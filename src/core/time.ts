@@ -298,8 +298,19 @@ export function clientOf(c: TimeConfig, client: string): { ok: true; client: Tim
 
 export const zoneOf = (c: TimeConfig, client: string): string => c.clients?.[client]?.zone ?? c.zone
 
-/** A project's name as names are told apart when one is added: case and spaces aside ("support " is "Support"). */
-export const projectKey = (name: string): string => name.toLowerCase().replace(/\s+/g, '')
+/** The characters that do not show: zero-width spaces and joiners, the word joiner, the BOM, the soft hyphen. */
+const UNSEEN = new RegExp(
+  `[${[0x200b, 0x200c, 0x200d, 0x2060, 0xfeff, 0xad].map(c => String.fromCharCode(c)).join('')}]`,
+  'g',
+)
+
+/**
+ * A project's name as names are told apart: case, spaces and the characters that do not show aside,
+ * the same letters however they are encoded ("support " is "Support"; "Café" composed or not, or
+ * with a zero-width space in it, is one name).
+ */
+export const projectKey = (name: string): string =>
+  name.normalize('NFKC').toLowerCase().replace(/\s+/g, '').replace(UNSEEN, '')
 
 export const sameProject = (a: string, b: string): boolean => projectKey(a) === projectKey(b)
 

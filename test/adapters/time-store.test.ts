@@ -18,6 +18,7 @@ import {
   marksOf,
   moveEntry,
   postEntries,
+  projectCount,
   projectUse,
   REPEAT_MS,
   raiseEntry,
@@ -990,7 +991,7 @@ test('a project typed as new that the client has, case and spaces aside, is the 
   db.close()
 })
 
-test('a rename moves the client’s live entries of the project, a journal row each; a current mark stays current', () => {
+test('a rename moves the client’s entries of the project, removed ones too, a journal row each; a current mark stays current', () => {
   const db = fresh()
   const one = addEntry(db, shelved, base, me).entry
   const two = addEntry(
@@ -1021,13 +1022,16 @@ test('a rename moves the client’s live entries of the project, a journal row e
     [
       [one.id, 'Support desk', 2],
       [two.id, 'Support desk', 3],
+      // removed: restored, it comes back under the new name
+      [gone.id, 'Support desk', 3],
     ],
   )
   assert.equal(then, 1, 'the config written in the same transaction')
+  assert.equal(restoreEntry(db, gone.id, me).project, 'Support desk')
   assert.deepEqual(
-    [gone.id, elsewhere.id, otherLane.id].map(id => getEntry(db, id)?.project),
-    ['Support', 'Cases work', 'Support'],
-    'a removed entry, another project and another lane are left as they are',
+    [elsewhere.id, otherLane.id].map(id => getEntry(db, id)?.project),
+    ['Cases work', 'Support'],
+    'another project and another lane are left as they are',
   )
   const marks = marksOf(db, [one.id, two.id])
   assert.deepEqual(
@@ -1043,8 +1047,38 @@ test('a rename moves the client’s live entries of the project, a journal row e
       ['rename', one.id],
       ['rename-mark', one.id],
       ['rename', two.id],
+      ['rename', gone.id],
+      ['restore', gone.id],
     ],
   )
+  db.close()
+})
+
+test('a rename moves every spelling of the name (case, spaces, unseen characters, composed or not), counted as one; the same name is no change', () => {
+  const db = fresh()
+  const lane = timeConfig({ zone: NY, clients: { a: { projects: ['Café', 'Help Desk'] } } })
+  assert.ok(lane)
+  const at2 = (h: number) => ({ start: at(`2026-10-28T${h}:00:00Z`), stop: at(`2026-10-28T${h}:30:00Z`) })
+  const made = (project: string, h: number) =>
+    addEntry(db, conf, { ...base, client: 'b', project, ...at2(h) }, me).entry
+  // as an import or a hand-edited file leaves them: other spellings of the listed names
+  const ids = [made('Help Desk', 10), made('help desk', 11), made('Help\u200bDesk', 12), made('Cafe\u0301', 13)].map(
+    e => e.id,
+  )
+  db.db.query("UPDATE time_entries SET client = 'a'").run()
+  assert.equal(projectCount(db, 'a', 'Help Desk'), 3)
+  assert.equal(projectCount(db, 'a', 'Café'), 1, 'the decomposed é is the same letter')
+  const moved = renameProject(db, lane, 'a', 'Help Desk', 'Support', 'user')
+  assert.deepEqual(
+    moved.map(e => e.id),
+    ids.slice(0, 3),
+  )
+  assert.deepEqual(
+    ids.map(id => getEntry(db, id)?.project),
+    ['Support', 'Support', 'Support', 'Cafe\u0301'],
+  )
+  // named so already: no revision moves
+  assert.deepEqual(renameProject(db, lane, 'a', 'support', 'Support', 'user'), [])
   db.close()
 })
 

@@ -12,9 +12,9 @@
 // entry's revision then. A mark is no change of the entry (its revision stays), so anyone who may
 // write marks any entry, without `force`; every mark and unmark has its journal row.
 //
-// A project renamed (#237, Settings → Time): the client's live entries of it move to the new name
-// in one transaction, a journal row each; a mark that was current stays so (the name is the
-// board's own, nothing to change in the client's systems).
+// A project renamed (#237, Settings → Time): the client's entries of it, however spelled and removed
+// ones too, move to the new name in one transaction, a journal row each; a mark that was current
+// stays so (the name is the board's own, nothing to change in the client's systems).
 import { randomBytes } from 'node:crypto'
 import { t } from '../core/lang.ts'
 import {
@@ -31,6 +31,7 @@ import {
   isoOf,
   problemsText,
   projectIn,
+  sameProject,
   secondsOf,
   systemsFor,
   type TimeConfig,
@@ -636,11 +637,15 @@ export function restoreEntry(
 }
 
 /**
- * A client's project renamed (Settings → Time): its live entries of `from` moved to `to` in one
- * transaction, each a revision more with its journal row (`rename`, the entry before and after); a
- * mark that was current (entered at the entry's revision) moves with it (`rename-mark`), so a
- * rename is no change to make in the client's systems. `then` runs last, in that transaction (the
- * config written): when it throws, nothing is changed. The entries moved.
+ * A client's project renamed (Settings → Time): its entries of `from`, however they spell it (case,
+ * spaces and unseen characters aside: projectKey), removed ones too (restored, they come back under
+ * the new name), moved to `to` in one transaction, each a revision more with its journal row
+ * (`rename`, the entry before and after); one named `to` already is left as it is. A mark that was
+ * current (entered at the entry's revision) moves with it (`rename-mark`), so a rename is no change
+ * to make in the client's systems. `then` runs last, in that transaction (the config written):
+ * when it throws, nothing is changed. db.write may run its function again when SQLite answered
+ * busy at its start, before anything ran: `then` writes the same file again then, no harm. The
+ * entries moved.
  */
 export function renameProject(
   db: BoardDb,
@@ -654,13 +659,11 @@ export function renameProject(
   checkConfig(c)
   return db.write(actorText(actor), tx => {
     const rows = db.db
-      .query(
-        `SELECT ${COLUMNS} FROM time_entries WHERE client = ? AND project = ? AND deleted IS NULL ORDER BY start, id`,
-      )
-      .all(client, from) as Row[]
+      .query(`SELECT ${COLUMNS} FROM time_entries WHERE client = ? ORDER BY start, id`)
+      .all(client) as Row[]
     const now = Date.now()
     const moved: TimeEntry[] = []
-    for (const e of rows.map(entryOf)) {
+    for (const e of rows.map(entryOf).filter(x => x.project !== to && sameProject(x.project, from))) {
       const saved: TimeEntry = { ...e, project: to, changed: now, changedBy: actor, rev: e.rev + 1 }
       try {
         update(tx, saved)
@@ -687,7 +690,15 @@ export function renameProject(
   })
 }
 
-/** How many live entries a client has of a project (Settings → Time says it before a rename). */
+/** How many entries a client has of a project, every spelling of it and removed ones too: what a rename moves. */
+export function projectCount(db: BoardDb, client: string, name: string): number {
+  const rows = db.db
+    .query('SELECT project, COUNT(*) AS n FROM time_entries WHERE client = ? GROUP BY project')
+    .all(client) as { project: string; n: number }[]
+  return rows.filter(r => sameProject(r.project, name)).reduce((n, r) => n + r.n, 0)
+}
+
+/** How many live entries a client has of each project, as each is spelled (Settings → Time adds the spellings up). */
 export function projectUse(db: BoardDb, client: string): Record<string, number> {
   const rows = db.db
     .query('SELECT project, COUNT(*) AS n FROM time_entries WHERE client = ? AND deleted IS NULL GROUP BY project')
@@ -917,7 +928,13 @@ export function importEntries(
   db: BoardDb,
   c: TimeConfig,
   entries: readonly ImportRow[],
-  o: { update?: boolean; now?: number; batch?: number } = {},
+  o: {
+    update?: boolean
+    now?: number
+    batch?: number
+    /** Each entry it wrote (added, or updated from Toggl): whose projects join the lanes' lists. */
+    wrote?: (e: TimeEntry) => void
+  } = {},
 ): { added: number; already: number; changed: ImportChange[]; updated: ImportChange[] } {
   checkConfig(c)
   const now = o.now ?? Date.now()
@@ -928,6 +945,7 @@ export function importEntries(
   let already = 0
   const changes: ImportChange[] = []
   const updated: ImportChange[] = []
+  const wrote = o.wrote ?? (() => {})
   for (let at = 0; at < verdicts.length; at += batch) {
     db.write('import', tx => {
       for (const v of verdicts.slice(at, at + batch)) {
@@ -962,6 +980,7 @@ export function importEntries(
           }
           tx.journal({ store: 'time', op: 'import-update', ref: saved.id, before: v.stored, after: saved })
           updated.push(change)
+          wrote(saved)
           continue
         }
         const e = { ...v.entry, id: newId(db) }
@@ -975,6 +994,7 @@ export function importEntries(
         }
         tx.journal({ store: 'time', op: 'import', ref: e.id, after: e })
         added++
+        wrote(e)
       }
     })
   }

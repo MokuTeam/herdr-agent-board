@@ -13,7 +13,7 @@ import { JSDOM } from 'jsdom'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { openDb } from '../../src/adapters/db.ts'
-import { editEntry, removeEntry } from '../../src/adapters/time-store.ts'
+import { addEntry, editEntry, removeEntry } from '../../src/adapters/time-store.ts'
 import { freshTarget } from '../../src/core/backup.ts'
 import { makeKey } from '../../src/core/backup-file.ts'
 import { timeConfig } from '../../src/core/time.ts'
@@ -37,6 +37,8 @@ const TIME = {
   clients: {
     'client-a': { projects: ['Support'], retired: ['Old'], billing: [{ group: 'ref', step: 30, round: 'up' }] },
     'client-b': { projects: ['Support'] },
+    // its one project retired: an entry on it keeps it, a new one asks for a project
+    'client-r': { projects: [], retired: ['Old'] },
     // billed under its time: to the nearest 30 minutes
     'client-n': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'nearest' }] },
     // entered into an ERP and a tracker; its Internal project not billed
@@ -228,7 +230,13 @@ async function setup() {
       start: `${DAY}T13:00:00Z`,
       stop: `${DAY}T14:30:00Z`,
     })
-  return { post, stored, byAgent, removedByAgent, entry }
+  /** The board's database, for an entry the config would not take now (on a project retired since). */
+  const database = () => {
+    const db = openDb({ path: join(state, 'board.db') })
+    if (!db) throw new Error('no database')
+    return db
+  }
+  return { post, stored, byAgent, removedByAgent, entry, database }
 }
 
 const toasts: { text: string; error?: boolean | undefined; o?: ToastOptions | undefined }[] = []
@@ -951,7 +959,7 @@ test('"New project…": typed where the list was, what Save does said under it, 
   await settle(50)
   const offered = [...(qa('.time-editor select')[1] as HTMLSelectElement).options].map(o => o.textContent)
   expect(offered).toEqual(['Support', 'New project…'])
-  await setValue(qa('.time-editor select')[1] as HTMLElement, ' new')
+  await setValue(qa('.time-editor select')[1] as HTMLElement, '\u0000new')
   await settle(50)
   expect(qa('.time-editor select').length).toBe(1)
   const name = () => q('.time-new-project input')
@@ -981,11 +989,44 @@ test('"Back to the list" puts the list back as it was, the name typed gone', asy
   await mount(1)
   await click(q('.time-add-open'))
   await setValue(qa('.time-editor select')[0] as HTMLElement, 'client-a')
-  await setValue(qa('.time-editor select')[1] as HTMLElement, ' new')
+  await setValue(qa('.time-editor select')[1] as HTMLElement, '\u0000new')
   await settle(50)
   await setValue(q('.time-new-project input'), 'Draft name')
   await click(q('.time-new-back'))
   const project = qa('.time-editor select')[1] as HTMLSelectElement
   expect(project.value).toBe('Support')
   expect(q('.time-project-note')).toBeNull()
+})
+
+test('an entry on a project retired since, its client with no project offered: it opens on its project and its description saves', async () => {
+  const s = await setup()
+  const db = s.database()
+  const was = timeConfig({ zone: 'America/New_York', clients: { 'client-r': { projects: ['Old'] } } })
+  if (!was) throw new Error('config')
+  addEntry(
+    db,
+    was,
+    {
+      client: 'client-r',
+      project: 'Old',
+      description: 'Case 10001 X: work',
+      start: Date.parse(`${DAY}T13:00:00Z`),
+      stop: Date.parse(`${DAY}T14:00:00Z`),
+      startGiven: true,
+    },
+    agent,
+  )
+  db.close()
+  await mount(1)
+  await click(q('.time-open'))
+  // the list as it is (none) with the entry's own project, no name asked for
+  expect(q('.time-new-project')).toBeNull()
+  expect((qa('.time-editor select')[0] as HTMLSelectElement).value).toBe('Old')
+  await setValue(q('.time-editor textarea'), 'Case 10001 X: corrected')
+  expect((qa('.time-editor button[type=submit]')[0] as HTMLButtonElement).disabled).toBe(false)
+  await submit()
+  await settle()
+  expect((await s.stored()).map(e => [(e as { project?: string }).project, e.description])).toEqual([
+    ['Old', 'Case 10001 X: corrected'],
+  ])
 })

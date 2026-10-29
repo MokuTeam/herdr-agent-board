@@ -27,6 +27,8 @@ export interface TimeSettingsView {
   zone: string
   localZone: string
   every: boolean
+  /** config.json is there but does not read as JSON: nothing can be changed until it is fixed by hand. */
+  unreadable?: boolean
   clients: Record<string, TimeClientView>
   problems: string[]
 }

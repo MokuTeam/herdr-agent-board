@@ -450,4 +450,12 @@ test('a project typed again is the one listed, case and spaces aside', () => {
   assert.equal(projectKey(' Cases  Work '), 'caseswork')
   assert.equal(projectIn(['Support', 'Cases work'], 'cases work '), 'Cases work')
   assert.equal(projectIn(['Support'], 'casesWork'), null)
+  // the same letters however encoded, and characters that do not show: one name
+  const accent = String.fromCharCode(0x301)
+  const unseen = [0x200b, 0x200d, 0x2060, 0xfeff, 0xad].map(c => String.fromCharCode(c))
+  assert.equal(projectKey(`Cafe${accent}`), projectKey('Café'))
+  for (const u of unseen) assert.equal(projectKey(`Help${u}Desk`), 'helpdesk')
+  // compatibility forms too: full-width letters, a ligature
+  assert.equal(projectKey('ＡＢＣ'), 'abc')
+  assert.equal(projectKey('ﬁle'), 'file')
 })

@@ -6,8 +6,10 @@
 //
 // A project typed as new (`--new-project`, the editor's "New project…", #237) goes into the
 // client's list in config.json with the entry that has it, under the file's lock (withNewProject).
+
+import { existsSync } from 'node:fs'
 import { readKey, readStatus } from '../adapters/backup-store.ts'
-import { configBusy, readConfigFile, withConfigFile, withTimeProjects } from '../adapters/config-file.ts'
+import { configBusy, configFile, readConfigFile, withConfigFile, withTimeProjects } from '../adapters/config-file.ts'
 import { TimeError } from '../adapters/time-store.ts'
 import { activeTargets, backupConfig, targetWhere } from '../core/backup.ts'
 import { t } from '../core/lang.ts'
@@ -55,8 +57,12 @@ export function withNewProject<T>(
   write: (conf: TimeConfig) => T,
   entryOf: (written: T) => TimeEntry,
 ): T {
-  // no file to add it to (a board that never wrote its config): the entry alone, as before
-  if (!readConfigFile()) return write(conf)
+  // no file to add it to (a board that never wrote its config): the entry alone, as before; one
+  // there that does not read as JSON: refused, nothing written (its list would be left behind)
+  if (!readConfigFile()) {
+    if (existsSync(configFile())) throw new TimeError('err.configUnreadable')
+    return write(conf)
+  }
   try {
     return withConfigFile((raw, save) => {
       const now = raw ? timeConfig(raw.time) : conf

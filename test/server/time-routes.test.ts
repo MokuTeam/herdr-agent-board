@@ -560,3 +560,23 @@ test('Settings → Time renames a project: the client’s entries move with it, 
     [[], ['Support desk']],
   )
 })
+
+test('a change right after Settings → Time is checked against what it wrote, not the config of a moment before', async () => {
+  const { post, settings } = await liveBoard()
+  assert.equal((await settings({ op: 'project', client: 'client-a', name: 'Audit' }))[0], 200)
+  // at once, before the board's watcher would have read the file again
+  assert.equal((await post({ ...add, project: 'Audit' }))[0], 200)
+  assert.equal((await settings({ op: 'retire', client: 'client-a', project: 'Audit' }))[0], 200)
+  const [status, why] = await post({ ...add, start: `${NEAR}T15:00:00Z`, stop: `${NEAR}T15:30:00Z`, project: 'Audit' })
+  assert.deepEqual([status, why.code], [400, 'retired'])
+})
+
+test('a new project while config.json’s lock is held (a writer stopped a moment ago): 409 in words, no entry written', async () => {
+  const { url, post, settings, file } = await liveBoard()
+  mkdirSync(`${file}.lock`)
+  const [status, why] = await post({ ...add, project: 'Audit', newProject: true })
+  assert.deepEqual([status, why.code], [409, 'configBusy'])
+  const [s2, w2] = await settings({ op: 'project', client: 'client-a', name: 'Audit' })
+  assert.deepEqual([s2, w2.code], [409, 'configBusy'])
+  assert.deepEqual((await json(await fetch(`${url}/api/time?date=${NEAR}`))).entries, [])
+}, 20_000)

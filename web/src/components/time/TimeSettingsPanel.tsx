@@ -126,7 +126,8 @@ export interface TimeSettingsBodyProps {
 /** The panel's content, from its view: no fetching here (TimeSettingsPanel does it). */
 export function TimeSettingsBody({ view, loadError, lanes, swatches, disabled, refusal, send }: TimeSettingsBodyProps) {
   const t = useT()
-  const [opened, setOpened] = useState<string | null>(null)
+  // the client opened in place; undefined until one is picked: the only client then
+  const [opened, setOpened] = useState<string | null | undefined>(undefined)
   const [drafting, setDrafting] = useState(false)
   const said = (part: string) =>
     refusal?.part === part ? (
@@ -151,6 +152,8 @@ export function TimeSettingsBody({ view, loadError, lanes, swatches, disabled, r
     )
   const ids = clientOrder(view, lanes)
   const without = lanesWithout(view, lanes)
+  // config.json there but not JSON: what it says is shown, nothing can be changed
+  const off = disabled || !!view.unreadable
   return (
     <div className="sheet-body cats-body time-set-body">
       {view.problems.length > 0 && (
@@ -160,7 +163,7 @@ export function TimeSettingsBody({ view, loadError, lanes, swatches, disabled, r
         <Switch
           label={t('time.set.on')}
           on={view.on}
-          disabled={disabled}
+          disabled={off}
           onChange={on => void send('time', { op: 'on', on })}
         />
         {!view.on && <p className="access-hint time-set-hint">{t('time.set.offHint')}</p>}
@@ -168,7 +171,7 @@ export function TimeSettingsBody({ view, loadError, lanes, swatches, disabled, r
           <span>{t('time.set.zone')}</span>
           <select
             value={view.zone}
-            disabled={disabled}
+            disabled={off}
             onChange={e => void send('time', { op: 'zone', zone: e.target.value })}
           >
             {zonesOf(view.zone, view.localZone).map(z => (
@@ -190,7 +193,7 @@ export function TimeSettingsBody({ view, loadError, lanes, swatches, disabled, r
             <button
               type="button"
               className="button"
-              disabled={disabled}
+              disabled={off}
               onClick={() => void send('clients', { op: 'lanes', lanes: lanes.map(l => l.id) })}
             >
               {t('time.set.choose')}
@@ -209,9 +212,9 @@ export function TimeSettingsBody({ view, loadError, lanes, swatches, disabled, r
                   title={lane(id)?.title ?? id}
                   color={lane(id)?.color ?? 'var(--label-3)'}
                   c={view.clients[id] as TimeClientView}
-                  open={opened === id || ids.length === 1}
-                  onToggle={() => setOpened(o => (o === id ? null : id))}
-                  disabled={disabled}
+                  open={opened === undefined ? ids.length === 1 : opened === id}
+                  onToggle={() => setOpened(o => ((o === undefined ? ids.length === 1 : o === id) ? null : id))}
+                  disabled={off}
                   send={send}
                   said={said}
                 />
@@ -228,7 +231,7 @@ export function TimeSettingsBody({ view, loadError, lanes, swatches, disabled, r
                     <button
                       type="button"
                       className="button"
-                      disabled={disabled}
+                      disabled={off}
                       onClick={async () => {
                         if (await send(`take:${l.id}`, { op: 'client', client: l.id, on: true })) setOpened(l.id)
                       }}
@@ -245,7 +248,7 @@ export function TimeSettingsBody({ view, loadError, lanes, swatches, disabled, r
             <div className="time-set-group time-set-draft">
               <CategoryDraft
                 color={draftColor(lanes, swatches)}
-                disabled={disabled}
+                disabled={off}
                 edit={body => send('lane', { ...body, op: 'newLane' })}
                 onCreated={made => {
                   setDrafting(false)
@@ -259,7 +262,7 @@ export function TimeSettingsBody({ view, loadError, lanes, swatches, disabled, r
             <button
               type="button"
               className="time-add-open time-set-new"
-              disabled={disabled}
+              disabled={off}
               onClick={() => setDrafting(true)}
             >
               <PlusIcon />

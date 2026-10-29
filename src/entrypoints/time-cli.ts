@@ -835,13 +835,23 @@ async function importCmd(
   }
   const db = writable()
   try {
-    const r = importEntries(db, conf, entries, { update: a.has('--update') })
-    // projects found go into each lane's list, where the lane lists them: only once the gate let the run in
-    const byLane = new Map<string, string[]>()
-    for (const e of entries) if (e.project !== '-') byLane.set(e.client, [...(byLane.get(e.client) ?? []), e.project])
-    for (const [lane, projects] of byLane) addTimeProjects(lane, projects)
+    const projects = new Map<string, string[]>()
+    const r = importEntries(db, conf, entries, {
+      update: a.has('--update'),
+      wrote: e => {
+        if (e.project !== '-') projects.set(e.client, [...(projects.get(e.client) ?? []), e.project])
+      },
+    })
+    // the projects of the entries it wrote go into each lane's list, where the lane lists them: a
+    // row already there (or one that differs, a project renamed on the board since) brings none back
+    const refusals = [...projects].flatMap(([lane, names]) => {
+      const added = addTimeProjects(lane, names)
+      return added.ok ? [] : [added.error]
+    })
+    const listNote = refusals.length ? t('time.cli.projectsNotAdded', { error: refusals[0] ?? '' }) : null
     print(
       [
+        ...(listNote ? [listNote] : []),
         ...changeLines('time.cli.importChanged', r.changed),
         ...changeLines('time.cli.importUpdated', r.updated),
         t('time.cli.imported', {
@@ -853,7 +863,7 @@ async function importCmd(
           bad: bad.length,
         }),
       ],
-      { ...summary, ...r },
+      { ...summary, ...r, ...(listNote && { projectsNotAdded: listNote }) },
     )
   } finally {
     db.close()

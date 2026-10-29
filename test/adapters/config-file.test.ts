@@ -12,6 +12,7 @@ import {
 } from 'node:fs'
 import { join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { dropKey } from '../../src/adapters/backup-store.ts'
 import { readCard, writeCard } from '../../src/adapters/cards.ts'
 import {
   addTimeProjects,
@@ -25,12 +26,14 @@ import {
   loadConfig,
   saveFoundProfiles,
   setTunnelOn,
+  takeOverWake,
 } from '../../src/adapters/config-file.ts'
 import { isRecord, renameWithRetry, replaceFile } from '../../src/adapters/json-store.ts'
 import { configDir } from '../../src/adapters/paths.ts'
 import { loadProfiles } from '../../src/adapters/profiles.ts'
 import { useLanguage } from '../../src/core/lang.ts'
 import { sameDir } from '../../src/core/launch/names.ts'
+import { newDropKey } from '../../src/services/backup-server.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const saved = (): Record<string, unknown> => JSON.parse(readFileSync(configFile(), 'utf8'))
@@ -673,3 +676,36 @@ test('a config folder with spaces in its path (a Windows user name, say): edits 
   )
   assert.equal(existsSync(`${configFile()}.lock`), false)
 })
+
+test('a config.json that does not read as JSON is never replaced by the defaults: an edit is refused in words, the file as it was', () => {
+  isolatedHome()
+  seed({ language: 'en', time: { zone: 'America/New_York' } })
+  const broken = `${readFileSync(configFile(), 'utf8').slice(0, -1)},}`
+  writeFileSync(configFile(), broken)
+  const r = editSettings({ language: 'ru' })
+  assert.equal(r.ok, false)
+  assert.match((r as { error: string }).error, /does not read as JSON/)
+  assert.equal(addTimeProjects('a', ['X']).ok, false)
+  assert.equal(readFileSync(configFile(), 'utf8'), broken)
+})
+
+test('a busy lock in a writer that answers for itself: the takeover says it in words, the found profiles wait for the next start, a new drop key keeps the old one', async () => {
+  isolatedHome()
+  seed({
+    language: 'en',
+    backup: { server: { host: 'example.org', port: 22, admin: { user: 'me', key: '' }, set: 'x' } },
+  })
+  const key = dropKey()
+  mkdirSync(join(key, '..'), { recursive: true })
+  writeFileSync(key, 'old key')
+  mkdirSync(`${configFile()}.lock`)
+  const taken = takeOverWake({ enabled: true })
+  assert.equal(taken.ok, false)
+  assert.match((taken as { error: string }).error, /config\.json is being changed by another process/)
+  assert.equal(saveFoundProfiles(join(process.env.HOME as string, '.claude')), false)
+  // the server stays set for the key it has: nothing goes while config.json cannot be changed
+  const fresh = await newDropKey()
+  assert.equal(fresh.ok, false)
+  assert.equal(readFileSync(key, 'utf8'), 'old key')
+  assert.equal(((saved().backup as Record<string, unknown>).server as Record<string, unknown>).set, 'x')
+}, 15_000)

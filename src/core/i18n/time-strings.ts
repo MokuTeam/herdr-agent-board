@@ -204,6 +204,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.edit.newProjectSame': '{client} has “{project}” already: the entry takes it.',
     'time.edit.newProjectRetired': '“{project}” is retired: bring it back in Settings → Time tracking…',
     'time.edit.projectList': 'Back to the list',
+    'time.cli.projectsNotAdded': 'the entries are in; their new projects are not in the lanes’ lists: {error}',
 
     'set.time': 'Time tracking…',
     'time.set.title': 'Time tracking',
@@ -460,6 +461,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.edit.newProjectSame': 'У {client} уже есть «{project}»: запись получит его.',
     'time.edit.newProjectRetired': '«{project}» скрыт: вернуть можно в Настройки → Учёт времени…',
     'time.edit.projectList': 'К списку',
+    'time.cli.projectsNotAdded': 'записи импортированы; их новые проекты не добавлены в списки лейнов: {error}',
 
     'set.time': 'Учёт времени…',
     'time.set.title': 'Учёт времени',

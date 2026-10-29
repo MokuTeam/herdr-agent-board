@@ -1898,13 +1898,22 @@ while there is one, no entry is written, and `board time day`, the Time panel, t
 listed `projects` (a typo is refused with the list; `--new-project` adds one on purpose); a client
 without `projects` takes any. Without `clients`, every lane takes any project. A project added
 (`--new-project`, the editor's "New project…", Settings → Time tracking…, the import) that the
-client has already, case and spaces aside, is the one it has: "support " is "Support", and the list
-gets no near duplicate. A client with `"on": false` takes no new entry (nor one moved to it): its
+client has already, case, spaces and characters that do not show aside (and the same letters however
+they are encoded), is the one it has: "support " is "Support", and the list gets no near duplicate. A client with `"on": false` takes no new entry (nor one moved to it): its
 entries stay, billed by its rules as before. `retired` lists projects no longer offered: an entry
 keeps one, a new entry is refused it (`--new-project` too: it is brought back in Settings, not by an
 agent). `"on": false` on `time` itself turns time tracking off and keeps every setting for when it
 is on again. Every writer of config.json (the Settings panels, `--new-project`, the import) changes
-it under one lock, so two at once never lose each other's change.
+it under one lock, so two at once never lose each other's change; the one write outside it is the
+defaults a first start puts there when there is no file at all. A writer that waits gives up after 2
+seconds and says so, the file as it was; a lock left by a writer that stopped mid-write is taken
+over once it is 30 seconds old, so until then each change asked is refused after its 2 seconds. A
+new project and a rename hold the lock while the database writes (which may wait up to 5 seconds for
+another writer of it). A config.json that does not read as JSON (a comma too many) is never replaced
+by the defaults: every change from the board is refused, in words, until it is fixed by hand. The
+import adds to a lane's list the projects of the entries it wrote (new rows, and ones `--update`
+rewrote): a row already there, or one that differs (a project renamed on the board since), brings
+no name back; a new row under an old name brings that name as Toggl has it.
 
 **Billing rules, as data.** A client's day becomes billed lines: each entry goes to the first rule
 whose `match` (a regex on the description, case aside) fits; `group` adds entries up (`entry`
@@ -2059,10 +2068,15 @@ or not, Rename and Retire; a project added; the retired ones, each to bring back
 is billed, and the systems its time is entered into. A lane without time takes it in one tap, and
 a new lane can be made and take time in one step. Every change is checked as the board reads the
 config and refused when it would bring a problem the file did not have; one already there stays
-said and stops no change elsewhere. A rename says first how many entries move: the client's live
-entries of the project go to the new name in one transaction, a journal row each, then config.json
-is written (a failure leaves both as they were); a mark that was current stays current, since the
-name is the board's own. A name the client has already is refused (no merge). Billing rules and
+said and stops no change elsewhere. A rename says first how many entries move: the client's entries
+of the project, however they spell it, removed ones too (restored, they come back under the new
+name), go to the new name in one transaction, a journal row each, then config.json is written in
+that transaction (a failure leaves both as they were); a mark that was current stays current, since
+the name is the board's own. A name the client has already is refused (no merge); the same name
+again is no change. A backup restored from before a rename brings the entries back under their old
+name while config.json keeps the new one: the old name is then a project the list does not have
+(rename it again, or add it back). With no `time` in config.json yet, the panel shows the lanes
+with none taking time; a change there sets time up off, and only its switch turns it on. Billing rules and
 `ref` stay in config.json, and a client that has them says so.
 
 **Billable and entered, on the board.** An entry's editor has a switch for billable, its default

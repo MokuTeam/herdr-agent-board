@@ -68,12 +68,15 @@ export const configBusy = (err: unknown): boolean =>
 
 /**
  * The usual edit: the file (the defaults when there is none) changed by `change`, written when it
- * says ok. The lock still taken after its wait (another writer, or one that stopped mid-write a
- * moment ago: its lock goes after 30 seconds) is a refusal in words, the file as it was.
+ * says ok. A file that is there but does not read as JSON is left as it is, and said. The lock
+ * still taken after its wait (another writer, or one that stopped mid-write a moment ago: its lock
+ * goes after 30 seconds) is a refusal in words, the file as it was.
  */
 function editConfig(change: (raw: Raw) => EditResult): EditResult {
   try {
     return withConfigFile((had, save) => {
+      // there but not JSON (a comma too many): never replaced by the defaults, the owner's settings with it
+      if (!had && existsSync(configFile())) return { ok: false, error: t('err.configUnreadable') }
       const raw = had ?? structuredClone<Raw>(DEFAULT_CONFIG)
       const r = change(raw)
       if (r.ok) save(raw)
@@ -355,7 +358,8 @@ export function withTimeProjects(raw: Raw, lane: string, projects: readonly stri
  * `board time add --new-project` and by the import. Nothing is written when every one is there.
  */
 export function addTimeProjects(lane: string, projects: readonly string[]): EditResult {
-  if (!readConfigFile()) return { ok: true }
+  if (!readConfigFile())
+    return existsSync(configFile()) ? { ok: false, error: t('err.configUnreadable') } : { ok: true }
   try {
     return withConfigFile((raw, save) => {
       if (raw && withTimeProjects(raw, lane, projects).length) save(raw)
@@ -440,6 +444,7 @@ export function takeOverWake(fields: Raw): EditResult {
       return { ok: true }
     })
   } catch (err) {
+    if (configBusy(err)) return { ok: false, error: t('err.configBusy') }
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
@@ -707,12 +712,35 @@ export function saveFoundProfiles(inheritedDir: string, home: string = homedir()
   // Only into a file that is there: the board's loadConfig makes it, with its defaults, on first use
   // (none: not even its folder, nor the lock in it)
   if (!readConfigFile()) return false
-  return withConfigFile((raw, save) => {
-    if (!raw) return false
-    const profiles = profilesIn(raw, home, inheritedDir)
-    if (!profiles.added.length) return false
-    profiles.save()
-    save(raw)
-    return true
-  })
+  try {
+    return withConfigFile((raw, save) => {
+      if (!raw) return false
+      const profiles = profilesIn(raw, home, inheritedDir)
+      if (!profiles.added.length) return false
+      profiles.save()
+      save(raw)
+      return true
+    })
+  } catch (err) {
+    // another writer holds the file: the folders are saved at the next start
+    if (configBusy(err)) return false
+    throw err
+  }
+}
+
+/** A config edit that must go through, for a caller with no answer of its own to give: a refusal thrown, its words the message. */
+export function mustEdit(r: EditResult): void {
+  if (!r.ok) throw new Error(r.error)
+}
+
+/**
+ * The running board's `time` and lanes as config.json has them now, at once, after a write of its
+ * own (Settings → Time, a new project): the watcher (liveConfig) follows ~120 ms later, and a
+ * change asked in between must already see it. A file that does not read leaves them as they are.
+ */
+export function freshTime(cfg: Config): void {
+  const raw = readConfigFile()
+  if (!raw) return
+  cfg.time = raw.time
+  cfg.categories = normalizeConfig(raw).categories
 }

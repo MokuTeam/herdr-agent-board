@@ -55,8 +55,9 @@ export function editedTime(time: unknown, e: TimeEdit, zone: string): { time: un
     if (!isObject(time)) return { time }
     return { time: { ...time, on: false } }
   }
-  // the rest change settings that are there: `true` becomes the object it means
-  const t: Raw = time === true ? { zone } : isObject(time) ? structuredClone(time) : { zone, clients: {} }
+  // the rest change settings that are there: `true` becomes the object it means; none at all is set
+  // up off (lanes picked, projects added, then On), nothing but On turns time on
+  const t: Raw = time === true ? { zone } : isObject(time) ? structuredClone(time) : { on: false, zone, clients: {} }
   if (e.op === 'zone') {
     const z = e.zone.trim()
     if (!knownZone(z)) return { key: 'time.err.zone', vars: { zone: z } }
@@ -64,7 +65,8 @@ export function editedTime(time: unknown, e: TimeEdit, zone: string): { time: un
     return { time: t }
   }
   if (e.op === 'lanes') {
-    if (isObject(t.clients)) return { time: t }
+    // only where every lane took time (none set up yet: these are the first ones)
+    if (isObject(t.clients) && isObject(time)) return { time: t }
     t.clients = Object.fromEntries([...new Set(e.lanes)].map(id => [id, {}]))
     return { time: t }
   }

@@ -63,6 +63,14 @@ test('lanes: a lane takes time with an empty list; a client off and on; every la
   // every lane: its choice made explicit first
   assert.equal(refusal(true, { op: 'client', client: 'x', on: true }), 'time.set.err.every')
   assert.deepEqual(edited(true, { op: 'lanes', lanes: ['a', 'b', 'a'] }), { zone: ZONE, clients: { a: {}, b: {} } })
+  // no time at all: set up off, nothing but On turns it on; the lanes chosen are its first clients
+  assert.deepEqual(edited(undefined, { op: 'client', client: 'a', on: true }), {
+    on: false,
+    zone: ZONE,
+    clients: { a: { projects: [] } },
+  })
+  assert.deepEqual(edited(undefined, { op: 'lanes', lanes: ['a'] }), { on: false, zone: ZONE, clients: { a: {} } })
+  assert.deepEqual(edited(BASE, { op: 'lanes', lanes: ['x'] }), BASE, 'lanes chosen already: left as they are')
 })
 
 test('projects: added once (case and spaces aside), renamed in every list that names it, retired and brought back', () => {

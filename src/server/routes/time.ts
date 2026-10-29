@@ -17,6 +17,7 @@
 // GET and POST /api/time-settings are Settings → Time (services/time-settings.ts): on this
 // computer's board only (core/remote.ts localOnly), as Settings → Backup… is.
 import { existsSync } from 'node:fs'
+import { freshTime } from '../../adapters/config-file.ts'
 import { type BoardDb, DbError, dbFile, openDb } from '../../adapters/db.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import {
@@ -404,13 +405,15 @@ export function timeRoutes(cfg: Config): Route[] {
                     x => x,
                   )
                 : change(db, conf, b, Date.now())
+            if (b.newProject === true) freshTime(cfg)
             return [entryView(conf, e, marksOf(db, [e.id]).get(e.id))]
           })
           // the entry changed (a mark's: the first of them), and all of a mark's
           return json(200, { ok: true, entry: entries[0], entries })
         } catch (err) {
           if (err instanceof TimeError) {
-            const status = err.key === 'time.err.gone' ? 404 : err.key === 'time.err.changedSince' ? 409 : 400
+            const again = err.key === 'time.err.changedSince' || err.key === 'err.configBusy'
+            const status = err.key === 'time.err.gone' ? 404 : again ? 409 : 400
             return json(status, refusal(err))
           }
           if (err instanceof DbError) return json(503, { ok: false, error: err.message })
@@ -431,7 +434,10 @@ export function timeRoutes(cfg: Config): Route[] {
       guard: ['board-header', 'origin'],
       async handle(_req, ctx) {
         const r = editTimeSettings(await ctx.rawBody(), withDb)
-        return json(r.ok ? 200 : 400, { ...r, view: timeSettingsView(withDb) })
+        // the next change (an entry added at once) is checked against what was just written
+        if (r.ok) freshTime(cfg)
+        const status = r.ok ? 200 : r.code === 'configBusy' ? 409 : 400
+        return json(status, { ...r, view: timeSettingsView(withDb) })
       },
     },
   ]

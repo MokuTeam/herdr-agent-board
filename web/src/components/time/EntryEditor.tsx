@@ -127,10 +127,13 @@ export function EntryEditor({
   const listed = projects(d.client)
   // a name typed for a new project, or a client with none yet: its first one
   const [named, setNamed] = useState(draft.newProject)
-  const naming = !!listed && (named || listed.length === 0)
+  // (an entry with a project, a retired one say, keeps it: the list shows it as it is)
+  const naming = !!listed && (named || (listed.length === 0 && !draft.project))
   const typedName = d.project.trim()
   const sameAs = naming && typedName ? projectIn(listed ?? [], typedName) : null
-  const retiredAs = naming && typedName && !sameAs ? projectIn(retired(d.client), typedName) : null
+  // the entry's own project typed back is no new one: it keeps it, retired or not
+  const retiredAs =
+    naming && typedName && !sameAs && typedName !== draft.project ? projectIn(retired(d.client), typedName) : null
   const projectNote =
     !naming || !typedName
       ? ''

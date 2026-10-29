@@ -5,13 +5,14 @@
 // the same write. A rename moves the client's live entries of the project in one transaction
 // (time-store.ts renameProject), config.json written last in it: a failure leaves both as they were;
 // entries are moved only as any entry is written (the config checks out, a backup went through).
-import { categoriesEdited, configBusy, readConfigFile, withConfigFile } from '../adapters/config-file.ts'
+import { existsSync } from 'node:fs'
+import { categoriesEdited, configBusy, configFile, readConfigFile, withConfigFile } from '../adapters/config-file.ts'
 import type { BoardDb } from '../adapters/db.ts'
 import { isRecord } from '../adapters/json-store.ts'
-import { projectUse, renameProject, TimeError } from '../adapters/time-store.ts'
+import { projectCount, projectUse, renameProject, TimeError } from '../adapters/time-store.ts'
 import { DEFAULT_CONFIG } from '../core/categories.ts'
 import { t } from '../core/lang.ts'
-import { cleanText, localZone, problemsText, type TimeSystem, timeConfig } from '../core/time.ts'
+import { cleanText, localZone, problemsText, projectIn, type TimeSystem, timeConfig } from '../core/time.ts'
 import { editedTime, newProblems, type TimeEdit } from '../core/time-settings.ts'
 import { writeRefusal } from './time.ts'
 
@@ -46,6 +47,8 @@ export interface TimeSettingsView {
   localZone: string
   /** Every lane takes time, any project (`"time": true`, or no `clients`). */
   every: boolean
+  /** config.json is there but does not read as JSON: nothing can be changed until it is fixed by hand. */
+  unreadable?: boolean
   clients: Record<string, TimeClientView>
   /** What does not check out, a line each. */
   problems: string[]
@@ -58,22 +61,43 @@ const asOn = (time: unknown): unknown => {
   return rest
 }
 
+/**
+ * A client's live entries by project, every spelling of a name it lists or retired added up under
+ * that name (projectKey: case, spaces and unseen characters aside); a spelling it has not, as it is.
+ */
+function countsByName(raw: Record<string, number>, names: readonly string[]): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const [spelled, n] of Object.entries(raw)) {
+    const name = projectIn(names, spelled) ?? spelled
+    out[name] = (out[name] ?? 0) + n
+  }
+  return out
+}
+
 export function timeSettingsView(withDb: WithDb): TimeSettingsView {
-  const time = readConfigFile()?.time
+  const file = readConfigFile()
+  // there but not JSON: said, and every change refused until it is fixed by hand
+  const unreadable = !file && existsSync(configFile())
+  const time = file?.time
   const conf = timeConfig(asOn(time))
   const raw = isRecord(time) ? time : {}
   const clients = isRecord(raw.clients) ? raw.clients : {}
   const use = withDb(false, db => {
     const out: Record<string, Record<string, number>> = {}
-    if (db) for (const id of Object.keys(conf?.clients ?? {})) out[id] = projectUse(db, id)
+    if (db)
+      for (const [id, c] of Object.entries(conf?.clients ?? {}))
+        out[id] = countsByName(projectUse(db, id), [...(c.projects ?? []), ...c.retired])
     return out
   })
+  const set = time === true || isRecord(time)
   return {
     on: timeConfig(time) !== null,
-    set: time === true || isRecord(time),
+    set,
+    ...(unreadable && { unreadable }),
     zone: conf?.zone ?? localZone(),
     localZone: localZone(),
-    every: !conf?.clients,
+    // no `time` at all is no lane yet, not every lane
+    every: set && !conf?.clients,
     clients: Object.fromEntries(
       Object.entries(conf?.clients ?? {}).map(([id, c]) => {
         const own = isRecord(clients[id]) ? clients[id] : {}
@@ -94,7 +118,7 @@ export function timeSettingsView(withDb: WithDb): TimeSettingsView {
         ]
       }),
     ),
-    problems: (conf?.problems ?? []).map(p => problemsText([p], t)),
+    problems: unreadable ? [t('err.configUnreadable')] : (conf?.problems ?? []).map(p => problemsText([p], t)),
   }
 }
 
@@ -163,6 +187,8 @@ export function editTimeSettings(body: unknown, withDb: WithDb): TimeSettingsRes
   if (!e) return refused('time.set.err.usage')
   try {
     return withConfigFile((had, save): TimeSettingsResult => {
+      // there but not JSON: never replaced by the defaults (the owner's clients and rules with it)
+      if (!had && existsSync(configFile())) return refused('err.configUnreadable')
       const raw = had ?? structuredClone<Raw>(DEFAULT_CONFIG as unknown as Raw)
       const was = structuredClone(raw)
       let edit: TimeEdit = e as TimeEdit
@@ -186,7 +212,11 @@ export function editTimeSettings(body: unknown, withDb: WithDb): TimeSettingsRes
         return { ok: true }
       }
       const { client, from, to } = edit
-      const moving = withDb(false, db => (db ? (projectUse(db, client)[from] ?? 0) : 0))
+      const name = cleanText(to, 120)
+      // the same name once cleaned (" Help Desk "): nothing to write, no entry touched
+      if (name === from) return { ok: true, moved: 0 }
+      // every spelling of it moves, removed entries too (restored, they come back under the new name)
+      const moving = withDb(false, db => (db ? projectCount(db, client, from) : 0))
       if (!moving) {
         save(raw)
         return { ok: true, moved: 0 }
@@ -194,7 +224,6 @@ export function editTimeSettings(body: unknown, withDb: WithDb): TimeSettingsRes
       // the entries are written as any entry is: the config checks out, a backup went through
       const gate = writeRefusal({ backup: raw.backup }, conf)
       if (gate) throw gate
-      const name = cleanText(to, 120)
       let written = false
       try {
         const moved = withDb(true, db => {
@@ -204,7 +233,7 @@ export function editTimeSettings(body: unknown, withDb: WithDb): TimeSettingsRes
             written = true
           })
         })
-        return { ok: true, moved: moved.length }
+        return { ok: true, moved: moved.filter(x => !x.deleted).length }
       } catch (err) {
         // config.json written, then the transaction did not go through: the file back as it was
         if (written) save(was)
