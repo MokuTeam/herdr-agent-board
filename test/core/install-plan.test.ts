@@ -121,6 +121,34 @@ describe('planSettings', () => {
     assert.deepEqual(settingsOf(off).PreToolUse, [guard, ourAsk])
   })
 
+  test("notifications on macOS: Bun runs toast.ts; on Windows and Linux a Mac's toast.ts hook is someone else's, as before", () => {
+    const mac = '/Users/Имя Фамилия/.config/herdr/plugins/agent-board 100%'
+    const macPaths = {
+      ...paths,
+      bun: '/opt/homebrew/bin/bun',
+      hook: `${mac}/src/entrypoints/hook.ts`,
+      statusline: `${mac}/src/entrypoints/statusline.ts`,
+      toast: `${mac}/src/entrypoints/toast.ts`,
+      platform: 'darwin' as const,
+    }
+    const macToast = `"/opt/homebrew/bin/bun" "${mac}/src/entrypoints/toast.ts"`
+    assert.equal(toastCommand(macPaths), macToast)
+    const onMac = planSettings(undefined, macPaths, { toast: true }).settings
+    assert.deepEqual(settingsOf(onMac).Stop, [{ hooks: [{ type: 'command', command: macToast, timeout: 30, async: true }] }])
+    // Kept on, then off, on the Mac: its own hook is recognised.
+    assert.deepEqual(planSettings(onMac, macPaths).settings, onMac)
+    assert.equal(settingsOf(planSettings(onMac, macPaths, { toast: false }).settings).Stop, undefined)
+    // The same settings.json on Windows (paths) and Linux: not ours, so not replaced, kept or taken out.
+    const linux = { ...paths, toast: '/home/u/agent-board/src/integrations/toast.ps1', platform: 'linux' as const }
+    for (const other of [paths, linux]) {
+      for (const toast of [undefined, false]) {
+        const { settings, replaced } = planSettings(onMac, other, { toast })
+        assert.deepEqual(settingsOf(settings).Stop, settingsOf(onMac).Stop)
+        assert.deepEqual(replaced.filter(c => c.includes('toast')), [])
+      }
+    }
+  })
+
   test('no settings.json yet: hooks and status line from nothing', () => {
     const { settings, replaced, statusLineSet } = planSettings(undefined, paths)
     assert.deepEqual(settings, {

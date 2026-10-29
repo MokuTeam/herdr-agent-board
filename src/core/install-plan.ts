@@ -26,7 +26,11 @@ type Settings = Record<string, unknown>
 // name comes right after a separator, so `…/prehook.mjs` is someone else's.
 const OUR_HOOK = /agent-board.*[\\/](hook\.mjs|entrypoints[\\/]hook\.ts)/
 const OUR_STATUS_LINE = /agent-board.*[\\/](statusline\.mjs|entrypoints[\\/]statusline\.ts)/
-const OUR_TOAST = /agent-board.*[\\/](toast\.ps1|entrypoints[\\/]toast\.ts)/
+const OUR_TOAST = /agent-board.*[\\/]toast\.ps1/
+// On macOS the hook is the Bun entrypoint (boardFiles gives it there only); elsewhere such a hook,
+// in a settings.json copied from a Mac, is left alone as before.
+const OUR_MAC_TOAST = /agent-board.*[\\/](toast\.ps1|entrypoints[\\/]toast\.ts)/
+const MAC_TOAST_FILE = /[\\/]entrypoints[\\/]toast\.ts$/
 export const BOARD_EVENTS = ['SessionStart', 'UserPromptSubmit'] as const
 /**
  * The board's hook on a question form, before its dialog opens: the event and its matcher. It
@@ -85,7 +89,7 @@ export function ourCommands(files: Pick<InstallPaths, 'hook' | 'statusline' | 't
   return {
     hook: runs(files.hook, OUR_HOOK),
     line: runs(files.statusline, OUR_STATUS_LINE),
-    toast: runs(files.toast, OUR_TOAST),
+    toast: runs(files.toast, MAC_TOAST_FILE.test(files.toast) ? OUR_MAC_TOAST : OUR_TOAST),
   }
 }
 
@@ -203,7 +207,8 @@ export function planSettings(
   for (const event of BOARD_EVENTS) hooks[event] = withOurHook(hooks[event], hook, ours.hook, replaced)
   const [asked, matcher] = QUESTION_HOOK
   hooks[asked] = withOurHook(hooks[asked], { matcher, ...hook }, ours.hook, replaced)
-  // Desktop notifications: Windows PowerShell shows them, in the background (async), so Claude does not wait.
+  // Desktop notifications: Windows PowerShell or, on macOS, entrypoints/toast.ts shows them, in the
+  // background (async), so Claude does not wait.
   const had = TOAST_EVENTS.some(([event]) => commandsOf(settings, event).some(c => ours.toast(c.command)))
   const withToast = toast ?? had
   const notify = { type: 'command', command: toastCommand(paths), timeout: 30, async: true }
