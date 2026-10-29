@@ -58,6 +58,18 @@ describe('a rule moves a project both ways', () => {
     expect(r.unpaired).toEqual([])
   })
 
+  test('server to PC: a project the sync placed there whose folder is not made yet comes back by the rule', () => {
+    // its memory and sessions went up to /home/agent/migo/dev; the folder itself is not there
+    const waiting = project({ folder: '-home-agent-migo-dev', path: '/home/agent/migo/dev', state: 'gone' })
+    const r = pairProjects({
+      source: { platform: 'linux', projects: [waiting] },
+      target: { platform: 'win32', projects: [], clones: [], folders: {} },
+      given: {},
+      rules: ruleMoves([MIGO], 'down', 'linux'),
+    })
+    expect(pairsOf(r)).toEqual([['-home-agent-migo-dev', 'C:\\migo\\dev', 'rule', 0]])
+  })
+
   test('server to PC: the inverse, \\ between; a path outside every rule stays without a pair', () => {
     const there = project({ folder: '-home-agent-migo-a-b', path: '/home/agent/migo/a/b' })
     const elsewhere = project({ folder: '-srv-x', path: '/srv/x' })
@@ -133,7 +145,7 @@ describe('which wins: the owner’s path, then git remote, then a rule', () => {
   const gone = project({ folder: 'C--migo-old', path: 'C:\\migo\\old', state: 'gone' })
   const clones = [{ path: '/home/agent/work/board', remote: 'https://github.com/MokuTeam/board' }]
 
-  test('a clone there over the rule; a worktree by the rule, not onto its clone; a gone folder stays out', () => {
+  test('a clone there over the rule; a worktree by the rule, not onto its clone; a folder not there by the rule too', () => {
     const r = pairProjects({
       source: { platform: 'win32', projects: [board, notes, tree, gone] },
       target: server({ clones }),
@@ -143,9 +155,13 @@ describe('which wins: the owner’s path, then git remote, then a rule', () => {
     expect(pairsOf(r)).toEqual([
       ['C--migo-board', '/home/agent/work/board', 'remote', undefined],
       ['C--migo-notes', '/home/agent/migo/notes', 'rule', 0],
+      ['C--migo-old', '/home/agent/migo/old', 'rule', 0],
       ['C--migo-board--claude-worktrees-x', '/home/agent/migo/board/.claude/worktrees/x', 'rule', 0],
     ])
-    expect(r.unpaired.map(u => [u.folder, u.why])).toEqual([['C--migo-old', 'gone']])
+    expect(r.unpaired).toEqual([])
+    // without a rule, a folder not there has no pair, as before
+    const lone = pairProjects({ source: { platform: 'win32', projects: [gone] }, target: server(), given: {} })
+    expect(lone.unpaired.map(u => u.why)).toEqual(['gone'])
     // without the rule, the worktree is as it was: left without a pair
     const none = pairProjects({
       source: { platform: 'win32', projects: [tree] },
@@ -233,7 +249,10 @@ describe('the rule suggested', () => {
       { profile: 'default', folder: 'l', path: 'E:\\left', why: 'left' as const, files: 1, bytes: 1 },
       { profile: 'default', folder: 'u', path: null, why: 'unknown' as const, files: 1, bytes: 1 },
     ]
-    expect(suggestRules(unpaired, 'up', PC, SERVER)).toEqual([{ rule: MIGO, projects: 2 }])
+    expect(suggestRules(unpaired, 'up', PC, SERVER)).toEqual([
+      { rule: MIGO, projects: 2 },
+      { rule: { pc: 'D:\\gone', server: '/home/agent/gone' }, projects: 1 },
+    ])
     const down = [
       { ...(unpaired[0] as Unpaired), path: '/home/agent/migo/a' },
       { ...(unpaired[1] as Unpaired), path: '/home/agent/migo/b' },

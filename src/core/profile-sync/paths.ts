@@ -173,8 +173,10 @@ export function folderFor(to: string, there: readonly string[]): string {
  * out); else the target's clone with the same remote (the project's place inside its clone kept);
  * else the same path, when the target has a project there; else by the path rule with the
  * longest folder it is inside of (`rules`, longest first: the same path below the rule's folder
- * on the target). A worktree goes by the owner's path or a rule only (its clone's own folder is the
- * clone's). Two projects for one folder: the first keeps it. The rest are listed, with why.
+ * on the target). A worktree, and a folder not there, go by the owner's path or a rule only (a
+ * worktree's clone's folder is the clone's; a folder not there names no clone and may be one the
+ * sync placed, waiting). Two projects for one folder: the first keeps it. The rest are listed,
+ * with why.
  */
 export function pairProjects(o: {
   source: { platform: Platform; projects: readonly ProjectFact[] }
@@ -235,16 +237,17 @@ export function pairProjects(o: {
     } else if (p.path === null) {
       left('unknown')
       continue
-    } else if (p.state === 'gone') {
-      left('gone')
-      continue
     } else {
-      const found = p.worktree ? undefined : clones.get(remoteKey(p.remote) ?? '')?.[0]
+      // a folder not there (gone; on the server: one the sync placed whose project is not put
+      // there yet) goes by a rule only: its memory and sessions wait for it
+      const gone = p.state === 'gone'
+      const found = p.worktree || gone ? undefined : clones.get(remoteKey(p.remote) ?? '')?.[0]
       const ruled = byRule(p.path)
       if (found !== undefined && p.top) {
         const rest = under(p.path, p.top, source.platform)
         to = joinPath(found, rest ?? '', target.platform)
       } else if (
+        !gone &&
         !p.worktree &&
         source.platform !== 'win32' &&
         target.platform !== 'win32' &&
@@ -257,7 +260,9 @@ export function pairProjects(o: {
         how = 'rule'
         rule = ruled.rule
       } else {
-        left(p.worktree ? 'worktree' : p.state === 'git' && remoteKey(p.remote) ? 'noClone' : 'noRemote')
+        left(
+          gone ? 'gone' : p.worktree ? 'worktree' : p.state === 'git' && remoteKey(p.remote) ? 'noClone' : 'noRemote',
+        )
         continue
       }
     }

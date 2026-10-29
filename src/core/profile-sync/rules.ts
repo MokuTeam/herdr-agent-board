@@ -148,7 +148,9 @@ export function suggestRules(
   to: { platform: Platform; home: string },
 ): Suggestion[] {
   const paths = unpaired.flatMap(u =>
-    u.path !== null && (u.why === 'noRemote' || u.why === 'noClone' || u.why === 'worktree') ? [u.path] : [],
+    u.path !== null && (u.why === 'noRemote' || u.why === 'noClone' || u.why === 'worktree' || u.why === 'gone')
+      ? [u.path]
+      : [],
   )
   return suggestMoves(paths, from, to).map(m => ({
     rule: direction === 'up' ? { pc: m.from, server: m.to } : { pc: m.to, server: m.from },

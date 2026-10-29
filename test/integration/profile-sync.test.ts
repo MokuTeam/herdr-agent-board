@@ -321,7 +321,11 @@ describe.skipIf(!DOCKER)('the profiles synced with the board on the server (Debi
         expect(cj.userID).toBe('srv-user-id')
         expect(cj.theme).toBe('dark')
         expect(Object.keys(cj.projects)).toEqual([`${HOME}/work/proj`])
-        expect(cj.mcpServers).toEqual({ remote: { type: 'http', url: 'https://mcp.example.com/mcp' } })
+        // the PC's remote server without its token; the board's own browser server stays the server's
+        expect(cj.mcpServers).toEqual({
+          'board-browser': expect.objectContaining({ args: ['browser-mcp'] }),
+          remote: { type: 'http', url: 'https://mcp.example.com/mcp' },
+        })
         const st = JSON.parse((await s.sh(`cat ${HOME}/.claude/settings.json`)).stdout)
         expect(st.env).toEqual({ DISABLE_TELEMETRY: '1' })
         expect(JSON.stringify(st.hooks)).toContain('agent-board')

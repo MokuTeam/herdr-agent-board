@@ -217,7 +217,8 @@ Not built in this step. Written down so the server mode leaves room for it.
   server (`tunnel.syncPaths[<host>]`, not secret). A project under a rule's folder lands at the
   same place below the other one, both ways (`\` ↔ `/`, Windows' case ignored), the longest folder
   first; the owner's own path (or "leave out") wins over a clone by git remote, which wins over
-  the same path, which wins over a rule; a worktree goes by a rule too, a gone folder never. A rule
+  the same path, which wins over a rule; a worktree and a folder not there (on the server: one the
+  sync placed whose project is not put there yet) go by a rule only. A rule
   is suggested from the projects without a place: their deepest common folder (never a drive or
   `/` alone, nor a folder above the home) to its name in the target's home (`C:\migo` →
   `/home/agent/migo`; one in the home to the same place in the other home); with none, one per top
