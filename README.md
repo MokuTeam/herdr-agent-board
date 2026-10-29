@@ -542,8 +542,9 @@ the transcript `projects/<project folder>/<id>.jsonl`, the session's own folder 
 stay. Moving it back later finds its older copy from the move before in the target: when the
 source's transcript goes on from that copy byte for byte, the copy is replaced (through a temp file
 renamed into place) and the session's folder and file history are copied over the old ones. It is
-refused when the target has another conversation with that id (one that went on by itself), or the
-source has none. A card from before the board kept profiles moves from the folder wake's entry
+refused when the target has a longer or different copy (one that went on by itself), when the
+session runs in the target profile, or when the source has none; these are found before a running
+session is put to sleep, so it stays up. A card from before the board kept profiles moves from the folder wake's entry
 names. When the source profile trusts the session's folder and the target does not, that one
 `hasTrustDialogAccepted` is copied into the target's `.claude.json` (`~/.claude.json` for the
 default folder), so a wake does not stop at Claude's folder-trust dialog. The card then names the

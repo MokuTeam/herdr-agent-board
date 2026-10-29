@@ -86,34 +86,78 @@ export function isPrefixFile(older: string, newer: string): boolean {
   }
 }
 
+/** Where a copy stands before it starts: the source's transcript, and what the target has under its id. */
+interface CopyPlan {
+  source: string
+  there: string | null
+  /** The size of the target's transcript as it was compared; 0 for none. */
+  size: number
+  /** The target's is the source's, whole. */
+  same: boolean
+}
+
+/**
+ * What a copy from `from` to `to` would find, or why it is refused: no transcript in `from`, or
+ * one in `to` that is not the start of it (longer, or another conversation). Nothing is written.
+ */
+function planCopy(
+  from: string,
+  to: string,
+  session: string,
+  cwd: string,
+): { ok: true; plan: CopyPlan } | { ok: false; error: string } {
+  const source = findTranscript(from, session, cwd)
+  if (!source) return { ok: false, error: `no conversation ${session} in ${from}` }
+  const there = findTranscript(to, session, cwd)
+  if (!there) return { ok: true, plan: { source, there, size: 0, same: false } }
+  try {
+    if (!isPrefixFile(there, source))
+      return { ok: false, error: `${to} has a longer or different copy of this conversation (${there})` }
+    const size = statSync(there).size
+    return { ok: true, plan: { source, there, size, same: size === statSync(source).size } }
+  } catch (err) {
+    return { ok: false, error: `comparing with ${there} failed: ${messageOf(err)}` }
+  }
+}
+
+/**
+ * Whether the session's files could be copied from `from` to `to` (copySession's refusals that are
+ * known before anything is done), without writing anything: a move asks before it puts a running
+ * session to sleep (services/move.ts, #256).
+ */
+export function checkCopy(
+  from: string,
+  to: string,
+  session: string,
+  cwd: string,
+): { ok: true } | { ok: false; error: string } {
+  const plan = planCopy(from, to, session, cwd)
+  return plan.ok ? { ok: true } : plan
+}
+
 /**
  * The session's files copied from the profile in `from` to the one in `to`, under the same
- * project folder. Refused (nothing copied) when `from` has no transcript of it, or `to` has
- * another one under its id. The side folders go first and the transcript last, through a temp file
- * renamed into place, so a copy cut off halfway leaves no transcript, or a whole one: a second try
- * copies the side folders over what it left, and takes a transcript the same as the source's as
- * copied (the move then goes on with the card), so a move cut off halfway can be run again. A
+ * project folder. Refused (nothing copied) when `from` has no transcript of it, or `to` has a
+ * longer or different one under its id (planCopy). The side folders go first and the transcript
+ * last, through a temp file renamed into place, so a copy cut off halfway leaves no transcript, or
+ * a whole one: a second try copies the side folders over what it left, and takes a transcript the
+ * same as the source's as copied (the move then goes on with the card), so a move cut off halfway
+ * can be run again. A
  * transcript in `to` that the source's begins with, byte for byte, is this conversation as a move
- * there before left it (#256): replaced the same way, its side folders copied over the old ones.
+ * there before left it (#256): replaced the same way, its side folders copied over the old ones;
+ * refused, the copy taken back, when it changed meanwhile (a session writes it). `copy`: how the
+ * transcript is copied to the temp file (a test's).
  */
 export function copySession(
   from: string,
   to: string,
   session: string,
   cwd: string,
+  copy: (src: string, dst: string) => void = copyFileSync,
 ): { ok: true; copied: CopiedSession } | { ok: false; error: string } {
-  const source = findTranscript(from, session, cwd)
-  if (!source) return { ok: false, error: `no conversation ${session} in ${from}` }
-  const there = findTranscript(to, session, cwd)
-  // What the target has under its id: nothing, this transcript, or an older copy of it.
-  let same = false
-  try {
-    if (there && !isPrefixFile(there, source))
-      return { ok: false, error: `${to} has another conversation under ${session} already (${there})` }
-    same = !!there && statSync(there).size === statSync(source).size
-  } catch (err) {
-    return { ok: false, error: `comparing with ${there} failed: ${messageOf(err)}` }
-  }
+  const planned = planCopy(from, to, session, cwd)
+  if (!planned.ok) return planned
+  const { source, there, size, same } = planned.plan
   const target = there ?? join(to, 'projects', basename(dirname(source)), `${session}.jsonl`)
   const side = (src: string, dst: string): boolean => {
     if (!statSync(src, { throwIfNoEntry: false })?.isDirectory()) return false
@@ -128,7 +172,9 @@ export function copySession(
       mkdirSync(dirname(target), { recursive: true })
       const tmp = `${target}.${process.pid}.tmp`
       try {
-        copyFileSync(source, tmp)
+        copy(source, tmp)
+        // Its older copy written meanwhile (a session resumed there): those turns would be lost.
+        if (there && statSync(there).size !== size) throw new Error(`${there} changed while it was copied`)
         renameWithRetry(tmp, target)
       } catch (err) {
         try {

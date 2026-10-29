@@ -9,7 +9,7 @@
 // through POST /api/move (server/routes/move.ts, #256).
 import { homedir } from 'node:os'
 import { writeCard } from '../adapters/cards.ts'
-import { copySession, copyTrust } from '../adapters/move-files.ts'
+import { checkCopy, copySession, copyTrust } from '../adapters/move-files.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { claudeStateFile, moveProfile, moveSource } from '../core/move.ts'
 import type { Profile } from '../core/profiles.ts'
@@ -49,6 +49,21 @@ async function wakeDirOf(deps: Deps, item: Item, list: readonly Profile[]): Prom
   if (!item.session || item.profileFolder || itemProfile(item, list)) return ''
   const s = (await deps.wake.sleepers()).find(x => x.session === item.session)
   return s?.profile?.dir ?? ''
+}
+
+/** Whether the session `session` runs now in the profile folder `dir`, as its registry there says. */
+const runsIn = (deps: Deps, dir: string, session: string): boolean => deps.homes.forDir(dir).liveSessions().has(session)
+
+/**
+ * Why the session cannot be moved from `from` to `to`, known before anything is done: it runs in
+ * the target profile, or the files refuse (adapters/move-files.ts checkCopy); '' when it can. Asked
+ * before a running session is put to sleep, so it is not put to sleep for nothing.
+ */
+function copyBlock(deps: Deps, item: Item, from: string, to: Profile): string {
+  const session = item.session ?? ''
+  if (runsIn(deps, to.dir, session)) return `it is running in ${to.id}`
+  const check = checkCopy(from, to.dir, session, item.cwd)
+  return check.ok ? '' : check.error
 }
 
 /**
@@ -99,7 +114,7 @@ export async function moveMany(
         ? 'not a Claude session'
         : await (async () => {
             const src = moveSource(item, set.list, to.profile, await wakeDirOf(deps, item, set.list))
-            return 'error' in src ? src.error : ''
+            return 'error' in src ? src.error : copyBlock(deps, item, src.dir, to.profile)
           })()
     if (why) done.set(item.key, { target, result: 'refused', why, ...who })
     else checked.push({ target, item })
@@ -175,7 +190,9 @@ export async function moveAsleep(
   const src = moveSource(item, list, to, await wakeDirOf(deps, item, list))
   if ('error' in src) return { ok: false, error: src.error }
   const session = item.session ?? ''
-  if (deps.homes.forDir(src.dir).liveSessions().has(session)) return { ok: false, error: 'it is running again' }
+  if (runsIn(deps, src.dir, session)) return { ok: false, error: 'it is running again' }
+  // Resumed by hand in the target meanwhile: its transcript there is being written.
+  if (runsIn(deps, to.dir, session)) return { ok: false, error: `it is running in ${to.id}` }
   const copied = copySession(src.dir, to.dir, session, item.cwd)
   if (!copied.ok) return copied
   const notes: string[] = copied.copied.again

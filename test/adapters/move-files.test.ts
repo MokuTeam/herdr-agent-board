@@ -3,11 +3,22 @@
 // without one writes as before (POSIX only: Windows has no such mode). Moving back (#256): a target
 // copy the source goes on from, compared a piece at a time.
 import { expect, onTestFinished, test } from 'bun:test'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { replaceFile } from '../../src/adapters/json-store.ts'
-import { copyTrust, isPrefixFile } from '../../src/adapters/move-files.ts'
+import { checkCopy, copySession, copyTrust, isPrefixFile } from '../../src/adapters/move-files.ts'
 
 test.skipIf(process.platform === 'win32')(
   'copyTrust keeps the target state file’s 0600; replaceFile without a mode is as before',
@@ -55,4 +66,31 @@ test('isPrefixFile: a longer file going on from the shorter one, a byte apart pa
   const empty = join(dir, 'empty.jsonl')
   writeFileSync(empty, '')
   expect(isPrefixFile(empty, newer)).toBe(true)
+})
+
+test('copySession: an older copy that grows while the transcript is copied is not replaced, nothing lost', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-move-grows-'))
+  onTestFinished(() => rmSync(dir, { recursive: true, force: true }))
+  const session = '0f8fad5b-d9cb-469f-a165-70867728950e'
+  const from = join(dir, 'from')
+  const to = join(dir, 'to')
+  for (const d of [from, to]) mkdirSync(join(d, 'projects', 'p'), { recursive: true })
+  const source = join(from, 'projects', 'p', `${session}.jsonl`)
+  const there = join(to, 'projects', 'p', `${session}.jsonl`)
+  writeFileSync(there, '{"turn":1}\n')
+  writeFileSync(source, '{"turn":1}\n{"turn":2}\n')
+  expect(checkCopy(from, to, session, '')).toEqual({ ok: true })
+  // A session resumed in `to` writes a turn while the copy runs.
+  const r = copySession(from, to, session, '', (src, dst) => {
+    copyFileSync(src, dst)
+    appendFileSync(there, '{"turn":"in to"}\n')
+  })
+  expect(r).toEqual({ ok: false, error: `copying into ${to} failed: ${there} changed while it was copied` })
+  expect(readFileSync(there, 'utf8')).toBe('{"turn":1}\n{"turn":"in to"}\n')
+  expect(readdirSync(join(to, 'projects', 'p'))).toEqual([`${session}.jsonl`])
+  // Asked again, it is a copy that went on by itself: refused before anything is written.
+  expect(checkCopy(from, to, session, '')).toEqual({
+    ok: false,
+    error: `${to} has a longer or different copy of this conversation (${there})`,
+  })
 })
