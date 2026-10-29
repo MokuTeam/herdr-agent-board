@@ -5,6 +5,7 @@ import type { ReactNode } from 'react'
 import type { Item } from '../../../src/core/types.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import type { DropLit, LaneView } from '../models/board-view.ts'
+import { hoursText } from '../models/time.ts'
 import { COLUMN_COLORS } from '../models/toolbar.ts'
 import { classNames } from './class-names.ts'
 import { PlusIcon } from './icons.tsx'
@@ -24,10 +25,16 @@ export interface LaneProps {
   onNewSession(ctx: NewSessionContext, from: HTMLElement): void
   /** A click on its head (the categories panel opens at the lane). */
   onHead?: () => void
+  /** Today's billed seconds of this client (#233); none: no total shown. */
+  time?: number | undefined
+  /** config.json's `time` does not check out: the total is marked, and its hint says so. */
+  timeProblem?: boolean | undefined
+  /** A click on that total: the Time panel on this client. */
+  onTime?: () => void
   renderCard(item: Item): ReactNode
 }
 
-export function Lane({ lane, lit, canMutate, onNewSession, onHead, renderCard }: LaneProps) {
+export function Lane({ lane, lit, canMutate, onNewSession, onHead, time, timeProblem, onTime, renderCard }: LaneProps) {
   const t = useT()
   const litHere = lit?.lane === lane.id ? lit : null
   return (
@@ -47,6 +54,16 @@ export function Lane({ lane, lit, canMutate, onNewSession, onHead, renderCard }:
           <span className="lane-tag">{lane.title}</span>
           <span className="lane-count">{lane.items.length || ''}</span>
         </header>
+        {time ? (
+          <button
+            type="button"
+            className={classNames('lane-time', timeProblem && 'problem')}
+            title={t(timeProblem ? 'time.laneTotalProblem' : 'time.laneTotalHint')}
+            onClick={() => onTime?.()}
+          >
+            {t('time.laneTotal', { hours: hoursText(time, t) })}
+          </button>
+        ) : null}
         <button
           type="button"
           className="lane-new"

@@ -34,7 +34,7 @@ import {
 } from '../adapters/ssh.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
-import type { BackupPayload } from '../core/payload.ts'
+import type { BackupPayload, TimePayload } from '../core/payload.ts'
 import type { Observation } from '../core/presence.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
@@ -78,6 +78,7 @@ import { setupRoute } from './routes/setup.ts'
 import { sleepRoute } from './routes/sleep.ts'
 import { staticRoute } from './routes/static.ts'
 import { terminalRoute } from './routes/terminal.ts'
+import { timeRoutes, timeToday } from './routes/time.ts'
 import { todosRoutes } from './routes/todos.ts'
 import { wakeRoutes } from './routes/wake.ts'
 import { createBroadcaster } from './sse.ts'
@@ -420,6 +421,9 @@ export async function startServer({
     const first = v.problems[0]
     return { last, problem: first ? { kind: first.kind, ...('target' in first && { target: first.target }) } : null }
   }
+  // Time tracking (#233): while config.json turns it on, today's billed time by lane and the
+  // journal's last seq, read from the database (one query a refresh); off, nothing is read.
+  const timeLine = (): TimePayload | null => timeToday(cfg)
   const board = createBoardState({
     deps,
     launches,
@@ -435,6 +439,7 @@ export async function startServer({
     ...(omarchy && { omarchy: omarchy.stamp }),
     presence: presence.view,
     backup: backupLine,
+    time: timeLine,
   })
   board.publish()
   const refresh = (): void => void board.refresh()
@@ -462,6 +467,8 @@ export async function startServer({
     ...presenceRoutes(presence),
     // Tasks (#202): points pinned on the board, done, reopened, removed; turned on or off.
     ...todosRoutes({ cfg, find: board.find, refresh }),
+    // Time entries by day and client, as billed (#233): read only, the remote page too.
+    ...timeRoutes(cfg),
     // Settings → Backup… (#233): the passphrase, the targets, the server's setup; this computer only.
     ...backupRoutes({ cfg, server: backupServer, now: () => backups.now(true), changed: () => board.publish() }),
     // A line from the page for this log (a phone's browser says what it could not do there).

@@ -18,6 +18,7 @@ import { PhonesPanel, type PhonesPanelProps } from './phones/PhonesPanel.tsx'
 import { ProfilesPanel, type ProfilesPanelProps } from './profiles/ProfilesPanel.tsx'
 import { SchedulePanel, type SchedulePanelProps } from './schedule/SchedulePanel.tsx'
 import { Sheet, type SheetSlots } from './sheet/Sheet.tsx'
+import { TimePanel, type TimePanelProps } from './time/TimePanel.tsx'
 import { TodosPanel, type TodosPanelProps } from './todos/TodosPanel.tsx'
 import { WakePanel, type WakePanelProps } from './wake/WakePanel.tsx'
 
@@ -42,6 +43,8 @@ export interface SidePanelsProps {
   todos?: TodosPanelProps
   /** Settings → Backup… (#233); drawn when given (the page gives it once opened, on the local board only). */
   backup?: BackupPanelProps
+  /** Time (#233): drawn while the board has time tracking on. */
+  time?: TimePanelProps
 }
 
 export function SidePanels({
@@ -56,6 +59,7 @@ export function SidePanels({
   archive,
   todos,
   backup,
+  time,
 }: SidePanelsProps) {
   const { data, ui, dispatch } = useBoardContext()
   return (
@@ -73,6 +77,7 @@ export function SidePanels({
       {access && <AccessPanel {...access} />}
       {todos && data?.todos && <TodosPanel {...todos} />}
       {backup && <BackupPanel {...backup} />}
+      {time && data?.time && <TimePanel {...time} />}
     </>
   )
 }

@@ -186,6 +186,8 @@ export interface Config {
   todos?: unknown
   /** The backup of the board's database (#233), as config.json has it: read through core/backup.ts backupConfig. */
   backup?: unknown
+  /** Time tracking (#233), as config.json has it: read through core/time.ts timeConfig. */
+  time?: unknown
   [extra: string]: unknown
 }
 

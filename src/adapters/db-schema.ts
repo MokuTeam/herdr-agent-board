@@ -31,6 +31,36 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX journal_ref ON journal (store, ref);
     `,
   },
+  {
+    version: 2,
+    store: 'time',
+    // Time entries (core/time.ts TimeEntry): `date` is the work date stamped when written; a
+    // removed entry stays with `deleted` (its Toggl id keeps the import from bringing it back). Two
+    // live entries alike in client, project, description, start and stop are one: the index makes
+    // a repeated `board time add` find the first, whatever process writes it.
+    sql: `
+      CREATE TABLE time_entries (
+        id TEXT PRIMARY KEY,
+        client TEXT NOT NULL,
+        project TEXT NOT NULL,
+        description TEXT NOT NULL,
+        tags TEXT NOT NULL DEFAULT '[]',
+        start TEXT NOT NULL,
+        stop TEXT NOT NULL,
+        date TEXT NOT NULL,
+        by TEXT NOT NULL,
+        at INTEGER NOT NULL,
+        changed INTEGER NOT NULL,
+        changed_by TEXT NOT NULL,
+        rev INTEGER NOT NULL DEFAULT 1,
+        deleted INTEGER,
+        toggl TEXT
+      ) STRICT;
+      CREATE INDEX time_by_date ON time_entries (date, client);
+      CREATE UNIQUE INDEX time_live_same ON time_entries (client, project, description, start, stop) WHERE deleted IS NULL;
+      CREATE UNIQUE INDEX time_toggl ON time_entries (toggl) WHERE toggl IS NOT NULL;
+    `,
+  },
 ]
 
 /** The version the code makes a file: the last step's. */
