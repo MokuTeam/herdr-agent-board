@@ -21,8 +21,11 @@ import { addTimeProjects } from '../adapters/config-file.ts'
 import { type BoardDb, openDb } from '../adapters/db.ts'
 import {
   addEntry,
+  changeOf,
   editEntry,
   getEntry,
+  type ImportChange,
+  ImportIndex,
   type ImportRow,
   importEntries,
   importVerdict,
@@ -199,10 +202,10 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
     return c
   }
   /** A time flag: what parseWhen takes, within a day ahead and a year back. */
-  const when = (flag: string): number | null => {
+  const when = (flag: string, o: { yesterday?: boolean } = {}): number | null => {
     const v = a.one(flag)
     if (v === undefined) return null
-    const at = parseWhen(v, now)
+    const at = parseWhen(v, now, o)
     if (at === null) throw new TimeError('time.err.when', { value: v })
     if (!plausible(at, now)) throw new TimeError('time.err.whenRange', { value: v })
     return at
@@ -222,7 +225,11 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       const client = clientArg()
       const project = a.one('--project') ?? ''
       const start = when('--start')
-      const stopGiven = when('--stop')
+      // a stop with no start is the end of what was just done: HH:MM ahead of now is a slip, not
+      // yesterday's (with a start, the pair may be last evening's)
+      const stopGiven = when('--stop', { yesterday: start !== null })
+      if (start === null && stopGiven !== null && stopGiven > now + 60 * 60_000)
+        throw new TimeError('time.err.stopAhead', { value: a.one('--stop') ?? '' })
       const duration = durationOf({ minutes: a.one('--minutes'), hours: a.one('--hours') })
       let from: number
       let to: number
@@ -453,6 +460,7 @@ async function importCmd(
     if (r.missing.length) throw new TimeError('time.err.importColumns', { columns: r.missing.join(', ') })
     if (r.dates === 'ambiguous') throw new TimeError('time.err.dateFormat')
     if (r.dates === 'mixed') throw new TimeError('time.err.dateOrder')
+    if (r.dates === 'conflict') throw new TimeError('time.err.dateConflict', { format: format ?? '' })
     ;({ rows, bad } = r)
   }
   const unmapped = new Set<string>()
@@ -505,25 +513,32 @@ async function importCmd(
     title,
     ...list.map(d => `  ${d.date} · ${d.client} · ${d.entries} · ${hm(d.seconds)}`),
   ]
-  const changeLines = (key: string, list: readonly { id: string; fields: string[] }[]): string[] =>
-    list.map(c => t(key, { id: c.id, fields: c.fields.join(', ') }))
+  /** A row the store has otherwise: changed in Toggl (or on the board) since its import, or made by a session at that start. */
+  const changeLines = (key: string, list: readonly ImportChange[]): string[] =>
+    list.map(c =>
+      c.by === 'import'
+        ? t(key, { id: c.id, fields: c.fields.join(', ') })
+        : t('time.cli.importClash', { id: c.id, who: whoText(c.by), fields: c.fields.join(', ') }),
+    )
   if (a.has('--dry-run')) {
     // read only: what a run would do against the database as it is
     const db = readable()
-    const verdicts = (() => {
+    const index = (() => {
       try {
-        return entries.map(e => importVerdict(db, conf, e))
+        return new ImportIndex(db)
       } finally {
         db?.close()
       }
     })()
+    // a row the run would add goes into the index, as the run does: two of one file meet
+    const verdicts = entries.map(e => {
+      const v = importVerdict(index, conf, e)
+      if (v.kind === 'new') index.add(v.entry)
+      return v
+    })
     const fresh = verdicts.filter(v => v.kind === 'new').length
     const already = verdicts.filter(v => v.kind === 'already').length
-    const changed = verdicts.flatMap(v =>
-      v.kind === 'changed'
-        ? [{ id: v.stored.id, toggl: v.stored.toggl ?? null, start: v.stored.start, fields: v.fields }]
-        : [],
-    )
+    const changed = verdicts.flatMap(v => (v.kind === 'changed' ? [changeOf(v)] : []))
     print(
       [
         ...totals(t('time.cli.byWorkDate', { zone: conf.zone }), byWorkDate),

@@ -27,6 +27,12 @@ export interface BackupConfig {
   server: ServerTarget | null
 }
 
+/** Where a target puts its snapshots: the folder, or the server's host and port; null when it is not set. */
+export function targetWhere(c: BackupConfig, target: Target): string | null {
+  if (target === 'folder') return c.folder
+  return c.server ? `${c.server.host}:${c.server.port}` : null
+}
+
 const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -194,6 +200,8 @@ export interface TargetState {
   ahead?: number
   /** The last Test that went the whole way round (written, read back, opened, compared). */
   tested?: number | null
+  /** Where its last snapshot or Test went (targetWhere): a target moved since has not been backed up to. */
+  where?: string | null
 }
 
 export const freshTarget = (): TargetState => ({

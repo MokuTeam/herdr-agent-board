@@ -5,7 +5,7 @@
 // target that is down now does not stop a write; one that never worked does.
 import { readKey, readStatus } from '../adapters/backup-store.ts'
 import { TimeError } from '../adapters/time-store.ts'
-import { activeTargets, backupConfig } from '../core/backup.ts'
+import { activeTargets, backupConfig, targetWhere } from '../core/backup.ts'
 import { t } from '../core/lang.ts'
 import type { SetupCheck } from '../core/setup.ts'
 import { problemsText, type TimeConfig, timeConfig } from '../core/time.ts'
@@ -14,11 +14,16 @@ import type { Config, Translator } from '../core/types.ts'
 /** Why no entry may be written now, or null: it may. */
 export function writeRefusal(cfg: Pick<Config, 'backup'>, conf: TimeConfig): TimeError | null {
   if (conf.problems.length) return new TimeError('time.err.config', { problems: problemsText(conf.problems, t) })
-  const targets = activeTargets(backupConfig(cfg.backup))
+  const c = backupConfig(cfg.backup)
+  const targets = activeTargets(c)
   if (!targets.length || !readKey()) return new TimeError('time.err.noBackup')
   const states = readStatus().targets
-  if (!targets.some(target => states[target]?.lastOk || states[target]?.tested))
-    return new TimeError('time.err.notBackedUp')
+  // to this target as it is set now: a folder or server changed since has not taken one
+  const went = (target: (typeof targets)[number]) => {
+    const s = states[target]
+    return !!(s?.lastOk || s?.tested) && s?.where === targetWhere(c, target)
+  }
+  if (!targets.some(went)) return new TimeError('time.err.notBackedUp')
   return null
 }
 

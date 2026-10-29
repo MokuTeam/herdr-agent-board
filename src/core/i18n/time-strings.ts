@@ -36,6 +36,11 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.err.importColumns': 'The CSV lacks the columns: {columns}. Export Toggl’s Detailed report.',
     'time.err.unmapped':
       'Toggl clients without a lane: {clients}. Map each with --map "<client>=<lane>" ("" for none).',
+    'time.err.stopAhead':
+      '--stop {value} is over an hour from now and there is no --start: give the date (YYYY-MM-DD HH:MM), or a --start.',
+    'time.err.dateConflict':
+      'The CSV’s dates go the other way round than --date-format {format} says: leave the flag out, or export it again.',
+    'time.cli.importClash': 'made on the board by {who} at that start, not imported: {id} ({fields})',
     'time.err.config': 'Time is not written while config.json’s "time" does not check out: {problems}',
     'time.err.notBackedUp':
       'Time is not written before a backup of the board’s database has gone through once: run Test or Back up now in Settings → Backup…',
@@ -135,6 +140,11 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.err.importColumns': 'В CSV нет столбцов: {columns}. Выгрузите Detailed report из Toggl.',
     'time.err.unmapped':
       'Клиенты Toggl без лейна: {clients}. Укажите каждый через --map "<клиент>=<лейн>" ("" для пустого).',
+    'time.err.stopAhead':
+      '--stop {value} больше чем на час впереди, а --start нет: укажите дату (ГГГГ-ММ-ДД ЧЧ:ММ) или --start.',
+    'time.err.dateConflict':
+      'Даты в CSV записаны иначе, чем говорит --date-format {format}: уберите флаг или выгрузите файл заново.',
+    'time.cli.importClash': 'на доске в это время уже есть запись ({who}), не импортирована: {id} ({fields})',
     'time.err.config': 'Время не пишется, пока "time" в config.json не в порядке: {problems}',
     'time.err.notBackedUp':
       'Время не пишется, пока бэкап базы доски ни разу не прошёл: запустите Проверить или Бэкап сейчас в Настройки → Бэкап…',

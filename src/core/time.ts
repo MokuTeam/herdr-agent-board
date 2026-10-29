@@ -134,8 +134,9 @@ function ruleOf(raw: unknown, at: string, problems: TimeProblem[]): BillingRule 
   else if (raw.match !== undefined && raw.match !== null)
     problems.push({ at: `${at}.match`, why: 'type', value: shown(raw.match) })
   if (match && !goodRegex(match)) problems.push({ at: `${at}.match`, why: 'regex', value: match })
-  const group = raw.group === undefined ? 'entry' : (raw.group as Group)
-  if (!GROUPS.includes(group)) problems.push({ at: `${at}.group`, why: 'group', value: shown(raw.group) })
+  const group = raw.group as Group
+  if (raw.group === undefined) problems.push({ at: `${at}.group`, why: 'required' })
+  else if (!GROUPS.includes(group)) problems.push({ at: `${at}.group`, why: 'group', value: shown(raw.group) })
   const round = raw.round as Round
   if (raw.round === undefined) problems.push({ at: `${at}.round`, why: 'required' })
   else if (!ROUNDS.includes(round)) problems.push({ at: `${at}.round`, why: 'round', value: shown(raw.round) })
@@ -302,10 +303,10 @@ const HM_AHEAD_MS = 3_600_000
 
 /**
  * A time as a command takes it: ISO with an offset or Z ("2026-10-28T09:00:00+03:00"), or the
- * computer's own clock: "HH:MM" (today's, or yesterday's when today's is more than an hour ahead),
- * "YYYY-MM-DD HH:MM". The instant, or null.
+ * computer's own clock: "HH:MM" (today's, or yesterday's when today's is more than an hour ahead,
+ * unless `yesterday` is false), "YYYY-MM-DD HH:MM". The instant, or null.
  */
-export function parseWhen(s: string, now: number = Date.now()): number | null {
+export function parseWhen(s: string, now: number = Date.now(), o: { yesterday?: boolean } = {}): number | null {
   const v = s.trim()
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/i.test(v)) {
     const at = Date.parse(v)
@@ -316,7 +317,7 @@ export function parseWhen(s: string, now: number = Date.now()): number | null {
     if (!(Number(m[1]) < 24 && Number(m[2]) < 60)) return null
     const d = new Date(now)
     d.setHours(Number(m[1]), Number(m[2]), 0, 0)
-    if (d.getTime() > now + HM_AHEAD_MS) d.setDate(d.getDate() - 1)
+    if (o.yesterday !== false && d.getTime() > now + HM_AHEAD_MS) d.setDate(d.getDate() - 1)
     return d.getTime()
   }
   m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})$/.exec(v)

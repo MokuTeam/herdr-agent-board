@@ -25,7 +25,7 @@ async function setUp(backedUp: boolean | 'never' = true) {
   if (backedUp) {
     await writeKey(makeKey('correct horse battery', 1, { logN: 10, r: 8, p: 1 }))
     // a Test of the folder went the whole way round once ('never': set up, and never worked)
-    if (backedUp === true) updateTarget('folder', st => ({ ...st, tested: Date.now() }))
+    if (backedUp === true) updateTarget('folder', st => ({ ...st, tested: Date.now(), where: folder }))
   }
   const cfg = {
     language: 'en',
@@ -87,8 +87,18 @@ test('nothing is written before the database is backed up off the computer, once
   const { cfg } = await setUp('never')
   assert.equal(await keyOf(run(cfg, add)), 'time.err.notBackedUp')
   // one that did, once: a target down now does not stop a write
-  updateTarget('folder', st => ({ ...st, lastOk: Date.now() - 30 * 86_400_000, error: 'offline', failures: 9 }))
+  const folder = (cfg.backup as { folder: string }).folder
+  updateTarget('folder', st => ({
+    ...st,
+    lastOk: Date.now() - 30 * 86_400_000,
+    error: 'offline',
+    failures: 9,
+    where: folder,
+  }))
   assert.equal((await jsonOf(cfg, add)).existing, false)
+  // the folder moved since: the new one has taken nothing
+  const moved = { ...cfg, backup: { folder: `${folder}-new` } } as Config
+  assert.equal(await keyOf(run(moved, add)), 'time.err.notBackedUp')
 })
 
 test('nothing is written while config.json’s time does not check out; a day says so; doctor names it', async () => {
@@ -364,4 +374,43 @@ test('import: a dry run reads the database and says what is new, there and chang
   updateTarget('folder', st => ({ ...st, tested: null, lastOk: null }))
   assert.equal(await keyOf(run(cfg, ['import', csv, ...map])), 'time.err.notBackedUp')
   assert.equal(readFileSync(file, 'utf8'), before)
+})
+
+test('--stop over an hour ahead with no --start is refused, not read as yesterday’s; with a start it may be', async () => {
+  const { cfg } = await setUp()
+  // NOW is 12:00 in New York; on this computer's clock HH:MM two hours ahead of it
+  const ahead = new Date(NOW + 2 * 3_600_000)
+  const hm = `${ahead.getHours()}:${String(ahead.getMinutes()).padStart(2, '0')}`
+  assert.equal(
+    await keyOf(run(cfg, ['add', '--project', 'Support', '--stop', hm, '--minutes', '60', 'Case 10001 X: work'])),
+    'time.err.stopAhead',
+  )
+})
+
+test('import: a file whose dates go the other way than --date-format says is refused', async () => {
+  const { dir, cfg } = await setUp()
+  const csv = join(dir, 'toggl.csv')
+  writeFileSync(
+    csv,
+    'Client,Project,Description,Start date,Start time,End date,End time,Duration,Tags\nClient A,Support,Work,28/10/2026,09:00:00,28/10/2026,10:00:00,01:00:00,\n',
+  )
+  assert.equal(
+    await keyOf(
+      run(cfg, ['import', csv, '--tz', 'Europe/Istanbul', '--map', 'Client A=client-a', '--date-format', 'mdy']),
+    ),
+    'time.err.dateConflict',
+  )
+})
+
+test('import: two rows of one file with the same lane and start: the dry run says what the run does', async () => {
+  const { dir, cfg } = await setUp()
+  const csv = join(dir, 'toggl.csv')
+  const head = 'Client,Project,Description,Start date,Start time,End date,End time,Duration,Tags'
+  const one = 'Client A,Support,Case 10001 X: work,2026-10-28,16:00:00,2026-10-28,17:30:00,01:30:00,'
+  writeFileSync(csv, [head, one, one.replace('X: work', 'X: again')].join('\n'))
+  const map = ['--tz', 'Europe/Istanbul', '--map', 'Client A=client-a']
+  const dry = await jsonOf(cfg, ['import', csv, ...map, '--dry-run'])
+  assert.deepEqual([dry.new, dry.changed.length], [1, 1])
+  const done = await jsonOf(cfg, ['import', csv, ...map])
+  assert.deepEqual([done.added, done.changed.length], [1, 1])
 })

@@ -1792,7 +1792,8 @@ Time tracking of the board's own (#233), off unless `time` is in config.json: en
 (a board lane) that sessions write as they finish a piece of work and billing agents read at the
 end of the day, without the rate limit of an outside service. The entries live in the board's
 database ([Backup](#backup)), and nothing is written before a backup of it has gone through once,
-to a target off this computer (a snapshot, or a Test that went the whole way round): what a bill is
+to a target off this computer as it is set now (a snapshot, or a Test that went the whole way round;
+a folder or server changed since has to take one first): what a bill is
 made from is never on this computer alone. A target that is down for a while does not stop it.
 
 **An entry** is a client's and a project's, from a start to a stop, with a description and tags
@@ -1833,8 +1834,8 @@ without `projects` takes any. Without `clients`, every lane takes any project.
 **Billing rules, as data.** A client's day becomes billed lines: each entry goes to the first rule
 whose `match` (a regex on the description, case aside) fits; `group` adds entries up (`entry`
 each alone, `ref` the same reference whatever its project, entries without one by project,
-`project`, or `day`; `entry` when not given); `step` (minutes) and `round` (`up`, `nearest` with a
-tie going up, `down`, `exact`; required) make the billed figure. `nearest` bills nothing for a sum
+`project`, or `day`; required); `step` (minutes) and `round` (`up`, `nearest` with a tie going up,
+`down`, `exact`; required) make the billed figure. `nearest` bills nothing for a sum
 under half a step. The reference is the first capture of the client's `ref`; the default takes the
 first five-digit case number or ticket key such as ABC-123, so a client whose descriptions can carry
 other such text before it (UTF-8, SHA-256) sets its own, anchored: `"ref": "^Case (\\d{5})"`. An
@@ -1859,7 +1860,8 @@ board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--date-
 
 Times are ISO with an offset (`2026-10-28T09:00:00+03:00`), or this computer's clock (`9:30`,
 `2026-10-28 9:30`); `HH:MM` more than an hour ahead is yesterday's (past midnight, `21:00` is last
-evening). A time more than a day ahead or a year back is refused as a likely slip. Without
+evening); with no `--start`, a `--stop` over an hour ahead is refused instead (give its date).
+A time more than a day ahead or a year back is refused as a likely slip. Without
 `--start` the entry ends now (or at `--stop`). `--` ends the flags: quote the description, or put
 it after `--` when it may hold a word starting with `--`.
 
@@ -1892,7 +1894,9 @@ client: `client`, `date`, `zone`, `seconds`, `billedSeconds`, `held` (entry ids)
 ids), and `entries` (the day's entries in full). `projects` gives `{ "<lane>": [...] | null }`, or
 null without `clients`. An error is `{ "ok": false, "error": "<code>", "message": "…" }` on stdout
 with exit code 1: `notYours`, `changedSince`, `gone`, `removed`, `config`, `noBackup`,
-`notBackedUp`, `client`, `project`, `when`, `whenRange`, `usage`… (the key of its text).
+`notBackedUp`, `client`, `project`, `when`, `whenRange`, `stopAhead`, `usage`… (the key of its
+text). **While `problems` is not empty, an agent stops:** the day's figures were worked out with
+what of config.json checks out, and are not to be billed from.
 
 **The Time panel.** "Time" in the toolbar, and a lane's total for today by its name, open the day
 by client as it will be billed, on today each time: the day before and after and Today, the
@@ -1908,16 +1912,20 @@ names). `--tz` is the Toggl profile's time zone (the CSV's times have none); `--
 Toggl client to a lane (`"=personal"` for entries without one); an unmapped client stops the run
 with the list. The CSV's dates follow the profile's format: day and month either way round are
 read from the file itself (a 28 first is a day); a file where every date reads both ways asks for
-`--date-format dmy` or `mdy`, and a date that is no date (2026-02-30) is an unreadable row, named.
-12-hour times are read too.
+`--date-format dmy` or `mdy` (a file that shows the other order than the flag is refused), and a
+date that is no date (2026-02-30) is an unreadable row, named. 12-hour times are read too.
 
-A row is known again by Toggl's id when the file has one (the JSON), else by its lane and its start
-to the second: a second run, of the same export or a later one, adds only what is new and never
-brings back an entry removed since. A row edited in Toggl since it was imported (its wording, its
-stop, its project, its tags) is listed as changed, with the fields, and not added again;
+A row is known again by Toggl's id when the file has one (the JSON), else (the CSV has none) by a
+key of its lane and the start Toggl gave it, kept on the entry, and then by its lane and start: a
+second run, of the same export or a later one, adds only what is new and never brings back an entry
+removed since, moved on the board, or given another start there. A row that differs (edited in
+Toggl since it was imported: its wording, its stop, its project, its tags; or moved on the board)
+is listed as changed, with the fields, and not added again; a row at the start of an entry a
+session made is named as that session's, not imported;
 `--update` takes Toggl's values for the entries the board never changed (made and last changed by
 the import), journaled as `import-update`. `--dry-run` reads the database and writes nothing: what
-is new, already there and changed, and the totals per day twice, by work date (as the board will
+is new, already there and changed (two rows of one file at one lane and start meet each other, as
+in the run), and the totals per day twice, by work date (as the board will
 bill) and by Toggl's own day in `--tz` (to hold against Toggl's report). Running timers are
 skipped. Projects found go into each listed lane's projects, once the run is let in.
 

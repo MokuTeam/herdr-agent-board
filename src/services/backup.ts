@@ -50,6 +50,7 @@ import {
   type Target,
   type TargetState,
   targetDue,
+  targetWhere,
 } from '../core/backup.ts'
 import { BackupFileError, type BackupKey, makeKey, seal, unseal } from '../core/backup-file.ts'
 import { DROP_VERSION } from '../core/backup-server.ts'
@@ -311,7 +312,7 @@ export async function backupNow(o: {
     for (const target of due) {
       try {
         const { name, ahead } = await sendTo(target, c, snap.sealed, now())
-        record(target, now(), { name, seq: snap.seq, ahead })
+        record(target, now(), { name, seq: snap.seq, ahead, where: targetWhere(c, target) })
         report.sent.push({ target, name })
       } catch (err) {
         record(target, now(), failureOf(err))
@@ -332,7 +333,7 @@ export async function backupNow(o: {
 function record(
   target: Target,
   at: number,
-  r: { name: string; seq: number; ahead: number } | { error: string; held?: boolean },
+  r: { name: string; seq: number; ahead: number; where: string | null } | { error: string; held?: boolean },
 ): TargetState {
   // the view compares the database's seq with the backups': read it afresh after this one
   seqRead = null
@@ -349,6 +350,7 @@ function record(
           failures: 0,
           held: null,
           ahead: r.ahead,
+          where: r.where,
         },
   )
 }
@@ -488,8 +490,9 @@ export async function testTarget(
     const opened = unseal(back, key)
     if (!opened.equals(snap.plain)) return { ok: false, name, error: t('backup.err.notSame') }
     const at = now()
-    if (snap.seq >= 0) record(target, at, { name, seq: snap.seq, ahead })
-    updateTarget(target, s => ({ ...s, held: null, error: null, failures: 0, ahead, tested: at }))
+    const where = targetWhere(c, target)
+    if (snap.seq >= 0) record(target, at, { name, seq: snap.seq, ahead, where })
+    updateTarget(target, s => ({ ...s, held: null, error: null, failures: 0, ahead, tested: at, where }))
     return { ok: true, name }
   } catch (err) {
     const error = err instanceof BackupFileError ? t(err.message) : message(err)

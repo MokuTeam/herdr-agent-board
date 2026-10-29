@@ -453,12 +453,14 @@ export function restoreEntry(db: BoardDb, id: string, actor: Actor, o: { force?:
 /** A Toggl row for the store: its lane, and Toggl's id or none (the Detailed report's CSV has none). */
 export type ImportRow = Omit<NewEntry, 'startGiven' | 'newProject'>
 
-/** A row the store has, changed in Toggl since: the entry, and the fields that differ. */
+/** A row the store has that differs from Toggl's: the entry, who made it, and the fields that differ. */
 export interface ImportChange {
   id: string
   toggl: string | null
   start: string
   fields: string[]
+  /** Who made the stored entry: the import (changed in Toggl since, or on the board), or a session at that start. */
+  by: Actor
 }
 
 export type ImportVerdict =
@@ -467,6 +469,12 @@ export type ImportVerdict =
   | { kind: 'changed'; stored: TimeEntry; next: TimeEntry; fields: string[] }
 
 const IMPORT_FIELDS = ['client', 'project', 'description', 'start', 'stop', 'tags'] as const
+
+/**
+ * A CSV row's key (the Detailed report has no id): its lane and the start Toggl gave it, kept on
+ * the entry, so the row is known again after the entry is moved or its start changed on the board.
+ */
+export const csvKey = (client: string, start: number): string => `csv:${client}:${isoOf(start)}`
 
 /** The entry a Toggl row would be; `id` empty until it is written. */
 function importedEntry(c: TimeConfig, n: ImportRow, now: number): TimeEntry {
@@ -484,43 +492,65 @@ function importedEntry(c: TimeConfig, n: ImportRow, now: number): TimeEntry {
     changed: now,
     changedBy: 'import',
     rev: 1,
-    ...(n.toggl && { toggl: n.toggl }),
+    toggl: n.toggl || csvKey(n.client, n.start),
   }
 }
 
 /**
- * What the store makes of a Toggl row. It is known again by Toggl's id, else by its lane and its
- * start to the second (a live entry first, then a removed one): the same in client, project,
- * description, start, stop and tags is `already`; a removed one stays removed (`already`); one
- * that differs is `changed`, with the fields, and is not added twice. A live entry alike in all
- * but tags, made by a session, is `already` too.
+ * What the store has, for one import or dry run, read once: by key (Toggl's id, or a CSV row's
+ * csvKey), and by lane and start (entries a session made, and a live one before a removed one).
+ * What the run adds or changes goes in as it goes, so two rows of one file meet each other.
+ */
+export class ImportIndex {
+  private readonly byKey = new Map<string, TimeEntry>()
+  private readonly byStart = new Map<string, TimeEntry>()
+  constructor(db: BoardDb | null) {
+    if (!db) return
+    const rows = db.db.query(`SELECT ${COLUMNS} FROM time_entries ORDER BY deleted IS NOT NULL, at`).all() as Row[]
+    for (const r of rows) this.add(entryOf(r))
+  }
+  add(e: TimeEntry): void {
+    if (e.toggl) this.byKey.set(e.toggl, e)
+    const k = `${e.client}\u0000${e.start}`
+    const had = this.byStart.get(k)
+    if (!had || (had.deleted && !e.deleted)) this.byStart.set(k, e)
+  }
+  find(e: Pick<TimeEntry, 'toggl' | 'client' | 'start'>): TimeEntry | null {
+    return (e.toggl && this.byKey.get(e.toggl)) || this.byStart.get(`${e.client}\u0000${e.start}`) || null
+  }
+}
+
+/**
+ * What the store makes of a Toggl row (index: what it has). It is known again by its key, else by
+ * its lane and its start to the second: the same in client, project, description, start, stop and
+ * tags is `already`; a removed one stays removed (`already`); one that differs (changed in Toggl,
+ * or moved or changed on the board) is `changed`, with the fields, and is not added twice.
  */
 export function importVerdict(
-  db: BoardDb | null,
+  index: ImportIndex,
   c: TimeConfig,
   n: ImportRow,
   now: number = Date.now(),
 ): ImportVerdict {
   const entry = importedEntry(c, n, now)
-  if (!db) return { kind: 'new', entry }
-  const r = (
-    n.toggl
-      ? db.db.query(`SELECT ${COLUMNS} FROM time_entries WHERE toggl = ?`).get(n.toggl)
-      : db.db
-          .query(
-            `SELECT ${COLUMNS} FROM time_entries WHERE client = ? AND start = ? ORDER BY deleted IS NOT NULL, at LIMIT 1`,
-          )
-          .get(entry.client, entry.start)
-  ) as Row | null
-  const stored = r ? entryOf(r) : sameLive(db, entry)
+  const stored = index.find(entry)
   if (!stored) return { kind: 'new', entry }
   if (stored.deleted) return { kind: 'already', stored }
   const fields = IMPORT_FIELDS.filter(f =>
     f === 'tags' ? [...stored.tags].sort().join('\u0000') !== entry.tags.join('\u0000') : stored[f] !== entry[f],
   )
-  if (!fields.length || !r) return { kind: 'already', stored }
+  if (!fields.length) return { kind: 'already', stored }
   return { kind: 'changed', stored, next: entry, fields }
 }
+
+/** A changed verdict as the run reports it. */
+export const changeOf = (v: Extract<ImportVerdict, { kind: 'changed' }>): ImportChange => ({
+  id: v.stored.id,
+  toggl: v.stored.toggl ?? null,
+  start: v.stored.start,
+  fields: v.fields,
+  by: v.stored.by,
+})
 
 /**
  * The import's entries, in transactions of `batch` (another writer waits milliseconds), each new
@@ -537,6 +567,7 @@ export function importEntries(
   checkConfig(c)
   const now = o.now ?? Date.now()
   const batch = o.batch ?? 500
+  const index = new ImportIndex(db)
   let added = 0
   let already = 0
   const changes: ImportChange[] = []
@@ -544,13 +575,13 @@ export function importEntries(
   for (let at = 0; at < entries.length; at += batch) {
     db.write('import', tx => {
       for (const n of entries.slice(at, at + batch)) {
-        const v = importVerdict(db, c, n, now)
+        const v = importVerdict(index, c, n, now)
         if (v.kind === 'already') {
           already++
           continue
         }
         if (v.kind === 'changed') {
-          const change = { id: v.stored.id, toggl: v.stored.toggl ?? null, start: v.stored.start, fields: v.fields }
+          const change = changeOf(v)
           const mine = v.stored.by === 'import' && v.stored.changedBy === 'import'
           if (!o.update || !mine) {
             changes.push(change)
@@ -575,12 +606,14 @@ export function importEntries(
             continue
           }
           tx.journal({ store: 'time', op: 'import-update', ref: saved.id, before: v.stored, after: saved })
+          index.add(saved)
           updated.push(change)
           continue
         }
         const e = { ...v.entry, id: newId(db) }
         insert(tx, e)
         tx.journal({ store: 'time', op: 'import', ref: e.id, after: e })
+        index.add(e)
         added++
       }
     })

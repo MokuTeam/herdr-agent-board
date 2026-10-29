@@ -133,7 +133,7 @@ export function rowsFromCsv(
   text: string,
   zoned: ZonedInstant,
   format: DateFormat | null = null,
-): { rows: TogglRow[]; bad: number[]; missing: string[]; dates?: 'ambiguous' | 'mixed' } {
+): { rows: TogglRow[]; bad: number[]; missing: string[]; dates?: 'ambiguous' | 'mixed' | 'conflict' } {
   const all = csvRows(text)
   const head = (all[0] ?? []).map(h => h.trim().toLowerCase().replace(/\s+/g, ' '))
   const col = (...names: string[]): number => head.findIndex(h => names.includes(h))
@@ -158,6 +158,8 @@ export function rowsFromCsv(
   const dates = body.flatMap(r => [r[c.startDate] ?? '', c.endDate >= 0 ? (r[c.endDate] ?? '') : ''])
   const shown = dateFormatOf(dates)
   if (shown === 'mixed') return { rows: [], bad: [], missing: [], dates: 'mixed' }
+  // the file shows one order and the flag says the other: one of them is wrong
+  if (shown && format && shown !== format) return { rows: [], bad: [], missing: [], dates: 'conflict' }
   const order = shown ?? format
   if (!order && dates.some(twoWays)) return { rows: [], bad: [], missing: [], dates: 'ambiguous' }
   const rows: TogglRow[] = []

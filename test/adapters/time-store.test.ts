@@ -6,6 +6,7 @@ import {
   addEntry,
   editEntry,
   getEntry,
+  ImportIndex,
   type ImportRow,
   importEntries,
   importVerdict,
@@ -261,8 +262,11 @@ test('a CSV row edited in Toggl since its import is found by its lane and start:
   // the same row again: already there
   assert.deepEqual(importEntries(db, conf, [csvRow()]), { added: 0, already: 1, changed: [], updated: [] })
   // a dry run sees the same, writing nothing
-  assert.deepEqual(importVerdict(db, conf, csvRow({ stop: at('2026-10-28T13:45:00Z') })).kind, 'changed')
-  assert.deepEqual(importVerdict(null, conf, csvRow()).kind, 'new')
+  assert.deepEqual(
+    importVerdict(new ImportIndex(db), conf, csvRow({ stop: at('2026-10-28T13:45:00Z') })).kind,
+    'changed',
+  )
+  assert.deepEqual(importVerdict(new ImportIndex(null), conf, csvRow()).kind, 'new')
   db.close()
 })
 
@@ -316,5 +320,55 @@ test('nothing is written while the config does not check out; list --tag ignores
     'time.err.config',
   )
   assert.equal(listEntries(db, { from: '2026-10-28', to: '2026-10-28', tag: 'DEFERRED' }).length, 1)
+  db.close()
+})
+
+test('a CSV row keeps its key: moved, its start changed, or removed after that on the board, a re-import adds nothing', () => {
+  const db = fresh()
+  const rows = [
+    csvRow(),
+    csvRow({ start: at('2026-10-28T16:00:00Z'), stop: at('2026-10-28T17:00:00Z') }),
+    csvRow({ start: at('2026-10-28T18:00:00Z'), stop: at('2026-10-28T18:30:00Z') }),
+  ]
+  assert.equal(importEntries(db, conf, rows).added, 3)
+  const [a, b, c] = listEntries(db, { from: '2026-10-28', to: '2026-10-28' })
+  assert.equal(a?.toggl, `csv:a:2026-10-28T13:00:00Z`)
+  moveEntry(db, conf, a?.id as string, '2026-10-27', 'user')
+  editEntry(db, conf, b?.id as string, { start: at('2026-10-28T16:20:00Z') }, 'user')
+  editEntry(db, conf, c?.id as string, { start: at('2026-10-28T18:10:00Z') }, 'user')
+  removeEntry(db, c?.id as string, 'user')
+  const again = importEntries(db, conf, rows)
+  assert.equal(again.added, 0)
+  assert.deepEqual(
+    again.changed.map(x => [x.id, x.fields]),
+    [
+      [a?.id, ['start', 'stop']],
+      [b?.id, ['start', 'stop']],
+    ],
+  )
+  assert.equal(again.already, 1, 'the removed one stays removed')
+  assert.equal(listEntries(db, { from: '2026-10-27', to: '2026-10-28' }).length, 2)
+  db.close()
+})
+
+test('two rows of one file with the same lane and start: the first goes in, the second meets it; a session’s entry there is named', () => {
+  const db = fresh()
+  const r = importEntries(db, conf, [csvRow(), csvRow({ description: 'Case 10001 X: the same start' })])
+  assert.deepEqual([r.added, r.changed.length], [1, 1])
+  assert.equal(r.changed[0]?.by, 'import')
+  // a session's entry at a start a later Toggl row has
+  const mine = addEntry(
+    db,
+    conf,
+    { ...base, start: at('2026-10-28T20:00:00Z'), stop: at('2026-10-28T20:30:00Z') },
+    me,
+  ).entry
+  const clash = importEntries(db, conf, [
+    csvRow({ start: at('2026-10-28T20:00:00Z'), stop: at('2026-10-28T20:45:00Z') }),
+  ])
+  assert.deepEqual(
+    clash.changed.map(x => [x.id, x.by]),
+    [[mine.id, me]],
+  )
   db.close()
 })

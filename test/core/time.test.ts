@@ -69,6 +69,7 @@ test('timeConfig guesses nothing: each value that does not check out is a proble
           { group: 'case', step: 30, round: 'up' },
           { group: 'ref', round: 'up' },
           { group: 'ref', step: 30 },
+          { step: 30, round: 'up' },
           'exact',
         ],
         zone: 'Not/AZone',
@@ -91,7 +92,8 @@ test('timeConfig guesses nothing: each value that does not check out is a proble
       ['time.clients.a.billing[2].group', 'group'],
       ['time.clients.a.billing[3].step', 'step'],
       ['time.clients.a.billing[4].round', 'required'],
-      ['time.clients.a.billing[5]', 'type'],
+      ['time.clients.a.billing[5].group', 'required'],
+      ['time.clients.a.billing[6]', 'type'],
       ['time.clients.b', 'type'],
     ],
   )
