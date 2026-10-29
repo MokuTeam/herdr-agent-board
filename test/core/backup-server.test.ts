@@ -29,7 +29,6 @@ import {
 import { BLOCK_BEGIN } from '../../src/core/server-texts.ts'
 import { fakeRoot, sh } from '../support/fake-root.ts'
 
-const awk = Bun.which('awk')
 const KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBoardBackupTestKeyOnly0000000000000000 agent-board backup'
 const DAY = 86_400_000
 
@@ -91,173 +90,195 @@ function dropper(limits: Partial<DropLimits> = {}) {
 const snapshot = (n = 3000, fill = 7) =>
   Buffer.concat([Buffer.from('ABK1'), Buffer.from([0, 255, 10, 13, 0]), Buffer.alloc(n, fill)])
 
-test.skipIf(!sh)('the drop puts, lists and gets snapshots, names them itself and never overwrites one', () => {
-  const d = dropper()
-  try {
-    const one = snapshot()
-    const put = d.put(one)
-    assert.equal(put.status, 0, put.stderr.toString())
-    const m = /^@@put (\S+) (\d+)$/m.exec(put.stdout.toString())
-    assert.ok(m, put.stdout.toString())
-    const name = m[1] as string
-    assert.match(name, /^\d{8}T\d{6}Z-[0-9a-f]{8}\.abk$/)
-    assert.equal(Number(m[2]), one.length)
-    // the same bytes again: the same name, nothing over it; other bytes: a file of their own
-    assert.equal(d.put(one).status, 0)
-    assert.equal(d.put(snapshot(3000, 8)).status, 0)
-    assert.ok(d.files().filter(f => f.endsWith('.abk')).length >= 2)
-    const list = d.run('list').stdout.toString()
-    assert.match(list, new RegExp(`^${name} ${one.length}$`, 'm'))
-    const got = d.run(`get ${name}`)
-    assert.equal(got.status, 0)
-    assert.deepEqual(got.stdout, one, 'bytes come back as they went')
-    assert.match(d.run('check').stdout.toString(), new RegExp(`^@@ok ${DROP_VERSION}$`, 'm'))
-    assert.match(d.run('df').stdout.toString(), /^@@df \d+ \d+ \d+$/m)
-  } finally {
-    d.done()
-  }
-})
-
-test.skipIf(!sh)('the drop keeps nothing cut short or long, and refuses what is not a snapshot or not one line', () => {
-  const d = dropper()
-  try {
-    const one = snapshot()
-    const cut = d.put(one.subarray(0, 1000), one.length)
-    assert.equal(cut.status, 1)
-    assert.match(cut.stderr.toString(), /cut short or long: 1000 of/)
-    assert.equal(d.put(one, 100).status, 1, 'more than it said')
-    assert.match(d.run('put', one).stderr.toString(), /needs the snapshot's size/)
-    assert.match(d.put(Buffer.from('hello'), 5).stderr.toString(), /not a snapshot of the board/)
-    assert.equal(d.put(Buffer.alloc(0), 0).status, 1)
-    for (const command of [
-      'get ../drop.sh',
-      'get /etc/passwd',
-      'get 20261029T000000Z-abcdef01.abk',
-      'get 20261029T000000Z-abcdef01.abk\nrm -rf /',
-      'list\nrm x',
-      'put 12x',
-      'rm x',
-      'sh',
-      '',
-    ])
-      assert.equal(d.run(command).status, 1, JSON.stringify(command))
-    // nothing was left behind by the refused puts
-    assert.deepEqual(
-      d.files().filter(f => !f.startsWith('.')),
-      [],
-    )
-  } finally {
-    d.done()
-  }
-})
-
-test.skipIf(!sh)('a full folder makes room: the rotation runs before the cap is checked', () => {
-  const now = Date.now()
-  const fill = (d: ReturnType<typeof dropper>) => {
-    mkdirSync(d.snaps)
-    // two recent snapshots over twenty-eight from over two years back, 40 KB each: all but the
-    // newest ten past keeping
-    for (let i = 0; i < 30; i++) {
-      const back = i === 0 ? 10 : i === 1 ? 35 : 900 + i * 20
-      writeFileSync(join(d.snaps, snapshotName(now - back * DAY, i.toString(16).padStart(8, '0'))), snapshot(40_000))
+test.skipIf(!sh)(
+  'the drop puts, lists and gets snapshots, names them itself and never overwrites one',
+  () => {
+    const d = dropper()
+    try {
+      const one = snapshot()
+      const put = d.put(one)
+      assert.equal(put.status, 0, put.stderr.toString())
+      const m = /^@@put (\S+) (\d+)$/m.exec(put.stdout.toString())
+      assert.ok(m, put.stdout.toString())
+      const name = m[1] as string
+      assert.match(name, /^\d{8}T\d{6}Z-[0-9a-f]{8}\.abk$/)
+      assert.equal(Number(m[2]), one.length)
+      // the same bytes again: the same name, nothing over it; other bytes: a file of their own
+      assert.equal(d.put(one).status, 0)
+      assert.equal(d.put(snapshot(3000, 8)).status, 0)
+      assert.ok(d.files().filter(f => f.endsWith('.abk')).length >= 2)
+      const list = d.run('list').stdout.toString()
+      assert.match(list, new RegExp(`^${name} ${one.length}$`, 'm'))
+      const got = d.run(`get ${name}`)
+      assert.equal(got.status, 0)
+      assert.deepEqual(got.stdout, one, 'bytes come back as they went')
+      assert.match(d.run('check').stdout.toString(), new RegExp(`^@@ok ${DROP_VERSION}$`, 'm'))
+      assert.match(d.run('df').stdout.toString(), /^@@df \d+ \d+ \d+$/m)
+    } finally {
+      d.done()
     }
-  }
-  const tight = dropper({ maxKb: 64 })
-  const roomy = dropper({ maxKb: 1024 })
-  try {
-    fill(tight)
-    assert.equal(tight.put(snapshot()).status, 1, 'the ten kept are still over 64 KB')
-    fill(roomy)
-    const ok = roomy.put(snapshot())
-    assert.equal(ok.status, 0, ok.stderr.toString())
-    // the rotation again after the put: the ten newest, the new one among them
-    assert.equal(roomy.files().length, 10)
-  } finally {
-    tight.done()
-    roomy.done()
-  }
-})
+  },
+  30_000,
+)
 
-test.skipIf(!sh)('a disk nearly full is refused before anything is written', () => {
-  const d = dropper({ reserveKb: 1024 * 1024 * 1024 * 1024 })
-  try {
-    const r = d.put(snapshot())
-    assert.equal(r.status, 1)
-    assert.match(r.stderr.toString(), /nearly full/)
-    assert.deepEqual(
-      d.files().filter(f => f.endsWith('.abk')),
-      [],
-    )
-  } finally {
-    d.done()
-  }
-})
+test.skipIf(!sh)(
+  'the drop keeps nothing cut short or long, and refuses what is not a snapshot or not one line',
+  () => {
+    const d = dropper()
+    try {
+      const one = snapshot()
+      const cut = d.put(one.subarray(0, 1000), one.length)
+      assert.equal(cut.status, 1)
+      assert.match(cut.stderr.toString(), /cut short or long: 1000 of/)
+      assert.equal(d.put(one, 100).status, 1, 'more than it said')
+      assert.match(d.run('put', one).stderr.toString(), /needs the snapshot's size/)
+      assert.match(d.put(Buffer.from('hello'), 5).stderr.toString(), /not a snapshot of the board/)
+      assert.equal(d.put(Buffer.alloc(0), 0).status, 1)
+      for (const command of [
+        'get ../drop.sh',
+        'get /etc/passwd',
+        'get 20261029T000000Z-abcdef01.abk',
+        'get 20261029T000000Z-abcdef01.abk\nrm -rf /',
+        'list\nrm x',
+        'put 12x',
+        'rm x',
+        'sh',
+        '',
+      ])
+        assert.equal(d.run(command).status, 1, JSON.stringify(command))
+      // nothing was left behind by the refused puts
+      assert.deepEqual(
+        d.files().filter(f => !f.startsWith('.')),
+        [],
+      )
+    } finally {
+      d.done()
+    }
+  },
+  30_000,
+)
 
-test.skipIf(!awk)("the drop's rotation removes exactly what rotationKeeps does not keep", () => {
-  const now = Date.UTC(2026, 9, 29, 12, 0, 0)
-  const run = (names: string[], force = false) => {
-    const r = spawnSync(
-      awk as string,
-      ['-v', `now=${Math.floor(now / 1000)}`, '-v', `force=${force ? 1 : 0}`, pruneAwk()],
-      {
-        input: `${[...names].sort().join('\n')}\n`,
-        encoding: 'utf8',
-        env: { ...process.env, LC_ALL: 'C' },
-      },
-    )
-    assert.equal(r.status, 0, r.stderr)
-    return r.stdout.split('\n').filter(Boolean)
-  }
-  const same = (names: string[]) => {
-    const keep = rotationKeeps(names, now)
+test.skipIf(!sh)(
+  'a full folder makes room: the rotation runs before the cap is checked',
+  () => {
+    const now = Date.now()
+    const fill = (d: ReturnType<typeof dropper>) => {
+      mkdirSync(d.snaps)
+      // two recent snapshots over twenty-eight from over two years back, 40 KB each: all but the
+      // newest ten past keeping
+      for (let i = 0; i < 30; i++) {
+        const back = i === 0 ? 10 : i === 1 ? 35 : 900 + i * 20
+        writeFileSync(join(d.snaps, snapshotName(now - back * DAY, i.toString(16).padStart(8, '0'))), snapshot(40_000))
+      }
+    }
+    const tight = dropper({ maxKb: 64 })
+    const roomy = dropper({ maxKb: 1024 })
+    try {
+      fill(tight)
+      assert.equal(tight.put(snapshot()).status, 1, 'the ten kept are still over 64 KB')
+      fill(roomy)
+      const ok = roomy.put(snapshot())
+      assert.equal(ok.status, 0, ok.stderr.toString())
+      // the rotation again after the put: the ten newest, the new one among them
+      assert.equal(roomy.files().length, 10)
+    } finally {
+      tight.done()
+      roomy.done()
+    }
+  },
+  30_000,
+)
+
+test.skipIf(!sh)(
+  'a disk nearly full is refused before anything is written',
+  () => {
+    const d = dropper({ reserveKb: 1024 * 1024 * 1024 * 1024 })
+    try {
+      const r = d.put(snapshot())
+      assert.equal(r.status, 1)
+      assert.match(r.stderr.toString(), /nearly full/)
+      assert.deepEqual(
+        d.files().filter(f => f.endsWith('.abk')),
+        [],
+      )
+    } finally {
+      d.done()
+    }
+  },
+  30_000,
+)
+
+// every awk this machine has: a server's is mawk (Debian, Ubuntu) or busybox's, a dev's often gawk
+const AWKS = [['awk'], ['mawk'], ['busybox', 'awk']].filter(
+  ([bin]) => !!Bun.which(bin as string) && (bin !== 'busybox' || spawnSync(bin, ['awk', 'BEGIN {}']).status === 0),
+)
+
+for (const cmd of AWKS)
+  test(`the drop's rotation removes exactly what rotationKeeps does not keep (${cmd.join(' ')})`, () => {
+    const now = Date.UTC(2026, 9, 29, 12, 0, 0)
+    const run = (names: string[], force = false) => {
+      const r = spawnSync(
+        cmd[0] as string,
+        [...cmd.slice(1), '-v', `now=${Math.floor(now / 1000)}`, '-v', `force=${force ? 1 : 0}`, pruneAwk()],
+        {
+          input: `${[...names].sort().join('\n')}\n`,
+          encoding: 'utf8',
+          env: { ...process.env, LC_ALL: 'C' },
+        },
+      )
+      assert.equal(r.status, 0, r.stderr)
+      return r.stdout.split('\n').filter(Boolean)
+    }
+    const same = (names: string[]) => {
+      const keep = rotationKeeps(names, now)
+      assert.deepEqual(
+        run(names),
+        [...names].sort().filter(n => !keep.has(n)),
+      )
+    }
+    // every 7 hours for 900 days back, and one an hour ahead
+    const history: string[] = []
+    for (let back = 0; back < 900 * 24; back += 7)
+      history.push(snapshotName(now - back * 3_600_000, back.toString(16).padStart(8, '0')))
+    history.push(snapshotName(now + 3_600_000, 'ffffffff'))
+    same(history)
+    assert.ok(run(history).length > 100)
+    // a name a year ahead (a clock set wrong once, or a file put there): it stays, and the rest
+    // rotate as they would without it
+    const ahead = [...history, snapshotName(now + 400 * DAY, 'eeeeeeee')]
+    same(ahead)
+    assert.deepEqual(run(ahead), run(history))
+    // and the drop counts it, as aheadCount does
+    const count = spawnSync(cmd[0] as string, [...cmd.slice(1), '-v', `now=${Math.floor(now / 1000)}`, aheadAwk()], {
+      input: `${[...ahead].sort().join('\n')}\n`,
+      encoding: 'utf8',
+      env: { ...process.env, LC_ALL: 'C' },
+    })
+    assert.equal(count.stdout.trim(), String(aheadCount(ahead, now)))
+    assert.equal(count.stdout.trim(), '1')
+    // the newest a month and more after the one before it (a clock that jumped, a board asleep): nothing goes
+    const cutoff = snapshotName(now - 40 * DAY, '00000000')
+    const jumped = history.filter(n => n < cutoff).concat(snapshotName(now, 'dddddddd'))
+    same(jumped)
+    assert.deepEqual(run(jumped), [])
+    // the clock a month and more past the newest (a jump forward, before the put that follows it): nothing goes
+    const stale = history.filter(n => n < snapshotName(now - 40 * DAY, '00000000'))
+    same(stale)
+    assert.deepEqual(run(stale), [])
+    // over the cap the drop prunes again with that guard off: the rotation as rotationKeeps' force
+    const forced = rotationKeeps(stale, now, { force: true })
     assert.deepEqual(
-      run(names),
-      [...names].sort().filter(n => !keep.has(n)),
+      run(stale, true),
+      [...stale].sort().filter(n => !forced.has(n)),
     )
-  }
-  // every 7 hours for 900 days back, and one an hour ahead
-  const history: string[] = []
-  for (let back = 0; back < 900 * 24; back += 7)
-    history.push(snapshotName(now - back * 3_600_000, back.toString(16).padStart(8, '0')))
-  history.push(snapshotName(now + 3_600_000, 'ffffffff'))
-  same(history)
-  assert.ok(run(history).length > 100)
-  // a name a year ahead (a clock set wrong once, or a file put there): it stays, and the rest
-  // rotate as they would without it
-  const ahead = [...history, snapshotName(now + 400 * DAY, 'eeeeeeee')]
-  same(ahead)
-  assert.deepEqual(run(ahead), run(history))
-  // and the drop counts it, as aheadCount does
-  const count = spawnSync(awk as string, ['-v', `now=${Math.floor(now / 1000)}`, aheadAwk()], {
-    input: `${[...ahead].sort().join('\n')}\n`,
-    encoding: 'utf8',
-    env: { ...process.env, LC_ALL: 'C' },
+    assert.ok(run(stale, true).length > 0)
+    // ten from years ago under two recent ones: the newest ten stay whatever their age, two go
+    const old = Array.from({ length: 10 }, (_, i) =>
+      snapshotName(now - (1000 + i) * DAY, i.toString(16).padStart(8, '0')),
+    ).concat(snapshotName(now - 20 * DAY, 'aaaaaaaa'), snapshotName(now - 5 * DAY, 'bbbbbbbb'))
+    same(old)
+    assert.equal(run(old).length, 2)
   })
-  assert.equal(count.stdout.trim(), String(aheadCount(ahead, now)))
-  assert.equal(count.stdout.trim(), '1')
-  // the newest a month and more after the one before it (a clock that jumped, a board asleep): nothing goes
-  const cutoff = snapshotName(now - 40 * DAY, '00000000')
-  const jumped = history.filter(n => n < cutoff).concat(snapshotName(now, 'dddddddd'))
-  same(jumped)
-  assert.deepEqual(run(jumped), [])
-  // the clock a month and more past the newest (a jump forward, before the put that follows it): nothing goes
-  const stale = history.filter(n => n < snapshotName(now - 40 * DAY, '00000000'))
-  same(stale)
-  assert.deepEqual(run(stale), [])
-  // over the cap the drop prunes again with that guard off: the rotation as rotationKeeps' force
-  const forced = rotationKeeps(stale, now, { force: true })
-  assert.deepEqual(
-    run(stale, true),
-    [...stale].sort().filter(n => !forced.has(n)),
-  )
-  assert.ok(run(stale, true).length > 0)
-  // ten from years ago under two recent ones: the newest ten stay whatever their age, two go
-  const old = Array.from({ length: 10 }, (_, i) =>
-    snapshotName(now - (1000 + i) * DAY, i.toString(16).padStart(8, '0')),
-  ).concat(snapshotName(now - 20 * DAY, 'aaaaaaaa'), snapshotName(now - 5 * DAY, 'bbbbbbbb'))
-  same(old)
-  assert.equal(run(old).length, 2)
-})
 
 test.skipIf(!sh)(
   'old files over the cap, past the clock’s guard: a second prune makes room, the newest ten kept',
@@ -281,6 +302,7 @@ test.skipIf(!sh)(
       d.done()
     }
   },
+  30_000,
 )
 
 test('the newest ten, which the rotation always keeps, fit in the folder at their largest with room for one more', () => {

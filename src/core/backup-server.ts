@@ -105,7 +105,7 @@ export function pruneAwk(): string {
     // a name dated over a day ahead is kept and left out of the rest (rotationKeeps)
     `$0 ~ /${NAME_AWK}/ { if (stamp($0) > now + ${s(FUTURE_MS)}) next; n++; name[n] = $0 }`,
     'END {',
-    `if (n == 0 || (n > 1 && stamp(name[n]) - stamp(name[n - 1]) > ${s(GAP_MS)}) || (!force && now - stamp(name[n]) > ${s(GAP_MS)})) exit;`,
+    `if (n == 0 || (n > 1 && stamp(name[n]) - stamp(name[n - 1]) > ${s(GAP_MS)}) || (force != 1 && now - stamp(name[n]) > ${s(GAP_MS)})) exit;`,
     'for (i = 1; i <= n; i++) {',
     'x = name[i]; age = now - stamp(x); day = substr(x, 1, 8); month = substr(x, 1, 6);',
     'fd = !(day in seen_d); fm = !(month in seen_m); seen_d[day] = 1; seen_m[month] = 1;',

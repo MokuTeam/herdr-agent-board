@@ -6,7 +6,9 @@
 // byte, a snapshot cut short is not kept, and a shell command, a port forward and a login as the
 // backup user with any other key are refused; root's and the admin's own logins still work; Undo
 // takes it all out, keeps the snapshot, and the admin still logs in. Both of sshd's layouts: with
-// sshd_config.d included, and with sshd_config alone (its Include taken out first).
+// sshd_config.d included, and with sshd_config alone (its Include taken out first). The drop runs
+// under each server's own awk: mawk, Debian's and Ubuntu's default (test/core/backup-server.test.ts
+// holds its rotation against rotationKeeps under every awk the machine running it has).
 //
 // Run it before Apply on a server of your own:
 //   BOARD_SERVER_IT=1 bun test test/integration/backup-server.test.ts --timeout 3600000

@@ -1844,7 +1844,8 @@ targets: the newest ten always, every snapshot of the last 48 hours, the first o
 days, the first of each month for two years. A snapshot named more than a day ahead of the clock (a
 clock set wrong once, or a file put there) is kept, left out of the rotation, and shown; nothing is
 removed while the newest is a month after the one before it, or the clock a month past the newest
-(a clock that jumped would take the history; a board off for a month skips one rotation).
+(a clock that jumped would take the history; a board off for a month skips one rotation), except
+on the server when its folder is over its cap: then the rotation runs all the same.
 
 **What could be wrong** shows at the top of the panel, as a note in the board's toolbar on every
 page (a phone's too, in a few words, with no error text), and in `board doctor`: no target, no
