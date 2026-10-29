@@ -134,7 +134,9 @@ describe('planSettings', () => {
     const macToast = `"/opt/homebrew/bin/bun" "${mac}/src/entrypoints/toast.ts"`
     assert.equal(toastCommand(macPaths), macToast)
     const onMac = planSettings(undefined, macPaths, { toast: true }).settings
-    assert.deepEqual(settingsOf(onMac).Stop, [{ hooks: [{ type: 'command', command: macToast, timeout: 30, async: true }] }])
+    assert.deepEqual(settingsOf(onMac).Stop, [
+      { hooks: [{ type: 'command', command: macToast, timeout: 30, async: true }] },
+    ])
     // Kept on, then off, on the Mac: its own hook is recognised.
     assert.deepEqual(planSettings(onMac, macPaths).settings, onMac)
     assert.equal(settingsOf(planSettings(onMac, macPaths, { toast: false }).settings).Stop, undefined)
@@ -144,7 +146,10 @@ describe('planSettings', () => {
       for (const toast of [undefined, false]) {
         const { settings, replaced } = planSettings(onMac, other, { toast })
         assert.deepEqual(settingsOf(settings).Stop, settingsOf(onMac).Stop)
-        assert.deepEqual(replaced.filter(c => c.includes('toast')), [])
+        assert.deepEqual(
+          replaced.filter(c => c.includes('toast')),
+          [],
+        )
       }
     }
   })
