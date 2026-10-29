@@ -94,7 +94,7 @@
 .time-line-project { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--label-2); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
 .time-figures { flex: none; margin-left: auto; font-size: 13.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .time-figures strong { font-weight: 600; }
-.time-raw { margin-right: 4px; color: var(--label-3); font-size: 12.5px; }
+.time-raw { margin-right: 4px; color: var(--label-2); font-size: 12.5px; }
 
 .time-entries { margin: 3px 0 0; padding: 0; list-style: none; }
 .time-row {
@@ -116,7 +116,7 @@
 }
 .time-when, .time-dur { color: var(--label-2); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .time-what { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
-.time-note { grid-column: 2 / -1; color: var(--label-3); font-size: 11.5px; overflow-wrap: anywhere; }
+.time-note { grid-column: 2 / -1; color: var(--label-2); font-size: 11.5px; overflow-wrap: anywhere; }
 .time-open { cursor: pointer; transition: background 120ms ease; }
 .time-open:hover { background: var(--fill-2); }
 .time-open:active { background: var(--fill); }
@@ -234,7 +234,7 @@
   font-variant-numeric: tabular-nums;
   transition: background 120ms ease, transform 100ms ease-out;
 }
-.time-steps button:hover:not(:disabled) { background: var(--fill-2); }
+.time-steps button:hover:not(:disabled) { background: var(--fill); }
 .time-steps button:active:not(:disabled) { transform: scale(0.94); }
 .time-steps button:disabled { opacity: 0.5; }
 /* The duration typed between its steps: the field and its steps one control, ringed as a field is. */
@@ -298,6 +298,7 @@
 .time-field .time-tags input { flex: 1 1 40px; width: auto; height: 24px; padding: 0 4px; background: none; box-shadow: none; }
 .time-field .time-tags input:focus { box-shadow: none; }
 .time-tag-hints { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.time-tag-note { margin: 2px 0 0; color: var(--label-2); font-size: 11.5px; }
 .time-tag-hint {
   height: 22px;
   padding: 0 8px;
@@ -310,9 +311,11 @@
   transition: background 120ms ease, color 120ms ease;
 }
 .time-tag-hint:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
-.time-warn { margin: 0; font-size: 12px; }
+/* Its room kept when empty: a warning that comes and goes moves nothing under the pointer. */
+.time-warn { min-height: 1.4em; margin: 0; font-size: 12px; line-height: 1.4; }
 .time-editor .access-problem { margin: 0; padding: 0; }
-.time-stale {
+/* Changed elsewhere: said plainly (the problem's red overruled), Reload the one thing to do. */
+.time-editor .time-stale {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -323,8 +326,6 @@
   color: var(--label);
   font-size: 12.5px;
 }
-/* Changed elsewhere: said plainly, Reload the one thing to do. */
-.time-editor .time-stale { padding: 8px 10px; color: var(--label); }
 .time-stale span { flex: 1 1 200px; }
 .time-stale .button { background: var(--accent); color: #fff; }
 .time-by { margin: 0; color: var(--label-3); font-size: 11.5px; overflow-wrap: anywhere; }
@@ -352,6 +353,12 @@
 
 @media (prefers-reduced-motion: reduce) {
   .time-editor { animation: time-fade 0.15s ease-out; }
+  .time-step:active,
+  .time-today:active,
+  .time-add-open:active,
+  .time-raise:active,
+  .time-steps button:active,
+  .time-actions .button:active { transform: none; }
   .time-days { transition: none !important; transform: none !important; }
 }
 @keyframes time-fade { from { opacity: 0; } }

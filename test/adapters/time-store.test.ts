@@ -18,6 +18,7 @@ import {
   restoreEntry,
   TimeError,
   trimLine,
+  usedTags,
 } from '../../src/adapters/time-store.ts'
 import { type Actor, secondsOf, timeConfig } from '../../src/core/time.ts'
 import { isolatedHome } from '../support/env.ts'
@@ -514,5 +515,39 @@ test('Trim reads the line under the write lock as Raise does: an entry another p
   )
   // a revision read before is refused, and changes nothing
   assert.throws(() => trimLine(db, downConf, last.id, me, { expect: last.rev }), /changed since/)
+  db.close()
+})
+
+test('the tags entries have, most used first; a row whose tags are not JSON has none and fails nothing', () => {
+  const db = fresh()
+  addEntry(db, conf, { ...base, tags: ['call', 'review'] }, me)
+  addEntry(
+    db,
+    conf,
+    { ...base, start: at('2026-10-28T16:00:00Z'), stop: at('2026-10-28T16:30:00Z'), tags: ['call'] },
+    me,
+  )
+  db.write('user', tx =>
+    tx.db
+      .query(
+        'INSERT INTO time_entries (id, client, project, description, tags, start, stop, date, by, at, changed, changed_by, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
+      )
+      .run(
+        'bad00001',
+        'a',
+        'Support',
+        'x',
+        'not json',
+        '2026-10-28T18:00:00Z',
+        '2026-10-28T18:30:00Z',
+        '2026-10-28',
+        'user',
+        1,
+        1,
+        'user',
+      ),
+  )
+  assert.deepEqual(usedTags(db), ['call', 'review'])
+  assert.deepEqual(getEntry(db, 'bad00001')?.tags, [])
   db.close()
 })

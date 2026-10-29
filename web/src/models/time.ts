@@ -3,7 +3,7 @@
 // entry's description under its line, its times on this browser's clock, a date's name, and
 // whether a swipe changes the day. The rules
 // themselves are the board's (src/core/time.ts); the page only shows them.
-import type { ClientDay, DayLine, TimeEntry } from '../../../src/core/time.ts'
+import { type ClientDay, cleanTag, type DayLine, type TimeEntry } from '../../../src/core/time.ts'
 import type { Translator } from '../../../src/core/types.ts'
 
 export interface TimeDay {
@@ -318,8 +318,8 @@ export const tagList = (s: string): string[] =>
     .map(x => x.trim().replace(/^#/, ''))
     .filter(Boolean)
 
-/** A tag as the board keeps it: no leading #, no commas, lower case. */
-export const tagOf = (s: string): string => s.trim().replace(/^#+/, '').replaceAll(',', ' ').trim().toLowerCase()
+/** A tag as the board keeps it: no leading #, no commas, one line, 40 characters at most, lower case. */
+export const tagOf = (s: string): string => cleanTag(s.trim().replace(/^#+/, ''))
 
 /** The draft's tags with `tag` added at the end (once). */
 export function withTag(tags: string, tag: string): string {

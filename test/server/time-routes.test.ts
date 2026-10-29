@@ -316,3 +316,26 @@ test('no change before the database has a backup target and a passphrase', async
   assert.equal(res.status, 409)
   assert.match(String((await json(res)).error), /backed up/)
 })
+
+test('Raise and Trim say the figure the page showed: a line that bills otherwise now is refused, nothing changed', async () => {
+  const { url, post } = await writableBoard()
+  const at = (hm: string) => `${NEAR}T${hm}:00Z`
+  // 30 + 14 to the nearest 30: 30 billed; another hand lengthens the first to 55: 69 worked, 60 billed
+  const first = (await post({ ...add, client: 'client-n', start: at('13:00'), stop: at('13:30') }))[1].entry as Made
+  const last = (await post({ ...add, client: 'client-n', start: at('14:00'), stop: at('14:14') }))[1].entry as Made
+  await post({ op: 'edit', id: first.id, rev: first.rev, stop: at('13:55') })
+  const [status, why] = await post({ op: 'trim', id: last.id, rev: last.rev, billed: 1800 })
+  assert.deepEqual([status, why.code], [409, 'changedSince'])
+  const day = await json(await fetch(`${url}/api/time?date=${NEAR}`))
+  assert.deepEqual(
+    (day.entries as Made[]).map(e => e.stop),
+    [at('13:55'), at('14:14')],
+  )
+  // the figure as it is now: trimmed to it
+  assert.equal((await post({ op: 'trim', id: last.id, rev: last.rev, billed: 3600 }))[0], 200)
+  // Raise the same way
+  const up = (await post({ ...add, stop: at('13:40') }))[1].entry as Made
+  assert.equal((await post({ op: 'raise', id: up.id, rev: up.rev, billed: 5400 }))[1].code, 'changedSince')
+  assert.equal((await post({ op: 'raise', id: up.id, rev: up.rev, billed: 'x' }))[1].code, 'usage')
+  assert.equal(((await post({ op: 'raise', id: up.id, rev: up.rev, billed: 3600 }))[1].entry as Made).stop, at('14:00'))
+})

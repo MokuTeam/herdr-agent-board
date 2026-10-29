@@ -619,6 +619,9 @@ test('tags as tokens: Enter or a comma adds one, its x or Backspace takes one of
   await setValue(field(), 'a, #b,c')
   expect([shown(), field().value]).toEqual([['call', 'a', 'b'], 'c'])
   await setValue(field(), '')
+  // Enter with nothing typed ends nothing, and never saves
+  await press(field(), 'Enter')
+  expect(q('.time-editor')).toBeTruthy()
   await press(field(), 'Backspace')
   expect(shown()).toEqual(['call', 'a'])
   await click(q('.time-tag button[aria-label="Remove call"]'))
@@ -642,13 +645,29 @@ test('a duration typed moves the stop, the start as it was; one that is not a du
   const field = () => q('.time-steps input')
   expect(field().value).toBe('1h\u00a030m')
   const save = () => qa('.time-editor button[type=submit]')[0] as HTMLButtonElement
+  const stop = () => (qa('.time-editor input[type=time]')[1] as HTMLInputElement).value
+  const leave = () =>
+    act(async () => {
+      field().dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true }))
+    })
+  const before = stop()
+  // half typed ("1" of "1:10") is no duration yet: the stop waits
+  await setValue(field(), '1')
+  expect(stop()).toBe(before)
+  // none on leaving the field: kept as typed, said, Save waiting, the warning's line already there
   await setValue(field(), 'later')
-  expect([save().disabled, q('.time-editor .time-warn')?.textContent?.startsWith('Not a duration')]).toEqual([
-    true,
-    true,
-  ])
+  await leave()
+  expect([
+    field().value,
+    save().disabled,
+    q('.time-editor .time-warn')?.textContent?.startsWith('Not a duration'),
+  ]).toEqual(['later', true, true])
   await setValue(field(), '1:10')
-  expect(save().disabled).toBe(false)
+  expect([stop(), save().disabled]).toEqual([before, false])
+  // Enter puts it in the draft, said as the panel says durations; no Save
+  await press(field(), 'Enter')
+  expect([field().value, q('.time-editor')]).toEqual(['1h\u00a010m', q('.time-editor')])
+  expect(q('.time-editor .time-warn')?.textContent).toBe('')
   await submit()
   await settle(600)
   const [after] = await s.stored()
@@ -691,6 +710,76 @@ test('a line billed under its time offers Trim: it takes the gap from the last e
   expect((await s.stored()).map(e => e.stop)).toEqual([`${DAY}T13:29:00Z`, `${DAY}T14:01:00Z`])
   // there now: nothing to offer
   expect(q('.time-trim')).toBeNull()
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)
+
+test('tags: twenty at most, said; a long one cut as the board keeps it', async () => {
+  const s = await setup()
+  await s.entry()
+  const root = await mount(1)
+  await openOn('X: work')
+  const field = () => q('.time-tags input')
+  await setValue(field(), `${'x'.repeat(50)},`)
+  expect(qa('.time-tag').map(x => x.firstChild?.textContent)).toEqual(['x'.repeat(40)])
+  await setValue(field(), `${Array.from({ length: 25 }, (_, i) => `t${i}`).join(',')},`)
+  expect(qa('.time-tag').length).toBe(20)
+  expect(q('.time-tag-note')?.textContent).toBe('At most 20 tags.')
+  expect(qa('.time-tag-hint').length).toBe(0)
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)
+
+test('the layout: the billable figure, the time worked, each client’s share, the chips, a client’s rule, the held apart', async () => {
+  const s = await setup()
+  // client A: 40 minutes of a case, up to the half hour (60 billed), and 20 held; client B: 30 exact
+  await s.post({
+    op: 'add',
+    client: 'client-a',
+    project: 'Support',
+    description: 'Case 10001 X: work',
+    start: `${DAY}T13:00:00Z`,
+    stop: `${DAY}T13:40:00Z`,
+  })
+  await s.post({
+    op: 'add',
+    client: 'client-a',
+    project: 'Support',
+    description: 'Case 10002 W: later',
+    start: `${DAY}T15:00:00Z`,
+    stop: `${DAY}T15:20:00Z`,
+    tags: ['deferred'],
+  })
+  await s.post({
+    op: 'add',
+    client: 'client-b',
+    project: 'Support',
+    description: 'Call',
+    start: `${DAY}T16:00:00Z`,
+    stop: `${DAY}T16:30:00Z`,
+  })
+  const root = await mount(1)
+  const text = (sel: string) => qa(sel).map(x => x.textContent)
+  expect(text('.time-summary .time-caption')).toEqual(['Billable'])
+  expect(text('.time-summary .time-total')).toEqual(['1h\u00a030m'])
+  expect(text('.time-summary .time-about')).toEqual(['worked 1h\u00a010m'])
+  expect(qa('.time-bar span').length).toBe(2)
+  expect(text('.time-chips button')).toEqual(['All', 'Client A', 'client-b'])
+  expect(text('.time-client-head h4')).toEqual(['Client A', 'client-b'])
+  expect(text('.time-client-head .time-client-total')).toEqual(['1h', '30m'])
+  expect(text('.time-client-head .time-about')).toEqual(['worked 40m · up to 30 min'])
+  // the line rounded up says the time worked before its figure; the held, theirs apart
+  expect(text('.time-line-head .time-figures')).toEqual(['40m →1h', '20m', '30m'])
+  expect(text('.time-held .time-line-head .time-line-name')).toEqual(['Held'])
+  expect(qa('.time-held .time-entry').map(x => x.textContent?.includes('Case 10002 W: later'))).toEqual([true])
+  expect(text('.time-zone')).toEqual(['Days are counted in America/New_York time'])
+  // one client on show: the figure is that client's, named over it, and no heading of its own
+  await act(async () => root.render(view(1, 'client-a')))
+  await settle()
+  expect(text('.time-summary .time-caption')).toEqual(['Client A · Billable'])
+  expect(text('.time-summary .time-total')).toEqual(['1h'])
+  expect(text('.time-summary .time-about')).toEqual(['worked 40m · up to 30 min'])
+  expect([qa('.time-bar').length, qa('.time-client-head').length]).toEqual([0, 0])
   mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)

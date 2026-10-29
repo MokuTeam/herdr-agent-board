@@ -2,7 +2,8 @@
 // [&client=<lane>] answers that day by client, as billed, with its entries and what an entry may
 // be (the lanes that take time, their projects, the tags entries have). POST /api/time { op: add |
 // edit | move | remove | restore | raise | trim, … } changes one as the owner, who may change any
-// (raise and trim bring a line's time worked to its billed figure, up or down). Every op on an entry says the
+// (raise and trim bring a line's time worked to its billed figure, up or down, and say the figure
+// the page showed: one the line no longer bills is refused). Every op on an entry says the
 // revision it read (`rev`, an integer) and is refused when the entry changed since; times are ISO
 // with an offset, within a day ahead and a year back. An error says its `code` (the text key's last
 // part) beside its words. Not local-only: the board through the remote page and a paired phone read
@@ -190,6 +191,13 @@ function revOf(b: Record<string, unknown>): number {
   return b.rev
 }
 
+/** The billed figure a raise or a trim was asked for (the button's), when the body says it: whole seconds. */
+function billedOf(b: Record<string, unknown>): { billed?: number } {
+  if (b.billed === undefined) return {}
+  if (typeof b.billed !== 'number' || !Number.isInteger(b.billed) || b.billed < 0) throw new TimeError('time.err.usage')
+  return { billed: b.billed }
+}
+
 const MAX_TAGS = 20
 function tagsOf(v: unknown): string[] | undefined {
   if (v === undefined) return undefined
@@ -259,9 +267,9 @@ function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>, now: 
     case 'restore':
       return restoreEntry(db, id, 'user', { expect: revOf(b) })
     case 'raise':
-      return raiseEntry(db, conf, id, 'user', { expect: revOf(b) })
+      return raiseEntry(db, conf, id, 'user', { expect: revOf(b), ...billedOf(b) })
     case 'trim':
-      return trimLine(db, conf, id, 'user', { expect: revOf(b) })
+      return trimLine(db, conf, id, 'user', { expect: revOf(b), ...billedOf(b) })
     default:
       throw new TimeError('time.err.usage')
   }

@@ -52,7 +52,6 @@ import {
 } from '../../models/time.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { nextToastToken } from '../../state/board-ui.ts'
-import { classNames } from '../class-names.ts'
 import { ChevIcon, PlusIcon } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { EntryEditor } from './EntryEditor.tsx'
@@ -235,12 +234,13 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   // Raise and Trim are changes of their own: an editor open on another entry stays as it is, and a
   // refusal is a toast (no editor shows it). The board works the gap out from the day as it is now.
   const [raising, setRaising] = useState(false)
-  const alignTo = async (op: 'raise' | 'trim', lastId: string) => {
+  const alignTo = async (op: 'raise' | 'trim', lastId: string, billed: number) => {
     const e = entries.get(lastId)
     if (!e) return
     setRaising(true)
     try {
-      await post({ op, id: e.id, rev: e.rev })
+      // the figure the button said: a line that bills otherwise now is refused, not brought elsewhere
+      await post({ op, id: e.id, rev: e.rev, billed })
     } catch (err) {
       toast(said(err), true)
     } finally {
@@ -403,7 +403,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
             type="button"
             className={align === 'raise' ? 'time-raise' : 'time-raise time-trim'}
             disabled={busy || raising}
-            onClick={() => void alignTo(align, last)}
+            onClick={() => void alignTo(align, last, l.billedSeconds)}
           >
             {t(`time.edit.${align}`, { hours: dur(l.billedSeconds) })}
           </button>
@@ -457,12 +457,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
         {failed && <p className="access-problem">{t('time.loadError', { error: failed })}</p>}
         {shown && (shown.days.length > 1 || (client !== null && shown.days.length > 0)) && (
           <Chips>
-            <button
-              type="button"
-              aria-pressed={!client}
-              className={classNames('time-chip', !client && 'on')}
-              onClick={() => onClient(null)}
-            >
+            <button type="button" aria-pressed={!client} onClick={() => onClient(null)}>
               {t('time.all')}
             </button>
             {shown.days.map(d => (
@@ -470,7 +465,6 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                 type="button"
                 aria-pressed={client === d.client}
                 key={d.client}
-                className={classNames('time-chip', client === d.client && 'on')}
                 style={{ '--lane': color(d.client) }}
                 onClick={() => onClient(d.client)}
               >

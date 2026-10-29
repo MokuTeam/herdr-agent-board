@@ -417,7 +417,7 @@ export function raiseEntry(
   c: TimeConfig,
   id: string,
   actor: Actor,
-  o: { force?: boolean; expect?: number } = {},
+  o: { force?: boolean; expect?: number; billed?: number } = {},
 ): TimeEntry {
   checkConfig(c)
   return changed(
@@ -431,12 +431,22 @@ export function raiseEntry(
       const line = day.lines.find(l => l.entries.includes(id))
       if (!line || line.entries.at(-1) !== id || line.billedSeconds <= line.seconds)
         throw new TimeError('time.err.noRaise')
+      billedAsSeen(line, o.billed, e)
       const stop = Date.parse(e.stop) + (line.billedSeconds - line.seconds) * 1000
       checkTimes(Date.parse(e.start), stop)
       return { ...e, stop: isoOf(stop) }
     },
     'raise',
   )
+}
+
+/**
+ * The line bills what the change was asked for (`billed`, the figure its button said): refused as a
+ * change since otherwise, the line's last entry named (another entry of it changed, or one joined).
+ */
+function billedAsSeen(line: { billedSeconds: number }, billed: number | undefined, e: TimeEntry): void {
+  if (billed !== undefined && billed !== line.billedSeconds)
+    throw new TimeError('time.err.changedSince', { id: e.id, rev: e.rev })
 }
 
 /**
@@ -451,7 +461,7 @@ export function trimLine(
   c: TimeConfig,
   id: string,
   actor: Actor,
-  o: { force?: boolean; expect?: number } = {},
+  o: { force?: boolean; expect?: number; billed?: number } = {},
 ): TimeEntry {
   checkConfig(c)
   return db.write(actorText(actor), tx => {
@@ -464,6 +474,7 @@ export function trimLine(
     const line = clientDay(c, e.client, e.date, entries).lines.find(l => l.entries.includes(id))
     if (!line || line.entries.at(-1) !== id || line.billedSeconds >= line.seconds)
       throw new TimeError('time.err.noTrim')
+    billedAsSeen(line, o.billed, e)
     const byId = new Map(entries.map(x => [x.id, x]))
     const cuts: [TimeEntry, number][] = []
     let gap = line.seconds - line.billedSeconds
@@ -504,7 +515,9 @@ export function trimLine(
 export function usedTags(db: BoardDb, limit = 30): string[] {
   const rows = db.db
     .query(
-      `SELECT j.value AS tag, COUNT(*) AS n FROM time_entries, json_each(time_entries.tags) AS j
+      // a row whose tags are not JSON has none, as entryOf reads it: one such row fails no day
+      `SELECT j.value AS tag, COUNT(*) AS n FROM time_entries,
+         json_each(CASE WHEN json_valid(time_entries.tags) THEN time_entries.tags ELSE '[]' END) AS j
        WHERE time_entries.deleted IS NULL GROUP BY j.value ORDER BY n DESC, j.value LIMIT ?`,
     )
     .all(limit) as { tag: unknown }[]

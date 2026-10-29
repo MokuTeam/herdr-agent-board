@@ -1,8 +1,10 @@
 // An entry opened in place in the Time panel (#233): its description, its project (the client's
 // list), its start and stop on this browser's clock with the duration between them, typed (it
-// moves the stop) or stepped by -15 and +15 (a trim is the usual change; an untouched time keeps
+// moves the stop once it is one: on Enter, on leaving the field, on Save; until then the draft is
+// as it was, and a duration that is none is said and keeps Save waiting) or stepped by -15 and +15 (a trim is the usual change; an untouched time keeps
 // its seconds), its work date (a change moves it), its tags as tokens (Enter or a comma adds one,
-// its x or Backspace in the empty field takes one off, the board's tags offered under them); Save,
+// its x or Backspace in the empty field takes one off, the board's tags offered under them, twenty
+// at most); Save,
 // Delete and Cancel. A new entry has a client too (its projects
 // follow it), no Delete, and its date is the day its times are on. Changed elsewhere since it was
 // opened (`stale`): it says so, and Save waits for Reload, which shows the entry as it is now.
@@ -26,6 +28,9 @@ import {
   withTag,
 } from '../../models/time.ts'
 import { classNames } from '../class-names.ts'
+
+/** The most tags an entry has (the board refuses more). */
+const MAX_TAGS = 20
 
 export interface EntryEditorProps {
   draft: Draft
@@ -83,21 +88,39 @@ export function EntryEditor({
   }, [d, pending])
   const set = (field: 'description' | 'project', value: string) => setD(x => ({ ...x, [field]: value }))
   const listed = projects(d.client)
-  const seconds = draftSeconds(d)
   // the duration as typed, while it is; null: the draft's own, said as the panel says durations
   const [lasting, setLasting] = useState<string | null>(null)
-  const badDuration = lasting !== null && parseDuration(lasting) === null
+  const typedSeconds = lasting === null ? null : parseDuration(lasting)
+  const badDuration = lasting !== null && typedSeconds === null
+  /** The draft with the duration typed in it (the stop moved), once what is typed is one. */
+  const withTyped = (x: Draft): Draft => (typedSeconds === null ? x : withDuration(x, typedSeconds))
+  const commitDuration = () => {
+    if (typedSeconds === null) return
+    setD(withTyped)
+    setLasting(null)
+  }
+  const seconds = draftSeconds(withTyped(d))
+  // one line under the times, its room kept, so nothing moves under the pointer: a duration that is
+  // none, times that make none (a stop before the start), or a long one asked about
+  const warning = badDuration
+    ? t('time.edit.badDuration')
+    : seconds === null
+      ? t('time.edit.badTime')
+      : seconds > LONG_SECONDS
+        ? t('time.edit.long')
+        : ''
   const tags = tagList(d.tags)
+  const full = tags.length >= MAX_TAGS
   const addTag = (text: string) => {
-    if (tagOf(text)) setD(x => ({ ...x, tags: withTag(x.tags, text) }))
+    if (tagOf(text)) setD(x => (tagList(x.tags).length >= MAX_TAGS ? x : { ...x, tags: withTag(x.tags, text) }))
   }
   const typing = tagOf(pending)
-  const hints = offered.filter(x => !tags.includes(x) && x.startsWith(typing)).slice(0, 4)
+  const hints = full ? [] : offered.filter(x => !tags.includes(x) && x.startsWith(typing)).slice(0, 4)
   const tagField = useRef<HTMLInputElement>(null)
   const tagsLabel = useId()
   const submit = (e: FormEvent) => {
     e.preventDefault()
-    if (!stale && !badDuration) onSave(whole(d))
+    if (!stale && !badDuration) onSave(whole(withTyped(d)))
   }
   return (
     <form
@@ -214,14 +237,16 @@ export function EntryEditor({
               value={lasting ?? (seconds === null ? '' : durationText(seconds, t))}
               disabled={busy}
               autoComplete="off"
-              onChange={e => {
-                const text = e.target.value
-                setLasting(text)
-                const s = parseDuration(text)
-                if (s !== null) setD(x => withDuration(x, s))
+              aria-invalid={badDuration}
+              // half typed ("1" of "1:10") is no duration yet: the draft waits for Enter or leaving
+              onChange={e => setLasting(e.target.value)}
+              onKeyDown={e => {
+                if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
+                e.preventDefault()
+                commitDuration()
               }}
-              // what was typed is said as the panel says durations, or goes back to the draft's own
-              onBlur={() => setLasting(null)}
+              // a duration: into the draft, said as the panel says durations; none: kept, and said
+              onBlur={commitDuration}
             />
             <button
               type="button"
@@ -236,10 +261,9 @@ export function EntryEditor({
           </div>
         </div>
       </div>
-      {badDuration && <p className="access-warn time-warn">{t('time.edit.badDuration')}</p>}
-      {!badDuration && seconds !== null && seconds > LONG_SECONDS && (
-        <p className="access-warn time-warn">{t('time.edit.long')}</p>
-      )}
+      <p className="access-warn time-warn" aria-live="polite">
+        {warning}
+      </p>
       <div className="time-field-row">
         <label className="time-field time-clock">
           <span>{t('time.edit.date')}</span>
@@ -287,7 +311,9 @@ export function EntryEditor({
                 setPending(rest)
               }}
               onKeyDown={e => {
-                if (e.key === 'Enter' && tagOf(pending)) {
+                if (e.nativeEvent.isComposing) return
+                // Enter ends a tag, never the form
+                if (e.key === 'Enter') {
                   e.preventDefault()
                   addTag(pending)
                   setPending('')
@@ -303,6 +329,7 @@ export function EntryEditor({
               }}
             />
           </div>
+          {full && <p className="time-tag-note">{t('time.err.tags', { n: MAX_TAGS })}</p>}
           {hints.length > 0 && (
             <div className="time-tag-hints">
               {hints.map(hint => (
