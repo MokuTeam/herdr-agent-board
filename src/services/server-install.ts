@@ -19,7 +19,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { gzipSync } from 'node:zlib'
 import { ROOT } from '../adapters/paths.ts'
-import { CHROME_BINS, CHROME_PACKAGE, CHROMIUM_PACKAGE, DESKTOP_PACKAGES } from '../core/desktop.ts'
+import { CHROME_BINS, desktopNeeds, isChromiumLib } from '../core/desktop.ts'
 import { t } from '../core/lang.ts'
 import type { ServerFacts } from '../core/server-facts.ts'
 import {
@@ -29,6 +29,7 @@ import {
   BOARD_USER_COMMENT,
   BUN_VERSION,
   CHECKOUT,
+  desktopLibsUndoScript,
   desktopRemoveScript,
   desktopScript,
   INSTALL_RECORD,
@@ -329,19 +330,19 @@ const installed = async (pkg: string): Promise<boolean> =>
   (await run(['dpkg-query', '-W', `-f=\${Status}`, pkg])).out.includes('install ok installed')
 
 /**
- * The agents' browsers' packages not there yet (core/desktop.ts): Xvnc and the fonts, and a
- * browser where none is: Google Chrome on x86_64, Debian's Chromium on arm64 (none on Ubuntu's
- * arm64, whose Chromium is a snap: a gap, said by `board doctor`).
+ * The agents' browsers' packages not there yet (core/desktop.ts desktopNeeds): Xvnc and the fonts,
+ * and a browser where none is: Google Chrome on x86_64, Debian's Chromium on arm64 Debian; on
+ * arm64 Ubuntu (whose Chromium is a snap) the board's own Chromium's libraries, the Chromium
+ * itself put in place as the user by the install action (adapters/desktop-files.ts).
  */
-async function desktopMissing(): Promise<string[]> {
-  const missing: string[] = []
-  for (const p of DESKTOP_PACKAGES) if (!(await installed(p))) missing.push(p)
+function desktopMissing(): Promise<{ packages: string[]; chromium: boolean }> {
   const PATH = '/usr/local/bin:/usr/bin:/bin:/opt/google/chrome'
-  if (!CHROME_BINS.some(b => Bun.which(b, { PATH }))) {
-    if (process.arch === 'x64') missing.push(CHROME_PACKAGE)
-    else if (/^ID=debian$/m.test(readFileSync('/etc/os-release', 'utf8'))) missing.push(CHROMIUM_PACKAGE)
-  }
-  return missing
+  return desktopNeeds({
+    arch: process.arch,
+    osRelease: () => readFileSync('/etc/os-release', 'utf8'),
+    installed,
+    browserThere: () => CHROME_BINS.some(b => Bun.which(b, { PATH })),
+  })
 }
 
 /** Where the board's code comes from: root's copy (path A's git, or path B's pack and its mark). */
@@ -498,8 +499,10 @@ export async function install(f: InstallFlags, io: Io): Promise<number> {
     sudo: f.sudo,
     source,
     keysFrom: keys?.from ?? null,
-    desktop: await desktopMissing(),
   }
+  const needs = await desktopMissing()
+  facts.desktop = needs.packages
+  if (needs.chromium) facts.chromium = true
   // the web server's plan, the tunnel setup's, with the board's socket as its target
   const a = acme()
   const w: Wanted = { ...serverWanted(domain, f.user), ...(a && { acme: a }) }
@@ -566,14 +569,19 @@ export async function install(f: InstallFlags, io: Io): Promise<number> {
     if (!ok) return 1
   }
 
-  // the agents' browsers (core/desktop.ts): their packages as root; the board goes on without them
+  // the agents' browsers (core/desktop.ts): their packages as root; the board goes on without them.
+  // The board's own Chromium's libraries (Ubuntu's arm64) are kept apart: Undo hands them back to apt
   const desktopAdded: string[] = [...(record?.desktop ?? [])]
+  const libsAdded: string[] = [...(record?.desktopLibs ?? [])]
   const toAdd = facts.desktop ?? []
   if (toAdd.length) {
     await step(io, t('install.step.desktop', { packages: toAdd.join(', ') }), () =>
       tried(() => sh(desktopScript(toAdd), { timeoutMs: 30 * 60_000 })),
     )
-    for (const p of toAdd) if (!desktopAdded.includes(p) && (await installed(p))) desktopAdded.push(p)
+    for (const p of toAdd) {
+      const added = isChromiumLib(p) ? libsAdded : desktopAdded
+      if (!added.includes(p) && (await installed(p))) added.push(p)
+    }
   }
 
   // as the user: Bun (pinned), herdr and Claude Code from their own installers; what is there stays
@@ -713,7 +721,7 @@ export async function install(f: InstallFlags, io: Io): Promise<number> {
 
   writeFileSync(
     INSTALL_RECORD,
-    `${JSON.stringify({ v: 1, user: user.name, home, domain, socket: BOARD_SOCKET, source, sudo: f.sudo, at: new Date().toISOString(), ...(desktopAdded.length && { desktop: desktopAdded }) })}\n`,
+    `${JSON.stringify({ v: 1, user: user.name, home, domain, socket: BOARD_SOCKET, source, sudo: f.sudo, at: new Date().toISOString(), ...(desktopAdded.length && { desktop: desktopAdded }), ...(libsAdded.length && { desktopLibs: libsAdded }) })}\n`,
     { mode: 0o600 },
   )
   io.say('', t('install.done', { domain }))
@@ -778,7 +786,9 @@ export async function undo(f: InstallFlags, io: Io): Promise<number> {
   } else will.push(t('install.undo.will.webNone'))
   // the agents' browsers' packages the install added: only with the user, as its Bun and herdr
   const packages = f.removeUser && ours ? (record?.desktop ?? []) : []
+  const libs = f.removeUser && ours ? (record?.desktopLibs ?? []) : []
   if (packages.length) will.push(t('install.undo.will.desktop', { packages: packages.join(', ') }))
+  if (libs.length) will.push(t('install.undo.will.libs', { packages: libs.join(', ') }))
   if (u && f.removeUser && ours) will.push(t('install.undo.will.user', { user: name, home: u.home }))
   else if (u && ours) will.push(t('install.undo.will.keepUser', { user: name }))
   else if (u && f.removeUser) will.push(t('install.undo.userKept', { user: name }))
@@ -822,6 +832,10 @@ export async function undo(f: InstallFlags, io: Io): Promise<number> {
   if (packages.length)
     await step(io, t('install.undo.will.desktop', { packages: packages.join(', ') }), () =>
       sh(desktopRemoveScript(packages), { timeoutMs: 15 * 60_000 }),
+    )
+  if (libs.length)
+    await step(io, t('install.undo.will.libs', { packages: libs.join(', ') }), () =>
+      sh(desktopLibsUndoScript(libs), { timeoutMs: 5 * 60_000 }),
     )
   await sh(
     `rm -f ${INSTALL_RECORD}; [ -e ${SERVER_NAMES.record} ] || rmdir ${shQuote(socketFolder(BOARD_SOCKET))} 2>/dev/null; true`,

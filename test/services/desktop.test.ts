@@ -105,7 +105,7 @@ function setup(o: Parameters<typeof fakeServer>[0] = {}, items: Item[] = [item('
       onChange: () => state.changes++,
       log: () => {},
       system: server.sys,
-      arch: o.arch,
+      ...(o.arch && { arch: o.arch }),
       now: () => clock,
     })
   return { root, server, cards, state, make, d: make(), tick: (ms: number) => (clock += ms) }
