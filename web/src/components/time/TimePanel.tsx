@@ -46,6 +46,7 @@ import {
   entryTimes,
   isTimeDay,
   lineLabel,
+  lineSystems,
   type MarkBody,
   type MarkState,
   markPlan,
@@ -464,11 +465,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   const lineOf = (client: string) => (l: Line) => {
     const name = lineLabel(l, t)
     const listed = l.entries.map(id => entries.get(id)).filter((e): e is Entry => !!e)
-    // each system with the line's entries that are to be entered there (a project entered elsewhere
-    // is not); one none of them is, not offered
-    const systems = systemsOf(client)
-      .map(x => ({ ...x, listed: listed.filter(e => e.systems.includes(x.id)) }))
-      .filter(x => x.listed.length > 0)
+    const systems = lineSystems(listed, systemsOf(client))
     const last = l.entries[l.entries.length - 1]
     // what its entries can give, each kept a minute: Trim only where that reaches the billed figure
     const room = l.entries.reduce((n, id) => n + Math.max(0, (entries.get(id)?.seconds ?? 0) - 60), 0)

@@ -195,6 +195,22 @@ test('a project’s systems: set apart from the client’s, back to them, carrie
   const fewer = edited(none, { op: 'systems', client: 'client-a', systems: [{ id: 'erp', title: 'erp' }] })
   assert.deepEqual(client(fewer, 'client-a').projectSystems, { Migration: [], Support: [] })
   assert.deepEqual(timeConfig(fewer)?.problems, [])
+  // ids as config.json may hold them, spaces around: read as timeConfig reads them
+  const spaced = {
+    ...two,
+    clients: {
+      ...two.clients,
+      'client-a': {
+        ...two.clients['client-a'],
+        systems: [' erp', 'tracker '],
+        projectSystems: { Migration: [' tracker'] },
+      },
+    },
+  }
+  const kept = edited(spaced, { op: 'systems', client: 'client-a', systems: [{ id: 'tracker', title: '' }] })
+  assert.deepEqual(client(kept, 'client-a').projectSystems, { Migration: ['tracker'] })
+  const set = edited(spaced, { op: 'projectSystems', client: 'client-a', project: 'Support', systems: [' erp '] })
+  assert.deepEqual(client(set, 'client-a').projectSystems, { Migration: [' tracker'], Support: ['erp'] })
   const gone = edited(none, { op: 'systems', client: 'client-a', systems: [] })
   assert.equal('projectSystems' in client(gone, 'client-a'), false)
 })

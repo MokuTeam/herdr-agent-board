@@ -423,6 +423,20 @@ export function markState(entries: readonly Posted[], system: string): MarkState
   return posts.some(Boolean) ? 'partly' : 'not'
 }
 
+/**
+ * A line's systems as its marks show them: each of the client's with the line's entries that are to
+ * be entered there (an entry's own `systems`: a project entered elsewhere is not); one none of
+ * them is, left out.
+ */
+export function lineSystems<E extends Posted, S extends { id: string }>(
+  entries: readonly E[],
+  systems: readonly S[],
+): (S & { listed: E[] })[] {
+  return systems
+    .map(x => ({ ...x, listed: entries.filter(e => !e.systems || e.systems.includes(x.id)) }))
+    .filter(x => x.listed.length > 0)
+}
+
 /** A post or an unpost as the page sends it (POST /api/time). */
 export interface MarkBody {
   op: 'post' | 'unpost'

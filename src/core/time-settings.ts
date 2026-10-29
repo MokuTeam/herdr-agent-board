@@ -40,10 +40,12 @@ const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is s
 const SYSTEM_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
 /** A project's name as kept: one line, at most 120 characters (the entries' own limit). */
 const projectName = (s: string): string => cleanText(s, 120)
-/** The ids of a raw `systems` list (a string, or { id }). */
+/** The ids of a raw `systems` list (a string, or { id }), as timeConfig reads them: trimmed. */
 const systemIds = (v: unknown): string[] =>
   Array.isArray(v)
-    ? v.flatMap(s => (typeof s === 'string' ? [s] : isObject(s) && typeof s.id === 'string' ? [s.id] : []))
+    ? v.flatMap(s =>
+        typeof s === 'string' ? [s.trim()] : isObject(s) && typeof s.id === 'string' ? [s.id.trim()] : [],
+      )
     : []
 /** `projectSystems` kept, or taken out when it holds none. */
 function setProjectSystems(c: Raw, next: Raw): void {
@@ -188,7 +190,12 @@ export function editedTime(time: unknown, e: TimeEdit, zone: string): { time: un
           c,
           ids.length
             ? Object.fromEntries(
-                Object.entries(c.projectSystems).map(([p, v]) => [p, names(v).filter(id => ids.includes(id))]),
+                Object.entries(c.projectSystems).map(([p, v]) => [
+                  p,
+                  names(v)
+                    .map(id => id.trim())
+                    .filter(id => ids.includes(id)),
+                ]),
               )
             : {},
         )
@@ -204,8 +211,9 @@ export function editedTime(time: unknown, e: TimeEdit, zone: string): { time: un
         Object.entries(isObject(c.projectSystems) ? c.projectSystems : {}).filter(([p]) => !sameProject(p, e.project)),
       )
       // in the client's order; every one of them is the client's own, no list of its own
-      const ids = e.systems === null ? null : all.filter(id => e.systems?.includes(id))
-      const unknown = e.systems?.find(id => !all.includes(id))
+      const asked = e.systems?.map(id => id.trim()) ?? null
+      const ids = asked === null ? null : all.filter(id => asked.includes(id))
+      const unknown = asked?.find(id => !all.includes(id))
       if (unknown !== undefined) return { key: 'time.set.err.system', vars: { id: unknown } }
       setProjectSystems(
         c,

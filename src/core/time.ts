@@ -225,7 +225,9 @@ function systemsOf(v: unknown, at: string, problems: TimeProblem[]): TimeSystem[
 /**
  * A client's projects entered elsewhere than in all of its systems: a project (one of its projects
  * or retired ones, when it keeps a list; each named once, case and spaces aside) to a list of its
- * systems' ids, each once; an empty list: entered nowhere.
+ * systems' ids, each once; an empty list: entered nowhere. A list naming a system the client has
+ * not is left out whole (a problem): its project read as entered everywhere, so a slip over-lists
+ * what is to enter rather than hide it.
  */
 function projectSystemsOf(
   v: unknown,
@@ -239,25 +241,31 @@ function projectSystemsOf(
     return {}
   }
   const out: Record<string, string[]> = {}
+  const named: string[] = []
   for (const [project, raw] of Object.entries(v)) {
     const place = `${at}.${project}`
     if (own.projects && !projectIn([...own.projects, ...own.retired], project)) {
       problems.push({ at: place, why: 'project', value: project })
       continue
     }
-    if (Object.keys(out).some(p => sameProject(p, project))) {
+    // named twice whether or not the first one checks out: which one is meant would be a guess
+    if (named.some(p => sameProject(p, project))) {
       problems.push({ at: place, why: 'twice', value: project })
       continue
     }
+    named.push(project)
     const ids = strings(raw, place, problems)
     if (!ids) continue
     const list: string[] = []
+    let unknown = false
     ids.forEach((id, i) => {
       if (list.includes(id)) problems.push({ at: `${place}[${i}]`, why: 'system', value: id })
-      else if (!own.systems.some(s => s.id === id)) problems.push({ at: `${place}[${i}]`, why: 'notSystem', value: id })
-      else list.push(id)
+      else if (!own.systems.some(s => s.id === id)) {
+        problems.push({ at: `${place}[${i}]`, why: 'notSystem', value: id })
+        unknown = true
+      } else list.push(id)
     })
-    out[project] = list
+    if (!unknown) out[project] = list
   }
   return out
 }

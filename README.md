@@ -1969,7 +1969,8 @@ An entry changed on the board after it was entered (its revision moved past the 
 A project billed elsewhere (its time goes to the client's tracker, never to its ERP, say) names its
 own systems in `projectSystems`: the project (one of the client's `projects` or `retired`, named
 once, case and spaces aside) to a list of the client's system ids, each once; `[]` is entered
-nowhere. Its entries are to be entered there only: the panel's marks, "not entered", `list
+nowhere; a list naming a system the client has not is a problem, and that project is read as
+entered in all of them until it is fixed. Its entries are to be entered there only: the panel's marks, "not entered", `list
 --not-posted`, `--changed-after-post` (a mark in a system of the client's that the project does
 not use is none of the entry's) and the switch-over follow it, and `post` refuses a system the
 entry's project does not use (`unpost` takes such a mark off). A project not in `projectSystems`
@@ -3175,7 +3176,7 @@ while one does not check out.
 
 `time` (time tracking, [Time](#time); Settings → Time tracking… sets all but the billing rules):
 `on`, `zone`, `excludeTags`, `clients` with each one's `on`, `projects`, `retired`, `billable`,
-`nonBillable`, `systems`, `ref`, `zone` and `billing` rules).
+`nonBillable`, `systems`, `projectSystems`, `ref`, `zone` and `billing` rules).
 
 `backup` (the [backup](#backup) of the board's database; Settings → Backup… sets it): `folder` (a
 folder that syncs elsewhere), `server` (`{ "host", "port", "admin": { "user", "key" }, "set" }`:

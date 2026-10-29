@@ -546,4 +546,9 @@ test('projectSystems guesses nothing: a project not the client’s, one named tw
     ],
   )
   assert.match(problemsText(c.problems, translator('en')), /"wiki" is not one of this client’s systems/)
+  // the list with a system the client has not is left out: entered everywhere, not nowhere
+  assert.deepEqual(
+    systemsFor(c, 'a', 'Side Work').map(s => s.id),
+    ['erp', 'tracker'],
+  )
 })
