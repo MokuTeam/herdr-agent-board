@@ -36,7 +36,7 @@ import { t } from '../core/lang.ts'
 import { DEFAULT_PROFILE, shownProfiles } from '../core/profiles.ts'
 import { boardFiles, checkSetup, report, tomlValue } from '../core/setup.ts'
 import { wakeSwitch } from '../core/wake/config.ts'
-import { ensureToastApp } from '../integrations/toast-mac.ts'
+import { ensureToastApp, toastAppState } from '../integrations/toast-mac.ts'
 
 const args = process.argv.slice(2)
 for (const a of args.filter(a => a !== '--toast' && a !== '--no-toast' && a !== '--codex'))
@@ -212,10 +212,14 @@ try {
     if (app) {
       console.log(`desktop notifications: the app that shows them: ${app}`)
       console.log('  the first one asks to allow "Claude": allow it, or turn it on in System Settings > Notifications')
-    } else
+    } else {
       console.log(
-        'desktop notifications: not built: no Swift toolchain (swiftc); herdr shows its own instead ([ui.toast] delivery = "system")',
+        `desktop notifications: the app that shows them was not built (${toastAppState().failed ?? 'it could not be built'}); until it is, the hook shows herdr's own notification`,
       )
+      console.log(
+        '  to build it, install the Command Line Tools if they are missing (xcode-select --install), then run the install with --toast again',
+      )
+    }
   }
 } catch (err) {
   console.error(`agent-board install: ${messageOf(err)}`)
