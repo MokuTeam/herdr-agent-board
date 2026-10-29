@@ -9,11 +9,11 @@
 // login's (`password`, also sudo's, call 3) and sudo's own when it differs (`sudoPassword`). They
 // come with each Look, Apply or Undo (typed in the panel, or the ones the local board remembers
 // for 30 minutes, filled in by remote-access.ts: services/held-passwords.ts); the login's goes to
-// ssh's askpass (adapters/ssh.ts), once per ssh, sudo's to ssh's stdin, once per spawn. Kept in memory only while that request (or that
-// run, to mask a line that would hold one) lasts; never in config.json, web.log, the view, an
-// answer or a command line. ssh's lines are read as the server said them (a password like
-// `debian` or `1` is a word Look and the run print too); a line that is shown (a step's output, an
-// error) has it masked. Without a password the login is the keys' alone, its ssh line as before
+// ssh's askpass (adapters/ssh.ts), once per ssh, sudo's to ssh's stdin, once per spawn. Kept here
+// in memory only while that request (or that run, to mask a line that would hold one) lasts;
+// never in config.json, web.log, the view, an answer or a command line. ssh's lines are read as the
+// server said them (a password like `debian` or `1` is a word Look and the run print too); a line
+// that is shown (a step's output, an error) has it masked. Without a password the login is the keys' alone, its ssh line as before
 // the password login.
 //
 // With the board's own public key, Look reads step 1's parts too and Apply makes what the server

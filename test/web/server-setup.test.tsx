@@ -34,6 +34,7 @@ import { DOCKER_FILES, DOCKER_PACKAGES } from '../../src/core/server-texts.ts'
 import type { AdminHint, ServerView } from '../../src/core/server-view.ts'
 import { type TestStep, TUNNEL_SOCKET } from '../../src/core/tunnel.ts'
 import { sshdBlock } from '../../src/core/tunnel-snippets.ts'
+import { timeOf } from '../../src/core/when-format.ts'
 import { AccessBody } from '../../web/src/components/access/AccessPanel.tsx'
 import { ServerSetup, ServerSetupBody } from '../../web/src/components/access/ServerSetup.tsx'
 import { type AccessSend, accessSource } from '../../web/src/hooks/useAccess.ts'
@@ -81,7 +82,7 @@ const PUBLIC_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeFakeFake agent-boar
 const SENTINEL = `S3cr3t%$'"\`Ж`
 const SUDO_SENTINEL = `Sud0%$'"\`Щ`
 const W: Wanted = { user: 'boardtunnel', socket: TUNNEL_SOCKET, domain: 'board.example.com', publicPort: null }
-const NOTE = 'kept by this panel while it is open; never saved'
+const NOTE = 'remembered by this board for 30 minutes after it is last used, in its memory only; never saved'
 const CALL_4 = 'If the web server is not set up yet, this step fails until it is: set it up on the Server tab.'
 /** What the owner must never meet outside a fold (the spec's Goals). */
 const JARGON = /\b(network|case|container|caddyfile)\b|сеть|сети|контейнер|caddyfile|случа/i
@@ -815,6 +816,42 @@ test('case 3a on Ubuntu 26.04: Caddy in Docker in plain words; its network and t
   expect(foundLines(other, t, 'boardtunnel')[0]).toBe(
     'Fedora 41 (not supported: Do it myself) · no Docker · 443: httpd · 80: free',
   )
+})
+
+test('the password the board remembers: until when, next to the field; Forget the password; nothing asked while it holds one', async () => {
+  const until = NOW + 20 * 60_000
+  const held = withServer({ passwordHeld: { until } })
+  const live = liveServer(held)
+  const line = `Password remembered until ${timeOf(until, t)}`
+  expect(live.text('.access-held')).toEqual([line])
+  expect(live.text('.access-kept')).toEqual([line])
+  await live.click('Forget the password')
+  expect(live.calls).toEqual([['server-password-forget', {}]])
+  // Over (the board's clock past it), or none: the field's note as before, no Forget.
+  for (const view of [withServer({ passwordHeld: { until: NOW - 1 } }), withServer({ passwordHeld: null })]) {
+    const part = partOf(view)
+    expect(textsOf(part, 'access-kept')).toEqual([NOTE])
+    expect(buttonsIn(part).map(textOf)).not.toContain('Forget the password')
+  }
+  // In Russian.
+  expect(textsOf(partOf(held, { lang: 'ru' }), 'access-held')).toEqual([`Пароль запомнен до ${timeOf(until, ru)}`])
+  // sudo wants a password, none typed, but the board holds one: Apply goes, with nothing typed in it.
+  const plan = planned('2', 'debian13', { sudo: 'password' })
+  const apply = liveServer({ ...plan, server: plan.server && { ...plan.server, passwordHeld: { until } } })
+  expect(apply.disabled('Apply')).toBe(false)
+  await apply.click('Apply')
+  expect(apply.calls).toEqual([['server-apply', { plan: 'p1' }]])
+  // A Look that went through with the password typed: the board holds it now, the panel lets it go.
+  const look = liveServer(withServer({}))
+  await look.type('login-password', SENTINEL)
+  await look.click('Set up the server')
+  expect(look.calls).toEqual([['server-look', { password: SENTINEL }]])
+  expect([look.state().password, look.state().sudoPassword]).toEqual(['', ''])
+  // Refused: what was typed is asked for again, as before.
+  const refused = liveServer(withServer({}), () => ({ ok: false, hint: 'network' }))
+  await refused.type('login-password', 'pw')
+  await refused.click('Set up the server')
+  expect(refused.state().password).toBe('pw')
 })
 
 test('a plan that installs Docker: said in plain words, Apply off until its OK, then the plan, the tick and the password', async () => {

@@ -22,6 +22,7 @@ import type { Plan } from '../../../../src/core/server-plan.ts'
 import type { Progress } from '../../../../src/core/server-script.ts'
 import type { InstallView, ServerView } from '../../../../src/core/server-view.ts'
 import type { TestStep, TunnelConfig } from '../../../../src/core/tunnel.ts'
+import { timeOf } from '../../../../src/core/when-format.ts'
 import type { AccessSend } from '../../hooks/useAccess.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { hintText, stepLine } from '../../models/access.ts'
@@ -42,12 +43,14 @@ import {
   failHint,
   flowFill,
   foundLines,
+  heldUntil,
   hintLine,
   hostKeyLine,
   isPlainWarning,
   loginFolded,
   manualReasons,
   neededField,
+  passwordsTaken,
   plainOf,
   resultLine,
   rollbackLines,
@@ -163,10 +166,12 @@ export interface ServerSyncProps {
   send: AccessSend
   /** The Server tab's: the passwords typed there go with the sync's requests too. */
   state: SetupState
+  /** The Server tab's change: the typed passwords let go of once the board took them. */
+  onState?(patch: Partial<SetupState>): void
 }
 
 /** The Sync tab: the sync of the Claude profiles, signed in as the Server tab's login, once the board on the server has its address. */
-export function ServerSync({ view, send, state }: ServerSyncProps) {
+export function ServerSync({ view, send, state, onState }: ServerSyncProps) {
   const t = useT()
   const { canEdit } = useBoardContext()
   const s = view.server ?? SERVER_IDLE
@@ -177,7 +182,13 @@ export function ServerSync({ view, send, state }: ServerSyncProps) {
       <p className="access-note">{t('sync.panel.signsIn')}</p>
       <ProfileSync
         sync={view.sync ?? null}
-        send={send}
+        send={async (op, body) => {
+          const reply = await send(op, body)
+          // the board remembers them now: the Server tab's typed ones go
+          if (onState && passwordsTaken(op, reply) && (state.password !== '' || state.sudoPassword !== ''))
+            onState({ password: '', sudoPassword: '' })
+          return reply
+        }}
         passwords={withPassword(state)}
         enabled={canEdit && !busy && view.tunnel.ssh !== null}
       />
@@ -224,6 +235,8 @@ export function ServerSetupBody({
   const sudo = sudoField(s, state)
   const plain = phase === 'plan' ? plainOf(s, view.tunnel.settings, t) : null
   const tracker = saves ?? savesTracker()
+  // Until when the board remembers the server's passwords (its memory only): nothing asked meanwhile.
+  const held = heldUntil(s, now)
 
   // A field an answer asked for (its `need`): emptied and focused, once per ask.
   const passwordRef = useRef<HTMLInputElement>(null)
@@ -237,6 +250,12 @@ export function ServerSetupBody({
     field.value = ''
     field.focus()
   }, [asked, asks])
+
+  // The passwords let go of (here, or by the Sync tab once the board took them): their fields emptied too.
+  useEffect(() => {
+    if (state.password === '' && passwordRef.current) passwordRef.current.value = ''
+    if (state.sudoPassword === '' && sudoRef.current) sudoRef.current.value = ''
+  }, [state.password, state.sudoPassword])
 
   /**
    * What Look and the one command need first: the saves on their way ended; the board's address
@@ -298,10 +317,15 @@ export function ServerSetupBody({
     await look('server-install-look')
   }
 
-  /** Look (or Undo's Look) with the passwords typed; an answer that asks for one points at its field. */
+  /**
+   * Look (or Undo's Look) with the passwords typed (none: the board's remembered ones go); an answer
+   * that asks for one points at its field; one that went through lets the typed ones go (the board
+   * remembers them now).
+   */
   async function look(op: SetupState['again']): Promise<void> {
     const reply = await send(op, withPassword(state))
     onState(answerPatch(reply, op, state))
+    if (passwordsTaken(op, reply)) forget()
   }
 
   /**
@@ -334,8 +358,8 @@ export function ServerSetupBody({
       ...ticks,
       ...withPassword(state),
     })
-    // The board took the passwords for this run: the panel keeps them no longer (Undo asks again, call 9).
-    if (reply?.ok === true) forget()
+    // The board took the passwords for this run: the panel keeps them no longer (the board remembers them).
+    if (passwordsTaken(op, reply)) forget()
     onState(answerPatch(reply, null, state))
   }
 
@@ -513,7 +537,7 @@ export function ServerSetupBody({
 
   const needs = (p: Plan): boolean =>
     (p.ticks.includes('docker') && !state.docker) ||
-    (s.sudo === 'password' && state.password === '' && state.sudoPassword === '')
+    (s.sudo === 'password' && state.password === '' && state.sudoPassword === '' && held === null)
   const ran = plan && progress && (running || phase === 'done' || phase === 'failed')
   const tunnelWhy = tunnelLookWhy && <p className="access-look-why">{tunnelLookWhy}</p>
   const boardWhy = boardLookWhy && <p className="access-look-why">{boardLookWhy}</p>
@@ -720,7 +744,21 @@ export function ServerSetupBody({
           <div className="access-entry">{adminField('user', t('server.panel.login'), DEFAULT_LOGIN)}</div>
           <div className="access-entry">
             {passwordField('login-password', t('server.panel.password'))}
-            <p className="access-kept">{t('server.panel.sudoNote')}</p>
+            {held !== null ? (
+              <div className="access-held-line">
+                <p className="access-kept access-held">{t('server.panel.held', { time: timeOf(held, t) })}</p>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={!canEdit}
+                  onClick={() => void send('server-password-forget')}
+                >
+                  {t('server.panel.forgetPassword')}
+                </button>
+              </div>
+            ) : (
+              <p className="access-kept">{t('server.panel.sudoNote')}</p>
+            )}
           </div>
           {sudo && <div className="access-entry">{passwordField('sudo-password', t('server.panel.sudoOwn'))}</div>}
           <details className="access-keyfile" open={s.admin.key !== ''}>

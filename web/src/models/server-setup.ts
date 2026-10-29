@@ -48,7 +48,8 @@ export type Need = 'password' | 'sudoPassword'
 export interface SetupState {
   /**
    * The login's password as typed (sudo's too, call 3): sent with each Look, Apply or Undo, kept
-   * nowhere else, and forgotten once the board took it for a run (Undo asks for it again, call 9).
+   * nowhere else, and let go of once a login with it went through: the board remembers it then, in
+   * its memory only, for 30 minutes since its last use (`passwordHeld`).
    */
   password: string
   /** sudo's own password, once an answer asked for it: sent as the login's is. */
@@ -373,6 +374,31 @@ export const sudoField = (s: ServerView, state: SetupState): boolean =>
 
 /** The field the panel points at: the one an answer asked for, else the one the board's hint wants. */
 export const neededField = (s: ServerView, state: SetupState): Need | null => state.need ?? needFor(s.hint)
+
+/**
+ * The ops whose ok means a login with the passwords they carried went through: the board remembers
+ * those passwords then (services/held-passwords.ts), and the panel lets the typed ones go.
+ */
+const TAKEN_BY: ReadonlySet<string> = new Set([
+  'server-look',
+  'server-apply',
+  'server-undo-look',
+  'server-undo',
+  'server-install-look',
+  'server-install',
+  'sync-look',
+  'sync-dirs',
+  'sync-mkdir',
+  'sync-apply',
+])
+
+/** The board took the passwords this request carried (it remembers them now). */
+export const passwordsTaken = (op: string, reply: Record<string, unknown> | null): boolean =>
+  reply?.ok === true && TAKEN_BY.has(op)
+
+/** Until when the board remembers the server's passwords, while it still does by `now`; null when it holds none. */
+export const heldUntil = (s: ServerView, now: number): number | null =>
+  s.passwordHeld && s.passwordHeld.until > now ? s.passwordHeld.until : null
 
 /**
  * What an answer to Look, Apply or Undo changes in the part: a field it asks for (`need`) emptied

@@ -171,7 +171,7 @@ export function AccessBody({ view, send, steps, testing, tab: first }: AccessBod
       {pane(
         'sync',
         <section className="access-sync-tab">
-          <ServerSync view={view} send={send} state={keep.state} />
+          <ServerSync view={view} send={send} state={keep.state} onState={keep.onState} />
         </section>,
       )}
       {pane(

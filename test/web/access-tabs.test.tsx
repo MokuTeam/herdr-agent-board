@@ -190,18 +190,19 @@ describe('the tabs', () => {
 })
 
 describe('the login shared', () => {
-  test('the Sync tab’s requests carry the passwords typed on the Server tab', async () => {
+  test('the Sync tab’s requests carry the passwords typed on the Server tab; once the board took them, the typed ones go', async () => {
     const calls: [string, Record<string, unknown>][] = []
     const send: AccessSend = async (op, body = {}) => {
       calls.push([op, body])
       return { ok: true }
     }
     const state = { ...SETUP_START, password: 'S3cr3t%$Ж', sudoPassword: 'Sud0' }
+    const patches: Record<string, unknown>[] = []
     const context = board({ now: NOW })
     const world = new FakeWorld({ viewport: VP })
     const tree = () => (
       <div>
-        <ServerSync view={VIEW} send={send} state={state} />
+        <ServerSync view={VIEW} send={send} state={state} onState={patch => void patches.push(patch)} />
       </div>
     )
     let hosts: Host[] = []
@@ -224,5 +225,6 @@ describe('the login shared', () => {
     await world.fire(preview, 'click')
     for (let i = 0; i < 8; i++) await Bun.sleep(0)
     expect(calls).toEqual([['sync-look', { direction: 'up', password: 'S3cr3t%$Ж', sudoPassword: 'Sud0' }]])
+    expect(patches).toEqual([{ password: '', sudoPassword: '' }])
   })
 })

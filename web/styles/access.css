@@ -228,3 +228,6 @@
 .access-card-head { margin: 0 0 4px; font-size: 13px; }
 .access-card-line { margin: 0 0 6px; color: var(--label-2); font-size: 12.5px; overflow-wrap: anywhere; }
 .sync-tick { margin: 0 6px 0 0; vertical-align: middle; }
+/* The password the board remembers: until when, and Forget, next to the field. */
+.access-held-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.access-held-line .access-kept { margin: 0; }
