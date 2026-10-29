@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { dbFile, openDb } from '../../src/adapters/db.ts'
 import { addEntry } from '../../src/adapters/time-store.ts'
+import { freshTarget } from '../../src/core/backup.ts'
 import { makeKey } from '../../src/core/backup-file.ts'
 import { dateIn, timeConfig } from '../../src/core/time.ts'
 import { timeToday } from '../../src/server/routes/time.ts'
@@ -110,7 +111,8 @@ test('a time read that fails does not stop the board: the line is empty, said on
   assert.equal(timeToday({ time: { ...conf, zone: 'Nowhere/Here' } }, now)?.problems, true)
 })
 
-test('changes as the owner: add, a trim with the revision read, a stale one refused, a move, remove and restore', async () => {
+/** A board with time on, a backup target and key, and a Test of it that went through once. */
+async function writableBoard(tested = true) {
   const box = await sandbox()
   const folder = join(box.dir, 'Sync')
   mkdirSync(folder)
@@ -120,6 +122,11 @@ test('changes as the owner: add, a trim with the revision read, a stale one refu
     join(state, 'backup', 'backup-key.json'),
     JSON.stringify(makeKey('correct horse battery', 1, { logN: 10, r: 8, p: 1 })),
   )
+  if (tested)
+    writeFileSync(
+      join(state, 'backup', 'status.json'),
+      JSON.stringify({ targets: { folder: { ...freshTarget(), tested: Date.now() } } }),
+    )
   const { url } = await serveBoard(box, { language: 'en', time: TIME, backup: { folder } })
   const post = async (body: Record<string, unknown>, headers: Record<string, string> = { 'x-board': '1' }) => {
     const res = await fetch(`${url}/api/time`, {
@@ -129,34 +136,94 @@ test('changes as the owner: add, a trim with the revision read, a stale one refu
     })
     return [res.status, await json(res)] as const
   }
-  const add = {
-    op: 'add',
-    client: 'client-a',
-    project: 'Support',
-    description: 'Case 10001 X: work',
-    start: '2026-10-28T13:00:00Z',
-    stop: '2026-10-28T14:30:00Z',
-  }
+  return { url, post, state }
+}
+
+const NEAR = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10)
+const add = {
+  op: 'add',
+  client: 'client-a',
+  project: 'Support',
+  description: 'Case 10001 X: work',
+  start: `${NEAR}T13:00:00Z`,
+  stop: `${NEAR}T14:30:00Z`,
+}
+type Made = { id: string; rev: number; by: unknown; seconds: number; date: string; stop: string }
+
+test('changes as the owner: add, a trim with the revision read, a stale one refused, a move, remove and restore', async () => {
+  const { url, post } = await writableBoard()
   assert.notEqual((await post(add, {}))[0], 200, 'the board’s header is required')
   const [status, made] = await post(add)
   assert.equal(status, 200)
-  const entry = made.entry as { id: string; rev: number; by: unknown; seconds: number }
+  const entry = made.entry as Made
   assert.equal(entry.by, 'user')
-  const [, trimmed] = await post({ op: 'edit', id: entry.id, rev: entry.rev, stop: '2026-10-28T14:00:00Z' })
-  assert.equal((trimmed.entry as { seconds: number }).seconds, 3600)
+  const [, trimmed] = await post({ op: 'edit', id: entry.id, rev: entry.rev, stop: `${NEAR}T14:00:00Z` })
+  const t1 = trimmed.entry as Made
+  assert.equal(t1.seconds, 3600)
   const [stale, why] = await post({ op: 'edit', id: entry.id, rev: entry.rev, description: 'Case 10001 X: other' })
   assert.equal(stale, 409)
-  assert.match(String(why.error), /changed since/)
-  const [, moved] = await post({ op: 'move', id: entry.id, date: '2026-10-30' })
-  assert.equal((moved.entry as { date: string }).date, '2026-10-30')
-  assert.equal((await post({ op: 'remove', id: entry.id }))[0], 200)
-  const day = await json(await fetch(`${url}/api/time?date=2026-10-30`))
+  assert.equal(why.code, 'changedSince', 'a code beside the words, for the page’s own')
+  const to = new Date(Date.parse(`${NEAR}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10)
+  const [, moved] = await post({ op: 'move', id: entry.id, rev: t1.rev, date: to })
+  const m = moved.entry as Made
+  assert.equal(m.date, to)
+  const [, removed] = await post({ op: 'remove', id: entry.id, rev: m.rev })
+  const day = await json(await fetch(`${url}/api/time?date=${to}`))
   assert.deepEqual(day.entries, [])
   assert.deepEqual(day.projects, { 'client-a': ['Support'] })
-  assert.equal((await post({ op: 'restore', id: entry.id }))[0], 200)
-  assert.equal(((await json(await fetch(`${url}/api/time?date=2026-10-30`))).entries as unknown[]).length, 1)
-  assert.equal((await post({ op: 'edit', id: 'nope0000', description: 'x' }))[0], 404)
+  assert.equal((await post({ op: 'restore', id: entry.id, rev: (removed.entry as Made).rev }))[0], 200)
+  assert.equal(((await json(await fetch(`${url}/api/time?date=${to}`))).entries as unknown[]).length, 1)
+  assert.equal((await post({ op: 'edit', id: 'nope0000', rev: 1, description: 'x' }))[0], 404)
   assert.equal((await post({ ...add, project: 'Suport' }))[0], 400)
+})
+
+test('every change says the revision it read, an integer; a stale one is refused on each op', async () => {
+  const { post } = await writableBoard()
+  const e = (await post(add))[1].entry as Made
+  await post({ op: 'edit', id: e.id, rev: e.rev, description: 'Case 10001 X: corrected' })
+  // rev 1 is stale now; a rev that is not an integer, or none, is no change at all
+  for (const rev of ['1', 1.5, null, undefined])
+    assert.deepEqual(
+      [JSON.stringify(rev), (await post({ op: 'edit', id: e.id, rev, description: 'x' }))[1].code],
+      [JSON.stringify(rev), 'rev'],
+    )
+  for (const op of [{ op: 'edit', description: 'x' }, { op: 'move', date: NEAR }, { op: 'remove' }, { op: 'raise' }]) {
+    assert.equal((await post({ ...op, id: e.id }))[0], 400, `${op.op} without a rev`)
+    assert.equal((await post({ ...op, id: e.id, rev: 1 }))[0], op.op === 'raise' ? 400 : 409, `${op.op} stale`)
+  }
+})
+
+test('times are ISO with an offset, within a day ahead and a year back; tags are counted', async () => {
+  const { post } = await writableBoard()
+  for (const [start, code] of [
+    ['9999-01-01T10:00:00Z', 'whenRange'],
+    ['0000-01-01T10:00:00Z', 'whenRange'],
+    [`${NEAR}T10:00:00`, 'when'],
+    ['1', 'when'],
+  ] as const)
+    assert.deepEqual([start, (await post({ ...add, start }))[1].code], [start, code])
+  const e = (await post(add))[1].entry as Made
+  assert.equal((await post({ op: 'move', id: e.id, rev: e.rev, date: '0000-01-01' }))[1].code, 'whenRange')
+  const tags = Array.from({ length: 21 }, (_, i) => `t${i}`)
+  assert.equal((await post({ op: 'edit', id: e.id, rev: e.rev, tags }))[1].code, 'tags')
+})
+
+test('Raise lengthens a line’s last entry by the gap the board works out now', async () => {
+  const { post } = await writableBoard()
+  // 40 minutes in a 30-minute step rounded up: 60 billed, 20 to raise
+  const e = (await post({ ...add, stop: `${NEAR}T13:40:00Z` }))[1].entry as Made
+  const [status, raised] = await post({ op: 'raise', id: e.id, rev: e.rev })
+  assert.equal(status, 200)
+  assert.equal((raised.entry as Made).stop, `${NEAR}T14:00:00Z`)
+  // nothing left to raise
+  assert.equal((await post({ op: 'raise', id: e.id, rev: (raised.entry as Made).rev }))[1].code, 'noRaise')
+})
+
+test('a target that never took a backup is no backup: the board refuses as the command does', async () => {
+  const { post } = await writableBoard(false)
+  const [status, why] = await post(add)
+  assert.equal(status, 409)
+  assert.equal(why.code, 'notBackedUp')
 })
 
 test('no change before the database has a backup target and a passphrase', async () => {

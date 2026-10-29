@@ -1,23 +1,26 @@
 // Time entries for the page (#233, core/time.ts, adapters/time-store.ts). GET /api/time?date=<d>
 // [&client=<lane>] answers that day by client, as billed, with its entries and what an entry may
 // be (the lanes that take time, their projects). POST /api/time { op: add | edit | move | remove |
-// restore, … } changes one as the owner, who may change any; an edit or a move says the revision
-// it read (`rev`) and is refused when the entry changed since. Not local-only: the board through
-// the remote page and a paired phone read and change them as they do the cards. While time is off
-// both answer 409; nothing is written before the database has a backup target and a passphrase.
-import { readKey } from '../../adapters/backup-store.ts'
-import { type BoardDb, DbError, openDb } from '../../adapters/db.ts'
+// restore | raise, … } changes one as the owner, who may change any. Every op on an entry says the
+// revision it read (`rev`, an integer) and is refused when the entry changed since; times are ISO
+// with an offset, within a day ahead and a year back. An error says its `code` (the text key's last
+// part) beside its words. Not local-only: the board through the remote page and a paired phone read
+// and change them as they do the cards. While time is off both answer 409; nothing is written
+// while the config does not check out or before a backup went through (services/time.ts, as for
+// `board time`). The web board keeps one connection to the database for its life (keepTimeDb).
+import { existsSync } from 'node:fs'
+import { type BoardDb, DbError, dbFile, openDb } from '../../adapters/db.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import {
   addEntry,
   editEntry,
+  getEntry,
   listEntries,
   moveEntry,
   removeEntry,
   restoreEntry,
   TimeError,
 } from '../../adapters/time-store.ts'
-import { activeTargets, backupConfig } from '../../core/backup.ts'
 import { t } from '../../core/lang.ts'
 import type { TimePayload } from '../../core/payload.ts'
 import {
@@ -25,6 +28,7 @@ import {
   clientDay,
   dateIn,
   isDate,
+  plausible,
   problemsText,
   secondsOf,
   type TimeConfig,
@@ -33,7 +37,53 @@ import {
   zoneOf,
 } from '../../core/time.ts'
 import type { Config } from '../../core/types.ts'
+import { writeRefusal } from '../../services/time.ts'
 import { json, type Route } from '../http.ts'
+
+let keep = false
+let kept: { path: string; db: BoardDb } | null = null
+
+/** The web board keeps one connection for its life (server/app.ts); elsewhere each call opens and closes its own. */
+export function keepTimeDb(on: boolean): void {
+  keep = on
+  if (!on) dropKept()
+}
+
+function dropKept(): void {
+  try {
+    kept?.db.close()
+  } catch {}
+  kept = null
+}
+
+/**
+ * The database for one call: the kept connection (opened when there is none, or when the file it
+ * had is gone), or one of its own. A failure that is not a time refusal drops the kept one, so the
+ * next call opens it afresh.
+ */
+function withDb<T>(create: boolean, fn: (db: BoardDb | null) => T): T {
+  if (!keep) {
+    const db = openDb({ create })
+    try {
+      return fn(db)
+    } finally {
+      db?.close()
+    }
+  }
+  const path = dbFile()
+  if (kept && (kept.path !== path || !existsSync(path))) dropKept()
+  if (!kept) {
+    const db = openDb({ create })
+    if (!db) return fn(null)
+    kept = { path, db }
+  }
+  try {
+    return fn(kept.db)
+  } catch (err) {
+    if (!(err instanceof TimeError)) dropKept()
+    throw err
+  }
+}
 
 export interface TimeDayView {
   date: string
@@ -55,13 +105,7 @@ const projectsOf = (conf: TimeConfig): Record<string, string[] | null> =>
 export function timeDay(cfg: Pick<Config, 'time'>, date: string, client?: string): TimeDayView | null {
   const conf = timeConfig(cfg.time)
   if (!conf) return null
-  const db = openDb({ create: false })
-  let entries: TimeEntry[] = []
-  try {
-    entries = db ? listEntries(db, { from: date, to: date, ...(client && { client }) }) : []
-  } finally {
-    db?.close()
-  }
+  const entries = withDb(false, db => (db ? listEntries(db, { from: date, to: date, ...(client && { client }) }) : []))
   const clients = [...new Set(entries.map(e => e.client))].sort()
   return {
     date,
@@ -94,49 +138,78 @@ export function timeToday(cfg: Pick<Config, 'time'>, now: number = Date.now()): 
   if (!conf) return null
   const date = dateIn(now, conf.zone)
   const problems = conf.problems.length > 0
-  let db: ReturnType<typeof openDb> = null
   try {
-    db = openDb({ create: false })
-    if (!db) return { seq: 0, date, today: {}, ...(problems && { problems }) }
-    // a client in its own zone may be a day ahead or behind the board's
-    const entries = listEntries(db, { from: addDays(date, -1), to: addDays(date, 1) })
-    const today: Record<string, number> = {}
-    for (const c of new Set(entries.map(e => e.client))) {
-      const own = dateIn(now, zoneOf(conf, c))
-      const mine = entries.filter(e => e.client === c && e.date === own)
-      if (mine.length) today[c] = clientDay(conf, c, own, mine).billedSeconds
-    }
-    const seq = db.lastChange().seq
-    readFailed = ''
-    return { seq, date, today, ...(problems && { problems }) }
+    return withDb(false, db => {
+      if (!db) return { seq: 0, date, today: {}, ...(problems && { problems }) }
+      // a client in its own zone may be a day ahead or behind the board's
+      const entries = listEntries(db, { from: addDays(date, -1), to: addDays(date, 1) })
+      const today: Record<string, number> = {}
+      for (const c of new Set(entries.map(e => e.client))) {
+        const own = dateIn(now, zoneOf(conf, c))
+        const mine = entries.filter(e => e.client === c && e.date === own)
+        if (mine.length) today[c] = clientDay(conf, c, own, mine).billedSeconds
+      }
+      const seq = db.lastChange().seq
+      readFailed = ''
+      return { seq, date, today, ...(problems && { problems }) }
+    })
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err)
     if (why !== readFailed) console.error(`time: today's totals not read: ${why}`)
     readFailed = why
     return { seq: -1, date, today: {}, ...(problems && { problems }) }
-  } finally {
-    db?.close()
   }
 }
 
 const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
-const instant = (v: unknown): number | undefined => {
-  if (typeof v !== 'string') return undefined
-  const at = Date.parse(v)
-  return Number.isNaN(at) ? undefined : at
+
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/i
+
+/** A time the body gives: undefined when it gives none; refused when it is not ISO with an offset, or not one an entry may have. */
+function when(v: unknown, now: number): number | undefined {
+  if (v === undefined) return undefined
+  const at = typeof v === 'string' && ISO.test(v) ? Date.parse(v) : Number.NaN
+  if (Number.isNaN(at)) throw new TimeError('time.err.when', { value: String(v) })
+  if (!plausible(at, now)) throw new TimeError('time.err.whenRange', { value: String(v) })
+  return at
 }
-const tagsOf = (v: unknown): string[] | undefined =>
-  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : undefined
+
+/** The revision the change read: required, an integer. */
+function revOf(b: Record<string, unknown>): number {
+  if (typeof b.rev !== 'number' || !Number.isInteger(b.rev)) throw new TimeError('time.err.rev')
+  return b.rev
+}
+
+const MAX_TAGS = 20
+function tagsOf(v: unknown): string[] | undefined {
+  if (v === undefined) return undefined
+  if (!Array.isArray(v) || v.length > MAX_TAGS || !v.every(x => typeof x === 'string'))
+    throw new TimeError('time.err.tags', { n: MAX_TAGS })
+  return v
+}
+
+/**
+ * Raise a line rounded up to its billed figure: its last entry lengthened by the gap, as the day is
+ * read now (an entry that joined the line since is in it), the entry's revision as the page read it.
+ */
+function raise(db: BoardDb, conf: TimeConfig, id: string, rev: number): TimeEntry {
+  const e = getEntry(db, id)
+  if (!e || e.deleted) throw new TimeError('time.err.gone', { id })
+  const day = clientDay(conf, e.client, e.date, listEntries(db, { from: e.date, to: e.date, client: e.client }))
+  const line = day.lines.find(l => l.entries.includes(id))
+  if (line?.round !== 'up' || line.entries.at(-1) !== id || line.billedSeconds <= line.seconds)
+    throw new TimeError('time.err.noRaise')
+  const gap = line.billedSeconds - line.seconds
+  return editEntry(db, conf, id, { stop: Date.parse(e.stop) + gap * 1000 }, 'user', { expect: rev })
+}
 
 /** One change as the owner; the entry after it. */
-function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>): TimeEntry {
+function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>, now: number): TimeEntry {
   const id = text(b.id) ?? ''
-  const rev = typeof b.rev === 'number' && Number.isInteger(b.rev) ? b.rev : undefined
-  const o = rev !== undefined ? { expect: rev } : {}
   switch (b.op) {
     case 'add': {
-      const start = instant(b.start)
-      const stop = instant(b.stop)
+      const start = when(b.start, now)
+      const stop = when(b.stop, now)
       if (start === undefined || stop === undefined) throw new TimeError('time.err.noDuration')
       return addEntry(
         db,
@@ -149,14 +222,15 @@ function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>): Time
           start,
           stop,
           startGiven: true,
-          newProject: b.newProject === true,
         },
         'user',
+        now,
       ).entry
     }
     case 'edit': {
-      const start = instant(b.start)
-      const stop = instant(b.stop)
+      const rev = revOf(b)
+      const start = when(b.start, now)
+      const stop = when(b.stop, now)
       const description = text(b.description)
       const project = text(b.project)
       const tags = tagsOf(b.tags)
@@ -169,26 +243,35 @@ function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>): Time
           ...(project !== undefined && { project }),
           ...(start !== undefined && { start }),
           ...(stop !== undefined && { stop }),
+          // the tags as the page's field holds them: the whole set
           ...(tags !== undefined && { tags }),
-          newProject: b.newProject === true,
         },
         'user',
-        o,
+        { expect: rev },
       )
     }
     case 'move': {
+      const rev = revOf(b)
       const date = text(b.date) ?? ''
       if (!isDate(date)) throw new TimeError('time.err.usage')
-      return moveEntry(db, conf, id, date, 'user', o)
+      const today = dateIn(now, conf.zone)
+      if (date > addDays(today, 1) || date < addDays(today, -366))
+        throw new TimeError('time.err.whenRange', { value: date })
+      return moveEntry(db, conf, id, date, 'user', { expect: rev })
     }
     case 'remove':
-      return removeEntry(db, id, 'user')
+      return removeEntry(db, id, 'user', { expect: revOf(b) })
     case 'restore':
-      return restoreEntry(db, id, 'user')
+      return restoreEntry(db, id, 'user', { expect: revOf(b) })
+    case 'raise':
+      return raise(db, conf, id, revOf(b))
     default:
       throw new TimeError('time.err.usage')
   }
 }
+
+/** A refusal for the page: its words, and its code (notYours, changedSince…) for the page's own words. */
+const refusal = (err: TimeError) => ({ ok: false, error: err.message, code: err.key.split('.').at(-1) })
 
 export function timeRoutes(cfg: Config): Route[] {
   return [
@@ -216,25 +299,23 @@ export function timeRoutes(cfg: Config): Route[] {
       async handle(_req, ctx) {
         const conf = timeConfig(cfg.time)
         if (!conf) return json(409, { ok: false, error: t('time.err.off') })
-        if (!activeTargets(backupConfig(cfg.backup)).length || !readKey())
-          return json(409, { ok: false, error: t('time.err.noBackup') })
+        const refused = writeRefusal(cfg, conf)
+        if (refused) return json(409, refusal(refused))
         const raw = await ctx.rawBody()
         const b = isRecord(raw) ? raw : {}
-        let db: BoardDb | null = null
         try {
-          db = openDb()
-          if (!db) return json(500, { ok: false, error: t('time.err.noDb') })
-          const entry = change(db, conf, b)
+          const entry = withDb(true, db => {
+            if (!db) throw new TimeError('time.err.noDb')
+            return change(db, conf, b, Date.now())
+          })
           return json(200, { ok: true, entry: { ...entry, seconds: secondsOf(entry) } })
         } catch (err) {
           if (err instanceof TimeError) {
             const status = err.key === 'time.err.gone' ? 404 : err.key === 'time.err.changedSince' ? 409 : 400
-            return json(status, { ok: false, error: err.message })
+            return json(status, refusal(err))
           }
           if (err instanceof DbError) return json(503, { ok: false, error: err.message })
           return json(500, { ok: false, error: err instanceof Error ? err.message : String(err) })
-        } finally {
-          db?.close()
         }
       },
     },

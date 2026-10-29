@@ -101,19 +101,28 @@ export function swipeDay(dx: number, ms: number, width: number): -1 | 0 | 1 {
 
 // ------------------------------------------------------------------ the editor
 
-/** An entry as the editor holds it: the times as this browser's clock shows them (HH:MM). */
+/**
+ * An entry as the editor holds it: the times as this browser's clock shows them (HH:MM), on `day`.
+ * Until a time is typed, the entry's own instant stands behind it (`startAt`, `stopAt`): its
+ * seconds are kept, and a 15-minute step moves the stop by exactly that.
+ */
 export interface Draft {
   client: string
   project: string
   description: string
-  /** The work date (a change moves the entry). */
+  /** The work date (a change moves the entry; for a new one, the day its times are on). */
   date: string
+  /** The day of this browser's clock the times are on. */
+  day: string
   start: string
   stop: string
+  startAt: number | null
+  stopAt: number | null
   /** Tags as typed: words, commas between them. */
   tags: string
 }
 
+const DAY_MS = 86_400_000
 const pad = (n: number): string => String(n).padStart(2, '0')
 /** An instant's date on this browser's clock. */
 export const localDate = (at: number): string => {
@@ -129,13 +138,18 @@ export const localClock = (at: number): string => {
 export function draftOf(
   e: Pick<TimeEntry, 'client' | 'project' | 'description' | 'date' | 'start' | 'stop' | 'tags'>,
 ): Draft {
+  const startAt = Date.parse(e.start)
+  const stopAt = Date.parse(e.stop)
   return {
     client: e.client,
     project: e.project,
     description: e.description,
     date: e.date,
-    start: localClock(Date.parse(e.start)),
-    stop: localClock(Date.parse(e.stop)),
+    day: localDate(startAt),
+    start: localClock(startAt),
+    stop: localClock(stopAt),
+    startAt,
+    stopAt,
     tags: e.tags.join(', '),
   }
 }
@@ -149,11 +163,18 @@ export function newDraft(client: string, project: string, date: string, now: num
     project,
     description: '',
     date,
+    day: date,
     start: date === today ? localClock(end - 30 * 60_000) : '09:00',
     stop: date === today ? localClock(end) : '09:30',
+    startAt: null,
+    stopAt: null,
     tags: '',
   }
 }
+
+/** A time typed into the draft: the field's HH:MM, the instant behind it dropped. */
+export const typed = (d: Draft, field: 'start' | 'stop', value: string): Draft =>
+  field === 'start' ? { ...d, start: value, startAt: null } : { ...d, stop: value, stopAt: null }
 
 /** HH:MM on a day (YYYY-MM-DD) of this browser's clock as an instant; NaN for a bad one. */
 function at(day: string, clock: string): number {
@@ -163,27 +184,37 @@ function at(day: string, clock: string): number {
   return new Date(y, mo - 1, d, Number(m[1]), Number(m[2]), 0, 0).getTime()
 }
 
-/** The draft's start and stop on `day` (this browser's clock); a stop at or before the start is the next day's. Null when a time is not one. */
-export function draftTimes(d: Pick<Draft, 'start' | 'stop'>, day: string): { start: number; stop: number } | null {
-  const start = at(day, d.start)
-  let stop = at(day, d.stop)
+/**
+ * The draft's start and stop: the entry's own instants where no time was typed, else HH:MM on the
+ * draft's day; a typed stop at or before the start is the next day's. Null when a time is not one,
+ * or the stop is not after the start.
+ */
+export function draftTimes(d: Pick<Draft, 'day' | 'start' | 'stop' | 'startAt' | 'stopAt'>): {
+  start: number
+  stop: number
+} | null {
+  const start = d.startAt ?? at(d.day, d.start)
+  let stop = d.stopAt ?? at(d.day, d.stop)
   if (Number.isNaN(start) || Number.isNaN(stop)) return null
-  if (stop <= start) stop += 86_400_000
-  return { start, stop }
+  if (d.stopAt === null && stop <= start) stop += DAY_MS
+  return stop > start ? { start, stop } : null
 }
 
 /** The draft's duration in seconds, or null. */
-export function draftSeconds(d: Pick<Draft, 'start' | 'stop'>): number | null {
-  const times = draftTimes(d, '2026-01-15')
-  return times ? (times.stop - times.start) / 1000 : null
+export function draftSeconds(d: Pick<Draft, 'day' | 'start' | 'stop' | 'startAt' | 'stopAt'>): number | null {
+  const times = draftTimes(d)
+  return times ? Math.round((times.stop - times.start) / 1000) : null
 }
 
-/** The stop moved by `minutes`, the duration kept at a minute at least. */
+/** Longer than this is likely a slip (a stop before the start read as the next day's): the editor asks. */
+export const LONG_SECONDS = 12 * 3600
+
+/** The stop moved by `minutes` from where it is (its seconds kept), the duration kept at a minute at least. */
 export function nudge(d: Draft, minutes: number): Draft {
-  const times = draftTimes(d, '2026-01-15')
+  const times = draftTimes(d)
   if (!times) return d
   const stop = Math.max(times.start + 60_000, times.stop + minutes * 60_000)
-  return { ...d, stop: localClock(stop) }
+  return { ...d, stop: localClock(stop), stopAt: stop }
 }
 
 export const tagList = (s: string): string[] =>
@@ -193,35 +224,36 @@ export const tagList = (s: string): string[] =>
     .filter(Boolean)
 
 /**
- * What saving a draft of an entry sends: the edit of what changed (the times on the day the
- * entry's start falls on this browser's clock), then a move when the work date changed; nothing
- * for a draft as the entry is.
+ * What saving a draft of an entry sends, against the entry as it was opened (`base`) and with the
+ * revision read then: the edit of what changed, then a move when the work date changed; nothing for
+ * a draft as the entry is. Of the times only what moved goes: a new start with the stop as it
+ * stands (the board keeps the duration of a start sent alone), else a new stop alone; an untouched
+ * time keeps its seconds.
  */
 export function changesOf(
-  e: Pick<TimeEntry, 'id' | 'rev' | 'client' | 'project' | 'description' | 'date' | 'start' | 'stop' | 'tags'>,
+  base: Pick<TimeEntry, 'id' | 'rev' | 'client' | 'project' | 'description' | 'date' | 'start' | 'stop' | 'tags'>,
   d: Draft,
 ): { edit: Record<string, unknown> | null; move: string | null } | null {
-  const was = draftOf(e)
   const edit: Record<string, unknown> = {}
-  if (d.description.trim() !== was.description) edit.description = d.description
-  if (d.project !== was.project) edit.project = d.project
-  if (d.start !== was.start || d.stop !== was.stop) {
-    const times = draftTimes(d, localDate(Date.parse(e.start)))
-    if (!times) return null
+  if (d.description.trim() !== base.description) edit.description = d.description
+  if (d.project !== base.project) edit.project = d.project
+  const times = draftTimes(d)
+  if (!times) return null
+  if (times.start !== Date.parse(base.start)) {
     edit.start = new Date(times.start).toISOString()
     edit.stop = new Date(times.stop).toISOString()
-  }
+  } else if (times.stop !== Date.parse(base.stop)) edit.stop = new Date(times.stop).toISOString()
   const tags = tagList(d.tags)
-  if (tags.join(',') !== e.tags.join(',')) edit.tags = tags
+  if (tags.join(',') !== base.tags.join(',')) edit.tags = tags
   return {
-    edit: Object.keys(edit).length ? { op: 'edit', id: e.id, rev: e.rev, ...edit } : null,
-    move: d.date !== e.date ? d.date : null,
+    edit: Object.keys(edit).length ? { op: 'edit', id: base.id, rev: base.rev, ...edit } : null,
+    move: d.date !== base.date ? d.date : null,
   }
 }
 
 /** What saving a new entry's draft sends; null when its times are not times. */
 export function addOf(d: Draft): Record<string, unknown> | null {
-  const times = draftTimes(d, d.date)
+  const times = draftTimes(d)
   if (!times) return null
   return {
     op: 'add',

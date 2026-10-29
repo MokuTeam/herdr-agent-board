@@ -388,7 +388,9 @@ export function editEntry(
       const tags = new Set(ch.tags ? ch.tags.map(cleanTag).filter(Boolean) : e.tags)
       for (const tag of ch.addTags ?? []) if (cleanTag(tag)) tags.add(cleanTag(tag))
       for (const tag of ch.removeTags ?? []) tags.delete(cleanTag(tag))
-      const moved = ch.start !== undefined || client !== e.client
+      // the work date is stamped again only when the start or the client changes: a trim of the
+      // stop moves no day already billed, whatever the zone says now
+      const moved = (ch.start !== undefined && isoOf(ch.start) !== e.start) || client !== e.client
       return {
         ...e,
         client,
@@ -432,12 +434,22 @@ export function moveEntry(
 }
 
 /** An entry removed: it stays, marked, out of every list and total. Removing a removed one changes nothing. */
-export function removeEntry(db: BoardDb, id: string, actor: Actor, o: { force?: boolean } = {}): TimeEntry {
+export function removeEntry(
+  db: BoardDb,
+  id: string,
+  actor: Actor,
+  o: { force?: boolean; expect?: number } = {},
+): TimeEntry {
   return changed(db, id, actor, o, e => (e.deleted ? e : { ...e, deleted: Date.now() }), 'remove')
 }
 
 /** A removed entry back; one that is not removed stays as it is. */
-export function restoreEntry(db: BoardDb, id: string, actor: Actor, o: { force?: boolean } = {}): TimeEntry {
+export function restoreEntry(
+  db: BoardDb,
+  id: string,
+  actor: Actor,
+  o: { force?: boolean; expect?: number } = {},
+): TimeEntry {
   return changed(
     db,
     id,

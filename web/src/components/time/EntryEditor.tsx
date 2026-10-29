@@ -1,11 +1,13 @@
 // An entry opened in place in the Time panel (#233): its description, its project (the client's
 // list), its start and stop on this browser's clock with the duration between them and -15 and
-// +15 steps (a trim is the usual change), its work date (a change moves it), its tags; Save,
-// Delete and Cancel. A new entry has a client too, and no Delete. What the board refuses (another
-// change since, a project not the client's) is said under the fields, and the draft stays.
+// +15 steps (a trim is the usual change; an untouched time keeps its seconds), its work date (a
+// change moves it), its tags; Save, Delete and Cancel. A new entry has a client too (its projects
+// follow it), no Delete, and its date is the day its times are on. Changed elsewhere since it was
+// opened (`stale`): it says so, and Save waits for Reload, which shows the entry as it is now.
+// What the board refuses is said under the fields, and the draft stays. Over 12 hours, it asks.
 import { type FormEvent, useState } from 'react'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { type Draft, draftSeconds, hm, nudge } from '../../models/time.ts'
+import { type Draft, draftSeconds, hm, LONG_SECONDS, nudge, typed } from '../../models/time.ts'
 import { classNames } from '../class-names.ts'
 
 export interface EntryEditorProps {
@@ -17,6 +19,9 @@ export interface EntryEditorProps {
   projects(client: string): string[] | null
   busy: boolean
   error: string | null
+  /** The entry changed elsewhere since it was opened: Save waits for Reload. */
+  stale?: boolean | undefined
+  onReload?: (() => void) | undefined
   onSave(d: Draft): void
   onDelete?: (() => void) | undefined
   onCancel(): void
@@ -29,18 +34,20 @@ export function EntryEditor({
   projects,
   busy,
   error,
+  stale,
+  onReload,
   onSave,
   onDelete,
   onCancel,
 }: EntryEditorProps) {
   const t = useT()
   const [d, setD] = useState(draft)
-  const set = (field: keyof Draft, value: string) => setD(x => ({ ...x, [field]: value }))
+  const set = (field: 'description' | 'project' | 'tags', value: string) => setD(x => ({ ...x, [field]: value }))
   const listed = projects(d.client)
   const seconds = draftSeconds(d)
   const submit = (e: FormEvent) => {
     e.preventDefault()
-    onSave(d)
+    if (!stale) onSave(d)
   }
   return (
     <form
@@ -53,10 +60,28 @@ export function EntryEditor({
         }
       }}
     >
+      {stale && (
+        <div className="access-problem time-stale" role="alert">
+          <span>{t('time.edit.stale')}</span>
+          {onReload && (
+            <button type="button" className="button" onClick={onReload}>
+              {t('time.edit.reload')}
+            </button>
+          )}
+        </div>
+      )}
       {clients && (
         <label className="time-field">
           <span>{t('time.edit.client')}</span>
-          <select value={d.client} disabled={busy} onChange={e => set('client', e.target.value)}>
+          <select
+            value={d.client}
+            disabled={busy}
+            // another client: its own first project, not the last one's
+            onChange={e => {
+              const client = e.target.value
+              setD(x => ({ ...x, client, project: projects(client)?.[0] ?? x.project }))
+            }}
+          >
             {clients.map(c => (
               <option key={c} value={c}>
                 {clientTitle(c)}
@@ -97,11 +122,21 @@ export function EntryEditor({
       <div className="time-field-row">
         <label className="time-field">
           <span>{t('time.edit.start')}</span>
-          <input type="time" value={d.start} disabled={busy} onChange={e => set('start', e.target.value)} />
+          <input
+            type="time"
+            value={d.start}
+            disabled={busy}
+            onChange={e => setD(x => typed(x, 'start', e.target.value))}
+          />
         </label>
         <label className="time-field">
           <span>{t('time.edit.stop')}</span>
-          <input type="time" value={d.stop} disabled={busy} onChange={e => set('stop', e.target.value)} />
+          <input
+            type="time"
+            value={d.stop}
+            disabled={busy}
+            onChange={e => setD(x => typed(x, 'stop', e.target.value))}
+          />
         </label>
         <div className="time-field time-duration">
           <span>{t('time.edit.duration')}</span>
@@ -118,10 +153,20 @@ export function EntryEditor({
           </div>
         </div>
       </div>
+      {seconds !== null && seconds > LONG_SECONDS && <p className="access-warn">{t('time.edit.long')}</p>}
       <div className="time-field-row">
         <label className="time-field">
           <span>{t('time.edit.date')}</span>
-          <input type="date" value={d.date} disabled={busy} onChange={e => set('date', e.target.value)} />
+          <input
+            type="date"
+            value={d.date}
+            disabled={busy}
+            // a new entry's times are on its date; an entry's date moves it, its times as they are
+            onChange={e => {
+              const date = e.target.value
+              setD(x => (clients ? { ...x, date, day: date } : { ...x, date }))
+            }}
+          />
         </label>
         <label className="time-field time-field-grow">
           <span>{t('time.edit.tags')}</span>
@@ -134,7 +179,11 @@ export function EntryEditor({
         </p>
       )}
       <div className="access-actions">
-        <button type="submit" className="button primary" disabled={busy || seconds === null || !d.description.trim()}>
+        <button
+          type="submit"
+          className="button primary"
+          disabled={busy || !!stale || seconds === null || !d.description.trim()}
+        >
           {t('backup.save')}
         </button>
         <button type="button" className="button" disabled={busy} onClick={onCancel}>

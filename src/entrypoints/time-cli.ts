@@ -16,7 +16,7 @@
 //   board time projects [<lane>]
 //   board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy]
 //                  [--dry-run] [--update]
-//   board time export [--date <d> | --from <d> --to <d>] [--client <lane>]   CSV of the entries
+//   board time export [--csv] [--date <d> | --from <d> --to <d>] [--client <lane>] [--bom]   CSV of the entries
 import { readFileSync } from 'node:fs'
 import { addTimeProjects } from '../adapters/config-file.ts'
 import { type BoardDb, openDb } from '../adapters/db.ts'
@@ -328,7 +328,8 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       if (!id) throw new TimeError('time.err.usage')
       const db = writable()
       try {
-        const e = sub === 'rm' ? removeEntry(db, id, ctx.actor, { force }) : restoreEntry(db, id, ctx.actor, { force })
+        const o = { force, ...(expect !== undefined && { expect }) }
+        const e = sub === 'rm' ? removeEntry(db, id, ctx.actor, o) : restoreEntry(db, id, ctx.actor, o)
         print(`ok · ${entryLine(e)}`, entryJson(e))
       } finally {
         db.close()
@@ -424,7 +425,8 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       const db = readable()
       const list = db ? listEntries(db, { from, to, client: a.one('--client') }) : []
       db?.close()
-      out(csvOf(list))
+      // --csv says what it is (the only form there is); --bom for Excel, which reads UTF-8 by it
+      out(`${a.has('--bom') ? '\uFEFF' : ''}${csvOf(list)}`)
       return
     }
     case 'import':
@@ -437,21 +439,31 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
 /** A CSV field: quoted when it holds a comma, a quote or a line break, its quotes doubled. */
 const csvField = (v: string): string => (/[",\r\n]/.test(v) ? `"${v.replaceAll('"', '""')}"` : v)
 
-/** Entries as CSV, a header first: what a spreadsheet or another tool reads. */
+/**
+ * A text a person or an agent wrote, as a spreadsheet must not run it: one that starts as a formula
+ * would (= + - @, a tab or a line break) gets a ' before it, which the spreadsheet shows as text.
+ */
+const asText = (v: string): string => (/^[=+\-@\t\r]/.test(v) ? `'${v}` : v)
+
+/**
+ * Entries as CSV, a header first: what a spreadsheet or another tool reads. `start` and `stop` are
+ * UTC (Z); `date` is the work date in the client's zone; `tags` are joined by ", " (a tag holds no
+ * comma); the text columns are kept from running as formulas (asText).
+ */
 export function csvOf(list: readonly TimeEntry[]): string {
   const rows = [['id', 'date', 'client', 'project', 'description', 'tags', 'start', 'stop', 'hours', 'by']]
   for (const e of list)
     rows.push([
       e.id,
       e.date,
-      e.client,
-      e.project,
-      e.description,
-      e.tags.join(' '),
+      asText(e.client),
+      asText(e.project),
+      asText(e.description),
+      asText(e.tags.join(', ')),
       e.start,
       e.stop,
       String(Math.round((secondsOf(e) / 3600) * 10000) / 10000),
-      typeof e.by === 'string' ? e.by : e.by.name || e.by.key,
+      asText(typeof e.by === 'string' ? e.by : e.by.name || e.by.key),
     ])
   return rows.map(r => r.map(csvField).join(',')).join('\n')
 }

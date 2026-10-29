@@ -80,7 +80,8 @@ export function cleanText(s: string, max = 1000): string {
   return one.length > max ? one.slice(0, max) : one
 }
 
-export const cleanTag = (s: string): string => cleanText(s, 40).toLowerCase()
+/** A tag as kept: lowercase, one line, 40 characters at most, no comma (a list of them is joined by one). */
+export const cleanTag = (s: string): string => cleanText(s.replaceAll(',', ' '), 40).toLowerCase()
 
 /** Whether a time zone is one Intl knows. */
 export function knownZone(zone: string): boolean {

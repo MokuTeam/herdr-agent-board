@@ -393,3 +393,27 @@ test('a row another process writes while the import runs is already there, not a
   other.close()
   db.close()
 })
+
+test('a trim of the stop keeps the work date stamped, whatever the zone says now; a new start stamps it again', () => {
+  const db = fresh()
+  // 22:00 on the 28th in New York
+  const e = addEntry(
+    db,
+    conf,
+    { ...base, start: at('2026-10-29T02:00:00Z'), stop: at('2026-10-29T03:00:00Z') },
+    me,
+  ).entry
+  assert.equal(e.date, '2026-10-28')
+  const istanbul = timeConfig({
+    zone: 'Europe/Istanbul',
+    clients: { a: { projects: ['Support', 'Migration'] }, b: {} },
+  })
+  assert.ok(istanbul)
+  const trimmed = editEntry(db, istanbul, e.id, { stop: at('2026-10-29T02:45:00Z') }, me)
+  assert.equal(trimmed.date, '2026-10-28', 'the stop alone moves no day')
+  const same = editEntry(db, istanbul, e.id, { start: at('2026-10-29T02:00:00Z') }, me)
+  assert.equal(same.date, '2026-10-28', 'the same start sent again moves none either')
+  const moved = editEntry(db, istanbul, e.id, { start: at('2026-10-29T02:05:00Z') }, me)
+  assert.equal(moved.date, '2026-10-29', 'a new start: stamped in the zone as it is now')
+  db.close()
+})
