@@ -21,7 +21,7 @@ SheetJS's own server, cdn.sheetjs.com: when that cannot be reached, the install 
 it, and the quick look says a spreadsheet cannot be shown here); after `herdr plugin link`, run
 `bun install` in the folder yourself, again after an update that adds one (without them, the quick
 look shows a PDF in the browser's own viewer and says a Word document cannot be shown here). Windows, Linux and macOS (desktop
-notifications: Windows only). Steps 1 and 2 are what the board needs; the rest adds to it.
+notifications: Windows and macOS). Steps 1 and 2 are what the board needs; the rest adds to it.
 
 1. **The plugin and its install** (required).
 
@@ -99,7 +99,7 @@ notifications: Windows only). Steps 1 and 2 are what the board needs; the rest a
    SendMessage) into each shown profile. `"wake": false` in the board's config.json turns all of
    it off. With the separate herdr-wake plugin installed, the board leaves the work to it until
    you click "Switch over…". See [Sleep and wake](#sleep-and-wake).
-5. **Desktop notifications** (optional, Windows): `herdr plugin action invoke
+5. **Desktop notifications** (optional, Windows and macOS): `herdr plugin action invoke
    agent-board.notifications`. See [Notifications](#notifications).
 6. **Lanes**: "Categories" on the web board (titles, colors, the folders that sort sessions into
    each lane), or let the agents add them.
@@ -123,8 +123,9 @@ Back to `main` (the Node version): its install action does not know this one's e
 would leave them beside its own. First take them out of `~/.claude/settings.json`: the
 `SessionStart` and `UserPromptSubmit` hooks that run `src/entrypoints/hook.ts`, the
 `statusLine` that runs `src/entrypoints/statusline.ts`, and the notification hooks that run
-`src/integrations/toast.ps1`. Then put `main` in the plugin's folder and run its install action
-again, which writes its own `node "…/src/hook.mjs"` hooks, status line and commands.
+`src/integrations/toast.ps1` (on macOS `src/entrypoints/toast.ts`). Then put `main` in the
+plugin's folder and run its install action again, which writes its own `node "…/src/hook.mjs"`
+hooks, status line and commands.
 
 ## Codex
 
@@ -1761,8 +1762,8 @@ Keep herdr's own notifications off (`[ui.toast] delivery = "off"`, herdr's defau
 comes twice; `board doctor` says when they are on, and when another hook with "toast" in its
 command shows them too (a script of your own from before: take it out of settings.json). `bun
 src/entrypoints/install.ts --no-toast` takes the hooks out again (on Windows the protocol entry
-stays; it only ever opens a pane). The hooks run in the background, so Claude does not wait for
-them.
+stays; it only ever opens a pane; on macOS the app and its files in the state folder stay). The
+hooks run in the background, so Claude does not wait for them.
 
 On Windows they run `powershell -File src\integrations\toast.ps1` from the plugin's folder; a
 click finds Bun on PATH (else `~\.bun\bin\bun.exe`). To see one, from a herdr pane (`force` shows
@@ -1778,11 +1779,14 @@ entrypoint, which builds `src/integrations/toast-mac.swift` into a small app in 
 tools). macOS shows notifications only for an app it knows, so the first one asks to allow
 "Claude": allow it once, or turn it on in System Settings > Notifications. A click then needs no
 link: the app runs `toast.ts click <pane id>`, which shows that session on the board, else focuses
-the pane in herdr and brings its terminal app to the front. Without `swiftc` the app is not built
-and herdr shows its own. To see one, from a herdr pane:
+the pane in herdr and brings its terminal app to the front. Without the command line tools
+(`xcode-select --install`) the app is not built: the hooks hand each notification to herdr
+instead (`herdr notification show`), do not try the build again until the board's Swift source
+changes, and `board doctor` says so; run the notifications action again once the tools are in. To
+see one, from a herdr pane:
 
 ```sh
-'{"hook_event_name":"Stop","last_assistant_message":"Hello"}' | bun src/entrypoints/toast.ts force
+echo '{"hook_event_name":"Stop","last_assistant_message":"Hello"}' | bun src/entrypoints/toast.ts force
 ```
 
 On Linux the board shows none; herdr's own (`delivery = "system"`) say that a session finished,
