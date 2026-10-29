@@ -75,7 +75,8 @@ function bodyOf(view: AccessView, tab?: AccessTab, lang = 'en'): Node[] {
     lang,
   )
 }
-const paneOf = (nodes: Node[], tab: AccessTab): Element => find(nodes, el => el.attrs.get('id') === `access-pane-${tab}`)
+const paneOf = (nodes: Node[], tab: AccessTab): Element =>
+  find(nodes, el => el.attrs.get('id') === `access-pane-${tab}`)
 
 const storageSaved = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
 afterEach(() => {
@@ -103,7 +104,10 @@ function storage(refuse = false): Map<string, string> {
 describe('the tab kept', () => {
   test('none kept, or something else: the Tunnel tab; one kept: that one; a storage that refuses: the Tunnel tab, nothing thrown', () => {
     const kept = new Map<string, string>()
-    const store = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v) }
+    const store = {
+      getItem: (k: string) => kept.get(k) ?? null,
+      setItem: (k: string, v: string) => void kept.set(k, v),
+    }
     expect(loadTab(store)).toBe('tunnel')
     saveTab('sync', store)
     expect([...kept]).toEqual([[TAB_KEY, 'sync']])
@@ -157,12 +161,14 @@ describe('the tabs', () => {
     const server = paneOf(nodes, 'server')
     // the login once, at the top: the server and its port, the login, its password, a key file
     expect(inputs([server]).slice(0, 5)).toEqual(['host', 'sshPort', 'admin-user', 'login-password', 'admin-key'])
-    expect(byClass([server], 'access-card').map(c => textOf(find([c], el => hasClass(el, 'access-card-head'))))).toEqual(
-      ['The tunnel on the server', 'The board on the server'],
-    )
+    expect(
+      byClass([server], 'access-card').map(c => textOf(find([c], el => hasClass(el, 'access-card-head')))),
+    ).toEqual(['The tunnel on the server', 'The board on the server'])
     expect(textOf(server)).toContain('Not set up yet.')
     expect(textOf(server)).toContain('workbench.example.com')
-    expect(byClass([server], 'access-oneshot').length + byClass([server], 'access-oneshot-fold').length).toBeGreaterThan(0)
+    expect(
+      byClass([server], 'access-oneshot').length + byClass([server], 'access-oneshot-fold').length,
+    ).toBeGreaterThan(0)
     // nowhere else
     for (const name of ['host', 'sshPort', 'admin-user', 'login-password'])
       expect(inputs(nodes).filter(n => n === name).length).toBe(1)
