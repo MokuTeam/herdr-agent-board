@@ -1,7 +1,7 @@
-// Files and folders the chat mentions: what they are, a preview, opening them, links, and the
-// raw bytes of media for the quick look (adapters/files.ts); folders for the folder picker.
-// Through the tunnel, the board's own files are none of these (ctx.ownFile): stat says they are
-// missing, the others refuse them.
+// Files and folders the chat mentions: what they are, a preview, opening them, links, the raw
+// bytes of media for the quick look and any file as a download (adapters/files.ts); folders for
+// the folder picker. Through the tunnel, the board's own files are none of these (ctx.ownFile):
+// stat says they are missing, the others refuse them.
 import { statSync } from 'node:fs'
 import { basename, extname } from 'node:path'
 import { describe, MEDIA_TYPES, openWith, preview, resolvePath } from '../../adapters/files.ts'
@@ -71,6 +71,34 @@ async function raw(req: Request, ctx: RouteContext): Promise<Response> {
   return new Response(asked === null ? Bun.file(target) : await Bun.file(target).bytes(), { headers })
 }
 
+/**
+ * Content-Disposition for a download (RFC 6266): a plain ASCII filename for old clients, and the
+ * real name as UTF-8 in filename* (RFC 8187).
+ */
+export function attachment(name: string): string {
+  const plain = name.replace(/[^\x20-\x7e]|["\\%]/g, '_')
+  const utf8 = encodeURIComponent(name).replace(/['()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+  return `attachment; filename="${plain}"; filename*=UTF-8''${utf8}`
+}
+
+/** GET /api/fs/download: any file the quick look can show, saved on the viewer's device, never shown inline. */
+function download(ctx: RouteContext): Response {
+  const { path: target } = resolvePath(ctx.url.searchParams.get('path'))
+  if (target && ctx.ownFile(target)) return ownRefusal()
+  const st = target ? statSync(target, { throwIfNoEntry: false }) : null
+  if (!st?.isFile()) return json(404, { error: 'not found' })
+  const headers = {
+    'content-type': 'application/octet-stream',
+    'content-disposition': attachment(basename(target)),
+    'content-length': String(st.size),
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; sandbox",
+  }
+  // Bun.file goes out as it is read from disk, not from memory.
+  return new Response(st.size === 0 ? null : Bun.file(target), { headers })
+}
+
 export function fsRoutes(): Route[] {
   const post = (path: string | RegExp, handle: Route['handle']): Route => ({
     method: 'POST',
@@ -132,5 +160,7 @@ export function fsRoutes(): Route[] {
     // Bytes of an image, PDF, video or audio file for the quick look: the per-run token stands
     // for the X-Board header, which <img>, <video> and the PDF viewer cannot send.
     { method: 'GET', path: '/api/fs/raw', guard: ['fs-token'], handle: raw },
+    // Any file as a download, for the board on another device: the same token, as <a href> sends no header.
+    { method: 'GET', path: '/api/fs/download', guard: ['fs-token'], handle: (_req, ctx) => download(ctx) },
   ]
 }
