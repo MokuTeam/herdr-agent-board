@@ -280,6 +280,31 @@ for (const cmd of AWKS)
     assert.equal(run(old).length, 2)
   })
 
+/** Eighteen names an hour apart from 01:00 UTC of the day 45 days before `now`: all of one UTC day. */
+const floodNames = (now: number): string[] => {
+  const day = Math.floor((now - 45 * DAY) / DAY) * DAY
+  return Array.from({ length: 18 }, (_, i) =>
+    snapshotName(day + (i + 1) * 3_600_000, `ffff${String(i).padStart(4, '0')}`),
+  )
+}
+
+test('the flood of one old day, at every hour of the clock: the forced rotation keeps the newest ten and that day’s first', () => {
+  for (let hour = 0; hour < 24; hour++) {
+    const now = Date.UTC(2026, 9, 29, hour, 8)
+    const flood = floodNames(now)
+    const keep = rotationKeeps(flood, now, { force: true })
+    assert.equal(keep.size, 11, `at ${hour}:08 UTC`)
+    assert.ok(keep.has(flood[0] as string), `at ${hour}:08 UTC`)
+  }
+  // eighteen hours from now's hour, as the test once named them: after 16:00 UTC they cross a
+  // midnight and the second day's first is kept too (the rule is right; the names were not)
+  const now = Date.UTC(2026, 9, 29, 17, 8)
+  const crossing = Array.from({ length: 18 }, (_, i) =>
+    snapshotName(now - 45 * DAY + i * 3_600_000, `ffff${String(i).padStart(4, '0')}`),
+  )
+  assert.equal(rotationKeeps(crossing, now, { force: true }).size, 12)
+})
+
 test.skipIf(!sh)(
   'old files over the cap, past the clock’s guard: a second prune makes room, the newest ten kept',
   () => {
@@ -288,12 +313,10 @@ test.skipIf(!sh)(
     try {
       mkdirSync(d.snaps)
       // eighteen of 40 KB put 45 days ago an hour apart (a flood a stolen key left): over the cap,
-      // and the newest a month and more back, so the first prune keeps them all
-      for (let i = 0; i < 18; i++)
-        writeFileSync(
-          join(d.snaps, snapshotName(now - 45 * DAY + i * 3_600_000, `ffff${String(i).padStart(4, '0')}`)),
-          snapshot(40_000),
-        )
+      // and the newest a month and more back, so the first prune keeps them all. One UTC day, from
+      // its first hour (floodNames): eighteen hours from now's hour would cross a midnight after
+      // 16:00 UTC, and that day's first would be kept too
+      for (const name of floodNames(now)) writeFileSync(join(d.snaps, name), snapshot(40_000))
       const ok = d.put(snapshot())
       assert.equal(ok.status, 0, ok.stderr.toString())
       // the newest ten and the first of that day, then the new one
