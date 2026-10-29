@@ -698,8 +698,8 @@ test('#243: the same shell at an empty prompt (the user may have run something t
 
 test('#243: a pane herdr restored after starting over (a new terminal) at an empty prompt goes', async () => {
   const w = afterTidy({
-    panes: [withTerminal(shellPane('w1:p2', 't2', '💤 Billing'), 'term-b')],
-    sessions: work => ({ 'w1:p2': asleep(work, SID, 'Billing', { terminal: 'term-a' }) }),
+    panes: [withTerminal(shellPane('w1:p2', 't2', '💤 Счета 100% x'), 'term-b')],
+    sessions: work => ({ 'w1:p2': asleep(work, SID, 'Счета 100% x', { terminal: 'term-a' }) }),
   })
   // A fresh shell: its prompt, no wake line.
   w.io.screens['w1:p2'] = `PS ${PROJECT}> `
@@ -824,6 +824,17 @@ test('#243: restored with something at its prompt, or a program running: kept as
   const before = asked(w.io, 'w1:p2').length + asked(w.io, 'w1:p4').length
   await engine.remember()
   expect(asked(w.io, 'w1:p2').length + asked(w.io, 'w1:p4').length).toBe(before)
+})
+
+test('#243: a pane-<id> key (another agent’s session) is never looked at, restored or not', async () => {
+  const w = afterTidy({
+    panes: [withTerminal(shellPane('w1:p2', 't2', '💤 Codex'), 'term-b')],
+    sessions: work => ({ 'w1:p2': asleep(work, 'pane-w1:p2', 'Codex', { terminal: 'term-a' }) }),
+  })
+  w.io.screens['w1:p2'] = `PS ${PROJECT}> `
+  await createWakeEngine(w.deps).remember()
+  expect(asked(w.io, 'w1:p2')).toEqual([])
+  expect(closes(w.io)).toEqual([])
 })
 
 test('#243: with closePanes off nothing is asked and nothing noted, as before', async () => {

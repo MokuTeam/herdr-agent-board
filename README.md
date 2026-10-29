@@ -111,8 +111,13 @@ run this copy of the plugin; with more than one profile shown, in each, by its n
 Claude hook (in each shown profile too: without it a session's card has no conversation and no
 profile), the key, sleep and wake (running, off, crashed with its error, held by the separate
 herdr-wake plugin, or not answering, and its hooks in each shown profile), how new sessions start,
-MokuPilot, the notifications. The web board says it too, quietly: "Setup incomplete" in its
-toolbar while something the board needs does not work (see [Web board](#web-board)).
+MokuPilot, the notifications. It also says what herdr's panes hold: how many run an agent, sleep
+in their pane, are herdr-sidebar's or something else, with the memory their processes take, and
+how many of the sidebars and the others are a bare shell (a sidebar pane herdr restored without its
+sidebar, a terminal left open). With sleep and wake on, it names the panes labelled `💤` that wake
+has no record of: wake neither wakes them nor gives them back. The web board says it too, quietly:
+"Setup incomplete" in its toolbar while something the board needs does not work (see
+[Web board](#web-board)); the panes are counted by `board doctor` only.
 
 Back to `main` (the Node version): its install action does not know this one's entries and
 would leave them beside its own. First take them out of `~/.claude/settings.json`: the
@@ -1429,6 +1434,21 @@ keeps its pane (below). The session's card keeps the panes it had, so the board'
 links still find the session a `spawn-agent` started in one of them, and its reminders follow it
 to the pane it wakes in.
 
+**A kept pane is looked at again.** What keeps a pane does not last: you look at another tab, the
+tabs before it close, the sleeper coming back to its workspace wakes. So from then on wake looks
+at every pane it keeps at each of its looks (every 15 seconds), and gives it back by the same rule
+once that rule allows it, while the session's wake line is still at its prompt: nothing has been
+run in that shell since. A shell that shows anything else there stays, and is not looked at again.
+Wake asks herdr nothing about a pane the rule still keeps.
+
+**After herdr starts over** (a reboot, herdr's server restarted), herdr restores each pane as a new
+shell in its folder, a `💤` pane too, without the wake line typed at its prompt. Wake tells such a
+pane by its new terminal (herdr's `terminal_id`, which it notes for every pane it keeps) and judges
+it once, at its first look: an empty prompt will do, since nothing of yours is in a shell that has
+just started, and a session you `/exit`ed goes too. One the rule keeps (a workspace's first tab)
+gets its wake line typed again, as a sleep leaves it, unless you `/exit`ed it. A shell still
+starting (no prompt on its screen yet) is asked again at the next looks.
+
 What this changes for every setup: a woken session's tab comes back at the end of its workspace
 (a whole workspace at the end of herdr's list), not where it was, since herdr's command line cannot
 move a tab. `"closePanes": false` in the `wake` section keeps every pane, and the old behaviour, as
@@ -1584,7 +1604,7 @@ In the board's config.json, every key optional; no section is all the defaults (
 | `wakeTimeoutSec` | `120` | how long a wake waits for the session |
 | `pollTimeoutSec` | `25` | the Telegram long poll |
 | `listSleepingDays` | `7` | ListAgents lists sessions asleep for less than this |
-| `closePanes` | `true` | a session put to sleep gives its pane back (and its tab, when only herdr-sidebar's panes are beside it) and wakes in a new tab; `false`: its pane stays, `💤 <name>` |
+| `closePanes` | `true` | a session put to sleep gives its pane back (and its tab, when only herdr-sidebar's panes are beside it) and wakes in a new tab; a pane kept for it is looked at again, and after herdr starts over; `false`: its pane stays, `💤 <name>` |
 
 There is no `wakeCommand`: every wake is `board resume`, and `launch.claude` says how Claude
 starts. `wakeUrl` is used only while wake is off or held by the separate plugin.
