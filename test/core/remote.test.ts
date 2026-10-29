@@ -89,6 +89,13 @@ test("the remote mode's, Remote access's, wake's, the backup's and Settings → 
   expect(localOnly('/api/login/password')).toBe(false)
 })
 
+test("the peer network's routes are for the board on this computer only, /api/peers is not", () => {
+  for (const path of ['/api/team', '/api/team/', '/api/team/x', '/api/team/thread/abc', '/api/team/send'])
+    expect(localOnly(path)).toBe(true)
+  for (const path of ['/api/peers', '/api/teams', '/api/teamwork', '/api/session/s1/team', '/api/teamx/y'])
+    expect(localOnly(path)).toBe(false)
+})
+
 test('the token comes as Authorization: Bearer', () => {
   const token = 'a'.repeat(43)
   expect(bearerOf(`Bearer ${token}`)).toBe(token)

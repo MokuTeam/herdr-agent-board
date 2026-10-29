@@ -122,6 +122,7 @@ describe('routes', () => {
       'styles/backup.css',
       'styles/time.css',
       'styles/todos.css',
+      'styles/team.css',
       'styles/workspaces.css',
       'styles/fold.css',
       'styles/session-head.css',

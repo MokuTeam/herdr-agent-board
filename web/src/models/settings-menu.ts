@@ -58,6 +58,8 @@ export interface SettingsNow {
   backup?: boolean
   /** The local board's page: Time tracking… is offered (#237). */
   timeSettings?: boolean
+  /** The local board's page with the payload's teamRev (#231): Team… is offered. */
+  team?: boolean
   /** This page signed in through the owner's domain: Sign out is offered, last. */
   signOut?: boolean
   /** Presence as the board has it ('none': not on); none given: no Presence item (an older board). */
@@ -173,6 +175,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
     ...(now.access ? [{ id: 'access', label: t('set.access') }] : []),
     ...(now.backup ? [{ id: 'backup', label: t('set.backup') }] : []),
     ...(now.timeSettings ? [{ id: 'timeSettings', label: t('set.time') }] : []),
+    ...(now.team ? [{ id: 'team', label: t('set.team') }] : []),
     { separator: true },
     { id: 'sleepers', label: t('tb.sleepersTitle'), checked: now.sleepers },
     ...(now.fold
@@ -206,6 +209,7 @@ export type SettingPick =
   | { kind: 'access' }
   | { kind: 'backup' }
   | { kind: 'timeSettings' }
+  | { kind: 'team' }
   | { kind: 'signout' }
   | { kind: 'presence'; value: PresenceMode | 'none' }
   | { kind: 'presenceIdle'; value: number }
@@ -234,6 +238,7 @@ export function settingPicked(id: string): SettingPick {
   if (id === 'access') return { kind: 'access' }
   if (id === 'backup') return { kind: 'backup' }
   if (id === 'timeSettings') return { kind: 'timeSettings' }
+  if (id === 'team') return { kind: 'team' }
   if (id === 'signout') return { kind: 'signout' }
   if (kind === 'presence' && (value === 'none' || isPresenceMode(value))) return { kind, value }
   if (kind === 'presenceIdle' && /^\d+$/.test(value)) return { kind, value: Number(value) }

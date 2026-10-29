@@ -1,0 +1,25 @@
+/* The team panel (#231): the rows and buttons are the tasks panel's. */
+.team-body { display: flex; flex-direction: column; gap: 14px; }
+.team-body h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--label-2); }
+.team-body .hint { margin: 0; color: var(--label-2); font-size: 12.5px; }
+.team-state { margin: 0; font-weight: 600; }
+.team-state.revoked, .team-state.error { color: var(--red, var(--accent)); }
+.team-roster, .team-thread { display: flex; flex-direction: column; gap: 6px; }
+.team-peer { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 8px; background: var(--fill-2); }
+.team-peer.on { box-shadow: inset 3px 0 0 var(--accent); }
+.team-peer.changed { box-shadow: inset 3px 0 0 var(--orange, var(--accent)); }
+.team-pick { display: flex; align-items: center; gap: 8px; padding: 0; border: 0; background: none; text-align: start; cursor: pointer; }
+.team-pick:hover .team-name { color: var(--accent); }
+.team-name { font-weight: 600; }
+.team-dot.on { --c: var(--green, var(--accent)); }
+.team-fp { font-family: ui-monospace, monospace; }
+.team-changed { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.team-changed p { margin: 0; font-size: 12.5px; }
+.team-msg.in { box-shadow: inset 3px 0 0 var(--accent); }
+.team-msg.held { opacity: 0.7; }
+.team-compose { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.team-compose textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 0; border-radius: 8px; resize: vertical; background: var(--fill-2); }
+.team-compose .mini { padding: 3px 12px; border: 0; border-radius: 6px; background: var(--fill); font-size: 12px; cursor: pointer; }
+.team-compose .mini:hover:not(:disabled) { color: var(--accent); }
+.team-compose .mini:disabled { opacity: 0.5; cursor: default; }
+.team-changed .mini { padding: 3px 9px; border: 0; border-radius: 6px; background: var(--fill); font-size: 12px; cursor: pointer; }

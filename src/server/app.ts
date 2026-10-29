@@ -54,6 +54,7 @@ import { createRemoteAccess } from '../services/remote-access.ts'
 import { startScheduler } from '../services/scheduler.ts'
 import { createServerSetup } from '../services/server-setup.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
+import { createTeam } from '../services/team-hub.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
 import { createProbes, createSupervisor, networkSignature, realClock, type TunnelPlan } from '../services/tunnel.ts'
 import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
@@ -78,6 +79,7 @@ import { categoriesRoute, profilesRoute, settingsRoute } from './routes/settings
 import { setupRoute } from './routes/setup.ts'
 import { sleepRoute } from './routes/sleep.ts'
 import { staticRoute } from './routes/static.ts'
+import { teamRoutes } from './routes/team.ts'
 import { terminalRoute } from './routes/terminal.ts'
 import { keepTimeDb, timeRoutes, timeToday } from './routes/time.ts'
 import { todosRoutes } from './routes/todos.ts'
@@ -405,6 +407,8 @@ export async function startServer({
     onChange: () => board.publish(),
     sessions: () => board.items().map(i => i.key),
   })
+  // The peer network (#231): no socket, timer or file while config.json has no valid `team`.
+  const team = createTeam({ cfg, log, version: PLUGIN_VERSION || 'dev', onChange: () => board.publish() })
   // The backup of the board's database (#233): its schedule (a look a minute, which only stats the
   // file while there is none), the server's setup, and its line in the payload (none while there
   // is no database and no target).
@@ -441,6 +445,7 @@ export async function startServer({
     accessRev: () => accessRev,
     ...(omarchy && { omarchy: omarchy.stamp }),
     presence: presence.view,
+    teamRev: team.rev,
     backup: backupLine,
     time: timeLine,
   })
@@ -468,6 +473,8 @@ export async function startServer({
     ...mokupilotRoutes(cfg),
     // The user's presence: read, switched and set (the page, the phone, the Android app).
     ...presenceRoutes(presence),
+    // The peer network: roster, threads, sends (local only; nothing answers while `team` is off).
+    ...teamRoutes(team),
     // Tasks (#202): points pinned on the board, done, reopened, removed; turned on or off.
     ...todosRoutes({ cfg, find: board.find, refresh }),
     // Time entries by day and client, as billed (#233): read only, the remote page too.
@@ -603,6 +610,7 @@ export async function startServer({
   // Wake on but not running (its startup entry did not run, or it ended): started once.
   void wake.ensure()
   presence.start()
+  team.start()
 
   // What the Remote access view reads of config.json, and the tunnel's own settings in it, as of
   // the last config change.
@@ -635,6 +643,7 @@ export async function startServer({
       wake.configChanged()
       // Presence turned on or off: its sessions marked or unmarked, the board shown again.
       presence.refresh()
+      team.refresh()
       await board.refresh()
     },
     async close() {
@@ -645,6 +654,7 @@ export async function startServer({
       backups.stop()
       wake.stop()
       presence.stop()
+      team.stop()
       terminals.stopAll()
       setup.stop()
       accessOut.cancel()

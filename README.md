@@ -1865,6 +1865,90 @@ points come back with it.
 Not yet (see #202): a jump to the message a point came from (1b), a badge on the card, the open
 points in the sheet, the agent told of a point the user pinned as its promise.
 
+## Team
+
+An experiment (#231), off unless a `team` key is in config.json. Boards of people you trust talk
+through one small hub that you or a teammate runs: a board asks a question of another person's
+board, the hub holds it while that board is away, and the answer to "did it arrive" is signed by
+the board that received it. Nothing else crosses: no sessions, no files, no herdr commands. What
+comes in is shown in Settings → Team… and kept in a thread; it never starts, types into or
+launches anything.
+
+Step by step, for the hub's admin and for each member, with what to do when it does not work:
+[docs/team-quickstart.md](docs/team-quickstart.md) (English, then Russian).
+
+**The `team` key.** `"team": { "hub": "ws://host:7443", "name": "Ana" }`: the hub's address
+(`ws://` or `wss://`) and the name the others see (up to 40 characters). Without it, or with
+`false`, the board opens no connection, keeps no team file, and the page has no Team entry. It is
+written by `board team join`, and the running board connects within seconds. This board's key
+(ed25519) is made at the first join and kept in the board's state directory, readable by you
+only; its fingerprint is what the others compare.
+
+**Joining.** The hub's admin makes an invite (`hub/README.md`) and hands you the code out of band:
+
+```
+board team join hab-xxxx-xxxx-xxxx-xxxx-xxxx-xxxx --hub ws://hub.example:7443 --name Ana
+board team roster
+board team draft Roman "is the build green?"
+```
+
+`join` reaches the hub first and writes `team` and the key only once the hub says welcome; a bad
+or used invite changes nothing. `roster` asks the running board: the hub, the connection, who is
+online (`●`), who is not (`○`, with when they were last seen), and a flag on anyone whose key
+changed.
+
+**The panel.** Settings → "Team…" (the local board's page only; a phone's or the domain's page
+neither shows it nor can ask for it): the connection line, the roster with online dots and key
+fingerprints, and the messages with the person you pick. Each question you sent shows how far it
+got: queued at the hub, delivered, received (their board's signed ack) or expired (it waits up to
+24 hours by default). A person whose key changed is marked, and what comes from the new key is
+held back until you press Trust.
+
+**Asking an agent to draft.** Tell your agent: `board team draft Roman "is the build green?"`
+(a name from the roster, or a peer id). It only leaves a draft in the panel, under Roman's thread
+and counted on his roster row, marked "draft from an agent", with Send and Discard. Nothing leaves
+this board until you press Send; Discard drops it. There is no command that sends: at most 20
+drafts wait (a new one is refused until you settle some), each up to the same 4000 characters as a
+message. What you send from a draft goes out marked `via: "agent"` inside the signed message, which
+the hub relays and cannot strip: Roman sees "via Ana's agent" (the name is Roman's own roster entry for your key,
+never anything in the message), and you see "via your agent" on your own copy. A message you type in the panel carries no mark.
+
+Until #224 (below) the draft is a convenience, not a lock: an agent on the same machine can send on its
+own, either by creating a draft and sending it, or by calling the board's local `/api/team/send`
+directly, in which case the message carries no agent mark at all. The "via agent" mark only says the
+draft came from `board team draft`; it does not say that a person looked at it.
+
+**Running the hub.** `bun hub/src/main.ts`: see [hub/README.md](hub/README.md) for the options,
+invites, revoking a member and what it keeps. It is not part of the plugin; run it on one machine
+the members reach, on loopback or a tailnet, or behind TLS.
+
+**What the MVP does not do.**
+
+- No offers, no replies to offers, no status or data: the only message is a `question`, text up
+  to 4000 characters. It reaches a person, not a session.
+- No end-to-end encryption: the hub sees the text of a message while it waits for its recipient
+  (and deletes it after the ack or the expiry). Messages are signed, not sealed. Run a hub you trust.
+- The line between what a human may do and what an agent may do on the board is not enforced
+  (#224): anyone who can reach the board's local API can send as you. Use it on a computer you
+  alone use.
+- The hub is trusted by the address given at join; it has no identity of its own yet.
+
+**Checking it by hand, on two machines** (the hub on one machine, two boards on two others, all in
+one tailnet):
+
+1. On the hub's machine: `bun hub/src/main.ts --listen <tailnet ip>:7443`, then
+   `bun hub/src/cli.ts invite create` twice.
+2. On each board's machine: `board team join <invite> --hub ws://<tailnet ip>:7443 --name <name>`.
+   Both succeed; a second use of the same invite is refused.
+3. Settings → Team… on both: each sees the other with a green dot, and the connection line says
+   online.
+4. From A, pick B and Send a question. A's thread shows it queued, then delivered, then received.
+   B's thread shows it.
+5. Stop B's board. From A, send another: it stays queued. Start B again: it arrives, and A's
+   thread moves on to received.
+6. On the hub's machine: `bun hub/src/cli.ts revoke <B's name>`. B's line goes to "removed from
+   the team"; A's roster loses B within a second, and B cannot reconnect.
+
 ## Time
 
 Time tracking of the board's own (#233), off unless `time` is in config.json: entries per client
@@ -3119,7 +3203,7 @@ that has not picked a style in Settings; Classic otherwise, and without it),
 `refreshSec`, `wake` (sleep and wake: `false` turns it off; its section is under
 [The `wake` section](#the-wake-section), and Settings → "Sleep and wake…" sets it), `wakeUrl` (the
 separate herdr-wake plugin's router, used only while wake is off or held by that plugin),
-`scheduleWaitMin` (how long a due entry waits for a
+`team` (the peer network, see [Team](#team); written by `board team join`), `scheduleWaitMin` (how long a due entry waits for a
 busy session, 240), `port` (web board, 12422), `web` (false turns the
 web board off), `terminal` (false turns the web board's [terminal](#terminal) off), `browser`
 (path for the app window), `foldWaiting` (how the web board folds a session asleep in

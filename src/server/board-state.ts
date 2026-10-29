@@ -65,6 +65,8 @@ interface Options {
   aside?: () => boolean
   /** The Remote access view's revision (app.ts counts its changes). */
   accessRev?: () => number
+  /** The peer network's revision (services/team-hub.ts); null while `team` is not on. */
+  teamRev?: () => number | null
   /** The Omarchy theme's stamp (adapters/omarchy.ts), on a computer with Omarchy only. */
   omarchy?: () => string | null
   /** The user's presence (services/presence.ts); null while it is not on. */
@@ -142,6 +144,11 @@ function presenceOf(presence: Options['presence']): { presence?: PresenceView } 
   return view ? { presence: view } : {}
 }
 
+function teamRevOf(teamRev: Options['teamRev']): { teamRev?: number } {
+  const rev = teamRev?.() ?? null
+  return rev !== null ? { teamRev: rev } : {}
+}
+
 function timeOf(time: Options['time']): { time?: TimePayload } {
   const line = time?.() ?? null
   return line ? { time: line } : {}
@@ -169,6 +176,7 @@ export function createBoardState({
   remote,
   aside,
   accessRev,
+  teamRev,
   omarchy,
   presence,
   backup,
@@ -257,6 +265,8 @@ export function createBoardState({
       ...timeOf(time),
       // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
       accessRev: accessRev?.() ?? 0,
+      // teamRev: only while config.json turns the peer network on (#231).
+      ...teamRevOf(teamRev),
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.
       ...omarchyOf(omarchy),
     }

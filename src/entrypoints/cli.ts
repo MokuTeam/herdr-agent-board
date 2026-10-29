@@ -137,7 +137,7 @@ import { type MoveOutcome, moveMany } from '../services/move.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -481,6 +481,179 @@ function presence(): void {
   console.log(`ok · ${changed ? '' : 'already '}${p.state === 'away' ? 'away' : 'here'}`)
 }
 
+const TEAM_USAGE =
+  'usage: board team join <invite> --hub <ws://host:7443> --name <name> | board team roster | board team draft <name|peer-id> "<text>"'
+const TEAM_JOIN_MS = 10_000
+
+type KeyPair = import('../core/team.ts').KeyPair
+
+/** What the hub said to a join: welcome (with the name it took), or why not. */
+function joinAt(
+  T: typeof import('../core/team.ts'),
+  hub: string,
+  invite: string,
+  name: string,
+  key: KeyPair,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  return new Promise(resolve => {
+    let ws: WebSocket
+    let done = false
+    const finish = (r: { ok: true } | { ok: false; error: string }): void => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      try {
+        ws.close()
+      } catch {}
+      resolve(r)
+    }
+    const timer = setTimeout(() => finish({ ok: false, error: 'the hub did not answer in 10 s' }), TEAM_JOIN_MS)
+    try {
+      ws = new WebSocket(`${hub}/v1`)
+    } catch (err) {
+      return finish({ ok: false, error: messageOf(err) })
+    }
+    ws.onerror = () => finish({ ok: false, error: `cannot reach the hub at ${hub}` })
+    ws.onclose = e =>
+      finish({
+        ok: false,
+        error: `the hub closed the connection (${e.code}): the invite is not valid, or this key was revoked`,
+      })
+    ws.onopen = () =>
+      ws.send(JSON.stringify({ t: 'hello', v: T.TEAM_PROTOCOL, peer: key.pub, client: 'agent-board/cli' }))
+    ws.onmessage = e => {
+      const f = T.parseFrame(String(e.data))
+      if (!f) return
+      if (f.t === 'challenge')
+        void T.sign(key.pkcs8, T.joinBytes({ hub: f.hub, invite, name, nonce: f.nonce, peer: key.pub })).then(sig =>
+          ws.send(JSON.stringify({ t: 'join', invite, name, sig })),
+        )
+      else if (f.t === 'welcome') finish({ ok: true })
+      else if (f.t === 'error')
+        finish({ ok: false, error: `the hub refused: ${f.code}${f.message ? ` (${f.message})` : ''}` })
+    }
+  })
+}
+
+/**
+ * `board team draft <name|peer-id> "<text>"`: leaves a draft in the Team panel for the person to
+ * send. The name is looked up in the roster the running board has (a name that fits two people, or
+ * none, is an error that lists the names); nothing is sent from here.
+ */
+async function draftTo(
+  T: typeof import('../core/team.ts'),
+  webPort: number,
+  roster: unknown[],
+  who: string,
+  text: string,
+): Promise<void> {
+  const peers = roster.filter(isRecord).filter(p => typeof p.peer === 'string' && typeof p.name === 'string')
+  const names = peers.map(p => T.printable(String(p.name))).join(', ') || 'nobody yet'
+  const byId = peers.filter(p => p.peer === who)
+  const exact = peers.filter(p => p.name === who)
+  const loose = peers.filter(p => String(p.name).toLowerCase() === who.toLowerCase())
+  const hit = byId.length ? byId : exact.length ? exact : loose
+  if (hit.length > 1)
+    throw new Error(
+      `${T.printable(who)} fits more than one person (${names}): use the peer id from \`board team roster\``,
+    )
+  const target = hit[0]
+  if (!target) throw new Error(`nobody called ${T.printable(who)} on the team. On it: ${names}`)
+  let res: Response
+  try {
+    res = await fetch(`http://127.0.0.1:${webPort}/api/team/draft`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({ to: target.peer, text }),
+      signal: AbortSignal.timeout(5000),
+    })
+  } catch {
+    throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
+  }
+  const reply: unknown = await res.json().catch(() => null)
+  if (!res.ok || !isRecord(reply) || reply.ok !== true) {
+    const why = isRecord(reply) ? String(reply.error ?? res.status) : String(res.status)
+    const text_ =
+      why === 'full'
+        ? 'too many drafts are waiting: send or discard some in the Team panel first'
+        : why === 'text'
+          ? `the text is empty or longer than ${T.MAX_TEXT} characters`
+          : why === 'peer'
+            ? 'that person is not on the team any more'
+            : why
+    throw new Error(`no draft made: ${text_}`)
+  }
+  console.log(
+    `ok · draft for ${T.printable(String(target.name))} is in the Team panel; nothing is sent until a person presses Send`,
+  )
+}
+
+/**
+ * `board team join <invite> --hub <url> --name <name>` and `board team roster` (#231). Join makes
+ * this board's key (kept only once the hub has said welcome), joins with the invite and writes
+ * `team` into config.json; the running board connects within seconds. --name is read off the
+ * global parse above (forkName): fork's flag, the same word. Roster asks the running board; with
+ * `team` off it says so and touches nothing.
+ */
+async function team(): Promise<void> {
+  const [op, ...more] = rest
+  // Loaded here: no other command of the board command pays for the peer network.
+  const T = await import('../core/team.ts')
+  const store = await import('../adapters/team-store.ts')
+  if (op === 'join') {
+    const hi = more.indexOf('--hub')
+    const given = hi >= 0 ? more[hi + 1] : undefined
+    if (hi >= 0) more.splice(hi, 2)
+    const invite = more[0]
+    const have = isRecord(cfg.team) ? cfg.team : {}
+    const hub = T.normalizeHub(given ?? have.hub) ?? ''
+    const name = forkName ?? (typeof have.name === 'string' ? have.name : '')
+    if (!invite || more.length !== 1 || !hub || !T.validName(name)) throw new Error(TEAM_USAGE)
+    const key = store.readKey() ?? (await T.generateKey())
+    const r = await joinAt(T, hub, invite, name, key)
+    if (!r.ok) throw new Error(r.error)
+    await store.keepJoinedKey(key)
+    const w = (await import('../adapters/config-file.ts')).joinTeam({ hub, name })
+    if (!w.ok) throw new Error(w.error)
+    return console.log(
+      `ok · joined ${hub} as ${name} · your key ${T.fingerprint(key.pub)} · the running board connects in a few seconds`,
+    )
+  }
+  if (op === 'draft' ? more.length !== 2 : op !== 'roster' || more.length) throw new Error(TEAM_USAGE)
+  if (!T.teamConfig(cfg.team)) {
+    return console.log(
+      'team is off (no "team" in config.json; `board team join <invite> --hub <url> --name <name>` turns it on)',
+    )
+  }
+  const webPort = Number(cfg.port) || 12422
+  let view: unknown
+  try {
+    view = await (await fetch(`http://127.0.0.1:${webPort}/api/team`, { signal: AbortSignal.timeout(3000) })).json()
+  } catch {
+    throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
+  }
+  if (!isRecord(view) || !Array.isArray(view.roster)) throw new Error('the board does not run the team: restart it')
+  const me = isRecord(view.me) ? view.me : {}
+  console.log(
+    T.printable(
+      `${String(view.hub)} · ${String(view.state)} · you: ${String(me.name ?? '')} ${String(me.fingerprint ?? '')}`,
+    ),
+  )
+  if (op === 'draft') return draftTo(T, webPort, view.roster, more[0] ?? '', more[1] ?? '')
+  if (!view.roster.length) return console.log('nobody else on the team yet')
+  const now = Date.now()
+  for (const p of view.roster) {
+    if (!isRecord(p)) continue
+    const seen = p.online
+      ? 'online'
+      : typeof p.lastSeen === 'number'
+        ? `last seen ${fromNow(p.lastSeen, now)}`
+        : 'not seen yet'
+    const flag = p.pin === 'changed' ? '  KEY CHANGED: trust it in the board' : ''
+    console.log(T.printable(`${p.online ? '●' : '○'} ${String(p.name)}  ${String(p.fingerprint)}  ${seen}${flag}`))
+  }
+}
+
 async function main(): Promise<void> {
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') return console.log(USAGE)
 
@@ -570,6 +743,7 @@ async function main(): Promise<void> {
   if (cmd === 'resume') return rest.includes('--pi') ? resumePi() : resume()
   if (cmd === 'tg-key') return tgKey()
   if (cmd === 'presence' || cmd === 'away') return presence()
+  if (cmd === 'team') return team()
 
   const s = await resolveSession()
   const now = Date.now()

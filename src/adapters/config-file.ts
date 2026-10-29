@@ -267,6 +267,27 @@ export function editTodos(body: unknown): EditResult {
 }
 
 /**
+ * Join the peer network (#231): config.json's `team` becomes { hub, name }, its other fields kept.
+ * `board team join` calls it once the hub has said welcome. The running board picks it up as any
+ * edit (liveConfig).
+ */
+export function joinTeam(team: { hub: string; name: string }): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  raw.team = { ...(isRecord(raw.team) ? raw.team : {}), hub: team.hub, name: team.name }
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/** Leave it: `team` goes out of config.json. The key and the messages stay in the state folder. */
+export function leaveTeam(): EditResult {
+  const raw = readConfigFile()
+  if (!raw || !('team' in raw)) return { ok: true }
+  delete raw.team
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/**
  * The backup's targets (#233) in config.json's `backup`: `folder` (a path, or null to drop the
  * folder target), `server` (host, port and the admin's user and key, merged into what is there;
  * null drops it), `serverSet` (when Apply, or the owner's own setup and a Test, made the server
