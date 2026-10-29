@@ -523,6 +523,30 @@ session's own ListAgents and SendMessage see and wake only the sleeping sessions
 a name used in two profiles never wakes the other one; the board shows and wakes all of them. See
 [Sleep and wake](#sleep-and-wake).
 
+**Moving a session to another profile** (a client's work runs in `~/.claude-work` from now on,
+say), with its session id and conversation:
+
+```sh
+board move Billing w2:p7 3f2a9c1e-... --profile work   # names, panes or session ids
+board move Billing --profile work --when-free          # a busy one once it is free
+```
+
+The target is a listed, shown profile other than the session's own; with one profile shown there
+is nowhere to move. A session asleep is moved as it is and stays asleep; a free one is put to sleep
+first, as `board sleep` does, and woken again in the new profile once moved; a busy one (working,
+a dialog, unsent text, background tasks) is refused with the reason, or with `--when-free` gets a
+sleep entry (`board unschedule <id>` cancels it) that moves it once it is asleep. The move copies
+the transcript `projects/<project folder>/<id>.jsonl`, the session's own folder beside it and
+`file-history/<id>/` into the target profile's folder, under the same project folder; the originals
+stay. It is refused when the target has a conversation with that id already, or the source has
+none. When the source profile trusts the session's folder and the target does not, that one
+`hasTrustDialogAccepted` is copied into the target's `.claude.json` (`~/.claude.json` for the
+default folder), so a wake does not stop at Claude's folder-trust dialog. The card then names the
+target's folder, with no "wrong profile" tag, and so does wake's entry for the sleeper (a wake
+started before `board move` existed keeps its entry until the session's next wake: the card decides
+anyway, as `board resume` takes its folder first). Reminders stay with the session. A line per
+session: moved, once free, or refused and why.
+
 While the separate herdr-wake plugin does the waking (installed, and not switched over yet), it
 resumes a session with the env of its pane's shell, as before, and the board keeps its old rule:
 it wakes only a session in its own profile, or one in a pane the board opened with that session's
