@@ -21,6 +21,7 @@ const SID = '0f8fad5b-d9cb-469f-a165-70867728950e'
 const BUSY = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
 const TWIN = '1b2c3d4e-5f60-4718-8a9b-c0d1e2f3a4b5'
 const BARE = '2c3d4e5f-6071-4829-9bac-d1e2f3a4b5c6'
+const RUNS = '3d4e5f60-7182-493a-8cbd-e2f3a4b5c6d7'
 
 /** A pane: the shell a sleeper left (status null), or Claude at work. */
 type Pane = { id: string; session: string; name: string; status: string | null }
@@ -142,9 +143,10 @@ test('board move: an asleep session goes to Work with its conversation and trust
   const w = await world(box, [asleep('p1', SID, 'Billing')])
   const source = conversation(w, w.claude, SID)
   const key = w.cwd.replace(/\\/g, '/')
+  // Default trusts only a folder above the project (as this machine's trusts C:/Work): Work gets the project's own.
   writeFileSync(
     join(w.home, '.claude.json'),
-    JSON.stringify({ projects: { [w.cwd]: { hasTrustDialogAccepted: true, allowedTools: ['Bash'] } } }),
+    JSON.stringify({ projects: { [box.dir]: { hasTrustDialogAccepted: true, allowedTools: ['Bash'] } } }),
   )
   writeFileSync(join(w.work, '.claude.json'), JSON.stringify({ numStartups: 3, projects: { [key]: { lastCost: 1 } } }))
 
@@ -160,7 +162,7 @@ test('board move: an asleep session goes to Work with its conversation and trust
   // The card names Work, with nothing left that would tag it "wrong profile".
   expect(card(box, SID)).toMatchObject({ profile: 'work', profileDir: w.work })
   expect(card(box, SID)).not.toHaveProperty('profileWant')
-  // Only the trust of that project, the rest of Claude's file as it was.
+  // Only the trust of that project, never the folder above it; the rest of Claude's file as it was.
   expect(json(join(w.work, '.claude.json'))).toEqual({
     numStartups: 3,
     projects: { [key]: { lastCost: 1, hasTrustDialogAccepted: true } },
@@ -197,19 +199,29 @@ test('board move refuses what it cannot move, and takes a busy one once it is fr
     busy,
     asleep('p3', TWIN, 'Twin'),
     asleep('p4', BARE, 'Bare'),
+    asleep('p5', RUNS, 'Runs'),
   ])
   conversation(w, w.claude, SID)
   conversation(w, w.claude, TWIN)
-  conversation(w, w.work, TWIN)
+  conversation(w, w.claude, RUNS)
+  // Woken in Default meanwhile (a reminder, a message): its registry has it running.
+  mkdirSync(join(w.claude, 'sessions'), { recursive: true })
+  writeFileSync(
+    join(w.claude, 'sessions', '99999.json'),
+    JSON.stringify({ sessionId: RUNS, kind: 'interactive', pid: process.pid, status: 'idle' }),
+  )
+  // Work has another conversation under Twin's id: not this one.
+  writeFileSync(conversation(w, w.work, TWIN), '{"type":"user","message":"something else"}\n')
   const before = readdirSync(w.work, { recursive: true }).sort()
 
-  const r = await board(box, ['move', 'Busy', 'Twin', 'Bare', 'nobody', '--profile', 'work'])
+  const r = await board(box, ['move', 'Busy', 'Twin', 'Bare', 'Runs', 'nobody', '--profile', 'work'])
   expect(r.code).toBe(0)
   expect(r.out.split('\n')).toEqual([
-    'ok · 0 moved to work, 4 refused',
+    'ok · 0 moved to work, 5 refused',
     `Busy (p2): refused, working; put it to sleep first (board sleep ${BUSY}), or add --when-free`,
-    `Twin (p3): refused, ${w.work} has a conversation ${TWIN} already (${join(w.work, 'projects', projectFolderName(w.cwd), `${TWIN}.jsonl`)})`,
+    `Twin (p3): refused, ${w.work} has another conversation under ${TWIN} already (${join(w.work, 'projects', projectFolderName(w.cwd), `${TWIN}.jsonl`)})`,
     `Bare (p4): refused, no conversation ${BARE} in ${w.claude}`,
+    'Runs (p5): refused, it is running again',
     '"nobody": refused, no such session on the board',
   ])
   expect((await board(box, ['move', 'Billing', '--profile', 'nope'])).out).toBe(
@@ -217,7 +229,7 @@ test('board move refuses what it cannot move, and takes a busy one once it is fr
   )
   // Nothing was copied, and no card changed.
   expect(readdirSync(w.work, { recursive: true }).sort()).toEqual(before)
-  for (const key of [SID, BUSY, TWIN, BARE]) expect(card(box, key)).toMatchObject({ profileDir: w.claude })
+  for (const key of [SID, BUSY, TWIN, BARE, RUNS]) expect(card(box, key)).toMatchObject({ profileDir: w.claude })
 
   const later = await board(box, ['move', 'Busy', '--profile', 'work', '--when-free'])
   expect(later.code).toBe(0)
@@ -232,6 +244,23 @@ test('board move refuses what it cannot move, and takes a busy one once it is fr
     .map(n => json(join(schedule, n)))
   expect(entries).toHaveLength(1)
   expect(entries[0]).toMatchObject({ kind: 'sleep', key: BUSY, moveTo: 'work' })
+})
+
+test('a move cut off after the copy runs again to its end; a half-written transcript is never left', async () => {
+  const box = await sandbox()
+  const w = await world(box, [asleep('p1', SID, 'Billing')])
+  const source = conversation(w, w.claude, SID)
+  // The first run copied the transcript, then stopped before the card (Ctrl+C, a lock that timed out).
+  const project = join(w.work, 'projects', projectFolderName(w.cwd))
+  mkdirSync(project, { recursive: true })
+  writeFileSync(join(project, `${SID}.jsonl`), readFileSync(source))
+  const r = await board(box, ['move', 'Billing', '--profile', 'work'])
+  expect(r.out).toBe(
+    'ok · 1 moved to work\nBilling (p1): moved to work · its conversation was there already, from a move cut off before · folder not trusted in work: Claude will ask once',
+  )
+  expect(card(box, SID)).toMatchObject({ profile: 'work', profileDir: w.work })
+  expect(existsSync(join(project, SID, 'subagents', 'agent-1.jsonl'))).toBe(true)
+  expect(readdirSync(project).filter(n => n.endsWith('.tmp'))).toEqual([])
 })
 
 test('the scheduler moves a session once its sleep entry with moveTo finds it asleep', async () => {
@@ -271,7 +300,12 @@ test('the scheduler moves a session once its sleep entry with moveTo finds it as
   const log = join(schedule, 'log.jsonl')
   await until(() => existsSync(log) && readFileSync(log, 'utf8').trim() !== '')
   const run = JSON.parse(readFileSync(log, 'utf8').trim().split('\n')[0] ?? '{}')
-  expect(run).toMatchObject({ id: 'eeee01', kind: 'sleep', result: 'sent', why: 'moved to work' })
+  expect(run).toMatchObject({
+    id: 'eeee01',
+    kind: 'sleep',
+    result: 'sent',
+    why: 'moved to work: folder not trusted in work: Claude will ask once',
+  })
   expect(existsSync(join(w.work, 'projects', projectFolderName(w.cwd), `${SID}.jsonl`))).toBe(true)
   expect(card(box, SID)).toMatchObject({ profile: 'work', profileDir: w.work })
 })

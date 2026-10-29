@@ -92,8 +92,10 @@ export function trustedKey(state: unknown, cwd: string): string | null {
 /**
  * The target's state with the source's trust for `cwd` added, or null when nothing is to change:
  * the target trusts the folder already, or the source does not. Only `hasTrustDialogAccepted` of
- * that one project is set, under the key the source has (with `/` on Windows, as Claude writes
- * its keys there), every other field of the file and of the project kept.
+ * the session's own folder is set, even when the source trusts it through a folder above it (so a
+ * profile kept apart never comes to trust a whole tree, as `C:\Work`), under the key the target
+ * has for that folder, else the folder as Claude writes its keys (with `/` on Windows); every
+ * other field of the file and of the project kept.
  */
 export function withTrust(
   source: unknown,
@@ -102,10 +104,10 @@ export function withTrust(
   platform: string = process.platform,
 ): Record<string, unknown> | null {
   if (!cwd || !isRecord(target) || trustedKey(target, cwd) !== null) return null
-  const from = trustedKey(source, cwd)
-  if (from === null) return null
-  const key = platform === 'win32' ? from.replace(/\\/g, '/') : from
+  if (trustedKey(source, cwd) === null) return null
   const projects = isRecord(target.projects) ? target.projects : {}
+  const own = cwd.replace(/(.)[\\/]+$/, '$1')
+  const key = Object.keys(projects).find(k => sameDir(k, cwd)) ?? (platform === 'win32' ? own.replace(/\\/g, '/') : own)
   const project = isRecord(projects[key]) ? projects[key] : {}
   return { ...target, projects: { ...projects, [key]: { ...project, hasTrustDialogAccepted: true } } }
 }

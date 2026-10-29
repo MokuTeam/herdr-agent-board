@@ -91,9 +91,25 @@ test('withTrust: only that project gets hasTrustDialogAccepted, under the source
   expect(withTrust({ projects: {} }, target, cwd, 'win32')).toBeNull()
   expect(withTrust(source, null, cwd, 'win32')).toBeNull()
   expect(withTrust(source, target, '', 'win32')).toBeNull()
-  // Elsewhere the key is kept as it is.
-  const posix = { projects: { '/work/a b': { hasTrustDialogAccepted: true } } }
-  expect(withTrust(posix, {}, '/work/a b/c', 'linux')).toEqual({
+  // Elsewhere the folder is spelled as it is.
+  const posix = { projects: { '/work/a b/c': { hasTrustDialogAccepted: true } } }
+  expect(withTrust(posix, {}, '/work/a b/c/', 'linux')).toEqual({
+    projects: { '/work/a b/c': { hasTrustDialogAccepted: true } },
+  })
+})
+
+test('withTrust: a source that trusts only a folder above gives the target the session’s own folder, never that one', () => {
+  // This machine's Default trusts C:/Work itself; Work keeps clients apart and must not trust it all.
+  const source = { projects: { 'C:/Work': { hasTrustDialogAccepted: true } } }
+  expect(withTrust(source, { projects: {} }, 'C:\\Work\\BSD\\Centium', 'win32')).toEqual({
+    projects: { 'C:/Work/BSD/Centium': { hasTrustDialogAccepted: true } },
+  })
+  // The key the target has for that folder, however spelled, is the one set.
+  const target = { projects: { 'c:\\work\\bsd\\centium': { allowedTools: [] } } }
+  expect(withTrust(source, target, 'C:\\Work\\BSD\\Centium', 'win32')).toEqual({
+    projects: { 'c:\\work\\bsd\\centium': { allowedTools: [], hasTrustDialogAccepted: true } },
+  })
+  expect(withTrust({ projects: { '/work': { hasTrustDialogAccepted: true } } }, {}, '/work/a b', 'linux')).toEqual({
     projects: { '/work/a b': { hasTrustDialogAccepted: true } },
   })
 })

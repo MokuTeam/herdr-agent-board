@@ -115,7 +115,11 @@ export async function moveMany(
       done.set(item.key, { target, result: 'refused', sleep: s, ...who })
       continue
     }
-    const r = await moveAsleep(deps, item, to.profile, { wakeAfter: s?.result === 'asleep' })
+    // One failing is its own line; the others still go.
+    const r = await moveAsleep(deps, item, to.profile, { wakeAfter: s?.result === 'asleep' }).catch((err: unknown) => ({
+      ok: false as const,
+      error: messageOf(err),
+    }))
     const outcome: MoveOutcome = r.ok
       ? { target, result: 'moved', notes: r.notes, ...who }
       : { target, result: 'refused', why: r.error, ...who }
@@ -140,7 +144,10 @@ export function moveTarget(deps: Pick<Deps, 'profiles'>, id: string): { profile:
 /**
  * One session asleep moved to `to`: its conversation copied, the source profile's trust in its
  * folder copied, its card and wake's entry switched. `wakeAfter`: it was awake before the move,
- * and is woken again, in the new profile. The notes say what else happened.
+ * and is woken again, in the new profile. The notes say what else happened. A move cut off
+ * halfway is finished by the next one: a target transcript the same as the source's counts as
+ * copied (adapters/move-files.ts copySession). Refused when the session runs again in its profile
+ * (a reminder or a message woke it meanwhile): its transcript is being written.
  */
 export async function moveAsleep(
   deps: Deps,
@@ -155,14 +162,17 @@ export async function moveAsleep(
   const src = moveSource(item, deps.profiles().list, to)
   if ('error' in src) return { ok: false, error: src.error }
   const session = item.session ?? ''
+  if (deps.homes.forDir(src.dir).liveSessions().has(session)) return { ok: false, error: 'it is running again' }
   const copied = copySession(src.dir, to.dir, session, item.cwd)
   if (!copied.ok) return copied
-  const notes: string[] = []
+  const notes: string[] = copied.copied.again ? ['its conversation was there already, from a move cut off before'] : []
   try {
     const from = claudeStateFile(src.dir, home, platform)
-    if (copyTrust(from, claudeStateFile(to.dir, home, platform), item.cwd, platform)) notes.push('folder trust copied')
+    const trust = copyTrust(from, claudeStateFile(to.dir, home, platform), item.cwd, platform)
+    if (trust === 'copied') notes.push('folder trust copied')
+    if (trust === 'none') notes.push(`folder not trusted in ${to.id}: Claude will ask once`)
   } catch (err) {
-    notes.push(`folder trust not copied (${messageOf(err)})`)
+    notes.push(`folder trust not copied (${messageOf(err)}): Claude will ask once`)
   }
   writeCard(item.key, { profileDir: to.dir, profile: to.id, profileWant: '' })
   // Wake's entry: the board's own wake keeps it in memory, so only it changes it. Without one the
