@@ -3,7 +3,8 @@
 // names). Each row becomes an entry for the lane its Toggl client is mapped to. A row is known
 // again by Toggl's entry id when the file has one, else (the Detailed report's CSV has none) by its
 // lane and its start to the second: a row edited in Toggl since is then found as changed, not
-// added twice (adapters/time-store.ts importEntries). Pure, with no node: import.
+// added twice (adapters/time-store.ts importEntries). Toggl's Billable (the CSV's column, the
+// JSON's field) is kept on the entry as set. Pure, with no node: import.
 
 import { isDate } from './time.ts'
 
@@ -19,6 +20,14 @@ export interface TogglRow {
   stop: number
   /** A row of a timer still running: skipped. */
   running: boolean
+  /** Toggl's Billable, when the file says it: kept on the entry as set. */
+  billable?: boolean
+}
+
+/** Toggl's Billable as the CSV writes it ("Yes", "No"); undefined for anything else. */
+function yesNo(s: string): boolean | undefined {
+  const v = s.trim().toLowerCase()
+  return v === 'yes' || v === 'true' ? true : v === 'no' || v === 'false' ? false : undefined
 }
 
 /** CSV text into rows of fields: quotes, doubled quotes, commas and line breaks inside quotes. */
@@ -148,6 +157,7 @@ export function rowsFromCsv(
     endTime: col('end time'),
     duration: col('duration'),
     tags: col('tags'),
+    billable: col('billable'),
   }
   const missing: string[] = (['client', 'project', 'description', 'startDate', 'startTime'] as const).filter(
     k => c[k] < 0,
@@ -185,6 +195,7 @@ export function rowsFromCsv(
       .split(',')
       .map(s => s.trim())
       .filter(Boolean)
+    const billable = yesNo(get(c.billable))
     rows.push({
       key: get(c.id),
       client: get(c.client),
@@ -194,6 +205,7 @@ export function rowsFromCsv(
       start,
       stop: Number.isFinite(stop) ? stop : start,
       running,
+      ...(billable !== undefined && { billable }),
     })
   })
   return { rows, bad, missing: [] }
@@ -230,6 +242,7 @@ export function rowsFromJson(value: unknown): { rows: TogglRow[]; bad: number[] 
       start,
       stop: Number.isNaN(stop) ? start : stop,
       running,
+      ...(typeof o.billable === 'boolean' && { billable: o.billable }),
     })
   })
   return { rows, bad }

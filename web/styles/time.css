@@ -3,7 +3,9 @@
    calendar's; the clients as the toolbar's lanes control; the figure to bill, large, what it
    leaves out quiet under it and each client's share as a bar in the lanes' colors; each client
    with its own figure over one grouped list of its lines, a hairline between them, and a line's
-   entries under its name; the zone once, at the foot. One duration form everywhere, in tabular
+   entries under its name, then where the line stands in each of the client's systems (a pill each:
+   entered, partly, not, changed after) and Raise or Trim; non-billable and held entries apart,
+   quieter; the zone once, at the foot. One duration form everywhere, in tabular
    numerals so figures line up. An entry opens in place, the row grown into its editor. On a
    phone the list follows a sideways swipe (pan-y leaves the vertical scroll to the browser).
    Every rule here selects by class: the other sheets are upstream's, rule for rule. */
@@ -123,9 +125,42 @@
 .time-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* Raise or Trim to: under the figure it brings the entries to. */
+/* Under a line: its state in each system, at the start; Raise or Trim at the end. */
+.time-line-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.time-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px 0 7px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--separator);
+  color: var(--label-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  transition: background 120ms ease, color 120ms ease, transform 100ms ease-out;
+}
+.time-mark-glyph { font-size: 11px; line-height: 1; }
+.time-mark[data-state="entered"] {
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  box-shadow: none;
+  color: color-mix(in srgb, var(--green) 70%, var(--label));
+}
+.time-mark[data-state="partly"] { background: color-mix(in srgb, var(--green) 7%, transparent); }
+.time-mark[data-state="changed"] {
+  background: color-mix(in srgb, var(--orange) 18%, transparent);
+  box-shadow: none;
+  color: color-mix(in srgb, var(--orange) 70%, var(--label));
+}
+.time-mark:hover:not(:disabled) { color: var(--label); }
+.time-mark:active:not(:disabled) { transform: scale(0.96); }
+.time-mark:disabled { opacity: 0.6; }
+/* Billed time not entered yet: said beside the figure, in the color of what is still to do. */
+.time-unentered { color: color-mix(in srgb, var(--orange) 70%, var(--label)); }
 .time-raise {
-  display: block;
-  margin: 6px 0 0 auto;
+  margin-left: auto;
   padding: 4px 10px;
   border: 0;
   border-radius: 999px;
@@ -141,7 +176,7 @@
 
 /* Held: in the list, counted nowhere, quieter than the rest. */
 .time-held .time-line-name, .time-held .time-what { color: var(--label-2); }
-.time-held .time-figures { color: var(--label-3); }
+.time-held .time-figures { color: var(--label-2); }
 
 .time-empty { margin: 4px 2px 16px; color: var(--label-2); font-size: 13px; }
 .time-zone { margin: 0 2px; color: var(--label-3); font-size: 11.5px; }
@@ -333,6 +368,38 @@
 }
 .time-stale span { flex: 1 1 200px; }
 .time-stale .button { background: var(--accent); color: #fff; }
+/* Billable: a switch, its default the config's (said while the entry follows it). */
+.time-switch { display: flex; align-items: center; gap: 8px; color: var(--label); font-size: 13px; }
+.time-switch input {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 22px;
+  margin: 0;
+  border-radius: 999px;
+  background: var(--fill);
+  appearance: none;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+.time-switch input::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 180ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.time-switch input:checked { background: var(--green); }
+.time-switch input:checked::before { transform: translateX(14px); }
+.time-switch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.time-switch input:disabled { opacity: 0.6; }
+.time-switch small { color: var(--label-2); font-size: 11.5px; }
+.time-entered { margin: 0; color: var(--label-2); font-size: 12px; }
 .time-by { margin: 0; color: var(--label-3); font-size: 11.5px; overflow-wrap: anywhere; }
 .time-session { padding: 0; border: 0; background: none; color: var(--label-2); font: inherit; font-weight: 600; cursor: pointer; }
 .time-session:hover { color: var(--accent); text-decoration: underline; }
@@ -347,6 +414,7 @@
   .time-row { padding-top: 7px; padding-bottom: 7px; }
   .time-step, .time-today, .time-add-open, .time-actions .button { min-height: 36px; }
   .time-step { width: 36px; }
+  .time-mark { height: 30px; padding: 0 12px 0 10px; }
   .time-raise { padding: 7px 12px; }
   .time-field input, .time-field select, .time-steps { height: 38px; }
   .time-field input, .time-field select, .time-field textarea { font-size: 16px; }
@@ -363,8 +431,10 @@
   .time-today:active:not(:disabled),
   .time-add-open:active,
   .time-raise:active:not(:disabled),
+  .time-mark:active:not(:disabled),
   .time-steps button:active:not(:disabled),
   .time-actions .button:active:not(:disabled) { transform: none; }
   .time-days { transition: none !important; transform: none !important; }
+  .time-switch input, .time-switch input::before { transition: none; }
 }
 @keyframes time-fade { from { opacity: 0; } }

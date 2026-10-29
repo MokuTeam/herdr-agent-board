@@ -1810,13 +1810,15 @@ kept, and every change goes into the database's journal with the entry before an
   "excludeTags": ["deferred"],
   "clients": {
     "client-a": {
-      "projects": ["Support", "Migration"],
+      "projects": ["Support", "Migration", "Internal"],
       "billing": [
         { "match": "^Admin", "group": "day", "round": "exact" },
         { "group": "ref", "step": 30, "round": "up" }
-      ]
+      ],
+      "nonBillable": ["Internal"],
+      "systems": [{ "id": "erp", "title": "ERP" }, "tracker"]
     },
-    "personal": { "projects": ["Internal"] }
+    "personal": { "projects": ["Internal"], "billable": false }
   }
 }
 ```
@@ -1844,16 +1846,37 @@ entry no rule takes is billed exact, alone. Entries tagged with one of `excludeT
 and count in no total. The rules apply when a day is read: changing one re-rates the days already
 logged too (closing a billed day is for later). The board knows no client's rules but these.
 
+**Billable or not.** A client's entries are billable unless its `billable` is `false` (a lane
+never billed); `nonBillable` lists the projects of a billed client that are not (each one of its
+`projects`, or it is a problem). An entry can be set the other way (`--billable`,
+`--non-billable`, the editor's switch, Toggl's own Billable on import), and `--default-billable`
+puts it back to what the config says. A non-billable entry counts in the time worked and never in
+the billed figure: it joins no line, so nothing rounds it and Raise and Trim never touch it, and it
+shows apart. `deferred` keeps its meaning (held, billed later); an entry both non-billable and held
+is non-billable.
+
+**Entered into the client's systems.** `systems` names where a client's time is entered (an ERP's
+time records, a tracker's worklog): ids of `a-z`, `0-9` and `-`, each once, a string or
+`{ "id", "title" }` (the title is what the panel shows). A client without `systems` has nothing to
+enter. An entry is marked entered in a system with when, by whom, that system's own id for it
+(`--record`) and the entry's revision then; a mark is no change of the entry (its revision stays),
+so any session marks any entry without `--force`, and every mark and unmark has its journal row.
+An entry changed on the board after it was entered (its revision moved past the mark's) is
+"changed after entering" until it is marked again: the change is to be made in that system too.
+
 **The command.** It writes to the database itself, so it works while the web board is down; as
 the session that runs it, its lane the client when `--client` is not given. `--json` gives an
 agent the whole of it.
 
 ```
-board time add [--client <lane>] --project "<p>" [--start <t>] (--stop <t> | --minutes <n> | --hours <h>) [--tag <t>]... [--] "<description>"
-board time edit <id> [--description "…"] [--project "…"] [--client <lane>] [--start <t>] [--stop <t>] [--minutes <n>] [--tag +<t> | --tag -<t>] [--expect <rev>] [--force]
+board time add [--client <lane>] --project "<p>" [--start <t>] (--stop <t> | --minutes <n> | --hours <h>) [--tag <t>]... [--billable | --non-billable] [--] "<description>"
+board time edit <id> [--description "…"] [--project "…"] [--client <lane>] [--start <t>] [--stop <t>] [--minutes <n>] [--tag +<t> | --tag -<t>] [--billable | --non-billable | --default-billable] [--expect <rev>] [--force]
 board time move <id> <date> [--force]
 board time rm <id> [--force]    board time restore <id>    board time show <id>
-board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--tag <t>] [--deleted]
+board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--tag <t>] [--deleted] [--not-posted [--system <id>] | --changed-after-post]
+board time post <id>[@<rev>]... --system <id> [--record "<their id>"]    marked entered in a client's system
+board time post --client <lane> --to <d> [--from <d>] --system <id> [--dry-run]    what was entered before the board, at once
+board time unpost <id>[@<rev>]... --system <id>
 board time day [<d>] [--client <lane>]      the day as billed: lines, raw and billed
 board time projects [<lane>]
 board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy] [--dry-run] [--update]
@@ -1883,20 +1906,37 @@ it after `--` when it may hold a word starting with `--`.
   across a DST change too.
 - **Remove** leaves the entry, marked, out of every list and total; `restore` brings it back.
 - `list` totals what a day would: removed and held entries out (the held ones counted apart);
-  `--tag` matches whatever the case.
+  `--tag` matches whatever the case. `--not-posted` lists what a billing agent still has to enter:
+  billable, not held, without a mark in one of its client's systems (`--system`: in that one);
+  `--changed-after-post` lists the entries changed after they were entered. Both take the range
+  as `list` does (`--from` and `--to` for more than a day).
+- **Post** marks entries entered in one of their client's systems: `<id>@<rev>` refuses an entry
+  changed since that revision was read (an agent posts what it read); `--record` keeps that
+  system's id for it (a later post without one keeps it). Marking again clears "changed after
+  entering". The form with `--client` and `--to` (`--from`: any date before) is for the
+  switch-over: it marks the client's billable entries, live and not held, that have no mark in that
+  system yet, and says how many and their time; `--dry-run` writes nothing. `unpost` takes a mark
+  off.
 
 **The JSON** (`--json`), for agents. An entry: `id` (8 hex characters), `client`, `project`,
 `description`, `tags`, `start` and `stop` (ISO, UTC, to the second), `date` (the work date),
 `seconds`, `by` and `changedBy` (`{ "key", "name" }` of a session, or `"user"`, `"import"`), `at`
-and `changed` (ms), `rev`, and `deleted` (ms) or `toggl` when they apply. `add` adds `existing`
+and `changed` (ms), `rev`, `billable` (as it comes out) and `billableDefault` (true: as the config
+says, not set on the entry), `posts` (where it was entered: each `{ "system", "at", "by", "record",
+"rev", "changedAfter" }`, `record` null when none was given, `changedAfter` true when the entry
+changed since), and `deleted` (ms) or `toggl` when they apply. `add` adds `existing`
 and, when it wrote nothing, `reason`. `edit`, `move`, `rm`, `restore` and `show` give the entry;
-`list` a list of entries. `day` gives `{ "date", "problems": [<text>...], "days": [...] }`, a day per
-client: `client`, `date`, `zone`, `seconds`, `billedSeconds`, `held` (entry ids), `lines` (each:
+`list` a list of entries. `post` and `unpost` give `{ "system", "count", "seconds", "entries" }`
+(the entries after), and the switch-over's `--dry-run` the same with `"dryRun": true`. `day` gives
+`{ "date", "problems": [<text>...], "days": [...] }`, a day per
+client: `client`, `date`, `zone`, `seconds` (worked), `billedSeconds`, `held` and `nonBillable`
+(entry ids), `lines` (each:
 `key`, `project`, `ref`, `rule`, `group`, `step`, `round`, `seconds`, `billedSeconds`, `entries` as
 ids), and `entries` (the day's entries in full). `projects` gives `{ "<lane>": [...] | null }`, or
 null without `clients`. An error is `{ "ok": false, "error": "<code>", "message": "…" }` on stdout
 with exit code 1: `notYours`, `changedSince`, `gone`, `removed`, `config`, `noBackup`,
-`notBackedUp`, `client`, `project`, `when`, `whenRange`, `stopAhead`, `usage`… (the key of its
+`notBackedUp`, `client`, `project`, `when`, `whenRange`, `stopAhead`, `system`, `noSystem`,
+`billableFlags`, `usage`… (the key of its
 text). **While `problems` is not empty, an agent stops:** the day's figures were worked out with
 what of config.json checks out, and are not to be billed from.
 
@@ -1924,6 +1964,15 @@ an entry open in the editor stays as it is. The board changes them as the owner 
 each change saying the revision it read (one changed since is refused), with the same checks as
 the command: the config, a backup that went through, times within a day ahead and a year back.
 
+**Billable and entered, on the board.** An entry's editor has a switch for billable, its default
+the config's (said while the entry follows it); a non-billable entry shows apart under its client,
+counted as worked. Where a client's time is entered into its systems, each line says per system
+whether its entries are entered (all, some, none, or one changed after it was); a tap marks or
+unmarks the whole line there, with Undo on its toast (a mark changed after entering goes back as it
+was). An entry's hint names its marks, an entry already entered says so in its editor (the change
+is to be made there too), and the day's figure and each client's say how much billed time is not
+entered yet, when some is.
+
 **Export.** `board time export` prints a range as CSV: `id, date, client, project, description,
 tags, start, stop, hours, by`, where `start` and `stop` are UTC (`Z`) and `date` is the work date in
 the client's zone; tags are joined by a comma (a tag holds none). A text that a spreadsheet would
@@ -1932,7 +1981,9 @@ order mark Excel needs to read the file's UTF-8 when it is opened by a double cl
 
 **From Toggl.** `board time import <file>` takes Toggl's Detailed report exported as CSV from its
 web page (no API call, so no quota), or its JSON (API v9 time entries with project and client
-names). `--tz` is the Toggl profile's time zone (the CSV's times have none); `--map` sends each
+names); Toggl's own Billable (the CSV's column, the JSON's field) is kept on the entry as set, and
+a second run finds an entry the same when it comes out billable or not as Toggl says. `--tz` is
+the Toggl profile's time zone (the CSV's times have none); `--map` sends each
 Toggl client to a lane (`"=personal"` for entries without one); an unmapped client stops the run
 with the list. The CSV's dates follow the profile's format: day and month either way round are
 read from the file itself (a 28 first is a day); a file where every date reads both ways asks for

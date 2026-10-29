@@ -136,6 +136,8 @@ test('the JSON an agent reads: an entry, a repeat, a list, a day, and an error, 
   const made = await jsonOf(cfg, add)
   assert.deepEqual(Object.keys(made).sort(), [
     'at',
+    'billable',
+    'billableDefault',
     'by',
     'changed',
     'changedBy',
@@ -144,6 +146,7 @@ test('the JSON an agent reads: an entry, a repeat, a list, a day, and an error, 
     'description',
     'existing',
     'id',
+    'posts',
     'project',
     'rev',
     'seconds',
@@ -151,6 +154,7 @@ test('the JSON an agent reads: an entry, a repeat, a list, a day, and an error, 
     'stop',
     'tags',
   ])
+  assert.deepEqual([made.billable, made.billableDefault, made.posts], [true, true, []])
   assert.match(made.id, /^[0-9a-f]{8}$/)
   assert.deepEqual((({ existing, reason }) => ({ existing, reason }))(await jsonOf(cfg, add)), {
     existing: true,
@@ -170,6 +174,7 @@ test('the JSON an agent reads: an entry, a repeat, a list, a day, and an error, 
     'entries',
     'held',
     'lines',
+    'nonBillable',
     'seconds',
     'zone',
   ])
@@ -471,4 +476,129 @@ test('export keeps a spreadsheet from running what an agent wrote; --bom for Exc
   assert.match(csv[1] ?? '', /,"deferred, a b",/)
   const bom = (await run(cfg, ['export', '--bom', '--date', '2026-10-28'])).join('\n')
   assert.ok(bom.startsWith('﻿id,date,'))
+})
+
+/** client-a entered into an ERP and a tracker, its Internal project not billed; personal never billed. */
+const posting = (cfg: Config): Config =>
+  ({
+    ...cfg,
+    time: {
+      zone: 'America/New_York',
+      clients: {
+        'client-a': {
+          projects: ['Support', 'Internal'],
+          nonBillable: ['Internal'],
+          systems: ['erp', { id: 'tracker', title: 'Tracker' }],
+          billing: [{ group: 'ref', step: 30, round: 'up' }],
+        },
+        personal: { projects: ['Internal'], billable: false },
+      },
+    },
+  }) as Config
+
+const at = (hm: string) => `2026-10-28T${hm}:00-04:00`
+const addAt = (start: string, project: string, description: string, ...more: string[]) => [
+  'add',
+  '--project',
+  project,
+  '--start',
+  at(start),
+  '--minutes',
+  '30',
+  ...more,
+  description,
+]
+
+test('billable: as the config says, set on an entry either way and back; worked, never billed, when not', async () => {
+  const cfg = posting((await setUp()).cfg)
+  const work = await jsonOf(cfg, addAt('09:00', 'Support', 'Case 10001 X: work'))
+  const internal = await jsonOf(cfg, addAt('10:00', 'Internal', 'Standup'))
+  const slip = await jsonOf(cfg, addAt('11:00', 'Support', 'Case 10002 Y: our slip', '--non-billable'))
+  assert.deepEqual(
+    [work, internal, slip].map(e => [e.billable, e.billableDefault]),
+    [
+      [true, true],
+      [false, true],
+      [false, false],
+    ],
+  )
+  const billed = await jsonOf(cfg, ['edit', internal.id, '--billable'])
+  assert.deepEqual([billed.billable, billed.billableDefault, billed.rev], [true, false, 2])
+  const back = await jsonOf(cfg, ['edit', internal.id, '--default-billable'])
+  assert.deepEqual([back.billable, back.billableDefault, back.rev], [false, true, 3])
+  assert.equal((await jsonOf(cfg, ['edit', work.id, '--billable', '--non-billable'])).error, 'billableFlags')
+  const [day] = (await jsonOf(cfg, ['day', '2026-10-28'])).days
+  assert.deepEqual(day.nonBillable, [internal.id, slip.id])
+  // worked: all three; billed: the one case, up to the half hour
+  assert.deepEqual([day.seconds / 60, day.billedSeconds / 60], [90, 30])
+  assert.match((await run(cfg, ['show', slip.id]))[0] ?? '', /non-billable/)
+  // a lane never billed
+  const own = await jsonOf(cfg, [...addAt('12:00', 'Internal', 'Reading'), '--client', 'personal'])
+  assert.deepEqual([own.billable, own.billableDefault], [false, true])
+})
+
+test('post and unpost: a mark per system, no change of the entry; what is to enter, and what changed after', async () => {
+  const cfg = posting((await setUp()).cfg)
+  const one = await jsonOf(cfg, addAt('09:00', 'Support', 'Case 10001 X: work'))
+  const two = await jsonOf(cfg, addAt('10:00', 'Support', 'Case 10002 Y: work'))
+  await jsonOf(cfg, addAt('11:00', 'Internal', 'Standup'))
+  await jsonOf(cfg, addAt('12:00', 'Support', 'Case 10003 Z: later', '--tag', 'deferred'))
+  const ids = (list: { id: string }[]) => list.map(e => e.id)
+  const range = ['--from', '2026-10-28', '--to', '2026-10-28']
+  // to enter: billable, not held, missing a mark (non-billable and held out)
+  assert.deepEqual(ids(await jsonOf(cfg, ['list', '--not-posted', ...range])), [one.id, two.id])
+  const posted = await jsonOf(cfg, ['post', one.id, '--system', 'erp', '--record', 'TR-1'])
+  assert.deepEqual(Object.keys(posted), ['system', 'count', 'seconds', 'entries'])
+  const [p] = posted.entries[0].posts
+  assert.deepEqual(
+    [p.system, p.record, p.rev, p.changedAfter, p.by, posted.entries[0].rev],
+    ['erp', 'TR-1', 1, false, me, 1],
+  )
+  assert.deepEqual(Object.keys(p), ['system', 'at', 'by', 'record', 'rev', 'changedAfter'])
+  assert.deepEqual(ids(await jsonOf(cfg, ['list', '--not-posted', '--system', 'erp', ...range])), [two.id])
+  assert.deepEqual(ids(await jsonOf(cfg, ['list', '--not-posted', ...range])), [one.id, two.id], 'tracker still')
+  // changed after: listed, said on the edit, cleared by marking again (the record kept)
+  const said = await run(cfg, ['edit', one.id, '--description', 'Case 10001 X: more'])
+  assert.match(said.at(-1) ?? '', /Entered in erp already: change it there too/)
+  const changed = await jsonOf(cfg, ['list', '--changed-after-post', ...range])
+  assert.deepEqual(
+    changed.map((e: { id: string; posts: { changedAfter: boolean }[] }) => [e.id, e.posts[0]?.changedAfter]),
+    [[one.id, true]],
+  )
+  assert.equal((await jsonOf(cfg, ['post', `${one.id}@1`, '--system', 'erp'])).error, 'changedSince')
+  const again = await jsonOf(cfg, ['post', `${one.id}@2`, '--system', 'erp'])
+  assert.deepEqual([again.entries[0].posts[0].rev, again.entries[0].posts[0].record], [2, 'TR-1'])
+  assert.deepEqual(await jsonOf(cfg, ['list', '--changed-after-post', ...range]), [])
+  // another session's entry: marked without --force (a mark changes no entry)
+  const theirs = await jsonOf(cfg, ['post', two.id, '--system', 'erp'], { key: 's2', name: 'Two' })
+  assert.deepEqual(theirs.entries[0].posts[0].by, { key: 's2', name: 'Two' })
+  // refusals: a system the client has not, none named, an id that is not one
+  assert.equal((await jsonOf(cfg, ['post', one.id, '--system', 'nope'])).error, 'system')
+  assert.equal((await jsonOf(cfg, ['post', one.id])).error, 'noSystem')
+  assert.equal((await jsonOf(cfg, ['post', 'x', '--system', 'erp'])).error, 'usage')
+  const un = await jsonOf(cfg, ['unpost', one.id, two.id, '--system', 'erp'])
+  assert.deepEqual([un.count, un.entries.map((e: { posts: unknown[] }) => e.posts)], [2, [[], []]])
+})
+
+test('the switch-over: everything entered before the board, posted at once; a dry run first', async () => {
+  const cfg = posting((await setUp()).cfg)
+  const one = await jsonOf(cfg, addAt('09:00', 'Support', 'Case 10001 X: work'))
+  const two = await jsonOf(cfg, addAt('10:00', 'Support', 'Case 10002 Y: work'))
+  await jsonOf(cfg, addAt('11:00', 'Internal', 'Standup'))
+  await jsonOf(cfg, ['post', one.id, '--system', 'tracker', '--record', 'W-1'])
+  const bulk = ['post', '--client', 'client-a', '--to', '2026-10-28', '--system', 'tracker']
+  const dry = await jsonOf(cfg, [...bulk, '--dry-run'])
+  assert.deepEqual(
+    [dry.dryRun, dry.count, dry.seconds, dry.entries.map((e: { id: string }) => e.id)],
+    [true, 1, 1800, [two.id]],
+  )
+  assert.match((await run(cfg, [...bulk, '--dry-run']))[0] ?? '', /1 entry, 0:30, would be marked entered in tracker/)
+  assert.deepEqual(await jsonOf(cfg, ['list', '--changed-after-post', '--date', '2026-10-28']), [])
+  const done = await jsonOf(cfg, bulk)
+  assert.deepEqual([done.count, done.entries[0].id, done.entries[0].posts[0].system], [1, two.id, 'tracker'])
+  assert.deepEqual(await jsonOf(cfg, ['list', '--not-posted', '--system', 'tracker', '--date', '2026-10-28']), [])
+  // the earlier mark kept its record
+  const shown = await jsonOf(cfg, ['show', one.id])
+  assert.equal(shown.posts[0].record, 'W-1')
+  assert.equal((await jsonOf(cfg, [...bulk.slice(0, 5), '--system', 'nope'])).error, 'system')
 })

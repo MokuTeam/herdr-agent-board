@@ -1,9 +1,11 @@
 // Time entries for the page (#233, core/time.ts, adapters/time-store.ts). GET /api/time?date=<d>
 // [&client=<lane>] answers that day by client, as billed, with its entries and what an entry may
-// be (the lanes that take time, their projects, the tags entries have). POST /api/time { op: add |
-// edit | move | remove | restore | raise | trim, … } changes one as the owner, who may change any
-// (raise and trim bring a line's time worked to its billed figure, up or down, and say the figure
-// the page showed: one the line no longer bills is refused). Every op on an entry says the
+// be (the lanes that take time, their projects, billable and systems, the tags entries have). POST
+// /api/time { op: add | edit | move | remove | restore | raise | trim | post | unpost, … } changes
+// one as the owner, who may change any (raise and trim bring a line's time worked to its billed
+// figure, up or down, and say the figure the page showed: one the line no longer bills is
+// refused; post and unpost mark entries entered into a client's system, a line's at once:
+// { entries: [{ id, rev, record?, asOf? }], system }). Every op on an entry says the
 // revision it read (`rev`, an integer) and is refused when the entry changed since; times are ISO
 // with an offset, within a day ahead and a year back. An error says its `code` (the text key's last
 // part) beside its words. Not local-only: the board through the remote page and a paired phone read
@@ -16,13 +18,18 @@ import { isRecord } from '../../adapters/json-store.ts'
 import {
   addEntry,
   editEntry,
+  getEntry,
   listEntries,
+  marksOf,
   moveEntry,
+  type PostItem,
+  postEntries,
   raiseEntry,
   removeEntry,
   restoreEntry,
   TimeError,
   trimLine,
+  unpostEntries,
   usedTags,
 } from '../../adapters/time-store.ts'
 import { t } from '../../core/lang.ts'
@@ -31,12 +38,14 @@ import {
   addDays,
   clientDay,
   dateIn,
+  type EntryView,
+  entryView,
   isDate,
   plausible,
   problemsText,
-  secondsOf,
   type TimeConfig,
   type TimeEntry,
+  type TimeSystem,
   timeConfig,
   zoneOf,
 } from '../../core/time.ts'
@@ -94,7 +103,7 @@ export interface TimeDayView {
   /** The board's zone, the one a day without a client of its own is in. */
   zone: string
   days: ReturnType<typeof clientDay>[]
-  entries: (TimeEntry & { seconds: number })[]
+  entries: EntryView[]
   /** config.json's `time` does not check out: the figures may be wrong, and no entry is written. */
   problems: string | null
   /** The lanes that take time (null: every lane) and each one's projects (null: any). */
@@ -102,20 +111,37 @@ export interface TimeDayView {
   projects: Record<string, string[] | null>
   /** Tags to offer: the ones held out of the totals first, then the ones entries have, most used first. */
   tags: string[]
+  /** Each listed client's billable default (by project) and the systems its time is entered in. */
+  settings: Record<string, { billable: boolean; nonBillable: string[]; systems: TimeSystem[] }>
 }
 
 const projectsOf = (conf: TimeConfig): Record<string, string[] | null> =>
   Object.fromEntries(Object.entries(conf.clients ?? {}).map(([id, c]) => [id, c.projects]))
 
+const settingsOf = (conf: TimeConfig): TimeDayView['settings'] =>
+  Object.fromEntries(
+    Object.entries(conf.clients ?? {}).map(([id, c]) => [
+      id,
+      { billable: c.billable, nonBillable: c.nonBillable, systems: c.systems },
+    ]),
+  )
+
 /** One day by client, as billed (every client with entries that day, or the one asked). */
 export function timeDay(cfg: Pick<Config, 'time'>, date: string, client?: string): TimeDayView | null {
   const conf = timeConfig(cfg.time)
   if (!conf) return null
-  const { entries, used } = withDb(false, db =>
-    db
-      ? { entries: listEntries(db, { from: date, to: date, ...(client && { client }) }), used: usedTags(db) }
-      : { entries: [], used: [] },
-  )
+  const { entries, used, marks } = withDb(false, db => {
+    if (!db) return { entries: [], used: [], marks: new Map() }
+    const entries = listEntries(db, { from: date, to: date, ...(client && { client }) })
+    return {
+      entries,
+      used: usedTags(db),
+      marks: marksOf(
+        db,
+        entries.map(e => e.id),
+      ),
+    }
+  })
   const clients = [...new Set(entries.map(e => e.client))].sort()
   return {
     date,
@@ -129,10 +155,11 @@ export function timeDay(cfg: Pick<Config, 'time'>, date: string, client?: string
         entries.filter(e => e.client === c),
       ),
     ),
-    entries: entries.map(e => ({ ...e, seconds: secondsOf(e) })),
+    entries: entries.map(e => entryView(conf, e, marks.get(e.id))),
     clients: conf.clients ? Object.keys(conf.clients) : null,
     projects: projectsOf(conf),
     tags: [...new Set([...conf.excludeTags, ...used])],
+    settings: settingsOf(conf),
   }
 }
 
@@ -199,6 +226,49 @@ function billedOf(b: Record<string, unknown>): { billed?: number } {
   return { billed: b.billed }
 }
 
+/** Billable as the body sets it: true, false, null (back to the config's, `nullable`), or none. */
+function billableIn(v: unknown, nullable: boolean): boolean | null | undefined {
+  if (v === undefined || typeof v === 'boolean' || (nullable && v === null)) return v as boolean | null | undefined
+  throw new TimeError('time.err.usage')
+}
+
+const MAX_MARKED = 500
+/** A post's or unpost's entries: each with the revision read; a record and the revision it records when given. */
+function postItemsOf(v: unknown): PostItem[] {
+  if (!Array.isArray(v) || !v.length || v.length > MAX_MARKED) throw new TimeError('time.err.usage')
+  return v.map(x => {
+    const o = isRecord(x) ? x : {}
+    const id = text(o.id)
+    if (!id) throw new TimeError('time.err.usage')
+    const record = o.record === null ? null : text(o.record)
+    if (o.asOf !== undefined && (typeof o.asOf !== 'number' || !Number.isInteger(o.asOf)))
+      throw new TimeError('time.err.rev')
+    return {
+      id,
+      rev: revOf(o),
+      ...(record !== undefined && { record }),
+      ...(typeof o.asOf === 'number' && { asOf: o.asOf }),
+    }
+  })
+}
+
+/** Entries marked entered into a system, or unmarked, as the owner: the entries after. */
+function mark(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>): EntryView[] {
+  const system = text(b.system)
+  if (!system) throw new TimeError('time.err.noSystem')
+  const items = postItemsOf(b.entries)
+  if (b.op === 'post') postEntries(db, conf, items, system, 'user')
+  else unpostEntries(db, conf, items, system, 'user')
+  const marks = marksOf(
+    db,
+    items.map(i => i.id),
+  )
+  return items.flatMap(i => {
+    const e = getEntry(db, i.id)
+    return e ? [entryView(conf, e, marks.get(e.id))] : []
+  })
+}
+
 const MAX_TAGS = 20
 function tagsOf(v: unknown): string[] | undefined {
   if (v === undefined) return undefined
@@ -215,6 +285,7 @@ function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>, now: 
       const start = when(b.start, now)
       const stop = when(b.stop, now)
       if (start === undefined || stop === undefined) throw new TimeError('time.err.noDuration')
+      const billable = billableIn(b.billable, false)
       return addEntry(
         db,
         conf,
@@ -226,6 +297,7 @@ function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>, now: 
           start,
           stop,
           startGiven: true,
+          ...(typeof billable === 'boolean' && { billable }),
         },
         'user',
         now,
@@ -238,6 +310,7 @@ function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>, now: 
       const description = text(b.description)
       const project = text(b.project)
       const tags = tagsOf(b.tags)
+      const billable = billableIn(b.billable, true)
       return editEntry(
         db,
         conf,
@@ -249,6 +322,7 @@ function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>, now: 
           ...(stop !== undefined && { stop }),
           // the tags as the page's field holds them: the whole set
           ...(tags !== undefined && { tags }),
+          ...(billable !== undefined && { billable }),
         },
         'user',
         { expect: rev },
@@ -310,11 +384,14 @@ export function timeRoutes(cfg: Config): Route[] {
         const raw = await ctx.rawBody()
         const b = isRecord(raw) ? raw : {}
         try {
-          const entry = withDb(true, db => {
+          const entries = withDb(true, db => {
             if (!db) throw new TimeError('time.err.noDb')
-            return change(db, conf, b, Date.now())
+            if (b.op === 'post' || b.op === 'unpost') return mark(db, conf, b)
+            const e = change(db, conf, b, Date.now())
+            return [entryView(conf, e, marksOf(db, [e.id]).get(e.id))]
           })
-          return json(200, { ok: true, entry: { ...entry, seconds: secondsOf(entry) } })
+          // the entry changed (a mark's: the first of them), and all of a mark's
+          return json(200, { ok: true, entry: entries[0], entries })
         } catch (err) {
           if (err instanceof TimeError) {
             const status = err.key === 'time.err.gone' ? 404 : err.key === 'time.err.changedSince' ? 409 : 400
