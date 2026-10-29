@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { asSnapshot } from '../../src/adapters/herdr.ts'
@@ -12,6 +12,7 @@ import {
   isPaneId,
   lastAssistantText,
   plainText,
+  showToast,
   terminalAppOf,
   toastApp,
   toastMessage,
@@ -207,6 +208,65 @@ describe('the helper of an earlier notification', () => {
       assert.equal(existsSync(pidFile()), false, text)
     }
   })
+})
+
+// showToast against a stand-in for the helper: an app in the state folder that is newer than its
+// source, so nothing is built, whose program is `body` with `mode`. Windows has no execute bit.
+describe.skipIf(process.platform === 'win32')('showing a notification', () => {
+  const toast = { pane: 'w1:p2', title: 'Work', subtitle: 'claude finished', body: 'Done', tab: 'w1:t1', app: '/A.app' }
+  const record = (): string => join(toastDir(), 'pane-w1_p2.json')
+  const pidFile = (): string => join(toastDir(), 'pane-w1_p2.pid')
+
+  function stand(body: string, mode: number): void {
+    mkdirSync(join(toastApp(), 'Contents', 'MacOS'), { recursive: true })
+    writeFileSync(join(toastApp(), 'Contents', 'Info.plist'), '<plist/>')
+    writeFileSync(helperBinary(), body, { mode })
+    chmodSync(helperBinary(), mode)
+    const later = new Date(Date.now() + 60_000)
+    utimesSync(helperBinary(), later, later)
+  }
+  async function show(over: Partial<typeof toast> = {}): Promise<[string, string][]> {
+    const sent: [string, string][] = []
+    await showToast({ ...toast, ...over }, async (title, body) => {
+      sent.push([title, body])
+    })
+    return sent
+  }
+
+  test('the helper runs: no notification of herdr’s, the pane’s record and the helper’s pid written', async () => {
+    stand('#!/bin/sh\nexit 0\n', 0o755)
+    assert.deepEqual(await show(), [])
+    const saved = JSON.parse(readFileSync(record(), 'utf8'))
+    assert.deepEqual({ ...saved, at: 0 }, { tab: 'w1:t1', app: '/A.app', at: 0 })
+    assert.match(readFileSync(pidFile(), 'utf8'), /^\d+$/)
+  })
+
+  test('a helper that cannot start: herdr’s own notification instead, nothing written', async () => {
+    const cases: [string, string, number][] = [
+      ['not allowed to run', '#!/bin/sh\nexit 0\n', 0o644],
+      ['its interpreter is missing', '#!/nonexistent/sh\n', 0o755],
+    ]
+    for (const [why, body, mode] of cases) {
+      stand(body, mode)
+      assert.deepEqual(await show(), [['Work', 'claude finished — Done']], why)
+      assert.equal(existsSync(record()), false, why)
+      assert.equal(existsSync(pidFile()), false, why)
+    }
+    // A spawn that throws at once (an argument with a NUL byte; a file the system cannot execute) is the same.
+    stand('#!/bin/sh\nexit 0\n', 0o755)
+    assert.deepEqual(await show({ body: 'a\0b' }), [['Work', 'claude finished — a\0b']])
+    assert.equal(existsSync(record()), false)
+    assert.equal(existsSync(pidFile()), false)
+  })
+
+  // On a Mac this would build the real app, and show it.
+  test.skipIf(process.platform === 'darwin')(
+    'no app and none to build: herdr’s own notification, nothing written',
+    async () => {
+      assert.deepEqual(await show(), [['Work', 'claude finished — Done']])
+      assert.equal(existsSync(toastDir()), false)
+    },
+  )
 })
 
 describe('the hook the install writes', () => {

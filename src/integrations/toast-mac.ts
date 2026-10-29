@@ -284,17 +284,38 @@ export interface Toast {
 }
 
 /**
- * Shows the notification, or herdr's own when this computer cannot build the app (an older
- * macOS, no Swift toolchain): that one's click goes to the pane in herdr, not to the board.
+ * Starts the helper apart from this process: its pid, or null when it could not run. A program that
+ * is missing or not allowed to run says so with an 'error' a moment after spawn; one the system
+ * cannot execute, or an argument with a NUL byte, throws at once.
  */
-export async function showToast(toast: Toast): Promise<void> {
+function startHelper(program: string, args: string[]): Promise<number | null> {
+  return new Promise(resolve => {
+    try {
+      const child = spawn(program, args, { detached: true, stdio: 'ignore' })
+      child.once('error', () => resolve(null))
+      child.once('spawn', () => {
+        child.unref()
+        resolve(child.pid ?? null)
+      })
+    } catch {
+      resolve(null)
+    }
+  })
+}
+
+/**
+ * Shows the notification, or herdr's own (`fallback`) when this computer cannot build the app (an
+ * older macOS, no Swift toolchain) or the app will not start: that one's click goes to the pane in
+ * herdr, not to the board.
+ */
+export async function showToast(
+  toast: Toast,
+  fallback: (title: string, body: string) => Promise<void> = notify,
+): Promise<void> {
+  const herdrsOwn = (): Promise<void> =>
+    fallback(toast.title, [toast.subtitle, toast.body].filter(Boolean).join(' — ')).catch(() => {})
   const helper = ensureToastApp()
-  if (!helper) {
-    await notify(`${toast.title}`, [toast.subtitle, toast.body].filter(Boolean).join(' — ')).catch(() => {})
-    return
-  }
-  mkdirSync(appDir(), { recursive: true })
-  writeFileSync(recordFile(toast.pane), JSON.stringify({ tab: toast.tab ?? '', app: toast.app ?? '', at: Date.now() }))
+  if (!helper) return herdrsOwn()
   endEarlier(toast.pane)
   const script = join(ROOT, 'src', 'entrypoints', 'toast.ts')
   const args = [
@@ -317,9 +338,11 @@ export async function showToast(toast: Toast): Promise<void> {
     '--click-arg',
     toast.pane,
   ]
-  const child = spawn(toastBinary(), args, { detached: true, stdio: 'ignore' })
-  child.unref()
-  if (child.pid) writeFileSync(pidFile(toast.pane), String(child.pid))
+  const pid = await startHelper(toastBinary(), args)
+  if (pid === null) return herdrsOwn()
+  mkdirSync(appDir(), { recursive: true })
+  writeFileSync(recordFile(toast.pane), JSON.stringify({ tab: toast.tab ?? '', app: toast.app ?? '', at: Date.now() }))
+  writeFileSync(pidFile(toast.pane), String(pid))
 }
 
 // ------------------------------------------------------------------ a click
