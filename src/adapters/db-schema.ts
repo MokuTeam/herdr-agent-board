@@ -61,6 +61,27 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE UNIQUE INDEX time_toggl ON time_entries (toggl) WHERE toggl IS NOT NULL;
     `,
   },
+  {
+    version: 3,
+    store: 'time',
+    // An entry billable or not as set on it (1 or 0; NULL: as the config says, which every entry
+    // written before this step is). An entry entered into one of its client's systems (an ERP's
+    // time records, a tracker's worklog): one mark per entry and system, with when, by whom, that
+    // system's own id for the record, and the entry's revision then (a later one: changed after
+    // it was entered). A mark is no change of the entry: its revision stays.
+    sql: `
+      ALTER TABLE time_entries ADD COLUMN billable INTEGER;
+      CREATE TABLE time_marks (
+        entry TEXT NOT NULL,
+        system TEXT NOT NULL,
+        at INTEGER NOT NULL,
+        by TEXT NOT NULL,
+        record TEXT,
+        rev INTEGER NOT NULL,
+        PRIMARY KEY (entry, system)
+      ) STRICT;
+    `,
+  },
 ]
 
 /** The version the code makes a file: the last step's. */

@@ -136,6 +136,8 @@ test('the JSON an agent reads: an entry, a repeat, a list, a day, and an error, 
   const made = await jsonOf(cfg, add)
   assert.deepEqual(Object.keys(made).sort(), [
     'at',
+    'billable',
+    'billableDefault',
     'by',
     'changed',
     'changedBy',
@@ -144,6 +146,7 @@ test('the JSON an agent reads: an entry, a repeat, a list, a day, and an error, 
     'description',
     'existing',
     'id',
+    'posts',
     'project',
     'rev',
     'seconds',
@@ -151,6 +154,7 @@ test('the JSON an agent reads: an entry, a repeat, a list, a day, and an error, 
     'stop',
     'tags',
   ])
+  assert.deepEqual([made.billable, made.billableDefault, made.posts], [true, true, []])
   assert.match(made.id, /^[0-9a-f]{8}$/)
   assert.deepEqual((({ existing, reason }) => ({ existing, reason }))(await jsonOf(cfg, add)), {
     existing: true,
@@ -170,6 +174,7 @@ test('the JSON an agent reads: an entry, a repeat, a list, a day, and an error, 
     'entries',
     'held',
     'lines',
+    'nonBillable',
     'seconds',
     'zone',
   ])
@@ -471,4 +476,240 @@ test('export keeps a spreadsheet from running what an agent wrote; --bom for Exc
   assert.match(csv[1] ?? '', /,"deferred, a b",/)
   const bom = (await run(cfg, ['export', '--bom', '--date', '2026-10-28'])).join('\n')
   assert.ok(bom.startsWith('﻿id,date,'))
+})
+
+/** client-a entered into an ERP and a tracker, its Internal project not billed; personal never billed. */
+const posting = (cfg: Config): Config =>
+  ({
+    ...cfg,
+    time: {
+      zone: 'America/New_York',
+      clients: {
+        'client-a': {
+          projects: ['Support', 'Internal'],
+          nonBillable: ['Internal'],
+          systems: ['erp', { id: 'tracker', title: 'Tracker' }],
+          billing: [{ group: 'ref', step: 30, round: 'up' }],
+        },
+        personal: { projects: ['Internal'], billable: false },
+      },
+    },
+  }) as Config
+
+const at = (hm: string) => `2026-10-28T${hm}:00-04:00`
+const addAt = (start: string, project: string, description: string, ...more: string[]) => [
+  'add',
+  '--project',
+  project,
+  '--start',
+  at(start),
+  '--minutes',
+  '30',
+  ...more,
+  description,
+]
+
+test('billable: as the config says, set on an entry either way and back; worked, never billed, when not', async () => {
+  const cfg = posting((await setUp()).cfg)
+  const work = await jsonOf(cfg, addAt('09:00', 'Support', 'Case 10001 X: work'))
+  const internal = await jsonOf(cfg, addAt('10:00', 'Internal', 'Standup'))
+  const slip = await jsonOf(cfg, addAt('11:00', 'Support', 'Case 10002 Y: our slip', '--non-billable'))
+  assert.deepEqual(
+    [work, internal, slip].map(e => [e.billable, e.billableDefault]),
+    [
+      [true, true],
+      [false, true],
+      [false, false],
+    ],
+  )
+  const billed = await jsonOf(cfg, ['edit', internal.id, '--billable'])
+  assert.deepEqual([billed.billable, billed.billableDefault, billed.rev], [true, false, 2])
+  const back = await jsonOf(cfg, ['edit', internal.id, '--default-billable'])
+  assert.deepEqual([back.billable, back.billableDefault, back.rev], [false, true, 3])
+  assert.equal((await jsonOf(cfg, ['edit', work.id, '--billable', '--non-billable'])).error, 'billableFlags')
+  const [day] = (await jsonOf(cfg, ['day', '2026-10-28'])).days
+  assert.deepEqual(day.nonBillable, [internal.id, slip.id])
+  // worked: all three; billed: the one case, up to the half hour
+  assert.deepEqual([day.seconds / 60, day.billedSeconds / 60], [90, 30])
+  assert.match((await run(cfg, ['show', slip.id]))[0] ?? '', /non-billable/)
+  // a lane never billed
+  const own = await jsonOf(cfg, [...addAt('12:00', 'Internal', 'Reading'), '--client', 'personal'])
+  assert.deepEqual([own.billable, own.billableDefault], [false, true])
+})
+
+test('post and unpost: a mark per system, no change of the entry; what is to enter, and what changed after', async () => {
+  const cfg = posting((await setUp()).cfg)
+  const one = await jsonOf(cfg, addAt('09:00', 'Support', 'Case 10001 X: work'))
+  const two = await jsonOf(cfg, addAt('10:00', 'Support', 'Case 10002 Y: work'))
+  await jsonOf(cfg, addAt('11:00', 'Internal', 'Standup'))
+  await jsonOf(cfg, addAt('12:00', 'Support', 'Case 10003 Z: later', '--tag', 'deferred'))
+  const ids = (list: { id: string }[]) => list.map(e => e.id)
+  const range = ['--from', '2026-10-28', '--to', '2026-10-28']
+  // to enter: billable, not held, missing a mark (non-billable and held out)
+  assert.deepEqual(ids(await jsonOf(cfg, ['list', '--not-posted', ...range])), [one.id, two.id])
+  const posted = await jsonOf(cfg, ['post', one.id, '--system', 'erp', '--record', 'TR-1'])
+  assert.deepEqual(Object.keys(posted), ['system', 'count', 'seconds', 'entries'])
+  const [p] = posted.entries[0].posts
+  assert.deepEqual(
+    [p.system, p.record, p.rev, p.changedAfter, p.by, posted.entries[0].rev],
+    ['erp', 'TR-1', 1, false, me, 1],
+  )
+  assert.deepEqual(Object.keys(p), ['system', 'at', 'by', 'record', 'rev', 'changedAfter'])
+  assert.deepEqual(ids(await jsonOf(cfg, ['list', '--not-posted', '--system', 'erp', ...range])), [two.id])
+  assert.deepEqual(ids(await jsonOf(cfg, ['list', '--not-posted', ...range])), [one.id, two.id], 'tracker still')
+  // changed after: listed, said on the edit, cleared by marking again (the record kept)
+  const said = await run(cfg, ['edit', one.id, '--description', 'Case 10001 X: more'])
+  assert.match(said.at(-1) ?? '', /Entered in erp already: change it there too/)
+  const changed = await jsonOf(cfg, ['list', '--changed-after-post', ...range])
+  assert.deepEqual(
+    changed.map((e: { id: string; posts: { changedAfter: boolean }[] }) => [e.id, e.posts[0]?.changedAfter]),
+    [[one.id, true]],
+  )
+  assert.equal((await jsonOf(cfg, ['post', `${one.id}@1`, '--system', 'erp'])).error, 'changedSince')
+  const again = await jsonOf(cfg, ['post', `${one.id}@2`, '--system', 'erp'])
+  assert.deepEqual([again.entries[0].posts[0].rev, again.entries[0].posts[0].record], [2, 'TR-1'])
+  assert.deepEqual(await jsonOf(cfg, ['list', '--changed-after-post', ...range]), [])
+  // another session's entry: marked without --force (a mark changes no entry)
+  const theirs = await jsonOf(cfg, ['post', two.id, '--system', 'erp'], { key: 's2', name: 'Two' })
+  assert.deepEqual(theirs.entries[0].posts[0].by, { key: 's2', name: 'Two' })
+  // refusals: a system the client has not, none named, an id that is not one
+  assert.equal((await jsonOf(cfg, ['post', one.id, '--system', 'nope'])).error, 'system')
+  assert.equal((await jsonOf(cfg, ['post', one.id])).error, 'noSystem')
+  assert.equal((await jsonOf(cfg, ['post', 'x', '--system', 'erp'])).error, 'usage')
+  const un = await jsonOf(cfg, ['unpost', one.id, two.id, '--system', 'erp'])
+  assert.deepEqual([un.count, un.entries.map((e: { posts: unknown[] }) => e.posts)], [2, [[], []]])
+})
+
+test('the switch-over: everything entered before the board, posted at once; a dry run first', async () => {
+  const cfg = posting((await setUp()).cfg)
+  const one = await jsonOf(cfg, addAt('09:00', 'Support', 'Case 10001 X: work'))
+  const two = await jsonOf(cfg, addAt('10:00', 'Support', 'Case 10002 Y: work'))
+  await jsonOf(cfg, addAt('11:00', 'Internal', 'Standup'))
+  await jsonOf(cfg, ['post', one.id, '--system', 'tracker', '--record', 'W-1'])
+  const bulk = ['post', '--client', 'client-a', '--to', '2026-10-28', '--system', 'tracker']
+  const dry = await jsonOf(cfg, [...bulk, '--dry-run'])
+  assert.deepEqual(
+    [dry.dryRun, dry.count, dry.seconds, dry.entries.map((e: { id: string }) => e.id)],
+    [true, 1, 1800, [two.id]],
+  )
+  assert.match((await run(cfg, [...bulk, '--dry-run']))[0] ?? '', /1 entry, 0:30, would be marked entered in tracker/)
+  assert.deepEqual(await jsonOf(cfg, ['list', '--changed-after-post', '--date', '2026-10-28']), [])
+  const done = await jsonOf(cfg, bulk)
+  assert.deepEqual([done.count, done.entries[0].id, done.entries[0].posts[0].system], [1, two.id, 'tracker'])
+  assert.deepEqual(await jsonOf(cfg, ['list', '--not-posted', '--system', 'tracker', '--date', '2026-10-28']), [])
+  // the earlier mark kept its record
+  const shown = await jsonOf(cfg, ['show', one.id])
+  assert.equal(shown.posts[0].record, 'W-1')
+  assert.equal((await jsonOf(cfg, [...bulk.slice(0, 5), '--system', 'nope'])).error, 'system')
+})
+
+test('an entry entered, then removed, moved or brought back: said on the change, and listed as changed after (removed ones too)', async () => {
+  const cfg = posting((await setUp()).cfg)
+  const one = await jsonOf(cfg, addAt('09:00', 'Support', 'Case 10001 X: work'))
+  await jsonOf(cfg, ['post', one.id, '--system', 'erp'])
+  await jsonOf(cfg, ['post', one.id, '--system', 'tracker'])
+  const range = ['--from', '2026-10-27', '--to', '2026-10-28']
+  const moved = await run(cfg, ['move', one.id, '2026-10-27'])
+  assert.match(moved.at(-1) ?? '', /Entered in erp, tracker already: change it there too/)
+  const removed = await run(cfg, ['rm', one.id])
+  assert.match(removed.at(-1) ?? '', /Entered in erp, tracker: take it out there too/)
+  const listed = await jsonOf(cfg, ['list', '--changed-after-post', ...range])
+  assert.deepEqual(
+    listed.map((e: { id: string; deleted?: number }) => [e.id, typeof e.deleted]),
+    [[one.id, 'number']],
+  )
+  assert.match((await run(cfg, ['list', '--changed-after-post', ...range]))[0] ?? '', /removed/)
+  // the system named: only its stale marks
+  await jsonOf(cfg, ['restore', one.id])
+  const restored = await run(cfg, ['show', one.id])
+  assert.match(restored[0] ?? '', /changed after: erp, tracker/)
+  await jsonOf(cfg, ['post', one.id, '--system', 'tracker'])
+  assert.match((await run(cfg, ['show', one.id]))[0] ?? '', /posted erp, tracker \(changed after: erp\)/)
+  assert.deepEqual(await jsonOf(cfg, ['list', '--changed-after-post', '--system', 'tracker', ...range]), [])
+  assert.equal((await jsonOf(cfg, ['list', '--changed-after-post', '--system', 'erp', ...range])).length, 1)
+})
+
+test('a post or unpost by id writes, so it takes no --dry-run and no range; the count is of the marks it changed', async () => {
+  const cfg = posting((await setUp()).cfg)
+  const one = await jsonOf(cfg, addAt('09:00', 'Support', 'Case 10001 X: work'))
+  assert.equal((await jsonOf(cfg, ['post', one.id, '--system', 'erp', '--dry-run'])).error, 'dryRunById')
+  assert.equal((await jsonOf(cfg, ['unpost', one.id, '--system', 'erp', '--dry-run'])).error, 'dryRunById')
+  assert.equal(
+    (await jsonOf(cfg, ['post', one.id, '--system', 'erp', '--client', 'client-a', '--to', '2026-10-28'])).error,
+    'idsAndRange',
+  )
+  assert.deepEqual((await jsonOf(cfg, ['show', one.id])).posts, [], 'nothing written')
+  // none to take off, or one already as it would be: no change, counted as none
+  assert.equal((await jsonOf(cfg, ['unpost', one.id, '--system', 'erp'])).count, 0)
+  assert.equal((await jsonOf(cfg, ['post', one.id, '--system', 'erp'])).count, 1)
+  assert.equal((await jsonOf(cfg, ['post', one.id, '--system', 'erp'])).count, 0)
+  assert.match((await run(cfg, ['post', one.id, '--system', 'erp'])).at(-1) ?? '', /ok · 0 entries marked/)
+})
+
+test('import: Toggl’s Billable left aside unless asked: an all-No export keeps the config’s, a re-import with --update changes nothing', async () => {
+  const { dir, cfg: base } = await setUp()
+  const cfg = posting(base)
+  const csv = join(dir, 'toggl.csv')
+  const head = 'Client,Project,Description,Billable,Start date,Start time,End date,End time,Duration,Tags'
+  writeFileSync(
+    csv,
+    [
+      head,
+      'Client A,Support,Case 10001 X: work,No,2026-10-28,16:00:00,2026-10-28,17:30:00,01:30:00,',
+      'Client A,Support,Case 10002 Y: work,No,2026-10-28,18:00:00,2026-10-28,18:30:00,00:30:00,',
+    ].join('\n'),
+  )
+  const map = ['--tz', 'Europe/Istanbul', '--map', 'Client A=client-a']
+  assert.equal((await jsonOf(cfg, ['import', csv, ...map])).added, 2)
+  const day = async () =>
+    (await jsonOf(cfg, ['list', '--date', '2026-10-28'])) as {
+      billable: boolean
+      billableDefault: boolean
+      rev: number
+    }[]
+  assert.deepEqual(
+    (await day()).map(e => [e.billable, e.billableDefault, e.rev]),
+    [
+      [true, true, 1],
+      [true, true, 1],
+    ],
+  )
+  const again = await jsonOf(cfg, ['import', csv, ...map, '--update'])
+  assert.deepEqual([again.added, again.already, again.changed.length, again.updated.length], [0, 2, 0, 0])
+  assert.deepEqual(
+    (await day()).map(e => e.rev),
+    [1, 1],
+  )
+  // asked: the dry run says how many turn non-billable, the run sets them
+  const dry = await jsonOf(cfg, ['import', csv, ...map, '--billable-from-toggl', '--update', '--dry-run'])
+  assert.deepEqual([dry.nonBillable, dry.changed.length], [2, 2])
+  assert.match(
+    (await run(cfg, ['import', csv, ...map, '--billable-from-toggl', '--update', '--dry-run'])).join('\n'),
+    /2 rows would be non-billable, as Toggl’s Billable says/,
+  )
+  // without --update a row that differs is left as it is: none would be
+  assert.equal((await jsonOf(cfg, ['import', csv, ...map, '--billable-from-toggl', '--dry-run'])).nonBillable, 0)
+  await jsonOf(cfg, ['import', csv, ...map, '--billable-from-toggl', '--update'])
+  assert.deepEqual(
+    (await day()).map(e => [e.billable, e.billableDefault]),
+    [
+      [false, false],
+      [false, false],
+    ],
+  )
+})
+
+test('an edit that changes nothing asks for no change in the systems; the removed ones listed are counted apart', async () => {
+  const cfg = posting((await setUp()).cfg)
+  const one = await jsonOf(cfg, addAt('09:00', 'Support', 'Case 10001 X: work'))
+  await jsonOf(cfg, ['post', one.id, '--system', 'erp'])
+  const same = await run(cfg, ['edit', one.id, '--description', 'Case 10001 X: work'])
+  assert.equal(same.length, 1, 'no "change it there too" for a change of nothing')
+  const real = await run(cfg, ['edit', one.id, '--description', 'Case 10001 X: more'])
+  assert.match(real.at(-1) ?? '', /change it there too/)
+  await run(cfg, ['rm', one.id])
+  assert.match(
+    (await run(cfg, ['list', '--changed-after-post', '--date', '2026-10-28'])).at(-1) ?? '',
+    /0 entries, 0:00 · removed 1/,
+  )
 })

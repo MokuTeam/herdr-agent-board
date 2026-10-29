@@ -20,7 +20,11 @@ const json = async (res: Response) => (await res.json()) as Record<string, unkno
 const TIME = {
   zone: 'America/New_York',
   clients: {
-    'client-a': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'up' }] },
+    'client-a': {
+      projects: ['Support'],
+      billing: [{ group: 'ref', step: 30, round: 'up' }],
+      systems: ['erp', { id: 'tracker', title: 'Tracker' }],
+    },
     // billed under the time worked: to the nearest 30 minutes, and down to them
     'client-n': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'nearest' }] },
     'client-d': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'down' }] },
@@ -153,7 +157,17 @@ const add = {
   start: `${NEAR}T13:00:00Z`,
   stop: `${NEAR}T14:30:00Z`,
 }
-type Made = { id: string; rev: number; by: unknown; seconds: number; date: string; stop: string }
+type Made = {
+  id: string
+  rev: number
+  by: unknown
+  seconds: number
+  date: string
+  stop: string
+  billable: boolean
+  billableDefault: boolean
+  posts: { system: string; rev: number; record: string | null; changedAfter: boolean }[]
+}
 
 test('changes as the owner: add, a trim with the revision read, a stale one refused, a move, remove and restore', async () => {
   const { url, post } = await writableBoard()
@@ -315,6 +329,77 @@ test('no change before the database has a backup target and a passphrase', async
   })
   assert.equal(res.status, 409)
   assert.match(String((await json(res)).error), /backed up/)
+})
+
+test('billable set on an entry from the page, and back to the config’s; the day says each client’s settings', async () => {
+  const { url, post } = await writableBoard()
+  const e = (await post({ ...add, billable: false }))[1].entry as Made
+  assert.deepEqual([e.billable, e.billableDefault], [false, false])
+  const back = (await post({ op: 'edit', id: e.id, rev: e.rev, billable: null }))[1].entry as Made
+  assert.deepEqual([back.billable, back.billableDefault, back.rev], [true, true, 2])
+  assert.equal((await post({ op: 'edit', id: e.id, rev: back.rev, billable: 'no' }))[1].code, 'usage')
+  assert.equal(
+    (await post({ ...add, start: `${NEAR}T16:00:00Z`, stop: `${NEAR}T16:30:00Z`, billable: null }))[1].code,
+    'usage',
+  )
+  const day = await json(await fetch(`${url}/api/time?date=${NEAR}`))
+  assert.deepEqual((day.settings as Record<string, unknown>)['client-a'], {
+    billable: true,
+    nonBillable: [],
+    systems: [
+      { id: 'erp', title: 'erp' },
+      { id: 'tracker', title: 'Tracker' },
+    ],
+  })
+})
+
+test('post and unpost from the page: each entry with the revision read, a line at once, all or none', async () => {
+  const { url, post } = await writableBoard()
+  const one = (await post(add))[1].entry as Made
+  const two = (await post({ ...add, start: `${NEAR}T15:00:00Z`, stop: `${NEAR}T15:30:00Z` }))[1].entry as Made
+  const line = [
+    { id: one.id, rev: one.rev },
+    { id: two.id, rev: two.rev },
+  ]
+  // every entry says its revision; one stale refuses the whole line
+  assert.equal((await post({ op: 'post', system: 'erp', entries: [{ id: one.id }] }))[1].code, 'rev')
+  const [stale, why] = await post({ op: 'post', system: 'erp', entries: [line[0], { id: two.id, rev: 9 }] })
+  assert.deepEqual([stale, why.code], [409, 'changedSince'])
+  assert.equal((await post({ op: 'post', system: 'nope', entries: line }))[1].code, 'system')
+  assert.equal((await post({ op: 'post', entries: line }))[1].code, 'noSystem')
+  const day = async () => (await json(await fetch(`${url}/api/time?date=${NEAR}`))).entries as Made[]
+  assert.deepEqual(
+    (await day()).map(e => e.posts),
+    [[], []],
+    'nothing marked',
+  )
+  const [status, marked] = await post({ op: 'post', system: 'erp', entries: line })
+  assert.equal(status, 200)
+  assert.deepEqual(
+    (marked.entries as Made[]).map(e => [e.id, e.rev, e.posts.map(p => [p.system, p.rev, p.changedAfter])]),
+    [
+      [one.id, 1, [['erp', 1, false]]],
+      [two.id, 1, [['erp', 1, false]]],
+    ],
+  )
+  // changed after: the day shows it on the entry
+  await post({ op: 'edit', id: one.id, rev: 1, description: 'Case 10001 X: more' })
+  assert.deepEqual(
+    (await day()).map(e => e.posts[0]?.changedAfter),
+    [true, false],
+  )
+  // an Undo putting the marks back as they were: the record and the revision they recorded
+  const undone = await post({ op: 'unpost', system: 'erp', entries: [{ id: one.id, rev: 2 }] })
+  assert.deepEqual((undone[1].entries as Made[])[0]?.posts, [])
+  const [, back] = await post({
+    op: 'post',
+    system: 'erp',
+    entries: [{ id: one.id, rev: 2, record: 'TR-1', asOf: 1 }],
+  })
+  assert.deepEqual(
+    (back.entries as Made[])[0]?.posts.map(p => [p.record, p.rev, p.changedAfter]),
+    [['TR-1', 1, true]],
+  )
 })
 
 test('Raise and Trim say the figure the page showed: a line that bills otherwise now is refused, nothing changed', async () => {

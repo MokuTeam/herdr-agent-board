@@ -4,11 +4,13 @@
 // as it was, and a duration that is none is said and keeps Save waiting) or stepped by -15 and
 // +15 (a trim is the usual change; an untouched time keeps its seconds), its work date (a change
 // moves it), its tags as tokens (Enter or a comma adds one, its x or Backspace in the empty field
-// takes one off, the board's tags offered under them, twenty at most); Save, Delete and Cancel. A
-// new entry has a client too (its projects follow it), no Delete, and its date is the day its
-// times are on. Changed elsewhere since it was opened (`stale`): it says so, and Save waits for
-// Reload, which shows the entry as it is now. What the board refuses is said under the fields,
-// and the draft stays. Times that make no duration, or over 12 hours, are said under the times.
+// takes one off, the board's tags offered under them, twenty at most), billable as a switch (its
+// default the config's, said while the entry follows it); Save, Delete and Cancel. An entry
+// entered into its client's systems says so (a change is to be made there too). A new entry has a
+// client too (its projects follow it), no Delete, and its date is the day its times are on.
+// Changed elsewhere since it was opened (`stale`): it says so, and Save waits for Reload, which
+// shows the entry as it is now. What the board refuses is said under the fields, and the draft
+// stays. Times that make no duration, or over 12 hours, are said under the times.
 // Laid out as the row it opened from grown in place: the description first, then what it is for,
 // when, and the rest; who logged it quietly under them; Delete apart from Cancel and Save.
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
@@ -30,6 +32,15 @@ import {
 } from '../../models/time.ts'
 import { classNames } from '../class-names.ts'
 
+/** Names joined as the language joins them: "ERP and Tracker", "ERP и Tracker". */
+function listText(names: readonly string[], lang: string): string {
+  try {
+    return new Intl.ListFormat(lang, { type: 'conjunction' }).format(names)
+  } catch {
+    return names.join(', ')
+  }
+}
+
 /** The most tags an entry has (the board refuses more). */
 const MAX_TAGS = 20
 
@@ -44,6 +55,10 @@ export interface EntryEditorProps {
   by?: ReactNode
   /** Tags to offer, in the order to offer them (the board's: the held ones first). */
   tags?: string[] | undefined
+  /** Whether a client's entries on a project are billable as the config says. */
+  billableDefault?: ((client: string, project: string) => boolean) | undefined
+  /** The systems the entry is entered in (their names): a change is to be made there too. */
+  entered?: string[] | undefined
   busy: boolean
   error: string | null
   /** The entry changed elsewhere since it was opened: Save waits for Reload. */
@@ -63,6 +78,8 @@ export function EntryEditor({
   projects,
   by,
   tags: offered = [],
+  billableDefault = () => true,
+  entered = [],
   busy,
   error,
   stale,
@@ -112,6 +129,7 @@ export function EntryEditor({
       : seconds > LONG_SECONDS
         ? t('time.edit.long')
         : ''
+  const billable = d.billable ?? billableDefault(d.client, d.project)
   const tags = tagList(d.tags)
   const full = tags.length >= MAX_TAGS
   const addTag = (text: string) => {
@@ -353,6 +371,25 @@ export function EntryEditor({
           )}
         </div>
       </div>
+      <label className="time-switch">
+        <input
+          type="checkbox"
+          role="switch"
+          checked={billable}
+          aria-checked={billable}
+          disabled={busy}
+          // the config's way again is no setting of its own: the entry follows the config from then on
+          onChange={e => {
+            const on = e.target.checked
+            setD(x => ({ ...x, billable: on === billableDefault(x.client, x.project) ? null : on }))
+          }}
+        />
+        <span>{t('time.edit.billable')}</span>
+        {d.billable === null && <small>{t('time.edit.billableDefault')}</small>}
+      </label>
+      {entered.length > 0 && (
+        <p className="time-entered">{t('time.edit.entered', { systems: listText(entered, t.lang) })}</p>
+      )}
       {error && (
         <p className="access-problem" role="alert">
           {error}

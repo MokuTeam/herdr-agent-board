@@ -1,16 +1,24 @@
 // The Time panel (#233) as the page has it: GET /api/time's day read with a guard, and the words
 // and numbers the panel shows: a duration in one form everywhere, a line's label and rule, an
 // entry's description under its line, its times on this browser's clock, a date's name, and
-// whether a swipe changes the day. The rules
+// whether a swipe changes the day; an entry billable or not, and a line entered into its client's
+// systems or not (what a tap marks, and what its Undo puts back). The rules
 // themselves are the board's (src/core/time.ts); the page only shows them.
-import { type ClientDay, cleanTag, type DayLine, type TimeEntry } from '../../../src/core/time.ts'
+import {
+  type ClientDay,
+  cleanTag,
+  type DayLine,
+  type EntryView,
+  type TimeEntry,
+  type TimeSystem,
+} from '../../../src/core/time.ts'
 import type { Translator } from '../../../src/core/types.ts'
 
 export interface TimeDay {
   date: string
   zone: string
   days: ClientDay[]
-  entries: (TimeEntry & { seconds: number })[]
+  entries: EntryView[]
   /** config.json's `time` does not check out: what, in a line. */
   problems?: string | null
   /** The lanes that take time (null: every lane), and each one's projects (null: any). */
@@ -18,6 +26,8 @@ export interface TimeDay {
   projects?: Record<string, string[] | null>
   /** Tags to offer: the ones held out of the totals first, then the ones entries have, most used first. */
   tags?: string[]
+  /** Each listed client's billable default (by project) and the systems its time is entered in. */
+  settings?: Record<string, { billable: boolean; nonBillable: string[]; systems: TimeSystem[] }>
 }
 
 /** A day's answer shows under that day's name only: another day's, arriving late, is not shown. */
@@ -173,7 +183,13 @@ export interface Draft {
   stopWas: number | null
   /** Tags as typed: words, commas between them. */
   tags: string
+  /** Billable as set on the entry; null: as the config says. */
+  billable: boolean | null
 }
+
+/** What an entry's view says of its billable: set on it (true, false), or null when it follows the config. */
+export const billableSet = (e: { billable?: boolean; billableDefault?: boolean }): boolean | null =>
+  e.billableDefault === false && typeof e.billable === 'boolean' ? e.billable : null
 
 const DAY_MS = 86_400_000
 const pad = (n: number): string => String(n).padStart(2, '0')
@@ -189,7 +205,10 @@ export const localClock = (at: number): string => {
 }
 
 export function draftOf(
-  e: Pick<TimeEntry, 'client' | 'project' | 'description' | 'date' | 'start' | 'stop' | 'tags'>,
+  e: Pick<TimeEntry, 'client' | 'project' | 'description' | 'date' | 'start' | 'stop' | 'tags'> & {
+    billable?: boolean
+    billableDefault?: boolean
+  },
 ): Draft {
   const startAt = Date.parse(e.start)
   const stopAt = Date.parse(e.stop)
@@ -206,6 +225,7 @@ export function draftOf(
     startWas: startAt,
     stopWas: stopAt,
     tags: e.tags.join(', '),
+    billable: billableSet(e),
   }
 }
 
@@ -226,6 +246,7 @@ export function newDraft(client: string, project: string, date: string, now: num
     startWas: null,
     stopWas: null,
     tags: '',
+    billable: null,
   }
 }
 
@@ -346,7 +367,10 @@ export const withoutTag = (tags: string, tag: string): string =>
  * time keeps its seconds.
  */
 export function changesOf(
-  base: Pick<TimeEntry, 'id' | 'rev' | 'client' | 'project' | 'description' | 'date' | 'start' | 'stop' | 'tags'>,
+  base: Pick<TimeEntry, 'id' | 'rev' | 'client' | 'project' | 'description' | 'date' | 'start' | 'stop' | 'tags'> & {
+    billable?: boolean
+    billableDefault?: boolean
+  },
   d: Draft,
 ): { edit: Record<string, unknown> | null; move: string | null } | null {
   const edit: Record<string, unknown> = {}
@@ -360,6 +384,8 @@ export function changesOf(
   } else if (times.stop !== Date.parse(base.stop)) edit.stop = new Date(times.stop).toISOString()
   const tags = tagList(d.tags)
   if (tags.join(',') !== base.tags.join(',')) edit.tags = tags
+  // set either way, or back to the config's (null)
+  if (d.billable !== billableSet(base)) edit.billable = d.billable
   return {
     edit: Object.keys(edit).length ? { op: 'edit', id: base.id, rev: base.rev, ...edit } : null,
     move: d.date !== base.date ? d.date : null,
@@ -378,5 +404,75 @@ export function addOf(d: Draft): Record<string, unknown> | null {
     tags: tagList(d.tags),
     start: new Date(times.start).toISOString(),
     stop: new Date(times.stop).toISOString(),
+    ...(d.billable !== null && { billable: d.billable }),
   }
+}
+
+// ------------------------------------------------------------------ entered into the clients' systems
+
+/** A line's state in one system: every entry entered, some, none, or one changed after it was. */
+export type MarkState = 'entered' | 'partly' | 'not' | 'changed'
+
+type Posted = Pick<EntryView, 'id' | 'rev' | 'posts'>
+
+/** Where entries stand in a system: a change after entering first, then all, none, or some. */
+export function markState(entries: readonly Posted[], system: string): MarkState {
+  const posts = entries.map(e => e.posts.find(p => p.system === system))
+  if (posts.some(p => p?.changedAfter)) return 'changed'
+  if (posts.every(Boolean)) return 'entered'
+  return posts.some(Boolean) ? 'partly' : 'not'
+}
+
+/** A post or an unpost as the page sends it (POST /api/time). */
+export interface MarkBody {
+  op: 'post' | 'unpost'
+  system: string
+  entries: { id: string; rev: number; record?: string | null; asOf?: number }[]
+}
+
+/**
+ * What a tap on a line's mark in a system sends, and what its Undo sends back. Entered: every
+ * entry's mark taken off; Undo puts each back as it was (its record, the revision it recorded).
+ * Otherwise the entries not entered, or changed after, marked at their revision now; Undo takes
+ * off the new ones and puts the earlier ones back as they were.
+ */
+export function markPlan(entries: readonly Posted[], system: string): { send: MarkBody; undo: MarkBody[] } {
+  const was = (e: Posted) => e.posts.find(p => p.system === system)
+  if (markState(entries, system) === 'entered') {
+    const all = entries.map(e => ({ id: e.id, rev: e.rev }))
+    return {
+      send: { op: 'unpost', system, entries: all },
+      undo: [
+        {
+          op: 'post',
+          system,
+          entries: entries.map(e => ({
+            id: e.id,
+            rev: e.rev,
+            record: was(e)?.record ?? null,
+            asOf: was(e)?.rev ?? e.rev,
+          })),
+        },
+      ],
+    }
+  }
+  const fresh = entries.filter(e => !was(e))
+  const stale = entries.filter(e => was(e)?.changedAfter)
+  const undo: MarkBody[] = []
+  if (fresh.length) undo.push({ op: 'unpost', system, entries: fresh.map(e => ({ id: e.id, rev: e.rev })) })
+  if (stale.length)
+    undo.push({
+      op: 'post',
+      system,
+      entries: stale.map(e => ({ id: e.id, rev: e.rev, record: was(e)?.record ?? null, asOf: was(e)?.rev ?? e.rev })),
+    })
+  return { send: { op: 'post', system, entries: [...fresh, ...stale].map(e => ({ id: e.id, rev: e.rev })) }, undo }
+}
+
+/** A client's billed time not yet entered: its lines with an entry missing a mark in one of the systems. */
+export function notEntered(day: ClientDay, byId: ReadonlyMap<string, Posted>, systems: readonly string[]): number {
+  if (!systems.length) return 0
+  return day.lines
+    .filter(l => systems.some(sys => l.entries.some(id => !byId.get(id)?.posts.some(p => p.system === sys))))
+    .reduce((n, l) => n + l.billedSeconds, 0)
 }

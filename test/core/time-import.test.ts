@@ -151,3 +151,24 @@ test('dayTotals: per day and lane, for the dry run', () => {
     ],
   )
 })
+
+test('Toggl’s Billable: the CSV’s Yes and No and the JSON’s field read as set; a file without it says nothing', () => {
+  assert.deepEqual(
+    rowsFromCsv(CSV, zoned).rows.map(r => r.billable),
+    [true, false, true],
+  )
+  const without = CSV.replace(',Billable,', ',Paid,')
+  assert.deepEqual(
+    rowsFromCsv(without, zoned).rows.map(r => 'billable' in r),
+    [false, false, false],
+  )
+  const json = rowsFromJson([
+    { id: 1, start: '2026-10-28T06:00:00Z', duration: 600, billable: true },
+    { id: 2, start: '2026-10-28T07:00:00Z', duration: 600, billable: false },
+    { id: 3, start: '2026-10-28T08:00:00Z', duration: 600 },
+  ])
+  assert.deepEqual(
+    json.rows.map(r => r.billable),
+    [true, false, undefined],
+  )
+})

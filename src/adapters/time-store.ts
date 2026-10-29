@@ -7,10 +7,16 @@
 // import's only with `force` (the owner asked for it; the master session while billing). The
 // owner, on the board, changes any. A change can say which revision it read (`expect`): it is
 // refused when the entry changed since.
+//
+// Entered into a client's systems (#240): a mark per entry and system (post, unpost), with the
+// entry's revision then. A mark is no change of the entry (its revision stays), so anyone who may
+// write marks any entry, without `force`; every mark and unmark has its journal row.
 import { randomBytes } from 'node:crypto'
 import { t } from '../core/lang.ts'
 import {
   type Actor,
+  billableByDefault,
+  billableOf,
   cleanTag,
   cleanText,
   clientDay,
@@ -21,6 +27,7 @@ import {
   isoOf,
   problemsText,
   secondsOf,
+  systemsFor,
   type TimeConfig,
   type TimeEntry,
   zoneOf,
@@ -54,6 +61,7 @@ interface Row {
   rev: number
   deleted: number | null
   toggl: string | null
+  billable: number | null
 }
 
 const actorOf = (s: string): Actor => {
@@ -88,11 +96,16 @@ function entryOf(r: Row): TimeEntry {
     rev: r.rev,
     ...(r.deleted !== null && { deleted: r.deleted }),
     ...(r.toggl !== null && { toggl: r.toggl }),
+    ...(r.billable !== null && { billable: r.billable === 1 }),
   }
 }
 
 const COLUMNS =
-  'id, client, project, description, tags, start, stop, date, by, at, changed, changed_by, rev, deleted, toggl'
+  'id, client, project, description, tags, start, stop, date, by, at, changed, changed_by, rev, deleted, toggl, billable'
+
+/** The column's value: 1 or 0 as set, NULL as the config says. */
+const billableColumn = (e: Pick<TimeEntry, 'billable'>): number | null =>
+  e.billable === undefined ? null : e.billable ? 1 : 0
 
 export function getEntry(db: BoardDb, id: string): TimeEntry | null {
   const r = db.db.query(`SELECT ${COLUMNS} FROM time_entries WHERE id = ?`).get(id) as Row | null
@@ -170,7 +183,7 @@ const newId = (db: BoardDb): string => {
 
 function insert(tx: Tx, e: TimeEntry): void {
   tx.db
-    .query(`INSERT INTO time_entries (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .query(`INSERT INTO time_entries (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(
       e.id,
       e.client,
@@ -187,13 +200,14 @@ function insert(tx: Tx, e: TimeEntry): void {
       e.rev,
       e.deleted ?? null,
       e.toggl ?? null,
+      billableColumn(e),
     )
 }
 
 function update(tx: Tx, e: TimeEntry): void {
   tx.db
     .query(
-      'UPDATE time_entries SET client = ?, project = ?, description = ?, tags = ?, start = ?, stop = ?, date = ?, changed = ?, changed_by = ?, rev = ?, deleted = ? WHERE id = ?',
+      'UPDATE time_entries SET client = ?, project = ?, description = ?, tags = ?, start = ?, stop = ?, date = ?, changed = ?, changed_by = ?, rev = ?, deleted = ?, billable = ? WHERE id = ?',
     )
     .run(
       e.client,
@@ -207,6 +221,7 @@ function update(tx: Tx, e: TimeEntry): void {
       actorText(e.changedBy),
       e.rev,
       e.deleted ?? null,
+      billableColumn(e),
       e.id,
     )
 }
@@ -240,6 +255,8 @@ export interface NewEntry {
   startGiven: boolean
   newProject?: boolean
   toggl?: string
+  /** Set billable or not; absent: as the config says. */
+  billable?: boolean
 }
 
 /** How long a repeat of an `add` without a start is taken for the first one. */
@@ -282,6 +299,7 @@ export function addEntry(
     changedBy: actor,
     rev: 1,
     ...(n.toggl && { toggl: n.toggl }),
+    ...(n.billable !== undefined && { billable: n.billable }),
   }
   const before = sameLive(db, entry)
   if (before) return { entry: before, existing: true, reason: 'same' }
@@ -326,6 +344,8 @@ export interface EntryChange {
   /** The whole set of tags instead (the panel sends what its field holds). */
   tags?: string[]
   newProject?: boolean
+  /** Billable or not as set; null: back to what the config says. */
+  billable?: boolean | null
 }
 
 function changed(
@@ -392,8 +412,13 @@ export function editEntry(
       // the work date is stamped again only when the start or the client changes: a trim of the
       // stop moves no day already billed, whatever the zone says now
       const moved = (ch.start !== undefined && isoOf(ch.start) !== e.start) || client !== e.client
+      const { billable: was, ...rest } = e
+      // set the way the config has it already, on an entry that follows the config: no change
+      const asConfig = was === undefined && ch.billable === billableByDefault(c, client, project)
+      const billable = ch.billable === undefined ? was : ch.billable === null || asConfig ? undefined : ch.billable
+      // billable last, where a read entry has it: the no-change check compares the two as JSON
       return {
-        ...e,
+        ...rest,
         client,
         project,
         description,
@@ -401,6 +426,7 @@ export function editEntry(
         start: isoOf(start),
         stop: isoOf(stop),
         date: moved ? dateIn(start, zoneOf(c, client)) : e.date,
+        ...(billable !== undefined && { billable }),
       }
     },
     'edit',
@@ -603,7 +629,7 @@ export type ImportVerdict =
   | { kind: 'already'; stored: TimeEntry }
   | { kind: 'changed'; stored: TimeEntry; next: TimeEntry; fields: string[] }
 
-const IMPORT_FIELDS = ['client', 'project', 'description', 'start', 'stop', 'tags'] as const
+const IMPORT_FIELDS = ['client', 'project', 'description', 'start', 'stop', 'tags', 'billable'] as const
 
 /**
  * A CSV row's key (the Detailed report has no id): its lane and the start Toggl gave it, kept on
@@ -637,6 +663,7 @@ function importedEntry(c: TimeConfig, n: ImportRow, now: number): TimeEntry {
     changedBy: 'import',
     rev: 1,
     toggl: n.toggl || csvKey(n.client, n.start),
+    ...(n.billable !== undefined && { billable: n.billable }),
   }
 }
 
@@ -686,20 +713,30 @@ export class ImportIndex {
   }
 }
 
-/** The fields a stored entry has otherwise than a Toggl row's. */
-const differing = (stored: TimeEntry, entry: TimeEntry): string[] =>
+/**
+ * The fields a stored entry has otherwise than a Toggl row's. Billable only when the row says it
+ * (the import takes Toggl's Billable on --billable-from-toggl), as each comes out: an entry that
+ * follows the config and a row that says what the config says are the same.
+ */
+const differing = (c: TimeConfig, stored: TimeEntry, entry: TimeEntry): string[] =>
   IMPORT_FIELDS.filter(f =>
-    f === 'tags' ? [...stored.tags].sort().join('\u0000') !== entry.tags.join('\u0000') : stored[f] !== entry[f],
+    f === 'tags'
+      ? [...stored.tags].sort().join('\u0000') !== entry.tags.join('\u0000')
+      : f === 'billable'
+        ? entry.billable !== undefined && billableOf(c, stored) !== billableOf(c, entry)
+        : stored[f] !== entry[f],
   )
 
 /**
  * How the rows of one lane and start are paired with the entries the store has there, each pass
- * over the rows not yet paired: alike in every field first; then the same project and
+ * over the rows not yet paired: alike in every field first; then alike but for billable (a row
+ * that says it, with --billable-from-toggl, still finds its own entry before another's); then the same project and
  * description (its stop or tags changed); the same project and stop (its words changed); the same
  * project; the same description; the same stop; then whatever is left, one to one.
  */
-const PAIRINGS: ((stored: TimeEntry, row: TimeEntry) => boolean)[] = [
-  (a, b) => differing(a, b).length === 0,
+const pairings = (c: TimeConfig): ((stored: TimeEntry, row: TimeEntry) => boolean)[] => [
+  (a, b) => differing(c, a, b).length === 0,
+  (a, b) => differing(c, a, b).every(f => f === 'billable'),
   (a, b) => a.project === b.project && a.description === b.description,
   (a, b) => a.project === b.project && a.stop === b.stop,
   (a, b) => a.project === b.project,
@@ -711,7 +748,7 @@ const PAIRINGS: ((stored: TimeEntry, row: TimeEntry) => boolean)[] = [
 /**
  * What the store makes of Toggl's rows (index: what it has), each row's verdict in its place. A
  * row with Toggl's id is that entry. The others are known again by their lane and the start Toggl
- * gave them, a lane and start at a time: its rows are paired with the entries there (PAIRINGS),
+ * gave them, a lane and start at a time: its rows are paired with the entries there (pairings),
  * each entry with one row at most, so rows of one start that differ are each an entry of their
  * own. A row paired with an entry alike is `already`; with a removed one, `already` (it stays
  * removed); with one that differs (changed in Toggl, or moved or changed on the board), `changed`,
@@ -729,7 +766,7 @@ export function importVerdicts(
   const paired = (stored: TimeEntry, entry: TimeEntry): ImportVerdict => {
     index.take(stored)
     if (stored.deleted) return { kind: 'already', stored }
-    const fields = differing(stored, entry)
+    const fields = differing(c, stored, entry)
     return fields.length ? { kind: 'changed', stored, next: entry, fields } : { kind: 'already', stored }
   }
   rows.forEach((n, i) => {
@@ -745,7 +782,7 @@ export function importVerdicts(
   for (const group of groups.values()) {
     const first = entries[group[0] as number] as TimeEntry
     const there = index.at(first.client, first.start)
-    for (const pairs of PAIRINGS)
+    for (const pairs of pairings(c))
       for (const i of group) {
         if (out[i]) continue
         const stored = there.find(x => !index.isTaken(x) && pairs(x, entries[i] as TimeEntry))
@@ -755,7 +792,7 @@ export function importVerdicts(
     for (const i of group) {
       if (out[i]) continue
       const e = entries[i] as TimeEntry
-      const twin = fresh.find(x => differing(x, e).length === 0)
+      const twin = fresh.find(x => differing(c, x, e).length === 0)
       if (twin) {
         out[i] = { kind: 'already', stored: twin }
         continue
@@ -856,4 +893,158 @@ export function importEntries(
     })
   }
   return { added, already, changed: changes, updated }
+}
+
+// ------------------------------------------------------------------ entered into the clients' systems
+
+/** An entry entered into one of its client's systems. */
+export interface Mark {
+  entry: string
+  system: string
+  at: number
+  by: Actor
+  /** That system's own id for what was entered (a time record's, a worklog's); null: none given. */
+  record: string | null
+  /** The entry's revision it was entered at: a later one on the entry is a change after entering. */
+  rev: number
+}
+
+interface MarkRow {
+  entry: string
+  system: string
+  at: number
+  by: string
+  record: string | null
+  rev: number
+}
+
+const markOf = (r: MarkRow): Mark => ({ ...r, by: actorOf(r.by) })
+/** A mark as its journal row keeps it. */
+const markJson = (m: Mark) => ({ ...m, by: actorText(m.by) })
+
+const MARK_COLUMNS = 'entry, system, at, by, record, rev'
+
+function markIn(db: BoardDb, entry: string, system: string): Mark | null {
+  const r = db.db
+    .query(`SELECT ${MARK_COLUMNS} FROM time_marks WHERE entry = ? AND system = ?`)
+    .get(entry, system) as MarkRow | null
+  return r ? markOf(r) : null
+}
+
+/** The marks of these entries, by entry, each entry's in the order of their systems' ids. */
+export function marksOf(db: BoardDb, ids: readonly string[]): Map<string, Mark[]> {
+  const out = new Map<string, Mark[]>()
+  for (let at = 0; at < ids.length; at += 500) {
+    const chunk = ids.slice(at, at + 500)
+    const rows = db.db
+      .query(
+        `SELECT ${MARK_COLUMNS} FROM time_marks WHERE entry IN (${chunk.map(() => '?').join(', ')}) ORDER BY system`,
+      )
+      .all(...chunk) as MarkRow[]
+    for (const r of rows) out.set(r.entry, [...(out.get(r.entry) ?? []), markOf(r)])
+  }
+  return out
+}
+
+/** The system is one of the client's: refused otherwise, naming the ones it has. */
+function checkSystem(c: TimeConfig, client: string, system: string): void {
+  const systems = systemsFor(c, client)
+  if (!systems.some(x => x.id === system))
+    throw new TimeError('time.err.system', { client, system, known: systems.map(x => x.id).join(', ') || '-' })
+}
+
+/** An entry to mark: its id, the revision read (refused when it moved on), and what the mark keeps. */
+export interface PostItem {
+  id: string
+  /** The entry's revision as read: refused when the entry changed since. */
+  rev?: number
+  /** That system's id for the record; null: none; absent: the earlier mark's, if any. */
+  record?: string | null
+  /** The revision the mark records (an Undo putting an earlier mark back); absent: the entry's now. */
+  asOf?: number
+}
+
+/**
+ * Entries marked entered into `system`, one of each entry's client's systems, in one transaction:
+ * when, by whom, `record` (the item's, else `o.record`, else the earlier mark's), and the entry's
+ * revision now (or the item's `asOf`, no later than it). A mark already as it would be is left as
+ * it is; each one written has its journal row (`post`, the mark before and after), and is given
+ * back. The entry does not change. All or none: a removed, unknown or changed entry refuses the
+ * whole call.
+ */
+export function postEntries(
+  db: BoardDb,
+  c: TimeConfig,
+  items: readonly PostItem[],
+  system: string,
+  actor: Actor,
+  o: { record?: string; now?: number } = {},
+): Mark[] {
+  checkConfig(c)
+  const now = o.now ?? Date.now()
+  return db.write(actorText(actor), tx =>
+    items.flatMap(item => {
+      const e = getEntry(db, item.id)
+      if (!e) throw new TimeError('time.err.gone', { id: item.id })
+      if (e.deleted) throw new TimeError('time.err.removed', { id: e.id })
+      if (item.rev !== undefined && item.rev !== e.rev)
+        throw new TimeError('time.err.changedSince', { id: e.id, rev: e.rev })
+      checkSystem(c, e.client, system)
+      const asOf = item.asOf ?? e.rev
+      if (!Number.isInteger(asOf) || asOf < 1 || asOf > e.rev) throw new TimeError('time.err.rev')
+      const before = markIn(db, e.id, system)
+      const given = item.record !== undefined ? item.record : o.record
+      const record =
+        given === undefined ? (before?.record ?? null) : given === null ? null : cleanText(given, 200) || null
+      if (before && before.rev === asOf && before.record === record) return []
+      const after: Mark = { entry: e.id, system, at: now, by: actor, record, rev: asOf }
+      tx.db
+        .query(
+          `INSERT INTO time_marks (${MARK_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT (entry, system) DO UPDATE SET at = excluded.at, by = excluded.by, record = excluded.record, rev = excluded.rev`,
+        )
+        .run(after.entry, after.system, after.at, actorText(after.by), after.record, after.rev)
+      tx.journal({
+        store: 'time',
+        op: 'post',
+        ref: e.id,
+        before: before ? markJson(before) : null,
+        after: markJson(after),
+      })
+      return [after]
+    }),
+  )
+}
+
+/**
+ * Entries' marks in `system` taken off, in one transaction, each with its journal row (`unpost`,
+ * the mark it was). An entry with no mark there is left as it is; the system must be one of its
+ * client's, or one it has a mark in (a system since gone from the config). The removed marks.
+ */
+export function unpostEntries(
+  db: BoardDb,
+  c: TimeConfig,
+  items: readonly Pick<PostItem, 'id' | 'rev'>[],
+  system: string,
+  actor: Actor,
+): Mark[] {
+  checkConfig(c)
+  return db.write(actorText(actor), tx => {
+    const removed: Mark[] = []
+    for (const item of items) {
+      const e = getEntry(db, item.id)
+      if (!e) throw new TimeError('time.err.gone', { id: item.id })
+      if (item.rev !== undefined && item.rev !== e.rev)
+        throw new TimeError('time.err.changedSince', { id: e.id, rev: e.rev })
+      const before = markIn(db, e.id, system)
+      if (!before) {
+        checkSystem(c, e.client, system)
+        continue
+      }
+      tx.db.query('DELETE FROM time_marks WHERE entry = ? AND system = ?').run(e.id, system)
+      tx.journal({ store: 'time', op: 'unpost', ref: e.id, before: markJson(before), after: null })
+      removed.push(before)
+    }
+    return removed
+  })
 }

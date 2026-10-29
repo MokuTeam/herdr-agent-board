@@ -5,7 +5,11 @@
 // where they differ, each client's share as a bar; then each client with its own figure over its
 // billed lines, a line's entries under its name with their times on this browser's clock and the
 // description without the case the line is named after (who logged one: its hint, and its editor);
-// the held entries (a tag the config leaves out) apart; the zone once, at the foot. Every duration
+// the non-billable entries apart (worked, never billed), then the held ones (a tag the config
+// leaves out); the zone once, at the foot. Where a client's time is entered into its systems
+// (#240), each line says per system whether its entries are (all, some, none, or one changed after
+// it was), a tap marks or unmarks the whole line there with a toast's Undo, an entry's hint names
+// its marks, and the figures say how much billed time is not entered yet. Every duration
 // in one form (models/time.ts durationText), as the lanes' totals say it too. Asked when it opens
 // (always on today), when the day changes, and again whenever the board's time line says the store
 // changed; an answer that comes after a later question is dropped, and a day's figures show only
@@ -42,7 +46,12 @@ import {
   entryTimes,
   isTimeDay,
   lineLabel,
+  type MarkBody,
+  type MarkState,
+  markPlan,
+  markState,
   newDraft,
+  notEntered,
   rulesOf,
   ruleText,
   shiftDate,
@@ -58,6 +67,9 @@ import { EntryEditor } from './EntryEditor.tsx'
 
 /** The board said no: its words are the message. */
 class Refused extends Error {}
+
+/** A line's state in a system at a glance, beside the system's name. */
+const MARK_GLYPHS: Record<MarkState, string> = { entered: '✓', partly: '◐', not: '○', changed: '!' }
 
 /** How long a delete's Undo stays: long enough to read it and reach it on a phone. */
 const UNDO_MS = 7000
@@ -247,8 +259,40 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
       setRaising(false)
     }
   }
+  // A mark or an unmark of a line in a system: a change of its own, as Raise is; its toast's Undo
+  // puts the line back as it was (a newer change's toast takes the place of its Undo).
+  const [marking, setMarking] = useState(false)
+  const markLine = async (list: Entry[], system: { id: string; title: string }) => {
+    const plan = markPlan(list, system.id)
+    setMarking(true)
+    try {
+      await post(plan.send as unknown as Record<string, unknown>)
+      if (undoToken.current) dispatch({ type: 'toastHide', token: undoToken.current })
+      const token = nextToastToken()
+      undoToken.current = token
+      const back = async (bodies: MarkBody[]) => {
+        for (const b of bodies) await post(b as unknown as Record<string, unknown>)
+      }
+      toast(t(plan.send.op === 'post' ? 'time.mark.posted' : 'time.mark.unposted', { system: system.title }), false, {
+        action: { label: t('time.edit.undo'), run: () => void back(plan.undo).catch(err => toast(said(err), true)) },
+        ms: UNDO_MS,
+        token,
+      })
+    } catch (err) {
+      toast(said(err), true)
+    } finally {
+      setMarking(false)
+    }
+  }
   const takers = day?.clients ?? (data?.categories ?? []).map(c => c.id)
   const projectsOf = (c: string): string[] | null => day?.projects?.[c] ?? null
+  /** A client's settings as the day said them: its billable default and its systems. */
+  const settingsOf = (c: string) => day?.settings?.[c]
+  const systemsOf = (c: string) => settingsOf(c)?.systems ?? []
+  const billableDefault = (c: string, project: string): boolean => {
+    const own = settingsOf(c)
+    return own ? own.billable && !own.nonBillable.includes(project) : true
+  }
   const clientsForNew = client ? [client] : takers
 
   const go = (days: number) => setDate(d => shiftDate(d, days))
@@ -287,6 +331,28 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   /** What a billed figure leaves out, said once and quietly: the time worked where it differs, the rounding. */
   const about = (billed: number, worked: number, lines: Line[]) =>
     [billed !== worked ? t('time.worked', { time: dur(worked) }) : '', ...rulesOf(lines, t)].filter(Boolean).join(' · ')
+  /** A client's billed time not entered into its systems yet (none: nothing to enter). */
+  const unentered = (d: ClientDay) =>
+    notEntered(
+      d,
+      entries,
+      systemsOf(d.client).map(x => x.id),
+    )
+  /** The line under a figure: what it leaves out, then the billed time still to enter, only when there is some. */
+  const aboutLine = (text: string, open: number) =>
+    text || open > 0 ? (
+      <p className="time-about">
+        {text}
+        {open > 0 && (
+          <span className="time-unentered">
+            {text ? ' · ' : ''}
+            {t('time.notEntered', { time: dur(open) })}
+          </span>
+        )}
+      </p>
+    ) : null
+  /** How a line or an entry stands in a system, in words. */
+  const markText = (state: MarkState, system: string) => t(`time.mark.${state}`, { system })
   /** A new entry's draft: the one typed on this day and left open (for a client offered), else a fresh one. */
   const newOne = (() => {
     const first = clientsForNew[0] as string
@@ -317,6 +383,10 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
       clientTitle={title}
       projects={projectsOf}
       tags={shown?.tags}
+      billableDefault={billableDefault}
+      entered={systemsOf(now.client)
+        .filter(x => now.posts.some(p => p.system === x.id))
+        .map(x => x.title)}
       by={byOf(base)}
       busy={busy}
       error={editError}
@@ -360,7 +430,19 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
       </>
     )
     return (
-      <li className="time-entry" key={id} title={`${e.project} · ${byText(e, t)}`}>
+      <li
+        className="time-entry"
+        key={id}
+        title={[
+          `${e.project} · ${byText(e, t)}`,
+          ...systemsOf(e.client).flatMap(x => {
+            const p = e.posts.find(y => y.system === x.id)
+            return p
+              ? [`${markText(p.changedAfter ? 'changed' : 'entered', x.title)}${p.record ? ` (${p.record})` : ''}`]
+              : []
+          }),
+        ].join('\n')}
+      >
         {canEdit ? (
           <button type="button" className="time-open time-row" onClick={() => open1({ id, base: e, reload: 0 })}>
             {row}
@@ -371,9 +453,15 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
       </li>
     )
   }
-  /** A billed line: its name and project, its figure (from the time worked where rounding moved it), its entries, Raise or Trim to. */
-  const lineOf = (l: Line) => {
+  /**
+   * A billed line: its name and project, its figure (from the time worked where rounding moved it),
+   * its entries; under them, where it stands in each of the client's systems (a tap marks or unmarks
+   * it there) and Raise or Trim to.
+   */
+  const lineOf = (client: string) => (l: Line) => {
     const name = lineLabel(l, t)
+    const listed = l.entries.map(id => entries.get(id)).filter((e): e is Entry => !!e)
+    const systems = systemsOf(client)
     const last = l.entries[l.entries.length - 1]
     // what its entries can give, each kept a minute: Trim only where that reaches the billed figure
     const room = l.entries.reduce((n, id) => n + Math.max(0, (entries.get(id)?.seconds ?? 0) - 60), 0)
@@ -398,19 +486,57 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
         <ul className="time-entries">
           {l.entries.map(id => entryRow(id, l.group === 'day' ? '' : name, l.project, l.entries.length > 1))}
         </ul>
-        {align && last && (
-          <button
-            type="button"
-            className={align === 'raise' ? 'time-raise' : 'time-raise time-trim'}
-            disabled={busy || raising}
-            onClick={() => void alignTo(align, last, l.billedSeconds)}
-          >
-            {t(`time.edit.${align}`, { hours: dur(l.billedSeconds) })}
-          </button>
+        {(systems.length > 0 || align) && (
+          <div className="time-line-foot">
+            {systems.map(x => {
+              const state = markState(listed, x.id)
+              return (
+                <button
+                  type="button"
+                  key={x.id}
+                  className="time-mark"
+                  data-state={state}
+                  aria-pressed={state === 'entered'}
+                  // its state in words: the glyph and the colour are not read out
+                  aria-label={markText(state, x.title)}
+                  title={`${markText(state, x.title)}. ${t(state === 'entered' ? 'time.mark.tapUnpost' : 'time.mark.tapPost', { system: x.title })}`}
+                  disabled={!canEdit || busy || marking}
+                  onClick={() => void markLine(listed, x)}
+                >
+                  <span className="time-mark-glyph" aria-hidden="true">
+                    {MARK_GLYPHS[state]}
+                  </span>
+                  {x.title}
+                </button>
+              )
+            })}
+            {align && last && (
+              <button
+                type="button"
+                className={align === 'raise' ? 'time-raise' : 'time-raise time-trim'}
+                disabled={busy || raising}
+                onClick={() => void alignTo(align, last, l.billedSeconds)}
+              >
+                {t(`time.edit.${align}`, { hours: dur(l.billedSeconds) })}
+              </button>
+            )}
+          </div>
         )}
       </div>
     )
   }
+  /** A client's non-billable entries: worked, never billed, apart before the held ones. */
+  const unbilledOf = (d: ClientDay) => (
+    <div className="time-line time-held time-unbilled">
+      <div className="time-line-head">
+        <span className="time-line-name">{t('time.nonBillable')}</span>
+        <span className="time-figures">
+          {dur(d.nonBillable.reduce((n, id) => n + (entries.get(id)?.seconds ?? 0), 0))}
+        </span>
+      </div>
+      <ul className="time-entries">{d.nonBillable.map(id => entryRow(id, '', '', d.nonBillable.length > 1))}</ul>
+    </div>
+  )
   /** A client's held entries (a tag the config leaves out): apart, quiet, in no total. */
   const heldOf = (d: ClientDay) => (
     <div className="time-line time-held">
@@ -487,14 +613,18 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                 {t('time.billed')}
               </p>
               <p className="time-total">{dur(total)}</p>
-              {about(total, raw, single?.lines ?? []) && (
-                <p className="time-about">{about(total, raw, single?.lines ?? [])}</p>
+              {aboutLine(
+                about(total, raw, single?.lines ?? []),
+                days.reduce((n, d) => n + unentered(d), 0),
               )}
               {!single && total > 0 && (
                 <div className="time-bar" aria-hidden="true">
-                  {days.map(d => (
-                    <span key={d.client} style={{ '--lane': color(d.client), flexGrow: d.billedSeconds }} />
-                  ))}
+                  {/* a client that bills nothing (never billed, or all held) has no share */}
+                  {days
+                    .filter(d => d.billedSeconds > 0)
+                    .map(d => (
+                      <span key={d.client} style={{ '--lane': color(d.client), flexGrow: d.billedSeconds }} />
+                    ))}
                 </div>
               )}
             </div>
@@ -511,6 +641,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                   clientTitle={title}
                   projects={projectsOf}
                   tags={shown?.tags}
+                  billableDefault={billableDefault}
                   busy={busy}
                   error={editError}
                   onSave={d => void add(d)}
@@ -534,13 +665,12 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                 <header className="time-client-head">
                   <h4 className="time-dot">{title(d.client)}</h4>
                   <span className="time-client-total">{dur(d.billedSeconds)}</span>
-                  {about(d.billedSeconds, d.seconds, d.lines) && (
-                    <p className="time-about">{about(d.billedSeconds, d.seconds, d.lines)}</p>
-                  )}
+                  {aboutLine(about(d.billedSeconds, d.seconds, d.lines), unentered(d))}
                 </header>
               )}
               <div className="time-lines">
-                {d.lines.map(lineOf)}
+                {d.lines.map(lineOf(d.client))}
+                {d.nonBillable.length > 0 && unbilledOf(d)}
                 {d.held.length > 0 && heldOf(d)}
               </div>
             </section>

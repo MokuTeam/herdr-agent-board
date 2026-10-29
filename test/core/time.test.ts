@@ -2,6 +2,8 @@ import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { translator } from '../../src/core/i18n/translator.ts'
 import {
+  billableByDefault,
+  billableOf,
   clientDay,
   clientOf,
   clockIn,
@@ -16,6 +18,7 @@ import {
   problemsText,
   refIn,
   rounded,
+  systemsFor,
   type TimeEntry,
   timeConfig,
 } from '../../src/core/time.ts'
@@ -306,4 +309,101 @@ test('no rules: each entry alone and exact; a `project` group adds a project’s
     clientDay(byProject, 'a', '2026-10-28', es).lines.map(l => [l.project, l.seconds / 60, l.billedSeconds / 60]),
     [['Support', 35, 30]],
   )
+})
+
+test('billable and systems in config: a client billed or not, its projects that are not, where its time is entered', () => {
+  const c = timeConfig({
+    zone: NY,
+    clients: {
+      a: {
+        projects: ['Support', 'Internal'],
+        nonBillable: ['Internal'],
+        systems: ['erp', { id: 'tracker', title: 'Tracker' }],
+      },
+      own: { billable: false },
+    },
+  })
+  assert.ok(c)
+  assert.deepEqual(c.problems, [])
+  assert.deepEqual(systemsFor(c, 'a'), [
+    { id: 'erp', title: 'erp' },
+    { id: 'tracker', title: 'Tracker' },
+  ])
+  assert.deepEqual(systemsFor(c, 'own'), [])
+  assert.deepEqual(
+    [billableByDefault(c, 'a', 'Support'), billableByDefault(c, 'a', 'Internal'), billableByDefault(c, 'own', 'x')],
+    [true, false, false],
+  )
+  // set on an entry, either way, it wins
+  assert.equal(billableOf(c, { client: 'a', project: 'Internal', billable: true }), true)
+  assert.equal(billableOf(c, { client: 'a', project: 'Support', billable: false }), false)
+  assert.equal(billableOf(c, { client: 'own', project: 'x' }), false)
+  // every lane, `time: true`: billed, nowhere to enter
+  const any = timeConfig(true)
+  assert.ok(any)
+  assert.deepEqual([billableByDefault(any, 'x', 'y'), systemsFor(any, 'x')], [true, []])
+})
+
+test('billable and systems guess nothing either: each slip is a problem named by its place', () => {
+  const c = timeConfig({
+    zone: NY,
+    clients: {
+      a: {
+        projects: ['Support'],
+        billable: 'yes',
+        nonBillable: ['Suport'],
+        systems: ['erp', 'erp', 'ERP', { id: 'tracker', name: 'x' }, { id: 'wiki', title: 3 }, 7],
+      },
+      b: { systems: 'erp', nonBillable: 'Internal' },
+    },
+  })
+  assert.ok(c)
+  assert.deepEqual(
+    c.problems.map(x => [x.at, x.why, x.value]),
+    [
+      ['time.clients.a.billable', 'type', 'yes'],
+      ['time.clients.a.nonBillable[0]', 'project', 'Suport'],
+      ['time.clients.a.systems[1]', 'system', 'erp'],
+      ['time.clients.a.systems[2]', 'system', 'ERP'],
+      ['time.clients.a.systems[3].name', 'unknown', undefined],
+      ['time.clients.a.systems[4].title', 'type', '3'],
+      ['time.clients.a.systems[5]', 'type', '7'],
+      ['time.clients.b.nonBillable', 'type', 'Internal'],
+      ['time.clients.b.systems', 'type', 'erp'],
+    ],
+  )
+  assert.match(
+    problemsText(c.problems.slice(1, 3), translator('en')),
+    /not one of this client’s projects.*not a system id/,
+  )
+})
+
+test('a non-billable entry counts as worked, never as billed: in no line, so no rounding, no Raise or Trim', () => {
+  const c = timeConfig({
+    zone: NY,
+    clients: { a: { nonBillable: ['Internal'], billing: [{ group: 'ref', step: 30, round: 'up' }] } },
+  })
+  assert.ok(c)
+  const es = [
+    entry({ start: '2026-10-28T13:00:00Z', minutes: 20, description: 'Case 10001 X: looked' }),
+    // the same case, set non-billable: not in its line
+    entry({ start: '2026-10-28T14:00:00Z', minutes: 25, description: 'Case 10001 X: our slip', billable: false }),
+    entry({ start: '2026-10-28T15:00:00Z', minutes: 10, description: 'Standup', project: 'Internal' }),
+    // non-billable and held: never billed beats billed later
+    entry({
+      start: '2026-10-28T16:00:00Z',
+      minutes: 5,
+      description: 'Case 10002',
+      billable: false,
+      tags: ['deferred'],
+    }),
+    entry({ start: '2026-10-28T17:00:00Z', minutes: 15, description: 'Case 10003', tags: ['deferred'] }),
+  ]
+  const day = clientDay(c, 'a', '2026-10-28', es)
+  assert.deepEqual(
+    day.lines.map(l => [l.ref, l.seconds / 60, l.billedSeconds / 60, l.entries.length]),
+    [['10001', 20, 30, 1]],
+  )
+  assert.deepEqual([day.nonBillable.length, day.held.length], [3, 1])
+  assert.deepEqual([day.seconds / 60, day.billedSeconds / 60], [60, 30])
 })

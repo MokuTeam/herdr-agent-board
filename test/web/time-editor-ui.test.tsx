@@ -3,7 +3,8 @@
 // changed elsewhere while it is open is said, and Save waits for Reload (it never writes the old
 // text back); a Raise the board refuses is a toast; a delete's Undo stays seven seconds; an Undo
 // after paging leaves the day shown as it is. Brought over from the review of #236 (ui.test.tsx).
-// From #239: tags as tokens, a duration typed, Trim on a line billed under its time.
+// From #239: tags as tokens, a duration typed, Trim on a line billed under its time. From #240: a
+// line marked entered in a system by a tap (and its Undo), changed after entering; billable as a switch.
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -37,6 +38,13 @@ const TIME = {
     'client-b': { projects: ['Support'] },
     // billed under its time: to the nearest 30 minutes
     'client-n': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'nearest' }] },
+    // entered into an ERP and a tracker; its Internal project not billed
+    'client-s': {
+      projects: ['Support', 'Internal'],
+      nonBillable: ['Internal'],
+      systems: ['erp', { id: 'tracker', title: 'Tracker' }],
+      billing: [{ group: 'ref', step: 30, round: 'up' }],
+    },
   },
 }
 const conf = timeConfig(TIME)
@@ -807,6 +815,129 @@ test('the layout: the billable figure, the time worked, each client’s share, t
   expect(text('.time-summary .time-total')).toEqual(['1h'])
   expect(text('.time-summary .time-about')).toEqual(['worked 40m · up to 30 min'])
   expect([qa('.time-bar').length, qa('.time-client-head').length]).toEqual([0, 0])
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)
+
+type Stored = {
+  id: string
+  rev: number
+  billable: boolean
+  billableDefault: boolean
+  posts: { system: string; rev: number; changedAfter: boolean }[]
+}
+
+test('a line entered in a system by a tap, the whole line; its Undo; a change after entering shows, and a tap clears it', async () => {
+  const s = await setup()
+  toasts.length = 0
+  // one case in two entries, 30 + 20 minutes: one line, up to the hour
+  for (const [start, stop] of [
+    ['13:00', '13:30'],
+    ['14:00', '14:20'],
+  ])
+    await s.post({
+      op: 'add',
+      client: 'client-s',
+      project: 'Support',
+      description: 'Case 50001 S: work',
+      start: `${DAY}T${start}:00Z`,
+      stop: `${DAY}T${stop}:00Z`,
+    })
+  const root = await mount(1)
+  const pills = () => qa('.time-mark').map(x => [x.textContent, x.dataset.state])
+  const pill = (name: string) => qa('.time-mark').find(x => x.textContent?.endsWith(name)) ?? null
+  const stored = async () => (await s.stored()) as unknown as Stored[]
+  expect(pills()).toEqual([
+    ['○erp', 'not'],
+    ['○Tracker', 'not'],
+  ])
+  expect(q('.time-unentered')?.textContent).toBe(' · not entered 1h')
+  await click(pill('erp'))
+  await settle(600)
+  expect((await stored()).map(e => e.posts.map(p => p.system))).toEqual([['erp'], ['erp']])
+  expect(pills()).toEqual([
+    ['✓erp', 'entered'],
+    ['○Tracker', 'not'],
+  ])
+  expect(q('.time-unentered')?.textContent).toBe(' · not entered 1h')
+  await click(pill('Tracker'))
+  await settle(600)
+  expect(q('.time-unentered')).toBeNull()
+  expect(toasts.at(-1)?.text).toBe('Marked entered in Tracker')
+  expect(qa('.time-entry')[0]?.title).toContain('erp: entered')
+  // Undo: the tracker's marks off again
+  await act(async () => toasts.at(-1)?.o?.action?.run())
+  await settle(600)
+  expect((await stored()).map(e => e.posts.map(p => p.system))).toEqual([['erp'], ['erp']])
+  // an agent changes one: entered, then changed after
+  const [first] = await stored()
+  s.byAgent(first?.id as string, { description: 'Case 50001 S: more work' })
+  await act(async () => root.render(view(2)))
+  await settle()
+  expect(pill('erp')?.dataset.state).toBe('changed')
+  // a tap marks it again at its revision now; Undo puts the earlier mark back, changed after again
+  await click(pill('erp'))
+  await settle(600)
+  expect(pill('erp')?.dataset.state).toBe('entered')
+  await act(async () => toasts.at(-1)?.o?.action?.run())
+  await settle(600)
+  expect(pill('erp')?.dataset.state).toBe('changed')
+  expect((await stored()).map(e => e.posts[0]?.changedAfter)).toEqual([true, false])
+  // entered: a tap takes the whole line's mark off
+  await click(pill('erp'))
+  await settle(600)
+  await click(pill('erp'))
+  await settle(600)
+  expect(pill('erp')?.dataset.state).toBe('not')
+  expect(toasts.at(-1)?.text).toBe('Mark in erp taken off')
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)
+
+test('billable as a switch: the config’s way said, set either way and back; a non-billable entry apart; entered said in the editor', async () => {
+  const s = await setup()
+  await s.post({
+    op: 'add',
+    client: 'client-s',
+    project: 'Support',
+    description: 'Case 50002 S: work',
+    start: `${DAY}T13:00:00Z`,
+    stop: `${DAY}T13:30:00Z`,
+  })
+  const internal = await s.post({
+    op: 'add',
+    client: 'client-s',
+    project: 'Internal',
+    description: 'Standup',
+    start: `${DAY}T15:00:00Z`,
+    stop: `${DAY}T15:20:00Z`,
+  })
+  await s.post({ op: 'post', system: 'erp', entries: [{ id: internal.entry.id, rev: internal.entry.rev }] })
+  const root = await mount(1)
+  const stored = async () => (await s.stored()) as unknown as (Stored & { description: string })[]
+  expect(qa('.time-unbilled .time-line-name').map(x => x.textContent)).toEqual(['Non-billable'])
+  expect(qa('.time-unbilled .time-entry').length).toBe(1)
+  const toggle = () => q('.time-switch input') as unknown as HTMLInputElement
+  await openOn('S: work')
+  expect([toggle().checked, q('.time-switch small')?.textContent]).toEqual([true, 'as the config says'])
+  await click(toggle())
+  expect([toggle().checked, q('.time-switch small') === null]).toEqual([false, true])
+  await submit()
+  await settle(600)
+  const work = (await stored()).find(e => e.description.endsWith('work'))
+  expect([work?.billable, work?.billableDefault]).toEqual([false, false])
+  expect(qa('.time-unbilled .time-entry').length).toBe(2)
+  // back the config's way: it follows the config again
+  await openOn('S: work')
+  await click(toggle())
+  expect(q('.time-switch small')?.textContent).toBe('as the config says')
+  await submit()
+  await settle(600)
+  const again = (await stored()).find(e => e.description.endsWith('work'))
+  expect([again?.billable, again?.billableDefault]).toEqual([true, true])
+  // an entry entered somewhere says so in its editor
+  await openOn('Standup')
+  expect(q('.time-entered')?.textContent).toBe('Entered in erp: change it there too.')
   mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)
