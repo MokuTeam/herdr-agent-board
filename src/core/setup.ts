@@ -229,6 +229,12 @@ export interface SetupFacts {
   mokupilot?: MokupilotLauncher | null
   /** Where a call starts (core/mokupilot-mode.ts mokupilotMode); none: `auto`. */
   mokupilotMode?: MokupilotMode
+  /**
+   * macOS: whether the app that shows the notifications is built and current with its source, and
+   * why its last build failed (adapters/toast-app.ts toastAppState). None: not looked at (any other
+   * system).
+   */
+  toastApp?: { built: boolean; failed?: string } | undefined
 }
 
 export type SetupLevel = 'ok' | 'error' | 'warn' | 'off' | 'na'
@@ -690,6 +696,17 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
       )
     else if (!here)
       add('toast', 'warn', t('setup.toast.stale'), per.flat()[0]?.command ?? '', t('setup.run'), NOTIFICATIONS)
+    // On macOS the hooks show the board's own app, which a notification builds when it is not
+    // there; once that build fails, each notification is herdr's until the app is built again.
+    else if (mac && facts.toastApp?.failed !== undefined && !facts.toastApp.built)
+      add(
+        'toast',
+        'warn',
+        t('setup.toast.notBuilt'),
+        t('setup.toast.notBuiltDetail', { reason: facts.toastApp.failed }),
+        t('setup.toast.notBuiltFix'),
+        NOTIFICATIONS,
+      )
     else if (delivery !== 'off')
       add(
         'toast',

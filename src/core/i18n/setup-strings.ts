@@ -167,6 +167,9 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.toast.own': 'Desktop notifications from a hook of your own',
     'setup.toast.ok': 'Desktop notifications',
     'setup.toast.okDetail': 'when a session finishes, asks or needs a permission, except in the pane you look at',
+    'setup.toast.notBuilt': 'Desktop notifications: the macOS app that shows them is not built',
+    'setup.toast.notBuiltDetail': 'Its last build failed ({reason}); until it is built, herdr shows each notification.',
+    'setup.toast.notBuiltFix': 'With the Command Line Tools in (xcode-select --install), build it again:',
   },
   ru: {
     'setup.cards.title': 'Хранилище карточек',
@@ -329,5 +332,9 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.toast.ok': 'Уведомления на рабочем столе',
     'setup.toast.okDetail':
       'когда сессия закончила, спрашивает или просит разрешение, кроме панели, на которую ты смотришь',
+    'setup.toast.notBuilt': 'Уведомления: приложение macOS, которое их показывает, не собрано',
+    'setup.toast.notBuiltDetail':
+      'Последняя сборка не удалась ({reason}); пока его нет, каждое уведомление показывает herdr.',
+    'setup.toast.notBuiltFix': 'Когда Command Line Tools стоят (xcode-select --install), собери его снова:',
   },
 }

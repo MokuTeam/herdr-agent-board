@@ -495,6 +495,90 @@ describe('doctor', () => {
     assert.doesNotMatch(`${secret.title} ${secret.detail}`, /secret words/)
   })
 
+  test('desktop notifications: the macOS app, and Windows and Linux as before', () => {
+    const MAC_ROOT = '/Users/u/Agent Board 100%/agent-board'
+    const macFiles = boardFiles(MAC_ROOT, 'darwin')
+    const macPaths = {
+      bun: '/Users/u/.bun/bin/bun',
+      ...macFiles,
+      binDir: '/Users/u/.local/bin',
+      platform: 'darwin' as const,
+    }
+    const mac = (over: Partial<SetupFacts> = {}): SetupCheck =>
+      check(
+        checkSetup(
+          facts({
+            platform: 'darwin',
+            root: MAC_ROOT,
+            files: macFiles,
+            settings: planSettings({}, macPaths, { toast: true }).settings,
+            ...over,
+          }),
+        ),
+        'toast',
+      )
+    const NOTIFICATIONS = 'herdr plugin action invoke agent-board.notifications'
+
+    // The hooks run toast.ts with Bun; built, or not yet built (the next notification builds it): on.
+    for (const toastApp of [undefined, { built: true }, { built: false }])
+      assert.equal(mac(toastApp && { toastApp }).level, 'ok', JSON.stringify(toastApp))
+    // Its build failed for this source: each notification is herdr's until it is built again.
+    const failed = mac({ toastApp: { built: false, failed: 'the Command Line Tools are not installed' } })
+    assert.deepEqual(failed, {
+      id: 'toast',
+      level: 'warn',
+      title: 'Desktop notifications: the macOS app that shows them is not built',
+      detail:
+        'Its last build failed (the Command Line Tools are not installed); until it is built, herdr shows each notification.',
+      fix: 'With the Command Line Tools in (xcode-select --install), build it again:',
+      code: NOTIFICATIONS,
+    })
+    const ru = checkSetup(
+      facts({
+        platform: 'darwin',
+        root: MAC_ROOT,
+        files: macFiles,
+        settings: planSettings({}, macPaths, { toast: true }).settings,
+        toastApp: { built: false, failed: 'swiftc failed' },
+      }),
+      translator('ru'),
+    )
+    assert.equal(check(ru, 'toast').title, 'Уведомления: приложение macOS, которое их показывает, не собрано')
+    assert.match(check(ru, 'toast').detail, /\(swiftc failed\)/)
+    // Off on macOS: the macOS words.
+    assert.match(mac({ settings: {} }).detail, /^A macOS notification with the agent’s own words/)
+
+    // Windows: the same lines, word for word, and a stray toastApp fact changes nothing.
+    for (const toastApp of [undefined, { built: false, failed: 'swiftc failed' }])
+      assert.deepEqual(check(checkSetup(facts(toastApp && { toastApp })), 'toast'), {
+        id: 'toast',
+        level: 'ok',
+        title: 'Desktop notifications',
+        detail: 'when a session finishes, asks or needs a permission, except in the pane you look at',
+        fix: '',
+        code: '',
+      })
+    assert.deepEqual(check(checkSetup(facts({ settings: {} })), 'toast'), {
+      id: 'toast',
+      level: 'off',
+      title: 'Desktop notifications are off',
+      detail:
+        'A Windows notification with the agent’s own words when a session finishes, asks a question or needs a permission; a click opens that session on the board.',
+      fix: 'Turn them on:',
+      code: NOTIFICATIONS,
+    })
+    // Linux: none of the board's, herdr's own.
+    for (const toastApp of [undefined, { built: false, failed: 'swiftc failed' }])
+      assert.deepEqual(check(checkSetup(facts({ platform: 'linux', ...(toastApp && { toastApp }) })), 'toast'), {
+        id: 'toast',
+        level: 'na',
+        title: 'Desktop notifications: Windows and macOS only',
+        detail: 'On Linux herdr shows its own: [ui.toast] delivery = "system" in herdr’s config.toml.',
+        fix: '',
+        code: '',
+      })
+  })
+
   test('the agents’ skill: installed when missing or older, left alone when it is someone else’s', () => {
     assert.equal(skillAction(null, SKILL_TEXT), 'write')
     assert.equal(skillAction(SKILL_TEXT.replace(/\n/g, '\r\n'), SKILL_TEXT), 'same')
