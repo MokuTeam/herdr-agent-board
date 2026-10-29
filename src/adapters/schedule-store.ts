@@ -30,7 +30,7 @@ import {
 } from '../core/schedule-rules.ts'
 import { type ReceiptState, settleReport } from './call-receipts.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
-import { scheduleDir } from './paths.ts'
+import { boardFile, scheduleDir } from './paths.ts'
 
 const logFile = (): string => join(scheduleDir(), 'log.jsonl')
 const ID = /^[0-9a-f]{6}$/
@@ -78,6 +78,30 @@ export function listEntries(): ScheduleEntry[] {
 
 export function getEntry(id: unknown): ScheduleEntry | null {
   return ID.test(String(id)) ? readJson(fileOf(String(id)), isEntry) : null
+}
+
+/**
+ * Whether a board that runs the schedule answers now: with the web board off (`web` false) the
+ * terminal board's process, which runs it itself (entrypoints/tui.ts); else the web board's payload
+ * (`board()`, null when it does not answer) with its schedules.
+ */
+export async function schedulerRuns(
+  web: boolean,
+  board: () => Promise<Record<string, unknown> | null>,
+): Promise<boolean> {
+  try {
+    if (!web) {
+      const saved: unknown = JSON.parse(readFileSync(boardFile(), 'utf8'))
+      const pid = isRecord(saved) ? saved.pid : undefined
+      if (typeof pid !== 'number') return false
+      process.kill(pid, 0)
+      return true
+    }
+    const body = await board()
+    return !!body && 'schedules' in body
+  } catch {
+    return false
+  }
 }
 
 /** Save a new entry under a fresh id and return it. */
