@@ -814,3 +814,17 @@ test('import: only the rows it wrote bring their projects to the list, so a proj
   assert.match(busy.projectsNotAdded, /config\.json is being changed by another process/)
   assert.deepEqual(projects(), ['Support', 'Desk'])
 }, 15_000)
+
+test('import: a "differs" line cuts a long description by characters, never halving an emoji', async () => {
+  const { dir, cfg } = await setUp()
+  const csv = join(dir, 'toggl.csv')
+  const head = 'Client,Project,Description,Start date,Start time,End date,End time,Duration,Tags'
+  const words = `${'x'.repeat(39)}🙂 tail`
+  const row = (d: string) => `Client A,Support,${d},2026-10-28,16:00:00,2026-10-28,17:30:00,01:30:00,`
+  const map = ['--tz', 'Europe/Istanbul', '--map', 'Client A=client-a']
+  writeFileSync(csv, [head, row('First')].join('\n'))
+  await jsonOf(cfg, ['import', csv, ...map])
+  writeFileSync(csv, [head, row(words)].join('\n'))
+  const said = (await run(cfg, ['import', csv, ...map, '--dry-run'])).join('\n')
+  assert.ok(said.includes(`"${'x'.repeat(39)}🙂…"`), said)
+})

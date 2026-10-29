@@ -13,7 +13,7 @@ import {
   ImportIndex,
   type ImportRow,
   importEntries,
-  importVerdict,
+  importVerdicts,
   listEntries,
   marksOf,
   moveEntry,
@@ -278,10 +278,10 @@ test('a CSV row edited in Toggl since its import is found by its lane and start:
   assert.deepEqual(importEntries(db, conf, [csvRow()]), { added: 0, already: 1, changed: [], updated: [] })
   // a dry run sees the same, writing nothing
   assert.deepEqual(
-    importVerdict(new ImportIndex(db), conf, csvRow({ stop: at('2026-10-28T13:45:00Z') })).kind,
+    importVerdicts(new ImportIndex(db), conf, [csvRow({ stop: at('2026-10-28T13:45:00Z') })])[0]?.kind,
     'changed',
   )
-  assert.deepEqual(importVerdict(new ImportIndex(null), conf, csvRow()).kind, 'new')
+  assert.deepEqual(importVerdicts(new ImportIndex(null), conf, [csvRow()])[0]?.kind, 'new')
   db.close()
 })
 
@@ -1102,5 +1102,82 @@ test('a rename whose last step throws changes nothing; one onto a name an entry 
   )
   assert.deepEqual(projectUse(db, 'a'), { 'Cases work': 1, Support: 2 })
   assert.equal(getEntry(db, twin.id)?.rev, 1)
+  db.close()
+})
+
+test('rows alike in the five fields the store holds one of: one entry, the dry run as the run; tags alone differing are said', () => {
+  const db = fresh()
+  const twice = [csvRow(), csvRow()]
+  assert.deepEqual(importEntries(db, conf, twice), { added: 1, already: 1, changed: [], updated: [] })
+  // the same file again, as a dry run would see it: nothing new
+  assert.deepEqual(
+    importVerdicts(new ImportIndex(db), conf, twice).map(v => v.kind),
+    ['already', 'already'],
+  )
+  // in one file, alike but for tags: one in, the other differs in its tags; --update never takes
+  // turns between the two (the entry stays the first row's, at its revision)
+  const other = fresh()
+  const pair = [csvRow(), csvRow({ tags: ['call'] })]
+  const r = importEntries(other, conf, pair, { update: true })
+  assert.deepEqual([r.added, r.changed.map(c => c.fields), r.updated.length], [1, [['tags']], 0])
+  for (let n = 0; n < 2; n++) assert.equal(importEntries(other, conf, pair, { update: true }).updated.length, 0)
+  const [kept] = listEntries(other, { from: '2026-10-28', to: '2026-10-28' })
+  assert.deepEqual([kept?.tags, kept?.rev], [[], 1])
+  db.close()
+  other.close()
+})
+
+test('a removed entry is paired only by what it shares with a row: a new row at its start goes in', () => {
+  const db = fresh()
+  importEntries(db, conf, [csvRow()])
+  const [gone] = listEntries(db, { from: '2026-10-28', to: '2026-10-28' })
+  removeEntry(db, gone?.id as string, 'user')
+  const r = importEntries(db, conf, [
+    csvRow({ project: 'Migration', description: 'Other work', stop: at('2026-10-28T13:20:00Z') }),
+  ])
+  assert.deepEqual([r.added, r.already, r.changed.length], [1, 0, 0])
+  db.close()
+})
+
+test('a removed entry is not taken by a new row of its project that shares nothing else with it', () => {
+  const db = fresh()
+  importEntries(db, conf, [csvRow()])
+  const [gone] = listEntries(db, { from: '2026-10-28', to: '2026-10-28' })
+  removeEntry(db, gone?.id as string, 'user')
+  const r = importEntries(db, conf, [csvRow({ description: 'Another call', stop: at('2026-10-28T13:20:00Z') })])
+  assert.deepEqual([r.added, r.already, r.changed.length], [1, 0, 0])
+  db.close()
+})
+
+// passes on main too (its order there was the same in practice): it pins the order now said
+test('two entries no field tells apart: the first made is the one a row is paired with', () => {
+  const db = fresh()
+  const rows = [csvRow({ description: 'One' }), csvRow({ description: 'Two' })]
+  importEntries(db, conf, rows)
+  const [first] = listEntries(db, { from: '2026-10-28', to: '2026-10-28' }).sort((a, b) =>
+    (a.toggl ?? '') < (b.toggl ?? '') ? -1 : 1,
+  )
+  // in Toggl one is removed and the other's words edited: the row is the first made
+  const r = importEntries(db, conf, [csvRow({ description: 'Edited' })])
+  assert.deepEqual(
+    r.changed.map(c => [c.id, c.fields]),
+    [[first?.id, ['description']]],
+  )
+  db.close()
+})
+
+test('an entry imported before rows of one start were told apart (its key the bare lane and start) beside a new row there', () => {
+  const db = fresh()
+  importEntries(db, conf, [csvRow()])
+  const [legacy] = listEntries(db, { from: '2026-10-28', to: '2026-10-28' })
+  assert.equal(legacy?.toggl, 'csv:a:2026-10-28T13:00:00Z')
+  const r = importEntries(db, conf, [csvRow(), csvRow({ description: 'A second call' })])
+  assert.deepEqual([r.added, r.already, r.changed.length], [1, 1, 0])
+  assert.deepEqual(
+    listEntries(db, { from: '2026-10-28', to: '2026-10-28' })
+      .map(e => e.toggl)
+      .sort(),
+    ['csv:a:2026-10-28T13:00:00Z', 'csv:a:2026-10-28T13:00:00Z#2'],
+  )
   db.close()
 })
