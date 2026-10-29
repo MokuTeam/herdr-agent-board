@@ -183,6 +183,8 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
         // saved so far: the editor holds the entry as it now is (a move refused after this is the
         // move's, not a change from elsewhere), its draft as typed
         setEditing(x => (x !== null && x !== 'new' && x.id === base.id ? { ...x, base: now } : x))
+        const k = kept.current.get(base.id)
+        if (k) kept.current.set(base.id, { ...k, base: now })
       }
       // the move says the revision the edit left
       if (ch.move) now = await post({ op: 'move', id: base.id, rev: now.rev, date: ch.move })
@@ -194,7 +196,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
       const body = addOf(d)
       if (!body) throw new Error(t('time.edit.badTime'))
       const made = await post(body)
-      forget('new')
+      forget(`new:${shownDate.current}`)
       followed(made)
     })
   const undoToken = useRef(0)
@@ -267,12 +269,14 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   const color = (id: string) => cats.get(id)?.color ?? 'var(--label-3)'
   const total = days.reduce((n, d) => n + d.billedSeconds, 0)
   const raw = days.reduce((n, d) => n + d.seconds, 0)
-  /** A new entry's draft: the one typed on this day and left open, else a fresh one. */
+  /** A new entry's draft: the one typed on this day and left open (for a client offered), else a fresh one. */
   const newOne = (() => {
     const first = clientsForNew[0] as string
     const fresh = newDraft(first, projectsOf(first)?.[0] ?? '', date)
-    const was = kept.current.get('new')?.draft
-    return { fresh, kept: was && was.day === date ? was : null }
+    // kept for its day, and only when the form offers its client now (under another client's chip
+    // it waits, untouched, for the chip that shows it)
+    const was = kept.current.get(`new:${date}`)?.draft
+    return { fresh, kept: was && was.day === date && clientsForNew.includes(was.client) ? was : null }
   })()
   /** The editor of an entry as it was opened; `now` is the entry as the day reads it now. */
   const editorFor = ({ base, reload, draft }: Open, now: Entry) => (
@@ -485,10 +489,10 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                   error={editError}
                   onSave={d => void add(d)}
                   onCancel={() => {
-                    forget('new')
+                    forget(`new:${date}`)
                     open1(null)
                   }}
-                  onDraft={d => keep('new', null, d, newOne.fresh)}
+                  onDraft={d => keep(`new:${date}`, null, d, newOne.fresh)}
                 />
               ) : (
                 <button type="button" className="button" onClick={() => open1('new')}>

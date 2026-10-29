@@ -3,7 +3,7 @@
 // changed elsewhere while it is open is said, and Save waits for Reload (it never writes the old
 // text back); a Raise the board refuses is a toast; a delete's Undo stays seven seconds; an Undo
 // after paging leaves the day shown as it is. Brought over from the review of #236 (ui.test.tsx).
-import { afterAll, beforeAll, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { JSDOM } from 'jsdom'
@@ -184,7 +184,7 @@ async function setup() {
   const stored = async () =>
     (
       (await (await realFetch(`${url}/api/time?date=${DAY}`)).json()) as {
-        entries: { description: string; stop: string; rev: number }[]
+        entries: { description: string; stop: string; rev: number; client: string }[]
       }
     ).entries
   /** A change by an agent's `board time`, straight into the database. */
@@ -240,11 +240,20 @@ function view(seq: number, client: string | null = null, today = DAY) {
   )
 }
 
+/** The roots a test mounted: each unmounted after it, failed or not, so none is left for the next. */
+const mounted = new Set<Root>()
+afterEach(() => {
+  for (const root of mounted) act(() => root.unmount())
+  mounted.clear()
+  for (const el of [...dom.window.document.body.children]) if (el.id !== 'root') el.remove()
+})
+
 async function mount(seq = 1): Promise<Root> {
   // a container of its own for each test
   const el = dom.window.document.createElement('div')
   dom.window.document.body.append(el)
   const root = createRoot(el)
+  mounted.add(root)
   await act(async () => root.render(view(seq)))
   await settle()
   return root
@@ -282,6 +291,7 @@ test('an entry changed elsewhere while it is open: said, Save waits for Reload, 
   const [after] = await s.stored()
   expect(after?.description).toBe('Case 10001 X: CORRECTED BY AGENT')
   expect(after?.stop).toBe(`${DAY}T14:15:00Z`)
+  mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)
 
@@ -306,6 +316,7 @@ test('a Raise the board refuses is a toast, and nothing changes', async () => {
   expect(toasts.filter(x => x.error).map(x => x.text)).toEqual([
     'Changed elsewhere since it was read: Reload it, then change it again.',
   ])
+  mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)
 
@@ -337,6 +348,7 @@ test('a delete’s Undo stays seven seconds; after paging, Undo leaves the day s
   expect(qa('.time-entry').length).toBe(0)
   expect((await s.stored()).length).toBe(1)
   expect(toasts.some(x => x.text.startsWith('Saved on '))).toBe(true)
+  mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)
 
@@ -354,6 +366,7 @@ test('an entry open here that is removed elsewhere closes with a word, not silen
   expect(toasts.filter(x => x.error).map(x => x.text)).toEqual([
     'The entry open here was removed or moved elsewhere: what was typed is not saved.',
   ])
+  mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)
 
@@ -370,6 +383,7 @@ test('a change refused as changed since shows Reload at once, before the board s
   expect(q('.time-stale')).toBeTruthy()
   expect(qa('.time-stale button').length).toBe(1)
   expect((await s.stored())[0]?.description).toBe('Case 10001 X: CORRECTED BY AGENT')
+  mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)
 
@@ -389,6 +403,7 @@ test('a change saved in part (the edit in, the move refused) is not called a cha
   expect(q('.time-stale')).toBeNull()
   expect(q('.time-editor p.access-problem[role=alert]')?.textContent).toMatch(/a year back/)
   expect(q('.time-editor input[type=date]').value).toBe('2024-01-01')
+  mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)
 
@@ -433,6 +448,7 @@ test('a tap on another entry, or Add entry, leaves the typed text for when the f
   await click(qa('.time-editor button').find(b => b.textContent === 'Cancel') ?? null)
   await openOn('Case 10001 X: work')
   expect(q('.time-editor textarea').value).toBe('Case 10001 X: work')
+  mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)
 
@@ -457,6 +473,7 @@ test('the day changed (the arrows, or past midnight) leaves the typed text for t
   await settle(300)
   await openOn('Case 10001 X: work')
   expect(q('.time-editor textarea').value).toBe(TYPED)
+  mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)
 
@@ -475,5 +492,82 @@ test('another client chosen closes the editor (no hidden one left open), its typ
   expect(q('.time-editor')).toBeNull()
   await openOn('Case 10001 X: work')
   expect(q('.time-editor textarea').value).toBe(TYPED)
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)
+
+const addButton = () => qa('.time-add button').find(b => b.textContent === 'Add entry') ?? null
+const submitAdd = async () => {
+  await act(async () => {
+    q('.time-add .time-editor').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))
+  })
+}
+
+test('a new entry’s kept draft comes back only where the form offers its client; another client starts afresh', async () => {
+  const s = await setup()
+  await three(s)
+  const root = await mount(1)
+  await click(addButton())
+  expect(q('.time-add select').value).toBe('client-a')
+  await setValue(q('.time-add textarea'), 'Case 30001 N: a new entry')
+  // the chip on client B: the form offers B alone, so the draft for A waits
+  await act(async () => root.render(view(1, 'client-b')))
+  await settle()
+  await click(addButton())
+  expect(q('.time-add select').value).toBe('client-b')
+  expect(q('.time-add textarea').value).toBe('')
+  // back on all clients: the draft, its client A with it
+  await act(async () => root.render(view(1, null)))
+  await settle()
+  await click(addButton())
+  expect([q('.time-add select').value, q('.time-add textarea').value]).toEqual([
+    'client-a',
+    'Case 30001 N: a new entry',
+  ])
+  await submitAdd()
+  await settle(600)
+  expect((await s.stored()).find(e => e.description === 'Case 30001 N: a new entry')?.client).toBe('client-a')
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)
+
+test('a new entry’s draft is kept per day: another day’s form neither shows it nor wipes it', async () => {
+  const s = await setup()
+  await three(s)
+  const root = await mount(1)
+  await click(addButton())
+  await setValue(q('.time-add textarea'), 'Case 30001 N: typed on the day')
+  await click(q('button[aria-label="Previous day"]'))
+  await settle(300)
+  await click(addButton())
+  expect(q('.time-add textarea').value).toBe('')
+  await click(qa('.time-add .time-editor button').find(b => b.textContent === 'Cancel') ?? null)
+  await click(q('button[aria-label="Next day"]'))
+  await settle(300)
+  await click(addButton())
+  expect(q('.time-add textarea').value).toBe('Case 30001 N: typed on the day')
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)
+
+test('a change saved in part, left and opened again: its draft against the entry as saved, no word of elsewhere', async () => {
+  const s = await setup()
+  await three(s)
+  const root = await mount(1)
+  await openOn('Case 10001 X: work')
+  await setValue(q('.time-editor textarea'), 'Case 10001 X: edited')
+  await setValue(q('.time-editor input[type=date]'), '2024-01-01')
+  await submit()
+  await settle(700)
+  expect((await s.stored()).map(e => e.description)).toContain('Case 10001 X: edited')
+  await openOn('Case 10002 Z: second')
+  await act(async () => root.render(view(2)))
+  await settle()
+  await openOn('Case 10001 X: edited')
+  expect(q('.time-editor textarea').value).toBe('Case 10001 X: edited')
+  expect(q('.time-editor input[type=date]').value).toBe('2024-01-01')
+  expect(q('.time-stale')).toBeNull()
+  expect((qa('.time-editor button[type=submit]')[0] as HTMLButtonElement).disabled).toBe(false)
+  mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)
