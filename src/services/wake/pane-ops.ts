@@ -278,7 +278,7 @@ export async function lookAgain(
   io: WakeHerdr,
   target: { pane: string; session: string; line: string | null; shellPid?: number },
   marks: FreeMarks,
-  o: FreeOptions & { restored: boolean; alone?: (shellPid: number) => boolean | null },
+  o: FreeOptions & { restored: boolean; alone?: (shellPid: number) => Promise<boolean | null> },
 ): Promise<LookedAt> {
   const { pane, session, line } = target
   const screen = await io.screen(pane)
@@ -289,7 +289,7 @@ export async function lookAgain(
   if (!prompt) return 'kept'
   if (shows === 'empty') {
     if (!o.restored || prompt.pid === target.shellPid || promptRows(screen) !== 1) return 'kept'
-    const alone = o.alone ? o.alone(prompt.pid) : true
+    const alone = o.alone ? await o.alone(prompt.pid) : true
     if (alone === null) return 'later'
     if (!alone) return 'kept'
   }

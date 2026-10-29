@@ -580,10 +580,17 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     }
     if (!due.length) return
     await during(async () => {
-      // Where herdr does not list what a shell started (Windows): the process table, read once.
-      const read = due.some(d => d.restored !== undefined) ? processTable : null
-      const table = read ? await read().catch(() => null) : null
-      const alone = read ? (pid: number) => (table ? nothingUnder(table, pid) : null) : undefined
+      // Where herdr does not list what a shell started (Windows): the process table, read at most
+      // once a look, and only when a restored shell gets as far as needing it.
+      const read = processTable
+      let table: Promise<readonly MemRow[] | null> | undefined
+      const alone = read
+        ? async (pid: number): Promise<boolean | null> => {
+            table ??= read().catch(() => null)
+            const rows = await table
+            return rows ? nothingUnder(rows, pid) : null
+          }
+        : undefined
       // One after the other, as the tidy: each close changes what the next one's freePlan sees.
       for (const d of due)
         await withPane(d.pane, () => (d.note === undefined ? lookAt(d, alone) : noteShell(d, d.note, true)))
@@ -598,7 +605,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
    * One sleeper of giveBack's looked at again, while its entry is still the sleep it was taken up
    * for. `alone`: whether its shell has started nothing, by the process table (pane-ops lookAgain).
    */
-  async function lookAt(d: Due, alone?: (pid: number) => boolean | null): Promise<void> {
+  async function lookAt(d: Due, alone?: (pid: number) => Promise<boolean | null>): Promise<void> {
     const s = sessions[d.pane]
     if (!stillAsleep(d, s)) return
     const dir = s.profileDir ?? defaultProfileDir(homedir(), platform)

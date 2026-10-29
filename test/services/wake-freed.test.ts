@@ -1093,6 +1093,23 @@ test('#243 review 2: the table is read only when a restored pane is due, once pe
   expect(closes(unix.io)).toEqual([['tab', 'close', 't2']])
 })
 
+test('#243 review 3: the table is read only when a restored shell gets as far as needing it, not while it starts or shows text', async () => {
+  for (const screen of ['', `PS ${PROJECT}> cd ..`, `PS ${PROJECT}> git status\nOn branch main\nPS ${PROJECT}> `]) {
+    let reads = 0
+    const w = restoredShell(screen)
+    w.deps.processTable = async () => {
+      reads++
+      return w.table
+    }
+    const engine = createWakeEngine(w.deps)
+    for (let i = 0; i < 5; i++) {
+      w.clock.at += 15_000
+      await engine.remember()
+    }
+    expect([screen, reads, closes(w.io)]).toEqual([screen, 0, []])
+  }
+})
+
 test('#243 review 2: herdr not saying which shell runs at first sight: nothing noted, logged once, asked again', async () => {
   const w = afterTidy({
     panes: [withTerminal(shellPane('w1:p1', 't1', '💤 Master'), 'term-a')],
