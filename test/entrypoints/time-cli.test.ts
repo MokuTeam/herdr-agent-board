@@ -154,6 +154,7 @@ test('the JSON an agent reads: an entry, a repeat, a list, a day, and an error, 
     'seconds',
     'start',
     'stop',
+    'systems',
     'tags',
   ])
   assert.deepEqual([made.billable, made.billableDefault, made.posts], [true, true, []])
@@ -992,5 +993,104 @@ test('a change says the day as durations, worked → billed, and the entry’s s
   assert.ok(
     edited?.includes(` · 1:05 (${longer}) · Case 10001 X: work · rev 2 · for the day 1h\u00a05m → 1h\u00a030m`),
     String(edited),
+  )
+})
+
+test('a project billed elsewhere: entered only in its own systems; listed, switched over and posted by them', async () => {
+  const base = posting((await setUp()).cfg)
+  const time = base.time as { clients: Record<string, Record<string, unknown>> }
+  const cfg = {
+    ...base,
+    time: {
+      ...time,
+      clients: {
+        ...time.clients,
+        'client-a': {
+          ...time.clients['client-a'],
+          projects: ['Support', 'Internal', 'Side'],
+          projectSystems: { Side: ['tracker'] },
+        },
+      },
+    },
+  } as Config
+  const support = await jsonOf(cfg, addAt('09:00', 'Support', 'Case 10001 X: work'))
+  const side = await jsonOf(cfg, addAt('10:00', 'Side', 'Case 10002 Y: work'))
+  const ids = (list: { id: string }[]) => list.map(e => e.id)
+  const range = ['--from', '2026-10-28', '--to', '2026-10-28']
+  assert.deepEqual([support.systems, side.systems], [['erp', 'tracker'], ['tracker']])
+  // to enter in erp: not the side project's
+  assert.deepEqual(ids(await jsonOf(cfg, ['list', '--not-posted', '--system', 'erp', ...range])), [support.id])
+  await jsonOf(cfg, ['post', side.id, '--system', 'tracker'])
+  // in tracker, it is entered: nothing left of it to enter anywhere
+  assert.deepEqual(ids(await jsonOf(cfg, ['list', '--not-posted', ...range])), [support.id])
+  // a post in a system its project is not entered in is refused, naming its own
+  const refused = await jsonOf(cfg, ['post', side.id, '--system', 'erp'])
+  assert.deepEqual(
+    [refused.error, refused.message],
+    [
+      'projectSystem',
+      'Side of client-a is not entered into "erp": its systems are tracker (projectSystems in config.json)',
+    ],
+  )
+  // the switch-over leaves it out
+  const dry = await jsonOf(cfg, ['post', '--client', 'client-a', '--to', '2026-10-28', '--system', 'erp', '--dry-run'])
+  assert.deepEqual(ids(dry.entries), [support.id])
+  // a mark in erp from before (the config said otherwise then) is none of its own: a change does not
+  // list it as changed after entering there, only in tracker; unpost takes it off
+  await jsonOf(posting(base), ['post', side.id, '--system', 'erp'])
+  await run(cfg, ['edit', side.id, '--description', 'Case 10002 Y: more'])
+  const changed = await jsonOf(cfg, ['list', '--changed-after-post', '--system', 'erp', ...range])
+  assert.deepEqual(changed, [])
+  assert.deepEqual(ids(await jsonOf(cfg, ['list', '--changed-after-post', ...range])), [side.id])
+  const un = await jsonOf(cfg, ['unpost', side.id, '--system', 'erp'])
+  assert.equal(un.count, 1)
+  // a client whose projects all go everywhere: as before
+  assert.deepEqual(ids(await jsonOf(posting(base), ['list', '--not-posted', '--system', 'erp', ...range])), [
+    support.id,
+    side.id,
+  ])
+})
+
+test('a project entered nowhere ([]): nothing of it to enter, posted nowhere; a mark in a system gone from the config still changed after', async () => {
+  const base = posting((await setUp()).cfg)
+  const time = base.time as { clients: Record<string, Record<string, unknown>> }
+  const withClient = (own: Record<string, unknown>) =>
+    ({
+      ...base,
+      time: { ...time, clients: { ...time.clients, 'client-a': { ...time.clients['client-a'], ...own } } },
+    }) as Config
+  const cfg = withClient({ projects: ['Support', 'Internal', 'Own'], projectSystems: { Own: [] } })
+  const own = await jsonOf(cfg, addAt('09:00', 'Own', 'Case 10001 X: work'))
+  const range = ['--from', '2026-10-28', '--to', '2026-10-28']
+  assert.deepEqual(own.systems, [])
+  assert.deepEqual(await jsonOf(cfg, ['list', '--not-posted', ...range]), [])
+  const refused = await jsonOf(cfg, ['post', own.id, '--system', 'tracker'])
+  assert.deepEqual(
+    [refused.error, refused.message],
+    [
+      'projectSystem',
+      'Own of client-a is not entered into "tracker": its systems are - (projectSystems in config.json)',
+    ],
+  )
+  const dry = await jsonOf(cfg, [
+    'post',
+    '--client',
+    'client-a',
+    '--to',
+    '2026-10-28',
+    '--system',
+    'tracker',
+    '--dry-run',
+  ])
+  assert.equal(dry.count, 0)
+  // erp taken off the client after a Support entry was entered there: still to be changed there
+  const support = await jsonOf(base, addAt('10:00', 'Support', 'Case 10002 Y: work'))
+  await jsonOf(base, ['post', support.id, '--system', 'erp'])
+  const trackerOnly = withClient({ systems: [{ id: 'tracker', title: 'Tracker' }] })
+  await run(trackerOnly, ['edit', support.id, '--description', 'Case 10002 Y: more'])
+  const changed = await jsonOf(trackerOnly, ['list', '--changed-after-post', '--system', 'erp', ...range])
+  assert.deepEqual(
+    changed.map((e: { id: string }) => e.id),
+    [support.id],
   )
 })

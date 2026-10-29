@@ -11,7 +11,8 @@
 // An entry is billable as its client and project say (`billable`, `nonBillable`) unless a person,
 // an agent or the import set it the other way; one that is not counts as worked, never as billed.
 // A client's `systems` are where its time is entered (an ERP, a tracker): an entry carries a mark
-// per system once it is (adapters/time-store.ts).
+// per system once it is (adapters/time-store.ts). A project billed elsewhere names its own
+// (`projectSystems`): its entries are to be entered there only (#260).
 // Turned off (`time.on`, a client's `on`: false) and retired projects keep what is there: time off
 // keeps its settings for when it is on again; a client off takes no new entry, its own billed by
 // its rules as before; a retired project is offered no more, its entries keep it (#237).
@@ -57,6 +58,8 @@ export interface TimeClient {
   nonBillable: string[]
   /** Where its time is entered; none: nothing to enter. */
   systems: TimeSystem[]
+  /** A project entered elsewhere than in all of `systems`: its systems' ids (none: nowhere), by the project's name. */
+  projectSystems: Record<string, string[]>
   /** The reference in a description (a case number, a ticket key): its first capture. */
   ref: string
   /** The client's own time zone; null: the board's. */
@@ -85,6 +88,8 @@ export type ProblemWhy =
   | 'project'
   | 'system'
   | 'retired'
+  | 'notSystem'
+  | 'twice'
 
 /** A value of config.json's `time` that does not check out: where (time.clients.x.billing[1].round), and why. */
 export interface TimeProblem {
@@ -141,7 +146,18 @@ function goodRegex(source: string): boolean {
 }
 
 const TIME_KEYS = ['on', 'zone', 'excludeTags', 'clients']
-const CLIENT_KEYS = ['on', 'projects', 'retired', 'ref', 'zone', 'billing', 'billable', 'nonBillable', 'systems']
+const CLIENT_KEYS = [
+  'on',
+  'projects',
+  'retired',
+  'ref',
+  'zone',
+  'billing',
+  'billable',
+  'nonBillable',
+  'systems',
+  'projectSystems',
+]
 const SYSTEM_KEYS = ['id', 'title']
 const SYSTEM_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
 const RULE_KEYS = ['match', 'group', 'step', 'round']
@@ -202,6 +218,54 @@ function systemsOf(v: unknown, at: string, problems: TimeProblem[]): TimeSystem[
     else if (o && o.title !== undefined && typeof o.title !== 'string')
       problems.push({ at: `${place}.title`, why: 'type', value: shown(o.title) })
     else out.push({ id, title: (o && typeof o.title === 'string' && cleanText(o.title, 40)) || id })
+  }
+  return out
+}
+
+/**
+ * A client's projects entered elsewhere than in all of its systems: a project (one of its projects
+ * or retired ones, when it keeps a list; each named once, case and spaces aside) to a list of its
+ * systems' ids, each once; an empty list: entered nowhere. A list naming a system the client has
+ * not is left out whole (a problem): its project read as entered everywhere, so a slip over-lists
+ * what is to enter rather than hide it.
+ */
+function projectSystemsOf(
+  v: unknown,
+  at: string,
+  own: { systems: readonly TimeSystem[]; projects: readonly string[] | null; retired: readonly string[] },
+  problems: TimeProblem[],
+): Record<string, string[]> {
+  if (v === undefined) return {}
+  if (!isObject(v)) {
+    problems.push({ at, why: 'type', value: shown(v) })
+    return {}
+  }
+  const out: Record<string, string[]> = {}
+  const named: string[] = []
+  for (const [project, raw] of Object.entries(v)) {
+    const place = `${at}.${project}`
+    if (own.projects && !projectIn([...own.projects, ...own.retired], project)) {
+      problems.push({ at: place, why: 'project', value: project })
+      continue
+    }
+    // named twice whether or not the first one checks out: which one is meant would be a guess
+    if (named.some(p => sameProject(p, project))) {
+      problems.push({ at: place, why: 'twice', value: project })
+      continue
+    }
+    named.push(project)
+    const ids = strings(raw, place, problems)
+    if (!ids) continue
+    const list: string[] = []
+    let unknown = false
+    ids.forEach((id, i) => {
+      if (list.includes(id)) problems.push({ at: `${place}[${i}]`, why: 'system', value: id })
+      else if (!own.systems.some(s => s.id === id)) {
+        problems.push({ at: `${place}[${i}]`, why: 'notSystem', value: id })
+        unknown = true
+      } else list.push(id)
+    })
+    if (!unknown) out[project] = list
   }
   return out
 }
@@ -283,7 +347,13 @@ export function timeConfig(raw: unknown): TimeConfig | null {
             problems.push({ at: `${at}.nonBillable[${i}]`, why: 'project', value: project })
         })
       const systems = systemsOf(o.systems, `${at}.systems`, problems)
-      clients[id] = { on, projects, retired, ref, zone: own, billing, billable, nonBillable, systems }
+      const projectSystems = projectSystemsOf(
+        o.projectSystems,
+        `${at}.projectSystems`,
+        { systems, projects, retired },
+        problems,
+      )
+      clients[id] = { on, projects, retired, ref, zone: own, billing, billable, nonBillable, systems, projectSystems }
     }
   }
   return { zone, excludeTags, clients, problems }
@@ -337,6 +407,7 @@ const ANY_CLIENT: TimeClient = {
   billable: true,
   nonBillable: [],
   systems: [],
+  projectSystems: {},
 }
 
 /** Whether a client's entries on a project are billable by default (its `billable`, then `nonBillable`). */
@@ -350,11 +421,38 @@ export function billableByDefault(c: TimeConfig, client: string, project: string
 export const billableOf = (c: TimeConfig, e: Pick<TimeEntry, 'client' | 'project' | 'billable'>): boolean =>
   e.billable ?? billableByDefault(c, e.client, e.project)
 
-/** The systems a client's time is entered in (none: nothing to enter). */
-export const systemsFor = (c: TimeConfig, client: string): TimeSystem[] => {
-  const own = clientOf(c, client)
-  return own.ok ? own.client.systems : []
+/**
+ * The systems a client's project is entered in: its own (`projectSystems`, the name matched as the
+ * board tells names apart) where it has them, else all of the client's. The page has a client's
+ * settings as the day gives them, so `projectSystems` may be missing there.
+ */
+export function systemsOfProject(
+  client: { systems: readonly TimeSystem[]; projectSystems?: Record<string, readonly string[]> },
+  project: string,
+): TimeSystem[] {
+  const own = client.projectSystems ?? {}
+  const key = Object.keys(own).find(p => sameProject(p, project))
+  if (key === undefined) return [...client.systems]
+  const ids = own[key] ?? []
+  return client.systems.filter(s => ids.includes(s.id))
 }
+
+/**
+ * The systems a client's time is entered in (none: nothing to enter); with a project, the ones
+ * that project's entries are (systemsOfProject).
+ */
+export const systemsFor = (c: TimeConfig, client: string, project?: string): TimeSystem[] => {
+  const own = clientOf(c, client)
+  if (!own.ok) return []
+  return project === undefined ? own.client.systems : systemsOfProject(own.client, project)
+}
+
+/**
+ * Whether a mark in `system` is not one the entry is to have: a system of its client's that its
+ * project is not entered in (one since gone from the config is the entry's still, to take out).
+ */
+export const outsideProject = (c: TimeConfig, e: Pick<TimeEntry, 'client' | 'project'>, system: string): boolean =>
+  systemsFor(c, e.client).some(x => x.id === system) && !systemsFor(c, e.client, e.project).some(x => x.id === system)
 
 // ------------------------------------------------------------------ dates and times
 
@@ -558,7 +656,8 @@ export interface EntryPost {
 /**
  * An entry as the JSON gives it (`board time --json`, the Time panel): the stored fields, its
  * `seconds`, `billable` as it comes out with `billableDefault` (true: as the config says, not set
- * on it), and `posts`, where it was entered, each with `changedAfter` (the entry changed since).
+ * on it), `systems`, the ids of the systems it is to be entered in (its project's), and `posts`,
+ * where it was entered, each with `changedAfter` (the entry changed since).
  */
 export function entryView(c: TimeConfig, e: TimeEntry, posts: readonly EntryPost[] = []) {
   return {
@@ -566,6 +665,7 @@ export function entryView(c: TimeConfig, e: TimeEntry, posts: readonly EntryPost
     seconds: secondsOf(e),
     billable: billableOf(c, e),
     billableDefault: e.billable === undefined,
+    systems: systemsFor(c, e.client, e.project).map(s => s.id),
     posts: posts.map(p => ({
       system: p.system,
       at: p.at,

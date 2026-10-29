@@ -156,16 +156,23 @@ test('a client opened: projects with their entries and Billable, the retired to 
   const rows = r.by('time-set-project')
   expect(rows.map(li => text(li.children))).toEqual(['Support3 entries', 'Internal', 'Old1 entryBring back'])
   const checks = findAll(rows, (el: Element) => el.tag === 'input' && el.attrs.get('type') === 'checkbox')
+  // billable, then each of its two systems (a project entered elsewhere is unticked there)
   expect(checks.map(c => [c.attrs.get('aria-label'), c.attrs.has('checked')])).toEqual([
     ['Billable: Support', true],
+    ['Entered into ERP: Support', true],
+    ['Entered into tracker: Support', true],
     ['Billable: Internal', false],
+    ['Entered into ERP: Internal', true],
+    ['Entered into tracker: Internal', true],
   ])
   expect(r.all).toContain('Retired: not offered for new entries, kept by their entries')
   expect(text(r.by('time-set-systems')[0]?.children ?? [])).toBe('ERPerp×tracker×')
   expect(r.all).toContain('Billing rules and the reference are set in config.json.')
   // never billed: no Billable column, said
   const unbilled = render({ view: { ...VIEW, clients: { personal: { ...CLIENT, billable: false } } } })
-  expect(findAll(unbilled.by('time-set-project'), el => el.attrs.get('type') === 'checkbox')).toEqual([])
+  expect(
+    findAll(unbilled.by('time-set-project'), el => (el.attrs.get('aria-label') ?? '').startsWith('Billable')),
+  ).toEqual([])
   expect(unbilled.all).toContain('Never billed: its time counts as worked only.')
   // any project: kept as a list from what its entries have
   const any = render({ view: { ...VIEW, clients: { a: { ...CLIENT, projects: null } } } })
@@ -179,4 +186,26 @@ test('a refusal is said under the part it is about', () => {
   })
   expect(text(r.by('time-set-client-body')[0]?.children ?? [])).toContain('"Support" is there already.')
   expect(render({ view: VIEW, refusal: { part: 'time', text: 'nope' } }).by('time-set-refusal').length).toBe(1)
+})
+
+test('a project’s systems: a column each where the client has two, named once; one alone is no choice', () => {
+  const r = render({
+    view: { ...VIEW, clients: { 'client-a': { ...CLIENT, projectSystems: { Internal: ['tracker'] } } } },
+  })
+  expect(text(r.by('time-set-projects-head')[0]?.children ?? [])).toBe('ProjectsBillableERPtracker')
+  const checks = findAll(r.by('time-set-project'), el => (el.attrs.get('aria-label') ?? '').startsWith('Entered'))
+  expect(checks.map(c => [c.attrs.get('aria-label'), c.attrs.has('checked')])).toEqual([
+    ['Entered into ERP: Support', true],
+    ['Entered into tracker: Support', true],
+    ['Entered into ERP: Internal', false],
+    ['Entered into tracker: Internal', true],
+  ])
+  expect(r.all).toContain('A system unticked for a project: its entries are not entered there')
+  const one = render({
+    view: { ...VIEW, clients: { 'client-a': { ...CLIENT, systems: [{ id: 'erp', title: 'ERP' }] } } },
+  })
+  expect(findAll(one.by('time-set-project'), el => (el.attrs.get('aria-label') ?? '').startsWith('Entered'))).toEqual(
+    [],
+  )
+  expect(one.all).not.toContain('A system unticked')
 })

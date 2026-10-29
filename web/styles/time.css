@@ -510,15 +510,18 @@
 .time-set-name .time-dot { font-size: 14px; font-weight: 600; letter-spacing: -0.006em; overflow-wrap: anywhere; }
 .time-set-name small { color: var(--label-2); font-size: 12px; overflow-wrap: anywhere; }
 .time-set-client.off .time-set-name .time-dot { color: var(--label-2); }
-.time-set-client-body { padding: 0 0 12px 21px; }
+.time-set-client-body { --system-col: 60px; padding: 0 0 12px 21px; }
 .time-switch-bare { flex: none; }
 
-/* A project's row: its name, its entries, billable (a column named once, in the heading), Rename
-   and Retire as small icon buttons; a retired one's: its name, its entries, Bring back. */
+/* A project's row: its name, its entries, billable and each system it can be taken out of (columns
+   named once, in the heading; --systems has one --system-col per system, none where there is no
+   choice), Rename and Retire as small icon buttons; a retired one's: its name, its entries, Bring
+   back. */
 .time-set-projects { margin: 0; padding: 0; list-style: none; }
-.time-set-projects-head, .time-set-project { display: grid; grid-template-columns: minmax(0, 1fr) auto 52px 28px 28px; align-items: center; column-gap: 6px; }
+.time-set-projects-head, .time-set-project { display: grid; grid-template-columns: minmax(0, 1fr) auto 52px var(--systems,) 28px 28px; align-items: center; column-gap: 6px; }
 .time-set-projects-head h5 { margin: 0; font: inherit; }
 .time-set-projects-head span { grid-column: 3; text-align: center; }
+.time-set-projects-head .time-set-system-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .time-set-project { min-height: 36px; border-bottom: 0.5px solid var(--separator); }
 .time-set-retired .time-set-project { grid-template-columns: minmax(0, 1fr) auto auto; }
 .time-set-project-name { min-width: 0; font-size: 13.5px; overflow-wrap: anywhere; }
@@ -564,7 +567,7 @@
 
 /* a finger: Rename and Retire big enough to hit */
 @media (pointer: coarse) {
-  .time-set-projects-head, .time-set-project { grid-template-columns: minmax(0, 1fr) auto 44px 36px 36px; }
+  .time-set-projects-head, .time-set-project { grid-template-columns: minmax(0, 1fr) auto 44px var(--systems,) 36px 36px; }
   .time-set-icon { width: 36px; height: 36px; }
 }
 @media (prefers-reduced-motion: reduce) {

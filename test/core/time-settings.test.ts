@@ -158,3 +158,59 @@ test('newProblems: only what the edit brought, a problem already there is not on
   const more = [...was, { at: 'time.zone', why: 'zone' as const, value: 'X' }]
   assert.deepEqual(newProblems(was, more), [more[1]])
 })
+
+test('a project’s systems: set apart from the client’s, back to them, carried by a rename, a system taken off taken off it too', () => {
+  const two = {
+    ...BASE,
+    clients: { ...BASE.clients, 'client-a': { ...BASE.clients['client-a'], systems: ['erp', 'tracker'] } },
+  }
+  const own = edited(two, { op: 'projectSystems', client: 'client-a', project: 'migration', systems: ['tracker'] })
+  // under the name the list has, in the client's order
+  assert.deepEqual(client(own, 'client-a').projectSystems, { Migration: ['tracker'] })
+  assert.deepEqual(timeConfig(own)?.problems, [])
+  const none = edited(own, { op: 'projectSystems', client: 'client-a', project: 'Support', systems: [] })
+  assert.deepEqual(client(none, 'client-a').projectSystems, { Migration: ['tracker'], Support: [] })
+  // all of the client's, or null: no list of its own
+  const all = edited(own, {
+    op: 'projectSystems',
+    client: 'client-a',
+    project: 'Migration',
+    systems: ['tracker', 'erp'],
+  })
+  assert.equal('projectSystems' in client(all, 'client-a'), false)
+  const back = edited(own, { op: 'projectSystems', client: 'client-a', project: 'Migration', systems: null })
+  assert.equal('projectSystems' in client(back, 'client-a'), false)
+  assert.equal(
+    refusal(two, { op: 'projectSystems', client: 'client-a', project: 'Nope', systems: ['erp'] }),
+    'time.set.err.noSuch',
+  )
+  assert.equal(
+    refusal(two, { op: 'projectSystems', client: 'client-a', project: 'Support', systems: ['wiki'] }),
+    'time.set.err.system',
+  )
+  // a rename takes its systems along
+  const renamed = edited(own, { op: 'rename', client: 'client-a', from: 'Migration', to: 'Move' })
+  assert.deepEqual(client(renamed, 'client-a').projectSystems, { Move: ['tracker'] })
+  // a system taken off the client: off the projects' lists too (only there: entered nowhere)
+  const fewer = edited(none, { op: 'systems', client: 'client-a', systems: [{ id: 'erp', title: 'erp' }] })
+  assert.deepEqual(client(fewer, 'client-a').projectSystems, { Migration: [], Support: [] })
+  assert.deepEqual(timeConfig(fewer)?.problems, [])
+  // ids as config.json may hold them, spaces around: read as timeConfig reads them
+  const spaced = {
+    ...two,
+    clients: {
+      ...two.clients,
+      'client-a': {
+        ...two.clients['client-a'],
+        systems: [' erp', 'tracker '],
+        projectSystems: { Migration: [' tracker'] },
+      },
+    },
+  }
+  const kept = edited(spaced, { op: 'systems', client: 'client-a', systems: [{ id: 'tracker', title: '' }] })
+  assert.deepEqual(client(kept, 'client-a').projectSystems, { Migration: ['tracker'] })
+  const set = edited(spaced, { op: 'projectSystems', client: 'client-a', project: 'Support', systems: [' erp '] })
+  assert.deepEqual(client(set, 'client-a').projectSystems, { Migration: [' tracker'], Support: ['erp'] })
+  const gone = edited(none, { op: 'systems', client: 'client-a', systems: [] })
+  assert.equal('projectSystems' in client(gone, 'client-a'), false)
+})

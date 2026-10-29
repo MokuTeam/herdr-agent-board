@@ -220,6 +220,10 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.err.retired':
       '"{project}" is a retired project of {client}: it takes no new entries (Settings → Time tracking… brings it back).',
     'time.problem.retired': '"{value}" is both one of its projects and retired',
+    'time.problem.notSystem': '"{value}" is not one of this client’s systems',
+    'time.problem.twice': '"{value}" is named twice (case and spaces aside)',
+    'time.err.projectSystem':
+      '{project} of {client} is not entered into "{system}": its systems are {known} (projectSystems in config.json)',
     'time.edit.newProject': 'New project…',
     'time.edit.newProjectName': 'The new project’s name',
     'time.edit.newProjectAdds': 'Saved with the entry, it joins {client}’s projects.',
@@ -267,6 +271,9 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.set.systemId': 'id (a-z, 0-9, -)',
     'time.set.systemTitle': 'Name',
     'time.set.removeSystem': 'Remove {system}',
+    'time.set.projectEntered': 'Entered into {system}',
+    'time.set.projectSystemsHint':
+      'A system unticked for a project: its entries are not entered there (a project billed elsewhere).',
     'time.set.kept': 'Billing rules and the reference are set in config.json.',
     'time.set.without': 'Lanes without time',
     'time.set.take': 'Take time',
@@ -499,6 +506,10 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.err.retired':
       '"{project}" скрытый проект {client}: новых записей не принимает (вернуть можно в Настройки → Учёт времени…).',
     'time.problem.retired': '"{value}" одновременно в проектах и в скрытых',
+    'time.problem.notSystem': '"{value}" не система этого клиента',
+    'time.problem.twice': '"{value}" назван дважды (без учёта регистра и пробелов)',
+    'time.err.projectSystem':
+      '{project} клиента {client} не вносится в "{system}": его системы: {known} (projectSystems в config.json)',
     'time.edit.newProject': 'Новый проект…',
     'time.edit.newProjectName': 'Название нового проекта',
     'time.edit.newProjectAdds': 'Сохранится вместе с записью и добавится в проекты {client}.',
@@ -550,6 +561,9 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.set.systemId': 'id (a-z, 0-9, -)',
     'time.set.systemTitle': 'Название',
     'time.set.removeSystem': 'Убрать {system}',
+    'time.set.projectEntered': 'Вносится в {system}',
+    'time.set.projectSystemsHint':
+      'Система снята у проекта: его записи туда не вносятся (проект выставляется в другом месте).',
     'time.set.kept': 'Правила счёта и шаблон ссылки задаются в config.json.',
     'time.set.without': 'Лейны без учёта времени',
     'time.set.take': 'Учитывать время',

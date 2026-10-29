@@ -350,6 +350,7 @@ test('billable set on an entry from the page, and back to the config’s; the da
       { id: 'erp', title: 'erp' },
       { id: 'tracker', title: 'Tracker' },
     ],
+    projectSystems: {},
     retired: [],
   })
 })

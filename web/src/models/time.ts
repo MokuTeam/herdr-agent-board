@@ -412,7 +412,8 @@ export function addOf(d: Draft): Record<string, unknown> | null {
 /** A line's state in one system: every entry entered, some, none, or one changed after it was. */
 export type MarkState = 'entered' | 'partly' | 'not' | 'changed'
 
-type Posted = Pick<EntryView, 'id' | 'rev' | 'posts'>
+/** An entry as a mark reads it; `systems`, where it is to be entered (its project's), when the day said so. */
+type Posted = Pick<EntryView, 'id' | 'rev' | 'posts'> & { systems?: readonly string[] }
 
 /** Where entries stand in a system: a change after entering first, then all, none, or some. */
 export function markState(entries: readonly Posted[], system: string): MarkState {
@@ -420,6 +421,20 @@ export function markState(entries: readonly Posted[], system: string): MarkState
   if (posts.some(p => p?.changedAfter)) return 'changed'
   if (posts.every(Boolean)) return 'entered'
   return posts.some(Boolean) ? 'partly' : 'not'
+}
+
+/**
+ * A line's systems as its marks show them: each of the client's with the line's entries that are to
+ * be entered there (an entry's own `systems`: a project entered elsewhere is not); one none of
+ * them is, left out.
+ */
+export function lineSystems<E extends Posted, S extends { id: string }>(
+  entries: readonly E[],
+  systems: readonly S[],
+): (S & { listed: E[] })[] {
+  return systems
+    .map(x => ({ ...x, listed: entries.filter(e => !e.systems || e.systems.includes(x.id)) }))
+    .filter(x => x.listed.length > 0)
 }
 
 /** A post or an unpost as the page sends it (POST /api/time). */
@@ -468,10 +483,19 @@ export function markPlan(entries: readonly Posted[], system: string): { send: Ma
   return { send: { op: 'post', system, entries: [...fresh, ...stale].map(e => ({ id: e.id, rev: e.rev })) }, undo }
 }
 
-/** A client's billed time not yet entered: its lines with an entry missing a mark in one of the systems. */
+/**
+ * A client's billed time not yet entered: its lines with an entry missing a mark in one of the
+ * systems that it is to be entered in (its own `systems`: a project entered elsewhere is not asked
+ * for in the rest).
+ */
 export function notEntered(day: ClientDay, byId: ReadonlyMap<string, Posted>, systems: readonly string[]): number {
   if (!systems.length) return 0
+  const missing = (id: string, sys: string): boolean => {
+    const e = byId.get(id)
+    if (e?.systems && !e.systems.includes(sys)) return false
+    return !e?.posts.some(p => p.system === sys)
+  }
   return day.lines
-    .filter(l => systems.some(sys => l.entries.some(id => !byId.get(id)?.posts.some(p => p.system === sys))))
+    .filter(l => systems.some(sys => l.entries.some(id => missing(id, sys))))
     .reduce((n, l) => n + l.billedSeconds, 0)
 }

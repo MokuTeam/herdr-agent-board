@@ -46,6 +46,7 @@ import {
   entryTimes,
   isTimeDay,
   lineLabel,
+  lineSystems,
   type MarkBody,
   type MarkState,
   markPlan,
@@ -464,7 +465,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   const lineOf = (client: string) => (l: Line) => {
     const name = lineLabel(l, t)
     const listed = l.entries.map(id => entries.get(id)).filter((e): e is Entry => !!e)
-    const systems = systemsOf(client)
+    const systems = lineSystems(listed, systemsOf(client))
     const last = l.entries[l.entries.length - 1]
     // what its entries can give, each kept a minute: Trim only where that reaches the billed figure
     const room = l.entries.reduce((n, id) => n + Math.max(0, (entries.get(id)?.seconds ?? 0) - 60), 0)
@@ -492,7 +493,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
         {(systems.length > 0 || align) && (
           <div className="time-line-foot">
             {systems.map(x => {
-              const state = markState(listed, x.id)
+              const state = markState(x.listed, x.id)
               return (
                 <button
                   type="button"
@@ -504,7 +505,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                   aria-label={markText(state, x.title)}
                   title={`${markText(state, x.title)}. ${t(state === 'entered' ? 'time.mark.tapUnpost' : 'time.mark.tapPost', { system: x.title })}`}
                   disabled={!canEdit || busy || marking}
-                  onClick={() => void markLine(listed, x)}
+                  onClick={() => void markLine(x.listed, x)}
                 >
                   <span className="time-mark-glyph" aria-hidden="true">
                     {MARK_GLYPHS[state]}
