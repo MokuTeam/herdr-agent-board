@@ -102,8 +102,9 @@ Convenience comes from a one-command install and a service instead.
   the `agent` user and its home.
 - **`board update`** (as `agent`): fetches the ref the board came from, installs, and lets the
   board restart itself (run.ts restarts the board when its code changes).
-- **Path B**: in the local board's Remote access panel, a choice beside "Set up the server":
-  "Install the board on this server". The same server, login and password, and an address of its
+- **Path B**: in the local board's Remote access panel, on its Server tab, a card of its own
+  beside the tunnel's ("The board on the server"): "Install the board on this server". The same
+  server, login and password (the Server tab's login, once at its top), and an address of its
   own ("Address of the board on the server", `tunnel.install.domain`; never the tunnel's, which
   would move the tunnel); Look shows the plan;
   Apply sends the script and the archive over the existing password login and streams its output
@@ -168,14 +169,23 @@ Not built in this step. Written down so the server mode leaves room for it.
   - Deletions are shown and apply only when ticked.
 - **Size.** About 1.7 GB the first time for the owner's two profiles (mostly `projects`), packed,
   over ssh. Afterwards only what changed.
-- **How the local board reaches `agent`**: the builder of that step decides between the password
-  each time and a key the install adds, limited to the sync's own command.
+- **How the local board reaches `agent`**: the builder of that step decides between the admin's
+  password and a key the install adds, limited to the sync's own command.
 
 ### As built (after the sketch above)
 
-- **The password each time.** The sync logs in as the server setup does (the admin's login, the
-  server's key pinned by its Look, the password typed in the panel and sent with each request,
-  sudo's alone first); root reads the board's user and home from the install's record and runs
+- **The password remembered 30 minutes.** The sync logs in as the server setup does (the admin's
+  login, the server's key pinned by its Look, the password typed in the panel's Server tab, sudo's
+  alone first). The owner changed "asked every time" to "remembered 30 minutes in the local board's
+  memory": once a login with them went through, the local board keeps the admin's password (and
+  sudo's, when it is its own) in its process memory only, never on disk, in config.json, web.log,
+  a payload, an answer or the browser's storage, for 30 minutes since its last use, each use
+  counting again (`services/held-passwords.ts`). Every server action (Look, Apply, Undo, Install,
+  the sync's preview and apply, the folder listing) that carries none gets it; one the server
+  refuses is dropped, never held; "Forget the password" and a restart of the board drop it too.
+  The panel shows "Password remembered until HH:MM" next to the field (the view's
+  `server.passwordHeld`, until when only) and asks nothing while it holds one. Over the tunnel or
+  Tailscale `/api/access` stays refused, so only the local board's page reaches it. root reads the board's user and home from the install's record and runs
   the sync program (`entrypoints/profile-sync.ts`) as that user with `setsid -w runuser`: every
   file on the server's side is written by `agent`. A key limited to the sync would need the install
   to manage a second key in `agent`'s authorized_keys and a forced command parsing its arguments;

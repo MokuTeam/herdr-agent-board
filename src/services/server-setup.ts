@@ -13,8 +13,8 @@
 // in memory only while that request (or that run, to mask a line that would hold one) lasts;
 // never in config.json, web.log, the view, an answer or a command line. ssh's lines are read as the
 // server said them (a password like `debian` or `1` is a word Look and the run print too); a line
-// that is shown (a step's output, an error) has it masked. Without a password the login is the keys' alone, its ssh line as before
-// the password login.
+// that is shown (a step's output, an error) has it masked. Without a password the login is the
+// keys' alone, its ssh line as before the password login.
 //
 // With the board's own public key, Look reads step 1's parts too and Apply makes what the server
 // lacks of them (the tunnel user, the socket's folder, the keys file, sshd's fence). A run travels
