@@ -62,6 +62,11 @@ describe('the picker’s model', () => {
       pcListing({ path: 'C:\\migo', exists: true, dir: true, entries: ['b', '.git', 'a'], parent: 'C:\\', sep: '\\' }),
     ).toEqual({ path: 'C:\\migo', parent: 'C:\\', entries: ['a', 'b', '.git'], sep: '\\', roots: [], error: null })
     expect(pcListing({ path: 'C:\\gone', exists: false })?.error).toBe('missing')
+    // a folder not there yet: its parent, so the picker opens there
+    expect(pcListing({ path: 'C:\\migo\\gone', exists: false })?.parent).toBe('C:\\migo')
+    expect(pcListing({ path: 'C:\\gone', exists: false })?.parent).toBe('C:\\')
+    expect(pcListing({ path: '/home/me/gone', exists: false })?.parent).toBe('/home/me')
+    expect(pcListing({ path: '/gone', exists: false })?.parent).toBe('/')
     expect(pcListing({ path: 'X:\\', exists: false, slow: true })?.error).toBe('slow')
     expect(pcListing(null)).toBeNull()
     expect(

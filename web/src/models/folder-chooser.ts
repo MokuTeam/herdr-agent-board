@@ -51,6 +51,14 @@ export const sortFolders = (names: readonly string[]): string[] =>
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
 
+/** The folder a path is in, when the listing does not say (one not there): '' at a root. */
+function parentOf(path: string): string {
+  const up = path.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]*$/, '')
+  if (up === path || path === '') return ''
+  if (/^[a-zA-Z]:$/.test(up)) return `${up}\\`
+  return up === '' && path.startsWith('/') ? '/' : up
+}
+
 /** This computer's folder as POST /api/fs/dirs answers it ('' its roots); null for no answer. */
 export function pcListing(r: unknown): Listing | null {
   if (!r || typeof r !== 'object') return null
@@ -67,7 +75,7 @@ export function pcListing(r: unknown): Listing | null {
     o.exists === false ? (o.slow === true ? 'slow' : 'missing') : o.dir === false ? 'notDir' : (o.error ?? null)
   return {
     path,
-    parent: typeof o.parent === 'string' ? o.parent : '',
+    parent: typeof o.parent === 'string' ? o.parent : parentOf(path),
     entries: sortFolders(strings(o.entries)),
     sep: typeof o.sep === 'string' ? o.sep : path.includes('/') && !path.includes('\\') ? '/' : '\\',
     roots,
