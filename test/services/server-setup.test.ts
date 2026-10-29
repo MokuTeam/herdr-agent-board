@@ -18,6 +18,7 @@ import {
   sshVersion,
   tunnelDir,
 } from '../../src/adapters/ssh.ts'
+import type { LocalVersion } from '../../src/core/server-board.ts'
 import type { Plan, SetupRecord } from '../../src/core/server-plan.ts'
 import type { Acme } from '../../src/core/server-texts.ts'
 import type { ServerPhase } from '../../src/core/server-view.ts'
@@ -75,6 +76,7 @@ async function useBoard(
     sshVersion?: string
     key?: () => string | null
     pack?: () => Promise<BoardPack | null>
+    head?: () => Promise<LocalVersion | null>
   } = {},
 ) {
   const fake = await useFakeSsh()
@@ -138,6 +140,7 @@ async function useBoard(
     ...(o.acme && { acme: o.acme }),
     ...(o.key && { publicKey: async () => o.key?.() ?? null }),
     ...(o.pack && { pack: o.pack }),
+    ...(o.head && { head: o.head }),
     tunnel: async on => {
       turned.push(on)
     },
@@ -1525,5 +1528,211 @@ describe('the board installed on the server itself (path B of the board on a ser
     expect(b.setup.view().installDomain).toBe('')
     expect(b.setup.installDomain({ domain: null })).toEqual(OK)
     expect(b.tunnel()).toEqual(before)
+  })
+})
+
+describe('the board on the server: its version and its removal (path B’s card)', () => {
+  const SHA = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d'
+  const NEWER = 'ffeeddccbbaa99887766554433221100ffeeddcc'
+  const PACK: BoardPack = { bytes: new Uint8Array([31, 139, 8, 0, 4, 5, 6, 250, 251]), commit: NEWER, changes: false }
+  const SERVER_DOMAIN = 'workbench.example.com'
+  const INSTALL = { install: { domain: SERVER_DOMAIN } }
+  const RECORD = {
+    v: 1,
+    user: 'agent',
+    home: '/home/agent',
+    domain: SERVER_DOMAIN,
+    socket: '/var/lib/agent-board/board.sock',
+    source: { kind: 'archive', commit: SHA, changes: true },
+    sudo: false,
+    at: '2026-10-28T14:02:00.000Z',
+    desktop: ['chromium'],
+  }
+  /** What the round as root prints of an install: its record, its user with the installer's mark, herdr's service. */
+  const INSTALLED = [
+    `@@record ${JSON.stringify(RECORD)}`,
+    '@@user agent:x:1001:1001:agent-board server:/home/agent:/bin/bash',
+    '@@service',
+  ]
+  /** The server mode's own web server record at its domain, and the tunnel's setup kept apart (config.json). */
+  const serverRecord = (into: string): string =>
+    withRecord(into, 'debian13', 'bare', {
+      pair: { user: 'agent', socket: '/var/lib/agent-board/board.sock', server: true },
+      domain: SERVER_DOMAIN,
+      address: `https://${SERVER_DOMAIN}`,
+    })
+  const TUNNEL_SETUP = { setup: { case: '2', address: 'https://board.example.com', at: '2026-10-20T10:00:00.000Z' } }
+  const board = (o: { pack?: BoardPack | null; head?: LocalVersion | null } = {}) =>
+    useBoard(
+      { uid: 0 },
+      {
+        pack: async () => (o.pack === undefined ? PACK : o.pack),
+        head: async () => (o.head === undefined ? { commit: NEWER, changes: false } : o.head),
+        tunnel: { ...INSTALL, ...TUNNEL_SETUP },
+      },
+    )
+  const removeOf = (v: ReturnType<ReturnType<typeof createServerSetup>['view']>) => {
+    if (!v.remove) throw new Error('no remove in the view')
+    return v.remove
+  }
+
+  test('the install’s Look reads the version on the server, with the pack’s beside it', async () => {
+    const b = await board()
+    b.server({ fixture: fixture('debian13', 'bare'), board: INSTALLED })
+    expect(await b.setup.installLook({})).toEqual(OK)
+    const v = b.setup.view()
+    expect(v.installed?.version).toEqual({ commit: SHA, changes: true, ref: null, at: RECORD.at })
+    expect(v.local).toEqual({ commit: NEWER, changes: false })
+    // the round that reads it reads only, as root, and names nothing of the tunnel's
+    const round =
+      b
+        .commands()
+        .map(carried)
+        .find(c => c.includes('# agent-board: board')) ?? ''
+    expect(round).toContain('/etc/agent-board-server/install.json')
+    expect(round).not.toContain('boardtunnel')
+  })
+
+  test('read again on its own: the version and the local checkout’s, nothing else in the view changes; nothing installed is said as such', async () => {
+    const b = await board()
+    b.server({ board: INSTALLED })
+    const before = b.setup.view()
+    expect(before.installed ?? null).toBeNull()
+    expect(await b.setup.installVersion({})).toEqual(OK)
+    const v = b.setup.view()
+    expect(v.installed?.version?.commit).toBe(SHA)
+    expect(v.local).toEqual({ commit: NEWER, changes: false })
+    expect({ ...v, installed: null, local: null }).toEqual({ ...before, installed: null, local: null })
+    // two ssh: the probe and the round, no Look's
+    expect(b.commands().map(c => /# agent-board: (\S+)/.exec(carried(c) || c)?.[1] ?? 'probe')).toEqual([
+      'probe',
+      'board',
+    ])
+    b.server({ board: ['@@user '] })
+    expect(await b.setup.installVersion({})).toEqual(OK)
+    expect(b.setup.view().installed?.version).toBeNull()
+  })
+
+  test('the version read: refused while something runs, and before a login met the server’s key', async () => {
+    const unpinned = await useBoard({ uid: 0 }, { pinned: false, tunnel: INSTALL })
+    expect(await unpinned.setup.installVersion({})).toMatchObject({ status: 409, body: { hint: 'noHostKey' } })
+    expect(unpinned.logins()).toEqual([])
+    const b = await board()
+    b.server({ fixture: fixture('debian13', 'bare'), board: INSTALLED, run: { lines: ['one', 'two', 'three'] } })
+    expect(await b.setup.installLook({})).toEqual(OK)
+    expect(await b.setup.install({ plan: planOf(b.setup).id, docker: true })).toEqual(OK)
+    expect(await b.setup.installVersion({})).toMatchObject({ status: 409, body: { hint: 'busy' } })
+    await b.until(['done', 'failed'])
+  })
+
+  test('Remove: its Look says what the install’s --undo takes; the run sends the pack with --undo, the output streamed, then nothing installed', async () => {
+    const b = await board()
+    const tunnelBefore = b.tunnel()
+    b.server({ fixture: serverRecord(b.fake.dir), board: INSTALLED })
+    expect(await b.setup.removeLook({})).toEqual(OK)
+    const v = b.setup.view()
+    expect(v.target).toBe('remove')
+    expect(v.phase).toBe('plan')
+    const r = removeOf(v)
+    expect(r.facts).toMatchObject({ user: 'agent', home: '/home/agent', ours: true, record: true, service: true })
+    expect(r.domain).toBe(SERVER_DOMAIN)
+    expect(r.web).toBe(true)
+    expect(v.plan?.kind).toBe('undo')
+    expect(v.installed?.version?.commit).toBe(SHA)
+    b.server({ run: { lines: ['agent-board: looking at this server.', 'Undone.'] } })
+    expect(await b.setup.remove({ plan: r.id })).toEqual(OK)
+    expect(b.setup.view().phase).toBe('undoing')
+    await b.until(['done', 'failed'])
+    const after = b.setup.view()
+    expect(after.phase).toBe('done')
+    expect(removeOf(after).out).toEqual(['agent-board: looking at this server.', 'Undone.'])
+    expect(removeOf(after).code).toBe(0)
+    expect(after.installed?.version).toBeNull()
+    expect(b.logs).toEqual(['server remove: started', 'server remove: ended 0'])
+    const remover = carried(b.commands().at(-1) ?? '')
+    expect(remover).toContain('# agent-board: undo')
+    expect(remover).toContain('--undo --lang en --yes')
+    expect(remover).not.toContain('--remove-user')
+    expect(b.stdins()).toEqual([])
+    // the tunnel's setup on the same server: not a word of it, its settings as they were
+    for (const c of b
+      .commands()
+      .map(carried)
+      .filter(c => /# agent-board: (board|undo)/.test(c)))
+      expect(c).not.toMatch(/boardtunnel|\/etc\/agent-board\/|board\.example\.com/)
+    expect(b.tunnel()).toEqual(tunnelBefore)
+    expect(after.setup).toEqual(TUNNEL_SETUP.setup)
+  })
+
+  test('the user and its home go only when ticked, and only the installer’s user', async () => {
+    const run = async (lines: string[], removeUser: boolean): Promise<string> => {
+      const b = await useBoard({ sudo: 'password', password: SENTINEL }, { pack: async () => PACK, tunnel: INSTALL })
+      b.server({ fixture: serverRecord(b.fake.dir), board: lines, run: { lines: ['ok'] } })
+      expect(await b.setup.removeLook({ password: SENTINEL })).toEqual(OK)
+      const id = removeOf(b.setup.view()).id
+      expect(await b.setup.remove({ plan: id, removeUser, password: SENTINEL })).toEqual(OK)
+      await b.until(['done', 'failed'])
+      expect(removeOf(b.setup.view()).removeUser).toBe(removeUser && lines === INSTALLED)
+      // sudo's password alone first, then the pack after it; never on a command line
+      expect(b.stdins().slice(-2)).toEqual([
+        `${SENTINEL}\n`,
+        `${SENTINEL}\n${Buffer.from(PACK.bytes).toString('base64')}\n`,
+      ])
+      expect(b.commands().join('\n')).not.toContain(SENTINEL)
+      return carried(b.commands().at(-1) ?? '')
+    }
+    expect(await run(INSTALLED, true)).toContain('--undo --remove-user --lang en --yes')
+    expect(await run(INSTALLED, false)).not.toContain('--remove-user')
+    const notOurs = [INSTALLED[0] ?? '', '@@user agent:x:1000:1000:Agent Smith:/home/agent:/bin/bash', '@@service']
+    expect(await run(notOurs, true)).not.toContain('--remove-user')
+  })
+
+  test('Remove’s refusals: nothing installed, another Look’s plan, a run going on, no checkout to send', async () => {
+    const empty = await board()
+    empty.server({ fixture: fixture('debian13', 'bare'), board: ['@@user '] })
+    const none = (await empty.setup.removeLook({})) as { status: number; body: { error?: string } }
+    expect(none.status).toBe(409)
+    expect(none.body.error).toBe('Nothing of the board’s installer is on this server.')
+    expect(empty.setup.view().phase).toBe('idle')
+    expect(empty.setup.view().installed?.version).toBeNull()
+
+    const b = await board()
+    b.server({ fixture: serverRecord(b.fake.dir), board: INSTALLED, run: { lines: ['a', 'b', 'c', 'd'] } })
+    // an install's Look's plan is not Remove's
+    expect(await b.setup.installLook({})).toEqual(OK)
+    expect(await b.setup.remove({ plan: planOf(b.setup).id })).toMatchObject({
+      status: 409,
+      body: { hint: 'lookAgain' },
+    })
+    expect(await b.setup.removeLook({})).toEqual(OK)
+    const id = removeOf(b.setup.view()).id
+    expect(await b.setup.remove({ plan: 'r999' })).toMatchObject({ status: 409, body: { hint: 'lookAgain' } })
+    expect(await b.setup.remove({ plan: id })).toEqual(OK)
+    // while it runs: neither another removal, its Look, nor Cancel
+    expect(await b.setup.remove({ plan: id })).toMatchObject({ status: 409, body: { hint: 'busy' } })
+    expect(await b.setup.removeLook({})).toMatchObject({ status: 409, body: { hint: 'busy' } })
+    expect(b.setup.cancel()).toMatchObject({ status: 409, body: { hint: 'busy' } })
+    await b.until(['done', 'failed'])
+    // the run needs a Look of its own again
+    expect(await b.setup.remove({ plan: id })).toMatchObject({ status: 409, body: { hint: 'lookAgain' } })
+
+    const bare = await board({ pack: null })
+    bare.server({ fixture: serverRecord(bare.fake.dir), board: INSTALLED })
+    expect(await bare.setup.removeLook({})).toEqual(OK)
+    const sent = bare.commands().length
+    const answer = (await bare.setup.remove({ plan: removeOf(bare.setup.view()).id })) as { body: { error?: string } }
+    expect(answer.body.error).toContain('not a git checkout')
+    expect(bare.commands().length).toBe(sent)
+    expect(bare.setup.view().phase).toBe('plan')
+  })
+
+  test('no web server part of the install’s: the Look says so, and the tunnel’s record is never taken for it', async () => {
+    const b = await board()
+    // the tunnel's own record (its pair) on the server: another's, so the removal has no web part
+    b.server({ fixture: withRecord(b.fake.dir, 'debian13', 'bare', {}), board: INSTALLED })
+    expect(await b.setup.removeLook({})).toEqual(OK)
+    const v = b.setup.view()
+    expect(removeOf(v).web).toBe(false)
+    expect(v.plan).toBeNull()
   })
 })
