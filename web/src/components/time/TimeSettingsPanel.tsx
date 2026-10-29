@@ -407,9 +407,10 @@ function ClientRow({ id, title, color, c, open, onToggle, disabled, send, said }
   )
 }
 
+/** A project's live entries; its cell kept when it has none, so the row's columns stay where they are. */
 function Uses({ n }: { n: number }) {
   const t = useT()
-  return n ? <small className="time-set-uses">{t('time.set.entries', { n })}</small> : null
+  return <small className="time-set-uses">{n ? t('time.set.entries', { n }) : ''}</small>
 }
 
 /** A project: its name and entries, billable or not (a billed client's), Rename in place, Retire. */
