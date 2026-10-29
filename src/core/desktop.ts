@@ -40,6 +40,121 @@ export const CHROME_PACKAGE = 'google-chrome-stable'
 export const CHROME_DEB = 'https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb'
 /** On arm64, Debian's own Chromium (Ubuntu's is a snap, which a server without snapd does not run). */
 export const CHROMIUM_PACKAGE = 'chromium'
+/**
+ * On Ubuntu's arm64, the board's own Chromium: Chrome for Testing's arm64 build, put in place by
+ * Playwright's CLI, pinned (`playwright-core@<this> install --no-shell chromium`), as the board's
+ * user, in the desktops' folder (adapters/desktop-files.ts); its libraries as root with apt.
+ */
+export const PLAYWRIGHT_VERSION = '1.64.1'
+/** Its folder in the desktops' folder (PLAYWRIGHT_BROWSERS_PATH). */
+export const BOARD_CHROMIUM_DIR = 'chromium'
+
+/** The browser the install puts in place: Google Chrome, Debian's Chromium, the board's own (Playwright's), or none. */
+export type BrowserKind = 'chrome' | 'chromium' | 'playwright' | null
+
+/** Which browser a machine gets (`process.arch`'s name, /etc/os-release): x86_64 Google Chrome; arm64 Debian's Chromium, Ubuntu's the board's own. */
+export function browserFor(arch: string, osRelease: string): BrowserKind {
+  if (arch === 'x64') return 'chrome'
+  if (arch !== 'arm64') return null
+  if (/^ID=debian$/m.test(osRelease)) return 'chromium'
+  if (/^ID=ubuntu$/m.test(osRelease)) return 'playwright'
+  return null
+}
+
+/** Playwright's `install-deps` list for its Chromium on Ubuntu 22.04 (playwright-core's nativeDeps, chromium; the fonts are the desktops' own). */
+const CHROMIUM_LIBS_2204 = [
+  'libasound2',
+  'libatk-bridge2.0-0',
+  'libatk1.0-0',
+  'libatspi2.0-0',
+  'libcairo2',
+  'libcups2',
+  'libdbus-1-3',
+  'libdrm2',
+  'libgbm1',
+  'libglib2.0-0',
+  'libnspr4',
+  'libnss3',
+  'libpango-1.0-0',
+  'libwayland-client0',
+  'libx11-6',
+  'libxcb1',
+  'libxcomposite1',
+  'libxdamage1',
+  'libxext6',
+  'libxfixes3',
+  'libxkbcommon0',
+  'libxrandr2',
+] as const
+/** The same for Ubuntu 24.04 and 26.04 (the t64 names). */
+const CHROMIUM_LIBS_2404 = [
+  'libasound2t64',
+  'libatk-bridge2.0-0t64',
+  'libatk1.0-0t64',
+  'libatspi2.0-0t64',
+  'libcairo2',
+  'libcups2t64',
+  'libdbus-1-3',
+  'libdrm2',
+  'libgbm1',
+  'libglib2.0-0t64',
+  'libnspr4',
+  'libnss3',
+  'libpango-1.0-0',
+  'libx11-6',
+  'libxcb1',
+  'libxcomposite1',
+  'libxdamage1',
+  'libxext6',
+  'libxfixes3',
+  'libxkbcommon0',
+  'libxrandr2',
+] as const
+
+/** The board's own Chromium's libraries for an Ubuntu (its /etc/os-release): 22.04's names, the t64 ones from 24.04 on. */
+export const chromiumLibs = (osRelease: string): readonly string[] =>
+  /^VERSION_ID="?22\.04"?$/m.test(osRelease) ? CHROMIUM_LIBS_2204 : CHROMIUM_LIBS_2404
+
+/** Whether a package is one of those libraries (the install's record keeps them apart: Undo hands them back to apt). */
+export const isChromiumLib = (pkg: string): boolean =>
+  (CHROMIUM_LIBS_2204 as readonly string[]).includes(pkg) || (CHROMIUM_LIBS_2404 as readonly string[]).includes(pkg)
+
+/** The board's own Chromium's programs in its folder's entries (`chromium-<revision>/…`, relative), the newest first. */
+export const chromiumPrograms = (entries: readonly string[]): string[] =>
+  entries
+    .map(e => /^chromium-(\d+)$/.exec(e)?.[1])
+    .filter((r): r is string => r !== undefined)
+    .map(Number)
+    .sort((a, b) => b - a)
+    .map(r => `chromium-${r}/chrome-linux-arm64/chrome`)
+
+/**
+ * What the install adds for the desktops (services/server-install.ts): Xvnc and the fonts not
+ * there yet; on x86_64 Google Chrome and on arm64 Debian its Chromium, where no browser is; on
+ * arm64 Ubuntu the board's own Chromium (`chromium`: put in place as the user) and its libraries
+ * not there yet, a browser on the PATH or not (Ubuntu's is a snap's wrapper).
+ */
+export async function desktopNeeds(o: {
+  arch: string
+  osRelease: () => string
+  installed: (pkg: string) => boolean | Promise<boolean>
+  browserThere: () => boolean
+}): Promise<{ packages: string[]; chromium: boolean }> {
+  const packages: string[] = []
+  for (const p of DESKTOP_PACKAGES) if (!(await o.installed(p))) packages.push(p)
+  if (o.arch === 'arm64') {
+    const os = o.osRelease()
+    if (browserFor(o.arch, os) === 'playwright') {
+      for (const p of chromiumLibs(os)) if (!(await o.installed(p))) packages.push(p)
+      return { packages, chromium: true }
+    }
+  }
+  if (!o.browserThere()) {
+    if (o.arch === 'x64') packages.push(CHROME_PACKAGE)
+    else if (/^ID=debian$/m.test(o.osRelease())) packages.push(CHROMIUM_PACKAGE)
+  }
+  return { packages, chromium: false }
+}
 
 export type Control = 'agent' | 'owner'
 
