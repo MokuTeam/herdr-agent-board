@@ -69,9 +69,12 @@ test('the rotation keeps the newest ten, the last 48 hours, the first of each da
 
 test('the rotation keeps the newest ten whatever their age; a name ahead of the clock stays and stops nothing; a jump keeps all', () => {
   const now = Date.UTC(2026, 9, 29, 12, 0, 0)
-  const old = Array.from({ length: 13 }, (_, i) =>
+  const ancient = Array.from({ length: 11 }, (_, i) =>
     snapshotName(now - (1000 + i) * DAY, i.toString(16).padStart(8, '0')),
   )
+  // two recent ones (the board running) over eleven from years ago: the newest ten stay, the two
+  // oldest go
+  const old = [...ancient, snapshotName(now - 20 * DAY, 'aaaaaaaa'), snapshotName(now - 5 * DAY, 'bbbbbbbb')]
   assert.equal(rotationKeeps(old, now).size, 10)
   // a name a year ahead of this clock (a planted file, a clock set wrong once): it stays, out of the
   // count, and the rest rotate as before
@@ -81,7 +84,9 @@ test('the rotation keeps the newest ten whatever their age; a name ahead of the 
   assert.ok(kept.has(ahead))
   assert.equal(aheadCount([...old, ahead, snapshotName(now + DAY / 2, 'dddddddd')], now), 1)
   // the newest more than a month after the one before it (a jump, or a board asleep): everything stays this time
-  assert.equal(rotationKeeps([...old, snapshotName(now, 'eeeeeeee')], now).size, 14)
+  assert.equal(rotationKeeps([...ancient, snapshotName(now, 'eeeeeeee')], now).size, 12)
+  // the clock a month and more past the newest (it jumped forward before this put): everything stays
+  assert.equal(rotationKeeps(old, now + 3 * 365 * DAY).size, 13)
 })
 
 test('targetDue waits for quiet after changes, but not past MOST_WAIT_MS, and takes the daily one', () => {

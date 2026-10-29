@@ -57,3 +57,26 @@ test('board db restore names each newer snapshot it passed over, and why', async
   ])
   assert.match(lines.at(-1) ?? '', new RegExp(`^ok · restored folder/${good}; `))
 }, 30_000)
+
+test('a restore that takes nothing still names what it passed over, then why it stopped', async () => {
+  const dir = isolatedHome()
+  const db = openDb()
+  assert.ok(db)
+  db.write('user', tx => tx.journal({ store: 'test', op: 'add', ref: 'kept' }))
+  db.close()
+  assert.ok((await writeKey(makeKey('correct horse battery', 1, { logN: 10, r: 8, p: 1 }))).ok)
+  const folder = join(dir, 'Sync')
+  mkdirSync(folder)
+  const configDir = join(dir, 'config', 'herdr', 'plugins', 'config', 'agent-board')
+  mkdirSync(configDir, { recursive: true })
+  writeFileSync(join(configDir, 'config.json'), JSON.stringify({ language: 'en', port: 9, backup: { folder } }))
+  const good = (await backupNow({ cfg: { backup: { folder } } })).sent[0]?.name as string
+  const damaged = readFileSync(join(folder, FOLDER_NAME, good))
+  damaged[damaged.length - 5] = (damaged[damaged.length - 5] ?? 0) ^ 1
+  writeFileSync(join(folder, FOLDER_NAME, good), damaged)
+  const r = await cli(['db', 'restore', '--target', 'folder'])
+  assert.equal(r.code, 1)
+  const lines = r.out.split(/\r?\n/)
+  assert.equal(lines[0], `passed over ${good}: The snapshot is damaged: it does not open with the board’s own key.`)
+  assert.match(lines.at(-1) ?? '', /^board: The snapshot is damaged/)
+}, 30_000)

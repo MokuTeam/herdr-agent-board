@@ -426,7 +426,12 @@ test('on a new computer, a passphrase that opens none of the newest three stops 
   rmSync(keyFile())
   await assert.rejects(
     restore({ from: { target: 'folder' }, cfg, by: 'user', passphrase: 'another passphrase' }),
-    (err: unknown) => err instanceof BackupError && err.key === 'backup.file.wrong',
+    (err: unknown) =>
+      err instanceof BackupError &&
+      err.key === 'backup.err.walkStopped' &&
+      err.skipped.length === 3 &&
+      /1 older ones were not tried/.test(err.message) &&
+      /--snapshot/.test(err.message),
   )
   assert.deepEqual(refsNow(), ['add:kept'], 'nothing restored')
 })
@@ -505,3 +510,38 @@ test.skipIf(process.platform !== 'win32')(
     assert.ok(existsSync(dbFile()))
   },
 )
+
+test('a walk that reaches its cap says so: what it tried, the older ones it did not, and how to take one', async () => {
+  const { folder } = await setUp(['kept'])
+  const cfg = { backup: { folder } }
+  const good = (await backupNow({ cfg })).sent[0]?.name as string
+  const dir = join(folder, FOLDER_NAME)
+  const damaged = readFileSync(join(dir, good))
+  damaged[damaged.length - 5] = (damaged[damaged.length - 5] ?? 0) ^ 1
+  // twenty damaged newer ones, planted: the good one is the twenty-first
+  for (let i = 1; i <= 20; i++)
+    writeFileSync(join(dir, snapshotName(Date.now() + i * 60_000, `dddd${String(i).padStart(4, '0')}`)), damaged)
+  await assert.rejects(
+    restore({ from: { target: 'folder' }, cfg, by: 'user' }),
+    (err: unknown) =>
+      err instanceof BackupError &&
+      err.key === 'backup.err.walkStopped' &&
+      err.skipped.length === 20 &&
+      /1 older ones were not tried: list them with board backup list folder/.test(err.message),
+  )
+  // the way it names
+  const r = await restore({ from: { target: 'folder', name: good }, cfg, by: 'user' })
+  assert.equal(r.from, `folder/${good}`)
+})
+
+test('a database emptied to nothing after a backup is a reset the view shows at once, with the board stopped', async () => {
+  const { folder } = await setUp(['a', 'b'])
+  const cfg = { backup: { folder } }
+  await backupNow({ cfg })
+  for (const end of ['-wal', '-shm']) rmSync(`${dbFile()}${end}`, { force: true })
+  writeFileSync(dbFile(), '')
+  assert.deepEqual(
+    backupView(cfg, Date.now() + 20_000).problems.map(p => p.kind),
+    ['reset'],
+  )
+})

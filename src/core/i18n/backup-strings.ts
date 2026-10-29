@@ -62,6 +62,8 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     ],
     'backup.short.ahead': 'Backup: {target} holds a snapshot dated ahead of the clock',
     'backup.cli.skipped': 'passed over {name}: {why}',
+    'backup.err.walkStopped':
+      '{tried} of the newest snapshots did not open ({why}), and {left} older ones were not tried: list them with board backup list {target}, and restore one with board db restore --target {target} --snapshot <name>.',
     'backup.nowReset': 'Send the smaller database anyway?',
     'backup.err.badName': '{name} is not a snapshot’s name.',
     'backup.err.noSnapshot': 'There is no snapshot {name}.',
@@ -250,6 +252,8 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     ],
     'backup.short.ahead': 'Бэкап: в {target} есть снимок с датой из будущего',
     'backup.cli.skipped': 'пропущен {name}: {why}',
+    'backup.err.walkStopped':
+      'Новейшие снимки ({tried}) не открылись ({why}), а более старые ({left}) не пробовались: посмотрите их через board backup list {target} и восстановите нужный через board db restore --target {target} --snapshot <имя>.',
     'backup.nowReset': 'Всё равно отправить меньшую базу?',
     'backup.err.badName': '{name} не имя снимка.',
     'backup.err.noSnapshot': 'Снимка {name} нет.',

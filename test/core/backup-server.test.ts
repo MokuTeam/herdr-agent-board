@@ -155,12 +155,12 @@ test.skipIf(!sh)('a full folder makes room: the rotation runs before the cap is 
   const now = Date.now()
   const fill = (d: ReturnType<typeof dropper>) => {
     mkdirSync(d.snaps)
-    // thirty snapshots 20 days apart from over two years back, 40 KB each: all but the newest ten past keeping
-    for (let i = 0; i < 30; i++)
-      writeFileSync(
-        join(d.snaps, snapshotName(now - (900 + i * 20) * DAY, i.toString(16).padStart(8, '0'))),
-        snapshot(40_000),
-      )
+    // two recent snapshots over twenty-eight from over two years back, 40 KB each: all but the
+    // newest ten past keeping
+    for (let i = 0; i < 30; i++) {
+      const back = i === 0 ? 10 : i === 1 ? 35 : 900 + i * 20
+      writeFileSync(join(d.snaps, snapshotName(now - back * DAY, i.toString(16).padStart(8, '0'))), snapshot(40_000))
+    }
   }
   const tight = dropper({ maxKb: 64 })
   const roomy = dropper({ maxKb: 1024 })
@@ -170,7 +170,8 @@ test.skipIf(!sh)('a full folder makes room: the rotation runs before the cap is 
     fill(roomy)
     const ok = roomy.put(snapshot())
     assert.equal(ok.status, 0, ok.stderr.toString())
-    assert.equal(roomy.files().length, 11, 'the ten newest and the new one')
+    // the rotation again after the put: the ten newest, the new one among them
+    assert.equal(roomy.files().length, 10)
   } finally {
     tight.done()
     roomy.done()
@@ -235,10 +236,14 @@ test.skipIf(!awk)("the drop's rotation removes exactly what rotationKeeps does n
   const jumped = history.filter(n => n < cutoff).concat(snapshotName(now, 'dddddddd'))
   same(jumped)
   assert.deepEqual(run(jumped), [])
-  // twelve old ones a day apart: the newest ten stay whatever their age
-  const old = Array.from({ length: 12 }, (_, i) =>
+  // the clock a month and more past the newest (a jump forward, before the put that follows it): nothing goes
+  const stale = history.filter(n => n < snapshotName(now - 40 * DAY, '00000000'))
+  same(stale)
+  assert.deepEqual(run(stale), [])
+  // ten from years ago under two recent ones: the newest ten stay whatever their age, two go
+  const old = Array.from({ length: 10 }, (_, i) =>
     snapshotName(now - (1000 + i) * DAY, i.toString(16).padStart(8, '0')),
-  )
+  ).concat(snapshotName(now - 20 * DAY, 'aaaaaaaa'), snapshotName(now - 5 * DAY, 'bbbbbbbb'))
   same(old)
   assert.equal(run(old).length, 2)
 })

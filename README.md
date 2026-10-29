@@ -1843,8 +1843,8 @@ banned, the tunnel's with it), until a Test or an Apply goes through. **Rotation
 targets: the newest ten always, every snapshot of the last 48 hours, the first of each day for 60
 days, the first of each month for two years. A snapshot named more than a day ahead of the clock (a
 clock set wrong once, or a file put there) is kept, left out of the rotation, and shown; nothing is
-removed while the newest is a month after the one before it (a clock that jumped would take the
-history).
+removed while the newest is a month after the one before it, or the clock a month past the newest
+(a clock that jumped would take the history; a board off for a month skips one rotation).
 
 **What could be wrong** shows at the top of the panel, as a note in the board's toolbar on every
 page (a phone's too, in a few words, with no error text), and in `board doctor`: no target, no
@@ -1861,7 +1861,8 @@ gone after a backup, is held too: nothing scheduled sends it, so the backups kee
 newer one it passes over (cut short, changed, or a file that cannot be read) is named with why, so
 the hours it held are known to be missing; one dated more than a day ahead is left out; it looks at
 the newest twenty, and with a typed passphrase that opens none of the newest three it stops there
-(the passphrase is wrong, not the files),
+(the passphrase is wrong, not the files); a walk that stops with older ones left says how many it
+tried and how to take one of those (`board backup list`, then `--snapshot`),
 `--snapshot <name>` a given one, `--file <path>` one you downloaded. On a new computer, give the
 passphrase with `--passphrase-file <file>` (UTF-8 or UTF-16, as PowerShell writes it) or pipe it
 with `--passphrase-stdin`. The database as it was is copied first, inside the restore's own

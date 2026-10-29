@@ -59,6 +59,8 @@ import type { Config, Translator } from '../core/types.ts'
 import { shortWhen } from '../core/when-format.ts'
 
 export class BackupError extends Error {
+  /** A restore that found nothing to take: the snapshots it passed over, and why. */
+  skipped: { name: string; why: string }[] = []
   constructor(
     readonly key: string,
     readonly vars: Record<string, string | number> = {},
@@ -595,6 +597,16 @@ export async function restore(o: {
       let found: string | null = null
       let last: BackupError | null = null
       let wrong = 0
+      /** The walk ends with nothing taken: what it passed over goes with the error, and older ones not tried are named. */
+      const stopped = (why: BackupError): BackupError => {
+        const left = list.length - skipped.length
+        const err =
+          left > 0
+            ? new BackupError('backup.err.walkStopped', { tried: skipped.length, left, why: why.message, target })
+            : why
+        err.skipped = skipped
+        return err
+      }
       for (const { name } of [...list].reverse().slice(0, RESTORE_WALK)) {
         let sealed: Buffer
         try {
@@ -615,9 +627,9 @@ export async function restore(o: {
         skipped.push({ name, why: why.key })
         // a typed passphrase that opens none of the newest few is the wrong one, not their damage
         wrong = why.key === 'backup.file.wrong' ? wrong + 1 : 0
-        if (wrong >= WRONG_IN_A_ROW) throw why
+        if (wrong >= WRONG_IN_A_ROW) throw stopped(why)
       }
-      if (!found) throw last ?? new BackupError('backup.err.noneThere', { target })
+      if (!found) throw stopped(last ?? new BackupError('backup.err.noneThere', { target }))
       from = `${target}/${found}`
     }
     const live = dbFile()
@@ -704,7 +716,11 @@ function dbSeq(now: number): number | null {
       } finally {
         raw.close()
       }
-    } catch {}
+    } catch (err) {
+      // a file with no journal (emptied to 0 bytes, or a new one) holds no change: 0, so a reset
+      // shows; one that is busy or damaged is not known (null)
+      if (/no such table/i.test(message(err))) seq = 0
+    }
   seqRead = { at: now, path, seq }
   return seq
 }

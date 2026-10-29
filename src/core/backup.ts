@@ -118,7 +118,9 @@ export function rotationKeeps(names: readonly string[], now: number): Set<string
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   const newest = dated.at(-1)
   const before = dated.at(-2)
-  if (newest && before && newest.at - before.at > GAP_MS) {
+  // the newest a month and more after the one before, or the clock a month and more past the
+  // newest (it jumped, or the board slept): nothing goes this time
+  if (newest && ((before && newest.at - before.at > GAP_MS) || now - newest.at > GAP_MS)) {
     for (const { name } of dated) keep.add(name)
     return keep
   }

@@ -1248,24 +1248,33 @@ async function dbCmd(): Promise<void> {
     passphrase = passphraseFrom(Buffer.from(await readStdin()))
   }
   const webPort = Number(cfg.port) || 12422
-  const r = await backup.restore({
-    from: file ? { file: resolve(file) } : { target: target as 'folder' | 'server', ...(name && { name }) },
-    cfg,
-    passphrase,
-    by: 'user',
-    replaceFile: rest.includes('--replace-file'),
-    boardRunning: async () => {
-      try {
-        await fetch(`http://127.0.0.1:${webPort}/api/hello`, { signal: AbortSignal.timeout(1500) })
-        return true
-      } catch {
-        return false
-      }
-    },
-  })
   // what was newer and did not open: the hours it held are not in what was restored
-  for (const x of r.skipped)
-    console.log(t('backup.cli.skipped', { name: x.name, why: x.why.startsWith('backup.') ? t(x.why) : x.why }))
+  const passedOver = (skipped: readonly { name: string; why: string }[]) => {
+    for (const x of skipped)
+      console.log(t('backup.cli.skipped', { name: x.name, why: x.why.startsWith('backup.') ? t(x.why) : x.why }))
+  }
+  const r = await backup
+    .restore({
+      from: file ? { file: resolve(file) } : { target: target as 'folder' | 'server', ...(name && { name }) },
+      cfg,
+      passphrase,
+      by: 'user',
+      replaceFile: rest.includes('--replace-file'),
+      boardRunning: async () => {
+        try {
+          await fetch(`http://127.0.0.1:${webPort}/api/hello`, { signal: AbortSignal.timeout(1500) })
+          return true
+        } catch {
+          return false
+        }
+      },
+    })
+    .catch((err: unknown) => {
+      // nothing taken: what it passed over is said before why
+      if (err instanceof backup.BackupError) passedOver(err.skipped)
+      throw err
+    })
+  passedOver(r.skipped)
   if (!r.inPlace) return console.log(t('backup.cli.restoredFile', { from: r.from, aside: r.aside ?? '' }))
   console.log(t('backup.cli.restored', { from: r.from, before: r.before ?? '-' }))
 }
