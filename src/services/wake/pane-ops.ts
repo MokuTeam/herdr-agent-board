@@ -10,7 +10,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { inputDraft } from '../../core/dialogs/input-box.ts'
-import { type FreedPlace, type FreeRules, freePlan, promptIdle } from '../../core/wake/freed.ts'
+import { type FreedPlace, type FreeRules, freePlan, promptIdle, promptShows } from '../../core/wake/freed.ts'
 import { clearKeyFor, plainProfile, wakeLine } from '../../core/wake/rules.ts'
 import { isChannelsWarning, isExitTasksDialog, isTrustDialog } from '../../core/wake/screens.ts'
 
@@ -206,10 +206,17 @@ export async function freePane(
   io: WakeHerdr,
   target: { pane: string; session: string },
   marks: FreeMarks,
-  o: FreeRules & { now: number; log(text: string): void; sleep(ms: number): Promise<void> },
+  o: FreeOptions,
 ): Promise<FreedPlace | null> {
   const { pane } = target
   if (!(await atPrompt(io, pane)) || !promptIdle(await io.screen(pane), target.session)) return null
+  return closeFreed(io, pane, marks, o)
+}
+
+type FreeOptions = FreeRules & { now: number; log(text: string): void; sleep(ms: number): Promise<void> }
+
+/** freePane once its shell is judged: the close where freePlan allows it, on a snapshot taken now. */
+async function closeFreed(io: WakeHerdr, pane: string, marks: FreeMarks, o: FreeOptions): Promise<FreedPlace | null> {
   const plan = freePlan(await io.snapshot(), pane, o.now, o)
   if (!plan) return null
   marks.freeing(plan.place)
@@ -232,6 +239,35 @@ export async function freePane(
   if (!still) return plan.place
   marks.kept()
   return null
+}
+
+/**
+ * A sleeper kept in its pane, looked at again (#243): its pane given back as freePane gives it, now
+ * that what kept it may have gone (its tab no longer looked at, the tabs before it closed, nobody
+ * else coming back to its workspace). Only while its shell is as a sleep left it: its last prompt
+ * holds its wake line. In a shell herdr has `restored` after it started over (a new terminal, so
+ * nothing of the user's in it), an empty prompt will do too, and a pane that stays gets its wake
+ * line typed again (`line`, none for a session the user exited), as a sleep leaves it. The screen is
+ * read first: a restored shell that shows no prompt yet is still starting ('later', ask again).
+ * Not given back: 'line' while its wake line is at its prompt (a later look may give it back),
+ * 'kept' when nothing about this shell will change by itself.
+ */
+export async function lookAgain(
+  io: WakeHerdr,
+  target: { pane: string; session: string; line: string | null },
+  marks: FreeMarks,
+  o: FreeOptions & { restored: boolean },
+): Promise<'freed' | 'line' | 'kept' | 'later'> {
+  const { pane, session, line } = target
+  const shows = promptShows(await io.screen(pane), session)
+  if (shows === 'none') return o.restored ? 'later' : 'kept'
+  if (shows === 'other' || (shows === 'empty' && !o.restored)) return 'kept'
+  if (!(await atPrompt(io, pane))) return 'kept'
+  if (await closeFreed(io, pane, marks, o)) return 'freed'
+  if (shows === 'line') return 'line'
+  if (line === null || !(await atPrompt(io, pane))) return 'kept'
+  await io.sendText(pane, line)
+  return 'line'
 }
 
 /** Types /exit and waits for Claude to leave: 'slept', 'tasks' (Esc pressed on that dialog) or 'up'. */

@@ -70,7 +70,7 @@ export interface FreeRules {
  * herdr-sidebar's pane: its metadata tokens, or, once they have expired, its label with no agent in
  * it. That plugin adds one to every tab.
  */
-const isSidebar = (p: FreedPane): boolean => isSidebarPane(p) || (!p.agent && p.label === 'Sidebar')
+export const isSidebar = (p: FreedPane): boolean => isSidebarPane(p) || (!p.agent && p.label === 'Sidebar')
 
 /**
  * How to give the sleeper's pane back, or null to leave it as it is: herdr no longer has it, an
@@ -112,18 +112,18 @@ const PROMPT = /^.*?[>$#%❯λ](?=\s|$)/
 const CONTINUED = /^\s*>>/
 
 /**
- * What was typed at the shell's last prompt, as one line without its spaces: the rows after the
- * prompt's row are that line wrapped at the pane's width (an id split anywhere, a space lost at a
- * row's end). null when the screen shows no prompt, or a continuation prompt.
+ * What was typed at the shell's last prompt (`typed`), as one line without its spaces: the rows
+ * after the prompt's row are that line wrapped at the pane's width (an id split anywhere, a space
+ * lost at a row's end). No `typed` for a continuation prompt; null when the screen shows no prompt.
  */
-function typedAtPrompt(screen: string): string | null {
+function lastPrompt(screen: string): { typed?: string } | null {
   const rows = screen.split('\n').map(r => r.trimEnd())
   for (let i = rows.length - 1; i >= 0; i--) {
     const row = rows[i] ?? ''
     const prompt = PROMPT.exec(row)
     if (!prompt) continue
-    if (CONTINUED.test(row)) return null
-    return [row.slice(prompt[0].length), ...rows.slice(i + 1)].join('').replace(/\s+/g, '')
+    if (CONTINUED.test(row)) return {}
+    return { typed: [row.slice(prompt[0].length), ...rows.slice(i + 1)].join('').replace(/\s+/g, '') }
   }
   return null
 }
@@ -148,9 +148,23 @@ const SESSION_ID = /^[0-9a-f-]+$/i
  * alone.
  */
 export function promptIdle(screen: string, session: string): boolean {
-  const typed = typedAtPrompt(screen)
-  if (typed === null) return false
-  return typed === '' || (SESSION_ID.test(session) && isWakeLine(typed, session))
+  const shows = promptShows(screen, session)
+  return shows === 'empty' || shows === 'line'
+}
+
+/**
+ * What a sleeper's screen shows at its shell's last prompt (#243): no prompt (yet), the session's
+ * wake line (wrapped or not), an empty prompt, or anything else (a continuation prompt too). Only
+ * `line` says nothing has been run in that shell since a sleep typed the line there: a shell the
+ * user ran something in ends at an empty prompt too.
+ */
+export function promptShows(screen: string, session: string): 'none' | 'line' | 'empty' | 'other' {
+  const last = lastPrompt(screen)
+  if (!last) return 'none'
+  const { typed } = last
+  if (typed === undefined) return 'other'
+  if (typed === '') return 'empty'
+  return SESSION_ID.test(session) && isWakeLine(typed, session) ? 'line' : 'other'
 }
 
 const record = (v: unknown): Record<string, unknown> | null =>

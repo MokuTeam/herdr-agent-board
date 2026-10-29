@@ -19,6 +19,8 @@ export interface FakePane {
   terminal_title_stripped?: string
   focused?: boolean
   label?: string
+  /** The terminal it holds: a new one once herdr has restored the pane after starting over. */
+  terminal_id?: string
 }
 
 export interface FakeWakeHerdr extends WakeHerdr {

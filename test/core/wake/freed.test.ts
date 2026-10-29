@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { asFreedPlace, type FreedSnapshot, freePlan, promptIdle } from '../../../src/core/wake/freed.ts'
+import { asFreedPlace, type FreedSnapshot, freePlan, promptIdle, promptShows } from '../../../src/core/wake/freed.ts'
 
 const now = Date.parse('2026-10-27T12:00:00Z')
 const PROJECT = 'C:\\Work\\Проект x 50%'
@@ -153,4 +153,27 @@ test('promptIdle: an empty prompt of any shell, or nothing but this session’s 
     `$ board resume ${SID}\nls`,
   ])
     expect([screen, promptIdle(screen, SID)]).toEqual([screen, false])
+})
+
+test('#243 promptShows: no prompt yet, the wake line (wrapped too), an empty prompt, or anything else', () => {
+  const SID = '0f3c9a7e-1b2d-4e5f-8a9b-0c1d2e3f4a5b'
+  const PS = 'PS C:WorkПроект x 50%> '
+  const cases: [string, ReturnType<typeof promptShows>][] = [
+    ['', 'none'],
+    ['\n\n', 'none'],
+    [`claude --resume ${SID}`, 'none'],
+    [PS, 'empty'],
+    ['out\nuser@box:~/w$ ', 'empty'],
+    [`${PS}board resume ${SID}\n${PS}git status\nOn branch main\n${PS}`, 'empty'],
+    [`${PS}board resume ${SID} --profile work`, 'line'],
+    [`$ claude-tg --dangerously-skip-permissions --resume ${SID}`, 'line'],
+    [`${PS}board resume 0f3c9a7e-1b2d-4e5f-8a9b-0c1d2e3f\n4a5b --profile defau\nlt`, 'line'],
+    [`${PS}cd ..`, 'other'],
+    [`${PS}Get-Item x |\n>> `, 'other'],
+    [`$ board resume 6a7b8c9d-0e1f-4a2b-9c3d-4e5f6a7b8c9d`, 'other'],
+    [`$ board resume ${SID} && claude`, 'other'],
+  ]
+  for (const [screen, shows] of cases) expect([screen, promptShows(screen, SID)]).toEqual([screen, shows])
+  // Not a session id: never its wake line.
+  expect(promptShows('$ board resume pane-7', 'pane-7')).toBe('other')
 })

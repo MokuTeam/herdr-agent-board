@@ -604,3 +604,20 @@ test('#204: kept past 7 days without a pane; forgotten once it runs in a pane, n
   expect(rememberSeen(view([]), fresh, new Map([[SID, work]]), now).sessions).toEqual(fresh)
   expect(rememberSeen(view([]), sessions, new Map([[SID, work]]), now).sessions).toEqual({})
 })
+
+test('#243: a sleeper keeps the terminal it was judged in; awake again it has none, and one that is no string is left out', () => {
+  const read = asWakeSessions({
+    'w1:p2': { session: SID, name: 'Billing', seen_at: min(5), slept_at: min(5), terminal: 'term_65ef9516d93293' },
+    'w1:p3': { session: SID2, name: 'Docs', seen_at: min(5), slept_at: min(5), terminal: 7 },
+    'w1:p4': { session: SID3, name: 'Ops', seen_at: min(5), slept_at: min(5), terminal: '' },
+  })
+  expect(read?.['w1:p2']?.terminal).toBe('term_65ef9516d93293')
+  expect(read?.['w1:p3']).not.toHaveProperty('terminal')
+  expect(read?.['w1:p4']).not.toHaveProperty('terminal')
+  expect(markAwake(read ?? {}, 'w1:p2')?.['w1:p2']).toEqual({ session: SID, name: 'Billing', seen_at: min(5) })
+  // Claude seen back in the pane: awake, and its terminal note gone with its sleep.
+  const snap: SeenSnapshot = { panes: [claude('w1:p2', SID)], workspaces, takenAt: now }
+  const r = rememberSeen(snap, read ?? {}, new Map([[SID, work]]), now)
+  expect(r.sessions['w1:p2']).not.toHaveProperty('terminal')
+  expect(r.sessions['w1:p2']).not.toHaveProperty('slept_at')
+})
