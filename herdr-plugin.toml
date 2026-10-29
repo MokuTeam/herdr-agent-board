@@ -36,7 +36,7 @@ command = ["bun", "src/entrypoints/install.ts"]
 # Windows and macOS: notifications with the agent's words; a click opens the session on the board.
 [[actions]]
 id = "notifications"
-title = "Agent board: desktop notifications (Windows, macOS)"
+title = "Agent board: desktop notifications (Windows)"
 contexts = ["workspace"]
 command = ["bun", "src/entrypoints/install.ts", "--toast"]
 
