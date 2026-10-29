@@ -165,43 +165,81 @@ const deny = (reason: string): void =>
     }),
   )
 
+/** A session of another profile SendMessage's name fits. */
+interface Fit {
+  name: string
+  profile: Profile
+  pane?: string
+  cwd?: string
+}
+
 /**
- * SendMessage to `to` (lower case), not a session of the caller's profile: when exactly one session
- * of another shown profile has the name, the board delivers it (a reminder due now, typed in once
- * the session is free, from the caller's card name) and the native call is denied saying so; two
- * or more are refused, listed; none: left to Claude Code. The caller's own running sessions are
- * Claude Code's, as its sleepers were the wake's.
+ * SendMessage to `to` (lower case; `ref`, the hex after it, picks a session by the start of its id
+ * when it has 8 or more), not a session of the caller's profile: when exactly one session of another
+ * shown profile has the name, the board takes it (a reminder due now, typed in once the session is
+ * free, signed with the caller's Claude name and a ref to answer to) and the native call is denied
+ * saying so; two or more are refused, listed; none: left to Claude Code. The caller's own running
+ * sessions are Claude Code's, as its sleepers were the wake's. A running one counts only when herdr
+ * runs it (GET /awake), so the board can type into it; a message that is no text is Claude Code's,
+ * and one longer than a reminder carries is refused, not cut.
  */
-async function sendElsewhere(to: string, input: Record<string, unknown>, sleeping: Entry[]): Promise<void> {
+async function sendElsewhere(
+  to: string,
+  ref: string,
+  input: Record<string, unknown>,
+  sleeping: Entry[],
+  port: number,
+  raw: Record<string, unknown> | null,
+): Promise<void> {
+  const message = isRecord(input.tool_input) ? input.tool_input.message : undefined
+  if (typeof message !== 'string') return
   const set = otherProfiles()
   if (!set) return
   const { createClaudeHome } = await import('../adapters/claude-home.ts')
   const live = (dir: string) => [...createClaudeHome(dir).liveSessions().values()]
+  const byRef = (id: string): boolean => ref.length < 8 || id.toLowerCase().startsWith(ref)
   const own = live(set.ownDir)
-  if (own.some(s => s.name?.toLowerCase() === to)) return
-  const fits = new Map<string, { name: string; profile: Profile; pane?: string; cwd?: string }>()
+  if (own.some(s => s.name?.toLowerCase() === to && byRef(s.sessionId))) return
+  const fits = new Map<string, Fit>()
+  let awake: Entry[] | null | undefined
   for (const profile of set.others) {
-    for (const s of live(profile.dir))
-      if (s.name?.toLowerCase() === to && !fits.has(s.sessionId))
-        fits.set(s.sessionId, { name: s.name, profile, ...(s.cwd && { cwd: s.cwd }) })
-    for (const s of inProfile(sleeping, profile))
-      if (s.name.toLowerCase() === to && typeof s.session === 'string' && s.session && !fits.has(s.session))
-        fits.set(s.session, {
-          name: s.name,
-          profile,
-          ...(typeof s.pane === 'string' && s.pane && { pane: s.pane }),
-          ...(typeof s.cwd === 'string' && s.cwd && { cwd: s.cwd }),
-        })
+    for (const s of live(profile.dir)) {
+      if (s.name?.toLowerCase() !== to || !byRef(s.sessionId) || fits.has(s.sessionId)) continue
+      // Only a session herdr runs gets typed into: in /awake, in its profile, by its name.
+      awake ??= entries(await api(port, '/awake', null, 3000).catch(() => null))
+      const panes = inProfile(awake ?? [], profile).filter(a => a.name.toLowerCase() === to)
+      if (!panes.length) continue
+      const pane = panes.length === 1 && typeof panes[0]?.pane === 'string' ? panes[0].pane : ''
+      fits.set(s.sessionId, { name: s.name, profile, ...(pane && { pane }), ...(s.cwd && { cwd: s.cwd }) })
+    }
+    for (const s of inProfile(sleeping, profile)) {
+      const id = typeof s.session === 'string' ? s.session : ''
+      if (s.name.toLowerCase() !== to || !id || !byRef(id) || fits.has(id)) continue
+      fits.set(id, {
+        name: s.name,
+        profile,
+        ...(typeof s.pane === 'string' && s.pane && { pane: s.pane }),
+        ...(typeof s.cwd === 'string' && s.cwd && { cwd: s.cwd }),
+      })
+    }
   }
   if (!fits.size) return
-  const raw = isRecord(input.tool_input) ? input.tool_input.message : undefined
-  const text = typeof raw === 'string' ? raw : raw === undefined ? '' : JSON.stringify(raw)
+  const [{ addEntry, schedulerRuns }, { cleanName, cleanText, MAX_TEXT }] = await Promise.all([
+    import('../adapters/schedule-store.ts'),
+    import('../core/schedule-rules.ts'),
+  ])
+  const text = cleanText(message, Number.POSITIVE_INFINITY)
   if (!text.trim()) return
-  if (fits.size > 1) {
-    const listed = [...fits].map(([key, f]) => `${f.name} in profile ${f.profile.title} (${key})`).join(', ')
+  if (text.length > MAX_TEXT)
     return deny(
-      `Not sent: "${to}" is a session of more than one other profile (${listed}), and none of this one. ` +
-        `Send it to one of them with: board remind --session <its id> in 1m "<message>"`,
+      `Not sent: ${text.length} characters, the board carries ${MAX_TEXT}; send it in parts, or write it to a ` +
+        `file and send the path.`,
+    )
+  if (fits.size > 1) {
+    const listed = [...fits].map(([key, f]) => `${f.name} [${key.slice(0, 8)}] in profile ${f.profile.title}`)
+    return deny(
+      `Not sent: "${to}" fits more than one session of the other profiles (${listed.join(', ')}), and none of ` +
+        `this one. Send it to one of them by its name with its ref, as listed.`,
     )
   }
   const first = [...fits][0]
@@ -209,14 +247,11 @@ async function sendElsewhere(to: string, input: Record<string, unknown>, sleepin
   const [key, f] = first
   const sid = String(input.session_id ?? '') || process.env.CLAUDE_CODE_SESSION_ID || ''
   if (!sid) return
-  const [{ readCard }, { addEntry }, { cleanName, MAX_TEXT }] = await Promise.all([
-    import('../adapters/cards.ts'),
-    import('../adapters/schedule-store.ts'),
-    import('../core/schedule-rules.ts'),
-  ])
-  // The name the board shows on the caller's card, as the reminder's tag carries it.
-  const sender = cleanName(readCard(sid)?.name || own.find(s => s.sessionId === sid)?.name)
-  const from = profileForDir(set.list, set.ownDir)?.title ?? set.ownDir
+  // Signed with the caller's Claude name, as `board remind` does: the name SendMessage knows it by
+  // (its card's may be another). A reply needs that name and a profile the other side shows.
+  const name = own.find(s => s.sessionId === sid)?.name?.trim() ?? ''
+  const ownProfile = profileForDir(set.list, set.ownDir)
+  const replyTo = name && ownProfile && !ownProfile.hidden ? cleanText(`${name} [${sid.slice(0, 8)}]`) : ''
   const now = Date.now()
   try {
     addEntry({
@@ -229,8 +264,9 @@ async function sendElsewhere(to: string, input: Record<string, unknown>, sleepin
       next: now,
       idle: true,
       by: 'agent',
-      from: { key: sid, name: sender },
-      fromProfile: from,
+      from: { key: sid, name },
+      fromProfile: cleanName(ownProfile?.title ?? set.ownDir),
+      replyTo,
     })
   } catch (err) {
     return deny(
@@ -238,12 +274,25 @@ async function sendElsewhere(to: string, input: Record<string, unknown>, sleepin
         `${err instanceof Error ? err.message : String(err)}`,
     )
   }
-  const cut = text.length > MAX_TEXT ? ` Only its first ${MAX_TEXT} characters went.` : ''
+  // As `board remind` says it: no board runs the schedule now, so nothing is typed in until one does.
+  const board = async (): Promise<Record<string, unknown> | null> => {
+    const res = await fetch(`http://127.0.0.1:${Number(raw?.port) || 12422}/api/board`, {
+      signal: AbortSignal.timeout(1500),
+    })
+    const body: unknown = await res.json()
+    return isRecord(body) ? body : null
+  }
+  const down = (await schedulerRuns(raw?.web !== false, board))
+    ? ''
+    : ' Note: no board with the scheduler is running now; it goes out once one runs.'
+  const reply = replyTo
+    ? `The reply comes back the same way, as a board reminder from ${f.name}.`
+    : `No reply comes back this way: ${name ? 'this profile is not shown on the board' : 'this session has no name'}.`
   deny(
-    `Delivered through the board to ${f.name} in profile ${f.profile.title} (Claude Code reaches only this ` +
+    `Queued for ${f.name} in profile ${f.profile.title} through the board (Claude Code reaches only this ` +
       `profile's sessions, so it did not send it): the board types it in as a board reminder from ` +
-      `${sender || sid.slice(0, 8)} once ${f.name} is free, waking it first if it sleeps.${cut} Do not send it ` +
-      `again. The reply comes back the same way, as a board reminder from ${f.name}.`,
+      `${name || sid.slice(0, 8)} once ${f.name} is free, waking it first if it sleeps.${down} Do not send it ` +
+      `again. ${reply}`,
   )
 }
 
@@ -260,14 +309,16 @@ async function main(): Promise<void> {
     ownSleepers(list, { configDir: process.env.CLAUDE_CONFIG_DIR, home: homedir() })
 
   if (mode === 'pre-send') {
-    const to = String((isRecord(input.tool_input) ? input.tool_input.to : undefined) ?? '')
+    const named = String((isRecord(input.tool_input) ? input.tool_input.to : undefined) ?? '')
+    const ref = /\[([0-9a-f]+)\]\s*$/i.exec(named)?.[1]?.toLowerCase() ?? ''
+    const to = named
       .replace(/\s*\[[0-9a-f]+\]\s*$/i, '')
       .trim()
       .toLowerCase()
     if (!to) return
     const sleeping = entries(await api(settings.port, '/sleeping', null, 3000))
     const target = sleeping && own(sleeping).find(s => s.name.toLowerCase() === to)
-    if (sleeping && !target) return sendElsewhere(to, input, sleeping)
+    if (sleeping && !target) return sendElsewhere(to, ref, input, sleeping, settings.port, raw)
     // By its session id: its name may be another profile's sleeper's too.
     const id = target && [target.session, target.pane].find(v => typeof v === 'string' && v !== '')
     if (!target || !id) return
@@ -285,13 +336,14 @@ async function main(): Promise<void> {
   const sleeping = entries(list)
   if (!sleeping) return
   const awake = entries(running)
-  const set = otherProfiles()
-  const context = [
-    listContext(own(sleeping), awake && own(awake), settings.port, settings.listSleepingDays),
-    set && othersContext(sleeping, awake, set.others, settings.listSleepingDays),
-  ]
-    .filter(Boolean)
-    .join('\n\n')
+  const ownPart = listContext(own(sleeping), awake && own(awake), settings.port, settings.listSleepingDays)
+  // The other profiles' part on its own: whatever goes wrong there, this profile's still shows.
+  let others: string | null = null
+  try {
+    const set = otherProfiles()
+    others = set && othersContext(sleeping, awake, set.others, settings.listSleepingDays)
+  } catch {}
+  const context = [ownPart, others].filter(Boolean).join('\n\n')
   if (context)
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }))
 }

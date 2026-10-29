@@ -92,12 +92,18 @@ import { createClaudeHome, cwdOf } from '../adapters/claude-home.ts'
 import { configFile, editCategories, loadConfig, setRemoteOn, setTunnelOn } from '../adapters/config-file.ts'
 import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
-import { boardFile } from '../adapters/paths.ts'
 import { findPiSession } from '../adapters/pi-home.ts'
 import { currentPresence, setPresence } from '../adapters/presence-store.ts'
 import { runHere } from '../adapters/process.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
-import { addEntry, askRestart, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
+import {
+  addEntry,
+  askRestart,
+  listEntries,
+  type NewEntry,
+  removeEntry,
+  schedulerRuns as schedulerRunsNow,
+} from '../adapters/schedule-store.ts'
 import { peekPiSleepers } from '../adapters/wake-files.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
@@ -305,22 +311,7 @@ function boardAnswer(): Promise<Record<string, unknown> | null> {
 }
 
 /** Whether a board that runs the schedule answers now. */
-async function schedulerRuns(): Promise<boolean> {
-  try {
-    if (cfg.web === false) {
-      // The terminal board runs the schedule itself then (entrypoints/tui.ts).
-      const board: unknown = JSON.parse(readFileSync(boardFile(), 'utf8'))
-      const pid = isRecord(board) ? board.pid : undefined
-      if (typeof pid !== 'number') return false
-      process.kill(pid, 0)
-      return true
-    }
-    const body = await boardAnswer()
-    return !!body && 'schedules' in body
-  } catch {
-    return false
-  }
-}
+const schedulerRuns = (): Promise<boolean> => schedulerRunsNow(cfg.web !== false, boardAnswer)
 
 /**
  * The profiles with the board's own: the folder the running web board says its env points to

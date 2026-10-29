@@ -1482,12 +1482,16 @@ why). With one profile shown, a name only another profile has is left to Claude 
 more shown, ListAgents also lists the other shown profiles' running and sleeping sessions, each
 with its profile, and `SendMessage` to a name that only another shown profile has (not the
 caller's own, running or asleep: that one still wins) goes through the board: a reminder due now
-for that session, "[board reminder from <caller's card name>; SendMessage from profile <its
-profile>, answer with SendMessage to <name>] <text>", typed in once it is free and waking it first
-if it sleeps; the native call is denied with a reason that says it was delivered, to whom, in which
-profile, and that the reply comes back the same way. A name two other profiles share is refused
-with each listed. Neither runs on any other tool, nor on every prompt, and neither asks anything
-while wake is off. The install does not write them
+for that session, "[board reminder from <caller's Claude name>; SendMessage from profile <its
+profile>, answer with SendMessage to <name> [<first 8 of its session id>]] <text>", typed in once
+it is free and waking it first if it sleeps; the native call is denied with a reason that says it
+was queued, for whom, in which profile, whether a board with the scheduler runs now, and that the
+reply comes back the same way (or why it cannot: the caller has no Claude name, or its profile is
+hidden). A running session counts only when herdr runs it (`/awake`); a ref of 8 or more hex
+characters after the name picks one session among several of that name; a name that still fits
+several is refused with each listed, with its ref. Only a text message goes this way, and one
+longer than 2000 characters is refused, not cut. Neither runs on any other tool, nor on every
+prompt, and neither asks anything while wake is off. The install does not write them
 beside the separate herdr-wake plugin's: it says so, and "Switch over…" moves them.
 
 **pi sessions** sleep and wake too, when asked: "Put to sleep" on a pi card, `board sleep` (several
