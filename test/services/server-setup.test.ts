@@ -56,6 +56,8 @@ interface AdminState {
   login?: { password: string; kbdint?: string[]; alsoPassword?: boolean }
   fixture?: string
   run?: { lines: string[]; dropAfter?: number }
+  /** What the round that reads the install prints (none: nothing installed). */
+  board?: string[]
   wrong?: string[]
 }
 
@@ -1561,7 +1563,7 @@ describe('the board on the server: its version and its removal (path B’s card)
       domain: SERVER_DOMAIN,
       address: `https://${SERVER_DOMAIN}`,
     })
-  const TUNNEL_SETUP = { setup: { case: '2', address: 'https://board.example.com', at: '2026-10-20T10:00:00.000Z' } }
+  const TUNNEL_SETUP = { setup: { case: '2' as const, address: 'https://board.example.com', at: '2026-10-20T10:00:00.000Z' } }
   const board = (o: { pack?: BoardPack | null; head?: LocalVersion | null } = {}) =>
     useBoard(
       { uid: 0 },
