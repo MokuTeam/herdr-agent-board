@@ -352,7 +352,7 @@ test('billable and systems guess nothing either: each slip is a problem named by
         projects: ['Support'],
         billable: 'yes',
         nonBillable: ['Suport'],
-        systems: ['erp', 'erp', 'ERP', { id: 'tracker', name: 'x' }, { id: 'jira', title: 3 }, 7],
+        systems: ['erp', 'erp', 'ERP', { id: 'tracker', name: 'x' }, { id: 'wiki', title: 3 }, 7],
       },
       b: { systems: 'erp', nonBillable: 'Internal' },
     },
