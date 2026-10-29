@@ -355,11 +355,99 @@ test('a CSV row keeps its key: moved, its start changed, or removed after that o
   db.close()
 })
 
-test('two rows of one file with the same lane and start: the first goes in, the second meets it; a session’s entry there is named', () => {
+test('rows of one lane and start that differ are each an entry: by words alone, three at one start, two projects; again, nothing', () => {
   const db = fresh()
-  const r = importEntries(db, conf, [csvRow(), csvRow({ description: 'Case 10001 X: the same start' })])
-  assert.deepEqual([r.added, r.changed.length], [1, 1])
-  assert.equal(r.changed[0]?.by, 'import')
+  const rows = [
+    // the same project, start and stop, other words
+    csvRow({ description: 'Case 10001 X: work' }),
+    csvRow({ description: 'Case 10002 Y: work' }),
+    // three at one start
+    csvRow({ start: at('2026-10-28T15:00:00Z'), stop: at('2026-10-28T15:20:00Z'), description: 'Call one' }),
+    csvRow({ start: at('2026-10-28T15:00:00Z'), stop: at('2026-10-28T15:30:00Z'), description: 'Call two' }),
+    csvRow({ start: at('2026-10-28T15:00:00Z'), stop: at('2026-10-28T15:45:00Z'), description: 'Call three' }),
+    // two projects at one start
+    csvRow({ start: at('2026-10-28T17:00:00Z'), stop: at('2026-10-28T17:30:00Z'), description: 'Plan' }),
+    csvRow({
+      start: at('2026-10-28T17:00:00Z'),
+      stop: at('2026-10-28T18:00:00Z'),
+      project: 'Migration',
+      description: 'Move',
+    }),
+  ]
+  assert.deepEqual(importEntries(db, conf, rows), { added: 7, already: 0, changed: [], updated: [] })
+  // entries of one start come by their ids: the keys sorted
+  const keys = listEntries(db, { from: '2026-10-28', to: '2026-10-28' })
+    .map(e => e.toggl)
+    .sort()
+  assert.deepEqual(keys, [
+    'csv:a:2026-10-28T13:00:00Z',
+    'csv:a:2026-10-28T13:00:00Z#2',
+    'csv:a:2026-10-28T15:00:00Z',
+    'csv:a:2026-10-28T15:00:00Z#2',
+    'csv:a:2026-10-28T15:00:00Z#3',
+    'csv:a:2026-10-28T17:00:00Z',
+    'csv:a:2026-10-28T17:00:00Z#2',
+  ])
+  // the same file again, its rows in another order: each one already there
+  assert.deepEqual(importEntries(db, conf, [...rows].reverse()), { added: 0, already: 7, changed: [], updated: [] })
+  db.close()
+})
+
+test('a later export with one row of a same-start group edited in Toggl: that one differs, named; nothing added twice', () => {
+  const db = fresh()
+  const first = [
+    csvRow({ description: 'Case 10001 X: work' }),
+    csvRow({ description: 'Case 10002 Y: work' }),
+    csvRow({ start: at('2026-10-28T15:00:00Z'), stop: at('2026-10-28T15:20:00Z'), description: 'Call one' }),
+    csvRow({ start: at('2026-10-28T15:00:00Z'), stop: at('2026-10-28T15:30:00Z'), description: 'Call two' }),
+    csvRow({ start: at('2026-10-28T17:00:00Z'), stop: at('2026-10-28T17:30:00Z'), description: 'Plan' }),
+    csvRow({
+      start: at('2026-10-28T17:00:00Z'),
+      stop: at('2026-10-28T18:00:00Z'),
+      project: 'Migration',
+      description: 'Move',
+    }),
+  ]
+  importEntries(db, conf, first)
+  const stored = listEntries(db, { from: '2026-10-28', to: '2026-10-28' })
+  const idOf = (description: string) => stored.find(e => e.description === description)?.id
+  const later = [
+    // its words edited: paired by project and stop
+    csvRow({ description: 'Case 10001 X: work, worded better' }),
+    csvRow({ description: 'Case 10002 Y: work' }),
+    // its stop edited: paired by project and words
+    csvRow({ start: at('2026-10-28T15:00:00Z'), stop: at('2026-10-28T15:25:00Z'), description: 'Call one' }),
+    csvRow({ start: at('2026-10-28T15:00:00Z'), stop: at('2026-10-28T15:30:00Z'), description: 'Call two' }),
+    // the words of the one in the other project edited: paired by project
+    csvRow({ start: at('2026-10-28T17:00:00Z'), stop: at('2026-10-28T17:30:00Z'), description: 'Plan' }),
+    csvRow({
+      start: at('2026-10-28T17:00:00Z'),
+      stop: at('2026-10-28T18:00:00Z'),
+      project: 'Migration',
+      description: 'Moved',
+    }),
+  ]
+  const r = importEntries(db, conf, later)
+  assert.deepEqual([r.added, r.already], [0, 3])
+  assert.deepEqual(
+    r.changed.map(c => [c.id, c.fields, c.row.description]),
+    [
+      [idOf('Case 10001 X: work'), ['description'], 'Case 10001 X: work, worded better'],
+      [idOf('Call one'), ['stop'], 'Call one'],
+      [idOf('Move'), ['description'], 'Moved'],
+    ],
+  )
+  // a row added in Toggl at a start that has rows already: a new entry beside them
+  const more = importEntries(db, conf, [
+    ...first,
+    csvRow({ start: at('2026-10-28T15:00:00Z'), stop: at('2026-10-28T15:50:00Z'), description: 'Call three' }),
+  ])
+  assert.deepEqual([more.added, more.already, more.changed.length], [1, 6, 0])
+  db.close()
+})
+
+test('a session’s entry at the start of Toggl rows: one row is named as its, a second row there goes in', () => {
+  const db = fresh()
   // a session's entry at a start a later Toggl row has
   const mine = addEntry(
     db,
@@ -369,11 +457,13 @@ test('two rows of one file with the same lane and start: the first goes in, the 
   ).entry
   const clash = importEntries(db, conf, [
     csvRow({ start: at('2026-10-28T20:00:00Z'), stop: at('2026-10-28T20:45:00Z') }),
+    csvRow({ start: at('2026-10-28T20:00:00Z'), stop: at('2026-10-28T20:10:00Z'), description: 'Quick call' }),
   ])
   assert.deepEqual(
     clash.changed.map(x => [x.id, x.by]),
     [[mine.id, me]],
   )
+  assert.equal(clash.added, 1, 'the second row is not swallowed by the session’s entry')
   db.close()
 })
 

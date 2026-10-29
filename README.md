@@ -1942,9 +1942,13 @@ date that is no date (2026-02-30) is an unreadable row, named. 12-hour times are
 A row is known again by Toggl's id when the file has one (the JSON), else (the CSV has none) by a
 key of its lane and the start Toggl gave it, kept on the entry, and then by its lane and start: a
 second run, of the same export or a later one, adds only what is new and never brings back an entry
-removed since, moved on the board, or given another start there. A row that differs (edited in
+removed since, moved on the board, or given another start there. Rows of one lane that start at the
+same second are each an entry of their own (a number after the key tells them apart); a later run
+pairs them with the entries there as a group, alike first, then by project, description and stop,
+each entry with one row at most. A row that differs (edited in
 Toggl since it was imported: its wording, its stop, its project, its tags; or moved on the board)
-is listed as changed, with the fields, and not added again; a row at the start of an entry a
+is listed as changed, named by its day and start in `--tz` and its description's start, with the
+fields, and not added again; a row at the start of an entry a
 session made is named as that session's, not imported;
 `--update` takes Toggl's values for the entries the board never changed (made and last changed by
 the import), journaled as `import-update`. `--dry-run` reads the database and writes nothing: what

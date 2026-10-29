@@ -402,7 +402,7 @@ test('import: a file whose dates go the other way than --date-format says is ref
   )
 })
 
-test('import: two rows of one file with the same lane and start: the dry run says what the run does', async () => {
+test('import: rows of one lane and start are each an entry, the dry run as the run; one edited later is named by its day, start and words', async () => {
   const { dir, cfg } = await setUp()
   const csv = join(dir, 'toggl.csv')
   const head = 'Client,Project,Description,Start date,Start time,End date,End time,Duration,Tags'
@@ -410,9 +410,21 @@ test('import: two rows of one file with the same lane and start: the dry run say
   writeFileSync(csv, [head, one, one.replace('X: work', 'X: again')].join('\n'))
   const map = ['--tz', 'Europe/Istanbul', '--map', 'Client A=client-a']
   const dry = await jsonOf(cfg, ['import', csv, ...map, '--dry-run'])
-  assert.deepEqual([dry.new, dry.changed.length], [1, 1])
+  assert.deepEqual([dry.new, dry.already, dry.changed.length], [2, 0, 0])
   const done = await jsonOf(cfg, ['import', csv, ...map])
-  assert.deepEqual([done.added, done.changed.length], [1, 1])
+  assert.deepEqual([done.added, done.changed.length], [2, 0])
+  const again = await jsonOf(cfg, ['import', csv, ...map])
+  assert.deepEqual([again.added, again.already], [0, 2])
+  // one of them edited in Toggl: said with its day and start in --tz and its words, not added
+  writeFileSync(
+    csv,
+    [head, one.replace('X: work', 'X: work worded better'), one.replace('X: work', 'X: again')].join('\n'),
+  )
+  const said = await run(cfg, ['import', csv, ...map, '--dry-run'])
+  assert.match(
+    said.join('\n'),
+    /differs from Toggl’s row, not imported again: 2026-10-28 16:00 "Case 10001 X: work worded better" · [0-9a-f]{8} \(description\)/,
+  )
 })
 
 test('export: the entries of a range as CSV, quoted where a field needs it', async () => {

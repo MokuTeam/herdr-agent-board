@@ -29,7 +29,7 @@ import {
   ImportIndex,
   type ImportRow,
   importEntries,
-  importVerdict,
+  importVerdicts,
   listEntries,
   moveEntry,
   removeEntry,
@@ -43,6 +43,7 @@ import {
   type ClientDay,
   clientDay,
   clientOf,
+  clockIn,
   dateIn,
   durationOf,
   hm,
@@ -559,12 +560,19 @@ async function importCmd(
     title,
     ...list.map(d => `  ${d.date} · ${d.client} · ${d.entries} · ${hm(d.seconds)}`),
   ]
+  /** Toggl's row as a person finds it there: its day and start in --tz, its description's start, the entry's id. */
+  const rowText = (c: ImportChange): string => {
+    const at = Date.parse(c.row.start)
+    const [h, m] = clockIn(at, tz)
+    const words = c.row.description.length > 40 ? `${c.row.description.slice(0, 40)}…` : c.row.description
+    return `${dateIn(at, tz)} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} "${words}"${c.id ? ` · ${c.id}` : ''}`
+  }
   /** A row the store has otherwise: changed in Toggl (or on the board) since its import, or made by a session at that start. */
   const changeLines = (key: string, list: readonly ImportChange[]): string[] =>
     list.map(c =>
       c.by === 'import'
-        ? t(key, { id: c.id, fields: c.fields.join(', ') })
-        : t('time.cli.importClash', { id: c.id, who: whoText(c.by), fields: c.fields.join(', ') }),
+        ? t(key, { row: rowText(c), fields: c.fields.join(', ') })
+        : t('time.cli.importClash', { row: rowText(c), who: whoText(c.by), fields: c.fields.join(', ') }),
     )
   if (a.has('--dry-run')) {
     // read only: what a run would do against the database as it is
@@ -576,12 +584,8 @@ async function importCmd(
         db?.close()
       }
     })()
-    // a row the run would add goes into the index, as the run does: two of one file meet
-    const verdicts = entries.map(e => {
-      const v = importVerdict(index, conf, e)
-      if (v.kind === 'new') index.add(v.entry)
-      return v
-    })
+    // the file's rows paired with the store as the run pairs them: rows of one start meet together
+    const verdicts = importVerdicts(index, conf, entries)
     const fresh = verdicts.filter(v => v.kind === 'new').length
     const already = verdicts.filter(v => v.kind === 'already').length
     const changed = verdicts.flatMap(v => (v.kind === 'changed' ? [changeOf(v)] : []))
