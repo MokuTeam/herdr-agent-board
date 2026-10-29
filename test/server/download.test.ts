@@ -78,6 +78,8 @@ describe('file downloads', () => {
 
 test('Content-Disposition: quotes, backslashes and RFC 5987 specials are escaped', () => {
   expect(attachment('a "b"\\c.txt')).toBe(`attachment; filename="a _b__c.txt"; filename*=UTF-8''a%20%22b%22%5Cc.txt`)
-  expect(attachment("it's (1)*.md")).toBe(`attachment; filename="it's (1)*.md"; filename*=UTF-8''it%27s%20%281%29%2A.md`)
+  expect(attachment("it's (1)*.md")).toBe(
+    `attachment; filename="it's (1)*.md"; filename*=UTF-8''it%27s%20%281%29%2A.md`,
+  )
   expect(attachment('日本.pdf')).toBe(`attachment; filename="__.pdf"; filename*=UTF-8''%E6%97%A5%E6%9C%AC.pdf`)
 })

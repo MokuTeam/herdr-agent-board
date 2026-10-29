@@ -6,6 +6,7 @@
 // browser's too (components/panel/place.ts). With more than one Claude
 // profile folder found, Profiles… opens their panel (components/profiles/ProfilesPanel.tsx). While
 // the remote mode is on (core/remote.ts), Phones… opens theirs (components/phones/PhonesPanel.tsx).
+// The board on another device has Paths on this computer… (components/phones/LocalPathsPanel.tsx).
 // While the payload carries wake's state line, Sleep and wake… opens its panel (components/wake).
 // MokuPilot… opens where a call starts (components/mokupilot), on every board's page (offersMokupilot).
 // On the local board, Remote access… opens the board-through-your-domain panel
@@ -63,6 +64,8 @@ export interface SettingsNow {
   idleMinutes?: number | undefined
   /** Tasks as the board has them (#202, 'none': off); none given: no Tasks item (an older board). */
   todos?: TodoMode | undefined
+  /** The board on another device (models/remote-page.ts): Paths on this computer… is offered. */
+  localPaths?: boolean
 }
 
 /** The idle minutes Settings → Presence offers; config.json may hold any other. */
@@ -169,6 +172,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
     ...(now.mokupilot ? [{ id: 'mokupilot', label: t('set.mokupilot') }] : []),
     ...(now.access ? [{ id: 'access', label: t('set.access') }] : []),
     ...(now.backup ? [{ id: 'backup', label: t('set.backup') }] : []),
+    ...(now.localPaths ? [{ id: 'localPaths', label: t('set.localPaths') }] : []),
     { separator: true },
     { id: 'sleepers', label: t('tb.sleepersTitle'), checked: now.sleepers },
     ...(now.fold
@@ -205,6 +209,7 @@ export type SettingPick =
   | { kind: 'presence'; value: PresenceMode | 'none' }
   | { kind: 'presenceIdle'; value: number }
   | { kind: 'todos'; value: TodoMode }
+  | { kind: 'localPaths' }
   | null
 
 /**
@@ -232,5 +237,6 @@ export function settingPicked(id: string): SettingPick {
   if (kind === 'presence' && (value === 'none' || isPresenceMode(value))) return { kind, value }
   if (kind === 'presenceIdle' && /^\d+$/.test(value)) return { kind, value: Number(value) }
   if (kind === 'todos' && isTodoMode(value)) return { kind, value }
+  if (id === 'localPaths') return { kind: 'localPaths' }
   return null
 }

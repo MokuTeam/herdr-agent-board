@@ -21,6 +21,7 @@ import {
   type ZoomFoot,
   zoomBar,
 } from '../../models/files.ts'
+import { type PathMap, remoteTools } from '../../models/local-paths.ts'
 import {
   type FileLook,
   idOf,
@@ -31,7 +32,9 @@ import {
   type LookTarget,
   type LookView,
 } from '../../models/quick-look.ts'
+import { remotePage } from '../../models/remote-page.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
+import { localPaths } from '../../state/local-paths.ts'
 import { Store, useStore } from '../../state/store.ts'
 import { Changes, changesFoot } from '../sheet/Changes.tsx'
 import { FileIcon } from './FileChip.tsx'
@@ -43,7 +46,7 @@ export interface LookHandlers {
   close(): void
   refresh(): void
   mode(mode: LookMode): void
-  act(how: 'open' | 'reveal' | 'copy'): void
+  act(how: 'open' | 'reveal' | 'copy' | 'local'): void
   go(path: string): void
   search(query: string): void
   upgrade(root: HTMLElement, cwd: string): void
@@ -70,6 +73,11 @@ export interface QuickLookViewProps {
   canEdit: boolean
   /** The run's token for the raw bytes (the board's fsToken). */
   token: string | null
+  /**
+   * The board on another device (models/remote-page.ts): its server folder → folder here list, for
+   * Download and the path here; none at the computer, where neither is offered.
+   */
+  local?: readonly PathMap[] | null
   image?: ImageSize | null
   pages?: PageCount | null
   /** An image loaded (it zooms), and gone. */
@@ -121,6 +129,7 @@ export function QuickLookView({
   view,
   canEdit,
   token,
+  local = null,
   image = null,
   pages = null,
   onImage,
@@ -136,6 +145,8 @@ export function QuickLookView({
   // The past sessions say so in the page's language as it is now (the old page's relabel drew them again).
   const head = view.top?.kind === 'history' && !view.hidden ? { ...view.head, name: t('history.title') } : view.head
   const off = actionsOff(view.data, canEdit)
+  const file = view.data && isFileLook(view.data) && !view.hidden && !view.loading ? view.data : null
+  const remote = remoteTools(file, local, token)
   const label = (key: string) => ({ title: t(key), 'aria-label': t(key) })
   return (
     <div className="ql" hidden={view.hidden} ref={refs.layer}>
@@ -216,6 +227,26 @@ export function QuickLookView({
             >
               <FileIcon name="copy" />
             </button>
+            {remote.local && (
+              <button
+                type="button"
+                className="icon-button ql-local"
+                {...label('ql.copyLocal')}
+                onClick={() => on.act?.('local')}
+              >
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <rect x="2.5" y="3.5" width="15" height="10" rx="1.6" />
+                  <path d="M7 16.5h6M10 13.5v3m-1.6-5.9 1.6 1.6 1.6-1.6" />
+                </svg>
+              </button>
+            )}
+            {remote.download && (
+              <a className="icon-button ql-download" href={remote.download} download {...label('ql.download')}>
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="M10 3.5v9m-3.5-3.5 3.5 3.5 3.5-3.5M4 15.5h12" />
+                </svg>
+              </a>
+            )}
           </div>
           <button type="button" className="icon-button ql-close" {...label('sheet.close')} onClick={() => on.close?.()}>
             <FileIcon name="close" />
@@ -339,11 +370,16 @@ function LookBody({ view, token, onImage, onImageGone, onPages, onZoomable, onZo
 }
 
 /** The page's quick look, in <body> beside the page. */
+/** The quick look's paths list on the board at the computer: none. */
+const AT_THE_COMPUTER = new Store<PathMap[]>([])
+
 export function QuickLook({ engine }: { engine: QuickLookEngine }) {
   const view = useStore(engine.view)
   const { canEdit, data } = useBoardContext()
   const [image, setImage] = useState<ImageSize | null>(null)
   const [pages, setPages] = useState<PageCount | null>(null)
+  // At the computer the kept list is not even read: its own store, always empty, and no tools drawn.
+  const maps = useStore(remotePage() ? localPaths() : AT_THE_COMPUTER)
   const { refs } = engine
   // Just opened: drawn now, it grows out of where it came from.
   useLayoutEffect(() => engine.grow())
@@ -367,6 +403,7 @@ export function QuickLook({ engine }: { engine: QuickLookEngine }) {
       view={view}
       canEdit={canEdit}
       token={data?.fsToken ?? null}
+      local={remotePage() ? maps : null}
       image={image}
       onImage={(img, d) => {
         const own = engine.imageLoaded(img, d)

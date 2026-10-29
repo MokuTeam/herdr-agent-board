@@ -102,6 +102,14 @@ export function App() {
   const [timeClient, setTimeClient] = useState<string | null>(null)
   // Tasks (#202), while the board has them on: their panel, out of the toolbar's button.
   const [todosOpen, setTodosOpen] = useState(false)
+  // Settings → Paths on this computer…, on the board seen from another device only: mounted at its
+  // first opening, as Remote access.
+  const [localPaths, setLocalPaths] = useState(false)
+  const [localPathsMounted, setLocalPathsMounted] = useState(false)
+  const openLocalPaths = () => {
+    setLocalPaths(true)
+    setLocalPathsMounted(true)
+  }
   // The reminders' buttons, shared by the schedule panel and the sheet.
   const reminders = useSchedule()
   // Sessions off the board and back, the archive's panel; Retry on a session back from it is its Return again.
@@ -154,6 +162,7 @@ export function App() {
     openAccess,
     openMokupilot,
     openBackup,
+    openLocalPaths,
   )
   // Tasks' 📌 menu under an agent's message, and the panel's buttons.
   const todos = useTodos(menus.menu)
@@ -236,6 +245,9 @@ export function App() {
         {...(mokupilotMounted ? { mokupilot: { open: mokupilot, onClose: () => setMokupilot(false) } } : {})}
         {...(accessMounted && !remotePage() ? { access: { open: access, onClose: () => setAccess(false) } } : {})}
         {...(backupMounted && !remotePage() ? { backup: { open: backup, onClose: () => setBackup(false) } } : {})}
+        {...(localPathsMounted && remotePage()
+          ? { localPaths: { open: localPaths, onClose: () => setLocalPaths(false) } }
+          : {})}
         archive={archive}
         todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
         time={{ open: timeOpen, onClose: () => setTimeOpen(false), client: timeClient, onClient: setTimeClient }}
