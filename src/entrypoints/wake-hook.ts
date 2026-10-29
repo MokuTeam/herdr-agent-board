@@ -9,15 +9,21 @@
 //
 // Ported from herdr-wake's hook.mjs, its texts word for word but the name ("the board's wake").
 // Each keeps only the sessions of its caller's profile (CLAUDE_CONFIG_DIR; unset: the default
-// folder), so a name two profiles use never wakes the other one's, and a name only another
-// profile has is left to Claude Code (decision 9). config.json's kill switch is read first: wake
-// off, or a config.json that does not parse, and wake is asked nothing. Wake not running or not
-// answering, or anything else amiss: silent, and the tool runs as it would.
+// folder), so a name two profiles use never wakes the other one's (decision 9). With more than one
+// profile shown (#251), the other shown profiles' sessions come after: ListAgents lists them, and
+// SendMessage to a name that only they have (not the caller's profile, running or asleep) is
+// delivered by the board as a reminder from the caller, the native call denied with why. With one
+// shown, both go as before. config.json's kill switch is read first: wake off, or a config.json
+// that does not parse, and wake is asked nothing. Wake not running or not answering, or anything
+// else amiss: silent, and the tool runs as it would.
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { configFile, readConfigFile } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
+import { sameDir } from '../core/launch/names.ts'
+import { type Profile, profileForDir, resolveProfileDir, shownProfiles } from '../core/profiles.ts'
 import { wakeConfig, wakeSwitch } from '../core/wake/config.ts'
 import { ownSleepers, type WakeProfile } from '../core/wake/rules.ts'
 
@@ -119,6 +125,128 @@ function listContext(list: Entry[], running: Entry[] | null, port: number, days:
   return parts.length ? parts.join('\n\n') : null
 }
 
+/** The profiles the board shows, besides the caller's, when more than one is shown; null with one (#251). */
+function otherProfiles(): { list: Profile[]; others: Profile[]; ownDir: string } | null {
+  const list = loadProfiles()
+  const shown = shownProfiles(list)
+  if (shown.length < 2) return null
+  const ownDir = resolveProfileDir(process.env.CLAUDE_CONFIG_DIR, homedir())
+  return { list, others: shown.filter(p => !sameDir(p.dir, ownDir)), ownDir }
+}
+
+/** The entries of `list` in profile `p` (no profile: the default folder's, as ownSleepers reads it). */
+const inProfile = (list: Entry[], p: Profile): Entry[] => ownSleepers(list, { configDir: p.dir, home: homedir() })
+
+/** ListAgents: the other shown profiles' running and sleeping sessions, each with its profile; null for none. */
+function othersContext(sleeping: Entry[], running: Entry[] | null, others: Profile[], days: number): string | null {
+  const rows: string[] = []
+  for (const p of others) {
+    for (const s of inProfile(running ?? [], p))
+      rows.push(`  ${s.name}  ·  profile ${p.title}  ·  ${String(s.status)} ${ago(s.since)}`)
+    const recent = inProfile(sleeping, p)
+      .filter(s => Date.now() - sleptAt(s) < days * 86_400_000)
+      .sort((a, b) => sleptAt(b) - sleptAt(a))
+      .slice(0, LIST_MAX)
+    for (const s of recent) rows.push(`  ${s.name}  ·  profile ${p.title}  ·  asleep ${ago(s.slept_at)}`)
+  }
+  if (!rows.length) return null
+  return (
+    `Sessions of the other Claude profiles on this machine (not listed above: Claude Code knows only this ` +
+    `profile's). SendMessage to one by name goes through the board: it types the message in once the session ` +
+    `is free, waking it first if it sleeps, and the reply comes back the same way. A name this profile has too ` +
+    `goes to this profile's session.\n${rows.join('\n')}`
+  )
+}
+
+const deny = (reason: string): void =>
+  console.log(
+    JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason },
+    }),
+  )
+
+/**
+ * SendMessage to `to` (lower case), not a session of the caller's profile: when exactly one session
+ * of another shown profile has the name, the board delivers it (a reminder due now, typed in once
+ * the session is free, from the caller's card name) and the native call is denied saying so; two
+ * or more are refused, listed; none: left to Claude Code. The caller's own running sessions are
+ * Claude Code's, as its sleepers were the wake's.
+ */
+async function sendElsewhere(to: string, input: Record<string, unknown>, sleeping: Entry[]): Promise<void> {
+  const set = otherProfiles()
+  if (!set) return
+  const { createClaudeHome } = await import('../adapters/claude-home.ts')
+  const live = (dir: string) => [...createClaudeHome(dir).liveSessions().values()]
+  const own = live(set.ownDir)
+  if (own.some(s => s.name?.toLowerCase() === to)) return
+  const fits = new Map<string, { name: string; profile: Profile; pane?: string; cwd?: string }>()
+  for (const profile of set.others) {
+    for (const s of live(profile.dir))
+      if (s.name?.toLowerCase() === to && !fits.has(s.sessionId))
+        fits.set(s.sessionId, { name: s.name, profile, ...(s.cwd && { cwd: s.cwd }) })
+    for (const s of inProfile(sleeping, profile))
+      if (s.name.toLowerCase() === to && typeof s.session === 'string' && s.session && !fits.has(s.session))
+        fits.set(s.session, {
+          name: s.name,
+          profile,
+          ...(typeof s.pane === 'string' && s.pane && { pane: s.pane }),
+          ...(typeof s.cwd === 'string' && s.cwd && { cwd: s.cwd }),
+        })
+  }
+  if (!fits.size) return
+  const raw = isRecord(input.tool_input) ? input.tool_input.message : undefined
+  const text = typeof raw === 'string' ? raw : raw === undefined ? '' : JSON.stringify(raw)
+  if (!text.trim()) return
+  if (fits.size > 1) {
+    const listed = [...fits].map(([key, f]) => `${f.name} in profile ${f.profile.title} (${key})`).join(', ')
+    return deny(
+      `Not sent: "${to}" is a session of more than one other profile (${listed}), and none of this one. ` +
+        `Send it to one of them with: board remind --session <its id> in 1m "<message>"`,
+    )
+  }
+  const first = [...fits][0]
+  if (!first) return
+  const [key, f] = first
+  const sid = String(input.session_id ?? '') || process.env.CLAUDE_CODE_SESSION_ID || ''
+  if (!sid) return
+  const [{ readCard }, { addEntry }, { cleanName, MAX_TEXT }] = await Promise.all([
+    import('../adapters/cards.ts'),
+    import('../adapters/schedule-store.ts'),
+    import('../core/schedule-rules.ts'),
+  ])
+  // The name the board shows on the caller's card, as the reminder's tag carries it.
+  const sender = cleanName(readCard(sid)?.name || own.find(s => s.sessionId === sid)?.name)
+  const from = profileForDir(set.list, set.ownDir)?.title ?? set.ownDir
+  const now = Date.now()
+  try {
+    addEntry({
+      key,
+      name: f.name,
+      ...(f.pane && { pane: f.pane }),
+      ...(f.cwd && { cwd: f.cwd }),
+      text,
+      at: now,
+      next: now,
+      idle: true,
+      by: 'agent',
+      from: { key: sid, name: sender },
+      fromProfile: from,
+    })
+  } catch (err) {
+    return deny(
+      `Not sent: ${f.name} is a session of profile ${f.profile.title}, and the board could not take the message: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+  const cut = text.length > MAX_TEXT ? ` Only its first ${MAX_TEXT} characters went.` : ''
+  deny(
+    `Delivered through the board to ${f.name} in profile ${f.profile.title} (Claude Code reaches only this ` +
+      `profile's sessions, so it did not send it): the board types it in as a board reminder from ` +
+      `${sender || sid.slice(0, 8)} once ${f.name} is free, waking it first if it sleeps.${cut} Do not send it ` +
+      `again. The reply comes back the same way, as a board reminder from ${f.name}.`,
+  )
+}
+
 async function main(): Promise<void> {
   const mode = process.argv[2]
   if (mode !== 'pre-send' && mode !== 'post-list') return
@@ -139,21 +267,13 @@ async function main(): Promise<void> {
     if (!to) return
     const sleeping = entries(await api(settings.port, '/sleeping', null, 3000))
     const target = sleeping && own(sleeping).find(s => s.name.toLowerCase() === to)
+    if (sleeping && !target) return sendElsewhere(to, input, sleeping)
     // By its session id: its name may be another profile's sleeper's too.
     const id = target && [target.session, target.pane].find(v => typeof v === 'string' && v !== '')
     if (!target || !id) return
     const r = await api(settings.port, '/wake', { target: id }, 170_000)
-    if (isRecord(r) && !r.ok) {
-      console.log(
-        JSON.stringify({
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse',
-            permissionDecision: 'deny',
-            permissionDecisionReason: `${target.name} is asleep (the board's wake) and could not be woken: ${String(r.error)}`,
-          },
-        }),
-      )
-    }
+    if (isRecord(r) && !r.ok)
+      deny(`${target.name} is asleep (the board's wake) and could not be woken: ${String(r.error)}`)
     return
   }
 
@@ -165,7 +285,13 @@ async function main(): Promise<void> {
   const sleeping = entries(list)
   if (!sleeping) return
   const awake = entries(running)
-  const context = listContext(own(sleeping), awake && own(awake), settings.port, settings.listSleepingDays)
+  const set = otherProfiles()
+  const context = [
+    listContext(own(sleeping), awake && own(awake), settings.port, settings.listSleepingDays),
+    set && othersContext(sleeping, awake, set.others, settings.listSleepingDays),
+  ]
+    .filter(Boolean)
+    .join('\n\n')
   if (context)
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }))
 }

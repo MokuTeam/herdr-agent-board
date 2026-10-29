@@ -1478,8 +1478,16 @@ sleeping sessions of the caller's own profile (those asleep for less than `listS
 at most 15; the rest only counted, all of them wakeable by name) and how long its running ones have
 been idle or busy and when they go to sleep; before `SendMessage` to a sleeping session of its own
 profile, a wake first, by its session id (refused: the message is not sent, and the agent hears
-why). A name only another profile has is left to Claude Code. Neither runs on any other tool, nor
-on every prompt, and neither asks anything while wake is off. The install does not write them
+why). With one profile shown, a name only another profile has is left to Claude Code. With two or
+more shown, ListAgents also lists the other shown profiles' running and sleeping sessions, each
+with its profile, and `SendMessage` to a name that only another shown profile has (not the
+caller's own, running or asleep: that one still wins) goes through the board: a reminder due now
+for that session, "[board reminder from <caller's card name>; SendMessage from profile <its
+profile>, answer with SendMessage to <name>] <text>", typed in once it is free and waking it first
+if it sleeps; the native call is denied with a reason that says it was delivered, to whom, in which
+profile, and that the reply comes back the same way. A name two other profiles share is refused
+with each listed. Neither runs on any other tool, nor on every prompt, and neither asks anything
+while wake is off. The install does not write them
 beside the separate herdr-wake plugin's: it says so, and "Switch over…" moves them.
 
 **pi sessions** sleep and wake too, when asked: "Put to sleep" on a pi card, `board sleep` (several

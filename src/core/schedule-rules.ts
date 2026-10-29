@@ -90,6 +90,9 @@ export function promptOf(entry: ScheduleEntry, now: number): string {
     notes.push(
       t(setter ? 'sched.prompt.clearedFor' : 'sched.prompt.cleared', { name: before.name || before.key.slice(0, 8) }),
     )
+  // A SendMessage from another profile's session (#251, entrypoints/wake-hook.ts): how to answer it.
+  if (setter && typeof entry.fromProfile === 'string')
+    notes.unshift(t('sched.prompt.message', { profile: entry.fromProfile, name: setter }))
   // The tag stays in English: the hook knows a board prompt by it (entrypoints/hook.ts).
   const from = setter ? ` from ${setter}` : ''
   if (entry.kind === 'call')
