@@ -22,6 +22,8 @@ export type PanelKind =
   | 'mokupilot'
   | 'access'
   | 'todos'
+  | 'backup'
+  | 'time'
   | 'team'
 
 /** Each panel's name for screen readers, and the session sheet's close button id. */
@@ -36,6 +38,8 @@ const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
   mokupilot: { label: 'mokupilot.title' },
   access: { label: 'access.title' },
   todos: { label: 'todo.title' },
+  backup: { label: 'backup.title' },
+  time: { label: 'time.title' },
   team: { label: 'team.title' },
 }
 

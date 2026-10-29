@@ -17,6 +17,11 @@ export type Reach = 'up' | 'down' | 'slow'
 export interface BoardWake extends SleepProvider {
   /** Whether the board's wake answers now (GET /alive, 2 s); the separate plugin's router left on its port does not count. */
   reach(): Promise<Reach>
+  /**
+   * A sleeper moved to another profile (#250, `board move`): its entry in wake names `dir` from now
+   * on (POST /profile). A wake started before `board move` existed has no such path: it says so.
+   */
+  moveProfile(session: string, dir: string): Promise<{ ok: true } | { ok: false; error: string }>
   readonly mode: 'new'
 }
 
@@ -142,6 +147,28 @@ export function createBoardWake(o: {
       return api.sleep(item)
     },
     reach,
+    async moveProfile(session, dir) {
+      try {
+        const res = await fetchFn(`${o.url}/profile`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ session, dir }),
+          signal: AbortSignal.timeout(ANSWER_MS),
+        })
+        if (res.status === 404) {
+          await res.body?.cancel()
+          return { ok: false, error: 'wake started before board move existed: restart it (Settings → Sleep and wake)' }
+        }
+        const body: unknown = await res.json()
+        if (isObject(body) && body.ok === true) return { ok: true }
+        return {
+          ok: false,
+          error: isObject(body) && typeof body.error === 'string' ? body.error : `HTTP ${res.status}`,
+        }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
   }
 }
 

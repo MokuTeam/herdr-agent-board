@@ -11,6 +11,7 @@ import { isWakeView } from '../models/wake.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { AccessPanel, type AccessPanelProps } from './access/AccessPanel.tsx'
 import { ArchivePanel } from './archive/ArchivePanel.tsx'
+import { BackupPanel, type BackupPanelProps } from './backup/BackupPanel.tsx'
 import { CategoriesPanel, type CategoriesPanelProps } from './categories/CategoriesPanel.tsx'
 import { ErrorBoundary } from './ErrorBoundary.tsx'
 import { MokupilotPanel, type MokupilotPanelProps } from './mokupilot/MokupilotPanel.tsx'
@@ -19,6 +20,7 @@ import { ProfilesPanel, type ProfilesPanelProps } from './profiles/ProfilesPanel
 import { SchedulePanel, type SchedulePanelProps } from './schedule/SchedulePanel.tsx'
 import { Sheet, type SheetSlots } from './sheet/Sheet.tsx'
 import { TeamPanel, type TeamPanelProps } from './team/TeamPanel.tsx'
+import { TimePanel, type TimePanelProps } from './time/TimePanel.tsx'
 import { TodosPanel, type TodosPanelProps } from './todos/TodosPanel.tsx'
 import { WakePanel, type WakePanelProps } from './wake/WakePanel.tsx'
 
@@ -41,6 +43,10 @@ export interface SidePanelsProps {
   archive?: Archive
   /** Tasks (#202): drawn while the board has them on. */
   todos?: TodosPanelProps
+  /** Settings → Backup… (#233); drawn when given (the page gives it once opened, on the local board only). */
+  backup?: BackupPanelProps
+  /** Time (#233): drawn while the board has time tracking on. */
+  time?: TimePanelProps
   /** Settings → Team… (#231): given by the page while it offers it (the local page, the payload's teamRev). */
   team?: TeamPanelProps
 }
@@ -56,6 +62,8 @@ export function SidePanels({
   sheet,
   archive,
   todos,
+  backup,
+  time,
   team,
 }: SidePanelsProps) {
   const { data, ui, dispatch } = useBoardContext()
@@ -73,6 +81,8 @@ export function SidePanels({
       {mokupilot && <MokupilotPanel {...mokupilot} />}
       {access && <AccessPanel {...access} />}
       {todos && data?.todos && <TodosPanel {...todos} />}
+      {backup && <BackupPanel {...backup} />}
+      {time && data?.time && <TimePanel {...time} />}
       {team && offersTeam(data) && <TeamPanel {...team} />}
     </>
   )

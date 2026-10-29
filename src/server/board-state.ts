@@ -16,7 +16,7 @@ import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
 import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
 import type { Limits } from '../core/limits.ts'
-import type { BoardLimits, BoardPayload, BoardProfile } from '../core/payload.ts'
+import type { BackupPayload, BoardLimits, BoardPayload, BoardProfile, TimePayload } from '../core/payload.ts'
 import type { PresenceView } from '../core/presence.ts'
 import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts'
 import type { RemoteView } from '../core/remote.ts'
@@ -71,6 +71,10 @@ interface Options {
   omarchy?: () => string | null
   /** The user's presence (services/presence.ts); null while it is not on. */
   presence?: () => PresenceView | null
+  /** The backup's line (#233); null while there is no database and no target. */
+  backup?: () => BackupPayload | null
+  /** Time tracking's line (#233); null while it is off. */
+  time?: () => TimePayload | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -145,6 +149,16 @@ function teamRevOf(teamRev: Options['teamRev']): { teamRev?: number } {
   return rev !== null ? { teamRev: rev } : {}
 }
 
+function timeOf(time: Options['time']): { time?: TimePayload } {
+  const line = time?.() ?? null
+  return line ? { time: line } : {}
+}
+
+function backupOf(backup: Options['backup']): { backup?: BackupPayload } {
+  const line = backup?.() ?? null
+  return line ? { backup: line } : {}
+}
+
 function remoteOf(remote: Options['remote']): { remote?: RemoteView } {
   const view = remote?.() ?? null
   return view ? { remote: view } : {}
@@ -165,6 +179,8 @@ export function createBoardState({
   teamRev,
   omarchy,
   presence,
+  backup,
+  time,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -243,6 +259,10 @@ export function createBoardState({
       // presence: only while config.json turns it on (#172).
       ...presenceOf(presence),
       ...(todos && { todos }),
+      // backup: only once there is a database or a backup target (#233)
+      ...backupOf(backup),
+      // time: only while config.json turns it on (#233)
+      ...timeOf(time),
       // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
       accessRev: accessRev?.() ?? 0,
       // teamRev: only while config.json turns the peer network on (#231).

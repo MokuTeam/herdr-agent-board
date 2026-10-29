@@ -1,0 +1,28 @@
+/* Settings → Backup… (web/src/components/backup/BackupPanel.tsx, #233): built from the Remote access
+   panel's pieces (access.css: heads, hints, fields, actions, problems), its sections spaced as that
+   panel's; a target's state in the secondary label color; "Do it myself"'s script in monospace,
+   wrapped and scrolling when long. Every rule here selects by class: the other sheets are
+   upstream's, rule for rule. */
+
+.backup-body { display: flex; flex-direction: column; gap: 4px; max-width: 760px; }
+.backup-section { margin: 0 0 4px; }
+.backup-status .access-status { margin-bottom: 8px; }
+.backup-problem { margin-bottom: 6px; }
+.backup-state { margin: 0 0 6px; color: var(--label-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.backup-wide.access-field { padding-left: 6px; }
+.backup-wide .path-add { flex: 1; }
+.backup-note { margin: 0 0 8px; font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.backup-note p { margin: 0 0 4px; }
+.backup-restore { margin-top: 12px; }
+.backup-manual { margin: 4px 0 8px; }
+.backup-script {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--fill-2);
+  font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

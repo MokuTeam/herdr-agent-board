@@ -8,6 +8,7 @@ import type { Lang } from '../types.ts'
 import { ACCESS_STRINGS } from './access-strings.ts'
 import { ARCHIVE_STRINGS } from './archive-strings.ts'
 import { ASIDE_STRINGS } from './aside-strings.ts'
+import { BACKUP_STRINGS } from './backup-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
@@ -19,6 +20,7 @@ import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { TEAM_STRINGS } from './team-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
+import { TIME_STRINGS } from './time-strings.ts'
 import { TODO_STRINGS } from './todo-strings.ts'
 import { WAKE_STRINGS } from './wake-strings.ts'
 
@@ -601,6 +603,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.prompt.late': '{late} late, due {due}',
     'sched.prompt.cleared': 'set by {name} before /clear',
     'sched.prompt.clearedFor': 'set for {name} before /clear',
+    'sched.prompt.message': 'SendMessage from profile {profile}, answer with SendMessage to {name}',
+    'sched.prompt.messageNoReply': 'SendMessage from profile {profile}, no reply path',
     'sched.prompt.restarted': 'restarted as you asked',
     'sched.prompt.restartedOther': 'restarted',
     'sched.prompt.restartedUser': 'restarted by the user',
@@ -1234,6 +1238,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.prompt.late': 'опоздание {late}, срок был {due}',
     'sched.prompt.cleared': 'поставлено сессией {name} до /clear',
     'sched.prompt.clearedFor': 'поставлено для {name} до /clear',
+    'sched.prompt.message': 'SendMessage из профиля {profile}, ответ: SendMessage для {name}',
+    'sched.prompt.messageNoReply': 'SendMessage из профиля {profile}, ответить этим путём нельзя',
     'sched.prompt.restarted': 'перезапущена по твоей просьбе',
     'sched.prompt.restartedOther': 'перезапущена',
     'sched.prompt.restartedUser': 'перезапущена пользователем',
@@ -1323,6 +1329,10 @@ for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRING
 for (const code of Object.keys(TODO_STRINGS) as Lang[]) Object.assign(STRINGS[code], TODO_STRINGS[code])
 // And the peer network (#231).
 for (const code of Object.keys(TEAM_STRINGS) as Lang[]) Object.assign(STRINGS[code], TEAM_STRINGS[code])
+// And the board's database and its backup (#233).
+for (const code of Object.keys(BACKUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], BACKUP_STRINGS[code])
+// And time tracking on it (#233).
+for (const code of Object.keys(TIME_STRINGS) as Lang[]) Object.assign(STRINGS[code], TIME_STRINGS[code])
 // And the board through the owner's own domain: the tunnel and its login.
 for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[code], ACCESS_STRINGS[code])
 // And setting up the server's web server from the board.

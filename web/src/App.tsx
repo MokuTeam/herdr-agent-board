@@ -91,6 +91,16 @@ export function App() {
     setAccess(true)
     setAccessMounted(true)
   }
+  // Settings → Backup… (#233), on the local board only: mounted at its first opening, as Remote access.
+  const [backup, setBackup] = useState(false)
+  const [backupMounted, setBackupMounted] = useState(false)
+  const openBackup = () => {
+    setBackup(true)
+    setBackupMounted(true)
+  }
+  // Time (#233), while the board has it on: its panel, out of the toolbar's button or a lane's day total.
+  const [timeOpen, setTimeOpen] = useState(false)
+  const [timeClient, setTimeClient] = useState<string | null>(null)
   // Settings → Team… (#231), local page with the payload's teamRev: mounted at its first opening.
   const [team, setTeam] = useState(false)
   const [teamMounted, setTeamMounted] = useState(false)
@@ -151,6 +161,7 @@ export function App() {
     () => setWake(true),
     openAccess,
     openMokupilot,
+    openBackup,
     openTeam,
   )
   // Tasks' 📌 menu under an agent's message, and the panel's buttons.
@@ -206,10 +217,19 @@ export function App() {
           settings={settings}
           picks={picks}
           onTodos={() => setTodosOpen(!todosOpen)}
+          onBackup={remotePage() ? undefined : openBackup}
+          onTime={() => {
+            setTimeClient(null)
+            setTimeOpen(!timeOpen)
+          }}
         />
         <Board
           onNewSession={newSession}
           onLaneHead={openCategories}
+          onLaneTime={id => {
+            setTimeClient(id)
+            setTimeOpen(true)
+          }}
           roomBelow={panels.roomBelow}
           launch={launch.slots}
           takeovers={launch.takeovers}
@@ -224,9 +244,11 @@ export function App() {
         phones={{ open: phones, onClose: () => setPhones(false) }}
         {...(mokupilotMounted ? { mokupilot: { open: mokupilot, onClose: () => setMokupilot(false) } } : {})}
         {...(accessMounted && !remotePage() ? { access: { open: access, onClose: () => setAccess(false) } } : {})}
+        {...(backupMounted && !remotePage() ? { backup: { open: backup, onClose: () => setBackup(false) } } : {})}
         {...(teamMounted && offersTeam(data) ? { team: { open: team, onClose: () => setTeam(false) } } : {})}
         archive={archive}
         todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
+        time={{ open: timeOpen, onClose: () => setTimeOpen(false), client: timeClient, onClient: setTimeClient }}
         sheet={{
           onNewSession: newSession,
           schedule: {

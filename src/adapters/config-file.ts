@@ -28,7 +28,7 @@ import {
 import type { Admin } from '../core/server-admin.ts'
 import type { SetupCase } from '../core/server-plan.ts'
 import { isTodoMode } from '../core/todos.ts'
-import type { TunnelField } from '../core/tunnel.ts'
+import { fieldProblem, type TunnelField } from '../core/tunnel.ts'
 import type { Category, Config } from '../core/types.ts'
 import { wakeConfig } from '../core/wake/config.ts'
 import { allCards, writeCard } from './cards.ts'
@@ -245,6 +245,90 @@ export function leaveTeam(): EditResult {
   const raw = readConfigFile()
   if (!raw || !('team' in raw)) return { ok: true }
   delete raw.team
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/**
+ * The backup's targets (#233) in config.json's `backup`: `folder` (a path, or null to drop the
+ * folder target), `server` (host, port and the admin's user and key, merged into what is there;
+ * null drops it), `serverSet` (when Apply, or the owner's own setup and a Test, made the server
+ * take snapshots; null: not set). Checked as the tunnel's fields are; the folder by the caller.
+ */
+export function editBackup(b: {
+  folder?: string | null
+  server?: { host?: unknown; port?: unknown; adminUser?: unknown; adminKey?: unknown } | null
+  serverSet?: string | null
+}): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  const section: Raw = isRecord(raw.backup) ? { ...raw.backup } : {}
+  if (b.folder !== undefined) {
+    if (b.folder === null || b.folder.trim() === '') delete section.folder
+    else section.folder = b.folder.trim()
+  }
+  const setNow = isRecord(section.server) && typeof section.server.set === 'string'
+  // a server that takes snapshots keeps its address: Undo first (or a new host would leave the old
+  // one set up, its user and key still there); the admin's login may change (a key moved)
+  if (b.server === null) {
+    if (setNow) return { ok: false, error: t('backup.err.serverSet') }
+    delete section.server
+  } else if (b.server !== undefined) {
+    const s = b.server
+    const now: Raw = isRecord(section.server) ? { ...section.server } : {}
+    const was = JSON.stringify([now.host, now.port])
+    const admin: Raw = isRecord(now.admin) ? { ...now.admin } : {}
+    if (s.host !== undefined) {
+      const host = typeof s.host === 'string' ? s.host.trim() : ''
+      if (!host) return { ok: false, error: t('tunnel.err.required', { field: t('tunnel.field.host') }) }
+      const problem = fieldProblem('host', host)
+      if (problem) return { ok: false, error: problem }
+      now.host = host
+    }
+    if (s.port !== undefined) {
+      const port = Number(s.port)
+      const problem = fieldProblem('sshPort', port)
+      if (problem) return { ok: false, error: problem }
+      now.port = port
+    }
+    for (const [field, key] of [
+      ['user', s.adminUser],
+      ['key', s.adminKey],
+    ] as const) {
+      if (key === undefined) continue
+      const value = typeof key === 'string' ? key.trim() : ''
+      const problem = fieldProblem(field, value)
+      if (problem) return { ok: false, error: problem }
+      admin[field] = value
+    }
+    now.admin = admin
+    if (!now.host) return { ok: false, error: t('tunnel.err.required', { field: t('tunnel.field.host') }) }
+    if (setNow && JSON.stringify([now.host, now.port]) !== was) return { ok: false, error: t('backup.err.serverSet') }
+    section.server = now
+  }
+  if (b.serverSet !== undefined && isRecord(section.server)) {
+    if (b.serverSet === null) delete section.server.set
+    else section.server = { ...section.server, set: b.serverSet }
+  }
+  if (Object.keys(section).length) raw.backup = section
+  else delete raw.backup
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/**
+ * Projects added to a lane's list in config.json's `time.clients.<lane>.projects` (#233): by
+ * `board time add --new-project` and by the import. A lane without a list takes any project, and
+ * stays so; nothing is written when every project is there already.
+ */
+export function addTimeProjects(lane: string, projects: readonly string[]): EditResult {
+  const raw = readConfigFile()
+  if (!raw || !isRecord(raw.time) || !isRecord(raw.time.clients)) return { ok: true }
+  const client = raw.time.clients[lane]
+  if (!isRecord(client) || !Array.isArray(client.projects)) return { ok: true }
+  const have = new Set(client.projects.filter((p): p is string => typeof p === 'string'))
+  const added = [...new Set(projects.map(p => p.trim()).filter(p => p && !have.has(p)))]
+  if (!added.length) return { ok: true }
+  client.projects = [...client.projects, ...added]
   writeRaw(raw)
   return { ok: true }
 }
