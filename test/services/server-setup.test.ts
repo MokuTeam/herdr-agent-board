@@ -1627,6 +1627,8 @@ describe('the board on the server: its version and its removal (path B’s card)
     expect(await b.setup.install({ plan: planOf(b.setup).id, docker: true })).toEqual(OK)
     expect(await b.setup.installVersion({})).toMatchObject({ status: 409, body: { hint: 'busy' } })
     await b.until(['done', 'failed'])
+    // installed: the card has the pack's version, as the install's record says it
+    expect(b.setup.view().installed?.version).toMatchObject({ commit: NEWER, changes: false, ref: null })
   })
 
   test('Remove: its Look says what the install’s --undo takes; the run sends the pack with --undo, the output streamed, then nothing installed', async () => {

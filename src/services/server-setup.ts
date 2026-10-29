@@ -960,8 +960,14 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       view.code = end.code
       if (end.code === 0) {
         phase = 'done'
-        // removed: nothing of the install's there now
+        // removed: nothing of the install's there now; installed: the pack's version, as its record says
         if (kind === 'remove') installed = { version: null, seen: d.now() }
+        else {
+          const at = d.now()
+          const version = { commit: pack.commit, changes: pack.changes, ref: null, at: new Date(at).toISOString() }
+          installed = { version, seen: at }
+          local = { commit: pack.commit, changes: pack.changes }
+        }
       } else {
         phase = 'failed'
         // the run's own words say why when it said any; else ssh's or sudo's
