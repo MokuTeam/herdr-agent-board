@@ -172,11 +172,18 @@ export function askRestart(fields: RestartAsk): { entry: ScheduleEntry; again: b
 
 /**
  * The session `fields.key` put to sleep once it is free (`board sleep --when-free`): the one asked
- * for already, else a new entry of kind 'sleep', due now. Returns { entry, again }.
+ * for already, else a new entry of kind 'sleep', due now. `moveTo` (`board move --when-free`, #250):
+ * then moved to that profile; the one asked for already takes it. Returns { entry, again }.
  */
-export function askSleep(fields: Omit<RestartAsk, 'text'>): { entry: ScheduleEntry; again: boolean } {
+export function askSleep(fields: Omit<RestartAsk, 'text'> & { moveTo?: string }): {
+  entry: ScheduleEntry
+  again: boolean
+} {
   const pending = listEntries().find(e => e.kind === 'sleep' && e.key === fields.key)
-  if (pending) return { entry: pending, again: true }
+  if (pending) {
+    const moved = fields.moveTo ? updateEntry(pending.id, e => ({ ...e, moveTo: fields.moveTo })) : null
+    return { entry: moved ?? pending, again: true }
+  }
   const now = Date.now()
   return { entry: addEntry({ ...fields, kind: 'sleep', idle: true, text: '', at: now, next: now }), again: false }
 }
