@@ -311,11 +311,23 @@ Not built in this step. On the server only.
   profile|ask|cdp`) take the board's local key on every listener, so none comes through the domain.
 - **The install**, as root: `tigervnc-standalone-server`, `fonts-noto-core`, `fonts-noto-cjk`,
   `fonts-noto-color-emoji`, `fonts-liberation`, and Google Chrome stable from Google's .deb on
-  x86_64 (Debian's `chromium` on arm64 Debian; none on Ubuntu arm64, whose Chromium is a snap: a
-  gap doctor names). What it added is in `install.json`; Undo purges it only with
-  `--remove-user`, as the user's Bun and herdr go only then. As `agent`: the MCP server in the
-  profiles and chrome-devtools-mcp, by the install action in server mode (and the server mode's
-  own step, which runs after it on a first install); Undo takes them out.
+  x86_64 (Debian's `chromium` on arm64 Debian). What it added is in `install.json`; Undo purges it
+  only with `--remove-user`, as the user's Bun and herdr go only then. As `agent`: the MCP server
+  in the profiles and chrome-devtools-mcp, by the install action in server mode (and the server
+  mode's own step, which runs after it on a first install); Undo takes them out.
+- **Ubuntu on arm64**, whose own Chromium is a snap: the board's own Chromium, Chrome for
+  Testing's arm64 build put in place by Playwright's CLI at a pinned version
+  (`bun x --bun playwright-core@1.64.1 install --no-shell chromium`, `PLAYWRIGHT_BROWSERS_PATH`
+  `desktop/chromium/`), as `agent` by the install action, beside chrome-devtools-mcp; a new pin
+  replaces the revision on the next install or `board update`, older ones are removed. No apt
+  updates: it moves only with the pin. Its libraries (Playwright's `install-deps` list for
+  Chromium, 22.04's names or 24.04's t64 ones; not Xvfb, the fonts are the desktops' own) as root
+  with apt, in `install.json` as `desktopLibs`; Undo with `--remove-user` marks them as
+  installed for another package's sake (`apt-mark auto`), so `apt autoremove` takes them once
+  nothing needs them, and never purges them (a purge would take what came to need them since).
+  The server mode off takes the Chromium's folder out. The desktops and doctor take it first where
+  it is, on arm64 only (a snap's `chromium-browser` wrapper on the PATH is not used); on x86_64
+  and Debian nothing of it is read.
 - **Limits.** One agent's browser is not a wall against another agent of `agent`'s (each reads the
   local key). A profile switch restarts Chrome (open pages close). No window manager: a dialog
   opens where Chrome puts it.
