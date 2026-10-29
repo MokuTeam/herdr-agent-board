@@ -14,6 +14,9 @@ import {
 } from '../../../src/core/time.ts'
 import type { Translator } from '../../../src/core/types.ts'
 
+// a duration in one form everywhere: the command's day says it so too
+export { durationText } from '../../../src/core/time.ts'
+
 export interface TimeDay {
   date: string
   zone: string
@@ -50,18 +53,6 @@ export function isTimeDay(v: unknown): v is TimeDay {
     v.days.every(d => isObject(d) && Array.isArray(d.lines) && typeof d.billedSeconds === 'number') &&
     Array.isArray(v.entries)
   )
-}
-
-/**
- * Seconds as the board says a duration everywhere (the panel, a lane's total, the editor), to the
- * minute and in its language: "1h 30m", "45m", "2h"; "1 ч 30 мин".
- */
-export function durationText(seconds: number, t: Translator): string {
-  const minutes = Math.round(seconds / 60)
-  const h = Math.floor(minutes / 60)
-  const m = minutes % 60
-  if (!h) return t('time.dur.m', { m })
-  return m ? t('time.dur.hm', { h, m }) : t('time.dur.h', { h })
 }
 
 /** A line's name: "The day" for a day's group, the project for a project's, else its reference (a case, a ticket) or its project. */

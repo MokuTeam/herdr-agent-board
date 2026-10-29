@@ -12,8 +12,8 @@
 //                  [--billable | --non-billable | --default-billable] [--expect <rev>] [--force]
 //   board time move <id> <date> [--expect <rev>] [--force]
 //   board time rm <id> [--force]    board time restore <id> [--force]    board time show <id>
-//   board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--tag <t>] [--deleted]
-//                  [--not-posted [--system <id>] | --changed-after-post [--system <id>]]
+//   board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--project "<p>"] [--tag <t>] [--deleted]
+//                  [--not-posted [--system <id>] | --changed-after-post [--system <id>]] [--totals]
 //   board time post <id>[@<rev>]... --system <id> [--record <their id>]   entered into a client's system
 //   board time post --client <lane> --to <d> [--from <d>] --system <id> [--dry-run]   all before, at once
 //   board time unpost <id>[@<rev>]... --system <id>
@@ -22,6 +22,8 @@
 //   board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy]
 //                  [--dry-run] [--update] [--billable-from-toggl]
 //   board time export [--csv] [--date <d> | --from <d> --to <d>] [--client <lane>] [--bom]   CSV of the entries
+//   board time [<command>] --help   a command's usage with all its flags (time.usage.<command>), or every one's;
+//                  a usage error says the command's usage too
 import { readFileSync } from 'node:fs'
 import { addTimeProjects } from '../adapters/config-file.ts'
 import { type BoardDb, openDb } from '../adapters/db.ts'
@@ -57,6 +59,7 @@ import {
   clockIn,
   dateIn,
   durationOf,
+  durationText,
   entryView,
   hm,
   instantIn,
@@ -65,6 +68,8 @@ import {
   parseWhen,
   plausible,
   problemsText,
+  projectIn,
+  projectKey,
   secondsOf,
   systemsFor,
   type TimeConfig,
@@ -140,6 +145,59 @@ export interface TimeCmdContext {
   now?: number
 }
 
+/** The commands, each with its usage (time.usage.<command>). */
+const COMMANDS: readonly string[] = [
+  'add',
+  'edit',
+  'move',
+  'rm',
+  'restore',
+  'show',
+  'list',
+  'day',
+  'post',
+  'unpost',
+  'projects',
+  'import',
+  'export',
+]
+
+/** The generic usage: a command's own takes its place. */
+const GENERIC_USAGE = new Set(['time.err.usage', 'time.err.importUsage'])
+/** How a command was called, not what it was asked: its usage goes after the error. */
+const USAGE_ERRORS = new Set([
+  'time.err.flagValue',
+  'time.err.noDuration',
+  'time.err.noSystem',
+  'time.err.billableFlags',
+  'time.err.dryRunById',
+  'time.err.idsAndRange',
+  'time.err.noProject',
+  'time.err.noDescription',
+  'time.err.whichClient',
+])
+
+/** A command's usage: its forms ("board time …"), then a note or two (indented); `notes` false: the forms. */
+function usageOf(command: string, notes = true): string[] {
+  const lines = t(`time.usage.${command}`).split('\n')
+  return notes ? lines : lines.filter(l => !l.startsWith(' '))
+}
+
+/** `board time <command> --help`, or every command's forms. */
+const helpOf = (command: string | undefined): string[] =>
+  command && COMMANDS.includes(command)
+    ? [t('time.usage'), ...usageOf(command).map(l => `  ${l}`)]
+    : [t('time.usage'), ...COMMANDS.flatMap(c => usageOf(c, false).map(l => `  ${l}`)), t('time.usage.more')]
+
+const pad2 = (n: number): string => String(n).padStart(2, '0')
+/** An instant on this computer's clock, as the command takes times: "09:30". */
+const clockText = (iso: string): string => {
+  const d = new Date(iso)
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+/** An entry's start and stop on this computer's clock: "09:00-10:05" (a change of its duration keeps its start). */
+const intervalText = (e: TimeEntry): string => `${clockText(e.start)}-${clockText(e.stop)}`
+
 const whoText = (a: Actor): string => (typeof a === 'string' ? t(`time.who.${a}`) : a.name || a.key)
 
 /** Where an entry was entered, as a line says it: "posted erp, tracker (changed after: tracker)". */
@@ -149,8 +207,14 @@ function postsText(e: TimeEntry, marks: readonly Mark[]): string {
   return ` · ${t('time.cli.posted', { systems: marks.map(m => m.system).join(', ') })}${stale.length ? ` (${t('time.cli.changedAfter')}: ${stale.join(', ')})` : ''}`
 }
 
-function entryLine(e: TimeEntry, conf: TimeConfig, marks: readonly Mark[] = []): string {
-  return `${e.id} · ${e.date} · ${e.client}/${e.project} · ${hm(secondsOf(e))} · ${e.description}${e.tags.length ? ` · #${e.tags.join(' #')}` : ''}${billableOf(conf, e) ? '' : ` · ${t('time.cli.nonBillable')}`}${postsText(e, marks)}${e.deleted ? ` · ${t('time.cli.removed')}` : ''}`
+/** An entry in a line; `interval`: its start and stop after its duration, as a change of it says. */
+function entryLine(
+  e: TimeEntry,
+  conf: TimeConfig,
+  marks: readonly Mark[] = [],
+  o: { interval?: boolean } = {},
+): string {
+  return `${e.id} · ${e.date} · ${e.client}/${e.project} · ${hm(secondsOf(e))}${o.interval ? ` (${intervalText(e)})` : ''} · ${e.description}${e.tags.length ? ` · #${e.tags.join(' #')}` : ''}${billableOf(conf, e) ? '' : ` · ${t('time.cli.nonBillable')}`}${postsText(e, marks)}${e.deleted ? ` · ${t('time.cli.removed')}` : ''}`
 }
 
 /** An entry as the JSON gives it (core/time.ts entryView: billable, billableDefault, posts). */
@@ -189,13 +253,38 @@ const codeOf = (err: unknown): string => (err instanceof TimeError ? (err.key.sp
  */
 export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Promise<number> {
   const out = ctx.out ?? ((line: string) => console.log(line))
-  const json = rest.includes('--json') && !rest.slice(0, rest.indexOf('--json')).includes('--')
+  const flags = rest.includes('--') ? rest.slice(0, rest.indexOf('--')) : rest
+  const json = flags.includes('--json')
+  // help, whether time is on or not: a command's usage with all its flags, or every command's
+  if (flags.includes('--help') || flags.includes('-h') || rest[0] === 'help') {
+    const lines = helpOf(rest[0] === 'help' ? rest[1] : rest[0])
+    if (json) out(JSON.stringify({ usage: lines.join('\n') }, null, 2))
+    else for (const line of lines) out(line)
+    return 0
+  }
   try {
     await run(rest, ctx, out)
     return 0
   } catch (err) {
+    // called wrong: the command's usage goes with the error (the generic usage gives way to it)
+    const command = rest[0] ?? 'list'
+    const usage =
+      err instanceof TimeError &&
+      COMMANDS.includes(command) &&
+      (GENERIC_USAGE.has(err.key) || USAGE_ERRORS.has(err.key))
+        ? helpOf(command)
+        : null
+    if (usage && err instanceof TimeError)
+      err.message = GENERIC_USAGE.has(err.key) ? usage.join('\n') : `${err.message}\n${usage.join('\n')}`
     if (!json) throw err
-    out(JSON.stringify({ ok: false, error: codeOf(err), message: err instanceof Error ? err.message : String(err) }))
+    out(
+      JSON.stringify({
+        ok: false,
+        error: codeOf(err),
+        message: err instanceof Error ? err.message : String(err),
+        ...(usage && { usage: usageOf(command).join('\n') }),
+      }),
+    )
     return 1
   }
 }
@@ -266,9 +355,10 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
           list.map(e => e.id),
         )
       : new Map()
+  /** The entry's day, worked → billed, as durations: not read as the entry's own start and stop. */
   const dayTotal = (db: BoardDb, e: TimeEntry): string => {
     const { day } = dayOf(db, e.client, e.date)
-    return t('time.cli.dayTotal', { raw: hm(day.seconds), billed: hm(day.billedSeconds) })
+    return t('time.cli.dayTotal', { raw: durationText(day.seconds, t), billed: durationText(day.billedSeconds, t) })
   }
 
   switch (sub) {
@@ -316,7 +406,7 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
         const r = a.has('--new-project') ? withNewProject(conf, add, x => x.entry) : add(conf)
         const said = !r.existing ? 'ok' : r.reason === 'repeat-window' ? t('time.cli.repeat') : t('time.cli.existing')
         print(
-          `${said} · ${r.entry.id} · ${r.entry.client}/${r.entry.project} · ${r.entry.date} · ${hm(secondsOf(r.entry))} · ${dayTotal(db, r.entry)}`,
+          `${said} · ${r.entry.id} · ${r.entry.client}/${r.entry.project} · ${r.entry.date} · ${hm(secondsOf(r.entry))} (${intervalText(r.entry)}) · ${dayTotal(db, r.entry)}`,
           {
             ...entryJson(r.entry, conf, marksFor(db, [r.entry]).get(r.entry.id)),
             existing: r.existing,
@@ -369,7 +459,7 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
         const marks = marksFor(db, [e]).get(e.id) ?? []
         print(
           [
-            `ok · ${entryLine(e, conf, marks)} · rev ${e.rev} · ${dayTotal(db, e)}`,
+            `ok · ${entryLine(e, conf, marks, { interval: true })} · rev ${e.rev} · ${dayTotal(db, e)}`,
             ...there('time.cli.changeThere', was, e, marks),
           ],
           entryJson(e, conf, marks),
@@ -391,7 +481,7 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
         const marks = marksFor(db, [e]).get(e.id)
         print(
           [
-            `ok · ${entryLine(e, conf, marks)} · ${e.start} · ${dayTotal(db, e)}`,
+            `ok · ${entryLine(e, conf, marks, { interval: true })} · ${e.start} · ${dayTotal(db, e)}`,
             ...there('time.cli.changeThere', was, e, marks),
           ],
           entryJson(e, conf, marks),
@@ -451,6 +541,7 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       const to = a.one('--to') ?? date ?? from
       if (!isDate(from) || !isDate(to)) throw new TimeError('time.err.usage')
       const system = a.one('--system')
+      const project = a.one('--project')
       const changedAfter = a.has('--changed-after-post')
       if (system !== undefined && !a.has('--not-posted') && !changedAfter) throw new TimeError('time.err.usage')
       if (a.has('--not-posted') && changedAfter) throw new TimeError('time.err.usage')
@@ -462,6 +553,7 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
             to,
             client: a.one('--client'),
             tag: a.one('--tag'),
+            project,
             deleted: a.has('--deleted') || changedAfter,
           })
         : []
@@ -488,15 +580,53 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       // removed ones listed (--deleted, or changed after entering): counted apart, as the held ones
       const removedCount = list.filter(e => e.deleted).length
       const total = counted.reduce((n, e) => n + secondsOf(e), 0)
+      // per project, as the board tells names apart, under the name the client's list has for it
+      const projects = new Map<string, { client: string; project: string; count: number; seconds: number }>()
+      for (const e of counted) {
+        const key = `${e.client}\u0000${projectKey(e.project)}`
+        const p = projects.get(key) ?? {
+          client: e.client,
+          project: projectIn(conf.clients?.[e.client]?.projects ?? [], e.project) ?? e.project,
+          count: 0,
+          seconds: 0,
+        }
+        p.count++
+        p.seconds += secondsOf(e)
+        projects.set(key, p)
+      }
+      const byProject = [...projects.values()].sort(
+        (x, y) => x.client.localeCompare(y.client) || x.project.localeCompare(y.project),
+      )
+      // a person reads them per project when the list is a client's or a project's (or asked for)
+      const perProject =
+        (a.one('--client') !== undefined || project !== undefined || a.has('--totals')) && byProject.length > 1
+      const entries = list.map(e => entryJson(e, conf, marks.get(e.id)))
       print(
         list.length
           ? [
               ...warn(),
               ...list.map(e => entryLine(e, conf, marks.get(e.id))),
               `${t('time.cli.total', { n: counted.length, total: hm(total) })}${heldCount ? ` · ${t('time.cli.heldCount', { n: heldCount })}` : ''}${removedCount ? ` · ${t('time.cli.removedCount', { n: removedCount })}` : ''}`,
+              ...(perProject
+                ? byProject.map(
+                    p => `  ${p.client}/${p.project} · ${t('time.cli.total', { n: p.count, total: hm(p.seconds) })}`,
+                  )
+                : []),
             ]
           : [...warn(), t('time.cli.none')],
-        list.map(e => entryJson(e, conf, marks.get(e.id))),
+        // the list as agents read it; with --totals, the list and its totals
+        a.has('--totals')
+          ? {
+              entries,
+              total: {
+                count: counted.length,
+                seconds: total,
+                held: heldCount,
+                removed: removedCount,
+                projects: byProject,
+              },
+            }
+          : entries,
       )
       return
     }

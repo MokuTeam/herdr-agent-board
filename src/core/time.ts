@@ -494,6 +494,18 @@ export function hm(seconds: number): string {
   return `${sign}${Math.floor(a / 60)}:${String(a % 60).padStart(2, '0')}`
 }
 
+/**
+ * Seconds as the board says a duration everywhere (the panel, a lane's total, the editor, the
+ * command's day), to the minute and in its language: "1h 30m", "45m", "2h"; "1 ч 30 мин".
+ */
+export function durationText(seconds: number, t: Translator): string {
+  const minutes = Math.round(seconds / 60)
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  if (!h) return t('time.dur.m', { m })
+  return m ? t('time.dur.hm', { h, m }) : t('time.dur.h', { h })
+}
+
 /** Seconds as hours with up to two decimals, as a bill says them: 1.5, 0.25, 2. */
 export const hoursOf = (seconds: number): number => Math.round((seconds / 3600) * 100) / 100
 

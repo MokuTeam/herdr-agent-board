@@ -1974,7 +1974,7 @@ board time add [--client <lane>] --project "<p>" [--start <t>] (--stop <t> | --m
 board time edit <id> [--description "…"] [--project "…"] [--client <lane>] [--start <t>] [--stop <t>] [--minutes <n>] [--tag +<t> | --tag -<t>] [--billable | --non-billable | --default-billable] [--expect <rev>] [--force]
 board time move <id> <date> [--force]
 board time rm <id> [--force]    board time restore <id>    board time show <id>
-board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--tag <t>] [--deleted] [--not-posted [--system <id>] | --changed-after-post]
+board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--project "<p>"] [--tag <t>] [--deleted] [--not-posted [--system <id>] | --changed-after-post] [--totals]
 board time post <id>[@<rev>]... --system <id> [--record "<their id>"]    marked entered in a client's system
 board time post --client <lane> --to <d> [--from <d>] --system <id> [--dry-run]    what was entered before the board, at once
 board time unpost <id>[@<rev>]... --system <id>
@@ -1982,6 +1982,7 @@ board time day [<d>] [--client <lane>]      the day as billed: lines, raw and bi
 board time projects [<lane>]
 board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy] [--dry-run] [--update]
 board time export [--csv] [--date <d> | --from <d> --to <d>] [--client <lane>] [--bom]   the entries as CSV
+board time [<command>] --help      a command's usage with all its flags, or every command's
 ```
 
 Times are ISO with an offset (`2026-10-28T09:00:00+03:00`), or this computer's clock (`9:30`,
@@ -1989,7 +1990,11 @@ Times are ISO with an offset (`2026-10-28T09:00:00+03:00`), or this computer's c
 evening); with no `--start`, a `--stop` over an hour ahead is refused instead (give its date).
 A time more than a day ahead or a year back is refused as a likely slip. Without
 `--start` the entry ends now (or at `--stop`). `--` ends the flags: quote the description, or put
-it after `--` when it may hold a word starting with `--`.
+it after `--` when it may hold a word starting with `--`. A command called wrong (a flag without
+its value, `add` without a duration, `edit` without an id) says its usage after the error. An
+`add`, `edit` or `move` says the entry's start and stop on this computer's clock after its
+duration, and its day as durations, worked → billed ("for the day 19h 23m → 19h 58m"), so a
+change of the duration shows the start kept.
 
 - **A repeat is safe.** An `add` alike in client, project, description, start and stop to a live
   entry returns that one (`"existing": true, "reason": "same"`) and writes nothing, whichever
@@ -2007,6 +2012,8 @@ it after `--` when it may hold a word starting with `--`.
   across a DST change too.
 - **Remove** leaves the entry, marked, out of every list and total; `restore` brings it back.
 - `list` totals what a day would: removed and held entries out (the held ones counted apart);
+  per project too when the list is a client's or a project's (`--client`, `--project`) or
+  `--totals` asks. `--project` matches as the board tells names apart (case and spaces aside);
   `--tag` matches whatever the case. `--not-posted` lists what a billing agent still has to enter:
   billable, not held, without a mark in one of its client's systems (`--system`: in that one);
   `--changed-after-post` lists the entries changed after they were entered (`--system`: in that
@@ -2031,7 +2038,9 @@ says, not set on the entry), `posts` (where it was entered: each `{ "system", "a
 "rev", "changedAfter" }`, `record` null when none was given, `changedAfter` true when the entry
 changed since), and `deleted` (ms) or `toggl` when they apply. `add` adds `existing`
 and, when it wrote nothing, `reason`. `edit`, `move`, `rm`, `restore` and `show` give the entry;
-`list` a list of entries. `post` and `unpost` give `{ "system", "count", "seconds", "entries" }`
+`list` a list of entries (with `--totals`, `{ "entries", "total" }`, the total `{ "count",
+"seconds", "held", "removed", "projects" }`, each project `{ "client", "project", "count",
+"seconds" }`, counted as the text's total is). `post` and `unpost` give `{ "system", "count", "seconds", "entries" }`
 (the entries after), and the switch-over's `--dry-run` the same with `"dryRun": true`. `day` gives
 `{ "date", "problems": [<text>...], "days": [...] }`, a day per
 client: `client`, `date`, `zone`, `seconds` (worked), `billedSeconds`, `held` and `nonBillable`
@@ -2039,7 +2048,7 @@ client: `client`, `date`, `zone`, `seconds` (worked), `billedSeconds`, `held` an
 `key`, `project`, `ref`, `rule`, `group`, `step`, `round`, `seconds`, `billedSeconds`, `entries` as
 ids), and `entries` (the day's entries in full). `projects` gives `{ "<lane>": [...] | null }`, or
 null without `clients`. An error is `{ "ok": false, "error": "<code>", "message": "…" }` on stdout
-with exit code 1: `notYours`, `changedSince`, `gone`, `removed`, `config`, `noBackup`,
+(with `"usage"`, the command's, when it was called wrong) with exit code 1: `notYours`, `changedSince`, `gone`, `removed`, `config`, `noBackup`,
 `notBackedUp`, `client`, `clientOff`, `project`, `retired`, `when`, `whenRange`, `stopAhead`, `system`, `noSystem`,
 `billableFlags`, `usage`… (the key of its
 text). **While `problems` is not empty, an agent stops:** the day's figures were worked out with

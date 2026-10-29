@@ -26,9 +26,31 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.err.sameAs': 'That would make entry {id} the same as another one.',
     'time.err.flagValue': '{flag} needs a value.',
     'time.err.usage':
-      'usage: board time add | edit <id> | move <id> <date> | rm <id> | restore <id> | show <id> | list | day [<date>] | post <id>... | unpost <id>... | projects | import <file> | export',
+      'usage: board time add | edit <id> | move <id> <date> | rm <id> | restore <id> | show <id> | list | day [<date>] | post <id>... | unpost <id>... | projects | import <file> | export. board time --help: each with its flags',
     'time.err.importUsage':
       'usage: board time import <file> --tz <Toggl profile’s zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy] [--dry-run] [--update] [--billable-from-toggl]',
+    'time.usage': 'usage:',
+    'time.usage.more': 'board time <command> --help: its flags. The whole of it: the README’s Time section.',
+    'time.usage.add':
+      'board time add [--client <lane>] --project "<project>" [--new-project] [--start <time>] (--stop <time> | --minutes <n> | --hours <h>) [--tag <tag>]... [--billable | --non-billable] [--json] [--] "<description>"\n  a time: ISO with an offset, HH:MM or YYYY-MM-DD HH:MM (this computer’s clock); without --start the entry ends now, or at --stop',
+    'time.usage.edit':
+      'board time edit <id> [--description "<text>"] [--project "<project>"] [--new-project] [--client <lane>] [--start <time>] [--stop <time>] [--minutes <n> | --hours <h>] [--tag +<tag> | --tag -<tag>]... [--billable | --non-billable | --default-billable] [--expect <rev>] [--force] [--json]\n  --minutes or --hours keeps the start and sets the stop; --start alone keeps the duration',
+    'time.usage.move':
+      'board time move <id> <YYYY-MM-DD> [--expect <rev>] [--force] [--json]\n  the same wall clock in the client’s zone on that date, and the same duration',
+    'time.usage.rm': 'board time rm <id> [--expect <rev>] [--force] [--json]',
+    'time.usage.restore': 'board time restore <id> [--expect <rev>] [--force] [--json]',
+    'time.usage.show': 'board time show <id> [--json]',
+    'time.usage.list':
+      'board time list [--date <YYYY-MM-DD> | --from <YYYY-MM-DD> --to <YYYY-MM-DD>] [--client <lane>] [--project "<project>"] [--tag <tag>] [--deleted] [--not-posted [--system <id>] | --changed-after-post [--system <id>]] [--totals] [--json]\n  today without a date; the total of the period, per project too with --client, --project or --totals; --json --totals gives { entries, total }',
+    'time.usage.day': 'board time day [<YYYY-MM-DD>] [--client <lane>] [--json]',
+    'time.usage.post':
+      'board time post <id>[@<rev>]... --system <id> [--record "<their id>"] [--json]\nboard time post --client <lane> --to <YYYY-MM-DD> [--from <YYYY-MM-DD>] --system <id> [--dry-run] [--json]\n  the second is the switch-over: everything entered before the board, at once',
+    'time.usage.unpost': 'board time unpost <id>[@<rev>]... --system <id> [--json]',
+    'time.usage.projects': 'board time projects [<lane>] [--json]',
+    'time.usage.import':
+      'board time import <file> --tz <Toggl profile’s zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy] [--dry-run] [--update] [--billable-from-toggl] [--json]',
+    'time.usage.export':
+      'board time export [--csv] [--date <YYYY-MM-DD> | --from <YYYY-MM-DD> --to <YYYY-MM-DD>] [--client <lane>] [--bom]',
     'time.err.zone': '"{zone}" is not a time zone (an IANA name, such as Europe/Istanbul).',
     'time.err.map': '--map wants "<Toggl client>=<lane>": {value}',
     'time.err.file': 'Cannot read {file}.',
@@ -122,7 +144,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.round.exact': 'exact',
     'time.cli.existing': 'already there',
     'time.cli.removed': 'removed',
-    'time.cli.dayTotal': 'day {raw} → {billed}',
+    'time.cli.dayTotal': 'for the day {raw} → {billed}',
     'time.cli.total': ['{n} entry, {total}', '{n} entries, {total}'],
     'time.cli.none': 'no entries',
     'time.cli.held': 'held',
@@ -281,9 +303,31 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.err.sameAs': 'Так запись {id} совпадёт с другой.',
     'time.err.flagValue': '{flag}: нужно значение.',
     'time.err.usage':
-      'использование: board time add | edit <id> | move <id> <дата> | rm <id> | restore <id> | show <id> | list | day [<дата>] | post <id>... | unpost <id>... | projects | import <файл> | export',
+      'использование: board time add | edit <id> | move <id> <дата> | rm <id> | restore <id> | show <id> | list | day [<дата>] | post <id>... | unpost <id>... | projects | import <файл> | export. board time --help: каждая с её флагами',
     'time.err.importUsage':
       'использование: board time import <файл> --tz <зона профиля Toggl> [--map "<клиент Toggl>=<лейн>"]... [--date-format dmy|mdy] [--dry-run] [--update] [--billable-from-toggl]',
+    'time.usage': 'использование:',
+    'time.usage.more': 'board time <команда> --help: её флаги. Целиком: раздел Time в README.',
+    'time.usage.add':
+      'board time add [--client <лейн>] --project "<проект>" [--new-project] [--start <время>] (--stop <время> | --minutes <n> | --hours <ч>) [--tag <тег>]... [--billable | --non-billable] [--json] [--] "<описание>"\n  время: ISO со смещением, ЧЧ:ММ или ГГГГ-ММ-ДД ЧЧ:ММ (часы этого компьютера); без --start запись кончается сейчас или в --stop',
+    'time.usage.edit':
+      'board time edit <id> [--description "<текст>"] [--project "<проект>"] [--new-project] [--client <лейн>] [--start <время>] [--stop <время>] [--minutes <n> | --hours <ч>] [--tag +<тег> | --tag -<тег>]... [--billable | --non-billable | --default-billable] [--expect <rev>] [--force] [--json]\n  --minutes или --hours оставляют начало и задают конец; одно --start сохраняет длительность',
+    'time.usage.move':
+      'board time move <id> <ГГГГ-ММ-ДД> [--expect <rev>] [--force] [--json]\n  те же часы в поясе клиента на эту дату и та же длительность',
+    'time.usage.rm': 'board time rm <id> [--expect <rev>] [--force] [--json]',
+    'time.usage.restore': 'board time restore <id> [--expect <rev>] [--force] [--json]',
+    'time.usage.show': 'board time show <id> [--json]',
+    'time.usage.list':
+      'board time list [--date <ГГГГ-ММ-ДД> | --from <ГГГГ-ММ-ДД> --to <ГГГГ-ММ-ДД>] [--client <лейн>] [--project "<проект>"] [--tag <тег>] [--deleted] [--not-posted [--system <id>] | --changed-after-post [--system <id>]] [--totals] [--json]\n  без даты: сегодня; итог за период, с --client, --project или --totals и по проектам; --json --totals даёт { entries, total }',
+    'time.usage.day': 'board time day [<ГГГГ-ММ-ДД>] [--client <лейн>] [--json]',
+    'time.usage.post':
+      'board time post <id>[@<rev>]... --system <id> [--record "<их id>"] [--json]\nboard time post --client <лейн> --to <ГГГГ-ММ-ДД> [--from <ГГГГ-ММ-ДД>] --system <id> [--dry-run] [--json]\n  второе: перенос, всё внесённое до доски разом',
+    'time.usage.unpost': 'board time unpost <id>[@<rev>]... --system <id> [--json]',
+    'time.usage.projects': 'board time projects [<лейн>] [--json]',
+    'time.usage.import':
+      'board time import <файл> --tz <зона профиля Toggl> [--map "<клиент Toggl>=<лейн>"]... [--date-format dmy|mdy] [--dry-run] [--update] [--billable-from-toggl] [--json]',
+    'time.usage.export':
+      'board time export [--csv] [--date <ГГГГ-ММ-ДД> | --from <ГГГГ-ММ-ДД> --to <ГГГГ-ММ-ДД>] [--client <лейн>] [--bom]',
     'time.err.zone': '"{zone}" не часовой пояс (имя IANA, например Europe/Istanbul).',
     'time.err.map': '--map ждёт "<клиент Toggl>=<лейн>": {value}',
     'time.err.file': 'Не удалось прочитать {file}.',
@@ -380,7 +424,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.round.exact': 'точно',
     'time.cli.existing': 'уже есть',
     'time.cli.removed': 'удалена',
-    'time.cli.dayTotal': 'день {raw} → {billed}',
+    'time.cli.dayTotal': 'за день {raw} → {billed}',
     'time.cli.total': ['{n} запись, {total}', '{n} записи, {total}', '{n} записей, {total}'],
     'time.cli.none': 'записей нет',
     'time.cli.held': 'отложены',

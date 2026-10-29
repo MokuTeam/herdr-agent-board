@@ -123,6 +123,8 @@ export interface ListQuery {
   to: string
   client?: string | undefined
   tag?: string | undefined
+  /** A project as the board matches names (core/time.ts sameProject: case and spaces aside). */
+  project?: string | undefined
   /** Removed ones too. */
   deleted?: boolean | undefined
 }
@@ -139,9 +141,10 @@ export function listEntries(db: BoardDb, q: ListQuery): TimeEntry[] {
   const rows = db.db
     .query(`SELECT ${COLUMNS} FROM time_entries WHERE ${where.join(' AND ')} ORDER BY start, id`)
     .all(...args) as Row[]
-  const list = rows.map(entryOf)
   const tag = q.tag ? cleanTag(q.tag) : ''
-  return tag ? list.filter(e => e.tags.includes(tag)) : list
+  return rows
+    .map(entryOf)
+    .filter(e => (!tag || e.tags.includes(tag)) && (q.project === undefined || sameProject(e.project, q.project)))
 }
 
 // ------------------------------------------------------------------ checks

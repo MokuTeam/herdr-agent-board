@@ -828,3 +828,169 @@ test('import: a "differs" line cuts a long description by characters, never halv
   const said = (await run(cfg, ['import', csv, ...map, '--dry-run'])).join('\n')
   assert.ok(said.includes(`"${'x'.repeat(39)}🙂…"`), said)
 })
+
+test('help: every command with its flags, one command’s usage, time off too; a usage error says the command’s usage', async () => {
+  isolatedHome()
+  const off = { language: 'en' } as unknown as Config
+  const all = (await run(off, ['--help'])).join('\n')
+  for (const c of [
+    'add',
+    'edit',
+    'move',
+    'rm',
+    'restore',
+    'show',
+    'list',
+    'day',
+    'post',
+    'unpost',
+    'projects',
+    'import',
+    'export',
+  ])
+    assert.match(all, new RegExp(`board time ${c} `))
+  assert.match(all, /--billable \| --non-billable/)
+  assert.match(all, /board time <command> --help/)
+  // a command's own usage: all its flags, and its notes
+  const add = (await run(off, ['add', '--help'])).join('\n')
+  for (const f of [
+    '--client',
+    '--project',
+    '--new-project',
+    '--start',
+    '--stop',
+    '--minutes',
+    '--hours',
+    '--tag',
+    '--non-billable',
+  ])
+    assert.ok(add.includes(f), f)
+  assert.doesNotMatch(add, /board time edit/)
+  assert.match(add, /without --start the entry ends now/)
+  assert.deepEqual(await run(off, ['help', 'list']), await run(off, ['list', '-h']))
+  assert.match((await run(off, ['list', '--help'])).join('\n'), /--project "<project>".*--totals/)
+  assert.deepEqual(JSON.parse((await run(off, ['day', '--help', '--json'])).join('\n')), {
+    usage: 'usage:\n  board time day [<YYYY-MM-DD>] [--client <lane>] [--json]',
+  })
+  // after `--`, --help is the description's
+  const { cfg } = await setUp()
+  assert.match(
+    (await run(cfg, ['add', '--project', 'Support', '--minutes', '5', '--', 'see', '--help']))[0] ?? '',
+    /^ok · /,
+  )
+  // called wrong: the error, then the command's usage with all its flags
+  const noDuration = await run(cfg, ['add']).then(
+    () => assert.fail('no error'),
+    (err: Error) => err.message,
+  )
+  assert.match(noDuration, /^How long\? /)
+  assert.match(noDuration, /\nusage:\n {2}board time add \[--client <lane>\] --project/)
+  // the generic usage gives way to the command's own
+  const noId = await run(cfg, ['edit']).then(
+    () => assert.fail('no error'),
+    (err: Error) => err.message,
+  )
+  assert.match(noId, /^usage:\n {2}board time edit <id> \[--description/)
+  assert.doesNotMatch(noId, /board time add/)
+  // under --json: the code as before, the usage apart
+  const error = await jsonOf(cfg, ['post', 'abcdef12'])
+  assert.deepEqual([error.ok, error.error], [false, 'noSystem'])
+  assert.match(error.usage, /^board time post <id>\[@<rev>\]\.\.\. --system <id>/)
+  // an error that is not about how it was called says no usage
+  const gone = await jsonOf(cfg, ['show', 'abcdef12'])
+  assert.deepEqual([gone.error, gone.usage], ['gone', undefined])
+  // an unknown command: the list, and where each one's flags are
+  assert.match(
+    await run(cfg, ['bill']).then(
+      () => '',
+      (err: Error) => err.message,
+    ),
+    /board time --help/,
+  )
+})
+
+test('list --project, matched as the board matches names; the total of the period, per project when filtered; --totals in JSON', async () => {
+  const { cfg } = await setUp()
+  // client-b takes any project, so a name is kept as typed
+  const clients = (cfg.time as { clients: Record<string, { projects?: string[] }> }).clients
+  clients['client-b'] = {}
+  const add = (project: string, start: string, minutes: number, lane = 'client-b') =>
+    run(cfg, [
+      'add',
+      '--client',
+      lane,
+      '--project',
+      project,
+      '--start',
+      start,
+      '--minutes',
+      String(minutes),
+      `Case 1000${minutes % 10} X`,
+    ])
+  await add('Support', '2026-10-27T09:00:00-04:00', 30)
+  await add('support ', '2026-10-28T09:00:00-04:00', 45)
+  await add('Migration', '2026-10-28T11:00:00-04:00', 60)
+  await add('Internal', '2026-10-28T12:00:00-04:00', 15, 'personal')
+  const range = ['--from', '2026-10-27', '--to', '2026-10-28']
+  // case and spaces aside: "support " is Support
+  const support = await jsonOf(cfg, ['list', ...range, '--project', 'SUPPORT'])
+  assert.deepEqual(
+    support.map((e: { seconds: number }) => e.seconds / 60),
+    [30, 45],
+  )
+  const text = await run(cfg, ['list', ...range, '--project', 'Support'])
+  assert.equal(text.at(-1), '2 entries, 1:15')
+  // a client's list: the total, then per project
+  const byClient = await run(cfg, ['list', ...range, '--client', 'client-b'])
+  assert.deepEqual(byClient.slice(-3), [
+    '3 entries, 2:15',
+    '  client-b/Migration · 1 entry, 1:00',
+    '  client-b/Support · 2 entries, 1:15',
+  ])
+  // not filtered: the total alone
+  assert.equal((await run(cfg, ['list', ...range])).at(-1), '4 entries, 2:30')
+  // the JSON stays the list agents read; --totals gives the list and its totals
+  assert.ok(Array.isArray(await jsonOf(cfg, ['list', ...range])))
+  const totals = await jsonOf(cfg, ['list', ...range, '--totals'])
+  assert.equal(totals.entries.length, 4)
+  assert.deepEqual(totals.total, {
+    count: 4,
+    seconds: 150 * 60,
+    held: 0,
+    removed: 0,
+    projects: [
+      { client: 'client-b', project: 'Migration', count: 1, seconds: 3600 },
+      { client: 'client-b', project: 'Support', count: 2, seconds: 75 * 60 },
+      { client: 'personal', project: 'Internal', count: 1, seconds: 900 },
+    ],
+  })
+  assert.deepEqual((await jsonOf(cfg, ['list', '--date', '2026-10-20', '--totals'])).total.projects, [])
+})
+
+test('a change says the day as durations, worked → billed, and the entry’s start and stop, so the start kept shows', async () => {
+  const { cfg } = await setUp()
+  const clock = (iso: string) => {
+    const d = new Date(iso)
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  }
+  const start = '2026-10-28T09:00:00-04:00'
+  const [added] = await run(cfg, [
+    'add',
+    '--project',
+    'Support',
+    '--start',
+    start,
+    '--minutes',
+    '20',
+    'Case 10001 X: work',
+  ])
+  const range = `${clock(start)}-${clock('2026-10-28T09:20:00-04:00')}`
+  assert.ok(added?.includes(` · 0:20 (${range}) · for the day 20m → 30m`), String(added))
+  const [made] = await jsonOf(cfg, ['list', '--date', '2026-10-28'])
+  const [edited] = await run(cfg, ['edit', made.id, '--minutes', '65'])
+  const longer = `${clock(start)}-${clock('2026-10-28T10:05:00-04:00')}`
+  assert.ok(
+    edited?.includes(` · 1:05 (${longer}) · Case 10001 X: work · rev 2 · for the day 1h\u00a05m → 1h\u00a030m`),
+    String(edited),
+  )
+})
