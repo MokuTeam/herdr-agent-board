@@ -518,7 +518,13 @@ async function main(): Promise<void> {
   if (cmd === 'doctor') {
     const { gatherFacts } = await import('../adapters/setup-facts.ts')
     const { checkSetup, report } = await import('../core/setup.ts')
-    const checks = checkSetup(await gatherFacts(cfg), t)
+    const facts = await gatherFacts(cfg)
+    const checks = checkSetup(facts, t)
+    // What herdr's panes hold (#243): asked here only, not in the web board's setup note.
+    const { paneFacts } = await import('../adapters/pane-facts.ts')
+    const { paneChecks, wakeKeepsSleepers } = await import('../core/pane-report.ts')
+    const panes = await paneFacts(wakeKeepsSleepers(facts.wakeNew?.state))
+    if (panes) checks.push(...paneChecks(panes, t))
     const webPort = Number(cfg.port) || 12422
     // The remote mode's own checks, only while it is on: off, Tailscale is never asked.
     if (remoteConfig(cfg.remote).on) {
