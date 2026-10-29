@@ -263,9 +263,9 @@ export function openDb({ path = dbFile(), create = true, steps = MIGRATIONS }: O
       const version = (db.query('SELECT sqlite_version() AS v').get() as { v: string }).v
       if (!sqliteAtLeast(version)) throw new DbError('oldSqlite', version)
       settle(db)
-      const newer =
-        damageOf(path) === null ? migrate(db, path, steps) : userVersion(db) > (steps.at(-1)?.version ?? LATEST)
-      return handle(db, path, newer)
+      const known = steps.at(-1)?.version ?? LATEST
+      const newer = damageOf(path) === null ? migrate(db, path, steps) : userVersion(db) > known
+      return handle(db, path, newer, known)
     })
   } catch (err) {
     ;(db as Database | null)?.close(false)
@@ -279,7 +279,13 @@ export function openDb({ path = dbFile(), create = true, steps = MIGRATIONS }: O
   }
 }
 
-function handle(db: Database, path: string, newer: boolean): BoardDb {
+/**
+ * A connection's handle. A file a newer board migrated after this connection opened (a process that
+ * runs for long, the web board) is found at its next write, under the write lock: refused, and
+ * `newer` from then on.
+ */
+function handle(db: Database, path: string, opened: boolean, known: number): BoardDb {
+  let newer = opened
   const insertJournal = db.query(
     'INSERT INTO journal (at, by, store, op, ref, before, after) VALUES (?, ?, ?, ?, ?, ?, ?)',
   )
@@ -287,7 +293,9 @@ function handle(db: Database, path: string, newer: boolean): BoardDb {
   return {
     path,
     db,
-    newer,
+    get newer() {
+      return newer
+    },
     write<T>(by: string, fn: (tx: Tx) => T): T {
       const damage = damageOf(path)
       if (damage !== null) throw new DbError('damaged', damage)
@@ -301,7 +309,17 @@ function handle(db: Database, path: string, newer: boolean): BoardDb {
         },
       }
       try {
-        return whileBusy(() => db.transaction(() => fn(tx)).immediate())
+        return whileBusy(() =>
+          db
+            .transaction(() => {
+              if (userVersion(db) > known) {
+                newer = true
+                throw new DbError('newer')
+              }
+              return fn(tx)
+            })
+            .immediate(),
+        )
       } catch (err) {
         if (corrupt(err)) {
           markDamaged(path, String((err as Error).message))

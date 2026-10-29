@@ -281,6 +281,24 @@ test('several processes opening an existing file that wants a step: one migrates
   raw.close()
 })
 
+test('a connection kept open while a newer board migrates the file refuses its next write, and says newer from then on', () => {
+  isolatedHome()
+  const kept = openDb()
+  assert.ok(kept)
+  kept.write('user', tx => tx.journal({ store: 's', op: 'o', ref: 'before' }))
+  // another process, newer code: a step this connection does not know
+  const other = new Database(dbFile())
+  other.exec(`PRAGMA user_version = ${LATEST + 1}`)
+  other.close()
+  assert.throws(
+    () => kept.write('user', tx => tx.journal({ store: 's', op: 'o', ref: 'after' })),
+    (err: unknown) => err instanceof DbError && err.problem === 'newer',
+  )
+  assert.equal(kept.newer, true)
+  assert.equal((kept.db.query('SELECT count(*) AS n FROM journal').get() as { n: number }).n, 1, 'nothing written')
+  kept.close()
+})
+
 test('sqliteAtLeast compares versions part by part', () => {
   assert.ok(sqliteAtLeast('3.53.4'))
   assert.ok(sqliteAtLeast('3.37.0'))
