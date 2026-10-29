@@ -729,12 +729,14 @@ const differing = (c: TimeConfig, stored: TimeEntry, entry: TimeEntry): string[]
 
 /**
  * How the rows of one lane and start are paired with the entries the store has there, each pass
- * over the rows not yet paired: alike in every field first; then the same project and
+ * over the rows not yet paired: alike in every field first; then alike but for billable (a row
+ * that says it, with --billable-from-toggl, still finds its own entry before another's); then the same project and
  * description (its stop or tags changed); the same project and stop (its words changed); the same
  * project; the same description; the same stop; then whatever is left, one to one.
  */
 const pairings = (c: TimeConfig): ((stored: TimeEntry, row: TimeEntry) => boolean)[] => [
   (a, b) => differing(c, a, b).length === 0,
+  (a, b) => differing(c, a, b).every(f => f === 'billable'),
   (a, b) => a.project === b.project && a.description === b.description,
   (a, b) => a.project === b.project && a.stop === b.stop,
   (a, b) => a.project === b.project,

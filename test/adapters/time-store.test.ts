@@ -27,7 +27,7 @@ import {
   unpostEntries,
   usedTags,
 } from '../../src/adapters/time-store.ts'
-import { type Actor, secondsOf, timeConfig } from '../../src/core/time.ts'
+import { type Actor, isoOf, secondsOf, timeConfig } from '../../src/core/time.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const WRITER = fileURLToPath(new URL('../support/time-writer.ts', import.meta.url))
@@ -893,4 +893,34 @@ test('billable set the way the config has it, on an entry that follows the confi
   )
   db.close()
   old.close()
+})
+
+test('with Toggl’s Billable, rows of one start still find their own entries: alike but for billable before by project and words', () => {
+  const db = fresh()
+  const at15 = at('2026-10-28T15:00:00Z')
+  const row = (minutes: number, o: Partial<ImportRow> = {}) =>
+    csvRow({ start: at15, stop: at15 + minutes * 60_000, description: 'Call', ...o })
+  // two entries at one start, made in the other order than the later file has them
+  importEntries(db, posting, [row(25), row(10)])
+  const stored = listEntries(db, { from: '2026-10-28', to: '2026-10-28' })
+  const idBy = (minutes: number) => stored.find(e => e.stop === isoOf(at15 + minutes * 60_000))?.id
+  const r = importEntries(db, posting, [row(10, { billable: false }), row(25, { billable: false })], { update: true })
+  assert.deepEqual(
+    r.updated.map(c => [c.id, c.fields]),
+    [
+      [idBy(10), ['billable']],
+      [idBy(25), ['billable']],
+    ],
+  )
+  assert.deepEqual(
+    // entries of one start come by their ids: by stop here
+    listEntries(db, { from: '2026-10-28', to: '2026-10-28' })
+      .map(e => [e.stop, e.billable])
+      .sort(),
+    [
+      [isoOf(at15 + 10 * 60_000), false],
+      [isoOf(at15 + 25 * 60_000), false],
+    ],
+  )
+  db.close()
 })

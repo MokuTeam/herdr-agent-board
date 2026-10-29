@@ -252,9 +252,12 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
     if (set.length > 1) throw new TimeError('time.err.billableFlags')
     return set[0] === '--billable' ? true : set[0] === '--non-billable' ? false : set[0] ? null : undefined
   }
-  /** An entry entered somewhere, as a change of it is printed: the change is to be made there too. */
-  const there = (key: string, marks: readonly Mark[] = []): string[] =>
-    marks.length ? [t(key, { systems: marks.map(m => m.system).join(', ') })] : []
+  /**
+   * An entry entered somewhere, as a change of it is printed: the change is to be made there too;
+   * only when it changed (`was`, the entry before: a change that changed nothing asks for none).
+   */
+  const there = (key: string, was: TimeEntry | null, e: TimeEntry, marks: readonly Mark[] = []): string[] =>
+    marks.length && was?.rev !== e.rev ? [t(key, { systems: marks.map(m => m.system).join(', ') })] : []
   /** The marks of entries read from `db`, by entry. */
   const marksFor = (db: BoardDb | null, list: readonly TimeEntry[]): Map<string, Mark[]> =>
     db
@@ -338,6 +341,7 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       const billable = billableFlag()
       const db = writable()
       try {
+        const was = getEntry(db, id)
         const e = editEntry(
           db,
           conf,
@@ -363,7 +367,7 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
         print(
           [
             `ok · ${entryLine(e, conf, marks)} · rev ${e.rev} · ${dayTotal(db, e)}`,
-            ...(marks.length ? [t('time.cli.changeThere', { systems: marks.map(m => m.system).join(', ') })] : []),
+            ...there('time.cli.changeThere', was, e, marks),
           ],
           entryJson(e, conf, marks),
         )
@@ -379,12 +383,13 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
         throw new TimeError('time.err.whenRange', { value: date })
       const db = writable()
       try {
+        const was = getEntry(db, id)
         const e = moveEntry(db, conf, id, date, ctx.actor, { force, ...(expect !== undefined && { expect }) })
         const marks = marksFor(db, [e]).get(e.id)
         print(
           [
             `ok · ${entryLine(e, conf, marks)} · ${e.start} · ${dayTotal(db, e)}`,
-            ...there('time.cli.changeThere', marks),
+            ...there('time.cli.changeThere', was, e, marks),
           ],
           entryJson(e, conf, marks),
         )
@@ -400,13 +405,14 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       const db = writable()
       try {
         const o = { force, ...(expect !== undefined && { expect }) }
+        const was = getEntry(db, id)
         const e = sub === 'rm' ? removeEntry(db, id, ctx.actor, o) : restoreEntry(db, id, ctx.actor, o)
         const marks = marksFor(db, [e]).get(e.id)
         // removed, entered somewhere: to be taken out there too; back: to be entered again there
         print(
           [
             `ok · ${entryLine(e, conf, marks)}`,
-            ...there(sub === 'rm' ? 'time.cli.removeThere' : 'time.cli.changeThere', marks),
+            ...there(sub === 'rm' ? 'time.cli.removeThere' : 'time.cli.changeThere', was, e, marks),
           ],
           entryJson(e, conf, marks),
         )
@@ -476,13 +482,15 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       // the total as a day's would be: removed and held entries out of it
       const counted = list.filter(e => !e.deleted && !held(e))
       const heldCount = list.filter(e => !e.deleted).length - counted.length
+      // removed ones listed (--deleted, or changed after entering): counted apart, as the held ones
+      const removedCount = list.filter(e => e.deleted).length
       const total = counted.reduce((n, e) => n + secondsOf(e), 0)
       print(
         list.length
           ? [
               ...warn(),
               ...list.map(e => entryLine(e, conf, marks.get(e.id))),
-              `${t('time.cli.total', { n: counted.length, total: hm(total) })}${heldCount ? ` · ${t('time.cli.heldCount', { n: heldCount })}` : ''}`,
+              `${t('time.cli.total', { n: counted.length, total: hm(total) })}${heldCount ? ` · ${t('time.cli.heldCount', { n: heldCount })}` : ''}${removedCount ? ` · ${t('time.cli.removedCount', { n: removedCount })}` : ''}`,
             ]
           : [...warn(), t('time.cli.none')],
         list.map(e => entryJson(e, conf, marks.get(e.id))),

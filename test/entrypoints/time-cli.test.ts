@@ -698,3 +698,18 @@ test('import: Toggl’s Billable left aside unless asked: an all-No export keeps
     ],
   )
 })
+
+test('an edit that changes nothing asks for no change in the systems; the removed ones listed are counted apart', async () => {
+  const cfg = posting((await setUp()).cfg)
+  const one = await jsonOf(cfg, addAt('09:00', 'Support', 'Case 10001 X: work'))
+  await jsonOf(cfg, ['post', one.id, '--system', 'erp'])
+  const same = await run(cfg, ['edit', one.id, '--description', 'Case 10001 X: work'])
+  assert.equal(same.length, 1, 'no "change it there too" for a change of nothing')
+  const real = await run(cfg, ['edit', one.id, '--description', 'Case 10001 X: more'])
+  assert.match(real.at(-1) ?? '', /change it there too/)
+  await run(cfg, ['rm', one.id])
+  assert.match(
+    (await run(cfg, ['list', '--changed-after-post', '--date', '2026-10-28'])).at(-1) ?? '',
+    /0 entries, 0:00 · removed 1/,
+  )
+})
