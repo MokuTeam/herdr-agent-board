@@ -24,6 +24,7 @@ export type PanelKind =
   | 'todos'
   | 'backup'
   | 'time'
+  | 'timeSettings'
 
 /** Each panel's name for screen readers, and the session sheet's close button id. */
 const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
@@ -39,6 +40,7 @@ const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
   todos: { label: 'todo.title' },
   backup: { label: 'backup.title' },
   time: { label: 'time.title' },
+  timeSettings: { label: 'time.set.title' },
 }
 
 interface ShellProps {

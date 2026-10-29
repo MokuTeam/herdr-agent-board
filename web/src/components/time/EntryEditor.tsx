@@ -13,7 +13,12 @@
 // stays. Times that make no duration, or over 12 hours, are said under the times.
 // Laid out as the row it opened from grown in place: the description first, then what it is for,
 // when, and the rest; who logged it quietly under them; Delete apart from Cancel and Save.
+// The Project field offers "New project…" last (#237): a name typed there goes with Save, which adds
+// it to the client's list; a line under it says so, or that the client has it already (case and
+// spaces aside: the entry takes that one), or that it is retired (Save waits). A client with no
+// project yet asks for its first one at once.
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
+import { projectIn } from '../../../../src/core/time.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import {
   type Draft,
@@ -44,6 +49,9 @@ function listText(names: readonly string[], lang: string): string {
 /** The most tags an entry has (the board refuses more). */
 const MAX_TAGS = 20
 
+/** The Project field's choice that is no project: "New project…". */
+const NEW_PROJECT = '\u0000new'
+
 export interface EntryEditorProps {
   draft: Draft
   /** A new entry: the client can be chosen among these. */
@@ -51,6 +59,8 @@ export interface EntryEditorProps {
   clientTitle(id: string): string
   /** The client's projects (null: any, typed). */
   projects(client: string): string[] | null
+  /** The client's retired projects: a new one by that name waits. */
+  retired?: ((client: string) => string[]) | undefined
   /** Who logged the entry (a session's name opens it); none for a new one. */
   by?: ReactNode
   /** Tags to offer, in the order to offer them (the board's: the held ones first). */
@@ -76,6 +86,7 @@ export function EntryEditor({
   clients,
   clientTitle,
   projects,
+  retired = () => [],
   by,
   tags: offered = [],
   billableDefault = () => true,
@@ -114,6 +125,20 @@ export function EntryEditor({
   }, [d, pending, lasting])
   const set = (field: 'description' | 'project', value: string) => setD(x => ({ ...x, [field]: value }))
   const listed = projects(d.client)
+  // a name typed for a new project, or a client with none yet: its first one
+  const [named, setNamed] = useState(draft.newProject)
+  const naming = !!listed && (named || listed.length === 0)
+  const typedName = d.project.trim()
+  const sameAs = naming && typedName ? projectIn(listed ?? [], typedName) : null
+  const retiredAs = naming && typedName && !sameAs ? projectIn(retired(d.client), typedName) : null
+  const projectNote =
+    !naming || !typedName
+      ? ''
+      : retiredAs
+        ? t('time.edit.newProjectRetired', { project: retiredAs })
+        : sameAs
+          ? t('time.edit.newProjectSame', { client: clientTitle(d.client), project: sameAs })
+          : t('time.edit.newProjectAdds', { client: clientTitle(d.client) })
   const commitDuration = () => {
     if (typedSeconds === null) return
     setD(withTyped)
@@ -139,6 +164,8 @@ export function EntryEditor({
   const hints = full ? [] : offered.filter(x => !tags.includes(x) && x.startsWith(typing)).slice(0, 4)
   const tagField = useRef<HTMLInputElement>(null)
   const tagsLabel = useId()
+  const newName = useId()
+  const newNote = useId()
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (!stale && !badDuration) onSave(whole(withTyped(d)))
@@ -185,7 +212,10 @@ export function EntryEditor({
               // another client: its own first project, not the last one's
               onChange={e => {
                 const client = e.target.value
-                setD(x => ({ ...x, client, project: projects(client)?.[0] ?? x.project }))
+                setNamed(false)
+                // one with no project yet: its first one is typed, not the last client's carried over
+                const list = projects(client)
+                setD(x => ({ ...x, client, project: list ? (list[0] ?? '') : x.project, newProject: false }))
               }}
             >
               {clients.map(c => (
@@ -196,16 +226,60 @@ export function EntryEditor({
             </select>
           </label>
         )}
-        {listed ? (
+        {listed && naming ? (
+          <div className="time-field time-new-project">
+            <label htmlFor={newName}>{t('time.edit.project')}</label>
+            <div className="time-new-row">
+              <input
+                id={newName}
+                value={d.project}
+                disabled={busy}
+                autoComplete="off"
+                placeholder={t('time.edit.newProjectName')}
+                aria-describedby={projectNote ? newNote : undefined}
+                aria-invalid={!!retiredAs}
+                // biome-ignore lint/a11y/noAutofocus: the field "New project…" opened, typed into next
+                autoFocus={named}
+                onChange={e => setD(x => ({ ...x, project: e.target.value, newProject: true }))}
+              />
+              {listed.length > 0 && (
+                <button
+                  type="button"
+                  className="time-new-back"
+                  disabled={busy}
+                  onClick={() => {
+                    setNamed(false)
+                    setD(x => ({
+                      ...x,
+                      project: draft.newProject ? (listed[0] ?? '') : draft.project,
+                      newProject: false,
+                    }))
+                  }}
+                >
+                  {t('time.edit.projectList')}
+                </button>
+              )}
+            </div>
+          </div>
+        ) : listed ? (
           <label className="time-field">
             <span>{t('time.edit.project')}</span>
-            <select value={d.project} disabled={busy} onChange={e => set('project', e.target.value)}>
+            <select
+              value={d.project}
+              disabled={busy}
+              onChange={e => {
+                if (e.target.value !== NEW_PROJECT) return set('project', e.target.value)
+                setNamed(true)
+                setD(x => ({ ...x, project: '', newProject: true }))
+              }}
+            >
               {!listed.includes(d.project) && <option value={d.project}>{d.project}</option>}
               {listed.map(p => (
                 <option key={p} value={p}>
                   {p}
                 </option>
               ))}
+              <option value={NEW_PROJECT}>{t('time.edit.newProject')}</option>
             </select>
           </label>
         ) : (
@@ -215,6 +289,11 @@ export function EntryEditor({
           </label>
         )}
       </div>
+      {projectNote && (
+        <p id={newNote} className={classNames('time-project-note', retiredAs && 'access-warn')} aria-live="polite">
+          {projectNote}
+        </p>
+      )}
       <div className="time-field-row">
         <label className="time-field time-clock">
           <span>{t('time.edit.start')}</span>
@@ -412,7 +491,14 @@ export function EntryEditor({
         <button
           type="submit"
           className="button primary"
-          disabled={busy || !!stale || badDuration || seconds === null || !d.description.trim()}
+          disabled={
+            busy ||
+            !!stale ||
+            badDuration ||
+            seconds === null ||
+            !d.description.trim() ||
+            (naming && (!typedName || !!retiredAs))
+          }
         >
           {t('backup.save')}
         </button>

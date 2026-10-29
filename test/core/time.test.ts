@@ -16,10 +16,13 @@ import {
   parseWhen,
   plausible,
   problemsText,
+  projectIn,
+  projectKey,
   refIn,
   rounded,
   systemsFor,
   type TimeEntry,
+  takersOf,
   timeConfig,
 } from '../../src/core/time.ts'
 
@@ -406,4 +409,45 @@ test('a non-billable entry counts as worked, never as billed: in no line, so no 
   )
   assert.deepEqual([day.nonBillable.length, day.held.length], [3, 1])
   assert.deepEqual([day.seconds / 60, day.billedSeconds / 60], [60, 30])
+})
+
+test('time off keeps its settings; a client off and its retired projects are read, each slip a problem by its place', () => {
+  // `on: false`: off, whatever else the section holds; absent or true: on, as every config so far
+  assert.equal(timeConfig({ on: false, zone: NY, clients: { a: {} } }), null)
+  assert.equal(timeConfig({ on: true, zone: NY })?.problems.length, 0)
+  const c = timeConfig({
+    zone: NY,
+    clients: {
+      a: { on: false, projects: ['Support'], retired: ['Old', 'Old'], nonBillable: ['Old'] },
+      b: { projects: ['Support'] },
+    },
+  })
+  assert.ok(c)
+  assert.deepEqual(c.problems, [])
+  assert.deepEqual(
+    [c.clients?.a?.on, c.clients?.a?.retired, c.clients?.b?.on, c.clients?.b?.retired],
+    [false, ['Old'], true, []],
+  )
+  assert.deepEqual(takersOf(c), ['b'])
+  assert.equal(takersOf({ ...c, clients: null }), null)
+  const bad = timeConfig({
+    on: 'yes',
+    zone: NY,
+    clients: { a: { on: 1, projects: ['Support'], retired: ['support '] }, b: { retired: 'Old' } },
+  })
+  assert.deepEqual(
+    bad?.problems.map(p => [p.at, p.why]),
+    [
+      ['time.on', 'type'],
+      ['time.clients.a.on', 'type'],
+      ['time.clients.a.retired[0]', 'retired'],
+      ['time.clients.b.retired', 'type'],
+    ],
+  )
+})
+
+test('a project typed again is the one listed, case and spaces aside', () => {
+  assert.equal(projectKey(' Cases  Work '), 'caseswork')
+  assert.equal(projectIn(['Support', 'Cases work'], 'cases work '), 'Cases work')
+  assert.equal(projectIn(['Support'], 'casesWork'), null)
 })

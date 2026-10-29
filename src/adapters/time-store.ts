@@ -11,6 +11,10 @@
 // Entered into a client's systems (#240): a mark per entry and system (post, unpost), with the
 // entry's revision then. A mark is no change of the entry (its revision stays), so anyone who may
 // write marks any entry, without `force`; every mark and unmark has its journal row.
+//
+// A project renamed (#237, Settings → Time): the client's live entries of it move to the new name
+// in one transaction, a journal row each; a mark that was current stays so (the name is the
+// board's own, nothing to change in the client's systems).
 import { randomBytes } from 'node:crypto'
 import { t } from '../core/lang.ts'
 import {
@@ -26,6 +30,7 @@ import {
   instantIn,
   isoOf,
   problemsText,
+  projectIn,
   secondsOf,
   systemsFor,
   type TimeConfig,
@@ -145,17 +150,37 @@ function checkConfig(c: TimeConfig): void {
   if (c.problems.length) throw new TimeError('time.err.config', { problems: problemsText(c.problems, t) })
 }
 
-/** The client takes time, and the project is one of its own (unless `newProject`). */
-function checkClientProject(c: TimeConfig, client: string, project: string, newProject: boolean): void {
+/**
+ * The client takes time (and new entries, for one coming to it: it is on), and the project is one
+ * of its own, not retired (an entry keeps a project retired since: `was`, the entry as it is); one
+ * typed as new (`newProject`) is the name the client already has for it, case and spaces aside,
+ * when it has one. The project's name to keep.
+ */
+function checkClientProject(
+  c: TimeConfig,
+  client: string,
+  project: string,
+  newProject: boolean,
+  was?: Pick<TimeEntry, 'client' | 'project'>,
+): string {
   const own = clientOf(c, client)
   if (!own.ok) {
     const known = Object.keys(c.clients ?? {}).join(', ')
     throw new TimeError('time.err.client', { client, known })
   }
+  if (!own.client.on && was?.client !== client) throw new TimeError('time.err.clientOff', { client })
   if (!project) throw new TimeError('time.err.noProject')
   const projects = own.client.projects
-  if (projects && !projects.includes(project) && !newProject)
-    throw new TimeError('time.err.project', { project, client, known: projects.join(', ') })
+  const retired = projectIn(own.client.retired, project)
+  if (retired) {
+    if (was?.client === client && was.project === project) return project
+    throw new TimeError('time.err.retired', { project: retired, client })
+  }
+  if (!projects || projects.includes(project)) return project
+  const listed = newProject ? projectIn(projects, project) : null
+  if (listed) return listed
+  if (!newProject) throw new TimeError('time.err.project', { project, client, known: projects.join(', ') })
+  return project
 }
 
 function checkTimes(start: number, stop: number): void {
@@ -280,9 +305,8 @@ export function addEntry(
 ): { entry: TimeEntry; existing: boolean; reason?: ExistingReason } {
   checkConfig(c)
   const description = cleanText(n.description)
-  const project = cleanText(n.project, 120)
   if (!description) throw new TimeError('time.err.noDescription')
-  checkClientProject(c, n.client, project, !!n.newProject)
+  const project = checkClientProject(c, n.client, cleanText(n.project, 120), !!n.newProject)
   checkTimes(n.start, n.stop)
   const entry: TimeEntry = {
     id: '',
@@ -397,8 +421,10 @@ export function editEntry(
     e => {
       if (e.deleted) throw new TimeError('time.err.removed', { id })
       const client = ch.client ?? e.client
-      const project = ch.project !== undefined ? cleanText(ch.project, 120) : e.project
-      if (ch.client !== undefined || ch.project !== undefined) checkClientProject(c, client, project, !!ch.newProject)
+      let project = ch.project !== undefined ? cleanText(ch.project, 120) : e.project
+      // an entry keeps its client off or its project retired; one coming to them is refused
+      if (ch.client !== undefined || ch.project !== undefined)
+        project = checkClientProject(c, client, project, !!ch.newProject, e)
       const description = ch.description !== undefined ? cleanText(ch.description) : e.description
       if (!description) throw new TimeError('time.err.noDescription')
       const start = ch.start ?? Date.parse(e.start)
@@ -607,6 +633,66 @@ export function restoreEntry(
     },
     'restore',
   )
+}
+
+/**
+ * A client's project renamed (Settings → Time): its live entries of `from` moved to `to` in one
+ * transaction, each a revision more with its journal row (`rename`, the entry before and after); a
+ * mark that was current (entered at the entry's revision) moves with it (`rename-mark`), so a
+ * rename is no change to make in the client's systems. `then` runs last, in that transaction (the
+ * config written): when it throws, nothing is changed. The entries moved.
+ */
+export function renameProject(
+  db: BoardDb,
+  c: TimeConfig,
+  client: string,
+  from: string,
+  to: string,
+  actor: Actor,
+  then: () => void = () => {},
+): TimeEntry[] {
+  checkConfig(c)
+  return db.write(actorText(actor), tx => {
+    const rows = db.db
+      .query(
+        `SELECT ${COLUMNS} FROM time_entries WHERE client = ? AND project = ? AND deleted IS NULL ORDER BY start, id`,
+      )
+      .all(client, from) as Row[]
+    const now = Date.now()
+    const moved: TimeEntry[] = []
+    for (const e of rows.map(entryOf)) {
+      const saved: TimeEntry = { ...e, project: to, changed: now, changedBy: actor, rev: e.rev + 1 }
+      try {
+        update(tx, saved)
+      } catch (err) {
+        if (unique(err)) throw new TimeError('time.err.sameAs', { id: e.id })
+        throw err
+      }
+      tx.journal({ store: 'time', op: 'rename', ref: e.id, before: e, after: saved })
+      for (const m of marksOf(db, [e.id]).get(e.id) ?? []) {
+        if (m.rev !== e.rev) continue
+        tx.db.query('UPDATE time_marks SET rev = ? WHERE entry = ? AND system = ?').run(saved.rev, e.id, m.system)
+        tx.journal({
+          store: 'time',
+          op: 'rename-mark',
+          ref: e.id,
+          before: markJson(m),
+          after: markJson({ ...m, rev: saved.rev }),
+        })
+      }
+      moved.push(saved)
+    }
+    then()
+    return moved
+  })
+}
+
+/** How many live entries a client has of a project (Settings → Time says it before a rename). */
+export function projectUse(db: BoardDb, client: string): Record<string, number> {
+  const rows = db.db
+    .query('SELECT project, COUNT(*) AS n FROM time_entries WHERE client = ? AND deleted IS NULL GROUP BY project')
+    .all(client) as { project: string; n: number }[]
+  return Object.fromEntries(rows.map(r => [r.project, r.n]))
 }
 
 /** A Toggl row for the store: its lane, and Toggl's id or none (the Detailed report's CSV has none). */

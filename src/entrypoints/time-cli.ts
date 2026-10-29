@@ -74,7 +74,7 @@ import {
 } from '../core/time.ts'
 import { type DateFormat, dayTotals, parseMap, rowsFromCsv, rowsFromJson, type TogglRow } from '../core/time-import.ts'
 import type { Config } from '../core/types.ts'
-import { writeRefusal } from '../services/time.ts'
+import { withNewProject, writeRefusal } from '../services/time.ts'
 
 const FLAGS_WITH_VALUE = new Set([
   '--client',
@@ -294,24 +294,26 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       const billable = billableFlag()
       const db = writable()
       try {
-        const r = addEntry(
-          db,
-          conf,
-          {
-            client,
-            project,
-            description,
-            tags: a.all('--tag'),
-            start: from,
-            stop: to,
-            startGiven: start !== null,
-            newProject: a.has('--new-project'),
-            ...(typeof billable === 'boolean' && { billable }),
-          },
-          ctx.actor,
-          now,
-        )
-        if (a.has('--new-project') && !r.existing) addTimeProjects(client, [r.entry.project])
+        const add = (c: TimeConfig) =>
+          addEntry(
+            db,
+            c,
+            {
+              client,
+              project,
+              description,
+              tags: a.all('--tag'),
+              start: from,
+              stop: to,
+              startGiven: start !== null,
+              newProject: a.has('--new-project'),
+              ...(typeof billable === 'boolean' && { billable }),
+            },
+            ctx.actor,
+            now,
+          )
+        // a new project: the entry and the client's list under config.json's lock
+        const r = a.has('--new-project') ? withNewProject(conf, add, x => x.entry) : add(conf)
         const said = !r.existing ? 'ok' : r.reason === 'repeat-window' ? t('time.cli.repeat') : t('time.cli.existing')
         print(
           `${said} · ${r.entry.id} · ${r.entry.client}/${r.entry.project} · ${r.entry.date} · ${hm(secondsOf(r.entry))} · ${dayTotal(db, r.entry)}`,
@@ -342,26 +344,27 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       const db = writable()
       try {
         const was = getEntry(db, id)
-        const e = editEntry(
-          db,
-          conf,
-          id,
-          {
-            ...(description !== undefined && { description }),
-            ...(project !== undefined && { project }),
-            ...(client !== undefined && { client }),
-            ...(start !== null && { start }),
-            ...(stop !== null && { stop }),
-            ...(duration !== null && { seconds: duration }),
-            addTags: tags.filter(x => !x.startsWith('-')).map(x => x.replace(/^\+/, '')),
-            removeTags: tags.filter(x => x.startsWith('-')).map(x => x.slice(1)),
-            newProject: a.has('--new-project'),
-            ...(billable !== undefined && { billable }),
-          },
-          ctx.actor,
-          { force, ...(expect !== undefined && { expect }) },
-        )
-        if (a.has('--new-project')) addTimeProjects(e.client, [e.project])
+        const edit = (c: TimeConfig) =>
+          editEntry(
+            db,
+            c,
+            id,
+            {
+              ...(description !== undefined && { description }),
+              ...(project !== undefined && { project }),
+              ...(client !== undefined && { client }),
+              ...(start !== null && { start }),
+              ...(stop !== null && { stop }),
+              ...(duration !== null && { seconds: duration }),
+              addTags: tags.filter(x => !x.startsWith('-')).map(x => x.replace(/^\+/, '')),
+              removeTags: tags.filter(x => x.startsWith('-')).map(x => x.slice(1)),
+              newProject: a.has('--new-project'),
+              ...(billable !== undefined && { billable }),
+            },
+            ctx.actor,
+            { force, ...(expect !== undefined && { expect }) },
+          )
+        const e = a.has('--new-project') ? withNewProject(conf, edit, x => x) : edit(conf)
         // entered somewhere already: the change is to be made there too
         const marks = marksFor(db, [e]).get(e.id) ?? []
         print(

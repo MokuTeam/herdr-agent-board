@@ -713,3 +713,51 @@ test('an edit that changes nothing asks for no change in the systems; the remove
     /0 entries, 0:00 · removed 1/,
   )
 })
+
+test('--new-project: a name the client has, case and spaces aside, is the one; a new one joins its list in config.json once', async () => {
+  const { dir, cfg } = await setUp()
+  const file = join(dir, 'config', 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
+  mkdirSync(join(file, '..'), { recursive: true })
+  writeFileSync(file, JSON.stringify(cfg))
+  const projects = () =>
+    (JSON.parse(readFileSync(file, 'utf8')) as { time: { clients: Record<string, { projects: string[] }> } }).time
+      .clients['client-a']?.projects
+  const at = ['--start', '2026-10-29T09:00:00-04:00', '--minutes', '30']
+  const same = await jsonOf(cfg, ['add', '--project', 'support ', '--new-project', ...at, 'Case 10001 X: work'])
+  assert.equal(same.project, 'Support')
+  assert.deepEqual(projects(), ['Support'], 'no near duplicate')
+  const fresh = await jsonOf(cfg, [
+    'add',
+    '--project',
+    'Audit',
+    '--new-project',
+    '--start',
+    '2026-10-29T10:00:00-04:00',
+    '--minutes',
+    '30',
+    'Case 10002 Y: work',
+  ])
+  assert.equal(fresh.project, 'Audit')
+  // the config the command read (cfg) did not have it: the file as it is now did, read under its lock
+  const moved = await jsonOf(cfg, ['edit', fresh.id, '--project', 'audit', '--new-project'])
+  assert.equal(moved.project, 'Audit')
+  assert.deepEqual(projects(), ['Support', 'Audit'])
+})
+
+test('a client off and a retired project refuse an entry, --new-project too, saying where to turn them back', async () => {
+  const { cfg } = await setUp()
+  const time = cfg.time as { clients: Record<string, Record<string, unknown>> }
+  time.clients['client-a'] = { ...time.clients['client-a'], retired: ['Old'] }
+  time.clients.personal = { ...time.clients.personal, on: false }
+  const at = ['--start', '2026-10-29T09:00:00-04:00', '--minutes', '30']
+  assert.equal(
+    await keyOf(run(cfg, ['add', '--project', 'old', '--new-project', ...at, 'Case 10001 X: work'])),
+    'time.err.retired',
+  )
+  assert.equal(
+    await keyOf(run(cfg, ['add', '--client', 'personal', '--project', 'Internal', ...at, 'Reading'])),
+    'time.err.clientOff',
+  )
+  const off = await jsonOf(cfg, ['add', '--client', 'personal', '--project', 'Internal', ...at, 'Reading'])
+  assert.deepEqual([off.ok, off.error], [false, 'clientOff'])
+})

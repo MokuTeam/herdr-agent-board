@@ -5,6 +5,7 @@
 // after paging leaves the day shown as it is. Brought over from the review of #236 (ui.test.tsx).
 // From #239: tags as tokens, a duration typed, Trim on a line billed under its time. From #240: a
 // line marked entered in a system by a tap (and its Undo), changed after entering; billable as a switch.
+// From #237: a new project typed where the Project field's list was, saved with the entry.
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -34,7 +35,7 @@ let payload: typeof Payload
 const TIME = {
   zone: 'America/New_York',
   clients: {
-    'client-a': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'up' }] },
+    'client-a': { projects: ['Support'], retired: ['Old'], billing: [{ group: 'ref', step: 30, round: 'up' }] },
     'client-b': { projects: ['Support'] },
     // billed under its time: to the nearest 30 minutes
     'client-n': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'nearest' }] },
@@ -941,3 +942,50 @@ test('billable as a switch: the config’s way said, set either way and back; a 
   mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)
+
+test('"New project…": typed where the list was, what Save does said under it, saved with the entry in one request', async () => {
+  const s = await setup()
+  await mount(1)
+  await click(q('.time-add-open'))
+  await setValue(qa('.time-editor select')[0] as HTMLElement, 'client-a')
+  await settle(50)
+  const offered = [...(qa('.time-editor select')[1] as HTMLSelectElement).options].map(o => o.textContent)
+  expect(offered).toEqual(['Support', 'New project…'])
+  await setValue(qa('.time-editor select')[1] as HTMLElement, ' new')
+  await settle(50)
+  expect(qa('.time-editor select').length).toBe(1)
+  const name = () => q('.time-new-project input')
+  expect(dom.window.document.activeElement).toBe(name())
+  // the client has it, case and spaces aside: the entry takes it
+  await setValue(name(), 'support ')
+  expect(q('.time-project-note').textContent).toBe('Client A has “Support” already: the entry takes it.')
+  // retired: said, and Save waits
+  await setValue(name(), 'old')
+  expect(q('.time-project-note').textContent).toBe('“Old” is retired: bring it back in Settings → Time tracking…')
+  await setValue(q('.time-editor textarea'), 'Case 10001 X: kickoff')
+  expect((qa('.time-editor button[type=submit]')[0] as HTMLButtonElement).disabled).toBe(true)
+  // a new one: it joins the list with Save
+  await setValue(name(), 'Audit')
+  expect(q('.time-project-note').textContent).toBe('Saved with the entry, it joins Client A’s projects.')
+  expect((qa('.time-editor button[type=submit]')[0] as HTMLButtonElement).disabled).toBe(false)
+  await submit()
+  await settle()
+  expect(q('.time-editor')).toBeNull()
+  expect((await s.stored()).map(e => [e.client, (e as { project?: string }).project, e.description])).toEqual([
+    ['client-a', 'Audit', 'Case 10001 X: kickoff'],
+  ])
+})
+
+test('"Back to the list" puts the list back as it was, the name typed gone', async () => {
+  await setup()
+  await mount(1)
+  await click(q('.time-add-open'))
+  await setValue(qa('.time-editor select')[0] as HTMLElement, 'client-a')
+  await setValue(qa('.time-editor select')[1] as HTMLElement, ' new')
+  await settle(50)
+  await setValue(q('.time-new-project input'), 'Draft name')
+  await click(q('.time-new-back'))
+  const project = qa('.time-editor select')[1] as HTMLSelectElement
+  expect(project.value).toBe('Support')
+  expect(q('.time-project-note')).toBeNull()
+})

@@ -27,12 +27,13 @@ import {
 } from '../core/profiles.ts'
 import type { Admin } from '../core/server-admin.ts'
 import type { SetupCase } from '../core/server-plan.ts'
+import { projectKey } from '../core/time.ts'
 import { isTodoMode } from '../core/todos.ts'
 import { fieldProblem, type TunnelField } from '../core/tunnel.ts'
 import type { Category, Config } from '../core/types.ts'
 import { wakeConfig } from '../core/wake/config.ts'
 import { allCards, writeCard } from './cards.ts'
-import { isRecord, readJson, replaceFile } from './json-store.ts'
+import { isRecord, readJson, replaceFile, withLock } from './json-store.ts'
 import { configDir } from './paths.ts'
 import { findProfileDirs } from './profiles.ts'
 
@@ -48,6 +49,27 @@ export const readConfigFile = (): Raw | null => readJson(configFile(), isRecord)
 function writeRaw(raw: Raw): void {
   mkdirSync(configDir(), { recursive: true })
   replaceFile(configFile(), `${JSON.stringify(raw, null, 2)}\n`)
+}
+
+/**
+ * `fn` under config.json's lock (json-store.ts withLock), with the file as it is (null: missing, or
+ * no JSON object) and `save` to write it changed. Every edit of the file goes through here: the
+ * Settings panels, `board time --new-project`, the import's projects and Settings → Time writing
+ * at once never lose each other's change (each read before the other wrote, once, did).
+ */
+export function withConfigFile<T>(fn: (raw: Raw | null, save: (next: Raw) => void) => T): T {
+  mkdirSync(configDir(), { recursive: true })
+  return withLock(configFile(), () => fn(readConfigFile(), writeRaw))
+}
+
+/** The usual edit: the file (the defaults when there is none) changed by `change`, written when it says ok. */
+function editConfig(change: (raw: Raw) => EditResult): EditResult {
+  return withConfigFile((had, save) => {
+    const raw = had ?? structuredClone<Raw>(DEFAULT_CONFIG)
+    const r = change(raw)
+    if (r.ok) save(raw)
+    return r
+  })
 }
 
 export function loadConfig(): Config {
@@ -67,10 +89,10 @@ export function loadConfig(): Config {
  * running board picks it up as any edit (liveConfig).
  */
 export function setRemoteOn(on: boolean): EditResult {
-  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  raw.remote = { ...(isRecord(raw.remote) ? raw.remote : {}), on }
-  writeRaw(raw)
-  return { ok: true }
+  return editConfig(raw => {
+    raw.remote = { ...(isRecord(raw.remote) ? raw.remote : {}), on }
+    return { ok: true }
+  })
 }
 
 /**
@@ -78,12 +100,12 @@ export function setRemoteOn(on: boolean): EditResult {
  * fields of `remote.pwa`. On turns the remote mode on too; off leaves it as it is.
  */
 export function setPwaOn(on: boolean): EditResult {
-  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  const remote = isRecord(raw.remote) ? raw.remote : raw.remote === true ? { on: true } : {}
-  const pwa = isRecord(remote.pwa) ? remote.pwa : {}
-  raw.remote = { ...remote, ...(on ? { on: true } : {}), pwa: { ...pwa, on } }
-  writeRaw(raw)
-  return { ok: true }
+  return editConfig(raw => {
+    const remote = isRecord(raw.remote) ? raw.remote : raw.remote === true ? { on: true } : {}
+    const pwa = isRecord(remote.pwa) ? remote.pwa : {}
+    raw.remote = { ...remote, ...(on ? { on: true } : {}), pwa: { ...pwa, on } }
+    return { ok: true }
+  })
 }
 
 /** config.json's `tunnel` object as it is on disk (core/tunnel.ts reads it), or a new one. */
@@ -95,16 +117,16 @@ const tunnelOf = (raw: Raw): Raw => (isRecord(raw.tunnel) ? { ...raw.tunnel } : 
  * out or undefined stays as it is. Checking them is the caller's (fieldProblem).
  */
 export function editTunnel(fields: Partial<Record<TunnelField, unknown>>): EditResult {
-  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  const tunnel = tunnelOf(raw)
-  for (const [field, value] of Object.entries(fields)) {
-    if (value === undefined) continue
-    if (value === null || value === '') delete tunnel[field]
-    else tunnel[field] = value
-  }
-  raw.tunnel = tunnel
-  writeRaw(raw)
-  return { ok: true }
+  return editConfig(raw => {
+    const tunnel = tunnelOf(raw)
+    for (const [field, value] of Object.entries(fields)) {
+      if (value === undefined) continue
+      if (value === null || value === '') delete tunnel[field]
+      else tunnel[field] = value
+    }
+    raw.tunnel = tunnel
+    return { ok: true }
+  })
 }
 
 /**
@@ -113,58 +135,58 @@ export function editTunnel(fields: Partial<Record<TunnelField, unknown>>): EditR
  * caller's (adminProblems).
  */
 export function editTunnelAdmin(a: Partial<Admin>): EditResult {
-  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  const tunnel = tunnelOf(raw)
-  const admin: Raw = isRecord(tunnel.admin) ? { ...tunnel.admin } : {}
-  for (const [field, value] of Object.entries(a)) {
-    if (value === undefined) continue
-    if (value === '') delete admin[field]
-    else admin[field] = value
-  }
-  if (Object.keys(admin).length) tunnel.admin = admin
-  else delete tunnel.admin
-  raw.tunnel = tunnel
-  writeRaw(raw)
-  return { ok: true }
+  return editConfig(raw => {
+    const tunnel = tunnelOf(raw)
+    const admin: Raw = isRecord(tunnel.admin) ? { ...tunnel.admin } : {}
+    for (const [field, value] of Object.entries(a)) {
+      if (value === undefined) continue
+      if (value === '') delete admin[field]
+      else admin[field] = value
+    }
+    if (Object.keys(admin).length) tunnel.admin = admin
+    else delete tunnel.admin
+    raw.tunnel = tunnel
+    return { ok: true }
+  })
 }
 
 /** The setup on record, as the panel shows it (`tunnel.setup`: its case, address and when), or none (null). */
 export function setTunnelSetup(s: { case: SetupCase; address: string; at: string } | null): EditResult {
-  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  const tunnel = tunnelOf(raw)
-  if (s) tunnel.setup = { ...(isRecord(tunnel.setup) ? tunnel.setup : {}), ...s }
-  else delete tunnel.setup
-  raw.tunnel = tunnel
-  writeRaw(raw)
-  return { ok: true }
+  return editConfig(raw => {
+    const tunnel = tunnelOf(raw)
+    if (s) tunnel.setup = { ...(isRecord(tunnel.setup) ? tunnel.setup : {}), ...s }
+    else delete tunnel.setup
+    raw.tunnel = tunnel
+    return { ok: true }
+  })
 }
 
 /** Turn the tunnel on or off in config.json, keeping its other fields; the running board follows (liveConfig). */
 export function setTunnelOn(on: boolean): EditResult {
-  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  raw.tunnel = { ...tunnelOf(raw), on }
-  writeRaw(raw)
-  return { ok: true }
+  return editConfig(raw => {
+    raw.tunnel = { ...tunnelOf(raw), on }
+    return { ok: true }
+  })
 }
 
 /** Change settings in config.json from the web board: { language, foldWaiting }. */
 export function editSettings(body: unknown): EditResult {
-  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  const language = isRecord(body) ? body.language : undefined
-  if (language !== undefined) {
-    const l = String(language)
-    if (l !== 'auto' && !LANGUAGES[l as keyof typeof LANGUAGES])
-      return { ok: false, error: t('err.language', { lang: l }) }
-    raw.language = l
-  }
-  // How a session asleep in "Waiting" folds on the web board.
-  const fold = isRecord(body) ? body.foldWaiting : undefined
-  if (fold !== undefined) {
-    if (!isFoldMode(fold)) return { ok: false, error: t('err.foldWaiting', { mode: String(fold) }) }
-    raw.foldWaiting = fold
-  }
-  writeRaw(raw)
-  return { ok: true }
+  return editConfig(raw => {
+    const language = isRecord(body) ? body.language : undefined
+    if (language !== undefined) {
+      const l = String(language)
+      if (l !== 'auto' && !LANGUAGES[l as keyof typeof LANGUAGES])
+        return { ok: false, error: t('err.language', { lang: l }) }
+      raw.language = l
+    }
+    // How a session asleep in "Waiting" folds on the web board.
+    const fold = isRecord(body) ? body.foldWaiting : undefined
+    if (fold !== undefined) {
+      if (!isFoldMode(fold)) return { ok: false, error: t('err.foldWaiting', { mode: String(fold) }) }
+      raw.foldWaiting = fold
+    }
+    return { ok: true }
+  })
 }
 
 /**
@@ -176,12 +198,12 @@ export function editSettings(body: unknown): EditResult {
 export function editMokupilot(body: unknown): EditResult {
   const mode = isRecord(body) ? body.mode : undefined
   if (!isMokupilotMode(mode)) return { ok: false, error: t('mokupilot.err.mode', { mode: String(mode) }) }
-  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  if (raw.mokupilot === false) return { ok: false, error: t('mokupilot.err.off') }
-  const { link: _link, ...own } = isRecord(raw.mokupilot) ? raw.mokupilot : {}
-  raw.mokupilot = { ...own, mode }
-  writeRaw(raw)
-  return { ok: true }
+  return editConfig(raw => {
+    if (raw.mokupilot === false) return { ok: false, error: t('mokupilot.err.off') }
+    const { link: _link, ...own } = isRecord(raw.mokupilot) ? raw.mokupilot : {}
+    raw.mokupilot = { ...own, mode }
+    return { ok: true }
+  })
 }
 
 /**
@@ -199,18 +221,18 @@ export function editPresence(body: unknown): EditResult {
     !(Number.isInteger(b.idleMinutes) && Number(b.idleMinutes) >= 1 && Number(b.idleMinutes) <= MAX_IDLE_MINUTES)
   )
     return { ok: false, error: t('err.presenceMinutes', { max: MAX_IDLE_MINUTES }) }
-  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  const now = presenceConfig(raw.presence)
-  if (b.on === false || (b.on === undefined && !now && b.mode === undefined && b.idleMinutes === undefined)) {
-    delete raw.presence
-  } else {
-    const section: Raw = isRecord(raw.presence) ? { ...raw.presence } : {}
-    section.mode = b.mode ?? now?.mode ?? 'auto'
-    if (b.idleMinutes !== undefined) section.idleMinutes = b.idleMinutes
-    raw.presence = section
-  }
-  writeRaw(raw)
-  return { ok: true }
+  return editConfig(raw => {
+    const now = presenceConfig(raw.presence)
+    if (b.on === false || (b.on === undefined && !now && b.mode === undefined && b.idleMinutes === undefined)) {
+      delete raw.presence
+    } else {
+      const section: Raw = isRecord(raw.presence) ? { ...raw.presence } : {}
+      section.mode = b.mode ?? now?.mode ?? 'auto'
+      if (b.idleMinutes !== undefined) section.idleMinutes = b.idleMinutes
+      raw.presence = section
+    }
+    return { ok: true }
+  })
 }
 
 /**
@@ -221,11 +243,11 @@ export function editPresence(body: unknown): EditResult {
 export function editTodos(body: unknown): EditResult {
   const mode = isRecord(body) ? body.mode : undefined
   if (!isTodoMode(mode)) return { ok: false, error: t('todo.err.mode') }
-  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  if (mode === 'none') delete raw.todos
-  else raw.todos = mode === 'agents' ? true : { agents: false }
-  writeRaw(raw)
-  return { ok: true }
+  return editConfig(raw => {
+    if (mode === 'none') delete raw.todos
+    else raw.todos = mode === 'agents' ? true : { agents: false }
+    return { ok: true }
+  })
 }
 
 /**
@@ -239,77 +261,92 @@ export function editBackup(b: {
   server?: { host?: unknown; port?: unknown; adminUser?: unknown; adminKey?: unknown } | null
   serverSet?: string | null
 }): EditResult {
-  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  const section: Raw = isRecord(raw.backup) ? { ...raw.backup } : {}
-  if (b.folder !== undefined) {
-    if (b.folder === null || b.folder.trim() === '') delete section.folder
-    else section.folder = b.folder.trim()
-  }
-  const setNow = isRecord(section.server) && typeof section.server.set === 'string'
-  // a server that takes snapshots keeps its address: Undo first (or a new host would leave the old
-  // one set up, its user and key still there); the admin's login may change (a key moved)
-  if (b.server === null) {
-    if (setNow) return { ok: false, error: t('backup.err.serverSet') }
-    delete section.server
-  } else if (b.server !== undefined) {
-    const s = b.server
-    const now: Raw = isRecord(section.server) ? { ...section.server } : {}
-    const was = JSON.stringify([now.host, now.port])
-    const admin: Raw = isRecord(now.admin) ? { ...now.admin } : {}
-    if (s.host !== undefined) {
-      const host = typeof s.host === 'string' ? s.host.trim() : ''
-      if (!host) return { ok: false, error: t('tunnel.err.required', { field: t('tunnel.field.host') }) }
-      const problem = fieldProblem('host', host)
-      if (problem) return { ok: false, error: problem }
-      now.host = host
+  return editConfig(raw => {
+    const section: Raw = isRecord(raw.backup) ? { ...raw.backup } : {}
+    if (b.folder !== undefined) {
+      if (b.folder === null || b.folder.trim() === '') delete section.folder
+      else section.folder = b.folder.trim()
     }
-    if (s.port !== undefined) {
-      const port = Number(s.port)
-      const problem = fieldProblem('sshPort', port)
-      if (problem) return { ok: false, error: problem }
-      now.port = port
+    const setNow = isRecord(section.server) && typeof section.server.set === 'string'
+    // a server that takes snapshots keeps its address: Undo first (or a new host would leave the old
+    // one set up, its user and key still there); the admin's login may change (a key moved)
+    if (b.server === null) {
+      if (setNow) return { ok: false, error: t('backup.err.serverSet') }
+      delete section.server
+    } else if (b.server !== undefined) {
+      const s = b.server
+      const now: Raw = isRecord(section.server) ? { ...section.server } : {}
+      const was = JSON.stringify([now.host, now.port])
+      const admin: Raw = isRecord(now.admin) ? { ...now.admin } : {}
+      if (s.host !== undefined) {
+        const host = typeof s.host === 'string' ? s.host.trim() : ''
+        if (!host) return { ok: false, error: t('tunnel.err.required', { field: t('tunnel.field.host') }) }
+        const problem = fieldProblem('host', host)
+        if (problem) return { ok: false, error: problem }
+        now.host = host
+      }
+      if (s.port !== undefined) {
+        const port = Number(s.port)
+        const problem = fieldProblem('sshPort', port)
+        if (problem) return { ok: false, error: problem }
+        now.port = port
+      }
+      for (const [field, key] of [
+        ['user', s.adminUser],
+        ['key', s.adminKey],
+      ] as const) {
+        if (key === undefined) continue
+        const value = typeof key === 'string' ? key.trim() : ''
+        const problem = fieldProblem(field, value)
+        if (problem) return { ok: false, error: problem }
+        admin[field] = value
+      }
+      now.admin = admin
+      if (!now.host) return { ok: false, error: t('tunnel.err.required', { field: t('tunnel.field.host') }) }
+      if (setNow && JSON.stringify([now.host, now.port]) !== was) return { ok: false, error: t('backup.err.serverSet') }
+      section.server = now
     }
-    for (const [field, key] of [
-      ['user', s.adminUser],
-      ['key', s.adminKey],
-    ] as const) {
-      if (key === undefined) continue
-      const value = typeof key === 'string' ? key.trim() : ''
-      const problem = fieldProblem(field, value)
-      if (problem) return { ok: false, error: problem }
-      admin[field] = value
+    if (b.serverSet !== undefined && isRecord(section.server)) {
+      if (b.serverSet === null) delete section.server.set
+      else section.server = { ...section.server, set: b.serverSet }
     }
-    now.admin = admin
-    if (!now.host) return { ok: false, error: t('tunnel.err.required', { field: t('tunnel.field.host') }) }
-    if (setNow && JSON.stringify([now.host, now.port]) !== was) return { ok: false, error: t('backup.err.serverSet') }
-    section.server = now
-  }
-  if (b.serverSet !== undefined && isRecord(section.server)) {
-    if (b.serverSet === null) delete section.server.set
-    else section.server = { ...section.server, set: b.serverSet }
-  }
-  if (Object.keys(section).length) raw.backup = section
-  else delete raw.backup
-  writeRaw(raw)
-  return { ok: true }
+    if (Object.keys(section).length) raw.backup = section
+    else delete raw.backup
+    return { ok: true }
+  })
 }
 
 /**
- * Projects added to a lane's list in config.json's `time.clients.<lane>.projects` (#233): by
- * `board time add --new-project` and by the import. A lane without a list takes any project, and
- * stays so; nothing is written when every project is there already.
+ * Projects added to a lane's list in a raw config's `time.clients.<lane>.projects` (#233), each
+ * one it has not got: neither listed nor retired, case and spaces aside (core/time.ts projectKey).
+ * A lane without a list takes any project, and stays so. The names added (none: nothing changed).
+ */
+export function withTimeProjects(raw: Raw, lane: string, projects: readonly string[]): string[] {
+  if (!isRecord(raw.time) || !isRecord(raw.time.clients)) return []
+  const client = raw.time.clients[lane]
+  if (!isRecord(client) || !Array.isArray(client.projects)) return []
+  const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((p): p is string => typeof p === 'string') : [])
+  const have = new Set([...names(client.projects), ...names(client.retired)].map(projectKey))
+  const added: string[] = []
+  for (const p of projects.map(x => x.trim()).filter(Boolean)) {
+    if (have.has(projectKey(p))) continue
+    have.add(projectKey(p))
+    added.push(p)
+  }
+  if (added.length) client.projects = [...client.projects, ...added]
+  return added
+}
+
+/**
+ * Projects added to a lane's list in config.json (withTimeProjects), under the file's lock: by
+ * `board time add --new-project` and by the import. Nothing is written when every one is there.
  */
 export function addTimeProjects(lane: string, projects: readonly string[]): EditResult {
-  const raw = readConfigFile()
-  if (!raw || !isRecord(raw.time) || !isRecord(raw.time.clients)) return { ok: true }
-  const client = raw.time.clients[lane]
-  if (!isRecord(client) || !Array.isArray(client.projects)) return { ok: true }
-  const have = new Set(client.projects.filter((p): p is string => typeof p === 'string'))
-  const added = [...new Set(projects.map(p => p.trim()).filter(p => p && !have.has(p)))]
-  if (!added.length) return { ok: true }
-  client.projects = [...client.projects, ...added]
-  writeRaw(raw)
-  return { ok: true }
+  if (!readConfigFile()) return { ok: true }
+  return withConfigFile((raw, save) => {
+    if (raw && withTimeProjects(raw, lane, projects).length) save(raw)
+    return { ok: true }
+  })
 }
 
 /** Why a wake switch's value is refused, in the panel's words (err.wakeSetting). */
@@ -349,18 +386,18 @@ export function editWake(body: unknown): EditResult {
   if (b.telegram !== undefined && b.telegram !== 'auto' && b.telegram !== 'off')
     return wakeRefusal('wake.telegram', 'wake.why.mode')
 
-  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  const section: Raw = isRecord(raw.wake)
-    ? { ...raw.wake }
-    : raw.wake === undefined
-      ? {}
-      : { enabled: wakeConfig(raw.wake).enabled }
-  if (typeof b.on === 'boolean') section.enabled = b.on
-  if (reaper) section.reaper = { ...(isRecord(section.reaper) ? section.reaper : {}), ...reaper }
-  if (b.telegram !== undefined) section.telegram = b.telegram
-  raw.wake = section
-  writeRaw(raw)
-  return { ok: true }
+  return editConfig(raw => {
+    const section: Raw = isRecord(raw.wake)
+      ? { ...raw.wake }
+      : raw.wake === undefined
+        ? {}
+        : { enabled: wakeConfig(raw.wake).enabled }
+    if (typeof b.on === 'boolean') section.enabled = b.on
+    if (reaper) section.reaper = { ...(isRecord(section.reaper) ? section.reaper : {}), ...reaper }
+    if (b.telegram !== undefined) section.telegram = b.telegram
+    raw.wake = section
+    return { ok: true }
+  })
 }
 
 /**
@@ -370,22 +407,23 @@ export function editWake(body: unknown): EditResult {
  * is, and said; none there is made from the defaults, as editWake does.
  */
 export function takeOverWake(fields: Raw): EditResult {
-  const raw = readConfigFile()
-  if (!raw && existsSync(configFile()))
-    return { ok: false, error: `${configFile()} does not read as JSON; nothing was taken over` }
-  const next = raw ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  const section: Raw = isRecord(next.wake)
-    ? { ...next.wake }
-    : next.wake === undefined
-      ? {}
-      : { enabled: wakeConfig(next.wake).enabled }
-  next.wake = { ...section, ...fields }
   try {
-    writeRaw(next)
+    return withConfigFile((raw, save) => {
+      if (!raw && existsSync(configFile()))
+        return { ok: false, error: `${configFile()} does not read as JSON; nothing was taken over` }
+      const next = raw ?? structuredClone<Raw>(DEFAULT_CONFIG)
+      const section: Raw = isRecord(next.wake)
+        ? { ...next.wake }
+        : next.wake === undefined
+          ? {}
+          : { enabled: wakeConfig(next.wake).enabled }
+      next.wake = { ...section, ...fields }
+      save(next)
+      return { ok: true }
+    })
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
-  return { ok: true }
 }
 
 /**
@@ -471,8 +509,10 @@ function ordered(cats: unknown[], ids: unknown[]): unknown[] {
  * Ids are fixed once created (cards point at them). Deleting one drops it from the cards that
  * named it, so those sessions fall back to the folder guess. "other" is the fallback lane and stays.
  */
-export function editCategories(body: unknown): EditResult {
-  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+export const editCategories = (body: unknown): EditResult => editConfig(raw => categoriesEdited(raw, body))
+
+/** editCategories on a raw config, in place (Settings → Time makes a lane in its own edit of the file). */
+export function categoriesEdited(raw: Raw, body: unknown): EditResult {
   let cats = categoriesOf(raw)
   const find = (id: unknown) => cats.filter(editable).find(c => c.id === id)
   const b: Raw = isRecord(body) ? body : {}
@@ -529,7 +569,6 @@ export function editCategories(body: unknown): EditResult {
       return { ok: false, error: `unknown op ${String(b.op)}` }
   }
   raw.categories = cats
-  writeRaw(raw)
   return { ok: true }
 }
 
@@ -595,64 +634,67 @@ const freeColor = (list: readonly Profile[]): string =>
  * and one stays shown; { op: 'add', dir } adds a folder somewhere else ("~" is the home folder), shown.
  */
 export function editProfiles(body: unknown, { home = homedir() }: { home?: string } = {}): EditResult {
-  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  const profiles = profilesIn(raw, home)
-  const { list } = profiles
-  const b: Raw = isRecord(body) ? body : {}
-  switch (b.op) {
-    case 'update': {
-      const p = list.find(x => x.id === b.id)
-      if (!p) return { ok: false, error: t('err.profile.missing', { id: String(b.id) }) }
-      const entry = profiles.entryOf(p)
-      // The start command first: a refused one leaves the whole edit unwritten.
-      if (b.command !== undefined) {
-        let words: string[] | null
-        try {
-          words = profileCommand(b.command)
-        } catch (err) {
-          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  return editConfig(raw => {
+    const profiles = profilesIn(raw, home)
+    const { list } = profiles
+    const b: Raw = isRecord(body) ? body : {}
+    switch (b.op) {
+      case 'update': {
+        const p = list.find(x => x.id === b.id)
+        if (!p) return { ok: false, error: t('err.profile.missing', { id: String(b.id) }) }
+        const entry = profiles.entryOf(p)
+        // The start command first: a refused one leaves the whole edit unwritten.
+        if (b.command !== undefined) {
+          let words: string[] | null
+          try {
+            words = profileCommand(b.command)
+          } catch (err) {
+            return { ok: false, error: err instanceof Error ? err.message : String(err) }
+          }
+          if (words === null) delete entry.command
+          else entry.command = typeof b.command === 'string' ? b.command.trim() : b.command
         }
-        if (words === null) delete entry.command
-        else entry.command = typeof b.command === 'string' ? b.command.trim() : b.command
+        if (b.title !== undefined) {
+          if (!cleanTitle(b.title)) return { ok: false, error: t('err.profile.title') }
+          entry.title = cleanTitle(b.title)
+        }
+        if (b.color !== undefined && validColor(b.color)) entry.color = String(b.color)
+        if (typeof b.hidden === 'boolean') {
+          if (b.hidden && !p.hidden && !shownProfiles(list).some(x => x !== p))
+            return { ok: false, error: t('err.profile.lastShown') }
+          entry.hidden = b.hidden
+        }
+        break
       }
-      if (b.title !== undefined) {
-        if (!cleanTitle(b.title)) return { ok: false, error: t('err.profile.title') }
-        entry.title = cleanTitle(b.title)
+      case 'add': {
+        // A folder named relative to wherever the board runs would be another one for each start.
+        const dir = resolveProfileDir(typeof b.dir === 'string' ? b.dir : '', home)
+        if (!isAbsolute(dir) || !isFolder(dir)) return { ok: false, error: t('err.profile.noFolder', { path: dir }) }
+        const known = profileForDir(list, dir)
+        if (known) return { ok: false, error: t('err.profile.exists', { path: dir, title: known.title }) }
+        const id = profileIdOf(dir, home, new Set(list.map(p => p.id)))
+        list.push({ id, title: profileTitleOf(id), dir, color: freeColor(list), hidden: false })
+        break
       }
-      if (b.color !== undefined && validColor(b.color)) entry.color = String(b.color)
-      if (typeof b.hidden === 'boolean') {
-        if (b.hidden && !p.hidden && !shownProfiles(list).some(x => x !== p))
-          return { ok: false, error: t('err.profile.lastShown') }
-        entry.hidden = b.hidden
-      }
-      break
+      default:
+        return { ok: false, error: `unknown op ${String(b.op)}` }
     }
-    case 'add': {
-      // A folder named relative to wherever the board runs would be another one for each start.
-      const dir = resolveProfileDir(typeof b.dir === 'string' ? b.dir : '', home)
-      if (!isAbsolute(dir) || !isFolder(dir)) return { ok: false, error: t('err.profile.noFolder', { path: dir }) }
-      const known = profileForDir(list, dir)
-      if (known) return { ok: false, error: t('err.profile.exists', { path: dir, title: known.title }) }
-      const id = profileIdOf(dir, home, new Set(list.map(p => p.id)))
-      list.push({ id, title: profileTitleOf(id), dir, color: freeColor(list), hidden: false })
-      break
-    }
-    default:
-      return { ok: false, error: `unknown op ${String(b.op)}` }
-  }
-  profiles.save()
-  writeRaw(raw)
-  return { ok: true }
+    profiles.save()
+    return { ok: true }
+  })
 }
 
 /** Adds the found folders config.json does not list (shownDir: shown too); true when it wrote. */
 export function saveFoundProfiles(inheritedDir: string, home: string = homedir()): boolean {
-  // Only into a file that is there: the board's loadConfig makes it, with its defaults, on first use.
-  const raw = readConfigFile()
-  if (!raw) return false
-  const profiles = profilesIn(raw, home, inheritedDir)
-  if (!profiles.added.length) return false
-  profiles.save()
-  writeRaw(raw)
-  return true
+  // Only into a file that is there: the board's loadConfig makes it, with its defaults, on first use
+  // (none: not even its folder, nor the lock in it)
+  if (!readConfigFile()) return false
+  return withConfigFile((raw, save) => {
+    if (!raw) return false
+    const profiles = profilesIn(raw, home, inheritedDir)
+    if (!profiles.added.length) return false
+    profiles.save()
+    save(raw)
+    return true
+  })
 }

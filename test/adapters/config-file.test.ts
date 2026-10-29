@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { readCard, writeCard } from '../../src/adapters/cards.ts'
 import {
+  addTimeProjects,
   configFile,
   type EditResult,
   editCategories,
@@ -578,4 +580,50 @@ test('setTunnelOn turns the tunnel on and off, keeping its other fields and the 
   })
   expect(setTunnelOn(false)).toEqual({ ok: true })
   expect(saved().tunnel).toEqual({ host: 'ssh.example.com', user: 'boardtunnel', note: 'mine', on: false })
+})
+
+test('projects added to a lane: each one it has not got, neither listed nor retired, case and spaces aside', () => {
+  isolatedHome()
+  seed({
+    language: 'en',
+    time: { zone: 'America/New_York', clients: { a: { projects: ['Support'], retired: ['Old'] }, any: {} } },
+  })
+  assert.deepEqual(addTimeProjects('a', ['support ', 'old', 'Audit', 'audit', ' Calls ']), { ok: true })
+  const time = saved().time as { clients: Record<string, Record<string, unknown>> }
+  assert.deepEqual(time.clients.a, { projects: ['Support', 'Audit', 'Calls'], retired: ['Old'] })
+  addTimeProjects('any', ['X'])
+  assert.deepEqual(time.clients.any, (saved().time as typeof time).clients.any, 'a lane that takes any stays so')
+})
+
+const CONFIG_WRITER = fileURLToPath(new URL('../support/config-writer.ts', import.meta.url))
+
+test('two writers of config.json at once: one waits for the other’s lock, so neither loses what the other added', async () => {
+  isolatedHome()
+  seed({ language: 'en', time: { zone: 'America/New_York', clients: { a: { projects: ['A'] } } } })
+  // another writer is mid-way: it holds the file's lock, and read the file before its change
+  const lock = `${configFile()}.lock`
+  mkdirSync(lock)
+  const read = saved()
+  const child = Bun.spawn([process.execPath, CONFIG_WRITER, 'a', 'B'], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: { ...process.env },
+  })
+  const reader = child.stdout.getReader()
+  let said = ''
+  while (!said.includes('ready')) {
+    const { value, done } = await reader.read()
+    if (done) break
+    said += new TextDecoder().decode(value)
+  }
+  // time enough for a writer that does not wait to have written and gone
+  const early = await Promise.race([child.exited.then(() => true), Bun.sleep(400).then(() => false)])
+  const projectsOf = (c: Record<string, unknown>) =>
+    ((c.time as Record<string, unknown>).clients as Record<string, { projects: string[] }>).a?.projects ?? []
+  projectsOf(read).push('C')
+  writeFileSync(configFile(), JSON.stringify(read))
+  rmdirSync(lock)
+  await child.exited
+  assert.equal(early, false, 'the second writer waited for the lock')
+  assert.deepEqual(projectsOf(saved()), ['A', 'C', 'B'])
 })

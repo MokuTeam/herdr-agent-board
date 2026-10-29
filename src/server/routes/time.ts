@@ -12,6 +12,10 @@
 // and change them as they do the cards. While time is off both answer 409; nothing is written
 // while the config does not check out or before a backup went through (services/time.ts, as for
 // `board time`). The web board keeps one connection to the database for its life (keepTimeDb).
+// An add or edit with `newProject` (the editor's "New project…", #237) adds the project to the
+// client's list in the same request, under config.json's lock (services/time.ts withNewProject).
+// GET and POST /api/time-settings are Settings → Time (services/time-settings.ts): on this
+// computer's board only (core/remote.ts localOnly), as Settings → Backup… is.
 import { existsSync } from 'node:fs'
 import { type BoardDb, DbError, dbFile, openDb } from '../../adapters/db.ts'
 import { isRecord } from '../../adapters/json-store.ts'
@@ -46,11 +50,13 @@ import {
   type TimeConfig,
   type TimeEntry,
   type TimeSystem,
+  takersOf,
   timeConfig,
   zoneOf,
 } from '../../core/time.ts'
 import type { Config } from '../../core/types.ts'
-import { writeRefusal } from '../../services/time.ts'
+import { withNewProject, writeRefusal } from '../../services/time.ts'
+import { editTimeSettings, timeSettingsView } from '../../services/time-settings.ts'
 import { json, type Route } from '../http.ts'
 
 let keep = false
@@ -106,13 +112,13 @@ export interface TimeDayView {
   entries: EntryView[]
   /** config.json's `time` does not check out: the figures may be wrong, and no entry is written. */
   problems: string | null
-  /** The lanes that take time (null: every lane) and each one's projects (null: any). */
+  /** The lanes that take new entries (null: every lane) and each one's projects offered (null: any). */
   clients: string[] | null
   projects: Record<string, string[] | null>
   /** Tags to offer: the ones held out of the totals first, then the ones entries have, most used first. */
   tags: string[]
-  /** Each listed client's billable default (by project) and the systems its time is entered in. */
-  settings: Record<string, { billable: boolean; nonBillable: string[]; systems: TimeSystem[] }>
+  /** Each listed client's billable default (by project), the systems its time is entered in, its retired projects. */
+  settings: Record<string, { billable: boolean; nonBillable: string[]; systems: TimeSystem[]; retired: string[] }>
 }
 
 const projectsOf = (conf: TimeConfig): Record<string, string[] | null> =>
@@ -122,7 +128,7 @@ const settingsOf = (conf: TimeConfig): TimeDayView['settings'] =>
   Object.fromEntries(
     Object.entries(conf.clients ?? {}).map(([id, c]) => [
       id,
-      { billable: c.billable, nonBillable: c.nonBillable, systems: c.systems },
+      { billable: c.billable, nonBillable: c.nonBillable, systems: c.systems, retired: c.retired },
     ]),
   )
 
@@ -156,7 +162,7 @@ export function timeDay(cfg: Pick<Config, 'time'>, date: string, client?: string
       ),
     ),
     entries: entries.map(e => entryView(conf, e, marks.get(e.id))),
-    clients: conf.clients ? Object.keys(conf.clients) : null,
+    clients: takersOf(conf),
     projects: projectsOf(conf),
     tags: [...new Set([...conf.excludeTags, ...used])],
     settings: settingsOf(conf),
@@ -298,6 +304,7 @@ function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>, now: 
           stop,
           startGiven: true,
           ...(typeof billable === 'boolean' && { billable }),
+          newProject: b.newProject === true,
         },
         'user',
         now,
@@ -323,6 +330,7 @@ function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>, now: 
           // the tags as the page's field holds them: the whole set
           ...(tags !== undefined && { tags }),
           ...(billable !== undefined && { billable }),
+          newProject: b.newProject === true,
         },
         'user',
         { expect: rev },
@@ -387,7 +395,15 @@ export function timeRoutes(cfg: Config): Route[] {
           const entries = withDb(true, db => {
             if (!db) throw new TimeError('time.err.noDb')
             if (b.op === 'post' || b.op === 'unpost') return mark(db, conf, b)
-            const e = change(db, conf, b, Date.now())
+            // a project typed as new: the client's list and the entry in one request
+            const e =
+              b.newProject === true && (b.op === 'add' || b.op === 'edit')
+                ? withNewProject(
+                    conf,
+                    fresh => change(db, fresh, b, Date.now()),
+                    x => x,
+                  )
+                : change(db, conf, b, Date.now())
             return [entryView(conf, e, marksOf(db, [e.id]).get(e.id))]
           })
           // the entry changed (a mark's: the first of them), and all of a mark's
@@ -400,6 +416,22 @@ export function timeRoutes(cfg: Config): Route[] {
           if (err instanceof DbError) return json(503, { ok: false, error: err.message })
           return json(500, { ok: false, error: err instanceof Error ? err.message : String(err) })
         }
+      },
+    },
+    {
+      method: 'GET',
+      path: '/api/time-settings',
+      async handle() {
+        return json(200, timeSettingsView(withDb))
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/time-settings',
+      guard: ['board-header', 'origin'],
+      async handle(_req, ctx) {
+        const r = editTimeSettings(await ctx.rawBody(), withDb)
+        return json(r.ok ? 200 : 400, { ...r, view: timeSettingsView(withDb) })
       },
     },
   ]

@@ -4,7 +4,7 @@
 import { Database } from 'bun:sqlite'
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { dbFile, openDb } from '../../src/adapters/db.ts'
 import { addEntry } from '../../src/adapters/time-store.ts'
@@ -14,7 +14,7 @@ import { dateIn, timeConfig } from '../../src/core/time.ts'
 import { timeToday } from '../../src/server/routes/time.ts'
 import { serveBoard } from '../support/board-server.ts'
 import { isolatedHome } from '../support/env.ts'
-import { sandbox } from '../support/sandbox.ts'
+import { sandbox, until } from '../support/sandbox.ts'
 
 const json = async (res: Response) => (await res.json()) as Record<string, unknown>
 const TIME = {
@@ -350,6 +350,7 @@ test('billable set on an entry from the page, and back to the config’s; the da
       { id: 'erp', title: 'erp' },
       { id: 'tracker', title: 'Tracker' },
     ],
+    retired: [],
   })
 })
 
@@ -423,4 +424,139 @@ test('Raise and Trim say the figure the page showed: a line that bills otherwise
   assert.equal((await post({ op: 'raise', id: up.id, rev: up.rev, billed: 5400 }))[1].code, 'changedSince')
   assert.equal((await post({ op: 'raise', id: up.id, rev: up.rev, billed: 'x' }))[1].code, 'billed')
   assert.equal(((await post({ op: 'raise', id: up.id, rev: up.rev, billed: 3600 }))[1].entry as Made).stop, at('14:00'))
+})
+
+/**
+ * A board as writableBoard's, reading config.json as it changes (TEST_LIVE_CONFIG), as the real
+ * one does: Settings → Time and a new project write the file, and the board follows it.
+ */
+async function liveBoard() {
+  const box = await sandbox()
+  const folder = join(box.dir, 'Sync')
+  mkdirSync(folder)
+  const state = join(box.dir, 'state', 'herdr', 'plugins', 'agent-board')
+  mkdirSync(join(state, 'backup'), { recursive: true })
+  writeFileSync(
+    join(state, 'backup', 'backup-key.json'),
+    JSON.stringify(makeKey('correct horse battery', 1, { logN: 10, r: 8, p: 1 })),
+  )
+  writeFileSync(
+    join(state, 'backup', 'status.json'),
+    JSON.stringify({ targets: { folder: { ...freshTarget(), tested: Date.now(), where: folder } } }),
+  )
+  const cfg = {
+    language: 'en',
+    categories: [
+      { id: 'client-a', title: 'Client A', color: 'blue' },
+      { id: 'other', title: 'Other', color: 'gray' },
+    ],
+    wakeUrl: null,
+    refreshSec: 3600,
+    time: TIME,
+    backup: { folder },
+  }
+  const file = join(box.dir, 'config', 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
+  mkdirSync(join(file, '..'), { recursive: true })
+  writeFileSync(file, JSON.stringify(cfg, null, 2))
+  const { url, proc } = await serveBoard(box, cfg, { TEST_LIVE_CONFIG: '1' })
+  /** Resolves once the board has read config.json again after `fn` changed it. */
+  const reloaded = async (fn: () => Promise<unknown>) => {
+    const count = () => proc.messages.filter(m => (m as { reloaded?: boolean }).reloaded).length
+    const was = count()
+    const out = await fn()
+    await until(() => count() > was)
+    return out
+  }
+  const send = (path: string) => async (body: Record<string, unknown>) => {
+    const res = await fetch(`${url}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify(body),
+    })
+    return [res.status, await json(res)] as const
+  }
+  const config = () =>
+    (JSON.parse(readFileSync(file, 'utf8')) as { time: { clients: Record<string, Record<string, unknown>> } }).time
+  return { url, post: send('/api/time'), settings: send('/api/time-settings'), config, file, reloaded }
+}
+
+test('a new project from the editor: the entry and the client’s list in one request, a near name taking the one it has', async () => {
+  const { post, config } = await liveBoard()
+  const [, same] = await post({ ...add, project: ' support', newProject: true })
+  assert.equal((same.entry as Made & { project: string }).project, 'Support')
+  assert.deepEqual(config().clients['client-a']?.projects, ['Support'], 'no near duplicate')
+  const [status, made] = await post({
+    ...add,
+    start: `${NEAR}T15:00:00Z`,
+    stop: `${NEAR}T15:30:00Z`,
+    project: 'Audit',
+    newProject: true,
+  })
+  assert.equal(status, 200)
+  const e = made.entry as Made & { project: string }
+  assert.equal(e.project, 'Audit')
+  assert.deepEqual(config().clients['client-a']?.projects, ['Support', 'Audit'])
+  // an edit to another new one, too
+  const [, edited] = await post({ op: 'edit', id: e.id, rev: e.rev, project: 'Calls', newProject: true })
+  assert.equal((edited.entry as { project: string }).project, 'Calls')
+  assert.deepEqual(config().clients['client-a']?.projects, ['Support', 'Audit', 'Calls'])
+  // refused (no description): the list stays as it was
+  assert.equal((await post({ ...add, description: '', project: 'Never', newProject: true }))[0], 400)
+  assert.deepEqual(config().clients['client-a']?.projects, ['Support', 'Audit', 'Calls'])
+  // without newProject a name not listed is refused, as before
+  assert.equal((await post({ ...add, project: 'Elsewhere' }))[1].code, 'project')
+})
+
+test('Settings → Time: the view, a client off (refused new entries), a lane made with time, a refused edit leaving the file', async () => {
+  const { url, post, settings, config, reloaded } = await liveBoard()
+  const view = (await json(await fetch(`${url}/api/time-settings`))) as {
+    on: boolean
+    zone: string
+    every: boolean
+    clients: Record<string, { on: boolean; projects: string[]; systems: { id: string }[]; rules: number }>
+  }
+  assert.deepEqual([view.on, view.zone, view.every], [true, 'America/New_York', false])
+  assert.deepEqual(
+    [
+      view.clients['client-a']?.projects,
+      view.clients['client-a']?.systems.map(s => s.id),
+      view.clients['client-a']?.rules,
+    ],
+    [['Support'], ['erp', 'tracker'], 1],
+  )
+  const [off, offView] = (await reloaded(() => settings({ op: 'client', client: 'client-n', on: false }))) as Awaited<
+    ReturnType<typeof settings>
+  >
+  assert.equal(off, 200)
+  assert.equal((offView.view as typeof view).clients['client-n']?.on, false)
+  assert.equal(config().clients['client-n']?.on, false)
+  // the board follows the file: a new entry for it is refused
+  assert.equal((await post({ ...add, client: 'client-n' }))[1].code, 'clientOff')
+  const [made, lane] = await settings({ op: 'newLane', id: 'client-z', title: 'Client Z', color: 'teal' })
+  assert.equal(made, 200)
+  assert.deepEqual((lane.view as typeof view).clients['client-z']?.projects, [])
+  // what the edit would bring is refused, config.json left as it was
+  const before = JSON.stringify(config())
+  const [bad, why] = await settings({ op: 'systems', client: 'client-a', systems: [{ id: 'Bad Id', title: 'X' }] })
+  assert.deepEqual([bad, why.code], [400, 'system'])
+  assert.equal((await settings({ op: 'nope' }))[1].code, 'usage')
+  assert.equal(JSON.stringify(config()), before)
+})
+
+test('Settings → Time renames a project: the client’s entries move with it, a mark entered stays entered', async () => {
+  const { url, post, settings, config } = await liveBoard()
+  const one = (await post(add))[1].entry as Made
+  await post({ op: 'post', system: 'erp', entries: [{ id: one.id, rev: one.rev }] })
+  const [status, done] = await settings({ op: 'rename', client: 'client-a', from: 'Support', to: 'Support desk' })
+  assert.deepEqual([status, done.moved], [200, 1])
+  assert.deepEqual(config().clients['client-a']?.projects, ['Support desk'])
+  const day = await json(await fetch(`${url}/api/time?date=${NEAR}`))
+  const e = (day.entries as (Made & { project: string })[]).find(x => x.id === one.id)
+  assert.deepEqual([e?.project, e?.rev, e?.posts[0]?.changedAfter], ['Support desk', 2, false])
+  // retired: offered no more, its entry keeps it
+  await settings({ op: 'retire', client: 'client-a', project: 'Support desk' })
+  assert.deepEqual(
+    [config().clients['client-a']?.projects, config().clients['client-a']?.retired],
+    [[], ['Support desk']],
+  )
 })

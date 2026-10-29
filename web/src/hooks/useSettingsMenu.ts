@@ -73,6 +73,9 @@ export interface SettingsDeps {
   /** The local board's page: Backup… is offered (#233). */
   backup?(): boolean
   openBackup?(): void
+  /** The local board's page: Time tracking… is offered (#237). */
+  timeSettings?(): boolean
+  openTimeSettings?(): void
   /** This page signed in through the owner's domain: Sign out is offered. */
   signOut?(): boolean
   endLogin?(): void
@@ -109,6 +112,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       mokupilot: deps.mokupilot?.() ?? false,
       access: deps.access?.() ?? false,
       backup: deps.backup?.() ?? false,
+      timeSettings: deps.timeSettings?.() ?? false,
       signOut: deps.signOut?.() ?? false,
       presence: deps.presence?.(),
       idleMinutes: deps.idleMinutes?.(),
@@ -137,6 +141,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'mokupilot') deps.openMokupilot?.()
         else if (pick?.kind === 'access') deps.openAccess?.()
         else if (pick?.kind === 'backup') deps.openBackup?.()
+        else if (pick?.kind === 'timeSettings') deps.openTimeSettings?.()
         else if (pick?.kind === 'signout') deps.endLogin?.()
         else if (pick?.kind === 'presence')
           deps.choosePresence?.(pick.value === 'none' ? { on: false } : { on: true, mode: pick.value })
@@ -274,7 +279,8 @@ const crossFade = (): ((apply: () => void) => unknown) | undefined =>
 /**
  * Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts);
  * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake,
- * `openAccess` the Remote access panel, `openMokupilot` the MokuPilot panel, `openBackup` the Backup panel.
+ * `openAccess` the Remote access panel, `openMokupilot` the MokuPilot panel, `openBackup` the Backup panel,
+ * `openTimeSettings` Time tracking's.
  */
 export function useSettingsMenu(
   menu: MenuEngine,
@@ -284,6 +290,7 @@ export function useSettingsMenu(
   openAccess: () => void = () => {},
   openMokupilot: () => void = () => {},
   openBackup: () => void = () => {},
+  openTimeSettings: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
@@ -298,6 +305,7 @@ export function useSettingsMenu(
     openAccess,
     openMokupilot,
     openBackup,
+    openTimeSettings,
   })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
@@ -369,6 +377,8 @@ export function useSettingsMenu(
       openAccess: () => latest.current.openAccess(),
       backup: () => !remotePage(),
       openBackup: () => latest.current.openBackup(),
+      timeSettings: () => !remotePage(),
+      openTimeSettings: () => latest.current.openTimeSettings(),
       signOut: () => remotePage() && keptAuth() === 'login',
       endLogin: () => {
         const { t, board } = latest.current

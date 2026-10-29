@@ -12,6 +12,9 @@
 // an agent or the import set it the other way; one that is not counts as worked, never as billed.
 // A client's `systems` are where its time is entered (an ERP, a tracker): an entry carries a mark
 // per system once it is (adapters/time-store.ts).
+// Turned off (`time.on`, a client's `on`: false) and retired projects keep what is there: time off
+// keeps its settings for when it is on again; a client off takes no new entry, its own billed by
+// its rules as before; a retired project is offered no more, its entries keep it (#237).
 //
 // The owner writes this config by hand, and a value read wrong would date or bill entries wrong
 // with no word: so nothing in it is guessed. A value that does not check out (an unknown zone,
@@ -42,8 +45,12 @@ export interface TimeSystem {
 }
 
 export interface TimeClient {
+  /** Whether it takes new entries (false: off, its entries stay). */
+  on: boolean
   /** The projects it takes; null: any. */
   projects: string[] | null
+  /** Projects no longer offered for new entries; its entries keep them. */
+  retired: string[]
   /** Whether its entries are billable by default (false: a lane never billed). */
   billable: boolean
   /** Projects of a billed client that are not billed. */
@@ -77,6 +84,7 @@ export type ProblemWhy =
   | 'unknown'
   | 'project'
   | 'system'
+  | 'retired'
 
 /** A value of config.json's `time` that does not check out: where (time.clients.x.billing[1].round), and why. */
 export interface TimeProblem {
@@ -132,8 +140,8 @@ function goodRegex(source: string): boolean {
   }
 }
 
-const TIME_KEYS = ['zone', 'excludeTags', 'clients']
-const CLIENT_KEYS = ['projects', 'ref', 'zone', 'billing', 'billable', 'nonBillable', 'systems']
+const TIME_KEYS = ['on', 'zone', 'excludeTags', 'clients']
+const CLIENT_KEYS = ['on', 'projects', 'retired', 'ref', 'zone', 'billing', 'billable', 'nonBillable', 'systems']
 const SYSTEM_KEYS = ['id', 'title']
 const SYSTEM_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
 const RULE_KEYS = ['match', 'group', 'step', 'round']
@@ -198,16 +206,26 @@ function systemsOf(v: unknown, at: string, problems: TimeProblem[]): TimeSystem[
   return out
 }
 
+/** An `on` that is there: a boolean, or a problem (and on). */
+function onOf(v: unknown, at: string, problems: TimeProblem[]): boolean {
+  if (v === undefined || typeof v === 'boolean') return v !== false
+  problems.push({ at, why: 'type', value: shown(v) })
+  return true
+}
+
 /**
- * config.json's `time`: an object or `true` turns it on; anything else is off (null). `true` is the
- * computer's own zone and every lane; an object names its `zone`. What does not check out is in
- * `problems`, and the rest is read as well as it can be, for a view that says so.
+ * config.json's `time`: an object or `true` turns it on; anything else is off (null), and so is an
+ * object with `on: false` (its settings kept for when it is on again). `true` is the computer's own
+ * zone and every lane; an object names its `zone`. What does not check out is in `problems`, and
+ * the rest is read as well as it can be, for a view that says so.
  */
 export function timeConfig(raw: unknown): TimeConfig | null {
   if (raw !== true && !isObject(raw)) return null
   const problems: TimeProblem[] = []
   if (raw === true) return { zone: localZone(), excludeTags: ['deferred'], clients: null, problems }
   const c = raw as Record<string, unknown>
+  if (c.on === false) return null
+  onOf(c.on, 'time.on', problems)
   unknownKeys(c, TIME_KEYS, 'time', problems)
   let zone = localZone()
   if (c.zone === undefined) problems.push({ at: 'time.zone', why: 'required' })
@@ -228,7 +246,15 @@ export function timeConfig(raw: unknown): TimeConfig | null {
       if (!isObject(v)) problems.push({ at, why: 'type', value: shown(v) })
       const o = isObject(v) ? v : {}
       unknownKeys(o, CLIENT_KEYS, at, problems)
+      const on = onOf(o.on, `${at}.on`, problems)
       const projects = o.projects === undefined ? null : [...new Set(strings(o.projects, `${at}.projects`, problems))]
+      const retired = o.retired === undefined ? [] : [...new Set(strings(o.retired, `${at}.retired`, problems) ?? [])]
+      // offered and retired at once: which one it is would be a guess
+      if (projects)
+        retired.forEach((project, i) => {
+          if (projects.some(p => sameProject(p, project)))
+            problems.push({ at: `${at}.retired[${i}]`, why: 'retired', value: project })
+        })
       let ref = DEFAULT_REF
       if (typeof o.ref === 'string' && text(o.ref)) {
         if (goodRegex(text(o.ref))) ref = text(o.ref)
@@ -250,14 +276,14 @@ export function timeConfig(raw: unknown): TimeConfig | null {
       else if (o.billable !== undefined) problems.push({ at: `${at}.billable`, why: 'type', value: shown(o.billable) })
       const nonBillable =
         o.nonBillable === undefined ? [] : [...new Set(strings(o.nonBillable, `${at}.nonBillable`, problems) ?? [])]
-      // a project the client does not take is a slip of the pen, not a rule
+      // a project the client does not take is a slip of the pen, not a rule (a retired one it had)
       if (projects)
         nonBillable.forEach((project, i) => {
-          if (!projects.includes(project))
+          if (!projects.includes(project) && !retired.includes(project))
             problems.push({ at: `${at}.nonBillable[${i}]`, why: 'project', value: project })
         })
       const systems = systemsOf(o.systems, `${at}.systems`, problems)
-      clients[id] = { projects, ref, zone: own, billing, billable, nonBillable, systems }
+      clients[id] = { on, projects, retired, ref, zone: own, billing, billable, nonBillable, systems }
     }
   }
   return { zone, excludeTags, clients, problems }
@@ -272,9 +298,28 @@ export function clientOf(c: TimeConfig, client: string): { ok: true; client: Tim
 
 export const zoneOf = (c: TimeConfig, client: string): string => c.clients?.[client]?.zone ?? c.zone
 
+/** A project's name as names are told apart when one is added: case and spaces aside ("support " is "Support"). */
+export const projectKey = (name: string): string => name.toLowerCase().replace(/\s+/g, '')
+
+export const sameProject = (a: string, b: string): boolean => projectKey(a) === projectKey(b)
+
+/** The name a list has for a project typed (case and spaces aside), or null. */
+export const projectIn = (list: readonly string[], name: string): string | null =>
+  list.find(p => sameProject(p, name)) ?? null
+
+/** The lanes that take new entries: the clients on (null: every lane). */
+export const takersOf = (c: TimeConfig): string[] | null =>
+  c.clients
+    ? Object.entries(c.clients)
+        .filter(([, x]) => x.on)
+        .map(([id]) => id)
+    : null
+
 /** A client as `time: true` has every lane: any project, billed, nowhere to enter it. */
 const ANY_CLIENT: TimeClient = {
+  on: true,
   projects: null,
+  retired: [],
   ref: DEFAULT_REF,
   zone: null,
   billing: [],
