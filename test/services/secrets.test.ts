@@ -6,8 +6,8 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readCard, updateCard } from '../../src/adapters/cards.ts'
-import { useLanguage } from '../../src/core/lang.ts'
-import { fingerprintOf, requestsOf, type SecretRequest } from '../../src/core/secrets.ts'
+import { t, useLanguage } from '../../src/core/lang.ts'
+import { fingerprintOf, requestsOf, type SecretRequest, secretViews } from '../../src/core/secrets.ts'
 import type { Config } from '../../src/core/types.ts'
 import { secretCmd } from '../../src/entrypoints/secret-cli.ts'
 import {
@@ -238,4 +238,50 @@ test('from the second review: a value is written as typed, spaces too; only a li
   })
   assert.equal(done.status, 200)
   assert.deepEqual(JSON.parse(readFileSync(join(home, 'token.json'), 'utf8')), { svc: { token: '  spaced pass  ' } })
+})
+
+test('from the third review: the owner’s once holds at submit, for a request asked before it and a card entry that left it out (#273)', async () => {
+  const { home, cfg } = setUp()
+  const file = join(home, 'token.json')
+  const raw = (cfg.secrets as { sinks: { tok: Record<string, unknown> } }).sinks.tok
+  const owned = { secrets: { sinks: { tok: { ...raw, once: ['token'] } } } } as unknown as Config
+  /** What the form shows for a request, with the config as it is now: its fields and its fingerprint. */
+  const shown = (id: string) => secretViews(secretsOf(owned), readCard('s1'), t).find(v => v.id === id)
+  // (c) asked while config.json had no once; the owner adds it before the submit
+  const before = ask(cfg)
+  writeFileSync(file, JSON.stringify({ svc: { token: 'kept' } }))
+  const view = shown(before.id)
+  assert.deepEqual(view?.fields, [{ name: 'token', hidden: true, once: true }])
+  const c = await submitSecret(owned, before.id, { values: { token: VALUE }, fingerprint: view?.fingerprint })
+  assert.equal(c.status, 400)
+  assert.match(c.body.error ?? '', /is set already, and this field is written only once/)
+  // (b) an entry written on the card by hand, without once
+  updateCard('s1', saved => ({
+    ...saved,
+    secrets: [
+      ...requestsOf(saved?.secrets),
+      {
+        ...before,
+        id: 'bbbbbbbbbbbb',
+        fields: [{ name: 'token', hidden: true }],
+        status: 'pending',
+        writing: undefined,
+      },
+    ],
+  }))
+  const b = await submitSecret(owned, 'bbbbbbbbbbbb', {
+    values: { token: VALUE },
+    fingerprint: shown('bbbbbbbbbbbb')?.fingerprint,
+  })
+  assert.equal(b.status, 400)
+  // the fingerprint of the fields as asked, without the owner's once, is not what the form showed
+  const stale = await submitSecret(owned, 'bbbbbbbbbbbb', {
+    values: { token: VALUE },
+    fingerprint: fingerprintOf(secretsOf(owned).sinks.get('tok') as never, {}, [{ name: 'token', hidden: true }]),
+  })
+  assert.equal(stale.status, 409)
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { svc: { token: 'kept' } })
+  // spaces alone are no value
+  const blank = await submitSecret(cfg, before.id, { values: { token: '   ' }, fingerprint: fingerprint(cfg, before) })
+  assert.deepEqual(blank, { status: 400, body: { ok: false, error: '“token” is empty' } })
 })

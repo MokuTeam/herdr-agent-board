@@ -284,11 +284,11 @@ function jsonOut(r: RunResult): unknown {
   }
 }
 
-/** bw's own `encode`: the JSON as base64, which `create` and `edit` read from stdin. */
 /** How a program ended, in words that hold nothing it printed. */
 const codeOf = (r: RunResult): string =>
   r.killed || r.code === 'timeout' ? 'timed out' : r.code === 'ENOENT' ? 'not found' : `exit ${String(r.code)}`
 
+/** bw's own `encode`: the JSON as base64, which `create` and `edit` read from stdin. */
 const encoded = (value: unknown): string => Buffer.from(JSON.stringify(value), 'utf8').toString('base64')
 
 async function writeBitwarden(sink: BitwardenSink, input: WriteInput): Promise<WriteResult> {

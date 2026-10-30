@@ -258,17 +258,21 @@ export async function submitSecret(
   if (!sink) return no(409, t('secret.err.sinkGone', { sink: r.sink }))
   const check = checkRequest(sink, r.params, r.fields)
   if (!check.ok) return no(409, t(check.error, check.vars))
-  if (input.fingerprint !== fingerprintOf(sink, r.params, r.fields)) return no(409, t('secret.err.changed'))
+  // the fields as the sink takes them now: the owner's `once` holds for a request asked before it,
+  // or a card entry that left it out
+  const fields = check.fields
+  if (input.fingerprint !== fingerprintOf(sink, r.params, fields)) return no(409, t('secret.err.changed'))
   if (!isRecord(input.values)) return no(400, t('secret.err.values'))
   const given = input.values
   const values: Record<string, string> = {}
-  for (const name of Object.keys(given))
-    if (!r.fields.some(f => f.name === name)) return no(400, t('secret.err.values'))
-  for (const f of r.fields) {
+  for (const name of Object.keys(given)) if (!fields.some(f => f.name === name)) return no(400, t('secret.err.values'))
+  for (const f of fields) {
     const raw = given[f.name]
     if (typeof raw !== 'string') return no(400, t('secret.err.values'))
     // a line break a paste brings at either end is no part of a key; spaces are kept (the form says so)
     const value = raw.replace(/^[\r\n]+|[\r\n]+$/g, '')
+    // spaces alone are no value, in any sink (an empty Bitwarden part is left as it is)
+    if (value && !value.trim()) return no(400, t('secret.err.valueEmpty', { name: f.name }))
     const problem = valueProblem(sink, f.name, value)
     if (problem) return no(400, t(problem, { name: f.name }))
     values[f.name] = value
@@ -276,8 +280,7 @@ export async function submitSecret(
   const session = typeof input.session === 'string' ? input.session : ''
   if (sink.kind === 'bitwarden' && !session.trim()) return no(400, t('secret.err.bwSession'))
   // Bitwarden leaves a part left empty as it is, but an item with nothing new is no write
-  if (!Object.values(values).some(Boolean))
-    return no(400, t('secret.err.valueEmpty', { name: r.fields[0]?.name ?? '' }))
+  if (!Object.values(values).some(Boolean)) return no(400, t('secret.err.valueEmpty', { name: fields[0]?.name ?? '' }))
   const claimed = change(
     key,
     id,
@@ -292,7 +295,7 @@ export async function submitSecret(
   // the claim goes whatever happens after it: settled ok, or freed for another try
   let settled = false
   try {
-    const result = await writeSink({ sink, params: r.params, fields: r.fields, values, bwSession: session })
+    const result = await writeSink({ sink, params: r.params, fields, values, bwSession: session })
     const at = Date.now()
     if (result.ok) {
       const done = settle(key, id, 'ok', at, result.target)

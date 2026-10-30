@@ -147,7 +147,7 @@ test('config.json is strict: what does not check out is a problem of that sink, 
   const mixed = conf('linux', { bad: { kind: 'nope' }, good: SINKS.netrc })
   assert.deepEqual(mixed.sinks.get('good')?.problems, [])
   expect(problemsText(mixed.sinks.get('bad')?.problems ?? [], en)).toContain('kind is file, bitwarden, env or http')
-  assert.deepEqual(conf('linux', 'nope').problems, [{ at: 'secrets.sinks', why: 'type', value: 'nope' }])
+  assert.deepEqual(conf('linux', 'nope').problems, [{ at: 'secrets.sinks', why: 'type', value: 'string' }])
   assert.equal(secretsConfig(undefined, { home: HOME_POSIX }).sinks.size, 0)
 })
 
@@ -406,7 +406,7 @@ test('from the second review: no query or header in a problem, no / \\ % in a UR
     en,
   )
   for (const leak of ['qk-123', 'frag', 'hk-123']) assert.equal(said.includes(leak), false, said)
-  expect(said).toContain('http://api.example.com/x')
+  expect(said).toContain('http://api.example.com')
   const http = conf('linux', {
     s: {
       kind: 'http',
@@ -442,4 +442,22 @@ test('from the second review: no query or header in a problem, no / \\ % in a UR
   const env = conf('win32', { e: { kind: 'env', vars: '.*' } }).sinks.get('e') as Sink
   assert.equal(checkRequest(env, {}, [{ name: '__proto__', hidden: true }]).ok, false)
   assert.equal(checkRequest(env, {}, [{ name: 'GOOD_NAME', hidden: true }]).ok, true)
+})
+
+test('from the third review: a URL problem says the origin alone; a misplaced object or list only by its type (#273)', () => {
+  const said = problemsText(
+    [
+      ...conf('linux', {
+        hook: { kind: 'http', url: 'http://hooks.example.com/services/T0KEN-in-path', body: '{{v}}' },
+        bare: 'https://x.example.com/?key=bare-key',
+        listed: { kind: 'file', path: '~/x.json', format: 'json', at: { key: 'at-key' }, template: { a: '{{v}}' } },
+      }).sinks.values(),
+    ].flatMap(s => s.problems),
+    en,
+  )
+  for (const leak of ['T0KEN-in-path', 'bare-key', 'at-key']) assert.equal(said.includes(leak), false, said)
+  expect(said).toContain('http://hooks.example.com')
+  expect(said).toContain('not the right type: object')
+  expect(said).toContain('not the right type: string')
+  assert.equal(problemsText(conf('linux', ['a-key']).problems, en), 'secrets.sinks: not the right type: array')
 })

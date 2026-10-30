@@ -118,7 +118,15 @@ export const problemsText = (ps: readonly SecretProblem[], tr: Translator): stri
   ps.map(p => `${p.at}: ${tr(`secret.problem.${p.why}`, { value: p.value ?? '' })}`).join('; ')
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
-const shown = (v: unknown): string => (typeof v === 'string' ? v : (JSON.stringify(v) ?? String(v)))
+/**
+ * A config value as a problem says it: a string as it is (a kind, a format, a path), anything else
+ * by its type alone. An object or a list in the wrong place may hold a key the owner typed in, and
+ * `board secret sinks` hands problems to agents.
+ */
+const shown = (v: unknown): string =>
+  typeof v === 'string' ? v : v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v
+/** A value in the wrong place, by its type alone, whatever it is: a string there may be a key too. */
+const kindOf = (v: unknown): string => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v)
 
 export const SINK_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/
 /** A field's or a parameter's name, as a template writes it: {{name}}. */
@@ -230,7 +238,7 @@ function textOf(
   if (typeof v === 'string' && v.trim()) return v.trim()
   if (v === undefined) {
     if (required) problems.push({ at: `${at}.${key}`, why: 'required' })
-  } else problems.push({ at: `${at}.${key}`, why: 'type', value: shown(v) })
+  } else problems.push({ at: `${at}.${key}`, why: 'type', value: kindOf(v) })
   return ''
 }
 
@@ -238,7 +246,7 @@ function paramsOf(v: unknown, at: string, problems: SecretProblem[]): Record<str
   const out: Record<string, ParamRule> = {}
   if (v === undefined) return out
   if (!isObject(v)) {
-    problems.push({ at, why: 'type', value: shown(v) })
+    problems.push({ at, why: 'type', value: kindOf(v) })
     return out
   }
   for (const [name, rule] of Object.entries(v)) {
@@ -252,7 +260,7 @@ function paramsOf(v: unknown, at: string, problems: SecretProblem[]): Record<str
       } catch {
         problems.push({ at: place, why: 'regex', value: rule })
       }
-    } else problems.push({ at: place, why: 'type', value: shown(rule) })
+    } else problems.push({ at: place, why: 'type', value: kindOf(rule) })
   }
   return out
 }
@@ -262,7 +270,7 @@ function onceOf(v: unknown, at: string, problems: SecretProblem[]): string[] {
   if (v === undefined) return []
   if (Array.isArray(v) && v.every(x => typeof x === 'string' && (FIELD_NAME.test(x) || ENV_NAME.test(x))))
     return v as string[]
-  problems.push({ at, why: 'type', value: shown(v) })
+  problems.push({ at, why: 'type', value: kindOf(v) })
   return []
 }
 
@@ -333,7 +341,7 @@ function fileSink(base: SinkBase, o: Record<string, unknown>, at: string, opts: 
   if (o.at !== undefined) {
     if (format !== 'json') problems.push({ at: `${at}.at`, why: 'format', value: format })
     else if (!Array.isArray(o.at) || !o.at.length || !o.at.every(k => typeof k === 'string' && k))
-      problems.push({ at: `${at}.at`, why: 'type', value: shown(o.at) })
+      problems.push({ at: `${at}.at`, why: 'type', value: kindOf(o.at) })
     else {
       path = o.at as string[]
       paramsOnly(path, params, `${at}.at`, problems)
@@ -378,17 +386,17 @@ function envSink(base: SinkBase, o: Record<string, unknown>, at: string, opts: P
     } catch {
       problems.push({ at: `${at}.vars`, why: 'regex', value: v })
     }
-  } else problems.push({ at: `${at}.vars`, why: v === undefined ? 'required' : 'type', value: shown(v) })
+  } else problems.push({ at: `${at}.vars`, why: v === undefined ? 'required' : 'type', value: kindOf(v) })
   return { ...base, kind: 'env', vars, pattern, fields: null }
 }
 
 const LOCAL_HOSTS = ['localhost', '127.0.0.1', '[::1]']
 
 /**
- * A URL as a problem says it, to the owner and to `board secret sinks`: its scheme, host and path,
- * never a login, a query or a fragment, where config.json may hold a key.
+ * A URL as a problem says it, to the owner and to `board secret sinks`: its scheme and host alone.
+ * A login, the path (a webhook's token is often in it), a query or a fragment may hold a key.
  */
-const urlShown = (url: string): string => url.replace(/\/\/[^/@?#]*@/, '//').replace(/[?#].*$/, '')
+const urlShown = (url: string): string => (/^[a-z]+:\/\/[^/?#]*/i.exec(url)?.[0] ?? 'url').replace(/\/\/[^@]*@/, '//')
 
 function httpSink(base: SinkBase, o: Record<string, unknown>, at: string): HttpSink {
   const { problems, params } = base
@@ -440,24 +448,24 @@ export function secretsConfig(raw: unknown, opts: ParseOptions): SecretsConfig {
   const sinks = new Map<string, Sink>()
   const problems: SecretProblem[] = []
   if (raw === undefined || raw === null) return { sinks, problems }
-  if (!isObject(raw)) return { sinks, problems: [{ at: 'secrets', why: 'type', value: shown(raw) }] }
+  if (!isObject(raw)) return { sinks, problems: [{ at: 'secrets', why: 'type', value: kindOf(raw) }] }
   unknownKeys(raw, ['sinks'], 'secrets', problems)
   if (raw.sinks === undefined) return { sinks, problems }
   if (!isObject(raw.sinks))
-    return { sinks, problems: [...problems, { at: 'secrets.sinks', why: 'type', value: shown(raw.sinks) }] }
+    return { sinks, problems: [...problems, { at: 'secrets.sinks', why: 'type', value: kindOf(raw.sinks) }] }
   for (const [id, v] of Object.entries(raw.sinks)) {
     const at = `secrets.sinks.${id}`
     const own: SecretProblem[] = []
     if (!SINK_ID.test(id)) own.push({ at, why: 'id', value: id })
     const o = isObject(v) ? v : {}
-    if (!isObject(v)) own.push({ at, why: 'type', value: shown(v) })
+    if (!isObject(v)) own.push({ at, why: 'type', value: kindOf(v) })
     const kind = o.kind as SinkKind
     const known = Object.hasOwn(KEYS, kind)
     if (isObject(v) && !known)
       own.push({ at: `${at}.kind`, why: o.kind === undefined ? 'required' : 'kind', value: shown(o.kind) })
     const title = typeof o.title === 'string' ? cleanText(o.title, 200) : ''
     if (o.title !== undefined && typeof o.title !== 'string')
-      own.push({ at: `${at}.title`, why: 'type', value: shown(o.title) })
+      own.push({ at: `${at}.title`, why: 'type', value: kindOf(o.title) })
     const params = known && kind !== 'env' ? paramsOf(o.params, `${at}.params`, own) : {}
     const once = onceOf(o.once, `${at}.once`, own)
     const base: SinkBase = { id, kind: known ? kind : 'file', title, params, fields: null, raw: v, once, problems: own }
@@ -780,14 +788,17 @@ export function secretViews(
         problem: tr('secret.err.sinkGone', { sink: r.sink }),
       }
     const check = checkRequest(sink, r.params, r.fields)
-    const target = targetOf(sink, r.params, r.fields, tr)
+    // the fields as a submit will write them: with the owner's `once`
+    const fields = check.ok ? check.fields : r.fields
+    const target = targetOf(sink, r.params, fields, tr)
     return {
       ...base,
+      fields,
       sinkTitle: sink.title,
       kind: sink.kind,
       where: target.where,
       detail: target.detail,
-      fingerprint: fingerprintOf(sink, r.params, r.fields),
+      fingerprint: fingerprintOf(sink, r.params, fields),
       ...(!check.ok && { problem: tr(check.error, check.vars) }),
     }
   })
