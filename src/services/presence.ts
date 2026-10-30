@@ -2,9 +2,13 @@
 // read, and detection. While config.json's presence mode is 'auto' or 'suggest' the board asks
 // the computer every half minute how long it has gone without input and whether its screen is
 // locked (adapters/idle.ts), and a request from the board's own page counts as input too; each
-// answer goes through presenceStep. With presence off, or its mode 'off', nothing is asked and
-// nothing runs. Nothing is ever sent to a session: they read the state from the hooks.
+// answer goes through presenceStep, with the MokuPilot call in progress on this computer
+// (adapters/mokupilot-call.ts) where MokuPilot has run and config.json has no `"mokupilot": false`;
+// whether it has is looked up once a minute, while presence is on. With presence off, or its mode
+// 'off', nothing is asked and nothing runs. Nothing is ever sent to a session: they read the state
+// from the hooks.
 import { observe as observeComputer } from '../adapters/idle.ts'
+import { callInProgress, mokupilotHere } from '../adapters/mokupilot-call.ts'
 import {
   clearPresence,
   currentPresence,
@@ -44,13 +48,17 @@ export interface PresenceService {
 }
 
 interface Options {
-  cfg: Pick<Config, 'presence'>
+  cfg: Pick<Config, 'presence'> & { mokupilot?: unknown }
   log: (line: string) => void
   /** The board changed: publish it. */
   onChange: () => void
   /** The sessions on the board (card keys). */
   sessions?: () => Iterable<string>
   observe?: () => Promise<Observation>
+  /** The MokuPilot call in progress (its id), or null. */
+  call?: () => string | null
+  /** Whether MokuPilot has run on this computer. */
+  callsHere?: () => boolean
   now?: () => number
   intervalMs?: number
 }
@@ -63,6 +71,8 @@ export function createPresence({
   onChange,
   sessions = () => [],
   observe = () => observeComputer(),
+  call = () => callInProgress(),
+  callsHere = () => mokupilotHere(),
   now = Date.now,
   intervalMs = DETECT_INTERVAL_MS,
 }: Options): PresenceService {
@@ -73,7 +83,15 @@ export function createPresence({
   let busy = false
   let on: boolean | null = null
 
+  let here = { at: Number.NEGATIVE_INFINITY, on: false }
+
   const config = (): PresenceConfig | null => presenceConfig(cfg.presence)
+  /** MokuPilot's calls count: not turned off, and MokuPilot has run here (looked up once a minute). */
+  const calls = (): boolean => {
+    if (cfg.mokupilot === false) return false
+    if (now() - here.at > 60_000) here = { at: now(), on: callsHere() }
+    return here.on
+  }
   const detecting = (c: PresenceConfig | null): c is PresenceConfig => !!c && c.mode !== 'off'
 
   function apply(c: PresenceConfig, obs: Observation): void {
@@ -128,7 +146,7 @@ export function createPresence({
         detects = said
         onChange()
       }
-      apply(c, obs)
+      apply(c, calls() ? { ...obs, call: call() } : obs)
     } catch (err) {
       log(`presence: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
@@ -140,7 +158,14 @@ export function createPresence({
     view() {
       const c = config()
       if (!c) return null
-      return { ...currentPresence(), mode: c.mode, idleMinutes: c.idleMinutes, hint, detects }
+      return {
+        ...currentPresence(),
+        mode: c.mode,
+        idleMinutes: c.idleMinutes,
+        hint,
+        detects,
+        ...(calls() && { calls: true as const }),
+      }
     },
     set(state, from) {
       const r = setPresence(state, 'user', from, now())

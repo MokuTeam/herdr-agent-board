@@ -133,3 +133,32 @@ test('choosePresence saves the setting, or says why not', async () => {
   await choosePresence({ on: true }, { ...deps, save: async () => Promise.reject(new Error('nope')) })
   expect(toasts).toHaveLength(2)
 })
+
+test('on a call (#276): the switch says so and a press ends it where it started; the phone button only where MokuPilot runs', () => {
+  expect(presenceSwitch(view({ state: 'call', before: 'away' }), t)).toEqual({
+    state: 'call',
+    label: 'On a call',
+    hint: expect.stringMatching(/when the call is over/),
+    next: 'away',
+    offer: null,
+  })
+  expect(presenceSwitch(view({ state: 'call' }), t)?.next).toBe('here')
+  expect(presenceSwitch(view({ calls: true }), t)?.call).toMatch(/^On a call/)
+  expect(presenceSwitch(view({ state: 'call', calls: true }), t)).not.toHaveProperty('call')
+  expect(presenceSwitch(view(), t)).not.toHaveProperty('call')
+  expect(presenceBody('call', false)).toEqual({ state: 'call', from: 'web' })
+
+  const ids = (data: Partial<PresenceView>) =>
+    findAll(
+      renderInBoard(<PresenceSwitch />, board({ data: payload({ presence: view(data) }) })),
+      el => /^presence-/.test(el.attrs.get('id') ?? ''),
+    ).map(el => [el.attrs.get('id'), el.attrs.get('data-state'), el.attrs.get('aria-pressed')])
+  expect(ids({})).toEqual([['presence-switch', 'here', 'false']])
+  expect(ids({ calls: true })).toEqual([
+    ['presence-switch', 'here', 'false'],
+    ['presence-call', undefined, undefined],
+  ])
+  expect(ids({ state: 'call', calls: true })).toEqual([['presence-switch', 'call', 'true']])
+  expect(ids({ state: 'call' })).toEqual([['presence-switch', 'call', 'true']])
+  expect(translator('ru')('presence.call')).toBe('На звонке')
+})

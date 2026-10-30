@@ -1,20 +1,26 @@
-// Whether the user is at the computer ('here') or away from it ('away'), #172: the board keeps it
+// Whether the user is at the computer ('here'), away from it ('away') or on a call ('call', #276),
+// #172: the board keeps it
 // (adapters/presence-store.ts), the user switches it (the web board and the phone, `board away`,
 // POST /api/presence), and the board can notice it by itself (services/presence.ts). Every
 // session reads it passively: a line in its hook context (entrypoints/hook.ts) and `board
 // presence`. The line tells the agent where its news goes: while the user is away, also to where
 // they read it away from the computer (a messenger such as Telegram); while here, the board and
-// the terminal only. Nothing is ever typed into a session for it.
+// the terminal only; while on a call, the board, where its questions wait until the call is over.
+// Nothing is ever typed into a session for it.
 //
 // config.json's `presence` turns it on; a setup without it sees nothing of this anywhere:
 //   "presence": { "mode": "auto", "idleMinutes": 15 }
 // mode: 'auto' (the default) switches by itself on idle input or a locked screen, and back;
 // 'suggest' only offers the switch on the board; 'off' is the manual switch alone. `true` is
-// { mode: 'auto' }.
+// { mode: 'auto' }. A MokuPilot call on this computer (adapters/mokupilot-call.ts) is no guess:
+// under 'auto' and 'suggest' alike the board puts the user on a call while it runs and back to the
+// state before once it ends.
 
 export const PRESENCE_MODES = ['auto', 'suggest', 'off'] as const
 export type PresenceMode = (typeof PRESENCE_MODES)[number]
-export type PresenceState = 'here' | 'away'
+export type PresenceState = 'here' | 'away' | 'call'
+/** The states a call returns to. */
+export type AtState = Exclude<PresenceState, 'call'>
 /** Where a manual switch came from; 'auto' marks the board's own. */
 export const PRESENCE_SOURCES = ['web', 'phone', 'cli', 'agent', 'api', 'auto'] as const
 export type PresenceSource = (typeof PRESENCE_SOURCES)[number]
@@ -26,6 +32,8 @@ export interface Presence {
   /** Who set it: the user (a switch) or the board's detection. */
   by: 'user' | 'auto'
   from?: PresenceSource
+  /** On a call: the state it returns to once it ends. */
+  before?: AtState
 }
 
 /** What the page, the phone and GET /api/presence see (services/presence.ts). */
@@ -36,6 +44,8 @@ export interface PresenceView extends Presence {
   hint: PresenceState | null
   /** Whether this computer told detection anything at its last ask; null before one. */
   detects: boolean | null
+  /** MokuPilot runs on this computer: its calls are seen, and the switch offers one by hand. */
+  calls?: true
 }
 
 export interface PresenceConfig {
@@ -51,7 +61,8 @@ export const MAX_IDLE_MINUTES = 24 * 60
 export const NO_PRESENCE: Presence = { state: 'here', since: 0, by: 'auto' }
 
 export const isPresenceMode = (v: unknown): v is PresenceMode => PRESENCE_MODES.some(m => m === v)
-export const isPresenceState = (v: unknown): v is PresenceState => v === 'here' || v === 'away'
+export const isAtState = (v: unknown): v is AtState => v === 'here' || v === 'away'
+export const isPresenceState = (v: unknown): v is PresenceState => isAtState(v) || v === 'call'
 export const isPresenceSource = (v: unknown): v is PresenceSource => PRESENCE_SOURCES.some(s => s === v)
 
 export const validIdleMinutes = (v: unknown): v is number =>
@@ -79,14 +90,19 @@ export const isPresence = (v: unknown): v is Presence => {
     isPresenceState(p.state) &&
     typeof p.since === 'number' &&
     (p.by === 'user' || p.by === 'auto') &&
-    (p.from === undefined || isPresenceSource(p.from))
+    (p.from === undefined || isPresenceSource(p.from)) &&
+    (p.before === undefined || isAtState(p.before))
   )
 }
 
-/** What the computer said, each null when it cannot tell: seconds since the last input, a locked screen. */
+/**
+ * What the computer said, each null when it cannot tell: seconds since the last input, a locked
+ * screen; and the MokuPilot call in progress (its id), null for none, absent where no one looked.
+ */
 export interface Observation {
   idleSec: number | null
   locked: boolean | null
+  call?: string | null
 }
 
 /** What an observation says of the user: gone, at the computer, or nothing (no way to tell). */
@@ -106,10 +122,12 @@ export function seenOf(obs: Observation, idleMinutes: number): 'away' | 'back' |
 export interface StepMemory {
   since: number
   agreed: boolean
+  /** The MokuPilot call seen last, across changes of state: a new one puts the user on a call once. */
+  call?: string
 }
 
 export interface Step {
-  /** Switch to this state now (mode 'auto'). */
+  /** Switch to this state now (mode 'auto'; a call under 'suggest' too). */
   flip?: PresenceState
   /** Offer this state on the board (mode 'suggest'); null: nothing to offer. */
   hint: PresenceState | null
@@ -122,15 +140,28 @@ export interface Step {
  */
 export function presenceStep(p: Presence, obs: Observation, cfg: PresenceConfig, memory: StepMemory | null): Step {
   // A state the board set agreed with what it saw; one the user set has to be seen first.
-  const mem = memory && memory.since === p.since ? memory : { since: p.since, agreed: p.by === 'auto' }
+  const kept = memory && memory.since === p.since ? memory : { since: p.since, agreed: p.by === 'auto' }
+  const call = obs.call === undefined ? memory?.call : obs.call || undefined
+  const mem: StepMemory = call ? { ...kept, call } : withoutCall(kept)
+  if (cfg.mode === 'off') return { hint: null, memory: mem }
+  // A call that started puts the user on it, whatever they said before; one seen to end brings
+  // back the state before it, as does no call at all under a call the board set (one that ended
+  // while the board was down). While on a call, idle input and a locked screen say nothing.
+  if (call && call !== memory?.call && p.state !== 'call') return { flip: 'call', hint: null, memory: mem }
+  if (p.state === 'call')
+    return obs.call === null && (memory?.call || p.by === 'auto')
+      ? { flip: p.before ?? 'here', hint: null, memory: mem }
+      : { hint: null, memory: mem }
   const seen = seenOf(obs, cfg.idleMinutes)
-  if (!seen || cfg.mode === 'off') return { hint: null, memory: mem }
+  if (!seen) return { hint: null, memory: mem }
   const want: PresenceState = seen === 'away' ? 'away' : 'here'
   if (want === p.state) return { hint: null, memory: mem.agreed ? mem : { ...mem, agreed: true } }
   if (!mem.agreed) return { hint: null, memory: mem }
   if (cfg.mode === 'auto') return { flip: want, hint: null, memory: mem }
   return { hint: want, memory: mem }
 }
+
+const withoutCall = ({ call: _, ...rest }: StepMemory): StepMemory => rest
 
 const clock = (ms: number): string => {
   const d = new Date(ms)
@@ -140,6 +171,8 @@ const clock = (ms: number): string => {
 /** The line a session is told: where its news goes now. */
 export function presenceLine(p: Presence): string {
   const at = p.since ? ` (since ${clock(p.since)})` : ''
+  if (p.state === 'call')
+    return `[agent-board] The user is on a call${at} and slow to answer: go on with what you can decide yourself; a question waits on the board (board ask) until the call is over. No need to send things elsewhere (Telegram and the like).`
   return p.state === 'away'
     ? `[agent-board] The user is away from the computer${at}. Anything they need to see or answer (a result, a question, a blocker) also goes where they read it away from the computer, if this session has a way (Telegram or another messenger); the board alone waits unseen.`
     : `[agent-board] The user is at the computer${at}: the board and this terminal are enough; no need to send things elsewhere (Telegram and the like).`
