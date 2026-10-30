@@ -19,7 +19,16 @@ import type { MessageGate } from '../../core/message-gate.ts'
 import type { Viewer } from '../../core/mokupilot-mode.ts'
 import { isPiItem } from '../../core/pi.ts'
 import type { Item, Pin } from '../../core/types.ts'
-import { checkWake, focus, send, sleepSession, wake, wakeAnswers } from '../../services/actions.ts'
+import {
+  checkWake,
+  focus,
+  NAMED_POLL_MS,
+  namedWaitMs,
+  send,
+  sleepSession,
+  wake,
+  wakeAnswers,
+} from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
 import { askArchive, undoMs } from '../../services/archive.ts'
 import { askAside } from '../../services/aside.ts'
@@ -113,10 +122,24 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
   return app.gate(item.key, body.requestId ?? randomUUID(), [body.session ?? null, body.text, files], async () => {
     // Always collect a new snapshot before accepting a message, even if SSE is connected: a
     // board that cannot reach herdr fails here rather than send on old data.
-    const fresh = (await collect(deps)).find(next => next.key === item.key)
-    if (!fresh || fresh.session !== item.session || fresh.pane !== item.pane) return changed(item)
+    const fresh = await freshItem(deps, item)
+    // A card shown asleep is for its session wherever it woke meanwhile: a new tab (#204) too.
+    const moved = item.sleeping && !!item.session
+    if (!fresh || fresh.session !== item.session || (fresh.pane !== item.pane && !moved)) return changed(item)
     return send(deps, fresh, [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n'))
   })
+}
+
+/**
+ * The card's session in a new snapshot. One the card shows asleep may have just woken (by wake,
+ * Telegram or by hand) in a pane herdr does not name it in yet (#267): looked for again for a few
+ * seconds before it counts as gone.
+ */
+async function freshItem(deps: Deps, item: Item): Promise<Item | undefined> {
+  for (const deadline = Date.now() + namedWaitMs(); ; await Bun.sleep(NAMED_POLL_MS)) {
+    const fresh = (await collect(deps)).find(next => next.key === item.key)
+    if (fresh || !item.sleeping || Date.now() >= deadline) return fresh
+  }
 }
 
 // A question form, a permission prompt or pi's menu or text input, answered with keys in the pane

@@ -210,6 +210,8 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
           r = await send(deps, { ...item, sleeping: false, pane }, promptOf(entry, Date.now()), {
             free: !!entry.idle,
             draft: true,
+            // Woken just now: herdr may name it in its pane a few seconds later (#267).
+            woken: !!item.sleeping,
           })
         } catch (err) {
           if (entry.receipt) settleReport(entry, 'delivery-unknown')

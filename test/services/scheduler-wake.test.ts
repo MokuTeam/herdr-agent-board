@@ -9,6 +9,7 @@ import { setDefaultTimeout, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { reportHash, reportIdentity } from '../../src/adapters/call-receipts.ts'
 import { WAKE_SHIPPED } from '../../src/core/wake/config.ts'
 import { unusedPort } from '../support/board-server.ts'
 import { fakeWake } from '../support/fake-wake.ts'
@@ -21,8 +22,10 @@ import {
   herdrAwake,
   paneCalls,
   projectDir,
+  SCREEN,
   SID,
   scheduleDir,
+  stateDir,
   transcript,
   twoProfiles,
   wakeRuns,
@@ -183,6 +186,52 @@ test('wake off: the reminder wakes the session through the board and is sent', a
   )
   await until(() => runs(box).length === 1)
   assert.equal(runs(box)[0]?.result, 'sent')
+})
+
+test('a call report for a sleeper herdr names seconds after wake brought it back: sent once, its receipt sent (#267)', async () => {
+  const box = await sandbox()
+  const { cwd, list } = workSleeper(box)
+  herdrAsleep(box, cwd)
+  // A call report's receipt, queued (adapters/call-receipts.ts): it settles as sent only when the
+  // first send goes; a failed one leaves it delivery-unknown, never to be sent again.
+  const receipt = reportIdentity(SID, 'report-1', reportHash('the report'))
+  writeFileSync(
+    join(stateDir(box), 'call-receipts.json'),
+    JSON.stringify({ version: 1, records: { [receipt.key]: { ...receipt, entryId: 'eeee07', state: 'queued' } } }),
+  )
+  const wake = await fakeWake({
+    sleeping: [{ session: SID, pane: 'p1', name: 'Report', slept_at: new Date().toISOString() }],
+    wake: () => {
+      // Claude is back in p1, idle; herdr names its session there from its third read on.
+      const agent = (named: boolean) => ({
+        result: { agent: { agent: 'claude', agent_status: 'idle', ...(named && { agent_session: { value: SID } }) } },
+      })
+      box.state({
+        'api snapshot': {
+          result: {
+            snapshot: {
+              workspaces: [{ workspace_id: 'w1', label: 'Отчёты 50%' }],
+              tabs: [{ tab_id: 't1', workspace_id: 'w1' }],
+              panes: [{ pane_id: 'p1', workspace_id: 'w1', tab_id: 't1', cwd, agent: 'claude', agent_status: 'idle' }],
+            },
+          },
+        },
+        'agent get': { seq: [agent(false), agent(false), agent(true)] },
+        'agent read': { text: SCREEN },
+        'agent prompt': { result: {} },
+      })
+      wake.sleeping = []
+      return { ok: true, pane: 'p1', name: 'Report' }
+    },
+  })
+  wakeRuns(box)
+  put(box, { id: 'eeee07', kind: 'call', text: 'the report', receipt })
+  await scheduler(box, { wake: { enabled: true, port: wake.port }, profiles: list }, boardOnPath(box))
+  await until(() => runs(box).length === 1, 20_000)
+  assert.equal(runs(box)[0]?.result, 'sent', JSON.stringify(runs(box)[0]))
+  assert.equal(prompts(box).length, 1)
+  const journal = JSON.parse(readFileSync(join(stateDir(box), 'call-receipts.json'), 'utf8'))
+  assert.equal(journal.records[receipt.key].state, 'sent')
 })
 
 test('a restart with wakeUrl null and wake on (the new wake) is not given up: put to sleep, woken, its note', async () => {

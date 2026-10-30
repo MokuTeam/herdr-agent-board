@@ -1388,7 +1388,9 @@ on every install, with nothing to install or run (it did it through the separate
 [herdr-wake](herdr-wake/) plugin before, on Node.js). By itself it does nothing: no session is put
 to sleep, woken or typed into until someone clicks "Put to sleep", "Wake" or "Restart", runs
 `board sleep` or `board restart`, sends a sleeping session a message or a reminder, or turns the
-reaper or the Telegram router on.
+reaper or the Telegram router on. A message or a reminder to a sleeper goes in once the session is
+back, in its pane or a new tab, and herdr names it there (herdr's own SessionStart hook can do that
+a few seconds after Claude is up); another session in that pane is still refused.
 
 **How it runs.** herdr starts it with the board: a startup entry of its own
 (`src/entrypoints/wake-start.ts`), which the board's start never waits for, so the board opens
