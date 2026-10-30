@@ -257,7 +257,7 @@ async function act(
       )
       return { ok: true, held: r.held, dropped: r.dropped, closeAt: r.record.closeAt }
     }
-    // A MokuPilot call whose agent is a fork of this session, only in the board's own profile; no herdr in it.
+    // A MokuPilot call whose agent is a fork of this session, in the session's own profile; no herdr in it.
     // Here or on the viewer's computer by the mode, and under `auto` by who asks (core/mokupilot-mode.ts).
     case 'mokupilot':
       return startCall(deps.cfg, item, { profiles: deps.profiles(), viewer, own: ownAddresses })
