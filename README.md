@@ -1869,6 +1869,104 @@ points come back with it.
 Not yet (see #202): a jump to the message a point came from (1b), a badge on the card, the open
 points in the sheet, the agent told of a point the user pinned as its promise.
 
+## Secrets
+
+An agent that needs a token, a password or OAuth keys it must never see used to write a script
+with a hidden prompt and ask you to run it in a window of your own (#273). Now it asks the board:
+its card goes under "Needs me" with a form, you type the values on the board (the computer's or
+the phone's, through its pairing or the tunnel's login), and the board writes them where you said.
+The agent gets back ok, declined or expired, never a value.
+
+**Sinks** are yours, in config.json, and nothing else decides where a value goes:
+
+```json
+"secrets": {
+  "sinks": {
+    "mcp-token": {
+      "kind": "file", "title": "API token for the local MCP server",
+      "path": "~/.vendor_secrets.json", "format": "json", "at": ["local-user", "{{profile}}"],
+      "template": { "username": "TOKEN.me", "password": "{{token}}" },
+      "params": { "profile": "^[a-z0-9-]{1,20}$" }
+    },
+    "wss": {
+      "kind": "file", "path": "~/.wss_netrc", "format": "netrc",
+      "template": "machine ws.example.com login {{user}} password {{token}}\n"
+    },
+    "client-env": {
+      "kind": "file", "folder": "~/env", "name": "{{file}}.env", "format": "env",
+      "template": { "API_TOKEN": "{{token}}" }, "params": { "file": "name" }
+    },
+    "vault": { "kind": "bitwarden", "folder": "Agents", "item": "{{item}}", "params": { "item": "text" } },
+    "shell": { "kind": "env", "vars": ["VENDOR_TOKEN", "VENDOR_USER"] },
+    "vendor": {
+      "kind": "http", "method": "PUT", "url": "https://api.example.com/v1/connections/{{conn}}/credentials",
+      "headers": { "Authorization": "Bearer {{apiToken}}" },
+      "body": { "consumerKey": "{{consumerKey}}", "consumerSecret": "{{consumerSecret}}" },
+      "params": { "conn": "^[0-9a-f-]{36}$" }
+    }
+  }
+}
+```
+
+A `{{name}}` in a template is a **parameter** when the sink's `params` names it (the request fills
+it in: `name` is a plain file or item name, `text` one line, anything else a regular expression the
+whole value must match), and otherwise a **field**, which you type. A file's name, a JSON file's
+`at` and a URL take parameters only: a secret there would end up in listings and logs.
+
+- `file`: `path`, or `folder` and `name` (absolute or `~/…`; the folder must be there). `format`
+  `json` puts the template under the keys of `at` and keeps the rest of the file (without `at` it
+  is the whole file); `env` sets its variables and keeps the file's other lines; `netrc` and
+  `text` are the whole file. The file is written in place, never through a temp file, and made
+  yours alone before anything goes in (mode 600; on Windows inheritance off and full control to
+  your user only, as the tunnel's key). A link or a folder where the file goes is refused.
+- `bitwarden`: an item by name in `folder` (made when missing), created or updated, with
+  `organization` and `collection` (both, or neither) for a new item of an organization. The fields
+  a request names are the item's `username`, `password`, `totp`, `notes`, `uri`, or custom fields
+  (hidden ones when the field is masked); one left empty stays as it is. The board runs `bw` with
+  the session you paste into the form (`bw unlock --raw`), in bw's environment only, for this one
+  write: it is kept nowhere. The item goes to `bw` on its stdin, never on its command line.
+- `env` (Windows): your user's environment variables (`vars`: their names, or one regular
+  expression), set by Windows PowerShell with the values on its stdin; new programs see them.
+- `http`: `method` (POST, PUT, PATCH), `url`, `headers`, `auth` (`{ "user", "password" }`, basic),
+  `body` (JSON with templates in its strings, or text). The scheme and host are written out in
+  full (https; http only for localhost): parameters go into the path and the query, encoded. The
+  board makes the call itself, follows no redirect, and reads nothing of the answer but its status.
+
+A sink that does not check out (an unknown key, a relative path, a field in a URL) takes no request,
+and `board doctor` says why; the others work.
+
+**Asking**, as an agent: `board secret request --title "<what for>" --sink <id>
+[--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m]`. A sink with a
+template asks its own fields when none are named; for Bitwarden and env the request names them. A
+field is masked unless `:shown` (a user name); `:once` writes it only where nothing is set yet (the
+JSON key, the .env variable, the file, the Bitwarden part, the variable), never over a value that
+is there. The command waits until you answer or it expires (30 minutes by default, a day at most),
+so an agent runs it in the background, and prints `ok · <id> · <where> · <time>`, or `declined` /
+`expired`; `--no-wait` returns at once, then `board secret status <id> [--wait]`. Also
+`board secret cancel <id>`, `list` and `sinks` (what each takes). Claude sessions hear of it in
+their brief, only where config.json has sinks.
+
+**The form**, at the top of the session's sheet: what it is for, where the values go (the file and
+where in it, the vault's folder and item, the variables, the method and URL) with the request's
+parameters, then a field for each, masked ones with Show; spelling services, autofill and password
+managers are told to keep out. **Write** sends the values in one request to the board, which writes
+the sink and answers ok or why not; a failed write keeps the request open for another try. When
+the sink changed in config.json since the form was shown, the write is refused and the form shows
+the new place. **Decline** answers the agent without a write.
+
+**What it keeps from whom.** A value goes from the form to the sink and nowhere else: not to the
+agent, the card, the board's payload or its event stream, board.db, a log, an error text (what a
+program or a server says back is scrubbed of the values), a temp file or the backup; the board holds
+it in memory for the one write. No route returns one. The request on its card holds the title, the
+sink, the parameters and the field names; the audit (`secrets/audit.jsonl` in the state folder, a
+megabyte, then the one before) has a line for each step: who asked, the sink, the fields, the
+parameters, when, what came of it. The route is guarded as the board's other changes (X-Board, the
+board's own Origin; through the phone's pairing or the tunnel's login), and only your submit
+writes: an agent's request writes nothing. It does not guard against an agent that works against
+you: it runs as your user and can read the file a sink writes, or change config.json (the form
+shows where a value goes, so read it). What it is for is keeping secrets out of the agent's
+conversation, its transcripts and its provider.
+
 ## Time
 
 Time tracking of the board's own (#233), off unless `time` is in config.json: entries per client
@@ -3282,7 +3380,14 @@ the folder target), `src/adapters/backup-ssh.ts` (ssh to the drop), `src/service
 JSON), `src/adapters/time-store.ts` (the entries, whose they are, the import's batch),
 `src/entrypoints/time-cli.ts` (`board time`), `src/server/routes/time.ts`,
 `src/core/time-settings.ts` and `src/services/time-settings.ts` (Settings → Time tracking…'s changes),
-`web/src/components/time/`. The drop script's tests run it with
+`web/src/components/time/`. Secrets through the board (#273): `src/core/secrets.ts` (the sinks'
+config, a request's rules, the templates, where a sink writes, a request on its card),
+`src/adapters/secret-sinks.ts` (the file, Bitwarden, PowerShell and HTTP writes),
+`src/services/secrets.ts` (asking, submit, decline, expiry, the audit), `src/server/routes/secrets.ts`,
+`src/entrypoints/secret-cli.ts` (`board secret`), `web/src/components/secrets/SecretForm.tsx`.
+Tests never run the real `bw` or PowerShell: `BOARD_BW_BIN_PATH` and `BOARD_POWERSHELL_BIN_PATH`
+name fakes (`test/support/fake-bw.ts`, `fake-powershell.ts`), and every sandbox points them at
+files that do not exist. The drop script's tests run it with
 dash where there is one, else a POSIX sh (`test/support/fake-drop-ssh.ts` stands in for ssh), and
 skip without one; Look, Apply and Undo run the same way on a fake root (`test/support/fake-root.ts`:
 shims for useradd, sshd, systemctl and the rest, the scripts' paths moved into a temp folder). On

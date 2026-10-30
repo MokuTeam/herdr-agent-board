@@ -67,6 +67,22 @@ export function changeTodos(
   return result
 }
 
+/**
+ * A change to a card read and written under its lock (secret requests, #273): `change` gets the
+ * card as saved (null: none) and returns it changed, or undefined to leave it as it is.
+ */
+export function updateCard(key: string, change: (saved: Card | null) => Card | undefined): Card | null | undefined {
+  mkdirSync(cardsDir(), { recursive: true })
+  return updateJson(
+    file(key),
+    (saved: Card | null): Card | undefined => {
+      const next = change(saved)
+      return next && { ...next, key: next.key ?? key, updatedAt: Date.now() }
+    },
+    isCard,
+  )
+}
+
 /** Remove a card; one that is not there is no error. */
 export function removeCard(key: string): void {
   try {

@@ -39,6 +39,8 @@ export function brief(
   presence: Presence | null = null,
   /** Tasks (#202, core/todos.ts), only where config.json turned them on; agents hear of them only with agents on. */
   todos: TodosConfig | null = null,
+  /** The secret sinks config.json defines (#273); agents hear of `board secret` only where there are any. */
+  sinks: readonly string[] = [],
 ): string {
   const cat = card?.category
   const guess = categoryFor(cfg, cwd)
@@ -63,12 +65,18 @@ export function brief(
     agent === 'Claude' &&
       "  More reliable than CronCreate or ScheduleWakeup: those live in this Claude process and die when the idle session is put to sleep; the board's entries survive sleep and restarts. Use it for anything due later than a few minutes.",
     agent === 'Claude' && todos?.agents && todosBrief(),
+    agent === 'Claude' && sinks.length > 0 && secretsBrief(sinks),
     `Card texts in ${languageName()}, short. Call it only when the state changes, not every turn.${state ? ` Card now: ${state}.` : ''}`,
     presence && presenceBrief(presence),
     herdrLine(env, agent),
   ]
     .filter(Boolean)
     .join('\n')
+}
+
+/** How an agent asks the owner for a secret it must never see (#273), with the sinks there are. */
+export function secretsBrief(sinks: readonly string[]): string {
+  return `- board secret request --title "<what for>" --sink <id> [--field <name>[:shown]]... [--param <name>=<value>]...: a token, a password or keys you must never see. The owner types them into a form on the board and the board writes them where the sink says; you get back only ok, declined or expired (run it in the background: it waits). Never ask for a secret in the chat or with a script of your own. Sinks: ${sinks.join(', ')} (board secret sinks says what each takes).`
 }
 
 export function waitReminder(card: Pick<Card, 'wait'>): string {

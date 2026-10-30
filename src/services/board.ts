@@ -2,6 +2,7 @@
 // merged with its card and with what Claude recorded about it in its own profile's folder, and
 // sorted into a column. Sessions in the archive are left out (services/archive.ts).
 import { readFileSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { allCards, writeCard } from '../adapters/cards.ts'
 import type { ClaudeHome } from '../adapters/claude-home.ts'
@@ -20,8 +21,9 @@ import { t } from '../core/lang.ts'
 import { relate } from '../core/links.ts'
 import { isPiItem, isPiSessionFile, PI_AGENT, piSessionId } from '../core/pi.ts'
 import { sessionProfile } from '../core/profiles.ts'
+import { pendingOf, requestsOf, type SecretView, secretsConfig, secretViews } from '../core/secrets.ts'
 import { type Todo, todosOf } from '../core/todos.ts'
-import type { AgentStatus, Attention, Card, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
+import type { AgentStatus, Attention, Card, Config, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
 import { piSleeperPane } from '../core/wake/pi.ts'
 import { archivedFiles, getArchived, hides, isArchived, settleReturned } from './archive.ts'
 import type { Deps } from './deps.ts'
@@ -30,6 +32,19 @@ const numberOf = (value: unknown): number | undefined => (typeof value === 'numb
 
 /** The panes its card says wake closed as it went to sleep (#204, services/wake/follow.ts), when it has any. */
 /** A card's tasks (#202) for its item, when it has any. */
+/** A secret request's line on the card (#273), the newest one's, when no `board ask` says more. */
+function secretAsk(card: Card): string {
+  const last = pendingOf(requestsOf(card.secrets), Date.now()).at(-1)
+  return last ? t('secret.asks', { title: last.title }) : ''
+}
+
+/** The card's pending secret requests (#273), each with where it writes; absent when none. */
+const secretsField = (cfg: Config, card: Card): { secrets?: SecretView[] } => {
+  if (!Array.isArray(card.secrets)) return {}
+  const views = secretViews(secretsConfig(cfg.secrets, { home: homedir() }), card, t)
+  return views.length ? { secrets: views } : {}
+}
+
 const todosField = (card: Card): { todos?: Todo[] } => {
   const todos = todosOf(card.todos)
   return todos.length ? { todos } : {}
@@ -67,7 +82,7 @@ function pinOf(key: string, status: AgentStatus, card: Card): Pin | '' {
 
 /** What the user is asked, for the card. */
 function askedText(attention: Attention, card: Card, info: TranscriptInfo, tool: ToolCall | null): string {
-  if (attention === 'ask') return card.ask ?? ''
+  if (attention === 'ask') return card.ask || secretAsk(card)
   if (attention === 'question') return info.question ?? ''
   if (attention !== 'decision' || !tool?.pending) return ''
   return tool.name === 'AskUserQuestion'
@@ -302,6 +317,7 @@ export async function collect(
       auto: columnOf(base.status, { ...card, pin: '' }, info), // where it would be without the pin
       ...(card.favorite === true && { favorite: true }), // the user keeps it in sight
       ...todosField(card), // its tasks (#202), when it has any
+      ...secretsField(cfg, card), // what it asks the user to fill in (#273), when it does
       helpers: own, // its subagents, forks, workflow agents and teammates in short, or null
       // a fork's card says whose fork it is, and when it started
       ...(typeof card.forkOf === 'string' && { fork: { of: card.forkOf, at: Number(card.forkAt) || 0 } }),

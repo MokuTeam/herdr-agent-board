@@ -16,6 +16,7 @@ import { ONESHOT_STRINGS } from './oneshot-strings.ts'
 import { PRESENCE_STRINGS } from './presence-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
 import { REMOTE_STRINGS } from './remote-strings.ts'
+import { SECRET_STRINGS } from './secret-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
@@ -1334,6 +1335,7 @@ for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[c
 for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PRESENCE_STRINGS[code])
 // And tasks (#202).
 for (const code of Object.keys(TODO_STRINGS) as Lang[]) Object.assign(STRINGS[code], TODO_STRINGS[code])
+for (const code of Object.keys(SECRET_STRINGS) as Lang[]) Object.assign(STRINGS[code], SECRET_STRINGS[code])
 // And the board's database and its backup (#233).
 for (const code of Object.keys(BACKUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], BACKUP_STRINGS[code])
 // And time tracking on it (#233).

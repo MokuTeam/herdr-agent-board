@@ -48,6 +48,12 @@
 //                            the line every session's context has; with a state, the user's switch
 //   board away [on|off]      the same switch: away (on, the default) or back at the computer (off).
 //                            Both only while config.json turns presence on; never sent to a session
+//   board secret request --title <what for> --sink <id> [--field <name>[:shown][:once]]...
+//                            [--param <name>=<value>]... [--expires 30m] [--no-wait]
+//                            asks the owner for values the agent must never see (#273,
+//                            entrypoints/secret-cli.ts): the owner fills a form on the board, the
+//                            board writes the sink config.json defines; waits, then prints ok,
+//                            declined or expired. status <id> [--wait] | cancel <id> | list | sinks
 //   board todo add [--mine] "<text>" | done <id> | list   tasks (#202, core/todos.ts): what the
 //                            agent hands the user to do, or (--mine) a promise of its own it defers;
 //                            done closes its own; list shows this session's open ones. Only while
@@ -137,7 +143,7 @@ import { type MoveOutcome, moveMany } from '../services/move.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -540,6 +546,9 @@ async function main(): Promise<void> {
     // Time tracking's config (#233), while time is on.
     const { timeChecks } = await import('../services/time.ts')
     checks.push(...timeChecks(cfg, t))
+    // The secret sinks' config (#273), once config.json has `secrets`.
+    const { secretsChecks } = await import('../services/secrets.ts')
+    checks.push(...secretsChecks(cfg, t))
     return console.log(report(checks, t))
   }
 
@@ -562,6 +571,7 @@ async function main(): Promise<void> {
   if (cmd === 'tunnel') return tunnel()
   if (cmd === 'backup') return backupCmd()
   if (cmd === 'time') return timeCommand()
+  if (cmd === 'secret') return secretCommand()
   if (cmd === 'db') return dbCmd()
   if (cmd === 'archive') return archive()
   if (cmd === 'sleep') return sleep()
@@ -1194,6 +1204,17 @@ async function timeCommand(): Promise<void> {
   const { timeCmd } = await import('./time-cli.ts')
   // under --json an error is printed as JSON, and the exit code says it failed
   process.exitCode = await timeCmd(rest, { cfg, actor: own ? { key: own.key, name: own.name ?? '' } : 'user', lane })
+}
+
+/** `board secret …` (#273, entrypoints/secret-cli.ts): the request goes on this session's card. */
+async function secretCommand(): Promise<void> {
+  const own = await ownSession()
+  const { secretCmd } = await import('./secret-cli.ts')
+  process.exitCode = await secretCmd(rest, {
+    cfg,
+    session: own ? { key: own.key, name: own.name ?? '' } : null,
+    out: line => console.log(line),
+  })
 }
 
 /** A flag's value: `--name value` in the command's words; undefined when it is not there. */
