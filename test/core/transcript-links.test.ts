@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   peerOf,
   promptOf,
+  promptsOf,
   spawnOf,
   spawnResult,
   spawnResults,
@@ -97,4 +98,63 @@ test('#281: every spawn-agent of one call, and every session it printed, in orde
   ])
   assert.deepEqual(spawnResult(printed), { pane: 'w1:p2', name: 'Orchestrator' })
   assert.deepEqual(spawnResults('No such folder'), [])
+})
+
+test('herdr typing into another pane: each command a call runs, not one it only mentions', () => {
+  const bash = (command: string) => promptsOf('Bash', { command })
+  const pwsh = (command: string) => promptsOf('PowerShell', { command })
+  assert.deepEqual(bash('herdr agent prompt Herdr "Go on with PR 2"'), [{ target: 'Herdr', verb: 'agent prompt' }])
+  // Its options before or after the target; herdr's own before its command.
+  assert.deepEqual(bash("herdr agent prompt --wait Herdr-edgelog 'x' --until idle --timeout 5000"), [
+    { target: 'Herdr-edgelog', verb: 'agent prompt' },
+  ])
+  assert.deepEqual(bash('herdr --machine vps pane run w1:p2 "bun test"'), [{ target: 'w1:p2', verb: 'pane run' }])
+  // Several in one call, each recorded; a line that goes on, an env variable in front.
+  assert.deepEqual(
+    bash(
+      "herdr pane send-text w8:p4 'hi' && herdr pane send-keys w8:p4 Enter\nX=1 herdr agent \\\n  send-keys case-42 esc",
+    ),
+    [
+      { target: 'w8:p4', verb: 'pane send-text' },
+      { target: 'w8:p4', verb: 'pane send-keys' },
+      { target: 'case-42', verb: 'agent send-keys' },
+    ],
+  )
+  // Names with spaces, other alphabets and %; a variable is no name; a shell's own command line.
+  assert.deepEqual(
+    bash('herdr agent prompt "Кейс 42 — 50%" ok; herdr agent prompt "$T" ok; bash -c "herdr agent prompt Q hi"'),
+    [
+      { target: 'Кейс 42 — 50%', verb: 'agent prompt' },
+      { target: '', verb: 'agent prompt' },
+      { target: 'Q', verb: 'agent prompt' },
+    ],
+  )
+  // PowerShell: herdr.exe by its path, the call operator, a here-string that only holds the words.
+  assert.deepEqual(
+    pwsh(
+      '$b = @"\nherdr agent prompt X hi\n"@\n& C:\\Tools\\herdr.exe agent prompt \'Case 42\' $b; herdr pane send-keys w1:p3 Enter <# herdr agent prompt Z #>',
+    ),
+    [
+      { target: 'Case 42', verb: 'agent prompt' },
+      { target: 'w1:p3', verb: 'pane send-keys' },
+    ],
+  )
+  // Mentions only: an echo, a file written with a here-document, a commit message, a search, a
+  // comment, its help, another herdr command, the calling pane itself, another tool.
+  for (const command of [
+    'echo "herdr agent prompt Herdr hi"',
+    "cat > CLAUDE.md <<'EOF'\nUse herdr agent prompt Herdr hi to wake it.\nEOF\nls",
+    'cat <<-EOF > brief.md\n\therdr pane send-text w1:p1 x\n\tEOF',
+    'git commit -m "Docs: herdr agent prompt <target>"',
+    "grep -rn 'herdr agent prompt' src",
+    '# herdr agent prompt Herdr hi',
+    'herdr agent prompt --help',
+    'herdr pane send-keys -h',
+    'herdr agent list',
+    'herdr pane send-text --current hi',
+    'spawn-agent --name herdr-prompt',
+  ])
+    assert.deepEqual(bash(command), [], command)
+  assert.deepEqual(promptsOf('Read', { command: 'herdr agent prompt X hi' }), [])
+  assert.deepEqual(promptsOf('Bash', null), [])
 })

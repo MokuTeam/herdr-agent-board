@@ -9,8 +9,10 @@
 //              Claude Code marks each copied line `forkedFrom` in some versions; in others the
 //              copies keep only their time, older than the fork: the board's forks say on their
 //              card whose fork they are and since when (forkCard), and older events are left out
+//   prompted   it ran a herdr command that types into another pane (`herdr agent prompt <target>`,
+//              `pane send-text <pane>`, …): for the edge log only, the board's links leave it out
 // Pure: adapters/links.ts reads the transcripts' lines in the background.
-import { spawnResults, spawnsOf } from './transcript-links.ts'
+import { promptsOf, spawnResults, spawnsOf } from './transcript-links.ts'
 
 type Rec = Record<string, unknown>
 const rec = (v: unknown): Rec | null => (v && typeof v === 'object' ? (v as Rec) : null)
@@ -35,6 +37,7 @@ export type LinkEvent =
   | { kind: 'fork'; of: string; at: number }
   | { kind: 'sent'; to: string; name: string; summary: string; at: number }
   | { kind: 'received'; name: string; pipe: string; id: string; text: string; at: number }
+  | { kind: 'prompted'; target: string; verb: string; at: number }
 
 /** What a transcript's lines carry over to later ones (lineEvents). */
 export interface LinkState {
@@ -76,7 +79,8 @@ function received(origin: Rec, at: number, state: LinkState): LinkEvent | null {
 
 /**
  * The events in one transcript line: [{ kind: 'spawn', name, pane, at } | { kind: 'sent', to,
- * summary, at } | { kind: 'received', name, pipe, id, text, at }]. `state` carries what a later
+ * summary, at } | { kind: 'received', name, pipe, id, text, at } | { kind: 'prompted', target,
+ * verb, at }]. `summary`: the one SendMessage gave, never the message. `state` carries what a later
  * line completes (a spawn-agent call waits for its output) and what was seen already (a call is
  * recorded twice when a request is logged with it).
  */
@@ -123,11 +127,13 @@ export function lineEvents(line: string, state: LinkState): LinkEvent[] {
           kind: 'sent',
           to,
           name: state.pipes.get(to) ?? '',
-          summary: clip(String(input.summary ?? firstLine(input.message)), 200),
+          summary: clip(typeof input.summary === 'string' ? input.summary : '', 200),
           at,
         })
         continue
       }
+      // Only a command that names herdr is read for one that types into another pane.
+      for (const p of promptsOf(str(b.name), input)) out.push({ kind: 'prompted', ...p, at })
       const spawns = spawnsOf(str(b.name), input)
       if (spawns.length) state.pending.set(id, { names: spawns.map(s => s.name), at })
     } else if (o.type === 'user' && b?.type === 'tool_result' && state.pending.has(str(b.tool_use_id))) {
@@ -205,27 +211,68 @@ const norm = (s: unknown): string =>
     .replace(/[^\p{L}\p{N}]+/gu, '')
 
 /**
- * The links between the board's items, from each one's events (`eventsOf(item)`): by key,
- * { from: { key, name, at } | null, started: [{ key, name, at }], talks: [{ key, name, in, out,
- * at }] }. A started session is matched by its pane (or one it had before wake closed it, #204) and
- * the name spawn-agent gave it (a pane id is used again once its tab is gone); a message's other
- * end by its pipe while that session runs, else by its name when exactly one session on the board
- * has it.
+ * The item at an event's other end, among `items`, for the session `self` whose event it is: null
+ * when none is, or the session itself. A started session is matched by its pane (or one it had
+ * before wake closed it, #204) and the name spawn-agent gave it (a pane id is used again once its
+ * tab is gone); a fork's source by its session id; a message's other end by its pipe while that
+ * session runs, else by its name when exactly one session on the board has it; a pane herdr typed
+ * into by the session in it now, else the target as a name.
  */
-export function relate<T extends LinkItem>(
+export function ends<T extends LinkItem>(
   items: readonly T[],
-  eventsOf: (item: T) => readonly LinkEvent[] | undefined,
-): Map<string, ItemLinks> {
+): (self: Pick<LinkItem, 'key'>, ev: LinkEvent) => T | null {
   const names = (it: T) => new Set([it.name, it.autoName].filter(Boolean).map(norm))
   const byName = new Map<string, T[]>()
   for (const it of items) for (const n of names(it)) if (n) byName.set(n, [...(byName.get(n) ?? []), it])
   const byPipe = new Map(items.filter(it => it.pipe).map(it => [String(it.pipe).replace(/^uds:/, ''), it]))
-  const one = (name: string, self: T): T | null => {
+  const one = (name: string, self: Pick<LinkItem, 'key'>): T | null => {
     // A name with no letters or digits (a broadcast "*", an emoji) names no one.
     if (!norm(name)) return null
     const list = (byName.get(norm(name)) ?? []).filter(it => it.key !== self.key)
     return list.length === 1 ? (list[0] ?? null) : null
   }
+  const other = (self: Pick<LinkItem, 'key'>, ev: LinkEvent): T | null | undefined => {
+    switch (ev.kind) {
+      case 'spawn':
+        return items.find(it => it.key !== self.key && inPane(it, ev.pane) && names(it).has(norm(ev.name)))
+      case 'fork':
+        return items.find(it => it.key !== self.key && (it.session === ev.of || it.key === ev.of))
+      case 'sent':
+        // A reply goes to the pipe the message came from.
+        return ev.to.startsWith('uds:') ? (byPipe.get(ev.to.slice(4)) ?? one(ev.name, self)) : one(ev.to, self)
+      case 'received':
+        return byPipe.get(ev.pipe.replace(/^uds:/, '')) ?? one(ev.name, self)
+      case 'prompted':
+        return (ev.target && items.find(it => it.pane === ev.target)) || one(ev.target, self)
+    }
+  }
+  return (self, ev) => {
+    const b = other(self, ev)
+    return b && b.key !== self.key ? b : null
+  }
+}
+
+/** Whether an event is the item's own: a fork's from before it started are its source's, copied. */
+export const isOwn = (item: Pick<LinkItem, 'fork'> | null, ev: LinkEvent): boolean =>
+  !item?.fork || ev.kind === 'fork' || ev.at >= item.fork.at
+
+/** An item's own events (isOwn), and for a fork whose transcript does not say so yet, what its card says. */
+export function ownEvents(item: Pick<LinkItem, 'fork'>, read: readonly LinkEvent[]): readonly LinkEvent[] {
+  const own = item.fork
+  const mine = read.filter(ev => isOwn(item, ev))
+  return own?.of && !mine.some(ev => ev.kind === 'fork') ? [...mine, { kind: 'fork', of: own.of, at: own.at }] : mine
+}
+
+/**
+ * The links between the board's items, from each one's events (`eventsOf(item)`): by key,
+ * { from: { key, name, at } | null, started: [{ key, name, at }], talks: [{ key, name, in, out,
+ * at }] }, each event's other end as `ends` finds it. Prompts are not links.
+ */
+export function relate<T extends LinkItem>(
+  items: readonly T[],
+  eventsOf: (item: T) => readonly LinkEvent[] | undefined,
+): Map<string, ItemLinks> {
+  const end = ends(items)
   const out = new Map<string, ItemLinks>(items.map(it => [it.key, { from: null, started: [], talks: [] }]))
   const linksOf = (key: string): ItemLinks => {
     const links = out.get(key)
@@ -243,15 +290,11 @@ export function relate<T extends LinkItem>(
     t.at = Math.max(t.at, at)
   }
   for (const a of items) {
-    // A fork's events from before it started are its source's, copied; its card says whose fork it is.
-    const own = a.fork
-    const read = (eventsOf(a) ?? []).filter(ev => !own || ev.kind === 'fork' || ev.at >= own.at)
-    const events: readonly LinkEvent[] =
-      own?.of && !read.some(ev => ev.kind === 'fork') ? [...read, { kind: 'fork', of: own.of, at: own.at }] : read
-    for (const ev of events) {
+    for (const ev of ownEvents(a, eventsOf(a) ?? [])) {
+      if (ev.kind === 'prompted') continue
+      const b = end(a, ev)
+      if (!b) continue
       if (ev.kind === 'spawn') {
-        const b = items.find(it => it.key !== a.key && inPane(it, ev.pane) && names(it).has(norm(ev.name)))
-        if (!b) continue
         const mine = linksOf(a.key).started
         const prev = mine.find(x => x.key === b.key)
         if (prev) prev.at = Math.max(prev.at, ev.at)
@@ -262,19 +305,10 @@ export function relate<T extends LinkItem>(
         if (!theirs.from || (!theirs.from.fork && theirs.from.at <= ev.at))
           theirs.from = { key: a.key, name: a.name, at: ev.at }
       } else if (ev.kind === 'fork') {
-        const b = items.find(it => it.key !== a.key && (it.session === ev.of || it.key === ev.of))
-        if (!b) continue
         linksOf(a.key).from = { key: b.key, name: b.name, at: ev.at, fork: true }
         const theirs = linksOf(b.key).started
         if (!theirs.some(x => x.key === a.key)) theirs.push({ key: a.key, name: a.name, at: ev.at, fork: true })
-      } else if (ev.kind === 'sent') {
-        // A reply goes to the pipe the message came from.
-        const b = ev.to.startsWith('uds:') ? (byPipe.get(ev.to.slice(4)) ?? one(ev.name, a)) : one(ev.to, a)
-        if (b && b.key !== a.key) talk(a, b, 'out', ev.at)
-      } else {
-        const b = byPipe.get(ev.pipe.replace(/^uds:/, '')) ?? one(ev.name, a)
-        if (b && b.key !== a.key) talk(a, b, 'in', ev.at)
-      }
+      } else talk(a, b, ev.kind === 'sent' ? 'out' : 'in', ev.at)
     }
   }
   for (const links of out.values()) {
@@ -284,4 +318,54 @@ export function relate<T extends LinkItem>(
     links.talks = links.talks.slice(0, 8)
   }
   return out
+}
+
+/** Where an event was read: its transcript, the line's byte offset and uuid, the transcript's session id. */
+export interface EventSource {
+  transcript: string
+  offset: number
+  uuid: string
+  session: string
+}
+
+/**
+ * A line of the edge log (adapters/edge-log.ts): an event as the board read it, with the session
+ * it is from and the one at its other end, by their session ids, keys and names at that moment
+ * (null when the board had none). A message's text is left out.
+ */
+export type Edge = (LinkEvent extends infer E ? (E extends LinkEvent ? Omit<E, 'text'> : never) : never) & {
+  seq: number
+  session: string
+  key: string | null
+  sessionName: string | null
+  toSession: string | null
+  toKey: string | null
+  toName: string | null
+  transcript: string
+  offset: number
+  uuid: string
+}
+
+/** The edge log's line for an event of `item` (null: no session on the board reads that transcript now). */
+export function edgeOf(
+  ev: LinkEvent,
+  src: EventSource,
+  item: Pick<LinkItem, 'key' | 'name' | 'session'> | null,
+  other: Pick<LinkItem, 'key' | 'name' | 'session'> | null,
+  seq = 0,
+): Edge {
+  const { text: _text, ...fields } = ev as LinkEvent & { text?: string }
+  return {
+    seq,
+    ...fields,
+    session: item?.session || src.session,
+    key: item?.key ?? null,
+    sessionName: item?.name ?? null,
+    toSession: other?.session ?? null,
+    toKey: other?.key ?? null,
+    toName: other?.name ?? null,
+    transcript: src.transcript,
+    offset: src.offset,
+    uuid: src.uuid,
+  } as Edge
 }
