@@ -107,33 +107,16 @@ function envContent(existing: string | null, set: Record<string, string>): strin
   return out.join(eol) + eol
 }
 
-async function writeFile(sink: FileSink, input: WriteInput): Promise<WriteResult> {
-  const name = fillText(sink.name, input.params)
-  const path = join(sink.folder, name)
-  const rel = relative(sink.folder, path)
-  if (!safeName(name) || rel !== name || rel.includes(sep)) return refuse('secret.err.paramBad', { name })
-  let folder: ReturnType<typeof statSync> | null = null
-  try {
-    folder = statSync(sink.folder)
-  } catch {}
-  if (!folder?.isDirectory()) return refuse('secret.err.noFolder', { folder: sink.folder })
-  let there: ReturnType<typeof lstatSync> | null = null
-  try {
-    there = lstatSync(path)
-  } catch {}
-  // a link could point anywhere, and a folder is no file to write
-  if (there && (there.isSymbolicLink() || !there.isFile())) return refuse('secret.err.notFile', { path })
-  const existing = there ? readFileSync(path, 'utf8') : null
+/** What the file holds once the values are in, from what it holds now (null: no file), or why not. */
+function contentOf(sink: FileSink, input: WriteInput, path: string, existing: string | null): string | WriteResult {
   const all = { ...input.params, ...input.values }
   const once = onceFields(input.fields)
-  let content: string
   switch (sink.format) {
     case 'json': {
       const filled = fillDeep(sink.template, all)
       if (!sink.at) {
         if (once.length && existing !== null) return refuse('secret.err.onceThere', { what: path })
-        content = `${JSON.stringify(filled, null, 2)}\n`
-        break
+        return `${JSON.stringify(filled, null, 2)}\n`
       }
       let data: unknown = {}
       if (existing?.trim()) {
@@ -144,20 +127,23 @@ async function writeFile(sink: FileSink, input: WriteInput): Promise<WriteResult
         }
       }
       if (!isObject(data)) return refuse('secret.err.notJson', { path })
+      // the file's own keys only, read and made as data: never an object's prototype or maker
       const keys = sink.at.map(k => fillText(k, input.params))
       const last = keys.pop() as string
+      const put = (o: Record<string, unknown>, k: string, v: unknown): void => {
+        Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true })
+      }
       let node: Record<string, unknown> = data
       for (const k of keys) {
-        const next = node[k]
-        if (next === undefined) node[k] = {}
+        const next = Object.hasOwn(node, k) ? node[k] : undefined
+        if (next === undefined) put(node, k, {})
         else if (!isObject(next)) return refuse('secret.err.notJson', { path })
         node = node[k] as Record<string, unknown>
       }
       if (once.length && Object.hasOwn(node, last))
         return refuse('secret.err.onceThere', { what: [...keys, last].join(' › ') })
-      node[last] = filled
-      content = `${JSON.stringify(data, null, 2)}\n`
-      break
+      put(node, last, filled)
+      return `${JSON.stringify(data, null, 2)}\n`
     }
     case 'env': {
       const set: Record<string, string> = {}
@@ -171,30 +157,68 @@ async function writeFile(sink: FileSink, input: WriteInput): Promise<WriteResult
         if (quoted === null) return refuse('secret.err.valueQuotes', { name: key })
         set[key] = quoted
       }
-      content = envContent(existing, set)
-      break
+      return envContent(existing, set)
     }
     default:
       if (once.length && existing !== null) return refuse('secret.err.onceThere', { what: path })
-      content = fillText(sink.template as string, all)
+      return fillText(sink.template as string, all)
   }
-  // The rights first, while the file is empty or still holds what it held: the value goes into a
-  // file only the user can read. Windows: inheritance off, the user alone (as the tunnel's key).
-  const made = !there
-  if (made) closeSync(openSync(path, 'wx', 0o600))
-  const rights = process.platform === 'win32' ? await protectKey(path) : chmodRights(path)
-  if (!rights.ok) {
-    if (made) rmSync(path, { force: true })
-    return refuse('secret.err.rights', { path })
-  }
-  const fd = openSync(path, 'w')
-  try {
-    writeSync(fd, content)
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
-  }
-  return { ok: true, target: sink.at ? `${path} › ${sink.at.map(k => fillText(k, input.params)).join(' › ')}` : path }
+}
+
+/** One write to a path at a time in this process: two requests to one JSON file never lose each other's. */
+const writing = new Map<string, Promise<unknown>>()
+function oneAtATime<T>(path: string, fn: () => Promise<T>): Promise<T> {
+  const key = process.platform === 'win32' ? path.toLowerCase() : path
+  const run = (writing.get(key) ?? Promise.resolve()).then(fn, fn)
+  const done = run.catch(() => {})
+  writing.set(key, done)
+  void done.then(() => {
+    if (writing.get(key) === done) writing.delete(key)
+  })
+  return run
+}
+
+async function writeFile(sink: FileSink, input: WriteInput): Promise<WriteResult> {
+  const name = fillText(sink.name, input.params)
+  const path = join(sink.folder, name)
+  const rel = relative(sink.folder, path)
+  if (!safeName(name) || rel !== name || rel.includes(sep)) return refuse('secret.err.paramBad', { name })
+  return oneAtATime(path, async () => {
+    let folder: ReturnType<typeof statSync> | null = null
+    try {
+      folder = statSync(sink.folder)
+    } catch {}
+    if (!folder?.isDirectory()) return refuse('secret.err.noFolder', { folder: sink.folder })
+    let there: ReturnType<typeof lstatSync> | null = null
+    try {
+      there = lstatSync(path)
+    } catch {}
+    // a link could point anywhere, and a folder is no file to write
+    if (there && (there.isSymbolicLink() || !there.isFile())) return refuse('secret.err.notFile', { path })
+    // what would be refused is refused before the file's rights change
+    const first = contentOf(sink, input, path, there ? readFileSync(path, 'utf8') : null)
+    if (typeof first !== 'string') return first
+    // The rights first, while the file is empty or still holds what it held: the value goes into a
+    // file only the user can read. Windows: inheritance off, the user alone (as the tunnel's key).
+    const made = !there
+    if (made) closeSync(openSync(path, 'wx', 0o600))
+    const rights = process.platform === 'win32' ? await protectKey(path) : chmodRights(path)
+    if (!rights.ok) {
+      if (made) rmSync(path, { force: true })
+      return refuse('secret.err.rights', { path })
+    }
+    // read again: setting the rights took a moment, and the file is what it is now
+    const content = made ? first : contentOf(sink, input, path, readFileSync(path, 'utf8'))
+    if (typeof content !== 'string') return content
+    const fd = openSync(path, 'w')
+    try {
+      writeSync(fd, content)
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+    return { ok: true, target: sink.at ? `${path} › ${sink.at.map(k => fillText(k, input.params)).join(' › ')}` : path }
+  })
 }
 
 function chmodRights(path: string): { ok: boolean } {
@@ -219,7 +243,9 @@ async function bw(bin: string, args: string[], session: string, input?: string):
   const env = { ...process.env, BW_SESSION: session, BW_NOINTERACTION: 'true' }
   const viaCmd = process.platform === 'win32' && /\.(cmd|bat)$/i.test(bin)
   const [file, argv] = viaCmd ? [system32('cmd.exe'), ['/d', '/c', bin, ...args]] : [bin, args]
-  return runTree(file, argv, { env, timeout: RUN_MS, ...(input !== undefined && { input }) })
+  const r = await runTree(file, argv, { env, timeout: RUN_MS, ...(input !== undefined && { input }) })
+  // a program the timeout ended has failed, whatever its code says
+  return r.killed ? { ...r, code: 'timeout', stderr: 'timed out' } : r
 }
 
 /** What bw printed as JSON, or null. */
@@ -354,11 +380,13 @@ async function writeEnv(_sink: EnvSink, input: WriteInput): Promise<WriteResult>
       timeout: RUN_MS,
     },
   )
-  const said = r.stdout.trim()
+  const said = r.killed ? '' : r.stdout.trim()
   if (said.startsWith('taken:')) return refuse('secret.err.onceThere', { what: said.slice(6) })
   if (r.code !== 0 || said !== 'ok')
     return refuse('secret.err.envFailed', {
-      detail: scrub(r.stderr || r.error?.message || `exit ${String(r.code)}`, Object.values(input.values)),
+      detail: r.killed
+        ? 'timed out'
+        : scrub(r.stderr || r.error?.message || `exit ${String(r.code)}`, Object.values(input.values)),
     })
   return { ok: true, target: input.fields.map(f => f.name).join(', ') }
 }

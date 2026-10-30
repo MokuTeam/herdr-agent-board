@@ -40,9 +40,13 @@ function secretAsk(card: Card): string {
 
 /** The card's pending secret requests (#273), each with where it writes; absent when none. */
 const secretsField = (cfg: Config, card: Card): { secrets?: SecretView[] } => {
-  if (!Array.isArray(card.secrets)) return {}
-  const views = secretViews(secretsConfig(cfg.secrets, { home: homedir() }), card, t)
-  return views.length ? { secrets: views } : {}
+  if (!Array.isArray(card.secrets) || !pendingOf(requestsOf(card.secrets), Date.now()).length) return {}
+  try {
+    const views = secretViews(secretsConfig(cfg.secrets, { home: homedir() }), card, t)
+    return views.length ? { secrets: views } : {}
+  } catch {
+    return {} // a card any process wrote: what cannot be read of it never stops the board
+  }
 }
 
 const todosField = (card: Card): { todos?: Todo[] } => {

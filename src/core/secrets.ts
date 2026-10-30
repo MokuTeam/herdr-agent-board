@@ -174,9 +174,18 @@ export function safeName(name: string): boolean {
 const oneLine = (v: string): boolean =>
   v.length > 0 && v.length <= 100 && ![...v].some(ch => ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127)
 
-/** Whether a parameter's value passes its rule (and is one line, whatever the rule). */
+/**
+ * Names an object takes as its prototype or its maker: as a JSON key they would reach the board's
+ * own objects, not the file's.
+ */
+const OBJECT_KEYS = ['__proto__', 'constructor', 'prototype']
+
+/**
+ * Whether a parameter's value passes its rule, whatever the rule: one line, not only dots (a path
+ * segment that climbs, in a URL or a name), no object's own key (a JSON file's `at`).
+ */
 export function paramOk(rule: ParamRule, value: string): boolean {
-  if (!oneLine(value)) return false
+  if (!oneLine(value) || /^\.+$/.test(value) || OBJECT_KEYS.includes(value)) return false
   if (rule.kind === 'name') return safeName(value)
   if (rule.kind === 'text') return value.trim() === value
   try {
@@ -377,7 +386,7 @@ function httpSink(base: SinkBase, o: Record<string, unknown>, at: string): HttpS
       parsed = origin ? new URL(origin) : null
     } catch {}
     if (!parsed || placeholders(origin).length || parsed.username || parsed.password)
-      problems.push({ at: `${at}.url`, why: 'origin', value: url })
+      problems.push({ at: `${at}.url`, why: 'origin', value: url.replace(/\/\/[^/@]*@/, '//') })
     else if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && LOCAL_HOSTS.includes(parsed.hostname)))
       problems.push({ at: `${at}.url`, why: 'scheme', value: url })
     paramsOnly(url, params, `${at}.url`, problems)
@@ -396,7 +405,8 @@ function httpSink(base: SinkBase, o: Record<string, unknown>, at: string): HttpS
   if (o.auth !== undefined) {
     if (isObject(o.auth) && typeof o.auth.user === 'string' && typeof o.auth.password === 'string')
       auth = { user: o.auth.user, password: o.auth.password }
-    else problems.push({ at: `${at}.auth`, why: 'type', value: shown(o.auth) })
+    // what it holds may be a password typed into config.json: not said back
+    else problems.push({ at: `${at}.auth`, why: 'type', value: 'auth' })
   }
   const body = o.body ?? null
   if (body !== null && typeof body !== 'string' && !isObject(body) && !Array.isArray(body))
@@ -493,6 +503,9 @@ export function checkRequest(sink: Sink, params: Record<string, string>, asked: 
     if (value === undefined) return { ok: false, error: 'secret.err.paramMissing', vars: { name } }
     if (!paramOk(rule, value)) return { ok: false, error: 'secret.err.paramBad', vars: { name } }
   }
+  if (sink.kind === 'file' && sink.format === 'netrc')
+    for (const [name, value] of Object.entries(params))
+      if (/\s/.test(value)) return { ok: false, error: 'secret.err.paramBad', vars: { name } }
   // a file's name filled in must still be one name inside the folder
   if (sink.kind === 'file' && !safeName(fillText(sink.name, params)))
     return { ok: false, error: 'secret.err.paramBad', vars: { name: placeholders(sink.name).join(', ') } }
@@ -584,13 +597,13 @@ export function fingerprintOf(sink: Sink, params: Record<string, string>, fields
 
 /**
  * A text that may hold a typed value (a program's error, a server's answer) without any: each
- * value (and its trimmed form) replaced, one line, 300 characters at most.
+ * value (its trimmed form, its base64 as PowerShell and bw get it) replaced, one line, 300
+ * characters at most.
  */
 export function scrub(text: string, values: readonly string[]): string {
   let out = text
-  const all = [...new Set(values.flatMap(v => [v, v.trim()]).filter(v => v.length > 0))].sort(
-    (a, b) => b.length - a.length,
-  )
+  const forms = (v: string): string[] => [v, v.trim(), Buffer.from(v, 'utf8').toString('base64')]
+  const all = [...new Set(values.flatMap(forms).filter(v => v.length > 0))].sort((a, b) => b.length - a.length)
   for (const v of all) out = out.split(v).join('•••')
   return cleanText(out, 300)
 }
@@ -618,7 +631,9 @@ export interface SecretRequest {
 export const DEFAULT_EXPIRES_MS = 30 * 60_000
 export const MAX_EXPIRES_MS = 24 * 3_600_000
 /** A claim older than this is a submit that died midway. */
-export const WRITING_MS = 2 * 60_000
+export const WRITING_MS = 8 * 60_000
+/** The requests a card may have waiting at once. */
+export const MAX_PENDING = 5
 const KEPT_MS = 24 * 3_600_000
 const KEPT_MAX = 20
 
@@ -636,22 +651,35 @@ const STATUSES = ['pending', 'ok', 'declined', 'expired', 'cancelled']
 /** A card's requests as far as they are requests; anything else in the list is left out. */
 export function requestsOf(v: unknown): SecretRequest[] {
   if (!Array.isArray(v)) return []
+  // a card is any process's to write: an entry that is not wholly a request is left out, whole
   return v.filter(
     (r): r is SecretRequest =>
       isObject(r) &&
       typeof r.id === 'string' &&
       typeof r.sink === 'string' &&
       typeof r.title === 'string' &&
+      Number.isFinite(r.at) &&
       Number.isFinite(r.expires) &&
       STATUSES.includes(r.status as string) &&
+      isObject(r.by) &&
+      typeof r.by.key === 'string' &&
+      typeof r.by.name === 'string' &&
       Array.isArray(r.fields) &&
-      isObject(r.params),
+      r.fields.every(f => isObject(f) && typeof f.name === 'string' && typeof f.hidden === 'boolean') &&
+      isObject(r.params) &&
+      Object.values(r.params).every(p => typeof p === 'string'),
   )
 }
 
-/** Its status now: a pending one past its time has expired, whether or not anyone said so yet. */
+/** A submit writes it now: claimed less than WRITING_MS ago. */
+export const writingNow = (r: SecretRequest, now: number): boolean => !!r.writing && now - r.writing < WRITING_MS
+
+/**
+ * Its status now: a pending one past its time has expired, whether or not anyone said so yet; one
+ * a submit writes now has not (the submit came in time, and its write decides).
+ */
 export const statusOf = (r: SecretRequest, now: number): SecretRequest['status'] =>
-  r.status === 'pending' && now >= r.expires ? 'expired' : r.status
+  r.status === 'pending' && now >= r.expires && !writingNow(r, now) ? 'expired' : r.status
 
 export const pendingOf = (list: readonly SecretRequest[], now: number): SecretRequest[] =>
   list.filter(r => statusOf(r, now) === 'pending')

@@ -18,6 +18,8 @@ import { t } from '../core/lang.ts'
 import {
   checkRequest,
   fingerprintOf,
+  MAX_PENDING,
+  pendingOf,
   problemsText,
   pruned,
   requestsOf,
@@ -29,6 +31,7 @@ import {
   statusOf,
   valueProblem,
   WRITING_MS,
+  writingNow,
 } from '../core/secrets.ts'
 import type { SetupCheck } from '../core/setup.ts'
 import { cleanText } from '../core/time.ts'
@@ -102,6 +105,8 @@ export function askSecret(
   if (!title) return { ok: false, error: t('secret.err.title') }
   const check = checkRequest(sink, input.params, input.fields)
   if (!check.ok) return { ok: false, error: t(check.error, check.vars) }
+  if (pendingOf(requestsOf(readCard(by.key)?.secrets), now).length >= MAX_PENDING)
+    return { ok: false, error: t('secret.err.pendingMany', { n: MAX_PENDING }) }
   const request: SecretRequest = {
     id: randomBytes(6).toString('hex'),
     title,
@@ -170,7 +175,8 @@ function settle(
   return change(
     key,
     id,
-    r => r.status === 'pending',
+    // a write under way is the submit's to settle: no decline, cancel or expiry cuts across it
+    r => r.status === 'pending' && (status === 'ok' || !writingNow(r, now)),
     r => {
       const { writing: _, ...rest } = r
       return { ...rest, status, done: now, ...(target && { target }) }
@@ -210,7 +216,15 @@ export function declineSecret(id: string, now = Date.now()): Answer {
   if (!found) return no(404, t('secret.err.gone'))
   const r = expireIfDue(found.key, found.request, now)
   const done = r.status === 'pending' ? settle(found.key, id, 'declined', now) : null
-  if (!done) return no(409, t(`secret.err.was.${statusOf(r, now)}`))
+  if (!done) {
+    const again = ownRequest(found.key, id) ?? r
+    return no(
+      409,
+      again.status === 'pending' && writingNow(again, now)
+        ? t('secret.err.busy')
+        : t(`secret.err.was.${statusOf(again, now)}`),
+    )
+  }
   audit('declined', done, 'owner', {}, now)
   return { status: 200, body: { ok: true } }
 }

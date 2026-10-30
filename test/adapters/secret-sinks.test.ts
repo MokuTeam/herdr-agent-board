@@ -354,3 +354,38 @@ test('HTTP: the board makes the call to the sink’s host, follows no redirect, 
   const down = await write(sink, { conn: 'x' }, { apiToken: 'api-1', secret: VALUE })
   assert.deepEqual(down, { ok: false, error: 'secret.err.httpFailed', vars: { host: `127.0.0.1:${port}` } })
 })
+
+test('from the review: a JSON key that names a prototype stays the file’s own key, never the board’s objects (#273)', async () => {
+  const home = join(isolatedHome(), 'home')
+  const sink = sinkOf(
+    {
+      kind: 'file',
+      path: '~/p.json',
+      format: 'json',
+      at: ['{{a}}', '{{b}}'],
+      template: { token: '{{token}}' },
+      params: { a: 'text', b: 'text' },
+    },
+    home,
+  )
+  // past the request's own checks, straight to the writer: it holds by itself
+  const keys: [string, string][] = [
+    ['__proto__', 'toString'],
+    ['ok', '__proto__'],
+    ['constructor', 'prototype'],
+  ]
+  for (const [a, b] of keys) {
+    const r = await writeSink({
+      sink,
+      params: { a, b },
+      fields: [{ name: 'token', hidden: true }],
+      values: { token: VALUE },
+    })
+    assert.equal(r.ok, true)
+  }
+  assert.equal(Object.hasOwn(Object.prototype, 'token'), false)
+  assert.equal({}.toString, Object.prototype.toString)
+  assert.equal(JSON.stringify({}), '{}')
+  const written = readFileSync(join(home, 'p.json'), 'utf8')
+  assert.ok(written.includes('"__proto__"'), written)
+})

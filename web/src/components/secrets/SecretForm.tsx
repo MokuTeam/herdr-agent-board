@@ -49,6 +49,20 @@ const QUIET = {
   'data-bwignore': '',
 } as const
 
+/**
+ * A browser that masks a text field by CSS gets one: its own password manager never offers to save
+ * a token as a password once the form goes away (`autocomplete` does not stop it for a password
+ * field). Elsewhere a password field.
+ */
+const CSS_MASK =
+  typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('-webkit-text-security', 'disc')
+const maskProps = (masked: boolean) =>
+  masked
+    ? CSS_MASK
+      ? { type: 'text', className: 'qa-input masked' }
+      : { type: 'password', className: 'qa-input' }
+    : { type: 'text', className: 'qa-input' }
+
 type Status = { kind: 'idle' } | { kind: 'sending'; op: 'submit' | 'decline' } | { kind: 'error'; text: string }
 
 function SecretForm({ request: r }: { request: SecretView }) {
@@ -135,8 +149,7 @@ function SecretForm({ request: r }: { request: SecretView }) {
                   {f.once && <small>{t('secret.form.once')}</small>}
                 </span>
                 <input
-                  className="qa-input"
-                  type={masked ? 'password' : 'text'}
+                  {...maskProps(masked)}
                   value={values[f.name] ?? ''}
                   disabled={locked}
                   aria-label={f.name}
@@ -164,8 +177,7 @@ function SecretForm({ request: r }: { request: SecretView }) {
                 <small>{t('secret.form.sessionHint')}</small>
               </span>
               <input
-                className="qa-input"
-                type="password"
+                {...maskProps(true)}
                 value={session}
                 disabled={locked}
                 aria-label={t('secret.form.session')}

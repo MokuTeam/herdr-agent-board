@@ -10,9 +10,11 @@ import {
   fillDeep,
   fillText,
   fingerprintOf,
+  paramOk,
   parseExpires,
   parseField,
   problemsText,
+  requestsOf,
   type SecretField,
   type SecretRequest,
   type Sink,
@@ -325,4 +327,65 @@ test('a pending request puts the card under "Needs me", working or not; an expir
         columnOf(status, card),
         `${status} ${JSON.stringify(card)}`,
       )
+})
+
+test('from the review: no object key, no dot segment, under any rule; a netrc parameter without a space (#273)', () => {
+  for (const rule of [{ kind: 'name' }, { kind: 'text' }, { kind: 'regex', source: '.*' }] as const)
+    for (const value of ['__proto__', 'constructor', 'prototype', '.', '..', '...'])
+      assert.equal(paramOk(rule, value), false, `${rule.kind} ${value}`)
+  const json = conf('linux', {
+    s: {
+      kind: 'file',
+      path: '~/x.json',
+      format: 'json',
+      at: ['{{a}}', '{{b}}'],
+      template: { t: '{{v}}' },
+      params: { a: 'text', b: 'text' },
+    },
+  }).sinks.get('s') as Sink
+  assert.equal(checkRequest(json, { a: '__proto__', b: 'toString' }, []).ok, false)
+  assert.equal(checkRequest(json, { a: 'ok', b: 'constructor' }, []).ok, false)
+  assert.equal(checkRequest(json, { a: 'ok', b: 'fine' }, []).ok, true)
+  const http = conf('linux', {
+    s: { kind: 'http', url: 'https://api.example.com/v1/projects/{{p}}/secrets', body: '{{v}}', params: { p: 'text' } },
+  }).sinks.get('s') as Sink
+  for (const p of ['..', '.']) assert.equal(checkRequest(http, { p }, []).ok, false, p)
+  const netrc = conf('linux', {
+    s: {
+      kind: 'file',
+      path: '~/.n',
+      format: 'netrc',
+      template: 'machine {{host}} password {{v}}',
+      params: { host: 'text' },
+    },
+  }).sinks.get('s') as Sink
+  assert.equal(checkRequest(netrc, { host: 'a.example.com login evil' }, []).ok, false)
+  assert.equal(checkRequest(netrc, { host: 'a.example.com' }, []).ok, true)
+  // what config.json holds as a password is not said back by a problem
+  const said = problemsText(
+    [
+      ...conf('linux', {
+        s: { kind: 'http', url: 'https://u:pw-in-config@api.example.com/', auth: 'pw-in-config', body: '{{v}}' },
+      }).sinks.values(),
+    ][0]?.problems ?? [],
+    en,
+  )
+  assert.equal(said.includes('pw-in-config'), false, said)
+  assert.equal(scrub(`echo ${Buffer.from('k3y-value').toString('base64')}`, ['k3y-value']), 'echo •••')
+})
+
+test('from the review: an entry on a card that is not wholly a request is left out, and a write under way does not expire', () => {
+  const good = request({ expires: Date.now() + 60_000 })
+  const bad = [
+    { ...good, fields: [null] },
+    { ...good, fields: [{ name: 'x' }] },
+    { ...good, params: { a: 1 } },
+    { ...good, by: null },
+    { ...good, at: 'now' },
+  ]
+  assert.deepEqual(requestsOf([...bad, good]), [good])
+  assert.equal(secretViews(conf(), { secrets: [...bad, good] }, en).length, 1)
+  const writing = request({ expires: 10_000, writing: 9_000 })
+  assert.equal(statusOf(writing, 20_000), 'pending')
+  assert.equal(statusOf(writing, 9_000 + 9 * 60_000), 'expired')
 })

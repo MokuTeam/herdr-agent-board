@@ -126,7 +126,7 @@ test('one write at a time: a submit while another writes is refused; one that di
   claim(Date.now())
   const busy = await submitSecret(cfg, r.id, { values: { token: VALUE }, fingerprint: fingerprint(cfg, r) })
   assert.deepEqual(busy, { status: 409, body: { ok: false, error: 'Another submit is writing this request now' } })
-  claim(Date.now() - 3 * 60_000)
+  claim(Date.now() - 9 * 60_000)
   const done = await submitSecret(cfg, r.id, { values: { token: ` ${VALUE}\n` }, fingerprint: fingerprint(cfg, r) })
   assert.equal(done.status, 200)
   // what a paste brings around a key is no part of it
@@ -187,4 +187,44 @@ test('`board secret request` waits for the owner and prints what came of it; --n
   lines.length = 0
   assert.equal(await secretCmd(['sinks'], { ...ctx, session: null }), 0)
   assert.equal(lines[0], 'tok · file · fields: token')
+})
+
+test('a pane-keyed session, a name with spaces and another alphabet, a value with % and Cyrillic: as any other', async () => {
+  const { home, cfg } = setUp()
+  const pane = { key: 'pane-wP:p8Y', name: 'Сессия с пробелом' }
+  const asked = askSecret(cfg, pane, { title: 'Ключ API', sink: 'tok', params: {}, fields: [], expiresMs: 60_000 })
+  assert.ok(asked.ok)
+  assert.equal(ownRequest(pane.key, asked.request.id)?.by.name, 'Сессия с пробелом')
+  const value = 'пароль%20100% ✓'
+  const done = await submitSecret(cfg, asked.request.id, {
+    values: { token: value },
+    fingerprint: fingerprint(cfg, asked.request),
+  })
+  assert.equal(done.status, 200)
+  assert.deepEqual(JSON.parse(readFileSync(join(home, 'token.json'), 'utf8')), { svc: { token: value } })
+  assert.equal(ownRequest(pane.key, asked.request.id)?.status, 'ok')
+  assert.equal(readFileSync(auditFile(), 'utf8').includes(value), false)
+})
+
+test('from the review: no decline, cancel or expiry cuts across a write under way; five waiting at most (#273)', () => {
+  const { cfg } = setUp()
+  const r = ask(cfg, Date.now() - 50_000, 60_000)
+  updateCard('s1', saved => ({
+    ...saved,
+    secrets: requestsOf(saved?.secrets).map(x => ({ ...x, writing: Date.now() })),
+  }))
+  assert.deepEqual(declineSecret(r.id), {
+    status: 409,
+    body: { ok: false, error: 'Another submit is writing this request now' },
+  })
+  assert.equal(cancelSecret('s1', r.id)?.status, 'pending')
+  // past its time while the write goes on: still the write's to settle
+  assert.equal(expireIfDue('s1', ownRequest('s1', r.id) as SecretRequest, Date.now() + 30_000).status, 'pending')
+  assert.equal(ownRequest('s1', r.id)?.status, 'pending')
+  for (let i = 0; i < 4; i++) ask(cfg)
+  const sixth = askSecret(cfg, me, { title: 'One more', sink: 'tok', params: {}, fields: [], expiresMs: 60_000 })
+  assert.deepEqual(sixth, {
+    ok: false,
+    error: 'This session has 5 requests waiting already: let the owner answer those first',
+  })
 })

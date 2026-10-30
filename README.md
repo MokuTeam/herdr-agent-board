@@ -1914,8 +1914,8 @@ whole value must match), and otherwise a **field**, which you type. A file's nam
 `at` and a URL take parameters only: a secret there would end up in listings and logs.
 
 - `file`: `path`, or `folder` and `name` (absolute or `~/…`; the folder must be there). `format`
-  `json` puts the template under the keys of `at` and keeps the rest of the file (without `at` it
-  is the whole file); `env` sets its variables and keeps the file's other lines; `netrc` and
+  `json` puts the template under the keys of `at` and keeps the file's other keys (the file is
+  written again as JSON, two spaces; without `at` the template is the whole file); `env` sets its variables and keeps the file's other lines; `netrc` and
   `text` are the whole file. The file is written in place, never through a temp file, and made
   yours alone before anything goes in (mode 600; on Windows inheritance off and full control to
   your user only, as the tunnel's key). A link or a folder where the file goes is refused.
@@ -1949,7 +1949,8 @@ their brief, only where config.json has sinks.
 **The form**, at the top of the session's sheet: what it is for, where the values go (the file and
 where in it, the vault's folder and item, the variables, the method and URL) with the request's
 parameters, then a field for each, masked ones with Show; spelling services, autofill and password
-managers are told to keep out. **Write** sends the values in one request to the board, which writes
+managers are told to keep out (where the browser masks a text field by CSS, a masked field is one,
+so its own password manager never offers to save a token). **Write** sends the values in one request to the board, which writes
 the sink and answers ok or why not; a failed write keeps the request open for another try. When
 the sink changed in config.json since the form was shown, the write is refused and the form shows
 the new place. **Decline** answers the agent without a write.
