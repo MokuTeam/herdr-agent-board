@@ -50,7 +50,12 @@ test('a call keeps the state it started from, and drops it once over', () => {
     before: 'here',
   })
   expect(setPresence('call', 'user', 'web', 200).changed).toBe(false)
-  expect(setPresence('away', 'user', 'web', 300).presence).toEqual({ state: 'away', since: 300, by: 'user', from: 'web' })
+  expect(setPresence('away', 'user', 'web', 300).presence).toEqual({
+    state: 'away',
+    since: 300,
+    by: 'user',
+    from: 'web',
+  })
   expect(setPresence('call', 'user', 'cli', 400).presence).toMatchObject({ state: 'call', before: 'away' })
   expect(readPresence()).toMatchObject({ state: 'call', before: 'away', since: 400 })
 })

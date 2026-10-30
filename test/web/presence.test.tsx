@@ -149,9 +149,8 @@ test('on a call (#276): the switch says so and a press ends it where it started;
   expect(presenceBody('call', false)).toEqual({ state: 'call', from: 'web' })
 
   const ids = (data: Partial<PresenceView>) =>
-    findAll(
-      renderInBoard(<PresenceSwitch />, board({ data: payload({ presence: view(data) }) })),
-      el => /^presence-/.test(el.attrs.get('id') ?? ''),
+    findAll(renderInBoard(<PresenceSwitch />, board({ data: payload({ presence: view(data) }) })), el =>
+      /^presence-/.test(el.attrs.get('id') ?? ''),
     ).map(el => [el.attrs.get('id'), el.attrs.get('data-state'), el.attrs.get('aria-pressed')])
   expect(ids({})).toEqual([['presence-switch', 'here', 'false']])
   expect(ids({ calls: true })).toEqual([

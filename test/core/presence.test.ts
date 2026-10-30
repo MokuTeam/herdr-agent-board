@@ -176,10 +176,11 @@ test('a MokuPilot call: on while it runs, back to the state before once it ends;
     assert.equal(d.step(onCall('7:1')).flip, 'call')
     assert.deepEqual([d.p.state, d.p.before], ['call', 'here'])
     // A long call without typing, a locked screen: still on the call, nothing offered.
-    for (const obs of [idle(40), LOCKED, idle(0)]) assert.deepEqual(d.step(onCall('7:1', obs)), {
-      hint: null,
-      memory: { since: d.p.since, agreed: true, call: '7:1' },
-    })
+    for (const obs of [idle(40), LOCKED, idle(0)])
+      assert.deepEqual(d.step(onCall('7:1', obs)), {
+        hint: null,
+        memory: { since: d.p.since, agreed: true, call: '7:1' },
+      })
     assert.equal(d.step(noCall()).flip, 'here')
     assert.equal(d.p.state, 'here')
   }
@@ -213,7 +214,8 @@ test('a call the board set ends on the first look without one (it ended while th
   const p: Presence = { state: 'call', since: 1, by: 'auto', from: 'auto', before: 'away' }
   assert.equal(presenceStep(p, idle(0), AUTO, null).flip, undefined)
   assert.equal(presenceStep(p, noCall(), AUTO, null).flip, 'away')
-  assert.equal(presenceStep({ ...p, before: undefined }, noCall(), AUTO, null).flip, 'here')
+  const { before: _, ...noBefore } = p
+  assert.equal(presenceStep(noBefore, noCall(), AUTO, null).flip, 'here')
 })
 
 test('mode off: a call switches nothing', () => {
