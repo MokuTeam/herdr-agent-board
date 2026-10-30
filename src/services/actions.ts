@@ -427,6 +427,24 @@ export async function sleepSession(deps: Deps, item: Item): Promise<ActionResult
   return deps.wake.sleep(item)
 }
 
+/** How long a message to a session it just woke waits for herdr to name the session in its pane, and how often it asks. */
+export const NAMED_WAIT_MS = 15_000
+const NAMED_POLL_MS = 500
+
+/**
+ * herdr's agent in the pane a wake just brought the session back to (#267). herdr names the
+ * session there only once its own SessionStart hook reported it (a PowerShell script on Windows),
+ * which can come seconds after Claude is up and idle, all a wake waits for: while the pane's agent
+ * has no session, it is asked again. No agent, another session, or none by the deadline is
+ * answered as it is.
+ */
+async function namedAgent(pane: string, session: string | null): Promise<HerdrAgent | null> {
+  for (const deadline = Date.now() + NAMED_WAIT_MS; ; await Bun.sleep(NAMED_POLL_MS)) {
+    const agent = await agentGet(pane)
+    if (!agent || agent.session || !session || Date.now() >= deadline) return agent
+  }
+}
+
 /** Focus the session's pane in herdr, waking it first; `raise` also brings the terminal window up. */
 export async function focus(
   deps: Deps,
@@ -486,7 +504,7 @@ export async function send(
   }
   if (!pane) return { ok: false, error: t('err.noPane') }
   try {
-    const agent = await agentGet(pane)
+    const agent = item.sleeping ? await namedAgent(pane, expectedSession) : await agentGet(pane)
     // Recheck after wake too: the pane may now host a different session.
     const before = refused(agent)
     if (before) return before
