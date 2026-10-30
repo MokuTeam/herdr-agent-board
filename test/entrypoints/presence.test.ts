@@ -159,3 +159,24 @@ test('board presence / board away: refused while off, switch and read while on',
   expect(bad.code).not.toBe(0)
   expect(bad.out).toMatch(/usage: board away \[on\|off\]/)
 })
+
+test('on a call (#276): board presence call sets it; the next prompt says the user is on a call, once', async () => {
+  const box = await sandbox()
+  config(box, { presence: true })
+  expect(contextOf(await claude(box, 'SessionStart'))).toMatch(HERE)
+  expect(await cli(box, ['presence', 'call'])).toEqual({ code: 0, out: 'ok · call' })
+  expect(JSON.parse(readFileSync(presenceFile(box), 'utf8'))).toMatchObject({
+    state: 'call',
+    by: 'user',
+    before: 'here',
+  })
+  expect((await cli(box, ['presence', 'call'])).out).toBe('ok · already call')
+  const news = contextOf(await claude(box, 'UserPromptSubmit'))
+  expect(news).toMatch(/The user is on a call \(since \d\d:\d\d\) and slow to answer/)
+  expect(await claude(box, 'UserPromptSubmit')).toBe('')
+  expect((await cli(box, ['presence'])).out).toMatch(/on a call/)
+  expect((await cli(box, ['presence', 'here'])).out).toBe('ok · here')
+  const bad = await cli(box, ['presence', 'busy'])
+  expect(bad.code).not.toBe(0)
+  expect(bad.out).toMatch(/usage: board presence \[here\|away\|call\]/)
+})
