@@ -1699,7 +1699,10 @@ it); Claude keeps the conversation on disk, so it can come back.
 - Its reminders and repeating pings wait in the record and come back with it: under their old
   ids, a repeating one from its next run, a one-off that came due meanwhile late (the prompt says
   by how much). A restart on its way is dropped: a resume is one. A MokuPilot report with a
-  receipt keeps the session on the board until it is delivered.
+  receipt keeps the session on the board until it is delivered. Meanwhile `board schedule
+  --session <id|name|pane>` (and `--all`) lists them, marked parked; `board unschedule <id>`
+  removes one; `board schedule --move <id>` moves one to the session that runs it (`--session`: to
+  that one, which must be on the board), as Return would put it back, the prompt saying whose it was.
 - The card file stays as it was (name, lane, notes), so the session comes back with them, also
   when you resume it by hand elsewhere.
 - Many at once: the menu of the "Idle" column (its head, or a lane's "Idle" in a narrow window)
@@ -3159,8 +3162,11 @@ board every "<cron>" "<text>"  the same on a cron schedule
 board restart ["<note>"]  once this turn is over: Claude exits and resumes in its pane (MCP
                           servers, settings, hooks, skills load anew), then gets
                           "[board reminder; restarted as you asked] <note>"; see Restart
-board schedule [--all]    this session's entries (every session's)
-board unschedule <id|all> remove an entry (all: every entry of this session)
+board schedule [--all]    this session's entries (every session's), those parked with an
+                          archived session too; see Archive
+board schedule --move <id>  move an entry parked with an archived session to this session
+                          (--session: to that one)
+board unschedule <id|all> remove an entry, a parked one too (all: every entry of this session)
 board call-report --session <id> --file <report.md>
                           a MokuPilot call's results for the session (MokuPilot runs it):
                           typed in once the session is free, for its information

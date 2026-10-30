@@ -19,8 +19,11 @@
 //                            herdr-wake put it to sleep and wake it again (MCP servers, settings,
 //                            hooks and skills load anew, the conversation stays), then types
 //                            "[board reminder; restarted as you asked] <text>" into it
-//   board schedule [--all]   this session's entries (every session's)
-//   board unschedule <id|all>    removes an entry (all: every entry of this session)
+//   board schedule [--all]   this session's entries (every session's); those parked with an
+//                            archived session too, marked (--session finds one by its name or pane)
+//   board schedule --move <id>   moves an entry parked with an archived session to this session
+//                            (or --session's), into the schedule as Return would put it back
+//   board unschedule <id|all>    removes an entry, a parked one too (all: every entry of this session)
 //   board call-report --session <id> --file <report.md> [--report-id <stable-id>]
 //                            a MokuPilot call's results (services/mokupilot.ts) for the
 //                            session it was a fork of: the board types them in once the session
@@ -137,14 +140,24 @@ import { keyFor, type TopicSnapshot } from '../core/wake/topics.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
 import { shortWhen } from '../core/when-format.ts'
 import { checkWake, wakeAnswers } from '../services/actions.ts'
-import { askArchive, closeDue, getArchived, profileDoubt } from '../services/archive.ts'
+import {
+  askArchive,
+  closeDue,
+  dropHeld,
+  dueAgain,
+  getArchived,
+  heldEntry,
+  listArchive,
+  moveHeld,
+  profileDoubt,
+} from '../services/archive.ts'
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { type MoveOutcome, moveMany } from '../services/move.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away | call] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away | call] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -228,16 +241,23 @@ const liveSessions = (): Map<string, LiveHit> => {
   return deps.homes.liveSessions([profiles.inheritedDir, ...profiles.list.map(p => p.dir)])
 }
 
-/** { key, cwd } of the session the command is about. */
-async function resolveSession(): Promise<Session> {
+/**
+ * { key, cwd } of the session the command is about. `archived`: a --session name or pane that
+ * no session on the board has may be an archived one's (its entries wait in its record).
+ */
+async function resolveSession({ archived = false }: { archived?: boolean } = {}): Promise<Session> {
   if (target) {
     if (UUID.test(target)) return { key: target, cwd: '' }
     const t = target.toLowerCase()
     const item = (await collect(deps)).find(i =>
       [i.name, i.autoName, i.pane, i.session].some(v => v && v.toLowerCase() === t),
     )
-    if (!item) throw new Error(`no session "${target}" on the board`)
-    return { key: item.key, cwd: item.cwd, name: item.name, pane: item.pane }
+    if (item) return { key: item.key, cwd: item.cwd, name: item.name, pane: item.pane }
+    const r = archived
+      ? listArchive().find(x => [x.name, x.autoName, x.pane, x.session, x.key].some(v => v && v.toLowerCase() === t))
+      : undefined
+    if (!r) throw new Error(`no session "${target}" on the board${archived ? ' or in its archive' : ''}`)
+    return { key: r.key, cwd: r.cwd, name: r.name }
   }
   const pane = process.env.HERDR_PANE_ID
   const fromCodex = codexCaller()
@@ -382,7 +402,7 @@ function restartState(e: ScheduleEntry): string {
 /** The wake the board talks to, as its lines name it: the board's own (#119), else the separate herdr-wake plugin, as before. */
 const wakeName = (): string => (currentWakeMode(cfg).kind === 'new' ? 'wake' : 'herdr-wake')
 
-function entryLine(e: ScheduleEntry, now: number, withSession: boolean): string {
+function entryLine(e: ScheduleEntry, now: number, withSession: boolean, parked = false): string {
   const parts =
     e.kind === 'restart' || e.kind === 'sleep'
       ? [e.id, `${e.kind}, asked ${stamp(e.created ?? e.next)}`, restartState(e)]
@@ -393,10 +413,23 @@ function entryLine(e: ScheduleEntry, now: number, withSession: boolean): string 
           e.idle ? 'when free' : 'on time',
         ]
   if (withSession) parts.push(e.name || e.key)
+  if (parked) parts.push('parked in the archive')
   if (e.pendingSince && e.kind !== 'restart' && e.kind !== 'sleep')
     parts.push(`due, waits for the session since ${stamp(Number(e.pendingSince))}`)
   if (e.text) parts.push(clip(e.text, 80))
   return parts.join(' · ')
+}
+
+/**
+ * The lines of entries that wait with archived sessions: due as Return would put them back
+ * (services/archive.ts dueAgain), then what else can be done with them.
+ */
+function parkedLines(held: ScheduleEntry[], now: number, withSession: boolean): string[] {
+  if (!held.length) return []
+  return [
+    ...held.map(e => entryLine({ ...e, next: dueAgain(e, now) ?? e.next }, now, withSession, true)),
+    'parked entries come back with their session; board schedule --move <id> moves one to this session (--session <id|name|pane>: to that one), board unschedule <id> removes it',
+  ]
 }
 
 function line(key: string, cwd: string): string {
@@ -556,15 +589,21 @@ async function main(): Promise<void> {
   // Neither needs to know which session asks.
   if (cmd === 'schedule' && rest.includes('--all')) {
     const list = listEntries()
-    if (!list.length) return console.log('nothing scheduled')
+    const parked = listArchive().flatMap(r => r.held)
+    if (!list.length && !parked.length) return console.log('nothing scheduled')
     for (const e of list) console.log(entryLine(e, Date.now(), true))
+    for (const l of parkedLines(parked, Date.now(), true)) console.log(l)
     return
   }
   if (cmd === 'unschedule' && rest[0] && rest[0].toLowerCase() !== 'all') {
-    const e = removeEntry(rest[0].toLowerCase())
+    const id = rest[0].toLowerCase()
+    // Not in the schedule: one parked with an archived session goes from its record.
+    const removed = removeEntry(id)
+    const held = removed ? null : heldEntry(id)
+    const e = removed ?? (held && dropHeld(held.record.key, id)[0])
     if (!e) throw new Error(`no entry "${rest[0]}"; see board schedule`)
     return console.log(
-      `ok · removed ${e.id} (${e.cron ? `every "${e.cron}"` : stamp(e.next)}${e.name ? `, ${e.name}` : ''}): ${clip(e.text)}`,
+      `ok · removed ${e.id} (${e.cron ? `every "${e.cron}"` : stamp(e.next)}${e.name ? `, ${e.name}` : ''}${held ? ', parked in the archive' : ''}): ${clip(e.text)}`,
     )
   }
   if (cmd === 'call-report') return callReport()
@@ -582,7 +621,11 @@ async function main(): Promise<void> {
   if (cmd === 'tg-key') return tgKey()
   if (cmd === 'presence' || cmd === 'away') return presence()
 
-  const s = await resolveSession()
+  // schedule --move <id>: a parked entry to this session (or --session's, which must be on the board).
+  const mv = cmd === 'schedule' ? rest.indexOf('--move') : -1
+  const moving = mv >= 0 ? (rest[mv + 1] ?? '') : null
+  // Listing and removing reach an archived session's parked entries; nothing else is for one.
+  const s = await resolveSession({ archived: (cmd === 'schedule' && moving === null) || cmd === 'unschedule' })
   const now = Date.now()
   switch (cmd) {
     case 'show':
@@ -677,19 +720,23 @@ async function main(): Promise<void> {
     case 'restart':
       return restart(s)
     case 'schedule': {
+      if (moving !== null) return moveParked(moving, s, now)
       const list = listEntries().filter(e => e.key === s.key)
-      if (!list.length) return console.log('nothing scheduled for this session')
+      const parked = getArchived(s.key)?.held ?? []
+      if (!list.length && !parked.length) return console.log('nothing scheduled for this session')
       for (const e of list) console.log(entryLine(e, now, false))
+      for (const l of parkedLines(parked, now, false)) console.log(l)
       return
     }
     case 'todo':
       return todo(s.key)
     case 'unschedule': {
-      // An id is removed above, whoever set it; here only "all" of this session's.
+      // An id is removed above, whoever set it; here only "all" of this session's, parked ones too.
       if (rest[0]?.toLowerCase() !== 'all') throw new Error('usage: board unschedule <id|all>')
       const mine = listEntries().filter(e => e.key === s.key)
       for (const e of mine) removeEntry(e.id)
-      return console.log(`ok · removed ${mine.length} ${mine.length === 1 ? 'entry' : 'entries'}`)
+      const n = mine.length + dropHeld(s.key).length
+      return console.log(`ok · removed ${n} ${n === 1 ? 'entry' : 'entries'}`)
     }
     default:
       throw new Error(`unknown command "${cmd}". ${USAGE}`)
@@ -697,6 +744,25 @@ async function main(): Promise<void> {
   const cat = readCard(s.key)?.category
   const extra = cat && !cfg.categories.some(c => c.id === cat) ? ` (new lane "${categoryInfo(cfg, cat).title}")` : ''
   console.log(`ok · ${line(s.key, s.cwd)}${extra}`)
+}
+
+/**
+ * `board schedule --move <id>`: an entry parked with an archived session moves to this session (or
+ * --session's), with its pane and folder, into the schedule as Return would put it back
+ * (services/archive.ts moveHeld). Only to a session that is not in the archive itself; an entry
+ * in the schedule already is not moved.
+ */
+async function moveParked(id: string, s: Session, now: number): Promise<void> {
+  if (!id) throw new Error('usage: board schedule --move <id> [--session <id|name|pane>]')
+  if (getArchived(s.key))
+    throw new Error(`${s.name || s.key} is in the archive too; move the entry to a session on the board`)
+  const { from, ...to } = await entryFor(s)
+  const e = moveHeld(id.toLowerCase(), to)
+  if (!e) throw new Error(`no entry "${id}" is parked in the archive; see board schedule --all`)
+  const when = e.cron ? `every "${e.cron}", next ${stamp(e.next)}` : stamp(e.next)
+  console.log(
+    `ok · moved ${e.id} to ${to.name || to.key.slice(0, 8)}: ${when} (${fromNow(e.next, now)}): ${clip(e.text)} · cancel: board unschedule ${e.id}${await schedulerNote()}`,
+  )
 }
 
 /**
