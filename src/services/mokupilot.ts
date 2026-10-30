@@ -7,12 +7,14 @@
 // minute for one installed or removed meanwhile.
 import { type SpawnOptions, spawn } from 'node:child_process'
 import { statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { cwdOf } from '../adapters/claude-home.ts'
 import { mokupilotCommand } from '../adapters/setup-facts.ts'
+import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
 import { callable, callCommand, callLink } from '../core/mokupilot.ts'
 import { mokupilotMode, type Resolved, resolveMode, type Viewer } from '../core/mokupilot-mode.ts'
-import { inBoardProfile, type ProfileSet, profileLabel } from '../core/profiles.ts'
+import { absoluteProfileDir, configDirFor, inBoardProfile, type ProfileSet, profileLabel } from '../core/profiles.ts'
 import type { Config, Item } from '../core/types.ts'
 
 /** What starting the launcher gives back: it started, or why not. */
@@ -27,7 +29,7 @@ export interface CallOptions {
   env?: Record<string, string | undefined>
   /** child_process.spawn. */
   run?: (file: string, args: string[], options: SpawnOptions) => CallChild
-  /** The profiles (Deps.profiles): a call is taken only from a session in the board's own. */
+  /** The profiles (Deps.profiles): a call from a session in another than the board's own starts in its profile. */
   profiles?: ProfileSet
   /** Who asks (the request's peer and X-Forwarded-For), for mode `auto`; none: this computer. */
   viewer?: Viewer | null | undefined
@@ -61,15 +63,35 @@ const reason = (err: unknown): string => {
 }
 
 /**
+ * CLAUDE_CONFIG_DIR for a call with a fork of `item`: undefined for a session in the board's own
+ * profile (the launcher keeps the env the board inherited), else the folder of the profile it runs
+ * in, or the folder it reported that no profile has; null when neither is known.
+ */
+function callConfigDir(
+  item: Pick<Item, 'profile' | 'profileFolder'>,
+  set: ProfileSet,
+  platform: string,
+): string | null | undefined {
+  if (inBoardProfile(item, set)) return undefined
+  const dir = itemProfile(item, set.list)?.dir || absoluteProfileDir(item.profileFolder, homedir(), platform)
+  if (!dir) return null
+  return configDirFor({ dir }, set.inheritedDir) ?? undefined
+}
+
+/**
  * Start a MokuPilot call with a fork of the session `item` (a board item with its transcript):
  * { ok, state: 'launched' } once MokuPilot's launcher started, { ok, state: 'link', url } when the
  * call goes to the viewer's computer (nothing runs here: the page opens the link), { ok: false,
  * error } when it could not; past the first checks each says where it went and why (`resolved`,
  * `why`, the viewer's address under `auto`). It runs on its own, past the board's lifetime. This is NOT an application-ready,
  * call-started or recording-started acknowledgement: an IPC handshake is required for those. The
- * folder is the one the session started in. A running MokuPilot takes the call over in its own
- * env, so with `profiles` a session in another profile than the board's own is refused before
- * anything starts.
+ * folder is the one the session started in. With `profiles`, a session in another profile than
+ * the board's own has the launcher start with that profile's CLAUDE_CONFIG_DIR: MokuPilot finds
+ * the session and runs its fork in it, and hands it to a copy already running in another profile
+ * (one from before that takes the call in its own profile, where the session is not found, and
+ * starts nothing). Refused before anything starts: such a session whose folder is not known, and
+ * one whose call goes to the viewer's computer, whose MokuPilot runs the fork over ssh in its
+ * login's profile.
  */
 export async function startCall(
   cfg: Partial<Config>,
@@ -77,14 +99,17 @@ export async function startCall(
   { platform = process.platform, env = process.env, run = spawn, profiles, viewer, own = () => [] }: CallOptions = {},
 ): Promise<CallResult> {
   if (!item || !callable(item)) return { ok: false, error: t('mokupilot.err.notClaude') }
-  if (profiles && !inBoardProfile(item, profiles)) {
-    const board = profiles.inherited?.title || profiles.inheritedDir
-    return { ok: false, error: t('mokupilot.err.profile', { board, profile: profileLabel(item, profiles) }) }
-  }
+  const configDir = profiles ? callConfigDir(item, profiles, platform) : undefined
+  if (profiles && configDir === null)
+    return { ok: false, error: t('mokupilot.err.profileUnknown', { profile: profileLabel(item, profiles) }) }
   if (cfg.mokupilot === false) return { ok: false, error: t('mokupilot.err.off') }
   // Here or on the viewer's computer: by the mode, and under `auto` by who asks.
   const mode = mokupilotMode(cfg.mokupilot)
   const decided = resolveMode(mode, viewer, mode === 'auto' && viewer ? own() : [])
+  if (profiles && configDir && decided.resolved === 'link') {
+    const board = profiles.inherited?.title || profiles.inheritedDir
+    return { ok: false, error: t('mokupilot.err.profile', { board, profile: profileLabel(item, profiles) }) }
+  }
   const where: Where = {
     resolved: decided.resolved,
     why: decided.why,
@@ -125,6 +150,8 @@ export async function startCall(
   const childEnv = { ...env }
   delete childEnv.HERDR_PANE_ID
   delete childEnv.HERDR_TAB_ID
+  // The session's profile: MokuPilot hands it to a copy already running in another.
+  if (configDir) childEnv.CLAUDE_CONFIG_DIR = configDir
   return new Promise(res => {
     let child: CallChild
     try {

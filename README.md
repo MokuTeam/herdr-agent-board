@@ -60,9 +60,8 @@ notifications: Windows only). Steps 1 and 2 are what the board needs; the rest a
    shown), its conversation looked for in that profile's folder only. It stays in the archive,
    saying why, when the board cannot be sure: that profile is no longer listed, the card does not
    say its profile while more than one is shown, the session ran in another profile than its
-   start asked for, or its conversation is in another profile's folder. A MokuPilot call is still
-   refused outside the board's own profile ([Web board](#web-board)). With `~/.claude` alone
-   nothing changes.
+   start asked for, or its conversation is in another profile's folder. A MokuPilot call starts in
+   the session's own profile ([Web board](#web-board)). With `~/.claude` alone nothing changes.
 2. **A key** (recommended), in herdr's `config.toml` (`%APPDATA%\herdr\config.toml` on Windows,
    `~/.config/herdr/config.toml` elsewhere), then `herdr server reload-config`. Without it the
    board opens with `herdr plugin action invoke agent-board.open`.
@@ -248,10 +247,14 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   is free (woken if it sleeps), for its information, as `[mokupilot call report]`, the report, and
   a note not to start work on it unless you ask; its conversation shows "MokuPilot call results"
   as a quiet line that opens to the report, its paths (the full protocol, the transcript) as file
-  chips. With more than one Claude profile, a call goes only from a session in the board's own
-  profile (the one its `CLAUDE_CONFIG_DIR` points to): a running MokuPilot takes the call over in
-  its own env, so a fork of a session in another profile would run in the wrong account. The board
-  refuses that call before anything starts, saying so.
+  chips. With more than one Claude profile, a call from a session in another profile than the
+  board's own (the one its `CLAUDE_CONFIG_DIR` points to) starts MokuPilot's launcher with that
+  profile's `CLAUDE_CONFIG_DIR`: MokuPilot looks the session up and runs its fork in that profile,
+  and hands it to a copy already running in another one (MokuPilot from MokuTeam/MokuPilot#119 on;
+  an older running copy takes the call in its own profile, does not find the session there and
+  starts nothing). The board refuses the call before anything starts when it does not know the
+  session's profile folder, and when the call goes to the viewer's computer (below), whose
+  MokuPilot runs the fork over ssh in its login's profile.
   Where the call starts is Settings → MokuPilot… (shown while the board offers calls):
   - **Auto** (the default): looking at the board on its own computer, the call starts there;
     from any other computer (through `tailscale serve`, your own domain, the remote mode), on
@@ -506,10 +509,9 @@ is started. What the board refuses and the "wrong profile" check: [New sessions]
 **Helpers and forks keep their parent's profile.** "New here" from a card starts in that card's
 profile and no other (from a card in the wrong profile, you choose). `spawn-agent`, run by an
 agent, starts the new session in the agent's own profile, hidden or not; `--profile <id>` names
-another, shown one. See [spawn-agent](#spawn-agent). A MokuPilot call is the exception: it goes
-only from a session in the board's own profile, since a running MokuPilot takes the call over in
-its own env and a fork from another profile would run in its account. The board refuses the call
-from any other profile before anything starts (see [Web board](#web-board)).
+another, shown one. See [spawn-agent](#spawn-agent). A MokuPilot call starts in the session's
+profile too, whichever one a running MokuPilot is in; by link (MokuPilot on the viewer's computer)
+it goes only from a session in the board's own profile (see [Web board](#web-board)).
 
 **Waking stays in the profile.** Every wake, whoever asks for it (the Wake button, Enter on the
 terminal board, a message, a reminder, a restart, another session's SendMessage, a Telegram

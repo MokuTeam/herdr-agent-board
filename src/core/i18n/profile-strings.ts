@@ -46,9 +46,12 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     // a reminder whose session is gone, not sent to the session of another profile now in its pane (services/scheduler.ts)
     'sched.err.profile':
       'The session now in its pane runs in profile {now}, not in {was}, where this was set, so it does not go there; if it is for that session, set it there again',
-    // a MokuPilot call from a session in another profile than the board's (services/mokupilot.ts)
+    // a MokuPilot call by link (the viewer's MokuPilot, over ssh) from a session in another profile than the board's (services/mokupilot.ts)
     'mokupilot.err.profile':
       'MokuPilot takes the profile of its running copy, {board}: a call from {profile} would run in the wrong account',
+    // a MokuPilot call from a session in another profile than the board's whose folder is not known (services/mokupilot.ts)
+    'mokupilot.err.profileUnknown':
+      'The folder of this session’s profile is not known ({profile}): a call could run in the wrong account',
     // herdr's notification of a session whose hooks report another profile than its start asked for (server/board-state.ts)
     'profile.wrongTitle': 'Wrong profile: {name}',
     'profile.wrongBody': '{name} was started in {want} but runs in {got}',
@@ -163,9 +166,12 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     // a reminder whose session is gone, not sent to the session of another profile now in its pane (services/scheduler.ts)
     'sched.err.profile':
       'Сессия, что сейчас в её панели, работает в профиле {now}, а не в {was}, где это поставлено, поэтому туда оно не уходит; если оно для той сессии, поставь его там заново',
-    // a MokuPilot call from a session in another profile than the board's (services/mokupilot.ts)
+    // a MokuPilot call by link (the viewer's MokuPilot, over ssh) from a session in another profile than the board's (services/mokupilot.ts)
     'mokupilot.err.profile':
       'MokuPilot берёт профиль своей запущенной копии, {board}: звонок из {profile} пошёл бы не в том аккаунте',
+    // a MokuPilot call from a session in another profile than the board's whose folder is not known (services/mokupilot.ts)
+    'mokupilot.err.profileUnknown':
+      'Папка профиля этой сессии неизвестна ({profile}): звонок мог бы пойти не в том аккаунте',
     // herdr's notification of a session whose hooks report another profile than its start asked for (server/board-state.ts)
     'profile.wrongTitle': 'Не тот профиль: {name}',
     'profile.wrongBody': '{name}: запущена в профиле {want}, а работает в {got}',
