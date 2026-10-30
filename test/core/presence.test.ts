@@ -140,7 +140,10 @@ test('the brief tells presence only when the setup turned it on', () => {
 })
 
 // A MokuPilot call (#276): observations carry its id while it runs, null once none runs.
-const onCall = (id: string, obs: Observation = idle(0)): Observation => ({ ...obs, call: id })
+const onCall = (id: string, obs: Observation = idle(0), started = 0): Observation => ({
+  ...obs,
+  call: { id, started },
+})
 const noCall = (obs: Observation = idle(0)): Observation => ({ ...obs, call: null })
 
 /** Steps through observations as the board does: each flip recorded as the board records it. */
@@ -198,8 +201,8 @@ test('a call cleared by hand stays cleared until the next call; one set by hand 
   assert.equal(d.step(onCall('7:1')).flip, undefined)
   assert.equal(d.step(onCall('7:1', idle(0))).flip, undefined)
   assert.equal(d.p.state, 'here')
-  // The next call is a new one.
-  assert.equal(d.step(onCall('7:9')).flip, 'call')
+  // The next call, started after the switch, is a new one.
+  assert.equal(d.step(onCall('7:9', idle(0), 60_000)).flip, 'call')
 
   // "On a call" pressed with no MokuPilot call: no look ends it, nor idle time.
   const byHand: Presence = { state: 'call', since: 60_000, by: 'user', from: 'web', before: 'here' }
@@ -213,7 +216,7 @@ test('a call cleared by hand stays cleared until the next call; one set by hand 
 test('a call the board set ends on the first look without one (it ended while the board was down); a page touch is no look', () => {
   const p: Presence = { state: 'call', since: 1, by: 'auto', from: 'auto', before: 'away' }
   assert.equal(presenceStep(p, idle(0), AUTO, null).flip, undefined)
-  assert.equal(presenceStep(p, noCall(), AUTO, null).flip, 'away')
+  assert.equal(presenceStep(p, noCall(NOTHING), AUTO, null).flip, 'away')
   const { before: _, ...noBefore } = p
   assert.equal(presenceStep(noBefore, noCall(), AUTO, null).flip, 'here')
 })
@@ -252,4 +255,22 @@ test('the file keeps the state a call returns to; the line says the user is on a
   assert.match(line, /^\[agent-board\] The user is on a call \(since 15:40\) and slow to answer/)
   assert.match(line, /board ask/)
   assert.doesNotMatch(line, /[\u2013\u2014]/)
+})
+
+test('a call the user cleared by hand stays cleared across a board restart (a step with no memory)', () => {
+  const cleared: Presence = { state: 'here', since: 70_000, by: 'user', from: 'web' }
+  assert.equal(presenceStep(cleared, onCall('7:1', idle(0), 60_000), AUTO, null).flip, undefined)
+  // A call that started after the switch is a new one; a switch the board made is no say of the user's.
+  assert.equal(presenceStep(cleared, onCall('7:2', idle(0), 80_000), AUTO, null).flip, 'call')
+  assert.equal(presenceStep({ ...cleared, by: 'auto' }, onCall('7:1', idle(0), 60_000), AUTO, null).flip, 'call')
+})
+
+test('away before the call, plainly here at its end: here under auto; suggest and silence keep the state before', () => {
+  const p: Presence = { state: 'call', since: 1, by: 'auto', from: 'auto', before: 'away' }
+  const mem: StepMemory = { since: 1, agreed: true, call: '7:1' }
+  assert.equal(presenceStep(p, noCall(idle(0)), AUTO, mem).flip, 'here')
+  assert.equal(presenceStep(p, noCall(idle(30)), AUTO, mem).flip, 'away')
+  assert.equal(presenceStep(p, noCall(NOTHING), AUTO, mem).flip, 'away')
+  assert.equal(presenceStep(p, noCall(idle(0)), { mode: 'suggest', idleMinutes: 10 }, mem).flip, 'away')
+  assert.equal(presenceStep({ ...p, before: 'here' }, noCall(idle(30)), AUTO, mem).flip, 'here')
 })

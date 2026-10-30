@@ -6,7 +6,7 @@ import { expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readCard, writeCard } from '../../src/adapters/cards.ts'
 import { currentPresence, presenceFile, readPresence } from '../../src/adapters/presence-store.ts'
-import { NO_PRESENCE, type Observation } from '../../src/core/presence.ts'
+import { type MokupilotCall, NO_PRESENCE, type Observation } from '../../src/core/presence.ts'
 import type { Config } from '../../src/core/types.ts'
 import { createPresence } from '../../src/services/presence.ts'
 import { isolatedHome } from '../support/env.ts'
@@ -20,7 +20,7 @@ function rig(presence: Config['presence'], mokupilot?: unknown) {
   let asked = 0
   // MokuPilot (#276): whether it has run here, and its call in progress; each look counted.
   let here = false
-  let call: string | null = null
+  let call: MokupilotCall | null | undefined = null
   const looks = { here: 0, call: 0 }
   const svc = createPresence({
     cfg,
@@ -51,9 +51,13 @@ function rig(presence: Config['presence'], mokupilot?: unknown) {
     later(ms: number) {
       clock += ms
     },
-    mokupilot(on: boolean, id: string | null = null) {
+    mokupilot(on: boolean, id: string | null = null, started = 0) {
       here = on
-      call = id
+      call = id === null ? null : { id, started }
+    },
+    /** call.json there but held by another program: no answer. */
+    unreadable() {
+      call = undefined
     },
     looks,
     get changes() {
@@ -229,4 +233,31 @@ test('a MokuPilot call puts the user on it and back; the view offers one by hand
   expect(currentPresence().state).toBe('call')
   r.svc.set('here', 'web')
   expect(currentPresence().state).toBe('here')
+})
+
+test('a call that cannot be read changes nothing; one no longer watched ends if the board set it', async () => {
+  isolatedHome()
+  const r = rig({ mode: 'auto', idleMinutes: 10 })
+  r.mokupilot(true, '7:1')
+  r.see({ idleSec: 5 })
+  await r.svc.tick()
+  expect(currentPresence().state).toBe('call')
+  // Held by another program a moment: still on the call, and no new call when it reads again.
+  r.unreadable()
+  r.later(30_000)
+  await r.svc.tick()
+  r.mokupilot(true, '7:1')
+  r.later(30_000)
+  await r.svc.tick()
+  expect(currentPresence()).toMatchObject({ state: 'call', since: 1_000 })
+  // `"mokupilot": false` mid-call: the board's call ends.
+  r.cfg.mokupilot = false
+  r.later(30_000)
+  await r.svc.tick()
+  expect(currentPresence()).toMatchObject({ state: 'here', by: 'auto' })
+  // One the user set stays theirs.
+  r.svc.set('call', 'cli')
+  r.later(30_000)
+  await r.svc.tick()
+  expect(currentPresence()).toMatchObject({ state: 'call', by: 'user' })
 })

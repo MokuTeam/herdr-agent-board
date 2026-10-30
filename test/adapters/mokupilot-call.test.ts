@@ -1,6 +1,6 @@
 // MokuPilot's call in progress as the board reads it (#276): call.json in its state folder while
 // a call runs; no file, a file of a process that is gone, one older than a day or not of MokuPilot's
-// shape is no call.
+// shape is no call; one that cannot be read says nothing.
 import { expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -22,11 +22,19 @@ test('a call: its process and start; none without the file or its process', () =
   expect(read()).toBeNull()
   write(file, { pid: 4242, started: NOW / 1000 - 600 })
   expect(mokupilotHere(home)).toBe(true)
-  expect(read()).toBe(`4242:${NOW / 1000 - 600}`)
+  expect(read()).toEqual({ id: `4242:${NOW / 1000 - 600}`, started: NOW - 600_000 })
   expect(read(false)).toBeNull()
   // The process it names, asked for real: this one runs.
   write(file, { pid: process.pid, started: Date.now() / 1000 })
-  expect(callInProgress({ file })).toMatch(new RegExp(`^${process.pid}:`))
+  expect(callInProgress({ file })?.id).toMatch(new RegExp(`^${process.pid}:`))
+})
+
+test('a file that cannot be read is no answer, not the end of a call', () => {
+  const home = isolatedHome()
+  const file = callFile(home)
+  // A folder where the file should be: reading it fails as a file held by another program does.
+  mkdirSync(file, { recursive: true })
+  expect(callInProgress({ file, now: () => NOW, alive: () => true })).toBeUndefined()
 })
 
 test('a stale or foreign file is no call', () => {

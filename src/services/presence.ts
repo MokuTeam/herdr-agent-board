@@ -17,6 +17,7 @@ import {
   unmarkSessions,
 } from '../adapters/presence-store.ts'
 import {
+  type MokupilotCall,
   type Observation,
   type Presence,
   type PresenceConfig,
@@ -55,8 +56,8 @@ interface Options {
   /** The sessions on the board (card keys). */
   sessions?: () => Iterable<string>
   observe?: () => Promise<Observation>
-  /** The MokuPilot call in progress (its id), or null. */
-  call?: () => string | null
+  /** The MokuPilot call in progress, null for none, undefined when it could not be read. */
+  call?: () => MokupilotCall | null | undefined
   /** Whether MokuPilot has run on this computer. */
   callsHere?: () => boolean
   now?: () => number
@@ -94,8 +95,12 @@ export function createPresence({
   }
   const detecting = (c: PresenceConfig | null): c is PresenceConfig => !!c && c.mode !== 'off'
 
-  function apply(c: PresenceConfig, obs: Observation): void {
-    const step = presenceStep(currentPresence(), obs, c, memory)
+  /** One step; `unwatched`: MokuPilot's calls are not looked at (any more). */
+  function apply(c: PresenceConfig, obs: Observation, unwatched = false): void {
+    const p = currentPresence()
+    // A call the board set ends once its calls are no longer watched ("mokupilot": false, say).
+    const seen = unwatched && p.state === 'call' && p.by === 'auto' ? { ...obs, call: null } : obs
+    const step = presenceStep(p, seen, c, memory)
     memory = step.memory
     let changed = false
     if (step.flip) {
@@ -146,7 +151,9 @@ export function createPresence({
         detects = said
         onChange()
       }
-      apply(c, calls() ? { ...obs, call: call() } : obs)
+      const watched = calls()
+      const inProgress = watched ? call() : undefined
+      apply(c, inProgress === undefined ? obs : { ...obs, call: inProgress }, !watched)
     } catch (err) {
       log(`presence: ${err instanceof Error ? err.message : String(err)}`)
     } finally {

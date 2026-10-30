@@ -192,12 +192,18 @@ function Get-LastAssistantText([string]$TranscriptPath) {
 }
 
 # The board's presence says the user is on a call. presence.json is in the board's state folder
-# only while presence is on.
+# only while presence is on; one left after presence was turned off with the board closed counts
+# only while config.json still turns presence on (`true` or a section, as the board reads it).
 function Test-OnCall {
     if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { return $false }
     $file = Join-Path $env:LOCALAPPDATA "herdr\plugins\agent-board\presence.json"
     if (-not (Test-Path -LiteralPath $file)) { return $false }
-    try { (Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json).state -eq "call" } catch { $false }
+    try {
+        if ((Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json).state -ne "call") { return $false }
+        $config = Join-Path $env:APPDATA "herdr\plugins\config\agent-board\config.json"
+        $on = (Get-Content -LiteralPath $config -Raw -Encoding UTF8 | ConvertFrom-Json).presence
+        ($on -is [bool] -and $on) -or $on -is [Management.Automation.PSCustomObject]
+    } catch { $false }
 }
 
 function Show-Toast([string]$Title, [string]$Body, [string]$Attribution, [string]$PaneId, [bool]$Quiet) {

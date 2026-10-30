@@ -314,15 +314,19 @@ test.skipIf(!windows)(
   async () => {
     const box: Sandbox = await sandbox()
     const local = join(box.dir, 'local')
+    const roaming = join(box.dir, 'roaming')
     const dir = join(local, 'herdr', 'plugins', 'agent-board')
-    const ask = (env: Record<string, string>) =>
+    const configDir = join(roaming, 'herdr', 'plugins', 'config', 'agent-board')
+    const ask = (env: Record<string, string> = {}) =>
       Bun.spawnSync([powershell, '-NoProfile', '-Command', `${onCallPart()}\nTest-OnCall`], {
-        env: { ...process.env, ...env },
+        env: { ...process.env, LOCALAPPDATA: local, APPDATA: roaming, ...env },
       })
         .stdout.toString()
         .trim()
-    assert.equal(ask({ LOCALAPPDATA: local }), 'False')
+    assert.equal(ask(), 'False')
     mkdirSync(dir, { recursive: true })
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(configDir, 'config.json'), JSON.stringify({ language: 'en', presence: { mode: 'auto' } }))
     for (const [content, want] of [
       ['{"state":"call","since":1,"by":"auto","before":"here"}', 'True'],
       ['{"state":"here","since":1,"by":"auto"}', 'False'],
@@ -330,10 +334,25 @@ test.skipIf(!windows)(
       ['not json', 'False'],
     ] as const) {
       writeFileSync(join(dir, 'presence.json'), content)
-      assert.equal(ask({ LOCALAPPDATA: local }), want, content)
+      assert.equal(ask(), want, content)
     }
     writeFileSync(join(dir, 'presence.json'), '{"state":"call","since":1,"by":"auto"}')
     assert.equal(ask({ LOCALAPPDATA: '' }), 'False')
+    // Presence as config.json has it: `true` or a section is on; anything else, or none, is off.
+    for (const [presence, want] of [
+      [true, 'True'],
+      [{}, 'True'],
+      [false, 'False'],
+      [1, 'False'],
+      ['yes', 'False'],
+      [[], 'False'],
+      [null, 'False'],
+    ] as const) {
+      writeFileSync(join(configDir, 'config.json'), JSON.stringify({ presence }))
+      assert.equal(ask(), want, JSON.stringify(presence))
+    }
+    writeFileSync(join(configDir, 'config.json'), '{"language":"en"}')
+    assert.equal(ask(), 'False')
   },
   30_000,
 )

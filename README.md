@@ -1751,8 +1751,8 @@ On Windows, `herdr plugin action invoke agent-board.notifications` (`bun src/ent
 
 The title is `<workspace> · <session>`. None comes for the pane you are looking at (focused in
 herdr, with the terminal in front), for a subagent, or for a `claude -p` run inside a session.
-While [presence](#presence) has you on a call, each goes to the notification center without
-popping up. A
+While [presence](#presence) has you on a call (its `presence.json` says so and config.json still
+turns presence on), each goes to the notification center without popping up. A
 newer one replaces the pane's last one in the notification center. They make no sound (herdr
 plays its own). A click opens that session on the web board when the board runs and has it (as
 `src/entrypoints/web-open.ts --pane` does); else herdr goes to the pane and the terminal comes to
@@ -1802,7 +1802,8 @@ Settings → Presence turns it on, or `presence` in config.json:
 
 A third state, "on a call", comes from [MokuPilot](https://github.com/MokuTeam/MokuPilot): while
 it has a call in progress on this computer, the board puts you on a call, and back to the state
-before (here or away) once the call ends. A call is no guess, so `suggest` switches for it as
+before (here or away) once the call ends; under `auto`, away before it but plainly back at its end
+(you ended it) is here. A call is no guess, so `suggest` switches for it as
 `auto` does; `off` does not. While you are on a call, idle time and a locked screen change
 nothing. Sessions read that you are on a call and slow to answer: they go on with what they can
 decide themselves, and their questions wait under "needs you" on the board. The Windows
@@ -1810,7 +1811,7 @@ notifications (see [Notifications](#notifications)) go quietly to the notificati
 instead of popping up. You can set the call by hand too, for one MokuPilot does not see: the
 phone button next to the switch (shown where MokuPilot runs), `board presence call`, or the API.
 Pressing the switch while on a call ends it. Clearing it by hand while a MokuPilot call goes on
-holds until the next call.
+holds until the next call, across a restart of the board too.
 
 A switch by hand wins until the next clear change. Press "away" at the keyboard and the input right
 after does not bring you back; once you have actually gone and come back, it does. The same goes
@@ -1849,9 +1850,11 @@ Detection asks the computer every 30 seconds (`src/adapters/idle.ts`), only whil
 MokuPilot's calls: while a call runs, MokuPilot keeps `call.json` in its state folder
 (`~/.meeting-copilot`), with its process id and the call's start, and takes it away when the call
 ends. Detection reads it on each ask. A file whose process is gone (MokuPilot ended without taking
-it away) or older than a day counts as no call. Whether MokuPilot has run on this computer (that
-folder) is looked up once a minute while presence is on; without it, or with `"mokupilot": false`,
-no call is read and the view has no `calls`, so the board is as it was. On a call the state
+it away) or older than a day counts as no call; one that cannot be read for a moment (another
+program holds it) changes nothing. Whether MokuPilot has run on this computer (that folder) is
+looked up once a minute while presence is on; without it, or with `"mokupilot": false`, no call is
+read and the view has no `calls`, so the board is as it was. A call the board set ends once calls
+are no longer read. On a call the state
 keeps `before`, the state the call returns to (`src/adapters/mokupilot-call.ts`).
 
 ## Tasks

@@ -44,7 +44,7 @@ export interface PresenceView extends Presence {
   hint: PresenceState | null
   /** Whether this computer told detection anything at its last ask; null before one. */
   detects: boolean | null
-  /** MokuPilot runs on this computer: its calls are seen, and the switch offers one by hand. */
+  /** MokuPilot has run on this computer: the switch offers a call by hand; detection sees its calls. */
   calls?: true
 }
 
@@ -95,14 +95,21 @@ export const isPresence = (v: unknown): v is Presence => {
   )
 }
 
+/** A MokuPilot call in progress: an id no next call shares, and when it started (ms). */
+export interface MokupilotCall {
+  id: string
+  started: number
+}
+
 /**
  * What the computer said, each null when it cannot tell: seconds since the last input, a locked
- * screen; and the MokuPilot call in progress (its id), null for none, absent where no one looked.
+ * screen; and the MokuPilot call in progress, null for none, absent where no one looked (or the
+ * look failed).
  */
 export interface Observation {
   idleSec: number | null
   locked: boolean | null
-  call?: string | null
+  call?: MokupilotCall | null
 }
 
 /** What an observation says of the user: gone, at the computer, or nothing (no way to tell). */
@@ -141,18 +148,22 @@ export interface Step {
 export function presenceStep(p: Presence, obs: Observation, cfg: PresenceConfig, memory: StepMemory | null): Step {
   // A state the board set agreed with what it saw; one the user set has to be seen first.
   const kept = memory && memory.since === p.since ? memory : { since: p.since, agreed: p.by === 'auto' }
-  const call = obs.call === undefined ? memory?.call : obs.call || undefined
+  const call = obs.call === undefined ? memory?.call : obs.call?.id
   const mem: StepMemory = call ? { ...kept, call } : withoutCall(kept)
   if (cfg.mode === 'off') return { hint: null, memory: mem }
-  // A call that started puts the user on it, whatever they said before; one seen to end brings
+  const seen = seenOf(obs, cfg.idleMinutes)
+  // A call that started puts the user on it, whatever they said before it (what they switched to
+  // by hand since it started stays, a board restart between included); one seen to end brings
   // back the state before it, as does no call at all under a call the board set (one that ended
   // while the board was down). While on a call, idle input and a locked screen say nothing.
-  if (call && call !== memory?.call && p.state !== 'call') return { flip: 'call', hint: null, memory: mem }
-  if (p.state === 'call')
-    return obs.call === null && (memory?.call || p.by === 'auto')
-      ? { flip: p.before ?? 'here', hint: null, memory: mem }
-      : { hint: null, memory: mem }
-  const seen = seenOf(obs, cfg.idleMinutes)
+  if (obs.call && call !== memory?.call && p.state !== 'call' && !(p.by === 'user' && p.since >= obs.call.started))
+    return { flip: 'call', hint: null, memory: mem }
+  if (p.state === 'call') {
+    if (obs.call !== null || !(memory?.call || p.by === 'auto')) return { hint: null, memory: mem }
+    // Away before the call, but the user is plainly here at its end (they ended it): here.
+    const back = cfg.mode === 'auto' && p.before === 'away' && seen === 'back' ? 'here' : (p.before ?? 'here')
+    return { flip: back, hint: null, memory: mem }
+  }
   if (!seen) return { hint: null, memory: mem }
   const want: PresenceState = seen === 'away' ? 'away' : 'here'
   if (want === p.state) return { hint: null, memory: mem.agreed ? mem : { ...mem, agreed: true } }
