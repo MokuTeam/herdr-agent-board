@@ -3,7 +3,9 @@
    calendar's; the clients as the toolbar's lanes control; the figure to bill, large, what it
    leaves out quiet under it and each client's share as a bar in the lanes' colors; each client
    with its own figure over one grouped list of its lines, a hairline between them, and a line's
-   entries under its name; the zone once, at the foot. One duration form everywhere, in tabular
+   entries under its name, then where the line stands in each of the client's systems (a pill each:
+   entered, partly, not, changed after) and Raise or Trim; non-billable and held entries apart,
+   quieter; the zone once, at the foot. One duration form everywhere, in tabular
    numerals so figures line up. An entry opens in place, the row grown into its editor. On a
    phone the list follows a sideways swipe (pan-y leaves the vertical scroll to the browser).
    Every rule here selects by class: the other sheets are upstream's, rule for rule. */
@@ -123,9 +125,43 @@
 .time-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* Raise or Trim to: under the figure it brings the entries to. */
+/* Under a line: its state in each system, at the start; Raise or Trim at the end. */
+.time-line-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.time-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px 0 7px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--separator);
+  color: var(--label-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  transition: background 120ms ease, color 120ms ease, transform 100ms ease-out;
+}
+.time-mark-glyph { font-size: 11px; line-height: 1; }
+.time-mark[data-state="entered"] {
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  box-shadow: none;
+  color: color-mix(in srgb, var(--green) 70%, var(--label));
+}
+.time-mark[data-state="partly"] { background: color-mix(in srgb, var(--green) 7%, transparent); }
+.time-mark[data-state="changed"] {
+  background: color-mix(in srgb, var(--orange) 18%, transparent);
+  box-shadow: none;
+  color: color-mix(in srgb, var(--orange) 70%, var(--label));
+}
+.time-mark:hover:not(:disabled) { color: var(--label); }
+.time-mark:active:not(:disabled) { transform: scale(0.96); }
+.time-mark:disabled { opacity: 0.6; }
+.time-mark:focus-visible, .time-raise:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Billed time not entered yet: said beside the figure, in the color of what is still to do. */
+.time-unentered { color: color-mix(in srgb, var(--orange) 70%, var(--label)); }
 .time-raise {
-  display: block;
-  margin: 6px 0 0 auto;
+  margin-left: auto;
   padding: 4px 10px;
   border: 0;
   border-radius: 999px;
@@ -142,6 +178,7 @@
 /* Held: in the list, counted nowhere, quieter than the rest. */
 .time-held .time-line-name, .time-held .time-what { color: var(--label-2); }
 .time-held .time-figures { color: var(--label-3); }
+.time-unbilled .time-figures { color: var(--label-2); }
 
 .time-empty { margin: 4px 2px 16px; color: var(--label-2); font-size: 13px; }
 .time-zone { margin: 0 2px; color: var(--label-3); font-size: 11.5px; }
@@ -333,6 +370,38 @@
 }
 .time-stale span { flex: 1 1 200px; }
 .time-stale .button { background: var(--accent); color: #fff; }
+/* Billable: a switch, its default the config's (said while the entry follows it). */
+.time-switch { display: flex; align-items: center; gap: 8px; color: var(--label); font-size: 13px; }
+.time-switch input {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 22px;
+  margin: 0;
+  border-radius: 999px;
+  background: var(--fill);
+  appearance: none;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+.time-switch input::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 180ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.time-switch input:checked { background: var(--green); }
+.time-switch input:checked::before { transform: translateX(14px); }
+.time-switch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.time-switch input:disabled { opacity: 0.6; }
+.time-switch small { color: var(--label-2); font-size: 11.5px; }
+.time-entered { margin: 0; color: var(--label-2); font-size: 12px; }
 .time-by { margin: 0; color: var(--label-3); font-size: 11.5px; overflow-wrap: anywhere; }
 .time-session { padding: 0; border: 0; background: none; color: var(--label-2); font: inherit; font-weight: 600; cursor: pointer; }
 .time-session:hover { color: var(--accent); text-decoration: underline; }
@@ -347,6 +416,7 @@
   .time-row { padding-top: 7px; padding-bottom: 7px; }
   .time-step, .time-today, .time-add-open, .time-actions .button { min-height: 36px; }
   .time-step { width: 36px; }
+  .time-mark { height: 30px; padding: 0 12px 0 10px; }
   .time-raise { padding: 7px 12px; }
   .time-field input, .time-field select, .time-steps { height: 38px; }
   .time-field input, .time-field select, .time-field textarea { font-size: 16px; }
@@ -363,8 +433,143 @@
   .time-today:active:not(:disabled),
   .time-add-open:active,
   .time-raise:active:not(:disabled),
+  .time-mark:active:not(:disabled),
   .time-steps button:active:not(:disabled),
   .time-actions .button:active:not(:disabled) { transform: none; }
   .time-days { transition: none !important; transform: none !important; }
+  .time-switch input, .time-switch input::before { transition: none; }
 }
 @keyframes time-fade { from { opacity: 0; } }
+
+/* The editor's "New project…" (#237): the name typed where the list was, "Back to the list" a
+   quiet link beside it; what Save will do in a line under the row (the danger color when it waits). */
+.time-new-project label { color: var(--label-2); }
+.time-new-row { display: flex; align-items: center; gap: 6px; }
+.time-new-row input { flex: 1 1 auto; }
+.time-new-back, .time-set-link {
+  flex: none;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.time-new-back:hover:not(:disabled), .time-set-link:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.time-new-back:active:not(:disabled), .time-set-link:active:not(:disabled) { transform: scale(0.96); }
+.time-new-back:disabled, .time-set-link:disabled { opacity: 0.5; cursor: default; }
+.time-project-note { margin: -4px 0 0; color: var(--label-2); font-size: 12px; line-height: 1.35; }
+
+/* Settings → Time tracking… (web/src/components/time/TimeSettingsPanel.tsx, #237): grouped lists
+   as the Time panel's lines are (a surface, a hairline between rows); a client a row with its
+   lane's color, a line of what it has and its switch, opened in place, its chevron turning;
+   a client off quieter; links for the small changes, buttons for the ones that add. */
+.time-set-body { display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
+.time-set-body > * { flex: none; }
+.time-set-group { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-card); list-style: none; }
+.time-set-group > .time-switch + .time-set-zone { margin-top: 12px; }
+.time-set-hint { margin: 4px 0 0; }
+.time-set-zone select { max-width: 320px; }
+.time-set-sub { margin: 14px 2px 6px; color: var(--label-2); font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; }
+.time-set-client-body .time-set-sub:first-child { margin-top: 4px; }
+.time-set-quiet { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.time-set-refusal { margin-top: 6px; }
+
+.time-set-clients, .time-set-lanes { padding: 0; }
+.time-set-client, .time-set-lane { position: relative; padding: 0 12px; }
+.time-set-client + .time-set-client::before, .time-set-lane + .time-set-lane::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 12px;
+  height: 0.5px;
+  background: var(--separator);
+}
+.time-set-client-head { display: flex; align-items: center; gap: 10px; min-height: 48px; }
+.time-set-disclose {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 0;
+  border: 0;
+  background: none;
+  color: var(--label);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.time-set-disclose svg { flex: none; width: 13px; height: 13px; stroke-width: 2.2; color: var(--label-3); transition: transform 200ms cubic-bezier(0.2, 0.9, 0.3, 1); }
+.time-set-client.open .time-set-disclose svg { transform: rotate(90deg); }
+.time-set-name { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.time-set-name .time-dot { font-size: 14px; font-weight: 600; letter-spacing: -0.006em; overflow-wrap: anywhere; }
+.time-set-name small { color: var(--label-2); font-size: 12px; overflow-wrap: anywhere; }
+.time-set-client.off .time-set-name .time-dot { color: var(--label-2); }
+.time-set-client-body { --system-col: 60px; padding: 0 0 12px 21px; }
+.time-switch-bare { flex: none; }
+
+/* A project's row: its name, its entries, billable and each system it can be taken out of (columns
+   named once, in the heading; --systems has one --system-col per system, none where there is no
+   choice), Rename and Retire as small icon buttons; a retired one's: its name, its entries, Bring
+   back. */
+.time-set-projects { margin: 0; padding: 0; list-style: none; }
+.time-set-projects-head, .time-set-project { display: grid; grid-template-columns: minmax(0, 1fr) auto 52px var(--systems,) 28px 28px; align-items: center; column-gap: 6px; }
+.time-set-projects-head h5 { margin: 0; font: inherit; }
+.time-set-projects-head span { grid-column: 3; text-align: center; }
+.time-set-projects-head .time-set-system-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.time-set-project { min-height: 36px; border-bottom: 0.5px solid var(--separator); }
+.time-set-retired .time-set-project { grid-template-columns: minmax(0, 1fr) auto auto; }
+.time-set-project-name { min-width: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.time-set-retired .time-set-project-name { color: var(--label-2); }
+.time-set-uses { color: var(--label-3); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.time-set-check { display: grid; place-items: center; }
+.time-set-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--green); cursor: pointer; }
+.time-set-icon { width: 28px; height: 28px; background: none; color: var(--label-2); }
+.time-set-icon svg { width: 16px; height: 16px; }
+.time-set-icon:hover:not(:disabled) { background: var(--fill); color: var(--label); }
+.time-set-icon:active:not(:disabled) { transform: scale(0.92); }
+.time-set-icon:disabled { opacity: 0.45; }
+.time-set-project.renaming { display: block; padding: 6px 0; }
+.time-set-billed { margin-top: 14px; }
+.time-set-rename, .time-set-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.time-set-add { margin-top: 8px; }
+.time-set-rename input, .time-set-add input {
+  box-sizing: border-box;
+  flex: 1 1 140px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--fill-2);
+  box-shadow: inset 0 0 0 0.5px var(--separator);
+  color: var(--label);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.time-set-rename input:focus, .time-set-add input:focus {
+  box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.time-set-add .button:disabled, .time-set-rename .button:disabled { opacity: 0.5; }
+.time-set-systems { min-height: 0; padding: 0; background: none; box-shadow: none; }
+.time-set-systems small { margin-left: 4px; color: var(--label-3); font-size: 11px; }
+
+.time-set-lane { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 44px; }
+.time-set-lane .time-dot { flex: 1; min-width: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.time-set-new { align-self: flex-start; margin-left: 0; }
+.time-set-draft { padding: 6px 8px; }
+
+/* a finger: Rename and Retire big enough to hit */
+@media (pointer: coarse) {
+  .time-set-projects-head, .time-set-project { grid-template-columns: minmax(0, 1fr) auto 44px var(--systems,) 36px 36px; }
+  .time-set-icon { width: 36px; height: 36px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .time-set-disclose svg { transition: none; }
+}

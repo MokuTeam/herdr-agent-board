@@ -10,8 +10,9 @@
 // While the payload carries wake's state line, Sleep and wake… opens its panel (components/wake).
 // MokuPilot… opens where a call starts (components/mokupilot), on every board's page (offersMokupilot).
 // On the local board, Remote access… opens the board-through-your-domain panel
-// (components/access/AccessPanel.tsx), and Backup… the backup of the board's database (#233,
-// components/backup/BackupPanel.tsx).
+// (components/access/AccessPanel.tsx), Backup… the backup of the board's database (#233,
+// components/backup/BackupPanel.tsx), and Time tracking… its clients and projects (#237,
+// components/time/TimeSettingsPanel.tsx).
 // How sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
 // On a page signed in through the owner's domain, Sign out ends this browser's own login (Call 15).
 // Tasks (#202, src/core/todos.ts) are the board's: Off, the user's pins only, or agents too.
@@ -56,6 +57,8 @@ export interface SettingsNow {
   access?: boolean
   /** The local board's page: Backup… is offered (#233). */
   backup?: boolean
+  /** The local board's page: Time tracking… is offered (#237). */
+  timeSettings?: boolean
   /** This page signed in through the owner's domain: Sign out is offered, last. */
   signOut?: boolean
   /** Presence as the board has it ('none': not on); none given: no Presence item (an older board). */
@@ -172,6 +175,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
     ...(now.mokupilot ? [{ id: 'mokupilot', label: t('set.mokupilot') }] : []),
     ...(now.access ? [{ id: 'access', label: t('set.access') }] : []),
     ...(now.backup ? [{ id: 'backup', label: t('set.backup') }] : []),
+    ...(now.timeSettings ? [{ id: 'timeSettings', label: t('set.time') }] : []),
     ...(now.localPaths ? [{ id: 'localPaths', label: t('set.localPaths') }] : []),
     { separator: true },
     { id: 'sleepers', label: t('tb.sleepersTitle'), checked: now.sleepers },
@@ -205,6 +209,7 @@ export type SettingPick =
   | { kind: 'mokupilot' }
   | { kind: 'access' }
   | { kind: 'backup' }
+  | { kind: 'timeSettings' }
   | { kind: 'signout' }
   | { kind: 'presence'; value: PresenceMode | 'none' }
   | { kind: 'presenceIdle'; value: number }
@@ -233,6 +238,7 @@ export function settingPicked(id: string): SettingPick {
   if (id === 'mokupilot') return { kind: 'mokupilot' }
   if (id === 'access') return { kind: 'access' }
   if (id === 'backup') return { kind: 'backup' }
+  if (id === 'timeSettings') return { kind: 'timeSettings' }
   if (id === 'signout') return { kind: 'signout' }
   if (kind === 'presence' && (value === 'none' || isPresenceMode(value))) return { kind, value }
   if (kind === 'presenceIdle' && /^\d+$/.test(value)) return { kind, value: Number(value) }

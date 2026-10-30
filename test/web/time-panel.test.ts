@@ -7,6 +7,7 @@ import type { DayLine } from '../../src/core/time.ts'
 import {
   addOf,
   askedInTurn,
+  billableSet,
   byText,
   changesOf,
   dateName,
@@ -19,8 +20,12 @@ import {
   entryTimes,
   isTimeDay,
   lineLabel,
+  lineSystems,
   localClock,
+  markPlan,
+  markState,
   newDraft,
+  notEntered,
   nudge,
   parseDuration,
   rulesOf,
@@ -324,4 +329,160 @@ test('tags as tokens: one added once, cleaned as the board keeps it; one taken o
   expect(withTag('call, review', 'call')).toBe('call, review')
   expect(withTag('call', '  ')).toBe('call')
   expect(withoutTag('call, review, deferred', 'review')).toBe('call, deferred')
+})
+
+test('a line in a system: entered, partly, not, changed after; what a tap sends and what its Undo puts back', () => {
+  const post = (system: string, rev: number, changedAfter = false, record: string | null = null) => ({
+    system,
+    at: 0,
+    by: 'user' as const,
+    record,
+    rev,
+    changedAfter,
+  })
+  const a = { id: 'a', rev: 3, posts: [post('erp', 3, false, 'TR-1')] }
+  const b = { id: 'b', rev: 2, posts: [] }
+  const c = { id: 'c', rev: 5, posts: [post('erp', 4, true, 'TR-3')] }
+  expect([markState([a], 'erp'), markState([a, b], 'erp'), markState([b], 'erp'), markState([a, c], 'erp')]).toEqual([
+    'entered',
+    'partly',
+    'not',
+    'changed',
+  ])
+  // entered: off, Undo puts each back as it was
+  expect(markPlan([a], 'erp')).toEqual({
+    send: { op: 'unpost', system: 'erp', entries: [{ id: 'a', rev: 3 }] },
+    undo: [{ op: 'post', system: 'erp', entries: [{ id: 'a', rev: 3, record: 'TR-1', asOf: 3 }] }],
+  })
+  // otherwise: the ones not entered and the ones changed after, marked now; Undo takes the new ones
+  // off and puts the earlier ones back at the revision they recorded
+  expect(markPlan([a, b, c], 'erp')).toEqual({
+    send: {
+      op: 'post',
+      system: 'erp',
+      entries: [
+        { id: 'b', rev: 2 },
+        { id: 'c', rev: 5 },
+      ],
+    },
+    undo: [
+      { op: 'unpost', system: 'erp', entries: [{ id: 'b', rev: 2 }] },
+      { op: 'post', system: 'erp', entries: [{ id: 'c', rev: 5, record: 'TR-3', asOf: 4 }] },
+    ],
+  })
+})
+
+test('billed time not entered: a line with an entry missing in one of the systems; none to enter, none', () => {
+  const day = {
+    client: 'x',
+    date: '2026-10-28',
+    zone: 'UTC',
+    held: [],
+    nonBillable: [],
+    seconds: 0,
+    billedSeconds: 0,
+    lines: [line({ entries: ['a'], billedSeconds: 1800 }), line({ entries: ['b'], billedSeconds: 3600 })],
+  }
+  const byId = new Map([
+    [
+      'a',
+      {
+        id: 'a',
+        rev: 1,
+        posts: [{ system: 'erp', at: 0, by: 'user' as const, record: null, rev: 1, changedAfter: false }],
+      },
+    ],
+    ['b', { id: 'b', rev: 1, posts: [] }],
+  ])
+  expect(notEntered(day, byId, ['erp'])).toBe(3600)
+  expect(notEntered(day, byId, ['erp', 'tracker'])).toBe(5400)
+  expect(notEntered(day, byId, [])).toBe(0)
+  // an entry of a project entered elsewhere (its own systems): not asked for in the rest
+  const a = { ...(byId.get('a') as NonNullable<ReturnType<typeof byId.get>>), systems: ['erp', 'tracker'] }
+  const elsewhere = new Map([
+    ['a', a],
+    ['b', { id: 'b', rev: 1, posts: a.posts.slice(0, 0), systems: ['tracker'] }],
+  ])
+  expect(notEntered(day, elsewhere, ['erp'])).toBe(0)
+  expect(notEntered(day, elsewhere, ['erp', 'tracker'])).toBe(5400)
+})
+
+test('a line’s marks: each system with the entries to be entered there; one none of them is, not offered', () => {
+  const systems = [
+    { id: 'erp', title: 'ERP' },
+    { id: 'tracker', title: 'Tracker' },
+  ]
+  const both = { id: 'a', rev: 1, posts: [], systems: ['erp', 'tracker'] }
+  const side = { id: 'b', rev: 1, posts: [], systems: ['tracker'] }
+  const nowhere = { id: 'c', rev: 1, posts: [], systems: [] }
+  const shown = (entries: (typeof both)[]) => lineSystems(entries, systems).map(x => [x.title, x.listed.map(e => e.id)])
+  expect(shown([both, side])).toEqual([
+    ['ERP', ['a']],
+    ['Tracker', ['a', 'b']],
+  ])
+  expect(shown([side])).toEqual([['Tracker', ['b']]])
+  expect(shown([nowhere])).toEqual([])
+  // entries the day gave without their systems: every system of the client's, as before
+  expect(lineSystems([{ id: 'd', rev: 1, posts: [] }], systems).map(x => x.id)).toEqual(['erp', 'tracker'])
+})
+
+test('billable in the editor: set on the entry or the config’s; what saving sends of it', () => {
+  expect([
+    billableSet({ billable: false, billableDefault: false }),
+    billableSet({ billable: false, billableDefault: true }),
+    billableSet({}),
+  ]).toEqual([false, null, null])
+  const e = {
+    id: 'e1',
+    rev: 2,
+    client: 'client-a',
+    project: 'Support',
+    description: 'x',
+    date: '2026-10-28',
+    start: '2026-10-28T13:00:00Z',
+    stop: '2026-10-28T13:30:00Z',
+    tags: [],
+    billable: true,
+    billableDefault: true,
+  }
+  const d = draftOf(e)
+  expect(d.billable).toBe(null)
+  expect(changesOf(e, d)?.edit).toBe(null)
+  expect(changesOf(e, { ...d, billable: false })?.edit).toEqual({ op: 'edit', id: 'e1', rev: 2, billable: false })
+  const set = { ...e, billable: false, billableDefault: false }
+  expect(changesOf(set, { ...draftOf(set), billable: null })?.edit).toEqual({
+    op: 'edit',
+    id: 'e1',
+    rev: 2,
+    billable: null,
+  })
+  expect(addOf({ ...newDraft('client-a', 'Support', '2026-10-28'), billable: false })?.billable).toBe(false)
+  expect('billable' in (addOf(newDraft('client-a', 'Support', '2026-10-28')) ?? {})).toBe(false)
+})
+
+test('a project typed as new goes with the change that names it: on an add, and on an edit that changes the project', () => {
+  const fresh = { ...newDraft('client-a', 'Audit', '2026-10-28'), newProject: true }
+  expect(addOf(fresh)?.newProject).toBe(true)
+  expect('newProject' in (addOf(newDraft('client-a', 'Support', '2026-10-28')) ?? {})).toBe(false)
+  const e = {
+    id: 'e1',
+    rev: 2,
+    client: 'client-a',
+    project: 'Support',
+    description: 'x',
+    date: '2026-10-28',
+    start: '2026-10-28T13:00:00Z',
+    stop: '2026-10-28T13:30:00Z',
+    tags: [],
+  }
+  expect(draftOf(e).newProject).toBe(false)
+  expect(changesOf(e, { ...draftOf(e), project: 'Audit', newProject: true })?.edit).toEqual({
+    op: 'edit',
+    id: 'e1',
+    rev: 2,
+    project: 'Audit',
+    newProject: true,
+  })
+  // typed back to the entry's own: no change, nothing new
+  expect(changesOf(e, { ...draftOf(e), newProject: true })?.edit).toBe(null)
 })

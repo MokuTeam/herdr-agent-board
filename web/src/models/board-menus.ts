@@ -7,6 +7,7 @@
 // or the focus and the menu for it, with the board handed in. The listeners that open it are the
 // page's (hooks/useContextMenus.ts).
 import { archiveBlock } from '../../../src/core/archive.ts'
+import { itemProfile, shownProfiles } from '../../../src/core/item-profile.ts'
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import type { LanePicks } from './lane-picks.ts'
@@ -21,6 +22,7 @@ import {
   type MenuContext,
   type MenuEntry,
   type MenuItem,
+  type MenuProfile,
   type Point,
   wantsNativeMenu,
 } from './menu-model.ts'
@@ -82,6 +84,10 @@ export interface BoardMenuActions {
   fork(key: string, from: MenuOrigin): unknown
   /** Off the board until Return: its tab closes, Claude keeps the conversation (hooks/useArchive.ts). */
   archive(key: string, from: MenuOrigin): unknown
+  /** To the Claude profile `id`, keeping its conversation (#256, models/profile-move.ts). */
+  profile(key: string, id: string): unknown
+  /** The lane's sessions `keys` to the profile `id`; `usual`: it becomes the lane's usual profile too. */
+  laneProfile(lane: MenuCategory, id: string, keys: readonly string[], usual: boolean): unknown
   /** The sleeping sessions in "Idle" asleep `days` days or more to the archive: in lane `lane`, or in the lanes on show. */
   tidy(days: number, lane: string | null): unknown
   /** The archive's panel. */
@@ -135,8 +141,14 @@ export interface BoardMenuDeps {
       fork?: boolean | undefined
       /** The schedule: a restart of a session on its way grays its Restart. */
       schedules?: readonly ScheduleEntry[] | undefined
+      /** The Claude profiles (a board before them sent none). */
+      profiles?: readonly (MenuProfile & { hidden: boolean })[] | undefined
     }
   }
+  /** The board's sessions, for a lane's: those its menu moves to another profile. */
+  items?: (() => readonly Item[]) | undefined
+  /** The open menu's items again: a check in it turned on or off (components/menu/menu-engine.ts update). */
+  update?: ((items: MenuEntry[]) => void) | undefined
   /** Sessions on their way (the launch window); none: their cards get no menu. */
   launch?: LaunchMenus | null | undefined
   /** Sleeping sessions in "Idle" a tidy-up of `days` takes, in `lane` or the lanes on show (src/core/archive.ts tidyList). */
@@ -241,10 +253,17 @@ const CARD_ACTIONS = [
 type CardAction = (typeof CARD_ACTIONS)[number]
 const isCardAction = (id: string): id is CardAction => CARD_ACTIONS.some(a => a === id)
 
+/** The profiles shown, when two or more are: only then can a session be moved to another (#256). */
+function movable(board: BoardMenuDeps): MenuProfile[] | undefined {
+  const shown = shownProfiles(board.state().data.profiles ?? [])
+  return shown.length >= 2 ? shown.map(({ id, title, color }) => ({ id, title, color })) : undefined
+}
+
 function forCard(board: BoardMenuDeps, key: string, it: Item, el: Element, at: Point): BoardMenu {
   const t = board.t()
   const state = board.state()
   const nameEl = el.matches?.('.card') ? el.querySelector('.name') : el
+  const profiles = movable(board)
   return {
     label: it.name,
     items: cardMenu(it, {
@@ -257,11 +276,14 @@ function forCard(board: BoardMenuDeps, key: string, it: Item, el: Element, at: P
       category: board.category(it),
       restarting: (state.data.schedules ?? []).some(e => e.kind === 'restart' && e.key === key && !e.failed),
       archiveWhy: archiveBlock(it, state.data.schedules ?? []),
+      ...(profiles && { profiles, profile: itemProfile(it, state.data.profiles ?? [])?.id ?? '' }),
     }),
     pick: id => {
       const [what, arg = ''] = id.split(/:(.*)/s)
       const from: MenuOrigin = el.isConnected ? el : pointRect(at.x, at.y)
       if (what === 'cat') return void board.do.move(key, { cat: arg })
+      if (what === 'profile')
+        return void (arg !== itemProfile(it, state.data.profiles ?? [])?.id && board.do.profile(key, arg))
       if (what === 'col') return void board.do.move(key, { column: arg })
       if (what === 'copy') {
         const values: Record<string, string | null | undefined> = {
@@ -318,11 +340,43 @@ function forColumn(board: BoardMenuDeps, col: string | undefined, lane: string |
 
 function forLane(board: BoardMenuDeps, cat: MenuCategory, at: Point): BoardMenu {
   const state = board.state()
+  const profiles = movable(board)
+  // The lane's Claude sessions, and the check its move offers (only for a lane in the config).
+  const all = state.data.profiles ?? []
+  const sessions = profiles
+    ? (board.items?.() ?? []).filter(i => i.agent === 'claude' && !!i.session && board.category(i) === cat.id)
+    : []
+  const outside = (id: string) => sessions.filter(i => itemProfile(i, all)?.id !== id)
+  let usual: boolean | undefined = profiles && cat.configured ? false : undefined
+  const items = () =>
+    laneMenu(cat, {
+      ...ctxOf(board),
+      filter: state.filter,
+      tidyCount: days => board.tidyCount(days, cat.id),
+      ...(profiles && {
+        profiles,
+        moving: (id: string) => outside(id).length,
+        usual,
+      }),
+    })
   return {
     label: cat.title,
-    items: laneMenu(cat, { ...ctxOf(board), filter: state.filter, tidyCount: days => board.tidyCount(days, cat.id) }),
+    items: items(),
     pick: id => {
       const from = pointRect(at.x, at.y)
+      if (id === 'usual') {
+        usual = !usual
+        return void board.update?.(items())
+      }
+      if (id.startsWith('profile:')) {
+        const to = id.slice(8)
+        return void board.do.laneProfile(
+          cat,
+          to,
+          outside(to).map(i => i.key),
+          !!usual,
+        )
+      }
       if (id.startsWith('tidy:')) return void board.do.tidy(Number(id.slice(5)), cat.id)
       if (id === 'new') board.do.newSession({ category: cat.id }, from)
       else if (id === 'newWorkspace') board.do.newSession({ category: cat.id, newWorkspace: true }, from)

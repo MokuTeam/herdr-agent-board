@@ -8,6 +8,14 @@
 // A client's day becomes billed lines by its rules, data in the config: each entry goes to the
 // first rule whose `match` fits its description; the rule adds entries up by `group` and rounds
 // the sum to `step` minutes as `round` says. The board knows no client's rules but these fields.
+// An entry is billable as its client and project say (`billable`, `nonBillable`) unless a person,
+// an agent or the import set it the other way; one that is not counts as worked, never as billed.
+// A client's `systems` are where its time is entered (an ERP, a tracker): an entry carries a mark
+// per system once it is (adapters/time-store.ts). A project billed elsewhere names its own
+// (`projectSystems`): its entries are to be entered there only (#260).
+// Turned off (`time.on`, a client's `on`: false) and retired projects keep what is there: time off
+// keeps its settings for when it is on again; a client off takes no new entry, its own billed by
+// its rules as before; a retired project is offered no more, its entries keep it (#237).
 //
 // The owner writes this config by hand, and a value read wrong would date or bill entries wrong
 // with no word: so nothing in it is guessed. A value that does not check out (an unknown zone,
@@ -31,9 +39,27 @@ export interface BillingRule {
   round: Round
 }
 
+/** A system a client's time is entered in: its id (a-z, 0-9, -) and the name shown. */
+export interface TimeSystem {
+  id: string
+  title: string
+}
+
 export interface TimeClient {
+  /** Whether it takes new entries (false: off, its entries stay). */
+  on: boolean
   /** The projects it takes; null: any. */
   projects: string[] | null
+  /** Projects no longer offered for new entries; its entries keep them. */
+  retired: string[]
+  /** Whether its entries are billable by default (false: a lane never billed). */
+  billable: boolean
+  /** Projects of a billed client that are not billed. */
+  nonBillable: string[]
+  /** Where its time is entered; none: nothing to enter. */
+  systems: TimeSystem[]
+  /** A project entered elsewhere than in all of `systems`: its systems' ids (none: nowhere), by the project's name. */
+  projectSystems: Record<string, string[]>
   /** The reference in a description (a case number, a ticket key): its first capture. */
   ref: string
   /** The client's own time zone; null: the board's. */
@@ -50,7 +76,20 @@ export interface TimeConfig {
   problems: TimeProblem[]
 }
 
-export type ProblemWhy = 'required' | 'zone' | 'regex' | 'group' | 'round' | 'step' | 'type' | 'unknown'
+export type ProblemWhy =
+  | 'required'
+  | 'zone'
+  | 'regex'
+  | 'group'
+  | 'round'
+  | 'step'
+  | 'type'
+  | 'unknown'
+  | 'project'
+  | 'system'
+  | 'retired'
+  | 'notSystem'
+  | 'twice'
 
 /** A value of config.json's `time` that does not check out: where (time.clients.x.billing[1].round), and why. */
 export interface TimeProblem {
@@ -106,8 +145,21 @@ function goodRegex(source: string): boolean {
   }
 }
 
-const TIME_KEYS = ['zone', 'excludeTags', 'clients']
-const CLIENT_KEYS = ['projects', 'ref', 'zone', 'billing']
+const TIME_KEYS = ['on', 'zone', 'excludeTags', 'clients']
+const CLIENT_KEYS = [
+  'on',
+  'projects',
+  'retired',
+  'ref',
+  'zone',
+  'billing',
+  'billable',
+  'nonBillable',
+  'systems',
+  'projectSystems',
+]
+const SYSTEM_KEYS = ['id', 'title']
+const SYSTEM_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
 const RULE_KEYS = ['match', 'group', 'step', 'round']
 
 const shown = (v: unknown): string => (typeof v === 'string' ? v : (JSON.stringify(v) ?? String(v)))
@@ -148,16 +200,96 @@ function ruleOf(raw: unknown, at: string, problems: TimeProblem[]): BillingRule 
   return { match, group, step: round === 'exact' ? 0 : step, round }
 }
 
+/** A client's systems: ids (a-z, 0-9, -) each once, as a string or { id, title }. */
+function systemsOf(v: unknown, at: string, problems: TimeProblem[]): TimeSystem[] {
+  if (v === undefined) return []
+  if (!Array.isArray(v)) {
+    problems.push({ at, why: 'type', value: shown(v) })
+    return []
+  }
+  const out: TimeSystem[] = []
+  for (const [i, raw] of v.entries()) {
+    const place = `${at}[${i}]`
+    const o = isObject(raw) ? raw : null
+    if (o) unknownKeys(o, SYSTEM_KEYS, place, problems)
+    const id = typeof raw === 'string' ? raw.trim() : o && typeof o.id === 'string' ? o.id.trim() : null
+    if (id === null) problems.push({ at: place, why: 'type', value: shown(raw) })
+    else if (!SYSTEM_ID.test(id) || out.some(x => x.id === id)) problems.push({ at: place, why: 'system', value: id })
+    else if (o && o.title !== undefined && typeof o.title !== 'string')
+      problems.push({ at: `${place}.title`, why: 'type', value: shown(o.title) })
+    else out.push({ id, title: (o && typeof o.title === 'string' && cleanText(o.title, 40)) || id })
+  }
+  return out
+}
+
 /**
- * config.json's `time`: an object or `true` turns it on; anything else is off (null). `true` is the
- * computer's own zone and every lane; an object names its `zone`. What does not check out is in
- * `problems`, and the rest is read as well as it can be, for a view that says so.
+ * A client's projects entered elsewhere than in all of its systems: a project (one of its projects
+ * or retired ones, when it keeps a list; each named once, case and spaces aside) to a list of its
+ * systems' ids, each once; an empty list: entered nowhere. A list naming a system the client has
+ * not is left out whole (a problem): its project read as entered everywhere, so a slip over-lists
+ * what is to enter rather than hide it.
+ */
+function projectSystemsOf(
+  v: unknown,
+  at: string,
+  own: { systems: readonly TimeSystem[]; projects: readonly string[] | null; retired: readonly string[] },
+  problems: TimeProblem[],
+): Record<string, string[]> {
+  if (v === undefined) return {}
+  if (!isObject(v)) {
+    problems.push({ at, why: 'type', value: shown(v) })
+    return {}
+  }
+  const out: Record<string, string[]> = {}
+  const named: string[] = []
+  for (const [project, raw] of Object.entries(v)) {
+    const place = `${at}.${project}`
+    if (own.projects && !projectIn([...own.projects, ...own.retired], project)) {
+      problems.push({ at: place, why: 'project', value: project })
+      continue
+    }
+    // named twice whether or not the first one checks out: which one is meant would be a guess
+    if (named.some(p => sameProject(p, project))) {
+      problems.push({ at: place, why: 'twice', value: project })
+      continue
+    }
+    named.push(project)
+    const ids = strings(raw, place, problems)
+    if (!ids) continue
+    const list: string[] = []
+    let unknown = false
+    ids.forEach((id, i) => {
+      if (list.includes(id)) problems.push({ at: `${place}[${i}]`, why: 'system', value: id })
+      else if (!own.systems.some(s => s.id === id)) {
+        problems.push({ at: `${place}[${i}]`, why: 'notSystem', value: id })
+        unknown = true
+      } else list.push(id)
+    })
+    if (!unknown) out[project] = list
+  }
+  return out
+}
+
+/** An `on` that is there: a boolean, or a problem (and on). */
+function onOf(v: unknown, at: string, problems: TimeProblem[]): boolean {
+  if (v === undefined || typeof v === 'boolean') return v !== false
+  problems.push({ at, why: 'type', value: shown(v) })
+  return true
+}
+
+/**
+ * config.json's `time`: an object or `true` turns it on; anything else is off (null), and so is an
+ * object with `on: false` (its settings kept for when it is on again). `true` is the computer's own
+ * zone and every lane; an object names its `zone`. What does not check out is in `problems`, and
+ * the rest is read as well as it can be, for a view that says so.
  */
 export function timeConfig(raw: unknown): TimeConfig | null {
   if (raw !== true && !isObject(raw)) return null
   const problems: TimeProblem[] = []
   if (raw === true) return { zone: localZone(), excludeTags: ['deferred'], clients: null, problems }
   const c = raw as Record<string, unknown>
+  if (c.on === false) return null
+  onOf(c.on, 'time.on', problems)
   unknownKeys(c, TIME_KEYS, 'time', problems)
   let zone = localZone()
   if (c.zone === undefined) problems.push({ at: 'time.zone', why: 'required' })
@@ -178,7 +310,15 @@ export function timeConfig(raw: unknown): TimeConfig | null {
       if (!isObject(v)) problems.push({ at, why: 'type', value: shown(v) })
       const o = isObject(v) ? v : {}
       unknownKeys(o, CLIENT_KEYS, at, problems)
+      const on = onOf(o.on, `${at}.on`, problems)
       const projects = o.projects === undefined ? null : [...new Set(strings(o.projects, `${at}.projects`, problems))]
+      const retired = o.retired === undefined ? [] : [...new Set(strings(o.retired, `${at}.retired`, problems) ?? [])]
+      // offered and retired at once: which one it is would be a guess
+      if (projects)
+        retired.forEach((project, i) => {
+          if (projects.some(p => sameProject(p, project)))
+            problems.push({ at: `${at}.retired[${i}]`, why: 'retired', value: project })
+        })
       let ref = DEFAULT_REF
       if (typeof o.ref === 'string' && text(o.ref)) {
         if (goodRegex(text(o.ref))) ref = text(o.ref)
@@ -195,7 +335,25 @@ export function timeConfig(raw: unknown): TimeConfig | null {
           .map((r, i) => ruleOf(r, `${at}.billing[${i}]`, problems))
           .filter((r): r is BillingRule => r !== null)
       else if (o.billing !== undefined) problems.push({ at: `${at}.billing`, why: 'type', value: shown(o.billing) })
-      clients[id] = { projects, ref, zone: own, billing }
+      let billable = true
+      if (typeof o.billable === 'boolean') billable = o.billable
+      else if (o.billable !== undefined) problems.push({ at: `${at}.billable`, why: 'type', value: shown(o.billable) })
+      const nonBillable =
+        o.nonBillable === undefined ? [] : [...new Set(strings(o.nonBillable, `${at}.nonBillable`, problems) ?? [])]
+      // a project the client does not take is a slip of the pen, not a rule (a retired one it had)
+      if (projects)
+        nonBillable.forEach((project, i) => {
+          if (!projects.includes(project) && !retired.includes(project))
+            problems.push({ at: `${at}.nonBillable[${i}]`, why: 'project', value: project })
+        })
+      const systems = systemsOf(o.systems, `${at}.systems`, problems)
+      const projectSystems = projectSystemsOf(
+        o.projectSystems,
+        `${at}.projectSystems`,
+        { systems, projects, retired },
+        problems,
+      )
+      clients[id] = { on, projects, retired, ref, zone: own, billing, billable, nonBillable, systems, projectSystems }
     }
   }
   return { zone, excludeTags, clients, problems }
@@ -203,12 +361,98 @@ export function timeConfig(raw: unknown): TimeConfig | null {
 
 /** A client's settings, or why it takes no time (a text key). */
 export function clientOf(c: TimeConfig, client: string): { ok: true; client: TimeClient } | { ok: false; key: string } {
-  if (!c.clients) return { ok: true, client: { projects: null, ref: DEFAULT_REF, zone: null, billing: [] } }
+  if (!c.clients) return { ok: true, client: ANY_CLIENT }
   const found = c.clients[client]
   return found ? { ok: true, client: found } : { ok: false, key: 'time.err.client' }
 }
 
 export const zoneOf = (c: TimeConfig, client: string): string => c.clients?.[client]?.zone ?? c.zone
+
+/** The characters that do not show: zero-width spaces and joiners, the word joiner, the BOM, the soft hyphen. */
+const UNSEEN = new RegExp(
+  `[${[0x200b, 0x200c, 0x200d, 0x2060, 0xfeff, 0xad].map(c => String.fromCharCode(c)).join('')}]`,
+  'g',
+)
+
+/**
+ * A project's name as names are told apart: case, spaces and the characters that do not show aside,
+ * the same letters however they are encoded ("support " is "Support"; "Café" composed or not, or
+ * with a zero-width space in it, is one name).
+ */
+export const projectKey = (name: string): string =>
+  name.normalize('NFKC').toLowerCase().replace(/\s+/g, '').replace(UNSEEN, '')
+
+export const sameProject = (a: string, b: string): boolean => projectKey(a) === projectKey(b)
+
+/** The name a list has for a project typed (case and spaces aside), or null. */
+export const projectIn = (list: readonly string[], name: string): string | null =>
+  list.find(p => sameProject(p, name)) ?? null
+
+/** The lanes that take new entries: the clients on (null: every lane). */
+export const takersOf = (c: TimeConfig): string[] | null =>
+  c.clients
+    ? Object.entries(c.clients)
+        .filter(([, x]) => x.on)
+        .map(([id]) => id)
+    : null
+
+/** A client as `time: true` has every lane: any project, billed, nowhere to enter it. */
+const ANY_CLIENT: TimeClient = {
+  on: true,
+  projects: null,
+  retired: [],
+  ref: DEFAULT_REF,
+  zone: null,
+  billing: [],
+  billable: true,
+  nonBillable: [],
+  systems: [],
+  projectSystems: {},
+}
+
+/** Whether a client's entries on a project are billable by default (its `billable`, then `nonBillable`). */
+export function billableByDefault(c: TimeConfig, client: string, project: string): boolean {
+  const own = clientOf(c, client)
+  if (!own.ok) return true
+  return own.client.billable && !own.client.nonBillable.includes(project)
+}
+
+/** Whether an entry is billable: as set on it, else as its client and project say. */
+export const billableOf = (c: TimeConfig, e: Pick<TimeEntry, 'client' | 'project' | 'billable'>): boolean =>
+  e.billable ?? billableByDefault(c, e.client, e.project)
+
+/**
+ * The systems a client's project is entered in: its own (`projectSystems`, the name matched as the
+ * board tells names apart) where it has them, else all of the client's. The page has a client's
+ * settings as the day gives them, so `projectSystems` may be missing there.
+ */
+export function systemsOfProject(
+  client: { systems: readonly TimeSystem[]; projectSystems?: Record<string, readonly string[]> },
+  project: string,
+): TimeSystem[] {
+  const own = client.projectSystems ?? {}
+  const key = Object.keys(own).find(p => sameProject(p, project))
+  if (key === undefined) return [...client.systems]
+  const ids = own[key] ?? []
+  return client.systems.filter(s => ids.includes(s.id))
+}
+
+/**
+ * The systems a client's time is entered in (none: nothing to enter); with a project, the ones
+ * that project's entries are (systemsOfProject).
+ */
+export const systemsFor = (c: TimeConfig, client: string, project?: string): TimeSystem[] => {
+  const own = clientOf(c, client)
+  if (!own.ok) return []
+  return project === undefined ? own.client.systems : systemsOfProject(own.client, project)
+}
+
+/**
+ * Whether a mark in `system` is not one the entry is to have: a system of its client's that its
+ * project is not entered in (one since gone from the config is the entry's still, to take out).
+ */
+export const outsideProject = (c: TimeConfig, e: Pick<TimeEntry, 'client' | 'project'>, system: string): boolean =>
+  systemsFor(c, e.client).some(x => x.id === system) && !systemsFor(c, e.client, e.project).some(x => x.id === system)
 
 // ------------------------------------------------------------------ dates and times
 
@@ -348,6 +592,18 @@ export function hm(seconds: number): string {
   return `${sign}${Math.floor(a / 60)}:${String(a % 60).padStart(2, '0')}`
 }
 
+/**
+ * Seconds as the board says a duration everywhere (the panel, a lane's total, the editor, the
+ * command's day), to the minute and in its language: "1h 30m", "45m", "2h"; "1 ч 30 мин".
+ */
+export function durationText(seconds: number, t: Translator): string {
+  const minutes = Math.round(seconds / 60)
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  if (!h) return t('time.dur.m', { m })
+  return m ? t('time.dur.hm', { h, m }) : t('time.dur.h', { h })
+}
+
 /** Seconds as hours with up to two decimals, as a bill says them: 1.5, 0.25, 2. */
 export const hoursOf = (seconds: number): number => Math.round((seconds / 3600) * 100) / 100
 
@@ -381,10 +637,47 @@ export interface TimeEntry {
   rev: number
   deleted?: number
   toggl?: string
+  /** Set by a person, an agent or the import; absent: as the config says (billableOf). */
+  billable?: boolean
 }
 
 export const secondsOf = (e: Pick<TimeEntry, 'start' | 'stop'>): number =>
   Math.round((Date.parse(e.stop) - Date.parse(e.start)) / 1000)
+
+/** Where an entry was entered: a system of its client's, when, by whom, that system's id for it, the entry's revision then. */
+export interface EntryPost {
+  system: string
+  at: number
+  by: Actor
+  record: string | null
+  rev: number
+}
+
+/**
+ * An entry as the JSON gives it (`board time --json`, the Time panel): the stored fields, its
+ * `seconds`, `billable` as it comes out with `billableDefault` (true: as the config says, not set
+ * on it), `systems`, the ids of the systems it is to be entered in (its project's), and `posts`,
+ * where it was entered, each with `changedAfter` (the entry changed since).
+ */
+export function entryView(c: TimeConfig, e: TimeEntry, posts: readonly EntryPost[] = []) {
+  return {
+    ...e,
+    seconds: secondsOf(e),
+    billable: billableOf(c, e),
+    billableDefault: e.billable === undefined,
+    systems: systemsFor(c, e.client, e.project).map(s => s.id),
+    posts: posts.map(p => ({
+      system: p.system,
+      at: p.at,
+      by: p.by,
+      record: p.record,
+      rev: p.rev,
+      changedAfter: p.rev < e.rev,
+    })),
+  }
+}
+
+export type EntryView = ReturnType<typeof entryView>
 
 // ------------------------------------------------------------------ a day as billed
 
@@ -411,6 +704,9 @@ export interface ClientDay {
   lines: DayLine[]
   /** Entries with one of `excludeTags`: shown, counted in no total. */
   held: string[]
+  /** Entries not billable: in no line, counted in `seconds` (worked), never billed. */
+  nonBillable: string[]
+  /** Worked: the lines' and the non-billable entries'. */
   seconds: number
   billedSeconds: number
 }
@@ -434,16 +730,25 @@ export function refIn(description: string, ref: string): string | null {
 /**
  * One client's entries of one day (live ones; any order) as billed lines: each entry to the first
  * rule whose `match` fits, the rule's group added up and rounded; an entry no rule takes, alone and
- * exact; an entry with an excluded tag held. Lines in the order of their first entry's start.
+ * exact; an entry not billable apart (worked, never billed: it joins no line, so no rounding and
+ * no Raise or Trim touches it); then one with an excluded tag held (billable later). Lines in the
+ * order of their first entry's start.
  */
 export function clientDay(c: TimeConfig, client: string, date: string, entries: readonly TimeEntry[]): ClientDay {
   const settings = clientOf(c, client)
-  const own = settings.ok ? settings.client : { projects: null, ref: DEFAULT_REF, zone: null, billing: [] }
+  const own = settings.ok ? settings.client : ANY_CLIENT
   const sorted = [...entries].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : a.id < b.id ? -1 : 1))
   const held: string[] = []
+  const nonBillable: string[] = []
+  let unbilled = 0
   const lines = new Map<string, DayLine & { first: string }>()
   const matchers = own.billing.map(r => (r.match ? new RegExp(r.match, 'i') : null))
   for (const e of sorted) {
+    if (!billableOf(c, e)) {
+      nonBillable.push(e.id)
+      unbilled += secondsOf(e)
+      continue
+    }
     if (e.tags.some(tag => c.excludeTags.includes(tag))) {
       held.push(e.id)
       continue
@@ -488,7 +793,8 @@ export function clientDay(c: TimeConfig, client: string, date: string, entries: 
     zone: zoneOf(c, client),
     lines: out,
     held,
-    seconds: out.reduce((n, l) => n + l.seconds, 0),
+    nonBillable,
+    seconds: out.reduce((n, l) => n + l.seconds, 0) + unbilled,
     billedSeconds: out.reduce((n, l) => n + l.billedSeconds, 0),
   }
 }

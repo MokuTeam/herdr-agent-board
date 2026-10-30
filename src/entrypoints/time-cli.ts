@@ -6,17 +6,24 @@
 // description after it may start with "--".
 //
 //   board time add [--client <lane>] --project "<p>" [--start <t>] (--stop <t> | --minutes <n> | --hours <h>)
-//                  [--tag <t>]... [--new-project] [--] "<description>"
+//                  [--tag <t>]... [--billable | --non-billable] [--new-project] [--] "<description>"
 //   board time edit <id> [--description "…"] [--project "…"] [--client <lane>] [--start <t>] [--stop <t>]
-//                  [--minutes <n> | --hours <h>] [--tag +<t> | --tag -<t>]... [--expect <rev>] [--force]
+//                  [--minutes <n> | --hours <h>] [--tag +<t> | --tag -<t>]...
+//                  [--billable | --non-billable | --default-billable] [--expect <rev>] [--force]
 //   board time move <id> <date> [--expect <rev>] [--force]
 //   board time rm <id> [--force]    board time restore <id> [--force]    board time show <id>
-//   board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--tag <t>] [--deleted]
+//   board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--project "<p>"] [--tag <t>] [--deleted]
+//                  [--not-posted [--system <id>] | --changed-after-post [--system <id>]] [--totals]
+//   board time post <id>[@<rev>]... --system <id> [--record <their id>]   entered into a client's system
+//   board time post --client <lane> --to <d> [--from <d>] --system <id> [--dry-run]   all before, at once
+//   board time unpost <id>[@<rev>]... --system <id>
 //   board time day [<d>] [--client <lane>]
 //   board time projects [<lane>]
 //   board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy]
-//                  [--dry-run] [--update]
+//                  [--dry-run] [--update] [--billable-from-toggl]
 //   board time export [--csv] [--date <d> | --from <d> --to <d>] [--client <lane>] [--bom]   CSV of the entries
+//   board time [<command>] --help   a command's usage with all its flags (time.usage.<command>), or every one's;
+//                  a usage error says the command's usage too
 import { readFileSync } from 'node:fs'
 import { addTimeProjects } from '../adapters/config-file.ts'
 import { type BoardDb, openDb } from '../adapters/db.ts'
@@ -31,29 +38,41 @@ import {
   importEntries,
   importVerdicts,
   listEntries,
+  type Mark,
+  marksOf,
   moveEntry,
+  type PostItem,
+  postEntries,
   removeEntry,
   restoreEntry,
   TimeError,
+  unpostEntries,
 } from '../adapters/time-store.ts'
 import { t } from '../core/lang.ts'
 import {
   type Actor,
   addDays,
+  billableOf,
   type ClientDay,
   clientDay,
   clientOf,
   clockIn,
   dateIn,
   durationOf,
+  durationText,
+  entryView,
   hm,
   instantIn,
   isDate,
   knownZone,
+  outsideProject,
   parseWhen,
   plausible,
   problemsText,
+  projectIn,
+  projectKey,
   secondsOf,
+  systemsFor,
   type TimeConfig,
   type TimeEntry,
   timeConfig,
@@ -61,7 +80,7 @@ import {
 } from '../core/time.ts'
 import { type DateFormat, dayTotals, parseMap, rowsFromCsv, rowsFromJson, type TogglRow } from '../core/time-import.ts'
 import type { Config } from '../core/types.ts'
-import { writeRefusal } from '../services/time.ts'
+import { withNewProject, writeRefusal } from '../services/time.ts'
 
 const FLAGS_WITH_VALUE = new Set([
   '--client',
@@ -79,6 +98,8 @@ const FLAGS_WITH_VALUE = new Set([
   '--tz',
   '--map',
   '--date-format',
+  '--system',
+  '--record',
 ])
 
 interface Args {
@@ -125,14 +146,87 @@ export interface TimeCmdContext {
   now?: number
 }
 
-const whoText = (a: Actor): string => (typeof a === 'string' ? t(`time.who.${a}`) : a.name || a.key)
+/** The commands, each with its usage (time.usage.<command>). */
+const COMMANDS: readonly string[] = [
+  'add',
+  'edit',
+  'move',
+  'rm',
+  'restore',
+  'show',
+  'list',
+  'day',
+  'post',
+  'unpost',
+  'projects',
+  'import',
+  'export',
+]
 
-function entryLine(e: TimeEntry): string {
-  return `${e.id} · ${e.date} · ${e.client}/${e.project} · ${hm(secondsOf(e))} · ${e.description}${e.tags.length ? ` · #${e.tags.join(' #')}` : ''}${e.deleted ? ` · ${t('time.cli.removed')}` : ''}`
+/** The generic usage: a command's own takes its place. */
+const GENERIC_USAGE = new Set(['time.err.usage', 'time.err.importUsage'])
+/** How a command was called, not what it was asked: its usage goes after the error. */
+const USAGE_ERRORS = new Set([
+  'time.err.flagValue',
+  'time.err.noDuration',
+  'time.err.noSystem',
+  'time.err.billableFlags',
+  'time.err.dryRunById',
+  'time.err.idsAndRange',
+  'time.err.noProject',
+  'time.err.noDescription',
+  'time.err.whichClient',
+])
+
+/** A command's usage: its forms ("board time …"), then a note or two (indented); `notes` false: the forms. */
+function usageOf(command: string, notes = true): string[] {
+  const lines = t(`time.usage.${command}`).split('\n')
+  return notes ? lines : lines.filter(l => !l.startsWith(' '))
 }
 
-/** An entry as the JSON gives it: its seconds beside the stored fields. */
-const entryJson = (e: TimeEntry) => ({ ...e, seconds: secondsOf(e) })
+/** `board time <command> --help`, or every command's forms. */
+const helpOf = (command: string | undefined): string[] =>
+  command && COMMANDS.includes(command)
+    ? [t('time.usage'), ...usageOf(command).map(l => `  ${l}`)]
+    : [t('time.usage'), ...COMMANDS.flatMap(c => usageOf(c, false).map(l => `  ${l}`)), t('time.usage.more')]
+
+const pad2 = (n: number): string => String(n).padStart(2, '0')
+/** An instant on this computer's clock, as the command takes times: "09:30". */
+const clockText = (iso: string): string => {
+  const d = new Date(iso)
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+/** An entry's start and stop on this computer's clock: "09:00-10:05" (a change of its duration keeps its start). */
+const intervalText = (e: TimeEntry): string => `${clockText(e.start)}-${clockText(e.stop)}`
+
+const whoText = (a: Actor): string => (typeof a === 'string' ? t(`time.who.${a}`) : a.name || a.key)
+
+/** Where an entry was entered, as a line says it: "posted erp, tracker (changed after: tracker)". */
+function postsText(e: TimeEntry, marks: readonly Mark[]): string {
+  if (!marks.length) return ''
+  const stale = marks.filter(m => m.rev < e.rev).map(m => m.system)
+  return ` · ${t('time.cli.posted', { systems: marks.map(m => m.system).join(', ') })}${stale.length ? ` (${t('time.cli.changedAfter')}: ${stale.join(', ')})` : ''}`
+}
+
+/** An entry in a line; `interval`: its start and stop after its duration, as a change of it says. */
+function entryLine(
+  e: TimeEntry,
+  conf: TimeConfig,
+  marks: readonly Mark[] = [],
+  o: { interval?: boolean } = {},
+): string {
+  return `${e.id} · ${e.date} · ${e.client}/${e.project} · ${hm(secondsOf(e))}${o.interval ? ` (${intervalText(e)})` : ''} · ${e.description}${e.tags.length ? ` · #${e.tags.join(' #')}` : ''}${billableOf(conf, e) ? '' : ` · ${t('time.cli.nonBillable')}`}${postsText(e, marks)}${e.deleted ? ` · ${t('time.cli.removed')}` : ''}`
+}
+
+/** An entry as the JSON gives it (core/time.ts entryView: billable, billableDefault, posts). */
+const entryJson = (e: TimeEntry, conf: TimeConfig, marks: readonly Mark[] = []) => entryView(conf, e, marks)
+
+/** `<id>` or `<id>@<rev>` (the revision read: refused when the entry changed since). */
+function postItem(word: string): PostItem {
+  const m = /^([0-9a-f]{8})(?:@(\d+))?$/i.exec(word)
+  if (!m) throw new TimeError('time.err.usage')
+  return { id: (m[1] as string).toLowerCase(), ...(m[2] !== undefined && { rev: Number(m[2]) }) }
+}
 
 function dayLines(d: ClientDay, byId: Map<string, TimeEntry>): string[] {
   const lines = [`${d.client} · ${d.date} (${d.zone}) · ${hm(d.seconds)} → ${hm(d.billedSeconds)}`]
@@ -146,6 +240,7 @@ function dayLines(d: ClientDay, byId: Map<string, TimeEntry>): string[] {
       if (e) lines.push(`    ${e.id} ${e.start.slice(11, 16)}Z ${hm(secondsOf(e))} ${e.description}`)
     }
   }
+  if (d.nonBillable.length) lines.push(`  ${t('time.cli.nonBillable')}: ${d.nonBillable.join(', ')}`)
   if (d.held.length) lines.push(`  ${t('time.cli.held')}: ${d.held.join(', ')}`)
   return lines
 }
@@ -159,13 +254,38 @@ const codeOf = (err: unknown): string => (err instanceof TimeError ? (err.key.sp
  */
 export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Promise<number> {
   const out = ctx.out ?? ((line: string) => console.log(line))
-  const json = rest.includes('--json') && !rest.slice(0, rest.indexOf('--json')).includes('--')
+  const flags = rest.includes('--') ? rest.slice(0, rest.indexOf('--')) : rest
+  const json = flags.includes('--json')
+  // help, whether time is on or not: a command's usage with all its flags, or every command's
+  if (flags.includes('--help') || flags.includes('-h') || rest[0] === 'help') {
+    const lines = helpOf(rest[0] === 'help' ? rest[1] : rest[0])
+    if (json) out(JSON.stringify({ usage: lines.join('\n') }, null, 2))
+    else for (const line of lines) out(line)
+    return 0
+  }
   try {
     await run(rest, ctx, out)
     return 0
   } catch (err) {
+    // called wrong: the command's usage goes with the error (the generic usage gives way to it)
+    const command = rest[0] ?? 'list'
+    const usage =
+      err instanceof TimeError &&
+      COMMANDS.includes(command) &&
+      (GENERIC_USAGE.has(err.key) || USAGE_ERRORS.has(err.key))
+        ? helpOf(command)
+        : null
+    if (usage && err instanceof TimeError)
+      err.message = GENERIC_USAGE.has(err.key) ? usage.join('\n') : `${err.message}\n${usage.join('\n')}`
     if (!json) throw err
-    out(JSON.stringify({ ok: false, error: codeOf(err), message: err instanceof Error ? err.message : String(err) }))
+    out(
+      JSON.stringify({
+        ok: false,
+        error: codeOf(err),
+        message: err instanceof Error ? err.message : String(err),
+        ...(usage && { usage: usageOf(command).join('\n') }),
+      }),
+    )
     return 1
   }
 }
@@ -216,9 +336,30 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
     const entries = db ? listEntries(db, { from: date, to: date, client }) : []
     return { day: clientDay(conf, client, date, entries), entries }
   }
+  /** --billable, --non-billable, --default-billable (back to the config's): the change; undefined: none. */
+  const billableFlag = (): boolean | null | undefined => {
+    const set = ['--billable', '--non-billable', '--default-billable'].filter(f => a.has(f))
+    if (set.length > 1) throw new TimeError('time.err.billableFlags')
+    return set[0] === '--billable' ? true : set[0] === '--non-billable' ? false : set[0] ? null : undefined
+  }
+  /**
+   * An entry entered somewhere, as a change of it is printed: the change is to be made there too;
+   * only when it changed (`was`, the entry before: a change that changed nothing asks for none).
+   */
+  const there = (key: string, was: TimeEntry | null, e: TimeEntry, marks: readonly Mark[] = []): string[] =>
+    marks.length && was?.rev !== e.rev ? [t(key, { systems: marks.map(m => m.system).join(', ') })] : []
+  /** The marks of entries read from `db`, by entry. */
+  const marksFor = (db: BoardDb | null, list: readonly TimeEntry[]): Map<string, Mark[]> =>
+    db
+      ? marksOf(
+          db,
+          list.map(e => e.id),
+        )
+      : new Map()
+  /** The entry's day, worked → billed, as durations: not read as the entry's own start and stop. */
   const dayTotal = (db: BoardDb, e: TimeEntry): string => {
     const { day } = dayOf(db, e.client, e.date)
-    return t('time.cli.dayTotal', { raw: hm(day.seconds), billed: hm(day.billedSeconds) })
+    return t('time.cli.dayTotal', { raw: durationText(day.seconds, t), billed: durationText(day.billedSeconds, t) })
   }
 
   switch (sub) {
@@ -241,29 +382,37 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
         to = stopGiven ?? Math.floor(now / 60_000) * 60_000
         from = to - duration * 1000
       } else throw new TimeError('time.err.noDuration')
+      const billable = billableFlag()
       const db = writable()
       try {
-        const r = addEntry(
-          db,
-          conf,
-          {
-            client,
-            project,
-            description,
-            tags: a.all('--tag'),
-            start: from,
-            stop: to,
-            startGiven: start !== null,
-            newProject: a.has('--new-project'),
-          },
-          ctx.actor,
-          now,
-        )
-        if (a.has('--new-project') && !r.existing) addTimeProjects(client, [r.entry.project])
+        const add = (c: TimeConfig) =>
+          addEntry(
+            db,
+            c,
+            {
+              client,
+              project,
+              description,
+              tags: a.all('--tag'),
+              start: from,
+              stop: to,
+              startGiven: start !== null,
+              newProject: a.has('--new-project'),
+              ...(typeof billable === 'boolean' && { billable }),
+            },
+            ctx.actor,
+            now,
+          )
+        // a new project: the entry and the client's list under config.json's lock
+        const r = a.has('--new-project') ? withNewProject(conf, add, x => x.entry) : add(conf)
         const said = !r.existing ? 'ok' : r.reason === 'repeat-window' ? t('time.cli.repeat') : t('time.cli.existing')
         print(
-          `${said} · ${r.entry.id} · ${r.entry.client}/${r.entry.project} · ${r.entry.date} · ${hm(secondsOf(r.entry))} · ${dayTotal(db, r.entry)}`,
-          { ...entryJson(r.entry), existing: r.existing, ...(r.reason && { reason: r.reason }) },
+          `${said} · ${r.entry.id} · ${r.entry.client}/${r.entry.project} · ${r.entry.date} · ${hm(secondsOf(r.entry))} (${intervalText(r.entry)}) · ${dayTotal(db, r.entry)}`,
+          {
+            ...entryJson(r.entry, conf, marksFor(db, [r.entry]).get(r.entry.id)),
+            existing: r.existing,
+            ...(r.reason && { reason: r.reason }),
+          },
         )
       } finally {
         db.close()
@@ -282,28 +431,40 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       const client = a.one('--client')
       const start = when('--start')
       const stop = when('--stop')
+      const billable = billableFlag()
       const db = writable()
       try {
-        const e = editEntry(
-          db,
-          conf,
-          id,
-          {
-            ...(description !== undefined && { description }),
-            ...(project !== undefined && { project }),
-            ...(client !== undefined && { client }),
-            ...(start !== null && { start }),
-            ...(stop !== null && { stop }),
-            ...(duration !== null && { seconds: duration }),
-            addTags: tags.filter(x => !x.startsWith('-')).map(x => x.replace(/^\+/, '')),
-            removeTags: tags.filter(x => x.startsWith('-')).map(x => x.slice(1)),
-            newProject: a.has('--new-project'),
-          },
-          ctx.actor,
-          { force, ...(expect !== undefined && { expect }) },
+        const was = getEntry(db, id)
+        const edit = (c: TimeConfig) =>
+          editEntry(
+            db,
+            c,
+            id,
+            {
+              ...(description !== undefined && { description }),
+              ...(project !== undefined && { project }),
+              ...(client !== undefined && { client }),
+              ...(start !== null && { start }),
+              ...(stop !== null && { stop }),
+              ...(duration !== null && { seconds: duration }),
+              addTags: tags.filter(x => !x.startsWith('-')).map(x => x.replace(/^\+/, '')),
+              removeTags: tags.filter(x => x.startsWith('-')).map(x => x.slice(1)),
+              newProject: a.has('--new-project'),
+              ...(billable !== undefined && { billable }),
+            },
+            ctx.actor,
+            { force, ...(expect !== undefined && { expect }) },
+          )
+        const e = a.has('--new-project') ? withNewProject(conf, edit, x => x) : edit(conf)
+        // entered somewhere already: the change is to be made there too
+        const marks = marksFor(db, [e]).get(e.id) ?? []
+        print(
+          [
+            `ok · ${entryLine(e, conf, marks, { interval: true })} · rev ${e.rev} · ${dayTotal(db, e)}`,
+            ...there('time.cli.changeThere', was, e, marks),
+          ],
+          entryJson(e, conf, marks),
         )
-        if (a.has('--new-project')) addTimeProjects(e.client, [e.project])
-        print(`ok · ${entryLine(e)} · rev ${e.rev} · ${dayTotal(db, e)}`, entryJson(e))
       } finally {
         db.close()
       }
@@ -316,8 +477,16 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
         throw new TimeError('time.err.whenRange', { value: date })
       const db = writable()
       try {
+        const was = getEntry(db, id)
         const e = moveEntry(db, conf, id, date, ctx.actor, { force, ...(expect !== undefined && { expect }) })
-        print(`ok · ${entryLine(e)} · ${e.start} · ${dayTotal(db, e)}`, entryJson(e))
+        const marks = marksFor(db, [e]).get(e.id)
+        print(
+          [
+            `ok · ${entryLine(e, conf, marks, { interval: true })} · ${e.start} · ${dayTotal(db, e)}`,
+            ...there('time.cli.changeThere', was, e, marks),
+          ],
+          entryJson(e, conf, marks),
+        )
       } finally {
         db.close()
       }
@@ -330,8 +499,17 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       const db = writable()
       try {
         const o = { force, ...(expect !== undefined && { expect }) }
+        const was = getEntry(db, id)
         const e = sub === 'rm' ? removeEntry(db, id, ctx.actor, o) : restoreEntry(db, id, ctx.actor, o)
-        print(`ok · ${entryLine(e)}`, entryJson(e))
+        const marks = marksFor(db, [e]).get(e.id)
+        // removed, entered somewhere: to be taken out there too; back: to be entered again there
+        print(
+          [
+            `ok · ${entryLine(e, conf, marks)}`,
+            ...there(sub === 'rm' ? 'time.cli.removeThere' : 'time.cli.changeThere', was, e, marks),
+          ],
+          entryJson(e, conf, marks),
+        )
       } finally {
         db.close()
       }
@@ -342,11 +520,19 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       if (!id) throw new TimeError('time.err.usage')
       const db = readable()
       const e = db ? getEntry(db, id) : null
+      const marks = e ? (marksFor(db, [e]).get(e.id) ?? []) : []
       db?.close()
       if (!e) throw new TimeError('time.err.gone', { id })
       print(
-        [entryLine(e), `${e.start} → ${e.stop} · rev ${e.rev} · ${whoText(e.by)} · ${whoText(e.changedBy)}`],
-        entryJson(e),
+        [
+          entryLine(e, conf, marks),
+          `${e.start} → ${e.stop} · rev ${e.rev} · ${whoText(e.by)} · ${whoText(e.changedBy)}`,
+          ...marks.map(
+            m =>
+              `  ${m.system}${m.record ? ` ${m.record}` : ''} · ${new Date(m.at).toISOString()} · ${whoText(m.by)} · rev ${m.rev}${m.rev < e.rev ? ` · ${t('time.cli.changedAfter')}` : ''}`,
+          ),
+        ],
+        entryJson(e, conf, marks),
       )
       return
     }
@@ -355,24 +541,97 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       const from = a.one('--from') ?? date ?? today
       const to = a.one('--to') ?? date ?? from
       if (!isDate(from) || !isDate(to)) throw new TimeError('time.err.usage')
+      const system = a.one('--system')
+      const project = a.one('--project')
+      const changedAfter = a.has('--changed-after-post')
+      if (system !== undefined && !a.has('--not-posted') && !changedAfter) throw new TimeError('time.err.usage')
+      if (a.has('--not-posted') && changedAfter) throw new TimeError('time.err.usage')
       const db = readable()
-      const list = db
-        ? listEntries(db, { from, to, client: a.one('--client'), tag: a.one('--tag'), deleted: a.has('--deleted') })
+      // changed after entering takes in removed entries: one removed on the board is to be taken out there
+      const read = db
+        ? listEntries(db, {
+            from,
+            to,
+            client: a.one('--client'),
+            tag: a.one('--tag'),
+            project,
+            deleted: a.has('--deleted') || changedAfter,
+          })
         : []
+      const marks = marksFor(db, read)
       db?.close()
+      const held = (e: TimeEntry) => e.tags.some(tag => conf.excludeTags.includes(tag))
+      const list = read.filter(e => {
+        const own = marks.get(e.id) ?? []
+        // what a billing agent still has to enter: billable, not held, missing a mark in a system
+        // its project is entered in (or in the one named)
+        if (a.has('--not-posted')) {
+          if (e.deleted || held(e) || !billableOf(conf, e)) return false
+          const systems = systemsFor(conf, e.client, e.project).map(x => x.id)
+          const wanted = system === undefined ? systems : systems.filter(x => x === system)
+          return wanted.some(x => !own.some(m => m.system === x))
+        }
+        // entered, then changed on the board (removed too): to change there too, in the system named;
+        // a mark in a system its project is not entered in is none of its own
+        if (changedAfter)
+          return own.some(
+            m => m.rev < e.rev && (system === undefined || m.system === system) && !outsideProject(conf, e, m.system),
+          )
+        return true
+      })
       // the total as a day's would be: removed and held entries out of it
-      const counted = list.filter(e => !e.deleted && !e.tags.some(tag => conf.excludeTags.includes(tag)))
-      const held = list.filter(e => !e.deleted).length - counted.length
+      const counted = list.filter(e => !e.deleted && !held(e))
+      const heldCount = list.filter(e => !e.deleted).length - counted.length
+      // removed ones listed (--deleted, or changed after entering): counted apart, as the held ones
+      const removedCount = list.filter(e => e.deleted).length
       const total = counted.reduce((n, e) => n + secondsOf(e), 0)
+      // per project, as the board tells names apart, under the name the client's list has for it
+      const projects = new Map<string, { client: string; project: string; count: number; seconds: number }>()
+      for (const e of counted) {
+        const key = `${e.client}\u0000${projectKey(e.project)}`
+        const p = projects.get(key) ?? {
+          client: e.client,
+          project: projectIn(conf.clients?.[e.client]?.projects ?? [], e.project) ?? e.project,
+          count: 0,
+          seconds: 0,
+        }
+        p.count++
+        p.seconds += secondsOf(e)
+        projects.set(key, p)
+      }
+      const byProject = [...projects.values()].sort(
+        (x, y) => x.client.localeCompare(y.client) || x.project.localeCompare(y.project),
+      )
+      // a person reads them per project when the list is a client's or a project's (or asked for)
+      const perProject =
+        (a.one('--client') !== undefined || project !== undefined || a.has('--totals')) && byProject.length > 1
+      const entries = list.map(e => entryJson(e, conf, marks.get(e.id)))
       print(
         list.length
           ? [
               ...warn(),
-              ...list.map(entryLine),
-              `${t('time.cli.total', { n: counted.length, total: hm(total) })}${held ? ` · ${t('time.cli.heldCount', { n: held })}` : ''}`,
+              ...list.map(e => entryLine(e, conf, marks.get(e.id))),
+              `${t('time.cli.total', { n: counted.length, total: hm(total) })}${heldCount ? ` · ${t('time.cli.heldCount', { n: heldCount })}` : ''}${removedCount ? ` · ${t('time.cli.removedCount', { n: removedCount })}` : ''}`,
+              ...(perProject
+                ? byProject.map(
+                    p => `  ${p.client}/${p.project} · ${t('time.cli.total', { n: p.count, total: hm(p.seconds) })}`,
+                  )
+                : []),
             ]
           : [...warn(), t('time.cli.none')],
-        list.map(entryJson),
+        // the list as agents read it; with --totals, the list and its totals
+        a.has('--totals')
+          ? {
+              entries,
+              total: {
+                count: counted.length,
+                seconds: total,
+                held: heldCount,
+                removed: removedCount,
+                projects: byProject,
+              },
+            }
+          : entries,
       )
       return
     }
@@ -381,6 +640,7 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       if (!isDate(date)) throw new TimeError('time.err.usage')
       const db = readable()
       const entries = db ? listEntries(db, { from: date, to: date, client: a.one('--client') }) : []
+      const marks = marksFor(db, entries)
       db?.close()
       const clients = [...new Set(entries.map(e => e.client))].sort()
       if (a.one('--client') && !clients.includes(a.one('--client') as string)) clients.push(a.one('--client') as string)
@@ -400,8 +660,8 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
           ...d,
           entries: d.lines
             .flatMap(l => l.entries)
-            .concat(d.held)
-            .map(id => entryJson(byId.get(id) as TimeEntry)),
+            .concat(d.nonBillable, d.held)
+            .map(id => entryJson(byId.get(id) as TimeEntry, conf, marks.get(id))),
         })),
       })
       return
@@ -428,6 +688,94 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       db?.close()
       // --csv says what it is (the only form there is); --bom for Excel, which reads UTF-8 by it
       out(`${a.has('--bom') ? '\uFEFF' : ''}${csvOf(list)}`)
+      return
+    }
+    case 'post':
+    case 'unpost': {
+      const system = a.one('--system')
+      if (!system) throw new TimeError('time.err.noSystem')
+      const bulk = sub === 'post' && !a.words.length && a.one('--to') !== undefined
+      if (!bulk && !a.words.length) throw new TimeError('time.err.usage')
+      // a post or unpost by id writes: a dry run, or a range, is the switch-over's alone
+      if (!bulk && a.has('--dry-run')) throw new TimeError('time.err.dryRunById')
+      if (a.words.length && ['--client', '--to', '--from'].some(f => a.one(f) !== undefined))
+        throw new TimeError('time.err.idsAndRange')
+      let items: PostItem[]
+      let dryList: TimeEntry[] = []
+      if (bulk) {
+        // the switch-over: what was entered before the board took over, all at once: the client's
+        // billable entries, live and not held, up to --to (from --from), of projects entered there,
+        // not marked there yet
+        const client = a.one('--client')
+        const to = a.one('--to') as string
+        const from = a.one('--from') ?? '0000-01-01'
+        if (!client || !isDate(to) || !isDate(from)) throw new TimeError('time.err.usage')
+        if (!systemsFor(conf, client).some(x => x.id === system))
+          throw new TimeError('time.err.system', {
+            client,
+            system,
+            known:
+              systemsFor(conf, client)
+                .map(x => x.id)
+                .join(', ') || '-',
+          })
+        const db = readable()
+        const read = db ? listEntries(db, { from, to, client }) : []
+        const marks = marksFor(db, read)
+        db?.close()
+        dryList = read.filter(
+          e =>
+            billableOf(conf, e) &&
+            !e.tags.some(tag => conf.excludeTags.includes(tag)) &&
+            systemsFor(conf, e.client, e.project).some(x => x.id === system) &&
+            !(marks.get(e.id) ?? []).some(m => m.system === system),
+        )
+        // each with the revision read: one changed since refuses the run, all or none
+        items = dryList.map(e => ({ id: e.id, rev: e.rev }))
+      } else items = a.words.map(postItem)
+      const seconds = (list: readonly TimeEntry[]) => list.reduce((n, e) => n + secondsOf(e), 0)
+      if (bulk && a.has('--dry-run')) {
+        print(t('time.cli.postDry', { n: dryList.length, total: hm(seconds(dryList)), system }), {
+          system,
+          dryRun: true,
+          count: dryList.length,
+          seconds: seconds(dryList),
+          entries: dryList.map(e => entryJson(e, conf)),
+        })
+        return
+      }
+      const db = writable()
+      try {
+        const record = a.one('--record')
+        // what was written: a mark already as it would be, or none to take off, is no change
+        const changed = new Set(
+          (sub === 'post'
+            ? postEntries(db, conf, items, system, ctx.actor, { ...(record !== undefined && { record }) })
+            : unpostEntries(db, conf, items, system, ctx.actor)
+          ).map(m => m.entry),
+        )
+        const after = items.map(i => getEntry(db, i.id)).filter((e): e is TimeEntry => e !== null)
+        const done = after.filter(e => changed.has(e.id))
+        const marks = marksFor(db, after)
+        print(
+          [
+            ...after.map(e => entryLine(e, conf, marks.get(e.id))),
+            t(sub === 'post' ? 'time.cli.postedCount' : 'time.cli.unpostedCount', {
+              n: done.length,
+              total: hm(seconds(done)),
+              system,
+            }),
+          ],
+          {
+            system,
+            count: done.length,
+            seconds: seconds(done),
+            entries: after.map(e => entryJson(e, conf, marks.get(e.id))),
+          },
+        )
+      } finally {
+        db.close()
+      }
       return
     }
     case 'import':
@@ -484,6 +832,7 @@ async function importCmd(
   if (format !== undefined && format !== 'dmy' && format !== 'mdy')
     throw new TimeError('time.err.flagValue', { flag: '--date-format' })
   const map = parseMap(a.all('--map'))
+  const fromToggl = a.has('--billable-from-toggl')
   if (typeof map === 'string') throw new TimeError('time.err.map', { value: map })
   let text: string
   try {
@@ -531,6 +880,8 @@ async function importCmd(
       start: r.start,
       stop: r.stop,
       ...(r.key && { toggl: r.key }),
+      // Toggl's Billable only when asked: its free plan says No on every row
+      ...(fromToggl && r.billable !== undefined && { billable: r.billable }),
     })
   }
   for (const lane of new Set(map.values())) {
@@ -564,7 +915,11 @@ async function importCmd(
   const rowText = (c: ImportChange): string => {
     const at = Date.parse(c.row.start)
     const [h, m] = clockIn(at, tz)
-    const words = c.row.description.length > 40 ? `${c.row.description.slice(0, 40)}…` : c.row.description
+    // cut by what a reader takes for one character (a grapheme): an emoji is never halved
+    const chars = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(c.row.description)].map(
+      x => x.segment,
+    )
+    const words = chars.length > 40 ? `${chars.slice(0, 40).join('')}…` : c.row.description
     return `${dateIn(at, tz)} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} "${words}"${c.id ? ` · ${c.id}` : ''}`
   }
   /** A row the store has otherwise: changed in Toggl (or on the board) since its import, or made by a session at that start. */
@@ -589,11 +944,25 @@ async function importCmd(
     const fresh = verdicts.filter(v => v.kind === 'new').length
     const already = verdicts.filter(v => v.kind === 'already').length
     const changed = verdicts.flatMap(v => (v.kind === 'changed' ? [changeOf(v)] : []))
+    // with Toggl's Billable: how many rows the run would make non-billable, said before it does
+    const nonBillable = verdicts.filter(
+      v =>
+        (v.kind === 'new' && v.entry.billable === false) ||
+        // a row that differs is rewritten only with --update, and only an entry the board never changed
+        (v.kind === 'changed' &&
+          !v.alike &&
+          a.has('--update') &&
+          v.stored.by === 'import' &&
+          v.stored.changedBy === 'import' &&
+          v.fields.includes('billable') &&
+          v.next.billable === false),
+    ).length
     print(
       [
         ...totals(t('time.cli.byWorkDate', { zone: conf.zone }), byWorkDate),
         ...totals(t('time.cli.byTogglDay', { zone: tz }), byTogglDay),
         ...changeLines('time.cli.importChanged', changed),
+        ...(fromToggl ? [t('time.cli.importNonBillable', { n: nonBillable })] : []),
         t('time.cli.importDry', {
           n: fresh,
           already,
@@ -602,19 +971,29 @@ async function importCmd(
           bad: bad.length,
         }),
       ],
-      { ...summary, dryRun: true, new: fresh, already, changed },
+      { ...summary, dryRun: true, new: fresh, already, changed, ...(fromToggl && { nonBillable }) },
     )
     return
   }
   const db = writable()
   try {
-    const r = importEntries(db, conf, entries, { update: a.has('--update') })
-    // projects found go into each lane's list, where the lane lists them: only once the gate let the run in
-    const byLane = new Map<string, string[]>()
-    for (const e of entries) if (e.project !== '-') byLane.set(e.client, [...(byLane.get(e.client) ?? []), e.project])
-    for (const [lane, projects] of byLane) addTimeProjects(lane, projects)
+    const projects = new Map<string, string[]>()
+    const r = importEntries(db, conf, entries, {
+      update: a.has('--update'),
+      wrote: e => {
+        if (e.project !== '-') projects.set(e.client, [...(projects.get(e.client) ?? []), e.project])
+      },
+    })
+    // the projects of the entries it wrote go into each lane's list, where the lane lists them: a
+    // row already there (or one that differs, a project renamed on the board since) brings none back
+    const refusals = [...projects].flatMap(([lane, names]) => {
+      const added = addTimeProjects(lane, names)
+      return added.ok ? [] : [added.error]
+    })
+    const listNote = refusals.length ? t('time.cli.projectsNotAdded', { error: refusals[0] ?? '' }) : null
     print(
       [
+        ...(listNote ? [listNote] : []),
         ...changeLines('time.cli.importChanged', r.changed),
         ...changeLines('time.cli.importUpdated', r.updated),
         t('time.cli.imported', {
@@ -626,7 +1005,7 @@ async function importCmd(
           bad: bad.length,
         }),
       ],
-      { ...summary, ...r },
+      { ...summary, ...r, ...(listNote && { projectsNotAdded: listNote }) },
     )
   } finally {
     db.close()

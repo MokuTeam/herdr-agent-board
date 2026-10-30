@@ -34,6 +34,10 @@
 //                            too, with the board's own wake (#178). `board sleep <pane>
 //                            --pi-session <file>`: a pane where pi was stopped by hand, a shell
 //                            now, taken as that pi session asleep there
+//   board move <id|name|pane>... --profile <id> [--when-free]   moves those sessions to another
+//                            Claude profile, keeping their conversation (#250, services/move.ts): put
+//                            to sleep first when free (--when-free: the busy ones once they are),
+//                            their conversation copied there, card and wake switched; a line each
 //   board fork [--name <Name>] [note]   a fork of this session (or --session's): a new session in
 //                            a new tab with a copy of its conversation, started by the web board as
 //                            its Fork does (services/launch/fork.ts); the note is its first message
@@ -92,18 +96,25 @@ import { createClaudeHome, cwdOf } from '../adapters/claude-home.ts'
 import { configFile, editCategories, loadConfig, setRemoteOn, setTunnelOn } from '../adapters/config-file.ts'
 import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
-import { boardFile } from '../adapters/paths.ts'
 import { findPiSession } from '../adapters/pi-home.ts'
 import { currentPresence, setPresence } from '../adapters/presence-store.ts'
 import { runHere } from '../adapters/process.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
-import { addEntry, askRestart, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
+import {
+  addEntry,
+  askRestart,
+  listEntries,
+  type NewEntry,
+  removeEntry,
+  schedulerRuns as schedulerRunsNow,
+} from '../adapters/schedule-store.ts'
 import { peekPiSleepers } from '../adapters/wake-files.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { CODEX_AGENT } from '../core/codex.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
+import { parseMove } from '../core/move.ts'
 import { isPiSessionFile, piSessionId } from '../core/pi.ts'
 import { type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
 import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
@@ -122,10 +133,11 @@ import { checkWake, wakeAnswers } from '../services/actions.ts'
 import { askArchive, closeDue, getArchived, profileDoubt } from '../services/archive.ts'
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
+import { type MoveOutcome, moveMany } from '../services/move.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -305,22 +317,7 @@ function boardAnswer(): Promise<Record<string, unknown> | null> {
 }
 
 /** Whether a board that runs the schedule answers now. */
-async function schedulerRuns(): Promise<boolean> {
-  try {
-    if (cfg.web === false) {
-      // The terminal board runs the schedule itself then (entrypoints/tui.ts).
-      const board: unknown = JSON.parse(readFileSync(boardFile(), 'utf8'))
-      const pid = isRecord(board) ? board.pid : undefined
-      if (typeof pid !== 'number') return false
-      process.kill(pid, 0)
-      return true
-    }
-    const body = await boardAnswer()
-    return !!body && 'schedules' in body
-  } catch {
-    return false
-  }
-}
+const schedulerRuns = (): Promise<boolean> => schedulerRunsNow(cfg.web !== false, boardAnswer)
 
 /**
  * The profiles with the board's own: the folder the running web board says its env points to
@@ -568,6 +565,7 @@ async function main(): Promise<void> {
   if (cmd === 'db') return dbCmd()
   if (cmd === 'archive') return archive()
   if (cmd === 'sleep') return sleep()
+  if (cmd === 'move') return move()
   if (cmd === 'fork') return fork()
   if (cmd === 'resume') return rest.includes('--pi') ? resumePi() : resume()
   if (cmd === 'tg-key') return tgKey()
@@ -1020,6 +1018,40 @@ async function sleep(): Promise<void> {
       : ''
   const note = count('scheduled') ? await schedulerNote() : ''
   console.log([`ok · ${head.filter(Boolean).join(', ')}${hint}${note}`, ...results.map(sleepLine)].join('\n'))
+}
+
+/** One session's line for `board move`: who, then moved, moved once free, or refused and why. */
+function moveLine(o: MoveOutcome, profile: string): string {
+  const who = o.name ? `${o.name}${o.pane ? ` (${o.pane})` : ''}` : `"${o.target}"`
+  if (o.result === 'moved') return `${who}: moved to ${profile}${o.notes?.length ? ` · ${o.notes.join(' · ')}` : ''}`
+  const s = o.sleep
+  if (o.result === 'scheduled' && s)
+    return `${who}: ${keptBy(s)}; goes to sleep once it is free, then moves to ${profile}${s.again ? ' (asked before)' : ''} · cancel: board unschedule ${s.id}`
+  if (!s) return `${who}: refused, ${o.why ?? ''}`
+  // Held for what passes: put to sleep by hand, or moved once it is free.
+  const passes = ['busy', 'dialog', 'draft', 'tasks'].includes(s.why ?? '')
+  const hint = passes ? `; put it to sleep first (board sleep ${o.key ?? o.target}), or add --when-free` : ''
+  return `${who}: refused, ${keptBy(s)}${hint}`
+}
+
+/**
+ * `board move <id|name|pane>... --profile <id> [--when-free]` (#250): the sessions moved to another
+ * Claude profile, keeping their conversation (services/move.ts); a line for each. In English for
+ * agents, whatever language the board speaks.
+ */
+async function move(): Promise<void> {
+  const { targets, profile } = parseMove([...rest, ...(target ? [target] : [])])
+  const from = await ownSession()
+  const items = await collect(deps)
+  const results = await moveMany(deps, items, targets, { profile, whenFree, by: 'agent', ...(from && { from }) })
+  const count = (result: MoveOutcome['result']): number => results.filter(o => o.result === result).length
+  const head = [
+    `${count('moved')} moved to ${profile}`,
+    count('scheduled') && `${count('scheduled')} once free`,
+    count('refused') && `${count('refused')} refused`,
+  ]
+  const note = count('scheduled') ? await schedulerNote() : ''
+  console.log([`ok · ${head.filter(Boolean).join(', ')}${note}`, ...results.map(o => moveLine(o, profile))].join('\n'))
 }
 
 /**

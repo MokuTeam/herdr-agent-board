@@ -2,21 +2,30 @@ import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { translator } from '../../src/core/i18n/translator.ts'
 import {
+  billableByDefault,
+  billableOf,
   clientDay,
   clientOf,
   clockIn,
   DEFAULT_REF,
   dateIn,
   durationOf,
+  entryView,
   hm,
   instantIn,
   isDate,
+  outsideProject,
   parseWhen,
   plausible,
   problemsText,
+  projectIn,
+  projectKey,
   refIn,
   rounded,
+  systemsFor,
+  systemsOfProject,
   type TimeEntry,
+  takersOf,
   timeConfig,
 } from '../../src/core/time.ts'
 
@@ -305,5 +314,241 @@ test('no rules: each entry alone and exact; a `project` group adds a project’s
   assert.deepEqual(
     clientDay(byProject, 'a', '2026-10-28', es).lines.map(l => [l.project, l.seconds / 60, l.billedSeconds / 60]),
     [['Support', 35, 30]],
+  )
+})
+
+test('billable and systems in config: a client billed or not, its projects that are not, where its time is entered', () => {
+  const c = timeConfig({
+    zone: NY,
+    clients: {
+      a: {
+        projects: ['Support', 'Internal'],
+        nonBillable: ['Internal'],
+        systems: ['erp', { id: 'tracker', title: 'Tracker' }],
+      },
+      own: { billable: false },
+    },
+  })
+  assert.ok(c)
+  assert.deepEqual(c.problems, [])
+  assert.deepEqual(systemsFor(c, 'a'), [
+    { id: 'erp', title: 'erp' },
+    { id: 'tracker', title: 'Tracker' },
+  ])
+  assert.deepEqual(systemsFor(c, 'own'), [])
+  assert.deepEqual(
+    [billableByDefault(c, 'a', 'Support'), billableByDefault(c, 'a', 'Internal'), billableByDefault(c, 'own', 'x')],
+    [true, false, false],
+  )
+  // set on an entry, either way, it wins
+  assert.equal(billableOf(c, { client: 'a', project: 'Internal', billable: true }), true)
+  assert.equal(billableOf(c, { client: 'a', project: 'Support', billable: false }), false)
+  assert.equal(billableOf(c, { client: 'own', project: 'x' }), false)
+  // every lane, `time: true`: billed, nowhere to enter
+  const any = timeConfig(true)
+  assert.ok(any)
+  assert.deepEqual([billableByDefault(any, 'x', 'y'), systemsFor(any, 'x')], [true, []])
+})
+
+test('billable and systems guess nothing either: each slip is a problem named by its place', () => {
+  const c = timeConfig({
+    zone: NY,
+    clients: {
+      a: {
+        projects: ['Support'],
+        billable: 'yes',
+        nonBillable: ['Suport'],
+        systems: ['erp', 'erp', 'ERP', { id: 'tracker', name: 'x' }, { id: 'wiki', title: 3 }, 7],
+      },
+      b: { systems: 'erp', nonBillable: 'Internal' },
+    },
+  })
+  assert.ok(c)
+  assert.deepEqual(
+    c.problems.map(x => [x.at, x.why, x.value]),
+    [
+      ['time.clients.a.billable', 'type', 'yes'],
+      ['time.clients.a.nonBillable[0]', 'project', 'Suport'],
+      ['time.clients.a.systems[1]', 'system', 'erp'],
+      ['time.clients.a.systems[2]', 'system', 'ERP'],
+      ['time.clients.a.systems[3].name', 'unknown', undefined],
+      ['time.clients.a.systems[4].title', 'type', '3'],
+      ['time.clients.a.systems[5]', 'type', '7'],
+      ['time.clients.b.nonBillable', 'type', 'Internal'],
+      ['time.clients.b.systems', 'type', 'erp'],
+    ],
+  )
+  assert.match(
+    problemsText(c.problems.slice(1, 3), translator('en')),
+    /not one of this client’s projects.*not a system id/,
+  )
+})
+
+test('a non-billable entry counts as worked, never as billed: in no line, so no rounding, no Raise or Trim', () => {
+  const c = timeConfig({
+    zone: NY,
+    clients: { a: { nonBillable: ['Internal'], billing: [{ group: 'ref', step: 30, round: 'up' }] } },
+  })
+  assert.ok(c)
+  const es = [
+    entry({ start: '2026-10-28T13:00:00Z', minutes: 20, description: 'Case 10001 X: looked' }),
+    // the same case, set non-billable: not in its line
+    entry({ start: '2026-10-28T14:00:00Z', minutes: 25, description: 'Case 10001 X: our slip', billable: false }),
+    entry({ start: '2026-10-28T15:00:00Z', minutes: 10, description: 'Standup', project: 'Internal' }),
+    // non-billable and held: never billed beats billed later
+    entry({
+      start: '2026-10-28T16:00:00Z',
+      minutes: 5,
+      description: 'Case 10002',
+      billable: false,
+      tags: ['deferred'],
+    }),
+    entry({ start: '2026-10-28T17:00:00Z', minutes: 15, description: 'Case 10003', tags: ['deferred'] }),
+  ]
+  const day = clientDay(c, 'a', '2026-10-28', es)
+  assert.deepEqual(
+    day.lines.map(l => [l.ref, l.seconds / 60, l.billedSeconds / 60, l.entries.length]),
+    [['10001', 20, 30, 1]],
+  )
+  assert.deepEqual([day.nonBillable.length, day.held.length], [3, 1])
+  assert.deepEqual([day.seconds / 60, day.billedSeconds / 60], [60, 30])
+})
+
+test('time off keeps its settings; a client off and its retired projects are read, each slip a problem by its place', () => {
+  // `on: false`: off, whatever else the section holds; absent or true: on, as every config so far
+  assert.equal(timeConfig({ on: false, zone: NY, clients: { a: {} } }), null)
+  assert.equal(timeConfig({ on: true, zone: NY })?.problems.length, 0)
+  const c = timeConfig({
+    zone: NY,
+    clients: {
+      a: { on: false, projects: ['Support'], retired: ['Old', 'Old'], nonBillable: ['Old'] },
+      b: { projects: ['Support'] },
+    },
+  })
+  assert.ok(c)
+  assert.deepEqual(c.problems, [])
+  assert.deepEqual(
+    [c.clients?.a?.on, c.clients?.a?.retired, c.clients?.b?.on, c.clients?.b?.retired],
+    [false, ['Old'], true, []],
+  )
+  assert.deepEqual(takersOf(c), ['b'])
+  assert.equal(takersOf({ ...c, clients: null }), null)
+  const bad = timeConfig({
+    on: 'yes',
+    zone: NY,
+    clients: { a: { on: 1, projects: ['Support'], retired: ['support '] }, b: { retired: 'Old' } },
+  })
+  assert.deepEqual(
+    bad?.problems.map(p => [p.at, p.why]),
+    [
+      ['time.on', 'type'],
+      ['time.clients.a.on', 'type'],
+      ['time.clients.a.retired[0]', 'retired'],
+      ['time.clients.b.retired', 'type'],
+    ],
+  )
+})
+
+test('a project typed again is the one listed, case and spaces aside', () => {
+  assert.equal(projectKey(' Cases  Work '), 'caseswork')
+  assert.equal(projectIn(['Support', 'Cases work'], 'cases work '), 'Cases work')
+  assert.equal(projectIn(['Support'], 'casesWork'), null)
+  // the same letters however encoded, and characters that do not show: one name
+  const accent = String.fromCharCode(0x301)
+  const unseen = [0x200b, 0x200d, 0x2060, 0xfeff, 0xad].map(c => String.fromCharCode(c))
+  assert.equal(projectKey(`Cafe${accent}`), projectKey('Café'))
+  for (const u of unseen) assert.equal(projectKey(`Help${u}Desk`), 'helpdesk')
+  // compatibility forms too: full-width letters, a ligature
+  assert.equal(projectKey('ＡＢＣ'), 'abc')
+  assert.equal(projectKey('ﬁle'), 'file')
+})
+
+test('a project billed elsewhere: its own systems (projectSystems), its name matched as names are; the rest the client’s', () => {
+  const c = timeConfig({
+    zone: NY,
+    clients: {
+      a: {
+        projects: ['Support', 'Side Work'],
+        retired: ['Old'],
+        systems: ['erp', { id: 'tracker', title: 'Tracker' }],
+        projectSystems: { 'side work': ['tracker'], Old: [] },
+      },
+    },
+  })
+  assert.ok(c)
+  assert.deepEqual(c.problems, [])
+  const ids = (project?: string) => systemsFor(c, 'a', project).map(s => s.id)
+  assert.deepEqual(
+    [ids(), ids('Support'), ids('Side Work'), ids('SIDE WORK '), ids('Old')],
+    [['erp', 'tracker'], ['erp', 'tracker'], ['tracker'], ['tracker'], []],
+  )
+  // a mark in the client's other system is none of that project's; one in a system gone is its own
+  const side = { client: 'a', project: 'Side Work' }
+  assert.deepEqual(
+    [outsideProject(c, side, 'erp'), outsideProject(c, side, 'tracker'), outsideProject(c, side, 'gone')],
+    [true, false, false],
+  )
+  assert.equal(outsideProject(c, { client: 'a', project: 'Support' }, 'erp'), false)
+  // the entry says where it is to be entered
+  const e: TimeEntry = {
+    id: 'e1',
+    client: 'a',
+    project: 'Side Work',
+    description: 'x',
+    tags: [],
+    start: '2026-10-28T13:00:00Z',
+    stop: '2026-10-28T14:00:00Z',
+    date: '2026-10-28',
+    by: 'user',
+    at: 0,
+    changed: 0,
+    changedBy: 'user',
+    rev: 1,
+  }
+  assert.deepEqual(entryView(c, e).systems, ['tracker'])
+  assert.deepEqual(entryView(c, { ...e, project: 'Support' }).systems, ['erp', 'tracker'])
+  // the page's settings, without projectSystems: the client's
+  assert.deepEqual(systemsOfProject({ systems: [{ id: 'erp', title: 'ERP' }] }, 'Side Work'), [
+    { id: 'erp', title: 'ERP' },
+  ])
+  // a client without a list takes any project's name as written
+  const any = timeConfig({ zone: NY, clients: { b: { systems: ['erp', 'tracker'], projectSystems: { X: ['erp'] } } } })
+  assert.deepEqual([any?.problems, any && systemsFor(any, 'b', 'x').map(s => s.id)], [[], ['erp']])
+})
+
+test('projectSystems guesses nothing: a project not the client’s, one named twice, a system not its own, each a problem', () => {
+  const c = timeConfig({
+    zone: NY,
+    clients: {
+      a: {
+        projects: ['Support', 'Side Work'],
+        systems: ['erp', 'tracker'],
+        projectSystems: {
+          Supprot: ['erp'],
+          'Side Work': ['tracker', 'tracker', 'wiki'],
+          'side work': ['erp'],
+          Support: 'erp',
+        },
+      },
+      b: { systems: ['erp'], projectSystems: ['erp'] },
+    },
+  })
+  assert.ok(c)
+  assert.deepEqual(
+    c.problems.map(p => [p.at, p.why, p.value]),
+    [
+      ['time.clients.a.projectSystems.Supprot', 'project', 'Supprot'],
+      ['time.clients.a.projectSystems.Side Work[1]', 'system', 'tracker'],
+      ['time.clients.a.projectSystems.Side Work[2]', 'notSystem', 'wiki'],
+      ['time.clients.a.projectSystems.side work', 'twice', 'side work'],
+      ['time.clients.a.projectSystems.Support', 'type', 'erp'],
+      ['time.clients.b.projectSystems', 'type', '["erp"]'],
+    ],
+  )
+  assert.match(problemsText(c.problems, translator('en')), /"wiki" is not one of this client’s systems/)
+  // the list with a system the client has not is left out: entered everywhere, not nowhere
+  assert.deepEqual(
+    systemsFor(c, 'a', 'Side Work').map(s => s.id),
+    ['erp', 'tracker'],
   )
 })

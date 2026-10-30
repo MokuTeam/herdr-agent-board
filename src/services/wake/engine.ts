@@ -138,6 +138,9 @@ export interface WakeEngineDeps {
 
 export type TargetAnswer = { ok: true; pane: string; name: string; already?: true } | { ok: false; error: string }
 
+/** POST /profile's answer: how many entries now name the new folder, or why none. */
+export type MoveAnswer = { ok: true; entries: number } | { ok: false; error: string }
+
 /** A sleeper as `GET /sleeping?agents=all` lists it: Claude's as /sleeping does, then pi's (#178). */
 export type AnySleepingAnswer = SleepingAnswer | PiSleepingAnswer
 
@@ -183,6 +186,12 @@ export interface WakeEngine {
   status(): Promise<StatusAnswer>
   wake(target: unknown): Promise<TargetAnswer>
   sleep(target: unknown): Promise<TargetAnswer>
+  /**
+   * A sleeper moved to another profile (#250, `board move`): its entries asleep name `dir` and that
+   * folder's listed id from now on, so its wake line and the profile ListAgents sees are the new
+   * one's. A session not asleep here is refused.
+   */
+  moveProfile(session: unknown, dir: unknown): MoveAnswer
   /** Puts the idle sessions due to sleep, at most maxPerRound, while wake and its reaper are on. */
   reapRound(): Promise<void>
   /** The reaper's verdict for every Claude pane (--reap-dry). */
@@ -1018,6 +1027,25 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     },
 
     sleeping,
+
+    moveProfile(session, dir) {
+      const id = String(session ?? '').trim()
+      if (!SESSION_ID.test(id)) return { ok: false, error: `"${id}" is not a session id` }
+      const to = absoluteProfileDir(dir, homedir(), platform)
+      if (!to) return { ok: false, error: 'no profile folder named in full' }
+      const asleep = Object.keys(sessions).filter(k => sessions[k]?.session === id && sessions[k]?.slept_at)
+      if (!asleep.length) return { ok: false, error: `${id} is not asleep in wake's file` }
+      const listed = listedId(deps.profiles(), to)
+      const next = { ...sessions }
+      for (const k of asleep) {
+        const { profile: _id, ...entry } = next[k] as WakeEntry
+        next[k] = { ...entry, profileDir: to, ...(listed !== undefined && { profile: listed }) }
+      }
+      sessions = next
+      save()
+      deps.log(`${id}: moved to the profile in ${to}${listed ? ` (${listed})` : ''}`)
+      return { ok: true, entries: asleep.length }
+    },
 
     async sleepingAll() {
       const snap = await snapshotNow()

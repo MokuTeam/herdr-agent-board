@@ -281,6 +281,10 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.cat.other': '{title} is the fallback lane and stays',
     'err.language': 'Unknown language {lang}',
     'err.foldWaiting': 'Unknown way to fold {mode}',
+    'err.configUnreadable':
+      'config.json does not read as JSON (a comma too many, say): fix it by hand first. Nothing was changed.',
+    'err.configBusy':
+      'config.json is being changed by another process, or one stopped while changing it: try again in a moment (a lock left behind goes after 30 seconds).',
     'err.fs.missing': 'Not found: {path}',
     'err.fs.open': 'Could not open it: {why}',
 
@@ -602,6 +606,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.prompt.late': '{late} late, due {due}',
     'sched.prompt.cleared': 'set by {name} before /clear',
     'sched.prompt.clearedFor': 'set for {name} before /clear',
+    'sched.prompt.message': 'SendMessage from profile {profile}, answer with SendMessage to {name}',
+    'sched.prompt.messageNoReply': 'SendMessage from profile {profile}, no reply path',
     'sched.prompt.restarted': 'restarted as you asked',
     'sched.prompt.restartedOther': 'restarted',
     'sched.prompt.restartedUser': 'restarted by the user',
@@ -917,6 +923,10 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.cat.other': '{title} нужна как запасная дорожка',
     'err.language': 'Нет языка {lang}',
     'err.foldWaiting': 'Нет такого способа сворачивать: {mode}',
+    'err.configUnreadable':
+      'config.json не читается как JSON (например, лишняя запятая): сначала поправьте его вручную. Ничего не изменено.',
+    'err.configBusy':
+      'config.json сейчас меняет другой процесс, или он остановился посреди изменения: попробуйте чуть позже (оставленная блокировка снимается через 30 секунд).',
     'err.fs.missing': 'Не найдено: {path}',
     'err.fs.open': 'Не открылось: {why}',
 
@@ -1235,6 +1245,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.prompt.late': 'опоздание {late}, срок был {due}',
     'sched.prompt.cleared': 'поставлено сессией {name} до /clear',
     'sched.prompt.clearedFor': 'поставлено для {name} до /clear',
+    'sched.prompt.message': 'SendMessage из профиля {profile}, ответ: SendMessage для {name}',
+    'sched.prompt.messageNoReply': 'SendMessage из профиля {profile}, ответить этим путём нельзя',
     'sched.prompt.restarted': 'перезапущена по твоей просьбе',
     'sched.prompt.restartedOther': 'перезапущена',
     'sched.prompt.restartedUser': 'перезапущена пользователем',

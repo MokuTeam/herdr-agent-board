@@ -373,10 +373,11 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   [Helpers and linked sessions](#helpers-and-linked-sessions).
 - Right click (or a long press on a touch screen, or the menu key / Shift+F10 on a focused card)
   opens the board's own menu: on a card (open, go to herdr, message, wake or sleep, rename, move
-  to a category, status, "No reply needed", open its folder, Changes, History, a new session in
-  its folder, copy its name, folder, session or pane id, archive it, clear the card), on a lane
-  (a new session or workspace there, edit the category, show only it, archive its sleeping
-  sessions), on the "Idle" column's head (archive the sleeping sessions), on the board, on the
+  to a category, status, its Claude profile with two or more shown, "No reply needed", open its
+  folder, Changes, History, a new session in its folder, copy its name, folder, session or pane
+  id, archive it, clear the card), on a lane (a new session or workspace there, edit the category,
+  show only it, archive its sleeping sessions, move its sessions to another profile), on the
+  "Idle" column's head (archive the sleeping sessions), on the board, on the
   sheet's head, on a starting session and on file chips. It opens where you clicked, stays on screen,
   takes arrows, Enter, Esc and the first letters of an item. Gray items say why (no fresh data
   from herdr, the session works). Fields, selected text and links keep the browser's own menu;
@@ -522,6 +523,44 @@ folder), and its conversation is in that folder; else it stays up, and "Put to s
 session's own ListAgents and SendMessage see and wake only the sleeping sessions of its profile, so
 a name used in two profiles never wakes the other one; the board shows and wakes all of them. See
 [Sleep and wake](#sleep-and-wake).
+
+**Moving a session to another profile** (a client's work runs in `~/.claude-work` from now on,
+say), with its session id and conversation:
+
+```sh
+board move Billing w2:p7 3f2a9c1e-... --profile work   # names, panes or session ids
+board move Billing --profile work --when-free          # a busy one once it is free
+```
+
+The target is a listed, shown profile other than the session's own; with one profile shown there
+is nowhere to move. A session asleep is moved as it is and stays asleep; a free one is put to sleep
+first, as `board sleep` does, and woken again in the new profile once moved; a busy one (working,
+a dialog, unsent text, background tasks) is refused with the reason, or with `--when-free` gets a
+sleep entry (`board unschedule <id>` cancels it) that moves it once it is asleep. The move copies
+the transcript `projects/<project folder>/<id>.jsonl`, the session's own folder beside it and
+`file-history/<id>/` into the target profile's folder, under the same project folder; the originals
+stay. Moving it back later finds its older copy from the move before in the target: when the
+source's transcript goes on from that copy byte for byte, the copy is replaced (through a temp file
+renamed into place) and the session's folder and file history are copied over the old ones. It is
+refused when the target has a longer or different copy (one that went on by itself), when the
+session runs in the target profile, or when the source has none; these are found before a running
+session is put to sleep, so it stays up. A card from before the board kept profiles moves from the folder wake's entry
+names. When the source profile trusts the session's folder and the target does not, that one
+`hasTrustDialogAccepted` is copied into the target's `.claude.json` (`~/.claude.json` for the
+default folder), so a wake does not stop at Claude's folder-trust dialog. The card then names the
+target's folder, with no "wrong profile" tag, and so does wake's entry for the sleeper (a wake
+started before `board move` existed keeps its entry until the session's next wake: the card decides
+anyway, as `board resume` takes its folder first). Reminders stay with the session. A line per
+session: moved, once free, or refused and why.
+
+On the board, with two or more profiles shown, a card's menu has **Profile ▸** with each shown
+profile, the session's own checked: another one moves it there the same way, and a toast says how
+it went; a busy one's toast says why and offers **Move once it is free**. A lane's menu has
+**Move <lane>'s sessions to ▸** with each profile and how many of the lane's Claude sessions a move
+there takes, one toast for them all; its check **Also make it <lane>'s usual profile** sets the
+lane's usual profile too (as Categories does), so new sessions there start in it. The page sends
+it as `POST /api/move` with `{ "targets": ["<key>", ...], "profile": "<id>", "whenFree": true }`,
+which answers `{ ok, results }` as `board move` has them (`src/server/routes/move.ts`).
 
 While the separate herdr-wake plugin does the waking (installed, and not switched over yet), it
 resumes a session with the env of its pane's shell, as before, and the board keeps its old rule:
@@ -1478,8 +1517,20 @@ sleeping sessions of the caller's own profile (those asleep for less than `listS
 at most 15; the rest only counted, all of them wakeable by name) and how long its running ones have
 been idle or busy and when they go to sleep; before `SendMessage` to a sleeping session of its own
 profile, a wake first, by its session id (refused: the message is not sent, and the agent hears
-why). A name only another profile has is left to Claude Code. Neither runs on any other tool, nor
-on every prompt, and neither asks anything while wake is off. The install does not write them
+why). With one profile shown, a name only another profile has is left to Claude Code. With two or
+more shown, ListAgents also lists the other shown profiles' running and sleeping sessions, each
+with its profile, and `SendMessage` to a name that only another shown profile has (not the
+caller's own, running or asleep: that one still wins) goes through the board: a reminder due now
+for that session, "[board reminder from <caller's Claude name>; SendMessage from profile <its
+profile>, answer with SendMessage to <name> [<first 8 of its session id>]] <text>", typed in once
+it is free and waking it first if it sleeps; the native call is denied with a reason that says it
+was queued, for whom, in which profile, whether a board with the scheduler runs now, and that the
+reply comes back the same way (or why it cannot: the caller has no Claude name, or its profile is
+hidden). A running session counts only when herdr runs it (`/awake`); a ref of 8 or more hex
+characters after the name picks one session among several of that name; a name that still fits
+several is refused with each listed, with its ref. Only a text message goes this way, and one
+longer than 2000 characters is refused, not cut. Neither runs on any other tool, nor on every
+prompt, and neither asks anything while wake is off. The install does not write them
 beside the separate herdr-wake plugin's: it says so, and "Switch over…" moves them.
 
 **pi sessions** sleep and wake too, when asked: "Put to sleep" on a pi card, `board sleep` (several
@@ -1838,13 +1889,16 @@ kept, and every change goes into the database's journal with the entry before an
   "excludeTags": ["deferred"],
   "clients": {
     "client-a": {
-      "projects": ["Support", "Migration"],
+      "projects": ["Support", "Migration", "Internal"],
       "billing": [
         { "match": "^Admin", "group": "day", "round": "exact" },
         { "group": "ref", "step": 30, "round": "up" }
-      ]
+      ],
+      "nonBillable": ["Internal"],
+      "systems": [{ "id": "erp", "title": "ERP" }, "tracker"],
+      "projectSystems": { "Migration": ["tracker"] }
     },
-    "personal": { "projects": ["Internal"] }
+    "personal": { "projects": ["Internal"], "billable": false }
   }
 }
 ```
@@ -1858,7 +1912,24 @@ while there is one, no entry is written, and `board time day`, the Time panel, t
 
 **Clients and projects.** With `clients`, only the lanes listed take time, and only into their
 listed `projects` (a typo is refused with the list; `--new-project` adds one on purpose); a client
-without `projects` takes any. Without `clients`, every lane takes any project.
+without `projects` takes any. Without `clients`, every lane takes any project. A project added
+(`--new-project`, the editor's "New project…", Settings → Time tracking…, the import) that the
+client has already, case, spaces and characters that do not show aside (and the same letters however
+they are encoded), is the one it has: "support " is "Support", and the list gets no near duplicate. A client with `"on": false` takes no new entry (nor one moved to it): its
+entries stay, billed by its rules as before. `retired` lists projects no longer offered: an entry
+keeps one, a new entry is refused it (`--new-project` too: it is brought back in Settings, not by an
+agent). `"on": false` on `time` itself turns time tracking off and keeps every setting for when it
+is on again. Every writer of config.json (the Settings panels, `--new-project`, the import) changes
+it under one lock, so two at once never lose each other's change; the one write outside it is the
+defaults a first start puts there when there is no file at all. A writer that waits gives up after 2
+seconds and says so, the file as it was; a lock left by a writer that stopped mid-write is taken
+over once it is 30 seconds old, so until then each change asked is refused after its 2 seconds. A
+new project and a rename hold the lock while the database writes (which may wait up to 5 seconds for
+another writer of it). A config.json that does not read as JSON (a comma too many) is never replaced
+by the defaults: every change from the board is refused, in words, until it is fixed by hand. The
+import adds to a lane's list the projects of the entries it wrote (new rows, and ones `--update`
+rewrote): a row already there, or one that differs (a project renamed on the board since), brings
+no name back; a new row under an old name brings that name as Toggl has it.
 
 **Billing rules, as data.** A client's day becomes billed lines: each entry goes to the first rule
 whose `match` (a regex on the description, case aside) fits; `group` adds entries up (`entry`
@@ -1869,23 +1940,60 @@ under half a step. The reference is the first capture of the client's `ref`; the
 first five-digit case number or ticket key such as ABC-123, so a client whose descriptions can carry
 other such text before it (UTF-8, SHA-256) sets its own, anchored: `"ref": "^Case (\\d{5})"`. An
 entry no rule takes is billed exact, alone. Entries tagged with one of `excludeTags` show, held,
-and count in no total. The rules apply when a day is read: changing one re-rates the days already
+and count in no total, the time worked either (a day of held entries only shows 0 worked). The rules apply when a day is read: changing one re-rates the days already
 logged too (closing a billed day is for later). The board knows no client's rules but these.
+
+**Billable or not.** A client's entries are billable unless its `billable` is `false` (a lane
+never billed); `nonBillable` lists the projects of a billed client that are not (each one of its
+`projects`, or it is a problem; a client that takes any project has no list to hold them against,
+so there they are taken as written). An entry can be set the other way (`--billable`,
+`--non-billable`, the editor's switch, Toggl's own Billable on import with
+`--billable-from-toggl`), and `--default-billable` puts it back to what the config says; set the
+way the config has it already, an entry that follows the config stays so (no change). An entry
+that follows the config is billable as the config says when a day is read: a later change of
+`billable` or `nonBillable` re-rates them, entered ones too (they do not show as changed after
+entering), as a change of the rules does. A non-billable entry counts in the time worked and never in
+the billed figure: it joins no line, so nothing rounds it and Raise and Trim never touch it, and it
+shows apart. `deferred` keeps its meaning (held, billed later); an entry both non-billable and held
+is non-billable.
+
+**Entered into the client's systems.** `systems` names where a client's time is entered (an ERP's
+time records, a tracker's worklog): ids of `a-z`, `0-9` and `-`, each once, a string or
+`{ "id", "title" }` (the title is what the panel shows). A client without `systems` has nothing to
+enter. An entry is marked entered in a system with when, by whom, that system's own id for it
+(`--record`) and the entry's revision then; a mark is no change of the entry (its revision stays),
+so any session marks any entry without `--force`, and every mark and unmark has its journal row.
+An entry changed on the board after it was entered (its revision moved past the mark's) is
+"changed after entering" until it is marked again: the change is to be made in that system too.
+
+A project billed elsewhere (its time goes to the client's tracker, never to its ERP, say) names its
+own systems in `projectSystems`: the project (one of the client's `projects` or `retired`, named
+once, case and spaces aside) to a list of the client's system ids, each once; `[]` is entered
+nowhere; a list naming a system the client has not is a problem, and that project is read as
+entered in all of them until it is fixed. Its entries are to be entered there only: the panel's marks, "not entered", `list
+--not-posted`, `--changed-after-post` (a mark in a system of the client's that the project does
+not use is none of the entry's) and the switch-over follow it, and `post` refuses a system the
+entry's project does not use (`unpost` takes such a mark off). A project not in `projectSystems`
+is entered in all of the client's systems, as before.
 
 **The command.** It writes to the database itself, so it works while the web board is down; as
 the session that runs it, its lane the client when `--client` is not given. `--json` gives an
 agent the whole of it.
 
 ```
-board time add [--client <lane>] --project "<p>" [--start <t>] (--stop <t> | --minutes <n> | --hours <h>) [--tag <t>]... [--] "<description>"
-board time edit <id> [--description "…"] [--project "…"] [--client <lane>] [--start <t>] [--stop <t>] [--minutes <n>] [--tag +<t> | --tag -<t>] [--expect <rev>] [--force]
+board time add [--client <lane>] --project "<p>" [--start <t>] (--stop <t> | --minutes <n> | --hours <h>) [--tag <t>]... [--billable | --non-billable] [--] "<description>"
+board time edit <id> [--description "…"] [--project "…"] [--client <lane>] [--start <t>] [--stop <t>] [--minutes <n>] [--tag +<t> | --tag -<t>] [--billable | --non-billable | --default-billable] [--expect <rev>] [--force]
 board time move <id> <date> [--force]
 board time rm <id> [--force]    board time restore <id>    board time show <id>
-board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--tag <t>] [--deleted]
+board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--project "<p>"] [--tag <t>] [--deleted] [--not-posted [--system <id>] | --changed-after-post] [--totals]
+board time post <id>[@<rev>]... --system <id> [--record "<their id>"]    marked entered in a client's system
+board time post --client <lane> --to <d> [--from <d>] --system <id> [--dry-run]    what was entered before the board, at once
+board time unpost <id>[@<rev>]... --system <id>
 board time day [<d>] [--client <lane>]      the day as billed: lines, raw and billed
 board time projects [<lane>]
 board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy] [--dry-run] [--update]
 board time export [--csv] [--date <d> | --from <d> --to <d>] [--client <lane>] [--bom]   the entries as CSV
+board time [<command>] --help      a command's usage with all its flags, or every command's
 ```
 
 Times are ISO with an offset (`2026-10-28T09:00:00+03:00`), or this computer's clock (`9:30`,
@@ -1893,7 +2001,11 @@ Times are ISO with an offset (`2026-10-28T09:00:00+03:00`), or this computer's c
 evening); with no `--start`, a `--stop` over an hour ahead is refused instead (give its date).
 A time more than a day ahead or a year back is refused as a likely slip. Without
 `--start` the entry ends now (or at `--stop`). `--` ends the flags: quote the description, or put
-it after `--` when it may hold a word starting with `--`.
+it after `--` when it may hold a word starting with `--`. A command called wrong (a flag without
+its value, `add` without a duration, `edit` without an id) says its usage after the error. An
+`add`, `edit` or `move` says the entry's start and stop on this computer's clock after its
+duration, and its day as durations, worked → billed ("for the day 19h 23m → 19h 58m"), so a
+change of the duration shows the start kept.
 
 - **A repeat is safe.** An `add` alike in client, project, description, start and stop to a live
   entry returns that one (`"existing": true, "reason": "same"`) and writes nothing, whichever
@@ -1911,20 +2023,46 @@ it after `--` when it may hold a word starting with `--`.
   across a DST change too.
 - **Remove** leaves the entry, marked, out of every list and total; `restore` brings it back.
 - `list` totals what a day would: removed and held entries out (the held ones counted apart);
-  `--tag` matches whatever the case.
+  per project too when the list is a client's or a project's (`--client`, `--project`) or
+  `--totals` asks. `--project` matches as the board tells names apart (case and spaces aside);
+  `--tag` matches whatever the case. `--not-posted` lists what a billing agent still has to enter:
+  billable, not held, without a mark in one of its project's systems (`--system`: in that one);
+  `--changed-after-post` lists the entries changed after they were entered (`--system`: in that
+  one), removed ones too (marked removed: to be taken out of that system). Both take the range as
+  `list` does (`--from` and `--to` for more than a day). An `edit`, `move`, `rm` or `restore`
+  of an entry already entered says where, to be changed there too.
+- **Post** marks entries entered in one of their project's systems: `<id>@<rev>` refuses an entry
+  changed since that revision was read (an agent posts what it read); `--record` keeps that
+  system's id for it (a later post without one keeps it). Marking again clears "changed after
+  entering". The form with `--client` and `--to` (`--from`: any date before) is for the
+  switch-over: it marks the client's billable entries, live and not held, of projects entered in
+  that system, that have no mark there yet, each at the revision read (one changed since refuses the run), and says how many and
+  their time; `--dry-run` writes nothing (the switch-over's alone: a post or an unpost by id
+  writes, and ids do not go with `--client` and `--to`). `unpost` takes a mark off. The count
+  each says is of the marks it wrote or took off: one already as it would be is none.
 
 **The JSON** (`--json`), for agents. An entry: `id` (8 hex characters), `client`, `project`,
 `description`, `tags`, `start` and `stop` (ISO, UTC, to the second), `date` (the work date),
 `seconds`, `by` and `changedBy` (`{ "key", "name" }` of a session, or `"user"`, `"import"`), `at`
-and `changed` (ms), `rev`, and `deleted` (ms) or `toggl` when they apply. `add` adds `existing`
+and `changed` (ms), `rev`, `billable` (as it comes out) and `billableDefault` (true: as the config
+says, not set on the entry), `systems` (the ids of the systems it is to be entered in: its
+project's), `posts` (where it was entered: each `{ "system", "at", "by", "record",
+"rev", "changedAfter" }`, `record` null when none was given, `changedAfter` true when the entry
+changed since), and `deleted` (ms) or `toggl` when they apply. `add` adds `existing`
 and, when it wrote nothing, `reason`. `edit`, `move`, `rm`, `restore` and `show` give the entry;
-`list` a list of entries. `day` gives `{ "date", "problems": [<text>...], "days": [...] }`, a day per
-client: `client`, `date`, `zone`, `seconds`, `billedSeconds`, `held` (entry ids), `lines` (each:
+`list` a list of entries (with `--totals`, `{ "entries", "total" }`, the total `{ "count",
+"seconds", "held", "removed", "projects" }`, each project `{ "client", "project", "count",
+"seconds" }`, counted as the text's total is). `post` and `unpost` give `{ "system", "count", "seconds", "entries" }`
+(the entries after), and the switch-over's `--dry-run` the same with `"dryRun": true`. `day` gives
+`{ "date", "problems": [<text>...], "days": [...] }`, a day per
+client: `client`, `date`, `zone`, `seconds` (worked), `billedSeconds`, `held` and `nonBillable`
+(entry ids), `lines` (each:
 `key`, `project`, `ref`, `rule`, `group`, `step`, `round`, `seconds`, `billedSeconds`, `entries` as
 ids), and `entries` (the day's entries in full). `projects` gives `{ "<lane>": [...] | null }`, or
 null without `clients`. An error is `{ "ok": false, "error": "<code>", "message": "…" }` on stdout
-with exit code 1: `notYours`, `changedSince`, `gone`, `removed`, `config`, `noBackup`,
-`notBackedUp`, `client`, `project`, `when`, `whenRange`, `stopAhead`, `usage`… (the key of its
+(with `"usage"`, the command's, when it was called wrong) with exit code 1: `notYours`, `changedSince`, `gone`, `removed`, `config`, `noBackup`,
+`notBackedUp`, `client`, `clientOff`, `project`, `retired`, `when`, `whenRange`, `stopAhead`, `system`, `projectSystem`, `noSystem`,
+`billableFlags`, `usage`… (the key of its
 text). **While `problems` is not empty, an agent stops:** the day's figures were worked out with
 what of config.json checks out, and are not to be billed from.
 
@@ -1952,6 +2090,42 @@ an entry open in the editor stays as it is. The board changes them as the owner 
 each change saying the revision it read (one changed since is refused), with the same checks as
 the command: the config, a backup that went through, times within a day ahead and a year back.
 
+**New projects in the editor.** The Project field ends with "New project…": the name typed there
+goes with Save, which adds it to the client's list and saves the entry with it in one request
+(`newProject` on `add` and `edit`). A line under the field says what Save will do: add it, take the
+client's own name for it (the same but for case and spaces), or wait (a retired one). The Client
+field of a new entry offers the clients that take new entries; adding a client is Settings → Time
+tracking…'s, so a stray tap cannot start billing a new lane.
+
+**Settings → Time tracking…** (on the board on this computer only, as Backup… is): time tracking on
+and off, the zone days are counted in; the clients in the lanes' order, each with a line of what it
+has and its switch (off: no new entries); opened, a client's projects with their entries, billable
+or not, Rename and Retire; a project added; the retired ones, each to bring back; whether the client
+is billed, and the systems its time is entered into; with two or more, a column each beside the
+projects, unticked for a project entered elsewhere (`projectSystems`; a rename takes it along, a
+system taken off the client is taken off the projects' lists too). A lane without time takes it in one tap, and
+a new lane can be made and take time in one step. Every change is checked as the board reads the
+config and refused when it would bring a problem the file did not have; one already there stays
+said and stops no change elsewhere. A rename says first how many entries move: the client's entries
+of the project, however they spell it, removed ones too (restored, they come back under the new
+name), go to the new name in one transaction, a journal row each, then config.json is written in
+that transaction (a failure leaves both as they were); a mark that was current stays current, since
+the name is the board's own. A name the client has already is refused (no merge); the same name
+again is no change. A backup restored from before a rename brings the entries back under their old
+name while config.json keeps the new one: the old name is then a project the list does not have
+(rename it again, or add it back). With no `time` in config.json yet, the panel shows the lanes
+with none taking time; a change there sets time up off, and only its switch turns it on. Billing rules and
+`ref` stay in config.json, and a client that has them says so.
+
+**Billable and entered, on the board.** An entry's editor has a switch for billable, its default
+the config's (said while the entry follows it); a non-billable entry shows apart under its client,
+counted as worked. Where a client's time is entered into its systems, each line says per system
+(the ones its entries' projects are entered in) whether its entries are entered (all, some, none, or one changed after it was); a tap marks or
+unmarks the whole line there, with Undo on its toast (a mark goes back with its record and the
+revision it recorded, changed after entering as it was; when and by whom are the Undo's). An entry's hint names its marks, an entry already entered says so in its editor (the change
+is to be made there too), and the day's figure and each client's say how much billed time is not
+entered yet, when some is.
+
 **Export.** `board time export` prints a range as CSV: `id, date, client, project, description,
 tags, start, stop, hours, by`, where `start` and `stop` are UTC (`Z`) and `date` is the work date in
 the client's zone; tags are joined by a comma (a tag holds none). A text that a spreadsheet would
@@ -1960,7 +2134,12 @@ order mark Excel needs to read the file's UTF-8 when it is opened by a double cl
 
 **From Toggl.** `board time import <file>` takes Toggl's Detailed report exported as CSV from its
 web page (no API call, so no quota), or its JSON (API v9 time entries with project and client
-names). `--tz` is the Toggl profile's time zone (the CSV's times have none); `--map` sends each
+names). Toggl's own Billable (the CSV's column, the JSON's field) is left aside unless
+`--billable-from-toggl` says to take it (Toggl's free plan says No on every row, which would make
+the whole history non-billable): without it the entries follow the config, and billable is never a
+difference on a second run nor changed by `--update`; with it the entry keeps Toggl's value as set,
+a row that does not say it is not held against the entry, and `--dry-run` says how many rows would
+be non-billable. `--tz` is the Toggl profile's time zone (the CSV's times have none); `--map` sends each
 Toggl client to a lane (`"=personal"` for entries without one); an unmapped client stops the run
 with the list. The CSV's dates follow the profile's format: day and month either way round are
 read from the file itself (a 28 first is a day); a file where every date reads both ways asks for
@@ -1972,8 +2151,16 @@ key of its lane and the start Toggl gave it, kept on the entry, and then by its 
 second run, of the same export or a later one, adds only what is new and never brings back an entry
 removed since, moved on the board, or given another start there. Rows of one lane that start at the
 same second are each an entry of their own (a number after the key tells them apart); a later run
-pairs them with the entries there as a group, alike first, then by project, description and stop,
-each entry with one row at most. A row that differs (edited in
+pairs them with the entries there as a group: alike in every field first, then alike but for
+billable, by project and description, by project and stop, by project, by description, by stop,
+then what is left one to one. A removed entry is paired only up to project and stop, so a new row
+at its start that shares less with it goes in. Each entry is paired with one row at most; where no field tells two entries
+apart (the same project and stop, say), the first made is the one. A row alike to an entry in the
+five fields the board holds one of (client, project, description, start and stop) is that entry:
+already there, or said to differ in its tags (never written, `--update` too); a Toggl entry
+duplicated in Toggl is one entry on the board, while the per-day totals printed are Toggl's rows,
+the duplicate counted.
+A row that differs (edited in
 Toggl since it was imported: its wording, its stop, its project, its tags; or moved on the board)
 is listed as changed, named by its day and start in `--tz` and its description's start, with the
 fields, and not added again; a row at the start of an entry a
@@ -2987,8 +3174,9 @@ server's own record, filled in from it when missing; Undo removes it). None of i
 password is ever in it. The board checks every field before it uses it, and runs nothing
 while one does not check out.
 
-`time` (time tracking, [Time](#time): `zone`, `excludeTags`, `clients` with each one's `projects`,
-`ref`, `zone` and `billing` rules).
+`time` (time tracking, [Time](#time); Settings → Time tracking… sets all but the billing rules):
+`on`, `zone`, `excludeTags`, `clients` with each one's `on`, `projects`, `retired`, `billable`,
+`nonBillable`, `systems`, `projectSystems`, `ref`, `zone` and `billing` rules).
 
 `backup` (the [backup](#backup) of the board's database; Settings → Backup… sets it): `folder` (a
 folder that syncs elsewhere), `server` (`{ "host", "port", "admin": { "user", "key" }, "set" }`:
@@ -3089,6 +3277,7 @@ the folder target), `src/adapters/backup-ssh.ts` (ssh to the drop), `src/service
 `time` settings, work dates in a zone, a day as billed), `src/core/time-import.ts` (Toggl's CSV and
 JSON), `src/adapters/time-store.ts` (the entries, whose they are, the import's batch),
 `src/entrypoints/time-cli.ts` (`board time`), `src/server/routes/time.ts`,
+`src/core/time-settings.ts` and `src/services/time-settings.ts` (Settings → Time tracking…'s changes),
 `web/src/components/time/`. The drop script's tests run it with
 dash where there is one, else a POSIX sh (`test/support/fake-drop-ssh.ts` stands in for ssh), and
 skip without one; Look, Apply and Undo run the same way on a fake root (`test/support/fake-root.ts`:

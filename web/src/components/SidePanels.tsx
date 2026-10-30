@@ -1,9 +1,10 @@
 // The side panels, one open at a time in their shared place: the session sheet, the categories,
 // the schedule, the archive and, with more than one Claude profile folder found, the profiles; sleep
 // and wake while the payload carries its state line; the phones while the remote mode is on;
-// MokuPilot always; tasks while the board has them on (#202); Remote access once it was first opened, on the local
-// board; the paths on this computer once first opened, on the board seen from another device. A session sheet
-// that fails to draw says so on its own and leaves the board; opening another session tries again.
+// MokuPilot always; tasks while the board has them on (#202); Remote access, Backup and Time tracking once each
+// was first opened, on the local board; the paths on this computer once first opened, on the board seen from
+// another device. A session sheet that fails to draw says so on its own and leaves the board; opening another
+// session tries again.
 import type { Archive } from '../hooks/useArchive.ts'
 import { offersProfiles } from '../models/profiles.ts'
 import { remotePage } from '../models/remote-page.ts'
@@ -21,6 +22,7 @@ import { ProfilesPanel, type ProfilesPanelProps } from './profiles/ProfilesPanel
 import { SchedulePanel, type SchedulePanelProps } from './schedule/SchedulePanel.tsx'
 import { Sheet, type SheetSlots } from './sheet/Sheet.tsx'
 import { TimePanel, type TimePanelProps } from './time/TimePanel.tsx'
+import { TimeSettingsPanel, type TimeSettingsPanelProps } from './time/TimeSettingsPanel.tsx'
 import { TodosPanel, type TodosPanelProps } from './todos/TodosPanel.tsx'
 import { WakePanel, type WakePanelProps } from './wake/WakePanel.tsx'
 
@@ -49,6 +51,8 @@ export interface SidePanelsProps {
   backup?: BackupPanelProps
   /** Time (#233): drawn while the board has time tracking on. */
   time?: TimePanelProps
+  /** Settings → Time tracking… (#237); drawn when given (the page gives it once opened, on the local board only). */
+  timeSettings?: TimeSettingsPanelProps
 }
 
 export function SidePanels({
@@ -65,6 +69,7 @@ export function SidePanels({
   todos,
   backup,
   time,
+  timeSettings,
 }: SidePanelsProps) {
   const { data, ui, dispatch } = useBoardContext()
   return (
@@ -83,6 +88,7 @@ export function SidePanels({
       {todos && data?.todos && <TodosPanel {...todos} />}
       {backup && <BackupPanel {...backup} />}
       {time && data?.time && <TimePanel {...time} />}
+      {timeSettings && <TimeSettingsPanel {...timeSettings} />}
       {localPaths && remotePage() && <LocalPathsPanel {...localPaths} />}
     </>
   )

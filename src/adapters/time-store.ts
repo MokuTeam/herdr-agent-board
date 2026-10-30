@@ -7,10 +7,20 @@
 // import's only with `force` (the owner asked for it; the master session while billing). The
 // owner, on the board, changes any. A change can say which revision it read (`expect`): it is
 // refused when the entry changed since.
+//
+// Entered into a client's systems (#240): a mark per entry and system (post, unpost), with the
+// entry's revision then. A mark is no change of the entry (its revision stays), so anyone who may
+// write marks any entry, without `force`; every mark and unmark has its journal row.
+//
+// A project renamed (#237, Settings → Time): the client's entries of it, however spelled and removed
+// ones too, move to the new name in one transaction, a journal row each; a mark that was current
+// stays so (the name is the board's own, nothing to change in the client's systems).
 import { randomBytes } from 'node:crypto'
 import { t } from '../core/lang.ts'
 import {
   type Actor,
+  billableByDefault,
+  billableOf,
   cleanTag,
   cleanText,
   clientDay,
@@ -20,7 +30,10 @@ import {
   instantIn,
   isoOf,
   problemsText,
+  projectIn,
+  sameProject,
   secondsOf,
+  systemsFor,
   type TimeConfig,
   type TimeEntry,
   zoneOf,
@@ -54,6 +67,7 @@ interface Row {
   rev: number
   deleted: number | null
   toggl: string | null
+  billable: number | null
 }
 
 const actorOf = (s: string): Actor => {
@@ -88,11 +102,16 @@ function entryOf(r: Row): TimeEntry {
     rev: r.rev,
     ...(r.deleted !== null && { deleted: r.deleted }),
     ...(r.toggl !== null && { toggl: r.toggl }),
+    ...(r.billable !== null && { billable: r.billable === 1 }),
   }
 }
 
 const COLUMNS =
-  'id, client, project, description, tags, start, stop, date, by, at, changed, changed_by, rev, deleted, toggl'
+  'id, client, project, description, tags, start, stop, date, by, at, changed, changed_by, rev, deleted, toggl, billable'
+
+/** The column's value: 1 or 0 as set, NULL as the config says. */
+const billableColumn = (e: Pick<TimeEntry, 'billable'>): number | null =>
+  e.billable === undefined ? null : e.billable ? 1 : 0
 
 export function getEntry(db: BoardDb, id: string): TimeEntry | null {
   const r = db.db.query(`SELECT ${COLUMNS} FROM time_entries WHERE id = ?`).get(id) as Row | null
@@ -104,6 +123,8 @@ export interface ListQuery {
   to: string
   client?: string | undefined
   tag?: string | undefined
+  /** A project as the board matches names (core/time.ts sameProject: case and spaces aside). */
+  project?: string | undefined
   /** Removed ones too. */
   deleted?: boolean | undefined
 }
@@ -120,9 +141,10 @@ export function listEntries(db: BoardDb, q: ListQuery): TimeEntry[] {
   const rows = db.db
     .query(`SELECT ${COLUMNS} FROM time_entries WHERE ${where.join(' AND ')} ORDER BY start, id`)
     .all(...args) as Row[]
-  const list = rows.map(entryOf)
   const tag = q.tag ? cleanTag(q.tag) : ''
-  return tag ? list.filter(e => e.tags.includes(tag)) : list
+  return rows
+    .map(entryOf)
+    .filter(e => (!tag || e.tags.includes(tag)) && (q.project === undefined || sameProject(e.project, q.project)))
 }
 
 // ------------------------------------------------------------------ checks
@@ -132,17 +154,37 @@ function checkConfig(c: TimeConfig): void {
   if (c.problems.length) throw new TimeError('time.err.config', { problems: problemsText(c.problems, t) })
 }
 
-/** The client takes time, and the project is one of its own (unless `newProject`). */
-function checkClientProject(c: TimeConfig, client: string, project: string, newProject: boolean): void {
+/**
+ * The client takes time (and new entries, for one coming to it: it is on), and the project is one
+ * of its own, not retired (an entry keeps a project retired since: `was`, the entry as it is); one
+ * typed as new (`newProject`) is the name the client already has for it, case and spaces aside,
+ * when it has one. The project's name to keep.
+ */
+function checkClientProject(
+  c: TimeConfig,
+  client: string,
+  project: string,
+  newProject: boolean,
+  was?: Pick<TimeEntry, 'client' | 'project'>,
+): string {
   const own = clientOf(c, client)
   if (!own.ok) {
     const known = Object.keys(c.clients ?? {}).join(', ')
     throw new TimeError('time.err.client', { client, known })
   }
+  if (!own.client.on && was?.client !== client) throw new TimeError('time.err.clientOff', { client })
   if (!project) throw new TimeError('time.err.noProject')
   const projects = own.client.projects
-  if (projects && !projects.includes(project) && !newProject)
-    throw new TimeError('time.err.project', { project, client, known: projects.join(', ') })
+  const retired = projectIn(own.client.retired, project)
+  if (retired) {
+    if (was?.client === client && was.project === project) return project
+    throw new TimeError('time.err.retired', { project: retired, client })
+  }
+  if (!projects || projects.includes(project)) return project
+  const listed = newProject ? projectIn(projects, project) : null
+  if (listed) return listed
+  if (!newProject) throw new TimeError('time.err.project', { project, client, known: projects.join(', ') })
+  return project
 }
 
 function checkTimes(start: number, stop: number): void {
@@ -170,7 +212,7 @@ const newId = (db: BoardDb): string => {
 
 function insert(tx: Tx, e: TimeEntry): void {
   tx.db
-    .query(`INSERT INTO time_entries (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .query(`INSERT INTO time_entries (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(
       e.id,
       e.client,
@@ -187,13 +229,14 @@ function insert(tx: Tx, e: TimeEntry): void {
       e.rev,
       e.deleted ?? null,
       e.toggl ?? null,
+      billableColumn(e),
     )
 }
 
 function update(tx: Tx, e: TimeEntry): void {
   tx.db
     .query(
-      'UPDATE time_entries SET client = ?, project = ?, description = ?, tags = ?, start = ?, stop = ?, date = ?, changed = ?, changed_by = ?, rev = ?, deleted = ? WHERE id = ?',
+      'UPDATE time_entries SET client = ?, project = ?, description = ?, tags = ?, start = ?, stop = ?, date = ?, changed = ?, changed_by = ?, rev = ?, deleted = ?, billable = ? WHERE id = ?',
     )
     .run(
       e.client,
@@ -207,6 +250,7 @@ function update(tx: Tx, e: TimeEntry): void {
       actorText(e.changedBy),
       e.rev,
       e.deleted ?? null,
+      billableColumn(e),
       e.id,
     )
 }
@@ -240,6 +284,8 @@ export interface NewEntry {
   startGiven: boolean
   newProject?: boolean
   toggl?: string
+  /** Set billable or not; absent: as the config says. */
+  billable?: boolean
 }
 
 /** How long a repeat of an `add` without a start is taken for the first one. */
@@ -263,9 +309,8 @@ export function addEntry(
 ): { entry: TimeEntry; existing: boolean; reason?: ExistingReason } {
   checkConfig(c)
   const description = cleanText(n.description)
-  const project = cleanText(n.project, 120)
   if (!description) throw new TimeError('time.err.noDescription')
-  checkClientProject(c, n.client, project, !!n.newProject)
+  const project = checkClientProject(c, n.client, cleanText(n.project, 120), !!n.newProject)
   checkTimes(n.start, n.stop)
   const entry: TimeEntry = {
     id: '',
@@ -282,6 +327,7 @@ export function addEntry(
     changedBy: actor,
     rev: 1,
     ...(n.toggl && { toggl: n.toggl }),
+    ...(n.billable !== undefined && { billable: n.billable }),
   }
   const before = sameLive(db, entry)
   if (before) return { entry: before, existing: true, reason: 'same' }
@@ -326,6 +372,8 @@ export interface EntryChange {
   /** The whole set of tags instead (the panel sends what its field holds). */
   tags?: string[]
   newProject?: boolean
+  /** Billable or not as set; null: back to what the config says. */
+  billable?: boolean | null
 }
 
 function changed(
@@ -377,8 +425,10 @@ export function editEntry(
     e => {
       if (e.deleted) throw new TimeError('time.err.removed', { id })
       const client = ch.client ?? e.client
-      const project = ch.project !== undefined ? cleanText(ch.project, 120) : e.project
-      if (ch.client !== undefined || ch.project !== undefined) checkClientProject(c, client, project, !!ch.newProject)
+      let project = ch.project !== undefined ? cleanText(ch.project, 120) : e.project
+      // an entry keeps its client off or its project retired; one coming to them is refused
+      if (ch.client !== undefined || ch.project !== undefined)
+        project = checkClientProject(c, client, project, !!ch.newProject, e)
       const description = ch.description !== undefined ? cleanText(ch.description) : e.description
       if (!description) throw new TimeError('time.err.noDescription')
       const start = ch.start ?? Date.parse(e.start)
@@ -392,8 +442,13 @@ export function editEntry(
       // the work date is stamped again only when the start or the client changes: a trim of the
       // stop moves no day already billed, whatever the zone says now
       const moved = (ch.start !== undefined && isoOf(ch.start) !== e.start) || client !== e.client
+      const { billable: was, ...rest } = e
+      // set the way the config has it already, on an entry that follows the config: no change
+      const asConfig = was === undefined && ch.billable === billableByDefault(c, client, project)
+      const billable = ch.billable === undefined ? was : ch.billable === null || asConfig ? undefined : ch.billable
+      // billable last, where a read entry has it: the no-change check compares the two as JSON
       return {
-        ...e,
+        ...rest,
         client,
         project,
         description,
@@ -401,6 +456,7 @@ export function editEntry(
         start: isoOf(start),
         stop: isoOf(stop),
         date: moved ? dateIn(start, zoneOf(c, client)) : e.date,
+        ...(billable !== undefined && { billable }),
       }
     },
     'edit',
@@ -583,6 +639,76 @@ export function restoreEntry(
   )
 }
 
+/**
+ * A client's project renamed (Settings → Time): its entries of `from`, however they spell it (case,
+ * spaces and unseen characters aside: projectKey), removed ones too (restored, they come back under
+ * the new name), moved to `to` in one transaction, each a revision more with its journal row
+ * (`rename`, the entry before and after); one named `to` already is left as it is. A mark that was
+ * current (entered at the entry's revision) moves with it (`rename-mark`), so a rename is no change
+ * to make in the client's systems. `then` runs last, in that transaction (the config written):
+ * when it throws, nothing is changed. db.write may run its function again when SQLite answered
+ * busy at its start, before anything ran: `then` writes the same file again then, no harm. The
+ * entries moved.
+ */
+export function renameProject(
+  db: BoardDb,
+  c: TimeConfig,
+  client: string,
+  from: string,
+  to: string,
+  actor: Actor,
+  then: () => void = () => {},
+): TimeEntry[] {
+  checkConfig(c)
+  return db.write(actorText(actor), tx => {
+    const rows = db.db
+      .query(`SELECT ${COLUMNS} FROM time_entries WHERE client = ? ORDER BY start, id`)
+      .all(client) as Row[]
+    const now = Date.now()
+    const moved: TimeEntry[] = []
+    for (const e of rows.map(entryOf).filter(x => x.project !== to && sameProject(x.project, from))) {
+      const saved: TimeEntry = { ...e, project: to, changed: now, changedBy: actor, rev: e.rev + 1 }
+      try {
+        update(tx, saved)
+      } catch (err) {
+        if (unique(err)) throw new TimeError('time.err.sameAs', { id: e.id })
+        throw err
+      }
+      tx.journal({ store: 'time', op: 'rename', ref: e.id, before: e, after: saved })
+      for (const m of marksOf(db, [e.id]).get(e.id) ?? []) {
+        if (m.rev !== e.rev) continue
+        tx.db.query('UPDATE time_marks SET rev = ? WHERE entry = ? AND system = ?').run(saved.rev, e.id, m.system)
+        tx.journal({
+          store: 'time',
+          op: 'rename-mark',
+          ref: e.id,
+          before: markJson(m),
+          after: markJson({ ...m, rev: saved.rev }),
+        })
+      }
+      moved.push(saved)
+    }
+    then()
+    return moved
+  })
+}
+
+/** How many entries a client has of a project, every spelling of it and removed ones too: what a rename moves. */
+export function projectCount(db: BoardDb, client: string, name: string): number {
+  const rows = db.db
+    .query('SELECT project, COUNT(*) AS n FROM time_entries WHERE client = ? GROUP BY project')
+    .all(client) as { project: string; n: number }[]
+  return rows.filter(r => sameProject(r.project, name)).reduce((n, r) => n + r.n, 0)
+}
+
+/** How many live entries a client has of each project, as each is spelled (Settings → Time adds the spellings up). */
+export function projectUse(db: BoardDb, client: string): Record<string, number> {
+  const rows = db.db
+    .query('SELECT project, COUNT(*) AS n FROM time_entries WHERE client = ? AND deleted IS NULL GROUP BY project')
+    .all(client) as { project: string; n: number }[]
+  return Object.fromEntries(rows.map(r => [r.project, r.n]))
+}
+
 /** A Toggl row for the store: its lane, and Toggl's id or none (the Detailed report's CSV has none). */
 export type ImportRow = Omit<NewEntry, 'startGiven' | 'newProject'>
 
@@ -601,9 +727,10 @@ export interface ImportChange {
 export type ImportVerdict =
   | { kind: 'new'; entry: TimeEntry }
   | { kind: 'already'; stored: TimeEntry }
-  | { kind: 'changed'; stored: TimeEntry; next: TimeEntry; fields: string[] }
+  /** `alike`: the row is alike in the five unique fields to an entry another row has: said, never written */
+  | { kind: 'changed'; stored: TimeEntry; next: TimeEntry; fields: string[]; alike?: true }
 
-const IMPORT_FIELDS = ['client', 'project', 'description', 'start', 'stop', 'tags'] as const
+const IMPORT_FIELDS = ['client', 'project', 'description', 'start', 'stop', 'tags', 'billable'] as const
 
 /**
  * A CSV row's key (the Detailed report has no id): its lane and the start Toggl gave it, kept on
@@ -637,6 +764,7 @@ function importedEntry(c: TimeConfig, n: ImportRow, now: number): TimeEntry {
     changedBy: 'import',
     rev: 1,
     toggl: n.toggl || csvKey(n.client, n.start),
+    ...(n.billable !== undefined && { billable: n.billable }),
   }
 }
 
@@ -652,7 +780,11 @@ export class ImportIndex {
   private readonly taken = new Set<TimeEntry>()
   constructor(db: BoardDb | null) {
     if (!db) return
-    const rows = db.db.query(`SELECT ${COLUMNS} FROM time_entries ORDER BY deleted IS NOT NULL, at`).all() as Row[]
+    // the live ones first, then in the order they were made (rowid where two were made at once):
+    // where no field tells two entries apart, the first made is the one a row is paired with
+    const rows = db.db
+      .query(`SELECT ${COLUMNS} FROM time_entries ORDER BY deleted IS NOT NULL, at, rowid`)
+      .all() as Row[]
     for (const r of rows) this.add(entryOf(r))
   }
   add(e: TimeEntry): void {
@@ -671,6 +803,10 @@ export class ImportIndex {
     const all = (this.byStart.get(`${client}\u0000${start}`) ?? []).filter(e => !this.taken.has(e))
     return [...all.filter(e => !e.deleted), ...all.filter(e => e.deleted)]
   }
+  /** The live entry at a lane and start alike in the five fields the store holds one of (taken or not). */
+  sameLive(e: TimeEntry): TimeEntry | null {
+    return (this.byStart.get(`${e.client}\u0000${e.start}`) ?? []).find(x => !x.deleted && sameKey(x, e)) ?? null
+  }
   take(e: TimeEntry): void {
     this.taken.add(e)
   }
@@ -686,20 +822,40 @@ export class ImportIndex {
   }
 }
 
-/** The fields a stored entry has otherwise than a Toggl row's. */
-const differing = (stored: TimeEntry, entry: TimeEntry): string[] =>
+/** Alike in the five fields of which the store holds one live entry (its index time_live_same). */
+const sameKey = (a: TimeEntry, b: TimeEntry): boolean =>
+  a.client === b.client &&
+  a.project === b.project &&
+  a.description === b.description &&
+  a.start === b.start &&
+  a.stop === b.stop
+
+/**
+ * The fields a stored entry has otherwise than a Toggl row's. Billable only when the row says it
+ * (the import takes Toggl's Billable on --billable-from-toggl), as each comes out: an entry that
+ * follows the config and a row that says what the config says are the same.
+ */
+const differing = (c: TimeConfig, stored: TimeEntry, entry: TimeEntry): string[] =>
   IMPORT_FIELDS.filter(f =>
-    f === 'tags' ? [...stored.tags].sort().join('\u0000') !== entry.tags.join('\u0000') : stored[f] !== entry[f],
+    f === 'tags'
+      ? [...stored.tags].sort().join('\u0000') !== entry.tags.join('\u0000')
+      : f === 'billable'
+        ? entry.billable !== undefined && billableOf(c, stored) !== billableOf(c, entry)
+        : stored[f] !== entry[f],
   )
 
 /**
  * How the rows of one lane and start are paired with the entries the store has there, each pass
- * over the rows not yet paired: alike in every field first; then the same project and
+ * over the rows not yet paired: alike in every field first; then alike but for billable (a row
+ * that says it, with --billable-from-toggl, still finds its own entry before another's); then the same project and
  * description (its stop or tags changed); the same project and stop (its words changed); the same
- * project; the same description; the same stop; then whatever is left, one to one.
+ * project; the same description; the same stop; then whatever is left, one to one. A removed entry
+ * is paired only in the strong passes (up to project and stop): a new row at its start that shares
+ * less with it is a new entry, not the removed one.
  */
-const PAIRINGS: ((stored: TimeEntry, row: TimeEntry) => boolean)[] = [
-  (a, b) => differing(a, b).length === 0,
+const pairings = (c: TimeConfig): ((stored: TimeEntry, row: TimeEntry) => boolean)[] => [
+  (a, b) => differing(c, a, b).length === 0,
+  (a, b) => differing(c, a, b).every(f => f === 'billable'),
   (a, b) => a.project === b.project && a.description === b.description,
   (a, b) => a.project === b.project && a.stop === b.stop,
   (a, b) => a.project === b.project,
@@ -711,12 +867,15 @@ const PAIRINGS: ((stored: TimeEntry, row: TimeEntry) => boolean)[] = [
 /**
  * What the store makes of Toggl's rows (index: what it has), each row's verdict in its place. A
  * row with Toggl's id is that entry. The others are known again by their lane and the start Toggl
- * gave them, a lane and start at a time: its rows are paired with the entries there (PAIRINGS),
+ * gave them, a lane and start at a time: its rows are paired with the entries there (pairings),
  * each entry with one row at most, so rows of one start that differ are each an entry of their
  * own. A row paired with an entry alike is `already`; with a removed one, `already` (it stays
  * removed); with one that differs (changed in Toggl, or moved or changed on the board), `changed`,
- * with the fields, and not added twice. A row left over is `new`, with a key of its own; one
- * alike to a row of the same run already new is that row (`already`).
+ * with the fields, and not added twice. A row left over that is alike in the five fields the
+ * store holds one live entry of (client, project, description, start, stop) to an entry there or
+ * to a row of this run is that entry: `already`, or `changed` with `alike` where its tags or
+ * billable differ (said, never written: it is not the entry's own row). Any other row left over is
+ * `new`, with a key of its own.
  */
 export function importVerdicts(
   index: ImportIndex,
@@ -729,7 +888,7 @@ export function importVerdicts(
   const paired = (stored: TimeEntry, entry: TimeEntry): ImportVerdict => {
     index.take(stored)
     if (stored.deleted) return { kind: 'already', stored }
-    const fields = differing(stored, entry)
+    const fields = differing(c, stored, entry)
     return fields.length ? { kind: 'changed', stored, next: entry, fields } : { kind: 'already', stored }
   }
   rows.forEach((n, i) => {
@@ -745,34 +904,37 @@ export function importVerdicts(
   for (const group of groups.values()) {
     const first = entries[group[0] as number] as TimeEntry
     const there = index.at(first.client, first.start)
-    for (const pairs of PAIRINGS)
+    const passes = pairings(c)
+    passes.forEach((pairs, p) => {
+      // a removed entry only by what tells it is that row (up to project and stop)
+      const strong = p <= 3
       for (const i of group) {
         if (out[i]) continue
-        const stored = there.find(x => !index.isTaken(x) && pairs(x, entries[i] as TimeEntry))
+        const stored = there.find(x => !index.isTaken(x) && (strong || !x.deleted) && pairs(x, entries[i] as TimeEntry))
         if (stored) out[i] = paired(stored, entries[i] as TimeEntry)
       }
-    const fresh: TimeEntry[] = []
+    })
     for (const i of group) {
       if (out[i]) continue
       const e = entries[i] as TimeEntry
-      const twin = fresh.find(x => differing(x, e).length === 0)
+      // alike in the five fields to an entry the store has, or one this run adds (it is in the
+      // index): the store holds one, so this row is that one, never a new one
+      const twin = index.sameLive(e)
       if (twin) {
-        out[i] = { kind: 'already', stored: twin }
+        const fields = differing(c, twin, e)
+        out[i] = fields.length
+          ? { kind: 'changed', stored: twin, next: e, fields, alike: true }
+          : { kind: 'already', stored: twin }
         continue
       }
       if (!rows[i]?.toggl) e.toggl = index.freeKey(e.client, Date.parse(e.start))
       index.add(e)
       index.take(e)
-      fresh.push(e)
       out[i] = { kind: 'new', entry: e }
     }
   }
   return out as ImportVerdict[]
 }
-
-/** One row's verdict (importVerdicts, for a row alone). */
-export const importVerdict = (index: ImportIndex, c: TimeConfig, n: ImportRow, now: number = Date.now()) =>
-  importVerdicts(index, c, [n], now)[0] as ImportVerdict
 
 /** A changed verdict as the run reports it. */
 export const changeOf = (v: Extract<ImportVerdict, { kind: 'changed' }>): ImportChange => ({
@@ -786,7 +948,7 @@ export const changeOf = (v: Extract<ImportVerdict, { kind: 'changed' }>): Import
 
 /**
  * The import's entries, in transactions of `batch` (another writer waits milliseconds), each new
- * one with a journal row. One the store has (importVerdict) is counted, not added. A changed one is
+ * one with a journal row. One the store has (importVerdicts) is counted, not added. A changed one is
  * listed; with `update`, Toggl's values replace the entry's when the board never changed it (made
  * and last changed by the import), journaled as `import-update`, its work date stamped again.
  */
@@ -794,7 +956,13 @@ export function importEntries(
   db: BoardDb,
   c: TimeConfig,
   entries: readonly ImportRow[],
-  o: { update?: boolean; now?: number; batch?: number } = {},
+  o: {
+    update?: boolean
+    now?: number
+    batch?: number
+    /** Each entry it wrote (added, or updated from Toggl): whose projects join the lanes' lists. */
+    wrote?: (e: TimeEntry) => void
+  } = {},
 ): { added: number; already: number; changed: ImportChange[]; updated: ImportChange[] } {
   checkConfig(c)
   const now = o.now ?? Date.now()
@@ -805,6 +973,7 @@ export function importEntries(
   let already = 0
   const changes: ImportChange[] = []
   const updated: ImportChange[] = []
+  const wrote = o.wrote ?? (() => {})
   for (let at = 0; at < verdicts.length; at += batch) {
     db.write('import', tx => {
       for (const v of verdicts.slice(at, at + batch)) {
@@ -814,7 +983,8 @@ export function importEntries(
         }
         if (v.kind === 'changed') {
           const change = changeOf(v)
-          const mine = v.stored.by === 'import' && v.stored.changedBy === 'import'
+          // a row alike to an entry another row has is said, never written (two rows would take turns)
+          const mine = !v.alike && v.stored.by === 'import' && v.stored.changedBy === 'import'
           if (!o.update || !mine) {
             changes.push(change)
             continue
@@ -839,6 +1009,7 @@ export function importEntries(
           }
           tx.journal({ store: 'time', op: 'import-update', ref: saved.id, before: v.stored, after: saved })
           updated.push(change)
+          wrote(saved)
           continue
         }
         const e = { ...v.entry, id: newId(db) }
@@ -852,8 +1023,175 @@ export function importEntries(
         }
         tx.journal({ store: 'time', op: 'import', ref: e.id, after: e })
         added++
+        wrote(e)
       }
     })
   }
   return { added, already, changed: changes, updated }
+}
+
+// ------------------------------------------------------------------ entered into the clients' systems
+
+/** An entry entered into one of its client's systems. */
+export interface Mark {
+  entry: string
+  system: string
+  at: number
+  by: Actor
+  /** That system's own id for what was entered (a time record's, a worklog's); null: none given. */
+  record: string | null
+  /** The entry's revision it was entered at: a later one on the entry is a change after entering. */
+  rev: number
+}
+
+interface MarkRow {
+  entry: string
+  system: string
+  at: number
+  by: string
+  record: string | null
+  rev: number
+}
+
+const markOf = (r: MarkRow): Mark => ({ ...r, by: actorOf(r.by) })
+/** A mark as its journal row keeps it. */
+const markJson = (m: Mark) => ({ ...m, by: actorText(m.by) })
+
+const MARK_COLUMNS = 'entry, system, at, by, record, rev'
+
+function markIn(db: BoardDb, entry: string, system: string): Mark | null {
+  const r = db.db
+    .query(`SELECT ${MARK_COLUMNS} FROM time_marks WHERE entry = ? AND system = ?`)
+    .get(entry, system) as MarkRow | null
+  return r ? markOf(r) : null
+}
+
+/** The marks of these entries, by entry, each entry's in the order of their systems' ids. */
+export function marksOf(db: BoardDb, ids: readonly string[]): Map<string, Mark[]> {
+  const out = new Map<string, Mark[]>()
+  for (let at = 0; at < ids.length; at += 500) {
+    const chunk = ids.slice(at, at + 500)
+    const rows = db.db
+      .query(
+        `SELECT ${MARK_COLUMNS} FROM time_marks WHERE entry IN (${chunk.map(() => '?').join(', ')}) ORDER BY system`,
+      )
+      .all(...chunk) as MarkRow[]
+    for (const r of rows) out.set(r.entry, [...(out.get(r.entry) ?? []), markOf(r)])
+  }
+  return out
+}
+
+/**
+ * The system is one of the client's, and with a project, one that project's entries are entered in
+ * (`projectSystems`): refused otherwise, naming the ones there are.
+ */
+function checkSystem(c: TimeConfig, client: string, system: string, project?: string): void {
+  const systems = systemsFor(c, client)
+  if (!systems.some(x => x.id === system))
+    throw new TimeError('time.err.system', { client, system, known: systems.map(x => x.id).join(', ') || '-' })
+  if (project === undefined) return
+  const own = systemsFor(c, client, project)
+  if (!own.some(x => x.id === system))
+    throw new TimeError('time.err.projectSystem', {
+      client,
+      project,
+      system,
+      known: own.map(x => x.id).join(', ') || '-',
+    })
+}
+
+/** An entry to mark: its id, the revision read (refused when it moved on), and what the mark keeps. */
+export interface PostItem {
+  id: string
+  /** The entry's revision as read: refused when the entry changed since. */
+  rev?: number
+  /** That system's id for the record; null: none; absent: the earlier mark's, if any. */
+  record?: string | null
+  /** The revision the mark records (an Undo putting an earlier mark back); absent: the entry's now. */
+  asOf?: number
+}
+
+/**
+ * Entries marked entered into `system`, one each entry's project is entered in, in one transaction:
+ * when, by whom, `record` (the item's, else `o.record`, else the earlier mark's), and the entry's
+ * revision now (or the item's `asOf`, no later than it). A mark already as it would be is left as
+ * it is; each one written has its journal row (`post`, the mark before and after), and is given
+ * back. The entry does not change. All or none: a removed, unknown or changed entry refuses the
+ * whole call.
+ */
+export function postEntries(
+  db: BoardDb,
+  c: TimeConfig,
+  items: readonly PostItem[],
+  system: string,
+  actor: Actor,
+  o: { record?: string; now?: number } = {},
+): Mark[] {
+  checkConfig(c)
+  const now = o.now ?? Date.now()
+  return db.write(actorText(actor), tx =>
+    items.flatMap(item => {
+      const e = getEntry(db, item.id)
+      if (!e) throw new TimeError('time.err.gone', { id: item.id })
+      if (e.deleted) throw new TimeError('time.err.removed', { id: e.id })
+      if (item.rev !== undefined && item.rev !== e.rev)
+        throw new TimeError('time.err.changedSince', { id: e.id, rev: e.rev })
+      checkSystem(c, e.client, system, e.project)
+      const asOf = item.asOf ?? e.rev
+      if (!Number.isInteger(asOf) || asOf < 1 || asOf > e.rev) throw new TimeError('time.err.rev')
+      const before = markIn(db, e.id, system)
+      const given = item.record !== undefined ? item.record : o.record
+      const record =
+        given === undefined ? (before?.record ?? null) : given === null ? null : cleanText(given, 200) || null
+      if (before && before.rev === asOf && before.record === record) return []
+      const after: Mark = { entry: e.id, system, at: now, by: actor, record, rev: asOf }
+      tx.db
+        .query(
+          `INSERT INTO time_marks (${MARK_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT (entry, system) DO UPDATE SET at = excluded.at, by = excluded.by, record = excluded.record, rev = excluded.rev`,
+        )
+        .run(after.entry, after.system, after.at, actorText(after.by), after.record, after.rev)
+      tx.journal({
+        store: 'time',
+        op: 'post',
+        ref: e.id,
+        before: before ? markJson(before) : null,
+        after: markJson(after),
+      })
+      return [after]
+    }),
+  )
+}
+
+/**
+ * Entries' marks in `system` taken off, in one transaction, each with its journal row (`unpost`,
+ * the mark it was). An entry with no mark there is left as it is; the system must be one of its
+ * client's, or one it has a mark in (a system since gone from the config). The removed marks.
+ */
+export function unpostEntries(
+  db: BoardDb,
+  c: TimeConfig,
+  items: readonly Pick<PostItem, 'id' | 'rev'>[],
+  system: string,
+  actor: Actor,
+): Mark[] {
+  checkConfig(c)
+  return db.write(actorText(actor), tx => {
+    const removed: Mark[] = []
+    for (const item of items) {
+      const e = getEntry(db, item.id)
+      if (!e) throw new TimeError('time.err.gone', { id: item.id })
+      if (item.rev !== undefined && item.rev !== e.rev)
+        throw new TimeError('time.err.changedSince', { id: e.id, rev: e.rev })
+      const before = markIn(db, e.id, system)
+      if (!before) {
+        checkSystem(c, e.client, system)
+        continue
+      }
+      tx.db.query('DELETE FROM time_marks WHERE entry = ? AND system = ?').run(e.id, system)
+      tx.journal({ store: 'time', op: 'unpost', ref: e.id, before: markJson(before), after: null })
+      removed.push(before)
+    }
+    return removed
+  })
 }
