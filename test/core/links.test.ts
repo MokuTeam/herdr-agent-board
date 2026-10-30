@@ -194,3 +194,36 @@ test('a fork its card names: its events from before it started are its source’
 test('a fork’s card says whose fork it is and since when', () => {
   assert.deepEqual(forkCard(SOURCE, 1234), { forkOf: SOURCE, forkAt: 1234 })
 })
+
+test('#281: one Bash call that starts two sessions: both started, both know who started them', () => {
+  const st = newState()
+  const command = 'spawn-agent --name Orchestrator --cwd ~/o && spawn-agent --name Herdr --cwd ~/h'
+  assert.deepEqual(lineEvents(main(line.call(1, 'sp', 'Bash', { command })), st), [])
+  const printed = 'pane=w1:p2 name=Orchestrator agent=Orchestrator\npane=w2:p1 name=Herdr agent=Herdr'
+  const events = lineEvents(main(line.result(2, 'sp', printed)), st)
+  assert.deepEqual(events, [
+    { kind: 'spawn', name: 'Orchestrator', pane: 'w1:p2', at: T0 + 1000 },
+    { kind: 'spawn', name: 'Herdr', pane: 'w2:p1', at: T0 + 1000 },
+  ])
+  // One of the two did not start: the one that did.
+  lineEvents(
+    main(line.call(3, 'sp2', 'Bash', { command: 'spawn-agent --name A --cwd x; spawn-agent --name B --cwd /nope' })),
+    st,
+  )
+  assert.deepEqual(lineEvents(main(line.result(4, 'sp2', 'pane=w3:p1 name=A agent=A\nNo such folder: /nope')), st), [
+    { kind: 'spawn', name: 'A', pane: 'w3:p1', at: T0 + 3000 },
+  ])
+
+  const items: LinkItem[] = [
+    { key: 'me', name: 'Me', pane: 'w0:p1' },
+    { key: 'o', name: 'Orchestrator', pane: 'w1:p2' },
+    { key: 'pane-w2:p1', name: 'Herdr', pane: 'w2:p1' },
+  ]
+  const rel = relate(items, it => (it.key === 'me' ? events : []))
+  assert.deepEqual(rel.get('o')?.from, { key: 'me', name: 'Me', at: T0 + 1000 })
+  assert.deepEqual(rel.get('pane-w2:p1')?.from, { key: 'me', name: 'Me', at: T0 + 1000 })
+  assert.deepEqual(
+    rel.get('me')?.started.map(x => x.key),
+    ['o', 'pane-w2:p1'],
+  )
+})
