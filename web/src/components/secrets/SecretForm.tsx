@@ -70,7 +70,8 @@ function SecretForm({ request: r }: { request: SecretView }) {
   const { canEdit, toast, now } = useBoardContext()
   const [values, setValues] = useState<Record<string, string>>({})
   const [session, setSession] = useState('')
-  const [shown, setShown] = useState<Record<string, boolean>>({})
+  // a field the owner turned the other way: shown when the request masks it, masked when it shows it
+  const [flipped, setFlipped] = useState<Record<string, boolean>>({})
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
   const sending = status.kind === 'sending'
   const expired = now >= r.expires
@@ -141,7 +142,7 @@ function SecretForm({ request: r }: { request: SecretView }) {
       ) : (
         <div className="qa-opts secret-fields">
           {r.fields.map(f => {
-            const masked = f.hidden && !shown[f.name]
+            const masked = f.hidden !== !!flipped[f.name]
             return (
               <label key={f.name} className="qa-opt qa-other secret-field">
                 <span className="secret-label">
@@ -156,17 +157,15 @@ function SecretForm({ request: r }: { request: SecretView }) {
                   {...QUIET}
                   onChange={e => setValues(v => ({ ...v, [f.name]: e.target.value }))}
                 />
-                {f.hidden && (
-                  <button
-                    type="button"
-                    className="button secret-eye"
-                    aria-pressed={!!shown[f.name]}
-                    disabled={locked}
-                    onClick={() => setShown(s => ({ ...s, [f.name]: !s[f.name] }))}
-                  >
-                    {shown[f.name] ? t('secret.form.hide') : t('secret.form.show')}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="button secret-eye"
+                  aria-pressed={!masked}
+                  disabled={locked}
+                  onClick={() => setFlipped(s => ({ ...s, [f.name]: !s[f.name] }))}
+                >
+                  {masked ? t('secret.form.show') : t('secret.form.hide')}
+                </button>
               </label>
             )
           })}
@@ -188,7 +187,9 @@ function SecretForm({ request: r }: { request: SecretView }) {
           )}
         </div>
       )}
-      <p className="qa-desc secret-never">{t('secret.form.never')}</p>
+      <p className="qa-desc secret-never">
+        {t('secret.form.never')} {t('secret.form.asTyped')}
+      </p>
       <div className="qa-foot">
         <span className="qa-hint">
           {expired

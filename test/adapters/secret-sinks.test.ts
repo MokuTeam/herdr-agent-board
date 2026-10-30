@@ -239,13 +239,10 @@ test('Bitwarden refuses without its session, locked, or with two items of the na
   })
   const twice = await write(sink, {}, { password: VALUE }, fields, 'sess-1')
   assert.equal(!twice.ok && twice.error, 'secret.err.bwTwice')
-  // bw's error echoes what it was given: none of it comes back
+  // bw's error echoes what it was given, quotes and backslashes and all: only the step and the code come back
   f.vault({ session: 'sess-1', folders: [{ id: 'f1', name: 'Agents' }], items: [], fail: 'create item' })
   const failed = await write(sink, {}, { password: VALUE }, fields, 'sess-1')
-  assert.equal(!failed.ok && failed.error, 'secret.err.bwFailed')
-  const text = JSON.stringify(failed)
-  assert.equal(text.includes(VALUE), false, text)
-  assert.equal(text.includes('sess-1'), false, text)
+  assert.deepEqual(failed, { ok: false, error: 'secret.err.bwFailed', vars: { step: 'create item', detail: 'exit 1' } })
 })
 
 test('user environment variables through PowerShell: the values on stdin as base64, never in its argv; once keeps a set one', async () => {
@@ -330,11 +327,11 @@ test('HTTP: the board makes the call to the sink’s host, follows no redirect, 
     },
     '/home/x',
   )
-  const r = await write(sink, { conn: 'a/b c' }, { apiToken: 'api-1', secret: VALUE })
-  assert.deepEqual(r, { ok: true, target: `PUT http://127.0.0.1:${server.port}/v1/a%2Fb%20c/credentials`, status: 201 })
+  const r = await write(sink, { conn: 'a b?c' }, { apiToken: 'api-1', secret: VALUE })
+  assert.deepEqual(r, { ok: true, target: `PUT http://127.0.0.1:${server.port}/v1/a%20b%3Fc/credentials`, status: 201 })
   assert.deepEqual(seen[0], {
     method: 'PUT',
-    path: '/v1/a%2Fb%20c/credentials',
+    path: '/v1/a%20b%3Fc/credentials',
     auth: 'Bearer api-1',
     body: JSON.stringify({ consumerSecret: VALUE, n: 1 }),
   })
@@ -389,3 +386,26 @@ test('from the review: a JSON key that names a prototype stays the file’s own 
   const written = readFileSync(join(home, 'p.json'), 'utf8')
   assert.ok(written.includes('"__proto__"'), written)
 })
+
+// From the second review: icacls /inheritance:r drops only inherited entries, so one put on the file
+// by hand stayed. An existing file's own entries are reset first, and the rights read back.
+test.skipIf(process.platform !== 'win32')(
+  'an existing file that Everyone could read is the user’s alone before the value goes in',
+  async () => {
+    const home = join(isolatedHome(), 'home')
+    const file = join(home, 'shared.txt')
+    writeFileSync(file, 'old')
+    const icacls = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe')
+    spawnSync(icacls, [file, '/grant', '*S-1-1-0:(R)'], { encoding: 'utf8' })
+    // its own entry besides the inherited ones (Everyone's name is in the system's language)
+    assert.ok(
+      spawnSync(icacls, [file], { encoding: 'utf8' })
+        .stdout.split(/\r?\n/)
+        .some(l => /:\(R\)\s*$/.test(l)),
+    )
+    const r = await write(sinkOf({ kind: 'file', path: '~/shared.txt', template: '{{v}}' }, home), {}, { v: VALUE })
+    assert.equal(r.ok, true)
+    onlyMine(file)
+    assert.equal(readFileSync(file, 'utf8'), VALUE)
+  },
+)

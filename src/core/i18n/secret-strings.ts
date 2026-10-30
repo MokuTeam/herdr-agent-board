@@ -19,6 +19,7 @@ export const SECRET_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'secret.form.sessionHint': 'Used for this write only, kept nowhere',
     'secret.form.never':
       'The values go straight to this place. The agent, the card and the board’s logs never see them.',
+    'secret.form.asTyped': 'Written as typed, spaces too; only a line break at either end is dropped.',
     'secret.form.until': 'Until {time}',
     'secret.form.expired': 'Expired',
     'secret.form.write': 'Write',
@@ -122,6 +123,7 @@ export const SECRET_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'secret.form.session': 'Сессия Bitwarden (bw unlock --raw)',
     'secret.form.sessionHint': 'Только для этой записи, нигде не хранится',
     'secret.form.never': 'Значения идут прямо сюда. Агент, карточка и логи доски их не видят.',
+    'secret.form.asTyped': 'Записывается как набрано, с пробелами; убирается только перенос строки в начале и в конце.',
     'secret.form.until': 'До {time}',
     'secret.form.expired': 'Истёк',
     'secret.form.write': 'Записать',

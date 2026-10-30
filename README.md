@@ -1915,10 +1915,12 @@ whole value must match), and otherwise a **field**, which you type. A file's nam
 
 - `file`: `path`, or `folder` and `name` (absolute or `~/…`; the folder must be there). `format`
   `json` puts the template under the keys of `at` and keeps the file's other keys (the file is
-  written again as JSON, two spaces; without `at` the template is the whole file); `env` sets its variables and keeps the file's other lines; `netrc` and
-  `text` are the whole file. The file is written in place, never through a temp file, and made
-  yours alone before anything goes in (mode 600; on Windows inheritance off and full control to
-  your user only, as the tunnel's key). A link or a folder where the file goes is refused.
+  written again as JSON, two spaces; without `at` the template is the whole file); `env` sets its
+  variables and keeps the file's other lines; `netrc` and `text` are the whole file. The file is
+  written in place, never through a temp file, and made yours alone before anything goes in (mode
+  600; on Windows an existing file's own entries reset, inheritance off, full control to your user
+  only, and the rights read back: anything else and nothing is written). A link or a folder where
+  the file goes is refused.
 - `bitwarden`: an item by name in `folder` (made when missing), created or updated, with
   `organization` and `collection` (both, or neither) for a new item of an organization. The fields
   a request names are the item's `username`, `password`, `totp`, `notes`, `uri`, or custom fields
@@ -1929,10 +1931,12 @@ whole value must match), and otherwise a **field**, which you type. A file's nam
   expression), set by Windows PowerShell with the values on its stdin; new programs see them.
 - `http`: `method` (POST, PUT, PATCH), `url`, `headers`, `auth` (`{ "user", "password" }`, basic),
   `body` (JSON with templates in its strings, or text). The scheme and host are written out in
-  full (https; http only for localhost): parameters go into the path and the query, encoded. The
-  board makes the call itself, follows no redirect, and reads nothing of the answer but its status.
+  full (https; http only for localhost): parameters go into the path and the query, encoded, and
+  one in the URL has no `/`, `\` or `%`. The board makes the call itself, follows no redirect, and
+  reads nothing of the answer but its status.
 
-A sink that does not check out (an unknown key, a relative path, a field in a URL) takes no request,
+`once` on a sink (not `http`) lists fields written only where nothing is set yet, whatever the
+request says. A sink that does not check out (an unknown key, a relative path, a field in a URL) takes no request,
 and `board doctor` says why; the others work.
 
 **Asking**, as an agent: `board secret request --title "<what for>" --sink <id>
@@ -1948,16 +1952,19 @@ their brief, only where config.json has sinks.
 
 **The form**, at the top of the session's sheet: what it is for, where the values go (the file and
 where in it, the vault's folder and item, the variables, the method and URL) with the request's
-parameters, then a field for each, masked ones with Show; spelling services, autofill and password
-managers are told to keep out (where the browser masks a text field by CSS, a masked field is one,
-so its own password manager never offers to save a token). **Write** sends the values in one request to the board, which writes
-the sink and answers ok or why not; a failed write keeps the request open for another try. When
+parameters, then a field for each, masked or shown as the request asks, and Show or Hide on each,
+so you can mask any of them; spelling services, autofill and password managers are told to keep
+out (where the browser masks a text field by CSS, a masked field is one, so its own password manager
+never offers to save a token). A value is written as typed, spaces too; only a line break at either
+end (a paste's) is dropped. **Write** sends the values in one request to the board, which writes the
+sink and answers ok or why not; a failed write keeps the request open for another try. When
 the sink changed in config.json since the form was shown, the write is refused and the form shows
 the new place. **Decline** answers the agent without a write.
 
 **What it keeps from whom.** A value goes from the form to the sink and nowhere else: not to the
-agent, the card, the board's payload or its event stream, board.db, a log, an error text (what a
-program or a server says back is scrubbed of the values), a temp file or the backup; the board holds
+agent, the card, the board's payload or its event stream, board.db, a log, an error text (a
+failure of bw or PowerShell is said by its step and exit code, never by what it printed; a
+server's answer is not read), a temp file or the backup; the board holds
 it in memory for the one write. No route returns one. The request on its card holds the title, the
 sink, the parameters and the field names; the audit (`secrets/audit.jsonl` in the state folder, a
 megabyte, then the one before) has a line for each step: who asked, the sink, the fields, the

@@ -3,7 +3,8 @@
 // file is written in place, with the user's rights only before anything is in it; Bitwarden and
 // PowerShell get them on stdin, never as an argument, and Bitwarden's session in their env only;
 // an HTTP call goes to the sink's own origin, follows no redirect, and its answer is reduced to a
-// status. What a program or a server says back is scrubbed of every value before it is an error.
+// status. A program's failure is said by its step and exit code, never by what it printed (that
+// can echo its input in any escaping); a runtime's error by its name and code.
 // BOARD_BW_BIN_PATH and BOARD_POWERSHELL_BIN_PATH name other binaries (tests).
 import {
   chmodSync,
@@ -31,8 +32,7 @@ import {
   scrub,
 } from '../core/secrets.ts'
 import { isRecord } from './json-store.ts'
-import { type RunResult, runTree } from './process.ts'
-import { protectKey } from './ssh.ts'
+import { type RunResult, run, runTree } from './process.ts'
 
 export interface WriteInput {
   sink: Sink
@@ -72,7 +72,10 @@ export async function writeSink(input: WriteInput): Promise<WriteResult> {
         return await writeHttp(input.sink, input)
     }
   } catch (err) {
-    return refuse('secret.err.failed', { detail: scrub(err instanceof Error ? err.message : String(err), secrets) })
+    // a runtime's message can quote what it was given: its name and code only
+    const e = err as { name?: unknown; code?: unknown }
+    const what = [e?.name, e?.code].filter(x => typeof x === 'string' && x).join(' ')
+    return refuse('secret.err.failed', { detail: scrub(what || 'error', secrets) })
   }
 }
 
@@ -199,10 +202,10 @@ async function writeFile(sink: FileSink, input: WriteInput): Promise<WriteResult
     const first = contentOf(sink, input, path, there ? readFileSync(path, 'utf8') : null)
     if (typeof first !== 'string') return first
     // The rights first, while the file is empty or still holds what it held: the value goes into a
-    // file only the user can read. Windows: inheritance off, the user alone (as the tunnel's key).
+    // file only the user can read. Windows: the user alone, and read back so.
     const made = !there
     if (made) closeSync(openSync(path, 'wx', 0o600))
-    const rights = process.platform === 'win32' ? await protectKey(path) : chmodRights(path)
+    const rights = process.platform === 'win32' ? await userOnly(path, !made) : chmodRights(path)
     if (!rights.ok) {
       if (made) rmSync(path, { force: true })
       return refuse('secret.err.rights', { path })
@@ -219,6 +222,29 @@ async function writeFile(sink: FileSink, input: WriteInput): Promise<WriteResult
     }
     return { ok: true, target: sink.at ? `${path} › ${sink.at.map(k => fillText(k, input.params)).join(' › ')}` : path }
   })
+}
+
+/**
+ * Windows: the file's rights the user's alone. An existing file's own entries go first (`/reset`:
+ * `/inheritance:r` drops only inherited ones, so an Everyone:(R) put on it by hand would stay),
+ * then inheritance off and full control to the user by SID, then the rights read back: one entry,
+ * the user's, or no write.
+ */
+async function userOnly(path: string, existed: boolean): Promise<{ ok: boolean }> {
+  const who = await run(system32('whoami.exe'), ['/user', '/fo', 'csv', '/nh'])
+  const m = /^"((?:[^"]|"")*)","(S-1-[\d-]+)"/m.exec(who.stdout)
+  if (who.code !== 0 || !m?.[1] || !m[2]) return { ok: false }
+  const icacls = system32('icacls.exe')
+  if (existed && (await run(icacls, [path, '/reset'])).code !== 0) return { ok: false }
+  if ((await run(icacls, [path, '/inheritance:r', '/grant:r', `*${m[2]}:F`])).code !== 0) return { ok: false }
+  const shown = await run(icacls, [path])
+  const aces = shown.stdout
+    .split(/\r?\n/)
+    .map(line => (line.startsWith(path) ? line.slice(path.length) : line).trim())
+    .filter(line => /:\(/.test(line))
+  const name = m[1].replaceAll('""', '"').toLowerCase()
+  const only = aces.length === 1 && (aces[0] ?? '').toLowerCase() === `${name}:(f)`
+  return { ok: shown.code === 0 && only }
 }
 
 function chmodRights(path: string): { ok: boolean } {
@@ -259,6 +285,10 @@ function jsonOut(r: RunResult): unknown {
 }
 
 /** bw's own `encode`: the JSON as base64, which `create` and `edit` read from stdin. */
+/** How a program ended, in words that hold nothing it printed. */
+const codeOf = (r: RunResult): string =>
+  r.killed || r.code === 'timeout' ? 'timed out' : r.code === 'ENOENT' ? 'not found' : `exit ${String(r.code)}`
+
 const encoded = (value: unknown): string => Buffer.from(JSON.stringify(value), 'utf8').toString('base64')
 
 async function writeBitwarden(sink: BitwardenSink, input: WriteInput): Promise<WriteResult> {
@@ -266,13 +296,9 @@ async function writeBitwarden(sink: BitwardenSink, input: WriteInput): Promise<W
   if (!session) return refuse('secret.err.bwSession')
   const bin = bwBin()
   if (!bin) return refuse('secret.err.bwMissing')
-  const secrets = [...Object.values(input.values), session]
+  // what bw says on a failure can echo what it was given, in any escaping: the step and the code only
   const failed = (step: string, r: RunResult): WriteResult =>
-    refuse('secret.err.bwFailed', {
-      step,
-      detail:
-        r.code === 'ENOENT' ? 'bw not found' : scrub(r.stderr || r.error?.message || `exit ${String(r.code)}`, secrets),
-    })
+    refuse('secret.err.bwFailed', { step, detail: r.code === 'ENOENT' ? 'bw not found' : codeOf(r) })
   const status = await bw(bin, ['status'], session)
   const st = jsonOut(status)
   if (!isRecord(st)) return failed('status', status)
@@ -384,9 +410,7 @@ async function writeEnv(_sink: EnvSink, input: WriteInput): Promise<WriteResult>
   if (said.startsWith('taken:')) return refuse('secret.err.onceThere', { what: said.slice(6) })
   if (r.code !== 0 || said !== 'ok')
     return refuse('secret.err.envFailed', {
-      detail: r.killed
-        ? 'timed out'
-        : scrub(r.stderr || r.error?.message || `exit ${String(r.code)}`, Object.values(input.values)),
+      detail: codeOf(r),
     })
   return { ok: true, target: input.fields.map(f => f.name).join(', ') }
 }

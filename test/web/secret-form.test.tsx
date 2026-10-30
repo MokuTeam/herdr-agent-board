@@ -150,11 +150,16 @@ test('where it goes first, masked fields kept from spelling, autofill and passwo
   await setValue(inputs[1] as HTMLInputElement, 'pw-1')
   expect(write.disabled).toBe(true) // no session yet
   await setValue(inputs[2] as HTMLInputElement, 'sess')
-  // Show turns a masked field to text, and back
-  await click(q('.secret-eye'))
+  // Show turns a masked field to text, and back; the owner can mask a shown one too
+  const eyes = () => qa('form.secret .secret-eye')
+  expect(eyes().map(b => b.textContent)).toEqual(['Hide', 'Show'])
+  await click(eyes()[1] ?? null)
   expect((qa('form.secret input')[1] as HTMLInputElement).type).toBe('text')
-  await click(q('.secret-eye'))
+  await click(eyes()[1] ?? null)
   expect((qa('form.secret input')[1] as HTMLInputElement).type).toBe('password')
+  await click(eyes()[0] ?? null)
+  expect((qa('form.secret input')[0] as HTMLInputElement).type).toBe('password')
+  expect(q('form.secret')?.textContent).toContain('Written as typed, spaces too')
   await click(write)
   expect(sent).toEqual([
     {

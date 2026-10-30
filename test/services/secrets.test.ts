@@ -127,9 +127,9 @@ test('one write at a time: a submit while another writes is refused; one that di
   const busy = await submitSecret(cfg, r.id, { values: { token: VALUE }, fingerprint: fingerprint(cfg, r) })
   assert.deepEqual(busy, { status: 409, body: { ok: false, error: 'Another submit is writing this request now' } })
   claim(Date.now() - 9 * 60_000)
-  const done = await submitSecret(cfg, r.id, { values: { token: ` ${VALUE}\n` }, fingerprint: fingerprint(cfg, r) })
+  const done = await submitSecret(cfg, r.id, { values: { token: `${VALUE}\n` }, fingerprint: fingerprint(cfg, r) })
   assert.equal(done.status, 200)
-  // what a paste brings around a key is no part of it
+  // the line break a paste brings is no part of a key
   assert.deepEqual(JSON.parse(readFileSync(join(home, 'token.json'), 'utf8')), { svc: { token: VALUE } })
   const saved = ownRequest('s1', r.id)
   assert.equal(saved?.status, 'ok')
@@ -227,4 +227,15 @@ test('from the review: no decline, cancel or expiry cuts across a write under wa
     ok: false,
     error: 'This session has 5 requests waiting already: let the owner answer those first',
   })
+})
+
+test('from the second review: a value is written as typed, spaces too; only a line break at either end goes (#273)', async () => {
+  const { home, cfg } = setUp()
+  const r = ask(cfg)
+  const done = await submitSecret(cfg, r.id, {
+    values: { token: '\r\n  spaced pass  \n' },
+    fingerprint: fingerprint(cfg, r),
+  })
+  assert.equal(done.status, 200)
+  assert.deepEqual(JSON.parse(readFileSync(join(home, 'token.json'), 'utf8')), { svc: { token: '  spaced pass  ' } })
 })

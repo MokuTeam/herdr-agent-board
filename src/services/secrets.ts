@@ -267,8 +267,8 @@ export async function submitSecret(
   for (const f of r.fields) {
     const raw = given[f.name]
     if (typeof raw !== 'string') return no(400, t('secret.err.values'))
-    // what a paste brings around it (a line break, a space) is no part of a key
-    const value = raw.trim()
+    // a line break a paste brings at either end is no part of a key; spaces are kept (the form says so)
+    const value = raw.replace(/^[\r\n]+|[\r\n]+$/g, '')
     const problem = valueProblem(sink, f.name, value)
     if (problem) return no(400, t(problem, { name: f.name }))
     values[f.name] = value
@@ -289,31 +289,46 @@ export async function submitSecret(
     const again = ownRequest(key, id)
     return no(409, again?.status === 'pending' ? t('secret.err.busy') : t(`secret.err.was.${again?.status ?? 'gone'}`))
   }
-  const result = await writeSink({ sink, params: r.params, fields: r.fields, values, bwSession: session })
-  const at = Date.now()
-  if (result.ok) {
-    const done = settle(key, id, 'ok', at, result.target)
-    audit(
-      'written',
-      done ?? r,
-      'owner',
-      { target: result.target, ...(result.status && { httpStatus: result.status }) },
-      at,
-    )
-    return {
-      status: 200,
-      body: { ok: true, target: result.target, ...(result.status && { httpStatus: result.status }) },
+  // the claim goes whatever happens after it: settled ok, or freed for another try
+  let settled = false
+  try {
+    const result = await writeSink({ sink, params: r.params, fields: r.fields, values, bwSession: session })
+    const at = Date.now()
+    if (result.ok) {
+      const done = settle(key, id, 'ok', at, result.target)
+      settled = true
+      audit(
+        'written',
+        done ?? r,
+        'owner',
+        { target: result.target, ...(result.status && { httpStatus: result.status }) },
+        at,
+      )
+      return {
+        status: 200,
+        body: { ok: true, target: result.target, ...(result.status && { httpStatus: result.status }) },
+      }
     }
+    audit('failed', r, 'owner', { error: result.error, ...(result.status && { httpStatus: result.status }) }, at)
+    return failedAnswer(result, values, session)
+  } finally {
+    if (!settled)
+      change(
+        key,
+        id,
+        x => x.status === 'pending',
+        ({ writing: _, ...x }) => x,
+        Date.now(),
+      )
   }
-  change(
-    key,
-    id,
-    x => x.status === 'pending',
-    ({ writing: _, ...x }) => x,
-    at,
-  )
-  audit('failed', r, 'owner', { error: result.error, ...(result.status && { httpStatus: result.status }) }, at)
-  // the reason in words, the values scrubbed from it once more
+}
+
+/** A failed write's answer: the reason in words, the values scrubbed from it once more. */
+function failedAnswer(
+  result: { error: string; vars?: Record<string, string>; status?: number },
+  values: Record<string, string>,
+  session: string,
+): Answer {
   const error = scrub(t(result.error, { ...result.vars }), Object.values(values).concat(session))
   return {
     status: result.status ? 502 : 400,

@@ -372,6 +372,11 @@ test('from the review: no object key, no dot segment, under any rule; a netrc pa
   )
   assert.equal(said.includes('pw-in-config'), false, said)
   assert.equal(scrub(`echo ${Buffer.from('k3y-value').toString('base64')}`, ['k3y-value']), 'echo •••')
+  // and as JSON or a URL would carry it
+  assert.equal(
+    scrub(`{"p":${JSON.stringify('a"b\\c')}} ?x=${encodeURIComponent('a b&c')}`, ['a"b\\c', 'a b&c']),
+    '{"p":"•••"} ?x=•••',
+  )
 })
 
 test('from the review: an entry on a card that is not wholly a request is left out, and a write under way does not expire', () => {
@@ -388,4 +393,53 @@ test('from the review: an entry on a card that is not wholly a request is left o
   const writing = request({ expires: 10_000, writing: 9_000 })
   assert.equal(statusOf(writing, 20_000), 'pending')
   assert.equal(statusOf(writing, 9_000 + 9 * 60_000), 'expired')
+})
+
+test('from the second review: no query or header in a problem, no / \\ % in a URL parameter, the owner’s once, no prototype as a field (#273)', () => {
+  const said = problemsText(
+    [
+      ...conf('linux', {
+        a: { kind: 'http', url: 'http://api.example.com/x?key=qk-123#frag', body: '{{v}}' },
+        b: { kind: 'http', url: 'https://api.example.com/x', headers: 'Bearer hk-123', body: 7 },
+      }).sinks.values(),
+    ].flatMap(s => s.problems),
+    en,
+  )
+  for (const leak of ['qk-123', 'frag', 'hk-123']) assert.equal(said.includes(leak), false, said)
+  expect(said).toContain('http://api.example.com/x')
+  const http = conf('linux', {
+    s: {
+      kind: 'http',
+      url: 'https://api.example.com/v1/{{p}}?q={{q}}',
+      body: '{{v}}',
+      params: { p: 'text', q: 'text' },
+    },
+  }).sinks.get('s') as Sink
+  for (const bad of ['a/b', 'a\\b', '%2e%2e', '50%'])
+    assert.equal(checkRequest(http, { p: bad, q: 'x' }, []).ok, false, bad)
+  assert.equal(checkRequest(http, { p: 'ok', q: 'a/b' }, []).ok, false)
+  assert.equal(checkRequest(http, { p: 'ok-1', q: 'a b' }, []).ok, true)
+  // the owner's once holds whatever the request says
+  const owned = conf('linux', {
+    t: { kind: 'file', path: '~/t', template: '{{user}} {{token}}', once: ['token'] },
+    v: { kind: 'bitwarden', folder: 'A', item: 'x', once: ['password'] },
+    w: { kind: 'file', path: '~/w', template: '{{token}}', once: ['nope'] },
+  }).sinks
+  const t = checkRequest(owned.get('t') as Sink, {}, [])
+  assert.ok(t.ok)
+  assert.deepEqual(t.fields, [
+    { name: 'user', hidden: true },
+    { name: 'token', hidden: true, once: true },
+  ])
+  const v = checkRequest(owned.get('v') as Sink, {}, [{ name: 'password', hidden: true }])
+  assert.ok(v.ok)
+  assert.equal(v.fields[0]?.once, true)
+  expect(owned.get('w')?.problems.map(p => `${p.at} ${p.why}`)).toEqual(['secrets.sinks.w.once field'])
+  expect(problemsOf({ kind: 'http', url: 'https://a.example.com/', body: '{{v}}', once: ['v'] })).toContain(
+    'secrets.sinks.s.once unknown',
+  )
+  // an object's own key is no field
+  const env = conf('win32', { e: { kind: 'env', vars: '.*' } }).sinks.get('e') as Sink
+  assert.equal(checkRequest(env, {}, [{ name: '__proto__', hidden: true }]).ok, false)
+  assert.equal(checkRequest(env, {}, [{ name: 'GOOD_NAME', hidden: true }]).ok, true)
 })

@@ -31,6 +31,8 @@ interface SinkBase {
   fields: string[] | null
   /** The sink as config.json has it: what the form's fingerprint is made of. */
   raw: unknown
+  /** Fields the owner wants written only where nothing is set yet, whatever the request says. */
+  once: string[]
   /** What does not check out: a sink with any problem takes no request and writes nothing. */
   problems: SecretProblem[]
 }
@@ -202,9 +204,9 @@ interface ParseOptions {
 }
 
 const KEYS: Record<SinkKind, readonly string[]> = {
-  file: ['kind', 'title', 'params', 'path', 'folder', 'name', 'format', 'template', 'at'],
-  bitwarden: ['kind', 'title', 'params', 'folder', 'item', 'organization', 'collection'],
-  env: ['kind', 'title', 'vars'],
+  file: ['kind', 'title', 'params', 'path', 'folder', 'name', 'format', 'template', 'at', 'once'],
+  bitwarden: ['kind', 'title', 'params', 'folder', 'item', 'organization', 'collection', 'once'],
+  env: ['kind', 'title', 'vars', 'once'],
   http: ['kind', 'title', 'params', 'method', 'url', 'headers', 'auth', 'body'],
 }
 
@@ -253,6 +255,15 @@ function paramsOf(v: unknown, at: string, problems: SecretProblem[]): Record<str
     } else problems.push({ at: place, why: 'type', value: shown(rule) })
   }
   return out
+}
+
+/** `once`: the names of fields, or none. */
+function onceOf(v: unknown, at: string, problems: SecretProblem[]): string[] {
+  if (v === undefined) return []
+  if (Array.isArray(v) && v.every(x => typeof x === 'string' && (FIELD_NAME.test(x) || ENV_NAME.test(x))))
+    return v as string[]
+  problems.push({ at, why: 'type', value: shown(v) })
+  return []
 }
 
 /** `~/x` from the home; any other path must be absolute already. */
@@ -373,6 +384,12 @@ function envSink(base: SinkBase, o: Record<string, unknown>, at: string, opts: P
 
 const LOCAL_HOSTS = ['localhost', '127.0.0.1', '[::1]']
 
+/**
+ * A URL as a problem says it, to the owner and to `board secret sinks`: its scheme, host and path,
+ * never a login, a query or a fragment, where config.json may hold a key.
+ */
+const urlShown = (url: string): string => url.replace(/\/\/[^/@?#]*@/, '//').replace(/[?#].*$/, '')
+
 function httpSink(base: SinkBase, o: Record<string, unknown>, at: string): HttpSink {
   const { problems, params } = base
   const method = (typeof o.method === 'string' ? o.method.trim().toUpperCase() : 'POST') || 'POST'
@@ -386,14 +403,14 @@ function httpSink(base: SinkBase, o: Record<string, unknown>, at: string): HttpS
       parsed = origin ? new URL(origin) : null
     } catch {}
     if (!parsed || placeholders(origin).length || parsed.username || parsed.password)
-      problems.push({ at: `${at}.url`, why: 'origin', value: url.replace(/\/\/[^/@]*@/, '//') })
+      problems.push({ at: `${at}.url`, why: 'origin', value: urlShown(url) })
     else if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && LOCAL_HOSTS.includes(parsed.hostname)))
-      problems.push({ at: `${at}.url`, why: 'scheme', value: url })
+      problems.push({ at: `${at}.url`, why: 'scheme', value: urlShown(url) })
     paramsOnly(url, params, `${at}.url`, problems)
   }
   const headers: Record<string, string> = {}
   if (o.headers !== undefined) {
-    if (!isObject(o.headers)) problems.push({ at: `${at}.headers`, why: 'type', value: shown(o.headers) })
+    if (!isObject(o.headers)) problems.push({ at: `${at}.headers`, why: 'type', value: 'headers' })
     else
       for (const [k, v] of Object.entries(o.headers)) {
         if (!/^[A-Za-z0-9-]{1,60}$/.test(k) || typeof v !== 'string' || /[\r\n]/.test(v))
@@ -410,7 +427,7 @@ function httpSink(base: SinkBase, o: Record<string, unknown>, at: string): HttpS
   }
   const body = o.body ?? null
   if (body !== null && typeof body !== 'string' && !isObject(body) && !Array.isArray(body))
-    problems.push({ at: `${at}.body`, why: 'type', value: shown(body) })
+    problems.push({ at: `${at}.body`, why: 'type', value: 'body' })
   const fields = fieldsOf([headers, auth ?? '', body ?? ''], params, `${at}.body`, problems)
   return { ...base, kind: 'http', method, url, headers, auth, body, fields }
 }
@@ -442,7 +459,8 @@ export function secretsConfig(raw: unknown, opts: ParseOptions): SecretsConfig {
     if (o.title !== undefined && typeof o.title !== 'string')
       own.push({ at: `${at}.title`, why: 'type', value: shown(o.title) })
     const params = known && kind !== 'env' ? paramsOf(o.params, `${at}.params`, own) : {}
-    const base: SinkBase = { id, kind: known ? kind : 'file', title, params, fields: null, raw: v, problems: own }
+    const once = onceOf(o.once, `${at}.once`, own)
+    const base: SinkBase = { id, kind: known ? kind : 'file', title, params, fields: null, raw: v, once, problems: own }
     if (!known) {
       sinks.set(id, { ...base, kind: 'env', vars: null, pattern: null })
       continue
@@ -456,6 +474,9 @@ export function secretsConfig(raw: unknown, opts: ParseOptions): SecretsConfig {
           : kind === 'env'
             ? envSink(base, o, at, opts)
             : httpSink(base, o, at)
+    // a template's own fields only
+    for (const name of once)
+      if (sink.fields && !sink.fields.includes(name)) own.push({ at: `${at}.once`, why: 'field', value: name })
     sinks.set(id, sink)
   }
   return { sinks, problems }
@@ -506,12 +527,18 @@ export function checkRequest(sink: Sink, params: Record<string, string>, asked: 
   if (sink.kind === 'file' && sink.format === 'netrc')
     for (const [name, value] of Object.entries(params))
       if (/\s/.test(value)) return { ok: false, error: 'secret.err.paramBad', vars: { name } }
+  // in a URL a parameter is one segment or one query value, encoded: nothing that could read as more
+  if (sink.kind === 'http')
+    for (const name of placeholders(sink.url))
+      if (/[/\\%]/.test(params[name] ?? '')) return { ok: false, error: 'secret.err.paramBad', vars: { name } }
   // a file's name filled in must still be one name inside the folder
   if (sink.kind === 'file' && !safeName(fillText(sink.name, params)))
     return { ok: false, error: 'secret.err.paramBad', vars: { name: placeholders(sink.name).join(', ') } }
   const names = asked.map(f => f.name)
   if (new Set(names).size !== names.length) return { ok: false, error: 'secret.err.fieldTwice' }
   if (asked.length > MAX_FIELDS) return { ok: false, error: 'secret.err.fieldsMany', vars: { n: String(MAX_FIELDS) } }
+  if (asked.some(f => OBJECT_KEYS.includes(f.name)))
+    return { ok: false, error: 'secret.err.fieldBad', vars: { name: '__proto__' } }
   let fields = asked
   if (sink.fields) {
     if (!asked.length) fields = sink.fields.map(name => ({ name, hidden: true }))
@@ -532,6 +559,8 @@ export function checkRequest(sink: Sink, params: Record<string, string>, asked: 
   }
   // the other side's state is no one's to read: once cannot be kept there
   if (sink.kind === 'http' && fields.some(f => f.once)) return { ok: false, error: 'secret.err.onceHttp' }
+  // the owner's `once` holds whatever the request says
+  fields = fields.map(f => (sink.once.includes(f.name) && !f.once ? { ...f, once: true as const } : f))
   return { ok: true, params, fields }
 }
 
@@ -597,12 +626,18 @@ export function fingerprintOf(sink: Sink, params: Record<string, string>, fields
 
 /**
  * A text that may hold a typed value (a program's error, a server's answer) without any: each
- * value (its trimmed form, its base64 as PowerShell and bw get it) replaced, one line, 300
- * characters at most.
+ * value (trimmed, as base64 as PowerShell and bw get it, JSON-escaped, URL-encoded) replaced, one
+ * line, 300 characters at most.
  */
 export function scrub(text: string, values: readonly string[]): string {
   let out = text
-  const forms = (v: string): string[] => [v, v.trim(), Buffer.from(v, 'utf8').toString('base64')]
+  const forms = (v: string): string[] => [
+    v,
+    v.trim(),
+    Buffer.from(v, 'utf8').toString('base64'),
+    JSON.stringify(v).slice(1, -1),
+    encodeURIComponent(v),
+  ]
   const all = [...new Set(values.flatMap(forms).filter(v => v.length > 0))].sort((a, b) => b.length - a.length)
   for (const v of all) out = out.split(v).join('•••')
   return cleanText(out, 300)
