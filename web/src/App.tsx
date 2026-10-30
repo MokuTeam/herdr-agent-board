@@ -19,6 +19,7 @@ import { SheetQuestion } from './components/questions/SheetQuestion.tsx'
 import { RenameField } from './components/RenameField.tsx'
 import { SetupPop } from './components/SetupPop.tsx'
 import { SidePanels } from './components/SidePanels.tsx'
+import { SecretRequests, secretsOf } from './components/secrets/SecretForm.tsx'
 import { Toasts } from './components/Toasts.tsx'
 import { Toolbar } from './components/Toolbar.tsx'
 import { Terminal } from './components/terminal/Terminal.tsx'
@@ -271,7 +272,18 @@ export function App() {
             onMode: reminders.mode,
             onMore: () => openSchedule(ui.open),
           },
-          question: (item, detail) => questions.mount(item, detail) && <SheetQuestion questions={questions} />,
+          question: (item, detail) => {
+            const asked = questions.mount(item, detail) && <SheetQuestion questions={questions} />
+            // a secret the session waits for (#273) comes first: it holds the session until filled in
+            return secretsOf(item).length ? (
+              <>
+                <SecretRequests item={item} />
+                {asked}
+              </>
+            ) : (
+              asked
+            )
+          },
           upgradeFiles: chips.upgrade,
           onChanges: quickLook.lookChanges,
           onHistory: quickLook.lookHistory,

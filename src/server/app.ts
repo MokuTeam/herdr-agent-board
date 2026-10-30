@@ -73,6 +73,7 @@ import { presenceRoutes } from './routes/presence.ts'
 import { remoteRoutes } from './routes/remote.ts'
 import { revealRoute, revealState } from './routes/reveal.ts'
 import { scheduleRoute } from './routes/schedule.ts'
+import { secretsRoutes } from './routes/secrets.ts'
 import { sessionRoutes } from './routes/session.ts'
 import { categoriesRoute, profilesRoute, settingsRoute } from './routes/settings.ts'
 import { setupRoute } from './routes/setup.ts'
@@ -470,6 +471,8 @@ export async function startServer({
     ...presenceRoutes(presence),
     // Tasks (#202): points pinned on the board, done, reopened, removed; turned on or off.
     ...todosRoutes({ cfg, find: board.find, refresh }),
+    // Secret requests (#273): the owner's submit writes the sink, or the owner declines; the phone too.
+    ...secretsRoutes({ refresh }),
     // Time entries by day and client, as billed (#233): read only, the remote page too.
     ...timeRoutes(cfg),
     // Settings → Backup… (#233): the passphrase, the targets, the server's setup; this computer only.

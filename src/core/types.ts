@@ -188,6 +188,8 @@ export interface Config {
   backup?: unknown
   /** Time tracking (#233), as config.json has it: read through core/time.ts timeConfig. */
   time?: unknown
+  /** Secrets through the board (#273), as config.json has it: read through core/secrets.ts secretsConfig. */
+  secrets?: unknown
   [extra: string]: unknown
 }
 

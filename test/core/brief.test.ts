@@ -86,3 +86,13 @@ test('the brief tells agents about the schedule', () => {
   // #51 told sessions in herdr they can restart themselves: every running one hears it again.
   assert.ok(BRIEF_VERSION >= 5)
 })
+
+test('brief: `board secret` only where config.json has sinks, for Claude; without any, the brief is as it was (#273)', () => {
+  const none = brief(cfg, null, 'C:X', {})
+  assert.equal(brief(cfg, null, 'C:X', {}, 'Claude', null, null, []), none)
+  assert.doesNotMatch(none, /board secret/)
+  const some = brief(cfg, null, 'C:X', {}, 'Claude', null, null, ['wss', 'vault'])
+  assert.match(some, /board secret request --title .*Sinks: wss, vault/)
+  assert.equal(some.split('\n').length, none.split('\n').length + 1)
+  assert.doesNotMatch(brief(cfg, null, 'C:X', {}, 'Codex', null, null, ['wss']), /board secret/)
+})

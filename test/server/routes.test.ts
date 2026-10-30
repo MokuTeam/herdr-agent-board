@@ -114,6 +114,7 @@ describe('routes', () => {
       'styles/menu.css',
       'styles/launch.css',
       'styles/questions.css',
+      'styles/secrets.css',
       'styles/terminal.css',
       'styles/helpers.css',
       'styles/profiles.css',
