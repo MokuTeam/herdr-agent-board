@@ -19,7 +19,16 @@ import type { MessageGate } from '../../core/message-gate.ts'
 import type { Viewer } from '../../core/mokupilot-mode.ts'
 import { isPiItem } from '../../core/pi.ts'
 import type { Item, Pin } from '../../core/types.ts'
-import { checkWake, focus, NAMED_WAIT_MS, send, sleepSession, wake, wakeAnswers } from '../../services/actions.ts'
+import {
+  checkWake,
+  focus,
+  NAMED_POLL_MS,
+  namedWaitMs,
+  send,
+  sleepSession,
+  wake,
+  wakeAnswers,
+} from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
 import { askArchive, undoMs } from '../../services/archive.ts'
 import { askAside } from '../../services/aside.ts'
@@ -113,7 +122,7 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
   return app.gate(item.key, body.requestId ?? randomUUID(), [body.session ?? null, body.text, files], async () => {
     // Always collect a new snapshot before accepting a message, even if SSE is connected: a
     // board that cannot reach herdr fails here rather than send on old data.
-    const fresh = await current(deps, item)
+    const fresh = await freshItem(deps, item)
     // A card shown asleep is for its session wherever it woke meanwhile: a new tab (#204) too.
     const moved = item.sleeping && !!item.session
     if (!fresh || fresh.session !== item.session || (fresh.pane !== item.pane && !moved)) return changed(item)
@@ -126,8 +135,8 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
  * Telegram or by hand) in a pane herdr does not name it in yet (#267): looked for again for a few
  * seconds before it counts as gone.
  */
-async function current(deps: Deps, item: Item): Promise<Item | undefined> {
-  for (const deadline = Date.now() + NAMED_WAIT_MS; ; await Bun.sleep(1000)) {
+async function freshItem(deps: Deps, item: Item): Promise<Item | undefined> {
+  for (const deadline = Date.now() + namedWaitMs(); ; await Bun.sleep(NAMED_POLL_MS)) {
     const fresh = (await collect(deps)).find(next => next.key === item.key)
     if (fresh || !item.sleeping || Date.now() >= deadline) return fresh
   }

@@ -6,8 +6,7 @@ import type { AddressInfo } from 'node:net'
 import { dirname, join } from 'node:path'
 import { sandbox } from '../support/sandbox.ts'
 
-// A just woken session herdr never names is refused only once the wait for its name is over (15 s).
-setDefaultTimeout(30_000)
+setDefaultTimeout(10_000)
 
 describe('send', () => {
   const agentOf = (identity: string) => ({
@@ -51,11 +50,12 @@ describe('send', () => {
           await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
           try {
             cfg.wakeUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-            const out = await box.run('send', {
-              item: { pane: 'pane1', session: 'expected', name: 'Test', sleeping },
-              cfg,
-              text: '-hello',
-            }).exited
+            // The wait for herdr to name a just woken session, 3 s instead of 15.
+            const out = await box.run(
+              'send',
+              { item: { pane: 'pane1', session: 'expected', name: 'Test', sleeping }, cfg, text: '-hello' },
+              { BOARD_NAMED_WAIT_MS: '3000' },
+            ).exited
             assert.equal(out.code, 0, out.stderr)
             assert.equal(JSON.parse(out.stdout).ok, sent)
           } finally {
