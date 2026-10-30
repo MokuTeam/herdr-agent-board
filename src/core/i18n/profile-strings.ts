@@ -48,7 +48,7 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
       'The session now in its pane runs in profile {now}, not in {was}, where this was set, so it does not go there; if it is for that session, set it there again',
     // a MokuPilot call by link (the viewer's MokuPilot, over ssh) from a session in another profile than the board's (services/mokupilot.ts)
     'mokupilot.err.profile':
-      'MokuPilot takes the profile of its running copy, {board}: a call from {profile} would run in the wrong account',
+      'A call by link runs its fork over ssh in the board’s profile, {board}: a call from {profile} would run in the wrong account; start it at the board’s computer',
     // a MokuPilot call from a session in another profile than the board's whose folder is not known (services/mokupilot.ts)
     'mokupilot.err.profileUnknown':
       'The folder of this session’s profile is not known ({profile}): a call could run in the wrong account',
@@ -168,7 +168,7 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
       'Сессия, что сейчас в её панели, работает в профиле {now}, а не в {was}, где это поставлено, поэтому туда оно не уходит; если оно для той сессии, поставь его там заново',
     // a MokuPilot call by link (the viewer's MokuPilot, over ssh) from a session in another profile than the board's (services/mokupilot.ts)
     'mokupilot.err.profile':
-      'MokuPilot берёт профиль своей запущенной копии, {board}: звонок из {profile} пошёл бы не в том аккаунте',
+      'Звонок по ссылке запускает форк по ssh в профиле доски, {board}: звонок из {profile} пошёл бы не в том аккаунте; начни его за компьютером доски',
     // a MokuPilot call from a session in another profile than the board's whose folder is not known (services/mokupilot.ts)
     'mokupilot.err.profileUnknown':
       'Папка профиля этой сессии неизвестна ({profile}): звонок мог бы пойти не в том аккаунте',
