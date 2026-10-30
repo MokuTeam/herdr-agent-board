@@ -249,5 +249,5 @@ test('the file keeps the state a call returns to; the line says the user is on a
   const line = presenceLine({ state: 'call', since: at, by: 'auto' })
   assert.match(line, /^\[agent-board\] The user is on a call \(since 15:40\) and slow to answer/)
   assert.match(line, /board ask/)
-  assert.doesNotMatch(line, /—|–/)
+  assert.doesNotMatch(line, /[\u2013\u2014]/)
 })
