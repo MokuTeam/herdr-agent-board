@@ -86,6 +86,9 @@ export interface SettingsDeps {
   /** Tasks as the board has them (#202, 'none': off); none: no Tasks item. */
   todos?(): TodoMode | undefined
   chooseTodos?(mode: TodoMode): void
+  /** The board on another device: Paths on this computer… is offered. */
+  localPaths?(): boolean
+  openLocalPaths?(): void
 }
 
 /** What Settings → Presence asks the board for (POST /api/presence { op: 'settings', … }). */
@@ -117,6 +120,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       presence: deps.presence?.(),
       idleMinutes: deps.idleMinutes?.(),
       todos: deps.todos?.(),
+      localPaths: deps.localPaths?.() ?? false,
     })
     const source: MenuSource = keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse'
     deps.menu.open(items, {
@@ -147,6 +151,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
           deps.choosePresence?.(pick.value === 'none' ? { on: false } : { on: true, mode: pick.value })
         else if (pick?.kind === 'presenceIdle') deps.choosePresence?.({ on: true, idleMinutes: pick.value })
         else if (pick?.kind === 'todos') deps.chooseTodos?.(pick.value)
+        else if (pick?.kind === 'localPaths') deps.openLocalPaths?.()
       },
     })
   }
@@ -280,7 +285,7 @@ const crossFade = (): ((apply: () => void) => unknown) | undefined =>
  * Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts);
  * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake,
  * `openAccess` the Remote access panel, `openMokupilot` the MokuPilot panel, `openBackup` the Backup panel,
- * `openTimeSettings` Time tracking's.
+ * `openTimeSettings` Time tracking's, `openLocalPaths` Paths on this computer.
  */
 export function useSettingsMenu(
   menu: MenuEngine,
@@ -291,6 +296,7 @@ export function useSettingsMenu(
   openMokupilot: () => void = () => {},
   openBackup: () => void = () => {},
   openTimeSettings: () => void = () => {},
+  openLocalPaths: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
@@ -306,6 +312,7 @@ export function useSettingsMenu(
     openMokupilot,
     openBackup,
     openTimeSettings,
+    openLocalPaths,
   })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
@@ -409,6 +416,8 @@ export function useSettingsMenu(
         if (!board.canEdit) return board.toast(t('live.off'), true)
         api.post('/api/todos', { op: 'settings', mode }).catch(err => board.toast(errorText(err, t), true))
       },
+      localPaths: remotePage,
+      openLocalPaths: () => latest.current.openLocalPaths(),
     })
     return settingsGear(menu, open, setExpanded)
   })

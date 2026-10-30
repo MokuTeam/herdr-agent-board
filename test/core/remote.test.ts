@@ -56,6 +56,7 @@ test("what acts on this computer's screen is not for a phone", () => {
     '/api/session/s1/wake',
     '/api/fs/preview',
     '/api/fs/raw',
+    '/api/fs/download',
     '/api/term/s1/agent/input',
     '/api/launch',
   ])

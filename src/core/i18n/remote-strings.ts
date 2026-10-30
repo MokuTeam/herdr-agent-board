@@ -5,6 +5,19 @@ import type { Lang } from '../types.ts'
 export const REMOTE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
   en: {
     'set.phones': 'Phones…',
+    'set.localPaths': 'Paths on this computer…',
+    'paths.title': 'Paths on this computer',
+    'paths.about':
+      "Where the server's folders are on this computer, through a shared drive (Samba). The quick look copies a file's path here; kept in this browser only.",
+    'paths.server': 'On the server',
+    'paths.local': 'On this computer',
+    'paths.add': 'Add a folder',
+    'paths.remove': 'Remove',
+    'paths.suggest': 'Use the suggestion',
+    'paths.none': 'No folders: the quick look offers Download only.',
+    'ql.download': 'Download',
+    'ql.copyLocal': 'Copy path on this computer',
+    'ql.localCopied': 'Path on this computer copied',
     'phones.title': 'Phones',
     'phones.about':
       'Phones on your Tailscale network that may use this board. Only your own Tailscale user (and the logins remote.allow lists) can ask to pair.',
@@ -65,6 +78,19 @@ export const REMOTE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
   },
   ru: {
     'set.phones': 'Телефоны…',
+    'set.localPaths': 'Пути на этом компьютере…',
+    'paths.title': 'Пути на этом компьютере',
+    'paths.about':
+      'Где папки сервера на этом компьютере, через общий диск (Samba). Быстрый просмотр копирует путь к файлу здесь; хранится только в этом браузере.',
+    'paths.server': 'На сервере',
+    'paths.local': 'На этом компьютере',
+    'paths.add': 'Добавить папку',
+    'paths.remove': 'Убрать',
+    'paths.suggest': 'Взять предложенное',
+    'paths.none': 'Папок нет: в быстром просмотре только «Скачать».',
+    'ql.download': 'Скачать',
+    'ql.copyLocal': 'Скопировать путь на этом компьютере',
+    'ql.localCopied': 'Путь на этом компьютере скопирован',
     'phones.title': 'Телефоны',
     'phones.about':
       'Телефоны в вашей сети Tailscale, которым можно пользоваться этой доской. Попросить о связи может только ваш пользователь Tailscale (и те, кого перечисляет remote.allow).',
