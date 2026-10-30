@@ -33,7 +33,7 @@ import { boardFactsScript, readBoardFacts } from '../../src/core/server-board.ts
 import { BOARD_SOCKET, BOARD_USER_COMMENT, removerScript } from '../../src/core/server-install.ts'
 import { oneshotScripts } from '../../src/core/server-oneshot.ts'
 import type { Wanted } from '../../src/core/server-plan.ts'
-import { FENCE_FILE } from '../../src/core/server-texts.ts'
+import { FENCE_FILE, SERVER_NAMES } from '../../src/core/server-texts.ts'
 import { forwardAccepted, sshArgs, TUNNEL_SOCKET, tunnelConfig } from '../../src/core/tunnel.ts'
 import {
   buildImage,
@@ -414,7 +414,7 @@ describe.skipIf(!DOCKER)('the board on a server of the owner’s (path A from th
             "the board's Caddy back after the restart",
             async () =>
               (
-                await s.sh("docker inspect -f '{{.State.Running}}' agent-board-caddy", { check: false })
+                await s.sh(`docker inspect -f '{{.State.Running}}' ${SERVER_NAMES.caddyName}`, { check: false })
               ).stdout.trim() === 'true',
             3 * MIN,
             2000,
@@ -432,7 +432,7 @@ describe.skipIf(!DOCKER)('the board on a server of the owner’s (path A from th
             'Linger=yes',
           )
           expect((await s.sh('pgrep -u agent -f "herdr server"', { check: false })).code).not.toBe(0)
-          expect((await s.sh('docker ps -a --format "{{.Names}}"')).stdout).not.toContain('agent-board-caddy')
+          expect((await s.sh('docker ps -a --format "{{.Names}}"')).stdout).not.toContain(SERVER_NAMES.caddyName)
           expect(
             (
               await s.sh(
