@@ -11,7 +11,9 @@
 // by the fences' round trips); with a server that does not, the next update is asked for as soon as
 // one starts to come, so no round trip waits between them. A display that changes size says so
 // (DesktopSize). Its cursor is drawn into the picture by the server. What it draws goes to
-// `screen`; what it sends, to `send`.
+// `screen`; what it sends, to `send`. While the picture comes as video (models/desk-video.ts) it
+// asks for none (`pictures: false`): the connection carries the mouse, the keys and the pings
+// only, until `watch()` asks for the picture after all.
 import { Inflater } from './inflate.ts'
 
 /** Where the picture goes (models/desk-screen.ts: a canvas), each in the order it came. */
@@ -57,6 +59,8 @@ export interface RfbOptions {
   adapt?: boolean
   /** The clock (ms) the link's speed is read by. */
   now?: () => number
+  /** Ask for the picture once through the handshake (true unless false): false while it comes as video, until watch(). */
+  pictures?: boolean
 }
 
 const RAW = 0
@@ -236,6 +240,10 @@ export class RfbClient {
   private readonly zlib = [new Inflater(), new Inflater(), new Inflater(), new Inflater()]
   /** The server sends what changes as it changes (asked for once it said it can), instead of an update per request. */
   private continuous = false
+  /** The server said it can send continuous updates. */
+  private canContinue = false
+  /** The picture is asked for (not while it comes as video). */
+  private watching: boolean
   /** JPEG's quality while the link is fast, and now. */
   private readonly fast: number
   private quality: number
@@ -263,6 +271,22 @@ export class RfbClient {
     this.quality = this.fast
     this.adapt = options.adapt ?? true
     this.now = options.now ?? (() => performance.now())
+    this.watching = options.pictures ?? true
+  }
+
+  /**
+   * Ask for the picture after all (the video failed, or there is none): all of it, then what
+   * changes, as it would have from the handshake. Before the handshake is through, it asks then.
+   */
+  watch(): void {
+    if (this.watching) return
+    this.watching = true
+    if (this.state !== 'live') return
+    this.request(false)
+    if (this.canContinue) {
+      this.continuous = true
+      this.enableContinuous()
+    }
   }
 
   /** Bytes from the server. */
@@ -420,7 +444,7 @@ export class RfbClient {
     // 32 bits, depth 24, little-endian, true colour, 255 each; red at 0, green 8, blue 16: R G B spare.
     this.send(Uint8Array.of(0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 0, 8, 16, 0, 0, 0))
     this.encodings()
-    this.request(false)
+    if (this.watching) this.request(false)
     this.state = 'live'
     this.step = () => this.message()
     this.events.live?.(name)
@@ -470,7 +494,7 @@ export class RfbClient {
         this.started = { at: this.at, end: this.received }
         p.skip(4)
         // asked for already, while this one comes: the server sends the next as soon as there is one
-        if (!this.continuous) this.request(true)
+        if (this.watching && !this.continuous) this.request(true)
         this.step = () => this.rect()
         return true
       case 1: {
@@ -495,12 +519,14 @@ export class RfbClient {
       case END_OF_CONTINUOUS_UPDATES:
         p.skip(1)
         // The first says the server can (it answers the encodings so); a later one, that it stopped.
-        if (!this.continuous) {
+        if (!this.canContinue) {
+          this.canContinue = true
+          if (!this.watching) return true
           this.continuous = true
           this.enableContinuous()
-        } else {
+        } else if (this.continuous) {
           this.continuous = false
-          this.request(true)
+          if (this.watching) this.request(true)
         }
         return true
       case SERVER_FENCE: {
@@ -567,7 +593,7 @@ export class RfbClient {
         this.screen.size(w, h)
         // the new size asked for: the request sent as this update came was for the old one
         if (this.continuous) this.enableContinuous()
-        else this.request(true)
+        else if (this.watching) this.request(true)
         return true
       default:
         return this.fail('data', `encoding ${encoding}`)

@@ -497,7 +497,7 @@ async function main(): Promise<void> {
     if (server) {
       const { onServerFacts } = await import('../services/first-login.ts')
       checks.push(...serverModeChecks(await onServerFacts(server), t))
-      // the agents' own browsers: Xvnc, the browser, the fonts, chrome-devtools-mcp, each profile's MCP server
+      // the agents' own browsers: Xvnc, ffmpeg, the browser, the fonts, chrome-devtools-mcp, each profile's MCP server
       const { desktopDoctorFacts } = await import('../adapters/desktop-files.ts')
       const { desktopChecks } = await import('../core/desktop.ts')
       const { shownProfiles } = await import('../core/profiles.ts')

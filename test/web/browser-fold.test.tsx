@@ -4,8 +4,9 @@
 // is, full size comes and goes on the same socket (Esc, ×), nothing goes to the display until
 // "Take control", and control is given back with the view. A session without a running browser
 // has no fold.
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import type { ReactNode } from 'react'
+import { videoMessage } from '../../src/core/desktop-video.ts'
 import type { Item, ItemDesktop } from '../../src/core/types.ts'
 import type { PanelPlace as Place } from '../../web/src/components/panel/place.ts'
 import type { BrowserFold as Fold } from '../../web/src/components/sheet/BrowserFold.tsx'
@@ -24,7 +25,7 @@ class FakeSocket {
   closed = false
   sent: number[][] = []
   onmessage: ((e: { data: unknown }) => void) | null = null
-  onclose: (() => void) | null = null
+  onclose: ((e?: { code: number; reason: string }) => void) | null = null
   constructor(readonly url: string) {
     FakeSocket.made.push(this)
   }
@@ -403,17 +404,18 @@ test('full size over the board on the same socket: Esc or × brings it back, × 
   expect(FakeSocket.made).toHaveLength(1)
 })
 
-test('the link’s meter in the picture’s corner, folded and full size: round trip, frames a second, quality; gone with the view', () => {
+test('the link’s meter in the picture’s corner, folded and full size: round trip, frames a second, VNC and its quality; gone with the view', () => {
   render({ desktop: desktop(), open: true })
   const [socket] = FakeSocket.made
   const meter = () => byClass('desk-meter')
   // not live yet: there, but empty (and hidden)
   expect(meter()?.textContent ?? '').toBe('')
   handshake(socket)
-  expect(meter()?.textContent).toBe('– ms · 0 fps · q6')
+  // no WebCodecs here: the VNC picture, said so
+  expect(meter()?.textContent).toBe('– ms · 0 fps · vnc q6')
   expect(meter()?.getAttribute('aria-hidden')).toBe('true')
   expect(meter()?.getAttribute('title')).toBe(
-    'Round trip to the server · frames a second · picture quality (JPEG, 0–9)',
+    'Round trip to the server · frames a second · how the picture comes: h264 video, or VNC with its JPEG quality (0–9)',
   )
   expect(meter()?.parentNode).toBe(canvas()?.parentNode)
   click(desk('full'))
@@ -1060,5 +1062,176 @@ test('a board ask that is not the browser’s: the panel’s "needs you" as befo
     expect(byClass('asked-actions')).toBeUndefined()
     expect(byClass('asked')?.textContent).toBe('ASKSWhich branch?No reply needed')
     expect(seen).toEqual([])
+  })
+})
+
+describe('the picture as H.264 video, where the page decodes it (WebCodecs)', () => {
+  const KEY = [...[0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x28, 0xda], ...[0, 0, 0, 1, 0x68, 0xce], ...[0, 0, 0, 1, 0x65, 0x88]]
+  const keyFrame = (seq: number) => [...videoMessage(seq, { key: true, data: Uint8Array.from(KEY) })]
+  type Decoder = { state: string; init: VideoDecoderInit; chunks: { type: string; timestamp: number }[] }
+  let decoders: Decoder[] = []
+  /** WebCodecs as the page has it, the decoder the test's own; `supported`: what it says of the codec. */
+  function install(supported = true) {
+    decoders = []
+    class Decoder {
+      state = 'unconfigured'
+      chunks: { type: string; timestamp: number }[] = []
+      constructor(readonly init: VideoDecoderInit) {
+        decoders.push(this)
+      }
+      configure() {
+        this.state = 'configured'
+      }
+      decode(c: { type: string; timestamp: number }) {
+        this.chunks.push({ type: c.type, timestamp: c.timestamp })
+      }
+      close() {
+        this.state = 'closed'
+      }
+      static isConfigSupported = async (config: VideoDecoderConfig) => ({ supported, config })
+    }
+    class Chunk {
+      constructor(init: object) {
+        Object.assign(this, init)
+      }
+    }
+    Reflect.set(globalThis, 'VideoDecoder', Decoder)
+    Reflect.set(globalThis, 'EncodedVideoChunk', Chunk)
+  }
+  /** A frame out of the decoder (its chunk numbered `seq`): the page draws it. */
+  const decoded = (seq: number) => {
+    const frame = { timestamp: seq, displayWidth: 4, displayHeight: 2, close() {} }
+    flush(() => decoders.at(-1)?.init.output(frame as unknown as VideoFrame))
+  }
+  /** The VNC handshake (RFB 3.8, a 4 × 2 display), then its fence and its word that it can send continuous updates. */
+  const vncHello = (socket: FakeSocket | undefined) => {
+    socket?.serve('RFB 003.008\n', [1, 1], [0, 0, 0, 0], [0, 4, 0, 2, ...new Array(16).fill(0), 0, 0, 0, 1, 120])
+    socket?.serve([248, 0, 0, 0, 0x80, 0, 0, 0, 1, 0, 150])
+  }
+  /** Whether the VNC was asked for the picture (an update request, continuous updates). */
+  const askedPicture = (socket: FakeSocket | undefined) => !!socket?.sent.some(m => m[0] === 3 || m[0] === 150)
+  const texts = (socket: FakeSocket | undefined) => socket?.sent.map(m => m.join('')) ?? []
+  const logged = (calls: ReturnType<typeof answers>) =>
+    sent(calls)
+      .filter(c => c[0] === '/api/log')
+      .map(c => (c[3] as { text: string }).text)
+
+  beforeEach(() => install())
+  afterEach(() => {
+    Reflect.deleteProperty(globalThis, 'VideoDecoder')
+    Reflect.deleteProperty(globalThis, 'EncodedVideoChunk')
+  })
+
+  test('a second socket for the video; the VNC asks for no picture; the first frame drawn: the corner says h264, the board’s log the codec', async () => {
+    const calls = answers()
+    render({ desktop: desktop(), open: true })
+    expect(FakeSocket.made).toHaveLength(2)
+    const [vnc, video] = FakeSocket.made
+    expect(vnc?.url).toBe('ws://board.test/api/desktop/a%20b%25/vnc?t=tok')
+    expect(video?.url).toBe('ws://board.test/api/desktop/a%20b%25/video?t=tok')
+    expect(video?.binaryType).toBe('arraybuffer')
+    vncHello(vnc)
+    // its pixel format, its encodings, its fence answered: nothing that asks for a picture
+    expect(vnc?.sent.slice(3).map(m => m[0])).toEqual([0, 2, 248])
+    expect(askedPicture(vnc)).toBe(false)
+    const meter = () => byClass('desk-meter')?.textContent
+    expect(meter()).toBe('– ms · 0 fps')
+    video?.serve(keyFrame(1))
+    await settle()
+    expect(decoders).toHaveLength(1)
+    expect(decoders[0]?.chunks).toEqual([{ type: 'key', timestamp: 1 }])
+    decoded(1)
+    expect(meter()).toBe('– ms · 0 fps · h264')
+    // the frame answered on the video's socket
+    expect(texts(video)).toEqual(['a1'])
+    await settle()
+    expect(logged(calls)).toEqual(['browser view a b%: h264 avc1.42C028'])
+    expect(askedPicture(vnc)).toBe(false)
+  })
+
+  test('the video closed (no ffmpeg, its encoder ended): the VNC picture at once, all of it then as it changes; the corner says vnc, the board’s log why', async () => {
+    const calls = answers()
+    render({ desktop: desktop(), open: true })
+    const [vnc, video] = FakeSocket.made
+    vncHello(vnc)
+    vnc?.sent.splice(0)
+    flush(() => video?.onclose?.({ code: 4011, reason: 'video ended' }))
+    expect(vnc?.sent).toEqual([
+      [3, 0, 0, 0, 0, 0, 0, 4, 0, 2],
+      [150, 1, 0, 0, 0, 0, 0, 4, 0, 2],
+    ])
+    expect(video?.closed).toBe(true)
+    expect(byClass('desk-meter')?.textContent).toBe('– ms · 0 fps · vnc q6')
+    await settle()
+    expect(logged(calls)).toEqual(['browser view a b%: VNC picture (its video closed (4011 video ended))'])
+    // the VNC's updates draw and count from now on; nothing more of the video
+    expect(video?.onmessage).toBeNull()
+  })
+
+  test('a codec the browser does not decode: the VNC picture, said so in the board’s log', async () => {
+    install(false)
+    const calls = answers()
+    render({ desktop: desktop(), open: true })
+    const [vnc, video] = FakeSocket.made
+    vncHello(vnc)
+    video?.serve(keyFrame(1))
+    await settle()
+    expect(decoders).toEqual([])
+    expect(askedPicture(vnc)).toBe(true)
+    expect(video?.closed).toBe(true)
+    await settle()
+    expect(logged(calls)).toEqual(['browser view a b%: VNC picture (the browser does not decode avc1.42C028)'])
+  })
+
+  test('input and control as before: with control the mouse and keys go on the VNC socket, the video’s socket has its answers only', async () => {
+    const { socket } = await controlled()
+    const video = FakeSocket.made[1]
+    expect(askedPicture(socket)).toBe(false)
+    const at = { clientX: 250, clientY: 150, button: 0, pointerId: 1, pointerType: 'mouse' }
+    fire(canvas(), 'pointerdown', { ...at, buttons: 1 })
+    fire(canvas(), 'pointerup', { ...at, buttons: 0 })
+    key(canvas(), { key: 'a', code: 'KeyA' })
+    key(canvas(), { key: 'a', code: 'KeyA' }, 'keyup')
+    expect(socket?.sent).toEqual([
+      [5, 1, 0, 2, 0, 1],
+      [5, 0, 0, 2, 0, 1],
+      [4, 1, 0, 0, 0, 0, 0, 0x61],
+      [4, 0, 0, 0, 0, 0, 0, 0x61],
+    ])
+    expect(video?.sent).toEqual([])
+    expect(byClass('desk-who')?.textContent).toBe('You have control')
+  })
+
+  test('a page out of sight: its video closes (the board’s encoder with it) and opens again with it; the VNC and control stay', async () => {
+    render({ desktop: desktop(), open: true })
+    const [vnc, video] = FakeSocket.made
+    vncHello(vnc)
+    try {
+      Reflect.set(dom.document, 'hidden', true)
+      flush(() => dom.document.dispatchEvent(new MiniEvent('visibilitychange')))
+      expect(video?.closed).toBe(true)
+      expect(vnc?.closed).toBe(false)
+      expect(FakeSocket.made).toHaveLength(2)
+      Reflect.set(dom.document, 'hidden', false)
+      flush(() => dom.document.dispatchEvent(new MiniEvent('visibilitychange')))
+      expect(FakeSocket.made).toHaveLength(3)
+      expect(FakeSocket.made[2]?.url).toBe('ws://board.test/api/desktop/a%20b%25/video?t=tok')
+      // hidden, no VNC picture meanwhile: the video comes back
+      expect(askedPicture(vnc)).toBe(false)
+    } finally {
+      Reflect.deleteProperty(dom.document, 'hidden')
+    }
+  })
+
+  test('the view closed: both sockets closed, the decoder let go', async () => {
+    render({ desktop: desktop(), open: true })
+    const [vnc, video] = FakeSocket.made
+    vncHello(vnc)
+    video?.serve(keyFrame(1))
+    await settle()
+    click(desk('close'))
+    expect(vnc?.closed).toBe(true)
+    expect(video?.closed).toBe(true)
+    expect(decoders[0]?.state).toBe('closed')
   })
 })

@@ -196,6 +196,7 @@ export function desktopDoctorFacts(profiles: readonly Profile[]): DesktopDoctorF
   const PATH = `${process.env.PATH ?? ''}:/usr/bin:/bin:/opt/google/chrome`
   return {
     xvnc: Bun.which('Xvnc', { PATH }),
+    ffmpeg: Bun.which('ffmpeg', { PATH }),
     chrome: boardChromium() ?? CHROME_BINS.map(b => Bun.which(b, { PATH })).find(Boolean) ?? null,
     fonts: ['/usr/share/fonts/truetype/noto', '/usr/share/fonts/opentype/noto'].some(d => existsSync(d)),
     mcp: devtoolsMcpVersion(),

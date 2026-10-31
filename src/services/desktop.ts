@@ -13,7 +13,10 @@
 //
 // The owner watches and takes over through the board's login: the VNC bytes go both ways over a
 // WebSocket (routes/desktop.ts), a viewer's keys, mouse and clipboard only while the owner has the
-// browser, and meanwhile the wrapper holds the agent's calls. Server mode only: app.ts makes none
+// browser, and meanwhile the wrapper holds the agent's calls. The picture comes as H.264 video on a
+// WebSocket of its own where the server has ffmpeg (services/desktop-video.ts: one encoder per
+// desktop while it has viewers), the VNC connection then carrying the input and no picture; where
+// it has none, the page asks VNC for the picture as before. Server mode only: app.ts makes none
 // of this on a PC.
 import { randomBytes } from 'node:crypto'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -39,6 +42,7 @@ import {
 } from '../core/desktop.ts'
 import type { Card, Item, ItemDesktop } from '../core/types.ts'
 import { nulFrames } from './cdp-pipe.ts'
+import { createDesktopVideo, type DesktopVideo, VIDEO_NONE, type VideoViewer } from './desktop-video.ts'
 
 /** What the desktops ask of the server: tests hand in their own. */
 export interface DesktopSystem {
@@ -192,12 +196,14 @@ interface Desktop {
 /** What a hand-over came to: who has the browser now, or why not (404: no desktop; 409: no view to take it in). */
 export type ControlAnswer = { ok: true; control: Control } | { ok: false; status: 404 | 409; error: string }
 
-/** What a desktop's WebSocket carries (routes/desktop.ts): a view's VNC, or the agent's DevTools (`cdp`). */
+/** What a desktop's WebSocket carries (routes/desktop.ts): a view's VNC, its video, or the agent's DevTools (`cdp`). */
 export interface VncData {
   pane: string
   socket: string
   /** The agent's DevTools (chrome-devtools-mcp through the keyed route), not a view. */
   cdp?: boolean
+  /** A view's video (services/desktop-video.ts), not its VNC: `socket` is not used. */
+  video?: boolean
   /** Called with a close when the viewer's login ends (the domain's listener); returns its unwatch. */
   watch?: (gone: () => void) => () => void
 }
@@ -229,6 +235,8 @@ export interface DesktopsOptions {
   chromeExtra?: readonly string[]
   /** The machine's (process.arch; a test's own): on arm64 the board's own Chromium comes first where it is. */
   arch?: string
+  /** The desktops' video (a test's own); by default the board's, with ffmpeg where the server has it. */
+  video?: DesktopVideo
 }
 
 export interface Desktops {
@@ -257,6 +265,8 @@ export interface Desktops {
   setControl(item: Item, to: Control): ControlAnswer
   /** The VNC socket of the session's running desktop, or null. */
   vncOf(item: Item): { pane: string; socket: string } | null
+  /** The session's running desktop's pane for its video: null with no desktop; `none` where the server has no ffmpeg. */
+  videoOf(item: Item): { pane: string } | 'none' | null
   stop(pane: string, why: string): Promise<void>
   stopAll(): Promise<void>
   websocket: WebSocketHandler<VncData>
@@ -293,6 +303,9 @@ function tailOf(path: string): string {
 export function createDesktops(o: DesktopsOptions): Desktops {
   const sys = o.system ?? realSystem
   const now = o.now ?? Date.now
+  const video = o.video ?? createDesktopVideo({ log: o.log })
+  /** Each video viewer's socket as the video sends to it. */
+  const watchers = new WeakMap<ServerWebSocket<VncData>, { viewer: VideoViewer; unwatch: () => void }>()
   const record = join(o.root, 'desktops.json')
   const desktops = new Map<string, Desktop>()
   /** The profile each pane asked for, kept for its next start. */
@@ -352,6 +365,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     d.chrome = null
     d.xvnc = null
     d.running = false
+    video.stop(d.pane)
     for (const ws of viewers.get(d.pane) ?? []) ws.close(1001, 'stopped')
     viewers.delete(d.pane)
     rmSync(d.dir, { recursive: true, force: true })
@@ -614,6 +628,41 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   }
 
   /**
+   * A view's video: its desktop's encoder's frames to it (started for it where none runs), until
+   * it closes, its login ends or the desktop stops. Control is not the video's: it goes with the
+   * view's VNC connection, which carries the input.
+   */
+  function openVideo(ws: ServerWebSocket<VncData>): void {
+    const d = desktops.get(ws.data.pane)
+    if (!d || d.stopping || d.xvnc === null) {
+      ws.close(1001, 'stopped')
+      return
+    }
+    if (!video.available()) {
+      ws.close(VIDEO_NONE, 'no ffmpeg')
+      return
+    }
+    const viewer: VideoViewer = {
+      send: bytes => ws.send(bytes),
+      close: (code, reason) => ws.close(code, reason),
+    }
+    const unwatch = ws.data.watch?.(() => ws.close(4001, 'login')) ?? (() => {})
+    watchers.set(ws, { viewer, unwatch })
+    video.join(
+      { pane: d.pane, display: d.display, auth: join(d.dir, 'Xauthority'), log: join(d.dir, 'video.log') },
+      viewer,
+    )
+  }
+
+  function closeVideo(ws: ServerWebSocket<VncData>): void {
+    const w = watchers.get(ws)
+    watchers.delete(ws)
+    if (!w) return
+    w.unwatch()
+    video.leave(ws.data.pane, w.viewer)
+  }
+
+  /**
    * A viewer gone. The last one gone while the owner has the browser hands it back to the agent:
    * a closed tab cannot say so (what the agent asked stays asked).
    */
@@ -798,6 +847,12 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       return { pane: d.pane, socket: d.vnc }
     },
 
+    videoOf(item) {
+      const d = item.pane ? desktops.get(item.pane) : undefined
+      if (!d || item.sleeping || d.xvnc === null || !existsSync(d.vnc)) return null
+      return video.available() ? { pane: d.pane } : 'none'
+    },
+
     stop,
 
     async stopAll() {
@@ -811,6 +866,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       perMessageDeflate: false,
       open(ws) {
         if (ws.data.cdp) return openCdp(ws)
+        if (ws.data.video) return openVideo(ws)
         const sock = createConnection({ path: ws.data.socket })
         sock.on('connect', () => {
           const c = conns.get(ws)
@@ -838,6 +894,11 @@ export function createDesktops(o: DesktopsOptions): Desktops {
           cdps.get(ws)?.sock.write(`${typeof msg === 'string' ? msg : Buffer.from(msg).toString('utf8')}\0`)
           return
         }
+        if (ws.data.video) {
+          const w = watchers.get(ws)
+          if (w && typeof msg === 'string') video.message(ws.data.pane, w.viewer, msg)
+          return
+        }
         const c = conns.get(ws)
         if (!c) return
         const bytes = typeof msg === 'string' ? Buffer.from(msg) : msg
@@ -847,9 +908,10 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       },
       drain(ws) {
         if (ws.data.cdp) cdps.get(ws)?.flush()
-        else conns.get(ws)?.sock.resume()
+        else if (!ws.data.video) conns.get(ws)?.sock.resume()
       },
       close(ws) {
+        if (ws.data.video) return closeVideo(ws)
         if (!ws.data.cdp) return closeViewer(ws)
         cdps.get(ws)?.sock.destroy()
         cdps.delete(ws)

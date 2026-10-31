@@ -27,9 +27,13 @@ export const BROWSER_MCP = 'board-browser'
 export const HOLD_MS = 10 * 60_000
 /** The browsers the board runs, in this order: Google Chrome stable, then Debian's Chromium. */
 export const CHROME_BINS = ['google-chrome-stable', 'google-chrome', 'chromium', 'chromium-browser'] as const
-/** What the install adds for the desktops (as root, by apt): Xvnc, and fonts so pages look right. */
+/**
+ * What the install adds for the desktops (as root, by apt): Xvnc, ffmpeg (the live view as H.264
+ * video: services/desktop-video.ts), and fonts so pages look right.
+ */
 export const DESKTOP_PACKAGES = [
   'tigervnc-standalone-server',
+  'ffmpeg',
   'fonts-noto-core',
   'fonts-noto-cjk',
   'fonts-noto-color-emoji',
@@ -451,6 +455,8 @@ export function withBrowserMcp(
 /** What `board doctor` finds of the desktops (services/desktop.ts desktopFacts). */
 export interface DesktopDoctorFacts {
   xvnc: string | null
+  /** ffmpeg (the live view as video), or null: the view is VNC's pictures then. */
+  ffmpeg: string | null
   chrome: string | null
   fonts: boolean
   /** chrome-devtools-mcp's version in place, or null. */
@@ -459,7 +465,7 @@ export interface DesktopDoctorFacts {
   profiles: { title: string; has: boolean }[]
 }
 
-/** `board doctor`'s checks of the desktops, in server mode: Xvnc, the browser, the fonts, chrome-devtools-mcp, the MCP server in each profile. */
+/** `board doctor`'s checks of the desktops, in server mode: Xvnc, ffmpeg, the browser, the fonts, chrome-devtools-mcp, the MCP server in each profile. */
 export function desktopChecks(f: DesktopDoctorFacts, tr: Translator): SetupCheck[] {
   const check = (c: Partial<SetupCheck> & Pick<SetupCheck, 'id' | 'level' | 'title'>): SetupCheck => ({
     detail: '',
@@ -472,6 +478,9 @@ export function desktopChecks(f: DesktopDoctorFacts, tr: Translator): SetupCheck
     f.xvnc
       ? check({ id: 'desktop-xvnc', level: 'ok', title: tr('desktop.check.xvnc'), detail: f.xvnc })
       : check({ id: 'desktop-xvnc', level: 'warn', title: tr('desktop.check.noXvnc'), fix: install }),
+    f.ffmpeg
+      ? check({ id: 'desktop-ffmpeg', level: 'ok', title: tr('desktop.check.ffmpeg'), detail: f.ffmpeg })
+      : check({ id: 'desktop-ffmpeg', level: 'warn', title: tr('desktop.check.noFfmpeg'), fix: install }),
     f.chrome
       ? check({ id: 'desktop-chrome', level: 'ok', title: tr('desktop.check.chrome'), detail: f.chrome })
       : check({ id: 'desktop-chrome', level: 'warn', title: tr('desktop.check.noChrome'), fix: install }),

@@ -10,7 +10,14 @@ import type { ServerWebSocket } from 'bun'
 import type { CardPatch } from '../../src/adapters/cards.ts'
 import { handedBackText } from '../../src/core/desktop.ts'
 import type { Card, Item } from '../../src/core/types.ts'
-import { createDesktops, type DesktopSystem, displayHeldAt, type VncData } from '../../src/services/desktop.ts'
+import {
+  createDesktops,
+  type DesktopSystem,
+  type DesktopsOptions,
+  displayHeldAt,
+  type VncData,
+} from '../../src/services/desktop.ts'
+import { type DesktopVideo, VIDEO_NONE, type VideoSource, type VideoViewer } from '../../src/services/desktop-video.ts'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -104,7 +111,11 @@ function cardOf(cards: [string, CardPatch][], key: string): Card | null {
 const item = (key: string, pane: string | null, more: Partial<Item> = {}): Item =>
   ({ key, pane, session: key, name: key, sleeping: false, ...more }) as Item
 
-function setup(o: Parameters<typeof fakeServer>[0] = {}, items: Item[] = [item('s1', 'w0:p1'), item('s2', 'w0:p2')]) {
+function setup(
+  o: Parameters<typeof fakeServer>[0] = {},
+  items: Item[] = [item('s1', 'w0:p1'), item('s2', 'w0:p2')],
+  more: Partial<DesktopsOptions> = {},
+) {
   const root = mkdtempSync(join(tmpdir(), 'desktops-'))
   dirs.push(root)
   const server = fakeServer(o)
@@ -124,6 +135,7 @@ function setup(o: Parameters<typeof fakeServer>[0] = {}, items: Item[] = [item('
       system: server.sys,
       ...(o.arch && { arch: o.arch }),
       now: () => clock,
+      ...more,
     })
   return { root, server, cards, reminders, state, make, d: make(), tick: (ms: number) => (clock += ms) }
 }
@@ -884,5 +896,100 @@ test('the agent’s DevTools through the board: each message a text frame one wa
     d.websocket.close?.(late, 1000, '')
   } finally {
     holder.close()
+  }
+})
+
+/** The desktops' video of the test's own: who joined (and what to grab), left, said what; what stopped. */
+function fakeVideo(available = true) {
+  const v = {
+    available,
+    joins: [] as { src: VideoSource; viewer: VideoViewer }[],
+    leaves: [] as string[],
+    said: [] as [string, string][],
+    stops: [] as string[],
+  }
+  const video: DesktopVideo = {
+    available: () => v.available,
+    join: (src, viewer) => v.joins.push({ src, viewer }),
+    leave: pane => v.leaves.push(pane),
+    message: (pane, _viewer, text) => v.said.push([pane, text]),
+    stop: pane => v.stops.push(pane),
+    stopAll: () => {},
+    running: () => 0,
+  }
+  return { v, video }
+}
+
+test('the view’s video: its own WebSocket joined to the desktop’s display (its number, its X cookie, its log), its answers passed on, left as it closes or the login ends; the desktop stopped stops it', async () => {
+  const { v, video } = fakeVideo()
+  const { d, state, root } = setup({}, undefined, { video })
+  const s1 = state.items[0] as Item
+  expect(d.videoOf(s1)).toBeNull()
+  await d.ensure('w0:p1')
+  expect(d.videoOf(s1)).toEqual({ pane: 'w0:p1' })
+  expect(d.videoOf({ ...s1, sleeping: true })).toBeNull()
+  let gone = () => {}
+  let unwatched = 0
+  const sent: Uint8Array[] = []
+  const ws = Object.assign(viewer('w0:p1'), {
+    send: (b: Uint8Array) => sent.push(b),
+  })
+  ws.data = {
+    pane: 'w0:p1',
+    socket: '',
+    video: true,
+    watch: g => {
+      gone = g
+      return () => unwatched++
+    },
+  }
+  d.websocket.open?.(ws)
+  expect(v.joins).toHaveLength(1)
+  const dir = join(root, 'sessions', '100')
+  expect(v.joins[0]?.src).toEqual({
+    pane: 'w0:p1',
+    display: 100,
+    auth: join(dir, 'Xauthority'),
+    log: join(dir, 'video.log'),
+  })
+  // the video's frames go to its socket
+  v.joins[0]?.viewer.send(Uint8Array.of(1, 0, 0, 0, 1, 9))
+  expect(sent.map(b => [...b])).toEqual([[1, 0, 0, 0, 1, 9]])
+  // its texts to the video; bytes are nothing
+  d.websocket.message?.(ws, 'a1')
+  d.websocket.message?.(ws, Buffer.from([1, 2, 3]))
+  expect(v.said).toEqual([['w0:p1', 'a1']])
+  // control goes with a view's VNC, not its video
+  expect(d.setControl(s1, 'owner')).toMatchObject({ ok: false, status: 409 })
+  // the login ended: closed; then its close leaves the video
+  gone()
+  expect(ws.closed).toBe(4001)
+  d.websocket.close?.(ws, 4001, 'login')
+  expect(v.leaves).toEqual(['w0:p1'])
+  expect(unwatched).toBe(1)
+  // closed twice (Bun says it once, but): left once
+  d.websocket.close?.(ws, 1000, '')
+  expect(v.leaves).toEqual(['w0:p1'])
+  await d.stop('w0:p1', 'test')
+  expect(v.stops).toEqual(['w0:p1'])
+})
+
+test('no ffmpeg on the server: the route is told (`none`) and a video socket that opens anyway is closed; the VNC view as it was', async () => {
+  const { v, video } = fakeVideo(false)
+  const { d, state, root } = setup({}, undefined, { video })
+  await d.ensure('w0:p1')
+  expect(d.videoOf(state.items[0] as Item)).toBe('none')
+  const ws = viewer('w0:p1')
+  ws.data = { pane: 'w0:p1', socket: '', video: true }
+  d.websocket.open?.(ws)
+  expect(ws.closed).toBe(VIDEO_NONE)
+  expect(v.joins).toEqual([])
+  // the VNC view: connected, control with it, as before
+  const vnc = await vncServer(root)
+  try {
+    await vnc.open(d, 'w0:p1')
+    expect(d.setControl(state.items[0] as Item, 'owner')).toEqual({ ok: true, control: 'owner' })
+  } finally {
+    vnc.close()
   }
 })

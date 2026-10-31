@@ -1,6 +1,10 @@
 // An agent's display while it is shown (components/sheet/BrowserFold.tsx): a WebSocket to it through
-// the board, read by the board's own VNC client (models/rfb.ts) into a canvas of its own that the
-// fold or full size puts where it shows. Shown only while `on`: off, the socket closes, with no
+// the board, read by the board's own VNC client (models/rfb.ts), and a canvas of its own that the
+// fold or full size puts where it shows. Its picture comes as H.264 video on a second WebSocket
+// where the page can decode it (WebCodecs, models/desk-video.ts) and the board can make it
+// (ffmpeg): the VNC connection then asks for no picture and carries the input and the pings; where
+// not (no WebCodecs, no ffmpeg, a codec the decoder does not take, no frame in VIDEO_WAIT_MS, the
+// video ended), the VNC picture as before. Shown only while `on`: off, the sockets close, with no
 // picture and no traffic, and the agent's browser runs on. Nothing goes to the display but the
 // requests for its picture until `controlling`: then the mouse, the keys and pasted text (typed as
 // keys) on the canvas go to it, and leave the board's own shortcuts alone. A finger's or a pen's
@@ -29,8 +33,9 @@ import {
   type Zoom,
   zoomTransform,
 } from '../models/desk-input.ts'
-import { DeskMeter } from '../models/desk-meter.ts'
+import { DeskMeter, type MeterVia } from '../models/desk-meter.ts'
 import { canvasScreen } from '../models/desk-screen.ts'
+import { type Codecs, DeskVideo, webCodecs } from '../models/desk-video.ts'
 import { RfbClient, type RfbFailure } from '../models/rfb.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { useLatest } from './useLatest.ts'
@@ -43,7 +48,7 @@ export interface DeskView {
   why: string
   /** The display's picture while on, for the fold or full size to put where it shows. */
   canvas: HTMLCanvasElement | null
-  /** The link's round trip, frames a second and JPEG's quality, for the picture's corner (with the canvas). */
+  /** The link's round trip, frames a second and what the picture comes by, for the picture's corner (with the canvas). */
   meter: HTMLElement | null
   /** Connect again after it closed or failed. */
   retry(): void
@@ -502,6 +507,8 @@ const OFF = { state: 'off' as DeskState, why: '', canvas: null, meter: null }
 /** A ping every this many seconds, and the board's log a line every this many. */
 const PING_S = 2
 const LOG_S = 60
+/** No video frame this long after the view opened: the VNC picture instead. */
+export const VIDEO_WAIT_MS = 5000
 
 export function useDesktop(key: string, on: boolean, controlling: boolean): DeskView {
   const t = useLatest(useT())
@@ -524,28 +531,37 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
     const link = new DeskMeter()
     const socket = new WebSocket(desktopSocketUrl(key, token))
     socket.binaryType = 'arraybuffer'
+    const codecs = webCodecs()
+    /** What the picture comes by: video first where the page can decode it, VNC's where not or once the video fails. */
+    let via: 'pending' | 'h264' | 'vnc' = codecs ? 'pending' : 'vnc'
+    const shown = (): MeterVia => (via === 'pending' ? null : via)
     let live = false
+    const show = () => {
+      if (live) meter.textContent = link.text(shown(), rfb.jpegQuality)
+    }
     // once live, each second: the corner; a ping every PING_S, the board's log a line every LOG_S
     let seconds = 0
     let ticking: ReturnType<typeof setInterval> | undefined
     const tick = () => {
       seconds++
       link.second()
-      meter.textContent = link.text(rfb.jpegQuality)
+      show()
       if (seconds % PING_S === 0) rfb.ping()
       if (seconds % LOG_S) return
-      const line = link.minute({ key, quality: rfb.jpegQuality, mbps: rfb.linkMbps })
+      const line = link.minute({ key, via: shown(), quality: rfb.jpegQuality, mbps: rfb.linkMbps })
       if (line) pageLog(line)
     }
+    const screen = canvasScreen(canvas)
     const rfb = new RfbClient(
       bytes => {
         if (socket.readyState === OPEN) socket.send(bytes)
       },
-      canvasScreen(canvas),
+      // the video's frames are the display's size already: the canvas is not cleared under them
+      { ...screen, size: (width, height) => via !== 'h264' && screen.size(width, height) },
       {
         live() {
           live = true
-          meter.textContent = link.text(rfb.jpegQuality)
+          show()
           ticking = setInterval(tick, 1000)
           setView({ state: 'live', why: '', canvas, meter })
         },
@@ -553,15 +569,94 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
           setView({ state: 'failed', why: whyText(why, t.current), canvas, meter })
           socket.close()
         },
-        updated: () => link.frame(),
+        updated: () => via === 'vnc' && link.frame(),
         pong: ms => link.pong(ms),
       },
+      { pictures: via === 'vnc' },
     )
+    // ------------------------------------------------ the video, where the page can decode it
+    let video: DeskVideo | null = null
+    let videoSocket: WebSocket | null = null
+    let waiting: ReturnType<typeof setTimeout> | undefined
+    const endVideo = () => {
+      clearTimeout(waiting)
+      video?.close()
+      video = null
+      if (!videoSocket) return
+      videoSocket.onmessage = null
+      videoSocket.onclose = null
+      videoSocket.close()
+      videoSocket = null
+    }
+    /** The video given up (or never there): VNC's picture from now on. */
+    const toVnc = (why: string) => {
+      if (via === 'vnc') return
+      via = 'vnc'
+      endVideo()
+      rfb.watch()
+      show()
+      pageLog(`browser view ${key}: VNC picture (${why})`)
+    }
+    const ctx = codecs && typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null
+    /** The video's socket and decoder: a frame within VIDEO_WAIT_MS, or VNC's picture. */
+    const startVideo = (codecs: Codecs) => {
+      const vs = new WebSocket(desktopSocketUrl(key, token, location, 'video'))
+      vs.binaryType = 'arraybuffer'
+      videoSocket = vs
+      let drawn = false
+      video = new DeskVideo(
+        codecs,
+        text => {
+          if (vs.readyState === OPEN) vs.send(text)
+        },
+        {
+          draw(frame) {
+            if (via === 'vnc') return
+            if (!drawn) {
+              drawn = true
+              clearTimeout(waiting)
+            }
+            if (via === 'pending') {
+              via = 'h264'
+              show()
+            }
+            const { displayWidth: width, displayHeight: height } = frame
+            if (canvas.width !== width || canvas.height !== height) {
+              canvas.width = width
+              canvas.height = height
+            }
+            ctx?.drawImage(frame, 0, 0, width, height)
+            link.frame()
+          },
+          failed: why => toVnc(why),
+          ready: codec => pageLog(`browser view ${key}: h264 ${codec}`),
+        },
+      )
+      vs.onmessage = e => {
+        if (!(e.data instanceof ArrayBuffer)) return
+        link.bytes(e.data.byteLength)
+        video?.receive(new Uint8Array(e.data))
+      }
+      vs.onclose = e => toVnc(`its video closed${e?.code ? ` (${e.code}${e.reason ? ` ${e.reason}` : ''})` : ''}`)
+      waiting = setTimeout(() => !drawn && toVnc(`no video frame in ${VIDEO_WAIT_MS / 1000} s`), VIDEO_WAIT_MS)
+    }
+    // A page out of sight draws nothing: its video goes while it is hidden (the board's encoder with
+    // it, when no one else watches) and comes back with it, while its VNC connection is there (it
+    // stays meanwhile, with control).
+    const visibility = () => {
+      if (!codecs || via === 'vnc') return
+      if (document.hidden) endVideo()
+      else if (!videoSocket && socket.readyState <= OPEN) startVideo(codecs)
+    }
+    if (codecs && !document.hidden) startVideo(codecs)
+    document.addEventListener('visibilitychange', visibility)
     socket.onmessage = e => {
       if (e.data instanceof ArrayBuffer) rfb.receive(new Uint8Array(e.data))
     }
     socket.onclose = () => {
       clearInterval(ticking)
+      // the display gone (or the board): its video with it
+      endVideo()
       setView(was =>
         was.state === 'failed'
           ? was
@@ -583,6 +678,8 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
     setView({ state: 'connecting', why: '', canvas, meter })
     return () => {
       clearInterval(ticking)
+      document.removeEventListener('visibilitychange', visibility)
+      endVideo()
       meter.parentNode?.removeChild(meter)
       keys.detach()
       input.current = null

@@ -4,6 +4,10 @@
 //   GET  /api/desktop/<card key>/vnc?t=<the page's file token>   a WebSocket: the session's VNC,
 //        raw RFB bytes both ways (binary frames); 404 while it has no desktop running. A WebSocket
 //        sends no X-Board: the per-run token stands in for it, as for the terminal's stream
+//   GET  /api/desktop/<card key>/video?t=<the page's file token> a WebSocket: its display as H.264,
+//        a frame a binary message, the page's answers as text (core/desktop-video.ts); 404 while it
+//        has no desktop running, and `no video` where the server has no ffmpeg (the page then
+//        asks the VNC for its picture)
 //   POST /api/desktop/<card key>/control   { "to": "owner" | "agent" } → { ok: true, control }; 409 for
 //        "owner" while no view of it is connected (control goes with a view, which hands it back)
 //
@@ -31,7 +35,7 @@ export interface DesktopApp {
   keyOk(req: Request): boolean
 }
 
-const DESKTOP = /^\/api\/desktop\/([^/]+)\/(vnc|control)$/
+const DESKTOP = /^\/api\/desktop\/([^/]+)\/(vnc|video|control)$/
 const BROWSER = /^\/api\/browser\/(start|call|profile|ask)$/
 const PANE = /^[\w:.-]{1,80}$/
 /** What a route answers once the request became a WebSocket: Bun answers it with 101 itself. */
@@ -47,6 +51,18 @@ export function desktopRoutes(app: DesktopApp): Route[] {
         const m = DESKTOP.exec(ctx.rawPath)
         if (!m) return json(404, { error: 'not found' })
         const item = app.find(decodeURIComponent(m[1] ?? ''))
+        if (m[2] === 'video') {
+          if (req.method !== 'GET') return json(405, { error: 'method' })
+          const refused = ctx.refuse('fs-token') ?? ctx.refuse('origin')
+          if (refused) return refused
+          const video = item ? app.desktops.videoOf(item) : null
+          if (!video) return json(404, { error: 'no desktop' })
+          if (video === 'none') return json(404, { error: 'no video' })
+          if (req.headers.get('upgrade')?.toLowerCase() !== 'websocket' || !ctx.upgrade)
+            return json(400, { error: 'upgrade' })
+          const data: VncData = { pane: video.pane, socket: '', video: true }
+          return ctx.upgrade(data) ? UPGRADED() : json(400, { error: 'upgrade' })
+        }
         if (m[2] === 'vnc') {
           if (req.method !== 'GET') return json(405, { error: 'method' })
           const refused = ctx.refuse('fs-token') ?? ctx.refuse('origin')

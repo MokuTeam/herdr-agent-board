@@ -119,6 +119,18 @@ describe('on the board’s own server', () => {
     ])
   })
 
+  test('the video WebSocket through the domain: as the VNC one, the login, the file token, the Origin; 404 with no desktop', async () => {
+    const video = `/api/desktop/s1/video?t=${fsToken}`
+    expect(await answer(viaSocket(socket).get(video, { origin: ORIGIN }))).toEqual([401, { error: 'login' }])
+    expect(await answer(caddy.get('/api/desktop/s1/video', { origin: ORIGIN }))).toEqual([403, { error: 'token' }])
+    expect(await answer(caddy.get(video, { origin: 'https://evil.example' }))).toEqual([403, { error: 'origin' }])
+    expect(await answer(caddy.get(video, { origin: ORIGIN }))).toEqual([404, { error: 'no desktop' }])
+    expect(await answer(caddy.post(video, {}))).toEqual([405, { error: 'method' }])
+    const base = { Origin: ORIGIN, Cookie: COOKIE }
+    expect(await handshake(socket, video, base)).toBe('HTTP/1.1 404 Not Found')
+    expect(await handshake(socket, video, { Origin: ORIGIN })).toBe('HTTP/1.1 401 Unauthorized')
+  })
+
   test('control: from the page (X-Board, its Origin), owner or agent; 404 with no desktop', async () => {
     expect(await answer(caddy.post('/api/desktop/s1/control', { to: 'owner' }))).toEqual([
       404,
@@ -184,7 +196,12 @@ describe('a board on a PC (no serverMode)', () => {
       return [res.status, await res.text()]
     }
     for (const method of ['GET', 'POST'])
-      for (const path of ['/api/desktop/s1/vnc', '/api/desktop/s1/control', '/api/browser/call'])
+      for (const path of [
+        '/api/desktop/s1/vnc',
+        '/api/desktop/s1/video',
+        '/api/desktop/s1/control',
+        '/api/browser/call',
+      ])
         expect(await unknown(path, method)).toEqual(await unknown('/api/no-such-route/s1', method))
     let items: Record<string, unknown>[] = []
     for (let i = 0; i < 50 && !items.length; i++) {

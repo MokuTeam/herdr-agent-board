@@ -569,6 +569,64 @@ describe('updates as they come (Xvnc’s continuous updates and fences)', () => 
   })
 })
 
+describe('while the picture comes as video (pictures: false)', () => {
+  test('through the handshake no picture is asked for; the server able to send continuous updates is not asked to; its fences answered, pings and input go', () => {
+    const clock = { t: 0 }
+    const w = world({ pictures: false, now: () => clock.t })
+    w.client.receive(ascii('RFB 003.008\n'))
+    w.client.receive(bytes(1, 1))
+    w.client.receive(bytes(u32(0)))
+    w.client.receive(serverInit(1440, 900, 'agent'))
+    expect(w.client.state).toBe('live')
+    // its pixel format and encodings (fences, continuous updates among them), no update request
+    expect(w.sent.slice(3).map(m => m[0])).toEqual([0, 2])
+    w.sent.length = 0
+    // its fence and its word that it can send continuous updates: the fence answered, nothing asked
+    w.client.receive(bytes(248, 0, 0, 0, u32(0x80000000), 1, 0, 150))
+    expect(w.sent).toEqual([[248, 0, 0, 0, ...u32(0), 1, 0]])
+    w.sent.length = 0
+    expect(w.client.ping()).toBe(true)
+    w.client.pointer(10, 20, 1)
+    w.client.key(0x61, true)
+    expect(w.sent.map(m => m[0])).toEqual([248, 5, 4])
+    clock.t = 131
+    w.client.receive(bytes(248, 0, 0, 0, u32(0), 4, 0x70, 0x70, 0, 1))
+    expect(w.pongs).toEqual([131])
+    // an update the server sent anyway (one asked for before): drawn, and no next one asked for
+    w.sent.length = 0
+    w.client.receive(bytes(update(1), rect(0, 0, 1, 1, 0), [1, 2, 3, 0]))
+    expect(w.sent).toEqual([])
+  })
+
+  test('watch(): the video gone, the whole picture asked for, then continuous updates; before the handshake is through, asked for then', () => {
+    const w = connected({ pictures: false }, 4, 2)
+    w.client.receive(bytes(248, 0, 0, 0, u32(0x80000000), 1, 0, 150))
+    w.sent.length = 0
+    w.client.watch()
+    expect(w.sent).toEqual([
+      [3, 0, 0, 0, 0, 0, ...u16(4), ...u16(2)],
+      [150, 1, 0, 0, 0, 0, ...u16(4), ...u16(2)],
+    ])
+    // again: nothing more
+    w.client.watch()
+    expect(w.sent).toHaveLength(2)
+    // a server without continuous updates: the whole picture, then an update asked for as each comes
+    const plain = connected({ pictures: false }, 4, 2)
+    plain.client.watch()
+    expect(plain.sent).toEqual([[3, 0, 0, 0, 0, 0, ...u16(4), ...u16(2)]])
+    plain.client.receive(bytes(update(1), rect(0, 0, 1, 1, 0), [1, 2, 3, 0]))
+    expect(plain.sent.at(-1)).toEqual([3, 1, 0, 0, 0, 0, ...u16(4), ...u16(2)])
+    // watched before it was live: the handshake asks for it as always
+    const early = world({ pictures: false })
+    early.client.watch()
+    early.client.receive(ascii('RFB 003.008\n'))
+    early.client.receive(bytes(1, 1))
+    early.client.receive(bytes(u32(0)))
+    early.client.receive(serverInit(4, 2, 'agent'))
+    expect(early.sent.at(-1)).toEqual([3, 0, 0, 0, 0, 0, ...u16(4), ...u16(2)])
+  })
+})
+
 describe('the link’s speed', () => {
   /** An update of 100 KB of Raw, its first 1000 bytes at `from` ms, the rest at `to`. */
   const slowly = (w: ReturnType<typeof connected>, clock: { t: number }, from: number, to: number) => {
@@ -644,13 +702,17 @@ describe('the round trip (pings)', () => {
 })
 
 describe('the link’s meter', () => {
-  test('the corner: the round trip (the median of the last five), the last second’s frames, the quality', () => {
+  test('the corner: the round trip (the median of the last five), the last second’s frames, what the picture comes by', () => {
     const m = new DeskMeter()
-    expect(m.text(6)).toBe('– ms · 0 fps · q6')
+    // not known yet (the video tried first): no word for it
+    expect(m.text(null, 6)).toBe('– ms · 0 fps')
+    expect(m.text('vnc', 6)).toBe('– ms · 0 fps · vnc q6')
     for (const ms of [40, 300, 44, 41, 43]) m.pong(ms)
     for (let i = 0; i < 12; i++) m.frame()
     m.second()
-    expect(m.text(4)).toBe('43 ms · 12 fps · q4')
+    expect(m.text('vnc', 4)).toBe('43 ms · 12 fps · vnc q4')
+    // video: no JPEG quality to say
+    expect(m.text('h264', 4)).toBe('43 ms · 12 fps · h264')
     // only the last five count: the slow one gone
     m.pong(50)
     expect(m.rtt()).toBe(44)
@@ -665,12 +727,30 @@ describe('the link’s meter', () => {
       for (let i = 0; i < n; i++) m.frame()
       m.second()
     }
-    expect(m.minute({ key: 'a b', quality: 6, mbps: 14.26 })).toBe(
-      'browser view a b: rtt median 34 ms (min 30, max 90, 4 pings), fps median 20 (max 30, 3 s with frames), JPEG q6, link 14.3 Mbit/s',
+    expect(m.minute({ key: 'a b', via: 'vnc', quality: 6, mbps: 14.26 })).toBe(
+      'browser view a b: rtt median 34 ms (min 30, max 90, 4 pings), fps median 20 (max 30, 3 s with frames), vnc JPEG q6, link 14.3 Mbit/s',
     )
     // the next minute starts empty: nothing in it, no line
     m.second()
-    expect(m.minute({ key: 'a b', quality: 6, mbps: 0 })).toBeNull()
+    expect(m.minute({ key: 'a b', via: 'vnc', quality: 6, mbps: 0 })).toBeNull()
+  })
+
+  test('a minute of video: its frames and its bytes over the minute (Mbit/s), no JPEG', () => {
+    const m = new DeskMeter()
+    m.pong(131)
+    for (let s = 0; s < 3; s++) {
+      for (let i = 0; i < 30; i++) m.frame()
+      m.second()
+    }
+    m.bytes(15_000_000)
+    m.bytes(7_500_000)
+    expect(m.minute({ key: 'k', via: 'h264', quality: 6, mbps: 0 })).toBe(
+      'browser view k: rtt median 131 ms (min 131, max 131, 1 pings), fps median 30 (max 30, 3 s with frames), h264 3.0 Mbit/s',
+    )
+    // the bytes are the minute's: the next one counts from nothing
+    m.frame()
+    m.second()
+    expect(m.minute({ key: 'k', via: 'h264', quality: 6, mbps: 0 })).toContain('h264 0.0 Mbit/s')
   })
 })
 

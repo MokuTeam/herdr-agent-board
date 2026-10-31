@@ -14,7 +14,8 @@ export const DESK_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'desk.askWhy': 'IN ITS BROWSER',
     // the fold and full size
     'desk.title': 'Browser',
-    'desk.meter': 'Round trip to the server · frames a second · picture quality (JPEG, 0–9)',
+    'desk.meter':
+      'Round trip to the server · frames a second · how the picture comes: h264 video, or VNC with its JPEG quality (0–9)',
     'desk.agent': 'The agent has control',
     'desk.you': 'You have control',
     'desk.take': 'Take control',
@@ -49,7 +50,8 @@ export const DESK_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'desk.askLabel': 'В его браузере',
     'desk.askWhy': 'В ЕГО БРАУЗЕРЕ',
     'desk.title': 'Браузер',
-    'desk.meter': 'Задержка до сервера и обратно · кадров в секунду · качество картинки (JPEG, 0–9)',
+    'desk.meter':
+      'Задержка до сервера и обратно · кадров в секунду · как идёт картинка: видео h264 или VNC с качеством JPEG (0–9)',
     'desk.agent': 'Управляет агент',
     'desk.you': 'Управляете вы',
     'desk.take': 'Взять управление',

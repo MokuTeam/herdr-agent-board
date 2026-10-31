@@ -181,20 +181,46 @@ test('the MCP server in a profile’s .claude.json: added, kept when there, take
 test('doctor: each piece there or what to do, in both languages', () => {
   const all = {
     xvnc: '/usr/bin/Xvnc',
+    ffmpeg: '/usr/bin/ffmpeg',
     chrome: '/usr/bin/google-chrome-stable',
     fonts: true,
     mcp: DEVTOOLS_MCP_VERSION,
     profiles: [{ title: 'default', has: true }],
   }
-  expect(desktopChecks(all, en).map(c => c.level)).toEqual(['ok', 'ok', 'ok', 'ok', 'ok'])
+  expect(desktopChecks(all, en).map(c => c.level)).toEqual(['ok', 'ok', 'ok', 'ok', 'ok', 'ok'])
   const none = desktopChecks(
-    { xvnc: null, chrome: null, fonts: false, mcp: '1.0.0', profiles: [{ title: 'work', has: false }] },
+    { xvnc: null, ffmpeg: null, chrome: null, fonts: false, mcp: '1.0.0', profiles: [{ title: 'work', has: false }] },
     en,
   )
-  expect(none.map(c => c.level)).toEqual(['warn', 'warn', 'warn', 'warn', 'warn'])
-  expect(none[4]?.title).toBe('The agents’ browsers: no MCP server in work')
-  expect(none[3]?.code).toBe('herdr plugin action invoke agent-board.install')
+  expect(none.map(c => c.level)).toEqual(['warn', 'warn', 'warn', 'warn', 'warn', 'warn'])
+  expect(none[5]?.title).toBe('The agents’ browsers: no MCP server in work')
+  expect(none[4]?.code).toBe('herdr plugin action invoke agent-board.install')
   expect(desktopChecks(all, ru)[0]?.title).toBe('Браузеры агентов: Xvnc (TigerVNC)')
+})
+
+test('doctor: ffmpeg for the live view as video; without it a warning, the install its fix (the view is VNC’s pictures)', () => {
+  const base = {
+    xvnc: '/usr/bin/Xvnc',
+    chrome: '/usr/bin/google-chrome-stable',
+    fonts: true,
+    mcp: DEVTOOLS_MCP_VERSION,
+    profiles: [{ title: 'default', has: true }],
+  }
+  const there = desktopChecks({ ...base, ffmpeg: '/usr/bin/ffmpeg' }, en).find(c => c.id === 'desktop-ffmpeg')
+  expect(there).toMatchObject({
+    level: 'ok',
+    title: 'The agents’ browsers: ffmpeg (their live view as H.264 video)',
+    detail: '/usr/bin/ffmpeg',
+  })
+  const missing = desktopChecks({ ...base, ffmpeg: null }, en).find(c => c.id === 'desktop-ffmpeg')
+  expect(missing).toMatchObject({
+    level: 'warn',
+    title: 'The agents’ browsers: no ffmpeg (their live view stays VNC pictures, slower)',
+    fix: 'Run the board’s install again on the server, as root (server-install.sh); it adds them.',
+  })
+  expect(desktopChecks({ ...base, ffmpeg: null }, ru).find(c => c.id === 'desktop-ffmpeg')?.title).toBe(
+    'Браузеры агентов: нет ffmpeg (их показ остаётся картинками VNC, медленнее)',
+  )
 })
 
 test('the install’s packages: apt for Xvnc and the fonts, Google’s .deb for Chrome; Undo purges what it added', () => {
@@ -297,6 +323,7 @@ test('what the install adds for the browsers, per machine: x86_64 and arm64 Debi
   ).toEqual({
     packages: [
       'tigervnc-standalone-server',
+      'ffmpeg',
       'fonts-noto-core',
       'fonts-noto-cjk',
       'fonts-noto-color-emoji',
@@ -313,7 +340,14 @@ test('what the install adds for the browsers, per machine: x86_64 and arm64 Debi
     await needs(
       'arm64',
       DEBIAN,
-      ['tigervnc-standalone-server', 'fonts-noto-core', 'fonts-noto-cjk', 'fonts-noto-color-emoji', 'fonts-liberation'],
+      [
+        'tigervnc-standalone-server',
+        'ffmpeg',
+        'fonts-noto-core',
+        'fonts-noto-cjk',
+        'fonts-noto-color-emoji',
+        'fonts-liberation',
+      ],
       false,
     ),
   ).toEqual({
@@ -323,6 +357,7 @@ test('what the install adds for the browsers, per machine: x86_64 and arm64 Debi
   expect(await needs('arm64', DEBIAN, [], true)).toEqual({
     packages: [
       'tigervnc-standalone-server',
+      'ffmpeg',
       'fonts-noto-core',
       'fonts-noto-cjk',
       'fonts-noto-color-emoji',
@@ -335,6 +370,7 @@ test('what the install adds for the browsers, per machine: x86_64 and arm64 Debi
     const u = await needs('arm64', UBUNTU('22.04'), ['libnss3', 'fonts-liberation'], browser)
     expect(u.chromium).toBe(true)
     expect(u.packages).toContain('tigervnc-standalone-server')
+    expect(u.packages).toContain('ffmpeg')
     expect(u.packages).toContain('libasound2')
     expect(u.packages).not.toContain('libnss3')
     expect(u.packages).not.toContain('fonts-liberation')
@@ -345,6 +381,7 @@ test('what the install adds for the browsers, per machine: x86_64 and arm64 Debi
   expect(await needs('arm64', FEDORA, [], false)).toEqual({
     packages: [
       'tigervnc-standalone-server',
+      'ffmpeg',
       'fonts-noto-core',
       'fonts-noto-cjk',
       'fonts-noto-color-emoji',
