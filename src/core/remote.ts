@@ -77,9 +77,11 @@ export const desktopOnly = (rawPath: string): boolean => DESKTOP_ONLY.some(re =>
  * For the board on this computer only: the remote mode's and Remote access's management (approving
  * pairings, the login, the tunnel), wake's switches, Start and Log (#119), and the backup's setup
  * (#233: it logs in to the owner's server as the admin), Settings → Time (#237: clients, lanes and
- * billing settings). Refused on every remote listener, in both spellings of a path.
+ * billing settings), the edge log (#280: who worked with whom, for an audit). Refused on every
+ * remote listener, in both spellings of a path.
  */
-export const localOnly = (path: string): boolean => /^\/api\/(remote|access|wake|backup|time-settings)(\/|$)/.test(path)
+export const localOnly = (path: string): boolean =>
+  /^\/api\/(remote|access|wake|backup|time-settings|links\/log)(\/|$)/.test(path)
 
 /**
  * What pairs: the app, or the board in a phone's browser (core/pwa.ts). A phone can have both,

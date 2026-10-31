@@ -66,6 +66,7 @@ import { backupRoutes } from './routes/backup.ts'
 import { boardRoutes } from './routes/board.ts'
 import { fsRoutes } from './routes/fs.ts'
 import { launchRoutes } from './routes/launch.ts'
+import { linksRoutes } from './routes/links.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { moveRoute } from './routes/move.ts'
 import { pageLogRoute } from './routes/page-log.ts'
@@ -461,6 +462,8 @@ export async function startServer({
     ...remoteRoutes(listener, remote, cfg, port),
     ...accessRoutes(remoteAccess),
     ...boardRoutes(board, events),
+    // The edge log, every link event read from the transcripts (adapters/edge-log.ts); this computer only.
+    ...linksRoutes(board),
     ...fsRoutes(),
     ...uploadRoutes(),
     revealRoute(board, events, reveals),

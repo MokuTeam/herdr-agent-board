@@ -1166,8 +1166,8 @@ What it costs: a helper's meta file and the head and tail of its transcript are 
 again only when they change (time and size); a session's folder is listed again only when it
 changes. The links come from a read of each session's transcript in the background, once in
 full and then only what it gained, parsing only the lines with a marker (spawn-agent,
-SendMessage, a message from another session). A helper's whole conversation is read only when
-its window is open.
+SendMessage, a message from another session, herdr's commands that type into a pane). A helper's
+whole conversation is read only when its window is open.
 
 `GET /api/session/<key>` carries `helpers` and `workflows`; `GET /api/session/<key>/helper/<id>`
 one helper with its conversation, where the id only picks among that session's own helpers. The
@@ -1177,6 +1177,48 @@ board payload has each item's `helpers` (counts and the newest at work) and `lin
 (the calls and messages in a transcript), `src/server/routes/helpers.ts`, `web/src/components/helpers/`
 (the window, the rows, the card's and the sheet's parts), `web/src/hooks/useHelpers.ts`,
 `web/src/models/helper-model.ts`.
+
+### The edge log
+
+The links on the board are how things stand: per pair of sessions, how many messages and the
+latest. For a history (an audit of who started, wrote to or typed into whom, and when), the board
+also writes every event it reads from a transcript into the edge log, one JSON line each, kept
+across restarts, renames and sessions leaving the board. Besides spawn, fork, sent and received it
+has `prompted`: a Bash or PowerShell call that runs `herdr agent prompt <target>`,
+`herdr agent send-keys <target>`, `herdr pane send-text <pane>`, `herdr pane send-keys <pane>` or
+`herdr pane run <pane>`, one event for each such command in the call. The command is parsed, not
+searched: one that only mentions them (an echo, a file a here-document writes, a commit message,
+`--help`) is none, nor one with `--current`. Prompts are in the log only, not in the board's links.
+
+```json
+{"seq":12,"kind":"sent","to":"case-42","name":"","summary":"Status","at":1793350000000,
+ "session":"<session id>","key":"<card key>","sessionName":"Master",
+ "toSession":"<session id>","toKey":"<card key>","toName":"case-42",
+ "transcript":"<path>","offset":48213,"uuid":"<the line's uuid>"}
+```
+
+(one line in the file). `seq` numbers the lines from 1. The event's own fields: spawn `name`,
+`pane`; fork `of` (the session id); sent `to`, `name` (who wrote from a pipe it replies to),
+`summary` (the one SendMessage gave, never the message); received `name`, `pipe`, `id`; prompted
+`target` (an agent name or a pane id, `""` for a variable), `verb` (`agent prompt`, `pane
+send-keys`, …). `at`: when the call was made or the message came, in ms. `session`, `key` and
+`sessionName` are the session whose transcript it is, `toSession`, `toKey` and `toName` the one at
+the other end as the board matched it (as the links match it, above), both as the board knew them
+when it wrote the line; `null` where it had none. A message's text is not in the log. `transcript`,
+`offset` (the line's byte offset) and `uuid` say where it was read.
+
+Where: `edge-log/` in the board's state folder (`~/.local/state/herdr/plugins/agent-board/`,
+`%LOCALAPPDATA%\herdr\plugins\agent-board\` on Windows), in segments of about 4 MB,
+`edges-<the first line's seq, 12 digits>.jsonl`, none ever removed. `marks.json` beside them says
+how far each transcript is logged: a board that starts again reads every transcript from the start
+and writes no event twice. When the board first runs with the log, it writes what the sessions on
+the board then have in their transcripts.
+
+`GET /api/links/log?since=<seq>&limit=<n>` answers `{ edges, next }`: the lines after `since` (0,
+or none: from the first), at most `limit` (1 to 1000, 1000 when not given), and the `seq` to ask
+after next time. For the board on this computer only: a remote listener refuses it. Code:
+`src/adapters/edge-log.ts`, `src/server/routes/links.ts`, `promptsOf` in
+`src/core/transcript-links.ts`.
 
 ## Moving a card by hand
 
