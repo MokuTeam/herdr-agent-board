@@ -55,6 +55,31 @@ export function keysymOf(key: string, code: string): number | null {
   return null
 }
 
+/** The Globe key's names (KeyboardEvent.key or .code), where a browser gives it one. */
+const GLOBE = new Set(['Fn', 'FnLock'])
+
+/**
+ * A key the owner's own system switches its input language with: Ctrl+Space (with Shift, or with
+ * Option: macOS's next source), Caps Lock (iPadOS and macOS can switch with it), the Globe (Fn)
+ * key. It is the owner's, never the display's: held back there or sent, the iPad does not switch.
+ * The display's Caps Lock is not missed: Xvnc puts each letter it is sent in its case itself.
+ */
+export function switchesInput(e: { key?: string; code?: string; ctrlKey?: boolean; metaKey?: boolean }): boolean {
+  const key = e.key ?? ''
+  if (key === 'CapsLock' || GLOBE.has(key) || GLOBE.has(e.code ?? '')) return true
+  return !!e.ctrlKey && !e.metaKey && (key === ' ' || e.code === 'Space')
+}
+
+/**
+ * An iPad or an iPhone: its keys are typed in a field (its own keyboard, its input language and the
+ * Globe key are a field's, not a picture's). An iPad's Safari says it is a Mac's, but a Mac has no
+ * touch screen.
+ */
+export function appleTouch(nav: { userAgent?: string; maxTouchPoints?: number }): boolean {
+  const ua = nav.userAgent ?? ''
+  return /\b(iPad|iPhone|iPod)\b/.test(ua) || (/\bMacintosh\b/.test(ua) && (nav.maxTouchPoints ?? 0) > 1)
+}
+
 /** Pasted text as the keys that type it: a line's end as Return, a tab as Tab. */
 export function textKeysyms(text: string): number[] {
   const out: number[] = []

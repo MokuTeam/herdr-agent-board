@@ -7,8 +7,10 @@
 // video ended), the VNC picture as before. Shown only while `on`: off, the sockets close, with no
 // picture and no traffic, and the agent's browser runs on. Nothing goes to the display but the
 // requests for its picture until `controlling`: then the mouse, the keys and pasted text (typed as
-// keys) on the canvas go to it, and leave the board's own shortcuts alone. A finger's or a pen's
-// tap brings up the screen's keyboard (a canvas brings up none): its text goes as keys too. A
+// keys) on the canvas go to it, and leave the board's own shortcuts alone; what switches the owner's
+// input language (Ctrl+Space, Caps Lock, the Globe key) stays the owner's. A finger's or a pen's
+// tap brings up the screen's keyboard (a canvas brings up none): its text goes as keys too; on an
+// iPad (an iPhone) a hardware keyboard's too, once a key or a trackpad's click is on the picture. A
 // finger as on a tablet's remote desktop: a tap clicks, a swipe scrolls, held still it drags, a
 // pinch zooms the picture in the board. Text the display's keyboard has no keys for (an emoji,
 // another alphabet than those the board gives it), and long pastes, go by its clipboard
@@ -20,6 +22,7 @@ import { pageLog } from '../api/client.ts'
 import { desktopSocketUrl } from '../api/desktop.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import {
+  appleTouch,
   buttonMask,
   DeskTyping,
   InputQueue,
@@ -29,6 +32,7 @@ import {
   pinched,
   screenPoint,
   shownScale,
+  switchesInput,
   WHEEL_DOWN,
   WHEEL_LEFT,
   WHEEL_PX,
@@ -150,7 +154,9 @@ export function copyText(text: string): Promise<void> {
  * name), which brings up the screen's keyboard: what it types comes as text, its other keys as on
  * the canvas. A finger, as a remote desktop on a tablet has it: a tap clicks, a swipe of one or
  * two scrolls the display's page (its wheel), held still a moment it presses the button and drags,
- * a pinch zooms the picture in the board. A mouse goes as it always did.
+ * a pinch zooms the picture in the board. A mouse goes as it always did; on an iPad (an iPhone) its
+ * keys, and those of a key pressed on the picture, go to the field from then on (its input language
+ * switches there, not on a picture). What switches the owner's input language is never the display's.
  */
 export function attachInput(
   canvas: HTMLElement,
@@ -186,6 +192,9 @@ export function attachInput(
   let wheel = 0
   let touched = false
   let field: HTMLTextAreaElement | null = null
+  // An iPad's (an iPhone's) keys are typed in the field, a keyboard of its own too: there its input
+  // language switches (the Globe key, Ctrl+Space), on a picture it does not.
+  const keysInField = typeof navigator !== 'undefined' && appleTouch(navigator)
   const at = (e: { clientX: number; clientY: number }) =>
     screenPoint(canvas.getBoundingClientRect(), rfb.width, rfb.height, e.clientX, e.clientY)
   const atPoint = (p: Point) => at({ clientX: p.x, clientY: p.y })
@@ -212,6 +221,9 @@ export function attachInput(
     const k = e as KeyboardEvent
     // The board's own keys (its shortcuts, Esc closing the panel) stay out of it.
     e.stopPropagation()
+    // What switches the owner's input language (Ctrl+Space, Caps Lock, the Globe key) is the owner's
+    // system's: not held back, not sent.
+    if (switchesInput(k)) return
     // A paste: its text comes as keys (paste, below), not as Ctrl+V on the display; the field takes
     // it (a picture is no place a browser pastes into: Safari fires no paste there).
     if ((k.ctrlKey || k.metaKey) && k.key?.toLowerCase() === 'v') return catchPaste()
@@ -522,7 +534,9 @@ export function attachInput(
       // A mouse's keys come to the picture; a finger's from the keyboard its tap brings up (below).
       touched = touching(e as PointerEvent)
       if (touched) return fingerDown(e as PointerEvent)
-      canvas.focus()
+      // an iPad's trackpad: its keys to the field
+      if (keysInField) keyboard()
+      else canvas.focus()
       canvas.setPointerCapture?.((e as PointerEvent).pointerId)
       point(e as PointerEvent)
     },
@@ -563,7 +577,11 @@ export function attachInput(
       if (controlling()) e.preventDefault()
     },
     keydown(e) {
-      if (controlling()) keyDown(e)
+      if (!controlling()) return
+      // A key on an iPad's picture: a keyboard of its own is there, the field has its keys from now
+      // on; this one goes as on the picture.
+      if (keysInField) keyboard()
+      keyDown(e)
     },
     keyup(e) {
       if (controlling()) keyUp(e)

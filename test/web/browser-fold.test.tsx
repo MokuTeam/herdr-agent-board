@@ -1104,6 +1104,227 @@ test('Russian and Latin typed in the touch keyboard’s field go to the display 
   ])
 })
 
+/** Keys pressed on `el` (each: its keydown, or its keyup with `up`), whether each was held back. */
+const press = (el: MiniNode | undefined, ...keys: (Record<string, unknown> & { up?: boolean })[]) =>
+  keys.map(({ up, ...fields }) => key(el, fields, up ? 'keyup' : 'keydown').defaultPrevented)
+const CTRL = { key: 'Control', code: 'ControlLeft', ctrlKey: true }
+const SHIFT = { key: 'Shift', code: 'ShiftLeft', shiftKey: true }
+const ALT = { key: 'Alt', code: 'AltLeft', altKey: true }
+/** What switches the owner's own input language, as the browser hears it (the Globe key by either name it may have). */
+const SWITCHES: { name: string; keys: (Record<string, unknown> & { up?: boolean })[]; sent: string[] }[] = [
+  {
+    name: 'Ctrl+Space',
+    keys: [CTRL, { key: ' ', code: 'Space', ctrlKey: true }, { key: ' ', code: 'Space', ctrlKey: true, up: true }],
+    sent: ['down ffe3'],
+  },
+  {
+    name: 'Ctrl+Shift+Space',
+    keys: [CTRL, { ...SHIFT, ctrlKey: true }, { key: ' ', code: 'Space', ctrlKey: true, shiftKey: true }],
+    sent: ['down ffe3', 'down ffe1'],
+  },
+  {
+    name: 'Ctrl+Option+Space',
+    keys: [CTRL, { ...ALT, ctrlKey: true }, { key: ' ', code: 'Space', ctrlKey: true, altKey: true }],
+    sent: ['down ffe3', 'down ffe9'],
+  },
+  {
+    name: 'Caps Lock',
+    keys: [
+      { key: 'CapsLock', code: 'CapsLock' },
+      { key: 'CapsLock', code: 'CapsLock', up: true },
+    ],
+    sent: [],
+  },
+  {
+    name: 'Globe (Fn)',
+    keys: [
+      { key: 'Fn', code: 'Fn' },
+      { key: 'Fn', code: 'Fn', up: true },
+    ],
+    sent: [],
+  },
+  {
+    name: 'Globe (no name)',
+    keys: [
+      { key: 'Unidentified', code: 'Fn' },
+      { key: 'Unidentified', code: 'Fn', up: true },
+    ],
+    sent: [],
+  },
+]
+
+test('the keys the owner’s own system switches its input language with stay its own, on the picture and in the touch keyboard’s field: Ctrl+Space (with Shift or Option), Caps Lock, the Globe (Fn) key are not held back and do not go to the display (the Ctrl, Shift and Option with them as before)', async () => {
+  const { socket } = await controlled()
+  clipboardOn(socket)
+  for (const where of ['picture', 'field'] as const) {
+    if (where === 'field') tap(canvas(), 250, 150)
+    const el = where === 'picture' ? canvas() : byClass('desk-keys')
+    for (const { name, keys, sent } of SWITCHES) {
+      socket?.sent.splice(0)
+      const held = press(el, ...keys)
+      // the modifiers' own keys go as they did; the one that switches neither goes nor is held back
+      expect({ where, name, held: held.slice(sent.length), sent: socket?.sent.map(said) }).toEqual({
+        where,
+        name,
+        held: held.slice(sent.length).map(() => false),
+        sent,
+      })
+      // what is down goes up as it does when the picture is left
+      press(el, ...[CTRL, SHIFT, ALT].map(k => ({ ...k, up: true })))
+    }
+  }
+})
+
+test('the keys around them as before: a space, Shift+Space, Ctrl+A, Ctrl+L, Ctrl+C, a letter, Shift on the picture go to the display, held back there', async () => {
+  const { socket } = await controlled()
+  clipboardOn(socket)
+  const held = press(
+    canvas(),
+    { key: ' ', code: 'Space' },
+    { key: ' ', code: 'Space', up: true },
+    SHIFT,
+    { key: ' ', code: 'Space', shiftKey: true },
+    { key: ' ', code: 'Space', shiftKey: true, up: true },
+    { ...SHIFT, up: true },
+    CTRL,
+    ...['a', 'l', 'c'].flatMap(k => [
+      { key: k, code: `Key${k.toUpperCase()}`, ctrlKey: true },
+      { key: k, code: `Key${k.toUpperCase()}`, ctrlKey: true, up: true },
+    ]),
+    { ...CTRL, up: true },
+    { key: 'е', code: 'KeyT' },
+    { key: 'е', code: 'KeyT', up: true },
+  )
+  expect(held.every(Boolean)).toBe(true)
+  expect(socket?.sent.map(said)).toEqual([
+    'down 20',
+    'up 20',
+    'down ffe1',
+    'down 20',
+    'up 20',
+    'up ffe1',
+    'down ffe3',
+    ...['61', '6c', '63'].flatMap(k => [`down ${k}`, `up ${k}`]),
+    'up ffe3',
+    'down 1000435',
+    'up 1000435',
+  ])
+})
+
+/** The page as a browser says it is (its user agent, its touch points) for `body`; as it was after. */
+async function asBrowser(userAgent: string, maxTouchPoints: number, body: () => Promise<void>) {
+  const was = ['userAgent', 'maxTouchPoints'].map(
+    name => [name, Object.getOwnPropertyDescriptor(navigator, name)] as const,
+  )
+  Object.defineProperty(navigator, 'userAgent', { value: userAgent, configurable: true })
+  Object.defineProperty(navigator, 'maxTouchPoints', { value: maxTouchPoints, configurable: true })
+  try {
+    await body()
+  } finally {
+    for (const [name, descriptor] of was)
+      if (descriptor) Object.defineProperty(navigator, name, descriptor)
+      else Reflect.deleteProperty(navigator, name)
+  }
+}
+const SAFARI_MAC =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15'
+const TOUCH_APPLE: [string, string, number][] = [
+  // an iPad's Safari says it is a Mac's, but a Mac has no touch screen
+  ['an iPad’s Safari', SAFARI_MAC, 5],
+  [
+    'an iPad’s Safari asked for the mobile page',
+    'Mozilla/5.0 (iPad; CPU OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1',
+    5,
+  ],
+  [
+    'an iPad’s Chrome',
+    'Mozilla/5.0 (iPad; CPU OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/141.0.7390.96 Mobile/15E148 Safari/604.1',
+    5,
+  ],
+  [
+    'an iPhone’s Safari',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1',
+    5,
+  ],
+]
+const DESKTOPS: [string, string, number][] = [
+  ['a Mac’s Safari', SAFARI_MAC, 0],
+  [
+    'a Mac’s Chrome',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
+    0,
+  ],
+  [
+    'Windows with a touch screen',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0',
+    10,
+  ],
+  ['Linux’s Firefox', 'Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0', 0],
+]
+const mouseAt = { clientX: 250, clientY: 150, button: 0, pointerId: 1, pointerType: 'mouse' }
+/** What has the keys now, in words (an element's own diff is too big to show). */
+const keysAt = () => {
+  const at = dom.document.activeElement
+  return at === canvas() ? 'picture' : at && at === byClass('desk-keys') ? 'field' : 'elsewhere'
+}
+
+test('on an iPad (or an iPhone) a hardware keyboard’s keys go to the field by the picture, where its own input language switches (a picture has none): a key on the picture puts them there and goes once, so does a trackpad’s click (which clicks as before)', async () => {
+  for (const [name, userAgent, touchPoints] of TOUCH_APPLE)
+    await asBrowser(userAgent, touchPoints, async () => {
+      const { socket } = await controlled()
+      clipboardOn(socket)
+      // control taken: the picture has the keys, as before
+      expect([name, keysAt()]).toEqual([name, 'picture'])
+      // a key there: it goes (once), and the keys are the field's from then on
+      expect(press(canvas(), { key: 'е', code: 'KeyT' })).toEqual([true])
+      const field = byClass('desk-keys')
+      expect([name, keysAt()]).toEqual([name, 'field'])
+      press(field, { key: 'е', code: 'KeyT', up: true })
+      expect(socket?.sent.map(said)).toEqual(typedKeys('е'))
+      // the Globe key in the field: the iPad's own
+      socket?.sent.splice(0)
+      expect(press(field, { key: 'Fn', code: 'Fn' }, { key: 'Fn', code: 'Fn', up: true })).toEqual([false, false])
+      typeIn(field, 'test')
+      expect(socket?.sent.map(said)).toEqual(typedKeys('test'))
+      // the picture has them again (a paste's Cmd+V, say): a trackpad's click clicks, and puts them in the field
+      ;(canvas() as MiniElement).focus()
+      socket?.sent.splice(0)
+      const down = fire(canvas(), 'pointerdown', { ...mouseAt, buttons: 1 })
+      fire(canvas(), 'pointerup', { ...mouseAt, buttons: 0 })
+      expect(down.defaultPrevented).toBe(true)
+      expect([name, keysAt()]).toEqual([name, 'field'])
+      expect(socket?.sent).toEqual([
+        [5, 1, 0, 2, 0, 1],
+        [5, 0, 0, 2, 0, 1],
+      ])
+      // Cmd+V the first key on the picture: the field pastes, and keeps the keys
+      ;(canvas() as MiniElement).focus()
+      socket?.sent.splice(0)
+      expect(press(canvas(), { key: 'v', code: 'KeyV', metaKey: true })).toEqual([false])
+      fire(field, 'paste', { clipboardData: { getData: () => 'hi' } })
+      expect([name, keysAt(), socket?.sent.map(said)]).toEqual([name, 'field', typedKeys('hi')])
+      flush(() => root.unmount())
+      newRoot()
+      FakeSocket.made = []
+    })
+})
+
+test('on a computer (a Mac, Windows with a touch screen, Linux) the picture keeps the keys as before: a mouse’s click and a key there make no field', async () => {
+  for (const [name, userAgent, touchPoints] of DESKTOPS)
+    await asBrowser(userAgent, touchPoints, async () => {
+      const { socket } = await controlled()
+      clipboardOn(socket)
+      fire(canvas(), 'pointerdown', { ...mouseAt, buttons: 1 })
+      fire(canvas(), 'pointerup', { ...mouseAt, buttons: 0 })
+      expect(press(canvas(), { key: 'a', code: 'KeyA' }, { key: 'a', code: 'KeyA', up: true })).toEqual([true, true])
+      expect([name, keysAt(), !!byClass('desk-keys')]).toEqual([name, 'picture', false])
+      expect(socket?.sent.map(said)).toEqual(['message 5', 'message 5', ...typedKeys('a')])
+      flush(() => root.unmount())
+      newRoot()
+      FakeSocket.made = []
+    })
+})
+
 test('a character the display’s keyboard has no key for (Greek, an emoji) goes by its clipboard: announced, Ctrl+V, its text as the server asks; what is typed after it waits for the server’s turn', async () => {
   const { socket } = await controlled()
   clipboardOn(socket)
