@@ -25,6 +25,12 @@ export const DESK_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'desk.back': 'Back to the panel (Esc)',
     'desk.close': 'Close the view (its browser keeps running)',
     'desk.shownFull': 'Shown full size',
+    // the conversation beside it full size
+    'desk.chat': 'Chat',
+    'desk.chatHint': 'The conversation with the agent beside its browser',
+    'desk.chatBottom': 'Chat at the bottom',
+    'desk.chatRight': 'Chat on the right',
+    'desk.chatEdge': 'Chat size',
     // what the agent asks the owner to do in it (browser_ask_owner), folded or open, and full size
     'desk.asks': 'The agent asks you',
     // the connection
@@ -53,6 +59,11 @@ export const DESK_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'desk.back': 'Обратно в панель (Esc)',
     'desk.close': 'Закрыть показ (сам браузер продолжит работать)',
     'desk.shownFull': 'Показан во весь экран',
+    'desk.chat': 'Чат',
+    'desk.chatHint': 'Разговор с агентом рядом с его браузером',
+    'desk.chatBottom': 'Чат снизу',
+    'desk.chatRight': 'Чат справа',
+    'desk.chatEdge': 'Размер чата',
     'desk.asks': 'Агент просит вас',
     'desk.connecting': 'Подключение к его браузеру…',
     'desk.closed': 'Его браузер закрыл показ',

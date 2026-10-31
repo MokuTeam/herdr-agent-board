@@ -6,7 +6,11 @@
 // Parts the page hands in plug in here: the question form or permission prompt, the file chips and
 // quick looks, the reminders' buttons (the page's schedule desk, shared with the schedule panel);
 // the phone's "More actions" menu and renaming; "New here" opens the launch window.
+//
+// The session's own browser shown full size can have the conversation and the message box beside
+// it ("Chat", BrowserFold.tsx): these same ones, moved there while it does, and back after.
 import { type ReactNode, type Ref, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { archiveBlock } from '../../../../src/core/archive.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import type { SessionDetail } from '../../api/client.ts'
@@ -155,6 +159,12 @@ export function Sheet(slots: SheetSlots) {
   // The card's empty fields show only when asked for; each session opens without them.
   const [propertiesOpen, setPropertiesOpen] = useState(false)
   const [browserOpen, setBrowserOpen] = useBrowserFold(ui, itemOf(open)?.desktop?.control === 'owner')
+  const [scroll] = useState(() => new ConversationScroll())
+  // Where the conversation and the message box are beside the browser full size; null: here.
+  const [chatHost, setChatHost] = useState<HTMLElement | null>(null)
+  // Moved there or back, the conversation (a new box) starts at its foot again.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: moved there or back is when to go to the foot
+  useLayoutEffect(() => scroll.opened(), [scroll, chatHost])
   // Switching sessions in the open panel: its conversation fades in; it starts at the bottom.
   const before = useRef(open)
   useLayoutEffect(() => {
@@ -165,7 +175,6 @@ export function Sheet(slots: SheetSlots) {
     if (previous !== null && previous !== open && !reducedMotion.matches)
       body.current?.animate([{ opacity: 0.3 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' })
   }, [open])
-  const [scroll] = useState(() => new ConversationScroll())
   // biome-ignore lint/correctness/useExhaustiveDependencies: an opening is when to go to the bottom
   useLayoutEffect(() => scroll.opened(), [scroll, open, ui.opened])
   // A message going out: the thread goes to its foot, where its bubble is.
@@ -183,11 +192,12 @@ export function Sheet(slots: SheetSlots) {
   }
   const cwd = shown.item?.cwd ?? ''
   const drawn = shown.item !== null
-  // The conversation drawn anew (a new detail, the session shown, the language): its paths are new.
+  // The conversation drawn anew (a new detail, the session shown, the language, moved beside the
+  // browser or back): its paths are new.
   // biome-ignore lint/correctness/useExhaustiveDependencies: these are when to look, not what it reads
   useLayoutEffect(() => {
     if (body.current && drawn) upgradeFiles?.(body.current, cwd)
-  }, [detail.value.data, drawn, shown.key, cwd, t, upgradeFiles])
+  }, [detail.value.data, drawn, shown.key, cwd, t, upgradeFiles, chatHost])
   const form = shown.item ? question?.(shown.item, detail.value.data) : null
   const hasForm = form !== null && form !== undefined && form !== false
   // Once its paths are chips: a conversation drawn anew (what upstream's renderSheetBody draws it
@@ -201,6 +211,7 @@ export function Sheet(slots: SheetSlots) {
       hasForm,
       shown.item?.column,
       composer.outbox.version,
+      chatHost,
     ]),
   )
 
@@ -261,7 +272,7 @@ export function Sheet(slots: SheetSlots) {
         buttons={buttons}
         moreOpen={slots.moreOpen ?? false}
         links={links}
-        browser={{ open: browserOpen, onOpen: setBrowserOpen }}
+        browser={{ open: browserOpen, onOpen: setBrowserOpen, chatHost, onChatHost: setChatHost }}
       />
     </Panel>
   )
@@ -291,8 +302,19 @@ export interface SheetViewProps {
   /** The "More actions" menu is open. */
   moreOpen?: boolean
   links?: SheetLinks | undefined
-  /** The session's own browser's fold (components/sheet/BrowserFold.tsx), while it runs. */
-  browser?: { open: boolean; onOpen(open: boolean): void } | undefined
+  /**
+   * The session's own browser's fold (components/sheet/BrowserFold.tsx), while it runs; with
+   * `onChatHost`, its full size offers "Chat": the conversation and the message box go to
+   * `chatHost` while it has them.
+   */
+  browser?:
+    | {
+        open: boolean
+        onOpen(open: boolean): void
+        chatHost?: HTMLElement | null | undefined
+        onChatHost?: ((host: HTMLElement | null) => void) | undefined
+      }
+    | undefined
 }
 
 /** The sheet under its head, as drawn for one state. */
@@ -335,37 +357,10 @@ export function SheetView(props: SheetViewProps) {
     browser?.onOpen(true)
     setReveal(n => n + 1)
   }
-  return (
+  // The conversation and the message box: here, or beside the browser full size while its "Chat" has them.
+  const chatHost = browser?.chatHost ?? null
+  const talk = (
     <>
-      <div className="sheet-question" id="sheet-question" hidden={!hasForm && !asking}>
-        {hasForm
-          ? form
-          : asking &&
-            item && (
-              <Asked
-                item={item}
-                disabled={availability.dismiss}
-                onDismiss={props.onDismiss}
-                onBrowser={inBrowser ? openBrowser : undefined}
-              />
-            )}
-      </div>
-      <HelpersStrip
-        helpers={(item && detail.data?.helpers) || []}
-        workflows={(item && detail.data?.workflows) || []}
-        onHelper={(id, el) => props.links?.onHelper(id, el)}
-        onList={(run, el) => props.links?.onList(run, el)}
-      />
-      {item && browser && (
-        <BrowserFold
-          key={item.key}
-          item={item}
-          open={browser.open && open !== null}
-          onOpen={browser.onOpen}
-          askedAbove={inBrowser}
-          reveal={reveal}
-        />
-      )}
       <div
         className={classNames('sheet-body', !!notice.text && 'has-detail-state')}
         id="sheet-body"
@@ -416,6 +411,41 @@ export function SheetView(props: SheetViewProps) {
         on={buttons}
         moreOpen={props.moreOpen ?? false}
       />
+    </>
+  )
+  return (
+    <>
+      <div className="sheet-question" id="sheet-question" hidden={!hasForm && !asking}>
+        {hasForm
+          ? form
+          : asking &&
+            item && (
+              <Asked
+                item={item}
+                disabled={availability.dismiss}
+                onDismiss={props.onDismiss}
+                onBrowser={inBrowser ? openBrowser : undefined}
+              />
+            )}
+      </div>
+      <HelpersStrip
+        helpers={(item && detail.data?.helpers) || []}
+        workflows={(item && detail.data?.workflows) || []}
+        onHelper={(id, el) => props.links?.onHelper(id, el)}
+        onList={(run, el) => props.links?.onList(run, el)}
+      />
+      {item && browser && (
+        <BrowserFold
+          key={item.key}
+          item={item}
+          open={browser.open && open !== null}
+          onOpen={browser.onOpen}
+          askedAbove={inBrowser}
+          reveal={reveal}
+          chat={browser.onChatHost}
+        />
+      )}
+      {chatHost ? createPortal(talk, chatHost) : talk}
     </>
   )
 }

@@ -81,3 +81,34 @@
 .desk-full .desk-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; margin: 0; }
 .desk-full .desk-host { flex: 1 1 auto; min-height: 0; }
 .desk-full .desk-screen { height: 100%; max-height: none; }
+
+/* ---------------------------------------------------------------- the chat beside it */
+/* Full size with "Chat" (components/sheet/BrowserFold.tsx, models/desk-chat.ts): the session's
+   conversation and its message box, the panel's own, beside the picture on the right or under it;
+   the bar, the ask and the warning stay above both. The picture fits what is left, whole and
+   centred as before (desk-input.ts screenPoint reads the canvas so). Its size is the viewer's
+   (--chat-size), never less than its least nor taking the picture's. */
+.desk-full.chat { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto minmax(0, 1fr); row-gap: 0; column-gap: 6px; }
+.desk-full.chat > .desk-bar { grid-row: 1; grid-column: 1 / -1; margin-bottom: 6px; }
+.desk-full.chat > .desk-asks { grid-row: 2; grid-column: 1 / -1; margin-bottom: 6px; }
+.desk-full.chat > .desk-warn { grid-row: 3; grid-column: 1 / -1; margin: 0 0 6px; }
+.desk-full.chat > .desk-view { grid-row: 4; grid-column: 1; min-width: 0; }
+.desk-full.chat-right { grid-template-columns: minmax(0, 1fr) clamp(300px, var(--chat-size, min(420px, 40%)), max(300px, calc(100% - 326px))); }
+.desk-full.chat-right > .desk-chat { grid-row: 4; grid-column: 2; }
+.desk-full.chat-bottom { grid-template-rows: auto auto auto minmax(0, 1fr) clamp(180px, var(--chat-size, 40%), max(180px, calc(100% - 220px))); }
+.desk-full.chat-bottom > .desk-chat { grid-row: 5; grid-column: 1; margin-top: 6px; }
+.desk-chat { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-radius: 10px; background: var(--panel); box-shadow: 0 0 0 0.5px var(--separator); }
+.desk-chat-host { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden; border-radius: inherit; }
+.desk-chat-host > .sheet-body { padding: 8px 14px 12px 16px; }
+.desk-chat-host > .composer { padding: 8px 10px 10px 12px; }
+/* Its edge towards the picture resizes it: the pointer drags it, the arrows move it, a double-click
+   puts the default back. A pill shows on hover and while it moves. */
+.desk-chat-edge { position: absolute; z-index: 2; outline: none; touch-action: none; }
+.chat-right .desk-chat-edge { top: 0; bottom: 0; left: -10px; width: 14px; cursor: col-resize; }
+.chat-bottom .desk-chat-edge { left: 0; right: 0; top: -10px; height: 14px; cursor: row-resize; }
+.desk-chat-edge::after { content: ""; position: absolute; border-radius: 2px; background: var(--label-3); opacity: 0.35; transition: opacity 160ms ease, background-color 160ms ease; }
+.chat-right .desk-chat-edge::after { left: 5px; top: 50%; width: 4px; height: 44px; margin-top: -22px; }
+.chat-bottom .desk-chat-edge::after { top: 5px; left: 50%; width: 44px; height: 4px; margin-left: -22px; }
+.desk-chat-edge:hover::after, .desk-chat-edge:active::after, .desk-chat-edge:focus-visible::after { opacity: 1; }
+.desk-chat-edge:focus-visible::after { background-color: var(--accent); }
+.desk-tools [data-desk="chat"][aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 18%, var(--fill)); color: var(--accent); }

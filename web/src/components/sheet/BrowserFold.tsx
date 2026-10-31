@@ -6,18 +6,23 @@
 // and keys go to it while the agent's own actions wait, with a plain warning that the agent sees
 // what is typed there; "Give back", or leaving the view, hands it back. What the agent asks the
 // owner to do there (browser_ask_owner) is said at the browser itself, folded or open, and full
-// size, while it asks.
+// size, while it asks. Full size, "Chat" puts the session's conversation and its composer beside
+// the picture (the panel's own, `chat`; models/desk-chat.ts): on the right or at the bottom, its
+// edge dragged for its size; what is typed there is the chat's, whoever has the browser.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Item } from '../../../../src/core/types.ts'
 import { errorText } from '../../api/client.ts'
 import { type DesktopControl, setDesktopControl } from '../../api/desktop.ts'
+import { useDeskChat } from '../../hooks/useDeskChat.ts'
 import { useDesktop } from '../../hooks/useDesktop.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { escLeavesFull } from '../../models/desk-chat.ts'
 import { reducedMotion } from '../../models/spring.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { ChevGlyph, CloseGlyph, ExpandGlyph } from '../icons.tsx'
+import { DockGlyph } from '../panel/glyphs.tsx'
 
 export interface BrowserFoldProps {
   item: Item
@@ -28,9 +33,14 @@ export interface BrowserFoldProps {
   askedAbove?: boolean | undefined
   /** Counts the asks to bring the fold into view ("Open its browser" in what it asks). */
   reveal?: number | undefined
+  /**
+   * Where the session's conversation and composer go beside the picture full size, while "Chat" has
+   * them there: the element, then null once it goes (the panel puts them back). None: no "Chat".
+   */
+  chat?: ((host: HTMLElement | null) => void) | undefined
 }
 
-export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0 }: BrowserFoldProps) {
+export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0, chat }: BrowserFoldProps) {
   const t = useT()
   const { canMutate, toast } = useBoardContext()
   const desktop = item.desktop
@@ -48,6 +58,7 @@ export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0
   const [asking, setAsking] = useState(false)
   const [full, setFull] = useState(false)
   const view = useDesktop(item.key, on, owner)
+  const chatting = useDeskChat(full, !!chat)
   const [foldHost, setFoldHost] = useState<HTMLElement | null>(null)
   const [fullHost, setFullHost] = useState<HTMLElement | null>(null)
   const section = useRef<HTMLElement>(null)
@@ -66,18 +77,21 @@ export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0
   useEffect(() => {
     if (!on) setFull(false)
   }, [on])
-  // Esc brings full size back, before the panel, the board or the display hear it.
+  // Esc brings full size back, before the panel, the board or the display hear it; in the chat's
+  // box it is the box's (the board's first Esc leaves it: models/desk-chat.ts escLeavesFull), and
+  // one a layer over it took first (a menu the chat opened) is that layer's.
+  const chatPane = chatting.pane
   useEffect(() => {
     if (!full) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' || e.defaultPrevented || !escLeavesFull(e.target, chatPane.current)) return
       e.preventDefault()
       e.stopPropagation()
       setFull(false)
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [full])
+  }, [full, chatPane])
   // Control taken here and the view left: given back, so the agent's browser does not wait on no one.
   const took = useRef(false)
   const key = item.key
@@ -119,6 +133,30 @@ export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0
       >
         {t(owner ? 'desk.give' : 'desk.take')}
       </button>
+      {where === 'full' && chatting.can && (
+        <button
+          type="button"
+          className="button"
+          data-desk="chat"
+          aria-pressed={chatting.on}
+          title={t('desk.chatHint')}
+          onClick={chatting.toggle}
+        >
+          {t('desk.chat')}
+        </button>
+      )}
+      {where === 'full' && chatting.on && (
+        <button
+          type="button"
+          className="icon-button desk-tool"
+          data-desk="chat-dock"
+          title={t(chatting.dock === 'right' ? 'desk.chatBottom' : 'desk.chatRight')}
+          aria-label={t(chatting.dock === 'right' ? 'desk.chatBottom' : 'desk.chatRight')}
+          onClick={chatting.flip}
+        >
+          <DockGlyph dock={chatting.dock === 'right' ? 'bottom' : 'right'} />
+        </button>
+      )}
       {where === 'fold' && (
         <button
           type="button"
@@ -194,7 +232,13 @@ export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0
       {full &&
         createPortal(
           <div
-            className={classNames('desk-full', owner && 'owner')}
+            className={classNames(
+              'desk-full',
+              owner && 'owner',
+              chatting.on && 'chat',
+              chatting.on && `chat-${chatting.dock}`,
+            )}
+            style={chatting.on && chatting.size !== null ? { '--chat-size': `${chatting.size}px` } : undefined}
             role="dialog"
             aria-modal="true"
             aria-label={`${t('desk.title')} · ${item.name}`}
@@ -207,7 +251,7 @@ export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0
             </div>
             {asks}
             {warn}
-            <div className="desk-view">
+            <div className="desk-view" ref={chatting.view}>
               {status && (
                 <p className="desk-status" role="status">
                   {status}
@@ -216,6 +260,23 @@ export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0
               )}
               <div className="desk-host" ref={setFullHost} />
             </div>
+            {chatting.on && (
+              <div className="desk-chat" ref={chatting.pane}>
+                {/* biome-ignore lint/a11y/useSemanticElements: a pane's resizing edge, as the panel's own (an <hr> takes no pointer) */}
+                <div
+                  className="desk-chat-edge"
+                  role="separator"
+                  tabIndex={0}
+                  aria-orientation={chatting.dock === 'bottom' ? 'horizontal' : 'vertical'}
+                  aria-label={t('desk.chatEdge')}
+                  aria-valuenow={chatting.drawn.now}
+                  aria-valuemin={chatting.drawn.min}
+                  aria-valuemax={chatting.drawn.max}
+                  {...chatting.edge}
+                />
+                <div className="desk-chat-host" ref={chat} />
+              </div>
+            )}
           </div>,
           document.body,
         )}

@@ -142,12 +142,31 @@ export const layout = {
   rect: (_el: MiniElement): MiniRect => ({ left: 0, top: 0, width: 0, height: 0 }),
 }
 
+/**
+ * An inline style: its properties as fields, and, unseen by a spread, the calls react-dom makes for
+ * custom properties (`--name`).
+ */
+function miniStyle(): Record<string, string> {
+  const style: Record<string, string> = {}
+  Object.defineProperties(style, {
+    setProperty: {
+      value: (name: string, value: unknown) => {
+        if (value === '' || value === null || value === undefined) delete style[name]
+        else style[name] = String(value)
+      },
+    },
+    removeProperty: { value: (name: string) => void delete style[name] },
+    getPropertyValue: { value: (name: string) => style[name] ?? '' },
+  })
+  return style
+}
+
 /** One part of a selector: a tag, an #id, .classes and an [attr], each optional (`button`, `.sheet`, `[data-act]`). */
 const SIMPLE = /^\s*([a-z][a-z0-9-]*)?((?:[#.][\w-]+)*)(?:\[([\w-]+)\])?\s*$/i
 
 export class MiniElement extends MiniNode {
   readonly attributes = new Map<string, string>()
-  readonly style: Record<string, string> = {}
+  readonly style: Record<string, string> = miniStyle()
   readonly tagName: string
   readonly localName: string
   readonly namespaceURI = 'http://www.w3.org/1999/xhtml'
