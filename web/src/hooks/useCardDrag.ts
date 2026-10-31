@@ -104,15 +104,17 @@ function placeAt(el: Element | null): DropPlace {
 
 /**
  * The staircase's steps in sight, in the window: where each column's cards start (--stair-<column>,
- * from the left edge of the heads' row, which goes sideways with the board), those starting before
- * the board's right edge. So Idle, past it, takes a card once the board scrolls to it (or over its
- * head, peeking at the row's edge): a card never lands where it cannot be seen.
+ * from the left edge of the board's cards, the heads' row's, less how far the board scrolled
+ * sideways), those starting before the board's right edge. So Idle, past it, takes a card once the
+ * board scrolls to it (or over its head, at the right end of the heads' row): a card never lands
+ * where it cannot be seen.
  */
 function stepEdges(): { id: string; left: number }[] {
   const heads = document.getElementById('columns-head')
-  if (!heads) return []
-  const origin = heads.getBoundingClientRect().left - (heads.scrollLeft || 0)
-  const right = document.getElementById('board')?.getBoundingClientRect().right ?? Number.POSITIVE_INFINITY
+  const board = document.getElementById('board')
+  if (!heads || !board) return []
+  const origin = heads.getBoundingClientRect().left - (board.scrollLeft || 0)
+  const right = board.getBoundingClientRect().right
   const style = document.documentElement.style
   return [...heads.querySelectorAll<HTMLElement>('.col-head')]
     .map(head => {

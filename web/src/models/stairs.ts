@@ -1,12 +1,13 @@
 // The staircase: a board too narrow for its columns (styles/stairs.css, hooks/useStairs.ts). Where
 // the board cannot give each column with cards a card's readable width beside the empty ones' heads,
 // its cards go in one list instead, lane by lane, top to bottom, every one a card's width, its left
-// edge at its column's step, under its column's head. The four columns but Idle share what the
-// board shows: a card as wide as it can be, the steps as small as the heads above them allow in two
-// rows; Idle starts past the board's right edge, its head peeking there until the board scrolls to
-// it. Only where the page lays its board out in columns (wider than 960px): a phone and a narrow
-// window keep their stacked column, a board with room its columns. Here: when it applies, where
-// each column's cards and head go, where a dragged card lands, and the keys.
+// edge at its column's step, the steps in the columns' order; a card's coloured dot is its column's,
+// as its head's is. The four columns but Idle share what the board shows: a card as wide as it can
+// be, the steps small; Idle starts past the board's right edge, its head at the right end of the
+// heads' row, a legend in one row above. Only where the page lays its board out in columns (wider
+// than 960px): a phone and a narrow window keep their stacked column, a board with room its
+// columns. Here: when it applies, where each column's cards go, where a dragged card lands, and the
+// keys.
 import { type Dir, type GridLane, gridStep, listStep } from '../../../src/core/grid-nav.ts'
 import type { DropPlace } from './board-view.ts'
 
@@ -24,8 +25,8 @@ export const STAIRS = {
   step: 14,
   /** A card's width in the staircase: at least, and at most (wider only spreads its lines out). */
   card: { min: 320, max: 420 },
-  /** px between two heads in a row of the heads. */
-  headGap: 8,
+  /** px from one column's step to the next's, at least: enough to tell them apart, little enough to leave the card its room. */
+  indent: 52,
   /** The column out of the way, past the board's right edge. */
   aside: 'idle',
 } as const
@@ -60,58 +61,35 @@ export interface HeadEdge {
   left: number
 }
 
-/** A column head's width, as wide as its name and count. */
-export interface HeadSize {
-  id: string
-  width: number
-}
-
-/** Where the staircase puts the cards and the heads (--stair-* on <html>), in px from the board's left edge for its cards. */
+/** Where the staircase puts the cards (--stair-* on <html>), in px from the left edge of the board's cards. */
 export interface StairsLayout {
   /** Every card's width. */
   card: number
-  /** Each column's step: where its cards' and its head's left edges are. */
+  /** Each column's step: where its cards' left edges are. */
   steps: Record<string, number>
-  /** The row of the heads each head is in, from 1. */
-  rows: Record<string, number>
-  /** Where the last column's cards end: as far as the heads' row goes sideways. */
-  end: number
 }
 
 const round = (px: number): number => Math.round(px * 100) / 100
 
 /**
- * The staircase's sizes for a board `room` wide (its gutter past it), its heads `heads` wide.
- * The columns but Idle fill the room: a card's width and a step for each but the first, the card
- * as wide as STAIRS.card allows, the steps as small as the heads allow when every other head shares
- * a row (two rows, each head's left edge at its step), wider where the card has all it may.
- * Idle's step is past the room and the gutter, out of sight until the board scrolls there.
+ * The staircase's sizes for a board `room` wide (its gutter past it), the columns `columns` in their
+ * order. The columns but Idle fill the room: a card's width and a step for each but the first, the
+ * card as wide as STAIRS.card allows beside steps of STAIRS.indent, the steps wider where the card
+ * has all it may. Idle's step is past the room and the gutter, out of sight until the board scrolls
+ * there.
  */
-export function stairsLayout(heads: readonly HeadSize[], room: Pick<BoardRoom, 'room' | 'gutter'>): StairsLayout {
-  const shown = heads.filter(h => h.id !== STAIRS.aside)
-  const aside = heads.find(h => h.id === STAIRS.aside)
-  const n = Math.max(1, shown.length - 1)
-  // Two rows: a head and the one two further on share one.
-  const least = Math.max(0, ...shown.slice(0, -2).map(h => (h.width + STAIRS.headGap) / 2))
-  const card = Math.min(STAIRS.card.max, Math.max(STAIRS.card.min, room.room - n * least))
-  const step = shown.length > 1 ? Math.max(least, (room.room - card) / n) : 0
+export function stairsLayout(columns: readonly string[], room: Pick<BoardRoom, 'room' | 'gutter'>): StairsLayout {
+  const shown = columns.filter(id => id !== STAIRS.aside)
+  const n = shown.length - 1
+  const card = Math.min(STAIRS.card.max, Math.max(STAIRS.card.min, room.room - Math.max(0, n) * STAIRS.indent))
+  const step = n > 0 ? Math.max(STAIRS.indent, (room.room - card) / n) : 0
   const steps: Record<string, number> = {}
-  shown.forEach((h, k) => {
-    steps[h.id] = round(k * step)
+  shown.forEach((id, k) => {
+    steps[id] = round(k * step)
   })
-  const last = (shown.length - 1) * step + card
-  if (aside) steps[aside.id] = round(Math.max(room.room, last) + room.gutter)
-  // Each head in the first row it fits in; Idle's where it peeks, at the room's right edge.
-  const ends: number[] = []
-  const rows: Record<string, number> = {}
-  for (const h of heads) {
-    const left = h.id === STAIRS.aside ? room.room - h.width : (steps[h.id] ?? 0)
-    let row = ends.findIndex(end => left >= end + STAIRS.headGap)
-    if (row < 0) row = ends.push(0) - 1
-    ends[row] = left + h.width
-    rows[h.id] = row + 1
-  }
-  return { card: round(card), steps, rows, end: round(aside ? (steps[aside.id] ?? 0) + card : last) }
+  if (columns.includes(STAIRS.aside))
+    steps[STAIRS.aside] = round(Math.max(room.room, Math.max(0, n) * step + card) + room.gutter)
+  return { card: round(card), steps }
 }
 
 /** The column whose head's left edge is nearest `x` (the left one of two as near); none without heads. */

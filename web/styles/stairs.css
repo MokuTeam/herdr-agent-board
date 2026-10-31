@@ -1,39 +1,31 @@
 /* The staircase: a board too narrow for its columns. Where the board cannot give each column with
    cards a card's readable width (210px, beside.css's --col-card) beside the empty ones' heads, <html>
    has data-stairs (web/src/hooks/useStairs.ts, models/stairs.ts) with the staircase's sizes: the
-   card's width (--stair-card), each column's step (--stair-<column>), the row of the heads each head
-   is in (--stair-row-<column>) and where the last column ends (--stair-end). The cards go in one
-   list, lane by lane, top to bottom, in the columns' order and each column's own, every one a card's
-   width, its left edge at its column's step; each head starts at its column's step too, the heads
-   in two rows where the steps are narrower than they are. The four columns but Idle fill what the
-   board shows; Idle starts past its right edge, its head peeking at the edge of the heads' row until
-   the board scrolls to it. The board scrolls sideways, the heads with it (components/Board.tsx), and
-   each lane's title stays at its left. Every rule here starts with :root[data-stairs] and, but the
-   card's least width, holds where the page lays its board out in columns (a page over 960px), as
-   the attribute does: a phone, a narrow window's stacked column and a board with room are as they
-   were. Linked before beside.css, outranking its rule for the heads; the Terminal style comes after,
-   outranked where it would undo them, its own sizes here given by --stair-bar and --stair-gap
-   (look-terminal.css). */
+   card's width (--stair-card) and each column's step (--stair-<column>). The cards go in one list,
+   lane by lane, top to bottom, in the columns' order and each column's own, every one a card's
+   width, its left edge at its column's step, the steps small and in the columns' order; a card's
+   coloured dot is its column's, as its head's is. The four columns but Idle fill what the board
+   shows; Idle starts past its right edge. The heads are a legend in one row: the four in their
+   order, Idle's at the right end with a ›. The board scrolls sideways and each lane's title stays at
+   its left. Every rule here starts with :root[data-stairs] and, but the card's least width, holds
+   where the page lays its board out in columns (a page over 960px), as the attribute does: a phone,
+   a narrow window's stacked column and a board with room are as they were. Linked before
+   beside.css, outranking its rule for the heads; the Terminal style comes after, outranked where it
+   would undo them, its own sizes here given by --stair-bar and --stair-gap (look-terminal.css). */
 
 :root[data-stairs] { --stair-card: 320px; }
 
 @container page (min-width: 961px) {
-  /* The heads: each at its column's step, in its row, as wide as its name and count (room for two
-     digits); the row goes sideways with the board as far as the last column's cards. Idle's stays
-     at the row's right edge, peeking, until the board scrolls to its column. */
-  :root[data-stairs] .toolbar .columns-head {
-    grid-template-columns: var(--stair-end, max-content);
-    row-gap: 4px;
-    overflow: hidden;
-  }
-  :root[data-stairs] .columns-head > .col-head { grid-column: 1; justify-self: start; }
-  :root[data-stairs] .columns-head > [data-col="work"] { grid-row: var(--stair-row-work, 1); margin-left: var(--stair-work, 0px); }
-  :root[data-stairs] .columns-head > [data-col="me"] { grid-row: var(--stair-row-me, 1); margin-left: var(--stair-me, 0px); }
-  :root[data-stairs] .columns-head > [data-col="ext"] { grid-row: var(--stair-row-ext, 1); margin-left: var(--stair-ext, 0px); }
-  :root[data-stairs] .columns-head > [data-col="done"] { grid-row: var(--stair-row-done, 1); margin-left: var(--stair-done, 0px); }
-  :root[data-stairs] .columns-head > [data-col="idle"] { grid-row: var(--stair-row-idle, 1); margin-left: var(--stair-idle, 0px); position: sticky; right: 0; }
+  /* The heads: a legend in one row, the four in their order, each with its coloured dot (the
+     Terminal style's too) and its count, a longer name giving way first; Idle's never gives way, at
+     the row's right end with a ›, its dot a ring as its cards' are. Placed by the row itself, never
+     past its edge: a head beyond the row's clipped edge is not drawn. */
+  :root[data-stairs] .toolbar .columns-head { display: flex; overflow: hidden; }
+  :root[data-stairs] .columns-head > .col-head { flex: 0 1 auto; }
+  :root[data-stairs] .columns-head > .col-head > .dot { display: block; }
+  :root[data-stairs] .columns-head > [data-col="idle"] { flex: none; margin-left: auto; }
+  :root[data-stairs] .columns-head > [data-col="idle"] > .dot { background: none; box-shadow: inset 0 0 0 1.5px var(--c, var(--gray)); }
   :root[data-stairs] .columns-head > [data-col="idle"]::after { content: "›"; content: "›" / ""; color: var(--label-3); font-weight: 500; }
-  :root[data-stairs] .col-head > .n { min-width: 2ch; }
 
   /* The board scrolls sideways; its lanes are all as wide as the widest one's steps, so a lane lit
      as a drop place, and its title, go all the way. */
