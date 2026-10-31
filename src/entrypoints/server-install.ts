@@ -63,6 +63,7 @@ async function userPart(args: string[]): Promise<number> {
       items: () => [],
       writeCard: () => {},
       readCard: () => null,
+      remind: () => {},
       onChange: () => {},
       log: say,
     }).stopAll()

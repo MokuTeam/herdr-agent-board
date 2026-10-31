@@ -113,9 +113,12 @@ async function main(): Promise<void> {
   // user dragged the card to has done its job either way: the session works again, which drops
   // the pin anyway (services/board.ts pinOf).
   const fromBoard = isNotice(input.prompt)
+  // What the agent asked to be done in its browser (services/desktop.ts askBrowser): the user talks
+  // as they do it ("where is that button?"), which does not answer it; handing the browser back does.
+  const inBrowser = (c: typeof card): boolean => !!c?.ask && c.askBrowser !== undefined && c.askBrowser === c.askSince
   const answered = (c: typeof card): CardPatch | null =>
     c?.pin || (c?.ask && !fromBoard)
-      ? { ...(!fromBoard && { ask: '', askSince: '' }), pin: '', pinAt: '', pinBusy: '' }
+      ? { ...(!fromBoard && !inBrowser(c) && { ask: '', askSince: '' }), pin: '', pinAt: '', pinBusy: '' }
       : null
   // A pi session's ask and wait are on pi's card; the brief stays with the Claude session it went to.
   // pi's card is told the profile too: the folder this Claude runs in is the account pi's turn

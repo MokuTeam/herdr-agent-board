@@ -20,6 +20,7 @@ import { ownFileCheck } from '../adapters/own-files.ts'
 import { archiveDir, cardsDir, ROOT, scheduleDir, stateDir } from '../adapters/paths.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
+import { addEntry } from '../adapters/schedule-store.ts'
 import {
   endLogins,
   endStraySsh,
@@ -258,6 +259,20 @@ export async function startServer({
         items: () => board.items(),
         writeCard,
         readCard,
+        // The hand-back's word to the agent: a board reminder due now, as `board remind` makes one.
+        remind: (item, text) => {
+          const now = Date.now()
+          addEntry({
+            key: item.key,
+            name: item.name,
+            ...(item.pane && { pane: item.pane }),
+            ...(item.cwd && { cwd: item.cwd }),
+            text,
+            at: now,
+            next: now,
+            by: 'board',
+          })
+        },
         onChange: () => board.publish(),
         log,
         chromeExtra: (process.env.BOARD_DESKTOP_CHROME_ARGS ?? '').split(' ').filter(Boolean),

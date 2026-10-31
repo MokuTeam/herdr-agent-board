@@ -15,6 +15,7 @@ import {
   desktopChecks,
   desktopNeeds,
   desktopView,
+  handedBackText,
   PLAYWRIGHT_VERSION,
   pickSlot,
   profileName,
@@ -25,8 +26,10 @@ import {
   xvncArgs,
 } from '../../src/core/desktop.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
+import { reminderNotice } from '../../src/core/notices.ts'
 import { mergeClaudeJson } from '../../src/core/profile-sync/rewrite.ts'
 import { shareClaudeJson } from '../../src/core/profile-sync/secrets.ts'
+import { promptOf } from '../../src/core/schedule-rules.ts'
 import {
   BOARD_SOCKET,
   desktopLibsUndoScript,
@@ -147,6 +150,17 @@ test('the card’s field: asks only while the card still asks', () => {
   expect(desktopView(asked, false)).toEqual({ ...desktopView(d, false), ask: 'Sign in to GitHub' })
   expect('ask' in desktopView({ ...asked, asks: false }, true)).toBe(false)
   expect('ask' in desktopView(d, true)).toBe(false)
+})
+
+test('the hand-back’s word to the agent: a board reminder, which the thread shows as one; the ask on one line, clipped', () => {
+  const text = handedBackText('Sign in to GitHub\n  as acme-bot')
+  expect(text).toBe(
+    'The owner handed your browser back (the ask was: "Sign in to GitHub as acme-bot"). Check the page and go on.',
+  )
+  expect(handedBackText('x'.repeat(400))).toContain(`"${'x'.repeat(299)}…")`)
+  const prompt = promptOf({ id: 'a1b2c3', key: 's1', text, next: 1, at: 1, by: 'board' }, 1)
+  expect(prompt).toBe(`[board reminder] ${text}`)
+  expect(reminderNotice(prompt)).toMatchObject({ kind: 'reminder', name: text })
 })
 
 test('the MCP server in a profile’s .claude.json: added, kept when there, taken out; nothing else changes', () => {

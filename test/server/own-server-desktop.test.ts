@@ -145,7 +145,10 @@ describe('on the board’s own server', () => {
         body: JSON.stringify(body),
       })
     expect(await answer(local('/api/browser/call', { pane: 'w0:p1' }, ''))).toEqual([403, { error: 'key' }])
-    expect(await answer(local('/api/browser/call', { pane: 'w0:p1' }))).toEqual([200, { ok: true, control: 'agent' }])
+    expect(await answer(local('/api/browser/call', { pane: 'w0:p1' }))).toEqual([
+      200,
+      { ok: true, control: 'agent', asks: false },
+    ])
     expect(await answer(local('/api/browser/call', { pane: 'w0 p1;' }))).toEqual([400, { ok: false, error: 'pane' }])
     expect(await answer(local('/api/browser/profile', { pane: 'w0:p1', name: '../x' }))).toEqual([
       400,

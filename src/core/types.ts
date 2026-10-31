@@ -29,6 +29,12 @@ export interface Card {
   result?: string
   ask?: string
   askSince?: number
+  /**
+   * The ask is the agent's browser ask (services/desktop.ts ask, browser_ask_owner): its askSince.
+   * What the user writes does not answer it (entrypoints/hook.ts): they may well talk while they do
+   * it. Handing the browser back, "No reply needed", `board doing` or another ask end it.
+   */
+  askBrowser?: number
   pin?: Pin | ''
   pinAt?: number | ''
   /** Dragged during a turn (the web board writes 1). */
@@ -293,7 +299,7 @@ export interface ItemDesktop {
   asks: boolean
   /**
    * What it asked the owner to do there, while that ask stands: from the ask until the owner hands
-   * the browser back or its card's ask is over (answered, cleared, another one), the agent working
+   * the browser back or its card's ask is over ("No reply needed", `board doing`, another ask), the agent working
    * on meanwhile or not. Absent otherwise.
    */
   ask?: string

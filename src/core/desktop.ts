@@ -310,6 +310,16 @@ export interface DesktopFacts {
 }
 
 /**
+ * What the agent is told when the owner hands its browser back while its ask stands (a board
+ * reminder: "[board reminder] <this>", services/desktop.ts): in English, the agent reads it.
+ */
+export function handedBackText(ask: string): string {
+  const said = ask.replace(/\s+/g, ' ').trim()
+  const short = said.length > 300 ? `${said.slice(0, 299)}…` : said
+  return `The owner handed your browser back (the ask was: "${short}"). Check the page and go on.`
+}
+
+/**
  * A browser ask stands while the agent's turn runs on (its browser tools wait, or it polls): the
  * board's item has no ask then (core/board.ts attentionOf: a turn is never "needs you"), so the card
  * says it as a `board ask` would, under "needs you" (services/desktop.ts card). Out of a turn the

@@ -97,7 +97,8 @@ export function desktopRoutes(app: DesktopApp): Route[] {
         const pane = typeof body.pane === 'string' ? body.pane.trim() : ''
         if (!PANE.test(pane)) return json(400, { ok: false, error: 'pane' })
         const op = ctx.params[0]
-        if (op === 'call') return json(200, { ok: true, control: app.desktops.control(pane) })
+        if (op === 'call')
+          return json(200, { ok: true, control: app.desktops.control(pane), asks: app.desktops.asks(pane) })
         if (op === 'start') {
           const r = await app.desktops.ensure(pane)
           return json(r.ok ? 200 : 409, r)

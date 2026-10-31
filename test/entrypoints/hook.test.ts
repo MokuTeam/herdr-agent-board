@@ -307,6 +307,36 @@ test('a task reporting back does not count as the user answering the session (ho
   assert.equal(cardOf(box, 's1')?.ask, 'Send it?')
 })
 
+test('what the agent asked to be done in its browser is not answered by what the user writes; any other ask is, as before', async () => {
+  const box = await sandbox()
+  // the browser's ask (askBrowser = its askSince): stays, and its pin goes as always
+  putCard(box, { key: 's1', ask: 'Sign in to GitHub', askSince: 5, askBrowser: 5, pin: 'me', pinAt: 1, briefV: 99 })
+  await runHook(box, {
+    hook_event_name: 'UserPromptSubmit',
+    session_id: 's1',
+    cwd: box.dir,
+    prompt: 'where is the button?',
+  })
+  expect(cardOf(box, 's1')).toMatchObject({ ask: 'Sign in to GitHub', askSince: 5, askBrowser: 5 })
+  expect(cardOf(box, 's1')?.pin).toBeUndefined()
+  // a board ask since, over a browser's one: answered
+  putCard(box, { key: 's2', ask: 'Which branch?', askSince: 9, askBrowser: 5, briefV: 99 })
+  await runHook(box, { hook_event_name: 'UserPromptSubmit', session_id: 's2', cwd: box.dir, prompt: 'main' })
+  expect(cardOf(box, 's2')?.ask).toBeUndefined()
+  // a board ask: answered
+  putCard(box, { key: 's3', ask: 'Sign in to GitHub', askSince: 5, briefV: 99 })
+  await runHook(box, { hook_event_name: 'UserPromptSubmit', session_id: 's3', cwd: box.dir, prompt: 'done' })
+  expect(cardOf(box, 's3')?.ask).toBeUndefined()
+  // the board's word on hand-back is not the user: whatever is on the card stays
+  putCard(box, { key: 's4', ask: 'Which branch?', askSince: 9, briefV: 99 })
+  const prompt = promptOf(
+    { id: 'b1', key: 's4', text: 'The owner handed your browser back', next: Date.now() },
+    Date.now(),
+  )
+  await runHook(box, { hook_event_name: 'UserPromptSubmit', session_id: 's4', cwd: box.dir, prompt })
+  expect(cardOf(box, 's4')?.ask).toBe('Which branch?')
+})
+
 test("a call's results do not count as the user answering the session (hook)", async () => {
   const box = await sandbox()
   putCard(box, { key: 's1', ask: 'Deploy now?', askSince: 1, briefV: 99 })

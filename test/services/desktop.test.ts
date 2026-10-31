@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ServerWebSocket } from 'bun'
 import type { CardPatch } from '../../src/adapters/cards.ts'
+import { handedBackText } from '../../src/core/desktop.ts'
 import type { Card, Item } from '../../src/core/types.ts'
 import { createDesktops, type DesktopSystem, displayHeldAt, type VncData } from '../../src/services/desktop.ts'
 
@@ -108,6 +109,7 @@ function setup(o: Parameters<typeof fakeServer>[0] = {}, items: Item[] = [item('
   dirs.push(root)
   const server = fakeServer(o)
   const cards: [string, CardPatch][] = []
+  const reminders: [string, string][] = []
   let clock = 1_000_000
   const state = { items, changes: 0 }
   const make = () =>
@@ -116,13 +118,14 @@ function setup(o: Parameters<typeof fakeServer>[0] = {}, items: Item[] = [item('
       items: () => state.items,
       writeCard: (key, patch) => cards.push([key, patch]),
       readCard: key => cardOf(cards, key),
+      remind: (it, text) => reminders.push([it.key, text]),
       onChange: () => state.changes++,
       log: () => {},
       system: server.sys,
       ...(o.arch && { arch: o.arch }),
       now: () => clock,
     })
-  return { root, server, cards, state, make, d: make(), tick: (ms: number) => (clock += ms) }
+  return { root, server, cards, reminders, state, make, d: make(), tick: (ms: number) => (clock += ms) }
 }
 
 /** The Chromes running, in the order they started. */
@@ -280,7 +283,9 @@ test('ask: the card under "needs you", the desktop up, asks while the card asks;
   const { d, state, cards, root } = setup()
   expect(await d.ask('w0:p9', 'Sign in')).toEqual({ ok: false, error: 'this session is not on the board' })
   expect((await d.ask('w0:p1', 'Sign in to GitHub')).ok).toBe(true)
-  expect(cards).toEqual([['s1', { ask: 'Sign in to GitHub', askSince: expect.any(Number), by: 'agent' }]])
+  expect(cards).toEqual([
+    ['s1', { ask: 'Sign in to GitHub', askSince: expect.any(Number), askBrowser: expect.any(Number), by: 'agent' }],
+  ])
   const asking = item('s1', 'w0:p1', { question: 'Sign in to GitHub', askSince: cards[0]?.[1].askSince as number })
   expect(d.view(asking)).toEqual({
     running: true,
@@ -296,7 +301,7 @@ test('ask: the card under "needs you", the desktop up, asks while the card asks;
   expect(d.view(asking)?.asks).toBe(true)
   expect(d.setControl(asking, 'agent')).toEqual({ ok: true, control: 'agent' })
   expect(d.view(asking)?.asks).toBe(false)
-  expect(cards.at(-1)).toEqual(['s1', { ask: '', askSince: '' }])
+  expect(cards.at(-1)).toEqual(['s1', { ask: '', askSince: '', askBrowser: '' }])
   d.websocket.close?.(ws, 1000, '')
   vnc.close()
   // the agent went on (`board doing`: the card asks no more): asks goes too, and stays gone
@@ -327,7 +332,7 @@ test('the agent working on keeps its browser ask and its words; over once its ca
     asks: true,
     ask: 'Sign in to GitHub as acme-bot',
   })
-  // the user answered (its card's ask cleared): over
+  // "No reply needed" (its card's ask cleared): over
   cards.push(['s1', { ask: '', askSince: '' }])
   d.observe(state.items)
   expect(d.view(working)?.ask).toBeUndefined()
@@ -340,7 +345,7 @@ test('the agent working on keeps its browser ask and its words; over once its ca
     expect(d.setControl(working, 'owner').ok).toBe(true)
     expect(d.view(working)?.ask).toBe('Solve the captcha')
     d.setControl(working, 'agent')
-    expect(cards.at(-1)).toEqual(['s1', { ask: '', askSince: '' }])
+    expect(cards.at(-1)).toEqual(['s1', { ask: '', askSince: '', askBrowser: '' }])
     expect(d.view(working)?.ask).toBeUndefined()
   } finally {
     vnc.close()
@@ -557,6 +562,96 @@ test('the owner has it and no view is connected any more: the next refreshes giv
   }
 })
 
+test('handed back while its ask stands, by Give back, its view closing or no view a while: the agent is woken by a board reminder, once, and the card asks no more', async () => {
+  const { d, cards, reminders, root, state, tick } = setup()
+  const one = state.items[0] as Item
+  const vnc = await vncServer(root)
+  try {
+    await d.ask('w0:p1', 'Sign in to GitHub as acme-bot')
+    const since = cards.at(-1)?.[1].askSince as number
+    expect(d.asks('w0:p1')).toBe(true)
+    const ws = await vnc.open(d, 'w0:p1')
+    // the card has it as the browser's ask, which keeps what the user writes from answering it
+    expect(cards.at(-1)).toEqual([
+      's1',
+      { ask: 'Sign in to GitHub as acme-bot', askSince: since, askBrowser: since, by: 'agent' },
+    ])
+    d.setControl(one, 'owner')
+    expect(reminders).toEqual([])
+    // Give back
+    d.setControl(one, 'agent')
+    expect(cards.at(-1)).toEqual(['s1', { ask: '', askSince: '', askBrowser: '' }])
+    expect(reminders).toEqual([
+      [
+        's1',
+        'The owner handed your browser back (the ask was: "Sign in to GitHub as acme-bot"). Check the page and go on.',
+      ],
+    ])
+    expect(d.asks('w0:p1')).toBe(false)
+    expect(d.view(one)?.ask).toBeUndefined()
+    // taken and given back again, with no ask: nothing more
+    d.setControl(one, 'owner')
+    d.setControl(one, 'agent')
+    expect(reminders).toHaveLength(1)
+    // its view closing (the panel closed, the tab gone)
+    tick(5)
+    await d.ask('w0:p1', 'Solve the captcha')
+    d.setControl(one, 'owner')
+    d.websocket.close?.(ws, 1000, '')
+    expect(d.control('w0:p1')).toBe('agent')
+    expect(reminders.at(-1)).toEqual(['s1', handedBackText('Solve the captcha')])
+    expect(cards.at(-1)).toEqual(['s1', { ask: '', askSince: '', askBrowser: '' }])
+    // no view of it a while (its close never came)
+    tick(5)
+    await d.ask('w0:p1', 'Pick the account')
+    await vnc.open(d, 'w0:p1')
+    d.setControl(one, 'owner')
+    for (const c of vnc.conns) c.destroy()
+    await Bun.sleep(50)
+    d.observe(state.items)
+    tick(31_000)
+    d.observe(state.items)
+    expect(d.control('w0:p1')).toBe('agent')
+    expect(reminders.map(([, text]) => text)).toEqual([
+      handedBackText('Sign in to GitHub as acme-bot'),
+      handedBackText('Solve the captcha'),
+      handedBackText('Pick the account'),
+    ])
+  } finally {
+    vnc.close()
+  }
+})
+
+test('handed back with no ask, or once its ask ended another way ("No reply needed", board doing, another ask): nobody is woken', async () => {
+  const { d, cards, reminders, root, state, tick } = setup()
+  const one = state.items[0] as Item
+  const vnc = await vncServer(root)
+  try {
+    await d.ensure('w0:p1')
+    await vnc.open(d, 'w0:p1')
+    d.setControl(one, 'owner')
+    d.setControl(one, 'agent')
+    // its card's ask cleared ("No reply needed", board doing)
+    await d.ask('w0:p1', 'Sign in to GitHub')
+    cards.push(['s1', { ask: '', askSince: '' }])
+    d.observe(state.items)
+    d.setControl(one, 'owner')
+    d.setControl(one, 'agent')
+    // another ask over it (board ask), seen or not yet: that one stays on the card
+    tick(5)
+    await d.ask('w0:p1', 'Solve the captcha')
+    const since = cards.at(-1)?.[1].askSince as number
+    d.setControl(one, 'owner')
+    const other: CardPatch = { ask: 'Which branch?', askSince: since + 10, by: 'agent' }
+    cards.push(['s1', other])
+    d.setControl(one, 'agent')
+    expect(cards.at(-1)).toEqual(['s1', other])
+    expect(reminders).toEqual([])
+  } finally {
+    vnc.close()
+  }
+})
+
 test('given back: only the ask the browser ask put on the card is cleared', async () => {
   const { d, cards, root } = setup()
   const vnc = await vncServer(root)
@@ -578,7 +673,7 @@ test('given back: only the ask the browser ask put on the card is cleared', asyn
     expect(d.view(mine)?.asks).toBe(true)
     d.setControl(mine, 'owner')
     d.setControl(mine, 'agent')
-    expect(cards.at(-1)).toEqual(['s1', { ask: '', askSince: '' }])
+    expect(cards.at(-1)).toEqual(['s1', { ask: '', askSince: '', askBrowser: '' }])
   } finally {
     vnc.close()
   }

@@ -30,6 +30,7 @@ import {
   type Control,
   chromeArgs,
   desktopView,
+  handedBackText,
   pickSlot,
   rfbInputFilter,
   slotDisplay,
@@ -215,6 +216,11 @@ export interface DesktopsOptions {
    * still there, which the board's item does not say while the agent works on.
    */
   readCard(key: string): Card | null
+  /**
+   * A board reminder to the session, due now (adapters/schedule-store.ts addEntry): the scheduler
+   * types it into its prompt, waking it if it sleeps, queued into its turn if it works.
+   */
+  remind(item: Item, text: string): void
   onChange(): void
   log(line: string): void
   system?: DesktopSystem
@@ -245,6 +251,8 @@ export interface Desktops {
   ask(pane: string, text: string): Promise<Started>
   /** Who has the browser of the session in `pane` (the wrapper asks before each call). */
   control(pane: string): Control
+  /** Its browser ask stands (the wrapper: while the owner has the browser for it, a call that acts fails at once). */
+  asks(pane: string): boolean
   /** The owner takes the browser (only with a view of it connected) or hands it back. */
   setControl(item: Item, to: Control): ControlAnswer
   /** The VNC socket of the session's running desktop, or null. */
@@ -621,9 +629,34 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     const d = desktops.get(ws.data.pane)
     if (d?.control !== 'owner' || d.stopping) return
     d.control = 'agent'
+    handedBack(d, d.key || itemIn(d.pane)?.key || '')
     save()
     o.log(`desktop :${d.display} for ${d.key || d.pane}: back to the agent (the owner's view closed)`)
     o.onChange()
+  }
+
+  /**
+   * The owner's control is over (handed back, its view gone, no view of it a while) while the
+   * agent's ask stands: what it asked is done, its card's ask too (the browser's own only), and the
+   * agent is told so by a board reminder, which wakes it or goes into its turn. An ask that ended
+   * another way meanwhile ("No reply needed", `board doing`, another ask) wakes nobody; what the user
+   * writes does not end it (entrypoints/hook.ts, the card's askBrowser).
+   */
+  function handedBack(d: Desktop, key: string): void {
+    if (!d.asks) return
+    const ask = d.ask
+    const ours = !!key && cardAsks(key, d)
+    d.asks = false
+    d.ask = ''
+    if (!ours) return
+    o.writeCard(key, { ask: '', askSince: '', askBrowser: '' })
+    const item = o.items().find(i => i.key === key)
+    if (!item) return
+    try {
+      o.remind(item, handedBackText(ask))
+    } catch (err) {
+      o.log(`desktop :${d.display} for ${key}: the hand-back's reminder: ${messageOf(err)}`)
+    }
   }
 
   return {
@@ -654,7 +687,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
             d.session = item.session
             changed = true
           }
-          // its card asks no more, or asks something else: the user answered, or the agent moved on
+          // its card asks no more, or asks something else: "No reply needed", or the agent moved on
           // (`board doing`, another ask); the agent working on meanwhile is not that
           if (d.asks && !cardAsks(item.key, d)) {
             d.asks = false
@@ -674,6 +707,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
           if (now() - d.unviewedSince >= UNVIEWED_MS) {
             d.control = 'agent'
             d.unviewedSince = 0
+            handedBack(d, d.key)
             o.log(`desktop :${d.display} for ${d.key || d.pane}: back to the agent (no view of the owner's)`)
             changed = true
           }
@@ -725,7 +759,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       const r = await serial(pane, () => ensureNow(pane))
       if (!r.ok) return r
       const since = now()
-      o.writeCard(item.key, { ask: text, askSince: since, by: 'agent' })
+      o.writeCard(item.key, { ask: text, askSince: since, askBrowser: since, by: 'agent' })
       const d = desktops.get(pane)
       if (d) {
         d.asks = true
@@ -739,6 +773,8 @@ export function createDesktops(o: DesktopsOptions): Desktops {
 
     control: pane => desktops.get(pane)?.control ?? 'agent',
 
+    asks: pane => !!desktops.get(pane)?.asks,
+
     setControl(item, to) {
       const d = item.pane ? desktops.get(item.pane) : undefined
       if (!d || item.sleeping) return { ok: false, status: 404, error: 'no desktop' }
@@ -748,13 +784,8 @@ export function createDesktops(o: DesktopsOptions): Desktops {
         return { ok: false, status: 409, error: 'open the browser’s view first: control goes with a view of it' }
       d.control = to
       d.unviewedSince = 0
-      // handed back: what the agent asked for is done (its own ask only: a later `board ask` stays),
-      // its card's too while the agent works on, when the item does not show the ask
-      if (to === 'agent' && d.asks) {
-        if (cardAsks(item.key, d)) o.writeCard(item.key, { ask: '', askSince: '' })
-        d.asks = false
-        d.ask = ''
-      }
+      // handed back: what the agent asked is done (its own ask only: a later `board ask` stays), and it is told
+      if (to === 'agent') handedBack(d, item.key)
       save()
       o.log(`desktop :${d.display} for ${item.key}: ${to === 'owner' ? 'the owner has it' : 'back to the agent'}`)
       o.onChange()
