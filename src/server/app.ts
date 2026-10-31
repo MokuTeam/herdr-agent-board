@@ -38,6 +38,7 @@ import {
   sshVersion,
   writePidRecord,
 } from '../adapters/ssh.ts'
+import { deskLanguages } from '../core/desktop.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import { onServer, serverModeOf } from '../core/on-server.ts'
@@ -276,6 +277,8 @@ export async function startServer({
         onChange: () => board.publish(),
         log,
         chromeExtra: (process.env.BOARD_DESKTOP_CHROME_ARGS ?? '').split(' ').filter(Boolean),
+        // what pages are told of the owner's languages: the board's own (config.json `language`)
+        languages: () => deskLanguages(cfg.language),
       })
     : null
   const routes: Route[] = []

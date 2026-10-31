@@ -47,6 +47,8 @@ function fakeServer(
     xkbcomp?: boolean
     /** Chrome asked to quit (Browser.close) ends once this resolves. */
     quitting?: () => Promise<void>
+    /** Chrome asked to quit answers, and runs on. */
+    quitIgnored?: boolean
   } = {},
 ) {
   const procs = new Map<number, Proc>()
@@ -99,6 +101,7 @@ function fakeServer(
     async quit(cdp) {
       quits.push(cdp)
       await o.quitting?.()
+      if (o.quitIgnored) return
       for (const p of procs.values()) if (p.alive && p.argv[0] === '/usr/bin/chrome' && p.cmdline.endsWith(cdp)) p.end()
     },
     alive: pid => !!procs.get(pid)?.alive,
@@ -1393,7 +1396,7 @@ test('while it stops, the card has no browser already and its views close; a cal
 })
 
 test('as before for a browser that is not stopped: a session that ends takes its own profile with it, and nothing is kept', async () => {
-  const { d, root, state, tick, server } = setup()
+  const { d, root, state, tick } = setup()
   await d.ensure('w0:p1')
   state.items = []
   d.observe(state.items)
@@ -1402,6 +1405,70 @@ test('as before for a browser that is not stopped: a session that ends takes its
   await Bun.sleep(10)
   expect(existsSync(join(root, 'sessions', '100'))).toBe(false)
   expect(existsSync(join(root, 'kept'))).toBe(false)
-  // Chrome was ended as before (a signal), not asked to quit
-  expect(server.quits).toEqual([])
+})
+
+test('every stop quits Chrome as a person quits it first (its last tabs and cookies saved), a signal only for what is left: the session ending, a profile switch, the board stopping them', async () => {
+  const { d, root, state, tick, server } = setup({}, [item('s1', 'w0:p1'), item('s2', 'w0:p2'), item('s3', 'w0:p3')])
+  const cdp = (display: number) => join(root, 'sessions', String(display), 'cdp.sock')
+  const pidOf = (p: Proc | undefined) => [...server.procs.entries()].find(([, x]) => x === p)?.[0]
+  await d.ensure('w0:p1')
+  await d.ensure('w0:p2')
+  await d.ensure('w0:p3')
+  const [c1, c2, c3] = chromeOf(server.procs)
+  // a profile switch: the Chrome before quits, the new one starts on the same display
+  await d.profile('w0:p2', 'github')
+  expect(server.quits).toEqual([cdp(101)])
+  expect(c2?.alive).toBe(false)
+  // the session ends
+  state.items = [item('s2', 'w0:p2'), item('s3', 'w0:p3')]
+  d.observe(state.items)
+  tick(120_000)
+  d.observe(state.items)
+  await Bun.sleep(10)
+  expect(server.quits).toEqual([cdp(101), cdp(100)])
+  expect(c1?.alive).toBe(false)
+  // the board stops them
+  await d.stopAll()
+  expect(server.quits.slice(2).sort()).toEqual([cdp(101), cdp(102)])
+  expect(c3?.alive).toBe(false)
+  // each Chrome ended by its own quit, not a signal
+  for (const c of [c1, c2, c3]) expect(server.killed).not.toContain(pidOf(c))
+  expect([...server.procs.values()].some(p => p.alive)).toBe(false)
+})
+
+test('a Chrome that does not quit when asked is ended by a signal, as before', async () => {
+  const { d, server } = setup({ quitIgnored: true })
+  await d.ensure('w0:p1')
+  const chrome = chromeOf(server.procs)[0]
+  const pid = [...server.procs.entries()].find(([, x]) => x === chrome)?.[0] as number
+  await d.stop('w0:p1', 'test')
+  expect(chrome?.alive).toBe(false)
+  expect(server.killed).toContain(pid)
+})
+
+test('the owner’s languages, when the board has them: each Chrome started with them, as the board’s setting is at its start; none, as before', async () => {
+  let languages: string[] | null = ['ru', 'en']
+  const { d, server } = setup({}, undefined, { languages: () => languages })
+  await d.ensure('w0:p1')
+  expect(chromeOf(server.procs)[0]?.argv).toContain('--accept-lang=ru,en')
+  languages = null
+  await d.ensure('w0:p2')
+  expect(chromeOf(server.procs)[1]?.argv.some(a => a.startsWith('--accept-lang'))).toBe(false)
+  // without the option at all: none
+  const plain = setup()
+  await plain.d.ensure('w0:p1')
+  expect(chromeOf(plain.server.procs)[0]?.argv.some(a => a.startsWith('--accept-lang'))).toBe(false)
+})
+
+test('the board stopping them all (server mode off): a stopped browser’s kept profile goes too, as a running one’s own does; named profiles stay', async () => {
+  const { d, root } = setup()
+  await d.ensure('w0:p1')
+  await d.profile('w0:p2', 'github')
+  await d.close('w0:p1')
+  expect(readdirSync(join(root, 'kept'))).toHaveLength(1)
+  await d.stopAll()
+  expect(readdirSync(join(root, 'kept'))).toEqual([])
+  expect(existsSync(join(root, 'sessions', '101'))).toBe(false)
+  expect(existsSync(join(root, 'profiles', 'github'))).toBe(true)
+  expect(JSON.parse(readFileSync(join(root, 'kept.json'), 'utf8'))).toEqual([])
 })

@@ -394,11 +394,24 @@ export function xvncArgs(o: { display: number; socket: string; auth: string; nam
  * over the whole screen (there is no window manager), no first-run questions, no keyring (none on
  * a server), /tmp for its shared memory. No smooth scrolling: a wheel step (the owner's swipe on
  * the picture) is one frame on the display, not an animation of a dozen sent over the owner's link;
- * what a page shows stays as it was. Started again after its stop (`restore`: browser_close, or
- * idle, services/desktop.ts): its last tabs reopened, and its session cookies with them (Chrome's
- * "continue where you left off" for this start only), with no blank tab beside them.
+ * what a page shows stays as it was. WebGL by SwiftShader (on the CPU: the server has no GPU, and
+ * without it a page gets no WebGL context at all, which sites read as a bot), for WebGL only: with
+ * `--use-angle=swiftshader` all of Chrome's drawing went through it too, an idle page at about 3
+ * times the CPU and an animated one at 7. Started again after its stop (`restore`: browser_close,
+ * or idle, services/desktop.ts): its last tabs reopened, and its session cookies with them
+ * (Chrome's "continue where you left off" for this start only), with no blank tab beside them. With the owner's `languages` (deskLanguages): what pages are told
+ * (navigator.languages, Accept-Language), all of them, not cut to the first as Chrome does by
+ * default; its own menus stay in the server's language.
  */
-export function chromeArgs(o: { profileDir: string; extra?: readonly string[]; restore?: boolean }): string[] {
+export function chromeArgs(o: {
+  profileDir: string
+  extra?: readonly string[]
+  restore?: boolean
+  languages?: readonly string[] | null
+}): string[] {
+  const langs = o.languages?.length
+    ? [`--accept-lang=${o.languages.join(',')}`, '--disable-features=ReduceAcceptLanguage,ReduceAcceptLanguageHTTP']
+    : []
   return [
     `--user-data-dir=${o.profileDir}`,
     '--remote-debugging-pipe',
@@ -408,12 +421,22 @@ export function chromeArgs(o: { profileDir: string; extra?: readonly string[]; r
     '--disable-dev-shm-usage',
     '--hide-crash-restore-bubble',
     '--disable-smooth-scrolling',
+    '--enable-unsafe-swiftshader',
+    ...langs,
     '--window-position=0,0',
     `--window-size=${SCREEN.width},${SCREEN.height}`,
     ...(o.extra ?? []),
     ...(o.restore ? ['--restore-last-session'] : ['about:blank']),
   ]
 }
+
+/**
+ * The languages the agents' browsers tell pages, from the board's language (config.json): in
+ * Russian, Russian then English; in English or following the system (`auto`), none: Chrome's own,
+ * as before.
+ */
+export const deskLanguages = (language: string): string[] | null =>
+  /^[a-z]{2}$/.test(language) && language !== 'en' ? [language, 'en'] : null
 
 /**
  * The letters a display's keyboard has besides its own, each with its capital: Russian, Ukrainian

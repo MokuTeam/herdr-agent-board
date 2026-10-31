@@ -16,6 +16,7 @@ import {
   DESK_MARKS,
   DEVTOOLS_MCP_VERSION,
   deskKeymap,
+  deskLanguages,
   desktopChecks,
   desktopNeeds,
   desktopView,
@@ -93,6 +94,32 @@ test('Chrome started again after its stop (browser_close, idle): its last tabs r
   // everything else as on a first start
   expect(a.filter(x => x !== '--restore-last-session')).toEqual(fresh.filter(x => x !== 'about:blank'))
   expect(chromeArgs({ profileDir: '/p/own', restore: false })).toEqual(chromeArgs({ profileDir: '/p/own' }))
+})
+
+test('Chrome with the owner’s languages: navigator.languages and Accept-Language both of them (not cut to the first), its own UI language left as it is; none given, as before', () => {
+  const a = chromeArgs({ profileDir: '/p', languages: ['ru', 'en'] })
+  expect(a).toContain('--accept-lang=ru,en')
+  expect(a).toContain('--disable-features=ReduceAcceptLanguage,ReduceAcceptLanguageHTTP')
+  expect(a.some(x => x.startsWith('--lang'))).toBe(false)
+  for (const none of [chromeArgs({ profileDir: '/p' }), chromeArgs({ profileDir: '/p', languages: null })])
+    expect(
+      none.some(x => x.startsWith('--accept-lang') || x.startsWith('--disable-features') || x.startsWith('--lang')),
+    ).toBe(false)
+  // the board in Russian: Russian, then English; in English or following the system: Chrome's own
+  expect(deskLanguages('ru')).toEqual(['ru', 'en'])
+  expect(deskLanguages('en')).toBeNull()
+  expect(deskLanguages('auto')).toBeNull()
+  expect(deskLanguages('')).toBeNull()
+})
+
+test('Chrome with WebGL: SwiftShader’s, there being no GPU on the server; for WebGL only, not all its drawing', () => {
+  for (const a of [
+    chromeArgs({ profileDir: '/p' }),
+    chromeArgs({ profileDir: '/p', restore: true, languages: ['ru'] }),
+  ]) {
+    expect(a).toContain('--enable-unsafe-swiftshader')
+    expect(a.some(x => x.startsWith('--use-angle'))).toBe(false)
+  }
 })
 
 test('the X cookie file: one MIT-MAGIC-COOKIE-1 entry for the display, any host', () => {

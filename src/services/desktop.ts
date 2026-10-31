@@ -299,6 +299,8 @@ export interface DesktopsOptions {
   video?: DesktopVideo
   /** A desktop unused this long stops (IDLE_MS; a test's own). */
   idleMs?: number
+  /** The languages its Chrome tells pages (core/desktop.ts deskLanguages), as the board's setting is at its start; null: Chrome's own. */
+  languages?: () => readonly string[] | null
 }
 
 export interface Desktops {
@@ -491,7 +493,8 @@ export function createDesktops(o: DesktopsOptions): Desktops {
 
   /**
    * Chrome asked to quit as a person quits it, and waited for (QUIT_MS): its tabs and cookies on
-   * disk for its next start. What is left of it after that is ended by a signal (teardown).
+   * disk (a signal alone loses what it did in the last half minute, and its tabs). What is left of
+   * it after that is ended by a signal.
    */
   async function quitChrome(d: Desktop): Promise<void> {
     const pid = d.chrome
@@ -519,12 +522,13 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   }
 
   /**
-   * Its processes ended and its folder gone (named profiles stay); its viewers closed. `keep`: Chrome
-   * asked to quit first, and the session's profile folders kept (their folder's path).
+   * Its processes ended (Chrome asked to quit first: what it did last is on disk, a named profile's
+   * too) and its folder gone (named profiles stay); its viewers closed. `keep`: the session's
+   * profile folders kept (their folder's path).
    */
   async function teardown(d: Desktop, keep = false): Promise<string | null> {
     d.stopping = true
-    if (keep) await quitChrome(d)
+    await quitChrome(d)
     await ended(d.chrome, 5000)
     await ended(d.xvnc, 3000)
     d.chrome = null
@@ -661,7 +665,15 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     }
     rmSync(d.cdp, { force: true })
     const proc = sys.spawnChrome(
-      [bin, ...chromeArgs({ profileDir: p.dir, extra: o.chromeExtra ?? [], restore: same && !p.fresh })],
+      [
+        bin,
+        ...chromeArgs({
+          profileDir: p.dir,
+          extra: o.chromeExtra ?? [],
+          restore: same && !p.fresh,
+          languages: o.languages?.() ?? null,
+        }),
+      ],
       d.cdp,
       env,
       join(d.dir, 'chrome.log'),
@@ -1096,6 +1108,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
           return ensureNow(pane).then(r => (r.ok ? { ...r, copy: desktops.get(pane)?.copy ?? false } : r))
         if (d.profile === name && !d.copy) return { ok: true, copy: false }
         d.stopping = true
+        await quitChrome(d)
         await ended(d.chrome, 5000)
         d.stopping = false
         d.chrome = null
@@ -1186,8 +1199,12 @@ export function createDesktops(o: DesktopsOptions): Desktops {
 
     stop,
 
+    // server mode off: the running ones stopped, and the stopped ones' kept profiles gone with them
     async stopAll() {
-      await Promise.all([...desktops.keys()].map(pane => stop(pane, 'the board stopped them')))
+      await Promise.all([
+        ...[...desktops.keys()].map(pane => stop(pane, 'the board stopped them')),
+        ...[...kept.values()].map(k => serial(k.pane, async () => forget(k, 'the board stopped them'))),
+      ])
     },
 
     websocket: {
