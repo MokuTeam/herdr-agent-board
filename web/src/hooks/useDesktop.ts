@@ -31,7 +31,8 @@ import {
 } from '../models/desk-input.ts'
 import { DeskMeter } from '../models/desk-meter.ts'
 import { canvasScreen } from '../models/desk-screen.ts'
-import { RfbClient, type RfbFailure } from '../models/rfb.ts'
+import { LocalScroll } from '../models/local-scroll.ts'
+import { RfbClient, type RfbCursor, type RfbFailure } from '../models/rfb.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { useLatest } from './useLatest.ts'
 
@@ -62,6 +63,12 @@ const whyText = (why: RfbFailure, t: Translator): string =>
 
 export interface DeskInput {
   detach(): void
+  /** An update read (the pixels it drew): what to do once it is drawn (the picture's own scroll caught up). */
+  updated(pixels: number): (() => void) | null
+  /** The server has mark `id` (models/rfb.ts mark). */
+  marked(id: number): void
+  /** The pointer's shape, for a mouse over the picture. */
+  cursor(shape: RfbCursor): void
   /** Keys and buttons still down go up on the display (control given back, the canvas left). */
   release(): void
   /** Control given back: what is down goes up, a touch screen's keyboard goes, the picture fits again. */
@@ -83,6 +90,11 @@ const nextFrame = (fn: () => void): void => {
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => fn())
   else setTimeout(fn, 16)
 }
+
+/** A frame drawing this much of the display (a share of it) shows a scroll; a smaller one, not. */
+const BIG_FRAME = 0.15
+/** Steps the server had this long (ms) ago and no big frame since (the page's end): given back. */
+const EXPIRE_MS = 300
 
 /** A finger held this long (ms) without moving presses the button: what it moves then drags. */
 export const HOLD_MS = 500
@@ -122,8 +134,43 @@ export function attachInput(
   controlling: () => boolean,
   label: () => string = () => '',
 ): DeskInput {
+  // ------------------------------------------------ the picture moved here ahead of the server's
+  // A swipe (or the wheel) moves the picture at once (models/local-scroll.ts); its steps go to the
+  // display with a mark after them, and the frames that show them move it back as far.
+  let zoom = NO_ZOOM
+  const place = (settle: boolean) => {
+    const moved = scroll.x || scroll.y ? `translate(${scroll.x}px, ${scroll.y}px)` : ''
+    canvas.style.transition = settle ? 'transform 0.12s ease-out' : ''
+    canvas.style.transform = [moved, zoomTransform(zoom)].filter(Boolean).join(' ')
+    canvas.style.transformOrigin = zoom.z > 1 ? '0 0' : ''
+  }
+  const scroll = new LocalScroll(place)
+  /** Only where the server answers marks (fences): there the picture can be brought back. */
+  const predicting = () => rfb.canMark
+  /** The picture's box as the server's frames have it: without what it is moved here. */
+  const box = () => {
+    const r = canvas.getBoundingClientRect()
+    return { left: r.left - scroll.x, top: r.top - scroll.y, width: r.width, height: r.height }
+  }
+  const scale = () => shownScale(box(), rfb.width, rfb.height)
+  const expiring = new Set<ReturnType<typeof setTimeout>>()
+  /** Mark `id` answered: steps no big frame shows by then (the page's end) are given back. */
+  const expireLater = (id: number, ms = EXPIRE_MS) => {
+    const timer = setTimeout(() => {
+      expiring.delete(timer)
+      // an update still coming may be the one that shows them
+      if (rfb.updating) expireLater(id, 50)
+      else scroll.expire(id)
+    }, ms)
+    expiring.add(timer)
+  }
   // moves and wheel steps a frame at a time; buttons and keys at once (models/desk-input.ts)
-  const out = new InputQueue(rfb, nextFrame)
+  const out = new InputQueue(rfb, nextFrame, (sx, sy) => {
+    if (!predicting()) return
+    const id = rfb.mark()
+    const s = scale()
+    if (id !== null) scroll.sent(id, sx * WHEEL_PX * s, sy * WHEEL_PX * s)
+  })
   const keys = new Map<string, number>()
   let mask = 0
   let last = { x: 0, y: 0 }
@@ -131,7 +178,7 @@ export function attachInput(
   let touched = false
   let field: HTMLTextAreaElement | null = null
   const at = (e: { clientX: number; clientY: number }) =>
-    screenPoint(canvas.getBoundingClientRect(), rfb.width, rfb.height, e.clientX, e.clientY)
+    screenPoint(box(), rfb.width, rfb.height, e.clientX, e.clientY)
   const atPoint = (p: Point) => at({ clientX: p.x, clientY: p.y })
   const point = (e: PointerEvent) => {
     const p = at(e)
@@ -258,7 +305,6 @@ export function attachInput(
   let keepTo: 'x' | 'y' | 'xy' | null = null
   let holding: ReturnType<typeof setTimeout> | undefined
   let holder = -1
-  let zoom = NO_ZOOM
   /** Two fingers down: where each was then, the picture's zoom and box then. */
   let two = { a: start, b: start, zoom, box: { left: 0, top: 0, width: 0, height: 0 } }
   let tapped = { at: Number.NEGATIVE_INFINITY, client: start, point: start }
@@ -270,8 +316,7 @@ export function attachInput(
   }
   const zoomTo = (to: Zoom) => {
     zoom = to
-    canvas.style.transform = zoomTransform(to)
-    canvas.style.transformOrigin = to.z > 1 ? '0 0' : ''
+    place(false)
   }
   // Held still a moment: the button goes down where the finger is, and stays down while it moves.
   const held = () => {
@@ -301,16 +346,19 @@ export function attachInput(
   // began: the page follows the finger (one going up shows what is under: the wheel down).
   const swipe = () => {
     const now = middle()
-    const scale = shownScale(canvas.getBoundingClientRect(), rfb.width, rfb.height)
+    const k = scale()
     const p = atPoint(start)
-    if (!scale || !p) return
-    swept = { x: swept.x + (now.x - was.x) / scale, y: swept.y + (now.y - was.y) / scale }
+    if (!k || !p) return
+    const [dx, dy] = [now.x - was.x, now.y - was.y]
+    swept = { x: swept.x + dx / k, y: swept.y + dy / k }
     was = now
     // Begun mostly up or down (or to the side): that way only, as a tablet's own page scrolls.
     const [x, y] = [Math.abs(swept.x), Math.abs(swept.y)]
     keepTo ??= y >= 2 * x ? 'y' : x >= 2 * y ? 'x' : 'xy'
     if (keepTo === 'y') swept.x = 0
     if (keepTo === 'x') swept.y = 0
+    // the picture with the finger, at once
+    if (predicting()) scroll.move(keepTo === 'y' ? 0 : dx, keepTo === 'x' ? 0 : dy)
     const steps = (along: 'x' | 'y', back: number, on: number) => {
       while (Math.abs(swept[along]) >= WHEEL_PX / 2) {
         const bit = swept[along] > 0 ? back : on
@@ -348,7 +396,7 @@ export function attachInput(
       unhold()
       gesture = 'two'
       const [a = p, b = p] = pair()
-      two = { a: { ...a }, b: { ...b }, zoom, box: canvas.getBoundingClientRect() }
+      two = { a: { ...a }, b: { ...b }, zoom, box: box() }
       start = middleOf([a, b])
     }
     was = middle()
@@ -407,8 +455,15 @@ export function attachInput(
       if (zoom.z < ZOOM_SNAP) zoomTo(NO_ZOOM)
       gesture = 'over'
     } else if (fingers.size) was = middle()
-    // all lifted: a swipe's last steps go now, not a frame later
-    if (!fingers.size) out.flush()
+    if (fingers.size) return
+    // all lifted: a swipe's last steps go now, not a frame later; what of its way made no step
+    // goes back (the display scrolls by steps)
+    out.flush()
+    if (gesture === 'swipe' && predicting()) {
+      const k = scale()
+      scroll.move(-swept.x * k, -swept.y * k, true)
+      swept = { x: 0, y: 0 }
+    }
   }
   /** The fingers forgotten, the button up and the picture as it fits (control given back, the canvas gone). */
   const unfinger = () => {
@@ -416,7 +471,39 @@ export function attachInput(
     fingers.clear()
     gesture = 'over'
     canvas.removeAttribute('data-held')
+    scroll.reset()
     zoomTo(NO_ZOOM)
+  }
+
+  // ------------------------------------------------ the pointer drawn here (a mouse, a pen over it)
+  let shape: RfbCursor | null = null
+  let pointer: HTMLCanvasElement | null = null
+  const drawShape = () => {
+    if (!pointer || !shape) return
+    pointer.width = shape.width
+    pointer.height = shape.height
+    if (shape.width && shape.height)
+      pointer.getContext?.('2d')?.putImageData(new ImageData(shape.rgba, shape.width, shape.height), 0, 0)
+  }
+  const hidePointer = () => {
+    if (pointer) pointer.style.display = 'none'
+    canvas.style.cursor = ''
+  }
+  /** Where a mouse (or a pen over the picture) is, with control: the display's pointer there, drawn here. */
+  const showPointer = (e: PointerEvent) => {
+    const host = canvas.parentNode as HTMLElement | null
+    if (!shape?.width || !host || !controlling() || touching(e)) return hidePointer()
+    if (!pointer) {
+      pointer = document.createElement('canvas')
+      pointer.setAttribute('class', 'desk-cursor')
+      pointer.setAttribute('aria-hidden', 'true')
+      drawShape()
+    }
+    if (pointer.parentNode !== host) host.insertBefore(pointer, canvas.nextSibling)
+    const at = host.getBoundingClientRect()
+    pointer.style.display = ''
+    pointer.style.transform = `translate(${e.clientX - at.left - shape.x}px, ${e.clientY - at.top - shape.y}px)`
+    canvas.style.cursor = 'none'
   }
 
   const handlers: Record<string, (e: Event) => void> = {
@@ -425,16 +512,22 @@ export function attachInput(
       e.preventDefault()
       // A mouse's keys come to the picture; a finger's from the keyboard its tap brings up (below).
       touched = touching(e as PointerEvent)
-      if (touched) return fingerDown(e as PointerEvent)
+      if (touched) {
+        hidePointer()
+        return fingerDown(e as PointerEvent)
+      }
       canvas.focus()
       canvas.setPointerCapture?.((e as PointerEvent).pointerId)
       point(e as PointerEvent)
+      showPointer(e as PointerEvent)
     },
     pointermove(e) {
-      if (!controlling()) return
+      if (!controlling()) return hidePointer()
       if (touching(e as PointerEvent)) fingerMove(e as PointerEvent)
       else point(e as PointerEvent)
+      if (!fingers.size) showPointer(e as PointerEvent)
     },
+    pointerleave: hidePointer,
     pointerup(e) {
       if (!controlling()) return
       if (touching(e as PointerEvent)) fingerUp(e as PointerEvent, false)
@@ -460,6 +553,8 @@ export function attachInput(
       wheel += w.deltaMode === 0 ? w.deltaY : w.deltaY * 40
       while (Math.abs(wheel) >= WHEEL_STEP) {
         out.wheel(p.x, p.y, mask, wheel < 0 ? WHEEL_UP : WHEEL_DOWN)
+        // the picture by the step at once: up, its content down
+        if (predicting()) scroll.move(0, Math.sign(wheel) * -WHEEL_PX * scale())
         wheel -= Math.sign(wheel) * WHEEL_STEP
       }
     },
@@ -480,8 +575,25 @@ export function attachInput(
   for (const [type, fn] of Object.entries(handlers))
     canvas.addEventListener(type, fn, type === 'wheel' ? { passive: false } : undefined)
   return {
+    updated(pixels) {
+      // a big frame shows the steps the server had before it (answers do not come within an update)
+      const upTo = scroll.lastAnswered()
+      if (upTo === null || pixels < BIG_FRAME * rfb.width * rfb.height) return null
+      return () => scroll.drawn(upTo)
+    },
+    marked(id) {
+      if (scroll.answered(id)) expireLater(id)
+    },
+    cursor(next) {
+      shape = next
+      drawShape()
+      if (!next.width || !next.height) hidePointer()
+    },
     detach() {
       unhold()
+      for (const timer of expiring) clearTimeout(timer)
+      expiring.clear()
+      pointer?.parentNode?.removeChild(pointer)
       for (const [type, fn] of Object.entries(handlers)) canvas.removeEventListener(type, fn)
       if (!field) return
       for (const [type, fn] of Object.entries(fieldHandlers)) field.removeEventListener(type, fn)
@@ -492,6 +604,7 @@ export function attachInput(
     stop() {
       release()
       unfinger()
+      hidePointer()
       touched = false
       field?.blur()
     },
@@ -525,6 +638,8 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
     const socket = new WebSocket(desktopSocketUrl(key, token))
     socket.binaryType = 'arraybuffer'
     let live = false
+    const screen = canvasScreen(canvas)
+    let keys: DeskInput | null = null
     // once live, each second: the corner; a ping every PING_S, the board's log a line every LOG_S
     let seconds = 0
     let ticking: ReturnType<typeof setInterval> | undefined
@@ -541,7 +656,7 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
       bytes => {
         if (socket.readyState === OPEN) socket.send(bytes)
       },
-      canvasScreen(canvas),
+      screen,
       {
         live() {
           live = true
@@ -553,8 +668,15 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
           setView({ state: 'failed', why: whyText(why, t.current), canvas, meter })
           socket.close()
         },
-        updated: () => link.frame(),
+        updated: pixels => {
+          link.frame()
+          // what the input does once this update is drawn (the picture moved here caught up)
+          const after = keys?.updated(pixels)
+          if (after) screen.later(after)
+        },
         pong: ms => link.pong(ms),
+        marked: id => keys?.marked(id),
+        cursor: shape => keys?.cursor(shape),
       },
     )
     socket.onmessage = e => {
@@ -573,18 +695,19 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
             },
       )
     }
-    const keys = attachInput(
+    const attached = attachInput(
       canvas,
       rfb,
       () => control.current,
       () => t.current('desk.title'),
     )
-    input.current = keys
+    keys = attached
+    input.current = attached
     setView({ state: 'connecting', why: '', canvas, meter })
     return () => {
       clearInterval(ticking)
       meter.parentNode?.removeChild(meter)
-      keys.detach()
+      attached.detach()
       input.current = null
       socket.onmessage = null
       socket.onclose = null

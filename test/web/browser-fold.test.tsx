@@ -891,6 +891,139 @@ test('a finger held still a moment presses the button where it is: what it moves
   expect(canvas()?.hasAttribute('data-held')).toBe(false)
 })
 
+/** The display's first fence, asking for an answer (Xvnc's, at the start): it answers marks too. */
+const FENCE_ASKS = [248, 0, 0, 0, 0x80, 0, 0, 0, 1, 0]
+/** The page's mark `n` (models/rfb.ts mark), and the display's answer to it. */
+const mark = (n: number) => [248, 0, 0, 0, 0x80, 0, 0, 0, 4, 0x6d, 0x6d, n >> 8, n & 255]
+const marked = (n: number) => [248, 0, 0, 0, 0, 0, 0, 0, 4, 0x6d, 0x6d, n >> 8, n & 255]
+/** An update of one colour over w × h (Tight's fill): all of the 800 × 400 display, or a corner. */
+const frameOf = (w: number, h: number) => [
+  0,
+  0,
+  0,
+  1,
+  0,
+  0,
+  0,
+  0,
+  w >> 8,
+  w & 255,
+  h >> 8,
+  h & 255,
+  0,
+  0,
+  0,
+  7,
+  0x80,
+  9,
+  9,
+  9,
+]
+/** How far the picture is moved here now (its transform's translate), [x, y]. */
+const movedBy = (): [number, number] => {
+  const m = /translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(canvas()?.style.transform ?? '')
+  return m ? [Number(m[1]), Number(m[2])] : [0, 0]
+}
+/** The canvas 400 × 200 where it is moved to, as a browser has its box. */
+const screenMoving = () => {
+  layout.rect = el => {
+    const [x, y] = el.localName === 'canvas' ? movedBy() : [0, 0]
+    return { left: x, top: y, width: el.localName === 'canvas' ? 400 : 0, height: 200 }
+  }
+}
+
+test('a swipe moves the picture with the finger at once, ahead of the display; a big frame that shows its steps brings it back as far; let go, it is the display’s', async () => {
+  const { socket } = await controlled(800, 400)
+  screenMoving()
+  socket?.serve(FENCE_ASKS)
+  socket?.sent.splice(0)
+  finger('pointerdown', 1, 200, 150)
+  finger('pointermove', 1, 200, 100)
+  // at once, before anything went to the display: up 50 px with the finger
+  expect(movedBy()).toEqual([0, -50])
+  expect(socket?.sent).toEqual([])
+  await frame()
+  // its steps (the display's 100 px, 53 a step) where it began, then a mark
+  expect(socket?.sent).toEqual([...step(16, 400, 300), ...step(16, 400, 300), mark(1)])
+  // the display has them; a small frame shows no scroll; a big one does: back by 2 × 53 at half size
+  socket?.serve(marked(1))
+  socket?.serve(frameOf(40, 40))
+  expect(movedBy()).toEqual([0, -50])
+  socket?.serve(frameOf(800, 400))
+  expect(movedBy()).toEqual([0, 3])
+  // let go: the 3 px that made no step go back, smoothly; it is the display's picture again
+  finger('pointerup', 1, 200, 100)
+  expect(canvas()?.style.transform).toBe('')
+  expect(canvas()?.style.transition).toContain('transform')
+  // a tap then goes where it would have
+  socket?.sent.splice(0)
+  tap(canvas(), 100, 50)
+  expect(socket?.sent).toEqual([pointerAt(1, 200, 100), pointerAt(0, 200, 100)])
+})
+
+test('steps that no frame shows (the page’s end) go back a moment after the display had them', async () => {
+  const { socket } = await controlled(800, 400)
+  screenMoving()
+  socket?.serve(FENCE_ASKS)
+  finger('pointerdown', 1, 200, 150)
+  finger('pointermove', 1, 200, 100)
+  await frame()
+  finger('pointerup', 1, 200, 100)
+  // the 3 px that made no step gone: as far as the two steps
+  expect(movedBy()).toEqual([0, -53])
+  socket?.serve(marked(1))
+  await new Promise(done => setTimeout(done, 350))
+  expect(canvas()?.style.transform).toBe('')
+})
+
+test('the wheel moves the picture by its steps at once too, until a frame shows them', async () => {
+  const { socket } = await controlled(800, 400)
+  screenMoving()
+  socket?.serve(FENCE_ASKS)
+  socket?.sent.splice(0)
+  fire(canvas(), 'wheel', { clientX: 100, clientY: 50, deltaY: 100, deltaMode: 0 })
+  expect(movedBy()).toEqual([0, -53])
+  await frame()
+  expect(socket?.sent).toEqual([...step(16, 200, 100), ...step(16, 200, 100), mark(1)])
+  socket?.serve(marked(1), frameOf(800, 400))
+  expect(canvas()?.style.transform).toBe('')
+})
+
+test('the display’s pointer drawn here where a mouse is, with no round trip; none for a finger, out of the picture or given back', async () => {
+  const { socket, calls } = await controlled(800, 400)
+  // its shape: 2 × 1, hot spot (2, 3), with alpha
+  const s32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]
+  socket?.serve([0, 0, 0, 1, 0, 2, 0, 3, 0, 2, 0, 1, ...s32(-314), ...s32(0), 0, 0, 0, 255, 255, 255, 255, 255])
+  const pointer = () => byClass('desk-cursor')
+  fire(canvas(), 'pointermove', { clientX: 100, clientY: 50, pointerId: 1, pointerType: 'mouse', buttons: 0 })
+  expect(pointer()?.parentNode).toBe(canvas()?.parentNode)
+  expect(pointer()?.style.transform).toBe('translate(98px, 47px)')
+  expect(pointer()?.style.display).toBe('')
+  expect(canvas()?.style.cursor).toBe('none')
+  // the mouse's move went to the display as before
+  await frame()
+  expect(socket?.sent.at(-1)).toEqual(pointerAt(0, 200, 100))
+  // a finger: no pointer
+  finger('pointerdown', 2, 100, 50)
+  expect(pointer()?.style.display).toBe('none')
+  expect(canvas()?.style.cursor).toBe('')
+  finger('pointerup', 2, 100, 50)
+  fire(canvas(), 'pointermove', { clientX: 120, clientY: 60, pointerId: 1, pointerType: 'mouse', buttons: 0 })
+  expect(pointer()?.style.display).toBe('')
+  fire(canvas(), 'pointerleave', { pointerId: 1, pointerType: 'mouse' })
+  expect(pointer()?.style.display).toBe('none')
+  fire(canvas(), 'pointermove', { clientX: 120, clientY: 60, pointerId: 1, pointerType: 'mouse', buttons: 0 })
+  click(desk('control'))
+  await settle()
+  expect(pointer()?.style.display).toBe('none')
+  expect(canvas()?.style.cursor).toBe('')
+  expect(
+    sent(calls)
+      .map(c => c[3])
+      .at(-1),
+  ).toEqual({ to: 'agent' })
+})
+
 test('a tap soon after one near it clicks where that one did, so the display sees a double click; farther or later, where it is', async () => {
   const { socket } = await controlled(800, 400)
   tap(canvas(), 250, 150)

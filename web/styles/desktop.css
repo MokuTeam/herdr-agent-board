@@ -52,14 +52,16 @@
 .desk-view { margin-top: 4px; overflow: hidden; border-radius: 10px; background: #000; }
 .owner .desk-view { box-shadow: 0 0 0 2px var(--orange); }
 .desk-status { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0; padding: 16px 12px; font-size: 12px; text-align: center; color: rgba(255, 255, 255, 0.8); }
-.desk-host { position: relative; display: flex; justify-content: center; }
+.desk-host { position: relative; display: flex; justify-content: center; overflow: hidden; }
+/* The display's pointer, drawn here where a mouse is (hooks/useDesktop.ts): no round trip to move it. */
+.desk-cursor { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 1; }
 /* A touch screen's keys go through a field by the picture (hooks/useDesktop.ts): there and focused,
    so the keyboard comes up, but unseen, and at 16px so iOS does not zoom in to it. */
 .desk-keys { position: absolute; top: 0; left: 0; width: 1px; height: 1px; margin: 0; padding: 0; border: 0; opacity: 0; resize: none; overflow: hidden; font-size: 16px; color: transparent; background: transparent; caret-color: transparent; pointer-events: none; }
 /* Fitted whole and centred (models/desk-input.ts screenPoint reads it so); watched, a touch scrolls the page.
    With control the fingers are the display's (hooks/useDesktop.ts): no scroll, zoom, callout or
    selection of the board's own; a finger held still holds the button down, the edge thicker meanwhile.
-   A pinch zooms the picture by its transform, inside the view's clip. */
+   A pinch zooms the picture by its transform, inside its box's clip, as a swipe moves it. */
 .desk-screen { display: block; width: 100%; height: auto; max-height: min(50vh, 36cqh); object-fit: contain; outline: none; }
 .owner .desk-screen { touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 .owner .desk-view:has(.desk-screen[data-held]) { box-shadow: 0 0 0 4px var(--orange); }

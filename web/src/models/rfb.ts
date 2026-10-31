@@ -10,8 +10,9 @@
 // what changed as it changes (continuous updates, which it does only with fences: it paces itself
 // by the fences' round trips); with a server that does not, the next update is asked for as soon as
 // one starts to come, so no round trip waits between them. A display that changes size says so
-// (DesktopSize). Its cursor is drawn into the picture by the server. What it draws goes to
-// `screen`; what it sends, to `send`.
+// (DesktopSize). The pointer's shape comes to be drawn by the page where its mouse is, with no
+// round trip (Cursor, CursorWithAlpha); the server draws it into the picture no more. What it draws
+// goes to `screen`; what it sends, to `send`.
 import { Inflater } from './inflate.ts'
 
 /** Where the picture goes (models/desk-screen.ts: a canvas), each in the order it came. */
@@ -42,18 +43,30 @@ export interface RfbEvents {
   /** Through the handshake: the display's name. */
   live?(name: string): void
   failed?(why: RfbFailure): void
-  /** An update all read and handed to the screen. */
-  updated?(): void
+  /** An update all read and handed to the screen: the pixels it drew (its rectangles' areas). */
+  updated?(pixels: number): void
   /** The answer to a ping (RfbClient.ping): the round trip to the server, in ms. */
   pong?(ms: number): void
+  /** The server answered mark `id` (RfbClient.mark): it has what was sent before it. */
+  marked?(id: number): void
+  /** The display's pointer as the server draws it no more (the client does): its hot spot, size and pixels (RGBA, not premultiplied); 0 × 0 for none. */
+  cursor?(shape: RfbCursor): void
+}
+
+export interface RfbCursor {
+  x: number
+  y: number
+  width: number
+  height: number
+  rgba: Uint8ClampedArray<ArrayBuffer>
 }
 
 export type RfbState = 'handshake' | 'live' | 'failed'
 
 export interface RfbOptions {
-  /** JPEG's quality while the link is fast, 0 to 9 (QUALITY). */
+  /** JPEG's quality to begin with, 0 to 9 (QUALITY). */
   quality?: number
-  /** Lower it while the link is slow (SLOW_QUALITY); on unless false. */
+  /** Up while the link is fast (FAST_QUALITY), down while it is slow (SLOW_QUALITY); on unless false. */
   adapt?: boolean
   /** The clock (ms) the link's speed is read by. */
   now?: () => number
@@ -66,6 +79,9 @@ const TIGHT = 7
 const DESKTOP_SIZE = -223
 const FENCE = -312
 const CONTINUOUS_UPDATES = -313
+/** The pointer's shape for the client to draw: with a mask, or with alpha (TigerVNC's). */
+const CURSOR = -239
+const CURSOR_WITH_ALPHA = -314
 /** Tight's JPEG quality, 0 to 9: -32 + it. */
 const QUALITY_0 = -32
 /** Tight's zlib level, 0 to 9: -256 + it. */
@@ -75,13 +91,18 @@ export const QUALITY = 6
 /** zlib at 2: little of the server's time for most of what more would save. */
 export const COMPRESSION = 2
 /**
- * While the link is slow, JPEG at 4 (its quality 62, colour at half width): a scrolled page's
- * frames a third smaller, so they keep up; the server sends the picture again at its best once it
- * stops changing. Slow: updates come slower than SLOW_MBPS; fast again: faster than FAST_MBPS.
+ * By the link's speed (updates' Mbit/s), each way with a gap so it does not go back and forth:
+ * above FAST_UP JPEG at 8 (its quality 92: text in a photo's part as sharp as the rest), down to 6
+ * below FAST_DOWN; below SLOW_DOWN at 4 (its quality 62, colour at half width: a scrolled page's
+ * frames a third smaller, so they keep up), up to 6 above SLOW_UP. The server sends the picture
+ * again at its best once it stops changing, whatever the quality.
  */
+export const FAST_QUALITY = 8
 export const SLOW_QUALITY = 4
-const SLOW_MBPS = 6
-const FAST_MBPS = 10
+const FAST_UP = 20
+const FAST_DOWN = 16
+const SLOW_DOWN = 6
+const SLOW_UP = 10
 /** An update tells the link's speed when this much of it came after its first piece. */
 const MEASURED_BYTES = 64 * 1024
 
@@ -92,8 +113,9 @@ const SERVER_FENCE = 248
 /** A fence's flags: the other end asks for an answer; what before it, and what after it, must be done first. */
 const FENCE_REQUEST = 0x80000000
 const FENCE_BLOCK = 0b11
-/** A ping's fence says so in its first two bytes ("pp"), then its number. */
+/** A ping's fence says so in its first two bytes ("pp"), then its number; a mark's, "mm". */
 const PING = 0x70
+const MARK = 0x6d
 /** A display larger than this on a side is not one Xvnc makes: the client stops instead of making a canvas that big. */
 const MAX_SIDE = 8192
 /** Tight's data shorter than this comes as it is, not through zlib. */
@@ -251,7 +273,9 @@ export class RfbClient {
   /** The server answers fences (it sent one); the client's pings out, by number, when each went. */
   private fences = false
   private readonly pings = new Map<number, number>()
-  private pinged = 0
+  private fenced = 0
+  /** The pixels the update being read draws (its rectangles' areas). */
+  private area = 0
 
   constructor(
     private readonly send: (bytes: Uint8Array<ArrayBuffer>) => void,
@@ -307,19 +331,43 @@ export class RfbClient {
    * sent one), or before the handshake is through.
    */
   ping(): boolean {
-    if (this.state !== 'live' || !this.fences) return false
-    const n = ++this.pinged & 0xffff
+    const n = this.fence(PING)
+    if (n === null) return false
     this.pings.set(n, this.now())
     // only the last few wait for their answer
     for (const old of this.pings.keys()) if (this.pings.size > 8) this.pings.delete(old)
-    this.send(Uint8Array.of(SERVER_FENCE, 0, 0, 0, 0x80, 0, 0, 0, 4, PING, PING, n >> 8, n & 255))
     return true
   }
 
   /**
+   * A mark after what was sent so far (a fence, as a ping): `marked` says when the server has it,
+   * so that what it draws from then on shows it. Its number, or null where the server does no
+   * fences, or before the handshake is through.
+   */
+  mark(): number | null {
+    return this.fence(MARK)
+  }
+
+  /** The server answers fences (it sent one): pings and marks can go. */
+  get canMark(): boolean {
+    return this.state === 'live' && this.fences
+  }
+
+  /** An update being read now (its header came, not all of it yet). */
+  get updating(): boolean {
+    return this.rects > 0
+  }
+
+  private fence(tag: number): number | null {
+    if (this.state !== 'live' || !this.fences) return null
+    const n = ++this.fenced & 0xffff
+    this.send(Uint8Array.of(SERVER_FENCE, 0, 0, 0, 0x80, 0, 0, 0, 4, tag, tag, n >> 8, n & 255))
+    return n
+  }
+
+  /**
    * An update read: the bytes of it that came after its first piece, over the time they took,
-   * are the link's speed (the server writes an update all at once). Slow, JPEG at SLOW_QUALITY;
-   * fast again, as it was.
+   * are the link's speed (the server writes an update all at once): JPEG's quality by it.
    */
   private measure(): void {
     const later = this.received - this.pending.length - this.started.end
@@ -328,9 +376,13 @@ export class RfbClient {
     const mbps = (later * 8) / ms / 1000
     this.mbps = this.mbps ? 0.7 * this.mbps + 0.3 * mbps : mbps
     if (!this.adapt) return
-    const q =
-      this.mbps < SLOW_MBPS ? Math.min(this.fast, SLOW_QUALITY) : this.mbps > FAST_MBPS ? this.fast : this.quality
-    if (q === this.quality) return
+    const was = this.quality
+    let q = was
+    if (this.mbps > FAST_UP) q = Math.max(this.fast, FAST_QUALITY)
+    else if (this.mbps < SLOW_DOWN) q = Math.min(this.fast, SLOW_QUALITY)
+    else if (was > this.fast && this.mbps < FAST_DOWN) q = this.fast
+    else if (was < this.fast && this.mbps > SLOW_UP) q = this.fast
+    if (q === was) return
     this.quality = q
     this.encodings()
   }
@@ -437,6 +489,8 @@ export class RfbClient {
       DESKTOP_SIZE,
       FENCE,
       CONTINUOUS_UPDATES,
+      CURSOR_WITH_ALPHA,
+      CURSOR,
       QUALITY_0 + this.quality,
       COMPRESS_0 + COMPRESSION,
     ]
@@ -467,6 +521,7 @@ export class RfbClient {
       case 0: // FramebufferUpdate
         if (p.length < 4) return false
         this.rects = p.u16(2)
+        this.area = 0
         this.started = { at: this.at, end: this.received }
         p.skip(4)
         // asked for already, while this one comes: the server sends the next as soon as there is one
@@ -516,12 +571,15 @@ export class RfbClient {
           answer.set(fence)
           new DataView(answer.buffer).setUint32(4, flags & FENCE_BLOCK)
           this.send(answer)
-        } else if (n === 4 && fence[9] === PING && fence[10] === PING) {
-          // the answer to a ping
+        } else if (n === 4 && fence[9] === fence[10]) {
+          // the answer to a ping or a mark
           const k = ((fence[11] as number) << 8) | (fence[12] as number)
-          const sent = this.pings.get(k)
-          this.pings.delete(k)
-          if (sent !== undefined) this.events.pong?.(this.now() - sent)
+          if (fence[9] === MARK) this.events.marked?.(k)
+          else if (fence[9] === PING) {
+            const sent = this.pings.get(k)
+            this.pings.delete(k)
+            if (sent !== undefined) this.events.pong?.(this.now() - sent)
+          }
         }
         return true
       }
@@ -535,7 +593,7 @@ export class RfbClient {
     if (this.rects === 0) {
       this.step = () => this.message()
       this.measure()
-      this.events.updated?.()
+      this.events.updated?.(this.area)
       return true
     }
     if (p.length < 12) return false
@@ -546,6 +604,7 @@ export class RfbClient {
     const encoding = p.u32(8) | 0
     p.skip(12)
     this.rects--
+    if (encoding >= 0) this.area += w * h
     switch (encoding) {
       case RAW:
         this.step = () => this.raw(x, y, w, h)
@@ -569,9 +628,48 @@ export class RfbClient {
         if (this.continuous) this.enableContinuous()
         else this.request(true)
         return true
+      case CURSOR:
+      case CURSOR_WITH_ALPHA:
+        this.step = () => this.cursor(x, y, w, h, encoding === CURSOR_WITH_ALPHA)
+        return true
       default:
         return this.fail('data', `encoding ${encoding}`)
     }
+  }
+
+  /**
+   * The pointer's shape, (x, y) its hot spot: Cursor's pixels as the display's and a bit mask, one
+   * bit a pixel (rows to a byte); CursorWithAlpha's an encoding (Raw only, as TigerVNC sends it)
+   * and pixels R G B A, the colours premultiplied by A.
+   */
+  private cursor(x: number, y: number, w: number, h: number, alpha: boolean): boolean {
+    const p = this.pending
+    const n = w * h * 4
+    const rgba = new Uint8ClampedArray(n)
+    if (alpha) {
+      if (p.length < 4) return false
+      const inner = p.u32(0) | 0
+      if (inner !== RAW) return this.fail('data', `cursor encoding ${inner}`)
+      if (p.length < 4 + n) return false
+      const px = p.take(4 + n).subarray(4)
+      for (let i = 0; i < n; i += 4) {
+        const a = px[i + 3] as number
+        for (let c = 0; c < 3; c++) rgba[i + c] = a ? Math.round(((px[i + c] as number) * 255) / a) : 0
+        rgba[i + 3] = a
+      }
+    } else {
+      const row = (w + 7) >> 3
+      if (p.length < n + row * h) return false
+      const bytes = p.take(n + row * h)
+      for (let i = 0, j = 0; i < n; i += 4, j++) {
+        const [cx, cy] = [j % w, Math.floor(j / w)]
+        const on = ((bytes[n + cy * row + (cx >> 3)] as number) >> (7 - (cx & 7))) & 1
+        rgba.set([bytes[i] as number, bytes[i + 1] as number, bytes[i + 2] as number, on ? 255 : 0], i)
+      }
+    }
+    this.events.cursor?.({ x, y, width: w, height: h, rgba })
+    this.step = () => this.rect()
+    return true
   }
 
   private raw(x: number, y: number, w: number, h: number): boolean {

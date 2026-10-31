@@ -178,9 +178,11 @@ export class InputQueue {
   private mask = 0
   private waiting = false
 
+  /** `stepped`: after a flush that sent wheel steps, their sum (down and right positive). */
   constructor(
     private readonly sink: DeskSink,
     private readonly frame: (fn: () => void) => void,
+    private readonly stepped: (x: number, y: number) => void = () => {},
   ) {}
 
   /** The pointer at (x, y) with these buttons: a move waits for the frame; a button changed goes at once. */
@@ -228,6 +230,8 @@ export class InputQueue {
   flush(): void {
     const held = this.held
     this.held = []
+    let sx = 0
+    let sy = 0
     for (const h of held) {
       if (!h.steps) {
         this.sink.pointer(h.x, h.y, h.mask)
@@ -241,7 +245,10 @@ export class InputQueue {
       }
       press(h.steps.y, WHEEL_UP, WHEEL_DOWN)
       press(h.steps.x, WHEEL_LEFT, WHEEL_RIGHT)
+      sx += h.steps.x
+      sy += h.steps.y
     }
+    if (sx || sy) this.stepped(sx, sy)
   }
 
   private later(): void {
