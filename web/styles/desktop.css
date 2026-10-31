@@ -11,8 +11,12 @@
 
 /* ---------------------------------------------------------------- the session panel */
 /* The Browser fold above the conversation: one line folded; open, the display at the panel's width,
-   never taller than half the window, the conversation going on under it. */
+   never taller than half the window nor a third of the panel, the conversation going on under it.
+   Open, the conversation gives way to it down to its least, and it to the composer: on a low panel
+   (a tablet) its foot is cut rather than the box you write in pushed off the screen. */
 .desk { flex: none; padding: 0 18px 6px 22px; }
+.desk.open { flex: 0 1 auto; min-height: 0; overflow: hidden; }
+#sheet .sheet-inner:has(.desk.open) .sheet-body { min-height: 96px; }
 .desk-bar { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 30px; }
 .desk-fold { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; padding: 0; border: 0; background: none; font-size: 12px; font-weight: 600; letter-spacing: 0.02em; color: var(--label-2); cursor: pointer; }
 .desk-fold .chev { width: 12px; height: 12px; transition: transform 150ms ease; }
@@ -31,7 +35,7 @@
 .desk-status { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0; padding: 16px 12px; font-size: 12px; text-align: center; color: rgba(255, 255, 255, 0.8); }
 .desk-host { display: flex; justify-content: center; }
 /* Fitted whole and centred (models/desk-input.ts screenPoint reads it so); watched, a touch scrolls the page. */
-.desk-screen { display: block; width: 100%; height: auto; max-height: 50vh; object-fit: contain; outline: none; }
+.desk-screen { display: block; width: 100%; height: auto; max-height: min(50vh, 36cqh); object-fit: contain; outline: none; }
 .owner .desk-screen { touch-action: none; }
 
 /* ---------------------------------------------------------------- full size */
