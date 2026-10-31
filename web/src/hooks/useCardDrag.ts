@@ -2,7 +2,9 @@
 // then follows the pointer 1:1 (lifted a little), the drop place lights up, the page scrolls at
 // its edges, and on release the ghost lands where the card lives with the pointer's velocity.
 // Or to the archive: its place comes up with the drag (components/DropArchive.tsx); let go over
-// it, or flicked at it, the ghost goes into it and the archive takes the session.
+// it, or flicked at it, the ghost goes into it and the archive takes the session. In the staircase
+// (styles/stairs.css) the column is the step nearest the card's left edge (models/stairs.ts
+// stairsPlace); a board that scrolls sideways there or beside a side panel scrolls at its edges too.
 import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
@@ -25,6 +27,7 @@ import {
   mayDrag,
 } from '../models/board-view.ts'
 import { type PointerSample, reducedMotion, Spring, velocityOf } from '../models/spring.ts'
+import { sidewaysStep, stairsPlace } from '../models/stairs.ts'
 import { useLatest } from './useLatest.ts'
 
 export interface DragOptions {
@@ -97,6 +100,42 @@ function placeAt(el: Element | null): DropPlace {
   const lane = el?.closest<HTMLElement>('.lane')
   const col = el?.closest<HTMLElement>('.col')
   return { lane: lane?.dataset.cat ?? null, column: col?.dataset.col ?? null }
+}
+
+/** The column heads' left edges, in the window (the staircase's steps). */
+const headEdges = () =>
+  [...(document.getElementById('columns-head')?.querySelectorAll<HTMLElement>('.col-head') ?? [])].map(head => ({
+    id: head.dataset.col ?? '',
+    left: head.getBoundingClientRect().left,
+  }))
+
+/**
+ * The lane and column a dragged `card` is over, the pointer over `el` and the card's left edge at
+ * `left`: the lane and column `el` is in; in the staircase (hooks/useStairs.ts) the column by its
+ * steps (models/stairs.ts stairsPlace).
+ */
+export function dropPlaceAt(el: Element | null, card: Element, left: number): DropPlace {
+  if (!document.documentElement.hasAttribute('data-stairs')) return placeAt(el)
+  return stairsPlace({
+    lane: el?.closest<HTMLElement>('.lane')?.dataset.cat ?? null,
+    inCards: !!el?.closest('.lane-grid'),
+    head: el?.closest<HTMLElement>('#columns-head .col-head')?.dataset.col ?? null,
+    own: card.closest<HTMLElement>('.lane')?.dataset.cat ?? null,
+    left,
+    heads: headEdges(),
+  })
+}
+
+/** A board that scrolls sideways (the staircase, beside a side panel): a drag near its left or right edge scrolls it that way. */
+export function scrollSideways(x: number): void {
+  const html = document.documentElement
+  if (!html.hasAttribute('data-stairs') && !html.hasAttribute('data-panel-side')) return
+  const board = document.getElementById('board')
+  if (!board) return
+  const r = board.getBoundingClientRect()
+  const edges = { left: Math.max(0, r.left), right: Math.min(html.clientWidth, r.right) }
+  const step = sidewaysStep(x, edges, { at: board.scrollLeft, max: board.scrollWidth - board.clientWidth })
+  if (step) board.scrollLeft += step
 }
 
 const sameLit = (a: DropLit | null, b: DropLit | null) => a?.lane === b?.lane && a?.column === b?.column
@@ -244,7 +283,7 @@ export function useCardDrag(opts: DragOptions): DragHandlers {
           d.over = over
           setArchive(view => view && { ...view, over })
         }
-        const place = placeAt(document.elementFromPoint(ev.clientX, ev.clientY))
+        const place = dropPlaceAt(document.elementFromPoint(ev.clientX, ev.clientY), d.card, ev.clientX - d.grab.x)
         const target = over ? null : options.current.targetAt(d.key, place)
         // The column lights up when the card changes column there, else the lane when only the lane changes.
         const nextLit = dropLit(target, place)
@@ -256,6 +295,7 @@ export function useCardDrag(opts: DragOptions): DragHandlers {
         if (over) return
         const step = edgeScroll(ev.clientY, innerHeight, options.current.roomBelow?.() ?? 0)
         if (step) scrollBy(0, step)
+        scrollSideways(ev.clientX)
       }
 
       const end = (ev: PointerEvent) => {

@@ -16,6 +16,7 @@ import { useSegmentFolds } from '../hooks/useSegmentFolds.ts'
 import type { SegmentPicks } from '../hooks/useSegmentPicks.ts'
 import type { SettingsMenu } from '../hooks/useSettingsMenu.ts'
 import type { SetupNoteState } from '../hooks/useSetupNote.ts'
+import { useStairs } from '../hooks/useStairs.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { pickedProfile, profileOptions } from '../models/profiles.ts'
 import { columnHeads, documentTitle, laneOptions, scheduleBadge, summaryParts, summaryText } from '../models/toolbar.ts'
@@ -74,6 +75,8 @@ export function Toolbar({
   const parts = data && summaryParts(data.items, t)
   const heads = data ? columnHeads(data.columns, visible, ui.filter, categoryOf, t, ui.moves) : []
   useColumnWidths(heads)
+  // A board too narrow for its columns: the staircase (styles/stairs.css).
+  useStairs(heads)
 
   useEffect(() => {
     if (data) document.title = documentTitle(data.items)

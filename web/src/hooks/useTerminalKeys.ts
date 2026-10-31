@@ -5,9 +5,10 @@
 // do what the card's menu does (its items, gray ones included, from hooks/useContextMenus.ts). The
 // board's own keys go first (hooks/useBoardKeys.ts calls this only for a key they leave).
 import { toggledColumn } from '../../../src/core/board-keys.ts'
-import { type Dir, type GridLane, gridStep, listStep } from '../../../src/core/grid-nav.ts'
+import type { Dir, GridLane } from '../../../src/core/grid-nav.ts'
 import { lookNow } from '../models/look.ts'
 import type { MenuItem } from '../models/menu-model.ts'
+import { type BoardLayout, boardStep } from '../models/stairs.ts'
 import { type CardAct, terminalKey } from '../models/terminal-keys.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import type { ContextMenus } from './useContextMenus.ts'
@@ -34,10 +35,14 @@ function boardGrid(): GridLane[] {
   }))
 }
 
-/** A wide page shows the column heads and lays the lanes out as a grid; a narrow one stacks them. */
-const wide = (): boolean => {
+/**
+ * A wide page shows the column heads and lays the lanes out as a grid, or, too narrow for its
+ * columns, as a staircase (hooks/useStairs.ts); a narrow one stacks them.
+ */
+const layoutNow = (): BoardLayout => {
   const heads = document.getElementById('columns-head')
-  return !!heads && getComputedStyle(heads).display !== 'none'
+  if (!heads || getComputedStyle(heads).display === 'none') return 'stacked'
+  return document.documentElement.hasAttribute('data-stairs') ? 'stairs' : 'columns'
 }
 
 function focusCard(key: string): void {
@@ -119,14 +124,7 @@ export function useTerminalKeys(
     }
 
     function move(dir: Dir): void {
-      const grid = boardGrid()
-      const list = grid.flatMap(lane => lane.cols.flat())
-      const from = focused && list.some(c => c.key === focused) ? focused : null
-      const next = !from
-        ? listStep(list, null, dir === 'last' ? 'last' : 'home')
-        : wide() && dir !== 'home' && dir !== 'last'
-          ? gridStep(grid, from, dir)
-          : listStep(list, from, dir)
+      const next = boardStep(boardGrid(), focused ?? null, dir, layoutNow())
       if (next) focusCard(next)
     }
 

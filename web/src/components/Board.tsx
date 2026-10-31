@@ -41,7 +41,7 @@ export interface BoardProps {
 const buttonOf = (e: MouseEvent<HTMLElement>): HTMLElement | null | undefined =>
   e.target instanceof Element ? e.target.closest<HTMLElement>('[data-act]') : undefined
 
-/** Beside a panel docked at a side the board can scroll sideways (styles/beside.css): the column heads in the toolbar go with it. */
+/** Beside a panel docked at a side (styles/beside.css) or as a staircase (styles/stairs.css) the board can scroll sideways: the column heads in the toolbar go with it. */
 function headsAlong(e: UIEvent<HTMLElement>): void {
   const heads = document.getElementById('columns-head')
   if (heads && heads.scrollLeft !== e.currentTarget.scrollLeft) heads.scrollLeft = e.currentTarget.scrollLeft

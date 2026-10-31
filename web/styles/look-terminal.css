@@ -200,6 +200,9 @@
 :root[data-look="terminal"] .lane-new:hover { background: var(--bg); color: var(--lc); box-shadow: inset 0 0 0 1px var(--lc); }
 :root[data-look="terminal"] .lane-grid { border-radius: var(--radius); }
 :root[data-look="terminal"] .col { gap: 10px; }
+/* A board too narrow for its columns, a staircase (stairs.css): the lane's bar, its rule to the + at
+   the end, a card's width; the cards one under the other as far apart as in a column. */
+:root[data-look="terminal"] { --stair-bar: var(--stair-card); --stair-gap: 10px; }
 
 /* Where a dragged card would land: a dashed outline, nothing filled. */
 :root[data-look="terminal"] .lane.drop .lane-grid { background: none; box-shadow: none; outline: 1px dashed var(--accent); outline-offset: -1px; }
