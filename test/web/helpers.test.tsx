@@ -245,17 +245,97 @@ describe('the sheet', () => {
     const stopped = helper('s9', {
       status: 'stopped',
       description: 'Denser board header',
-      endedAt: NOW - 29 * 3600 * S,
+      endedAt: NOW - 8 * 60 * S,
     })
     expect(ended([stopped], [])).toEqual({
-      title: 'Denser board header · stopped 1 d ago',
-      parts: ['Denser board header', 'stopped 1 d ago'],
+      title: 'Denser board header · stopped 8 min ago',
+      parts: ['Denser board header', 'stopped 8 min ago'],
     })
     expect(ended([], [run('wf_late', { endedAt: NOW - 10 * S, status: 'failed' })]).parts).toEqual([
       'flow-wf_late',
       'failed just now',
     ])
-    expect(ended([], [run('wf_only', { status: 'done' })]).parts).toEqual(['flow-wf_only', 'finished 13 min ago'])
+    expect(ended([], [run('wf_only', { status: 'done', endedAt: NOW - 7 * 60 * S })]).parts).toEqual([
+      'flow-wf_only',
+      'finished 7 min ago',
+    ])
+  })
+
+  describe('none at work: the newest ended line for ten minutes, then only the head', () => {
+    const textOf = (n: Node): string => (n.kind === 'text' ? n.text : n.children.map(textOf).join(''))
+    // The strip as the board draws it at `now`.
+    const at = (helpers: PublicHelper[], workflows: WorkflowRun[], now = NOW) =>
+      renderInBoard(
+        <HelpersStrip helpers={helpers} workflows={workflows} onHelper={() => {}} onList={() => {}} />,
+        board({ data: payload({ items: ITEMS, categories: CATEGORIES }), now }),
+      )
+    const parts = (nodes: Node[]) => {
+      const last = findAll(nodes, el => hasClass(el, 'helper-last'))
+      return {
+        last: last.map(el => el.children.slice(1).map(textOf)),
+        rows: findAll(nodes, el => hasClass(el, 'helper-rows')).length,
+        head: findAll(nodes, el => hasClass(el, 'helpers-head')).map(textOf),
+        hidden: nodes[0]?.kind === 'element' && nodes[0].attrs.has('hidden'),
+      }
+    }
+    const head = (sum: string) => [`Helpers${sum}All`]
+    const ago = (min: number) => NOW - min * 60 * S
+
+    test('a helper ended 9 min ago: its line; 11 min ago: the head alone, "All" still there', () => {
+      const ended = (min: number) => [
+        helper('b1', { description: 'Board header above docked panel', endedAt: ago(min), activity: ago(min) }),
+        helper('b0', { status: 'failed', endedAt: ago(min + 30), activity: ago(min + 30) }),
+      ]
+      expect(parts(at(ended(9), []))).toEqual({
+        last: [['Board header above docked panel', 'finished 9 min ago']],
+        rows: 1,
+        head: head('2 finished'),
+        hidden: false,
+      })
+      const later = at(ended(11), [])
+      expect(parts(later)).toEqual({ last: [], rows: 0, head: head('2 finished'), hidden: false })
+      expect(findAll(later, el => el.attrs.has('data-helpers-all')).length).toBe(1)
+    })
+
+    test('the line goes by itself as the board’s clock moves on, without new helpers', () => {
+      const list = [helper('b1', { endedAt: ago(9), activity: ago(9) })]
+      expect(parts(at(list, [], NOW)).last).toEqual([['Task b1', 'finished 9 min ago']])
+      expect(parts(at(list, [], NOW + 59 * S)).last).toEqual([['Task b1', 'finished 9 min ago']])
+      expect(parts(at(list, [], NOW + 61 * S)).last).toEqual([])
+    })
+
+    test('no end time: from its last activity', () => {
+      const stopped = (min: number) => [
+        helper('s2', { status: 'stopped', description: 'Stopped one', endedAt: null, activity: ago(min) }),
+      ]
+      expect(parts(at(stopped(9), [])).last).toEqual([['Stopped one', 'stopped 9 min ago']])
+      expect(parts(at(stopped(11), [])).last).toEqual([])
+    })
+
+    test('a workflow run: its line for ten minutes, then the head with nothing to count', () => {
+      const flow = (min: number) => [run('wf_n', { status: 'done', endedAt: ago(min), activity: ago(min) })]
+      expect(parts(at([], flow(9))).last).toEqual([['flow-wf_n', 'finished 9 min ago']])
+      expect(parts(at([], flow(11)))).toEqual({ last: [], rows: 0, head: head(''), hidden: false })
+    })
+
+    test('the newest decides: a run that ended 2 min ago shows over a helper of an hour ago', () => {
+      const list = [helper('b1', { endedAt: ago(60), activity: ago(60) })]
+      const flows = [run('wf_r', { status: 'done', endedAt: ago(2), activity: ago(2) })]
+      expect(parts(at(list, flows)).last).toEqual([['flow-wf_r', 'finished 2 min ago']])
+      expect(parts(at(list, flows, NOW + 9 * 60 * S)).last).toEqual([])
+    })
+
+    test('at work, beside helpers that ended a day ago: as before', () => {
+      const old = HELPERS.filter(h => h.status !== 'running').map(h => ({
+        ...h,
+        endedAt: h.endedAt && ago(24 * 60),
+        activity: ago(24 * 60),
+      }))
+      strip([...HELPERS.filter(h => h.status === 'running'), ...old], RUNS)
+      strip([HELPERS[0] as PublicHelper, ...old], [])
+      // Only a workflow run at work, its agent included.
+      strip([HELPERS[6] as PublicHelper, ...old], RUNS.slice(0, 1))
+    })
   })
 
   const relations = (links: NonNullable<Item['links']> | null, items = ITEMS) => {

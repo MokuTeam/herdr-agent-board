@@ -1,6 +1,7 @@
 // The session's helpers above its conversation in the sheet (the old page's app.js
 // renderHelpersStrip): the ones at work with what each does now and a running clock, else the
-// newest one in a line, which says how and when it ended if it did. A row opens the helper's conversation, "All" the whole list (the helpers
+// newest one in a line, which says how and when it ended if it did, for ten minutes after (LAST_FOR),
+// then only the head. A row opens the helper's conversation, "All" the whole list (the helpers
 // window, hooks/useHelpers.ts). A redraw keeps the focus on what opens the same thing
 // (hooks/useKeepFocus.ts).
 import type { MouseEvent, ReactNode } from 'react'
@@ -12,6 +13,9 @@ import { endedLine, helperTitle } from '../../models/helper-model.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { ChevGlyph } from '../icons.tsx'
 import { HelperRow, KindIcon, RunRow, StatusMark } from './HelperRows.tsx'
+
+/** How long the newest helper's line stays when none is at work, from when it ended (else its last activity). */
+const LAST_FOR = 10 * 60_000
 
 export interface HelpersStripProps {
   helpers: readonly PublicHelper[]
@@ -73,9 +77,11 @@ function Strip({
   )
   if (!liveRuns.length && !own.length) {
     // The newest of the session's own helpers or workflow runs (not an agent inside a run).
-    const last = [...list.filter(h => !h.workflow), ...runs].sort(
+    const newest = [...list.filter(h => !h.workflow), ...runs].sort(
       (a, b) => (b.endedAt ?? b.activity ?? 0) - (a.endedAt ?? a.activity ?? 0),
     )[0]
+    // Long enough for the owner to see it ended and how; after that the head alone says how many did.
+    const last = newest && now - (newest.endedAt ?? newest.activity ?? 0) < LAST_FOR ? newest : undefined
     const helper = last && 'kind' in last ? last : null
     const title = helper ? helperTitle(helper) : last ? last.name || last.id : ''
     // One that ended says how and when where its mark was: a stop mark read as a stop button (#113).
@@ -111,7 +117,7 @@ function Strip({
           <ChevGlyph />
         </button>
       </header>
-      <div className="helper-rows">{rows}</div>
+      {rows && <div className="helper-rows">{rows}</div>}
     </>
   )
 }
