@@ -13,7 +13,11 @@
 // (DesktopSize). Its cursor is drawn into the picture by the server. What it draws goes to
 // `screen`; what it sends, to `send`. While the picture comes as video (models/desk-video.ts) it
 // asks for none (`pictures: false`): the connection carries the mouse, the keys and the pings
-// only, until `watch()` asks for the picture after all.
+// only, until `watch()` asks for the picture after all. The clipboard goes both ways as UTF-8
+// where the server does the extended clipboard (TigerVNC does; plain cut text is Latin-1 only):
+// the display's text, once it says it has some and the page asks for it (`copies`), comes to
+// `copied`; text the page announces (`announce`) the server asks for when a program there pastes
+// (`clipboardWanted`), and gets (`provide`).
 import { Inflater } from './inflate.ts'
 
 /** Where the picture goes (models/desk-screen.ts: a canvas), each in the order it came. */
@@ -48,6 +52,10 @@ export interface RfbEvents {
   updated?(): void
   /** The answer to a ping (RfbClient.ping): the round trip to the server, in ms. */
   pong?(ms: number): void
+  /** What was copied on the display, while `copies` is on: its text (never logged). */
+  copied?(text: string): void
+  /** A program on the display pastes what the page announced: the server asks for its text (`provide`). */
+  clipboardWanted?(): void
 }
 
 export type RfbState = 'handshake' | 'live' | 'failed'
@@ -70,6 +78,17 @@ const TIGHT = 7
 const DESKTOP_SIZE = -223
 const FENCE = -312
 const CONTINUOUS_UPDATES = -313
+/** The extended clipboard (0xC0A1E5CE): UTF-8 both ways, announced first and sent when asked for. */
+const EXTENDED_CLIPBOARD = -1063131698
+/** Its flags: the formats (text only here), and what a message is. */
+const CLIP_TEXT = 1
+const CLIP_CAPS = 1 << 24
+const CLIP_REQUEST = 1 << 25
+const CLIP_PEEK = 1 << 26
+const CLIP_NOTIFY = 1 << 27
+const CLIP_PROVIDE = 1 << 28
+/** Clipboard text either way, at most this many bytes (TigerVNC's own MaxCutText). */
+export const MAX_CLIPBOARD = 256 * 1024
 /** Tight's JPEG quality, 0 to 9: -32 + it. */
 const QUALITY_0 = -32
 /** Tight's zlib level, 0 to 9: -256 + it. */
@@ -96,8 +115,11 @@ const SERVER_FENCE = 248
 /** A fence's flags: the other end asks for an answer; what before it, and what after it, must be done first. */
 const FENCE_REQUEST = 0x80000000
 const FENCE_BLOCK = 0b11
-/** A ping's fence says so in its first two bytes ("pp"), then its number. */
+/** A ping's fence says so in its first two bytes ("pp"), then its number; a wait for the server's turn ("ss"), so. */
 const PING = 0x70
+const SETTLE = 0x73
+/** Where the server does no fences: what waits for its turn waits this long (ms) instead. */
+const SETTLE_MS = 150
 /** A display larger than this on a side is not one Xvnc makes: the client stops instead of making a canvas that big. */
 const MAX_SIDE = 8192
 /** Tight's data shorter than this comes as it is, not through zlib. */
@@ -223,6 +245,30 @@ function fromGradient(data: Uint8Array, w: number, h: number): Uint8ClampedArray
 }
 
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes)
+/** Plain cut text: Latin-1, a byte a character. */
+const latin1 = (bytes: Uint8Array) => String.fromCharCode(...bytes)
+
+/** `data` as a zlib stream of stored blocks (nothing to gain from compressing a clipboard's text here), ended by a flush as TigerVNC's own. */
+function storedZlib(data: Uint8Array): Uint8Array<ArrayBuffer> {
+  const blocks = Math.ceil(data.length / 0xffff)
+  const out = new Uint8Array(2 + 5 * blocks + data.length + 5)
+  out.set([0x78, 0x01])
+  let at = 2
+  for (let i = 0; i < data.length; i += 0xffff) {
+    const n = Math.min(0xffff, data.length - i)
+    out.set([0, n & 255, n >> 8, ~n & 255, (~n >> 8) & 255], at)
+    out.set(data.subarray(i, i + n), at + 5)
+    at += 5 + n
+  }
+  out.set([0, 0, 0, 0xff, 0xff], at)
+  return out
+}
+
+/** A clipboard's text as the extended clipboard has it: UTF-8, lines ended CR LF, a NUL at the end. */
+function clipboardBytes(text: string): Uint8Array {
+  const bytes = new TextEncoder().encode(`${text.replace(/\r?\n/g, '\r\n')}\0`)
+  return bytes.length > MAX_CLIPBOARD ? new Uint8Array(0) : bytes
+}
 
 export class RfbClient {
   state: RfbState = 'handshake'
@@ -260,6 +306,15 @@ export class RfbClient {
   private fences = false
   private readonly pings = new Map<number, number>()
   private pinged = 0
+  /** What waits for the server's turn (settled), by its fence's number. */
+  private readonly waits = new Map<number, () => void>()
+  private waited = 0
+  /** The server does the extended clipboard (it said what it can). */
+  private extended = false
+  /** The display's copies are asked for and handed to `copied`. */
+  private copying = false
+  /** What the page announced it has (text or not), for the server's peek. */
+  private announced = false
 
   constructor(
     private readonly send: (bytes: Uint8Array<ArrayBuffer>) => void,
@@ -315,6 +370,86 @@ export class RfbClient {
     this.send(Uint8Array.of(4, down ? 1 : 0, 0, 0, k >>> 24, (k >>> 16) & 255, (k >>> 8) & 255, k & 255))
   }
 
+  /** The clipboard goes as UTF-8 both ways (the server does the extended clipboard). */
+  get clipboard(): boolean {
+    return this.extended
+  }
+
+  /**
+   * The display's copies to `copied` from now on (true), or not: then what it copies stays there
+   * and is not even asked for. Plain cut text (a server without the extended clipboard) comes as it is.
+   * On, what the client can do is said again: a board whose filter took only the owner's
+   * clipboard messages dropped it at the handshake, made while the agent had the browser.
+   */
+  set copies(on: boolean) {
+    const was = this.copying
+    this.copying = on
+    if (on && !was && this.extended && this.state === 'live') this.clipboardCaps()
+  }
+
+  /** What the client can do with the clipboard: text, up to MAX_CLIPBOARD, every action. */
+  private clipboardCaps(): void {
+    const caps = new Uint8Array(4)
+    new DataView(caps.buffer).setUint32(0, MAX_CLIPBOARD)
+    this.clipboardMessage(CLIP_CAPS | CLIP_TEXT | CLIP_REQUEST | CLIP_PEEK | CLIP_NOTIFY | CLIP_PROVIDE, caps)
+  }
+
+  /** The page has text for the display's clipboard (true) or none (false): the server asks for it when a program there pastes. */
+  announce(has: boolean): void {
+    if (this.state !== 'live' || !this.extended) return
+    this.announced = has
+    this.clipboardMessage(CLIP_NOTIFY | (has ? CLIP_TEXT : 0))
+  }
+
+  /** The text for the display's clipboard, as the server asked for it (or ahead of its asking). */
+  provide(clip: string): void {
+    if (this.state !== 'live' || !this.extended) return
+    const bytes = clipboardBytes(clip)
+    const sized = new Uint8Array(4 + bytes.length)
+    new DataView(sized.buffer).setUint32(0, bytes.length)
+    sized.set(bytes, 4)
+    this.clipboardMessage(CLIP_PROVIDE | CLIP_TEXT, storedZlib(sized))
+  }
+
+  /** A ClientCutText of the extended clipboard: its flags and what follows them. */
+  private clipboardMessage(flags: number, body: Uint8Array = new Uint8Array(0)): void {
+    const bytes = new Uint8Array(12 + body.length)
+    const view = new DataView(bytes.buffer)
+    view.setUint8(0, 6)
+    view.setInt32(4, -(4 + body.length))
+    view.setUint32(8, flags >>> 0)
+    bytes.set(body, 12)
+    this.send(bytes)
+  }
+
+  /** The server's extended cut text: what it can, asks for, peeks at, has, or sends. */
+  private serverClipboard(body: Uint8Array): void {
+    if (body.length < 4) return
+    const view = new DataView(body.buffer, body.byteOffset, body.byteLength)
+    const flags = view.getUint32(0)
+    if (flags & CLIP_CAPS) {
+      if (!(flags & CLIP_TEXT)) return
+      this.extended = true
+      this.clipboardCaps()
+    } else if (flags & CLIP_REQUEST) {
+      if (flags & CLIP_TEXT) this.events.clipboardWanted?.()
+    } else if (flags & CLIP_PEEK) {
+      this.clipboardMessage(CLIP_NOTIFY | (this.announced ? CLIP_TEXT : 0))
+    } else if (flags & CLIP_NOTIFY) {
+      if (flags & CLIP_TEXT && this.copying) this.clipboardMessage(CLIP_REQUEST | CLIP_TEXT)
+    } else if (flags & CLIP_PROVIDE && flags & CLIP_TEXT && this.copying) {
+      // its own zlib stream: the text's length, then its bytes (the first format there is text)
+      const out = new Inflater().inflate(body.subarray(4), 4 + MAX_CLIPBOARD, true)
+      if (!out || out.length < 4) return
+      const n = new DataView(out.buffer, out.byteOffset, out.byteLength).getUint32(0)
+      if (n > out.length - 4) return
+      const got = text(out.subarray(4, 4 + n))
+        .replace(/\0+$/, '')
+        .replace(/\r\n/g, '\n')
+      this.events.copied?.(got)
+    }
+  }
+
   /** JPEG's quality asked for now (0 to 9). */
   get jpegQuality(): number {
     return this.quality
@@ -338,6 +473,21 @@ export class RfbClient {
     for (const old of this.pings.keys()) if (this.pings.size > 8) this.pings.delete(old)
     this.send(Uint8Array.of(SERVER_FENCE, 0, 0, 0, 0x80, 0, 0, 0, 4, PING, PING, n >> 8, n & 255))
     return true
+  }
+
+  /**
+   * `fn` once the server has done all that went to it before (a fence of the client's own, which it
+   * answers in its turn); where it does no fences, after SETTLE_MS. Not live: never.
+   */
+  settled(fn: () => void): void {
+    if (this.state !== 'live') return
+    if (!this.fences) {
+      setTimeout(fn, SETTLE_MS)
+      return
+    }
+    const n = ++this.waited & 0xffff
+    this.waits.set(n, fn)
+    this.send(Uint8Array.of(SERVER_FENCE, 0, 0, 0, 0x80, 0, 0, 0, 4, SETTLE, SETTLE, n >> 8, n & 255))
   }
 
   /**
@@ -463,6 +613,7 @@ export class RfbClient {
       CONTINUOUS_UPDATES,
       QUALITY_0 + this.quality,
       COMPRESS_0 + COMPRESSION,
+      EXTENDED_CLIPBOARD,
     ]
     const bytes = new Uint8Array(4 + 4 * list.length)
     const view = new DataView(bytes.buffer)
@@ -509,11 +660,15 @@ export class RfbClient {
         p.skip(1)
         return true
       case 3: {
-        // ServerCutText: the display's clipboard, not taken.
+        // ServerCutText: the display's clipboard, as plain Latin-1 or (a negative length) extended
         if (p.length < 8) return false
-        const n = 8 + p.u32(4)
-        if (p.length < n) return false
-        p.skip(n)
+        const length = p.u32(4) | 0
+        const size = Math.abs(length)
+        if (size > MAX_CLIPBOARD + 64) return this.fail('data', `cut text ${size}`)
+        if (p.length < 8 + size) return false
+        const body = p.take(8 + size).subarray(8)
+        if (length < 0) this.serverClipboard(body)
+        else if (this.copying && size) this.events.copied?.(latin1(body).replace(/\r\n/g, '\n'))
         return true
       }
       case END_OF_CONTINUOUS_UPDATES:
@@ -548,6 +703,12 @@ export class RfbClient {
           const sent = this.pings.get(k)
           this.pings.delete(k)
           if (sent !== undefined) this.events.pong?.(this.now() - sent)
+        } else if (n === 4 && fence[9] === SETTLE && fence[10] === SETTLE) {
+          // the server's turn came: what waited for it goes
+          const k = ((fence[11] as number) << 8) | (fence[12] as number)
+          const fn = this.waits.get(k)
+          this.waits.delete(k)
+          fn?.()
         }
         return true
       }

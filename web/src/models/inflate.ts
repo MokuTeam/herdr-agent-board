@@ -107,10 +107,11 @@ export class Inflater {
   }
 
   /**
-   * What `data`, the stream's next part, inflates to: exactly `size` bytes, valid until the next
-   * call (the caller copies them out). Null when it is not that: then the stream cannot go on.
+   * What `data`, the stream's next part, inflates to: exactly `size` bytes (or, `atMost`, up to
+   * that many: a clipboard's text, its length inside), valid until the next call (the caller copies
+   * them out). Null when it is not that: then the stream cannot go on.
    */
-  inflate(data: Uint8Array, size: number): Uint8Array | null {
+  inflate(data: Uint8Array, size: number, atMost = false): Uint8Array | null {
     if (this.finished) return null
     // room for the part after the window: slide the window down, or grow
     if (this.end + size > this.buf.length) {
@@ -264,8 +265,8 @@ export class Inflater {
         break
       }
     }
-    if (op !== limit) return null
+    if (atMost ? op > limit : op !== limit) return null
     this.end = op
-    return out.subarray(start, limit)
+    return out.subarray(start, op)
   }
 }

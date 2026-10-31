@@ -199,13 +199,19 @@ export function controlOf(body: unknown): Control | null {
 
 /** A viewer's clipboard text longer than this closes it (no viewer of the board's sends one). */
 const MAX_CUT = 1 << 20
+/** The extended clipboard's flags: what the viewer can do (caps), and what it has (notify; no format: nothing). */
+const CLIP_CAPS = 1 << 24
+const CLIP_NOTIFY = 1 << 27
 
 /**
  * What a viewer sends a desktop's VNC (RFB, client to server), cut into its messages: the bytes
  * that go on. The handshake (the version, the security type, ClientInit) and what only asks for
- * the picture (its pixel format, encodings, updates, continuous updates, fences) always go on;
- * what acts on the display (a key, the mouse, the clipboard, its size, xvp) only while `input`
- * (the owner has the browser): the server never sees a watcher's. Null: bytes it cannot read on
+ * the picture (its pixel format, encodings, updates, continuous updates, fences) always go on,
+ * and of the extended clipboard what the viewer can do (its caps) and its letting go of a
+ * clipboard of its own (a notify with nothing: the server heeds it from the viewer that has it
+ * only); what acts on the display (a key, the mouse, the clipboard's text announced, sent or asked
+ * for, its size, xvp) only while `input` (the owner has the browser): the server never sees a
+ * watcher's. Null: bytes it cannot read on
  * from (another protocol, a security type other than None, a message it does not know), and the
  * viewer is closed. One per viewer: a message cut across WebSocket frames waits for its rest.
  */
@@ -232,10 +238,16 @@ export function rfbInputFilter(): (bytes: Uint8Array, input: boolean) => Uint8Ar
       case 5: // PointerEvent
         return need(6, true)
       case 6: {
-        // ClientCutText (a negative length: the extended clipboard's)
+        // ClientCutText (a negative length: the extended clipboard's, its flags first)
         if (have < 8) return { n: 0, acts: true }
-        const len = Math.abs(s32(4))
-        return len > MAX_CUT ? null : need(8 + len, true)
+        const raw = s32(4)
+        const len = Math.abs(raw)
+        if (len > MAX_CUT) return null
+        if (raw >= 0) return need(8 + len, true)
+        if (have < 12) return { n: 0, acts: true }
+        const flags = s32(8) >>> 0
+        const says = flags & CLIP_CAPS || (flags >>> 24 === CLIP_NOTIFY >>> 24 && !(flags & 0xffff))
+        return need(8 + len, !says)
       }
       case 150: // EnableContinuousUpdates
         return need(10)
@@ -399,6 +411,63 @@ export function chromeArgs(o: { profileDir: string; extra?: readonly string[] })
     ...(o.extra ?? []),
     'about:blank',
   ]
+}
+
+/**
+ * The letters a display's keyboard has besides its own, each with its capital: Russian, Ukrainian
+ * and Belarusian, then the accented Latin ones most typed. Xvnc (TigerVNC) types a keysym its
+ * keyboard lacks by putting it on a free key on the way, and has room for some twenty: then it
+ * drops the rest ("Failure adding new keysym"), and a key put there just before may be read by
+ * Chrome as the one after it. With these on keys of their own (deskKeymap), they type as any
+ * letter does (web/src/models/desk-input.ts).
+ */
+export const DESK_LETTERS = 'абвгдеёжзийклмнопрстуфхцчшщъыьэюяіїєґўéèêëàâäçùûüôöîïñáíóúßø'
+/** Marks typed as much, two to a key (the second with Shift): quotes, dashes, the ellipsis, №, ₽, €, °. */
+export const DESK_MARKS = '«»—–„“”’‘…№₽€°'
+/** Every character the display's keyboard has a key for besides US ASCII (with the letters' capitals). */
+export const DESK_KEYED = `${DESK_LETTERS}${DESK_LETTERS.replace('ß', 'ẞ').toUpperCase()}${DESK_MARKS}`
+/**
+ * Keys no one presses on a display (F13 to F24, launch, system and brightness keys), for
+ * DESK_LETTERS and DESK_MARKS: not the ones Chrome acts on (Back, Forward, Reload), the media and
+ * scrolling keys, nor those Xvnc leaves free for what it puts on the way.
+ */
+const SPARE_KEYS = [
+  ...Array.from({ length: 12 }, (_, i) => `FK${13 + i}`),
+  ...[147, 148, 150, 151, 152, 153, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 169, 170, 177, 179, 189],
+  ...[210, 211, 212, 213, 214, 220, 223, 224, 226, 227, 228, 229, 232, 233, 235, 236, 237, 238, 239, 240, 241],
+  ...[243, 244, 245, 246, 247, 249, 250, 251, 252, 253, 254, 255],
+].map(k => (typeof k === 'number' ? `I${k}` : k))
+
+/** A character's keysym name for xkbcomp (U0430; Latin-1 is its own keysym there). */
+const unicodeName = (ch: string) => `U${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}`
+/** A letter's capital (ß's is ẞ, not "SS"). */
+const capital = (ch: string) => (ch === 'ß' ? 'ẞ' : ch.toUpperCase())
+
+/**
+ * A display's keymap (xkbcomp's source): Xvnc's own (US on evdev's keys), and DESK_LETTERS (each
+ * its letter and, with Shift, its capital) and DESK_MARKS (two to a key) on SPARE_KEYS, in the
+ * same group, where Xvnc looks for them.
+ */
+export function deskKeymap(): string {
+  const letters = [...DESK_LETTERS].map(ch => ['ALPHABETIC', ch, capital(ch)])
+  const marks = [...DESK_MARKS].flatMap((ch, i, all) => (i % 2 ? [] : [['TWO_LEVEL', ch, all[i + 1] ?? ch]]))
+  const keys = [...letters, ...marks].map(
+    ([type, one, two], i) =>
+      `    key <${SPARE_KEYS[i]}> { type = "${type}", [ ${unicodeName(one as string)}, ${unicodeName(two as string)} ] };`,
+  )
+  return [
+    'xkb_keymap {',
+    '  xkb_keycodes { include "evdev+aliases(qwerty)" };',
+    '  xkb_types { include "complete" };',
+    '  xkb_compat { include "complete" };',
+    '  xkb_symbols {',
+    '    include "pc+us+inet(evdev)"',
+    ...keys,
+    '  };',
+    '  xkb_geometry { include "pc(pc105)" };',
+    '};',
+    '',
+  ].join('\n')
 }
 
 /**

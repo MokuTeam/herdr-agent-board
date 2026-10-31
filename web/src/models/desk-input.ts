@@ -1,5 +1,6 @@
 // What the page's keys, mouse and pasted text are on an agent's display (models/rfb.ts): X keysyms
 // and the display's own points and buttons.
+import { DESK_KEYED } from '../../../src/core/desktop.ts'
 
 /** Keys by the page's name for them (KeyboardEvent.key); a side's own by its code. */
 const NAMED: Record<string, number> = {
@@ -256,5 +257,162 @@ export class InputQueue {
       this.waiting = false
       this.flush()
     })
+  }
+}
+
+/** What typing needs of the display: its keys and, where it has one, its clipboard (models/rfb.ts). */
+export interface TypingSink {
+  key(keysym: number, down: boolean): void
+  /** The display takes clipboard text as UTF-8 (the extended clipboard). */
+  readonly clipboard: boolean
+  announce(has: boolean): void
+  provide(text: string): void
+  /** `fn` once the server has done what went to it before. */
+  settled(fn: () => void): void
+}
+
+/** Text longer than this (characters) goes by the display's clipboard even where every key of it is there. */
+export const LONG_TEXT = 200
+/** A paste the display does not ask for in this long (ms) did not happen there (nothing took it): what waits goes on. */
+export const PASTE_WAIT_MS = 2000
+/**
+ * The server has a paste's text: this long (ms) more before the clipboard changes again. Chrome
+ * there drops a paste whose clipboard changes while it is still at it: about one in ten at 100 to
+ * 250 ms, none at 600 (measured on the board's Chromium with characters pasted a key apart).
+ */
+export const PASTE_SETTLE_MS = 600
+/** The display's clipboard is emptied this long (ms) after the last paste. */
+export const CLEAR_MS = 1500
+const CONTROL_L = 0xffe3
+const KEY_V = 0x76
+
+const KEYED = new Set(DESK_KEYED)
+/**
+ * A character the display's keyboard has, typed as its key: US ASCII, a line's end, a tab, and the
+ * letters and marks the board gives it (core/desktop.ts deskKeymap: Cyrillic, accented Latin, «»—…).
+ */
+export const keyed = (ch: string): boolean => ch === '\n' || ch === '\t' || (ch >= ' ' && ch <= '~') || KEYED.has(ch)
+
+/**
+ * Text to the display. What its keyboard has goes as keys (`keyed`: passwords too, which so never
+ * reach its clipboard); the rest (an emoji, another alphabet: a key Xvnc would have to add, and it
+ * has room for only a few, then drops them) goes by its clipboard: the text announced,
+ * Ctrl+V, the text when the server asks for it, and the next change only once the server's turn
+ * came and the program there read it; text longer than LONG_TEXT goes so whole. Its clipboard is emptied CLEAR_MS after the last paste, so what was typed or pasted
+ * does not stay there. Keys and the pointer (`later`) wait behind a paste in flight, in their order;
+ * with nothing in flight they go at once. A display without the extended clipboard gets keys only,
+ * as before.
+ */
+export class DeskTyping {
+  private queue: (string | (() => void))[] = []
+  private pasting: { text: string; asked: boolean; waiting: ReturnType<typeof setTimeout> } | null = null
+  private clearing: ReturnType<typeof setTimeout> | undefined
+  /** The display's clipboard has text of the page's (not emptied yet). */
+  private holds = false
+
+  constructor(private readonly sink: TypingSink) {}
+
+  /** Text as typed or pasted, after what waits. */
+  text(text: string): void {
+    if (!text) return
+    this.queue.push(text)
+    this.run()
+  }
+
+  /** Anything else for the display (a key, the pointer): at once, or after the paste in flight and what waits. */
+  later(fn: () => void): void {
+    if (!this.pasting && !this.queue.length) fn()
+    else this.queue.push(fn)
+  }
+
+  /** The server asks for the text announced (a program there pastes): it goes, and what waits after the server's turn. */
+  wanted(): void {
+    const p = this.pasting
+    if (!p || p.asked) return
+    p.asked = true
+    clearTimeout(p.waiting)
+    this.sink.provide(p.text)
+    this.sink.settled(() => {
+      p.waiting = setTimeout(() => this.done(p), PASTE_SETTLE_MS)
+    })
+  }
+
+  /** What waits dropped and the display's clipboard emptied (control given back, the view gone). */
+  stop(): void {
+    this.queue = []
+    if (this.pasting) clearTimeout(this.pasting.waiting)
+    this.pasting = null
+    this.clear()
+  }
+
+  private run(): void {
+    while (!this.pasting && this.queue.length) {
+      const next = this.queue.shift() as string | (() => void)
+      if (typeof next === 'function') {
+        next()
+        continue
+      }
+      let text = next
+      while (typeof this.queue[0] === 'string') text += this.queue.shift()
+      this.type(text)
+    }
+  }
+
+  private type(text: string): void {
+    const chars = [...text]
+    const first = chars.findIndex(ch => !keyed(ch))
+    if (this.sink.clipboard && chars.length > LONG_TEXT) {
+      this.paste(text)
+      return
+    }
+    if (!this.sink.clipboard || first < 0) {
+      this.press(text)
+      return
+    }
+    // up to the first that no key types as keys; from it to the last such before a line's end, one paste; then the rest
+    let last = first
+    for (let i = first + 1; i < chars.length && chars[i] !== '\n' && chars[i] !== '\t'; i++)
+      if (!keyed(chars[i] as string)) last = i
+    this.press(chars.slice(0, first).join(''))
+    const rest = chars.slice(last + 1).join('')
+    if (rest) this.queue.unshift(rest)
+    this.paste(chars.slice(first, last + 1).join(''))
+  }
+
+  private press(text: string): void {
+    for (const keysym of textKeysyms(text)) {
+      this.sink.key(keysym, true)
+      this.sink.key(keysym, false)
+    }
+  }
+
+  private paste(text: string): void {
+    clearTimeout(this.clearing)
+    const p = { text, asked: false, waiting: setTimeout(() => this.done(p), PASTE_WAIT_MS) }
+    this.pasting = p
+    this.holds = true
+    this.sink.announce(true)
+    this.sink.key(CONTROL_L, true)
+    this.sink.key(KEY_V, true)
+    this.sink.key(KEY_V, false)
+    this.sink.key(CONTROL_L, false)
+  }
+
+  private done(p: NonNullable<DeskTyping['pasting']>): void {
+    if (this.pasting !== p) return
+    clearTimeout(p.waiting)
+    this.pasting = null
+    this.run()
+    if (!this.pasting && this.holds) {
+      clearTimeout(this.clearing)
+      this.clearing = setTimeout(() => this.clear(), CLEAR_MS)
+    }
+  }
+
+  private clear(): void {
+    clearTimeout(this.clearing)
+    if (!this.holds || this.pasting) return
+    this.holds = false
+    this.sink.announce(false)
   }
 }

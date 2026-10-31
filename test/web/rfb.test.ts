@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { constants, deflateSync } from 'node:zlib'
+import { constants, deflateSync, inflateSync } from 'node:zlib'
 import { rfbInputFilter } from '../../src/core/desktop.ts'
 import {
   buttonMask,
@@ -47,6 +47,9 @@ function world(options: RfbOptions = {}) {
   /** Each put's pixels, as RGBA. */
   const pixels: number[][] = []
   const pongs: number[] = []
+  /** What the display copied, as handed on; how often its server asked for the page's clipboard. */
+  const copies: string[] = []
+  let wanted = 0
   let live = ''
   let updates = 0
   const screen: RfbScreen = {
@@ -72,10 +75,24 @@ function world(options: RfbOptions = {}) {
       failed: why => failures.push(why),
       updated: () => updates++,
       pong: ms => pongs.push(ms),
+      copied: text => copies.push(text),
+      clipboardWanted: () => wanted++,
     },
     options,
   )
-  return { client, sent, drawn, failures, jpegs, pixels, pongs, live: () => live, updates: () => updates }
+  return {
+    client,
+    sent,
+    drawn,
+    failures,
+    jpegs,
+    pixels,
+    pongs,
+    copies,
+    wanted: () => wanted,
+    live: () => live,
+    updates: () => updates,
+  }
 }
 
 /** A client through the 3.8 handshake to a display named "agent" (4 × 2), what it sent so far taken. */
@@ -114,8 +131,9 @@ describe('the handshake', () => {
       // SetPixelFormat: 32 bits, depth 24, little-endian, true colour, 255 each, red at 0, green 8, blue 16.
       [0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 0, 8, 16, 0, 0, 0],
       // SetEncodings: CopyRect, then Tight, Hextile and Raw, the server's choice the first it has;
-      // the display's new size, fences, continuous updates, Tight's JPEG at quality 6, its zlib at 2.
-      [2, 0, 0, 9, ...[1, 7, 5, 0, -223, -312, -313, -26, -254].flatMap(s32)],
+      // the display's new size, fences, continuous updates, Tight's JPEG at quality 6, its zlib at 2,
+      // the extended clipboard (UTF-8 both ways).
+      [2, 0, 0, 10, ...[1, 7, 5, 0, -223, -312, -313, -26, -254, -1063131698].flatMap(s32)],
       // The whole screen, not incremental.
       [3, 0, 0, 0, 0, 0, ...u16(1280), ...u16(800)],
     ])
@@ -875,5 +893,142 @@ describe('desk input', () => {
     expect(buttonMask(2)).toBe(4)
     expect(buttonMask(4)).toBe(2)
     expect(buttonMask(7)).toBe(7)
+  })
+})
+
+describe('the clipboard', () => {
+  const CAPS = 1 << 24
+  const REQUEST = 1 << 25
+  const PEEK = 1 << 26
+  const NOTIFY = 1 << 27
+  const PROVIDE = 1 << 28
+  const TEXT = 1
+  /** The server's extended cut text: its flags and what follows them. */
+  const serverClip = (flags: number, ...body: (number[] | Uint8Array)[]) => {
+    const rest = bytes(...body)
+    return bytes(3, 0, 0, 0, s32(-(4 + rest.length)), u32(flags), rest)
+  }
+  /** The text a provide carries: its zlib stream of the length, the bytes. */
+  const provided = (text: string) => {
+    const raw = ascii(text)
+    return deflateSync(bytes(u32(raw.length), raw))
+  }
+  /** A client's extended cut text read back: its flags and its body. */
+  const clientClip = (m: number[]) => {
+    expect(m.slice(0, 4)).toEqual([6, 0, 0, 0])
+    const view = new DataView(Uint8Array.from(m).buffer)
+    expect(-view.getInt32(4)).toBe(m.length - 8)
+    return { flags: view.getUint32(8), body: Uint8Array.from(m.slice(12)) }
+  }
+  /** Connected to a server that does the extended clipboard (its caps answered), what was sent taken. */
+  const extended = () => {
+    const w = connected()
+    w.client.receive(serverClip(CAPS | TEXT | REQUEST | PEEK | NOTIFY | PROVIDE, u32(10 << 20)))
+    w.sent.length = 0
+    return w
+  }
+
+  test('a server with the extended clipboard: the client answers with what it can (text, up to 256 KB, every action); without it, plain', () => {
+    const w = connected()
+    expect(w.client.clipboard).toBe(false)
+    w.client.receive(serverClip(CAPS | TEXT | REQUEST | NOTIFY | PROVIDE, u32(1 << 20)))
+    expect(w.client.clipboard).toBe(true)
+    expect(w.sent).toHaveLength(1)
+    const caps = clientClip(w.sent[0] as number[])
+    expect(caps.flags).toBe((CAPS | TEXT | REQUEST | PEEK | NOTIFY | PROVIDE) >>> 0)
+    expect([...caps.body]).toEqual(u32(256 * 1024))
+    // caps with no text: not this client's kind
+    const other = connected()
+    other.client.receive(serverClip(CAPS | 2, u32(100)))
+    expect(other.client.clipboard).toBe(false)
+  })
+
+  test('what the display copied: asked for and handed on (UTF-8, its line ends LF, no NUL) only while copies are on; plain cut text as Latin-1', () => {
+    const w = extended()
+    // off (the owner does not have it): a copy there is not even asked for
+    w.client.receive(serverClip(NOTIFY | TEXT))
+    expect(w.sent).toEqual([])
+    // on (the owner took it): what the client can do said again (a filter may have dropped it at the handshake)
+    w.client.copies = true
+    expect(w.sent.map(m => clientClip(m).flags)).toEqual([(CAPS | TEXT | REQUEST | PEEK | NOTIFY | PROVIDE) >>> 0])
+    w.client.copies = true
+    expect(w.sent).toHaveLength(1)
+    w.sent.length = 0
+    w.client.receive(serverClip(NOTIFY | TEXT))
+    expect(w.sent.map(m => clientClip(m).flags)).toEqual([(REQUEST | TEXT) >>> 0])
+    // it has nothing now: nothing asked
+    w.client.receive(serverClip(NOTIFY))
+    expect(w.sent).toHaveLength(1)
+    w.client.receive(serverClip(PROVIDE | TEXT, provided('Скопируй\r\nменя ✓\0')))
+    expect(w.copies).toEqual(['Скопируй\nменя ✓'])
+    // in two pieces, as a socket may cut it
+    const again = serverClip(PROVIDE | TEXT, provided('second'))
+    w.client.receive(again.slice(0, 9))
+    w.client.receive(again.slice(9))
+    expect(w.copies).toEqual(['Скопируй\nменя ✓', 'second'])
+    // off again: what comes is dropped
+    w.client.copies = false
+    w.client.receive(serverClip(PROVIDE | TEXT, provided('third')))
+    expect(w.copies).toHaveLength(2)
+    // a server without it: plain Latin-1 cut text
+    const plain = connected()
+    plain.client.copies = true
+    plain.client.receive(bytes(3, 0, 0, 0, u32(5), [0x63, 0x61, 0x66, 0xe9, 0x21]))
+    expect(plain.copies).toEqual(['café!'])
+    expect(plain.client.state).toBe('live')
+  })
+
+  test('the page’s text for the display’s clipboard: announced, sent as the server asks (UTF-8, CR LF, a NUL, one zlib stream), and taken back', () => {
+    const w = extended()
+    w.client.announce(true)
+    w.client.receive(serverClip(REQUEST | TEXT))
+    expect(w.wanted()).toBe(1)
+    w.client.provide('Привет\nмир')
+    w.client.announce(false)
+    const [has, text, none] = w.sent.map(clientClip)
+    expect(has?.flags).toBe((NOTIFY | TEXT) >>> 0)
+    expect(text?.flags).toBe((PROVIDE | TEXT) >>> 0)
+    const out = inflateSync(text?.body as Uint8Array, { finishFlush: constants.Z_SYNC_FLUSH })
+    const n = new DataView(out.buffer, out.byteOffset).getUint32(0)
+    expect(n).toBe(out.length - 4)
+    expect(new TextDecoder().decode(out.subarray(4))).toBe('Привет\r\nмир\0')
+    expect(none?.flags).toBe(NOTIFY >>> 0)
+    // the server peeks: what the page has, said again
+    w.sent.length = 0
+    w.client.receive(serverClip(PEEK))
+    expect(w.sent.map(m => clientClip(m).flags)).toEqual([NOTIFY >>> 0])
+    // a server without it: nothing of this goes
+    const plain = connected()
+    plain.client.announce(true)
+    plain.client.provide('x')
+    expect(plain.sent).toEqual([])
+  })
+
+  test('settled: once the server answered a fence of its own (its turn came); where it does no fences, a moment later', async () => {
+    const w = connected()
+    const done: string[] = []
+    w.client.settled(() => done.push('no fences'))
+    expect(w.sent).toEqual([])
+    await new Promise(r => setTimeout(r, 200))
+    expect(done).toEqual(['no fences'])
+    // it does fences (it sent one, answered at once)
+    w.client.receive(bytes(248, 0, 0, 0, u32(0x80000000), 0))
+    w.sent.length = 0
+    w.client.settled(() => done.push('first'))
+    w.client.settled(() => done.push('second'))
+    expect(w.sent.map(m => m.slice(0, 11))).toEqual([
+      [248, 0, 0, 0, 0x80, 0, 0, 0, 4, 0x73, 0x73],
+      [248, 0, 0, 0, 0x80, 0, 0, 0, 4, 0x73, 0x73],
+    ])
+    expect(done).toEqual(['no fences'])
+    // the server's answers: its flags without "request", the client's bytes back
+    for (const m of w.sent) w.client.receive(bytes(248, 0, 0, 0, u32(0), 4, m.slice(9)))
+    expect(done).toEqual(['no fences', 'first', 'second'])
+  })
+
+  test('a cut text far too long for a clipboard: the client stops instead of waiting for it', () => {
+    const w = connected()
+    w.client.receive(bytes(3, 0, 0, 0, u32(64 << 20)))
+    expect(w.failures).toEqual([{ code: 'data', detail: `cut text ${64 << 20}` }])
   })
 })

@@ -10,7 +10,10 @@
 // keys) on the canvas go to it, and leave the board's own shortcuts alone. A finger's or a pen's
 // tap brings up the screen's keyboard (a canvas brings up none): its text goes as keys too. A
 // finger as on a tablet's remote desktop: a tap clicks, a swipe scrolls, held still it drags, a
-// pinch zooms the picture in the board.
+// pinch zooms the picture in the board. Text the display's keyboard has no keys for (an emoji,
+// another alphabet than those the board gives it), and long pastes, go by its clipboard
+// (models/desk-input.ts DeskTyping); what is copied there, while the owner has it, the view offers
+// to copy to the owner's own (`copied`, `copyOut`).
 import { useEffect, useRef, useState } from 'react'
 import type { Translator } from '../../../src/core/types.ts'
 import { pageLog } from '../api/client.ts'
@@ -18,13 +21,14 @@ import { desktopSocketUrl } from '../api/desktop.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import {
   buttonMask,
+  DeskTyping,
   InputQueue,
+  keyed,
   keysymOf,
   NO_ZOOM,
   pinched,
   screenPoint,
   shownScale,
-  textKeysyms,
   WHEEL_DOWN,
   WHEEL_LEFT,
   WHEEL_PX,
@@ -50,6 +54,15 @@ export interface DeskView {
   canvas: HTMLCanvasElement | null
   /** The link's round trip, frames a second and what the picture comes by, for the picture's corner (with the canvas). */
   meter: HTMLElement | null
+  /** Something was copied in its browser while the owner has it: the view offers to copy it to the owner's own. */
+  copied: boolean
+  /**
+   * What was copied there, onto the owner's clipboard (call it in the tap's own handler: a browser
+   * copies only so); the offer goes. Resolves once it is there, rejects with why not.
+   */
+  copyOut(): Promise<void>
+  /** Text into its browser where its cursor is, as if typed (the owner's clipboard, read by a button). */
+  type(text: string): void
   /** Connect again after it closed or failed. */
   retry(): void
 }
@@ -67,6 +80,8 @@ const whyText = (why: RfbFailure, t: Translator): string =>
 
 export interface DeskInput {
   detach(): void
+  /** Text typed or pasted, as the field's (models/desk-input.ts DeskTyping). */
+  type(text: string): void
   /** Keys and buttons still down go up on the display (control given back, the canvas left). */
   release(): void
   /** Control given back: what is down goes up, a touch screen's keyboard goes, the picture fits again. */
@@ -113,6 +128,22 @@ const middleOf = (points: Point[]): Point => ({
  */
 type Gesture = 'wait' | 'two' | 'swipe' | 'pinch' | 'hold' | 'over'
 
+/** Copied to the page's clipboard: the clipboard API where the page has it (https, localhost), else a field selected and the copy command. */
+export function copyText(text: string): Promise<void> {
+  if (typeof navigator !== 'undefined' && typeof navigator.clipboard?.writeText === 'function')
+    return navigator.clipboard.writeText(text)
+  const field = document.createElement('textarea')
+  field.value = text
+  field.setAttribute('readonly', '')
+  field.setAttribute('class', 'desk-keys')
+  document.body.appendChild(field)
+  field.select?.()
+  field.setSelectionRange?.(0, text.length)
+  const ok = typeof document.execCommand === 'function' && document.execCommand('copy')
+  document.body.removeChild(field)
+  return ok ? Promise.resolve() : Promise.reject(new Error('copy'))
+}
+
 /**
  * The canvas's mouse, wheel, keys and pastes to the display, while `controlling()`. A tap (a
  * finger or a pen) puts the keys in a field of their own by the picture instead (`label`: its
@@ -126,9 +157,29 @@ export function attachInput(
   rfb: RfbClient,
   controlling: () => boolean,
   label: () => string = () => '',
+  /** Its typing, for the display's requests for the clipboard text it announced. */
+  withTyping: (typing: { wanted(): void }) => void = () => {},
 ): DeskInput {
   // moves and wheel steps a frame at a time; buttons and keys at once (models/desk-input.ts)
   const out = new InputQueue(rfb, nextFrame)
+  // text as keys, or what no key types by the display's clipboard; keys and the pointer after a
+  // paste in flight, in their order (at once with none)
+  const typing = new DeskTyping({
+    key: (keysym, down) => out.key(keysym, down),
+    get clipboard() {
+      return rfb.clipboard
+    },
+    announce: has => rfb.announce(has),
+    provide: text => rfb.provide(text),
+    settled: fn => rfb.settled(fn),
+  })
+  withTyping(typing)
+  const send = {
+    pointer: (x: number, y: number, mask: number) => typing.later(() => out.pointer(x, y, mask)),
+    wheel: (x: number, y: number, mask: number, step: number) => typing.later(() => out.wheel(x, y, mask, step)),
+    key: (keysym: number, down: boolean) => typing.later(() => out.key(keysym, down)),
+    flush: () => typing.later(() => out.flush()),
+  }
   const keys = new Map<string, number>()
   let mask = 0
   let last = { x: 0, y: 0 }
@@ -143,31 +194,39 @@ export function attachInput(
     if (!p) return
     last = p
     mask = buttonMask(e.buttons)
-    out.pointer(p.x, p.y, mask)
+    send.pointer(p.x, p.y, mask)
   }
   const release = () => {
-    for (const keysym of keys.values()) out.key(keysym, false)
+    for (const keysym of keys.values()) send.key(keysym, false)
     keys.clear()
-    if (mask) out.pointer(last.x, last.y, 0)
+    if (mask) send.pointer(last.x, last.y, 0)
     mask = 0
   }
   const press = (keysyms: number[]) => {
     for (const keysym of keysyms) {
-      out.key(keysym, true)
-      out.key(keysym, false)
+      send.key(keysym, true)
+      send.key(keysym, false)
     }
   }
   const keyDown = (e: Event) => {
     const k = e as KeyboardEvent
     // The board's own keys (its shortcuts, Esc closing the panel) stay out of it.
     e.stopPropagation()
-    // A paste: its text comes as keys (paste, below), not as Ctrl+V on the display.
-    if ((k.ctrlKey || k.metaKey) && k.key?.toLowerCase() === 'v') return
+    // A paste: its text comes as keys (paste, below), not as Ctrl+V on the display; the field takes
+    // it (a picture is no place a browser pastes into: Safari fires no paste there).
+    if ((k.ctrlKey || k.metaKey) && k.key?.toLowerCase() === 'v') return catchPaste()
+    // A character the display's keyboard has no key for (an emoji, another alphabet): as text.
+    const ch = k.key ?? ''
+    if (rfb.clipboard && [...ch].length === 1 && !keyed(ch) && !k.metaKey && (!k.ctrlKey || k.altKey)) {
+      e.preventDefault()
+      typing.text(ch)
+      return
+    }
     const keysym = keysymOf(k.key ?? '', k.code ?? '')
     if (keysym === null) return
     e.preventDefault()
     keys.set(k.code || k.key, keysym)
-    out.key(keysym, true)
+    send.key(keysym, true)
   }
   const keyUp = (e: Event) => {
     const k = e as KeyboardEvent
@@ -177,14 +236,14 @@ export function attachInput(
     if (keysym === undefined) return
     e.preventDefault()
     keys.delete(id)
-    out.key(keysym, false)
+    send.key(keysym, false)
   }
   const paste = (e: Event) => {
     e.preventDefault()
     const text = (e as ClipboardEvent).clipboardData?.getData('text/plain') ?? ''
     // The Ctrl held for the paste goes up first, so the text types as text.
     release()
-    press(textKeysyms(text.slice(0, MAX_PASTE)))
+    typing.text(text.slice(0, MAX_PASTE))
   }
 
   // ------------------------------------------------ a touch screen's keyboard
@@ -201,7 +260,7 @@ export function attachInput(
       let same = 0
       while (same < KEYS_AT.length && now[same] === KEYS_AT[same]) same++
       press(new Array<number>(KEYS_AT.length - same).fill(BACKSPACE))
-      press(textKeysyms(now.slice(same, same + MAX_PASTE)))
+      typing.text(now.slice(same, same + MAX_PASTE))
     }
     keepField()
   }
@@ -227,25 +286,53 @@ export function attachInput(
     compositionend: typed,
     paste(e) {
       if (controlling()) paste(e)
+      // a paste the picture's Ctrl/Cmd+V sent here: the picture has the keys again
+      if (pasted) back()
     },
     blur: release,
   }
-  /** The field by the picture (wherever it shows now), with the keys in it: the screen's keyboard comes up. */
-  const keyboard = () => {
+  /** The field by the picture (wherever it shows now). */
+  const fieldHere = (): HTMLTextAreaElement => {
     if (!field) {
       field = document.createElement('textarea')
       field.setAttribute('class', 'desk-keys')
       field.setAttribute('aria-label', label())
-      // What it types goes as it is: no capitals, corrections or suggestions of the keyboard's own.
-      const plain = { autocapitalize: 'off', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false' }
+      // What it types goes as it is: no capitals, corrections or suggestions of the keyboard's own,
+      // and no language of its own (not the board's, which the screen's keyboard may then keep to):
+      // the keyboard the owner picks (its globe key) stays.
+      const plain = { autocapitalize: 'off', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false', lang: '' }
       for (const [name, value] of Object.entries({ ...plain, tabindex: '-1', rows: '1' }))
         field.setAttribute(name, value)
       for (const [type, fn] of Object.entries(fieldHandlers)) field.addEventListener(type, fn)
     }
     if (field.parentNode !== canvas.parentNode) canvas.parentNode?.insertBefore(field, canvas.nextSibling)
-    if (document.activeElement === field) return
+    return field
+  }
+  /** The field by the picture, with the keys in it: the screen's keyboard comes up. */
+  const keyboard = () => {
+    const f = fieldHere()
+    if (document.activeElement === f) return
     keepField()
-    field.focus({ preventScroll: true })
+    f.focus({ preventScroll: true })
+  }
+  // Ctrl/Cmd+V on the picture: the field has the keys for the paste, then the picture again (at the
+  // paste, or a moment later where none came: nothing on the clipboard).
+  let pasted = false
+  let backing: ReturnType<typeof setTimeout> | undefined
+  const back = () => {
+    clearTimeout(backing)
+    if (!pasted) return
+    pasted = false
+    if (document.activeElement === field) canvas.focus()
+  }
+  const catchPaste = () => {
+    const f = fieldHere()
+    if (document.activeElement === f) return
+    keepField()
+    f.focus({ preventScroll: true })
+    pasted = true
+    clearTimeout(backing)
+    backing = setTimeout(back, 1000)
   }
 
   // ------------------------------------------------ a finger's (or a pen's) gestures
@@ -287,7 +374,7 @@ export function attachInput(
     canvas.setAttribute('data-held', '')
     last = p
     mask = 1
-    out.pointer(p.x, p.y, mask)
+    send.pointer(p.x, p.y, mask)
   }
   // A tap: a click where the finger went down; one soon after and near the one before, where that
   // one clicked (a finger is not so exact: the display sees a double click).
@@ -299,8 +386,8 @@ export function attachInput(
     tapped = { at: when, client: start, point: q }
     last = q
     mask = 0
-    out.pointer(q.x, q.y, 1)
-    out.pointer(q.x, q.y, 0)
+    send.pointer(q.x, q.y, 1)
+    send.pointer(q.x, q.y, 0)
   }
   // What the fingers' middle went, in the display's px at the picture's scale as it shows now
   // (zoomed by a pinch or not), as the wheel's steps where the swipe began: the page follows the
@@ -323,7 +410,7 @@ export function attachInput(
     const steps = (along: 'x' | 'y', back: number, on: number) => {
       while (Math.abs(swept[along]) > WHEEL_PX / 2) {
         const bit = swept[along] > 0 ? back : on
-        out.wheel(p.x, p.y, mask, bit)
+        send.wheel(p.x, p.y, mask, bit)
         swept[along] -= Math.sign(swept[along]) * WHEEL_PX
       }
     }
@@ -375,7 +462,7 @@ export function attachInput(
       const p = e.pointerId === holder ? at(e) : null
       if (!p) return
       last = p
-      out.pointer(p.x, p.y, mask)
+      send.pointer(p.x, p.y, mask)
       return
     }
     if (gesture === 'wait' && apart(finger, start) > SLOP) {
@@ -408,7 +495,7 @@ export function attachInput(
       const p = (cancelled ? null : at(e)) ?? last
       last = p
       mask = 0
-      out.pointer(p.x, p.y, 0)
+      send.pointer(p.x, p.y, 0)
       canvas.removeAttribute('data-held')
       gesture = 'over'
       if (!cancelled) keyboard()
@@ -417,7 +504,7 @@ export function attachInput(
       gesture = 'over'
     } else if (fingers.size) was = middle()
     // all lifted: a swipe's last steps go now, not a frame later
-    if (!fingers.size) out.flush()
+    if (!fingers.size) send.flush()
   }
   /** The fingers forgotten, the button up and the picture as it fits (control given back, the canvas gone). */
   const unfinger = () => {
@@ -468,7 +555,7 @@ export function attachInput(
       if (!p) return
       wheel += w.deltaMode === 0 ? w.deltaY : w.deltaY * 40
       while (Math.abs(wheel) >= WHEEL_STEP) {
-        out.wheel(p.x, p.y, mask, wheel < 0 ? WHEEL_UP : WHEEL_DOWN)
+        send.wheel(p.x, p.y, mask, wheel < 0 ? WHEEL_UP : WHEEL_DOWN)
         wheel -= Math.sign(wheel) * WHEEL_STEP
       }
     },
@@ -491,23 +578,35 @@ export function attachInput(
   return {
     detach() {
       unhold()
+      clearTimeout(backing)
+      typing.stop()
       for (const [type, fn] of Object.entries(handlers)) canvas.removeEventListener(type, fn)
       if (!field) return
       for (const [type, fn] of Object.entries(fieldHandlers)) field.removeEventListener(type, fn)
       field.parentNode?.removeChild(field)
       field = null
     },
+    type(text) {
+      if (!controlling()) return
+      release()
+      typing.text(text.slice(0, MAX_PASTE))
+    },
     release,
     stop() {
+      // what waits behind a paste goes, and the display's clipboard is emptied; then what is down goes up
+      typing.stop()
       release()
       unfinger()
       touched = false
+      clearTimeout(backing)
+      pasted = false
       field?.blur()
     },
   }
 }
 
 const OFF = { state: 'off' as DeskState, why: '', canvas: null, meter: null }
+type Shown = Pick<DeskView, 'state' | 'why' | 'canvas' | 'meter'>
 /** A ping every this many seconds, and the board's log a line every this many. */
 const PING_S = 2
 const LOG_S = 60
@@ -518,9 +617,13 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
   const t = useLatest(useT())
   const control = useLatest(controlling)
   const token = useBoardContext().data?.fsToken ?? ''
-  const [view, setView] = useState<Omit<DeskView, 'retry'>>(OFF)
+  const [view, setView] = useState<Shown>(OFF)
   const [attempt, setAttempt] = useState(0)
   const input = useRef<DeskInput | null>(null)
+  const display = useRef<RfbClient | null>(null)
+  // what was copied there (never shown, never logged): offered until taken, control given back or the view gone
+  const clip = useRef('')
+  const [copied, setCopied] = useState(false)
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: another attempt is when to connect again
   useEffect(() => {
@@ -575,9 +678,19 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
         },
         updated: () => via === 'vnc' && link.frame(),
         pong: ms => link.pong(ms),
+        copied(text) {
+          if (!control.current || !text) return
+          clip.current = text
+          setCopied(true)
+        },
+        clipboardWanted: () => typing.wanted(),
       },
       { pictures: via === 'vnc' },
     )
+    // what is copied there is asked for only while the owner has it
+    rfb.copies = control.current
+    display.current = rfb
+    let typing: { wanted(): void } = { wanted() {} }
     // ------------------------------------------------ the video, where the page can decode it
     let video: DeskVideo | null = null
     let videoSocket: WebSocket | null = null
@@ -677,6 +790,9 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
       rfb,
       () => control.current,
       () => t.current('desk.title'),
+      paste => {
+        typing = paste
+      },
     )
     input.current = keys
     setView({ state: 'connecting', why: '', canvas, meter })
@@ -687,6 +803,9 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
       meter.parentNode?.removeChild(meter)
       keys.detach()
       input.current = null
+      display.current = null
+      clip.current = ''
+      setCopied(false)
       socket.onmessage = null
       socket.onclose = null
       socket.close()
@@ -695,10 +814,26 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
     }
   }, [key, on, token, attempt])
 
-  // Control given back: what is still down goes up on the display, and the screen's keyboard goes.
+  // Control given back: what is still down goes up on the display, and the screen's keyboard goes;
+  // what it copies is no longer asked for, and what it copied is offered no more.
   useEffect(() => {
-    if (!controlling) input.current?.stop()
+    if (display.current) display.current.copies = controlling
+    if (controlling) return
+    input.current?.stop()
+    clip.current = ''
+    setCopied(false)
   }, [controlling])
 
-  return { ...view, retry: () => setAttempt(n => n + 1) }
+  return {
+    ...view,
+    copied,
+    copyOut() {
+      const text = clip.current
+      clip.current = ''
+      setCopied(false)
+      return text ? copyText(text) : Promise.reject(new Error('nothing copied'))
+    },
+    type: text => input.current?.type(text),
+    retry: () => setAttempt(n => n + 1),
+  }
 }

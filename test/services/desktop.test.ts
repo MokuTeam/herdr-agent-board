@@ -37,7 +37,15 @@ interface Proc {
  * socket at once (or once `ready` resolves); what ran, and what it was told.
  */
 function fakeServer(
-  o: { held?: number[]; noChrome?: boolean; chromeFails?: boolean; ready?: () => Promise<void>; arch?: string } = {},
+  o: {
+    held?: number[]
+    noChrome?: boolean
+    chromeFails?: boolean
+    ready?: () => Promise<void>
+    arch?: string
+    /** xkbcomp on PATH, done at once. */
+    xkbcomp?: boolean
+  } = {},
 ) {
   const procs = new Map<number, Proc>()
   let next = 1000
@@ -62,8 +70,9 @@ function fakeServer(
   }
   const sys: DesktopSystem = {
     spawn(argv, env) {
-      const { pid, exited } = start(argv, env)
+      const { pid, exited, p } = start(argv, env)
       if (argv[0] === '/usr/bin/Xvnc') writeFileSync(argv[argv.indexOf('-rfbunixpath') + 1] as string, '')
+      if (argv[0] === '/usr/bin/xkbcomp') p.end()
       return { pid, exited }
     },
     spawnChrome(argv, cdp, env) {
@@ -89,7 +98,13 @@ function fakeServer(
       return existsSync(cdp)
     },
     which: name =>
-      name === 'Xvnc' ? '/usr/bin/Xvnc' : name === 'google-chrome-stable' && !o.noChrome ? '/usr/bin/chrome' : null,
+      name === 'Xvnc'
+        ? '/usr/bin/Xvnc'
+        : name === 'google-chrome-stable' && !o.noChrome
+          ? '/usr/bin/chrome'
+          : name === 'xkbcomp' && o.xkbcomp
+            ? '/usr/bin/xkbcomp'
+            : null,
     sleep: async () => {},
   }
   return { sys, procs, start }
@@ -500,6 +515,37 @@ async function vncServer(root: string) {
   }
   return { path, got, conns, open, close: () => server.close() }
 }
+
+test('the first view of a desktop gives its keyboard the Cyrillic letters (xkbcomp on its display, with its cookie); later views nothing more; without xkbcomp, as before', async () => {
+  const { d, server, root } = setup({ xkbcomp: true })
+  await d.ensure('w0:p1')
+  const xkb = () => [...server.procs.values()].filter(p => p.argv[0] === '/usr/bin/xkbcomp')
+  expect(xkb()).toEqual([])
+  const vnc = await vncServer(root)
+  try {
+    await vnc.open(d, 'w0:p1')
+    await vnc.open(d, 'w0:p1')
+    expect(xkb().map(p => [p.argv[1], p.argv[2], p.argv[4]])).toEqual([['-w', '0', ':100']])
+    expect(xkb()[0]?.argv[3]).toMatch(/sessions[\\/]100[\\/]keymap\.xkb$/)
+    expect(xkb()[0]?.env.XAUTHORITY).toMatch(/sessions[\\/]100[\\/]Xauthority$/)
+    const map = readFileSync(xkb()[0]?.argv[3] as string, 'utf8')
+    expect(map).toContain('include "pc+us+inet(evdev)"')
+    expect(map).toContain('key <FK13> { type = "ALPHABETIC", [ U0430, U0410 ] };')
+  } finally {
+    vnc.close()
+  }
+  // no xkbcomp there: a view opens as before, nothing more runs
+  const plain = setup()
+  await plain.d.ensure('w0:p1')
+  const before = plain.server.procs.size
+  const vnc2 = await vncServer(plain.root)
+  try {
+    await vnc2.open(plain.d, 'w0:p1')
+    expect(plain.server.procs.size).toBe(before)
+  } finally {
+    vnc2.close()
+  }
+})
 
 test('a viewer’s keys, mouse and clipboard reach the display only while the owner has the browser', async () => {
   const { d, state, root } = setup()

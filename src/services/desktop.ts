@@ -32,6 +32,7 @@ import {
   CHROME_BINS,
   type Control,
   chromeArgs,
+  deskKeymap,
   desktopView,
   handedBackText,
   pickSlot,
@@ -320,6 +321,41 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   >()
   /** Whether a view of the pane's desktop is connected to its display. */
   const viewed = (pane: string): boolean => [...(viewers.get(pane) ?? [])].some(ws => conns.get(ws)?.up)
+  /** Displays whose keyboard has the Cyrillic letters (deskKeymap), loading or loaded. */
+  const keyed = new WeakSet<Desktop>()
+
+  /**
+   * The display's keyboard with the Cyrillic letters too (core/desktop.ts deskKeymap), once, as its
+   * first view opens (so a display that ran before it, the board's restart, has them too): what the
+   * owner types in Russian then goes as keys. Without xkbcomp (it comes with Xvnc), as before.
+   */
+  async function keymapOf(d: Desktop): Promise<void> {
+    if (keyed.has(d)) return
+    keyed.add(d)
+    const xkbcomp = sys.which('xkbcomp')
+    if (!xkbcomp) return
+    const file = join(d.dir, 'keymap.xkb')
+    try {
+      writeFileSync(file, deskKeymap(), { mode: 0o600 })
+    } catch {
+      return
+    }
+    const proc = sys.spawn(
+      [xkbcomp, '-w', '0', file, `:${d.display}`],
+      {
+        HOME: process.env.HOME ?? '',
+        PATH: `${process.env.PATH ?? ''}:${PATH}`,
+        XAUTHORITY: join(d.dir, 'Xauthority'),
+      },
+      join(d.dir, 'xkbcomp.log'),
+    )
+    const code = await proc.exited
+    if (code === 0) return
+    keyed.delete(d)
+    o.log(
+      `desktop :${d.display}: its keymap did not load (xkbcomp ${String(code)}: ${tailOf(join(d.dir, 'xkbcomp.log'))})`,
+    )
+  }
 
   /** One thing at a time per pane, and slots picked one at a time. */
   const chains = new Map<string, Promise<unknown>>()
@@ -887,6 +923,8 @@ export function createDesktops(o: DesktopsOptions): Desktops {
         const set = viewers.get(ws.data.pane) ?? new Set()
         set.add(ws)
         viewers.set(ws.data.pane, set)
+        const d = desktops.get(ws.data.pane)
+        if (d && !d.stopping) void keymapOf(d)
       },
       // keys, the mouse and the clipboard reach the display only while the owner has the browser
       message(ws, msg) {

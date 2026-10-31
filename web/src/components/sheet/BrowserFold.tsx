@@ -8,7 +8,9 @@
 // owner to do there (browser_ask_owner) is said at the browser itself, folded or open, and full
 // size, while it asks. Full size, "Chat" puts the session's conversation and its composer beside
 // the picture (the panel's own, `chat`; models/desk-chat.ts): on the right or at the bottom, its
-// edge dragged for its size; what is typed there is the chat's, whoever has the browser.
+// edge dragged for its size; what is typed there is the chat's, whoever has the browser. With
+// control, "Paste" types the owner's clipboard into its browser (the page's own paste is the
+// browser's too), and what is copied there is offered on the picture, copied to the owner's on a tap.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Item } from '../../../../src/core/types.ts'
@@ -23,6 +25,9 @@ import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { ChevGlyph, CloseGlyph, ExpandGlyph } from '../icons.tsx'
 import { DockGlyph } from '../panel/glyphs.tsx'
+
+/** Why the page's clipboard said no (the browser's own words). */
+const whyNot = (err: unknown): string => (err instanceof Error ? err.message || err.name : String(err))
 
 export interface BrowserFoldProps {
   item: Item
@@ -107,6 +112,20 @@ export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0
   }, [on, key])
 
   if (!desktop || !running) return null
+  // the owner's clipboard read by a button: where the page may (https, localhost; it asks first)
+  const canRead = typeof navigator !== 'undefined' && typeof navigator.clipboard?.readText === 'function'
+  const pasteMine = () =>
+    void navigator.clipboard.readText().then(
+      text => view.type(text),
+      (err: unknown) => toast(t('desk.pasteFailed', { why: whyNot(err) }), true),
+    )
+  const copyOut = () =>
+    void view.copyOut().then(
+      () => toast(t('desk.copiedDone')),
+      (err: unknown) => toast(t('desk.copyFailed', { why: whyNot(err) }), true),
+    )
+  // a button by the picture takes no focus from its keys (the screen's keyboard stays up)
+  const keepKeys = (e: { preventDefault(): void }) => e.preventDefault()
 
   async function hand(to: DesktopControl, from: DesktopControl): Promise<void> {
     setAsking(true)
@@ -135,6 +154,18 @@ export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0
       >
         {t(owner ? 'desk.give' : 'desk.take')}
       </button>
+      {owner && canRead && (
+        <button
+          type="button"
+          className="button"
+          data-desk="paste"
+          title={t('desk.pasteHint')}
+          onPointerDown={keepKeys}
+          onClick={pasteMine}
+        >
+          {t('desk.paste')}
+        </button>
+      )}
       {where === 'full' && chatting.can && (
         <button
           type="button"
@@ -189,6 +220,15 @@ export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0
       {t('detail.retry')}
     </button>
   )
+  // what was copied there, while the owner has it: on the picture, where it shows
+  const copied = (where: 'fold' | 'full') =>
+    owner &&
+    view.copied &&
+    (where === 'full') === full && (
+      <button type="button" className="desk-copied" data-desk="copied" onPointerDown={keepKeys} onClick={copyOut}>
+        {t('desk.copied')}
+      </button>
+    )
   const warn = owner && (
     <p className="desk-warn" role="note">
       {t('desk.warn')}
@@ -228,6 +268,7 @@ export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0
               </p>
             )}
             <div className="desk-host" ref={setFoldHost} />
+            {copied('fold')}
           </div>
         </>
       )}
@@ -261,6 +302,7 @@ export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0
                 </p>
               )}
               <div className="desk-host" ref={setFullHost} />
+              {copied('full')}
             </div>
             {chatting.on && (
               <div className="desk-chat" ref={chatting.pane}>

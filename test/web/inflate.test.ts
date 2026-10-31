@@ -91,3 +91,17 @@ describe('inflate', () => {
     expect(new Inflater().inflate(broken, 5000)).toBeNull()
   })
 })
+
+describe('up to a size', () => {
+  test('a clipboard’s stream, its length inside: what it inflates to when no more than the size; more, null; Tight’s exact size as before', () => {
+    const text = new TextEncoder().encode('Скопируй меня — and me too '.repeat(40))
+    const whole = deflateSync(text)
+    const got = new Inflater().inflate(whole, text.length + 1000, true)
+    expect(got && new TextDecoder().decode(got)).toBe(new TextDecoder().decode(text))
+    expect(new Inflater().inflate(whole, text.length, true)?.length).toBe(text.length)
+    expect(new Inflater().inflate(whole, text.length - 1, true)).toBeNull()
+    // without it, only the exact size
+    expect(new Inflater().inflate(whole, text.length + 1000)).toBeNull()
+    expect(new Inflater().inflate(whole, text.length)?.length).toBe(text.length)
+  })
+})

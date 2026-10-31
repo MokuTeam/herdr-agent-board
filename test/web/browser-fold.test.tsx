@@ -5,6 +5,7 @@
 // "Take control", and control is given back with the view. A session without a running browser
 // has no fold.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
+import { constants, deflateSync, inflateSync } from 'node:zlib'
 import type { ReactNode } from 'react'
 import { videoMessage } from '../../src/core/desktop-video.ts'
 import type { Item, ItemDesktop } from '../../src/core/types.ts'
@@ -65,6 +66,7 @@ let useBrowserFold: typeof UseBrowserFold
 /** What the touch keyboard's field is kept at, and how long a finger is held to press (hooks/useDesktop.ts). */
 let KEYS_AT = ''
 let HOLD_MS = 500
+let PASTE_SETTLE_MS = 600
 const saved = { WebSocket: globalThis.WebSocket, location: Reflect.get(globalThis, 'location') }
 
 beforeAll(async () => {
@@ -82,6 +84,7 @@ beforeAll(async () => {
   ;({ useBrowserFold } = await import('../../web/src/components/sheet/Sheet.tsx'))
   KEYS_AT = Reflect.get(await import('../../web/src/hooks/useDesktop.ts'), 'KEYS_AT') ?? ''
   HOLD_MS = Reflect.get(await import('../../web/src/hooks/useDesktop.ts'), 'HOLD_MS') ?? 500
+  PASTE_SETTLE_MS = Reflect.get(await import('../../web/src/models/desk-input.ts'), 'PASTE_SETTLE_MS') ?? 600
   const support = await import('./support/board.tsx')
   boardOf = fields => support.board({ data: support.payload({ fsToken: 'tok' }), ...fields })
   itemOf = support.item
@@ -1020,6 +1023,228 @@ test('a swipe on the picture zoomed in goes as far as the finger at that zoom: a
   finger('pointermove', 1, 250, 30)
   finger('pointerup', 1, 250, 30)
   expect(socket?.sent).toEqual(step(16, 450, 250))
+})
+
+// ---------------------------------------------------------------- the keyboard's language, the clipboard both ways
+
+const CLIP = { caps: 1 << 24, request: 1 << 25, peek: 1 << 26, notify: 1 << 27, provide: 1 << 28, text: 1 }
+const be32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]
+/** The display's extended cut text: its flags and what follows them. */
+const serverClip = (flags: number, ...body: number[]) => [
+  3,
+  0,
+  0,
+  0,
+  ...be32(-(4 + body.length)),
+  ...be32(flags),
+  ...body,
+]
+/** The display's server does the extended clipboard and fences (it said so); what the page answered taken. */
+function clipboardOn(socket: FakeSocket | undefined) {
+  const all = CLIP.caps | CLIP.text | CLIP.request | CLIP.peek | CLIP.notify | CLIP.provide
+  socket?.serve(serverClip(all, ...be32(1 << 20)), [248, 0, 0, 0, 0x80, 0, 0, 0, 0])
+  socket?.sent.splice(0)
+}
+/** What the page sent, read: a key, the pointer, or the clipboard (its flags; a provide's text). */
+function said(m: number[]): string {
+  if (m[0] === 4)
+    return `${m[1] ? 'down' : 'up'} ${((m[4] ?? 0) * 2 ** 24 + ((m[5] ?? 0) << 16) + ((m[6] ?? 0) << 8) + (m[7] ?? 0)).toString(16)}`
+  if (m[0] === 248) return `fence ${String.fromCharCode(m[9] ?? 0, m[10] ?? 0)}`
+  if (m[0] !== 6) return `message ${m[0]}`
+  const flags = new DataView(Uint8Array.from(m).buffer).getUint32(8)
+  const names = Object.entries(CLIP)
+    .filter(([, bit]) => flags & bit)
+    .map(([name]) => name)
+  if (!(flags & CLIP.provide)) return `clipboard ${names.join(' ')}`
+  const out = inflateSync(Uint8Array.from(m.slice(12)), { finishFlush: constants.Z_SYNC_FLUSH })
+  return `clipboard provide ${new TextDecoder().decode(out.subarray(4)).replace(/\0$/, '')}`
+}
+const typedKeys = (text: string) =>
+  [...text].flatMap(ch => {
+    const cp = ch.codePointAt(0) ?? 0
+    const k = (cp >= 0x20 && cp <= 0x7e) || (cp >= 0xa0 && cp <= 0xff) ? cp : 0x01000000 + cp
+    return [`down ${k.toString(16)}`, `up ${k.toString(16)}`]
+  })
+const CTRL_V = ['down ffe3', 'down 76', 'up 76', 'up ffe3']
+/** The page's clipboard as a browser gives it, for `body`; gone after. */
+async function withClipboard(clip: Partial<Clipboard>, body: () => Promise<void>) {
+  Object.defineProperty(navigator, 'clipboard', { value: clip, configurable: true })
+  try {
+    await body()
+  } finally {
+    Reflect.deleteProperty(navigator, 'clipboard')
+  }
+}
+/** The field's text typed: what it has new after what it is kept at. */
+const typeIn = (field: MiniElement | undefined, text: string) => {
+  Reflect.set(field as object, 'value', `${KEYS_AT}${text}`)
+  fire(field, 'input')
+}
+
+test('the touch keyboard’s field has no language of its own: not the board’s, which the screen’s keyboard may keep to, so the one the owner picks (its globe key) stays', async () => {
+  const { socket } = await controlled()
+  clipboardOn(socket)
+  tap(canvas(), 250, 150)
+  expect(byClass('desk-keys')?.getAttribute('lang')).toBe('')
+})
+
+test('Russian and Latin typed in the touch keyboard’s field go to the display as keys, as before (and accents and «»—№ now too)', async () => {
+  const { socket } = await controlled()
+  clipboardOn(socket)
+  tap(canvas(), 250, 150)
+  const field = byClass('desk-keys')
+  socket?.sent.splice(0)
+  typeIn(field, 'Привет, мир! Ёё')
+  typeIn(field, 'github.com/a?b=1')
+  typeIn(field, '«café» — №5')
+  expect(socket?.sent.map(said)).toEqual([
+    ...typedKeys('Привет, мир! Ёё'),
+    ...typedKeys('github.com/a?b=1'),
+    ...typedKeys('«café» — №5'),
+  ])
+})
+
+test('a character the display’s keyboard has no key for (Greek, an emoji) goes by its clipboard: announced, Ctrl+V, its text as the server asks; what is typed after it waits for the server’s turn', async () => {
+  const { socket } = await controlled()
+  clipboardOn(socket)
+  tap(canvas(), 250, 150)
+  const field = byClass('desk-keys')
+  socket?.sent.splice(0)
+  typeIn(field, 'λ')
+  expect(socket?.sent.map(said)).toEqual(['clipboard notify text', ...CTRL_V])
+  typeIn(field, 'x')
+  expect(socket?.sent).toHaveLength(5)
+  // the display pastes: its server asks for the text
+  socket?.serve(serverClip(CLIP.request | CLIP.text))
+  expect(socket?.sent.slice(5).map(said)).toEqual(['clipboard provide λ', 'fence ss'])
+  // its turn came: then the rest
+  const fence = socket?.sent.at(-1) as number[]
+  socket?.serve([248, 0, 0, 0, 0, 0, 0, 0, 4, ...fence.slice(9)])
+  await new Promise(r => setTimeout(r, PASTE_SETTLE_MS + 60))
+  expect(socket?.sent.slice(7).map(said)).toEqual(typedKeys('x'))
+})
+
+test('Ctrl+V (or Cmd+V) on the picture: the field takes the paste, its text goes to the display, the picture has the keys again', async () => {
+  const { socket } = await controlled()
+  clipboardOn(socket)
+  expect(dom.document.activeElement).toBe(canvas() as MiniElement)
+  key(canvas(), { key: 'Control', code: 'ControlLeft', ctrlKey: true })
+  const v = key(canvas(), { key: 'v', code: 'KeyV', ctrlKey: true })
+  // the browser pastes: into the field now
+  expect(v.defaultPrevented).toBe(false)
+  const field = byClass('desk-keys')
+  expect(dom.document.activeElement).toBe(field as MiniElement)
+  const paste = fire(field, 'paste', { clipboardData: { getData: () => 'hi мир' } })
+  expect(paste.defaultPrevented).toBe(true)
+  expect(dom.document.activeElement).toBe(canvas() as MiniElement)
+  // Control up first, then the text as keys
+  expect(socket?.sent.map(said)).toEqual(['down ffe3', 'up ffe3', ...typedKeys('hi мир')])
+  // Cmd+V too
+  socket?.sent.splice(0)
+  key(canvas(), { key: 'v', code: 'KeyV', metaKey: true })
+  expect(dom.document.activeElement).toBe(field as MiniElement)
+  fire(field, 'paste', { clipboardData: { getData: () => 'ok' } })
+  expect(socket?.sent.map(said)).toEqual(typedKeys('ok'))
+})
+
+test('a long paste (over 200 characters) goes by the display’s clipboard as one, its text whole', async () => {
+  const { socket } = await controlled()
+  clipboardOn(socket)
+  tap(canvas(), 250, 150)
+  socket?.sent.splice(0)
+  const long = `${'Съешь же ещё этих мягких булок. '.repeat(8)}end`
+  fire(byClass('desk-keys'), 'paste', { clipboardData: { getData: () => long } })
+  expect(socket?.sent.map(said)).toEqual(['clipboard notify text', ...CTRL_V])
+  socket?.serve(serverClip(CLIP.request | CLIP.text))
+  expect(said(socket?.sent.at(-2) as number[])).toBe(`clipboard provide ${long}`)
+})
+
+test('copied in its browser while the owner has it: asked for, offered on the picture, copied to the owner’s clipboard on a tap; watched, nothing asked or offered', async () => {
+  const { socket } = await controlled()
+  clipboardOn(socket)
+  socket?.serve(serverClip(CLIP.notify | CLIP.text))
+  expect(socket?.sent.map(said)).toEqual(['clipboard request text'])
+  expect(byClass('desk-copied')).toBeUndefined()
+  const text = new TextEncoder().encode('Скопировано ✓\0')
+  const z = [...deflateSync(Uint8Array.from([...be32(text.length), ...text]))]
+  socket?.serve(serverClip(CLIP.provide | CLIP.text, ...z))
+  const notice = () => byClass('desk-copied')
+  expect(notice()?.textContent).toBe('Copied in its browser — tap to copy it to yours')
+  expect(notice()?.parentNode).toBe(byClass('desk-view'))
+  const written: string[] = []
+  toasts.length = 0
+  await withClipboard({ writeText: async t => void written.push(t) }, async () => {
+    click(notice())
+    await settle()
+  })
+  expect(written).toEqual(['Скопировано ✓'])
+  expect(notice()).toBeUndefined()
+  expect(toasts).toEqual(['Copied to your clipboard'])
+  // given back: what is copied there is not asked for, nor offered
+  click(desk('control'))
+  await settle()
+  socket?.sent.splice(0)
+  socket?.serve(serverClip(CLIP.notify | CLIP.text))
+  socket?.serve(serverClip(CLIP.provide | CLIP.text, ...z))
+  expect(socket?.sent.map(said).filter(m => m.startsWith('clipboard request'))).toEqual([])
+  expect(notice()).toBeUndefined()
+})
+
+test('the offer in Russian', async () => {
+  flush(() => root.unmount())
+  newRoot()
+  render({ desktop: desktop(), open: true, lang: 'ru' })
+  const [socket] = FakeSocket.made
+  handshake(socket)
+  answers([200, { ok: true, control: 'owner' }])
+  click(desk('control'))
+  await settle()
+  clipboardOn(socket)
+  socket?.serve(serverClip(CLIP.notify | CLIP.text))
+  const text = new TextEncoder().encode('x\0')
+  socket?.serve(serverClip(CLIP.provide | CLIP.text, ...deflateSync(Uint8Array.from([...be32(text.length), ...text]))))
+  expect(byClass('desk-copied')?.textContent).toBe('Скопировано в его браузере — нажмите, чтобы скопировать к себе')
+})
+
+test('"Paste" with control where the page can read the owner’s clipboard: its text typed into the display (a password as keys, never on its clipboard), the button taking no focus; watched or without it, no button', async () => {
+  await withClipboard({ readText: async () => 'S3cret-pass!' }, async () => {
+    const { socket } = await controlled()
+    clipboardOn(socket)
+    tap(canvas(), 250, 150)
+    const field = byClass('desk-keys')
+    socket?.sent.splice(0)
+    const button = desk('paste')
+    expect(button?.textContent).toBe('Paste')
+    expect(fire(button, 'pointerdown').defaultPrevented).toBe(true)
+    click(button)
+    await settle()
+    expect(socket?.sent.map(said)).toEqual(typedKeys('S3cret-pass!'))
+    expect(dom.document.activeElement).toBe(field as MiniElement)
+    click(desk('control'))
+    await settle()
+    expect(desk('paste')).toBeUndefined()
+  })
+  // a page that cannot read it (no https): no button
+  flush(() => root.unmount())
+  newRoot()
+  await controlled()
+  expect(desk('paste')).toBeUndefined()
+})
+
+test('a paste anywhere else on the page (the chat’s composer beside it) never reaches the display, and the display’s paste and copy leave it as it was', async () => {
+  const { socket } = await controlled()
+  clipboardOn(socket)
+  const composer = dom.document.body.appendChild(dom.document.createElement('textarea'))
+  Reflect.set(composer, 'value', 'my message')
+  composer.focus()
+  const e = fire(composer, 'paste', { clipboardData: { getData: () => 'for the chat' } })
+  expect(e.defaultPrevented).toBe(false)
+  key(composer, { key: 'v', code: 'KeyV', ctrlKey: true })
+  expect(socket?.sent).toEqual([])
+  expect(dom.document.activeElement).toBe(composer)
+  // the display's offer taken: the composer keeps its text
+  socket?.serve(serverClip(CLIP.notify | CLIP.text))
+  expect(Reflect.get(composer, 'value')).toBe('my message')
 })
 
 // ---------------------------------------------------------------- the panel's "needs you"

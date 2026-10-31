@@ -11,7 +11,11 @@ import {
   chromiumLibs,
   chromiumPrograms,
   controlOf,
+  DESK_KEYED,
+  DESK_LETTERS,
+  DESK_MARKS,
   DEVTOOLS_MCP_VERSION,
+  deskKeymap,
   desktopChecks,
   desktopNeeds,
   desktopView,
@@ -141,6 +145,64 @@ test('a viewer’s RFB bytes: the handshake and picture requests go on; keys, th
   expect(rfbInputFilter()(Uint8Array.from([...handshake, 99]), false)).toBeNull()
   expect(rfbInputFilter()(Uint8Array.from(enc('GET / HTTP/1.1\r\n')), false)).toBeNull()
   expect(rfbInputFilter()(Uint8Array.from([...enc('RFB 003.008\n'), 2]), false)).toBeNull()
+})
+
+test('the display’s keymap: Xvnc’s own, and the letters (each with its capital) and marks on keys of their own, none Chrome acts on nor Xvnc keeps free', () => {
+  const map = deskKeymap()
+  expect(map).toContain('include "evdev+aliases(qwerty)"')
+  expect(map).toContain('include "pc+us+inet(evdev)"')
+  const char = (hex: string | undefined) => String.fromCodePoint(Number.parseInt(hex ?? '', 16))
+  const letters = [...map.matchAll(/key <(\w+)> \{ type = "ALPHABETIC", \[ U([0-9A-F]+), U([0-9A-F]+) \] \};/g)]
+  expect(letters.map(k => char(k[2])).join('')).toBe(DESK_LETTERS)
+  // each with its capital (ß’s is ẞ)
+  expect(letters.map(k => char(k[3])).join('')).toBe(DESK_LETTERS.replace('ß', 'ẞ').toUpperCase())
+  for (const ch of 'ёЁїЇґҐўЎéÉçÇñÑßẞ«»—№₽') expect(DESK_KEYED).toContain(ch)
+  // the marks two to a key, the second with Shift
+  const marks = [...map.matchAll(/key <(\w+)> \{ type = "TWO_LEVEL", \[ U([0-9A-F]+), U([0-9A-F]+) \] \};/g)]
+  expect(marks.flatMap(k => [char(k[2]), char(k[3])]).join('')).toBe(DESK_MARKS)
+  const keys = [...letters, ...marks].map(k => k[1] as string)
+  expect(new Set(keys).size).toBe(keys.length)
+  // Back, Forward, Reload: Chrome acts on them instead of typing
+  for (const no of ['I166', 'I167', 'I181']) expect(keys).not.toContain(no)
+  // those Xvnc leaves free for what it puts on the way
+  for (const free of [93, 97, 103, 120, 132, 149, 154, 168, 178, 183, 184, 217, 219, 222, 230, 248])
+    expect(keys).not.toContain(`I${free}`)
+  // real keys (8 to 255)
+  for (const k of keys) if (k.startsWith('I')) expect(Number(k.slice(1))).toBeLessThanOrEqual(255)
+})
+
+test('the extended clipboard through the filter: what the viewer can do, and its letting go, go on watched too; its text announced, sent or asked for only with control', () => {
+  const handshake = [...new TextEncoder().encode('RFB 003.008\n'), 1, 1]
+  /** An extended ClientCutText: its flags, then what follows them. */
+  const clip = (flags: number, ...body: number[]) => {
+    const n = -(4 + body.length)
+    return [
+      6,
+      0,
+      0,
+      0,
+      (n >>> 24) & 255,
+      (n >>> 16) & 255,
+      (n >>> 8) & 255,
+      n & 255,
+      ...[24, 16, 8, 0].map(s => (flags >>> s) & 255),
+      ...body,
+    ]
+  }
+  const caps = clip((1 << 24) | 1 | (1 << 25) | (1 << 26) | (1 << 27) | (1 << 28), 0, 4, 0, 0)
+  const empty = clip(1 << 27)
+  const has = clip((1 << 27) | 1)
+  const ask = clip((1 << 25) | 1)
+  const provide = clip((1 << 28) | 1, 0x78, 0x01, 0, 0, 0, 0xff, 0xff)
+  const plain = [6, 0, 0, 0, 0, 0, 0, 2, 0x68, 0x69]
+  const all = [...handshake, ...caps, ...has, ...ask, ...provide, ...plain, ...empty]
+  const watched = rfbInputFilter()
+  const out: number[] = []
+  // byte by byte: the flags too wait for the rest of them
+  for (const b of all) out.push(...(watched(Uint8Array.of(b), false) ?? [Number.NaN]))
+  expect(out).toEqual([...handshake, ...caps, ...empty])
+  const owner = rfbInputFilter()
+  expect([...(owner(Uint8Array.from(all), true) ?? [])]).toEqual(all)
 })
 
 test('the card’s field: asks only while the card still asks', () => {
