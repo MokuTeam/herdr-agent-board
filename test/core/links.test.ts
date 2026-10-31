@@ -1,6 +1,15 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { forkCard, type LinkEvent, type LinkItem, lineEvents, newState, relate } from '../../src/core/links.ts'
+import {
+  edgeOf,
+  ends,
+  forkCard,
+  type LinkEvent,
+  type LinkItem,
+  lineEvents,
+  newState,
+  relate,
+} from '../../src/core/links.ts'
 import { type Line, line, T0 } from '../support/helper-fixtures.ts'
 
 const main = (o: Line) => JSON.stringify({ ...o, isSidechain: false })
@@ -225,5 +234,82 @@ test('#281: one Bash call that starts two sessions: both started, both know who 
   assert.deepEqual(
     rel.get('me')?.started.map(x => x.key),
     ['o', 'pane-w2:p1'],
+  )
+})
+
+test('#280: herdr typing into another pane is an event of its own, and no link on the board', () => {
+  const st = newState()
+  const call = (s: number, id: string, command: string) => main(line.call(s, id, 'Bash', { command }))
+  assert.deepEqual(lineEvents(call(1, 'p1', 'herdr agent prompt Herdr "go" && herdr pane send-keys w:p2 Enter'), st), [
+    { kind: 'prompted', target: 'Herdr', verb: 'agent prompt', at: T0 + 1000 },
+    { kind: 'prompted', target: 'w:p2', verb: 'pane send-keys', at: T0 + 1000 },
+  ])
+  // A request record repeats the call: once. A brief that mentions the command: none.
+  assert.deepEqual(lineEvents(call(1, 'p1', 'herdr agent prompt Herdr "go"'), st), [])
+  assert.deepEqual(lineEvents(call(2, 'p2', "cat > b.md <<'EOF'\nherdr agent prompt Herdr go\nEOF"), st), [])
+  // spawn-agent and a prompt in one call: both.
+  assert.deepEqual(lineEvents(call(3, 'p3', 'spawn-agent --name case-42 && herdr agent prompt case-42 hi'), st), [
+    { kind: 'prompted', target: 'case-42', verb: 'agent prompt', at: T0 + 3000 },
+  ])
+  assert.deepEqual(lineEvents(main(line.result(4, 'p3', 'pane=w:p2 name=case-42 agent=x')), st), [
+    { kind: 'spawn', name: 'case-42', pane: 'w:p2', at: T0 + 3000 },
+  ])
+  // A message's summary is the one SendMessage gave, never its text.
+  assert.deepEqual(lineEvents(main(line.call(5, 'sm', 'SendMessage', { to: 'Herdr', message: 'Secret plan.' })), st), [
+    { kind: 'sent', to: 'Herdr', name: '', summary: '', at: T0 + 5000 },
+  ])
+
+  // The board's links are the same with prompts among the events as without.
+  const items: LinkItem[] = [
+    { key: 'm', session: 's-m', name: 'Master', pane: 'w:p1' },
+    { key: 'pane-w:p2', session: null, name: 'case 42', autoName: 'case-42', pane: 'w:p2' },
+    { key: 'C:\\w\\Кейс 50%', session: 's-k', name: 'Кейс 50%', pane: 'w:p3' },
+  ]
+  const before: LinkEvent[] = [
+    { kind: 'spawn', name: 'case-42', pane: 'w:p2', at: 10 },
+    { kind: 'sent', to: 'Кейс 50%', name: '', summary: '', at: 20 },
+  ]
+  const prompts: LinkEvent[] = [
+    { kind: 'prompted', target: 'w:p2', verb: 'pane send-text', at: 30 },
+    { kind: 'prompted', target: 'Кейс 50%', verb: 'agent prompt', at: 31 },
+  ]
+  const without = relate(items, it => (it.key === 'm' ? before : []))
+  const with_ = relate(items, it => (it.key === 'm' ? [...before, ...prompts] : []))
+  assert.deepEqual([...with_], [...without])
+
+  // Its other end: the session in that pane now, else the one by that name; never itself.
+  const end = ends(items)
+  const m = { key: 'm' }
+  assert.equal(end(m, { kind: 'prompted', target: 'w:p2', verb: 'pane send-keys', at: 0 })?.key, 'pane-w:p2')
+  assert.equal(end(m, { kind: 'prompted', target: 'Кейс 50%', verb: 'agent prompt', at: 0 })?.key, 'C:\\w\\Кейс 50%')
+  assert.equal(end(m, { kind: 'prompted', target: 'w:p1', verb: 'pane run', at: 0 }), null)
+  assert.equal(end(m, { kind: 'prompted', target: '', verb: 'agent prompt', at: 0 }), null)
+  assert.equal(end(m, before[0] as LinkEvent)?.key, 'pane-w:p2')
+
+  // The edge log's line: the event without a message's text, both ends as the board has them.
+  const src = { transcript: 'C:\\Users\\a b\\.claude\\projects\\x\\s-m.jsonl', offset: 120, uuid: 'u1', session: 's-m' }
+  const recv: LinkEvent = { kind: 'received', name: 'Кейс 50%', pipe: 'uds:x', id: 'pm1', text: 'Secret plan.', at: 40 }
+  assert.deepEqual(edgeOf(recv, src, items[0] ?? null, items[2] ?? null, 7), {
+    seq: 7,
+    kind: 'received',
+    name: 'Кейс 50%',
+    pipe: 'uds:x',
+    id: 'pm1',
+    at: 40,
+    session: 's-m',
+    key: 'm',
+    sessionName: 'Master',
+    toSession: 's-k',
+    toKey: 'C:\\w\\Кейс 50%',
+    toName: 'Кейс 50%',
+    transcript: src.transcript,
+    offset: 120,
+    uuid: 'u1',
+  })
+  // No session on the board reads that transcript any more: the line's own session id.
+  const gone = edgeOf(prompts[0] as LinkEvent, src, null, items[1] ?? null)
+  assert.deepEqual(
+    [gone.session, gone.key, gone.sessionName, gone.toSession, gone.toKey],
+    ['s-m', null, null, null, 'pane-w:p2'],
   )
 })
