@@ -22,11 +22,8 @@ export function decodeJpeg(data: Uint8Array): Promise<Decoded> {
     .finally(() => URL.revokeObjectURL(url))
 }
 
-/** The display drawn into `canvas`; `later(fn)`: fn once what came before is drawn. */
-export type CanvasScreen = RfbScreen & { later(fn: () => void): void }
-
 /** The display drawn into `canvas` (none drawn where the page has no 2D context). */
-export function canvasScreen(canvas: HTMLCanvasElement, decode: JpegDecoder = decodeJpeg): CanvasScreen {
+export function canvasScreen(canvas: HTMLCanvasElement, decode: JpegDecoder = decodeJpeg): RfbScreen {
   const ctx = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null
   /** What waits behind a picture still being decoded, in order; empty: drawn at once. */
   const waiting: { ready: boolean; draw: () => void }[] = []
@@ -38,7 +35,6 @@ export function canvasScreen(canvas: HTMLCanvasElement, decode: JpegDecoder = de
     else fn()
   }
   return {
-    later: draw,
     size(width, height) {
       draw(() => {
         canvas.width = width

@@ -114,9 +114,8 @@ describe('the handshake', () => {
       // SetPixelFormat: 32 bits, depth 24, little-endian, true colour, 255 each, red at 0, green 8, blue 16.
       [0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 0, 8, 16, 0, 0, 0],
       // SetEncodings: CopyRect, then Tight, Hextile and Raw, the server's choice the first it has;
-      // the display's new size, fences, continuous updates, the pointer's shape to draw here (with
-      // alpha, or a mask), Tight's JPEG at quality 6, its zlib at 2.
-      [2, 0, 0, 11, ...[1, 7, 5, 0, -223, -312, -313, -314, -239, -26, -254].flatMap(s32)],
+      // the display's new size, fences, continuous updates, Tight's JPEG at quality 6, its zlib at 2.
+      [2, 0, 0, 9, ...[1, 7, 5, 0, -223, -312, -313, -26, -254].flatMap(s32)],
       // The whole screen, not incremental.
       [3, 0, 0, 0, 0, 0, ...u16(1280), ...u16(800)],
     ])
@@ -579,36 +578,23 @@ describe('the link’s speed', () => {
     clock.t = to
     w.client.receive(all.subarray(1000))
   }
-  /** The JPEG qualities asked for since the handshake (its pseudo-encoding, -32 to -23). */
   const qualityAsked = (w: ReturnType<typeof connected>) =>
     w.sent
       .filter(m => m[0] === 2)
-      .map(m => {
-        const v = new DataView(Uint8Array.from(m).buffer)
-        for (let at = 4; at < m.length; at += 4)
-          if (v.getInt32(at) >= -32 && v.getInt32(at) <= -23) return v.getInt32(at) + 32
-        return -1
-      })
+      .map(m => (new DataView(Uint8Array.from(m).buffer).getInt32(4 + 7 * 4) as number) + 32)
 
-  test('JPEG by the link: at 4 while slow, 6 between, 8 while fast; each way with a gap, so it does not go back and forth', () => {
+  test('updates coming slowly: JPEG at 4; coming fast again: at 6 again', () => {
     const clock = { t: 0 }
     const w = connected({ now: () => clock.t }, 200, 200)
-    // 100 KB over a second: 0.8 Mbit/s, slow
+    // 100 KB over a second: 0.8 Mbit/s
     slowly(w, clock, 0, 1000)
     expect(qualityAsked(w)).toEqual([4])
-    // about 39 Mbit/s: 12 smoothed with the slow one, past 10: 6
-    slowly(w, clock, 2000, 2021)
+    // still slow: asked for no more
+    slowly(w, clock, 2000, 3000)
+    expect(qualityAsked(w)).toEqual([4])
+    // over 10 ms: 80 Mbit/s, fast enough on its own (smoothed with the slow ones)
+    slowly(w, clock, 4000, 4010)
     expect(qualityAsked(w)).toEqual([4, 6])
-    // 81 Mbit/s: 33 smoothed, past 20: 8
-    slowly(w, clock, 3000, 3010)
-    expect(qualityAsked(w)).toEqual([4, 6, 8])
-    // 2 Mbit/s again and again: 24, then 17 smoothed (still not under 16: 8 stays), then 13: 6
-    slowly(w, clock, 4000, 4405)
-    slowly(w, clock, 5000, 5405)
-    expect(qualityAsked(w)).toEqual([4, 6, 8])
-    slowly(w, clock, 6000, 6405)
-    expect(qualityAsked(w)).toEqual([4, 6, 8, 6])
-    expect(w.client.jpegQuality).toBe(6)
   })
 
   test('an update in one piece, or a small one, says nothing of the link; and none of this when asked not to', () => {
@@ -626,88 +612,6 @@ describe('the link’s speed', () => {
     const sharp = connected({ now: () => clock.t, quality: 8 }, 200, 200)
     slowly(sharp, clock, 0, 1000)
     expect(qualityAsked(sharp)).toEqual([4])
-  })
-})
-
-describe('the pointer drawn here (Cursor, CursorWithAlpha)', () => {
-  test('with a mask: the display’s pixels, opaque where its bit is set (a bit a pixel, rows to a byte)', () => {
-    const shapes: unknown[] = []
-    const drawn: string[] = []
-    const draw = (what: string) => () => {
-      drawn.push(what)
-    }
-    const c = new RfbClient(
-      () => {},
-      { size() {}, put: draw('put'), copy: draw('copy'), fill: draw('fill'), jpeg: draw('jpeg') },
-      { cursor: s => shapes.push(s) },
-    )
-    for (const b of [ascii('RFB 003.008\n'), bytes(1, 1), bytes(u32(0)), serverInit(4, 2, 'agent')]) c.receive(b)
-    // 9 × 1, hot spot (4, 0): the first and the last opaque
-    const px = Array.from({ length: 9 }, (_, i) => [i, 2 * i, 3 * i, 0]).flat()
-    c.receive(bytes(update(1), rect(4, 0, 9, 1, -239), px, [0b1000_0000, 0b1000_0000]))
-    expect(shapes).toEqual([
-      {
-        x: 4,
-        y: 0,
-        width: 9,
-        height: 1,
-        rgba: new Uint8ClampedArray(
-          Array.from({ length: 9 }, (_, i) => [i, 2 * i, 3 * i, i === 0 || i === 8 ? 255 : 0]).flat(),
-        ),
-      },
-    ])
-    // it draws nothing into the picture
-    expect(drawn).toEqual([])
-  })
-
-  test('with alpha (TigerVNC’s): Raw RGBA, its colours premultiplied, given back as they are; another encoding stops it', () => {
-    const shapes: { rgba: Uint8ClampedArray }[] = []
-    const make = () => {
-      const c = new RfbClient(
-        () => {},
-        { size() {}, put() {}, copy() {}, fill() {}, jpeg() {} },
-        {
-          cursor: s => shapes.push(s),
-          failed: f => shapes.push({ rgba: new Uint8ClampedArray([f.code === 'data' ? 1 : 0]) }),
-        },
-      )
-      for (const b of [ascii('RFB 003.008\n'), bytes(1, 1), bytes(u32(0)), serverInit(4, 2, 'agent')]) c.receive(b)
-      return c
-    }
-    // red at half alpha (premultiplied: 128, 0, 0, 128), white opaque, nothing
-    make().receive(bytes(update(1), rect(1, 1, 3, 1, -314), s32(0), [128, 0, 0, 128, 255, 255, 255, 255, 0, 0, 0, 0]))
-    expect([...(shapes[0]?.rgba ?? [])]).toEqual([255, 0, 0, 128, 255, 255, 255, 255, 0, 0, 0, 0])
-    make().receive(bytes(update(1), rect(1, 1, 3, 1, -314), s32(7)))
-    expect([...(shapes[1]?.rgba ?? [])]).toEqual([1])
-  })
-})
-
-describe('marks, and what an update drew', () => {
-  test('a mark after what was sent; its answer says the server has it; an update tells the pixels it drew', () => {
-    const marks: number[] = []
-    const areas: number[] = []
-    const sent: number[][] = []
-    const c = new RfbClient(
-      b => sent.push([...b]),
-      { size() {}, put() {}, copy() {}, fill() {}, jpeg() {} },
-      { marked: id => marks.push(id), updated: px => areas.push(px) },
-    )
-    for (const b of [ascii('RFB 003.008\n'), bytes(1, 1), bytes(u32(0)), serverInit(100, 100, 'agent')]) c.receive(b)
-    // no fences yet: none
-    expect([c.canMark, c.mark()]).toEqual([false, null])
-    c.receive(bytes(248, 0, 0, 0, u32(0x80000000), 1, 0))
-    sent.length = 0
-    expect(c.canMark).toBe(true)
-    expect(c.mark()).toBe(1)
-    expect(sent).toEqual([[248, 0, 0, 0, ...u32(0x80000000), 4, 0x6d, 0x6d, 0, 1]])
-    c.receive(bytes(248, 0, 0, 0, u32(0), 4, 0x6d, 0x6d, 0, 1))
-    expect(marks).toEqual([1])
-    // an update: its rectangles' pixels (not the size's or the pointer's); while it comes, updating
-    c.receive(bytes(update(3), rect(0, 0, 10, 5, 7), 0x80, [1, 2, 3]))
-    expect(c.updating).toBe(true)
-    c.receive(bytes(rect(0, 0, 4, 1, 0), new Uint8Array(16), rect(0, 0, 0, 0, -239)))
-    expect(c.updating).toBe(false)
-    expect(areas).toEqual([54])
   })
 })
 
