@@ -37,7 +37,10 @@
 .desk-view { margin-top: 4px; overflow: hidden; border-radius: 10px; background: #000; }
 .owner .desk-view { box-shadow: 0 0 0 2px var(--orange); }
 .desk-status { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0; padding: 16px 12px; font-size: 12px; text-align: center; color: rgba(255, 255, 255, 0.8); }
-.desk-host { display: flex; justify-content: center; }
+.desk-host { position: relative; display: flex; justify-content: center; }
+/* A touch screen's keys go through a field by the picture (hooks/useDesktop.ts): there and focused,
+   so the keyboard comes up, but unseen, and at 16px so iOS does not zoom in to it. */
+.desk-keys { position: absolute; top: 0; left: 0; width: 1px; height: 1px; margin: 0; padding: 0; border: 0; opacity: 0; resize: none; overflow: hidden; font-size: 16px; color: transparent; background: transparent; caret-color: transparent; pointer-events: none; }
 /* Fitted whole and centred (models/desk-input.ts screenPoint reads it so); watched, a touch scrolls the page. */
 .desk-screen { display: block; width: 100%; height: auto; max-height: min(50vh, 36cqh); object-fit: contain; outline: none; }
 .owner .desk-screen { touch-action: none; }

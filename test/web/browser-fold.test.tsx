@@ -61,6 +61,8 @@ let useState: typeof import('react').useState
 let PanelPlace: typeof Place
 let listenClickAway: typeof ClickAway
 let useBrowserFold: typeof UseBrowserFold
+/** What the touch keyboard's field is kept at (hooks/useDesktop.ts). */
+let KEYS_AT = ''
 const saved = { WebSocket: globalThis.WebSocket, location: Reflect.get(globalThis, 'location') }
 
 beforeAll(async () => {
@@ -76,6 +78,7 @@ beforeAll(async () => {
   ;({ PanelPlace } = await import('../../web/src/components/panel/place.ts'))
   ;({ listenClickAway } = await import('../../web/src/hooks/usePanelClickAway.ts'))
   ;({ useBrowserFold } = await import('../../web/src/components/sheet/Sheet.tsx'))
+  KEYS_AT = Reflect.get(await import('../../web/src/hooks/useDesktop.ts'), 'KEYS_AT') ?? ''
   const support = await import('./support/board.tsx')
   boardOf = fields => support.board({ data: support.payload({ fsToken: 'tok' }), ...fields })
   itemOf = support.item
@@ -527,4 +530,123 @@ test('the session opened again keeps its browser open while the owner has it; fo
   // the panel closed (control went back with it), then opened again: folded
   at({ open: null, opened: 5, browser: true }, true)
   expect(at({ open: 'b', opened: 6, browser: false }, true)).toBe(false)
+})
+
+// ---------------------------------------------------------------- a mouse, a finger
+
+/** Control taken in the fold, the display drawn 400 × 200; its socket, nothing sent yet. */
+async function controlled() {
+  render({ desktop: desktop(), open: true })
+  const [socket] = FakeSocket.made
+  handshake(socket)
+  const calls = answers([200, { ok: true, control: 'owner' }], [200, { ok: true, control: 'agent' }])
+  click(desk('control'))
+  await settle()
+  screenAt()
+  socket?.sent.splice(0)
+  return { socket, calls }
+}
+
+const fire = (el: MiniNode | undefined, type: string, fields: Record<string, unknown> = {}) => {
+  const e = Object.assign(new MiniEvent(type), fields)
+  flush(() => (el as MiniElement).dispatchEvent(e))
+  return e
+}
+
+test('a mouse with control goes as it always did: the picture has the keys, no field; press, move, let go, wheel, keys', async () => {
+  const { socket } = await controlled()
+  const at = { clientX: 250, clientY: 150, button: 0, pointerId: 1, pointerType: 'mouse' }
+  const down = fire(canvas(), 'pointerdown', { ...at, buttons: 1 })
+  expect(down.defaultPrevented).toBe(true)
+  expect(dom.document.activeElement).toBe(canvas() as MiniElement)
+  fire(canvas(), 'pointermove', { ...at, clientX: 150, buttons: 1 })
+  fire(canvas(), 'pointerup', { ...at, clientX: 150, buttons: 0 })
+  fire(canvas(), 'click', { ...at, clientX: 150 })
+  fire(canvas(), 'wheel', { clientX: 150, clientY: 150, deltaY: 120, deltaMode: 0 })
+  key(canvas(), { key: 'a', code: 'KeyA' })
+  key(canvas(), { key: 'a', code: 'KeyA' }, 'keyup')
+  expect(socket?.sent).toEqual([
+    [5, 1, 0, 2, 0, 1],
+    [5, 1, 0, 1, 0, 1],
+    [5, 0, 0, 1, 0, 1],
+    [5, 16, 0, 1, 0, 1],
+    [5, 0, 0, 1, 0, 1],
+    [5, 16, 0, 1, 0, 1],
+    [5, 0, 0, 1, 0, 1],
+    [4, 1, 0, 0, 0, 0, 0, 0x61],
+    [4, 0, 0, 0, 0, 0, 0, 0x61],
+  ])
+  expect(byClass('desk-keys')).toBeUndefined()
+  expect(dom.document.activeElement).toBe(canvas() as MiniElement)
+})
+
+test('a tap with control brings up the screen’s keyboard: a field by the picture whose text and keys go to the display; given back, it goes', async () => {
+  const { socket } = await controlled()
+  tap(canvas(), 250, 150)
+  const field = () => byClass('desk-keys')
+  expect(field()?.localName).toBe('textarea')
+  expect(field()?.parentNode).toBe(canvas()?.parentNode)
+  expect(dom.document.activeElement).toBe(field() as MiniElement)
+  const attrs = ['autocapitalize', 'autocorrect', 'autocomplete', 'spellcheck', 'tabindex', 'aria-label']
+  expect(attrs.map(a => field()?.getAttribute(a))).toEqual(['off', 'off', 'off', 'false', '-1', 'Browser'])
+  // the tap itself: a click on the display
+  expect(socket?.sent).toEqual([
+    [5, 1, 0, 2, 0, 1],
+    [5, 0, 0, 2, 0, 1],
+  ])
+  socket?.sent.splice(0)
+  const value = (text: string) => Reflect.set(field() as object, 'value', text)
+  // a letter comes as text: its key goes nowhere (and the board's keys do not hear it)…
+  const letter = key(field(), { key: 'h', code: 'KeyH' })
+  expect([letter.defaultPrevented, letter.stopped]).toEqual([false, true])
+  // …and what the field has new goes as keys; the field is kept as it was
+  value(`${KEYS_AT}hé`)
+  fire(field(), 'input')
+  expect(socket?.sent).toEqual([
+    [4, 1, 0, 0, 0, 0, 0, 0x68],
+    [4, 0, 0, 0, 0, 0, 0, 0x68],
+    [4, 1, 0, 0, 0, 0, 0, 0xe9],
+    [4, 0, 0, 0, 0, 0, 0, 0xe9],
+  ])
+  expect(Reflect.get(field() as object, 'value')).toBe(KEYS_AT)
+  // a Backspace that took from the field; Return as a key, kept out of the field
+  socket?.sent.splice(0)
+  value(KEYS_AT.slice(1))
+  fire(field(), 'input')
+  const enter = key(field(), { key: 'Enter', code: 'Enter' })
+  key(field(), { key: 'Enter', code: 'Enter' }, 'keyup')
+  expect(enter.defaultPrevented).toBe(true)
+  expect(socket?.sent).toEqual([
+    [4, 1, 0, 0, 0, 0, 0xff, 0x08],
+    [4, 0, 0, 0, 0, 0, 0xff, 0x08],
+    [4, 1, 0, 0, 0, 0, 0xff, 0x0d],
+    [4, 0, 0, 0, 0, 0, 0xff, 0x0d],
+  ])
+  // an input method's word: once it is done
+  socket?.sent.splice(0)
+  value(`${KEYS_AT}に`)
+  fire(field(), 'input', { isComposing: true })
+  expect(socket?.sent).toEqual([])
+  fire(field(), 'compositionend')
+  expect(socket?.sent).toEqual([
+    [4, 1, 0, 0, 1, 0, 0x30, 0x6b],
+    [4, 0, 0, 0, 1, 0, 0x30, 0x6b],
+  ])
+  // full size: the field goes with the picture
+  click(desk('full'))
+  tap(canvas(), 250, 150)
+  expect(field()?.parentNode).toBe(canvas()?.parentNode)
+  expect(within(field(), byClass('desk-full'))).toBe(true)
+  // given back: the keyboard goes, and what it types goes nowhere
+  click(desk('control', byClass('desk-full')))
+  await settle()
+  expect(dom.document.activeElement).not.toBe(field() as MiniElement)
+  socket?.sent.splice(0)
+  value(`${KEYS_AT}x`)
+  fire(field(), 'input')
+  key(field(), { key: 'Enter', code: 'Enter' })
+  // watched only, a tap brings it up no more and goes nowhere
+  tap(canvas(), 250, 150)
+  expect(dom.document.activeElement).not.toBe(field() as MiniElement)
+  expect(socket?.sent).toEqual([])
 })
