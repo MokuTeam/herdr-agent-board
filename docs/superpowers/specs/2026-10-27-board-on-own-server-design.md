@@ -272,7 +272,10 @@ Not built in this step. On the server only.
   VNC in the page, through the board's login. It shows Chrome's tabs and address bar, system
   dialogs, file pickers and anything else on that display.
 - **Taken over.** The owner can click and type there: sign in, a password or key, a captcha, 2FA.
-  Then they hand control back. While the owner has control, the agent's browser actions wait.
+  Then they hand control back. While the owner has control, the agent's browser actions wait (for
+  what it asked: they fail at once, the agent ends its turn so the chat stays free, and the board
+  wakes it with a reminder once the browser is handed back, by Give back or by its view closing;
+  what the owner writes meanwhile does not answer the ask).
   The page warns that the agent can see what is typed into its own browser.
 - **The agent asks for it.** "Sign in to X for me" puts the card under "needs you", with "Open its
   browser" on it.
@@ -332,11 +335,15 @@ Not built in this step. On the server only.
   `--config <file>`: `wsEndpoint` the board's `GET /api/browser/cdp?pane=<pane>` (a WebSocket the
   board bridges to the holder's socket, one CDP message a text frame) and `wsHeaders` the board's
   local key, in a file of its own (`desktop/run/`, 0700; the file 0600, gone when it ends), never
-  on a command line, which every account reads. Before each tool call it asks the board who has
-  the browser; while the owner has it, or the board does not answer, the call waits (10 minutes,
-  then "the owner has the browser" or "the board does not answer"); a JSON-RPC batch with a call
-  in it waits as a whole. Then it asks the board to start the desktop, so what keeps it from
-  starting is the call's answer. Its own tools: `browser_profile` and `browser_ask_owner`; the same
+  on a command line, which every account reads. Before each tool call that acts it asks the board
+  who has the browser. While the owner has it for what the agent asked, the call fails at once
+  ("end your turn; the board wakes you when they hand it back"); while the owner has it otherwise,
+  or the board does not answer, the call waits (10 minutes, then "the owner has the browser" or
+  "the board does not answer"). A call that only looks (a screenshot of what shows, the snapshot,
+  the pages, the console and the network) goes on whoever has it, so the agent can answer the owner
+  about the screen meanwhile. A JSON-RPC batch waits or fails as a whole, unless all of it only
+  looks. Then it asks the board to start the desktop, so what keeps it from starting is the call's
+  answer. Its own tools: `browser_profile` and `browser_ask_owner`; the same
   as `board browser profile [<name>]` and `board browser ask <text>`. A profile switch is refused
   while the owner has the browser.
 - **The interface** with the web page: the card's `desktop: { running, profile, control, asks }`;

@@ -1365,7 +1365,7 @@ async function browser(): Promise<void> {
   if (r.ok !== true) throw new Error(r.error ?? 'not done')
   if (what === 'ask')
     return console.log(
-      'ok · asked: your card is under "Needs me" with your browser; your browser tools wait while the owner has it',
+      'ok · asked: your card is under "Needs me" with your browser. End your turn now (no polling, no browser calls to wait): the board wakes you when the owner hands it back',
     )
   console.log(
     !r.profile

@@ -9,11 +9,16 @@
 // session's desktop (services/desktop.ts), so what keeps it from starting is the call's answer.
 //
 // Between Claude and chrome-devtools-mcp it relays JSON-RPC line by line, and before a tool call
-// goes on it asks the board who has the browser: while the owner has it (or the board does not
-// say), the call waits, up to HOLD_MS, then answers that the owner has the browser; a JSON-RPC
-// batch with a call in it waits as a whole. Two tools of its own join the list:
-// browser_profile (a named profile, for logins that last) and browser_ask_owner (the card under
-// "needs you": sign in to X for me).
+// that acts goes on it asks the board who has the browser. While the owner has it for what the
+// agent asked, the call fails at once: the agent ends its turn and the board wakes it when the
+// browser is handed back (services/desktop.ts). While the owner has it otherwise (or the board does
+// not say), the call waits, up to HOLD_MS, then answers that the owner has the browser. A call that
+// only looks (READS: a screenshot of what shows, the page's snapshot, its pages, the console and
+// the network) goes on whoever has it (a board that does not answer holds it as any call), so the
+// agent can answer the owner about the screen. A
+// JSON-RPC batch waits or fails as a whole, unless all of it only looks. Two tools of its own join
+// the list: browser_profile (a named profile, for logins that last) and browser_ask_owner (the card
+// under "needs you": sign in to X for me).
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { LOCAL_KEY_HEADER } from '../adapters/local-key.ts'
@@ -39,7 +44,7 @@ export const OWN_TOOLS = [
   {
     name: 'browser_ask_owner',
     description:
-      'Asks the owner to act in your browser for you: sign in, a password or a key, a captcha, 2FA. Your card goes under "needs you" with your browser on it; the owner takes it over from the board and hands it back. While the owner has it, your browser tools wait. Never type the owner\'s secrets yourself.',
+      'Asks the owner to act in your browser for you: sign in, a password or a key, a captcha, 2FA. Your card goes under "needs you" with your browser on it; the owner takes it over from the board and hands it back. After asking, end your turn: do not poll and do not call browser tools to wait. The board wakes you with a message when the owner hands your browser back. While the owner has it, tools that act in it fail at once; looking works (take_screenshot of what shows, take_snapshot, list_pages, the console and the network), so you can answer what the owner asks meanwhile. Never type the owner\'s secrets yourself.',
     inputSchema: {
       type: 'object',
       properties: { text: { type: 'string', description: 'what you need, e.g. "Sign in to GitHub as acme-bot"' } },
@@ -51,6 +56,38 @@ export const OWN_TOOLS = [
 
 export const OWNER_HAS_IT =
   'The owner has the browser now (they took it over from the board). Try again later, or ask what they need; nothing was done.'
+/** A call that acts while the owner has the browser for what the agent asked: at once, no wait. */
+export const OWNER_DOING_ASK =
+  'The owner has your browser now, for what you asked: nothing was done. End your turn; the board wakes you with a message when they hand it back. Meanwhile you can look: take_screenshot (of what shows), take_snapshot, list_pages, and the console and network reads work.'
+/** What the agent is told once it asked the owner (browser_ask_owner). */
+export const ASKED =
+  'Asked: your card is under "needs you" with your browser on it. End your turn now: do not poll and do not call browser tools to wait. The board wakes you with a message when the owner hands your browser back; then check the page and go on. If the owner writes to you meanwhile, answer them: you can look at the browser then (take_screenshot, take_snapshot, list_pages, the console and the network), not act in it.'
+
+/**
+ * The calls that only look, which go on while the owner has the browser: nothing in them moves the
+ * page under the owner's hands. A screenshot only of what shows (an element's scrolls it into view,
+ * a full page's lays the page out beyond the window); not wait_for (it waits), nor select_page (it
+ * may bring a tab to the front), nor evaluate_script (a script may do anything), nor any tool not
+ * named here.
+ */
+export const READS: ReadonlySet<string> = new Set([
+  'take_screenshot',
+  'take_snapshot',
+  'list_pages',
+  'list_console_messages',
+  'get_console_message',
+  'list_network_requests',
+  'get_network_request',
+  'get_css_styles',
+])
+
+/** A tools/call's params that only look (READS, a screenshot without `uid` or `fullPage`). */
+export function onlyLooks(params: unknown): boolean {
+  if (!isRecord(params) || typeof params.name !== 'string' || !READS.has(params.name)) return false
+  if (params.name !== 'take_screenshot') return true
+  const args = isRecord(params.arguments) ? params.arguments : {}
+  return !args.uid && !args.fullPage
+}
 export const BOARD_SILENT =
   'The board does not answer who has the browser (it may be restarting): nothing was done. Try again in a moment.'
 
@@ -97,11 +134,13 @@ export function createRelay(o: RelayOptions): Relay {
   }
 
   /**
-   * Resolves true once the board says the agent has the browser; false when the hold timed out
-   * (`late` answers with why) or was cancelled. A board that does not answer, or answers anything
-   * else, holds the call as the owner does: nothing goes on that the board did not let go.
+   * Resolves true once the board says the agent has the browser (a call that only `looks`: either
+   * has it); false when the hold timed out (`late` answers with why) or was cancelled, or at once
+   * (`late` says so) while the owner has it for what the agent asked. A board that does not answer,
+   * or answers anything else, holds the call as the owner does: nothing goes on that the board did
+   * not let go.
    */
-  async function agentHasIt(id: unknown, late: (text: string) => void): Promise<boolean> {
+  async function agentHasIt(id: unknown, late: (text: string) => void, looks = false): Promise<boolean> {
     const key = idKey(id)
     const mark = { cancelled: false }
     const deadline = now() + holdMs
@@ -109,7 +148,11 @@ export function createRelay(o: RelayOptions): Relay {
       for (;;) {
         const r = await o.board('call', {})
         if (mark.cancelled) return false
-        if (r?.control === 'agent') return true
+        if (r?.control === 'agent' || (looks && r?.control === 'owner')) return true
+        if (r?.control === 'owner' && r.asks === true) {
+          late(OWNER_DOING_ASK)
+          return false
+        }
         if (!holding.has(key)) holding.set(key, mark)
         if (now() >= deadline) {
           late(r?.control === 'owner' ? OWNER_HAS_IT : BOARD_SILENT)
@@ -152,12 +195,7 @@ export function createRelay(o: RelayOptions): Relay {
     const r = await o.board('ask', { text })
     if (!r) return o.toClient(result(id, 'The board does not answer: the owner was not asked.', true))
     if (r.ok !== true) return o.toClient(result(id, String(r.error ?? 'not asked'), true))
-    o.toClient(
-      result(
-        id,
-        'Asked: your card is under "needs you" with your browser on it. While the owner has your browser your browser tools wait; when they hand it back, go on (check the page first).',
-      ),
-    )
+    o.toClient(result(id, ASKED))
   }
 
   return {
@@ -168,14 +206,16 @@ export function createRelay(o: RelayOptions): Relay {
       } catch {
         return o.toChild(line)
       }
-      // a batch with a call in it waits as a whole; answered as a batch when its hold ends
+      // a batch with a call in it waits as a whole; answered as a batch when its hold ends; one
+      // that only looks goes on as such a call does
       if (Array.isArray(msg)) {
         const calls = msg.filter(m => isRecord(m) && m.method === 'tools/call') as Msg[]
         if (!calls.length) return o.toChild(line)
         const ids = msg.filter(m => isRecord(m) && m.method !== undefined && m.id !== undefined).map(m => (m as Msg).id)
         const late = (text: string) => o.toClient(JSON.stringify(ids.map(i => JSON.parse(result(i, text, true)))))
+        const looks = calls.every(c => onlyLooks(c.params))
         return track(
-          agentHasIt(calls[0]?.id, late).then(async go => {
+          agentHasIt(calls[0]?.id, late, looks).then(async go => {
             if (go && (await started(late))) o.toChild(line)
           }),
         )
@@ -193,8 +233,9 @@ export function createRelay(o: RelayOptions): Relay {
       if (msg.method !== 'tools/call') return o.toChild(line)
       if (OWN_TOOLS.some(t => t.name === params.name)) return track(own(msg, params))
       const late = (text: string) => o.toClient(result(msg.id, text, true))
+      // Looking goes on whoever has the browser; acting waits for the agent's turn at it.
       track(
-        agentHasIt(msg.id, late).then(async go => {
+        agentHasIt(msg.id, late, onlyLooks(params)).then(async go => {
           if (go && (await started(late))) o.toChild(line)
         }),
       )

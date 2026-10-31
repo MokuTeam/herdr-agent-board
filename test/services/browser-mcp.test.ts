@@ -3,11 +3,22 @@
 // while the owner has it and let go when it comes back, answered after the hold's limit, and its
 // own tools through the board. And the session's pane, from herdr's variable.
 import { expect, test } from 'bun:test'
-import { createRelay, devtoolsMcp, OWN_TOOLS, OWNER_HAS_IT, paneOf } from '../../src/services/browser-mcp.ts'
+import {
+  ASKED,
+  createRelay,
+  devtoolsMcp,
+  OWN_TOOLS,
+  OWNER_DOING_ASK,
+  OWNER_HAS_IT,
+  onlyLooks,
+  paneOf,
+} from '../../src/services/browser-mcp.ts'
 
 type Msg = Record<string, unknown>
 
-function relayWith(o: { control?: () => string | null; answers?: Record<string, Msg>; holdMs?: number } = {}) {
+function relayWith(
+  o: { control?: () => string | null; asks?: () => boolean; answers?: Record<string, Msg>; holdMs?: number } = {},
+) {
   const toChild: string[] = []
   const toClient: Msg[] = []
   const raw: string[] = []
@@ -18,7 +29,7 @@ function relayWith(o: { control?: () => string | null; answers?: Record<string, 
       asked.push([op, body])
       if (op === 'call') {
         const c = o.control ? o.control() : 'agent'
-        return c === null ? null : { ok: true, control: c }
+        return c === null ? null : { ok: true, control: c, asks: o.asks?.() ?? false }
       }
       return o.answers?.[op] ?? { ok: true }
     },
@@ -227,4 +238,130 @@ test('chrome-devtools-mcp to the board’s keyed DevTools route: the key in its 
   expect(devtoolsMcp({ origin: 'http://127.0.0.1:1', pane: 'p', key: null, bin: 'b', config: 'c' }).config).toEqual({
     wsEndpoint: 'ws://127.0.0.1:1/api/browser/cdp?pane=p',
   })
+})
+
+// ---------------------------------------------------------------- the owner has it for what the agent asked
+
+/** Looks only: nothing in them moves the page under the owner's hands. */
+const LOOKS: [string, Msg][] = [
+  ['take_screenshot', {}],
+  ['take_screenshot', { format: 'jpeg', quality: 50, filePath: '/tmp/x.jpg' }],
+  ['take_snapshot', {}],
+  ['list_pages', {}],
+  ['list_console_messages', {}],
+  ['get_console_message', { msgid: 1 }],
+  ['list_network_requests', {}],
+  ['get_network_request', { reqid: 2 }],
+  ['get_css_styles', { uid: '1_2' }],
+]
+/** Act on the page, wait, or may do anything. */
+const ACTS: [string, Msg][] = [
+  ['click', { uid: '1_2' }],
+  ['fill', { uid: '1_2', value: 'x' }],
+  ['type_text', { text: 'x' }],
+  ['press_key', { key: 'Enter' }],
+  ['navigate_page', { url: 'https://example.com' }],
+  ['drag', { from_uid: '1', to_uid: '2' }],
+  ['upload_file', { uid: '1', filePath: '/tmp/a' }],
+  ['new_page', { url: 'https://example.com' }],
+  ['close_page', { pageId: 1 }],
+  ['select_page', { pageId: 1, bringToFront: true }],
+  ['evaluate_script', { function: '() => document.title' }],
+  ['wait_for', { text: 'Signed in' }],
+  ['take_screenshot', { uid: '1_2' }],
+  ['take_screenshot', { fullPage: true }],
+  ['handle_dialog', { action: 'accept' }],
+  ['emulate', { networkConditions: 'Offline' }],
+  ['a_tool_not_known_yet', {}],
+]
+
+test('what only looks and what acts: a screenshot of what shows, the snapshot, the pages, the console and the network look', () => {
+  for (const [name, args] of LOOKS)
+    expect([name, args, onlyLooks({ name, arguments: args })]).toEqual([name, args, true])
+  for (const [name, args] of ACTS)
+    expect([name, args, onlyLooks({ name, arguments: args })]).toEqual([name, args, false])
+  expect(onlyLooks(null)).toBe(false)
+  expect(onlyLooks({ name: 'take_snapshot' })).toBe(true)
+})
+
+test('the owner has it for what the agent asked: a call that acts is answered at once to end the turn, never held or passed on', async () => {
+  const { relay, toChild, toClient, asked } = relayWith({ control: () => 'owner', asks: () => true })
+  for (const [i, [name, args]] of ACTS.entries()) relay.fromClient(call(100 + i, name, args))
+  await Bun.sleep(5)
+  expect(relay.held()).toBe(0)
+  await relay.idle()
+  expect(toChild).toEqual([])
+  expect(toClient).toEqual(
+    ACTS.map((_, i) => ({
+      jsonrpc: '2.0',
+      id: 100 + i,
+      result: { content: [{ type: 'text', text: OWNER_DOING_ASK }], isError: true },
+    })),
+  )
+  expect(OWNER_DOING_ASK).toContain('End your turn')
+  // one look at who has it each, no hold, nothing started
+  expect(asked.map(([op]) => op)).toEqual(ACTS.map(() => 'call'))
+  // a profile switch too
+  relay.fromClient(call(200, 'browser_profile', { name: 'github' }))
+  await relay.idle()
+  expect(toClient.at(-1)).toEqual({
+    jsonrpc: '2.0',
+    id: 200,
+    result: { content: [{ type: 'text', text: OWNER_DOING_ASK }], isError: true },
+  })
+  expect(asked.some(([op]) => op === 'profile')).toBe(false)
+})
+
+test('the owner has the browser, for an ask or not: a call that only looks goes on at once', async () => {
+  for (const asks of [true, false]) {
+    const { relay, toChild, toClient } = relayWith({ control: () => 'owner', asks: () => asks })
+    const lines = LOOKS.map(([name, args], i) => call(300 + i, name, args))
+    for (const line of lines) relay.fromClient(line)
+    await relay.idle()
+    expect([asks, toChild]).toEqual([asks, lines])
+    expect(toClient).toEqual([])
+  }
+})
+
+test('a batch while the owner has it for an ask: all looks go on; with a call that acts, answered at once as a batch', async () => {
+  const { relay, toChild, raw } = relayWith({ control: () => 'owner', asks: () => true })
+  const looks = JSON.stringify([JSON.parse(call(1, 'take_snapshot')), JSON.parse(call(2, 'list_pages'))])
+  relay.fromClient(looks)
+  await relay.idle()
+  expect(toChild).toEqual([looks])
+  relay.fromClient(JSON.stringify([JSON.parse(call(3, 'take_snapshot')), JSON.parse(call(4, 'click', { uid: '1' }))]))
+  await relay.idle()
+  expect(toChild).toEqual([looks])
+  const answered = JSON.parse(raw.at(-1) as string) as { id: number; result: { content: { text: string }[] } }[]
+  expect(answered.map(a => [a.id, a.result.content[0]?.text])).toEqual([
+    [3, OWNER_DOING_ASK],
+    [4, OWNER_DOING_ASK],
+  ])
+})
+
+test('as before: the agent has it, everything goes on; the owner has it without an ask, a call that acts is held', async () => {
+  const agent = relayWith({ control: () => 'agent', asks: () => true })
+  for (const [i, [name, args]] of [...ACTS, ...LOOKS].entries()) agent.relay.fromClient(call(i, name, args))
+  await agent.relay.idle()
+  expect(agent.toChild).toHaveLength(ACTS.length + LOOKS.length)
+  expect(agent.toClient).toEqual([])
+  let control = 'owner'
+  const owner = relayWith({ control: () => control, asks: () => false })
+  owner.relay.fromClient(call(1, 'click', { uid: '1' }))
+  await Bun.sleep(20)
+  expect(owner.relay.held()).toBe(1)
+  control = 'agent'
+  await owner.relay.idle()
+  expect(owner.toChild).toEqual([call(1, 'click', { uid: '1' })])
+})
+
+test('asking the owner: the agent is told to end its turn, not to poll or wait, and that the board wakes it', async () => {
+  const ask = OWN_TOOLS.find(t => t.name === 'browser_ask_owner')?.description ?? ''
+  expect(ask).toContain('end your turn: do not poll and do not call browser tools to wait')
+  expect(ask).toContain('The board wakes you with a message when the owner hands your browser back')
+  const { relay, toClient } = relayWith({ answers: { ask: { ok: true } } })
+  relay.fromClient(call(1, 'browser_ask_owner', { text: 'Sign in to GitHub' }))
+  await relay.idle()
+  expect(toClient).toEqual([{ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: ASKED }] } }])
+  expect(ASKED).toContain('End your turn now')
 })
