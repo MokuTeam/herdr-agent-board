@@ -4,7 +4,7 @@ import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { resolvePath } from './files.ts'
-import { gitInfo } from './git.ts'
+import { gitInfo, repoRoot } from './git.ts'
 
 // A path someone typed can be a share that is offline: no file-system call on it may hold the
 // board up. Each one gives up after `ms` and says so (SLOW).
@@ -62,7 +62,8 @@ export interface DirListing {
   parent?: string
   sep?: string
   error?: string | null
-  git?: { root: string; branch: string } | null
+  /** repo: the main checkout, when the folder is in a linked worktree of it (ticket worktrees go by it). */
+  git?: { root: string; branch: string; repo?: string } | null
 }
 
 const isDir = (st: Stats | null | typeof SLOW | undefined): boolean => !!st && st !== SLOW && st.isDirectory()
@@ -110,6 +111,10 @@ export async function listDirs(raw: unknown, { git = false }: { git?: boolean } 
     sep,
     error,
   }
-  if (git) out.git = await gitInfo(path)
+  if (git) {
+    const info = await gitInfo(path)
+    const repo = info && (await repoRoot(info.root))
+    out.git = info && repo && repo !== info.root ? { ...info, repo } : info
+  }
   return out
 }

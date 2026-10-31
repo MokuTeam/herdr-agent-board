@@ -8,6 +8,7 @@ import type { Lang } from '../types.ts'
 import { ACCESS_STRINGS } from './access-strings.ts'
 import { ARCHIVE_STRINGS } from './archive-strings.ts'
 import { ASIDE_STRINGS } from './aside-strings.ts'
+import { BACKUP_STRINGS } from './backup-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
@@ -15,9 +16,12 @@ import { ONESHOT_STRINGS } from './oneshot-strings.ts'
 import { PRESENCE_STRINGS } from './presence-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
 import { REMOTE_STRINGS } from './remote-strings.ts'
+import { SECRET_STRINGS } from './secret-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
+import { TIME_STRINGS } from './time-strings.ts'
+import { TODO_STRINGS } from './todo-strings.ts'
 import { WAKE_STRINGS } from './wake-strings.ts'
 
 export type Entry = string | string[]
@@ -278,6 +282,10 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.cat.other': '{title} is the fallback lane and stays',
     'err.language': 'Unknown language {lang}',
     'err.foldWaiting': 'Unknown way to fold {mode}',
+    'err.configUnreadable':
+      'config.json does not read as JSON (a comma too many, say): fix it by hand first. Nothing was changed.',
+    'err.configBusy':
+      'config.json is being changed by another process, or one stopped while changing it: try again in a moment (a lock left behind goes after 30 seconds).',
     'err.fs.missing': 'Not found: {path}',
     'err.fs.open': 'Could not open it: {why}',
 
@@ -297,6 +305,13 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'ql.firstItems': 'the first {n} shown',
     'ql.lines': ['{n} line', '{n} lines'],
     'ql.rows': ['{n} row', '{n} rows'],
+    'ql.pages': ['{n} page', '{n} pages'],
+    'ql.pageOf': '{n} of {total}',
+    'ql.pdfPassword': 'This PDF is password protected: open it to read it',
+    'ql.pdfBroken': 'This PDF cannot be shown here',
+    'ql.fileLocked': 'This file is password protected: open it to read it',
+    'ql.fileBroken': 'This file cannot be shown here',
+    'ql.tooBig': 'Too big to show here: open it to see it',
     'ql.truncated': 'the start only, open it for the rest',
     'ql.modified': 'modified {date}',
     'ql.fit': 'Fit',
@@ -364,15 +379,43 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.hint':
       'Start a MokuPilot call whose agent is a fork of this session: it knows what the session knows, and the session itself stays as it was',
     'mokupilot.started': 'MokuPilot launcher started for “{name}”. Call readiness is not confirmed.',
+    'mokupilot.opened':
+      'Opening MokuPilot on this computer for “{name}”. Nothing happens on a phone, or where MokuPilot is not set up as a remote agent host.',
+    'mokupilot.err.open': 'The browser did not open the MokuPilot link: {why}',
     'mokupilot.err.notClaude': 'Only a Claude Code session with an id can join a call',
     'mokupilot.err.off': 'MokuPilot is turned off in config.json ("mokupilot": false)',
     'mokupilot.err.missing':
       'MokuPilot not found ({file}). Point config.json at it: "mokupilot": { "dir": "<MokuPilot folder>" }',
+    'mokupilot.err.missingAuto':
+      'MokuPilot is not installed on this computer ({file}). To start calls on the computer you’re viewing from instead, choose “The computer you’re viewing from” in Settings → MokuPilot….',
     'mokupilot.err.notFound': '{file} not found',
     'mokupilot.err.start': 'MokuPilot did not start: {why}',
     'mokupilot.err.command': 'mokupilot.command in config.json: a list, the program first',
     'mokupilot.err.commandShell': 'mokupilot.command in config.json: a program, not cmd or a .cmd or .bat file',
     'mokupilot.err.placeholder': 'mokupilot.command: {name} is not a value the board knows ({session} and {cwd} are)',
+    'mokupilot.err.mode': 'Unknown MokuPilot mode: {mode} (auto, local or link)',
+    'set.mokupilot': 'MokuPilot…',
+    'mokupilot.title': 'MokuPilot',
+    'mokupilot.about': 'Where “Call in MokuPilot” starts the call.',
+    'mokupilot.mode.auto': 'Auto',
+    'mokupilot.mode.autoLine':
+      'Viewing the board on its own computer, the call starts there; from any other computer, on the one you’re viewing from.',
+    'mokupilot.mode.local': 'This machine',
+    'mokupilot.mode.localLine':
+      'The board’s computer starts MokuPilot itself, whoever presses the button and wherever they are.',
+    'mokupilot.mode.link': 'The computer you’re viewing from',
+    'mokupilot.mode.linkLine':
+      'The page opens a mokupilot:// link and MokuPilot on that computer takes the call. Nothing starts on the board’s computer.',
+    'mokupilot.linkNote':
+      'MokuPilot on the computer you view from needs “agents on another machine” turned on, with this board’s ssh address.',
+    'mokupilot.now.local': 'Right now, from this browser: the call starts on the board’s computer.',
+    'mokupilot.now.link': 'Right now, from this browser: the call starts on this computer.',
+    'mokupilot.now.asking': 'Asking the board where a call from this browser would start…',
+    'mokupilot.now.why': 'Decided by: {why}',
+    'mokupilot.offNote': 'MokuPilot calls are turned off in the board’s config.json ("mokupilot": false).',
+    'mokupilot.hereMissing': 'MokuPilot is not installed on the board’s computer: a call cannot start there.',
+    'mokupilot.hereMissingFine':
+      'MokuPilot is not installed on the board’s computer. Nothing is wrong: calls from this browser start on the computer you view from.',
     'sheet.sleep': 'Put to sleep',
     'sheet.sleepHint': 'Claude exits, the pane stays. Wake it from here, from herdr or with a message',
     'sheet.sleepBusy': 'The session is working: it can sleep once it is done',
@@ -564,6 +607,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.prompt.late': '{late} late, due {due}',
     'sched.prompt.cleared': 'set by {name} before /clear',
     'sched.prompt.clearedFor': 'set for {name} before /clear',
+    'sched.prompt.message': 'SendMessage from profile {profile}, answer with SendMessage to {name}',
+    'sched.prompt.messageNoReply': 'SendMessage from profile {profile}, no reply path',
     'sched.prompt.restarted': 'restarted as you asked',
     'sched.prompt.restartedOther': 'restarted',
     'sched.prompt.restartedUser': 'restarted by the user',
@@ -879,6 +924,10 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.cat.other': '{title} нужна как запасная дорожка',
     'err.language': 'Нет языка {lang}',
     'err.foldWaiting': 'Нет такого способа сворачивать: {mode}',
+    'err.configUnreadable':
+      'config.json не читается как JSON (например, лишняя запятая): сначала поправьте его вручную. Ничего не изменено.',
+    'err.configBusy':
+      'config.json сейчас меняет другой процесс, или он остановился посреди изменения: попробуйте чуть позже (оставленная блокировка снимается через 30 секунд).',
     'err.fs.missing': 'Не найдено: {path}',
     'err.fs.open': 'Не открылось: {why}',
 
@@ -897,6 +946,13 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'ql.firstItems': 'показаны первые {n}',
     'ql.lines': ['{n} строка', '{n} строки', '{n} строк'],
     'ql.rows': ['{n} запись', '{n} записи', '{n} записей'],
+    'ql.pages': ['{n} страница', '{n} страницы', '{n} страниц'],
+    'ql.pageOf': '{n} из {total}',
+    'ql.pdfPassword': 'PDF защищён паролем: откройте его, чтобы прочитать',
+    'ql.pdfBroken': 'Этот PDF здесь не показать',
+    'ql.fileLocked': 'Файл защищён паролем: откройте его, чтобы прочитать',
+    'ql.fileBroken': 'Этот файл здесь не показать',
+    'ql.tooBig': 'Слишком большой для просмотра: откройте его, чтобы посмотреть',
     'ql.truncated': 'показано только начало, остальное в «Открыть»',
     'ql.modified': 'изменён {date}',
     'ql.fit': 'Вписать',
@@ -959,15 +1015,42 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.hint':
       'Начать звонок в MokuPilot, где агент: форк этой сессии. Он знает всё, что знает сессия, а сама сессия остаётся как была',
     'mokupilot.started': 'Запущен MokuPilot для «{name}». Готовность звонка ещё не подтверждена.',
+    'mokupilot.opened':
+      'Открываю MokuPilot на этом компьютере для «{name}». На телефоне и там, где MokuPilot не настроен как удалённый хост агента, ничего не произойдёт.',
+    'mokupilot.err.open': 'Браузер не открыл ссылку MokuPilot: {why}',
     'mokupilot.err.notClaude': 'В звонок можно взять только сессию Claude Code с id',
     'mokupilot.err.off': 'MokuPilot выключен в config.json ("mokupilot": false)',
     'mokupilot.err.missing':
       'MokuPilot не найден ({file}). Укажи его в config.json: "mokupilot": { "dir": "<папка MokuPilot>" }',
+    'mokupilot.err.missingAuto':
+      'MokuPilot не установлен на этом компьютере ({file}). Чтобы звонки начинались на компьютере, с которого ты смотришь, выбери «Компьютер, с которого ты смотришь» в Настройках → MokuPilot….',
     'mokupilot.err.notFound': '{file} не найден',
     'mokupilot.err.start': 'MokuPilot не запустился: {why}',
     'mokupilot.err.command': 'mokupilot.command в config.json: список, первой идёт программа',
     'mokupilot.err.commandShell': 'mokupilot.command в config.json: программа, а не cmd и не файл .cmd или .bat',
     'mokupilot.err.placeholder': 'mokupilot.command: {name} доска не знает (знает {session} и {cwd})',
+    'mokupilot.err.mode': 'Неизвестный режим MokuPilot: {mode} (auto, local или link)',
+    'set.mokupilot': 'MokuPilot…',
+    'mokupilot.title': 'MokuPilot',
+    'mokupilot.about': 'Где кнопка «Звонок в MokuPilot» начинает звонок.',
+    'mokupilot.mode.auto': 'Авто',
+    'mokupilot.mode.autoLine':
+      'Если доска открыта на её собственном компьютере, звонок начинается там; с любого другого компьютера: на том, с которого ты смотришь.',
+    'mokupilot.mode.local': 'Этот компьютер',
+    'mokupilot.mode.localLine': 'Компьютер доски сам запускает MokuPilot, кто бы ни нажал кнопку и где бы он ни был.',
+    'mokupilot.mode.link': 'Компьютер, с которого ты смотришь',
+    'mokupilot.mode.linkLine':
+      'Страница открывает ссылку mokupilot://, и звонок берёт MokuPilot на том компьютере. На компьютере доски ничего не запускается.',
+    'mokupilot.linkNote':
+      'В MokuPilot на компьютере, с которого ты смотришь, должен быть включён режим «агенты на другой машине» с ssh-адресом этой доски.',
+    'mokupilot.now.local': 'Сейчас, из этого браузера: звонок начнётся на компьютере доски.',
+    'mokupilot.now.link': 'Сейчас, из этого браузера: звонок начнётся на этом компьютере.',
+    'mokupilot.now.asking': 'Спрашиваю доску, где начнётся звонок из этого браузера…',
+    'mokupilot.now.why': 'Решило: {why}',
+    'mokupilot.offNote': 'Звонки в MokuPilot выключены в config.json доски ("mokupilot": false).',
+    'mokupilot.hereMissing': 'На компьютере доски MokuPilot не установлен: звонок там не начнётся.',
+    'mokupilot.hereMissingFine':
+      'На компьютере доски MokuPilot не установлен. Всё в порядке: звонок из этого браузера начнётся на компьютере, с которого смотришь.',
     'sheet.sleep': 'Усыпить',
     'sheet.sleepHint': 'Claude выйдет, панель останется. Разбудить можно отсюда, из herdr или сообщением',
     'sheet.sleepBusy': 'Сессия работает: усыпить можно, когда закончит',
@@ -1163,6 +1246,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.prompt.late': 'опоздание {late}, срок был {due}',
     'sched.prompt.cleared': 'поставлено сессией {name} до /clear',
     'sched.prompt.clearedFor': 'поставлено для {name} до /clear',
+    'sched.prompt.message': 'SendMessage из профиля {profile}, ответ: SendMessage для {name}',
+    'sched.prompt.messageNoReply': 'SendMessage из профиля {profile}, ответить этим путём нельзя',
     'sched.prompt.restarted': 'перезапущена по твоей просьбе',
     'sched.prompt.restartedOther': 'перезапущена',
     'sched.prompt.restartedUser': 'перезапущена пользователем',
@@ -1248,6 +1333,13 @@ for (const code of Object.keys(FORK_STRINGS) as Lang[]) Object.assign(STRINGS[co
 for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ASIDE_STRINGS[code])
 // And the user's presence (#172).
 for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PRESENCE_STRINGS[code])
+// And tasks (#202).
+for (const code of Object.keys(TODO_STRINGS) as Lang[]) Object.assign(STRINGS[code], TODO_STRINGS[code])
+for (const code of Object.keys(SECRET_STRINGS) as Lang[]) Object.assign(STRINGS[code], SECRET_STRINGS[code])
+// And the board's database and its backup (#233).
+for (const code of Object.keys(BACKUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], BACKUP_STRINGS[code])
+// And time tracking on it (#233).
+for (const code of Object.keys(TIME_STRINGS) as Lang[]) Object.assign(STRINGS[code], TIME_STRINGS[code])
 // And the board through the owner's own domain: the tunnel and its login.
 for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[code], ACCESS_STRINGS[code])
 // And setting up the server's web server from the board.

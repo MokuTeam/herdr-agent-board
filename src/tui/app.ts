@@ -116,7 +116,8 @@ function setBusy(key: string, text: string | null): void {
 }
 
 async function jump(it: Item | undefined): Promise<void> {
-  if (!it?.pane) return
+  // A sleeper without a pane wakes in a new tab (#178, #204).
+  if (!it?.pane && !it?.sleeping) return
   setBusy(it.key, t(it.sleeping ? 'tui.waking' : 'tui.going'))
   const r = await actions.focus(deps, it)
   setBusy(it.key, null)

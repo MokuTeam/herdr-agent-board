@@ -11,14 +11,24 @@ import { askRestart } from '../../adapters/schedule-store.ts'
 import { busy, PINS } from '../../core/board.ts'
 import { isCodexItem } from '../../core/codex.ts'
 import { type PublicDialog, parseDialog, publicDialog } from '../../core/dialogs/questions.ts'
-import { effortFromScreen, modelFromScreen } from '../../core/effort.ts'
+import { effortFromScreen, meterReads, modelFromScreen } from '../../core/effort.ts'
 import { publicHelper } from '../../core/helpers.ts'
 import { t } from '../../core/lang.ts'
 import { checkName } from '../../core/launch/names.ts'
 import type { MessageGate } from '../../core/message-gate.ts'
+import type { Viewer } from '../../core/mokupilot-mode.ts'
 import { isPiItem } from '../../core/pi.ts'
 import type { Item, Pin } from '../../core/types.ts'
-import { checkWake, focus, send, sleepSession, wake, wakeAnswers } from '../../services/actions.ts'
+import {
+  checkWake,
+  focus,
+  NAMED_POLL_MS,
+  namedWaitMs,
+  send,
+  sleepSession,
+  wake,
+  wakeAnswers,
+} from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
 import { askArchive, undoMs } from '../../services/archive.ts'
 import { askAside } from '../../services/aside.ts'
@@ -28,6 +38,7 @@ import { forkSession } from '../../services/launch/fork.ts'
 import type { Launches } from '../../services/launch/launches.ts'
 import { renameSession, renameWorkspace } from '../../services/launch/rename.ts'
 import { startCall } from '../../services/mokupilot.ts'
+import { ownAddresses } from '../../services/tunnel.ts'
 import { type Body, type Handler, json, type Route } from '../http.ts'
 import { helperRoute, withSessions } from './helpers.ts'
 
@@ -76,12 +87,9 @@ async function detail(app: SessionApp, item: Item) {
   const checkout = await isCheckout(item.cwd)
   let screen = ''
   let dialog: PublicDialog | null = null
-  let effort = ''
-  // A blocked pi pane's menu is read as before; an idle non-pi one is read for its effort line.
-  if (item.pane && (item.status === 'blocked' || item.agent !== 'pi')) {
+  if (item.status === 'blocked' && item.pane) {
     try {
       const text = await herdrText(['agent', 'read', item.pane, '--source', 'visible'], 5000)
-      if (item.agent !== 'pi') effort = effortFromScreen(text)
       screen = text
         .split('\n')
         .map(l => l.trimEnd())
@@ -96,24 +104,9 @@ async function detail(app: SessionApp, item: Item) {
       dialog = publicDialog(parseDialog(text, item.agent))
     } catch {}
   }
-  // The screen is what a blocked session asks; an idle one is read only for its effort line.
-  if (item.status !== 'blocked') {
-    screen = ''
-    dialog = null
-  }
   const helpers = own.helpers.map(publicHelper)
   const queued = alive ? thread.queued : []
-  return {
-    item: shown,
-    conversation,
-    queued,
-    helpers,
-    workflows: own.workflows,
-    screen,
-    dialog,
-    checkout,
-    ...(effort ? { effort } : {}),
-  }
+  return { item: shown, conversation, queued, helpers, workflows: own.workflows, screen, dialog, checkout }
 }
 
 function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
@@ -129,10 +122,24 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
   return app.gate(item.key, body.requestId ?? randomUUID(), [body.session ?? null, body.text, files], async () => {
     // Always collect a new snapshot before accepting a message, even if SSE is connected: a
     // board that cannot reach herdr fails here rather than send on old data.
-    const fresh = (await collect(deps)).find(next => next.key === item.key)
-    if (!fresh || fresh.session !== item.session || fresh.pane !== item.pane) return changed(item)
+    const fresh = await freshItem(deps, item)
+    // A card shown asleep is for its session wherever it woke meanwhile: a new tab (#204) too.
+    const moved = item.sleeping && !!item.session
+    if (!fresh || fresh.session !== item.session || (fresh.pane !== item.pane && !moved)) return changed(item)
     return send(deps, fresh, [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n'))
   })
+}
+
+/**
+ * The card's session in a new snapshot. One the card shows asleep may have just woken (by wake,
+ * Telegram or by hand) in a pane herdr does not name it in yet (#267): looked for again for a few
+ * seconds before it counts as gone.
+ */
+async function freshItem(deps: Deps, item: Item): Promise<Item | undefined> {
+  for (const deadline = Date.now() + namedWaitMs(); ; await Bun.sleep(NAMED_POLL_MS)) {
+    const fresh = (await collect(deps)).find(next => next.key === item.key)
+    if (fresh || !item.sleeping || Date.now() >= deadline) return fresh
+  }
 }
 
 // A question form, a permission prompt or pi's menu or text input, answered with keys in the pane
@@ -234,7 +241,13 @@ async function restart(deps: SessionApp['deps'], item: Item): Promise<Result> {
 }
 
 /** `body`: its fields, taken only by the actions that read them (as main's did, so a null body fails only there). */
-async function act(app: SessionApp, item: Item, action: string, body: () => Promise<Body>): Promise<Result> {
+async function act(
+  app: SessionApp,
+  item: Item,
+  action: string,
+  body: () => Promise<Body>,
+  viewer?: Viewer,
+): Promise<Result> {
   const { deps } = app
   switch (action) {
     case 'focus':
@@ -267,9 +280,10 @@ async function act(app: SessionApp, item: Item, action: string, body: () => Prom
       )
       return { ok: true, held: r.held, dropped: r.dropped, closeAt: r.record.closeAt }
     }
-    // A MokuPilot call whose agent is a fork of this session, only in the board's own profile; no herdr in it.
+    // A MokuPilot call whose agent is a fork of this session, in the session's own profile; no herdr in it.
+    // Here or on the viewer's computer by the mode, and under `auto` by who asks (core/mokupilot-mode.ts).
     case 'mokupilot':
-      return startCall(deps.cfg, item, { profiles: deps.profiles() })
+      return startCall(deps.cfg, item, { profiles: deps.profiles(), viewer, own: ownAddresses })
     // A new session in a new tab with a copy of this one's conversation; this one stays as it is.
     case 'fork':
       return app.launches
@@ -290,7 +304,7 @@ export function sessionRoutes(app: SessionApp): Route[] {
       const item = app.find(ctx.params[0] ?? '')
       return item ? handle(item, req, ctx) : gone()
     }
-  const action = withItem(async (item, _req, ctx) => {
+  const action = withItem(async (item, req, ctx) => {
     const what = ctx.params[1] ?? ''
     // Read for every action (too large or not JSON is a 500), its fields only where they are used.
     await ctx.rawBody()
@@ -298,7 +312,9 @@ export function sessionRoutes(app: SessionApp): Route[] {
       const refused = ctx.refuse('fresh-data')
       if (refused) return refused
     }
-    const r = await act(app, item, what, ctx.body)
+    const viewer =
+      what === 'mokupilot' ? { peer: ctx.peer(), forwardedFor: req.headers.get('x-forwarded-for') } : undefined
+    const r = await act(app, item, what, ctx.body, viewer)
     app.refresh()
     return json(r.ok ? 200 : 409, r)
   })
@@ -329,9 +345,10 @@ export function sessionRoutes(app: SessionApp): Route[] {
       method: 'GET',
       path: /^\/api\/session\/([^/]+)\/meter$/,
       // The model and effort the session is on now: their /model and /effort lines change before a turn.
+      // Only an awake Claude's screen has them (core/effort.ts meterReads); any other answers empty, unread.
       handle: withItem(async item => {
         const text =
-          item.pane && item.agent !== 'pi'
+          item.pane && meterReads(item)
             ? await herdrText(['agent', 'read', item.pane, '--source', 'visible'], 5000).catch(() => '')
             : ''
         return json(200, { effort: effortFromScreen(text), model: modelFromScreen(text) })
@@ -358,12 +375,13 @@ export function sessionRoutes(app: SessionApp): Route[] {
       guard: ['board-header', 'origin'],
       handle: action,
     },
-    // A side question runs Claude once on a copy of the conversation (services/aside.ts): like a
-    // call, only from this page, no herdr; the page going away ends it.
+    // A side question types /btw into the session and reads its answer (services/aside.ts): it
+    // presses keys in a session, so only from this page and through a herdr the board reaches; the
+    // page going away closes the overlay.
     {
       method: 'POST',
       path: /^\/api\/session\/([^/]+)\/aside$/,
-      guard: ['board-header', 'origin'],
+      guard: ['board-header', 'origin', 'fresh-data'],
       handle: withItem(async (item, req, ctx) => {
         const r = await askAside(app.deps, item, (await ctx.body()).question, { signal: req.signal })
         return json(r.ok ? 200 : 409, r)

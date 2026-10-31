@@ -6,8 +6,10 @@
 // Parts the page hands in plug in here: the question form or permission prompt, the file chips and
 // quick looks, the reminders' buttons (the page's schedule desk, shared with the schedule panel);
 // the phone's "More actions" menu and renaming; "New here" opens the launch window.
+
 import { type ReactNode, type Ref, useLayoutEffect, useRef, useState } from 'react'
 import { archiveBlock } from '../../../../src/core/archive.ts'
+import type { AssistantTurn } from '../../../../src/core/transcript.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import type { SessionDetail } from '../../api/client.ts'
 import { type ComposerControls, useComposer } from '../../hooks/useComposer.ts'
@@ -82,6 +84,8 @@ export interface SheetSlots {
   onArchive?: ((key: string) => void) | undefined
   /** "Fork": a fork of the session in a new tab, its window out of the button (hooks/useFork.ts). */
   onFork?: ((key: string, button: HTMLElement) => void) | undefined
+  /** Tasks on (#202): an agent message's points to pin, a menu out of its 📌 (hooks/useTodos.ts). */
+  onPin?: ((key: string, turn: AssistantTurn, el: HTMLElement) => void) | undefined
 }
 
 /** The board's card of `key` (a drag's ghost is outside the board). */
@@ -115,6 +119,7 @@ export function Sheet(slots: SheetSlots) {
     helpers,
     onArchive,
     onFork,
+    onPin,
   } = slots
   const t = useT()
   const { data, ui, dispatch, canEdit } = useBoardContext()
@@ -156,6 +161,8 @@ export function Sheet(slots: SheetSlots) {
     onHelper: (id, el) => helpers?.show({ id }, el),
     onList: (run, el) => helpers?.show({ list: true, run }, el),
     onSession: goToSession,
+    // Tasks only while the board has them on: no 📌 otherwise.
+    ...(onPin && data?.todos && open && { onPin: (turn: AssistantTurn, el: HTMLElement) => onPin(open, turn, el) }),
   }
   const cwd = shown.item?.cwd ?? ''
   const drawn = shown.item !== null
@@ -248,6 +255,8 @@ export interface SheetLinks {
   /** The list, at a workflow run's agents (`run`) or from the top. */
   onList(run: string | null, el: HTMLElement): void
   onSession(key: string): void
+  /** An agent message's 📌 (tasks on, #202). */
+  onPin?(turn: AssistantTurn, el: HTMLElement): void
 }
 
 export interface SheetViewProps {
@@ -353,7 +362,6 @@ export function SheetView(props: SheetViewProps) {
       <Composer
         composer={composer}
         item={item}
-        effort={detail.data?.effort ?? ''}
         availability={availability}
         buttons={item ? headButtons(item, t, !!data?.mokupilot, schedules, !!data?.fork) : NO_HEAD_BUTTONS}
         term={item ? termButton(item, data, t) : undefined}
@@ -412,6 +420,7 @@ function Conversation({ detail, item, links, composer, onResize }: ConversationP
     onRun: (id, el) => links?.onList(id, el),
     onSession: key => links?.onSession(key),
     onResize,
+    ...(links?.onPin && { onPin: links.onPin, todos: item.todos ?? [] }),
   }
   return (
     <>

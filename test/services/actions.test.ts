@@ -9,24 +9,31 @@ import { sandbox } from '../support/sandbox.ts'
 setDefaultTimeout(10_000)
 
 describe('send', () => {
+  const agentOf = (identity: string) => ({
+    result: {
+      agent:
+        identity === 'no-agent'
+          ? null
+          : {
+              agent_status: identity === 'blocked' ? 'blocked' : 'idle',
+              ...(identity === 'missing'
+                ? {}
+                : { agent_session: { value: identity === 'different' ? 'replacement' : 'expected' } }),
+            },
+    },
+  })
   for (const sleeping of [false, true]) {
-    for (const identity of ['same', 'different', 'missing', 'no-agent', 'blocked']) {
+    // late: herdr names the session on its third read (its SessionStart hook after Claude is up, #267).
+    for (const identity of ['same', 'different', 'missing', 'no-agent', 'blocked', 'late']) {
+      // A session it just woke is waited for until herdr names it; an awake one is not.
+      const sent = identity === 'same' || (sleeping && identity === 'late')
       test(`sleeping=${sleeping}, identity=${identity}`, async () => {
         const box = await sandbox()
         const reply = {
-          'agent get': {
-            result: {
-              agent:
-                identity === 'no-agent'
-                  ? null
-                  : {
-                      agent_status: identity === 'blocked' ? 'blocked' : 'idle',
-                      ...(identity === 'missing'
-                        ? {}
-                        : { agent_session: { value: identity === 'different' ? 'replacement' : 'expected' } }),
-                    },
-            },
-          },
+          'agent get':
+            identity === 'late'
+              ? { seq: [agentOf('missing'), agentOf('missing'), agentOf('same')] }
+              : agentOf(identity),
           'agent prompt': { result: {} },
         }
         box.state(sleeping ? { 'agent get': { error: 'must wake first' } } : reply)
@@ -43,13 +50,14 @@ describe('send', () => {
           await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
           try {
             cfg.wakeUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-            const out = await box.run('send', {
-              item: { pane: 'pane1', session: 'expected', name: 'Test', sleeping },
-              cfg,
-              text: '-hello',
-            }).exited
+            // The wait for herdr to name a just woken session, 3 s instead of 15.
+            const out = await box.run(
+              'send',
+              { item: { pane: 'pane1', session: 'expected', name: 'Test', sleeping }, cfg, text: '-hello' },
+              { BOARD_NAMED_WAIT_MS: '3000' },
+            ).exited
             assert.equal(out.code, 0, out.stderr)
-            assert.equal(JSON.parse(out.stdout).ok, identity === 'same')
+            assert.equal(JSON.parse(out.stdout).ok, sent)
           } finally {
             await new Promise(resolve => server.close(resolve))
           }
@@ -60,13 +68,18 @@ describe('send', () => {
             text: '-hello',
           }).exited
           assert.equal(out.code, 0, out.stderr)
-          assert.equal(JSON.parse(out.stdout).ok, identity === 'same')
+          assert.equal(JSON.parse(out.stdout).ok, sent)
         }
         assert.equal(wakes, sleeping ? 1 : 0)
         assert.deepEqual(
           box.calls().filter(a => a[1] === 'prompt'),
-          identity === 'same' ? [['agent', 'prompt', 'pane1', ' -hello']] : [],
+          sent ? [['agent', 'prompt', 'pane1', ' -hello']] : [],
         )
+        // An awake session, or a just woken one herdr shows without an agent or with another
+        // session, is read once; one it shows without a session yet is read again.
+        const reads = box.calls().filter(a => a[0] === 'agent' && a[1] === 'get').length
+        const waited = sleeping && (identity === 'missing' || identity === 'late')
+        assert.ok(waited ? reads >= 3 : reads === 1, `${reads} reads`)
       })
     }
   }

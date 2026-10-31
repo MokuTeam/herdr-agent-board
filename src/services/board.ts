@@ -2,6 +2,7 @@
 // merged with its card and with what Claude recorded about it in its own profile's folder, and
 // sorted into a column. Sessions in the archive are left out (services/archive.ts).
 import { readFileSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { allCards, writeCard } from '../adapters/cards.ts'
 import type { ClaudeHome } from '../adapters/claude-home.ts'
@@ -20,12 +21,45 @@ import { t } from '../core/lang.ts'
 import { relate } from '../core/links.ts'
 import { isPiItem, isPiSessionFile, PI_AGENT, piSessionId } from '../core/pi.ts'
 import { sessionProfile } from '../core/profiles.ts'
-import type { AgentStatus, Attention, Card, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
+import { pendingOf, requestsOf, type SecretView, secretsConfig, secretViews } from '../core/secrets.ts'
+import { type Todo, todosOf } from '../core/todos.ts'
+import type { AgentStatus, Attention, Card, Config, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
 import { piSleeperPane } from '../core/wake/pi.ts'
 import { archivedFiles, getArchived, hides, isArchived, settleReturned } from './archive.ts'
 import type { Deps } from './deps.ts'
 
 const numberOf = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined)
+
+/** The panes its card says wake closed as it went to sleep (#204, services/wake/follow.ts), when it has any. */
+/** A card's tasks (#202) for its item, when it has any. */
+/** A secret request's line on the card (#273), the newest one's, when no `board ask` says more. */
+function secretAsk(card: Card): string {
+  const last = pendingOf(requestsOf(card.secrets), Date.now()).at(-1)
+  return last ? t('secret.asks', { title: last.title }) : ''
+}
+
+/** The card's pending secret requests (#273), each with where it writes; absent when none. */
+const secretsField = (cfg: Config, card: Card): { secrets?: SecretView[] } => {
+  if (!Array.isArray(card.secrets) || !pendingOf(requestsOf(card.secrets), Date.now()).length) return {}
+  try {
+    const views = secretViews(secretsConfig(cfg.secrets, { home: homedir() }), card, t)
+    return views.length ? { secrets: views } : {}
+  } catch {
+    return {} // a card any process wrote: what cannot be read of it never stops the board
+  }
+}
+
+const todosField = (card: Card): { todos?: Todo[] } => {
+  const todos = todosOf(card.todos)
+  return todos.length ? { todos } : {}
+}
+
+const formerPanes = (card: Card): { formerPanes?: string[] } => {
+  const panes = Array.isArray(card.panes)
+    ? card.panes.filter((p): p is string => typeof p === 'string' && p !== '')
+    : []
+  return panes.length ? { formerPanes: panes } : {}
+}
 
 /**
  * The column the user dragged the card to, or ''. It holds until the session works again (the
@@ -52,7 +86,7 @@ function pinOf(key: string, status: AgentStatus, card: Card): Pin | '' {
 
 /** What the user is asked, for the card. */
 function askedText(attention: Attention, card: Card, info: TranscriptInfo, tool: ToolCall | null): string {
-  if (attention === 'ask') return card.ask ?? ''
+  if (attention === 'ask') return card.ask || secretAsk(card)
   if (attention === 'question') return info.question ?? ''
   if (attention !== 'decision' || !tool?.pending) return ''
   return tool.name === 'AskUserQuestion'
@@ -286,10 +320,13 @@ export async function collect(
       pin, // the column the user dragged it to, or ''
       auto: columnOf(base.status, { ...card, pin: '' }, info), // where it would be without the pin
       ...(card.favorite === true && { favorite: true }), // the user keeps it in sight
+      ...todosField(card), // its tasks (#202), when it has any
+      ...secretsField(cfg, card), // what it asks the user to fill in (#273), when it does
       helpers: own, // its subagents, forks, workflow agents and teammates in short, or null
       // a fork's card says whose fork it is, and when it started
       ...(typeof card.forkOf === 'string' && { fork: { of: card.forkOf, at: Number(card.forkAt) || 0 } }),
       transcript: path,
+      ...formerPanes(card), // panes wake closed as it went to sleep (#204), for the links
       ...sessionProfile(card, profiles.list), // its profile, as its hooks reported it
       claudeRoot: home?.root ?? null, // the folder its records were read from
     })
@@ -352,16 +389,17 @@ export async function collect(
     const pane = panes.get(s.pane ?? '')
     // One from wake's session file only where herdr shows its pane as a shell: not one whose pane
     // runs Claude (or another agent) again, nor one whose pane is gone. Its workspace is herdr's.
-    if (s.fromFile && (!pane || pane.agent)) continue
+    // One whose pane wake closed (#204) has none: it wakes in a new tab, its workspace the file's.
+    if (s.fromFile && s.pane && (!pane || pane.agent)) continue
     seen.add(s.session)
     add({
       key: s.session,
       session: s.session,
-      pane: s.pane ?? null,
-      workspace: s.fromFile ? (labels.get(pane?.workspace_id ?? '') ?? '') : (s.workspace ?? ''),
+      pane: s.pane || null,
+      workspace: s.fromFile && s.pane ? (labels.get(pane?.workspace_id ?? '') ?? '') : (s.workspace ?? ''),
       agent: 'claude',
       name: s.name || s.session.slice(0, 8),
-      cwd: pane?.cwd ?? '',
+      cwd: pane?.cwd ?? s.cwd ?? '',
       status: 'sleeping',
       sleeping: true,
       focused: false,

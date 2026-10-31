@@ -93,3 +93,31 @@ test('prompt format', () => {
       '[telegram message_id=6 file_id=AgAC-1 file_kind=photo in_reply_to="did you \\"check\\"?" queued_at=2026-10-13T19:50:00Z]\n(photo attached)',
   )
 })
+
+test('#204: a sleeper whose pane was closed is found by the topic it slept in, or by its old pane as a hint', () => {
+  const SID = '0f8fad5b-d9cb-469f-a165-70867728950e'
+  const asleep = { session: SID, title: 'Invoices', freed: { pane: 'w1:p7', topic: 'topic:Billing / invoices' } }
+  const known = { [SID]: asleep }
+  const target = { pane: SID, session: SID, title: 'Invoices' }
+  expect(resolve({ key: 'topic:Billing / invoices' }, snap, known, 'PC')).toStrictEqual(target)
+  expect(resolve({ key: 'topic:Other', pane: 'PC:w1:p7' }, snap, known, 'PC')).toStrictEqual(target)
+  // Its old pane's id is another pane's now (herdr started over): that pane, not the sleeper.
+  expect(
+    resolve(
+      { key: 'topic:Other', pane: 'PC:w1:p3' },
+      snap,
+      { [SID]: { ...asleep, freed: { ...asleep.freed, pane: 'w1:p3' } } },
+      'PC',
+    ),
+  ).toBeNull()
+  // A running Claude in the topic's tab still wins.
+  expect(
+    resolve(
+      { key: 'topic:Billing' },
+      snap,
+      { [SID]: { ...asleep, freed: { ...asleep.freed, topic: 'topic:Billing' } } },
+      'PC',
+    ),
+  ).toStrictEqual({ pane: 'w1:p1', title: 'Billing-master' })
+  expect(resolve({ key: 'topic:Billing / elsewhere' }, snap, known, 'PC')).toBeNull()
+})

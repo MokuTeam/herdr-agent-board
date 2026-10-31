@@ -206,6 +206,13 @@ export class MiniDocument extends MiniNode {
   readonly body: MiniElement
   activeElement: MiniElement
   defaultView: unknown = null
+  /**
+   * As a browser's document has it. react-dom asks `'oninput' in document` when it loads, once for
+   * the whole run: without it, it takes the browser for one without input events and watches every
+   * field the old IE way (onpropertychange) in each test file after this one, where a value a test
+   * sets is not always taken (test/web/time-editor-ui.test.tsx, a time field put back as it was).
+   */
+  oninput: null = null
   constructor() {
     super(null, 9, '#document')
     this.documentElement = this.appendChild(new MiniElement(this, 'html'))

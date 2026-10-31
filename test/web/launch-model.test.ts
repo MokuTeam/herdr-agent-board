@@ -406,6 +406,11 @@ describe('the worktree, what the form lacks, the Start button', () => {
     expect(worktreeNote({ root: '/srv/web/', branch: 'trunk' }, true, 'fix/x', t, true).text).toContain(
       '/srv/web-wt/fix-x',
     )
+    // From a linked worktree, a ticket worktree goes beside the main checkout, as the launch makes it.
+    const inWorktree = { root: '/srv/web-wt/14312', branch: 'feature-y', repo: '/srv/web' }
+    expect(worktreeNote(inWorktree, true, 'EA-1', t, true).text).toContain('/srv/web-wt/EA-1')
+    expect(worktreeNote(inWorktree, true, 'EA-1', t, true).text).toContain('feature-y')
+    expect(worktreeNote(inWorktree, true, 'next', t).text).toContain('/srv/web-wt/14312-next')
     expect(worktreeNote({ root: '/srv/web', branch: 'trunk' }, true, 'a..b', t)).toEqual({
       text: t('launch.err.branch'),
       error: true,

@@ -61,6 +61,23 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     // Task 4.7: board doctor's wake line
     'setup.wake.running': 'Sleep and wake runs',
     'setup.wake.runningDetail': 'on 127.0.0.1:{port}, {n} asleep',
+    // #243: board doctor's line on what herdr's panes hold
+    'setup.panes.title': 'herdr panes',
+    'setup.panes.total': '{n} in all, {mem}',
+    'setup.panes.agents': 'agents: {n} ({mem})',
+    'setup.panes.asleep': 'asleep in their pane: {n} ({mem})',
+    'setup.panes.sidebars': 'sidebars: {n} ({mem})',
+    'setup.panes.sidebarsBare': 'sidebars: {n} ({mem}), {bare} of them a bare shell with no sidebar ({bareMem})',
+    'setup.panes.other': 'other: {n} ({mem})',
+    'setup.panes.otherBare': 'other: {n} ({mem}), {bare} of them a bare shell',
+    'setup.panes.gb': '{n} GB',
+    'setup.panes.mb': '{n} MB',
+    'setup.panes.unknown': [
+      '{n} pane is labelled asleep, but wake has no record of it',
+      '{n} panes are labelled asleep, but wake has no record of them',
+    ],
+    'setup.panes.unknownFix':
+      'Wake cannot wake such a pane from the board, nor give it back. Close it in herdr if you do not need it: its conversation stays, and board resume <session id> brings it back.',
     'setup.wake.newOff': 'Sleep and wake is off',
     'setup.wake.newOffFix':
       'Turn it on in Settings → Sleep and wake…, or set "wake": { "enabled": true } in the board\'s config.json',
@@ -198,6 +215,24 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'на 127.0.0.1:{port}, {n} спят',
       'на 127.0.0.1:{port}, {n} спят',
     ],
+    // #243: board doctor's line on what herdr's panes hold
+    'setup.panes.title': 'Панели herdr',
+    'setup.panes.total': 'всего {n}, {mem}',
+    'setup.panes.agents': 'агенты: {n} ({mem})',
+    'setup.panes.asleep': 'спят в своей панели: {n} ({mem})',
+    'setup.panes.sidebars': 'сайдбары: {n} ({mem})',
+    'setup.panes.sidebarsBare': 'сайдбары: {n} ({mem}), из них пустой шелл без сайдбара: {bare} ({bareMem})',
+    'setup.panes.other': 'прочие: {n} ({mem})',
+    'setup.panes.otherBare': 'прочие: {n} ({mem}), из них пустой шелл: {bare}',
+    'setup.panes.gb': '{n} ГБ',
+    'setup.panes.mb': '{n} МБ',
+    'setup.panes.unknown': [
+      '{n} панель помечена спящей, но у сна нет о ней записи',
+      '{n} панели помечены спящими, но у сна нет о них записи',
+      '{n} панелей помечены спящими, но у сна нет о них записи',
+    ],
+    'setup.panes.unknownFix':
+      'Сон не разбудит такую панель с доски и не вернёт её. Закрой её в herdr, если она не нужна: разговор останется, board resume <id сессии> вернёт его.',
     'setup.wake.newOff': 'Сон и пробуждение выключены',
     'setup.wake.newOffFix':
       'Включи их в Настройки → Сон и пробуждение… или задай "wake": { "enabled": true } в config.json доски',

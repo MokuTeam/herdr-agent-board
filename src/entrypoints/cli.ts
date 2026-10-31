@@ -34,16 +34,31 @@
 //                            too, with the board's own wake (#178). `board sleep <pane>
 //                            --pi-session <file>`: a pane where pi was stopped by hand, a shell
 //                            now, taken as that pi session asleep there
+//   board move <id|name|pane>... --profile <id> [--when-free]   moves those sessions to another
+//                            Claude profile, keeping their conversation (#250, services/move.ts): put
+//                            to sleep first when free (--when-free: the busy ones once they are),
+//                            their conversation copied there, card and wake switched; a line each
 //   board fork [--name <Name>] [note]   a fork of this session (or --session's): a new session in
 //                            a new tab with a copy of its conversation, started by the web board as
 //                            its Fork does (services/launch/fork.ts); the note is its first message
 //   board tunnel [on|off|test]   the board through the owner's own domain (core/tunnel.ts): where
 //                            the tunnel stands; on and off in config.json; test runs Test connection
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
-//   board presence [here|away]   whether the user is at the computer or away (core/presence.ts),
-//                            the line every session's context has; with a state, the user's switch
+//   board presence [here|away|call]   whether the user is at the computer, away or on a call
+//                            (core/presence.ts), the line every session's context has; with a
+//                            state, the user's switch
 //   board away [on|off]      the same switch: away (on, the default) or back at the computer (off).
 //                            Both only while config.json turns presence on; never sent to a session
+//   board secret request --title <what for> --sink <id> [--field <name>[:shown][:once]]...
+//                            [--param <name>=<value>]... [--expires 30m] [--no-wait]
+//                            asks the owner for values the agent must never see (#273,
+//                            entrypoints/secret-cli.ts): the owner fills a form on the board, the
+//                            board writes the sink config.json defines; waits, then prints ok,
+//                            declined or expired. status <id> [--wait] | cancel <id> | list | sinks
+//   board todo add [--mine] "<text>" | done <id> | list   tasks (#202, core/todos.ts): what the
+//                            agent hands the user to do, or (--mine) a promise of its own it defers;
+//                            done closes its own; list shows this session's open ones. Only while
+//                            config.json turns tasks on with agents (`"todos": true`)
 //   board resume <session id> [--profile <id>]   resumes that session here, in the profile its
 //                            card says it ran in (else the one named): what herdr types into a
 //                            restored pane for a session in another profile than the default one
@@ -58,6 +73,18 @@
 //                            TG_KEY (core/wake/topics.ts keyFor); outside herdr, or with a herdr
 //                            that does not answer within 5 s, the folder; always exits 0. For the
 //                            launchers (core/wake/launchers.ts), so not in the usage line
+//   board backup now | status | list [folder|server] | passphrase | folder <path> | folder off |
+//                            test <folder|server>   the backup of the board's database (#233,
+//                            services/backup.ts): a snapshot to every target now; how each stands;
+//                            the snapshots a target holds; the passphrase (two lines on stdin, never
+//                            an argument); the folder target; a real round trip to a target
+//   board time add | edit | move | rm | restore | show | list | day | projects | import   time
+//                            entries in the board's database (#233, entrypoints/time-cli.ts, where
+//                            each is spelled out), written as this session, its lane the client
+//   board db restore [--target folder|server] [--snapshot <name>] [--file <path>]
+//                            [--passphrase-file <file> | --passphrase-stdin] [--replace-file]   the database back as a
+//                            snapshot has it (the newest of the target when none is named); without
+//                            a target, the snapshots each target holds
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -71,29 +98,37 @@ import {
   reportHash,
   reportIdentity,
 } from '../adapters/call-receipts.ts'
-import { readCard, writeCard } from '../adapters/cards.ts'
+import { changeTodos, readCard, writeCard } from '../adapters/cards.ts'
 import { createClaudeHome, cwdOf } from '../adapters/claude-home.ts'
 import { configFile, editCategories, loadConfig, setRemoteOn, setTunnelOn } from '../adapters/config-file.ts'
 import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
-import { boardFile } from '../adapters/paths.ts'
 import { findPiSession } from '../adapters/pi-home.ts'
 import { currentPresence, setPresence } from '../adapters/presence-store.ts'
 import { runHere } from '../adapters/process.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
-import { addEntry, askRestart, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
+import {
+  addEntry,
+  askRestart,
+  listEntries,
+  type NewEntry,
+  removeEntry,
+  schedulerRuns as schedulerRunsNow,
+} from '../adapters/schedule-store.ts'
 import { peekPiSleepers } from '../adapters/wake-files.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { CODEX_AGENT } from '../core/codex.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
+import { parseMove } from '../core/move.ts'
 import { isPiSessionFile, piSessionId } from '../core/pi.ts'
-import { type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
+import { isPresenceState, type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
 import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
 import { type RemoteView, remoteConfig } from '../core/remote.ts'
 import { parseResume, projectFolderName, resumeDir, resumePlan } from '../core/resume.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
+import { sortTodos, todosConfig, todosOf } from '../core/todos.ts'
 import { boardPorts, publicOrigin, type TestStep, tunnelChecks, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
 import type { Item } from '../core/types.ts'
 import { wakeConfig } from '../core/wake/config.ts'
@@ -105,10 +140,11 @@ import { checkWake, wakeAnswers } from '../services/actions.ts'
 import { askArchive, closeDue, getArchived, profileDoubt } from '../services/archive.ts'
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
+import { type MoveOutcome, moveMany } from '../services/move.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away | call] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -288,22 +324,7 @@ function boardAnswer(): Promise<Record<string, unknown> | null> {
 }
 
 /** Whether a board that runs the schedule answers now. */
-async function schedulerRuns(): Promise<boolean> {
-  try {
-    if (cfg.web === false) {
-      // The terminal board runs the schedule itself then (entrypoints/tui.ts).
-      const board: unknown = JSON.parse(readFileSync(boardFile(), 'utf8'))
-      const pid = isRecord(board) ? board.pid : undefined
-      if (typeof pid !== 'number') return false
-      process.kill(pid, 0)
-      return true
-    }
-    const body = await boardAnswer()
-    return !!body && 'schedules' in body
-  } catch {
-    return false
-  }
-}
+const schedulerRuns = (): Promise<boolean> => schedulerRunsNow(cfg.web !== false, boardAnswer)
 
 /**
  * The profiles with the board's own: the folder the running web board says its env points to
@@ -391,7 +412,48 @@ function line(key: string, cwd: string): string {
 }
 
 /**
- * `board presence [here|away]` and `board away [on|off]`: the user's presence (#172), read or
+ * `board todo add [--mine] "<text>" | done <id> | list` (#202): the agent's side of the tasks, on
+ * this session's card, under its lock (adapters/cards.ts changeTodos). Refused while tasks are off,
+ * or on for the user's pins only.
+ */
+function todo(key: string): void {
+  const usage = 'usage: board todo add [--mine] "<text>" | board todo done <id> | board todo list'
+  const conf = todosConfig(cfg.todos)
+  if (!conf) throw new Error(t('todo.err.off'))
+  if (!conf.agents) throw new Error(t('todo.err.agentsOff'))
+  const [sub = 'list', ...args] = rest
+  if (sub === 'list') {
+    const open = sortTodos(todosOf(readCard(key)?.todos)).filter(x => !x.done)
+    if (!open.length) {
+      console.log('no open tasks for this session')
+      return
+    }
+    for (const x of open) console.log(`${x.id} · ${x.owner === 'agent' ? 'yours' : "the user's"} · ${x.text}`)
+    return
+  }
+  if (sub === 'add') {
+    const mine = args.includes('--mine')
+    const words = args
+      .filter(a => a !== '--mine')
+      .join(' ')
+      .trim()
+    if (!words) throw new Error(usage)
+    const r = changeTodos(key, { op: 'add', text: words, owner: mine ? 'agent' : 'user', by: 'agent' })
+    if (!r.ok) throw new Error(t(r.error))
+    console.log(`ok · task ${r.todo?.id} · ${mine ? 'yours' : "the user's"}`)
+    return
+  }
+  if (sub === 'done' && args[0]) {
+    const r = changeTodos(key, { op: 'done', id: args[0], by: 'agent' })
+    if (!r.ok) throw new Error(t(r.error))
+    console.log(`ok · task ${args[0]} done`)
+    return
+  }
+  throw new Error(usage)
+}
+
+/**
+ * `board presence [here|away|call]` and `board away [on|off]`: the user's presence (#172), read or
  * switched in its file, so with the board closed too; the board shows a switch at its next look.
  * While config.json has no `presence` it is off, and a switch is refused: no file appears.
  */
@@ -406,11 +468,11 @@ function presence(): void {
           : null
       : word === ''
         ? null
-        : word === 'here' || word === 'away'
+        : isPresenceState(word)
           ? word
           : null
   if (word && !state)
-    throw new Error(cmd === 'away' ? 'usage: board away [on|off]' : 'usage: board presence [here|away]')
+    throw new Error(cmd === 'away' ? 'usage: board away [on|off]' : 'usage: board presence [here|away|call]')
   if (!presenceConfig(cfg.presence)) {
     if (!state) {
       console.log('presence is off (no "presence" in config.json; Settings → Presence turns it on)')
@@ -423,7 +485,7 @@ function presence(): void {
     return
   }
   const { presence: p, changed } = setPresence(state, 'user', process.env.HERDR_PANE_ID ? 'agent' : 'cli')
-  console.log(`ok · ${changed ? '' : 'already '}${p.state === 'away' ? 'away' : 'here'}`)
+  console.log(`ok · ${changed ? '' : 'already '}${p.state}`)
 }
 
 async function main(): Promise<void> {
@@ -460,7 +522,13 @@ async function main(): Promise<void> {
   if (cmd === 'doctor') {
     const { gatherFacts } = await import('../adapters/setup-facts.ts')
     const { checkSetup, report } = await import('../core/setup.ts')
-    const checks = checkSetup(await gatherFacts(cfg), t)
+    const facts = await gatherFacts(cfg)
+    const checks = checkSetup(facts, t)
+    // What herdr's panes hold (#243): asked here only, not in the web board's setup note.
+    const { paneFacts } = await import('../adapters/pane-facts.ts')
+    const { paneChecks, wakeKeepsSleepers } = await import('../core/pane-report.ts')
+    const panes = await paneFacts(wakeKeepsSleepers(facts.wakeNew?.state))
+    if (panes) checks.push(...paneChecks(panes, t))
     const webPort = Number(cfg.port) || 12422
     // The remote mode's own checks, only while it is on: off, Tailscale is never asked.
     if (remoteConfig(cfg.remote).on) {
@@ -473,6 +541,15 @@ async function main(): Promise<void> {
       const { tunnelFacts } = await import('../services/tunnel-facts.ts')
       checks.push(...tunnelChecks(await tunnelFacts(cfg, webPort), t))
     }
+    // The board's database and its backup (#233), once there is either: else nothing is asked.
+    const { backupChecks } = await import('../services/backup.ts')
+    checks.push(...backupChecks(cfg, t))
+    // Time tracking's config (#233), while time is on.
+    const { timeChecks } = await import('../services/time.ts')
+    checks.push(...timeChecks(cfg, t))
+    // The secret sinks' config (#273), once config.json has `secrets`.
+    const { secretsChecks } = await import('../services/secrets.ts')
+    checks.push(...secretsChecks(cfg, t))
     return console.log(report(checks, t))
   }
 
@@ -493,8 +570,13 @@ async function main(): Promise<void> {
   if (cmd === 'call-report') return callReport()
   if (cmd === 'remote') return remote()
   if (cmd === 'tunnel') return tunnel()
+  if (cmd === 'backup') return backupCmd()
+  if (cmd === 'time') return timeCommand()
+  if (cmd === 'secret') return secretCommand()
+  if (cmd === 'db') return dbCmd()
   if (cmd === 'archive') return archive()
   if (cmd === 'sleep') return sleep()
+  if (cmd === 'move') return move()
   if (cmd === 'fork') return fork()
   if (cmd === 'resume') return rest.includes('--pi') ? resumePi() : resume()
   if (cmd === 'tg-key') return tgKey()
@@ -600,6 +682,8 @@ async function main(): Promise<void> {
       for (const e of list) console.log(entryLine(e, now, false))
       return
     }
+    case 'todo':
+      return todo(s.key)
     case 'unschedule': {
       // An id is removed above, whoever set it; here only "all" of this session's.
       if (rest[0]?.toLowerCase() !== 'all') throw new Error('usage: board unschedule <id|all>')
@@ -947,6 +1031,40 @@ async function sleep(): Promise<void> {
   console.log([`ok · ${head.filter(Boolean).join(', ')}${hint}${note}`, ...results.map(sleepLine)].join('\n'))
 }
 
+/** One session's line for `board move`: who, then moved, moved once free, or refused and why. */
+function moveLine(o: MoveOutcome, profile: string): string {
+  const who = o.name ? `${o.name}${o.pane ? ` (${o.pane})` : ''}` : `"${o.target}"`
+  if (o.result === 'moved') return `${who}: moved to ${profile}${o.notes?.length ? ` · ${o.notes.join(' · ')}` : ''}`
+  const s = o.sleep
+  if (o.result === 'scheduled' && s)
+    return `${who}: ${keptBy(s)}; goes to sleep once it is free, then moves to ${profile}${s.again ? ' (asked before)' : ''} · cancel: board unschedule ${s.id}`
+  if (!s) return `${who}: refused, ${o.why ?? ''}`
+  // Held for what passes: put to sleep by hand, or moved once it is free.
+  const passes = ['busy', 'dialog', 'draft', 'tasks'].includes(s.why ?? '')
+  const hint = passes ? `; put it to sleep first (board sleep ${o.key ?? o.target}), or add --when-free` : ''
+  return `${who}: refused, ${keptBy(s)}${hint}`
+}
+
+/**
+ * `board move <id|name|pane>... --profile <id> [--when-free]` (#250): the sessions moved to another
+ * Claude profile, keeping their conversation (services/move.ts); a line for each. In English for
+ * agents, whatever language the board speaks.
+ */
+async function move(): Promise<void> {
+  const { targets, profile } = parseMove([...rest, ...(target ? [target] : [])])
+  const from = await ownSession()
+  const items = await collect(deps)
+  const results = await moveMany(deps, items, targets, { profile, whenFree, by: 'agent', ...(from && { from }) })
+  const count = (result: MoveOutcome['result']): number => results.filter(o => o.result === result).length
+  const head = [
+    `${count('moved')} moved to ${profile}`,
+    count('scheduled') && `${count('scheduled')} once free`,
+    count('refused') && `${count('refused')} refused`,
+  ]
+  const note = count('scheduled') ? await schedulerNote() : ''
+  console.log([`ok · ${head.filter(Boolean).join(', ')}${note}`, ...results.map(o => moveLine(o, profile))].join('\n'))
+}
+
 /**
  * `board sleep <pane> --pi-session <file>` (#178): a pane at its shell where a pi session was
  * stopped by hand, taken by the board's wake as that session asleep there: its card shows it
@@ -1076,6 +1194,171 @@ const isStep = (v: unknown): v is TestStep =>
  * Remote access…). Test runs Test connection on the running board. Without an argument: where the
  * tunnel stands, as the running board says. In English, whatever language the board speaks.
  */
+/**
+ * `board time …` (#233, entrypoints/time-cli.ts): as the session that runs it, its lane the client
+ * when none is named; outside a session, as the owner.
+ */
+async function timeCommand(): Promise<void> {
+  const own = await ownSession()
+  const card = own ? readCard(own.key) : null
+  const lane = (typeof card?.category === 'string' && card.category) || categoryFor(cfg, process.cwd())
+  const { timeCmd } = await import('./time-cli.ts')
+  // under --json an error is printed as JSON, and the exit code says it failed
+  process.exitCode = await timeCmd(rest, { cfg, actor: own ? { key: own.key, name: own.name ?? '' } : 'user', lane })
+}
+
+/** `board secret …` (#273, entrypoints/secret-cli.ts): the request goes on this session's card. */
+async function secretCommand(): Promise<void> {
+  const own = await ownSession()
+  const { secretCmd } = await import('./secret-cli.ts')
+  process.exitCode = await secretCmd(rest, {
+    cfg,
+    session: own ? { key: own.key, name: own.name ?? '' } : null,
+    out: line => console.log(line),
+  })
+}
+
+/** A flag's value: `--name value` in the command's words; undefined when it is not there. */
+function option(name: string): string | undefined {
+  const i = rest.indexOf(name)
+  return i >= 0 ? rest[i + 1] : undefined
+}
+
+/** `board backup …` (#233): the backup of the board's database (services/backup.ts). */
+async function backupCmd(): Promise<void> {
+  const [op = 'status', arg] = rest
+  const backup = await import('../services/backup.ts')
+  const { activeTargets, backupConfig, isTarget, problemSentence } = await import('../core/backup.ts')
+  const c = backupConfig(cfg.backup)
+  if (op === 'now') {
+    const r = await backup.backupNow({ cfg, force: true })
+    if (r.nothing) return console.log(t('backup.cli.nothing'))
+    if (!r.sent.length && !r.failed.length) return console.log(t('backup.cli.noTargets'))
+    for (const s of r.sent) console.log(t('backup.cli.sent', { target: s.target, name: s.name }))
+    for (const f of r.failed) console.log(t('backup.cli.failed', { target: f.target, error: f.error }))
+    if (r.failed.length) process.exitCode = 1
+    return
+  }
+  if (op === 'status') {
+    const v = backup.backupView(cfg)
+    if (!v.needed) console.log(t('backup.cli.nothing'))
+    for (const target of activeTargets(v.config)) {
+      const s = v.states[target]
+      const state = s?.lastOk ? t('backup.state.ok', { when: clock(s.lastOk) }) : t('backup.state.never')
+      console.log(`${target} · ${state}${s?.error ? ` · ${t('backup.state.error', { error: s.error })}` : ''}`)
+    }
+    for (const p of v.problems) console.log(`! ${problemSentence(p, t)}`)
+    if (v.problems.length) process.exitCode = 1
+    return
+  }
+  if (op === 'list') {
+    const targets = arg ? (isTarget(arg) ? [arg] : []) : activeTargets(c)
+    if (!targets.length) throw new Error(arg ? t('backup.cli.usage') : t('backup.cli.noTargets'))
+    for (const target of targets) {
+      const list = await backup.listAt(target, c)
+      console.log(t('backup.cli.list', { target, n: list.length }))
+      for (const x of list) console.log(`  ${x.name}  ${Math.ceil(x.size / 1024)} KB`)
+    }
+    return
+  }
+  if (op === 'passphrase') {
+    // never an argument (it would stay in the shell's history and the process list), never typed on a terminal here
+    if (process.stdin.isTTY) throw new Error(t('backup.cli.usage'))
+    const { readStdin } = await import('../adapters/stdin.ts')
+    const [first = '', second = ''] = (await readStdin()).split(/\r?\n/)
+    const r = await backup.setPassphrase(first, second)
+    if (!r.ok) throw new Error(r.error)
+    return console.log(t('backup.cli.passphraseSet'))
+  }
+  if (op === 'folder') {
+    const { editBackup } = await import('../adapters/config-file.ts')
+    if (arg === 'off') {
+      const r = editBackup({ folder: null })
+      if (!r.ok) throw new Error(r.error)
+      backup.resetTarget('folder')
+      return console.log(t('backup.cli.folderOff'))
+    }
+    if (!arg) throw new Error(t('backup.cli.usage'))
+    const folder = resolve(arg)
+    const { folderProblem } = await import('../adapters/backup-store.ts')
+    const problem = folderProblem(folder)
+    if (problem) throw new Error(t(problem, { folder }))
+    const r = editBackup({ folder })
+    if (!r.ok) throw new Error(r.error)
+    backup.resetTarget('folder')
+    return console.log(t('backup.cli.folderSet', { folder }))
+  }
+  if (op === 'test' && isTarget(arg)) {
+    const r = await backup.testTarget(arg, cfg)
+    if (!r.ok) throw new Error(r.error ?? '')
+    return console.log(t('backup.tested', { name: r.name ?? '' }))
+  }
+  throw new Error(t('backup.cli.usage'))
+}
+
+/** `board db restore …` (#233): the board's database back as a snapshot has it (services/backup.ts restore). */
+async function dbCmd(): Promise<void> {
+  const [op] = rest
+  if (op !== 'restore') throw new Error(t('backup.cli.restoreUsage'))
+  const backup = await import('../services/backup.ts')
+  const { activeTargets, backupConfig, isTarget } = await import('../core/backup.ts')
+  const target = option('--target')
+  const file = option('--file')
+  const name = option('--snapshot')
+  const passFile = option('--passphrase-file')
+  if (target !== undefined && !isTarget(target)) throw new Error(t('backup.cli.restoreUsage'))
+  if (!target && !file) {
+    const c = backupConfig(cfg.backup)
+    const targets = activeTargets(c)
+    if (!targets.length) throw new Error(t('backup.cli.noTargets'))
+    for (const tg of targets) {
+      const list = await backup.listAt(tg, c)
+      console.log(t('backup.cli.list', { target: tg, n: list.length }))
+      for (const x of list.slice(-10)) console.log(`  ${x.name}  ${Math.ceil(x.size / 1024)} KB`)
+    }
+    return console.log(t('backup.cli.restoreUsage'))
+  }
+  const { passphraseFrom } = await import('../core/backup-file.ts')
+  let passphrase: string | null = null
+  if (passFile) passphrase = passphraseFrom(readFileSync(passFile))
+  else if (rest.includes('--passphrase-stdin')) {
+    // never typed on a terminal here (it would show): piped, as `board backup passphrase` takes it
+    if (process.stdin.isTTY) throw new Error(t('backup.cli.restoreUsage'))
+    const { readStdin } = await import('../adapters/stdin.ts')
+    passphrase = passphraseFrom(Buffer.from(await readStdin()))
+  }
+  const webPort = Number(cfg.port) || 12422
+  // what was newer and did not open: the hours it held are not in what was restored
+  const passedOver = (skipped: readonly { name: string; why: string }[]) => {
+    for (const x of skipped)
+      console.log(t('backup.cli.skipped', { name: x.name, why: x.why.startsWith('backup.') ? t(x.why) : x.why }))
+  }
+  const r = await backup
+    .restore({
+      from: file ? { file: resolve(file) } : { target: target as 'folder' | 'server', ...(name && { name }) },
+      cfg,
+      passphrase,
+      by: 'user',
+      replaceFile: rest.includes('--replace-file'),
+      boardRunning: async () => {
+        try {
+          await fetch(`http://127.0.0.1:${webPort}/api/hello`, { signal: AbortSignal.timeout(1500) })
+          return true
+        } catch {
+          return false
+        }
+      },
+    })
+    .catch((err: unknown) => {
+      // nothing taken: what it passed over is said before why
+      if (err instanceof backup.BackupError) passedOver(err.skipped)
+      throw err
+    })
+  passedOver(r.skipped)
+  if (!r.inPlace) return console.log(t('backup.cli.restoredFile', { from: r.from, aside: r.aside ?? '' }))
+  console.log(t('backup.cli.restored', { from: r.from, before: r.before ?? '-' }))
+}
+
 async function tunnel(): Promise<void> {
   const [op = 'status'] = rest
   const webPort = Number(cfg.port) || 12422

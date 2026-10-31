@@ -175,15 +175,19 @@ export class MenuEngine {
   /**
    * The open menu's items again, where they are, the lit one still lit: a check turned on or off
    * in it by an item that keeps it open. The same items in the same order; a submenu open meanwhile
-   * stays as it is.
+   * stays open, its items the new ones of the item it is open from (a check in it, #256).
    */
   update(items: readonly MenuEntry[]): void {
-    const layer = this.layers[0]
-    if (!layer || items.length !== layer.items.length) return
-    const { items: next, note } = shareReasons(items)
-    layer.items = next
-    layer.note = note
-    layer.checks = next.some(it => !isSeparator(it) && it.checked !== undefined)
+    let next: readonly MenuEntry[] | null | undefined = items
+    for (const layer of this.layers) {
+      if (!next || next.length !== layer.items.length) break
+      const shared = shareReasons(next)
+      layer.items = shared.items
+      layer.note = shared.note
+      layer.checks = shared.items.some(it => !isSeparator(it) && it.checked !== undefined)
+      const from = layer.items[layer.sub]
+      next = from && !isSeparator(from) ? from.submenu : null
+    }
     this.publish()
   }
 

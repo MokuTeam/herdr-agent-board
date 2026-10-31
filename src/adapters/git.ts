@@ -106,6 +106,12 @@ export async function gitInfo(dir: string): Promise<{ root: string; branch: stri
   return root ? { root: resolve(root), branch: branch ?? '' } : null
 }
 
+/** The commit a checkout is on, for a base when it has no branch (detached), or null. */
+export async function headCommit(dir: string): Promise<string | null> {
+  const r = await run('git', ['-C', dir, 'rev-parse', 'HEAD'], { timeout: 5000 })
+  return r.code === 0 && r.stdout.trim() ? r.stdout.trim() : null
+}
+
 /**
  * The main checkout of the repository `dir` belongs to (a linked worktree included), or null.
  * herdr links a worktree to the repository, not to the worktree it was made from, so this is

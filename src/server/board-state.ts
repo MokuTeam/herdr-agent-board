@@ -16,11 +16,12 @@ import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
 import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
 import type { Limits } from '../core/limits.ts'
-import type { BoardLimits, BoardPayload, BoardProfile } from '../core/payload.ts'
+import type { BackupPayload, BoardLimits, BoardPayload, BoardProfile, TimePayload } from '../core/payload.ts'
 import type { PresenceView } from '../core/presence.ts'
 import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts'
 import type { RemoteView } from '../core/remote.ts'
 import type { SetupSummary } from '../core/setup.ts'
+import { todosConfig } from '../core/todos.ts'
 import type { Item } from '../core/types.ts'
 import type { WakeView } from '../core/wake/view.ts'
 import { collect } from '../services/board.ts'
@@ -60,7 +61,7 @@ interface Options {
   mokupilot?: () => boolean
   /** The remote mode as the page shows it; null while it is off (server/remote.ts). */
   remote?: () => RemoteView | null
-  /** Whether the board can ask a session a side question (services/aside.ts asideCheck). */
+  /** Whether the board can ask a session a side question (services/aside.ts: /btw in its pane). */
   aside?: () => boolean
   /** The Remote access view's revision (app.ts counts its changes). */
   accessRev?: () => number
@@ -68,6 +69,10 @@ interface Options {
   omarchy?: () => string | null
   /** The user's presence (services/presence.ts); null while it is not on. */
   presence?: () => PresenceView | null
+  /** The backup's line (#233); null while there is no database and no target. */
+  backup?: () => BackupPayload | null
+  /** Time tracking's line (#233); null while it is off. */
+  time?: () => TimePayload | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -137,6 +142,16 @@ function presenceOf(presence: Options['presence']): { presence?: PresenceView } 
   return view ? { presence: view } : {}
 }
 
+function timeOf(time: Options['time']): { time?: TimePayload } {
+  const line = time?.() ?? null
+  return line ? { time: line } : {}
+}
+
+function backupOf(backup: Options['backup']): { backup?: BackupPayload } {
+  const line = backup?.() ?? null
+  return line ? { backup: line } : {}
+}
+
 function remoteOf(remote: Options['remote']): { remote?: RemoteView } {
   const view = remote?.() ?? null
   return view ? { remote: view } : {}
@@ -156,6 +171,8 @@ export function createBoardState({
   accessRev,
   omarchy,
   presence,
+  backup,
+  time,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -185,7 +202,11 @@ export function createBoardState({
       })
     // What the page has no use for stays here: file paths (the Claude folder included), the Claude
     // process and its pipe.
-    const list = items.map(({ transcript, claudeRoot, alive, since, pipe, ...rest }) => launches.decorate(rest))
+    // Tasks (#202) only while config.json turns them on: off, the page sees none.
+    const todos = todosConfig(cfg.todos)
+    const list = items.map(({ transcript, claudeRoot, alive, since, pipe, todos: own, ...rest }) =>
+      launches.decorate(todos && own ? { ...rest, todos: own } : rest),
+    )
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)
     // The usage the pill shows: the board's own profile's (the default one's when its env points to
@@ -216,7 +237,7 @@ export function createBoardState({
       mokupilot: mokupilot?.() ?? false,
       // fork: whether the board can fork a session into a new tab with its launcher.
       fork: canFork(cfg),
-      // aside: whether a session's sheet offers a side question (Claude Code on PATH).
+      // aside: whether a session's sheet offers a side question (/btw typed into the session).
       aside: aside?.() ?? false,
       setup: setup?.() ?? null,
       // wake: only once it ships, while it is on, or while its file has sleepers (dormant otherwise).
@@ -229,6 +250,11 @@ export function createBoardState({
       ...remoteOf(remote),
       // presence: only while config.json turns it on (#172).
       ...presenceOf(presence),
+      ...(todos && { todos }),
+      // backup: only once there is a database or a backup target (#233)
+      ...backupOf(backup),
+      // time: only while config.json turns it on (#233)
+      ...timeOf(time),
       // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
       accessRev: accessRev?.() ?? 0,
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.

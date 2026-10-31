@@ -5,7 +5,8 @@
 #   Notification               -> same title, body = Claude's message (permission prompt etc.)
 #   PreToolUse AskUserQuestion -> same title, body = the question
 # Skipped when this pane is focused in herdr and the terminal is the foreground window,
-# like herdr, which only pops up for background work.
+# like herdr, which only pops up for background work. While the board has the user on a call
+# (presence, #276) it goes quietly to the notification center, without popping up.
 # Clicking the toast opens claude-pane:<pane id>, a URL protocol registered below that runs
 # this script again as `open <uri>`: the agent board shows that session when it runs and has it
 # (its window comes up on the session's sheet), else herdr switches to that pane and the terminal
@@ -190,7 +191,22 @@ function Get-LastAssistantText([string]$TranscriptPath) {
     ""
 }
 
-function Show-Toast([string]$Title, [string]$Body, [string]$Attribution, [string]$PaneId) {
+# The board's presence says the user is on a call. presence.json is in the board's state folder
+# only while presence is on; one left after presence was turned off with the board closed counts
+# only while config.json still turns presence on (`true` or a section, as the board reads it).
+function Test-OnCall {
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { return $false }
+    $file = Join-Path $env:LOCALAPPDATA "herdr\plugins\agent-board\presence.json"
+    if (-not (Test-Path -LiteralPath $file)) { return $false }
+    try {
+        if ((Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json).state -ne "call") { return $false }
+        $config = Join-Path $env:APPDATA "herdr\plugins\config\agent-board\config.json"
+        $on = (Get-Content -LiteralPath $config -Raw -Encoding UTF8 | ConvertFrom-Json).presence
+        ($on -is [bool] -and $on) -or $on -is [Management.Automation.PSCustomObject]
+    } catch { $false }
+}
+
+function Show-Toast([string]$Title, [string]$Body, [string]$Attribution, [string]$PaneId, [bool]$Quiet) {
     Register-Handlers
 
     $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
@@ -215,6 +231,8 @@ function Show-Toast([string]$Title, [string]$Body, [string]$Attribution, [string
     # One live toast per pane: a newer one replaces the old in the notification center.
     $toast.Group = "herdr"
     $toast.Tag = $PaneId -replace '[^A-Za-z0-9_.-]', '_'
+    # Straight to the notification center: seen after the call.
+    if ($Quiet) { $toast.SuppressPopup = $true }
     [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($AppId).Show($toast)
 }
 
@@ -317,6 +335,6 @@ if ($pane) {
 if ([string]::IsNullOrWhiteSpace($title)) { $title = "Claude" }
 
 try {
-    Show-Toast $title $body $attribution $env:HERDR_PANE_ID
+    Show-Toast $title $body $attribution $env:HERDR_PANE_ID (Test-OnCall)
 } catch {
 }

@@ -163,6 +163,7 @@ export const SAMPLES: Record<string, string> = Object.fromEntries(
       [/^\/api\/session\/([^/]+)\/(focus|wake|sleep|restart|message)$/, '/api/session/s1/message'],
       [/^\/api\/session\/([^/]+)\/(\w+)$/, '/api/session/s1/rename'],
       [/^\/api\/term\//, '/api/term/s1/agent/stream'],
+      [/^\/api\/secret\/([0-9a-f]{12})$/, '/api/secret/0123456789ab'],
       [/^\/uploads\/(\d{4}-\d{2}-\d{2})\/([^/]+)$/, '/uploads/2026-10-20/a.png'],
     ] as const
   ).map(([re, raw]) => [re.source, raw]),

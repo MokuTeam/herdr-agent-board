@@ -32,6 +32,8 @@ import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
 import { heldQuestionOf } from '../core/held-question.ts'
 import { isNotice } from '../core/notices.ts'
 import { type Profile, profileReport } from '../core/profiles.ts'
+import { secretsConfig, usableSinks } from '../core/secrets.ts'
+import { todosConfig } from '../core/todos.ts'
 import type { Config } from '../core/types.ts'
 
 const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
@@ -135,7 +137,9 @@ async function main(): Promise<void> {
     cfg = loadConfig()
     // The user's presence (#172), only where config.json turned it on.
     const presence = presenceForBrief(cfg)
-    context = brief(cfg, card, text(input.cwd) ?? '', process.env, 'Claude', presence)
+    // The secret sinks (#273), only where config.json has any: else the brief is as it was.
+    const sinks = cfg.secrets === undefined ? [] : usableSinks(secretsConfig(cfg.secrets, { home: homedir() }))
+    context = brief(cfg, card, text(input.cwd) ?? '', process.env, 'Claude', presence, todosConfig(cfg.todos), sinks)
     Object.assign(patch, { briefedAt: Date.now(), briefV: BRIEF_VERSION })
     if (presence) patch.presenceSeen = presence.since
     else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''

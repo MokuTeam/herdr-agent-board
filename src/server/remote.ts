@@ -45,7 +45,7 @@ import {
 } from '../core/remote.ts'
 import type { Config } from '../core/types.ts'
 import type { Remote } from '../services/remote.ts'
-import { dispatch, type GuardState, json, type Route, readBody } from './http.ts'
+import { dispatch, type GuardState, json, peerOf, type Route, readBody } from './http.ts'
 import { decoded, endsWhenGone, remoteRefusal } from './streams.ts'
 
 export interface Hello {
@@ -246,7 +246,9 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
       // The board's page is for the computer's own browser; a phone has its app.
       if (!raw.startsWith('/api/') && !raw.startsWith('/uploads/')) return json(404, { error: 'not found' })
       const guards = fromServe ? { ...o.guards, origins: [pwaOrigin] } : o.guards
-      return endsWhenGone(await dispatch(o.routes, req, url, path, guards), gone => o.remote.watch(device.id, gone))
+      return endsWhenGone(await dispatch(o.routes, req, url, path, guards, () => peerOf(srv, req)), gone =>
+        o.remote.watch(device.id, gone),
+      )
     } catch (err) {
       o.log(`remote ${req.method} ${url ? url.pathname : ''}: ${messageOf(err)}`)
       return json(500, { error: messageOf(err) })

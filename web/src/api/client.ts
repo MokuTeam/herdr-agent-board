@@ -91,8 +91,6 @@ export interface SessionDetail {
   /** The terminal's screen while a dialog holds the session. */
   screen: string
   dialog: PublicDialog | null
-  /** The effort its latest /effort line says, when that line is on screen. */
-  effort?: string
   /** Its folder is in a git checkout: the sheet offers its changes. */
   checkout: boolean
   /** Its subagents, forks, workflow agents and teammates, newest first, and its workflow runs. */

@@ -334,6 +334,54 @@ describe('doctor', () => {
     )
   })
 
+  test('the MokuPilot mode: local needs MokuPilot here, link does not, auto says how it goes', () => {
+    const missing = { state: 'missing', configured: false, file: 'meet' } as const
+    // This machine and nothing here: a mark, saying the mode asks for it.
+    const local = checkSetup(facts({ platform: 'linux', mokupilot: missing, mokupilotMode: 'local' }))
+    assert.equal(level(local, 'mokupilot'), 'warn')
+    assert.match(check(local, 'mokupilot').title, /MokuPilot not found: meet/)
+    assert.match(check(local, 'mokupilot').detail ?? '', /“This machine”: calls start here/)
+    assert.deepEqual(
+      todo(local).map(c => c.id),
+      ['mokupilot'],
+    )
+    // Auto (said or not) and nothing here: no mark, as before the modes, and how the link goes.
+    for (const mokupilotMode of [undefined, 'auto'] as const) {
+      const auto = checkSetup(facts({ platform: 'linux', mokupilot: missing, ...(mokupilotMode && { mokupilotMode }) }))
+      assert.equal(level(auto, 'mokupilot'), 'off')
+      assert.match(check(auto, 'mokupilot').detail ?? '', /“The computer you’re viewing from” in Settings → MokuPilot…/)
+      assert.ok(!todo(auto).some(c => c.id === 'mokupilot'))
+    }
+    // Auto with MokuPilot here: ok, and where a call from elsewhere goes.
+    const here = checkSetup(facts({ mokupilotMode: 'auto' }))
+    assert.equal(level(here, 'mokupilot'), 'ok')
+    assert.match(check(here, 'mokupilot').detail ?? '', /MokuPilot\.exe Settings → MokuPilot… says “Auto”/)
+    // Local with MokuPilot here: ok, its file only.
+    const there = checkSetup(facts({ mokupilotMode: 'local' }))
+    assert.equal(check(there, 'mokupilot').detail, 'C:\\Users\\u\\AppData\\Local\\Programs\\MokuPilot\\MokuPilot.exe')
+    // A configured file that is not there, under auto: the mark as before.
+    const gone = checkSetup(
+      facts({ mokupilot: { state: 'missing', configured: true, file: '/opt/mp/meet' }, mokupilotMode: 'auto' }),
+    )
+    assert.equal(level(gone, 'mokupilot'), 'warn')
+    assert.match(check(gone, 'mokupilot').detail ?? '', /Under “Auto” a call asked from this computer fails/)
+  })
+
+  test('MokuPilot by a link: a call from the viewer’s computer, no file, nothing to fix', () => {
+    for (const platform of ['linux', 'win32']) {
+      const link = checkSetup(facts({ platform, mokupilot: { state: 'link', configured: true } }))
+      assert.equal(level(link, 'mokupilot'), 'ok')
+      assert.match(check(link, 'mokupilot').title, /mokupilot:\/\/ link/)
+      assert.match(
+        check(link, 'mokupilot').detail ?? '',
+        /Settings → MokuPilot….*Nothing starts on this computer, and MokuPilot need not be installed here/,
+      )
+      assert.doesNotMatch(check(link, 'mokupilot').title, /not found|not on this computer/)
+      assert.equal(check(link, 'mokupilot').code ?? '', '')
+      assert.ok(!todo(link).some(c => c.id === 'mokupilot'))
+    }
+  })
+
   test('each missing piece, what it costs and how to fix it', () => {
     const noHooks = checkSetup(facts({ settings: {} }))
     assert.equal(level(noHooks, 'hooks'), 'error')

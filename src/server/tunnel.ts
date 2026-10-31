@@ -38,7 +38,7 @@ import { boardPorts, publicHosts, publicOrigin, tunnelConfig, tunnelPort, tunnel
 import type { Config } from '../core/types.ts'
 import type { Access, SignIn, Who } from '../services/access.ts'
 import type { Probes } from '../services/tunnel.ts'
-import { type Body, dispatch, type GuardState, json, type Route, readBody } from './http.ts'
+import { type Body, dispatch, type GuardState, json, peerOf, type Route, readBody } from './http.ts'
 import { decoded, endsWhenGone, remoteRefusal } from './streams.ts'
 import { probeAnswer } from './tunnel-probe.ts'
 
@@ -219,7 +219,7 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
     return undefined
   }
 
-  async function answer(req: Request): Promise<Response> {
+  async function answer(req: Request, srv?: Server): Promise<Response> {
     // The site as this request found it, should a sync change it meanwhile.
     const here = site
     const host = (req.headers.get('host') ?? '').toLowerCase()
@@ -273,7 +273,14 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         const r = o.access.addPasskey(login.id, body, { origin, rpId: domain }, who.userAgent)
         return r.ok ? json(200, { ok: true, id: r.id }) : json(400, { ok: false, error: r.error })
       }
-      const res = await dispatch(o.routes, req, url, path, { ...o.guards, origins: [origin], ownFiles: o.ownFiles })
+      const res = await dispatch(
+        o.routes,
+        req,
+        url,
+        path,
+        { ...o.guards, origins: [origin], ownFiles: o.ownFiles },
+        () => peerOf(srv, req),
+      )
       return endsWhenGone(res, gone => o.access.watch(login.id, gone), { 'x-accel-buffering': 'no' })
     } catch (err) {
       // The path only: a query can carry the page's file token.
@@ -299,7 +306,7 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         idleTimeout: 0,
         development: false,
         reusePort: false,
-        fetch: async req => unframed(await answer(req)),
+        fetch: async (req, srv) => unframed(await answer(req, srv)),
       })
       bound = port
       error = null

@@ -284,3 +284,78 @@ test('rebuilds run one at a time, so the newest bundle is the one kept', async (
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+// The quick look's viewers (server/viewers.ts, #176): each bundled apart, so app.js stays as it was.
+test('viewers are bundled apart from the page, each with its map; one that fails leaves the rest', async () => {
+  const root = site({
+    'app.js': "console.log('marker-of-the-page')\n",
+    'viewer.js': "import { v } from './lib.js'\nexport const mount = () => v\n",
+    'lib.js': "export const v = 'marker-of-the-viewer'\n",
+    'broken.js': "import { nothing } from 'no-such-package'\nexport const mount = nothing\n",
+  })
+  mkdirSync(join(root, 'node_modules', 'some-lib'), { recursive: true })
+  writeFileSync(join(root, 'node_modules', 'some-lib', 'package.json'), '{"name":"some-lib","version":"1.0.0"}')
+  writeFileSync(join(root, 'node_modules', 'some-lib', 'worker.mjs'), 'self.onmessage = () => {}\n')
+  const logs: string[] = []
+  try {
+    const bundle = await createWebBundle({
+      root,
+      entry: join(root, 'web', 'app.js'),
+      viewers: { 'viewer.js': join(root, 'web', 'viewer.js'), 'broken.js': join(root, 'web', 'broken.js') },
+      copies: { 'worker.js': 'some-lib/worker.mjs', 'gone.js': 'some-lib/gone.mjs' },
+      log: text => logs.push(text),
+    })
+    expect(bundle.js()).toContain('marker-of-the-page')
+    expect(bundle.js()).not.toContain('marker-of-the-viewer')
+    const viewer = String(bundle.file('viewer.js') ?? '')
+    expect(viewer).toContain('marker-of-the-viewer')
+    expect(viewer).toMatch(/export\s*\{/)
+    expect(viewer.trimEnd().endsWith('//# sourceMappingURL=viewer.js.map')).toBe(true)
+    const { sources } = JSON.parse(String(bundle.file('viewer.js.map') ?? '{}')) as { sources: string[] }
+    expect(sources.some(s => s.endsWith('lib.js'))).toBe(true)
+    expect(String(bundle.file('worker.js'))).toBe('self.onmessage = () => {}\n')
+    // Not built, not there: logged by name, the page and the other viewer as they are.
+    expect(bundle.file('broken.js')).toBeUndefined()
+    expect(bundle.file('gone.js')).toBeUndefined()
+    expect(logs.some(l => l.includes('broken.js'))).toBe(true)
+    expect(logs.some(l => l.includes('gone.js'))).toBe(true)
+    // A viewer changed is a new page version.
+    const v = bundle.version()
+    writeFileSync(join(root, 'web', 'lib.js'), "export const v = 'changed'\n")
+    await bundle.rebuild()
+    expect(bundle.version()).not.toBe(v)
+    expect(bundle.file('viewer.js')).toContain('changed')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// A viewer that stops building keeps its last good build, as app.js does (a 404 would quietly send
+// the page back to the browser's own viewer); a copy is served as its bytes, not as text.
+test('a viewer broken later keeps its last good build; a copy keeps its bytes', async () => {
+  const root = site({ 'app.js': "console.log('page')\n", 'viewer.js': "export const mount = () => 'first'\n" })
+  mkdirSync(join(root, 'node_modules', 'some-lib'), { recursive: true })
+  writeFileSync(join(root, 'node_modules', 'some-lib', 'package.json'), '{"name":"some-lib","version":"1.0.0"}')
+  const bytes = Buffer.from([0, 0xff, 0xfe, 0x80, 0x61])
+  writeFileSync(join(root, 'node_modules', 'some-lib', 'decoder.wasm'), bytes)
+  const logs: string[] = []
+  try {
+    const bundle = await createWebBundle({
+      root,
+      entry: join(root, 'web', 'app.js'),
+      viewers: { 'viewer.js': join(root, 'web', 'viewer.js') },
+      copies: { 'decoder.wasm': 'some-lib/decoder.wasm' },
+      log: text => logs.push(text),
+    })
+    expect(Buffer.compare(bundle.file('decoder.wasm') as Buffer, bytes)).toBe(0)
+    const good = bundle.file('viewer.js')
+    expect(good).toContain('first')
+    writeFileSync(join(root, 'web', 'viewer.js'), 'export const mount = (')
+    await bundle.rebuild()
+    expect(logs.some(l => l.includes('viewer.js'))).toBe(true)
+    expect(bundle.file('viewer.js')).toBe(good)
+    expect(bundle.file('viewer.js.map')).toBeTruthy()
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
