@@ -51,7 +51,7 @@ function imageSources(content: unknown): string[] {
 }
 
 /** A message with its images named again: their "[Image #N]" marks out, their paths on lines under it. */
-function withImages(text: string, ids: readonly number[], sources: readonly string[]): string {
+export function withImages(text: string, ids: readonly number[], sources: readonly string[]): string {
   const named = new Set(ids.slice(0, sources.length))
   const rest = text.replace(/\[Image #(\d+)\] ?/g, (mark, n) => (named.has(Number(n)) ? '' : mark))
   return `${rest}\n${sources.join('\n')}`

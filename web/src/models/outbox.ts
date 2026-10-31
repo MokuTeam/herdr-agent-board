@@ -1,23 +1,12 @@
 // Messages the board sent that the session's thread does not show yet. Each one shows at once
 // as a bubble of its own at the foot of the thread, and goes as soon as the transcript has it:
 // in Claude Code's queue (the server's `queued`) or as a user line (upstream's web/outbox.js).
+
+import { messageKey } from '../../../src/core/message-key.ts'
 import type { QueuedPrompt } from '../../../src/core/queue.ts'
 
-/**
- * A message's words, to find what the board sent in what the transcript shows. On its way
- * Claude Code wraps pasted text in <pasted_content id="…"> tags, turns an image's path into
- * "[Image #1]", drops blank lines and can change a path (a pasted "\a" or "\t" is read as a
- * control character); a queued one, or one the thread's budget cut, comes clipped. So: no tags,
- * no image marks, no paths, one space between words.
- */
-export function messageKey(text: unknown): string {
-  return String(text ?? '')
-    .replace(/<\/?pasted_content\b[^>]*>/g, ' ')
-    .replace(/\[(?:Image|Pasted text) #\d+[^\]]*\]/g, ' ')
-    .replace(/\S*[\\/]\S*/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
+/** A message's words, to find what the board sent in what the transcript shows (core/message-key.ts). */
+export { messageKey }
 
 /**
  * Whether a message the transcript shows holds what the board sent (its key): the same words,

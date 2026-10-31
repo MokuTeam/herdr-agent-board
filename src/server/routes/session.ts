@@ -8,6 +8,7 @@ import { helpersOf } from '../../adapters/helpers.ts'
 import { herdrText } from '../../adapters/herdr.ts'
 import { uploadsDir } from '../../adapters/paths.ts'
 import { askRestart } from '../../adapters/schedule-store.ts'
+import { picturesSentTo, rememberPictures } from '../../adapters/sent-pictures-store.ts'
 import { busy, PINS } from '../../core/board.ts'
 import { isCodexItem } from '../../core/codex.ts'
 import { PICTURE_PATH } from '../../core/dialogs/input-box.ts'
@@ -17,8 +18,12 @@ import { publicHelper } from '../../core/helpers.ts'
 import { t } from '../../core/lang.ts'
 import { checkName } from '../../core/launch/names.ts'
 import type { MessageGate } from '../../core/message-gate.ts'
+import { messageKey } from '../../core/message-key.ts'
 import type { Viewer } from '../../core/mokupilot-mode.ts'
 import { isPiItem } from '../../core/pi.ts'
+import type { QueuedPrompt } from '../../core/queue.ts'
+import { picturesBack, type SentPictures } from '../../core/sent-pictures.ts'
+import type { ConversationTurn } from '../../core/transcript.ts'
 import type { Item, Pin } from '../../core/types.ts'
 import { checkWake, focus, send, sleepSession, wake, wakeAnswers } from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
@@ -67,11 +72,13 @@ async function detail(app: SessionApp, item: Item) {
       ? reg.statusUpdatedAt
       : 0
   // A pi session's turns are in its session file, its key.
-  const thread = isCodexItem(item)
+  const claude = !isCodexItem(item) && !isPiItem(item)
+  const read = isCodexItem(item)
     ? deps.codex.sessionThread(item.session ?? '', 60)
     : isPiItem(item)
       ? deps.pi.sessionThread(item.session ?? '', 60)
       : deps.claude.sessionThread(transcript ?? '', 60, { since: since ?? 0, idleSince })
+  const thread = claude && item.session ? withPicturesBack(read, item.session) : read
   const conversation = withSessions(app.items(), thread.conversation)
   // helpers: every subagent, fork, workflow agent and teammate, newest first (adapters/helpers.ts).
   const own = helpersOf(transcript, { alive: !!alive, since: since ?? null })
@@ -101,6 +108,31 @@ async function detail(app: SessionApp, item: Item) {
   return { item: shown, conversation, queued, helpers, workflows: own.workflows, screen, dialog, checkout }
 }
 
+/**
+ * A Claude thread whose messages sent while it worked show their pictures as the others do: the
+ * board's record of what it sent gives back the paths Claude Code kept no line for
+ * (core/sent-pictures.ts). The record is read only for a message with a mark left.
+ */
+function withPicturesBack<T extends { conversation: ConversationTurn[]; queued: QueuedPrompt[] }>(
+  thread: T,
+  session: string,
+): T {
+  let sent: SentPictures[] | null = null
+  const records = (): SentPictures[] => {
+    sent ??= picturesSentTo(session)
+    return sent
+  }
+  const back = <M extends { text: string; at: number }>(m: M): M => {
+    const text = picturesBack(m.text, m.at, records)
+    return text === m.text ? m : { ...m, text }
+  }
+  return {
+    ...thread,
+    conversation: thread.conversation.map(m => (m.role === 'user' ? back(m) : m)),
+    queued: thread.queued.map(back),
+  }
+}
+
 function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
   const { deps } = app
   // Attached files go as their paths: Claude reads them, and picks up image paths as images.
@@ -116,9 +148,12 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
     // board that cannot reach herdr fails here rather than send on old data.
     const fresh = (await collect(deps)).find(next => next.key === item.key)
     if (!fresh || fresh.session !== item.session || fresh.pane !== item.pane) return changed(item)
-    return send(deps, fresh, [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n'), {
-      pictures: files.some(p => PICTURE_PATH.test(p)),
-    })
+    const typed = [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n')
+    const pictures = files.filter(p => PICTURE_PATH.test(p))
+    // What its thread needs should the message reach the session while it works (core/sent-pictures.ts).
+    if (pictures.length && fresh.session && !isCodexItem(fresh) && !isPiItem(fresh))
+      rememberPictures({ session: fresh.session, key: messageKey(typed), pictures, at: Date.now() }, deps.log)
+    return send(deps, fresh, typed, { pictures: pictures.length > 0 })
   })
 }
 
