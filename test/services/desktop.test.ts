@@ -3,7 +3,7 @@
 // profile's copy for a second session, control and asks, taken over by the next board, and the
 // owner's last view closing hands the browser back.
 import { afterEach, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ServerWebSocket } from 'bun'
@@ -45,9 +45,14 @@ function fakeServer(
     arch?: string
     /** xkbcomp on PATH, done at once. */
     xkbcomp?: boolean
+    /** Chrome asked to quit (Browser.close) ends once this resolves. */
+    quitting?: () => Promise<void>
   } = {},
 ) {
   const procs = new Map<number, Proc>()
+  /** The DevTools sockets Chrome was asked to quit on, and the pids a signal ended. */
+  const quits: string[] = []
+  const killed: number[] = []
   let next = 1000
   function start(argv: string[], env: Record<string, string>, mark = '') {
     const pid = next++
@@ -87,7 +92,14 @@ function fakeServer(
     },
     kill(pid) {
       const p = procs.get(pid)
-      if (p?.alive) p.end()
+      if (!p?.alive) return
+      killed.push(pid)
+      p.end()
+    },
+    async quit(cdp) {
+      quits.push(cdp)
+      await o.quitting?.()
+      for (const p of procs.values()) if (p.alive && p.argv[0] === '/usr/bin/chrome' && p.cmdline.endsWith(cdp)) p.end()
     },
     alive: pid => !!procs.get(pid)?.alive,
     cmdline: pid => procs.get(pid)?.cmdline ?? '',
@@ -107,7 +119,7 @@ function fakeServer(
             : null,
     sleep: async () => {},
   }
-  return { sys, procs, start }
+  return { sys, procs, start, quits, killed }
 }
 
 /** The card as the patches written made it ('' clears a field, as adapters/cards.ts has it). */
@@ -1038,4 +1050,358 @@ test('no ffmpeg on the server: the route is told (`none`) and a video socket tha
   } finally {
     vnc.close()
   }
+})
+
+// ------------------------------------------------ run only while needed: browser_close, idle, kept profile
+
+const MIN = 60_000
+/** A Chrome's profile folder (its --user-data-dir). */
+const userDataDir = (p: Proc | undefined): string =>
+  (p?.argv.find(a => a.startsWith('--user-data-dir=')) ?? '').slice('--user-data-dir='.length)
+/** The displays whose Xvnc runs. */
+const displaysOf = (procs: Map<number, Proc>) =>
+  [...procs.values()].filter(p => p.alive && p.argv[0] === '/usr/bin/Xvnc').map(p => p.argv[1])
+
+test('browser_close: Chrome asked to quit first (its tabs and cookies saved), then it and its display end as one; the card has no browser; the session’s own profile kept, and the next call starts it again by itself with its last tabs', async () => {
+  const logs: string[] = []
+  const { d, server, state, root } = setup({}, undefined, { log: line => logs.push(line) })
+  const one = state.items[0] as Item
+  await d.ensure('w0:p1')
+  await d.ensure('w0:p2')
+  const own = join(root, 'sessions', '100', 'profile')
+  mkdirSync(join(own, 'Default'), { recursive: true })
+  writeFileSync(join(own, 'Default', 'Cookies'), 'signed in')
+  const chrome = chromeOf(server.procs)[0] as Proc
+  const pid = [...server.procs.entries()].find(([, p]) => p === chrome)?.[0] as number
+  expect(await d.close('w0:p1')).toEqual({ ok: true, closed: true })
+  expect(server.quits).toEqual([join(root, 'sessions', '100', 'cdp.sock')])
+  // ended by its own quit, not a signal; its display with it; the other session's browser runs on
+  expect(chrome.alive).toBe(false)
+  expect(server.killed).not.toContain(pid)
+  expect(displaysOf(server.procs)).toEqual([':101'])
+  expect(chromeOf(server.procs).map(p => p.env.DISPLAY)).toEqual([':101'])
+  // shown as a session with no browser: nothing to view, no control, no DevTools
+  expect(d.view(one)).toBeUndefined()
+  expect(d.card(one)).toEqual({})
+  expect(d.vncOf(one)).toBeNull()
+  expect(d.videoOf(one)).toBeNull()
+  expect(d.cdpOf('w0:p1')).toBeNull()
+  expect(d.setControl(one, 'owner')).toEqual({ ok: false, status: 404, error: 'no desktop' })
+  expect(existsSync(join(root, 'sessions', '100'))).toBe(false)
+  expect(logs.filter(l => l.includes('stopped'))).toEqual([
+    expect.stringMatching(/^desktop :100 for s1 stopped: .*closed/),
+  ])
+  // the next call: up again by itself, the same profile, its last tabs (no blank one beside them)
+  expect(await d.ensure('w0:p1')).toEqual({ ok: true })
+  const again = chromeOf(server.procs).find(p => p.env.DISPLAY !== ':101')
+  expect(again?.argv).toContain('--restore-last-session')
+  expect(again?.argv).not.toContain('about:blank')
+  expect(readFileSync(join(userDataDir(again), 'Default', 'Cookies'), 'utf8')).toBe('signed in')
+  expect(d.view(one)).toEqual({ running: true, profile: null, control: 'agent', asks: false })
+  // a first start as before: a blank tab, nothing restored
+  const other = chromeOf(server.procs).find(p => p.env.DISPLAY === ':101')
+  expect(other?.argv.at(-1)).toBe('about:blank')
+  expect(other?.argv).not.toContain('--restore-last-session')
+  // Chrome ending on its own later is started again as before: nothing restored then
+  again?.end()
+  await Bun.sleep(10)
+  await d.ensure('w0:p1')
+  const third = chromeOf(server.procs).find(p => p.env.DISPLAY !== ':101')
+  expect(third?.argv.at(-1)).toBe('about:blank')
+})
+
+test('browser_close: not while the owner has the browser or the agent’s ask to them stands; nothing running, nothing to do', async () => {
+  const { d, state, root, server } = setup()
+  const one = state.items[0] as Item
+  expect(await d.close('w0:p1')).toEqual({ ok: true, closed: false })
+  expect(server.procs.size).toBe(0)
+  await d.ensure('w0:p1')
+  const vnc = await vncServer(root)
+  try {
+    const ws = await vnc.open(d, 'w0:p1')
+    d.setControl(one, 'owner')
+    expect(await d.close('w0:p1')).toEqual({ ok: false, error: expect.stringContaining('owner has') })
+    expect(d.view(one)?.running).toBe(true)
+    d.setControl(one, 'agent')
+    await d.ask('w0:p1', 'Sign in to GitHub')
+    expect(await d.close('w0:p1')).toEqual({ ok: false, error: expect.stringContaining('ask') })
+    expect(d.view(one)?.running).toBe(true)
+    expect(server.quits).toEqual([])
+    d.websocket.close?.(ws, 1000, '')
+  } finally {
+    vnc.close()
+  }
+})
+
+test('idle for 15 minutes (no call of the agent’s, no view of it, VNC or video, the owner not holding it, no ask standing): stopped as browser_close stops it, said in the log; each of those keeps it', async () => {
+  const logs: string[] = []
+  const { v, video } = fakeVideo()
+  const s = setup({}, undefined, { log: line => logs.push(line), video })
+  const one = s.state.items[0] as Item
+  const running = async () => {
+    s.d.observe(s.state.items)
+    await Bun.sleep(10)
+    return s.d.view(one)?.running === true
+  }
+  await s.d.ensure('w0:p1')
+  s.tick(14 * MIN)
+  expect(await running()).toBe(true)
+  // a call (the wrapper asks who has the browser before each): the clock starts again
+  s.d.control('w0:p1')
+  s.tick(14 * MIN)
+  expect(await running()).toBe(true)
+  // a view open: kept however long, and the owner holding it too
+  const vnc = await vncServer(s.root)
+  try {
+    const ws = await vnc.open(s.d, 'w0:p1')
+    s.tick(30 * MIN)
+    expect(await running()).toBe(true)
+    s.d.setControl(one, 'owner')
+    s.tick(30 * MIN)
+    expect(await running()).toBe(true)
+    s.d.setControl(one, 'agent')
+    s.d.websocket.close?.(ws, 1000, '')
+  } finally {
+    vnc.close()
+  }
+  // the view gone: the clock from then
+  s.tick(14 * MIN)
+  expect(await running()).toBe(true)
+  // its video watched: kept
+  const vws = viewer('w0:p1')
+  vws.data = { pane: 'w0:p1', socket: '', video: true }
+  s.d.websocket.open?.(vws)
+  expect(v.joins).toHaveLength(1)
+  s.tick(30 * MIN)
+  expect(await running()).toBe(true)
+  s.d.websocket.close?.(vws, 1000, '')
+  // its ask to the owner standing: kept; the ask over (its card asks no more), the clock from then
+  await s.d.ask('w0:p1', 'Sign in to GitHub')
+  s.tick(30 * MIN)
+  expect(await running()).toBe(true)
+  s.cards.push(['s1', { ask: '', askSince: '' }])
+  expect(await running()).toBe(true)
+  s.tick(14 * MIN)
+  expect(await running()).toBe(true)
+  expect(s.server.quits).toEqual([])
+  s.tick(MIN)
+  expect(await running()).toBe(false)
+  expect(s.server.quits).toHaveLength(1)
+  expect(displaysOf(s.server.procs)).toEqual([])
+  expect(logs.filter(l => l.includes('stopped'))).toEqual([
+    expect.stringMatching(/^desktop :100 for s1 stopped: no browser call for 15 min/),
+  ])
+  // and the next call has it again, with its tabs
+  expect(await s.d.ensure('w0:p1')).toEqual({ ok: true })
+  expect(chromeOf(s.server.procs)[0]?.argv).toContain('--restore-last-session')
+})
+
+test('idle: a call that comes while the stop waits its turn keeps the browser', async () => {
+  let release = (): void => {}
+  const gate = new Promise<void>(done => {
+    release = done
+  })
+  const s = setup({ ready: () => gate })
+  // a start under way past 15 minutes: the stop waits behind it, then finds the call was just now
+  const starting = s.d.ensure('w0:p1')
+  for (let i = 0; i < 50 && chromeOf(s.server.procs).length === 0; i++) await Bun.sleep(1)
+  s.tick(16 * MIN)
+  s.d.observe(s.state.items)
+  release()
+  expect((await starting).ok).toBe(true)
+  await Bun.sleep(10)
+  expect(s.d.view(s.state.items[0] as Item)?.running).toBe(true)
+  expect(s.server.quits).toEqual([])
+})
+
+test('a named profile, or its copy, through a stop: the named one where it is, and its tabs; the copy reopened as it was, not copied again', async () => {
+  const { d, server, root } = setup()
+  const named = join(root, 'profiles', 'github')
+  await d.profile('w0:p1', 'github')
+  expect(await d.profile('w0:p2', 'github')).toEqual({ ok: true, copy: true })
+  const copy = join(root, 'sessions', '101', 'copy-github')
+  writeFileSync(join(copy, 'Cookies'), 'signed in to the copy')
+  expect(await d.close('w0:p2')).toEqual({ ok: true, closed: true })
+  expect(existsSync(join(root, 'sessions', '101'))).toBe(false)
+  // started again while the first session still has the profile: its own copy, as it was
+  await d.ensure('w0:p2')
+  const c2 = chromeOf(server.procs).find(p => p.env.DISPLAY === ':101')
+  expect(userDataDir(c2)).toMatch(/copy-github$/)
+  expect(readFileSync(join(userDataDir(c2), 'Cookies'), 'utf8')).toBe('signed in to the copy')
+  expect(c2?.argv).toContain('--restore-last-session')
+  expect(d.view(item('s2', 'w0:p2'))?.profile).toBe('github')
+  // the named one: kept where it is (it always is), and started again with its tabs
+  writeFileSync(join(named, 'Cookies'), 'signed in')
+  await d.close('w0:p1')
+  expect(readFileSync(join(named, 'Cookies'), 'utf8')).toBe('signed in')
+  await d.ensure('w0:p1')
+  const c1 = chromeOf(server.procs).find(p => p.env.DISPLAY === ':100')
+  expect(userDataDir(c1)).toBe(named)
+  expect(c1?.argv).toContain('--restore-last-session')
+  expect(d.view(item('s1', 'w0:p1'))?.profile).toBe('github')
+})
+
+test('a stopped browser whose named profile another session opened meanwhile: a fresh copy, nothing of the other’s restored', async () => {
+  const { d, server, root } = setup({}, [item('s1', 'w0:p1'), item('s2', 'w0:p2'), item('s3', 'w0:p3')])
+  await d.profile('w0:p1', 'github')
+  await d.close('w0:p1')
+  // the profile is free: another session has it now
+  expect(await d.profile('w0:p2', 'github')).toEqual({ ok: true, copy: false })
+  await d.ensure('w0:p1')
+  // the latest Chrome: the first session's, started again (on the display the other did not take)
+  const c1 = chromeOf(server.procs).at(-1)
+  expect(userDataDir(c1)).toBe(join(root, 'sessions', '101', 'copy-github'))
+  expect(c1?.argv).not.toContain('--restore-last-session')
+  expect(c1?.argv.at(-1)).toBe('about:blank')
+})
+
+test('a profile switch while stopped: the new profile, its pages not restored; the session’s own kept still', async () => {
+  const { d, server, root } = setup()
+  await d.ensure('w0:p1')
+  mkdirSync(join(root, 'sessions', '100', 'profile'), { recursive: true })
+  writeFileSync(join(root, 'sessions', '100', 'profile', 'Cookies'), 'own')
+  await d.close('w0:p1')
+  expect(await d.profile('w0:p1', 'client-x')).toEqual({ ok: true, copy: false })
+  const c = chromeOf(server.procs)[0]
+  expect(userDataDir(c)).toBe(join(root, 'profiles', 'client-x'))
+  expect(c?.argv).not.toContain('--restore-last-session')
+  // back to its own: what it had
+  await d.profile('w0:p1', null)
+  expect(readFileSync(join(userDataDir(chromeOf(server.procs)[0]), 'Cookies'), 'utf8')).toBe('own')
+})
+
+test('the kept profile goes when the session does, as a running browser’s does: asleep or gone 2 minutes on end, or another session in its pane; a named one stays', async () => {
+  const logs: string[] = []
+  const { d, state, root, tick, server } = setup({}, undefined, { log: line => logs.push(line) })
+  await d.ensure('w0:p1')
+  await d.profile('w0:p2', 'github')
+  await d.close('w0:p1')
+  await d.close('w0:p2')
+  const kept = () => readdirSync(join(root, 'kept'))
+  expect(kept()).toHaveLength(2)
+  // asleep a while (a restart), then back: kept
+  state.items = [item('s1', 'w0:p1', { sleeping: true }), item('s2', 'w0:p2')]
+  d.observe(state.items)
+  tick(90_000)
+  d.observe(state.items)
+  d.observe([item('s1', 'w0:p1'), item('s2', 'w0:p2')])
+  tick(60_000)
+  d.observe(state.items)
+  await Bun.sleep(10)
+  expect(kept()).toHaveLength(2)
+  // asleep 2 minutes on end: gone, as a running one's own profile goes
+  tick(120_000)
+  d.observe(state.items)
+  await Bun.sleep(10)
+  expect(kept()).toHaveLength(1)
+  expect(logs.at(-1)).toMatch(/s1.*the session sleeps/)
+  // another session in the second one's pane (/clear): gone at once; the named profile stays
+  state.items = [item('s2', 'w0:p2', { session: 'other' })]
+  d.observe(state.items)
+  await Bun.sleep(10)
+  expect(kept()).toEqual([])
+  expect(existsSync(join(root, 'profiles', 'github'))).toBe(true)
+  // the new session's first call: a browser of its own, fresh
+  await d.ensure('w0:p2')
+  const c = chromeOf(server.procs)[0]
+  expect(userDataDir(c)).toMatch(/sessions[\\/]10\d[\\/]profile$/)
+  expect(c?.argv.at(-1)).toBe('about:blank')
+})
+
+test('a new session’s first call in the pane, before a refresh saw it: the one before’s kept profile is not its own', async () => {
+  const { d, server, state, root } = setup({}, [item('s1', 'w0:p1', { session: 'a' })])
+  await d.ensure('w0:p1')
+  mkdirSync(join(root, 'sessions', '100', 'profile'), { recursive: true })
+  writeFileSync(join(root, 'sessions', '100', 'profile', 'Cookies'), 'a’s')
+  await d.close('w0:p1')
+  state.items = [item('s1', 'w0:p1', { session: 'b' })]
+  await d.ensure('w0:p1')
+  const c = chromeOf(server.procs)[0]
+  expect(c?.argv).not.toContain('--restore-last-session')
+  expect(existsSync(join(userDataDir(c), 'Cookies'))).toBe(false)
+  expect(readdirSync(join(root, 'kept'))).toEqual([])
+})
+
+test('the next board knows a stopped browser’s kept profile: started again with it, or removed once the session ends; a kept folder no record has is cleared', async () => {
+  const s = setup()
+  await s.d.ensure('w0:p1')
+  mkdirSync(join(s.root, 'sessions', '100', 'profile'), { recursive: true })
+  writeFileSync(join(s.root, 'sessions', '100', 'profile', 'Cookies'), 'signed in')
+  await s.d.close('w0:p1')
+  // left by a board that ended between its move and its record
+  mkdirSync(join(s.root, 'kept', 'stray'), { recursive: true })
+  const next = s.make()
+  expect(existsSync(join(s.root, 'kept', 'stray'))).toBe(false)
+  expect(next.view(s.state.items[0] as Item)).toBeUndefined()
+  await next.ensure('w0:p1')
+  const c = chromeOf(s.server.procs)[0]
+  expect(c?.argv).toContain('--restore-last-session')
+  expect(readFileSync(join(userDataDir(c), 'Cookies'), 'utf8')).toBe('signed in')
+  // stopped again, and its session ends while a third board runs
+  await next.close('w0:p1')
+  const third = s.make()
+  third.observe([])
+  s.tick(120_000)
+  third.observe([])
+  await Bun.sleep(10)
+  expect(readdirSync(join(s.root, 'kept'))).toEqual([])
+})
+
+test('a start again that fails keeps the profile for the next try', async () => {
+  const o: Parameters<typeof fakeServer>[0] = {}
+  const { d, server, root } = setup(o)
+  await d.ensure('w0:p1')
+  mkdirSync(join(root, 'sessions', '100', 'profile'), { recursive: true })
+  writeFileSync(join(root, 'sessions', '100', 'profile', 'Cookies'), 'signed in')
+  await d.close('w0:p1')
+  o.chromeFails = true
+  expect((await d.ensure('w0:p1')).ok).toBe(false)
+  o.chromeFails = false
+  expect(await d.ensure('w0:p1')).toEqual({ ok: true })
+  const c = chromeOf(server.procs)[0]
+  expect(c?.argv).toContain('--restore-last-session')
+  expect(readFileSync(join(userDataDir(c), 'Cookies'), 'utf8')).toBe('signed in')
+})
+
+test('while it stops, the card has no browser already and its views close; a call meanwhile waits and starts it again', async () => {
+  let release = (): void => {}
+  const gate = new Promise<void>(done => {
+    release = done
+  })
+  const s = setup({ quitting: () => gate })
+  const one = s.state.items[0] as Item
+  await s.d.ensure('w0:p1')
+  const vnc = await vncServer(s.root)
+  try {
+    const ws = await vnc.open(s.d, 'w0:p1')
+    const changes = s.state.changes
+    const closing = s.d.close('w0:p1')
+    for (let i = 0; i < 50 && !s.server.quits.length; i++) await Bun.sleep(1)
+    // Chrome still quitting: the card says no browser, and the board was told
+    expect(s.d.view(one)).toBeUndefined()
+    expect(s.d.vncOf(one)).toBeNull()
+    expect(s.state.changes).toBeGreaterThan(changes)
+    const call = s.d.ensure('w0:p1')
+    release()
+    expect(await closing).toEqual({ ok: true, closed: true })
+    expect(ws.closed).toBe(1001)
+    expect(await call).toEqual({ ok: true })
+    expect(s.d.view(one)?.running).toBe(true)
+  } finally {
+    vnc.close()
+  }
+})
+
+test('as before for a browser that is not stopped: a session that ends takes its own profile with it, and nothing is kept', async () => {
+  const { d, root, state, tick, server } = setup()
+  await d.ensure('w0:p1')
+  state.items = []
+  d.observe(state.items)
+  tick(120_000)
+  d.observe(state.items)
+  await Bun.sleep(10)
+  expect(existsSync(join(root, 'sessions', '100'))).toBe(false)
+  expect(existsSync(join(root, 'kept'))).toBe(false)
+  // Chrome was ended as before (a signal), not asked to quit
+  expect(server.quits).toEqual([])
 })

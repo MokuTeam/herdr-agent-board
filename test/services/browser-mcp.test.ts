@@ -5,6 +5,7 @@
 import { expect, test } from 'bun:test'
 import {
   ASKED,
+  CLOSED,
   createRelay,
   devtoolsMcp,
   OWN_TOOLS,
@@ -17,7 +18,12 @@ import {
 type Msg = Record<string, unknown>
 
 function relayWith(
-  o: { control?: () => string | null; asks?: () => boolean; answers?: Record<string, Msg>; holdMs?: number } = {},
+  o: {
+    control?: () => string | null
+    asks?: () => boolean
+    answers?: Record<string, Msg | null>
+    holdMs?: number
+  } = {},
 ) {
   const toChild: string[] = []
   const toClient: Msg[] = []
@@ -31,7 +37,8 @@ function relayWith(
         const c = o.control ? o.control() : 'agent'
         return c === null ? null : { ok: true, control: c, asks: o.asks?.() ?? false }
       }
-      return o.answers?.[op] ?? { ok: true }
+      // an answer of null: the board does not answer
+      return o.answers && op in o.answers ? (o.answers[op] ?? null) : { ok: true }
     },
     toChild: line => toChild.push(line),
     toClient: line => {
@@ -54,7 +61,7 @@ function relayWith(
 const call = (id: number, name: string, args: Msg = {}): string =>
   JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } })
 
-test('its two tools join chrome-devtools-mcp’s list; everything else goes through as it is', async () => {
+test('its own tools join chrome-devtools-mcp’s list; everything else goes through as it is', async () => {
   const { relay, toChild, toClient, raw } = relayWith()
   const init = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
   relay.fromClient(init)
@@ -67,7 +74,7 @@ test('its two tools join chrome-devtools-mcp’s list; everything else goes thro
   expect(toClient.length).toBe(2)
   expect((toClient[0]?.result as { tools?: unknown[] } | undefined)?.tools).toHaveLength(1)
   const names = ((toClient[1]?.result as { tools?: { name: string }[] } | undefined)?.tools ?? []).map(t => t.name)
-  expect(names).toEqual(['navigate_page', 'browser_profile', 'browser_ask_owner'])
+  expect(names).toEqual(['navigate_page', 'browser_profile', 'browser_ask_owner', 'browser_close'])
   expect(OWN_TOOLS.every(t => t.inputSchema.type === 'object')).toBe(true)
 })
 
@@ -192,6 +199,53 @@ test('its own tools: through the board, a profile only while the agent has the b
   await held.relay.idle()
   expect(held.asked.some(([op]) => op === 'profile')).toBe(false)
   expect((held.toClient[0]?.result as { isError?: boolean } | undefined)?.isError).toBe(true)
+})
+
+test('browser_close: through the board once the agent has the browser; told its sign-ins and tabs stay and the next call opens it again, which then goes on as any first call', async () => {
+  const desc = OWN_TOOLS.find(t => t.name === 'browser_close')?.description ?? ''
+  expect(desc).toContain('done with')
+  expect(desc).toContain('next browser tool call')
+  expect(desc).toContain('15 minutes')
+  const { relay, toChild, toClient, asked } = relayWith({ answers: { close: { ok: true, closed: true } } })
+  relay.fromClient(call(1, 'browser_close'))
+  await relay.idle()
+  expect(toChild).toEqual([])
+  expect(asked.map(([op]) => op)).toEqual(['call', 'close'])
+  const text = (m: Msg | undefined) =>
+    (m?.result as { content: { type?: string; text: string }[]; isError?: boolean } | undefined) ?? null
+  expect(text(toClient[0])?.isError).toBeUndefined()
+  expect(text(toClient[0])?.content[0]?.text).toBe(CLOSED)
+  expect(CLOSED).toContain('next browser tool call')
+  // the next call: the browser started first, then passed on
+  relay.fromClient(call(2, 'list_pages'))
+  await relay.idle()
+  expect(asked.map(([op]) => op)).toEqual(['call', 'close', 'call', 'start'])
+  expect(toChild).toEqual([call(2, 'list_pages')])
+  // nothing open: said so, not an error
+  const none = relayWith({ answers: { close: { ok: true, closed: false } } })
+  none.relay.fromClient(call(3, 'browser_close'))
+  await none.relay.idle()
+  expect(text(none.toClient[0])?.content[0]?.text).toContain('not open')
+  expect(text(none.toClient[0])?.isError).toBeUndefined()
+  // the board says no (its ask stands): its reason, as an error
+  const no = relayWith({ answers: { close: { ok: false, error: 'your ask to the owner stands' } } })
+  no.relay.fromClient(call(4, 'browser_close'))
+  await no.relay.idle()
+  expect(text(no.toClient[0])).toEqual({
+    content: [{ type: 'text', text: 'your ask to the owner stands' }],
+    isError: true,
+  })
+  // the owner has it for the agent's ask: at once, nothing closed
+  const asks = relayWith({ control: () => 'owner', asks: () => true })
+  asks.relay.fromClient(call(5, 'browser_close'))
+  await asks.relay.idle()
+  expect(asks.asked.map(([op]) => op)).toEqual(['call'])
+  expect(text(asks.toClient[0])?.content[0]?.text).toBe(OWNER_DOING_ASK)
+  // the board does not answer: not closed
+  const silent = relayWith({ answers: { close: null } })
+  silent.relay.fromClient(call(6, 'browser_close'))
+  await silent.relay.idle()
+  expect(text(silent.toClient[0])?.isError).toBe(true)
 })
 
 test('the session’s pane: HERDR_PANE_ID, else none outside herdr', () => {

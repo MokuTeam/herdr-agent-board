@@ -11,6 +11,13 @@
 // sessions of their own (setsid), so the board's restart (run.ts) leaves them running; the next
 // board takes them over from desktops.json, where each is from the moment it is spawned.
 //
+// It runs only while needed: the agent closes it once done (browser_close), and one unused a while
+// (IDLE_MS: no call of the agent's, no view of it, the owner not holding it, no ask standing) stops
+// by itself. Such a stop ends Chrome as a person quits it (its tabs and cookies saved) and its
+// display with it, and keeps the session's profile folders (kept/<id>, on file in kept.json) until
+// its next call starts it again with them and its last tabs, or until the session ends as a
+// running one's do. The card shows none meanwhile, as for a session that never had one.
+//
 // The owner watches and takes over through the board's login: the VNC bytes go both ways over a
 // WebSocket (routes/desktop.ts), a viewer's keys, mouse and clipboard only while the owner has the
 // browser, and meanwhile the wrapper holds the agent's calls. The picture comes as H.264 video on a
@@ -19,10 +26,20 @@
 // it has none, the page asks VNC for the picture as before. Server mode only: app.ts makes none
 // of this on a PC.
 import { randomBytes } from 'node:crypto'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { cp } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
-import { basename, join } from 'node:path'
+import { basename, join, sep } from 'node:path'
 import type { ServerWebSocket, WebSocketHandler } from 'bun'
 import type { CardPatch } from '../adapters/cards.ts'
 import { boardChromium } from '../adapters/desktop-files.ts'
@@ -69,6 +86,12 @@ export interface DesktopSystem {
   displayHeld(display: number): boolean
   /** Whether Chrome answered on its pipe: its holder's socket is there. */
   cdpReady(cdp: string): boolean | Promise<boolean>
+  /**
+   * Chrome asked to quit as a person quits it (Browser.close on its holder's socket `cdp`), so its
+   * tabs, cookies and settings are saved for its next start; done once asked (or not answered).
+   * None: Chrome is ended by a signal only.
+   */
+  quit?(cdp: string): Promise<void>
   /** A program on PATH (and Chrome's own folder), or null. */
   which(name: string): string | null
   sleep(ms: number): Promise<void>
@@ -151,6 +174,18 @@ export const realSystem: DesktopSystem = {
   },
   displayHeld: display => displayHeldAt(display),
   cdpReady: cdp => existsSync(cdp),
+  quit: cdp =>
+    new Promise<void>(resolve => {
+      const sock = createConnection({ path: cdp })
+      const late = setTimeout(() => sock.destroy(), 3000)
+      sock.on('connect', () => sock.write(`${JSON.stringify({ id: 1, method: 'Browser.close' })}\0`))
+      sock.on('data', () => sock.destroy())
+      sock.on('error', () => {})
+      sock.on('close', () => {
+        clearTimeout(late)
+        resolve()
+      })
+    }),
   which: name => Bun.which(name, { PATH: `${process.env.PATH ?? ''}:${PATH}` }),
   sleep: ms => Bun.sleep(ms),
 }
@@ -192,6 +227,30 @@ interface Desktop {
   stopping: boolean
   /** Since when the owner has the browser with no view connected (0: a view is, or the agent has it). */
   unviewedSince: number
+  /** The agent's last call (or the last view, the owner's control or an ask ending): IDLE_MS on, it stops. */
+  usedAt: number
+  /** Started again after its stop: the profile it had then (its last tabs reopened in that one only). */
+  restore: { profile: string | null; copy: boolean } | null
+  /** It stops (browser_close, idle): the card has no browser from the stop's start. */
+  closing: boolean
+}
+
+/**
+ * A session's browser stopped while the session goes on (browser_close, or idle): Chrome and its
+ * display ended, its profile folders (its own, a named profile's copy) kept in a folder of their
+ * own until its next call starts it again with them, or the session ends as a running one's does.
+ */
+interface Kept {
+  pane: string
+  key: string
+  session: string
+  /** Its folder (kept/<id>): the stopped desktop's `profile` and `copy-<name>`, moved there. */
+  dir: string
+  /** The profile it had open (null: the session's own), and whether a copy of it. */
+  profile: string | null
+  copy: boolean
+  /** Since when no session is awake in its pane (0: one is). */
+  goneSince: number
 }
 
 /** What a hand-over came to: who has the browser now, or why not (404: no desktop; 409: no view to take it in). */
@@ -238,6 +297,8 @@ export interface DesktopsOptions {
   arch?: string
   /** The desktops' video (a test's own); by default the board's, with ffmpeg where the server has it. */
   video?: DesktopVideo
+  /** A desktop unused this long stops (IDLE_MS; a test's own). */
+  idleMs?: number
 }
 
 export interface Desktops {
@@ -256,9 +317,15 @@ export interface Desktops {
   cdpOf(pane: string): string | null
   /** The profile the session wants (null: its own); a running Chrome opens it now. */
   profile(pane: string, name: string | null): Promise<Started & { copy?: boolean }>
+  /**
+   * The agent is done with its browser for now (browser_close): Chrome and its display stop as one,
+   * its profile kept, and its next call starts it again with its tabs. Not while the owner has it or
+   * its ask to them stands. `closed`: false when none ran.
+   */
+  close(pane: string): Promise<{ ok: true; closed: boolean } | { ok: false; error: string }>
   /** The agent asks the owner to act in its browser: its card under "needs you", its desktop up. */
   ask(pane: string, text: string): Promise<Started>
-  /** Who has the browser of the session in `pane` (the wrapper asks before each call). */
+  /** Who has the browser of the session in `pane` (the wrapper asks before each call: its idle clock starts again). */
   control(pane: string): Control
   /** Its browser ask stands (the wrapper: while the owner has the browser for it, a call that acts fails at once). */
   asks(pane: string): boolean
@@ -280,6 +347,15 @@ export interface Desktops {
 const GONE_MS = 2 * 60_000
 /** The owner has the browser and no view of it is connected for this long: the agent has it again. */
 const UNVIEWED_MS = 30_000
+/**
+ * No call of the agent's for this long, no view of it connected (VNC or video), the owner not
+ * holding it and no ask standing: it stops as browser_close stops it (its profile kept).
+ */
+const IDLE_MS = 15 * 60_000
+/** Chrome asked to quit and still running this long after: ended by a signal. */
+const QUIT_MS = 10_000
+/** A desktop's folders that are the session's profiles: its own, and a named profile's copy. */
+const PROFILE_FOLDER = /^(profile|copy-.+)$/
 /** Viewers' bytes queued over this pause the VNC socket until they drain. */
 const HIGH_WATER = 4 << 20
 /**
@@ -304,14 +380,21 @@ function tailOf(path: string): string {
 export function createDesktops(o: DesktopsOptions): Desktops {
   const sys = o.system ?? realSystem
   const now = o.now ?? Date.now
+  const idleMs = o.idleMs ?? IDLE_MS
   const video = o.video ?? createDesktopVideo({ log: o.log })
   /** Each video viewer's socket as the video sends to it. */
   const watchers = new WeakMap<ServerWebSocket<VncData>, { viewer: VideoViewer; unwatch: () => void }>()
   const record = join(o.root, 'desktops.json')
   const desktops = new Map<string, Desktop>()
+  /** The browsers stopped while their sessions go on (browser_close, idle), by pane; on file in kept.json. */
+  const kept = new Map<string, Kept>()
+  const keptRecord = join(o.root, 'kept.json')
+  const keptRoot = join(o.root, 'kept')
   /** The profile each pane asked for, kept for its next start. */
   const wanted = new Map<string, string | null>()
   const viewers = new Map<string, Set<ServerWebSocket<VncData>>>()
+  /** Each pane's video viewers. */
+  const videos = new Map<string, Set<ServerWebSocket<VncData>>>()
   /** Slots picked for a start that is not in the list yet. */
   const picking = new Set<number>()
   /** Each viewer's VNC connection (`up` once connected), and what of its bytes go on (core/desktop.ts rfbInputFilter). */
@@ -321,6 +404,13 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   >()
   /** Whether a view of the pane's desktop is connected to its display. */
   const viewed = (pane: string): boolean => [...(viewers.get(pane) ?? [])].some(ws => conns.get(ws)?.up)
+  /** Whether a view of it is open on the board, its VNC or its video. */
+  const watched = (pane: string): boolean => !!viewers.get(pane)?.size || !!videos.get(pane)?.size
+  /** The pane's desktop was used now: its idle clock starts again. */
+  const touch = (pane: string): void => {
+    const d = desktops.get(pane)
+    if (d) d.usedAt = now()
+  }
   /** Displays whose keyboard has the Cyrillic letters (deskKeymap), loading or loaded. */
   const keyed = new WeakSet<Desktop>()
 
@@ -372,8 +462,14 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   function save(): void {
     try {
       mkdirSync(o.root, { recursive: true, mode: 0o700 })
-      const list = [...desktops.values()].map(({ running, goneSince, stopping, unviewedSince, ...d }) => d)
+      const list = [...desktops.values()].map(
+        ({ running, goneSince, stopping, unviewedSince, usedAt, restore, closing, ...d }) => d,
+      )
       writeFileSync(record, `${JSON.stringify(list, null, 1)}\n`, { mode: 0o600 })
+      if (kept.size || existsSync(keptRecord)) {
+        const stopped = [...kept.values()].map(({ goneSince, ...k }) => k)
+        writeFileSync(keptRecord, `${JSON.stringify(stopped, null, 1)}\n`, { mode: 0o600 })
+      }
     } catch (err) {
       o.log(`desktop: ${messageOf(err)}`)
     }
@@ -393,9 +489,42 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     if (sys.alive(pid)) sys.kill(pid, 'SIGKILL')
   }
 
-  /** Its processes ended and its folder gone (named profiles stay); its viewers closed. */
-  async function teardown(d: Desktop): Promise<void> {
+  /**
+   * Chrome asked to quit as a person quits it, and waited for (QUIT_MS): its tabs and cookies on
+   * disk for its next start. What is left of it after that is ended by a signal (teardown).
+   */
+  async function quitChrome(d: Desktop): Promise<void> {
+    const pid = d.chrome
+    if (pid === null || !sys.quit || !sys.alive(pid) || !existsSync(d.cdp)) return
+    try {
+      await sys.quit(d.cdp)
+    } catch {
+      return
+    }
+    for (let waited = 0; waited < QUIT_MS && sys.alive(pid); waited += 100) await sys.sleep(100)
+  }
+
+  /** The session's profile folders moved out of a desktop's folder into one of their own (kept/<id>). */
+  function keepProfiles(d: Desktop): string | null {
+    const to = join(keptRoot, randomBytes(8).toString('hex'))
+    try {
+      mkdirSync(to, { recursive: true, mode: 0o700 })
+      for (const name of readdirSync(d.dir))
+        if (PROFILE_FOLDER.test(name)) renameSync(join(d.dir, name), join(to, name))
+      return to
+    } catch (err) {
+      o.log(`desktop :${d.display}: its profile was not kept: ${messageOf(err)}`)
+      return existsSync(to) ? to : null
+    }
+  }
+
+  /**
+   * Its processes ended and its folder gone (named profiles stay); its viewers closed. `keep`: Chrome
+   * asked to quit first, and the session's profile folders kept (their folder's path).
+   */
+  async function teardown(d: Desktop, keep = false): Promise<string | null> {
     d.stopping = true
+    if (keep) await quitChrome(d)
     await ended(d.chrome, 5000)
     await ended(d.xvnc, 3000)
     d.chrome = null
@@ -404,7 +533,10 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     video.stop(d.pane)
     for (const ws of viewers.get(d.pane) ?? []) ws.close(1001, 'stopped')
     viewers.delete(d.pane)
+    videos.delete(d.pane)
+    const dir = keep ? keepProfiles(d) : null
     rmSync(d.dir, { recursive: true, force: true })
+    return dir
   }
 
   // A board before this one left desktops running: taken over when they are still the programs it
@@ -433,6 +565,9 @@ export function createDesktops(o: DesktopsOptions): Desktops {
         goneSince: 0,
         stopping: false,
         unviewedSince: 0,
+        usedAt: now(),
+        restore: null,
+        closing: false,
         startedAt: now(),
       }
       const chrome = ours(d.chrome, chromeMark(d))
@@ -449,6 +584,29 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     }
     if (desktops.size) o.log(`desktop: ${desktops.size} running from before`)
   } catch {}
+  // and the browsers it had stopped while their sessions went on: their profiles still kept; a kept
+  // folder no record has (a board that ended between its move and its record) is cleared away
+  try {
+    const list: unknown = JSON.parse(readFileSync(keptRecord, 'utf8'))
+    for (const r of Array.isArray(list) ? (list as Kept[]) : []) {
+      if (typeof r?.pane !== 'string' || typeof r.dir !== 'string' || !r.dir.startsWith(keptRoot + sep)) continue
+      if (desktops.has(r.pane) || !existsSync(r.dir)) continue
+      kept.set(r.pane, {
+        pane: r.pane,
+        key: typeof r.key === 'string' ? r.key : '',
+        session: typeof r.session === 'string' ? r.session : '',
+        dir: r.dir,
+        profile: typeof r.profile === 'string' ? r.profile : null,
+        copy: r.copy === true,
+        goneSince: 0,
+      })
+    }
+  } catch {}
+  try {
+    const known = new Set([...kept.values()].map(k => k.dir))
+    for (const name of readdirSync(keptRoot))
+      if (!known.has(join(keptRoot, name))) rmSync(join(keptRoot, name), { recursive: true, force: true })
+  } catch {}
 
   const itemIn = (pane: string): Item | undefined => o.items().find(i => i.pane === pane && !i.sleeping)
   /** The card of `key` still has the ask the browser ask put on it (the same one, by its askSince). */
@@ -460,18 +618,25 @@ export function createDesktops(o: DesktopsOptions): Desktops {
 
   /**
    * Where Chrome keeps the profile `name` for `d`: its own folder, a copy while another has it, or
-   * the session's own. The copy is made without holding up the board (other panes' calls, refreshes).
+   * the session's own. The copy is made without holding up the board (other panes' calls, refreshes);
+   * `ownCopy`: the session's copy from before its stop is its own still, as it was. `fresh`: a copy
+   * made now (what is in it is the other session's).
    */
-  async function profileDir(d: Desktop, name: string | null): Promise<{ dir: string; copy: boolean }> {
-    if (name === null) return { dir: join(d.dir, 'profile'), copy: false }
+  async function profileDir(
+    d: Desktop,
+    name: string | null,
+    ownCopy = false,
+  ): Promise<{ dir: string; copy: boolean; fresh: boolean }> {
+    if (name === null) return { dir: join(d.dir, 'profile'), copy: false, fresh: false }
+    const copy = join(d.dir, `copy-${name}`)
+    if (ownCopy && existsSync(copy)) return { dir: copy, copy: true, fresh: false }
     const own = join(o.root, 'profiles', name)
     const busy = [...desktops.values()].some(x => x !== d && x.chrome !== null && x.profile === name && !x.copy)
     mkdirSync(own, { recursive: true, mode: 0o700 })
-    if (!busy) return { dir: own, copy: false }
-    const copy = join(d.dir, `copy-${name}`)
+    if (!busy) return { dir: own, copy: false, fresh: false }
     rmSync(copy, { recursive: true, force: true })
     await cp(own, copy, { recursive: true, filter: src => !NOT_COPIED.test(basename(src)) })
-    return { dir: copy, copy: true }
+    return { dir: copy, copy: true, fresh: true }
   }
 
   async function launchChrome(d: Desktop): Promise<Started> {
@@ -480,7 +645,11 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       boardChromium(join(o.root, BOARD_CHROMIUM_DIR), o.arch) ?? CHROME_BINS.map(b => sys.which(b)).find(Boolean)
     if (!bin) return { ok: false, error: 'no Google Chrome or Chromium on this server (the install puts it in place)' }
     const name = wanted.get(d.pane) ?? null
-    const p = await profileDir(d, name)
+    // started again after its stop with the profile it had: its last tabs (in that profile only)
+    const back = d.restore
+    d.restore = null
+    const same = back !== null && back.profile === name
+    const p = await profileDir(d, name, same && back.copy)
     d.profile = name
     d.copy = p.copy
     const env = {
@@ -492,7 +661,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     }
     rmSync(d.cdp, { force: true })
     const proc = sys.spawnChrome(
-      [bin, ...chromeArgs({ profileDir: p.dir, extra: o.chromeExtra ?? [] })],
+      [bin, ...chromeArgs({ profileDir: p.dir, extra: o.chromeExtra ?? [], restore: same && !p.fresh })],
       d.cdp,
       env,
       join(d.dir, 'chrome.log'),
@@ -560,8 +729,24 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       goneSince: 0,
       stopping: false,
       unviewedSince: 0,
+      usedAt: now(),
+      restore: null,
+      closing: false,
     }
     desktops.set(pane, d)
+    // stopped before (browser_close, idle) while the session went on: its profile folders back in place
+    const back = kept.get(pane)
+    if (back) {
+      kept.delete(pane)
+      d.restore = { profile: back.profile, copy: back.copy }
+      if (!wanted.has(pane)) wanted.set(pane, back.profile)
+      try {
+        for (const name of readdirSync(back.dir)) renameSync(join(back.dir, name), join(dir, name))
+      } catch (err) {
+        o.log(`desktop :${display}: its kept profile did not come back: ${messageOf(err)}`)
+      }
+      rmSync(back.dir, { recursive: true, force: true })
+    }
     const auth = join(dir, 'Xauthority')
     writeFileSync(auth, xauthority(display, randomBytes(16)), { mode: 0o600 })
     const proc = sys.spawn(
@@ -584,9 +769,11 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       up = existsSync(d.vnc) && sys.displayHeld(display)
       if (!up) await sys.sleep(100)
     }
+    // one started again that fails keeps its profile for the next try
     const fail = async (error: string): Promise<Started> => {
-      await teardown(d)
+      const again = await teardown(d, !!back)
       desktops.delete(pane)
+      if (back && again) kept.set(pane, { ...back, dir: again })
       save()
       return { ok: false, error }
     }
@@ -607,6 +794,8 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       await stopNow(pane, 'a new session in its pane')
       d = undefined
     }
+    const back = kept.get(pane)
+    if (back?.session && session && back.session !== session) forget(back, 'a new session in its pane')
     if (d && d.xvnc !== null && sys.alive(d.xvnc)) {
       if (d.chrome !== null && sys.alive(d.chrome) && d.running) return { ok: true }
       // the display is there, Chrome not (it ended, or the board took it over without it)
@@ -621,6 +810,46 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     }
     return startNew(pane)
   }
+
+  /**
+   * Stopped while the session goes on (browser_close, idle): the card has no browser at once (its
+   * views go with the board's word, not an error), Chrome quits as a person quits it, its display
+   * ends with it, and the session's profile folders are kept for its next start.
+   */
+  async function closeNow(pane: string, why: string): Promise<void> {
+    const d = desktops.get(pane)
+    if (!d) return
+    d.closing = true
+    o.onChange()
+    const dir = await teardown(d, true)
+    desktops.delete(pane)
+    if (dir)
+      kept.set(pane, { pane, key: d.key, session: d.session, dir, profile: d.profile, copy: d.copy, goneSince: 0 })
+    save()
+    o.log(`desktop :${d.display} for ${d.key || pane} stopped: ${why}; its profile kept for its next start`)
+    o.onChange()
+  }
+
+  /** A stopped browser's kept profile gone with its session (as a running one's goes), in its pane's turn. */
+  function forget(k: Kept, why: string): void {
+    if (kept.get(k.pane) !== k) return
+    kept.delete(k.pane)
+    wanted.delete(k.pane)
+    rmSync(k.dir, { recursive: true, force: true })
+    save()
+    o.log(`desktop for ${k.key || k.pane}: its kept profile removed: ${why}`)
+  }
+
+  /** Unused: no call for IDLE_MS, no view of it, the owner not holding it, no ask standing. */
+  const idle = (d: Desktop): boolean =>
+    !d.stopping && !d.closing && d.control === 'agent' && !d.asks && !watched(d.pane) && now() - d.usedAt >= idleMs
+  const idleFor = idleMs >= 60_000 ? `${Math.round(idleMs / 60_000)} min` : `${Math.round(idleMs / 1000)} s`
+  /** `d` stopped as idle, when it still is in its pane's turn (a call may have come meanwhile). */
+  const idleStop = (d: Desktop): Promise<void> =>
+    serial(d.pane, async () => {
+      if (desktops.get(d.pane) === d && idle(d))
+        await closeNow(d.pane, `no browser call for ${idleFor}, no view of it, no ask standing`)
+    })
 
   async function stopNow(pane: string, why: string): Promise<void> {
     const d = desktops.get(pane)
@@ -670,7 +899,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
    */
   function openVideo(ws: ServerWebSocket<VncData>): void {
     const d = desktops.get(ws.data.pane)
-    if (!d || d.stopping || d.xvnc === null) {
+    if (!d || d.stopping || d.closing || d.xvnc === null) {
       ws.close(1001, 'stopped')
       return
     }
@@ -684,6 +913,9 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     }
     const unwatch = ws.data.watch?.(() => ws.close(4001, 'login')) ?? (() => {})
     watchers.set(ws, { viewer, unwatch })
+    const set = videos.get(d.pane) ?? new Set()
+    set.add(ws)
+    videos.set(d.pane, set)
     video.join(
       { pane: d.pane, display: d.display, auth: join(d.dir, 'Xauthority'), log: join(d.dir, 'video.log') },
       viewer,
@@ -696,6 +928,11 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     if (!w) return
     w.unwatch()
     video.leave(ws.data.pane, w.viewer)
+    const set = videos.get(ws.data.pane)
+    set?.delete(ws)
+    if (!set?.size) videos.delete(ws.data.pane)
+    // the idle clock from the last view on
+    touch(ws.data.pane)
   }
 
   /**
@@ -709,6 +946,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     c?.sock.destroy()
     const set = viewers.get(ws.data.pane)
     set?.delete(ws)
+    touch(ws.data.pane)
     if (set?.size) return
     viewers.delete(ws.data.pane)
     const d = desktops.get(ws.data.pane)
@@ -747,13 +985,13 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   return {
     view(item) {
       const d = item.pane ? desktops.get(item.pane) : undefined
-      if (!d || item.sleeping) return undefined
+      if (!d || item.sleeping || d.closing) return undefined
       return desktopView(d, d.askSince !== null && (item.askSince === d.askSince || asksInTurn(item.status, d)))
     },
 
     card(item) {
       const d = item.pane ? desktops.get(item.pane) : undefined
-      if (!d || item.sleeping || !asksInTurn(item.status, d)) return {}
+      if (!d || item.sleeping || d.closing || !asksInTurn(item.status, d)) return {}
       return { column: 'me', attention: 'ask', question: d.ask, askSince: d.askSince }
     },
 
@@ -802,6 +1040,29 @@ export function createDesktops(o: DesktopsOptions): Desktops {
           d.running = false
           changed = true
         }
+        // only while needed: unused a while (no call, no view, the owner not holding it, no ask), it stops
+        if (item && !d.stopping && !d.closing) {
+          if (d.control === 'owner' || d.asks || watched(d.pane)) d.usedAt = now()
+          else if (idle(d)) void idleStop(d)
+        }
+      }
+      // the browsers stopped while their sessions go on: a kept profile goes when its session does
+      for (const k of kept.values()) {
+        const item = items.find(i => i.pane === k.pane && !i.sleeping)
+        if (item && k.session && item.session && item.session !== k.session) {
+          void serial(k.pane, async () => forget(k, 'a new session in its pane'))
+          continue
+        }
+        if (item) {
+          k.goneSince = 0
+          k.key = item.key
+          if (!k.session && item.session) k.session = item.session
+          continue
+        }
+        k.goneSince ||= now()
+        if (now() - k.goneSince < GONE_MS) continue
+        const asleep = items.some(i => i.pane === k.pane && i.sleeping)
+        void serial(k.pane, async () => forget(k, asleep ? 'the session sleeps' : 'the session ended'))
       }
       if (changed) {
         save()
@@ -809,7 +1070,14 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       }
     },
 
-    ensure: pane => serial(pane, () => ensureNow(pane)),
+    ensure: pane => {
+      touch(pane)
+      return serial(pane, async () => {
+        const r = await ensureNow(pane)
+        touch(pane)
+        return r
+      })
+    },
 
     cdpOf(pane) {
       const d = desktops.get(pane)
@@ -818,6 +1086,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
 
     profile: (pane, name) =>
       serial(pane, async () => {
+        touch(pane)
         // a switch restarts the browser under the owner's hands: never while they have it
         if (desktops.get(pane)?.control === 'owner')
           return { ok: false, error: 'the owner has the browser now: no profile switch until they hand it back' }
@@ -838,11 +1107,33 @@ export function createDesktops(o: DesktopsOptions): Desktops {
         return r.ok ? { ...r, copy: d.copy } : r
       }),
 
+    close: pane =>
+      serial(pane, async () => {
+        const d = desktops.get(pane)
+        if (!d) return { ok: true, closed: false }
+        // another session's in the pane (/clear, before a refresh saw it): stopped as such, nothing kept
+        const session = itemIn(pane)?.session ?? ''
+        if (d.session && session && d.session !== session) {
+          await stopNow(pane, 'a new session in its pane')
+          return { ok: true, closed: false }
+        }
+        if (d.control === 'owner')
+          return { ok: false, error: 'the owner has your browser now: it stays open until they hand it back' }
+        if (d.asks)
+          return {
+            ok: false,
+            error: 'your ask to the owner stands (browser_ask_owner): your browser stays open until they hand it back',
+          }
+        await closeNow(pane, 'the agent closed it (browser_close)')
+        return { ok: true, closed: true }
+      }),
+
     async ask(pane, text) {
       const item = itemIn(pane)
       if (!item) return { ok: false, error: 'this session is not on the board' }
       const r = await serial(pane, () => ensureNow(pane))
       if (!r.ok) return r
+      touch(pane)
       const since = now()
       o.writeCard(item.key, { ask: text, askSince: since, askBrowser: since, by: 'agent' })
       const d = desktops.get(pane)
@@ -856,13 +1147,17 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       return r
     },
 
-    control: pane => desktops.get(pane)?.control ?? 'agent',
+    // the wrapper asks before each of the agent's calls: its browser is used now
+    control: pane => {
+      touch(pane)
+      return desktops.get(pane)?.control ?? 'agent'
+    },
 
     asks: pane => !!desktops.get(pane)?.asks,
 
     setControl(item, to) {
       const d = item.pane ? desktops.get(item.pane) : undefined
-      if (!d || item.sleeping) return { ok: false, status: 404, error: 'no desktop' }
+      if (!d || item.sleeping || d.closing) return { ok: false, status: 404, error: 'no desktop' }
       if (d.control === to) return { ok: true, control: to }
       // taken only where it is seen: a view of it connected, which hands it back when it closes
       if (to === 'owner' && !viewed(d.pane))
@@ -879,13 +1174,13 @@ export function createDesktops(o: DesktopsOptions): Desktops {
 
     vncOf(item) {
       const d = item.pane ? desktops.get(item.pane) : undefined
-      if (!d || item.sleeping || d.xvnc === null || !existsSync(d.vnc)) return null
+      if (!d || item.sleeping || d.closing || d.xvnc === null || !existsSync(d.vnc)) return null
       return { pane: d.pane, socket: d.vnc }
     },
 
     videoOf(item) {
       const d = item.pane ? desktops.get(item.pane) : undefined
-      if (!d || item.sleeping || d.xvnc === null || !existsSync(d.vnc)) return null
+      if (!d || item.sleeping || d.closing || d.xvnc === null || !existsSync(d.vnc)) return null
       return video.available() ? { pane: d.pane } : 'none'
     },
 
@@ -924,6 +1219,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
         set.add(ws)
         viewers.set(ws.data.pane, set)
         const d = desktops.get(ws.data.pane)
+        touch(ws.data.pane)
         if (d && !d.stopping) void keymapOf(d)
       },
       // keys, the mouse and the clipboard reach the display only while the owner has the browser

@@ -394,9 +394,11 @@ export function xvncArgs(o: { display: number; socket: string; auth: string; nam
  * over the whole screen (there is no window manager), no first-run questions, no keyring (none on
  * a server), /tmp for its shared memory. No smooth scrolling: a wheel step (the owner's swipe on
  * the picture) is one frame on the display, not an animation of a dozen sent over the owner's link;
- * what a page shows stays as it was.
+ * what a page shows stays as it was. Started again after its stop (`restore`: browser_close, or
+ * idle, services/desktop.ts): its last tabs reopened, and its session cookies with them (Chrome's
+ * "continue where you left off" for this start only), with no blank tab beside them.
  */
-export function chromeArgs(o: { profileDir: string; extra?: readonly string[] }): string[] {
+export function chromeArgs(o: { profileDir: string; extra?: readonly string[]; restore?: boolean }): string[] {
   return [
     `--user-data-dir=${o.profileDir}`,
     '--remote-debugging-pipe',
@@ -409,7 +411,7 @@ export function chromeArgs(o: { profileDir: string; extra?: readonly string[] })
     '--window-position=0,0',
     `--window-size=${SCREEN.width},${SCREEN.height}`,
     ...(o.extra ?? []),
-    'about:blank',
+    ...(o.restore ? ['--restore-last-session'] : ['about:blank']),
   ]
 }
 

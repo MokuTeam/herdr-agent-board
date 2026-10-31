@@ -82,6 +82,17 @@ test('Chrome: headed, its own profile folder, DevTools on its pipe and no port, 
   expect(a).toContain('--disable-smooth-scrolling')
   expect(a.some(x => x.includes('reduced-motion'))).toBe(false)
   expect(a.slice(-2)).toEqual(['--no-sandbox', 'about:blank'])
+  expect(a).not.toContain('--restore-last-session')
+})
+
+test('Chrome started again after its stop (browser_close, idle): its last tabs reopened (and its session cookies), no blank tab beside them', () => {
+  const a = chromeArgs({ profileDir: '/p/own', extra: ['--no-sandbox'], restore: true })
+  const fresh = chromeArgs({ profileDir: '/p/own', extra: ['--no-sandbox'] })
+  expect(a).toContain('--restore-last-session')
+  expect(a).not.toContain('about:blank')
+  // everything else as on a first start
+  expect(a.filter(x => x !== '--restore-last-session')).toEqual(fresh.filter(x => x !== 'about:blank'))
+  expect(chromeArgs({ profileDir: '/p/own', restore: false })).toEqual(chromeArgs({ profileDir: '/p/own' }))
 })
 
 test('the X cookie file: one MIT-MAGIC-COOKIE-1 entry for the display, any host', () => {

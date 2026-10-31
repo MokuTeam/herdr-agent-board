@@ -165,7 +165,7 @@ export const SAMPLES: Record<string, string> = Object.fromEntries(
       [/^\/api\/term\//, '/api/term/s1/agent/stream'],
       // the board's own server only (routes/desktop.ts)
       [/^\/api\/desktop\//, '/api/desktop/s1/vnc'],
-      [/^\/api\/browser\/(start|call|profile|ask)$/, '/api/browser/call'],
+      [/^\/api\/browser\/(start|call|profile|ask|close)$/, '/api/browser/call'],
       [/^\/uploads\/(\d{4}-\d{2}-\d{2})\/([^/]+)$/, '/uploads/2026-10-20/a.png'],
     ] as const
   ).map(([re, raw]) => [re.source, raw]),

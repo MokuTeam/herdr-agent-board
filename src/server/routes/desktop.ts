@@ -23,6 +23,9 @@
 //   POST /api/browser/call     { pane }            who has the browser: { control }
 //   POST /api/browser/profile  { pane, name|null } a named profile (null: the session's own)
 //   POST /api/browser/ask      { pane, text }      the card under "needs you", the desktop up
+//   POST /api/browser/close    { pane }            done with it for now (browser_close): stopped, its
+//        profile kept for the next call, which starts it again: { ok, closed }; 409 while the owner
+//        has it or its ask stands
 import { controlOf, profileName } from '../../core/desktop.ts'
 import type { Item } from '../../core/types.ts'
 import type { Desktops, VncData } from '../../services/desktop.ts'
@@ -36,7 +39,7 @@ export interface DesktopApp {
 }
 
 const DESKTOP = /^\/api\/desktop\/([^/]+)\/(vnc|video|control)$/
-const BROWSER = /^\/api\/browser\/(start|call|profile|ask)$/
+const BROWSER = /^\/api\/browser\/(start|call|profile|ask|close)$/
 const PANE = /^[\w:.-]{1,80}$/
 /** What a route answers once the request became a WebSocket: Bun answers it with 101 itself. */
 const UPGRADED = (): Response => new Response(null, { status: 200 })
@@ -117,6 +120,10 @@ export function desktopRoutes(app: DesktopApp): Route[] {
           return json(200, { ok: true, control: app.desktops.control(pane), asks: app.desktops.asks(pane) })
         if (op === 'start') {
           const r = await app.desktops.ensure(pane)
+          return json(r.ok ? 200 : 409, r)
+        }
+        if (op === 'close') {
+          const r = await app.desktops.close(pane)
           return json(r.ok ? 200 : 409, r)
         }
         if (op === 'profile') {
