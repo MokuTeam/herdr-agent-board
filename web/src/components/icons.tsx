@@ -414,7 +414,7 @@ export const GripGlyph = () => (
 
 /** An agent's own browser: a screen on its stand (its card's mark, the session panel's fold). */
 export const ScreenGlyph = () => (
-  <Glyph className="screen">
+  <Glyph>
     <rect x="3" y="4" width="14" height="10" rx="1.5" />
     <path d="M7.5 17h5M10 14v3" />
   </Glyph>

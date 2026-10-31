@@ -38,6 +38,8 @@ describe('the browser mark', () => {
     const { react } = card(it)
     expect(marks(react)).toBe(1)
     expect(react).toMatch(/<button[^>]*class="desk-mark"[^>]*data-act="browser"/)
+    // Not the class of a terminal's screen (app.css .screen: its grey box and padding hid the icon).
+    expect(react).not.toMatch(/<svg[^>]*class="[^"]*\bscreen\b/)
     expect(react).toContain('title="Its browser is running: open it"')
     const ru = bothCards({ items: [it], lang: 'ru' }, 'a').react
     expect(ru).toContain('title="Его браузер запущен: открыть"')
