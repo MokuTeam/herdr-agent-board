@@ -8,11 +8,12 @@ import { possibleProfilePanes, provenProfilePanes } from '../adapters/profile-pa
 import { boardOnPath } from '../adapters/resume-report.ts'
 import { peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
 import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
-import { inputDraft } from '../core/dialogs/input-box.ts'
+import { inputDraft, stillPasting } from '../core/dialogs/input-box.ts'
 import { piDraft } from '../core/dialogs/pi-dialogs.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
 import { sameDir } from '../core/launch/names.ts'
+import { onServer } from '../core/on-server.ts'
 import { isPiItem, piTurnOver } from '../core/pi.ts'
 import {
   absoluteProfileDir,
@@ -30,6 +31,7 @@ import { herdrWakeAnswers, type SleepProvider } from '../integrations/herdr-wake
 import { raiseTerminal } from '../integrations/terminal-window.ts'
 import type { BoardWake } from '../integrations/wake.ts'
 import type { Deps } from './deps.ts'
+import { holdsItsLine, settlePaste } from './paste.ts'
 import { PROFILE_NOT_PLAIN, type WakeOutcome, wakeInPane } from './wake/pane-ops.ts'
 import { defaultPiOps, readPiTail, wakePi } from './wake/pi.ts'
 
@@ -395,17 +397,41 @@ export async function focus(
 }
 
 /**
+ * The message typed, its pictures still being read: Claude Code's Enter once the paste is over
+ * (services/paste.ts). One still in the box at the end says so, rather than that it went.
+ */
+async function enterAfterPaste(pane: string, text: string, name: string): Promise<ActionResult> {
+  const end = await settlePaste(
+    {
+      screen: () => herdrText(['agent', 'read', pane, '--source', 'visible', '--ansi'], 10_000).catch(() => null),
+      enter: () => herdr(['pane', 'send-keys', pane, 'enter']).then(() => {}),
+      sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+      now: () => Date.now(),
+    },
+    text,
+  )
+  if (end === 'taken') return { ok: true }
+  return { ok: false, error: t(end === 'pasting' ? 'err.pasteSlow' : 'err.pasteHeld', { name }) }
+}
+
+/**
  * Type a message into the session's prompt, waking it first. Refused while it waits for a
  * decision or Claude's visible screen has no recognizable input box, even if herdr says idle.
  * With `free`, also while it works (instead of queueing into its turn); with `draft`, also while
  * the user has unsent text in its input box (the scheduler's guards). Those refusals say `busy`,
- * plus `dialog` or `draft` for those two.
+ * plus `dialog` or `draft` for those two. `pictures`: the message carries paths Claude Code takes
+ * in as pictures; on the board's own server, it is answered once the message is out of Claude's
+ * input box (services/paste.ts).
  */
 export async function send(
   deps: Deps,
   item: Item,
   message: string,
-  { free = false, draft: guardDraft = false }: { free?: boolean; draft?: boolean } = {},
+  {
+    free = false,
+    draft: guardDraft = false,
+    pictures = false,
+  }: { free?: boolean; draft?: boolean; pictures?: boolean } = {},
 ): Promise<ActionResult> {
   const text = String(message ?? '').trim()
   if (!text) return { ok: false, error: t('err.emptyMessage') }
@@ -433,11 +459,16 @@ export async function send(
     // Recheck after wake too: the pane may now host a different session.
     const before = refused(agent)
     if (before) return before
-    if (agent?.kind === 'claude' || item.agent === 'claude') {
+    const claude = agent?.kind === 'claude' || item.agent === 'claude'
+    // Pictures to Claude on the board's own server: the Enter is the board's, once the paste is over.
+    const settle = pictures && claude && onServer(deps.cfg)
+    let typed = false
+    if (claude) {
       // Herdr can miss a dialog (e.g. Teach auto mode). Require the visible prompt for every
       // send; recent scrollback could still contain an old input box. Only scheduled messages
       // also refuse a draft: Enter would send both it and the reminder.
-      const draft = inputDraft(await herdrText(['agent', 'read', pane, '--source', 'visible', '--ansi'], 10_000))
+      const screen = await herdrText(['agent', 'read', pane, '--source', 'visible', '--ansi'], 10_000)
+      const draft = inputDraft(screen)
       if (draft === null || (guardDraft && draft !== '')) {
         return {
           ok: false,
@@ -453,10 +484,14 @@ export async function send(
       const after = refused(fresh)
       if (after) return after
       if (fresh?.kind !== agent?.kind) return { ok: false, error: t('err.sessionChanged', { name: item.name }) }
+      // A message of the board's still in the box, or its pictures still being read (sent again
+      // from the thread): it is not typed twice, only its Enter is missing.
+      typed = settle && ((!!draft && holdsItsLine(draft, text)) || stillPasting(screen))
     }
     // This read and prompt are separate CLI calls, not an atomic identity check and send.
     // A leading dash would be read as an option by the herdr CLI.
-    await herdr(['agent', 'prompt', pane, /^-/.test(text) ? ` ${text}` : text])
+    if (!typed) await herdr(['agent', 'prompt', pane, /^-/.test(text) ? ` ${text}` : text])
+    if (settle) return await enterAfterPaste(pane, text, item.name)
     return { ok: true }
   } catch (err) {
     return { ok: false, error: t('err.send', { name: item.name, why: messageOf(err) }) }

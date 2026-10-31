@@ -62,3 +62,20 @@ export function inputDraft(ansiScreen: unknown): string | null {
   }
   return null
 }
+
+/** The paths Claude Code takes in as pictures when they are pasted into its input box (its own test). */
+export const PICTURE_PATH = /\.(png|jpe?g|gif|webp)$/i
+
+/**
+ * Whether Claude Code is still taking in a paste: "Pasting…" under its input box, the box itself
+ * still empty. A pasted picture's path is read first (a large one made smaller), only then does the
+ * box show "[Image #1]" and the rest of the text.
+ */
+export function stillPasting(ansiScreen: unknown): boolean {
+  const lines = String(ansiScreen ?? '')
+    .split(/\r?\n/)
+    .map(stripAnsi)
+  let last = -1
+  for (let i = lines.length - 1; i >= 0 && last < 0; i--) if (RULE.test(lines[i] ?? '')) last = i
+  return last >= 0 && lines.slice(last + 1).some(l => /^\s*Pasting(?:…|\.\.\.)\s*$/.test(l))
+}

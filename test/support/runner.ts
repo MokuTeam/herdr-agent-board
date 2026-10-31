@@ -19,6 +19,8 @@ type RunnerInput = {
   patch: Record<string, unknown>
   release?: string
   failPatch?: boolean
+  /** send's options (services/actions.ts): a message's `pictures`, say. */
+  options?: { free?: boolean; draft?: boolean; pictures?: boolean }
 }
 const input = <T = RunnerInput>(): T => JSON.parse(process.env.TEST_INPUT ?? 'null') as T
 const send = (message: unknown): void => {
@@ -38,10 +40,10 @@ if (mode === 'open') {
 } else if (mode === 'send') {
   const { send: sendText } = await import('../../src/services/actions.ts')
   const { defaultDeps } = await import('../../src/services/deps.ts')
-  const { item, cfg, text } = input()
+  const { item, cfg, text, options } = input()
   // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
   if (cfg.language) (await import('../../src/core/lang.ts')).useLanguage(cfg.language)
-  console.log(JSON.stringify(await sendText(defaultDeps(cfg), item, text)))
+  console.log(JSON.stringify(await sendText(defaultDeps(cfg), item, text, options)))
 } else if (mode === 'answer') {
   // services/answer.ts against the fake herdr: a question form, a permission prompt, or one own answer typed.
   const { answerPermission, answerQuestions, paneIO } = await import('../../src/services/answer.ts')

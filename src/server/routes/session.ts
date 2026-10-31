@@ -10,6 +10,7 @@ import { uploadsDir } from '../../adapters/paths.ts'
 import { askRestart } from '../../adapters/schedule-store.ts'
 import { busy, PINS } from '../../core/board.ts'
 import { isCodexItem } from '../../core/codex.ts'
+import { PICTURE_PATH } from '../../core/dialogs/input-box.ts'
 import { type PublicDialog, parseDialog, publicDialog } from '../../core/dialogs/questions.ts'
 import { effortFromScreen, meterReads, modelFromScreen } from '../../core/effort.ts'
 import { publicHelper } from '../../core/helpers.ts'
@@ -115,7 +116,9 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
     // board that cannot reach herdr fails here rather than send on old data.
     const fresh = (await collect(deps)).find(next => next.key === item.key)
     if (!fresh || fresh.session !== item.session || fresh.pane !== item.pane) return changed(item)
-    return send(deps, fresh, [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n'))
+    return send(deps, fresh, [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n'), {
+      pictures: files.some(p => PICTURE_PATH.test(p)),
+    })
   })
 }
 

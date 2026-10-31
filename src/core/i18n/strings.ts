@@ -215,6 +215,10 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.blocked': '{name} waits for a decision in the terminal',
     'err.working': '{name} is working',
     'err.draft': '{name} has unsent text in its input box',
+    'err.pasteHeld':
+      'The message is in the input box of {name}, but Claude Code did not take it: Retry, or Enter in its terminal, sends it',
+    'err.pasteSlow':
+      'Claude Code in {name} is still reading the pictures: the message waits in its input box; Retry, or Enter in its terminal, sends it',
     'err.sessionChanged': '{name}: another session is in that pane now, refresh the board',
     'err.qa.notWaiting': '{name} no longer waits in a dialog',
     'err.qa.answered': 'This question is no longer open in {name}: it was answered or closed',
@@ -839,6 +843,10 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.blocked': '{name} ждёт решения в терминале',
     'err.working': '{name} сейчас работает',
     'err.draft': '{name}: в поле ввода недописанный текст',
+    'err.pasteHeld':
+      'Сообщение в поле ввода {name}, но Claude Code его не принял: отправит «Повторить» или Enter в его терминале',
+    'err.pasteSlow':
+      'Claude Code в {name} ещё читает картинки: сообщение ждёт в поле ввода; отправит «Повторить» или Enter в его терминале',
     'err.sessionChanged': '{name}: в панели теперь другая сессия, обнови доску',
     'err.qa.notWaiting': '{name} больше не ждёт в диалоге',
     'err.qa.answered': 'Этот вопрос в {name} уже не открыт: на него ответили или его закрыли',
