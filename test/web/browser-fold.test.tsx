@@ -802,39 +802,34 @@ test('watched only, a finger’s swipe goes nowhere: the board’s page has it t
   expect(byClass('desk-keys')).toBeUndefined()
 })
 
-test('a finger’s swipe with control scrolls the display’s page by its wheel, as far as the finger went, where it began: no click, no keyboard', async () => {
+test('a finger’s swipe with control scrolls the display’s page by its wheel as far as the finger went, a step its 120 px, where it began: no click, no keyboard', async () => {
   const { socket } = await controlled(800, 400)
   const down = finger('pointerdown', 1, 200, 150)
   expect(down.defaultPrevented).toBe(true)
   // a few px is still a tap
   finger('pointermove', 1, 203, 144)
   expect(socket?.sent).toEqual([])
-  // up 100 px, the display's 200: four steps of 53 down (the page follows the finger), at (400, 300);
+  // up 120 px, the display's 240: two steps down (the page follows the finger), at (400, 300);
   // a little to the side on the way, but begun up it scrolls up and down only
   finger('pointermove', 1, 203, 100)
-  finger('pointermove', 1, 210, 50)
-  finger('pointerup', 1, 210, 50)
-  fire(canvas(), 'click', { clientX: 210, clientY: 50 })
-  expect(socket?.sent).toEqual([
-    ...step(16, 400, 300),
-    ...step(16, 400, 300),
-    ...step(16, 400, 300),
-    ...step(16, 400, 300),
-  ])
+  finger('pointermove', 1, 210, 30)
+  finger('pointerup', 1, 210, 30)
+  fire(canvas(), 'click', { clientX: 210, clientY: 30 })
+  expect(socket?.sent).toEqual([...step(16, 400, 300), ...step(16, 400, 300)])
   expect(byClass('desk-keys')).toBeUndefined()
 
   // down: the wheel up; to the left: right (button 7), to the right: left (button 6)
   socket?.sent.splice(0)
   finger('pointerdown', 2, 100, 100)
-  finger('pointermove', 2, 100, 130)
-  finger('pointerup', 2, 100, 130)
+  finger('pointermove', 2, 100, 160)
+  finger('pointerup', 2, 100, 160)
   finger('pointerdown', 3, 300, 100)
-  finger('pointermove', 3, 270, 100)
-  finger('pointermove', 3, 240, 102)
-  finger('pointerup', 3, 240, 102)
+  finger('pointermove', 3, 240, 100)
+  finger('pointermove', 3, 180, 102)
+  finger('pointerup', 3, 180, 102)
   finger('pointerdown', 4, 300, 100)
-  finger('pointermove', 4, 330, 100)
-  finger('pointerup', 4, 330, 100)
+  finger('pointermove', 4, 360, 100)
+  finger('pointerup', 4, 360, 100)
   expect(socket?.sent).toEqual([
     ...step(8, 200, 200),
     ...step(64, 600, 200),
@@ -844,24 +839,47 @@ test('a finger’s swipe with control scrolls the display’s page by its wheel,
   expect(byClass('desk-keys')).toBeUndefined()
 })
 
+test('a slow swipe goes as far as a quick one: what a step has not gone yet is kept, there and back; half a step is none', async () => {
+  const { socket } = await controlled(800, 400)
+  // up 120 px a px at a time: the display's 240, two steps, as in one go
+  finger('pointerdown', 1, 100, 180)
+  for (let y = 179; y >= 60; y--) finger('pointermove', 1, 100, y)
+  await frame()
+  expect(socket?.sent).toEqual([...step(16, 200, 360), ...step(16, 200, 360)])
+  // and back down 60 px: one step up
+  for (let y = 61; y <= 120; y++) finger('pointermove', 1, 100, y)
+  finger('pointerup', 1, 100, 120)
+  expect(socket?.sent).toEqual([...step(16, 200, 360), ...step(16, 200, 360), ...step(8, 200, 360)])
+
+  // 30 px, the display's 60: half a step, none (and no end of steps back and forth); a px more, one
+  socket?.sent.splice(0)
+  finger('pointerdown', 2, 100, 100)
+  finger('pointermove', 2, 100, 130)
+  await frame()
+  expect(socket?.sent).toEqual([])
+  finger('pointermove', 2, 100, 131)
+  finger('pointerup', 2, 100, 131)
+  expect(socket?.sent).toEqual(step(8, 200, 200))
+})
+
 test('two fingers’ swipe scrolls it too, from their middle where they went down; a finger lifted on the way, the other goes on', async () => {
   const { socket } = await controlled(800, 400)
-  finger('pointerdown', 1, 150, 100)
-  finger('pointerdown', 2, 250, 100)
-  // side by side, up together, one heard before the other: 60 px, the display's 120, two steps
-  finger('pointermove', 1, 150, 90)
-  finger('pointermove', 2, 250, 90)
-  finger('pointermove', 1, 150, 70)
-  finger('pointermove', 2, 250, 70)
-  finger('pointermove', 1, 150, 40)
-  finger('pointermove', 2, 250, 40)
+  finger('pointerdown', 1, 150, 180)
+  finger('pointerdown', 2, 250, 180)
+  // side by side, up together, one heard before the other: 60 px, the display's 120, a step
+  finger('pointermove', 1, 150, 170)
+  finger('pointermove', 2, 250, 170)
+  finger('pointermove', 1, 150, 150)
+  finger('pointermove', 2, 250, 150)
+  finger('pointermove', 1, 150, 120)
+  finger('pointermove', 2, 250, 120)
   await frame()
-  expect(socket?.sent).toEqual([...step(16, 400, 200), ...step(16, 400, 200)])
-  // one lifted: the other's 30 px more, a third step
-  finger('pointerup', 2, 250, 40)
-  finger('pointermove', 1, 150, 10)
-  finger('pointerup', 1, 150, 10)
-  expect(socket?.sent).toEqual([...step(16, 400, 200), ...step(16, 400, 200), ...step(16, 400, 200)])
+  expect(socket?.sent).toEqual(step(16, 400, 360))
+  // one lifted: the other's 120 px more, two steps
+  finger('pointerup', 2, 250, 120)
+  finger('pointermove', 1, 150, 0)
+  finger('pointerup', 1, 150, 0)
+  expect(socket?.sent).toEqual([...step(16, 400, 360), ...step(16, 400, 360), ...step(16, 400, 360)])
   expect(canvas()?.style.transform ?? '').toBe('')
   expect(byClass('desk-keys')).toBeUndefined()
 })
@@ -916,27 +934,32 @@ test('a tap soon after one near it clicks where that one did, so the display see
   ])
 })
 
-test('a pinch zooms the picture in the board, not on the display: a tap then clicks what shows under it; pinched back, or given back, it fits', async () => {
-  const { socket } = await controlled(800, 400)
-  // the picture's box as the page has it: zoomed by its transform (from its top left corner)
+/** The picture's box as the page has it (400 × 200 at the corner), zoomed by its transform (from its top left corner). */
+const zoomedAt = () => {
   layout.rect = el => {
     if (el.localName !== 'canvas') return { left: 0, top: 0, width: 0, height: 200 }
     const m = /^translate\((-?[\d.]+)%, (-?[\d.]+)%\) scale\(([\d.]+)\)$/.exec(el.style.transform ?? '')
     const [fx, fy, z] = m ? [Number(m[1]) / 100, Number(m[2]) / 100, Number(m[3])] : [0, 0, 1]
     return { left: fx * 400, top: fy * 200, width: 400 * z, height: 200 * z }
   }
-  const pinch = (from: [number, number], to: [number, number][]) => {
-    finger('pointerdown', 1, from[0], 100)
-    finger('pointerdown', 2, from[1], 100)
-    for (const [a, b] of to) {
-      finger('pointermove', 1, a, 100)
-      finger('pointermove', 2, b, 100)
-    }
+}
+/** Two fingers down at x `from` (y 100), moved to each pair of `to` in turn; lifted at `lift`'s. */
+const pinch = (from: [number, number], to: [number, number][]) => {
+  finger('pointerdown', 1, from[0], 100)
+  finger('pointerdown', 2, from[1], 100)
+  for (const [a, b] of to) {
+    finger('pointermove', 1, a, 100)
+    finger('pointermove', 2, b, 100)
   }
-  const lift = (a: number, b: number) => {
-    finger('pointerup', 1, a, 100)
-    finger('pointerup', 2, b, 100)
-  }
+}
+const lift = (a: number, b: number) => {
+  finger('pointerup', 1, a, 100)
+  finger('pointerup', 2, b, 100)
+}
+
+test('a pinch zooms the picture in the board, not on the display: a tap then clicks what shows under it; pinched back, or given back, it fits', async () => {
+  const { socket } = await controlled(800, 400)
+  zoomedAt()
   // apart twice as far, about their middle (200, 100): twice as large, that point where it was
   pinch(
     [150, 250],
@@ -977,6 +1000,26 @@ test('a pinch zooms the picture in the board, not on the display: a tap then cli
   await settle()
   expect(canvas()?.style.transform).toBe('')
   expect(byClass('desk-who')?.textContent).toBe('The agent has control')
+})
+
+test('a swipe on the picture zoomed in goes as far as the finger at that zoom: a page px is the display’s own then', async () => {
+  const { socket } = await controlled(800, 400)
+  zoomedAt()
+  pinch(
+    [150, 250],
+    [
+      [130, 270],
+      [100, 300],
+    ],
+  )
+  lift(100, 300)
+  expect(canvas()?.style.transform).toBe('translate(-50%, -50%) scale(2)')
+  // up 120 px, the display's 120 now: one step down, where it began ((250, 150) shows (450, 250))
+  finger('pointerdown', 1, 250, 150)
+  finger('pointermove', 1, 250, 90)
+  finger('pointermove', 1, 250, 30)
+  finger('pointerup', 1, 250, 30)
+  expect(socket?.sent).toEqual(step(16, 450, 250))
 })
 
 // ---------------------------------------------------------------- the panel's "needs you"

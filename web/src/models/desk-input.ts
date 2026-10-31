@@ -102,8 +102,13 @@ export const WHEEL_DOWN = 16
 /** The wheel to the side, a step left or right (buttons 6 and 7). */
 export const WHEEL_LEFT = 32
 export const WHEEL_RIGHT = 64
-/** How far a wheel step moves a page in the display's browser (Chrome on X: 53 px). */
-export const WHEEL_PX = 53
+/**
+ * How far a wheel step moves a page in the display's browser, in the display's px: 120 (measured on
+ * an Xvnc of its own with the board's Chromium 156 and its flags, smooth scrolling off: up, down and
+ * to either side, a whole page or a small box in it, the browser zoomed or not). It is 120 at the
+ * browser's own scale, which on the board's displays is 1 (at a scale of 2 it would be 240).
+ */
+export const WHEEL_PX = 120
 
 /** The page's px per display px, its picture shown in `box` as screenPoint has it; 0 before it has a size. */
 export function shownScale(box: Box, width: number, height: number): number {

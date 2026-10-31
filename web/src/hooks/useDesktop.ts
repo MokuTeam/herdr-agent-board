@@ -302,8 +302,10 @@ export function attachInput(
     out.pointer(q.x, q.y, 1)
     out.pointer(q.x, q.y, 0)
   }
-  // What the fingers' middle went, at the picture's scale, as the wheel's steps where the swipe
-  // began: the page follows the finger (one going up shows what is under: the wheel down).
+  // What the fingers' middle went, in the display's px at the picture's scale as it shows now
+  // (zoomed by a pinch or not), as the wheel's steps where the swipe began: the page follows the
+  // finger one to one (one going up shows what is under: the wheel down); what a step has not gone
+  // yet is kept for the next, so a slow swipe goes as far as a quick one.
   const swipe = () => {
     const now = middle()
     const scale = shownScale(canvas.getBoundingClientRect(), rfb.width, rfb.height)
@@ -316,8 +318,10 @@ export function attachInput(
     keepTo ??= y >= 2 * x ? 'y' : x >= 2 * y ? 'x' : 'xy'
     if (keepTo === 'y') swept.x = 0
     if (keepTo === 'x') swept.y = 0
+    // Past half a step, a step (more than half: just half, the step would leave just half the other
+    // way, and back and forth without end).
     const steps = (along: 'x' | 'y', back: number, on: number) => {
-      while (Math.abs(swept[along]) >= WHEEL_PX / 2) {
+      while (Math.abs(swept[along]) > WHEEL_PX / 2) {
         const bit = swept[along] > 0 ? back : on
         out.wheel(p.x, p.y, mask, bit)
         swept[along] -= Math.sign(swept[along]) * WHEEL_PX
