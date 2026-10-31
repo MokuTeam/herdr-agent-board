@@ -3,6 +3,8 @@
 // Browser fold (data-act="browser": Board.tsx, the board's `open` with `browser`). A card without
 // one, or with one stopped, is drawn exactly as before, and so is its session panel.
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Item, ItemDesktop } from '../../src/core/types.ts'
 import { Sheet } from '../../web/src/components/sheet/Sheet.tsx'
 import { boardUi, initialUi } from '../../web/src/state/board-ui.ts'
@@ -49,7 +51,7 @@ describe('the browser mark', () => {
     const asks = item({ key: 'a', name: 'Alpha', column: 'me', question: 'Sign in to GitHub for me', attention: 'ask' })
     const { react } = card({ ...asks, desktop: desktop({ asks: true }) })
     expect(marks(react)).toBe(2)
-    expect(react).toMatch(/<div class="ask">.*Sign in to GitHub for me.*<button[^>]*data-act="browser"/s)
+    expect(react).toMatch(/<div class="ask desk-asking">.*Sign in to GitHub for me.*<button[^>]*data-act="browser"/s)
     expect(react).toContain('Open its browser')
     // Not asking: the mark alone.
     expect(marks(card({ ...asks, desktop: desktop() }).react)).toBe(1)
@@ -119,12 +121,36 @@ describe('a browser ask, while the agent works on', () => {
     const { react } = card(asking)
     expect(react).toContain('data-col="me"')
     expect(react).toMatch(
-      /<div class="ask">\s*<b>In its browser:<\/b>\s*Sign in to GitHub as acme-bot\s*<button[^>]*data-act="browser"/,
+      /<div class="ask-q">\s*<b>In its browser:<\/b>\s*Sign in to GitHub as acme-bot\s*<\/div>\s*<button[^>]*data-act="browser"/,
     )
     const ru = bothCards({ items: [asking], lang: 'ru' }, 'a').react
     expect(ru).toMatch(
-      /<div class="ask">\s*<b>В его браузере:<\/b>\s*Sign in to GitHub as acme-bot\s*<button[^>]*data-act="browser"/,
+      /<div class="ask-q">\s*<b>В его браузере:<\/b>\s*Sign in to GitHub as acme-bot\s*<\/div>\s*<button[^>]*data-act="browser"/,
     )
+  })
+
+  test('a long ask clamps its text on its own: "Open its browser" is outside the clamp, under it, wrapped card text too', () => {
+    const long =
+      'Тест 5: найди в поиске Википедии «Bishkek», открой статью и нажми «Вернуть», когда она откроется; потом напиши мне в чат, что увидел в первом абзаце, и ничего больше не трогай'
+    const it = { ...asking, question: long, desktop: desktop({ asks: true, ask: long }) }
+    // the box holds the clamped text and, beside it rather than in it, the button
+    expect(bothCards({ items: [it], lang: 'ru' }, 'a').react).toMatch(
+      /<div class="ask desk-asking">\s*<div class="ask-q">\s*<b>В его браузере:<\/b>\s*Тест 5[^<]*<\/div>\s*<button class="button desk-ask" data-act="browser"[^>]*>[\s\S]*?<span>Открыть его браузер<\/span>\s*<\/button>\s*<\/div>/,
+    )
+    // the page's sheets: .ask clamps its whole box (app.css); the browser's ask unclamps it and
+    // clamps its text instead (desktop.css), wrapped card text too (card-wrap.css, after its .ask rule)
+    const read = (name: string) => readFileSync(join(import.meta.dir, '..', '..', 'web', name), 'utf8')
+    expect(read('styles/app.css')).toMatch(/^\.ask \{[^}]*-webkit-line-clamp: 3;[^}]*overflow: hidden;/m)
+    const css = read('styles/desktop.css')
+    expect(css).toContain('.ask.desk-asking { display: block; -webkit-line-clamp: none; }')
+    expect(css).toMatch(
+      /^\.desk-asking \.ask-q \{ display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;/m,
+    )
+    const wrap = read('styles/card-wrap.css')
+    const unclamp = ':root[data-card-text="wrap"] .card .ask.desk-asking { -webkit-line-clamp: none; }'
+    expect(wrap.indexOf(unclamp)).toBeGreaterThan(wrap.indexOf('.card .ask:not(.qa-card)'))
+    const page = read('index.html')
+    expect(page.indexOf('styles/desktop.css')).toBeGreaterThan(page.indexOf('styles/app.css'))
   })
 
   const panel = (it: Item, lang: string) =>

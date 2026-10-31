@@ -264,12 +264,21 @@ function CardAsk({ item }: { item: Item }) {
     )
   }
   const ask = askLine(item, t)
-  return (
-    <div className="ask">
+  const line = (
+    <>
       <b>{ask.label}:</b> {ask.text}
-      <OpenBrowser item={item} />
-    </div>
+    </>
   )
+  // Asked in its browser: the ask clamps its text on its own and "Open its browser" stays under it
+  // (the card's ask clamps its whole box to three lines, which cut the button off a long one).
+  if (item.desktop?.asks)
+    return (
+      <div className="ask desk-asking">
+        <div className="ask-q">{line}</div>
+        <OpenBrowser item={item} />
+      </div>
+    )
+  return <div className="ask">{line}</div>
 }
 
 /** What the agent asks is done in its own browser (a sign-in, a captcha): the button that opens it. */

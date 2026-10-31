@@ -5,6 +5,10 @@
 .desk-mark { display: flex; flex: none; padding: 0; border: 0; background: none; color: var(--accent); cursor: pointer; }
 .desk-mark svg { width: 14px; height: 14px; }
 .desk-mark:hover { opacity: 0.7; }
+/* Asked in its browser: the ask's text clamps on its own (app.css .ask clamps the whole box, which
+   cut the button off a long ask), "Open its browser" always under it (wrapped card text: card-wrap.css). */
+.ask.desk-asking { display: block; -webkit-line-clamp: none; }
+.desk-asking .ask-q { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 /* "Open its browser" under what the agent asks. */
 .ask .desk-ask { display: flex; margin-top: 7px; height: 26px; padding: 0 10px; font-size: 12px; background: color-mix(in srgb, var(--surface) 70%, transparent); }
 .ask .desk-ask svg { width: 14px; height: 14px; }
