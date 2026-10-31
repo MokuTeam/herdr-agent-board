@@ -1,11 +1,17 @@
 // The board's own small VNC client (web/src/models/rfb.ts) against a fake server's bytes: the
 // handshake of RFB 3.8 and 3.3 with no password, what it asks for once in (32-bit pixels it can draw
-// as they come, CopyRect, Hextile, Raw, the display's new size), the pictures it draws, what it
-// sends for the mouse and the keys, and why it gives up. Then the keys and points it sends
-// (web/src/models/desk-input.ts).
+// as they come, Tight first with JPEG, then CopyRect, Hextile, Raw, the display's new size, fences
+// and continuous updates), the pictures it draws (Tight's from real captures of Xvnc too), how it
+// keeps the updates coming, what it sends for the mouse and the keys, and why it gives up. Then the
+// keys and points it sends (web/src/models/desk-input.ts).
 import { describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { constants, deflateSync } from 'node:zlib'
+import { rfbInputFilter } from '../../src/core/desktop.ts'
 import { buttonMask, keysymOf, screenPoint, textKeysyms } from '../../web/src/models/desk-input.ts'
-import { RfbClient, type RfbFailure, type RfbScreen } from '../../web/src/models/rfb.ts'
+import { RfbClient, type RfbFailure, type RfbOptions, type RfbScreen } from '../../web/src/models/rfb.ts'
 
 const ascii = (text: string) => new TextEncoder().encode(text)
 const u16 = (n: number) => [n >> 8, n & 255]
@@ -22,35 +28,53 @@ const rect = (x: number, y: number, w: number, h: number, encoding: number) =>
 const update = (n: number) => bytes(0, 0, u16(n))
 
 /** A fake server: what the client sent, what it drew, and how it ended. */
-function world() {
+function world(options: RfbOptions = {}) {
   const sent: number[][] = []
   const drawn: string[] = []
   const failures: RfbFailure[] = []
+  const jpegs: Uint8Array[] = []
+  /** Each put's pixels, as RGBA. */
+  const pixels: number[][] = []
   let live = ''
+  let updates = 0
   const screen: RfbScreen = {
     size: (w, h) => drawn.push(`size ${w}x${h}`),
-    put: (x, y, w, h, rgba) => drawn.push(`put ${x},${y} ${w}x${h} ${[...rgba.slice(0, 8)].join(' ')}`),
-    copy: (sx, sy, x, y, w, h) => drawn.push(`copy ${sx},${sy} -> ${x},${y} ${w}x${h}`),
-  }
-  const client = new RfbClient(b => sent.push([...b]), screen, {
-    live: name => {
-      live = name
+    put: (x, y, w, h, rgba) => {
+      drawn.push(`put ${x},${y} ${w}x${h} ${[...rgba.slice(0, 8)].join(' ')}`)
+      pixels.push([...rgba])
     },
-    failed: why => failures.push(why),
-  })
-  return { client, sent, drawn, failures, live: () => live }
+    copy: (sx, sy, x, y, w, h) => drawn.push(`copy ${sx},${sy} -> ${x},${y} ${w}x${h}`),
+    fill: (x, y, w, h, r, g, b) => drawn.push(`fill ${x},${y} ${w}x${h} ${r} ${g} ${b}`),
+    jpeg: (x, y, w, h, data) => {
+      drawn.push(`jpeg ${x},${y} ${w}x${h} ${data.length}`)
+      jpegs.push(Uint8Array.from(data))
+    },
+  }
+  const client = new RfbClient(
+    b => sent.push([...b]),
+    screen,
+    {
+      live: name => {
+        live = name
+      },
+      failed: why => failures.push(why),
+      updated: () => updates++,
+    },
+    options,
+  )
+  return { client, sent, drawn, failures, jpegs, pixels, live: () => live, updates: () => updates }
 }
 
-/** A client through the 3.8 handshake to a 4 × 2 display named "agent", what it sent so far taken. */
-function connected() {
-  const w = world()
-  w.client.receive(ascii('RFB 003.008\n'))
-  w.client.receive(bytes(1, 1))
-  w.client.receive(bytes(u32(0)))
-  w.client.receive(serverInit(4, 2, 'agent'))
-  w.sent.length = 0
-  w.drawn.length = 0
-  return w
+/** A client through the 3.8 handshake to a display named "agent" (4 × 2), what it sent so far taken. */
+function connected(options: RfbOptions = {}, w = 4, h = 2) {
+  const it = world(options)
+  it.client.receive(ascii('RFB 003.008\n'))
+  it.client.receive(bytes(1, 1))
+  it.client.receive(bytes(u32(0)))
+  it.client.receive(serverInit(w, h, 'agent'))
+  it.sent.length = 0
+  it.drawn.length = 0
+  return it
 }
 
 describe('the handshake', () => {
@@ -76,8 +100,9 @@ describe('the handshake', () => {
     expect(w.sent.slice(3)).toEqual([
       // SetPixelFormat: 32 bits, depth 24, little-endian, true colour, 255 each, red at 0, green 8, blue 16.
       [0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 0, 8, 16, 0, 0, 0],
-      // SetEncodings: CopyRect, Hextile, Raw, DesktopSize.
-      [2, 0, 0, 4, ...s32(1), ...s32(5), ...s32(0), ...s32(-223)],
+      // SetEncodings: CopyRect, then Tight, Hextile and Raw, the server's choice the first it has;
+      // the display's new size, fences, continuous updates, Tight's JPEG at quality 6, its zlib at 2.
+      [2, 0, 0, 9, ...[1, 7, 5, 0, -223, -312, -313, -26, -254].flatMap(s32)],
       // The whole screen, not incremental.
       [3, 0, 0, 0, 0, 0, ...u16(1280), ...u16(800)],
     ])
@@ -135,12 +160,16 @@ describe('the handshake', () => {
 })
 
 describe('pictures', () => {
-  test('Raw: its pixels as they come, made opaque; then the next update is asked for, incremental', () => {
+  test('Raw: its pixels as they come, made opaque; the next update asked for (incremental) as soon as this one starts to come', () => {
     const w = connected()
     const px = [10, 20, 30, 0, 40, 50, 60, 0]
-    w.client.receive(bytes(update(1), rect(1, 1, 2, 1, 0), px))
-    expect(w.drawn).toEqual(['put 1,1 2x1 10 20 30 255 40 50 60 255'])
+    w.client.receive(update(1))
+    // asked for before the rest of this one has come: no round trip between the two
     expect(w.sent).toEqual([[3, 1, 0, 0, 0, 0, ...u16(4), ...u16(2)]])
+    w.client.receive(bytes(rect(1, 1, 2, 1, 0), px))
+    expect(w.drawn).toEqual(['put 1,1 2x1 10 20 30 255 40 50 60 255'])
+    expect(w.sent).toHaveLength(1)
+    expect(w.updates()).toBe(1)
   })
 
   test('a rectangle cut across messages waits for the rest; two in one update', () => {
@@ -171,7 +200,11 @@ describe('pictures', () => {
     const w = connected()
     w.client.receive(bytes(update(1), rect(0, 0, 8, 6, -223)))
     expect(w.drawn).toEqual(['size 8x6'])
-    expect(w.sent).toEqual([[3, 1, 0, 0, 0, 0, ...u16(8), ...u16(6)]])
+    // the request that went as the update came was for the old size: the new one asked for too
+    expect(w.sent).toEqual([
+      [3, 1, 0, 0, 0, 0, ...u16(4), ...u16(2)],
+      [3, 1, 0, 0, 0, 0, ...u16(8), ...u16(6)],
+    ])
     w.client.receive(bytes(2, 3, 0, 0, 0, u32(2), ascii('hi'), 1, 0, u16(0), u16(1), [0, 0, 0, 0, 0, 0]))
     expect(w.client.state).toBe('live')
   })
@@ -200,6 +233,371 @@ describe('pictures', () => {
     init.client.receive(bytes(u32(0)))
     init.client.receive(serverInit(9000, 2, 'agent'))
     expect(init.failures).toEqual([{ code: 'data', detail: 'size 9000x2' }])
+  })
+})
+
+/** A zlib stream's first part, flushed as Tight sends one. */
+const zlibPart = (data: number[]) => [...deflateSync(Uint8Array.from(data), { finishFlush: constants.Z_SYNC_FLUSH })]
+/** Tight's length of what follows: 1 to 3 bytes, 7 bits each, lowest first. */
+const compact = (n: number) =>
+  n < 128 ? [n] : n < 16384 ? [(n & 127) | 128, n >> 7] : [(n & 127) | 128, ((n >> 7) & 127) | 128, n >> 14]
+/** RGBA of these R G B colours. */
+const rgba = (...colours: number[][]) => colours.flatMap(c => [...c, 255])
+const TIGHT = 7
+
+describe('Tight', () => {
+  test('one colour: a fill; JPEG: its bytes to the screen whole, at any length', () => {
+    const w = connected()
+    const jpeg = (n: number) => Uint8Array.from({ length: n }, (_, i) => (i * 7) & 255)
+    w.client.receive(
+      bytes(
+        update(4),
+        rect(1, 0, 3, 2, TIGHT),
+        0x80,
+        [10, 20, 30],
+        // lengths of one, two and three bytes
+        rect(0, 0, 2, 2, TIGHT),
+        0x90,
+        compact(5),
+        jpeg(5),
+        rect(0, 0, 2, 2, TIGHT),
+        0x90,
+        compact(200),
+        jpeg(200),
+        rect(0, 0, 4, 2, TIGHT),
+        0x90,
+        compact(20_000),
+        jpeg(20_000),
+      ),
+    )
+    expect(w.drawn).toEqual(['fill 1,0 3x2 10 20 30', 'jpeg 0,0 2x2 5', 'jpeg 0,0 2x2 200', 'jpeg 0,0 4x2 20000'])
+    expect(w.jpegs[2]).toEqual(jpeg(20_000))
+    expect(w.updates()).toBe(1)
+  })
+
+  test('under 12 bytes the pixels come as they are: three bytes each, or a palette’s indices', () => {
+    const w = connected()
+    // 3 × 1, no filter named: R G B each
+    w.client.receive(bytes(update(2), rect(0, 0, 3, 1, TIGHT), 0x00, [1, 2, 3, 4, 5, 6, 7, 8, 9]))
+    // 2 × 2, a palette of three (stream 2, filter named): an index a byte
+    w.client.receive(bytes(rect(0, 0, 2, 2, TIGHT), 0x60, 1, 2, [9, 9, 9, 0, 0, 0, 200, 100, 50], [2, 1, 0, 2]))
+    expect(w.pixels).toEqual([
+      rgba([1, 2, 3], [4, 5, 6], [7, 8, 9]),
+      rgba([200, 100, 50], [0, 0, 0], [9, 9, 9], [200, 100, 50]),
+    ])
+  })
+
+  test('a palette through zlib (stream 2): an index a byte; two colours (stream 1): a bit each, rows to the byte', () => {
+    const w = connected()
+    const indices = [0, 1, 2, 3, 3, 2, 1, 0, 0, 0, 1, 1, 2, 2, 3, 3]
+    const four = [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]
+    // 10 × 6 in two colours: two bytes a row, the first pixel the highest bit
+    const bits = [0b1000_0000, 0b0100_0000, 0, 0, 0xff, 0xc0, 0, 0, 0, 0, 0b0101_0101, 0]
+    w.client.receive(
+      bytes(
+        update(2),
+        rect(0, 0, 4, 4, TIGHT),
+        0x60,
+        1,
+        3,
+        four,
+        compact(zlibPart(indices).length),
+        zlibPart(indices),
+        rect(0, 0, 10, 6, TIGHT),
+        0x50,
+        1,
+        1,
+        [255, 255, 255, 16, 48, 112],
+        compact(zlibPart(bits).length),
+        zlibPart(bits),
+      ),
+    )
+    expect(w.failures).toEqual([])
+    const colour = (i: number) => four.slice(i * 3, i * 3 + 3)
+    expect(w.pixels[0]).toEqual(rgba(...indices.map(colour)))
+    const [white, blue] = [
+      [255, 255, 255],
+      [16, 48, 112],
+    ]
+    const row = (pattern: string) => [...pattern].map(c => (c === '1' ? blue : white)) as number[][]
+    expect(w.pixels[1]).toEqual(
+      rgba(
+        ...row('1000000001'),
+        ...row('0000000000'),
+        ...row('1111111111'),
+        ...row('0000000000'),
+        ...row('0000000000'),
+        ...row('0101010100'),
+      ),
+    )
+  })
+
+  test('the gradient filter: each colour the difference from left + above − above left', () => {
+    const w = connected()
+    const want = [
+      [10, 200, 30],
+      [20, 190, 60],
+      [40, 100, 255],
+      [5, 0, 128],
+    ]
+    // 2 × 2: what is sent is each colour less its guess (0 off the picture), within a byte
+    const at = (i: number, c: number) => want[i]?.[c] ?? 0
+    const guess = (i: number, c: number) => {
+      const left = i % 2 ? at(i - 1, c) : 0
+      const up = i >= 2 ? at(i - 2, c) : 0
+      const upLeft = i === 3 ? at(0, c) : 0
+      return Math.max(0, Math.min(255, left + up - upLeft))
+    }
+    const sent = want.flatMap((p, i) => p.map((v, c) => (v - guess(i, c)) & 255))
+    w.client.receive(bytes(update(1), rect(0, 0, 2, 2, TIGHT), 0x40, 2, compact(zlibPart(sent).length), zlibPart(sent)))
+    expect(w.pixels).toEqual([rgba(...want)])
+  })
+
+  test('a stream’s reset bit starts it again; without it a new stream’s bytes are not that stream: it stops', () => {
+    const w = connected()
+    const indices = Array.from({ length: 16 }, (_, i) => i % 3)
+    const part = zlibPart(indices)
+    const tight = (control: number) =>
+      bytes(rect(0, 0, 4, 4, TIGHT), control, 1, 2, [1, 1, 1, 2, 2, 2, 3, 3, 3], compact(part.length), part)
+    // stream 1 begun, then begun again with its reset bit (2): both read
+    w.client.receive(bytes(update(2), tight(0x50), tight(0x50 | 0b0010)))
+    expect(w.pixels).toHaveLength(2)
+    expect(w.pixels[1]).toEqual(w.pixels[0] as number[])
+    // the same again with no reset: not the stream's next part
+    w.client.receive(bytes(update(1), tight(0x50)))
+    expect(w.failures).toEqual([{ code: 'data', detail: 'tight zlib' }])
+  })
+
+  test('a rectangle cut anywhere waits for the rest', () => {
+    const indices = Array.from({ length: 64 }, (_, i) => (i >> 2) % 4)
+    const all = bytes(
+      update(3),
+      rect(0, 0, 8, 8, TIGHT),
+      0x60,
+      1,
+      3,
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+      compact(zlibPart(indices).length),
+      zlibPart(indices),
+      rect(1, 1, 2, 1, TIGHT),
+      0x80,
+      [7, 7, 7],
+      rect(0, 0, 3, 3, TIGHT),
+      0x90,
+      compact(300),
+      new Uint8Array(300),
+    )
+    const whole = connected()
+    whole.client.receive(all)
+    const cut = connected()
+    for (const b of all) cut.client.receive(bytes(b))
+    expect(cut.drawn).toEqual(whole.drawn)
+    expect(cut.pixels).toEqual(whole.pixels)
+    expect(cut.drawn).toHaveLength(3)
+  })
+
+  test('what it cannot read on from (PNG, an unknown filter, broken zlib): it stops', () => {
+    const png = connected()
+    png.client.receive(bytes(update(1), rect(0, 0, 1, 1, TIGHT), 0xa0, 1, 0))
+    expect(png.failures).toEqual([{ code: 'data', detail: 'tight 10' }])
+    const filter = connected()
+    filter.client.receive(bytes(update(1), rect(0, 0, 1, 1, TIGHT), 0x40, 3))
+    expect(filter.failures).toEqual([{ code: 'data', detail: 'tight filter 3' }])
+    const broken = connected()
+    broken.client.receive(bytes(update(1), rect(0, 0, 4, 1, TIGHT), 0x00, compact(4), [0x78, 0x9c, 0xff, 0xff]))
+    expect(broken.failures).toEqual([{ code: 'data', detail: 'tight zlib' }])
+  })
+})
+
+/**
+ * What Xvnc (TigerVNC 1.12) sent for part of its screen, recorded after the handshake (32-bit
+ * pixels as this client asks): `tight-lossless.bin` a page scrolled (Tight, no JPEG, 8 updates);
+ * `tight-mono.bin` two colours; `tight-jpeg.bin` a photo and its caption (JPEG at 6). With each, the
+ * SHA-256 of what Xvnc sent as Raw for the same screen.
+ */
+const capture = (name: string) => new Uint8Array(readFileSync(join(import.meta.dir, '../fixtures/vnc', name)))
+
+/** The client on Xvnc's 1440 × 900 screen, drawn into a picture of its own. */
+function xvnc() {
+  const W = 1440
+  const fb = new Uint8ClampedArray(W * 900 * 4)
+  const drawn: string[] = []
+  let updates = 0
+  const screen: RfbScreen = {
+    size() {},
+    put(x, y, w, h, rgba) {
+      for (let r = 0; r < h; r++) fb.set(rgba.subarray(r * w * 4, (r + 1) * w * 4), ((y + r) * W + x) * 4)
+      drawn.push(`put ${x},${y} ${w}x${h}`)
+    },
+    copy() {
+      throw new Error('no CopyRect in these captures')
+    },
+    fill(x, y, w, h, r, g, b) {
+      for (let row = y; row < y + h; row++)
+        for (let col = x; col < x + w; col++) fb.set([r, g, b, 255], (row * W + col) * 4)
+      drawn.push(`fill ${x},${y} ${w}x${h}`)
+    },
+    jpeg(x, y, w, h, data) {
+      // whole: from its start (FF D8) to its end (FF D9)
+      const whole = data[0] === 0xff && data[1] === 0xd8 && data.at(-2) === 0xff && data.at(-1) === 0xd9
+      drawn.push(`jpeg ${x},${y} ${w}x${h} ${data.length}${whole ? '' : ' broken'}`)
+    },
+  }
+  const failures: RfbFailure[] = []
+  const client = new RfbClient(() => {}, screen, { failed: f => failures.push(f), updated: () => updates++ })
+  client.receive(ascii('RFB 003.008\n'))
+  client.receive(bytes(1, 1))
+  client.receive(bytes(u32(0)))
+  client.receive(serverInit(W, 900, 'agent'))
+  /** The SHA-256 of a part of the picture, its rows one after another. */
+  const sha = (x: number, y: number, w: number, h: number) => {
+    const hash = createHash('sha256')
+    for (let r = 0; r < h; r++) hash.update(fb.subarray(((y + r) * W + x) * 4, ((y + r) * W + x + w) * 4))
+    return hash.digest('hex')
+  }
+  return { client, drawn, failures, sha, updates: () => updates }
+}
+
+describe('Tight from Xvnc (captured)', () => {
+  test('a page scrolled, no JPEG: zlib streams 0 and 2 going on through 8 updates end on exactly Xvnc’s Raw pixels', () => {
+    const x = xvnc()
+    const data = capture('tight-lossless.bin')
+    // in pieces as a socket cuts them
+    for (let at = 0; at < data.length; at += 1000) x.client.receive(data.subarray(at, at + 1000))
+    expect(x.failures).toEqual([])
+    expect(x.updates()).toBe(8)
+    expect(x.drawn.filter(d => d.startsWith('fill'))).toHaveLength(3)
+    expect(x.sha(240, 590, 160, 100)).toBe('20e9cba5b4fbff853e53a28abb9d79efd81e8d12ef268902f0f05afffcbb0240')
+  })
+
+  test('two colours (stream 1): exactly Xvnc’s Raw pixels', () => {
+    const x = xvnc()
+    x.client.receive(capture('tight-mono.bin'))
+    expect(x.drawn).toEqual(['put 90,330 120x60'])
+    expect(x.sha(90, 330, 120, 60)).toBe('b99247489691a0c61c59654d19379fcc9d03c54ca0b4837adb2f68b83ad78ee2')
+  })
+
+  test('JPEG at 6: the photo’s parts to the screen as JPEG, each whole; the text beside them as a palette', () => {
+    const x = xvnc()
+    x.client.receive(capture('tight-jpeg.bin'))
+    expect(x.failures).toEqual([])
+    expect(x.drawn).toEqual([
+      'jpeg 240,560 200x72 4148',
+      'jpeg 240,632 76x16 927',
+      'jpeg 325,632 115x16 1186',
+      'jpeg 240,648 200x32 3207',
+      'put 316,632 9x16',
+    ])
+  })
+})
+
+describe('updates as they come (Xvnc’s continuous updates and fences)', () => {
+  test('its opening answered: its fence, then continuous updates of the whole display; then none asked for', () => {
+    const w = connected()
+    // a fence asking for an answer (1 << 31, one byte of its own), then: it can send continuous updates
+    for (const b of bytes(248, 0, 0, 0, u32(0x80000000), 1, 0, 150)) w.client.receive(bytes(b))
+    expect(w.sent).toEqual([
+      // the same back, not asking
+      [248, 0, 0, 0, ...u32(0), 1, 0],
+      // continuous updates of all of it
+      [150, 1, 0, 0, 0, 0, ...u16(4), ...u16(2)],
+    ])
+    w.sent.length = 0
+    w.client.receive(bytes(update(1), rect(0, 0, 1, 1, 0), [1, 2, 3, 0]))
+    w.client.receive(bytes(update(1), rect(1, 0, 1, 1, 0), [4, 5, 6, 0]))
+    expect(w.drawn).toHaveLength(2)
+    expect(w.updates()).toBe(2)
+    expect(w.sent).toEqual([])
+  })
+
+  test('its round trips answered at once: the blocking flags kept, SyncNext (not done here) left out; an answer gets none', () => {
+    const w = connected()
+    w.client.receive(bytes(248, 0, 0, 0, u32(0x80000001), 1, 1))
+    w.client.receive(bytes(248, 0, 0, 0, u32(0x80000007), 2, 5, 6))
+    w.client.receive(bytes(248, 0, 0, 0, u32(1), 0))
+    expect(w.sent).toEqual([
+      [248, 0, 0, 0, ...u32(1), 1, 1],
+      [248, 0, 0, 0, ...u32(3), 2, 5, 6],
+    ])
+  })
+
+  test('a new size: continuous updates of all of it; the server stopping them: asked for again', () => {
+    const w = connected()
+    w.client.receive(bytes(248, 0, 0, 0, u32(0x80000000), 0, 150))
+    w.sent.length = 0
+    w.client.receive(bytes(update(1), rect(0, 0, 8, 6, -223)))
+    expect(w.sent).toEqual([[150, 1, 0, 0, 0, 0, ...u16(8), ...u16(6)]])
+    w.sent.length = 0
+    w.client.receive(bytes(150))
+    expect(w.sent).toEqual([[3, 1, 0, 0, 0, 0, ...u16(8), ...u16(6)]])
+    w.client.receive(update(0))
+    expect(w.sent).toHaveLength(2)
+  })
+
+  test('all it sends for the picture goes through the board’s bridge while the owner only watches', () => {
+    let t = 0
+    const w = world({ now: () => t })
+    w.client.receive(ascii('RFB 003.008\n'))
+    w.client.receive(bytes(1, 1))
+    w.client.receive(bytes(u32(0)))
+    w.client.receive(serverInit(200, 200, 'agent'))
+    w.client.receive(bytes(248, 0, 0, 0, u32(0x80000000), 1, 0, 150))
+    w.client.receive(bytes(248, 0, 0, 0, u32(0x80000001), 1, 1))
+    // a slow update: the quality asked for again
+    const pixels = new Uint8Array(160 * 160 * 4)
+    w.client.receive(bytes(update(1), rect(0, 0, 160, 160, 0), pixels.subarray(0, 100)))
+    t = 1000
+    w.client.receive(pixels.subarray(100))
+    w.client.receive(bytes(update(1), rect(0, 0, 300, 300, -223)))
+    expect(w.sent.map(m => m[0])).toEqual([...ascii('R'), 1, 1, 0, 2, 3, 248, 150, 248, 2, 150])
+    const all = Uint8Array.from(w.sent.flat())
+    expect([...(rfbInputFilter()(all, false) ?? [])]).toEqual([...all])
+  })
+})
+
+describe('the link’s speed', () => {
+  /** An update of 100 KB of Raw, its first 1000 bytes at `from` ms, the rest at `to`. */
+  const slowly = (w: ReturnType<typeof connected>, clock: { t: number }, from: number, to: number) => {
+    const all = bytes(update(1), rect(0, 0, 160, 160, 0), new Uint8Array(160 * 160 * 4))
+    clock.t = from
+    w.client.receive(all.subarray(0, 1000))
+    clock.t = to
+    w.client.receive(all.subarray(1000))
+  }
+  const qualityAsked = (w: ReturnType<typeof connected>) =>
+    w.sent
+      .filter(m => m[0] === 2)
+      .map(m => (new DataView(Uint8Array.from(m).buffer).getInt32(4 + 7 * 4) as number) + 32)
+
+  test('updates coming slowly: JPEG at 4; coming fast again: at 6 again', () => {
+    const clock = { t: 0 }
+    const w = connected({ now: () => clock.t }, 200, 200)
+    // 100 KB over a second: 0.8 Mbit/s
+    slowly(w, clock, 0, 1000)
+    expect(qualityAsked(w)).toEqual([4])
+    // still slow: asked for no more
+    slowly(w, clock, 2000, 3000)
+    expect(qualityAsked(w)).toEqual([4])
+    // over 10 ms: 80 Mbit/s, fast enough on its own (smoothed with the slow ones)
+    slowly(w, clock, 4000, 4010)
+    expect(qualityAsked(w)).toEqual([4, 6])
+  })
+
+  test('an update in one piece, or a small one, says nothing of the link; and none of this when asked not to', () => {
+    const clock = { t: 0 }
+    const w = connected({ now: () => clock.t }, 200, 200)
+    w.client.receive(bytes(update(1), rect(0, 0, 160, 160, 0), new Uint8Array(160 * 160 * 4)))
+    clock.t = 5000
+    w.client.receive(bytes(update(1), rect(0, 0, 10, 10, 0)))
+    clock.t = 9000
+    w.client.receive(new Uint8Array(400))
+    expect(qualityAsked(w)).toEqual([])
+    const fixed = connected({ now: () => clock.t, adapt: false }, 200, 200)
+    slowly(fixed, clock, 0, 1000)
+    expect(qualityAsked(fixed)).toEqual([])
+    const sharp = connected({ now: () => clock.t, quality: 8 }, 200, 200)
+    slowly(sharp, clock, 0, 1000)
+    expect(qualityAsked(sharp)).toEqual([4])
   })
 })
 

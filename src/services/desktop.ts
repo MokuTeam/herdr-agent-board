@@ -805,8 +805,10 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     },
 
     websocket: {
-      // the picture compresses well; Bun keeps it per message
-      perMessageDeflate: true,
+      // Not compressed again: the picture comes compressed from Xvnc (Tight: zlib and JPEG). (On,
+      // it did nothing either: Bun deflates only what is sent asking for it.) Each piece goes on
+      // as it comes, the socket paused while much waits; Xvnc paces itself by the viewer's fences.
+      perMessageDeflate: false,
       open(ws) {
         if (ws.data.cdp) return openCdp(ws)
         const sock = createConnection({ path: ws.data.socket })

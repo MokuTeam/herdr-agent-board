@@ -27,7 +27,8 @@ import {
   type Zoom,
   zoomTransform,
 } from '../models/desk-input.ts'
-import { RfbClient, type RfbFailure, type RfbScreen } from '../models/rfb.ts'
+import { canvasScreen } from '../models/desk-screen.ts'
+import { RfbClient, type RfbFailure } from '../models/rfb.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { useLatest } from './useLatest.ts'
 
@@ -53,23 +54,6 @@ const whyText = (why: RfbFailure, t: Translator): string =>
   t('desk.failed', {
     why: why.code === 'refused' ? why.detail : t(`desk.why.${why.code}`, { what: why.detail }),
   })
-
-/** The display drawn into a canvas (none drawn where the page has no 2D context). */
-function canvasScreen(canvas: HTMLCanvasElement): RfbScreen {
-  const ctx = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null
-  return {
-    size(width, height) {
-      canvas.width = width
-      canvas.height = height
-    },
-    put(x, y, width, height, rgba) {
-      ctx?.putImageData(new ImageData(rgba, width, height), x, y)
-    },
-    copy(sx, sy, x, y, width, height) {
-      ctx?.drawImage(canvas, sx, sy, width, height, x, y, width, height)
-    },
-  }
-}
 
 export interface DeskInput {
   detach(): void
