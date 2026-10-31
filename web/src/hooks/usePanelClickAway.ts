@@ -1,13 +1,14 @@
 // A click on the board beside an open panel closes it. A card switches the panel to its own
 // session instead, controls keep their own job, and a press that travelled (a card drag, a text
 // selection ending outside the panel) is not a click, nor is one that only put the panel's
-// place menu away.
+// place menu away. An agent's browser shown full size (.desk-full) lies over the board but is the
+// session panel's own: a tap in it is for the browser.
 import { useEffect } from 'react'
 import type { PanelPlace } from '../components/panel/place.ts'
 import { outsidePanelPress, type Press, panelPress } from '../models/click-away.ts'
 
 const KEEPS =
-  '.sheet, .ql, .launch, .limits-pop, .setup-pop, .menu, .rename, .card, .lane-head, .layout-menu, button, input, textarea, select, label, a, [data-act]'
+  '.sheet, .desk-full, .ql, .launch, .limits-pop, .setup-pop, .menu, .rename, .card, .lane-head, .layout-menu, button, input, textarea, select, label, a, [data-act]'
 
 /** Listens on the window for presses beside the open panel; returns the way to stop. */
 export function listenClickAway(place: PanelPlace): () => void {

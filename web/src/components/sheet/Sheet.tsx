@@ -35,6 +35,7 @@ import {
 import { reducedMotion } from '../../models/spring.ts'
 import { termButton } from '../../models/terminal.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
+import type { BoardUi } from '../../state/board-ui.ts'
 import { classNames } from '../class-names.ts'
 import { HelpersStrip } from '../helpers/HelpersStrip.tsx'
 import { CheckGlyph } from '../icons.tsx'
@@ -102,6 +103,27 @@ function useShown(open: string | null, item: Item | undefined): { key: string | 
   return { key, item: item ?? (kept?.key === key ? kept : null) }
 }
 
+/**
+ * The session's own browser's fold: open when the opening asked for it (the card's mark), else
+ * folded. The same session opened again (its card clicked) while the owner has its browser in hand
+ * (`ownerHasIt`) keeps it open: folding it would hand the browser back under their hands.
+ */
+export function useBrowserFold(
+  ui: Pick<BoardUi, 'open' | 'opened' | 'browser'>,
+  ownerHasIt: boolean,
+): [boolean, (open: boolean) => void] {
+  const { open, opened, browser } = ui
+  const [shown, setShown] = useState(() => open !== null && browser)
+  const before = useRef(open)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: an opening is when to fold or unfold it
+  useLayoutEffect(() => {
+    const again = before.current === open
+    before.current = open
+    if (open !== null) setShown(was => browser || (was && again && ownerHasIt))
+  }, [open, opened, browser])
+  return [shown, setShown]
+}
+
 export function Sheet(slots: SheetSlots) {
   const {
     question,
@@ -132,12 +154,7 @@ export function Sheet(slots: SheetSlots) {
 
   // The card's empty fields show only when asked for; each session opens without them.
   const [propertiesOpen, setPropertiesOpen] = useState(false)
-  // Its own browser's fold: open when the opening asked for it (the card's mark), else folded.
-  const [browserOpen, setBrowserOpen] = useState(() => open !== null && ui.browser)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: an opening is when to fold or unfold it
-  useLayoutEffect(() => {
-    if (open !== null) setBrowserOpen(ui.browser)
-  }, [open, ui.opened, ui.browser])
+  const [browserOpen, setBrowserOpen] = useBrowserFold(ui, itemOf(open)?.desktop?.control === 'owner')
   // Switching sessions in the open panel: its conversation fades in; it starts at the bottom.
   const before = useRef(open)
   useLayoutEffect(() => {

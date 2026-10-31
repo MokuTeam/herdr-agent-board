@@ -128,8 +128,22 @@ export class MiniText extends MiniNode {
   }
 }
 
+/** An element's box on screen, as getBoundingClientRect says it. */
+export interface MiniRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
 /** What layout says of an element: the test sets it. */
-export const layout = { scrollHeight: (_el: MiniElement): number => 0 }
+export const layout = {
+  scrollHeight: (_el: MiniElement): number => 0,
+  rect: (_el: MiniElement): MiniRect => ({ left: 0, top: 0, width: 0, height: 0 }),
+}
+
+/** One part of a selector: a tag, an #id, .classes and an [attr], each optional (`button`, `.sheet`, `[data-act]`). */
+const SIMPLE = /^\s*([a-z][a-z0-9-]*)?((?:[#.][\w-]+)*)(?:\[([\w-]+)\])?\s*$/i
 
 export class MiniElement extends MiniNode {
   readonly attributes = new Map<string, string>()
@@ -169,6 +183,25 @@ export class MiniElement extends MiniNode {
   }
   get scrollHeight(): number {
     return layout.scrollHeight(this)
+  }
+  getBoundingClientRect(): MiniRect {
+    return layout.rect(this)
+  }
+  /** Whether it is one of `selector`'s parts (see SIMPLE: no combinators). */
+  matches(selector: string): boolean {
+    return selector.split(',').some(part => {
+      const m = SIMPLE.exec(part)
+      if (!m) return false
+      if (m[1] && m[1].toLowerCase() !== this.localName) return false
+      for (const [, kind, name] of (m[2] ?? '').matchAll(/([#.])([\w-]+)/g))
+        if (kind === '#' ? this.id !== name : !this.className.split(/\s+/).includes(name ?? '')) return false
+      return !m[3] || this.hasAttribute(m[3])
+    })
+  }
+  closest(selector: string): MiniElement | null {
+    for (let at: MiniNode | null = this; at; at = at.parentNode)
+      if (at instanceof MiniElement && at.matches(selector)) return at
+    return null
   }
   focus(): void {
     if (this.ownerDocument) this.ownerDocument.activeElement = this
@@ -233,6 +266,8 @@ export function miniWindow(innerHeight: number) {
     HTMLIFrameElement: class {},
   })
   document.defaultView = win
+  // As in a browser, the window is on every event's way: its listeners hear what bubbles up the page.
+  document.parentNode = win as unknown as MiniNode
   const saved = { window: Reflect.get(globalThis, 'window'), document: Reflect.get(globalThis, 'document') }
   Reflect.set(globalThis, 'window', win)
   Reflect.set(globalThis, 'document', document)

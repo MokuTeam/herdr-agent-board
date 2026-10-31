@@ -7,11 +7,14 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'bun:test'
 import type { ReactNode } from 'react'
 import type { Item, ItemDesktop } from '../../src/core/types.ts'
+import type { PanelPlace as Place } from '../../web/src/components/panel/place.ts'
 import type { BrowserFold as Fold } from '../../web/src/components/sheet/BrowserFold.tsx'
+import type { useBrowserFold as UseBrowserFold } from '../../web/src/components/sheet/Sheet.tsx'
+import type { listenClickAway as ClickAway } from '../../web/src/hooks/usePanelClickAway.ts'
 import type { I18nProvider as Provider } from '../../web/src/i18n/I18nProvider.tsx'
 import type { Board } from '../../web/src/state/BoardProvider.tsx'
 import { answers, restoreFetch, sent } from './support/fetch-answers.ts'
-import { MiniElement, MiniEvent, type MiniNode, miniWindow } from './support/mini-dom.ts'
+import { layout, MiniElement, MiniEvent, type MiniNode, miniWindow } from './support/mini-dom.ts'
 
 /** The page's WebSocket, as the fold uses it. */
 class FakeSocket {
@@ -55,6 +58,9 @@ let BoardContext: React.Context<Board | null>
 let boardOf: (fields: Partial<Board>) => Board
 let itemOf: (fields: Partial<Item> & Pick<Item, 'key'>) => Item
 let useState: typeof import('react').useState
+let PanelPlace: typeof Place
+let listenClickAway: typeof ClickAway
+let useBrowserFold: typeof UseBrowserFold
 const saved = { WebSocket: globalThis.WebSocket, location: Reflect.get(globalThis, 'location') }
 
 beforeAll(async () => {
@@ -67,6 +73,9 @@ beforeAll(async () => {
   ;({ BrowserFold } = await import('../../web/src/components/sheet/BrowserFold.tsx'))
   ;({ I18nProvider } = await import('../../web/src/i18n/I18nProvider.tsx'))
   ;({ BoardContext } = await import('../../web/src/state/BoardProvider.tsx'))
+  ;({ PanelPlace } = await import('../../web/src/components/panel/place.ts'))
+  ;({ listenClickAway } = await import('../../web/src/hooks/usePanelClickAway.ts'))
+  ;({ useBrowserFold } = await import('../../web/src/components/sheet/Sheet.tsx'))
   const support = await import('./support/board.tsx')
   boardOf = fields => support.board({ data: support.payload({ fsToken: 'tok' }), ...fields })
   itemOf = support.item
@@ -82,6 +91,7 @@ beforeAll(async () => {
 beforeEach(() => newRoot())
 
 afterEach(() => {
+  layout.rect = () => ({ left: 0, top: 0, width: 0, height: 0 })
   flush(() => root.unmount())
   for (const c of [...dom.document.body.childNodes]) dom.document.body.removeChild(c)
   restoreFetch()
@@ -338,4 +348,150 @@ test('Take control only once the view is connected; Give back always', async () 
   newRoot()
   render({ desktop: desktop({ control: 'owner' }), open: true })
   expect(desk('control')?.hasAttribute('disabled')).toBe(false)
+})
+
+// ---------------------------------------------------------------- in the session panel
+
+/** The session panel as the place has it: open until it closes itself (Sheet's onClose: the board's `open` goes). */
+const panel = {
+  isOpen: true,
+  gesturing: false,
+  closed: () => {},
+  close() {
+    this.isOpen = false
+    this.closed()
+  },
+  reflow() {},
+  cancel() {},
+  setDock() {},
+  resetSize() {},
+  setOver() {},
+}
+
+/** The fold in the panel's aside, the panel shown until it closes, the fold open from the card's "Open its browser". */
+function InPanel({ item }: { item: Item }) {
+  const [shown, setShown] = useState(true)
+  const [open, setOpen] = useState(true)
+  panel.closed = () => setShown(false)
+  return (
+    <aside className={shown ? 'sheet open' : 'sheet'}>
+      <BrowserFold item={item} open={open && shown} onOpen={setOpen} />
+    </aside>
+  )
+}
+
+function renderInPanel(fields: { desktop: ItemDesktop }) {
+  const item = itemOf({ key: KEY, name: 'Alpha', desktop: fields.desktop })
+  draw(
+    <I18nProvider lang="en">
+      <BoardContext.Provider value={boardOf({ toast: text => toasts.push(text) })}>
+        <InPanel item={item} />
+      </BoardContext.Provider>
+    </I18nProvider>,
+  )
+}
+
+/** The page's listeners on the window (the click-away's) are the small DOM's window's. */
+function onWindow<T>(fn: () => T): T {
+  const was = { add: globalThis.addEventListener, remove: globalThis.removeEventListener }
+  Reflect.set(globalThis, 'addEventListener', dom.window.addEventListener.bind(dom.window))
+  Reflect.set(globalThis, 'removeEventListener', dom.window.removeEventListener.bind(dom.window))
+  try {
+    return fn()
+  } finally {
+    Reflect.set(globalThis, 'addEventListener', was.add)
+    Reflect.set(globalThis, 'removeEventListener', was.remove)
+  }
+}
+
+/** A tap (or a click, `pointerType` 'mouse') where (x, y) is: the press, the let go, the click the browser sends. */
+function tap(el: MiniElement | undefined, x = 10, y = 10, pointerType = 'touch') {
+  if (!el) throw new Error('nothing to tap')
+  const at = { clientX: x, clientY: y, button: 0, pointerId: 1, pointerType }
+  flush(() => el.dispatchEvent(Object.assign(new MiniEvent('pointerdown'), at, { buttons: 1 })))
+  flush(() => el.dispatchEvent(Object.assign(new MiniEvent('pointerup'), at, { buttons: 0 })))
+  flush(() => el.dispatchEvent(Object.assign(new MiniEvent('click'), at)))
+}
+
+/** The display (4 × 2) drawn 400 × 200 at the window's corner: (250, 150) is its point (2, 1). */
+const screenAt = () => {
+  layout.rect = el => ({ left: 0, top: 0, width: el.localName === 'canvas' ? 400 : 0, height: 200 })
+}
+
+test('control taken full size: a tap on its browser goes to it, and the panel, full size and control stay', async () => {
+  const place = new PanelPlace(() => ({ w: 1024, h: 768 }))
+  panel.isOpen = true
+  place.panels.push(panel)
+  const stop = onWindow(() => listenClickAway(place))
+  try {
+    renderInPanel({ desktop: desktop({ asks: true }) })
+    const [socket] = FakeSocket.made
+    handshake(socket)
+    const full = () => byClass('desk-full')
+    tap(desk('full'))
+    const calls = answers([200, { ok: true, control: 'owner' }], [200, { ok: true, control: 'agent' }])
+    tap(desk('control', full()))
+    await settle()
+    // the board's word follows (and the card asks no more: the agent went on)
+    renderInPanel({ desktop: desktop({ control: 'owner' }) })
+    expect(byClass('desk-who')?.textContent).toBe('You have control')
+
+    screenAt()
+    socket?.sent.splice(0)
+    tap(canvas(), 250, 150)
+    expect(panel.isOpen).toBe(true)
+    expect(within(canvas(), full())).toBe(true)
+    expect(byClass('desk-who')?.textContent).toBe('You have control')
+    expect(socket?.closed).toBe(false)
+    // the press and the let go at (2, 1), and nothing handed back
+    expect(socket?.sent).toEqual([
+      [5, 1, 0, 2, 0, 1],
+      [5, 0, 0, 2, 0, 1],
+    ])
+    expect(sent(calls).map(c => c[3])).toEqual([{ to: 'owner' }])
+    // full size's own bar and its warning keep it too
+    tap(full())
+    tap(byClass('desk-warn'))
+    expect(panel.isOpen).toBe(true)
+    expect(full()).toBeDefined()
+
+    // the board beside the panel closes it as before, and control goes back with the view
+    const board = dom.document.body.appendChild(dom.document.createElement('main'))
+    board.setAttribute('class', 'board')
+    tap(desk('close', full()))
+    tap(board as MiniElement)
+    await settle()
+    expect(panel.isOpen).toBe(false)
+    expect(socket?.closed).toBe(true)
+    expect(sent(calls).map(c => c[3])).toEqual([{ to: 'owner' }, { to: 'agent' }])
+  } finally {
+    onWindow(stop)
+    place.panels.splice(0)
+  }
+})
+
+test('the session opened again keeps its browser open while the owner has it; folded as before otherwise', () => {
+  type Ui = { open: string | null; opened: number; browser: boolean }
+  let got: [boolean, (open: boolean) => void] = [false, () => {}]
+  function Probe({ ui, owner }: { ui: Ui; owner: boolean }) {
+    got = useBrowserFold(ui, owner)
+    return null
+  }
+  const at = (ui: Ui, owner = false) => {
+    draw(<Probe ui={ui} owner={owner} />)
+    return got[0]
+  }
+  // opened from the card's mark: open; opened again (its card clicked) with the agent at it: folded
+  expect(at({ open: 'a', opened: 1, browser: true })).toBe(true)
+  expect(at({ open: 'a', opened: 2, browser: false })).toBe(false)
+  // unfolded by hand, the owner takes it: opened again, it stays open
+  flush(() => got[1](true))
+  expect(at({ open: 'a', opened: 2, browser: false }, true)).toBe(true)
+  expect(at({ open: 'a', opened: 3, browser: false }, true)).toBe(true)
+  // another session: folded; asked for: open
+  expect(at({ open: 'b', opened: 4, browser: false }, true)).toBe(false)
+  expect(at({ open: 'b', opened: 5, browser: true })).toBe(true)
+  // the panel closed (control went back with it), then opened again: folded
+  at({ open: null, opened: 5, browser: true }, true)
+  expect(at({ open: 'b', opened: 6, browser: false }, true)).toBe(false)
 })
