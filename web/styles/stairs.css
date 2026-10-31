@@ -1,26 +1,38 @@
 /* The staircase: a board too narrow for its columns. Where the board cannot give each column with
    cards a card's readable width (210px, beside.css's --col-card) beside the empty ones' heads, <html>
-   has data-stairs (web/src/hooks/useStairs.ts, models/stairs.ts), with every column's step: its
-   head's left edge from the first head's (--stair-<column>). The heads stay in one row at the top,
-   each as wide as its name and count; the cards go in one list, lane by lane, top to bottom, in the
-   columns' order and each column's own, every one a card's width (--stair-card), its left edge under
-   its column's head. The right-hand columns' cards run past the board's right edge: the board
-   scrolls sideways, the heads with it (components/Board.tsx), and each lane's title stays at its
-   left. Every rule here starts with :root[data-stairs] and, but the width, holds where the page lays
-   its board out in columns (a page over 960px), as the attribute does: a phone, a narrow window's
-   stacked column and a board with room are as they were. Linked before beside.css, which sets
-   nothing these rules set; the Terminal style comes after, outranked where it would undo them, its
-   own sizes here given by --stair-bar and --stair-gap (look-terminal.css). */
+   has data-stairs (web/src/hooks/useStairs.ts, models/stairs.ts) with the staircase's sizes: the
+   card's width (--stair-card), each column's step (--stair-<column>), the row of the heads each head
+   is in (--stair-row-<column>) and where the last column ends (--stair-end). The cards go in one
+   list, lane by lane, top to bottom, in the columns' order and each column's own, every one a card's
+   width, its left edge at its column's step; each head starts at its column's step too, the heads
+   in two rows where the steps are narrower than they are. The four columns but Idle fill what the
+   board shows; Idle starts past its right edge, its head peeking at the edge of the heads' row until
+   the board scrolls to it. The board scrolls sideways, the heads with it (components/Board.tsx), and
+   each lane's title stays at its left. Every rule here starts with :root[data-stairs] and, but the
+   card's least width, holds where the page lays its board out in columns (a page over 960px), as
+   the attribute does: a phone, a narrow window's stacked column and a board with room are as they
+   were. Linked before beside.css, outranking its rule for the heads; the Terminal style comes after,
+   outranked where it would undo them, its own sizes here given by --stair-bar and --stair-gap
+   (look-terminal.css). */
 
-:root[data-stairs] { --stair-card: 280px; }
+:root[data-stairs] { --stair-card: 320px; }
 
 @container page (min-width: 961px) {
-  /* The heads: one row, each as wide as its name and count (room for two digits, so the steps stay
-     where they are as a count grows), going sideways with the board; past the last one, room for its
-     cards, so the row can go as far as the board does. */
-  :root[data-stairs] .columns-head { display: flex; overflow: hidden; }
-  :root[data-stairs] .columns-head::after { content: ""; flex: none; width: var(--stair-card); }
-  :root[data-stairs] .columns-head > .col-head { flex: none; }
+  /* The heads: each at its column's step, in its row, as wide as its name and count (room for two
+     digits); the row goes sideways with the board as far as the last column's cards. Idle's stays
+     at the row's right edge, peeking, until the board scrolls to its column. */
+  :root[data-stairs] .toolbar .columns-head {
+    grid-template-columns: var(--stair-end, max-content);
+    row-gap: 4px;
+    overflow: hidden;
+  }
+  :root[data-stairs] .columns-head > .col-head { grid-column: 1; justify-self: start; }
+  :root[data-stairs] .columns-head > [data-col="work"] { grid-row: var(--stair-row-work, 1); margin-left: var(--stair-work, 0px); }
+  :root[data-stairs] .columns-head > [data-col="me"] { grid-row: var(--stair-row-me, 1); margin-left: var(--stair-me, 0px); }
+  :root[data-stairs] .columns-head > [data-col="ext"] { grid-row: var(--stair-row-ext, 1); margin-left: var(--stair-ext, 0px); }
+  :root[data-stairs] .columns-head > [data-col="done"] { grid-row: var(--stair-row-done, 1); margin-left: var(--stair-done, 0px); }
+  :root[data-stairs] .columns-head > [data-col="idle"] { grid-row: var(--stair-row-idle, 1); margin-left: var(--stair-idle, 0px); position: sticky; right: 0; }
+  :root[data-stairs] .columns-head > [data-col="idle"]::after { content: "›"; content: "›" / ""; color: var(--label-3); font-weight: 500; }
   :root[data-stairs] .col-head > .n { min-width: 2ch; }
 
   /* The board scrolls sideways; its lanes are all as wide as the widest one's steps, so a lane lit

@@ -1,10 +1,11 @@
 // The staircase (web/src/models/stairs.ts, hooks/useStairs.ts, styles/stairs.css): a board too
 // narrow to give each column with cards a card's readable width beside the empty ones' heads lays
-// its cards out in one list, lane by lane, each a card's width, its left edge under its column's
-// head, the heads in one row at the top, the lane titles staying at the left as the board scrolls
-// sideways. When it applies, by the board's own width; where each column's cards start; their order;
-// the stylesheet and its gate; dragging a card in it; the keys. A board with room, a phone and a
-// narrow window's stacked column are as they were.
+// its cards out in one list, lane by lane, each a card's width, its left edge at its column's step
+// where its head starts too, the four columns but Idle in sight and Idle past the board's right
+// edge, its head peeking there, the lane titles staying at the left as the board scrolls sideways.
+// When it applies, by the board's own width; the sizes; where each column's cards and head start;
+// their order; the stylesheet and its gate; dragging a card in it; the keys. A board with room, a
+// phone and a narrow window's stacked column are as they were.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -19,10 +20,11 @@ import { dropTarget, lanesOf, NO_MOVES } from '../../web/src/models/board-view.t
 import {
   type BoardRoom,
   boardStep,
+  type HeadSize,
   nearestHead,
   STAIRS,
   sidewaysStep,
-  stairOffsets,
+  stairsLayout,
   stairsPlace,
   stairsWanted,
 } from '../../web/src/models/stairs.ts'
@@ -99,7 +101,12 @@ const GUTTER = 28
 /** The heads with the first `full` columns holding cards. */
 const heads = (full: number) => COLUMNS.map((_, i) => ({ vacant: i >= full }))
 /** A window `w` wide, the board `board` wide in it (a panel docked at a side takes the rest). */
-const at = (w: number, boardWidth = w): BoardRoom => ({ page: w, room: boardWidth - 2 * GUTTER, ...SIZES })
+const at = (w: number, boardWidth = w): BoardRoom => ({
+  page: w,
+  room: boardWidth - 2 * GUTTER,
+  ...SIZES,
+  gutter: GUTTER,
+})
 /** Beside a side panel of its default 560px: the board makes it room (a wide window) or keeps clear of it all the same (styles/beside.css). */
 const beside = (w: number) => at(w, w - 560)
 
@@ -136,7 +143,7 @@ describe('when the board is a staircase: by its own width', () => {
   test('the switch point: every column with cards at 210px, every empty one at its head’s, and the gaps', () => {
     // Three with cards, two empty: 3 × 210 + 2 × 136 + 4 × 12 = 950.
     const need = 3 * 210 + 2 * 136 + 4 * 12
-    const r = (room: number): BoardRoom => ({ page: 1200, room, ...SIZES })
+    const r = (room: number): BoardRoom => ({ page: 1200, room, ...SIZES, gutter: GUTTER })
     expect(stairsWanted(heads(3), r(need - 1))).toBe(true)
     expect(stairsWanted(heads(3), r(need))).toBe(false)
     // A laptop 1440 wide with the panel over the board (880 left): one column with cards fits, two do not.
@@ -163,25 +170,88 @@ describe('when the board is a staircase: by its own width', () => {
   })
 })
 
+/** Heads as wide as their name and count (with two digits' room), as an iPad draws them. */
+const widths = (w: Record<ColumnId, number>): HeadSize[] => COLUMNS.map(id => ({ id, width: w[id] }))
+const RU = widths({ work: 95, me: 99, ext: 129, done: 82, idle: 100 })
+const EN = widths({ work: 82, me: 92, ext: 140, done: 62, idle: 60 })
+/** The owner's iPad in landscape, the panel docked at a side: the board 590 wide. */
+const OWNER = { room: 590 - 2 * GUTTER, gutter: GUTTER }
+
+describe('the sizes: wide cards, the four columns in sight, Idle past the edge', () => {
+  test('on the owner’s iPad: cards 373.5 wide, the steps 53.5 apart, Idle past the board’s edge', () => {
+    const l = stairsLayout(RU, OWNER)
+    expect(l.card).toBe(373.5)
+    expect(l.steps).toEqual({ work: 0, me: 53.5, ext: 107, done: 160.5, idle: 534 + GUTTER })
+    // Two rows of heads, each starting at its column's step; Idle's where it peeks, at the right.
+    expect(l.rows).toEqual({ work: 1, me: 2, ext: 1, done: 2, idle: 1 })
+    expect(l.end).toBe(562 + 373.5)
+  })
+
+  test('a card is 320 to 420 wide, the four columns fill what the board shows, Idle out of sight', () => {
+    for (const hs of [RU, EN])
+      for (let room = 300; room <= 1100; room += 7) {
+        const l = stairsLayout(hs, { room, gutter: GUTTER })
+        const s = l.steps
+        expect(l.card).toBeGreaterThanOrEqual(STAIRS.card.min)
+        expect(l.card).toBeLessThanOrEqual(STAIRS.card.max)
+        expect([s.work, s.me, s.ext, s.done].every((v, i, a) => i === 0 || (v ?? 0) > (a[i - 1] ?? 0))).toBe(true)
+        // The last of the four ends at the board's right edge, unless the card is at its least.
+        const last = (s.done ?? 0) + l.card
+        if (l.card > STAIRS.card.min) expect(last).toBeLessThanOrEqual(room + 0.01)
+        // Idle starts past the right edge and its padding, and past the other columns' cards.
+        expect(s.idle ?? 0).toBeGreaterThanOrEqual(room + GUTTER - 0.01)
+        expect(s.idle ?? 0).toBeGreaterThanOrEqual(last + GUTTER - 0.01)
+        expect(l.end).toBe(Math.round(((s.idle ?? 0) + l.card) * 100) / 100)
+      }
+  })
+
+  test('each head starts at its column’s step, none over another in its row, in two rows where the four fit', () => {
+    for (const hs of [RU, EN])
+      for (let room = 300; room <= 1100; room += 7) {
+        const l = stairsLayout(hs, { room, gutter: GUTTER })
+        const placed = hs.map(h => {
+          // Idle's head peeks at the right edge of the heads' row until the board scrolls to it.
+          const left = h.id === 'idle' ? room - h.width : (l.steps[h.id] ?? 0)
+          return { row: l.rows[h.id], left, right: left + h.width }
+        })
+        for (const a of placed)
+          for (const b of placed)
+            if (a !== b && a.row === b.row && a.left <= b.left)
+              expect(b.left).toBeGreaterThanOrEqual(a.right + STAIRS.headGap - 0.01)
+        // Two rows wherever the least card and the steps fit; a third only on a board narrower still.
+        const four = STAIRS.card.min + 3 * (l.steps.me ?? 0)
+        expect(Math.max(...Object.values(l.rows))).toBeLessThanOrEqual(room >= four ? 2 : 3)
+      }
+  })
+
+  test('a wider board: the card at its widest, the steps wider, the heads in one row', () => {
+    const l = stairsLayout(RU, { room: 905, gutter: GUTTER })
+    expect(l.card).toBe(420)
+    expect(l.steps.me).toBeCloseTo((905 - 420) / 3, 1)
+    expect(Object.values(l.rows)).toEqual([1, 1, 1, 1, 1])
+    // Too narrow for the least card: it keeps 320, the last of the four running a little past the edge.
+    expect(stairsLayout(RU, { room: 420, gutter: GUTTER }).card).toBe(320)
+  })
+})
+
 describe('turning it on and off', () => {
-  /** A page whose heads stand at `lefts`, recording what is written. */
-  function fakePage(lefts: number[]) {
+  /** A page whose heads are `hs` wide, recording what is written. */
+  function fakePage(hs: HeadSize[]) {
     const log: unknown[] = []
     let reads = 0
     const page: StairsPage = {
       turn: on => void log.push(['turn', on]),
       heads: () => {
         reads++
-        return COLUMNS.map((id, i) => ({ id, left: lefts[i] ?? 0 }))
+        return hs.map(h => ({ ...h }))
       },
-      steps: offsets => void log.push(['steps', offsets]),
+      sizes: layout => void log.push(['sizes', layout]),
     }
     return { log, page, reads: () => reads }
   }
-  const LEFTS = [28, 128, 232, 366, 453]
 
   test('a board with room: nothing written, the heads never read', () => {
-    const p = fakePage(LEFTS)
+    const p = fakePage(RU)
     const s = stairs(p.page)
     s.fit(heads(5))
     s.room(at(1440))
@@ -191,31 +261,31 @@ describe('turning it on and off', () => {
     expect(p.reads()).toBe(0)
   })
 
-  test('too narrow: on, then each column’s step, its head’s left edge from the first head’s', () => {
-    const p = fakePage(LEFTS)
+  test('too narrow: on, then the sizes for the board’s width and the heads’', () => {
+    const p = fakePage(RU)
     const s = stairs(p.page)
     s.fit(heads(2))
-    s.room(beside(1180))
+    s.room(at(1180, 590))
     expect(p.log).toEqual([
       ['turn', true],
-      ['steps', { work: 0, me: 100, ext: 204, done: 338, idle: 425 }],
+      ['sizes', stairsLayout(RU, OWNER)],
     ])
     // Drawn again, nothing moved: nothing written.
     s.fit(heads(2))
     expect(p.log).toHaveLength(2)
   })
 
-  test('the steps follow the heads (a count grows a digit, another language, the Terminal style)', () => {
-    const lefts = [...LEFTS]
-    const p = fakePage(lefts)
+  test('the sizes follow the heads (a count grows a digit, another language, the Terminal style) and the board', () => {
+    const hs = RU.map(h => ({ ...h }))
+    const p = fakePage(hs)
     const s = stairs(p.page)
     s.fit(heads(2))
-    s.room(beside(1180))
-    lefts[2] = 240
-    lefts[3] = 374
-    lefts[4] = 461
-    s.room(beside(1180))
-    expect(p.log.at(-1)).toEqual(['steps', { work: 0, me: 100, ext: 212, done: 346, idle: 433 }])
+    s.room(at(1180, 590))
+    for (const h of hs) if (h.id === 'me') h.width = 119
+    s.room(at(1180, 590))
+    expect(p.log.at(-1)).toEqual(['sizes', stairsLayout(hs, OWNER)])
+    s.room(at(1180, 620))
+    expect(p.log.at(-1)).toEqual(['sizes', stairsLayout(hs, { room: 620 - 56, gutter: GUTTER })])
   })
 
   test('off again when the panel closes, the columns empty, or the board goes', () => {
@@ -224,7 +294,7 @@ describe('turning it on and off', () => {
       (s: ReturnType<typeof stairs>) => s.fit(heads(0)),
       (s: ReturnType<typeof stairs>) => s.room(null),
     ]) {
-      const p = fakePage(LEFTS)
+      const p = fakePage(RU)
       const s = stairs(p.page)
       s.fit(heads(4))
       s.room(beside(1180))
@@ -245,8 +315,11 @@ const ITEMS: Item[] = [
   item({ key: 'b3', category: 'other', column: 'idle' }),
 ]
 const HEADS: ColumnHead[] = COLUMNS.map(id => ({ id, title: id, color: COLUMN_COLORS[id], n: 1, vacant: false }))
-/** The heads' left edges in the window: the gutter, then each as wide as its name and count, 12px apart. */
+/** Steps in the window, for the drop place's own rules. */
 const HEAD_LEFT: Record<string, number> = { work: 28, me: 128, ext: 232, done: 366, idle: 453 }
+/** The owner's iPad: the board 590 wide at the window's left, its heads' row at its gutter. */
+const BOARD = box(0, 0, 590, 2000)
+const HEADS_ROW = box(GUTTER, 90, 590 - 2 * GUTTER, 44)
 
 let world: FakeWorld
 const html = () => world.document.documentElement
@@ -271,8 +344,11 @@ beforeEach(() => {
     viewport: { w: 1180, h: 820 },
     rects: (e: FakeElement): RectBox | null => {
       const col = e.getAttribute('data-col')
-      if (e.getAttribute('class')?.split(' ').includes('col-head') && col) return box(HEAD_LEFT[col] ?? 0, 96, 90, 20)
-      if (e.getAttribute('id') === 'board') return box(0, 0, 620, 2000)
+      const width = RU.find(h => h.id === col)?.width ?? 0
+      if (e.getAttribute('class')?.split(' ').includes('col-head') && col)
+        return box(HEAD_LEFT[col] ?? 0, 96, width, 20)
+      if (e.getAttribute('id') === 'board') return BOARD
+      if (e.getAttribute('id') === 'columns-head') return HEADS_ROW
       return null
     },
   })
@@ -286,32 +362,42 @@ afterEach(async () => {
   }
 })
 
-describe('where each column’s cards start: under its head', () => {
-  test('the page’s heads are read in their order, and the steps written on <html> and taken away', () => {
+describe('where each column’s cards and head start: at its step', () => {
+  test('the page’s heads are read in their order, and the sizes written on <html> and taken away', () => {
     mountPage()
     htmlStyle().setProperty('--cols', 'kept')
     const page = documentStairs()
-    expect(page.heads()).toEqual(COLUMNS.map(id => ({ id, left: HEAD_LEFT[id] ?? NaN })))
+    expect(page.heads()).toEqual(RU)
     page.turn(true)
-    page.steps(stairOffsets(page.heads()))
+    page.sizes(stairsLayout(page.heads(), OWNER))
     expect(html().getAttribute('data-stairs')).toBe('')
-    for (const id of COLUMNS)
-      expect(htmlStyle().getPropertyValue(`--stair-${id}`)).toBe(`${(HEAD_LEFT[id] ?? NaN) - 28}px`)
+    const written = (name: string) => htmlStyle().getPropertyValue(name)
+    expect([written('--stair-card'), written('--stair-end')]).toEqual(['373.5px', '935.5px'])
+    expect(COLUMNS.map(id => written(`--stair-${id}`))).toEqual(['0px', '53.5px', '107px', '160.5px', '562px'])
+    expect(COLUMNS.map(id => written(`--stair-row-${id}`))).toEqual(['1', '2', '1', '2', '1'])
     page.turn(false)
     expect(html().hasAttribute('data-stairs')).toBe(false)
-    for (const id of COLUMNS) expect(htmlStyle().getPropertyValue(`--stair-${id}`)).toBe('')
-    expect(htmlStyle().getPropertyValue('--cols')).toBe('kept')
+    for (const name of [
+      '--stair-card',
+      '--stair-end',
+      ...COLUMNS.flatMap(id => [`--stair-${id}`, `--stair-row-${id}`]),
+    ])
+      expect(written(name)).toBe('')
+    expect(written('--cols')).toBe('kept')
   })
 
-  test('each column sits at its step, a card’s width, so its cards’ left edges are its head’s', () => {
-    expect(of(GATE)['--stair-card']).toBe('280px')
+  test('a column’s cards and its head start at the same step, so a card’s left edge is its head’s', () => {
+    // The least card until the sizes are written; then the card's width as written.
+    expect(of(GATE)['--stair-card']).toBe(`${STAIRS.card.min}px`)
     expect(of(`${GATE} .lane-grid > .col`)).toEqual({ width: 'var(--stair-card)', 'max-width': 'none' })
-    for (const id of COLUMNS)
+    for (const id of COLUMNS) {
       expect(of(`${GATE} .lane-grid > [data-col="${id}"]`)['margin-left']).toBe(`var(--stair-${id}, 0px)`)
-    // The board's cards start at its gutter, as the heads do in the toolbar: a card's left edge is
-    // the gutter and its step, its head's left edge.
-    const steps = stairOffsets(COLUMNS.map(id => ({ id, left: HEAD_LEFT[id] ?? 0 })))
-    for (const id of COLUMNS) expect(GUTTER + (steps[id] ?? NaN)).toBe(HEAD_LEFT[id] ?? 0)
+      expect(of(`${GATE} .columns-head > [data-col="${id}"]`)['margin-left']).toBe(`var(--stair-${id}, 0px)`)
+      expect(of(`${GATE} .columns-head > [data-col="${id}"]`)['grid-row']).toBe(`var(--stair-row-${id}, 1)`)
+    }
+    // The heads' row starts at the toolbar's gutter, the board's cards at the board's: the same.
+    expect(app).toMatch(/\.toolbar \{[^}]*padding: 10px var\(--gutter\) 0;/)
+    expect(app).toMatch(/\.board \{ padding: 4px var\(--gutter\)/)
   })
 
   test('the board’s width as the page lays it out: the page’s, and the board’s less its gutters', () => {
@@ -334,7 +420,7 @@ describe('where each column’s cards start: under its head', () => {
       board(),
     )
     if (page?.kind === 'element') world.mount(page)
-    expect(roomNow()).toEqual({ page: 1180, room: 620 - 56, colMin: 136, gap: 12 })
+    expect(roomNow()).toEqual({ page: 1180, room: 620 - 56, colMin: 136, gap: 12, gutter: 28 })
   })
 })
 
@@ -370,7 +456,9 @@ describe('the cards’ order: lane by lane, by column, then each column’s own'
       'flex-direction': 'column',
       gap: 'var(--stair-gap, 8px)',
     })
-    expect(css).not.toMatch(/\border\s*:|-reverse|grid-row|grid-area/)
+    for (const r of rules.filter(r => r.selectors.some(sel => /\.(lane|col|board|card)\b/.test(sel))))
+      expect(Object.keys(r.decls).filter(d => /^(order|grid-row|grid-area|flex-flow)$/.test(d))).toEqual([])
+    expect(css).not.toContain('-reverse')
     // An empty column takes no row; while a card is dragged, the one it would land in opens there.
     expect(of(`${GATE} .lane-grid > .col:not(.has-cards)`).display).toBe('none')
     expect(of(`${GATE} body.dragging .lane-grid > .col.drop`).display).toBe('flex')
@@ -406,15 +494,28 @@ describe('the stylesheet', () => {
     expect(i).toBe(linked.indexOf('beside.css') - 1)
   })
 
-  test('the heads: one row, each as wide as its name and count, going sideways as far as the board does', () => {
-    expect(of(`${GATE} .columns-head`)).toEqual({ display: 'flex', overflow: 'hidden' })
-    expect(of(`${GATE} .columns-head > .col-head`)).toEqual({ flex: 'none' })
-    // Two digits' room: the steps stay put as a count grows.
+  test('the heads: each at its step in its row, going sideways with the board as far as its cards go', () => {
+    const row = `${GATE} .toolbar .columns-head`
+    expect(of(row)).toEqual({
+      'grid-template-columns': 'var(--stair-end, max-content)',
+      'row-gap': '4px',
+      overflow: 'hidden',
+    })
+    // beside.css (linked after) sets the heads' columns beside a side panel: this outranks it.
+    expect(read('beside.css')).toContain(':root[data-panel-side] .columns-head { grid-template-columns:')
+    expect(outranks(row, ':root[data-panel-side] .columns-head')).toBe(true)
+    expect(of(`${GATE} .columns-head > .col-head`)).toEqual({ 'grid-column': '1', 'justify-self': 'start' })
+    // Two digits' room: a head does not grow as a count does.
     expect(of(`${GATE} .col-head > .n`)).toEqual({ 'min-width': '2ch' })
-    // Past the last head, a card's width: the row can scroll as far as the last column's cards go.
-    expect(of(`${GATE} .columns-head::after`)).toEqual({ content: '""', flex: 'none', width: 'var(--stair-card)' })
     const board = readFileSync(join(WEB, 'src', 'components', 'Board.tsx'), 'utf8')
     expect(board).toContain('onScroll={headsAlong}')
+  })
+
+  test('Idle’s head peeks at the right edge of the heads’ row, with a ›, until the board scrolls to its column', () => {
+    const idle = of(`${GATE} .columns-head > [data-col="idle"]`)
+    expect([idle.position, idle.right]).toEqual(['sticky', '0'])
+    expect(of(`${GATE} .columns-head > [data-col="idle"]::after`).content).toBe('"›" / ""')
+    expect(STAIRS.aside).toBe('idle')
   })
 
   test('the board scrolls sideways, its lanes as wide as the widest one’s steps', () => {
@@ -485,7 +586,7 @@ describe('dragging a card in the staircase', () => {
     expect(over({ lane: null, inCards: false })).toBe(null)
   })
 
-  test('in the page: the staircase by the steps, the columns as before', () => {
+  test('in the page: the staircase by the steps in sight, the columns as before', () => {
     mountPage()
     const grabbed = card('a2')
     // Columns: the lane and column under the pointer, whatever the card's left edge.
@@ -493,17 +594,25 @@ describe('dragging a card in the staircase', () => {
     expect(dropPlaceAt(card('a4'), grabbed, 30)).toEqual({ lane: 'proj', column: 'done' })
     expect(dropPlaceAt(under('[data-cat="other"] .lane-head'), grabbed, 366)).toEqual({ lane: 'other', column: null })
     expect(dropPlaceAt(under('#columns-head [data-col="idle"]'), grabbed, 128)).toEqual({ lane: null, column: null })
-    // The staircase: over another lane's card at the step of Waiting on others, over its title, over a head.
+    // The staircase on the owner's iPad: steps at the gutter (28) and 53.5 apart, Idle's at 590, the board's edge.
     html().setAttribute('data-stairs', '')
-    expect(dropPlaceAt(card('b1'), grabbed, 236)).toEqual({ lane: 'other', column: 'ext' })
-    expect(dropPlaceAt(card('b2'), grabbed, 128)).toEqual({ lane: 'other', column: 'me' })
-    expect(dropPlaceAt(card('a4'), grabbed, 128)).toEqual({ lane: 'proj', column: 'me' })
+    documentStairs().sizes(stairsLayout(RU, OWNER))
+    expect(dropPlaceAt(card('b1'), grabbed, 28 + 107)).toEqual({ lane: 'other', column: 'ext' })
+    expect(dropPlaceAt(card('b2'), grabbed, 28 + 60)).toEqual({ lane: 'other', column: 'me' })
+    expect(dropPlaceAt(card('a4'), grabbed, 28 + 170)).toEqual({ lane: 'proj', column: 'done' })
+    // Idle is out of sight: a card pushed far right goes to Done, never where it cannot be seen.
+    expect(dropPlaceAt(card('a4'), grabbed, 450)).toEqual({ lane: 'proj', column: 'done' })
     expect(dropPlaceAt(under('[data-cat="other"] .lane-head'), grabbed, 366)).toEqual({ lane: 'other', column: null })
+    // Over Idle's head, peeking at the edge: Idle, in the card's own lane.
     expect(dropPlaceAt(under('#columns-head [data-col="idle"] .t'), grabbed, 128)).toEqual({
       lane: 'proj',
       column: 'idle',
     })
     expect(dropPlaceAt(null, grabbed, 128)).toEqual({ lane: null, column: null })
+    // The board scrolled to Idle (its heads with it): Idle's step in sight takes the card.
+    Object.defineProperty(el('#columns-head'), 'scrollLeft', { value: 400 })
+    expect(dropPlaceAt(card('b3'), grabbed, 28 + 562 - 400)).toEqual({ lane: 'other', column: 'idle' })
+    expect(dropPlaceAt(card('b3'), grabbed, 28 + 160.5 - 400)).toEqual({ lane: 'other', column: 'done' })
   })
 
   test('near the board’s left or right edge it scrolls the board sideways, 14px a move, while it can go', () => {
@@ -523,7 +632,7 @@ describe('dragging a card in the staircase', () => {
     let scrolled = 0
     Object.defineProperties(boardEl, {
       scrollWidth: { value: 1000 },
-      clientWidth: { value: 620 },
+      clientWidth: { value: 590 },
       scrollLeft: {
         get: () => scrolled,
         set: (v: number) => {
@@ -532,11 +641,12 @@ describe('dragging a card in the staircase', () => {
       },
     })
     // A board with room: as before, never.
-    scrollSideways(610)
+    scrollSideways(580)
     expect(scrolled).toBe(0)
+    // Toward Idle, past the right edge.
     html().setAttribute('data-stairs', '')
-    scrollSideways(610)
-    scrollSideways(610)
+    scrollSideways(580)
+    scrollSideways(580)
     expect(scrolled).toBe(28)
     scrollSideways(300)
     expect(scrolled).toBe(28)

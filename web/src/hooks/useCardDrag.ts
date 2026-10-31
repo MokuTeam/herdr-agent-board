@@ -102,12 +102,25 @@ function placeAt(el: Element | null): DropPlace {
   return { lane: lane?.dataset.cat ?? null, column: col?.dataset.col ?? null }
 }
 
-/** The column heads' left edges, in the window (the staircase's steps). */
-const headEdges = () =>
-  [...(document.getElementById('columns-head')?.querySelectorAll<HTMLElement>('.col-head') ?? [])].map(head => ({
-    id: head.dataset.col ?? '',
-    left: head.getBoundingClientRect().left,
-  }))
+/**
+ * The staircase's steps in sight, in the window: where each column's cards start (--stair-<column>,
+ * from the left edge of the heads' row, which goes sideways with the board), those starting before
+ * the board's right edge. So Idle, past it, takes a card once the board scrolls to it (or over its
+ * head, peeking at the row's edge): a card never lands where it cannot be seen.
+ */
+function stepEdges(): { id: string; left: number }[] {
+  const heads = document.getElementById('columns-head')
+  if (!heads) return []
+  const origin = heads.getBoundingClientRect().left - (heads.scrollLeft || 0)
+  const right = document.getElementById('board')?.getBoundingClientRect().right ?? Number.POSITIVE_INFINITY
+  const style = document.documentElement.style
+  return [...heads.querySelectorAll<HTMLElement>('.col-head')]
+    .map(head => {
+      const id = head.dataset.col ?? ''
+      return { id, left: origin + (Number.parseFloat(style.getPropertyValue(`--stair-${id}`)) || 0) }
+    })
+    .filter(step => step.left < right)
+}
 
 /**
  * The lane and column a dragged `card` is over, the pointer over `el` and the card's left edge at
@@ -122,7 +135,7 @@ export function dropPlaceAt(el: Element | null, card: Element, left: number): Dr
     head: el?.closest<HTMLElement>('#columns-head .col-head')?.dataset.col ?? null,
     own: card.closest<HTMLElement>('.lane')?.dataset.cat ?? null,
     left,
-    heads: headEdges(),
+    heads: stepEdges(),
   })
 }
 
