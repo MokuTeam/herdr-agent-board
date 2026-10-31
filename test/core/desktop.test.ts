@@ -74,6 +74,9 @@ test('Chrome: headed, its own profile folder, DevTools on its pipe and no port, 
   expect(a.some(x => x.startsWith('--remote-debugging-port') || x.startsWith('--remote-debugging-address'))).toBe(false)
   expect(a).toContain('--password-store=basic')
   expect(a.some(x => x.startsWith('--headless'))).toBe(false)
+  // a wheel step one frame on the display, not a smooth scroll's dozen; pages as they are (no reduced motion)
+  expect(a).toContain('--disable-smooth-scrolling')
+  expect(a.some(x => x.includes('reduced-motion'))).toBe(false)
   expect(a.slice(-2)).toEqual(['--no-sandbox', 'about:blank'])
 })
 

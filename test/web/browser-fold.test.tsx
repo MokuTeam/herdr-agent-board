@@ -188,6 +188,8 @@ const key = (el: MiniNode | undefined, fields: Record<string, unknown>, type = '
   return e
 }
 const settle = () => new Promise(done => setTimeout(done, 15))
+/** The next frame (the test's page draws none: a moment), when the moves and wheel steps that wait go (models/desk-input.ts InputQueue). */
+const frame = () => new Promise(done => setTimeout(done, 25))
 const within = (el: MiniNode | undefined, parent: MiniNode | undefined) => !!el && !!parent?.contains(el)
 
 /** The display's hello: RFB 3.8, no password, a 4 × 2 screen (or `width` × `height`). */
@@ -399,6 +401,33 @@ test('full size over the board on the same socket: Esc or × brings it back, × 
   expect(full()).toBeUndefined()
   expect(socket?.closed).toBe(true)
   expect(FakeSocket.made).toHaveLength(1)
+})
+
+test('the link’s meter in the picture’s corner, folded and full size: round trip, frames a second, quality; gone with the view', () => {
+  render({ desktop: desktop(), open: true })
+  const [socket] = FakeSocket.made
+  const meter = () => byClass('desk-meter')
+  // not live yet: there, but empty (and hidden)
+  expect(meter()?.textContent ?? '').toBe('')
+  handshake(socket)
+  expect(meter()?.textContent).toBe('– ms · 0 fps · q6')
+  expect(meter()?.getAttribute('aria-hidden')).toBe('true')
+  expect(meter()?.getAttribute('title')).toBe(
+    'Round trip to the server · frames a second · picture quality (JPEG, 0–9)',
+  )
+  expect(meter()?.parentNode).toBe(canvas()?.parentNode)
+  click(desk('full'))
+  expect(within(meter(), byClass('desk-full'))).toBe(true)
+  expect(meter()?.parentNode).toBe(canvas()?.parentNode)
+  click(desk('close', byClass('desk-full')))
+  expect(meter()?.parentNode).toBe(canvas()?.parentNode)
+  click(
+    desk(
+      'close',
+      find(el => el.localName === 'section'),
+    ),
+  )
+  expect(meter()).toBeUndefined()
 })
 
 test('control taken here and the view left: it is given back', async () => {
@@ -729,7 +758,7 @@ const pointerAt = (mask: number, x: number, y: number) => [5, mask, x >> 8, x & 
 const step = (bit: number, x: number, y: number) => [pointerAt(bit, x, y), pointerAt(0, x, y)]
 const holdOn = () => new Promise(done => setTimeout(done, HOLD_MS + 40))
 
-test('a mouse held still and dragged goes as it always did, the button down at once; a pen over the picture moves its pointer', async () => {
+test('a mouse held still and dragged goes as it always did, the button down at once, its moves in a frame as their last; a pen over the picture moves its pointer', async () => {
   const { socket } = await controlled(800, 400)
   const mouse = { button: 0, pointerId: 1, pointerType: 'mouse' }
   fire(canvas(), 'pointerdown', { ...mouse, clientX: 100, clientY: 50, buttons: 1 })
@@ -741,9 +770,11 @@ test('a mouse held still and dragged goes as it always did, the button down at o
   fire(canvas(), 'pointerup', { ...mouse, button: 2, clientX: 200, clientY: 150, buttons: 0 })
   fire(canvas(), 'wheel', { clientX: 200, clientY: 150, deltaY: -50, deltaMode: 0 })
   fire(canvas(), 'pointermove', { clientX: 210, clientY: 160, pointerId: 2, pointerType: 'pen', buttons: 0 })
+  // the wheel's step and the pen's move wait for the frame
+  await frame()
   expect(socket?.sent).toEqual([
     pointerAt(1, 200, 100),
-    pointerAt(1, 200, 300),
+    // the two moves in one frame: the last, before the let go
     pointerAt(1, 400, 300),
     pointerAt(0, 400, 300),
     pointerAt(4, 400, 300),
@@ -822,6 +853,7 @@ test('two fingers’ swipe scrolls it too, from their middle where they went dow
   finger('pointermove', 2, 250, 70)
   finger('pointermove', 1, 150, 40)
   finger('pointermove', 2, 250, 40)
+  await frame()
   expect(socket?.sent).toEqual([...step(16, 400, 200), ...step(16, 400, 200)])
   // one lifted: the other's 30 px more, a third step
   finger('pointerup', 2, 250, 40)
@@ -844,12 +876,8 @@ test('a finger held still a moment presses the button where it is: what it moves
   finger('pointermove', 1, 150, 50)
   finger('pointermove', 1, 200, 75)
   finger('pointerup', 1, 200, 75)
-  expect(socket?.sent).toEqual([
-    pointerAt(1, 200, 100),
-    pointerAt(1, 300, 100),
-    pointerAt(1, 400, 150),
-    pointerAt(0, 400, 150),
-  ])
+  // its two moves in one frame: the last, before the let go
+  expect(socket?.sent).toEqual([pointerAt(1, 200, 100), pointerAt(1, 400, 150), pointerAt(0, 400, 150)])
   expect(canvas()?.hasAttribute('data-held')).toBe(false)
   // the screen's keyboard, as after a tap
   expect(dom.document.activeElement).toBe(byClass('desk-keys') as MiniElement)

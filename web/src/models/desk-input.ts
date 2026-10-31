@@ -156,3 +156,100 @@ export function zoomTransform(zoom: Zoom): string {
   const n = (v: number) => Number(v.toFixed(4))
   return `translate(${n(zoom.fx * 100)}%, ${n(zoom.fy * 100)}%) scale(${n(zoom.z)})`
 }
+
+/** Where the display's mouse and keys go (models/rfb.ts RfbClient). */
+export interface DeskSink {
+  pointer(x: number, y: number, mask: number): void
+  key(keysym: number, down: boolean): void
+}
+
+type Held = { x: number; y: number; mask: number; steps?: { x: number; y: number } }
+
+/**
+ * What goes to the display, a frame at a time: the pointer's moves (a mouse, a pen over the
+ * picture, a held finger's drag) wait for the next frame (`frame`), and only the last of them goes;
+ * the wheel's steps at a place (a finger's swipe, the wheel) are summed and go then too. A button
+ * pressed or let go and a key go at once, after what waits: nothing is held back longer or sent
+ * out of its order. A 120 Hz finger or trackpad sends no more moves than the screen shows.
+ */
+export class InputQueue {
+  private held: Held[] = []
+  /** The buttons as last given (sent, or waiting). */
+  private mask = 0
+  private waiting = false
+
+  constructor(
+    private readonly sink: DeskSink,
+    private readonly frame: (fn: () => void) => void,
+  ) {}
+
+  /** The pointer at (x, y) with these buttons: a move waits for the frame; a button changed goes at once. */
+  pointer(x: number, y: number, mask: number): void {
+    if (mask !== this.mask) {
+      this.flush()
+      this.mask = mask
+      this.sink.pointer(x, y, mask)
+      return
+    }
+    const last = this.held.at(-1)
+    if (last && !last.steps) {
+      last.x = x
+      last.y = y
+    } else this.held.push({ x, y, mask })
+    this.later()
+  }
+
+  /** A wheel step (WHEEL_UP, _DOWN, _LEFT, _RIGHT) at (x, y) with `mask` held: summed with the frame's others there. */
+  wheel(x: number, y: number, mask: number, step: number): void {
+    if (mask !== this.mask) {
+      this.flush()
+      this.mask = mask
+    }
+    let last = this.held.at(-1)
+    if (!last?.steps || last.x !== x || last.y !== y) {
+      last = { x, y, mask, steps: { x: 0, y: 0 } }
+      this.held.push(last)
+    }
+    const steps = last.steps as { x: number; y: number }
+    if (step === WHEEL_UP) steps.y--
+    else if (step === WHEEL_DOWN) steps.y++
+    else if (step === WHEEL_LEFT) steps.x--
+    else if (step === WHEEL_RIGHT) steps.x++
+    this.later()
+  }
+
+  /** A key down or up: at once, after what waits. */
+  key(keysym: number, down: boolean): void {
+    this.flush()
+    this.sink.key(keysym, down)
+  }
+
+  /** What waits, sent now. */
+  flush(): void {
+    const held = this.held
+    this.held = []
+    for (const h of held) {
+      if (!h.steps) {
+        this.sink.pointer(h.x, h.y, h.mask)
+        continue
+      }
+      const press = (n: number, back: number, on: number) => {
+        for (let i = 0; i < Math.abs(n); i++) {
+          this.sink.pointer(h.x, h.y, h.mask | (n < 0 ? back : on))
+          this.sink.pointer(h.x, h.y, h.mask)
+        }
+      }
+      press(h.steps.y, WHEEL_UP, WHEEL_DOWN)
+      press(h.steps.x, WHEEL_LEFT, WHEEL_RIGHT)
+    }
+  }
+
+  private later(): void {
+    if (this.waiting) return
+    this.waiting = true
+    this.frame(() => {
+      this.waiting = false
+      this.flush()
+    })
+  }
+}

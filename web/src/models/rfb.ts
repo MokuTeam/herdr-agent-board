@@ -44,6 +44,8 @@ export interface RfbEvents {
   failed?(why: RfbFailure): void
   /** An update all read and handed to the screen. */
   updated?(): void
+  /** The answer to a ping (RfbClient.ping): the round trip to the server, in ms. */
+  pong?(ms: number): void
 }
 
 export type RfbState = 'handshake' | 'live' | 'failed'
@@ -90,6 +92,8 @@ const SERVER_FENCE = 248
 /** A fence's flags: the other end asks for an answer; what before it, and what after it, must be done first. */
 const FENCE_REQUEST = 0x80000000
 const FENCE_BLOCK = 0b11
+/** A ping's fence says so in its first two bytes ("pp"), then its number. */
+const PING = 0x70
 /** A display larger than this on a side is not one Xvnc makes: the client stops instead of making a canvas that big. */
 const MAX_SIDE = 8192
 /** Tight's data shorter than this comes as it is, not through zlib. */
@@ -244,6 +248,10 @@ export class RfbClient {
   private received = 0
   /** The update being read: when its first piece came, and where that piece ended. */
   private started = { at: 0, end: 0 }
+  /** The server answers fences (it sent one); the client's pings out, by number, when each went. */
+  private fences = false
+  private readonly pings = new Map<number, number>()
+  private pinged = 0
 
   constructor(
     private readonly send: (bytes: Uint8Array<ArrayBuffer>) => void,
@@ -281,6 +289,31 @@ export class RfbClient {
     if (this.state !== 'live') return
     const k = keysym >>> 0
     this.send(Uint8Array.of(4, down ? 1 : 0, 0, 0, k >>> 24, (k >>> 16) & 255, (k >>> 8) & 255, k & 255))
+  }
+
+  /** JPEG's quality asked for now (0 to 9). */
+  get jpegQuality(): number {
+    return this.quality
+  }
+
+  /** The link's speed as updates came (Mbit/s, smoothed), 0 before any told it. */
+  get linkMbps(): number {
+    return this.mbps
+  }
+
+  /**
+   * A ping: a fence of the client's own, which the server answers in its turn, after what it was
+   * sending (`pong` then has the round trip). False where the server does no fences (it has not
+   * sent one), or before the handshake is through.
+   */
+  ping(): boolean {
+    if (this.state !== 'live' || !this.fences) return false
+    const n = ++this.pinged & 0xffff
+    this.pings.set(n, this.now())
+    // only the last few wait for their answer
+    for (const old of this.pings.keys()) if (this.pings.size > 8) this.pings.delete(old)
+    this.send(Uint8Array.of(SERVER_FENCE, 0, 0, 0, 0x80, 0, 0, 0, 4, PING, PING, n >> 8, n & 255))
+    return true
   }
 
   /**
@@ -476,12 +509,19 @@ export class RfbClient {
         if (p.length < 9 + n) return false
         const flags = p.u32(4)
         const fence = p.take(9 + n)
+        this.fences = true
         // Answered at once: what came before it is read (and a picture drawn in its order).
         if (flags & FENCE_REQUEST) {
           const answer = new Uint8Array(9 + n)
           answer.set(fence)
           new DataView(answer.buffer).setUint32(4, flags & FENCE_BLOCK)
           this.send(answer)
+        } else if (n === 4 && fence[9] === PING && fence[10] === PING) {
+          // the answer to a ping
+          const k = ((fence[11] as number) << 8) | (fence[12] as number)
+          const sent = this.pings.get(k)
+          this.pings.delete(k)
+          if (sent !== undefined) this.events.pong?.(this.now() - sent)
         }
         return true
       }

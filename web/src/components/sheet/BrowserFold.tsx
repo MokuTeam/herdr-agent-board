@@ -72,7 +72,9 @@ export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0
   useLayoutEffect(() => {
     const host = full ? fullHost : foldHost
     if (host && view.canvas && view.canvas.parentNode !== host) host.appendChild(view.canvas)
-  }, [view.canvas, full, foldHost, fullHost])
+    // the link's meter in its corner, with it
+    if (host && view.meter && view.meter.parentNode !== host) host.appendChild(view.meter)
+  }, [view.canvas, view.meter, full, foldHost, fullHost])
   // Folded, or the panel closed: full size goes too.
   useEffect(() => {
     if (!on) setFull(false)

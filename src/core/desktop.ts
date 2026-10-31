@@ -376,7 +376,9 @@ export function xvncArgs(o: { display: number; socket: string; auth: string; nam
  * Chrome's arguments: headed on the display, its own profile folder, its DevTools on the pipe its
  * holder gives it (fds 3 and 4: no port any account could reach, services/cdp-pipe.ts), its window
  * over the whole screen (there is no window manager), no first-run questions, no keyring (none on
- * a server), /tmp for its shared memory.
+ * a server), /tmp for its shared memory. No smooth scrolling: a wheel step (the owner's swipe on
+ * the picture) is one frame on the display, not an animation of a dozen sent over the owner's link;
+ * what a page shows stays as it was.
  */
 export function chromeArgs(o: { profileDir: string; extra?: readonly string[] }): string[] {
   return [
@@ -387,6 +389,7 @@ export function chromeArgs(o: { profileDir: string; extra?: readonly string[] })
     '--password-store=basic',
     '--disable-dev-shm-usage',
     '--hide-crash-restore-bubble',
+    '--disable-smooth-scrolling',
     '--window-position=0,0',
     `--window-size=${SCREEN.width},${SCREEN.height}`,
     ...(o.extra ?? []),

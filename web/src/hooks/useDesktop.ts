@@ -9,10 +9,12 @@
 // pinch zooms the picture in the board.
 import { useEffect, useRef, useState } from 'react'
 import type { Translator } from '../../../src/core/types.ts'
+import { pageLog } from '../api/client.ts'
 import { desktopSocketUrl } from '../api/desktop.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import {
   buttonMask,
+  InputQueue,
   keysymOf,
   NO_ZOOM,
   pinched,
@@ -27,6 +29,7 @@ import {
   type Zoom,
   zoomTransform,
 } from '../models/desk-input.ts'
+import { DeskMeter } from '../models/desk-meter.ts'
 import { canvasScreen } from '../models/desk-screen.ts'
 import { RfbClient, type RfbFailure } from '../models/rfb.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
@@ -40,6 +43,8 @@ export interface DeskView {
   why: string
   /** The display's picture while on, for the fold or full size to put where it shows. */
   canvas: HTMLCanvasElement | null
+  /** The link's round trip, frames a second and JPEG's quality, for the picture's corner (with the canvas). */
+  meter: HTMLElement | null
   /** Connect again after it closed or failed. */
   retry(): void
 }
@@ -72,6 +77,12 @@ const BACKSPACE = 0xff08
 
 /** A finger or a pen, not a mouse: the picture brings up no keyboard on screen for it. */
 const touching = (e: PointerEvent): boolean => e.pointerType === 'touch' || e.pointerType === 'pen'
+
+/** The next frame the page draws (a moment, where it draws none). */
+const nextFrame = (fn: () => void): void => {
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => fn())
+  else setTimeout(fn, 16)
+}
 
 /** A finger held this long (ms) without moving presses the button: what it moves then drags. */
 export const HOLD_MS = 500
@@ -111,6 +122,8 @@ export function attachInput(
   controlling: () => boolean,
   label: () => string = () => '',
 ): DeskInput {
+  // moves and wheel steps a frame at a time; buttons and keys at once (models/desk-input.ts)
+  const out = new InputQueue(rfb, nextFrame)
   const keys = new Map<string, number>()
   let mask = 0
   let last = { x: 0, y: 0 }
@@ -125,18 +138,18 @@ export function attachInput(
     if (!p) return
     last = p
     mask = buttonMask(e.buttons)
-    rfb.pointer(p.x, p.y, mask)
+    out.pointer(p.x, p.y, mask)
   }
   const release = () => {
-    for (const keysym of keys.values()) rfb.key(keysym, false)
+    for (const keysym of keys.values()) out.key(keysym, false)
     keys.clear()
-    if (mask) rfb.pointer(last.x, last.y, 0)
+    if (mask) out.pointer(last.x, last.y, 0)
     mask = 0
   }
   const press = (keysyms: number[]) => {
     for (const keysym of keysyms) {
-      rfb.key(keysym, true)
-      rfb.key(keysym, false)
+      out.key(keysym, true)
+      out.key(keysym, false)
     }
   }
   const keyDown = (e: Event) => {
@@ -149,7 +162,7 @@ export function attachInput(
     if (keysym === null) return
     e.preventDefault()
     keys.set(k.code || k.key, keysym)
-    rfb.key(keysym, true)
+    out.key(keysym, true)
   }
   const keyUp = (e: Event) => {
     const k = e as KeyboardEvent
@@ -159,7 +172,7 @@ export function attachInput(
     if (keysym === undefined) return
     e.preventDefault()
     keys.delete(id)
-    rfb.key(keysym, false)
+    out.key(keysym, false)
   }
   const paste = (e: Event) => {
     e.preventDefault()
@@ -269,7 +282,7 @@ export function attachInput(
     canvas.setAttribute('data-held', '')
     last = p
     mask = 1
-    rfb.pointer(p.x, p.y, mask)
+    out.pointer(p.x, p.y, mask)
   }
   // A tap: a click where the finger went down; one soon after and near the one before, where that
   // one clicked (a finger is not so exact: the display sees a double click).
@@ -281,8 +294,8 @@ export function attachInput(
     tapped = { at: when, client: start, point: q }
     last = q
     mask = 0
-    rfb.pointer(q.x, q.y, 1)
-    rfb.pointer(q.x, q.y, 0)
+    out.pointer(q.x, q.y, 1)
+    out.pointer(q.x, q.y, 0)
   }
   // What the fingers' middle went, at the picture's scale, as the wheel's steps where the swipe
   // began: the page follows the finger (one going up shows what is under: the wheel down).
@@ -301,8 +314,7 @@ export function attachInput(
     const steps = (along: 'x' | 'y', back: number, on: number) => {
       while (Math.abs(swept[along]) >= WHEEL_PX / 2) {
         const bit = swept[along] > 0 ? back : on
-        rfb.pointer(p.x, p.y, mask | bit)
-        rfb.pointer(p.x, p.y, mask)
+        out.wheel(p.x, p.y, mask, bit)
         swept[along] -= Math.sign(swept[along]) * WHEEL_PX
       }
     }
@@ -354,7 +366,7 @@ export function attachInput(
       const p = e.pointerId === holder ? at(e) : null
       if (!p) return
       last = p
-      rfb.pointer(p.x, p.y, mask)
+      out.pointer(p.x, p.y, mask)
       return
     }
     if (gesture === 'wait' && apart(finger, start) > SLOP) {
@@ -387,7 +399,7 @@ export function attachInput(
       const p = (cancelled ? null : at(e)) ?? last
       last = p
       mask = 0
-      rfb.pointer(p.x, p.y, 0)
+      out.pointer(p.x, p.y, 0)
       canvas.removeAttribute('data-held')
       gesture = 'over'
       if (!cancelled) keyboard()
@@ -395,6 +407,8 @@ export function attachInput(
       if (zoom.z < ZOOM_SNAP) zoomTo(NO_ZOOM)
       gesture = 'over'
     } else if (fingers.size) was = middle()
+    // all lifted: a swipe's last steps go now, not a frame later
+    if (!fingers.size) out.flush()
   }
   /** The fingers forgotten, the button up and the picture as it fits (control given back, the canvas gone). */
   const unfinger = () => {
@@ -445,8 +459,7 @@ export function attachInput(
       if (!p) return
       wheel += w.deltaMode === 0 ? w.deltaY : w.deltaY * 40
       while (Math.abs(wheel) >= WHEEL_STEP) {
-        rfb.pointer(p.x, p.y, mask | (wheel < 0 ? WHEEL_UP : WHEEL_DOWN))
-        rfb.pointer(p.x, p.y, mask)
+        out.wheel(p.x, p.y, mask, wheel < 0 ? WHEEL_UP : WHEEL_DOWN)
         wheel -= Math.sign(wheel) * WHEEL_STEP
       }
     },
@@ -485,7 +498,10 @@ export function attachInput(
   }
 }
 
-const OFF = { state: 'off' as DeskState, why: '', canvas: null }
+const OFF = { state: 'off' as DeskState, why: '', canvas: null, meter: null }
+/** A ping every this many seconds, and the board's log a line every this many. */
+const PING_S = 2
+const LOG_S = 60
 
 export function useDesktop(key: string, on: boolean, controlling: boolean): DeskView {
   const t = useLatest(useT())
@@ -501,9 +517,26 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
     const canvas = document.createElement('canvas')
     canvas.setAttribute('class', 'desk-screen')
     canvas.setAttribute('tabindex', '0')
+    const meter = document.createElement('span')
+    meter.setAttribute('class', 'desk-meter')
+    meter.setAttribute('aria-hidden', 'true')
+    meter.setAttribute('title', t.current('desk.meter'))
+    const link = new DeskMeter()
     const socket = new WebSocket(desktopSocketUrl(key, token))
     socket.binaryType = 'arraybuffer'
     let live = false
+    // once live, each second: the corner; a ping every PING_S, the board's log a line every LOG_S
+    let seconds = 0
+    let ticking: ReturnType<typeof setInterval> | undefined
+    const tick = () => {
+      seconds++
+      link.second()
+      meter.textContent = link.text(rfb.jpegQuality)
+      if (seconds % PING_S === 0) rfb.ping()
+      if (seconds % LOG_S) return
+      const line = link.minute({ key, quality: rfb.jpegQuality, mbps: rfb.linkMbps })
+      if (line) pageLog(line)
+    }
     const rfb = new RfbClient(
       bytes => {
         if (socket.readyState === OPEN) socket.send(bytes)
@@ -512,23 +545,34 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
       {
         live() {
           live = true
-          setView({ state: 'live', why: '', canvas })
+          meter.textContent = link.text(rfb.jpegQuality)
+          ticking = setInterval(tick, 1000)
+          setView({ state: 'live', why: '', canvas, meter })
         },
         failed(why) {
-          setView({ state: 'failed', why: whyText(why, t.current), canvas })
+          setView({ state: 'failed', why: whyText(why, t.current), canvas, meter })
           socket.close()
         },
+        updated: () => link.frame(),
+        pong: ms => link.pong(ms),
       },
     )
     socket.onmessage = e => {
       if (e.data instanceof ArrayBuffer) rfb.receive(new Uint8Array(e.data))
     }
-    socket.onclose = () =>
+    socket.onclose = () => {
+      clearInterval(ticking)
       setView(was =>
         was.state === 'failed'
           ? was
-          : { state: live ? 'closed' : 'failed', why: t.current(live ? 'desk.closed' : 'desk.unreachable'), canvas },
+          : {
+              state: live ? 'closed' : 'failed',
+              why: t.current(live ? 'desk.closed' : 'desk.unreachable'),
+              canvas,
+              meter,
+            },
       )
+    }
     const keys = attachInput(
       canvas,
       rfb,
@@ -536,8 +580,10 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
       () => t.current('desk.title'),
     )
     input.current = keys
-    setView({ state: 'connecting', why: '', canvas })
+    setView({ state: 'connecting', why: '', canvas, meter })
     return () => {
+      clearInterval(ticking)
+      meter.parentNode?.removeChild(meter)
       keys.detach()
       input.current = null
       socket.onmessage = null

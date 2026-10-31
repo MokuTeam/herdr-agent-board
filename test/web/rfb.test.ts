@@ -10,7 +10,18 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { constants, deflateSync } from 'node:zlib'
 import { rfbInputFilter } from '../../src/core/desktop.ts'
-import { buttonMask, keysymOf, screenPoint, textKeysyms } from '../../web/src/models/desk-input.ts'
+import {
+  buttonMask,
+  InputQueue,
+  keysymOf,
+  screenPoint,
+  textKeysyms,
+  WHEEL_DOWN,
+  WHEEL_LEFT,
+  WHEEL_RIGHT,
+  WHEEL_UP,
+} from '../../web/src/models/desk-input.ts'
+import { DeskMeter } from '../../web/src/models/desk-meter.ts'
 import { RfbClient, type RfbFailure, type RfbOptions, type RfbScreen } from '../../web/src/models/rfb.ts'
 
 const ascii = (text: string) => new TextEncoder().encode(text)
@@ -35,6 +46,7 @@ function world(options: RfbOptions = {}) {
   const jpegs: Uint8Array[] = []
   /** Each put's pixels, as RGBA. */
   const pixels: number[][] = []
+  const pongs: number[] = []
   let live = ''
   let updates = 0
   const screen: RfbScreen = {
@@ -59,10 +71,11 @@ function world(options: RfbOptions = {}) {
       },
       failed: why => failures.push(why),
       updated: () => updates++,
+      pong: ms => pongs.push(ms),
     },
     options,
   )
-  return { client, sent, drawn, failures, jpegs, pixels, live: () => live, updates: () => updates }
+  return { client, sent, drawn, failures, jpegs, pixels, pongs, live: () => live, updates: () => updates }
 }
 
 /** A client through the 3.8 handshake to a display named "agent" (4 × 2), what it sent so far taken. */
@@ -549,7 +562,8 @@ describe('updates as they come (Xvnc’s continuous updates and fences)', () => 
     t = 1000
     w.client.receive(pixels.subarray(100))
     w.client.receive(bytes(update(1), rect(0, 0, 300, 300, -223)))
-    expect(w.sent.map(m => m[0])).toEqual([...ascii('R'), 1, 1, 0, 2, 3, 248, 150, 248, 2, 150])
+    expect(w.client.ping()).toBe(true)
+    expect(w.sent.map(m => m[0])).toEqual([...ascii('R'), 1, 1, 0, 2, 3, 248, 150, 248, 2, 150, 248])
     const all = Uint8Array.from(w.sent.flat())
     expect([...(rfbInputFilter()(all, false) ?? [])]).toEqual([...all])
   })
@@ -598,6 +612,126 @@ describe('the link’s speed', () => {
     const sharp = connected({ now: () => clock.t, quality: 8 }, 200, 200)
     slowly(sharp, clock, 0, 1000)
     expect(qualityAsked(sharp)).toEqual([4])
+  })
+})
+
+describe('the round trip (pings)', () => {
+  test('none before the server has sent a fence; then a fence of its own, whose answer is the round trip', () => {
+    const clock = { t: 0 }
+    const w = world({ now: () => clock.t })
+    w.client.receive(ascii('RFB 003.008\n'))
+    expect(w.client.ping()).toBe(false)
+    const c = connected({ now: () => clock.t })
+    // live, but the server has not said it does fences
+    expect(c.client.ping()).toBe(false)
+    c.client.receive(bytes(248, 0, 0, 0, u32(0x80000000), 1, 0))
+    c.sent.length = 0
+    clock.t = 1000
+    expect(c.client.ping()).toBe(true)
+    // asking for an answer, four bytes: "pp" and its number
+    expect(c.sent).toEqual([[248, 0, 0, 0, ...u32(0x80000000), 4, 0x70, 0x70, 0, 1]])
+    clock.t = 1042
+    // the server's answer: the same, not asking
+    c.client.receive(bytes(248, 0, 0, 0, u32(0), 4, 0x70, 0x70, 0, 1))
+    expect(c.pongs).toEqual([42])
+    // an answer to no ping of its own, or the same again: nothing
+    c.client.receive(bytes(248, 0, 0, 0, u32(0), 4, 0x70, 0x70, 0, 9))
+    c.client.receive(bytes(248, 0, 0, 0, u32(0), 4, 0x70, 0x70, 0, 1))
+    expect(c.pongs).toEqual([42])
+    expect(c.sent).toHaveLength(1)
+    expect(c.client.jpegQuality).toBe(6)
+  })
+})
+
+describe('the link’s meter', () => {
+  test('the corner: the round trip (the median of the last five), the last second’s frames, the quality', () => {
+    const m = new DeskMeter()
+    expect(m.text(6)).toBe('– ms · 0 fps · q6')
+    for (const ms of [40, 300, 44, 41, 43]) m.pong(ms)
+    for (let i = 0; i < 12; i++) m.frame()
+    m.second()
+    expect(m.text(4)).toBe('43 ms · 12 fps · q4')
+    // only the last five count: the slow one gone
+    m.pong(50)
+    expect(m.rtt()).toBe(44)
+    m.second()
+    expect(m.fps).toBe(0)
+  })
+
+  test('a line a minute for the board’s log: the round trip’s median, the frames’ median while there were any; none for a still minute', () => {
+    const m = new DeskMeter()
+    for (const ms of [30, 35, 33, 90]) m.pong(ms)
+    for (const n of [10, 0, 20, 30]) {
+      for (let i = 0; i < n; i++) m.frame()
+      m.second()
+    }
+    expect(m.minute({ key: 'a b', quality: 6, mbps: 14.26 })).toBe(
+      'browser view a b: rtt median 34 ms (min 30, max 90, 4 pings), fps median 20 (max 30, 3 s with frames), JPEG q6, link 14.3 Mbit/s',
+    )
+    // the next minute starts empty: nothing in it, no line
+    m.second()
+    expect(m.minute({ key: 'a b', quality: 6, mbps: 0 })).toBeNull()
+  })
+})
+
+describe('input a frame at a time', () => {
+  /** A queue whose frame comes when the test says, and what it sent. */
+  function queue() {
+    const sent: string[] = []
+    const frames: (() => void)[] = []
+    const q = new InputQueue(
+      { pointer: (x, y, m) => sent.push(`p ${x},${y} ${m}`), key: (k, d) => sent.push(`k ${k} ${d ? 'down' : 'up'}`) },
+      fn => frames.push(fn),
+    )
+    const frame = () => {
+      for (const fn of frames.splice(0)) fn()
+    }
+    return { q, sent, frame }
+  }
+
+  test('moves wait for the frame, and only the last goes; a press, a let go and a key go at once, after what waits', () => {
+    const { q, sent, frame } = queue()
+    q.pointer(1, 1, 0)
+    q.pointer(2, 2, 0)
+    q.pointer(3, 3, 0)
+    expect(sent).toEqual([])
+    frame()
+    expect(sent).toEqual(['p 3,3 0'])
+    // a drag: the press at once, its moves a frame at a time, the let go at once after the last move
+    q.pointer(3, 3, 1)
+    q.pointer(4, 4, 1)
+    q.pointer(5, 5, 1)
+    q.pointer(5, 5, 0)
+    q.key(0x61, true)
+    q.key(0x61, false)
+    expect(sent.slice(1)).toEqual(['p 3,3 1', 'p 5,5 1', 'p 5,5 0', 'k 97 down', 'k 97 up'])
+    // nothing waits: the frame sends nothing more
+    frame()
+    expect(sent).toHaveLength(6)
+  })
+
+  test('wheel steps at a place are summed (up and down too); a move between them keeps its place in the order', () => {
+    const { q, sent, frame } = queue()
+    q.wheel(5, 5, 0, WHEEL_DOWN)
+    q.wheel(5, 5, 0, WHEEL_DOWN)
+    q.wheel(5, 5, 0, WHEEL_UP)
+    q.wheel(5, 5, 0, WHEEL_DOWN)
+    q.wheel(5, 5, 0, WHEEL_RIGHT)
+    q.pointer(6, 6, 0)
+    q.wheel(6, 6, 0, WHEEL_LEFT)
+    expect(sent).toEqual([])
+    frame()
+    expect(sent).toEqual([
+      ...['p 5,5 16', 'p 5,5 0', 'p 5,5 16', 'p 5,5 0'],
+      ...['p 5,5 64', 'p 5,5 0'],
+      'p 6,6 0',
+      ...['p 6,6 32', 'p 6,6 0'],
+    ])
+    // with a button held, the steps keep it
+    q.pointer(6, 6, 1)
+    q.wheel(6, 6, 1, WHEEL_UP)
+    q.flush()
+    expect(sent.slice(-3)).toEqual(['p 6,6 1', 'p 6,6 9', 'p 6,6 1'])
   })
 })
 
