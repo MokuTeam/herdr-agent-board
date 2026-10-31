@@ -9,6 +9,12 @@
 .backup-status .access-status { margin-bottom: 8px; }
 .backup-problem { margin-bottom: 6px; }
 .backup-state { margin: 0 0 6px; color: var(--label-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+/* The fields (.path-add, app.css: no fill, no outline, a fill only while focused) lay on the
+   panel's own color and showed no place to type, in the dark theme above all (#283). They take the
+   fill the Login fields' .access-input has (--fill-2), a ring in the accent on focus as the board's
+   other fields have, and keep their monospace face. */
+.backup-body .path-add { background: var(--fill-2); }
+.backup-body .path-add:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
 .backup-wide.access-field { padding-left: 6px; }
 .backup-wide .path-add { flex: 1; }
 .backup-note { margin: 0 0 8px; font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
