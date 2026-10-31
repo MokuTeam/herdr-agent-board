@@ -10,7 +10,7 @@
 //              copies keep only their time, older than the fork: the board's forks say on their
 //              card whose fork they are and since when (forkCard), and older events are left out
 // Pure: adapters/links.ts reads the transcripts' lines in the background.
-import { spawnOf, spawnResult } from './transcript-links.ts'
+import { spawnResults, spawnsOf } from './transcript-links.ts'
 
 type Rec = Record<string, unknown>
 const rec = (v: unknown): Rec | null => (v && typeof v === 'object' ? (v as Rec) : null)
@@ -38,8 +38,8 @@ export type LinkEvent =
 
 /** What a transcript's lines carry over to later ones (lineEvents). */
 export interface LinkState {
-  /** spawn-agent calls waiting for what they printed. */
-  pending: Map<string, { name: string; at: number }>
+  /** spawn-agent calls waiting for what they printed: the names each spawn-agent in the call gave. */
+  pending: Map<string, { names: string[]; at: number }>
   /** Calls and messages seen already. */
   seen: Set<string>
   /** A sender's message pipe -> its name. */
@@ -128,8 +128,8 @@ export function lineEvents(line: string, state: LinkState): LinkEvent[] {
         })
         continue
       }
-      const spawn = spawnOf(str(b.name), input)
-      if (spawn) state.pending.set(id, { ...spawn, at })
+      const spawns = spawnsOf(str(b.name), input)
+      if (spawns.length) state.pending.set(id, { names: spawns.map(s => s.name), at })
     } else if (o.type === 'user' && b?.type === 'tool_result' && state.pending.has(str(b.tool_use_id))) {
       const call = state.pending.get(str(b.tool_use_id))
       state.pending.delete(str(b.tool_use_id))
@@ -139,8 +139,18 @@ export function lineEvents(line: string, state: LinkState): LinkEvent[] {
           : Array.isArray(b.content)
             ? b.content.map(c => rec(c)?.text ?? '').join('\n')
             : ''
-      const r = !b.is_error && spawnResult(text)
-      if (r && call) out.push({ kind: 'spawn', name: r.name || call.name, pane: r.pane, at: call.at })
+      // Every session the call started, by the name spawn-agent printed for it (else the one it gave).
+      if (call && !b.is_error)
+        out.push(
+          ...spawnResults(text).map(
+            (r, i): LinkEvent => ({
+              kind: 'spawn',
+              name: r.name || (call.names[i] ?? ''),
+              pane: r.pane,
+              at: call.at,
+            }),
+          ),
+        )
     }
   }
   return out

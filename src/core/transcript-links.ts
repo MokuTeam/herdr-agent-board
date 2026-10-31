@@ -116,25 +116,41 @@ export function peerOf(origin: unknown, text: unknown): Peer | null {
   }
 }
 
+const SPAWN_AGENT = /(?:^|[\s;&|(=])spawn-agent(?:\.ps1|\.cmd)?\s/gi
+const NAME = /\s--?name(?:\s+|[=:])(?:"([^"]+)"|'([^']+)'|([^\s"';|&)]+))/i
+
 /**
- * A Bash or PowerShell call that starts a session with spawn-agent: { name } as it gave -Name or
- * --name ('' when that is a variable). Null for anything else, a spawn-agent without a name included.
+ * A Bash or PowerShell call's spawn-agent runs, in order: [{ name }] as each gave -Name or --name
+ * ('' when that is a variable), the first one after it and before the next spawn-agent. One
+ * without a name is left out; [] for any other call.
  */
-export function spawnOf(tool: string, input: unknown): { name: string } | null {
-  if (tool !== 'Bash' && tool !== 'PowerShell') return null
+export function spawnsOf(tool: string, input: unknown): { name: string }[] {
+  if (tool !== 'Bash' && tool !== 'PowerShell') return []
   const cmd = String(rec(input)?.command ?? '')
-  if (!/(?:^|[\s;&|(=])spawn-agent(?:\.ps1|\.cmd)?\s/i.test(cmd)) return null
-  const m = /\s--?name(?:\s+|[=:])(?:"([^"]+)"|'([^']+)'|([^\s"';|&)]+))/i.exec(cmd)
-  if (!m) return null
-  const name = (m[1] ?? m[2] ?? m[3] ?? '').trim()
-  return { name: name.startsWith('$') ? '' : name.slice(0, 120) }
+  const starts = [...cmd.matchAll(SPAWN_AGENT)].map(m => m.index ?? 0)
+  return starts.flatMap((start, i) => {
+    const m = NAME.exec(cmd.slice(start, starts[i + 1] ?? cmd.length))
+    if (!m) return []
+    const name = (m[1] ?? m[2] ?? m[3] ?? '').trim()
+    return [{ name: name.startsWith('$') ? '' : name.slice(0, 120) }]
+  })
 }
 
-/** What spawn-agent printed for the session it started: "pane=<id> name=<name> agent=<id>". */
-export function spawnResult(text: unknown): { pane: string; name: string } | null {
-  const m = /\bpane=([\w:.-]+)\s+name=(.+?)\s+agent=\S+/.exec(String(text ?? ''))
-  return m ? { pane: m[1] ?? '', name: (m[2] ?? '').trim().slice(0, 120) } : null
+/** The first of spawnsOf, or null: a call's spawn-agent for its line in the thread. */
+export const spawnOf = (tool: string, input: unknown): { name: string } | null => spawnsOf(tool, input)[0] ?? null
+
+const SPAWNED = /\bpane=([\w:.-]+)\s+name=(.+?)\s+agent=\S+/g
+
+/** What spawn-agent printed for each session it started, in order: "pane=<id> name=<name> agent=<id>". */
+export function spawnResults(text: unknown): { pane: string; name: string }[] {
+  return [...String(text ?? '').matchAll(SPAWNED)].map(m => ({
+    pane: m[1] ?? '',
+    name: (m[2] ?? '').trim().slice(0, 120),
+  }))
 }
+
+/** The first of spawnResults, or null. */
+export const spawnResult = (text: unknown): { pane: string; name: string } | null => spawnResults(text)[0] ?? null
 
 /** A Workflow call's name: its script's meta name, or the saved workflow it ran. */
 function workflowName(input: Rec): string {

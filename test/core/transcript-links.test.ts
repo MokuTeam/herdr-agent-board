@@ -1,6 +1,14 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { peerOf, promptOf, spawnOf, spawnResult, teammateMessages } from '../../src/core/transcript-links.ts'
+import {
+  peerOf,
+  promptOf,
+  spawnOf,
+  spawnResult,
+  spawnResults,
+  spawnsOf,
+  teammateMessages,
+} from '../../src/core/transcript-links.ts'
 
 test('what a helper was asked: the prompt without the frames around it', () => {
   assert.deepEqual(promptOf('Review the diff.'), { prompt: 'Review the diff.', from: '' })
@@ -60,4 +68,33 @@ test("another session's or a teammate's message comes whole (#174); its summary 
   )
   assert.equal(mate?.text, long)
   assert.equal(mate?.summary?.length, 200)
+})
+
+test('#281: every spawn-agent of one call, and every session it printed, in order', () => {
+  const bash = (command: string) => spawnsOf('Bash', { command })
+  assert.deepEqual(
+    bash('spawn-agent --name Orchestrator --cwd ~/orchestrator && spawn-agent --name Herdr --cwd ~/herdr-agent-board'),
+    [{ name: 'Orchestrator' }, { name: 'Herdr' }],
+  )
+  // PowerShell, names with spaces, other alphabets and %, a variable, one without a name.
+  assert.deepEqual(
+    spawnsOf('PowerShell', {
+      command:
+        "spawn-agent.ps1 -Name 'Кейс 42' -Cwd 'C:\\w\\a b'; spawn-agent.ps1 -Cwd C:\\w; spawn-agent.ps1 -Name \"50% done\"; spawn-agent.ps1 -Name $n",
+    }),
+    [{ name: 'Кейс 42' }, { name: '50% done' }, { name: '' }],
+  )
+  // One spawn-agent: as before.
+  assert.deepEqual(bash('spawn-agent --name=case-42 --cwd /w'), [{ name: 'case-42' }])
+  assert.deepEqual(spawnOf('Bash', { command: 'spawn-agent --name A && spawn-agent --name B' }), { name: 'A' })
+  assert.deepEqual(bash('echo spawn-agent'), [])
+  assert.deepEqual(spawnsOf('Read', { command: 'spawn-agent --name A' }), [])
+
+  const printed = 'pane=w1:p2 name=Orchestrator agent=Orchestrator\nready\npane=w2:p1 name=Кейс 42 agent=x\n'
+  assert.deepEqual(spawnResults(printed), [
+    { pane: 'w1:p2', name: 'Orchestrator' },
+    { pane: 'w2:p1', name: 'Кейс 42' },
+  ])
+  assert.deepEqual(spawnResult(printed), { pane: 'w1:p2', name: 'Orchestrator' })
+  assert.deepEqual(spawnResults('No such folder'), [])
 })
