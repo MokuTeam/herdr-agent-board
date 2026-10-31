@@ -24,6 +24,7 @@ import type { ServerWebSocket, WebSocketHandler } from 'bun'
 import type { CardPatch } from '../adapters/cards.ts'
 import { boardChromium } from '../adapters/desktop-files.ts'
 import {
+  asksInTurn,
   BOARD_CHROMIUM_DIR,
   CHROME_BINS,
   type Control,
@@ -227,6 +228,11 @@ export interface DesktopsOptions {
 export interface Desktops {
   /** The card's field for `item`, or undefined: none, or the session sleeps. */
   view(item: Item): ItemDesktop | undefined
+  /**
+   * What its browser ask puts on the card of `item` while the agent's turn runs on: under "needs
+   * you" with the ask as its question, as a `board ask` (core/desktop.ts asksInTurn); else nothing.
+   */
+  card(item: Item): Partial<Item>
   /** The sessions on the board as of a fresh refresh: a desktop with none awake in its pane stops. */
   observe(items: readonly Item[]): void
   /** Started (or running already) for the session in `pane`. */
@@ -624,7 +630,13 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     view(item) {
       const d = item.pane ? desktops.get(item.pane) : undefined
       if (!d || item.sleeping) return undefined
-      return desktopView(d, d.askSince !== null && item.askSince === d.askSince)
+      return desktopView(d, d.askSince !== null && (item.askSince === d.askSince || asksInTurn(item.status, d)))
+    },
+
+    card(item) {
+      const d = item.pane ? desktops.get(item.pane) : undefined
+      if (!d || item.sleeping || !asksInTurn(item.status, d)) return {}
+      return { column: 'me', attention: 'ask', question: d.ask, askSince: d.askSince }
     },
 
     observe(items) {

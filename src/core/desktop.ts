@@ -310,6 +310,15 @@ export interface DesktopFacts {
 }
 
 /**
+ * A browser ask stands while the agent's turn runs on (its browser tools wait, or it polls): the
+ * board's item has no ask then (core/board.ts attentionOf: a turn is never "needs you"), so the card
+ * says it as a `board ask` would, under "needs you" (services/desktop.ts card). Out of a turn the
+ * card's own ask is the item's already.
+ */
+export const asksInTurn = (status: string, d: Pick<DesktopFacts, 'asks' | 'ask'>): boolean =>
+  status === 'working' && d.asks && !!d.ask
+
+/**
  * The card's field: `asks` only while the card still asks (the agent went on, or the user
  * answered: it is over); what was asked while the ask stands, for the browser's own view.
  */

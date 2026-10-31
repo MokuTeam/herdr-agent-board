@@ -87,10 +87,17 @@ export function cardAge(it: Item, now: number, t: Translator): { text: string; t
   return { text, title }
 }
 
-/** The line under "Needs me": what kind of stop, and the question. */
+/**
+ * What it asks is to be done in its own browser (browser_ask_owner: a sign-in, a captcha), not
+ * answered in the chat: the card's ask is its browser's (core/types.ts ItemDesktop.asks).
+ */
+export const asksInBrowser = (it: Pick<Item, 'attention' | 'desktop'>): boolean =>
+  it.attention === 'ask' && !!it.desktop?.asks
+
+/** The line under "Needs me": what kind of stop (an ask to do in its browser says so), and the question. */
 export function askLine(it: Item, t: Translator): { label: string; text: string } {
   return {
-    label: t(it.attention ? `att.${it.attention}` : 'att.default'),
+    label: asksInBrowser(it) ? t('desk.askLabel') : t(it.attention ? `att.${it.attention}` : 'att.default'),
     text: plain(it.question) || t(it.attention === 'later' ? 'card.lookLater' : 'card.needsDecision'),
   }
 }

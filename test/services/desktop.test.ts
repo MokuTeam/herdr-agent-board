@@ -319,11 +319,12 @@ test('the agent working on keeps its browser ask and its words; over once its ca
   const working = item('s1', 'w0:p1', { status: 'working', attention: '', question: '', askSince: null })
   state.items = [working, item('s2', 'w0:p2')]
   d.observe(state.items)
+  // (and its card says it, under "needs you": below)
   expect(d.view(working)).toEqual({
     running: true,
     profile: null,
     control: 'agent',
-    asks: false,
+    asks: true,
     ask: 'Sign in to GitHub as acme-bot',
   })
   // the user answered (its card's ask cleared): over
@@ -347,6 +348,65 @@ test('the agent working on keeps its browser ask and its words; over once its ca
   // the next board knows what is asked
   await d.ask('w0:p1', 'Pick the account')
   expect(make().view(working)?.ask).toBe('Pick the account')
+})
+
+test('while the agent works on, its card is under "needs you" with the browser ask as its question, as a board ask; once the ask ends, as its state says', async () => {
+  const { d, cards, root, state, tick } = setup()
+  const working = item('s1', 'w0:p1', {
+    status: 'working',
+    column: 'work',
+    attention: '',
+    question: '',
+    askSince: null,
+  })
+  state.items = [working, item('s2', 'w0:p2')]
+  // no browser, or one that asks nothing: the card as it is
+  expect(d.card(working)).toEqual({})
+  await d.ensure('w0:p1')
+  d.observe(state.items)
+  expect(d.card(working)).toEqual({})
+  tick(5)
+  await d.ask('w0:p1', 'Sign in to GitHub as acme-bot')
+  const since = cards.at(-1)?.[1].askSince as number
+  d.observe(state.items)
+  expect(d.card(working)).toEqual({
+    column: 'me',
+    attention: 'ask',
+    question: 'Sign in to GitHub as acme-bot',
+    askSince: since,
+  })
+  // "Open its browser" under it
+  expect(d.view(working)?.asks).toBe(true)
+  // out of the turn the card's own ask is the item's already; a permission dialog stays the decision it is; asleep, nothing
+  const done = item('s1', 'w0:p1', { status: 'done', column: 'me', attention: 'ask', question: 'x', askSince: since })
+  expect(d.card(done)).toEqual({})
+  expect(d.view(done)?.asks).toBe(true)
+  expect(d.card(item('s1', 'w0:p1', { status: 'blocked', column: 'me', attention: 'decision' }))).toEqual({})
+  expect(d.card(item('s1', 'w0:p1', { status: 'working', sleeping: true }))).toEqual({})
+  // `board doing` (the card asks no more): back to what its state says
+  cards.push(['s1', { doing: 'Reading the page', ask: '', askSince: '', by: 'agent' }])
+  d.observe(state.items)
+  expect(d.card(working)).toEqual({})
+  expect(d.view(working)?.asks).toBe(false)
+  // another ask over it (`board ask`): the browser's is over
+  await d.ask('w0:p1', 'Solve the captcha')
+  expect(d.card(working).question).toBe('Solve the captcha')
+  tick(5)
+  cards.push(['s1', { ask: 'Which branch?', askSince: since + 10, by: 'agent' }])
+  d.observe(state.items)
+  expect(d.card(working)).toEqual({})
+  // handed back: over
+  await d.ask('w0:p1', 'Pick the account')
+  const vnc = await vncServer(root)
+  try {
+    await vnc.open(d, 'w0:p1')
+    d.setControl(working, 'owner')
+    expect(d.card(working).column).toBe('me')
+    d.setControl(working, 'agent')
+    expect(d.card(working)).toEqual({})
+  } finally {
+    vnc.close()
+  }
 })
 
 test('the next board takes over what still runs; what does not is cleared away', async () => {

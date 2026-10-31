@@ -101,3 +101,55 @@ describe('the session panel', () => {
     expect(folded).not.toContain('Take control')
   })
 })
+
+describe('a browser ask, while the agent works on', () => {
+  // As the board sends it then (services/desktop.ts card): under "needs you", the ask its question.
+  const ask = 'Sign in to GitHub as acme-bot'
+  const asking = item({
+    key: 'a',
+    name: 'Alpha',
+    status: 'working',
+    column: 'me',
+    attention: 'ask',
+    question: ask,
+    desktop: desktop({ asks: true, ask }),
+  })
+
+  test('the card is a question under "needs you": "In its browser:" and what to do, "Open its browser" under it', () => {
+    const { react } = card(asking)
+    expect(react).toContain('data-col="me"')
+    expect(react).toMatch(
+      /<div class="ask">\s*<b>In its browser:<\/b>\s*Sign in to GitHub as acme-bot\s*<button[^>]*data-act="browser"/,
+    )
+    const ru = bothCards({ items: [asking], lang: 'ru' }, 'a').react
+    expect(ru).toMatch(
+      /<div class="ask">\s*<b>В его браузере:<\/b>\s*Sign in to GitHub as acme-bot\s*<button[^>]*data-act="browser"/,
+    )
+  })
+
+  const panel = (it: Item, lang: string) =>
+    renderInBoard(
+      <PanelProvider viewport={() => ({ w: 1600, h: 1000 })}>
+        <Sheet />
+      </PanelProvider>,
+      board({ data: payload({ items: [it], categories: CATEGORIES }), ui: { open: 'a' } }),
+      lang,
+    )
+  const asked = (it: Item, lang = 'en') =>
+    findAll(panel(it, lang), el => hasClass(el, 'asked')).map(el => canonical([el]))
+
+  test('a board ask that is not the browser’s reads as before, with a browser or without', () => {
+    const plain = item({ key: 'a', name: 'Alpha', column: 'me', attention: 'ask', question: 'Which branch?' })
+    for (const it of [plain, { ...plain, desktop: desktop() }, { ...plain, desktop: desktop({ running: false }) }]) {
+      expect(card(it).react).toMatch(/<div class="ask">\s*<b>Asks:<\/b>\s*Which branch\?\s*<\/div>/)
+      expect(asked(it)[0]).toMatch(/<b>ASKS<\/b>\s*Which branch\?/)
+    }
+  })
+
+  test('the session panel’s "needs you" says it too, in both languages', () => {
+    const [en] = asked(asking)
+    expect(en).toMatch(/<b>IN ITS BROWSER<\/b>\s*Sign in to GitHub as acme-bot/)
+    const [ru] = asked(asking, 'ru')
+    expect(ru).toMatch(/<b>В ЕГО БРАУЗЕРЕ<\/b>\s*Sign in to GitHub as acme-bot/)
+  })
+})

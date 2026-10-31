@@ -71,7 +71,7 @@ interface Options {
   /** The user's presence (services/presence.ts); null while it is not on. */
   presence?: () => PresenceView | null
   /** The agents' own browsers (services/desktop.ts), on the board's own server only: each card's `desktop`. */
-  desktops?: Pick<Desktops, 'view' | 'observe'>
+  desktops?: Pick<Desktops, 'view' | 'card' | 'observe'>
 }
 
 // The colors the category editor offers (aliases left out).
@@ -191,11 +191,12 @@ export function createBoardState({
     // What the page has no use for stays here: file paths (the Claude folder included), the Claude
     // process and its pipe.
     const list = items.map(({ transcript, claudeRoot, alive, since, pipe, ...rest }) => launches.decorate(rest))
-    // On the board's own server: the cards whose session has a browser say so.
+    // On the board's own server: the cards whose session has a browser say so, and one whose
+    // browser ask stands while the agent works on is under "needs you" with it.
     if (desktops)
       for (const [i, item] of items.entries()) {
         const desktop = desktops.view(item)
-        if (desktop) list[i] = { ...list[i], desktop } as (typeof list)[number]
+        if (desktop) list[i] = { ...list[i], ...desktops.card(item), desktop } as (typeof list)[number]
       }
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)

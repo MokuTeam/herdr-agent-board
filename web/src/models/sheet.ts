@@ -4,7 +4,7 @@
 import { archiveBlock } from '../../../src/core/archive.ts'
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
-import { ago, dismissable, inTurn } from './card.ts'
+import { ago, asksInBrowser, dismissable, inTurn } from './card.ts'
 import type { DetailStatus, DetailValue } from './detail-resource.ts'
 import { restartOf, restartPending, restartText } from './restart.ts'
 
@@ -317,7 +317,7 @@ export interface AskedView {
 export function askedView(it: Item, t: Translator): AskedView {
   const later = it.attention === 'later'
   return {
-    why: t(it.attention ? `why.${it.attention}` : 'why.default'),
+    why: asksInBrowser(it) ? t('desk.askWhy') : t(it.attention ? `why.${it.attention}` : 'why.default'),
     text: later ? t('asked.later') : it.question || t('asked.terminal'),
     dismiss: dismissable(it) ? t(later ? 'asked.seen' : 'asked.noReply') : null,
   }

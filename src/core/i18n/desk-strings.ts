@@ -9,6 +9,9 @@ export const DESK_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     // the card
     'desk.mark': 'Its browser is running: open it',
     'desk.openIt': 'Open its browser',
+    // what it asks to be done in its browser, in the question's place (the card; the panel's "needs you")
+    'desk.askLabel': 'In its browser',
+    'desk.askWhy': 'IN ITS BROWSER',
     // the fold and full size
     'desk.title': 'Browser',
     'desk.agent': 'The agent has control',
@@ -36,6 +39,8 @@ export const DESK_STRINGS: Record<Lang, Record<string, string | string[]>> = {
   ru: {
     'desk.mark': 'Его браузер запущен: открыть',
     'desk.openIt': 'Открыть его браузер',
+    'desk.askLabel': 'В его браузере',
+    'desk.askWhy': 'В ЕГО БРАУЗЕРЕ',
     'desk.title': 'Браузер',
     'desk.agent': 'Управляет агент',
     'desk.you': 'Управляете вы',
