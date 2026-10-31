@@ -8,7 +8,7 @@
 // - a menu in its head picks the place, for keys and for those who would rather not throw.
 // Phones (760 px and narrower) keep the full-height sheet: it flicks right, no resizing, no docks.
 // React draws the panel (Panel.tsx) with what this reports: shown or not, its handles, and whether
-// it lies over the board.
+// the board makes it no room (`over`: the board keeps clear of it all the same, styles/beside.css).
 
 import {
   clampFloat,
@@ -72,7 +72,7 @@ export interface PanelState {
   /** In the page (`open` class, not aria-hidden) from opening until it has left. */
   shown: boolean
   chrome: PanelChrome
-  /** Docked at a side, it lies over the board (the window has no room beside it): the `over` class. */
+  /** Docked at a side, the board makes it no room (too narrow for its columns beside it): the `over` class. */
   over: boolean
 }
 
@@ -581,7 +581,7 @@ export class PanelMotion implements PlacedPanel {
     if (mode === 'mobile') return
     g.raw = draggedSize(mode, g.at, dx, dy)
     const size = soft(g.raw, sizeLimits(mode, vp))
-    // The board follows the edge 1:1, unless at this size the panel lies over it.
+    // The board follows the edge 1:1: by its room, or at a size it makes no room for, by what the panel takes.
     const sized = { ...this.place.layout, dock: mode, [sizeField(mode)]: size }
     const lies = overlays(sized, vp)
     this.jump({ ...dockRect(mode, size, vp), p: 1 })

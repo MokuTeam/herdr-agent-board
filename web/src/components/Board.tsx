@@ -2,7 +2,7 @@
 // with a spring from where the card was (useFlip), and a card can be dragged to another lane or
 // column (useCardDrag); a click opens it, its buttons act on the session. Pointing at a card marks
 // the sessions it works with. A card back from the archive comes out of the Archive button.
-import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from 'react'
+import { type KeyboardEvent, type MouseEvent, type UIEvent, useEffect, useRef, useState } from 'react'
 import type { Item } from '../../../src/core/types.ts'
 import { type Archive, flyFromArchive } from '../hooks/useArchive.ts'
 import { useBoardView } from '../hooks/useBoardView.ts'
@@ -40,6 +40,12 @@ export interface BoardProps {
 
 const buttonOf = (e: MouseEvent<HTMLElement>): HTMLElement | null | undefined =>
   e.target instanceof Element ? e.target.closest<HTMLElement>('[data-act]') : undefined
+
+/** Beside a panel docked at a side the board can scroll sideways (styles/beside.css): the column heads in the toolbar go with it. */
+function headsAlong(e: UIEvent<HTMLElement>): void {
+  const heads = document.getElementById('columns-head')
+  if (heads && heads.scrollLeft !== e.currentTarget.scrollLeft) heads.scrollLeft = e.currentTarget.scrollLeft
+}
 
 export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roomBelow, archive }: BoardProps) {
   const t = useT()
@@ -127,7 +133,7 @@ export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roo
   )
 
   return (
-    <main className="board" id="board" ref={root}>
+    <main className="board" id="board" ref={root} onScroll={headsAlong}>
       {data && !anyShown(lanes) && <p className="empty">{t(data.items.length ? 'empty.none' : 'empty.noSessions')}</p>}
       {lanes.map(lane => (
         <Lane

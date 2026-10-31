@@ -1,9 +1,11 @@
 // Where the side panel sits and how big it is: plain geometry, shared by the page (the React
 // panel, components/panel) and the tests. A panel docks right, left or at the bottom, flush with
 // the window's edge like a sidebar, where the board makes room for it, or floats over the board as
-// a window inset from the edges. A window too narrow to make room beside a side panel keeps it
-// docked, lying over the board like a drawer. Rectangles are { x, y, w, h } in CSS pixels of the
-// window `vp` ({ w, h }).
+// a window inset from the edges. A window too narrow to make room beside a side panel for the
+// board's columns keeps it docked all the same: the board keeps clear of it, its columns scrolling
+// sideways. A side panel starts under the page's header (`top`), which keeps the window's width
+// over the board and the panel (styles/beside.css). Rectangles are { x, y, w, h } in CSS pixels of
+// the window `vp` ({ w, h, top }).
 import { project, rubberband } from './spring.ts'
 
 export type Dock = 'right' | 'left' | 'bottom' | 'float'
@@ -16,6 +18,8 @@ export type Edge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 export interface Viewport {
   w: number
   h: number
+  /** Where a panel docked at a side starts: under the page's header (none: the window's top). */
+  top?: number
 }
 export interface Point {
   x: number
@@ -45,7 +49,7 @@ export interface PanelLayout {
   float: Rect | null
 }
 export type Room = Record<Side, number>
-/** What a side panel lying over the board takes of the toolbar's width, per side. */
+/** What a side panel the board makes no room for takes of the page's width, per side. */
 export type Over = Record<'left' | 'right', number>
 
 export const DOCKS: readonly Dock[] = ['right', 'left', 'bottom', 'float']
@@ -87,19 +91,24 @@ export function dockSize(layout: PanelLayout, dock: Dock, vp: Viewport): number 
   return clamp(own ?? (dock === 'bottom' ? Math.round(vp.h * DEFAULT.bottom) : DEFAULT.side), min, max)
 }
 
-/** A docked panel's rectangle at `size`, unlimited: a drag shows sizes past the limits, softened. */
+/** A docked panel's rectangle at `size`, unlimited: a drag shows sizes past the limits, softened. A side one runs from under the header down. */
 export function dockRect(dock: Dock, size: number, vp: Viewport): Rect {
-  if (dock === 'left') return { x: 0, y: 0, w: size, h: vp.h }
+  const top = vp.top ?? 0
+  if (dock === 'left') return { x: 0, y: top, w: size, h: vp.h - top }
   if (dock === 'bottom') return { x: 0, y: vp.h - size, w: vp.w, h: size }
-  return { x: vp.w - size, y: 0, w: size, h: vp.h }
+  return { x: vp.w - size, y: top, w: size, h: vp.h - top }
 }
 
-/** Does a panel docked at a side lie over the board, the window too narrow to make room beside it? */
+/**
+ * Does a panel docked at a side leave the board less than its columns' width, so that the board
+ * makes it no room (the page's narrower layout)? The board keeps clear of it all the same, its
+ * columns as the window's width lays them out, scrolling sideways (styles/beside.css).
+ */
 export function overlays(layout: PanelLayout, vp: Viewport): boolean {
   return (layout.dock === 'left' || layout.dock === 'right') && !roomFor(layout, vp)[layout.dock]
 }
 
-/** What a side panel lying over the board takes of the toolbar's width, per side, so its controls stay clear of it. */
+/** What a side panel the board makes no room for takes of the page's width, per side: the board and its column heads keep clear of it (styles/beside.css). */
 export function overFor(layout: PanelLayout, vp: Viewport): Over {
   const over = { left: 0, right: 0 }
   if (overlays(layout, vp) && (layout.dock === 'left' || layout.dock === 'right'))
@@ -141,8 +150,9 @@ export function roomFor(layout: PanelLayout, vp: Viewport): Room {
   const room = { left: 0, right: 0, bottom: 0 }
   if (layout.dock !== 'float') {
     const size = dockSize(layout, layout.dock, vp)
-    // At modest desktop widths the side panel overlays the board. Its dock, size,
-    // drag handles and saved preference stay intact; a wide window still makes room.
+    // At modest desktop widths the board makes no room (overFor): its columns keep their layout
+    // beside the panel and scroll sideways. Its dock, size, drag handles and saved preference stay
+    // intact; a wide window still makes room.
     if (layout.dock === 'bottom' || vp.w - size >= BOARD_COLUMNS_MIN) room[layout.dock] = size
   }
   return room

@@ -1,0 +1,47 @@
+/* The board beside a panel docked at a side. While one takes the board's width, <html> has
+   data-panel-side, left or right (web/src/components/panel/place.ts; never on a phone, for a
+   floating panel or one at the bottom). The header keeps the window's width and is laid out as with
+   no panel; the panel starts under it (place.ts underHeader). Under the header the board and the
+   column heads at the toolbar's foot keep clear of the panel: by the room the board makes for it
+   (--room-*) or, in a window too narrow for that, by what the panel takes (--over-*: its size and
+   the 12 px MARGIN of models/panel-layout.ts). The columns keep the layout the window's width gives
+   them; where they do not fit beside the panel, the board scrolls sideways and the heads go with it
+   (components/Board.tsx). Every rule here starts with :root[data-panel-side], so the page without
+   such a panel is as it was; the other sheets are upstream's, rule for rule. Linked before
+   look-terminal.css. */
+
+:root[data-panel-side] {
+  --beside-left: calc(var(--room-left, 0px) + max(0px, var(--over-left, 0px) - 12px));
+  --beside-right: calc(var(--room-right, 0px) + max(0px, var(--over-right, 0px) - 12px));
+}
+
+/* The header: the window's width, as with no panel. */
+:root[data-panel-side] .page { margin-left: 0; margin-right: 0; }
+:root[data-panel-side] .toolbar-fit { margin-left: 0; margin-right: 0; }
+
+/* The board and its column heads beside the panel; the columns scroll sideways where they do not fit. */
+:root[data-panel-side] .columns-head,
+:root[data-panel-side] .board { margin-left: var(--beside-left); margin-right: var(--beside-right); }
+:root[data-panel-side] .columns-head { overflow: hidden; }
+:root[data-panel-side] .board { overflow-x: auto; overscroll-behavior-x: contain; }
+/* A lane as wide as its five columns, so a card held over it lights all of them (the stacked
+   column of a narrower page is the board's width, as it was). */
+@container page (min-width: 961px) {
+  :root[data-panel-side] .lane { min-width: min-content; }
+}
+/* A finger never drags a card (models/board-view.ts mayDrag): on one it scrolls the board sideways as well. */
+@media (pointer: coarse) {
+  :root[data-panel-side] .card { touch-action: pan-x pan-y; }
+}
+
+/* The archive's place and the notes come up over the board's middle, clear of the panel. */
+:root[data-panel-side] .drop-archive,
+:root[data-panel-side] .toasts { left: calc(50% + (var(--beside-left) - var(--beside-right)) / 2); }
+
+/* The panel: the sidebar under the header, a hairline between them (the Terminal style's edge
+   there, its --separator). Where the board makes it no room (.over) it looks the same, since it no
+   longer lies over the cards; the Terminal style's own docked panel outranks this (linked after). */
+:root[data-panel-side] .sheet[data-dock="right"],
+:root[data-panel-side] .sheet[data-dock="left"] { border-top: 1px solid var(--separator); }
+:root[data-panel-side] .sheet.over[data-dock="right"] { box-shadow: -1px 0 0 var(--separator), -20px 0 44px -30px rgba(0, 0, 0, 0.5); }
+:root[data-panel-side] .sheet.over[data-dock="left"] { box-shadow: 1px 0 0 var(--separator), 20px 0 44px -30px rgba(0, 0, 0, 0.5); }

@@ -3,9 +3,13 @@
 // the place menu, and the window around them. One panel is open at a time, in this place.
 //
 // The board's margins (--room-left/right/bottom on <html>) are springs. While they move, the card
-// the panel is about keeps its place on screen, and stays clear of a panel at the bottom. A side
-// panel that lies over the board (no room for it) still keeps the toolbar's controls clear of it:
-// --over-left/right, on springs as well.
+// the panel is about keeps its place on screen, stays clear of a panel at the bottom, and in a
+// board that scrolls sideways beside a side panel stays in sight that way too. A side panel the
+// board makes no room for (too narrow for its columns) takes --over-left/right, on springs as
+// well. While a side panel takes either, <html> has data-panel-side (left or right): the header
+// keeps the window's width over the board and the panel, the board and its column heads keep clear
+// of the panel, scrolling sideways when its columns do not fit (styles/beside.css). A side panel
+// starts under that header (`underHeader`).
 
 import {
   type Dock,
@@ -27,6 +31,7 @@ import {
   roomValue,
   roomWanted,
   SIDES,
+  sidewaysScroll,
 } from '../../models/panel-motion.ts'
 import { Spring } from '../../models/spring.ts'
 import { storage } from '../../state/storage.ts'
@@ -76,6 +81,14 @@ const nothing: About = () => null
 
 const html = (): HTMLElement => document.documentElement
 
+/** A board that scrolls sideways beside a side panel (styles/beside.css): the card kept in sight shows that way too. */
+function keepSideways(el: Element, r: DOMRect): void {
+  const board = el.closest('.board')
+  if (!board || !(board.scrollWidth > board.clientWidth)) return
+  const by = sidewaysScroll(r, board.getBoundingClientRect())
+  if (by) board.scrollLeft += by
+}
+
 /** The window's size, without its scrollbar. */
 function windowSize(): Viewport {
   return typeof document === 'undefined' ? { w: 0, h: 0 } : { w: html().clientWidth, h: html().clientHeight }
@@ -92,13 +105,17 @@ export class PanelPlace {
   following = false
   /** Where the board's visible part starts (the page says: the toolbar's bottom). */
   boardTop: () => number = () => 0
+  /** Where a panel docked at a side starts (the page says: under its header, `underHeader`). */
+  dockTop: () => number = () => 0
   private anchor: { el: Element; y: number } | null = null
   private queued = false
   private phone: MediaQueryList | null = null
   private last: Viewport = { w: 0, h: 0 }
+  /** The side <html> says a panel takes of the board (data-panel-side). */
+  private beside: keyof Over | null = null
   readonly state: Store<PlaceState>
 
-  constructor(readonly viewport: () => Viewport = windowSize) {
+  constructor(private readonly size: () => Viewport = windowSize) {
     this.layout = restoreLayout(storage.get(LAYOUT_KEY, ''))
     this.state = new Store<PlaceState>({ layout: this.layout, menu: { expanded: null, checked: null }, open: false })
     const spring = () =>
@@ -121,6 +138,13 @@ export class PanelPlace {
       () => this.viewport(),
       menu => this.state.set({ ...this.state.get(), menu }),
     )
+  }
+
+  /** The window the panels are placed in: its size, and where a panel docked at a side starts. */
+  viewport(): Viewport {
+    const vp = this.size()
+    const top = this.dockTop()
+    return top > 0 ? { ...vp, top } : vp
   }
 
   private phoneQuery(): MediaQueryList | null {
@@ -181,13 +205,21 @@ export class PanelPlace {
     this.queued = false
     for (const side of SIDES) html().style.setProperty(`--room-${side}`, roomValue(this.room[side].value))
     for (const side of OVER_SIDES) html().style.setProperty(`--over-${side}`, roomValue(this.over[side].value))
+    const beside = OVER_SIDES.find(side => this.room[side].value > 0 || this.over[side].value > 0) ?? null
+    if (beside !== this.beside) {
+      this.beside = beside
+      if (beside) html().setAttribute('data-panel-side', beside)
+      else html().removeAttribute('data-panel-side')
+    }
     if (this.anchor?.el.isConnected) {
       const r = this.anchor.el.getBoundingClientRect()
       const by = anchorScroll(this.anchor.y, r, this.boardTop(), this.viewport().h, this.room.bottom.value)
       if (by) scrollBy(0, by)
+      keepSideways(this.anchor.el, r)
     }
     // Once the room is still (and no edge is held), the browser's own scroll anchoring is back.
-    if (!this.following && !SIDES.some(side => this.room[side].moving)) this.dropAnchor()
+    const moving = SIDES.some(side => this.room[side].moving) || OVER_SIDES.some(side => this.over[side].moving)
+    if (!this.following && !moving) this.dropAnchor()
   }
 
   /** Keeps what the panel is about where it is on screen while the board makes room. */
@@ -231,10 +263,26 @@ export class PanelPlace {
   // ---------------------------------------------------------------- the window around them
   private relayout(): void {
     const vp = this.viewport()
-    if (vp.w === this.last.w && vp.h === this.last.h) return
+    if (vp.w === this.last.w && vp.h === this.last.h && vp.top === this.last.top) return
     this.last = vp
     for (const p of this.panels) p.reflow()
     this.syncRoom({ jump: true })
+  }
+
+  /**
+   * The page's header (`el`), which keeps the window's width: a panel docked at a side starts
+   * `top()` px down, under it, and moves with it as it grows or shrinks (a row more or less).
+   */
+  underHeader(el: Element, top: () => number): () => void {
+    this.dockTop = top
+    const observer = new ResizeObserver(() => this.relayout())
+    observer.observe(el)
+    this.relayout()
+    return () => {
+      observer.disconnect()
+      this.dockTop = () => 0
+      this.relayout()
+    }
   }
 
   /** Listens to the window: its size, the phone breakpoint, and Esc during a gesture. */

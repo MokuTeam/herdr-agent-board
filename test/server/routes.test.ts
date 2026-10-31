@@ -134,6 +134,7 @@ describe('routes', () => {
       'styles/errors.css',
       'styles/messages.css',
       'styles/desktop.css',
+      'styles/beside.css',
       'styles/look-terminal.css',
       'app.js',
     ])

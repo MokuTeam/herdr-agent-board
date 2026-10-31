@@ -74,6 +74,27 @@ test('rectangles per dock, flush with the window like a sidebar, and the way in 
   assert.deepEqual(offRect('float', right), right)
 })
 
+test('a side panel runs from under the page’s header down; at the bottom or floating it is where it was', () => {
+  const ipad = { w: 1000, h: 750 }
+  const under = { ...ipad, top: 90 }
+  assert.deepEqual(rectFor(fresh, under), { x: 1000 - 560, y: 90, w: 560, h: 750 - 90 })
+  assert.deepEqual(rectFor({ ...fresh, dock: 'left' }, under), { x: 0, y: 90, w: 560, h: 750 - 90 })
+  // It comes in and goes out along its own edge, under the header all the way.
+  assert.equal(offRect('right', rectFor(fresh, under)).y, 90)
+  // No header said: the window's top, as before.
+  assert.deepEqual(rectFor(fresh, ipad), { x: 1000 - 560, y: 0, w: 560, h: 750 })
+  // At the bottom, and floating, the header changes nothing.
+  for (const layout of [
+    { ...fresh, dock: 'bottom' as const },
+    { ...fresh, dock: 'float' as const },
+    { ...fresh, dock: 'float' as const, float: { x: 300, y: 20, w: 480, h: 600 } },
+  ])
+    assert.deepEqual(rectFor(layout, under), rectFor(layout, ipad), layout.dock)
+  // Its size and limits are the window's width, the header or not.
+  assert.deepEqual(sizeLimits('right', under), sizeLimits('right', ipad))
+  assert.equal(dockSize(fresh, 'right', under), dockSize(fresh, 'right', ipad))
+})
+
 test('a side panel the window has no room for lies over the board, still docked, and keeps the toolbar clear', () => {
   const laptop = { w: 1440, h: 900 }
   assert.equal(overlays(fresh, laptop), true)

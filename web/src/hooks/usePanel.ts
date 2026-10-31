@@ -20,7 +20,7 @@ export interface PanelControls {
   ref: RefObject<HTMLElement | null>
   shown: boolean
   chrome: PanelChrome
-  /** Docked at a side, it lies over the board. */
+  /** Docked at a side, the board makes it no room (it keeps clear of it all the same, styles/beside.css). */
   over: boolean
   /** The place menu is up from this panel's button. */
   menuOpen: boolean

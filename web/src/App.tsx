@@ -5,7 +5,7 @@
 // (wake's also from the toolbar's "Wake stopped"); the archive (its panel, sessions off the board
 // and back, Ctrl+Z); a fork of a session in a new tab; Remote access from Settings on the local
 // board.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
 import { QuickLook } from './components/files/QuickLook.tsx'
@@ -177,6 +177,14 @@ export function App() {
   // A card kept in sight while the board makes room for a panel stays below the toolbar.
   useEffect(() => {
     panels.place.boardTop = () => document.querySelector('.toolbar')?.getBoundingClientRect().bottom ?? 0
+  }, [panels.place])
+  // A panel docked at a side starts under the header, which keeps the window's width; the column
+  // heads at the toolbar's foot go with the board beside the panel (styles/beside.css).
+  useLayoutEffect(() => {
+    const toolbar = document.querySelector<HTMLElement>('.toolbar')
+    if (!toolbar) return
+    const heads = () => document.getElementById('columns-head')?.offsetHeight ?? 0
+    return panels.place.underHeader(toolbar, () => toolbar.offsetHeight - heads())
   }, [panels.place])
   return (
     <>

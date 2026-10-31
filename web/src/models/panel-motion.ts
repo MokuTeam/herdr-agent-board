@@ -246,10 +246,10 @@ export function roomWanted(open: boolean, phone: boolean, layout: PanelLayout, v
   return open && !phone ? roomFor(layout, vp) : { left: 0, right: 0, bottom: 0 }
 }
 
-/** The sides a panel lying over the board keeps the toolbar clear of. */
+/** The sides a side panel the board makes no room for takes of the page's width (--over-*). */
 export const OVER_SIDES = ['left', 'right'] as const
 
-/** What the open side panel lying over the board takes of the toolbar (none on a phone, or with no panel open). */
+/** What the open side panel the board makes no room for takes of the page's width; the board keeps clear of it all the same, scrolling sideways (styles/beside.css). None on a phone, or with no panel open. */
 export function overWanted(open: boolean, phone: boolean, layout: PanelLayout, vp: Viewport): Over {
   return open && !phone ? overFor(layout, vp) : { left: 0, right: 0 }
 }
@@ -269,4 +269,21 @@ export function anchorScroll(y: number, r: Box, top: number, viewH: number, room
   const lowest = viewH - roomBelow - r.height - 16
   const want = Math.max(top + 8, Math.min(y, lowest))
   return Math.abs(r.top - want) > 0.5 ? r.top - want : 0
+}
+
+/**
+ * How far a board that scrolls sideways (beside a side panel, styles/beside.css) scrolls so the
+ * card kept in sight shows that way too, `pad` px in from the board's edges; 0 when it does. A card
+ * wider than the board shows from its left edge.
+ */
+export function sidewaysScroll(
+  r: Pick<RectLike, 'left' | 'right'>,
+  view: Pick<RectLike, 'left' | 'right'>,
+  pad = 16,
+): number {
+  const left = view.left + pad
+  const right = view.right - pad
+  if (r.left < left) return r.left - left
+  if (r.right > right) return Math.min(r.right - right, r.left - left)
+  return 0
 }

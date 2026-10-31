@@ -76,7 +76,7 @@ export interface PanelViewProps extends ShellProps {
   /** In the page: from opening until it has left. */
   shown: boolean
   chrome: PanelChrome
-  /** Docked at a side, it lies over the board: a deeper shadow, a drawer over the cards. */
+  /** Docked at a side, the board makes it no room (the board keeps clear of it all the same, styles/beside.css). */
   over?: boolean
   menuOpen: boolean
   asideRef?: Ref<HTMLElement>

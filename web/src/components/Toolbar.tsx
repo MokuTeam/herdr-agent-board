@@ -81,7 +81,7 @@ export function Toolbar({
 
   return (
     <header className={scrolled ? 'toolbar scrolled' : 'toolbar'}>
-      {/* The row's own width: the page's, less a side panel lying over the board (--over-*). */}
+      {/* The row's own width: the window's, also beside a panel docked at a side (styles/beside.css). */}
       <div className="toolbar-fit">
         <div className="toolbar-row" ref={row}>
           {/* The summary hides in a narrower toolbar: its words are the title's tooltip too. */}
