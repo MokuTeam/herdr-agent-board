@@ -1,5 +1,6 @@
 // A stand-in for Claude Code, put on PATH as `claude` (fakeClaudeOn): writes down its arguments,
-// its CLAUDE_CONFIG_DIR and its folder to FAKE_CLAUDE_LOG, and exits with FAKE_CLAUDE_EXIT. The
+// its CLAUDE_CONFIG_DIR and its folder to FAKE_CLAUDE_LOG, with FAKE_CLAUDE_ENV (names, comma
+// between them) the variables of those names it has too, and exits with FAKE_CLAUDE_EXIT. The
 // real Claude is never run by a test.
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -12,6 +13,13 @@ if (import.meta.main) {
       args: process.argv.slice(2),
       configDir: process.env.CLAUDE_CONFIG_DIR ?? null,
       cwd: process.cwd(),
+      ...(process.env.FAKE_CLAUDE_ENV && {
+        env: Object.fromEntries(
+          process.env.FAKE_CLAUDE_ENV.split(',').flatMap(k =>
+            process.env[k] === undefined ? [] : [[k, process.env[k]]],
+          ),
+        ),
+      }),
     }),
   )
   process.exit(Number(process.env.FAKE_CLAUDE_EXIT ?? 0))

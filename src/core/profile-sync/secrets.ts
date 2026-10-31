@@ -23,9 +23,22 @@ const ONE_MACHINE_ANY = /(\.lock|\.bak-agent-board|\.bak-profile-sync|\.agent-bo
 /** herdr's own Claude hook script, and the board's skill for the agents (each side's install writes its own). */
 const HERDR_HOOK_FILE = /^hooks\/herdr-agent-state\.[a-z0-9]+$|^skills\/herdr-agents\//i
 
+/**
+ * The board's own secrets for the agents (adapters/secret-store.ts), at any depth, in case a
+ * profile folder holds the board's state folder or a run folder: the store and its key
+ * (herdr/plugins/agent-board/secrets/) and the sessions' own files (agent-board/secrets/, in
+ * $XDG_RUNTIME_DIR or agent-board-<uid>/secrets/ in the temp folder). Each side keeps its own; the
+ * key never leaves its machine. (Claude's session-env/, where the board's line for a session's
+ * Bash goes, is one machine's above.)
+ */
+const BOARD_SECRETS = /(^|\/)agent-board(-[^/]+)?\/secrets(\/|$)/
+
 /** A path in a profile folder ('/' between its parts) that belongs to its machine only: never synced, never listed. */
 export const oneMachine = (rel: string): boolean =>
-  ONE_MACHINE_TOP.test(rel.split('/')[0] ?? '') || ONE_MACHINE_ANY.test(rel) || HERDR_HOOK_FILE.test(rel)
+  ONE_MACHINE_TOP.test(rel.split('/')[0] ?? '') ||
+  ONE_MACHINE_ANY.test(rel) ||
+  HERDR_HOOK_FILE.test(rel) ||
+  BOARD_SECRETS.test(rel)
 
 /**
  * A file that is a secret as a whole, at any depth: Claude's credentials, any copy of .claude.json

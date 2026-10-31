@@ -120,6 +120,10 @@ Symptoms: a server listed as failed or disconnected, its tools gone, or calls fa
 - Do not try to drive the `/mcp` menu yourself: your terminal is busy with you, and keys typed into a menu land in the wrong place easily.
 - Without herdr-wake (`board restart` says so): ask the user to run `/mcp` in your session and Reconnect the server (on the web board: your card, "Terminal", then "Claude"). Meanwhile carry on with what does not need it, and `board wait "MCP <server> reconnect"`.
 
+## Secrets the owner set for you
+
+API tokens and keys the owner keeps in the board (Settings → Secrets…, `board secret set`) are environment variables in your Bash commands, and in your MCP servers when the board started you (`$TOGGL_API_TOKEN`, say). `board secret get NAME` prints one, `board secret file NAME` writes it to a file of your session's own (0600) and prints the path; `board secret list` names them, never a value. Never put a value in the conversation, a card, a project's file or a commit. One set after you started reaches you once you restart (`board restart`).
+
 ## Do not
 
 - Run bare `herdr`: it opens the TUI. For a command group's help run it without a subcommand (`herdr pane`, `herdr tab`).

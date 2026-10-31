@@ -21,6 +21,7 @@ export type PanelKind =
   | 'phones'
   | 'mokupilot'
   | 'access'
+  | 'secrets'
 
 /** Each panel's name for screen readers, and the session sheet's close button id. */
 const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
@@ -33,6 +34,7 @@ const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
   phones: { label: 'phones.title' },
   mokupilot: { label: 'mokupilot.title' },
   access: { label: 'access.title' },
+  secrets: { label: 'secrets.title' },
 }
 
 interface ShellProps {

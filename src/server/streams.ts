@@ -1,7 +1,7 @@
 // What the board's remote listeners share (server/remote.ts: Tailscale and serve; server/tunnel.ts:
 // the owner's domain): a path decoded, what they refuse whoever calls, and event streams that end
 // the moment the caller's pairing or login does.
-import { desktopOnly, localOnly } from '../core/remote.ts'
+import { desktopOnly, localOnly, secretsPath } from '../core/remote.ts'
 import { json } from './http.ts'
 import { namedEvent } from './sse.ts'
 
@@ -16,13 +16,19 @@ export function decoded(raw: string): string | null {
 
 /**
  * What a remote caller is refused, paired or signed in: what acts on this computer's screen
- * (403 desktop) and what is for the board on this computer only (403 local). The routes match a
- * string path decoded and a RegExp one as it came, so both spellings are checked, or an encoded
- * letter (/api/fs/%6Fpen, /api/%61ccess) would get by.
+ * (403 desktop) and what is for the board on this computer only (403 local); the secrets too
+ * (403 local), unless `secrets` lets them by: the board's own server's login listener. The routes
+ * match a string path decoded and a RegExp one as it came, so both spellings are checked, or an
+ * encoded letter (/api/fs/%6Fpen, /api/%61ccess) would get by.
  */
-export function remoteRefusal(raw: string, path: string): Response | null {
+export function remoteRefusal(
+  raw: string,
+  path: string,
+  { secrets = false }: { secrets?: boolean } = {},
+): Response | null {
   if (desktopOnly(raw) || desktopOnly(path)) return json(403, { error: 'desktop' })
   if (localOnly(raw) || localOnly(path)) return json(403, { error: 'local' })
+  if (!secrets && (secretsPath(raw) || secretsPath(path))) return json(403, { error: 'local' })
   return null
 }
 

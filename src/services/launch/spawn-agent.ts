@@ -20,14 +20,20 @@
 // names one (core/pi.ts namingOf: Claude's /rename, pi's /name). pi's session is keyed by its
 // file, which herdr reports once pi is up: the profile it is meant for goes on that card. A start
 // asked for pi (--agent pi; the board's, when its request picks pi) types `launch.pi` instead.
+//
+// Once the owner set a secret on this computer (adapters/secret-store.ts), a start typed with
+// `launch.claude` (no profile command of its own) goes through `board launch`, which starts Claude
+// with the session's secrets in its env for its MCP servers; a profile's own command (an alias)
+// calls `board launch` itself, if the owner set it so. Without secrets, the line is as it was.
 import { randomUUID } from 'node:crypto'
-import { readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, resolve } from 'node:path'
 import { readCard, removeCard, writeCard } from '../../adapters/cards.ts'
 import { createClaudeHome } from '../../adapters/claude-home.ts'
 import { herdr, herdrText, tabCreateRoot } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
+import { secretStoreFile } from '../../adapters/paths.ts'
 import {
   forgetProfilePane,
   possibleProfilePanes,
@@ -35,6 +41,8 @@ import {
   recordProfilePane,
 } from '../../adapters/profile-panes.ts'
 import { type Env, inheritedProfileDir, loadProfiles } from '../../adapters/profiles.ts'
+import { boardOnPath } from '../../adapters/resume-report.ts'
+import { anySecrets } from '../../adapters/secret-store.ts'
 import { importsDialog, keyTowardYes, ownImports, sameFolder, trustDialog } from '../../core/dialogs/trust.ts'
 import { t } from '../../core/lang.ts'
 import { sameDir, slugName, ticketSlugName, uniqueSlug } from '../../core/launch/names.ts'
@@ -299,7 +307,14 @@ export async function spawnAgent(
       : sessionId && !choosesSession(program)
         ? [...program, '--session-id', sessionId]
         : program
-  const command = shellLine(argv, process.platform === 'win32')
+  // With the owner's secrets here, Claude started with `launch.claude` gets them in its env through `board launch`.
+  const throughBoard =
+    o.agent !== 'pi' &&
+    profileCommand(profile?.command) === null &&
+    existsSync(secretStoreFile()) &&
+    anySecrets() &&
+    boardOnPath(env)
+  const command = shellLine(throughBoard ? ['board', 'launch', ...argv] : argv, process.platform === 'win32')
 
   // The tab is labelled before Claude runs: a launcher may name things after it (a Telegram topic).
   let pane = o.pane

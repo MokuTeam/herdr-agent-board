@@ -19,12 +19,19 @@
 // wake's Telegram router is on and launch.claude is a launcher: herdr is told to bring it back with
 // `board resume …` after a restart (core/resume.ts), by a process of its own; every other session
 // is left to herdr's own `claude --resume <id>`, and nothing more is read or started for it.
+// SessionStart of any Claude session, in herdr or not, once the owner set a secret on this computer
+// (its store is there): the session's secrets for its Bash commands, through $CLAUDE_ENV_FILE
+// (services/secrets.ts); with no store, one look for its file and nothing else. While a secret is
+// set, a session in the default profile reports `board resume <id>` too (core/resume.ts), which
+// starts Claude with them, so its MCP servers have them again after herdr restarts.
 // Claude Code waits for it: an empty or broken input ends it at once, silently, with exit code 0.
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { type CardPatch, readCard, writeCard } from '../adapters/cards.ts'
 import { loadConfig } from '../adapters/config-file.ts'
 import { agentGet } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { secretStoreFile } from '../adapters/paths.ts'
 import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
@@ -49,6 +56,7 @@ async function reportResume(
   dir: string,
   profiles: Profile[],
   cfg: Config | undefined,
+  secrets: boolean,
 ): Promise<void> {
   try {
     const [{ resumeCommand }, { claudeProgram }, { wakeConfig }] = await Promise.all([
@@ -67,6 +75,7 @@ async function reportResume(
       env: process.env,
       wakeTelegram: wake.enabled && wake.telegram === 'auto',
       launchProgram: claudeProgram(cfg?.launch?.claude, cfg?.launch?.args),
+      secrets,
     })
     if (!command) return
     const { boardOnPath, herdrWakeResumesIn, startResumeReport } = await import('../adapters/resume-report.ts')
@@ -96,6 +105,17 @@ async function main(): Promise<void> {
   const event = text(input.hook_event_name)
   const sid = input.session_id
   const pane = process.env.HERDR_PANE_ID
+  // The owner's secrets, for a session's own start (not a subagent's), only once one was ever set;
+  // `secrets`: one is set now, which herdr's resume of the session is to start Claude with.
+  let secrets = false
+  if (event === 'SessionStart' && typeof sid === 'string' && sid && existsSync(secretStoreFile())) {
+    const [{ callerOf, sessionStartSecrets }, { anySecrets }] = await Promise.all([
+      import('../services/secrets.ts'),
+      import('../adapters/secret-store.ts'),
+    ])
+    if (!input.agent_id) sessionStartSecrets({ ...callerOf(loadProfiles(), inheritedProfileDir(), sid), session: sid })
+    secrets = anySecrets()
+  }
   if (!sid || typeof sid !== 'string' || !pane) return
   if (event === 'PreToolUse') {
     const asking = heldQuestionOf(input, Date.now())
@@ -152,7 +172,7 @@ async function main(): Promise<void> {
     }
   }
   if (Object.keys(patch).length) writeCard(sid, patch)
-  if (event === 'SessionStart') await reportResume(input, sid, pane, dir, profiles, cfg)
+  if (event === 'SessionStart') await reportResume(input, sid, pane, dir, profiles, cfg, secrets)
   if (context) console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }))
 }
 

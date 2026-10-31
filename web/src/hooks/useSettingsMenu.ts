@@ -4,7 +4,8 @@
 // (components/panel/place.ts), whether sleeping sessions show, with more than one profile folder
 // the Profiles panel, while wake's state line is in the payload Sleep and wake…, and how sessions
 // asleep in "Waiting" fold, for every board; on the local board, Remote access…; on a page
-// signed in through the owner's domain, Sign out; Presence (#172), the board's, for every board.
+// signed in through the owner's domain, Sign out; Presence (#172), the board's, for every board;
+// Secrets… on the local board and on the board's own server.
 // The items are models/settings-menu.ts.
 import { useEffect, useState } from 'react'
 import type { FoldMode } from '../../../src/core/fold-mode.ts'
@@ -19,7 +20,7 @@ import { LOOK_KEY, lookNow, setLook } from '../models/look.ts'
 import { type Dock, isDock } from '../models/panel-layout.ts'
 import { offersProfiles } from '../models/profiles.ts'
 import { keptAuth, remotePage, UNPAIRED } from '../models/remote-page.ts'
-import { offersAccess, offersMokupilot, settingPicked, settingsMenu } from '../models/settings-menu.ts'
+import { offersAccess, offersMokupilot, offersSecrets, settingPicked, settingsMenu } from '../models/settings-menu.ts'
 import { reducedMotion } from '../models/spring.ts'
 import { setTheme, THEME_KEY, themeNow } from '../models/theme.ts'
 import { isWakeView } from '../models/wake.ts'
@@ -69,6 +70,9 @@ export interface SettingsDeps {
   /** The local board's page (not one through Tailscale or the domain): Remote access… is offered. */
   access?(): boolean
   openAccess?(): void
+  /** The local board's page or the board's own server's: Secrets… is offered. */
+  secrets?(): boolean
+  openSecrets?(): void
   /** This page signed in through the owner's domain: Sign out is offered. */
   signOut?(): boolean
   endLogin?(): void
@@ -101,6 +105,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       phones: deps.phones?.() ?? false,
       mokupilot: deps.mokupilot?.() ?? false,
       access: deps.access?.() ?? false,
+      secrets: deps.secrets?.() ?? false,
       signOut: deps.signOut?.() ?? false,
       presence: deps.presence?.(),
       idleMinutes: deps.idleMinutes?.(),
@@ -127,6 +132,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'phones') deps.openPhones?.()
         else if (pick?.kind === 'mokupilot') deps.openMokupilot?.()
         else if (pick?.kind === 'access') deps.openAccess?.()
+        else if (pick?.kind === 'secrets') deps.openSecrets?.()
         else if (pick?.kind === 'signout') deps.endLogin?.()
         else if (pick?.kind === 'presence')
           deps.choosePresence?.(pick.value === 'none' ? { on: false } : { on: true, mode: pick.value })
@@ -263,7 +269,8 @@ const crossFade = (): ((apply: () => void) => unknown) | undefined =>
 /**
  * Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts);
  * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake,
- * `openAccess` the Remote access panel, `openMokupilot` the MokuPilot panel.
+ * `openAccess` the Remote access panel, `openMokupilot` the MokuPilot panel, `openSecrets` the
+ * Secrets panel.
  */
 export function useSettingsMenu(
   menu: MenuEngine,
@@ -272,11 +279,22 @@ export function useSettingsMenu(
   openWake: () => void = () => {},
   openAccess: () => void = () => {},
   openMokupilot: () => void = () => {},
+  openSecrets: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
   const place = usePanelPlace()
-  const latest = useLatest({ t, choose, board, openProfiles, openPhones, openWake, openAccess, openMokupilot })
+  const latest = useLatest({
+    t,
+    choose,
+    board,
+    openProfiles,
+    openPhones,
+    openWake,
+    openAccess,
+    openMokupilot,
+    openSecrets,
+  })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
     const open = settingsMenuFrom({
@@ -345,6 +363,8 @@ export function useSettingsMenu(
       openMokupilot: () => latest.current.openMokupilot(),
       access: () => offersAccess(remotePage(), latest.current.board.data),
       openAccess: () => latest.current.openAccess(),
+      secrets: () => offersSecrets(remotePage(), latest.current.board.data),
+      openSecrets: () => latest.current.openSecrets(),
       signOut: () => remotePage() && keptAuth() === 'login',
       endLogin: () => {
         const { t, board } = latest.current

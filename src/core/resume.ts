@@ -56,6 +56,8 @@ export interface ResumeFacts {
   wakeTelegram?: boolean
   /** The program the board starts Claude with (claudeProgram of `launch.claude`); unset: `claude`. */
   launchProgram?: string
+  /** The owner set secrets on this computer (adapters/secret-store.ts): Claude's start is to have them. */
+  secrets?: boolean
 }
 
 /**
@@ -74,6 +76,9 @@ const isLauncher = (program: string): boolean =>
  * word; `board resume` takes the folder from the card first anyway. In the default folder only
  * while wake's Telegram router is on and the board starts Claude through a launcher (claude-tg):
  * `board resume <id>`, which runs it, as herdr-wake's own hook reported its wakeCommand (call 21).
+ * Also while the owner has secrets here and the board starts plain `claude`: `board resume <id>`
+ * starts it with the session's secrets in its env (services/secrets.ts), for its MCP servers;
+ * without secrets, herdr's own resume stays.
  */
 export function resumeCommand(f: ResumeFacts): string[] | null {
   if (f.event !== 'SessionStart' || f.agentId || f.env.HERDR_ENV !== '1' || f.env.PI_CODING_AGENT) return null
@@ -81,8 +86,10 @@ export function resumeCommand(f: ResumeFacts): string[] | null {
   const platform = f.platform ?? process.platform
   const dir = absoluteProfileDir(f.dir, f.home, platform)
   if (!dir) return null
-  if (sameDir(dir, defaultProfileDir(f.home, platform)))
-    return f.wakeTelegram && isLauncher(f.launchProgram ?? 'claude') ? ['board', 'resume', f.session] : null
+  if (sameDir(dir, defaultProfileDir(f.home, platform))) {
+    const launcher = isLauncher(f.launchProgram ?? 'claude')
+    return (f.wakeTelegram && launcher) || (f.secrets && !launcher) ? ['board', 'resume', f.session] : null
+  }
   const id = profileForDir(f.profiles, dir)?.id
   return ['board', 'resume', f.session, ...(id && PLAIN.test(id) ? ['--profile', id] : [])]
 }

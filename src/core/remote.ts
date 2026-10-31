@@ -81,6 +81,13 @@ export const desktopOnly = (rawPath: string): boolean => DESKTOP_ONLY.some(re =>
 export const localOnly = (path: string): boolean => /^\/api\/(remote|access|wake)(\/|$)/.test(path)
 
 /**
+ * The owner's secrets for the agents (Settings → Secrets…): the local board's page, and the board's
+ * own server through its domain's login only; refused on a phone's Tailscale listener and on a PC's
+ * tunnel, in both spellings of a path.
+ */
+export const secretsPath = (path: string): boolean => /^\/api\/secrets(\/|$)/.test(path)
+
+/**
  * What pairs: the app, or the board in a phone's browser (core/pwa.ts). A phone can have both,
  * each with a token of its own.
  */

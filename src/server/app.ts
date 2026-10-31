@@ -80,6 +80,7 @@ import { presenceRoutes } from './routes/presence.ts'
 import { remoteRoutes } from './routes/remote.ts'
 import { revealRoute, revealState } from './routes/reveal.ts'
 import { scheduleRoute } from './routes/schedule.ts'
+import { secretRoutes } from './routes/secrets.ts'
 import { sessionRoutes } from './routes/session.ts'
 import { categoriesRoute, profilesRoute, settingsRoute } from './routes/settings.ts'
 import { setupRoute } from './routes/setup.ts'
@@ -511,6 +512,8 @@ export async function startServer({
     // The archive: its list, and archiving, bringing back or removing sessions (services/archive.ts).
     ...archiveRoutes({ deps, launches, items: board.items, find: board.find, refresh }),
     categoriesRoute(),
+    // Settings → Secrets… (services/secrets.ts): never a value out; refused remotely but on the board's own server.
+    ...secretRoutes({ profiles: () => deps.profiles().list, log }),
     // The Profiles panel: Install, and its edits, a show installing too (services/profiles.ts).
     profilesRoute(
       async id => {

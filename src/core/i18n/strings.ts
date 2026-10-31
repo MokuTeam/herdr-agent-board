@@ -19,6 +19,7 @@ import { ONESHOT_STRINGS } from './oneshot-strings.ts'
 import { PRESENCE_STRINGS } from './presence-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
 import { REMOTE_STRINGS } from './remote-strings.ts'
+import { SECRET_STRINGS } from './secret-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { SYNC_STRINGS } from './sync-strings.ts'
@@ -1330,3 +1331,5 @@ for (const code of Object.keys(SYNC_STRINGS) as Lang[]) Object.assign(STRINGS[co
 for (const code of Object.keys(DESKTOP_STRINGS) as Lang[]) Object.assign(STRINGS[code], DESKTOP_STRINGS[code])
 // And an agent's own browser on the board's server, as the web board shows it.
 for (const code of Object.keys(DESK_STRINGS) as Lang[]) Object.assign(STRINGS[code], DESK_STRINGS[code])
+// And the owner's secrets for the agents.
+for (const code of Object.keys(SECRET_STRINGS) as Lang[]) Object.assign(STRINGS[code], SECRET_STRINGS[code])

@@ -264,6 +264,11 @@ describe('what never crosses', () => {
       'hooks/herdr-agent-state.ps1',
       'skills/herdr-agents/SKILL.md',
       'projects/x/a.jsonl.agent-board-sync',
+      // The board's secrets for the agents, wherever a profile folder might hold them.
+      'state/herdr/plugins/agent-board/secrets/store.json',
+      'state/herdr/plugins/agent-board/secrets/key',
+      'agent-board/secrets/0f8fad5b-d9cb-469f-a165-70867728950e/env.sh',
+      'tmp/agent-board-1000/secrets/x/TOKEN',
     ])
       expect(oneMachine(rel)).toBe(true)
     for (const rel of [
@@ -273,6 +278,8 @@ describe('what never crosses', () => {
       'hooks/mine.sh',
       'paste-cache/x',
       'todos/x',
+      'skills/secrets/SKILL.md',
+      'projects/agent-board/notes.md',
     ])
       expect(oneMachine(rel)).toBe(false)
     expect(secretFile('.credentials.json')).toBe(true)

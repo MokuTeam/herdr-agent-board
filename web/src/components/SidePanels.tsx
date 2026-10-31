@@ -1,9 +1,9 @@
 // The side panels, one open at a time in their shared place: the session sheet, the categories,
 // the schedule, the archive and, with more than one Claude profile folder found, the profiles; sleep
 // and wake while the payload carries its state line; the phones while the remote mode is on;
-// MokuPilot always; Remote access once it was first opened, on the local
-// board. A session sheet that fails to draw says so
-// on its own and leaves the board; opening another session tries again.
+// MokuPilot always; Remote access once it was first opened, on the local board; Secrets once it
+// was first opened, on the local board and the board's own server. A session sheet that fails to
+// draw says so on its own and leaves the board; opening another session tries again.
 import type { Archive } from '../hooks/useArchive.ts'
 import { offersProfiles } from '../models/profiles.ts'
 import { isWakeView } from '../models/wake.ts'
@@ -16,6 +16,7 @@ import { MokupilotPanel, type MokupilotPanelProps } from './mokupilot/MokupilotP
 import { PhonesPanel, type PhonesPanelProps } from './phones/PhonesPanel.tsx'
 import { ProfilesPanel, type ProfilesPanelProps } from './profiles/ProfilesPanel.tsx'
 import { SchedulePanel, type SchedulePanelProps } from './schedule/SchedulePanel.tsx'
+import { SecretsPanel, type SecretsPanelProps } from './secrets/SecretsPanel.tsx'
 import { Sheet, type SheetSlots } from './sheet/Sheet.tsx'
 import { WakePanel, type WakePanelProps } from './wake/WakePanel.tsx'
 
@@ -32,6 +33,8 @@ export interface SidePanelsProps {
   mokupilot?: MokupilotPanelProps
   /** Settings → Remote access…; drawn when given (the page gives it once opened, on the local board only). */
   access?: AccessPanelProps
+  /** Settings → Secrets…; drawn when given (the page gives it once opened, where offersSecrets offers it). */
+  secrets?: SecretsPanelProps
   /** What the page hands the session sheet. */
   sheet?: SheetSlots
   /** The archive's panel (hooks/useArchive.ts); none: not drawn. */
@@ -46,6 +49,7 @@ export function SidePanels({
   phones,
   mokupilot,
   access,
+  secrets,
   sheet,
   archive,
 }: SidePanelsProps) {
@@ -63,6 +67,7 @@ export function SidePanels({
       {phones && data?.remote && <PhonesPanel {...phones} />}
       {mokupilot && <MokupilotPanel {...mokupilot} />}
       {access && <AccessPanel {...access} />}
+      {secrets && <SecretsPanel {...secrets} />}
     </>
   )
 }

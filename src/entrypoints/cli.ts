@@ -72,8 +72,20 @@
 //                            later sessions (a new name makes one); no name: the session's own
 //   board browser-mcp        the agent's browser as an MCP server (stdio; services/browser-mcp.ts):
 //                            what the install puts in each Claude profile on the board's server
+//   board secret set <NAME> [--profile <id> | --session <id|name|pane>]   the owner's secret for
+//                            every session, a profile's or one session's (core/secrets.ts); the
+//                            value from stdin, or typed at a hidden prompt, never an argument
+//   board secret list        the secrets: name, scope, when set, when last used (never a value)
+//   board secret rm <NAME> [--profile <id> | --session <id|name|pane> | --global]   removes one
+//   board secret get <NAME>  prints the value this session gets (its session's, profile's or the
+//                            global one); for the calling session only
+//   board secret file <NAME> the same in a file of the session's own (0600, in memory), its path printed
+//   board launch <program> [args...]   runs the program (claude) with the secrets of its profile
+//                            (CLAUDE_CONFIG_DIR) and session (--resume, --session-id) in its env,
+//                            for MCP servers: what a profile's start command (an alias like cld-work)
+//                            calls; exits with its code
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
-import { readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { readArchiveLog } from '../adapters/archive-store.ts'
@@ -91,7 +103,7 @@ import { configFile, editCategories, loadConfig, setRemoteOn, setTunnelOn } from
 import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { localFetch, readLocalKey } from '../adapters/local-key.ts'
-import { boardFile } from '../adapters/paths.ts'
+import { boardFile, secretStoreFile } from '../adapters/paths.ts'
 import { findPiSession } from '../adapters/pi-home.ts'
 import { currentPresence, setPresence } from '../adapters/presence-store.ts'
 import { runHere } from '../adapters/process.ts'
@@ -124,7 +136,7 @@ import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | login [link | reset] | doctor | update [--ref <ref>] | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | browser ask <text> | browser profile [<name>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | login [link | reset] | doctor | update [--ref <ref>] | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | browser ask <text> | browser profile [<name>] | secret set|list|rm|get|file [<NAME>] [--profile <id>] | launch <program> [args...]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -537,6 +549,8 @@ async function main(): Promise<void> {
   if (cmd === 'presence' || cmd === 'away') return presence()
   if (cmd === 'browser-mcp') return browserMcp()
   if (cmd === 'browser') return browser()
+  if (cmd === 'secret') return secret()
+  if (cmd === 'launch') return launch()
 
   const s = await resolveSession()
   const now = Date.now()
@@ -771,9 +785,165 @@ async function resume(): Promise<void> {
   })
   const [file = 'claude', ...argv] = plan.argv
   const dir = plan.dir ?? resolveProfileDir(process.env.CLAUDE_CONFIG_DIR, homedir())
-  const ran = await runHere(file, argv, plan.env, (await resumeFolder(o.session, dir)) ?? undefined)
+  const env = await withSecrets(plan.env, dir, o.session)
+  const ran = await runHere(file, argv, env, (await resumeFolder(o.session, dir)) ?? undefined)
   if (ran.error) throw new Error(`${file} did not start: ${messageOf(ran.error)}`)
   process.exit(ran.code)
+}
+
+/**
+ * `env` with the owner's secrets for Claude started in the profile folder `dir`, for `session`
+ * (services/secrets.ts launchEnv); `env` itself when no secret was ever set here.
+ */
+async function withSecrets(
+  env: Record<string, string | undefined>,
+  dir: string | null,
+  session: string | null,
+): Promise<Record<string, string | undefined>> {
+  if (!existsSync(secretStoreFile())) return env
+  const { callerOf, launchEnv } = await import('../services/secrets.ts')
+  return launchEnv(env, callerOf(deps.profiles().list, dir, session))
+}
+
+/**
+ * `board launch <program> [args...]`: the program (claude) with the secrets of its profile (this
+ * env's CLAUDE_CONFIG_DIR) and of the session its arguments resume or name in its env, in this
+ * terminal; exits with its code. Its arguments as they came: none of the board's own flags is
+ * taken out of them (`--session`, `--name` are Claude's here).
+ */
+async function launch(): Promise<void> {
+  const at = process.argv.indexOf('launch', 2)
+  const given = process.argv.slice(at + 1)
+  const [program, ...argv] = given[0] === '--' ? given.slice(1) : given
+  if (!program) throw new Error('usage: board launch <program> [args...] (claude and its arguments)')
+  const { sessionInArgs } = await import('../core/secrets.ts')
+  const env = await withSecrets(
+    process.env,
+    resolveProfileDir(process.env.CLAUDE_CONFIG_DIR, homedir()),
+    sessionInArgs(argv),
+  )
+  const ran = await runHere(program, argv, env)
+  if (ran.error) throw new Error(`${program} did not start: ${messageOf(ran.error)}`)
+  process.exit(ran.code)
+}
+
+const SECRET_USAGE =
+  'usage: board secret set <NAME> [--profile <id> | --session <id|name|pane>] (the value from stdin or a hidden prompt) | list | rm <NAME> [--profile <id> | --session <id|name|pane> | --global] | get <NAME> | file <NAME>'
+
+/** `board secret …`: the owner's secrets for the agents (services/secrets.ts). In English, for agents and the owner alike. */
+async function secret(): Promise<void> {
+  const [sub = 'list', ...more] = rest
+  const store = await import('../adapters/secret-store.ts')
+  const { secretProblem } = await import('../services/secrets.ts')
+  const { nameProblem, secretId } = await import('../core/secrets.ts')
+  const at = more.indexOf('--profile')
+  const profile = at >= 0 ? more[at + 1] : undefined
+  if (at >= 0) more.splice(at, 2)
+  const gi = more.indexOf('--global')
+  const global = gi >= 0
+  if (global) more.splice(gi, 1)
+  const name = more[0]
+  if ([profile !== undefined, target !== undefined, global].filter(Boolean).length > 1)
+    throw new Error(`one scope at most: --profile, --session or --global. ${SECRET_USAGE}`)
+  if (at >= 0 && !profile) throw new Error(`--profile needs a profile id. ${SECRET_USAGE}`)
+  const profiles = deps.profiles().list
+
+  if (sub === 'list') {
+    const list = store.listSecrets()
+    if (!list.length) return console.log('no secrets (board secret set <NAME>)')
+    const names = await sessionNames()
+    const who = (key: string, fallback?: string): string => names.get(key) || fallback || key.slice(0, 8)
+    for (const m of list) {
+      const scope =
+        m.scope === 'global'
+          ? 'global'
+          : m.scope === 'profile'
+            ? `profile ${m.target}`
+            : `session ${who(m.target ?? '', m.targetName)}`
+      const used = m.usedAt ? `used ${stamp(m.usedAt)} by ${who(m.usedBy ?? '')} (${m.usedHow})` : 'never used'
+      console.log(`${m.name} · ${scope} · set ${stamp(m.setAt)} · ${used}`)
+    }
+    return
+  }
+
+  if (sub === 'get' || sub === 'file') {
+    if (target !== undefined || profile !== undefined || global)
+      throw new Error(`board secret ${sub} is for the calling session only: no --session, --profile or --global`)
+    if (!name || nameProblem(name) === 'name') throw new Error(SECRET_USAGE)
+    const s = await resolveSession()
+    const { callerOf } = await import('../services/secrets.ts')
+    const who = callerOf(profiles, resolveProfileDir(process.env.CLAUDE_CONFIG_DIR, homedir()), s.key)
+    const got = store.secretsFor(who).find(x => x.name === name)
+    if (!got) throw new Error(`no secret ${name} for this session (board secret list)`)
+    if (sub === 'get') {
+      process.stdout.write(process.stdout.isTTY ? `${got.value}\n` : got.value)
+      store.markUsed([got.id], s.key, 'get')
+      return
+    }
+    const file = store.writeSessionFile(s.key, got)
+    store.markUsed([got.id], s.key, 'file')
+    return console.log(file)
+  }
+
+  if (sub !== 'set' && sub !== 'rm') throw new Error(SECRET_USAGE)
+  if (!name) throw new Error(SECRET_USAGE)
+  if (more.length > 1)
+    throw new Error(
+      sub === 'set'
+        ? 'the value is never an argument: pipe it in (board secret set NAME < file) or type it at the prompt'
+        : SECRET_USAGE,
+    )
+  // The place it is for: a profile the board knows, a Claude session the board knows, or every session.
+  let place: { scope: 'global' | 'profile' | 'session'; target: string | null } | null = null
+  let targetName: string | undefined
+  if (profile !== undefined) {
+    if (!profiles.some(p => p.id === profile))
+      throw new Error(`no profile "${profile}": ${profiles.map(p => p.id).join(', ')}`)
+    place = { scope: 'profile', target: profile }
+  } else if (target !== undefined) {
+    const s = await resolveSession()
+    if (!UUID.test(s.key)) throw new Error(`"${target}" is not a Claude session: a secret is for a Claude session's id`)
+    place = { scope: 'session', target: s.key.toLowerCase() }
+    targetName = s.name || (await sessionNames()).get(s.key.toLowerCase())
+  } else if (global || sub === 'set') place = { scope: 'global', target: null }
+
+  if (sub === 'rm') {
+    const all = store.listSecrets().filter(m => m.name === name)
+    const hit = place ? all.find(m => m.id === secretId(place, name)) : all.length === 1 ? all[0] : undefined
+    if (!hit)
+      throw new Error(
+        all.length > 1
+          ? `${name} is set in ${all.length} scopes (${all.map(m => (m.scope === 'global' ? 'global' : `${m.scope} ${m.target}`)).join(', ')}): say which with --global, --profile or --session`
+          : `no secret ${name}${place ? ' there' : ''} (board secret list)`,
+      )
+    store.removeSecret(hit.id)
+    return console.log(`ok · removed ${name} (${hit.scope === 'global' ? 'global' : `${hit.scope} ${hit.target}`})`)
+  }
+
+  const en = translator('en')
+  const bad = secretProblem(name, 'x', en)
+  if (bad) throw new Error(bad)
+  const { readHidden, readStdin } = await import('../adapters/stdin.ts')
+  const typed = process.stdin.isTTY ? await readHidden(`${name} (typed, not shown): `) : await readStdin()
+  if (typed === null) throw new Error('nothing was set')
+  // What a pipe ends with is the pipe's, not the secret's: one line end is dropped.
+  const value = typed.replace(/\r?\n$/, '')
+  const problem = secretProblem(name, value, en)
+  if (problem) throw new Error(problem)
+  if (!place) throw new Error(SECRET_USAGE)
+  store.setSecret(place, name, value, targetName ? { targetName } : {})
+  console.log(
+    `ok · ${name} set for ${place.scope === 'global' ? 'every session' : place.scope === 'profile' ? `profile ${place.target}` : `session ${targetName || place.target}`}; new or restarted sessions get it`,
+  )
+}
+
+/** The board's sessions' names by key, when the board can be read (else none). */
+async function sessionNames(): Promise<Map<string, string>> {
+  try {
+    return new Map((await collect(deps)).map(i => [i.key.toLowerCase(), i.autoName || i.name]))
+  } catch {
+    return new Map()
+  }
 }
 
 /**

@@ -2560,6 +2560,48 @@ With more than one Claude profile there is still one journal: a receipt is keyed
 UUID, whichever profile the session runs in, and waking it for a report goes through the same
 profile guard as any other wake. The code: [`src/adapters/call-receipts.ts`](src/adapters/call-receipts.ts).
 
+## Secrets
+
+API tokens and keys for the agents (a Toggl token for a skill, a Slack token for one agent), kept by
+the board and handed to the sessions they are for. Settings → Secrets… on the board's page (the
+local page on your computer; on the board's own server, its page at your domain behind its login;
+never through a phone's Tailscale or a PC's tunnel), or `board secret`:
+
+```
+board secret set NAME [--profile <id> | --session <id|name|pane>]   value from stdin or a hidden prompt
+board secret list                    name, scope, when set, when last used and by which session
+board secret rm NAME [--global | --profile <id> | --session <id|name|pane>]
+board secret get NAME                (in a session) the value this session gets
+board secret file NAME               (in a session) the same in a file of its own (0600), its path
+```
+
+- **Scopes.** Every session (global), the sessions of one board profile, or one Claude session
+  (picked by name, kept by its id, so sleep and resume keep it; `/clear` starts a new id). The same
+  name in several: the session's wins over the profile's, the profile's over the global one. A name
+  is a shell variable's; the ones the shell, Claude Code, herdr or the board read themselves
+  (`PATH`, `HOME`, `CLAUDE_*`, `ANTHROPIC_*`, `HERDR_*`, `LD_*`, …) are refused.
+- **How a session gets them.** As environment variables in its Bash commands: the board's
+  SessionStart hook writes a block into Claude Code's `$CLAUDE_ENV_FILE`, which Claude Code runs
+  before each Bash command; on Linux the block only sources the session's own file in
+  `$XDG_RUNTIME_DIR/agent-board/secrets/<session>/env.sh` (memory, 0600), so Claude's `session-env/`
+  folder holds a path, not a value (without `$XDG_RUNTIME_DIR`, on macOS and Windows, it holds the
+  export lines). In Claude's own environment, which its MCP servers start with (`${VAR}` in an MCP
+  server's config): `board resume` (wake, `board sleep`'s line, herdr's restore), spawn-agent's
+  start of `launch.claude` (through `board launch`) and `board launch <program> [args…]`, which a
+  profile's own start command can call (`alias cld-work='CLAUDE_CONFIG_DIR=$HOME/.claude-work board
+  launch claude …'`). Never on a command line, never typed into a pane. On demand with
+  `board secret get` and `board secret file`, for the calling session only.
+- **Changes apply to new or restarted sessions** (`board restart`, or sleep and wake).
+- **On disk.** `~/.local/state/herdr/plugins/agent-board/secrets/` (`%LOCALAPPDATA%\herdr\plugins\agent-board\secrets\`
+  on Windows), 0700: `store.json` (each value sealed with AES-256-GCM), `key` (its key) and
+  `used.json` (last used), each 0600; no value in a log, a card, the board's answers or an error.
+  The profile sync never takes them; a sync of your own between computers should leave out that
+  folder (and `$XDG_RUNTIME_DIR/agent-board/`): each computer keeps its own secrets and key.
+- **The limit.** All agents run as one user: the scopes keep a secret from the sessions it is not
+  for by accident, not from an agent set on reading it (it can read the store, the key and other
+  sessions' environments as you can).
+- With no secret ever set, nothing of this runs: the hook only looks whether the store is there.
+
 ## Settings
 
 `%APPDATA%\herdr\plugins\config\agent-board\config.json`: `language` (`auto`, `en`, `ru`),
@@ -2708,6 +2750,12 @@ ssh, Pebble as the CA, a stand-in board at the tunnel's end, about an hour.
 board's serve side by side, with the board's own images, flags and texts (a few minutes).
 `BOARD_IT_KEEP=1` keeps the built images and the Docker Hub mirror for the next run. Without these
 variables `bun test` skips them and starts no container.
+
+The secrets for the agents: `src/core/secrets.ts` (names, scopes, which one a session gets, the
+shell words and the env file's block), `src/adapters/secret-store.ts` (the sealed store, its key, the
+sessions' files in memory), `src/services/secrets.ts` (the hook's, the launches' and the page's
+part), `src/server/routes/secrets.ts`, `web/src/components/secrets/`; `board secret` and
+`board launch` in `src/entrypoints/cli.ts`.
 
 `herdr-wake/` is the separate plugin, deprecated (the board does this now) and kept one release
 for those who still run it, on Node.js rather than Bun: `bun test`, `bun run check` and tsc leave

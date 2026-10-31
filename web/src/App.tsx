@@ -4,7 +4,7 @@
 // session's helpers in their window; the Claude profiles' panel and sleep and wake's from Settings
 // (wake's also from the toolbar's "Wake stopped"); the archive (its panel, sessions off the board
 // and back, Ctrl+Z); a fork of a session in a new tab; Remote access from Settings on the local
-// board.
+// board; Secrets from Settings on the local board and on the board's own server.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
@@ -48,6 +48,7 @@ import { useTerminal } from './hooks/useTerminal.ts'
 import { useTerminalKeys } from './hooks/useTerminalKeys.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { remotePage } from './models/remote-page.ts'
+import { offersSecrets } from './models/settings-menu.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
@@ -88,6 +89,14 @@ export function App() {
   const openAccess = () => {
     setAccess(true)
     setAccessMounted(true)
+  }
+  // Settings → Secrets…, on the local board and on the board's own server: mounted at its first
+  // opening, as Remote access.
+  const [secrets, setSecrets] = useState(false)
+  const [secretsMounted, setSecretsMounted] = useState(false)
+  const openSecrets = () => {
+    setSecrets(true)
+    setSecretsMounted(true)
   }
   // The reminders' buttons, shared by the schedule panel and the sheet.
   const reminders = useSchedule()
@@ -140,6 +149,7 @@ export function App() {
     () => setWake(true),
     openAccess,
     openMokupilot,
+    openSecrets,
   )
   // The lanes control and the profile switch folded into pills: their choices as menus.
   const picks = useSegmentPicks(menus.menu)
@@ -217,6 +227,9 @@ export function App() {
         phones={{ open: phones, onClose: () => setPhones(false) }}
         {...(mokupilotMounted ? { mokupilot: { open: mokupilot, onClose: () => setMokupilot(false) } } : {})}
         {...(accessMounted && !remotePage() ? { access: { open: access, onClose: () => setAccess(false) } } : {})}
+        {...(secretsMounted && offersSecrets(remotePage(), data)
+          ? { secrets: { open: secrets, onClose: () => setSecrets(false) } }
+          : {})}
         archive={archive}
         sheet={{
           onNewSession: newSession,

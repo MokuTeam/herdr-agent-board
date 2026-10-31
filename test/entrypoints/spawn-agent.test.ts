@@ -615,6 +615,47 @@ test('no start command, or a blank one, types launch.claude as before', async ()
     assert.equal(callList(box)[1], `pane run wA:p9 claude --model sonnet --session-id ${SID}`, JSON.stringify(work))
   }
 }, 60_000)
+test('with the owner’s secrets here, launch.claude goes through board launch; a profile’s own command, pi, or no board on PATH as before', async () => {
+  /** A store as the board keeps one, with one secret (spawn-agent never opens it) or emptied, and `board` on PATH when asked. */
+  const withSecrets = (box: Sandbox, onPath: boolean, emptied = false): Record<string, string> => {
+    const dir = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board', 'secrets')
+    mkdirSync(dir, { recursive: true })
+    const one = { name: 'A', scope: 'global', target: null, setAt: 1, iv: 'aa', tag: 'bb', data: 'cc' }
+    writeFileSync(join(dir, 'store.json'), JSON.stringify({ v: 1, entries: emptied ? [] : [one] }))
+    if (!onPath) return {}
+    const bin = join(box.dir, 'bin')
+    mkdirSync(bin, { recursive: true })
+    const file = join(bin, process.platform === 'win32' ? 'board.cmd' : 'board')
+    writeFileSync(file, process.platform === 'win32' ? '@exit /b 0\r\n' : '#!/bin/sh\n', { mode: 0o755 })
+    return { PATH: `${bin}${process.platform === 'win32' ? ';' : ':'}${box.env.PATH}` }
+  }
+  const start = ['--name', 'Helper', '--workspace', 'wA', '--session-id', SID]
+  const plain = await profileBox()
+  const r = await runSpawn(plain.box, [...start, '--cwd', plain.dir], {
+    CLAUDE_CONFIG_DIR: plain.work,
+    ...withSecrets(plain.box, true),
+  })
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(callList(plain.box)[1], `pane run wA:p9 board launch claude --model sonnet --session-id ${SID}`)
+  // The profile's own command (an alias): typed as it is; the owner's alias calls board launch itself.
+  const own = await profileBox({}, () => [], { work: { command: 'cld-work' } })
+  await runSpawn(own.box, [...start, '--cwd', own.dir], { CLAUDE_CONFIG_DIR: own.work, ...withSecrets(own.box, true) })
+  assert.equal(callList(own.box)[1], `pane run wA:p9 cld-work --model sonnet --session-id ${SID}`)
+  // No board on PATH: as before.
+  const lost = await profileBox()
+  await runSpawn(lost.box, [...start, '--cwd', lost.dir], {
+    CLAUDE_CONFIG_DIR: lost.work,
+    ...withSecrets(lost.box, false),
+  })
+  assert.equal(callList(lost.box)[1], `pane run wA:p9 claude --model sonnet --session-id ${SID}`)
+  // Every secret removed since: as before.
+  const gone = await profileBox()
+  await runSpawn(gone.box, [...start, '--cwd', gone.dir], {
+    CLAUDE_CONFIG_DIR: gone.work,
+    ...withSecrets(gone.box, true, true),
+  })
+  assert.equal(callList(gone.box)[1], `pane run wA:p9 claude --model sonnet --session-id ${SID}`)
+}, 60_000)
 test('the board’s own profile types its start command too, its env left alone; --keep-env and --config-dir alike', async () => {
   const own = await profileBox({}, () => [], { default: { command: 'cld' } })
   const r = await runSpawn(own.box, [

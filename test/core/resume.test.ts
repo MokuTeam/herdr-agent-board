@@ -78,6 +78,25 @@ test('the default folder, however spelled, is left to herdr: no command', () => 
   expect(resumeCommand(start('/home/me/.claude', { home: '/home/me', platform: 'linux' }))).toBeNull()
 })
 
+test('with the owner’s secrets here, the default folder comes back through board resume too, for its MCP servers', () => {
+  const secrets = { secrets: true }
+  for (const dir of [DEFAULT.dir, 'c:/users/me/.claude/'])
+    expect(resumeCommand(start(dir, secrets))).toEqual(['board', 'resume', SID])
+  expect(resumeCommand(start('/home/me/.claude', { home: '/home/me', platform: 'linux', ...secrets }))).toEqual([
+    'board',
+    'resume',
+    SID,
+  ])
+  // Another profile as without them.
+  expect(resumeCommand(start(WORK.dir, secrets))).toEqual(['board', 'resume', SID, '--profile', 'work'])
+  // A launcher of the owner's (claude-tg) without wake's Telegram router: herdr's own resume, as without them.
+  expect(resumeCommand(start(DEFAULT.dir, { ...secrets, launchProgram: 'claude-tg' }))).toBeNull()
+  // Not a SessionStart in herdr: none, secrets or not.
+  expect(resumeCommand(start(DEFAULT.dir, { ...secrets, env: {} }))).toBeNull()
+  expect(resumeCommand(start(DEFAULT.dir, { ...secrets, agentId: 'agent-1' }))).toBeNull()
+  expect(resumeCommand(start(DEFAULT.dir, { secrets: false }))).toBeNull()
+})
+
 test('only a SessionStart of a pane’s own Claude session in herdr gets a command', () => {
   expect(resumeCommand(start(WORK.dir, { event: 'UserPromptSubmit' }))).toBeNull()
   expect(resumeCommand(start(WORK.dir, { event: undefined }))).toBeNull()

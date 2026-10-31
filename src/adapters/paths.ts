@@ -42,3 +42,6 @@ export const contextDir = (): string => join(stateDir(), 'context')
 export const terminalsFile = (): string => join(stateDir(), 'terminals.json')
 // The panes opened with a profile's CLAUDE_CONFIG_DIR (adapters/profile-panes.ts).
 export const profilePanesFile = (): string => join(stateDir(), 'profile-panes.json')
+// The owner's secrets for the agents (adapters/secret-store.ts): one folder, never synced.
+export const secretsDir = (): string => join(stateDir(), 'secrets')
+export const secretStoreFile = (): string => join(secretsDir(), 'store.json')
