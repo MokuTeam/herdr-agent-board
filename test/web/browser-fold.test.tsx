@@ -119,13 +119,33 @@ const desktop = (fields: Partial<ItemDesktop> = {}): ItemDesktop => ({
 const toasts: string[] = []
 
 /** The fold in the panel as the sheet has it: its own open state; `shown`: the panel is open. */
-function Harness({ item, shown, initial }: { item: Item; shown: boolean; initial: boolean }) {
+function Harness({
+  item,
+  shown,
+  initial,
+  askedAbove,
+  reveal,
+}: {
+  item: Item
+  shown: boolean
+  initial: boolean
+  askedAbove?: boolean | undefined
+  reveal?: number | undefined
+}) {
   const [open, setOpen] = useState(initial)
-  return <BrowserFold item={item} open={open && shown} onOpen={setOpen} />
+  return <BrowserFold item={item} open={open && shown} onOpen={setOpen} askedAbove={askedAbove} reveal={reveal} />
 }
 
 function render(
-  fields: { desktop?: ItemDesktop; shown?: boolean; open?: boolean; question?: string; lang?: string } = {},
+  fields: {
+    desktop?: ItemDesktop
+    shown?: boolean
+    open?: boolean
+    question?: string
+    lang?: string
+    askedAbove?: boolean
+    reveal?: number
+  } = {},
 ) {
   const item = itemOf({
     key: KEY,
@@ -138,7 +158,13 @@ function render(
   draw(
     <I18nProvider lang={fields.lang ?? 'en'}>
       <BoardContext.Provider value={value}>
-        <Harness item={item} shown={fields.shown ?? true} initial={fields.open ?? false} />
+        <Harness
+          item={item}
+          shown={fields.shown ?? true}
+          initial={fields.open ?? false}
+          askedAbove={fields.askedAbove}
+          reveal={fields.reveal}
+        />
       </BoardContext.Provider>
     </I18nProvider>,
   )
@@ -235,6 +261,35 @@ test('what the agent asks the owner to do there: at its browser folded, open and
   newRoot()
   render({ desktop: desktop({ ask }), lang: 'ru' })
   expect(asks()).toEqual([`Агент просит вас: ${ask}`])
+})
+
+test('the panel’s "needs you" saying the ask already: the fold does not, folded or open; full size still does; asked to, it comes into view', () => {
+  const ask = 'Sign in to GitHub as acme-bot'
+  const asks = (under: MiniNode = dom.document.body) => all(under).filter(el => el.className === 'desk-asks').length
+  const seen: unknown[] = []
+  const was = MiniElement.prototype.scrollIntoView
+  MiniElement.prototype.scrollIntoView = function (this: MiniElement, options?: unknown) {
+    seen.push([this.localName, this.className, options])
+  }
+  try {
+    render({ desktop: desktop({ asks: true, ask }), askedAbove: true })
+    expect(asks()).toBe(0)
+    click(desk('fold'))
+    expect(asks()).toBe(0)
+    click(desk('full'))
+    expect(asks(byClass('desk-full'))).toBe(1)
+    expect(asks()).toBe(1)
+    // not asked to come into view yet; then asked: the fold's section, nearest
+    expect(seen).toEqual([])
+    render({ desktop: desktop({ asks: true, ask }), askedAbove: true, reveal: 1 })
+    expect(seen).toEqual([['section', 'desk open', { block: 'nearest', behavior: 'smooth' }]])
+    // without the panel's block (a form in its place): the fold says it, as before
+    render({ desktop: desktop({ asks: true, ask }), askedAbove: false, reveal: 1 })
+    expect(asks()).toBe(2)
+    expect(seen).toHaveLength(1)
+  } finally {
+    MiniElement.prototype.scrollIntoView = was
+  }
 })
 
 test('it says why it could not show, and tries again', () => {
@@ -649,4 +704,90 @@ test('a tap with control brings up the screen’s keyboard: a field by the pictu
   tap(canvas(), 250, 150)
   expect(dom.document.activeElement).not.toBe(field() as MiniElement)
   expect(socket?.sent).toEqual([])
+})
+
+// ---------------------------------------------------------------- the panel's "needs you"
+
+const ASK = 'Sign in to GitHub as acme-bot'
+/** The panel under its head (SheetView) for `it`, its fold's own open state; the scrolls into view it asked for. */
+async function sheetView(it: Item) {
+  const { SheetView } = await import('../../web/src/components/sheet/Sheet.tsx')
+  const { emptyDetail } = await import('../../web/src/hooks/useSessionDetail.ts')
+  const { composerOf } = await import('./support/sheet-scene.tsx')
+  function Panel() {
+    const [open, setOpen] = useState(false)
+    return (
+      <SheetView
+        open={KEY}
+        item={it}
+        detail={emptyDetail(KEY)}
+        composer={composerOf({ open: KEY })}
+        browser={{ open, onOpen: setOpen }}
+      />
+    )
+  }
+  const base = boardOf({})
+  const value = boardOf({ data: base.data && { ...base.data, items: [it] } })
+  draw(
+    <I18nProvider lang="en">
+      <BoardContext.Provider value={value}>
+        <Panel />
+      </BoardContext.Provider>
+    </I18nProvider>,
+  )
+  const asked = byClass('asked')
+  return { buttons: () => all(asked as MiniElement).filter(el => el.localName === 'button'), asked }
+}
+
+/** Calls to scrollIntoView while `body` runs: the class of what was brought into view. */
+async function scrolls(body: (seen: string[]) => Promise<void>) {
+  const seen: string[] = []
+  const was = MiniElement.prototype.scrollIntoView
+  MiniElement.prototype.scrollIntoView = function (this: MiniElement) {
+    seen.push(this.className)
+  }
+  try {
+    await body(seen)
+  } finally {
+    MiniElement.prototype.scrollIntoView = was
+  }
+}
+
+const askingItem = () =>
+  itemOf({
+    key: KEY,
+    name: 'Alpha',
+    status: 'working',
+    column: 'me',
+    attention: 'ask',
+    question: ASK,
+    desktop: desktop({ asks: true, ask: ASK }),
+  })
+
+test('"Open its browser" in the panel’s "needs you", first beside "No reply needed": it unfolds the fold and brings it into view', async () => {
+  await scrolls(async seen => {
+    const { buttons, asked } = await sheetView(askingItem())
+    expect(buttons().map(b => [b.className, b.textContent])).toEqual([
+      ['button desk-ask', 'Open its browser'],
+      ['button asked-dismiss', 'No reply needed'],
+    ])
+    expect(byClass('asked-actions')?.parentNode).toBe(asked)
+    // folded, and the fold does not say the ask again
+    expect(desk('fold')?.getAttribute('aria-expanded')).toBe('false')
+    expect(byClass('desk-asks')).toBeUndefined()
+    click(desk('open'))
+    expect(desk('fold')?.getAttribute('aria-expanded')).toBe('true')
+    expect(seen).toEqual(['desk open'])
+    expect(FakeSocket.made).toHaveLength(1)
+  })
+})
+
+test('a board ask that is not the browser’s: the panel’s "needs you" as before, no such button, nothing brought into view', async () => {
+  await scrolls(async seen => {
+    const { buttons } = await sheetView({ ...askingItem(), question: 'Which branch?', desktop: desktop() })
+    expect(buttons().map(b => [b.className, b.textContent])).toEqual([['button asked-dismiss', 'No reply needed']])
+    expect(byClass('asked-actions')).toBeUndefined()
+    expect(byClass('asked')?.textContent).toBe('ASKSWhich branch?No reply needed')
+    expect(seen).toEqual([])
+  })
 })

@@ -34,6 +34,7 @@
 :root[data-card-text="wrap"] .card .qa-card-q { -webkit-line-clamp: 3; overflow-wrap: anywhere; }
 /* An ask to do in its browser clamps its text, not its box, so "Open its browser" stays (desktop.css). */
 :root[data-card-text="wrap"] .card .ask.desk-asking { -webkit-line-clamp: none; }
+:root[data-card-text="wrap"] .card .desk-asking .ask-q { -webkit-line-clamp: 3; }
 :root[data-card-text="wrap"] .card .qa-card-opts { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: normal; overflow-wrap: anywhere; }
 /* What it waits for: the clock by the first line, the chip's corners rounded to fit more than one. */
 :root[data-card-text="wrap"] .card .chip { align-items: flex-start; border-radius: 12px; }

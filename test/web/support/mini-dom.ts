@@ -174,6 +174,9 @@ export class MiniElement extends MiniNode {
   get className(): string {
     return this.getAttribute('class') ?? ''
   }
+  get children(): MiniElement[] {
+    return this.childNodes.filter((c): c is MiniElement => c instanceof MiniElement)
+  }
   /** Read back as its text only. */
   get innerHTML(): string {
     return this.textContent
@@ -268,9 +271,17 @@ export function miniWindow(innerHeight: number) {
   document.defaultView = win
   // As in a browser, the window is on every event's way: its listeners hear what bubbles up the page.
   document.parentNode = win as unknown as MiniNode
-  const saved = { window: Reflect.get(globalThis, 'window'), document: Reflect.get(globalThis, 'document') }
+  const saved = {
+    window: Reflect.get(globalThis, 'window'),
+    document: Reflect.get(globalThis, 'document'),
+    getComputedStyle: Reflect.get(globalThis, 'getComputedStyle'),
+    HTMLElement: Reflect.get(globalThis, 'HTMLElement'),
+  }
   Reflect.set(globalThis, 'window', win)
   Reflect.set(globalThis, 'document', document)
+  // An element's style as computed: its inline style, all the layout there is here.
+  Reflect.set(globalThis, 'getComputedStyle', (el: MiniElement) => ({ ...el.style }))
+  Reflect.set(globalThis, 'HTMLElement', MiniElement)
   return {
     window: win,
     document,
@@ -282,6 +293,8 @@ export function miniWindow(innerHeight: number) {
     uninstall() {
       Reflect.set(globalThis, 'window', saved.window)
       Reflect.set(globalThis, 'document', saved.document)
+      Reflect.set(globalThis, 'getComputedStyle', saved.getComputedStyle)
+      Reflect.set(globalThis, 'HTMLElement', saved.HTMLElement)
     },
   }
 }

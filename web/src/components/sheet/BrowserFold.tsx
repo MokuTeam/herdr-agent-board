@@ -14,6 +14,7 @@ import { errorText } from '../../api/client.ts'
 import { type DesktopControl, setDesktopControl } from '../../api/desktop.ts'
 import { useDesktop } from '../../hooks/useDesktop.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { reducedMotion } from '../../models/spring.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { ChevGlyph, CloseGlyph, ExpandGlyph } from '../icons.tsx'
@@ -23,9 +24,13 @@ export interface BrowserFoldProps {
   /** The fold is open (an opening from the card's mark opens it: the board's `browser`). */
   open: boolean
   onOpen(open: boolean): void
+  /** The panel's "needs you" above says the ask already: the fold does not (full size still does). */
+  askedAbove?: boolean | undefined
+  /** Counts the asks to bring the fold into view ("Open its browser" in what it asks). */
+  reveal?: number | undefined
 }
 
-export function BrowserFold({ item, open, onOpen }: BrowserFoldProps) {
+export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0 }: BrowserFoldProps) {
   const t = useT()
   const { canMutate, toast } = useBoardContext()
   const desktop = item.desktop
@@ -45,6 +50,12 @@ export function BrowserFold({ item, open, onOpen }: BrowserFoldProps) {
   const view = useDesktop(item.key, on, owner)
   const [foldHost, setFoldHost] = useState<HTMLElement | null>(null)
   const [fullHost, setFullHost] = useState<HTMLElement | null>(null)
+  const section = useRef<HTMLElement>(null)
+  // Asked to be seen: in view, once open.
+  useEffect(() => {
+    if (reveal)
+      section.current?.scrollIntoView({ block: 'nearest', behavior: reducedMotion.matches ? 'auto' : 'smooth' })
+  }, [reveal])
 
   // The picture where it shows: in the fold, or full size.
   useLayoutEffect(() => {
@@ -152,7 +163,11 @@ export function BrowserFold({ item, open, onOpen }: BrowserFoldProps) {
     </p>
   ) : null
   return (
-    <section className={classNames('desk', open && 'open', owner && 'owner')} aria-label={t('desk.title')}>
+    <section
+      ref={section}
+      className={classNames('desk', open && 'open', owner && 'owner')}
+      aria-label={t('desk.title')}
+    >
       <div className="desk-bar">
         <button type="button" className="desk-fold" data-desk="fold" aria-expanded={open} onClick={() => onOpen(!open)}>
           <ChevGlyph />
@@ -161,7 +176,7 @@ export function BrowserFold({ item, open, onOpen }: BrowserFoldProps) {
         </button>
         {open && tools('fold')}
       </div>
-      {asks}
+      {!askedAbove && asks}
       {open && (
         <>
           {warn}

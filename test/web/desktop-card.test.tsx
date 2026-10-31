@@ -179,3 +179,22 @@ describe('a browser ask, while the agent works on', () => {
     expect(ru).toMatch(/<b>В ЕГО БРАУЗЕРЕ<\/b>\s*Sign in to GitHub as acme-bot/)
   })
 })
+
+describe('"Open its browser" stands out', () => {
+  const read = (name: string) => readFileSync(join(import.meta.dir, '..', '..', 'web', 'styles', name), 'utf8')
+  test('filled in the ask’s orange on the card and in the panel; outlined in it in the Terminal style, hovered too', () => {
+    const css = read('desktop.css')
+    expect(css).toContain('.button.desk-ask { background: var(--orange); color: #fff; font-weight: 600; }')
+    // nothing over the fill on the card, nor in the panel
+    expect(css).not.toMatch(/^\.ask \.desk-ask \{[^}]*background/m)
+    expect(css).not.toMatch(/^\.asked \.desk-ask \{[^}]*background/m)
+    const terminal = read('look-terminal.css')
+    const outline =
+      ':root[data-look="terminal"] .button.desk-ask:hover:not(:disabled) { background: none; box-shadow: inset 0 0 0 1px var(--orange); color: var(--orange); font-weight: 700; }'
+    expect(terminal).toContain(outline)
+    // after the Terminal style's own hover, of the same weight
+    expect(terminal.indexOf(outline)).toBeGreaterThan(
+      terminal.indexOf(':root[data-look="terminal"] .button:not(.primary):hover:not(:disabled)'),
+    )
+  })
+})

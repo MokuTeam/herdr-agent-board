@@ -20,7 +20,7 @@ import { type OpenLaunch, useNewSession } from '../../hooks/useNewSession.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
 import { type DetailSnapshot, useSessionDetail } from '../../hooks/useSessionDetail.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { inTurn } from '../../models/card.ts'
+import { asksInBrowser, inTurn } from '../../models/card.ts'
 import { ConversationScroll } from '../../models/conversation-scroll.ts'
 import { restartPending } from '../../models/restart.ts'
 import {
@@ -38,7 +38,7 @@ import { useBoardContext } from '../../state/BoardProvider.tsx'
 import type { BoardUi } from '../../state/board-ui.ts'
 import { classNames } from '../class-names.ts'
 import { HelpersStrip } from '../helpers/HelpersStrip.tsx'
-import { CheckGlyph } from '../icons.tsx'
+import { CheckGlyph, ScreenGlyph } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { BrowserFold } from './BrowserFold.tsx'
 import { Composer, type SessionButtons } from './Composer.tsx'
@@ -326,12 +326,29 @@ export function SheetView(props: SheetViewProps) {
   )
   const hasForm = form !== null && form !== undefined && form !== false
   const asking = !hasForm && item?.column === 'me'
+  // What it asks is to be done in its own browser, and the fold is here: "Open its browser" in what
+  // it asks, which unfolds the fold and brings it into view; the fold does not say the ask again.
+  const browser = item?.desktop?.running ? props.browser : undefined
+  const inBrowser = asking && !!item && asksInBrowser(item) && !!browser
+  const [reveal, setReveal] = useState(0)
+  const openBrowser = () => {
+    browser?.onOpen(true)
+    setReveal(n => n + 1)
+  }
   return (
     <>
       <div className="sheet-question" id="sheet-question" hidden={!hasForm && !asking}>
         {hasForm
           ? form
-          : asking && item && <Asked item={item} disabled={availability.dismiss} onDismiss={props.onDismiss} />}
+          : asking &&
+            item && (
+              <Asked
+                item={item}
+                disabled={availability.dismiss}
+                onDismiss={props.onDismiss}
+                onBrowser={inBrowser ? openBrowser : undefined}
+              />
+            )}
       </div>
       <HelpersStrip
         helpers={(item && detail.data?.helpers) || []}
@@ -339,12 +356,14 @@ export function SheetView(props: SheetViewProps) {
         onHelper={(id, el) => props.links?.onHelper(id, el)}
         onList={(run, el) => props.links?.onList(run, el)}
       />
-      {item?.desktop?.running && props.browser && (
+      {item && browser && (
         <BrowserFold
           key={item.key}
           item={item}
-          open={props.browser.open && open !== null}
-          onOpen={props.browser.onOpen}
+          open={browser.open && open !== null}
+          onOpen={browser.onOpen}
+          askedAbove={inBrowser}
+          reveal={reveal}
         />
       )}
       <div
@@ -455,25 +474,49 @@ function Conversation({ detail, item, links, composer, onResize }: ConversationP
   )
 }
 
-/** Under "Needs me" with no form to answer: why it stopped, what it asks, and the button that waves it off. */
-function Asked({ item, disabled, onDismiss }: { item: Item; disabled: boolean; onDismiss?: (() => void) | undefined }) {
+/**
+ * Under "Needs me" with no form to answer: why it stopped, what it asks, and the button that waves it
+ * off; asked to be done in its browser (`onBrowser`), "Open its browser" first, beside it.
+ */
+function Asked({
+  item,
+  disabled,
+  onDismiss,
+  onBrowser,
+}: {
+  item: Item
+  disabled: boolean
+  onDismiss?: (() => void) | undefined
+  onBrowser?: (() => void) | undefined
+}) {
   const t = useT()
   const asked = askedView(item, t)
+  const dismiss = asked.dismiss && (
+    <button
+      type="button"
+      className="button asked-dismiss"
+      data-act="dismiss"
+      disabled={disabled}
+      onClick={() => onDismiss?.()}
+    >
+      <CheckGlyph />
+      <span>{asked.dismiss}</span>
+    </button>
+  )
   return (
     <div className="asked">
       <b>{asked.why}</b>
       {asked.text}
-      {asked.dismiss && (
-        <button
-          type="button"
-          className="button asked-dismiss"
-          data-act="dismiss"
-          disabled={disabled}
-          onClick={() => onDismiss?.()}
-        >
-          <CheckGlyph />
-          <span>{asked.dismiss}</span>
-        </button>
+      {onBrowser ? (
+        <div className="asked-actions">
+          <button type="button" className="button desk-ask" data-desk="open" onClick={onBrowser}>
+            <ScreenGlyph />
+            <span>{t('desk.openIt')}</span>
+          </button>
+          {dismiss}
+        </div>
+      ) : (
+        dismiss
       )}
     </div>
   )

@@ -9,9 +9,20 @@
    cut the button off a long ask), "Open its browser" always under it (wrapped card text: card-wrap.css). */
 .ask.desk-asking { display: block; -webkit-line-clamp: none; }
 .desk-asking .ask-q { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-/* "Open its browser" under what the agent asks. */
-.ask .desk-ask { display: flex; margin-top: 7px; height: 26px; padding: 0 10px; font-size: 12px; background: color-mix(in srgb, var(--surface) 70%, transparent); }
-.ask .desk-ask svg { width: 14px; height: 14px; }
+/* "Open its browser" under what the agent asks, on the card and in the panel's "needs you": the thing
+   to do, filled in the ask's orange (the Terminal style outlines it: look-terminal.css). */
+.button.desk-ask { background: var(--orange); color: #fff; font-weight: 600; }
+.button.desk-ask:hover:not(:disabled) { background: color-mix(in srgb, var(--orange) 85%, #000); }
+.desk-ask svg { width: 14px; height: 14px; }
+.ask .desk-ask { display: flex; margin-top: 7px; height: 26px; padding: 0 10px; font-size: 12px; }
+/* In the panel's "needs you": first, beside "No reply needed". */
+.asked-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.asked .desk-ask { height: 28px; }
+#sheet .asked-actions .asked-dismiss { margin: 0; }
+@media (max-width: 760px) {
+  #sheet .asked-actions { margin-top: 5px; gap: 6px; }
+  #sheet .asked .desk-ask { height: 26px; font-size: 12px; }
+}
 
 /* ---------------------------------------------------------------- the session panel */
 /* The Browser fold above the conversation: one line folded; open, the display at the panel's width,
