@@ -121,12 +121,19 @@ function Harness({ item, shown, initial }: { item: Item; shown: boolean; initial
   return <BrowserFold item={item} open={open && shown} onOpen={setOpen} />
 }
 
-function render(fields: { desktop?: ItemDesktop; shown?: boolean; open?: boolean } = {}) {
-  const item = itemOf({ key: KEY, name: 'Alpha', ...(fields.desktop && { desktop: fields.desktop }) })
+function render(
+  fields: { desktop?: ItemDesktop; shown?: boolean; open?: boolean; question?: string; lang?: string } = {},
+) {
+  const item = itemOf({
+    key: KEY,
+    name: 'Alpha',
+    ...(fields.desktop && { desktop: fields.desktop }),
+    ...(fields.question && { question: fields.question }),
+  })
   const value = boardOf({ toast: text => toasts.push(text) })
   // Rendered again in a test, the same fold takes the new fields.
   draw(
-    <I18nProvider lang="en">
+    <I18nProvider lang={fields.lang ?? 'en'}>
       <BoardContext.Provider value={value}>
         <Harness item={item} shown={fields.shown ?? true} initial={fields.open ?? false} />
       </BoardContext.Provider>
@@ -199,6 +206,32 @@ test('the socket is open only while the fold is: folded, by ×, and with the pan
   render({ desktop: desktop(), shown: false })
   expect(FakeSocket.made[1]?.closed).toBe(true)
   expect(FakeSocket.made).toHaveLength(2)
+})
+
+test('what the agent asks the owner to do there: at its browser folded, open and full size, in both languages, while it asks', () => {
+  const ask = 'Sign in to GitHub as acme-bot'
+  const asks = (under: MiniNode = dom.document.body) =>
+    all(under)
+      .filter(el => el.className === 'desk-asks')
+      .map(el => el.textContent)
+  render({ desktop: desktop({ ask }) })
+  expect(asks()).toEqual([`The agent asks you: ${ask}`])
+  expect(byClass('desk-asks')?.getAttribute('role')).toBe('status')
+  click(desk('fold'))
+  expect(asks()).toEqual([`The agent asks you: ${ask}`])
+  click(desk('full'))
+  expect(asks(byClass('desk-full'))).toEqual([`The agent asks you: ${ask}`])
+  // asked no more: gone, and the card's question is not the browser's
+  render({ desktop: desktop(), question: 'Which branch?' })
+  expect(asks()).toEqual([])
+  // a board before the field: the card's question while the card asks for the browser
+  render({ desktop: desktop({ asks: true }), question: ask })
+  expect(asks(byClass('desk-full'))).toEqual([`The agent asks you: ${ask}`])
+  // in Russian
+  flush(() => root.unmount())
+  newRoot()
+  render({ desktop: desktop({ ask }), lang: 'ru' })
+  expect(asks()).toEqual([`Агент просит вас: ${ask}`])
 })
 
 test('it says why it could not show, and tries again', () => {

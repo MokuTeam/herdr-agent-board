@@ -35,7 +35,7 @@ import {
   xauthority,
   xvncArgs,
 } from '../core/desktop.ts'
-import type { Item, ItemDesktop } from '../core/types.ts'
+import type { Card, Item, ItemDesktop } from '../core/types.ts'
 import { nulFrames } from './cdp-pipe.ts'
 
 /** What the desktops ask of the server: tests hand in their own. */
@@ -167,7 +167,10 @@ interface Desktop {
   /** The named profile is a throwaway copy (another session has it). */
   copy: boolean
   control: Control
+  /** Its browser ask stands: from the ask until handed back, or until its card's ask is over (not the agent working on). */
   asks: boolean
+  /** What that ask said (the browser's own view shows it while it stands). */
+  ask: string
   /** When the browser ask put its ask on the card (the card's askSince): handing back clears that ask only. */
   askSince: number | null
   xvnc: number | null
@@ -206,6 +209,11 @@ export interface DesktopsOptions {
   items(): Item[]
   /** A card's change (adapters/cards.ts writeCard): `board browser ask` puts it under "needs you". */
   writeCard(key: string, patch: CardPatch): void
+  /**
+   * A session's card as it is now (adapters/cards.ts readCard): whether the browser ask on it is
+   * still there, which the board's item does not say while the agent works on.
+   */
+  readCard(key: string): Card | null
   onChange(): void
   log(line: string): void
   system?: DesktopSystem
@@ -354,6 +362,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       const d: Desktop = {
         ...r,
         session: typeof r.session === 'string' ? r.session : '',
+        ask: typeof r.ask === 'string' ? r.ask : '',
         askSince: typeof r.askSince === 'number' ? r.askSince : null,
         control: 'agent',
         running: false,
@@ -378,6 +387,12 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   } catch {}
 
   const itemIn = (pane: string): Item | undefined => o.items().find(i => i.pane === pane && !i.sleeping)
+  /** The card of `key` still has the ask the browser ask put on it (the same one, by its askSince). */
+  const cardAsks = (key: string, d: Desktop): boolean => {
+    if (d.askSince === null) return false
+    const card = o.readCard(key)
+    return !!card?.ask && card.askSince === d.askSince
+  }
 
   /**
    * Where Chrome keeps the profile `name` for `d`: its own folder, a copy while another has it, or
@@ -472,6 +487,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       copy: false,
       control: 'agent',
       asks: false,
+      ask: '',
       askSince: null,
       xvnc: null,
       chrome: null,
@@ -626,9 +642,11 @@ export function createDesktops(o: DesktopsOptions): Desktops {
             d.session = item.session
             changed = true
           }
-          // the card asks no more, or asks something else: the agent went on, or the user answered
-          if (d.asks && item.askSince !== d.askSince) {
+          // its card asks no more, or asks something else: the user answered, or the agent moved on
+          // (`board doing`, another ask); the agent working on meanwhile is not that
+          if (d.asks && !cardAsks(item.key, d)) {
             d.asks = false
+            d.ask = ''
             changed = true
           }
         } else {
@@ -699,6 +717,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       const d = desktops.get(pane)
       if (d) {
         d.asks = true
+        d.ask = text
         d.askSince = since
         save()
       }
@@ -717,10 +736,12 @@ export function createDesktops(o: DesktopsOptions): Desktops {
         return { ok: false, status: 409, error: 'open the browser’s view first: control goes with a view of it' }
       d.control = to
       d.unviewedSince = 0
-      // handed back: what the agent asked for is done (its own ask only: a later `board ask` stays)
+      // handed back: what the agent asked for is done (its own ask only: a later `board ask` stays),
+      // its card's too while the agent works on, when the item does not show the ask
       if (to === 'agent' && d.asks) {
+        if (cardAsks(item.key, d)) o.writeCard(item.key, { ask: '', askSince: '' })
         d.asks = false
-        if (d.askSince !== null && item.askSince === d.askSince) o.writeCard(item.key, { ask: '', askSince: '' })
+        d.ask = ''
       }
       save()
       o.log(`desktop :${d.display} for ${item.key}: ${to === 'owner' ? 'the owner has it' : 'back to the agent'}`)

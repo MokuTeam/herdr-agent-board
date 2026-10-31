@@ -28,6 +28,10 @@
 .desk-tools .button { flex: none; height: 26px; padding: 0 10px; font-size: 12px; }
 .desk-tool { width: 26px; height: 26px; }
 .desk-tool svg { width: 14px; height: 14px; }
+/* What the agent asks the owner to do in it, under the bar folded or open, and full size: a long
+   one scrolls in a few lines rather than pushing the display away. */
+.desk-asks { margin: 2px 0 0; max-height: 6.5em; overflow-y: auto; padding: 6px 9px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 14%, transparent); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.desk-full .desk-asks { flex: none; margin: 0; }
 /* While the owner has control: the warning, and an orange edge round the display. */
 .desk-warn { margin: 4px 0 0; padding: 6px 9px; border-radius: 8px; background: color-mix(in srgb, var(--orange) 14%, transparent); font-size: 12px; }
 .desk-view { margin-top: 4px; overflow: hidden; border-radius: 10px; background: #000; }

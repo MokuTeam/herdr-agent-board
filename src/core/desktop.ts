@@ -303,15 +303,22 @@ export interface DesktopFacts {
   running: boolean
   profile: string | null
   control: Control
+  /** Its browser ask stands. */
   asks: boolean
+  /** What that ask said. */
+  ask?: string
 }
 
-/** The card's field: `asks` only while the card still asks (the agent went on, or the user answered: it is over). */
+/**
+ * The card's field: `asks` only while the card still asks (the agent went on, or the user
+ * answered: it is over); what was asked while the ask stands, for the browser's own view.
+ */
 export const desktopView = (d: DesktopFacts, cardAsks: boolean): ItemDesktop => ({
   running: d.running,
   profile: d.profile,
   control: d.control,
   asks: d.asks && cardAsks,
+  ...(d.asks && d.ask ? { ask: d.ask } : {}),
 })
 
 /**

@@ -289,6 +289,12 @@ export interface ItemDesktop {
   profile: string | null
   /** Who acts in it: the agent, or the owner (the agent's browser actions wait). */
   control: 'agent' | 'owner'
-  /** The agent asked the owner to act in its browser (`board browser ask`). */
+  /** The agent asked the owner to act in its browser (`board browser ask`), and its card says so now (under "needs you"). */
   asks: boolean
+  /**
+   * What it asked the owner to do there, while that ask stands: from the ask until the owner hands
+   * the browser back or its card's ask is over (answered, cleared, another one), the agent working
+   * on meanwhile or not. Absent otherwise.
+   */
+  ask?: string
 }

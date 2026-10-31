@@ -11,7 +11,7 @@ import { type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 import type { WebSocketHandler } from 'bun'
-import { writeCard } from '../adapters/cards.ts'
+import { readCard, writeCard } from '../adapters/cards.ts'
 import { editSyncPaths, saveFoundProfiles } from '../adapters/config-file.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { ensureLocalKey, keyMatches, LOCAL_KEY_HEADER } from '../adapters/local-key.ts'
@@ -257,6 +257,7 @@ export async function startServer({
         root: join(stateDir(), 'desktop'),
         items: () => board.items(),
         writeCard,
+        readCard,
         onChange: () => board.publish(),
         log,
         chromeExtra: (process.env.BOARD_DESKTOP_CHROME_ARGS ?? '').split(' ').filter(Boolean),

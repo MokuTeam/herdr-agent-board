@@ -62,6 +62,7 @@ async function userPart(args: string[]): Promise<number> {
       root: join(stateDir(), 'desktop'),
       items: () => [],
       writeCard: () => {},
+      readCard: () => null,
       onChange: () => {},
       log: say,
     }).stopAll()

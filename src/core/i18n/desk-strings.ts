@@ -22,6 +22,8 @@ export const DESK_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'desk.back': 'Back to the panel (Esc)',
     'desk.close': 'Close the view (its browser keeps running)',
     'desk.shownFull': 'Shown full size',
+    // what the agent asks the owner to do in it (browser_ask_owner), folded or open, and full size
+    'desk.asks': 'The agent asks you',
     // the connection
     'desk.connecting': 'Connecting to its browser…',
     'desk.closed': 'Its browser closed the view',
@@ -46,6 +48,7 @@ export const DESK_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'desk.back': 'Обратно в панель (Esc)',
     'desk.close': 'Закрыть показ (сам браузер продолжит работать)',
     'desk.shownFull': 'Показан во весь экран',
+    'desk.asks': 'Агент просит вас',
     'desk.connecting': 'Подключение к его браузеру…',
     'desk.closed': 'Его браузер закрыл показ',
     'desk.unreachable': 'Его браузер не ответил',

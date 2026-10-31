@@ -4,7 +4,9 @@
 // board (hooks/useDesktop.ts). One button shows it full size over the whole board, Esc or × brings
 // it back, and × on the fold closes it. It is only watched until "Take control": then the mouse
 // and keys go to it while the agent's own actions wait, with a plain warning that the agent sees
-// what is typed there; "Give back", or leaving the view, hands it back.
+// what is typed there; "Give back", or leaving the view, hands it back. What the agent asks the
+// owner to do there (browser_ask_owner) is said at the browser itself, folded or open, and full
+// size, while it asks.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Item } from '../../../../src/core/types.ts'
@@ -141,6 +143,14 @@ export function BrowserFold({ item, open, onOpen }: BrowserFoldProps) {
       {t('desk.warn')}
     </p>
   )
+  // The board's word while the ask stands (the agent working on or not); a board before it said
+  // the card's question while the card asks.
+  const asked = desktop.ask || (desktop.asks ? item.question : '')
+  const asks = asked ? (
+    <p className="desk-asks" role="status">
+      <b>{t('desk.asks')}:</b> {asked}
+    </p>
+  ) : null
   return (
     <section className={classNames('desk', open && 'open', owner && 'owner')} aria-label={t('desk.title')}>
       <div className="desk-bar">
@@ -151,6 +161,7 @@ export function BrowserFold({ item, open, onOpen }: BrowserFoldProps) {
         </button>
         {open && tools('fold')}
       </div>
+      {asks}
       {open && (
         <>
           {warn}
@@ -179,6 +190,7 @@ export function BrowserFold({ item, open, onOpen }: BrowserFoldProps) {
               </span>
               {tools('full')}
             </div>
+            {asks}
             {warn}
             <div className="desk-view">
               {status && (

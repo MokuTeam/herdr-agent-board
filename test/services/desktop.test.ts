@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ServerWebSocket } from 'bun'
 import type { CardPatch } from '../../src/adapters/cards.ts'
-import type { Item } from '../../src/core/types.ts'
+import type { Card, Item } from '../../src/core/types.ts'
 import { createDesktops, type DesktopSystem, displayHeldAt, type VncData } from '../../src/services/desktop.ts'
 
 const dirs: string[] = []
@@ -87,6 +87,19 @@ function fakeServer(
   return { sys, procs, start }
 }
 
+/** The card as the patches written made it ('' clears a field, as adapters/cards.ts has it). */
+function cardOf(cards: [string, CardPatch][], key: string): Card | null {
+  const mine = cards.filter(([k]) => k === key)
+  if (!mine.length) return null
+  const card: Record<string, unknown> = {}
+  for (const [, patch] of mine)
+    for (const [field, value] of Object.entries(patch)) {
+      if (value === '') delete card[field]
+      else card[field] = value
+    }
+  return card as Card
+}
+
 const item = (key: string, pane: string | null, more: Partial<Item> = {}): Item =>
   ({ key, pane, session: key, name: key, sleeping: false, ...more }) as Item
 
@@ -102,6 +115,7 @@ function setup(o: Parameters<typeof fakeServer>[0] = {}, items: Item[] = [item('
       root,
       items: () => state.items,
       writeCard: (key, patch) => cards.push([key, patch]),
+      readCard: key => cardOf(cards, key),
       onChange: () => state.changes++,
       log: () => {},
       system: server.sys,
@@ -268,7 +282,13 @@ test('ask: the card under "needs you", the desktop up, asks while the card asks;
   expect((await d.ask('w0:p1', 'Sign in to GitHub')).ok).toBe(true)
   expect(cards).toEqual([['s1', { ask: 'Sign in to GitHub', askSince: expect.any(Number), by: 'agent' }]])
   const asking = item('s1', 'w0:p1', { question: 'Sign in to GitHub', askSince: cards[0]?.[1].askSince as number })
-  expect(d.view(asking)).toEqual({ running: true, profile: null, control: 'agent', asks: true })
+  expect(d.view(asking)).toEqual({
+    running: true,
+    profile: null,
+    control: 'agent',
+    asks: true,
+    ask: 'Sign in to GitHub',
+  })
   const vnc = await vncServer(root)
   const ws = await vnc.open(d, 'w0:p1')
   expect(d.setControl(asking, 'owner')).toEqual({ ok: true, control: 'owner' })
@@ -279,8 +299,9 @@ test('ask: the card under "needs you", the desktop up, asks while the card asks;
   expect(cards.at(-1)).toEqual(['s1', { ask: '', askSince: '' }])
   d.websocket.close?.(ws, 1000, '')
   vnc.close()
-  // the agent went on (the card asks no more): asks goes too, and stays gone
+  // the agent went on (`board doing`: the card asks no more): asks goes too, and stays gone
   await d.ask('w0:p1', 'Solve the captcha')
+  cards.push(['s1', { doing: 'Reading the page', ask: '', askSince: '', by: 'agent' }])
   state.items = [item('s1', 'w0:p1'), item('s2', 'w0:p2')]
   d.observe(state.items)
   expect(d.view(asking)?.asks).toBe(false)
@@ -289,6 +310,43 @@ test('ask: the card under "needs you", the desktop up, asks while the card asks;
   expect(d.setControl(item('s2', 'w0:p2'), 'owner')).toEqual(none)
   expect(d.setControl(item('s1', 'w0:p1', { sleeping: true }), 'owner')).toEqual(none)
   expect(d.control('w0:p2')).toBe('agent')
+})
+
+test('the agent working on keeps its browser ask and its words; over once its card asks no more, or handed back (its card’s ask too)', async () => {
+  const { d, cards, root, state, make } = setup()
+  await d.ask('w0:p1', 'Sign in to GitHub as acme-bot')
+  // the agent works on (its browser tools wait): its item shows no ask while the turn is on
+  const working = item('s1', 'w0:p1', { status: 'working', attention: '', question: '', askSince: null })
+  state.items = [working, item('s2', 'w0:p2')]
+  d.observe(state.items)
+  expect(d.view(working)).toEqual({
+    running: true,
+    profile: null,
+    control: 'agent',
+    asks: false,
+    ask: 'Sign in to GitHub as acme-bot',
+  })
+  // the user answered (its card's ask cleared): over
+  cards.push(['s1', { ask: '', askSince: '' }])
+  d.observe(state.items)
+  expect(d.view(working)?.ask).toBeUndefined()
+  // asked again, taken and handed back while the agent works: the card's ask goes with it
+  await d.ask('w0:p1', 'Solve the captcha')
+  const vnc = await vncServer(root)
+  try {
+    await vnc.open(d, 'w0:p1')
+    d.observe(state.items)
+    expect(d.setControl(working, 'owner').ok).toBe(true)
+    expect(d.view(working)?.ask).toBe('Solve the captcha')
+    d.setControl(working, 'agent')
+    expect(cards.at(-1)).toEqual(['s1', { ask: '', askSince: '' }])
+    expect(d.view(working)?.ask).toBeUndefined()
+  } finally {
+    vnc.close()
+  }
+  // the next board knows what is asked
+  await d.ask('w0:p1', 'Pick the account')
+  expect(make().view(working)?.ask).toBe('Pick the account')
 })
 
 test('the next board takes over what still runs; what does not is cleared away', async () => {
@@ -446,6 +504,7 @@ test('given back: only the ask the browser ask put on the card is cleared', asyn
     await d.ask('w0:p1', 'Sign in to GitHub')
     await vnc.open(d, 'w0:p1')
     // the agent asked something else since (board ask): that one stays
+    cards.push(['s1', { ask: 'Which branch?', askSince: 5, by: 'agent' }])
     const other = item('s1', 'w0:p1', { question: 'Which branch?', askSince: 5 })
     expect(d.setControl(other, 'owner').ok).toBe(true)
     const before = cards.length

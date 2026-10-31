@@ -142,6 +142,11 @@ test('the card’s field: asks only while the card still asks', () => {
   expect(desktopView(d, true)).toEqual({ running: true, profile: 'github', control: 'owner', asks: true })
   expect(desktopView(d, false).asks).toBe(false)
   expect(desktopView({ ...d, asks: false }, true).asks).toBe(false)
+  // what was asked, while the ask stands, whether the card shows it now or not
+  const asked = { ...d, ask: 'Sign in to GitHub' }
+  expect(desktopView(asked, false)).toEqual({ ...desktopView(d, false), ask: 'Sign in to GitHub' })
+  expect('ask' in desktopView({ ...asked, asks: false }, true)).toBe(false)
+  expect('ask' in desktopView(d, true)).toBe(false)
 })
 
 test('the MCP server in a profile’s .claude.json: added, kept when there, taken out; nothing else changes', () => {
