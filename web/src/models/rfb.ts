@@ -141,7 +141,7 @@ export class RfbClient {
     while (this.step()) {}
   }
 
-  /** The mouse at (x, y) on the display with these buttons down (1 left, 2 middle, 4 right, 8/16 the wheel). */
+  /** The mouse at (x, y) on the display with these buttons down (1 left, 2 middle, 4 right, 8/16 the wheel, 32/64 to the side). */
   pointer(x: number, y: number, mask: number): void {
     if (this.state !== 'live') return
     const at = (n: number, max: number) => Math.max(0, Math.min(max - 1, Math.round(n)))

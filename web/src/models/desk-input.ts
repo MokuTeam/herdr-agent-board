@@ -99,3 +99,60 @@ export function buttonMask(buttons: number): number {
 /** The wheel, a step up or down: a button pressed and let go. */
 export const WHEEL_UP = 8
 export const WHEEL_DOWN = 16
+/** The wheel to the side, a step left or right (buttons 6 and 7). */
+export const WHEEL_LEFT = 32
+export const WHEEL_RIGHT = 64
+/** How far a wheel step moves a page in the display's browser (Chrome on X: 53 px). */
+export const WHEEL_PX = 53
+
+/** The page's px per display px, its picture shown in `box` as screenPoint has it; 0 before it has a size. */
+export function shownScale(box: Box, width: number, height: number): number {
+  if (width <= 0 || height <= 0 || box.width <= 0 || box.height <= 0) return 0
+  return Math.min(box.width / width, box.height / height)
+}
+
+/**
+ * The picture zoomed in the board (a pinch), not on the display: `z` times as large, moved by `fx`
+ * and `fy` of its own box. Its box on the page (getBoundingClientRect) is the zoomed one, so
+ * screenPoint reads a point on it as it reads one on the picture unzoomed.
+ */
+export interface Zoom {
+  z: number
+  fx: number
+  fy: number
+}
+export const NO_ZOOM: Zoom = { z: 1, fx: 0, fy: 0 }
+export const MAX_ZOOM = 4
+
+/**
+ * A pinch going on: the picture `ratio` times as large as it was at `zoom` when it began (its box
+ * then `box`), its point that was under `from` (the fingers' middle then) under `to` (their middle
+ * now); never smaller than its box nor off it.
+ */
+export function pinched(
+  zoom: Zoom,
+  box: Box,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  ratio: number,
+): Zoom {
+  if (box.width <= 0 || box.height <= 0 || !(ratio > 0)) return zoom
+  const width = box.width / zoom.z
+  const height = box.height / zoom.z
+  const left = box.left - zoom.fx * width
+  const top = box.top - zoom.fy * height
+  const z = Math.max(1, Math.min(MAX_ZOOM, zoom.z * ratio))
+  const along = (n: number) => Math.max(1 - z, Math.min(0, n))
+  return {
+    z,
+    fx: along((to.x - left) / width - ((from.x - box.left) / box.width) * z),
+    fy: along((to.y - top) / height - ((from.y - box.top) / box.height) * z),
+  }
+}
+
+/** The zoom as the picture's CSS transform (from its top left corner); '' unzoomed. */
+export function zoomTransform(zoom: Zoom): string {
+  if (zoom.z <= 1) return ''
+  const n = (v: number) => Number(v.toFixed(4))
+  return `translate(${n(zoom.fx * 100)}%, ${n(zoom.fy * 100)}%) scale(${n(zoom.z)})`
+}

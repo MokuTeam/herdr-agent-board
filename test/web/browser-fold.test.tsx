@@ -61,8 +61,9 @@ let useState: typeof import('react').useState
 let PanelPlace: typeof Place
 let listenClickAway: typeof ClickAway
 let useBrowserFold: typeof UseBrowserFold
-/** What the touch keyboard's field is kept at (hooks/useDesktop.ts). */
+/** What the touch keyboard's field is kept at, and how long a finger is held to press (hooks/useDesktop.ts). */
 let KEYS_AT = ''
+let HOLD_MS = 500
 const saved = { WebSocket: globalThis.WebSocket, location: Reflect.get(globalThis, 'location') }
 
 beforeAll(async () => {
@@ -79,6 +80,7 @@ beforeAll(async () => {
   ;({ listenClickAway } = await import('../../web/src/hooks/usePanelClickAway.ts'))
   ;({ useBrowserFold } = await import('../../web/src/components/sheet/Sheet.tsx'))
   KEYS_AT = Reflect.get(await import('../../web/src/hooks/useDesktop.ts'), 'KEYS_AT') ?? ''
+  HOLD_MS = Reflect.get(await import('../../web/src/hooks/useDesktop.ts'), 'HOLD_MS') ?? 500
   const support = await import('./support/board.tsx')
   boardOf = fields => support.board({ data: support.payload({ fsToken: 'tok' }), ...fields })
   itemOf = support.item
@@ -188,10 +190,11 @@ const key = (el: MiniNode | undefined, fields: Record<string, unknown>, type = '
 const settle = () => new Promise(done => setTimeout(done, 15))
 const within = (el: MiniNode | undefined, parent: MiniNode | undefined) => !!el && !!parent?.contains(el)
 
-/** The display's hello: RFB 3.8, no password, a 4 × 2 screen. */
-function handshake(socket: FakeSocket | undefined) {
+/** The display's hello: RFB 3.8, no password, a 4 × 2 screen (or `width` × `height`). */
+function handshake(socket: FakeSocket | undefined, width = 4, height = 2) {
   if (!socket) throw new Error('no socket')
-  socket.serve('RFB 003.008\n', [1, 1], [0, 0, 0, 0], [0, 4, 0, 2, ...new Array(16).fill(0), 0, 0, 0, 1, 120])
+  const size = [width >> 8, width & 255, height >> 8, height & 255]
+  socket.serve('RFB 003.008\n', [1, 1], [0, 0, 0, 0], [...size, ...new Array(16).fill(0), 0, 0, 0, 1, 120])
   socket.sent.length = 0
 }
 
@@ -589,11 +592,11 @@ test('the session opened again keeps its browser open while the owner has it; fo
 
 // ---------------------------------------------------------------- a mouse, a finger
 
-/** Control taken in the fold, the display drawn 400 × 200; its socket, nothing sent yet. */
-async function controlled() {
+/** Control taken in the fold, the display (4 × 2, or `width` × `height`) drawn 400 × 200; its socket, nothing sent yet. */
+async function controlled(width = 4, height = 2) {
   render({ desktop: desktop(), open: true })
   const [socket] = FakeSocket.made
-  handshake(socket)
+  handshake(socket, width, height)
   const calls = answers([200, { ok: true, control: 'owner' }], [200, { ok: true, control: 'agent' }])
   click(desk('control'))
   await settle()
@@ -704,6 +707,246 @@ test('a tap with control brings up the screen’s keyboard: a field by the pictu
   tap(canvas(), 250, 150)
   expect(dom.document.activeElement).not.toBe(field() as MiniElement)
   expect(socket?.sent).toEqual([])
+})
+
+// ---------------------------------------------------------------- a finger as on a tablet's remote desktop
+// An 800 × 400 display drawn 400 × 200: a page px is two of the display's, (x, y) its (2x, 2y).
+
+/** A finger (`id`) on the picture at (x, y): put down, moved, lifted, or taken by the system. */
+const finger = (type: string, id: number, x: number, y: number, fields: Record<string, unknown> = {}) =>
+  fire(canvas(), type, {
+    clientX: x,
+    clientY: y,
+    pointerId: id,
+    pointerType: 'touch',
+    button: 0,
+    buttons: type === 'pointerdown' || type === 'pointermove' ? 1 : 0,
+    ...fields,
+  })
+/** The display's pointer at (x, y) with these buttons, as its message. */
+const pointerAt = (mask: number, x: number, y: number) => [5, mask, x >> 8, x & 255, y >> 8, y & 255]
+/** A wheel step (8 up, 16 down, 32 left, 64 right) at (x, y): the button pressed and let go. */
+const step = (bit: number, x: number, y: number) => [pointerAt(bit, x, y), pointerAt(0, x, y)]
+const holdOn = () => new Promise(done => setTimeout(done, HOLD_MS + 40))
+
+test('a mouse held still and dragged goes as it always did, the button down at once; a pen over the picture moves its pointer', async () => {
+  const { socket } = await controlled(800, 400)
+  const mouse = { button: 0, pointerId: 1, pointerType: 'mouse' }
+  fire(canvas(), 'pointerdown', { ...mouse, clientX: 100, clientY: 50, buttons: 1 })
+  await holdOn()
+  fire(canvas(), 'pointermove', { ...mouse, clientX: 100, clientY: 150, buttons: 1 })
+  fire(canvas(), 'pointermove', { ...mouse, clientX: 200, clientY: 150, buttons: 1 })
+  fire(canvas(), 'pointerup', { ...mouse, clientX: 200, clientY: 150, buttons: 0 })
+  fire(canvas(), 'pointerdown', { ...mouse, button: 2, clientX: 200, clientY: 150, buttons: 2 })
+  fire(canvas(), 'pointerup', { ...mouse, button: 2, clientX: 200, clientY: 150, buttons: 0 })
+  fire(canvas(), 'wheel', { clientX: 200, clientY: 150, deltaY: -50, deltaMode: 0 })
+  fire(canvas(), 'pointermove', { clientX: 210, clientY: 160, pointerId: 2, pointerType: 'pen', buttons: 0 })
+  expect(socket?.sent).toEqual([
+    pointerAt(1, 200, 100),
+    pointerAt(1, 200, 300),
+    pointerAt(1, 400, 300),
+    pointerAt(0, 400, 300),
+    pointerAt(4, 400, 300),
+    pointerAt(0, 400, 300),
+    ...step(8, 400, 300),
+    pointerAt(0, 420, 320),
+  ])
+  expect(canvas()?.hasAttribute('data-held')).toBe(false)
+  expect(canvas()?.style.transform ?? '').toBe('')
+  expect(dom.document.activeElement).toBe(canvas() as MiniElement)
+})
+
+test('watched only, a finger’s swipe goes nowhere: the board’s page has it to scroll', () => {
+  render({ desktop: desktop(), open: true })
+  const [socket] = FakeSocket.made
+  handshake(socket, 800, 400)
+  screenAt()
+  const down = finger('pointerdown', 1, 200, 150)
+  finger('pointermove', 1, 200, 50)
+  finger('pointerup', 1, 200, 50)
+  expect(down.defaultPrevented).toBe(false)
+  expect(socket?.sent).toEqual([])
+  expect(byClass('desk-keys')).toBeUndefined()
+})
+
+test('a finger’s swipe with control scrolls the display’s page by its wheel, as far as the finger went, where it began: no click, no keyboard', async () => {
+  const { socket } = await controlled(800, 400)
+  const down = finger('pointerdown', 1, 200, 150)
+  expect(down.defaultPrevented).toBe(true)
+  // a few px is still a tap
+  finger('pointermove', 1, 203, 144)
+  expect(socket?.sent).toEqual([])
+  // up 100 px, the display's 200: four steps of 53 down (the page follows the finger), at (400, 300);
+  // a little to the side on the way, but begun up it scrolls up and down only
+  finger('pointermove', 1, 203, 100)
+  finger('pointermove', 1, 210, 50)
+  finger('pointerup', 1, 210, 50)
+  fire(canvas(), 'click', { clientX: 210, clientY: 50 })
+  expect(socket?.sent).toEqual([
+    ...step(16, 400, 300),
+    ...step(16, 400, 300),
+    ...step(16, 400, 300),
+    ...step(16, 400, 300),
+  ])
+  expect(byClass('desk-keys')).toBeUndefined()
+
+  // down: the wheel up; to the left: right (button 7), to the right: left (button 6)
+  socket?.sent.splice(0)
+  finger('pointerdown', 2, 100, 100)
+  finger('pointermove', 2, 100, 130)
+  finger('pointerup', 2, 100, 130)
+  finger('pointerdown', 3, 300, 100)
+  finger('pointermove', 3, 270, 100)
+  finger('pointermove', 3, 240, 102)
+  finger('pointerup', 3, 240, 102)
+  finger('pointerdown', 4, 300, 100)
+  finger('pointermove', 4, 330, 100)
+  finger('pointerup', 4, 330, 100)
+  expect(socket?.sent).toEqual([
+    ...step(8, 200, 200),
+    ...step(64, 600, 200),
+    ...step(64, 600, 200),
+    ...step(32, 600, 200),
+  ])
+  expect(byClass('desk-keys')).toBeUndefined()
+})
+
+test('two fingers’ swipe scrolls it too, from their middle where they went down; a finger lifted on the way, the other goes on', async () => {
+  const { socket } = await controlled(800, 400)
+  finger('pointerdown', 1, 150, 100)
+  finger('pointerdown', 2, 250, 100)
+  // side by side, up together, one heard before the other: 60 px, the display's 120, two steps
+  finger('pointermove', 1, 150, 90)
+  finger('pointermove', 2, 250, 90)
+  finger('pointermove', 1, 150, 70)
+  finger('pointermove', 2, 250, 70)
+  finger('pointermove', 1, 150, 40)
+  finger('pointermove', 2, 250, 40)
+  expect(socket?.sent).toEqual([...step(16, 400, 200), ...step(16, 400, 200)])
+  // one lifted: the other's 30 px more, a third step
+  finger('pointerup', 2, 250, 40)
+  finger('pointermove', 1, 150, 10)
+  finger('pointerup', 1, 150, 10)
+  expect(socket?.sent).toEqual([...step(16, 400, 200), ...step(16, 400, 200), ...step(16, 400, 200)])
+  expect(canvas()?.style.transform ?? '').toBe('')
+  expect(byClass('desk-keys')).toBeUndefined()
+})
+
+test('a finger held still a moment presses the button where it is: what it moves then drags, let go the button is up; taken by the system, too', async () => {
+  const { socket } = await controlled(800, 400)
+  finger('pointerdown', 1, 100, 50)
+  // a finger's tremble: still held
+  finger('pointermove', 1, 104, 53)
+  expect(socket?.sent).toEqual([])
+  await holdOn()
+  expect(socket?.sent).toEqual([pointerAt(1, 200, 100)])
+  expect(canvas()?.hasAttribute('data-held')).toBe(true)
+  finger('pointermove', 1, 150, 50)
+  finger('pointermove', 1, 200, 75)
+  finger('pointerup', 1, 200, 75)
+  expect(socket?.sent).toEqual([
+    pointerAt(1, 200, 100),
+    pointerAt(1, 300, 100),
+    pointerAt(1, 400, 150),
+    pointerAt(0, 400, 150),
+  ])
+  expect(canvas()?.hasAttribute('data-held')).toBe(false)
+  // the screen's keyboard, as after a tap
+  expect(dom.document.activeElement).toBe(byClass('desk-keys') as MiniElement)
+
+  socket?.sent.splice(0)
+  finger('pointerdown', 2, 100, 50)
+  await holdOn()
+  finger('pointermove', 2, 120, 50)
+  finger('pointercancel', 2, 120, 50)
+  expect(socket?.sent).toEqual([pointerAt(1, 200, 100), pointerAt(1, 240, 100), pointerAt(0, 240, 100)])
+  expect(canvas()?.hasAttribute('data-held')).toBe(false)
+})
+
+test('a tap soon after one near it clicks where that one did, so the display sees a double click; farther or later, where it is', async () => {
+  const { socket } = await controlled(800, 400)
+  tap(canvas(), 250, 150)
+  tap(canvas(), 258, 155)
+  expect(socket?.sent).toEqual([
+    pointerAt(1, 500, 300),
+    pointerAt(0, 500, 300),
+    pointerAt(1, 500, 300),
+    pointerAt(0, 500, 300),
+  ])
+  socket?.sent.splice(0)
+  tap(canvas(), 300, 150)
+  const later = { timeStamp: Date.now() + 1000 }
+  finger('pointerdown', 1, 304, 152, later)
+  finger('pointerup', 1, 304, 152, later)
+  expect(socket?.sent).toEqual([
+    pointerAt(1, 600, 300),
+    pointerAt(0, 600, 300),
+    pointerAt(1, 608, 304),
+    pointerAt(0, 608, 304),
+  ])
+})
+
+test('a pinch zooms the picture in the board, not on the display: a tap then clicks what shows under it; pinched back, or given back, it fits', async () => {
+  const { socket } = await controlled(800, 400)
+  // the picture's box as the page has it: zoomed by its transform (from its top left corner)
+  layout.rect = el => {
+    if (el.localName !== 'canvas') return { left: 0, top: 0, width: 0, height: 200 }
+    const m = /^translate\((-?[\d.]+)%, (-?[\d.]+)%\) scale\(([\d.]+)\)$/.exec(el.style.transform ?? '')
+    const [fx, fy, z] = m ? [Number(m[1]) / 100, Number(m[2]) / 100, Number(m[3])] : [0, 0, 1]
+    return { left: fx * 400, top: fy * 200, width: 400 * z, height: 200 * z }
+  }
+  const pinch = (from: [number, number], to: [number, number][]) => {
+    finger('pointerdown', 1, from[0], 100)
+    finger('pointerdown', 2, from[1], 100)
+    for (const [a, b] of to) {
+      finger('pointermove', 1, a, 100)
+      finger('pointermove', 2, b, 100)
+    }
+  }
+  const lift = (a: number, b: number) => {
+    finger('pointerup', 1, a, 100)
+    finger('pointerup', 2, b, 100)
+  }
+  // apart twice as far, about their middle (200, 100): twice as large, that point where it was
+  pinch(
+    [150, 250],
+    [
+      [130, 270],
+      [100, 300],
+    ],
+  )
+  lift(100, 300)
+  expect(canvas()?.style.transform).toBe('translate(-50%, -50%) scale(2)')
+  expect(canvas()?.style.transformOrigin).toBe('0 0')
+  expect(socket?.sent).toEqual([])
+  // (250, 150) shows the display's (450, 250) now, not (500, 300)
+  tap(canvas(), 250, 150)
+  expect(socket?.sent).toEqual([pointerAt(1, 450, 250), pointerAt(0, 450, 250)])
+
+  // closer again: as it fits
+  pinch(
+    [150, 250],
+    [
+      [170, 230],
+      [190, 210],
+    ],
+  )
+  lift(190, 210)
+  expect([canvas()?.style.transform, canvas()?.style.transformOrigin]).toEqual(['', ''])
+  // let go of only a little larger: as it fits too
+  pinch([50, 350], [[39, 361]])
+  expect(canvas()?.style.transform).toMatch(/scale\(1\.07/)
+  lift(39, 361)
+  expect(canvas()?.style.transform).toBe('')
+
+  // zoomed, then given back: as it fits
+  pinch([150, 250], [[100, 300]])
+  lift(100, 300)
+  expect(canvas()?.style.transform).toBe('translate(-50%, -50%) scale(2)')
+  click(desk('control'))
+  await settle()
+  expect(canvas()?.style.transform).toBe('')
+  expect(byClass('desk-who')?.textContent).toBe('The agent has control')
 })
 
 // ---------------------------------------------------------------- the panel's "needs you"
