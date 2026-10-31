@@ -24,9 +24,15 @@
 :root[data-panel-side] .board { margin-left: var(--beside-left); margin-right: var(--beside-right); }
 :root[data-panel-side] .columns-head { overflow: hidden; }
 :root[data-panel-side] .board { overflow-x: auto; overscroll-behavior-x: contain; }
-/* A lane as wide as its five columns, so a card held over it lights all of them (the stacked
-   column of a narrower page is the board's width, as it was). */
+/* The five columns beside the panel (--cols-beside, hooks/useColumnWidths.ts): an empty one keeps
+   only its head's width, so the ones with cards get the room, and one with cards never narrows
+   below a card's readable width (--col-card, about what it has on an iPad with no panel): where they
+   do not fit, the board scrolls sideways. A lane is as wide as its columns, so a card held over it
+   lights all of them. The stacked column of a narrower page is the board's width, as it was. */
+:root[data-panel-side] { --col-card: 210px; }
 @container page (min-width: 961px) {
+  :root[data-panel-side] .lane-grid,
+  :root[data-panel-side] .columns-head { grid-template-columns: var(--cols-beside, var(--cols)); }
   :root[data-panel-side] .lane { min-width: min-content; }
 }
 /* A finger never drags a card (models/board-view.ts mayDrag): on one it scrolls the board sideways as well. */
@@ -45,3 +51,20 @@
 :root[data-panel-side] .sheet[data-dock="left"] { border-top: 1px solid var(--separator); }
 :root[data-panel-side] .sheet.over[data-dock="right"] { box-shadow: -1px 0 0 var(--separator), -20px 0 44px -30px rgba(0, 0, 0, 0.5); }
 :root[data-panel-side] .sheet.over[data-dock="left"] { box-shadow: 1px 0 0 var(--separator), 20px 0 44px -30px rgba(0, 0, 0, 0.5); }
+
+/* The session panel at the side is the window's height less the header's (place.ts underHeader). In
+   that height its parts give way so that its head's lines and the message box always show: the
+   helpers shrink and scroll, the card's fields scroll in a smaller height, the conversation keeps a
+   sixth of the panel and never less than 96px, the message box grows to a lower height (it scrolls
+   past it). Nothing scrolls the panel itself (clip): typing in a long message never slides its head
+   away, nor the box down. The wide panel's side-by-side layouts keep their own. */
+@container sheet not ((min-width: 680px) and (min-aspect-ratio: 5 / 4)) {
+  :root[data-panel-side] #sheet:is([data-dock="right"], [data-dock="left"]) .sheet-inner { overflow: clip; }
+  :root[data-panel-side] #sheet:is([data-dock="right"], [data-dock="left"]) .sheet-helpers { flex-shrink: 1; }
+  :root[data-panel-side] #sheet:is([data-dock="right"], [data-dock="left"]) .sheet-card { max-height: 15cqh; }
+  :root[data-panel-side] #sheet:is([data-dock="right"], [data-dock="left"]) .sheet-inner:has(.sheet-question .qa) .sheet-card { max-height: min(64px, 15cqh); }
+  :root[data-panel-side] #sheet:is([data-dock="right"], [data-dock="left"]) .sheet-body { min-height: max(96px, min(16cqh, 280px)); }
+  :root[data-panel-side] #sheet:is([data-dock="right"], [data-dock="left"]) .sheet-inner:has(.desk.open) .sheet-body { min-height: 96px; }
+  :root[data-panel-side] #sheet:is([data-dock="right"], [data-dock="left"]) .composer { flex: none; }
+  :root[data-panel-side] #sheet:is([data-dock="right"], [data-dock="left"]) .composer textarea { max-height: min(180px, 18cqh); }
+}

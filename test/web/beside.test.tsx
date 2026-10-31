@@ -7,8 +7,10 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { columnWidths } from '../../web/src/hooks/useColumnWidths.ts'
 import { MARGIN, type PanelLayout, rectFor } from '../../web/src/models/panel-layout.ts'
 import { sidewaysScroll } from '../../web/src/models/panel-motion.ts'
+import { besideTracks, columnTracks } from '../../web/src/models/toolbar.ts'
 import { box, type FakeElement, type RectBox } from './support/fake-dom.ts'
 import { parseHtml } from './support/markup.ts'
 import { newSide, type ReactSide } from './support/panel-sides.tsx'
@@ -20,11 +22,27 @@ const GATE = ':root[data-panel-side]'
 const css = readFileSync(join(WEB, 'styles', SHEET), 'utf8')
 const bare = css.replace(/\/\*[\s\S]*?\*\//g, '')
 
-/** The declarations of every rule (inside @media too) whose selector list holds `selector`, merged. */
-function declarations(selector: string): Record<string, string> {
+/** A selector list's selectors: split at its own commas, not those in :is() and the like. */
+function selectorList(list: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let from = 0
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] === '(') depth++
+    else if (list[i] === ')') depth--
+    else if (list[i] === ',' && depth === 0) {
+      out.push(list.slice(from, i).trim())
+      from = i + 1
+    }
+  }
+  return [...out, list.slice(from).trim()]
+}
+
+/** The declarations of every rule (inside @media and @container too) whose selector list holds `selector`, merged. */
+function declarations(selector: string, source = bare): Record<string, string> {
   const found: Record<string, string> = {}
-  for (const m of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    const selectors = (m[1] ?? '').split(',').map(s => s.trim())
+  for (const m of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectors = selectorList(m[1] ?? '')
     if (!selectors.includes(selector)) continue
     for (const d of (m[2] ?? '').split(';')) {
       const at = d.indexOf(':')
@@ -253,5 +271,92 @@ describe('the stylesheet', () => {
     expect(declarations(`${GATE} .card`)['touch-action']).toBe('pan-x pan-y')
     const board = readFileSync(join(WEB, 'src', 'components', 'Board.tsx'), 'utf8')
     expect(board).toContain('onScroll={headsAlong}')
+  })
+})
+
+describe('the columns beside the panel', () => {
+  test('one with cards keeps a card’s readable width, an empty one its head’s; with no panel the tracks are as they were', () => {
+    // Two with cards, one empty, one filling: their least widths go with their shares.
+    expect(besideTracks([1, 0, 0.5])).toBe(
+      'minmax(max(var(--col-min), calc(var(--col-card) * 1.000)), 1.000fr) ' +
+        'minmax(max(var(--col-min), calc(var(--col-card) * 0.000)), 0.000fr) ' +
+        'minmax(max(var(--col-min), calc(var(--col-card) * 0.500)), 0.500fr)',
+    )
+    // The board with no side panel reads --cols, which is as it was.
+    expect(columnTracks([1, 0, 0.5])).toBe(
+      'minmax(var(--col-min), 1.000fr) minmax(var(--col-min), 0.000fr) minmax(var(--col-min), 0.500fr)',
+    )
+  })
+
+  test('both are written as the shares move', async () => {
+    const written: [string, string][] = []
+    const widths = columnWidths((tracks, beside) => void written.push([tracks, beside]))
+    widths.fit(['work', 'me', 'idle'], [1, 0, 1])
+    await Promise.resolve()
+    expect(written.at(-1)).toEqual([columnTracks([1, 0, 1]), besideTracks([1, 0, 1])])
+    widths.stop()
+  })
+
+  test('the stylesheet: the five columns beside the panel read --cols-beside, a card at least about as wide as on an iPad with no panel', () => {
+    const container = bare.slice(bare.indexOf('@container page (min-width: 961px)'))
+    expect(declarations(`${GATE} .lane-grid`, container)['grid-template-columns']).toBe(
+      'var(--cols-beside, var(--cols))',
+    )
+    expect(declarations(`${GATE} .columns-head`, container)['grid-template-columns']).toBe(
+      'var(--cols-beside, var(--cols))',
+    )
+    // An iPad (1000 wide) with no panel: three columns with cards and two empty share 1000 less the
+    // gutters (2 × 28), the gaps (4 × 12) and the empty ones' heads (2 × 136).
+    const without = (1000 - 2 * 28 - 4 * 12 - 2 * 136) / 3
+    const card = Number.parseFloat(declarations(GATE)['--col-card'] ?? '0')
+    expect(card).toBeGreaterThanOrEqual(Math.floor(without))
+    // All five with cards there is narrower still: a card never narrows below what it had then.
+    expect(card).toBeGreaterThan((1000 - 2 * 28 - 4 * 12) / 5)
+    // The stacked column of a narrower page is left as it was.
+    expect(bare.slice(0, bare.indexOf('@container page (min-width: 961px)'))).not.toContain('--cols-beside')
+  })
+})
+
+describe('the session panel at the side, under the header', () => {
+  const SIDE = `${GATE} #sheet:is([data-dock="right"], [data-dock="left"])`
+  const narrow = bare.slice(bare.indexOf('@container sheet not ((min-width: 680px) and (min-aspect-ratio: 5 / 4))'))
+  const at = (el: string) => declarations(`${SIDE} ${el}`, narrow)
+
+  test('nothing scrolls the panel itself: its head never slides away while a long message is typed', () => {
+    expect(narrow.length).toBeGreaterThan(0)
+    expect(at('.sheet-inner').overflow).toBe('clip')
+  })
+
+  test('its parts give way: the helpers and the card’s fields scroll, the conversation shrinks, never the message box', () => {
+    expect(at('.sheet-helpers')['flex-shrink']).toBe('1')
+    expect(at('.sheet-card')['max-height']).toBe('15cqh')
+    expect(at('.sheet-body')['min-height']).toBe('max(96px, min(16cqh, 280px))')
+    expect(at('.composer').flex).toBe('none')
+    expect(at('.composer textarea')['max-height']).toBe('min(180px, 18cqh)')
+  })
+
+  test('on an iPad in landscape (750 tall, the header 90) the head’s lines, the card’s fields, the least conversation and the tallest message box fit', () => {
+    const h = 750 - HEADER
+    // A length as the stylesheet writes it (px, cqh of the panel, min and max), in px; none written
+    // here: what the panel's own sheets have (session-head.css, helpers.css, app.css).
+    const px = (value: string | undefined, theirs: string): number => {
+      const expr = (value ?? theirs).replace(/([\d.]+)cqh/g, (_, n) => String((Number(n) / 100) * h)).replace(/px/g, '')
+      return new Function('min', 'max', `return ${expr}`)(Math.min, Math.max) as number
+    }
+    // The head's lines: the pills, a two-line name, the line under it, its paddings.
+    const head = 26 + 2 * 26 + 20 + 26
+    const card = px(at('.sheet-card')['max-height'], '30cqh')
+    const conversation = px(at('.sheet-body')['min-height'], 'max(96px, min(36cqh, 280px))')
+    // The message box at its tallest: the buttons' row, two pictures above the box, the box and its
+    // padding, the meter under it, the composer's paddings.
+    const box = px(at('.composer textarea')['max-height'], '180px')
+    const composer = 40 + 64 + box + 12 + 18 + 24
+    expect(head + card + conversation + composer).toBeLessThanOrEqual(h)
+  })
+
+  test('only a panel docked at a side, beside the board: never a floating one, one at the bottom, a phone', () => {
+    const rules = rulesOf(SHEET, narrow.slice(0, narrow.indexOf('}\n}') + 3))
+    expect(rules.length).toBeGreaterThan(5)
+    for (const r of rules) expect(r.selector.startsWith(SIDE)).toBe(true)
   })
 })

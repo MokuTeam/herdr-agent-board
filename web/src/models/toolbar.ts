@@ -104,6 +104,20 @@ export const columnShares = (heads: Pick<ColumnHead, 'vacant'>[]): number[] =>
 export const columnTracks = (shares: number[]): string =>
   shares.map(v => `minmax(var(--col-min), ${Math.max(0, v).toFixed(3)}fr)`).join(' ')
 
+/**
+ * The same columns beside a panel docked at a side (--cols-beside, styles/beside.css), where the
+ * board may have less room than its columns: one with cards keeps a card's readable width
+ * (--col-card) and the board scrolls sideways rather than narrow it further; an empty one keeps only
+ * its head's (--col-min), so the ones with cards get the room. In between, as the shares move.
+ */
+export const besideTracks = (shares: number[]): string =>
+  shares
+    .map(v => {
+      const share = Math.max(0, v).toFixed(3)
+      return `minmax(max(var(--col-min), calc(var(--col-card) * ${share})), ${share}fr)`
+    })
+    .join(' ')
+
 /** The lanes control fades at an edge with more lanes past it. */
 export function laneFades(el: { scrollWidth: number; clientWidth: number; scrollLeft: number }): {
   start: boolean

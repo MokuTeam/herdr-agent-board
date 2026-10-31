@@ -1,10 +1,11 @@
 // The board's columns share its width by whether they have cards on show (models/toolbar.ts
 // columnShares): an empty one keeps only its head's width (--col-min) and the others take its room.
 // The shares move on springs, so cards glide to their new width when a column fills or empties
-// instead of the board jumping; the grid reads them from --cols on <html>.
+// instead of the board jumping; the grid reads them from --cols on <html>, and beside a panel docked
+// at a side from --cols-beside (styles/beside.css), where a column with cards keeps a readable width.
 import { useEffect, useLayoutEffect, useState } from 'react'
 import { Spring } from '../models/spring.ts'
-import { type ColumnHead, columnShares, columnTracks } from '../models/toolbar.ts'
+import { besideTracks, type ColumnHead, columnShares, columnTracks } from '../models/toolbar.ts'
 
 export interface ColumnWidths {
   /** The columns in their order, and the share each heads for. */
@@ -12,8 +13,8 @@ export interface ColumnWidths {
   stop(): void
 }
 
-/** `write` gets the grid's columns (--cols) once per frame the shares moved in. */
-export function columnWidths(write: (tracks: string) => void): ColumnWidths {
+/** `write` gets the grid's columns (--cols, and beside a side panel --cols-beside) once per frame the shares moved in. */
+export function columnWidths(write: (tracks: string, beside: string) => void): ColumnWidths {
   const shares = new Map<string, Spring>()
   let ids: string[] = []
   let queued = false
@@ -22,7 +23,8 @@ export function columnWidths(write: (tracks: string) => void): ColumnWidths {
     queued = true
     queueMicrotask(() => {
       queued = false
-      write(columnTracks(ids.map(id => shares.get(id)?.value ?? 0)))
+      const now = ids.map(id => shares.get(id)?.value ?? 0)
+      write(columnTracks(now), besideTracks(now))
     })
   }
   return {
@@ -45,7 +47,12 @@ export function columnWidths(write: (tracks: string) => void): ColumnWidths {
 
 /** After every draw of the toolbar, as the old page's renderToolbar did. */
 export function useColumnWidths(heads: ColumnHead[]): void {
-  const [widths] = useState(() => columnWidths(tracks => document.documentElement.style.setProperty('--cols', tracks)))
+  const [widths] = useState(() =>
+    columnWidths((tracks, beside) => {
+      document.documentElement.style.setProperty('--cols', tracks)
+      document.documentElement.style.setProperty('--cols-beside', beside)
+    }),
+  )
   useLayoutEffect(() => {
     widths.fit(
       heads.map(h => h.id),
