@@ -1,8 +1,9 @@
 // Settings → Sleep and wake… (#119): wake's state and settings, its switches, Start, Start again,
 // Log and Switch over… (services/wake/control.ts), Install claude-tg (adapters/launchers.ts), and
 // the note of what the takeover at wake's first start did, seen (adapters/wake-files.ts). For the board
-// on this computer only: every remote listener refuses these routes (core/remote.ts localOnly);
-// a phone reads the state line in the payload.
+// on this computer, and the board's own server through its domain's login, that page being the
+// owner's own (core/remote.ts ownServerSettings); every other remote listener refuses these routes
+// (localOnly), and a phone reads the state line in the payload.
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { type EditResult, editWake } from '../../adapters/config-file.ts'

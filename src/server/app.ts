@@ -559,7 +559,7 @@ export async function startServer({
     sleepRoute({ deps, items: board.items, refresh }),
     // Sessions to another Claude profile, from the card and lane menus (services/move.ts, #256).
     moveRoute({ deps, items: board.items, refresh }),
-    // Settings → Sleep and wake… (services/wake/control.ts), for this computer only.
+    // Settings → Sleep and wake… (services/wake/control.ts), for this computer and the board's own server.
     ...wakeRoutes(wake),
     // The archive: its list, and archiving, bringing back or removing sessions (services/archive.ts).
     ...archiveRoutes({ deps, launches, items: board.items, find: board.find, refresh }),

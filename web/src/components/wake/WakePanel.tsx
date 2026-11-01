@@ -7,11 +7,14 @@
 // once it is Auto and found tg-mcp). While the separate herdr-wake plugin holds wake: Switch over…,
 // asked once, then what it took over. What the takeover at wake's first start did (nobody asked:
 // the reaper and Telegram left off), until "Got it". Every change goes to the board at once
-// (hooks/useWake.ts) and comes back over the live stream. On a phone: the state line, read only.
+// (hooks/useWake.ts) and comes back over the live stream. All of it on the computer's own page and
+// on the board's own server (offersWakeSettings); on a phone or through a PC's tunnel: the state
+// line, read only.
 import type { Switched, WakeSettingsView, WakeView } from '../../../../src/core/wake/view.ts'
 import { useWake, type WakeActions } from '../../hooks/useWake.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { remotePage } from '../../models/remote-page.ts'
+import { offersWakeSettings } from '../../models/settings-menu.ts'
 import {
   excludeEdited,
   hookNotes,
@@ -38,7 +41,7 @@ export interface WakePanelProps {
 export function WakePanel({ open, onClose }: WakePanelProps) {
   const t = useT()
   const { data, canEdit, now } = useBoardContext()
-  const phone = remotePage()
+  const phone = !offersWakeSettings(remotePage(), data)
   const wake = useWake(open && !phone)
   const { view, settings } = withPending(isWakeView(data?.wake) ? data.wake : undefined, wake.settings, wake.pending)
   if (!view) return null
@@ -82,7 +85,7 @@ export interface WakeBodyProps {
   /** Switch over… asks before it goes: its question is up. */
   asking?: boolean
   onAsking?(asking: boolean): void
-  /** The board in a phone's browser: the state line only. */
+  /** A page that cannot change wake (a phone's, a PC's tunnel's): the state line only. */
   phone: boolean
   canEdit: boolean
   now: number
