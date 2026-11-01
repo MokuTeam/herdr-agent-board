@@ -158,7 +158,23 @@ async function paneGet(pane: string): Promise<PaneFacts | null> {
 }
 
 /** What the archive's checks read of a board item, or of a record (it keeps the same fields). */
-export type ArchiveSubject = Pick<Item, 'name' | 'pane' | 'session' | 'profile' | 'profileFolder' | 'profileWanted'>
+export type ArchiveSubject = Pick<
+  Item,
+  'name' | 'autoName' | 'pane' | 'session' | 'profile' | 'profileFolder' | 'profileWanted'
+>
+
+/**
+ * Whether a shell's label is the one herdr-wake gives this sleeper: `💤 <name>`, the name wake
+ * knows it by (the board's autoName, not a name given on the board), or `💤` alone for one with no
+ * name (the board shows its session id's start for it). herdr gives pane ids out again (#302): a
+ * 💤 pane of another sleeper, or of anything else, is not this one's.
+ */
+function sleeperLabel(label: string, item: ArchiveSubject): boolean {
+  const mark = label.trim()
+  const name = (item.autoName ?? '').trim()
+  if (mark === `💤 ${name}`) return true
+  return mark === '💤' && (!name || name === item.session?.slice(0, 8))
+}
 
 export type FreeToClose = { ok: true; pane: PaneFacts | null } | { ok: false; why: string; detail?: string }
 
@@ -168,7 +184,8 @@ export type FreeToClose = { ok: true; pane: PaneFacts | null } | { ok: false; wh
  * tell, or it could not come back in the right account. Claude in it must be this session and
  * free: no turn, no dialog, no text in its input box, no background command or Monitor (actions.ts
  * readyToSleep, in its own profile's registry). A shell with no Claude in it goes only as
- * herdr-wake left a sleeping one: marked 💤, nothing running in it but the shell; a Claude that
+ * herdr-wake left this sleeper: marked 💤 with its name (sleeperLabel), nothing running in it but
+ * the shell; a Claude that
  * exited by itself, or a program started in its place, keeps the pane. The profile's detail is in
  * `tr`'s language (profileDoubt).
  */
@@ -187,7 +204,7 @@ export async function freeToClose(deps: Deps, item: ArchiveSubject, tr: Translat
   }
   if (!pane) return { ok: true, pane: null }
   if (!pane.agent) {
-    if (!pane.label.startsWith('💤')) return { ok: false, why: 'archive.why.exited' }
+    if (!sleeperLabel(pane.label, item)) return { ok: false, why: 'archive.why.exited' }
     try {
       const answer = await herdr(['pane', 'process-info', '--pane', target])
       const info = isRecord(answer) && isRecord(answer.process_info) ? answer.process_info : null

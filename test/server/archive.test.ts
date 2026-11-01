@@ -458,7 +458,14 @@ test('a sleeping session goes too; a pane that shares its tab closes alone; Remo
     assert.match(String((await b.archive()).body.error), /no longer runs in its pane/)
     herdrWith(box, dir, { asleep: true, running: true })
     assert.match(String((await b.archive()).body.error), /Something else runs in its pane/)
+    // herdr gives pane ids out again (#302): a pane marked 💤 for another sleeper is not this one's.
+    herdrWith(box, dir, { asleep: true, label: '💤 Other' })
+    assert.match(String((await b.archive()).body.error), /no longer runs in its pane/)
     assert.equal(record(box), null)
+    assert.equal(
+      calls(box).some(c => c.startsWith('pane close') || c.startsWith('tab close')),
+      false,
+    )
     herdrWith(box, dir, { asleep: true, shared: true })
     mkdirSync(join(stateDir(box), 'context'), { recursive: true })
     writeFileSync(join(stateDir(box), 'context', `${S}.json`), '{}')
