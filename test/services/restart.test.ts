@@ -110,7 +110,7 @@ function registry(box: Sandbox, status: string, profileDir = join(box.env.HOME a
   )
 }
 
-type WakeAnswer = { ok: boolean; error?: string }
+type WakeAnswer = { ok: boolean; error?: string; pane?: string }
 
 /**
  * herdr-wake: /sleep puts s1 to sleep (the pane becomes a shell, /sleeping lists it), /wake brings
@@ -294,6 +294,22 @@ test('once the session is free it is put to sleep, woken, and gets its note; the
   assert.equal(read(box, 'aaaa01'), null)
   const [run] = runs(box)
   assert.deepEqual([run?.result, run?.kind, run?.by], ['sent', 'restart', 'agent'])
+})
+
+test('#204: woken in a new tab (its pane closed as it went to sleep), the note goes to the pane it woke in', async () => {
+  const box = await sandbox()
+  herdrWith(box, 'idle')
+  // The wake says where it woke; herdr shows the session there from then on.
+  const wake = await fakeWake(box, { wake: () => ({ ok: true, pane: 'p2' }), pane: { pane_id: 'p2' } })
+  put(box, { id: 'aaaa02', text: 'go on' })
+  await scheduler(box, { wakeUrl: wake.url })
+  await until(() => runs(box).length === 1)
+  assert.deepEqual(wake.calls(), ['/sleep', '/wake'])
+  const typed = box.calls().filter(a => a[1] === 'prompt')
+  assert.deepEqual(
+    typed.map(a => [a[2], a[3]]),
+    [['p2', '[board reminder; restarted as you asked] go on']],
+  )
 })
 
 test('a turn, the user’s draft and background tasks hold a restart back, without counting as tries', async () => {

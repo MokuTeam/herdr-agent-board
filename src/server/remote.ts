@@ -10,7 +10,8 @@
 //   /api/hello and the pairing itself;
 // - it does not act on this computer's screen (desktopOnly), nor approve pairings, set up Remote
 //   access or work wake (localOnly: /api/remote, /api/access, /api/wake, for the board on this
-//   computer only), nor read or change the owner's secrets for the agents (/api/secrets).
+//   computer only), nor read or change the owner's secret store for the agents (/api/secrets). A
+//   desk (RemoteDevice.desk) may focus herdr and answer the phones that ask.
 // The routes' own guards apply as for the web board (X-Board on POSTs, fresh herdr data, the file
 // token).
 //
@@ -19,6 +20,7 @@
 // address from serve, the token in a cookie, and the board's page for a phone's browser.
 // A device's open streams end when it is unpaired, on both.
 import { hostname } from 'node:os'
+import { isRecord } from '../adapters/json-store.ts'
 import { type Caller, serveStatus, tailscaleStatus, whois } from '../adapters/tailscale.ts'
 import {
   clearCookie,
@@ -34,6 +36,7 @@ import {
 import {
   allowedLogin,
   bearerOf,
+  DESK_REMOTE_OPS,
   type PwaView,
   REMOTE_API,
   type RemoteConfig,
@@ -203,13 +206,17 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
     try {
       url = new URL(req.url)
       const raw = url.pathname
-      if (req.method === 'GET' && raw === '/api/hello')
-        return json(
-          200,
-          fromServe
-            ? { ...hello(), paired: !!(token && o.remote.verify(token, who)), language: o.cfg.language ?? null }
-            : hello(),
-        )
+      if (req.method === 'GET' && raw === '/api/hello') {
+        if (!fromServe) return json(200, hello())
+        const known = token ? o.remote.verify(token, who) : null
+        return json(200, {
+          ...hello(),
+          paired: !!known,
+          desk: !!known?.desk,
+          device: known?.id ?? null,
+          language: o.cfg.language ?? null,
+        })
+      }
       if (req.method === 'POST' && raw === '/api/remote/pair') {
         const body = await readBody(req)
         const r = o.remote.request((body as { name?: unknown })?.name, who, fromServe ? 'browser' : undefined)
@@ -240,8 +247,15 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
       // computer is refused in both spellings, or an encoded letter (/api/fs/%6Fpen) would get by.
       const path = decoded(raw)
       if (path === null) return json(400, { error: 'path' })
-      const refused = remoteRefusal(raw, path)
+      const refused = remoteRefusal(raw, path, { desk: !!device.desk })
       if (refused) return refused
+      if (req.method === 'POST' && raw === '/api/remote') {
+        // A body that is not a JSON object (null, a string, a broken or oversized one) is no op
+        // this desk may run: refused like any other, never answered with a 500 and its message.
+        const body = await readBody(req.clone()).catch(() => null)
+        const op = isRecord(body) ? body.op : undefined
+        if (!DESK_REMOTE_OPS.has(op)) return json(403, { error: 'local' })
+      }
       if (req.method === 'GET' && raw === '/api/peers') return json(200, { peers: await peers() })
       // The board's page is for the computer's own browser; a phone has its app.
       if (!raw.startsWith('/api/') && !raw.startsWith('/uploads/')) return json(404, { error: 'not found' })

@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardPayload, BoardProfile } from '../../src/core/payload.ts'
-import type { SecretMeta, SecretsView } from '../../src/core/secrets.ts'
+import type { SecretMeta, SecretsView } from '../../src/core/secret-store.ts'
 import type { Item } from '../../src/core/types.ts'
 import { longWhen } from '../../src/core/when-format.ts'
 import { SecretsBody, SecretsPanel } from '../../web/src/components/secrets/SecretsPanel.tsx'
@@ -218,6 +218,8 @@ describe('the help', () => {
       'board secret file NAME',
     ])
     expect(help).toContain('Changes apply to new or restarted sessions.')
+    // an agent's request (#273) lands here too
+    expect(help).toContain('An agent can ask you for one, too: its card shows a form')
     expect(help).toContain('the session’s wins over the profile’s')
     expect(help).toContain('All agents run as one Linux user')
     expect(help).toContain('not from an agent set on reading it')

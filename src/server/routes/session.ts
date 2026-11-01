@@ -25,7 +25,16 @@ import type { QueuedPrompt } from '../../core/queue.ts'
 import { picturesBack, type SentPictures } from '../../core/sent-pictures.ts'
 import type { ConversationTurn } from '../../core/transcript.ts'
 import type { Item, Pin } from '../../core/types.ts'
-import { checkWake, focus, send, sleepSession, wake, wakeAnswers } from '../../services/actions.ts'
+import {
+  checkWake,
+  focus,
+  NAMED_POLL_MS,
+  namedWaitMs,
+  send,
+  sleepSession,
+  wake,
+  wakeAnswers,
+} from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
 import { askArchive, undoMs } from '../../services/archive.ts'
 import { askAside } from '../../services/aside.ts'
@@ -146,8 +155,10 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
   return app.gate(item.key, body.requestId ?? randomUUID(), [body.session ?? null, body.text, files], async () => {
     // Always collect a new snapshot before accepting a message, even if SSE is connected: a
     // board that cannot reach herdr fails here rather than send on old data.
-    const fresh = (await collect(deps)).find(next => next.key === item.key)
-    if (!fresh || fresh.session !== item.session || fresh.pane !== item.pane) return changed(item)
+    const fresh = await freshItem(deps, item)
+    // A card shown asleep is for its session wherever it woke meanwhile: a new tab (#204) too.
+    const moved = item.sleeping && !!item.session
+    if (!fresh || fresh.session !== item.session || (fresh.pane !== item.pane && !moved)) return changed(item)
     const typed = [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n')
     const pictures = files.filter(p => PICTURE_PATH.test(p))
     // What its thread needs should the message reach the session while it works (core/sent-pictures.ts).
@@ -155,6 +166,18 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
       rememberPictures({ session: fresh.session, key: messageKey(typed), pictures, at: Date.now() }, deps.log)
     return send(deps, fresh, typed, { pictures: pictures.length > 0 })
   })
+}
+
+/**
+ * The card's session in a new snapshot. One the card shows asleep may have just woken (by wake,
+ * Telegram or by hand) in a pane herdr does not name it in yet (#267): looked for again for a few
+ * seconds before it counts as gone.
+ */
+async function freshItem(deps: Deps, item: Item): Promise<Item | undefined> {
+  for (const deadline = Date.now() + namedWaitMs(); ; await Bun.sleep(NAMED_POLL_MS)) {
+    const fresh = (await collect(deps)).find(next => next.key === item.key)
+    if (fresh || !item.sleeping || Date.now() >= deadline) return fresh
+  }
 }
 
 // A question form, a permission prompt or pi's menu or text input, answered with keys in the pane
@@ -295,7 +318,7 @@ async function act(
       )
       return { ok: true, held: r.held, dropped: r.dropped, closeAt: r.record.closeAt }
     }
-    // A MokuPilot call whose agent is a fork of this session, only in the board's own profile; no herdr in it.
+    // A MokuPilot call whose agent is a fork of this session, in the session's own profile; no herdr in it.
     // Here or on the viewer's computer by the mode, and under `auto` by who asks (core/mokupilot-mode.ts).
     case 'mokupilot':
       return startCall(deps.cfg, item, { profiles: deps.profiles(), viewer, own: ownAddresses })
@@ -390,12 +413,13 @@ export function sessionRoutes(app: SessionApp): Route[] {
       guard: ['board-header', 'origin'],
       handle: action,
     },
-    // A side question runs Claude once on a copy of the conversation (services/aside.ts): like a
-    // call, only from this page, no herdr; the page going away ends it.
+    // A side question types /btw into the session and reads its answer (services/aside.ts): it
+    // presses keys in a session, so only from this page and through a herdr the board reaches; the
+    // page going away closes the overlay.
     {
       method: 'POST',
       path: /^\/api\/session\/([^/]+)\/aside$/,
-      guard: ['board-header', 'origin'],
+      guard: ['board-header', 'origin', 'fresh-data'],
       handle: withItem(async (item, req, ctx) => {
         const r = await askAside(app.deps, item, (await ctx.body()).question, { signal: req.signal })
         return json(r.ok ? 200 : 409, r)

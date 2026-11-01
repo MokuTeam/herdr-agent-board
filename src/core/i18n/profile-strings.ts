@@ -46,9 +46,12 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     // a reminder whose session is gone, not sent to the session of another profile now in its pane (services/scheduler.ts)
     'sched.err.profile':
       'The session now in its pane runs in profile {now}, not in {was}, where this was set, so it does not go there; if it is for that session, set it there again',
-    // a MokuPilot call from a session in another profile than the board's (services/mokupilot.ts)
+    // a MokuPilot call by link (the viewer's MokuPilot, over ssh) from a session in another profile than the board's (services/mokupilot.ts)
     'mokupilot.err.profile':
-      'MokuPilot takes the profile of its running copy, {board}: a call from {profile} would run in the wrong account',
+      'A call by link runs its fork over ssh in the board’s profile, {board}: a call from {profile} would run in the wrong account; start it at the board’s computer',
+    // a MokuPilot call from a session in another profile than the board's whose folder is not known (services/mokupilot.ts)
+    'mokupilot.err.profileUnknown':
+      'The folder of this session’s profile is not known ({profile}): a call could run in the wrong account',
     // herdr's notification of a session whose hooks report another profile than its start asked for (server/board-state.ts)
     'profile.wrongTitle': 'Wrong profile: {name}',
     'profile.wrongBody': '{name} was started in {want} but runs in {got}',
@@ -67,6 +70,28 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'cat.profileNone': 'None',
     // the profile choice in the new-session window (web/src/components/launch/LaunchDialog.tsx)
     'launch.profile': 'Profile',
+    // a session moved to another profile from the board (#256): the card's and the lane's menus
+    // (web/src/models/menu-model.ts), the card while it moves, the toasts (web/src/models/profile-move.ts)
+    'move.menu': 'Profile',
+    'move.lane': 'Move {lane}’s sessions to',
+    'move.laneUsual': 'Also make it {lane}’s usual profile',
+    'move.laneNone': 'No Claude sessions in {lane}',
+    'move.busy': 'Moving…',
+    'move.done': '{name} moved to {profile}',
+    'move.later': '{name} moves to {profile} once it is free',
+    'move.refused': '{name} stays where it is: {why}',
+    'move.whenFree': 'Move once it is free',
+    'move.why.busy': 'it is working',
+    'move.why.dialog': 'a dialog waits for an answer',
+    'move.why.draft': 'there is unsent text in its input box',
+    'move.why.tasks': 'background tasks run',
+    'move.why.gone': 'another session is in its pane now',
+    'move.sum': '{lane}: {parts}',
+    'move.sum.moved': ['{n} moved to {profile}', '{n} moved to {profile}'],
+    'move.sum.later': ['{n} once free', '{n} once free'],
+    'move.sum.refused': ['{n} refused', '{n} refused'],
+    'move.sum.usual': 'new sessions start in {profile}',
+    'move.err.usual': '{lane}’s usual profile stays as it was: {why}',
     // the Profiles panel, from Settings with more than one profile folder (web/src/components/profiles)
     'set.profiles': 'Profiles…',
     'prof.title': 'Profiles',
@@ -141,9 +166,12 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     // a reminder whose session is gone, not sent to the session of another profile now in its pane (services/scheduler.ts)
     'sched.err.profile':
       'Сессия, что сейчас в её панели, работает в профиле {now}, а не в {was}, где это поставлено, поэтому туда оно не уходит; если оно для той сессии, поставь его там заново',
-    // a MokuPilot call from a session in another profile than the board's (services/mokupilot.ts)
+    // a MokuPilot call by link (the viewer's MokuPilot, over ssh) from a session in another profile than the board's (services/mokupilot.ts)
     'mokupilot.err.profile':
-      'MokuPilot берёт профиль своей запущенной копии, {board}: звонок из {profile} пошёл бы не в том аккаунте',
+      'Звонок по ссылке запускает форк по ssh в профиле доски, {board}: звонок из {profile} пошёл бы не в том аккаунте; начни его за компьютером доски',
+    // a MokuPilot call from a session in another profile than the board's whose folder is not known (services/mokupilot.ts)
+    'mokupilot.err.profileUnknown':
+      'Папка профиля этой сессии неизвестна ({profile}): звонок мог бы пойти не в том аккаунте',
     // herdr's notification of a session whose hooks report another profile than its start asked for (server/board-state.ts)
     'profile.wrongTitle': 'Не тот профиль: {name}',
     'profile.wrongBody': '{name}: запущена в профиле {want}, а работает в {got}',
@@ -162,6 +190,32 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'cat.profileNone': 'Нет',
     // the profile choice in the new-session window (web/src/components/launch/LaunchDialog.tsx)
     'launch.profile': 'Профиль',
+    // a session moved to another profile from the board (#256): the card's and the lane's menus
+    // (web/src/models/menu-model.ts), the card while it moves, the toasts (web/src/models/profile-move.ts)
+    'move.menu': 'Профиль',
+    'move.lane': 'Перенести сессии «{lane}» в',
+    'move.laneUsual': 'И сделать его обычным для «{lane}»',
+    'move.laneNone': 'В «{lane}» нет сессий Claude',
+    'move.busy': 'Переношу…',
+    'move.done': '{name}: теперь в профиле {profile}',
+    'move.later': '{name}: перейдёт в {profile}, когда освободится',
+    'move.refused': '{name} остаётся, где была: {why}',
+    'move.whenFree': 'Перенести, когда освободится',
+    'move.why.busy': 'она работает',
+    'move.why.dialog': 'ждёт ответа диалог',
+    'move.why.draft': 'в поле ввода неотправленный текст',
+    'move.why.tasks': 'идут фоновые задачи',
+    'move.why.gone': 'в её панели теперь другая сессия',
+    'move.sum': '{lane}: {parts}',
+    'move.sum.moved': ['{n} перенесена в {profile}', '{n} перенесены в {profile}', '{n} перенесено в {profile}'],
+    'move.sum.later': [
+      '{n} перейдёт, когда освободится',
+      '{n} перейдут, когда освободятся',
+      '{n} перейдут, когда освободятся',
+    ],
+    'move.sum.refused': ['{n} не перенесена', '{n} не перенесены', '{n} не перенесено'],
+    'move.sum.usual': 'новые сессии начнутся в {profile}',
+    'move.err.usual': 'Обычный профиль «{lane}» не изменился: {why}',
     // the Profiles panel, from Settings with more than one profile folder (web/src/components/profiles)
     'set.profiles': 'Профили…',
     'prof.title': 'Профили',

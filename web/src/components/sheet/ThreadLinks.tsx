@@ -4,10 +4,13 @@
 // with spawn-agent; and another session's or a teammate's message, a bubble with their name. In a
 // helper's own conversation (the helpers window) what its session asked is the other side. An
 // agent's or a workflow's report has "Conversation" beside it.
+
 import type { MouseEvent, ReactNode } from 'react'
 import type { PublicHelper, WorkflowRun } from '../../../../src/core/helpers.ts'
+import { inPane } from '../../../../src/core/links.ts'
 import type { TaskNotice } from '../../../../src/core/notices.ts'
-import type { PeerTurn, ToolTurn, UserTurn } from '../../../../src/core/transcript.ts'
+import type { Todo } from '../../../../src/core/todos.ts'
+import type { AssistantTurn, PeerTurn, ToolTurn, UserTurn } from '../../../../src/core/transcript.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { findHelper, helperTitle, sessionByName, took } from '../../models/helper-model.ts'
@@ -33,6 +36,10 @@ export interface ThreadLinks {
   onSession?: (key: string) => void
   /** A long message opened or folded again: the thread changed height where the reader is. */
   onResize?: (() => void) | undefined
+  /** Tasks on (#202): the 📌 under an agent's message opens its points to pin, from `el`. */
+  onPin?: ((turn: AssistantTurn, el: HTMLElement) => void) | undefined
+  /** The session's tasks, for how many of a message's points are pinned. */
+  todos?: readonly Todo[] | undefined
 }
 
 export const NO_LINKS: ThreadLinks = { helpers: [], workflows: [], items: [] }
@@ -211,8 +218,7 @@ export function LinkLine({ turn: m, item, helper, links }: LinkLineProps) {
   }
   if (m.spawn) {
     const spawn = m.spawn
-    const target =
-      links.items.find(x => x.pane && x.pane === spawn.pane && [x.name, x.autoName].includes(spawn.name)) ?? null
+    const target = links.items.find(x => inPane(x, spawn.pane) && [x.name, x.autoName].includes(spawn.name)) ?? null
     const name = target ? <SessionButton session={target} links={links} /> : <b>{spawn.name || '…'}</b>
     return (
       <div className={spawn.failed ? 'link-line failed' : 'link-line'}>

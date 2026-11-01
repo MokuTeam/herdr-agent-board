@@ -36,6 +36,11 @@ export interface WakeConfig {
   wakeTimeoutSec: number
   pollTimeoutSec: number
   listSleepingDays: number
+  /**
+   * A session put to sleep gives its pane back, and its tab when only herdr-sidebar's panes are
+   * beside it, and wakes in a new tab of its workspace (#204); false: its pane stays, `💤 <name>`.
+   */
+  closePanes: boolean
 }
 
 const record = (v: unknown): Record<string, unknown> | null =>
@@ -83,6 +88,7 @@ export function wakeConfig(section: unknown): WakeConfig {
     wakeTimeoutSec: count(w.wakeTimeoutSec, 120),
     pollTimeoutSec: count(w.pollTimeoutSec, 25),
     listSleepingDays: count(w.listSleepingDays, 7),
+    closePanes: w.closePanes !== false,
   }
 }
 

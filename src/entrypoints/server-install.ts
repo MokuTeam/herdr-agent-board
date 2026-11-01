@@ -14,7 +14,7 @@
 import { closeSync, mkdirSync, openSync, readSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { setServerMode } from '../adapters/config-file.ts'
+import { mustEdit, setServerMode } from '../adapters/config-file.ts'
 import { putBrowserParts, takeBrowserParts } from '../adapters/desktop-files.ts'
 import { configDir, stateDir } from '../adapters/paths.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
@@ -56,7 +56,7 @@ async function userPart(args: string[]): Promise<number> {
   const say = (line: string): void => console.log(line)
   const profiles = loadProfiles({ shownDir: inheritedProfileDir() })
   if (what === 'off') {
-    setServerMode(null)
+    mustEdit(setServerMode(null))
     // the agents' browsers: those still running stopped, the MCP server out of every profile
     await createDesktops({
       root: join(stateDir(), 'desktop'),
@@ -81,7 +81,7 @@ async function userPart(args: string[]): Promise<number> {
     console.error('usage: server-install.ts --user-part on <mode> <source> | off')
     return 2
   }
-  setServerMode({ domain, socket: BOARD_SOCKET })
+  mustEdit(setServerMode({ domain, socket: BOARD_SOCKET }))
   mkdirSync(configDir(), { recursive: true })
   writeFileSync(join(configDir(), SOURCE_FILE), `${JSON.stringify(s, null, 2)}\n`)
   // the install action ran before the server mode was on: the agents' browsers' part now

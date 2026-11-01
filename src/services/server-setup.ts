@@ -29,7 +29,7 @@
 // and Apply need the server and the login alone of the tunnel's settings, and change none of them.
 import { gzipSync } from 'node:zlib'
 import { type BoardPack, boardHead, boardPack } from '../adapters/board-pack.ts'
-import { editTunnel, editTunnelAdmin, editTunnelInstall, setTunnelSetup } from '../adapters/config-file.ts'
+import { editTunnel, editTunnelAdmin, editTunnelInstall, mustEdit, setTunnelSetup } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import type { RemoteRun, spawnRemote } from '../adapters/ssh.ts'
 import { lang, t } from '../core/lang.ts'
@@ -365,8 +365,9 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       : null
   }
 
+  // a refused write (config.json busy or unreadable) is thrown: the run says it failed, not done
   function writeSetup(s: Setup | null): void {
-    setTunnelSetup(s)
+    mustEdit(setTunnelSetup(s))
     mirror(x => {
       if (s) x.setup = { ...(isRecord(x.setup) ? x.setup : {}), ...s }
       else delete x.setup
@@ -374,7 +375,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
   }
 
   function writePublicPort(port: number | null): void {
-    editTunnel({ publicPort: port })
+    mustEdit(editTunnel({ publicPort: port }))
     mirror(x => {
       if (port === null) delete x.publicPort
       else x.publicPort = port

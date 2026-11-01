@@ -28,6 +28,8 @@ export interface BoardProps {
   onNewSession?: (ctx: NewSessionContext, from: HTMLElement) => void
   /** A lane's head: the categories panel, at that lane. */
   onLaneHead?: (id: string) => void
+  /** A lane's day total (#233): the Time panel on that client. */
+  onLaneTime?: (id: string) => void
   /** Sessions on their way (hooks/useLaunch.ts). */
   launch?: LaunchSlots
   /** A card's key -> the launch card it takes over on screen. */
@@ -47,7 +49,16 @@ function headsAlong(e: UIEvent<HTMLElement>): void {
   if (heads && heads.scrollLeft !== e.currentTarget.scrollLeft) heads.scrollLeft = e.currentTarget.scrollLeft
 }
 
-export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roomBelow, archive }: BoardProps) {
+export function Board({
+  onOpen,
+  onNewSession,
+  onLaneHead,
+  onLaneTime,
+  launch,
+  takeovers,
+  roomBelow,
+  archive,
+}: BoardProps) {
   const t = useT()
   const { data, ui, canMutate, canEdit, dispatch, toast } = useBoardContext()
   const { visible } = useBoardView()
@@ -143,6 +154,9 @@ export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roo
           canMutate={canMutate}
           onNewSession={(ctx, from) => onNewSession?.(ctx, from)}
           onHead={() => onLaneHead?.(lane.id)}
+          time={data?.time?.today[lane.id]}
+          timeProblem={data?.time?.problems}
+          onTime={() => onLaneTime?.(lane.id)}
           renderCard={renderCard}
         />
       ))}

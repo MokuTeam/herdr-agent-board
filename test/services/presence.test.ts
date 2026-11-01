@@ -6,18 +6,22 @@ import { expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readCard, writeCard } from '../../src/adapters/cards.ts'
 import { currentPresence, presenceFile, readPresence } from '../../src/adapters/presence-store.ts'
-import type { Observation } from '../../src/core/presence.ts'
+import { type MokupilotCall, NO_PRESENCE, type Observation } from '../../src/core/presence.ts'
 import type { Config } from '../../src/core/types.ts'
 import { createPresence } from '../../src/services/presence.ts'
 import { isolatedHome } from '../support/env.ts'
 
-function rig(presence: Config['presence']) {
-  const cfg: Pick<Config, 'presence'> = { presence }
+function rig(presence: Config['presence'], mokupilot?: unknown) {
+  const cfg: Pick<Config, 'presence'> & { mokupilot?: unknown } = { presence, mokupilot }
   let obs: Observation = { idleSec: null, locked: null }
   let clock = 1_000
   let changes = 0
   const logs: string[] = []
   let asked = 0
+  // MokuPilot (#276): whether it has run here, and its call in progress; each look counted.
+  let here = false
+  let call: MokupilotCall | null | undefined = null
+  const looks = { here: 0, call: 0 }
   const svc = createPresence({
     cfg,
     log: l => logs.push(l),
@@ -26,6 +30,14 @@ function rig(presence: Config['presence']) {
     observe: async () => {
       asked++
       return obs
+    },
+    call: () => {
+      looks.call++
+      return call
+    },
+    callsHere: () => {
+      looks.here++
+      return here
     },
     now: () => clock,
   })
@@ -39,6 +51,15 @@ function rig(presence: Config['presence']) {
     later(ms: number) {
       clock += ms
     },
+    mokupilot(on: boolean, id: string | null = null, started = 0) {
+      here = on
+      call = id === null ? null : { id, started }
+    },
+    /** call.json there but held by another program: no answer. */
+    unreadable() {
+      call = undefined
+    },
+    looks,
     get changes() {
       return changes
     },
@@ -157,4 +178,86 @@ test('turned on under a running board marks the briefed sessions; turned off for
   expect(existsSync(presenceFile())).toBe(false)
   expect(readCard('s1')).not.toHaveProperty('presenceSeen')
   expect(r.svc.view()).toBeNull()
+})
+
+test('without MokuPilot here: no call is read, the view is the one before', async () => {
+  isolatedHome()
+  const r = rig({ mode: 'auto', idleMinutes: 10 })
+  r.see({ idleSec: 5 })
+  for (let i = 0; i < 5; i++) {
+    await r.svc.tick()
+    r.later(30_000)
+  }
+  expect(r.looks.call).toBe(0)
+  // Looked up once a minute, not on every tick.
+  expect(r.looks.here).toBeLessThanOrEqual(3)
+  expect(r.svc.view()).toEqual({ ...NO_PRESENCE, mode: 'auto', idleMinutes: 10, hint: null, detects: true })
+  // `"mokupilot": false`: not even looked up.
+  const off = rig({ mode: 'auto' }, false)
+  off.mokupilot(true, '7:1')
+  await off.svc.tick()
+  expect(off.svc.view()).not.toHaveProperty('calls')
+  expect([off.looks.here, off.looks.call]).toEqual([0, 0])
+  expect(currentPresence().state).toBe('here')
+})
+
+test('a MokuPilot call puts the user on it and back; the view offers one by hand where MokuPilot runs', async () => {
+  isolatedHome()
+  const r = rig({ mode: 'suggest', idleMinutes: 10 })
+  r.mokupilot(true)
+  r.see({ idleSec: 5 })
+  await r.svc.tick()
+  expect(r.svc.view()).toMatchObject({ state: 'here', calls: true })
+  r.mokupilot(true, '7:1')
+  r.later(30_000)
+  await r.svc.tick()
+  expect(readPresence()).toEqual({ state: 'call', since: 31_000, by: 'auto', from: 'auto', before: 'here' })
+  expect(r.logs).toContain('presence: call (detected)')
+  // The call runs on without input; the board's page used meanwhile changes nothing.
+  r.see({ idleSec: 1800 })
+  r.later(30_000)
+  await r.svc.tick()
+  r.svc.touch()
+  expect(currentPresence().state).toBe('call')
+  r.mokupilot(true, null)
+  r.see({ idleSec: 2 })
+  r.later(30_000)
+  await r.svc.tick()
+  expect(currentPresence()).toMatchObject({ state: 'here', by: 'auto' })
+  expect(currentPresence()).not.toHaveProperty('before')
+  // By hand, as the other states.
+  r.svc.set('call', 'web')
+  expect(r.svc.view()).toMatchObject({ state: 'call', by: 'user', before: 'here' })
+  r.later(30_000)
+  await r.svc.tick()
+  expect(currentPresence().state).toBe('call')
+  r.svc.set('here', 'web')
+  expect(currentPresence().state).toBe('here')
+})
+
+test('a call that cannot be read changes nothing; one no longer watched ends if the board set it', async () => {
+  isolatedHome()
+  const r = rig({ mode: 'auto', idleMinutes: 10 })
+  r.mokupilot(true, '7:1')
+  r.see({ idleSec: 5 })
+  await r.svc.tick()
+  expect(currentPresence().state).toBe('call')
+  // Held by another program a moment: still on the call, and no new call when it reads again.
+  r.unreadable()
+  r.later(30_000)
+  await r.svc.tick()
+  r.mokupilot(true, '7:1')
+  r.later(30_000)
+  await r.svc.tick()
+  expect(currentPresence()).toMatchObject({ state: 'call', since: 1_000 })
+  // `"mokupilot": false` mid-call: the board's call ends.
+  r.cfg.mokupilot = false
+  r.later(30_000)
+  await r.svc.tick()
+  expect(currentPresence()).toMatchObject({ state: 'here', by: 'auto' })
+  // One the user set stays theirs.
+  r.svc.set('call', 'cli')
+  r.later(30_000)
+  await r.svc.tick()
+  expect(currentPresence()).toMatchObject({ state: 'call', by: 'user' })
 })

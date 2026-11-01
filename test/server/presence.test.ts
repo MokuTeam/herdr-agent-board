@@ -2,7 +2,7 @@
 // the board's payload carrying it only while it is on, and detection running against a fake
 // computer (TEST_PRESENCE_OBS) instead of this one.
 import { expect, setDefaultTimeout, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { serveBoard } from '../support/board-server.ts'
 import { type Sandbox, sandbox } from '../support/sandbox.ts'
@@ -120,4 +120,37 @@ test('suggest: the offer is in the view, nothing switches by itself', async () =
   await eventually(async () => (await b.get())?.hint === 'away')
   expect((await b.get())?.state).toBe('here')
   expect(existsSync(presenceFile(box))).toBe(false)
+})
+
+test('a MokuPilot call on this computer (#276): on a call while call.json names a running process, back after', async () => {
+  // No MokuPilot here: nothing about calls in the view.
+  const plain = await sandbox()
+  const obsPlain = join(plain.dir, 'obs.json')
+  writeFileSync(obsPlain, JSON.stringify({ idleSec: 5, locked: null }))
+  const p = await board(plain, { presence: { mode: 'auto' } }, { TEST_PRESENCE_OBS: obsPlain, TEST_PRESENCE_MS: '50' })
+  await eventually(async () => (await p.get())?.detects === true)
+  expect(await p.get()).not.toHaveProperty('calls')
+
+  const box = await sandbox()
+  const folder = join(box.env.USERPROFILE as string, '.meeting-copilot')
+  mkdirSync(folder, { recursive: true })
+  const obs = join(box.dir, 'obs.json')
+  writeFileSync(obs, JSON.stringify({ idleSec: 5, locked: null }))
+  const b = await board(box, { presence: { mode: 'auto' } }, { TEST_PRESENCE_OBS: obs, TEST_PRESENCE_MS: '50' })
+  await eventually(async () => (await b.get())?.calls === true)
+  expect((await b.get())?.state).toBe('here')
+  // A call: MokuPilot's own process stands in as this test's.
+  writeFileSync(join(folder, 'call.json'), JSON.stringify({ pid: process.pid, started: Date.now() / 1000 }))
+  await eventually(async () => (await b.get())?.state === 'call')
+  expect(await b.get()).toMatchObject({ by: 'auto', before: 'here' })
+  expect(JSON.parse(readFileSync(presenceFile(box), 'utf8'))).toMatchObject({ state: 'call', before: 'here' })
+  expect((await b.payload()).presence).toMatchObject({ state: 'call', calls: true })
+  rmSync(join(folder, 'call.json'))
+  await eventually(async () => (await b.get())?.state === 'here')
+  // By hand through the API, as the other states.
+  expect((await b.post({ state: 'call', from: 'phone' }))[1]).toMatchObject({
+    ok: true,
+    changed: true,
+    presence: { state: 'call', by: 'user', before: 'here' },
+  })
 })

@@ -181,6 +181,33 @@ test('a file sleeper whose pane runs Claude again, or is gone, is not shown', as
   assert.equal(items.find(i => i.key === 's-bill')?.workspace, 'Work stuff')
 })
 
+test('#204: a file sleeper whose pane wake closed is shown without a pane, its workspace and folder the file’s', async () => {
+  const box = await sandbox()
+  herdrState(box)
+  const old = await fakeWake({ sleeping: [] })
+  const freed = {
+    pane: 'w1:p7',
+    workspace: 'w1',
+    workspaceLabel: 'Billing room',
+    topic: 'topic:Billing room',
+    at: SLEPT,
+  }
+  wakeFile(box, {
+    's-free': { session: 's-free', name: 'Freed', cwd: box.dir, seen_at: SLEPT - 60_000, slept_at: SLEPT, freed },
+    // One that runs again shows as running, once.
+    's-run': { session: 's-run', name: 'Running', seen_at: SLEPT - 60_000, slept_at: SLEPT, freed },
+  })
+  config(box, { wakeUrl: old.url, wake: false })
+  const items = await boardItems(box, { language: 'en', wakeUrl: old.url, wake: false })
+  const one = items.find(i => i.key === 's-free')
+  assert.deepEqual(
+    [one?.pane, one?.workspace, one?.cwd, one?.status, one?.sleeping, one?.fromFile],
+    [null, 'Billing room', box.dir, 'sleeping', true, true],
+  )
+  assert.deepEqual(items.map(i => i.key).sort(), ['s-back', 's-free', 's-run'])
+  assert.equal(items.find(i => i.key === 's-run')?.sleeping, false)
+})
+
 test('the old wake’s own sleepers are not filtered: today’s list stays as it was', async () => {
   const box = await sandbox()
   herdrState(box)

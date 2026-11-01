@@ -15,9 +15,13 @@ current with the `board` command; a SessionStart / UserPromptSubmit hook tells e
 ## Setup
 
 [Bun](https://bun.com/docs/installation) 1.4.3 or newer. `herdr plugin install` runs
-`bun install --production` (react and react-dom, its only dependencies); after `herdr plugin link`, run
-`bun install` in the folder yourself. Windows, Linux and macOS (desktop notifications: Windows
-only). Steps 1 and 2 are what the board needs; the rest adds to it.
+`bun install --production` (react and react-dom, and for the quick look's viewers pdfjs-dist,
+mammoth and DOMPurify: its only dependencies; and, optional, SheetJS's `xlsx`, which comes from
+SheetJS's own server, cdn.sheetjs.com: when that cannot be reached, the install goes on without
+it, and the quick look says a spreadsheet cannot be shown here); after `herdr plugin link`, run
+`bun install` in the folder yourself, again after an update that adds one (without them, the quick
+look shows a PDF in the browser's own viewer and says a Word document cannot be shown here). Windows, Linux and macOS (desktop
+notifications: Windows only). Steps 1 and 2 are what the board needs; the rest adds to it.
 
 1. **The plugin and its install** (required).
 
@@ -56,9 +60,8 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
    shown), its conversation looked for in that profile's folder only. It stays in the archive,
    saying why, when the board cannot be sure: that profile is no longer listed, the card does not
    say its profile while more than one is shown, the session ran in another profile than its
-   start asked for, or its conversation is in another profile's folder. A MokuPilot call is still
-   refused outside the board's own profile ([Web board](#web-board)). With `~/.claude` alone
-   nothing changes.
+   start asked for, or its conversation is in another profile's folder. A MokuPilot call starts in
+   the session's own profile ([Web board](#web-board)). With `~/.claude` alone nothing changes.
 2. **A key** (recommended), in herdr's `config.toml` (`%APPDATA%\herdr\config.toml` on Windows,
    `~/.config/herdr/config.toml` elsewhere), then `herdr server reload-config`. Without it the
    board opens with `herdr plugin action invoke agent-board.open`.
@@ -107,8 +110,13 @@ run this copy of the plugin; with more than one profile shown, in each, by its n
 Claude hook (in each shown profile too: without it a session's card has no conversation and no
 profile), the key, sleep and wake (running, off, crashed with its error, held by the separate
 herdr-wake plugin, or not answering, and its hooks in each shown profile), how new sessions start,
-MokuPilot, the notifications. The web board says it too, quietly: "Setup incomplete" in its
-toolbar while something the board needs does not work (see [Web board](#web-board)).
+MokuPilot, the notifications. It also says what herdr's panes hold: how many run an agent, sleep
+in their pane, are herdr-sidebar's or something else, with the memory their processes take, and
+how many of the sidebars and the others are a bare shell (a sidebar pane herdr restored without its
+sidebar, a terminal left open). While the board's sleep and wake runs, it names the panes labelled
+`💤` that wake has no record of: wake neither wakes them nor gives them back. The web board says it too, quietly:
+"Setup incomplete" in its toolbar while something the board needs does not work (see
+[Web board](#web-board)); the panes are counted by `board doctor` only.
 
 Back to `main` (the Node version): its install action does not know this one's entries and
 would leave them beside its own. First take them out of `~/.claude/settings.json`: the
@@ -239,10 +247,14 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   is free (woken if it sleeps), for its information, as `[mokupilot call report]`, the report, and
   a note not to start work on it unless you ask; its conversation shows "MokuPilot call results"
   as a quiet line that opens to the report, its paths (the full protocol, the transcript) as file
-  chips. With more than one Claude profile, a call goes only from a session in the board's own
-  profile (the one its `CLAUDE_CONFIG_DIR` points to): a running MokuPilot takes the call over in
-  its own env, so a fork of a session in another profile would run in the wrong account. The board
-  refuses that call before anything starts, saying so.
+  chips. With more than one Claude profile, a call from a session in another profile than the
+  board's own (the one its `CLAUDE_CONFIG_DIR` points to) starts MokuPilot's launcher with that
+  profile's `CLAUDE_CONFIG_DIR`: MokuPilot looks the session up and runs its fork in that profile,
+  and hands it to a copy already running in another one (MokuPilot from MokuTeam/MokuPilot#119 on;
+  an older running copy takes the call in its own profile, does not find the session there and
+  starts nothing). The board refuses the call before anything starts when it does not know the
+  session's profile folder, and when the call goes to the viewer's computer (below), whose
+  MokuPilot runs the fork over ssh in its login's profile.
   Where the call starts is Settings → MokuPilot… (shown while the board offers calls):
   - **Auto** (the default): looking at the board on its own computer, the call starts there;
     from any other computer (through `tailscale serve`, your own domain, the remote mode), on
@@ -268,9 +280,9 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
 - "Fork" (the sheet, a card's menu): a new session in a new tab that starts with a copy of this
   one's conversation, so it knows what this one knows while this one goes on as it was; see
   [Fork](#fork).
-- A side question (the bubble in the message box, or a message that starts with `/btw`): asked of
-  a copy of the session's conversation, answered in a card over the box, while nothing goes into
-  the session's conversation; see [Side questions](#side-questions).
+- A side question (the bubble in the message box, or a message that starts with `/btw`): typed
+  into the session as Claude Code's own `/btw`, answered in a card over the box, while nothing
+  goes into the session's conversation; see [Side questions](#side-questions).
 - The sheet's place and size are the viewer's own (kept in this browser): docked right, left or
   at the bottom, flush with that edge like a sidebar, where the board makes room for it (a window
   too narrow for that keeps the board's columns and lays the sheet over them), or floating over
@@ -307,11 +319,35 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   `herdr-reveal:` or `file:` link, or relative to the session's folder in `code`, with an
   optional `:line`) becomes a chip once the board finds it on disk; file tool calls in the
   folded runs open the same way. A chip opens a quick look over the board, grown out of the
-  chip: images, PDF, video and audio, Markdown (rendered or source), code and text with line
-  numbers (the `:line` lit and scrolled to), JSON pretty, CSV as a table, folders as a list to
+  chip: images, PDF, Word documents and spreadsheets, video and audio, Markdown (rendered or
+  source), code and text with line
+  numbers (the `:line` lit and scrolled to), JSON pretty, CSV and TSV as a table (`,` `;` tab or
+  `|` between fields, UTF-8 or Windows' old code page as Excel saves it, quoted fields with line
+  breaks, up to 20 000 rows drawn as they scroll into view), folders as a list to
   walk through (the path bar goes up; Backspace goes back). From there: open it with the
   system, show it in its folder, copy the path. Esc closes it. Web links open in the default
   browser.
+- A PDF in the quick look is drawn by the board itself, so a phone's browser and the installed
+  board show it too: its pages fit the width and are drawn as they come into view, their text can
+  be selected, a badge says which page while it scrolls and the footer how many. They zoom with
+  Ctrl+wheel or a trackpad pinch, two fingers on a phone, `+` `-` `0` (fit) and the footer's
+  button; the arrow and page keys scroll. A broken or password-protected PDF says so, beside the
+  button that opens it with the system.
+- A Word document (`.docx`) shows as a page of its text: headings, paragraphs, lists, tables,
+  pictures, footnotes and web links (opened in the default browser); fonts, colors and page
+  layout are left out. A spreadsheet (`.xlsx`, `.xlsm`, `.xls`, `.ods`) shows each visible sheet
+  as a table, the sheet names as tabs below: values as Excel shows them, numbers and the short
+  date in the board's language, merged cells, the rows Excel keeps frozen held at the top (in an
+  `.xlsx` or `.xlsm`; an `.xls` or `.ods` shows none frozen), up to 20 000 rows drawn as they
+  scroll into view; a cell cut short shows its whole text on hover. Both are read in a worker; a
+  document's HTML is then cleaned on the page's own thread, which takes about a second for one of
+  tens of thousands of paragraphs. One over 20 MB (a document) or 10 MB (a spreadsheet), unpacked
+  to more than 150 MB or 120 MB, read for over a minute, broken or with a password says so,
+  beside the button that opens it with the system. The unpacked size is the one the zip's own
+  directory gives: a zip that understates a part is unpacked before the library notices (see
+  #230), and only the one-minute limit holds it. Columns are not limited before the reading: a
+  sheet of thousands of columns under those limits can take tens of seconds and a gigabyte or more
+  of memory on the computer before it is shown or the minute runs out.
 - Images and SVG in the quick look zoom as in Preview and Photos: Ctrl+wheel or a trackpad
   pinch, two fingers on a phone, a click (a double-tap) zooms in to 100% at that spot and a
   double-click goes back to fit, `+` `-` `0` (fit) and the arrows from the keyboard. A zoomed
@@ -340,10 +376,11 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   [Helpers and linked sessions](#helpers-and-linked-sessions).
 - Right click (or a long press on a touch screen, or the menu key / Shift+F10 on a focused card)
   opens the board's own menu: on a card (open, go to herdr, message, wake or sleep, rename, move
-  to a category, status, "No reply needed", open its folder, Changes, History, a new session in
-  its folder, copy its name, folder, session or pane id, archive it, clear the card), on a lane
-  (a new session or workspace there, edit the category, show only it, archive its sleeping
-  sessions), on the "Idle" column's head (archive the sleeping sessions), on the board, on the
+  to a category, status, its Claude profile with two or more shown, "No reply needed", open its
+  folder, Changes, History, a new session in its folder, copy its name, folder, session or pane
+  id, archive it, clear the card), on a lane (a new session or workspace there, edit the category,
+  show only it, archive its sleeping sessions, move its sessions to another profile), on the
+  "Idle" column's head (archive the sleeping sessions), on the board, on the
   sheet's head, on a starting session and on file chips. It opens where you clicked, stays on screen,
   takes arrows, Enter, Esc and the first letters of an item. Gray items say why (no fresh data
   from herdr, the session works). Fields, selected text and links keep the browser's own menu;
@@ -472,10 +509,9 @@ is started. What the board refuses and the "wrong profile" check: [New sessions]
 **Helpers and forks keep their parent's profile.** "New here" from a card starts in that card's
 profile and no other (from a card in the wrong profile, you choose). `spawn-agent`, run by an
 agent, starts the new session in the agent's own profile, hidden or not; `--profile <id>` names
-another, shown one. See [spawn-agent](#spawn-agent). A MokuPilot call is the exception: it goes
-only from a session in the board's own profile, since a running MokuPilot takes the call over in
-its own env and a fork from another profile would run in its account. The board refuses the call
-from any other profile before anything starts (see [Web board](#web-board)).
+another, shown one. See [spawn-agent](#spawn-agent). A MokuPilot call starts in the session's
+profile too, whichever one a running MokuPilot is in; by link (MokuPilot on the viewer's computer)
+it goes only from a session in the board's own profile (see [Web board](#web-board)).
 
 **Waking stays in the profile.** Every wake, whoever asks for it (the Wake button, Enter on the
 terminal board, a message, a reminder, a restart, another session's SendMessage, a Telegram
@@ -489,6 +525,44 @@ folder), and its conversation is in that folder; else it stays up, and "Put to s
 session's own ListAgents and SendMessage see and wake only the sleeping sessions of its profile, so
 a name used in two profiles never wakes the other one; the board shows and wakes all of them. See
 [Sleep and wake](#sleep-and-wake).
+
+**Moving a session to another profile** (a client's work runs in `~/.claude-work` from now on,
+say), with its session id and conversation:
+
+```sh
+board move Billing w2:p7 3f2a9c1e-... --profile work   # names, panes or session ids
+board move Billing --profile work --when-free          # a busy one once it is free
+```
+
+The target is a listed, shown profile other than the session's own; with one profile shown there
+is nowhere to move. A session asleep is moved as it is and stays asleep; a free one is put to sleep
+first, as `board sleep` does, and woken again in the new profile once moved; a busy one (working,
+a dialog, unsent text, background tasks) is refused with the reason, or with `--when-free` gets a
+sleep entry (`board unschedule <id>` cancels it) that moves it once it is asleep. The move copies
+the transcript `projects/<project folder>/<id>.jsonl`, the session's own folder beside it and
+`file-history/<id>/` into the target profile's folder, under the same project folder; the originals
+stay. Moving it back later finds its older copy from the move before in the target: when the
+source's transcript goes on from that copy byte for byte, the copy is replaced (through a temp file
+renamed into place) and the session's folder and file history are copied over the old ones. It is
+refused when the target has a longer or different copy (one that went on by itself), when the
+session runs in the target profile, or when the source has none; these are found before a running
+session is put to sleep, so it stays up. A card from before the board kept profiles moves from the folder wake's entry
+names. When the source profile trusts the session's folder and the target does not, that one
+`hasTrustDialogAccepted` is copied into the target's `.claude.json` (`~/.claude.json` for the
+default folder), so a wake does not stop at Claude's folder-trust dialog. The card then names the
+target's folder, with no "wrong profile" tag, and so does wake's entry for the sleeper (a wake
+started before `board move` existed keeps its entry until the session's next wake: the card decides
+anyway, as `board resume` takes its folder first). Reminders stay with the session. A line per
+session: moved, once free, or refused and why.
+
+On the board, with two or more profiles shown, a card's menu has **Profile ▸** with each shown
+profile, the session's own checked: another one moves it there the same way, and a toast says how
+it went; a busy one's toast says why and offers **Move once it is free**. A lane's menu has
+**Move <lane>'s sessions to ▸** with each profile and how many of the lane's Claude sessions a move
+there takes, one toast for them all; its check **Also make it <lane>'s usual profile** sets the
+lane's usual profile too (as Categories does), so new sessions there start in it. The page sends
+it as `POST /api/move` with `{ "targets": ["<key>", ...], "profile": "<id>", "whenFree": true }`,
+which answers `{ ok, results }` as `board move` has them (`src/server/routes/move.ts`).
 
 While the separate herdr-wake plugin does the waking (installed, and not switched over yet), it
 resumes a session with the env of its pane's shell, as before, and the board keeps its old rule:
@@ -923,41 +997,45 @@ menu), `{ kind: 'input', title, body, more, cut, value, fingerprint }` (pi's tex
 
 ## Side questions
 
-Claude Code's own `/btw` asks a side question with the conversation's context and keeps it out of
-the conversation, but it answers in an overlay of the terminal, and under `-p` it says it "isn't
-available in this environment": the board could only read its answer off the screen, and only
-while the session runs. So the board asks a one-off copy of the conversation instead, which works
-whatever the session does (working, waiting, asleep):
+A side question is Claude Code's own `/btw`, typed into the session's pane through herdr as a
+message is sent (`herdr agent prompt <pane> "/btw <question>"`). Claude Code answers it in an
+overlay over its input box, from what the conversation holds and with no tools, and keeps it out
+of the conversation; it answers while a turn runs too. Claude Code does keep a session's `/btw`
+questions and answers among themselves: a later side question can draw on an earlier one, and the
+user's own `/btw` lists the board's. The board reads the answer off the screen
+(`herdr agent read --source visible`), pressing Down while more of it is below, and closes the
+overlay with Esc. A `/btw` that shows something other than an answer for a few seconds (an error)
+is reported with what it shows. The answer shows in a card over the message box: the question,
+the answer and how long it took. Close (×) forgets it; on its way the same button cancels it and
+closes the overlay. The cards stay with their session while the page is open, and never go to the
+server or the conversation.
 
-```
-claude -p --resume <id> --fork-session --no-session-persistence --tools "" \
-       --strict-mcp-config --settings '{"disableAllHooks":true}' --max-turns 1 --output-format json
-```
+It types only where the line lands as `/btw`, checked as before a message
+(`src/services/actions.ts`), and otherwise says why and types nothing:
 
-in the folder the session's conversation was recorded in, with `CLAUDE_CONFIG_DIR` of the profile
-that holds it (none in the board's own), the question on stdin. The copy is never written to disk
-(no new transcript, the session's own untouched), has no tools (it answers from what the
-conversation holds and cannot act), no MCP servers and no hooks (no card, no context, nothing
-ingested or notified). The answer shows in a card over the message box: the question, the answer,
-and that it went as a request of its own, with Claude Code's price for it at API rates and the
-context it read, the whole conversation. The copy's prompt is not the session's (no tools, no MCP
-servers), so the first side question to a session writes the conversation to the cache anew,
-about what the session's own next turn would cost without its cache; another one before the
-session has moved on reads that cache and costs a fraction (measured on a 34k-token session:
-$0.27 for the first, $0.008 for the next, $0.25 again once the session had worked on). Close (×)
-forgets it; on its way the same button cancels it and ends Claude. The cards stay with their
-session while the page is open, and never go to the server or the conversation.
+- the session asleep: `/btw` needs the running session, and the board does not wake one for it;
+- a dialog, a picker or an overlay open in the terminal (a permission question, `/model`, the
+  user's own `/btw`), or the session blocked on one: the line would go into it;
+- text in the input box: Enter would send it along;
+- another session in the pane by now, or a side question to it still on its way.
+
+Esc goes only to the overlay with this question in it: a key pressed into anything else would
+answer it. The answer comes back as the terminal showed it, lists and code as drawn and long lines
+wrapped at the pane's width. `/btw` runs no UserPromptSubmit hook, but herdr reports the session
+working while it answers: the card moves under "Working" for a few seconds and then back (a
+session under "Needs me" returns there); the board cannot keep it in place. A question is up to 790
+characters: Claude Code folds a longer paste into "[Pasted text #1]" and sends that to the
+conversation as a message.
 
 The switch in the message box (the bubble beside the clip, purple while on) sends the next
-message aside; a message that starts with `/btw` goes aside too. Both only where the board can ask
-one: a Claude session with an id, and `claude` on the board's PATH (`claude.exe` on Windows: an
-npm install's `claude.cmd` would need a shell, which the board never runs). Elsewhere the box is
-as it was, and `/btw` goes to the session as typed.
+message aside; a message that starts with `/btw` goes aside too. Both only in a Claude session
+with an id; elsewhere the box is as it was, and `/btw` goes to the session as typed.
 
-`POST /api/session/<key>/aside` with `{ question }` answers `{ ok, text, costUsd, tokens: {
-context, cached, output }, ms }` or `{ ok: false, error }` (the page only, like a launch); the
-board payload's `aside` says whether the board can ask. Code: `src/core/aside.ts`,
-`src/services/aside.ts`, `web/src/hooks/useAside.ts`, `web/src/components/sheet/Aside.tsx`.
+`POST /api/session/<key>/aside` with `{ question }` answers `{ ok, text, ms }` or `{ ok: false,
+error, busy? }` (the page only, with herdr's data recent enough to act on); the board payload's
+`aside` says whether the board can ask. Code: `src/core/aside.ts` (the overlay on the screen),
+`src/services/aside.ts` (the steps through herdr), `web/src/hooks/useAside.ts`,
+`web/src/components/sheet/Aside.tsx`.
 
 ## Terminal
 
@@ -1088,8 +1166,8 @@ What it costs: a helper's meta file and the head and tail of its transcript are 
 again only when they change (time and size); a session's folder is listed again only when it
 changes. The links come from a read of each session's transcript in the background, once in
 full and then only what it gained, parsing only the lines with a marker (spawn-agent,
-SendMessage, a message from another session). A helper's whole conversation is read only when
-its window is open.
+SendMessage, a message from another session, herdr's commands that type into a pane). A helper's
+whole conversation is read only when its window is open.
 
 `GET /api/session/<key>` carries `helpers` and `workflows`; `GET /api/session/<key>/helper/<id>`
 one helper with its conversation, where the id only picks among that session's own helpers. The
@@ -1099,6 +1177,48 @@ board payload has each item's `helpers` (counts and the newest at work) and `lin
 (the calls and messages in a transcript), `src/server/routes/helpers.ts`, `web/src/components/helpers/`
 (the window, the rows, the card's and the sheet's parts), `web/src/hooks/useHelpers.ts`,
 `web/src/models/helper-model.ts`.
+
+### The edge log
+
+The links on the board are how things stand: per pair of sessions, how many messages and the
+latest. For a history (an audit of who started, wrote to or typed into whom, and when), the board
+also writes every event it reads from a transcript into the edge log, one JSON line each, kept
+across restarts, renames and sessions leaving the board. Besides spawn, fork, sent and received it
+has `prompted`: a Bash or PowerShell call that runs `herdr agent prompt <target>`,
+`herdr agent send-keys <target>`, `herdr pane send-text <pane>`, `herdr pane send-keys <pane>` or
+`herdr pane run <pane>`, one event for each such command in the call. The command is parsed, not
+searched: one that only mentions them (an echo, a file a here-document writes, a commit message,
+`--help`) is none, nor one with `--current`. Prompts are in the log only, not in the board's links.
+
+```json
+{"seq":12,"kind":"sent","to":"case-42","name":"","summary":"Status","at":1793350000000,
+ "session":"<session id>","key":"<card key>","sessionName":"Master",
+ "toSession":"<session id>","toKey":"<card key>","toName":"case-42",
+ "transcript":"<path>","offset":48213,"uuid":"<the line's uuid>"}
+```
+
+(one line in the file). `seq` numbers the lines from 1. The event's own fields: spawn `name`,
+`pane`; fork `of` (the session id); sent `to`, `name` (who wrote from a pipe it replies to),
+`summary` (the one SendMessage gave, never the message); received `name`, `pipe`, `id`; prompted
+`target` (an agent name or a pane id, `""` for a variable), `verb` (`agent prompt`, `pane
+send-keys`, …). `at`: when the call was made or the message came, in ms. `session`, `key` and
+`sessionName` are the session whose transcript it is, `toSession`, `toKey` and `toName` the one at
+the other end as the board matched it (as the links match it, above), both as the board knew them
+when it wrote the line; `null` where it had none. A message's text is not in the log. `transcript`,
+`offset` (the line's byte offset) and `uuid` say where it was read.
+
+Where: `edge-log/` in the board's state folder (`~/.local/state/herdr/plugins/agent-board/`,
+`%LOCALAPPDATA%\herdr\plugins\agent-board\` on Windows), in segments of about 4 MB,
+`edges-<the first line's seq, 12 digits>.jsonl`, none ever removed. `marks.json` beside them says
+how far each transcript is logged: a board that starts again reads every transcript from the start
+and writes no event twice. When the board first runs with the log, it writes what the sessions on
+the board then have in their transcripts.
+
+`GET /api/links/log?since=<seq>&limit=<n>` answers `{ edges, next }`: the lines after `since` (0,
+or none: from the first), at most `limit` (1 to 1000, 1000 when not given), and the `seq` to ask
+after next time. For the board on this computer only: a remote listener refuses it. Code:
+`src/adapters/edge-log.ts`, `src/server/routes/links.ts`, `promptsOf` in
+`src/core/transcript-links.ts`.
 
 ## Moving a card by hand
 
@@ -1302,13 +1422,17 @@ board sleep --when-free Report-north --self                 # and this session, 
 
 ## Sleep and wake
 
-A sleeping session costs nothing: its Claude has exited, its pane stays, labelled `💤 <name>`, and
-it comes back in that pane with the same session id and conversation. The board does this itself,
+A sleeping session costs nothing: its Claude has exited, and its pane is closed, with its tab when
+nothing but herdr-sidebar's panes was beside it, so it holds no shell and no sidebar (below). It
+comes back in a new tab of its workspace with the same session id and conversation, its card,
+name, lane and reminders as they were. The board does this itself,
 on every install, with nothing to install or run (it did it through the separate
 [herdr-wake](herdr-wake/) plugin before, on Node.js). By itself it does nothing: no session is put
 to sleep, woken or typed into until someone clicks "Put to sleep", "Wake" or "Restart", runs
 `board sleep` or `board restart`, sends a sleeping session a message or a reminder, or turns the
-reaper or the Telegram router on.
+reaper or the Telegram router on. A message or a reminder to a sleeper goes in once the session is
+back, in its pane or a new tab, and herdr names it there (herdr's own SessionStart hook can do that
+a few seconds after Claude is up); another session in that pane is still refused.
 
 **How it runs.** herdr starts it with the board: a startup entry of its own
 (`src/entrypoints/wake-start.ts`), which the board's start never waits for, so the board opens
@@ -1370,10 +1494,66 @@ not: within 15 seconds its pane is marked `💤` and its card offers Wake, and L
 SendMessage and Telegram take it for asleep. Only sessions seen running in the last 10 minutes
 count, so an old shell stays a shell. Close the pane to be done with a session for good.
 
-**Waking** types `board resume <id> --profile <id>` into the session's pane, after clearing what is
-at its prompt (Esc for PowerShell and cmd, Ctrl+U for bash, zsh, fish and sh, by the shell herdr
-says runs there), and waits for Claude to come up (`wakeTimeoutSec`, 120), answering the
-development-channels confirmation if it asks. So a session wakes in its own profile and its
+**Its pane given back.** Once Claude has left, wake closes the pane where the session comes back
+in the same Telegram topic ([Telegram](#telegram): a workspace's first tab is `topic:<workspace>`,
+the others `topic:<workspace> / <tab>`, and herdr opens a new tab at the end of its workspace):
+
+- a tab that is not its workspace's first: the tab goes, sidebar and all, when only herdr-sidebar's
+  panes are beside the session; with a pane of yours beside it, only the session's pane goes and
+  the tab stays;
+- a workspace's only tab, nothing but sidebars beside the session: the tab goes, and the workspace
+  with it, unless another sleeper whose pane was closed comes back to that workspace (whichever woke
+  first would take its first tab and the other's topic);
+- the first tab of a workspace with other tabs, or one with a pane of yours beside the session,
+  keeps its pane as before, labelled `💤 <name>` with the wake line typed at its prompt: closing it
+  would move the session, and the tab after it, to other topics.
+
+Only a pane at its shell's prompt is closed: nothing started in it since Claude left, nothing
+typed at the last prompt on its screen but the session's own wake line (wake's, or the old
+plugin's, wrapped or not), and nothing in its tab focused (the tab you are looking at stays). A
+screen without a prompt, or with PowerShell's `>>` continuation prompt, keeps the pane. Sessions
+already asleep in a kept pane when this came in (labelled `💤 <name>` by wake) get it closed once
+by the same rule, at a look of wake's with this on that herdr answered; then `wake-tidy.json` in
+the state folder says it is done, and no later start does it again. One you `/exit` yourself
+keeps its pane (below). The session's card keeps the panes it had, so the board's
+links still find the session a `spawn-agent` started in one of them, and its reminders follow it
+to the pane it wakes in.
+
+**A kept pane is looked at again.** What keeps a pane does not last: you look at another tab, the
+tabs before it close, the sleeper coming back to its workspace wakes. So from then on wake looks
+at every pane it keeps at each of its looks (every 15 seconds), and gives it back by the same rule
+once that rule allows it, while the session's wake line is still at its prompt: nothing has been
+run in that shell since. A shell that shows anything else there stays, and is not looked at again.
+Wake asks herdr nothing about a pane the rule still keeps.
+
+**After herdr starts over** (a reboot, herdr's server restarted), herdr restores each pane as a new
+shell in its folder, a `💤` pane too, without the wake line typed at its prompt. For every pane it
+keeps, wake notes herdr's terminal (`terminal_id`) and the shell's process. A pane with another
+terminal is judged once, when you are not looking at its tab, by what its screen shows. An empty
+prompt will do only in a shell that has just started: another process than the one noted, one
+prompt on its screen, and nothing running in it. A shell you ran something in shows more prompts
+(your commands, or a remote shell's or a REPL's prompt) and stays, unless you cleared its screen.
+A program still running in it keeps it whatever the screen shows: herdr lists it on macOS and
+Linux, and on Windows, where herdr does not, wake reads the process table. So a shell you used,
+cleared and left with nothing running is the one that goes then. A session you `/exit`ed goes too. herdr's live handoff (`herdr
+update --handoff`, macOS and Linux) also gives a pane a new terminal, but keeps its shell: such a
+pane is judged as in its own shell (its wake line at its prompt, or it stays). One the rule keeps
+(a workspace's first tab) gets its wake line typed again, as a sleep leaves it, unless you
+`/exit`ed it; nothing is typed while you look at its tab. A shell still starting (no prompt on its
+screen yet) is asked again at the next looks, for up to 10 minutes.
+
+What this changes for every setup: a woken session's tab comes back at the end of its workspace
+(a whole workspace at the end of herdr's list), not where it was, since herdr's command line cannot
+move a tab. `"closePanes": false` in the `wake` section keeps every pane, and the old behaviour, as
+before; the panes given back by then wake in new tabs all the same.
+
+**Waking** a session whose pane was given back opens a new tab in its workspace (while herdr has it
+under the label it had, else one of that label; a new workspace of its label when there is none),
+in its folder, under its tab's label, and runs `board resume <id> --profile <id>` there. One in a kept pane
+gets that line typed into its pane, after clearing what is at its prompt (Esc for PowerShell and
+cmd, Ctrl+U for bash, zsh, fish and sh, by the shell herdr says runs there). Either way wake waits
+for Claude to come up (`wakeTimeoutSec`, 120), answering the development-channels confirmation if
+it asks; one that does not come up in its new tab sleeps on there, `💤 <name>`, for the next wake. So a session wakes in its own profile and its
 project folder, whatever the pane's shell has ([Claude profiles](#claude-profiles)). A Wake while
 wake is slow to answer types nothing (wake may be waking that very session): the board says so.
 
@@ -1383,8 +1563,20 @@ sleeping sessions of the caller's own profile (those asleep for less than `listS
 at most 15; the rest only counted, all of them wakeable by name) and how long its running ones have
 been idle or busy and when they go to sleep; before `SendMessage` to a sleeping session of its own
 profile, a wake first, by its session id (refused: the message is not sent, and the agent hears
-why). A name only another profile has is left to Claude Code. Neither runs on any other tool, nor
-on every prompt, and neither asks anything while wake is off. The install does not write them
+why). With one profile shown, a name only another profile has is left to Claude Code. With two or
+more shown, ListAgents also lists the other shown profiles' running and sleeping sessions, each
+with its profile, and `SendMessage` to a name that only another shown profile has (not the
+caller's own, running or asleep: that one still wins) goes through the board: a reminder due now
+for that session, "[board reminder from <caller's Claude name>; SendMessage from profile <its
+profile>, answer with SendMessage to <name> [<first 8 of its session id>]] <text>", typed in once
+it is free and waking it first if it sleeps; the native call is denied with a reason that says it
+was queued, for whom, in which profile, whether a board with the scheduler runs now, and that the
+reply comes back the same way (or why it cannot: the caller has no Claude name, or its profile is
+hidden). A running session counts only when herdr runs it (`/awake`); a ref of 8 or more hex
+characters after the name picks one session among several of that name; a name that still fits
+several is refused with each listed, with its ref. Only a text message goes this way, and one
+longer than 2000 characters is refused, not cut. Neither runs on any other tool, nor on every
+prompt, and neither asks anything while wake is off. The install does not write them
 beside the separate herdr-wake plugin's: it says so, and "Switch over…" moves them.
 
 **pi sessions** sleep and wake too, when asked: "Put to sleep" on a pi card, `board sleep` (several
@@ -1517,6 +1709,7 @@ In the board's config.json, every key optional; no section is all the defaults (
 | `wakeTimeoutSec` | `120` | how long a wake waits for the session |
 | `pollTimeoutSec` | `25` | the Telegram long poll |
 | `listSleepingDays` | `7` | ListAgents lists sessions asleep for less than this |
+| `closePanes` | `true` | a session put to sleep gives its pane back (and its tab, when only herdr-sidebar's panes are beside it) and wakes in a new tab; a pane kept for it is looked at again, and after herdr starts over; `false`: its pane stays, `💤 <name>` |
 
 There is no `wakeCommand`: every wake is `board resume`, and `launch.claude` says how Claude
 starts. `wakeUrl` is used only while wake is off or held by the separate plugin.
@@ -1541,13 +1734,17 @@ it); Claude keeps the conversation on disk, so it can come back.
   gray with the reason. What only herdr can tell is checked when you click (text you started
   typing in its input box, a background command or Monitor) and again right before the pane
   closes: a session that got to work meanwhile (a Telegram message, another session) stays on the
-  board, and a toast says why. A sleeping session goes as it is: its pane with the 💤 closes. A
-  shell with no Claude in it is closed only as wake left it, marked 💤 with nothing running
-  in it but the shell; a Claude that exited by itself, or a program started there, keeps the pane.
+  board, and a toast says why. A sleeping session goes as it is: its pane with the 💤 closes, or
+  none when wake closed it. A shell with no Claude in it is closed only as wake left it, marked 💤
+  with nothing running in it but the shell; a Claude that exited by itself, or a program started
+  there, keeps the pane.
 - Its reminders and repeating pings wait in the record and come back with it: under their old
   ids, a repeating one from its next run, a one-off that came due meanwhile late (the prompt says
   by how much). A restart on its way is dropped: a resume is one. A MokuPilot report with a
-  receipt keeps the session on the board until it is delivered.
+  receipt keeps the session on the board until it is delivered. Meanwhile `board schedule
+  --session <id|name|pane>` (and `--all`) lists them, marked parked; `board unschedule <id>`
+  removes one; `board schedule --move <id>` moves one to the session that runs it (`--session`: to
+  that one, which must be on the board), as Return would put it back, the prompt saying whose it was.
 - The card file stays as it was (name, lane, notes), so the session comes back with them, also
   when you resume it by hand elsewhere.
 - Many at once: the menu of the "Idle" column (its head, or a lane's "Idle" in a narrow window)
@@ -1598,7 +1795,9 @@ On Windows, `herdr plugin action invoke agent-board.notifications` (`bun src/ent
 - it asks a question (AskUserQuestion): the question.
 
 The title is `<workspace> · <session>`. None comes for the pane you are looking at (focused in
-herdr, with the terminal in front), for a subagent, or for a `claude -p` run inside a session. A
+herdr, with the terminal in front), for a subagent, or for a `claude -p` run inside a session.
+While [presence](#presence) has you on a call (its `presence.json` says so and config.json still
+turns presence on), each goes to the notification center without popping up. A
 newer one replaces the pane's last one in the notification center. They make no sound (herdr
 plays its own). A click opens that session on the web board when the board runs and has it (as
 `src/entrypoints/web-open.ts --pane` does); else herdr goes to the pane and the terminal comes to
@@ -1646,6 +1845,19 @@ Settings → Presence turns it on, or `presence` in config.json:
 - `suggest`: the board only offers the switch, next to the toolbar's switch.
 - `off`: the manual switch alone.
 
+A third state, "on a call", comes from [MokuPilot](https://github.com/MokuTeam/MokuPilot): while
+it has a call in progress on this computer, the board puts you on a call, and back to the state
+before (here or away) once the call ends; under `auto`, away before it but plainly back at its end
+(you ended it) is here. A call is no guess, so `suggest` switches for it as
+`auto` does; `off` does not. While you are on a call, idle time and a locked screen change
+nothing. Sessions read that you are on a call and slow to answer: they go on with what they can
+decide themselves, and their questions wait under "needs you" on the board. The Windows
+notifications (see [Notifications](#notifications)) go quietly to the notification center
+instead of popping up. You can set the call by hand too, for one MokuPilot does not see: the
+phone button next to the switch (shown where MokuPilot runs), `board presence call`, or the API.
+Pressing the switch while on a call ends it. Clearing it by hand while a MokuPilot call goes on
+holds until the next call, across a restart of the board too.
+
 A switch by hand wins until the next clear change. Press "away" at the keyboard and the input right
 after does not bring you back; once you have actually gone and come back, it does. The same goes
 for "here" while the screen still counts as idle.
@@ -1653,10 +1865,10 @@ for "here" while the screen still counts as idle.
 To switch it:
 
 - the board: the toolbar's Here / Away switch, which is also on the phone and in the PWA;
-- the command line: `board presence` prints the state, `board presence here|away` sets it, and
-  `board away [on|off]` does the same;
+- the command line: `board presence` prints the state, `board presence here|away|call` sets it,
+  and `board away [on|off]` does the same;
 - HTTP: `GET /api/presence` gives `{ presence }`, which is null while presence is off.
-  `POST /api/presence` with `x-board: 1` takes `{ "state": "here" | "away", "from": "phone" }` to
+  `POST /api/presence` with `x-board: 1` takes `{ "state": "here" | "away" | "call", "from": "phone" }` to
   switch, or `{ "op": "settings", "on": true, "mode": "suggest", "idleMinutes": 10 }` to change
   the settings. The phone and the Android app use these.
 
@@ -1680,6 +1892,655 @@ Detection asks the computer every 30 seconds (`src/adapters/idle.ts`), only whil
 
 `detects` in `GET /api/presence` says whether this computer told the board anything at its last ask.
 
+MokuPilot's calls: while a call runs, MokuPilot keeps `call.json` in its state folder
+(`~/.meeting-copilot`), with its process id and the call's start, and takes it away when the call
+ends. Detection reads it on each ask. A file whose process is gone (MokuPilot ended without taking
+it away) or older than a day counts as no call; one that cannot be read for a moment (another
+program holds it) changes nothing. Whether MokuPilot has run on this computer (that folder) is
+looked up once a minute while presence is on; without it, or with `"mokupilot": false`, no call is
+read and the view has no `calls`, so the board is as it was. A call the board set ends once calls
+are no longer read. On a call the state
+keeps `before`, the state the call returns to (`src/adapters/mokupilot-call.ts`).
+
+## Tasks
+
+An experiment (#202), off unless you turn it on. An agent answers with five points: two are
+yours to do, three are unclear, and the talk about those three pushes the first two up the thread
+until they are lost. Tasks keep them: one list across sessions, each point with the session it
+came from.
+
+Settings → Tasks turns it on, or `todos` in config.json:
+
+- **My pins only** (`"todos": { "agents": false }`): you pin points yourself; agents are told
+  nothing and `board todo add` is refused. Nothing changes for the agents.
+- **Pins and agents** (`"todos": true`): also, Claude sessions are told in their brief to record
+  what they hand you to do, and (with `--mine`) a promise of their own they defer, with
+  `board todo add`. Nothing else: not their working steps, not questions (those are `board ask`).
+- **Off** (no `todos`): no button, no 📌, no brief line. The points stay on the cards and show
+  again once it is back on.
+
+**Pinning.** Under an agent's message in a session's sheet, 📌 opens its points: its list items
+(bulleted or numbered, at any depth, outside code blocks), or its first paragraph when it has no
+list. A point picked is yours to do, checked, and the menu stays open for the next; picked again,
+it is unpinned. "As the agent's promise" pins it as the agent's instead. 📌 stays lit, with how
+many of its points are pinned.
+
+**The panel.** "Tasks" in the toolbar, with the count of your open points, opens the list across
+sessions, grouped by session, the one with the oldest open point first. Mine, Agents' or All. Each
+point: its text, its age, Open (the session's sheet), To chat (the point quoted at the top of the
+session's message box, the sheet open) and Done. Done points fold under the list, to open again
+or remove; they go after 14 days, or past the 30 newest on a card.
+
+An agent closes only its own promises (`board todo done <id>`); the user closes any. The points
+live on the cards (`todos`), changed under the card's lock, so the board and `board todo` writing
+at once never lose each other's change. Only sessions on the board count: an archived session's
+points come back with it.
+
+Not yet (see #202): a jump to the message a point came from (1b), a badge on the card, the open
+points in the sheet, the agent told of a point the user pinned as its promise.
+
+## Secrets
+
+API tokens, passwords and keys for the agents, in two ways that are one feature:
+
+- **The board's own store.** You keep them in the board (Settings → Secrets…, or `board secret
+  set`), sealed on this computer, each for every session, a profile's sessions or one session;
+  the sessions they are for get them as environment variables.
+- **An agent asks.** An agent that needs one it must not be handed in the chat asks the board
+  (#273): its card goes under "Needs me" with a form, you type the values on the board (the
+  computer's or the phone's, through its pairing or the tunnel's login), and the board keeps them
+  in its store as the variables the agent named (with no `secrets.sinks` in config.json), or
+  writes them where a sink of yours says (a file, Bitwarden, Windows' user variables, an HTTP
+  call). The agent gets back ok, declined or expired, never a value; a value kept in the store it
+  reads afterwards as any other of the store's (`board secret get`, or its environment once it
+  restarts).
+
+### The board's own store
+
+Settings → Secrets… on the board's page (the local page on your computer; on the board's own
+server, its page at your domain behind its login; never through a phone's Tailscale or a PC's
+tunnel), or `board secret`:
+
+```
+board secret set NAME [--profile <id> | --session <id|name|pane>]   value from stdin or a hidden prompt
+board secret list                    name, scope, when set, when last used and by which session
+board secret rm NAME [--global | --profile <id> | --session <id|name|pane>]
+board secret get NAME                (in a session) the value this session gets
+board secret file NAME               (in a session) the same in a file of its own (0600), its path
+```
+
+- **Scopes.** Every session (global), the sessions of one board profile, or one Claude session
+  (picked by name, kept by its id, so sleep and resume keep it; `/clear` starts a new id). The same
+  name in several: the session's wins over the profile's, the profile's over the global one. A name
+  is a shell variable's; the ones the shell, Claude Code, herdr or the board read themselves
+  (`PATH`, `HOME`, `CLAUDE_*`, `ANTHROPIC_*`, `HERDR_*`, `LD_*`, …) are refused.
+- **How a session gets them.** As environment variables in its Bash commands: the board's
+  SessionStart hook writes a block into Claude Code's `$CLAUDE_ENV_FILE`, which Claude Code runs
+  before each Bash command; on Linux the block only sources the session's own file in
+  `$XDG_RUNTIME_DIR/agent-board/secrets/<session>/env.sh` (memory, 0600), so Claude's `session-env/`
+  folder holds a path, not a value (without `$XDG_RUNTIME_DIR`, on macOS and Windows, it holds the
+  export lines). In Claude's own environment, which its MCP servers start with (`${VAR}` in an MCP
+  server's config): `board resume` (wake, `board sleep`'s line, herdr's restore), spawn-agent's
+  start of `launch.claude` (through `board launch`) and `board launch <program> [args…]`, which a
+  profile's own start command can call (`alias cld-work='CLAUDE_CONFIG_DIR=$HOME/.claude-work board
+  launch claude …'`). Never on a command line, never typed into a pane. On demand with
+  `board secret get` and `board secret file`, for the calling session only.
+- **Changes apply to new or restarted sessions** (`board restart`, or sleep and wake).
+- **On disk.** `~/.local/state/herdr/plugins/agent-board/secrets/` (`%LOCALAPPDATA%\herdr\plugins\agent-board\secrets\`
+  on Windows), 0700: `store.json` (each value sealed with AES-256-GCM), `key` (its key) and
+  `used.json` (last used), each 0600; no value in a log, a card, the board's answers or an error.
+  The profile sync never takes them; a sync of your own between computers should leave out that
+  folder (and `$XDG_RUNTIME_DIR/agent-board/`): each computer keeps its own secrets and key.
+- **The limit.** All agents run as one user: the scopes keep a secret from the sessions it is not
+  for by accident, not from an agent set on reading it (it can read the store, the key and other
+  sessions' environments as you can).
+- With no secret ever set, nothing of this runs: the hook only looks whether the store is there.
+- An agent's request (below) with no sinks in config.json lands here: what you type in the form
+  is set as if by `board secret set`, for the asking session unless it asked `--profile <id>` or
+  `--global`, and shows in Settings → Secrets… with the others. The audit of requests,
+  `audit.jsonl`, lives in the same folder.
+
+### An agent asks
+
+`board secret request --title "<what for>" [--sink <id>] [--field <name>[:shown][:once]]...
+[--param <name>=<value>]... [--global | --profile <id>] [--expires 30m]`. The command waits until
+you answer or it expires (30 minutes by default, a day at most), so an agent runs it in the
+background, and prints `ok · <id> · <where> · <time>`, or `declined` / `expired`; `--no-wait`
+returns at once, then `board secret status <id> [--wait]`. Also `board secret cancel <id>`,
+`board secret requests` (this session's) and `board secret sinks` (what each takes).
+
+- **Into the store** (no `secrets.sinks` in config.json: the one sink there is is `store`, so no
+  `--sink`): each `--field` is a variable's name, as `board secret set` takes one (`PATH`,
+  `CLAUDE_*` and the rest it refuses are refused here too). It is kept for the asking Claude
+  session; `--profile <id>` (one of the board's profiles) keeps it for that profile's sessions,
+  `--global` for every session (or `--param scope=global|profile|session`, `profile=<id>`,
+  `session=<Claude session id>`). A session keyed by its pane (pi) has no session of its own in the
+  store and asks for a profile or every session. `ok · <id> · secrets: GH_TOKEN (session <name>)`
+  means it is set: `board secret get GH_TOKEN` prints it in that session now, and a new or
+  restarted one has `$GH_TOKEN`.
+- **Into a sink of yours** (`--sink <id>`): a sink with a template asks its own fields when none are
+  named; for Bitwarden and env the request names them. A field is masked unless `:shown` (a user
+  name); `:once` writes it only where nothing is set yet (the JSON key, the .env variable, the
+  file, the Bitwarden part, the variable, the store's secret at that scope), never over a value
+  that is there.
+
+Claude sessions hear of it in their brief, only where config.json has a `secrets` section or the
+store is there (you set a secret once): with the store the one sink, a line on asking for a
+variable and reading it back; with sinks of yours, the sinks.
+
+**Sinks** are yours, in config.json, and nothing else decides where a value goes. Without
+`secrets.sinks` the board's own store is the one sink; with them, the store is a sink only where one
+says so (`"board": { "kind": "store", "title": "…" }`, with `once` if you like), and the rest are:
+
+```json
+"secrets": {
+  "sinks": {
+    "mcp-token": {
+      "kind": "file", "title": "API token for the local MCP server",
+      "path": "~/.vendor_secrets.json", "format": "json", "at": ["local-user", "{{profile}}"],
+      "template": { "username": "TOKEN.me", "password": "{{token}}" },
+      "params": { "profile": "^[a-z0-9-]{1,20}$" }
+    },
+    "wss": {
+      "kind": "file", "path": "~/.wss_netrc", "format": "netrc",
+      "template": "machine ws.example.com login {{user}} password {{token}}\n"
+    },
+    "client-env": {
+      "kind": "file", "folder": "~/env", "name": "{{file}}.env", "format": "env",
+      "template": { "API_TOKEN": "{{token}}" }, "params": { "file": "name" }
+    },
+    "vault": { "kind": "bitwarden", "folder": "Agents", "item": "{{item}}", "params": { "item": "text" } },
+    "shell": { "kind": "env", "vars": ["VENDOR_TOKEN", "VENDOR_USER"] },
+    "vendor": {
+      "kind": "http", "method": "PUT", "url": "https://api.example.com/v1/connections/{{conn}}/credentials",
+      "headers": { "Authorization": "Bearer {{apiToken}}" },
+      "body": { "consumerKey": "{{consumerKey}}", "consumerSecret": "{{consumerSecret}}" },
+      "params": { "conn": "^[0-9a-f-]{36}$" }
+    }
+  }
+}
+```
+
+A `{{name}}` in a template is a **parameter** when the sink's `params` names it (the request fills
+it in: `name` is a plain file or item name, `text` one line, anything else a regular expression the
+whole value must match), and otherwise a **field**, which you type. A file's name, a JSON file's
+`at` and a URL take parameters only: a secret there would end up in listings and logs.
+
+- `file`: `path`, or `folder` and `name` (absolute or `~/…`; the folder must be there). `format`
+  `json` puts the template under the keys of `at` and keeps the file's other keys (the file is
+  written again as JSON, two spaces; without `at` the template is the whole file); `env` sets its
+  variables and keeps the file's other lines; `netrc` and `text` are the whole file. The file is
+  written in place, never through a temp file, and made yours alone before anything goes in (mode
+  600; on Windows an existing file's own entries reset, inheritance off, full control to your user
+  only, and the rights read back: anything else and nothing is written). A link or a folder where
+  the file goes is refused.
+- `bitwarden`: an item by name in `folder` (made when missing), created or updated, with
+  `organization` and `collection` (both, or neither) for a new item of an organization. The fields
+  a request names are the item's `username`, `password`, `totp`, `notes`, `uri`, or custom fields
+  (hidden ones when the field is masked); one left empty stays as it is. The board runs `bw` with
+  the session you paste into the form (`bw unlock --raw`), in bw's environment only, for this one
+  write: it is kept nowhere. The item goes to `bw` on its stdin, never on its command line.
+- `env` (Windows): your user's environment variables (`vars`: their names, or one regular
+  expression), set by Windows PowerShell with the values on its stdin; new programs see them.
+- `http`: `method` (POST, PUT, PATCH), `url`, `headers`, `auth` (`{ "user", "password" }`, basic),
+  `body` (JSON with templates in its strings, or text). The scheme and host are written out in
+  full (https; http only for localhost): parameters go into the path and the query, encoded, and
+  one in the URL has no `/`, `\` or `%`. The board makes the call itself, follows no redirect, and
+  reads nothing of the answer but its status.
+
+`once` on a sink (not `http`) lists fields written only where nothing is set yet, whatever the
+request says. A sink that does not check out (an unknown key, a relative path, a field in a URL) takes no request,
+and `board doctor` says why; the others work.
+
+**The form**, at the top of the session's sheet: what it is for, where the values go (the store's
+variables and whose they are, the file and where in it, the vault's folder and item, the variables,
+the method and URL) with the request's
+parameters, then a field for each, masked or shown as the request asks, and Show or Hide on each,
+so you can mask any of them; spelling services, autofill and password managers are told to keep
+out (where the browser masks a text field by CSS, a masked field is one, so its own password manager
+never offers to save a token). A value is written as typed, spaces too; only a line break at either
+end (a paste's) is dropped. **Write** sends the values in one request to the board, which writes the
+sink and answers ok or why not; a failed write keeps the request open for another try. When
+the sink changed in config.json since the form was shown, the write is refused and the form shows
+the new place. **Decline** answers the agent without a write.
+
+**What it keeps from whom.** A value goes from the form to the sink and nowhere else (for the store,
+sealed into its file, and from there to the sessions it is for, as above): not to the
+agent, the card, the board's payload or its event stream, board.db, a log, an error text (a
+failure of bw or PowerShell is said by its step and exit code, never by what it printed; a
+server's answer is not read), a temp file or the backup; the board holds
+it in memory for the one write. No route returns one. The request on its card holds the title, the
+sink, the parameters and the field names; the audit (`secrets/audit.jsonl` in the state folder, a
+megabyte, then the one before) has a line for each step: who asked, the sink, the fields, the
+parameters, when, what came of it. The route is guarded as the board's other changes (X-Board, the
+board's own Origin; through the phone's pairing or the tunnel's login), and only your submit
+writes: an agent's request writes nothing. It does not guard against an agent that works against
+you: it runs as your user and can read the file a sink writes, or change config.json (the form
+shows where a value goes, so read it). What it is for is keeping secrets out of the agent's
+conversation, its transcripts and its provider.
+
+## Time
+
+Time tracking of the board's own (#233), off unless `time` is in config.json: entries per client
+(a board lane) that sessions write as they finish a piece of work and billing agents read at the
+end of the day, without the rate limit of an outside service. The entries live in the board's
+database ([Backup](#backup)), and nothing is written before a backup of it has gone through once,
+to a target off this computer as it is set now (a snapshot, or a Test that went the whole way round;
+a folder or server changed since has to take one first). With no database yet there is nothing to
+back up, so the first time it is a Test that lets entries in.: what a bill is
+made from is never on this computer alone. A target that is down for a while does not stop it.
+
+**An entry** is a client's and a project's, from a start to a stop, with a description and tags
+(`deferred`, say). The day it counts for is its start's date in the client's time zone
+(`time.zone`, US Eastern for example, or the client's own `zone`), stamped on the entry when it is
+written: work at 01:30 in Istanbul counts for the day before in New York, as clients there see it,
+and changing the zone later moves no day already billed. Who made it and who changed it last are
+kept, and every change goes into the database's journal with the entry before and after.
+
+```json
+"time": {
+  "zone": "America/New_York",
+  "excludeTags": ["deferred"],
+  "clients": {
+    "client-a": {
+      "projects": ["Support", "Migration", "Internal"],
+      "billing": [
+        { "match": "^Admin", "group": "day", "round": "exact" },
+        { "group": "ref", "step": 30, "round": "up" }
+      ],
+      "nonBillable": ["Internal"],
+      "systems": [{ "id": "erp", "title": "ERP" }, "tracker"],
+      "projectSystems": { "Migration": ["tracker"] }
+    },
+    "personal": { "projects": ["Internal"], "billable": false }
+  }
+}
+```
+
+**Nothing in it is guessed.** `zone` is required (`"time": true` alone takes this computer's zone
+and every lane). A value that does not check out (a zone Intl does not know, a `round` or `group`
+not in the lists below, a `match` or `ref` that does not compile, a `step` missing where it rounds,
+a key the board does not know, a typo say) is named by its place, `time.clients.client-a.billing[1].round`:
+while there is one, no entry is written, and `board time day`, the Time panel, the lane totals and
+`board doctor` say so. Fix config.json and it takes effect at once.
+
+**Clients and projects.** With `clients`, only the lanes listed take time, and only into their
+listed `projects` (a typo is refused with the list; `--new-project` adds one on purpose); a client
+without `projects` takes any. Without `clients`, every lane takes any project. A project added
+(`--new-project`, the editor's "New project…", Settings → Time tracking…, the import) that the
+client has already, case, spaces and characters that do not show aside (and the same letters however
+they are encoded), is the one it has: "support " is "Support", and the list gets no near duplicate. A client with `"on": false` takes no new entry (nor one moved to it): its
+entries stay, billed by its rules as before. `retired` lists projects no longer offered: an entry
+keeps one, a new entry is refused it (`--new-project` too: it is brought back in Settings, not by an
+agent). `"on": false` on `time` itself turns time tracking off and keeps every setting for when it
+is on again. Every writer of config.json (the Settings panels, `--new-project`, the import) changes
+it under one lock, so two at once never lose each other's change; the one write outside it is the
+defaults a first start puts there when there is no file at all. A writer that waits gives up after 2
+seconds and says so, the file as it was; a lock left by a writer that stopped mid-write is taken
+over once it is 30 seconds old, so until then each change asked is refused after its 2 seconds. A
+new project and a rename hold the lock while the database writes (which may wait up to 5 seconds for
+another writer of it). A config.json that does not read as JSON (a comma too many) is never replaced
+by the defaults: every change from the board is refused, in words, until it is fixed by hand. The
+import adds to a lane's list the projects of the entries it wrote (new rows, and ones `--update`
+rewrote): a row already there, or one that differs (a project renamed on the board since), brings
+no name back; a new row under an old name brings that name as Toggl has it.
+
+**Billing rules, as data.** A client's day becomes billed lines: each entry goes to the first rule
+whose `match` (a regex on the description, case aside) fits; `group` adds entries up (`entry`
+each alone, `ref` the same reference whatever its project, entries without one by project,
+`project`, or `day`; required); `step` (minutes) and `round` (`up`, `nearest` with a tie going up,
+`down`, `exact`; required) make the billed figure. `nearest` bills nothing for a sum
+under half a step. The reference is the first capture of the client's `ref`; the default takes the
+first five-digit case number or ticket key such as ABC-123, so a client whose descriptions can carry
+other such text before it (UTF-8, SHA-256) sets its own, anchored: `"ref": "^Case (\\d{5})"`. An
+entry no rule takes is billed exact, alone. Entries tagged with one of `excludeTags` show, held,
+and count in no total, the time worked either (a day of held entries only shows 0 worked). The rules apply when a day is read: changing one re-rates the days already
+logged too (closing a billed day is for later). The board knows no client's rules but these.
+
+**Billable or not.** A client's entries are billable unless its `billable` is `false` (a lane
+never billed); `nonBillable` lists the projects of a billed client that are not (each one of its
+`projects`, or it is a problem; a client that takes any project has no list to hold them against,
+so there they are taken as written). An entry can be set the other way (`--billable`,
+`--non-billable`, the editor's switch, Toggl's own Billable on import with
+`--billable-from-toggl`), and `--default-billable` puts it back to what the config says; set the
+way the config has it already, an entry that follows the config stays so (no change). An entry
+that follows the config is billable as the config says when a day is read: a later change of
+`billable` or `nonBillable` re-rates them, entered ones too (they do not show as changed after
+entering), as a change of the rules does. A non-billable entry counts in the time worked and never in
+the billed figure: it joins no line, so nothing rounds it and Raise and Trim never touch it, and it
+shows apart. `deferred` keeps its meaning (held, billed later); an entry both non-billable and held
+is non-billable.
+
+**Entered into the client's systems.** `systems` names where a client's time is entered (an ERP's
+time records, a tracker's worklog): ids of `a-z`, `0-9` and `-`, each once, a string or
+`{ "id", "title" }` (the title is what the panel shows). A client without `systems` has nothing to
+enter. An entry is marked entered in a system with when, by whom, that system's own id for it
+(`--record`) and the entry's revision then; a mark is no change of the entry (its revision stays),
+so any session marks any entry without `--force`, and every mark and unmark has its journal row.
+An entry changed on the board after it was entered (its revision moved past the mark's) is
+"changed after entering" until it is marked again: the change is to be made in that system too.
+
+A project billed elsewhere (its time goes to the client's tracker, never to its ERP, say) names its
+own systems in `projectSystems`: the project (one of the client's `projects` or `retired`, named
+once, case and spaces aside) to a list of the client's system ids, each once; `[]` is entered
+nowhere; a list naming a system the client has not is a problem, and that project is read as
+entered in all of them until it is fixed. Its entries are to be entered there only: the panel's marks, "not entered", `list
+--not-posted`, `--changed-after-post` (a mark in a system of the client's that the project does
+not use is none of the entry's) and the switch-over follow it, and `post` refuses a system the
+entry's project does not use (`unpost` takes such a mark off). A project not in `projectSystems`
+is entered in all of the client's systems, as before.
+
+**The command.** It writes to the database itself, so it works while the web board is down; as
+the session that runs it, its lane the client when `--client` is not given. `--json` gives an
+agent the whole of it.
+
+```
+board time add [--client <lane>] --project "<p>" [--start <t>] (--stop <t> | --minutes <n> | --hours <h>) [--tag <t>]... [--billable | --non-billable] [--] "<description>"
+board time edit <id> [--description "…"] [--project "…"] [--client <lane>] [--start <t>] [--stop <t>] [--minutes <n>] [--tag +<t> | --tag -<t>] [--billable | --non-billable | --default-billable] [--expect <rev>] [--force]
+board time move <id> <date> [--force]
+board time rm <id> [--force]    board time restore <id>    board time show <id>
+board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--project "<p>"] [--tag <t>] [--deleted] [--not-posted [--system <id>] | --changed-after-post] [--totals]
+board time post <id>[@<rev>]... --system <id> [--record "<their id>"]    marked entered in a client's system
+board time post --client <lane> --to <d> [--from <d>] --system <id> [--dry-run]    what was entered before the board, at once
+board time unpost <id>[@<rev>]... --system <id>
+board time day [<d>] [--client <lane>]      the day as billed: lines, raw and billed
+board time projects [<lane>]
+board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy] [--dry-run] [--update]
+board time export [--csv] [--date <d> | --from <d> --to <d>] [--client <lane>] [--bom]   the entries as CSV
+board time [<command>] --help      a command's usage with all its flags, or every command's
+```
+
+Times are ISO with an offset (`2026-10-28T09:00:00+03:00`), or this computer's clock (`9:30`,
+`2026-10-28 9:30`); `HH:MM` more than an hour ahead is yesterday's (past midnight, `21:00` is last
+evening); with no `--start`, a `--stop` over an hour ahead is refused instead (give its date).
+A time more than a day ahead or a year back is refused as a likely slip. Without
+`--start` the entry ends now (or at `--stop`). `--` ends the flags: quote the description, or put
+it after `--` when it may hold a word starting with `--`. A command called wrong (a flag without
+its value, `add` without a duration, `edit` without an id) says its usage after the error. An
+`add`, `edit` or `move` says the entry's start and stop on this computer's clock after its
+duration, and its day as durations, worked → billed ("for the day 19h 23m → 19h 58m"), so a
+change of the duration shows the start kept.
+
+- **A repeat is safe.** An `add` alike in client, project, description, start and stop to a live
+  entry returns that one (`"existing": true, "reason": "same"`) and writes nothing, whichever
+  process wrote it first; without `--start`, the same session's entry (by its key: a changed name
+  does not matter) alike but for its start, made within 15 minutes, is the one (`"reason":
+  "repeat-window"`, "already there (the same call within 15 minutes)"). Two real blocks alike
+  within 15 minutes need `--start`; an agent always gives `--start` and `--stop`. `edit` and `move`
+  set values, so a repeat changes nothing.
+- **Whose entries.** A session changes its own; another session's, the owner's or the import's
+  only with `--force` (the owner asked for it). The owner changes any. `--expect <rev>` refuses a
+  change to an entry changed since it was read. A session is known by Claude Code's session id,
+  which `/clear` changes: after a `/clear`, a session's earlier entries need `--force` too. Run
+  outside a session, the command is the owner's.
+- **Move** keeps the start's wall clock in the client's zone on the new date, and the duration,
+  across a DST change too.
+- **Remove** leaves the entry, marked, out of every list and total; `restore` brings it back.
+- `list` totals what a day would: removed and held entries out (the held ones counted apart);
+  per project too when the list is a client's or a project's (`--client`, `--project`) or
+  `--totals` asks. `--project` matches as the board tells names apart (case and spaces aside);
+  `--tag` matches whatever the case. `--not-posted` lists what a billing agent still has to enter:
+  billable, not held, without a mark in one of its project's systems (`--system`: in that one);
+  `--changed-after-post` lists the entries changed after they were entered (`--system`: in that
+  one), removed ones too (marked removed: to be taken out of that system). Both take the range as
+  `list` does (`--from` and `--to` for more than a day). An `edit`, `move`, `rm` or `restore`
+  of an entry already entered says where, to be changed there too.
+- **Post** marks entries entered in one of their project's systems: `<id>@<rev>` refuses an entry
+  changed since that revision was read (an agent posts what it read); `--record` keeps that
+  system's id for it (a later post without one keeps it). Marking again clears "changed after
+  entering". The form with `--client` and `--to` (`--from`: any date before) is for the
+  switch-over: it marks the client's billable entries, live and not held, of projects entered in
+  that system, that have no mark there yet, each at the revision read (one changed since refuses the run), and says how many and
+  their time; `--dry-run` writes nothing (the switch-over's alone: a post or an unpost by id
+  writes, and ids do not go with `--client` and `--to`). `unpost` takes a mark off. The count
+  each says is of the marks it wrote or took off: one already as it would be is none.
+
+**The JSON** (`--json`), for agents. An entry: `id` (8 hex characters), `client`, `project`,
+`description`, `tags`, `start` and `stop` (ISO, UTC, to the second), `date` (the work date),
+`seconds`, `by` and `changedBy` (`{ "key", "name" }` of a session, or `"user"`, `"import"`), `at`
+and `changed` (ms), `rev`, `billable` (as it comes out) and `billableDefault` (true: as the config
+says, not set on the entry), `systems` (the ids of the systems it is to be entered in: its
+project's), `posts` (where it was entered: each `{ "system", "at", "by", "record",
+"rev", "changedAfter" }`, `record` null when none was given, `changedAfter` true when the entry
+changed since), and `deleted` (ms) or `toggl` when they apply. `add` adds `existing`
+and, when it wrote nothing, `reason`. `edit`, `move`, `rm`, `restore` and `show` give the entry;
+`list` a list of entries (with `--totals`, `{ "entries", "total" }`, the total `{ "count",
+"seconds", "held", "removed", "projects" }`, each project `{ "client", "project", "count",
+"seconds" }`, counted as the text's total is). `post` and `unpost` give `{ "system", "count", "seconds", "entries" }`
+(the entries after), and the switch-over's `--dry-run` the same with `"dryRun": true`. `day` gives
+`{ "date", "problems": [<text>...], "days": [...] }`, a day per
+client: `client`, `date`, `zone`, `seconds` (worked), `billedSeconds`, `held` and `nonBillable`
+(entry ids), `lines` (each:
+`key`, `project`, `ref`, `rule`, `group`, `step`, `round`, `seconds`, `billedSeconds`, `entries` as
+ids), and `entries` (the day's entries in full). `projects` gives `{ "<lane>": [...] | null }`, or
+null without `clients`. An error is `{ "ok": false, "error": "<code>", "message": "…" }` on stdout
+(with `"usage"`, the command's, when it was called wrong) with exit code 1: `notYours`, `changedSince`, `gone`, `removed`, `config`, `noBackup`,
+`notBackedUp`, `client`, `clientOff`, `project`, `retired`, `when`, `whenRange`, `stopAhead`, `system`, `projectSystem`, `noSystem`,
+`billableFlags`, `usage`… (the key of its
+text). **While `problems` is not empty, an agent stops:** the day's figures were worked out with
+what of config.json checks out, and are not to be billed from.
+
+**The Time panel.** "Time" in the toolbar, and a lane's total for today by its name, open the day
+by client as it will be billed, on today each time: the day before and after and Today, the
+clients as chips with their billed hours, each client's lines with their entries (times on this
+browser's clock, the description, the project, the session that logged it: a tap opens its sheet),
+the held ones apart, and the totals. On a phone
+(the remote page) it is the full-height sheet, and a sideways swipe goes to the day before or
+after. A day's figures show only under that day's name, whatever order the answers come in.
+
+**Changing them on the board.** A tap on an entry opens it in place: description, project (the
+client's list), start and stop on this browser's clock with the duration between them and -15 and
++15 steps, the work date (a new one moves it), tags. Only what changed is sent: a time left alone
+keeps its seconds, and a step moves the stop by exactly 15 minutes; over 12 hours the editor asks
+whether the stop is right. An entry changed elsewhere while it is open (an agent's `board time`,
+another tab) is said in the editor, and Save waits for Reload, which shows it as it is now: what
+was typed over an older copy never overwrites the newer one. Delete asks nothing: the toast's Undo
+(7 seconds; a newer delete's takes its place) brings the entry back. "Add entry" under the day adds
+one; its times are on its date. An entry saved on another day than the one shown (a move, or a time
+that falls on the day before in the client's zone) is said, with Show. A line rounded up offers
+"Raise to": its last entry lengthened by the gap the board works out as the day is now, for a
+client that wants the entries themselves to add up to the billed figure; a refusal is a toast, and
+an entry open in the editor stays as it is. The board changes them as the owner (`POST /api/time`),
+each change saying the revision it read (one changed since is refused), with the same checks as
+the command: the config, a backup that went through, times within a day ahead and a year back.
+
+**New projects in the editor.** The Project field ends with "New project…": the name typed there
+goes with Save, which adds it to the client's list and saves the entry with it in one request
+(`newProject` on `add` and `edit`). A line under the field says what Save will do: add it, take the
+client's own name for it (the same but for case and spaces), or wait (a retired one). The Client
+field of a new entry offers the clients that take new entries; adding a client is Settings → Time
+tracking…'s, so a stray tap cannot start billing a new lane.
+
+**Settings → Time tracking…** (on the board on this computer only, as Backup… is): time tracking on
+and off, the zone days are counted in; the clients in the lanes' order, each with a line of what it
+has and its switch (off: no new entries); opened, a client's projects with their entries, billable
+or not, Rename and Retire; a project added; the retired ones, each to bring back; whether the client
+is billed, and the systems its time is entered into; with two or more, a column each beside the
+projects, unticked for a project entered elsewhere (`projectSystems`; a rename takes it along, a
+system taken off the client is taken off the projects' lists too). A lane without time takes it in one tap, and
+a new lane can be made and take time in one step. Every change is checked as the board reads the
+config and refused when it would bring a problem the file did not have; one already there stays
+said and stops no change elsewhere. A rename says first how many entries move: the client's entries
+of the project, however they spell it, removed ones too (restored, they come back under the new
+name), go to the new name in one transaction, a journal row each, then config.json is written in
+that transaction (a failure leaves both as they were); a mark that was current stays current, since
+the name is the board's own. A name the client has already is refused (no merge); the same name
+again is no change. A backup restored from before a rename brings the entries back under their old
+name while config.json keeps the new one: the old name is then a project the list does not have
+(rename it again, or add it back). With no `time` in config.json yet, the panel shows the lanes
+with none taking time; a change there sets time up off, and only its switch turns it on. Billing rules and
+`ref` stay in config.json, and a client that has them says so.
+
+**Billable and entered, on the board.** An entry's editor has a switch for billable, its default
+the config's (said while the entry follows it); a non-billable entry shows apart under its client,
+counted as worked. Where a client's time is entered into its systems, each line says per system
+(the ones its entries' projects are entered in) whether its entries are entered (all, some, none, or one changed after it was); a tap marks or
+unmarks the whole line there, with Undo on its toast (a mark goes back with its record and the
+revision it recorded, changed after entering as it was; when and by whom are the Undo's). An entry's hint names its marks, an entry already entered says so in its editor (the change
+is to be made there too), and the day's figure and each client's say how much billed time is not
+entered yet, when some is.
+
+**Export.** `board time export` prints a range as CSV: `id, date, client, project, description,
+tags, start, stop, hours, by`, where `start` and `stop` are UTC (`Z`) and `date` is the work date in
+the client's zone; tags are joined by a comma (a tag holds none). A text that a spreadsheet would
+run as a formula (starting with `=`, `+`, `-`, `@`) gets a `'` before it. `--bom` puts the byte
+order mark Excel needs to read the file's UTF-8 when it is opened by a double click.
+
+**From Toggl.** `board time import <file>` takes Toggl's Detailed report exported as CSV from its
+web page (no API call, so no quota), or its JSON (API v9 time entries with project and client
+names). Toggl's own Billable (the CSV's column, the JSON's field) is left aside unless
+`--billable-from-toggl` says to take it (Toggl's free plan says No on every row, which would make
+the whole history non-billable): without it the entries follow the config, and billable is never a
+difference on a second run nor changed by `--update`; with it the entry keeps Toggl's value as set,
+a row that does not say it is not held against the entry, and `--dry-run` says how many rows would
+be non-billable. `--tz` is the Toggl profile's time zone (the CSV's times have none); `--map` sends each
+Toggl client to a lane (`"=personal"` for entries without one); an unmapped client stops the run
+with the list. The CSV's dates follow the profile's format: day and month either way round are
+read from the file itself (a 28 first is a day); a file where every date reads both ways asks for
+`--date-format dmy` or `mdy` (a file that shows the other order than the flag is refused), and a
+date that is no date (2026-02-30) is an unreadable row, named. 12-hour times are read too.
+
+A row is known again by Toggl's id when the file has one (the JSON), else (the CSV has none) by a
+key of its lane and the start Toggl gave it, kept on the entry, and then by its lane and start: a
+second run, of the same export or a later one, adds only what is new and never brings back an entry
+removed since, moved on the board, or given another start there. Rows of one lane that start at the
+same second are each an entry of their own (a number after the key tells them apart); a later run
+pairs them with the entries there as a group: alike in every field first, then alike but for
+billable, by project and description, by project and stop, by project, by description, by stop,
+then what is left one to one. A removed entry is paired only up to project and stop, so a new row
+at its start that shares less with it goes in. Each entry is paired with one row at most; where no field tells two entries
+apart (the same project and stop, say), the first made is the one. A row alike to an entry in the
+five fields the board holds one of (client, project, description, start and stop) is that entry:
+already there, or said to differ in its tags (never written, `--update` too); a Toggl entry
+duplicated in Toggl is one entry on the board, while the per-day totals printed are Toggl's rows,
+the duplicate counted.
+A row that differs (edited in
+Toggl since it was imported: its wording, its stop, its project, its tags; or moved on the board)
+is listed as changed, named by its day and start in `--tz` and its description's start, with the
+fields, and not added again; a row at the start of an entry a
+session made is named as that session's, not imported;
+`--update` takes Toggl's values for the entries the board never changed (made and last changed by
+the import), journaled as `import-update`. `--dry-run` reads the database and writes nothing: what
+is new, already there and changed (two rows of one file at one lane and start meet each other, as
+in the run), and the totals per day twice, by work date (as the board will
+bill) and by Toggl's own day in `--tz` (to hold against Toggl's report). Running timers are
+skipped. Projects found go into each listed lane's projects, once the run is let in.
+
+## Backup
+
+The board keeps some of its data in a database of its own (#233): `board.db` in the state folder,
+one SQLite file that features move into (time tracking first). Nothing makes the file until a
+feature that uses it runs: a board without one has no database and nothing below applies.
+Because what goes in there can be the record a bill is made from, it is backed up off the
+computer from the first day: sealed with your passphrase, to your server, to a folder a sync
+client takes off the computer, or both (both is better: two copies in two places).
+
+**Settings → Backup…** (on the board on this computer only):
+
+- **Passphrase.** Every snapshot is sealed with it (AES-256-GCM, with a key made from it by
+  scrypt). Keep it in your password manager: without it no snapshot opens on another computer.
+  The board keeps the key, not the passphrase, readable by you alone, so a backup asks for
+  nothing. Changed later, the snapshots made before still open with the old one.
+- **Folder.** A folder that syncs elsewhere: OneDrive, Google Drive for desktop, Dropbox. The
+  snapshots go in its `agent-board-backups`, each written whole before it takes its name. Test
+  writes one, reads it back, opens it and compares it. A file the sync client or a scanner holds
+  when the rotation would remove it stays for the next time; the backup still counts.
+- **Server.** Your server over ssh, as a user of its own, `agent-board-backup`, with a key of
+  its own (`backup/id_ed25519` in the state folder) that can run one program, the drop script:
+  it puts a snapshot (its size said first: one cut short is not kept; named by the server's own
+  clock and its hash, never over another one; 32 MB at most, a sealed snapshot is about one), lists
+  them, gives one back, and removes none but by the rotation. Its folder holds 512 MB at most and
+  leaves 512 MB of the disk free. The tunnel's
+  user and key are not used and not touched, and the backup goes over plain ssh to sshd, so it is
+  the same with the board's own Caddy, yours, nginx, or no tunnel at all (with a tunnel, the
+  server and the admin login are filled in from it). Your `~/.ssh/config` is not read (as for the
+  tunnel): no alias, no ProxyJump; the server must be reachable as it is named. **Look** says what
+  the server has, and checks sshd's config with the backup user's fence on a copy (`sshd -t`, and
+  that the fence would be in force, no AllowUsers or AllowGroups leaving the user out), changing
+  nothing. **Apply** makes the user, its folder (`/var/lib/agent-board-backup/snapshots`), its own
+  folder `/etc/agent-board-backup` (the drop script and Apply's record, apart from the tunnel's
+  `/etc/agent-board`), the key's line and sshd's fence (its own file in `sshd_config.d`, or
+  between markers at the end of `sshd_config` where sshd has no Include, the file replaced whole):
+  the config checked before it is in place and after, the fence in force for that user, root's
+  and your admin's own sshd settings unchanged, then a reload; any failure puts back what the run
+  changed, and never removes a folder that holds a snapshot. The record is written as each step is
+  done, and a dropped admin connection does not stop the run, so Undo always finds what was made.
+  A block of the board's in `sshd_config` that is not whole (edited by hand) is never touched.
+  Then a test snapshot goes through. **Undo** removes what Apply made, gives the snapshots' folder
+  to root, and keeps the snapshots. **Do it myself** shows the same script to run as root
+  yourself, then "I ran it" tests it (that first Test pins the server's key when no Look did).
+  Look, Apply and Undo log in as your admin with a key (ssh's own, or the one named) and use sudo;
+  sudo's password, when sudo asks one, comes with the click and is kept nowhere. While the server
+  takes snapshots its address (host and port) is locked: Undo first to move it. The admin's login
+  may change (a key moved): Look, Apply and Undo need it right.
+
+**When.** Ten minutes after the last change, and never more than an hour after the first change
+not yet backed up, so a burst of edits makes one snapshot; and once a day at 03:00 even without
+changes. The web board does this; changes made while it is not running are backed up when it
+starts. A target that fails is tried again after 5, 15 and 60 minutes; one whose login the server
+refuses (or whose key changed) is held, with no more tries (they could get the laptop's address
+banned, the tunnel's with it), until a Test or an Apply goes through. **Rotation**, on both
+targets: the newest ten always, every snapshot of the last 48 hours, the first of each day for 60
+days, the first of each month for two years. A snapshot named more than a day ahead of the clock (a
+clock set wrong once, or a file put there) is kept, left out of the rotation, and shown; nothing is
+removed while the newest is a month after the one before it, or the clock a month past the newest
+(a clock that jumped would take the history; a board off for a month skips one rotation), except
+on the server when its folder is over its cap: then the rotation runs all the same.
+
+**What could be wrong** shows at the top of the panel, as a note in the board's toolbar on every
+page (a phone's too, in a few words, with no error text), and in `board doctor`: no target, no
+passphrase, a target that failed or is held, no good backup for more than a day, a snapshot
+dated ahead of the clock. A damaged
+database is never sent: it would only push good snapshots out of the rotation. A database that
+holds fewer changes than its last backup (emptied, or an older copy put back by hand), or that is
+gone after a backup, is held too: nothing scheduled sends it, so the backups keep the better one;
+`board backup now` sends it on purpose (in the panel, Back up now asks a second click), or
+`board db restore` brings the better one back.
+
+**Restore.** `board db restore` lists the snapshots each target holds;
+`board db restore --target server` (or `folder`) brings back the newest that opens whole: each
+newer one it passes over (cut short, changed, or a file that cannot be read) is named with why, so
+the hours it held are known to be missing; one dated more than a day ahead is left out; it looks at
+the newest twenty, and with a typed passphrase that opens none of the newest three it stops there
+(the passphrase is wrong, not the files); a walk that stops with older ones left says how many it
+tried and how to take one of those (`board backup list`, then `--snapshot`),
+`--snapshot <name>` a given one, `--file <path>` one you downloaded. On a new computer, give the
+passphrase with `--passphrase-file <file>` (UTF-8 or UTF-16, as PowerShell writes it) or pipe it
+with `--passphrase-stdin`. The database as it was is copied first, inside the restore's own
+transaction (`board.db.before-restore-<time>`, the last three kept), so a restore can be undone
+by another; the rows are put back while the board runs, and the file is checked after. A file too
+damaged for that: stop the web board (and any `board` command) and add `--replace-file`; the
+damaged file goes to `damaged-<time>/` in the state folder. While another process has the file
+open, nothing moves.
+
+**A laptop lost or stolen.** Whoever has it has the database itself and the board's key to it,
+and with the drop key can add files to the server's folder and read the sealed ones, but not
+remove one. That is not the whole of it: files added there count for the rotation like yours, so
+enough of them can push real snapshots out (the newest ten always stay, and the folder's cap and
+the disk's reserve bound it), or fill the folder: then no snapshot goes in for up to two days,
+until the rotation lets the flood go (the files of the last 48 hours stay). To clear it at once:
+`sudo rm` the files you do not know in `/var/lib/agent-board-backup/snapshots` on the server. On a computer you still have, with the board on it: Settings →
+Backup… → **New key**, then **Apply**: the server takes the new key and the old one stops working.
+Without one, from any machine with your admin login: `sudo rm /etc/ssh/authorized_keys/agent-board-backup`.
+Then a new passphrase (the old snapshots keep the old one).
+
+**The database itself.** WAL, so several processes (the web board, `board` commands, agents)
+read and write at once; a change waits up to 5 seconds for another one and takes the write lock
+at its start; every change is written with a journal row (who, what, before and after) in the
+same transaction; `synchronous=FULL`, so a change that returned survives a power cut. A step of
+its layout runs under the write lock, its copy of the file as it was taken inside it
+(`board.db.before-v<n>-…`, the last three kept), so of several processes opening it at once one
+does it. That copy is made from memory while the lock is held: the whole file for a moment (a few
+MB now; a 100 MB file would take 100 MB, and other writers would wait a second or two). The page cache is held at 2 MB and the file is not mapped into memory: a `board` command
+costs about 2 MB over Bun itself, the web board a few more. A file found damaged is marked
+(`board.db.damaged.json`) and refused for changes until a restore. Keep the state folder out of
+synced folders (`board doctor` warns): a sync client copies the file mid-write, and WAL's shared
+memory (`board.db-wal`, `board.db-shm` beside it) does not work over a network.
+
+`board backup now | status | list [folder|server] | folder <path> | folder off | test <target>`
+does the same from a terminal; `board backup passphrase` takes the passphrase as two lines on
+stdin, never as an argument.
+
 ## Phones
 
 Off unless you turn it on. With [Tailscale](https://tailscale.com) on this computer and on a phone,
@@ -1694,6 +2555,7 @@ board remote on                  # or "remote": { "on": true } in config.json
 board remote                     # where it listens, who asks to pair, who is paired
 board remote approve <id>        # or Approve in Settings → Phones… on the web board
 board remote revoke <id>         # the phone's token stops working at once
+board remote desk <id> [off]     # a paired browser is your desk: Go to herdr and Approve work there
 board remote pwa on              # the board in a phone's browser, below
 board remote off
 ```
@@ -1713,6 +2575,12 @@ it needs:
 - **Nothing on this computer's screen.** A phone cannot open files or links here, focus herdr or
   raise windows; the board's page itself is not served to it. Everything else answers as for the
   web board, with the same checks.
+- **Unless it is your desk.** When the board runs on a server and you attach to its herdr from your
+  own computer (`herdr --remote <host>`), the board in that computer's browser is a paired device
+  too. `board remote desk <id>`, on the server only, marks it as your desk: from it **Go to herdr**
+  works (the herdr client you attached follows the focus), and so do Approve, Deny and Unpair in
+  Phones…. Opening files or links, turning phones off, Remote access and wake stay with the
+  server. `board remote desk <id> off` takes it back. Setting it up: [Your desk](#your-desk).
 
 A firewall that drops what comes in on the Tailscale interface must let the port through (on
 Linux with ufw: `sudo ufw allow in on tailscale0 to any port 12422 proto tcp`). Off, nothing
@@ -1774,6 +2642,29 @@ Share → Add to Home Screen on an iPhone, ⋮ → Install app on Android.
 Code: `src/core/pwa.ts` (the rules), `src/services/pwa.ts` (serve), `src/core/qr.ts`,
 `web/src/components/remote/RemoteGate.tsx` (pairing, no connection), `web/sw.js`,
 `web/manifest.webmanifest`, `web/styles/pwa.css`.
+
+### Your desk
+
+The board runs on a server; you sit at your own computer. Two things are needed there: herdr
+attached to the server's herdr, and the board in its browser, paired and marked as your desk. The
+board cannot see the first (herdr tells nobody which clients are attached), so Go to herdr only
+moves the focus on the server: what shows it is the herdr you attached. Once, on your computer:
+
+1. **SSH to the server as the user herdr runs as.** Your computer's public key goes into that
+   user's `~/.ssh/authorized_keys` on the server; `ssh <user>@<server>` must work without asking.
+2. **A name for it** in `~/.ssh/config`:
+   ```
+   Host board
+     HostName <server's Tailscale name>
+     User <user>
+     Port <sshd's port, when not 22>
+   ```
+3. **Attach:** `herdr --remote board`, and keep it open while you work.
+4. **The board in the browser:** the server's HTTPS address (Phones…, "In a phone's browser"),
+   asks to pair; approve it on the server (`board remote approve <id>`).
+5. **Mark it:** on the server, `board remote desk <id>`. Phones… on that page shows the command
+   with its own id; the command prints these steps with the server's user and name. Reload the
+   page: Go to herdr shows, and Approve, Deny and Unpair work.
 
 ## Another computer or a tablet, through your own domain
 
@@ -2380,9 +3271,21 @@ Files (`src/adapters/files.ts`, `src/server/routes/fs.ts`, `web/src/components/f
 `POST /api/fs/preview`, `POST /api/fs/open` (`open` or `reveal`, through explorer.exe, `open`
 or `xdg-open`, no shell) and `POST /api/open-url` (http(s) only) need the `X-Board` header like
 every POST. `GET /api/fs/raw` serves images, PDF, video and audio, with ranges, to the page's
-`<img>`, `<video>` and PDF viewer, which cannot send headers: it needs the `fsToken` from the
+`<img>`, `<video>` and the quick look's viewers (Word documents and spreadsheets too), which cannot
+send headers: it needs the `fsToken` from the
 board payload, new on every start, which only the board's own page can read. Text never comes
-raw, and raw responses carry a CSP that runs no script.
+raw, and raw responses carry a CSP that runs no script. The quick look's viewers
+(`web/src/viewers/`, `src/server/viewers.ts`) are scripts of their own beside app.js, each bundled
+apart and imported only when such a file is opened: `pdf-viewer.js` (PDF.js, which reads the PDF
+through `/api/fs/raw`, in ranges past 8 MB), PDF.js's worker as `pdf.worker.js`, and what the
+worker fetches as a PDF needs it under `pdfjs/` (decoders, character maps, fonts);
+`document-viewer.js` and `document-worker.js` (mammoth turns the .docx into HTML in the worker,
+DOMPurify keeps only its text, structure, web links and pictures as data: URLs in the page);
+`spreadsheet-viewer.js` and `spreadsheet-worker.js` (SheetJS reads the workbook in the worker,
+only the rows shown and one more, after the zip's own directory said how big it is unpacked; the
+page puts each cell in as text). Each worker runs under a policy of its own
+(`WORKER_POLICIES`): PDF.js's may also compile its decoders, the others only read from the
+board.
 
 New sessions (`src/services/launch/`, `web/src/components/launch/`): `GET /api/launch/options` (herdr's workspaces,
 recent folders, the launcher, and `agents`: the agents a start may name, `[{ id, title }]` with
@@ -2457,8 +3360,11 @@ board every "<cron>" "<text>"  the same on a cron schedule
 board restart ["<note>"]  once this turn is over: Claude exits and resumes in its pane (MCP
                           servers, settings, hooks, skills load anew), then gets
                           "[board reminder; restarted as you asked] <note>"; see Restart
-board schedule [--all]    this session's entries (every session's)
-board unschedule <id|all> remove an entry (all: every entry of this session)
+board schedule [--all]    this session's entries (every session's), those parked with an
+                          archived session too; see Archive
+board schedule --move <id>  move an entry parked with an archived session to this session
+                          (--session: to that one)
+board unschedule <id|all> remove an entry, a parked one too (all: every entry of this session)
 board call-report --session <id> --file <report.md>
                           a MokuPilot call's results for the session (MokuPilot runs it):
                           typed in once the session is free, for its information
@@ -2477,10 +3383,13 @@ board fork [--name "<Name>"] ["<note>"]
                           a fork of this session in a new tab, with a copy of its conversation
                           (the web board starts it; the note is its first message); see Fork
 --session <id|name|pane>  for another session's card
-board presence [here|away]
-                          whether the user is at the computer or away (where news goes: also
-                          Telegram while away); here|away sets it; see Presence
+board presence [here|away|call]
+                          whether the user is at the computer, away or on a call (where news
+                          goes: also Telegram while away); a state sets it; see Presence
 board away [on|off]       the same switch: away (on), back at the computer (off)
+board todo add [--mine] "<text>" | done <id> | list
+                          tasks (with "todos": true): what you hand the user to do, or (--mine) a
+                          promise of yours you defer; done closes your own; see Tasks
 board doctor              what is set up on this computer, and what is missing
 board resume <session id> [--profile <id>]
                           resumes that session here, in its own Claude profile (what herdr types
@@ -2560,48 +3469,6 @@ With more than one Claude profile there is still one journal: a receipt is keyed
 UUID, whichever profile the session runs in, and waking it for a report goes through the same
 profile guard as any other wake. The code: [`src/adapters/call-receipts.ts`](src/adapters/call-receipts.ts).
 
-## Secrets
-
-API tokens and keys for the agents (a Toggl token for a skill, a Slack token for one agent), kept by
-the board and handed to the sessions they are for. Settings → Secrets… on the board's page (the
-local page on your computer; on the board's own server, its page at your domain behind its login;
-never through a phone's Tailscale or a PC's tunnel), or `board secret`:
-
-```
-board secret set NAME [--profile <id> | --session <id|name|pane>]   value from stdin or a hidden prompt
-board secret list                    name, scope, when set, when last used and by which session
-board secret rm NAME [--global | --profile <id> | --session <id|name|pane>]
-board secret get NAME                (in a session) the value this session gets
-board secret file NAME               (in a session) the same in a file of its own (0600), its path
-```
-
-- **Scopes.** Every session (global), the sessions of one board profile, or one Claude session
-  (picked by name, kept by its id, so sleep and resume keep it; `/clear` starts a new id). The same
-  name in several: the session's wins over the profile's, the profile's over the global one. A name
-  is a shell variable's; the ones the shell, Claude Code, herdr or the board read themselves
-  (`PATH`, `HOME`, `CLAUDE_*`, `ANTHROPIC_*`, `HERDR_*`, `LD_*`, …) are refused.
-- **How a session gets them.** As environment variables in its Bash commands: the board's
-  SessionStart hook writes a block into Claude Code's `$CLAUDE_ENV_FILE`, which Claude Code runs
-  before each Bash command; on Linux the block only sources the session's own file in
-  `$XDG_RUNTIME_DIR/agent-board/secrets/<session>/env.sh` (memory, 0600), so Claude's `session-env/`
-  folder holds a path, not a value (without `$XDG_RUNTIME_DIR`, on macOS and Windows, it holds the
-  export lines). In Claude's own environment, which its MCP servers start with (`${VAR}` in an MCP
-  server's config): `board resume` (wake, `board sleep`'s line, herdr's restore), spawn-agent's
-  start of `launch.claude` (through `board launch`) and `board launch <program> [args…]`, which a
-  profile's own start command can call (`alias cld-work='CLAUDE_CONFIG_DIR=$HOME/.claude-work board
-  launch claude …'`). Never on a command line, never typed into a pane. On demand with
-  `board secret get` and `board secret file`, for the calling session only.
-- **Changes apply to new or restarted sessions** (`board restart`, or sleep and wake).
-- **On disk.** `~/.local/state/herdr/plugins/agent-board/secrets/` (`%LOCALAPPDATA%\herdr\plugins\agent-board\secrets\`
-  on Windows), 0700: `store.json` (each value sealed with AES-256-GCM), `key` (its key) and
-  `used.json` (last used), each 0600; no value in a log, a card, the board's answers or an error.
-  The profile sync never takes them; a sync of your own between computers should leave out that
-  folder (and `$XDG_RUNTIME_DIR/agent-board/`): each computer keeps its own secrets and key.
-- **The limit.** All agents run as one user: the scopes keep a secret from the sessions it is not
-  for by accident, not from an agent set on reading it (it can read the store, the key and other
-  sessions' environments as you can).
-- With no secret ever set, nothing of this runs: the hook only looks whether the store is there.
-
 ## Settings
 
 `%APPDATA%\herdr\plugins\config\agent-board\config.json`: `language` (`auto`, `en`, `ru`),
@@ -2646,6 +3513,16 @@ server's own record, filled in from it when missing; Undo removes it). None of i
 password is ever in it. The board checks every field before it uses it, and runs nothing
 while one does not check out.
 
+`time` (time tracking, [Time](#time); Settings → Time tracking… sets all but the billing rules):
+`on`, `zone`, `excludeTags`, `clients` with each one's `on`, `projects`, `retired`, `billable`,
+`nonBillable`, `systems`, `projectSystems`, `ref`, `zone` and `billing` rules).
+
+`backup` (the [backup](#backup) of the board's database; Settings → Backup… sets it): `folder` (a
+folder that syncs elsewhere), `server` (`{ "host", "port", "admin": { "user", "key" }, "set" }`:
+your server, the admin Look and Apply log in as, and when Apply or your own setup with a Test
+made it take snapshots; Undo removes `set`). No passphrase and no key in it: the key is
+`backup/backup-key.json` in the state folder, readable by you alone.
+
 Cards: `%LOCALAPPDATA%\herdr\plugins\agent-board\cards\<session id>.json`. Sessions in the archive:
 `archive\<session id>.json` beside them (see [Archive](#archive)).
 
@@ -2682,7 +3559,7 @@ next writer. A card write the board itself fails at is retried on its next refre
 repository's full history:
 
 ```sh
-bun install     # react and react-dom, and the dev tools: TypeScript, Biome, the types
+bun install     # react, react-dom and the viewers' libraries, and the dev tools: TypeScript, Biome, the types, jsdom
 bun test        # the whole suite (a couple of minutes); two symlink tests skip without symlink rights
 bun run check   # type check (tsc) and lint (Biome)
 ```
@@ -2726,6 +3603,41 @@ run the real ssh: `BOARD_SSH_BIN_PATH` and `BOARD_SSH_KEYGEN_BIN_PATH` name othe
 in `test/support`), and `BOARD_TUNNEL_PROBE_ORIGIN` another origin than `https://<domain>` for the
 probe.
 
+The board's database and its backup (#233): `src/adapters/db.ts` (the file, its settings, its
+steps, the write that carries the journal row, the damage mark, restore in place) and
+`src/adapters/db-schema.ts` (its steps, one list for every store), `src/core/backup.ts` (the
+`backup` settings, a snapshot's name, the rotation, when a target is due, what is wrong),
+`src/core/backup-file.ts` (the sealed file), `src/core/backup-server.ts` (the drop script, Look,
+Apply and Undo as root, what they print), `src/adapters/backup-store.ts` (the key, status.json,
+the folder target), `src/adapters/backup-ssh.ts` (ssh to the drop), `src/services/backup.ts`
+(the snapshot, the targets, the schedule, Test, restore, `board doctor`'s lines),
+`src/services/backup-server.ts` (Look, Apply and Undo over the admin connection),
+`src/server/routes/backup.ts`, `web/src/components/backup/`. Time on it: `src/core/time.ts` (the
+`time` settings, work dates in a zone, a day as billed), `src/core/time-import.ts` (Toggl's CSV and
+JSON), `src/adapters/time-store.ts` (the entries, whose they are, the import's batch),
+`src/entrypoints/time-cli.ts` (`board time`), `src/server/routes/time.ts`,
+`src/core/time-settings.ts` and `src/services/time-settings.ts` (Settings → Time tracking…'s changes),
+`web/src/components/time/`. Secrets: an agent's request (#273) in `src/core/secrets.ts` (the sinks'
+config, the store as a sink, a request's rules, the templates, where a sink writes, a request on its
+card), `src/adapters/secret-sinks.ts` (the file, Bitwarden, PowerShell, HTTP and store writes),
+`src/services/secrets.ts` (asking, submit, decline, expiry, the audit),
+`src/entrypoints/secret-cli.ts` (`board secret request|status|cancel|requests|sinks`),
+`web/src/components/secrets/SecretForm.tsx`; the board's own store in `src/core/secret-store.ts`
+(names, scopes, which one a session gets, the shell words and the env file's block),
+`src/adapters/secret-store.ts` (the sealed store, its key, the sessions' files in memory),
+`src/services/secret-store.ts` (the hook's, the launches' and the page's part),
+`web/src/components/secrets/SecretsPanel.tsx`; `board secret set|list|rm|get|file` and `board launch`
+in `src/entrypoints/cli.ts`; both halves' routes in `src/server/routes/secrets.ts`.
+Tests never run the real `bw` or PowerShell: `BOARD_BW_BIN_PATH` and `BOARD_POWERSHELL_BIN_PATH`
+name fakes (`test/support/fake-bw.ts`, `fake-powershell.ts`), and every sandbox points them at
+files that do not exist. The drop script's tests run it with
+dash where there is one, else a POSIX sh (`test/support/fake-drop-ssh.ts` stands in for ssh), and
+skip without one; Look, Apply and Undo run the same way on a fake root (`test/support/fake-root.ts`:
+shims for useradd, sshd, systemctl and the rest, the scripts' paths moved into a temp folder). On
+real sshd, before an Apply on a server of your own: `BOARD_SERVER_IT=1 bun test
+test/integration/backup-server.test.ts --timeout 3600000` (the server-setup harness's Debian and
+Ubuntu servers in Docker Desktop, about ten minutes once the images are built).
+
 Setting up the web server on the server: `src/core/server-look.ts` (Look's two scripts and their
 parsers, into `src/core/server-facts.ts`'s types), `src/core/server-plan.ts` (the case, the plan per
 case, the record and whose it is, Undo, the facts "Do it myself" fills with placeholders),
@@ -2750,12 +3662,6 @@ ssh, Pebble as the CA, a stand-in board at the tunnel's end, about an hour.
 board's serve side by side, with the board's own images, flags and texts (a few minutes).
 `BOARD_IT_KEEP=1` keeps the built images and the Docker Hub mirror for the next run. Without these
 variables `bun test` skips them and starts no container.
-
-The secrets for the agents: `src/core/secrets.ts` (names, scopes, which one a session gets, the
-shell words and the env file's block), `src/adapters/secret-store.ts` (the sealed store, its key, the
-sessions' files in memory), `src/services/secrets.ts` (the hook's, the launches' and the page's
-part), `src/server/routes/secrets.ts`, `web/src/components/secrets/`; `board secret` and
-`board launch` in `src/entrypoints/cli.ts`.
 
 `herdr-wake/` is the separate plugin, deprecated (the board does this now) and kept one release
 for those who still run it, on Node.js rather than Bun: `bun test`, `bun run check` and tsc leave

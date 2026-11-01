@@ -12,7 +12,7 @@ import {
   type SecretScope,
   type SecretsView,
   type SecretUse,
-} from '../../../src/core/secrets.ts'
+} from '../../../src/core/secret-store.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 import { longWhen } from '../../../src/core/when-format.ts'
 

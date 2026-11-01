@@ -1,157 +1,391 @@
-// How the owner's secrets (core/secrets.ts, adapters/secret-store.ts) reach the sessions, and what
-// the board's page and the `board secret` command change. Three ways in:
-//   - Bash: Claude Code's SessionStart hook (entrypoints/hook.ts) writes the board's block in
-//     $CLAUDE_ENV_FILE, which Claude Code runs before each Bash command. Where the session's
-//     secrets can live in memory ($XDG_RUNTIME_DIR), the block only sources the session's env.sh
-//     there, so Claude's folder (session-env/, which outlives the session by a month) holds a path
-//     and no value; elsewhere (macOS, Windows) it holds the export lines themselves, the plain
-//     assignments Claude Code's PowerShell reads too.
-//   - Claude's own environment, which its MCP servers start with: `board resume`, spawn-agent's
-//     start and `board launch` run Claude with them added to its env (never on a command line,
-//     never typed into a pane).
-//   - On demand: `board secret get NAME` prints one, `board secret file NAME` writes it to a file of
-//     the session's own and prints the path; for the calling session's scopes only.
-// Each way records when, to which session and how (last used). With no store nothing of this runs.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+// A secret request's life (#273, core/secrets.ts): an agent asks (`board secret request`), the
+// request goes on its card, the card goes under "needs the user", the owner's submit on the board
+// writes the sink (adapters/secret-sinks.ts; where config.json defines none, the board's own store,
+// adapters/secret-store.ts), and the agent learns ok, declined or expired. Only the owner's submit
+// writes: a request is no write, and nothing returns a value. A value kept in the store reaches
+// the session it is for as the store's other secrets do (services/secret-store.ts): a variable in
+// a new or restarted session, `board secret get` in a running one.
+//
+// Every step leaves an audit line in secrets/audit.jsonl in the state folder: who asked, the sink,
+// the field names, the parameters, when, what came of it. Never a value: the values are in the
+// submit's memory only, until the sink is written.
+import { randomBytes } from 'node:crypto'
+import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { allCards, readCard, updateCard } from '../adapters/cards.ts'
 import { isRecord } from '../adapters/json-store.ts'
-import {
-  type GivenSecret,
-  listSecrets,
-  markUsed,
-  removeSecret,
-  runDirInMemory,
-  secretsFor,
-  setSecret,
-  writeSessionEnv,
-} from '../adapters/secret-store.ts'
+import { stateDir } from '../adapters/paths.ts'
+import { loadProfiles } from '../adapters/profiles.ts'
+import { writeSink } from '../adapters/secret-sinks.ts'
 import { t } from '../core/lang.ts'
-import { type Profile, profileForDir } from '../core/profiles.ts'
+import { SESSION_ID } from '../core/resume.ts'
 import {
-  exportLines,
-  nameProblem,
-  placeOf,
-  SECRET_MOST,
-  type SecretCaller,
-  type SecretMeta,
-  type SecretsView,
-  sourceLine,
+  checkRequest,
+  fingerprintOf,
+  MAX_PENDING,
+  pendingOf,
+  problemsText,
+  pruned,
+  requestsOf,
+  type SecretField,
+  type SecretRequest,
+  type SecretsConfig,
+  scrub,
+  secretsConfig,
+  statusOf,
   valueProblem,
-  withBoardBlock,
+  WRITING_MS,
+  withDefaultStore,
+  writingNow,
 } from '../core/secrets.ts'
-import type { Translator } from '../core/types.ts'
+import type { SetupCheck } from '../core/setup.ts'
+import { cleanText } from '../core/time.ts'
+import type { Config, Translator } from '../core/types.ts'
 
-type Env = Record<string, string | undefined>
+/** The sinks a request can name: config.json's, or the board's own store where it defines none. */
+export const secretsOf = (cfg: Pick<Config, 'secrets'>): SecretsConfig =>
+  withDefaultStore(secretsConfig(cfg.secrets, { home: homedir() }))
 
-/** The caller from its profile folder and its session: the board profile with that folder, if any. */
-export const callerOf = (profiles: readonly Profile[], dir: string | null, session: string | null): SecretCaller => ({
-  profile: profileForDir(profiles, dir)?.id ?? null,
-  session,
-})
+export const auditFile = (): string => join(stateDir(), 'secrets', 'audit.jsonl')
+const AUDIT_MAX = 1 << 20
 
-/**
- * At SessionStart: the board's block in $CLAUDE_ENV_FILE for this session's secrets (none: the
- * block taken out, as a resumed session may have it from before). No env file (an older Claude
- * Code): nothing. Never throws; a value goes nowhere but env.sh (0600, in memory) or, where there
- * is no memory folder, the env file Claude Code made for the session.
- */
-export function sessionStartSecrets(who: SecretCaller & { session: string }, env: Env = process.env): void {
-  const envFile = env.CLAUDE_ENV_FILE
-  if (!envFile) return
+/** Who did it: the agent that asked, the owner on the board, the board itself (expired). */
+type Who = 'agent' | 'owner' | 'board'
+
+/** One line of the audit, never a value. A line that cannot be written is said on stderr, without it. */
+export function audit(
+  op: string,
+  r: SecretRequest,
+  who: Who,
+  extra: Record<string, unknown> = {},
+  now = Date.now(),
+): void {
+  const line = {
+    at: new Date(now).toISOString(),
+    op,
+    id: r.id,
+    sink: r.sink,
+    fields: r.fields.map(f => f.name),
+    params: r.params,
+    asked: r.by,
+    who,
+    ...extra,
+  }
   try {
-    const given = secretsFor(who)
-    const before = existsSync(envFile) ? readFileSync(envFile, 'utf8') : ''
-    // None for this session, and none from before: nothing is written anywhere.
-    if (!given.length && withBoardBlock(before, null) === before) return
-    let body: string | null = null
-    if (given.length && runDirInMemory(env) && process.platform !== 'win32')
-      body = sourceLine(writeSessionEnv(who.session, given, env))
-    else if (given.length) body = exportLines(given)
-    const after = withBoardBlock(before, body)
-    if (after !== before) writeFileSync(envFile, after, { mode: 0o600 })
-    markUsed(
-      given.map(s => s.id),
-      who.session,
-      'env',
-    )
-  } catch {}
+    const file = auditFile()
+    // the store's own folder (adapters/secret-store.ts), this user's alone whichever makes it first
+    mkdirSync(join(stateDir(), 'secrets'), { recursive: true, mode: 0o700 })
+    try {
+      // a megabyte, then the one before it moves aside
+      if (statSync(file).size > AUDIT_MAX) renameSync(file, `${file}.1`)
+    } catch {}
+    appendFileSync(file, `${JSON.stringify(line)}\n`, { mode: 0o600 })
+  } catch (err) {
+    console.error(`secrets audit: ${(err as Error).message}`)
+  }
+}
+
+export type Ask = { ok: true; request: SecretRequest } | { ok: false; error: string }
+
+export interface AskInput {
+  title: string
+  sink: string
+  params: Record<string, string>
+  fields: SecretField[]
+  expiresMs: number
+}
+
+/** An agent's request on its card, once the sink takes it. */
+export function askSecret(
+  cfg: Pick<Config, 'secrets'>,
+  by: { key: string; name: string },
+  input: AskInput,
+  now = Date.now(),
+): Ask {
+  const conf = secretsOf(cfg)
+  const sink = conf.sinks.get(input.sink)
+  if (!sink) {
+    const known = [...conf.sinks.keys()].join(', ')
+    return { ok: false, error: known ? t('secret.err.noSink', { sink: input.sink, known }) : t('secret.err.noSinks') }
+  }
+  const title = cleanText(input.title, 200)
+  if (!title) return { ok: false, error: t('secret.err.title') }
+  let params = input.params
+  if (sink.kind === 'store') {
+    const asked = storeParams(params, by)
+    if (!asked.ok) return asked
+    params = asked.params
+  }
+  const check = checkRequest(sink, params, input.fields)
+  if (!check.ok) return { ok: false, error: t(check.error, check.vars) }
+  if (pendingOf(requestsOf(readCard(by.key)?.secrets), now).length >= MAX_PENDING)
+    return { ok: false, error: t('secret.err.pendingMany', { n: MAX_PENDING }) }
+  const request: SecretRequest = {
+    id: randomBytes(6).toString('hex'),
+    title,
+    sink: sink.id,
+    params: check.params,
+    fields: check.fields,
+    by,
+    at: now,
+    expires: now + input.expiresMs,
+    status: 'pending',
+  }
+  updateCard(by.key, saved => ({
+    ...(saved ?? { key: by.key }),
+    secrets: [...pruned(requestsOf(saved?.secrets), now), request],
+  }))
+  audit('asked', request, 'agent', { expires: new Date(request.expires).toISOString() }, now)
+  return { ok: true, request }
 }
 
 /**
- * `env` with the caller's secrets added, for Claude's own start (MCP servers take its env); the
- * same `env` when it gets none. A secret's name the env has already is replaced: the owner's
- * value for this session wins. Records them as used at the start when the session is known.
+ * A store request's parameters with the asker filled in: no scope is the asking session's own, by
+ * its Claude id (a session keyed by its pane, or pi's, has none: it asks for a profile or for
+ * every session); a profile must be one of the board's.
  */
-export function launchEnv(env: Env, who: SecretCaller): Env {
-  let given: GivenSecret[] = []
-  try {
-    given = secretsFor(who)
-  } catch {
-    return env
+function storeParams(
+  given: Record<string, string>,
+  by: { key: string; name: string },
+): { ok: true; params: Record<string, string> } | { ok: false; error: string } {
+  const params = { ...given }
+  const scope = params.scope ?? 'session'
+  if (scope === 'session' && params.session === undefined) {
+    if (!SESSION_ID.test(by.key)) return { ok: false, error: t('secret.err.storeSession') }
+    params.scope = 'session'
+    params.session = by.key.toLowerCase()
   }
-  if (!given.length) return env
-  const out: Env = { ...env }
-  for (const s of given) out[s.name] = s.value
-  if (who.session)
-    markUsed(
-      given.map(s => s.id),
-      who.session,
-      'launch',
-    )
+  if (scope === 'profile' && params.profile) {
+    const known = loadProfiles().map(p => p.id)
+    if (!known.includes(params.profile))
+      return { ok: false, error: t('secret.err.storeProfile', { profile: params.profile, known: known.join(', ') }) }
+  }
+  return { ok: true, params }
+}
+
+/** The request with this id and the card it is on, wherever it is. */
+export function findRequest(id: string): { key: string; request: SecretRequest } | null {
+  for (const [key, card] of allCards()) {
+    const request = requestsOf(card.secrets).find(r => r.id === id)
+    if (request) return { key, request }
+  }
+  return null
+}
+
+/** One of this session's requests. */
+export const ownRequest = (key: string, id: string): SecretRequest | null =>
+  requestsOf(readCard(key)?.secrets).find(r => r.id === id) ?? null
+
+/**
+ * The request changed under its card's lock while `ok` says so of it as saved; null when it is
+ * not there or `ok` refused (another submit settled it first).
+ */
+function change(
+  key: string,
+  id: string,
+  ok: (r: SecretRequest) => boolean,
+  patch: (r: SecretRequest) => SecretRequest,
+  now: number,
+): SecretRequest | null {
+  let out: SecretRequest | null = null
+  updateCard(key, saved => {
+    const list = requestsOf(saved?.secrets)
+    const at = list.findIndex(r => r.id === id)
+    const r = list[at]
+    if (!saved || !r || !ok(r)) return undefined
+    out = patch(r)
+    const next = [...list]
+    next[at] = out
+    return { ...saved, secrets: pruned(next, now) }
+  })
   return out
 }
 
-/** The page's list (GET /api/secrets): never a value. */
-export const secretsView = (): SecretsView => ({ secrets: listSecrets() })
-
-/** What a set or a removal answers: the page shows `error` as it is. */
-export type SecretOp = { status: number; body: { ok: true; secret?: SecretMeta } | { ok: false; error: string } }
-
-const refused = (error: string): SecretOp => ({ status: 409, body: { ok: false, error } })
-
-/** Why a name or value is refused, in the board's language or `tr`'s (never the value); null when fine. */
-export function secretProblem(name: unknown, value: unknown, tr: Translator = t): string | null {
-  const n = nameProblem(name)
-  if (n === 'name') return tr('secrets.err.name')
-  if (n === 'reserved') return tr('secrets.err.reserved', { name: String(name) })
-  const v = valueProblem(value)
-  if (v === 'long') return tr('secrets.err.long', { most: SECRET_MOST / 1024 })
-  return v ? tr(`secrets.err.${v}`) : null
+/** Settles a pending request (declined, cancelled, expired, ok): null when it was not pending any more. */
+function settle(
+  key: string,
+  id: string,
+  status: SecretRequest['status'],
+  now: number,
+  target?: string,
+): SecretRequest | null {
+  return change(
+    key,
+    id,
+    // a write under way is the submit's to settle: no decline, cancel or expiry cuts across it
+    r => r.status === 'pending' && (status === 'ok' || !writingNow(r, now)),
+    r => {
+      const { writing: _, ...rest } = r
+      return { ...rest, status, done: now, ...(target && { target }) }
+    },
+    now,
+  )
 }
 
-/** What can be set for: the board's profiles by id, the sessions it knows by key. */
-export interface SecretTargets {
-  profile(id: string): boolean
-  session(key: string): boolean
+/** A pending request past its time, said expired on its card and in the audit; the request as it is now. */
+export function expireIfDue(key: string, r: SecretRequest, now = Date.now()): SecretRequest {
+  if (r.status !== 'pending' || statusOf(r, now) !== 'expired') return r
+  const done = settle(key, r.id, 'expired', now)
+  if (done) audit('expired', done, 'board', {}, now)
+  return done ?? ownRequest(key, r.id) ?? r
+}
+
+/** The agent takes its own request back. */
+export function cancelSecret(key: string, id: string, now = Date.now()): SecretRequest | null {
+  const r = ownRequest(key, id)
+  if (!r) return null
+  const done = settle(key, id, 'cancelled', now)
+  if (done) audit('cancelled', done, 'agent', {}, now)
+  return done ?? expireIfDue(key, r, now)
+}
+
+/** What a route answers: its status, and a body that never holds a value. */
+export interface Answer {
+  status: number
+  body: { ok: boolean; error?: string; target?: string; httpStatus?: number }
+}
+
+const no = (status: number, error: string): Answer => ({ status, body: { ok: false, error } })
+
+/** The owner declines on the board. */
+export function declineSecret(id: string, now = Date.now()): Answer {
+  const found = findRequest(id)
+  if (!found) return no(404, t('secret.err.gone'))
+  const r = expireIfDue(found.key, found.request, now)
+  const done = r.status === 'pending' ? settle(found.key, id, 'declined', now) : null
+  if (!done) {
+    const again = ownRequest(found.key, id) ?? r
+    return no(
+      409,
+      again.status === 'pending' && writingNow(again, now)
+        ? t('secret.err.busy')
+        : t(`secret.err.was.${statusOf(again, now)}`),
+    )
+  }
+  audit('declined', done, 'owner', {}, now)
+  return { status: 200, body: { ok: true } }
+}
+
+export interface Submit {
+  /** By field name; every field the request asks, no other. */
+  values: unknown
+  /** What the form showed (fingerprintOf). */
+  fingerprint: unknown
+  /** Bitwarden's session, for a Bitwarden sink. */
+  session?: unknown
 }
 
 /**
- * A change from the page or the command: { op: 'set', name, scope, target, targetName?, value }
- * or { op: 'rm', id }. The value is checked, sealed and dropped; no answer and no error holds it.
- * `log` gets what went wrong in the store (never a value), the page a plain refusal.
+ * The owner's submit: the request still pending, its sink the same as the form showed, every
+ * value given and fit for the sink; then one write at a time (a second device's submit waits for
+ * the first), and the request is ok, or stays pending with why it failed.
  */
-export function secretOp(body: unknown, targets: SecretTargets, log: (line: string) => void): SecretOp {
-  const b = isRecord(body) ? body : {}
-  try {
-    if (b.op === 'rm') {
-      if (typeof b.id !== 'string' || !removeSecret(b.id)) return refused(t('secrets.err.gone'))
-      return { status: 200, body: { ok: true } }
-    }
-    if (b.op !== 'set') return refused(t('secrets.err.scope'))
-    const problem = secretProblem(b.name, b.value)
-    if (problem) return refused(problem)
-    const place = placeOf(b.scope, b.target)
-    if (
-      !place ||
-      (place.scope === 'profile' && !targets.profile(place.target ?? '')) ||
-      (place.scope === 'session' && !targets.session(place.target ?? ''))
-    )
-      return refused(t('secrets.err.scope'))
-    const targetName = typeof b.targetName === 'string' ? b.targetName.trim().slice(0, 200) : ''
-    const secret = setSecret(place, String(b.name), String(b.value), targetName ? { targetName } : {})
-    return { status: 200, body: { ok: true, secret } }
-  } catch (err) {
-    // The store's own trouble (a lock, a folder): its message names files, never a value.
-    log(`secrets: ${err instanceof Error ? err.message : String(err)}`)
-    return { status: 500, body: { ok: false, error: t('secrets.err.store') } }
+export async function submitSecret(
+  cfg: Pick<Config, 'secrets'>,
+  id: string,
+  input: Submit,
+  now = Date.now(),
+): Promise<Answer> {
+  const found = findRequest(id)
+  if (!found) return no(404, t('secret.err.gone'))
+  const { key } = found
+  const r = expireIfDue(key, found.request, now)
+  if (r.status !== 'pending') return no(409, t(`secret.err.was.${r.status}`))
+  const sink = secretsOf(cfg).sinks.get(r.sink)
+  if (!sink) return no(409, t('secret.err.sinkGone', { sink: r.sink }))
+  const check = checkRequest(sink, r.params, r.fields)
+  if (!check.ok) return no(409, t(check.error, check.vars))
+  // the fields as the sink takes them now: the owner's `once` holds for a request asked before it,
+  // or a card entry that left it out
+  const fields = check.fields
+  if (input.fingerprint !== fingerprintOf(sink, r.params, fields)) return no(409, t('secret.err.changed'))
+  if (!isRecord(input.values)) return no(400, t('secret.err.values'))
+  const given = input.values
+  const values: Record<string, string> = {}
+  for (const name of Object.keys(given)) if (!fields.some(f => f.name === name)) return no(400, t('secret.err.values'))
+  for (const f of fields) {
+    const raw = given[f.name]
+    if (typeof raw !== 'string') return no(400, t('secret.err.values'))
+    // a line break a paste brings at either end is no part of a key; spaces are kept (the form says so)
+    const value = raw.replace(/^[\r\n]+|[\r\n]+$/g, '')
+    // spaces alone are no value, in any sink (an empty Bitwarden part is left as it is)
+    if (value && !value.trim()) return no(400, t('secret.err.valueEmpty', { name: f.name }))
+    const problem = valueProblem(sink, f.name, value)
+    if (problem) return no(400, t(problem, { name: f.name }))
+    values[f.name] = value
   }
+  const session = typeof input.session === 'string' ? input.session : ''
+  if (sink.kind === 'bitwarden' && !session.trim()) return no(400, t('secret.err.bwSession'))
+  // Bitwarden leaves a part left empty as it is, but an item with nothing new is no write
+  if (!Object.values(values).some(Boolean)) return no(400, t('secret.err.valueEmpty', { name: fields[0]?.name ?? '' }))
+  const claimed = change(
+    key,
+    id,
+    x => x.status === 'pending' && !(x.writing && now - x.writing < WRITING_MS),
+    x => ({ ...x, writing: now }),
+    now,
+  )
+  if (!claimed) {
+    const again = ownRequest(key, id)
+    return no(409, again?.status === 'pending' ? t('secret.err.busy') : t(`secret.err.was.${again?.status ?? 'gone'}`))
+  }
+  // the claim goes whatever happens after it: settled ok, or freed for another try
+  let settled = false
+  try {
+    const result = await writeSink({ sink, params: r.params, fields, values, bwSession: session, by: r.by })
+    const at = Date.now()
+    if (result.ok) {
+      const done = settle(key, id, 'ok', at, result.target)
+      settled = true
+      audit(
+        'written',
+        done ?? r,
+        'owner',
+        { target: result.target, ...(result.status && { httpStatus: result.status }) },
+        at,
+      )
+      return {
+        status: 200,
+        body: { ok: true, target: result.target, ...(result.status && { httpStatus: result.status }) },
+      }
+    }
+    audit('failed', r, 'owner', { error: result.error, ...(result.status && { httpStatus: result.status }) }, at)
+    return failedAnswer(result, values, session)
+  } finally {
+    if (!settled)
+      change(
+        key,
+        id,
+        x => x.status === 'pending',
+        ({ writing: _, ...x }) => x,
+        Date.now(),
+      )
+  }
+}
+
+/** A failed write's answer: the reason in words, the values scrubbed from it once more. */
+function failedAnswer(
+  result: { error: string; vars?: Record<string, string>; status?: number },
+  values: Record<string, string>,
+  session: string,
+): Answer {
+  const error = scrub(t(result.error, { ...result.vars }), Object.values(values).concat(session))
+  return {
+    status: result.status ? 502 : 400,
+    body: { ok: false, error, ...(result.status && { httpStatus: result.status }) },
+  }
+}
+
+/** `board doctor`'s line for the sinks, once config.json has `secrets`: how many, or what does not check out. */
+export function secretsChecks(cfg: Pick<Config, 'secrets'>, tr: Translator): SetupCheck[] {
+  if (cfg.secrets === undefined) return []
+  const conf = secretsOf(cfg)
+  const problems = [...conf.problems, ...[...conf.sinks.values()].flatMap(s => s.problems)]
+  const base = { id: 'secrets', title: tr('secret.doctor.title'), fix: '', code: '' }
+  return [
+    problems.length
+      ? { ...base, level: 'error', detail: tr('secret.doctor.problems', { problems: problemsText(problems, tr) }) }
+      : { ...base, level: 'ok', detail: tr('secret.doctor.ok', { n: conf.sinks.size }) },
+  ]
 }

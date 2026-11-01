@@ -19,8 +19,15 @@ test('without a wake section: the defaults, and no Telegram even with tg-mcp in 
     wakeTimeoutSec: 120,
     pollTimeoutSec: 25,
     listSleepingDays: 7,
+    closePanes: true,
   })
   expect(telegramTarget(c, TELEGRAM)).toBeNull()
+})
+
+test('closePanes: on unless the section says false (#204)', () => {
+  expect(wakeConfig({ closePanes: false }).closePanes).toBe(false)
+  for (const v of [true, undefined, 'no', 0, null]) expect(wakeConfig({ closePanes: v }).closePanes).toBe(true)
+  expect(wakeConfig(false).closePanes).toBe(true)
 })
 
 test('auto: the telegram MCP server in ~/.claude.json gives the url and token, as before', () => {

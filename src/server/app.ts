@@ -7,12 +7,13 @@
 // it cannot type into a session. On the board's own server every request carries the board's
 // local key too (adapters/local-key.ts): other accounts there reach 127.0.0.1 as well.
 import { randomBytes } from 'node:crypto'
-import { type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
+import { existsSync, type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 import type { WebSocketHandler } from 'bun'
 import { readCard, writeCard } from '../adapters/cards.ts'
-import { editSyncPaths, saveFoundProfiles } from '../adapters/config-file.ts'
+import { editSyncPaths, loadConfig, saveFoundProfiles } from '../adapters/config-file.ts'
+import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { ensureLocalKey, keyMatches, LOCAL_KEY_HEADER } from '../adapters/local-key.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
@@ -42,13 +43,16 @@ import { deskLanguages } from '../core/desktop.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import { onServer, serverModeOf } from '../core/on-server.ts'
+import type { BackupPayload, TimePayload } from '../core/payload.ts'
 import type { Observation } from '../core/presence.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
 import { boardPorts, forwardSpec, publicHosts, sshArgs, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
+import type { Config } from '../core/types.ts'
 import { createAccess } from '../services/access.ts'
-import { asideCheck } from '../services/aside.ts'
+import { backupView, startBackups } from '../services/backup.ts'
+import { createBackupServer } from '../services/backup-server.ts'
 import type { Deps } from '../services/deps.ts'
 import { createDesktops } from '../services/desktop.ts'
 import { createFirstLogin } from '../services/first-login.ts'
@@ -70,28 +74,34 @@ import { dispatch, json, peerOf, type Route } from './http.ts'
 import { createRemoteListener } from './remote.ts'
 import { accessRoutes } from './routes/access.ts'
 import { archiveRoutes } from './routes/archive.ts'
+import { backupRoutes } from './routes/backup.ts'
 import { boardRoutes } from './routes/board.ts'
 import { desktopRoutes } from './routes/desktop.ts'
 import { fsRoutes } from './routes/fs.ts'
 import { launchRoutes } from './routes/launch.ts'
+import { linksRoutes } from './routes/links.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
+import { moveRoute } from './routes/move.ts'
 import { pageLogRoute } from './routes/page-log.ts'
 import { presenceRoutes } from './routes/presence.ts'
 import { remoteRoutes } from './routes/remote.ts'
 import { revealRoute, revealState } from './routes/reveal.ts'
 import { scheduleRoute } from './routes/schedule.ts'
-import { secretRoutes } from './routes/secrets.ts'
+import { secretsRoutes } from './routes/secrets.ts'
 import { sessionRoutes } from './routes/session.ts'
 import { categoriesRoute, profilesRoute, settingsRoute } from './routes/settings.ts'
 import { setupRoute } from './routes/setup.ts'
 import { sleepRoute } from './routes/sleep.ts'
 import { staticRoute } from './routes/static.ts'
 import { terminalRoute } from './routes/terminal.ts'
+import { keepTimeDb, timeRoutes, timeToday } from './routes/time.ts'
+import { todosRoutes } from './routes/todos.ts'
 import { wakeRoutes } from './routes/wake.ts'
 import { createBroadcaster } from './sse.ts'
 import { createTunnelListener } from './tunnel.ts'
 import { openProbeListener } from './tunnel-probe.ts'
 import { pruneUploads, uploadRoutes } from './uploads.ts'
+import { VIEWER_COPIES, viewerDirs, viewerEntries, WORKER_POLICIES } from './viewers.ts'
 import { createWebBundle } from './web-bundle.ts'
 
 const WEB = join(ROOT, 'web')
@@ -215,13 +225,17 @@ export async function startServer({
   }
   // The React page (web/src/main.tsx) is bundled in memory (Bun.build) and served as /app.js, with
   // what it runs before it paints (web/src/theme.ts) as /theme.js; their version, with the page's
-  // other files, tells open pages to reload.
+  // other files, tells open pages to reload. The quick look's viewers are bundled apart, for the
+  // page to import when it opens such a file (server/viewers.ts).
   const bundle = await createWebBundle({
     root: ROOT,
     entry: join(WEB, 'src', 'main.tsx'),
     early: join(WEB, 'src', 'theme.ts'),
+    viewers: viewerEntries(WEB),
+    copies: VIEWER_COPIES,
     log,
   })
+  const viewerExtras = { dirs: viewerDirs(ROOT), policies: WORKER_POLICIES }
   // Sessions started from the board (services/launch): their progress goes out with the board.
   const launches = createLaunches({ deps, onChange: () => board.publish() })
   // The terminal (services/terminals.ts): shells the board opened in sessions' folders, and live panes.
@@ -231,8 +245,8 @@ export async function startServer({
   // Whether MokuPilot is here for calls with a fork of a session: looked up again when its
   // setting changes, and once a minute for one installed or removed meanwhile.
   const mokupilot = mokupilotCheck(cfg)
-  // Whether Claude Code is here for side questions to a session: looked up again once a minute.
-  const aside = asideCheck()
+  // Side questions to a session go as Claude Code's /btw in its pane: nothing to look up here.
+  const aside = () => true
   // A notification click asks for a session: pages that connect right after are told it too.
   const reveals = revealState()
   const events = createBroadcaster(() => board.payload(), { greet: reveals.greet })
@@ -290,7 +304,7 @@ export async function startServer({
   const page = (html: string): string => pageWithLook(html, { look: cfg.look, omarchy: !!omarchy })
   // The page for a phone's browser through `tailscale serve`, while remote.pwa is on, and through
   // the owner's domain: marked remote, with what installs it.
-  const remotePage = staticRoute(WEB, bundle, html => pwaPage(page(html), bundle.version()))
+  const remotePage = staticRoute(WEB, bundle, html => pwaPage(page(html), bundle.version()), viewerExtras)
   const listener = createRemoteListener({
     cfg,
     webPort: port,
@@ -462,6 +476,28 @@ export async function startServer({
     onChange: () => board.publish(),
     sessions: () => board.items().map(i => i.key),
   })
+  // The backup of the board's database (#233): its schedule (a look a minute, which only stats the
+  // file while there is none), the server's setup, and its line in the payload (none while there
+  // is no database and no target).
+  // config.json's `backup` as it is now: the live config follows a change a moment later, and Back
+  // up now, a Look or an Apply right after the panel saved a target must already see it. Read only
+  // once there is a database (the schedule) or when the panel asks.
+  const backupCfg = (): Config => ({ ...cfg, backup: loadConfig().backup })
+  // one connection to the database for the board's life: the payload and the Time panel's reads and writes
+  keepTimeDb(true)
+  const backups = startBackups({ cfg: backupCfg, onChange: () => board.publish() })
+  const backupServer = createBackupServer({ cfg: backupCfg, spawn: spawnRemote })
+  const backupLine = (): BackupPayload | null => {
+    if (!existsSync(dbFile()) && !cfg.backup) return null
+    const v = backupView(cfg)
+    let last: number | null = null
+    for (const s of Object.values(v.states)) if (s?.lastOk && (last === null || s.lastOk > last)) last = s.lastOk
+    const first = v.problems[0]
+    return { last, problem: first ? { kind: first.kind, ...('target' in first && { target: first.target }) } : null }
+  }
+  // Time tracking (#233): while config.json turns it on, today's billed time by lane and the
+  // journal's last seq, read from the database (one query a refresh); off, nothing is read.
+  const timeLine = (): TimePayload | null => timeToday(cfg)
   const board = createBoardState({
     deps,
     launches,
@@ -477,6 +513,8 @@ export async function startServer({
     ...(omarchy && { omarchy: omarchy.stamp }),
     presence: presence.view,
     ...(desktops && { desktops }),
+    backup: backupLine,
+    time: timeLine,
   })
   board.publish()
   const refresh = (): void => void board.refresh()
@@ -494,6 +532,8 @@ export async function startServer({
     ...remoteRoutes(listener, remote, cfg, port),
     ...accessRoutes(remoteAccess),
     ...boardRoutes(board, events),
+    // The edge log, every link event read from the transcripts (adapters/edge-log.ts); this computer only.
+    ...linksRoutes(board),
     ...fsRoutes(),
     ...uploadRoutes(),
     revealRoute(board, events, reveals),
@@ -502,18 +542,28 @@ export async function startServer({
     ...mokupilotRoutes(cfg),
     // The user's presence: read, switched and set (the page, the phone, the Android app).
     ...presenceRoutes(presence),
+    // Tasks (#202): points pinned on the board, done, reopened, removed; turned on or off.
+    ...todosRoutes({ cfg, find: board.find, refresh }),
+    // The owner's secrets: a request's submit writes the sink (the board's own store where config.json
+    // defines none), or the owner declines, the phone too (#273); Settings → Secrets…, the store's list
+    // and its changes, never a value out, refused remotely but on the board's own server.
+    ...secretsRoutes({ refresh, profiles: () => deps.profiles().list, log }),
+    // Time entries by day and client, as billed (#233): read only, the remote page too.
+    ...timeRoutes(cfg),
+    // Settings → Backup… (#233): the passphrase, the targets, the server's setup; this computer only.
+    ...backupRoutes({ cfg, server: backupServer, now: () => backups.now(true), changed: () => board.publish() }),
     // A line from the page for this log (a phone's browser says what it could not do there).
     pageLogRoute(log),
     scheduleRoute(refresh),
     // Several sessions put to sleep at once, for agents (services/sleep.ts).
     sleepRoute({ deps, items: board.items, refresh }),
+    // Sessions to another Claude profile, from the card and lane menus (services/move.ts, #256).
+    moveRoute({ deps, items: board.items, refresh }),
     // Settings → Sleep and wake… (services/wake/control.ts), for this computer only.
     ...wakeRoutes(wake),
     // The archive: its list, and archiving, bringing back or removing sessions (services/archive.ts).
     ...archiveRoutes({ deps, launches, items: board.items, find: board.find, refresh }),
     categoriesRoute(),
-    // Settings → Secrets… (services/secrets.ts): never a value out; refused remotely but on the board's own server.
-    ...secretRoutes({ profiles: () => deps.profiles().list, log }),
     // The Profiles panel: Install, and its edits, a show installing too (services/profiles.ts).
     profilesRoute(
       async id => {
@@ -561,7 +611,7 @@ export async function startServer({
         })
       },
     },
-    staticRoute(WEB, bundle, page),
+    staticRoute(WEB, bundle, page, viewerExtras),
   )
   const host = new RegExp(`^(127\\.0\\.0\\.1|localhost):${port}$`)
   const ownOrigin = (req: Request): boolean => {
@@ -707,6 +757,7 @@ export async function startServer({
       for (const watcher of watchers) watcher.close()
       omarchy?.close()
       scheduler.stop()
+      backups.stop()
       wake.stop()
       presence.stop()
       terminals.stopAll()

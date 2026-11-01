@@ -62,23 +62,49 @@ export function allowedLogin(login: string | null, owner: string | null, allow: 
  * drive: opening a file or a link here, focusing herdr's window, raising the board's window.
  * Matched on the path as it came (encoded), as the routes are.
  */
-const DESKTOP_ONLY: readonly RegExp[] = [
-  /^\/api\/fs\/open$/,
-  /^\/api\/open-url$/,
-  /^\/api\/reveal$/,
+const HERDR_FOCUS: readonly RegExp[] = [
   /^\/api\/session\/[^/]+\/focus$/,
   /^\/api\/launch\/[\w-]+\/focus$/,
   /^\/api\/term\/[^/]+\/shell\/focus$/,
 ]
+const DESKTOP_ONLY: readonly RegExp[] = [/^\/api\/fs\/open$/, /^\/api\/open-url$/, /^\/api\/reveal$/, ...HERDR_FOCUS]
 
 export const desktopOnly = (rawPath: string): boolean => DESKTOP_ONLY.some(re => re.test(rawPath))
 
 /**
+ * What a desk (RemoteDevice.desk) may do of desktopOnly: herdr's focus, which the herdr client the
+ * owner attached from that desk (`herdr --remote`) follows. Opening files and links stays here.
+ */
+export const deskFocus = (rawPath: string): boolean => HERDR_FOCUS.some(re => re.test(rawPath))
+
+/**
+ * What `board remote desk <id>` prints after marking a desk: the board cannot see whether a herdr
+ * client is attached from it (herdr tells nobody), so it says how to get there. `user` is the login
+ * herdr runs as here, `host` this computer's Tailscale name (null when the listener has none yet).
+ */
+export function deskSteps(user: string, host: string | null): string[] {
+  const h = host ?? '<this computer>'
+  return [
+    'For Go to herdr to move herdr there, that computer must be attached to this herdr:',
+    `  1. its SSH key in ~${user}/.ssh/authorized_keys here (ssh ${user}@${h} works from it)`,
+    `  2. in its ~/.ssh/config:  Host board  HostName ${h}  User ${user}  (and Port, when sshd here is not on 22)`,
+    '  3. there: herdr --remote board, and keep it open',
+    'The board cannot tell whether it is attached: Go to herdr just moves the focus here.',
+  ]
+}
+
+/** What a desk may ask of /api/remote: answering the phones that ask to pair, and unpairing. */
+export const DESK_REMOTE_OPS: ReadonlySet<unknown> = new Set(['approve', 'deny', 'revoke'])
+
+/**
  * For the board on this computer only: the remote mode's and Remote access's management (approving
- * pairings, the login, the tunnel), and wake's switches, Start and Log (#119). Refused on every
+ * pairings, the login, the tunnel), wake's switches, Start and Log (#119), and the backup's setup
+ * (#233: it logs in to the owner's server as the admin), Settings → Time (#237: clients, lanes and
+ * billing settings), the edge log (#280: who worked with whom, for an audit). Refused on every
  * remote listener, in both spellings of a path.
  */
-export const localOnly = (path: string): boolean => /^\/api\/(remote|access|wake)(\/|$)/.test(path)
+export const localOnly = (path: string): boolean =>
+  /^\/api\/(remote|access|wake|backup|time-settings|links\/log)(\/|$)/.test(path)
 
 /**
  * The owner's secrets for the agents (Settings → Secrets…): the local board's page, and the board's
@@ -110,7 +136,11 @@ export interface PairRequest {
   status: 'pending' | 'approved' | 'denied'
 }
 
-/** A paired device. The token itself is never kept, only its hash. */
+/**
+ * A paired device. The token itself is never kept, only its hash. `desk`: the owner's own desk,
+ * marked on this computer only (`board remote desk <id>`): herdr's focus and answering the phones
+ * that ask to pair work from it too, for a board on a server whose herdr the owner attaches to.
+ */
 export interface RemoteDevice {
   id: string
   name: string
@@ -122,6 +152,7 @@ export interface RemoteDevice {
   tokenHash: string
   pairedAt: number
   seenAt: number | null
+  desk?: boolean
 }
 
 /** What the page shows of the remote mode: never a token or its hash. */

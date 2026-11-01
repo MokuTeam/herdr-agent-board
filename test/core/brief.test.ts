@@ -86,3 +86,30 @@ test('the brief tells agents about the schedule', () => {
   // #51 told sessions in herdr they can restart themselves: every running one hears it again.
   assert.ok(BRIEF_VERSION >= 5)
 })
+
+test('brief: `board secret` only where config.json has sinks, for Claude; without any, the brief is as it was (#273)', () => {
+  const none = brief(cfg, null, 'C:X', {})
+  assert.equal(brief(cfg, null, 'C:X', {}, 'Claude', null, null, []), none)
+  assert.doesNotMatch(none, /board secret/)
+  const some = brief(cfg, null, 'C:X', {}, 'Claude', null, null, ['wss', 'vault'])
+  assert.match(some, /board secret request --title .*Sinks: wss, vault/)
+  assert.equal(some.split('\n').length, none.split('\n').length + 1)
+  assert.doesNotMatch(brief(cfg, null, 'C:X', {}, 'Codex', null, null, ['wss']), /board secret/)
+})
+
+test('brief: the board’s own store as the one sink says how to ask for a variable and read it; beside other sinks, one line more', () => {
+  const none = brief(cfg, null, 'C:X', {})
+  const store = brief(cfg, null, 'C:X', {}, 'Claude', null, null, ['store'], ['store'])
+  assert.match(
+    store,
+    /board secret request --title "<what for>" --field <NAME>\[:shown\]\.\.\. \[--global \| --profile <id>\]/,
+  )
+  assert.match(store, /board secret get <NAME> prints it for this session/)
+  assert.doesNotMatch(store, /--sink/)
+  assert.equal(store.split('\n').length, none.split('\n').length + 1)
+  // with sinks of the owner's, their line as it was, the store named at its end
+  const plain = brief(cfg, null, 'C:X', {}, 'Claude', null, null, ['wss', 'vault'])
+  const mixed = brief(cfg, null, 'C:X', {}, 'Claude', null, null, ['wss', 'vault'], ['vault'])
+  assert.match(mixed, /Sinks: wss, vault \(board secret sinks says what each takes\)\. vault: the board's own store/)
+  assert.equal(mixed.replace(/ vault: the board's own store[^\n]*/, ''), plain)
+})

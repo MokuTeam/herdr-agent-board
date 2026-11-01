@@ -287,6 +287,11 @@ async function api(req: Request, url: URL): Promise<unknown> {
     const body = await bodyOf(req)
     return body.piSession === undefined ? engine.sleep(body.target) : engine.adoptPi(body.target, body.piSession)
   }
+  // A sleeper moved to another profile (#250, `board move`): its entry follows.
+  if (req.method === 'POST' && path === '/profile') {
+    const body = await bodyOf(req)
+    return engine.moveProfile(body.session, body.dir)
+  }
   return null
 }
 

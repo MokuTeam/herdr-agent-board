@@ -35,7 +35,7 @@ PowerShell-style names work too (`-Name -Cwd -Label -BriefFile -Brief -Workspace
 - Put a long brief in a UTF-8 file: quoting a long text on a command line breaks.
 - Do not start Claude with `herdr agent start --kind claude` or a bare `claude` in a pane: it gets no name, no brief, and the permission mode and launcher this computer uses are skipped.
 - A new folder may show Claude's "trust this folder" dialog: spawn-agent stops and says so; the user answers it in that tab.
-- A one-off session that has finished can be taken off the board with `board archive --session <name>` (its tab closes; the user can bring it back from the board's archive), but only one you started, or when the user asks.
+- A one-off session that has finished can be taken off the board with `board archive --session <name>` (its tab closes; the user can bring it back from the board's archive), but only one you started, or when the user asks. Its board reminders wait with it, parked: `board schedule --session <name>` lists them, `board schedule --move <id>` moves one to you, `board unschedule <id>` removes one.
 
 ## Talk to another session
 
@@ -128,9 +128,15 @@ Symptoms: a server listed as failed or disconnected, its tools gone, or calls fa
 - Do not try to drive the `/mcp` menu yourself: your terminal is busy with you, and keys typed into a menu land in the wrong place easily.
 - Without herdr-wake (`board restart` says so): ask the user to run `/mcp` in your session and Reconnect the server (on the web board: your card, "Terminal", then "Claude"). Meanwhile carry on with what does not need it, and `board wait "MCP <server> reconnect"`.
 
-## Secrets the owner set for you
+## Secrets
 
-API tokens and keys the owner keeps in the board (Settings → Secrets…, `board secret set`) are environment variables in your Bash commands, and in your MCP servers when the board started you (`$TOGGL_API_TOKEN`, say). `board secret get NAME` prints one, `board secret file NAME` writes it to a file of your session's own (0600) and prints the path; `board secret list` names them, never a value. Never put a value in the conversation, a card, a project's file or a commit. One set after you started reaches you once you restart (`board restart`).
+API tokens and keys the owner keeps in the board (Settings → Secrets…, `board secret set`) are environment variables in your Bash commands, and in your MCP servers when the board started you (`$TOGGL_API_TOKEN`, say). `board secret get NAME` prints one, `board secret file NAME` writes it to a file of your session's own (0600) and prints the path; `board secret list` names them, never a value. Never put a value in the conversation, a card, a project's file or a commit. One set after you started reaches you once you restart (`board restart`); until then `board secret get NAME` has it.
+
+One you need and do not have: ask the owner through the board, never in the chat or with a script of your own.
+
+- `board secret request --title "<what for>" --field NAME [--field NAME2]... [--global | --profile <id>]`, in the background (it waits until the owner answers, 30 minutes by default; `--expires 2h`, `--no-wait`). Your card shows the owner a form; what they type is kept in the board's encrypted store as the variable NAME for this session (`--profile <id>`: that profile's sessions, `--global`: every session). You get back `ok`, `declined` or `expired`, never the value: then `board secret get NAME` (or `$NAME` after a restart). `:shown` after a name (`--field USER:shown`) shows what the owner types, `:once` keeps a value already set.
+- Where the owner defined sinks in config.json (files, Bitwarden, an HTTP call), `board secret sinks` lists them and `--sink <id>` names one: its values go where the sink says, and you get only ok, declined or expired.
+- `board secret status <id> [--wait]`, `board secret cancel <id>`, `board secret requests`.
 
 ## Do not
 

@@ -1,4 +1,4 @@
-// The owner's secrets for the agents (core/secrets.ts), on disk: one folder in the board's state
+// The owner's secrets for the agents (core/secret-store.ts), on disk: one folder in the board's state
 // folder, `secrets/` (0700), never synced (the profile sync reads Claude's profile folders only,
 // and core/profile-sync/secrets.ts keeps this folder out by name too):
 //   key        32 random bytes (0600): the key the values are sealed with
@@ -35,7 +35,7 @@ import {
   type SecretUse,
   secretId,
   sessionFolder,
-} from '../core/secrets.ts'
+} from '../core/secret-store.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
 import { secretStoreFile, secretsDir } from './paths.ts'
 
@@ -166,26 +166,40 @@ export function listSecrets(): SecretMeta[] {
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : rank[a.scope] - rank[b.scope]))
 }
 
-/** Sets (or replaces) the secret `name` at `place`; what anyone may see of it. Checks are the caller's (core/secrets.ts). */
+/** Sets (or replaces) the secret `name` at `place`; what anyone may see of it. Checks are the caller's (core/secret-store.ts). */
 export function setSecret(
   place: SecretPlace,
   name: string,
   value: string,
-  { targetName, now = Date.now() }: { targetName?: string; now?: number } = {},
+  opts: { targetName?: string; now?: number } = {},
 ): SecretMeta {
+  return setSecrets(place, [{ name, value }], opts)[0] as SecretMeta
+}
+
+/**
+ * Sets (or replaces) several secrets at `place` in one write of the store (a request's fields,
+ * services/secrets.ts); what anyone may see of them, in their order. Checks are the caller's.
+ */
+export function setSecrets(
+  place: SecretPlace,
+  given: readonly { name: string; value: string }[],
+  { targetName, now = Date.now() }: { targetName?: string; now?: number } = {},
+): SecretMeta[] {
   const key = ensureKey()
-  const id = secretId(place, name)
-  const entry: Entry = {
+  const target = place.scope === 'global' ? null : place.target
+  const named = place.scope === 'session' && targetName ? { targetName } : {}
+  const entries: Entry[] = given.map(({ name, value }) => ({
     name,
     scope: place.scope,
-    target: place.scope === 'global' ? null : place.target,
-    ...(place.scope === 'session' && targetName && { targetName }),
+    target,
+    ...named,
     setAt: now,
-    ...seal(key, id, value),
-  }
+    ...seal(key, secretId(place, name), value),
+  }))
+  const ids = new Set(entries.map(e => secretId(e, e.name)))
   updateJson(
     secretStoreFile(),
-    cur => ({ v: 1 as const, entries: [...entriesOf(cur).filter(e => secretId(e, e.name) !== id), entry] }),
+    cur => ({ v: 1 as const, entries: [...entriesOf(cur).filter(e => !ids.has(secretId(e, e.name))), ...entries] }),
     isStore,
     { mode: 0o600 },
   )
@@ -193,21 +207,20 @@ export function setSecret(
   updateJson(
     secretUsedFile(),
     cur => {
-      if (!cur || !(id in cur)) return undefined
-      const { [id]: _gone, ...rest } = cur
-      return rest
+      if (!cur || ![...ids].some(id => id in cur)) return undefined
+      return Object.fromEntries(Object.entries(cur).filter(([id]) => !ids.has(id)))
     },
     isUsed,
     { mode: 0o600 },
   )
-  return {
-    id,
-    name,
-    scope: entry.scope,
-    target: entry.target,
-    ...(entry.targetName && { targetName: entry.targetName }),
+  return entries.map(e => ({
+    id: secretId(e, e.name),
+    name: e.name,
+    scope: e.scope,
+    target: e.target,
+    ...(e.targetName && { targetName: e.targetName }),
     setAt: now,
-  }
+  }))
 }
 
 /** Removes the secret with this id; false when there is none. The store stays (empty), so hooks still clear what a session had. */
@@ -246,7 +259,7 @@ export interface GivenSecret {
   value: string
 }
 
-/** What the caller gets, one per name (core/secrets.ts pickFor); none without a store. One that does not open is left out. */
+/** What the caller gets, one per name (core/secret-store.ts pickFor); none without a store. One that does not open is left out. */
 export function secretsFor(who: SecretCaller): GivenSecret[] {
   if (!hasSecretStore()) return []
   const picked = pickFor(entriesOf(readJson(secretStoreFile(), isStore)), who)

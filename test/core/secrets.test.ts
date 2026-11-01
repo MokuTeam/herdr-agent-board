@@ -1,137 +1,525 @@
-// The secrets' rules (core/secrets.ts): names, scopes, which one a session gets, and how a value
-// goes into a shell, checked against bash itself where a shell is at hand.
+// The rules of secrets through the board (#273, core/secrets.ts): config.json's sinks, strict; what
+// a request may ask; templates filled; where a sink writes; a request's status; and the card under
+// "Needs me" while one waits, whatever the session does, and as before without one.
 import { expect, test } from 'bun:test'
+import assert from 'node:assert/strict'
+import { attentionOf, columnOf } from '../../src/core/board.ts'
+import { translator } from '../../src/core/i18n/translator.ts'
 import {
-  appliesTo,
-  exportLines,
-  nameProblem,
-  parseSecretId,
-  pickFor,
-  placeOf,
-  SECRET_MOST,
-  secretId,
-  sessionFolder,
-  sessionInArgs,
-  shellWord,
-  sourceLine,
+  checkRequest,
+  fillDeep,
+  fillText,
+  fingerprintOf,
+  onlyStore,
+  paramOk,
+  parseExpires,
+  parseField,
+  problemsText,
+  requestsOf,
+  type SecretField,
+  type SecretRequest,
+  type Sink,
+  safeName,
+  scrub,
+  secretsConfig,
+  secretViews,
+  statusLine,
+  statusOf,
+  storePlace,
+  storeTarget,
+  targetOf,
   valueProblem,
-  withBoardBlock,
+  withDefaultStore,
 } from '../../src/core/secrets.ts'
+import type { Card } from '../../src/core/types.ts'
 
-const SID = '0f8fad5b-d9cb-469f-a165-70867728950e'
+const en = translator('en')
+const HOME_WIN = 'C:\\Users\\owner'
+const HOME_POSIX = '/home/owner'
 
-test('a name is a shell variable name, and not one the setup reads itself', () => {
-  for (const ok of ['TOGGL_API_TOKEN', 'SLACK_BOT_TOKEN', '_X', 'a1', 'BOARD_TEST_SECRET'])
-    expect(nameProblem(ok)).toBeNull()
-  for (const bad of ['', '1X', 'A-B', 'A B', 'Ключ', 'X'.repeat(129), 'A=B', null, 3])
-    expect(nameProblem(bad)).toBe('name')
-  for (const own of [
-    'PATH',
-    'HOME',
-    'path',
-    'CLAUDE_CONFIG_DIR',
-    'ANTHROPIC_API_KEY',
-    'HERDR_PANE_ID',
-    'LD_PRELOAD',
-    'BASH_ENV',
-    'XDG_RUNTIME_DIR',
-    'NODE_OPTIONS',
-  ])
-    expect(nameProblem(own)).toBe('reserved')
-})
+const SINKS = {
+  'mcp-token': {
+    kind: 'file',
+    title: 'API token for the local MCP server',
+    path: '~/.vendor_secrets.json',
+    format: 'json',
+    at: ['local-user', '{{profile}}'],
+    template: { username: 'TOKEN.me', password: '{{token}}', account_id: 'acct-1' },
+    params: { profile: '^[a-z0-9-]{1,20}$' },
+  },
+  netrc: {
+    kind: 'file',
+    path: '~/.wss_netrc',
+    format: 'netrc',
+    template: 'machine ws.example.com login {{user}} password {{token}}\n',
+  },
+  dotenv: {
+    kind: 'file',
+    folder: '~/env',
+    name: '{{file}}.env',
+    format: 'env',
+    template: { API_TOKEN: '{{token}}' },
+    params: { file: 'name' },
+  },
+  vault: { kind: 'bitwarden', folder: 'Agents', item: '{{item}}', params: { item: 'text' } },
+  shell: { kind: 'env', vars: ['VENDOR_TOKEN', 'VENDOR_USER'] },
+  vendor: {
+    kind: 'http',
+    method: 'put',
+    url: 'https://api.example.com/v1/connections/{{conn}}/credentials',
+    headers: { authorization: 'Bearer {{apiToken}}' },
+    body: { consumerKey: '{{consumerKey}}', consumerSecret: '{{consumerSecret}}' },
+    params: { conn: '^[0-9a-f-]{8,40}$' },
+  },
+}
 
-test('a value: not empty, no NUL, 64 KB at most; newlines, quotes and other alphabets are fine', () => {
-  expect(valueProblem('')).toBe('empty')
-  expect(valueProblem(undefined)).toBe('empty')
-  expect(valueProblem('a\0b')).toBe('nul')
-  expect(valueProblem('я'.repeat(SECRET_MOST / 2 + 1))).toBe('long')
-  expect(valueProblem('line 1\nit\'s "q" $HOME `x` %41 ключ')).toBeNull()
-})
+const conf = (platform: 'win32' | 'linux' = 'win32', sinks: unknown = SINKS) =>
+  secretsConfig({ sinks }, { home: platform === 'win32' ? HOME_WIN : HOME_POSIX, platform })
+const sink = (id: string, platform: 'win32' | 'linux' = 'win32'): Sink => {
+  const s = conf(platform).sinks.get(id)
+  assert.ok(s, id)
+  return s
+}
+const problemsOf = (raw: unknown, platform: 'win32' | 'linux' = 'linux') =>
+  [...conf(platform, { s: raw }).sinks.values()].flatMap(s => s.problems).map(p => `${p.at} ${p.why}`)
 
-test('ids: scope, target and name, back again; a target with a colon or a path stays whole', () => {
-  for (const [scope, target] of [
-    ['global', null],
-    ['profile', 'work'],
-    ['session', SID],
-    ['session', 'C:\\Users\\me\\.pi\\s:1.jsonl'],
-  ] as const) {
-    const id = secretId({ scope, target }, 'TOKEN')
-    expect(parseSecretId(id)).toEqual({ scope, target, name: 'TOKEN' })
+test('each kind of sink reads as written, its fields from its template and the request', () => {
+  const c = conf()
+  assert.deepEqual(c.problems, [])
+  for (const s of c.sinks.values()) assert.deepEqual(s.problems, [], s.id)
+  const file = sink('mcp-token')
+  assert.equal(file.kind, 'file')
+  if (file.kind === 'file') {
+    assert.equal(file.folder, HOME_WIN)
+    assert.equal(file.name, '.vendor_secrets.json')
   }
-  for (const bad of ['', 'TOKEN', 'nope:x:TOKEN', 'global:x:TOKEN', 'profile::TOKEN', 'global::1X', 7])
-    expect(parseSecretId(bad)).toBeNull()
-  expect(placeOf('global', 'ignored')).toEqual({ scope: 'global', target: null })
-  expect(placeOf('profile', ' work ')).toEqual({ scope: 'profile', target: 'work' })
-  expect(placeOf('session', '')).toBeNull()
-  expect(placeOf('everyone', null)).toBeNull()
+  assert.deepEqual(file.fields, ['token'])
+  assert.deepEqual(sink('netrc').fields, ['user', 'token'])
+  assert.deepEqual(sink('vendor').fields, ['apiToken', 'consumerKey', 'consumerSecret'])
+  assert.equal(sink('vault').fields, null)
+  assert.equal(sink('shell').fields, null)
+  assert.equal(sink('vendor').kind === 'http' && (sink('vendor') as { method: string }).method, 'PUT')
 })
 
-test('the session over the profile over the global one; another profile or session gets none of theirs', () => {
-  const all = [
-    { scope: 'global', target: null, name: 'A', v: 'g' },
-    { scope: 'profile', target: 'work', name: 'A', v: 'p' },
-    { scope: 'session', target: SID, name: 'A', v: 's' },
-    { scope: 'profile', target: 'work', name: 'B', v: 'pb' },
-    { scope: 'session', target: 'other', name: 'C', v: 'sc' },
-    { scope: 'global', target: null, name: 'D', v: 'gd' },
-  ] as const
-  const of = (profile: string | null, session: string | null) =>
-    pickFor(all, { profile, session }).map(e => `${e.name}=${e.v}`)
-  expect(of('work', SID)).toEqual(['A=s', 'B=pb', 'D=gd'])
-  expect(of('work', null)).toEqual(['A=p', 'B=pb', 'D=gd'])
-  expect(of('default', SID)).toEqual(['A=s', 'D=gd'])
-  expect(of(null, null)).toEqual(['A=g', 'D=gd'])
-  expect(appliesTo({ scope: 'profile', target: 'work' }, { profile: null, session: null })).toBe(false)
+test('config.json is strict: what does not check out is a problem of that sink, and the others still work', () => {
+  expect(problemsOf({ kind: 'file', path: 'relative/file', template: '{{x}}' })).toContain('secrets.sinks.s.path path')
+  expect(problemsOf({ kind: 'file', path: '~/f', template: '{{x}}', extra: 1 })).toContain(
+    'secrets.sinks.s.extra unknown',
+  )
+  expect(problemsOf({ kind: 'nope' })).toContain('secrets.sinks.s.kind kind')
+  expect(problemsOf({ path: '~/f' })).toContain('secrets.sinks.s.kind required')
+  // a secret in a file's name or a JSON key would end up in listings and logs
+  expect(problemsOf({ kind: 'file', folder: '~/x', name: '{{token}}.txt', template: '{{token}}' })).toContain(
+    'secrets.sinks.s.name param',
+  )
+  expect(
+    problemsOf({ kind: 'file', path: '~/x.json', format: 'json', at: ['{{token}}'], template: { a: '{{v}}' } }),
+  ).toContain('secrets.sinks.s.at param')
+  expect(problemsOf({ kind: 'file', folder: '~/x', name: '../up', template: '{{v}}' })).toContain(
+    'secrets.sinks.s.name name',
+  )
+  expect(problemsOf({ kind: 'file', path: '~/x', format: 'json', template: 'text' })).toContain(
+    'secrets.sinks.s.template template',
+  )
+  expect(problemsOf({ kind: 'file', path: '~/x', template: 'no fields' })).toContain('secrets.sinks.s.template field')
+  expect(problemsOf({ kind: 'file', path: '~/x', template: '{{v}}', params: { p: '[' } })).toContain(
+    'secrets.sinks.s.params.p regex',
+  )
+  // the URL's host is the owner's alone: no template in it, no login, https (http for localhost)
+  expect(problemsOf({ kind: 'http', url: 'https://{{host}}/x', body: '{{v}}', params: { host: 'text' } })).toContain(
+    'secrets.sinks.s.url origin',
+  )
+  expect(problemsOf({ kind: 'http', url: 'https://user:pw@api.example.com/x', body: '{{v}}' })).toContain(
+    'secrets.sinks.s.url origin',
+  )
+  expect(problemsOf({ kind: 'http', url: 'http://api.example.com/x', body: '{{v}}' })).toContain(
+    'secrets.sinks.s.url scheme',
+  )
+  assert.deepEqual(problemsOf({ kind: 'http', url: 'http://127.0.0.1:9/x', body: '{{v}}' }), [])
+  expect(problemsOf({ kind: 'http', url: 'https://api.example.com/{{v}}', body: '{{w}}' })).toContain(
+    'secrets.sinks.s.url param',
+  )
+  expect(problemsOf({ kind: 'http', method: 'GET', url: 'https://api.example.com/', body: '{{v}}' })).toContain(
+    'secrets.sinks.s.method method',
+  )
+  expect(
+    problemsOf({ kind: 'bitwarden', folder: 'A', item: 'x', organization: 'not-a-guid', collection: 'x' }),
+  ).toContain('secrets.sinks.s.organization id')
+  // a user environment variable is Windows' own
+  expect(problemsOf({ kind: 'env', vars: ['A'] }, 'linux')).toContain('secrets.sinks.s platform')
+  assert.deepEqual(problemsOf({ kind: 'env', vars: ['A'] }, 'win32'), [])
+  const mixed = conf('linux', { bad: { kind: 'nope' }, good: SINKS.netrc })
+  assert.deepEqual(mixed.sinks.get('good')?.problems, [])
+  expect(problemsText(mixed.sinks.get('bad')?.problems ?? [], en)).toContain(
+    'kind is file, bitwarden, env, http or store',
+  )
+  assert.deepEqual(conf('linux', 'nope').problems, [{ at: 'secrets.sinks', why: 'type', value: 'string' }])
+  assert.equal(secretsConfig(undefined, { home: HOME_POSIX }).sinks.size, 0)
 })
 
-test('a value as one shell word: bash reads back exactly what was set', async () => {
-  const bash = Bun.which('bash')
-  const values = ["it's", "''", 'a"b', '$HOME `id` $(id) \\n', 'line 1\nline 2', 'ключ 🔑', '%41%', ' lead and trail ']
-  const lines = exportLines(values.map((value, i) => ({ name: `V${i}`, value })))
-  for (const v of values) expect(shellWord(v).startsWith("'")).toBe(true)
-  if (!bash) return
-  const script = `${lines}${values.map((_, i) => `printf '%s\\0' "$V${i}"`).join('\n')}\n`
-  const proc = Bun.spawn([bash, '--noprofile', '--norc', '-c', script], { stdout: 'pipe', env: {} })
-  const out = await new Response(proc.stdout).text()
-  expect(out.split('\0').slice(0, -1)).toEqual(values)
+test('a request fills only the declared parameters, each by its rule, and never a way out of the folder', () => {
+  const dotenv = sink('dotenv')
+  assert.equal(checkRequest(dotenv, { file: 'client-a' }, []).ok, true)
+  for (const file of ['../escape', 'a/b', 'a\\b', 'CON', 'nul.txt', 'x.', ' lead', '', 'a\nb'])
+    assert.equal(checkRequest(dotenv, { file }, []).ok, false, JSON.stringify(file))
+  assert.deepEqual(checkRequest(dotenv, {}, []), {
+    ok: false,
+    error: 'secret.err.paramMissing',
+    vars: { name: 'file' },
+  })
+  assert.deepEqual(checkRequest(dotenv, { file: 'a', other: 'b' }, []), {
+    ok: false,
+    error: 'secret.err.paramUnknown',
+    vars: { name: 'other' },
+  })
+  // a lax regex cannot let a path through: the name filled in is checked as a name again
+  const lax = conf('linux', {
+    s: { kind: 'file', folder: '~/x', name: '{{f}}', template: '{{v}}', params: { f: '.*' } },
+  }).sinks.get('s') as Sink
+  assert.equal(checkRequest(lax, { f: '../../etc/passwd' }, []).ok, false)
+  assert.equal(checkRequest(sink('mcp-token'), { profile: 'Bad Profile' }, []).ok, false)
+  assert.equal(checkRequest(sink('vendor'), { conn: 'x.evil.com' }, []).ok, false)
+  // a broken sink takes nothing
+  const broken = conf('linux', { s: { kind: 'file', path: 'rel', template: '{{v}}' } }).sinks.get('s') as Sink
+  assert.deepEqual(checkRequest(broken, {}, []), { ok: false, error: 'secret.err.sinkBroken', vars: { sink: 's' } })
 })
 
-test('export lines are what Claude Code takes as plain assignments (its PowerShell reads only those)', () => {
-  // Claude Code 2.1.309's own check, line by line.
-  const plain =
-    /^(?:\s*(?:#.*)?|(?:export +|declare -x +)?([A-Za-z_]\w*)=((?:[\w@%+=:,./-]|'[^'\0]*'|"(?:[^"\\$`\0]|\\[^\0])*")*))$/
-  const lines = exportLines([
-    { name: 'A', value: "it's" },
-    { name: 'B', value: 'x y $z' },
+test('fields: a template asks for its own, masked by default; the others are named by the request within the sink’s rules', () => {
+  const r = checkRequest(sink('netrc'), {}, [])
+  assert.ok(r.ok)
+  assert.deepEqual(r.fields, [
+    { name: 'user', hidden: true },
+    { name: 'token', hidden: true },
   ])
-  for (const line of lines.trimEnd().split('\n')) expect(plain.test(line)).toBe(true)
+  const shown = checkRequest(sink('netrc'), {}, [
+    { name: 'user', hidden: false },
+    { name: 'token', hidden: true },
+  ])
+  assert.ok(shown.ok)
+  assert.equal(checkRequest(sink('netrc'), {}, [{ name: 'token', hidden: true }]).ok, false)
+  assert.equal(checkRequest(sink('netrc'), {}, [{ name: 'other', hidden: true }]).ok, false)
+  assert.equal(checkRequest(sink('vault'), { item: 'Login' }, []).ok, false)
+  assert.equal(checkRequest(sink('vault'), { item: 'Login' }, [{ name: 'password', hidden: true }]).ok, true)
+  assert.equal(checkRequest(sink('shell'), {}, [{ name: 'VENDOR_TOKEN', hidden: true }]).ok, true)
+  assert.equal(checkRequest(sink('shell'), {}, [{ name: 'PATH', hidden: true }]).ok, false)
+  assert.equal(
+    checkRequest(sink('vault'), { item: 'x' }, [
+      { name: 'a', hidden: true },
+      { name: 'a', hidden: true },
+    ]).ok,
+    false,
+  )
+  // what the other side holds is no one's to read
+  const once: SecretField[] = [
+    { name: 'apiToken', hidden: true, once: true },
+    { name: 'consumerKey', hidden: true },
+    { name: 'consumerSecret', hidden: true },
+  ]
+  assert.deepEqual(checkRequest(sink('vendor'), { conn: 'abcdef12' }, once), {
+    ok: false,
+    error: 'secret.err.onceHttp',
+  })
+  assert.deepEqual(parseField('token'), { name: 'token', hidden: true })
+  assert.deepEqual(parseField('user:shown'), { name: 'user', hidden: false })
+  assert.deepEqual(parseField('key:hidden:once'), { name: 'key', hidden: true, once: true })
+  assert.equal(parseField('key:shown:hidden'), null)
+  assert.equal(parseField('key:weird'), null)
 })
 
-test("the board's block in Claude Code's env file: set, replaced, taken out; other hooks' lines kept", () => {
-  const other = 'export FROM_OTHER=1\n'
-  const one = withBoardBlock(other, 'export A=1\n')
-  expect(one).toBe(`${other}# agent-board secrets (begin)\nexport A=1\n# agent-board secrets (end)\n`)
-  const two = withBoardBlock(one, 'export A=2')
-  expect(two).toBe(`${other}# agent-board secrets (begin)\nexport A=2\n# agent-board secrets (end)\n`)
-  expect(withBoardBlock(two, null)).toBe(other)
-  expect(withBoardBlock('', null)).toBe('')
-  expect(withBoardBlock('export X=1', 'export A=1\n')).toStartWith('export X=1\n# agent-board')
-  expect(sourceLine("/run/user/1000/a'b/env.sh")).toBe(
-    `[ -r '/run/user/1000/a'"'"'b/env.sh' ] && . '/run/user/1000/a'"'"'b/env.sh'\n`,
+test('templates: values go in as text, JSON stays JSON whatever they hold, and a URL gets them encoded', () => {
+  const nasty = 'a"b\\c\n}{"x":1'
+  const filled = fillDeep({ k: '{{v}}', n: 3, list: ['x {{v}}'], '{{p}}': true }, { v: nasty, p: 'key' })
+  assert.deepEqual(JSON.parse(JSON.stringify(filled)), { k: nasty, n: 3, list: [`x ${nasty}`], key: true })
+  assert.equal(fillText('a {{ v }} b {{missing}}', { v: 'X' }), 'a X b {{missing}}')
+  assert.equal(fillText('/c/{{id}}', { id: 'a/../b?x' }, encodeURIComponent), '/c/a%2F..%2Fb%3Fx')
+  assert.equal(valueProblem(sink('netrc'), 'token', 'has space'), 'secret.err.valueSpace')
+  assert.equal(valueProblem(sink('dotenv'), 'token', 'two\nlines'), 'secret.err.valueLine')
+  assert.equal(valueProblem(sink('vendor'), 'apiToken', 'line\r\nbreak'), 'secret.err.valueLine')
+  assert.equal(valueProblem(sink('vendor'), 'consumerKey', 'line\nbreak'), null)
+  assert.equal(valueProblem(sink('netrc'), 'token', ''), 'secret.err.valueEmpty')
+  assert.equal(valueProblem(sink('vault'), 'totp', ''), null)
+  assert.equal(safeName('client.env'), true)
+  assert.equal(safeName('lpt1'), false)
+})
+
+test('the form shows where the values go, and its fingerprint changes with the sink', () => {
+  const file = sink('mcp-token')
+  const fields: SecretField[] = [{ name: 'token', hidden: true }]
+  const target = targetOf(file, { profile: 'centi' }, fields, en, 'win32')
+  assert.deepEqual(target, {
+    kind: 'file',
+    where: 'C:\\Users\\owner\\.vendor_secrets.json',
+    detail: 'at local-user › centi; the rest of the file stays as it is',
+  })
+  assert.equal(
+    targetOf(sink('vendor'), { conn: 'abc-123' }, [], en).where,
+    'PUT https://api.example.com/v1/connections/abc-123/credentials',
+  )
+  expect(targetOf(sink('vault'), { item: 'Login' }, [], en).where).toBe(
+    'folder “Agents”, item “Login” (made, or updated when it is there)',
+  )
+  const before = fingerprintOf(file, { profile: 'a' }, fields)
+  assert.equal(fingerprintOf(file, { profile: 'a' }, fields), before)
+  assert.notEqual(fingerprintOf(file, { profile: 'b' }, fields), before)
+  const moved = conf('win32', { ...SINKS, 'mcp-token': { ...SINKS['mcp-token'], path: '~/elsewhere.json' } }).sinks.get(
+    'mcp-token',
+  ) as Sink
+  assert.notEqual(fingerprintOf(moved, { profile: 'a' }, fields), before)
+})
+
+test('scrub: no value, nor its trimmed form, survives in a text', () => {
+  const out = scrub('Error: bad token  s3cr3t-v4lue  for user; again s3cr3t-v4lue\nline', [' s3cr3t-v4lue ', 'other'])
+  assert.equal(out.includes('s3cr3t-v4lue'), false)
+  assert.equal(out, 'Error: bad token ••• for user; again ••• line')
+})
+
+const request = (over: Partial<SecretRequest> = {}): SecretRequest => ({
+  id: 'abcdef012345',
+  title: 'Token',
+  sink: 'netrc',
+  params: {},
+  fields: [{ name: 'token', hidden: true }],
+  by: { key: 's1', name: 'One' },
+  at: 1000,
+  expires: 10_000,
+  status: 'pending',
+  ...over,
+})
+
+test('a request expires by itself, and says so in one line without a value', () => {
+  assert.equal(statusOf(request(), 9999), 'pending')
+  assert.equal(statusOf(request(), 10_000), 'expired')
+  assert.equal(statusOf(request({ status: 'ok' }), 20_000), 'ok')
+  expect(statusLine(request({ status: 'ok', target: '/home/owner/.wss_netrc', done: 5000 }), 6000)).toBe(
+    'ok · abcdef012345 · /home/owner/.wss_netrc · 1970-01-01T00:00:05.000Z',
+  )
+  assert.equal(statusLine(request(), 20_000), 'expired · abcdef012345 · netrc')
+  assert.equal(parseExpires('30m'), 30 * 60_000)
+  assert.equal(parseExpires('2h'), 7_200_000)
+  assert.equal(parseExpires('10s'), null)
+  assert.equal(parseExpires('2d'), null)
+  const views = secretViews(
+    conf(),
+    { secrets: [request({ expires: Date.now() + 60_000 }), request({ id: 'old000000000' })] },
+    en,
+  )
+  assert.deepEqual(
+    views.map(v => [v.id, v.kind, v.where]),
+    [['abcdef012345', 'file', 'C:\\Users\\owner\\.wss_netrc']],
+  )
+  const gone = secretViews(conf('win32', {}), { secrets: [request({ expires: Date.now() + 60_000 })] }, en)
+  assert.equal(gone[0]?.problem, 'The sink “netrc” is no longer in config.json')
+})
+
+test('a pending request puts the card under "Needs me", working or not; an expired or answered one does not', () => {
+  const pending: Card = { secrets: [request({ expires: Date.now() + 60_000 })] }
+  assert.equal(columnOf('working', pending), 'me')
+  assert.equal(attentionOf('working', pending), 'ask')
+  assert.equal(columnOf('idle', pending), 'me')
+  // a dialog in the terminal is still the decision it was
+  assert.equal(attentionOf('blocked', pending), 'decision')
+  // the user's own drag still wins, as for `board ask`
+  assert.equal(columnOf('idle', { ...pending, pin: 'done' }), 'done')
+  assert.equal(columnOf('working', { ...pending, pin: 'done' }), 'work')
+  const old: Card = { secrets: [request({ expires: Date.now() - 1 })] }
+  assert.equal(columnOf('working', old), 'work')
+  assert.equal(columnOf('idle', old), 'idle')
+  assert.equal(columnOf('working', { secrets: [request({ status: 'ok', expires: Date.now() + 60_000 })] }), 'work')
+  // a card without requests (every setup before #273) goes where it went
+  for (const status of ['working', 'idle', 'blocked', 'done', 'sleeping'])
+    for (const card of [{}, { ask: 'q' }, { wait: 'w' }, { pin: 'me' as const }])
+      assert.equal(
+        columnOf(status, { ...card, secrets: [] }),
+        columnOf(status, card),
+        `${status} ${JSON.stringify(card)}`,
+      )
+})
+
+test('from the review: no object key, no dot segment, under any rule; a netrc parameter without a space (#273)', () => {
+  for (const rule of [{ kind: 'name' }, { kind: 'text' }, { kind: 'regex', source: '.*' }] as const)
+    for (const value of ['__proto__', 'constructor', 'prototype', '.', '..', '...'])
+      assert.equal(paramOk(rule, value), false, `${rule.kind} ${value}`)
+  const json = conf('linux', {
+    s: {
+      kind: 'file',
+      path: '~/x.json',
+      format: 'json',
+      at: ['{{a}}', '{{b}}'],
+      template: { t: '{{v}}' },
+      params: { a: 'text', b: 'text' },
+    },
+  }).sinks.get('s') as Sink
+  assert.equal(checkRequest(json, { a: '__proto__', b: 'toString' }, []).ok, false)
+  assert.equal(checkRequest(json, { a: 'ok', b: 'constructor' }, []).ok, false)
+  assert.equal(checkRequest(json, { a: 'ok', b: 'fine' }, []).ok, true)
+  const http = conf('linux', {
+    s: { kind: 'http', url: 'https://api.example.com/v1/projects/{{p}}/secrets', body: '{{v}}', params: { p: 'text' } },
+  }).sinks.get('s') as Sink
+  for (const p of ['..', '.']) assert.equal(checkRequest(http, { p }, []).ok, false, p)
+  const netrc = conf('linux', {
+    s: {
+      kind: 'file',
+      path: '~/.n',
+      format: 'netrc',
+      template: 'machine {{host}} password {{v}}',
+      params: { host: 'text' },
+    },
+  }).sinks.get('s') as Sink
+  assert.equal(checkRequest(netrc, { host: 'a.example.com login evil' }, []).ok, false)
+  assert.equal(checkRequest(netrc, { host: 'a.example.com' }, []).ok, true)
+  // what config.json holds as a password is not said back by a problem
+  const said = problemsText(
+    [
+      ...conf('linux', {
+        s: { kind: 'http', url: 'https://u:pw-in-config@api.example.com/', auth: 'pw-in-config', body: '{{v}}' },
+      }).sinks.values(),
+    ][0]?.problems ?? [],
+    en,
+  )
+  assert.equal(said.includes('pw-in-config'), false, said)
+  assert.equal(scrub(`echo ${Buffer.from('k3y-value').toString('base64')}`, ['k3y-value']), 'echo •••')
+  // and as JSON or a URL would carry it
+  assert.equal(
+    scrub(`{"p":${JSON.stringify('a"b\\c')}} ?x=${encodeURIComponent('a b&c')}`, ['a"b\\c', 'a b&c']),
+    '{"p":"•••"} ?x=•••',
   )
 })
 
-test("a session's folder: a Claude id as it is, anything else hashed; claude's own session from its arguments", () => {
-  const h = (s: string) => `h${s.length}`
-  expect(sessionFolder(SID.toUpperCase(), h)).toBe(SID)
-  expect(sessionFolder('/home/me/.pi/sessions/x.jsonl', h)).toBe('h29')
-  expect(sessionFolder('pane-w1:p2', h)).toBe('h10')
-  expect(sessionInArgs(['--allow-dangerously-skip-permissions', '--resume', SID])).toBe(SID)
-  expect(sessionInArgs(['-r', SID])).toBe(SID)
-  expect(sessionInArgs([`--resume=${SID}`])).toBe(SID)
-  expect(sessionInArgs(['--session-id', SID, '--model', 'opus'])).toBe(SID)
-  expect(sessionInArgs(['--resume'])).toBeNull()
-  expect(sessionInArgs(['--resume', '--model'])).toBeNull()
-  expect(sessionInArgs(['--continue'])).toBeNull()
-  expect(sessionInArgs(['--', '--resume', SID])).toBeNull()
+test('from the review: an entry on a card that is not wholly a request is left out, and a write under way does not expire', () => {
+  const good = request({ expires: Date.now() + 60_000 })
+  const bad = [
+    { ...good, fields: [null] },
+    { ...good, fields: [{ name: 'x' }] },
+    { ...good, params: { a: 1 } },
+    { ...good, by: null },
+    { ...good, at: 'now' },
+  ]
+  assert.deepEqual(requestsOf([...bad, good]), [good])
+  assert.equal(secretViews(conf(), { secrets: [...bad, good] }, en).length, 1)
+  const writing = request({ expires: 10_000, writing: 9_000 })
+  assert.equal(statusOf(writing, 20_000), 'pending')
+  assert.equal(statusOf(writing, 9_000 + 9 * 60_000), 'expired')
+})
+
+test('from the second review: no query or header in a problem, no / \\ % in a URL parameter, the owner’s once, no prototype as a field (#273)', () => {
+  const said = problemsText(
+    [
+      ...conf('linux', {
+        a: { kind: 'http', url: 'http://api.example.com/x?key=qk-123#frag', body: '{{v}}' },
+        b: { kind: 'http', url: 'https://api.example.com/x', headers: 'Bearer hk-123', body: 7 },
+      }).sinks.values(),
+    ].flatMap(s => s.problems),
+    en,
+  )
+  for (const leak of ['qk-123', 'frag', 'hk-123']) assert.equal(said.includes(leak), false, said)
+  expect(said).toContain('http://api.example.com')
+  const http = conf('linux', {
+    s: {
+      kind: 'http',
+      url: 'https://api.example.com/v1/{{p}}?q={{q}}',
+      body: '{{v}}',
+      params: { p: 'text', q: 'text' },
+    },
+  }).sinks.get('s') as Sink
+  for (const bad of ['a/b', 'a\\b', '%2e%2e', '50%'])
+    assert.equal(checkRequest(http, { p: bad, q: 'x' }, []).ok, false, bad)
+  assert.equal(checkRequest(http, { p: 'ok', q: 'a/b' }, []).ok, false)
+  assert.equal(checkRequest(http, { p: 'ok-1', q: 'a b' }, []).ok, true)
+  // the owner's once holds whatever the request says
+  const owned = conf('linux', {
+    t: { kind: 'file', path: '~/t', template: '{{user}} {{token}}', once: ['token'] },
+    v: { kind: 'bitwarden', folder: 'A', item: 'x', once: ['password'] },
+    w: { kind: 'file', path: '~/w', template: '{{token}}', once: ['nope'] },
+  }).sinks
+  const t = checkRequest(owned.get('t') as Sink, {}, [])
+  assert.ok(t.ok)
+  assert.deepEqual(t.fields, [
+    { name: 'user', hidden: true },
+    { name: 'token', hidden: true, once: true },
+  ])
+  const v = checkRequest(owned.get('v') as Sink, {}, [{ name: 'password', hidden: true }])
+  assert.ok(v.ok)
+  assert.equal(v.fields[0]?.once, true)
+  expect(owned.get('w')?.problems.map(p => `${p.at} ${p.why}`)).toEqual(['secrets.sinks.w.once field'])
+  expect(problemsOf({ kind: 'http', url: 'https://a.example.com/', body: '{{v}}', once: ['v'] })).toContain(
+    'secrets.sinks.s.once unknown',
+  )
+  // an object's own key is no field
+  const env = conf('win32', { e: { kind: 'env', vars: '.*' } }).sinks.get('e') as Sink
+  assert.equal(checkRequest(env, {}, [{ name: '__proto__', hidden: true }]).ok, false)
+  assert.equal(checkRequest(env, {}, [{ name: 'GOOD_NAME', hidden: true }]).ok, true)
+})
+
+test('from the third review: a URL problem says the origin alone; a misplaced object or list only by its type (#273)', () => {
+  const said = problemsText(
+    [
+      ...conf('linux', {
+        hook: { kind: 'http', url: 'http://hooks.example.com/services/T0KEN-in-path', body: '{{v}}' },
+        bare: 'https://x.example.com/?key=bare-key',
+        listed: { kind: 'file', path: '~/x.json', format: 'json', at: { key: 'at-key' }, template: { a: '{{v}}' } },
+      }).sinks.values(),
+    ].flatMap(s => s.problems),
+    en,
+  )
+  for (const leak of ['T0KEN-in-path', 'bare-key', 'at-key']) assert.equal(said.includes(leak), false, said)
+  expect(said).toContain('http://hooks.example.com')
+  expect(said).toContain('not the right type: object')
+  expect(said).toContain('not the right type: string')
+  assert.equal(problemsText(conf('linux', ['a-key']).problems, en), 'secrets.sinks: not the right type: array')
+})
+
+test('the board’s own store: the one sink where config.json defines none and its section checks out; its places and its checks', () => {
+  const none = secretsConfig(undefined, { home: HOME_POSIX, platform: 'linux' })
+  assert.deepEqual([...withDefaultStore(none).sinks.keys()], ['store'])
+  assert.equal(onlyStore(withDefaultStore(none)), 'store')
+  assert.deepEqual([...withDefaultStore(secretsConfig({ sinks: {} }, { home: HOME_POSIX })).sinks.keys()], ['store'])
+  // a section that does not check out is said, not taken for none
+  const broken = secretsConfig({ sinks: 'x' }, { home: HOME_POSIX })
+  assert.equal(withDefaultStore(broken).sinks.size, 0)
+  // the owner's sinks: the store only where one says so
+  assert.deepEqual([...withDefaultStore(conf('linux')).sinks.keys()], [...conf('linux').sinks.keys()])
+  assert.equal(onlyStore(conf('linux')), null)
+  const own = secretsConfig({ sinks: { mine: { kind: 'store', title: 'Mine', once: ['A'] } } }, { home: HOME_POSIX })
+  assert.deepEqual(own.sinks.get('mine')?.problems, [])
+  assert.equal(onlyStore(own), 'mine')
+  expect(
+    problemsText(
+      secretsConfig({ sinks: { s: { kind: 'store', params: {} } } }, { home: HOME_POSIX }).sinks.get('s')?.problems ??
+        [],
+      en,
+    ),
+  ).toContain('secrets.sinks.s.params: not a known setting')
+  const store = own.sinks.get('mine') as Sink
+  const sid = '0F8FAD5B-D9CB-469F-A165-70867728950E'
+  assert.deepEqual(storePlace({ scope: 'session', session: sid }), { scope: 'session', target: sid.toLowerCase() })
+  assert.deepEqual(storePlace({ scope: 'profile', profile: 'work' }), { scope: 'profile', target: 'work' })
+  assert.deepEqual(storePlace({ scope: 'global' }), { scope: 'global', target: null })
+  assert.equal(storePlace({ scope: 'global', profile: 'work' }), null)
+  assert.equal(storePlace({ scope: 'session', session: 'pane-1' }), null)
+  assert.equal(storePlace({ session: sid }) !== null, true)
+  const ok = checkRequest(store, { scope: 'session', session: sid }, [{ name: 'A', hidden: true }])
+  assert.deepEqual(ok, {
+    ok: true,
+    params: { scope: 'session', session: sid.toLowerCase() },
+    fields: [{ name: 'A', hidden: true, once: true }],
+  })
+  assert.deepEqual(checkRequest(store, { scope: 'profile' }, [{ name: 'A', hidden: true }]), {
+    ok: false,
+    error: 'secret.err.paramMissing',
+    vars: { name: 'profile' },
+  })
+  assert.deepEqual(checkRequest(store, { scope: 'global' }, [{ name: 'LD_PRELOAD', hidden: true }]), {
+    ok: false,
+    error: 'secret.err.fieldReserved',
+    vars: { name: 'LD_PRELOAD' },
+  })
+  assert.equal(valueProblem(store, 'A', 'x'.repeat(64 * 1024 + 1)), 'secret.err.valueLong')
+  assert.equal(valueProblem(store, 'A', 'a b\nc'), null)
+  const t1 = targetOf(store, { scope: 'profile', profile: 'work' }, [{ name: 'A', hidden: true }], en)
+  assert.deepEqual([t1.kind, t1.where], ['store', 'A'])
+  expect(t1.detail).toContain('profile “work”')
+  assert.equal(
+    storeTarget({ scope: 'session', target: sid.toLowerCase() }, ['A', 'B']),
+    'secrets: A, B (session 0f8fad5b)',
+  )
 })

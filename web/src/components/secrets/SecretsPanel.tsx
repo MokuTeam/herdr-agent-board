@@ -1,5 +1,5 @@
 // Settings → Secrets…, a panel built like Remote access's parts (components/access): the owner's
-// secrets for the agents (src/core/secrets.ts), offered on the local board's page and on the
+// secrets for the agents (src/core/secret-store.ts), offered on the local board's page and on the
 // board's own server (models/settings-menu.ts offersSecrets). At the top how agents get them, when
 // a change applies and what the scopes do not guard against. Then a row per secret: its name,
 // where it applies, when it was set and when a session last got it, Replace (the form filled with
@@ -10,7 +10,7 @@
 
 import type { Ref } from 'react'
 import { useEffect, useRef } from 'react'
-import type { SecretMeta, SecretScope } from '../../../../src/core/secrets.ts'
+import type { SecretMeta, SecretScope } from '../../../../src/core/secret-store.ts'
 import { type SecretsActions, type SecretsNow, useSecrets } from '../../hooks/useSecrets.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import {
@@ -100,6 +100,7 @@ export function SecretsBody({ now, act, valueRef }: SecretsBodyProps) {
         <p className="access-line secrets-command">
           <code className="access-code">board secret file NAME</code> {t('secrets.file')}
         </p>
+        <p className="sheet-meta">{t('secrets.asked')}</p>
         <p className="sheet-meta">{t('secrets.order')}</p>
         <p className="sheet-meta">{t('secrets.when')}</p>
         <p className="sheet-meta">{t('secrets.limit')}</p>

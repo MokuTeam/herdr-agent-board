@@ -232,14 +232,17 @@ export function createTelegram(o: TelegramDeps): Telegram {
       const topic = first.topic ?? first.key
       if (!target) return missing(topic)
       return withPane(target.pane, async (): Promise<RouteResult> => {
+        // A sleeper whose pane wake closed wakes in a new tab (#204): the message goes there.
+        let pane = target.pane
         if (target.session) {
           const woke = await o.engine.wakePane(target.pane)
           if (!woke.ok) return notWoken(target.pane, woke, topic)
+          pane = woke.pane ?? pane
         }
-        const r = await deliverLive(target.pane, formatPrompt(items))
+        const r = await withPane(pane, () => deliverLive(pane, formatPrompt(items)))
         if (!('ok' in r)) return r
         o.log(
-          `delivered ${items.length} message(s) for ${first.key} to ${target.pane}${target.session ? ' after waking it' : ''}`,
+          `delivered ${items.length} message(s) for ${first.key} to ${pane}${target.session ? ' after waking it' : ''}`,
         )
         return target.session ? { ok: true, note: wokeNote(target.title) } : r
       })

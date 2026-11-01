@@ -5,7 +5,7 @@
 // the POST that carries it, either way, and is dropped as the panel closes: it is never in the
 // list, a toast, or anywhere else the page keeps things.
 import { useEffect, useState } from 'react'
-import type { SecretMeta, SecretsView } from '../../../src/core/secrets.ts'
+import type { SecretMeta, SecretsView } from '../../../src/core/secret-store.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 import { api, errorText } from '../api/client.ts'
 import { useT } from '../i18n/I18nProvider.tsx'

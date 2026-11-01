@@ -4,6 +4,7 @@ import type { FormQuestion } from './dialogs/question-form.ts'
 import type { HelperSummary } from './helpers.ts'
 import type { FailureKind } from './launch/launcher-command.ts'
 import type { ItemLinks } from './links.ts'
+import type { Todo } from './todos.ts'
 
 export type Lang = 'en' | 'ru'
 export type Vars = Record<string, string | number>
@@ -62,6 +63,8 @@ export interface Card {
    * the board marked to hear it on its next prompt; absent where presence was never on.
    */
   presenceSeen?: number
+  /** Its tasks (#202, core/todos.ts): the user's pins and the agent's `board todo`; absent when none. */
+  todos?: Todo[]
   [extra: string]: unknown
 }
 
@@ -187,6 +190,14 @@ export interface Config {
   presence?: unknown
   /** The board on its own server (`{ domain, socket }`), as config.json has it: read through core/on-server.ts serverModeOf. */
   serverMode?: unknown
+  /** Tasks (#202, `true` or an object), as config.json has it: read through core/todos.ts todosConfig. */
+  todos?: unknown
+  /** The backup of the board's database (#233), as config.json has it: read through core/backup.ts backupConfig. */
+  backup?: unknown
+  /** Time tracking (#233), as config.json has it: read through core/time.ts timeConfig. */
+  time?: unknown
+  /** Secrets through the board (#273), as config.json has it: read through core/secrets.ts secretsConfig. */
+  secrets?: unknown
   [extra: string]: unknown
 }
 
@@ -237,6 +248,8 @@ export interface Item {
   column: ColumnId
   attention: Attention
   sleeping?: boolean
+  /** Panes it had before, closed by wake as it went to sleep (#204), from its card: the board's links find it by them. */
+  formerPanes?: string[]
   /** A sleeper read from the new wake's session file, not answered by a wake (integrations/wake.ts); absent for the others. */
   fromFile?: true
   agent?: string
@@ -284,6 +297,8 @@ export interface Item {
   claudeRoot?: string | null
   /** Its own browser on the board's server (core/desktop.ts); absent when it has none, and always on a PC. */
   desktop?: ItemDesktop
+  /** Its tasks from its card (#202), while config.json turns them on; absent when none. */
+  todos?: Todo[]
   [extra: string]: unknown
 }
 

@@ -534,3 +534,98 @@ test('a broken profile in the file drops the entry: never listed or woken in the
   expect(sleepingOf(view(panes), read ?? {})).toEqual([])
   expect(findSession('Billing', view(panes), read ?? {})).toBeUndefined()
 })
+
+// #204: a sleeper whose pane wake closed, kept under its session id.
+const FREED = {
+  pane: 'w1:p9',
+  workspace: 'w1',
+  workspaceLabel: 'Счета 100%',
+  tabLabel: 'Billing',
+  topic: 'topic: 100% / Billing',
+  at: min(30),
+}
+const freedEntry = {
+  session: SID,
+  name: 'Billing',
+  cwd: PROJECT,
+  seen_at: min(31),
+  slept_at: min(31),
+  profileDir: WORK,
+  profile: 'work',
+  freed: FREED,
+}
+
+test('#204: a sleeper whose pane was closed is listed, without a pane, with its folder and workspace', () => {
+  const sessions = asWakeSessions({ [SID]: freedEntry, [SID2]: { ...freedEntry, session: SID2, freed: { pane: '' } } })
+  // A `freed` that does not read as one is left out: that entry is an old one, under a gone pane.
+  expect(sessions?.[SID2]).not.toHaveProperty('freed')
+  expect(sleepingOf(view([]), sessions ?? {})).toEqual([
+    {
+      name: 'Billing',
+      pane: '',
+      session: SID,
+      workspace: 'Счета 100%',
+      slept_at: new Date(min(31)).toISOString(),
+      exited: false,
+      profile: { dir: WORK, id: 'work' },
+      cwd: PROJECT,
+    },
+  ])
+  // Its workspace renamed since: herdr's label now.
+  const renamed = { workspaces: [{ workspace_id: 'w1', label: 'Bills' }], panes: [], takenAt: now }
+  expect(sleepingOf(renamed, { [SID]: freedEntry })[0]?.workspace).toBe('Bills')
+})
+
+test('#204: found by name or session id, never by a pane id herdr may have given to another pane', () => {
+  const sessions: WakeSessions = { [SID]: freedEntry }
+  for (const t of ['billing [0f8f]', SID.toUpperCase()])
+    expect(findSession(t, view([]), sessions)).toMatchObject({ pane: SID, live: false, freed: FREED })
+  expect(findSession('w1:p9', view([shell('w1:p9')]), sessions)).toBeUndefined()
+  // An entry of a pane herdr has goes first.
+  const both: WakeSessions = {
+    ...sessions,
+    'w1:p1': { session: SID2, name: 'Billing', seen_at: min(5), slept_at: min(5) },
+  }
+  expect(findSession('Billing', view([shell('w1:p1')]), both)?.pane).toBe('w1:p1')
+})
+
+test('#204: kept past 7 days without a pane; forgotten once it runs in a pane, never on an older view', () => {
+  const sessions = frozen({ [SID]: { ...freedEntry, seen_at: min(30 * 1440) } })
+  expect(rememberSeen(view([]), sessions, new Map(), now)).toMatchObject({ changed: false, sessions })
+  // A view taken before its pane was closed still shows it there: not woken.
+  const before = view([claude('w1:p9', SID)], min(31))
+  expect(rememberSeen(before, sessions, new Map(), now).sessions[SID]).toEqual(sessions[SID])
+  // Resumed in a new pane: that pane's entry, and the sleeper forgotten.
+  const after = rememberSeen(view([claude('w1:p20', SID)]), sessions, new Map([[SID, work]]), now)
+  expect(Object.keys(after.sessions)).toEqual(['w1:p20'])
+  expect(after.renames).toEqual([])
+  // A registry still has it just after its pane closed: kept; a minute on, outside herdr: forgotten.
+  const fresh = frozen({ [SID]: { ...freedEntry, freed: { ...FREED, at: now - 5000 } } })
+  expect(rememberSeen(view([]), fresh, new Map([[SID, work]]), now).sessions).toEqual(fresh)
+  expect(rememberSeen(view([]), sessions, new Map([[SID, work]]), now).sessions).toEqual({})
+})
+
+test('#243: a sleeper keeps the terminal it was judged in; awake again it has none, and one that is no string is left out', () => {
+  const read = asWakeSessions({
+    'w1:p2': {
+      session: SID,
+      name: 'Billing',
+      seen_at: min(5),
+      slept_at: min(5),
+      terminal: 'term_65ef9516d93293',
+      shellPid: 4321,
+    },
+    'w1:p3': { session: SID2, name: 'Docs', seen_at: min(5), slept_at: min(5), terminal: 7, shellPid: '4321' },
+    'w1:p4': { session: SID3, name: 'Ops', seen_at: min(5), slept_at: min(5), terminal: '' },
+  })
+  expect(read?.['w1:p2']).toMatchObject({ terminal: 'term_65ef9516d93293', shellPid: 4321 })
+  expect(read?.['w1:p3']).not.toHaveProperty('terminal')
+  expect(read?.['w1:p3']).not.toHaveProperty('shellPid')
+  expect(read?.['w1:p4']).not.toHaveProperty('terminal')
+  expect(markAwake(read ?? {}, 'w1:p2')?.['w1:p2']).toEqual({ session: SID, name: 'Billing', seen_at: min(5) })
+  // Claude seen back in the pane: awake, and its terminal note gone with its sleep.
+  const snap: SeenSnapshot = { panes: [claude('w1:p2', SID)], workspaces, takenAt: now }
+  const r = rememberSeen(snap, read ?? {}, new Map([[SID, work]]), now)
+  expect(r.sessions['w1:p2']).not.toHaveProperty('terminal')
+  expect(r.sessions['w1:p2']).not.toHaveProperty('slept_at')
+})

@@ -8,6 +8,7 @@
 // (hooks/useSegmentFolds.ts). The icon-only buttons' labels carry their text keys (`data-i18n`,
 // as upstream's page wrote them): the stylesheet hides a label beside its icon by that, leaving
 // it the button's name.
+
 import { type RefObject, useEffect, useRef } from 'react'
 import { useBoardView } from '../hooks/useBoardView.ts'
 import { useColumnWidths } from '../hooks/useColumnWidths.ts'
@@ -19,10 +20,12 @@ import type { SetupNoteState } from '../hooks/useSetupNote.ts'
 import { useStairs } from '../hooks/useStairs.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { pickedProfile, profileOptions } from '../models/profiles.ts'
+import { openMine } from '../models/todos.ts'
 import { columnHeads, documentTitle, laneOptions, scheduleBadge, summaryParts, summaryText } from '../models/toolbar.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
+import { BackupNote } from './BackupNote.tsx'
 import { ColumnsHead } from './ColumnsHead.tsx'
-import { AlarmIcon, ArchiveIcon, GearIcon, PlusIcon, SearchIcon, TagIcon } from './icons.tsx'
+import { AlarmIcon, ArchiveIcon, GearIcon, PlusIcon, SearchIcon, TagIcon, TasksIcon, TimeIcon } from './icons.tsx'
 import { Lanes } from './Lanes.tsx'
 import { Limits } from './Limits.tsx'
 import { LiveDot } from './LiveDot.tsx'
@@ -43,12 +46,18 @@ export interface ToolbarProps {
   onArchive?: () => void
   /** The quiet "Setup incomplete" note (hooks/useSetupNote.ts). */
   setup?: SetupNoteState
+  /** The backup's note (#233): Settings → Backup… on the board on this computer; none elsewhere. */
+  onBackup?: (() => void) | undefined
   /** Opens Settings → Sleep and wake…, from the quiet "Wake stopped" note (components/wake/WakeNote.tsx). */
   onWake?: () => void
   /** Settings, the gear's menu (hooks/useSettingsMenu.ts). */
   settings?: SettingsMenu
   /** The menus of the lanes control and the profile switch folded into pills (hooks/useSegmentPicks.ts). */
   picks?: SegmentPicks
+  /** Tasks (#202): their panel opens and closes; the button shows while the board has them on. */
+  onTodos?: () => void
+  /** Time (#233): its panel, while the board has time tracking on. */
+  onTime?: () => void
 }
 
 export function Toolbar({
@@ -58,9 +67,12 @@ export function Toolbar({
   onSchedule,
   onArchive,
   setup,
+  onBackup,
   onWake,
   settings,
   picks,
+  onTodos,
+  onTime,
 }: ToolbarProps) {
   const t = useT()
   const { data, ui, dispatch, canMutate, canEdit, now } = useBoardContext()
@@ -156,6 +168,31 @@ export function Toolbar({
                 {badge.count || ''}
               </span>
             </button>
+            {data?.todos && (
+              <button
+                type="button"
+                className="pill-toggle icon-only"
+                id="todos-open"
+                title={t('todo.openHint')}
+                onClick={() => onTodos?.()}
+              >
+                <TasksIcon />
+                <span>{t('todo.open')}</span>
+                <span className="n">{openMine(data.items) || ''}</span>
+              </button>
+            )}
+            {data?.time && (
+              <button
+                type="button"
+                className="pill-toggle icon-only"
+                id="time-open"
+                title={t('time.openHint')}
+                onClick={() => onTime?.()}
+              >
+                <TimeIcon />
+                <span>{t('time.open')}</span>
+              </button>
+            )}
             <button
               type="button"
               className="pill-toggle icon-only"
@@ -181,6 +218,7 @@ export function Toolbar({
             <NextAttention />
             <PresenceSwitch />
             {setup && <SetupNote setup={setup} />}
+            <BackupNote onOpen={onBackup} />
             {onWake && <WakeNote onOpen={onWake} />}
             <Limits anchor={limitsAnchor} />
             <LiveDot />

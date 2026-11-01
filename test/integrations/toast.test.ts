@@ -291,3 +291,68 @@ test.skipIf(!windows)(
   },
   60_000,
 )
+
+// On a call (#276): the toast goes to the notification center without popping up. Test-OnCall
+// runs on its own here against a state folder in a sandbox; the toast itself is never shown.
+const onCallPart = (): string => {
+  const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
+  const fn = /^function Test-OnCall \{\n[\s\S]*?\n\}$/m.exec(text)?.[0]
+  assert.ok(fn)
+  return fn
+}
+
+test('toast.ps1: quiet only while the board has the user on a call', () => {
+  const text = readFileSync(script, 'utf8')
+  assert.ok(text.includes('if ($Quiet) { $toast.SuppressPopup = $true }'))
+  assert.ok(text.includes('Show-Toast $title $body $attribution $env:HERDR_PANE_ID (Test-OnCall)'))
+  assert.equal(text.match(/SuppressPopup/g)?.length, 1)
+  assert.deepEqual(unsafeIn(onCallPart()), [])
+})
+
+test.skipIf(!windows)(
+  'toast.ps1: Test-OnCall reads the board’s presence.json, no file or another state is no call',
+  async () => {
+    const box: Sandbox = await sandbox()
+    const local = join(box.dir, 'local')
+    const roaming = join(box.dir, 'roaming')
+    const dir = join(local, 'herdr', 'plugins', 'agent-board')
+    const configDir = join(roaming, 'herdr', 'plugins', 'config', 'agent-board')
+    const ask = (env: Record<string, string> = {}) =>
+      Bun.spawnSync([powershell, '-NoProfile', '-Command', `${onCallPart()}\nTest-OnCall`], {
+        env: { ...process.env, LOCALAPPDATA: local, APPDATA: roaming, ...env },
+      })
+        .stdout.toString()
+        .trim()
+    assert.equal(ask(), 'False')
+    mkdirSync(dir, { recursive: true })
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(configDir, 'config.json'), JSON.stringify({ language: 'en', presence: { mode: 'auto' } }))
+    for (const [content, want] of [
+      ['{"state":"call","since":1,"by":"auto","before":"here"}', 'True'],
+      ['{"state":"here","since":1,"by":"auto"}', 'False'],
+      ['{"state":"away","since":1,"by":"user"}', 'False'],
+      ['not json', 'False'],
+    ] as const) {
+      writeFileSync(join(dir, 'presence.json'), content)
+      assert.equal(ask(), want, content)
+    }
+    writeFileSync(join(dir, 'presence.json'), '{"state":"call","since":1,"by":"auto"}')
+    assert.equal(ask({ LOCALAPPDATA: '' }), 'False')
+    // Presence as config.json has it: `true` or a section is on; anything else, or none, is off.
+    for (const [presence, want] of [
+      [true, 'True'],
+      [{}, 'True'],
+      [false, 'False'],
+      [1, 'False'],
+      ['yes', 'False'],
+      [[], 'False'],
+      [null, 'False'],
+    ] as const) {
+      writeFileSync(join(configDir, 'config.json'), JSON.stringify({ presence }))
+      assert.equal(ask(), want, JSON.stringify(presence))
+    }
+    writeFileSync(join(configDir, 'config.json'), '{"language":"en"}')
+    assert.equal(ask(), 'False')
+  },
+  30_000,
+)

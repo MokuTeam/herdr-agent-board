@@ -1,9 +1,9 @@
 // The quick look over the board (the old page's files.js root): its head with the kind's icon,
 // the name, the folders above to walk to and the tools (preview or source for Markdown, open with
 // the system, read the changes again, show in its folder, copy the path), what it shows, and a
-// footer of what it is, with an image's scale and a button in to 100% or back to fit. It lives in
-// <body> itself, beside the page (hooks/useModalFocus.ts); its motion, focus, keys and zoom are
-// hooks/useQuickLook.ts's.
+// footer of what it is, with the scale of an image or a PDF's pages and a button in to 100% or
+// back to fit. It lives in <body> itself, beside the page (hooks/useModalFocus.ts); its motion,
+// focus, keys and zoom are hooks/useQuickLook.ts's.
 import { Fragment, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Translator } from '../../../../src/core/types.ts'
@@ -21,6 +21,7 @@ import {
   type ZoomFoot,
   zoomBar,
 } from '../../models/files.ts'
+import { type PathMap, remoteTools } from '../../models/local-paths.ts'
 import {
   type FileLook,
   idOf,
@@ -31,20 +32,22 @@ import {
   type LookTarget,
   type LookView,
 } from '../../models/quick-look.ts'
+import { remotePage } from '../../models/remote-page.ts'
 import { boardOnServer } from '../../models/settings-menu.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
+import { localPaths } from '../../state/local-paths.ts'
 import { Store, useStore } from '../../state/store.ts'
 import { Changes, changesFoot } from '../sheet/Changes.tsx'
 import { FileIcon } from './FileChip.tsx'
 import { History, historyFoot } from './History.tsx'
-import { Preview } from './Preview.tsx'
+import { Preview, type PreviewProps } from './Preview.tsx'
 
 export interface LookHandlers {
   back(): void
   close(): void
   refresh(): void
   mode(mode: LookMode): void
-  act(how: 'open' | 'reveal' | 'copy'): void
+  act(how: 'open' | 'reveal' | 'copy' | 'local'): void
   go(path: string): void
   search(query: string): void
   upgrade(root: HTMLElement, cwd: string): void
@@ -59,6 +62,12 @@ export interface ImageSize {
   height: number
 }
 
+/** A PDF's pages, for the one they were read from. */
+export interface PageCount {
+  data: LookData
+  pages: number
+}
+
 export interface QuickLookViewProps {
   view: LookView
   /** Open and reveal need the board. */
@@ -67,10 +76,20 @@ export interface QuickLookViewProps {
   system?: boolean
   /** The run's token for the raw bytes (the board's fsToken). */
   token: string | null
+  /**
+   * The board on another device (models/remote-page.ts): its server folder → folder here list, for
+   * Download and the path here; none at the computer, where neither is offered.
+   */
+  local?: readonly PathMap[] | null
   image?: ImageSize | null
+  pages?: PageCount | null
   /** An image loaded (it zooms), and gone. */
   onImage?: (img: HTMLImageElement, data: FileLook) => void
   onImageGone?: (img: HTMLImageElement) => void
+  /** A PDF read, how many pages; its viewer zooms, and is gone. */
+  onPages?: (pages: number, data: FileLook) => void
+  onZoomable?: PreviewProps['onZoomable']
+  onZoomGone?: PreviewProps['onZoomGone']
   /** The zoom of the image on show, for the footer: only the footer draws again as it changes. */
   zoom?: Store<ZoomFoot>
   refs?: Partial<LookRefs>
@@ -90,7 +109,12 @@ function bodyClassOf(view: LookView): string {
 }
 
 /** The footer: what it is, how big, how many, when it was read or changed. */
-export function footOf(view: LookView, t: Translator, image: ImageSize | null = null): string {
+export function footOf(
+  view: LookView,
+  t: Translator,
+  image: ImageSize | null = null,
+  pages: PageCount | null = null,
+): string {
   const d = view.data
   if (view.hidden || !view.top) return ''
   if (view.top.kind === 'history') return historyFoot(view.top, t)
@@ -98,8 +122,10 @@ export function footOf(view: LookView, t: Translator, image: ImageSize | null = 
   if (isChangesLook(d)) return changesFoot(d, t).join(' · ')
   if (!isFileLook(d)) return ''
   const foot = previewFoot(d, t)
-  const own = image?.data === d && d.kind === 'image' && !d.error && !d.dir
-  return (own ? [`${image.width} × ${image.height}`, ...foot] : foot).join(' · ')
+  const plain = !d.error && !d.dir
+  if (image?.data === d && d.kind === 'image' && plain) foot.unshift(`${image.width} × ${image.height}`)
+  if (pages?.data === d && d.kind === 'pdf' && plain) foot.unshift(t('ql.pages', { n: pages.pages }))
+  return foot.join(' · ')
 }
 
 export function QuickLookView({
@@ -107,9 +133,14 @@ export function QuickLookView({
   canEdit,
   system = true,
   token,
+  local = null,
   image = null,
+  pages = null,
   onImage,
   onImageGone,
+  onPages,
+  onZoomable,
+  onZoomGone,
   zoom = NOTHING_ZOOMED,
   refs = {},
   on = {},
@@ -118,6 +149,8 @@ export function QuickLookView({
   // The past sessions say so in the page's language as it is now (the old page's relabel drew them again).
   const head = view.top?.kind === 'history' && !view.hidden ? { ...view.head, name: t('history.title') } : view.head
   const off = actionsOff(view.data, canEdit)
+  const file = view.data && isFileLook(view.data) && !view.hidden && !view.loading ? view.data : null
+  const remote = remoteTools(file, local, token)
   const label = (key: string) => ({ title: t(key), 'aria-label': t(key) })
   return (
     <div className="ql" hidden={view.hidden} ref={refs.layer}>
@@ -200,15 +233,44 @@ export function QuickLookView({
             >
               <FileIcon name="copy" />
             </button>
+            {remote.local && (
+              <button
+                type="button"
+                className="icon-button ql-local"
+                {...label('ql.copyLocal')}
+                onClick={() => on.act?.('local')}
+              >
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <rect x="2.5" y="3.5" width="15" height="10" rx="1.6" />
+                  <path d="M7 16.5h6M10 13.5v3m-1.6-5.9 1.6 1.6 1.6-1.6" />
+                </svg>
+              </button>
+            )}
+            {remote.download && (
+              <a className="icon-button ql-download" href={remote.download} download {...label('ql.download')}>
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="M10 3.5v9m-3.5-3.5 3.5 3.5 3.5-3.5M4 15.5h12" />
+                </svg>
+              </a>
+            )}
           </div>
           <button type="button" className="icon-button ql-close" {...label('sheet.close')} onClick={() => on.close?.()}>
             <FileIcon name="close" />
           </button>
         </header>
         <div className={bodyClassOf(view)} ref={refs.body}>
-          <LookBody view={view} token={token} onImage={onImage} onImageGone={onImageGone} on={on} />
+          <LookBody
+            view={view}
+            token={token}
+            onImage={onImage}
+            onImageGone={onImageGone}
+            onPages={onPages}
+            onZoomable={onZoomable}
+            onZoomGone={onZoomGone}
+            on={on}
+          />
         </div>
-        <LookFoot text={footOf(view, t, image)} zoom={zoom} onZoom={on.zoom} />
+        <LookFoot text={footOf(view, t, image, pages)} zoom={zoom} onZoom={on.zoom} />
       </section>
     </div>
   )
@@ -281,10 +343,13 @@ interface LookBodyProps {
   token: string | null
   onImage?: ((img: HTMLImageElement, data: FileLook) => void) | undefined
   onImageGone?: ((img: HTMLImageElement) => void) | undefined
+  onPages?: ((pages: number, data: FileLook) => void) | undefined
+  onZoomable?: PreviewProps['onZoomable']
+  onZoomGone?: PreviewProps['onZoomGone']
   on: Partial<LookHandlers>
 }
 
-function LookBody({ view, token, onImage, onImageGone, on }: LookBodyProps) {
+function LookBody({ view, token, onImage, onImageGone, onPages, onZoomable, onZoomGone, on }: LookBodyProps) {
   const t = useT()
   const top: LookTarget | null = view.top
   if (view.hidden || !top) return null
@@ -303,15 +368,24 @@ function LookBody({ view, token, onImage, onImageGone, on }: LookBodyProps) {
       onOpen={() => on.act?.('open')}
       onImage={img => onImage?.(img, d)}
       onImageGone={onImageGone}
+      onPages={n => onPages?.(n, d)}
+      onZoomable={onZoomable}
+      onZoomGone={onZoomGone}
     />
   )
 }
 
 /** The page's quick look, in <body> beside the page. */
+/** The quick look's paths list on the board at the computer: none. */
+const AT_THE_COMPUTER = new Store<PathMap[]>([])
+
 export function QuickLook({ engine }: { engine: QuickLookEngine }) {
   const view = useStore(engine.view)
   const { canEdit, data } = useBoardContext()
   const [image, setImage] = useState<ImageSize | null>(null)
+  const [pages, setPages] = useState<PageCount | null>(null)
+  // At the computer the kept list is not even read: its own store, always empty, and no tools drawn.
+  const maps = useStore(remotePage() ? localPaths() : AT_THE_COMPUTER)
   const { refs } = engine
   // Just opened: drawn now, it grows out of where it came from.
   useLayoutEffect(() => engine.grow())
@@ -336,12 +410,17 @@ export function QuickLook({ engine }: { engine: QuickLookEngine }) {
       canEdit={canEdit}
       system={!boardOnServer(data)}
       token={data?.fsToken ?? null}
+      local={remotePage() ? maps : null}
       image={image}
       onImage={(img, d) => {
         const own = engine.imageLoaded(img, d)
         if (own) setImage({ data: d, ...own })
       }}
       onImageGone={engine.imageGone}
+      pages={pages}
+      onPages={(n, d) => setPages({ data: d, pages: n })}
+      onZoomable={engine.zoomable}
+      onZoomGone={engine.zoomGone}
       zoom={engine.zoom}
       refs={refs}
       on={{

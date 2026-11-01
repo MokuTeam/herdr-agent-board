@@ -318,8 +318,23 @@ test('the skill install copies is upstream’s, word for word, but for what `boa
   // Pinned to the newest web merge ported, b2c5afa (#50 brought it, #51 changed it, #56 last, its `board archive`
   // line; nothing since, up to f0cef14); a later upstream change moves the pin. #60 added `board sleep`: its
   // section, the line pointing to it and its words in the description, taken out here; #130 its `--self`, in
-  // the same section and words.
+  // the same section and words. #279: what becomes of an archived session's reminders, after `board archive`.
+  // The board on its own server: wake's key on its port, a CLI's browser login in the agent's own browser, and
+  // the owner's secrets (the store and an agent's request, #273), each a line or a section of its own.
   const ours = read(root, 'skills', 'herdr-agents', 'SKILL.md')
+    .replace(
+      ' On the board\'s own server (`board doctor` says "Server mode") add `-H "X-Board-Key: $(cat ~/.local/state/herdr/plugins/agent-board/local-key)"`.',
+      '',
+    )
+    .replace(
+      /\nOn the board's own server \(your browser tools are `mcp__board-browser__\*`\)[\s\S]*?(?=\n## Restart yourself\n)/,
+      '',
+    )
+    .replace(/\n## Secrets\n[\s\S]*?(?=\n## Do not\n)/, '')
+    .replace(
+      ' Its board reminders wait with it, parked: `board schedule --session <name>` lists them, `board schedule --move <id>` moves one to you, `board unschedule <id>` removes one.',
+      '',
+    )
     .replace(' put the sessions it coordinates to sleep in one call (itself too, once its run is over),', '')
     .replace('- Putting sessions to sleep that you coordinate: see the next section, one call for all of them.\n', '')
     .replace(/## Put the sessions you are done with to sleep\n[\s\S]*?(?=## Do something later\n)/, '')

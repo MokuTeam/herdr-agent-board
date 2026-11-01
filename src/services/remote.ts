@@ -48,6 +48,8 @@ export interface Remote {
   deny(id: string): boolean
   /** Unpairs a device: its token stops working at once. */
   revoke(id: string): boolean
+  /** Marks a paired device as the owner's desk, or not (RemoteDevice.desk). */
+  desk(id: string, on: boolean): boolean
   /** The paired device a token is, used from the device it was given to; null for any other. */
   verify(token: string, who: Caller): RemoteDevice | null
   pending(): PairRequest[]
@@ -156,6 +158,21 @@ export function createRemote({ onChange, now = Date.now }: { onChange: () => voi
         ended([id])
         onChange()
       }
+      return found
+    },
+    desk(id, on) {
+      let found = false
+      save(list =>
+        list.map(d => {
+          // A desk is a browser: the phone app is told nothing of the flag (hello) and has no way
+          // to follow herdr. `off` still clears one left on any device.
+          if (d.id !== id || (on && kindOf(d) !== 'browser')) return d
+          found = true
+          const { desk: _, ...rest } = d
+          return on ? { ...rest, desk: true } : rest
+        }),
+      )
+      if (found) onChange()
       return found
     },
     verify(token, who) {

@@ -50,7 +50,8 @@ export function archiveBlock(
   if (!it || it.launchOnly || it.launch) return 'archive.why.starting'
   // Only a Claude session comes back: Return resumes it by its id.
   if (!it.session || it.agent !== 'claude') return 'archive.why.notClaude'
-  if (!it.pane) return 'archive.why.noPane'
+  // A sleeper whose pane wake closed (#204) has none to close: it goes all the same.
+  if (!it.pane && !it.sleeping) return 'archive.why.noPane'
   if (it.status === 'working') return 'archive.why.working'
   if (it.status === 'blocked') return 'archive.why.dialog'
   if (!it.sleeping && (it.helpers?.running || it.helpers?.workflows)) return 'archive.why.helpers'

@@ -19,8 +19,11 @@
 //                            herdr-wake put it to sleep and wake it again (MCP servers, settings,
 //                            hooks and skills load anew, the conversation stays), then types
 //                            "[board reminder; restarted as you asked] <text>" into it
-//   board schedule [--all]   this session's entries (every session's)
-//   board unschedule <id|all>    removes an entry (all: every entry of this session)
+//   board schedule [--all]   this session's entries (every session's); those parked with an
+//                            archived session too, marked (--session finds one by its name or pane)
+//   board schedule --move <id>   moves an entry parked with an archived session to this session
+//                            (or --session's), into the schedule as Return would put it back
+//   board unschedule <id|all>    removes an entry, a parked one too (all: every entry of this session)
 //   board call-report --session <id> --file <report.md> [--report-id <stable-id>]
 //                            a MokuPilot call's results (services/mokupilot.ts) for the
 //                            session it was a fork of: the board types them in once the session
@@ -34,6 +37,10 @@
 //                            too, with the board's own wake (#178). `board sleep <pane>
 //                            --pi-session <file>`: a pane where pi was stopped by hand, a shell
 //                            now, taken as that pi session asleep there
+//   board move <id|name|pane>... --profile <id> [--when-free]   moves those sessions to another
+//                            Claude profile, keeping their conversation (#250, services/move.ts): put
+//                            to sleep first when free (--when-free: the busy ones once they are),
+//                            their conversation copied there, card and wake switched; a line each
 //   board fork [--name <Name>] [note]   a fork of this session (or --session's): a new session in
 //                            a new tab with a copy of its conversation, started by the web board as
 //                            its Fork does (services/launch/fork.ts); the note is its first message
@@ -47,10 +54,32 @@
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
 //   board update [--ref <ref>]   on a server the board was installed on (server-install.sh): its
 //                            code moved to the ref it came from, or this one (services/server-update.ts)
-//   board presence [here|away]   whether the user is at the computer or away (core/presence.ts),
-//                            the line every session's context has; with a state, the user's switch
+//   board presence [here|away|call]   whether the user is at the computer, away or on a call
+//                            (core/presence.ts), the line every session's context has; with a
+//                            state, the user's switch
 //   board away [on|off]      the same switch: away (on, the default) or back at the computer (off).
 //                            Both only while config.json turns presence on; never sent to a session
+//   board secret request --title <what for> [--sink <id>] [--field <name>[:shown][:once]]...
+//                            [--param <name>=<value>]... [--global | --profile <id>] [--expires 30m]
+//                            [--no-wait]   asks the owner for values the agent must not be handed in
+//                            the chat (#273, entrypoints/secret-cli.ts): the owner fills a form on
+//                            the board, the board writes the sink config.json defines, or, with
+//                            none defined, keeps them in its own store (core/secret-store.ts) as
+//                            variables for this session (or --profile's, or --global); waits, then
+//                            prints ok, declined or expired, never a value.
+//                            status <id> [--wait] | cancel <id> | requests | sinks
+//   board secret set <NAME> [--profile <id> | --session <id|name|pane>]   the owner's secret for
+//                            every session, a profile's or one session's (core/secret-store.ts);
+//                            the value from stdin, or typed at a hidden prompt, never an argument
+//   board secret list        the store's secrets: name, scope, when set, when last used (never a value)
+//   board secret rm <NAME> [--profile <id> | --session <id|name|pane> | --global]   removes one
+//   board secret get <NAME>  prints the value this session gets (its session's, profile's or the
+//                            global one); for the calling session only
+//   board secret file <NAME> the same in a file of the session's own (0600, in memory), its path printed
+//   board todo add [--mine] "<text>" | done <id> | list   tasks (#202, core/todos.ts): what the
+//                            agent hands the user to do, or (--mine) a promise of its own it defers;
+//                            done closes its own; list shows this session's open ones. Only while
+//                            config.json turns tasks on with agents (`"todos": true`)
 //   board resume <session id> [--profile <id>]   resumes that session here, in the profile its
 //                            card says it ran in (else the one named): what herdr types into a
 //                            restored pane for a session in another profile than the default one
@@ -81,21 +110,25 @@
 //                            up while it runs; exits with its code. Its arguments as they came
 //   board browser-mcp        the agent's browser as an MCP server (stdio; services/browser-mcp.ts):
 //                            what the install puts in each Claude profile on the board's server
-//   board secret set <NAME> [--profile <id> | --session <id|name|pane>]   the owner's secret for
-//                            every session, a profile's or one session's (core/secrets.ts); the
-//                            value from stdin, or typed at a hidden prompt, never an argument
-//   board secret list        the secrets: name, scope, when set, when last used (never a value)
-//   board secret rm <NAME> [--profile <id> | --session <id|name|pane> | --global]   removes one
-//   board secret get <NAME>  prints the value this session gets (its session's, profile's or the
-//                            global one); for the calling session only
-//   board secret file <NAME> the same in a file of the session's own (0600, in memory), its path printed
 //   board launch <program> [args...]   runs the program (claude) with the secrets of its profile
 //                            (CLAUDE_CONFIG_DIR) and session (--resume, --session-id) in its env,
 //                            for MCP servers: what a profile's start command (an alias like cld-work)
 //                            calls; exits with its code
+//   board backup now | status | list [folder|server] | passphrase | folder <path> | folder off |
+//                            test <folder|server>   the backup of the board's database (#233,
+//                            services/backup.ts): a snapshot to every target now; how each stands;
+//                            the snapshots a target holds; the passphrase (two lines on stdin, never
+//                            an argument); the folder target; a real round trip to a target
+//   board time add | edit | move | rm | restore | show | list | day | projects | import   time
+//                            entries in the board's database (#233, entrypoints/time-cli.ts, where
+//                            each is spelled out), written as this session, its lane the client
+//   board db restore [--target folder|server] [--snapshot <name>] [--file <path>]
+//                            [--passphrase-file <file> | --passphrase-stdin] [--replace-file]   the database back as a
+//                            snapshot has it (the newest of the target when none is named); without
+//                            a target, the snapshots each target holds
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { join, resolve } from 'node:path'
 import { readArchiveLog } from '../adapters/archive-store.ts'
 import {
@@ -106,31 +139,40 @@ import {
   reportHash,
   reportIdentity,
 } from '../adapters/call-receipts.ts'
-import { readCard, writeCard } from '../adapters/cards.ts'
+import { changeTodos, readCard, writeCard } from '../adapters/cards.ts'
 import { createClaudeHome, cwdOf } from '../adapters/claude-home.ts'
 import { configFile, editCategories, loadConfig, setRemoteOn, setTunnelOn } from '../adapters/config-file.ts'
 import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { localFetch, readLocalKey } from '../adapters/local-key.ts'
-import { boardFile, secretStoreFile } from '../adapters/paths.ts'
+import { secretStoreFile } from '../adapters/paths.ts'
 import { findPiSession } from '../adapters/pi-home.ts'
 import { currentPresence, setPresence } from '../adapters/presence-store.ts'
 import { runHere } from '../adapters/process.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
-import { addEntry, askRestart, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
+import {
+  addEntry,
+  askRestart,
+  listEntries,
+  type NewEntry,
+  removeEntry,
+  schedulerRuns as schedulerRunsNow,
+} from '../adapters/schedule-store.ts'
 import { peekPiSleepers } from '../adapters/wake-files.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { CODEX_AGENT } from '../core/codex.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
+import { parseMove } from '../core/move.ts'
 import { onServer, serverModeChecks, serverModeOf, serverModeProblems } from '../core/on-server.ts'
 import { isPiSessionFile, piSessionId } from '../core/pi.ts'
-import { type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
+import { isPresenceState, type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
 import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
-import { type RemoteView, remoteConfig } from '../core/remote.ts'
+import { deskSteps, type RemoteView, remoteConfig } from '../core/remote.ts'
 import { parseResume, projectFolderName, resumeDir, resumePlan } from '../core/resume.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
+import { sortTodos, todosConfig, todosOf } from '../core/todos.ts'
 import { boardPorts, publicOrigin, type TestStep, tunnelChecks, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
 import type { Item } from '../core/types.ts'
 import { wakeConfig } from '../core/wake/config.ts'
@@ -139,13 +181,24 @@ import { keyFor, type TopicSnapshot } from '../core/wake/topics.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
 import { shortWhen } from '../core/when-format.ts'
 import { checkWake, wakeAnswers } from '../services/actions.ts'
-import { askArchive, closeDue, getArchived, profileDoubt } from '../services/archive.ts'
+import {
+  askArchive,
+  closeDue,
+  dropHeld,
+  dueAgain,
+  getArchived,
+  heldEntry,
+  listArchive,
+  moveHeld,
+  profileDoubt,
+} from '../services/archive.ts'
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
+import { type MoveOutcome, moveMany } from '../services/move.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | login [link | reset] | doctor | update [--ref <ref>] | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | browser ask <text> | browser profile [<name>] | browser open <url> [--ask <text>] | browser run [--ask <text>] -- <program> [args...] | secret set|list|rm|get|file [<NAME>] [--profile <id>] | launch <program> [args...]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | login [link | reset] | doctor | update [--ref <ref>] | presence [here | away | call] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | browser ask <text> | browser profile [<name>] | browser open <url> [--ask <text>] | browser run [--ask <text>] -- <program> [args...] | secret request --title "<what for>" [--sink <id>] [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--global | --profile <id>] [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret requests | secret sinks | secret set|list|rm|get|file [<NAME>] [--profile <id>] | launch <program> [args...] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -229,16 +282,23 @@ const liveSessions = (): Map<string, LiveHit> => {
   return deps.homes.liveSessions([profiles.inheritedDir, ...profiles.list.map(p => p.dir)])
 }
 
-/** { key, cwd } of the session the command is about. */
-async function resolveSession(): Promise<Session> {
+/**
+ * { key, cwd } of the session the command is about. `archived`: a --session name or pane that
+ * no session on the board has may be an archived one's (its entries wait in its record).
+ */
+async function resolveSession({ archived = false }: { archived?: boolean } = {}): Promise<Session> {
   if (target) {
     if (UUID.test(target)) return { key: target, cwd: '' }
     const t = target.toLowerCase()
     const item = (await collect(deps)).find(i =>
       [i.name, i.autoName, i.pane, i.session].some(v => v && v.toLowerCase() === t),
     )
-    if (!item) throw new Error(`no session "${target}" on the board`)
-    return { key: item.key, cwd: item.cwd, name: item.name, pane: item.pane }
+    if (item) return { key: item.key, cwd: item.cwd, name: item.name, pane: item.pane }
+    const r = archived
+      ? listArchive().find(x => [x.name, x.autoName, x.pane, x.session, x.key].some(v => v && v.toLowerCase() === t))
+      : undefined
+    if (!r) throw new Error(`no session "${target}" on the board${archived ? ' or in its archive' : ''}`)
+    return { key: r.key, cwd: r.cwd, name: r.name }
   }
   const pane = process.env.HERDR_PANE_ID
   const fromCodex = codexCaller()
@@ -327,22 +387,7 @@ function boardAnswer(): Promise<Record<string, unknown> | null> {
 }
 
 /** Whether a board that runs the schedule answers now. */
-async function schedulerRuns(): Promise<boolean> {
-  try {
-    if (cfg.web === false) {
-      // The terminal board runs the schedule itself then (entrypoints/tui.ts).
-      const board: unknown = JSON.parse(readFileSync(boardFile(), 'utf8'))
-      const pid = isRecord(board) ? board.pid : undefined
-      if (typeof pid !== 'number') return false
-      process.kill(pid, 0)
-      return true
-    }
-    const body = await boardAnswer()
-    return !!body && 'schedules' in body
-  } catch {
-    return false
-  }
-}
+const schedulerRuns = (): Promise<boolean> => schedulerRunsNow(cfg.web !== false, boardAnswer)
 
 /**
  * The profiles with the board's own: the folder the running web board says its env points to
@@ -400,7 +445,7 @@ function restartState(e: ScheduleEntry): string {
 /** The wake the board talks to, as its lines name it: the board's own (#119), else the separate herdr-wake plugin, as before. */
 const wakeName = (): string => (currentWakeMode(cfg).kind === 'new' ? 'wake' : 'herdr-wake')
 
-function entryLine(e: ScheduleEntry, now: number, withSession: boolean): string {
+function entryLine(e: ScheduleEntry, now: number, withSession: boolean, parked = false): string {
   const parts =
     e.kind === 'restart' || e.kind === 'sleep'
       ? [e.id, `${e.kind}, asked ${stamp(e.created ?? e.next)}`, restartState(e)]
@@ -411,10 +456,23 @@ function entryLine(e: ScheduleEntry, now: number, withSession: boolean): string 
           e.idle ? 'when free' : 'on time',
         ]
   if (withSession) parts.push(e.name || e.key)
+  if (parked) parts.push('parked in the archive')
   if (e.pendingSince && e.kind !== 'restart' && e.kind !== 'sleep')
     parts.push(`due, waits for the session since ${stamp(Number(e.pendingSince))}`)
   if (e.text) parts.push(clip(e.text, 80))
   return parts.join(' · ')
+}
+
+/**
+ * The lines of entries that wait with archived sessions: due as Return would put them back
+ * (services/archive.ts dueAgain), then what else can be done with them.
+ */
+function parkedLines(held: ScheduleEntry[], now: number, withSession: boolean): string[] {
+  if (!held.length) return []
+  return [
+    ...held.map(e => entryLine({ ...e, next: dueAgain(e, now) ?? e.next }, now, withSession, true)),
+    'parked entries come back with their session; board schedule --move <id> moves one to this session (--session <id|name|pane>: to that one), board unschedule <id> removes it',
+  ]
 }
 
 function line(key: string, cwd: string): string {
@@ -430,7 +488,48 @@ function line(key: string, cwd: string): string {
 }
 
 /**
- * `board presence [here|away]` and `board away [on|off]`: the user's presence (#172), read or
+ * `board todo add [--mine] "<text>" | done <id> | list` (#202): the agent's side of the tasks, on
+ * this session's card, under its lock (adapters/cards.ts changeTodos). Refused while tasks are off,
+ * or on for the user's pins only.
+ */
+function todo(key: string): void {
+  const usage = 'usage: board todo add [--mine] "<text>" | board todo done <id> | board todo list'
+  const conf = todosConfig(cfg.todos)
+  if (!conf) throw new Error(t('todo.err.off'))
+  if (!conf.agents) throw new Error(t('todo.err.agentsOff'))
+  const [sub = 'list', ...args] = rest
+  if (sub === 'list') {
+    const open = sortTodos(todosOf(readCard(key)?.todos)).filter(x => !x.done)
+    if (!open.length) {
+      console.log('no open tasks for this session')
+      return
+    }
+    for (const x of open) console.log(`${x.id} · ${x.owner === 'agent' ? 'yours' : "the user's"} · ${x.text}`)
+    return
+  }
+  if (sub === 'add') {
+    const mine = args.includes('--mine')
+    const words = args
+      .filter(a => a !== '--mine')
+      .join(' ')
+      .trim()
+    if (!words) throw new Error(usage)
+    const r = changeTodos(key, { op: 'add', text: words, owner: mine ? 'agent' : 'user', by: 'agent' })
+    if (!r.ok) throw new Error(t(r.error))
+    console.log(`ok · task ${r.todo?.id} · ${mine ? 'yours' : "the user's"}`)
+    return
+  }
+  if (sub === 'done' && args[0]) {
+    const r = changeTodos(key, { op: 'done', id: args[0], by: 'agent' })
+    if (!r.ok) throw new Error(t(r.error))
+    console.log(`ok · task ${args[0]} done`)
+    return
+  }
+  throw new Error(usage)
+}
+
+/**
+ * `board presence [here|away|call]` and `board away [on|off]`: the user's presence (#172), read or
  * switched in its file, so with the board closed too; the board shows a switch at its next look.
  * While config.json has no `presence` it is off, and a switch is refused: no file appears.
  */
@@ -445,11 +544,11 @@ function presence(): void {
           : null
       : word === ''
         ? null
-        : word === 'here' || word === 'away'
+        : isPresenceState(word)
           ? word
           : null
   if (word && !state)
-    throw new Error(cmd === 'away' ? 'usage: board away [on|off]' : 'usage: board presence [here|away]')
+    throw new Error(cmd === 'away' ? 'usage: board away [on|off]' : 'usage: board presence [here|away|call]')
   if (!presenceConfig(cfg.presence)) {
     if (!state) {
       console.log('presence is off (no "presence" in config.json; Settings → Presence turns it on)')
@@ -462,7 +561,7 @@ function presence(): void {
     return
   }
   const { presence: p, changed } = setPresence(state, 'user', process.env.HERDR_PANE_ID ? 'agent' : 'cli')
-  console.log(`ok · ${changed ? '' : 'already '}${p.state === 'away' ? 'away' : 'here'}`)
+  console.log(`ok · ${changed ? '' : 'already '}${p.state}`)
 }
 
 async function main(): Promise<void> {
@@ -499,7 +598,13 @@ async function main(): Promise<void> {
   if (cmd === 'doctor') {
     const { gatherFacts } = await import('../adapters/setup-facts.ts')
     const { checkSetup, report } = await import('../core/setup.ts')
-    const checks = checkSetup(await gatherFacts(cfg), t)
+    const facts = await gatherFacts(cfg)
+    const checks = checkSetup(facts, t)
+    // What herdr's panes hold (#243): asked here only, not in the web board's setup note.
+    const { paneFacts } = await import('../adapters/pane-facts.ts')
+    const { paneChecks, wakeKeepsSleepers } = await import('../core/pane-report.ts')
+    const panes = await paneFacts(wakeKeepsSleepers(facts.wakeNew?.state))
+    if (panes) checks.push(...paneChecks(panes, t))
     const webPort = Number(cfg.port) || 12422
     // The remote mode's own checks, only while it is on: off, Tailscale is never asked.
     if (remoteConfig(cfg.remote).on) {
@@ -524,21 +629,36 @@ async function main(): Promise<void> {
       const { shownProfiles } = await import('../core/profiles.ts')
       checks.push(...desktopChecks(desktopDoctorFacts(shownProfiles(deps.profiles().list)), t))
     }
+    // The board's database and its backup (#233), once there is either: else nothing is asked.
+    const { backupChecks } = await import('../services/backup.ts')
+    checks.push(...backupChecks(cfg, t))
+    // Time tracking's config (#233), while time is on.
+    const { timeChecks } = await import('../services/time.ts')
+    checks.push(...timeChecks(cfg, t))
+    // The secret sinks' config (#273), once config.json has `secrets`.
+    const { secretsChecks } = await import('../services/secrets.ts')
+    checks.push(...secretsChecks(cfg, t))
     return console.log(report(checks, t))
   }
 
   // Neither needs to know which session asks.
   if (cmd === 'schedule' && rest.includes('--all')) {
     const list = listEntries()
-    if (!list.length) return console.log('nothing scheduled')
+    const parked = listArchive().flatMap(r => r.held)
+    if (!list.length && !parked.length) return console.log('nothing scheduled')
     for (const e of list) console.log(entryLine(e, Date.now(), true))
+    for (const l of parkedLines(parked, Date.now(), true)) console.log(l)
     return
   }
   if (cmd === 'unschedule' && rest[0] && rest[0].toLowerCase() !== 'all') {
-    const e = removeEntry(rest[0].toLowerCase())
+    const id = rest[0].toLowerCase()
+    // Not in the schedule: one parked with an archived session goes from its record.
+    const removed = removeEntry(id)
+    const held = removed ? null : heldEntry(id)
+    const e = removed ?? (held && dropHeld(held.record.key, id)[0])
     if (!e) throw new Error(`no entry "${rest[0]}"; see board schedule`)
     return console.log(
-      `ok · removed ${e.id} (${e.cron ? `every "${e.cron}"` : stamp(e.next)}${e.name ? `, ${e.name}` : ''}): ${clip(e.text)}`,
+      `ok · removed ${e.id} (${e.cron ? `every "${e.cron}"` : stamp(e.next)}${e.name ? `, ${e.name}` : ''}${held ? ', parked in the archive' : ''}): ${clip(e.text)}`,
     )
   }
   if (cmd === 'call-report') return callReport()
@@ -550,8 +670,12 @@ async function main(): Promise<void> {
     process.exitCode = await update(rest)
     return
   }
+  if (cmd === 'backup') return backupCmd()
+  if (cmd === 'time') return timeCommand()
+  if (cmd === 'db') return dbCmd()
   if (cmd === 'archive') return archive()
   if (cmd === 'sleep') return sleep()
+  if (cmd === 'move') return move()
   if (cmd === 'fork') return fork()
   if (cmd === 'resume') return rest.includes('--pi') ? resumePi() : resume()
   if (cmd === 'tg-key') return tgKey()
@@ -561,7 +685,11 @@ async function main(): Promise<void> {
   if (cmd === 'secret') return secret()
   if (cmd === 'launch') return launch()
 
-  const s = await resolveSession()
+  // schedule --move <id>: a parked entry to this session (or --session's, which must be on the board).
+  const mv = cmd === 'schedule' ? rest.indexOf('--move') : -1
+  const moving = mv >= 0 ? (rest[mv + 1] ?? '') : null
+  // Listing and removing reach an archived session's parked entries; nothing else is for one.
+  const s = await resolveSession({ archived: (cmd === 'schedule' && moving === null) || cmd === 'unschedule' })
   const now = Date.now()
   switch (cmd) {
     case 'show':
@@ -656,17 +784,23 @@ async function main(): Promise<void> {
     case 'restart':
       return restart(s)
     case 'schedule': {
+      if (moving !== null) return moveParked(moving, s, now)
       const list = listEntries().filter(e => e.key === s.key)
-      if (!list.length) return console.log('nothing scheduled for this session')
+      const parked = getArchived(s.key)?.held ?? []
+      if (!list.length && !parked.length) return console.log('nothing scheduled for this session')
       for (const e of list) console.log(entryLine(e, now, false))
+      for (const l of parkedLines(parked, now, false)) console.log(l)
       return
     }
+    case 'todo':
+      return todo(s.key)
     case 'unschedule': {
-      // An id is removed above, whoever set it; here only "all" of this session's.
+      // An id is removed above, whoever set it; here only "all" of this session's, parked ones too.
       if (rest[0]?.toLowerCase() !== 'all') throw new Error('usage: board unschedule <id|all>')
       const mine = listEntries().filter(e => e.key === s.key)
       for (const e of mine) removeEntry(e.id)
-      return console.log(`ok · removed ${mine.length} ${mine.length === 1 ? 'entry' : 'entries'}`)
+      const n = mine.length + dropHeld(s.key).length
+      return console.log(`ok · removed ${n} ${n === 1 ? 'entry' : 'entries'}`)
     }
     default:
       throw new Error(`unknown command "${cmd}". ${USAGE}`)
@@ -674,6 +808,25 @@ async function main(): Promise<void> {
   const cat = readCard(s.key)?.category
   const extra = cat && !cfg.categories.some(c => c.id === cat) ? ` (new lane "${categoryInfo(cfg, cat).title}")` : ''
   console.log(`ok · ${line(s.key, s.cwd)}${extra}`)
+}
+
+/**
+ * `board schedule --move <id>`: an entry parked with an archived session moves to this session (or
+ * --session's), with its pane and folder, into the schedule as Return would put it back
+ * (services/archive.ts moveHeld). Only to a session that is not in the archive itself; an entry
+ * in the schedule already is not moved.
+ */
+async function moveParked(id: string, s: Session, now: number): Promise<void> {
+  if (!id) throw new Error('usage: board schedule --move <id> [--session <id|name|pane>]')
+  if (getArchived(s.key))
+    throw new Error(`${s.name || s.key} is in the archive too; move the entry to a session on the board`)
+  const { from, ...to } = await entryFor(s)
+  const e = moveHeld(id.toLowerCase(), to)
+  if (!e) throw new Error(`no entry "${id}" is parked in the archive; see board schedule --all`)
+  const when = e.cron ? `every "${e.cron}", next ${stamp(e.next)}` : stamp(e.next)
+  console.log(
+    `ok · moved ${e.id} to ${to.name || to.key.slice(0, 8)}: ${when} (${fromNow(e.next, now)}): ${clip(e.text)} · cancel: board unschedule ${e.id}${await schedulerNote()}`,
+  )
 }
 
 /**
@@ -802,7 +955,7 @@ async function resume(): Promise<void> {
 
 /**
  * `env` with the owner's secrets for Claude started in the profile folder `dir`, for `session`
- * (services/secrets.ts launchEnv); `env` itself when no secret was ever set here.
+ * (services/secret-store.ts launchEnv); `env` itself when no secret was ever set here.
  */
 async function withSecrets(
   env: Record<string, string | undefined>,
@@ -810,7 +963,7 @@ async function withSecrets(
   session: string | null,
 ): Promise<Record<string, string | undefined>> {
   if (!existsSync(secretStoreFile())) return env
-  const { callerOf, launchEnv } = await import('../services/secrets.ts')
+  const { callerOf, launchEnv } = await import('../services/secret-store.ts')
   return launchEnv(env, callerOf(deps.profiles().list, dir, session))
 }
 
@@ -825,7 +978,7 @@ async function launch(): Promise<void> {
   const given = process.argv.slice(at + 1)
   const [program, ...argv] = given[0] === '--' ? given.slice(1) : given
   if (!program) throw new Error('usage: board launch <program> [args...] (claude and its arguments)')
-  const { sessionInArgs } = await import('../core/secrets.ts')
+  const { sessionInArgs } = await import('../core/secret-store.ts')
   const env = await withSecrets(
     process.env,
     resolveProfileDir(process.env.CLAUDE_CONFIG_DIR, homedir()),
@@ -836,15 +989,26 @@ async function launch(): Promise<void> {
   process.exit(ran.code)
 }
 
-const SECRET_USAGE =
-  'usage: board secret set <NAME> [--profile <id> | --session <id|name|pane>] (the value from stdin or a hidden prompt) | list | rm <NAME> [--profile <id> | --session <id|name|pane> | --global] | get <NAME> | file <NAME>'
+const STORE_USAGE =
+  'board secret set <NAME> [--profile <id> | --session <id|name|pane>] (the value from stdin or a hidden prompt) | list | rm <NAME> [--profile <id> | --session <id|name|pane> | --global] | get <NAME> | file <NAME>'
 
-/** `board secret …`: the owner's secrets for the agents (services/secrets.ts). In English, for agents and the owner alike. */
+/** The words that are an agent's request to the owner (entrypoints/secret-cli.ts), not the store's own. */
+const REQUEST_OPS = new Set(['request', 'status', 'cancel', 'requests', 'sinks'])
+
+/**
+ * `board secret …`: one command for both halves of the owner's secrets. An agent's request to the
+ * owner (request, status, cancel, requests, sinks: entrypoints/secret-cli.ts, #273) goes on its
+ * card; the store's own (set, list, rm, get, file: services/secret-store.ts) is the owner's list
+ * and what a session reads of it. In English, for agents and the owner alike.
+ */
 async function secret(): Promise<void> {
   const [sub = 'list', ...more] = rest
+  if (REQUEST_OPS.has(sub)) return secretCommand()
+  const { SECRET_USAGE: REQUEST_USAGE } = await import('./secret-cli.ts')
+  const SECRET_USAGE = `usage: ${STORE_USAGE}\n${REQUEST_USAGE}`
   const store = await import('../adapters/secret-store.ts')
-  const { secretProblem } = await import('../services/secrets.ts')
-  const { nameProblem, secretId } = await import('../core/secrets.ts')
+  const { secretProblem } = await import('../services/secret-store.ts')
+  const { nameProblem, secretId } = await import('../core/secret-store.ts')
   const at = more.indexOf('--profile')
   const profile = at >= 0 ? more[at + 1] : undefined
   if (at >= 0) more.splice(at, 2)
@@ -880,7 +1044,7 @@ async function secret(): Promise<void> {
       throw new Error(`board secret ${sub} is for the calling session only: no --session, --profile or --global`)
     if (!name || nameProblem(name) === 'name') throw new Error(SECRET_USAGE)
     const s = await resolveSession()
-    const { callerOf } = await import('../services/secrets.ts')
+    const { callerOf } = await import('../services/secret-store.ts')
     const who = callerOf(profiles, resolveProfileDir(process.env.CLAUDE_CONFIG_DIR, homedir()), s.key)
     const got = store.secretsFor(who).find(x => x.name === name)
     if (!got) throw new Error(`no secret ${name} for this session (board secret list)`)
@@ -1167,6 +1331,40 @@ async function sleep(): Promise<void> {
   console.log([`ok · ${head.filter(Boolean).join(', ')}${hint}${note}`, ...results.map(sleepLine)].join('\n'))
 }
 
+/** One session's line for `board move`: who, then moved, moved once free, or refused and why. */
+function moveLine(o: MoveOutcome, profile: string): string {
+  const who = o.name ? `${o.name}${o.pane ? ` (${o.pane})` : ''}` : `"${o.target}"`
+  if (o.result === 'moved') return `${who}: moved to ${profile}${o.notes?.length ? ` · ${o.notes.join(' · ')}` : ''}`
+  const s = o.sleep
+  if (o.result === 'scheduled' && s)
+    return `${who}: ${keptBy(s)}; goes to sleep once it is free, then moves to ${profile}${s.again ? ' (asked before)' : ''} · cancel: board unschedule ${s.id}`
+  if (!s) return `${who}: refused, ${o.why ?? ''}`
+  // Held for what passes: put to sleep by hand, or moved once it is free.
+  const passes = ['busy', 'dialog', 'draft', 'tasks'].includes(s.why ?? '')
+  const hint = passes ? `; put it to sleep first (board sleep ${o.key ?? o.target}), or add --when-free` : ''
+  return `${who}: refused, ${keptBy(s)}${hint}`
+}
+
+/**
+ * `board move <id|name|pane>... --profile <id> [--when-free]` (#250): the sessions moved to another
+ * Claude profile, keeping their conversation (services/move.ts); a line for each. In English for
+ * agents, whatever language the board speaks.
+ */
+async function move(): Promise<void> {
+  const { targets, profile } = parseMove([...rest, ...(target ? [target] : [])])
+  const from = await ownSession()
+  const items = await collect(deps)
+  const results = await moveMany(deps, items, targets, { profile, whenFree, by: 'agent', ...(from && { from }) })
+  const count = (result: MoveOutcome['result']): number => results.filter(o => o.result === result).length
+  const head = [
+    `${count('moved')} moved to ${profile}`,
+    count('scheduled') && `${count('scheduled')} once free`,
+    count('refused') && `${count('refused')} refused`,
+  ]
+  const note = count('scheduled') ? await schedulerNote() : ''
+  console.log([`ok · ${head.filter(Boolean).join(', ')}${note}`, ...results.map(o => moveLine(o, profile))].join('\n'))
+}
+
 /**
  * `board sleep <pane> --pi-session <file>` (#178): a pane at its shell where a pi session was
  * stopped by hand, taken by the board's wake as that session asleep there: its card shows it
@@ -1203,15 +1401,16 @@ async function adoptPi(): Promise<void> {
 }
 
 /**
- * `board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>]`: the remote mode
+ * `board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]]`: the remote mode
  * (core/remote.ts). On and off edit config.json (off takes back `tailscale serve` too); `pwa`
  * sets serve up for the board in a phone's browser (core/pwa.ts) and shows its address and QR
- * code; the rest goes through the running board, which holds the requests to pair. Without an
+ * code; the rest goes through the running board, which holds the requests to pair. `desk` marks a
+ * paired device as the owner's desk (RemoteDevice.desk), `desk <id> off` takes it back. Without an
  * argument: where it listens, who waits, who is paired.
  */
 async function remote(): Promise<void> {
   const [op = 'status', id = ''] = rest
-  const usage = 'usage: board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>]'
+  const usage = 'usage: board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]]'
   const webPort = Number(cfg.port) || 12422
   if (op === 'pwa') {
     const { pwaOff, pwaOn } = await import('../services/pwa.ts')
@@ -1247,6 +1446,26 @@ async function remote(): Promise<void> {
       throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
     }
   }
+  if (op === 'desk') {
+    if (!id || (rest[2] !== undefined && rest[2] !== 'off')) throw new Error(usage)
+    const off = rest[2] === 'off'
+    const body = JSON.stringify({ op: off ? 'undesk' : 'desk', id })
+    const r = await call({ method: 'POST', headers: { 'content-type': 'application/json', 'x-board': '1' }, body })
+    if (!isRecord(r) || r.ok !== true) {
+      const why = isRecord(r) && typeof r.error === 'string' ? ` (${r.error})` : ''
+      const what = off ? `no device ${id}` : `no paired browser ${id} to make a desk`
+      throw new Error(`${what}${why}: \`board remote\` lists them`)
+    }
+    if (off) return console.log(`ok · ${id} is a phone again`)
+    console.log(`ok · ${id} is your desk: Go to herdr and answering phones work from it; reload its board`)
+    const view = (await call().catch(() => null)) as Partial<RemoteView> | null
+    let host: string | null = null
+    try {
+      host = view?.url ? new URL(view.url).hostname : null
+    } catch {}
+    for (const line of deskSteps(userInfo().username, host)) console.log(line)
+    return
+  }
   if (op === 'approve' || op === 'deny' || op === 'revoke') {
     if (!id) throw new Error(usage)
     const body = JSON.stringify({ op, id })
@@ -1269,7 +1488,7 @@ async function remote(): Promise<void> {
     )
   for (const d of view.devices ?? [])
     console.log(
-      `paired: ${d.id} "${d.name}"${d.kind === 'browser' ? ' (browser)' : ''} on ${d.device} (${d.login})${d.seenAt ? `, seen ${stamp(d.seenAt)}` : ''}`,
+      `paired: ${d.id} "${d.name}"${d.kind === 'browser' ? ' (browser)' : ''} on ${d.device} (${d.login})${d.seenAt ? `, seen ${stamp(d.seenAt)}` : ''}${d.desk ? ' · desk' : ''}`,
     )
 }
 
@@ -1296,6 +1515,171 @@ const isStep = (v: unknown): v is TestStep =>
  * Remote access…). Test runs Test connection on the running board. Without an argument: where the
  * tunnel stands, as the running board says. In English, whatever language the board speaks.
  */
+/**
+ * `board time …` (#233, entrypoints/time-cli.ts): as the session that runs it, its lane the client
+ * when none is named; outside a session, as the owner.
+ */
+async function timeCommand(): Promise<void> {
+  const own = await ownSession()
+  const card = own ? readCard(own.key) : null
+  const lane = (typeof card?.category === 'string' && card.category) || categoryFor(cfg, process.cwd())
+  const { timeCmd } = await import('./time-cli.ts')
+  // under --json an error is printed as JSON, and the exit code says it failed
+  process.exitCode = await timeCmd(rest, { cfg, actor: own ? { key: own.key, name: own.name ?? '' } : 'user', lane })
+}
+
+/** `board secret request|status|cancel|requests|sinks` (#273, entrypoints/secret-cli.ts): the request goes on this session's card. */
+async function secretCommand(): Promise<void> {
+  const own = await ownSession()
+  const { secretCmd } = await import('./secret-cli.ts')
+  process.exitCode = await secretCmd(rest, {
+    cfg,
+    session: own ? { key: own.key, name: own.name ?? '' } : null,
+    out: line => console.log(line),
+  })
+}
+
+/** A flag's value: `--name value` in the command's words; undefined when it is not there. */
+function option(name: string): string | undefined {
+  const i = rest.indexOf(name)
+  return i >= 0 ? rest[i + 1] : undefined
+}
+
+/** `board backup …` (#233): the backup of the board's database (services/backup.ts). */
+async function backupCmd(): Promise<void> {
+  const [op = 'status', arg] = rest
+  const backup = await import('../services/backup.ts')
+  const { activeTargets, backupConfig, isTarget, problemSentence } = await import('../core/backup.ts')
+  const c = backupConfig(cfg.backup)
+  if (op === 'now') {
+    const r = await backup.backupNow({ cfg, force: true })
+    if (r.nothing) return console.log(t('backup.cli.nothing'))
+    if (!r.sent.length && !r.failed.length) return console.log(t('backup.cli.noTargets'))
+    for (const s of r.sent) console.log(t('backup.cli.sent', { target: s.target, name: s.name }))
+    for (const f of r.failed) console.log(t('backup.cli.failed', { target: f.target, error: f.error }))
+    if (r.failed.length) process.exitCode = 1
+    return
+  }
+  if (op === 'status') {
+    const v = backup.backupView(cfg)
+    if (!v.needed) console.log(t('backup.cli.nothing'))
+    for (const target of activeTargets(v.config)) {
+      const s = v.states[target]
+      const state = s?.lastOk ? t('backup.state.ok', { when: clock(s.lastOk) }) : t('backup.state.never')
+      console.log(`${target} · ${state}${s?.error ? ` · ${t('backup.state.error', { error: s.error })}` : ''}`)
+    }
+    for (const p of v.problems) console.log(`! ${problemSentence(p, t)}`)
+    if (v.problems.length) process.exitCode = 1
+    return
+  }
+  if (op === 'list') {
+    const targets = arg ? (isTarget(arg) ? [arg] : []) : activeTargets(c)
+    if (!targets.length) throw new Error(arg ? t('backup.cli.usage') : t('backup.cli.noTargets'))
+    for (const target of targets) {
+      const list = await backup.listAt(target, c)
+      console.log(t('backup.cli.list', { target, n: list.length }))
+      for (const x of list) console.log(`  ${x.name}  ${Math.ceil(x.size / 1024)} KB`)
+    }
+    return
+  }
+  if (op === 'passphrase') {
+    // never an argument (it would stay in the shell's history and the process list), never typed on a terminal here
+    if (process.stdin.isTTY) throw new Error(t('backup.cli.usage'))
+    const { readStdin } = await import('../adapters/stdin.ts')
+    const [first = '', second = ''] = (await readStdin()).split(/\r?\n/)
+    const r = await backup.setPassphrase(first, second)
+    if (!r.ok) throw new Error(r.error)
+    return console.log(t('backup.cli.passphraseSet'))
+  }
+  if (op === 'folder') {
+    const { editBackup } = await import('../adapters/config-file.ts')
+    if (arg === 'off') {
+      const r = editBackup({ folder: null })
+      if (!r.ok) throw new Error(r.error)
+      backup.resetTarget('folder')
+      return console.log(t('backup.cli.folderOff'))
+    }
+    if (!arg) throw new Error(t('backup.cli.usage'))
+    const folder = resolve(arg)
+    const { folderProblem } = await import('../adapters/backup-store.ts')
+    const problem = folderProblem(folder)
+    if (problem) throw new Error(t(problem, { folder }))
+    const r = editBackup({ folder })
+    if (!r.ok) throw new Error(r.error)
+    backup.resetTarget('folder')
+    return console.log(t('backup.cli.folderSet', { folder }))
+  }
+  if (op === 'test' && isTarget(arg)) {
+    const r = await backup.testTarget(arg, cfg)
+    if (!r.ok) throw new Error(r.error ?? '')
+    return console.log(t('backup.tested', { name: r.name ?? '' }))
+  }
+  throw new Error(t('backup.cli.usage'))
+}
+
+/** `board db restore …` (#233): the board's database back as a snapshot has it (services/backup.ts restore). */
+async function dbCmd(): Promise<void> {
+  const [op] = rest
+  if (op !== 'restore') throw new Error(t('backup.cli.restoreUsage'))
+  const backup = await import('../services/backup.ts')
+  const { activeTargets, backupConfig, isTarget } = await import('../core/backup.ts')
+  const target = option('--target')
+  const file = option('--file')
+  const name = option('--snapshot')
+  const passFile = option('--passphrase-file')
+  if (target !== undefined && !isTarget(target)) throw new Error(t('backup.cli.restoreUsage'))
+  if (!target && !file) {
+    const c = backupConfig(cfg.backup)
+    const targets = activeTargets(c)
+    if (!targets.length) throw new Error(t('backup.cli.noTargets'))
+    for (const tg of targets) {
+      const list = await backup.listAt(tg, c)
+      console.log(t('backup.cli.list', { target: tg, n: list.length }))
+      for (const x of list.slice(-10)) console.log(`  ${x.name}  ${Math.ceil(x.size / 1024)} KB`)
+    }
+    return console.log(t('backup.cli.restoreUsage'))
+  }
+  const { passphraseFrom } = await import('../core/backup-file.ts')
+  let passphrase: string | null = null
+  if (passFile) passphrase = passphraseFrom(readFileSync(passFile))
+  else if (rest.includes('--passphrase-stdin')) {
+    // never typed on a terminal here (it would show): piped, as `board backup passphrase` takes it
+    if (process.stdin.isTTY) throw new Error(t('backup.cli.restoreUsage'))
+    const { readStdin } = await import('../adapters/stdin.ts')
+    passphrase = passphraseFrom(Buffer.from(await readStdin()))
+  }
+  const webPort = Number(cfg.port) || 12422
+  // what was newer and did not open: the hours it held are not in what was restored
+  const passedOver = (skipped: readonly { name: string; why: string }[]) => {
+    for (const x of skipped)
+      console.log(t('backup.cli.skipped', { name: x.name, why: x.why.startsWith('backup.') ? t(x.why) : x.why }))
+  }
+  const r = await backup
+    .restore({
+      from: file ? { file: resolve(file) } : { target: target as 'folder' | 'server', ...(name && { name }) },
+      cfg,
+      passphrase,
+      by: 'user',
+      replaceFile: rest.includes('--replace-file'),
+      boardRunning: async () => {
+        try {
+          await fetch(`http://127.0.0.1:${webPort}/api/hello`, { signal: AbortSignal.timeout(1500) })
+          return true
+        } catch {
+          return false
+        }
+      },
+    })
+    .catch((err: unknown) => {
+      // nothing taken: what it passed over is said before why
+      if (err instanceof backup.BackupError) passedOver(err.skipped)
+      throw err
+    })
+  passedOver(r.skipped)
+  if (!r.inPlace) return console.log(t('backup.cli.restoredFile', { from: r.from, aside: r.aside ?? '' }))
+  console.log(t('backup.cli.restored', { from: r.from, before: r.before ?? '-' }))
+}
+
 async function tunnel(): Promise<void> {
   const [op = 'status'] = rest
   const webPort = Number(cfg.port) || 12422

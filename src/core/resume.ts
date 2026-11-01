@@ -77,7 +77,7 @@ const isLauncher = (program: string): boolean =>
  * while wake's Telegram router is on and the board starts Claude through a launcher (claude-tg):
  * `board resume <id>`, which runs it, as herdr-wake's own hook reported its wakeCommand (call 21).
  * Also while the owner has secrets here and the board starts plain `claude`: `board resume <id>`
- * starts it with the session's secrets in its env (services/secrets.ts), for its MCP servers;
+ * starts it with the session's secrets in its env (services/secret-store.ts), for its MCP servers;
  * without secrets, herdr's own resume stays.
  */
 export function resumeCommand(f: ResumeFacts): string[] | null {

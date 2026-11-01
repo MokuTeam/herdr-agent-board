@@ -8,7 +8,7 @@ import { type ChildProcess, spawn } from 'node:child_process'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { join, win32 } from 'node:path'
+import { dirname, join, win32 } from 'node:path'
 import { PassThrough, type Readable, type Writable } from 'node:stream'
 import { type AskpassReport, pinnedIn, promptKind } from '../core/server-admin.ts'
 import { sshHint, type TunnelConfig, type TunnelHint } from '../core/tunnel.ts'
@@ -62,16 +62,17 @@ const failure = (r: RunResult): string =>
 const NO_KEYGEN = 'ssh-keygen not found'
 
 /**
- * A new Ed25519 pair with no passphrase in tunnel/, the old pair removed first (ssh-keygen would
+ * A new Ed25519 pair with no passphrase at `key` (the tunnel's, in tunnel/, unless another is
+ * named: the backup's drop key), the old pair removed first (ssh-keygen would
  * ask before overwriting); on Windows the private key then made the user's alone. The public key.
  */
 export async function generateKey(
   comment: string,
+  key: string = generatedKey(),
 ): Promise<{ ok: true; publicKey: string } | { ok: false; error: string }> {
   const bin = sshKeygenBin()
   if (!bin) return { ok: false, error: NO_KEYGEN }
-  const key = generatedKey()
-  mkdirSync(tunnelDir(), { recursive: true })
+  mkdirSync(dirname(key), { recursive: true })
   rmSync(key, { force: true })
   rmSync(`${key}.pub`, { force: true })
   const made = await run(bin, ['-q', '-t', 'ed25519', '-N', '', '-C', comment, '-f', key])

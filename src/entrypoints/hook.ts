@@ -21,7 +21,7 @@
 // is left to herdr's own `claude --resume <id>`, and nothing more is read or started for it.
 // SessionStart of any Claude session, in herdr or not, once the owner set a secret on this computer
 // (its store is there): the session's secrets for its Bash commands, through $CLAUDE_ENV_FILE
-// (services/secrets.ts); with no store, one look for its file and nothing else. While a secret is
+// (services/secret-store.ts); with no store, one look for its file and nothing else. While a secret is
 // set, a session in the default profile reports `board resume <id>` too (core/resume.ts), which
 // starts Claude with them, so its MCP servers have them again after herdr restarts.
 // Claude Code waits for it: an empty or broken input ends it at once, silently, with exit code 0.
@@ -39,6 +39,8 @@ import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
 import { heldQuestionOf } from '../core/held-question.ts'
 import { isNotice } from '../core/notices.ts'
 import { type Profile, profileReport } from '../core/profiles.ts'
+import { secretsConfig, usableSinks, withDefaultStore } from '../core/secrets.ts'
+import { todosConfig } from '../core/todos.ts'
 import type { Config } from '../core/types.ts'
 
 const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
@@ -110,7 +112,7 @@ async function main(): Promise<void> {
   let secrets = false
   if (event === 'SessionStart' && typeof sid === 'string' && sid && existsSync(secretStoreFile())) {
     const [{ callerOf, sessionStartSecrets }, { anySecrets }] = await Promise.all([
-      import('../services/secrets.ts'),
+      import('../services/secret-store.ts'),
       import('../adapters/secret-store.ts'),
     ])
     if (!input.agent_id) sessionStartSecrets({ ...callerOf(loadProfiles(), inheritedProfileDir(), sid), session: sid })
@@ -158,7 +160,25 @@ async function main(): Promise<void> {
     cfg = loadConfig()
     // The user's presence (#172), only where config.json turned it on.
     const presence = presenceForBrief(cfg)
-    context = brief(cfg, card, text(input.cwd) ?? '', process.env, 'Claude', presence)
+    // The secret sinks (#273), only where config.json has a `secrets` section or the owner ever set a
+    // secret in the board's own store (the sink where config.json defines none): else the brief is as it was.
+    const conf =
+      cfg.secrets === undefined && !existsSync(secretStoreFile())
+        ? null
+        : withDefaultStore(secretsConfig(cfg.secrets, { home: homedir() }))
+    const sinks = conf ? usableSinks(conf) : []
+    const stores = sinks.filter(id => conf?.sinks.get(id)?.kind === 'store')
+    context = brief(
+      cfg,
+      card,
+      text(input.cwd) ?? '',
+      process.env,
+      'Claude',
+      presence,
+      todosConfig(cfg.todos),
+      sinks,
+      stores,
+    )
     Object.assign(patch, { briefedAt: Date.now(), briefV: BRIEF_VERSION })
     if (presence) patch.presenceSeen = presence.since
     else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''

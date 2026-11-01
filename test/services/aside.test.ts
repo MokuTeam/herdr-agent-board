@@ -1,153 +1,314 @@
+// A side question as Claude Code's /btw in the session's pane (services/aside.ts), against a fake
+// pane: what is typed, what keys are pressed, what is read back, and when nothing is typed at all.
 import { beforeEach, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import type { RunOptions, RunResult } from '../../src/adapters/process.ts'
-import { asideArgs } from '../../src/core/aside.ts'
+import type { HerdrAgent } from '../../src/adapters/herdr.ts'
+import { stripAnsi } from '../../src/core/dialogs/input-box.ts'
 import { useLanguage } from '../../src/core/lang.ts'
-import { profileSet } from '../../src/core/profiles.ts'
-import { asideCheck, askAside, claudeOnPath } from '../../src/services/aside.ts'
+import { askAside, type BtwIO } from '../../src/services/aside.ts'
 
 beforeEach(() => useLanguage('en'))
 
 const S = '0f8fad5b-d9cb-469f-a165-70867728950e'
-const ANSWER = JSON.stringify({
-  subtype: 'success',
-  is_error: false,
-  result: 'MANGO-77',
-  total_cost_usd: 0.27,
-  duration_ms: 2900,
-  usage: { input_tokens: 2, cache_creation_input_tokens: 33756, cache_read_input_tokens: 0, output_tokens: 8 },
-})
+const item = { agent: 'claude', session: S, name: 'Acme', pane: 'w1:p2', sleeping: false }
+const deps = { log: () => {} }
+const RULE = '▔'.repeat(80)
+const LINE = '─'.repeat(80)
+const DIM = '\x1b[2m'
+const RESET = '\x1b[0m'
 
-/** A session in `dir` whose conversation is in the profile folder `root`. */
-function session(fields: Record<string, unknown> = {}) {
-  const base = mkdtempSync(join(tmpdir(), 'board-aside-'))
-  const dir = join(base, 'Acme project')
-  const root = join(base, '.claude-work')
-  mkdirSync(dir)
-  mkdirSync(root)
-  const transcript = join(base, `${S}.jsonl`)
-  writeFileSync(transcript, `${JSON.stringify({ type: 'user', cwd: dir, sessionId: S })}\n`)
-  return {
-    dir,
-    root,
-    item: { agent: 'claude', session: S, name: 'Acme', cwd: dir, transcript, claudeRoot: root, ...fields },
-  }
+/** The session's screen with an empty input box, or `draft` in it. */
+const prompt = (draft = '') =>
+  ['● ready', '', LINE, `❯ ${draft || `${DIM}Try "fix lint errors"${RESET}`}`, LINE, '  ⏵⏵ auto mode on'].join('\n')
+
+interface Pane {
+  agent: HerdrAgent | null
+  /** The screen with the input box, as `--ansi` reads it. */
+  box: string
+  /** Screens the overlay goes through once the line is typed, one per read; the last stays. */
+  overlay: string[]
+  /** The answer's lines, of which `height` are in sight; Down moves three further. */
+  answer?: string[]
+  height?: number
+  /** Esc closes the overlay (false: it stays, as a frozen terminal would). */
+  escCloses?: boolean
+  /** Reads after a key that still show the screen from before it, as a slow redraw would. */
+  lag?: number
 }
 
-const profiles = (inherited: string) => () =>
-  profileSet([{ id: 'work', title: 'Work', dir: inherited, color: 'blue', hidden: false }], inherited)
-
-function fakeRun(result: Partial<RunResult> = {}) {
-  const calls: { file: string; args: string[]; o: RunOptions }[] = []
-  const run = async (file: string, args: string[], o: RunOptions = {}): Promise<RunResult> => {
-    calls.push({ file, args, o })
-    return { code: 0, killed: false, error: null, stdout: ANSWER, stderr: '', ...result }
+function fakePane(pane: Partial<Pane> = {}) {
+  const p: Pane = {
+    agent: { session: S, status: 'idle', kind: 'claude' } as HerdrAgent,
+    box: prompt(),
+    overlay: [],
+    escCloses: true,
+    ...pane,
   }
-  return { calls, run }
+  const sent: string[] = []
+  let typed = ''
+  let step = 0
+  let top = 0
+  let open = false
+  let stale = { reads: 0, screen: '' }
+  const overlayScreen = (): string => {
+    const q = typed
+    const screen = p.overlay[Math.min(step, p.overlay.length - 1)] ?? ''
+    if (screen !== 'ANSWER') return screen.replaceAll('{q}', q)
+    const shown = (p.answer ?? []).slice(top, top + (p.height ?? 20))
+    return [
+      '● ready',
+      RULE,
+      '',
+      `    ${q}`,
+      '',
+      ...shown.map(l => (l ? `      ${l}` : '')),
+      '',
+      '    ↑/↓ to scroll · c to copy · Esc to close',
+    ].join('\n')
+  }
+  const io: BtwIO = {
+    agent: async () => p.agent,
+    screen: async () => (open ? overlayScreen() : p.box),
+    read: async () => {
+      if (stale.reads > 0) {
+        stale.reads--
+        return stale.screen
+      }
+      if (!open) return stripAnsi(p.box)
+      const s = overlayScreen()
+      step++
+      return s
+    },
+    keys: async (...keys) => {
+      sent.push(...keys)
+      if (p.lag) stale = { reads: p.lag, screen: open ? overlayScreen() : stripAnsi(p.box) }
+      for (const k of keys) {
+        if (k === 'esc' && p.escCloses) open = false
+        if (k === 'down') top = Math.max(0, Math.min(top + 3, (p.answer?.length ?? 0) - (p.height ?? 20)))
+      }
+    },
+    prompt: async text => {
+      sent.push(`prompt:${text}`)
+      typed = text
+      open = p.overlay.length > 0
+    },
+  }
+  return { io, sent, isOpen: () => open }
 }
 
-test('a side question runs Claude once on a copy of the conversation, in its folder and profile, the question on stdin', async () => {
-  const { item, dir, root } = session()
-  const f = fakeRun()
-  const env = { PATH: '/bin', HERDR_PANE_ID: 'wB:p1', HERDR_TAB_ID: 'wB:t1', CLAUDECODE: '1', KEEP: 'yes' }
-  const r = await askAside({ profiles: profiles('/home/me/.claude'), log: () => {} }, item, '  What code word?  ', {
-    run: f.run,
-    env,
-    claude: '/usr/local/bin/claude',
-  })
-  expect(r).toEqual({
-    ok: true,
-    text: 'MANGO-77',
-    costUsd: 0.27,
-    tokens: { context: 33758, cached: 0, output: 8 },
-    ms: 2900,
-  })
-  const call = f.calls[0]
-  expect(call?.file).toBe('/usr/local/bin/claude')
-  expect(call?.args).toEqual(asideArgs(S))
-  expect(call?.o.cwd).toBe(dir)
-  expect(call?.o.input).toBe('What code word?')
-  // Another profile than the board's: its folder; not a pane of the board's, nor a nested session.
-  expect(call?.o.env).toEqual({ PATH: '/bin', KEEP: 'yes', CLAUDE_CONFIG_DIR: root })
+const answering = ['● ready', RULE, '', '    {q}', '', '      ✽ Answering…', '', '    Esc to close'].join('\n')
+const fast = { pollMs: 0, sleep: async () => {} }
+
+test('types /btw and the question into the session, reads the answer, closes the overlay', async () => {
+  const f = fakePane({ overlay: [answering, answering, 'ANSWER'], answer: ['PINEAPPLE'] })
+  const r = await askAside(deps, item, '  What was\n the code word?  ', { io: f.io, ...fast })
+  expect(r).toMatchObject({ ok: true, text: 'PINEAPPLE' })
+  // One line typed, nothing else into the conversation; one look further down; Esc closes it.
+  expect(f.sent).toEqual(['prompt:/btw What was the code word?', 'down', 'esc'])
+  expect(f.isOpen()).toBe(false)
 })
 
-test('in the board’s own profile the env stays as it is', async () => {
-  const { item, root } = session()
-  const f = fakeRun()
-  await askAside({ profiles: profiles(root), log: () => {} }, item, 'q', {
-    run: f.run,
-    env: { PATH: '/bin' },
-    claude: 'claude',
+test('works while the session is busy: /btw answers beside a running turn', async () => {
+  const f = fakePane({
+    agent: { session: S, status: 'working', kind: 'claude' } as HerdrAgent,
+    overlay: ['ANSWER'],
+    answer: ['Four'],
   })
-  expect(f.calls[0]?.o.env).toEqual({ PATH: '/bin' })
+  expect(await askAside(deps, item, 'what is 2+2?', { io: f.io, ...fast })).toMatchObject({ ok: true, text: 'Four' })
 })
 
-test('refused before Claude runs: no question, too long, not Claude, no conversation, no Claude Code', async () => {
-  const deps = { profiles: profiles('/x'), log: () => {} }
-  const f = fakeRun()
-  const opts = { run: f.run, env: {}, claude: 'claude' }
-  const { item } = session()
-  expect(await askAside(deps, item, '  ', opts)).toEqual({ ok: false, error: 'Type the question first' })
-  expect(await askAside(deps, item, 'x'.repeat(4001), opts)).toEqual({
+test('an answer taller than the overlay is read down to its end, blank lines kept', async () => {
+  const answer = [...Array.from({ length: 45 }, (_, i) => `${i + 1} ${(i + 1) ** 2}`), '', 'done']
+  const f = fakePane({ overlay: ['ANSWER'], answer, height: 26 })
+  const r = await askAside(deps, item, 'squares?', { io: f.io, ...fast })
+  expect(r).toMatchObject({ ok: true, text: answer.join('\n') })
+  expect(f.sent.filter(k => k === 'down').length).toBe(8)
+  expect(f.sent.at(-1)).toBe('esc')
+})
+
+test('a code block taller than the overlay comes back once: a window of nothing but its indented lines meets the one before', async () => {
+  // Read live as 105 lines for 72, items twice, when each window lost its own least indent.
+  const answer = ['Header', ...Array.from({ length: 70 }, (_, i) => `    item ${i + 1}`), 'Footer']
+  const f = fakePane({ overlay: ['ANSWER'], answer, height: 20 })
+  const r = await askAside(deps, item, 'a block of 70 lines?', { io: f.io, ...fast })
+  expect(r).toMatchObject({ ok: true, text: answer.join('\n') })
+})
+
+test('a slow redraw is not the end of a long answer, and reading it has a time of its own', async () => {
+  const answer = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`)
+  const slow = fakePane({ overlay: ['ANSWER'], answer, height: 10, lag: 1 })
+  expect(await askAside(deps, item, 'q', { io: slow.io, ...fast })).toMatchObject({ ok: true, text: answer.join('\n') })
+
+  const late = fakePane({ overlay: ['ANSWER'], answer, height: 10 })
+  expect(await askAside(deps, item, 'q', { io: late.io, ...fast, readMs: -1 })).toEqual({
     ok: false,
-    error: 'A side question is up to 4000 characters',
+    error: 'The /btw answer of “Acme” is too long to read off the screen',
   })
-  expect((await askAside(deps, { ...item, agent: 'pi' }, 'q', opts)).ok).toBe(false)
-  expect((await askAside(deps, { ...item, session: 'pane-w1:p1' }, 'q', opts)).ok).toBe(false)
-  expect(await askAside(deps, { ...item, transcript: null }, 'q', opts)).toEqual({
-    ok: false,
-    error: '“Acme” has no conversation on this computer yet',
-  })
-  expect(await askAside(deps, item, 'q', { ...opts, claude: null })).toEqual({
-    ok: false,
-    error: 'Claude Code (claude) is not on the board’s PATH',
-  })
-  expect(f.calls).toEqual([])
+  expect(late.sent).toEqual(['prompt:/btw q', 'esc'])
+  expect(late.isOpen()).toBe(false)
 })
 
-test('how it ends without an answer: cancelled, too slow, an error Claude printed', async () => {
-  const deps = { profiles: profiles('/x'), log: () => {} }
-  const { item } = session()
-  const control = new AbortController()
-  control.abort()
-  const cancelled = await askAside(deps, item, 'q', {
-    run: fakeRun({ killed: true }).run,
-    env: {},
-    claude: 'claude',
-    signal: control.signal,
-  })
-  expect(cancelled).toEqual({ ok: false, error: 'Cancelled' })
-  const slow = await askAside(deps, item, 'q', {
-    run: fakeRun({ killed: true, stdout: '' }).run,
-    env: {},
-    claude: 'claude',
-    timeoutMs: 5000,
-  })
-  expect(slow).toEqual({ ok: false, error: 'No answer in 5 s' })
-  const failed = await askAside(deps, item, 'q', {
-    run: fakeRun({ code: 1, stdout: '', stderr: 'Error: No conversation found with session ID\n' }).run,
-    env: {},
-    claude: 'claude',
-  })
-  expect(failed).toEqual({ ok: false, error: 'Error: No conversation found with session ID' })
+test('a second Esc only while the overlay stays up: one still drawn a moment after it closed gets none', async () => {
+  const lagging = fakePane({ overlay: ['ANSWER'], answer: ['x'], lag: 1 })
+  expect(await askAside(deps, item, 'q', { io: lagging.io, ...fast })).toMatchObject({ ok: true, text: 'x' })
+  expect(lagging.sent.filter(k => k === 'esc')).toEqual(['esc'])
+  expect(lagging.isOpen()).toBe(false)
+
+  const frozen = fakePane({ overlay: ['ANSWER'], answer: ['x'], escCloses: false })
+  await askAside(deps, item, 'q', { io: frozen.io, ...fast })
+  expect(frozen.sent.filter(k => k === 'esc')).toEqual(['esc', 'esc'])
 })
 
-test('Claude Code on PATH, as the board runs it: claude.exe on Windows (a .cmd needs a shell), claude elsewhere', () => {
-  const files = new Set(['C:\\npm\\claude.cmd', 'C:\\Users\\me\\.local\\bin\\claude.exe', '/usr/local/bin/claude'])
-  const isFile = (p: string) => files.has(p)
-  expect(claudeOnPath({ Path: 'C:\\npm;"C:\\Users\\me\\.local\\bin"' }, 'win32', isFile)).toBe(
-    'C:\\Users\\me\\.local\\bin\\claude.exe',
+test('a /btw that fails says so once its error stays on the screen, not after the whole timeout', async () => {
+  const error = ['● ready', RULE, '', '    {q}', '', '      API Error: 529 Overloaded', '', '    Esc to close'].join(
+    '\n',
   )
-  expect(claudeOnPath({ PATH: 'C:\\npm' }, 'win32', isFile)).toBe(null)
-  expect(claudeOnPath({ PATH: '/usr/bin:/usr/local/bin' }, 'linux', isFile)).toBe('/usr/local/bin/claude')
-  let now = 0
-  let found: string | null = null
-  const check = asideCheck({ now: () => now, find: () => found })
-  expect(check()).toBe(false)
-  found = 'claude'
-  expect(check()).toBe(false) // looked up again only after a minute
-  now = 61_000
-  expect(check()).toBe(true)
+  const failed = fakePane({ overlay: [error] })
+  expect(await askAside(deps, item, 'q', { io: failed.io, ...fast, stopMs: 0 })).toEqual({
+    ok: false,
+    error: '/btw in “Acme” ended with no answer: API Error: 529 Overloaded',
+  })
+  expect(failed.sent).toEqual(['prompt:/btw q', 'esc'])
+  // Text with no spinner for a moment, then the answer: still the answer.
+  const passing = fakePane({ overlay: [error, 'ANSWER'], answer: ['Four'] })
+  expect(await askAside(deps, item, 'q', { io: passing.io, ...fast })).toMatchObject({ ok: true, text: 'Four' })
+})
+
+test('nothing typed where it would not land as /btw: a dialog or overlay, a draft, another session, asleep', async () => {
+  const cases: [Partial<Pane>, string][] = [
+    [
+      { agent: { session: S, status: 'blocked', kind: 'claude' } as HerdrAgent },
+      'Acme waits for a decision in the terminal',
+    ],
+    [
+      { box: ['● ready', LINE, '❯ ', LINE, '  Select model', '  Esc to close'].join('\n') },
+      '“Acme” has a dialog or an overlay open in the terminal: /btw would land in it',
+    ],
+    [{ box: prompt('half a message') }, 'Acme has unsent text in its input box'],
+    [
+      { agent: { session: 'another', status: 'idle', kind: 'claude' } as HerdrAgent },
+      'Acme: another session is in that pane now, refresh the board',
+    ],
+    [{ agent: null }, 'Acme: another session is in that pane now, refresh the board'],
+  ]
+  for (const [pane, error] of cases) {
+    const f = fakePane({ overlay: ['ANSWER'], answer: ['x'], ...pane })
+    const r = await askAside(deps, item, 'q', { io: f.io, ...fast })
+    expect(r).toMatchObject({ ok: false, error })
+    expect(f.sent).toEqual([])
+  }
+  const f = fakePane({ overlay: ['ANSWER'], answer: ['x'] })
+  expect(await askAside(deps, { ...item, sleeping: true }, 'q', { io: f.io, ...fast })).toEqual({
+    ok: false,
+    error: '“Acme” is asleep: /btw needs the running session. Wake it first',
+  })
+  expect(await askAside(deps, { ...item, pane: null }, 'q', { io: f.io, ...fast })).toEqual({
+    ok: false,
+    error: 'The session has no pane',
+  })
+  expect(f.sent).toEqual([])
+})
+
+test('refused before anything is read: no question, too long for one /btw line', async () => {
+  const f = fakePane({ overlay: ['ANSWER'], answer: ['x'] })
+  const o = { io: f.io, ...fast }
+  expect(await askAside(deps, item, '  ', o)).toEqual({ ok: false, error: 'Type the question first' })
+  expect(await askAside(deps, item, 'x'.repeat(791), o)).toEqual({
+    ok: false,
+    error: 'A side question is up to 790 characters',
+  })
+  expect(f.sent).toEqual([])
+  // What is typed counts: an indented paste that fits on one line goes.
+  const pasted = Array.from({ length: 90 }, (_, i) => `        line ${i + 1}`).join('\n')
+  expect(pasted.length).toBeGreaterThan(790)
+  expect(await askAside(deps, item, pasted, o)).toMatchObject({ ok: true })
+  expect(f.sent[0]?.length).toBeLessThanOrEqual('prompt:/btw '.length + 790)
+})
+
+test('other agents (pi, Codex, unknown) and panes with no Claude session id: refused as before, with no herdr call', async () => {
+  const calls: string[] = []
+  const untouched = Object.fromEntries(
+    ['agent', 'screen', 'read', 'keys', 'prompt'].map(k => [
+      k,
+      async () => {
+        calls.push(k)
+        return null
+      },
+    ]),
+  ) as unknown as BtwIO
+  const notClaude = 'Only a Claude session with an id can be asked aside, and “Acme” is not one'
+  for (const other of [
+    { ...item, agent: 'pi' },
+    { ...item, agent: 'codex' },
+    { ...item, agent: 'unknown' },
+    { ...item, session: 'pane-w1:p1' },
+    { ...item, session: null },
+  ])
+    expect(await askAside(deps, other, 'q', { io: untouched, ...fast })).toEqual({ ok: false, error: notClaude })
+  expect(calls).toEqual([])
+})
+
+test('no overlay after typing (an older Claude Code, the line went elsewhere): says so and presses no key', async () => {
+  const f = fakePane({ overlay: [] })
+  const r = await askAside(deps, item, 'q', { io: f.io, pollMs: 0, showMs: 20, sleep: () => Bun.sleep(5) })
+  expect(r).toMatchObject({ ok: false })
+  expect((r as { error: string }).error).toContain('did not open /btw')
+  expect(f.sent).toEqual(['prompt:/btw q'])
+})
+
+test('too slow, or cancelled: our overlay is closed with Esc, and only ours', async () => {
+  const slow = fakePane({ overlay: [answering] })
+  const r = await askAside(deps, item, 'q', { io: slow.io, ...fast, timeoutMs: -1 })
+  expect(r).toEqual({ ok: false, error: 'No answer in 0 s' })
+  expect(slow.sent).toEqual(['prompt:/btw q', 'esc'])
+  expect(slow.isOpen()).toBe(false)
+
+  const control = new AbortController()
+  const cancelled = fakePane({ overlay: [answering] })
+  const pending = askAside(deps, item, 'q', {
+    io: cancelled.io,
+    pollMs: 0,
+    signal: control.signal,
+    sleep: async () => control.abort(),
+  })
+  expect(await pending).toEqual({ ok: false, error: 'Cancelled' })
+  expect(cancelled.sent).toEqual(['prompt:/btw q', 'esc'])
+
+  // An overlay with someone else's question: not ours to close.
+  const other = fakePane({
+    overlay: [
+      ['● ready', RULE, '', '    /btw which file?', '', '      a.ts', '', '    c to copy · Esc to close'].join('\n'),
+    ],
+  })
+  const r2 = await askAside(deps, item, 'q', { io: other.io, pollMs: 0, showMs: -1, sleep: async () => {} })
+  expect(r2.ok).toBe(false)
+  expect(other.sent).toEqual(['prompt:/btw q'])
+})
+
+test('one side question per pane at a time', async () => {
+  let release = () => {}
+  const f = fakePane({ overlay: ['ANSWER'], answer: ['x'] })
+  const first = askAside(deps, item, 'q', {
+    io: f.io,
+    pollMs: 0,
+    sleep: () => new Promise<void>(resolve => (release = resolve)),
+  })
+  const second = await askAside(deps, item, 'q2', { io: f.io, ...fast })
+  expect(second).toEqual({ ok: false, busy: true, error: '“Acme” is already answering a side question' })
+  for (let i = 0; i < 10; i++) {
+    release()
+    await Promise.resolve()
+    await new Promise(r => setTimeout(r, 0))
+  }
+  expect((await first).ok).toBe(true)
+})
+
+test('herdr failing says so', async () => {
+  const f = fakePane()
+  f.io.prompt = async () => {
+    throw new Error('herdr: pane not found')
+  }
+  expect(await askAside(deps, item, 'q', { io: f.io, ...fast })).toEqual({
+    ok: false,
+    error: 'Could not ask “Acme” through herdr: herdr: pane not found',
+  })
 })
