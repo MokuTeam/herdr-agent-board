@@ -13,6 +13,7 @@ import {
   offersSecrets,
   offersTimeSettings,
   offersVault,
+  offersWakeSettings,
   settingPicked,
   settingsMenu,
 } from '../../web/src/models/settings-menu.ts'
@@ -28,21 +29,24 @@ describe('Settings', () => {
     expect(offersMokupilot({ server: true, mokupilot: true })).toBe(false)
   })
 
-  test('on the board’s own server, behind its login: Backup… and Time tracking…, as Secrets…', () => {
+  test('on the board’s own server, behind its login: Backup…, Time tracking… and Sleep and wake…’s settings, as Secrets…', () => {
     // The page there is marked remote (the domain's), with the payload's `server`.
     for (const remote of [true, false]) {
       expect(offersBackup(remote, { server: true })).toBe(true)
       expect(offersTimeSettings(remote, { server: true })).toBe(true)
+      expect(offersWakeSettings(remote, { server: true })).toBe(true)
       expect(offersSecrets(remote, { server: true })).toBe(true)
     }
   })
 
-  test('on a PC as before: Backup… and Time tracking… on the local page only, not to a phone or through the tunnel', () => {
+  test('on a PC as before: Backup…, Time tracking… and wake’s settings on the local page only, not to a phone or through the tunnel', () => {
     for (const payload of [{}, { server: false }, null, undefined]) {
       expect(offersBackup(false, payload)).toBe(true)
       expect(offersTimeSettings(false, payload)).toBe(true)
+      expect(offersWakeSettings(false, payload)).toBe(true)
       expect(offersBackup(true, payload)).toBe(false)
       expect(offersTimeSettings(true, payload)).toBe(false)
+      expect(offersWakeSettings(true, payload)).toBe(false)
     }
   })
 

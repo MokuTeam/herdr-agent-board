@@ -7,7 +7,8 @@
 // profile folder found, Profiles… opens their panel (components/profiles/ProfilesPanel.tsx). While
 // the remote mode is on (core/remote.ts), Phones… opens theirs (components/phones/PhonesPanel.tsx).
 // The board on another device has Paths on this computer… (components/phones/LocalPathsPanel.tsx).
-// While the payload carries wake's state line, Sleep and wake… opens its panel (components/wake).
+// While the payload carries wake's state line, Sleep and wake… opens its panel (components/wake):
+// its switches and buttons where Backup… is (offersWakeSettings), the state line only elsewhere.
 // MokuPilot… opens where a call starts (components/mokupilot), on every board's page (offersMokupilot)
 // but the board's on its own server (src/core/on-server.ts), which has no PC to start a call on.
 // On the local board, Remote access… opens the board-through-your-domain panel
@@ -272,6 +273,12 @@ export const offersVault = (
   remote: boolean,
   payload?: { server?: boolean | undefined; vault?: boolean | undefined } | null,
 ): boolean => remote && boardOnServer(payload) && payload?.vault === true
+
+/**
+ * Whether Settings → Sleep and wake… (#119) offers its switches, the reaper, Telegram, Start and Log:
+ * as Backup…, for /api/wake; elsewhere (a phone, a PC's tunnel) its state line only, read only.
+ */
+export const offersWakeSettings = offersSecrets
 
 export function settingPicked(id: string): SettingPick {
   const [kind, value = ''] = id.split(':')

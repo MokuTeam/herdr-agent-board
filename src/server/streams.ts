@@ -20,8 +20,8 @@ export function decoded(raw: string): string | null {
  * (403 desktop) and what is for the board on this computer only (403 local); the owner's secret
  * store too (403 local), and the owner's password vault with the answers to a login fill (403 local,
  * core/vault.ts vaultOwnerPath). `ownServer` is the board's own server's login listener, whose page
- * is the owner's own: the secrets, the vault, Settings → Backup… and Settings → Time tracking… by
- * there (ownServerSettings), the rest of what is local still refused.
+ * is the owner's own: the secrets, the vault, Settings → Backup…, Settings → Time tracking… and
+ * Settings → Sleep and wake… by there (ownServerSettings), the rest of what is local still refused.
  * The routes match a string path decoded and a RegExp one as it came, so both spellings are
  * checked, or an encoded letter (/api/fs/%6Fpen, /api/%61ccess) would get by. A desk
  * (RemoteDevice.desk) may focus herdr and reach /api/remote, whose ops the listener narrows for it

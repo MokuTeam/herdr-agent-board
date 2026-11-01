@@ -210,7 +210,7 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   column or a phone: a card's name shows whole on as many lines as it takes, its profile, clock
   and age going under it when there is no room beside it, and what it does, asks, waits for and
   said last gets up to three lines; in either style, kept in this browser), language, where the
-  session panel sits, whether sleeping sessions show, and "Sleep and wake…" ([Sleep and wake](#sleep-and-wake); read only on a phone). On a
+  session panel sits, whether sleeping sessions show, and "Sleep and wake…" ([Sleep and wake](#sleep-and-wake); read only on a phone and through a PC's tunnel). On a
   computer with [Omarchy](https://omarchy.org), the Terminal style takes the colors of
   the Omarchy theme on now (mixed from its `colors.toml` as Omarchy's own apps take theirs) and the
   system's monospace font, and follows a theme switch while the page is open; in the theme's other
@@ -1449,8 +1449,9 @@ folder (`%LOCALAPPDATA%\herdr\plugins\agent-board` on Windows): `wake-sessions.j
 it knows, by pane), `wake-pi.json` (the pi sessions asleep, below), `wake-status.json` (its state),
 `wake.log` (kept to 2 MB, the one before as `wake.log.1`).
 
-**Settings → "Sleep and wake…"** (its switches and buttons on the computer's own board only; a
-phone sees it read only):
+**Settings → "Sleep and wake…"** (its switches and buttons on the computer's own board, and on the
+board's own server behind its domain's login, as Backup… is; a phone through Tailscale or a PC's
+tunnel sees it read only):
 
 - **Sleep and wake**, on or off. On from the install; on starts it at once. Off stops it, closes
   its pane, and the `Wake` workspace when nothing else is in it; nothing of wake runs then, no

@@ -101,19 +101,20 @@ export const DESK_REMOTE_OPS: ReadonlySet<unknown> = new Set(['approve', 'deny',
  * pairings, the login, the tunnel), wake's switches, Start and Log (#119), and the backup's setup
  * (#233: it logs in to the owner's server as the admin), Settings → Time (#237: clients, lanes and
  * billing settings), the edge log (#280: who worked with whom, for an audit). Refused on every
- * remote listener, in both spellings of a path; the backup's and Settings → Time's but on the
- * board's own server through its domain's login (ownServerSettings).
+ * remote listener, in both spellings of a path; the backup's, Settings → Time's and wake's but on
+ * the board's own server through its domain's login (ownServerSettings).
  */
 export const localOnly = (path: string): boolean =>
   /^\/api\/(remote|access|wake|backup|time-settings|links\/log)(\/|$)/.test(path)
 
 /**
  * What of localOnly the board's own server opens through its domain's login, where that page is the
- * owner's own (they have no other): Settings → Backup… and Settings → Time tracking…, their routes
- * as they are, not a path under them. Matched on a path as it is, so each spelling a route could
- * take must be one of them.
+ * owner's own (they have no other): Settings → Backup…, Settings → Time tracking… and Settings →
+ * Sleep and wake… (#119: its switches, the reaper, Telegram, Start and Log), their routes as they
+ * are, not a path under them. Matched on a path as it is, so each spelling a route could take must
+ * be one of them.
  */
-export const ownServerSettings = (path: string): boolean => /^\/api\/(backup|time-settings)$/.test(path)
+export const ownServerSettings = (path: string): boolean => /^\/api\/(backup|time-settings|wake)$/.test(path)
 
 /**
  * The owner's secrets for the agents (Settings → Secrets…): the local board's page, and the board's

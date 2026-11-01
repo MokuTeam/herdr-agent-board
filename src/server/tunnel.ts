@@ -12,8 +12,9 @@
 // - it carries the cookie of a live login;
 // - it does not act on this computer's screen (desktopOnly), nor manage the remote mode, Remote
 //   access or wake (localOnly), in either spelling of its path, nor the owner's secrets for the
-//   agents, Settings → Backup… and Settings → Time tracking… but in server mode (core/remote.ts
-//   secretsPath, ownServerSettings); pairing and peers are not here at all.
+//   agents, Settings → Backup…, Settings → Time tracking… and Settings → Sleep and wake… but in
+//   server mode (core/remote.ts secretsPath, ownServerSettings); pairing and peers are not here at
+//   all.
 // The routes' own guards apply as for the web board, with the domain's origin as the board's own,
 // and the routes that read by a path refuse the board's own files (ownFiles). WebAuthn expects
 // that origin too; its relying party is the domain alone, so passkeys outlive a port change.
@@ -444,7 +445,7 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
       if (path === null) return json(400, { error: 'path' })
       if (NOT_HERE.test(raw) || NOT_HERE.test(path)) return json(404, { error: 'not found' })
       // On the board's own server this login is the way in, its page the owner's own: the secrets,
-      // Backup… and Time tracking… there; through a PC's tunnel not.
+      // Backup…, Time tracking… and Sleep and wake… there; through a PC's tunnel not.
       const refused = remoteRefusal(raw, path, { ownServer: mode() !== null })
       if (refused) return refused
       if (req.method === 'POST' && raw === '/api/logout') {

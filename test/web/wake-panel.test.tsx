@@ -55,15 +55,30 @@ const SETTINGS: WakeSettingsView = {
 const textOf = (n: Node): string => (n.kind === 'text' ? n.text : n.children.map(textOf).join(''))
 const texts = (els: Element[]): string[] => els.map(textOf)
 
-/** The panel as drawn for a payload's wake (none: not in the payload). */
-function panelNodes(wake: WakeView | undefined, lang = 'en'): Node[] {
+/** The panel as drawn for a payload's wake (none: not in the payload), with more of the payload when given. */
+function panelNodes(wake: WakeView | undefined, lang = 'en', more: Partial<BoardPayload> = {}): Node[] {
   return renderInBoard(
     <PanelProvider viewport={() => VP}>
       <WakePanel open={false} onClose={() => {}} />
     </PanelProvider>,
-    board({ data: payload({ lang: lang === 'ru' ? 'ru' : 'en', ...(wake && { wake }) }) }),
+    board({ data: payload({ lang: lang === 'ru' ? 'ru' : 'en', ...(wake && { wake }), ...more }) }),
     lang,
   )
+}
+
+/** `fn` on a page marked remote (`data-remote` on <html>): a phone's, a PC's tunnel's, or the board's own server's. */
+function onRemotePage<T>(fn: () => T): T {
+  const doc = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: { documentElement: { hasAttribute: (name: string) => name === 'data-remote' } },
+  })
+  try {
+    return fn()
+  } finally {
+    if (doc) Object.defineProperty(globalThis, 'document', doc)
+    else Reflect.deleteProperty(globalThis, 'document')
+  }
 }
 
 /** Records what the panel's controls ask for. */
@@ -251,6 +266,22 @@ describe('the panel as drawn', () => {
     expect(textOf(find([bodyOf({ phone: true }, 'ru')], el => hasClass(el, 'wake-read-only')))).toBe(
       'Меняется только на компьютере',
     )
+  })
+
+  test('on the board’s own server, behind its login: the switch and the buttons, as on the PC', () => {
+    const panel = onRemotePage(() => byId(panelNodes(CRASHED, 'en', { server: true }), 'wake-sheet'))
+    expect(switchesIn(panel)).toEqual([['Sleep and wake', 'true']])
+    expect(buttonsIn(panel)).toEqual(['Start again', 'Log'])
+    expect(findAll([panel], el => hasClass(el, 'wake-read-only'))).toEqual([])
+  })
+
+  test('a phone or a PC’s tunnel (marked remote, no `server`): read only, as before', () => {
+    for (const more of [{}, { server: false }] as Partial<BoardPayload>[]) {
+      const panel = onRemotePage(() => byId(panelNodes(CRASHED, 'en', more), 'wake-sheet'))
+      expect(switchesIn(panel)).toEqual([])
+      expect(findAll([panel], el => el.tag === 'button' && hasClass(el, 'button'))).toEqual([])
+      expect(textOf(find([panel], el => hasClass(el, 'wake-read-only')))).toBe('Changed on the computer only')
+    }
   })
 
   test('a board that cannot edit (no connection): every control greyed', () => {
@@ -542,19 +573,21 @@ describe('the toolbar’s quiet note', () => {
   })
 
   test('on a phone: no note', () => {
-    const doc = Object.getOwnPropertyDescriptor(globalThis, 'document')
-    Object.defineProperty(globalThis, 'document', {
-      configurable: true,
-      value: { documentElement: { hasAttribute: (name: string) => name === 'data-remote' } },
-    })
-    try {
-      expect(
+    expect(
+      onRemotePage(() =>
         renderInBoard(<WakeNote onOpen={() => {}} />, board({ data: payload({ wake: CRASHED }), now: NOW })),
-      ).toEqual([])
-    } finally {
-      if (doc) Object.defineProperty(globalThis, 'document', doc)
-      else Reflect.deleteProperty(globalThis, 'document')
-    }
+      ),
+    ).toEqual([])
+  })
+
+  test('on the board’s own server: the note, which opens the panel there', () => {
+    const nodes = onRemotePage(() =>
+      renderInBoard(
+        <WakeNote onOpen={() => {}} />,
+        board({ data: payload({ wake: CRASHED, server: true }), now: NOW }),
+      ),
+    )
+    expect(texts(findAll(nodes, el => el.attrs.get('id') === 'wake-note'))).toEqual(['Wake stopped'])
   })
 })
 

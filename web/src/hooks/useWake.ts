@@ -3,7 +3,7 @@
 // it sent is not said back yet; what its controls send (POST /api/wake, and Install into a profile
 // through POST /api/profiles), refusals toasted; the switches shown as sent until the board says
 // the same; the log once asked for; Switch over… and what it took over. Nothing is asked on a
-// phone: those routes are the computer's.
+// phone or through a PC's tunnel: those routes are the computer's and the board's own server's.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Translator } from '../../../src/core/types.ts'
 import type { TelegramMode } from '../../../src/core/wake/config.ts'
@@ -146,7 +146,7 @@ export interface WakePanelState {
   act: WakeActions
 }
 
-/** The panel's state while `active` (open, on this computer); closed, it forgets what it held. */
+/** The panel's state while `active` (open, where it changes wake); closed, it forgets what it held. */
 export function useWake(active: boolean): WakePanelState {
   const t = useT()
   const { data, canEdit, toast } = useBoardContext()
