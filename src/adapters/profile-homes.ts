@@ -1,6 +1,7 @@
 // The Claude homes (claude-home.ts) of every profile folder the board reads: one per folder, made
 // on first use and kept, so each keeps its caches. Read across them: the sessions running in any
 // of the folders, each with the home it runs in, and the folders recent sessions ran in.
+import { tmpdir } from 'node:os'
 import { normDir, sameDir } from '../core/launch/names.ts'
 import { type ClaudeHome, createClaudeHome, type LiveSession } from './claude-home.ts'
 
@@ -22,14 +23,15 @@ export interface ProfileHomes {
   recentFolders(dirs: readonly string[], limit?: number): Promise<string[]>
 }
 
-export function createProfileHomes(): ProfileHomes {
+/** @param tempDir passed to each home (adapters/claude-home.ts): folders under it are not recent. */
+export function createProfileHomes(tempDir: string = tmpdir()): ProfileHomes {
   const homes = new Map<string, ClaudeHome>()
 
   function forDir(dir: string): ClaudeHome {
     const key = normDir(dir)
     let home = homes.get(key)
     if (!home) {
-      home = createClaudeHome(dir)
+      home = createClaudeHome(dir, tempDir)
       homes.set(key, home)
     }
     return home

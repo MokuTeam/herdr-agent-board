@@ -52,13 +52,20 @@ test('recent folders: the newest of all homes first, each folder once, no more t
   // Real folders outside the temp folder (temp folders are skipped on purpose): this checkout's.
   const repo = join(import.meta.dir, '..', '..')
   const [src, tests] = [join(repo, 'src'), join(repo, 'test')]
+  // The temp boundary is the test's own, so a checkout inside the system temp folder still counts
+  // as a real folder (#290); one under the boundary is skipped, as on a machine.
+  const temp = mkdtempSync(join(tmpdir(), 'board-profile-homes-temp-'))
+  made.push(temp)
+  const parked = join(temp, 'parked')
+  mkdirSync(parked)
   const A = homeWith()
   project(A, 'a', repo, 20)
   project(A, 'b', src, 10)
+  project(A, 'z', parked, 1)
   const B = homeWith()
   project(B, 'c', tests, 30)
   project(B, 'd', `${src}${sep}`, 5) // A has it too, spelled otherwise: B's is newer
-  const homes = createProfileHomes()
+  const homes = createProfileHomes(temp)
   expect(await homes.recentFolders([A, B])).toEqual([`${src}${sep}`, repo, tests])
   expect(await homes.recentFolders([A, B], 2)).toEqual([`${src}${sep}`, repo])
   expect(await homes.recentFolders([B, A])).toEqual([`${src}${sep}`, repo, tests])
@@ -85,7 +92,7 @@ test('recent folders: a newer work folder shows however many private ones there 
   const workHome = homeWith()
   project(workHome, 'w', work, 50)
   project(workHome, 'x', older, 900)
-  const homes = createProfileHomes()
+  const homes = createProfileHomes(mkdtempSync(join(tmpdir(), 'board-profile-homes-temp-')))
   // The private profile first, as the board lists it: work's newer folder still comes first.
   const recent = await homes.recentFolders([priv, workHome])
   expect(recent).toEqual([work, ...own.slice(0, 11)])
