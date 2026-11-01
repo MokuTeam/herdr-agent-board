@@ -1098,6 +1098,84 @@ test('"Close the tab" closes it and drops the launch; "Trust" refuses a screen w
   noEnv(box)
 }, 30_000)
 
+test('"Close the tab" leaves a tab alone whose pane holds another terminal than the launch’s: herdr gave its id out again', async () => {
+  const { box, post, board, started } = await boardServer(VIA_HERDR)
+  const tabCreate = { result: { tab: { tab_id: 'wA:t9' }, root_pane: { pane_id: 'wA:p9', terminal_id: 'term-9' } } }
+  const paneGet = (terminal: string) => ({
+    result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'claude', terminal_id: terminal } },
+  })
+  const closes = () => box.calls().filter(a => a[0] === 'tab' && a[1] === 'close')
+  const launch = async (name: string) => {
+    const dir = join(box.dir, name)
+    mkdirSync(dir)
+    const state = {
+      ...HERDR,
+      'tab create': tabCreate,
+      'agent start': { code: 'agent_not_ready', error: 'agent_not_ready: blocked' },
+      'agent get': blocked,
+      'pane read': { text: trustScreen(dir) },
+      'pane get': paneGet('term-9'),
+    }
+    box.state(state)
+    const id = await started({ name, cwd: dir, category: 'acme', workspace: { id: 'wA' } })
+    await launchState(board, id, l => l?.state === 'trust', 'never asked to trust')
+    return { id, state }
+  }
+  // herdr started over: wA:p9 is someone else's terminal now. Nothing is closed; the launch goes.
+  const { id: gone, state } = await launch('reused')
+  box.state({ ...state, 'pane get': paneGet('term-other') })
+  assert.equal((await post(`/api/launch/${gone}/close`, {})).status, 200)
+  assert.deepEqual(closes(), [])
+  assert.equal(
+    (await board()).launches.some(l => l.id === gone),
+    false,
+  )
+  // The launch's own terminal still there: its tab is closed as before.
+  const { id: own } = await launch('own')
+  assert.equal((await post(`/api/launch/${own}/close`, {})).status, 200)
+  assert.deepEqual(
+    closes().map(a => a.join(' ')),
+    ['tab close wA:t9'],
+  )
+  noEnv(box)
+}, 40_000)
+
+test('the tab a new workspace came with stays when its first pane holds another terminal: herdr gave the ids out again', async () => {
+  const box0 = await sandbox()
+  const record = join(box0.dir, 'launcher.json')
+  const command = [process.execPath, launcher, record, '-Name', '{name}', '-Cwd', '{cwd}', '-Workspace', '{workspace}']
+  const { box, started, launched } = await boardServer({ launch: { command } })
+  const dir = join(box.dir, 'Gamma')
+  mkdirSync(dir)
+  const run = async (name: string, terminal: string): Promise<string[]> => {
+    box.state({
+      ...HERDR,
+      'workspace create': {
+        result: {
+          workspace: { workspace_id: 'wN' },
+          tab: { tab_id: 'wN:t1' },
+          root_pane: { pane_id: 'wN:p1', terminal_id: 'term-1' },
+        },
+      },
+      'pane list': {
+        result: { panes: [{ pane_id: 'wN:p1', agent: null, tab_id: 'wN:t1', terminal_id: terminal }] },
+      },
+    })
+    const before = box.calls().length
+    const l = await launched(await started({ name, cwd: dir, workspace: { create: name } }))
+    assert.equal(l.state, 'done', l.error)
+    return box
+      .calls()
+      .slice(before)
+      .filter(a => a[0] === 'tab' && a[1] === 'close')
+      .map(a => a.join(' '))
+  }
+  // herdr started over while the launch ran: wN:t1 holds someone else's terminal now. It stays.
+  assert.deepEqual(await run('Gamma one', 'term-other'), [])
+  // The tab's own shell is still there: the tab goes, as before.
+  assert.deepEqual(await run('Gamma two', 'term-1'), ['tab close wN:t1'])
+}, 30_000)
+
 test('a launcher that gives up at the trust dialog: the launch is kept, and once trusted the board does what the launcher did not', async () => {
   const box0 = await sandbox()
   const record = join(box0.dir, 'launcher.json')

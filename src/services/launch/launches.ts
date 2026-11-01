@@ -4,7 +4,7 @@
 // it to the session it started, the card's buttons (dismiss, go to it, trust, close its tab) and
 // what the new-session window offers, the agents a start may pick among it (core/launch/agents.ts).
 import { readCard, removeCard, writeCard } from '../../adapters/cards.ts'
-import { herdr, paneTab, workspaceList } from '../../adapters/herdr.ts'
+import { herdr, paneTab, paneTabTerminal, workspaceList } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { findCommand } from '../../adapters/setup-facts.ts'
 import { t } from '../../core/lang.ts'
@@ -189,8 +189,11 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
     const l = launches.get(id)
     if (!l?.pane || (l.state !== 'trust' && l.state !== 'waiting')) return { ok: false, error: t('launch.err.gone') }
     try {
-      const tab = await paneTab(l.pane)
-      if (tab) await herdr(['tab', 'close', tab])
+      // A pane that holds another terminal than the one the board opened is not the launch's: herdr
+      // gave its id out again after it started over, and the launch's own tab is gone already.
+      const { tab, terminal } = await paneTabTerminal(l.pane)
+      const reused = !!l.terminal && !!terminal && terminal !== l.terminal
+      if (tab && !reused) await herdr(['tab', 'close', tab])
     } catch (err) {
       return { ok: false, error: t('err.focus', { name: l.name, why: messageOf(err) }) }
     }

@@ -70,6 +70,7 @@ import {
   type SeenSnapshot,
   type SleepingAnswer,
   sleepingOf,
+  sleepLabels,
   type WakeEntry,
   type WakeSessions,
 } from '../../core/wake/sessions.ts'
@@ -526,9 +527,6 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       deps.log(`could not save ${tidyFile}: ${messageOf(err)}`)
     }
   }
-
-  /** The labels wake gives a sleeper's pane: `💤 <name>` when put to sleep, its title for a name when exited. */
-  const sleepLabels = (s: WakeEntry): string[] => [`💤 ${s.name}`, `💤 ${s.name || s.title || ''}`]
 
   /**
    * A kept sleeper giveBack takes up: its pane, its sleep, its pane's label, and its shell (pane,

@@ -95,8 +95,8 @@ export interface LaunchContext {
 /** What a launcher tells the board while it works, so the card can show it and go to it. */
 export interface LaunchEvents {
   step(step: LaunchStep): void
-  /** The pane the session is in. */
-  pane(pane: string): void
+  /** The pane the session is in, and the terminal it holds when the launcher knows it. */
+  pane(pane: string, terminal?: string | null): void
   /** The id the launcher gives the Claude it starts; the board writes its card (and lane) before Claude exists. */
   session(id: string): void
 }
@@ -214,15 +214,17 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
         throw new LaunchError(t('archive.err.cannotResume'), 'launcher')
       on.step('tab')
       let pane: string
+      let terminal: string | null = null
       if (l.rootPane) {
         pane = l.rootPane
         if (l.rootTab) await herdr(['tab', 'rename', l.rootTab, l.label]).catch(() => {})
       } else {
         const opened = await openInProfile(l, env => tabCreateRoot(l.workspaceId, l.cwd, l.label, env))
         pane = opened.pane
+        terminal = opened.terminal
         notePane(l, pane, opened.terminal)
       }
-      on.pane(pane)
+      on.pane(pane, terminal)
       let sessionId: string | null = null
       if (l.resume) {
         sessionId = l.resume
