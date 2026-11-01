@@ -70,6 +70,25 @@ export function switchesInput(e: { key?: string; code?: string; ctrlKey?: boolea
   return !!e.ctrlKey && !e.metaKey && (key === ' ' || e.code === 'Space')
 }
 
+type KeyLike = { key?: string; code?: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean }
+
+/**
+ * The key a Ctrl or Cmd shortcut is on, as the owner's own system reads it: in another alphabet's
+ * layout (a Russian one's V key says "м") the Latin letter of its key (Windows reads its shortcuts
+ * by that key, macOS and iPadOS on their Latin layout), in its case; any other key as it says.
+ * Not with Alt: AltGr (Ctrl and Alt on Windows) types a letter.
+ */
+export function shortcutKey(e: KeyLike): string {
+  const key = e.key ?? ''
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || [...key].length !== 1 || (key.codePointAt(0) ?? 0) < 0x80) return key
+  const latin = /^Key([A-Z])$/.exec(e.code ?? '')?.[1]
+  if (!latin) return key
+  return key === key.toLowerCase() ? latin.toLowerCase() : latin
+}
+
+/** Ctrl+V or Cmd+V (Shift too), in any layout: what pastes the owner's clipboard. */
+export const pastes = (e: KeyLike): boolean => !!(e.ctrlKey || e.metaKey) && shortcutKey(e).toLowerCase() === 'v'
+
 /**
  * An iPad or an iPhone: its keys are typed in a field (its own keyboard, its input language and the
  * Globe key are a field's, not a picture's). An iPad's Safari says it is a Mac's, but a Mac has no
@@ -340,7 +359,8 @@ export class DeskTyping {
   /** Text as typed or pasted, after what waits. */
   text(text: string): void {
     if (!text) return
-    this.queue.push(text)
+    // Windows' line ends (CR LF) and old Macs' (CR) as a Return each, not a CR by the clipboard
+    this.queue.push(text.replace(/\r\n?/g, '\n'))
     this.run()
   }
 

@@ -27,6 +27,8 @@ export const DESK_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'desk.paste': 'Paste',
     'desk.pasteHint': 'Your clipboard into its browser, where its cursor is',
     'desk.pasteFailed': 'Could not read your clipboard: {why}',
+    'desk.pasteDenied':
+      'The browser does not let the board read your clipboard. Allow the clipboard in this site’s settings (the icon left of the address), or press Ctrl+V (Cmd+V on a Mac or an iPad) on the picture.',
     'desk.copied': 'Copied in its browser — tap to copy it to yours',
     'desk.copiedDone': 'Copied to your clipboard',
     'desk.copyFailed': 'Could not copy it: {why}',
@@ -69,6 +71,8 @@ export const DESK_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'desk.paste': 'Вставить',
     'desk.pasteHint': 'Ваш буфер обмена в его браузер, туда, где курсор',
     'desk.pasteFailed': 'Не удалось прочитать ваш буфер обмена: {why}',
+    'desk.pasteDenied':
+      'Браузер не даёт доске прочитать ваш буфер обмена. Разрешите буфер обмена в настройках этого сайта (значок слева от адреса) или нажмите Ctrl+V (Cmd+V на Mac и iPad) на картинке.',
     'desk.copied': 'Скопировано в его браузере — нажмите, чтобы скопировать к себе',
     'desk.copiedDone': 'Скопировано в ваш буфер обмена',
     'desk.copyFailed': 'Не удалось скопировать: {why}',

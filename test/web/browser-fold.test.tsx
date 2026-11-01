@@ -1368,6 +1368,116 @@ test('Ctrl+V (or Cmd+V) on the picture: the field takes the paste, its text goes
   expect(socket?.sent.map(said)).toEqual(typedKeys('ok'))
 })
 
+/**
+ * Ctrl+V and Cmd+V as the browser hears them: a Latin layout's, and a Russian one's, whose V key
+ * says "м" (Chrome, Safari); the owner's system pastes with it all the same (it reads shortcuts on
+ * the Latin keys: Windows' V key, macOS's and iPadOS's Latin layout).
+ */
+const PASTE_KEYS: [string, Record<string, unknown>][] = [
+  ['Ctrl+V', { key: 'v', code: 'KeyV', ctrlKey: true }],
+  ['Cmd+V', { key: 'v', code: 'KeyV', metaKey: true }],
+  ['Ctrl+V, a Russian layout', { key: 'м', code: 'KeyV', ctrlKey: true }],
+  ['Cmd+V, a Russian layout', { key: 'м', code: 'KeyV', metaKey: true }],
+  ['Ctrl+Shift+V, a Russian layout', { key: 'М', code: 'KeyV', ctrlKey: true, shiftKey: true }],
+]
+/**
+ * A paste's key pressed and let go where the keys are, as a browser has it: not held back, it
+ * pastes the owner's `text` into the field if the field has the keys then (a picture is no place a
+ * browser pastes into: Chrome fires its paste at the page's body, Safari none). Whether it was held back.
+ */
+function pasteKeys(fields: Record<string, unknown>, text: string): boolean {
+  const down = key(dom.document.activeElement, fields)
+  const field = byClass('desk-keys')
+  if (!down.defaultPrevented)
+    fire(field && dom.document.activeElement === field ? field : dom.document.body, 'paste', {
+      clipboardData: { getData: () => text },
+    })
+  key(dom.document.activeElement, fields, 'keyup')
+  return down.defaultPrevented
+}
+
+test('every Ctrl+V and Cmd+V pastes the owner’s clipboard, one after another, from the picture or from the field, on a computer and on an iPad, in a Latin layout and in a Russian one: none goes to the display as its keys', async () => {
+  for (const [browser, userAgent, touchPoints] of [...DESKTOPS, ...TOUCH_APPLE])
+    await asBrowser(userAgent, touchPoints, async () => {
+      const { socket } = await controlled()
+      clipboardOn(socket)
+      for (const from of ['picture', 'field'] as const)
+        for (const [name, fields] of PASTE_KEYS) {
+          // the keys on the picture (control taken, a click there) or in the field (a tap brings it)
+          if (from === 'picture') (canvas() as MiniElement).focus()
+          else if (keysAt() !== 'field') tap(canvas(), 250, 150)
+          for (const n of [1, 2]) {
+            socket?.sent.splice(0)
+            const text = `${n}: мир`
+            const held = pasteKeys(fields, text)
+            expect({ browser, from, name, n, held, sent: socket?.sent.map(said) }).toEqual({
+              browser,
+              from,
+              name,
+              n,
+              held: false,
+              sent: typedKeys(text),
+            })
+          }
+        }
+      flush(() => root.unmount())
+      newRoot()
+      FakeSocket.made = []
+    })
+})
+
+test('a paste, Russian typed on the picture, a paste again (the layout Russian now): both paste the owner’s clipboard (the second went to the display as Ctrl and a Russian letter, which pastes nothing there)', async () => {
+  const { socket } = await controlled()
+  clipboardOn(socket)
+  expect(pasteKeys({ key: 'v', code: 'KeyV', ctrlKey: true }, 'one')).toBe(false)
+  expect(keysAt()).toBe('picture')
+  press(canvas(), { key: 'д', code: 'KeyL' }, { key: 'д', code: 'KeyL', up: true })
+  expect(pasteKeys({ key: 'м', code: 'KeyV', ctrlKey: true }, 'two')).toBe(false)
+  expect(socket?.sent.map(said)).toEqual([...typedKeys('one'), ...typedKeys('д'), ...typedKeys('two')])
+  expect(keysAt()).toBe('picture')
+})
+
+test('in a Russian layout Ctrl+C, Ctrl+A, Ctrl+X, Ctrl+Z (Shift too) go to the display as on its Latin keys, as the owner’s system reads them, so its browser copies, selects, cuts, undoes; a Russian letter, and one typed with AltGr (Ctrl+Alt), go as before', async () => {
+  const { socket } = await controlled()
+  clipboardOn(socket)
+  const held = press(
+    canvas(),
+    CTRL,
+    ...[
+      ['с', 'KeyC'],
+      ['ф', 'KeyA'],
+      ['ч', 'KeyX'],
+      ['я', 'KeyZ'],
+    ].flatMap(([k, code]) => [
+      { key: k, code, ctrlKey: true },
+      { key: k, code, ctrlKey: true, up: true },
+    ]),
+    { ...SHIFT, ctrlKey: true },
+    { key: 'Я', code: 'KeyZ', ctrlKey: true, shiftKey: true },
+    { key: 'Я', code: 'KeyZ', ctrlKey: true, shiftKey: true, up: true },
+    { ...SHIFT, up: true },
+    { ...CTRL, up: true },
+    { key: 'с', code: 'KeyC' },
+    { key: 'с', code: 'KeyC', up: true },
+  )
+  expect(held.every(Boolean)).toBe(true)
+  expect(socket?.sent.map(said)).toEqual([
+    'down ffe3',
+    ...['63', '61', '78', '7a'].flatMap(k => [`down ${k}`, `up ${k}`]),
+    'down ffe1',
+    'down 5a',
+    'up 5a',
+    'up ffe1',
+    'up ffe3',
+    'down 1000441',
+    'up 1000441',
+  ])
+  // AltGr (Windows says Ctrl and Alt): what it types, as before
+  socket?.sent.splice(0)
+  press(canvas(), { key: '€', code: 'KeyE', ctrlKey: true, altKey: true })
+  expect(socket?.sent.map(said)).toEqual(['down 10020ac'])
+})
+
 test('a long paste (over 200 characters) goes by the display’s clipboard as one, its text whole', async () => {
   const { socket } = await controlled()
   clipboardOn(socket)
@@ -1450,6 +1560,53 @@ test('"Paste" with control where the page can read the owner’s clipboard: its 
   newRoot()
   await controlled()
   expect(desk('paste')).toBeUndefined()
+})
+
+test('"Paste" the browser does not let read the clipboard (the site’s setting, its Paste bubble dismissed): a hint in the board’s language where to allow it, or Ctrl+V / Cmd+V on the picture; another failure says why, as before', async () => {
+  const denied = async () => {
+    throw new DOMException('Read permission denied.', 'NotAllowedError')
+  }
+  for (const [lang, hint] of [
+    [
+      'en',
+      'The browser does not let the board read your clipboard. Allow the clipboard in this site’s settings (the icon left of the address), or press Ctrl+V (Cmd+V on a Mac or an iPad) on the picture.',
+    ],
+    [
+      'ru',
+      'Браузер не даёт доске прочитать ваш буфер обмена. Разрешите буфер обмена в настройках этого сайта (значок слева от адреса) или нажмите Ctrl+V (Cmd+V на Mac и iPad) на картинке.',
+    ],
+  ] as const)
+    await withClipboard({ readText: denied }, async () => {
+      flush(() => root.unmount())
+      newRoot()
+      FakeSocket.made = []
+      render({ desktop: desktop(), open: true, lang })
+      handshake(FakeSocket.made[0])
+      answers([200, { ok: true, control: 'owner' }])
+      click(desk('control'))
+      await settle()
+      toasts.length = 0
+      click(desk('paste'))
+      await settle()
+      expect(toasts).toEqual([hint])
+    })
+  await withClipboard(
+    {
+      readText: async () => {
+        throw new Error('Document is not focused.')
+      },
+    },
+    async () => {
+      toasts.length = 0
+      flush(() => root.unmount())
+      newRoot()
+      FakeSocket.made = []
+      await controlled()
+      click(desk('paste'))
+      await settle()
+      expect(toasts).toEqual(['Could not read your clipboard: Document is not focused.'])
+    },
+  )
 })
 
 test('a paste anywhere else on the page (the chat’s composer beside it) never reaches the display, and the display’s paste and copy leave it as it was', async () => {

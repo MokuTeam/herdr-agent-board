@@ -49,6 +49,12 @@ test('what the display’s keyboard has goes as its keys at once: US ASCII, a li
   expect(d.got).toEqual(keys(text))
 })
 
+test('Windows’ (and old Macs’) line ends, CR LF and CR, go as a Return each, as keys: nothing by the clipboard for them', () => {
+  const d = display()
+  d.typing.text('line 1\r\nline 2\rend\r\n')
+  expect(d.got).toEqual(keys('line 1\nline 2\nend\n'))
+})
+
 test('what it has no key for (Greek, an emoji) goes by its clipboard: announced, Ctrl+V, the text as the server asks; what comes after waits for the server’s turn, then the clipboard is emptied', async () => {
   const d = display()
   let pointed = 0

@@ -28,6 +28,11 @@ import { DockGlyph } from '../panel/glyphs.tsx'
 
 /** Why the page's clipboard said no (the browser's own words). */
 const whyNot = (err: unknown): string => (err instanceof Error ? err.message || err.name : String(err))
+/** Not allowed to read it: the site's setting, or its Paste bubble dismissed (Safari). */
+const notAllowed = (err: unknown): boolean => {
+  const name = (err as { name?: unknown } | null)?.name
+  return name === 'NotAllowedError' || name === 'SecurityError'
+}
 
 export interface BrowserFoldProps {
   item: Item
@@ -117,7 +122,8 @@ export function BrowserFold({ item, open, onOpen, askedAbove = false, reveal = 0
   const pasteMine = () =>
     void navigator.clipboard.readText().then(
       text => view.type(text),
-      (err: unknown) => toast(t('desk.pasteFailed', { why: whyNot(err) }), true),
+      (err: unknown) =>
+        toast(notAllowed(err) ? t('desk.pasteDenied') : t('desk.pasteFailed', { why: whyNot(err) }), true),
     )
   const copyOut = () =>
     void view.copyOut().then(

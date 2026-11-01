@@ -31,8 +31,10 @@ import {
   keyed,
   keysymOf,
   NO_ZOOM,
+  pastes,
   pinched,
   screenPoint,
+  shortcutKey,
   shownScale,
   switchesInput,
   WHEEL_DOWN,
@@ -226,9 +228,10 @@ export function attachInput(
     // What switches the owner's input language (Ctrl+Space, Caps Lock, the Globe key) is the owner's
     // system's: not held back, not sent.
     if (switchesInput(k)) return
-    // A paste: its text comes as keys (paste, below), not as Ctrl+V on the display; the field takes
-    // it (a picture is no place a browser pastes into: Safari fires no paste there).
-    if ((k.ctrlKey || k.metaKey) && k.key?.toLowerCase() === 'v') return catchPaste()
+    // A paste: the owner's clipboard, its text as keys (paste, below), not Ctrl+V on the display; the
+    // field takes it (a picture is no place a browser pastes into: Safari fires no paste there).
+    // In any layout: a Russian one's V key says "м", and the owner's system pastes with it.
+    if (pastes(k)) return catchPaste()
     // A character the display's keyboard has no key for (an emoji, another alphabet): as text.
     const ch = k.key ?? ''
     if (rfb.clipboard && [...ch].length === 1 && !keyed(ch) && !k.metaKey && (!k.ctrlKey || k.altKey)) {
@@ -236,7 +239,8 @@ export function attachInput(
       typing.text(ch)
       return
     }
-    const keysym = keysymOf(k.key ?? '', k.code ?? '')
+    // A shortcut in another alphabet's layout as on its Latin key (Ctrl+C copies there in a Russian one too).
+    const keysym = keysymOf(shortcutKey(k), k.code ?? '')
     if (keysym === null) return
     e.preventDefault()
     keys.set(k.code || k.key, keysym)
