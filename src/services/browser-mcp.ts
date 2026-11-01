@@ -22,11 +22,14 @@
 // into the focused field once the owner approves, core/login-fill.ts; where the board has no vault
 // the board says so) and browser_close (done with it for now: it stops, its sign-ins and tabs kept,
 // and the next call starts it again; chrome-devtools-mcp connects to it again by itself, as it does
-// to a browser restarted).
+// to a browser restarted). And two that read the page compactly (services/browser-read.ts:
+// read_page, list_interactive), through chrome-devtools-mcp by calls of the wrapper's own, which
+// only look; take_snapshot's and wait_for's descriptions point to them.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { LOCAL_KEY_HEADER } from '../adapters/local-key.ts'
 import { HOLD_MS } from '../core/desktop.ts'
+import { type ChildCall, READ_TOOL_NAMES, READ_TOOLS, readTool, steered } from './browser-read.ts'
 
 type Msg = Record<string, unknown>
 const isRecord = (v: unknown): v is Msg => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -48,7 +51,7 @@ export const OWN_TOOLS = [
   {
     name: 'browser_ask_owner',
     description:
-      'Asks the owner to act in your browser for you: sign in, a password or a key, a captcha, 2FA. Your card goes under "needs you" with your browser on it; the owner takes it over from the board and hands it back. After asking, end your turn: do not poll and do not call browser tools to wait. The board wakes you with a message when the owner hands your browser back. While the owner has it, tools that act in it fail at once; looking works (take_screenshot of what shows, take_snapshot, list_pages, the console and the network), so you can answer what the owner asks meanwhile. Never type the owner\'s secrets yourself.',
+      'Asks the owner to act in your browser for you: sign in, a password or a key, a captcha, 2FA. Your card goes under "needs you" with your browser on it; the owner takes it over from the board and hands it back. After asking, end your turn: do not poll and do not call browser tools to wait. The board wakes you with a message when the owner hands your browser back. While the owner has it, tools that act in it fail at once; looking works (read_page, list_interactive, take_screenshot of what shows, take_snapshot, list_pages, the console and the network), so you can answer what the owner asks meanwhile. Never type the owner\'s secrets yourself.',
     inputSchema: {
       type: 'object',
       properties: { text: { type: 'string', description: 'what you need, e.g. "Sign in to GitHub as acme-bot"' } },
@@ -90,7 +93,7 @@ export const OWNER_HAS_IT =
   'The owner has the browser now (they took it over from the board). Try again later, or ask what they need; nothing was done.'
 /** A call that acts while the owner has the browser for what the agent asked: at once, no wait. */
 export const OWNER_DOING_ASK =
-  'The owner has your browser now, for what you asked: nothing was done. End your turn; the board wakes you with a message when they hand it back. Meanwhile you can look: take_screenshot (of what shows), take_snapshot, list_pages, and the console and network reads work.'
+  'The owner has your browser now, for what you asked: nothing was done. End your turn; the board wakes you with a message when they hand it back. Meanwhile you can look: read_page, list_interactive, take_screenshot (of what shows), take_snapshot, list_pages, and the console and network reads work.'
 /** What the agent is told once its browser is closed (browser_close). */
 export const CLOSED =
   'Your browser is closed: its window and display stopped. Its sign-ins and open tabs are kept; the next browser tool call opens it again with them (a few seconds; page ids change, list_pages shows them).'
@@ -99,7 +102,7 @@ export const FILL_ASKED =
   'Asked: your card is under "needs you" with the login fill; the owner approves it on the board. End your turn now: do not poll and do not call browser tools to wait (the focus must stay where it is). The board wakes you with a message saying whether it was typed.'
 /** What the agent is told once it asked the owner (browser_ask_owner). */
 export const ASKED =
-  'Asked: your card is under "needs you" with your browser on it. End your turn now: do not poll and do not call browser tools to wait. The board wakes you with a message when the owner hands your browser back; then check the page and go on. If the owner writes to you meanwhile, answer them: you can look at the browser then (take_screenshot, take_snapshot, list_pages, the console and the network), not act in it.'
+  'Asked: your card is under "needs you" with your browser on it. End your turn now: do not poll and do not call browser tools to wait. The board wakes you with a message when the owner hands your browser back; then check the page and go on. If the owner writes to you meanwhile, answer them: you can look at the browser then (read_page, list_interactive, take_screenshot, take_snapshot, list_pages, the console and the network), not act in it.'
 
 /**
  * The calls that only look, which go on while the owner has the browser: nothing in them moves the
@@ -138,6 +141,8 @@ export interface RelayOptions {
   pollMs?: number
   sleep?: (ms: number) => Promise<void>
   now?: () => number
+  /** How long a call of the wrapper's own to chrome-devtools-mcp waits for its answer (read_page's). */
+  childMs?: number
 }
 
 export interface Relay {
@@ -166,6 +171,9 @@ export function createRelay(o: RelayOptions): Relay {
   const lists = new Set<string>()
   const holding = new Map<string, { cancelled: boolean }>()
   const busy = new Set<Promise<void>>()
+  /** The wrapper's own calls to chrome-devtools-mcp (read_page's), by id: their answers never reach Claude. */
+  const mine = new Map<string, (msg: Msg) => void>()
+  let mineSeq = 0
   const track = (p: Promise<void>): void => {
     busy.add(p)
     void p.finally(() => busy.delete(p))
@@ -210,6 +218,40 @@ export function createRelay(o: RelayOptions): Relay {
     if (r?.ok === true) return true
     late(r ? `No browser: ${String(r.error ?? 'it did not start')}` : 'The board does not answer: no browser now.')
     return false
+  }
+
+  /** A tool call of the wrapper's own to chrome-devtools-mcp: its answer's text, and whether it failed. */
+  const childCall: ChildCall = (name, args) =>
+    new Promise(resolve => {
+      const id = `board-read-${++mineSeq}`
+      const key = idKey(id)
+      const timer = setTimeout(() => {
+        mine.delete(key)
+        resolve({ text: 'The browser did not answer in time: nothing read.', isError: true })
+      }, o.childMs ?? 120_000)
+      mine.set(key, msg => {
+        clearTimeout(timer)
+        const r = isRecord(msg.result) ? msg.result : null
+        const content = Array.isArray(r?.content) ? (r.content as unknown[]) : []
+        const text = content
+          .map(c => (isRecord(c) && typeof c.text === 'string' ? c.text : ''))
+          .filter(Boolean)
+          .join('\n')
+        if (r) return resolve({ text, isError: r.isError === true })
+        const err = isRecord(msg.error) && typeof msg.error.message === 'string' ? msg.error.message : 'no answer'
+        resolve({ text: err, isError: true })
+      })
+      o.toChild(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }))
+    })
+
+  /** read_page or list_interactive: they only look, so they go on whoever has the browser, once it is up. */
+  async function read(msg: Msg, params: Msg): Promise<void> {
+    const id = msg.id
+    const late = (text: string) => o.toClient(result(id, text, true))
+    if (!(await agentHasIt(id, late, true)) || !(await started(late))) return
+    const args = isRecord(params.arguments) ? params.arguments : {}
+    const r = await readTool(String(params.name), args, childCall)
+    o.toClient(result(id, r.text, r.isError))
   }
 
   async function own(msg: Msg, params: Msg): Promise<void> {
@@ -297,6 +339,7 @@ export function createRelay(o: RelayOptions): Relay {
       }
       if (msg.method !== 'tools/call') return o.toChild(line)
       if (OWN_TOOLS.some(t => t.name === params.name)) return track(own(msg, params))
+      if (typeof params.name === 'string' && READ_TOOL_NAMES.has(params.name)) return track(read(msg, params))
       const late = (text: string) => o.toClient(result(msg.id, text, true))
       // Looking goes on whoever has the browser; acting waits for the agent's turn at it.
       track(
@@ -313,9 +356,15 @@ export function createRelay(o: RelayOptions): Relay {
         return o.toClient(line)
       }
       const key = isRecord(msg) ? idKey(msg.id) : ''
+      const answer = isRecord(msg) && msg.method === undefined ? mine.get(key) : undefined
+      if (answer && isRecord(msg)) {
+        mine.delete(key)
+        return answer(msg)
+      }
       if (isRecord(msg) && lists.has(key) && isRecord(msg.result) && Array.isArray(msg.result.tools)) {
         lists.delete(key)
-        if (!msg.result.nextCursor) msg.result.tools = [...msg.result.tools, ...OWN_TOOLS]
+        const tools = steered(msg.result.tools)
+        msg.result.tools = msg.result.nextCursor ? tools : [...tools, ...READ_TOOLS, ...OWN_TOOLS]
         return o.toClient(JSON.stringify(msg))
       }
       o.toClient(line)

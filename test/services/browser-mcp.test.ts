@@ -77,6 +77,8 @@ test('its own tools join chrome-devtools-mcp’s list; everything else goes thro
   const names = ((toClient[1]?.result as { tools?: { name: string }[] } | undefined)?.tools ?? []).map(t => t.name)
   expect(names).toEqual([
     'navigate_page',
+    'read_page',
+    'list_interactive',
     'browser_profile',
     'browser_ask_owner',
     'browser_fill_login',
@@ -466,4 +468,105 @@ test('browser_fill_login: through the board once the agent has the browser, with
   await asks.relay.idle()
   expect(asks.asked.map(([op]) => op)).toEqual(['call'])
   expect(asks.toClient[0]).toMatchObject({ result: { isError: true, content: [{ text: OWNER_DOING_ASK }] } })
+})
+
+// ---------------------------------------------------------------- read_page and list_interactive
+
+/** The wrapper's own call to chrome-devtools-mcp among what went to it: its id, tool and arguments. */
+const ownCall = (lines: string[], name: string) =>
+  lines.map(l => JSON.parse(l) as Msg).find(m => (m.params as Msg | undefined)?.name === name) as
+    | { id: string; method: string; params: { name: string; arguments: Msg } }
+    | undefined
+
+test('read_page: evaluate_script by a call of the wrapper’s own, its answer to Claude as compact text; the call’s own answer never reaches Claude', async () => {
+  // the owner has the browser for the agent's ask: reading only looks, so it goes on
+  const { relay, toChild, toClient, asked } = relayWith({ control: () => 'owner', asks: () => true })
+  relay.fromClient(call(1, 'read_page', { maxChars: 1000 }))
+  for (let i = 0; i < 50 && !toChild.length; i++) await Bun.sleep(1)
+  expect(asked.map(([op]) => op)).toEqual(['call', 'start'])
+  const sent = ownCall(toChild, 'evaluate_script')
+  expect(sent?.method).toBe('tools/call')
+  expect(sent?.id).toStartWith('board-read-')
+  expect(sent?.params.arguments.waitForStableDom).toBe(false)
+  expect(String(sent?.params.arguments.function)).toContain('"selector":null')
+  const page = { title: 'Karakol', url: 'https://x.org/k', root: 'main', text: 'Karakol is a city.', dropped: 0 }
+  const text = `Script ran on page and returned:\n\`\`\`json\n${JSON.stringify(page)}\n\`\`\``
+  relay.fromChild(JSON.stringify({ jsonrpc: '2.0', id: sent?.id, result: { content: [{ type: 'text', text }] } }))
+  await relay.idle()
+  expect(toClient).toHaveLength(1)
+  expect(toClient[0]?.id).toBe(1)
+  const out = toClient[0]?.result as { content: { text: string }[]; isError?: boolean }
+  expect(out.isError).toBeUndefined()
+  expect(out.content[0]?.text).toContain('Karakol | https://x.org/k')
+  expect(out.content[0]?.text).toEndWith('\n\nKarakol is a city.')
+  // an answer of chrome-devtools-mcp's to Claude's own call still goes through as it is
+  relay.fromChild(JSON.stringify({ jsonrpc: '2.0', id: 'board-read-1', result: {} }))
+  expect(toClient).toHaveLength(2)
+})
+
+test('list_interactive: take_snapshot by a call of the wrapper’s own, its uids as they are; a failure or a browser that cannot start answered as such', async () => {
+  const { relay, toChild, toClient } = relayWith()
+  relay.fromClient(call(2, 'list_interactive', { links: false }))
+  for (let i = 0; i < 50 && !toChild.length; i++) await Bun.sleep(1)
+  const sent = ownCall(toChild, 'take_snapshot')
+  expect(sent?.params.arguments).toEqual({})
+  const snapshot = [
+    '## Latest page snapshot',
+    'uid=3_0 RootWebArea "Form" url="https://x.org/f"',
+    '  uid=3_7 textbox "Email"',
+    '  uid=3_8 link "Home" url="https://x.org/"',
+    '  uid=3_9 button "Send"',
+  ].join('\n')
+  relay.fromChild(
+    JSON.stringify({ jsonrpc: '2.0', id: sent?.id, result: { content: [{ type: 'text', text: snapshot }] } }),
+  )
+  await relay.idle()
+  const text = (toClient[0]?.result as { content: { text: string }[] } | undefined)?.content[0]?.text ?? ''
+  expect(text).toContain('3_7 textbox "Email"\n3_9 button "Send"')
+  expect(text).not.toContain('Home')
+  // chrome-devtools-mcp fails it (a dialog open): its words, as an error
+  relay.fromClient(call(3, 'list_interactive'))
+  for (let i = 0; i < 50 && toChild.length < 2; i++) await Bun.sleep(1)
+  const again = JSON.parse(toChild[1] as string) as { id: string }
+  relay.fromChild(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: again.id,
+      result: { content: [{ type: 'text', text: 'A dialog is open' }], isError: true },
+    }),
+  )
+  relay.fromClient(call(4, 'read_page'))
+  for (let i = 0; i < 50 && toChild.length < 3; i++) await Bun.sleep(1)
+  const third = JSON.parse(toChild[2] as string) as { id: string }
+  relay.fromChild(JSON.stringify({ jsonrpc: '2.0', id: third.id, error: { code: -32602, message: 'bad params' } }))
+  await relay.idle()
+  expect(toClient.slice(1)).toEqual([
+    { jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: 'A dialog is open' }], isError: true } },
+    { jsonrpc: '2.0', id: 4, result: { content: [{ type: 'text', text: 'bad params' }], isError: true } },
+  ])
+  const none = relayWith({ answers: { start: { ok: false, error: 'no Xvnc on this server' } } })
+  none.relay.fromClient(call(5, 'read_page'))
+  await none.relay.idle()
+  expect(none.toChild).toEqual([])
+  expect((none.toClient[0]?.result as { content: { text: string }[] } | undefined)?.content[0]?.text).toContain(
+    'no Xvnc',
+  )
+})
+
+test('the list: take_snapshot’s description points to read_page and list_interactive; the compact tools only look, so asking the owner says they work meanwhile', async () => {
+  const { relay, toClient } = relayWith()
+  relay.fromClient(JSON.stringify({ jsonrpc: '2.0', id: 'L', method: 'tools/list' }))
+  relay.fromChild(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 'L',
+      result: { tools: [{ name: 'take_snapshot', description: 'Take a text snapshot.' }, { name: 'click' }] },
+    }),
+  )
+  const tools = (toClient[0]?.result as { tools: { name: string; description?: string }[] } | undefined)?.tools ?? []
+  expect(tools[0]?.description).toContain('list_interactive')
+  expect(tools[1]).toEqual({ name: 'click' })
+  for (const t of OWN_TOOLS.filter(t => t.name === 'browser_ask_owner')) expect(t.description).toContain('read_page')
+  expect(ASKED).toContain('read_page, list_interactive')
+  expect(OWNER_DOING_ASK).toContain('read_page, list_interactive')
 })
