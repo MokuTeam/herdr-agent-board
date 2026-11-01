@@ -380,8 +380,14 @@ export async function notify(title: string, body: string): Promise<void> {
 
 /** The tab a pane is in, or null when herdr does not say. */
 export async function paneTab(pane: string): Promise<string | null> {
+  return (await paneTabTerminal(pane)).tab
+}
+
+/** The tab a pane is in and the terminal it holds, each null when herdr does not say. */
+export async function paneTabTerminal(pane: string): Promise<{ tab: string | null; terminal: string | null }> {
   const answer = await herdr(['pane', 'get', pane])
-  return isRecord(answer) ? stringAt(answer.pane, 'tab_id') : null
+  if (!isRecord(answer)) return { tab: null, terminal: null }
+  return { tab: stringAt(answer.pane, 'tab_id'), terminal: stringAt(answer.pane, 'terminal_id') }
 }
 
 /** A workspace's panes: the tab each is in and the agent it runs (null for a shell). */

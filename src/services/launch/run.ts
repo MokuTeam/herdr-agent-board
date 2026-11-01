@@ -63,6 +63,11 @@ export interface Launch extends LaunchRequest {
   /** The panes on the board when it started: one matched to it while its launcher runs is new. */
   knownPanes: Set<string | null>
   pane: string | null
+  /**
+   * The terminal `pane` held when the board opened it, null when unknown (an older herdr, a pane a
+   * launcher command or spawn-agent opened): herdr gives a pane's id out again after it starts over.
+   */
+  terminal: string | null
   key: string | null
   error: string
   kind: LaunchFailure | ''
@@ -70,6 +75,8 @@ export interface Launch extends LaunchRequest {
   /** The key whose card has its lane. */
   carded: string | null
   rootPane: string | null
+  /** The terminal of `rootPane` when herdr said, else null. */
+  rootTerminal: string | null
   rootTab: string | null
   /** A tab the worktree came with, left over once the profile's own tab was opened. */
   spareTab: string | null
@@ -102,12 +109,14 @@ export function newLaunch(
     doneAt: null,
     knownPanes: new Set(items.map(i => i.pane)),
     pane: null,
+    terminal: null,
     key: null,
     error: '',
     kind: '',
     sessionId: null,
     carded: null,
     rootPane: null,
+    rootTerminal: null,
     rootTab: null,
     spareTab: null,
     ticketNames: false,
@@ -170,8 +179,9 @@ export function launchRunner({
 }): LaunchRunner {
   const events = (l: Launch): LaunchEvents => ({
     step: name => step(l, name),
-    pane: pane => {
+    pane: (pane, terminal) => {
       l.pane = pane
+      l.terminal = terminal ?? (pane === l.rootPane ? l.rootTerminal : null)
     },
     session: id => {
       l.sessionId = id
@@ -214,6 +224,7 @@ export function launchRunner({
         const ws = await openInProfile(l, env => workspaceCreate(l.cwd, l.workspaceLabel, env))
         l.workspaceId = ws.id
         l.rootPane = ws.pane
+        l.rootTerminal = ws.terminal
         l.rootTab = ws.tab
         if (ws.pane) notePane(l, ws.pane, ws.terminal)
       }
@@ -261,11 +272,13 @@ export function launchRunner({
     l.rootTab = ws.alreadyOpen ? null : ws.tab
     if (l.configDir === null && !ws.alreadyOpen) {
       l.rootPane = ws.pane
+      l.rootTerminal = ws.terminal
       if (ws.pane) notePane(l, ws.pane, ws.terminal)
       return
     }
     const opened = await openInProfile(l, env => tabCreateRoot(ws.id, l.cwd, l.label, env))
     l.rootPane = opened.pane
+    l.rootTerminal = opened.terminal
     if (spareRootTab && ws.tab && !ws.alreadyOpen) l.spareTab = ws.tab
     notePane(l, opened.pane, opened.terminal)
   }
