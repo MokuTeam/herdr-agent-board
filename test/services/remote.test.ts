@@ -119,3 +119,26 @@ test('the app and the browser on one phone are paired each on its own; unpairing
   expect(remote.revoke(appDevice?.id ?? '')).toBe(true)
   expect(gone).toEqual(['browser', 'app'])
 })
+
+test('a desk is a browser: the phone app is never marked, a browser is, and off clears it', () => {
+  const { remote } = setup()
+  const mac: Caller = { login: 'me@example.com', node: 'nMac', device: 'mac', os: 'macos' }
+  const askedApp = remote.request('My phone', phone)
+  const askedWeb = remote.request('Board in Safari', mac, 'browser')
+  if (!askedApp.ok || !askedWeb.ok) throw new Error('refused')
+  remote.approve(askedApp.id)
+  remote.approve(askedWeb.id)
+  const app = remote.poll(askedApp.id, phone)
+  const web = remote.poll(askedWeb.id, mac)
+  if (app.status !== 'approved' || web.status !== 'approved') throw new Error('not approved')
+  const appId = remote.verify(app.token, phone)?.id ?? ''
+  const webId = remote.verify(web.token, mac)?.id ?? ''
+  // A desk is a browser: the app cannot be marked, and nothing is written for it.
+  expect(remote.desk(appId, true)).toBe(false)
+  expect(remote.verify(app.token, phone)?.desk).toBeUndefined()
+  expect(remote.desk(webId, true)).toBe(true)
+  expect(remote.verify(web.token, mac)?.desk).toBe(true)
+  expect(remote.desk(webId, false)).toBe(true)
+  expect(remote.verify(web.token, mac)?.desk).toBeUndefined()
+  expect(remote.desk('nope', true)).toBe(false)
+})

@@ -90,7 +90,7 @@
 //                            a target, the snapshots each target holds
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { join, resolve } from 'node:path'
 import { readArchiveLog } from '../adapters/archive-store.ts'
 import {
@@ -128,7 +128,7 @@ import { parseMove } from '../core/move.ts'
 import { isPiSessionFile, piSessionId } from '../core/pi.ts'
 import { isPresenceState, type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
 import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
-import { type RemoteView, remoteConfig } from '../core/remote.ts'
+import { deskSteps, type RemoteView, remoteConfig } from '../core/remote.ts'
 import { parseResume, projectFolderName, resumeDir, resumePlan } from '../core/resume.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import { sortTodos, todosConfig, todosOf } from '../core/todos.ts'
@@ -157,7 +157,7 @@ import { type MoveOutcome, moveMany } from '../services/move.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away | call] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | doctor | presence [here | away | call] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -1167,15 +1167,16 @@ async function adoptPi(): Promise<void> {
 }
 
 /**
- * `board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>]`: the remote mode
+ * `board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]]`: the remote mode
  * (core/remote.ts). On and off edit config.json (off takes back `tailscale serve` too); `pwa`
  * sets serve up for the board in a phone's browser (core/pwa.ts) and shows its address and QR
- * code; the rest goes through the running board, which holds the requests to pair. Without an
+ * code; the rest goes through the running board, which holds the requests to pair. `desk` marks a
+ * paired device as the owner's desk (RemoteDevice.desk), `desk <id> off` takes it back. Without an
  * argument: where it listens, who waits, who is paired.
  */
 async function remote(): Promise<void> {
   const [op = 'status', id = ''] = rest
-  const usage = 'usage: board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>]'
+  const usage = 'usage: board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]]'
   const webPort = Number(cfg.port) || 12422
   if (op === 'pwa') {
     const { pwaOff, pwaOn } = await import('../services/pwa.ts')
@@ -1211,6 +1212,26 @@ async function remote(): Promise<void> {
       throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
     }
   }
+  if (op === 'desk') {
+    if (!id || (rest[2] !== undefined && rest[2] !== 'off')) throw new Error(usage)
+    const off = rest[2] === 'off'
+    const body = JSON.stringify({ op: off ? 'undesk' : 'desk', id })
+    const r = await call({ method: 'POST', headers: { 'content-type': 'application/json', 'x-board': '1' }, body })
+    if (!isRecord(r) || r.ok !== true) {
+      const why = isRecord(r) && typeof r.error === 'string' ? ` (${r.error})` : ''
+      const what = off ? `no device ${id}` : `no paired browser ${id} to make a desk`
+      throw new Error(`${what}${why}: \`board remote\` lists them`)
+    }
+    if (off) return console.log(`ok · ${id} is a phone again`)
+    console.log(`ok · ${id} is your desk: Go to herdr and answering phones work from it; reload its board`)
+    const view = (await call().catch(() => null)) as Partial<RemoteView> | null
+    let host: string | null = null
+    try {
+      host = view?.url ? new URL(view.url).hostname : null
+    } catch {}
+    for (const line of deskSteps(userInfo().username, host)) console.log(line)
+    return
+  }
   if (op === 'approve' || op === 'deny' || op === 'revoke') {
     if (!id) throw new Error(usage)
     const body = JSON.stringify({ op, id })
@@ -1233,7 +1254,7 @@ async function remote(): Promise<void> {
     )
   for (const d of view.devices ?? [])
     console.log(
-      `paired: ${d.id} "${d.name}"${d.kind === 'browser' ? ' (browser)' : ''} on ${d.device} (${d.login})${d.seenAt ? `, seen ${stamp(d.seenAt)}` : ''}`,
+      `paired: ${d.id} "${d.name}"${d.kind === 'browser' ? ' (browser)' : ''} on ${d.device} (${d.login})${d.seenAt ? `, seen ${stamp(d.seenAt)}` : ''}${d.desk ? ' · desk' : ''}`,
     )
 }
 

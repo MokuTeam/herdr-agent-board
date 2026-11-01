@@ -209,6 +209,40 @@ describe("the board in a phone's browser, through tailscale serve", () => {
     expect((await post('/api/session/s1/wake', {}, { origin: 'https://other.tail0.ts.net' })).status).toBe(403)
   })
 
+  test("the owner's desk, marked on the computer: herdr's focus and answering phones, nothing else", async () => {
+    const view = (await (await fetch(`${url}/api/remote`)).json()) as { devices: { id: string }[] }
+    const id = view.devices[0]?.id ?? ''
+    expect(await (await phone('/api/hello')).json()).toMatchObject({ paired: true, desk: false })
+    // Marking a desk is for the computer only, the desk itself included.
+    expect(await (await post('/api/remote', { op: 'desk', id })).json()).toEqual({ error: 'local' })
+    expect((await local('desk', id)).status).toBe(200)
+    // A body that is not a JSON object is refused like any other op, never answered with a 500.
+    for (const body of [null, 'a string', 42])
+      expect([body, await (await post('/api/remote', body)).json()]).toEqual([body, { error: 'local' }])
+    const raw = await phone(
+      '/api/remote',
+      { method: 'POST', body: 'not json' },
+      { 'content-type': 'application/json', 'x-board': '1', origin: ORIGIN },
+    )
+    expect([raw.status, await raw.json()]).toEqual([403, { error: 'local' }])
+    expect(await (await phone('/api/hello')).json()).toMatchObject({ paired: true, desk: true, device: id })
+    const listed = (await (await fetch(`${url}/api/remote`)).json()) as { devices: Record<string, unknown>[] }
+    expect(listed.devices).toEqual([expect.objectContaining({ id, desk: true })])
+
+    expect((await post('/api/session/s1/focus', {})).status).not.toBe(403)
+    expect(await (await post('/api/remote', { op: 'deny', id: 'nope' })).json()).toEqual({ ok: false, error: 'gone' })
+    for (const op of ['off', 'pwa-off', 'desk', 'undesk'])
+      expect([op, await (await post('/api/remote', { op, id })).json()]).toEqual([op, { error: 'local' }])
+    expect(await (await post('/api/fs/open', { path: '/tmp' })).json()).toEqual({ error: 'desktop' })
+    expect(await (await post('/api/open-url', { url: 'https://example.com' })).json()).toEqual({ error: 'desktop' })
+    expect(await (await phone('/api/access')).json()).toEqual({ error: 'local' })
+    expect(await (await post('/api/wake', {})).json()).toEqual({ error: 'local' })
+
+    expect((await local('undesk', id)).status).toBe(200)
+    expect(await (await post('/api/session/s1/focus', {})).json()).toEqual({ error: 'desktop' })
+    expect(await (await post('/api/remote', { op: 'deny', id: 'nope' })).json()).toEqual({ error: 'local' })
+  })
+
   test('unpairing ends its open stream with a word for the page, and the cookie stops working', async () => {
     const events = await phone('/api/events')
     expect(events.status).toBe(200)

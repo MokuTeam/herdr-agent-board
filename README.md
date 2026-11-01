@@ -2481,6 +2481,7 @@ board remote on                  # or "remote": { "on": true } in config.json
 board remote                     # where it listens, who asks to pair, who is paired
 board remote approve <id>        # or Approve in Settings → Phones… on the web board
 board remote revoke <id>         # the phone's token stops working at once
+board remote desk <id> [off]     # a paired browser is your desk: Go to herdr and Approve work there
 board remote pwa on              # the board in a phone's browser, below
 board remote off
 ```
@@ -2500,6 +2501,12 @@ it needs:
 - **Nothing on this computer's screen.** A phone cannot open files or links here, focus herdr or
   raise windows; the board's page itself is not served to it. Everything else answers as for the
   web board, with the same checks.
+- **Unless it is your desk.** When the board runs on a server and you attach to its herdr from your
+  own computer (`herdr --remote <host>`), the board in that computer's browser is a paired device
+  too. `board remote desk <id>`, on the server only, marks it as your desk: from it **Go to herdr**
+  works (the herdr client you attached follows the focus), and so do Approve, Deny and Unpair in
+  Phones…. Opening files or links, turning phones off, Remote access and wake stay with the
+  server. `board remote desk <id> off` takes it back. Setting it up: [Your desk](#your-desk).
 
 A firewall that drops what comes in on the Tailscale interface must let the port through (on
 Linux with ufw: `sudo ufw allow in on tailscale0 to any port 12422 proto tcp`). Off, nothing
@@ -2561,6 +2568,29 @@ Share → Add to Home Screen on an iPhone, ⋮ → Install app on Android.
 Code: `src/core/pwa.ts` (the rules), `src/services/pwa.ts` (serve), `src/core/qr.ts`,
 `web/src/components/remote/RemoteGate.tsx` (pairing, no connection), `web/sw.js`,
 `web/manifest.webmanifest`, `web/styles/pwa.css`.
+
+### Your desk
+
+The board runs on a server; you sit at your own computer. Two things are needed there: herdr
+attached to the server's herdr, and the board in its browser, paired and marked as your desk. The
+board cannot see the first (herdr tells nobody which clients are attached), so Go to herdr only
+moves the focus on the server: what shows it is the herdr you attached. Once, on your computer:
+
+1. **SSH to the server as the user herdr runs as.** Your computer's public key goes into that
+   user's `~/.ssh/authorized_keys` on the server; `ssh <user>@<server>` must work without asking.
+2. **A name for it** in `~/.ssh/config`:
+   ```
+   Host board
+     HostName <server's Tailscale name>
+     User <user>
+     Port <sshd's port, when not 22>
+   ```
+3. **Attach:** `herdr --remote board`, and keep it open while you work.
+4. **The board in the browser:** the server's HTTPS address (Phones…, "In a phone's browser"),
+   asks to pair; approve it on the server (`board remote approve <id>`).
+5. **Mark it:** on the server, `board remote desk <id>`. Phones… on that page shows the command
+   with its own id; the command prints these steps with the server's user and name. Reload the
+   page: Go to herdr shows, and Approve, Deny and Unpair work.
 
 ## Another computer or a tablet, through your own domain
 
