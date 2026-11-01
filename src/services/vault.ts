@@ -154,8 +154,12 @@ export function createVault(o: VaultOptions): Vault {
 
   const timer = setInterval(() => void closeSignups(), SIGNUPS_MS)
   timer.unref?.()
-  // as the board starts: an account made while it was down
-  const first = setTimeout(() => void closeSignups(), 2000)
+  // as the board starts: an account made while it was down; and the Bitwarden CLI's vault locked, which
+  // a board before may have left open (kept unlocked as it ended: that session went with it)
+  const first = setTimeout(() => {
+    void closeSignups()
+    if (o.cfg() && existsSync(join(appdata, 'data.json'))) void bw(['lock'])
+  }, 2000)
   first.unref?.()
 
   function bwEnv(c: VaultConfig, session?: string): Record<string, string> {
