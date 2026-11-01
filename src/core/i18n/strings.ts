@@ -27,6 +27,7 @@ import { SYNC_STRINGS } from './sync-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 import { TIME_STRINGS } from './time-strings.ts'
 import { TODO_STRINGS } from './todo-strings.ts'
+import { VAULT_STRINGS } from './vault-strings.ts'
 import { WAKE_STRINGS } from './wake-strings.ts'
 
 export type Entry = string | string[]
@@ -1350,6 +1351,7 @@ for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRING
 for (const code of Object.keys(TODO_STRINGS) as Lang[]) Object.assign(STRINGS[code], TODO_STRINGS[code])
 // And secrets through the board: the owner's form on the card and the board's own store (#273).
 for (const code of Object.keys(SECRET_STRINGS) as Lang[]) Object.assign(STRINGS[code], SECRET_STRINGS[code])
+for (const code of Object.keys(VAULT_STRINGS) as Lang[]) Object.assign(STRINGS[code], VAULT_STRINGS[code])
 // And the board's database and its backup (#233).
 for (const code of Object.keys(BACKUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], BACKUP_STRINGS[code])
 // And time tracking on it (#233).

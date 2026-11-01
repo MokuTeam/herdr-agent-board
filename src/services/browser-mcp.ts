@@ -16,11 +16,13 @@
 // only looks (READS: a screenshot of what shows, the page's snapshot, its pages, the console and
 // the network) goes on whoever has it (a board that does not answer holds it as any call), so the
 // agent can answer the owner about the screen. A
-// JSON-RPC batch waits or fails as a whole, unless all of it only looks. Three tools of its own join
+// JSON-RPC batch waits or fails as a whole, unless all of it only looks. Four tools of its own join
 // the list: browser_profile (a named profile, for logins that last), browser_ask_owner (the card
-// under "needs you": sign in to X for me) and browser_close (done with it for now: it stops, its
-// sign-ins and tabs kept, and the next call starts it again; chrome-devtools-mcp connects to it
-// again by itself, as it does to a browser restarted).
+// under "needs you": sign in to X for me), browser_fill_login (a login from the owner's vault typed
+// into the focused field once the owner approves, core/login-fill.ts; where the board has no vault
+// the board says so) and browser_close (done with it for now: it stops, its sign-ins and tabs kept,
+// and the next call starts it again; chrome-devtools-mcp connects to it again by itself, as it does
+// to a browser restarted).
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { LOCAL_KEY_HEADER } from '../adapters/local-key.ts'
@@ -55,6 +57,28 @@ export const OWN_TOOLS = [
     },
   },
   {
+    name: 'browser_fill_login',
+    description:
+      "Types a login from the owner's password vault into your browser, on the board's own server: the username, the password and/or the current 2FA (TOTP) code, in the order you list them, with Tab between them (and Return after, with submit). First click the field where typing starts (the username field; the code field for totp alone), then call this once. The board reads which page has the focus itself and asks the owner on your card; they approve with their vault's master password or decline. You never get a value: only whether it was typed. After asking, end your turn: do not poll and do not call browser tools to wait. The board wakes you with a message: ok (typed), declined, expired, no match (no login for the site), or why it did not go through. Never ask the owner for the password in the chat.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fields: {
+          type: 'array',
+          items: { type: 'string', enum: ['username', 'password', 'totp'] },
+          description: 'what to type, in order, each at most once; default ["username", "password"]',
+        },
+        submit: { type: 'boolean', description: 'press Return after the last one (default false)' },
+        username: { type: 'string', description: 'the login to use when the vault has several for the site' },
+        site: {
+          type: 'string',
+          description: 'the site you mean (a domain); the page with the focus must be on it. Default: that page',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'browser_close',
     description:
       'Closes your browser once you are done with it for now: its window and its display stop, which frees the server’s memory. Its sign-ins and open tabs are kept: the next browser tool call opens it again by itself (a few seconds), with them; page ids change then, list_pages shows them. Call it when your task no longer needs the browser. Left unused for 15 minutes (no call, the owner not watching it), the board closes it the same way. Not while the owner has it or your ask to them stands.',
@@ -70,6 +94,9 @@ export const OWNER_DOING_ASK =
 /** What the agent is told once its browser is closed (browser_close). */
 export const CLOSED =
   'Your browser is closed: its window and display stopped. Its sign-ins and open tabs are kept; the next browser tool call opens it again with them (a few seconds; page ids change, list_pages shows them).'
+/** What the agent is told once a login fill is asked (browser_fill_login). */
+export const FILL_ASKED =
+  'Asked: your card is under "needs you" with the login fill; the owner approves it on the board. End your turn now: do not poll and do not call browser tools to wait (the focus must stay where it is). The board wakes you with a message saying whether it was typed.'
 /** What the agent is told once it asked the owner (browser_ask_owner). */
 export const ASKED =
   'Asked: your card is under "needs you" with your browser on it. End your turn now: do not poll and do not call browser tools to wait. The board wakes you with a message when the owner hands your browser back; then check the page and go on. If the owner writes to you meanwhile, answer them: you can look at the browser then (take_screenshot, take_snapshot, list_pages, the console and the network), not act in it.'
@@ -104,7 +131,7 @@ export const BOARD_SILENT =
 
 export interface RelayOptions {
   /** POST /api/browser/<op> on the board with this pane: its answer, or null when the board does not answer. */
-  board(op: 'call' | 'start' | 'profile' | 'ask' | 'close', body: Msg): Promise<Msg | null>
+  board(op: 'call' | 'start' | 'profile' | 'ask' | 'close' | 'login', body: Msg): Promise<Msg | null>
   toChild(line: string): void
   toClient(line: string): void
   holdMs?: number
@@ -213,6 +240,20 @@ export function createRelay(o: RelayOptions): Relay {
           r.closed ? CLOSED : 'Your browser was not open: nothing to close. The next browser tool call opens it.',
         ),
       )
+    }
+    // typed in under the owner's hands never: it waits, or fails, as any call that acts
+    if (params.name === 'browser_fill_login') {
+      if (!(await agentHasIt(id, text => o.toClient(result(id, text, true))))) return
+      const r = await o.board('login', {
+        ...(args.fields !== undefined && { fields: args.fields }),
+        submit: args.submit === true,
+        ...(typeof args.username === 'string' && { username: args.username }),
+        ...(typeof args.site === 'string' && { site: args.site }),
+        wake: true,
+      })
+      if (!r) return o.toClient(result(id, 'The board does not answer: nothing was asked.', true))
+      if (r.ok !== true) return o.toClient(result(id, String(r.error ?? 'not asked'), true))
+      return o.toClient(result(id, FILL_ASKED))
     }
     const text = typeof args.text === 'string' ? args.text.trim() : ''
     if (!text) return o.toClient(result(id, 'text: what you need the owner to do', true))

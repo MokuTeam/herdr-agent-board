@@ -76,6 +76,11 @@ interface Options {
   presence?: () => PresenceView | null
   /** The agents' own browsers (services/desktop.ts), on the board's own server only: each card's `desktop`. */
   desktops?: Pick<Desktops, 'view' | 'card' | 'observe'>
+  /**
+   * The owner's password vault (core/vault.ts), on the board's own server with config.json's
+   * `vault` only: the payload's `vault`, and each card's login fills under "needs you".
+   */
+  vault?: { on(): boolean; card(item: Item): Partial<Item> }
   /** The backup's line (#233); null while there is no database and no target. */
   backup?: () => BackupPayload | null
   /** Time tracking's line (#233); null while it is off. */
@@ -179,6 +184,7 @@ export function createBoardState({
   omarchy,
   presence,
   desktops,
+  vault,
   backup,
   time,
 }: Options): BoardState {
@@ -221,6 +227,12 @@ export function createBoardState({
       for (const [i, item] of items.entries()) {
         const desktop = desktops.view(item)
         if (desktop) list[i] = { ...list[i], ...desktops.card(item), desktop } as (typeof list)[number]
+      }
+    // A login fill the card's session asked for: under "needs you" with it, until the owner answers.
+    if (vault)
+      for (const [i, item] of items.entries()) {
+        const fill = vault.card(item)
+        if (fill.loginFill) list[i] = { ...list[i], ...fill } as (typeof list)[number]
       }
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)
@@ -277,6 +289,8 @@ export function createBoardState({
       ...omarchyOf(omarchy),
       // server: only on the board's own server, whose page offers nothing only a PC has.
       ...(onServer(cfg) && { server: true as const }),
+      // vault: the owner's password vault there (Settings → Passwords), with config.json's `vault`
+      ...(onServer(cfg) && vault?.on() && { vault: true as const }),
     }
   }
 

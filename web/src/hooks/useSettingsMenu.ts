@@ -27,6 +27,7 @@ import {
   offersMokupilot,
   offersSecrets,
   offersTimeSettings,
+  offersVault,
   settingPicked,
   settingsMenu,
 } from '../models/settings-menu.ts'
@@ -88,6 +89,9 @@ export interface SettingsDeps {
   /** The local board's page or the board's own server's: Time tracking… is offered (#237). */
   timeSettings?(): boolean
   openTimeSettings?(): void
+  /** The board's own server's page with its password vault: Passwords is offered. */
+  vault?(): boolean
+  openVault?(): void
   /** This page signed in through the owner's domain: Sign out is offered. */
   signOut?(): boolean
   endLogin?(): void
@@ -129,6 +133,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       secrets: deps.secrets?.() ?? false,
       backup: deps.backup?.() ?? false,
       timeSettings: deps.timeSettings?.() ?? false,
+      vault: deps.vault?.() ?? false,
       signOut: deps.signOut?.() ?? false,
       presence: deps.presence?.(),
       idleMinutes: deps.idleMinutes?.(),
@@ -160,6 +165,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'secrets') deps.openSecrets?.()
         else if (pick?.kind === 'backup') deps.openBackup?.()
         else if (pick?.kind === 'timeSettings') deps.openTimeSettings?.()
+        else if (pick?.kind === 'vault') deps.openVault?.()
         else if (pick?.kind === 'signout') deps.endLogin?.()
         else if (pick?.kind === 'presence')
           deps.choosePresence?.(pick.value === 'none' ? { on: false } : { on: true, mode: pick.value })
@@ -405,6 +411,13 @@ export function useSettingsMenu(
       openBackup: () => latest.current.openBackup(),
       timeSettings: () => offersTimeSettings(remotePage(), latest.current.board.data),
       openTimeSettings: () => latest.current.openTimeSettings(),
+      vault: () => offersVault(remotePage(), latest.current.board.data),
+      // the web vault in a tab of its own (the same tab where a browser keeps it from opening one)
+      openVault: () => {
+        const tab = window.open('/vault/', '_blank')
+        if (tab) tab.opener = null
+        else window.location.assign('/vault/')
+      },
       signOut: () => remotePage() && keptAuth() === 'login',
       endLogin: () => {
         const { t, board } = latest.current

@@ -47,6 +47,7 @@ import {
   WHOIS_GRACE_MS,
 } from '../core/remote.ts'
 import type { Config } from '../core/types.ts'
+import { vaultPath } from '../core/vault.ts'
 import type { Remote } from '../services/remote.ts'
 import { dispatch, type GuardState, json, peerOf, type Route, readBody } from './http.ts'
 import { decoded, endsWhenGone, remoteRefusal } from './streams.ts'
@@ -233,7 +234,15 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
         return res
       }
       // The page, its scripts, styles, icons and service worker: the pairing screen needs them too.
-      if (fromServe && req.method === 'GET' && !raw.startsWith('/api/') && !raw.startsWith('/uploads/')) {
+      // Not the vault's path (the board's own server's, through its domain only): refused once paired.
+      if (
+        fromServe &&
+        req.method === 'GET' &&
+        !raw.startsWith('/api/') &&
+        !raw.startsWith('/uploads/') &&
+        !vaultPath(raw) &&
+        !vaultPath(decoded(raw) ?? '')
+      ) {
         const page = decoded(raw)
         return page === null ? json(400, { error: 'path' }) : await dispatch([o.page], req, url, page, o.guards)
       }

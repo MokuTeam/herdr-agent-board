@@ -108,6 +108,12 @@
 //                            SuiteCloud's account:setup, gh auth login --web) goes to that browser
 //                            through `board browser open`, with the ask when given; the browser kept
 //                            up while it runs; exits with its code. Its arguments as they came
+//   board browser login [--fields username,password,totp] [--enter] [--username <name>] [--site <domain>]
+//                            [--no-wait]   on the board's own server with its password vault (core/login-fill.ts):
+//                            the owner's login for the page that has the focus in this session's browser,
+//                            typed into the focused field once the owner approves on the board (a Tab
+//                            between the fields, Return after with --enter); waits and prints how it
+//                            ended, never a value
 //   board browser-mcp        the agent's browser as an MCP server (stdio; services/browser-mcp.ts):
 //                            what the install puts in each Claude profile on the board's server
 //   board launch <program> [args...]   runs the program (claude) with the secrets of its profile
@@ -198,7 +204,7 @@ import { type MoveOutcome, moveMany } from '../services/move.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | login [link | reset] | doctor | update [--ref <ref>] | presence [here | away | call] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | browser ask <text> | browser profile [<name>] | browser open <url> [--ask <text>] | browser run [--ask <text>] -- <program> [args...] | secret request --title "<what for>" [--sink <id>] [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--global | --profile <id>] [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret requests | secret sinks | secret set|list|rm|get|file [<NAME>] [--profile <id>] | launch <program> [args...] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | login [link | reset] | doctor | update [--ref <ref>] | presence [here | away | call] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | browser ask <text> | browser profile [<name>] | browser open <url> [--ask <text>] | browser run [--ask <text>] -- <program> [args...] | browser login [--fields username,password,totp] [--enter] [--username <name>] [--site <domain>] [--no-wait] | secret request --title "<what for>" [--sink <id>] [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--global | --profile <id>] [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret requests | secret sinks | secret set|list|rm|get|file [<NAME>] [--profile <id>] | launch <program> [args...] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -1907,12 +1913,14 @@ async function browserMcp(): Promise<void> {
 async function browser(): Promise<void> {
   const [what, ...words] = rest
   const usage =
-    'usage: board browser ask <text> | board browser profile [<name>] | board browser open <url> [--ask <text>] | board browser run [--ask <text>] -- <program> [args...]'
-  if (what !== 'ask' && what !== 'profile' && what !== 'open' && what !== 'run') throw new Error(usage)
+    'usage: board browser ask <text> | board browser profile [<name>] | board browser open <url> [--ask <text>] | board browser run [--ask <text>] -- <program> [args...] | board browser login [--fields username,password,totp] [--enter] [--username <name>] [--site <domain>] [--no-wait]'
+  if (what !== 'ask' && what !== 'profile' && what !== 'open' && what !== 'run' && what !== 'login')
+    throw new Error(usage)
   if (!onServer(cfg)) throw new Error("board browser: the agents' browsers are on the board's own server only")
   const pane = process.env.HERDR_PANE_ID
   if (!pane) throw new Error('board browser: run it in your session (no HERDR_PANE_ID)')
   if (what === 'run') return browserRun(pane, usage)
+  if (what === 'login') return browserLogin(pane, words, usage)
   const said = words.join(' ').replace(/\s+/g, ' ').trim()
   if (what === 'ask' && !said) throw new Error(usage)
   if (what === 'open') {
@@ -1949,6 +1957,37 @@ async function browser(): Promise<void> {
         ? `ok · a copy of the profile "${r.profile}" (another session has it): thrown away afterwards`
         : `ok · your browser has the profile "${r.profile}"; its sign-ins stay`,
   )
+}
+
+/**
+ * `board browser login`: the owner's vault's login for the page with the focus in this session's
+ * browser, typed in once the owner approves on the board (core/login-fill.ts). Waits for the
+ * answer unless --no-wait (then the board's reminder tells it), and prints it, never a value.
+ * Exit codes: 0 typed, 2 waiting (--no-wait), 3 declined, expired or not done, 4 no login for the site.
+ */
+async function browserLogin(pane: string, words: string[], usage: string): Promise<void> {
+  const { loginArgs, LOGIN_CODES } = await import('../core/login-fill.ts')
+  const a = loginArgs(words)
+  if (!a.ok) throw new Error(`${a.error}\n${usage}`)
+  const { wait, ...ask } = a.args
+  const r = await browserCall('login', { pane, ...ask, wake: !wait })
+  const id = String(r.id ?? '')
+  console.log(
+    `pending · ${id} · your card is under "Needs me": the owner approves the login fill on the board${wait ? '' : '. End your turn: the board wakes you with how it ended'}`,
+  )
+  if (!wait) {
+    process.exitCode = LOGIN_CODES.pending
+    return
+  }
+  for (;;) {
+    await Bun.sleep(1000)
+    const s = await browserCall('login-status', { pane, id })
+    if (s.status !== 'pending') {
+      console.log(String(s.text ?? s.status))
+      process.exitCode = LOGIN_CODES[String(s.status)] ?? 3
+      return
+    }
+  }
 }
 
 /** One of the agent's own calls to its browser (routes/desktop.ts /api/browser/<op>): its answer, or why not. */

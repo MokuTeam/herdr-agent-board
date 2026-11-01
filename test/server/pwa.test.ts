@@ -145,6 +145,9 @@ describe("the board in a phone's browser, through tailscale serve", () => {
     })
     expect((await phone('/api/board')).status).toBe(401)
     expect((await phone('/api/events')).status).toBe(401)
+    // the board's own server's password vault is no page here: refused once paired, not served before
+    for (const path of ['/vault', '/vault/', '/%76ault/'])
+      expect([path, (await phone(path)).status]).toEqual([path, 401])
   })
 
   test("the computer's own page stays as it was", async () => {
@@ -199,6 +202,10 @@ describe("the board in a phone's browser, through tailscale serve", () => {
       '/api/%62ackup',
       '/api/time-settings',
       '/api/time-%73ettings',
+      // the board's own server's password vault and its answers, through its domain only
+      '/vault/',
+      '/%76ault/api/sync',
+      '/api/vault/lock',
     ]) {
       const got = await phone(path)
       expect([path, got.status, await got.json()]).toEqual([path, 403, { error: 'local' }])

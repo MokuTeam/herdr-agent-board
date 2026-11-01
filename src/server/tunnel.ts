@@ -33,6 +33,11 @@
 // the login is set, only the setup page and its two calls answer (the first login's one-time
 // link, services/first-login.ts), rate-limited as a sign-in, and everything else is 401; once it
 // is set, they are 404 and the rest is as above.
+// With config.json's `vault` there (core/vault.ts), /vault is the owner's password vault: with a
+// live login only, to Vaultwarden on 127.0.0.1 as it came (server/vault-proxy.ts), the web vault's
+// calls from the domain's own Origin without X-Board (Vaultwarden takes its own bearer tokens), its
+// admin page never, a new account only while it has none, its notifications' WebSocket ending with
+// the login. Everywhere else /vault is refused (server/streams.ts), never the public page.
 import { chmodSync, lstatSync, unlinkSync } from 'node:fs'
 import type { WebSocketHandler } from 'bun'
 import { isRecord } from '../adapters/json-store.ts'
@@ -57,6 +62,7 @@ import { qrMatrix, qrPath } from '../core/qr.ts'
 import { REMOTE_API } from '../core/remote.ts'
 import { boardPorts, publicHosts, publicOrigin, tunnelConfig, tunnelPort, tunnelProblems } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
+import { vaultAdminPath, vaultPath, vaultRegisterPath, vaultSocketPath } from '../core/vault.ts'
 import type { Access, SignIn, Who } from '../services/access.ts'
 import type { FirstLogin } from '../services/first-login.ts'
 import type { Probes } from '../services/tunnel.ts'
@@ -64,6 +70,7 @@ import { type Body, dispatch, type GuardState, json, peerOf, type Route, readBod
 import { setupPage } from './setup-page.ts'
 import { decoded, endsWhenGone, remoteRefusal } from './streams.ts'
 import { probeAnswer } from './tunnel-probe.ts'
+import { socketHeaders, type VaultGate, vaultAnswer } from './vault-proxy.ts'
 
 export interface TunnelListenerOptions {
   cfg: Config
@@ -88,6 +95,12 @@ export interface TunnelListenerOptions {
    * closes when its login ends. Without it, or on the tunnel's port, none is made.
    */
   websocket?: WebSocketHandler<object>
+  /**
+   * In server mode, the owner's password vault (core/vault.ts): /vault through this login to
+   * Vaultwarden on 127.0.0.1, its WebSockets too (`websocket` takes them: server/vault-proxy.ts
+   * bothSockets). Without it, or on the tunnel's port, /vault is no route here.
+   */
+  vault?: VaultGate
 }
 
 export interface TunnelListener {
@@ -113,6 +126,15 @@ const RETRY_MS = 30_000
 /** Pairing and the other boards on the tailnet are the Tailscale listener's: not here at all. */
 const NOT_HERE = /^\/api\/(peers|remote\/pair)(\/|$)/
 const PROBE = /^\/api\/probe\/([^/]+)$/
+
+/** A request URL's path as it came, '' when it is none. */
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname
+  } catch {
+    return ''
+  }
+}
 
 /** Whether the request sent a login cookie, whatever its value. */
 const sentLogin = (cookie: string | null): boolean =>
@@ -322,11 +344,65 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         : signInAnswer(await o.access.signInPasskey(body, { origin, rpId: domain }, who))
     }
     // The page, its scripts, styles, icons, manifest and service worker: the login screen needs them.
-    if (req.method === 'GET' && !raw.startsWith('/api/') && !raw.startsWith('/uploads/')) {
+    // Not the vault's path: refused as the board's own server's secrets are, the login first.
+    if (
+      req.method === 'GET' &&
+      !raw.startsWith('/api/') &&
+      !raw.startsWith('/uploads/') &&
+      !vaultPath(raw) &&
+      !vaultPath(decoded(raw) ?? '')
+    ) {
       const page = decoded(raw)
       return page === null ? json(400, { error: 'path' }) : await dispatch([o.page], req, url, page, o.guards)
     }
     return undefined
+  }
+
+  /**
+   * The web vault on the board's own server (core/vault.ts, server/vault-proxy.ts): with a live
+   * login only (a page asked for without one goes to the board's, which signs in), never its admin
+   * page, a new account only while the vault has none, and its notifications' WebSocket from the
+   * domain's own page; the rest to Vaultwarden as it came.
+   */
+  async function vault(
+    req: Request,
+    url: URL,
+    here: Site,
+    who: Who,
+    cookie: string | null,
+    srv?: Server,
+  ): Promise<Response> {
+    const gate = o.vault as VaultGate
+    const raw = url.pathname
+    const token = loginToken(cookie)
+    const login = token ? o.access.verify(token) : null
+    if (!token || !login) {
+      if (req.method === 'GET' && (req.headers.get('accept') ?? '').includes('text/html'))
+        return clearedFor(new Response(null, { status: 303, headers: { location: '/' } }), cookie)
+      return clearedFor(json(401, { error: 'login' }), cookie)
+    }
+    const path = decoded(raw)
+    if (path === null) return json(400, { error: 'path' })
+    const port = gate.port()
+    if (port === null || vaultAdminPath(raw) || vaultAdminPath(path)) return NOT_FOUND()
+    const ca = gate.ca()
+    if (!ca) return json(502, { error: 'vault' })
+    if ((vaultRegisterPath(raw) || vaultRegisterPath(path)) && !gate.signupsOpen())
+      return json(403, { error: 'signups' })
+    if (raw === '/vault') return new Response(null, { status: 308, headers: { location: `/vault/${url.search}` } })
+    const to = { port, ca, domain: here.domain, address: who.address, cookie: LOGIN_COOKIE }
+    if ((req.headers.get('upgrade') ?? '').toLowerCase() === 'websocket') {
+      if (req.method !== 'GET' || !vaultSocketPath(raw) || !srv || !o.websocket) return json(400, { error: 'upgrade' })
+      if (req.headers.get('origin') !== here.origin) return json(403, { error: 'origin' })
+      const data = {
+        vault: { url: `wss://127.0.0.1:${port}${raw}${url.search}`, headers: socketHeaders(req, to), ca },
+        watch: (gone: () => void) => o.access.watch(login.id, gone),
+      }
+      return srv.upgrade(req, { data }) ? new Response(null, { status: 200 }) : json(400, { error: 'upgrade' })
+    }
+    const res = await vaultAnswer(req, url, to)
+    if (req.method === 'POST' && res.ok && (vaultRegisterPath(raw) || vaultRegisterPath(path))) gate.registered()
+    return res
   }
 
   async function answer(req: Request, srv?: Server): Promise<Response> {
@@ -336,9 +412,11 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
     if (!here.domain || !here.hosts.includes(host)) return json(403, { error: 'host' })
     if (req.headers.get('x-forwarded-proto') !== 'https') return json(403, { error: 'https' })
     const { domain, origin } = here
-    // A browser sends the cookie by itself: what changes anything must come from the board's own page.
+    // A browser sends the cookie by itself: what changes anything must come from the board's own page;
+    // the web vault's calls (server mode) from the domain's own Origin, which sends no X-Board.
     if (req.method !== 'GET' && req.method !== 'HEAD') {
-      if (req.headers.get('x-board') !== '1' || req.headers.get('origin') !== origin)
+      const vaultCall = here.setup && o.vault?.port() != null && vaultPath(pathOf(req.url))
+      if ((!vaultCall && req.headers.get('x-board') !== '1') || req.headers.get('origin') !== origin)
         return json(403, { error: 'origin' })
     }
     const who: Who = {
@@ -355,6 +433,7 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         const gate = await setupGate(req, raw, who, cookie)
         if (gate) return gate
       }
+      if (here.setup && o.vault?.port() != null && vaultPath(raw)) return await vault(req, url, here, who, cookie, srv)
       const pub = await open(req, url, here, who, cookie)
       if (pub) return pub
       const token = loginToken(cookie)

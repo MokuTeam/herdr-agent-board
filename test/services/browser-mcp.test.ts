@@ -8,6 +8,7 @@ import {
   CLOSED,
   createRelay,
   devtoolsMcp,
+  FILL_ASKED,
   OWN_TOOLS,
   OWNER_DOING_ASK,
   OWNER_HAS_IT,
@@ -74,7 +75,13 @@ test('its own tools join chrome-devtools-mcp’s list; everything else goes thro
   expect(toClient.length).toBe(2)
   expect((toClient[0]?.result as { tools?: unknown[] } | undefined)?.tools).toHaveLength(1)
   const names = ((toClient[1]?.result as { tools?: { name: string }[] } | undefined)?.tools ?? []).map(t => t.name)
-  expect(names).toEqual(['navigate_page', 'browser_profile', 'browser_ask_owner', 'browser_close'])
+  expect(names).toEqual([
+    'navigate_page',
+    'browser_profile',
+    'browser_ask_owner',
+    'browser_fill_login',
+    'browser_close',
+  ])
   expect(OWN_TOOLS.every(t => t.inputSchema.type === 'object')).toBe(true)
 })
 
@@ -418,4 +425,45 @@ test('asking the owner: the agent is told to end its turn, not to poll or wait, 
   await relay.idle()
   expect(toClient).toEqual([{ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: ASKED }] } }])
   expect(ASKED).toContain('End your turn now')
+})
+
+test('browser_fill_login: through the board once the agent has the browser, with what to type and the board’s word back; never a value', async () => {
+  const desc = OWN_TOOLS.find(t => t.name === 'browser_fill_login')?.description ?? ''
+  for (const words of ['click the field', 'master password', 'never get a value', 'end your turn', 'no match'])
+    expect(desc.toLowerCase()).toContain(words.toLowerCase())
+  const { relay, toChild, toClient, asked } = relayWith()
+  relay.fromClient(call(1, 'browser_fill_login', { fields: ['username', 'password'], submit: true, site: 'acme.test' }))
+  await relay.idle()
+  expect(asked).toEqual([
+    ['call', {}],
+    ['login', { fields: ['username', 'password'], submit: true, site: 'acme.test', wake: true }],
+  ])
+  expect(toChild).toEqual([])
+  expect(toClient).toEqual([{ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: FILL_ASKED }] } }])
+  // the board's refusal said as it is; a board that does not answer: nothing asked
+  const no = relayWith({
+    answers: {
+      login: { ok: false, error: 'The page with the focus is on evil.test, not acme.test: nothing was asked.' },
+    },
+  })
+  no.relay.fromClient(call(2, 'browser_fill_login', {}))
+  await no.relay.idle()
+  expect(no.toClient[0]).toMatchObject({
+    result: {
+      isError: true,
+      content: [{ text: 'The page with the focus is on evil.test, not acme.test: nothing was asked.' }],
+    },
+  })
+  const silent = relayWith({ answers: { login: null } })
+  silent.relay.fromClient(call(3, 'browser_fill_login', {}))
+  await silent.relay.idle()
+  expect(silent.toClient[0]).toMatchObject({
+    result: { isError: true, content: [{ text: 'The board does not answer: nothing was asked.' }] },
+  })
+  // the owner has the browser for an ask: at once, never through to the board
+  const asks = relayWith({ control: () => 'owner', asks: () => true })
+  asks.relay.fromClient(call(4, 'browser_fill_login', {}))
+  await asks.relay.idle()
+  expect(asks.asked.map(([op]) => op)).toEqual(['call'])
+  expect(asks.toClient[0]).toMatchObject({ result: { isError: true, content: [{ text: OWNER_DOING_ASK }] } })
 })

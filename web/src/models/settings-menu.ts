@@ -16,6 +16,8 @@
 // local board's page and on the board's own server (offersSecrets). Backup… the backup of the
 // board's database (#233, components/backup/BackupPanel.tsx), and Time tracking… its clients and
 // projects (#237, components/time/TimeSettingsPanel.tsx), there too (offersBackup, offersTimeSettings).
+// Passwords opens the owner's password vault (/vault, src/core/vault.ts) in a tab of its own, on the
+// board's own server's page with the vault only (offersVault).
 // How sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
 // On a page signed in through the owner's domain, Sign out ends this browser's own login (Call 15).
 // Tasks (#202, src/core/todos.ts) are the board's: Off, the user's pins only, or agents too.
@@ -64,6 +66,8 @@ export interface SettingsNow {
   backup?: boolean
   /** The local board's page, or the board's own server's (offersTimeSettings): Time tracking… is offered (#237). */
   timeSettings?: boolean
+  /** The board's own server's page with its password vault (offersVault): Passwords opens it. */
+  vault?: boolean
   /** This page signed in through the owner's domain: Sign out is offered, last. */
   signOut?: boolean
   /** Presence as the board has it ('none': not on); none given: no Presence item (an older board). */
@@ -182,6 +186,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
     ...(now.secrets ? [{ id: 'secrets', label: t('set.secrets') }] : []),
     ...(now.backup ? [{ id: 'backup', label: t('set.backup') }] : []),
     ...(now.timeSettings ? [{ id: 'timeSettings', label: t('set.time') }] : []),
+    ...(now.vault ? [{ id: 'vault', label: t('set.vault') }] : []),
     ...(now.localPaths ? [{ id: 'localPaths', label: t('set.localPaths') }] : []),
     { separator: true },
     { id: 'sleepers', label: t('tb.sleepersTitle'), checked: now.sleepers },
@@ -217,6 +222,7 @@ export type SettingPick =
   | { kind: 'secrets' }
   | { kind: 'backup' }
   | { kind: 'timeSettings' }
+  | { kind: 'vault' }
   | { kind: 'signout' }
   | { kind: 'presence'; value: PresenceMode | 'none' }
   | { kind: 'presenceIdle'; value: number }
@@ -257,6 +263,16 @@ export const offersBackup = offersSecrets
 /** Whether the page offers Settings → Time tracking… (#237): as Backup…, for /api/time-settings. */
 export const offersTimeSettings = offersSecrets
 
+/**
+ * Whether the page offers Settings → Passwords (the owner's password vault, src/core/vault.ts): on
+ * the board's own server's page through its domain's login, while the board has the vault; the web
+ * vault is at /vault there and nowhere else.
+ */
+export const offersVault = (
+  remote: boolean,
+  payload?: { server?: boolean | undefined; vault?: boolean | undefined } | null,
+): boolean => remote && boardOnServer(payload) && payload?.vault === true
+
 export function settingPicked(id: string): SettingPick {
   const [kind, value = ''] = id.split(':')
   if (kind === 'theme' || kind === 'lang') return { kind, value }
@@ -273,6 +289,7 @@ export function settingPicked(id: string): SettingPick {
   if (id === 'secrets') return { kind: 'secrets' }
   if (id === 'backup') return { kind: 'backup' }
   if (id === 'timeSettings') return { kind: 'timeSettings' }
+  if (id === 'vault') return { kind: 'vault' }
   if (id === 'signout') return { kind: 'signout' }
   if (kind === 'presence' && (value === 'none' || isPresenceMode(value))) return { kind, value }
   if (kind === 'presenceIdle' && /^\d+$/.test(value)) return { kind, value: Number(value) }

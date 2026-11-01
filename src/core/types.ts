@@ -4,6 +4,7 @@ import type { FormQuestion } from './dialogs/question-form.ts'
 import type { HelperSummary } from './helpers.ts'
 import type { FailureKind } from './launch/launcher-command.ts'
 import type { ItemLinks } from './links.ts'
+import type { LoginFillView } from './login-fill.ts'
 import type { Todo } from './todos.ts'
 
 export type Lang = 'en' | 'ru'
@@ -198,6 +199,8 @@ export interface Config {
   time?: unknown
   /** Secrets through the board (#273), as config.json has it: read through core/secrets.ts secretsConfig. */
   secrets?: unknown
+  /** The owner's password vault on the board's own server, as config.json has it: read through core/vault.ts vaultConfig. */
+  vault?: unknown
   [extra: string]: unknown
 }
 
@@ -299,6 +302,8 @@ export interface Item {
   desktop?: ItemDesktop
   /** Its tasks from its card (#202), while config.json turns them on; absent when none. */
   todos?: Todo[]
+  /** Its login fills waiting for the owner (core/login-fill.ts), on the board's own server; absent when none. */
+  loginFill?: LoginFillView[]
   [extra: string]: unknown
 }
 

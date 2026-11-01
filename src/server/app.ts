@@ -49,7 +49,8 @@ import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
 import { boardPorts, forwardSpec, publicHosts, sshArgs, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
-import type { Config } from '../core/types.ts'
+import type { Config, Item } from '../core/types.ts'
+import { vaultConfig, vaultOwnerPath } from '../core/vault.ts'
 import { createAccess } from '../services/access.ts'
 import { backupView, startBackups } from '../services/backup.ts'
 import { createBackupServer } from '../services/backup-server.ts'
@@ -57,6 +58,7 @@ import type { Deps } from '../services/deps.ts'
 import { createDesktops } from '../services/desktop.ts'
 import { createFirstLogin } from '../services/first-login.ts'
 import { createLaunches } from '../services/launch/launches.ts'
+import { createLoginFills } from '../services/login-fill.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
 import { createPresence } from '../services/presence.ts'
 import { createProfileSync } from '../services/profile-sync.ts'
@@ -68,6 +70,7 @@ import { createServerSetup } from '../services/server-setup.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
 import { createProbes, createSupervisor, networkSignature, realClock, type TunnelPlan } from '../services/tunnel.ts'
+import { createVault } from '../services/vault.ts'
 import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, peerOf, type Route } from './http.ts'
@@ -96,11 +99,13 @@ import { staticRoute } from './routes/static.ts'
 import { terminalRoute } from './routes/terminal.ts'
 import { keepTimeDb, timeRoutes, timeToday } from './routes/time.ts'
 import { todosRoutes } from './routes/todos.ts'
+import { vaultRoutes } from './routes/vault.ts'
 import { wakeRoutes } from './routes/wake.ts'
 import { createBroadcaster } from './sse.ts'
 import { createTunnelListener } from './tunnel.ts'
 import { openProbeListener } from './tunnel-probe.ts'
 import { pruneUploads, uploadRoutes } from './uploads.ts'
+import { bothSockets, vaultSockets } from './vault-proxy.ts'
 import { VIEWER_COPIES, viewerDirs, viewerEntries, WORKER_POLICIES } from './viewers.ts'
 import { createWebBundle } from './web-bundle.ts'
 
@@ -267,6 +272,20 @@ export async function startServer({
     onState: () => void setup.again().catch(err => log(`setup check: ${messageOf(err)}`)),
     log,
   })
+  /** A word to a session's agent: a board reminder due now, as `board remind` makes one. */
+  const remindNow = (item: Item, text: string): void => {
+    const now = Date.now()
+    addEntry({
+      key: item.key,
+      name: item.name,
+      ...(item.pane && { pane: item.pane }),
+      ...(item.cwd && { cwd: item.cwd }),
+      text,
+      at: now,
+      next: now,
+      by: 'board',
+    })
+  }
   // Each agent's own browser (services/desktop.ts), on the board's own server only: on a PC none is
   // made, no route answers for one and the web board serves no WebSocket.
   const desktops = onServer(cfg)
@@ -276,19 +295,7 @@ export async function startServer({
         writeCard,
         readCard,
         // The hand-back's word to the agent: a board reminder due now, as `board remind` makes one.
-        remind: (item, text) => {
-          const now = Date.now()
-          addEntry({
-            key: item.key,
-            name: item.name,
-            ...(item.pane && { pane: item.pane }),
-            ...(item.cwd && { cwd: item.cwd }),
-            text,
-            at: now,
-            next: now,
-            by: 'board',
-          })
-        },
+        remind: remindNow,
         onChange: () => board.publish(),
         log,
         chromeExtra: (process.env.BOARD_DESKTOP_CHROME_ARGS ?? '').split(' ').filter(Boolean),
@@ -296,6 +303,22 @@ export async function startServer({
         languages: () => deskLanguages(cfg.language),
       })
     : null
+  // The owner's password vault (core/vault.ts), on the board's own server with config.json's `vault`
+  // only: its web vault through the domain's login, and the agents' login fills. On a PC nothing of
+  // it is made, and nothing asks for it.
+  const vaultNow = () => vaultConfig(cfg.vault, { home: homedir(), serverMode: onServer(cfg) })
+  const vault = desktops ? createVault({ cfg: vaultNow, log }) : null
+  const fills =
+    desktops && vault
+      ? createLoginFills({
+          vault,
+          desktops,
+          itemOf: pane => board.items().find(i => i.pane === pane && !i.sleeping),
+          remind: remindNow,
+          onChange: () => board.publish(),
+          log,
+        })
+      : null
   const routes: Route[] = []
   const guards = { port, token: FILE_TOKEN, stale: () => board.stale() }
   // Omarchy here: the Terminal style takes the colors of its theme on now, and follows a switch.
@@ -356,8 +379,14 @@ export async function startServer({
     // On the board's own server (core/on-server.ts): the first login through its one-time link.
     // On a PC nothing asks it anything.
     firstLogin: createFirstLogin({ access, domain: () => serverModeOf(cfg.serverMode)?.domain ?? '' }),
-    // A desktop's VNC through the domain: only where the board runs desktops (its own server).
-    ...(desktops && { websocket: desktops.websocket as WebSocketHandler<object> }),
+    // A desktop's VNC through the domain: only where the board runs desktops (its own server); and
+    // there the owner's password vault at /vault, its notifications' WebSocket beside them.
+    ...(desktops && {
+      websocket: (vault
+        ? bothSockets(desktops.websocket, vaultSockets())
+        : desktops.websocket) as WebSocketHandler<object>,
+    }),
+    ...(vault && { vault }),
   })
   // The tunnel's ssh (services/tunnel.ts). It starts nothing until this board holds the web port
   // (below). Its line goes to the tunnel listener's port while that listens, the tunnel is on and
@@ -513,6 +542,7 @@ export async function startServer({
     ...(omarchy && { omarchy: omarchy.stamp }),
     presence: presence.view,
     ...(desktops && { desktops }),
+    ...(fills && vault && { vault: { on: () => vault.port() !== null, card: (item: Item) => fills.card(item) } }),
     backup: backupLine,
     time: timeLine,
   })
@@ -586,6 +616,16 @@ export async function startServer({
           },
         })
       : []),
+    // The owner's password vault's login fills, on the board's own server only.
+    ...(fills
+      ? vaultRoutes({
+          fills,
+          keyOk: req => {
+            const key = ownKey()
+            return key !== null && keyMatches(req.headers.get(LOCAL_KEY_HEADER), key)
+          },
+        })
+      : []),
     ...sessionRoutes({
       deps,
       launches,
@@ -644,6 +684,9 @@ export async function startServer({
     try {
       url = new URL(req.url)
       const path = decodeURIComponent(url.pathname)
+      // The owner's password vault and the answers to a login fill: through the domain's login only,
+      // never with the local key (core/vault.ts vaultOwnerPath), in either spelling.
+      if (onServer(cfg) && (vaultOwnerPath(url.pathname) || vaultOwnerPath(path))) return json(403, { error: 'local' })
       // Something done on this board's own page is the user at the computer (presence's "back");
       // the CLI and agents send no Origin, and the presence switch itself says what it says.
       if (req.method !== 'GET' && path.startsWith('/api/') && path !== '/api/presence' && ownOrigin(req))
@@ -760,6 +803,8 @@ export async function startServer({
       backups.stop()
       wake.stop()
       presence.stop()
+      vault?.close()
+      await fills?.close()
       terminals.stopAll()
       setup.stop()
       accessOut.cancel()

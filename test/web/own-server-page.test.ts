@@ -12,6 +12,9 @@ import {
   offersMokupilot,
   offersSecrets,
   offersTimeSettings,
+  offersVault,
+  settingPicked,
+  settingsMenu,
 } from '../../web/src/models/settings-menu.ts'
 import { FakeWorld } from './support/fake-dom.ts'
 import { parseHtml } from './support/markup.ts'
@@ -41,6 +44,35 @@ describe('Settings', () => {
       expect(offersBackup(true, payload)).toBe(false)
       expect(offersTimeSettings(true, payload)).toBe(false)
     }
+  })
+
+  test('Passwords: on the board’s own server’s page through its domain, with the vault; nowhere else', () => {
+    expect(offersVault(true, { server: true, vault: true })).toBe(true)
+    for (const [remote, payload] of [
+      [true, { server: true }],
+      [false, { server: true, vault: true }],
+      [true, { vault: true }],
+      [true, {}],
+      [false, null],
+    ] as const)
+      expect([remote, payload, offersVault(remote, payload)]).toEqual([remote, payload, false])
+    const base = {
+      t,
+      theme: 'auto',
+      languages: { en: 'English' },
+      canEdit: true,
+      dock: 'right',
+      sleepers: false,
+      profiles: false,
+    } as const
+    const ids = (vault: boolean) => settingsMenu({ ...base, vault }).map(e => ('id' in e ? e.id : '-'))
+    expect(ids(true)).toContain('vault')
+    expect(ids(false)).not.toContain('vault')
+    expect(settingsMenu({ ...base, vault: true }).find(e => 'id' in e && e.id === 'vault')).toMatchObject({
+      label: 'Passwords',
+    })
+    expect(translator('ru')('set.vault')).toBe('Пароли')
+    expect(settingPicked('vault')).toEqual({ kind: 'vault' })
   })
 
   test('on a PC as before: Remote access… on the local page only, MokuPilot… always', () => {

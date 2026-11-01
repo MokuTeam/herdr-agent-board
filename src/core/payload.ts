@@ -143,6 +143,8 @@ export interface BoardPayload {
    * (Remote access, MokuPilot, opening things on this computer). A board on a PC sends none.
    */
   server?: true
+  /** The owner's password vault on the board's own server (core/vault.ts): Settings → Passwords opens /vault. */
+  vault?: true
 }
 
 /** What the board's payload says of the backup (#233). */

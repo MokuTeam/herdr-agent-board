@@ -167,6 +167,9 @@ export const SAMPLES: Record<string, string> = Object.fromEntries(
       // the board's own server only (routes/desktop.ts)
       [/^\/api\/desktop\//, '/api/desktop/s1/vnc'],
       [/^\/api\/browser\/(start|call|profile|ask|close|open|display)$/, '/api/browser/call'],
+      // with the password vault (routes/vault.ts)
+      [/^\/api\/browser\/(login|login-status)$/, '/api/browser/login-status'],
+      [/^\/api\/vault\/fill\/([0-9a-f]{12})$/, '/api/vault/fill/0123456789ab'],
       [/^\/uploads\/(\d{4}-\d{2}-\d{2})\/([^/]+)$/, '/uploads/2026-10-20/a.png'],
     ] as const
   ).map(([re, raw]) => [re.source, raw]),

@@ -3225,6 +3225,26 @@ keys are copied for it) and run `claude` once to sign in; `herdr` attaches to th
   It answers at its own "Address of the board on the server" (config.json's `tunnel.install.domain`),
   never the tunnel's: the tunnel stays where it is.
   `board update` on that server then asks for a ref.
+- **Passwords for the agents (optional).** A Vaultwarden of `agent`'s own on 127.0.0.1 with a
+  certificate of its own there (`ROCKET_TLS`: the Bitwarden CLI takes HTTPS only; a systemd user
+  service, set up by hand: no installer step yet) and `"vault": { "port": 8222 }` in `config.json`
+  (`data`, `env`, `unit`, `bw` and `cert` say where its data, its environment file, its unit, the
+  Bitwarden CLI and that certificate are, which the board and the CLI trust alone; each has a
+  default). Then the board serves its web vault at
+  `https://<domain>/vault` behind the board's own login and nowhere else (no port, no name of its
+  own; Tailscale, a PC's tunnel and the local key's port refuse `/vault`), never its admin page, and
+  a new account only while it has none: once yours is there the board refuses register calls and
+  sets `SIGNUPS_ALLOWED=false` in its environment file and restarts it. **Settings → Passwords**
+  opens it. An agent asks with `browser_fill_login` (or `board browser login [--fields
+  username,password,totp] [--enter]`) for a login typed into the field that has the focus in its
+  browser: the board reads which page that is itself, its card goes under "needs you" with the site
+  and what will be typed; you approve with the vault's master password (never kept; "keep unlocked
+  for 15 minutes" holds the Bitwarden CLI's session in the board's memory only), pick a login when
+  several match, or decline. The board types the values by keys (no clipboard) and locks the vault
+  again; the agent hears only whether it was typed. Anything typed into a page can be read back by
+  the agent's DevTools: approve only for the site you see on the card. The board's backup does not
+  take the vault: its data folder (`db.sqlite3`, `rsa_key.pem`, `attachments/`) is yours to back up
+  (the database by `sqlite3 db.sqlite3 ".backup <file>"` while it runs).
 
 ## Language
 

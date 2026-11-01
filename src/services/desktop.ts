@@ -43,6 +43,7 @@ import { basename, join, sep } from 'node:path'
 import type { ServerWebSocket, WebSocketHandler } from 'bun'
 import type { CardPatch } from '../adapters/cards.ts'
 import { boardChromium } from '../adapters/desktop-files.ts'
+import { typeKeysyms } from '../adapters/rfb-keys.ts'
 import {
   asksInTurn,
   BOARD_CHROMIUM_DIR,
@@ -61,6 +62,7 @@ import {
   xvncArgs,
 } from '../core/desktop.ts'
 import type { Card, Item, ItemDesktop } from '../core/types.ts'
+import { type CdpLine, focusedPage, type PeekResult } from './cdp-peek.ts'
 import { nulFrames } from './cdp-pipe.ts'
 import { createDesktopVideo, type DesktopVideo, VIDEO_NONE, type VideoViewer } from './desktop-video.ts'
 
@@ -370,6 +372,19 @@ export interface Desktops {
   videoOf(item: Item): { pane: string } | 'none' | null
   stop(pane: string, why: string): Promise<void>
   stopAll(): Promise<void>
+  /**
+   * The page that has the focus in the pane's browser, its address as Chrome has it, and what has
+   * the focus there (services/cdp-peek.ts): read beside the agent's DevTools, never through them;
+   * with `activate`, that page made its window's active one first (before the board types there).
+   * Not while no browser runs.
+   */
+  peek(pane: string, o?: { activate?: boolean }): Promise<PeekResult>
+  /**
+   * Keys typed on the pane's display by the board itself (a login fill): X keysyms, each down and
+   * up, by a VNC connection of its own (adapters/rfb-keys.ts). Not while the owner has the browser,
+   * nor while none runs; a keysym past Latin-1 loads the display's keymap first (deskKeymap).
+   */
+  typeKeys(pane: string, keysyms: readonly number[]): Promise<Started>
   websocket: WebSocketHandler<VncData>
 }
 
@@ -539,6 +554,11 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   const chromeMark = (d: Pick<Desktop, 'cdp'>): string => d.cdp
   /** The agent's DevTools bridges (to each Chrome's holder): the socket, and sends what waits. */
   const cdps = new WeakMap<ServerWebSocket<VncData>, { sock: Socket; flush: () => void }>()
+  /** Each pane's open bridge, for the board's own look beside the agent's (peek): its socket, its taps, a message on to the agent. */
+  const bridges = new Map<
+    string,
+    { sock: Socket; taps: Set<(text: string) => boolean>; pass: (text: string) => void }
+  >()
 
   async function ended(pid: number | null, ms: number): Promise<void> {
     if (pid === null) return
@@ -969,13 +989,74 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       if (waiting.length) sock.pause()
       else sock.resume()
     }
+    const taps = new Set<(text: string) => boolean>()
+    const bridge = {
+      sock,
+      taps,
+      pass: (text: string) => {
+        waiting.push(text)
+        flush()
+      },
+    }
+    bridges.set(ws.data.pane, bridge)
     sock.on('data', (chunk: Buffer) => {
-      waiting.push(...frames(chunk))
+      for (const f of frames(chunk)) {
+        // the board's own look (peek) takes its own messages first; the rest is the agent's
+        let own = false
+        for (const tap of taps) if (tap(f)) own = true
+        if (!own) waiting.push(f)
+      }
       flush()
     })
-    sock.on('error', () => ws.close(1011, 'cdp'))
-    sock.on('close', () => ws.close(1000, 'cdp'))
+    const gone = (): void => {
+      if (bridges.get(ws.data.pane) === bridge) bridges.delete(ws.data.pane)
+    }
+    sock.on('error', () => {
+      gone()
+      ws.close(1011, 'cdp')
+    })
+    sock.on('close', () => {
+      gone()
+      ws.close(1000, 'cdp')
+    })
     cdps.set(ws, { sock, flush })
+  }
+
+  /** A DevTools line for the board's own look: the agent's open bridge, else a connection of its own to the holder (`cdp`). */
+  function lineTo(pane: string, cdp: string): { line: CdpLine; close: () => void } {
+    const bridge = bridges.get(pane)
+    if (bridge) {
+      return {
+        line: {
+          send: text => bridge.sock.write(`${text}\0`),
+          tap: fn => {
+            bridge.taps.add(fn)
+            return () => bridge.taps.delete(fn)
+          },
+          pass: text => bridge.pass(text),
+        },
+        close: () => {},
+      }
+    }
+    const sock = createConnection({ path: cdp })
+    const frames = nulFrames()
+    const taps = new Set<(text: string) => boolean>()
+    sock.on('data', (chunk: Buffer) => {
+      for (const f of frames(chunk)) for (const tap of taps) tap(f)
+    })
+    sock.on('error', () => {})
+    return {
+      line: {
+        send: text => sock.write(`${text}\0`),
+        tap: fn => {
+          taps.add(fn)
+          return () => taps.delete(fn)
+        },
+        pass: () => {},
+      },
+      // after the look's last answers: what it set on the browser the holder undoes as the connection goes
+      close: () => setTimeout(() => sock.destroy(), 1600),
+    }
   }
 
   /**
@@ -1314,6 +1395,35 @@ export function createDesktops(o: DesktopsOptions): Desktops {
         ...[...desktops.keys()].map(pane => stop(pane, 'the board stopped them')),
         ...[...kept.values()].map(k => serial(k.pane, async () => forget(k, 'the board stopped them'))),
       ])
+    },
+
+    async peek(pane, opts = {}) {
+      const d = desktops.get(pane)
+      if (!d || d.stopping || d.closing || !d.running || !existsSync(d.cdp)) return { ok: false, error: 'no browser' }
+      touch(pane)
+      const { line, close } = lineTo(pane, d.cdp)
+      try {
+        return await focusedPage(line, 5000, opts)
+      } finally {
+        close()
+      }
+    },
+
+    async typeKeys(pane, keysyms) {
+      const d = desktops.get(pane)
+      if (!d || d.stopping || d.closing || d.xvnc === null || !existsSync(d.vnc))
+        return { ok: false, error: 'no browser' }
+      if (d.control === 'owner') return { ok: false, error: 'owner' }
+      touch(pane)
+      // a letter past Latin-1 (Cyrillic, an accented one) goes as a key once the display's keyboard has it
+      if (keysyms.some(k => k > 0xff && k < 0xff00)) await keymapOf(d)
+      try {
+        await typeKeysyms(d.vnc, keysyms)
+        return { ok: true }
+      } catch (err) {
+        // the reason only: nothing typed is in it
+        return { ok: false, error: `typing: ${messageOf(err)}` }
+      }
     },
 
     websocket: {

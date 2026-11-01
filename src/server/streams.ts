@@ -2,6 +2,7 @@
 // the owner's domain): a path decoded, what they refuse whoever calls, and event streams that end
 // the moment the caller's pairing or login does.
 import { deskFocus, desktopOnly, localOnly, ownServerSettings, secretsPath } from '../core/remote.ts'
+import { vaultOwnerPath } from '../core/vault.ts'
 import { json } from './http.ts'
 import { namedEvent } from './sse.ts'
 
@@ -17,9 +18,10 @@ export function decoded(raw: string): string | null {
 /**
  * What a remote caller is refused, paired or signed in: what acts on this computer's screen
  * (403 desktop) and what is for the board on this computer only (403 local); the owner's secret
- * store too (403 local). `ownServer` is the board's own server's login listener, whose page is the
- * owner's own: the secrets, Settings → Backup… and Settings → Time tracking… by there
- * (ownServerSettings), the rest of what is local still refused.
+ * store too (403 local), and the owner's password vault with the answers to a login fill (403 local,
+ * core/vault.ts vaultOwnerPath). `ownServer` is the board's own server's login listener, whose page
+ * is the owner's own: the secrets, the vault, Settings → Backup… and Settings → Time tracking… by
+ * there (ownServerSettings), the rest of what is local still refused.
  * The routes match a string path decoded and a RegExp one as it came, so both spellings are
  * checked, or an encoded letter (/api/fs/%6Fpen, /api/%61ccess) would get by. A desk
  * (RemoteDevice.desk) may focus herdr and reach /api/remote, whose ops the listener narrows for it
@@ -36,6 +38,8 @@ export function remoteRefusal(
   const local = (p: string): boolean => localOnly(p) && !(ownServer && ownServerSettings(p))
   if (!pairing && (local(raw) || local(path))) return json(403, { error: 'local' })
   if (!ownServer && (secretsPath(raw) || secretsPath(path))) return json(403, { error: 'local' })
+  // the owner's password vault and the answers to a login fill: the board's own server's domain only
+  if (!ownServer && (vaultOwnerPath(raw) || vaultOwnerPath(path))) return json(403, { error: 'local' })
   return null
 }
 
