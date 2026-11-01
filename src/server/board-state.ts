@@ -78,7 +78,8 @@ interface Options {
   desktops?: Pick<Desktops, 'view' | 'card' | 'observe'>
   /**
    * The owner's password vault (core/vault.ts), on the board's own server with config.json's
-   * `vault` only: the payload's `vault`, and each card's login fills under "needs you".
+   * `vault` only: the payload's `vault`, and each card's login fills and login saves under "needs
+   * you".
    */
   vault?: { on(): boolean; card(item: Item): Partial<Item> }
   /** The backup's line (#233); null while there is no database and no target. */
@@ -228,11 +229,12 @@ export function createBoardState({
         const desktop = desktops.view(item)
         if (desktop) list[i] = { ...list[i], ...desktops.card(item), desktop } as (typeof list)[number]
       }
-    // A login fill the card's session asked for: under "needs you" with it, until the owner answers.
+    // A login fill the card's session asked for, or a login the owner typed in its browser to save:
+    // under "needs you" with it, until the owner answers.
     if (vault)
       for (const [i, item] of items.entries()) {
         const fill = vault.card(item)
-        if (fill.loginFill) list[i] = { ...list[i], ...fill } as (typeof list)[number]
+        if (fill.loginFill || fill.loginSave) list[i] = { ...list[i], ...fill } as (typeof list)[number]
       }
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)

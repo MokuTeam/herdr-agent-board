@@ -35,6 +35,7 @@ import {
 import type { Item } from '../core/types.ts'
 import type { Desktops } from './desktop.ts'
 import type { Vault } from './vault.ts'
+import { createVaultHold, type VaultHold } from './vault-hold.ts'
 
 interface Request {
   id: string
@@ -63,6 +64,8 @@ interface Request {
 
 export interface LoginFillOptions {
   vault: Vault
+  /** The one open vault, shared with the login save (services/vault-hold.ts); its own by default. */
+  hold?: VaultHold
   desktops: Pick<Desktops, 'peek' | 'typeKeys' | 'control'>
   /** The session in `pane` on the board now (not asleep), for its card and its reminder. */
   itemOf(pane: string): Item | undefined
@@ -104,9 +107,9 @@ const AUDIT_MAX = 1 << 20
 export function createLoginFills(o: LoginFillOptions): LoginFills {
   const now = o.now ?? Date.now
   const requests = new Map<string, Request>()
-  /** The vault open in memory: the session bw gave, until when (keep unlocked), or for one request's pick. */
-  let held: { session: string; until: number; for: string | null } | null = null
-  let lockTimer: ReturnType<typeof setTimeout> | undefined
+  /** The one open vault, in the board's memory, shared with the login save (services/vault-hold.ts). */
+  const hold = o.hold ?? createVaultHold({ vault: o.vault, onChange: o.onChange, now })
+  const ownsHold = !o.hold
   const sweep = setInterval(() => tick(), 5000)
   sweep.unref?.()
 
@@ -132,26 +135,6 @@ export function createLoginFills(o: LoginFillOptions): LoginFills {
     }
   }
 
-  /** The vault locked again, unless the owner keeps it open for longer than `forRequest` needs it. */
-  async function lock(forRequest?: string): Promise<void> {
-    if (held && forRequest !== undefined && held.for !== forRequest) return
-    held = null
-    clearTimeout(lockTimer)
-    await o.vault.lock().catch(() => {})
-    o.onChange()
-  }
-
-  function hold(session: string, ms: number, forRequest: string | null): void {
-    held = { session, until: now() + ms, for: forRequest }
-    clearTimeout(lockTimer)
-    lockTimer = setTimeout(() => void lock(), ms)
-    lockTimer.unref?.()
-  }
-
-  /** The open vault's session for request `id`: kept open by the owner, or opened for that request's own pick. */
-  const heldSession = (id: string): string | null =>
-    held && held.until > now() && (held.for === null || held.for === id) ? held.session : null
-
   function settle(r: Request, status: FillStatus, reason = ''): void {
     if (r.status !== 'pending') return
     r.status = status
@@ -159,7 +142,7 @@ export function createLoginFills(o: LoginFillOptions): LoginFills {
     r.done = now()
     r.matches = null
     audit(status, r, reason ? { reason } : {})
-    if (held?.for === r.id) void lock(r.id)
+    void hold.lock(r.id)
     if (r.wake) {
       const item = o.itemOf(r.pane)
       if (item && item.key === r.key)
@@ -253,7 +236,7 @@ export function createLoginFills(o: LoginFillOptions): LoginFills {
   /** Stays pending, the reason on the card for the owner. */
   function fail(r: Request, error: string, status = 409): Answer {
     r.error = error
-    r.stage = r.matches && r.matches.length > 1 && heldSession(r.id) ? 'pick' : 'asked'
+    r.stage = r.matches && r.matches.length > 1 && hold.session(r.id) ? 'pick' : 'asked'
     o.onChange()
     return { status, body: { ok: false, error } }
   }
@@ -282,7 +265,7 @@ export function createLoginFills(o: LoginFillOptions): LoginFills {
       expires: r.expires,
       stage: r.stage,
       matches: r.matches,
-      unlockedUntil: held && held.for === null && held.until > now() ? held.until : null,
+      unlockedUntil: hold.keptUntil(),
       firstLogin: firstLogin,
       error: r.error,
     }
@@ -344,7 +327,7 @@ export function createLoginFills(o: LoginFillOptions): LoginFills {
       o.onChange()
       // the vault kept open: the card shows its matches at once; the first sign-in shows a code field
       void (async () => {
-        const session = held?.for === null ? heldSession(r.id) : null
+        const session = hold.keptUntil() !== null ? hold.session(r.id) : null
         if (session) {
           r.matches = await find(r, session).catch(() => null)
           o.onChange()
@@ -368,7 +351,7 @@ export function createLoginFills(o: LoginFillOptions): LoginFills {
       if ('refused' in got) return got.refused
       const r = got
       const keep = b.keep === true
-      let session = heldSession(r.id)
+      let session = hold.session(r.id)
       if (!session) {
         const password = typeof b.password === 'string' ? b.password : ''
         if (!password || password.length > MAX_PASSWORD || /[\r\n]/.test(password))
@@ -386,14 +369,14 @@ export function createLoginFills(o: LoginFillOptions): LoginFills {
         }
         firstLogin = false
         session = opened.session
-        hold(session, keep ? HOLD_MS : PICK_MS, keep ? null : r.id)
+        hold.hold(session, keep ? HOLD_MS : PICK_MS, keep ? null : r.id)
       }
       r.stage = 'busy'
       o.onChange()
       const found = await find(r, session).catch(() => null)
       r.stage = 'asked'
       if (!found) {
-        await lock(r.id)
+        await hold.lock(r.id)
         return fail(r, t('fill.err.bw'))
       }
       if (!found.length) {
@@ -418,7 +401,7 @@ export function createLoginFills(o: LoginFillOptions): LoginFills {
       const r = got
       const match = r.matches?.find(m => m.id === itemId)
       if (!match) return { status: 400, body: { ok: false, error: t('fill.err.pick') } }
-      const session = heldSession(r.id)
+      const session = hold.session(r.id)
       if (!session) {
         r.stage = 'asked'
         return fail(r, t('fill.err.lockedAgain'), 409)
@@ -434,7 +417,7 @@ export function createLoginFills(o: LoginFillOptions): LoginFills {
     },
 
     async lockNow() {
-      await lock()
+      await hold.lockNow()
     },
 
     card(item) {
@@ -455,7 +438,7 @@ export function createLoginFills(o: LoginFillOptions): LoginFills {
 
     async close() {
       clearInterval(sweep)
-      if (held) await lock()
+      if (ownsHold) await hold.close()
     },
   }
 }

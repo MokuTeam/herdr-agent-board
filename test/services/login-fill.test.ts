@@ -73,6 +73,18 @@ function setup(o: { matches?: { id: string; name: string; username: string; totp
       bw.push(`secret ${id}`)
       return session === SESSION && unlocked ? { username: USER, password: PASSWORD, totp: id !== 'nototp' } : null
     },
+    async item(session, id) {
+      bw.push(`item ${id}`)
+      return session === SESSION && unlocked ? { id, type: 1, login: {} } : null
+    },
+    async createItem(session) {
+      bw.push('create')
+      return session === SESSION && unlocked ? 'new-id' : null
+    },
+    async editItem(session) {
+      bw.push('edit')
+      return session === SESSION && unlocked
+    },
     async totp(session) {
       bw.push('totp')
       return session === SESSION && unlocked ? CODE : null
@@ -384,6 +396,9 @@ describe('the owner’s answer', () => {
         sync: async () => true,
         matches: async () => [{ id: 'i1', name: 'Acme', username: USER, totp: false, uris: [] }],
         secret: async () => ({ username: USER, password: PASSWORD, totp: false }),
+        item: async () => null,
+        createItem: async () => null,
+        editItem: async () => false,
         totp: async () => null,
         lock: async () => {},
         close() {},

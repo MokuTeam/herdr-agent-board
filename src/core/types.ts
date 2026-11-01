@@ -5,6 +5,7 @@ import type { HelperSummary } from './helpers.ts'
 import type { FailureKind } from './launch/launcher-command.ts'
 import type { ItemLinks } from './links.ts'
 import type { LoginFillView } from './login-fill.ts'
+import type { LoginSaveView } from './login-save.ts'
 import type { Todo } from './todos.ts'
 
 export type Lang = 'en' | 'ru'
@@ -304,6 +305,8 @@ export interface Item {
   todos?: Todo[]
   /** Its login fills waiting for the owner (core/login-fill.ts), on the board's own server; absent when none. */
   loginFill?: LoginFillView[]
+  /** Logins the owner typed in its browser, offered to the vault (core/login-save.ts), on the board's own server; absent when none. */
+  loginSave?: LoginSaveView[]
   [extra: string]: unknown
 }
 

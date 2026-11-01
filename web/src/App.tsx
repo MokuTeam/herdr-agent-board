@@ -20,6 +20,7 @@ import { RenameField } from './components/RenameField.tsx'
 import { SetupPop } from './components/SetupPop.tsx'
 import { SidePanels } from './components/SidePanels.tsx'
 import { LoginFills, loginFillsOf } from './components/secrets/LoginFill.tsx'
+import { LoginSaves, loginSavesOf } from './components/secrets/LoginSave.tsx'
 import { SecretRequests, secretsOf } from './components/secrets/SecretForm.tsx'
 import { Toasts } from './components/Toasts.tsx'
 import { Toolbar } from './components/Toolbar.tsx'
@@ -301,10 +302,11 @@ export function App() {
             const asked = questions.mount(item, detail) && <SheetQuestion questions={questions} />
             // a secret the session waits for (#273) comes first: it holds the session until filled in;
             // so does a login fill in its browser (the board's own server)
-            return secretsOf(item).length || loginFillsOf(item).length ? (
+            return secretsOf(item).length || loginFillsOf(item).length || loginSavesOf(item).length ? (
               <>
                 <SecretRequests item={item} />
                 <LoginFills item={item} />
+                <LoginSaves item={item} />
                 {asked}
               </>
             ) : (

@@ -18,10 +18,12 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
 import { fillAsk } from '../../core/login-fill.ts'
 import type { LoginFills } from '../../services/login-fill.ts'
+import type { LoginSaves } from '../../services/login-save.ts'
 import { json, type Route } from '../http.ts'
 
 export interface VaultApp {
   fills: LoginFills
+  saves: LoginSaves
   /** Whether the request carries the board's local key (adapters/local-key.ts). */
   keyOk(req: Request): boolean
 }
@@ -71,6 +73,35 @@ export function vaultRoutes(app: VaultApp): Route[] {
                 : b.op === 'decline'
                   ? app.fills.decline(id)
                   : { status: 400, body: { ok: false, error: t('fill.err.op') } }
+          return json(answer.status, answer.body)
+        } catch {
+          // whatever threw may have had the password near it: none of it goes out or into the log
+          return json(500, { ok: false, error: t('fill.err.internal') })
+        }
+      },
+    },
+    {
+      // The owner's answer to a login save (the master password goes to bw's stdin and nowhere else,
+      // as a fill's does): through the domain's login only, guarded as the board's other changes.
+      method: 'POST',
+      path: /^\/api\/vault\/save\/([0-9a-f]{12})$/,
+      guard: ['board-header', 'origin'],
+      async handle(_req, ctx) {
+        const id = ctx.params[0] ?? ''
+        let body: unknown
+        try {
+          body = await ctx.rawBody()
+        } catch {
+          return json(400, { ok: false, error: t('save.err.op') })
+        }
+        const b = isRecord(body) ? body : {}
+        try {
+          const answer =
+            b.op === 'approve'
+              ? await app.saves.approve(id, { password: b.password, code: b.code, keep: b.keep })
+              : b.op === 'decline'
+                ? app.saves.decline(id)
+                : { status: 400, body: { ok: false, error: t('save.err.op') } }
           return json(answer.status, answer.body)
         } catch {
           // whatever threw may have had the password near it: none of it goes out or into the log

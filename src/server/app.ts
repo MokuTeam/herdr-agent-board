@@ -59,6 +59,7 @@ import { createDesktops } from '../services/desktop.ts'
 import { createFirstLogin } from '../services/first-login.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { createLoginFills } from '../services/login-fill.ts'
+import { createLoginSaves } from '../services/login-save.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
 import { createPresence } from '../services/presence.ts'
 import { createProfileSync } from '../services/profile-sync.ts'
@@ -71,6 +72,7 @@ import { createSetupChecks } from '../services/setup-check.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
 import { createProbes, createSupervisor, networkSignature, realClock, type TunnelPlan } from '../services/tunnel.ts'
 import { createVault } from '../services/vault.ts'
+import { createVaultHold } from '../services/vault-hold.ts'
 import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, peerOf, type Route } from './http.ts'
@@ -286,6 +288,15 @@ export async function startServer({
       by: 'board',
     })
   }
+  // The owner's password vault (core/vault.ts), on the board's own server with config.json's `vault`
+  // only: its web vault through the domain's login, the agents' login fills, and the owner's own
+  // sign-in offered to it. On a PC nothing of it is made, and nothing asks for it.
+  const vaultNow = () => vaultConfig(cfg.vault, { home: homedir(), serverMode: onServer(cfg) })
+  const hasVault = !!vaultNow()
+  // A sign-in the owner types while they hold an agent's browser, caught by the board (services/
+  // login-watch.ts) and offered to the vault (services/login-save.ts), set once the vault's saves
+  // are up; only where the vault is, so the watcher never starts otherwise.
+  const loginCaptureRef: { fn?: (pane: string, c: { url: string; username: string; password: string }) => void } = {}
   // Each agent's own browser (services/desktop.ts), on the board's own server only: on a PC none is
   // made, no route answers for one and the web board serves no WebSocket.
   const desktops = onServer(cfg)
@@ -301,17 +312,19 @@ export async function startServer({
         chromeExtra: (process.env.BOARD_DESKTOP_CHROME_ARGS ?? '').split(' ').filter(Boolean),
         // what pages are told of the owner's languages: the board's own (config.json `language`)
         languages: () => deskLanguages(cfg.language),
+        // only where the vault is: the watcher runs on no other server, and never while the agent acts
+        ...(hasVault && { onLoginCapture: (pane, cred) => loginCaptureRef.fn?.(pane, cred) }),
       })
     : null
-  // The owner's password vault (core/vault.ts), on the board's own server with config.json's `vault`
-  // only: its web vault through the domain's login, and the agents' login fills. On a PC nothing of
-  // it is made, and nothing asks for it.
-  const vaultNow = () => vaultConfig(cfg.vault, { home: homedir(), serverMode: onServer(cfg) })
   const vault = desktops ? createVault({ cfg: vaultNow, log }) : null
+  // The one open vault, shared by the fills and the saves (services/vault-hold.ts): one Bitwarden
+  // CLI, one data file, one unlock the owner may keep open for 15 minutes.
+  const vaultHold = desktops && vault ? createVaultHold({ vault, onChange: () => board.publish() }) : null
   const fills =
-    desktops && vault
+    desktops && vault && vaultHold
       ? createLoginFills({
           vault,
+          hold: vaultHold,
           desktops,
           itemOf: pane => board.items().find(i => i.pane === pane && !i.sleeping),
           remind: remindNow,
@@ -319,6 +332,17 @@ export async function startServer({
           log,
         })
       : null
+  const saves =
+    desktops && vault && vaultHold
+      ? createLoginSaves({
+          vault,
+          hold: vaultHold,
+          itemOf: pane => board.items().find(i => i.pane === pane && !i.sleeping),
+          onChange: () => board.publish(),
+          log,
+        })
+      : null
+  if (saves) loginCaptureRef.fn = (pane, cred) => void saves.capture(pane, cred)
   const routes: Route[] = []
   const guards = { port, token: FILE_TOKEN, stale: () => board.stale() }
   // Omarchy here: the Terminal style takes the colors of its theme on now, and follows a switch.
@@ -542,7 +566,14 @@ export async function startServer({
     ...(omarchy && { omarchy: omarchy.stamp }),
     presence: presence.view,
     ...(desktops && { desktops }),
-    ...(fills && vault && { vault: { on: () => vault.port() !== null, card: (item: Item) => fills.card(item) } }),
+    ...(vault &&
+      (fills || saves) && {
+        vault: {
+          on: () => vault.port() !== null,
+          // a login fill the agent asked for, and a login save offered to the owner: both under "needs you"
+          card: (item: Item) => ({ ...(fills ? fills.card(item) : {}), ...(saves ? saves.card(item) : {}) }),
+        },
+      }),
     backup: backupLine,
     time: timeLine,
   })
@@ -616,10 +647,11 @@ export async function startServer({
           },
         })
       : []),
-    // The owner's password vault's login fills, on the board's own server only.
-    ...(fills
+    // The owner's password vault's login fills and login saves, on the board's own server only.
+    ...(fills && saves
       ? vaultRoutes({
           fills,
+          saves,
           keyOk: req => {
             const key = ownKey()
             return key !== null && keyMatches(req.headers.get(LOCAL_KEY_HEADER), key)
@@ -805,6 +837,8 @@ export async function startServer({
       presence.stop()
       vault?.close()
       await fills?.close()
+      await saves?.close()
+      await vaultHold?.close()
       terminals.stopAll()
       setup.stop()
       accessOut.cancel()

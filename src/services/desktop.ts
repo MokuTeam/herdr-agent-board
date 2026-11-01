@@ -65,6 +65,7 @@ import type { Card, Item, ItemDesktop } from '../core/types.ts'
 import { type CdpLine, focusedPage, type PeekResult } from './cdp-peek.ts'
 import { nulFrames } from './cdp-pipe.ts'
 import { createDesktopVideo, type DesktopVideo, VIDEO_NONE, type VideoViewer } from './desktop-video.ts'
+import { createLoginWatch } from './login-watch.ts'
 
 /** What the desktops ask of the server: tests hand in their own. */
 export interface DesktopSystem {
@@ -324,6 +325,12 @@ export interface DesktopsOptions {
   idleMs?: number
   /** The languages its Chrome tells pages (core/desktop.ts deskLanguages), as the board's setting is at its start; null: Chrome's own. */
   languages?: () => readonly string[] | null
+  /**
+   * A sign-in the owner typed in an agent's browser while they hold it (services/login-watch.ts),
+   * offered to the vault (services/login-save.ts): set only where the vault is (config.json
+   * `vault`), so nothing of it runs otherwise. Absent: the board never watches for a sign-in.
+   */
+  onLoginCapture?: (pane: string, cred: { url: string; username: string; password: string }) => void
 }
 
 export interface Desktops {
@@ -604,6 +611,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
    */
   async function teardown(d: Desktop, keep = false): Promise<string | null> {
     d.stopping = true
+    stopWatch(d.pane)
     await quitChrome(d)
     await ended(d.chrome, 5000)
     await ended(d.xvnc, 3000)
@@ -1022,6 +1030,31 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     cdps.set(ws, { sock, flush })
   }
 
+  /**
+   * The board watching an agent's browser for the owner's own sign-in (services/login-watch.ts),
+   * only while the owner holds it; by pane. Started as the owner takes the browser, stopped as it
+   * goes back to the agent (handed back, the view gone, no view a while) or the browser stops.
+   */
+  const watches = new Map<string, { stop(): Promise<void> }>()
+  function startWatch(pane: string): void {
+    if (!o.onLoginCapture || watches.has(pane)) return
+    const d = desktops.get(pane)
+    if (!d || d.stopping || d.closing || !d.running || !existsSync(d.cdp)) return
+    const { line, close } = lineTo(pane, d.cdp)
+    const watch = createLoginWatch(line, {
+      onCapture: cred => o.onLoginCapture?.(pane, cred),
+      log: o.log,
+      now,
+    })
+    watches.set(pane, { stop: () => watch.stop().finally(close) })
+  }
+  function stopWatch(pane: string): void {
+    const w = watches.get(pane)
+    if (!w) return
+    watches.delete(pane)
+    void w.stop()
+  }
+
   /** A DevTools line for the board's own look: the agent's open bridge, else a connection of its own to the holder (`cdp`). */
   function lineTo(pane: string, cdp: string): { line: CdpLine; close: () => void } {
     const bridge = bridges.get(pane)
@@ -1119,6 +1152,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     const d = desktops.get(ws.data.pane)
     if (d?.control !== 'owner' || d.stopping) return
     d.control = 'agent'
+    stopWatch(d.pane)
     handedBack(d, d.key || itemIn(d.pane)?.key || '')
     save()
     o.log(`desktop :${d.display} for ${d.key || d.pane}: back to the agent (the owner's view closed)`)
@@ -1197,6 +1231,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
           if (now() - d.unviewedSince >= UNVIEWED_MS) {
             d.control = 'agent'
             d.unviewedSince = 0
+            stopWatch(d.pane)
             handedBack(d, d.key)
             o.log(`desktop :${d.display} for ${d.key || d.pane}: back to the agent (no view of the owner's)`)
             changed = true
@@ -1367,6 +1402,9 @@ export function createDesktops(o: DesktopsOptions): Desktops {
         return { ok: false, status: 409, error: 'open the browser’s view first: control goes with a view of it' }
       d.control = to
       d.unviewedSince = 0
+      // the owner holds it: the board watches for their own sign-in (services/login-watch.ts); back to the agent, it stops
+      if (to === 'owner') startWatch(d.pane)
+      else stopWatch(d.pane)
       // handed back: what the agent asked is done (its own ask only: a later `board ask` stays), and it is told
       if (to === 'agent') handedBack(d, item.key)
       save()

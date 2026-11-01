@@ -66,6 +66,12 @@ export interface Vault {
   matches(session: string, url: string): Promise<(FillMatch & { uris: string[] })[] | null>
   /** One item's username and password; null when bw failed. */
   secret(session: string, id: string): Promise<VaultItemSecret | null>
+  /** One item's full decrypted JSON (bw get item), for an edit that keeps the rest of it; null when bw failed. */
+  item(session: string, id: string): Promise<Record<string, unknown> | null>
+  /** A new login item created from `item` (bw create item, its encoded JSON on bw's stdin, never an argument); its new id, or null when bw failed. */
+  createItem(session: string, item: Record<string, unknown>): Promise<string | null>
+  /** An item replaced by `item` (bw edit item, its encoded JSON on bw's stdin); false when bw failed. */
+  editItem(session: string, id: string, item: Record<string, unknown>): Promise<boolean>
   /** The item's current TOTP code; null when it has none or bw failed. */
   totp(session: string, id: string): Promise<string | null>
   /** Locked again: the session bw gave is no use any more. */
@@ -313,6 +319,25 @@ export function createVault(o: VaultOptions): Vault {
         password: typeof it.login.password === 'string' ? it.login.password : '',
         totp: typeof it.login.totp === 'string' && it.login.totp !== '',
       }
+    },
+
+    async item(session, id) {
+      if (!/^[\w-]{1,64}$/.test(id)) return null
+      const it = jsonOf(await bw(['get', 'item', id], { session }))
+      return isRecord(it) ? it : null
+    },
+
+    async createItem(session, item) {
+      // the item's JSON (the password in it) goes base64 on bw's stdin, never an argument
+      const encoded = Buffer.from(JSON.stringify(item), 'utf8').toString('base64')
+      const made = jsonOf(await bw(['create', 'item'], { session, input: encoded }))
+      return isRecord(made) && typeof made.id === 'string' ? made.id : null
+    },
+
+    async editItem(session, id, item) {
+      if (!/^[\w-]{1,64}$/.test(id)) return false
+      const encoded = Buffer.from(JSON.stringify(item), 'utf8').toString('base64')
+      return (await bw(['edit', 'item', id], { session, input: encoded })).code === 0
     },
 
     async totp(session, id) {

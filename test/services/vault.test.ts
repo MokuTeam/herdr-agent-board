@@ -213,3 +213,52 @@ describe('the Bitwarden CLI as the board runs it', () => {
     },
   )
 })
+
+describe('creating and editing items for a login save', () => {
+  test('create item: the item’s JSON goes base64 on bw’s stdin, never an argument; the new id read back', async () => {
+    const v = vaultFor('create', ['owner@acme.test'], args => {
+      if (args[0] === 'create' && args[1] === 'item') return ok(JSON.stringify({ id: 'made-1', type: 1 }))
+      return ok()
+    })
+    const id = await v.vault.createItem('S', {
+      type: 1,
+      name: 'acme.test',
+      login: { username: 'bot', password: 'Hunter2-secret' },
+    })
+    expect(id).toBe('made-1')
+    const call = v.calls.find(c => c.args[0] === 'create')
+    expect(call?.args).toEqual(['create', 'item'])
+    // the password is in the encoded stdin, never on the command line
+    expect(JSON.stringify(call?.args)).not.toContain('Hunter2-secret')
+    expect(JSON.stringify(call?.args)).not.toContain('password')
+    const decoded = JSON.parse(Buffer.from(call?.input ?? '', 'base64').toString('utf8'))
+    expect(decoded.login.password).toBe('Hunter2-secret')
+    expect(call?.env.BW_SESSION).toBe('S')
+    v.vault.close()
+  })
+
+  test('edit item: its id on the command line, the JSON base64 on stdin; a bad id refused', async () => {
+    const v = vaultFor('edit', ['owner@acme.test'], args =>
+      args[0] === 'edit' ? ok(JSON.stringify({ id: args[2] })) : ok(),
+    )
+    expect(await v.vault.editItem('S', 'item-9', { login: { password: 'New-secret-1' } })).toBe(true)
+    const call = v.calls.find(c => c.args[0] === 'edit')
+    expect(call?.args).toEqual(['edit', 'item', 'item-9'])
+    expect(JSON.stringify(call?.args)).not.toContain('New-secret-1')
+    expect(JSON.parse(Buffer.from(call?.input ?? '', 'base64').toString('utf8')).login.password).toBe('New-secret-1')
+    // an id that is no id never reaches bw
+    expect(await v.vault.editItem('S', 'bad id!', {})).toBe(false)
+    expect(v.calls.filter(c => c.args[0] === 'edit').length).toBe(1)
+    v.vault.close()
+  })
+
+  test('item: one item’s JSON read back; bw failing is null', async () => {
+    const v = vaultFor('get', ['owner@acme.test'], args =>
+      args[0] === 'get' && args[1] === 'item'
+        ? ok(JSON.stringify({ id: args[2], login: { password: 'p' } }))
+        : failed('no'),
+    )
+    expect(await v.vault.item('S', 'i1')).toEqual({ id: 'i1', login: { password: 'p' } })
+    v.vault.close()
+  })
+})
