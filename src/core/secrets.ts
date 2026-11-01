@@ -759,12 +759,16 @@ export interface SecretView {
   problem?: string
 }
 
-/** The card's pending requests for the payload, each with where it would write now. */
+/**
+ * The card's pending requests for the payload, each with where it would write now. `platform` is
+ * the one `conf` was parsed for (secretsConfig), so a file's path is joined the same way.
+ */
 export function secretViews(
   conf: SecretsConfig,
   card: Record<string, unknown> | null | undefined,
   tr: Translator,
   now = Date.now(),
+  platform: string = process.platform,
 ): SecretView[] {
   return pendingOf(requestsOf(card?.secrets), now).map(r => {
     const sink = conf.sinks.get(r.sink)
@@ -790,7 +794,7 @@ export function secretViews(
     const check = checkRequest(sink, r.params, r.fields)
     // the fields as a submit will write them: with the owner's `once`
     const fields = check.ok ? check.fields : r.fields
-    const target = targetOf(sink, r.params, fields, tr)
+    const target = targetOf(sink, r.params, fields, tr, platform)
     return {
       ...base,
       fields,
