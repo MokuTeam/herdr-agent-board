@@ -77,6 +77,11 @@ const restored = {
 }
 // Once that pane is closed: its tab keeps only the sidebar's pane.
 const closed = { ...restored, panes: restored.panes.filter(p => p.pane_id !== 'wZ:p2') }
+// herdr keeps the board's label (its title in herdr-plugin.toml) on the pane it restores.
+const label = 'Agent board'
+const withLabel = <T extends { pane_id: string }>(panes: T[], ids: string[]): (T & { label?: string })[] =>
+  panes.map(p => (ids.includes(p.pane_id) ? { ...p, label } : p))
+const labelled = { ...restored, panes: withLabel(restored.panes, ['wZ:p2']) }
 // And once a new board is open, in a tab of its own.
 const reopened = {
   ...closed,
@@ -125,7 +130,7 @@ for (const background of [false, true]) {
     const box = await boardBox({ pane: 'wZ:p2', pid: await deadPid(), overlay: false })
     box.state({
       'api snapshot': {
-        result: { snapshot: restored },
+        result: { snapshot: labelled },
         until: ['pane close'],
         // biome-ignore lint/suspicious/noThenProperty: the fake herdr's reply after the close (test/support/fake-herdr.ts)
         then: { seq: [{ result: { snapshot: closed } }, { result: { snapshot: reopened } }] },
@@ -170,7 +175,7 @@ for (const placement of ['tab', 'overlay']) {
       const box = await boardBox({ pane: 'wZ:p2', pid: await deadPid(), overlay: placement === 'overlay' }, placement)
       box.state({
         'api snapshot': {
-          result: { snapshot: restored },
+          result: { snapshot: labelled },
           until: ['pane close'],
           // biome-ignore lint/suspicious/noThenProperty: the fake herdr's reply after the close (test/support/fake-herdr.ts)
           then: { result: { snapshot: closed } },
@@ -196,7 +201,7 @@ for (const placement of ['tab', 'overlay']) {
 test('open: a restored pane that does not close still leaves a new board open', async () => {
   const box = await boardBox({ pane: 'wZ:p2', pid: await deadPid(), overlay: false })
   box.state({
-    'api snapshot': { result: { snapshot: restored } },
+    'api snapshot': { result: { snapshot: labelled } },
     'pane close': { error: 'pane not found', code: 'pane_not_found' },
     'plugin pane open': { result: { plugin_pane: { pane: { pane_id: 'wZ:p9' } } } },
   })
@@ -209,6 +214,34 @@ test('open: a restored pane that does not close still leaves a new board open', 
     'plugin pane open --no-focus --placement tab --workspace wZ',
   ])
 }, 10_000)
+
+// herdr gives a pane's id out again: board.json's pane, its board gone, without the board's label
+// may be the user's now. It is not closed, and a board opens as if there were none (#189).
+for (const background of [false, true]) {
+  test(`open: a dead pid in a pane without the board's label: nothing closed, a new board opens (background=${background})`, async () => {
+    const box = await boardBox({ pane: 'wZ:p2', pid: await deadPid(), overlay: false })
+    box.state({
+      'api snapshot': { seq: [{ result: { snapshot: restored } }, { result: { snapshot: reopened } }] },
+      'plugin pane open': { result: { plugin_pane: { pane: { pane_id: 'wZ:p9' } } } },
+      'tab focus': { result: {} },
+      'pane zoom': { result: {} },
+    })
+    const out = await box.open(background).exited
+    assert.equal(out.code, 0, out.stderr)
+    assert.deepEqual(
+      said(box),
+      background
+        ? ['api snapshot', 'plugin pane open --no-focus --placement tab --workspace wZ']
+        : [
+            'api snapshot',
+            'plugin pane open --focus --placement tab --workspace wZ',
+            'api snapshot',
+            'tab focus new-tab',
+            'pane zoom wZ:p9 --on',
+          ],
+    )
+  }, 10_000)
+}
 
 // What stays as it was: a board that runs (its pid alive, or no pid in an older board.json) is
 // focused, toggled back or left alone; with no board.json a board opens.
@@ -269,10 +302,6 @@ for (const background of [false, true]) {
 // say): the pid lives, but the pane herdr restored holds a bare shell. board.json names the board's
 // host too (run.ts, the pane's own process), and herdr says what runs in the pane (#188).
 const HOST = 61104
-const label = 'Agent board'
-const withLabel = <T extends { pane_id: string }>(panes: T[], ids: string[]): (T & { label?: string })[] =>
-  panes.map(p => (ids.includes(p.pane_id) ? { ...p, label } : p))
-const labelled = { ...restored, panes: withLabel(restored.panes, ['wZ:p2']) }
 /** herdr 0.9.5's `pane process-info` answer for a pane whose own process is `pid`, idle in the foreground. */
 const processInfo = (pid: number, argv: string[]) => ({
   result: {

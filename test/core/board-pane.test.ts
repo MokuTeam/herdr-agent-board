@@ -154,6 +154,37 @@ test('a dead pid is stale without asking herdr', async () => {
   assert.deepEqual(herdr.asked, [])
 })
 
+// herdr gives a pane's id out again: a dead board's id may name one of the user's panes now (#189).
+test('a dead pid in a pane without the board’s label: no board, nothing to close, and herdr not asked', async () => {
+  const others = [
+    panes,
+    [{ pane_id: 'wZ:p2', label: 'my shell' }],
+    [{ pane_id: 'wZ:p2', label: 'agent board' }],
+    [{ pane_id: 'wZ:p2', label: `${BOARD_LABEL} (old)` }],
+    [{ pane_id: 'wZ:p2', label: '' }],
+  ]
+  for (const theirs of others)
+    for (const dead of [
+      { ...saved, pid: 31804 },
+      { pane: 'wZ:p2', pid: 31804 },
+    ]) {
+      const herdr = herdrSays({})
+      assert.equal(await lastBoardChecked(dead, theirs, alive, herdr.inPane), null, JSON.stringify([dead, theirs]))
+      assert.deepEqual(herdr.asked, [])
+    }
+})
+
+test('a dead pid in the board’s labelled pane is stale, with a host or without (Windows after shutdown)', async () => {
+  for (const dead of [
+    { ...saved, pid: 31804 },
+    { pane: 'wZ:p2', pid: 31804 },
+  ]) {
+    const herdr = herdrSays({})
+    assert.deepEqual(await lastBoardChecked(dead, boardPanes, alive, herdr.inPane), { pane: 'wZ:p2', stale: true })
+    assert.deepEqual(herdr.asked, [])
+  }
+})
+
 test('herdr that cannot say what runs in the pane (an error, an older herdr): the pane is trusted, as before', async () => {
   for (const answer of [new Error('unrecognized subcommand process-info'), null]) {
     const herdr = herdrSays({ 'wZ:p2': answer })
@@ -245,6 +276,21 @@ test('pane ids go to herdr and are matched whole, whatever they hold', async () 
   assert.deepEqual(herdr.asked, [...odd, 'панель:2', 'C:\\x y'])
   assert.equal(await lastBoardChecked({ ...saved, pane: 'pane-7' }, oddPanes, alive, herdr.inPane), null)
   assert.equal(await lastBoardChecked({ ...saved, pane: 'ПАНЕЛЬ:2' }, oddPanes, alive, herdr.inPane), null)
+})
+
+test('a dead pid: odd pane ids are stale with the board’s label and no board without it', async () => {
+  const odd = ['pane-7 a%b', 'панель:2', 'C:\\x y']
+  const herdr = herdrSays({})
+  for (const pane of odd) {
+    const dead = { pane, pid: 31804, host: 61104 }
+    assert.deepEqual(await lastBoardChecked(dead, [{ pane_id: pane, label }], alive, herdr.inPane), {
+      pane,
+      stale: true,
+    })
+    assert.equal(await lastBoardChecked(dead, [{ pane_id: pane, label: 'панель' }], alive, herdr.inPane), null)
+    assert.equal(await lastBoardChecked(dead, [{ pane_id: pane }], alive, herdr.inPane), null)
+  }
+  assert.deepEqual(herdr.asked, [])
 })
 
 test('a leftover closes with its tab when only herdr-sidebar’s panes are beside it, else alone', () => {
