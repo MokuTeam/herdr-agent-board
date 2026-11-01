@@ -49,8 +49,7 @@ if (background && placement !== 'workspace') process.exit(0)
 const last = await lastBoardChecked(saved, snap.panes, isAlive, paneProcesses)
 if (last?.stale) {
   // herdr brought the board's pane back (after a restart) with a shell in it, not the board: it is
-  // no plugin pane any more. Close it and open a board as if there were none. Only a pane with the
-  // board's label comes back stale; one without it may be the user's now and comes back as null.
+  // no plugin pane any more. Close it and open a board as if there were none.
   await herdr(['pane', 'close', last.pane]).catch(() => {})
 }
 // Other panes herdr brought back from earlier boards (the board's label, an idle shell in them):
