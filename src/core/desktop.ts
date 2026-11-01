@@ -460,7 +460,10 @@ export function xvncArgs(o: { display: number; socket: string; auth: string; nam
  * or idle, services/desktop.ts): its last tabs reopened, and its session cookies with them
  * (Chrome's "continue where you left off" for this start only), with no blank tab beside them. With the owner's `languages` (deskLanguages): what pages are told
  * (navigator.languages, Accept-Language), all of them, not cut to the first as Chrome does by
- * default; its own menus stay in the server's language.
+ * default; its own menus stay in the server's language. No startup infobars (Chrome for Testing's
+ * "only for automated testing", the board's own Chromium's): the switch is the running browser's,
+ * so a Chrome run later to hand it an address (`board browser open`) brings none back either; not
+ * --enable-automation, which would tell pages it is automation (navigator.webdriver, Google's sign-in).
  */
 export function chromeArgs(o: {
   profileDir: string
@@ -479,6 +482,7 @@ export function chromeArgs(o: {
     '--password-store=basic',
     '--disable-dev-shm-usage',
     '--hide-crash-restore-bubble',
+    '--disable-infobars',
     '--disable-smooth-scrolling',
     '--enable-unsafe-swiftshader',
     ...langs,
@@ -487,6 +491,25 @@ export function chromeArgs(o: {
     ...(o.extra ?? []),
     ...(o.restore ? ['--restore-last-session'] : ['about:blank']),
   ]
+}
+
+/**
+ * A profile's Preferences (Default/Preferences, Chrome's JSON) with the password manager off: no
+ * "Save password?" after a sign-in and nothing offered to fill in. Passwords are typed there by the
+ * owner (with control) or the agent; the browser keeps none, its sign-ins are its cookies, as
+ * before. Everything else in it stays Chrome's.
+ */
+export function quietPasswords(prefs: unknown): Record<string, unknown> {
+  const object = (v: unknown): Record<string, unknown> =>
+    v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+  const p = object(prefs)
+  return { ...p, credentials_enable_service: false, profile: { ...object(p.profile), password_manager_enabled: false } }
+}
+
+/** Whether a profile's Preferences have the password manager off already (nothing to write). */
+export const passwordsQuiet = (prefs: unknown): boolean => {
+  const p = prefs as { credentials_enable_service?: unknown; profile?: { password_manager_enabled?: unknown } } | null
+  return p?.credentials_enable_service === false && p.profile?.password_manager_enabled === false
 }
 
 /**

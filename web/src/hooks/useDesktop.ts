@@ -4,8 +4,10 @@
 // where the page can decode it (WebCodecs, models/desk-video.ts) and the board can make it
 // (ffmpeg): the VNC connection then asks for no picture and carries the input and the pings; where
 // not (no WebCodecs, no ffmpeg, a codec the decoder does not take, no frame in VIDEO_WAIT_MS, the
-// video ended), the VNC picture as before. Shown only while `on`: off, the sockets close, with no
-// picture and no traffic, and the agent's browser runs on. Nothing goes to the display but the
+// video ended), the VNC picture as before. A video that stops after it drew starts its decoder
+// again from a key frame, then opens its socket again, then (stopped again within REOPEN_MS) goes
+// to the VNC picture: never a picture that stands still for good. Shown only while `on`: off, the
+// sockets close, with no picture and no traffic, and the agent's browser runs on. Nothing goes to the display but the
 // requests for its picture until `controlling`: then the mouse, the keys and pasted text (typed as
 // keys) on the canvas go to it, and leave the board's own shortcuts alone; what switches the owner's
 // input language (Ctrl+Space, Caps Lock, the Globe key) stays the owner's. A finger's or a pen's
@@ -630,6 +632,8 @@ const PING_S = 2
 const LOG_S = 60
 /** No video frame this long after the view opened: the VNC picture instead. */
 export const VIDEO_WAIT_MS = 5000
+/** The video's socket opened again for want of frames: again within this long, the VNC picture instead. */
+export const REOPEN_MS = 60_000
 
 export function useDesktop(key: string, on: boolean, controlling: boolean): DeskView {
   const t = useLatest(useT())
@@ -713,8 +717,13 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
     let video: DeskVideo | null = null
     let videoSocket: WebSocket | null = null
     let waiting: ReturnType<typeof setTimeout> | undefined
+    /** Each second while the video is on: has its decoder stopped (DeskVideo.check)? */
+    let watching: ReturnType<typeof setInterval> | undefined
+    /** When the video's socket was last opened again for want of frames. */
+    let reopened: number | null = null
     const endVideo = () => {
       clearTimeout(waiting)
+      clearInterval(watching)
       video?.close()
       video = null
       if (!videoSocket) return
@@ -739,7 +748,7 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
       vs.binaryType = 'arraybuffer'
       videoSocket = vs
       let drawn = false
-      video = new DeskVideo(
+      const vd = new DeskVideo(
         codecs,
         text => {
           if (vs.readyState === OPEN) vs.send(text)
@@ -765,8 +774,19 @@ export function useDesktop(key: string, on: boolean, controlling: boolean): Desk
           },
           failed: why => toVnc(why),
           ready: codec => pageLog(`browser view ${key}: h264 ${codec}`),
+          restarted: why => pageLog(`browser view ${key}: h264 started again (${why})`),
+          stalled(why) {
+            const at = Date.now()
+            if (reopened !== null && at - reopened < REOPEN_MS) return toVnc(why)
+            reopened = at
+            pageLog(`browser view ${key}: h264 opened again (${why})`)
+            endVideo()
+            startVideo(codecs)
+          },
         },
       )
+      video = vd
+      watching = setInterval(() => vd.check(), 1000)
       vs.onmessage = e => {
         if (!(e.data instanceof ArrayBuffer)) return
         link.bytes(e.data.byteLength)

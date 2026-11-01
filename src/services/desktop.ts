@@ -52,7 +52,9 @@ import {
   deskKeymap,
   desktopView,
   handedBackText,
+  passwordsQuiet,
   pickSlot,
+  quietPasswords,
   rfbInputFilter,
   slotDisplay,
   xauthority,
@@ -401,6 +403,29 @@ const NOT_COPIED =
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/**
+ * The profile folder's Preferences with the password manager off (core/desktop.ts quietPasswords),
+ * before Chrome reads them: a new profile gets a file of just that, Chrome's own is kept but for it;
+ * one that is not JSON is Chrome's to deal with, left as it is.
+ */
+function passwordsOff(profileDir: string): void {
+  const dir = join(profileDir, 'Default')
+  const file = join(dir, 'Preferences')
+  let prefs: unknown = null
+  if (existsSync(file)) {
+    try {
+      prefs = JSON.parse(readFileSync(file, 'utf8'))
+    } catch {
+      return
+    }
+    if (passwordsQuiet(prefs)) return
+  }
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const tmp = `${file}.board`
+  writeFileSync(tmp, JSON.stringify(quietPasswords(prefs)), { mode: 0o600 })
+  renameSync(tmp, file)
+}
+
 /** A log's last lines, on one line: what a program said before it failed. */
 function tailOf(path: string): string {
   try {
@@ -706,6 +731,11 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     const p = await profileDir(d, name, same && back.copy)
     d.profile = name
     d.copy = p.copy
+    try {
+      passwordsOff(p.dir)
+    } catch (err) {
+      o.log(`desktop :${d.display}: the password manager not turned off: ${messageOf(err)}`)
+    }
     const env = chromeEnv(d)
     rmSync(d.cdp, { force: true })
     const proc = sys.spawnChrome(

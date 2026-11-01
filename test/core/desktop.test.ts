@@ -93,6 +93,16 @@ test('Chrome: headed, its own profile folder, DevTools on its pipe and no port, 
   expect(a).not.toContain('--restore-last-session')
 })
 
+test('Chrome without its startup infobars (Chrome for Testing’s "only for automated testing"), and still not as automation (no --enable-automation: navigator.webdriver, Google’s sign-in), however it starts', () => {
+  for (const a of [
+    chromeArgs({ profileDir: '/p' }),
+    chromeArgs({ profileDir: '/p', restore: true, languages: ['ru', 'en'], extra: ['--no-sandbox'] }),
+  ]) {
+    expect(a).toContain('--disable-infobars')
+    expect(a.some(x => x.startsWith('--enable-automation') || x.startsWith('--test-type'))).toBe(false)
+  }
+})
+
 test('Chrome started again after its stop (browser_close, idle): its last tabs reopened (and its session cookies), no blank tab beside them', () => {
   const a = chromeArgs({ profileDir: '/p/own', extra: ['--no-sandbox'], restore: true })
   const fresh = chromeArgs({ profileDir: '/p/own', extra: ['--no-sandbox'] })

@@ -5,7 +5,11 @@
 // the decoder before it is set up; each frame decoded is answered with its number, so the board
 // sends no more than the page takes. A decoder that fails after it worked starts again from a key
 // frame, which it asks the board for; one that never decoded a frame, a codec it does not take, or
-// three failures in a minute, and the view falls back to the VNC picture (`failed`).
+// three failures in a minute, and the view falls back to the VNC picture (`failed`). The board's
+// encoder makes 30 frames a second however still the screen is, so a decoder that drew and then
+// gives nothing out for STALL_MS (Safari's on an iPad did, with no error) has stopped: it starts
+// again the same way (`check`, each second), and, no frame STALL_MS after that either, the view
+// opens its video again (`stalled`).
 import { ackText, avcCodec, KEY_TEXT, readVideoMessage } from '../../../src/core/desktop-video.ts'
 
 /** WebCodecs as the page has it; tests hand in their own. */
@@ -31,11 +35,17 @@ export interface DeskVideoEvents {
   failed(why: string): void
   /** The decoder is set up for this codec (for the board's log, once). */
   ready?(codec: string): void
+  /** The decoder starts again from a key frame (it failed, or stopped giving frames out): why, for the board's log. */
+  restarted?(why: string): void
+  /** No frame even after a key frame was asked for: the view opens its video again (without this: `failed`). */
+  stalled?(why: string): void
 }
 
 /** Failures a decoder may have in a minute (it starts again after each) before the view gives up on video. */
 const MAX_FAILURES = 3
 const FAILURES_MS = 60_000
+/** No frame out of a decoder that drew this long: it has stopped (the board's encoder makes 30 a second, a still screen too). */
+export const STALL_MS = 3000
 
 type Message = NonNullable<ReturnType<typeof readVideoMessage>>
 
@@ -49,6 +59,10 @@ export class DeskVideo {
   private decoded = 0
   private failures: number[] = []
   private over = false
+  /** When a frame last came out (or the decoder last started again for want of one). */
+  private lastOut = 0
+  /** It started again for want of a frame and none came since: when. */
+  private askedAt: number | null = null
 
   constructor(
     private readonly codecs: Codecs,
@@ -65,6 +79,31 @@ export class DeskVideo {
     if (!m) return
     if (this.waiting) this.waiting.push(m)
     else this.decode(m)
+  }
+
+  /**
+   * Each second or so while the video is on: a decoder that drew and has given nothing out for
+   * STALL_MS starts again from a key frame it asks for; still nothing STALL_MS after that, `stalled`.
+   * Before its first frame the view's own wait applies.
+   */
+  check(): void {
+    if (this.over || !this.decoded) return
+    const at = this.now()
+    if (at - this.lastOut < STALL_MS) return
+    const secs = STALL_MS / 1000
+    if (this.askedAt === null) {
+      this.askedAt = at
+      this.lastOut = at
+      this.again(`no frame in ${secs} s`)
+      return
+    }
+    const why = `no frame in ${secs} s after a key frame was asked for`
+    if (!this.events.stalled) {
+      this.fail(why)
+      return
+    }
+    this.close()
+    this.events.stalled(why)
   }
 
   /** The view closed (or went to VNC): the decoder let go. */
@@ -141,6 +180,8 @@ export class DeskVideo {
       return
     }
     this.decoded++
+    this.lastOut = this.now()
+    this.askedAt = null
     const seq = frame.timestamp
     try {
       this.events.draw(frame)
@@ -153,17 +194,24 @@ export class DeskVideo {
   /** The decoder failed: started again from a key frame, or, before it decoded any (or too often), video given up. */
   private broken(err: unknown): void {
     if (this.over) return
-    const why = err instanceof Error ? err.message : String(err)
+    const why = `the decoder failed: ${err instanceof Error ? err.message : String(err)}`
+    if (this.decoded) this.again(why)
+    else this.fail(why)
+  }
+
+  /** Started again from a key frame it asks the board for (a new decoder for it); too often in a minute, video given up. */
+  private again(why: string): void {
     const at = this.now()
     this.failures = [...this.failures.filter(t => at - t < FAILURES_MS), at]
-    if (!this.decoded || this.failures.length >= MAX_FAILURES) {
-      this.fail(`the decoder failed: ${why}`)
+    if (this.failures.length >= MAX_FAILURES) {
+      this.fail(why)
       return
     }
     this.release()
     this.codec = ''
     this.needKey = true
     this.send(KEY_TEXT)
+    this.events.restarted?.(why)
   }
 
   private fail(why: string): void {

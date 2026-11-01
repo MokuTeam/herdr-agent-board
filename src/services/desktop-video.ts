@@ -7,7 +7,9 @@
 //
 // Each viewer says which frames it got; one that has more than MAX_AHEAD of them (or their bytes)
 // unanswered is behind (its link is slower than the picture changes): it gets no more until the
-// ones in flight are down to LOW_AHEAD, then a key frame, so it never sees seconds-old frames. The
+// ones in flight are down to LOW_AHEAD, then a key frame, so it never sees seconds-old frames. One
+// that asks for a key frame starts over: what it was sent before is not waited for (its decoder
+// went with them, and they would hold it behind for good). The
 // encoder is the board's child: the board gone, its stdout is closed and it ends. Where there is no
 // ffmpeg, no viewer is taken (the route says so) and the page shows the VNC picture instead.
 import { closeSync, openSync, readFileSync } from 'node:fs'
@@ -288,6 +290,11 @@ export function createDesktopVideo(o: { log(line: string): void; system?: VideoS
       const says = readViewerText(text)
       if (!st || !seat || !says) return
       if ('key' in says) {
+        // its decoder starts over: what it was sent before will never be answered (a decoder that
+        // failed, or stopped giving frames out, with them in it), so nothing is waited for; held
+        // behind on them it would never get the key frame it asks for
+        seat.flight = []
+        seat.behind = false
         seat.waitKey = true
         keyFrame(st)
         return

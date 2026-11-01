@@ -5,7 +5,7 @@
 // MIN_RESTART_MS); a viewer that does not keep up gets nothing until it does, then a key frame;
 // the encoder ending by itself, or no ffmpeg, closes the viewers so their pages show VNC.
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ffmpegArgs, readVideoMessage } from '../../src/core/desktop-video.ts'
@@ -279,6 +279,33 @@ test('a decoder that starts again asks for a key frame: it gets none of the fram
   expect(encoders).toHaveLength(2)
 })
 
+test('a viewer behind whose frames will never be answered (its decoder gone with them) asks for a key frame: it starts over from the next one, not held for good', async () => {
+  const { video, src, encoders, advance } = setup()
+  const a = viewer()
+  video.join(src, a)
+  await settle()
+  encoders[0]?.write(head())
+  encoders[0]?.write(keyFrame())
+  // its decoder gives nothing out (no answers): past MAX_AHEAD it gets no more
+  for (let i = 0; i < MAX_AHEAD + 5; i++) encoders[0]?.write(delta())
+  await settle()
+  expect(a.got).toHaveLength(MAX_AHEAD)
+  // the decoder fails with them in it: they are never answered; the page starts over and asks for a key frame
+  video.message(src.pane, a, 'k')
+  await advance(MIN_RESTART_MS)
+  expect(encoders).toHaveLength(2)
+  encoders[1]?.write(head())
+  encoders[1]?.write(keyFrame())
+  encoders[1]?.write(delta())
+  await settle()
+  expect(a.got.slice(MAX_AHEAD).map(f => f.key)).toEqual([true, false])
+  // and it goes on as any viewer: answered, it keeps getting them
+  video.message(src.pane, a, `a${a.got.at(-1)?.seq}`)
+  encoders[1]?.write(delta())
+  await settle()
+  expect(a.got.slice(MAX_AHEAD).map(f => f.key)).toEqual([true, false, false])
+})
+
 test('the encoder ending by itself (its display gone): its viewers closed so their pages show VNC, its log’s last words in the board’s', async () => {
   const { video, src, encoders, logs } = setup()
   const a = viewer()
@@ -343,4 +370,150 @@ test('the desktop stopped: its encoder ended, its viewers closed; another deskto
   video.stopAll()
   expect(other.closed).toEqual([1001, 'stopped'])
   expect(video.running()).toBe(0)
+})
+
+// ------------------------------------------------ end to end: the board's video and the page's decoder
+
+/** ffmpeg 4.4's own FLV (x264 as the board runs it): what it writes before its first frame, its key frame, its deltas. */
+function realStream() {
+  const flv = new Uint8Array(readFileSync(join(import.meta.dir, '../fixtures/video/x264-64x48.flv')))
+  const tags: Uint8Array[] = []
+  for (let at = 13; at + 11 <= flv.length; ) {
+    const size = ((flv[at + 1] as number) << 16) | ((flv[at + 2] as number) << 8) | (flv[at + 3] as number)
+    tags.push(flv.subarray(at, at + 11 + size + 4))
+    at += 11 + size + 4
+  }
+  // a frame's tag: video, AVC, its NAL units (not the sequence header); a key frame's type 1
+  const isFrame = (t: Uint8Array) => t[0] === 9 && t[12] === 1
+  const first = tags.findIndex(isFrame)
+  const frames = tags.slice(first)
+  const deltas = frames.filter(t => (t[11] as number) >> 4 !== 1)
+  return {
+    head: Uint8Array.from([...flv.subarray(0, 13), ...tags.slice(0, first).flatMap(t => [...t])]),
+    key: frames[0] as Uint8Array,
+    delta: (i: number) => deltas[i % deltas.length] as Uint8Array,
+  }
+}
+
+/**
+ * The owner's page on a viewer's socket, both ways: models/desk-video.ts as the page runs it, with
+ * a WebCodecs of the test's own whose decoder gives frames out only when told (keepUp), or fails.
+ */
+async function page(video: ReturnType<typeof createDesktopVideo>, pane: string, now: () => number) {
+  const { DeskVideo } = await import('../../web/src/models/desk-video.ts')
+  const decoders: { init: VideoDecoderInit; state: string; given: number[]; fail(): void }[] = []
+  class Decoder {
+    state = 'unconfigured'
+    given: number[] = []
+    constructor(readonly init: VideoDecoderInit) {
+      decoders.push(this)
+    }
+    configure() {
+      this.state = 'configured'
+    }
+    decode(c: { timestamp: number }) {
+      this.given.push(c.timestamp)
+    }
+    close() {
+      this.state = 'closed'
+    }
+    fail() {
+      this.state = 'closed'
+      this.init.error(new Error('Decoding error.') as DOMException)
+    }
+    static isConfigSupported = async (config: VideoDecoderConfig) => ({ supported: true, config })
+  }
+  class Chunk {
+    constructor(init: object) {
+      Object.assign(this, init)
+    }
+  }
+  const drawn: number[] = []
+  const failed: string[] = []
+  const socket: VideoViewer = {
+    send: b => desk.receive(b),
+    close: () => {},
+  }
+  const desk = new DeskVideo(
+    {
+      VideoDecoder: Decoder as unknown as typeof VideoDecoder,
+      EncodedVideoChunk: Chunk as unknown as typeof EncodedVideoChunk,
+    },
+    text => video.message(pane, socket, text),
+    { draw: f => drawn.push(f.timestamp), failed: why => failed.push(why) },
+    now,
+  )
+  /** The decoder gives out all it was given (drawn and answered), as one that keeps up. */
+  const keepUp = () => {
+    const d = decoders.at(-1)
+    for (const ts of d?.given.splice(0) ?? [])
+      d?.init.output({ timestamp: ts, displayWidth: 64, displayHeight: 48, close() {} } as unknown as VideoFrame)
+  }
+  return { socket, desk, decoders, drawn, failed, keepUp }
+}
+
+/** The page drawing as it should: a key frame and `n` deltas, each given out at once. */
+async function watching(n: number) {
+  const s = setup()
+  const p = await page(s.video, s.src.pane, s.sys.now)
+  const stream = realStream()
+  s.video.join(s.src, p.socket)
+  await settle()
+  s.encoders[0]?.write(stream.head)
+  s.encoders[0]?.write(stream.key)
+  await settle()
+  p.keepUp()
+  for (let i = 0; i < n; i++) {
+    s.encoders[0]?.write(stream.delta(i))
+    await settle()
+    p.keepUp()
+  }
+  expect(p.drawn).toHaveLength(n + 1)
+  // then its decoder gives nothing out: the board stops at MAX_AHEAD unanswered, the rest held
+  for (let i = 0; i < MAX_AHEAD + 10; i++) s.encoders[0]?.write(stream.delta(i))
+  await settle()
+  expect(p.decoders[0]?.given).toHaveLength(MAX_AHEAD)
+  return { ...s, p, stream }
+}
+
+test('the owner’s iPad, end to end with ffmpeg’s own frames: its decoder stops giving frames out and then fails with them in it; the page starts over and draws again', async () => {
+  const { p, encoders, advance, stream } = await watching(10)
+  p.decoders[0]?.fail()
+  await advance(MIN_RESTART_MS)
+  expect(encoders).toHaveLength(2)
+  encoders[1]?.write(stream.head)
+  encoders[1]?.write(stream.key)
+  await settle()
+  p.keepUp()
+  encoders[1]?.write(stream.delta(0))
+  await settle()
+  p.keepUp()
+  // the key frame and the delta after it: drawn by a decoder of its own
+  expect(p.decoders).toHaveLength(2)
+  expect(p.drawn).toHaveLength(13)
+  expect(p.failed).toEqual([])
+})
+
+test('end to end, its decoder stops giving frames out with no error: STALL_MS on, the page starts it again from a key frame and draws again', async () => {
+  const { p, encoders, advance, stream } = await watching(10)
+  const stall: number = Reflect.get(await import('../../web/src/models/desk-video.ts'), 'STALL_MS') ?? 3000
+  // nothing out for a while: nothing to do yet
+  await advance(stall - 1)
+  p.desk.check()
+  expect(p.decoders).toHaveLength(1)
+  await advance(1)
+  p.desk.check()
+  await advance(MIN_RESTART_MS)
+  expect(encoders).toHaveLength(2)
+  encoders[1]?.write(stream.head)
+  encoders[1]?.write(stream.key)
+  await settle()
+  p.keepUp()
+  encoders[1]?.write(stream.delta(0))
+  await settle()
+  p.keepUp()
+  expect(p.decoders).toHaveLength(2)
+  expect(p.decoders[0]?.state).toBe('closed')
+  expect(p.drawn).toHaveLength(13)
+  expect(p.failed).toEqual([])
 })

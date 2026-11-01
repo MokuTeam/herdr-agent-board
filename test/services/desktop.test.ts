@@ -844,6 +844,59 @@ test('a named profile’s copy: made without holding up the board, caches, servi
   expect(existsSync(join(copy, 'Default', 'Service Worker'))).toBe(false)
 })
 
+test('the agent’s browser keeps no passwords: before each Chrome starts, its profile’s Preferences have the password manager off (no "Save password?"), the session’s own, a named one, its copy; Chrome’s own settings there kept, a Preferences that is not JSON left alone', async () => {
+  const { d, server, root } = setup()
+  const prefs = (dir: string): unknown => {
+    try {
+      return JSON.parse(readFileSync(join(dir, 'Default', 'Preferences'), 'utf8'))
+    } catch {
+      return null
+    }
+  }
+  // what each Chrome found there as it started
+  const found: unknown[] = []
+  const spawnChrome = server.sys.spawnChrome
+  server.sys.spawnChrome = (argv, cdp, env, log) => {
+    found.push(prefs((argv.find(a => a.startsWith('--user-data-dir=')) ?? '').slice('--user-data-dir='.length)))
+    return spawnChrome(argv, cdp, env, log)
+  }
+  const off = { credentials_enable_service: false, profile: { password_manager_enabled: false } }
+  // the session's own, new
+  await d.ensure('w0:p1')
+  expect(found).toEqual([off])
+  // a named one Chrome used before, the password manager on there: off, the rest as Chrome had it
+  const own = join(root, 'profiles', 'github')
+  mkdirSync(join(own, 'Default'), { recursive: true })
+  const chromes = {
+    credentials_enable_service: true,
+    profile: { name: 'Person 1', exit_type: 'Normal', password_manager_enabled: true },
+    browser: { has_seen_welcome_page: true },
+  }
+  writeFileSync(join(own, 'Default', 'Preferences'), JSON.stringify(chromes))
+  await d.profile('w0:p1', 'github')
+  const quiet = {
+    credentials_enable_service: false,
+    profile: { name: 'Person 1', exit_type: 'Normal', password_manager_enabled: false },
+    browser: { has_seen_welcome_page: true },
+  }
+  expect(found[1]).toEqual(quiet)
+  // a second session's copy of it: the same
+  await d.profile('w0:p2', 'github')
+  expect(found[2]).toEqual(quiet)
+  expect(prefs(join(root, 'sessions', '101', 'copy-github'))).toEqual(quiet)
+  // a Preferences that is not JSON: Chrome's to deal with, not written over
+  const broken = join(root, 'profiles', 'broken')
+  mkdirSync(join(broken, 'Default'), { recursive: true })
+  writeFileSync(join(broken, 'Default', 'Preferences'), '{"profile":')
+  await d.profile('w0:p2', 'broken')
+  expect(readFileSync(join(broken, 'Default', 'Preferences'), 'utf8')).toBe('{"profile":')
+  expect(chromeOf(server.procs)).toHaveLength(2)
+  // board browser open hands an address to the running one: nothing written meanwhile
+  writeFileSync(join(own, 'Default', 'Preferences'), JSON.stringify(chromes))
+  await d.open('w0:p1', 'https://example.com/')
+  expect(JSON.parse(readFileSync(join(own, 'Default', 'Preferences'), 'utf8'))).toEqual(chromes)
+})
+
 test('a display whose X server was killed (its lock and socket left) is free again; a live one or another’s is not', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'xtmp-'))
   dirs.push(tmp)

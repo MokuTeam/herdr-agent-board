@@ -194,6 +194,81 @@ test('the decoder failing before it decoded a frame: given up (the device cannot
   expect(failed).toEqual(['the decoder failed: and again'])
 })
 
+test('a decoder that drew and then gives nothing out, with no error (Safari’s on the owner’s iPad): STALL_MS on it starts again from a key frame it asks for, said; still nothing as long after: stalled', async () => {
+  const STALL_MS: number = Reflect.get(await import('../../web/src/models/desk-video.ts'), 'STALL_MS') ?? 3000
+  const fake = fakeCodecs()
+  const sent: string[] = []
+  const said: string[] = []
+  let clock = 0
+  const video = new DeskVideo(
+    fake.codecs,
+    text => sent.push(text),
+    {
+      draw() {},
+      failed: why => said.push(`failed: ${why}`),
+      restarted: why => said.push(`restarted: ${why}`),
+      stalled: why => said.push(`stalled: ${why}`),
+    },
+    () => clock,
+  )
+  // before its first frame: the view's own wait (VIDEO_WAIT_MS), not this one
+  video.receive(key(1))
+  await settle()
+  clock += STALL_MS * 2
+  video.check()
+  expect(sent).toEqual([])
+  fake.decoders[0]?.out(1)
+  // frames out: nothing to do; then none for STALL_MS
+  video.receive(delta(2))
+  clock += STALL_MS - 1
+  video.check()
+  expect(sent).toEqual(['a1'])
+  clock += 1
+  video.check()
+  expect(sent).toEqual(['a1', KEY_TEXT])
+  expect(fake.decoders[0]?.state).toBe('closed')
+  expect(said).toEqual([`restarted: no frame in ${STALL_MS / 1000} s`])
+  // asked once: it waits for that key frame
+  clock += STALL_MS - 1
+  video.check()
+  expect(sent).toEqual(['a1', KEY_TEXT])
+  // it came, a decoder of its own draws again: the watch starts over
+  video.receive(key(3))
+  await settle()
+  expect(fake.decoders).toHaveLength(2)
+  fake.decoders[1]?.out(3)
+  clock += STALL_MS - 1
+  video.check()
+  expect(said).toHaveLength(1)
+  // stuck again, and no key frame comes after the ask either: stalled (the view opens its video again)
+  clock += 1
+  video.check()
+  expect(sent.at(-1)).toBe(KEY_TEXT)
+  clock += STALL_MS
+  video.check()
+  expect(said.at(-1)).toBe(`stalled: no frame in ${STALL_MS / 1000} s after a key frame was asked for`)
+  // said once; nothing more from it
+  clock += STALL_MS
+  video.check()
+  expect(said.filter(s => s.startsWith('stalled'))).toHaveLength(1)
+  expect(said.filter(s => s.startsWith('failed'))).toEqual([])
+})
+
+test('the decoder failing after it drew is said too (the board’s log), as it starts again', async () => {
+  const fake = fakeCodecs()
+  const said: string[] = []
+  const video = new DeskVideo(fake.codecs, () => {}, {
+    draw() {},
+    failed: why => said.push(`failed: ${why}`),
+    restarted: why => said.push(`restarted: ${why}`),
+  })
+  video.receive(key(1))
+  await settle()
+  fake.decoders[0]?.out(1)
+  fake.decoders[0]?.fail('Decoding error.')
+  expect(said).toEqual(['restarted: the decoder failed: Decoding error.'])
+})
+
 test('closed with the view: the decoder let go, nothing after', async () => {
   const { video, decoders, sent } = setup()
   video.receive(key(1))
