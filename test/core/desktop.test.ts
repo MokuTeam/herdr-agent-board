@@ -2,6 +2,9 @@
 // cookie file, profile names, the card's field, the MCP server's entry, doctor's checks, and the
 // install's packages script and record (core/server-install.ts).
 import { expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   BROWSER_MCP,
   browserFor,
@@ -21,10 +24,14 @@ import {
   desktopNeeds,
   desktopView,
   handedBackText,
+  MAX_OPEN_URL,
+  openerScript,
+  openUrl,
   PLAYWRIGHT_VERSION,
   pickSlot,
   profileName,
   rfbInputFilter,
+  runEnv,
   slotDisplay,
   withBrowserMcp,
   xauthority,
@@ -522,4 +529,75 @@ test('the install’s plan and record for Ubuntu’s arm64: Chromium as the user
   expect(undo).toContain('libnss3 libasound2')
   expect(undo).not.toContain('rm -rf')
   expect(undo).not.toContain('purge')
+})
+
+// SuiteCloud CLI 3.1.1's browser login (its Java SDK's PKCE flow), as it opens it: the address it gives xdg-open.
+const SUITECLOUD_LOGIN =
+  'https://system.netsuite.com/app/login/oauth2/authorize.nl?scope=restlets&redirect_uri=http%3A%2F%2F127.0.0.1%3A52300%2Fsuitecloud-auth&response_type=code&client_id=6da57bf05a6247fc876c6d228184ff487760a382a43ac7e93eaff743803d22ac&state=0357efc8-8cad-45f6-a288-938ec75d5a44&code_challenge=fKinHf_CbajU44RKS3YP6ZedNm3enkKZa9PzF57RmRA&code_challenge_method=S256'
+
+test('board browser open: http and https addresses as they came (a CLI login’s, its query intact), nothing Chrome could take for a switch, a script or a file', () => {
+  expect(openUrl(SUITECLOUD_LOGIN)).toBe(SUITECLOUD_LOGIN)
+  expect(openUrl('http://127.0.0.1:52300/suitecloud-auth?code=x&state=y')).toBe(
+    'http://127.0.0.1:52300/suitecloud-auth?code=x&state=y',
+  )
+  expect(openUrl(' https://github.com/login/device ')).toBe('https://github.com/login/device')
+  expect(openUrl('https://example.com/путь?q=a b%')).toBe('https://example.com/%D0%BF%D1%83%D1%82%D1%8C?q=a%20b%')
+  for (const bad of [
+    '',
+    '   ',
+    'javascript:alert(1)',
+    'file:///etc/passwd',
+    'chrome://settings',
+    'data:text/html,hi',
+    '--user-data-dir=/tmp/x',
+    '--headless',
+    'example.com',
+    `https://example.com/${'a'.repeat(MAX_OPEN_URL)}`,
+    undefined,
+    null,
+    42,
+    ['https://example.com'],
+  ])
+    expect(openUrl(bad)).toBeNull()
+})
+
+test('board browser run: its program’s xdg-open hands the address to `board browser open` by this board command, with the ask when there is one; paths with spaces and quotes stay whole', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'opener-'))
+  try {
+    // a "bun" that says what it was run with, in a folder whose name has a space and a quote
+    const odd = join(dir, "my bun's dir")
+    mkdirSync(odd)
+    const bun = join(odd, 'bun')
+    writeFileSync(bun, `#!/bin/sh\nfor a in "$@"; do printf '[%s]' "$a"; done\n`, { mode: 0o755 })
+    const opener = join(dir, 'xdg-open')
+    writeFileSync(opener, openerScript(bun, "/opt/agent board/src/entrypoints/it's cli.ts"), { mode: 0o700 })
+    const run = (env: Record<string, string>) =>
+      Bun.spawnSync([opener, SUITECLOUD_LOGIN], { env: { PATH: '/usr/bin:/bin', ...env } }).stdout.toString()
+    expect(run({})).toBe(`[/opt/agent board/src/entrypoints/it's cli.ts][browser][open][${SUITECLOUD_LOGIN}]`)
+    expect(run({ BOARD_BROWSER_ASK: 'Войди в NetSuite: bb-success-platform-dev (100% "ok")' })).toBe(
+      `[/opt/agent board/src/entrypoints/it's cli.ts][browser][open][${SUITECLOUD_LOGIN}][--ask][Войди в NetSuite: bb-success-platform-dev (100% "ok")]`,
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('board browser run: its program gets the session’s display and X cookie, the board’s xdg-open first on the PATH and as BROWSER, and the ask only when given', () => {
+  const base = { PATH: '/usr/bin:/bin', HOME: '/home/a', HERDR_PANE_ID: 'w0:p1', BOARD_BROWSER_ASK: 'from outside' }
+  const o = { display: 104, xauthority: '/state/desktop/sessions/104/Xauthority', opener: '/state/desktop/run/open-x' }
+  expect(runEnv(base, o)).toEqual({
+    PATH: '/state/desktop/run/open-x:/usr/bin:/bin',
+    HOME: '/home/a',
+    HERDR_PANE_ID: 'w0:p1',
+    DISPLAY: ':104',
+    XAUTHORITY: '/state/desktop/sessions/104/Xauthority',
+    BROWSER: '/state/desktop/run/open-x/xdg-open',
+  })
+  expect(runEnv({ DISPLAY: ':0' }, { ...o, ask: 'Sign in to NetSuite' })).toEqual({
+    DISPLAY: ':104',
+    XAUTHORITY: '/state/desktop/sessions/104/Xauthority',
+    BROWSER: '/state/desktop/run/open-x/xdg-open',
+    PATH: '/state/desktop/run/open-x',
+    BOARD_BROWSER_ASK: 'Sign in to NetSuite',
+  })
 })

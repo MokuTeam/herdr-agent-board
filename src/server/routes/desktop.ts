@@ -23,10 +23,15 @@
 //   POST /api/browser/call     { pane }            who has the browser: { control }
 //   POST /api/browser/profile  { pane, name|null } a named profile (null: the session's own)
 //   POST /api/browser/ask      { pane, text }      the card under "needs you", the desktop up
+//   POST /api/browser/open     { pane, url, text? } the address (http or https) in a tab of its own,
+//        the desktop up (`board browser open`); with `text`, then asked as by /ask: { ok, asked }.
+//        409 while the owner has the browser, or for a session not on the board
+//   POST /api/browser/display  { pane }            the desktop up, for a program of the agent's own
+//        (`board browser run`): { ok, display, xauthority } (its number, its X cookie file)
 //   POST /api/browser/close    { pane }            done with it for now (browser_close): stopped, its
 //        profile kept for the next call, which starts it again: { ok, closed }; 409 while the owner
 //        has it or its ask stands
-import { controlOf, profileName } from '../../core/desktop.ts'
+import { controlOf, openUrl, profileName } from '../../core/desktop.ts'
 import type { Item } from '../../core/types.ts'
 import type { Desktops, VncData } from '../../services/desktop.ts'
 import { json, type Route } from '../http.ts'
@@ -39,7 +44,7 @@ export interface DesktopApp {
 }
 
 const DESKTOP = /^\/api\/desktop\/([^/]+)\/(vnc|video|control)$/
-const BROWSER = /^\/api\/browser\/(start|call|profile|ask|close)$/
+const BROWSER = /^\/api\/browser\/(start|call|profile|ask|close|open|display)$/
 const PANE = /^[\w:.-]{1,80}$/
 /** What a route answers once the request became a WebSocket: Bun answers it with 101 itself. */
 const UPGRADED = (): Response => new Response(null, { status: 200 })
@@ -125,6 +130,22 @@ export function desktopRoutes(app: DesktopApp): Route[] {
         if (op === 'close') {
           const r = await app.desktops.close(pane)
           return json(r.ok ? 200 : 409, r)
+        }
+        if (op === 'display') {
+          const r = await app.desktops.display(pane)
+          return json(r.ok ? 200 : 409, r)
+        }
+        if (op === 'open') {
+          const url = openUrl(body.url)
+          if (!url) return json(400, { ok: false, error: 'url: an http or https address' })
+          const said =
+            body.text === undefined || body.text === null ? '' : typeof body.text === 'string' ? body.text.trim() : null
+          if (said === null || said.length > MAX_ASK) return json(400, { ok: false, error: 'text' })
+          const r = await app.desktops.open(pane, url)
+          if (!r.ok) return json(409, r)
+          if (!said) return json(200, { ok: true, asked: false })
+          const asked = await app.desktops.ask(pane, said)
+          return asked.ok ? json(200, { ok: true, asked: true }) : json(409, asked)
         }
         if (op === 'profile') {
           const name = profileName(body.name)

@@ -49,12 +49,18 @@ function fakeServer(
     quitting?: () => Promise<void>
     /** Chrome asked to quit answers, and runs on. */
     quitIgnored?: boolean
+    /** Chrome run to hand an address on does not end in time (or fails). */
+    relayFails?: boolean
+    /** A server with no way to hand an address on (a test system of before). */
+    noRelay?: boolean
   } = {},
 ) {
   const procs = new Map<number, Proc>()
   /** The DevTools sockets Chrome was asked to quit on, and the pids a signal ended. */
   const quits: string[] = []
   const killed: number[] = []
+  /** Each Chrome run to hand an address to a running one: its arguments, environment and wait. */
+  const relays: { argv: string[]; env: Record<string, string>; ms: number }[] = []
   let next = 1000
   function start(argv: string[], env: Record<string, string>, mark = '') {
     const pid = next++
@@ -104,6 +110,12 @@ function fakeServer(
       if (o.quitIgnored) return
       for (const p of procs.values()) if (p.alive && p.argv[0] === '/usr/bin/chrome' && p.cmdline.endsWith(cdp)) p.end()
     },
+    ...(!o.noRelay && {
+      async relay(argv: string[], env: Record<string, string>, ms: number) {
+        relays.push({ argv, env, ms })
+        return !o.relayFails
+      },
+    }),
     alive: pid => !!procs.get(pid)?.alive,
     cmdline: pid => procs.get(pid)?.cmdline ?? '',
     displayHeld: d => (o.held ?? []).includes(d) || [...procs.values()].some(p => p.alive && p.argv[1] === `:${d}`),
@@ -122,7 +134,7 @@ function fakeServer(
             : null,
     sleep: async () => {},
   }
-  return { sys, procs, start, quits, killed }
+  return { sys, procs, start, quits, killed, relays }
 }
 
 /** The card as the patches written made it ('' clears a field, as adapters/cards.ts has it). */
@@ -1471,4 +1483,83 @@ test('the board stopping them all (server mode off): a stopped browser’s kept 
   expect(existsSync(join(root, 'sessions', '101'))).toBe(false)
   expect(existsSync(join(root, 'profiles', 'github'))).toBe(true)
   expect(JSON.parse(readFileSync(join(root, 'kept.json'), 'utf8'))).toEqual([])
+})
+
+test('board browser open: the address handed to the running Chrome on its own profile (a Chrome run with that profile and the address, on its display), the browser started first when it is not up', async () => {
+  const { d, server, root } = setup()
+  const url = 'https://system.netsuite.com/app/login/oauth2/authorize.nl?scope=restlets&state=s'
+  expect(await d.open('w0:p1', url)).toEqual({ ok: true })
+  // started for it: one display, one Chrome, nothing else left running
+  expect(chromeOf(server.procs)).toHaveLength(1)
+  expect(server.relays).toEqual([
+    {
+      argv: ['/usr/bin/chrome', `--user-data-dir=${join(root, 'sessions', '100', 'profile')}`, url],
+      env: expect.objectContaining({ DISPLAY: ':100', XAUTHORITY: join(root, 'sessions', '100', 'Xauthority') }),
+      ms: 10_000,
+    },
+  ])
+  // up already: handed on, nothing started
+  expect(await d.open('w0:p1', 'https://example.com/')).toEqual({ ok: true })
+  expect(chromeOf(server.procs)).toHaveLength(1)
+  expect(server.relays.map(r => r.argv[2])).toEqual([url, 'https://example.com/'])
+})
+
+test('board browser open: on the profile the browser has: a named one where it is, its copy for a second session', async () => {
+  const { d, server, root } = setup()
+  await d.profile('w0:p1', 'netsuite')
+  await d.profile('w0:p2', 'netsuite')
+  await d.open('w0:p1', 'https://a.example/')
+  await d.open('w0:p2', 'https://b.example/')
+  expect(server.relays.map(r => [r.argv[1], r.env.DISPLAY])).toEqual([
+    [`--user-data-dir=${join(root, 'profiles', 'netsuite')}`, ':100'],
+    [`--user-data-dir=${join(root, 'sessions', '101', 'copy-netsuite')}`, ':101'],
+  ])
+})
+
+test('board browser open: not for a session not on the board, nor while the owner has the browser (nothing started or opened); a Chrome that does not take it, or a server with no way to, said', async () => {
+  const { d, server, state, root } = setup()
+  expect(await d.open('w0:p9', 'https://example.com/')).toEqual({
+    ok: false,
+    error: 'this session is not on the board',
+  })
+  expect(server.procs.size).toBe(0)
+  await d.ensure('w0:p1')
+  const vnc = await vncServer(root)
+  try {
+    await vnc.open(d, 'w0:p1')
+    d.setControl(state.items[0] as Item, 'owner')
+    expect(await d.open('w0:p1', 'https://example.com/')).toEqual({
+      ok: false,
+      error: expect.stringContaining('the owner has your browser'),
+    })
+    expect(server.relays).toEqual([])
+  } finally {
+    vnc.close()
+  }
+  const fails = setup({ relayFails: true })
+  expect(await fails.d.open('w0:p1', 'https://example.com/')).toEqual({
+    ok: false,
+    error: 'the browser did not take the address',
+  })
+  const none = setup({ noRelay: true })
+  expect((await none.d.open('w0:p1', 'https://example.com/')).ok).toBe(false)
+})
+
+test('board browser run: the session’s display and its X cookie file, the browser started when it is not up; not for a session not on the board', async () => {
+  const { d, server, root } = setup()
+  expect(await d.display('w0:p9')).toEqual({ ok: false, error: 'this session is not on the board' })
+  expect(server.procs.size).toBe(0)
+  expect(await d.display('w0:p2')).toEqual({
+    ok: true,
+    display: 100,
+    xauthority: join(root, 'sessions', '100', 'Xauthority'),
+  })
+  expect(await d.display('w0:p2')).toEqual({
+    ok: true,
+    display: 100,
+    xauthority: join(root, 'sessions', '100', 'Xauthority'),
+  })
+  expect(chromeOf(server.procs)).toHaveLength(1)
+  const none = setup({ noChrome: true })
+  expect((await none.d.display('w0:p1')).ok).toBe(false)
 })

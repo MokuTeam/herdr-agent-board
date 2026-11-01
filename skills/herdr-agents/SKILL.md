@@ -90,6 +90,14 @@ herdr pane read <pane> --source recent-unwrapped --lines 120
 
 Split right when your pane is wide, down when it is narrow. For a login, tell the user which pane waits for them; on the web board they can also open "Terminal" on your card. Close only the panes you created.
 
+On the board's own server (your browser tools are `mcp__board-browser__*`), a CLI login that opens a browser (SuiteCloud's `account:setup`, `gh auth login --web`) runs from your own shell tool instead, in the background, its answers piped in:
+
+```bash
+printf 'my-auth-id\n' | board browser run --ask "Sign in to NetSuite: my-auth-id" -- npx suitecloud account:setup
+```
+
+The page it opens goes to your own browser, your card under "needs you" with the ask; end your turn, and the board wakes you once the owner hands the browser back. `board browser open <url> [--ask "<text>"]` opens one address there.
+
 ## Restart yourself
 
 ```bash

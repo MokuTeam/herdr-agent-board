@@ -87,7 +87,7 @@ describe('on the board’s own server', () => {
   test('its routes are in the table', () => {
     const paths = routeTable(proc).map(r => r.path)
     expect(paths).toContain('^\\/api\\/desktop\\/')
-    expect(paths).toContain('^\\/api\\/browser\\/(start|call|profile|ask|close)$')
+    expect(paths).toContain('^\\/api\\/browser\\/(start|call|profile|ask|close|open|display)$')
     expect(paths).toContain('/api/browser/cdp')
   })
 
@@ -148,7 +148,7 @@ describe('on the board’s own server', () => {
   })
 
   test('the agent’s own calls: never through the domain; on 127.0.0.1 with the board’s key', async () => {
-    for (const op of ['start', 'call', 'profile', 'ask', 'close'])
+    for (const op of ['start', 'call', 'profile', 'ask', 'close', 'open', 'display'])
       expect(await answer(caddy.post(`/api/browser/${op}`, { pane: 'w0:p1' }))).toEqual([403, { error: 'key' }])
     const local = (path: string, body: unknown, k = key) =>
       fetch(`${url}${path}`, {
@@ -170,6 +170,33 @@ describe('on the board’s own server', () => {
       409,
       { ok: false, error: 'this session is not on the board' },
     ])
+    // board browser open: an http or https address only, asked text within bounds; a session not on the board: none started
+    for (const url of [undefined, '', 'file:///etc/passwd', 'javascript:alert(1)', '--headless', 'chrome://settings'])
+      expect(await answer(local('/api/browser/open', { pane: 'w0:p1', url }))).toEqual([
+        400,
+        { ok: false, error: 'url: an http or https address' },
+      ])
+    expect(
+      await answer(local('/api/browser/open', { pane: 'w0:p1', url: 'https://example.com/', text: 'x'.repeat(2001) })),
+    ).toEqual([400, { ok: false, error: 'text' }])
+    expect(await answer(local('/api/browser/open', { pane: 'w0:p1', url: 'https://example.com/', text: 7 }))).toEqual([
+      400,
+      { ok: false, error: 'text' },
+    ])
+    expect(await answer(local('/api/browser/open', { pane: 'w0 p1;', url: 'https://example.com/' }))).toEqual([
+      400,
+      { ok: false, error: 'pane' },
+    ])
+    expect(await answer(local('/api/browser/open', { pane: 'w0:p9', url: 'https://example.com/' }))).toEqual([
+      409,
+      { ok: false, error: 'this session is not on the board' },
+    ])
+    // board browser run: the display of a session on the board only
+    expect(await answer(local('/api/browser/display', { pane: 'w0:p9' }))).toEqual([
+      409,
+      { ok: false, error: 'this session is not on the board' },
+    ])
+    expect(await answer(local('/api/browser/display', { pane: 'w0 p1;' }))).toEqual([400, { ok: false, error: 'pane' }])
     // browser_close with no browser running: nothing to close
     expect(await answer(local('/api/browser/close', { pane: 'w0:p1' }))).toEqual([200, { ok: true, closed: false }])
     expect(await answer(local('/api/browser/close', { pane: 'w0 p1;' }))).toEqual([400, { ok: false, error: 'pane' }])

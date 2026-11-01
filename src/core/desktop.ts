@@ -197,6 +197,65 @@ export function controlOf(body: unknown): Control | null {
   return to === 'owner' || to === 'agent' ? to : null
 }
 
+/** The longest address `board browser open` takes. */
+export const MAX_OPEN_URL = 8192
+
+/**
+ * An address the agent's browser opens for `board browser open` (and for what a program under
+ * `board browser run` opens): http or https only, as the URL parser writes it, or null. So it can
+ * never be taken by Chrome for one of its switches, a script or a file of the server's.
+ */
+export function openUrl(v: unknown): string | null {
+  if (typeof v !== 'string' || !v.trim() || v.length > MAX_OPEN_URL) return null
+  let url: URL
+  try {
+    url = new URL(v.trim())
+  } catch {
+    return null
+  }
+  return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null
+}
+
+/** A word for sh, in single quotes. */
+const shWord = (s: string): string => `'${s.replaceAll("'", `'\\''`)}'`
+
+/**
+ * The `xdg-open` that `board browser run` puts first on its program's PATH (and in BROWSER): the
+ * address the program opens goes to the session's own browser through `board browser open`, by
+ * the board command this one is (`bun` running `cli`), with the ask BOARD_BROWSER_ASK holds when
+ * there is one. SuiteCloud's login (its Java SDK) runs `xdg-open <address>` on Linux, as most
+ * command-line logins do.
+ */
+export function openerScript(bun: string, cli: string): string {
+  return [
+    '#!/bin/sh',
+    "# agent-board (board browser run): what this program opens goes to the session's own browser",
+    `exec ${shWord(bun)} ${shWord(cli)} browser open "$1" \${BOARD_BROWSER_ASK:+--ask "$BOARD_BROWSER_ASK"}`,
+    '',
+  ].join('\n')
+}
+
+/**
+ * The environment `board browser run` gives its program: the session's own display (X with its
+ * cookie file), the board's `xdg-open` (in the folder `opener`) first on the PATH and as BROWSER,
+ * and the ask for what the program opens (`ask`; none: no BOARD_BROWSER_ASK, one from outside
+ * neither). Everything else as it came.
+ */
+export function runEnv(
+  env: Record<string, string | undefined>,
+  o: { display: number; xauthority: string; opener: string; ask?: string },
+): Record<string, string | undefined> {
+  const { BOARD_BROWSER_ASK: _, ...rest } = env
+  return {
+    ...rest,
+    DISPLAY: `:${o.display}`,
+    XAUTHORITY: o.xauthority,
+    BROWSER: `${o.opener}/xdg-open`,
+    PATH: env.PATH ? `${o.opener}:${env.PATH}` : o.opener,
+    ...(o.ask ? { BOARD_BROWSER_ASK: o.ask } : {}),
+  }
+}
+
 /** A viewer's clipboard text longer than this closes it (no viewer of the board's sends one). */
 const MAX_CUT = 1 << 20
 /** The extended clipboard's flags: what the viewer can do (caps), and what it has (notify; no format: nothing). */

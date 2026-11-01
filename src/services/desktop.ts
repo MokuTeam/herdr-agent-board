@@ -1,6 +1,6 @@
 // Each agent's own browser on the board's server (core/desktop.ts), in the board's process: the
 // desktops it runs, one per session's pane, started on demand (the agent's first browser call
-// through `board browser-mcp`, or `board browser ask`) and stopped when the session sleeps or
+// through `board browser-mcp`, or `board browser ask|open|run`) and stopped when the session sleeps or
 // ends (seen at the board's refresh). Each is an Xvnc display of its own (VNC on a Unix socket in
 // the desktop's folder, 0600; X for its cookie only, never over TCP) and a headed Chrome on it
 // with its profile: a named one (profiles/<name>, kept for later sessions; a copy for a second
@@ -92,6 +92,14 @@ export interface DesktopSystem {
    * None: Chrome is ended by a signal only.
    */
   quit?(cdp: string): Promise<void>
+  /**
+   * Chrome (`argv`: its program, a running one's profile folder, an address) run once more: it
+   * hands the address to the Chrome running on that profile (Chrome's process singleton), which
+   * opens it in a tab, and ends. True when it ended so within `ms`; ended by a signal otherwise,
+   * well before Chrome's own wait (20 s), after which it would end the running one as hung. None:
+   * no address is opened.
+   */
+  relay?(argv: string[], env: Record<string, string>, ms: number): Promise<boolean>
   /** A program on PATH (and Chrome's own folder), or null. */
   which(name: string): string | null
   sleep(ms: number): Promise<void>
@@ -186,6 +194,17 @@ export const realSystem: DesktopSystem = {
         resolve()
       })
     }),
+  async relay(argv, env, ms) {
+    const proc = Bun.spawn(argv, { env, stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' })
+    let late = false
+    const timer = setTimeout(() => {
+      late = true
+      proc.kill('SIGKILL')
+    }, ms)
+    const code = await proc.exited
+    clearTimeout(timer)
+    return !late && code === 0
+  },
   which: name => Bun.which(name, { PATH: `${process.env.PATH ?? ''}:${PATH}` }),
   sleep: ms => Bun.sleep(ms),
 }
@@ -327,6 +346,16 @@ export interface Desktops {
   close(pane: string): Promise<{ ok: true; closed: boolean } | { ok: false; error: string }>
   /** The agent asks the owner to act in its browser: its card under "needs you", its desktop up. */
   ask(pane: string, text: string): Promise<Started>
+  /**
+   * An address (core/desktop.ts openUrl) opened in the session's browser, in a tab of its own,
+   * the browser started when it is not up (`board browser open`). Not while the owner has it.
+   */
+  open(pane: string, url: string): Promise<Started>
+  /**
+   * The session's display for a program of its own (`board browser run`), started when it is not
+   * up: its number and its X cookie file.
+   */
+  display(pane: string): Promise<{ ok: true; display: number; xauthority: string } | { ok: false; error: string }>
   /** Who has the browser of the session in `pane` (the wrapper asks before each call: its idle clock starts again). */
   control(pane: string): Control
   /** Its browser ask stands (the wrapper: while the owner has the browser for it, a call that acts fails at once). */
@@ -356,6 +385,8 @@ const UNVIEWED_MS = 30_000
 const IDLE_MS = 15 * 60_000
 /** Chrome asked to quit and still running this long after: ended by a signal. */
 const QUIT_MS = 10_000
+/** Chrome run to hand an address to the running one and not ended this long after: ended by a signal. */
+const RELAY_MS = 10_000
 /** A desktop's folders that are the session's profiles: its own, and a named profile's copy. */
 const PROFILE_FOLDER = /^(profile|copy-.+)$/
 /** Viewers' bytes queued over this pause the VNC socket until they drain. */
@@ -643,10 +674,29 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     return { dir: copy, copy: true, fresh: true }
   }
 
+  /** The browser the desktops run: the board's own Chromium (Ubuntu's arm64, where the install put it), else the PATH's. */
+  const chromeBin = (): string | null =>
+    boardChromium(join(o.root, BOARD_CHROMIUM_DIR), o.arch) ?? CHROME_BINS.map(b => sys.which(b)).find(Boolean) ?? null
+
+  /** What Chrome runs with on `d`'s display. */
+  const chromeEnv = (d: Desktop): Record<string, string> => ({
+    DISPLAY: `:${d.display}`,
+    XAUTHORITY: join(d.dir, 'Xauthority'),
+    HOME: process.env.HOME ?? '',
+    PATH: `${process.env.PATH ?? ''}:${PATH}`,
+    LANG: process.env.LANG || 'C.UTF-8',
+  })
+
+  /** The profile folder `d`'s Chrome runs on: the session's own, a named profile's, or its copy. */
+  const profileIn = (d: Desktop): string =>
+    d.profile === null
+      ? join(d.dir, 'profile')
+      : d.copy
+        ? join(d.dir, `copy-${d.profile}`)
+        : join(o.root, 'profiles', d.profile)
+
   async function launchChrome(d: Desktop): Promise<Started> {
-    // the board's own Chromium (Ubuntu's arm64, where the install put it), else the PATH's
-    const bin =
-      boardChromium(join(o.root, BOARD_CHROMIUM_DIR), o.arch) ?? CHROME_BINS.map(b => sys.which(b)).find(Boolean)
+    const bin = chromeBin()
     if (!bin) return { ok: false, error: 'no Google Chrome or Chromium on this server (the install puts it in place)' }
     const name = wanted.get(d.pane) ?? null
     // started again after its stop with the profile it had: its last tabs (in that profile only)
@@ -656,13 +706,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     const p = await profileDir(d, name, same && back.copy)
     d.profile = name
     d.copy = p.copy
-    const env = {
-      DISPLAY: `:${d.display}`,
-      XAUTHORITY: join(d.dir, 'Xauthority'),
-      HOME: process.env.HOME ?? '',
-      PATH: `${process.env.PATH ?? ''}:${PATH}`,
-      LANG: process.env.LANG || 'C.UTF-8',
-    }
+    const env = chromeEnv(d)
     rmSync(d.cdp, { force: true })
     const proc = sys.spawnChrome(
       [
@@ -1159,6 +1203,41 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       o.onChange()
       return r
     },
+
+    open: (pane, url) =>
+      serial(pane, async () => {
+        if (!itemIn(pane)) return { ok: false, error: 'this session is not on the board' }
+        touch(pane)
+        // a tab of its own in front: never under the owner's hands
+        if (desktops.get(pane)?.control === 'owner')
+          return {
+            ok: false,
+            error: 'the owner has your browser now: nothing opened; try again once they hand it back',
+          }
+        const r = await ensureNow(pane)
+        if (!r.ok) return r
+        touch(pane)
+        const d = desktops.get(pane)
+        const bin = chromeBin()
+        if (!d || !bin || !sys.relay) return { ok: false, error: 'no browser to open it in on this server' }
+        // Chrome on the same profile hands the address to the running one: no DevTools client of the agent's is kicked
+        if (!(await sys.relay([bin, `--user-data-dir=${profileIn(d)}`, url], chromeEnv(d), RELAY_MS)))
+          return { ok: false, error: 'the browser did not take the address' }
+        o.log(`desktop :${d.display} for ${d.key || pane}: opened a page of ${new URL(url).host}`)
+        return { ok: true }
+      }),
+
+    display: pane =>
+      serial(pane, async () => {
+        if (!itemIn(pane)) return { ok: false, error: 'this session is not on the board' }
+        touch(pane)
+        const r = await ensureNow(pane)
+        touch(pane)
+        if (!r.ok) return r
+        const d = desktops.get(pane)
+        if (!d) return { ok: false, error: 'no desktop' }
+        return { ok: true, display: d.display, xauthority: join(d.dir, 'Xauthority') }
+      }),
 
     // the wrapper asks before each of the agent's calls: its browser is used now
     control: pane => {

@@ -70,6 +70,15 @@
 //                            under "Needs me" with the browser on it, which starts when it is not up
 //   board browser profile [<name>]   that browser with a named profile, whose sign-ins stay for
 //                            later sessions (a new name makes one); no name: the session's own
+//   board browser open <url> [--ask <text>]   the address (http or https) in that browser, in a tab
+//                            of its own, the browser started when it is not up; with --ask, then
+//                            asked as by `board browser ask` (sign in there: the owner does it)
+//   board browser run [--ask <text>] -- <program> [args...]   the program in this terminal with that
+//                            browser's display (DISPLAY, XAUTHORITY) and the board's xdg-open first
+//                            on its PATH and in BROWSER: an address it opens (a CLI's browser login:
+//                            SuiteCloud's account:setup, gh auth login --web) goes to that browser
+//                            through `board browser open`, with the ask when given; the browser kept
+//                            up while it runs; exits with its code. Its arguments as they came
 //   board browser-mcp        the agent's browser as an MCP server (stdio; services/browser-mcp.ts):
 //                            what the install puts in each Claude profile on the board's server
 //   board secret set <NAME> [--profile <id> | --session <id|name|pane>]   the owner's secret for
@@ -85,7 +94,7 @@
 //                            for MCP servers: what a profile's start command (an alias like cld-work)
 //                            calls; exits with its code
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { readArchiveLog } from '../adapters/archive-store.ts'
@@ -136,7 +145,7 @@ import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | login [link | reset] | doctor | update [--ref <ref>] | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | browser ask <text> | browser profile [<name>] | secret set|list|rm|get|file [<NAME>] [--profile <id>] | launch <program> [args...]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | login [link | reset] | doctor | update [--ref <ref>] | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | browser ask <text> | browser profile [<name>] | browser open <url> [--ask <text>] | browser run [--ask <text>] -- <program> [args...] | secret set|list|rm|get|file [<NAME>] [--profile <id>] | launch <program> [args...]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -1510,29 +1519,41 @@ async function browserMcp(): Promise<void> {
   process.exit(code)
 }
 
-/** `board browser ask|profile`: this session's own browser on the board's server, through the board. */
+/** `board browser ask|profile|open|run`: this session's own browser on the board's server, through the board. */
 async function browser(): Promise<void> {
   const [what, ...words] = rest
-  const usage = 'usage: board browser ask <text> | board browser profile [<name>]'
-  if (what !== 'ask' && what !== 'profile') throw new Error(usage)
+  const usage =
+    'usage: board browser ask <text> | board browser profile [<name>] | board browser open <url> [--ask <text>] | board browser run [--ask <text>] -- <program> [args...]'
+  if (what !== 'ask' && what !== 'profile' && what !== 'open' && what !== 'run') throw new Error(usage)
   if (!onServer(cfg)) throw new Error("board browser: the agents' browsers are on the board's own server only")
   const pane = process.env.HERDR_PANE_ID
   if (!pane) throw new Error('board browser: run it in your session (no HERDR_PANE_ID)')
+  if (what === 'run') return browserRun(pane, usage)
   const said = words.join(' ').replace(/\s+/g, ' ').trim()
   if (what === 'ask' && !said) throw new Error(usage)
-  let r: { ok?: boolean; error?: string; profile?: string | null; copy?: boolean }
-  try {
-    const res = await localFetch(cfg)(`http://127.0.0.1:${Number(cfg.port) || 12422}/api/browser/${what}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(what === 'ask' ? { pane, text: said } : { pane, name: words[0] || null }),
-      signal: AbortSignal.timeout(90_000),
-    })
-    r = (await res.json()) as typeof r
-  } catch {
-    throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
+  if (what === 'open') {
+    const at = words.indexOf('--ask')
+    const ask =
+      at >= 0
+        ? words
+            .slice(at + 1)
+            .join(' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+        : ''
+    const url = (at >= 0 ? words.slice(0, at) : words)[0] ?? ''
+    if (!url || (at >= 0 && !ask)) throw new Error(usage)
+    const r = (await browserCall('open', { pane, url, ...(ask && { text: ask }) })) as { asked?: boolean }
+    return console.log(
+      r.asked
+        ? 'ok · opened in your browser and asked: your card is under "Needs me" with your browser. End your turn now (no polling, no browser calls to wait): the board wakes you when the owner hands it back'
+        : 'ok · opened in your browser, in a tab of its own',
+    )
   }
-  if (r.ok !== true) throw new Error(r.error ?? 'not done')
+  const r = (await browserCall(what, what === 'ask' ? { pane, text: said } : { pane, name: words[0] || null })) as {
+    profile?: string | null
+    copy?: boolean
+  }
   if (what === 'ask')
     return console.log(
       'ok · asked: your card is under "Needs me" with your browser. End your turn now (no polling, no browser calls to wait): the board wakes you when the owner hands it back',
@@ -1544,6 +1565,71 @@ async function browser(): Promise<void> {
         ? `ok · a copy of the profile "${r.profile}" (another session has it): thrown away afterwards`
         : `ok · your browser has the profile "${r.profile}"; its sign-ins stay`,
   )
+}
+
+/** One of the agent's own calls to its browser (routes/desktop.ts /api/browser/<op>): its answer, or why not. */
+async function browserCall(op: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  let r: Record<string, unknown>
+  try {
+    const res = await localFetch(cfg)(`http://127.0.0.1:${Number(cfg.port) || 12422}/api/browser/${op}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(90_000),
+    })
+    r = (await res.json()) as Record<string, unknown>
+  } catch {
+    throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
+  }
+  if (r.ok !== true) throw new Error(typeof r.error === 'string' ? r.error : 'not done')
+  return r
+}
+
+/** While `board browser run`'s program runs, its browser is used: the idle stop (15 min) waits. */
+const RUN_KEEP_MS = 60_000
+
+/**
+ * `board browser run [--ask <text>] -- <program> [args...]`: the program in this terminal with the
+ * session's browser up and its display (DISPLAY, XAUTHORITY), and the board's xdg-open (core/desktop.ts
+ * openerScript, in a folder of its own, gone after) first on its PATH and in BROWSER, so an address it
+ * opens goes to that browser, with the ask when given. Its arguments as they came: none of the
+ * board's own flags is taken out of them. Exits with its code.
+ */
+async function browserRun(pane: string, usage: string): Promise<void> {
+  const at = process.argv.indexOf('run', process.argv.indexOf('browser', 2) + 1)
+  let given = process.argv.slice(at + 1)
+  let ask = ''
+  if (given[0] === '--ask') {
+    ask = (given[1] ?? '').replace(/\s+/g, ' ').trim()
+    if (!ask) throw new Error(usage)
+    given = given.slice(2)
+  }
+  if (given[0] === '--') given = given.slice(1)
+  const [program, ...argv] = given
+  if (!program) throw new Error(usage)
+  const { openerScript, runEnv } = await import('../core/desktop.ts')
+  const { desktopDir } = await import('../adapters/desktop-files.ts')
+  const r = (await browserCall('display', { pane })) as { display?: unknown; xauthority?: unknown }
+  if (typeof r.display !== 'number' || typeof r.xauthority !== 'string')
+    throw new Error('the board did not say the display')
+  const runDir = join(desktopDir(), 'run')
+  mkdirSync(runDir, { recursive: true, mode: 0o700 })
+  const opener = mkdtempSync(join(runDir, 'open-'))
+  try {
+    writeFileSync(join(opener, 'xdg-open'), openerScript(process.execPath, import.meta.path), { mode: 0o700 })
+    const env = runEnv(process.env, { display: r.display, xauthority: r.xauthority, opener, ...(ask && { ask }) })
+    console.error(
+      `board browser run: your browser is up (display :${r.display}); what ${program} opens goes there${ask ? ', with your ask to the owner' : ''}`,
+    )
+    const keep = setInterval(() => void browserCall('call', { pane }).catch(() => {}), RUN_KEEP_MS)
+    const ran = await runHere(program, argv, env)
+    clearInterval(keep)
+    if (ran.error) throw new Error(`${program} did not start: ${messageOf(ran.error)}`)
+    process.exitCode = ran.code
+  } finally {
+    rmSync(opener, { recursive: true, force: true })
+  }
+  process.exit(process.exitCode ?? 0)
 }
 
 /** A retry-safe report's receipt, as JSON; delivery under way or not known exits with 2: do not replay. */
