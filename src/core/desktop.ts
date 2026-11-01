@@ -447,6 +447,9 @@ export function xvncArgs(o: { display: number; socket: string; auth: string; nam
   ]
 }
 
+/** Blink's features off for Chrome (chromeArgs): one switch, as Chrome takes only the last. */
+const BLINK_OFF = '--disable-blink-features='
+
 /**
  * Chrome's arguments: headed on the display, its own profile folder, its DevTools on the pipe its
  * holder gives it (fds 3 and 4: no port any account could reach, services/cdp-pipe.ts), its window
@@ -463,7 +466,10 @@ export function xvncArgs(o: { display: number; socket: string; auth: string; nam
  * default; its own menus stay in the server's language. No startup infobars (Chrome for Testing's
  * "only for automated testing", the board's own Chromium's): the switch is the running browser's,
  * so a Chrome run later to hand it an address (`board browser open`) brings none back either; not
- * --enable-automation, which would tell pages it is automation (navigator.webdriver, Google's sign-in).
+ * --enable-automation, which would tell pages it is automation. Nor does DevTools on its pipe: that
+ * alone makes navigator.webdriver true, and Google's sign-in refuses such a browser ("This browser
+ * or app may not be secure"); Blink's AutomationControlled off keeps it false (one
+ * --disable-blink-features, a test server's own merged into it: Chrome takes only the last).
  */
 export function chromeArgs(o: {
   profileDir: string
@@ -474,6 +480,10 @@ export function chromeArgs(o: {
   const langs = o.languages?.length
     ? [`--accept-lang=${o.languages.join(',')}`, '--disable-features=ReduceAcceptLanguage,ReduceAcceptLanguageHTTP']
     : []
+  const extra = o.extra ?? []
+  const blink = new Set(['AutomationControlled'])
+  for (const a of extra)
+    if (a.startsWith(BLINK_OFF)) for (const f of a.slice(BLINK_OFF.length).split(',')) if (f) blink.add(f)
   return [
     `--user-data-dir=${o.profileDir}`,
     '--remote-debugging-pipe',
@@ -483,12 +493,13 @@ export function chromeArgs(o: {
     '--disable-dev-shm-usage',
     '--hide-crash-restore-bubble',
     '--disable-infobars',
+    `${BLINK_OFF}${[...blink].join(',')}`,
     '--disable-smooth-scrolling',
     '--enable-unsafe-swiftshader',
     ...langs,
     '--window-position=0,0',
     `--window-size=${SCREEN.width},${SCREEN.height}`,
-    ...(o.extra ?? []),
+    ...extra.filter(a => !a.startsWith(BLINK_OFF)),
     ...(o.restore ? ['--restore-last-session'] : ['about:blank']),
   ]
 }

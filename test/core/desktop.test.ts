@@ -103,6 +103,22 @@ test('Chrome without its startup infobars (Chrome for Testing’s "only for auto
   }
 })
 
+test('Chrome does not tell pages it is automation: navigator.webdriver false though DevTools are on its pipe (Google’s sign-in refuses such a browser), one --disable-blink-features with a test server’s own merged in', () => {
+  const blink = (a: string[]) => a.filter(x => x.startsWith('--disable-blink-features'))
+  for (const a of [
+    chromeArgs({ profileDir: '/p' }),
+    chromeArgs({ profileDir: '/p', restore: true, languages: ['ru', 'en'], extra: ['--no-sandbox'] }),
+  ])
+    expect(blink(a)).toEqual(['--disable-blink-features=AutomationControlled'])
+  const a = chromeArgs({ profileDir: '/p', extra: ['--no-sandbox', '--disable-blink-features=Foo,Bar', '--x'] })
+  expect(blink(a)).toEqual(['--disable-blink-features=AutomationControlled,Foo,Bar'])
+  // the extra arguments' others as they were, last
+  expect(a.slice(-3)).toEqual(['--no-sandbox', '--x', 'about:blank'])
+  expect(blink(chromeArgs({ profileDir: '/p', extra: ['--disable-blink-features=AutomationControlled'] }))).toEqual([
+    '--disable-blink-features=AutomationControlled',
+  ])
+})
+
 test('Chrome started again after its stop (browser_close, idle): its last tabs reopened (and its session cookies), no blank tab beside them', () => {
   const a = chromeArgs({ profileDir: '/p/own', extra: ['--no-sandbox'], restore: true })
   const fresh = chromeArgs({ profileDir: '/p/own', extra: ['--no-sandbox'] })
