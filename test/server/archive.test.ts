@@ -511,6 +511,37 @@ test('a sleeping session goes too; a pane that shares its tab closes alone; Remo
   }
 }, 30_000)
 
+test('a sleeper put to sleep without a name of its own closes under the bare 💤 wake gave it (#302)', async () => {
+  const box = await sandbox()
+  const dir = project(box)
+  // No /rename: wake lists it under its title, but `herdr-wake sleep <pane>` labelled it a bare 💤.
+  const wake = http.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json')
+    res.end(
+      JSON.stringify(
+        req.url?.startsWith('/sleeping')
+          ? [{ session: S, pane: 'wP:p1', name: 'Probe', slept_at: new Date(Date.now() - 5 * DAY).toISOString() }]
+          : {},
+      ),
+    )
+  })
+  await new Promise<void>(resolve => wake.listen(0, '127.0.0.1', resolve))
+  try {
+    herdrWith(box, dir, { asleep: true, label: '💤' })
+    const b = await board(box, {
+      archiveUndoSec: 0.2,
+      wakeUrl: `http://127.0.0.1:${(wake.address() as AddressInfo).port}`,
+    })
+    const r = await b.archive()
+    assert.equal(r.status, 200, JSON.stringify(r.body))
+    await until(() => record(box)?.state === 'archived', 10_000)
+    // Alone in its tab but for herdr-sidebar's panel: the tab goes with it.
+    assert.ok(calls(box).includes('tab close wP:t1'), JSON.stringify(calls(box)))
+  } finally {
+    await new Promise(resolve => wake.close(resolve))
+  }
+}, 30_000)
+
 test('board archive --session: by the same rules, its tab closed at once; never the session itself', async () => {
   const box = await sandbox()
   const dir = project(box)

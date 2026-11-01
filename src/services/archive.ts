@@ -51,6 +51,7 @@ import { sameDir, sessionWorkspace, UNSAFE_CHARS } from '../core/launch/names.ts
 import { launchTarget, type ProfileSet, sessionProfile } from '../core/profiles.ts'
 import { cleanName, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import type { Config, Item, Translator } from '../core/types.ts'
+import { sleepLabels } from '../core/wake/sessions.ts'
 import { nextRun } from '../core/when.ts'
 import { readyToSleep } from './actions.ts'
 import type { Deps } from './deps.ts'
@@ -164,16 +165,16 @@ export type ArchiveSubject = Pick<
 >
 
 /**
- * Whether a shell's label is the one herdr-wake gives this sleeper: `💤 <name>`, the name wake
- * knows it by (the board's autoName, not a name given on the board), or `💤` alone for one with no
- * name (the board shows its session id's start for it). herdr gives pane ids out again (#302): a
- * 💤 pane of another sleeper, or of anything else, is not this one's.
+ * Whether a shell's label is one herdr-wake gives this sleeper (sleepLabels). The board knows the
+ * sleeper by wake's name, or by its title when it has none (the board's autoName, not a name given
+ * on the board): `💤 <autoName>`, or `💤` alone, which wake writes for a session with no name of its
+ * own put to sleep by pane or session id, whatever its title. herdr gives pane ids out again (#302):
+ * a pane under another sleeper's name, or anything else, is not this one's.
  */
 function sleeperLabel(label: string, item: ArchiveSubject): boolean {
-  const mark = label.trim()
   const name = (item.autoName ?? '').trim()
-  if (mark === `💤 ${name}`) return true
-  return mark === '💤' && (!name || name === item.session?.slice(0, 8))
+  const known = [...sleepLabels({ name }), ...sleepLabels({ name: '', title: name })]
+  return known.some(l => l.trim() === label.trim())
 }
 
 export type FreeToClose = { ok: true; pane: PaneFacts | null } | { ok: false; why: string; detail?: string }
