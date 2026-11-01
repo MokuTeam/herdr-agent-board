@@ -2351,7 +2351,8 @@ client's own name for it (the same but for case and spaces), or wait (a retired 
 field of a new entry offers the clients that take new entries; adding a client is Settings → Time
 tracking…'s, so a stray tap cannot start billing a new lane.
 
-**Settings → Time tracking…** (on the board on this computer only, as Backup… is): time tracking on
+**Settings → Time tracking…** (on the board on this computer, and on the board's own server behind
+its domain's login; never through a phone's Tailscale or a PC's tunnel, as Backup…): time tracking on
 and off, the zone days are counted in; the clients in the lanes' order, each with a line of what it
 has and its switch (off: no new entries); opened, a client's projects with their entries, billable
 or not, Rename and Retire; a project added; the retired ones, each to bring back; whether the client
@@ -2435,7 +2436,9 @@ Because what goes in there can be the record a bill is made from, it is backed u
 computer from the first day: sealed with your passphrase, to your server, to a folder a sync
 client takes off the computer, or both (both is better: two copies in two places).
 
-**Settings → Backup…** (on the board on this computer only):
+**Settings → Backup…** (on the board on this computer, and on the board's own server behind its
+domain's login, where the folder and the admin key are paths on the server; never through a phone's
+Tailscale or a PC's tunnel):
 
 - **Passphrase.** Every snapshot is sealed with it (AES-256-GCM, with a key made from it by
   scrypt). Keep it in your password manager: without it no snapshot opens on another computer.

@@ -5,7 +5,7 @@
 // the Profiles panel, while wake's state line is in the payload Sleep and wake…, and how sessions
 // asleep in "Waiting" fold, for every board; on the local board, Remote access…; on a page
 // signed in through the owner's domain, Sign out; Presence (#172), the board's, for every board;
-// Secrets… on the local board and on the board's own server.
+// Secrets…, Backup… and Time tracking… on the local board and on the board's own server.
 // The items are models/settings-menu.ts.
 import { useEffect, useState } from 'react'
 import type { FoldMode } from '../../../src/core/fold-mode.ts'
@@ -21,7 +21,15 @@ import { LOOK_KEY, lookNow, setLook } from '../models/look.ts'
 import { type Dock, isDock } from '../models/panel-layout.ts'
 import { offersProfiles } from '../models/profiles.ts'
 import { keptAuth, remotePage, UNPAIRED } from '../models/remote-page.ts'
-import { offersAccess, offersMokupilot, offersSecrets, settingPicked, settingsMenu } from '../models/settings-menu.ts'
+import {
+  offersAccess,
+  offersBackup,
+  offersMokupilot,
+  offersSecrets,
+  offersTimeSettings,
+  settingPicked,
+  settingsMenu,
+} from '../models/settings-menu.ts'
 import { reducedMotion } from '../models/spring.ts'
 import { setTheme, THEME_KEY, themeNow } from '../models/theme.ts'
 import { isWakeView } from '../models/wake.ts'
@@ -74,10 +82,10 @@ export interface SettingsDeps {
   /** The local board's page or the board's own server's: Secrets… is offered. */
   secrets?(): boolean
   openSecrets?(): void
-  /** The local board's page: Backup… is offered (#233). */
+  /** The local board's page or the board's own server's: Backup… is offered (#233). */
   backup?(): boolean
   openBackup?(): void
-  /** The local board's page: Time tracking… is offered (#237). */
+  /** The local board's page or the board's own server's: Time tracking… is offered (#237). */
   timeSettings?(): boolean
   openTimeSettings?(): void
   /** This page signed in through the owner's domain: Sign out is offered. */
@@ -393,9 +401,9 @@ export function useSettingsMenu(
       openAccess: () => latest.current.openAccess(),
       secrets: () => offersSecrets(remotePage(), latest.current.board.data),
       openSecrets: () => latest.current.openSecrets(),
-      backup: () => !remotePage(),
+      backup: () => offersBackup(remotePage(), latest.current.board.data),
       openBackup: () => latest.current.openBackup(),
-      timeSettings: () => !remotePage(),
+      timeSettings: () => offersTimeSettings(remotePage(), latest.current.board.data),
       openTimeSettings: () => latest.current.openTimeSettings(),
       signOut: () => remotePage() && keptAuth() === 'login',
       endLogin: () => {

@@ -1,7 +1,7 @@
 // What the board's remote listeners share (server/remote.ts: Tailscale and serve; server/tunnel.ts:
 // the owner's domain): a path decoded, what they refuse whoever calls, and event streams that end
 // the moment the caller's pairing or login does.
-import { deskFocus, desktopOnly, localOnly, secretsPath } from '../core/remote.ts'
+import { deskFocus, desktopOnly, localOnly, ownServerSettings, secretsPath } from '../core/remote.ts'
 import { json } from './http.ts'
 import { namedEvent } from './sse.ts'
 
@@ -17,7 +17,9 @@ export function decoded(raw: string): string | null {
 /**
  * What a remote caller is refused, paired or signed in: what acts on this computer's screen
  * (403 desktop) and what is for the board on this computer only (403 local); the owner's secret
- * store too (403 local), unless `secrets` lets them by: the board's own server's login listener.
+ * store too (403 local). `ownServer` is the board's own server's login listener, whose page is the
+ * owner's own: the secrets, Settings → Backup… and Settings → Time tracking… by there
+ * (ownServerSettings), the rest of what is local still refused.
  * The routes match a string path decoded and a RegExp one as it came, so both spellings are
  * checked, or an encoded letter (/api/fs/%6Fpen, /api/%61ccess) would get by. A desk
  * (RemoteDevice.desk) may focus herdr and reach /api/remote, whose ops the listener narrows for it
@@ -26,13 +28,14 @@ export function decoded(raw: string): string | null {
 export function remoteRefusal(
   raw: string,
   path: string,
-  { desk = false, secrets = false }: { desk?: boolean; secrets?: boolean } = {},
+  { desk = false, ownServer = false }: { desk?: boolean; ownServer?: boolean } = {},
 ): Response | null {
   const focus = desk && deskFocus(raw) && deskFocus(path)
   if (!focus && (desktopOnly(raw) || desktopOnly(path))) return json(403, { error: 'desktop' })
   const pairing = desk && raw === '/api/remote' && path === '/api/remote'
-  if (!pairing && (localOnly(raw) || localOnly(path))) return json(403, { error: 'local' })
-  if (!secrets && (secretsPath(raw) || secretsPath(path))) return json(403, { error: 'local' })
+  const local = (p: string): boolean => localOnly(p) && !(ownServer && ownServerSettings(p))
+  if (!pairing && (local(raw) || local(path))) return json(403, { error: 'local' })
+  if (!ownServer && (secretsPath(raw) || secretsPath(path))) return json(403, { error: 'local' })
   return null
 }
 

@@ -15,7 +15,7 @@
 // Secrets… opens the owner's secrets for the agents (components/secrets/SecretsPanel.tsx), on the
 // local board's page and on the board's own server (offersSecrets). Backup… the backup of the
 // board's database (#233, components/backup/BackupPanel.tsx), and Time tracking… its clients and
-// projects (#237, components/time/TimeSettingsPanel.tsx).
+// projects (#237, components/time/TimeSettingsPanel.tsx), there too (offersBackup, offersTimeSettings).
 // How sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
 // On a page signed in through the owner's domain, Sign out ends this browser's own login (Call 15).
 // Tasks (#202, src/core/todos.ts) are the board's: Off, the user's pins only, or agents too.
@@ -60,9 +60,9 @@ export interface SettingsNow {
   access?: boolean
   /** The local board's page, or the board's own server's (offersSecrets): Secrets… is offered. */
   secrets?: boolean
-  /** The local board's page: Backup… is offered (#233). */
+  /** The local board's page, or the board's own server's (offersBackup): Backup… is offered (#233). */
   backup?: boolean
-  /** The local board's page: Time tracking… is offered (#237). */
+  /** The local board's page, or the board's own server's (offersTimeSettings): Time tracking… is offered (#237). */
   timeSettings?: boolean
   /** This page signed in through the owner's domain: Sign out is offered, last. */
   signOut?: boolean
@@ -247,6 +247,15 @@ export const offersAccess = (remote: boolean, payload?: { server?: boolean | und
  */
 export const offersSecrets = (remote: boolean, payload?: { server?: boolean | undefined } | null): boolean =>
   !remote || boardOnServer(payload)
+
+/**
+ * Whether the page offers Settings → Backup… (#233): where Secrets… is, the local board's page and
+ * the board's own server's; not a phone's or a PC's tunnel, which the board refuses /api/backup.
+ */
+export const offersBackup = offersSecrets
+
+/** Whether the page offers Settings → Time tracking… (#237): as Backup…, for /api/time-settings. */
+export const offersTimeSettings = offersSecrets
 
 export function settingPicked(id: string): SettingPick {
   const [kind, value = ''] = id.split(':')

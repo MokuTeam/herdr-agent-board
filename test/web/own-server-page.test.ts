@@ -5,7 +5,14 @@ import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { type BoardMenuDeps, menuFor } from '../../web/src/models/board-menus.ts'
 import { ALL_LANES } from '../../web/src/models/lane-picks.ts'
-import { boardOnServer, offersAccess, offersMokupilot } from '../../web/src/models/settings-menu.ts'
+import {
+  boardOnServer,
+  offersAccess,
+  offersBackup,
+  offersMokupilot,
+  offersSecrets,
+  offersTimeSettings,
+} from '../../web/src/models/settings-menu.ts'
 import { FakeWorld } from './support/fake-dom.ts'
 import { parseHtml } from './support/markup.ts'
 
@@ -16,6 +23,24 @@ describe('Settings', () => {
     expect(boardOnServer({ server: true })).toBe(true)
     expect(offersAccess(false, { server: true })).toBe(false)
     expect(offersMokupilot({ server: true, mokupilot: true })).toBe(false)
+  })
+
+  test('on the board’s own server, behind its login: Backup… and Time tracking…, as Secrets…', () => {
+    // The page there is marked remote (the domain's), with the payload's `server`.
+    for (const remote of [true, false]) {
+      expect(offersBackup(remote, { server: true })).toBe(true)
+      expect(offersTimeSettings(remote, { server: true })).toBe(true)
+      expect(offersSecrets(remote, { server: true })).toBe(true)
+    }
+  })
+
+  test('on a PC as before: Backup… and Time tracking… on the local page only, not to a phone or through the tunnel', () => {
+    for (const payload of [{}, { server: false }, null, undefined]) {
+      expect(offersBackup(false, payload)).toBe(true)
+      expect(offersTimeSettings(false, payload)).toBe(true)
+      expect(offersBackup(true, payload)).toBe(false)
+      expect(offersTimeSettings(true, payload)).toBe(false)
+    }
   })
 
   test('on a PC as before: Remote access… on the local page only, MokuPilot… always', () => {

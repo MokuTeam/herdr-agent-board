@@ -15,7 +15,8 @@
 // An add or edit with `newProject` (the editor's "New project…", #237) adds the project to the
 // client's list in the same request, under config.json's lock (services/time.ts withNewProject).
 // GET and POST /api/time-settings are Settings → Time (services/time-settings.ts): on this
-// computer's board only (core/remote.ts localOnly), as Settings → Backup… is.
+// computer's board only (core/remote.ts localOnly), and on the board's own server through its
+// domain's login (ownServerSettings), as Settings → Backup… is.
 import { existsSync } from 'node:fs'
 import { freshTime } from '../../adapters/config-file.ts'
 import { type BoardDb, DbError, dbFile, openDb } from '../../adapters/db.ts'

@@ -2,7 +2,8 @@
 // what it changes: the passphrase, the folder, the server's fields, Look, Apply, Undo, "Do it
 // myself", Test and Back up now. For the board on this computer only: every remote listener refuses
 // /api/backup (core/remote.ts localOnly), since it sets up the owner's server with the admin's
-// login; the board everywhere sees the backup's line in the payload.
+// login; on the board's own server its domain's login reaches it, that page being the owner's own
+// (ownServerSettings). The board everywhere sees the backup's line in the payload.
 import { folderProblem } from '../../adapters/backup-store.ts'
 import { editBackup, loadConfig } from '../../adapters/config-file.ts'
 import { isRecord } from '../../adapters/json-store.ts'

@@ -50,7 +50,7 @@ import { useTerminalKeys } from './hooks/useTerminalKeys.ts'
 import { useTodos } from './hooks/useTodos.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { remotePage } from './models/remote-page.ts'
-import { offersSecrets } from './models/settings-menu.ts'
+import { offersBackup, offersSecrets, offersTimeSettings } from './models/settings-menu.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
@@ -100,14 +100,15 @@ export function App() {
     setSecrets(true)
     setSecretsMounted(true)
   }
-  // Settings → Backup… (#233), on the local board only: mounted at its first opening, as Remote access.
+  // Settings → Backup… (#233), on the local board and on the board's own server: mounted at its
+  // first opening, as Remote access.
   const [backup, setBackup] = useState(false)
   const [backupMounted, setBackupMounted] = useState(false)
   const openBackup = () => {
     setBackup(true)
     setBackupMounted(true)
   }
-  // Settings → Time tracking… (#237), on the local board only: mounted at its first opening, as Backup.
+  // Settings → Time tracking… (#237), where Backup… is: mounted at its first opening, as Backup.
   const [timeSettings, setTimeSettings] = useState(false)
   const [timeSettingsMounted, setTimeSettingsMounted] = useState(false)
   const openTimeSettings = () => {
@@ -244,7 +245,7 @@ export function App() {
           settings={settings}
           picks={picks}
           onTodos={() => setTodosOpen(!todosOpen)}
-          onBackup={remotePage() ? undefined : openBackup}
+          onBackup={offersBackup(remotePage(), data) ? openBackup : undefined}
           onTime={() => {
             setTimeClient(null)
             setTimeOpen(!timeOpen)
@@ -274,8 +275,10 @@ export function App() {
         {...(secretsMounted && offersSecrets(remotePage(), data)
           ? { secrets: { open: secrets, onClose: () => setSecrets(false) } }
           : {})}
-        {...(backupMounted && !remotePage() ? { backup: { open: backup, onClose: () => setBackup(false) } } : {})}
-        {...(timeSettingsMounted && !remotePage()
+        {...(backupMounted && offersBackup(remotePage(), data)
+          ? { backup: { open: backup, onClose: () => setBackup(false) } }
+          : {})}
+        {...(timeSettingsMounted && offersTimeSettings(remotePage(), data)
           ? { timeSettings: { open: timeSettings, onClose: () => setTimeSettings(false) } }
           : {})}
         {...(localPathsMounted && remotePage()

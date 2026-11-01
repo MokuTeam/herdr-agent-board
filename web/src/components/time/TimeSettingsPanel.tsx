@@ -1,13 +1,13 @@
-// Settings → Time tracking… (#237), on the local board only, as Settings → Backup… is: time on and
-// off, the zone days are counted in; the clients in the lanes' order, each a row with its lane's
-// color, a line of what it has and its switch (off: no new entries, its own stay), opened in place
-// to its projects (each with its entries, billable or not, Rename and Retire; a new one added;
-// the retired ones under them, each to bring back), whether it is billed, and where its time is
-// entered; the lanes without time, each a Take time away; a new lane that takes time in one step.
-// Every change goes to POST /api/time-settings at once and the view comes back with its answer:
-// nothing is held on the page. What the board refuses is said under the part it is about. A
-// rename says first how many entries move with it, and its toast says how many did. Billing rules
-// stay in config.json: a client that has some says so.
+// Settings → Time tracking… (#237), where Settings → Backup… is (the local board, the board's own
+// server): time on and off, the zone days are counted in; the clients in the lanes' order, each a
+// row with its lane's color, a line of what it has and its switch (off: no new entries, its own
+// stay), opened in place to its projects (each with its entries, billable or not, Rename and
+// Retire; a new one added; the retired ones under them, each to bring back), whether it is billed,
+// and where its time is entered; the lanes without time, each a Take time away; a new lane that
+// takes time in one step. Every change goes to POST /api/time-settings at once and the view comes
+// back with its answer: nothing is held on the page. What the board refuses is said under the part
+// it is about. A rename says first how many entries move with it, and its toast says how many did.
+// Billing rules stay in config.json: a client that has some says so.
 import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useState } from 'react'
 import type { BoardCategory, Swatch } from '../../../../src/core/payload.ts'
 import { systemsOfProject } from '../../../../src/core/time.ts'

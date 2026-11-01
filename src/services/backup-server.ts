@@ -4,7 +4,8 @@
 // script to run by hand, then Test). The admin logs in with a key (ssh's own, the agent's, or the
 // one named), as the tunnel's does without a password; sudo's password, when sudo asks one, comes
 // with the request, goes to ssh's stdin once, and is kept nowhere. The board's own drop key is
-// made on the first Look (adapters/backup-store.ts dropKey). Only the local board reaches this.
+// made on the first Look (adapters/backup-store.ts dropKey). Only the local board reaches this,
+// and the board's own server through its domain's login.
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { dropKey } from '../adapters/backup-store.ts'
 import { editBackup } from '../adapters/config-file.ts'

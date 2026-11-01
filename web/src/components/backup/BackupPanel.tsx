@@ -1,10 +1,11 @@
-// Settings → Backup… (#233), on the local board only: the board's database, sealed with the owner's
-// passphrase, off this computer. From the top: how the backup stands (the first problem in the
-// danger color, else the last good backup) and Back up now; the passphrase (typed twice, or
-// changed); the folder a sync client takes off the computer, with Test; the owner's server, its
-// fields (from the tunnel's when none are set), Look, Apply, Undo, "Do it myself" and Test; and
-// how to restore. Each button says what it does while it runs; what it found or why it failed is
-// said under it. The view is asked when the panel opens and comes back with every answer.
+// Settings → Backup… (#233), on the local board and on the board's own server: the board's
+// database, sealed with the owner's passphrase, off this computer. From the top: how the backup
+// stands (the first problem in the danger color, else the last good backup) and Back up now; the
+// passphrase (typed twice, or changed); the folder a sync client takes off the computer, with Test;
+// the owner's server, its fields (from the tunnel's when none are set), Look, Apply, Undo, "Do it
+// myself" and Test; and how to restore. Each button says what it does while it runs; what it found
+// or why it failed is said under it. The view is asked when the panel opens and comes back with
+// every answer.
 import { type FormEvent, useCallback, useEffect, useState } from 'react'
 import type { Target } from '../../../../src/core/backup.ts'
 import { shortWhen } from '../../../../src/core/when-format.ts'
