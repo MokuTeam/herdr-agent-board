@@ -216,6 +216,15 @@ describe("the board in a phone's browser, through tailscale serve", () => {
     // Marking a desk is for the computer only, the desk itself included.
     expect(await (await post('/api/remote', { op: 'desk', id })).json()).toEqual({ error: 'local' })
     expect((await local('desk', id)).status).toBe(200)
+    // A body that is not a JSON object is refused like any other op, never answered with a 500.
+    for (const body of [null, 'a string', 42])
+      expect([body, await (await post('/api/remote', body)).json()]).toEqual([body, { error: 'local' }])
+    const raw = await phone(
+      '/api/remote',
+      { method: 'POST', body: 'not json' },
+      { 'content-type': 'application/json', 'x-board': '1', origin: ORIGIN },
+    )
+    expect([raw.status, await raw.json()]).toEqual([403, { error: 'local' }])
     expect(await (await phone('/api/hello')).json()).toMatchObject({ paired: true, desk: true, device: id })
     const listed = (await (await fetch(`${url}/api/remote`)).json()) as { devices: Record<string, unknown>[] }
     expect(listed.devices).toEqual([expect.objectContaining({ id, desk: true })])

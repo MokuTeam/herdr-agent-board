@@ -19,6 +19,7 @@
 // address from serve, the token in a cookie, and the board's page for a phone's browser.
 // A device's open streams end when it is unpaired, on both.
 import { hostname } from 'node:os'
+import { isRecord } from '../adapters/json-store.ts'
 import { type Caller, serveStatus, tailscaleStatus, whois } from '../adapters/tailscale.ts'
 import {
   clearCookie,
@@ -248,7 +249,10 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
       const refused = remoteRefusal(raw, path, !!device.desk)
       if (refused) return refused
       if (req.method === 'POST' && raw === '/api/remote') {
-        const { op } = (await readBody(req.clone())) as { op?: unknown }
+        // A body that is not a JSON object (null, a string, a broken or oversized one) is no op
+        // this desk may run: refused like any other, never answered with a 500 and its message.
+        const body = await readBody(req.clone()).catch(() => null)
+        const op = isRecord(body) ? body.op : undefined
         if (!DESK_REMOTE_OPS.has(op)) return json(403, { error: 'local' })
       }
       if (req.method === 'GET' && raw === '/api/peers') return json(200, { peers: await peers() })

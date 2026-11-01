@@ -164,7 +164,9 @@ export function createRemote({ onChange, now = Date.now }: { onChange: () => voi
       let found = false
       save(list =>
         list.map(d => {
-          if (d.id !== id) return d
+          // A desk is a browser: the phone app is told nothing of the flag (hello) and has no way
+          // to follow herdr. `off` still clears one left on any device.
+          if (d.id !== id || (on && kindOf(d) !== 'browser')) return d
           found = true
           const { desk: _, ...rest } = d
           return on ? { ...rest, desk: true } : rest

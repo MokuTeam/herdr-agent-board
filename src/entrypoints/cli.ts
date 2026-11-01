@@ -1217,7 +1217,11 @@ async function remote(): Promise<void> {
     const off = rest[2] === 'off'
     const body = JSON.stringify({ op: off ? 'undesk' : 'desk', id })
     const r = await call({ method: 'POST', headers: { 'content-type': 'application/json', 'x-board': '1' }, body })
-    if (!isRecord(r) || r.ok !== true) throw new Error(`no device ${id}: \`board remote\` lists them`)
+    if (!isRecord(r) || r.ok !== true) {
+      const why = isRecord(r) && typeof r.error === 'string' ? ` (${r.error})` : ''
+      const what = off ? `no device ${id}` : `no paired browser ${id} to make a desk`
+      throw new Error(`${what}${why}: \`board remote\` lists them`)
+    }
     if (off) return console.log(`ok · ${id} is a phone again`)
     console.log(`ok · ${id} is your desk: Go to herdr and answering phones work from it; reload its board`)
     const view = (await call().catch(() => null)) as Partial<RemoteView> | null
