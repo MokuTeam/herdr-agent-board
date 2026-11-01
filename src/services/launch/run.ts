@@ -80,6 +80,8 @@ export interface Launch extends LaunchRequest {
   rootTab: string | null
   /** A tab the worktree came with, left over once the profile's own tab was opened. */
   spareTab: string | null
+  /** The pane `spareTab` came with and its terminal, as herdr said when it opened the tab. */
+  spareRoot: { pane: string | null; terminal: string | null } | null
   /** The setup's ticket convention: case- names, -wt/<ticket> paths, linked workspaces. */
   ticketNames: boolean
   worktreeMade: boolean
@@ -119,6 +121,7 @@ export function newLaunch(
     rootTerminal: null,
     rootTab: null,
     spareTab: null,
+    spareRoot: null,
     ticketNames: false,
     worktreeMade: false,
     dismissed: false,
@@ -257,10 +260,11 @@ export function launchRunner({
     }
     // A new workspace starts with a tab of shells; a launcher command opened its own tab beside it.
     // A worktree opened with a profile's env leaves its first tab empty: it goes too.
-    if (l.spareTab && l.pane) await tidy(l.workspaceId, l.spareTab, l.pane)
+    if (l.spareTab && l.pane) await tidy(l.workspaceId, l.spareTab, l.pane, l.spareRoot)
     else if (launcher.kind !== 'herdr' && l.rootTab && l.pane && l.pane !== l.rootPane)
-      await tidy(l.workspaceId, l.rootTab, l.pane)
+      await tidy(l.workspaceId, l.rootTab, l.pane, { pane: l.rootPane, terminal: l.rootTerminal })
     l.spareTab = null
+    l.spareRoot = null
   }
 
   /**
@@ -279,7 +283,10 @@ export function launchRunner({
     const opened = await openInProfile(l, env => tabCreateRoot(ws.id, l.cwd, l.label, env))
     l.rootPane = opened.pane
     l.rootTerminal = opened.terminal
-    if (spareRootTab && ws.tab && !ws.alreadyOpen) l.spareTab = ws.tab
+    if (spareRootTab && ws.tab && !ws.alreadyOpen) {
+      l.spareTab = ws.tab
+      l.spareRoot = { pane: ws.pane, terminal: ws.terminal }
+    }
     notePane(l, opened.pane, opened.terminal)
   }
 
@@ -382,11 +389,23 @@ export function launchRunner({
     throw new LaunchError(t(l.dismissed ? 'launch.err.dismissed' : 'launch.err.dialogTimeout'), 'dialog')
   }
 
-  /** Close the tab a new workspace came with, if no agent runs in it (the session is elsewhere). */
-  async function tidy(workspace: string, tab: string, pane: string): Promise<void> {
+  /**
+   * Close the tab a new workspace came with, if no agent runs in it (the session is elsewhere).
+   * herdr gives ids out again once it starts over: the pane the tab came with holding another
+   * terminal than herdr named for it then means the tab is someone else's now, and it stays.
+   */
+  async function tidy(
+    workspace: string,
+    tab: string,
+    pane: string,
+    root: { pane: string | null; terminal: string | null } | null,
+  ): Promise<void> {
     try {
       const panes = (await workspacePanes(workspace)).filter(p => p.tab === tab)
-      if (panes.length && !panes.some(p => p.agent || p.pane === pane)) await herdr(['tab', 'close', tab])
+      const reused = panes.some(
+        p => !!root?.terminal && p.pane === root.pane && !!p.terminal && p.terminal !== root.terminal,
+      )
+      if (panes.length && !reused && !panes.some(p => p.agent || p.pane === pane)) await herdr(['tab', 'close', tab])
     } catch {}
   }
 

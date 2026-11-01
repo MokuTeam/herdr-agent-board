@@ -393,10 +393,15 @@ export async function paneTabTerminal(pane: string): Promise<{ tab: string | nul
 /** A workspace's panes: the tab each is in and the agent it runs (null for a shell). */
 export async function workspacePanes(
   workspace: string,
-): Promise<{ pane: string | null; tab: string | null; agent: string | null }[]> {
+): Promise<{ pane: string | null; tab: string | null; agent: string | null; terminal: string | null }[]> {
   const answer = await herdr(['pane', 'list', '--workspace', workspace])
   const panes = isRecord(answer) && Array.isArray(answer.panes) ? answer.panes : []
-  return panes.map(p => ({ pane: stringAt(p, 'pane_id'), tab: stringAt(p, 'tab_id'), agent: stringAt(p, 'agent') }))
+  return panes.map(p => ({
+    pane: stringAt(p, 'pane_id'),
+    tab: stringAt(p, 'tab_id'),
+    agent: stringAt(p, 'agent'),
+    terminal: stringAt(p, 'terminal_id'),
+  }))
 }
 
 /** herdr's workspaces: id, label, and whether it has the focus. */
