@@ -189,13 +189,29 @@ export const tailComplete = (info: TranscriptInfo): boolean =>
  *             result yet, questions = an AskUserQuestion call's questions
  *   question  the agent's last words end in a question; replied: the user wrote after them
  *   lastAt    the time of the newest user or assistant line
+ *   context   the tokens the last request carried, cached parts included; after a compaction
+ *             with no request since, Claude Code's own count of what is left (postTokens)
  */
 export function parseTranscriptTail(lines: string[]): TranscriptInfo {
   const info: TranscriptInfo = { title: '', prompt: '', lastText: '', question: '', replied: false, tool: null }
   const results = new Set<string>() // tool_use ids that already have a result (seen later in the file)
+  let compacted = false // a compaction came after every request still to be read: they say nothing of the context now
   for (let i = lines.length - 1; i >= 0 && !tailComplete(info); i--) {
     const line = lines[i]
     if (!line) continue
+    // A /compact (or an auto one) put a summary in place of the conversation. Until the next
+    // request, the context is what the compaction left, not what the request before it carried.
+    if (line.includes('"compact_boundary"')) {
+      const o = parse(line)
+      if (o?.type === 'system' && o.subtype === 'compact_boundary' && !o.isSidechain) {
+        if (info.context == null && !compacted) {
+          const left = rec(o.compactMetadata)?.postTokens
+          if (typeof left === 'number' && left > 0) info.context = left
+          compacted = true
+        }
+        continue
+      }
+    }
     if (line.includes('"type":"ai-title"')) {
       if (!info.title) info.title = str(parse(line)?.aiTitle)
       continue
@@ -243,7 +259,7 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
     }
     // How full the context is: what the last real request carried, cached parts included.
     const u = rec(message?.usage)
-    if (info.context == null && u && message?.model !== '<synthetic>') {
+    if (info.context == null && !compacted && u && message?.model !== '<synthetic>') {
       const num = (v: unknown) => (typeof v === 'number' ? v : 0)
       const tokens = num(u.input_tokens) + num(u.cache_creation_input_tokens) + num(u.cache_read_input_tokens)
       if (tokens) info.context = tokens

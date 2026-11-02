@@ -36,3 +36,9 @@
   button.rel::after { content: ""; position: absolute; inset: -8px -4px; }
   .helpers-chip::after { content: ""; position: absolute; inset: -8px 0; }
 }
+
+/* The tool at work stays inside the card: a long MCP tool's name ("server · tool") ends in …
+   rather than past the card's edge, and the detail after it gives way first. */
+.now > svg { flex: none; }
+.now .tool { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.now .detail { flex-shrink: 100; }

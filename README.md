@@ -1166,8 +1166,8 @@ What it costs: a helper's meta file and the head and tail of its transcript are 
 again only when they change (time and size); a session's folder is listed again only when it
 changes. The links come from a read of each session's transcript in the background, once in
 full and then only what it gained, parsing only the lines with a marker (spawn-agent,
-SendMessage, a message from another session). A helper's whole conversation is read only when
-its window is open.
+SendMessage, a message from another session, herdr's commands that type into a pane). A helper's
+whole conversation is read only when its window is open.
 
 `GET /api/session/<key>` carries `helpers` and `workflows`; `GET /api/session/<key>/helper/<id>`
 one helper with its conversation, where the id only picks among that session's own helpers. The
@@ -1177,6 +1177,48 @@ board payload has each item's `helpers` (counts and the newest at work) and `lin
 (the calls and messages in a transcript), `src/server/routes/helpers.ts`, `web/src/components/helpers/`
 (the window, the rows, the card's and the sheet's parts), `web/src/hooks/useHelpers.ts`,
 `web/src/models/helper-model.ts`.
+
+### The edge log
+
+The links on the board are how things stand: per pair of sessions, how many messages and the
+latest. For a history (an audit of who started, wrote to or typed into whom, and when), the board
+also writes every event it reads from a transcript into the edge log, one JSON line each, kept
+across restarts, renames and sessions leaving the board. Besides spawn, fork, sent and received it
+has `prompted`: a Bash or PowerShell call that runs `herdr agent prompt <target>`,
+`herdr agent send-keys <target>`, `herdr pane send-text <pane>`, `herdr pane send-keys <pane>` or
+`herdr pane run <pane>`, one event for each such command in the call. The command is parsed, not
+searched: one that only mentions them (an echo, a file a here-document writes, a commit message,
+`--help`) is none, nor one with `--current`. Prompts are in the log only, not in the board's links.
+
+```json
+{"seq":12,"kind":"sent","to":"case-42","name":"","summary":"Status","at":1793350000000,
+ "session":"<session id>","key":"<card key>","sessionName":"Master",
+ "toSession":"<session id>","toKey":"<card key>","toName":"case-42",
+ "transcript":"<path>","offset":48213,"uuid":"<the line's uuid>"}
+```
+
+(one line in the file). `seq` numbers the lines from 1. The event's own fields: spawn `name`,
+`pane`; fork `of` (the session id); sent `to`, `name` (who wrote from a pipe it replies to),
+`summary` (the one SendMessage gave, never the message); received `name`, `pipe`, `id`; prompted
+`target` (an agent name or a pane id, `""` for a variable), `verb` (`agent prompt`, `pane
+send-keys`, …). `at`: when the call was made or the message came, in ms. `session`, `key` and
+`sessionName` are the session whose transcript it is, `toSession`, `toKey` and `toName` the one at
+the other end as the board matched it (as the links match it, above), both as the board knew them
+when it wrote the line; `null` where it had none. A message's text is not in the log. `transcript`,
+`offset` (the line's byte offset) and `uuid` say where it was read.
+
+Where: `edge-log/` in the board's state folder (`~/.local/state/herdr/plugins/agent-board/`,
+`%LOCALAPPDATA%\herdr\plugins\agent-board\` on Windows), in segments of about 4 MB,
+`edges-<the first line's seq, 12 digits>.jsonl`, none ever removed. `marks.json` beside them says
+how far each transcript is logged: a board that starts again reads every transcript from the start
+and writes no event twice. When the board first runs with the log, it writes what the sessions on
+the board then have in their transcripts.
+
+`GET /api/links/log?since=<seq>&limit=<n>` answers `{ edges, next }`: the lines after `since` (0,
+or none: from the first), at most `limit` (1 to 1000, 1000 when not given), and the `seq` to ask
+after next time. For the board on this computer only: a remote listener refuses it. Code:
+`src/adapters/edge-log.ts`, `src/server/routes/links.ts`, `promptsOf` in
+`src/core/transcript-links.ts`.
 
 ## Moving a card by hand
 
@@ -1699,7 +1741,10 @@ it); Claude keeps the conversation on disk, so it can come back.
 - Its reminders and repeating pings wait in the record and come back with it: under their old
   ids, a repeating one from its next run, a one-off that came due meanwhile late (the prompt says
   by how much). A restart on its way is dropped: a resume is one. A MokuPilot report with a
-  receipt keeps the session on the board until it is delivered.
+  receipt keeps the session on the board until it is delivered. Meanwhile `board schedule
+  --session <id|name|pane>` (and `--all`) lists them, marked parked; `board unschedule <id>`
+  removes one; `board schedule --move <id>` moves one to the session that runs it (`--session`: to
+  that one, which must be on the board), as Return would put it back, the prompt saying whose it was.
 - The card file stays as it was (name, lane, notes), so the session comes back with them, also
   when you resume it by hand elsewhere.
 - Many at once: the menu of the "Idle" column (its head, or a lane's "Idle" in a narrow window)
@@ -2436,6 +2481,7 @@ board remote on                  # or "remote": { "on": true } in config.json
 board remote                     # where it listens, who asks to pair, who is paired
 board remote approve <id>        # or Approve in Settings → Phones… on the web board
 board remote revoke <id>         # the phone's token stops working at once
+board remote desk <id> [off]     # a paired browser is your desk: Go to herdr and Approve work there
 board remote pwa on              # the board in a phone's browser, below
 board remote off
 ```
@@ -2455,6 +2501,12 @@ it needs:
 - **Nothing on this computer's screen.** A phone cannot open files or links here, focus herdr or
   raise windows; the board's page itself is not served to it. Everything else answers as for the
   web board, with the same checks.
+- **Unless it is your desk.** When the board runs on a server and you attach to its herdr from your
+  own computer (`herdr --remote <host>`), the board in that computer's browser is a paired device
+  too. `board remote desk <id>`, on the server only, marks it as your desk: from it **Go to herdr**
+  works (the herdr client you attached follows the focus), and so do Approve, Deny and Unpair in
+  Phones…. Opening files or links, turning phones off, Remote access and wake stay with the
+  server. `board remote desk <id> off` takes it back. Setting it up: [Your desk](#your-desk).
 
 A firewall that drops what comes in on the Tailscale interface must let the port through (on
 Linux with ufw: `sudo ufw allow in on tailscale0 to any port 12422 proto tcp`). Off, nothing
@@ -2516,6 +2568,29 @@ Share → Add to Home Screen on an iPhone, ⋮ → Install app on Android.
 Code: `src/core/pwa.ts` (the rules), `src/services/pwa.ts` (serve), `src/core/qr.ts`,
 `web/src/components/remote/RemoteGate.tsx` (pairing, no connection), `web/sw.js`,
 `web/manifest.webmanifest`, `web/styles/pwa.css`.
+
+### Your desk
+
+The board runs on a server; you sit at your own computer. Two things are needed there: herdr
+attached to the server's herdr, and the board in its browser, paired and marked as your desk. The
+board cannot see the first (herdr tells nobody which clients are attached), so Go to herdr only
+moves the focus on the server: what shows it is the herdr you attached. Once, on your computer:
+
+1. **SSH to the server as the user herdr runs as.** Your computer's public key goes into that
+   user's `~/.ssh/authorized_keys` on the server; `ssh <user>@<server>` must work without asking.
+2. **A name for it** in `~/.ssh/config`:
+   ```
+   Host board
+     HostName <server's Tailscale name>
+     User <user>
+     Port <sshd's port, when not 22>
+   ```
+3. **Attach:** `herdr --remote board`, and keep it open while you work.
+4. **The board in the browser:** the server's HTTPS address (Phones…, "In a phone's browser"),
+   asks to pair; approve it on the server (`board remote approve <id>`).
+5. **Mark it:** on the server, `board remote desk <id>`. Phones… on that page shows the command
+   with its own id; the command prints these steps with the server's user and name. Reload the
+   page: Go to herdr shows, and Approve, Deny and Unpair work.
 
 ## Another computer or a tablet, through your own domain
 
@@ -3159,8 +3234,11 @@ board every "<cron>" "<text>"  the same on a cron schedule
 board restart ["<note>"]  once this turn is over: Claude exits and resumes in its pane (MCP
                           servers, settings, hooks, skills load anew), then gets
                           "[board reminder; restarted as you asked] <note>"; see Restart
-board schedule [--all]    this session's entries (every session's)
-board unschedule <id|all> remove an entry (all: every entry of this session)
+board schedule [--all]    this session's entries (every session's), those parked with an
+                          archived session too; see Archive
+board schedule --move <id>  move an entry parked with an archived session to this session
+                          (--session: to that one)
+board unschedule <id|all> remove an entry, a parked one too (all: every entry of this session)
 board call-report --session <id> --file <report.md>
                           a MokuPilot call's results for the session (MokuPilot runs it):
                           typed in once the session is free, for its information

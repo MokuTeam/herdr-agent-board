@@ -3,6 +3,7 @@
 import { statSync } from 'node:fs'
 import { readArchiveLog } from '../adapters/archive-store.ts'
 import { readUsageFile } from '../adapters/claude-home.ts'
+import { createEdgeLog, type EdgeLog } from '../adapters/edge-log.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { notify } from '../adapters/herdr.ts'
 import { createLinks } from '../adapters/links.ts'
@@ -42,6 +43,8 @@ export interface BoardState {
   publish(): void
   /** Collects the board from herdr and the files; a call during one runs once more after it. */
   refresh(): Promise<void>
+  /** The edge log's lines after number `since` (adapters/edge-log.ts). */
+  edges: EdgeLog['read']
 }
 
 interface Options {
@@ -277,8 +280,17 @@ export function createBoardState({
   }
 
   // Who started whom and who wrote to whom, read from the transcripts in the background
-  // (adapters/links.ts); a read that found something new refreshes the board.
-  const links = createLinks({ onChange: () => void refresh() })
+  // (adapters/links.ts); a read that found something new refreshes the board, and its events go
+  // into the edge log after it, with the sessions the board has then (adapters/edge-log.ts).
+  const edgeLog = createEdgeLog()
+  const links = createLinks({ onChange: () => void refresh(), onEvents: edgeLog.add })
+  function logEdges(): void {
+    try {
+      edgeLog.flush(items)
+    } catch (err) {
+      log(`edge log: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
 
   // A session whose hooks report another profile than its start asked for gets a herdr notification,
   // once in this process; its card's red tag stays. A notification that fails is logged.
@@ -329,6 +341,7 @@ export function createBoardState({
         }
       }
       items = await collect(deps, { helpers: true, links, seen })
+      logEdges()
       launches.observe(items)
       stale = false
       lastSuccessfulRefreshAt = Date.now()
@@ -357,5 +370,6 @@ export function createBoardState({
       Date.now() - lastSuccessfulRefreshAt > Math.max(10000, (cfg.refreshSec ?? 2) * 3000),
     publish,
     refresh,
+    edges: (since, limit) => edgeLog.read(since, limit),
   }
 }

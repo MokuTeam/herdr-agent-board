@@ -17,7 +17,9 @@
 // --when-free`), which would put it back to sleep as it comes back. Putting them back marks the
 // record `restoring` first and drops it only once every entry is back, so a board that stops in between
 // finishes the job on its next refresh (collect calls settleReturned). The card file stays where
-// it is, so a session resumed by hand elsewhere comes back with its name and lane too.
+// it is, so a session resumed by hand elsewhere comes back with its name and lane too. Meanwhile
+// `board schedule` lists them, `board unschedule <id>` removes one, and `board schedule --move
+// <id>` moves one to a session on the board (heldEntry, dropHeld, moveHeld).
 //
 // Claude profiles: the record keeps the profile the session ran in, and Return resumes it there
 // or not at all: the board's launch path with that profile (launchTarget with the record as the
@@ -47,7 +49,7 @@ import { parentProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
 import { sameDir, sessionWorkspace, UNSAFE_CHARS } from '../core/launch/names.ts'
 import { launchTarget, type ProfileSet, sessionProfile } from '../core/profiles.ts'
-import type { ScheduleEntry, SessionRef } from '../core/schedule-rules.ts'
+import { cleanName, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import type { Config, Item, Translator } from '../core/types.ts'
 import { nextRun } from '../core/when.ts'
 import { readyToSleep } from './actions.ts'
@@ -423,15 +425,8 @@ export function restoreHeld(r: ArchiveRecord, where: Where = {}): ScheduleEntry[
   const now = Date.now()
   const left: ScheduleEntry[] = []
   for (const e of r.held) {
-    let next: number | null = e.next
-    if (e.cron && e.next < now) {
-      try {
-        next = nextRun(e.cron, now)
-      } catch {
-        next = null
-      }
-      if (next === null) continue
-    }
+    const next = dueAgain(e, now)
+    if (next === null) continue
     try {
       restoreEntry({ ...e, next, ...(where.pane && { pane: where.pane }), ...(where.cwd && { cwd: where.cwd }) })
     } catch (err) {
@@ -440,6 +435,71 @@ export function restoreHeld(r: ArchiveRecord, where: Where = {}): ScheduleEntry[
     }
   }
   return left
+}
+
+/**
+ * When an entry that waited is due once it is back in the schedule (`now`): a repeating one from
+ * its next run after now (the runs it missed are not owed), null when it runs no more; a one-off
+ * when it was.
+ */
+export function dueAgain(e: ScheduleEntry, now: number): number | null {
+  if (!e.cron || e.next >= now) return e.next
+  try {
+    return nextRun(e.cron, now)
+  } catch {
+    return null
+  }
+}
+
+// ------------------------------------------------------------------ held entries, from the board command
+
+/** The entry that waits with an archived session by its id, with that session's record; null when none holds it. */
+export function heldEntry(id: string): { record: ArchiveRecord; entry: ScheduleEntry } | null {
+  for (const record of listArchive()) {
+    const entry = record.held.find(e => e.id === id)
+    if (entry) return { record, entry }
+  }
+  return null
+}
+
+/** Entries taken out of the record of `key`, under its lock (`id`: that one, else all); returns those it took. */
+export function dropHeld(key: string, id?: string): ScheduleEntry[] {
+  // Read first: a session without a record gets no archive folder and no lock.
+  if (!getArchived(key)) return []
+  const seen: { out: ScheduleEntry[] } = { out: [] }
+  update(key, r => {
+    seen.out = r.held.filter(e => id === undefined || e.id === id)
+    return seen.out.length ? { ...r, held: r.held.filter(e => !seen.out.includes(e)) } : undefined
+  })
+  return seen.out
+}
+
+/**
+ * An entry that waits with an archived session, into the schedule for another session (`to`: its
+ * key, name, pane and folder) as Return would put it back (restoreHeld): under its id, a
+ * repeating one from its next run. Set by the archived session unless another one set it, so the
+ * prompt says from whom; the session it was for before /clear goes. Copied first, then taken out
+ * of the record, as holdEntries does. Returns the entry in the schedule, or null when no record
+ * holds it.
+ */
+export function moveHeld(id: string, to: SessionRef & Where): ScheduleEntry | null {
+  const found = heldEntry(id)
+  if (!found) return null
+  const { record: r, entry: e } = found
+  const next = dueAgain(e, Date.now())
+  if (next === null) throw new Error(`entry ${id}: "${e.cron}" runs no more`)
+  const { pane, cwd, movedFrom, gone, ...rest } = e
+  const moved = restoreEntry({
+    ...rest,
+    key: to.key,
+    name: cleanName(to.name),
+    ...(to.pane && { pane: to.pane }),
+    ...(to.cwd && { cwd: to.cwd }),
+    from: e.from ?? { key: r.key, name: cleanName(r.name) },
+    next,
+  })
+  dropHeld(r.key, id)
+  return moved
 }
 
 // ------------------------------------------------------------------ Return, and dropping a record

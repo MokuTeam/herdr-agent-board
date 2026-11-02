@@ -63,6 +63,63 @@ describe('Phones panel', () => {
     expect(buttons).toEqual(['Approve', 'Deny', 'Set up the HTTPS address', 'Unpair', 'Turn off phones'])
   })
 
+  test('on the board in a browser elsewhere: where to approve, and no button the server refuses', () => {
+    const doc = Object.getOwnPropertyDescriptor(globalThis, 'document')
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: { documentElement: { hasAttribute: (name: string) => name === 'data-remote' } },
+    })
+    try {
+      const nodes = render(REMOTE)
+      const all = text([byId(nodes, 'phones-sheet')])
+      expect(all).toContain('Agent board app on xiaomi-17 asks to use this board')
+      expect(all).toContain('board remote approve r1')
+      const buttons = findAll(nodes, el => el.tag === 'button' && hasClass(el, 'button'))
+      expect(buttons.map(b => text(b.children))).toEqual(['Set up the HTTPS address', 'Unpair', 'Turn off phones'])
+      expect(buttons.every(b => b.attrs.has('disabled'))).toBe(true)
+    } finally {
+      if (doc) Object.defineProperty(globalThis, 'document', doc)
+      else Reflect.deleteProperty(globalThis, 'document')
+    }
+  })
+
+  test('a paired browser elsewhere names its own id in the command that makes it a desk', () => {
+    const doc = Object.getOwnPropertyDescriptor(globalThis, 'document')
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: {
+        documentElement: {
+          hasAttribute: (name: string) => name === 'data-remote',
+          getAttribute: (name: string) => (name === 'data-device' ? '2d240475327c' : null),
+        },
+      },
+    })
+    try {
+      expect(text([byId(render(REMOTE), 'phones-sheet')])).toContain('board remote desk 2d240475327c')
+    } finally {
+      if (doc) Object.defineProperty(globalThis, 'document', doc)
+      else Reflect.deleteProperty(globalThis, 'document')
+    }
+  })
+
+  test("on the owner's desk elsewhere: Approve, Deny and Unpair; turning phones off stays with the computer", () => {
+    const doc = Object.getOwnPropertyDescriptor(globalThis, 'document')
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: { documentElement: { hasAttribute: (name: string) => name === 'data-remote' || name === 'data-desk' } },
+    })
+    try {
+      const nodes = render(REMOTE)
+      expect(text([byId(nodes, 'phones-sheet')])).toContain('This browser is your desk.')
+      const buttons = findAll(nodes, el => el.tag === 'button' && hasClass(el, 'button'))
+      const enabled = buttons.filter(b => !b.attrs.has('disabled')).map(b => text(b.children))
+      expect(enabled).toEqual(['Approve', 'Deny', 'Unpair'])
+    } finally {
+      if (doc) Object.defineProperty(globalThis, 'document', doc)
+      else Reflect.deleteProperty(globalThis, 'document')
+    }
+  })
+
   test('no phone yet; and why phones cannot reach it', () => {
     const none = text(render({ ...REMOTE, pending: [], devices: [] }))
     expect(none).toContain('No phone is paired yet')

@@ -236,6 +236,8 @@ export interface MenuContext {
   canEdit: boolean
   /** The board in a phone's browser: what acts on the computer's screen is left out (models/remote-page.ts). */
   remote?: boolean | undefined
+  /** On the owner's desk elsewhere, Go to herdr stays all the same (deskPage). */
+  desk?: boolean | undefined
 }
 
 /** A lane as the menus show it. */
@@ -353,7 +355,11 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
   ]
   return tidy<MenuEntry>([
     { id: 'open', label: t('menu.open'), hint: 'Enter' },
-    !ctx.remote && { id: 'focus', label: t(it.sleeping ? 'menu.wakeFocus' : 'menu.focus'), ...herdr() },
+    (!ctx.remote || ctx.desk) && {
+      id: 'focus',
+      label: t(it.sleeping ? 'menu.wakeFocus' : 'menu.focus'),
+      ...herdr(),
+    },
     // Looking needs no fresh data; typing and opening a shell wait for it in the window itself.
     ctx.terminal && (it.cwd || it.pane) && { id: 'terminal', label: t('term.open'), hint: 'Ctrl+`' },
     // A MokuPilot call with a fork of the session: needs the board, not fresh herdr data.
@@ -577,7 +583,7 @@ export function launchMenu(l: MenuLaunch, ctx: MenuContext): MenuEntry[] {
     l.state === 'trust' && { id: 'trust', label: t('launch.trust.go'), ...herdr },
     l.state === 'trust' && { id: 'closeTab', label: t('launch.trust.close'), ...herdr },
     l.state === 'trust' && SEP,
-    l.pane && !ctx.remote && { id: 'focus', label: t('menu.focus'), ...herdr },
+    l.pane && (!ctx.remote || ctx.desk) && { id: 'focus', label: t('menu.focus'), ...herdr },
     // A launch that failed only at its first message has a running session: a retry would start a second one.
     l.state === 'failed' && l.kind !== 'message' && { id: 'retry', label: t('launch.retry') },
     l.state === 'failed' && { id: 'copyError', label: t('launch.copyError') },

@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
+import { promptOf } from '../../src/core/schedule-rules.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 
 setDefaultTimeout(15_000)
@@ -92,6 +93,196 @@ test('board remind / every / schedule / unschedule keep entries for the session'
     readdirSync(dirOf(box)).filter(n => n.endsWith('.json')),
     [],
   )
+})
+
+// An archived session's entries wait in its record (services/archive.ts holdEntries), not in the
+// schedule folder: `board schedule` lists them, `board unschedule` removes them, `board schedule
+// --move <id>` moves one to a session on the board (#279).
+const ARCHIVED = '0f8fad5b-d9cb-469f-a165-70867728950e'
+const archiveDirOf = (box: Sandbox): string => join(box.env.LOCALAPPDATA as string, 'herdr/plugins/agent-board/archive')
+const heldIn = (box: Sandbox, file: string): string[] =>
+  (JSON.parse(readFileSync(join(archiveDirOf(box), file), 'utf8')).held as { id: string }[]).map(e => e.id)
+
+/** A record in the archive as `board archive` leaves it, its entries held (no scheduler bookkeeping). */
+function archived(box: Sandbox, key: string, name: string, held: Record<string, unknown>[]): void {
+  mkdirSync(archiveDirOf(box), { recursive: true })
+  const now = Date.now()
+  writeFileSync(
+    join(archiveDirOf(box), `${key.replace(/[^A-Za-z0-9_-]/g, '_')}.json`),
+    JSON.stringify({
+      key,
+      session: key.startsWith('pane-') ? '' : key,
+      name,
+      autoName: '',
+      category: 'personal',
+      cwd: join(box.dir, 'probe'),
+      workspace: 'Personal',
+      workspaceId: 'wP',
+      pane: 'wP:p1',
+      tab: 'wP:t1',
+      note: '',
+      title: '',
+      sleeping: false,
+      activity: 0,
+      archivedAt: now - 3 * 86_400_000,
+      by: 'agent',
+      state: 'archived',
+      closeAt: now - 3 * 86_400_000,
+      closedAt: now - 3 * 86_400_000,
+      profile: 'default',
+      held: held.map(e => ({ key, name, pane: 'wP:p1', cwd: join(box.dir, 'probe'), by: 'agent', ...e })),
+    }),
+  )
+}
+
+test('board schedule / unschedule reach an archived session’s parked entries; schedule --move moves one (#279)', async () => {
+  const box = await sandbox()
+  config(box)
+  // On the board: Target in p2. In the archive: "Проба 100% card" (its pane closed), and a session known by its pane only.
+  const snapshot = {
+    panes: [
+      {
+        pane_id: 'p2',
+        agent: 'claude',
+        agent_session: { value: 's2' },
+        agent_status: 'idle',
+        cwd: box.dir,
+        terminal_title_stripped: 'Target',
+      },
+    ],
+    tabs: [],
+    workspaces: [],
+  }
+  box.state({ 'api snapshot': { result: { snapshot } } })
+  const now = Date.now()
+  const name = 'Проба 100% card'
+  archived(box, ARCHIVED, name, [
+    { id: 'abc123', text: 'check the CI', at: now - 2 * 3600e3, next: now - 2 * 3600e3, created: now - 86_400_000 },
+    // Its next run went by while it was archived: shown, and moved, from the next one after now.
+    {
+      id: 'def456',
+      text: 'look at the overnight alerts',
+      cron: '0 9 * * *',
+      next: now - 3 * 86_400_000,
+      created: now - 9 * 86_400_000,
+      movedFrom: { key: 'before-clear', name: 'Before' },
+      gone: 2,
+    },
+    { id: '0a0b0c', text: 'send the report', at: now + 86_400_000, next: now + 86_400_000, idle: true },
+  ])
+  archived(box, 'pane-7', 'Shell one', [{ id: 'aaa111', text: 'in the shell', at: now + 3600e3, next: now + 3600e3 }])
+  const own = await agentCli(box, ['remind', '--session', 'Target', 'in', '1h', 'own thing'])
+  assert.equal(own.code, 0, own.out)
+  const ownId = idIn(own.out, 'reminder')
+
+  // A session on the board: its own entries, as before, none of the archive's.
+  const target = await agentCli(box, ['schedule', '--session', 'Target'])
+  assert.equal(target.code, 0, target.out)
+  assert.match(target.out, new RegExp(`^${ownId} · .+ \\(in 1 h\\) · once · on time · own thing$`))
+
+  // The archived one, by its name in another case, by its id, and one with a pane-<id> key by it.
+  for (const by of ['проба 100% CARD', ARCHIVED]) {
+    const list = await agentCli(box, ['schedule', '--session', by])
+    assert.equal(list.code, 0, list.out)
+    const lines = list.out.split('\n')
+    assert.equal(lines.length, 4, list.out)
+    assert.match(lines[0] ?? '', /^abc123 · .+ \(2 h ago\) · once · on time · parked in the archive · check the CI$/)
+    assert.match(
+      lines[1] ?? '',
+      /^def456 · .+ \(in [^)]+\) · every "0 9 \* \* \*" · on time · parked in the archive · look at the overnight alerts$/,
+    )
+    assert.match(
+      lines[2] ?? '',
+      /^0a0b0c · .+ \(in 1 d\) · once · when free · parked in the archive · send the report$/,
+    )
+    assert.match(lines[3] ?? '', /^parked entries come back with their session; board schedule --move <id> moves one/)
+  }
+  assert.match((await agentCli(box, ['schedule', '--session', 'pane-7'])).out, /^aaa111 · .+ · in the shell$/m)
+  assert.match(
+    (await agentCli(box, ['schedule', '--session', 'nobody'])).out,
+    /no session "nobody" on the board or in its archive/,
+  )
+  // Every session's: the schedule's, then the parked ones with their session's name.
+  const all = (await agentCli(box, ['schedule', '--all'])).out.split('\n')
+  assert.equal(all.length, 6, all.join('\n'))
+  assert.match(all[0] ?? '', new RegExp(`^${ownId} · .+ · Target · own thing$`))
+  assert.equal(all.filter(l => l.includes(`· ${name} · parked in the archive ·`)).length, 3)
+  assert.equal(all.filter(l => l.includes('· Shell one · parked in the archive ·')).length, 1)
+
+  // Removed by its id, from its record.
+  const gone = await agentCli(box, ['unschedule', 'abc123'])
+  assert.equal(gone.code, 0, gone.out)
+  assert.match(gone.out, new RegExp(`^ok · removed abc123 \\(.+, ${name}, parked in the archive\\): check the CI$`))
+  assert.deepEqual(heldIn(box, `${ARCHIVED}.json`), ['def456', '0a0b0c'])
+  assert.match((await agentCli(box, ['unschedule', 'abc123'])).out, /no entry "abc123"/)
+
+  // An id alone moves nothing: the cron prompt's tag reads `board schedule <id>`, and it lists as before.
+  const look = await agentCli(box, ['schedule', 'def456', '--session', 'Target'])
+  assert.equal(look.out, target.out)
+  assert.deepEqual(heldIn(box, `${ARCHIVED}.json`), ['def456', '0a0b0c'])
+  assert.match(
+    (await agentCli(box, ['schedule', '--move', '--session', 'Target'])).out,
+    /usage: board schedule --move <id>/,
+  )
+  // Moved to a session on the board: into the schedule under its id, from its next run, set by the archived one.
+  const moved = await agentCli(box, ['schedule', '--move', 'def456', '--session', 'Target'])
+  assert.equal(moved.code, 0, moved.out)
+  assert.match(
+    moved.out,
+    /^ok · moved def456 to Target: every "0 9 \* \* \*", next .+ \(in [^)]+\): look at the overnight alerts · cancel: board unschedule def456/,
+  )
+  const e = read(box, 'def456')
+  assert.ok(e)
+  assert.deepEqual(
+    [e.key, e.name, e.pane, e.cwd, e.from, e.movedFrom, e.gone, e.cron, e.text],
+    [
+      's2',
+      'Target',
+      'p2',
+      box.dir,
+      { key: ARCHIVED, name },
+      undefined,
+      undefined,
+      '0 9 * * *',
+      'look at the overnight alerts',
+    ],
+  )
+  assert.ok(e.next > now && e.next <= now + 86_400_000 + 60_000)
+  // Target is told whose it was; not that it was set before /clear.
+  assert.equal(
+    promptOf({ id: 'def456', key: 's2', ...e }, e.next),
+    `[board schedule def456 from ${name}: 0 9 * * *] look at the overnight alerts`,
+  )
+  assert.deepEqual(heldIn(box, `${ARCHIVED}.json`), ['0a0b0c'])
+  // Not to a session in the archive, and not one that is in the schedule already.
+  assert.match(
+    (await agentCli(box, ['schedule', '--move', '0a0b0c', '--session', ARCHIVED])).out,
+    /is in the archive too; move the entry to a session on the board/,
+  )
+  assert.match(
+    (await agentCli(box, ['schedule', '--move', ownId, '--session', 'Target'])).out,
+    new RegExp(`no entry "${ownId}" is parked in the archive`),
+  )
+  assert.deepEqual(heldIn(box, `${ARCHIVED}.json`), ['0a0b0c'])
+
+  // All of the archived session's: the record stays, without them.
+  assert.match((await agentCli(box, ['unschedule', 'all', '--session', name])).out, /^ok · removed 1 entry$/)
+  assert.deepEqual(heldIn(box, `${ARCHIVED}.json`), [])
+  assert.equal(JSON.parse(readFileSync(join(archiveDirOf(box), `${ARCHIVED}.json`), 'utf8')).state, 'archived')
+  assert.equal((await agentCli(box, ['schedule', '--session', ARCHIVED])).out, 'nothing scheduled for this session')
+  // Target's own and the moved one, as before.
+  assert.match((await agentCli(box, ['unschedule', 'all', '--session', 'Target'])).out, /^ok · removed 2 entries$/)
+  assert.deepEqual(heldIn(box, 'pane-7.json'), ['aaa111'])
+})
+
+test('board schedule and unschedule all for a session never archived: as before, and no archive folder', async () => {
+  const box = await sandbox()
+  const s = ['--session', '11111111-2222-3333-4444-555555555555']
+  assert.equal((await cli(box, ['schedule', ...s])).out, 'nothing scheduled for this session')
+  assert.equal((await cli(box, ['schedule', '--all'])).out, 'nothing scheduled')
+  assert.equal((await cli(box, ['unschedule', ...s, 'all'])).out, 'ok · removed 0 entries')
+  assert.match((await cli(box, ['unschedule', 'abc123'])).out, /no entry "abc123"; see board schedule/)
+  assert.equal(existsSync(archiveDirOf(box)), false)
 })
 
 test('board favorite keeps the session in sight; off takes it back (#64)', async () => {

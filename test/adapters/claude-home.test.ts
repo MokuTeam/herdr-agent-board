@@ -324,8 +324,13 @@ describe('localUsage', () => {
 describe('recentFolders', () => {
   test('the cwd in the newest transcript of each project, newest first, once each, existing folders only', async () => {
     const root = newRoot()
-    // Real folders outside the temp folder (temp folders are skipped on purpose): this checkout's,
-    // wherever the tests run from.
+    // Real folders outside the temp folder (temp folders are skipped on purpose): this checkout's.
+    // The boundary is the test's own, not the system temp folder: a checkout inside that folder (a
+    // worker's scratchpad) would empty every case here, which is #290.
+    const temp = mkdtempSync(join(tmpdir(), 'board-claude-home-temp-'))
+    made.push(temp)
+    const parked = join(temp, 'parked')
+    mkdirSync(parked)
     const older = join(import.meta.dir, '..', '..')
     const newer = join(older, 'src')
     const missing = join(older, `no-such-folder-${process.pid}`)
@@ -342,6 +347,7 @@ describe('recentFolders', () => {
     mk('b', missing, 10)
     mk('c', newer, 5)
     mk('d', newer, 30) // same folder again, older
-    assert.deepEqual(await createClaudeHome(root).recentFolders(), [newer, older])
+    mk('e', parked, 1) // exists, but under the given temp boundary: never offered
+    assert.deepEqual(await createClaudeHome(root, temp).recentFolders(), [newer, older])
   })
 })
