@@ -1,7 +1,8 @@
 // A card's profile tag, right after its name: the profile's name in its color, "unknown profile"
 // for a folder no profile has, or a red warning for a session running in another profile than its
 // start asked for. None with one profile shown, as before profiles (src/core/profile-tag.ts). On a
-// card it carries its mark too, which it shows instead when the name needs the room (#324).
+// card it carries its mark too, which it shows instead when the name needs the room (#324); its
+// words then stay for a screen reader, out of sight.
 import { profileTag } from '../../../src/core/profile-tag.ts'
 import type { Item } from '../../../src/core/types.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
@@ -36,7 +37,7 @@ export function ProfileTag({
       title={view.title}
       data-mark={mark ? profileMark(tag, profiles ?? []) : undefined}
     >
-      {view.text}
+      {mark ? <span className="tag-text">{view.text}</span> : view.text}
     </span>
   )
 }

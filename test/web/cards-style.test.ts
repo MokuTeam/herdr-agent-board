@@ -65,7 +65,11 @@ test('each step gives way as the model says: the state word unseen but read, the
   expect(status).toContain('position: absolute;')
   expect(status).toContain('clip-path: inset(50%);')
   expect(status).not.toContain('display: none')
-  expect(rule(css, '.card-top[data-give~="profile"] > .profile-tag')).toContain('font-size: 0;')
+  // The profile's words, out of sight the same way (not font-size 0, which some screen readers drop).
+  const words = rule(css, '.card-top[data-give~="profile"] > .profile-tag > .tag-text')
+  expect(words).toContain('position: absolute;')
+  expect(words).toContain('clip-path: inset(50%);')
+  expect(css.replace(/\/\*[\s\S]*?\*\//g, '')).not.toContain('font-size: 0')
   expect(rule(css, '.card-top[data-give~="profile"] > .profile-tag::before')).toContain(
     'content: attr(data-mark) / "";',
   )
@@ -76,9 +80,6 @@ test('each step gives way as the model says: the state word unseen but read, the
   expect(
     rule(terminal, ':root[data-look="terminal"] .card-top[data-give~="profile"] > .profile-tag::before'),
   ).toContain('content: "[" attr(data-mark) / "";')
-  expect(rule(terminal, ':root[data-look="terminal"] .card-top[data-give~="profile"] > .profile-tag::after')).toBe(
-    'font-size: 12px;',
-  )
   expect(rule(terminal, ':root[data-look="terminal"] .profile-tag.wrong::before')).toContain('content: "![";')
 })
 

@@ -1,8 +1,8 @@
 // A card's head gives way to its name (#324). The name is what tells one card from another, so it
 // is the last thing in the row to be cut: what stands beside it keeps its whole width until the name
 // would be cut, then gives way one step at a time, and only as far as the name needs
-// (hooks/useHeadFit.ts measures; styles/cards.css draws each step). Past every step the name is cut,
-// in the middle when its end is what tells it apart, and whole in its tooltip.
+// (hooks/head-fitter.ts fits every card's row; styles/cards.css draws each step). Past every step
+// the name is cut, in the middle when its end is what tells it apart, and whole in its tooltip.
 import type { ProfileTag } from '../../../src/core/profile-tag.ts'
 import type { BoardProfile } from '../api/client.ts'
 
@@ -13,28 +13,6 @@ import type { BoardProfile } from '../api/client.ts'
  */
 export const HEAD_STEPS = ['status', 'profile', 'alarm'] as const
 export type HeadStep = (typeof HEAD_STEPS)[number]
-
-export interface HeadFit {
-  /** The steps taken, in order. */
-  given: HeadStep[]
-  /** The name is cut even so. */
-  cut: boolean
-}
-
-/**
- * The fewest steps, in HEAD_STEPS order, that leave the name whole. `present`: the steps the card
- * has something for (a card without a schedule has no clock to shorten). `fits`: whether the name
- * is whole with `given` taken, the head drawn so; it is last called with the answer's steps. When no
- * step is enough, all are taken and the name is cut.
- */
-export function headFit(present: readonly HeadStep[], fits: (given: HeadStep[]) => boolean): HeadFit {
-  const order = HEAD_STEPS.filter(s => present.includes(s))
-  for (let n = 0; n <= order.length; n++) {
-    const given = order.slice(0, n)
-    if (fits(given)) return { given, cut: false }
-  }
-  return { given: order, cut: true }
-}
 
 /** Where a name's parts meet: "Client-Case-Templates", "repo/branch", "notes.md". */
 const JOINS = ['-', '_', '/', '.', ':']

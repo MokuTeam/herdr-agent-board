@@ -269,9 +269,8 @@
 :root[data-look="terminal"] .profile-tag.wrong { background: none; color: var(--red); }
 :root[data-look="terminal"] .profile-tag.wrong::before { content: "!["; content: "![" / ""; }
 /* Its mark, when the name needs the room (#324; cards.css): "[W]", a wrong one "[!]" in red. */
-:root[data-look="terminal"] .card-top[data-give~="profile"] > .profile-tag { min-width: 0; padding: 0; font-size: 0; line-height: inherit; }
-:root[data-look="terminal"] .card-top[data-give~="profile"] > .profile-tag::before { content: "[" attr(data-mark); content: "[" attr(data-mark) / ""; font-size: 12px; }
-:root[data-look="terminal"] .card-top[data-give~="profile"] > .profile-tag::after { font-size: 12px; }
+:root[data-look="terminal"] .card-top[data-give~="profile"] > .profile-tag { min-width: 0; padding: 0; }
+:root[data-look="terminal"] .card-top[data-give~="profile"] > .profile-tag::before { content: "[" attr(data-mark); content: "[" attr(data-mark) / ""; }
 
 /* The body: one line each. What it does in the text color, what it said dim, the rest in color. */
 :root[data-look="terminal"] .what,

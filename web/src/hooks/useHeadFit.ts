@@ -1,90 +1,99 @@
-// A card's head gives way to its name (#324; models/card-head.ts). The steps are tried on the row
-// itself, before the frame is painted: each sets the row's data-give, which styles/cards.css reads,
-// and the name is measured; the fewest steps that leave it whole stay. A card whose name fits takes
-// none and is drawn as before. Measured again when the row's words change (an age, a state, a
-// profile), when its width does, and when the page changes its type (the look, wrapped card text,
-// a font loaded late). Where nothing can be measured (no layout) the row takes no step.
-import { type RefObject, useLayoutEffect, useRef, useState } from 'react'
+// A card's head gives way to its name (#324; models/card-head.ts). The page's one fitter
+// (hooks/head-fitter.ts) fits every card's row together, before the frame is painted: each step
+// sets the row's data-give, which styles/cards.css reads, and the name is measured. A card whose
+// name fits takes none and is drawn as before. Where nothing can be measured (no ResizeObserver,
+// no layout) there is no fitter and the row takes no step.
+import { type RefObject, useLayoutEffect, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { HEAD_STEPS, type HeadStep, headFit } from '../models/card-head.ts'
+import { HEAD_STEPS, type HeadStep } from '../models/card-head.ts'
+import { createHeadFitter, type HeadEnv, type HeadFitter } from './head-fitter.ts'
 
 /** What each step shortens, a child of the row. */
 const STEP_OF: Record<HeadStep, string> = { status: 'card-status', profile: 'profile-tag', alarm: 'alarm' }
 
-/** Whether `el`'s text runs past its box (its ellipsis shows). */
-const runsOver = (el: Element): boolean => el.scrollWidth > el.clientWidth
-
-/** Whether the name is cut: a name cut in the middle is cut where either part is. */
-export function nameCut(name: Element): boolean {
-  return name.classList.contains('split') ? Array.from(name.children).some(runsOver) : runsOver(name)
-}
+/** Less than this past its box is no cut: what layout's rounding leaves. */
+const EPSILON = 0.02
 
 /**
- * Takes the steps `row` needs for its name to show whole (its data-give) and says whether the name
- * is cut even so. `cut`: the page's measure (a test's stand-in).
+ * Whether `el`'s text runs past its box, to the fraction of a pixel (an ellipsis shows at any
+ * overflow; scrollWidth and clientWidth are whole pixels). The text's own end against the box's:
+ * what stands before it in the box (the Terminal style's "› " before an open card's name) counts.
  */
-export function fitHead(row: HTMLElement, cut: (name: Element) => boolean = nameCut): boolean {
-  const name = row.querySelector('.name')
-  if (!name) return false
-  const present = HEAD_STEPS.filter(s => Array.from(row.children).some(c => c.classList.contains(STEP_OF[s])))
-  return headFit(present, given => {
-    give(row, given)
-    return !cut(name)
-  }).cut
+let range: Range | undefined
+function runsOver(el: Element): boolean {
+  range ??= document.createRange()
+  range.selectNodeContents(el)
+  return range.getBoundingClientRect().right - el.getBoundingClientRect().right > EPSILON
 }
 
-function give(row: HTMLElement, given: readonly HeadStep[]) {
-  const value = given.join(' ')
-  if ((row.dataset.give ?? '') === value) return
-  if (value) row.dataset.give = value
-  else delete row.dataset.give
+/** Whether the name is cut: one cut in the middle is cut where either part is. */
+export function nameCut(name: Element): boolean {
+  if (!name.classList.contains('split')) return runsOver(name)
+  return Array.from(name.children).some(part => !part.classList.contains('sr-only') && runsOver(part))
 }
 
-/** The page's type changed under every card: each measures again. */
-const pageWatchers = new Set<() => void>()
-let watchingPage = false
-function watchPage() {
-  if (watchingPage || typeof MutationObserver === 'undefined') return
-  watchingPage = true
-  const all = () => {
-    for (const again of pageWatchers) again()
+const PAGE: HeadEnv<HTMLElement> = {
+  // The card's classes style the name (open, a result unseen, asleep in Idle), its words fill the row.
+  key: row => `${row.parentElement?.className ?? ''}\n${row.childElementCount}\n${row.textContent}`,
+  present: row => HEAD_STEPS.filter(s => Array.from(row.children).some(c => c.classList.contains(STEP_OF[s]))),
+  give(row, given) {
+    const value = given.join(' ')
+    if ((row.dataset.give ?? '') === value) return
+    if (value) row.dataset.give = value
+    else delete row.dataset.give
+  },
+  cut(row) {
+    const name = row.querySelector('.name')
+    return !!name && nameCut(name)
+  },
+  observer(resized) {
+    // The content box: a transform (a card pressed, dragged) leaves it as it is.
+    const watch = new ResizeObserver(entries =>
+      resized(entries.map(e => ({ row: e.target as HTMLElement, width: e.contentRect.width }))),
+    )
+    return { observe: row => watch.observe(row), unobserve: row => watch.unobserve(row) }
+  },
+  flushSync,
+  later: fit => queueMicrotask(fit),
+}
+
+let page: HeadFitter<HTMLElement> | null | undefined
+/** The page's fitter, made with the first card; null where nothing can be measured. */
+function pageFitter(): HeadFitter<HTMLElement> | null {
+  if (page !== undefined) return page
+  if (typeof ResizeObserver === 'undefined' || typeof MutationObserver === 'undefined') {
+    page = null
+    return page
   }
-  new MutationObserver(all).observe(document.documentElement, {
+  const fitter = createHeadFitter(PAGE)
+  // The look and wrapped card text change the type under every card at once.
+  new MutationObserver(() => fitter.pageChanged()).observe(document.documentElement, {
     attributes: true,
     attributeFilter: ['data-look', 'data-card-text'],
   })
-  document.fonts?.addEventListener?.('loadingdone', all)
+  page = fitter
+  return fitter
 }
 
-/** Fits the head in `ref` to its name; true while the name is cut even so (its tooltip names it). */
-export function useHeadFit(ref: RefObject<HTMLElement | null>): boolean {
+/**
+ * Fits the head the name in `ref` stands in (its parent, the row) to that name; true while the
+ * name is cut even so (its tooltip names it). `fitter`: the page's (a test's stand-in).
+ */
+export function useHeadFit(
+  ref: RefObject<HTMLElement | null>,
+  fitter: HeadFitter<HTMLElement> | null = pageFitter(),
+): boolean {
   const [cut, setCut] = useState(false)
-  const seen = useRef('')
-  const measure = (row: HTMLElement, force: boolean) => {
-    const width = row.getBoundingClientRect().width
-    // The words and the width: a render that changes neither (the board's clock) measures nothing.
-    const key = `${width} ${row.childElementCount} ${row.textContent}`
-    if (!width || (!force && key === seen.current)) return
-    seen.current = key
-    setCut(fitHead(row))
-  }
   useLayoutEffect(() => {
-    if (ref.current) measure(ref.current, false)
+    const row = ref.current?.parentElement
+    if (!row || !fitter) return
+    fitter.add(row, setCut)
+    return () => fitter.remove(row)
+  }, [ref, fitter])
+  // Every render: what styles or fills the row may have changed (the fitter compares).
+  useLayoutEffect(() => {
+    const row = ref.current?.parentElement
+    if (row) fitter?.changed(row)
   })
-  // biome-ignore lint/correctness/useExhaustiveDependencies: measure reads only the row and refs
-  useLayoutEffect(() => {
-    const row = ref.current
-    if (!row || typeof ResizeObserver === 'undefined') return
-    // Before the frame is painted, so a resize never shows the old steps at the new width.
-    const watch = new ResizeObserver(() => flushSync(() => measure(row, false)))
-    watch.observe(row)
-    const again = () => measure(row, true)
-    watchPage()
-    pageWatchers.add(again)
-    return () => {
-      watch.disconnect()
-      pageWatchers.delete(again)
-    }
-  }, [ref])
   return cut
 }

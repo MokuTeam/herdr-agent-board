@@ -66,8 +66,9 @@
 .card .card-top > .profile-tag { flex: none; max-width: none; }
 .card .card-top > .card-status { max-width: none; }
 .card-top[data-give~="status"] > .card-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-.card-top[data-give~="profile"] > .profile-tag { display: flex; align-items: center; justify-content: center; min-width: 18px; padding-inline: 5px; font-size: 0; line-height: 0; }
-.card-top[data-give~="profile"] > .profile-tag::before { content: attr(data-mark); content: attr(data-mark) / ""; font-size: 11px; line-height: 16px; }
+.card-top[data-give~="profile"] > .profile-tag { display: flex; align-items: center; justify-content: center; min-width: 18px; padding-inline: 5px; }
+.card-top[data-give~="profile"] > .profile-tag > .tag-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.card-top[data-give~="profile"] > .profile-tag::before { content: attr(data-mark); content: attr(data-mark) / ""; }
 .card-top[data-give~="alarm"] > .alarm { padding: 0; background: none; }
 .card-top[data-give~="alarm"] > .alarm > span { display: none; }
 .card-top > .name.split { display: flex; }

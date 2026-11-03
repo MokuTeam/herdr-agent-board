@@ -3,7 +3,15 @@
 // Motion and dragging are the board's (hooks/useFlip.ts, hooks/useCardDrag.ts); the card only says
 // what it is. One asleep in "Waiting" folds down to its name, what it waits for and its time, and
 // unfolds in place while pointed at, as the board's Settings say (hooks/useFold.ts, styles/fold.css).
-import { type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, useRef } from 'react'
+import {
+  type FocusEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+  type Ref,
+  useRef,
+} from 'react'
 import { foldModeOf } from '../../../src/core/fold-mode.ts'
 import type { Item, LaunchView, ToolCall } from '../../../src/core/types.ts'
 import { useFold } from '../hooks/useFold.ts'
@@ -150,17 +158,14 @@ function CardTop({ item }: { item: Item }) {
   const age = cardAge(item, now, t)
   const renamed = item.name !== item.autoName && !!item.autoName
   const was = renamed ? t('rename.was', { name: item.autoName }) : undefined
-  // The name wins the row: the rest gives way first (useHeadFit).
-  const top = useRef<HTMLDivElement>(null)
-  const cut = useHeadFit(top)
   return (
-    <div ref={top} className="card-top">
+    <div className="card-top">
       {item.sleeping ? (
         <MoonGlyph />
       ) : (
         <span className={`dot ${item.column}`} style={{ '--c': COLUMN_COLORS[item.column] }} />
       )}
-      <CardName name={item.name} cut={cut} was={was} />
+      <CardName name={item.name} was={was} />
       {/* A favorite: a quiet star by the name. */}
       {item.favorite && (
         <span className="favorite" title={t('card.favorite')}>
@@ -188,23 +193,49 @@ function CardTop({ item }: { item: Item }) {
 }
 
 /**
+ * A card's name, which wins its row: the rest of the row gives way first (useHeadFit). Whether it
+ * is cut even so is the name's alone, so a change of it draws the name again, not the row.
+ */
+function CardName({ name, was }: { name: string; was: string | undefined }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const cut = useHeadFit(ref)
+  return <NameText ref={ref} name={name} cut={cut} was={was} />
+}
+
+/**
  * A card's name, one text as before while it shows whole. Cut even so (`cut`), it is whole in its
  * tooltip, and one whose end tells it apart is drawn in two parts, so the cut falls before that
- * end (models/card-head.ts nameParts). `was`: the name the session had before a rename.
+ * end (models/card-head.ts nameParts). The two parts are what shows; the name is read, found and
+ * copied whole, from a copy of it out of sight. `was`: the name the session had before a rename.
  */
-export function CardName({ name, cut, was }: { name: string; cut: boolean; was: string | undefined }) {
+export function NameText({
+  ref,
+  name,
+  cut,
+  was,
+}: {
+  ref?: Ref<HTMLSpanElement>
+  name: string
+  cut: boolean
+  was: string | undefined
+}) {
   const parts = cut ? nameParts(name) : null
   const title = cut ? [name, was].filter(Boolean).join('\n') : was
   if (!parts)
     return (
-      <span className="name" title={title}>
+      <span ref={ref} className="name" title={title}>
         {name}
       </span>
     )
   return (
-    <span className="name split" title={title}>
-      <span className="name-head">{parts.head}</span>
-      <span className="name-tail">{parts.tail}</span>
+    <span ref={ref} className="name split" title={title}>
+      <span className="sr-only">{name}</span>
+      <span className="name-head" aria-hidden="true">
+        {parts.head}
+      </span>
+      <span className="name-tail" aria-hidden="true">
+        {parts.tail}
+      </span>
     </span>
   )
 }
