@@ -12,8 +12,11 @@ import {
   pinMenu,
   pinnedCount,
   pinPicked,
+  proposedCount,
+  proposedGroups,
   quoteDraft,
   todoGroups,
+  todoLanes,
 } from '../../web/src/models/todos.ts'
 
 const t = translator('en')
@@ -83,4 +86,50 @@ test('"To chat" quotes the point above what the box held; ages are short', () =>
   assert.equal(ageText(0, 5 * 60_000), '5m')
   assert.equal(ageText(0, 3 * 3600_000), '3h')
   assert.equal(ageText(0, 72 * 3600_000), '3d')
+})
+
+// #319: lanes as the board orders them, sessions inside; what agents proposed done above, apart.
+const inLane = (key: string, category: string, todos: Todo[]): Item => ({ key, name: key, category, todos }) as Item
+
+test("#319 lanes in the board's order (an unknown one last), sessions oldest point first; proposed ones apart", () => {
+  const items = [
+    inLane('a1', 'acme', [todo({ id: '1', at: 30 })]),
+    inLane('o1', 'ops', [todo({ id: '2', at: 5 }), todo({ id: '3', at: 1, proposed: { at: 40, why: 'sent' } })]),
+    inLane('a2', 'acme', [todo({ id: '4', at: 10 })]),
+    inLane('z1', 'zeta', [todo({ id: '5', at: 2 })]),
+    inLane('o2', 'ops', [
+      todo({ id: '6', at: 3, proposed: { at: 20 } }),
+      todo({ id: '7', at: 4, done: 9, doneBy: 'user' }),
+    ]),
+  ]
+  const cats = [
+    { id: 'ops', title: 'Ops', color: '#f00' },
+    { id: 'acme', title: 'Acme', color: '#0f0' },
+  ]
+  assert.deepEqual(
+    todoLanes(items, cats, 'mine').map(l => [l.id, l.title, l.groups.map(g => [g.item.key, g.open.map(x => x.id)])]),
+    [
+      ['ops', 'Ops', [['o1', ['2']]]],
+      [
+        'acme',
+        'Acme',
+        [
+          ['a2', ['4']],
+          ['a1', ['1']],
+        ],
+      ],
+      ['zeta', 'zeta', [['z1', ['5']]]],
+    ],
+  )
+  assert.deepEqual(
+    proposedGroups(items).map(g => [g.item.key, g.open.map(x => x.id)]),
+    [
+      ['o2', ['6']],
+      ['o1', ['3']],
+    ],
+  )
+  // The count: the user's open points not proposed; the proposed ones apart.
+  assert.equal(openMine(items), 4)
+  assert.equal(proposedCount(items), 2)
+  assert.deepEqual(todoLanes(items, cats, 'agents'), [])
 })

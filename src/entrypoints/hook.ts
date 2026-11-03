@@ -33,7 +33,7 @@ import { heldQuestionOf } from '../core/held-question.ts'
 import { isNotice } from '../core/notices.ts'
 import { type Profile, profileReport } from '../core/profiles.ts'
 import { secretsConfig, usableSinks } from '../core/secrets.ts'
-import { todosConfig } from '../core/todos.ts'
+import { todosConfig, todosNews } from '../core/todos.ts'
 import type { Config } from '../core/types.ts'
 
 const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
@@ -150,6 +150,18 @@ async function main(): Promise<void> {
     if (news) {
       context = context ? `${context}\n${news.line}` : news.line
       patch.presenceSeen = news.seen
+    }
+  }
+  // Its open tasks changed since it was told (#319): their keys, so it closes what it sees done; on
+  // a start (a resume, a compaction) again, as its context lost them. Only a card with tasks, or
+  // one told of some before, reads config.json for it.
+  const start = event === 'SessionStart'
+  if ((start || event === 'UserPromptSubmit') && (card?.todos !== undefined || card?.todosSeen !== undefined)) {
+    cfg ??= loadConfig()
+    const tasks = todosConfig(cfg.todos)?.agents ? todosNews(start && card ? { ...card, todosSeen: '' } : card) : null
+    if (tasks) {
+      if (tasks.line) context = context ? `${context}\n${tasks.line}` : tasks.line
+      patch.todosSeen = tasks.seen
     }
   }
   if (Object.keys(patch).length) writeCard(sid, patch)

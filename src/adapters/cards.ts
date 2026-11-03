@@ -51,7 +51,8 @@ export function changeTodos(
   updateJson(
     file(key),
     (saved: Card | null): Card | undefined => {
-      const r = applyTodo(todosOf(saved?.todos), op, now, () => crypto.randomUUID().slice(0, 8))
+      const seq = Number(saved?.todoSeq) || 0
+      const r = applyTodo(todosOf(saved?.todos), op, now, () => crypto.randomUUID().slice(0, 8), seq)
       if ('error' in r) {
         result = { ok: false, error: r.error }
         return undefined
@@ -60,6 +61,8 @@ export function changeTodos(
       const card: Card = { ...(saved ?? { key }), updatedAt: now }
       if (r.list.length) card.todos = r.list
       else delete card.todos
+      // The last number given (#319), so a number never comes back once its point is gone.
+      if (r.seq) card.todoSeq = r.seq
       return card
     },
     isCard,
