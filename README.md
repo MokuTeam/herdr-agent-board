@@ -1924,6 +1924,9 @@ Settings → Tasks turns it on, or `todos` in config.json:
 - **Pins and agents** (`"todos": true`): also, Claude sessions are told in their brief to record
   what they hand you to do, and (with `--mine`) a promise of their own they defer, with
   `board todo add`. Nothing else: not their working steps, not questions (those are `board ask`).
+  When an agent sees one of your points done, it says so on the board and you confirm (below).
+- **Pins and agents, agents close them** (`"todos": { "autoClose": true }`): the same, but an agent
+  closes your point itself when it sees it done, saying why; you can open it again.
 - **Off** (no `todos`): no button, no 📌, no brief line. The points stay on the cards and show
   again once it is back on.
 
@@ -1933,19 +1936,37 @@ list. A point picked is yours to do, checked, and the menu stays open for the ne
 it is unpinned. "As the agent's promise" pins it as the agent's instead. 📌 stays lit, with how
 many of its points are pinned.
 
-**The panel.** "Tasks" in the toolbar, with the count of your open points, opens the list across
-sessions, grouped by session, the one with the oldest open point first. Mine, Agents' or All. Each
-point: its text, its age, Open (the session's sheet), To chat (the point quoted at the top of the
-session's message box, the sheet open) and Done. Done points fold under the list, to open again
-or remove; they go after 14 days, or past the 30 newest on a card.
+**Keys (#319).** Each point has a number on its card, counted up and never given twice (`todoSeq`
+on the card), and a key made of its lane, its session's name and that number: `acme-ticket-12-3`
+(the lane once when the name starts with it: `genetix-14601-2`). The panel shows it, `board todo
+add` prints it, and agents name points by it; `board todo done` takes the key, the number or the
+old id. Points made before numbers get theirs in the order they were made, the same on the board
+and at the next change.
 
-An agent closes only its own promises (`board todo done <id>`); the user closes any. The points
-live on the cards (`todos`), changed under the card's lock, so the board and `board todo` writing
-at once never lose each other's change. Only sessions on the board count: an archived session's
-points come back with it.
+**What a point is about.** `board todo add --ref <ticket, file or link> --why "<what it waits on>"`:
+the panel shows the ref (a link opens in a new tab) and the reason under the point's text.
+
+**The panel.** "Tasks" in the toolbar, with the count of your open points (and, apart, how many
+agents say are done), opens the list across sessions. First **Agents say these are done**: each
+with what the agent said settled it, Close and Keep open, and Close all for a session with more
+than one. Then the open points by lane, in the board's order, and by session, with its state
+(working, waiting...), the one with the oldest open point first. Mine, Agents' or All. Each point:
+its key, its text, its ref and reason, its age, Open (the session's sheet), To chat (the point
+quoted at the top of the session's message box, the sheet open) and Done. Done points fold under
+the list with who closed them and why, to open again or remove; they go after 14 days, or past
+the 30 newest on a card.
+
+**Closing.** An agent closes its own promises (`board todo done <key> --why "<what settled it>"`).
+On one of yours the same command proposes it done: it stays open, under "Agents say these are
+done", until you close it or keep it open; with `autoClose` it is closed at once. You close any.
+An agent hears of its session's open points, with their keys, on its next prompt after they
+change (added, closed, proposed), and again when it starts or resumes (its context lost them): one
+line from the hook, read only for a card that has points. The points live on the cards (`todos`),
+changed under the card's lock, so the board and `board todo` writing at once never lose each
+other's change. Only sessions on the board count: an archived session's points come back with it.
 
 Not yet (see #202): a jump to the message a point came from (1b), a badge on the card, the open
-points in the sheet, the agent told of a point the user pinned as its promise.
+points in the sheet.
 
 ## Secrets
 
@@ -3269,9 +3290,10 @@ board presence [here|away|call]
                           whether the user is at the computer, away or on a call (where news
                           goes: also Telegram while away); a state sets it; see Presence
 board away [on|off]       the same switch: away (on), back at the computer (off)
-board todo add [--mine] "<text>" | done <id> | list
+board todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | done <key> [--why "<w>"] | list
                           tasks (with "todos": true): what you hand the user to do, or (--mine) a
-                          promise of yours you defer; done closes your own; see Tasks
+                          promise of yours you defer, printed with its key; done closes your own,
+                          and on the user's tells them it is done (they confirm); see Tasks
 board doctor              what is set up on this computer, and what is missing
 board resume <session id> [--profile <id>]
                           resumes that session here, in its own Claude profile (what herdr types

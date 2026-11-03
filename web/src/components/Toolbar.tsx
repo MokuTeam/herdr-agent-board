@@ -19,7 +19,7 @@ import type { SettingsMenu } from '../hooks/useSettingsMenu.ts'
 import type { SetupNoteState } from '../hooks/useSetupNote.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { pickedProfile, profileOptions } from '../models/profiles.ts'
-import { openMine } from '../models/todos.ts'
+import { openMine, proposedCount } from '../models/todos.ts'
 import { columnHeads, documentTitle, laneOptions, scheduleBadge, summaryParts, summaryText } from '../models/toolbar.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { BackupNote } from './BackupNote.tsx'
@@ -176,6 +176,11 @@ export function Toolbar({
                 <TasksIcon />
                 <span>{t('todo.open')}</span>
                 <span className="n">{openMine(data.items) || ''}</span>
+                {proposedCount(data.items) > 0 && (
+                  <span className="n confirm" title={t('todo.toConfirmHint')}>
+                    {t('todo.toConfirm', { n: proposedCount(data.items) })}
+                  </span>
+                )}
               </button>
             )}
             {data?.time && (

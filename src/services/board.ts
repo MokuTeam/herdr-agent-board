@@ -22,7 +22,7 @@ import { relate } from '../core/links.ts'
 import { isPiItem, isPiSessionFile, PI_AGENT, piSessionId } from '../core/pi.ts'
 import { sessionProfile } from '../core/profiles.ts'
 import { pendingOf, requestsOf, type SecretView, secretsConfig, secretViews } from '../core/secrets.ts'
-import { type Todo, todosOf } from '../core/todos.ts'
+import { numberTodos, type Todo, todosOf } from '../core/todos.ts'
 import type { AgentStatus, Attention, Card, Config, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
 import { piSleeperPane } from '../core/wake/pi.ts'
 import { archivedFiles, getArchived, hides, isArchived, settleReturned } from './archive.ts'
@@ -49,9 +49,10 @@ const secretsField = (cfg: Config, card: Card): { secrets?: SecretView[] } => {
   }
 }
 
+// Numbered as the next change will write them (#319), points made before numbers too.
 const todosField = (card: Card): { todos?: Todo[] } => {
   const todos = todosOf(card.todos)
-  return todos.length ? { todos } : {}
+  return todos.length ? { todos: numberTodos(todos, Number(card.todoSeq) || 0).list } : {}
 }
 
 const formerPanes = (card: Card): { formerPanes?: string[] } => {
