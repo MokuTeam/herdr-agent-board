@@ -205,6 +205,7 @@ async function wakeHereIn(deps: Deps, item: Item, freed: FreedPlace | null): Pro
           cwd: item.cwd,
           label: item.name,
           ...(freed.tabLabel !== undefined && { tabLabel: freed.tabLabel }),
+          ...(freed.worktree && { worktree: freed.worktree }),
         },
         snap,
       )
