@@ -30,6 +30,7 @@
 /* ---------------------------------------------------------------- the body */
 :root[data-card-text="wrap"] .card .what,
 :root[data-card-text="wrap"] .card .said,
+:root[data-card-text="wrap"] .card .task,
 :root[data-card-text="wrap"] .card .ask:not(.qa-card),
 :root[data-card-text="wrap"] .card .qa-card-q { -webkit-line-clamp: 3; overflow-wrap: anywhere; }
 :root[data-card-text="wrap"] .card .qa-card-opts { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: normal; overflow-wrap: anywhere; }

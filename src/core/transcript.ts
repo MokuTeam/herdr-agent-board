@@ -176,7 +176,40 @@ export function trailingQuestion(text: unknown): string {
   return clip(q.replace(/\s+/g, ' ').trim(), 300)
 }
 
-/** True once the tail holds everything a card needs; the reader widens its window until then. */
+/**
+ * A recap's text for a card (#321): Claude Code ends a session's first recaps with how to turn them
+ * off, which is not about the session.
+ */
+const recapText = (content: unknown): string =>
+  clip(
+    str(content)
+      .replace(/\s*\(disable recaps in \/config\)\s*$/, '')
+      .trim(),
+    700,
+  )
+
+/**
+ * Whether `line` is one of Claude Code's recaps (#321), written a few minutes after a turn while
+ * the terminal is away; the first one met, the newest, goes into `info`. A fork's copy of its
+ * source's recap (`forkedFrom`) is about the other session.
+ */
+function isRecap(line: string | undefined, info: TranscriptInfo): boolean {
+  if (!line?.includes('"away_summary"')) return false
+  const o = parse(line)
+  if (o?.type !== 'system' || o.subtype !== 'away_summary' || o.isSidechain) return false
+  const recap = info.recap === undefined && !o.forkedFrom ? recapText(o.content) : ''
+  if (recap) {
+    info.recap = recap
+    const at = Date.parse(str(o.timestamp))
+    if (at) info.recapAt = at
+  }
+  return true
+}
+
+/**
+ * True once the tail holds everything a card needs; the reader widens its window until then. Not
+ * a recap: many sessions never get one.
+ */
 export const tailComplete = (info: TranscriptInfo): boolean =>
   !!(info.title && info.prompt && info.lastText && info.tool)
 
@@ -189,6 +222,7 @@ export const tailComplete = (info: TranscriptInfo): boolean =>
  *             result yet, questions = an AskUserQuestion call's questions
  *   question  the agent's last words end in a question; replied: the user wrote after them
  *   lastAt    the time of the newest user or assistant line
+ *   recap     Claude Code's newest recap of the session (away_summary), recapAt its time
  *   context   the tokens the last request carried, cached parts included; after a compaction
  *             with no request since, Claude Code's own count of what is left (postTokens)
  */
@@ -196,7 +230,8 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
   const info: TranscriptInfo = { title: '', prompt: '', lastText: '', question: '', replied: false, tool: null }
   const results = new Set<string>() // tool_use ids that already have a result (seen later in the file)
   let compacted = false // a compaction came after every request still to be read: they say nothing of the context now
-  for (let i = lines.length - 1; i >= 0 && !tailComplete(info); i--) {
+  let i = lines.length - 1
+  for (; i >= 0 && !tailComplete(info); i--) {
     const line = lines[i]
     if (!line) continue
     // A /compact (or an auto one) put a summary in place of the conversation. Until the next
@@ -212,6 +247,7 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
         continue
       }
     }
+    if (isRecap(line, info)) continue
     if (line.includes('"type":"ai-title"')) {
       if (!info.title) info.title = str(parse(line)?.aiTitle)
       continue
@@ -285,6 +321,8 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
       }
     }
   }
+  // The window read for the rest can hold an older recap still: looked for without reading more.
+  for (; i >= 0 && info.recap === undefined; i--) isRecap(lines[i], info)
   return info
 }
 

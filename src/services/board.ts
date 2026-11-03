@@ -305,12 +305,17 @@ export async function collect(
       category: card.category || guess || 'other',
       categorySet: !!card.category,
       doing: card.doing ?? '',
+      // A card written before doingAt (#321): its last change, the latest the doing can be from.
+      doingAt: card.doing ? (card.doingAt ?? card.updatedAt ?? null) : null,
       wait: card.wait ?? '',
       waitSince: card.waitSince ?? null,
       result: card.result ?? '',
       title: info.title ?? '',
       prompt: info.prompt ?? '',
       lastText: info.lastText ?? '',
+      lastAt: info.lastAt ?? null,
+      recap: info.recap ?? '',
+      recapAt: info.recapAt ?? null,
       ...contextOf(codex ? null : base.session, info, home?.root ?? null), // Codex has no Claude status line file.
       tool,
       attention,

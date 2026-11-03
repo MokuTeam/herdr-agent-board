@@ -217,7 +217,10 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   mode (a light page for a dark theme) it keeps One Light / One Dark.
 - A card says what the session works on (its own `board doing`, else Claude's title of the
   session, else "You: <your last request>"), its last words, the tool it runs now, the question
-  it is stuck on, what it waits for.
+  it is stuck on, what it waits for. A Claude Code recap of the session (written while the
+  terminal is away) that is newer than `board doing` takes the line, with how long ago it was
+  written before it and the task under it; once the session has gone on half an hour past it, it
+  is drawn in the dimmer shade.
 - Drag a card to another lane to change its category, or to another column to put it there by
   hand (also the status pill in the sheet's head). See [Moving a card by hand](#moving-a-card-by-hand).
 - Click a card: a sheet with a compact head (two pills, where the card shows and its lane, each

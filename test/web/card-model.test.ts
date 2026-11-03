@@ -10,12 +10,14 @@ import {
   askLine,
   cardAge,
   cardWords,
+  clipWords,
   compact,
   dismissable,
   folds,
   inTurn,
   plain,
   questionLine,
+  RECAP_STALE_MS,
 } from '../../web/src/models/card.ts'
 import { item } from './support/board.tsx'
 import { OLD_WHEN, oldCode, oldFunction, oldModule } from './support/old-app.ts'
@@ -112,6 +114,94 @@ describe('cardWords', () => {
     expect(cardWords(item({ key: 'a', column: 'me', lastText: 'L' })).said).toBe('')
     expect(cardWords(item({ key: 'a', column: 'done', doing: 'Same', result: 'Same' })).said).toBe('')
     expect(cardWords(item({ key: 'a', column: 'done', prompt: 'Same', result: 'Same' })).said).toBe('')
+  })
+})
+
+describe('cardWords with a recap (#321)', () => {
+  const at = NOW - 60 * MIN
+  test('a recap newer than doing is the line; doing goes under it as the task', () => {
+    const it = item({
+      key: 'a',
+      doing: 'Fix **login**',
+      doingAt: at,
+      recap: 'Login *fixed*; next: tests.',
+      recapAt: at + MIN,
+    })
+    expect(cardWords(it)).toMatchObject({ own: '', asked: '', recap: 'Login fixed; next: tests.', task: 'Fix login' })
+  })
+
+  test('a recap older than doing, or of a doing whose time is not known, leaves the card as it was', () => {
+    const older = item({ key: 'a', doing: 'Fix login', doingAt: at + MIN, recap: 'Old recap.', recapAt: at })
+    expect(cardWords(older)).toMatchObject({ own: 'Fix login', recap: '', task: '' })
+    const unknown = item({ key: 'a', doing: 'Fix login', recap: 'Recap.', recapAt: at })
+    expect(cardWords(unknown)).toMatchObject({ own: 'Fix login', recap: '' })
+  })
+
+  test('with no doing the recap stands over the title and the last request', () => {
+    const it = item({ key: 'a', name: 'N', title: 'Claude title', prompt: 'p', recap: 'Recap.', recapAt: at })
+    expect(cardWords(it)).toMatchObject({ own: '', asked: '', recap: 'Recap.', task: '' })
+  })
+
+  test('no recap: the line of every agent is as before (Claude, Codex, pi)', () => {
+    for (const agent of ['claude', 'codex', 'pi']) {
+      const it = item({
+        key: 'a',
+        agent,
+        doing: 'D',
+        doingAt: at,
+        title: 'T',
+        prompt: 'p',
+        lastText: 'L',
+        column: 'work',
+      })
+      expect(cardWords(it)).toEqual({ own: 'D', asked: '', said: 'L', recap: '', task: '', stale: false })
+      const bare = item({ key: 'a', agent, name: 'N', prompt: 'do *it*', recap: '', recapAt: null })
+      expect(cardWords(bare)).toMatchObject({ own: '', asked: 'do it', recap: '' })
+    }
+  })
+
+  test('its last words show only when they came after the recap', () => {
+    const told = item({ key: 'a', column: 'idle', lastText: 'Done.', lastAt: at, recap: 'R', recapAt: at + MIN })
+    expect(cardWords(told).said).toBe('')
+    const later = item({ key: 'a', column: 'work', lastText: 'Now B.', lastAt: at + 2 * MIN, recap: 'R', recapAt: at })
+    expect(cardWords(later).said).toBe('Now B.')
+    expect(cardWords({ ...later, column: 'me' }).said).toBe('')
+  })
+
+  test('a result it was given stays under a newer recap; only its last words go', () => {
+    const it = item({
+      key: 'a',
+      column: 'done',
+      result: 'PR #12 merged',
+      lastText: 'L',
+      lastAt: at,
+      recap: 'R',
+      recapAt: at + MIN,
+    })
+    expect(cardWords(it).said).toBe('PR #12 merged')
+    expect(cardWords({ ...it, column: 'idle' }).said).toBe('PR #12 merged')
+    expect(cardWords({ ...it, result: '' }).said).toBe('')
+  })
+
+  test('a fork: a recap from before the fork is its source’s, not the line', () => {
+    const fork = { of: 'src', at: at + 10 * MIN }
+    expect(cardWords(item({ key: 'a', title: 'T', fork, recap: 'Source.', recapAt: at })).recap).toBe('')
+    expect(cardWords(item({ key: 'a', fork, recap: 'Own.', recapAt: at + 11 * MIN })).recap).toBe('Own.')
+  })
+
+  test('a recap the session went on long after reads as of then', () => {
+    const recap = { key: 'a', recap: 'R', recapAt: at }
+    expect(cardWords(item({ ...recap, lastAt: at + RECAP_STALE_MS })).stale).toBe(false)
+    expect(cardWords(item({ ...recap, lastAt: at + RECAP_STALE_MS + MIN })).stale).toBe(true)
+    expect(cardWords(item({ ...recap, lastAt: null })).stale).toBe(false)
+  })
+})
+
+describe('clipWords', () => {
+  test('cut after whole words, with "…", without the comma or stop before the cut', () => {
+    expect(clipWords('Fixed the card, next the tests', 3)).toBe('Fixed the card…')
+    expect(clipWords('  Карточки   из рекапов. Дальше', 3)).toBe('Карточки из рекапов…')
+    expect(clipWords('one two', 0)).toBe('…')
   })
 })
 
