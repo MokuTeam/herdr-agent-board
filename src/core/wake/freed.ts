@@ -29,10 +29,21 @@ export interface FreedPlace {
   workspaceLabel?: string
   /** Its tab's label, which the new tab gets. */
   tabLabel?: string
+  /**
+   * The linked worktree its workspace was opened for (`herdr worktree open`), when herdr said so:
+   * the workspace comes back linked to its repository, grouped under it in herdr's sidebar (#317).
+   */
+  worktree?: FreedWorktree
   /** Its Telegram topic then (core/wake/topics.ts keyFor), by which the router finds it. */
   topic: string
   /** When its pane was closed. */
   at: number
+}
+
+/** A linked worktree: its repository's main checkout and its own folder. */
+export interface FreedWorktree {
+  root: string
+  path: string
 }
 
 /** A pane as herdr's snapshot shows it, the fields read here. */
@@ -48,6 +59,7 @@ interface FreedPane {
 }
 
 export interface FreedSnapshot extends TopicSnapshot {
+  workspaces: (TopicSnapshot['workspaces'][number] & { worktree?: unknown })[]
   panes: FreedPane[]
   focused_pane_id?: string
 }
@@ -97,6 +109,7 @@ export function freePlan(snap: FreedSnapshot, pane: string, now: number, rules: 
       workspace: ws.workspace_id,
       ...(ws.label && { workspaceLabel: ws.label }),
       ...(tab.label && { tabLabel: tab.label }),
+      ...withWorktree(linkedWorktree(ws.worktree)),
       topic: keyFor(snap, pane, p.cwd ?? ''),
       at: now,
     },
@@ -190,6 +203,24 @@ const record = (v: unknown): Record<string, unknown> | null =>
 const time = (v: unknown): v is number => typeof v === 'number' && Math.abs(v) <= 8.64e15
 const filled = (v: unknown): v is string => typeof v === 'string' && v !== ''
 
+/**
+ * The linked worktree herdr says a workspace is for (its `worktree`, `is_linked_worktree`), or null:
+ * a plain workspace, or a repository's main checkout.
+ */
+function linkedWorktree(value: unknown): FreedWorktree | null {
+  const w = record(value)
+  if (w?.is_linked_worktree !== true || !filled(w.repo_root) || !filled(w.checkout_path)) return null
+  return { root: w.repo_root, path: w.checkout_path }
+}
+
+const withWorktree = (w: FreedWorktree | null): { worktree?: FreedWorktree } => (w ? { worktree: w } : {})
+
+/** A FreedWorktree as wake's session file has it; null for one that does not read as one. */
+function asWorktree(value: unknown): FreedWorktree | null {
+  const w = record(value)
+  return w && filled(w.root) && filled(w.path) ? { root: w.root, path: w.path } : null
+}
+
 /** A FreedPlace as wake's session file has it; null for one that does not read as one. */
 export function asFreedPlace(value: unknown): FreedPlace | null {
   const f = record(value)
@@ -199,6 +230,7 @@ export function asFreedPlace(value: unknown): FreedPlace | null {
     ...(filled(f.workspace) && { workspace: f.workspace }),
     ...(filled(f.workspaceLabel) && { workspaceLabel: f.workspaceLabel }),
     ...(filled(f.tabLabel) && { tabLabel: f.tabLabel }),
+    ...withWorktree(asWorktree(f.worktree)),
     topic: f.topic,
     at: f.at,
   }

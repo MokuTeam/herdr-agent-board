@@ -1554,7 +1554,15 @@ gets that line typed into its pane, after clearing what is at its prompt (Esc fo
 cmd, Ctrl+U for bash, zsh, fish and sh, by the shell herdr says runs there). Either way wake waits
 for Claude to come up (`wakeTimeoutSec`, 120), answering the development-channels confirmation if
 it asks; one that does not come up in its new tab sleeps on there, `💤 <name>`, for the next wake. So a session wakes in its own profile and its
-project folder, whatever the pane's shell has ([Claude profiles](#claude-profiles)). A Wake while
+project folder, whatever the pane's shell has ([Claude profiles](#claude-profiles)).
+
+A workspace that herdr opened for a linked git worktree (`herdr worktree open`: one checkout per
+ticket under `.worktrees`) goes when its only tab is given back. Its sleeper, when it ran in the
+worktree's own folder, comes back in that worktree's workspace again (`herdr worktree open`, under
+the label it had), so herdr's sidebar keeps it under its repository (#317); open already under
+another label: a new tab there. A plain workspace, a repository's main checkout, a session in a
+folder under the worktree, a worktree whose folder is gone, or herdr refusing it: a plain new
+workspace, as before. A Wake while
 wake is slow to answer types nothing (wake may be waking that very session): the board says so.
 
 **Its hooks.** The install puts two Claude Code hooks into each shown profile while wake is on
