@@ -244,7 +244,12 @@ function RecapLine({ item, words }: { item: Item; words: CardWords }) {
         className={classNames('what recap', words.stale && 'stale')}
         title={recap === words.recap ? undefined : words.recap}
       >
-        {age && <span className="recap-age">{age}</span>}
+        <span className="sr-only">{`${t('card.recap')}: `}</span>
+        {age && (
+          <span className="recap-age" title={t('card.recapAge')}>
+            {age}
+          </span>
+        )}
         {age && ' '}
         <span data-clip="">{recap}</span>
       </div>

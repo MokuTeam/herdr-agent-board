@@ -322,7 +322,8 @@ test('a recap newer than doing is the line, its age before it; doing goes under 
   const { react } = bothCards({ items: [it] }, 'r')
   expect(react).toContain(
     `<div class="recap what">
-    <span class="recap-age">12 min</span>
+    <span class="sr-only">Recap: </span>
+    <span class="recap-age" title="When Claude Code wrote this recap of the session">12 min</span>
     ' '
     <span data-clip="">Login fixed; next: the tests.</span>`,
   )

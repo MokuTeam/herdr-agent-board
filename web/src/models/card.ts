@@ -82,24 +82,30 @@ export const RECAP_STALE_MS = 30 * 60_000
 function recapLine(it: Item): string {
   const recap = plain(it.recap)
   if (!recap) return ''
+  // A fork's transcript starts with its source's lines: a recap from before the fork is the other's.
+  if (it.fork && (it.recapAt ?? 0) < it.fork.at) return ''
   if (!it.doing) return recap
   // A doing of unknown time stays the line, as before recaps.
   return it.recapAt && it.doingAt && it.recapAt > it.doingAt ? recap : ''
 }
 
+/** Its result when done or idle, else its last words; `spoken` stands for those. */
+const saidOf = (it: Item, spoken = it.lastText): string =>
+  plain(it.column === 'done' || it.column === 'idle' ? it.result || spoken : spoken)
+
 export function cardWords(it: Item): CardWords {
   const recap = recapLine(it)
-  const said = plain(it.column === 'done' || it.column === 'idle' ? it.result || it.lastText : it.lastText)
   if (recap) {
     const task = plain(it.doing)
     const lastAt = it.lastAt ?? 0
     const recapAt = it.recapAt ?? 0
-    // Written after its last words, the recap tells them already.
+    // Written after its last words, the recap tells them already; not a result it was given.
     const told = !!lastAt && !!recapAt && recapAt >= lastAt
+    const said = saidOf(it, told ? '' : it.lastText)
     return {
       own: '',
       asked: '',
-      said: it.column !== 'me' && !told && said && said !== recap && said !== task ? said : '',
+      said: it.column !== 'me' && said && said !== recap && said !== task ? said : '',
       recap,
       task,
       stale: !!lastAt && !!recapAt && lastAt - recapAt > RECAP_STALE_MS,
@@ -108,6 +114,7 @@ export function cardWords(it: Item): CardWords {
   const own = plain(it.doing || (it.title && it.title !== it.name ? it.title : ''))
   const asked = own ? '' : plain(it.prompt)
   const what = own || asked
+  const said = saidOf(it)
   return {
     own,
     asked,

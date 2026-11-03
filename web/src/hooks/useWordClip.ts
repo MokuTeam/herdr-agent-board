@@ -4,6 +4,7 @@
 // changes. Until it has measured (and where nothing can be measured) the text stays whole and the
 // element's own clamp holds it.
 import { type RefObject, useLayoutEffect, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { clipWords } from '../models/card.ts'
 
 /**
@@ -19,24 +20,37 @@ export function useWordClip(ref: RefObject<HTMLElement | null>, text: string): s
     let seen = ''
     const measure = () => {
       const width = el.getBoundingClientRect().width
-      const lines = Number.parseInt(getComputedStyle(el).webkitLineClamp, 10)
-      if (!width || !(lines > 0) || seen === `${width} ${lines}`) return
-      seen = `${width} ${lines}`
+      const style = getComputedStyle(el)
+      const lines = Number.parseInt(style.webkitLineClamp, 10)
+      // The type too: another look can change it at the same width and clamp.
+      const key = [width, lines, style.fontSize, style.lineHeight, style.fontFamily].join(' ')
+      if (!width || !(lines > 0) || seen === key) return
+      seen = key
       setFit({ text, words: wordsThatFit(el, text, lines, width) })
     }
     measure()
-    const watch = new ResizeObserver(measure)
+    // Before the frame is painted, so a resize never shows the old cut at the new width.
+    const watch = new ResizeObserver(() => flushSync(measure))
     watch.observe(el)
     return () => watch.disconnect()
   }, [ref, text])
   return fit.text === text && fit.words != null ? clipWords(text, fit.words) : text
 }
 
-/** How many words of `text` fit in `lines` lines of `el` at `width`; null when all of it does. */
-function wordsThatFit(el: HTMLElement, text: string, lines: number, width: number): number | null {
-  const copy = el.cloneNode(true)
+/**
+ * How many words of `text` fit in `lines` lines of `el` at `width`; null when all of it does.
+ * `styleOf`: the page's getComputedStyle (a test's stand-in).
+ */
+export function wordsThatFit(
+  el: HTMLElement,
+  text: string,
+  lines: number,
+  width: number,
+  styleOf: (el: Element) => { lineHeight: string } = getComputedStyle,
+): number | null {
+  const copy = el.cloneNode(true) as HTMLElement
   const parent = el.parentElement
-  if (!(copy instanceof HTMLElement) || !parent) return null
+  if (!parent) return null
   const slot = copy.querySelector('[data-clip]')
   if (!slot) return null
   copy.removeAttribute('id')
@@ -55,7 +69,7 @@ function wordsThatFit(el: HTMLElement, text: string, lines: number, width: numbe
   })
   parent.appendChild(copy)
   try {
-    const line = Number.parseFloat(getComputedStyle(copy).lineHeight)
+    const line = Number.parseFloat(styleOf(copy).lineHeight)
     if (!line) return null
     const room = line * lines + 1
     const fits = (s: string) => {

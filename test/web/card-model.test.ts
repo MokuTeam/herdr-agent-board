@@ -168,6 +168,27 @@ describe('cardWords with a recap (#321)', () => {
     expect(cardWords({ ...later, column: 'me' }).said).toBe('')
   })
 
+  test('a result it was given stays under a newer recap; only its last words go', () => {
+    const it = item({
+      key: 'a',
+      column: 'done',
+      result: 'PR #12 merged',
+      lastText: 'L',
+      lastAt: at,
+      recap: 'R',
+      recapAt: at + MIN,
+    })
+    expect(cardWords(it).said).toBe('PR #12 merged')
+    expect(cardWords({ ...it, column: 'idle' }).said).toBe('PR #12 merged')
+    expect(cardWords({ ...it, result: '' }).said).toBe('')
+  })
+
+  test('a fork: a recap from before the fork is its source’s, not the line', () => {
+    const fork = { of: 'src', at: at + 10 * MIN }
+    expect(cardWords(item({ key: 'a', title: 'T', fork, recap: 'Source.', recapAt: at })).recap).toBe('')
+    expect(cardWords(item({ key: 'a', fork, recap: 'Own.', recapAt: at + 11 * MIN })).recap).toBe('Own.')
+  })
+
   test('a recap the session went on long after reads as of then', () => {
     const recap = { key: 'a', recap: 'R', recapAt: at }
     expect(cardWords(item({ ...recap, lastAt: at + RECAP_STALE_MS })).stale).toBe(false)

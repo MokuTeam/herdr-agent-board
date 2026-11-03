@@ -6,7 +6,7 @@ import { type TodosConfig, todosBrief } from './todos.ts'
 import type { Card, Config } from './types.ts'
 
 // Bump when the brief says something new: every running session gets it again on its next prompt.
-export const BRIEF_VERSION = 5
+export const BRIEF_VERSION = 6
 
 type Env = Record<string, string | undefined>
 

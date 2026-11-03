@@ -547,3 +547,43 @@ test('transcript tail: no recap, none on the card; the tail is complete without 
     undefined,
   )
 })
+
+test('transcript tail: a recap older than all the rest is still found in the window read (#321)', () => {
+  const lines = [
+    recapLine('Imported the receipts; next: the 10/24 file.', '2026-11-03T10:00:00.000Z'),
+    line({ type: 'ai-title', aiTitle: 'Receipts' }),
+    line({ type: 'last-prompt', lastPrompt: 'go on' }),
+    line({ type: 'user', timestamp: '2026-11-03T10:05:00.000Z', message: { content: 'go on' } }),
+    line({
+      type: 'assistant',
+      timestamp: '2026-11-03T10:06:00.000Z',
+      message: {
+        content: [
+          { type: 'text', text: 'Reading it.' },
+          { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'C:/a/10-24.csv' } },
+        ],
+      },
+    }),
+  ]
+  const info = parseTranscriptTail(lines)
+  assert.equal(info.title, 'Receipts') // everything else came before the recap was reached
+  assert.equal(info.recap, 'Imported the receipts; next: the 10/24 file.')
+  assert.equal(info.recapAt, Date.parse('2026-11-03T10:00:00.000Z'))
+})
+
+test('transcript tail: no recap from a fork’s copied line, from content that is no text; one without a time has none (#321)', () => {
+  const forked = { forkedFrom: { sessionId: '5e550000-0000-4000-8000-000000000001' } }
+  assert.equal(parseTranscriptTail([recapLine('The source’s recap.', '2026-11-03T10:00:00Z', forked)]).recap, undefined)
+  const own = parseTranscriptTail([
+    recapLine('The source’s recap.', '2026-11-03T10:00:00Z', forked),
+    recapLine('The fork’s own.', '2026-11-03T11:00:00Z'),
+  ])
+  assert.equal(own.recap, 'The fork’s own.')
+  assert.equal(
+    parseTranscriptTail([line({ type: 'system', subtype: 'away_summary', content: ['x'] })]).recap,
+    undefined,
+  )
+  const untimed = parseTranscriptTail([recapLine('No time.', 'not a time')])
+  assert.equal(untimed.recap, 'No time.')
+  assert.equal('recapAt' in untimed, false)
+})
