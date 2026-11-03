@@ -7,6 +7,7 @@ import { type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent
 import { foldModeOf } from '../../../src/core/fold-mode.ts'
 import type { Item, LaunchView, ToolCall } from '../../../src/core/types.ts'
 import { useFold } from '../hooks/useFold.ts'
+import { useHeadFit } from '../hooks/useHeadFit.ts'
 import { useWordClip } from '../hooks/useWordClip.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { unseenResult } from '../models/attention.ts'
@@ -23,6 +24,7 @@ import {
   launchOf,
   questionLine,
 } from '../models/card.ts'
+import { nameParts } from '../models/card-head.ts'
 import { pendingQuestions } from '../models/question-model.ts'
 import { restartOf, restartView } from '../models/restart.ts'
 import { COLUMN_COLORS } from '../models/toolbar.ts'
@@ -147,16 +149,18 @@ function CardTop({ item }: { item: Item }) {
   const { ui, now } = useBoardContext()
   const age = cardAge(item, now, t)
   const renamed = item.name !== item.autoName && !!item.autoName
+  const was = renamed ? t('rename.was', { name: item.autoName }) : undefined
+  // The name wins the row: the rest gives way first (useHeadFit).
+  const top = useRef<HTMLDivElement>(null)
+  const cut = useHeadFit(top)
   return (
-    <div className="card-top">
+    <div ref={top} className="card-top">
       {item.sleeping ? (
         <MoonGlyph />
       ) : (
         <span className={`dot ${item.column}`} style={{ '--c': COLUMN_COLORS[item.column] }} />
       )}
-      <span className="name" title={renamed ? t('rename.was', { name: item.autoName }) : undefined}>
-        {item.name}
-      </span>
+      <CardName name={item.name} cut={cut} was={was} />
       {/* A favorite: a quiet star by the name. */}
       {item.favorite && (
         <span className="favorite" title={t('card.favorite')}>
@@ -164,7 +168,7 @@ function CardTop({ item }: { item: Item }) {
         </span>
       )}
       {/* Its profile, while the board shows more than one, or one hidden or not known. */}
-      <ProfileTag item={item} />
+      <ProfileTag item={item} mark />
       <span className="card-status" style={{ '--c': COLUMN_COLORS[item.column] }} title={t(`col.${item.column}`)}>
         {t(`col.${item.column}`)}
       </span>
@@ -180,6 +184,28 @@ function CardTop({ item }: { item: Item }) {
         {age.text}
       </span>
     </div>
+  )
+}
+
+/**
+ * A card's name, one text as before while it shows whole. Cut even so (`cut`), it is whole in its
+ * tooltip, and one whose end tells it apart is drawn in two parts, so the cut falls before that
+ * end (models/card-head.ts nameParts). `was`: the name the session had before a rename.
+ */
+export function CardName({ name, cut, was }: { name: string; cut: boolean; was: string | undefined }) {
+  const parts = cut ? nameParts(name) : null
+  const title = cut ? [name, was].filter(Boolean).join('\n') : was
+  if (!parts)
+    return (
+      <span className="name" title={title}>
+        {name}
+      </span>
+    )
+  return (
+    <span className="name split" title={title}>
+      <span className="name-head">{parts.head}</span>
+      <span className="name-tail">{parts.tail}</span>
+    </span>
   )
 }
 

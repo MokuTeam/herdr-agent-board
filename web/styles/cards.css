@@ -53,3 +53,24 @@
 .recap-age { color: var(--label-3); font-size: 11.5px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .card .task { margin-top: 3px; font-size: 12px; line-height: 1.35; color: var(--label-2); display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .card .task-label { color: var(--label-3); font-weight: 500; }
+
+/* The name wins the head (#324; models/card-head.ts, hooks/useHeadFit.ts): it is what tells one
+   card from another, so it is the last thing to give way. What stands beside it keeps its whole
+   width, never "D…" or "Waiting on oth…", until the name would be cut. Then, one step at a time
+   and only as far as the name needs (the row's data-give), the state word goes (the dot's color
+   and the column say it; a screen reader still reads it), the profile tag becomes its mark (its
+   color and initial; its tooltip as before) and the clock its bare glyph (the time in its
+   tooltip, as on a narrow card). The row stays one line: a second would make every such card
+   taller. Past all three the name is cut, whole in its tooltip; one whose end tells it apart
+   ("…-Templates") is cut in the middle and keeps that end. */
+.card .card-top > .profile-tag { flex: none; max-width: none; }
+.card .card-top > .card-status { max-width: none; }
+.card-top[data-give~="status"] > .card-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.card-top[data-give~="profile"] > .profile-tag { display: flex; align-items: center; justify-content: center; min-width: 18px; padding-inline: 5px; font-size: 0; line-height: 0; }
+.card-top[data-give~="profile"] > .profile-tag::before { content: attr(data-mark); content: attr(data-mark) / ""; font-size: 11px; line-height: 16px; }
+.card-top[data-give~="alarm"] > .alarm { padding: 0; background: none; }
+.card-top[data-give~="alarm"] > .alarm > span { display: none; }
+.card-top > .name.split { display: flex; }
+.card-top > .name.split::before { white-space: pre; }
+.name-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.name-tail { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; }

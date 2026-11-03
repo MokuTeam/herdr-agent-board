@@ -39,3 +39,57 @@ test('on a screen without hover a tap leaves the age, the clock and no hover but
   expect(css).toContain('.card { -webkit-tap-highlight-color: transparent; }')
   expect(sheet('../index.html')).toContain('<link rel="stylesheet" href="styles/cards.css">')
 })
+
+// The name wins the head (#324; web/src/models/card-head.ts, hooks/useHeadFit.ts).
+const rule = (css: string, selector: string): string => {
+  const bare = css.replace(/\/\*[\s\S]*?\*\//g, '')
+  for (const m of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+    if ((m[1] ?? '').split(',').some(s => s.trim() === selector)) return (m[2] ?? '').trim()
+  return ''
+}
+
+test('in a card’s head nothing beside the name is cut: the profile tag and the state word keep their width (#324)', () => {
+  const css = sheet('cards.css')
+  // Upstream's profile tag shrinks to "D…" (max-width 45%, 60% when wrong) and the state word ends
+  // at 92px; on a card neither shrinks, so only the name can, and the steps decide what gives way.
+  expect(rule(sheet('profiles.css'), '.profile-tag')).toContain('flex: 0 1 auto;')
+  expect(rule(css, '.card .card-top > .profile-tag')).toBe('flex: none; max-width: none;')
+  expect(rule(css, '.card .card-top > .card-status')).toBe('max-width: none;')
+  // Three classes: it outranks `.profile-tag.wrong` (two), whichever sheet comes later.
+  expect(rule(sheet('profiles.css'), '.profile-tag.wrong')).toContain('max-width: 60%;')
+})
+
+test('each step gives way as the model says: the state word unseen but read, the profile its mark, the clock its glyph (#324)', () => {
+  const css = sheet('cards.css')
+  const status = rule(css, '.card-top[data-give~="status"] > .card-status')
+  expect(status).toContain('position: absolute;')
+  expect(status).toContain('clip-path: inset(50%);')
+  expect(status).not.toContain('display: none')
+  expect(rule(css, '.card-top[data-give~="profile"] > .profile-tag')).toContain('font-size: 0;')
+  expect(rule(css, '.card-top[data-give~="profile"] > .profile-tag::before')).toContain(
+    'content: attr(data-mark) / "";',
+  )
+  expect(rule(css, '.card-top[data-give~="alarm"] > .alarm > span')).toBe('display: none;')
+  // In the Terminal style the mark is in its brackets, "[D]", a wrong one "[!]" rather than "![!]":
+  // these outrank the style's own tag rules (more classes and attributes).
+  const terminal = sheet('look-terminal.css')
+  expect(
+    rule(terminal, ':root[data-look="terminal"] .card-top[data-give~="profile"] > .profile-tag::before'),
+  ).toContain('content: "[" attr(data-mark) / "";')
+  expect(rule(terminal, ':root[data-look="terminal"] .card-top[data-give~="profile"] > .profile-tag::after')).toBe(
+    'font-size: 12px;',
+  )
+  expect(rule(terminal, ':root[data-look="terminal"] .profile-tag.wrong::before')).toContain('content: "![";')
+})
+
+test('a name cut in the middle keeps its end, and wraps as one text where card text wraps (#324)', () => {
+  const css = sheet('cards.css')
+  expect(rule(css, '.card-top > .name.split')).toBe('display: flex;')
+  expect(rule(css, '.name-head')).toBe('min-width: 0; overflow: hidden; text-overflow: ellipsis;')
+  expect(rule(css, '.name-tail')).toContain('flex: none;')
+  // The Terminal style's "› " before a selected name keeps its space in the two-part name.
+  expect(rule(css, '.card-top > .name.split::before')).toBe('white-space: pre;')
+  const wrap = sheet('card-wrap.css')
+  expect(rule(wrap, ':root[data-card-text="wrap"] .card .name.split')).toBe('display: block;')
+  expect(rule(wrap, ':root[data-card-text="wrap"] .card .name-tail')).toBe('display: inline;')
+})
