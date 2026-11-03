@@ -27,8 +27,11 @@ export function writeCard(key: string, patch: CardPatch): Card {
   return updateJson(
     file(key),
     (saved: Card | null): Card => {
+      const now = Date.now()
+      // When `doing` was written (#321), so a newer recap can stand over it; cleared with it.
+      const at = patch.doing === undefined ? {} : { doingAt: patch.doing ? now : '' }
       // The same order as { ...saved, ...patch, updatedAt }; '' values go just below.
-      const card: Card = Object.assign({ ...(saved ?? { key }) }, patch, { updatedAt: Date.now() })
+      const card: Card = Object.assign({ ...(saved ?? { key }) }, patch, at, { updatedAt: now })
       for (const [k, v] of Object.entries(card)) if (v === '' || v === null) delete card[k]
       return card
     },

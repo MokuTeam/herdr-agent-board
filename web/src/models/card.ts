@@ -67,14 +67,64 @@ export interface CardWords {
   asked: string
   /** What it said last (its result when done), when that is worth a line. */
   said: string
+  /** Claude Code's recap of the session, when it is newer than `doing` (#321): the card's line then. */
+  recap: string
+  /** The task `doing` names, under the recap that stands over it. */
+  task: string
+  /** The session went on long after its recap: it says how things stood then, not now. */
+  stale: boolean
+}
+
+/** How long a session may go on after its recap before the recap reads as of then (#321). */
+export const RECAP_STALE_MS = 30 * 60_000
+
+/** The recap, when it is the card's line: there is one and nothing newer was put in `doing`. */
+function recapLine(it: Item): string {
+  const recap = plain(it.recap)
+  if (!recap) return ''
+  if (!it.doing) return recap
+  // A doing of unknown time stays the line, as before recaps.
+  return it.recapAt && it.doingAt && it.recapAt > it.doingAt ? recap : ''
 }
 
 export function cardWords(it: Item): CardWords {
+  const recap = recapLine(it)
+  const said = plain(it.column === 'done' || it.column === 'idle' ? it.result || it.lastText : it.lastText)
+  if (recap) {
+    const task = plain(it.doing)
+    const lastAt = it.lastAt ?? 0
+    const recapAt = it.recapAt ?? 0
+    // Written after its last words, the recap tells them already.
+    const told = !!lastAt && !!recapAt && recapAt >= lastAt
+    return {
+      own: '',
+      asked: '',
+      said: it.column !== 'me' && !told && said && said !== recap && said !== task ? said : '',
+      recap,
+      task,
+      stale: !!lastAt && !!recapAt && lastAt - recapAt > RECAP_STALE_MS,
+    }
+  }
   const own = plain(it.doing || (it.title && it.title !== it.name ? it.title : ''))
   const asked = own ? '' : plain(it.prompt)
   const what = own || asked
-  const said = plain(it.column === 'done' || it.column === 'idle' ? it.result || it.lastText : it.lastText)
-  return { own, asked, said: it.column !== 'me' && said && said !== what ? said : '' }
+  return {
+    own,
+    asked,
+    said: it.column !== 'me' && said && said !== what ? said : '',
+    recap: '',
+    task: '',
+    stale: false,
+  }
+}
+
+/**
+ * `text` cut after its first `words` words, with "…" (#321): the card's long lines end at a word,
+ * where a clamp's ellipsis can cut into one. A comma or the like before the cut goes with it.
+ */
+export function clipWords(text: string, words: number): string {
+  const kept = text.trim().split(/\s+/).slice(0, Math.max(words, 0)).join(' ')
+  return `${kept.replace(/[\s,;:.\-\u2013\u2014]+$/u, '')}…`
 }
 
 /** Under "Needs me" the age says how long it has waited for you: since its question, else since its last activity. */

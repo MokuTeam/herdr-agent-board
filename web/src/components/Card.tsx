@@ -7,10 +7,13 @@ import { type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent
 import { foldModeOf } from '../../../src/core/fold-mode.ts'
 import type { Item, LaunchView, ToolCall } from '../../../src/core/types.ts'
 import { useFold } from '../hooks/useFold.ts'
+import { useWordClip } from '../hooks/useWordClip.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { unseenResult } from '../models/attention.ts'
 import {
+  ago,
   askLine,
+  type CardWords,
   cardAge,
   cardWords,
   compact,
@@ -185,7 +188,9 @@ function CardBody({ item, launch, folding }: { item: Item; launch: LaunchSlots |
   const t = useT()
   const words = cardWords(item)
   const started = launchOf(item)
-  const what = words.own ? (
+  const what = words.recap ? (
+    <RecapLine item={item} words={words} />
+  ) : words.own ? (
     <div className="what">{words.own}</div>
   ) : words.asked ? (
     <div className="what">
@@ -215,6 +220,39 @@ function CardBody({ item, launch, folding }: { item: Item; launch: LaunchSlots |
       {item.column === 'me' && started?.state !== 'trust' && <CardAsk item={item} />}
       {wait}
       <CardRest item={item} launch={launch} />
+    </>
+  )
+}
+
+/**
+ * Claude Code's recap as the card's line (#321): how long ago it was written, quietly before it;
+ * set back a shade once the session has gone on long after it. The task it stands over under it,
+ * in one line. Both end at a word.
+ */
+function RecapLine({ item, words }: { item: Item; words: CardWords }) {
+  const t = useT()
+  const { now } = useBoardContext()
+  const line = useRef<HTMLDivElement>(null)
+  const task = useRef<HTMLDivElement>(null)
+  const recap = useWordClip(line, words.recap)
+  const doing = useWordClip(task, words.task)
+  const age = ago(item.recapAt, now, t)
+  return (
+    <>
+      <div
+        ref={line}
+        className={classNames('what recap', words.stale && 'stale')}
+        title={recap === words.recap ? undefined : words.recap}
+      >
+        {age && <span className="recap-age">{age}</span>}
+        {age && ' '}
+        <span data-clip="">{recap}</span>
+      </div>
+      {words.task && (
+        <div ref={task} className="task" title={doing === words.task ? undefined : words.task}>
+          <span className="task-label">{t('row.task')}</span> <span data-clip="">{doing}</span>
+        </div>
+      )}
     </>
   )
 }

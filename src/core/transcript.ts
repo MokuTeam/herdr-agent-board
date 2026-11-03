@@ -176,7 +176,22 @@ export function trailingQuestion(text: unknown): string {
   return clip(q.replace(/\s+/g, ' ').trim(), 300)
 }
 
-/** True once the tail holds everything a card needs; the reader widens its window until then. */
+/**
+ * A recap's text for a card (#321): Claude Code ends a session's first recaps with how to turn them
+ * off, which is not about the session.
+ */
+const recapText = (content: unknown): string =>
+  clip(
+    str(content)
+      .replace(/\s*\(disable recaps in \/config\)\s*$/, '')
+      .trim(),
+    700,
+  )
+
+/**
+ * True once the tail holds everything a card needs; the reader widens its window until then. Not
+ * a recap: many sessions never get one.
+ */
 export const tailComplete = (info: TranscriptInfo): boolean =>
   !!(info.title && info.prompt && info.lastText && info.tool)
 
@@ -189,6 +204,7 @@ export const tailComplete = (info: TranscriptInfo): boolean =>
  *             result yet, questions = an AskUserQuestion call's questions
  *   question  the agent's last words end in a question; replied: the user wrote after them
  *   lastAt    the time of the newest user or assistant line
+ *   recap     Claude Code's newest recap of the session (away_summary), recapAt its time
  *   context   the tokens the last request carried, cached parts included; after a compaction
  *             with no request since, Claude Code's own count of what is left (postTokens)
  */
@@ -208,6 +224,19 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
           const left = rec(o.compactMetadata)?.postTokens
           if (typeof left === 'number' && left > 0) info.context = left
           compacted = true
+        }
+        continue
+      }
+    }
+    // Claude Code's recap, written a few minutes after a turn while the terminal is away (#321).
+    if (line.includes('"away_summary"')) {
+      const o = parse(line)
+      if (o?.type === 'system' && o.subtype === 'away_summary' && !o.isSidechain) {
+        const recap = info.recap === undefined ? recapText(o.content) : ''
+        if (recap) {
+          info.recap = recap
+          const at = Date.parse(str(o.timestamp))
+          if (at) info.recapAt = at
         }
         continue
       }

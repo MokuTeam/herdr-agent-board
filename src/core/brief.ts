@@ -57,7 +57,7 @@ export function brief(
     `[agent-board] The user watches every ${agent} session on a kanban board in herdr: lanes by category; columns working, needs the user, waiting on someone else, done, idle.`,
     "Working, done and terminal dialogs are detected automatically. Keep the rest of this session's card current with the `board` shell command (Bash or PowerShell; it prints one line; no need to tell the user):",
     `- board cat <id>: this session's lane. Now: ${now}. Known: ${known}. For a client that has none yet: board cat <new-id> "<Title>" adds it.`,
-    '- board doing "<3-8 words>": when you start a distinct task.',
+    '- board doing "<3-8 words>": when you start a distinct task, and again when you move to its next step.',
     '- board ask "<the question, short>": before ending a turn that needs the user\'s answer or decision (approve a draft, pick an option, give data). Puts the card under "needs the user"; cleared by itself when the user replies.',
     '- board wait "<who/what>": before ending a turn blocked on something outside this chat (client reply, CI, another session, a date). The card stays in "waiting" until you run doing or done.',
     '- board done ["<result>"]: task finished; clears doing, wait and ask.',
