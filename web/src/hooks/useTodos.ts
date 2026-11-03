@@ -1,5 +1,5 @@
 // Tasks on the page (#202, src/core/todos.ts): the 📌 menu under an agent's message, and the
-// panel's buttons (done, open again, remove, to chat). Every change is POST /api/todos; the board
+// panel's buttons (done, keep open, close all proposed, open again, remove, to chat). Every change is POST /api/todos; the board
 // that comes back after it shows it. The 📌 menu stays open for the next point, its checks as the
 // answers say.
 
@@ -19,6 +19,10 @@ export interface TodosUi {
   /** An agent message's points as a menu out of its 📌. */
   pin(key: string, turn: AssistantTurn, el: HTMLElement): void
   done(key: string, id: string): void
+  /** An agent's proposal turned down: the point stays open (#319). */
+  keep(key: string, id: string): void
+  /** Every point of a session an agent proposed done, closed (#319). */
+  closeAll(key: string, ids: readonly string[]): void
   reopen(key: string, id: string): void
   remove(key: string, id: string): void
   /** The point quoted in the session's message box, its sheet open. */
@@ -72,6 +76,10 @@ export function useTodos(menu: Pick<MenuEngine, 'open' | 'update'>): TodosUi {
       })
     },
     done: (key, id) => void post({ key, op: 'done', id }),
+    keep: (key, id) => void post({ key, op: 'keep', id }),
+    async closeAll(key, ids) {
+      for (const id of ids) if (!(await post({ key, op: 'done', id }))?.ok) return
+    },
     reopen: (key, id) => void post({ key, op: 'reopen', id }),
     remove: (key, id) => void post({ key, op: 'remove', id }),
     toChat(item, todo) {

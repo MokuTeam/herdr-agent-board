@@ -28,22 +28,28 @@ test('a change to the tasks keeps the rest of the card; the last one gone takes 
       owner: 'user',
       by: 'user',
       at: 10,
+      n: 1,
       anchor: { id: 'u', at: 1 },
     },
   ])
-  expect(changeTodos('s1', { op: 'done', id: a.ok ? (a.todo?.id ?? '') : '', by: 'agent' })).toEqual({
-    ok: false,
-    error: 'todo.err.notYours',
-  })
+  expect(card?.todoSeq).toBe(1)
+  // An agent's done on the user's point proposes it (#319): it stays open.
+  const proposed = changeTodos('s1', { op: 'done', id: a.ok ? (a.todo?.id ?? '') : '', by: 'agent', why: 'posted' }, 20)
+  expect(proposed.ok && proposed.todo).toMatchObject({ proposed: { at: 20, why: 'posted' } })
+  expect(readCard('s1')?.todos?.[0]?.done).toBeUndefined()
   expect(changeTodos('s1', { op: 'remove', id: a.ok ? (a.todo?.id ?? '') : '' }).ok).toBe(true)
   expect(readCard('s1')?.todos).toBeUndefined()
   expect(readCard('s1')?.category).toBe('work')
+  // The number is not given again once its point is gone.
+  const b = changeTodos('s1', { op: 'add', text: 'Next', owner: 'user', by: 'agent' }, 30)
+  expect(b.ok && b.todo?.n).toBe(2)
+  expect(readCard('s1')?.todoSeq).toBe(2)
   // A card that is not there is not made for a refused change.
   expect(changeTodos('nope', { op: 'remove', id: 'x' })).toEqual({ ok: false, error: 'todo.err.gone' })
   expect(readCard('nope')).toBeNull()
 })
 
-test('Settings → Tasks: off deletes the section, mine is agents false, agents is true', () => {
+test('Settings → Tasks: off deletes the section, mine is agents false, agents is true, auto closes too', () => {
   isolatedHome()
   useLanguage('en')
   const todos = () => JSON.parse(readFileSync(configFile(), 'utf8')).todos
@@ -51,6 +57,8 @@ test('Settings → Tasks: off deletes the section, mine is agents false, agents 
   expect(todos()).toEqual({ agents: false })
   expect(editTodos({ mode: 'agents' })).toEqual({ ok: true })
   expect(todos()).toBe(true)
+  expect(editTodos({ mode: 'auto' })).toEqual({ ok: true })
+  expect(todos()).toEqual({ autoClose: true })
   expect(editTodos({ mode: 'none' })).toEqual({ ok: true })
   expect(todos()).toBeUndefined()
   expect(editTodos({ mode: 'all' }).ok).toBe(false)
@@ -95,6 +103,15 @@ test('POST /api/todos: refused while off; a pin, done and a missing session whil
   expect((await post(routes, { key: 's1', op: 'done', id: 'nope' })).status).toBe(404)
   expect((await post(routes, { key: 's1', op: 'fly' })).status).toBe(400)
   expect(refreshed).toBe(2)
+  // #319: an agent proposed the user's point done; the user keeps it open, or closes it.
+  const mine = changeTodos('s1', { op: 'add', text: 'Post it', owner: 'user', by: 'agent' })
+  const mineId = mine.ok ? (mine.todo?.id ?? '') : ''
+  changeTodos('s1', { op: 'done', id: mineId, by: 'agent', why: 'posted' })
+  expect((await post(routes, { key: 's1', op: 'keep', id: mineId })).status).toBe(200)
+  expect(readCard('s1')?.todos?.find(x => x.id === mineId)).not.toHaveProperty('proposed')
+  changeTodos('s1', { op: 'done', id: mineId, by: 'agent', why: 'posted' })
+  expect((await post(routes, { key: 's1', op: 'done', id: mineId })).status).toBe(200)
+  expect(readCard('s1')?.todos?.find(x => x.id === mineId)).toMatchObject({ doneBy: 'user', doneWhy: 'posted' })
   // The setting goes through while off too.
   cfg.todos = undefined
   expect((await post(routes, { op: 'settings', mode: 'agents' })).status).toBe(200)

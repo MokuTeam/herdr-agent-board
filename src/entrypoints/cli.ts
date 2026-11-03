@@ -58,10 +58,13 @@
 //                            entrypoints/secret-cli.ts): the owner fills a form on the board, the
 //                            board writes the sink config.json defines; waits, then prints ok,
 //                            declined or expired. status <id> [--wait] | cancel <id> | list | sinks
-//   board todo add [--mine] "<text>" | done <id> | list   tasks (#202, core/todos.ts): what the
-//                            agent hands the user to do, or (--mine) a promise of its own it defers;
-//                            done closes its own; list shows this session's open ones. Only while
-//                            config.json turns tasks on with agents (`"todos": true`)
+//   board todo add [--mine] [--ref <r>] [--why <w>] "<text>" | done <key> [--why <w>] | list
+//                            tasks (#202, core/todos.ts): what the agent hands the user to do, or
+//                            (--mine) a promise of its own it defers, printed with its key
+//                            (<lane>-<session>-<n>, #319); done closes its own, and on the user's
+//                            proposes it done for them to confirm (closes it with autoClose); list
+//                            shows this session's open ones. Only while config.json turns tasks on
+//                            with agents (`"todos": true`)
 //   board resume <session id> [--profile <id>]   resumes that session here, in the profile its
 //                            card says it ran in (else the one named): what herdr types into a
 //                            restored pane for a session in another profile than the default one
@@ -131,7 +134,7 @@ import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '
 import { deskSteps, type RemoteView, remoteConfig } from '../core/remote.ts'
 import { parseResume, projectFolderName, resumeDir, resumePlan } from '../core/resume.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
-import { sortTodos, todosConfig, todosOf } from '../core/todos.ts'
+import { findTodo, numberTodos, sortTodos, type Todo, todoKey, todosConfig, todosOf } from '../core/todos.ts'
 import { boardPorts, publicOrigin, type TestStep, tunnelChecks, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
 import type { Item } from '../core/types.ts'
 import { wakeConfig } from '../core/wake/config.ts'
@@ -157,7 +160,7 @@ import { type MoveOutcome, moveMany } from '../services/move.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | doctor | presence [here | away | call] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | doctor | presence [here | away | call] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -445,41 +448,76 @@ function line(key: string, cwd: string): string {
 }
 
 /**
- * `board todo add [--mine] "<text>" | done <id> | list` (#202): the agent's side of the tasks, on
- * this session's card, under its lock (adapters/cards.ts changeTodos). Refused while tasks are off,
- * or on for the user's pins only.
+ * `board todo add [--mine] [--ref <r>] [--why <w>] "<text>" | done <key> [--why <w>] | list` (#202,
+ * #319): the agent's side of the tasks, on this session's card, under its lock (adapters/cards.ts
+ * changeTodos). A task is named by its key, its number or its id. Done on the user's own task
+ * proposes it done for the user to confirm, or closes it where config.json's `autoClose` says so.
+ * Refused while tasks are off, or on for the user's pins only.
  */
 function todo(key: string): void {
-  const usage = 'usage: board todo add [--mine] "<text>" | board todo done <id> | board todo list'
+  const usage =
+    'usage: board todo add [--mine] [--ref <ticket|file|link>] [--why "<what it waits on>"] "<text>" | board todo done <key> [--why "<what settled it>"] | board todo list'
   const conf = todosConfig(cfg.todos)
   if (!conf) throw new Error(t('todo.err.off'))
   if (!conf.agents) throw new Error(t('todo.err.agentsOff'))
   const [sub = 'list', ...args] = rest
+  // --ref and --why with their values, --mine; the rest is the text (add) or the task (done).
+  const flags: Record<string, string> = {}
+  const words: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? ''
+    if ((a === '--ref' || a === '--why') && i + 1 < args.length) flags[a.slice(2)] = args[++i] ?? ''
+    else if (a !== '--mine') words.push(a)
+  }
+  const card = () => readCard(key)
+  const listed = (): Todo[] => {
+    const c = card()
+    return numberTodos(todosOf(c?.todos), Number(c?.todoSeq) || 0).list
+  }
+  const keyOf = (x: Todo): string => todoKey(card() ?? {}, x)
   if (sub === 'list') {
-    const open = sortTodos(todosOf(readCard(key)?.todos)).filter(x => !x.done)
+    const open = sortTodos(listed()).filter(x => !x.done)
     if (!open.length) {
       console.log('no open tasks for this session')
       return
     }
-    for (const x of open) console.log(`${x.id} · ${x.owner === 'agent' ? 'yours' : "the user's"} · ${x.text}`)
+    for (const x of open) {
+      const whose = x.owner === 'agent' ? 'yours' : x.proposed ? "the user's, proposed done" : "the user's"
+      console.log([keyOf(x), whose, x.text, ...(x.ref ? [`ref ${x.ref}`] : [])].join(' · '))
+    }
     return
   }
   if (sub === 'add') {
     const mine = args.includes('--mine')
-    const words = args
-      .filter(a => a !== '--mine')
-      .join(' ')
-      .trim()
-    if (!words) throw new Error(usage)
-    const r = changeTodos(key, { op: 'add', text: words, owner: mine ? 'agent' : 'user', by: 'agent' })
+    const text = words.join(' ').trim()
+    if (!text) throw new Error(usage)
+    const r = changeTodos(key, {
+      op: 'add',
+      text,
+      owner: mine ? 'agent' : 'user',
+      by: 'agent',
+      ...(flags.ref !== undefined && { ref: flags.ref }),
+      ...(flags.why !== undefined && { why: flags.why }),
+    })
     if (!r.ok) throw new Error(t(r.error))
-    console.log(`ok · task ${r.todo?.id} · ${mine ? 'yours' : "the user's"}`)
+    console.log(`ok · task ${r.todo ? keyOf(r.todo) : ''} · ${mine ? 'yours' : "the user's"}`)
     return
   }
-  if (sub === 'done' && args[0]) {
-    const r = changeTodos(key, { op: 'done', id: args[0], by: 'agent' })
+  if (sub === 'done' && words[0]) {
+    const found = findTodo(listed(), words[0])
+    if (!found) throw new Error(t('todo.err.gone'))
+    const r = changeTodos(key, {
+      op: 'done',
+      id: found.id,
+      by: 'agent',
+      ...(flags.why !== undefined && { why: flags.why }),
+      ...(conf.autoClose && { auto: true }),
+    })
     if (!r.ok) throw new Error(t(r.error))
-    console.log(`ok · task ${args[0]} done`)
+    const x = r.todo ?? found
+    console.log(
+      x.done ? `ok · task ${keyOf(x)} done` : `ok · task ${keyOf(x)} proposed done: the user confirms it on the board`,
+    )
     return
   }
   throw new Error(usage)

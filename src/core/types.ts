@@ -59,6 +59,10 @@ export interface Card {
   presenceSeen?: number
   /** Its tasks (#202, core/todos.ts): the user's pins and the agent's `board todo`; absent when none. */
   todos?: Todo[]
+  /** The last task number given on this card (#319, core/todos.ts numberTodos). */
+  todoSeq?: number
+  /** The open tasks this session was last told of (#319, core/todos.ts todosNews). */
+  todosSeen?: string
   [extra: string]: unknown
 }
 

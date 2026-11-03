@@ -1,7 +1,9 @@
 // Tasks (#202, src/core/todos.ts) on the page: the 📌 menu under an agent's message (its points,
-// the ones pinned checked), the toolbar's count, and the panel's groups by session.
+// the ones pinned checked), the toolbar's count, and the panel's groups by lane and session; the
+// points agents proposed done first, for the user to confirm (#319).
 
-import { messagePoints, sortTodos, type Todo, type TodoOwner } from '../../../src/core/todos.ts'
+import type { BoardCategory } from '../../../src/core/payload.ts'
+import { isProposed, messagePoints, sortTodos, type Todo, type TodoOwner } from '../../../src/core/todos.ts'
 import type { AssistantTurn } from '../../../src/core/transcript.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 import type { MenuEntry } from './menu-model.ts'
@@ -77,9 +79,13 @@ export function pinPicked(id: string): { owner: TodoOwner; n: number } | null {
   return m ? { owner: m[1] as TodoOwner, n: Number(m[2]) } : null
 }
 
-/** The toolbar's count: the user's own open points, on sessions the board shows. */
+/** The toolbar's count: the user's own open points, on sessions the board shows; proposed ones apart. */
 export const openMine = (items: readonly Item[]): number =>
-  items.reduce((n, i) => n + (i.todos ?? []).filter(x => !x.done && x.owner === 'user').length, 0)
+  items.reduce((n, i) => n + (i.todos ?? []).filter(x => !x.done && x.owner === 'user' && !x.proposed).length, 0)
+
+/** The points agents proposed done, for the user to confirm (#319). */
+export const proposedCount = (items: readonly Item[]): number =>
+  items.reduce((n, i) => n + (i.todos ?? []).filter(isProposed).length, 0)
 
 export const fits = (x: Todo, filter: TodoFilter): boolean =>
   filter === 'all' || (filter === 'mine' ? x.owner === 'user' : x.owner === 'agent')
@@ -95,6 +101,49 @@ export function todoGroups(items: readonly Item[], filter: TodoFilter): TodoGrou
     .map(item => ({ item, open: sortTodos(item.todos ?? []).filter(x => !x.done && fits(x, filter)) }))
     .filter(g => g.open.length)
     .sort((a, b) => (a.open[0]?.at ?? 0) - (b.open[0]?.at ?? 0))
+}
+
+/** Sessions with points an agent proposed done (#319), the oldest proposal first. */
+export function proposedGroups(items: readonly Item[]): TodoGroup[] {
+  const first = (g: TodoGroup) => Math.min(...g.open.map(x => x.proposed?.at ?? x.at))
+  return items
+    .map(item => ({ item, open: sortTodos(item.todos ?? []).filter(isProposed) }))
+    .filter(g => g.open.length)
+    .sort((a, b) => first(a) - first(b))
+}
+
+/** A lane of the panel: its sessions' open points (proposed ones are above, apart). */
+export interface TodoLane {
+  id: string
+  title: string
+  color: string
+  groups: TodoGroup[]
+}
+
+/**
+ * The open points for the filter by lane, as the board orders its lanes (a lane it does not know
+ * after them), then by session, the one with the oldest point first (#319).
+ */
+export function todoLanes(
+  items: readonly Item[],
+  categories: readonly Pick<BoardCategory, 'id' | 'title' | 'color'>[],
+  filter: TodoFilter,
+): TodoLane[] {
+  const groups = items
+    .map(item => ({ item, open: sortTodos(item.todos ?? []).filter(x => !x.done && !x.proposed && fits(x, filter)) }))
+    .filter(g => g.open.length)
+    .sort((a, b) => (a.open[0]?.at ?? 0) - (b.open[0]?.at ?? 0))
+  const order = new Map(categories.map((c, i) => [c.id, i]))
+  const lanes = new Map<string, TodoLane>()
+  for (const g of groups) {
+    const id = g.item.category || ''
+    const c = categories.find(x => x.id === id)
+    const lane = lanes.get(id) ?? { id, title: c?.title || id, color: c?.color ?? '', groups: [] }
+    lane.groups.push(g)
+    lanes.set(id, lane)
+  }
+  const rank = (id: string) => order.get(id) ?? Number.MAX_SAFE_INTEGER
+  return [...lanes.values()].sort((a, b) => rank(a.id) - rank(b.id))
 }
 
 /** The done points for the filter, newest first, with their sessions. */
