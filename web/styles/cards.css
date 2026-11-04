@@ -53,6 +53,17 @@
 .recap-age { color: var(--label-3); font-size: 11.5px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .card .task { margin-top: 3px; font-size: 12px; line-height: 1.35; color: var(--label-2); display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .card .task-label { color: var(--label-3); font-weight: 500; }
+/* A MokuPilot call agent (#326): its call first, quiet and still, in the line the tool at work
+   uses; after the call in the plain label color, as the card waits on its helpers. Its task board
+   is task lines; what comes next a shade back. */
+.now.call { margin-top: 5px; }
+/* The call's label wins the line: how long and how much is done give way first, to nothing. */
+.now.call .tool { flex: none; max-width: calc(100% - 18px); }
+.now.call svg { width: 12px; height: 12px; stroke-width: 1.7; color: var(--accent); }
+.now.call .tool { color: var(--accent); }
+.now.call.after svg, .now.call.after .tool { color: var(--label-2); }
+.card .call-task.next { color: var(--label-3); }
+.call-steps, .call-more { color: var(--label-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* The name wins the head (#324; models/card-head.ts, hooks/useHeadFit.ts): it is what tells one
    card from another, so it is the last thing to give way. What stands beside it keeps its whole

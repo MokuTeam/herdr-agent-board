@@ -9,6 +9,7 @@ import { ACCESS_STRINGS } from './access-strings.ts'
 import { ARCHIVE_STRINGS } from './archive-strings.ts'
 import { ASIDE_STRINGS } from './aside-strings.ts'
 import { BACKUP_STRINGS } from './backup-strings.ts'
+import { CALL_STRINGS } from './call-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
@@ -1337,6 +1338,7 @@ for (const code of Object.keys(FORK_STRINGS) as Lang[]) Object.assign(STRINGS[co
 for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ASIDE_STRINGS[code])
 // And the user's presence (#172).
 for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PRESENCE_STRINGS[code])
+for (const code of Object.keys(CALL_STRINGS) as Lang[]) Object.assign(STRINGS[code], CALL_STRINGS[code])
 // And tasks (#202).
 for (const code of Object.keys(TODO_STRINGS) as Lang[]) Object.assign(STRINGS[code], TODO_STRINGS[code])
 for (const code of Object.keys(SECRET_STRINGS) as Lang[]) Object.assign(STRINGS[code], SECRET_STRINGS[code])

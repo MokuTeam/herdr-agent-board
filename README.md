@@ -286,6 +286,20 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   so and points to the panel); under This machine only with MokuPilot found there. Settings →
   MokuPilot… is always offered, so the mode can be changed in every case; with
   `"mokupilot": false` the panel says calls are off.
+- While a call runs, its agent has a card of its own (#326). MokuPilot runs it outside herdr with
+  every hook off, and keeps one file per live agent in `~/.meeting-copilot/call-agents/`
+  (`<session id>.json`: its session, the session it is a fork of, its Claude folder and
+  folder, whether the call is on or over and a turn runs, how many helpers it has); its own task
+  board is `~/.agent-boards/<harness>/<session id>.json` (`AGENT_BOARDS_DIR` first). A fork's card
+  is "Call · <the session>", in that session's lane and right after it; one with no conversation
+  is "MokuPilot call"; one MokuPilot went on in marks that session's own card. Under its name: on
+  a call and for how long, or after the call how many helpers it still finishes; then its own
+  line (its `board doing`, else its task board's first doing item) and its task board as task
+  lines. It runs in MokuPilot, so its card, sheet and menu have nothing of herdr's or a
+  terminal's, and the board refuses those actions for it. Its last words and a recap count only
+  from its start: before that its transcript is its parent's. The folder is looked at only where
+  MokuPilot has run (once a minute) and `"mokupilot"` is not `false`; the card goes when the file
+  does (`src/core/call-agent.ts`, `src/adapters/mokupilot-call.ts`).
 - "Fork" (the sheet, a card's menu): a new session in a new tab that starts with a copy of this
   one's conversation, so it knows what this one knows while this one goes on as it was; see
   [Fork](#fork).
