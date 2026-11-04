@@ -36,8 +36,7 @@
 .cal-views { flex: none; }
 
 .cal-sync svg { width: 15px; height: 15px; }
-.cal-sync.busy svg { animation: cal-spin 900ms linear infinite; }
-@keyframes cal-spin { to { transform: rotate(360deg); } }
+/* while a sync runs its glyph turns in a box of its own (Turn, motion.css), never the SVG itself */
 
 /* The sources: each a mark in its colour and its label; a tap hides or shows it. */
 .cal-sources { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
@@ -561,7 +560,6 @@ button.cal-day-head.today:hover .cal-dn { background: var(--red); color: #fff; }
 @media (prefers-reduced-motion: reduce) {
   .cal-card { animation: cal-fade 120ms ease-out; }
   @keyframes cal-fade { from { opacity: 0; } }
-  .cal-sync.busy svg { animation: none; opacity: 0.5; }
   .cal-event:active,
   .cal-join:active,
   .cal-source:active { transform: none; }

@@ -39,7 +39,7 @@ import { askedInTurn } from '../../models/time.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { storage } from '../../state/storage.ts'
 import { classNames } from '../class-names.ts'
-import { ChevIcon, GearIcon, RestartIcon, WarnIcon } from '../icons.tsx'
+import { ChevIcon, GearIcon, RestartIcon, Turn, WarnIcon } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { Agenda, EventCard, type Marks, MonthGrid, TimeGrid } from './CalendarViews.tsx'
 
@@ -191,7 +191,9 @@ export function CalendarPanel({ open, onClose, onSettings }: CalendarPanelProps)
             disabled={busy}
             onClick={() => void sync()}
           >
-            <RestartIcon />
+            <Turn spinning={busy}>
+              <RestartIcon />
+            </Turn>
           </button>
           {onSettings && (
             <button
