@@ -7,6 +7,7 @@
 // (the contract: issue #326). Its own task board is the harness's file,
 // ~/.agent-boards/<harness>/<session_id>.json (format "agent-board"), which MokuPilot or the
 // harness keeps. Pure: what the files say, read by adapters/mokupilot-call.ts.
+import { posix, win32 } from 'node:path'
 import type { Item } from './types.ts'
 
 export const CALL_AGENT_FORMAT = 'mokupilot-call-agent'
@@ -66,13 +67,16 @@ export interface CallView {
   tasks: CallTask[]
 }
 
-const MAX_AGE_MS = 24 * 60 * 60 * 1000
+/** A call (call.json) or a call agent started longer ago than this is a leftover, not one in progress. */
+export const MAX_AGE_MS = 24 * 60 * 60 * 1000
 const MAX_TASKS = 60
 const MAX_TEXT = 200
 
 const rec = (v: unknown): Record<string, unknown> | null =>
   typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+/** A folder as a whole path, of this computer or another one (a remote agent's), else none. */
+const absolute = (p: string): string => (win32.isAbsolute(p) || posix.isAbsolute(p) ? p : '')
 const seconds = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v * 1000 : null)
 /** A version this reader knows: a newer one changed what the file means. */
 const known = (v: unknown, newest: number): boolean =>
@@ -102,13 +106,13 @@ export function parseCallAgent(
     session,
     harness,
     parent: str(d.parent_session_id).trim(),
-    configDir: str(d.config_dir),
-    cwd: str(d.cwd),
+    configDir: absolute(str(d.config_dir)),
+    cwd: absolute(str(d.cwd)),
     started,
     phase: d.call === 'after' ? 'after' : 'on',
     busy: d.busy === true,
     helpers,
-    updated: Math.max(seconds(d.updated) ?? started, started),
+    updated: Math.min(Math.max(seconds(d.updated) ?? started, started), now + 60_000),
   }
 }
 

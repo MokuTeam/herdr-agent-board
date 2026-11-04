@@ -19,7 +19,7 @@ import { useHeadFit } from '../hooks/useHeadFit.ts'
 import { useWordClip } from '../hooks/useWordClip.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { unseenResult } from '../models/attention.ts'
-import { callLines } from '../models/call.ts'
+import { type CallLines as CallView, callLines, inMokupilot } from '../models/call.ts'
 import {
   ago,
   askLine,
@@ -274,9 +274,7 @@ function CardBody({ item, launch, folding }: { item: Item; launch: LaunchSlots |
     )
   return (
     <>
-      <CallLines item={item} />
-      {what}
-      <CallTasks item={item} />
+      {item.call ? <CallParts item={item}>{what}</CallParts> : what}
       {/* A launch held at the trust dialog says what it asks itself (its note), with its buttons. */}
       {item.column === 'me' && started?.state !== 'trust' && <CardAsk item={item} />}
       {wait}
@@ -341,14 +339,31 @@ function CardRest({ item, launch }: { item: Item; launch: LaunchSlots | undefine
 }
 
 /**
- * A MokuPilot call agent's call (#326), first under its name: on a call and for how long, or how
- * many helpers it finishes after the call. A line like the tool at work, quiet, and not moving.
+ * A MokuPilot call agent's card (#326): its call first under its name (on a call and for how long,
+ * or how many helpers it finishes after the call), a line like the tool at work, quiet and still;
+ * then the card's own line (`children`); then its task board as task lines.
  */
-function CallLines({ item }: { item: Item }) {
+function CallParts({ item, children }: { item: Item; children: ReactNode }) {
   const t = useT()
   const { now } = useBoardContext()
   const call = callLines(item, now, t)
-  if (!call) return null
+  if (!call) return children
+  return (
+    <>
+      <CallLine call={call} />
+      {children}
+      {call.rows.map(row => (
+        <div key={row.id} className={classNames('task call-task', row.kind)} title={row.text}>
+          <span className="task-label">{row.label}</span> {row.text}
+          {row.steps && <span className="call-steps"> {row.steps}</span>}
+          {row.more && <span className="call-more"> {row.more}</span>}
+        </div>
+      ))}
+    </>
+  )
+}
+
+function CallLine({ call }: { call: CallView }) {
   return (
     <div className={classNames('now call', call.phase === 'after' && 'after')} title={call.hint}>
       <PhoneGlyph />
@@ -356,20 +371,6 @@ function CallLines({ item }: { item: Item }) {
       {call.detail && <span className="detail">{call.detail}</span>}
     </div>
   )
-}
-
-/** Its task board under the card's own line: what it does, then what comes next, as task lines. */
-function CallTasks({ item }: { item: Item }) {
-  const t = useT()
-  const { now } = useBoardContext()
-  const rows = callLines(item, now, t)?.rows ?? []
-  return rows.map(row => (
-    <div key={row.id} className={classNames('task call-task', row.kind)} title={row.text}>
-      <span className="task-label">{row.label}</span> {row.text}
-      {row.steps && <span className="call-steps"> {row.steps}</span>}
-      {row.more && <span className="call-more"> {row.more}</span>}
-    </div>
-  ))
 }
 
 /** Under "Needs me": a question form's first question and options, else the question or the kind of stop. */
@@ -448,7 +449,7 @@ function CardActions({ item }: { item: Item }) {
   const q = (s: string) => t('q', { s })
   // A MokuPilot call agent (#326) runs in MokuPilot, not in a pane: nothing to focus, put to sleep
   // or type into from the board.
-  const inMokupilot = !!item.call && !item.pane
+  const away = inMokupilot(item)
   return (
     <div className="card-actions">
       {dismissable(item) && (
@@ -461,12 +462,12 @@ function CardActions({ item }: { item: Item }) {
           <CheckGlyph />
         </button>
       )}
-      {!item.sleeping && !!item.session && !inTurn(item) && !inMokupilot && (
+      {!item.sleeping && !!item.session && !inTurn(item) && !away && (
         <button type="button" data-act="sleep" title={t('card.sleep')} disabled={!canMutate}>
           <MoonGlyph />
         </button>
       )}
-      {!inMokupilot && (
+      {!away && (
         <>
           <button type="button" data-act="write" title={t('card.write')}>
             <WriteGlyph />

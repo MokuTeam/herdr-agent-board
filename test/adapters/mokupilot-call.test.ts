@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import {
   callAgents,
   callAgentsFolder,
+  callAgentsGate,
   callFile,
   callInProgress,
   mokupilotHere,
@@ -129,4 +130,34 @@ test('a call agent’s task board: its harness’s file, AGENT_BOARDS_DIR first'
     if (saved === undefined) delete process.env.AGENT_BOARDS_DIR
     else process.env.AGENT_BOARDS_DIR = saved
   }
+})
+
+test('the gate: off with "mokupilot": false, nothing read where MokuPilot never ran, looked up once a minute', () => {
+  let clock = NOW
+  const looked: string[] = []
+  let ran = false
+  const gate = callAgentsGate({
+    here: () => {
+      looked.push('here')
+      return ran
+    },
+    read: () => {
+      looked.push('read')
+      return []
+    },
+    now: () => clock,
+  })
+  expect(gate({ mokupilot: false })).toEqual([])
+  expect(looked).toEqual([])
+  gate({})
+  gate({})
+  expect(looked).toEqual(['here'])
+  // MokuPilot runs for the first time: seen within the minute, then read on every refresh.
+  ran = true
+  clock += 61_000
+  gate({})
+  gate({ mokupilot: { mode: 'auto' } })
+  expect(looked).toEqual(['here', 'here', 'read', 'read'])
+  expect(gate({ mokupilot: false })).toEqual([])
+  expect(looked).toHaveLength(4)
 })

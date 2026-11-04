@@ -52,6 +52,8 @@ function herdrState(box: Sandbox): void {
       pane('w1:p1', PARENT, 'idle', 'Invoices 100%'),
       pane('w1:p2', 's-busy', 'working', 'Busy one'),
       pane('w1:p3', null, '', 'shell'),
+      // An agent herdr names no session for: its card's key is its pane's.
+      { ...pane('w1:p4', null, '', 'No id yet'), agent: 'claude', agent_status: 'idle' },
     ],
   }
   box.state({ 'api snapshot': { result: { snapshot } } })
@@ -104,13 +106,21 @@ function transcript(box: Sandbox, profile: string, session: string, said: string
 }
 
 async function boardItems(box: Sandbox, cfg: Record<string, unknown> = {}): Promise<Record<string, unknown>[]> {
+  return (await board(box, cfg)).items
+}
+
+/** The board served (its url) and its items once refreshed. */
+async function board(
+  box: Sandbox,
+  cfg: Record<string, unknown> = {},
+): Promise<{ url: string; items: Record<string, unknown>[] }> {
   const { url } = await serveBoard(box, { language: 'en', categories: CATEGORIES, ...cfg })
   for (let tries = 0; ; tries++) {
     const board = (await (await fetch(`${url}/api/board`)).json()) as {
       stale: boolean
       items: Record<string, unknown>[]
     }
-    if (!board.stale) return board.items
+    if (!board.stale) return { url, items: board.items }
     if (tries > 200) throw new Error('the board did not refresh')
     await Bun.sleep(25)
   }
@@ -141,7 +151,7 @@ test('a call agent: its own card right after its parent, in its lane, on a call,
     { id: 'b3', text: 'Book the follow-up', status: 'next' },
     { id: 'b4', text: 'Read the contract', status: 'done' },
   ])
-  const items = await boardItems(box)
+  const { url, items } = await board(box)
   const call = items.find(i => i.key === CALL)
   assert.ok(call, 'the call agent has a card')
   expect({
@@ -195,10 +205,66 @@ test('a call agent: its own card right after its parent, in its lane, on a call,
   expect(keys.indexOf(CALL)).toBe(keys.indexOf(PARENT) + 1)
   expect(items.filter(i => i.call).map(i => i.key)).toEqual([CALL])
 
+  // Nothing of herdr's, and no fork or call of a session MokuPilot runs: refused, herdr not asked.
+  const before = box.calls().length
+  for (const act of ['fork', 'mokupilot', 'sleep', 'restart', 'archive', 'focus']) {
+    const res = await fetch(`${url}/api/session/${CALL}/${act}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: '{}',
+    })
+    expect([act, res.status, ((await res.json()) as { error?: string }).error]).toEqual([
+      act,
+      409,
+      'The session has no pane',
+    ])
+  }
+  expect(
+    box
+      .calls()
+      .slice(before)
+      .filter(c => c[1] !== 'snapshot'),
+  ).toEqual([])
+
   // Its own `board doing` (no herdr pane: Claude Code's session id) wins over its task board's.
   await cli(box, ['doing', 'Reading the numbers aloud'], { CLAUDE_CODE_SESSION_ID: CALL })
   const again = (await boardItems(box)).find(i => i.key === CALL)
   expect(again?.doing).toBe('Reading the numbers aloud')
+})
+
+test('a fork whose transcript has only its parent’s copied lines says nothing yet', async () => {
+  const box = await sandbox()
+  herdrState(box)
+  const wake = await fakeWake({ sleeping: [] })
+  config(box, { wakeUrl: wake.url })
+  callAgent(box, CALL, { parent_session_id: PARENT })
+  const old = new Date(Date.now() - 3 * 3_600_000).toISOString()
+  const lines = [
+    { type: 'summary', summary: 'The parent’s title', leafUuid: 'x' },
+    { type: 'user', message: { role: 'user', content: 'Run the migration' }, timestamp: old },
+    {
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Migration finished, shall I deploy?' }] },
+      timestamp: old,
+    },
+  ]
+  put(
+    join(home(box), '.claude', 'projects', projectFolderName(box.dir), `${CALL}.jsonl`),
+    `${lines.map(l => JSON.stringify(l)).join('\n')}\n`,
+  )
+  const call = (await boardItems(box, { wakeUrl: wake.url })).find(i => i.key === CALL)
+  expect(call).toMatchObject({ lastText: '', lastAt: null, title: '', prompt: '', attention: '', column: 'idle' })
+})
+
+test('"mokupilot": false turns the call agents off: no card from a live file', async () => {
+  const box = await sandbox()
+  herdrState(box)
+  const wake = await fakeWake({ sleeping: [SLEEPER] })
+  config(box, { wakeUrl: wake.url, mokupilot: false })
+  callAgent(box, ALONE, {})
+  const items = await boardItems(box, { wakeUrl: wake.url, mokupilot: false })
+  expect(items.map(i => i.key).sort()).toEqual([PARENT, 'pane-w1:p4', 's-busy', 's-old'].sort())
+  expect((await cli(box, ['list'])).split('\n')).toEqual(MAIN)
 })
 
 test('after the call, with no parent, and one MokuPilot went on in a sleeping session', async () => {
@@ -219,6 +285,16 @@ test('after the call, with no parent, and one MokuPilot went on in a sleeping se
   // Its last words to the call end in a question: that is no question to the user.
   transcript(box, '.claude', ALONE, 'Shall we move the deadline to Friday?')
   callAgent(box, KEPT, { parent_session_id: KEPT, busy: true })
+  // Its own words from before the call: MokuPilot went on in it, so they are its own.
+  const before = new Date(Date.now() - 3_600_000).toISOString()
+  put(
+    join(home(box), '.claude', 'projects', projectFolderName(box.dir), `${KEPT}.jsonl`),
+    `${JSON.stringify({
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Agenda is ready' }] },
+      timestamp: before,
+    })}\n`,
+  )
   // The session was archived from its pane before: MokuPilot going on in it shows it, and it stays archived.
   put(join(stateDir(box), 'archive', `${KEPT}.json`), {
     key: KEPT,
@@ -254,6 +330,7 @@ test('after the call, with no parent, and one MokuPilot went on in a sleeping se
   expect(kept[0]).toMatchObject({
     name: 'Kept talk',
     workspace: 'Work stuff',
+    lastText: 'Agenda is ready',
     status: 'working',
     sleeping: false,
     call: { phase: 'on', parent: null },
@@ -263,19 +340,35 @@ test('after the call, with no parent, and one MokuPilot went on in a sleeping se
   const busy = items.filter(i => i.key === 's-busy')
   expect(busy).toHaveLength(1)
   expect(busy[0]).toMatchObject({ pane: 'w1:p2', name: 'Busy one', call: { phase: 'on', parent: null } })
-  expect(items.map(i => i.key).sort()).toEqual([ALONE, KEPT, PARENT, 's-busy'].sort())
+  expect(items.map(i => i.key).sort()).toEqual([ALONE, KEPT, PARENT, 'pane-w1:p4', 's-busy'].sort())
 })
 
 // What `board list` printed for this herdr state against main's files (run there once, as
 // AGENTS.md says): a setup without MokuPilot, and one whose MokuPilot writes call.json only.
-const MAIN = ['Busy one [other] Working', 'Invoices 100% [other] Idle']
+const MAIN = [
+  'Busy one [other] Working',
+  'Old sleeper [other] Idle (asleep)',
+  'Invoices 100% [other] Idle',
+  'No id yet [other] Idle',
+]
+
+/** A session wake put to sleep, for the comparisons with main. */
+const SLEEPER = {
+  name: 'Old sleeper',
+  pane: 'w1:p3',
+  session: 's-old',
+  workspace: 'Work stuff',
+  slept_at: '2026-10-21T08:00:00Z',
+}
 
 test('without MokuPilot, or with one that writes call.json only, the board lists what main listed', async () => {
   const box = await sandbox()
   herdrState(box)
-  const wake = await fakeWake({ sleeping: [] })
+  const wake = await fakeWake({ sleeping: [SLEEPER] })
   config(box, { wakeUrl: wake.url })
-  expect((await cli(box, ['list'])).split('\n')).toEqual(MAIN)
+  const listed = (await cli(box, ['list'])).split('\n')
+  if (process.env.PRINT_ITEMS) console.log(`LIST ${JSON.stringify(listed)}`)
+  expect(listed).toEqual(MAIN)
   put(join(home(box), '.meeting-copilot', 'call.json'), { pid: process.pid, started: Date.now() / 1000 - 60 })
   expect((await cli(box, ['list'])).split('\n')).toEqual(MAIN)
   expect(box.calls()).toEqual([
@@ -330,6 +423,48 @@ const MAIN_ITEMS: unknown = [
     links: null,
   },
   {
+    key: 's-old',
+    session: 's-old',
+    pane: 'w1:p3',
+    workspace: 'Work stuff',
+    agent: 'claude',
+    name: 'Old sleeper',
+    cwd: '<dir>',
+    status: 'sleeping',
+    sleeping: true,
+    focused: false,
+    activity: 'a time',
+    autoName: 'Old sleeper',
+    category: 'other',
+    categorySet: false,
+    doing: '',
+    doingAt: null,
+    wait: '',
+    waitSince: null,
+    result: '',
+    title: '',
+    prompt: '',
+    lastText: '',
+    lastAt: null,
+    recap: '',
+    recapAt: null,
+    context: null,
+    contextPct: null,
+    contextSize: null,
+    model: null,
+    effort: null,
+    tool: null,
+    attention: '',
+    question: '',
+    askSince: null,
+    column: 'idle',
+    pin: '',
+    auto: 'idle',
+    helpers: null,
+    profile: 'default',
+    links: null,
+  },
+  {
     key: 's-busy',
     session: 's-busy',
     pane: 'w1:p2',
@@ -371,6 +506,48 @@ const MAIN_ITEMS: unknown = [
     profile: 'default',
     links: null,
   },
+  {
+    key: 'pane-w1:p4',
+    session: null,
+    pane: 'w1:p4',
+    workspace: 'Work stuff',
+    agent: 'claude',
+    name: 'No id yet',
+    cwd: '<dir>',
+    status: 'idle',
+    sleeping: false,
+    focused: false,
+    activity: 0,
+    autoName: 'No id yet',
+    category: 'other',
+    categorySet: false,
+    doing: '',
+    doingAt: null,
+    wait: '',
+    waitSince: null,
+    result: '',
+    title: '',
+    prompt: '',
+    lastText: '',
+    lastAt: null,
+    recap: '',
+    recapAt: null,
+    context: null,
+    contextPct: null,
+    contextSize: null,
+    model: null,
+    effort: null,
+    tool: null,
+    attention: '',
+    question: '',
+    askSince: null,
+    column: 'idle',
+    pin: '',
+    auto: 'idle',
+    helpers: null,
+    profile: 'default',
+    links: null,
+  },
 ]
 
 /** The board's items with this sandbox's folder as <dir>, for comparing runs. */
@@ -380,7 +557,7 @@ const normalized = (box: Sandbox, items: unknown): unknown =>
 test('without MokuPilot, or with call.json only, the page gets the items main gave it', async () => {
   const box = await sandbox()
   herdrState(box)
-  const wake = await fakeWake({ sleeping: [] })
+  const wake = await fakeWake({ sleeping: [SLEEPER] })
   config(box, { wakeUrl: wake.url })
   put(join(home(box), '.meeting-copilot', 'call.json'), { pid: process.pid, started: Date.now() / 1000 - 60 })
   // A card with a lane and a doing, and a transcript with a title, a prompt, a question and a recap.

@@ -7,6 +7,7 @@
 
 import { TIDY_DAYS } from '../../../src/core/archive.ts'
 import type { Translator } from '../../../src/core/types.ts'
+import { inMokupilot } from './call.ts'
 import type { LanePicks } from './lane-picks.ts'
 
 /** One item of a menu; `submenu` opens beside it (null: it would, but cannot now). */
@@ -347,9 +348,9 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     ctx.canMutate ? (extra ?? {}) : { disabled: true, reason: herdrWhy }
   const edit = (): Partial<MenuItem> => (ctx.canEdit ? {} : { disabled: true, reason: editWhy })
   const turn = it.status === 'working' || it.status === 'blocked'
-  // A MokuPilot call agent with no pane (#326) runs in MokuPilot: nothing of herdr's to do with it,
-  // no call or fork of it, no profile to move it to, no tab to archive.
-  const own = !(it.call && !it.pane)
+  // A MokuPilot call agent with no pane (#326) runs in MokuPilot: nothing of herdr's or a terminal's
+  // to do with it, no call or fork of it, no profile to move it to, no tab to archive.
+  const own = !inMokupilot(it)
   const claude = !!it.session
   const dismissable = it.attention === 'ask' || it.attention === 'question' || it.attention === 'later'
   const copy: (MenuItem | Absent)[] = [
@@ -367,7 +368,7 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
         ...herdr(),
       },
     // Looking needs no fresh data; typing and opening a shell wait for it in the window itself.
-    ctx.terminal && (it.cwd || it.pane) && { id: 'terminal', label: t('term.open'), hint: 'Ctrl+`' },
+    own && ctx.terminal && (it.cwd || it.pane) && { id: 'terminal', label: t('term.open'), hint: 'Ctrl+`' },
     // A MokuPilot call with a fork of the session: needs the board, not fresh herdr data.
     own &&
       ctx.mokupilot &&

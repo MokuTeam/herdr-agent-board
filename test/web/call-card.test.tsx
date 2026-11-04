@@ -8,6 +8,8 @@ import { translator } from '../../src/core/i18n/translator.ts'
 import type { Item } from '../../src/core/types.ts'
 import { callLines } from '../../web/src/models/call.ts'
 import { cardMenu, type MenuEntry, type MenuItem } from '../../web/src/models/menu-model.ts'
+import { headButtons } from '../../web/src/models/sheet.ts'
+import { termButton } from '../../web/src/models/terminal.ts'
 import { item } from './support/board.tsx'
 import { bothCards } from './support/board-scene.tsx'
 
@@ -151,6 +153,7 @@ describe('its menu', () => {
     t,
     canMutate: true,
     canEdit: true,
+    terminal: true,
     categories: [],
     column: 'idle',
     category: 'other',
@@ -162,7 +165,7 @@ describe('its menu', () => {
     ],
   }
   const ids = (items: readonly MenuEntry[]) => items.filter((i): i is MenuItem => !i.separator).map(i => i.id)
-  const HERDR = ['focus', 'mokupilot', 'fork', 'sleep', 'restart', 'renameWorkspace', 'profile', 'archive']
+  const HERDR = ['focus', 'terminal', 'mokupilot', 'fork', 'sleep', 'restart', 'renameWorkspace', 'profile', 'archive']
 
   test('a call agent with no pane: nothing that needs a terminal or a tab; with a pane, all as before', () => {
     const base = { key: 'c', session: 'c', agent: 'claude', cwd: '/w', status: 'idle', workspace: 'ws' }
@@ -173,5 +176,35 @@ describe('its menu', () => {
     const plain = ids(cardMenu({ ...base, pane: 'w1:p1' }, ctx))
     expect(inPane).toEqual(plain)
     for (const id of HERDR) expect(plain).toContain(id)
+  })
+})
+
+describe('its sheet', () => {
+  const t = translator('en')
+  const hidden = (it: Item) => {
+    const b = headButtons(it, t, true, [], true)
+    return {
+      sleep: b.sleepHidden,
+      restart: b.restartHidden,
+      mokupilot: b.mokupilotHidden,
+      fork: b.forkHidden,
+      archive: b.archiveHidden,
+      terminal: termButton(it, { terminal: true }, t).hidden,
+    }
+  }
+  const NONE = { sleep: false, restart: false, mokupilot: false, fork: false, archive: false, terminal: false }
+
+  test('a call agent with no pane: no herdr or terminal button; in a pane, and any other card, as before', () => {
+    const base = { agent: 'claude', cwd: '/w', session: '7a2b4c6d-0000-4000-8000-000000000002' }
+    expect(hidden(agent({ ...base, pane: null }))).toEqual({
+      sleep: true,
+      restart: true,
+      mokupilot: true,
+      fork: true,
+      archive: true,
+      terminal: true,
+    })
+    expect(hidden(agent({ ...base, pane: 'w1:p1', status: 'idle', column: 'idle' }))).toEqual(NONE)
+    expect(hidden(item({ key: 'a', ...base, pane: 'w1:p1' }))).toEqual(NONE)
   })
 })

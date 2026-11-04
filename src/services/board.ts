@@ -10,7 +10,7 @@ import { helpersOf } from '../adapters/helpers.ts'
 import { paneTerminals, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import type { LinksIndex } from '../adapters/links.ts'
-import { callAgents, taskBoard } from '../adapters/mokupilot-call.ts'
+import { callAgentsGate, taskBoard } from '../adapters/mokupilot-call.ts'
 import { contextDir } from '../adapters/paths.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
 import { attentionOf, busy, columnOf, isAgentStatus, PINS } from '../core/board.ts'
@@ -31,6 +31,9 @@ import { archivedFiles, getArchived, hides, isArchived, settleReturned } from '.
 import type { Deps } from './deps.ts'
 
 const numberOf = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined)
+
+/** MokuPilot's call agents (#326), read only where it is not turned off and has run here (looked up once a minute). */
+const callAgentsHere = callAgentsGate()
 
 /** The panes its card says wake closed as it went to sleep (#204, services/wake/follow.ts), when it has any. */
 /** A card's tasks (#202) for its item, when it has any. */
@@ -67,19 +70,22 @@ const callView = (a: CallAgent, key: string): CallView => ({
 })
 
 /**
- * A call agent's words from its transcript: what it said last, and a recap it wrote on the call
- * (`since`: when it started). Its title and an older recap are its parent's, copied with the
- * conversation; its prompts are what MokuPilot feeds it from the call: none of them on its card.
+ * A call agent's words from its transcript (`since`: when it started). A fork's transcript starts
+ * with a copy of its parent's conversation, old times and all: its title, and what was said or
+ * recapped before `since`, are the parent's. Its prompts are what MokuPilot feeds it from the
+ * call. None of those on its card. One MokuPilot went on in (`inPlace`) has only its own words:
+ * its title, last prompt and last words stay; a recap from before the call is of before the call.
  */
-const callWords = (info: TranscriptInfo, since: number) => {
-  const own = (info.recapAt ?? 0) >= since
+const callWords = (info: TranscriptInfo, since: number, inPlace: boolean) => {
+  const recapped = (info.recapAt ?? 0) >= since
+  const spoke = inPlace || (info.lastAt ?? 0) >= since
   return {
-    title: '',
-    prompt: '',
-    lastText: info.lastText ?? '',
-    lastAt: info.lastAt ?? null,
-    recap: own ? (info.recap ?? '') : '',
-    recapAt: own ? (info.recapAt ?? null) : null,
+    title: inPlace ? (info.title ?? '') : '',
+    prompt: inPlace ? (info.prompt ?? '') : '',
+    lastText: spoke ? (info.lastText ?? '') : '',
+    lastAt: spoke ? (info.lastAt ?? null) : null,
+    recap: recapped ? (info.recap ?? '') : '',
+    recapAt: recapped ? (info.recapAt ?? null) : null,
   }
 }
 
@@ -354,7 +360,7 @@ export async function collect(
       // A call agent's title and recap from before its call are its parent's, copied with the
       // conversation; its prompts are what MokuPilot feeds it from the call.
       ...(call
-        ? callWords(info, call.started)
+        ? callWords(info, call.started, call.parent === call.session)
         : {
             title: info.title ?? '',
             prompt: info.prompt ?? '',
@@ -417,7 +423,7 @@ export async function collect(
   // MokuPilot's call agents (#326): one in a pane already is marked there; a sleeper of the same
   // session is the call agent now (MokuPilot went on in it); the rest are added once the sessions
   // they are forks of are on the board.
-  const calls = callAgents()
+  const calls = callAgentsHere(cfg)
   const onCall: CallAgent[] = []
   for (const a of calls) {
     if (seen.has(a.session)) continue

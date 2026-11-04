@@ -44,6 +44,14 @@ test('a call agent: its session, parent, folder, call and turn, times in ms', ()
     read(file({ call: 'after', busy: false, helpers: undefined, parent_session_id: '', extra: { x: 1 } })),
   ).toMatchObject({ phase: 'after', busy: false, helpers: null, parent: '' })
   expect(read(file({ harness: 'pi' }))?.harness).toBe('pi')
+  // Folders as whole paths, of this computer or another one's; anything else is no folder.
+  expect(read(file({ config_dir: 'C:\\Users\\me\\.claude-work', cwd: '/srv/app' }))).toMatchObject({
+    configDir: 'C:\\Users\\me\\.claude-work',
+    cwd: '/srv/app',
+  })
+  expect(read(file({ config_dir: '..\\..\\Windows', cwd: '../../../etc' }))).toMatchObject({ configDir: '', cwd: '' })
+  // An update time far ahead is now, at most a minute on.
+  expect(read(file({ updated: NOW / 1000 + 86_400 }))?.updated).toBe(NOW + 60_000)
   // No harness named: Claude's. No update time: its start.
   expect(read(file({ harness: undefined, updated: undefined }))).toMatchObject({
     harness: 'claude',

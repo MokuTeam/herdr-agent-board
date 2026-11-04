@@ -7,7 +7,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { type CallAgent, type CallTask, parseCallAgent, SAFE_NAME, tasksOf } from '../core/call-agent.ts'
+import { type CallAgent, type CallTask, MAX_AGE_MS, parseCallAgent, SAFE_NAME, tasksOf } from '../core/call-agent.ts'
 import type { MokupilotCall } from '../core/presence.ts'
 import { isAlive } from './process.ts'
 
@@ -16,8 +16,6 @@ export const callFile = (home = homedir()): string => join(stateFolder(home), 'c
 
 /** Whether MokuPilot keeps its state on this computer: it has run here. */
 export const mokupilotHere = (home = homedir()): boolean => existsSync(stateFolder(home))
-
-const MAX_CALL_MS = 24 * 60 * 60 * 1000
 
 export interface CallOptions {
   file?: string
@@ -51,7 +49,7 @@ export function callInProgress({
   if (!Number.isSafeInteger(pid) || (pid as number) <= 0) return null
   if (typeof started !== 'number' || !Number.isFinite(started)) return null
   const age = now() - started * 1000
-  if (age < -60_000 || age > MAX_CALL_MS || !alive(pid as number)) return null
+  if (age < -60_000 || age > MAX_AGE_MS || !alive(pid as number)) return null
   return { id: `${pid}:${started}`, started: started * 1000 }
 }
 
@@ -92,6 +90,27 @@ export function callAgents({
     } catch {} // half-written or held by another program a moment: the next refresh reads it
   }
   return out
+}
+
+export interface GateOptions {
+  /** Whether MokuPilot has run on this computer. */
+  here?: () => boolean
+  read?: () => CallAgent[]
+  now?: () => number
+}
+
+/**
+ * The call agents to show, for config.json's `cfg`: none where `"mokupilot": false` turns MokuPilot
+ * off or it never ran here, without a look at its folder; whether it has run here is looked up once
+ * a minute, as presence does (services/presence.ts), so a setup without it reads nothing more.
+ */
+export function callAgentsGate({ here = mokupilotHere, read = callAgents, now = Date.now }: GateOptions = {}) {
+  let seen = { at: Number.NEGATIVE_INFINITY, on: false }
+  return (cfg: { readonly mokupilot?: unknown; readonly [key: string]: unknown }): CallAgent[] => {
+    if (cfg.mokupilot === false) return []
+    if (now() - seen.at > 60_000) seen = { at: now(), on: here() }
+    return seen.on ? read() : []
+  }
 }
 
 /** Where the harnesses keep their agents' task boards: AGENT_BOARDS_DIR, else ~/.agent-boards. */
