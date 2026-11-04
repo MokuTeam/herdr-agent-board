@@ -25,6 +25,8 @@ export interface Card {
   key?: string
   category?: string
   doing?: string
+  /** When `doing` was last written (#321): a recap newer than it takes the card's line. */
+  doingAt?: number
   wait?: string
   waitSince?: number
   result?: string
@@ -219,6 +221,9 @@ export interface TranscriptInfo {
   replied?: boolean
   /** The time of its newest user or assistant line. */
   lastAt?: number
+  /** Claude Code's newest recap of the session (away_summary, #321) and its time; absent with none. */
+  recap?: string
+  recapAt?: number
   activity?: number
   tokens?: number
   context?: number | null
@@ -251,12 +256,19 @@ export interface Item {
   agent?: string
   focused?: boolean
   doing?: string
+  /** When `doing` was written (#321), else null. */
+  doingAt?: number | null
   wait?: string
   waitSince?: number | null
   result?: string
   title?: string
   prompt?: string
   lastText?: string
+  /** The time of its transcript's newest user or assistant line (#321), else null. */
+  lastAt?: number | null
+  /** Claude Code's newest recap of the session and its time (#321): '' and null with none. */
+  recap?: string
+  recapAt?: number | null
   context?: number | null
   contextPct?: number | null
   contextSize?: number | null

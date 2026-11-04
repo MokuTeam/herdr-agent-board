@@ -21,6 +21,10 @@
 :root[data-card-text="wrap"] .card-top > .alarm,
 :root[data-card-text="wrap"] .card-top > .age { margin-inline-start: auto; }
 :root[data-card-text="wrap"] .card-top > .alarm ~ .age { margin-inline-start: 0; }
+/* A name cut in the middle when cut short (#324) wraps as one text. */
+:root[data-card-text="wrap"] .card .name.split { display: block; }
+:root[data-card-text="wrap"] .card .name-head,
+:root[data-card-text="wrap"] .card .name-tail { display: inline; }
 
 /* Asleep in Idle: the same, on its lower line. */
 :root[data-card-text="wrap"] .card.compact .card-top { min-height: 18px; }
@@ -30,6 +34,7 @@
 /* ---------------------------------------------------------------- the body */
 :root[data-card-text="wrap"] .card .what,
 :root[data-card-text="wrap"] .card .said,
+:root[data-card-text="wrap"] .card .task,
 :root[data-card-text="wrap"] .card .ask:not(.qa-card),
 :root[data-card-text="wrap"] .card .qa-card-q { -webkit-line-clamp: 3; overflow-wrap: anywhere; }
 :root[data-card-text="wrap"] .card .qa-card-opts { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: normal; overflow-wrap: anywhere; }

@@ -268,6 +268,9 @@
 :root[data-look="terminal"] .profile-tag.unknown { background: none; box-shadow: none; }
 :root[data-look="terminal"] .profile-tag.wrong { background: none; color: var(--red); }
 :root[data-look="terminal"] .profile-tag.wrong::before { content: "!["; content: "![" / ""; }
+/* Its mark, when the name needs the room (#324; cards.css): "[W]", a wrong one "[!]" in red. */
+:root[data-look="terminal"] .card-top[data-give~="profile"] > .profile-tag { min-width: 0; padding: 0; }
+:root[data-look="terminal"] .card-top[data-give~="profile"] > .profile-tag::before { content: "[" attr(data-mark); content: "[" attr(data-mark) / ""; }
 
 /* The body: one line each. What it does in the text color, what it said dim, the rest in color. */
 :root[data-look="terminal"] .what,
@@ -277,6 +280,9 @@
 :root[data-look="terminal"] .what { margin-top: 3px; font-size: 12.5px; font-weight: 400; line-height: 1.45; }
 :root[data-look="terminal"] .what .you { color: var(--label-2); font-weight: 400; }
 :root[data-look="terminal"] .said { margin-top: 2px; font-size: 12.5px; line-height: 1.45; }
+:root[data-look="terminal"] .recap-age,
+:root[data-look="terminal"] .card .task-label { font-size: inherit; font-weight: 400; }
+:root[data-look="terminal"] .card .task { margin-top: 2px; font-size: 12.5px; line-height: 1.45; }
 :root[data-look="terminal"] .now { gap: 1ch; margin-top: 3px; font-size: 12px; }
 :root[data-look="terminal"] .now .tool { font-weight: 700; }
 :root[data-look="terminal"] .ask { margin-top: 3px; padding: 0; border-radius: 0; background: none; font-size: 12.5px; line-height: 1.45; }

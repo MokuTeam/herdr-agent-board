@@ -217,7 +217,16 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   mode (a light page for a dark theme) it keeps One Light / One Dark.
 - A card says what the session works on (its own `board doing`, else Claude's title of the
   session, else "You: <your last request>"), its last words, the tool it runs now, the question
-  it is stuck on, what it waits for.
+  it is stuck on, what it waits for. A Claude Code recap of the session (written while the
+  terminal is away) that is newer than `board doing` takes the line, with how long ago it was
+  written before it and the task under it; once the session has gone on half an hour past it, it
+  is drawn in the dimmer shade.
+- A card's top row gives its room to the session's name: in a narrow column the rest of the row
+  gives way before the name is cut, one step at a time and only as far as the name needs. The
+  state word goes first (the dot and the column say it), then the profile tag shrinks to its mark
+  (its color and initial, "[D]" in the Terminal style), then the clock to its glyph (the time in
+  its tooltip). A name still too long is cut, whole in its tooltip; one whose end tells it apart
+  ("…-Templates", "…-14041") is cut in the middle and keeps that end.
 - Drag a card to another lane to change its category, or to another column to put it there by
   hand (also the status pill in the sheet's head). See [Moving a card by hand](#moving-a-card-by-hand).
 - Click a card: a sheet with a compact head (two pills, where the card shows and its lane, each
