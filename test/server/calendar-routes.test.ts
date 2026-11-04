@@ -5,7 +5,7 @@
 // a fake wake; events are invented.
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { localOnly } from '../../src/core/remote.ts'
 import { serveBoard } from '../support/board-server.ts'
@@ -168,4 +168,72 @@ test('Settings → Calendar is for this computer’s board only, as the other se
   assert.equal(localOnly('/api/calendar-settings'), true)
   assert.equal(localOnly('/api/calendar'), false)
   assert.equal(localOnly('/api/time-settings'), true)
+})
+
+test('the calendar sink end to end: an agent asks for an iCal address, the card’s form takes it, the file has it', async () => {
+  const KEY = '3c9e1f2a-6b7d-4e58-9a01-b2c3d4e5f607'
+  const ADDRESS = 'https://calendar.example.com/ical/private-Zq81x/basic.ics'
+  const box = await sandbox()
+  const wake = await fakeWake()
+  try {
+    const cfg = { language: 'en', wakeUrl: wake.url, calendar: { on: true, sources: [{ id: 'home', kind: 'ics' }] } }
+    const confDir = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board')
+    mkdirSync(confDir, { recursive: true })
+    writeFileSync(join(confDir, 'config.json'), JSON.stringify({ ...cfg, port: 9, wake: false }))
+    box.state({
+      'api snapshot': {
+        result: {
+          snapshot: {
+            panes: [
+              { pane_id: 'p1', agent: 'claude', agent_session: { value: KEY }, agent_status: 'working', cwd: box.dir },
+            ],
+            tabs: [],
+            workspaces: [],
+          },
+        },
+      },
+    })
+    const { url } = await serveBoard(box, cfg)
+    const asked = await box.run('cli', {
+      args: [
+        'secret',
+        'request',
+        '--title',
+        'Home calendar',
+        '--sink',
+        'calendar',
+        '--param',
+        'source=home',
+        '--field',
+        'url',
+        '--no-wait',
+      ],
+      env: { CLAUDE_CODE_SESSION_ID: KEY },
+    }).exited
+    const id = /pending · ([0-9a-f]{12}) · calendar/.exec(`${asked.stdout}${asked.stderr}`)?.[1]
+    assert.ok(id, `${asked.stdout}${asked.stderr}`)
+    let view: { problem?: string; fingerprint: string; where: string } | undefined
+    await until(async () => {
+      const items = ((await json(await fetch(`${url}/api/board`))).items ?? []) as {
+        key: string
+        secrets?: (typeof view)[]
+      }[]
+      view = items.find(i => i.key === KEY)?.secrets?.[0]
+      return !!view
+    })
+    // the board's own sink, as the request and the submit see it: no "no longer in config.json"
+    assert.equal(view?.problem, undefined)
+    const res = await post(`${url}/api/secret/${id}`, {
+      op: 'submit',
+      values: { url: ADDRESS },
+      fingerprint: view?.fingerprint,
+    })
+    assert.equal(res.status, 200, await res.clone().text())
+    const state = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board')
+    assert.deepEqual(JSON.parse(readFileSync(join(state, 'calendar', 'secret', 'home.json'), 'utf8')), { url: ADDRESS })
+    assert.ok(!readFileSync(join(confDir, 'config.json'), 'utf8').includes('private-Zq81x'))
+    assert.ok(!JSON.stringify(await json(await fetch(`${url}/api/calendar-settings`))).includes('private-Zq81x'))
+  } finally {
+    wake.down()
+  }
 })

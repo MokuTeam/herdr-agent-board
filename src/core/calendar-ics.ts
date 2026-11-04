@@ -206,15 +206,16 @@ function vtimezone(comp: IcsComp, name: string): Zone | null {
     const had = onsetsByYear.get(year)
     if (had) return had
     const list: { at: number; to: number }[] = []
-    const lo = `${year - 1}-01-01`
+    // every onset up to the year after: the last one before an instant may be years back (a zone
+    // that stopped changing, a rule that ended with its UNTIL)
     const hi = `${year + 1}-12-31`
     for (const r of rules) {
       const walls: Wall[] = [r.start, ...r.rdates.filter((w): w is Wall => w !== null)]
       // an onset's UNTIL is in UTC; the onset itself on the wall clock of its TZOFFSETFROM
       const at = (w: Wall) => wallMs(w.date, w.clock ?? [0, 0, 0]) - (w.utc ? 0 : r.from)
-      if (r.rule) walls.push(...expandRule(r.rule, r.start, lo, hi, at))
+      if (r.rule) walls.push(...expandRule(r.rule, r.start, r.start.date, hi, at))
       for (const w of walls) {
-        if (!w.clock || w.date < lo || w.date > hi) continue
+        if (!w.clock || w.date > hi) continue
         list.push({ at: wallMs(w.date, w.clock) - r.from, to: r.to })
       }
     }
@@ -459,7 +460,23 @@ export function expandRule(rule: Rule, start: Wall, lo: string, hi: string, unti
   }
   const [sy, sm, sd] = start.date.split('-').map(Number) as [number, number, number]
   const monthOk = (m: number) => !rule.byMonth.length || rule.byMonth.includes(m)
-  for (let p = 0; p < MAX_PERIODS; p++) {
+  // Without COUNT nothing before the window counts: the walk starts a period before it (a daily
+  // series from years ago is not walked day by day). With COUNT every instance from DTSTART does.
+  let first = 0
+  if (rule.count === null && lo > start.date) {
+    const [ly, lm] = lo.split('-').map(Number) as [number, number]
+    const days = Math.floor((Date.parse(`${lo}T12:00:00Z`) - Date.parse(`${start.date}T12:00:00Z`)) / 86_400_000)
+    const span =
+      rule.freq === 'DAILY'
+        ? days
+        : rule.freq === 'WEEKLY'
+          ? Math.floor(days / 7)
+          : rule.freq === 'MONTHLY'
+            ? (ly - sy) * 12 + (lm - sm)
+            : ly - sy
+    first = Math.max(0, Math.floor(span / rule.interval) - 1)
+  }
+  for (let p = first; p < first + MAX_PERIODS; p++) {
     let dates: string[] = []
     if (rule.freq === 'DAILY') {
       const date = addDays(start.date, p * rule.interval)
@@ -568,7 +585,6 @@ export function icsEvents(text: string, o: IcsOptions): CalEvent[] {
   }
   walk(root)
   const account = o.account?.trim().toLowerCase() || null
-  const loDate = new Date(o.from - 2 * 86_400_000).toISOString().slice(0, 10)
   const hiDate = new Date(o.to + 2 * 86_400_000).toISOString().slice(0, 10)
 
   interface Base {
@@ -704,8 +720,11 @@ export function icsEvents(text: string, o: IcsOptions): CalEvent[] {
         if (!w) continue
         excluded.add(b.allDay || !w.clock ? w.date : String(instantOf(w, zoneOf(p.params.TZID ?? undefined))))
       }
+    // an instance that began before the window and lasts into it is in it: the walk starts its length earlier
+    const reach = b.allDay ? b.length * 86_400_000 : b.length
+    const lo = new Date(o.from - 2 * 86_400_000 - reach).toISOString().slice(0, 10)
     const walls: Wall[] = rule
-      ? expandRule(rule, b.start, loDate < b.start.date ? b.start.date : loDate, hiDate, w => instantOf(w, b.zone))
+      ? expandRule(rule, b.start, lo < b.start.date ? b.start.date : lo, hiDate, w => instantOf(w, b.zone))
       : [b.start]
     for (const r of rdates) if (r) walls.push(b.allDay ? { ...r, clock: null } : r)
     const own = overrides.get(b.uid)

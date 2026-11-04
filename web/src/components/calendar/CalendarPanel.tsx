@@ -135,7 +135,7 @@ export function CalendarPanel({ open, onClose, onSettings }: CalendarPanelProps)
       const failed = (reply.results ?? []).filter(r => !r.ok)
       if (!res.ok) toast(t('err.status', { code: res.status }), true)
       else if (failed.length) toast(t('cal.syncFailed', { sources: failed.map(f => f.source).join(', ') }), true)
-      await ask(win.from, win.to)
+      // the copies it wrote move the board's calendar line, and the window on show is asked again then
     } catch (err) {
       toast(errorText(err, t), true)
     } finally {
@@ -154,9 +154,8 @@ export function CalendarPanel({ open, onClose, onSettings }: CalendarPanelProps)
         t,
       ),
   }
-  const events = (
-    answer && answer.from === win.from && answer.to === win.to ? answer.events : (answer?.events ?? [])
-  ).filter(e => !hidden.has(e.source))
+  // while a new window is asked, the last answer stays on show (each view draws only its own days)
+  const events = (answer?.events ?? []).filter(e => !hidden.has(e.source))
   const days = viewDays(view, date, weekStart)
   const today = localDate(now)
   const busy = syncing || !!data?.calendar?.busy

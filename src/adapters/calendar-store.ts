@@ -261,7 +261,12 @@ export function removeBoardEvent(db: BoardDb, by: CalActor, id: string, now = Da
   })
 }
 
-/** A write to a provider's calendar, as the journal keeps it: who, which event, what it was and became, who asked. */
+/**
+ * A write to a provider's calendar, as the journal keeps it: who, which event, what it was and is
+ * to become, the owner's words that asked for it, and its phase: `asked` before the provider is
+ * called (the database is open and writable, or nothing is called), `done` after, with the id the
+ * provider gave.
+ */
 export function journalProviderWrite(
   db: BoardDb,
   by: CalActor,
@@ -272,6 +277,7 @@ export function journalProviderWrite(
     before?: unknown
     after?: unknown
     asked: string
+    phase: 'asked' | 'done'
   },
 ): void {
   db.write(actorText(by), tx => {
@@ -280,7 +286,11 @@ export function journalProviderWrite(
       op: `provider-${row.op}`,
       ref: `${row.source}/${row.id}`,
       before: row.before,
-      after: { ...(typeof row.after === 'object' && row.after !== null ? row.after : {}), asked: row.asked },
+      after: {
+        ...(typeof row.after === 'object' && row.after !== null ? row.after : {}),
+        asked: row.asked,
+        phase: row.phase,
+      },
     })
   })
 }

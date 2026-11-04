@@ -103,6 +103,8 @@ const PROTOCOL = '2025-06-18'
 /** One conversation with an MCP server: opened at the first call, closed by `close`. */
 export class McpClient {
   private session: string | null = null
+  /** The protocol revision the server answered initialize with: every request after it says it. */
+  private version: string | null = null
   private opened = false
   private nextId = 1
 
@@ -115,8 +117,8 @@ export class McpClient {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream',
-      'MCP-Protocol-Version': PROTOCOL,
     }
+    if (this.version) headers['MCP-Protocol-Version'] = this.version
     if (this.session) headers['Mcp-Session-Id'] = this.session
     let res: Response
     try {
@@ -148,7 +150,7 @@ export class McpClient {
 
   private async open(): Promise<void> {
     if (this.opened) return
-    await this.post(
+    const init = await this.post(
       {
         jsonrpc: '2.0',
         id: this.nextId++,
@@ -157,6 +159,8 @@ export class McpClient {
       },
       true,
     )
+    const said = (init?.result as { protocolVersion?: unknown } | undefined)?.protocolVersion
+    this.version = typeof said === 'string' && said ? said : PROTOCOL
     await this.post({ jsonrpc: '2.0', method: 'notifications/initialized' }, false)
     this.opened = true
   }
@@ -183,7 +187,7 @@ export class McpClient {
     try {
       await fetch(this.url, {
         method: 'DELETE',
-        headers: { 'Mcp-Session-Id': this.session, 'MCP-Protocol-Version': PROTOCOL },
+        headers: { 'Mcp-Session-Id': this.session, 'MCP-Protocol-Version': this.version ?? PROTOCOL },
         signal: AbortSignal.timeout(5000),
       })
     } catch {}

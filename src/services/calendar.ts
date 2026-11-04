@@ -7,13 +7,14 @@
 // nothing; configChanged starts or stops it as the config changes. A fetch that fails keeps the
 // last good copy and says why beside it; the next try waits longer each time it fails again
 // (twice the interval, four times… up to an hour).
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import {
   copiesStamp,
   readCopy,
   readIcsAddress,
   removeCopy,
   type SourceCopy,
+  secretDir,
   writeCopy,
 } from '../adapters/calendar-cache.ts'
 import { FetchError, fetchIcs, McpClient } from '../adapters/calendar-fetch.ts'
@@ -145,6 +146,10 @@ export async function fetchSource(
           const read = googleEvents(answer.text, source)
           if (!read.events.length && !/^\s*(Successfully|No events)/i.test(answer.text))
             throw new FetchError(firstLine(answer.text) || t('cal.err.noEventsInAnswer'))
+          // the answer says how many it has: far fewer read means its form changed, and the last
+          // good copy stays rather than an empty one
+          if (read.said !== null && read.said > 0 && read.events.length < Math.ceil(read.said / 2))
+            throw new FetchError(t('cal.err.unreadAnswer', { read: read.events.length, said: read.said }))
           // one calendar's events, several calendars: an id unique within the source
           out.push(
             ...(source.calendars.length > 1 && calendar !== 'primary'
@@ -217,7 +222,9 @@ export async function syncSource(
     return { source: source.id, ok: true, count: events.length }
   } catch (err) {
     const error = errorWords(err, source.kind === 'ics' ? readIcsAddress(source.id) : null)
-    writeCopy({ ...before, lastTry: now, error, fails: before.fails + 1 })
+    // no address yet is no failure of the source: looked at again on its interval, not later each time
+    const unset = err instanceof CalError && err.code === 'noAddress'
+    writeCopy({ ...before, lastTry: now, error, fails: unset ? 0 : before.fails + 1 })
     return { source: source.id, ok: false, count: before.events.length, error }
   }
 }
@@ -398,6 +405,12 @@ export function createCalendarSync({
         if (!r.ok) log(`calendar: ${s.id}: ${r.error}`)
         return r
       })
+      // the copy itself could not be written (a full disk, a rename a scanner holds): said, never thrown
+      .catch((err: unknown): SyncResult => {
+        const error = err instanceof Error ? err.message : String(err)
+        log(`calendar: ${s.id}: ${error}`)
+        return { source: s.id, ok: false, count: 0, error }
+      })
       .finally(() => {
         running.delete(s.id)
         onChange()
@@ -414,8 +427,17 @@ export function createCalendarSync({
   }
 
   const configChanged = (): void => {
-    const on = !!calendarOf(cfg)
+    const c = calendarOf(cfg)
+    const on = !!c
     keepCalendarDb(on)
+    // the folder the `calendar` sink writes an ICS address into: a form submitted on the board finds it there
+    if (c?.sources.some(s => s.kind === 'ics')) {
+      try {
+        mkdirSync(secretDir(), { recursive: true })
+      } catch (err) {
+        log(`calendar: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     if (on && !timer) {
       timer = setInterval(tick, tickMs)
       tick()

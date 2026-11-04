@@ -53,6 +53,8 @@ export interface NextPage {
 export interface GoogleAnswer {
   events: CalEvent[]
   next: NextPage | null
+  /** How many events the answer's first line says it has (this page's); null: it says none. */
+  said: number | null
 }
 
 const EVENT_KINDS: Record<string, EventKind> = {
@@ -170,7 +172,8 @@ export function googleEvents(text: string, source: Pick<CalSource, 'id' | 'accou
   }
   close()
   if (next) next.timeMin = timeMin
-  return { events, next }
+  const said = /^\s*Successfully retrieved (\d+) events?/i.exec(text)
+  return { events, next, said: said ? Number(said[1]) : null }
 }
 
 /** The window as the preset asks for it: RFC 3339 in UTC. */

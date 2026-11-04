@@ -395,6 +395,61 @@ test('icsEvents: a zone only the file defines (VTIMEZONE), a Windows name, folde
   assert.equal(by('Floating')?.start, '2026-11-03T03:00:00Z')
 })
 
+test('icsEvents: a zone whose last change was years ago; an instance that began before the window; a long series', () => {
+  const text = ics(
+    'BEGIN:VTIMEZONE',
+    'TZID:Old Zone',
+    'BEGIN:STANDARD',
+    'DTSTART:19911027T020000',
+    'TZOFFSETFROM:+0400',
+    'TZOFFSETTO:+0300',
+    'END:STANDARD',
+    'END:VTIMEZONE',
+    'BEGIN:VEVENT',
+    'UID:old-zone',
+    'DTSTART;TZID=Old Zone:20261105T100000',
+    'DTEND;TZID=Old Zone:20261105T110000',
+    'SUMMARY:In an old zone',
+    'END:VEVENT',
+    'BEGIN:VEVENT',
+    'UID:long-stay',
+    'DTSTART;VALUE=DATE:20261001',
+    'DTEND;VALUE=DATE:20261010',
+    'RRULE:FREQ=MONTHLY',
+    'SUMMARY:Nine days a month',
+    'END:VEVENT',
+    'BEGIN:VEVENT',
+    'UID:since-2010',
+    'DTSTART:20100104T080000Z',
+    'DTEND:20100104T081500Z',
+    'RRULE:FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR',
+    'SUMMARY:Since 2010',
+    'END:VEVENT',
+  )
+  const started = performance.now()
+  const evs = icsEvents(text, win('2026-11-08T00:00:00Z', '2026-11-14T00:00:00Z'))
+  const old = icsEvents(text, win('2026-11-05T00:00:00Z', '2026-11-06T00:00:00Z')).find(
+    e => e.title === 'In an old zone',
+  )
+  assert.equal(old?.start, '2026-11-05T07:00:00Z')
+  assert.deepEqual(
+    evs.filter(e => e.title === 'Nine days a month').map(e => [e.start, e.end]),
+    [['2026-11-01', '2026-11-10']],
+  )
+  assert.deepEqual(
+    evs.filter(e => e.title === 'Since 2010').map(e => e.start),
+    [
+      '2026-11-09T08:00:00Z',
+      '2026-11-10T08:00:00Z',
+      '2026-11-11T08:00:00Z',
+      '2026-11-12T08:00:00Z',
+      '2026-11-13T08:00:00Z',
+    ],
+  )
+  // a series without COUNT is not walked day by day from its start
+  assert.ok(performance.now() - started < 500)
+})
+
 test('ruleOf: what the reader expands, and what it leaves to the first instance', () => {
   assert.equal(ruleOf('FREQ=HOURLY;INTERVAL=2'), null)
   const r = ruleOf('FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE;WKST=SU;UNTIL=20261231T000000Z')
@@ -495,6 +550,7 @@ test('googleEvents: the short form (ID on the head line), no events, and the arg
   assert.deepEqual(googleEvents('No events found in calendar primary.', { id: 'w', account: null }), {
     events: [],
     next: null,
+    said: null,
   })
   const args = googleListArgs(
     { account: 'me@example.com' },

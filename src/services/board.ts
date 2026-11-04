@@ -23,12 +23,13 @@ import { t } from '../core/lang.ts'
 import { relate } from '../core/links.ts'
 import { isPiItem, isPiSessionFile, PI_AGENT, piSessionId } from '../core/pi.ts'
 import { sessionProfile } from '../core/profiles.ts'
-import { pendingOf, requestsOf, type SecretView, secretsConfig, secretViews } from '../core/secrets.ts'
+import { pendingOf, requestsOf, type SecretView, secretViews } from '../core/secrets.ts'
 import { numberTodos, type Todo, todosOf } from '../core/todos.ts'
 import type { AgentStatus, Attention, Card, Config, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
 import { piSleeperPane } from '../core/wake/pi.ts'
 import { archivedFiles, getArchived, hides, isArchived, settleReturned } from './archive.ts'
 import type { Deps } from './deps.ts'
+import { secretsOf } from './secrets.ts'
 
 const numberOf = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined)
 
@@ -47,7 +48,8 @@ function secretAsk(card: Card): string {
 const secretsField = (cfg: Config, card: Card): { secrets?: SecretView[] } => {
   if (!Array.isArray(card.secrets) || !pendingOf(requestsOf(card.secrets), Date.now()).length) return {}
   try {
-    const views = secretViews(secretsConfig(cfg.secrets, { home: homedir() }), card, t)
+    // the owner's sinks, and the calendar's own while it is on (#328): as the request and the submit see them
+    const views = secretViews(secretsOf(cfg), card, t)
     return views.length ? { secrets: views } : {}
   } catch {
     return {} // a card any process wrote: what cannot be read of it never stops the board

@@ -279,7 +279,7 @@ export interface Submit {
  * the first), and the request is ok, or stays pending with why it failed.
  */
 export async function submitSecret(
-  cfg: Pick<Config, 'secrets'>,
+  cfg: Pick<Config, 'secrets'> & { calendar?: unknown },
   id: string,
   input: Submit,
   now = Date.now(),

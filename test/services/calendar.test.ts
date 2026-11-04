@@ -90,6 +90,7 @@ interface Call {
   name?: string | undefined
   args?: Record<string, unknown> | undefined
   session: string | null
+  version?: string | null
 }
 
 /**
@@ -98,7 +99,7 @@ interface Call {
  */
 function mcpServer(
   tools: Record<string, (args: Record<string, unknown>) => unknown>,
-  o: { sse?: boolean; session?: boolean } = {},
+  o: { sse?: boolean; session?: boolean; version?: string } = {},
 ) {
   const calls: Call[] = []
   const server = Bun.serve({
@@ -115,12 +116,18 @@ function mcpServer(
         method: string
         params?: { name?: string; arguments?: Record<string, unknown> }
       }
-      calls.push({ method: body.method, name: body.params?.name, args: body.params?.arguments, session })
+      calls.push({
+        method: body.method,
+        name: body.params?.name,
+        args: body.params?.arguments,
+        session,
+        version: req.headers.get('mcp-protocol-version'),
+      })
       if (body.id === undefined) return new Response(null, { status: 202 })
       let result: unknown
       if (body.method === 'initialize')
         result = {
-          protocolVersion: '2025-06-18',
+          protocolVersion: o.version ?? '2025-06-18',
           capabilities: { tools: {} },
           serverInfo: { name: 'fake', version: '0' },
         }
@@ -251,6 +258,52 @@ test('a failed fetch keeps the last good copy, says why without the address, and
     'UTC',
   )
   assert.match(none.error ?? '', /No iCal address for other/)
+  // no address yet is no failure: looked at again on its interval, not an hour later
+  assert.equal(readCopy('other')?.fails, 0)
+  assert.equal(dueAt(readCopy('other'), { everyMin: 5 }), NOW + 5 * 60_000)
+})
+
+test('an answer read far short of what it says it has keeps the last good copy (the provider’s form changed)', async () => {
+  isolatedHome()
+  let changed = false
+  const fake = mcpServer({
+    get_events: () =>
+      text(
+        changed
+          ? "Successfully retrieved 2 events from calendar 'primary' for me@example.com:\n* Kickoff at 10:00\n* Retro at 15:00"
+          : GOOGLE_PAGE_2,
+      ),
+  })
+  const cfg = cfgWith([
+    { id: 'work', kind: 'mcp', url: fake.url, preset: 'google-workspace', account: 'me@example.com' },
+  ])
+  const c = calendarConfig(cfg.calendar)
+  assert.ok(c)
+  assert.equal((await syncSource(c, c.sources[1] as never, NOW, 'UTC')).count, 1)
+  changed = true
+  const r = await syncSource(c, c.sources[1] as never, NOW + 60_000, 'UTC')
+  assert.equal(r.ok, false)
+  assert.match(r.error ?? '', /has 2 events and the board read 0/)
+  assert.deepEqual(
+    readCopy('work')?.events.map(e => e.id),
+    ['r1'],
+  )
+})
+
+test('the MCP client says the protocol revision the server answered with, after initialize', async () => {
+  isolatedHome()
+  const old = mcpServer({ echo: () => text('ok') }, { version: '2025-03-26' })
+  const client = new McpClient(old.url)
+  await client.call('echo', {})
+  await client.close()
+  assert.deepEqual(
+    old.calls.map(c => [c.method, c.version]),
+    [
+      ['initialize', null],
+      ['notifications/initialized', '2025-03-26'],
+      ['tools/call', '2025-03-26'],
+    ],
+  )
 })
 
 test('readEvents: the board’s own and every copy merged in order; cancelled left out unless asked', async () => {
@@ -557,6 +610,11 @@ test('board cal: off says how to turn it on; list, add, edit, rm on the board’
     [JSON.parse(allDay.out[0] as string).event.start, JSON.parse(allDay.out[0] as string).event.end],
     ['2026-11-05', '2026-11-07'],
   )
+  const longer = JSON.parse((await cal(cfg, ['edit', e.id, '--minutes', '60', '--json'])).out[0] as string)
+  assert.deepEqual([longer.event.start, longer.event.end], ['2026-11-04T16:00:00Z', '2026-11-04T17:00:00Z'])
+  const nothing = await cal(cfg, ['edit', e.id])
+  assert.equal(nothing.code, 1)
+  assert.match(nothing.err.join('\n'), /nothing to change/)
   assert.equal((await cal(cfg, ['rm', e.id])).code, 0)
   const usage = await cal(cfg, ['add', '--title', 'x'])
   assert.equal(usage.code, 1)
@@ -628,16 +686,21 @@ test('board cal: a provider’s calendar only through a source that writes, with
   const db = openDb({ create: false })
   assert.ok(db)
   try {
-    const row = db.db.query("SELECT by, op, ref, after FROM journal WHERE store = 'calendar'").get() as {
+    const rows = db.db.query("SELECT by, op, ref, after FROM journal WHERE store = 'calendar' ORDER BY seq").all() as {
       by: string
       op: string
       ref: string
       after: string
-    }
-    assert.equal(row.op, 'provider-create')
-    assert.equal(row.ref, 'work/new123')
-    assert.equal(row.by, JSON.stringify({ key: 's1', name: 'Agent' }))
-    assert.equal(JSON.parse(row.after).asked, 'put a call with Ann tomorrow at 10')
+    }[]
+    // who asked for what, before the provider is called; then what it gave
+    assert.deepEqual(
+      rows.map(r => [r.op, r.ref, JSON.parse(r.after).phase, JSON.parse(r.after).asked]),
+      [
+        ['provider-create', 'work/new', 'asked', 'put a call with Ann tomorrow at 10'],
+        ['provider-create', 'work/new123', 'done', 'put a call with Ann tomorrow at 10'],
+      ],
+    )
+    assert.equal(rows[0]?.by, JSON.stringify({ key: 's1', name: 'Agent' }))
   } finally {
     db.close()
   }

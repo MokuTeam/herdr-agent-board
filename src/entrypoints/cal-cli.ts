@@ -208,10 +208,21 @@ async function providerWrite(source: CalSource, ask: WriteAsk): Promise<string |
 }
 
 /** The times of an add or an edit: timed (ms) or all day (dates, the end exclusive). */
-function timesOf(a: Args, now: number, required: boolean): { start?: number | string; end?: number | string } {
+function timesOf(
+  a: Args,
+  now: number,
+  required: boolean,
+  /** An edit's event as it is: --minutes alone counts from its start. */
+  was?: { start: string; allDay: boolean } | null,
+): { start?: number | string; end?: number | string } {
   const start = a.one('--start')
   const end = a.one('--end')
   const minutes = a.one('--minutes')
+  const length = (): number => {
+    const n = Number(minutes)
+    if (!(n > 0 && n <= 7 * 24 * 60)) throw new Usage(`not a number of minutes: ${minutes}`)
+    return n * 60_000
+  }
   if (a.has('--all-day')) {
     if (!start) throw new Usage('--all-day needs --start <date>')
     const first = dayOf(start, now, localZone())
@@ -222,15 +233,17 @@ function timesOf(a: Args, now: number, required: boolean): { start?: number | st
   if (!start) {
     if (required) throw new Usage('--start is needed')
     if (end) return { end: instantOf(end, now) }
+    if (minutes) {
+      // no such event: said as not found where it is looked up
+      if (!was) return {}
+      if (was.allDay) throw new Usage('--minutes needs a timed event, or --start with it')
+      return { end: Date.parse(was.start) + length() }
+    }
     return {}
   }
   const s = instantOf(start, now)
   if (end) return { start: s, end: instantOf(end, now) }
-  if (minutes) {
-    const n = Number(minutes)
-    if (!(n > 0 && n <= 7 * 24 * 60)) throw new Usage(`not a number of minutes: ${minutes}`)
-    return { start: s, end: s + n * 60_000 }
-  }
+  if (minutes) return { start: s, end: s + length() }
   if (required) throw new Usage('--end or --minutes is needed')
   return { start: s }
 }
@@ -363,7 +376,17 @@ export async function calCmd(rest: readonly string[], ctx: CalCmdContext): Promi
         const word = cmd === 'add' ? '' : (a.words[0] ?? '')
         const id = word.startsWith(prefix) ? word.slice(prefix.length) : word
         if (cmd !== 'add' && !id) throw new Usage(`board cal ${cmd} <id>`)
-        const times = cmd === 'rm' ? {} : timesOf(a, now, cmd === 'add')
+        // an edit changes something: a flag that says what
+        const CHANGES = ['--title', '--start', '--end', '--minutes', '--location', '--join', '--note']
+        if (cmd === 'edit' && !CHANGES.some(f => a.one(f) !== undefined) && !a.has('--all-day'))
+          throw new Usage(`nothing to change: ${CHANGES.join(', ')}`)
+        const was =
+          cmd === 'edit'
+            ? target
+              ? (readCopy(target.source.id)?.events.find(e => e.id === id) ?? null)
+              : withCalendarDb(false, db => (db ? getBoardEvent(db, id) : null))
+            : null
+        const times = cmd === 'rm' ? {} : timesOf(a, now, cmd === 'add', was)
         const text = (flag: string): string | null | undefined => {
           const v = a.one(flag)
           return v === undefined ? undefined : v.trim() || null
@@ -385,18 +408,31 @@ export async function calCmd(rest: readonly string[], ctx: CalCmdContext): Promi
             ...(text('--note') != null && { note: text('--note') as string }),
           }
           if (cmd === 'add' && !ask.title) throw new Usage('--title is needed')
-          const written = await providerWrite(target.source, ask)
+          const row = {
+            source: target.source.id,
+            op: ask.op,
+            before,
+            after: ask.op === 'delete' ? null : ask,
+            asked: target.asked,
+          }
+          // who asked for what is in the journal before the provider is called: a database that
+          // cannot take the row stops the write before it happens
           withCalendarDb(true, db => {
             if (!db) throw new CalError('cal.err.noDb')
-            journalProviderWrite(db, ctx.actor, {
-              source: target.source.id,
-              op: ask.op,
-              id: written ?? id ?? '?',
-              before,
-              after: ask.op === 'delete' ? null : ask,
-              asked: target.asked,
-            })
+            journalProviderWrite(db, ctx.actor, { ...row, id: id || 'new', phase: 'asked' })
           })
+          const written = await providerWrite(target.source, ask)
+          // done at the provider: a row that cannot be written now is said, never a failure (a
+          // retry would make the event twice)
+          try {
+            withCalendarDb(true, db => {
+              if (db) journalProviderWrite(db, ctx.actor, { ...row, id: written ?? id ?? 'new', phase: 'done' })
+            })
+          } catch (err) {
+            errOut(
+              `board cal: written at ${target.source.id}, but not journaled: ${err instanceof Error ? err.message : String(err)}`,
+            )
+          }
           const synced = await syncSource(c, target.source, now, zone)
           const result = { ok: true, source: target.source.id, op: ask.op, id: written, synced: synced.ok }
           out(json ? JSON.stringify(result) : `ok · ${ask.op} in ${target.source.id}${written ? ` · ${written}` : ''}`)

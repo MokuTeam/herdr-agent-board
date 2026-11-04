@@ -30,6 +30,7 @@ export const CAL_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'cal.err.noAddress': 'No iCal address for {source} yet: add it in Settings → Calendar',
     'cal.err.notFetched': '{source} is not fetched by the board',
     'cal.err.noEventsInAnswer': 'The answer has no events the board can read',
+    'cal.err.unreadAnswer': 'The answer has {said} events and the board read {read}: its form may have changed',
     'cal.err.noSource': 'No calendar source {source}: see board cal sources',
     'cal.err.readOnly':
       '{source} takes no writes: only the board’s own calendar, or a source with "write" in config.json',
@@ -170,6 +171,7 @@ export const CAL_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'cal.err.noAddress': 'Для {source} ещё нет iCal-адреса: добавьте его в Настройки → Календарь',
     'cal.err.notFetched': 'Доска не загружает {source} сама',
     'cal.err.noEventsInAnswer': 'В ответе нет событий, которые доска может прочитать',
+    'cal.err.unreadAnswer': 'В ответе {said} событий, доска прочитала {read}: похоже, его формат изменился',
     'cal.err.noSource': 'Нет источника календаря {source}: см. board cal sources',
     'cal.err.readOnly':
       '{source} не принимает записи: только собственный календарь доски или источник с "write" в config.json',
