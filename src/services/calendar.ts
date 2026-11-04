@@ -7,14 +7,14 @@
 // nothing; configChanged starts or stops it as the config changes. A fetch that fails keeps the
 // last good copy and says why beside it; the next try waits longer each time it fails again
 // (twice the interval, four times… up to an hour).
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import {
   copiesStamp,
+  makeSecretDir,
   readCopy,
   readIcsAddress,
   removeCopy,
   type SourceCopy,
-  secretDir,
   writeCopy,
 } from '../adapters/calendar-cache.ts'
 import { FetchError, fetchIcs, McpClient } from '../adapters/calendar-fetch.ts'
@@ -433,7 +433,7 @@ export function createCalendarSync({
     // the folder the `calendar` sink writes an ICS address into: a form submitted on the board finds it there
     if (c?.sources.some(s => s.kind === 'ics')) {
       try {
-        mkdirSync(secretDir(), { recursive: true })
+        makeSecretDir()
       } catch (err) {
         log(`calendar: ${err instanceof Error ? err.message : String(err)}`)
       }

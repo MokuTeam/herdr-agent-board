@@ -214,6 +214,8 @@ function timesOf(
   required: boolean,
   /** An edit's event as it is: --minutes alone counts from its start. */
   was?: { start: string; allDay: boolean } | null,
+  /** The zone a day is read in (today, tomorrow): the command's. */
+  zone: string = localZone(),
 ): { start?: number | string; end?: number | string } {
   const start = a.one('--start')
   const end = a.one('--end')
@@ -225,8 +227,8 @@ function timesOf(
   }
   if (a.has('--all-day')) {
     if (!start) throw new Usage('--all-day needs --start <date>')
-    const first = dayOf(start, now, localZone())
-    const last = end ? dayOf(end, now, localZone()) : first
+    const first = dayOf(start, now, zone)
+    const last = end ? dayOf(end, now, zone) : first
     if (last < first) throw new CalError('cal.err.endBeforeStart')
     return { start: first, end: addDays(last, 1) }
   }
@@ -386,7 +388,7 @@ export async function calCmd(rest: readonly string[], ctx: CalCmdContext): Promi
               ? (readCopy(target.source.id)?.events.find(e => e.id === id) ?? null)
               : withCalendarDb(false, db => (db ? getBoardEvent(db, id) : null))
             : null
-        const times = cmd === 'rm' ? {} : timesOf(a, now, cmd === 'add', was)
+        const times = cmd === 'rm' ? {} : timesOf(a, now, cmd === 'add', was, zone)
         const text = (flag: string): string | null | undefined => {
           const v = a.one(flag)
           return v === undefined ? undefined : v.trim() || null

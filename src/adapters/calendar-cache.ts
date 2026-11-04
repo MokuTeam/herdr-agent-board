@@ -8,7 +8,7 @@
 //
 // A copy is written whole by rename, so the web board and a `board cal` command never read half of
 // one. A failed fetch writes the copy again with its events as they were and the error beside them.
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { type CalEvent, eventOf, SOURCE_ID, webAddress } from '../core/calendar.ts'
 import { isRecord, readJson, replaceFile } from './json-store.ts'
@@ -90,6 +90,16 @@ export function icsAddress(v: unknown): string | null {
   return webAddress(s)
 }
 
+/**
+ * The folder of the addresses, made when missing: on macOS and Linux its owner's alone (0700), as
+ * each file in it is (0600), so no other user lists which sources have one. Windows keeps the
+ * profile folder's own access rules.
+ */
+export function makeSecretDir(): void {
+  mkdirSync(secretDir(), { recursive: true, mode: 0o700 })
+  if (process.platform !== 'win32') chmodSync(secretDir(), 0o700)
+}
+
 /** An ICS source's address, or null: none set (or not one that can be fetched). */
 export function readIcsAddress(id: string): string | null {
   if (!SOURCE_ID.test(id)) return null
@@ -102,7 +112,7 @@ export const hasIcsAddress = (id: string): boolean => SOURCE_ID.test(id) && exis
 /** The address as the `calendar` sink writes it: the file readable by the owner alone. */
 export function writeIcsAddress(id: string, url: string): void {
   if (!SOURCE_ID.test(id)) throw new Error(`not a source id: ${id}`)
-  mkdirSync(secretDir(), { recursive: true })
+  makeSecretDir()
   replaceFile(addressFile(id), `${JSON.stringify({ url })}\n`, undefined, 0o600)
 }
 

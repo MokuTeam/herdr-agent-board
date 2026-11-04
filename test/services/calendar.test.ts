@@ -6,7 +6,7 @@ import { afterEach, onTestFinished, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { readCopy, readIcsAddress, writeIcsAddress } from '../../src/adapters/calendar-cache.ts'
+import { readCopy, readIcsAddress, secretDir, writeIcsAddress } from '../../src/adapters/calendar-cache.ts'
 import { McpClient } from '../../src/adapters/calendar-fetch.ts'
 import {
   addBoardEvent,
@@ -225,13 +225,11 @@ test('a failed fetch keeps the last good copy, says why without the address, and
   )
   writeIcsAddress('home', ics.url)
   assert.equal(readIcsAddress('home'), ics.url)
-  if (process.platform !== 'win32')
-    assert.equal(
-      statSync(
-        join(process.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board', 'calendar', 'secret', 'home.json'),
-      ).mode & 0o777,
-      0o600,
-    )
+  // the owner's alone on macOS and Linux: the folder and the file
+  if (process.platform !== 'win32') {
+    assert.equal(statSync(secretDir()).mode & 0o777, 0o700)
+    assert.equal(statSync(join(secretDir(), 'home.json')).mode & 0o777, 0o600)
+  }
   const cfg = cfgWith([{ id: 'home', kind: 'ics', label: 'Home', everyMin: 5 }])
   const c = calendarConfig(cfg.calendar)
   assert.ok(c)
