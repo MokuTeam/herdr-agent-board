@@ -4,7 +4,15 @@
 import { expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { callFile, callInProgress, mokupilotHere } from '../../src/adapters/mokupilot-call.ts'
+import {
+  callAgents,
+  callAgentsFolder,
+  callFile,
+  callInProgress,
+  mokupilotHere,
+  taskBoard,
+  taskBoardsFolder,
+} from '../../src/adapters/mokupilot-call.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const NOW = 1_800_000_000_000
@@ -56,5 +64,69 @@ test('a stale or foreign file is no call', () => {
   ]) {
     write(file, bad === 'not json' ? bad : JSON.stringify(bad))
     expect(read()).toBeNull()
+  }
+})
+
+// #326: the call agents MokuPilot writes, one file each in call-agents/, and their task boards.
+const AGENT = '1f0c9a3e-0000-4000-8000-000000000001'
+const agentFile = (over: Record<string, unknown> = {}) => ({
+  format: 'mokupilot-call-agent',
+  version: 1,
+  pid: 4242,
+  session_id: AGENT,
+  harness: 'claude',
+  parent_session_id: '',
+  config_dir: '',
+  cwd: '/work',
+  started: NOW / 1000 - 60,
+  call: 'on',
+  busy: false,
+  updated: NOW / 1000,
+  ...over,
+})
+
+test('call agents: none without the folder; each live file, the rest left out', () => {
+  const home = isolatedHome()
+  const folder = callAgentsFolder(home)
+  expect(folder).toBe(join(home, '.meeting-copilot', 'call-agents'))
+  const read = (alive: (pid: number) => boolean = pid => pid === 4242) => callAgents({ folder, now: () => NOW, alive })
+  expect(read()).toEqual([])
+  // An old MokuPilot: call.json only, no folder.
+  write(callFile(home), { pid: 4242, started: NOW / 1000 - 600 })
+  expect(read()).toEqual([])
+  write(join(folder, `${AGENT}.json`), agentFile())
+  write(join(folder, 'other.json'), agentFile({ session_id: 'other', pid: 7 }))
+  write(join(folder, 'broken.json'), '{"format":')
+  write(join(folder, `.${AGENT}.tmp.json`), agentFile())
+  write(join(folder, 'notes.txt'), 'x')
+  expect(read().map(a => a.session)).toEqual([AGENT])
+  expect(
+    read(() => true)
+      .map(a => a.session)
+      .sort(),
+  ).toEqual([AGENT, 'other'])
+})
+
+test('a call agent’s task board: its harness’s file, AGENT_BOARDS_DIR first', () => {
+  const home = isolatedHome()
+  const items = [{ id: 'b1', text: 'Check the totals', status: 'doing' }]
+  const boardFile = (root: string, harness = 'claude') => join(root, harness, `${AGENT}.json`)
+  const saved = process.env.AGENT_BOARDS_DIR
+  delete process.env.AGENT_BOARDS_DIR
+  try {
+    expect(taskBoardsFolder(home)).toBe(join(home, '.agent-boards'))
+    expect(taskBoard({ harness: 'claude', session: AGENT }, taskBoardsFolder(home))).toEqual([])
+    write(boardFile(join(home, '.agent-boards')), { format: 'agent-board', version: 1, items })
+    expect(taskBoard({ harness: 'claude', session: AGENT }, taskBoardsFolder(home))).toEqual([
+      { id: 'b1', text: 'Check the totals', status: 'doing' },
+    ])
+    // pi's folder is its own; a name that would leave the folder reads nothing.
+    expect(taskBoard({ harness: 'pi', session: AGENT }, taskBoardsFolder(home))).toEqual([])
+    expect(taskBoard({ harness: '..', session: AGENT }, taskBoardsFolder(home))).toEqual([])
+    process.env.AGENT_BOARDS_DIR = join(home, 'boards')
+    expect(taskBoardsFolder(home)).toBe(join(home, 'boards'))
+  } finally {
+    if (saved === undefined) delete process.env.AGENT_BOARDS_DIR
+    else process.env.AGENT_BOARDS_DIR = saved
   }
 })

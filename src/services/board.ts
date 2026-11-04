@@ -10,9 +10,11 @@ import { helpersOf } from '../adapters/helpers.ts'
 import { paneTerminals, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import type { LinksIndex } from '../adapters/links.ts'
+import { callAgents, taskBoard } from '../adapters/mokupilot-call.ts'
 import { contextDir } from '../adapters/paths.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
 import { attentionOf, busy, columnOf, isAgentStatus, PINS } from '../core/board.ts'
+import { besideParents, type CallAgent, type CallView } from '../core/call-agent.ts'
 import { categoryFor } from '../core/categories.ts'
 import { isCodexItem } from '../core/codex.ts'
 import { waitingTool } from '../core/held-question.ts'
@@ -53,6 +55,32 @@ const secretsField = (cfg: Config, card: Card): { secrets?: SecretView[] } => {
 const todosField = (card: Card): { todos?: Todo[] } => {
   const todos = todosOf(card.todos)
   return todos.length ? { todos: numberTodos(todos, Number(card.todoSeq) || 0).list } : {}
+}
+
+/** A call agent's card (#326, core/call-agent.ts) as the page gets it: its call and its task board. */
+const callView = (a: CallAgent, key: string): CallView => ({
+  phase: a.phase,
+  since: a.started,
+  parent: a.parent && a.parent !== key ? a.parent : null,
+  helpers: a.helpers,
+  tasks: taskBoard(a),
+})
+
+/**
+ * A call agent's words from its transcript: what it said last, and a recap it wrote on the call
+ * (`since`: when it started). Its title and an older recap are its parent's, copied with the
+ * conversation; its prompts are what MokuPilot feeds it from the call: none of them on its card.
+ */
+const callWords = (info: TranscriptInfo, since: number) => {
+  const own = (info.recapAt ?? 0) >= since
+  return {
+    title: '',
+    prompt: '',
+    lastText: info.lastText ?? '',
+    lastAt: info.lastAt ?? null,
+    recap: own ? (info.recap ?? '') : '',
+    recapAt: own ? (info.recapAt ?? null) : null,
+  }
 }
 
 const formerPanes = (card: Card): { formerPanes?: string[] } => {
@@ -264,12 +292,15 @@ export async function collect(
   const seen = new Set<string>()
   const archived = archivedFiles()
 
-  const add = (base: Base): void => {
+  // A MokuPilot call agent (#326) runs with no pane and no hook: its card is told the Claude folder
+  // MokuPilot started it in, where its records are, unless its own card says one.
+  const add = (base: Base, call?: CallAgent, parent?: Item): void => {
     if (isArchived(archived, base.key)) {
       const record = getArchived(base.key)
       if (hides(record, base)) return
       // In another pane than the one it was archived in: it is back (Return, or resumed by hand).
-      if (record) {
+      // MokuPilot going on in it for a call (#326) is no return: it shows while the call lasts.
+      if (record && !call) {
         try {
           settleReturned(base)
         } catch {} // its record is locked: the next refresh settles it
@@ -277,7 +308,11 @@ export async function collect(
     }
     const saved = cards.get(base.key) ?? {}
     const pin = pinOf(base.key, base.status, saved)
-    const card: Card = { ...saved, pin }
+    const card: Card = {
+      ...saved,
+      pin,
+      ...(call && !saved.profileDir && { profileDir: call.configDir || join(homedir(), '.claude') }),
+    }
     const hit = base.session ? live.get(base.session) : undefined
     // A pi session's records are its session file, its key: none of Claude's folders has them.
     const pi = isPiItem(base) ? (deps.pi.transcriptInfo(base.session) ?? {}) : null
@@ -290,7 +325,12 @@ export async function collect(
     const guess = categoryFor(cfg, base.cwd)
     // A Claude session's question form can be the hook's still (core/held-question.ts).
     const tool = pi || codex ? (info.tool ?? null) : waitingTool(base.status, info, card.asking)
-    const attention = attentionOf(base.status, card, info)
+    // A call agent's last words go to the call, its questions too: only its `board ask` asks the user.
+    const told: TranscriptInfo = call ? { ...info, question: '' } : info
+    const attention = attentionOf(base.status, card, told)
+    const callOf = call ? callView(call, base.key) : null
+    // Its own words on the board, else what its task board says it does.
+    const doing = card.doing || callOf?.tasks.find(x => x.status === 'doing')?.text || ''
     let own: HelperSummary | null = null
     if (helpers && path) {
       try {
@@ -302,35 +342,45 @@ export async function collect(
       // A name given on the board beats the one herdr and Claude know it by; autoName is theirs.
       name: card.name || autoName,
       autoName,
-      category: card.category || guess || 'other',
+      // A call agent goes in its parent's lane, unless its own card says another.
+      category: card.category || parent?.category || guess || 'other',
       categorySet: !!card.category,
-      doing: card.doing ?? '',
+      doing,
       // A card written before doingAt (#321): its last change, the latest the doing can be from.
-      doingAt: card.doing ? (card.doingAt ?? card.updatedAt ?? null) : null,
+      doingAt: card.doing ? (card.doingAt ?? card.updatedAt ?? null) : doing && call ? call.updated : null,
       wait: card.wait ?? '',
       waitSince: card.waitSince ?? null,
       result: card.result ?? '',
-      title: info.title ?? '',
-      prompt: info.prompt ?? '',
-      lastText: info.lastText ?? '',
-      lastAt: info.lastAt ?? null,
-      recap: info.recap ?? '',
-      recapAt: info.recapAt ?? null,
+      // A call agent's title and recap from before its call are its parent's, copied with the
+      // conversation; its prompts are what MokuPilot feeds it from the call.
+      ...(call
+        ? callWords(info, call.started)
+        : {
+            title: info.title ?? '',
+            prompt: info.prompt ?? '',
+            lastText: info.lastText ?? '',
+            lastAt: info.lastAt ?? null,
+            recap: info.recap ?? '',
+            recapAt: info.recapAt ?? null,
+          }),
       ...contextOf(codex ? null : base.session, info, home?.root ?? null), // Codex has no Claude status line file.
       tool,
       attention,
-      question: askedText(attention, card, info, tool),
+      question: askedText(attention, card, told, tool),
       askSince: attention === 'ask' ? (card.askSince ?? null) : null,
       activity: info.activity ?? base.activity ?? 0,
-      column: columnOf(base.status, card, info),
+      column: columnOf(base.status, card, told),
       pin, // the column the user dragged it to, or ''
-      auto: columnOf(base.status, { ...card, pin: '' }, info), // where it would be without the pin
+      auto: columnOf(base.status, { ...card, pin: '' }, told), // where it would be without the pin
       ...(card.favorite === true && { favorite: true }), // the user keeps it in sight
       ...todosField(card), // its tasks (#202), when it has any
       ...secretsField(cfg, card), // what it asks the user to fill in (#273), when it does
       helpers: own, // its subagents, forks, workflow agents and teammates in short, or null
-      // a fork's card says whose fork it is, and when it started
-      ...(typeof card.forkOf === 'string' && { fork: { of: card.forkOf, at: Number(card.forkAt) || 0 } }),
+      // a fork's card says whose fork it is, and when it started; a call agent's file says it
+      ...(typeof card.forkOf === 'string'
+        ? { fork: { of: card.forkOf, at: Number(card.forkAt) || 0 } }
+        : callOf?.parent && { fork: { of: callOf.parent, at: callOf.since } }),
+      ...(callOf && { call: callOf }), // a MokuPilot call agent (#326): its call and its task board
       transcript: path,
       ...formerPanes(card), // panes wake closed as it went to sleep (#204), for the links
       ...sessionProfile(card, profiles.list), // its profile, as its hooks reported it
@@ -362,6 +412,17 @@ export async function collect(
       since: numberOf(reg?.startedAt) ?? null,
       pipe: typeof reg?.messagingSocketPath === 'string' ? reg.messagingSocketPath : '',
     })
+  }
+
+  // MokuPilot's call agents (#326): one in a pane already is marked there; a sleeper of the same
+  // session is the call agent now (MokuPilot went on in it); the rest are added once the sessions
+  // they are forks of are on the board.
+  const calls = callAgents()
+  const onCall: CallAgent[] = []
+  for (const a of calls) {
+    if (seen.has(a.session)) continue
+    seen.add(a.session)
+    onCall.push(a)
   }
 
   const panes = new Map(snap.panes.map(p => [p.pane_id, p]))
@@ -414,8 +475,42 @@ export async function collect(
     })
   }
 
-  // Favorites first in their columns, then the latest activity first.
+  for (const a of onCall) {
+    const parent = a.parent && a.parent !== a.session ? items.find(i => i.session === a.parent) : undefined
+    // MokuPilot went on in a sleeping session: its card, by its name and in its workspace.
+    const slept = asleep.find(s => s.session === a.session)
+    add(
+      {
+        key: a.session,
+        session: a.session,
+        pane: null,
+        workspace:
+          parent?.workspace ??
+          (slept ? (labels.get(panes.get(slept.pane ?? '')?.workspace_id ?? '') ?? slept.workspace ?? '') : ''),
+        agent: a.harness,
+        name: parent ? t('call.of', { name: parent.name }) : slept?.name || t('call.alone'),
+        cwd: a.cwd || parent?.cwd || '',
+        status: a.busy ? 'working' : 'idle',
+        sleeping: false,
+        focused: false,
+        activity: a.updated,
+        alive: true,
+        since: a.started,
+        pipe: '',
+      },
+      a,
+      parent,
+    )
+  }
+  for (const a of calls) {
+    const it = onCall.includes(a) ? undefined : items.find(i => i.key === a.session)
+    if (it) it.call = callView(a, it.key)
+  }
+
+  // Favorites first in their columns, then the latest activity first; a call agent right after
+  // the session it is a fork of.
   items.sort((a, b) => Number(!!b.favorite) - Number(!!a.favorite) || (b.activity ?? 0) - (a.activity ?? 0))
+  if (calls.length) items.splice(0, items.length, ...besideParents(items))
   if (links) {
     links.update(items.map(i => i.transcript))
     const rel = relate(items, it => links.events(it.transcript))
