@@ -147,7 +147,7 @@ export function calendarRoutes(cfg: Config, sync: CalendarSync): Route[] {
       method: 'GET',
       path: '/api/calendar-settings',
       handle() {
-        return json(200, calendarSettingsView(withCalendarDb))
+        return json(200, calendarSettingsView(withCalendarDb, cfg.calendar))
       },
     },
     {
@@ -166,7 +166,7 @@ export function calendarRoutes(cfg: Config, sync: CalendarSync): Route[] {
           if (isRecord(body) && (body.op === 'add' || body.op === 'edit') && r.id) void sync.syncNow(r.id)
         }
         const status = r.ok ? 200 : r.code === 'configBusy' ? 409 : 400
-        return json(status, { ...r, view: calendarSettingsView(withCalendarDb) })
+        return json(status, { ...r, view: calendarSettingsView(withCalendarDb, cfg.calendar) })
       },
     },
   ]

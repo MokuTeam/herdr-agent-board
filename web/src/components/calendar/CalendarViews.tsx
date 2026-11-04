@@ -252,6 +252,7 @@ function EventBlock({
         'cal-event',
         `tone-${eventTone(e)}`,
         minutes <= 30 && 'short',
+        Number((style as Record<string, unknown>)['--cols']) > 1 && 'stacked',
         callSoon(e, now) && 'soon',
         s.end <= now && 'past',
         clippedTop && 'cut-top',
@@ -267,7 +268,7 @@ function EventBlock({
         <span className="cal-ev-time">{minutes <= 30 ? clockText(s.start, lang) : time}</span>
         <span className="cal-mark-label">{label}</span>
       </span>
-      {e.join && <JoinButton url={e.join} compact label={e.title} />}
+      {e.join && s.end > now && <JoinButton url={e.join} compact label={e.title} />}
     </div>
   )
 }
@@ -370,7 +371,7 @@ export function MonthGrid({
                 <button
                   type="button"
                   key={`${e.source}/${e.id}`}
-                  className={classNames('cal-month-ev', isBar(e) ? 'bar' : 'dot', `tone-${eventTone(e)}`)}
+                  className={classNames('cal-month-ev', isBar(e) ? 'cal-whole' : 'cal-timed', `tone-${eventTone(e)}`)}
                   style={{ '--ev': marks.color(e) } as CSSProperties}
                   title={`${e.title} · ${marks.label(e)}`}
                   onClick={ev => onPick(e, ev.currentTarget)}

@@ -29,6 +29,7 @@ import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
+import { calendarConfig } from '../core/calendar.ts'
 import { heldQuestionOf } from '../core/held-question.ts'
 import { isNotice } from '../core/notices.ts'
 import { type Profile, profileReport } from '../core/profiles.ts'
@@ -139,7 +140,19 @@ async function main(): Promise<void> {
     const presence = presenceForBrief(cfg)
     // The secret sinks (#273), only where config.json has any: else the brief is as it was.
     const sinks = cfg.secrets === undefined ? [] : usableSinks(secretsConfig(cfg.secrets, { home: homedir() }))
-    context = brief(cfg, card, text(input.cwd) ?? '', process.env, 'Claude', presence, todosConfig(cfg.todos), sinks)
+    // The calendar (#328), only while config.json turns it on: else the brief is as it was.
+    const calendar = calendarConfig(cfg.calendar) !== null
+    context = brief(
+      cfg,
+      card,
+      text(input.cwd) ?? '',
+      process.env,
+      'Claude',
+      presence,
+      todosConfig(cfg.todos),
+      sinks,
+      calendar,
+    )
     Object.assign(patch, { briefedAt: Date.now(), briefV: BRIEF_VERSION })
     if (presence) patch.presenceSeen = presence.since
     else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''

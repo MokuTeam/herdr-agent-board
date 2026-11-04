@@ -122,9 +122,9 @@ button.cal-day-head.today:hover .cal-dn { background: var(--red); color: #fff; }
   align-self: center;
   padding-right: 6px;
   color: var(--label-3);
-  font-size: 10px;
+  font-size: 9.5px;
+  line-height: 1.05;
   text-align: right;
-  white-space: nowrap;
   overflow: hidden;
 }
 .cal-bar {
@@ -158,7 +158,7 @@ button.cal-day-head.today:hover .cal-dn { background: var(--red); color: #fff; }
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.cal-col { position: relative; min-width: 0; box-shadow: inset 0.5px 0 0 var(--separator); }
+.cal-col { position: relative; min-width: 0; box-shadow: inset 0.5px 0 0 var(--separator); container: cal-col / inline-size; }
 .cal-col .cal-hour-row + .cal-hour-row { box-shadow: inset 0 0.5px 0 var(--separator); }
 
 /* An event: a tint of its source's colour, its edge in it. */
@@ -184,6 +184,7 @@ button.cal-day-head.today:hover .cal-dn { background: var(--red); color: #fff; }
   cursor: pointer;
   transition: background 150ms ease, transform 100ms ease-out;
 }
+.cal-event > * { flex: none; }
 .cal-event:hover { z-index: 2; background: color-mix(in srgb, var(--ev) 24%, var(--surface)); }
 .cal-event:active { transform: scale(0.98); }
 .cal-event:focus-visible,
@@ -198,7 +199,7 @@ button.cal-day-head.today:hover .cal-dn { background: var(--red); color: #fff; }
 .cal-ev-meta > span { overflow: hidden; text-overflow: ellipsis; }
 .cal-ev-time { font-variant-numeric: tabular-nums; }
 .cal-event.short { flex-direction: row; align-items: baseline; gap: 6px; padding-top: 1px; padding-bottom: 1px; }
-.cal-event.short .cal-ev-title { display: block; min-width: 0; white-space: nowrap; text-overflow: ellipsis; }
+.cal-event.short .cal-ev-title { display: block; flex: 0 1 auto; min-width: 0; white-space: nowrap; text-overflow: ellipsis; }
 .cal-event.short .cal-mark-label { display: none; }
 .cal-event.past { opacity: 0.6; }
 .cal-event.soon { box-shadow: inset 3px 0 0 var(--ev), 0 0 0 1.5px var(--ev); }
@@ -342,10 +343,10 @@ button.cal-day-head.today:hover .cal-dn { background: var(--red); color: #fff; }
   white-space: nowrap;
 }
 .cal-month-ev:hover { background: var(--fill-2); }
-.cal-month-ev.dot::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ev); }
-.cal-month-ev.bar { background: color-mix(in srgb, var(--ev) 18%, var(--surface)); }
+.cal-month-ev.cal-timed::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ev); }
+.cal-month-ev.cal-whole { background: color-mix(in srgb, var(--ev) 18%, var(--surface)); }
 .cal-month-ev .cal-ev-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
-.cal-month-ev.bar .cal-ev-title { font-weight: 600; }
+.cal-month-ev.cal-whole .cal-ev-title { font-weight: 600; }
 .cal-month-ev .cal-ev-time { flex: none; color: var(--label-2); }
 .cal-month-more {
   align-self: flex-start;
@@ -420,7 +421,9 @@ button.cal-day-head.today:hover .cal-dn { background: var(--red); color: #fff; }
 .cal-soon { color: var(--red); font-weight: 600; }
 .cal-row.past { opacity: 0.55; }
 .cal-row.tone-pending .cal-row-text { border-left-style: dashed; }
-.cal-row .cal-join { flex: none; }
+.cal-row .cal-join { flex: none; align-self: center; }
+.cal-row.tone-quiet .cal-ev-title { color: var(--label-2); font-weight: 500; }
+.cal-row.tone-quiet .cal-row-text { border-left-color: color-mix(in srgb, var(--ev) 45%, transparent); }
 
 /* ---------------------------------------------------------------- an event's card */
 
@@ -490,7 +493,7 @@ button.cal-day-head.today:hover .cal-dn { background: var(--red); color: #fff; }
 
 /* ---------------------------------------------------------------- Settings → Calendar */
 
-.cal-set-sources { margin: 0 0 10px; padding: 2px 0; }
+.cal-set-sources { margin: 0 0 10px; padding: 2px 12px; }
 .cal-set-source + .cal-set-source { box-shadow: 0 -0.5px 0 var(--separator); }
 .cal-set-head {
   display: flex;
@@ -525,6 +528,17 @@ button.cal-day-head.today:hover .cal-dn { background: var(--red); color: #fff; }
 
 /* ---------------------------------------------------------------- narrow: a docked panel, a phone */
 
+/* A day too narrow for overlapping events side by side: they overlap instead, each a little
+   further in, the later one on top with a ring of the sheet's colour, as a paper calendar's. */
+@container cal-col (max-width: 130px) {
+  .cal-event.stacked {
+    left: calc(var(--col) * 9px + 2px);
+    width: calc(100% - var(--col) * 9px - 4px);
+    z-index: calc(1 + var(--col));
+  }
+  .cal-event.stacked:hover { z-index: 9; }
+}
+
 @container (max-width: 560px) {
   .cal-grid-head,
   .cal-strip,
@@ -540,8 +554,8 @@ button.cal-day-head.today:hover .cal-dn { background: var(--red); color: #fff; }
 }
 @container (max-width: 400px) {
   .cal-views button { padding: 4px 9px; }
-  .cal-month-ev.dot .cal-ev-title { display: none; }
-  .cal-month-ev.dot { justify-content: center; }
+  .cal-month-ev.cal-timed .cal-ev-title { display: none; }
+  .cal-month-ev.cal-timed { justify-content: center; }
 }
 
 @media (prefers-reduced-motion: reduce) {

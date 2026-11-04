@@ -62,7 +62,11 @@ export function CalendarPanel({ open, onClose, onSettings }: CalendarPanelProps)
   const now = useMinute(open)
   const rev = data?.calendar?.rev ?? ''
   const lanes = data?.categories ?? []
-  const weekStart = useMemo(() => weekStartFor(typeof navigator === 'undefined' ? 'en' : navigator.language), [])
+  // the week starts as the board's language has it (Monday in Russian), else as this browser's locale does
+  const weekStart = useMemo(
+    () => weekStartFor(lang === 'ru' || typeof navigator === 'undefined' ? lang : navigator.language),
+    [lang],
+  )
   const [picked, setPicked] = useState<CalView>(() => {
     const v = storage.read(VIEW_KEY)
     return isCalView(v) ? v : 'week'

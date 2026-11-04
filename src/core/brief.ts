@@ -41,6 +41,8 @@ export function brief(
   todos: TodosConfig | null = null,
   /** The secret sinks config.json defines (#273); agents hear of `board secret` only where there are any. */
   sinks: readonly string[] = [],
+  /** The calendar is on (#328): agents hear of `board cal`. */
+  calendar = false,
 ): string {
   const cat = card?.category
   const guess = categoryFor(cfg, cwd)
@@ -66,6 +68,7 @@ export function brief(
       "  More reliable than CronCreate or ScheduleWakeup: those live in this Claude process and die when the idle session is put to sleep; the board's entries survive sleep and restarts. Use it for anything due later than a few minutes.",
     agent === 'Claude' && todos?.agents && todosBrief(),
     agent === 'Claude' && sinks.length > 0 && secretsBrief(sinks),
+    agent === 'Claude' && calendar && calendarBrief(),
     `Card texts in ${languageName()}, short. Call it only when the state changes, not every turn.${state ? ` Card now: ${state}.` : ''}`,
     presence && presenceBrief(presence),
     herdrLine(env, agent),
@@ -77,6 +80,11 @@ export function brief(
 /** How an agent asks the owner for a secret it must never see (#273), with the sinks there are. */
 export function secretsBrief(sinks: readonly string[]): string {
   return `- board secret request --title "<what for>" --sink <id> [--field <name>[:shown]]... [--param <name>=<value>]...: a token, a password or keys you must never see. The owner types them into a form on the board and the board writes them where the sink says; you get back only ok, declined or expired (run it in the background: it waits). Never ask for a secret in the chat or with a script of your own. Sinks: ${sinks.join(', ')} (board secret sinks says what each takes).`
+}
+
+/** The owner's calendar for agents (#328), while it is on. */
+export function calendarBrief(): string {
+  return `- board cal list [--day <d> | --from <t> --to <t>] [--json]: the owner's schedule across every calendar (each line says whose); read it before planning around the owner's time. board cal add --title "<t>" --start <t> --minutes <n> puts an event of yours on the board's own calendar (edit, rm too). A real meeting in a provider's calendar only when the owner asked for that event: --source <id> --asked "<their words>". board cal --help.`
 }
 
 export function waitReminder(card: Pick<Card, 'wait'>): string {
