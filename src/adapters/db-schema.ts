@@ -82,6 +82,34 @@ export const MIGRATIONS: readonly Migration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 4,
+    store: 'calendar',
+    // The board's own calendar (#328, adapters/calendar-store.ts): events agents and the owner put
+    // on it. A timed event's `start` and `end` are UTC instants (2026-11-02T13:00:00Z), an all-day
+    // one's dates with `end` the day after its last; a removed one stays with `deleted`. Nothing
+    // reads the table while the calendar is off. A provider's events are not kept here: they are
+    // a copy in the state folder (adapters/calendar-cache.ts), out of the journal and the backups.
+    sql: `
+      CREATE TABLE cal_events (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        start TEXT NOT NULL,
+        end TEXT NOT NULL,
+        all_day INTEGER NOT NULL DEFAULT 0,
+        location TEXT,
+        join_url TEXT,
+        note TEXT,
+        by TEXT NOT NULL,
+        at INTEGER NOT NULL,
+        changed INTEGER NOT NULL,
+        changed_by TEXT NOT NULL,
+        rev INTEGER NOT NULL DEFAULT 1,
+        deleted INTEGER
+      ) STRICT;
+      CREATE INDEX cal_by_start ON cal_events (start);
+    `,
+  },
 ]
 
 /** The version the code makes a file: the last step's. */

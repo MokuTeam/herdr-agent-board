@@ -24,6 +24,7 @@ import { columnHeads, documentTitle, laneOptions, scheduleBadge, summaryParts, s
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { BackupNote } from './BackupNote.tsx'
 import { ColumnsHead } from './ColumnsHead.tsx'
+import { CalendarButton } from './calendar/CalendarButton.tsx'
 import { AlarmIcon, ArchiveIcon, GearIcon, PlusIcon, SearchIcon, TagIcon, TasksIcon, TimeIcon } from './icons.tsx'
 import { Lanes } from './Lanes.tsx'
 import { Limits } from './Limits.tsx'
@@ -57,6 +58,8 @@ export interface ToolbarProps {
   onTodos?: () => void
   /** Time (#233): its panel, while the board has time tracking on. */
   onTime?: () => void
+  /** The calendar (#328): its panel, while the board has the calendar on. */
+  onCalendar?: () => void
 }
 
 export function Toolbar({
@@ -72,6 +75,7 @@ export function Toolbar({
   picks,
   onTodos,
   onTime,
+  onCalendar,
 }: ToolbarProps) {
   const t = useT()
   const { data, ui, dispatch, canMutate, canEdit, now } = useBoardContext()
@@ -183,6 +187,7 @@ export function Toolbar({
                 )}
               </button>
             )}
+            {data?.calendar && <CalendarButton onOpen={() => onCalendar?.()} />}
             {data?.time && (
               <button
                 type="button"

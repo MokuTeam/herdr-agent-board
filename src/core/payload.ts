@@ -128,6 +128,12 @@ export interface BoardPayload {
    */
   time?: TimePayload
   /**
+   * The calendar (#328), only while config.json turns it on: a revision that moves when any
+   * source's copy or the board's own events change (an open panel reads again then), whether a
+   * fetch runs, how many sources fail, and the next call of the coming hours for the toolbar.
+   */
+  calendar?: CalendarPayload
+  /**
    * The Remote access view's revision (GET /api/access, local only): it changes when the view does,
    * and the panel fetches the view again then; the view itself never goes out with the board. The
    * server always sends it; a board before it sent none.
@@ -154,4 +160,24 @@ export interface TimePayload {
   today: Record<string, number>
   /** config.json's `time` does not check out (the panel says what): no entry is written. */
   problems?: boolean
+}
+
+/** What the board's payload says of the calendar (#328). */
+export interface CalendarPayload {
+  rev: string
+  busy: boolean
+  /** Sources with a problem in config.json or whose last fetch failed. */
+  failing: number
+  /** The next timed call not declined, ongoing or within twelve hours. */
+  next: {
+    source: string
+    id: string
+    title: string
+    start: string
+    end: string
+    join?: string
+    label: string
+    color: string | null
+    lane: string | null
+  } | null
 }
