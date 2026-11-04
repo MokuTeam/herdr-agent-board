@@ -87,6 +87,9 @@
 //   board time add | edit | move | rm | restore | show | list | day | projects | import   time
 //                            entries in the board's database (#233, entrypoints/time-cli.ts, where
 //                            each is spelled out), written as this session, its lane the client
+//   board cal list | sources | sync | add | edit | rm | push   the owner's calendar (#328,
+//                            entrypoints/cal-cli.ts, where each is spelled out): every source's events,
+//                            the board's own changed as this session; while config.json turns it on
 //   board db restore [--target folder|server] [--snapshot <name>] [--file <path>]
 //                            [--passphrase-file <file> | --passphrase-stdin] [--replace-file]   the database back as a
 //                            snapshot has it (the newest of the target when none is named); without
@@ -160,7 +163,7 @@ import { type MoveOutcome, moveMany } from '../services/move.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | doctor | presence [here | away | call] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | doctor | presence [here | away | call] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -649,6 +652,7 @@ async function main(): Promise<void> {
   if (cmd === 'tunnel') return tunnel()
   if (cmd === 'backup') return backupCmd()
   if (cmd === 'time') return timeCommand()
+  if (cmd === 'cal') return calCommand()
   if (cmd === 'secret') return secretCommand()
   if (cmd === 'db') return dbCmd()
   if (cmd === 'archive') return archive()
@@ -1330,6 +1334,13 @@ async function timeCommand(): Promise<void> {
   const { timeCmd } = await import('./time-cli.ts')
   // under --json an error is printed as JSON, and the exit code says it failed
   process.exitCode = await timeCmd(rest, { cfg, actor: own ? { key: own.key, name: own.name ?? '' } : 'user', lane })
+}
+
+/** `board cal …` (#328, entrypoints/cal-cli.ts): the owner's calendar, changed as the session that runs it. */
+async function calCommand(): Promise<void> {
+  const own = await ownSession()
+  const { calCmd } = await import('./cal-cli.ts')
+  process.exitCode = await calCmd(rest, { cfg, actor: own ? { key: own.key, name: own.name ?? '' } : 'user' })
 }
 
 /** `board secret …` (#273, entrypoints/secret-cli.ts): the request goes on this session's card. */

@@ -197,6 +197,8 @@ export interface Config {
   time?: unknown
   /** Secrets through the board (#273), as config.json has it: read through core/secrets.ts secretsConfig. */
   secrets?: unknown
+  /** The calendar (#328), as config.json has it: read through core/calendar.ts calendarConfig. */
+  calendar?: unknown
   [extra: string]: unknown
 }
 
