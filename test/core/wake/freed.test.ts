@@ -94,6 +94,56 @@ test('a place as the session file has it; what does not read as one is none', ()
     expect(asFreedPlace(bad)).toBeNull()
 })
 
+// #317: the workspace of a linked worktree (`herdr worktree open`) comes back linked to its repository.
+const ROOT = 'C:\\Work\\Repo 50%'
+const TREE = 'C:\\Work\\Repo 50%\\.worktrees\\Счёт-1'
+const linked = {
+  checkout_path: TREE,
+  is_linked_worktree: true,
+  repo_key: `${ROOT}\\.git`,
+  repo_name: 'Repo',
+  repo_root: ROOT,
+}
+
+test('#317 a linked worktree’s workspace: its repository and folder noted; a plain one or a main checkout: nothing', () => {
+  const withTree = (worktree: unknown): FreedSnapshot => {
+    const s = snap({ tabs: ['t1'] })
+    return { ...s, workspaces: [{ workspace_id: 'w1', label: 'TICKET-1 50%', worktree }] }
+  }
+  expect(freePlan(withTree(linked), 't1-claude', now)?.place).toEqual({
+    pane: 't1-claude',
+    workspace: 'w1',
+    workspaceLabel: 'TICKET-1 50%',
+    tabLabel: '1',
+    worktree: { root: ROOT, path: TREE },
+    topic: 'topic:TICKET-1 50%',
+    at: now,
+  })
+  for (const not of [
+    undefined,
+    null,
+    { ...linked, is_linked_worktree: false, checkout_path: ROOT },
+    { ...linked, is_linked_worktree: 'true' },
+    { ...linked, repo_root: '' },
+    { ...linked, checkout_path: 7 },
+    'linked',
+  ]) {
+    const place = freePlan(withTree(not), 't1-claude', now)?.place
+    expect(place).toBeDefined()
+    expect(place).not.toHaveProperty('worktree')
+  }
+})
+
+test('#317 the worktree as the session file has it; a malformed one is dropped, the place kept', () => {
+  const place = { pane: 'w1:p1', workspace: 'w1', workspaceLabel: 'Счёт-1', topic: 'topic:Счёт-1', at: now }
+  expect(asFreedPlace({ ...place, worktree: { root: ROOT, path: TREE, extra: 1 } })).toEqual({
+    ...place,
+    worktree: { root: ROOT, path: TREE },
+  })
+  for (const bad of [null, 'x', [], { root: ROOT }, { root: '', path: TREE }, { root: ROOT, path: 1 }])
+    expect(asFreedPlace({ ...place, worktree: bad })).toEqual(place)
+})
+
 test('the tab the user looks at is left as it is, whichever of its panes has the focus', () => {
   const focused = snap()
   focused.focused_pane_id = 't2-side'

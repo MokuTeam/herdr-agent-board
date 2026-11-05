@@ -39,6 +39,8 @@ test('card reads prompt, answer, tool completion and input usage without double 
   })
   expect(parseCodexTail([...lines, message('user', 'yes')])).toMatchObject({ prompt: 'yes', replied: true })
   expect(parseCodexTail([...lines, call('t2')]).tool).toMatchObject({ id: 't2', pending: true })
+  // Recaps are Claude Code's (#321): a Codex card has none.
+  expect('recap' in parseCodexTail(lines)).toBe(false)
 })
 
 test('thread uses response items once, leaves out reasoning, system context and event copies', () => {

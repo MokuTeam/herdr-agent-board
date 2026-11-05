@@ -6,6 +6,7 @@ import type { TermStep } from '../../../src/core/terminal/term-keys.ts'
 import { MAX_STEPS, MAX_TEXT } from '../../../src/core/terminal/term-keys.ts'
 import { parseLine, type TermRun, withLinks } from '../../../src/core/terminal/term-model.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
+import { inMokupilot } from './call.ts'
 import { esc } from './markdown.ts'
 
 export type TermTarget = 'agent' | 'shell'
@@ -190,13 +191,14 @@ export function footStatus(s: FootState, x: Pick<Item, 'agent'> | null | undefin
 
 /** The sheet's Terminal button: hidden where the board offers none, a dot while the board has a shell open. */
 export function termButton(
-  it: Pick<Item, 'key' | 'cwd' | 'pane'>,
+  it: Pick<Item, 'key' | 'cwd' | 'pane' | 'call'>,
   data: { terminal?: boolean | undefined; shells?: readonly string[] | undefined } | null | undefined,
   t: Translator,
 ): { hidden: boolean; hasShell: boolean; title: string } {
   const hasShell = (data?.shells ?? []).includes(it.key)
   return {
-    hidden: data?.terminal === false || !(it.cwd || it.pane),
+    // A MokuPilot call agent with no pane (#326) has no terminal of the board's either.
+    hidden: data?.terminal === false || !(it.cwd || it.pane) || inMokupilot(it),
     hasShell,
     title: t(hasShell ? 'term.shellOpen' : 'term.hint'),
   }

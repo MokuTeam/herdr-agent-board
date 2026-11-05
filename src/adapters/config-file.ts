@@ -261,7 +261,7 @@ export function editTodos(body: unknown): EditResult {
   if (!isTodoMode(mode)) return { ok: false, error: t('todo.err.mode') }
   return editConfig(raw => {
     if (mode === 'none') delete raw.todos
-    else raw.todos = mode === 'agents' ? true : { agents: false }
+    else raw.todos = mode === 'agents' ? true : mode === 'auto' ? { autoClose: true } : { agents: false }
     return { ok: true }
   })
 }

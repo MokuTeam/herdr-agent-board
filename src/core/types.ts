@@ -1,5 +1,6 @@
 // Types shared across the board. Grows with each ported module.
 
+import type { CallView } from './call-agent.ts'
 import type { FormQuestion } from './dialogs/question-form.ts'
 import type { HelperSummary } from './helpers.ts'
 import type { FailureKind } from './launch/launcher-command.ts'
@@ -25,6 +26,8 @@ export interface Card {
   key?: string
   category?: string
   doing?: string
+  /** When `doing` was last written (#321): a recap newer than it takes the card's line. */
+  doingAt?: number
   wait?: string
   waitSince?: number
   result?: string
@@ -59,6 +62,10 @@ export interface Card {
   presenceSeen?: number
   /** Its tasks (#202, core/todos.ts): the user's pins and the agent's `board todo`; absent when none. */
   todos?: Todo[]
+  /** The last task number given on this card (#319, core/todos.ts numberTodos). */
+  todoSeq?: number
+  /** The open tasks this session was last told of (#319, core/todos.ts todosNews). */
+  todosSeen?: string
   [extra: string]: unknown
 }
 
@@ -190,6 +197,8 @@ export interface Config {
   time?: unknown
   /** Secrets through the board (#273), as config.json has it: read through core/secrets.ts secretsConfig. */
   secrets?: unknown
+  /** The calendar (#328), as config.json has it: read through core/calendar.ts calendarConfig. */
+  calendar?: unknown
   [extra: string]: unknown
 }
 
@@ -215,6 +224,9 @@ export interface TranscriptInfo {
   replied?: boolean
   /** The time of its newest user or assistant line. */
   lastAt?: number
+  /** Claude Code's newest recap of the session (away_summary, #321) and its time; absent with none. */
+  recap?: string
+  recapAt?: number
   activity?: number
   tokens?: number
   context?: number | null
@@ -247,12 +259,19 @@ export interface Item {
   agent?: string
   focused?: boolean
   doing?: string
+  /** When `doing` was written (#321), else null. */
+  doingAt?: number | null
   wait?: string
   waitSince?: number | null
   result?: string
   title?: string
   prompt?: string
   lastText?: string
+  /** The time of its transcript's newest user or assistant line (#321), else null. */
+  lastAt?: number | null
+  /** Claude Code's newest recap of the session and its time (#321): '' and null with none. */
+  recap?: string
+  recapAt?: number | null
   context?: number | null
   contextPct?: number | null
   contextSize?: number | null
@@ -274,6 +293,8 @@ export interface Item {
   links?: ItemLinks | null
   /** A fork's card: the session it is a fork of and when it started (core/links.ts), or none. */
   fork?: { of: string; at: number } | null
+  /** A MokuPilot call agent's (#326, core/call-agent.ts): its call and its task board; absent for the others. */
+  call?: CallView | null
   /** Its Claude process: whether it runs, since when, the pipe other sessions write to (server only). */
   alive?: boolean
   since?: number | null

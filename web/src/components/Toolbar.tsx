@@ -19,11 +19,12 @@ import type { SettingsMenu } from '../hooks/useSettingsMenu.ts'
 import type { SetupNoteState } from '../hooks/useSetupNote.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { pickedProfile, profileOptions } from '../models/profiles.ts'
-import { openMine } from '../models/todos.ts'
+import { openMine, proposedCount } from '../models/todos.ts'
 import { columnHeads, documentTitle, laneOptions, scheduleBadge, summaryParts, summaryText } from '../models/toolbar.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { BackupNote } from './BackupNote.tsx'
 import { ColumnsHead } from './ColumnsHead.tsx'
+import { CalendarButton } from './calendar/CalendarButton.tsx'
 import { AlarmIcon, ArchiveIcon, GearIcon, PlusIcon, SearchIcon, TagIcon, TasksIcon, TimeIcon } from './icons.tsx'
 import { Lanes } from './Lanes.tsx'
 import { Limits } from './Limits.tsx'
@@ -57,6 +58,8 @@ export interface ToolbarProps {
   onTodos?: () => void
   /** Time (#233): its panel, while the board has time tracking on. */
   onTime?: () => void
+  /** The calendar (#328): its panel, while the board has the calendar on. */
+  onCalendar?: () => void
 }
 
 export function Toolbar({
@@ -72,6 +75,7 @@ export function Toolbar({
   picks,
   onTodos,
   onTime,
+  onCalendar,
 }: ToolbarProps) {
   const t = useT()
   const { data, ui, dispatch, canMutate, canEdit, now } = useBoardContext()
@@ -176,8 +180,14 @@ export function Toolbar({
                 <TasksIcon />
                 <span>{t('todo.open')}</span>
                 <span className="n">{openMine(data.items) || ''}</span>
+                {proposedCount(data.items) > 0 && (
+                  <span className="n confirm" title={t('todo.toConfirmHint')}>
+                    {t('todo.toConfirm', { n: proposedCount(data.items) })}
+                  </span>
+                )}
               </button>
             )}
+            {data?.calendar && <CalendarButton onOpen={() => onCalendar?.()} />}
             {data?.time && (
               <button
                 type="button"

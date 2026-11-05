@@ -101,6 +101,19 @@ test('writeCard keeps fields it does not know', () => {
   assert.equal(saved.doing, 'x')
 })
 
+test('writeCard records when doing was written, again on every write of it, and clears it with it (#321)', () => {
+  isolatedHome()
+  const first = writeCard('d', { doing: 'one' })
+  assert.equal(first.doingAt, first.updatedAt)
+  const other = writeCard('d', { wait: 'w' })
+  assert.equal(other.doingAt, first.doingAt) // another field leaves it
+  const again = writeCard('d', { doing: 'one' })
+  assert.equal(again.doingAt, again.updatedAt)
+  const done = writeCard('d', { doing: '', result: 'r' })
+  assert.equal('doingAt' in done, false)
+  assert.equal('doingAt' in writeCard('e', { category: 'c' }), false)
+})
+
 test('allCards lists the cards by key and skips files that are not cards', () => {
   isolatedHome()
   writeCard('a', { doing: '1' })
