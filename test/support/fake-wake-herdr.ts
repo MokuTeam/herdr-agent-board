@@ -27,7 +27,8 @@ export interface FakeWakeHerdr extends WakeHerdr {
   /** Each call as herdr's argv. */
   calls: string[][]
   panes: FakePane[]
-  workspaces: { workspace_id: string; label?: string }[]
+  /** `worktree`: what herdr says of a workspace opened for a git worktree (#317). */
+  workspaces: { workspace_id: string; label?: string; worktree?: unknown }[]
   tabs: { tab_id: string; workspace_id: string; label?: string; number?: number }[]
   /**
    * Pane → its shell's process name as herdr reports it (`pwsh.exe`, `-bash`, a path); none: herdr

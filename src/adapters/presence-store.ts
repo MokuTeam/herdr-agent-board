@@ -27,8 +27,8 @@ export const currentPresence = (): Presence => readPresence() ?? NO_PRESENCE
 
 /**
  * Set the state. The same state again changes nothing (its time and who set it stay), so a click
- * on "away" while the board already put the user away is no new change. Returns the state on
- * record and whether it changed.
+ * on "away" while the board already put the user away is no new change. A call keeps the state it
+ * started from, to return to. Returns the state on record and whether it changed.
  */
 export function setPresence(
   state: PresenceState,
@@ -41,9 +41,11 @@ export function setPresence(
   const presence = updateJson(
     presenceFile(),
     (cur: Presence | null): Presence => {
-      if ((cur ?? NO_PRESENCE).state === state && cur) return cur
+      const was = cur ?? NO_PRESENCE
+      if (was.state === state && cur) return cur
       changed = true
-      return { state, since: now, by, from }
+      if (state !== 'call' || was.state === 'call') return { state, since: now, by, from }
+      return { state, since: now, by, from, before: was.state }
     },
     isPresence,
   )

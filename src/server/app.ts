@@ -44,6 +44,7 @@ import type { Config } from '../core/types.ts'
 import { createAccess } from '../services/access.ts'
 import { backupView, startBackups } from '../services/backup.ts'
 import { createBackupServer } from '../services/backup-server.ts'
+import { createCalendarSync } from '../services/calendar.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
@@ -64,8 +65,10 @@ import { accessRoutes } from './routes/access.ts'
 import { archiveRoutes } from './routes/archive.ts'
 import { backupRoutes } from './routes/backup.ts'
 import { boardRoutes } from './routes/board.ts'
+import { calendarRoutes } from './routes/calendar.ts'
 import { fsRoutes } from './routes/fs.ts'
 import { launchRoutes } from './routes/launch.ts'
+import { linksRoutes } from './routes/links.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { moveRoute } from './routes/move.ts'
 import { pageLogRoute } from './routes/page-log.ts'
@@ -73,6 +76,7 @@ import { presenceRoutes } from './routes/presence.ts'
 import { remoteRoutes } from './routes/remote.ts'
 import { revealRoute, revealState } from './routes/reveal.ts'
 import { scheduleRoute } from './routes/schedule.ts'
+import { secretsRoutes } from './routes/secrets.ts'
 import { sessionRoutes } from './routes/session.ts'
 import { categoriesRoute, profilesRoute, settingsRoute } from './routes/settings.ts'
 import { setupRoute } from './routes/setup.ts'
@@ -427,6 +431,9 @@ export async function startServer({
   // Time tracking (#233): while config.json turns it on, today's billed time by lane and the
   // journal's last seq, read from the database (one query a refresh); off, nothing is read.
   const timeLine = (): TimePayload | null => timeToday(cfg)
+  // The calendar (#328): while config.json turns it on, each source fetched on its own interval and
+  // the payload's line (its revision, the next call); off, no timer and nothing read.
+  const calendar = createCalendarSync({ cfg, log, onChange: () => board.publish() })
   const board = createBoardState({
     deps,
     launches,
@@ -443,6 +450,7 @@ export async function startServer({
     presence: presence.view,
     backup: backupLine,
     time: timeLine,
+    calendar: calendar.line,
   })
   board.publish()
   const refresh = (): void => void board.refresh()
@@ -460,6 +468,8 @@ export async function startServer({
     ...remoteRoutes(listener, remote, cfg, port),
     ...accessRoutes(remoteAccess),
     ...boardRoutes(board, events),
+    // The edge log, every link event read from the transcripts (adapters/edge-log.ts); this computer only.
+    ...linksRoutes(board),
     ...fsRoutes(),
     ...uploadRoutes(),
     revealRoute(board, events, reveals),
@@ -470,8 +480,12 @@ export async function startServer({
     ...presenceRoutes(presence),
     // Tasks (#202): points pinned on the board, done, reopened, removed; turned on or off.
     ...todosRoutes({ cfg, find: board.find, refresh }),
+    // Secret requests (#273): the owner's submit writes the sink, or the owner declines; the phone too.
+    ...secretsRoutes({ refresh }),
     // Time entries by day and client, as billed (#233): read only, the remote page too.
     ...timeRoutes(cfg),
+    // The calendar (#328): every source's events in a window, Sync, the board's own events; Settings → Calendar here only.
+    ...calendarRoutes(cfg, calendar),
     // Settings → Backup… (#233): the passphrase, the targets, the server's setup; this computer only.
     ...backupRoutes({ cfg, server: backupServer, now: () => backups.now(true), changed: () => board.publish() }),
     // A line from the page for this log (a phone's browser says what it could not do there).
@@ -603,6 +617,7 @@ export async function startServer({
   // Wake on but not running (its startup entry did not run, or it ended): started once.
   void wake.ensure()
   presence.start()
+  calendar.configChanged()
 
   // What the Remote access view reads of config.json, and the tunnel's own settings in it, as of
   // the last config change.
@@ -635,6 +650,8 @@ export async function startServer({
       wake.configChanged()
       // Presence turned on or off: its sessions marked or unmarked, the board shown again.
       presence.refresh()
+      // The calendar turned on or off: its timer started or stopped.
+      calendar.configChanged()
       await board.refresh()
     },
     async close() {
@@ -645,6 +662,7 @@ export async function startServer({
       backups.stop()
       wake.stop()
       presence.stop()
+      calendar.stop()
       terminals.stopAll()
       setup.stop()
       accessOut.cancel()

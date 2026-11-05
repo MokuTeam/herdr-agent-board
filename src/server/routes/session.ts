@@ -19,7 +19,16 @@ import type { MessageGate } from '../../core/message-gate.ts'
 import type { Viewer } from '../../core/mokupilot-mode.ts'
 import { isPiItem } from '../../core/pi.ts'
 import type { Item, Pin } from '../../core/types.ts'
-import { checkWake, focus, send, sleepSession, wake, wakeAnswers } from '../../services/actions.ts'
+import {
+  checkWake,
+  focus,
+  NAMED_POLL_MS,
+  namedWaitMs,
+  send,
+  sleepSession,
+  wake,
+  wakeAnswers,
+} from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
 import { askArchive, undoMs } from '../../services/archive.ts'
 import { askAside } from '../../services/aside.ts'
@@ -113,10 +122,24 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
   return app.gate(item.key, body.requestId ?? randomUUID(), [body.session ?? null, body.text, files], async () => {
     // Always collect a new snapshot before accepting a message, even if SSE is connected: a
     // board that cannot reach herdr fails here rather than send on old data.
-    const fresh = (await collect(deps)).find(next => next.key === item.key)
-    if (!fresh || fresh.session !== item.session || fresh.pane !== item.pane) return changed(item)
+    const fresh = await freshItem(deps, item)
+    // A card shown asleep is for its session wherever it woke meanwhile: a new tab (#204) too.
+    const moved = item.sleeping && !!item.session
+    if (!fresh || fresh.session !== item.session || (fresh.pane !== item.pane && !moved)) return changed(item)
     return send(deps, fresh, [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n'))
   })
+}
+
+/**
+ * The card's session in a new snapshot. One the card shows asleep may have just woken (by wake,
+ * Telegram or by hand) in a pane herdr does not name it in yet (#267): looked for again for a few
+ * seconds before it counts as gone.
+ */
+async function freshItem(deps: Deps, item: Item): Promise<Item | undefined> {
+  for (const deadline = Date.now() + namedWaitMs(); ; await Bun.sleep(NAMED_POLL_MS)) {
+    const fresh = (await collect(deps)).find(next => next.key === item.key)
+    if (fresh || !item.sleeping || Date.now() >= deadline) return fresh
+  }
 }
 
 // A question form, a permission prompt or pi's menu or text input, answered with keys in the pane
@@ -217,6 +240,9 @@ async function restart(deps: SessionApp['deps'], item: Item): Promise<Result> {
   return { ok: true, id: entry.id, again }
 }
 
+/** What the board does not do to a MokuPilot call agent with no pane (#326). */
+const IN_MOKUPILOT_REFUSED: ReadonlySet<string> = new Set(['focus', 'sleep', 'restart', 'archive', 'mokupilot', 'fork'])
+
 /** `body`: its fields, taken only by the actions that read them (as main's did, so a null body fails only there). */
 async function act(
   app: SessionApp,
@@ -226,6 +252,9 @@ async function act(
   viewer?: Viewer,
 ): Promise<Result> {
   const { deps } = app
+  // A MokuPilot call agent with no pane (#326) runs in MokuPilot: nothing of herdr's for it, and no
+  // fork or call of a session MokuPilot is running. Every other session goes on as before.
+  if (item.call && !item.pane && IN_MOKUPILOT_REFUSED.has(action)) return { ok: false, error: t('err.noPane') }
   switch (action) {
     case 'focus':
       return focus(deps, item, { raise: deps.cfg.raiseTerminal !== false })
@@ -257,7 +286,7 @@ async function act(
       )
       return { ok: true, held: r.held, dropped: r.dropped, closeAt: r.record.closeAt }
     }
-    // A MokuPilot call whose agent is a fork of this session, only in the board's own profile; no herdr in it.
+    // A MokuPilot call whose agent is a fork of this session, in the session's own profile; no herdr in it.
     // Here or on the viewer's computer by the mode, and under `auto` by who asks (core/mokupilot-mode.ts).
     case 'mokupilot':
       return startCall(deps.cfg, item, { profiles: deps.profiles(), viewer, own: ownAddresses })

@@ -54,9 +54,13 @@
 }
 
 /* The presence switch (components/PresenceSwitch.tsx, #172): drawn as the setup note, its dot green
-   while the user is at the computer, blue while away; detection's offer beside it, quieter. */
+   while the user is at the computer, blue while away, purple on a call (as Do Not Disturb, #276);
+   detection's offer beside it, quieter; "on a call" by hand an icon beside it. */
 .presence-switch[data-state="here"] .setup-dot { background: var(--green); }
 .presence-switch[data-state="away"] .setup-dot { background: var(--blue); }
-.presence-switch[data-state="away"] { color: var(--label); }
-.presence-switch:disabled, .presence-offer:disabled { opacity: 0.6; }
+.presence-switch[data-state="call"] .setup-dot { background: var(--purple); }
+.presence-switch[data-state="away"], .presence-switch[data-state="call"] { color: var(--label); }
+.presence-switch:disabled, .presence-offer:disabled, .presence-call:disabled { opacity: 0.6; }
 .presence-offer { color: var(--blue); }
+.presence-call { justify-content: center; min-width: 28px; padding: 0 7px; }
+.presence-call svg { width: 14px; height: 14px; }

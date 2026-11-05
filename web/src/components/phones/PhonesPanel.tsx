@@ -3,7 +3,10 @@
 // (Unpair, two clicks) and turning the remote mode off. A phone that asks opens it by itself.
 // The board in a phone's browser too (src/core/pwa.ts): setting its HTTPS address up, the address
 // as a QR code, what Tailscale still needs. Every answer goes to the board at once
-// (POST /api/remote) and comes back over the live stream.
+// (POST /api/remote) and comes back over the live stream. The board in a browser elsewhere sees it
+// all but changes none of it: the server keeps /api/remote for this computer (core/remote.ts
+// localOnly), so the panel says where to approve instead of offering buttons that are refused.
+// The owner's desk (deskPage) answers the phones that ask and unpairs; the rest stays here.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ADMIN_DNS } from '../../../../src/core/pwa.ts'
 import type { PwaView } from '../../../../src/core/remote.ts'
@@ -11,6 +14,7 @@ import { api, errorText } from '../../api/client.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { ago } from '../../models/card.ts'
+import { deskPage, deviceId, remotePage } from '../../models/remote-page.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { Qr } from '../Qr.tsx'
@@ -37,7 +41,11 @@ export function usePhonesPanel(): [boolean, (open: boolean) => void] {
 
 export function PhonesPanel({ open, onClose }: PhonesPanelProps) {
   const t = useT()
-  const { data, canEdit, toast } = useBoardContext()
+  const { data, canEdit: canMutate, toast } = useBoardContext()
+  const here = !remotePage()
+  const canEdit = canMutate && here
+  const answers = here || deskPage()
+  const canAnswer = canMutate && answers
   const latest = useLatest({ t, toast })
   const [sure, setSure] = useState<string | null>(null)
 
@@ -84,19 +92,34 @@ export function PhonesPanel({ open, onClose }: PhonesPanelProps) {
               <br />
               <span className="sheet-meta">{r.os ? t('phones.asksFrom', { login: r.login, os: r.os }) : r.login}</span>
             </p>
-            <button
-              type="button"
-              className="button primary"
-              disabled={!canEdit}
-              onClick={() => void send('approve', r.id)}
-            >
-              {t('phones.approve')}
-            </button>
-            <button type="button" className="button" disabled={!canEdit} onClick={() => void send('deny', r.id)}>
-              {t('phones.deny')}
-            </button>
+            {answers ? (
+              <>
+                <button
+                  type="button"
+                  className="button primary"
+                  disabled={!canAnswer}
+                  onClick={() => void send('approve', r.id)}
+                >
+                  {t('phones.approve')}
+                </button>
+                <button type="button" className="button" disabled={!canAnswer} onClick={() => void send('deny', r.id)}>
+                  {t('phones.deny')}
+                </button>
+              </>
+            ) : (
+              <p className="sheet-meta">{t('phones.approveThere', { id: r.id })}</p>
+            )}
           </div>
         ))}
+        {!here && (
+          <p className="sheet-meta">
+            {answers
+              ? t('phones.onlyThereDesk')
+              : deviceId()
+                ? t('phones.onlyThereId', { id: deviceId() ?? '' })
+                : t('phones.onlyThere')}
+          </p>
+        )}
         <h3 className="phones-head">{t('pwa.head')}</h3>
         <PwaSection pwa={remote.pwa} canEdit={canEdit} send={send} />
         <h3 className="phones-head">{t('phones.paired')}</h3>
@@ -115,7 +138,7 @@ export function PhonesPanel({ open, onClose }: PhonesPanelProps) {
               <button
                 type="button"
                 className="button"
-                disabled={!canEdit}
+                disabled={!canAnswer}
                 onBlur={() => setSure(null)}
                 onClick={() => {
                   if (sure !== d.id) return setSure(d.id)

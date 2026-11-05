@@ -1,7 +1,7 @@
 // What the board's remote listeners share (server/remote.ts: Tailscale and serve; server/tunnel.ts:
 // the owner's domain): a path decoded, what they refuse whoever calls, and event streams that end
 // the moment the caller's pairing or login does.
-import { desktopOnly, localOnly } from '../core/remote.ts'
+import { deskFocus, desktopOnly, localOnly } from '../core/remote.ts'
 import { json } from './http.ts'
 import { namedEvent } from './sse.ts'
 
@@ -18,11 +18,14 @@ export function decoded(raw: string): string | null {
  * What a remote caller is refused, paired or signed in: what acts on this computer's screen
  * (403 desktop) and what is for the board on this computer only (403 local). The routes match a
  * string path decoded and a RegExp one as it came, so both spellings are checked, or an encoded
- * letter (/api/fs/%6Fpen, /api/%61ccess) would get by.
+ * letter (/api/fs/%6Fpen, /api/%61ccess) would get by. A desk (RemoteDevice.desk) may focus herdr
+ * and reach /api/remote, whose ops the listener narrows for it (DESK_REMOTE_OPS).
  */
-export function remoteRefusal(raw: string, path: string): Response | null {
-  if (desktopOnly(raw) || desktopOnly(path)) return json(403, { error: 'desktop' })
-  if (localOnly(raw) || localOnly(path)) return json(403, { error: 'local' })
+export function remoteRefusal(raw: string, path: string, desk = false): Response | null {
+  const focus = desk && deskFocus(raw) && deskFocus(path)
+  if (!focus && (desktopOnly(raw) || desktopOnly(path))) return json(403, { error: 'desktop' })
+  const pairing = desk && raw === '/api/remote' && path === '/api/remote'
+  if (!pairing && (localOnly(raw) || localOnly(path))) return json(403, { error: 'local' })
   return null
 }
 

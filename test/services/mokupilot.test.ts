@@ -3,6 +3,7 @@
 // looked up again when the setting changes and once a minute.
 import { beforeEach, test } from 'bun:test'
 import assert from 'node:assert/strict'
+import type { SpawnOptions } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -132,66 +133,118 @@ test('launcher spawn acknowledges only launched, including an immediate applicat
   assert.notEqual(state, 'recording')
 })
 
-test('a call from a session in another profile than the board’s is refused before anything starts', async () => {
+test('a call from a session in another profile than the board’s starts MokuPilot in that profile', async () => {
   const DEFAULT = { id: 'default', title: 'Default', dir: '/home/u/.claude', color: 'indigo', hidden: false }
   const WORK = { id: 'work', title: 'Work', dir: '/home/u/.claude-work', color: 'teal', hidden: false }
   const SET = profileSet([DEFAULT, WORK], DEFAULT.dir)
-  const started: string[][] = []
-  const run: Run = (_file, args) => {
-    started.push(args)
+  const started: { args: string[]; env: SpawnOptions['env'] }[] = []
+  const run: Run = (_file, args, options) => {
+    started.push({ args, env: options.env })
     const child = new EventEmitter()
     queueMicrotask(() => child.emit('spawn'))
     return Object.assign(child, { unref() {} }) as unknown as CallChild
   }
   const cfg = { mokupilot: { command: [process.execPath] } }
   const call = { agent: 'claude', session: ID, cwd: tmpdir(), transcript: null }
-  const opts = { platform: 'linux', env: { PATH: '' }, profiles: SET, run }
+  const opts = { platform: 'linux', env: { PATH: '' }, profiles: SET, run, home: '/home/u' }
+  const launched = { ok: true, state: 'launched', file: process.execPath, resolved: 'local', why: 'no-peer' }
+  const configDir = () => started.at(-1)?.env?.CLAUDE_CONFIG_DIR
+  const unset = () => !Object.hasOwn(started.at(-1)?.env ?? {}, 'CLAUDE_CONFIG_DIR')
 
-  const work = await startCall(cfg, { ...call, profile: 'work' }, opts)
-  assert.deepEqual(work, {
-    ok: false,
-    error: 'MokuPilot takes the profile of its running copy, Default: a call from Work would run in the wrong account',
-  })
-  assert.equal(started.length, 0)
-  // A session whose profile the board does not know: refused too, naming the folder it reported.
-  const odd = await startCall(cfg, { ...call, profile: null, profileFolder: '/srv/.claude-x' }, opts)
-  assert.match(odd.ok ? '' : odd.error, /a call from \/srv\/\.claude-x would run in the wrong account/)
+  // MokuPilot finds the session and runs its fork in the profile its launcher starts in, and hands
+  // that to a copy already running in another: same command line, the session's folder in the env.
+  assert.deepEqual(await startCall(cfg, { ...call, profile: 'work' }, opts), launched)
+  assert.deepEqual(started.at(-1)?.args, ['call', '--claude-session', ID, '--cwd', tmpdir()])
+  assert.equal(configDir(), WORK.dir)
+  assert.equal(started.at(-1)?.env?.PATH, '')
+  // A folder no profile has, that the session reported: that folder.
+  assert.deepEqual(await startCall(cfg, { ...call, profile: null, profileFolder: '/srv/.claude-x' }, opts), launched)
+  assert.equal(configDir(), '/srv/.claude-x')
+  // The board in Work, the session in the default profile: CLAUDE_CONFIG_DIR unset, as `board
+  // resume` does. Set to ~/.claude, Claude would read ~/.claude/.claude.json: a fresh state.
+  const fromWork = { ...opts, profiles: profileSet([DEFAULT, WORK], WORK.dir), env: { CLAUDE_CONFIG_DIR: WORK.dir } }
+  assert.deepEqual(await startCall(cfg, { ...call, profile: 'default' }, fromWork), launched)
+  assert.equal(unset(), true)
+  // A folder no profile has that is the one the board's env points to: the env as it is.
+  assert.deepEqual(await startCall(cfg, { ...call, profile: null, profileFolder: '/home/u/.claude/' }, opts), launched)
+  assert.equal(unset(), true)
+  assert.equal(started.length, 4)
+
+  // Windows: a profile folder with a space in it as it is, Git Bash's /c/… read as c:/….
+  const JANE = 'C:\\Users\\Jane Doe'
+  const win = {
+    ...opts,
+    platform: 'win32',
+    home: JANE,
+    profiles: profileSet(
+      [
+        { ...DEFAULT, dir: `${JANE}\\.claude` },
+        { ...WORK, dir: `${JANE}\\.claude-work` },
+      ],
+      `${JANE}\\.claude`,
+    ),
+  }
+  assert.deepEqual(await startCall(cfg, { ...call, profile: 'work' }, win), launched)
+  assert.equal(configDir(), `${JANE}\\.claude-work`)
+  assert.deepEqual(
+    await startCall(cfg, { ...call, profile: null, profileFolder: '/c/Users/Jane Doe/.claude-x' }, win),
+    launched,
+  )
+  assert.equal(configDir(), 'c:/Users/Jane Doe/.claude-x')
+  assert.deepEqual(await startCall(cfg, { ...call, profile: 'default' }, win), launched)
+  assert.equal(unset(), true)
+  assert.equal(started.length, 7)
+
+  // A session whose profile the board does not know: refused, as nothing says which account it is.
   const unknown = await startCall(cfg, { ...call, profile: null }, opts)
-  assert.match(unknown.ok ? '' : unknown.error, /a call from unknown profile would/)
-  assert.equal(started.length, 0)
-
-  assert.deepEqual(await startCall(cfg, { ...call, profile: 'default' }, opts), {
-    ok: true,
-    state: 'launched',
-    file: process.execPath,
-    resolved: 'local',
-    why: 'no-peer',
+  assert.deepEqual(unknown, {
+    ok: false,
+    error: 'The folder of this session’s profile is not known (unknown profile): a call could run in the wrong account',
   })
-  assert.equal(started.length, 1)
+  assert.equal(started.length, 7)
+
+  // The board's own profile: the env as the board inherited it, as before profiles.
+  assert.deepEqual(await startCall(cfg, { ...call, profile: 'default' }, opts), launched)
+  assert.equal(unset(), true)
+  assert.deepEqual(await startCall(cfg, { ...call, profile: 'work' }, fromWork), launched)
+  assert.equal(configDir(), WORK.dir)
+  assert.equal(started.length, 9)
   // One profile listed: a session that names none is in it.
   const one = { ...opts, profiles: profileSet([DEFAULT], DEFAULT.dir) }
   assert.equal((await startCall(cfg, { ...call, profile: null }, one)).ok, true)
-  assert.equal(started.length, 2)
+  assert.equal(configDir(), undefined)
   // One shown, a hidden folder found besides: a session with no card yet is in the shown one, as
-  // before profiles; one that reported a folder no profile has is still refused.
+  // before profiles.
   const shown = profileSet([DEFAULT, { ...WORK, hidden: true }], DEFAULT.dir)
   const cardless = { ...call, ...sessionProfile(null, shown.list) }
   assert.equal(cardless.profile, null)
-  assert.deepEqual(await startCall(cfg, cardless, { ...opts, profiles: shown }), {
-    ok: true,
-    state: 'launched',
-    file: process.execPath,
-    resolved: 'local',
-    why: 'no-peer',
-  })
-  assert.equal(started.length, 3)
-  const stray = await startCall(
-    cfg,
-    { ...call, profile: null, profileFolder: '/srv/.claude-x' },
-    { ...opts, profiles: shown },
+  assert.deepEqual(await startCall(cfg, cardless, { ...opts, profiles: shown }), launched)
+  assert.equal(configDir(), undefined)
+  // No profiles at all (the CLI, a test): the env as it is.
+  assert.deepEqual(
+    await startCall(cfg, { ...call, profile: 'work' }, { platform: 'linux', env: { PATH: '' }, run }),
+    launched,
   )
-  assert.match(stray.ok ? '' : stray.error, /a call from \/srv\/\.claude-x would run in the wrong account/)
-  assert.equal(started.length, 3)
+  assert.equal(configDir(), undefined)
+  assert.equal(started.length, 12)
+
+  // Under auto, the board looked at from a phone: the call goes by link, so a session in another
+  // profile is refused; the board's own, and a folder the board's env points to, get the link.
+  const phone = { viewer: { peer: '127.0.0.1', forwardedFor: '100.64.0.7' }, own: () => ['192.168.1.20'] }
+  const work = await startCall(cfg, { ...call, profile: 'work' }, { ...opts, ...phone })
+  assert.deepEqual(work, {
+    ok: false,
+    error:
+      'A call by link runs its fork over ssh in the board’s profile, Default: a call from Work would run in the wrong account; start it at the board’s computer',
+  })
+  const link = { ok: true, state: 'link', resolved: 'link', why: 'forwarded-other', viewer: '100.64.0.7' }
+  assert.deepEqual(await startCall(cfg, { ...call, profile: 'default' }, { ...opts, ...phone }), {
+    ...link,
+    url: `mokupilot://call?claude-session=${ID}&cwd=${encodeURIComponent(tmpdir())}`,
+  })
+  const same = { ...call, profile: null, profileFolder: '/home/u/.claude' }
+  assert.equal((await startCall(cfg, same, { ...opts, ...phone })).ok, true)
+  assert.equal(started.length, 12)
 })
 
 test('whether the page offers calls: looked up again when the setting changes, and once a minute', () => {
@@ -260,7 +313,8 @@ test('link mode starts nothing here: the page gets the link, the folder the sess
         assert.equal(out.ok, false)
         assert.match(out.ok ? '' : out.error, /Claude Code session/)
       }
-      // Another profile than the board's: refused before a link, as before a launch.
+      // Another profile than the board's: refused before a link. The viewer's MokuPilot runs the
+      // fork over ssh in its login's profile, which the board cannot set.
       const profiles = profileSet(
         [
           { id: 'default', title: 'Default', dir: '/home/u/.claude', color: 'indigo', hidden: false },

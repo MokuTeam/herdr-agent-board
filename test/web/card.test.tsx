@@ -307,3 +307,46 @@ describe('card markup parity at the restart’s merge (#51): the card as upstrea
     expect(react).toContain('class="now on restart"')
   })
 })
+
+test('a recap newer than doing is the line, its age before it; doing goes under it as the task (#321)', () => {
+  const it = item({
+    key: 'r',
+    column: 'idle',
+    doing: 'Fix login',
+    doingAt: ago(40),
+    recap: 'Login fixed; next: the tests.',
+    recapAt: ago(12),
+    lastText: 'Fixed.',
+    lastAt: ago(15),
+  })
+  const { react } = bothCards({ items: [it] }, 'r')
+  expect(react).toContain(
+    `<div class="recap what">
+    <span class="sr-only">Recap: </span>
+    <span class="recap-age" title="When Claude Code wrote this recap of the session">12 min</span>
+    ' '
+    <span data-clip="">Login fixed; next: the tests.</span>`,
+  )
+  expect(react).toContain(
+    `<div class="task">
+    <span class="task-label">Task</span>
+    ' '
+    <span data-clip="">Fix login</span>`,
+  )
+  expect(react).not.toContain('class="what"')
+  expect(react).not.toContain('Fixed.') // the recap came after its last words
+  // Long after the recap, it steps back; in Russian, its words.
+  const stale = bothCards({ items: [{ ...it, lastAt: ago(-60) }], lang: 'ru' }, 'r').react
+  expect(stale).toContain('class="recap stale what"')
+  expect(stale).toContain('>12 мин<')
+  expect(stale).toContain('>Задача<')
+})
+
+test('a recap older than doing leaves the card as the old board drew it (#321)', () => {
+  same(
+    {
+      items: [item({ key: 'o', doing: 'Fix login', doingAt: ago(5), recap: 'Old.', recapAt: ago(30), lastText: 'L' })],
+    },
+    'o',
+  )
+})

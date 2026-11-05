@@ -11,6 +11,7 @@ import { type ImageZoom, zoomImage } from '../components/files/zoom.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { NO_ZOOM, type ZoomFoot, zoomFootAfter, zoomShown } from '../models/files.ts'
 import { paintWindow } from '../models/grow.ts'
+import { localPath } from '../models/local-paths.ts'
 import type { FocusScope } from '../models/modal-focus.ts'
 import {
   type FileLook,
@@ -23,6 +24,7 @@ import {
 import { reducedMotion, Spring } from '../models/spring.ts'
 import type { ZoomState } from '../models/zoom.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
+import { localPaths } from '../state/local-paths.ts'
 import { Store, useStore } from '../state/store.ts'
 import { useLatest } from './useLatest.ts'
 import { useModalFocus } from './useModalFocus.ts'
@@ -49,8 +51,11 @@ export interface QuickLookEngine {
   /** A step to a file or folder. */
   go(path: string): void
   setMode(mode: LookMode): void
-  /** Open with the system, show in its folder, or copy the path, of what is on show. */
-  act(how: 'open' | 'reveal' | 'copy'): void
+  /**
+   * Open with the system, show in its folder, or copy the path, of what is on show; `local`: copy
+   * where it is on this device (the board on another one, models/local-paths.ts).
+   */
+  act(how: 'open' | 'reveal' | 'copy' | 'local'): void
   /** Paths in what it shows become chips (hooks/useFileChips.ts). */
   upgrade(root: HTMLElement, cwd: string): void
   /**
@@ -236,10 +241,10 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
     if (error) deps.toast(error, true)
   }
 
-  async function copy(path: string): Promise<void> {
+  async function copy(path: string, done = 'ql.copied'): Promise<void> {
     try {
       await navigator.clipboard.writeText(path)
-      deps.toast(deps.t()('ql.copied'))
+      deps.toast(deps.t()(done))
     } catch (err) {
       deps.toast(err instanceof Error ? err.message : String(err), true)
     }
@@ -272,6 +277,10 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
     act(how) {
       const { data, top } = nav.view()
       const path = data ? data.path : top?.kind === 'file' ? top.path : undefined
+      if (how === 'local') {
+        const local = localPath(path ?? '', localPaths().get())
+        return void (local && copy(local, 'ql.localCopied'))
+      }
       if (how !== 'copy') return void system(path, how)
       const line = data && 'line' in data ? data.line : null
       void copy(line ? `${path}:${line}` : String(path))

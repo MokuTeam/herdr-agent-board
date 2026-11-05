@@ -480,8 +480,10 @@ test('a snapshot named a day and more ahead in the folder stays, the rotation go
 test('two restores in one second each keep their own copy of the database as it was', async () => {
   const { folder } = await setUp(['kept'])
   const cfg = { backup: { folder } }
-  await backupNow({ cfg })
+  // One clock for the snapshot's name and both restores: a name dated over a day past the
+  // restore's clock is left out as planted (#271).
   const now = () => Date.parse('2026-10-29T03:00:00Z')
+  await backupNow({ cfg, now })
   const first = await restore({ from: { target: 'folder' }, cfg, by: 'user', now })
   const second = await restore({ from: { target: 'folder' }, cfg, by: 'user', now })
   assert.notEqual(first.before, second.before)

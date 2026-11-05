@@ -8,6 +8,7 @@ import {
   parseConversation,
   parseTranscriptTail,
   saidIn,
+  tailComplete,
   toolDetail,
   toolLabel,
   toolPath,
@@ -157,6 +158,91 @@ test('transcript tail: title, last prompt, last words, pending tool; sidechains 
   assert.equal(peer?.role === 'peer' && peer.text, 'hi')
   assert.ok(!conv.some(c => 'text' in c && c.text === 'subagent noise'))
   assert.equal(parseConversation(lines, 2).length, 2)
+})
+
+// A request's usage as Claude Code writes it on an assistant line.
+const reply = (text: string, input: number, cached: number, extra: Record<string, unknown> = {}) =>
+  line({
+    type: 'assistant',
+    ...extra,
+    message: {
+      model: 'claude-opus-5-5',
+      usage: {
+        input_tokens: input,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: cached,
+        output_tokens: 300,
+      },
+      content: [{ type: 'text', text }],
+    },
+  })
+// What a manual /compact leaves at the end of the transcript, as Claude Code writes it (one
+// session on this machine: preTokens 161754 from a last request of 161468, postTokens 13853).
+const compaction = (meta: Record<string, unknown>, extra: Record<string, unknown> = {}) => [
+  line({
+    type: 'system',
+    subtype: 'compact_boundary',
+    content: 'Conversation compacted',
+    isSidechain: false,
+    compactMetadata: meta,
+    ...extra,
+  }),
+  line({
+    type: 'user',
+    isCompactSummary: true,
+    isVisibleInTranscriptOnly: true,
+    message: { role: 'user', content: 'This session is being continued from a previous conversation…' },
+  }),
+  line({ type: 'user', isMeta: true, message: { content: '<local-command-caveat>…</local-command-caveat>' } }),
+  line({ type: 'user', message: { content: '<command-name>/compact</command-name>' } }),
+  line({ type: 'user', message: { content: '<local-command-stdout>Compacted</local-command-stdout>' } }),
+]
+
+test('after a compaction the context is what it left, until the next request says', () => {
+  const before = [line({ type: 'user', message: { content: 'review the branch' } }), reply('Reviewed.', 2, 161466)]
+  const compacted = [...before, ...compaction({ trigger: 'manual', preTokens: 161754, postTokens: 13853 })]
+  const info = parseTranscriptTail(compacted)
+  assert.equal(info.context, 13853) // not 161468, the request before the compaction
+  assert.equal(info.lastText, 'Reviewed.') // the rest of the card reads as before
+  // The next request carries the summary, the system prompt and the new prompt: its usage wins.
+  const replied = [...compacted, line({ type: 'user', message: { content: 'next' } }), reply('On it.', 2, 49776)]
+  assert.equal(parseTranscriptTail(replied).context, 49778)
+  // An auto-compaction mid-turn reads the same.
+  assert.equal(parseTranscriptTail([...before, ...compaction({ trigger: 'auto', postTokens: 16626 })]).context, 16626)
+  // A compaction that did not say what it left (older Claude Code): unknown, not the old size.
+  assert.equal(
+    parseTranscriptTail([...before, ...compaction({ trigger: 'manual', preTokens: 161754 })]).context,
+    undefined,
+  )
+  // Two in a row with no request between: the newest one counts.
+  const twice = [...compacted, ...compaction({ trigger: 'manual', preTokens: 13964, postTokens: 18388 })]
+  assert.equal(parseTranscriptTail(twice).context, 18388)
+})
+
+test('a session never compacted keeps its context: lines that only name a compaction, sidechains, other setups', () => {
+  const lines = [
+    line({
+      type: 'user',
+      cwd: 'C:\\Users\\Иван Петров\\Проект 100%',
+      message: { content: 'why does "subtype":"compact_boundary" show up in the board?' },
+    }),
+    line({
+      type: 'assistant',
+      cwd: 'C:\\Users\\Иван Петров\\Проект 100%',
+      message: {
+        model: 'claude-opus-5-5',
+        usage: { input_tokens: 12, cache_creation_input_tokens: 3000, cache_read_input_tokens: 150000 },
+        content: [{ type: 'tool_use', id: 'g1', name: 'Grep', input: { pattern: 'compact_boundary' } }],
+      },
+    }),
+    line({
+      type: 'user',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'g1', content: '"compact_boundary"' }] },
+    }),
+    // An inline helper (older Claude Code) compacting its own conversation is not this session's.
+    line({ type: 'system', subtype: 'compact_boundary', isSidechain: true, compactMetadata: { postTokens: 900 } }),
+  ]
+  assert.equal(parseTranscriptTail(lines).context, 153012)
 })
 
 test('updates kept as thinking (thinkingDisplay "updates") are said like any message; other thinking is not', () => {
@@ -409,4 +495,95 @@ test("another session's message counts toward the budget and is cut like the res
     tiny.map(t => ('text' in t ? t.text : '')),
     ['…', '…', '…'],
   )
+})
+
+// Claude Code's recap (#321): a system line it writes a few minutes after a turn while the terminal is away.
+const recapLine = (content: string, timestamp: string, extra: Record<string, unknown> = {}) =>
+  line({ type: 'system', subtype: 'away_summary', content, timestamp, isMeta: false, ...extra })
+
+test('transcript tail: the newest recap and its time, without the line on how to turn recaps off (#321)', () => {
+  const lines = [
+    line({ type: 'ai-title', aiTitle: 'Receipts' }),
+    recapLine('Older recap.', '2026-11-03T10:00:00.000Z'),
+    line({ type: 'last-prompt', lastPrompt: 'go on' }),
+    line({ type: 'user', timestamp: '2026-11-03T10:05:00.000Z', message: { content: 'go on' } }),
+    line({
+      type: 'assistant',
+      timestamp: '2026-11-03T10:06:00.000Z',
+      message: { content: [{ type: 'text', text: 'Imported.' }] },
+    }),
+    recapLine('Importing receipts; next: the 10/24 file. (disable recaps in /config)', '2026-11-03T10:09:00.000Z'),
+    recapLine('A helper’s recap.', '2026-11-03T10:10:00.000Z', { isSidechain: true }),
+  ]
+  const info = parseTranscriptTail(lines)
+  assert.equal(info.recap, 'Importing receipts; next: the 10/24 file.')
+  assert.equal(info.recapAt, Date.parse('2026-11-03T10:09:00.000Z'))
+  assert.equal(info.lastText, 'Imported.')
+  assert.equal(info.title, 'Receipts')
+})
+
+test('transcript tail: no recap, none on the card; the tail is complete without one (#321)', () => {
+  const lines = [
+    line({ type: 'ai-title', aiTitle: 'T' }),
+    line({ type: 'last-prompt', lastPrompt: 'p' }),
+    line({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }] },
+    }),
+    line({ type: 'assistant', message: { content: [{ type: 'text', text: 'Done.' }] } }),
+  ]
+  const info = parseTranscriptTail(lines)
+  assert.equal('recap' in info, false)
+  assert.equal('recapAt' in info, false)
+  assert.equal(tailComplete(info), true)
+  // Other alphabets and % come through as written; only the trailing hint goes.
+  const ru = parseTranscriptTail([
+    recapLine('Чиню 100% карточек (disable recaps in /config)  ', '2026-11-03T10:00:00Z'),
+  ])
+  assert.equal(ru.recap, 'Чиню 100% карточек')
+  // A recap of only the hint is no recap.
+  assert.equal(
+    parseTranscriptTail([recapLine(' (disable recaps in /config)', '2026-11-03T10:00:00Z')]).recap,
+    undefined,
+  )
+})
+
+test('transcript tail: a recap older than all the rest is still found in the window read (#321)', () => {
+  const lines = [
+    recapLine('Imported the receipts; next: the 10/24 file.', '2026-11-03T10:00:00.000Z'),
+    line({ type: 'ai-title', aiTitle: 'Receipts' }),
+    line({ type: 'last-prompt', lastPrompt: 'go on' }),
+    line({ type: 'user', timestamp: '2026-11-03T10:05:00.000Z', message: { content: 'go on' } }),
+    line({
+      type: 'assistant',
+      timestamp: '2026-11-03T10:06:00.000Z',
+      message: {
+        content: [
+          { type: 'text', text: 'Reading it.' },
+          { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'C:/a/10-24.csv' } },
+        ],
+      },
+    }),
+  ]
+  const info = parseTranscriptTail(lines)
+  assert.equal(info.title, 'Receipts') // everything else came before the recap was reached
+  assert.equal(info.recap, 'Imported the receipts; next: the 10/24 file.')
+  assert.equal(info.recapAt, Date.parse('2026-11-03T10:00:00.000Z'))
+})
+
+test('transcript tail: no recap from a fork’s copied line, from content that is no text; one without a time has none (#321)', () => {
+  const forked = { forkedFrom: { sessionId: '5e550000-0000-4000-8000-000000000001' } }
+  assert.equal(parseTranscriptTail([recapLine('The source’s recap.', '2026-11-03T10:00:00Z', forked)]).recap, undefined)
+  const own = parseTranscriptTail([
+    recapLine('The source’s recap.', '2026-11-03T10:00:00Z', forked),
+    recapLine('The fork’s own.', '2026-11-03T11:00:00Z'),
+  ])
+  assert.equal(own.recap, 'The fork’s own.')
+  assert.equal(
+    parseTranscriptTail([line({ type: 'system', subtype: 'away_summary', content: ['x'] })]).recap,
+    undefined,
+  )
+  const untimed = parseTranscriptTail([recapLine('No time.', 'not a time')])
+  assert.equal(untimed.recap, 'No time.')
+  assert.equal('recapAt' in untimed, false)
 })

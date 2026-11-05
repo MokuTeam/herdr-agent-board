@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import {
   allowedLogin,
   bearerOf,
+  deskSteps,
   desktopOnly,
   localOnly,
   remoteConfig,
@@ -56,6 +57,7 @@ test("what acts on this computer's screen is not for a phone", () => {
     '/api/session/s1/wake',
     '/api/fs/preview',
     '/api/fs/raw',
+    '/api/fs/download',
     '/api/term/s1/agent/input',
     '/api/launch',
   ])
@@ -73,6 +75,8 @@ test("the remote mode's, Remote access's, wake's, the backup's and Settings → 
     '/api/backup',
     '/api/backup/x',
     '/api/time-settings',
+    // the edge log (#280): who worked with whom, for an audit on this computer
+    '/api/links/log',
   ])
     expect(localOnly(path)).toBe(true)
   for (const path of [
@@ -84,6 +88,7 @@ test("the remote mode's, Remote access's, wake's, the backup's and Settings → 
     '/api/backups',
     // the Time panel's entries go through the remote page and a paired phone too
     '/api/time',
+    '/api/links/logs',
   ])
     expect(localOnly(path)).toBe(false)
   expect(localOnly('/api/login/password')).toBe(false)
@@ -122,4 +127,13 @@ test('a look at Tailscale that failed keeps the listeners; only failures in a ro
   expect(statusVerdict(0)).toEqual({ down: true })
   // About fifty seconds of no answer: longer than a relay switch (24 s in the log that found it).
   expect(STATUS_RETRY_MS.reduce((a, b) => a + b, 0)).toBe(50_000)
+})
+
+test('marking a desk says how to attach herdr from it: user, host, ssh config, herdr --remote', () => {
+  const lines = deskSteps('claude', 'vps.tail1.ts.net').join('\n')
+  expect(lines).toContain('~claude/.ssh/authorized_keys')
+  expect(lines).toContain('ssh claude@vps.tail1.ts.net')
+  expect(lines).toContain('HostName vps.tail1.ts.net  User claude')
+  expect(lines).toContain('herdr --remote board')
+  expect(deskSteps('claude', null).join('\n')).toContain('ssh claude@<this computer>')
 })

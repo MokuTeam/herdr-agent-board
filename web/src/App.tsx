@@ -19,6 +19,7 @@ import { SheetQuestion } from './components/questions/SheetQuestion.tsx'
 import { RenameField } from './components/RenameField.tsx'
 import { SetupPop } from './components/SetupPop.tsx'
 import { SidePanels } from './components/SidePanels.tsx'
+import { SecretRequests, secretsOf } from './components/secrets/SecretForm.tsx'
 import { Toasts } from './components/Toasts.tsx'
 import { Toolbar } from './components/Toolbar.tsx'
 import { Terminal } from './components/terminal/Terminal.tsx'
@@ -104,11 +105,28 @@ export function App() {
     setTimeSettings(true)
     setTimeSettingsMounted(true)
   }
+  // Settings → Calendar (#328), on the local board only: mounted at its first opening, as Time tracking.
+  const [calendarSettings, setCalendarSettings] = useState(false)
+  const [calendarSettingsMounted, setCalendarSettingsMounted] = useState(false)
+  const openCalendarSettings = () => {
+    setCalendarSettings(true)
+    setCalendarSettingsMounted(true)
+  }
+  // The calendar (#328), while the board has it on: its panel, out of the toolbar's button.
+  const [calendarOpen, setCalendarOpen] = useState(false)
   // Time (#233), while the board has it on: its panel, out of the toolbar's button or a lane's day total.
   const [timeOpen, setTimeOpen] = useState(false)
   const [timeClient, setTimeClient] = useState<string | null>(null)
   // Tasks (#202), while the board has them on: their panel, out of the toolbar's button.
   const [todosOpen, setTodosOpen] = useState(false)
+  // Settings → Paths on this computer…, on the board seen from another device only: mounted at its
+  // first opening, as Remote access.
+  const [localPaths, setLocalPaths] = useState(false)
+  const [localPathsMounted, setLocalPathsMounted] = useState(false)
+  const openLocalPaths = () => {
+    setLocalPaths(true)
+    setLocalPathsMounted(true)
+  }
   // The reminders' buttons, shared by the schedule panel and the sheet.
   const reminders = useSchedule()
   // Sessions off the board and back, the archive's panel; Retry on a session back from it is its Return again.
@@ -162,6 +180,8 @@ export function App() {
     openMokupilot,
     openBackup,
     openTimeSettings,
+    openLocalPaths,
+    openCalendarSettings,
   )
   // Tasks' 📌 menu under an agent's message, and the panel's buttons.
   const todos = useTodos(menus.menu)
@@ -221,6 +241,7 @@ export function App() {
             setTimeClient(null)
             setTimeOpen(!timeOpen)
           }}
+          onCalendar={() => setCalendarOpen(!calendarOpen)}
         />
         <Board
           onNewSession={newSession}
@@ -247,6 +268,17 @@ export function App() {
         {...(timeSettingsMounted && !remotePage()
           ? { timeSettings: { open: timeSettings, onClose: () => setTimeSettings(false) } }
           : {})}
+        {...(calendarSettingsMounted && !remotePage()
+          ? { calendarSettings: { open: calendarSettings, onClose: () => setCalendarSettings(false) } }
+          : {})}
+        calendar={{
+          open: calendarOpen,
+          onClose: () => setCalendarOpen(false),
+          onSettings: remotePage() ? undefined : openCalendarSettings,
+        }}
+        {...(localPathsMounted && remotePage()
+          ? { localPaths: { open: localPaths, onClose: () => setLocalPaths(false) } }
+          : {})}
         archive={archive}
         todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
         time={{ open: timeOpen, onClose: () => setTimeOpen(false), client: timeClient, onClient: setTimeClient }}
@@ -259,7 +291,18 @@ export function App() {
             onMode: reminders.mode,
             onMore: () => openSchedule(ui.open),
           },
-          question: (item, detail) => questions.mount(item, detail) && <SheetQuestion questions={questions} />,
+          question: (item, detail) => {
+            const asked = questions.mount(item, detail) && <SheetQuestion questions={questions} />
+            // a secret the session waits for (#273) comes first: it holds the session until filled in
+            return secretsOf(item).length ? (
+              <>
+                <SecretRequests item={item} />
+                {asked}
+              </>
+            ) : (
+              asked
+            )
+          },
           upgradeFiles: chips.upgrade,
           onChanges: quickLook.lookChanges,
           onHistory: quickLook.lookHistory,

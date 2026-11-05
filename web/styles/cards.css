@@ -36,3 +36,53 @@
   button.rel::after { content: ""; position: absolute; inset: -8px -4px; }
   .helpers-chip::after { content: ""; position: absolute; inset: -8px 0; }
 }
+
+/* The tool at work stays inside the card: a long MCP tool's name ("server · tool") ends in …
+   rather than past the card's edge, and the detail after it gives way first. */
+.now > svg { flex: none; }
+.now .tool { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.now .detail { flex-shrink: 100; }
+
+/* Claude Code's recap as the card's line (#321; Card.tsx RecapLine). Prose, so in the regular
+   weight and on up to three lines; how long ago it was written before it, small and quiet. Once
+   the session went on long after it, it steps back to the shade of what the session said. The
+   task the recap stands over follows in one quiet line. Both end at a word (hooks/useWordClip.ts);
+   the clamp is what holds them until that has measured. */
+.what.recap { font-weight: 400; line-height: 1.38; -webkit-line-clamp: 3; }
+.what.recap.stale { color: var(--label-2); }
+.recap-age { color: var(--label-3); font-size: 11.5px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.card .task { margin-top: 3px; font-size: 12px; line-height: 1.35; color: var(--label-2); display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.card .task-label { color: var(--label-3); font-weight: 500; }
+/* A MokuPilot call agent (#326): its call first, quiet and still, in the line the tool at work
+   uses; after the call in the plain label color, as the card waits on its helpers. Its task board
+   is task lines; what comes next a shade back. */
+.now.call { margin-top: 5px; }
+/* The call's label wins the line: how long and how much is done give way first, to nothing. */
+.now.call .tool { flex: none; max-width: calc(100% - 18px); }
+.now.call svg { width: 12px; height: 12px; stroke-width: 1.7; color: var(--accent); }
+.now.call .tool { color: var(--accent); }
+.now.call.after svg, .now.call.after .tool { color: var(--label-2); }
+.card .call-task.next { color: var(--label-3); }
+.call-steps, .call-more { color: var(--label-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* The name wins the head (#324; models/card-head.ts, hooks/useHeadFit.ts): it is what tells one
+   card from another, so it is the last thing to give way. What stands beside it keeps its whole
+   width, never "D…" or "Waiting on oth…", until the name would be cut. Then, one step at a time
+   and only as far as the name needs (the row's data-give), the state word goes (the dot's color
+   and the column say it; a screen reader still reads it), the profile tag becomes its mark (its
+   color and initial; its tooltip as before) and the clock its bare glyph (the time in its
+   tooltip, as on a narrow card). The row stays one line: a second would make every such card
+   taller. Past all three the name is cut, whole in its tooltip; one whose end tells it apart
+   ("…-Templates") is cut in the middle and keeps that end. */
+.card .card-top > .profile-tag { flex: none; max-width: none; }
+.card .card-top > .card-status { max-width: none; }
+.card-top[data-give~="status"] > .card-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.card-top[data-give~="profile"] > .profile-tag { display: flex; align-items: center; justify-content: center; min-width: 18px; padding-inline: 5px; }
+.card-top[data-give~="profile"] > .profile-tag > .tag-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.card-top[data-give~="profile"] > .profile-tag::before { content: attr(data-mark); content: attr(data-mark) / ""; }
+.card-top[data-give~="alarm"] > .alarm { padding: 0; background: none; }
+.card-top[data-give~="alarm"] > .alarm > span { display: none; }
+.card-top > .name.split { display: flex; }
+.card-top > .name.split::before { white-space: pre; }
+.name-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.name-tail { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; }

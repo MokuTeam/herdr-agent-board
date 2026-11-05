@@ -153,7 +153,7 @@ describe('the board’s own files through the tunnel', () => {
     ])
     for (const path of ['/api/fs/%70review', '/api/fs/pr%65view'])
       expect([path, ...(await answer(remote('POST', path, { path: marked[0] })))]).toEqual([path, 403, { error: OWN }])
-    for (const path of ['/api/fs/raw', '/api/fs/%72aw']) {
+    for (const path of ['/api/fs/raw', '/api/fs/%72aw', '/api/fs/download', '/api/fs/d%6Fwnload']) {
       const res = await remote('GET', `${path}?path=${encodeURIComponent(marked[1] as string)}&t=${fsToken}`)
       expect([path, ...(await answer(res))]).toEqual([path, 403, { error: OWN }])
     }
