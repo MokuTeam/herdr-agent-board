@@ -1,6 +1,7 @@
 // The live board: the event stream plus an uncached snapshot (models/lifecycle.ts), suspended
-// while the page is hidden or offline and resumed when it is back.
+// while the page is hidden, offline or not drawn (models/drawn.ts) and resumed when it is back.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { watchDrawn } from '../models/drawn.ts'
 import { boardConnection } from '../models/lifecycle.ts'
 import { nextRetryMs, remotePage, UNPAIRED } from '../models/remote-page.ts'
 import { listenForReveals, type Reveal } from '../models/reveal.ts'
@@ -15,7 +16,7 @@ export interface LiveBoard {
   canMutate: boolean
   /** Edits the board keeps itself (cards, lanes, language, files) need only the board. */
   canEdit: boolean
-  /** Opens a new stream and snapshot, unless the page is hidden or offline. */
+  /** Opens a new stream and snapshot, unless the page is hidden, offline or not drawn. */
   resume(): void
   /**
    * The last session the board was asked to show (a notification clicked: the stream's `reveal`
@@ -79,8 +80,11 @@ export function useBoard(): LiveBoard {
         if (!value && started) setDropped(true)
       },
     })
+    // On show but not drawn (a window covered by another one, #333): suspended as while hidden,
+    // until a frame comes again (models/drawn.ts).
+    let undrawn = false
     const resume = () => {
-      if (!pageAway()) connection.resume()
+      if (!pageAway() && !undrawn) connection.resume()
     }
     const suspend = () => connection.suspend()
     const visibility = () => (document.hidden ? suspend() : resume())
@@ -89,6 +93,19 @@ export function useBoard(): LiveBoard {
     addEventListener('online', resume)
     addEventListener('offline', suspend)
     document.addEventListener('visibilitychange', visibility)
+    const drawn =
+      typeof requestAnimationFrame === 'function'
+        ? watchDrawn({
+            undrawn() {
+              undrawn = true
+              suspend()
+            },
+            drawn() {
+              undrawn = false
+              resume()
+            },
+          })
+        : null
     resume()
     started = true
     return () => {
@@ -96,6 +113,7 @@ export function useBoard(): LiveBoard {
       removeEventListener('online', resume)
       removeEventListener('offline', suspend)
       document.removeEventListener('visibilitychange', visibility)
+      drawn?.stop()
       started = false
       clearTimeout(retry)
       suspend()
