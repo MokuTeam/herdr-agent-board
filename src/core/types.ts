@@ -295,6 +295,8 @@ export interface Item {
   fork?: { of: string; at: number } | null
   /** A MokuPilot call agent's (#326, core/call-agent.ts): its call and its task board; absent for the others. */
   call?: CallView | null
+  /** A MokuPilot day session (#331, core/mokupilot-day.ts): it has no pane, messages go to its day's inbox. */
+  day?: true
   /** Its Claude process: whether it runs, since when, the pipe other sessions write to (server only). */
   alive?: boolean
   since?: number | null

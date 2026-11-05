@@ -1,6 +1,7 @@
 import { expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
+import { dayName } from '../../src/core/mokupilot-day.ts'
 import { promptOf, type ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import { fakeWake } from '../support/fake-wake.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
@@ -531,6 +532,62 @@ test('#251 left to Claude Code: a running session herdr does not run, a message 
   passed(await runHook(w, 'pre-send', sendFrom('Ghost', 'hi', SID_ME)))
   passed(await runHook(w, 'pre-send', sendFrom('Centium Ops', { type: 'shutdown_request' }, SID_ME)))
   passed(await runHook(w, 'pre-send', sendFrom('Centium Ops', ' \x1b ', SID_ME)))
+  expect(scheduled(w)).toEqual([])
+})
+
+const SID_DAY = '9b0c1d2e-3f4a-4b5c-8d6e-7f8a9b0c1d2e'
+
+/** MokuPilot's day running today in the world's home, its Claude session `session` (#331). */
+function mokupilotDay(w: World, session: string, over: Record<string, unknown> = {}): void {
+  const folder = join(w.home, '.meeting-copilot', 'day', dayName(new Date()))
+  mkdirSync(folder, { recursive: true })
+  writeFileSync(
+    join(folder, 'state.json'),
+    JSON.stringify({ provider: 'claude', fork_session: session, ended_at: null, ...over }),
+  )
+}
+
+test("#331 to MokuPilot's day session from another profile: queued through the board although herdr does not run it", async () => {
+  const w = await world()
+  const fake = await fakeWake(runningIn(w, [[w.work, 'work', SID_O, 'Centium Ops']]))
+  writeBoardConfig(w.box, wakeOnConfig(fake.port, { config: profilesConfig(w) }))
+  // In Default's registry, not in /awake: MokuPilot runs it as `claude -p` with its hooks off.
+  liveIn(w.dflt, SID_DAY, 'work-a7', 'C:\\Work')
+  mokupilotDay(w, SID_DAY)
+
+  const work = { CLAUDE_CONFIG_DIR: w.work }
+  const r = denied(await runHook(w, 'pre-send', sendFrom('work-a7', 'done: case 42', SID_O), work))
+  expect(r).toStartWith('Queued for work-a7 in profile Default through the board')
+  expect(r).toEndWith('The reply comes back the same way, as a board reminder from work-a7.')
+  const [entry, ...more] = scheduled(w)
+  expect(more).toEqual([])
+  expect(entry).toMatchObject({
+    key: SID_DAY,
+    name: 'work-a7',
+    cwd: 'C:\\Work',
+    text: 'done: case 42',
+    from: { key: SID_O, name: 'Centium Ops' },
+    fromProfile: 'Work',
+    replyTo: 'Centium Ops [2d3e4f5a]',
+  })
+  expect(entry).not.toHaveProperty('pane')
+})
+
+test('#331 left to Claude Code: a session outside herdr that is not the running day, an ended day, "mokupilot": false', async () => {
+  const w = await world()
+  const fake = await fakeWake(runningIn(w, [[w.work, 'work', SID_O, 'Centium Ops']]))
+  writeBoardConfig(w.box, wakeOnConfig(fake.port, { config: profilesConfig(w) }))
+  liveIn(w.dflt, SID_DAY, 'work-a7')
+  liveIn(w.dflt, SID_ME, 'Ghost')
+  const work = { CLAUDE_CONFIG_DIR: w.work }
+
+  mokupilotDay(w, SID_DAY)
+  passed(await runHook(w, 'pre-send', sendFrom('Ghost', 'hi', SID_O), work))
+  mokupilotDay(w, SID_DAY, { ended_at: 1793870263.9 })
+  passed(await runHook(w, 'pre-send', sendFrom('work-a7', 'hi', SID_O), work))
+  mokupilotDay(w, SID_DAY)
+  writeBoardConfig(w.box, wakeOnConfig(fake.port, { config: { ...profilesConfig(w), mokupilot: false } }))
+  passed(await runHook(w, 'pre-send', sendFrom('work-a7', 'hi', SID_O), work))
   expect(scheduled(w)).toEqual([])
 })
 
