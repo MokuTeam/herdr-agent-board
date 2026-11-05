@@ -30,6 +30,7 @@ import { skillIn } from './agents-skill.ts'
 import { herdrHookOf, readSettings } from './hook-settings.ts'
 import { ROOT } from './paths.ts'
 import { findProfileDirs, inheritedProfileDir } from './profiles.ts'
+import { toastAppState } from './toast-app.ts'
 import { oldRouterAt, wakeAlive } from './wake-api.ts'
 import { peekWakeSessions, readWakeStatus, unseenWakeTakeover, wakeLogFile } from './wake-files.ts'
 
@@ -359,7 +360,7 @@ export async function gatherFacts(
     node: process.versions.node ?? '',
     binDir: join(home, '.local', 'bin'),
     path: String(env.PATH ?? env.Path ?? ''),
-    files: boardFiles(root),
+    files: boardFiles(root, platform as NodeJS.Platform),
     commands: {
       board: findCommand('board', { env, platform }),
       'spawn-agent': findCommand('spawn-agent', { env, platform }),
@@ -380,5 +381,7 @@ export async function gatherFacts(
     // MokuPilot for calls with a fork of a session: how the board would start it.
     mokupilot: mokupilotCommand(cfg, { platform, env }),
     mokupilotMode: mokupilotMode(cfg?.mokupilot),
+    // macOS shows the notifications through the board's own app, built at install.
+    ...(platform === 'darwin' && { toastApp: toastAppState() }),
   }
 }

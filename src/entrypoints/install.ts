@@ -14,8 +14,9 @@
 // ran this (an absolute path, no PATH lookup).
 //
 //   bun src/entrypoints/install.ts              the above; desktop notifications stay as they were
-//   bun src/entrypoints/install.ts --toast      also Windows notifications with the agent's words
-//                                               (the "notifications" action)
+//   bun src/entrypoints/install.ts --toast      also desktop notifications with the agent's words
+//                                               (the "notifications" action: Windows' PowerShell
+//                                               script, macOS' toast.ts)
 //   bun src/entrypoints/install.ts --no-toast   and without them
 //   bun src/entrypoints/install.ts --codex      Codex's hooks and the commands, leaving Claude alone
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -35,14 +36,16 @@ import { t } from '../core/lang.ts'
 import { DEFAULT_PROFILE, shownProfiles } from '../core/profiles.ts'
 import { boardFiles, checkSetup, report, tomlValue } from '../core/setup.ts'
 import { wakeSwitch } from '../core/wake/config.ts'
+import { ensureToastApp, toastAppState } from '../integrations/toast-mac.ts'
 
 const args = process.argv.slice(2)
 for (const a of args.filter(a => a !== '--toast' && a !== '--no-toast' && a !== '--codex'))
   console.log(`ignored ${a}: the options are --toast, --no-toast and --codex`)
 let toast = args.includes('--toast') ? true : args.includes('--no-toast') ? false : undefined
-if (toast && process.platform !== 'win32') {
+const toasts = process.platform === 'win32' || process.platform === 'darwin'
+if (toast && !toasts) {
   console.log(
-    'desktop notifications: Windows only; on Linux and macOS herdr shows its own ([ui.toast] delivery = "system")',
+    'desktop notifications: Windows and macOS only; on Linux herdr shows its own ([ui.toast] delivery = "system")',
   )
   toast = undefined
 }
@@ -171,7 +174,7 @@ try {
     console.log(
       out.statusLineSet ? `status line: ${paths.statusline}` : `status line in ${out.file}: left as it was (not ours)`,
     )
-    if (process.platform === 'win32')
+    if (toasts)
       console.log(
         out.toast
           ? `desktop notifications: on (Stop, Notification, PreToolUse AskUserQuestion -> ${paths.toast})`
@@ -194,12 +197,29 @@ try {
         "wake hooks: not added: the separate herdr-wake plugin's are there (Settings → Sleep and wake… → Switch over…)",
       )
   }
-  if (process.platform === 'win32') {
+  if (toasts) {
     const delivery = tomlValue(readText(herdrConfigFile()), 'ui.toast', 'delivery') ?? 'off'
     if (toastOn && delivery !== 'off')
       console.log(
         `  herdr shows its own too: set [ui.toast] delivery = "off" in ${herdrConfigFile()}, then herdr server reload-config`,
       )
+  }
+  // macOS: the notification app (macOS shows notifications only for an app LaunchServices knows).
+  // Built here so the first notification comes at once; a click on it opens the session's sheet.
+  // An app that is there and current is kept; one that failed to build is tried again (a hook does not).
+  if (process.platform === 'darwin' && toastOn) {
+    const app = ensureToastApp({ retry: true })
+    if (app) {
+      console.log(`desktop notifications: the app that shows them: ${app}`)
+      console.log('  the first one asks to allow "Claude": allow it, or turn it on in System Settings > Notifications')
+    } else {
+      console.log(
+        `desktop notifications: the app that shows them was not built (${toastAppState().failed ?? 'it could not be built'}); until it is, the hook shows herdr's own notification`,
+      )
+      console.log(
+        '  to build it, install the Command Line Tools if they are missing (xcode-select --install), then run the install with --toast again',
+      )
+    }
   }
 } catch (err) {
   console.error(`agent-board install: ${messageOf(err)}`)
