@@ -240,7 +240,7 @@ async function restart(deps: SessionApp['deps'], item: Item): Promise<Result> {
   return { ok: true, id: entry.id, again }
 }
 
-/** What the board does not do to a MokuPilot call agent with no pane (#326). */
+/** What the board does not do to a MokuPilot call agent with no pane (#326) or day session (#331). */
 const IN_MOKUPILOT_REFUSED: ReadonlySet<string> = new Set(['focus', 'sleep', 'restart', 'archive', 'mokupilot', 'fork'])
 
 /** `body`: its fields, taken only by the actions that read them (as main's did, so a null body fails only there). */
@@ -252,9 +252,11 @@ async function act(
   viewer?: Viewer,
 ): Promise<Result> {
   const { deps } = app
-  // A MokuPilot call agent with no pane (#326) runs in MokuPilot: nothing of herdr's for it, and no
-  // fork or call of a session MokuPilot is running. Every other session goes on as before.
-  if (item.call && !item.pane && IN_MOKUPILOT_REFUSED.has(action)) return { ok: false, error: t('err.noPane') }
+  // A MokuPilot call agent with no pane (#326) or day session (#331) runs in MokuPilot: nothing of
+  // herdr's for it, and no fork or call of a session MokuPilot is running. Every other session goes
+  // on as before.
+  if ((item.call || item.day) && !item.pane && IN_MOKUPILOT_REFUSED.has(action))
+    return { ok: false, error: t('err.noPane') }
   switch (action) {
     case 'focus':
       return focus(deps, item, { raise: deps.cfg.raiseTerminal !== false })
