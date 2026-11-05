@@ -286,6 +286,20 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   so and points to the panel); under This machine only with MokuPilot found there. Settings →
   MokuPilot… is always offered, so the mode can be changed in every case; with
   `"mokupilot": false` the panel says calls are off.
+- While a call runs, its agent has a card of its own (#326). MokuPilot runs it outside herdr with
+  every hook off, and keeps one file per live agent in `~/.meeting-copilot/call-agents/`
+  (`<session id>.json`: its session, the session it is a fork of, its Claude folder and
+  folder, whether the call is on or over and a turn runs, how many helpers it has); its own task
+  board is `~/.agent-boards/<harness>/<session id>.json` (`AGENT_BOARDS_DIR` first). A fork's card
+  is "Call · <the session>", in that session's lane and right after it; one with no conversation
+  is "MokuPilot call"; one MokuPilot went on in marks that session's own card. Under its name: on
+  a call and for how long, or after the call how many helpers it still finishes; then its own
+  line (its `board doing`, else its task board's first doing item) and its task board as task
+  lines. It runs in MokuPilot, so its card, sheet and menu have nothing of herdr's or a
+  terminal's, and the board refuses those actions for it. Its last words and a recap count only
+  from its start: before that its transcript is its parent's. The folder is looked at only where
+  MokuPilot has run (once a minute) and `"mokupilot"` is not `false`; the card goes when the file
+  does (`src/core/call-agent.ts`, `src/adapters/mokupilot-call.ts`).
 - "Fork" (the sheet, a card's menu): a new session in a new tab that starts with a copy of this
   one's conversation, so it knows what this one knows while this one goes on as it was; see
   [Fork](#fork).
@@ -2390,6 +2404,86 @@ in the run), and the totals per day twice, by work date (as the board will
 bill) and by Toggl's own day in `--tz` (to hold against Toggl's report). Running timers are
 skipped. Projects found go into each listed lane's projects, once the run is let in.
 
+## Calendar
+
+Every account's calls in one calendar, beside the kanban (#328). Off by default: with no
+`calendar` in config.json, or `"on": false`, the board fetches nothing, keeps no timer for it and
+shows nothing of it. Settings → Calendar… turns it on and adds the calendars.
+
+A **source** is one calendar. The board fetches each by itself, on its own interval (5 minutes
+unless it says otherwise) and on Sync, with no model in between, so a sync costs no tokens. A fetch
+that fails keeps the last good copy, says why in Settings → Calendar and on the source's mark, and
+the next try waits longer each time (up to an hour). Kinds:
+
+- `mcp`: a calendar MCP server over Streamable HTTP. The `google-workspace` preset calls the Google
+  Workspace MCP server's `get_events` (paged, `detailed`) for `account` and each of `calendars`
+  (`primary` when none is named), and reads its text answer. Without a preset, `list` names the
+  tool and its arguments, `{from}` and `{to}` filled in as ISO times, and the tool answers events
+  as JSON (a list, or `{ "events": [...] }`) in the board's form below. `url` is https, or http on
+  this computer.
+- `ics`: a calendar's secret iCal address (Google, Outlook, iCloud, Fastmail…). Read only. The
+  address is a secret: it never goes into config.json but into a file of its own in the state
+  folder, readable by you alone. You type it in Settings → Calendar, or an agent asks you for it
+  with `board secret request --sink calendar --param source=<id> --field url` (the board's own
+  sink, there while the calendar is on and has an ICS source). Recurring events, time zones (an
+  IANA name, the file's own VTIMEZONE, or a Windows name), all-day events, moved and cancelled
+  instances are read.
+- `push`: events an agent or a script hands over, `board cal push --source <id> < events.json`,
+  for a provider the board cannot reach.
+- `board`: the board's own calendar, always there, where agents put their events.
+
+```json
+"calendar": {
+  "on": true,
+  "sources": [
+    { "id": "work", "kind": "mcp", "label": "Work", "lane": "work",
+      "url": "http://127.0.0.1:8000/mcp", "preset": "google-workspace", "account": "me@example.com" },
+    { "id": "home", "kind": "ics", "label": "Home", "color": "#34c759" }
+  ]
+}
+```
+
+Each source has a short `label` and a colour: its own `color`, else its `lane`'s (a category's id),
+so a call reads as that client's and matches its cards. `everyMin`, `pastDays` (35) and
+`futureDays` (90) set how often and how far a sync reaches.
+
+**The panel.** The toolbar's Calendar button opens it in the side panels' place (docked or
+floating, resized like the others). Day, week, month and agenda, as Google Calendar has them;
+Today and the arrows; the time now as a red line; events of every source side by side where they
+overlap (in a narrow day, each a little further in); all-day events in a strip on top. An event
+shows its title, time and label; a tap opens its card (where, who is invited, your answer, the
+provider's page). Declined and cancelled events are struck and faded, unanswered ones outlined,
+past ones quieter. A call with a join link (Meet, Zoom, Teams, Webex…) has it one tap away on its
+block and its row; when a call is on or starts within fifteen minutes, the toolbar's button says
+so and its join link sits next to it. A tap on a source's mark hides or shows its events. On a
+phone the week opens as the agenda.
+
+**Agents** (`board cal`, `--json` for the whole of it):
+
+```sh
+board cal list [--day <d> | --from <t> --to <t> | --days <n>] [--source <id>]... [--json]
+board cal sources                      # every source and how its sync stands
+board cal sync [--source <id>]         # fetch now, in this process
+board cal add --title "Prep" --start "2026-11-05 14:00" --minutes 30 [--join <url>] [--note "…"]
+board cal add --title "Trip" --all-day --start 2026-11-10 --end 2026-11-12
+board cal edit <id> [--title …] [--start <t>] [--end <t>] [--expect <rev>]
+board cal rm <id>
+board cal push --source <id> [--file events.json]
+```
+
+`list` works while the web board is down: it reads each source's last copy and says when each was
+fetched. `add`, `edit` and `rm` change the board's own calendar, as the session that runs them. A
+real meeting in a provider's calendar changes only through an `mcp` source with `"write": true`
+(the preset's `manage_event`, or a tool named there), only for an event you asked for, with your
+words: `board cal add --source work --asked "<what you said>" …`. Every change, the board's own and
+a provider's, is in the database's journal with who made it.
+
+An event in JSON (`board cal list --json`, `push`, a generic MCP tool): `source`, `id`, `title`,
+`start` and `end` (ISO with an offset; an all-day event's are dates, `end` the day after its
+last), `allDay`, `zone`, `location`, `join`, `link`, `attendees` (a count), `status`
+(`confirmed`, `tentative`, `cancelled`), `response` (yours), `kind` (`workingLocation`,
+`outOfOffice`, `focusTime`).
+
 ## Backup
 
 The board keeps some of its data in a database of its own (#233): `board.db` in the state folder,
@@ -3430,6 +3524,11 @@ while one does not check out.
 `on`, `zone`, `excludeTags`, `clients` with each one's `on`, `projects`, `retired`, `billable`,
 `nonBillable`, `systems`, `projectSystems`, `ref`, `zone` and `billing` rules).
 
+`calendar` (the [calendar](#calendar); Settings → Calendar… sets it): `on`, `everyMin`,
+`pastDays`, `futureDays`, `sources` (each `id`, `kind`, `label`, `color`, `lane`, `everyMin`; an
+`mcp` one's `url`, `preset`, `account`, `calendars`, `list`, `write`). No iCal address is ever in
+it.
+
 `backup` (the [backup](#backup) of the board's database; Settings → Backup… sets it): `folder` (a
 folder that syncs elsewhere), `server` (`{ "host", "port", "admin": { "user", "key" }, "set" }`:
 your server, the admin Look and Apply log in as, and when Apply or your own setup with a Test
@@ -3535,6 +3634,17 @@ config, a request's rules, the templates, where a sink writes, a request on its 
 `src/adapters/secret-sinks.ts` (the file, Bitwarden, PowerShell and HTTP writes),
 `src/services/secrets.ts` (asking, submit, decline, expiry, the audit), `src/server/routes/secrets.ts`,
 `src/entrypoints/secret-cli.ts` (`board secret`), `web/src/components/secrets/SecretForm.tsx`.
+The calendar (#328): `src/core/calendar.ts` (the event, the `calendar` settings, join links, windows),
+`src/core/calendar-ics.ts` (iCalendar: recurrence, zones), `src/core/calendar-google.ts` (the
+Google Workspace preset's arguments and its text answer), `src/core/calendar-layout.ts` (the grid:
+overlaps, weeks, bars over days, items rather than events), `src/adapters/calendar-store.ts` (the
+board's own events in the database, step 4, with the journal), `src/adapters/calendar-cache.ts`
+(each source's copy and an ICS address in the state folder), `src/adapters/calendar-fetch.ts` (an
+ICS fetch, the MCP client), `src/services/calendar.ts` (fetching, the sync timer, reading a
+window), `src/services/calendar-settings.ts`, `src/server/routes/calendar.ts`,
+`src/entrypoints/cal-cli.ts` (`board cal`), `web/src/models/calendar.ts`,
+`web/src/components/calendar/`. Tests run fake MCP servers and ICS addresses of their own
+(`Bun.serve` on a free port) and never a real calendar.
 Tests never run the real `bw` or PowerShell: `BOARD_BW_BIN_PATH` and `BOARD_POWERSHELL_BIN_PATH`
 name fakes (`test/support/fake-bw.ts`, `fake-powershell.ts`), and every sandbox points them at
 files that do not exist. The drop script's tests run it with

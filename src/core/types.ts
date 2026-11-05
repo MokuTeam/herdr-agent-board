@@ -1,5 +1,6 @@
 // Types shared across the board. Grows with each ported module.
 
+import type { CallView } from './call-agent.ts'
 import type { FormQuestion } from './dialogs/question-form.ts'
 import type { HelperSummary } from './helpers.ts'
 import type { FailureKind } from './launch/launcher-command.ts'
@@ -196,6 +197,8 @@ export interface Config {
   time?: unknown
   /** Secrets through the board (#273), as config.json has it: read through core/secrets.ts secretsConfig. */
   secrets?: unknown
+  /** The calendar (#328), as config.json has it: read through core/calendar.ts calendarConfig. */
+  calendar?: unknown
   [extra: string]: unknown
 }
 
@@ -290,6 +293,8 @@ export interface Item {
   links?: ItemLinks | null
   /** A fork's card: the session it is a fork of and when it started (core/links.ts), or none. */
   fork?: { of: string; at: number } | null
+  /** A MokuPilot call agent's (#326, core/call-agent.ts): its call and its task board; absent for the others. */
+  call?: CallView | null
   /** Its Claude process: whether it runs, since when, the pipe other sessions write to (server only). */
   alive?: boolean
   since?: number | null

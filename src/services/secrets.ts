@@ -10,10 +10,12 @@ import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { secretDir } from '../adapters/calendar-cache.ts'
 import { allCards, readCard, updateCard } from '../adapters/cards.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { stateDir } from '../adapters/paths.ts'
 import { writeSink } from '../adapters/secret-sinks.ts'
+import { calendarConfig, SOURCE_ID } from '../core/calendar.ts'
 import { t } from '../core/lang.ts'
 import {
   checkRequest,
@@ -37,8 +39,41 @@ import type { SetupCheck } from '../core/setup.ts'
 import { cleanText } from '../core/time.ts'
 import type { Config, Translator } from '../core/types.ts'
 
-export const secretsOf = (cfg: Pick<Config, 'secrets'>): SecretsConfig =>
-  secretsConfig(cfg.secrets, { home: homedir() })
+export const secretsOf = (cfg: Pick<Config, 'secrets'> & { calendar?: unknown }): SecretsConfig =>
+  secretsConfig(withCalendarSink(cfg), { home: homedir() })
+
+/**
+ * config.json's `secrets` with the calendar's own sink (#328) beside the owner's: while the
+ * calendar is on and has an ICS source, `calendar` writes the address of one of those sources
+ * (`--param source=<id> --field url`) to its file (adapters/calendar-cache.ts). A sink of the
+ * owner's named `calendar` wins. The calendar off: `secrets` exactly as it is.
+ */
+function withCalendarSink(cfg: Pick<Config, 'secrets'> & { calendar?: unknown }): unknown {
+  const cal = calendarConfig(cfg.calendar)
+  if (!cal) return cfg.secrets
+  const ics = cal.sources.filter(s => s.kind === 'ics' && SOURCE_ID.test(s.id)).map(s => s.id)
+  if (!ics.length) return cfg.secrets
+  if (cfg.secrets !== undefined && !isRecord(cfg.secrets)) return cfg.secrets
+  const own = isRecord(cfg.secrets) ? cfg.secrets : {}
+  const sinks = isRecord(own.sinks) ? own.sinks : {}
+  if (own.sinks !== undefined && !isRecord(own.sinks)) return cfg.secrets
+  if (Object.hasOwn(sinks, 'calendar')) return cfg.secrets
+  return {
+    ...own,
+    sinks: {
+      ...sinks,
+      calendar: {
+        kind: 'file',
+        title: t('cal.sink.title'),
+        params: { source: `^(${ics.join('|')})$` },
+        folder: secretDir(),
+        name: '{{source}}.json',
+        format: 'json',
+        template: { url: '{{url}}' },
+      },
+    },
+  }
+}
 
 export const auditFile = (): string => join(stateDir(), 'secrets', 'audit.jsonl')
 const AUDIT_MAX = 1 << 20
@@ -244,7 +279,7 @@ export interface Submit {
  * the first), and the request is ok, or stays pending with why it failed.
  */
 export async function submitSecret(
-  cfg: Pick<Config, 'secrets'>,
+  cfg: Pick<Config, 'secrets'> & { calendar?: unknown },
   id: string,
   input: Submit,
   now = Date.now(),
