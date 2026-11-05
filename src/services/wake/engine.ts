@@ -987,6 +987,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         cwd: entry.cwd ?? '',
         label: name || 'claude',
         ...(was.tabLabel !== undefined && { tabLabel: was.tabLabel }),
+        ...(was.worktree && { worktree: was.worktree }),
       },
       await snapshotNow(),
     )

@@ -105,6 +105,15 @@ export function App() {
     setTimeSettings(true)
     setTimeSettingsMounted(true)
   }
+  // Settings → Calendar (#328), on the local board only: mounted at its first opening, as Time tracking.
+  const [calendarSettings, setCalendarSettings] = useState(false)
+  const [calendarSettingsMounted, setCalendarSettingsMounted] = useState(false)
+  const openCalendarSettings = () => {
+    setCalendarSettings(true)
+    setCalendarSettingsMounted(true)
+  }
+  // The calendar (#328), while the board has it on: its panel, out of the toolbar's button.
+  const [calendarOpen, setCalendarOpen] = useState(false)
   // Time (#233), while the board has it on: its panel, out of the toolbar's button or a lane's day total.
   const [timeOpen, setTimeOpen] = useState(false)
   const [timeClient, setTimeClient] = useState<string | null>(null)
@@ -172,6 +181,7 @@ export function App() {
     openBackup,
     openTimeSettings,
     openLocalPaths,
+    openCalendarSettings,
   )
   // Tasks' 📌 menu under an agent's message, and the panel's buttons.
   const todos = useTodos(menus.menu)
@@ -231,6 +241,7 @@ export function App() {
             setTimeClient(null)
             setTimeOpen(!timeOpen)
           }}
+          onCalendar={() => setCalendarOpen(!calendarOpen)}
         />
         <Board
           onNewSession={newSession}
@@ -257,6 +268,14 @@ export function App() {
         {...(timeSettingsMounted && !remotePage()
           ? { timeSettings: { open: timeSettings, onClose: () => setTimeSettings(false) } }
           : {})}
+        {...(calendarSettingsMounted && !remotePage()
+          ? { calendarSettings: { open: calendarSettings, onClose: () => setCalendarSettings(false) } }
+          : {})}
+        calendar={{
+          open: calendarOpen,
+          onClose: () => setCalendarOpen(false),
+          onSettings: remotePage() ? undefined : openCalendarSettings,
+        }}
         {...(localPathsMounted && remotePage()
           ? { localPaths: { open: localPaths, onClose: () => setLocalPaths(false) } }
           : {})}

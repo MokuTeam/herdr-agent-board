@@ -99,6 +99,12 @@ function world(o: { panes?: FakePane[]; sessions?: (work: string) => WakeSession
       io.tabs.push({ tab_id: 'w9:t1', workspace_id: 'w9', label: tabLabel ?? '1', number: 1 })
       return fresh('w9', 'w9:t1', cwd)
     },
+    async openWorktree(wt, label, tabLabel) {
+      opened.push(['worktree', wt.root, wt.path, label, tabLabel ?? ''])
+      io.workspaces.push({ workspace_id: 'w8', label })
+      io.tabs.push({ tab_id: 'w8:t1', workspace_id: 'w8', label: tabLabel ?? '1', number: 1 })
+      return { workspace: 'w8', pane: fresh('w8', 'w8:t1', wt.path), alreadyOpen: false }
+    },
     exists: () => true,
     home,
   }
@@ -521,6 +527,48 @@ test('review: alone in its workspace, nobody else coming back there: the tab goe
   expect(closes(w.io)).toEqual([['tab', 'close', 't1']])
   expect(w.io.workspaces).toEqual([])
   expect(readSessions(w.file)[SID]?.freed).toMatchObject({ workspaceLabel: 'Main', topic: 'topic:Main' })
+})
+
+test('#317 alone in a linked worktree’s workspace: its worktree noted, and woken in that worktree’s workspace again', async () => {
+  const root = process.platform === 'win32' ? 'C:\\Work' : '/work'
+  const pane = claudePane('w1:p1', 't1', SID)
+  const w = world({ panes: [pane] })
+  w.io.tabs.splice(1, 1)
+  w.io.panes.splice(
+    w.io.panes.findIndex(p => p.pane_id === 'w1:s2'),
+    1,
+  )
+  w.io.workspaces[0] = {
+    workspace_id: 'w1',
+    label: 'Main',
+    worktree: { checkout_path: PROJECT, is_linked_worktree: true, repo_root: root, repo_name: 'Work' },
+  }
+  expect(await sleepIn(w, pane, SID, 'Solo', 1)).toMatchObject({ ok: true })
+  expect(w.io.workspaces).toEqual([])
+  expect(readSessions(w.file)[SID]?.freed).toMatchObject({ workspaceLabel: 'Main', worktree: { root, path: PROJECT } })
+
+  startsOnRun(w.io, w.work, { id: SID, name: 'Solo', n: 2 })
+  expect(await createWakeEngine(w.deps).wake(SID)).toMatchObject({ ok: true, pane: 'w8:new1' })
+  expect(w.opened).toEqual([['worktree', root, PROJECT, 'Main', '1']])
+  expect(typed(w.io)).toEqual([['pane', 'run', 'w8:new1', `board resume ${SID} --profile work`]])
+})
+
+test('#317 a plain workspace (no worktree, or a main checkout) is noted as before and comes back as a plain one', async () => {
+  for (const worktree of [undefined, { checkout_path: PROJECT, is_linked_worktree: false, repo_root: PROJECT }]) {
+    const pane = claudePane('w1:p1', 't1', SID)
+    const w = world({ panes: [pane] })
+    w.io.tabs.splice(1, 1)
+    w.io.panes.splice(
+      w.io.panes.findIndex(p => p.pane_id === 'w1:s2'),
+      1,
+    )
+    w.io.workspaces[0] = { workspace_id: 'w1', label: 'Main', ...(worktree && { worktree }) }
+    expect(await sleepIn(w, pane, SID, 'Solo', 1)).toMatchObject({ ok: true })
+    expect(readSessions(w.file)[SID]?.freed).not.toHaveProperty('worktree')
+    startsOnRun(w.io, w.work, { id: SID, name: 'Solo', n: 2 })
+    expect(await createWakeEngine(w.deps).wake(SID)).toMatchObject({ ok: true, pane: 'w9:new1' })
+    expect(w.opened).toEqual([['workspace', PROJECT, 'Main', '1']])
+  }
 })
 
 test('review: a sidebar whose tokens have expired is still a sidebar: the tab goes with it', async () => {

@@ -3,14 +3,27 @@
 // Motion and dragging are the board's (hooks/useFlip.ts, hooks/useCardDrag.ts); the card only says
 // what it is. One asleep in "Waiting" folds down to its name, what it waits for and its time, and
 // unfolds in place while pointed at, as the board's Settings say (hooks/useFold.ts, styles/fold.css).
-import { type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, useRef } from 'react'
+import {
+  type FocusEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+  type Ref,
+  useRef,
+} from 'react'
 import { foldModeOf } from '../../../src/core/fold-mode.ts'
 import type { Item, LaunchView, ToolCall } from '../../../src/core/types.ts'
 import { useFold } from '../hooks/useFold.ts'
+import { useHeadFit } from '../hooks/useHeadFit.ts'
+import { useWordClip } from '../hooks/useWordClip.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { unseenResult } from '../models/attention.ts'
+import { type CallLines as CallView, callLines, inMokupilot } from '../models/call.ts'
 import {
+  ago,
   askLine,
+  type CardWords,
   cardAge,
   cardWords,
   compact,
@@ -20,6 +33,7 @@ import {
   launchOf,
   questionLine,
 } from '../models/card.ts'
+import { nameParts } from '../models/card-head.ts'
 import { pendingQuestions } from '../models/question-model.ts'
 import { restartOf, restartView } from '../models/restart.ts'
 import { COLUMN_COLORS } from '../models/toolbar.ts'
@@ -32,6 +46,7 @@ import {
   ClockGlyph,
   FocusGlyph,
   MoonGlyph,
+  PhoneGlyph,
   PinGlyph,
   RestartGlyph,
   SpinGlyph,
@@ -144,6 +159,7 @@ function CardTop({ item }: { item: Item }) {
   const { ui, now } = useBoardContext()
   const age = cardAge(item, now, t)
   const renamed = item.name !== item.autoName && !!item.autoName
+  const was = renamed ? t('rename.was', { name: item.autoName }) : undefined
   return (
     <div className="card-top">
       {item.sleeping ? (
@@ -151,9 +167,7 @@ function CardTop({ item }: { item: Item }) {
       ) : (
         <span className={`dot ${item.column}`} style={{ '--c': COLUMN_COLORS[item.column] }} />
       )}
-      <span className="name" title={renamed ? t('rename.was', { name: item.autoName }) : undefined}>
-        {item.name}
-      </span>
+      <CardName name={item.name} was={was} />
       {/* A favorite: a quiet star by the name. */}
       {item.favorite && (
         <span className="favorite" title={t('card.favorite')}>
@@ -161,7 +175,7 @@ function CardTop({ item }: { item: Item }) {
         </span>
       )}
       {/* Its profile, while the board shows more than one, or one hidden or not known. */}
-      <ProfileTag item={item} />
+      <ProfileTag item={item} mark />
       <span className="card-status" style={{ '--c': COLUMN_COLORS[item.column] }} title={t(`col.${item.column}`)}>
         {t(`col.${item.column}`)}
       </span>
@@ -180,12 +194,62 @@ function CardTop({ item }: { item: Item }) {
   )
 }
 
+/**
+ * A card's name, which wins its row: the rest of the row gives way first (useHeadFit). Whether it
+ * is cut even so is the name's alone, so a change of it draws the name again, not the row.
+ */
+function CardName({ name, was }: { name: string; was: string | undefined }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const cut = useHeadFit(ref)
+  return <NameText ref={ref} name={name} cut={cut} was={was} />
+}
+
+/**
+ * A card's name, one text as before while it shows whole. Cut even so (`cut`), it is whole in its
+ * tooltip, and one whose end tells it apart is drawn in two parts, so the cut falls before that
+ * end (models/card-head.ts nameParts). The two parts are what shows; the name is read, found and
+ * copied whole, from a copy of it out of sight. `was`: the name the session had before a rename.
+ */
+export function NameText({
+  ref,
+  name,
+  cut,
+  was,
+}: {
+  ref?: Ref<HTMLSpanElement>
+  name: string
+  cut: boolean
+  was: string | undefined
+}) {
+  const parts = cut ? nameParts(name) : null
+  const title = cut ? [name, was].filter(Boolean).join('\n') : was
+  if (!parts)
+    return (
+      <span ref={ref} className="name" title={title}>
+        {name}
+      </span>
+    )
+  return (
+    <span ref={ref} className="name split" title={title}>
+      <span className="sr-only">{name}</span>
+      <span className="name-head" aria-hidden="true">
+        {parts.head}
+      </span>
+      <span className="name-tail" aria-hidden="true">
+        {parts.tail}
+      </span>
+    </span>
+  )
+}
+
 /** Folded, what it waits for comes first and the rest under it, shown while it is open. */
 function CardBody({ item, launch, folding }: { item: Item; launch: LaunchSlots | undefined; folding: boolean }) {
   const t = useT()
   const words = cardWords(item)
   const started = launchOf(item)
-  const what = words.own ? (
+  const what = words.recap ? (
+    <RecapLine item={item} words={words} />
+  ) : words.own ? (
     <div className="what">{words.own}</div>
   ) : words.asked ? (
     <div className="what">
@@ -210,11 +274,49 @@ function CardBody({ item, launch, folding }: { item: Item; launch: LaunchSlots |
     )
   return (
     <>
-      {what}
+      {item.call ? <CallParts item={item}>{what}</CallParts> : what}
       {/* A launch held at the trust dialog says what it asks itself (its note), with its buttons. */}
       {item.column === 'me' && started?.state !== 'trust' && <CardAsk item={item} />}
       {wait}
       <CardRest item={item} launch={launch} />
+    </>
+  )
+}
+
+/**
+ * Claude Code's recap as the card's line (#321): how long ago it was written, quietly before it;
+ * set back a shade once the session has gone on long after it. The task it stands over under it,
+ * in one line. Both end at a word.
+ */
+function RecapLine({ item, words }: { item: Item; words: CardWords }) {
+  const t = useT()
+  const { now } = useBoardContext()
+  const line = useRef<HTMLDivElement>(null)
+  const task = useRef<HTMLDivElement>(null)
+  const recap = useWordClip(line, words.recap)
+  const doing = useWordClip(task, words.task)
+  const age = ago(item.recapAt, now, t)
+  return (
+    <>
+      <div
+        ref={line}
+        className={classNames('what recap', words.stale && 'stale')}
+        title={recap === words.recap ? undefined : words.recap}
+      >
+        <span className="sr-only">{`${t('card.recap')}: `}</span>
+        {age && (
+          <span className="recap-age" title={t('card.recapAge')}>
+            {age}
+          </span>
+        )}
+        {age && ' '}
+        <span data-clip="">{recap}</span>
+      </div>
+      {words.task && (
+        <div ref={task} className="task" title={doing === words.task ? undefined : words.task}>
+          <span className="task-label">{t('row.task')}</span> <span data-clip="">{doing}</span>
+        </div>
+      )}
     </>
   )
 }
@@ -233,6 +335,41 @@ function CardRest({ item, launch }: { item: Item; launch: LaunchSlots | undefine
       {/* Started from the board and not done starting: how it goes, or why it failed. */}
       {started && launch?.note(started)}
     </>
+  )
+}
+
+/**
+ * A MokuPilot call agent's card (#326): its call first under its name (on a call and for how long,
+ * or how many helpers it finishes after the call), a line like the tool at work, quiet and still;
+ * then the card's own line (`children`); then its task board as task lines.
+ */
+function CallParts({ item, children }: { item: Item; children: ReactNode }) {
+  const t = useT()
+  const { now } = useBoardContext()
+  const call = callLines(item, now, t)
+  if (!call) return children
+  return (
+    <>
+      <CallLine call={call} />
+      {children}
+      {call.rows.map(row => (
+        <div key={row.id} className={classNames('task call-task', row.kind)} title={row.text}>
+          <span className="task-label">{row.label}</span> {row.text}
+          {row.steps && <span className="call-steps"> {row.steps}</span>}
+          {row.more && <span className="call-more"> {row.more}</span>}
+        </div>
+      ))}
+    </>
+  )
+}
+
+function CallLine({ call }: { call: CallView }) {
+  return (
+    <div className={classNames('now call', call.phase === 'after' && 'after')} title={call.hint}>
+      <PhoneGlyph />
+      <span className="tool">{call.label}</span>
+      {call.detail && <span className="detail">{call.detail}</span>}
+    </div>
   )
 }
 
@@ -310,6 +447,9 @@ function CardActions({ item }: { item: Item }) {
   const t = useT()
   const { canMutate, canEdit } = useBoardContext()
   const q = (s: string) => t('q', { s })
+  // A MokuPilot call agent (#326) runs in MokuPilot, not in a pane: nothing to focus, put to sleep
+  // or type into from the board.
+  const away = inMokupilot(item)
   return (
     <div className="card-actions">
       {dismissable(item) && (
@@ -322,17 +462,21 @@ function CardActions({ item }: { item: Item }) {
           <CheckGlyph />
         </button>
       )}
-      {!item.sleeping && !!item.session && !inTurn(item) && (
+      {!item.sleeping && !!item.session && !inTurn(item) && !away && (
         <button type="button" data-act="sleep" title={t('card.sleep')} disabled={!canMutate}>
           <MoonGlyph />
         </button>
       )}
-      <button type="button" data-act="write" title={t('card.write')}>
-        <WriteGlyph />
-      </button>
-      <button type="button" data-act="focus" title={t('card.focus')} disabled={!canMutate}>
-        <FocusGlyph />
-      </button>
+      {!away && (
+        <>
+          <button type="button" data-act="write" title={t('card.write')}>
+            <WriteGlyph />
+          </button>
+          <button type="button" data-act="focus" title={t('card.focus')} disabled={!canMutate}>
+            <FocusGlyph />
+          </button>
+        </>
+      )}
     </div>
   )
 }

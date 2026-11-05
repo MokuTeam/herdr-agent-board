@@ -7,6 +7,7 @@
 
 import { TIDY_DAYS } from '../../../src/core/archive.ts'
 import type { Translator } from '../../../src/core/types.ts'
+import { inMokupilot } from './call.ts'
 import type { LanePicks } from './lane-picks.ts'
 
 /** One item of a menu; `submenu` opens beside it (null: it would, but cannot now). */
@@ -291,6 +292,8 @@ export interface MenuSession {
   /** The label of the herdr workspace it is in. */
   workspace?: string | null | undefined
   favorite?: boolean | undefined
+  /** A MokuPilot call agent's call (#326); absent for the others. */
+  call?: object | null | undefined
   [extra: string]: unknown
 }
 
@@ -345,6 +348,9 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     ctx.canMutate ? (extra ?? {}) : { disabled: true, reason: herdrWhy }
   const edit = (): Partial<MenuItem> => (ctx.canEdit ? {} : { disabled: true, reason: editWhy })
   const turn = it.status === 'working' || it.status === 'blocked'
+  // A MokuPilot call agent with no pane (#326) runs in MokuPilot: nothing of herdr's or a terminal's
+  // to do with it, no call or fork of it, no profile to move it to, no tab to archive.
+  const own = !inMokupilot(it)
   const claude = !!it.session
   const dismissable = it.attention === 'ask' || it.attention === 'question' || it.attention === 'later'
   const copy: (MenuItem | Absent)[] = [
@@ -355,17 +361,21 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
   ]
   return tidy<MenuEntry>([
     { id: 'open', label: t('menu.open'), hint: 'Enter' },
-    (!ctx.remote || ctx.desk) && {
-      id: 'focus',
-      label: t(it.sleeping ? 'menu.wakeFocus' : 'menu.focus'),
-      ...herdr(),
-    },
+    own &&
+      (!ctx.remote || ctx.desk) && {
+        id: 'focus',
+        label: t(it.sleeping ? 'menu.wakeFocus' : 'menu.focus'),
+        ...herdr(),
+      },
     // Looking needs no fresh data; typing and opening a shell wait for it in the window itself.
-    ctx.terminal && (it.cwd || it.pane) && { id: 'terminal', label: t('term.open'), hint: 'Ctrl+`' },
+    own && ctx.terminal && (it.cwd || it.pane) && { id: 'terminal', label: t('term.open'), hint: 'Ctrl+`' },
     // A MokuPilot call with a fork of the session: needs the board, not fresh herdr data.
-    ctx.mokupilot && claude && it.agent === 'claude' && { id: 'mokupilot', label: t('mokupilot.call'), ...edit() },
+    own &&
+      ctx.mokupilot &&
+      claude &&
+      it.agent === 'claude' && { id: 'mokupilot', label: t('mokupilot.call'), ...edit() },
     // A fork in a new tab starts a session through herdr, as a new one does.
-    ctx.fork && claude && it.agent === 'claude' && { id: 'fork', label: t('fork.menu'), ...herdr() },
+    own && ctx.fork && claude && it.agent === 'claude' && { id: 'fork', label: t('fork.menu'), ...herdr() },
     // A sleeper without a pane wakes in a new tab first (#178, #204).
     {
       id: 'write',
@@ -374,13 +384,15 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     },
     it.sleeping
       ? { id: 'wake', label: t('sheet.wake'), ...herdr() }
-      : claude && {
+      : own &&
+        claude && {
           id: 'sleep',
           label: t('card.sleep'),
           ...herdr(turn ? { disabled: true, reason: t('sheet.sleepBusy') } : {}),
         },
     // Waits until the session is free by itself, so a turn does not gray it; one asked for already does.
-    !it.sleeping &&
+    own &&
+      !it.sleeping &&
       claude &&
       it.agent === 'claude' && {
         id: 'restart',
@@ -389,7 +401,7 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
       },
     { id: 'rename', label: t('menu.rename'), hint: 'F2', ...edit() },
     // herdr's name for the workspace it is in, every session's there: it goes through herdr.
-    it.workspace && { id: 'renameWorkspace', label: t('menu.renameWorkspace'), ...herdr() },
+    own && it.workspace && { id: 'renameWorkspace', label: t('menu.renameWorkspace'), ...herdr() },
     // Kept in sight: first in its column, whole, left out of a tidy-up (the card's, so the board's).
     { id: 'favorite', label: t(it.favorite ? 'menu.unfavorite' : 'menu.favorite'), ...edit() },
     SEP,
@@ -401,7 +413,8 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     },
     { id: 'status', label: t('menu.status'), ...edit(), submenu: ctx.canEdit ? statusChoices(it, ctx) : null },
     // The Claude profile it runs in (#256): another one moves it there, put to sleep and woken again.
-    claude &&
+    own &&
+      claude &&
       it.agent === 'claude' &&
       ctx.profiles &&
       ctx.profiles.length >= 2 && {
@@ -425,7 +438,8 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     },
     SEP,
     // Off the board until Return: its tab closes, Claude keeps the conversation.
-    claude &&
+    own &&
+      claude &&
       it.agent === 'claude' && {
         id: 'archive',
         label: t('archive.menu'),
