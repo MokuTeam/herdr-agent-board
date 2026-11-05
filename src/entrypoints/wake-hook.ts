@@ -18,6 +18,7 @@
 // else amiss: silent, and the tool runs as it would.
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { configFile, readConfigFile } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { loadProfiles } from '../adapters/profiles.ts'
@@ -222,7 +223,7 @@ async function sendElsewhere(
       const panes = inProfile(awake ?? [], profile).filter(a => a.name.toLowerCase() === to)
       if (!panes.length) {
         // Or MokuPilot's day session (#331), which herdr does not name: the board puts it in its inbox.
-        day ??= raw?.mokupilot === false ? null : await daySession()
+        day ??= raw?.mokupilot === false || !existsSync(join(homedir(), '.meeting-copilot')) ? null : await daySession()
         if (day === s.sessionId) fits.set(s.sessionId, { name: s.name, profile, ...(s.cwd && { cwd: s.cwd }) })
         continue
       }

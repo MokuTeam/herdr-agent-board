@@ -187,6 +187,18 @@ describe('its menu', () => {
     expect(inPane).toEqual(plain)
     for (const id of HERDR) expect(plain).toContain(id)
   })
+
+  test('a MokuPilot day session (#331): nothing of herdr’s, and Write is there (its day’s inbox)', () => {
+    const base = { key: 'd', session: 'd', agent: 'claude', cwd: '/w', status: 'idle', workspace: 'ws' }
+    const menu = cardMenu({ ...base, pane: null, day: true }, ctx)
+    for (const id of HERDR) expect(ids(menu)).not.toContain(id)
+    const write = menu.find((i): i is MenuItem => !i.separator && i.id === 'write')
+    expect(write).toBeDefined()
+    expect(write?.disabled).toBeFalsy()
+    // A paneless session that is not a day's still cannot be written to.
+    const other = cardMenu({ ...base, pane: null }, ctx).find((i): i is MenuItem => !i.separator && i.id === 'write')
+    expect(other?.disabled).toBe(true)
+  })
 })
 
 describe('its sheet', () => {

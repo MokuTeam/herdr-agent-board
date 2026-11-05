@@ -319,12 +319,15 @@ export async function collect(
     }
     const saved = cards.get(base.key) ?? {}
     const pin = pinOf(base.key, base.status, saved)
+    const hit = base.session ? live.get(base.session) : undefined
+    // A MokuPilot day session (#331) has no hook to report its profile either: the folder whose
+    // registry runs it.
     const card: Card = {
       ...saved,
       pin,
       ...(call && !saved.profileDir && { profileDir: call.configDir || join(homedir(), '.claude') }),
+      ...(base.day && !saved.profileDir && hit && { profileDir: hit.home.root }),
     }
-    const hit = base.session ? live.get(base.session) : undefined
     // A pi session's records are its session file, its key: none of Claude's folders has them.
     const pi = isPiItem(base) ? (deps.pi.transcriptInfo(base.session) ?? {}) : null
     const codex = isCodexItem(base) ? (deps.codex.transcriptInfo(base.session) ?? {}) : null

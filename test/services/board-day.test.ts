@@ -58,9 +58,10 @@ function herdrState(box: Sandbox): void {
   box.state({ 'api snapshot': { result: { snapshot } } })
 }
 
-/** The day session in the default profile's registry, as Claude writes it; this test's pid: alive. */
-function registry(box: Sandbox, status = 'idle'): void {
-  put(join(home(box), '.claude', 'sessions', `${process.pid}.json`), {
+/** The day session in a profile's registry (the default one's), as Claude writes it; this test's pid: alive. */
+function registry(box: Sandbox, status = 'idle', profile = '.claude'): void {
+  put(join(home(box), profile, 'settings.json'), {})
+  put(join(home(box), profile, 'sessions', `${process.pid}.json`), {
     pid: process.pid,
     sessionId: DAY,
     cwd: 'C:\\Work',
@@ -195,6 +196,16 @@ test('a MokuPilot day session: one card under its Claude name in its pane’s wo
   // Its own `board doing` (Claude Code's session id in its Bash tool) is on its card.
   await cli(box, ['doing', 'Разбираю почту'], { CLAUDE_CODE_SESSION_ID: DAY })
   expect((await board(box)).items.find(i => i.key === DAY)?.doing).toBe('Разбираю почту')
+})
+
+test('a day in another profile than the default one: its card says that profile, as its hooks would', async () => {
+  const box = await sandbox()
+  herdrState(box)
+  registry(box, 'idle', '.claude-work 100%')
+  put(join(home(box), '.claude', 'settings.json'), {})
+  dayState(box, { claude_config_dir: join(home(box), '.claude-work 100%') })
+  const { items } = await board(box)
+  expect(items.find(i => i.key === DAY)).toMatchObject({ name: 'work-a7', profile: 'work-100', day: true })
 })
 
 test('a day with no herdr_pane: its own card, and MokuPilot’s pane keeps its card', async () => {

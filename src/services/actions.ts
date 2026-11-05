@@ -483,8 +483,9 @@ export async function focus(
 
 /**
  * A message for a MokuPilot day session (#331): into its day's inbox, which MokuPilot types into
- * the session as a report from the sender, a turn after the other, so it never waits for the
- * session to be free. Only the day that runs now, and only while it is still this session's.
+ * the session as a report from the sender, one turn after another (a reminder set to wait until the
+ * session is free waits in the scheduler). Only the day that runs now, and only while it is still
+ * this session's.
  */
 function toDay(item: Item, text: string): ActionResult {
   const day = runningDay()
