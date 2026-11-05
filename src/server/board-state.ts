@@ -3,6 +3,7 @@
 import { statSync } from 'node:fs'
 import { readArchiveLog } from '../adapters/archive-store.ts'
 import { readUsageFile } from '../adapters/claude-home.ts'
+import { createEdgeLog, type EdgeLog } from '../adapters/edge-log.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { notify } from '../adapters/herdr.ts'
 import { createLinks } from '../adapters/links.ts'
@@ -16,11 +17,19 @@ import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
 import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
 import type { Limits } from '../core/limits.ts'
-import type { BoardLimits, BoardPayload, BoardProfile } from '../core/payload.ts'
+import type {
+  BackupPayload,
+  BoardLimits,
+  BoardPayload,
+  BoardProfile,
+  CalendarPayload,
+  TimePayload,
+} from '../core/payload.ts'
 import type { PresenceView } from '../core/presence.ts'
 import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts'
 import type { RemoteView } from '../core/remote.ts'
 import type { SetupSummary } from '../core/setup.ts'
+import { todosConfig } from '../core/todos.ts'
 import type { Item } from '../core/types.ts'
 import type { WakeView } from '../core/wake/view.ts'
 import { collect } from '../services/board.ts'
@@ -41,6 +50,8 @@ export interface BoardState {
   publish(): void
   /** Collects the board from herdr and the files; a call during one runs once more after it. */
   refresh(): Promise<void>
+  /** The edge log's lines after number `since` (adapters/edge-log.ts). */
+  edges: EdgeLog['read']
 }
 
 interface Options {
@@ -68,6 +79,12 @@ interface Options {
   omarchy?: () => string | null
   /** The user's presence (services/presence.ts); null while it is not on. */
   presence?: () => PresenceView | null
+  /** The backup's line (#233); null while there is no database and no target. */
+  backup?: () => BackupPayload | null
+  /** Time tracking's line (#233); null while it is off. */
+  time?: () => TimePayload | null
+  /** The calendar's line (#328); null while it is off. */
+  calendar?: () => CalendarPayload | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -137,6 +154,21 @@ function presenceOf(presence: Options['presence']): { presence?: PresenceView } 
   return view ? { presence: view } : {}
 }
 
+function timeOf(time: Options['time']): { time?: TimePayload } {
+  const line = time?.() ?? null
+  return line ? { time: line } : {}
+}
+
+function calendarOf(calendar: Options['calendar']): { calendar?: CalendarPayload } {
+  const line = calendar?.() ?? null
+  return line ? { calendar: line } : {}
+}
+
+function backupOf(backup: Options['backup']): { backup?: BackupPayload } {
+  const line = backup?.() ?? null
+  return line ? { backup: line } : {}
+}
+
 function remoteOf(remote: Options['remote']): { remote?: RemoteView } {
   const view = remote?.() ?? null
   return view ? { remote: view } : {}
@@ -156,6 +188,9 @@ export function createBoardState({
   accessRev,
   omarchy,
   presence,
+  backup,
+  time,
+  calendar,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -185,7 +220,11 @@ export function createBoardState({
       })
     // What the page has no use for stays here: file paths (the Claude folder included), the Claude
     // process and its pipe.
-    const list = items.map(({ transcript, claudeRoot, alive, since, pipe, ...rest }) => launches.decorate(rest))
+    // Tasks (#202) only while config.json turns them on: off, the page sees none.
+    const todos = todosConfig(cfg.todos)
+    const list = items.map(({ transcript, claudeRoot, alive, since, pipe, todos: own, ...rest }) =>
+      launches.decorate(todos && own ? { ...rest, todos: own } : rest),
+    )
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)
     // The usage the pill shows: the board's own profile's (the default one's when its env points to
@@ -229,6 +268,13 @@ export function createBoardState({
       ...remoteOf(remote),
       // presence: only while config.json turns it on (#172).
       ...presenceOf(presence),
+      ...(todos && { todos }),
+      // backup: only once there is a database or a backup target (#233)
+      ...backupOf(backup),
+      // time: only while config.json turns it on (#233)
+      ...timeOf(time),
+      // calendar: only while config.json turns it on (#328)
+      ...calendarOf(calendar),
       // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
       accessRev: accessRev?.() ?? 0,
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.
@@ -251,8 +297,17 @@ export function createBoardState({
   }
 
   // Who started whom and who wrote to whom, read from the transcripts in the background
-  // (adapters/links.ts); a read that found something new refreshes the board.
-  const links = createLinks({ onChange: () => void refresh() })
+  // (adapters/links.ts); a read that found something new refreshes the board, and its events go
+  // into the edge log after it, with the sessions the board has then (adapters/edge-log.ts).
+  const edgeLog = createEdgeLog()
+  const links = createLinks({ onChange: () => void refresh(), onEvents: edgeLog.add })
+  function logEdges(): void {
+    try {
+      edgeLog.flush(items)
+    } catch (err) {
+      log(`edge log: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
 
   // A session whose hooks report another profile than its start asked for gets a herdr notification,
   // once in this process; its card's red tag stays. A notification that fails is logged.
@@ -303,6 +358,7 @@ export function createBoardState({
         }
       }
       items = await collect(deps, { helpers: true, links, seen })
+      logEdges()
       launches.observe(items)
       stale = false
       lastSuccessfulRefreshAt = Date.now()
@@ -331,5 +387,6 @@ export function createBoardState({
       Date.now() - lastSuccessfulRefreshAt > Math.max(10000, (cfg.refreshSec ?? 2) * 3000),
     publish,
     refresh,
+    edges: (since, limit) => edgeLog.read(since, limit),
   }
 }

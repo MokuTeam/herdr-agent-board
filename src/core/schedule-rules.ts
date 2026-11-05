@@ -50,6 +50,12 @@ export type ScheduleEntry = {
    * --report-id`), narrowed where it is read (adapters/call-receipts.ts).
    */
   receipt?: unknown
+  /**
+   * A SendMessage from a session of another profile (#251, entrypoints/wake-hook.ts): its profile's
+   * title, and the name with its ref an answer goes to ('' when no answer can come back that way).
+   */
+  fromProfile?: string
+  replyTo?: string
   [extra: string]: unknown
 }
 
@@ -89,6 +95,13 @@ export function promptOf(entry: ScheduleEntry, now: number): string {
   if (before)
     notes.push(
       t(setter ? 'sched.prompt.clearedFor' : 'sched.prompt.cleared', { name: before.name || before.key.slice(0, 8) }),
+    )
+  // A SendMessage from another profile's session (#251, entrypoints/wake-hook.ts): how to answer it.
+  if (setter && typeof entry.fromProfile === 'string')
+    notes.unshift(
+      entry.replyTo
+        ? t('sched.prompt.message', { profile: entry.fromProfile, name: entry.replyTo })
+        : t('sched.prompt.messageNoReply', { profile: entry.fromProfile }),
     )
   // The tag stays in English: the hook knows a board prompt by it (entrypoints/hook.ts).
   const from = setter ? ` from ${setter}` : ''

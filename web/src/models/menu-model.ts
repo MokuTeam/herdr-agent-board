@@ -7,6 +7,7 @@
 
 import { TIDY_DAYS } from '../../../src/core/archive.ts'
 import type { Translator } from '../../../src/core/types.ts'
+import { inMokupilot } from './call.ts'
 import type { LanePicks } from './lane-picks.ts'
 
 /** One item of a menu; `submenu` opens beside it (null: it would, but cannot now). */
@@ -236,10 +237,21 @@ export interface MenuContext {
   canEdit: boolean
   /** The board in a phone's browser: what acts on the computer's screen is left out (models/remote-page.ts). */
   remote?: boolean | undefined
+  /** On the owner's desk elsewhere, Go to herdr stays all the same (deskPage). */
+  desk?: boolean | undefined
 }
 
 /** A lane as the menus show it. */
 export interface MenuCategory {
+  id: string
+  title: string
+  color: string
+  /** In the config (the board's own lanes), so it can have a usual profile. */
+  configured?: boolean | undefined
+}
+
+/** A Claude profile as the menus show it: a shown one, its color as hex. */
+export interface MenuProfile {
   id: string
   title: string
   color: string
@@ -261,6 +273,10 @@ export interface CardMenuContext extends MenuContext {
   restarting?: boolean | undefined
   /** Why it cannot go to the archive now, a text key, or '' (src/core/archive.ts archiveBlock). */
   archiveWhy?: string | undefined
+  /** The profiles shown, two or more: the card's Profile, which moves it to another (#256); else none. */
+  profiles?: readonly MenuProfile[] | undefined
+  /** The profile it runs in now, '' when the board does not know it. */
+  profile?: string | undefined
 }
 
 /** What a card's menu reads of the board item. */
@@ -276,6 +292,8 @@ export interface MenuSession {
   /** The label of the herdr workspace it is in. */
   workspace?: string | null | undefined
   favorite?: boolean | undefined
+  /** A MokuPilot call agent's call (#326); absent for the others. */
+  call?: object | null | undefined
   [extra: string]: unknown
 }
 
@@ -311,6 +329,11 @@ export function categoryChoices({
   }))
 }
 
+/** The profiles a session can be moved to (`profile:<id>`), the one it runs in checked. */
+export function profileChoices(profiles: readonly MenuProfile[], current: string): MenuItem[] {
+  return profiles.map(p => ({ id: `profile:${p.id}`, label: p.title, checked: p.id === current, dot: p.color }))
+}
+
 /**
  * A card's menu. `it` is the board item; ctx: { t, canMutate, canEdit, categories, column (where
  * it shows now), category (its lane now), restarting (a restart of it is on its way), archiveWhy
@@ -325,6 +348,9 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     ctx.canMutate ? (extra ?? {}) : { disabled: true, reason: herdrWhy }
   const edit = (): Partial<MenuItem> => (ctx.canEdit ? {} : { disabled: true, reason: editWhy })
   const turn = it.status === 'working' || it.status === 'blocked'
+  // A MokuPilot call agent with no pane (#326) runs in MokuPilot: nothing of herdr's or a terminal's
+  // to do with it, no call or fork of it, no profile to move it to, no tab to archive.
+  const own = !inMokupilot(it)
   const claude = !!it.session
   const dismissable = it.attention === 'ask' || it.attention === 'question' || it.attention === 'later'
   const copy: (MenuItem | Absent)[] = [
@@ -335,13 +361,21 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
   ]
   return tidy<MenuEntry>([
     { id: 'open', label: t('menu.open'), hint: 'Enter' },
-    !ctx.remote && { id: 'focus', label: t(it.sleeping ? 'menu.wakeFocus' : 'menu.focus'), ...herdr() },
+    own &&
+      (!ctx.remote || ctx.desk) && {
+        id: 'focus',
+        label: t(it.sleeping ? 'menu.wakeFocus' : 'menu.focus'),
+        ...herdr(),
+      },
     // Looking needs no fresh data; typing and opening a shell wait for it in the window itself.
-    ctx.terminal && (it.cwd || it.pane) && { id: 'terminal', label: t('term.open'), hint: 'Ctrl+`' },
+    own && ctx.terminal && (it.cwd || it.pane) && { id: 'terminal', label: t('term.open'), hint: 'Ctrl+`' },
     // A MokuPilot call with a fork of the session: needs the board, not fresh herdr data.
-    ctx.mokupilot && claude && it.agent === 'claude' && { id: 'mokupilot', label: t('mokupilot.call'), ...edit() },
+    own &&
+      ctx.mokupilot &&
+      claude &&
+      it.agent === 'claude' && { id: 'mokupilot', label: t('mokupilot.call'), ...edit() },
     // A fork in a new tab starts a session through herdr, as a new one does.
-    ctx.fork && claude && it.agent === 'claude' && { id: 'fork', label: t('fork.menu'), ...herdr() },
+    own && ctx.fork && claude && it.agent === 'claude' && { id: 'fork', label: t('fork.menu'), ...herdr() },
     // A sleeper without a pane wakes in a new tab first (#178, #204).
     {
       id: 'write',
@@ -350,13 +384,15 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     },
     it.sleeping
       ? { id: 'wake', label: t('sheet.wake'), ...herdr() }
-      : claude && {
+      : own &&
+        claude && {
           id: 'sleep',
           label: t('card.sleep'),
           ...herdr(turn ? { disabled: true, reason: t('sheet.sleepBusy') } : {}),
         },
     // Waits until the session is free by itself, so a turn does not gray it; one asked for already does.
-    !it.sleeping &&
+    own &&
+      !it.sleeping &&
       claude &&
       it.agent === 'claude' && {
         id: 'restart',
@@ -365,7 +401,7 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
       },
     { id: 'rename', label: t('menu.rename'), hint: 'F2', ...edit() },
     // herdr's name for the workspace it is in, every session's there: it goes through herdr.
-    it.workspace && { id: 'renameWorkspace', label: t('menu.renameWorkspace'), ...herdr() },
+    own && it.workspace && { id: 'renameWorkspace', label: t('menu.renameWorkspace'), ...herdr() },
     // Kept in sight: first in its column, whole, left out of a tidy-up (the card's, so the board's).
     { id: 'favorite', label: t(it.favorite ? 'menu.unfavorite' : 'menu.favorite'), ...edit() },
     SEP,
@@ -376,6 +412,17 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
       submenu: ctx.canEdit ? categoryChoices(ctx) : null,
     },
     { id: 'status', label: t('menu.status'), ...edit(), submenu: ctx.canEdit ? statusChoices(it, ctx) : null },
+    // The Claude profile it runs in (#256): another one moves it there, put to sleep and woken again.
+    own &&
+      claude &&
+      it.agent === 'claude' &&
+      ctx.profiles &&
+      ctx.profiles.length >= 2 && {
+        id: 'profile',
+        label: t('move.menu'),
+        ...herdr(),
+        submenu: ctx.canMutate ? profileChoices(ctx.profiles, ctx.profile ?? '') : null,
+      },
     dismissable && { id: 'dismiss', label: t(it.attention === 'later' ? 'asked.seen' : 'card.noReply'), ...edit() },
     SEP,
     it.cwd && !ctx.remote && { id: 'reveal', label: t('menu.openFolder'), ...edit() },
@@ -391,7 +438,8 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     },
     SEP,
     // Off the board until Return: its tab closes, Claude keeps the conversation.
-    claude &&
+    own &&
+      claude &&
       it.agent === 'claude' && {
         id: 'archive',
         label: t('archive.menu'),
@@ -444,6 +492,12 @@ export interface LaneMenuContext extends MenuContext {
   filter: LanePicks
   /** The lane's sleeping sessions a tidy-up takes (its menu then offers it). */
   tidyCount?: ((days: number) => number) | undefined
+  /** The profiles shown, two or more: its sessions can be moved to one (#256); else none. */
+  profiles?: readonly MenuProfile[] | undefined
+  /** How many of its Claude sessions are not in the profile `id`: those a move there takes. */
+  moving?: ((id: string) => number) | undefined
+  /** The check that makes the profile moved to the lane's usual one too; undefined: no such check (a lane not in the config). */
+  usual?: boolean | undefined
 }
 
 /**
@@ -469,7 +523,42 @@ export function laneMenu(cat: MenuCategory, ctx: LaneMenuContext): MenuEntry[] {
     picked && { id: 'showAll', label: t('menu.showAll') },
     ctx.tidyCount && SEP,
     ctx.tidyCount && tidyItem({ ...ctx, tidyCount: ctx.tidyCount }),
+    ctx.profiles && ctx.profiles.length >= 2 && SEP,
+    ctx.profiles && ctx.profiles.length >= 2 && laneMoveItem(cat, ctx.profiles, ctx),
   ])
+}
+
+/**
+ * "Move the lane's sessions to" another profile (#256): each profile shown with how many a move
+ * there takes, gray at none; with the lane in the config, the check that makes it its usual one too.
+ */
+function laneMoveItem(cat: MenuCategory, profiles: readonly MenuProfile[], ctx: LaneMenuContext): MenuItem {
+  const { t } = ctx
+  const label = t('move.lane', { lane: cat.title })
+  const counts = profiles.map(p => ctx.moving?.(p.id) ?? 0)
+  if (!counts.some(Boolean))
+    return { id: 'laneProfile', label, disabled: true, reason: t('move.laneNone', { lane: cat.title }) }
+  if (!ctx.canMutate)
+    return { id: 'laneProfile', label, disabled: true, reason: ctx.canEdit ? t('mobile.readOnly') : t('live.off') }
+  return {
+    id: 'laneProfile',
+    label,
+    submenu: [
+      ...profiles.map((p, i): MenuItem => {
+        const n = counts[i] ?? 0
+        return {
+          id: `profile:${p.id}`,
+          label: p.title,
+          dot: p.color,
+          hint: String(n),
+          ...(n ? {} : { disabled: true }),
+        }
+      }),
+      ...(ctx.usual === undefined
+        ? []
+        : [SEP, { id: 'usual', label: t('move.laneUsual', { lane: cat.title }), checked: ctx.usual, keep: true }]),
+    ],
+  }
 }
 
 export interface BoardMenuContext extends LaneMenuContext {
@@ -508,7 +597,7 @@ export function launchMenu(l: MenuLaunch, ctx: MenuContext): MenuEntry[] {
     l.state === 'trust' && { id: 'trust', label: t('launch.trust.go'), ...herdr },
     l.state === 'trust' && { id: 'closeTab', label: t('launch.trust.close'), ...herdr },
     l.state === 'trust' && SEP,
-    l.pane && !ctx.remote && { id: 'focus', label: t('menu.focus'), ...herdr },
+    l.pane && (!ctx.remote || ctx.desk) && { id: 'focus', label: t('menu.focus'), ...herdr },
     // A launch that failed only at its first message has a running session: a retry would start a second one.
     l.state === 'failed' && l.kind !== 'message' && { id: 'retry', label: t('launch.retry') },
     l.state === 'failed' && { id: 'copyError', label: t('launch.copyError') },

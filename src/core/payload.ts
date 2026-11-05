@@ -7,6 +7,7 @@ import type { PresenceView } from './presence.ts'
 import type { RemoteView } from './remote.ts'
 import type { ScheduleEntry } from './schedule-rules.ts'
 import type { SetupSummary } from './setup.ts'
+import type { TodosConfig } from './todos.ts'
 import type { ColumnId, Item, Lang, LaunchView } from './types.ts'
 import type { WakeView } from './wake/view.ts'
 
@@ -112,6 +113,26 @@ export interface BoardPayload {
   remote?: RemoteView
   /** The user's presence (#172, core/presence.ts), only while config.json turns it on. */
   presence?: PresenceView
+  /** Tasks (#202, core/todos.ts), only while config.json turns them on; items carry theirs only then. */
+  todos?: TodosConfig
+  /**
+   * The backup of the board's database (#233): only once there is a database or a target is set.
+   * `last`: the newest good backup over all targets; `problem`: the first thing wrong as a short
+   * code and its target (core/backup.ts BackupProblem's kind), null when nothing is. Never an ssh
+   * error's or a check's text: those stay on this computer (Settings → Backup…, board doctor).
+   */
+  backup?: BackupPayload
+  /**
+   * Time tracking (#233), only while config.json turns it on: the journal's last seq (an open panel
+   * reads again when it moves) and today's billed seconds by lane (a lane's header shows them).
+   */
+  time?: TimePayload
+  /**
+   * The calendar (#328), only while config.json turns it on: a revision that moves when any
+   * source's copy or the board's own events change (an open panel reads again then), whether a
+   * fetch runs, how many sources fail, and the next call of the coming hours for the toolbar.
+   */
+  calendar?: CalendarPayload
   /**
    * The Remote access view's revision (GET /api/access, local only): it changes when the view does,
    * and the panel fetches the view again then; the view itself never goes out with the board. The
@@ -123,4 +144,40 @@ export interface BoardPayload {
    * that changes with it, only on a computer with Omarchy. The page loads omarchy-theme.css again.
    */
   omarchy?: string
+}
+
+/** What the board's payload says of the backup (#233). */
+export interface BackupPayload {
+  last: number | null
+  problem: { kind: string; target?: string } | null
+}
+
+/** What the board's payload says of time tracking (#233). */
+export interface TimePayload {
+  seq: number
+  /** Today in the board's zone, YYYY-MM-DD. */
+  date: string
+  today: Record<string, number>
+  /** config.json's `time` does not check out (the panel says what): no entry is written. */
+  problems?: boolean
+}
+
+/** What the board's payload says of the calendar (#328). */
+export interface CalendarPayload {
+  rev: string
+  busy: boolean
+  /** Sources with a problem in config.json or whose last fetch failed. */
+  failing: number
+  /** The next timed call not declined, ongoing or within twelve hours. */
+  next: {
+    source: string
+    id: string
+    title: string
+    start: string
+    end: string
+    join?: string
+    label: string
+    color: string | null
+    lane: string | null
+  } | null
 }

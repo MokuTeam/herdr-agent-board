@@ -35,7 +35,7 @@ PowerShell-style names work too (`-Name -Cwd -Label -BriefFile -Brief -Workspace
 - Put a long brief in a UTF-8 file: quoting a long text on a command line breaks.
 - Do not start Claude with `herdr agent start --kind claude` or a bare `claude` in a pane: it gets no name, no brief, and the permission mode and launcher this computer uses are skipped.
 - A new folder may show Claude's "trust this folder" dialog: spawn-agent stops and says so; the user answers it in that tab.
-- A one-off session that has finished can be taken off the board with `board archive --session <name>` (its tab closes; the user can bring it back from the board's archive), but only one you started, or when the user asks.
+- A one-off session that has finished can be taken off the board with `board archive --session <name>` (its tab closes; the user can bring it back from the board's archive), but only one you started, or when the user asks. Its board reminders wait with it, parked: `board schedule --session <name>` lists them, `board schedule --move <id>` moves one to you, `board unschedule <id>` removes one.
 
 ## Talk to another session
 

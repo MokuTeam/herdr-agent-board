@@ -1,6 +1,6 @@
 // JSON files shared by several processes (cards, schedule entries): read with a type guard,
 // changed under a lock.
-import { mkdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 
 export type Guard<T> = (value: unknown) => value is T
 
@@ -59,6 +59,19 @@ function lockFile(path: string, recoverStale = true): () => void {
   }
 }
 
+/**
+ * `fn` under `path`'s lock, the one updateJson takes: a writer in another process that takes it
+ * too waits until `fn` is done (config.json's edits: config-file.ts withConfigFile).
+ */
+export function withLock<T>(path: string, fn: () => T): T {
+  const unlock = lockFile(path)
+  try {
+    return fn()
+  } finally {
+    unlock()
+  }
+}
+
 const RENAME_TRIES = 10
 const RENAME_RETRY_MS = 20
 
@@ -92,11 +105,20 @@ function unlinkIfThere(path: string): void {
 /**
  * Write `text` to a temp file beside `path`, then rename it over `path` (renameWithRetry), so a
  * reader never sees half a file. When that fails, the temp file goes too and the error is passed on.
+ * `mode` (POSIX): the permissions the file gets, the ones it had for a file only its owner may read;
+ * without it, as before.
  */
-export function replaceFile(path: string, text: string, rename: (a: string, b: string) => void = renameSync): void {
+export function replaceFile(
+  path: string,
+  text: string,
+  rename: (a: string, b: string) => void = renameSync,
+  mode?: number,
+): void {
   const tmp = `${path}.${process.pid}.tmp`
   try {
-    writeFileSync(tmp, text)
+    writeFileSync(tmp, text, mode === undefined ? undefined : { mode })
+    // The umask may have taken bits off.
+    if (mode !== undefined) chmodSync(tmp, mode)
     renameWithRetry(tmp, path, rename)
   } catch (err) {
     unlinkIfThere(tmp)

@@ -18,6 +18,8 @@ export const ICON_PATHS = {
   image:
     '<rect x="3" y="4" width="14" height="12" rx="2"/><circle cx="7.5" cy="8.5" r="1.3"/><path d="m4 15 4.5-4.5 3 3 2-2 3.5 3.5"/>',
   pdf: `${DOC}<path d="M7.5 11h5M7.5 13.5h5M7.5 16h3"/>`,
+  document: `${DOC}<path d="m7.4 10.5 1.1 4.5 1.5-3.4 1.5 3.4 1.1-4.5"/>`,
+  spreadsheet: '<rect x="3" y="4" width="14" height="12" rx="1.6"/><path d="M3 8h14M3 12h14M8 4v12M12.5 4v12"/>',
   video: '<rect x="2.5" y="5" width="11" height="10" rx="2"/><path d="m13.5 9 4-2.5v7l-4-2.5"/>',
   audio: '<path d="M8 14.5V5l8-1.5V13"/><circle cx="6" cy="14.5" r="2"/><circle cx="14" cy="13" r="2"/>',
   missing: `${DOC}<path d="m8 10.5 4 4m0-4-4 4"/>`,
@@ -56,6 +58,11 @@ const KIND_BY_EXTENSION = new Map(
     webp: 'image',
     svg: 'image',
     pdf: 'pdf',
+    docx: 'document',
+    xlsx: 'spreadsheet',
+    xlsm: 'spreadsheet',
+    xls: 'spreadsheet',
+    ods: 'spreadsheet',
   }),
 )
 
@@ -171,13 +178,56 @@ export const dateText = (ms: number, lang: string): string =>
 export const clockOf = (ms: number, lang: string): string =>
   new Date(ms).toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit' })
 
-const MEDIA = new Set(['image', 'pdf', 'video', 'audio'])
+const MEDIA = new Set(['image', 'pdf', 'video', 'audio', 'document', 'spreadsheet'])
 
-/** A preview's media are drawn from the raw bytes; text comes with the preview. */
+/** A preview's media are drawn from the raw bytes (a document and a spreadsheet too); text comes with the preview. */
 export const isMedia = (kind: string | undefined): boolean => MEDIA.has(kind ?? '')
 
 /** A CSV with rows is drawn as a table. */
 export const isTable = (d: Preview): boolean => d.kind === 'csv' && !!d.rows?.length
+
+const WIDE = /[\u1100-\u115f\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uff60]/
+const BROAD = /[MWmwЖШЩЮЫМжшщюым@%]/
+const NARROW = /[iljtfI.,:;'"|!()[\]\s]/
+
+/** A value's width in average letters, roughly: wide letters (CJK, W, Ж) count more, narrow ones (i, l, a point) less. */
+export function roughWidth(text: string): number {
+  let width = 0
+  for (const ch of text) width += WIDE.test(ch) ? 2 : BROAD.test(ch) ? 1.4 : NARROW.test(ch) ? 0.45 : 1
+  return width
+}
+
+/** `value` among the `per` largest of `top` by `size`, kept largest first. */
+function keepTop(top: { value: string; size: number }[], value: string, size: number, per: number): void {
+  if (top.length >= per && size <= (top.at(-1)?.size ?? 0)) return
+  if (top.some(t => t.value === value)) return
+  top.push({ value, size })
+  top.sort((a, b) => b.size - a.size)
+  if (top.length > per) top.pop()
+}
+
+/**
+ * Each column's values worth measuring to size it for the whole file: its longest few and its
+ * widest few by roughWidth (forty-eight narrow letters can take less room than twenty-nine wide
+ * ones). The header row is measured as it is drawn.
+ */
+export function widestCandidates(rows: string[][], per = 3): string[][] {
+  // Each column's longest values by length alone (cheap); the rough width only for those.
+  const longest: { value: string; size: number }[][] = []
+  for (const row of rows.slice(1))
+    row.forEach((value, i) => {
+      longest[i] ??= []
+      keepTop(longest[i], value, value.length, MEASURED)
+    })
+  return longest.map(top => {
+    const widest: { value: string; size: number }[] = []
+    for (const { value } of top) keepTop(widest, value, roughWidth(value), per)
+    return [...new Set([...top.slice(0, per), ...widest].map(t => t.value))]
+  })
+}
+
+// How many of a column's longest values are weighed by roughWidth: a wider one is among them.
+const MEASURED = 20
 
 /** The footer of a file or folder: what it holds, how big, how far it reads, when it changed. */
 export function previewFoot(d: Preview, t: Translator): string[] {
@@ -190,7 +240,7 @@ export function previewFoot(d: Preview, t: Translator): string[] {
     if ((d.total ?? 0) > (d.entries?.length ?? 0)) foot.push(t('ql.firstItems', { n: d.entries?.length ?? 0 }))
   } else {
     foot.push(sizeText(d.size, t))
-    if (!isMedia(d.kind) && typeof d.text === 'string') {
+    if (!isMedia(d.kind) && (typeof d.text === 'string' || isTable(d))) {
       foot.push(isTable(d) ? t('ql.rows', { n: (d.rows?.length ?? 1) - 1 }) : t('ql.lines', { n: d.lines ?? 0 }))
       if (d.truncated) foot.push(t('ql.truncated'))
     }

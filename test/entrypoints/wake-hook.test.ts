@@ -1,6 +1,7 @@
 import { expect, setDefaultTimeout, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
+import { promptOf, type ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import { fakeWake } from '../support/fake-wake.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 import { wakeOnConfig, writeBoardConfig } from '../support/wake-process.ts'
@@ -326,4 +327,325 @@ test.skipIf(!node)('the context text is herdr-wake’s, word for word but the na
       .filter(q => q.method === 'POST')
       .map(q => q.body),
   ).toEqual([{ target: 'p1' }, { target: SID_D }])
+})
+
+// #251: with two or more profiles shown, the other profiles' sessions are listed, and SendMessage
+// to a name only they have goes through the board (a reminder due now, signed with the caller's
+// Claude name and a ref to answer to).
+const SID_ME = '3e4f5a6b-7c8d-4e9f-8a0b-1c2d3e4f5a6b'
+const SID_TWIN = '5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d'
+const SID_OPS = '4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b7c'
+
+/** Both profiles listed in config.json, Work hidden when `workHidden`; `more` after them. */
+const profilesConfig = (w: World, workHidden = false, more: Record<string, unknown>[] = []) => ({
+  profiles: [
+    { id: 'default', title: 'Default', dir: w.dflt, color: 'indigo', hidden: false },
+    { id: 'work', title: 'Work', dir: w.work, color: 'teal', hidden: workHidden },
+    ...more,
+  ],
+})
+
+/** A running Claude session in `dir`, as Claude's registry file records it (this test's pid: alive). */
+function liveIn(dir: string, sessionId: string, name: string, cwd = 'C:\\Work\\Проект 100%'): void {
+  mkdirSync(join(dir, 'sessions'), { recursive: true })
+  writeFileSync(
+    join(dir, 'sessions', `${sessionId}.json`),
+    JSON.stringify({ pid: process.pid, sessionId, name, cwd, kind: 'interactive' }),
+  )
+}
+
+const stateOf = (w: World): string => join(w.box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board')
+
+/** The caller's card, with the name it has on the board. */
+function cardOf(w: World, key: string, name: string): void {
+  mkdirSync(join(stateOf(w), 'cards'), { recursive: true })
+  writeFileSync(join(stateOf(w), 'cards', `${key}.json`), JSON.stringify({ key, name }))
+}
+
+/** The schedule's entries, as the board's scheduler reads them, oldest first. */
+function scheduled(w: World): ScheduleEntry[] {
+  const dir = join(stateOf(w), 'schedule')
+  if (!existsSync(dir)) return []
+  return readdirSync(dir)
+    .filter(f => /^[0-9a-f]{6}\.json$/.test(f))
+    .map(f => JSON.parse(readFileSync(join(dir, f), 'utf8')) as ScheduleEntry)
+    .sort((a, b) => (a.created ?? 0) - (b.created ?? 0))
+}
+
+const sendFrom = (to: string, message: unknown, sid: string) => ({
+  ...send(to),
+  session_id: sid,
+  tool_input: { to, message },
+})
+
+/** The reason of a deny the hook printed. */
+function denied(r: Ran): string {
+  expect([r.code, r.stderr]).toEqual([0, ''])
+  const out = JSON.parse(r.stdout) as { hookSpecificOutput: Record<string, string> }
+  expect(out.hookSpecificOutput.hookEventName).toBe('PreToolUse')
+  expect(out.hookSpecificOutput.permissionDecision).toBe('deny')
+  return out.hookSpecificOutput.permissionDecisionReason ?? ''
+}
+
+/** The hook let the call through to Claude Code: no output at all. */
+const passed = (r: Ran): void => expect([r.code, r.stdout, r.stderr]).toEqual([0, '', ''])
+
+/** The test's two profiles with a running session `name` in each profile given (its /awake row and registry file). */
+function runningIn(w: World, list: [dir: string, id: string, sid: string, name: string][]) {
+  const both = twoProfiles(w)
+  for (const [dir, , sid, name] of list) liveIn(dir, sid, name)
+  return {
+    sleeping: both.sleeping,
+    awake: [
+      ...both.awake,
+      ...list.map(([dir, id, , name]) => running(name, 'idle', 3, null, 'reaper off', { dir, id })),
+    ],
+  }
+}
+
+const NO_SCHEDULER = ' Note: no board with the scheduler is running now; it goes out once one runs.'
+
+test('#251 round trip: Default → Work and the reply Work → Default, by the Claude name and ref the prompt gives', async () => {
+  const w = await world()
+  const fake = await fakeWake(
+    runningIn(w, [
+      [w.dflt, 'default', SID_ME, 'Monitor'],
+      // Another Default session of the same name: the ref picks the sender.
+      [w.dflt, 'default', SID_TWIN, 'Monitor'],
+      [w.work, 'work', SID_O, 'Centium Ops'],
+    ]),
+  )
+  writeBoardConfig(w.box, wakeOnConfig(fake.port, { config: profilesConfig(w) }))
+  // The board shows another name on the sender's card: SendMessage does not know it by that one.
+  cardOf(w, SID_ME, 'Work Profile Migration')
+
+  const there = await runHook(w, 'pre-send', sendFrom('centium ops', 'mail for you\x1b[31m: case 42', SID_ME))
+  expect(denied(there)).toBe(
+    "Queued for Centium Ops in profile Work through the board (Claude Code reaches only this profile's sessions, " +
+      'so it did not send it): the board types it in as a board reminder from Monitor once Centium Ops is free, ' +
+      `waking it first if it sleeps.${NO_SCHEDULER} Do not send it again. The reply comes back the same way, as a ` +
+      'board reminder from Centium Ops.',
+  )
+  const [first] = scheduled(w)
+  expect(first).toMatchObject({
+    key: SID_O,
+    name: 'Centium Ops',
+    pane: 'p-Centium Ops',
+    cwd: 'C:\\Work\\Проект 100%',
+    text: 'mail for you[31m: case 42',
+    idle: true,
+    by: 'agent',
+    from: { key: SID_ME, name: 'Monitor' },
+    fromProfile: 'Default',
+    replyTo: 'Monitor [3e4f5a6b]',
+  })
+  expect(first?.next).toBeLessThanOrEqual(Date.now())
+  expect(promptOf(first as ScheduleEntry, first?.next ?? 0)).toBe(
+    '[board reminder from Monitor; SendMessage from profile Default, answer with SendMessage to Monitor [3e4f5a6b]] ' +
+      'mail for you[31m: case 42',
+  )
+
+  // The reply, from Work, to the name the prompt gave.
+  const work = { CLAUDE_CONFIG_DIR: w.work }
+  const back = await runHook(w, 'pre-send', sendFrom(first?.replyTo ?? '', 'done: case 42', SID_O), work)
+  expect(denied(back)).toStartWith('Queued for Monitor in profile Default through the board')
+  expect(denied(back)).toEndWith('The reply comes back the same way, as a board reminder from Monitor.')
+  const [, second, ...more] = scheduled(w)
+  expect(more).toEqual([])
+  expect(second).toMatchObject({
+    key: SID_ME,
+    name: 'Monitor',
+    text: 'done: case 42',
+    from: { key: SID_O, name: 'Centium Ops' },
+    fromProfile: 'Work',
+    replyTo: 'Centium Ops [2d3e4f5a]',
+  })
+  // Two Default sessions answer to the name alone: refused, each with its ref.
+  const bare = denied(await runHook(w, 'pre-send', sendFrom('Monitor', 'done', SID_O), work))
+  expect(bare).toStartWith('Not sent: "monitor" fits more than one session of the other profiles (')
+  expect(bare).toContain('Monitor [3e4f5a6b] in profile Default')
+  expect(bare).toContain('Monitor [5a6b7c8d] in profile Default')
+  expect(scheduled(w)).toHaveLength(2)
+  // Nothing woken by the hook: the scheduler wakes a sleeper when it delivers.
+  expect(fake.requests().filter(q => q.method === 'POST')).toEqual([])
+})
+
+test('#251 Work → Default: SendMessage to a Default sleeper goes through the board, with its pane', async () => {
+  const w = await world()
+  const d = { dir: w.dflt, id: 'default' }
+  const both = twoProfiles(w)
+  const fake = await fakeWake({
+    ...both,
+    sleeping: [...both.sleeping, sleeper('Monitor', 'p9', SID_ME, 'Home', 20, d)],
+  })
+  writeBoardConfig(w.box, wakeOnConfig(fake.port, { config: profilesConfig(w) }))
+  liveIn(w.work, SID_O, 'Centium Ops')
+
+  const r = await runHook(w, 'pre-send', sendFrom('Monitor', 'done: case 42', SID_O), { CLAUDE_CONFIG_DIR: w.work })
+  const reason = denied(r)
+  expect(reason).toStartWith('Queued for Monitor in profile Default through the board')
+  expect(reason).toContain('as a board reminder from Centium Ops once Monitor is free')
+  expect(scheduled(w)).toMatchObject([
+    {
+      key: SID_ME,
+      name: 'Monitor',
+      pane: 'p9',
+      text: 'done: case 42',
+      idle: true,
+      from: { key: SID_O, name: 'Centium Ops' },
+      fromProfile: 'Work',
+      replyTo: 'Centium Ops [2d3e4f5a]',
+    },
+  ])
+  expect(fake.requests().filter(q => q.method === 'POST')).toEqual([])
+})
+
+test('#251 a message longer than a reminder carries is refused, not cut; it is measured without control characters', async () => {
+  const w = await world()
+  const fake = await fakeWake(
+    runningIn(w, [
+      [w.dflt, 'default', SID_ME, 'Monitor'],
+      [w.work, 'work', SID_O, 'Centium Ops'],
+    ]),
+  )
+  writeBoardConfig(w.box, wakeOnConfig(fake.port, { config: profilesConfig(w) }))
+
+  const long = denied(await runHook(w, 'pre-send', sendFrom('Centium Ops', 'я'.repeat(2001), SID_ME)))
+  expect(long).toBe(
+    'Not sent: 2001 characters, the board carries 2000; send it in parts, or write it to a file and send the path.',
+  )
+  expect(scheduled(w)).toEqual([])
+  const fits = denied(await runHook(w, 'pre-send', sendFrom('Centium Ops', `${'я'.repeat(2000)}\x1b\x07`, SID_ME)))
+  expect(fits).toStartWith('Queued for Centium Ops in profile Work')
+  expect(scheduled(w).map(e => e.text)).toEqual(['я'.repeat(2000)])
+})
+
+test('#251 left to Claude Code: a running session herdr does not run, a message that is no text', async () => {
+  const w = await world()
+  const fake = await fakeWake(runningIn(w, [[w.work, 'work', SID_O, 'Centium Ops']]))
+  writeBoardConfig(w.box, wakeOnConfig(fake.port, { config: profilesConfig(w) }))
+  liveIn(w.dflt, SID_ME, 'Monitor')
+  // In Work's registry, not in /awake (a Claude outside herdr): the board could not type into it.
+  liveIn(w.work, SID_OPS, 'Ghost')
+
+  passed(await runHook(w, 'pre-send', sendFrom('Ghost', 'hi', SID_ME)))
+  passed(await runHook(w, 'pre-send', sendFrom('Centium Ops', { type: 'shutdown_request' }, SID_ME)))
+  passed(await runHook(w, 'pre-send', sendFrom('Centium Ops', ' \x1b ', SID_ME)))
+  expect(scheduled(w)).toEqual([])
+})
+
+test('#251 no reply path: a caller with no Claude name, or in a profile the board does not show', async () => {
+  const w = await world()
+  const ops = join(w.home, '.claude-ops')
+  const fake = await fakeWake(runningIn(w, [[w.work, 'work', SID_O, 'Centium Ops']]))
+  const hiddenOps = { id: 'ops', title: 'Ops', dir: ops, color: 'pink', hidden: true }
+  writeBoardConfig(w.box, wakeOnConfig(fake.port, { config: profilesConfig(w, false, [hiddenOps]) }))
+  liveIn(ops, SID_OPS, 'Ops Desk')
+
+  const nameless = denied(await runHook(w, 'pre-send', sendFrom('Centium Ops', 'hi', SID_ME)))
+  expect(nameless).toEndWith('No reply comes back this way: this session has no name.')
+  expect(nameless).toContain('as a board reminder from 3e4f5a6b once')
+  const hidden = denied(
+    await runHook(w, 'pre-send', sendFrom('Centium Ops', 'hi again', SID_OPS), { CLAUDE_CONFIG_DIR: ops }),
+  )
+  expect(hidden).toEndWith('No reply comes back this way: this profile is not shown on the board.')
+  const [a, b] = scheduled(w)
+  expect([a?.replyTo, b?.replyTo]).toEqual(['', ''])
+  expect(promptOf(a as ScheduleEntry, a?.next ?? 0)).toBe(
+    '[board reminder from 3e4f5a6b; SendMessage from profile Default, no reply path] hi',
+  )
+  expect(promptOf(b as ScheduleEntry, b?.next ?? 0)).toBe(
+    '[board reminder from Ops Desk; SendMessage from profile Ops, no reply path] hi again',
+  )
+})
+
+test('#251 the caller’s own profile wins, running or asleep; a name no profile has is left to Claude Code', async () => {
+  const w = await world()
+  const fake = await fakeWake(
+    runningIn(w, [
+      [w.dflt, 'default', SID_ME, 'Docs'],
+      [w.work, 'work', SID_O, 'Docs'],
+    ]),
+  )
+  writeBoardConfig(w.box, wakeOnConfig(fake.port, { config: profilesConfig(w) }))
+
+  // Docs runs in both: Default's own, Claude Code sends it.
+  passed(await runHook(w, 'pre-send', sendFrom('Docs', 'hi', SID_D)))
+  // Billing sleeps in both: Default's is woken, as before.
+  passed(await runHook(w, 'pre-send', sendFrom('Billing', 'hi', SID_D)))
+  expect(fake.requests().filter(q => q.method === 'POST')).toEqual([
+    { method: 'POST', path: '/wake', body: { target: SID_D } },
+  ])
+  passed(await runHook(w, 'pre-send', sendFrom('Nobody', 'hi', SID_D)))
+  expect(scheduled(w)).toEqual([])
+})
+
+test('#251 a name sessions of two other profiles share is refused, each listed with its ref; nothing scheduled', async () => {
+  const w = await world()
+  const ops = join(w.home, '.claude-ops')
+  const fake = await fakeWake(
+    runningIn(w, [
+      [w.work, 'work', SID_O, 'Ledger'],
+      [ops, 'ops', SID_OPS, 'ledger'],
+    ]),
+  )
+  const third = { id: 'ops', title: 'Ops', dir: ops, color: 'pink', hidden: false }
+  writeBoardConfig(w.box, wakeOnConfig(fake.port, { config: profilesConfig(w, false, [third]) }))
+
+  const reason = denied(await runHook(w, 'pre-send', sendFrom('Ledger', 'hi', SID_D)))
+  expect(reason).toStartWith('Not sent: "ledger" fits more than one session of the other profiles (')
+  for (const part of [
+    'Ledger [2d3e4f5a] in profile Work',
+    'Ledger [1c2d3e4f] in profile Work',
+    'ledger [4f5a6b7c] in profile Ops',
+  ])
+    expect(reason).toContain(part)
+  expect(scheduled(w)).toEqual([])
+})
+
+test('#251 one profile shown: SendMessage and ListAgents as before, no other call', async () => {
+  const w = await world()
+  const fake = await fakeWake(twoProfiles(w))
+  liveIn(w.work, SID_O, 'Centium Ops')
+  for (const config of [{}, profilesConfig(w, true)]) {
+    writeBoardConfig(w.box, wakeOnConfig(fake.port, { config }))
+    const r = await runHook(w, 'pre-send', sendFrom('Centium Ops', 'hi', SID_D))
+    expect([r.code, r.stdout, r.stderr]).toEqual([0, '', ''])
+    const list = contextOf(await runHook(w, 'post-list', LIST))
+    expect(list).not.toContain('other Claude profiles')
+    expect(list).not.toContain('Ledger')
+  }
+  expect(scheduled(w)).toEqual([])
+  expect(fake.requests().map(q => `${q.method} ${q.path}`)).toEqual([
+    'GET /sleeping',
+    'GET /sleeping',
+    'GET /awake',
+    'GET /sleeping',
+    'GET /sleeping',
+    'GET /awake',
+  ])
+})
+
+test('#251 ListAgents with two profiles shown: the other one’s running and sleeping sessions, each with its profile', async () => {
+  const w = await world()
+  const fake = await fakeWake(twoProfiles(w))
+  writeBoardConfig(w.box, wakeOnConfig(fake.port, { config: profilesConfig(w) }))
+  const othersOf = (text: string): string[] =>
+    text.slice(text.indexOf('Sessions of the other Claude profiles')).split('\n').slice(1)
+
+  const dflt = contextOf(await runHook(w, 'post-list', LIST)) ?? ''
+  // Its own as before.
+  expect(sleeperRows(dflt)).toEqual(['  Billing  ·  workspace Home  ·  put to sleep 30 min ago'])
+  expect(dflt).toContain('SendMessage to one by name goes through the board')
+  expect(othersOf(dflt)).toEqual([
+    '  Docs  ·  profile Work  ·  working 7 min',
+    '  Billing  ·  profile Work  ·  asleep 40 min',
+    '  Ledger  ·  profile Work  ·  asleep 50 min',
+  ])
+
+  const work = contextOf(await runHook(w, 'post-list', LIST, { CLAUDE_CONFIG_DIR: w.work })) ?? ''
+  expect(othersOf(work)).toEqual([
+    '  Api  ·  profile Default  ·  idle 5 min',
+    '  Billing  ·  profile Default  ·  asleep 30 min',
+  ])
 })

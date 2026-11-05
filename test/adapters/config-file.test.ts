@@ -1,9 +1,21 @@
 import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmdirSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { join, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { dropKey } from '../../src/adapters/backup-store.ts'
 import { readCard, writeCard } from '../../src/adapters/cards.ts'
 import {
+  addTimeProjects,
   configFile,
   type EditResult,
   editCategories,
@@ -14,12 +26,14 @@ import {
   loadConfig,
   saveFoundProfiles,
   setTunnelOn,
+  takeOverWake,
 } from '../../src/adapters/config-file.ts'
 import { isRecord, renameWithRetry, replaceFile } from '../../src/adapters/json-store.ts'
 import { configDir } from '../../src/adapters/paths.ts'
 import { loadProfiles } from '../../src/adapters/profiles.ts'
 import { useLanguage } from '../../src/core/lang.ts'
 import { sameDir } from '../../src/core/launch/names.ts'
+import { newDropKey } from '../../src/services/backup-server.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const saved = (): Record<string, unknown> => JSON.parse(readFileSync(configFile(), 'utf8'))
@@ -579,3 +593,119 @@ test('setTunnelOn turns the tunnel on and off, keeping its other fields and the 
   expect(setTunnelOn(false)).toEqual({ ok: true })
   expect(saved().tunnel).toEqual({ host: 'ssh.example.com', user: 'boardtunnel', note: 'mine', on: false })
 })
+
+test('projects added to a lane: each one it has not got, neither listed nor retired, case and spaces aside', () => {
+  isolatedHome()
+  seed({
+    language: 'en',
+    time: { zone: 'America/New_York', clients: { a: { projects: ['Support'], retired: ['Old'] }, any: {} } },
+  })
+  assert.deepEqual(addTimeProjects('a', ['support ', 'old', 'Audit', 'audit', ' Calls ']), { ok: true })
+  const time = saved().time as { clients: Record<string, Record<string, unknown>> }
+  assert.deepEqual(time.clients.a, { projects: ['Support', 'Audit', 'Calls'], retired: ['Old'] })
+  addTimeProjects('any', ['X'])
+  assert.deepEqual(time.clients.any, (saved().time as typeof time).clients.any, 'a lane that takes any stays so')
+})
+
+const CONFIG_WRITER = fileURLToPath(new URL('../support/config-writer.ts', import.meta.url))
+
+test('two writers of config.json at once: one waits for the other’s lock, so neither loses what the other added', async () => {
+  isolatedHome()
+  seed({ language: 'en', time: { zone: 'America/New_York', clients: { a: { projects: ['A'] } } } })
+  // another writer is mid-way: it holds the file's lock, and read the file before its change
+  const lock = `${configFile()}.lock`
+  mkdirSync(lock)
+  const read = saved()
+  const child = Bun.spawn([process.execPath, CONFIG_WRITER, 'a', 'B'], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: { ...process.env },
+  })
+  const reader = child.stdout.getReader()
+  let said = ''
+  while (!said.includes('ready')) {
+    const { value, done } = await reader.read()
+    if (done) break
+    said += new TextDecoder().decode(value)
+  }
+  // time enough for a writer that does not wait to have written and gone
+  const early = await Promise.race([child.exited.then(() => true), Bun.sleep(400).then(() => false)])
+  const projectsOf = (c: Record<string, unknown>) =>
+    ((c.time as Record<string, unknown>).clients as Record<string, { projects: string[] }>).a?.projects ?? []
+  projectsOf(read).push('C')
+  writeFileSync(configFile(), JSON.stringify(read))
+  rmdirSync(lock)
+  await child.exited
+  assert.equal(early, false, 'the second writer waited for the lock')
+  assert.deepEqual(projectsOf(saved()), ['A', 'C', 'B'])
+})
+
+test('a writer that stopped holding the lock: a moment ago, an edit is refused in words and the file stays; past 30 s, it is taken over', () => {
+  isolatedHome()
+  seed({ language: 'en', keep: 1 })
+  const lock = `${configFile()}.lock`
+  // stopped a moment ago (killed mid-write): the edit waits for it, then says so
+  mkdirSync(lock)
+  const before = readFileSync(configFile(), 'utf8')
+  const r = editSettings({ language: 'ru' })
+  assert.equal(r.ok, false)
+  assert.match((r as { error: string }).error, /config\.json is being changed by another process/)
+  assert.equal(readFileSync(configFile(), 'utf8'), before)
+  assert.deepEqual(addTimeProjects('a', ['X']).ok, false, 'the import’s projects: refused, not thrown')
+  // stopped long ago: its lock is taken over, the edit goes through and leaves no lock behind
+  const old = new Date(Date.now() - 31_000)
+  utimesSync(lock, old, old)
+  assert.deepEqual(editSettings({ language: 'ru' }), { ok: true })
+  assert.deepEqual([saved().language, saved().keep], ['ru', 1])
+  assert.equal(existsSync(lock), false)
+})
+
+test('a config folder with spaces in its path (a Windows user name, say): edits and their lock work there', () => {
+  const dir = isolatedHome()
+  process.env.APPDATA = join(dir, 'App Data', 'Roaming Folder')
+  seed({ language: 'en', time: { zone: 'America/New_York', clients: { a: { projects: ['A'] } } } })
+  assert.ok(configFile().includes(' '))
+  assert.deepEqual(editSettings({ language: 'ru' }), { ok: true })
+  assert.deepEqual(addTimeProjects('a', ['B']), { ok: true })
+  assert.deepEqual(
+    [
+      saved().language,
+      ((saved().time as Record<string, unknown>).clients as Record<string, { projects: string[] }>).a?.projects,
+    ],
+    ['ru', ['A', 'B']],
+  )
+  assert.equal(existsSync(`${configFile()}.lock`), false)
+})
+
+test('a config.json that does not read as JSON is never replaced by the defaults: an edit is refused in words, the file as it was', () => {
+  isolatedHome()
+  seed({ language: 'en', time: { zone: 'America/New_York' } })
+  const broken = `${readFileSync(configFile(), 'utf8').slice(0, -1)},}`
+  writeFileSync(configFile(), broken)
+  const r = editSettings({ language: 'ru' })
+  assert.equal(r.ok, false)
+  assert.match((r as { error: string }).error, /does not read as JSON/)
+  assert.equal(addTimeProjects('a', ['X']).ok, false)
+  assert.equal(readFileSync(configFile(), 'utf8'), broken)
+})
+
+test('a busy lock in a writer that answers for itself: the takeover says it in words, the found profiles wait for the next start, a new drop key keeps the old one', async () => {
+  isolatedHome()
+  seed({
+    language: 'en',
+    backup: { server: { host: 'example.org', port: 22, admin: { user: 'me', key: '' }, set: 'x' } },
+  })
+  const key = dropKey()
+  mkdirSync(join(key, '..'), { recursive: true })
+  writeFileSync(key, 'old key')
+  mkdirSync(`${configFile()}.lock`)
+  const taken = takeOverWake({ enabled: true })
+  assert.equal(taken.ok, false)
+  assert.match((taken as { error: string }).error, /config\.json is being changed by another process/)
+  assert.equal(saveFoundProfiles(join(process.env.HOME as string, '.claude')), false)
+  // the server stays set for the key it has: nothing goes while config.json cannot be changed
+  const fresh = await newDropKey()
+  assert.equal(fresh.ok, false)
+  assert.equal(readFileSync(key, 'utf8'), 'old key')
+  assert.equal(((saved().backup as Record<string, unknown>).server as Record<string, unknown>).set, 'x')
+}, 15_000)

@@ -135,3 +135,7 @@ test("it follows the window's height: no fold once two screens hold it, a fold a
   flush(() => dom.resize(800))
   expect(body(bubbles()[0])?.className).toBe('md folded')
 })
+
+test('the small window’s document has input events, as a browser’s: react-dom, loaded here first for the whole run, watches fields as in a browser for every file after', () => {
+  expect('oninput' in dom.document).toBe(true)
+})

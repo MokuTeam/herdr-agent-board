@@ -1,5 +1,13 @@
 import { expect, test } from 'bun:test'
-import { asFreedPlace, type FreedSnapshot, freePlan, promptIdle } from '../../../src/core/wake/freed.ts'
+import {
+  asFreedPlace,
+  type FreedSnapshot,
+  freePlan,
+  promptIdle,
+  promptRows,
+  promptShows,
+  tabFocused,
+} from '../../../src/core/wake/freed.ts'
 
 const now = Date.parse('2026-10-27T12:00:00Z')
 const PROJECT = 'C:\\Work\\Проект x 50%'
@@ -86,6 +94,56 @@ test('a place as the session file has it; what does not read as one is none', ()
     expect(asFreedPlace(bad)).toBeNull()
 })
 
+// #317: the workspace of a linked worktree (`herdr worktree open`) comes back linked to its repository.
+const ROOT = 'C:\\Work\\Repo 50%'
+const TREE = 'C:\\Work\\Repo 50%\\.worktrees\\Счёт-1'
+const linked = {
+  checkout_path: TREE,
+  is_linked_worktree: true,
+  repo_key: `${ROOT}\\.git`,
+  repo_name: 'Repo',
+  repo_root: ROOT,
+}
+
+test('#317 a linked worktree’s workspace: its repository and folder noted; a plain one or a main checkout: nothing', () => {
+  const withTree = (worktree: unknown): FreedSnapshot => {
+    const s = snap({ tabs: ['t1'] })
+    return { ...s, workspaces: [{ workspace_id: 'w1', label: 'TICKET-1 50%', worktree }] }
+  }
+  expect(freePlan(withTree(linked), 't1-claude', now)?.place).toEqual({
+    pane: 't1-claude',
+    workspace: 'w1',
+    workspaceLabel: 'TICKET-1 50%',
+    tabLabel: '1',
+    worktree: { root: ROOT, path: TREE },
+    topic: 'topic:TICKET-1 50%',
+    at: now,
+  })
+  for (const not of [
+    undefined,
+    null,
+    { ...linked, is_linked_worktree: false, checkout_path: ROOT },
+    { ...linked, is_linked_worktree: 'true' },
+    { ...linked, repo_root: '' },
+    { ...linked, checkout_path: 7 },
+    'linked',
+  ]) {
+    const place = freePlan(withTree(not), 't1-claude', now)?.place
+    expect(place).toBeDefined()
+    expect(place).not.toHaveProperty('worktree')
+  }
+})
+
+test('#317 the worktree as the session file has it; a malformed one is dropped, the place kept', () => {
+  const place = { pane: 'w1:p1', workspace: 'w1', workspaceLabel: 'Счёт-1', topic: 'topic:Счёт-1', at: now }
+  expect(asFreedPlace({ ...place, worktree: { root: ROOT, path: TREE, extra: 1 } })).toEqual({
+    ...place,
+    worktree: { root: ROOT, path: TREE },
+  })
+  for (const bad of [null, 'x', [], { root: ROOT }, { root: '', path: TREE }, { root: ROOT, path: 1 }])
+    expect(asFreedPlace({ ...place, worktree: bad })).toEqual(place)
+})
+
 test('the tab the user looks at is left as it is, whichever of its panes has the focus', () => {
   const focused = snap()
   focused.focused_pane_id = 't2-side'
@@ -153,4 +211,66 @@ test('promptIdle: an empty prompt of any shell, or nothing but this session’s 
     `$ board resume ${SID}\nls`,
   ])
     expect([screen, promptIdle(screen, SID)]).toEqual([screen, false])
+})
+
+test('#243 promptShows: no prompt yet, the wake line (wrapped too), an empty prompt, or anything else', () => {
+  const SID = '0f3c9a7e-1b2d-4e5f-8a9b-0c1d2e3f4a5b'
+  const PS = 'PS C:WorkПроект x 50%> '
+  const cases: [string, ReturnType<typeof promptShows>][] = [
+    ['', 'none'],
+    ['\n\n', 'none'],
+    [`claude --resume ${SID}`, 'none'],
+    [PS, 'empty'],
+    ['out\nuser@box:~/w$ ', 'empty'],
+    [`${PS}board resume ${SID}\n${PS}git status\nOn branch main\n${PS}`, 'empty'],
+    [`${PS}board resume ${SID} --profile work`, 'line'],
+    [`$ claude-tg --dangerously-skip-permissions --resume ${SID}`, 'line'],
+    [`${PS}board resume 0f3c9a7e-1b2d-4e5f-8a9b-0c1d2e3f\n4a5b --profile defau\nlt`, 'line'],
+    [`${PS}cd ..`, 'other'],
+    [`${PS}Get-Item x |\n>> `, 'other'],
+    [`$ board resume 6a7b8c9d-0e1f-4a2b-9c3d-4e5f6a7b8c9d`, 'other'],
+    [`$ board resume ${SID} && claude`, 'other'],
+  ]
+  for (const [screen, shows] of cases) expect([screen, promptShows(screen, SID)]).toEqual([screen, shows])
+  // Not a session id: never its wake line.
+  expect(promptShows('$ board resume pane-7', 'pane-7')).toBe('other')
+})
+
+test('#243 promptRows: one in a shell that has just started (its prompt wrapped too), more once anything ran', () => {
+  const PS = 'PS C:\\Work\\Проект x 50%> '
+  expect(promptRows(PS)).toBe(1)
+  expect(promptRows(`\n\n${PS}\n\n`)).toBe(1)
+  // A narrow pane wraps the prompt: the folder's part has no end mark.
+  expect(promptRows('PS C:\\Work\\BB\\Proj\nect> ')).toBe(1)
+  expect(promptRows(`${PS}git status\nOn branch main\n${PS}`)).toBe(2)
+  expect(promptRows(`${PS}ssh prod\nLast login\nroot@prod:~# `)).toBe(2)
+  expect(promptRows('')).toBe(0)
+})
+
+test('#243 tabFocused: herdr’s focused pane, or a pane marked focused, anywhere in the pane’s tab', () => {
+  const snap = (focused: Record<string, unknown> = {}, id?: string): FreedSnapshot => ({
+    workspaces: [{ workspace_id: 'w1', label: 'Main' }],
+    tabs: [
+      { tab_id: 't1', workspace_id: 'w1' },
+      { tab_id: 't2', workspace_id: 'w1' },
+    ],
+    panes: [shell('w1:p1', 't1'), sidebar('w1:s1', 't1'), shell('w1:p2', 't2', focused)],
+    ...(id && { focused_pane_id: id }),
+  })
+  expect(tabFocused(snap(), 'w1:p1')).toBe(false)
+  expect(tabFocused(snap({ focused: true }), 'w1:p1')).toBe(false)
+  expect(tabFocused(snap({}, 'w1:s1'), 'w1:p1')).toBe(true)
+  expect(tabFocused(snap({}, 'w1:p1'), 'w1:p1')).toBe(true)
+  expect(tabFocused(snap({ focused: true }), 'w1:p2')).toBe(true)
+  expect(tabFocused(snap({}, 'w1:s1'), 'w9:p9')).toBe(false)
+  // A pane herdr gives no tab for, itself focused (review round 2).
+  const loose = (more: Record<string, unknown>, id?: string): FreedSnapshot => ({
+    workspaces: [],
+    tabs: [],
+    panes: [{ pane_id: 'p', ...more }],
+    ...(id && { focused_pane_id: id }),
+  })
+  expect(tabFocused(loose({ focused: true }), 'p')).toBe(true)
+  expect(tabFocused(loose({}, 'p'), 'p')).toBe(true)
+  expect(tabFocused(loose({}), 'p')).toBe(false)
 })

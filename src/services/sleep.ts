@@ -68,14 +68,20 @@ export function sessionsFor(items: readonly Item[], target: string): Item[] {
 
 /**
  * Put the sessions `targets` name to sleep (`items`: the board's sessions), AT_ONCE at a time, a
- * session named twice once. `by` and `from` go into the entries `whenFree` makes. One outcome per
- * target, in their order; a target asked twice answers once.
+ * session named twice once. `by` and `from` go into the entries `whenFree` makes, and `moveTo` (a
+ * profile id, `board move --when-free`, #250): moved there once asleep. One outcome per target, in
+ * their order; a target asked twice answers once.
  */
 export async function sleepMany(
   deps: Deps,
   items: readonly Item[],
   targets: readonly string[],
-  { whenFree = false, by = 'agent', from }: { whenFree?: boolean; by?: string; from?: SessionRef } = {},
+  {
+    whenFree = false,
+    by = 'agent',
+    from,
+    moveTo,
+  }: { whenFree?: boolean; by?: string; from?: SessionRef; moveTo?: string } = {},
 ): Promise<SleepOutcome[]> {
   const asked = [...new Set(targets.map(s => s.trim()).filter(Boolean))].map(target => ({
     target,
@@ -87,7 +93,7 @@ export async function sleepMany(
   const queue = [...unique.values()]
   const worker = async (): Promise<void> => {
     for (let item = queue.shift(); item; item = queue.shift())
-      done.set(item.key, await sleepOne(deps, item, { whenFree, by, ...(from && { from }) }))
+      done.set(item.key, await sleepOne(deps, item, { whenFree, by, ...(from && { from }), ...(moveTo && { moveTo }) }))
   }
   await Promise.all(Array.from({ length: Math.min(AT_ONCE, queue.length) }, worker))
   return asked.map(({ target, fits }): SleepOutcome => {
@@ -108,7 +114,7 @@ export async function sleepMany(
 async function sleepOne(
   deps: Deps,
   item: Item,
-  opts: { whenFree: boolean; by: string; from?: SessionRef },
+  opts: { whenFree: boolean; by: string; from?: SessionRef; moveTo?: string },
 ): Promise<Outcome> {
   if (item.sleeping) return { result: 'already' }
   // pi too, where the board's own wake puts sessions to sleep (#178); the separate plugin does not.
@@ -134,7 +140,12 @@ async function sleepOne(
 }
 
 /** To sleep once it is free: its entry (askSleep), or kept up when the schedule has no room for it. */
-function later(item: Item, why: SleepWhy, opts: { by: string; from?: SessionRef }, detail?: string): Outcome {
+function later(
+  item: Item,
+  why: SleepWhy,
+  opts: { by: string; from?: SessionRef; moveTo?: string },
+  detail?: string,
+): Outcome {
   try {
     const { entry, again } = askSleep({
       key: item.key,
@@ -143,6 +154,7 @@ function later(item: Item, why: SleepWhy, opts: { by: string; from?: SessionRef 
       ...(item.cwd && { cwd: item.cwd }),
       by: opts.by,
       ...(opts.from && { from: opts.from }),
+      ...(opts.moveTo && { moveTo: opts.moveTo }),
     })
     return { result: 'scheduled', why, id: entry.id, again, ...(detail && { detail }) }
   } catch (err) {

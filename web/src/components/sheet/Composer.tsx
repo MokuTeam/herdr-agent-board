@@ -11,6 +11,7 @@ import { pageLog } from '../../api/client.ts'
 import { useActionRow } from '../../hooks/useActionRow.ts'
 import type { ComposerControls } from '../../hooks/useComposer.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { inMokupilot } from '../../models/call.ts'
 import {
   canReadClipboard,
   keepPasteHintSeen,
@@ -19,7 +20,7 @@ import {
   readClipboardImages,
 } from '../../models/clipboard-image.ts'
 import { composerView, sendsOnKey } from '../../models/composer.ts'
-import { remotePage } from '../../models/remote-page.ts'
+import { focusHere, remotePage } from '../../models/remote-page.ts'
 import type { HeadButtons, SheetAvailability } from '../../models/sheet.ts'
 import type { termButton } from '../../models/terminal.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
@@ -145,8 +146,9 @@ export function Composer({
         {av.banner}
       </p>
       <div className={classNames('composer-actions', row.icons && 'icons')} ref={actions}>
-        {/* Not in a phone's browser: herdr's window is on the computer (the row then fits without it). */}
-        {!remotePage() && (
+        {/* Not in a phone's browser: herdr's window is on the computer (the row then fits without it); on a desk, herdr follows. */}
+        {/* A MokuPilot call agent with no pane (#326) has nothing in herdr to go to. */}
+        {focusHere() && !(item && inMokupilot(item)) && (
           <button
             type="button"
             className={classNames('button', over('sheet-focus'))}

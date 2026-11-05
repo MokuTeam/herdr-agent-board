@@ -377,4 +377,42 @@ describe('checks that keep the menu open (the lanes’ pill: several lanes on sh
       await side.dispose()
     }
   })
+
+  test('a check in a submenu (a lane’s move, #256): update() turns it there, the submenu still open', async () => {
+    const side = reactMenuSide()
+    const lane = (usual: boolean): MenuEntry[] => [
+      { id: 'new', label: 'New' },
+      {
+        id: 'laneProfile',
+        label: 'Move to',
+        submenu: [
+          { id: 'profile:work', label: 'Work' },
+          { separator: true },
+          { id: 'usual', label: 'Usual too', checked: usual, keep: true },
+        ],
+      },
+    ]
+    const subChecks = () =>
+      (side.levels()[1]?.querySelectorAll('.menu-item') ?? []).map(el => el.getAttribute('aria-checked'))
+    try {
+      await side.open(lane(false), at(100, 100, { source: 'keyboard' }))
+      await side.world.settle()
+      for (const k of ['ArrowDown', 'ArrowRight']) await side.world.fire(side.world.window, 'keydown', { key: k })
+      await side.world.settle()
+      await side.world.fire(item(side, 1, 2), 'pointermove')
+      await side.world.fire(item(side, 1, 2), 'pointerdown')
+      await side.world.fire(item(side, 1, 2), 'pointerup')
+      await side.world.settle()
+      expect([side.log.filter(l => l.startsWith('picked')), side.isOpen(), side.levels().length]).toEqual([
+        ['picked usual'],
+        true,
+        2,
+      ])
+      side.engine.update(lane(true))
+      await side.world.flush()
+      expect([side.levels().length, subChecks()]).toEqual([2, [null, 'true']])
+    } finally {
+      await side.dispose()
+    }
+  })
 })

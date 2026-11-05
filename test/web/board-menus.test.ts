@@ -460,6 +460,8 @@ describe('without the launch window', () => {
           mokupilot: none,
           fork: none,
           archive: none,
+          profile: none,
+          laneProfile: none,
           tidy: none,
           archiveOpen: none,
           rename: none,

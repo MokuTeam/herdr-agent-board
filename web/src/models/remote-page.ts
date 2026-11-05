@@ -6,6 +6,20 @@
 export const remotePage = (): boolean =>
   typeof document !== 'undefined' && document.documentElement.hasAttribute('data-remote')
 
+/**
+ * This browser is the owner's desk (`board remote desk <id>`; RemoteDevice.desk): hello says so and
+ * RemoteGate marks the page (`data-desk` on <html>) before the board draws.
+ */
+export const deskPage = (): boolean =>
+  typeof document !== 'undefined' && document.documentElement.hasAttribute('data-desk')
+
+/** This browser's id among the paired devices (hello's device; RemoteGate sets `data-device`): what `board remote desk <id>` takes. */
+export const deviceId = (): string | null =>
+  (typeof document !== 'undefined' && document.documentElement.getAttribute?.('data-device')) || null
+
+/** herdr's focus works from this page: the board on the computer, or a desk elsewhere. */
+export const focusHere = (): boolean => !remotePage() || deskPage()
+
 /** The page runs as an app from the home screen, not in a browser's tab. */
 export const standalone = (): boolean =>
   matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true
@@ -55,6 +69,10 @@ export interface PhoneHello {
   name: string | null
   host: string
   paired: boolean
+  /** This browser is the owner's desk (deskPage). */
+  desk: boolean
+  /** This browser's id among the paired devices, once paired (deviceId). */
+  device: string | null
   language: string | null
   /** How this browser gets in: 'pair', a phone approved on the computer (Tailscale); 'login', through the owner's domain. */
   auth: 'pair' | 'login'
@@ -70,6 +88,8 @@ export function helloOf(value: unknown): PhoneHello | null {
     name: typeof v.name === 'string' ? v.name : null,
     host: typeof v.host === 'string' ? v.host : '',
     paired: v.paired === true,
+    desk: v.desk === true,
+    device: typeof v.device === 'string' ? v.device : null,
     language: typeof v.language === 'string' ? v.language : null,
     auth: v.auth === 'login' ? 'login' : 'pair',
     signedIn: v.signedIn === true,

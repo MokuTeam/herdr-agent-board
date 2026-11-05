@@ -727,3 +727,36 @@ test('read only (--reap-dry): a session file that does not read is neither set a
 test('every test gives back the home and folders it found', () => {
   expect(outside()).toEqual(OUTSIDE)
 })
+
+test('#250: a sleeper moved to Work wakes there, its entry naming Work; one awake or unknown is refused', async () => {
+  const pane = shellPane('w1:p1')
+  const at = Date.now() - HOUR
+  const w = world({
+    panes: [pane, claudePane('w1:p2', SID2)],
+    shells: { 'w1:p1': 'pwsh.exe' },
+    sessions: f => ({
+      'w1:p1': { session: SID, name: 'Billing', seen_at: at, slept_at: at, profileDir: f.claude, profile: 'default' },
+      'w1:p2': { session: SID2, name: 'Awake', seen_at: at, profileDir: f.claude, profile: 'default' },
+    }),
+  })
+  const engine = createWakeEngine(w.deps)
+  expect(engine.moveProfile(SID, w.work)).toEqual({ ok: true, entries: 1 })
+  expect(readSessions(w.file)['w1:p1']).toMatchObject({
+    session: SID,
+    slept_at: at,
+    profileDir: w.work,
+    profile: 'work',
+  })
+  expect(engine.moveProfile(SID2, w.work)).toEqual({ ok: false, error: `${SID2} is not asleep in wake's file` })
+  expect(engine.moveProfile(SID3, w.work)).toEqual({ ok: false, error: `${SID3} is not asleep in wake's file` })
+  expect(engine.moveProfile('nope', w.work)).toEqual({ ok: false, error: '"nope" is not a session id' })
+  expect(engine.moveProfile(SID, 'relative')).toEqual({ ok: false, error: 'no profile folder named in full' })
+  expect(readSessions(w.file)['w1:p2']).toMatchObject({ profileDir: w.claude, profile: 'default' })
+
+  startsOnRun(w.io, pane, w.work, { id: SID, name: 'Billing', n: 1 })
+  expect(await engine.wake('Billing')).toEqual({ ok: true, pane: 'w1:p1', name: 'Billing' })
+  expect(typed(w.io)).toEqual([
+    ['pane', 'send-keys', 'w1:p1', 'esc'],
+    ['pane', 'run', 'w1:p1', `board resume ${SID} --profile work`],
+  ])
+})
