@@ -7,9 +7,10 @@ import { isRecord } from './json-store.ts'
 import { ROOT, stateDir } from './paths.ts'
 
 export const toastAppDir = (): string => join(stateDir(), 'toast')
-export const toastApp = (): string => join(toastAppDir(), 'ClaudeToast.app')
+export const toastApp = (): string => join(toastAppDir(), 'AgentBoardToast.app')
 export const toastBinary = (): string => join(toastApp(), 'Contents', 'MacOS', 'ClaudeToast')
 export const toastSource = (): string => join(ROOT, 'src', 'integrations', 'toast-mac.swift')
+export const toastIcon = (): string => join(ROOT, 'src', 'integrations', 'toast-mac.icns')
 
 /** Written when a build fails: for which version of the source, and why. A hook does not try that source again. */
 export const toastFailedFile = (): string => join(toastAppDir(), 'build-failed.json')

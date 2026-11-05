@@ -128,9 +128,9 @@ describe('what it is titled', () => {
     assert.equal(toastTitle(snapshot, 'w1:p3'), 'Work · tab')
   })
 
-  test('a pane herdr no longer has: the folder, else Claude', () => {
+  test('a pane herdr no longer has: the folder, else Agent Board', () => {
     assert.equal(toastTitle(snapshot, 'w1:p9', '/Users/me/project'), 'project')
-    assert.equal(toastTitle(null, 'w1:p9'), 'Claude')
+    assert.equal(toastTitle(null, 'w1:p9'), 'Agent Board')
   })
 })
 
@@ -226,11 +226,11 @@ describe('the helper of an earlier notification', () => {
     assert.deepEqual(endWith('4242', helperBinary()), { killed: [4242], asked: [4242] })
     assert.equal(existsSync(pidFile()), false)
     // ps may show the helper under another state folder's path: still the helper.
-    assert.deepEqual(endWith('4242', '/Users/me/state/toast/ClaudeToast.app/Contents/MacOS/ClaudeToast').killed, [4242])
+    assert.deepEqual(endWith('4242', join(toastApp(), 'Contents', 'MacOS', 'ClaudeToast')).killed, [4242])
   })
 
   test('a pid that was given out again, or is gone, is left alone and its file removed', () => {
-    for (const program of ['/usr/bin/vim', '/Applications/ClaudeToast.app/Contents/MacOS/ClaudeToastHelper', '']) {
+    for (const program of ['/usr/bin/vim', '/Applications/AgentBoardToast.app/Contents/MacOS/ClaudeToastHelper', '']) {
       assert.deepEqual(endWith('4242', program).killed, [], program)
       assert.equal(existsSync(pidFile()), false, program)
     }
@@ -507,7 +507,13 @@ describe('building the notification app', () => {
     assert.ok(out.startsWith(join(toastApp(), 'Contents', 'MacOS')), out)
     assert.equal(readFileSync(join(toastApp(), 'Contents', 'MacOS', 'ClaudeToast'), 'utf8'), 'binary')
     assert.deepEqual(parts(), [])
-    assert.ok(readFileSync(join(toastApp(), 'Contents', 'Info.plist'), 'utf8').includes('com.mokuteam.agent-board'))
+    const plist = readFileSync(join(toastApp(), 'Contents', 'Info.plist'), 'utf8')
+    assert.ok(plist.includes('<string>com.mokuteam.agent-board.notify</string>'))
+    assert.ok(plist.includes('<string>Agent Board</string>'))
+    assert.ok(plist.includes('<string>toast-mac.icns</string>'))
+    assert.equal(existsSync(join(toastApp(), 'Contents', 'Resources', 'toast-mac.icns')), true)
+    const sign = p.ran[2] as string[]
+    assert.equal(sign[sign.indexOf('--options') + 1], 'runtime')
     assert.equal(existsSync(marker()), false)
     assert.deepEqual(toastAppState(), { built: true })
     const again = programs()
