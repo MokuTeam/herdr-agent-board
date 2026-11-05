@@ -467,15 +467,16 @@ function CardActions({ item }: { item: Item }) {
           <MoonGlyph />
         </button>
       )}
+      {/* A day session (#331) takes messages: MokuPilot types its day's inbox into it. */}
+      {(!away || item.day) && (
+        <button type="button" data-act="write" title={t('card.write')}>
+          <WriteGlyph />
+        </button>
+      )}
       {!away && (
-        <>
-          <button type="button" data-act="write" title={t('card.write')}>
-            <WriteGlyph />
-          </button>
-          <button type="button" data-act="focus" title={t('card.focus')} disabled={!canMutate}>
-            <FocusGlyph />
-          </button>
-        </>
+        <button type="button" data-act="focus" title={t('card.focus')} disabled={!canMutate}>
+          <FocusGlyph />
+        </button>
       )}
     </div>
   )

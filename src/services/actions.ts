@@ -4,6 +4,7 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { agentGet, type HerdrAgent, herdr, herdrText, paneTerminals, snapshot } from '../adapters/herdr.ts'
+import { reportToDay, runningDay } from '../adapters/mokupilot-day.ts'
 import { possibleProfilePanes, provenProfilePanes } from '../adapters/profile-panes.ts'
 import { boardOnPath } from '../adapters/resume-report.ts'
 import { peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
@@ -13,6 +14,7 @@ import { piDraft } from '../core/dialogs/pi-dialogs.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
 import { sameDir } from '../core/launch/names.ts'
+import { boardNotice } from '../core/notices.ts'
 import { isPiItem, piTurnOver } from '../core/pi.ts'
 import {
   absoluteProfileDir,
@@ -480,6 +482,22 @@ export async function focus(
 }
 
 /**
+ * A message for a MokuPilot day session (#331): into its day's inbox, which MokuPilot types into
+ * the session as a report from the sender, a turn after the other, so it never waits for the
+ * session to be free. Only the day that runs now, and only while it is still this session's.
+ */
+function toDay(item: Item, text: string): ActionResult {
+  const day = runningDay()
+  if (!day || day.session !== item.session) return { ok: false, error: t('err.dayOver', { name: item.name }) }
+  try {
+    reportToDay(day.folder, boardNotice(text) ? 'agent board' : 'the user, on the agent board', text)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: t('err.send', { name: item.name, why: messageOf(err) }) }
+  }
+}
+
+/**
  * Type a message into the session's prompt, waking it first. Refused while it waits for a
  * decision or Claude's visible screen has no recognizable input box, even if herdr says idle.
  * With `free`, also while it works (instead of queueing into its turn); with `draft`, also while
@@ -495,6 +513,7 @@ export async function send(
 ): Promise<ActionResult> {
   const text = String(message ?? '').trim()
   if (!text) return { ok: false, error: t('err.emptyMessage') }
+  if (item?.day) return toDay(item, text)
   // A sleeping session whose pane is gone wakes in a new tab: pi's (#178), Claude's that wake closed (#204).
   if (!item?.pane && !item?.sleeping) return { ok: false, error: t('err.noPane') }
   const expectedSession = item.session ?? null

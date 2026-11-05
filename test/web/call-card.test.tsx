@@ -147,6 +147,16 @@ describe('the card', () => {
   })
 })
 
+describe('a MokuPilot day session (#331)', () => {
+  test('its card can be written to (its day’s inbox), nothing of herdr’s; no call line', () => {
+    const day = item({ key: 'd', name: 'work-a7', pane: null, status: 'idle', column: 'idle', day: true })
+    const { react } = bothCards({ items: [day] }, 'd')
+    expect(react).toContain('data-act="write"')
+    for (const act of ['sleep', 'focus']) expect(react).not.toContain(`data-act="${act}"`)
+    expect(react).not.toContain('call now')
+  })
+})
+
 describe('its menu', () => {
   const t = translator('en')
   const ctx = {
