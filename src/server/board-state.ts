@@ -17,7 +17,14 @@ import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
 import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
 import type { Limits } from '../core/limits.ts'
-import type { BackupPayload, BoardLimits, BoardPayload, BoardProfile, TimePayload } from '../core/payload.ts'
+import type {
+  BackupPayload,
+  BoardLimits,
+  BoardPayload,
+  BoardProfile,
+  CalendarPayload,
+  TimePayload,
+} from '../core/payload.ts'
 import type { PresenceView } from '../core/presence.ts'
 import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts'
 import type { RemoteView } from '../core/remote.ts'
@@ -76,6 +83,8 @@ interface Options {
   backup?: () => BackupPayload | null
   /** Time tracking's line (#233); null while it is off. */
   time?: () => TimePayload | null
+  /** The calendar's line (#328); null while it is off. */
+  calendar?: () => CalendarPayload | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -150,6 +159,11 @@ function timeOf(time: Options['time']): { time?: TimePayload } {
   return line ? { time: line } : {}
 }
 
+function calendarOf(calendar: Options['calendar']): { calendar?: CalendarPayload } {
+  const line = calendar?.() ?? null
+  return line ? { calendar: line } : {}
+}
+
 function backupOf(backup: Options['backup']): { backup?: BackupPayload } {
   const line = backup?.() ?? null
   return line ? { backup: line } : {}
@@ -176,6 +190,7 @@ export function createBoardState({
   presence,
   backup,
   time,
+  calendar,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -258,6 +273,8 @@ export function createBoardState({
       ...backupOf(backup),
       // time: only while config.json turns it on (#233)
       ...timeOf(time),
+      // calendar: only while config.json turns it on (#328)
+      ...calendarOf(calendar),
       // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
       accessRev: accessRev?.() ?? 0,
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.

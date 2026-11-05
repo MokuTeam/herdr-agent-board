@@ -32,12 +32,13 @@ export function secretsRoutes(app: SecretsApp): Route[] {
         const b = isRecord(body) ? body : {}
         try {
           // config.json as it is now, not as the watcher last saw it: the sink the owner was shown
-          // is checked against the one that would be written
+          // is checked against the one that would be written (the calendar's own too, #328)
+          const now = b.op === 'submit' ? loadConfig() : null
           const answer =
             b.op === 'decline'
               ? declineSecret(id)
-              : b.op === 'submit'
-                ? await submitSecret({ secrets: loadConfig().secrets }, id, {
+              : b.op === 'submit' && now
+                ? await submitSecret({ secrets: now.secrets, calendar: now.calendar }, id, {
                     values: b.values,
                     fingerprint: b.fingerprint,
                     session: b.session,

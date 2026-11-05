@@ -5,7 +5,7 @@ import { readdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type BoardDb, dbFile, openDb } from '../../src/adapters/db.ts'
-import { MIGRATIONS } from '../../src/adapters/db-schema.ts'
+import { LATEST, MIGRATIONS } from '../../src/adapters/db-schema.ts'
 import {
   addEntry,
   editEntry,
@@ -784,10 +784,15 @@ test('a v2 file with entries goes to v3 under the lock, copied first: billable a
   assert.deepEqual(said, ['ok', 'ok', 'ok', 'ok'])
   assert.equal(readdirSync(dirname(dbFile())).filter(f => f.startsWith('board.db.before-v2-')).length, 1)
   const raw = new Database(dbFile(), { readonly: true })
-  assert.equal(Object.values(raw.query('PRAGMA user_version').get() as object)[0], 3)
-  assert.deepEqual(raw.query('SELECT id, billable FROM time_entries').all(), [{ id: made.id, billable: null }])
-  assert.deepEqual(raw.query('SELECT count(*) AS n FROM time_marks').get(), { n: 0 })
-  raw.close()
+  try {
+    // through time's step 3 and every step after it (the calendar's 4, #328)
+    assert.equal(Object.values(raw.query('PRAGMA user_version').get() as object)[0], LATEST)
+    assert.deepEqual(raw.query('SELECT id, billable FROM time_entries').all(), [{ id: made.id, billable: null }])
+    assert.deepEqual(raw.query('SELECT count(*) AS n FROM time_marks').get(), { n: 0 })
+  } finally {
+    // a failed check leaves no handle on the file: the temp folder still goes
+    raw.close()
+  }
   const db = openDb()
   assert.ok(db)
   assert.deepEqual([getEntry(db, made.id)?.rev, getEntry(db, made.id)?.billable], [1, undefined])

@@ -96,3 +96,14 @@ test('brief: `board secret` only where config.json has sinks, for Claude; withou
   assert.equal(some.split('\n').length, none.split('\n').length + 1)
   assert.doesNotMatch(brief(cfg, null, 'C:X', {}, 'Codex', null, null, ['wss']), /board secret/)
 })
+
+test('the calendar (#328): agents hear of board cal only while it is on; off, the brief is as it was', () => {
+  const cfg = { categories: [{ id: 'alpha', title: 'Alpha', color: 'blue', paths: [] }] }
+  const off = brief(cfg, null, 'C:X', {}, 'Claude', null, null, [])
+  assert.equal(brief(cfg, null, 'C:X', {}, 'Claude', null, null, [], false), off)
+  assert.doesNotMatch(off, /board cal/)
+  const on = brief(cfg, null, 'C:X', {}, 'Claude', null, null, [], true)
+  assert.match(on, /- board cal list \[--day <d> \| --from <t> --to <t>\] \[--json\]: the owner's schedule/)
+  assert.match(on, /only when the owner asked for that event: --source <id> --asked/)
+  assert.doesNotMatch(brief(cfg, null, 'C:X', {}, 'Codex', null, null, [], true), /board cal/)
+})
