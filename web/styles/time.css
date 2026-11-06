@@ -411,11 +411,154 @@
 .time-delete:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 10%, transparent); }
 .time-actions .button:active:not(:disabled) { transform: scale(0.97); }
 
+/* ---------------------------------------------------------------- week and month (#241) */
+
+/* Day, Week, Month: the panel's views, a segmented control the panel's width, above the rest. */
+.time-views { display: flex; align-self: stretch; margin: 0 0 12px; }
+.time-views button { flex: 1 1 0; }
+
+/* A week's or a month's clients, each with its total: one grouped list, as a day's lines. */
+.time-span-clients {
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.time-span-client {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 12px;
+  padding: 9px 12px;
+  font-size: 13.5px;
+}
+.time-span-client + .time-span-client::before { content: ""; position: absolute; top: 0; right: 0; left: 12px; height: 0.5px; background: var(--separator); }
+.time-span-client .time-dot { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.time-span-client .time-client-total { font-size: 13.5px; }
+.time-span-client .time-about { grid-column: 1 / -1; margin-top: 1px; font-size: 12px; }
+
+/* A day's billed figure as a bar against the longest day on show, in its clients' colours. */
+.time-day-bar { display: flex; gap: 1px; width: calc(var(--share, 1) * 100%); min-width: 4px; height: 4px; overflow: hidden; border-radius: 2px; }
+.time-day-bar span { flex-basis: 0; min-width: 2px; background: var(--lane); }
+
+/* A week: its seven days as one grouped list, each row a way into its day. */
+.time-week {
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.time-week li { position: relative; }
+.time-week li + li::before { content: ""; position: absolute; top: 0; right: 0; left: 58px; z-index: 1; height: 0.5px; background: var(--separator); }
+.time-week-day {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto 10px;
+  align-items: center;
+  column-gap: 12px;
+  width: 100%;
+  min-height: 54px;
+  padding: 8px 12px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.time-week-day:hover { background: var(--fill-2); }
+.time-week-day:active { background: var(--fill); }
+.time-week-day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.time-wd { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.time-wd-name { color: var(--label-2); font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.time-wd-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  border-radius: 13px;
+  font: 600 17px/1 var(--font-display);
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.time-week-day.today .time-wd-num { background: var(--red); color: #fff; }
+.time-week-day.ahead .time-wd-name,
+.time-week-day.ahead .time-wd-num { color: var(--label-3); }
+.time-week-main { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.time-week-clients { display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--label-2); font-size: 12px; line-height: 1.3; }
+.time-week-clients .time-dot { min-width: 0; overflow-wrap: anywhere; }
+.time-week-clients .time-dot::before { width: 7px; height: 7px; margin-right: 5px; border-radius: 2px; }
+.time-week-client-fig { color: var(--label); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.time-week-marks { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 12px; line-height: 1.3; }
+.time-flag { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.time-flag::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.time-flag-open { color: color-mix(in srgb, var(--orange) 70%, var(--label)); }
+.time-flag-open::before { background: var(--orange); }
+.time-flag-none { color: var(--label-2); }
+.time-flag-none::before { box-shadow: inset 0 0 0 1.5px var(--orange); }
+.time-week-figure { display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
+.time-week-figure strong { font: 600 15px/1.25 var(--font-display); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.time-week-worked { color: var(--label-2); font-size: 11.5px; white-space: nowrap; }
+.time-week-chev { display: flex; color: var(--label-3); }
+.time-week-chev svg { width: 10px; height: 10px; stroke-width: 2.4; }
+
+/* A month: the Calendar's grid (calendar.css: its weekday heads, its cells, other months quieter,
+   today in red), part of the panel's page instead of filling it. Each day a way into it: its
+   figure at the foot, its bar under it, a mark in its corner (a dot: not entered; a ring: a
+   weekday with no time). Narrow, the hours and the minutes take a line each and the type steps down. */
+.time-month { container: time-month / inline-size; margin: 0 0 10px; }
+.time-month .cal-month-days { grid-auto-rows: minmax(68px, auto); overflow: visible; }
+.time-month .time-month-day {
+  position: relative;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.time-month .time-month-day:not(.other) { background: none; }
+.time-month .time-month-day:hover { background: var(--fill-2); }
+.time-month .time-month-day:active { background: var(--fill); }
+.time-month .time-month-day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.time-month-day .cal-month-dn { display: inline-flex; align-items: center; justify-content: center; }
+.time-month-day .cal-month-dn:hover { background: none; }
+.time-month-mark { position: absolute; top: 10px; right: 6px; width: 6px; height: 6px; border-radius: 50%; }
+.time-month-day.open .time-month-mark { background: var(--orange); }
+.time-month-day.no-time .time-month-mark { box-shadow: inset 0 0 0 1.5px var(--orange); }
+.time-month-fig { margin-top: auto; padding: 0 2px; font-size: 12px; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.time-month-fig span { white-space: nowrap; }
+.time-month-day .time-day-bar { width: calc(var(--share, 1) * (100% - 4px)); height: 3px; margin: 3px 2px 1px; }
+.time-month-day.other .time-month-fig { color: var(--label-2); }
+@container time-month (max-width: 430px) {
+  .time-month .cal-month-days { grid-auto-rows: minmax(58px, auto); }
+  .time-month .cal-month-head { font-size: 9.5px; }
+  .time-month-day .cal-month-dn { min-width: 20px; height: 20px; padding: 0 3px; font-size: 11.5px; }
+  .time-month-fig { padding: 0 1px; font-size: 10.5px; }
+  .time-month-mark { top: 8px; right: 3px; width: 5px; height: 5px; }
+}
+
+.time-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 2px 16px; color: var(--label-2); font-size: 11.5px; }
+.time-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.time-legend span::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; }
+.time-legend-open::before { background: var(--orange); }
+.time-legend-none::before { box-shadow: inset 0 0 0 1.5px var(--orange); }
+
 /* A finger: rows and buttons the size of one. */
 @media (pointer: coarse) {
   .time-row { padding-top: 7px; padding-bottom: 7px; }
   .time-step, .time-today, .time-add-open, .time-actions .button { min-height: 36px; }
   .time-step { width: 36px; }
+  .time-views button { min-height: 32px; }
+  .time-week-day { min-height: 58px; }
   .time-mark { height: 30px; padding: 0 12px 0 10px; }
   .time-raise { padding: 7px 12px; }
   .time-field input, .time-field select, .time-steps { height: 38px; }
@@ -437,6 +580,8 @@
   .time-steps button:active:not(:disabled),
   .time-actions .button:active:not(:disabled) { transform: none; }
   .time-days { transition: none !important; transform: none !important; }
+  .time-week-day,
+  .time-month .time-month-day { transition: none; }
   .time-switch input, .time-switch input::before { transition: none; }
 }
 @keyframes time-fade { from { opacity: 0; } }
