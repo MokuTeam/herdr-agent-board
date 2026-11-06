@@ -272,6 +272,8 @@ export interface SourceView {
   color: string | null
   lane: string | null
   everyMin: number
+  /** Minutes before its events their reminders come (#335); null: the calendar's own; 0: none. */
+  remindMin: number | null
   /** mcp: the server's address (never an ICS one: that is a secret). */
   url: string | null
   preset: string | null
@@ -307,6 +309,7 @@ export function sourceViews(c: CalendarConfig, db: BoardDb | null = null): Sourc
       color: s.color,
       lane: s.lane,
       everyMin: s.everyMin,
+      remindMin: s.remindMin,
       url: s.kind === 'mcp' ? s.url : null,
       preset: s.preset,
       account: s.account,

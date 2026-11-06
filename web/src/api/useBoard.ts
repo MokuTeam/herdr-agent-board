@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { watchDrawn } from '../models/drawn.ts'
 import { boardConnection } from '../models/lifecycle.ts'
 import { nextRetryMs, remotePage, UNPAIRED } from '../models/remote-page.ts'
-import { listenForReveals, type Reveal } from '../models/reveal.ts'
+import { type CalOpen, listenForCalOpens, listenForReveals, type Reveal } from '../models/reveal.ts'
 import { api, type BoardPayload, isBoardPayload } from './client.ts'
 
 export interface LiveBoard {
@@ -23,6 +23,8 @@ export interface LiveBoard {
    * event), one the board had; `n` tells two asks for the same session apart.
    */
   reveal: Reveal | null
+  /** The last calendar event a reminder's Open on the desktop asked for (#335: the stream's `cal-open`). */
+  calOpen: CalOpen | null
 }
 
 const pageAway = () => document.hidden || navigator.onLine === false
@@ -32,6 +34,7 @@ export function useBoard(): LiveBoard {
   const [connected, setConnected] = useState(false)
   const [dropped, setDropped] = useState(false)
   const [reveal, setReveal] = useState<Reveal | null>(null)
+  const [calOpen, setCalOpen] = useState<CalOpen | null>(null)
   const resumeRef = useRef<() => void>(() => {})
 
   useEffect(() => {
@@ -55,6 +58,7 @@ export function useBoard(): LiveBoard {
         const stream = new EventSource('/api/events')
         // A notification clicked while this page is open (entrypoints/web-open.ts through /api/reveal).
         listenForReveals(stream, () => latest, setReveal)
+        listenForCalOpens(stream, setCalOpen)
         // In a phone's browser: unpaired on the computer, the board says so as it ends the stream.
         if (remotePage()) {
           stream.addEventListener('unpaired', () => dispatchEvent(new Event(UNPAIRED)))
@@ -123,7 +127,7 @@ export function useBoard(): LiveBoard {
   const resume = useCallback(() => resumeRef.current(), [])
   const canMutate = connected && data?.stale === false && data.lastSuccessfulRefreshAt != null
   return useMemo(
-    () => ({ data, connected, dropped, canMutate, canEdit: connected, resume, reveal }),
-    [data, connected, dropped, canMutate, resume, reveal],
+    () => ({ data, connected, dropped, canMutate, canEdit: connected, resume, reveal, calOpen }),
+    [data, connected, dropped, canMutate, resume, reveal, calOpen],
   )
 }

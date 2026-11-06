@@ -214,6 +214,8 @@ export interface CalSource {
   calendars: string[]
   /** mcp, generic: the tool that lists events and its arguments, `{from}` and `{to}` filled in. */
   list: { tool: string; args: Record<string, unknown> } | null
+  /** Minutes before an event its reminder comes (#335); null: the calendar's own; 0: none. */
+  remindMin: number | null
   /** The source takes writes (mcp with a write tool): only for an event the owner asked for. */
   write: boolean
   /** mcp, generic: the tool that writes, when `write`. */
@@ -222,12 +224,22 @@ export interface CalSource {
   problems: CalProblem[]
 }
 
+/** Reminders before events (#335): on unless config.json turns them off. */
+export interface ReminderSettings {
+  on: boolean
+  /** Minutes before an event's start, unless its source says otherwise. */
+  beforeMin: number
+  /** Minutes a Snooze puts a reminder off. */
+  snoozeMin: number
+}
+
 export interface CalendarConfig {
   /** How often a source is fetched unless it says otherwise, in minutes. */
   everyMin: number
   /** The window a sync keeps: so many days back and ahead of today. */
   pastDays: number
   futureDays: number
+  reminders: ReminderSettings
   /** The board's own calendar is always among them, first. */
   sources: CalSource[]
   /** What does not check out outside any one source. */
@@ -245,12 +257,32 @@ const DEFAULT_FUTURE_DAYS = 90
 const MAX_DAYS = 400
 const COLOR = /^#[0-9a-f]{6}$/i
 
-const CALENDAR_KEYS = ['on', 'everyMin', 'pastDays', 'futureDays', 'sources']
+export const DEFAULT_BEFORE_MIN = 10
+export const DEFAULT_SNOOZE_MIN = 5
+const MAX_BEFORE_MIN = 24 * 60
+const MAX_SNOOZE_MIN = 4 * 60
+
+const CALENDAR_KEYS = ['on', 'everyMin', 'pastDays', 'futureDays', 'reminders', 'sources']
+const REMINDER_KEYS = ['on', 'beforeMin', 'snoozeMin']
 const SOURCE_KEYS: Record<SourceKind, readonly string[]> = {
-  board: ['id', 'kind', 'label', 'color', 'lane'],
-  push: ['id', 'kind', 'label', 'color', 'lane', 'account'],
-  ics: ['id', 'kind', 'label', 'color', 'lane', 'everyMin', 'account'],
-  mcp: ['id', 'kind', 'label', 'color', 'lane', 'everyMin', 'url', 'preset', 'account', 'calendars', 'list', 'write'],
+  board: ['id', 'kind', 'label', 'color', 'lane', 'remindMin'],
+  push: ['id', 'kind', 'label', 'color', 'lane', 'account', 'remindMin'],
+  ics: ['id', 'kind', 'label', 'color', 'lane', 'everyMin', 'account', 'remindMin'],
+  mcp: [
+    'id',
+    'kind',
+    'label',
+    'color',
+    'lane',
+    'everyMin',
+    'url',
+    'preset',
+    'account',
+    'calendars',
+    'list',
+    'write',
+    'remindMin',
+  ],
 }
 
 const shown = (v: unknown): string => (typeof v === 'string' ? v : (JSON.stringify(v) ?? String(v)))
@@ -266,6 +298,42 @@ function numberIn(v: unknown, at: string, min: number, max: number, fallback: nu
     return fallback
   }
   return v
+}
+
+/** Whole minutes in [min, max], or the fallback and a problem. */
+const minutesIn = (
+  v: unknown,
+  at: string,
+  min: number,
+  max: number,
+  fallback: number,
+  problems: CalProblem[],
+): number => Math.round(numberIn(v, at, min, max, fallback, problems))
+
+/** config.json's `calendar.reminders`: `false` turns them off, an object sets them; absent, they are on. */
+function remindersOf(v: unknown, problems: CalProblem[]): ReminderSettings {
+  const r: ReminderSettings = { on: true, beforeMin: DEFAULT_BEFORE_MIN, snoozeMin: DEFAULT_SNOOZE_MIN }
+  if (v === undefined || v === true) return r
+  if (v === false) return { ...r, on: false }
+  if (!isObject(v)) {
+    problems.push({ at: 'calendar.reminders', why: 'type', value: shown(v) })
+    return r
+  }
+  unknownKeys(v, REMINDER_KEYS, 'calendar.reminders', problems)
+  if (v.on === false) r.on = false
+  else if (v.on !== undefined && v.on !== true)
+    problems.push({ at: 'calendar.reminders.on', why: 'type', value: shown(v.on) })
+  r.beforeMin = minutesIn(v.beforeMin, 'calendar.reminders.beforeMin', 1, MAX_BEFORE_MIN, DEFAULT_BEFORE_MIN, problems)
+  r.snoozeMin = minutesIn(v.snoozeMin, 'calendar.reminders.snoozeMin', 1, MAX_SNOOZE_MIN, DEFAULT_SNOOZE_MIN, problems)
+  return r
+}
+
+/** A source's `remindMin`: minutes, 0 or `false` for none; absent, the calendar's own (null). */
+function remindMinOf(v: unknown, at: string, problems: CalProblem[]): number | null {
+  if (v === undefined) return null
+  if (v === false) return 0
+  const n = minutesIn(v, at, 0, MAX_BEFORE_MIN, -1, problems)
+  return n < 0 ? null : n
 }
 
 /** A local server's or a provider's address: http on this computer, https anywhere. */
@@ -305,6 +373,7 @@ function sourceOf(raw: unknown, i: number, everyMin: number): CalSource {
     color,
     lane,
     everyMin: numberIn(o.everyMin, `${at}.everyMin`, MIN_EVERY_MIN, MAX_EVERY_MIN, everyMin, problems),
+    remindMin: remindMinOf(o.remindMin, `${at}.remindMin`, problems),
     url: null,
     preset: null,
     account,
@@ -358,6 +427,7 @@ const boardSource = (): CalSource => ({
   color: null,
   lane: null,
   everyMin: DEFAULT_EVERY_MIN,
+  remindMin: null,
   url: null,
   preset: null,
   account: null,
@@ -381,6 +451,7 @@ export function calendarConfig(raw: unknown): CalendarConfig | null {
     everyMin: DEFAULT_EVERY_MIN,
     pastDays: DEFAULT_PAST_DAYS,
     futureDays: DEFAULT_FUTURE_DAYS,
+    reminders: remindersOf(undefined, problems),
     sources: [boardSource()],
     problems,
   }
@@ -394,6 +465,7 @@ export function calendarConfig(raw: unknown): CalendarConfig | null {
   base.futureDays = Math.round(
     numberIn(c.futureDays, 'calendar.futureDays', 1, MAX_DAYS, DEFAULT_FUTURE_DAYS, problems),
   )
+  base.reminders = remindersOf(c.reminders, problems)
   if (c.sources === undefined) return base
   if (!Array.isArray(c.sources)) {
     problems.push({ at: 'calendar.sources', why: 'type', value: shown(c.sources) })
@@ -405,7 +477,13 @@ export function calendarConfig(raw: unknown): CalendarConfig | null {
     if (s.kind === 'board') {
       if (s.id && s.id !== BOARD_SOURCE) s.problems.push({ at: `calendar.sources.${i}.id`, why: 'id', value: s.id })
       const own = base.sources[0] as CalSource
-      base.sources[0] = { ...own, label: s.label === s.id ? own.label : s.label, color: s.color, lane: s.lane }
+      base.sources[0] = {
+        ...own,
+        label: s.label === s.id ? own.label : s.label,
+        color: s.color,
+        lane: s.lane,
+        remindMin: s.remindMin,
+      }
       if (s.problems.length) problems.push(...s.problems)
       return
     }

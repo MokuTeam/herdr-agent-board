@@ -7,6 +7,8 @@
 // board.
 import { useEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
+import type { CalendarFocus } from './components/calendar/CalendarPanel.tsx'
+import { Reminders } from './components/calendar/Reminders.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
 import { QuickLook } from './components/files/QuickLook.tsx'
 import { ForkPop } from './components/fork/ForkPop.tsx'
@@ -54,7 +56,7 @@ import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
   const limitsAnchor = useRef<HTMLButtonElement>(null)
-  const { ui, dispatch, data } = useBoardContext()
+  const { ui, dispatch, data, calOpen } = useBoardContext()
   const panels = usePanelLayout()
   // The categories and schedule panels, each opened at a lane or a session when asked.
   const [categories, setCategories] = useState(false)
@@ -112,8 +114,19 @@ export function App() {
     setCalendarSettings(true)
     setCalendarSettingsMounted(true)
   }
-  // The calendar (#328), while the board has it on: its panel, out of the toolbar's button.
+  // The calendar (#328), while the board has it on: its panel, out of the toolbar's button; an
+  // event a reminder's Open asks for (#335: on the page, or its notification on the desktop).
   const [calendarOpen, setCalendarOpen] = useState(false)
+  const [calendarFocus, setCalendarFocus] = useState<CalendarFocus | null>(null)
+  const showEvent = (e: Omit<CalendarFocus, 'n'>) => {
+    setCalendarOpen(true)
+    setCalendarFocus(f => ({ ...e, n: (f?.n ?? 0) + 1 }))
+  }
+  const asked = calOpen?.n ?? 0
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each ask once, by its count
+  useEffect(() => {
+    if (calOpen) showEvent(calOpen)
+  }, [asked])
   // Time (#233), while the board has it on: its panel, out of the toolbar's button or a lane's day total.
   const [timeOpen, setTimeOpen] = useState(false)
   const [timeClient, setTimeClient] = useState<string | null>(null)
@@ -273,6 +286,7 @@ export function App() {
           : {})}
         calendar={{
           open: calendarOpen,
+          focus: calendarFocus,
           onClose: () => setCalendarOpen(false),
           onSettings: remotePage() ? undefined : openCalendarSettings,
         }}
@@ -330,6 +344,7 @@ export function App() {
       {!fork.hidden && <ForkPop fork={fork} />}
       <ContextMenu engine={menus.menu} />
       <RenameField rename={rename} />
+      {data?.calendar && <Reminders onOpen={showEvent} />}
       <Toasts />
     </>
   )
