@@ -821,6 +821,12 @@ export function notEntered(day: ClientDay, byId: ReadonlyMap<string, Entered>, s
 
 // ------------------------------------------------------------------ days in a row (#241)
 
+/** How many days from `from` to `to`, both in: 0 when `to` is before `from` or either is no date. */
+export function spanLength(from: string, to: string): number {
+  const n = Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000) + 1
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
 /** A client's figures on one day of a week or a month: worked, billed by its rules, billed not entered yet. */
 export interface SpanClient {
   client: string
@@ -845,12 +851,15 @@ export interface SpanDay {
  * the day it started. `entries`: live ones with their marks (entryView); removed ones are left out.
  */
 export function spanDays(c: TimeConfig, from: string, to: string, entries: readonly EntryView[]): SpanDay[] {
+  // by count, not by comparing dates as text: past 9999-12-31 a date is no longer one (#241's review)
+  const n = spanLength(from, to)
   const live = entries.filter(e => !e.deleted)
   const byId = new Map(live.map(e => [e.id, e]))
   const byDate = new Map<string, EntryView[]>()
   for (const e of live) byDate.set(e.date, [...(byDate.get(e.date) ?? []), e])
   const out: SpanDay[] = []
-  for (let date = from; date <= to; date = addDays(date, 1)) {
+  for (let i = 0; i < n; i++) {
+    const date = addDays(from, i)
     const own = byDate.get(date) ?? []
     const clients = [...new Set(own.map(e => e.client))].sort()
     out.push({

@@ -72,7 +72,10 @@ export function dayFigures(day: SpanDay, client: string | null): Figures {
   }
 }
 
-/** The days' figures added up: in all and per client (in the order the clients first come). */
+/** Whether figures have time to show: worked or billed (a day of held entries only has none yet). */
+export const hasTime = (f: Figures): boolean => f.clients.some(c => c.seconds > 0 || c.billedSeconds > 0)
+
+/** The days' figures added up: in all and per client (in lane id order, as the chips). */
 export function spanTotals(days: readonly SpanDay[], client: string | null): Figures {
   const per = new Map<string, SpanClient>()
   for (const d of days)

@@ -160,13 +160,12 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
     [latest],
   )
 
-  // Every opening starts on the day and today, whatever it showed when it closed.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: on opening only
+  // Every opening starts on the day and today, whatever it showed when it closed: the view goes
+  // back to the day as it closes, so an opening asks for no week or month it will not show.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on opening and closing only
   useEffect(() => {
-    if (open) {
-      setDate(today)
-      setView('day')
-    }
+    if (open) setDate(today)
+    else setView('day')
   }, [open])
 
   // Opened on today; a new day of the board's (past midnight) follows while it shows today.
@@ -648,7 +647,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
 
   return (
     <Panel id="time-sheet" kind="time" open={open} onClose={onClose} title={<h2>{t('time.title')}</h2>}>
-      <div className={`sheet-body cats-body time-body time-view-${view}`}>
+      <div className="sheet-body cats-body time-body">
         <div className="segmented time-views" role="tablist" aria-label={t('time.views')} ref={viewsControl}>
           <span className="thumb" ref={viewsThumb} />
           {TIME_VIEWS.map(v => (
@@ -690,7 +689,15 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
             )}
             {!shownSpan && !spanFailed && <p className="sheet-meta time-empty">{t('time.loadingSpan')}</p>}
             {spanFailed && <p className="access-problem">{t('time.loadError', { error: spanFailed })}</p>}
-            {shownSpan && chipsOf(spanClients(shownSpan.days))}
+            {/* a month's clients are its own days', as its figures are, not the grid's edges' */}
+            {shownSpan &&
+              chipsOf(
+                spanClients(
+                  view === 'month'
+                    ? shownSpan.days.filter(d => d.date.slice(0, 7) === date.slice(0, 7))
+                    : shownSpan.days,
+                ),
+              )}
             <div className="time-days" {...swipe.handlers} style={swipe.style}>
               {shownSpan && (
                 <TimeSpanView

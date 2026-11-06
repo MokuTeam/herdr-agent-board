@@ -32,6 +32,8 @@ const TIME = {
     'client-a': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'up' }] },
     // entered into an ERP: what is not there yet is marked
     'client-s': { projects: ['Support'], systems: ['erp'] },
+    // time only in December: on the edge of November's grid, in none of November's figures
+    'client-e': { projects: ['Support'] },
   },
 }
 const conf = timeConfig(TIME)
@@ -164,6 +166,7 @@ async function setup() {
   add('client-a', 'Case 10002 X: Wednesday', '2026-11-04', 10, 20)
   add('client-s', 'Case 20001: Wednesday', '2026-11-04', 14, 90)
   add('client-a', 'Case 10003 X: later', '2026-11-05', 10, 30, ['deferred'])
+  add('client-e', 'Case 30001: December', '2026-12-03', 10, 60)
   db.close()
   const { url } = await serveBoard(box, { language: 'en', time: TIME, backup: { folder } })
   globalThis.fetch = ((u: string | URL | Request, init?: RequestInit) =>
@@ -189,6 +192,15 @@ function view(lang: 'en' | 'ru', client: string | null, width: number) {
         title: 'Client S',
         color: '#FF9500',
         colorName: 'orange',
+        paths: [],
+        configured: true,
+        fallback: false,
+      },
+      {
+        id: 'client-e',
+        title: 'Client E',
+        color: '#34C759',
+        colorName: 'green',
         paths: [],
         configured: true,
         fallback: false,
@@ -250,12 +262,15 @@ test('Day, Week and Month as one switch; it opens on the day, and a week shows i
   expect(weekRow(3)?.classList.contains('no-time')).toBe(true)
   expect(weekRow(3)?.textContent).toContain('No time')
   for (const n of [1, 6, 7]) expect(weekRow(n)?.classList.contains('no-time')).toBe(false)
-  // Thursday has a held entry: time, not billed yet, so no mark
+  // Thursday has a held entry: time, not billed yet, so no mark, and no figure of nothing ("0m")
   expect(weekRow(5)?.classList.contains('no-time')).toBe(false)
+  expect(weekRow(5)?.querySelector('.time-week-figure strong')).toBeNull()
   // Wednesday: both clients, client S not entered yet
   expect(weekRow(4)?.querySelectorAll('.time-week-clients .time-dot')).toHaveLength(2)
   expect(norm(weekRow(4)?.querySelector('.time-flag-open')?.textContent)).toBe('not entered 1h 30m')
   expect(weekRow(6)?.classList.contains('today')).toBe(true)
+  expect(weekRow(6)?.getAttribute('aria-current')).toBe('date')
+  expect(qa('[aria-current="date"]')).toHaveLength(1)
   expect(weekRow(7)?.classList.contains('ahead')).toBe(true)
 })
 
@@ -295,6 +310,13 @@ test('a month as the Calendar’s grid: each day a way into it, its figure, its 
   // the month's own days in its figure, the grid's days of October not
   expect(text('.time-total')).toBe('3h')
   expect(qa('.time-legend span').map(s => s.textContent)).toEqual(['Not entered', 'A weekday with no time'])
+  // December's days on the grid's edge are drawn, quieter, and their client is in neither the
+  // month's figures nor its chips
+  const december = qa('.time-month-day.other').find(b => b.querySelector('.cal-month-dn')?.textContent === '3')
+  expect(norm(december?.querySelector('.time-month-fig')?.textContent).trim()).toBe('1h')
+  expect(qa('.time-span-client').map(c => c.querySelector('.time-dot')?.textContent)).toEqual(['Client A', 'Client S'])
+  expect(qa('.time-chips button').map(b => b.textContent)).toEqual(['All', 'Client A', 'Client S'])
+  expect(monthCell(6)?.getAttribute('aria-current')).toBe('date')
   // the whole month's weekdays before the board's first entry are days with no time
   expect(monthCell(30)?.classList.contains('no-time')).toBe(false)
   await click(monthCell(2))

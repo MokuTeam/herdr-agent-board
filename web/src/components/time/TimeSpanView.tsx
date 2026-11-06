@@ -16,6 +16,7 @@ import {
   dayMarks,
   durationParts,
   type Figures,
+  hasTime,
   spanTotals,
   type TimeSpan,
   tallest,
@@ -61,7 +62,7 @@ export function TimeSpanView({
   const total = spanTotals(counted, client)
   const longest = tallest(shown, client)
   const single = client ? (total.clients[0] ?? null) : total.clients.length === 1 ? total.clients[0] : null
-  const any = counted.some(d => dayFigures(d, client).clients.length > 0)
+  const any = counted.some(d => hasTime(dayFigures(d, client)))
 
   /** What a figure leaves out, said quietly: the time worked where it differs, then the time not entered. */
   const about = (f: Pick<Figures, 'seconds' | 'billedSeconds' | 'notEntered'>) =>
@@ -148,12 +149,13 @@ export function TimeSpanView({
             const f = day ? dayFigures(day, client) : null
             const marks = day ? dayMarks(day, today, client) : { noTime: false, notEntered: 0 }
             const head = dayHead(d, lang)
-            const has = !!f && f.clients.length > 0
+            const has = !!f && hasTime(f)
             return (
               <li key={d}>
                 <button
                   type="button"
                   className={classNames('time-week-day', when(d, today), marks.noTime && 'no-time')}
+                  aria-current={d === today ? 'date' : undefined}
                   aria-label={dayLabel(d)}
                   onClick={() => onDay(d)}
                 >
@@ -208,7 +210,7 @@ export function TimeSpanView({
         </ul>
       ) : (
         <>
-          <div className="cal-month time-month" style={{ '--weeks': dates.length / 7 } as CSSProperties}>
+          <div className="cal-month time-month">
             <div className="cal-month-head" aria-hidden="true">
               {weekdayHeads(weekStart, lang).map(w => (
                 <span key={w}>{w}</span>
@@ -219,7 +221,7 @@ export function TimeSpanView({
                 const day = byDate.get(d)
                 const f = day ? dayFigures(day, client) : null
                 const marks = day ? dayMarks(day, today, client) : { noTime: false, notEntered: 0 }
-                const has = !!f && f.clients.length > 0
+                const has = !!f && hasTime(f)
                 return (
                   <button
                     type="button"
@@ -228,11 +230,11 @@ export function TimeSpanView({
                       'cal-month-day',
                       'time-month-day',
                       d.slice(0, 7) !== date.slice(0, 7) && 'other',
-                      d === today && 'today',
                       when(d, today),
                       marks.noTime && 'no-time',
                       marks.notEntered > 0 && 'open',
                     )}
+                    aria-current={d === today ? 'date' : undefined}
                     aria-label={dayLabel(d)}
                     onClick={() => onDay(d)}
                   >

@@ -8,6 +8,7 @@ import {
   type EntryPost,
   entryView,
   spanDays,
+  spanLength,
   type TimeConfig,
   type TimeEntry,
   timeConfig,
@@ -72,6 +73,20 @@ test('every day of the span is there, in order, with no time where there is none
     '2026-11-08',
   ])
   expect(days.every(d => d.entries === 0 && d.clients.length === 0)).toBe(true)
+})
+
+test('the days are counted, not compared as text: the last days a date can have end the span (a review of #241)', () => {
+  expect(spanLength('2026-11-01', '2026-11-30')).toBe(30)
+  expect(spanLength('2026-11-02', '2026-11-01')).toBe(0)
+  expect(spanLength('nope', '2026-11-01')).toBe(0)
+  // past 9999-12-31 the next date is no date ("+010000-01"), which sorts before it as text
+  expect(spanDays(conf, '9999-12-30', '9999-12-31', []).map(d => d.date)).toEqual(['9999-12-30', '9999-12-31'])
+  // a month across a change of clock (DST in New York on 1 November): each day once
+  expect(spanDays(conf, '2026-10-31', '2026-11-02', []).map(d => d.date)).toEqual([
+    '2026-10-31',
+    '2026-11-01',
+    '2026-11-02',
+  ])
 })
 
 test('each client’s day billed by its rules; a week adds its billed days up and never rounds the sum again', () => {

@@ -2361,6 +2361,18 @@ the held ones apart, and the totals. On a phone
 (the remote page) it is the full-height sheet, and a sideways swipe goes to the day before or
 after. A day's figures show only under that day's name, whatever order the answers come in.
 
+**A week and a month.** Day, Week and Month at the top of the panel switch what it shows; it opens
+on Day each time. A week has the figure to bill for its days (the time worked and the time not yet
+entered in the clients' systems under it), each client's total, then its seven days, each with its
+billed figure, a bar in its clients' colours and each client's figure. A month has the same figures
+for its own days, then the month as the Calendar draws it, each day with its figure. A day with
+billed time not entered yet has an orange dot; a weekday gone by with no entry at all has a ring
+("No time"); today, weekends and days ahead never do. A tap on a day opens it; the arrows, Today
+and a swipe go by a week or a month. Each client's day is billed by its rules as on its own, and a
+week or a month adds the billed days up (it never rounds the sum again). The page reads the days
+with `GET /api/time?from=<date>&to=<date>` (42 days at most): each day with each client's worked,
+billed and not entered seconds.
+
 **Changing them on the board.** A tap on an entry opens it in place: description, project (the
 client's list), start and stop on this browser's clock with the duration between them and -15 and
 +15 steps, the work date (a new one moves it), tags. Only what changed is sent: a time left alone

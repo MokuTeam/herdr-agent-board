@@ -52,6 +52,7 @@ import {
   problemsText,
   type SpanDay,
   spanDays,
+  spanLength,
   type TimeConfig,
   type TimeEntry,
   type TimeSystem,
@@ -225,10 +226,6 @@ export function timeSpan(cfg: Pick<Config, 'time'>, from: string, to: string): T
     days: spanDays(conf, from, to, views),
   }
 }
-
-/** Days from `from` to `to`, both in; 0 when `to` is before `from`. */
-const spanLength = (from: string, to: string): number =>
-  to < from ? 0 : Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000) + 1
 
 let readFailed = ''
 

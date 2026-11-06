@@ -123,6 +123,11 @@ test('a week or a month at once (#241): each day with each client’s worked, bi
   ])
     assert.equal((await fetch(`${url}/api/time?${q}`)).status, 400, q)
   assert.equal((await fetch(`${url}/api/time?from=${addDays(day, -41)}&to=${day}`)).status, 200)
+  // the last day a date can have answers at once, as one day (the days are counted, not compared as text)
+  const last = await json(
+    await fetch(`${url}/api/time?from=9999-12-31&to=9999-12-31`, { signal: AbortSignal.timeout(5000) }),
+  )
+  assert.deepEqual(last.days, [{ date: '9999-12-31', entries: 0, clients: [] }])
 })
 
 test('a time read that fails does not stop the board: the line is empty, said once; each client’s today in its own zone; problems flagged', () => {
