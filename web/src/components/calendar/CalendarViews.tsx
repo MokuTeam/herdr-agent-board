@@ -258,6 +258,7 @@ function EventBlock({
         clippedTop && 'cut-top',
       )}
       style={{ ...style, '--ev': marks.color(e) } as CSSProperties}
+      data-ev={`${e.source}/${e.id}`}
       title={`${e.title}\n${time} · ${label}`}
       aria-label={`${e.title}, ${time}, ${label}`}
       onClick={(ev: MouseEvent<HTMLDivElement>) => open(ev.currentTarget)}
@@ -373,6 +374,7 @@ export function MonthGrid({
                   key={`${e.source}/${e.id}`}
                   className={classNames('cal-month-ev', isBar(e) ? 'cal-whole' : 'cal-timed', `tone-${eventTone(e)}`)}
                   style={{ '--ev': marks.color(e) } as CSSProperties}
+                  data-ev={`${e.source}/${e.id}`}
                   title={`${e.title} · ${marks.label(e)}`}
                   onClick={ev => onPick(e, ev.currentTarget)}
                 >
@@ -451,6 +453,7 @@ export function Agenda({
                       role="button"
                       tabIndex={0}
                       className="cal-row-main"
+                      data-ev={`${e.source}/${e.id}`}
                       onClick={ev => open(ev.currentTarget)}
                       onKeyDown={openKeys(() => open(document.activeElement as HTMLElement))}
                     >

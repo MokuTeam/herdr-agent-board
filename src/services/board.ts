@@ -11,6 +11,7 @@ import { paneTerminals, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import type { LinksIndex } from '../adapters/links.ts'
 import { callAgentsGate, taskBoard } from '../adapters/mokupilot-call.ts'
+import { dayGate } from '../adapters/mokupilot-day.ts'
 import { contextDir } from '../adapters/paths.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
 import { attentionOf, busy, columnOf, isAgentStatus, PINS } from '../core/board.ts'
@@ -35,6 +36,7 @@ const numberOf = (value: unknown): number | undefined => (typeof value === 'numb
 
 /** MokuPilot's call agents (#326), read only where it is not turned off and has run here (looked up once a minute). */
 const callAgentsHere = callAgentsGate()
+const daySessionHere = dayGate()
 
 /** The panes its card says wake closed as it went to sleep (#204, services/wake/follow.ts), when it has any. */
 /** A card's tasks (#202) for its item, when it has any. */
@@ -266,6 +268,7 @@ type Base = Pick<
   | 'since'
   | 'pipe'
   | 'fromFile'
+  | 'day'
 >
 
 export interface CollectOptions {
@@ -316,12 +319,15 @@ export async function collect(
     }
     const saved = cards.get(base.key) ?? {}
     const pin = pinOf(base.key, base.status, saved)
+    const hit = base.session ? live.get(base.session) : undefined
+    // A MokuPilot day session (#331) has no hook to report its profile either: the folder whose
+    // registry runs it.
     const card: Card = {
       ...saved,
       pin,
       ...(call && !saved.profileDir && { profileDir: call.configDir || join(homedir(), '.claude') }),
+      ...(base.day && !saved.profileDir && hit && { profileDir: hit.home.root }),
     }
-    const hit = base.session ? live.get(base.session) : undefined
     // A pi session's records are its session file, its key: none of Claude's folders has them.
     const pi = isPiItem(base) ? (deps.pi.transcriptInfo(base.session) ?? {}) : null
     const codex = isCodexItem(base) ? (deps.codex.transcriptInfo(base.session) ?? {}) : null
@@ -396,9 +402,22 @@ export async function collect(
     })
   }
 
+  // MokuPilot's day session (#331), while its Claude process runs. The pane MokuPilot runs in is
+  // where herdr sees it; typing there reaches MokuPilot's console, not the session, so that pane's
+  // card is the day's, with no pane: its messages go to the day's inbox.
+  const day = daySessionHere(cfg)
+  const dayReg = day ? live.get(day.session)?.session : undefined
+  const dayPane = (p: (typeof snap.panes)[number], session: string | null): boolean =>
+    !!day && !!dayReg && (session === day.session || (!session && !!day.pane && p.pane_id === day.pane))
+  let dayWorkspace = ''
+
   for (const p of snap.panes) {
     if (!p.agent) continue
     const session = p.agent_session?.value ?? null
+    if (dayPane(p, session)) {
+      dayWorkspace ||= labels.get(p.workspace_id ?? '') ?? ''
+      continue
+    }
     const key = session ?? `pane-${p.pane_id}`
     if (seen.has(key)) continue
     seen.add(key)
@@ -419,6 +438,27 @@ export async function collect(
       alive: !!reg,
       since: numberOf(reg?.startedAt) ?? null,
       pipe: typeof reg?.messagingSocketPath === 'string' ? reg.messagingSocketPath : '',
+    })
+  }
+
+  if (day && dayReg && !seen.has(day.session)) {
+    seen.add(day.session)
+    add({
+      key: day.session,
+      session: day.session,
+      pane: null,
+      workspace: dayWorkspace,
+      agent: 'claude',
+      name: dayReg.name || day.session.slice(0, 8),
+      cwd: dayReg.cwd ?? '',
+      status: dayReg.status === 'busy' ? 'working' : 'idle',
+      sleeping: false,
+      focused: false,
+      activity: numberOf(dayReg.statusUpdatedAt) ?? 0,
+      alive: true,
+      since: numberOf(dayReg.startedAt) ?? null,
+      pipe: typeof dayReg.messagingSocketPath === 'string' ? dayReg.messagingSocketPath : '',
+      day: true,
     })
   }
 

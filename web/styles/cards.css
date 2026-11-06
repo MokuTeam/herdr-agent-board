@@ -86,3 +86,15 @@
 .card-top > .name.split::before { white-space: pre; }
 .name-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .name-tail { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; }
+
+/* Stop on a working card (#330): a glyph like its neighbours. Armed by a first press it widens into
+   "Stop?" in red, and stays in sight until it is pressed again or let go (StopButton.tsx). */
+.card-actions .stop-turn svg { width: 14px; height: 14px; }
+.card-actions .stop-turn:hover { background: color-mix(in srgb, var(--red) 16%, var(--fill)); color: var(--red); }
+.card-actions .stop-turn.armed { display: inline-flex; align-items: center; gap: 4px; width: auto; padding: 0 9px 0 7px; background: color-mix(in srgb, var(--red) 18%, var(--fill)); color: var(--red); font: 600 12px/1 var(--font); }
+.card-actions .stop-word { transform-origin: right center; animation: stop-word-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes stop-word-in { from { opacity: 0; transform: translateX(4px); } }
+.card-actions:has(.stop-turn.armed) { opacity: 1; transform: none; pointer-events: auto; }
+@media (prefers-reduced-motion: reduce) {
+  .card-actions .stop-word { animation: none; }
+}

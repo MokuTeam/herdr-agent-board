@@ -9,10 +9,12 @@ import { ago, plain } from './card.ts'
 import { liveCount } from './helper-model.ts'
 
 /**
- * A MokuPilot call agent with no pane (#326): it runs in MokuPilot, so nothing of herdr's or of a
- * terminal goes with its card (focus, sleep, restart, a fork or a call of it, archive, a terminal).
+ * A MokuPilot call agent with no pane (#326), or a day session (#331): it runs in MokuPilot, so
+ * nothing of herdr's or of a terminal goes with its card (focus, sleep, restart, a fork or a call
+ * of it, archive, a terminal). A day session's messages go to its day's inbox.
  */
-export const inMokupilot = (it: { call?: unknown; pane?: string | null | undefined }): boolean => !!it.call && !it.pane
+export const inMokupilot = (it: { call?: unknown; day?: unknown; pane?: string | null | undefined }): boolean =>
+  (!!it.call || !!it.day) && !it.pane
 
 /** Doing lines a card shows at most; the last one says how many more there are. */
 export const CALL_DOING_ROWS = 2

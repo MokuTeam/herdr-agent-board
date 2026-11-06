@@ -13,6 +13,7 @@ import {
   useRef,
 } from 'react'
 import { foldModeOf } from '../../../src/core/fold-mode.ts'
+import { canStop } from '../../../src/core/turn-keys.ts'
 import type { Item, LaunchView, ToolCall } from '../../../src/core/types.ts'
 import { useFold } from '../hooks/useFold.ts'
 import { useHeadFit } from '../hooks/useHeadFit.ts'
@@ -55,6 +56,7 @@ import {
   WriteGlyph,
 } from './icons.tsx'
 import { ProfileTag } from './ProfileTag.tsx'
+import { StopButton } from './StopButton.tsx'
 
 /** What a session on its way shows on the board (hooks/useLaunch.ts). */
 export interface LaunchSlots {
@@ -452,6 +454,8 @@ function CardActions({ item }: { item: Item }) {
   const away = inMokupilot(item)
   return (
     <div className="card-actions">
+      {/* Its turn interrupted with its program's own key, where the board knows it (#330). */}
+      {canStop(item) && !away && <StopButton item={item} />}
       {dismissable(item) && (
         <button
           type="button"
@@ -467,15 +471,16 @@ function CardActions({ item }: { item: Item }) {
           <MoonGlyph />
         </button>
       )}
+      {/* A day session (#331) takes messages: MokuPilot types its day's inbox into it. */}
+      {(!away || item.day) && (
+        <button type="button" data-act="write" title={t('card.write')}>
+          <WriteGlyph />
+        </button>
+      )}
       {!away && (
-        <>
-          <button type="button" data-act="write" title={t('card.write')}>
-            <WriteGlyph />
-          </button>
-          <button type="button" data-act="focus" title={t('card.focus')} disabled={!canMutate}>
-            <FocusGlyph />
-          </button>
-        </>
+        <button type="button" data-act="focus" title={t('card.focus')} disabled={!canMutate}>
+          <FocusGlyph />
+        </button>
       )}
     </div>
   )

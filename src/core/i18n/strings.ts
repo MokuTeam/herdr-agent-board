@@ -24,6 +24,7 @@ import { SETUP_STRINGS } from './setup-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 import { TIME_STRINGS } from './time-strings.ts'
 import { TODO_STRINGS } from './todo-strings.ts'
+import { TURN_STRINGS } from './turn-strings.ts'
 import { WAKE_STRINGS } from './wake-strings.ts'
 
 export type Entry = string | string[]
@@ -211,6 +212,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
       'background tasks (a command, a Monitor) kept running in it for 10 minutes; stop them or let them finish, then ask for the restart again',
     'err.restart.herdr': 'herdr did not answer ({why})',
     'err.noPane': 'The session has no pane',
+    'err.dayOver': '{name}: its MokuPilot day is over',
     'err.focus': 'Could not go to {name}: {why}',
     'err.emptyMessage': 'Empty message',
     'err.blocked': '{name} waits for a decision in the terminal',
@@ -850,6 +852,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
       'в ней 10 минут шли фоновые задачи (команда, Monitor); останови их или дождись конца, потом попроси перезапуск снова',
     'err.restart.herdr': 'herdr не ответил ({why})',
     'err.noPane': 'У сессии нет панели',
+    'err.dayOver': '{name}: день в MokuPilot уже закончился',
     'err.focus': 'Не перешёл в {name}: {why}',
     'err.emptyMessage': 'Пустое сообщение',
     'err.blocked': '{name} ждёт решения в терминале',
@@ -1335,6 +1338,8 @@ for (const code of Object.keys(REMOTE_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(ARCHIVE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ARCHIVE_STRINGS[code])
 // And a fork of a session.
 for (const code of Object.keys(FORK_STRINGS) as Lang[]) Object.assign(STRINGS[code], FORK_STRINGS[code])
+// And Stop and Send now on a working session (#330).
+for (const code of Object.keys(TURN_STRINGS) as Lang[]) Object.assign(STRINGS[code], TURN_STRINGS[code])
 // And a side question to a session.
 for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ASIDE_STRINGS[code])
 // And the user's presence (#172).

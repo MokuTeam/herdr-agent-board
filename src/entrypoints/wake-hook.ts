@@ -18,6 +18,7 @@
 // else amiss: silent, and the tool runs as it would.
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { configFile, readConfigFile } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { loadProfiles } from '../adapters/profiles.ts'
@@ -158,6 +159,16 @@ function othersContext(sleeping: Entry[], running: Entry[] | null, others: Profi
   )
 }
 
+/** The Claude session id of MokuPilot's day running now (#331), null for none. */
+async function daySession(): Promise<string | null> {
+  try {
+    const { runningDay } = await import('../adapters/mokupilot-day.ts')
+    return runningDay()?.session ?? null
+  } catch {
+    return null
+  }
+}
+
 const deny = (reason: string): void =>
   console.log(
     JSON.stringify({
@@ -180,7 +191,8 @@ interface Fit {
  * free, signed with the caller's Claude name and a ref to answer to) and the native call is denied
  * saying so; two or more are refused, listed; none: left to Claude Code. The caller's own running
  * sessions are Claude Code's, as its sleepers were the wake's. A running one counts only when herdr
- * runs it (GET /awake), so the board can type into it; a message that is no text is Claude Code's,
+ * runs it (GET /awake), so the board can type into it, or when it is MokuPilot's day session (#331),
+ * whose day's inbox the board writes to; a message that is no text is Claude Code's,
  * and one longer than a reminder carries is refused, not cut.
  */
 async function sendElsewhere(
@@ -202,13 +214,19 @@ async function sendElsewhere(
   if (own.some(s => s.name?.toLowerCase() === to && byRef(s.sessionId))) return
   const fits = new Map<string, Fit>()
   let awake: Entry[] | null | undefined
+  let day: string | null | undefined
   for (const profile of set.others) {
     for (const s of live(profile.dir)) {
       if (s.name?.toLowerCase() !== to || !byRef(s.sessionId) || fits.has(s.sessionId)) continue
       // Only a session herdr runs gets typed into: in /awake, in its profile, by its name.
       awake ??= entries(await api(port, '/awake', null, 3000).catch(() => null))
       const panes = inProfile(awake ?? [], profile).filter(a => a.name.toLowerCase() === to)
-      if (!panes.length) continue
+      if (!panes.length) {
+        // Or MokuPilot's day session (#331), which herdr does not name: the board puts it in its inbox.
+        day ??= raw?.mokupilot === false || !existsSync(join(homedir(), '.meeting-copilot')) ? null : await daySession()
+        if (day === s.sessionId) fits.set(s.sessionId, { name: s.name, profile, ...(s.cwd && { cwd: s.cwd }) })
+        continue
+      }
       const pane = panes.length === 1 && typeof panes[0]?.pane === 'string' ? panes[0].pane : ''
       fits.set(s.sessionId, { name: s.name, profile, ...(pane && { pane }), ...(s.cwd && { cwd: s.cwd }) })
     }

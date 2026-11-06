@@ -9,16 +9,53 @@
 // GET and POST /api/calendar-settings are Settings → Calendar (services/calendar-settings.ts): on
 // this computer's board only (core/remote.ts localOnly), as an ICS address is typed there. POST
 // { op: test, … } tries a source without adding it.
+//
+// POST /api/calendar-reminders { id, act: snooze | start | dismiss | join | open [, desktop] } is a
+// reminder's button (#335, services/calendar-reminders.ts), from the page or, with `desktop`, from
+// its notification (entrypoints/web-open.ts --reminder): { ok, event, join } or 404 for a reminder
+// gone, 409 while reminders are off. Open from a notification tells the pages to show the event,
+// those connected now and those that connect within REVEAL_MS (a window being raised).
 import { addBoardEvent, CalError, editBoardEvent, removeBoardEvent } from '../../adapters/calendar-store.ts'
 import { DbError } from '../../adapters/db.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { isInstant } from '../../core/calendar.ts'
+import { REMINDER_ACTS, REMINDER_ID, type ReminderAct } from '../../core/calendar-reminders.ts'
 import { t } from '../../core/lang.ts'
 import { isDate, localZone } from '../../core/time.ts'
 import type { Config } from '../../core/types.ts'
 import { type CalendarSync, calendarOf, readEvents, sourceViews, withCalendarDb } from '../../services/calendar.ts'
+import type { CalendarReminders } from '../../services/calendar-reminders.ts'
 import { calendarSettingsView, editCalendarSettings, testSource } from '../../services/calendar-settings.ts'
 import { json, type Route } from '../http.ts'
+import { type Broadcaster, namedEvent } from '../sse.ts'
+import { REVEAL_MS } from './reveal.ts'
+
+/** An event a notification's Open asked the pages to show. */
+export interface ShownEvent {
+  source: string
+  id: string
+  start: string
+}
+
+export interface EventReveal {
+  asked(e: ShownEvent): void
+  /** What a page that connects now is told: the event asked for within REVEAL_MS, once. */
+  greet(): string
+}
+
+export function eventReveal(now: () => number = Date.now): EventReveal {
+  let asked: { e: ShownEvent; at: number } | null = null
+  return {
+    asked(e) {
+      asked = { e, at: now() }
+    },
+    greet() {
+      const a = asked
+      asked = null
+      return a && now() - a.at < REVEAL_MS ? namedEvent('cal-open', a.e) : ''
+    },
+  }
+}
 
 /** The widest window one question may ask: a month's grid with a week each side. */
 const MAX_WINDOW_MS = 62 * 86_400_000
@@ -42,8 +79,37 @@ const text = (v: unknown): string | null | undefined => (v === null ? null : typ
 
 const refusal = (err: CalError) => ({ ok: false, error: err.message, code: err.code })
 
-export function calendarRoutes(cfg: Config, sync: CalendarSync): Route[] {
+interface ReminderRoutes {
+  reminders: CalendarReminders
+  events: Pick<Broadcaster, 'event'>
+  shown: Pick<EventReveal, 'asked'>
+}
+
+export function calendarRoutes(cfg: Config, sync: CalendarSync, rem?: ReminderRoutes): Route[] {
   return [
+    {
+      method: 'POST',
+      path: '/api/calendar-reminders',
+      guard: ['board-header', 'origin'],
+      async handle(_req, ctx) {
+        if (!rem) return json(409, { ok: false, error: t('cal.err.off') })
+        const body = await ctx.body()
+        const id = String(body.id ?? '')
+        const act = body.act as ReminderAct | 'open'
+        if (!REMINDER_ID.test(id) || !(act === 'open' || REMINDER_ACTS.includes(act)))
+          return json(400, { ok: false, error: t('cal.err.usage') })
+        const done = rem.reminders.act(id, act, { desktop: body.desktop === true })
+        if (!done.ok)
+          return done.code === 'off'
+            ? json(409, { ok: false, error: t('cal.rem.err.off') })
+            : json(404, { ok: false, error: t('cal.rem.err.gone') })
+        if (act === 'open' && body.desktop === true) {
+          rem.shown.asked(done.event)
+          rem.events.event('cal-open', done.event)
+        }
+        return json(200, done)
+      },
+    },
     {
       method: 'GET',
       path: '/api/calendar',
@@ -132,6 +198,7 @@ export function calendarRoutes(cfg: Config, sync: CalendarSync): Route[] {
             }
             throw new CalError('cal.err.usage')
           })
+          rem?.reminders.changed()
           return json(200, { ok: true, event })
         } catch (err) {
           if (err instanceof CalError) {
@@ -163,6 +230,7 @@ export function calendarRoutes(cfg: Config, sync: CalendarSync): Route[] {
           const { readConfigFile } = await import('../../adapters/config-file.ts')
           cfg.calendar = readConfigFile()?.calendar
           sync.configChanged()
+          rem?.reminders.configChanged()
           if (isRecord(body) && (body.op === 'add' || body.op === 'edit') && r.id) void sync.syncNow(r.id)
         }
         const status = r.ok ? 200 : r.code === 'configBusy' ? 409 : 400

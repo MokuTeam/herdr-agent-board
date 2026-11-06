@@ -10,7 +10,7 @@ import { dbFile, openDb } from '../../src/adapters/db.ts'
 import { addEntry } from '../../src/adapters/time-store.ts'
 import { freshTarget } from '../../src/core/backup.ts'
 import { makeKey } from '../../src/core/backup-file.ts'
-import { dateIn, timeConfig } from '../../src/core/time.ts'
+import { addDays, dateIn, instantIn, type SpanDay, timeConfig } from '../../src/core/time.ts'
 import { timeToday } from '../../src/server/routes/time.ts'
 import { serveBoard } from '../support/board-server.ts'
 import { isolatedHome } from '../support/env.ts'
@@ -72,6 +72,62 @@ test('time on: the day by client as billed, and today’s billed time by lane in
   )
   assert.equal((day.entries as unknown[]).length, 1)
   assert.equal((await fetch(`${url}/api/time?date=nope`)).status, 400)
+})
+
+test('a week or a month at once (#241): each day with each client’s worked, billed and not entered; 42 days at most', async () => {
+  const box = await sandbox()
+  const conf = timeConfig(TIME)
+  assert.ok(conf)
+  const db = openDb({ path: join(box.dir, 'state', 'herdr', 'plugins', 'agent-board', 'board.db') })
+  assert.ok(db)
+  const day = dateIn(Date.now() - 3 * 86_400_000, conf.zone)
+  const add = (client: string, description: string, start: number, minutes: number) =>
+    addEntry(
+      db,
+      conf,
+      { client, project: 'Support', description, start, stop: start + minutes * 60_000, startGiven: true },
+      { key: 's1', name: 'One' },
+    )
+  // 23:30 to 01:00 in New York: whole on the day it started
+  add('client-a', 'Case 10001 X: late', instantIn(day, [23, 30, 0], conf.zone), 90)
+  // 40 minutes to the nearest 30
+  add('client-n', 'Case 10002 X: morning', instantIn(day, [10, 0, 0], conf.zone), 40)
+  db.close()
+  const { url } = await serveBoard(box, { language: 'en', time: TIME })
+  const span = await json(await fetch(`${url}/api/time?from=${addDays(day, -1)}&to=${addDays(day, 1)}`))
+  assert.equal(span.from, addDays(day, -1))
+  assert.equal(span.zone, 'America/New_York')
+  assert.equal('entries' in span, false)
+  const days = span.days as SpanDay[]
+  assert.deepEqual(
+    days.map(d => [d.date, d.entries]),
+    [
+      [addDays(day, -1), 0],
+      [day, 2],
+      [addDays(day, 1), 0],
+    ],
+  )
+  // client-a is entered in an ERP and a tracker, in neither yet; client-n nowhere
+  assert.deepEqual(days[1]?.clients, [
+    { client: 'client-a', seconds: 5400, billedSeconds: 5400, notEntered: 5400 },
+    { client: 'client-n', seconds: 2400, billedSeconds: 1800, notEntered: 0 },
+  ])
+  // six weeks at most, in order, both dates real
+  const far = addDays(day, -42)
+  for (const q of [
+    `from=${far}&to=${day}`,
+    `from=${day}&to=${addDays(day, -1)}`,
+    `from=${day}`,
+    `to=${day}`,
+    `from=nope&to=${day}`,
+  ])
+    assert.equal((await fetch(`${url}/api/time?${q}`)).status, 400, q)
+  assert.equal((await fetch(`${url}/api/time?from=${addDays(day, -41)}&to=${day}`)).status, 200)
+  // the last day a date can have answers at once, as one day (the days are counted, not compared as text)
+  const last = await json(
+    await fetch(`${url}/api/time?from=9999-12-31&to=9999-12-31`, { signal: AbortSignal.timeout(5000) }),
+  )
+  assert.deepEqual(last.days, [{ date: '9999-12-31', entries: 0, clients: [] }])
 })
 
 test('a time read that fails does not stop the board: the line is empty, said once; each client’s today in its own zone; problems flagged', () => {

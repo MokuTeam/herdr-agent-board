@@ -180,4 +180,28 @@ export interface CalendarPayload {
     color: string | null
     lane: string | null
   } | null
+  /** Reminders on show (#335): only while one is; snoozed or dismissed ones are not. */
+  reminders?: RemindersPayload
+}
+
+/** The calendar's reminders on show (#335), for the page's banner. */
+export interface RemindersPayload {
+  /** Minutes a Snooze puts one off. */
+  snoozeMin: number
+  items: {
+    /** The reminder's id, for its buttons (POST /api/calendar-reminders). */
+    id: string
+    source: string
+    /** The event's id in its source. */
+    event: string
+    title: string
+    start: string
+    end: string
+    join?: string
+    /** The source as the page names it (with its kind and lane). */
+    label: string
+    kind: string
+    color: string | null
+    lane: string | null
+  }[]
 }
