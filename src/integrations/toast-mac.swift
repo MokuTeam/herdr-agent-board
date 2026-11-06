@@ -46,13 +46,15 @@ if argv.first == "--frontmost" {
     exit(0)
 }
 
-let title = take("--title") ?? "Claude"
+let title = take("--title") ?? "Agent Board"
 let subtitle = take("--subtitle") ?? ""
 let body = take("--body") ?? ""
 let givenId = take("--id")
 let wait = Double(take("--wait") ?? "600") ?? 600
 let clickExe = take("--click-exe")
 let clickArgs = takeAll("--click-arg")
+let fallbackExe = take("--fallback-exe")
+let fallbackArgs = takeAll("--fallback-arg")
 
 /// Runs the click's program without a shell; the process does not wait for it.
 func runClick(_ exe: String, _ args: [String]) {
@@ -128,7 +130,8 @@ center.requestAuthorization(options: [.alert, .sound]) { granted, error in
 // The first time, this is where the system asks the user; the prompt is answered in the run loop.
 pump(until: { answered }, seconds: 120)
 if !authorized {
-    note("not allowed: System Settings > Notifications > \(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Claude")")
+    note("not allowed: System Settings > Notifications > \(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Agent Board")")
+    if let fallbackExe { runClick(fallbackExe, fallbackArgs) }
     exit(2)
 }
 
