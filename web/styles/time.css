@@ -10,7 +10,7 @@
    phone the list follows a sideways swipe (pan-y leaves the vertical scroll to the browser).
    Every rule here selects by class: the other sheets are upstream's, rule for rule. */
 
-.time-body { display: flex; flex-direction: column; max-width: 760px; }
+.time-body { display: flex; flex-direction: column; }
 /* Nothing in the column gives its height up to a long day: the chips' strip, a scroller, kept none. */
 .time-body > * { flex: none; }
 
@@ -613,7 +613,7 @@
    as the Time panel's lines are (a surface, a hairline between rows); a client a row with its
    lane's color, a line of what it has and its switch, opened in place, its chevron turning;
    a client off quieter; links for the small changes, buttons for the ones that add. */
-.time-set-body { display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
+.time-set-body { display: flex; flex-direction: column; gap: 8px; }
 .time-set-body > * { flex: none; }
 .time-set-group { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-card); list-style: none; }
 .time-set-group > .time-switch + .time-set-zone { margin-top: 12px; }
