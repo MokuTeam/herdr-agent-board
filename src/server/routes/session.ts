@@ -18,6 +18,7 @@ import { checkName } from '../../core/launch/names.ts'
 import type { MessageGate } from '../../core/message-gate.ts'
 import type { Viewer } from '../../core/mokupilot-mode.ts'
 import { isPiItem } from '../../core/pi.ts'
+import type { QueuedPrompt, QueueWindow } from '../../core/queue.ts'
 import type { Item, Pin } from '../../core/types.ts'
 import {
   checkWake,
@@ -39,6 +40,7 @@ import type { Launches } from '../../services/launch/launches.ts'
 import { renameSession, renameWorkspace } from '../../services/launch/rename.ts'
 import { startCall } from '../../services/mokupilot.ts'
 import { ownAddresses } from '../../services/tunnel.ts'
+import { sendNow, stopTurn, turnIO } from '../../services/turn.ts'
 import { type Body, type Handler, json, type Route } from '../http.ts'
 import { helperRoute, withSessions } from './helpers.ts'
 
@@ -62,24 +64,38 @@ const changed = (item: Item): Result => ({ ok: false, error: t('err.sessionChang
 const PIN_NAMES: ReadonlySet<string> = PINS
 const isPin = (column: string): column is Pin => PIN_NAMES.has(column)
 
-async function detail(app: SessionApp, item: Item) {
-  const { deps } = app
-  const { transcript, claudeRoot, alive, since, pipe, ...shown } = item
-  // queued: the user's messages Claude has not taken in yet. Only a running Claude has a queue,
-  // and once it said its turn was over (its registry: idle, or a background shell) it had none.
-  // The registry is the one of the session's own profile.
-  const home = deps.homes.forDir(claudeRoot ?? deps.claude.root)
-  const reg = alive && item.session ? home.liveSessions().get(item.session) : null
+/**
+ * The window a Claude session's queue is read in (core/queue.ts): only a running Claude has a
+ * queue, and once it said its turn was over (its registry: idle, or a background shell) it had
+ * none. The registry is the one of the session's own profile.
+ */
+function queueWindow(deps: Deps, item: Item): QueueWindow {
+  const home = deps.homes.forDir(item.claudeRoot ?? deps.claude.root)
+  const reg = item.alive && item.session ? home.liveSessions().get(item.session) : null
   const idleSince =
     reg && ['idle', 'shell'].includes(reg.status ?? '') && typeof reg.statusUpdatedAt === 'number'
       ? reg.statusUpdatedAt
       : 0
+  return { since: item.since ?? 0, idleSince }
+}
+
+/** The user's messages still in a running Claude session's queue, as its detail shows them (Send now, #330). */
+function queueOf(deps: Deps, item: Item): QueuedPrompt[] {
+  if (!item.alive || isCodexItem(item) || isPiItem(item)) return []
+  // As far back as the detail reads it, so both see the same queue.
+  return deps.claude.sessionThread(item.transcript ?? '', 60, queueWindow(deps, item)).queued
+}
+
+async function detail(app: SessionApp, item: Item) {
+  const { deps } = app
+  const { transcript, claudeRoot, alive, since, pipe, ...shown } = item
+  // queued: the user's messages Claude has not taken in yet (queueWindow).
   // A pi session's turns are in its session file, its key.
   const thread = isCodexItem(item)
     ? deps.codex.sessionThread(item.session ?? '', 60)
     : isPiItem(item)
       ? deps.pi.sessionThread(item.session ?? '', 60)
-      : deps.claude.sessionThread(transcript ?? '', 60, { since: since ?? 0, idleSince })
+      : deps.claude.sessionThread(transcript ?? '', 60, queueWindow(deps, item))
   const conversation = withSessions(app.items(), thread.conversation)
   // helpers: every subagent, fork, workflow agent and teammate, newest first (adapters/helpers.ts).
   const own = helpersOf(transcript, { alive: !!alive, since: since ?? null })
@@ -241,7 +257,16 @@ async function restart(deps: SessionApp['deps'], item: Item): Promise<Result> {
 }
 
 /** What the board does not do to a MokuPilot call agent with no pane (#326) or day session (#331). */
-const IN_MOKUPILOT_REFUSED: ReadonlySet<string> = new Set(['focus', 'sleep', 'restart', 'archive', 'mokupilot', 'fork'])
+const IN_MOKUPILOT_REFUSED: ReadonlySet<string> = new Set([
+  'focus',
+  'sleep',
+  'restart',
+  'archive',
+  'mokupilot',
+  'fork',
+  'stop',
+  'sendnow',
+])
 
 /** `body`: its fields, taken only by the actions that read them (as main's did, so a null body fails only there). */
 async function act(
@@ -271,6 +296,13 @@ async function act(
     case 'answer':
     case 'permit':
       return answer(app, item, action, await body())
+    // Stop and Send now (#330): the program's own keys in its pane (services/turn.ts).
+    case 'stop':
+      return stopTurn(deps, item, { io: turnIO(item.pane ?? '', item.transcript, () => queueOf(deps, item)) })
+    case 'sendnow':
+      return sendNow(deps, item, (await body()).text, {
+        io: turnIO(item.pane ?? '', item.transcript, () => queueOf(deps, item)),
+      })
     case 'rename':
       return rename(item, await body())
     // herdr's name for the workspace it is in, which every session there shows.
@@ -368,11 +400,12 @@ export function sessionRoutes(app: SessionApp): Route[] {
       handle: withItem(async item => json(200, await detail(app, item))),
     },
     helperRoute(app),
-    // Answering a dialog presses keys in a session, an archive closes a pane, a workspace's new name
-    // is every session's there, a fork starts one: like a launch, only from this page.
+    // Answering a dialog presses keys in a session, and so do Stop and Send now (#330), an archive
+    // closes a pane, a workspace's new name is every session's there, a fork starts one: like a
+    // launch, only from this page.
     {
       method: 'POST',
-      path: /^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace|fork)$/,
+      path: /^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace|fork|stop|sendnow)$/,
       guard: ['board-header', 'origin', 'fresh-data'],
       handle: action,
     },
