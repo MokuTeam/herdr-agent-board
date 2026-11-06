@@ -29,6 +29,8 @@ export interface CalSourceView {
   address: boolean | null
   writes: boolean
   everyMin: number
+  /** Minutes before its events their reminders come (#335); null: the calendar's own; 0: none. */
+  remindMin?: number | null
   url: string | null
   account: string | null
   preset: string | null
@@ -307,3 +309,15 @@ export function firstHour(days: readonly string[], events: readonly CalEvent[], 
   const starts = events.filter(e => !isBar(e)).map(e => new Date(spanOf(e).start).getHours())
   return starts.length ? Math.max(0, Math.min(...starts) - 1) : 8
 }
+
+/** A reminder's "when" (#335): in so long, starting now, or started so long ago. */
+export function reminderWhen(start: number, now: number, t: (k: string, v?: Record<string, number>) => string): string {
+  const min = Math.round((start - now) / 60_000)
+  if (min > 59) return t('cal.inHours', { n: Math.round(min / 60) })
+  if (min > 0) return t('cal.inMin', { n: min })
+  if (min === 0) return t('cal.rem.now')
+  return t('cal.rem.started', { n: -min })
+}
+
+/** Whether a reminder still offers "At start": the start is more than a minute away. */
+export const offersAtStart = (start: number, now: number): boolean => start - now > 60_000

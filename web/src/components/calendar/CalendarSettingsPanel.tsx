@@ -20,9 +20,17 @@ export interface CalendarSettingsPanelProps {
   onClose(): void
 }
 
+interface Reminders {
+  on: boolean
+  beforeMin: number
+  snoozeMin: number
+}
+
 interface SettingsView {
   on: boolean
   everyMin: number
+  /** A board before reminders (#335) sends none. */
+  reminders?: Reminders
   sources: CalSourceView[]
   problems: string | null
 }
@@ -46,6 +54,11 @@ interface Draft {
   calendars: string
   address: string
 }
+
+/** The minutes a reminder may come before, and a snooze last: the usual ones and the one set. */
+const BEFORE_MIN = [5, 10, 15, 30, 60]
+const SNOOZE_MIN = [5, 10, 15]
+const withSet = (list: readonly number[], n: number): number[] => [...new Set([...list, n])].sort((a, b) => a - b)
 
 const emptyDraft = (): Draft => ({
   kind: 'mcp',
@@ -202,6 +215,10 @@ export function CalendarSettingsPanel({ open, onClose }: CalendarSettingsPanelPr
               {note('on')}
             </section>
 
+            {view.on && view.reminders && (
+              <ReminderFields r={view.reminders} disabled={off} send={send} note={note('reminders')} />
+            )}
+
             <h3 className="access-head">{t('cal.set.sources')}</h3>
             <ul className="time-set-group cal-set-sources">
               {view.sources.map(s => (
@@ -218,6 +235,7 @@ export function CalendarSettingsPanel({ open, onClose }: CalendarSettingsPanelPr
                   now={now}
                   send={send}
                   note={note}
+                  reminders={view.on && view.reminders?.on ? view.reminders : null}
                 />
               ))}
             </ul>
@@ -342,6 +360,70 @@ export function CalendarSettingsPanel({ open, onClose }: CalendarSettingsPanelPr
   )
 }
 
+/** Reminders before events (#335): on or off, how long before, how long a snooze. */
+function ReminderFields(props: {
+  r: Reminders
+  disabled: boolean
+  send(part: string, body: Record<string, unknown>): Promise<boolean>
+  note: ReactNode
+}) {
+  const { r, disabled, send } = props
+  const t = useT()
+  const set = (body: Record<string, unknown>) => void send('reminders', { op: 'reminders', ...body })
+  return (
+    <>
+      <h3 className="access-head">{t('cal.set.rem')}</h3>
+      <section className="time-set-group cal-set-rem">
+        <label className="time-switch">
+          <input
+            type="checkbox"
+            role="switch"
+            checked={r.on}
+            aria-checked={r.on}
+            disabled={disabled}
+            onChange={e => set({ on: e.target.checked })}
+          />
+          <span>{t('cal.set.remOn')}</span>
+        </label>
+        {r.on && (
+          <div className="time-field-row">
+            <label className="time-field">
+              <span>{t('cal.set.remBefore')}</span>
+              <select
+                value={r.beforeMin}
+                disabled={disabled}
+                onChange={e => set({ beforeMin: Number(e.target.value) })}
+              >
+                {withSet(BEFORE_MIN, r.beforeMin).map(n => (
+                  <option key={n} value={n}>
+                    {t('cal.set.min', { n })}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="time-field">
+              <span>{t('cal.set.remSnooze')}</span>
+              <select
+                value={r.snoozeMin}
+                disabled={disabled}
+                onChange={e => set({ snoozeMin: Number(e.target.value) })}
+              >
+                {withSet(SNOOZE_MIN, r.snoozeMin).map(n => (
+                  <option key={n} value={n}>
+                    {t('cal.set.min', { n })}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
+        <p className="access-hint">{t(r.on ? 'cal.set.remHint' : 'cal.set.remOffHint')}</p>
+        {props.note}
+      </section>
+    </>
+  )
+}
+
 /** A source's lane and colour: the lane's colour unless one of its own is picked. */
 function LookFields(props: {
   lane: string
@@ -393,8 +475,10 @@ function SourceRow(props: {
   now: number
   send(part: string, body: Record<string, unknown>): Promise<boolean>
   note(part: string): ReactNode
+  /** The calendar's reminders while they are on: the source's own minutes are picked here. */
+  reminders: Reminders | null
 }) {
-  const { s, color, label, open, disabled, now, send, note } = props
+  const { s, color, label, open, disabled, now, send, note, reminders } = props
   const t = useT()
   const [label2, setLabel2] = useState(s.label === s.id ? '' : s.label)
   const [address, setAddress] = useState('')
@@ -455,6 +539,30 @@ function SourceRow(props: {
             onLane={v => void send(part, { op: 'edit', id: s.id, source: { lane: v || null } })}
             onColor={v => void send(part, { op: 'edit', id: s.id, source: { color: v || null } })}
           />
+          {reminders && (
+            <label className="time-field">
+              <span>{t('cal.set.remSource')}</span>
+              <select
+                value={s.remindMin === null || s.remindMin === undefined ? '' : String(s.remindMin)}
+                disabled={disabled}
+                onChange={e =>
+                  void send(part, {
+                    op: 'edit',
+                    id: s.id,
+                    source: { remindMin: e.target.value === '' ? null : Number(e.target.value) },
+                  })
+                }
+              >
+                <option value="">{t('cal.set.remDefault', { n: reminders.beforeMin })}</option>
+                <option value="0">{t('cal.set.remNone')}</option>
+                {withSet(BEFORE_MIN, s.remindMin || reminders.beforeMin).map(n => (
+                  <option key={n} value={n}>
+                    {t('cal.set.min', { n })}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {s.kind === 'ics' && (
             <form
               className="time-field-row"

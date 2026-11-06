@@ -2525,6 +2525,27 @@ block and its row; when a call is on or starts within fifteen minutes, the toolb
 so and its join link sits next to it. A tap on a source's mark hides or shows its events. On a
 phone the week opens as the agenda.
 
+**Reminders** (#335). Ten minutes before each timed event of every source, a reminder comes on the
+desktop and on the board's page: the title, when, whose calendar, and Join one tap away beside
+Snooze and At start. The board's own process schedules them, so they come with its window closed.
+None for all-day events, cancelled ones, ones you declined, or working location, out of office and
+focus time. One comes once: what was shown and snoozed is kept in `calendar-reminders.json` in the
+state folder, so a restart repeats nothing, and a reminder that came due while the board was down
+comes when it is back only if the event started at most five minutes ago. On the page a card sits
+at the lower right (at the top on a phone) until ten minutes after the start; the same one on every
+open page and the phone, and Snooze on any of them takes it off all of them. On the desktop:
+- Windows: a toast under "Agent board" that stays until you act on it. Join opens the meeting's
+  link itself; Open, Snooze and At start come back to the board through the `claude-pane:` link
+  (`claude-pane:cal/<open|snooze|start>/<id>`, the id a hash of the reminder, nothing of the event
+  in it). Join on the toast goes straight to the browser, so the page's card stays until ten
+  minutes after the start.
+- macOS: the notification app the session notifications use, once it is built; its click is Join
+  or Open, and Snooze is on the page.
+- Elsewhere, or a Mac without that app: herdr's own notification, its words only.
+
+Settings → Calendar… has them under Reminders: on or off, minutes before, how long a snooze lasts,
+and for each calendar its own minutes or none. With the calendar off, none of it runs.
+
 **Agents** (`board cal`, `--json` for the whole of it):
 
 ```sh
@@ -3592,9 +3613,10 @@ while one does not check out.
 `nonBillable`, `systems`, `projectSystems`, `ref`, `zone` and `billing` rules).
 
 `calendar` (the [calendar](#calendar); Settings → Calendar… sets it): `on`, `everyMin`,
-`pastDays`, `futureDays`, `sources` (each `id`, `kind`, `label`, `color`, `lane`, `everyMin`; an
-`mcp` one's `url`, `preset`, `account`, `calendars`, `list`, `write`). No iCal address is ever in
-it.
+`pastDays`, `futureDays`, `reminders` (`on`, `beforeMin` (10), `snoozeMin` (5); `false` turns them
+off; on unless it says so), `sources` (each `id`, `kind`, `label`, `color`, `lane`, `everyMin`,
+`remindMin` (its own minutes before, 0 or `false` for none); an `mcp` one's `url`, `preset`,
+`account`, `calendars`, `list`, `write`). No iCal address is ever in it.
 
 `backup` (the [backup](#backup) of the board's database; Settings → Backup… sets it): `folder` (a
 folder that syncs elsewhere), `server` (`{ "host", "port", "admin": { "user", "key" }, "set" }`:
@@ -3712,6 +3734,15 @@ window), `src/services/calendar-settings.ts`, `src/server/routes/calendar.ts`,
 `src/entrypoints/cal-cli.ts` (`board cal`), `web/src/models/calendar.ts`,
 `web/src/components/calendar/`. Tests run fake MCP servers and ICS addresses of their own
 (`Bun.serve` on a free port) and never a real calendar.
+
+Its reminders (#335): `src/core/calendar-reminders.ts` (which events, when, Snooze and dismiss, the
+grace after a restart), `src/adapters/reminder-store.ts` (`calendar-reminders.json`),
+`src/services/calendar-reminders.ts` (the timer and the payload's reminders), and
+`src/integrations/reminder-toast.ts` (the desktop: `toast.ps1`'s `reminder` and `reminder-clear`,
+the Mac helper, herdr's notification). A button comes back as `POST /api/calendar-reminders` (from
+the page, or a notification through `src/entrypoints/web-open.ts --reminder`); Open on the desktop
+reaches the pages as the stream's `cal-open`. The page's card is
+`web/src/components/calendar/Reminders.tsx`.
 Tests never run the real `bw` or PowerShell: `BOARD_BW_BIN_PATH` and `BOARD_POWERSHELL_BIN_PATH`
 name fakes (`test/support/fake-bw.ts`, `fake-powershell.ts`), and every sandbox points them at
 files that do not exist. The drop script's tests run it with

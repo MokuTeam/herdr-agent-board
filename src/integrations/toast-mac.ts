@@ -343,7 +343,7 @@ export interface Toast {
  * is missing or not allowed to run says so with an 'error' a moment after spawn; one the system
  * cannot execute, or an argument with a NUL byte, throws at once.
  */
-function startHelper(program: string, args: string[]): Promise<number | null> {
+export function startHelper(program: string, args: string[]): Promise<number | null> {
   return new Promise(resolve => {
     try {
       const child = spawn(program, args, { detached: true, stdio: 'ignore' })
