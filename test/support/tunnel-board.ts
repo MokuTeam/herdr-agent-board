@@ -157,7 +157,7 @@ export const SAMPLES: Record<string, string> = Object.fromEntries(
       [/^\/api\/session\/([^/]+)\/meter$/, '/api/session/s1/meter'],
       [/^\/api\/session\/([^/]+)$/, '/api/session/s1'],
       [/^\/api\/session\/([^/]+)\/helper\/([A-Za-z0-9-]{1,120})$/, '/api/session/s1/helper/h1'],
-      [/^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace|fork)$/, '/api/session/s1/permit'],
+      [/^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace|fork|stop|sendnow)$/, '/api/session/s1/permit'],
       [/^\/api\/session\/([^/]+)\/(mokupilot)$/, '/api/session/s1/mokupilot'],
       [/^\/api\/session\/([^/]+)\/aside$/, '/api/session/s1/aside'],
       [/^\/api\/session\/([^/]+)\/(focus|wake|sleep|restart|message)$/, '/api/session/s1/message'],

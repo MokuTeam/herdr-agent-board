@@ -10,6 +10,7 @@
 import { type ReactNode, type Ref, useLayoutEffect, useRef, useState } from 'react'
 import { archiveBlock } from '../../../../src/core/archive.ts'
 import type { AssistantTurn } from '../../../../src/core/transcript.ts'
+import { canSendNow } from '../../../../src/core/turn-keys.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import type { SessionDetail } from '../../api/client.ts'
 import { type ComposerControls, useComposer } from '../../hooks/useComposer.ts'
@@ -25,6 +26,7 @@ import { useT } from '../../i18n/I18nProvider.tsx'
 import { inTurn } from '../../models/card.ts'
 import { ConversationScroll } from '../../models/conversation-scroll.ts'
 import { restartPending } from '../../models/restart.ts'
+import { noteQueue } from '../../models/settle.ts'
 import {
   askedView,
   detailNotice,
@@ -402,12 +404,27 @@ interface ConversationProps {
 function Conversation({ detail, item, links, composer, onResize }: ConversationProps) {
   const t = useT()
   const { data } = useBoardContext()
+  const actions = useSessionActions()
   const conversation = detail.data?.conversation
   // The foot: the session's queue, then the board's own messages on their way or not sent.
   const queued = detail.data?.queued ?? []
+  // What left the queue settles into the conversation (models/settle.ts); a detail not read yet says nothing.
+  if (detail.data)
+    noteQueue(
+      item.key,
+      queued.map(m => m.text),
+    )
   const own = composer.outbox.waiting(item.key)
+  // Send now on a queued message, while the session works and its key is known (#330).
+  const sendNow = canSendNow(item) ? (text: string) => actions.sendNow(item.key, text) : undefined
   const foot = (queued.length > 0 || own.length > 0) && (
-    <Waiting queued={queued} own={own} onRetry={composer.outbox.retry} onEdit={composer.outbox.edit} />
+    <Waiting
+      queued={queued}
+      own={own}
+      onRetry={composer.outbox.retry}
+      onEdit={composer.outbox.edit}
+      onSendNow={sendNow}
+    />
   )
   const placeholder = threadPlaceholder(conversation, detail.status, t)
   if (placeholder !== null || !conversation) return foot || <p className="row-value muted">{placeholder}</p>

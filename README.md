@@ -307,6 +307,9 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
 - A side question (the bubble in the message box, or a message that starts with `/btw`): typed
   into the session as Claude Code's own `/btw`, answered in a card over the box, while nothing
   goes into the session's conversation; see [Side questions](#side-questions).
+- Stop (a working card, beside the status in its sheet) and Send now (on a message waiting in
+  the session's queue): the turn interrupted, or the queue taken into the turn at once, as Esc and
+  Ctrl+Enter do in Claude Code's terminal; see [Stop and Send now](#stop-and-send-now).
 - The sheet's place and size are the viewer's own (kept in this browser): docked right, left or
   at the bottom, flush with that edge like a sidebar, where the board makes room for it (a window
   too narrow for that keeps the board's columns and lays the sheet over them), or floating over
@@ -1060,6 +1063,39 @@ error, busy? }` (the page only, with herdr's data recent enough to act on); the 
 `aside` says whether the board can ask. Code: `src/core/aside.ts` (the overlay on the screen),
 `src/services/aside.ts` (the steps through herdr), `web/src/hooks/useAside.ts`,
 `web/src/components/sheet/Aside.tsx`.
+
+## Stop and Send now
+
+Two keys of Claude Code's own, pressed into the session's pane through herdr (`herdr agent
+send-keys`), so the terminal does not have to be opened for them:
+
+- **Stop**, on a card in "Working" and beside the status in its sheet: Esc, which interrupts the
+  running turn. The session stays open with its conversation. A first press only arms it (it turns
+  red and asks); a second one, not the second click of a double click, stops the turn; left alone a
+  few seconds, Escape, or the pointer moving away takes it back. The board then reads the
+  transcript for Claude Code's mark of an interrupted turn (`[Request interrupted by user]`), or
+  herdr saying the turn is over; neither within a few seconds, and it says the turn did not stop.
+  A message waiting in the queue starts the next turn right after the stop, as it does after Esc in
+  the terminal.
+- **Send now**, on a message waiting in the session's queue at the foot of its thread (shown on
+  hover or focus, always on a touch screen): Ctrl+Enter, Claude Code's `chat:sendNow`, which takes
+  every waiting message into the running turn at once instead of after it. The message says
+  "Sending now…" until it leaves the queue, and settles into the conversation once it has; the
+  board says so when it has not within a few seconds.
+
+Both only where the board knows the program's key and can reach its pane: a Claude session (keys
+checked on Claude Code 2.1.319) with a pane, awake, while its turn runs. pi, Codex and others get
+neither until their keys are known; a MokuPilot call agent or day session (no pane) and a sleeper
+get neither. Nothing is pressed into a pane that holds another session by now, waits in a dialog,
+or shows something over its input box; Send now also waits for an empty input box, where the same
+key would send the text typed there. One press at a time per pane.
+
+`POST /api/session/<key>/stop` and `POST /api/session/<key>/sendnow` with `{ text }` (the queued
+message pressed) answer `{ ok }`, `{ ok, already }` when there was nothing left to do, or `{ ok:
+false, error, busy? }` (the page only, with herdr's data recent enough to act on). Code:
+`src/core/turn-keys.ts` (the keys per program, the transcript's mark), `src/services/turn.ts`,
+`web/src/components/StopButton.tsx`, `web/src/models/stop-guard.ts`, the queue's foot in
+`web/src/components/sheet/Thread.tsx`.
 
 ## Terminal
 
@@ -2325,6 +2361,18 @@ the held ones apart, and the totals. On a phone
 (the remote page) it is the full-height sheet, and a sideways swipe goes to the day before or
 after. A day's figures show only under that day's name, whatever order the answers come in.
 
+**A week and a month.** Day, Week and Month at the top of the panel switch what it shows; it opens
+on Day each time. A week has the figure to bill for its days (the time worked and the time not yet
+entered in the clients' systems under it), each client's total, then its seven days, each with its
+billed figure, a bar in its clients' colours and each client's figure. A month has the same figures
+for its own days, then the month as the Calendar draws it, each day with its figure. A day with
+billed time not entered yet has an orange dot; a weekday gone by with no entry at all has a ring
+("No time"); today, weekends and days ahead never do. A tap on a day opens it; the arrows, Today
+and a swipe go by a week or a month. Each client's day is billed by its rules as on its own, and a
+week or a month adds the billed days up (it never rounds the sum again). The page reads the days
+with `GET /api/time?from=<date>&to=<date>` (42 days at most): each day with each client's worked,
+billed and not entered seconds.
+
 **Changing them on the board.** A tap on an entry opens it in place: description, project (the
 client's list), start and stop on this browser's clock with the duration between them and -15 and
 +15 steps, the work date (a new one moves it), tags. Only what changed is sent: a time left alone
@@ -2476,6 +2524,27 @@ past ones quieter. A call with a join link (Meet, Zoom, Teams, Webex…) has it 
 block and its row; when a call is on or starts within fifteen minutes, the toolbar's button says
 so and its join link sits next to it. A tap on a source's mark hides or shows its events. On a
 phone the week opens as the agenda.
+
+**Reminders** (#335). Ten minutes before each timed event of every source, a reminder comes on the
+desktop and on the board's page: the title, when, whose calendar, and Join one tap away beside
+Snooze and At start. The board's own process schedules them, so they come with its window closed.
+None for all-day events, cancelled ones, ones you declined, or working location, out of office and
+focus time. One comes once: what was shown and snoozed is kept in `calendar-reminders.json` in the
+state folder, so a restart repeats nothing, and a reminder that came due while the board was down
+comes when it is back only if the event started at most five minutes ago. On the page a card sits
+at the lower right (at the top on a phone) until ten minutes after the start; the same one on every
+open page and the phone, and Snooze on any of them takes it off all of them. On the desktop:
+- Windows: a toast under "Agent board" that stays until you act on it. Join opens the meeting's
+  link itself; Open, Snooze and At start come back to the board through the `claude-pane:` link
+  (`claude-pane:cal/<open|snooze|start>/<id>`, the id a hash of the reminder, nothing of the event
+  in it). Join on the toast goes straight to the browser, so the page's card stays until ten
+  minutes after the start.
+- macOS: the notification app the session notifications use, once it is built; its click is Join
+  or Open, and Snooze is on the page.
+- Elsewhere, or a Mac without that app: herdr's own notification, its words only.
+
+Settings → Calendar… has them under Reminders: on or off, minutes before, how long a snooze lasts,
+and for each calendar its own minutes or none. With the calendar off, none of it runs.
 
 **Agents** (`board cal`, `--json` for the whole of it):
 
@@ -3544,9 +3613,10 @@ while one does not check out.
 `nonBillable`, `systems`, `projectSystems`, `ref`, `zone` and `billing` rules).
 
 `calendar` (the [calendar](#calendar); Settings → Calendar… sets it): `on`, `everyMin`,
-`pastDays`, `futureDays`, `sources` (each `id`, `kind`, `label`, `color`, `lane`, `everyMin`; an
-`mcp` one's `url`, `preset`, `account`, `calendars`, `list`, `write`). No iCal address is ever in
-it.
+`pastDays`, `futureDays`, `reminders` (`on`, `beforeMin` (10), `snoozeMin` (5); `false` turns them
+off; on unless it says so), `sources` (each `id`, `kind`, `label`, `color`, `lane`, `everyMin`,
+`remindMin` (its own minutes before, 0 or `false` for none); an `mcp` one's `url`, `preset`,
+`account`, `calendars`, `list`, `write`). No iCal address is ever in it.
 
 `backup` (the [backup](#backup) of the board's database; Settings → Backup… sets it): `folder` (a
 folder that syncs elsewhere), `server` (`{ "host", "port", "admin": { "user", "key" }, "set" }`:
@@ -3664,6 +3734,15 @@ window), `src/services/calendar-settings.ts`, `src/server/routes/calendar.ts`,
 `src/entrypoints/cal-cli.ts` (`board cal`), `web/src/models/calendar.ts`,
 `web/src/components/calendar/`. Tests run fake MCP servers and ICS addresses of their own
 (`Bun.serve` on a free port) and never a real calendar.
+
+Its reminders (#335): `src/core/calendar-reminders.ts` (which events, when, Snooze and dismiss, the
+grace after a restart), `src/adapters/reminder-store.ts` (`calendar-reminders.json`),
+`src/services/calendar-reminders.ts` (the timer and the payload's reminders), and
+`src/integrations/reminder-toast.ts` (the desktop: `toast.ps1`'s `reminder` and `reminder-clear`,
+the Mac helper, herdr's notification). A button comes back as `POST /api/calendar-reminders` (from
+the page, or a notification through `src/entrypoints/web-open.ts --reminder`); Open on the desktop
+reaches the pages as the stream's `cal-open`. The page's card is
+`web/src/components/calendar/Reminders.tsx`.
 Tests never run the real `bw` or PowerShell: `BOARD_BW_BIN_PATH` and `BOARD_POWERSHELL_BIN_PATH`
 name fakes (`test/support/fake-bw.ts`, `fake-powershell.ts`), and every sandbox points them at
 files that do not exist. The drop script's tests run it with

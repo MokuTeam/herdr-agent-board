@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { loadConfig } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { ROOT } from '../adapters/paths.ts'
+import { REMINDER_ACTS, REMINDER_ID } from '../core/calendar-reminders.ts'
 import { t } from '../core/lang.ts'
 import type { Config } from '../core/types.ts'
 import { type BoardWindow, edgeWindow } from '../integrations/edge-window.ts'
@@ -47,6 +48,41 @@ async function reveal(url: string, pane: string): Promise<Revealed> {
   } catch {
     return { ok: false, error: '' }
   }
+}
+
+/**
+ * A calendar reminder's button on the desktop (#335, toast.ps1's `claude-pane:cal/<act>/<id>`, the
+ * Mac helper's click): the board snoozes it or is done with it; Open also brings its window up on
+ * the event. Nothing for an act or id that is not one; the board is not started for it.
+ */
+export async function reminderClick(
+  act: string,
+  id: string,
+  cfg: WebConfig = loadConfig(),
+  options: Pick<WebOpenOptions, 'window'> = {},
+): Promise<WebOpenResult> {
+  const url = `http://127.0.0.1:${cfg.port ?? 12422}/`
+  if (!REMINDER_ID.test(id) || !(act === 'open' || (REMINDER_ACTS as readonly string[]).includes(act)))
+    return { ok: false, error: t('cal.err.usage') }
+  let answer: unknown
+  try {
+    const res = await fetch(`${url}api/calendar-reminders`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({ id, act, desktop: true }),
+      signal: AbortSignal.timeout(3000),
+    })
+    answer = await res.json()
+  } catch {
+    return { ok: false, missing: true, error: t('err.notRunning') }
+  }
+  if (!isRecord(answer) || answer.ok !== true)
+    return { ok: false, error: isRecord(answer) && typeof answer.error === 'string' ? answer.error : '' }
+  if (act !== 'open') return { ok: true, url }
+  const win = options.window ?? edgeWindow(typeof cfg.browser === 'string' ? cfg.browser : undefined)
+  // a page in a minimized or covered window has no stream: it is told as it connects again
+  if (!(await win.raise())) win.launch(url)
+  return { ok: true, url }
 }
 
 /** What of the config it reads (config.json's `port` and `browser`). */
