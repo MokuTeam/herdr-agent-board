@@ -196,9 +196,3 @@
   .sheet-pills button, .sheet-fold .chevron { transition: none; }
 }
 
-/* Stop beside the status pill while the session works (#330): quiet until a first press arms it,
-   then red and asking (StopButton.tsx). */
-.sheet-pills .stop-turn { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px 2px 7px; border-radius: 999px; background: var(--fill-2); color: var(--label-2); font-size: 11.5px; font-weight: 600; letter-spacing: 0.01em; }
-.sheet-pills .stop-turn svg { width: 11px; height: 11px; }
-.sheet-pills .stop-turn:not(:disabled):hover { background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); }
-.sheet-pills .stop-turn.armed { background: color-mix(in srgb, var(--red) 18%, transparent); color: var(--red); }

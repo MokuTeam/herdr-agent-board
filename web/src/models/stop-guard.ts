@@ -19,3 +19,12 @@ export function pressStop(armedAt: number | null, now: number, detail = 1): Stop
   if (armedAt === null || now - armedAt >= ARM_MS) return 'arm'
   return now - armedAt < SETTLE_MS ? 'ignore' : 'fire'
 }
+
+/**
+ * A press on Stop in the message box (#340): one press stops, as in any chat app, with no arming.
+ * The button was Send a moment ago, so the second click of a double click on Send, or a press
+ * within SETTLE_MS of the button turning into Stop (`shownAt`, ms), is the same gesture and stops
+ * nothing.
+ */
+export const pressComposerStop = (shownAt: number, now: number, detail = 1): boolean =>
+  detail <= 1 && now - shownAt >= SETTLE_MS

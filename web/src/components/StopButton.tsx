@@ -1,7 +1,7 @@
-// Stop on a working session (#330), on its card and in its sheet: the first press arms it and it
-// says so in red, a second one (not the second click of a double click) stops the turn; left
-// alone, Escape, the pointer or the focus going elsewhere puts it back. Shown only where the board
-// knows the program's interrupt key and its pane (core/turn-keys.ts canStop).
+// Stop on a working session's card (#330): the first press arms it and it says so in red, a second
+// one (not the second click of a double click) stops the turn; left alone, Escape, the pointer or
+// the focus going elsewhere puts it back. Shown only where the board knows the program's interrupt
+// key and its pane (core/turn-keys.ts canStop).
 import { type KeyboardEvent, type MouseEvent, type PointerEvent, useEffect, useState } from 'react'
 import type { Item } from '../../../src/core/types.ts'
 import { useSessionActions } from '../hooks/useSessionActions.ts'
@@ -11,8 +11,11 @@ import { useBoardContext } from '../state/BoardProvider.tsx'
 import { classNames } from './class-names.ts'
 import { StopGlyph } from './icons.tsx'
 
-/** `labeled`: the sheet's, with its word; the card's is a glyph that says more only once armed. */
-export function StopButton({ item, labeled = false }: { item: Item; labeled?: boolean }) {
+/**
+ * A glyph among the card's hover buttons that says more only once armed. (In the sheet, Stop is the
+ * message box's send button: sheet/SendButton.tsx, #340.)
+ */
+export function StopButton({ item }: { item: Item }) {
   const t = useT()
   const { canMutate, ui } = useBoardContext()
   const actions = useSessionActions()
@@ -24,12 +27,11 @@ export function StopButton({ item, labeled = false }: { item: Item; labeled?: bo
     return () => clearTimeout(id)
   }, [armedAt])
   const disarm = () => setArmedAt(null)
-  const word = armed ? t(labeled ? 'turn.stop.confirm' : 'turn.stop.confirmShort') : t('turn.stop')
   return (
     <button
       type="button"
       data-act="stop"
-      className={classNames('stop-turn', labeled && 'labeled', armed && 'armed')}
+      className={classNames('stop-turn', armed && 'armed')}
       title={t(armed ? 'turn.stop.confirmHint' : 'turn.stop.hint')}
       aria-label={armed ? t('turn.stop.confirmHint') : t('turn.stop')}
       // Not again while a stop of this session is on its way (its card says "Stopping…").
@@ -59,7 +61,7 @@ export function StopButton({ item, labeled = false }: { item: Item; labeled?: bo
       }}
     >
       <StopGlyph />
-      {(labeled || armed) && <span className="stop-word">{word}</span>}
+      {armed && <span className="stop-word">{t('turn.stop.confirmShort')}</span>}
     </button>
   )
 }
