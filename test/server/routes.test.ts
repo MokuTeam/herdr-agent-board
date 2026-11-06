@@ -139,6 +139,7 @@ describe('routes', () => {
       'styles/errors.css',
       'styles/messages.css',
       'styles/viewers.css',
+      'styles/panels.css',
       'styles/look-terminal.css',
       'app.js',
     ])

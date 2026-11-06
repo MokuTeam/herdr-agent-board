@@ -1,0 +1,31 @@
+/* The side panels in a wide panel (#339), over upstream's sheets, which stay theirs rule for rule.
+   Upstream lays a wide, low panel out side by side, in two columns made for the session's card
+   fields (app.css); the session sheet lays itself out there (session-head.css), and every other
+   panel put its body in the right-hand column with the left third empty. Here every panel but the
+   session's keeps one column under its head, and its lists and forms keep to a reading measure,
+   centred, the title over them and the panel's buttons in its corner, where they are at every
+   size. A panel whose content fills the width (the calendar's grid) is data-measure="full".
+   Below about 800 px the gutters are the narrow panel's (22px before, 18px after), so a docked
+   panel at its usual width and a phone look as they did. Every rule leaves the session sheet
+   (#sheet) alone and adds no weight of its own (:where), so a panel's own rules still win where
+   they set the same thing. */
+
+.sheet { --measure: 760px; --inset: max(0px, (100% - var(--measure)) / 2); }
+.sheet[data-measure="full"] { --measure: 100%; }
+
+@container sheet (min-width: 680px) and (min-aspect-ratio: 5 / 4) {
+  :where(.sheet:not(#sheet)) .sheet-inner { display: flex; }
+}
+
+/* the column: centred by the gutters of what spans the panel, so a scroll bar stays at its edge */
+:where(.sheet:not(#sheet)) .sheet-head { padding-left: max(22px, var(--inset)); }
+:where(.sheet:not(#sheet)) .sheet-title { max-width: var(--measure); }
+:where(.sheet:not(#sheet)) .sheet-tools { margin-left: auto; }
+:where(.sheet:not(#sheet)) .sheet-body { padding-right: max(18px, var(--inset)); padding-left: max(22px, var(--inset)); }
+:where(.sheet:not(#sheet)) .archive-find { padding-right: max(18px, var(--inset)); padding-left: max(22px, var(--inset)); }
+:where(.sheet:not(#sheet)) .sheet-inner > .composer { padding-right: max(14px, var(--inset)); padding-left: max(18px, var(--inset)); }
+
+/* A panel's scroll bars are the page's quiet thin ones (app.css: html). The width is not
+   inherited, and an area left at auto drew the classic bar with arrows. No weight: a rule that
+   hides a bar still does. */
+:where(.sheet) * { scrollbar-width: thin; }

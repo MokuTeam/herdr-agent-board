@@ -4,7 +4,7 @@
    wrapped and scrolling when long. Every rule here selects by class: the other sheets are
    upstream's, rule for rule. */
 
-.backup-body { display: flex; flex-direction: column; gap: 4px; max-width: 760px; }
+.backup-body { display: flex; flex-direction: column; gap: 4px; }
 .backup-section { margin: 0 0 4px; }
 .backup-status .access-status { margin-bottom: 8px; }
 .backup-problem { margin-bottom: 6px; }

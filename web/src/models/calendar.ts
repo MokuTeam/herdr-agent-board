@@ -302,6 +302,19 @@ export function joinProvider(url: string): string {
   return ''
 }
 
+/** How many hours the day and week grids show at a time (#339), as Apple Calendar's "Show 12 hours at a time". */
+export const HOURS_AT_A_TIME = 12
+/** The least an hour takes: a short panel scrolls through hours of this height. */
+export const HOUR_MIN = 44
+
+/**
+ * An hour's height in whole pixels for `room`, the grid's height for its hours: twelve of them
+ * fill it, so a tall panel shows bigger hours, not the whole day with nothing to scroll to.
+ */
+export function hourSize(room: number): number {
+  return Math.max(HOUR_MIN, Math.floor(room / HOURS_AT_A_TIME))
+}
+
 /** Where the hours scroll to when a day or week opens: an hour before now on today, else the first event or 8:00. */
 export function firstHour(days: readonly string[], events: readonly CalEvent[], now: number): number {
   const today = localDate(now)
