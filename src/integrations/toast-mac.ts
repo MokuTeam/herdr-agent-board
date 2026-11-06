@@ -16,6 +16,7 @@
 import { execFileSync, spawn } from 'node:child_process'
 import {
   closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -39,13 +40,14 @@ import {
   toastBinary,
   toastBuildFailure,
   toastFailedFile,
+  toastIcon,
   toastSource,
   toastSourceStamp,
 } from '../adapters/toast-app.ts'
 
 const DOT = '·'
-const APP_ID = 'com.mokuteam.agent-board.toast.cb'
-const APP_NAME = 'Claude'
+const APP_ID = 'com.mokuteam.agent-board.notify'
+const APP_NAME = 'Agent Board'
 /** herdr gives a pane's id out again after it starts over: nothing else is taken for one. */
 const PANE_ID = /^[A-Za-z0-9]+:p[A-Za-z0-9]+$/
 const LSREGISTER =
@@ -126,6 +128,8 @@ const INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
   <string>${APP_NAME}</string>
   <key>CFBundleExecutable</key>
   <string>ClaudeToast</string>
+  <key>CFBundleIconFile</key>
+  <string>toast-mac.icns</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -180,9 +184,12 @@ export function buildToastApp({ run: runner = run, platform = process.platform }
   const app = toastApp()
   const binary = toastBinary()
   // Built beside the binary and renamed over it: a hook that runs meanwhile never gets a half-written one.
+  if (!existsSync(toastIcon())) return buildFailed('the app icon is missing')
   const part = `${binary}.${process.pid}.part`
   mkdirSync(dirname(binary), { recursive: true })
+  mkdirSync(join(app, 'Contents', 'Resources'), { recursive: true })
   writeFileSync(join(app, 'Contents', 'Info.plist'), INFO_PLIST)
+  copyFileSync(toastIcon(), join(app, 'Contents', 'Resources', 'toast-mac.icns'))
   const built = runner('swiftc', [
     '-O',
     '-swift-version',
@@ -200,7 +207,7 @@ export function buildToastApp({ run: runner = run, platform = process.platform }
     return buildFailed('swiftc failed')
   }
   renameSync(part, binary)
-  if (!runner('codesign', ['-s', '-', '--force', '--deep', app])) {
+  if (!runner('codesign', ['-s', '-', '--force', '--deep', '--options', 'runtime', app])) {
     // Not left behind: an unsigned binary newer than its source would count as built.
     rmSync(binary, { force: true })
     return buildFailed('codesign failed')
@@ -392,6 +399,19 @@ export async function showToast(
     'click',
     '--click-arg',
     toast.pane,
+    // Authorization can be refused: the app says so and shows herdr's own instead.
+    '--fallback-exe',
+    '/usr/bin/env',
+    ...[
+      'herdr',
+      'notification',
+      'show',
+      toast.title,
+      '--body',
+      [toast.subtitle, toast.body].filter(Boolean).join(' — '),
+      '--sound',
+      'request',
+    ].flatMap(arg => ['--fallback-arg', arg]),
   ]
   const pid = await startHelper(toastBinary(), args)
   if (pid === null) return herdrsOwn()

@@ -1893,9 +1893,10 @@ it for the pane you are in):
 
 On macOS they run `bun src/entrypoints/toast.ts` from the plugin's folder: the board's own
 entrypoint, which builds `src/integrations/toast-mac.swift` into a small app in its state folder
-(`.../herdr/plugins/agent-board/toast/ClaudeToast.app`, with the `swiftc` of Xcode's command line
-tools). macOS shows notifications only for an app it knows, so the first one asks to allow
-"Claude": allow it once, or turn it on in System Settings > Notifications. A click then needs no
+(`.../herdr/plugins/agent-board/toast/AgentBoardToast.app`, with the `swiftc` of Xcode's command line
+tools and the board's own icon). macOS shows notifications only for an app it knows, so the first
+one asks to allow "Agent Board": allow it once, or turn it on in System Settings > Notifications.
+A click then needs no
 link: the app runs `toast.ts click <pane id>`, which shows that session on the board, else focuses
 the pane in herdr and brings its terminal app to the front. Without the command line tools
 (`xcode-select --install`) the app is not built: the hooks hand each notification to herdr
