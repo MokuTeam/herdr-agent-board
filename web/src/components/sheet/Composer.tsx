@@ -3,9 +3,11 @@
 // put it to sleep, restart it, take it off the board to the archive, a new session here, as many
 // as the row's width holds (hooks/useActionRow.ts), and More at the row's end with the rest — the
 // files that go with the next message, and the message box: Enter sends, Shift+Enter breaks the
-// line, the box grows with the text; files come in through the clip or Ctrl+V (a screenshot).
+// line, the box grows with the text; files come in through the clip or Ctrl+V (a screenshot). While
+// the session's turn runs and the box is empty, its send button is Stop (SendButton.tsx, #340).
 import { type ClipboardEvent, type KeyboardEvent, useLayoutEffect, useRef, useState } from 'react'
 import { changesMeter } from '../../../../src/core/effort.ts'
+import { canStop } from '../../../../src/core/turn-keys.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { pageLog } from '../../api/client.ts'
 import { useActionRow } from '../../hooks/useActionRow.ts'
@@ -19,7 +21,7 @@ import {
   pickInstead,
   readClipboardImages,
 } from '../../models/clipboard-image.ts'
-import { composerView, sendsOnKey } from '../../models/composer.ts'
+import { composerView, sendIsStop, sendsOnKey } from '../../models/composer.ts'
 import { focusHere, remotePage } from '../../models/remote-page.ts'
 import type { HeadButtons, SheetAvailability } from '../../models/sheet.ts'
 import type { termButton } from '../../models/terminal.ts'
@@ -40,12 +42,12 @@ import {
   PhotoIcon,
   PlusIcon,
   RestartIcon,
-  SendIcon,
   SunIcon,
 } from '../icons.tsx'
 import { TermIcon } from '../terminal/Terminal.tsx'
 import { AsideToggle, useAsideBox } from './Aside.tsx'
 import { Attachments } from './Attachments.tsx'
+import { SendButton } from './SendButton.tsx'
 import { SessionMeter } from './SessionMeter.tsx'
 
 /** What the session's buttons do; each gets the button it was pressed on, for what opens from it. */
@@ -372,15 +374,22 @@ export function Composer({
         >
           <CrossIcon />
         </button>
-        <button
-          className="send"
-          type="submit"
+        <SendButton
+          item={item}
+          stop={sendIsStop({
+            present,
+            sending,
+            text,
+            attachments,
+            stoppable: canStop(item),
+            aside: aside.on || aside.asking,
+            unsent: !!item && composer.outbox.waiting(item.key).some(e => e.state === 'failed'),
+          })}
+          focusBox={() => messageRef.current?.focus()}
           title={aside.question === null ? view.sendTitle : t('aside.toggle')}
-          aria-label={t(aside.question === null ? 'compose.sendLabel' : 'aside.toggle')}
+          label={t(aside.question === null ? 'compose.sendLabel' : 'aside.toggle')}
           disabled={aside.question === null ? view.sendDisabled : !aside.question}
-        >
-          <SendIcon />
-        </button>
+        />
       </form>
       {item && <SessionMeter key={item.key} item={item} asked={asked} />}
     </footer>
