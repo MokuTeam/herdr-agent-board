@@ -798,3 +798,92 @@ export function clientDay(c: TimeConfig, client: string, date: string, entries: 
     billedSeconds: out.reduce((n, l) => n + l.billedSeconds, 0),
   }
 }
+
+/** An entry as the figure not yet entered reads it: the systems it has a mark in, and the ones it is to be entered in (absent: all of its client's). */
+export type Entered = { posts: readonly { system: string }[]; systems?: readonly string[] | undefined }
+
+/**
+ * A client's billed time not yet entered: its lines with an entry missing a mark in one of the
+ * systems that it is to be entered in (its own `systems`: a project entered elsewhere is not asked
+ * for in the rest). The Time panel's day and its week and month (#241) say it so.
+ */
+export function notEntered(day: ClientDay, byId: ReadonlyMap<string, Entered>, systems: readonly string[]): number {
+  if (!systems.length) return 0
+  const missing = (id: string, sys: string): boolean => {
+    const e = byId.get(id)
+    if (e?.systems && !e.systems.includes(sys)) return false
+    return !e?.posts.some(p => p.system === sys)
+  }
+  return day.lines
+    .filter(l => systems.some(sys => l.entries.some(id => missing(id, sys))))
+    .reduce((n, l) => n + l.billedSeconds, 0)
+}
+
+// ------------------------------------------------------------------ days in a row (#241)
+
+/** How many days from `from` to `to`, both in: 0 when `to` is before `from` or either is no date. */
+export function spanLength(from: string, to: string): number {
+  const n = Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000) + 1
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+/** A client's figures on one day of a week or a month: worked, billed by its rules, billed not entered yet. */
+export interface SpanClient {
+  client: string
+  seconds: number
+  billedSeconds: number
+  notEntered: number
+}
+
+export interface SpanDay {
+  date: string
+  /** Each client with time that day, by lane id. */
+  clients: SpanClient[]
+  /** The day's live entries, held ones too: none, and the day has no time at all. */
+  entries: number
+}
+
+/**
+ * The days from `from` to `to` (both in), each with its clients' figures: each client's day billed
+ * by its rules as the day's view and billing do (clientDay), so a week's or a month's figure is the
+ * sum of its billed days, never a total rounded again. A day is an entry's work date as stored (its
+ * start's date in its client's zone, stamped when written): an entry over midnight counts whole on
+ * the day it started. `entries`: live ones with their marks (entryView); removed ones are left out.
+ */
+export function spanDays(c: TimeConfig, from: string, to: string, entries: readonly EntryView[]): SpanDay[] {
+  // by count, not by comparing dates as text: past 9999-12-31 a date is no longer one (#241's review)
+  const n = spanLength(from, to)
+  const live = entries.filter(e => !e.deleted)
+  const byId = new Map(live.map(e => [e.id, e]))
+  const byDate = new Map<string, EntryView[]>()
+  for (const e of live) byDate.set(e.date, [...(byDate.get(e.date) ?? []), e])
+  const out: SpanDay[] = []
+  for (let i = 0; i < n; i++) {
+    const date = addDays(from, i)
+    const own = byDate.get(date) ?? []
+    const clients = [...new Set(own.map(e => e.client))].sort()
+    out.push({
+      date,
+      entries: own.length,
+      clients: clients.map(client => {
+        const day = clientDay(
+          c,
+          client,
+          date,
+          own.filter(e => e.client === client),
+        )
+        return {
+          client,
+          seconds: day.seconds,
+          billedSeconds: day.billedSeconds,
+          notEntered: notEntered(
+            day,
+            byId,
+            systemsFor(c, client).map(s => s.id),
+          ),
+        }
+      }),
+    })
+  }
+  return out
+}

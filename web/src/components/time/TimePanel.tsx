@@ -26,11 +26,17 @@
 // figure. Each change goes as the owner (POST /api/time) with the revision it read, and the day
 // is read again after it; an entry saved on another day says so, with a way there. Not optimistic:
 // the figures change when the board says the change is in.
-import { type PointerEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+// Day, Week and Month (#241) are a segmented control at the top: every opening starts on the day
+// and today; the arrows, Today and a swipe go by the view's unit; a week or a month is asked for its
+// days' figures (GET /api/time?from&to) and drawn by TimeSpanView.tsx, and a tap on a day opens it
+// here. The client chips pick in all three.
+import { type PointerEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { errorText, postJson, replyOf } from '../../api/client.ts'
 import { useLaneFades } from '../../hooks/useLaneFades.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
+import { useSegmentThumb } from '../../hooks/useSegmentThumb.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { stepDate, viewTitle, weekStartFor } from '../../models/calendar.ts'
 import { reducedMotion } from '../../models/spring.ts'
 import {
   addOf,
@@ -60,11 +66,21 @@ import {
   type TimeDay,
   underLine,
 } from '../../models/time.ts'
+import {
+  isTimeSpan,
+  spanClients,
+  spanDates,
+  spanFor,
+  TIME_VIEWS,
+  type TimeSpan,
+  type TimeView,
+} from '../../models/time-span.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { nextToastToken } from '../../state/board-ui.ts'
 import { ChevIcon, PlusIcon } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { EntryEditor } from './EntryEditor.tsx'
+import { TimeSpanView } from './TimeSpanView.tsx'
 
 /** The board said no: its words are the message. */
 class Refused extends Error {}
@@ -93,6 +109,18 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   const [day, setDay] = useState<TimeDay | null>(null)
   const [error, setError] = useState<{ date: string; text: string } | null>(null)
   const turns = useRef(askedInTurn())
+  const [view, setView] = useState<TimeView>('day')
+  const [span, setSpan] = useState<TimeSpan | null>(null)
+  const [spanError, setSpanError] = useState<{ from: string; to: string; text: string } | null>(null)
+  const spanTurns = useRef(askedInTurn())
+  // the week starts as the Calendar's does: Monday in Russian, else as this browser's locale has it
+  const weekStart = useMemo(
+    () => weekStartFor(t.lang === 'ru' || typeof navigator === 'undefined' ? t.lang : navigator.language),
+    [t.lang],
+  )
+  const dates = view === 'day' ? [date] : spanDates(view, date, weekStart)
+  const from = dates[0] as string
+  const to = dates.at(-1) as string
 
   const ask = useCallback(
     async (d: string) => {
@@ -112,10 +140,32 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
     [latest],
   )
 
-  // Every opening starts on today, whatever day it showed when it closed.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: on opening only
+  const askSpan = useCallback(
+    async (a: string, b: string) => {
+      const n = spanTurns.current.ask()
+      try {
+        const res = await fetch(`/api/time?from=${encodeURIComponent(a)}&to=${encodeURIComponent(b)}`, {
+          cache: 'no-store',
+        })
+        const value = await replyOf(res)
+        if (!spanTurns.current.last(n)) return
+        if (res.ok && isTimeSpan(value)) {
+          setSpan(value)
+          setSpanError(null)
+        } else setSpanError({ from: a, to: b, text: String((value as { error?: unknown }).error ?? res.status) })
+      } catch (err) {
+        if (spanTurns.current.last(n)) setSpanError({ from: a, to: b, text: errorText(err, latest.current.t) })
+      }
+    },
+    [latest],
+  )
+
+  // Every opening starts on the day and today, whatever it showed when it closed: the view goes
+  // back to the day as it closes, so an opening asks for no week or month it will not show.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on opening and closing only
   useEffect(() => {
     if (open) setDate(today)
+    else setView('day')
   }, [open])
 
   // Opened on today; a new day of the board's (past midnight) follows while it shows today.
@@ -126,8 +176,13 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   }, [today, date])
   // biome-ignore lint/correctness/useExhaustiveDependencies: asked again when the store's seq moves
   useEffect(() => {
-    if (open) void ask(date)
-  }, [open, date, seq, ask])
+    if (open && view === 'day') void ask(date)
+  }, [open, view, date, seq, ask])
+  // a week's or a month's days, asked again as the day is
+  // biome-ignore lint/correctness/useExhaustiveDependencies: asked again when the store's seq moves
+  useEffect(() => {
+    if (open && view !== 'day') void askSpan(from, to)
+  }, [open, view, from, to, seq, askSpan])
 
   // the entry open in place, as it was when opened (its `base`, what a save is against and the
   // revision it says), or 'new' for one being added; what is being sent; the board's refusal
@@ -298,16 +353,26 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   // a new entry goes to a client that takes new ones: under an off client's chip, none
   const clientsForNew = client ? (takers.includes(client) ? [client] : []) : takers
 
-  const go = (days: number) => setDate(d => shiftDate(d, days))
+  /** A day, a week or a month before (-1) or after (1), as the view goes. */
+  const go = (by: number) => setDate(d => (view === 'day' ? shiftDate(d, by) : stepDate(view, d, by)))
   // no swipe while an entry is open: a sideways drag in a field would drop the draft
   const swipe = useSwipe(go, editing === null)
+  /** A day tapped in a week or a month: that day, here. */
+  const openDay = (d: string) => {
+    setDate(d)
+    setView('day')
+  }
+  // the views' control: a segmented one, its thumb under the view on show
+  const viewsControl = useRef<HTMLDivElement>(null)
+  const viewsThumb = useRef<HTMLSpanElement>(null)
+  useSegmentThumb(viewsControl, viewsThumb, view, t.lang)
   const lang = t.lang
   // the figures under a day's name are that day's: another day's answer, still shown, is not
   const shown = dayFor(day, date)
   const failed = error && error.date === date ? error.text : null
-  // another day: whatever was open closes
-  // biome-ignore lint/correctness/useExhaustiveDependencies: on a change of day only
-  useEffect(() => setEditing(null), [date])
+  // another day or view: whatever was open closes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on a change of day or view only
+  useEffect(() => setEditing(null), [date, view])
   // another client chosen: the open entry may not be drawn, so it closes (its draft kept)
   // biome-ignore lint/correctness/useExhaustiveDependencies: on a change of client only
   useEffect(() => setEditing(null), [client])
@@ -553,138 +618,202 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
     </div>
   )
 
+  const shownSpan = view === 'day' ? null : spanFor(span, from, to)
+  const spanFailed = spanError && spanError.from === from && spanError.to === to ? spanError.text : null
+  const zone = view === 'day' ? shown?.zone : shownSpan?.zone
+  // Today is where the view already shows it: the day, the week's seven days, the month (not its grid's edges)
+  const onToday = view === 'month' ? date.slice(0, 7) === today.slice(0, 7) : dates.includes(today)
+  /** The clients as the toolbar's lanes control: All, then each (shown with two or more, or one picked). */
+  const chipsOf = (ids: string[]) =>
+    ids.length > 1 || (client !== null && ids.length > 0) ? (
+      <Chips>
+        <button type="button" aria-pressed={!client} onClick={() => onClient(null)}>
+          {t('time.all')}
+        </button>
+        {ids.map(id => (
+          <button
+            type="button"
+            aria-pressed={client === id}
+            key={id}
+            style={{ '--lane': color(id) }}
+            onClick={() => onClient(id)}
+          >
+            {/* the dot on a span of its own: the Terminal style draws a pressed segment's brackets on the button's */}
+            <span className="time-dot">{title(id)}</span>
+          </button>
+        ))}
+      </Chips>
+    ) : null
+
   return (
     <Panel id="time-sheet" kind="time" open={open} onClose={onClose} title={<h2>{t('time.title')}</h2>}>
       <div className="sheet-body cats-body time-body">
+        <div className="segmented time-views" role="tablist" aria-label={t('time.views')} ref={viewsControl}>
+          <span className="thumb" ref={viewsThumb} />
+          {TIME_VIEWS.map(v => (
+            <button type="button" key={v} role="tab" data-id={v} aria-selected={v === view} onClick={() => setView(v)}>
+              {t(`time.view.${v}`)}
+            </button>
+          ))}
+        </div>
         <div className="time-nav">
-          <h3 className="time-date" title={shown ? t('time.zone', { zone: shown.zone }) : undefined}>
-            {dayTitle(date, lang)}
+          <h3 className="time-date" aria-live="polite" title={zone ? t('time.zone', { zone }) : undefined}>
+            {view === 'day' ? dayTitle(date, lang) : viewTitle(view, date, weekStart, lang)}
           </h3>
           <button
             type="button"
             className="icon-button time-step time-prev"
-            title={t('time.prev')}
-            aria-label={t('time.prev')}
+            title={t(STEP_KEYS[view].prev)}
+            aria-label={t(STEP_KEYS[view].prev)}
             onClick={() => go(-1)}
           >
             <ChevIcon />
           </button>
-          <button type="button" className="button time-today" disabled={date === today} onClick={() => setDate(today)}>
+          <button type="button" className="button time-today" disabled={onToday} onClick={() => setDate(today)}>
             {t('time.today')}
           </button>
           <button
             type="button"
             className="icon-button time-step"
-            title={t('time.next')}
-            aria-label={t('time.next')}
+            title={t(STEP_KEYS[view].next)}
+            aria-label={t(STEP_KEYS[view].next)}
             onClick={() => go(1)}
           >
             <ChevIcon />
           </button>
         </div>
-        {shown?.problems && <p className="access-problem">{t('time.problemsNote', { problems: shown.problems })}</p>}
-        {!shown && !failed && <p className="sheet-meta time-empty">{t('time.loading')}</p>}
-        {failed && <p className="access-problem">{t('time.loadError', { error: failed })}</p>}
-        {shown && (shown.days.length > 1 || (client !== null && shown.days.length > 0)) && (
-          <Chips>
-            <button type="button" aria-pressed={!client} onClick={() => onClient(null)}>
-              {t('time.all')}
-            </button>
-            {shown.days.map(d => (
-              <button
-                type="button"
-                aria-pressed={client === d.client}
-                key={d.client}
-                style={{ '--lane': color(d.client) }}
-                onClick={() => onClient(d.client)}
-              >
-                {/* the dot on a span of its own: the Terminal style draws a pressed segment's brackets on the button's */}
-                <span className="time-dot">{title(d.client)}</span>
-              </button>
-            ))}
-          </Chips>
-        )}
-        <div className="time-days" {...swipe.handlers} style={swipe.style}>
-          {shown && days.length > 0 && (
-            <div className="time-summary" style={single ? { '--lane': color(single.client) } : undefined}>
-              <p className="time-caption">
-                {single && (
-                  <>
-                    <span className="time-dot">{title(single.client)}</span>
-                    {' · '}
-                  </>
-                )}
-                {t('time.billed')}
-              </p>
-              <p className="time-total">{dur(total)}</p>
-              {aboutLine(
-                about(total, raw, single?.lines ?? []),
-                days.reduce((n, d) => n + unentered(d), 0),
+        {view !== 'day' ? (
+          <>
+            {shownSpan?.problems && (
+              <p className="access-problem">{t('time.problemsNote', { problems: shownSpan.problems })}</p>
+            )}
+            {!shownSpan && !spanFailed && <p className="sheet-meta time-empty">{t('time.loadingSpan')}</p>}
+            {spanFailed && <p className="access-problem">{t('time.loadError', { error: spanFailed })}</p>}
+            {/* a month's clients are its own days', as its figures are, not the grid's edges' */}
+            {shownSpan &&
+              chipsOf(
+                spanClients(
+                  view === 'month'
+                    ? shownSpan.days.filter(d => d.date.slice(0, 7) === date.slice(0, 7))
+                    : shownSpan.days,
+                ),
               )}
-              {!single && total > 0 && (
-                <div className="time-bar" aria-hidden="true">
-                  {/* a client that bills nothing (never billed, or all held) has no share */}
-                  {days
-                    .filter(d => d.billedSeconds > 0)
-                    .map(d => (
-                      <span key={d.client} style={{ '--lane': color(d.client), flexGrow: d.billedSeconds }} />
-                    ))}
+            <div className="time-days" {...swipe.handlers} style={swipe.style}>
+              {shownSpan && (
+                <TimeSpanView
+                  view={view}
+                  dates={dates}
+                  date={date}
+                  span={shownSpan}
+                  client={client}
+                  today={today}
+                  weekStart={weekStart}
+                  title={title}
+                  color={color}
+                  onDay={openDay}
+                />
+              )}
+              {shownSpan && <p className="time-zone">{t('time.zone', { zone: shownSpan.zone })}</p>}
+            </div>
+          </>
+        ) : (
+          <>
+            {shown?.problems && (
+              <p className="access-problem">{t('time.problemsNote', { problems: shown.problems })}</p>
+            )}
+            {!shown && !failed && <p className="sheet-meta time-empty">{t('time.loading')}</p>}
+            {failed && <p className="access-problem">{t('time.loadError', { error: failed })}</p>}
+            {shown && chipsOf(shown.days.map(d => d.client))}
+            <div className="time-days" {...swipe.handlers} style={swipe.style}>
+              {shown && days.length > 0 && (
+                <div className="time-summary" style={single ? { '--lane': color(single.client) } : undefined}>
+                  <p className="time-caption">
+                    {single && (
+                      <>
+                        <span className="time-dot">{title(single.client)}</span>
+                        {' · '}
+                      </>
+                    )}
+                    {t('time.billed')}
+                  </p>
+                  <p className="time-total">{dur(total)}</p>
+                  {aboutLine(
+                    about(total, raw, single?.lines ?? []),
+                    days.reduce((n, d) => n + unentered(d), 0),
+                  )}
+                  {!single && total > 0 && (
+                    <div className="time-bar" aria-hidden="true">
+                      {/* a client that bills nothing (never billed, or all held) has no share */}
+                      {days
+                        .filter(d => d.billedSeconds > 0)
+                        .map(d => (
+                          <span key={d.client} style={{ '--lane': color(d.client), flexGrow: d.billedSeconds }} />
+                        ))}
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-          )}
-          {shown && !days.length && <p className="time-empty">{t('time.empty')}</p>}
-          {canEdit && clientsForNew.length > 0 && day && (
-            <div className="time-add">
-              {editing === 'new' ? (
-                <EntryEditor
-                  // a new day, a new draft (one typed on this day and left open comes back)
-                  key={date}
-                  draft={newOne.kept ?? newOne.fresh}
-                  clients={clientsForNew}
-                  clientTitle={title}
-                  projects={projectsOf}
-                  retired={retiredOf}
-                  tags={shown?.tags}
-                  billableDefault={billableDefault}
-                  busy={busy}
-                  error={editError}
-                  onSave={d => void add(d)}
-                  onCancel={() => {
-                    forget(`new:${date}`)
-                    open1(null)
-                  }}
-                  onDraft={d => keep(`new:${date}`, null, d, newOne.fresh)}
-                />
-              ) : (
-                <button type="button" className="time-add-open" onClick={() => open1('new')}>
-                  <PlusIcon />
-                  <span>{t('time.edit.add')}</span>
-                </button>
+              {shown && !days.length && <p className="time-empty">{t('time.empty')}</p>}
+              {canEdit && clientsForNew.length > 0 && day && (
+                <div className="time-add">
+                  {editing === 'new' ? (
+                    <EntryEditor
+                      // a new day, a new draft (one typed on this day and left open comes back)
+                      key={date}
+                      draft={newOne.kept ?? newOne.fresh}
+                      clients={clientsForNew}
+                      clientTitle={title}
+                      projects={projectsOf}
+                      retired={retiredOf}
+                      tags={shown?.tags}
+                      billableDefault={billableDefault}
+                      busy={busy}
+                      error={editError}
+                      onSave={d => void add(d)}
+                      onCancel={() => {
+                        forget(`new:${date}`)
+                        open1(null)
+                      }}
+                      onDraft={d => keep(`new:${date}`, null, d, newOne.fresh)}
+                    />
+                  ) : (
+                    <button type="button" className="time-add-open" onClick={() => open1('new')}>
+                      <PlusIcon />
+                      <span>{t('time.edit.add')}</span>
+                    </button>
+                  )}
+                </div>
               )}
+              {days.map(d => (
+                <section className="time-client" key={d.client} style={{ '--lane': color(d.client) }}>
+                  {!single && (
+                    <header className="time-client-head">
+                      <h4 className="time-dot">{title(d.client)}</h4>
+                      <span className="time-client-total">{dur(d.billedSeconds)}</span>
+                      {aboutLine(about(d.billedSeconds, d.seconds, d.lines), unentered(d))}
+                    </header>
+                  )}
+                  <div className="time-lines">
+                    {d.lines.map(lineOf(d.client))}
+                    {d.nonBillable.length > 0 && unbilledOf(d)}
+                    {d.held.length > 0 && heldOf(d)}
+                  </div>
+                </section>
+              ))}
+              {shown && days.length > 0 && <p className="time-zone">{t('time.zone', { zone: shown.zone })}</p>}
             </div>
-          )}
-          {days.map(d => (
-            <section className="time-client" key={d.client} style={{ '--lane': color(d.client) }}>
-              {!single && (
-                <header className="time-client-head">
-                  <h4 className="time-dot">{title(d.client)}</h4>
-                  <span className="time-client-total">{dur(d.billedSeconds)}</span>
-                  {aboutLine(about(d.billedSeconds, d.seconds, d.lines), unentered(d))}
-                </header>
-              )}
-              <div className="time-lines">
-                {d.lines.map(lineOf(d.client))}
-                {d.nonBillable.length > 0 && unbilledOf(d)}
-                {d.held.length > 0 && heldOf(d)}
-              </div>
-            </section>
-          ))}
-          {shown && days.length > 0 && <p className="time-zone">{t('time.zone', { zone: shown.zone })}</p>}
-        </div>
+          </>
+        )}
       </div>
     </Panel>
   )
+}
+
+/** What the arrows say in each view. */
+const STEP_KEYS: Record<TimeView, { prev: string; next: string }> = {
+  day: { prev: 'time.prev', next: 'time.next' },
+  week: { prev: 'time.prevWeek', next: 'time.nextWeek' },
+  month: { prev: 'time.prevMonth', next: 'time.nextMonth' },
 }
 
 /** The clients of the day as the toolbar's lanes control has them, fading out at an edge with more past it. */

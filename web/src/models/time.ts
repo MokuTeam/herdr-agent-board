@@ -483,19 +483,5 @@ export function markPlan(entries: readonly Posted[], system: string): { send: Ma
   return { send: { op: 'post', system, entries: [...fresh, ...stale].map(e => ({ id: e.id, rev: e.rev })) }, undo }
 }
 
-/**
- * A client's billed time not yet entered: its lines with an entry missing a mark in one of the
- * systems that it is to be entered in (its own `systems`: a project entered elsewhere is not asked
- * for in the rest).
- */
-export function notEntered(day: ClientDay, byId: ReadonlyMap<string, Posted>, systems: readonly string[]): number {
-  if (!systems.length) return 0
-  const missing = (id: string, sys: string): boolean => {
-    const e = byId.get(id)
-    if (e?.systems && !e.systems.includes(sys)) return false
-    return !e?.posts.some(p => p.system === sys)
-  }
-  return day.lines
-    .filter(l => systems.some(sys => l.entries.some(id => missing(id, sys))))
-    .reduce((n, l) => n + l.billedSeconds, 0)
-}
+// a client's billed time not yet entered: the day's figure and the week's and month's say it alike
+export { notEntered } from '../../../src/core/time.ts'
