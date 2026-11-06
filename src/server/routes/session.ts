@@ -82,7 +82,8 @@ function queueWindow(deps: Deps, item: Item): QueueWindow {
 /** The user's messages still in a running Claude session's queue, as its detail shows them (Send now, #330). */
 function queueOf(deps: Deps, item: Item): QueuedPrompt[] {
   if (!item.alive || isCodexItem(item) || isPiItem(item)) return []
-  return deps.claude.sessionThread(item.transcript ?? '', 1, queueWindow(deps, item)).queued
+  // As far back as the detail reads it, so both see the same queue.
+  return deps.claude.sessionThread(item.transcript ?? '', 60, queueWindow(deps, item)).queued
 }
 
 async function detail(app: SessionApp, item: Item) {

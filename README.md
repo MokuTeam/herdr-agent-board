@@ -307,6 +307,9 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
 - A side question (the bubble in the message box, or a message that starts with `/btw`): typed
   into the session as Claude Code's own `/btw`, answered in a card over the box, while nothing
   goes into the session's conversation; see [Side questions](#side-questions).
+- Stop (a working card, beside the status in its sheet) and Send now (on a message waiting in
+  the session's queue): the turn interrupted, or the queue taken into the turn at once, as Esc and
+  Ctrl+Enter do in Claude Code's terminal; see [Stop and Send now](#stop-and-send-now).
 - The sheet's place and size are the viewer's own (kept in this browser): docked right, left or
   at the bottom, flush with that edge like a sidebar, where the board makes room for it (a window
   too narrow for that keeps the board's columns and lays the sheet over them), or floating over
@@ -1060,6 +1063,39 @@ error, busy? }` (the page only, with herdr's data recent enough to act on); the 
 `aside` says whether the board can ask. Code: `src/core/aside.ts` (the overlay on the screen),
 `src/services/aside.ts` (the steps through herdr), `web/src/hooks/useAside.ts`,
 `web/src/components/sheet/Aside.tsx`.
+
+## Stop and Send now
+
+Two keys of Claude Code's own, pressed into the session's pane through herdr (`herdr agent
+send-keys`), so the terminal does not have to be opened for them:
+
+- **Stop**, on a card in "Working" and beside the status in its sheet: Esc, which interrupts the
+  running turn. The session stays open with its conversation. A first press only arms it (it turns
+  red and asks); a second one, not the second click of a double click, stops the turn; left alone a
+  few seconds, Escape, or the pointer moving away takes it back. The board then reads the
+  transcript for Claude Code's mark of an interrupted turn (`[Request interrupted by user]`), or
+  herdr saying the turn is over; neither within a few seconds, and it says the turn did not stop.
+  A message waiting in the queue starts the next turn right after the stop, as it does after Esc in
+  the terminal.
+- **Send now**, on a message waiting in the session's queue at the foot of its thread (shown on
+  hover or focus, always on a touch screen): Ctrl+Enter, Claude Code's `chat:sendNow`, which takes
+  every waiting message into the running turn at once instead of after it. The message says
+  "Sending now…" until it leaves the queue, and settles into the conversation once it has; the
+  board says so when it has not within a few seconds.
+
+Both only where the board knows the program's key and can reach its pane: a Claude session (keys
+checked on Claude Code 2.1.319) with a pane, awake, while its turn runs. pi, Codex and others get
+neither until their keys are known; a MokuPilot call agent or day session (no pane) and a sleeper
+get neither. Nothing is pressed into a pane that holds another session by now, waits in a dialog,
+or shows something over its input box; Send now also waits for an empty input box, where the same
+key would send the text typed there. One press at a time per pane.
+
+`POST /api/session/<key>/stop` and `POST /api/session/<key>/sendnow` with `{ text }` (the queued
+message pressed) answer `{ ok }`, `{ ok, already }` when there was nothing left to do, or `{ ok:
+false, error, busy? }` (the page only, with herdr's data recent enough to act on). Code:
+`src/core/turn-keys.ts` (the keys per program, the transcript's mark), `src/services/turn.ts`,
+`web/src/components/StopButton.tsx`, `web/src/models/stop-guard.ts`, the queue's foot in
+`web/src/components/sheet/Thread.tsx`.
 
 ## Terminal
 

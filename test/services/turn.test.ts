@@ -30,9 +30,11 @@ const marker = (at: number) =>
 interface Pane {
   agent: HerdrAgent | null
   screen: string
-  /** What Esc does: writes the marker, ends the turn, both, or nothing (the turn goes on). */
-  esc: { marker?: boolean; idle?: boolean }
+  /** What Esc does: writes the marker, ends the turn, puts up a dialog, or nothing (the turn goes on). */
+  esc: { marker?: boolean; idle?: boolean; blocked?: boolean; replaced?: boolean }
   queued: QueuedPrompt[]
+  /** Whether ctrl+enter takes the queue in (false: an older Claude Code, a key bound to something else). */
+  takes: boolean
 }
 
 /** A fake pane on a fake clock: each sleep moves it on. */
@@ -42,6 +44,7 @@ function fakePane(pane: Partial<Pane> = {}) {
     screen: prompt(),
     esc: { marker: true },
     queued: [],
+    takes: true,
     ...pane,
   }
   const sent: string[] = []
@@ -55,8 +58,10 @@ function fakePane(pane: Partial<Pane> = {}) {
       if (keys.includes('esc')) {
         if (p.esc.marker) transcript += `${marker(now + 200)}\n`
         if (p.esc.idle && p.agent) p.agent = { ...p.agent, status: 'idle' }
+        if (p.esc.blocked && p.agent) p.agent = { ...p.agent, status: 'blocked' }
+        if (p.esc.replaced) p.agent = { session: 'another', status: 'idle', kind: 'claude' } as HerdrAgent
       }
-      if (keys.includes('ctrl+enter')) p.queued = []
+      if (keys.includes('ctrl+enter') && p.takes) p.queued = []
     },
     transcript: () => transcript,
     queued: () => p.queued,
@@ -100,7 +105,10 @@ describe('Stop', () => {
 
   test('nothing pressed: over a dialog, a dialog herdr knows, another session, a turn already over', async () => {
     const cases: [Partial<Pane>, object][] = [
-      [{ screen: DIALOG }, { ok: false, busy: true, error: 'Something is open over Acme’s input box: the board presses nothing into it' }],
+      [
+        { screen: DIALOG },
+        { ok: false, busy: true, error: 'Something is open over Acme’s input box: the board presses nothing into it' },
+      ],
       [
         { agent: { session: S, status: 'blocked', kind: 'claude' } as HerdrAgent },
         { ok: false, busy: true, error: 'Acme waits for a decision in the terminal' },
@@ -131,12 +139,59 @@ describe('Stop', () => {
     }
   })
 
+  test('a dialog that comes up instead is not a stop; the pane holding another session after Esc says so', async () => {
+    const blocked = fakePane({ esc: { blocked: true } })
+    expect(await stopTurn(deps, item, { ...blocked, waitMs: 2000 })).toEqual({
+      ok: false,
+      error: 'Acme did not stop: it is still working 2 s after Esc',
+    })
+    const replaced = fakePane({ esc: { replaced: true } })
+    expect(await stopTurn(deps, item, replaced)).toEqual({
+      ok: false,
+      error: 'Acme: another session is in that pane now, refresh the board',
+    })
+  })
+
+  test('one press at a time in a pane: a second Stop while the first waits is refused, no second Esc', async () => {
+    const f = fakePane({ esc: {} })
+    let release = () => {}
+    const held = new Promise<void>(r => {
+      release = r
+    })
+    const first = stopTurn(deps, item, {
+      ...f,
+      waitMs: 1000,
+      sleep: async ms => {
+        await held
+        await f.sleep(ms)
+      },
+    })
+    await Bun.sleep(0)
+    expect(await stopTurn(deps, item, f)).toEqual({
+      ok: false,
+      busy: true,
+      error: 'The board is pressing a key in Acme already',
+    })
+    expect(await sendNow(deps, item, undefined, fakePane({ queued: [{ text: 'x', at: 1 }] }))).toMatchObject({
+      ok: false,
+      busy: true,
+    })
+    release()
+    expect((await first).ok).toBe(false)
+    expect(f.sent).toEqual(['esc'])
+    // Free again once it is over.
+    expect(await stopTurn(deps, item, fakePane())).toEqual({ ok: true })
+  })
+
   test('herdr failing says so', async () => {
     const f = fakePane()
     f.io.keys = async () => {
       throw new Error('socket closed')
     }
-    expect(await stopTurn(deps, item, f)).toEqual({ ok: false, error: 'herdr did not press the key in Acme: socket closed' })
+    expect(await stopTurn(deps, item, f)).toEqual({
+      ok: false,
+      error: 'herdr did not press the key in Acme: socket closed',
+    })
   })
 
   test('in Russian', async () => {
@@ -164,12 +219,22 @@ describe('Send now', () => {
     expect(f.sent).toEqual(['ctrl+enter'])
   })
 
+  test('a key that took nothing in is reported, not shown as sent', async () => {
+    const f = fakePane({ queued, takes: false })
+    expect(await sendNow(deps, item, 'and the tests', { ...f, waitMs: 3000 })).toEqual({
+      ok: false,
+      error: 'Acme has not taken it in yet: it goes in once the running turn makes way, or after it',
+    })
+    expect(f.sent).toEqual(['ctrl+enter'])
+  })
+
   test('only on a queued message: gone in already, or nothing queued, presses nothing', async () => {
-    for (const [pane, text] of [
+    const cases: [Partial<Pane>, string | undefined][] = [
       [{ queued }, 'something else'],
       [{ queued: [] }, 'also check the logs'],
       [{ queued: [] }, undefined],
-    ] as const) {
+    ]
+    for (const [pane, text] of cases) {
       const f = fakePane(pane)
       expect(await sendNow(deps, item, text, f)).toEqual({ ok: true, already: true })
       expect(f.sent).toEqual([])

@@ -22,7 +22,9 @@ describe('the keys, by program', () => {
   })
 
   test('pi, Codex, an agent herdr does not name, a pane-<id> key: none until their keys are known', () => {
-    for (const agent of ['pi', 'codex', 'opencode', '', undefined, 'constructor', '__proto__']) {
+    const { agent: _claude, ...unnamed } = claude
+    expect([turnKeys(unnamed, 'stop'), canStop(unnamed), canSendNow(unnamed)]).toEqual([null, false, false])
+    for (const agent of ['pi', 'codex', 'opencode', '', 'constructor', '__proto__']) {
       const it = { ...claude, agent, session: agent === 'pi' ? 'pane-w1:p2' : S }
       expect([agent, turnKeys(it, 'stop'), turnKeys(it, 'sendNow')]).toEqual([agent, null, null])
       expect([agent, canStop(it), canSendNow(it)]).toEqual([agent, false, false])
@@ -44,7 +46,11 @@ describe('the keys, by program', () => {
 
   test('only while its turn runs: idle, done, blocked on a dialog, unknown get no button', () => {
     for (const status of ['idle', 'done', 'blocked', 'unknown', 'sleeping'] as const) {
-      expect([status, canStop({ ...claude, status }), canSendNow({ ...claude, status })]).toEqual([status, false, false])
+      expect([status, canStop({ ...claude, status }), canSendNow({ ...claude, status })]).toEqual([
+        status,
+        false,
+        false,
+      ])
     }
   })
 })

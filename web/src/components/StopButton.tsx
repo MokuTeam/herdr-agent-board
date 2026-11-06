@@ -14,7 +14,7 @@ import { StopGlyph } from './icons.tsx'
 /** `labeled`: the sheet's, with its word; the card's is a glyph that says more only once armed. */
 export function StopButton({ item, labeled = false }: { item: Item; labeled?: boolean }) {
   const t = useT()
-  const { canMutate } = useBoardContext()
+  const { canMutate, ui } = useBoardContext()
   const actions = useSessionActions()
   const [armedAt, setArmedAt] = useState<number | null>(null)
   const armed = armedAt !== null
@@ -32,7 +32,8 @@ export function StopButton({ item, labeled = false }: { item: Item; labeled?: bo
       className={classNames('stop-turn', labeled && 'labeled', armed && 'armed')}
       title={t(armed ? 'turn.stop.confirmHint' : 'turn.stop.hint')}
       aria-label={armed ? t('turn.stop.confirmHint') : t('turn.stop')}
-      disabled={!canMutate}
+      // Not again while a stop of this session is on its way (its card says "Stopping…").
+      disabled={!canMutate || ui.busy.has(item.key)}
       onClick={(e: MouseEvent<HTMLButtonElement>) => {
         // The card under it opens nothing (Board.tsx leaves data-act="stop" to this button).
         e.stopPropagation()
@@ -45,6 +46,8 @@ export function StopButton({ item, labeled = false }: { item: Item; labeled?: bo
         }
       }}
       onKeyDown={(e: KeyboardEvent<HTMLButtonElement>) => {
+        // A held Enter repeats its click: it presses once.
+        if (e.repeat && (e.key === 'Enter' || e.key === ' ')) return e.preventDefault()
         if (e.key !== 'Escape' || !armed) return
         e.stopPropagation()
         disarm()

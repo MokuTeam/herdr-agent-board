@@ -2,7 +2,7 @@
 // where they do not, the guard against a mistaken press, and the calm step from queued to sent.
 import { describe, expect, test } from 'bun:test'
 import type { QueuedPrompt } from '../../src/core/queue.ts'
-import type { Item } from '../../src/core/types.ts'
+import type { Item, Lang } from '../../src/core/types.ts'
 import { Board } from '../../web/src/components/Board.tsx'
 import { SheetHead } from '../../web/src/components/sheet/SheetHead.tsx'
 import { Waiting } from '../../web/src/components/sheet/Thread.tsx'
@@ -22,7 +22,7 @@ const cardOf = (nodes: Node[], key: string): Node[] => [
 ]
 const textOf = (node: Node): string => ('text' in node ? node.text : node.children.map(textOf).join(''))
 
-function boardWith(items: Item[], lang = 'en', stale = false) {
+function boardWith(items: Item[], lang: Lang = 'en', stale = false) {
   return renderInBoard(<Board />, board({ data: payload({ items, lang, stale, categories: CATEGORIES }) }), lang)
 }
 
@@ -32,7 +32,7 @@ describe('Stop on the card', () => {
       working({ key: 'claude' }),
       working({ key: 'pi', agent: 'pi' }),
       working({ key: 'codex', agent: 'codex' }),
-      working({ key: 'unknown', agent: undefined }),
+      (({ agent: _a, ...rest }: Item) => rest)(working({ key: 'unknown' })),
       // A MokuPilot call agent (#326) and a day session (#331): no pane.
       working({ key: 'call', pane: null }),
       working({ key: 'day', pane: null, day: true }),
@@ -67,8 +67,8 @@ describe('Stop on the card', () => {
 })
 
 describe('Stop in the sheet', () => {
-  const head = (it: Item, lang = 'en') =>
-    renderInBoard(<SheetHead item={it} />, board({ data: payload({ items: [it], lang }) }), lang)
+  const head = (it: Item, lang: Lang = 'en') =>
+    renderInBoard(<SheetHead item={it} missing={false} />, board({ data: payload({ items: [it], lang }) }), lang)
 
   test('beside the status, with its word, only where the card has it', () => {
     const stop = stopsIn(head(working({ key: 'a' })))[0] as Element
@@ -109,10 +109,19 @@ describe('Send now on a queued message', () => {
     { text: 'also check the logs', at: 1000 },
     { text: 'and the tests', at: 2000 },
   ]
-  const own: OutboxEntry[] = [
-    { id: 'o1', key: 'a', session: 'a', text: 'mine', full: 'mine', files: [], at: 3000, state: 'sending' },
-    { id: 'o2', key: 'a', session: 'a', text: 'lost', full: 'lost', files: [], at: 4000, state: 'failed', error: 'no' },
-  ] as OutboxEntry[]
+  const out = (id: string, text: string, state: OutboxEntry['state'], error = ''): OutboxEntry => ({
+    id,
+    text,
+    files: [],
+    attached: [],
+    full: text,
+    key: text,
+    after: 0,
+    state,
+    error,
+    sentAt: 0,
+  })
+  const own = [out('o1', 'mine', 'sending'), out('o2', 'lost', 'failed', 'no')]
   const sendNow = async () => ({ ok: true })
   const foot = (onSendNow?: typeof sendNow, lang = 'en') =>
     renderInBoard(<Waiting queued={queued} own={own} onSendNow={onSendNow} />, board(), lang)
@@ -137,7 +146,11 @@ describe('Send now on a queued message', () => {
   test('none while the board cannot send it now (an idle session, an unknown program): still "Queued"', () => {
     const nodes = foot(undefined)
     expect(buttons(nodes)).toEqual([])
-    expect(findAll(nodes, el => hasClass(el, 'when')).map(textOf).slice(0, 2)).toEqual(['Queued', 'Queued'])
+    expect(
+      findAll(nodes, el => hasClass(el, 'when'))
+        .map(textOf)
+        .slice(0, 2),
+    ).toEqual(['Queued', 'Queued'])
   })
 
   test('in Russian', () => {
@@ -155,7 +168,7 @@ describe('from queued to sent', () => {
     expect(takeSettling('first', 300)).toBe(false)
   })
 
-  test('not one that shows much later, nor another session\'s', () => {
+  test("not one that shows much later, nor another session's", () => {
     noteQueue('s2', ['late'], 0)
     noteQueue('s2', [], 0)
     expect(takeSettling('late', SETTLE_WINDOW_MS + 1)).toBe(false)

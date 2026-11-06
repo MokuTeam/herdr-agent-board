@@ -408,11 +408,12 @@ function Conversation({ detail, item, links, composer, onResize }: ConversationP
   const conversation = detail.data?.conversation
   // The foot: the session's queue, then the board's own messages on their way or not sent.
   const queued = detail.data?.queued ?? []
-  // What left the queue settles into the conversation (models/settle.ts).
-  noteQueue(
-    item.key,
-    queued.map(m => m.text),
-  )
+  // What left the queue settles into the conversation (models/settle.ts); a detail not read yet says nothing.
+  if (detail.data)
+    noteQueue(
+      item.key,
+      queued.map(m => m.text),
+    )
   const own = composer.outbox.waiting(item.key)
   // Send now on a queued message, while the session works and its key is known (#330).
   const sendNow = canSendNow(item) ? (text: string) => actions.sendNow(item.key, text) : undefined

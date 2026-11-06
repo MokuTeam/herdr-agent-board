@@ -19,7 +19,6 @@ export const TURN_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'turn.sendNow.hint':
       'Into the running turn at once, with every message waiting in the queue (Ctrl+Enter in the terminal)',
     'turn.sendingNow': 'Sending now…',
-    'turn.sendNow.already': 'It has gone in already',
     // why nothing was pressed, or what came of it
     'turn.err.unknown': 'The board does not know the key that stops {name}',
     'turn.err.asleep': '{name} is asleep: no turn runs',
@@ -28,6 +27,8 @@ export const TURN_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'turn.err.herdr': 'herdr did not press the key in {name}: {why}',
     'turn.sendNow.err.unknown': 'The board does not know the key that sends a queued message now in {name}',
     'turn.sendNow.err.draft': '{name} has unsent text in its input box: Send now would send that instead',
+    'turn.sendNow.err.still': '{name} has not taken it in yet: it goes in once the running turn makes way, or after it',
+    'turn.err.inFlight': 'The board is pressing a key in {name} already',
   },
   ru: {
     'turn.stop': 'Стоп',
@@ -41,7 +42,6 @@ export const TURN_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'turn.sendNow': 'Отправить сейчас',
     'turn.sendNow.hint': 'Сразу в идущий ход, вместе со всеми сообщениями в очереди (Ctrl+Enter в терминале)',
     'turn.sendingNow': 'Отправляется сейчас…',
-    'turn.sendNow.already': 'Сообщение уже ушло',
     'turn.err.unknown': '{name}: доска не знает клавишу, которая останавливает эту программу',
     'turn.err.asleep': '{name} спит: хода нет',
     'turn.err.covered': '{name}: поле ввода чем-то закрыто, доска ничего туда не нажимает',
@@ -49,5 +49,8 @@ export const TURN_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'turn.err.herdr': '{name}: herdr не нажал клавишу: {why}',
     'turn.sendNow.err.unknown': '{name}: доска не знает клавишу, которая сразу отправляет сообщение из очереди',
     'turn.sendNow.err.draft': '{name}: в поле ввода недописанный текст, «Отправить сейчас» отправило бы его',
+    'turn.sendNow.err.still':
+      '{name}: сообщение пока в очереди, оно уйдёт, когда идущий ход уступит место, или после него',
+    'turn.err.inFlight': '{name}: доска уже нажимает там клавишу',
   },
 }
