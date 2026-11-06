@@ -1,7 +1,8 @@
 // A calendar reminder on the desktop (#335), from the web board's process. Windows: a toast through
 // toast.ps1's `reminder` action (the reminder as JSON on stdin), with Join (the meeting's link
 // itself) or Open, Snooze and At start; its buttons that are not a link come back through the
-// claude-pane: protocol as `claude-pane:cal/<act>/<id>` to entrypoints/web-open.ts --reminder.
+// claude-pane: protocol as `claude-pane:cal/<act>/<id>` to entrypoints/web-open.ts --reminder;
+// `reminder-clear` takes one off the screen once it was acted on elsewhere (its id on stdin).
 // macOS: the notification helper the session toasts use (integrations/toast-mac.ts), once it is
 // built, its click Join (the link, opened by `open`) or Open; the helper takes no buttons, so
 // Snooze is on the page.
@@ -48,6 +49,8 @@ function launch(program: string, args: string[], input: string | null, log: (msg
       windowsHide: true,
     })
     child.once('error', err => log(`reminder notification: ${err.message}`))
+    // a program that ends before it reads its input: no unhandled EPIPE in the board's process
+    child.stdin?.on('error', () => {})
     if (input !== null) child.stdin?.end(input)
     child.unref()
   } catch (err) {
@@ -62,8 +65,9 @@ export function windowsDesktop(log: (msg: string) => void, bin: string = powersh
     show(toast) {
       launch(bin, [...PS_ARGS, toastScript(), 'reminder'], JSON.stringify(toast), log)
     },
+    // the id on stdin too: one that starts with a dash would read as a parameter's name
     clear(id) {
-      launch(bin, [...PS_ARGS, toastScript(), 'reminder-clear', id], null, log)
+      launch(bin, [...PS_ARGS, toastScript(), 'reminder-clear'], JSON.stringify({ id }), log)
     },
   }
 }

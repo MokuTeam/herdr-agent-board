@@ -58,12 +58,14 @@ export interface CalendarPanelProps {
   open: boolean
   /** An event to show as the panel opens, or while it is open. */
   focus?: CalendarFocus | null
+  /** The event asked for is on show (its card open), or not to be found in its window: the ask is done. */
+  onFocused?: (() => void) | undefined
   onClose(): void
   /** Settings → Calendar, on this computer's board only. */
   onSettings?: (() => void) | undefined
 }
 
-export function CalendarPanel({ open, focus = null, onClose, onSettings }: CalendarPanelProps) {
+export function CalendarPanel({ open, focus = null, onFocused, onClose, onSettings }: CalendarPanelProps) {
   const t = useT()
   const lang = t.lang
   const { data, toast } = useBoardContext()
@@ -128,12 +130,24 @@ export function CalendarPanel({ open, focus = null, onClose, onSettings }: Calen
     setCard(null)
     setDate(localDate(Date.parse(focus.start)))
   }, [open, focus])
+  const focused = useLatest(onFocused)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: looked at again with each answer and each ask
   useEffect(() => {
     const f = wanted.current
     if (!f || !answer) return
+    const done = () => {
+      wanted.current = null
+      focused.current?.()
+    }
     const e = answer.events.find(x => x.source === f.source && x.id === f.id)
     const el = e && document.querySelector<HTMLElement>(`[data-ev="${CSS.escape(`${f.source}/${f.id}`)}"]`)
-    if (!e || !el) return
+    if (!e || !el) {
+      // an answer for its day without it on show (gone, or its source hidden): the ask goes, and a
+      // later answer does not pop it open
+      const at = Date.parse(f.start)
+      if (answer.from <= at && at < answer.to) done()
+      return
+    }
     el.scrollIntoView({ block: 'nearest' })
     // the card goes where the event rests: once the panel has come in (its place still for a frame)
     let frame = 0
@@ -143,7 +157,7 @@ export function CalendarPanel({ open, focus = null, onClose, onSettings }: Calen
       const r = el.getBoundingClientRect()
       const at = `${Math.round(r.left)},${Math.round(r.top)}`
       if (at === last || --left <= 0) {
-        wanted.current = null
+        done()
         setCard({ e, from: el })
       } else {
         last = at
@@ -152,7 +166,7 @@ export function CalendarPanel({ open, focus = null, onClose, onSettings }: Calen
     }
     frame = requestAnimationFrame(settle)
     return () => cancelAnimationFrame(frame)
-  }, [answer])
+  }, [answer, focus])
   // biome-ignore lint/correctness/useExhaustiveDependencies: asked again when the board's calendar changes
   useEffect(() => {
     if (open) void ask(win.from, win.to)

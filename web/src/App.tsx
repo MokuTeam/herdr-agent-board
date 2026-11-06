@@ -287,7 +287,11 @@ export function App() {
         calendar={{
           open: calendarOpen,
           focus: calendarFocus,
-          onClose: () => setCalendarOpen(false),
+          onFocused: () => setCalendarFocus(null),
+          onClose: () => {
+            setCalendarOpen(false)
+            setCalendarFocus(null)
+          },
           onSettings: remotePage() ? undefined : openCalendarSettings,
         }}
         {...(localPathsMounted && remotePage()

@@ -26,18 +26,24 @@ const clock = (at: number, lang: string): string =>
 
 export function Reminders({ onOpen }: { onOpen: ShowEvent }) {
   const t = useT()
-  const { data, toast, canEdit } = useBoardContext()
+  const { data, toast, canEdit, connected } = useBoardContext()
   const line = data?.calendar?.reminders
   const items = line?.items ?? []
-  const sig = items.map(r => r.id).join(',')
+  // what a card shows: a title or a link changed while it is up shows at once
+  const sig = JSON.stringify(items.map(r => [r.id, r.title, r.join ?? '', r.start, r.end, r.label, r.color]))
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set())
   const [leaving, setLeaving] = useState<ReadonlyMap<string, Item>>(() => new Map())
   const before = useRef<Item[]>([])
   const now = useMinute(items.length > 0 || leaving.size > 0)
   const lanes = data?.categories ?? []
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: follows the ids on show, not the payload's identity
+  // biome-ignore lint/correctness/useExhaustiveDependencies: follows what is on show, not the payload's identity
   const shown = useMemo(() => items.filter(r => !hidden.has(r.id)), [sig, hidden])
+  // a page that was away (its stream suspended) may have missed the board taking one out: the board's
+  // word on what is on show counts again once it is back
+  useEffect(() => {
+    if (connected) setHidden(h => (h.size ? new Set() : h))
+  }, [connected])
   // a reminder that left (snoozed, dismissed elsewhere, past) goes on its spring; one that comes
   // back after a snooze has the same id and shows again
   // biome-ignore lint/correctness/useExhaustiveDependencies: follows the ids on show
@@ -66,20 +72,25 @@ export function Reminders({ onOpen }: { onOpen: ShowEvent }) {
 
   const act = async (r: Item, a: 'snooze' | 'start' | 'dismiss' | 'join') => {
     setHidden(h => new Set(h).add(r.id))
-    try {
-      const res = await postJson('/api/calendar-reminders', { id: r.id, act: a })
-      // gone already (its event moved, removed): nothing to bring back
-      if (res.ok || res.status === 404) return
-      const reply = (await replyOf(res)) as { error?: string }
-      throw new Error(reply.error || t('err.status', { code: res.status }))
-    } catch (err) {
+    const back = (why: string) => {
       setHidden(h => {
         const next = new Set(h)
         next.delete(r.id)
         return next
       })
-      toast(errorText(err, t), true)
+      toast(why, true)
     }
+    let res: Response
+    try {
+      res = await postJson('/api/calendar-reminders', { id: r.id, act: a })
+    } catch (err) {
+      back(errorText(err, t))
+      return
+    }
+    // gone already (its event moved, removed): nothing to bring back
+    if (res.ok || res.status === 404) return
+    const reply = (await replyOf(res)) as { error?: string }
+    back(reply.error || t('err.status', { code: res.status }))
   }
 
   if (!line && !leaving.size) return null
@@ -158,10 +169,17 @@ function ReminderCard(props: {
   useEffect(() => {
     const s = spring.current
     const el = ref.current
-    if (!leaving || !s || !el) return
-    el.style.pointerEvents = 'none'
-    s.onRest = () => onGone(r.id)
-    s.to(0)
+    if (!s || !el) return
+    if (leaving) {
+      el.style.pointerEvents = 'none'
+      s.onRest = () => onGone(r.id)
+      s.to(0)
+    } else if (el.style.pointerEvents) {
+      // the board refused a button: the card comes back from wherever it was going
+      el.style.pointerEvents = ''
+      s.onRest = () => {}
+      s.to(1)
+    }
   }, [leaving, onGone, r.id])
 
   return (

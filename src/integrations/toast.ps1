@@ -15,8 +15,8 @@
 # The web board posts its calendar reminders (#335) through it too: `reminder` with the reminder as
 # JSON on stdin, under the board's own app id, with Join (the meeting's link itself) or Open,
 # Snooze and At start; the buttons that are not a link open claude-pane:cal/<act>/<id>, which goes
-# to the board (web-open.ts --reminder). `reminder-clear <id>` takes one off the screen and the
-# notification centre once it was acted on elsewhere.
+# to the board (web-open.ts --reminder). `reminder-clear` (its id on stdin) takes one off the screen
+# and the notification centre once it was acted on elsewhere.
 # Try it from a herdr pane: a Stop payload on stdin and `force` (skips the focused-pane check):
 #   '{"hook_event_name":"Stop","last_assistant_message":"Hi"}' | powershell -File toast.ps1 force
 
@@ -172,6 +172,16 @@ function Register-Handlers {
     Set-ItemProperty -Path $commandKey -Name "(default)" -Value $command
 }
 
+# Bun from PATH, else where its installer puts it; null when neither has it.
+function Find-Bun {
+    $bun = (Get-Command bun -ErrorAction SilentlyContinue).Source
+    if (-not $bun) {
+        $bun = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
+        if (-not (Test-Path -LiteralPath $bun)) { $bun = $null }
+    }
+    $bun
+}
+
 # The board's calendar reminders come under an app id of their own, "Agent board" with its icon.
 function Register-BoardApp {
     $key = "HKCU:\Software\Classes\AppUserModelId\$BoardAppId"
@@ -302,19 +312,14 @@ function Show-Toast([string]$Title, [string]$Body, [string]$Attribution, [string
 }
 
 if ($Action -eq "open") {
-    # Bun from PATH, else where its installer puts it.
     $boardOpen = Join-Path $BoardDir "src\entrypoints\web-open.ts"
-    $bun = (Get-Command bun -ErrorAction SilentlyContinue).Source
-    if (-not $bun) {
-        $bun = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
-        if (-not (Test-Path -LiteralPath $bun)) { $bun = $null }
-    }
 
-    # A calendar reminder's button: the board snoozes it, or shows its event.
+    # A calendar reminder's button (#335): the board snoozes it, or shows its event.
     if ([Uri]::UnescapeDataString($Uri) -match '^claude-pane:cal/(open|snooze|start)/([A-Za-z0-9_-]{16})/?$') {
-        if ($bun -and (Test-Path -LiteralPath $boardOpen)) {
-            & $bun $boardOpen --reminder $Matches[1] $Matches[2] | Out-Null
-        }
+        $act = $Matches[1]
+        $id = $Matches[2]
+        $bun = Find-Bun
+        if ($bun -and (Test-Path -LiteralPath $boardOpen)) { & $bun $boardOpen --reminder $act $id | Out-Null }
         exit 0
     }
 
@@ -324,6 +329,7 @@ if ($Action -eq "open") {
 
     # The board first: when it runs and has a session in this pane, its window comes up on that
     # session (web-open.ts does both). Exit code 3: it does not run or has no such session.
+    $bun = Find-Bun
     if ($bun -and (Test-Path -LiteralPath $boardOpen)) {
         & $bun $boardOpen --pane $paneId | Out-Null
         if ($LASTEXITCODE -eq 0) { exit 0 }
@@ -359,11 +365,13 @@ if ($Action -eq "reminder") {
     exit 0
 }
 
+# The id on stdin ({ "id": … }): one that starts with a dash would read as a parameter's name.
 if ($Action -eq "reminder-clear") {
-    if ($Uri -notmatch $ReminderId) { exit 0 }
     try {
+        $id = [string](Read-Stdin | ConvertFrom-Json).id
+        if ($id -notmatch $ReminderId) { exit 0 }
         $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
-        [Windows.UI.Notifications.ToastNotificationManager]::History.Remove($Uri, "calendar", $BoardAppId)
+        [Windows.UI.Notifications.ToastNotificationManager]::History.Remove($id, "calendar", $BoardAppId)
     } catch { }
     exit 0
 }

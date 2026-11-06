@@ -5,7 +5,7 @@
 // the desktop and the clock are the test's own; events are invented.
 import { onTestFinished, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readReminders, remindersFile } from '../../src/adapters/reminder-store.ts'
 import type { CalEvent } from '../../src/core/calendar.ts'
@@ -36,7 +36,7 @@ function setup(calendar: unknown, events: CalEvent[] = [ev()], at = START - 10 *
   const clock = { now: at }
   const shown: ReminderToast[] = []
   const cleared: string[] = []
-  const reads: number[] = []
+  const reads: [number, number][] = []
   let changes = 0
   const make = () =>
     createCalendarReminders({
@@ -44,8 +44,8 @@ function setup(calendar: unknown, events: CalEvent[] = [ev()], at = START - 10 *
       log: () => {},
       onChange: () => changes++,
       desktop: { show: t => shown.push(t), clear: id => cleared.push(id) },
-      events: (_c, from) => {
-        reads.push(from)
+      events: (_c, from, to) => {
+        reads.push([from, to])
         return events
       },
       now: () => clock.now,
@@ -149,8 +149,51 @@ test('it reads only what a reminder may come from: back a while, ahead as far as
   const s = setup({ sources: [{ id: 'work', kind: 'push', remindMin: 45 }] }, [ev()], START - 50 * MIN)
   s.r.configChanged()
   assert.deepEqual(s.shown, [])
-  assert.equal(s.reads.length, 1)
+  // twelve hours back (a long snooze after the start), the longest lead and a minute ahead
+  assert.deepEqual(s.reads, [[START - 50 * MIN - 12 * 60 * MIN, START - 50 * MIN + 46 * MIN]])
   assert.equal(s.r.line(), null)
+})
+
+test('a title or a join link changed while one is on show goes out again; the same look again does not', () => {
+  isolatedHome()
+  const list = [ev()]
+  const s = setup(WORK, list)
+  s.r.configChanged()
+  assert.equal(s.changes(), 1)
+  s.r.configChanged()
+  assert.equal(s.changes(), 1)
+  list[0] = ev({ title: 'Standup, moved room', join: 'https://meet.example.com/new' })
+  s.r.configChanged()
+  assert.equal(s.changes(), 2)
+  assert.equal(s.r.line()?.items[0]?.title, 'Standup, moved room')
+  assert.equal(s.r.line()?.items[0]?.join, 'https://meet.example.com/new')
+  assert.equal(s.shown.length, 1, 'not shown on the desktop again')
+})
+
+test('a state that cannot be written: each reminder shows once in this process, not at every look', () => {
+  const dir = isolatedHome()
+  // the state folder is a file: nothing can be written there
+  mkdirSync(join(dir, 'state', 'herdr', 'plugins'), { recursive: true })
+  writeFileSync(join(dir, 'state', 'herdr', 'plugins', 'agent-board'), '')
+  const logs: string[] = []
+  const s = setup(WORK)
+  s.r.stop()
+  const r = createCalendarReminders({
+    cfg: s.cfg,
+    log: m => logs.push(m),
+    onChange: () => {},
+    desktop: { show: t => s.shown.push(t), clear: () => {} },
+    events: () => [ev()],
+    now: () => s.clock.now,
+    zone: () => 'UTC',
+  })
+  onTestFinished(() => r.stop())
+  r.configChanged()
+  s.clock.now += MIN
+  r.configChanged()
+  assert.equal(s.shown.length, 1)
+  assert.equal(r.line()?.items.length, 1)
+  assert.ok(logs.some(l => l.startsWith('calendar reminders:')))
 })
 
 test('Snooze from the page: off the desktop and the payload, back after the snooze; from the desktop its toast is left to Windows', () => {

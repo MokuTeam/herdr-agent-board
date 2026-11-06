@@ -382,10 +382,23 @@ test('toast.ps1: a calendar reminder’s link takes an act and an id only, goes 
   const pane = text.indexOf("-notmatch '^claude-pane:([A-Za-z0-9]+:p[A-Za-z0-9]+)/?$'")
   assert.ok(open < cal && cal < pane, 'inside the click, before the pane rule')
   const branch = text.slice(cal, pane)
-  assert.ok(branch.includes('& $bun $boardOpen --reminder $Matches[1] $Matches[2]'))
+  assert.ok(branch.includes('& $bun $boardOpen --reminder $act $id'))
   assert.ok(branch.includes('exit 0'))
   // a pane's click reads as it did: the cal rule never takes one
   assert.doesNotMatch('claude-pane:wP:p3G', re)
+  // a link that is neither is turned away before bun is looked for
+  const first = text.indexOf('$bun = Find-Bun', pane)
+  assert.ok(pane < first && text.slice(open, cal).indexOf('Find-Bun') < 0)
+})
+
+test('toast.ps1: reminder-clear takes its id from stdin, of the reminders’ form only', () => {
+  const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
+  const at = text.indexOf('if ($Action -eq "reminder-clear") {')
+  const block = text.slice(at, text.indexOf('\n}\n', at))
+  assert.ok(block.includes('$id = [string](Read-Stdin | ConvertFrom-Json).id'))
+  assert.ok(block.indexOf('if ($id -notmatch $ReminderId) { exit 0 }') < block.indexOf('History.Remove('))
+  assert.ok(block.includes('History.Remove($id, "calendar", $BoardAppId)'))
+  assert.ok(!block.includes('$Uri'))
 })
 
 test('toast.ps1: the reminder itself under the board’s own app id, buttons only of its own forms, after a click’s way', () => {

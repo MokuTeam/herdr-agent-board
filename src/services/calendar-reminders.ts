@@ -96,7 +96,7 @@ export function createCalendarReminders({
   cfg,
   log,
   onChange,
-  desktop = reminderDesktop(log),
+  desktop: given,
   now = Date.now,
   zone = localZone,
   events = (c, from, to) => withCalendarDb(false, db => readEvents(c, db, from, to, zone())),
@@ -106,6 +106,14 @@ export function createCalendarReminders({
   let active: Reminder[] = []
   let shownSig = ''
   let snoozeMin = 5
+  // looked for only once a reminder shows: a board with the calendar off asks nothing of its platform
+  let made: ReminderDesktop | undefined
+  const desktop = (): ReminderDesktop => {
+    made ??= given ?? reminderDesktop(log)
+    return made
+  }
+  // shown in this process while the state could not be written: once each, not at every look
+  const shownHere = new Set<string>()
 
   const arm = (at: number | null): void => {
     clearTimeout(timer)
@@ -138,7 +146,8 @@ export function createCalendarReminders({
   }
 
   const publish = (): void => {
-    const sig = active.map(r => r.id).join(',')
+    // what the page shows of each: a title or a link changed while it is up goes out too
+    const sig = JSON.stringify(active.map(r => [r.id, r.event.title, r.event.join, r.event.start, r.event.end]))
     if (sig === shownSig) return
     shownSig = sig
     onChange()
@@ -160,9 +169,11 @@ export function createCalendarReminders({
       arm(null)
       return
     }
-    let fired = plan.fire
+    const fired = plan.fire
     if (fired.length) {
-      // written down first: one that cannot be is not shown (it would show again at every look)
+      // written down first, so a restart does not show it again; one that cannot be written shows
+      // once in this process all the same, and is on show until its grace is over
+      let fresh = fired
       try {
         updateReminders(s =>
           shownAt(
@@ -173,9 +184,10 @@ export function createCalendarReminders({
         )
       } catch (err) {
         log(`calendar reminders: ${err instanceof Error ? err.message : String(err)}`)
-        fired = []
+        fresh = fired.filter(r => !shownHere.has(r.key))
+        for (const r of fresh) shownHere.add(r.key)
       }
-      for (const r of fired) desktop.show(toastOf(r, c, at))
+      for (const r of fresh) desktop().show(toastOf(r, c, at))
     }
     active = [...plan.active, ...fired].sort((a, b) => a.start - b.start || a.key.localeCompare(b.key))
     publish()
@@ -234,7 +246,7 @@ export function createCalendarReminders({
       const event = { source: r.source, id: r.id, start: r.start }
       if (act === 'open') return { ok: true, event, ...(r.join && { join: r.join }) }
       updateReminders(s => actOn(s, reminderKey(r), Date.parse(r.start), act, c.reminders.snoozeMin, at))
-      if (!o.desktop) desktop.clear(id)
+      if (!o.desktop) desktop().clear(id)
       tick()
       return { ok: true, event, ...(r.join && { join: r.join }) }
     },
