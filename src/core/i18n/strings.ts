@@ -24,6 +24,7 @@ import { SETUP_STRINGS } from './setup-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 import { TIME_STRINGS } from './time-strings.ts'
 import { TODO_STRINGS } from './todo-strings.ts'
+import { TURN_STRINGS } from './turn-strings.ts'
 import { WAKE_STRINGS } from './wake-strings.ts'
 
 export type Entry = string | string[]
@@ -1337,6 +1338,8 @@ for (const code of Object.keys(REMOTE_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(ARCHIVE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ARCHIVE_STRINGS[code])
 // And a fork of a session.
 for (const code of Object.keys(FORK_STRINGS) as Lang[]) Object.assign(STRINGS[code], FORK_STRINGS[code])
+// And Stop and Send now on a working session (#330).
+for (const code of Object.keys(TURN_STRINGS) as Lang[]) Object.assign(STRINGS[code], TURN_STRINGS[code])
 // And a side question to a session.
 for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ASIDE_STRINGS[code])
 // And the user's presence (#172).

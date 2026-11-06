@@ -110,6 +110,8 @@ export function Board({
     else if (act === 'dismiss') void actions.dismissAsk(key)
     else if (act === 'sleep') void actions.sleepSession(key)
     else if (act === 'rel') goToSession(button?.dataset.key ?? '')
+    // Stop takes its own presses (StopButton.tsx): the card opens nothing.
+    else if (act === 'stop') return
     else open(key)
   }
 
