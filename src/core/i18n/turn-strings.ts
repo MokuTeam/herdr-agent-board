@@ -5,10 +5,10 @@ import type { Lang } from '../types.ts'
 
 export const TURN_STRINGS: Record<Lang, Record<string, string | string[]>> = {
   en: {
-    // Stop, on a working card and in its sheet: one press arms it, a second one stops
+    // Stop: on a working card one press arms it and a second one stops; in the sheet it is the
+    // message box's send button while the turn runs and the box is empty, one press (#340)
     'turn.stop': 'Stop',
     'turn.stop.hint': 'Stop this turn, as Esc does in the terminal: the session and its conversation stay',
-    'turn.stop.confirm': 'Stop the turn?',
     'turn.stop.confirmShort': 'Stop?',
     'turn.stop.confirmHint': 'Press again to stop the turn',
     'turn.stopping': 'Stopping…',
@@ -33,7 +33,6 @@ export const TURN_STRINGS: Record<Lang, Record<string, string | string[]>> = {
   ru: {
     'turn.stop': 'Стоп',
     'turn.stop.hint': 'Остановить этот ход, как Esc в терминале: сессия и её переписка остаются',
-    'turn.stop.confirm': 'Остановить ход?',
     'turn.stop.confirmShort': 'Стоп?',
     'turn.stop.confirmHint': 'Нажмите ещё раз, чтобы остановить ход',
     'turn.stopping': 'Останавливается…',

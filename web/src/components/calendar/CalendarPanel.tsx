@@ -235,6 +235,7 @@ export function CalendarPanel({ open, focus = null, onFocused, onClose, onSettin
     <Panel
       id="cal-sheet"
       kind="calendar"
+      measure="full"
       open={open}
       onClose={onClose}
       title={<h2>{t('cal.title')}</h2>}

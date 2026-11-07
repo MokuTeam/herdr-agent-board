@@ -57,6 +57,28 @@ export function composerView(scene: ComposerScene, t: Translator): ComposerView 
   }
 }
 
+export interface StopScene extends Pick<ComposerScene, 'present' | 'sending' | 'text' | 'attachments'> {
+  /** The open session's turn runs and the board can stop it (core/turn-keys.ts canStop). */
+  stoppable: boolean
+  /** The box is set to ask a side question (/btw), or one is being asked. */
+  aside: boolean
+  /** A message of the board's to this session did not go: pressing the arrow again is a retry. */
+  unsent: boolean
+}
+
+/**
+ * Whether the send button is Stop (#340), as in any chat app: the open session's turn runs, the box
+ * holds no draft (no text, no file), and no press on it can mean "send": nothing on its way, no side
+ * question, no message that did not go. Typed text or the turn's end make it Send again.
+ */
+export const sendIsStop = (scene: StopScene): boolean =>
+  scene.stoppable &&
+  scene.present &&
+  !scene.sending &&
+  !scene.aside &&
+  !scene.unsent &&
+  !(scene.text || scene.attachments.length)
+
 /** Whether a submit goes out: fresh data, a session, nothing on its way, something to send, no upload still going. */
 export function canSubmit(scene: {
   canMutate: boolean

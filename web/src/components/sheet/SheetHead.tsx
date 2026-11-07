@@ -5,7 +5,6 @@
 // context (the workspace's name renames the workspace there on a click, where the page can), and
 // the card's fields that say something. Before a session was ever open, the empty places of the page.
 import { Fragment, type KeyboardEvent, type MouseEvent } from 'react'
-import { canStop } from '../../../../src/core/turn-keys.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import type { SheetPick } from '../../hooks/useContextMenus.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
@@ -15,7 +14,6 @@ import { foldLine, sheetHead, type WorkspaceFact } from '../../models/sheet.ts'
 import { COLUMN_COLORS } from '../../models/toolbar.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { ChevronGlyph, MoonGlyph, StarGlyph, UpDownGlyph, WriteGlyph } from '../icons.tsx'
-import { StopButton } from '../StopButton.tsx'
 import type { ScheduleActions } from './ScheduleRow.tsx'
 import { SheetCard } from './SheetCard.tsx'
 
@@ -154,8 +152,6 @@ export function SheetHead({ item, missing, onRename, onRenameWorkspace, card = N
             <UpDownGlyph />
           </button>
         )}
-        {/* Stop beside the status it changes, while it works (#330). */}
-        {!missing && canStop(item) && <StopButton item={item} labeled />}
         <button
           type="button"
           className="lane-pill"

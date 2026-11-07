@@ -19,6 +19,8 @@ export interface AsideBox {
   on: boolean
   /** The side question the box holds ('' while empty), or null: the text is a message to the session. */
   question: string | null
+  /** A side question of the open session's is being asked now. */
+  asking: boolean
   toggle(): void
   /** Send the box's side question, if it holds one; false: it holds a message for the session. */
   submit(): boolean
@@ -50,6 +52,7 @@ export function useAsideBox(text: string, setText: (text: string) => void): Asid
     can,
     on: can && on,
     question,
+    asking: list.some(a => a.state === 'asking'),
     toggle: () => setOn(was => !was),
     submit() {
       if (question === null) return false

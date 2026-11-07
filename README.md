@@ -307,9 +307,10 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
 - A side question (the bubble in the message box, or a message that starts with `/btw`): typed
   into the session as Claude Code's own `/btw`, answered in a card over the box, while nothing
   goes into the session's conversation; see [Side questions](#side-questions).
-- Stop (a working card, beside the status in its sheet) and Send now (on a message waiting in
-  the session's queue): the turn interrupted, or the queue taken into the turn at once, as Esc and
-  Ctrl+Enter do in Claude Code's terminal; see [Stop and Send now](#stop-and-send-now).
+- Stop (a working card, and the sheet's send button while the message box is empty) and Send
+  now (on a message waiting in the session's queue): the turn interrupted, or the queue taken
+  into the turn at once, as Esc and Ctrl+Enter do in Claude Code's terminal; see
+  [Stop and Send now](#stop-and-send-now).
 - The sheet's place and size are the viewer's own (kept in this browser): docked right, left or
   at the bottom, flush with that edge like a sidebar, where the board makes room for it (a window
   too narrow for that keeps the board's columns and lays the sheet over them), or floating over
@@ -1069,10 +1070,15 @@ error, busy? }` (the page only, with herdr's data recent enough to act on); the 
 Two keys of Claude Code's own, pressed into the session's pane through herdr (`herdr agent
 send-keys`), so the terminal does not have to be opened for them:
 
-- **Stop**, on a card in "Working" and beside the status in its sheet: Esc, which interrupts the
-  running turn. The session stays open with its conversation. A first press only arms it (it turns
-  red and asks); a second one, not the second click of a double click, stops the turn; left alone a
-  few seconds, Escape, or the pointer moving away takes it back. The board then reads the
+- **Stop**: Esc, which interrupts the running turn. The session stays open with its
+  conversation. In the sheet it is the message box's send button, as in other chat apps: while the
+  turn runs and the box is empty, the arrow turns into a square, and one press stops the turn (the
+  second click of a double click on Send does not). Typed text or a file makes it Send again, and
+  the message goes into the session's queue as before; Enter in the box only ever sends. When the
+  turn ends it is Send by itself. On a card in "Working" it is a glyph among the hover buttons,
+  for stopping from the board without opening the sheet: there a first press only arms it (it
+  turns red and asks); a second one, not the second click of a double click, stops the turn; left
+  alone a few seconds, Escape, or the pointer moving away takes it back. The board then reads the
   transcript for Claude Code's mark of an interrupted turn (`[Request interrupted by user]`), or
   herdr saying the turn is over; neither within a few seconds, and it says the turn did not stop.
   A message waiting in the queue starts the next turn right after the stop, as it does after Esc in
@@ -1094,7 +1100,8 @@ key would send the text typed there. One press at a time per pane.
 message pressed) answer `{ ok }`, `{ ok, already }` when there was nothing left to do, or `{ ok:
 false, error, busy? }` (the page only, with herdr's data recent enough to act on). Code:
 `src/core/turn-keys.ts` (the keys per program, the transcript's mark), `src/services/turn.ts`,
-`web/src/components/StopButton.tsx`, `web/src/models/stop-guard.ts`, the queue's foot in
+`web/src/components/StopButton.tsx` (the card's), `web/src/components/sheet/SendButton.tsx` (the
+message box's), `web/src/models/stop-guard.ts`, the queue's foot in
 `web/src/components/sheet/Thread.tsx`.
 
 ## Terminal
