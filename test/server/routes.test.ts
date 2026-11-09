@@ -135,6 +135,7 @@ describe('routes', () => {
       'styles/card-wrap.css',
       'styles/categories.css',
       'styles/segments.css',
+      'styles/toolbar.css',
       'styles/access.css',
       'styles/motion.css',
       'styles/errors.css',
