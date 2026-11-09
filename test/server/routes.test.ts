@@ -127,6 +127,7 @@ describe('routes', () => {
       'styles/workspaces.css',
       'styles/fold.css',
       'styles/session-head.css',
+      'styles/sheet-compact.css',
       'styles/fork.css',
       'styles/aside.css',
       'styles/favorites.css',

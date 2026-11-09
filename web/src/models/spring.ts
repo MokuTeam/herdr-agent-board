@@ -43,6 +43,14 @@ function loop(now: number): void {
   if (!frame) last = 0
 }
 
+/** Every spring stopped and the frame loop cleared: for a test that must start from nothing an earlier one left running. */
+export function stopAllSprings(): void {
+  for (const s of [...active]) s.stop()
+  if (frame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame)
+  frame = 0
+  last = 0
+}
+
 export class Spring {
   value: number
   target: number

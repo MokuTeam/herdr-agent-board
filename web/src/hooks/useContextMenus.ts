@@ -32,6 +32,7 @@ import {
 import { catOf, colOf } from '../models/board-view.ts'
 import { categoryChoices, type MenuCategory, type Point, statusChoices } from '../models/menu-model.ts'
 import { type MoveDeps, moveCard, moveLane } from '../models/profile-move.ts'
+import { REVEAL_SETTLE_MS, revealSheetDetails } from '../models/sheet-reveal.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import type { BoardAction } from '../state/board-ui.ts'
 import { useStore } from '../state/store.ts'
@@ -255,7 +256,12 @@ export function boardActions(deps: ActionDeps): BoardMenuActions {
     renameWorkspace: (key, el) => {
       if (el?.isConnected) return deps.rename(key, el, 'workspace')
       dispatch({ type: 'open', key })
-      setTimeout(() => deps.rename(key, document.getElementById('sheet-workspace'), 'workspace'), 380)
+      // In the compact head it is in the fold: open it, and wait for it to be where it stays.
+      const folded = revealSheetDetails(key)
+      setTimeout(
+        () => deps.rename(key, document.getElementById('sheet-workspace'), 'workspace'),
+        folded ? REVEAL_SETTLE_MS : 380,
+      )
     },
     move: (key, to) => actions().moveCard(key, { cat: to.cat ?? null, column: columnOf(to.column) }),
     dismiss: key => actions().dismissAsk(key),
