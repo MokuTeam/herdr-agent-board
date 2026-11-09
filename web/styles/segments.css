@@ -23,11 +23,6 @@
 }
 .pill-toggle.segment-pick.profiles .n { color: var(--c, var(--label-3)); font-weight: 600; }
 .segment-pick svg { width: 12px; height: 12px; margin: 0 -3px 0 5px; color: var(--label-2); stroke-width: 2; }
-/* Where the segments move to a row of their own (app.css), their pill goes too; on a phone it
-   keeps its width, so two pills share their row. */
-@container tools (max-width: 1200px) {
-  .controls > .segment-pick { order: 3; margin-top: 8px; }
-}
 
 /* A choice's count in the menu, after its name: a lane's quiet, a profile's in its color. */
 .mi-count { flex: none; margin-left: 18px; color: var(--label-3); font-variant-numeric: tabular-nums; }

@@ -16,6 +16,13 @@ export const SearchIcon = () => (
   </Icon>
 )
 
+/** A funnel: the filters the folded toolbar keeps behind one button. */
+export const FilterIcon = () => (
+  <Icon>
+    <path d="M3.5 5h13l-5 6v4.5l-3 1.5v-6Z" />
+  </Icon>
+)
+
 export const MoonIcon = () => (
   <Icon>
     <path d="M15.5 12.2A6.5 6.5 0 0 1 7.8 4.5a6.5 6.5 0 1 0 7.7 7.7Z" />

@@ -3,7 +3,9 @@
 // session" button, renderToolbar, renderLimits, updateLive, syncAvailability,
 // renderScheduleCount). The thumb's inline position and the lanes' fading edges are set after
 // layout on both pages, so neither side has them here; the setup note is its own test's
-// (setup-note.test.tsx).
+// (setup-note.test.tsx). Since #347 the controls are in two groups (the filters, the actions) in the
+// order of asToolbarRows below, with the folded filters' button and More in the actions; the rest is
+// the old page's, button for button.
 import { describe, expect, test } from 'bun:test'
 import { createRef } from 'react'
 import { translator } from '../../src/core/i18n/translator.ts'
@@ -19,6 +21,7 @@ import {
   byClass,
   byId,
   canonical,
+  type Element,
   find,
   findAll,
   hasClass,
@@ -118,6 +121,67 @@ function asReactRendersIt(toolbar: Node[]): string {
 const ui = (fields: Partial<BoardUi>) => fields
 
 /**
+ * The controls as this board groups them since #347: the lanes control, the profile switch and search
+ * in the filters; in the actions the filters' button (the folded toolbar's), then the old page's
+ * buttons with Next after the archive and Settings after More, and the live dot last. The
+ * filters' button and More are new: they are taken from what this board draws (their own tests
+ * are toolbar-dom.test.tsx and toolbar-menu.test.ts), the rest is the old page's markup moved, not changed.
+ */
+function asToolbarRows(toolbar: Node[], actual: Node[]): void {
+  const controls = byClass(toolbar, 'controls')
+  const els = controls.children.filter((n): n is Element => n.kind === 'element')
+  const take = (id: string) => {
+    const el = els.find(e => e.attrs.get('id') === id)
+    if (el) els.splice(els.indexOf(el), 1)
+    return el
+  }
+  const group = (name: string, id: string | null, children: (Element | undefined)[]): Element => ({
+    kind: 'element',
+    tag: 'div',
+    attrs: new Map(
+      id
+        ? [
+            ['class', name],
+            ['id', id],
+          ]
+        : [['class', name]],
+    ),
+    children: children.filter((c): c is Element => !!c),
+  })
+  const lanes = take('lanes')
+  const profiles = take('profiles')
+  const search = els.find(e => hasClass(e, 'search'))
+  if (search) els.splice(els.indexOf(search), 1)
+  const rest = (...ids: string[]) => ids.map(take)
+  const first = rest(
+    'new-session',
+    'cats-open',
+    'sched-open',
+    'todos-open',
+    'calendar-open',
+    'time-open',
+    'archive-open',
+  )
+  const next = take('next-attention')
+  const notes = rest('setup-note', 'backup-note', 'wake-note', 'limits')
+  const settings = take('settings')
+  const live = take('live')
+  controls.children = [
+    group('toolbar-filters', 'toolbar-filters', [lanes, profiles, search]),
+    group('toolbar-actions', null, [
+      byId(actual, 'toolbar-peek'),
+      ...first,
+      next,
+      ...notes,
+      byId(actual, 'toolbar-more'),
+      settings,
+      live,
+      ...els,
+    ]),
+  ]
+}
+
+/**
  * The lanes control as this board draws it since #179, where the old page had a tab list with a
  * thumb: a group of toggles, each lane on show pressed ("All" while none is picked).
  */
@@ -171,6 +235,7 @@ describe('toolbar markup parity', () => {
     setText(byId(old, 'sched-count'), '2')
     toggleClass(byId(old, 'sched-open'), 'due', true)
 
+    asToolbarRows(old, actual)
     expect(canonical(actual)).toBe(asReactRendersIt(old))
   })
 
@@ -226,6 +291,7 @@ describe('toolbar markup parity', () => {
     setAttr(live, 'title', t('live.stale', { time: new Date(NOW - 120_000).toLocaleTimeString('ru') }))
     syncAvailability(page, t, false, true)
 
+    asToolbarRows(page, actual)
     expect(canonical(actual)).toBe(asReactRendersIt(page))
   })
 
@@ -247,6 +313,7 @@ describe('toolbar markup parity', () => {
     setAttr(live, 'title', t('live.none'))
     syncAvailability(old, t, false, false)
 
+    asToolbarRows(old, actual)
     expect(canonical(actual)).toBe(asReactRendersIt(old))
   })
 })

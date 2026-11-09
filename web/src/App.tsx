@@ -50,6 +50,7 @@ import { useSetupNote } from './hooks/useSetupNote.ts'
 import { useTerminal } from './hooks/useTerminal.ts'
 import { useTerminalKeys } from './hooks/useTerminalKeys.ts'
 import { useTodos } from './hooks/useTodos.ts'
+import { useToolbarMenu } from './hooks/useToolbarMore.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { remotePage } from './models/remote-page.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
@@ -200,6 +201,8 @@ export function App() {
   const todos = useTodos(menus.menu)
   // The lanes control and the profile switch folded into pills: their choices as menus.
   const picks = useSegmentPicks(menus.menu)
+  // What left the toolbar's row at a narrow width: its More menu.
+  const more = useToolbarMenu(menus.menu)
   const terminalKeys = useTerminalKeys(menus)
   useOmarchyTheme(data?.omarchy)
   useBoardKeys({
@@ -248,6 +251,7 @@ export function App() {
           onWake={() => setWake(true)}
           settings={settings}
           picks={picks}
+          more={more}
           onTodos={() => setTodosOpen(!todosOpen)}
           onBackup={remotePage() ? undefined : openBackup}
           onTime={() => {
