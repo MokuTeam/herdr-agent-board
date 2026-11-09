@@ -87,7 +87,11 @@ describe('what leaves the row and what is folded', () => {
   })
 
   test('the Terminal look draws the filters button’s count as a plain figure', () => {
-    expect(rule(css, ':root[data-look="terminal"] #toolbar-peek.on .n')).toMatchObject({ background: 'none' })
+    expect(rule(read('web/styles/look-terminal.css'), ':root[data-look="terminal"] #toolbar-peek.on .n')).toMatchObject(
+      {
+        background: 'none',
+      },
+    )
   })
 
   test('the actions take what is left of the row, whatever they hold, and the first may shrink', () => {

@@ -56,10 +56,9 @@
 .toolbar-more { position: relative; }
 .more-dot { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 0 2px var(--material); }
 
-/* The folded filters' button: lit, with how many are on. The Terminal look has counts as plain figures. */
+/* The folded filters' button: lit, with how many are on (the Terminal look's: look-terminal.css). */
 #toolbar-peek.on { color: var(--accent); }
 #toolbar-peek.on .n { background: var(--accent); color: #fff; }
-:root[data-look="terminal"] #toolbar-peek.on .n { background: none; color: var(--accent); font-weight: 700; }
 
 /* ---------------------------------------------------------------- two rows */
 .toolbar-fit[data-rows] .toolbar-row {
