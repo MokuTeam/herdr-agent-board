@@ -216,3 +216,28 @@ export function linkedSessions(it: Pick<Item, 'links'>, onBoard: (key: string) =
   for (const x of l.talks ?? []) Object.assign(get(x.key), { in: x.in, out: x.out, at: Math.max(get(x.key).at, x.at) })
   return [...by.values()].filter(p => onBoard(p.key)).sort((a, b) => Number(b.from) - Number(a.from) || b.at - a.at)
 }
+
+/** The strip's summary of a session's helpers: "2 at work · 10 finished" (nothing when there are none). */
+export function helpersSum(list: readonly Pick<PublicHelper, 'status'>[], t: Translator): string {
+  const running = list.filter(h => h.status === 'running').length
+  const done = list.length - running
+  return [running && t('helpers.running', { n: running }), done && t('helpers.done', { n: done })]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/**
+ * The helpers' count in the compact head: the ones at work, else all of them (the finished). With
+ * only workflow runs and no helper of their own, the runs are counted. Null with nothing to show.
+ */
+export function helpersChip(
+  list: readonly Pick<PublicHelper, 'status'>[],
+  runs: readonly unknown[],
+  t: Translator,
+): { count: number; running: boolean; label: string } | null {
+  if (!list.length && !runs.length) return null
+  const running = list.filter(h => h.status === 'running').length
+  const count = running || list.length || runs.length
+  const sum = helpersSum(list, t)
+  return { count, running: running > 0, label: sum ? `${t('helpers.title')}: ${sum}` : t('helpers.title') }
+}

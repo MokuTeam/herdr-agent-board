@@ -22,9 +22,11 @@ import { useKeepFocus } from '../../hooks/useKeepFocus.ts'
 import { type OpenLaunch, useNewSession } from '../../hooks/useNewSession.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
 import { type DetailSnapshot, useSessionDetail } from '../../hooks/useSessionDetail.ts'
+import { useSheetDensity } from '../../hooks/useSheetDensity.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { inTurn } from '../../models/card.ts'
 import { ConversationScroll } from '../../models/conversation-scroll.ts'
+import { helpersChip } from '../../models/helper-model.ts'
 import { restartPending } from '../../models/restart.ts'
 import { noteQueue } from '../../models/settle.ts'
 import {
@@ -43,6 +45,7 @@ import { classNames } from '../class-names.ts'
 import { HelpersStrip } from '../helpers/HelpersStrip.tsx'
 import { CheckGlyph } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
+import { AskedCompact } from './AskedCompact.tsx'
 import { Composer, type SessionButtons } from './Composer.tsx'
 import type { ScheduleActions } from './ScheduleRow.tsx'
 import { SheetHead } from './SheetHead.tsx'
@@ -138,6 +141,10 @@ export function Sheet(slots: SheetSlots) {
 
   // The card's empty fields show only when asked for; each session opens without them.
   const [propertiesOpen, setPropertiesOpen] = useState(false)
+  // The compact sheet (#345): this browser's choice for the width, and the action row it folds behind the
+  // footer line, which each session opens without.
+  const density = useSheetDensity(shown.key)
+  const [actionsOpen, setActionsOpen] = useState(false)
   // Switching sessions in the open panel: its conversation fades in; it starts at the bottom.
   const before = useRef(open)
   useLayoutEffect(() => {
@@ -145,6 +152,7 @@ export function Sheet(slots: SheetSlots) {
     before.current = open
     if (open === null) return
     setPropertiesOpen(false)
+    setActionsOpen(false)
     if (previous !== null && previous !== open && !reducedMotion.matches)
       body.current?.animate([{ opacity: 0.3 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' })
   }, [open])
@@ -166,6 +174,7 @@ export function Sheet(slots: SheetSlots) {
     // Tasks only while the board has them on: no 📌 otherwise.
     ...(onPin && data?.todos && open && { onPin: (turn: AssistantTurn, el: HTMLElement) => onPin(open, turn, el) }),
   }
+  const chip = shown.item ? helpersChip(detail.value.data?.helpers ?? [], detail.value.data?.workflows ?? [], t) : null
   const cwd = shown.item?.cwd ?? ''
   const drawn = shown.item !== null
   // The conversation drawn anew (a new detail, the session shown, the language): its paths are new.
@@ -212,7 +221,7 @@ export function Sheet(slots: SheetSlots) {
       open={open !== null}
       onClose={() => dispatch({ type: 'open', key: null })}
       about={() => cardOf(open)}
-      className={drop.dropping ? 'dropping' : undefined}
+      className={classNames(drop.dropping && 'dropping', density.compact && 'sheet-compact')}
       drop={drop.handlers}
       title={
         <SheetHead
@@ -230,6 +239,11 @@ export function Sheet(slots: SheetSlots) {
             onSession: goToSession,
             onFavorite: () => open && void actions.setFavorite(open, !itemOf(open)?.favorite),
           }}
+          fold={{
+            compact: density.compact,
+            onToggle: density.toggle,
+            helpers: chip ? { ...chip, onOpen: el => void helpers?.show({ list: true, run: null }, el) } : undefined,
+          }}
         />
       }
     >
@@ -246,6 +260,9 @@ export function Sheet(slots: SheetSlots) {
         buttons={buttons}
         moreOpen={slots.moreOpen ?? false}
         links={links}
+        compact={density.compact}
+        actionsOpen={actionsOpen}
+        onActionsToggle={() => setActionsOpen(was => !was)}
       />
     </Panel>
   )
@@ -277,11 +294,16 @@ export interface SheetViewProps {
   /** The "More actions" menu is open. */
   moreOpen?: boolean
   links?: SheetLinks | undefined
+  /** The compact sheet (#345): the helpers' strip, the question's text and the action row fold up. */
+  compact?: boolean
+  /** In the compact sheet: the action row is shown above the message box. */
+  actionsOpen?: boolean
+  onActionsToggle?: () => void
 }
 
 /** The sheet under its head, as drawn for one state. */
 export function SheetView(props: SheetViewProps) {
-  const { open, item, detail, form, composer, buttons } = props
+  const { open, item, detail, form, composer, buttons, compact = false } = props
   const t = useT()
   const { data, connected, canMutate, canEdit } = useBoardContext()
   // A redraw of the conversation keeps the focus on what opens the same thing (a helper's line).
@@ -315,13 +337,20 @@ export function SheetView(props: SheetViewProps) {
       <div className="sheet-question" id="sheet-question" hidden={!hasForm && !asking}>
         {hasForm
           ? form
-          : asking && item && <Asked item={item} disabled={availability.dismiss} onDismiss={props.onDismiss} />}
+          : asking &&
+            item &&
+            (compact ? (
+              <AskedCompact item={item} disabled={availability.dismiss} onDismiss={props.onDismiss} />
+            ) : (
+              <Asked item={item} disabled={availability.dismiss} onDismiss={props.onDismiss} />
+            ))}
       </div>
       <HelpersStrip
         helpers={(item && detail.data?.helpers) || []}
         workflows={(item && detail.data?.workflows) || []}
         onHelper={(id, el) => props.links?.onHelper(id, el)}
         onList={(run, el) => props.links?.onList(run, el)}
+        folded={compact}
       />
       <div
         className={classNames('sheet-body', !!notice.text && 'has-detail-state')}
@@ -372,6 +401,7 @@ export function SheetView(props: SheetViewProps) {
         canMutate={canMutate}
         on={buttons}
         moreOpen={props.moreOpen ?? false}
+        fold={compact ? { folded: !props.actionsOpen, onToggle: () => props.onActionsToggle?.() } : undefined}
       />
     </>
   )

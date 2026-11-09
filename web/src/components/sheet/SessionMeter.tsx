@@ -6,9 +6,16 @@ import { meterReads } from '../../../../src/core/effort.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { api } from '../../api/client.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { ChevronGlyph } from '../icons.tsx'
+
+/** The compact sheet's action row (#345): folded behind the footer line, a chevron at its end opens it. */
+export interface FootFold {
+  folded: boolean
+  onToggle(): void
+}
 
 /** asked: counts the /model and /effort messages sent from the box (Composer). */
-export function SessionMeter({ item, asked = 0 }: { item: Item; asked?: number }) {
+export function SessionMeter({ item, asked = 0, fold }: { item: Item; asked?: number; fold?: FootFold | undefined }) {
   const t = useT()
   // /model and /effort change only the screen, and only for this session. It is read when the sheet
   // opens, when the session's status moves, and after a /model or /effort sent from the box; not
@@ -60,6 +67,19 @@ export function SessionMeter({ item, asked = 0 }: { item: Item; asked?: number }
       <span className="meter-fact" title={t('meter.effortHint')}>
         {t('meter.effort')}: {live || item.effort || t('meter.unknown')}
       </span>
+      {fold && (
+        <button
+          type="button"
+          className="foot-toggle"
+          aria-expanded={!fold.folded}
+          aria-controls="sheet-actions"
+          title={t(fold.folded ? 'sheet.actionsShow' : 'sheet.actionsHide')}
+          aria-label={t('sheet.actions')}
+          onClick={() => fold.onToggle()}
+        >
+          <ChevronGlyph />
+        </button>
+      )}
     </div>
   )
 }

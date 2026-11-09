@@ -245,7 +245,16 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   the moon on a card), "Wake" for sleeping sessions, "Restart" (also in a card's menu) for one
   that lost an MCP server or acts up, see [Restart](#restart). To close: click the board beside
   it, flick it out the way it came, or Esc. Another card switches it to that session.
-  Attachments stay with their session through a close.
+  Attachments stay with their session through a close. The chevron in the head's row folds the
+  sheet so the conversation gets the room: the row keeps the status, the name and a count of the
+  helpers (a tap opens their list), the lane, the star, the facts and the card's fields fold
+  under it, the question it waits on stays as two lines that open on a tap, with its "no reply
+  needed" button, and the row of actions folds behind the footer line (context, model, effort).
+  What folds goes back up the way it came, and a tap in the middle of it turns it back. A phone
+  starts folded, a wider panel whole; the choice is this browser's, kept once for the phone's
+  width and once for the wider one. In the wide, low layout the head is a column beside the
+  conversation: its fold stays open there, and the chevron folds the helpers' strip, the question
+  and the row of actions, which take the conversation's height.
 - "MokuPilot", a call (the sheet, a card's menu), when [MokuPilot](https://github.com/MokuTeam/MokuPilot)
   is on this computer: a MokuPilot call starts at once, its agent a fork of the session
   (`claude --resume <id> --fork-session`, in the folder the session started in), so it knows what

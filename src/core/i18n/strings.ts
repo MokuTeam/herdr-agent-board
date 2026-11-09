@@ -33,6 +33,14 @@ export type Dictionary = Record<string, Entry>
 export const STRINGS: Record<Lang, Dictionary> = {
   en: {
     'sheet.properties': 'Card details',
+    'sheet.details': 'Session details',
+    'sheet.detailsShow': 'Show details',
+    'sheet.detailsHide': 'Hide details',
+    'sheet.actions': 'Session actions',
+    'sheet.actionsShow': 'Show actions',
+    'sheet.actionsHide': 'Hide actions',
+    'asked.more': 'Show the whole question',
+    'asked.less': 'Show less',
     'sheet.more': 'More actions',
     'detail.error': 'Could not read the conversation: {error}',
     'detail.retry': 'Retry',
@@ -677,6 +685,14 @@ export const STRINGS: Record<Lang, Dictionary> = {
 
   ru: {
     'sheet.properties': 'Сведения о карточке',
+    'sheet.details': 'Сведения о сессии',
+    'sheet.detailsShow': 'Показать сведения',
+    'sheet.detailsHide': 'Скрыть сведения',
+    'sheet.actions': 'Действия сессии',
+    'sheet.actionsShow': 'Показать действия',
+    'sheet.actionsHide': 'Скрыть действия',
+    'asked.more': 'Показать вопрос целиком',
+    'asked.less': 'Свернуть',
     'sheet.more': 'Ещё действия',
     'detail.error': 'Не удалось прочитать переписку: {error}',
     'detail.retry': 'Повторить',
