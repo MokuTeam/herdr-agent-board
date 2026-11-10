@@ -31,7 +31,10 @@ export interface AgentLimits {
   peerDay: number
   /** The same text in the same thread again within this many minutes is refused. */
   echoMin: number
-  /** This many agent messages in a row in a thread (both ways) pause this board's agents there. */
+  /**
+   * This many agent messages in a row in a thread (both ways) pause this board's agents there: the
+   * default for a peer whose own setting (PeerAgents.loop, #360) is not set.
+   */
   loopRun: number
   /** More agent messages an hour than this from one peer pause routing for that peer for an hour. */
   inboundHour: number
@@ -44,7 +47,7 @@ export const DEFAULT_LIMITS: AgentLimits = {
   peerHour: 60,
   peerDay: 300,
   echoMin: 10,
-  loopRun: 8,
+  loopRun: 20,
   inboundHour: 60,
   noticeGapMin: 2,
 }
@@ -97,6 +100,17 @@ export function laneHit(text: string, lanes: { id: string; title: string }[]): s
   }
   return null
 }
+
+/** The highest loop pause a peer may have (#360); the lowest is 1. */
+export const MAX_LOOP = 100
+
+/** A peer's own loop pause: a whole number from 1 to MAX_LOOP. */
+export const validLoop = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= MAX_LOOP
+
+/** The loop pause for a peer (or the team): its own setting, else the board's default. */
+export const loopFor = (peer: { loop?: unknown } | undefined, limits: Pick<AgentLimits, 'loopRun'>): number =>
+  validLoop(peer?.loop) ? peer.loop : limits.loopRun
 
 /** Whether the last `run` messages of a thread (oldest first, `via` of each) all came from agents. */
 export function loopRun(vias: (string | undefined)[], run: number): boolean {

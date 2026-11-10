@@ -342,11 +342,16 @@ export function changeThreads<R>(fn: (threads: Record<string, ThreadRecord>) => 
 
 // ---- What agents may do (#216)
 
-/** One peer's (or the team's) switches: agents talk with it, the lanes it may hear about, muted (the team). */
+/**
+ * One peer's (or the team's) switches: agents talk with it, the lanes it may hear about, muted (the
+ * team), and its own loop pause (#360: agent messages in a row before the next waits for the owner;
+ * the board's default while unset).
+ */
 export interface PeerAgents {
   on: boolean
   lanes: string[]
   muted?: boolean
+  loop?: number
 }
 export interface AgentSettings {
   /** The owner's global off: overrides every peer. */

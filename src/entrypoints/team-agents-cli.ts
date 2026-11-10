@@ -1,15 +1,23 @@
 // `board team post | reply | thread | assign | release | listen` (#216): a session's side of agents
-// talking through the team hub. Every one asks the running board (its /api/team routes); the board
+// talking through the team hub, and `board team loop` (#360), a peer's loop pause. Every one asks the running board (its /api/team routes); the board
 // decides what goes out without a person and marks whatever comes this way as an agent's. `thread`
 // prints what a peer wrote as quoted data under a header that says whose it is and what it is not
 // (instructions from the owner); #355 builds inbox, watch and --json on it. Loaded only by
 // `board team`, so no other board command pays for it.
 import { isRecord } from '../adapters/json-store.ts'
 import { printable } from '../core/team.ts'
-import { heldWhy, refusedWhy, resolveThreadRef, splitKey, TEAM } from '../core/team-agents.ts'
+import {
+  DEFAULT_LIMITS,
+  heldWhy,
+  refusedWhy,
+  resolveThreadRef,
+  splitKey,
+  TEAM,
+  validLoop,
+} from '../core/team-agents.ts'
 
 export const AGENT_USAGE =
-  'board team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | board team reply <thread> "<text>" | board team thread <thread> | board team assign <thread> <session> | board team release <thread> | board team listen [off]'
+  'board team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | board team reply <thread> "<text>" | board team thread <thread> | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default]'
 
 export interface SessionWord {
   key: string
@@ -70,6 +78,14 @@ async function threadKeyOf(ctx: Ctx, word: string): Promise<string> {
   return r.key
 }
 
+/** A post's or a setting's peer: `team`, or a person by name or key. */
+function targetOf(ctx: Ctx, who: string): string {
+  if (who.toLowerCase() === TEAM) return TEAM
+  const r = resolveThreadRef(who, [], peersOf(ctx.roster))
+  if (!r.ok) throw new Error(printable(r.error))
+  return splitKey(r.key)?.scope ?? ''
+}
+
 /** Who a scope is called here: `the team`, or the pair's peer by name. */
 function whoOf(ctx: Ctx, scope: string): string {
   if (scope === TEAM) return 'the team'
@@ -123,13 +139,7 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
     const link = flag(rest, '--link')
     if (rest.length !== 2 || (link !== undefined && title === undefined)) throw new Error(`usage: ${AGENT_USAGE}`)
     const [who = '', text = ''] = rest
-    let to: string
-    if (who.toLowerCase() === TEAM) to = TEAM
-    else {
-      const r = resolveThreadRef(who, [], peersOf(ctx.roster))
-      if (!r.ok) throw new Error(printable(r.error))
-      to = splitKey(r.key)?.scope ?? ''
-    }
+    const to = targetOf(ctx, who)
     const self = await ctx.self()
     const thread = title !== undefined ? { title, ...(link !== undefined && { link }) } : undefined
     const { status, reply } = await call(ctx.webPort, '/api/team/post', {
@@ -140,6 +150,27 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
       ...(thread && { thread }),
     })
     return said(reply, status, whoOf(ctx, to))
+  }
+  if (op === 'loop') {
+    // How many agent messages in a row, both ways, before the next one waits for the owner (#360).
+    if (rest.length < 1 || rest.length > 2) throw new Error(`usage: ${AGENT_USAGE}`)
+    const [who = '', n] = rest
+    const to = targetOf(ctx, who)
+    if (n === undefined) {
+      const { reply } = await call(ctx.webPort, '/api/team/agents')
+      const peers = isRecord(reply) && isRecord(reply.peers) ? reply.peers : {}
+      const entry = peers[to]
+      const own = isRecord(entry) && validLoop(entry.loop) ? entry.loop : null
+      const fallback = isRecord(reply) && validLoop(reply.loopDefault) ? reply.loopDefault : DEFAULT_LIMITS.loopRun
+      return `${whoOf(ctx, to)}: agents pause after ${own ?? fallback} messages in a row${own === null ? ' (the default)' : ''}`
+    }
+    const loop = n === 'default' ? null : /^\d{1,3}$/.test(n) ? Number(n) : Number.NaN
+    if (loop !== null && !validLoop(loop)) throw new Error('the loop pause is a whole number from 1 to 100, or default')
+    const { status, reply } = await call(ctx.webPort, '/api/team/agents', { peer: to, loop })
+    if (!isRecord(reply) || reply.ok !== true) throw new Error(`the board answered ${status}`)
+    return loop === null
+      ? `ok · ${whoOf(ctx, to)}: agents pause after the board's default number of messages in a row`
+      : `ok · ${whoOf(ctx, to)}: agents pause after ${loop} messages in a row`
   }
   if (op === 'reply') {
     if (rest.length !== 2) throw new Error(`usage: ${AGENT_USAGE}`)

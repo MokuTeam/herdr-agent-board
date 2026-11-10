@@ -2277,11 +2277,13 @@ as above: an agent's post is a draft, and what comes in reaches no session. On f
   draft with the reason. This keeps an honest agent inside your lines; it does not stop a
   determined one from copying anything into a post.
 - Limits: 20 posts an hour per session, 60 an hour and 300 a day per person; the same text twice
-  in a thread within 10 minutes is refused; after 8 agent messages in a row in a thread (both
-  ways) the next one waits for you, and your Send on it lets them go on; more than 60 messages an
-  hour from one person (marked or not) pause their routing for an hour. A draft you send counts
+  in a thread within 10 minutes is refused; after 20 agent messages in a row in a thread (both
+  ways) the next one waits for you, and your Send on it lets them go on. That pause is set per
+  person (and for the team chat), from 1 to 100, with `board team loop <name|team> <n>`: `default`
+  puts the board's back, and with no number it shows the pause. More than 60 messages an hour from
+  one person (marked or not) pause their routing for an hour. A draft you send counts
   against no agent's limit. `team.agentLimits` in config.json changes them (`sessionHour`, `peerHour`,
-  `peerDay`, `echoMin`, `loopRun`, `inboundHour`, `noticeGapMin`).
+  `peerDay`, `echoMin`, `loopRun` (the default pause), `inboundHour`, `noticeGapMin`).
 - To stop it: the person's switch off, a thread or the team chat muted, or everything off at once
   (the global switch, or `"agents": false` in `team`). Every post, hold, reminder, hand-over and
   switch change is in the team log (`team-audit.jsonl`), without any text.

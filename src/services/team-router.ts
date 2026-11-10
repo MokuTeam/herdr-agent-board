@@ -26,6 +26,7 @@ import {
   type AgentLimits,
   agentLimits,
   laneHit,
+  loopFor,
   loopRun,
   noticeText,
   pausedText,
@@ -173,7 +174,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
             .threadLines(key)
             .filter(l => l.dir !== 'draft')
             .map(l => (l.pressed ? undefined : l.via))
-          if (loopRun(vias, limits().loopRun)) reason = 'loop'
+          if (loopRun(vias, loopFor(peer, limits()))) reason = 'loop'
         }
       }
       if (reason) {
