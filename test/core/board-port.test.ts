@@ -46,8 +46,12 @@ describe('the script and the checkout a process runs from', () => {
 
 describe('whether it is this install’s board', () => {
   const root = 'C:\\Users\\a\\herdr\\agent-board'
-  test('the pid board.json names is this install’s board, whatever else it says', () => {
+  test('a server that does not tell its folder is this install’s board when board.json names its pid', () => {
+    expect(strangerOf(owner(), { version: '0.1.0', root: null }, root, 4242, 'win32')).toBeNull()
     expect(strangerOf(owner(), { version: null, root: null }, root, 4242, 'win32')).toBeNull()
+  })
+  test('a server that tells its folder is judged by it, board.json or not', () => {
+    expect(strangerOf(owner(), { version: '0.1.0', root: 'C:\\wt\\board-12' }, root, 4242, 'win32')).toBe('elsewhere')
   })
   test('a server that says this install’s folder (any case and slash on Windows) is it', () => {
     const says = { version: '0.1.0', root: 'c:/users/a/herdr/agent-board/' }

@@ -6,7 +6,7 @@
 // that try logs in with the same key instead, and a welcome means the board is a member after all.
 
 import { authBytes, joinBytes, type KeyPair, parseFrame, sign, TEAM_PROTOCOL } from '../core/team.ts'
-import { describeReach, type Reach, reachable } from '../core/team-reach.ts'
+import { describeReach, type Reach, wayClosed } from '../core/team-reach.ts'
 
 /** How long one try may wait for the hub's welcome. BOARD_TEAM_JOIN_MS shortens it (tests). */
 export const TRY_MS = 10_000
@@ -37,6 +37,13 @@ export interface JoinDeps {
   /** A line for the person while it tries again. */
   say: (line: string) => void
   pause: (ms: number) => Promise<void>
+  /**
+   * Runs before each join goes out: from then on the hub may take the invite for this key, so the
+   * key must outlive this process (an interrupt between tries included).
+   */
+  beforeJoin?: () => Promise<void>
+  /** One try (tests); tryOnce otherwise. */
+  attempt?: typeof tryOnce
 }
 
 export type JoinOutcome =
@@ -44,14 +51,17 @@ export type JoinOutcome =
   | {
       ok: false
       error: string
-      /** A join went out and no answer came: the hub may have taken it, so the key is worth keeping. */
+      /**
+       * A join went out and no answer came: the hub may have taken it, so the key is worth keeping.
+       * False: the hub refused, or said it does not know the key, or no join went out.
+       */
       unanswered: boolean
     }
 
 const seconds = (ms: number): string => `${Math.round(ms / 100) / 10} s`
 
-/** One try: `join` with the invite, or `auth` with the key alone. */
-export function tryOnce(r: JoinRequest, mode: Mode, ms: number): Promise<Try> {
+/** One try: `join` with the invite, or `auth` with the key alone. `beforeJoin` runs before a join goes out. */
+export function tryOnce(r: JoinRequest, mode: Mode, ms: number, beforeJoin?: () => Promise<void>): Promise<Try> {
   return new Promise(resolve => {
     let ws: WebSocket | undefined
     let stage: Stage = 'connect'
@@ -105,13 +115,15 @@ export function tryOnce(r: JoinRequest, mode: Mode, ms: number): Promise<Try> {
           mode === 'join'
             ? joinBytes({ hub: f.hub, invite: r.invite, name: r.name, nonce: f.nonce, peer: r.key.pub })
             : authBytes({ hub: f.hub, nonce: f.nonce, peer: r.key.pub })
-        void sign(r.key.pkcs8, bytes).then(sig => {
+        void (async () => {
+          const sig = await sign(r.key.pkcs8, bytes)
+          if (mode === 'join') await beforeJoin?.()
           if (done) return
           ws?.send(
             JSON.stringify(mode === 'join' ? { t: 'join', invite: r.invite, name: r.name, sig } : { t: 'auth', sig }),
           )
           sent = true
-        })
+        })().catch(err => fail(`the ${mode} did not go out: ${err instanceof Error ? err.message : String(err)}`))
       } else if (f.t === 'welcome') finish({ ok: true })
       else if (f.t === 'error')
         fail(`the hub refused: ${f.code}${f.message ? ` (${f.message})` : ''}`, {
@@ -126,16 +138,25 @@ export function tryOnce(r: JoinRequest, mode: Mode, ms: number): Promise<Try> {
 const takenAlready = (refused: { code: string; message?: string }): boolean =>
   refused.code === 'invite_invalid' || (refused.code === 'bad_frame' && /already a member/.test(refused.message ?? ''))
 
-/** Joins the hub, trying again while the way is open; says what got through when it gives up. */
+/**
+ * Joins the hub, trying again while the way may be open; says what got through when it gives up.
+ * A join refused because the invite is used or the key is a member, after a join of this run went
+ * unanswered or with a key the board had before, logs in with the key: a welcome is a member, the
+ * hub not knowing the key settles that the join never landed.
+ */
 export async function joinHub(r: JoinRequest, d: JoinDeps): Promise<JoinOutcome> {
+  const attempt = d.attempt ?? tryOnce
   let unanswered = false
   for (let n = 1; ; n++) {
-    const t = await tryOnce(r, 'join', d.tryMs)
+    const t = await attempt(r, 'join', d.tryMs, d.beforeJoin)
     if (t.ok) return { ok: true, via: 'join' }
     if (t.refused) {
       if ((unanswered || r.keyWasSaved) && takenAlready(t.refused)) {
-        const again = await tryOnce(r, 'auth', d.tryMs)
+        const again = await attempt(r, 'auth', d.tryMs)
         if (again.ok) return { ok: true, via: 'auth' }
+        // The hub answered the login: it does not know the key (the join never landed) or says why not.
+        if (again.refused)
+          return { ok: false, error: again.refused.code === 'unknown_peer' ? t.error : again.error, unanswered: false }
       }
       return { ok: false, error: t.error, unanswered }
     }
@@ -144,7 +165,7 @@ export async function joinHub(r: JoinRequest, d: JoinDeps): Promise<JoinOutcome>
     if (t.stage === 'connect') {
       const reach = await d.probe(r.hub)
       way = describeReach(reach)
-      if (!reachable(reach))
+      if (wayClosed(reach))
         return { ok: false, error: `cannot reach the hub at ${r.hub}: ${t.error} · ${way}`, unanswered }
     }
     const said = `${t.error}${way ? ` · ${way}` : ''}`

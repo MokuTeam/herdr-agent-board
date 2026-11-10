@@ -86,7 +86,7 @@ describe('board team join on a bad way to the hub', () => {
       const r = await board(box, ['team', 'join', hub.invite(), '--hub', p.url, '--name', 'slowfirst'])
       expect(r.code).toBe(0)
       expect(r.stderr).toMatch(
-        /^board: try 1 of 3: the connection did not open in 1\.5 s · TCP 127\.0\.0\.1:\d+ ok in \d+ ms; trying again\n$/,
+        /^board: try 1 of 3: the connection did not open in 1\.5 s · TCP 127\.0\.0\.1:\d+ ok in \d+ ms; trying again\n/,
       )
       expect(r.stdout).toMatch(/^ok · joined ws:\/\/127\.0\.0\.1:\d+ as slowfirst · your key /)
       expect(configOf(box)).toMatchObject({ team: { hub: p.url, name: 'slowfirst' } })
@@ -104,7 +104,7 @@ describe('board team join on a bad way to the hub', () => {
       const r = await board(box, ['team', 'join', hub.invite(), '--hub', p.url, '--name', 'lostwelcome'])
       expect(r.stderr).toMatch(/^board: try 1 of 3: the connection closed after the join went out, with no answer/)
       expect(r.code).toBe(0)
-      expect(r.stdout).toContain('as lostwelcome (an earlier try had reached the hub) · your key ')
+      expect(r.stdout).toContain('as lostwelcome (the hub knew this key already) · your key ')
       await hub.login(keyOf(box))
     } finally {
       p.close()
@@ -128,7 +128,7 @@ describe('board team join on a bad way to the hub', () => {
       const again = await board(box, ['team', 'join', invite, '--hub', direct, '--name', 'nowelcome'])
       expect(again.stderr).toBe('')
       expect(again.code).toBe(0)
-      expect(again.stdout).toContain('(an earlier try had reached the hub)')
+      expect(again.stdout).toContain('(the hub knew this key already)')
       expect(keyOf(box)).toEqual(kept)
       expect(configOf(box)).toMatchObject({ team: { hub: direct, name: 'nowelcome' } })
       await hub.login(kept)

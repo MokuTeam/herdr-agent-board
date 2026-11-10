@@ -571,14 +571,12 @@ const TEAM_USAGE =
  * install's board after all, or the system does not say.
  */
 async function strangerOnPort(port: number): Promise<string | null> {
-  const P = await import('../adapters/port-owner.ts')
-  const B = await import('../core/board-port.ts')
+  const { whoHoldsPort } = await import('../adapters/port-owner.ts')
+  const { describeOwner } = await import('../core/board-port.ts')
   const { ROOT } = await import('../adapters/paths.ts')
-  const saved = P.savedBoardPid()
-  const [owner, says] = await Promise.all([P.portOwner(port, pid => pid === saved), P.serverSays(port)])
-  const why = owner && B.strangerOf(owner, says, ROOT, saved, process.platform)
+  const { owner, says, why } = await whoHoldsPort(port, ROOT)
   if (!owner || !why) return null
-  const who = B.describeOwner(owner, says, why, Date.now())
+  const who = describeOwner(owner, says, why, Date.now())
   return `port ${port} is held by a process that is not this install's board (${ROOT}): ${who}. Stop it (often an old board server from another checkout) and open the board again`
 }
 
@@ -660,6 +658,10 @@ async function team(): Promise<void> {
     const key = saved ?? (await T.generateKey())
     const { joinHub, TRIES, TRY_MS } = await import('../services/team-join.ts')
     const { probeHub } = await import('../adapters/hub-reach.ts')
+    // From the moment a join goes out the hub may take the invite for this key, so a new key is
+    // saved first: an interrupt between tries, or no answer at all, must not lose it. It is taken
+    // back once the hub has settled that the join did not land.
+    let wrote = false
     const r = await joinHub(
       { hub, invite, name, key, keyWasSaved: saved !== null },
       {
@@ -668,13 +670,18 @@ async function team(): Promise<void> {
         probe: probeHub,
         say: line => console.error(`board: ${line}`),
         pause: ms => Bun.sleep(ms),
+        beforeJoin: async () => {
+          if (saved || wrote) return
+          await store.keepJoinedKey(key)
+          wrote = true
+        },
       },
     )
     if (!r.ok) {
-      if (!r.unanswered) throw new Error(r.error)
-      // The hub may have taken this join and its invite: the key is kept, so that the next join
-      // logs in with it and finds out (services/team-join.ts).
-      if (!saved) await store.ensureKey(key)
+      if (!r.unanswered) {
+        if (wrote) store.forgetKey(key.pub)
+        throw new Error(r.error)
+      }
       throw new Error(
         `${r.error}. The join went out and may have reached the hub: this board keeps its key, so the same command again finds out`,
       )
@@ -682,7 +689,7 @@ async function team(): Promise<void> {
     await store.keepJoinedKey(key)
     const w = (await import('../adapters/config-file.ts')).joinTeam({ hub, name })
     if (!w.ok) throw new Error(w.error)
-    const late = r.via === 'auth' ? ' (an earlier try had reached the hub)' : ''
+    const late = r.via === 'auth' ? ' (the hub knew this key already)' : ''
     return console.log(
       `ok · joined ${hub} as ${name}${late} · your key ${T.fingerprint(key.pub)} · the running board connects in a few seconds`,
     )
@@ -700,9 +707,14 @@ async function team(): Promise<void> {
   } catch {
     throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
   }
-  const view: unknown = await res.json().catch(() => null)
+  const view: unknown = await res.json().catch(() => undefined)
   if (!isRecord(view) || !Array.isArray(view.roster))
-    throw new Error((await strangerOnPort(webPort)) ?? 'the board does not run the team: restart it')
+    throw new Error(
+      (await strangerOnPort(webPort)) ??
+        (view === undefined
+          ? 'the board does not run: open it first (herdr plugin action invoke agent-board.open)'
+          : 'the board does not run the team: restart it'),
+    )
   const me = isRecord(view.me) ? view.me : {}
   console.log(
     T.printable(
@@ -789,11 +801,9 @@ async function main(): Promise<void> {
     // Who holds the board's port (#356): the system is asked only when something listens there.
     const port = await import('../adapters/port-owner.ts')
     if (await port.listening(webPort)) {
-      const { strangerOf, portCheck } = await import('../core/board-port.ts')
+      const { portCheck } = await import('../core/board-port.ts')
       const { ROOT } = await import('../adapters/paths.ts')
-      const saved = port.savedBoardPid()
-      const [owner, says] = await Promise.all([port.portOwner(webPort, pid => pid === saved), port.serverSays(webPort)])
-      const why = owner && strangerOf(owner, says, ROOT, saved, process.platform)
+      const { owner, says, why } = await port.whoHoldsPort(webPort, ROOT)
       const c = portCheck(webPort, owner, says, why, ROOT, Date.now(), t)
       if (c) checks.push(c)
     }

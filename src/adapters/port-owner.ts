@@ -6,7 +6,7 @@
 import { readFileSync, readlinkSync } from 'node:fs'
 import { connect } from 'node:net'
 import { win32 } from 'node:path'
-import type { PortOwner, ServerSays } from '../core/board-port.ts'
+import { type PortOwner, type ServerSays, type Stranger, saysRoot, strangerOf } from '../core/board-port.ts'
 import { isRecord } from './json-store.ts'
 import { boardFile } from './paths.ts'
 import { run } from './process.ts'
@@ -57,7 +57,11 @@ export function savedBoardPid(): number | null {
   }
 }
 
-/** The pid that listens on `port` in `netstat -ano -p TCP`'s table: a line whose local address ends in the port and whose foreign one is a wildcard (the state word is in the system's language, so it is not read). */
+/**
+ * The pid that listens on `port` in `netstat -ano`'s table (TCP over IPv4 and IPv6): a line whose
+ * local address ends in the port and whose foreign one is a wildcard. The state word is in the
+ * system's language, so it is not read.
+ */
 export function listenerIn(netstat: string, port: number): number | null {
   for (const line of netstat.split(/\r?\n/)) {
     const [proto, local, foreign, ...more] = line.trim().split(/\s+/)
@@ -91,7 +95,7 @@ const system32 = (...parts: string[]): string =>
   win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', ...parts)
 
 async function windowsPid(port: number): Promise<number | null> {
-  const r = await run(system32('NETSTAT.EXE'), ['-ano', '-p', 'TCP'], { timeout: 10_000 })
+  const r = await run(system32('NETSTAT.EXE'), ['-ano'], { timeout: 10_000 })
   return listenerIn(r.stdout, port)
 }
 
@@ -155,4 +159,19 @@ export async function portOwner(
   if (pid === null) return null
   if (known(pid)) return { pid, command: null, cwd: null, startedAt: null }
   return { pid, ...(platform === 'win32' ? await windowsInfo(pid) : await unixInfo(pid)) }
+}
+
+/**
+ * Who holds the board's port and whether it is this install's board (root: this install's folder).
+ * The server is asked first: when it says this install's folder, or the pid is board.json's, the
+ * system is asked only for the pid, not (on Windows, slowly) for the command line.
+ */
+export async function whoHoldsPort(
+  port: number,
+  root: string,
+): Promise<{ owner: PortOwner | null; says: ServerSays; why: Stranger | null }> {
+  const says = await serverSays(port)
+  const saved = savedBoardPid()
+  const owner = await portOwner(port, pid => pid === saved || saysRoot(says, root, process.platform))
+  return { owner, says, why: owner && strangerOf(owner, says, root, saved, process.platform) }
 }

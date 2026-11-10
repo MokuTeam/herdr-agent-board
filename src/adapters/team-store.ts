@@ -3,7 +3,7 @@
 // team-pins.json (the keys of the peers seen) and team-audit.jsonl (what happened, never a message's
 // text). Nothing here creates a file until it is asked to write: `board team join` and the running
 // board with `team` set are the only callers.
-import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs'
+import { appendFileSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs'
 import {
   type Ack,
   type DeliveryState,
@@ -71,6 +71,17 @@ export async function keepJoinedKey(joined: KeyPair): Promise<void> {
     throw new Error(
       'another key was saved for this board while joining, so the hub knows a key this board does not use; config.json was not changed. Ask for a new invite and run `board team join` again',
     )
+}
+
+/**
+ * Takes back a key `board team join` saved before its join went out, once the hub has settled that
+ * the join did not land (#356). Only that very key: a key saved by anything else stays.
+ */
+export function forgetKey(pub: string): void {
+  if (readKey()?.pub !== pub) return
+  try {
+    unlinkSync(teamKeyFile())
+  } catch {}
 }
 
 // ---- Messages

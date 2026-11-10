@@ -61,5 +61,16 @@ export function describeReach(r: Reach): string {
   return parts.join(' · ')
 }
 
-/** Whether the way is open up to the WebSocket: another try is worth it only then. */
-export const reachable = (r: Reach): boolean => r.dns.ok && r.tcp.some(s => s.ok) && (!r.secure || r.tls?.ok === true)
+/** A step that failed for good: an answer that says no, not silence or a dropped line, which a later try may get past. */
+const definite = (s: ReachStep): boolean => !s.ok && s.error !== 'timeout' && s.error !== 'ECONNRESET'
+
+/**
+ * Whether the way is closed for sure, so that another try is no use: the name does not exist, every
+ * address refuses, or TLS says no (a certificate). A step that only got no answer in time (a slow
+ * first lookup, a slow handshake) leaves it open.
+ */
+export const wayClosed = (r: Reach): boolean =>
+  definite(r.dns) ||
+  (r.dns.ok && r.tcp.length > 0 && r.tcp.every(definite)) ||
+  (r.dns.ok && r.dns.addresses.length === 0) ||
+  (r.tls !== null && definite(r.tls))

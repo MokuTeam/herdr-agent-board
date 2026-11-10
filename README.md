@@ -110,7 +110,10 @@ run this copy of the plugin; with more than one profile shown, in each, by its n
 Claude hook (in each shown profile too: without it a session's card has no conversation and no
 profile), the key, sleep and wake (running, off, crashed with its error, held by the separate
 herdr-wake plugin, or not answering, and its hooks in each shown profile), how new sessions start,
-MokuPilot, the notifications. It also says what herdr's panes hold: how many run an agent, sleep
+MokuPilot, the notifications, and who holds the board's port when something listens there (this
+install's board, or another process by its pid, folder and age: an old board server left running
+from another checkout keeps this board from listening and answers the board command in its place).
+It also says what herdr's panes hold: how many run an agent, sleep
 in their pane, are herdr-sidebar's or something else, with the memory their processes take, and
 how many of the sidebars and the others are a bare shell (a sidebar pane herdr restored without its
 sidebar, a terminal left open). While the board's sleep and wake runs, it names the panes labelled
@@ -2207,8 +2210,12 @@ board team roster
 board team draft Roman "is the build green?"
 ```
 
-`join` reaches the hub first and writes `team` and the key only once the hub says welcome; a bad
-or used invite changes nothing. `roster` asks the running board: the hub, the connection, who is
+`join` reaches the hub first and writes `team` only once the hub says welcome; a bad or used
+invite changes nothing. A try that gets no answer in 10 s is made again, up to three tries, and a
+failure says what got through on the way: the name's addresses, TCP to each family, TLS. The key
+is saved just before the join goes out and taken back when the hub refuses it, so a join whose
+welcome was lost is not lost with it: the same command again logs in with that key. `roster` asks
+the running board: the hub, the connection, who is
 online (`●`), who is not (`○`, with when they were last seen), and a flag on anyone whose key
 changed.
 
@@ -2848,7 +2855,9 @@ Linux with ufw: `sudo ufw allow in on tailscale0 to any port 12422 proto tcp`). 
 listens and Tailscale is never asked.
 
 `GET /api/hello` says what the board is (`{ board, api, version, host, name, dnsName, platform,
-remote }`, `api` 1). On the Tailscale address also: `POST /api/remote/pair` with `{ name }` (202
+remote }`, `api` 1). `GET /api/process` (this computer only, refused on every remote listener)
+says which process it is and where it is installed (`{ board, pid, root }`): the board command and
+`board doctor` tell this install's board from an old one on the port by it. On the Tailscale address also: `POST /api/remote/pair` with `{ name }` (202
 `{ id }`), `GET /api/remote/pair/<id>` (`pending`, `denied`, once `approved` with `token`, then
 `gone`), and with `Authorization: Bearer <token>` the web board's `/api/*` routes plus
 `GET /api/peers`: the other computers on the tailnet whose board answers. Code:

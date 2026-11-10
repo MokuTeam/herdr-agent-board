@@ -56,10 +56,15 @@ export function checkoutOf(owner: PortOwner): string | null {
   return owner.cwd
 }
 
+/** The server on the port says it is installed in `root`. */
+export const saysRoot = (says: ServerSays, root: string, platform: string): boolean =>
+  says.root !== null && norm(says.root, platform) === norm(root, platform)
+
 /**
- * Null when the process is this install's board: the one board.json names, or a server that says
- * this install's folder. Else why not: no agent board answered, a board from another folder, or a
- * board server that does not know /api/process and so runs code older than this install's.
+ * Null when the process is this install's board. A server that tells its folder (/api/process) is
+ * judged by it. One that does not is this install's only when it is the terminal board board.json
+ * names (a board started before this install was updated); else it is a board server running older
+ * code than this install's, or no agent board at all.
  */
 export function strangerOf(
   owner: PortOwner,
@@ -68,10 +73,9 @@ export function strangerOf(
   savedPid: number | null,
   platform: string,
 ): Stranger | null {
+  if (says.root !== null) return saysRoot(says, root, platform) ? null : 'elsewhere'
   if (savedPid !== null && owner.pid === savedPid) return null
-  if (says.version === null) return 'no-board'
-  if (says.root === null) return 'older'
-  return norm(says.root, platform) === norm(root, platform) ? null : 'elsewhere'
+  return says.version === null ? 'no-board' : 'older'
 }
 
 function age(ms: number): string {

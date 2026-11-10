@@ -35,7 +35,11 @@ export async function startOldBoard(): Promise<OldBoard> {
   let out = ''
   while (!/\d+\s*\n/.test(out)) {
     const { done, value } = await reader.read()
-    if (done) throw new Error(`the old board did not start: ${out}`)
+    if (done) {
+      child.kill()
+      rmSync(dir, { recursive: true, force: true })
+      throw new Error(`the old board did not start: ${out}`)
+    }
     out += new TextDecoder().decode(value)
   }
   reader.releaseLock()
