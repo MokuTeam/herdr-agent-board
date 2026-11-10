@@ -2235,7 +2235,9 @@ draft came from `board team draft`; it does not say that a person looked at it.
 
 **Running the hub.** `bun hub/src/main.ts`: see [hub/README.md](hub/README.md) for the options,
 invites, revoking a member and what it keeps. It is not part of the plugin; run it on one machine
-the members reach, on loopback or a tailnet, or behind TLS.
+the members reach: on a tailnet, or on loopback on a server of yours with nginx bringing TLS in
+front of it, the boards' hub then being `wss://hub.example.com` and no Tailscale needed
+(`hub/hab-hub.nginx.conf`, `hub/hab-hub.system.service`; step by step in the quickstart).
 
 **What the MVP does not do.**
 
@@ -2246,7 +2248,8 @@ the members reach, on loopback or a tailnet, or behind TLS.
 - The line between what a human may do and what an agent may do on the board is not enforced
   (#224): anyone who can reach the board's local API can send as you. Use it on a computer you
   alone use.
-- The hub is trusted by the address given at join; it has no identity of its own yet.
+- The hub is trusted by the address given at join; it has no identity of its own yet. Over
+  `wss://` the board checks the hub's certificate for that name, as a browser does.
 
 **Checking it by hand, on two machines** (the hub on one machine, two boards on two others, all in
 one tailnet):

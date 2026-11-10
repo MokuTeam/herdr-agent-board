@@ -11,7 +11,7 @@ frames and gets signed frames back; everything else stays on the board.
 ## Run it
 
 ```
-bun hub/src/main.ts [--dir D] [--listen host:port] [--allow-public] [--keep-days N]
+bun hub/src/main.ts [--dir D] [--listen host:port] [--allow-public] [--trust-proxy] [--keep-days N]
 ```
 
 - `--dir` (default `~/.local/state/hab-hub`): the store (`hub.db`, SQLite in WAL mode) and the admin
@@ -20,14 +20,41 @@ bun hub/src/main.ts [--dir D] [--listen host:port] [--allow-public] [--keep-days
 - `--listen` (default `127.0.0.1:7443`): loopback and Tailscale addresses (100.64.0.0/10,
   fd7a:115c:a1e0::/48) are taken as they are. Any other address, the wildcard `0.0.0.0` included,
   needs `--allow-public`. The hub speaks plain `ws://`; on anything but loopback or a tailnet put
-  TLS in front of it and use `wss://` in the boards' `team.hub`.
+  TLS in front of it and use `wss://` in the boards' `team.hub`. Behind a reverse proxy on the
+  same machine keep the default: the proxy reaches it on loopback (see "Behind a reverse proxy").
+- `--trust-proxy`: a reverse proxy on this machine forwards to the hub. A connection from a
+  loopback address is then taken to be the proxy's, and the log shows the rightmost entry of its
+  `X-Forwarded-For` (the address the proxy saw) instead of 127.0.0.1. Only an IP literal counts,
+  and only from loopback; the address goes to the log and nowhere else.
 - `--keep-days` (default 90, at least 8): how long finished rows are kept, see "What it keeps". Below
   8 the hub refuses to start: a message lives up to 7 days, and its id must stay known for as long
   as the sender may send it again.
-- SIGINT and SIGTERM stop it cleanly. There is no systemd/launchd unit here; write your own.
+- SIGINT and SIGTERM stop it cleanly. Two systemd units are here: `hab-hub.service`, a user unit
+  for a tailnet, and `hab-hub.system.service`, a system unit for a server behind nginx. There is
+  no launchd one.
 
 No hub identity is pinned in this version: a board trusts the address it was given. Keep the hub on
-loopback or a tailnet.
+loopback or a tailnet, or behind TLS with a certificate for its name: over `wss://` the board
+checks the certificate as a browser does, and refuses one it cannot verify.
+
+## Behind a reverse proxy
+
+On a server of your own with a domain, the hub stays on loopback and a reverse proxy brings TLS:
+the boards' hub is `wss://hub.example.com`, and no tailnet is needed. Two samples:
+
+- `hab-hub.nginx.conf`: an nginx server block for `hub.example.com`. It passes `/v1` to
+  `127.0.0.1:7443` with the WebSocket upgrade, sets `X-Forwarded-For`, keeps a connection for 300 s
+  without a frame (a board pings every 30 s), redirects port 80 to https and serves nothing else.
+- `hab-hub.system.service`: a system unit that runs the hub as a user of its own
+  (`--listen 127.0.0.1:7443 --trust-proxy`), with its store in `/var/lib/hab-hub` and the rest of
+  the system read-only to it.
+
+The hub needs no `bun install`: it uses only Bun's and Node's own modules. Step by step, with the
+certificate and the invites: "Your own server with a domain" in
+[docs/team-quickstart.md](../docs/team-quickstart.md). Another proxy works the same way if it
+upgrades WebSocket on `/v1` and puts the client's address last in `X-Forwarded-For` (Caddy does both
+by default). Behind a second proxy (a CDN in front of nginx) the rightmost entry is that proxy's
+address, not the member's.
 
 ## Invites and members
 

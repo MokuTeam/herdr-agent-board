@@ -38,6 +38,55 @@ member joins it with a one-time invite. What the MVP is and is not: the
 The hub keeps message text only while it waits for the recipient (see "What it keeps" in
 [hub/README.md](../hub/README.md)).
 
+## The hub's admin on your own server with a domain (no tailnet)
+
+The same hub, reached from anywhere as `wss://hub.example.com`: it listens on loopback only and
+nginx brings TLS in front of it, the way the board itself is reached through its own domain. Nobody
+needs Tailscale. Below, `hub.example.com` stands for a name of yours whose DNS points at the
+server; the commands are for Debian or Ubuntu with nginx, run as root.
+
+1. A user for the hub, and bun and the repository where that user can read them (the hub needs no
+   `bun install`):
+
+   ```sh
+   useradd --system --home-dir /var/lib/hab-hub --shell /usr/sbin/nologin hab-hub
+   curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash   # bun in /usr/local/bin; needs unzip
+   git clone https://github.com/MokuTeam/herdr-agent-board.git /opt/herdr-agent-board
+   ```
+
+   Check out the branch or main that has the Team feature.
+2. The unit. Copy `hub/hab-hub.system.service` to `/etc/systemd/system/hab-hub.service`; if bun
+   or the repository are elsewhere, change the two paths in `ExecStart`. It runs the hub as
+   `hab-hub` on `127.0.0.1:7443` with `--trust-proxy`, its store in `/var/lib/hab-hub`.
+
+   ```sh
+   systemctl daemon-reload
+   systemctl enable --now hab-hub
+   systemctl status hab-hub          # active (running)
+   curl -s http://127.0.0.1:7443/    # agent-board hub
+   ```
+3. The certificate and nginx. Ports 443 and 80 (for the certificate) must be open; 7443 never is.
+
+   ```sh
+   certbot certonly --nginx -d hub.example.com
+   cp /opt/herdr-agent-board/hub/hab-hub.nginx.conf /etc/nginx/sites-available/hab-hub
+   # put your name in place of every hub.example.com in it
+   ln -s /etc/nginx/sites-available/hab-hub /etc/nginx/sites-enabled/hab-hub
+   nginx -t && systemctl reload nginx
+   curl -si https://hub.example.com/v1 | head -1   # 426: the hub answered through nginx
+   ```
+4. Invites and members as in the tailnet setup above (steps 4 to 6), run as the hub's user:
+
+   ```sh
+   cd /opt/herdr-agent-board
+   sudo -u hab-hub /usr/local/bin/bun hub/src/cli.ts --dir /var/lib/hab-hub invite create --note anna
+   sudo -u hab-hub /usr/local/bin/bun hub/src/cli.ts --dir /var/lib/hab-hub peers
+   ```
+5. Members join with `--hub wss://hub.example.com` (no port; `/v1` may be added or left out).
+
+`journalctl -u hab-hub` shows who came online and who was refused, with the address nginx saw.
+To update: `git -C /opt/herdr-agent-board pull && systemctl restart hab-hub`.
+
 ## Each member (Linux, macOS, Windows)
 
 1. Update the board to the branch or main that has the Team feature:
@@ -62,8 +111,9 @@ The hub keeps message text only while it waits for the recipient (see "What it k
    board team join hab-xxxx-xxxx-xxxx-xxxx-xxxx-xxxx --hub ws://100.64.0.7:7443 --name Anna
    ```
 
-   The name is what the others see (up to 40 characters, no control characters). A bad or used
-   invite changes nothing.
+   With a hub on a domain the address is `wss://hub.example.com`, and no tailnet is needed. The
+   name is what the others see (up to 40 characters, no control characters). A bad or used invite
+   changes nothing.
 3. Check: `board team roster`. It lists who is online (`●`) and who is not (`○`).
 4. In the board: Settings → Team…. Pick a person; a green dot means they are online.
 5. First message: type a question under the thread and press Send. It shows queued, delivered,
@@ -82,6 +132,12 @@ The hub keeps message text only while it waits for the recipient (see "What it k
   (`tailscale status`) and on the hub's? Is the hub running (`systemctl --user status hab-hub` on
   the VPS)? Is the address the tailnet one with port `7443`, and the same as the admin gave? `board team
   roster` first line shows the address the board uses.
+- **"cannot reach the hub", or "Connecting…" for long, with a `wss://` address.** The board checks
+  the hub's certificate as a browser does: an expired or self-signed one, or one for another name,
+  is refused. `curl -sI https://hub.example.com/v1` from the same computer shows the same error. On
+  the server: `systemctl status hab-hub`, `nginx -t`. For a test with a certificate authority of
+  your own, start the board with `NODE_EXTRA_CA_CERTS=<ca.pem>`; nothing in config.json turns the
+  check off.
 - **The invite is refused** (`invite_invalid`, "the hub refused"). An invite works once and for 24
   hours; it was used or has expired. Ask the admin for a new one. `name_taken`: someone has that
   name, choose another.
@@ -114,7 +170,7 @@ you). See [What the MVP does not do](../README.md#team) in the README.
    loopback или tailnet, если не указать `--allow-public`.
 2. Склонируйте репозиторий, выполните `bun install` и переключитесь на ветку или main, где есть Team.
 3. Поставьте юнит. Скопируйте `hub/hab-hub.service` в `~/.config/systemd/user/hab-hub.service` и
-   поправьте `ExecStart`: путь к `bun`, путь к репозиторию и `--listen <tailnet ip>:7443`. `--dir` —
+   поправьте `ExecStart`: путь к `bun`, путь к репозиторию и `--listen <tailnet ip>:7443`. `--dir`:
    где лежат `hub.db` и сокет админа (`~/.local/state/hab-hub`).
 
    ```sh
@@ -139,6 +195,55 @@ you). See [What the MVP does not do](../README.md#team) in the README.
 Хаб хранит текст сообщения, только пока оно ждёт получателя (см. «What it keeps» в
 [hub/README.md](../hub/README.md)).
 
+## Админ хаба на своём сервере с доменом (без tailnet)
+
+Тот же хаб, доступный откуда угодно как `wss://hub.example.com`: он слушает только loopback, а
+TLS перед ним даёт nginx, так же как сама доска доступна через свой домен. Tailscale не нужен
+никому. Ниже `hub.example.com` означает ваше имя, DNS которого указывает на сервер; команды для
+Debian или Ubuntu с nginx, от root.
+
+1. Пользователь для хаба, а bun и репозиторий там, где этот пользователь может их читать (хабу не
+   нужен `bun install`):
+
+   ```sh
+   useradd --system --home-dir /var/lib/hab-hub --shell /usr/sbin/nologin hab-hub
+   curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash   # bun в /usr/local/bin; нужен unzip
+   git clone https://github.com/MokuTeam/herdr-agent-board.git /opt/herdr-agent-board
+   ```
+
+   Переключитесь на ветку или main, где есть Team.
+2. Юнит. Скопируйте `hub/hab-hub.system.service` в `/etc/systemd/system/hab-hub.service`; если
+   bun или репозиторий лежат в другом месте, поправьте два пути в `ExecStart`. Он запускает хаб
+   от `hab-hub` на `127.0.0.1:7443` с `--trust-proxy`, хранилище в `/var/lib/hab-hub`.
+
+   ```sh
+   systemctl daemon-reload
+   systemctl enable --now hab-hub
+   systemctl status hab-hub          # active (running)
+   curl -s http://127.0.0.1:7443/    # agent-board hub
+   ```
+3. Сертификат и nginx. Порты 443 и 80 (для сертификата) должны быть открыты; 7443 никогда.
+
+   ```sh
+   certbot certonly --nginx -d hub.example.com
+   cp /opt/herdr-agent-board/hub/hab-hub.nginx.conf /etc/nginx/sites-available/hab-hub
+   # замените в нём каждый hub.example.com на своё имя
+   ln -s /etc/nginx/sites-available/hab-hub /etc/nginx/sites-enabled/hab-hub
+   nginx -t && systemctl reload nginx
+   curl -si https://hub.example.com/v1 | head -1   # 426: хаб ответил через nginx
+   ```
+4. Приглашения и участники как в варианте с tailnet выше (шаги с 4 по 6), от пользователя хаба:
+
+   ```sh
+   cd /opt/herdr-agent-board
+   sudo -u hab-hub /usr/local/bin/bun hub/src/cli.ts --dir /var/lib/hab-hub invite create --note anna
+   sudo -u hab-hub /usr/local/bin/bun hub/src/cli.ts --dir /var/lib/hab-hub peers
+   ```
+5. Участники вступают с `--hub wss://hub.example.com` (без порта; `/v1` можно дописать или нет).
+
+`journalctl -u hab-hub` показывает, кто вошёл и кому отказано, с адресом, который видел nginx.
+Обновить: `git -C /opt/herdr-agent-board pull && systemctl restart hab-hub`.
+
 ## Каждый участник (Linux, macOS, Windows)
 
 1. Обновите доску до ветки или main, где есть Team:
@@ -149,12 +254,12 @@ you). See [What the MVP does not do](../README.md#team) in the README.
    herdr plugin action invoke agent-board.install
    ```
 
-   Открытая доска перезапускается сама, когда меняется её код; если нет — закройте её и откройте
+   Открытая доска перезапускается сама, когда меняется её код; если нет, закройте её и откройте
    снова (`herdr plugin action invoke agent-board.open`). `board restart` для этого не подходит: он
    перезапускает сессию Claude. Доска, поставленная через `herdr plugin install`, обновляется
    `herdr plugin update`; чтобы попробовать ветку, склонируйте репозиторий, перейдите на ветку,
    затем `herdr plugin unlink agent-board` и `herdr plugin link <клон>` перед командами выше.
-   В Windows те же команды в PowerShell. Команда `board` — та, что установка положила в
+   В Windows те же команды в PowerShell. Команда `board` здесь та, что установка положила в
    `~/.local/bin` (в Windows это `.cmd`).
 2. Вступите с кодом от админа и tailnet-адресом хаба (вы должны быть в том же tailnet; адрес можно
    писать с `/v1` и без):
@@ -163,8 +268,8 @@ you). See [What the MVP does not do](../README.md#team) in the README.
    board team join hab-xxxx-xxxx-xxxx-xxxx-xxxx-xxxx --hub ws://100.64.0.7:7443 --name Anna
    ```
 
-   Имя видят остальные (до 40 символов, без управляющих). Неверное или использованное приглашение
-   ничего не меняет.
+   Если хаб на домене, адрес `wss://hub.example.com`, и tailnet не нужен. Имя видят остальные (до
+   40 символов, без управляющих). Неверное или использованное приглашение ничего не меняет.
 3. Проверьте: `board team roster`. Он показывает, кто в сети (`●`) и кто нет (`○`).
 4. В доске: Settings → «Команда…». Выберите человека; зелёная точка значит, что он в сети.
 5. Первое сообщение: напишите вопрос под перепиской и нажмите «Отправить». Статус: ждёт в хабе,
@@ -174,7 +279,7 @@ you). See [What the MVP does not do](../README.md#team) in the README.
    уходит с вашего компьютера; «Удалить» убирает его. Roman увидит «через агента Anna».
 
    Важно: пока не сделан #224, агент на том же компьютере может отправить сообщение сам: создать
-   черновик и отправить его или вызвать `/api/team/send` напрямую — тогда у сообщения нет пометки
+   черновик и отправить его или вызвать `/api/team/send` напрямую, и тогда у сообщения нет пометки
    агента. Пометка «через агента» говорит только, что черновик пришёл из `board team draft`; она не
    значит, что человек его одобрил.
 
@@ -182,8 +287,13 @@ you). See [What the MVP does not do](../README.md#team) in the README.
 
 - **Нет зелёной точки / «Не удалось работать с …» / долго «Подключаемся…».** Работает ли Tailscale
   у вас (`tailscale status`) и на хабе? Запущен ли хаб (`systemctl --user status hab-hub` на VPS)?
-  Адрес — tailnet-овый, порт `7443`, такой же, как дал админ? Первая строка `board team roster`
+  Адрес tailnet-овый, порт `7443`, такой же, как дал админ? Первая строка `board team roster`
   показывает адрес, который использует доска.
+- **«cannot reach the hub» или долго «Подключаемся…» при адресе `wss://`.** Доска проверяет
+  сертификат хаба, как браузер: просроченный, самоподписанный или выданный на другое имя
+  отклоняется. `curl -sI https://hub.example.com/v1` с того же компьютера покажет ту же ошибку. На
+  сервере: `systemctl status hab-hub`, `nginx -t`. Для теста с собственным удостоверяющим центром
+  запустите доску с `NODE_EXTRA_CA_CERTS=<ca.pem>`; в config.json эту проверку не отключить.
 - **Приглашение отклонено** (`invite_invalid`). Оно работает один раз и 24 часа: уже использовано
   или истекло. Попросите у админа новое. `name_taken`: имя занято, выберите другое.
 - **Сообщение «ждёт в хабе».** Доска получателя не в сети. Оно дойдёт, когда та вернётся, а через
