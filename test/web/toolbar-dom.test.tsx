@@ -398,6 +398,18 @@ test('two rows from 320 to 1200 px: the actions that do not fit are the end of t
   expect(before).toBe(0)
 })
 
+test('a board that started wide takes one row where everything fits: the summary it showed there takes no room now', async () => {
+  world.total = 2560
+  await mount()
+  expect(rows()).toBe(false)
+  // Everything and the filters need about 1160 px; the summary (240 px, wide boards only) is gone below 1580.
+  await resizeTo(1300)
+  expect(rows()).toBe(false)
+  expect(over()).toEqual([])
+  await resizeTo(1100)
+  expect(rows()).toBe(true)
+})
+
 test('a phone keeps Next, and the presence pill beside it where the row holds both; a wider toolbar grows back to one row', async () => {
   await mount()
   await resizeTo(390)

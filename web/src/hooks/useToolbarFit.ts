@@ -35,8 +35,6 @@ interface Sizes {
   more: number
   /** The pinned buttons and the gap before each. */
   pinned: number
-  /** The summary's width (0 while it is not shown). */
-  title: number
 }
 
 interface Measured {
@@ -47,7 +45,7 @@ interface Measured {
   two: Sizes
 }
 
-const NONE_SIZED: Sizes = { items: [], more: 0, pinned: 0, title: 0 }
+const NONE_SIZED: Sizes = { items: [], more: 0, pinned: 0 }
 const NOT_MEASURED: Measured = { key: '', one: NONE_SIZED, two: NONE_SIZED }
 
 /** The row's actions on show in the order the page draws them: those that may leave, the pinned ones. */
@@ -71,7 +69,6 @@ function measure(el: Elements, now: ReturnType<typeof actionsIn>): Measured {
       items: now.items.map(item => ({ id: item.id, width: width(item) })),
       more: more ? width(more) : 0,
       pinned: now.pinned.reduce((sum, pin) => sum + gap + width(pin), 0),
-      title: el.title ? width(el.title) : 0,
     }
     el.actions.classList.remove('measuring')
     return sizes
@@ -105,8 +102,10 @@ export function fitToolbarIn(el: Elements, widths: Measured): { shape: ToolbarSh
   const measured = now.key === widths.key ? widths : measure(el, now)
   const gap = Number.parseFloat(getComputedStyle(el.actions).columnGap) || 0
   const { one, two } = measured
+  // The summary is not measured with the rest: it shows only on a wide board (a container query of app.css), so its width goes with the toolbar's, not with the actions.
+  const title = el.title ? width(el.title) : 0
   const natural = one.items.reduce((sum, it, i) => sum + (i ? gap : 0) + it.width, 0) + one.pinned
-  const rows = !oneRowFits(total, { title: one.title, actions: natural })
+  const rows = !oneRowFits(total, { title, actions: natural })
   if (!rows) return { shape: { rows, over: NONE }, widths: measured }
   // The row's own width is the two-row layout's: drawn first, then read.
   el.fit.toggleAttribute('data-rows', true)
