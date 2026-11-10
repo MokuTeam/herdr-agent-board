@@ -2,7 +2,7 @@
 // a handshake from the hub's side, and a service in an isolated home with a clock the test moves.
 import { expect } from 'bun:test'
 import { authBytes, type Frame, parseFrame, verify } from '../../src/core/team.ts'
-import { createTeam, type TeamService, type WsLike } from '../../src/services/team-hub.ts'
+import { createTeam, type InboundEvent, type TeamService, type WsLike } from '../../src/services/team-hub.ts'
 import { fakeClock } from '../hub/harness.ts'
 import { isolatedHome } from './env.ts'
 
@@ -52,8 +52,10 @@ export function stopAll(): void {
   live = []
 }
 
-export function setup(...given: [unknown?]) {
+/** `onInbound`: the router's hook (#216). */
+export function setup(...given: [unknown?, { onInbound?: (e: InboundEvent) => void }?]) {
   const team = given.length ? given[0] : { hub: HUB, name: 'me' }
+  const onInbound = given[1]?.onInbound
   isolatedHome()
   const cfg: { team: unknown } = { team }
   const clock = fakeClock()
@@ -65,6 +67,7 @@ export function setup(...given: [unknown?]) {
     clock,
     log: l => logs.push(l),
     onChange: () => void changes++,
+    ...(onInbound && { onInbound }),
     random: () => 0.5,
     socket: url => {
       const w = new FakeWs(url)
@@ -79,7 +82,7 @@ export function setup(...given: [unknown?]) {
 export type Setup = ReturnType<typeof setup>
 
 /** The hub's side of a handshake on the newest socket, ending with welcome and a roster. */
-export async function handshake(s: Setup, roster: Array<{ peer: string; name: string }> = [], n = 1) {
+export async function handshake(s: Setup, roster: Array<{ peer: string; name: string; caps?: string[] }> = [], n = 1) {
   await until(() => s.sockets.length >= n, 'a socket')
   const ws = s.sockets[n - 1] as FakeWs
   ws.open()

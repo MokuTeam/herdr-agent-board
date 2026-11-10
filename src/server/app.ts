@@ -57,6 +57,7 @@ import { startScheduler } from '../services/scheduler.ts'
 import { createServerSetup } from '../services/server-setup.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
 import { createTeam } from '../services/team-hub.ts'
+import { createTeamRouter, noticeSchedule } from '../services/team-router.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
 import { createProbes, createSupervisor, networkSignature, realClock, type TunnelPlan } from '../services/tunnel.ts'
 import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
@@ -415,7 +416,22 @@ export async function startServer({
     sessions: () => board.items().map(i => i.key),
   })
   // The peer network (#231): no socket, timer or file while config.json has no valid `team`.
-  const team = createTeam({ cfg, log, version: PLUGIN_VERSION || 'dev', onChange: () => board.publish() })
+  // What comes in goes to the router (#216), which tells a session only when the owner turned
+  // Agents on for that peer, and only through the schedule, with a notice of its own words.
+  const team = createTeam({
+    cfg,
+    log,
+    version: PLUGIN_VERSION || 'dev',
+    onChange: () => board.publish(),
+    onInbound: e => teamRouter.inbound(e),
+  })
+  const teamRouter = createTeamRouter({
+    team,
+    cfg,
+    items: () => board.items(),
+    schedule: noticeSchedule,
+    log,
+  })
   // The backup of the board's database (#233): its schedule (a look a minute, which only stats the
   // file while there is none), the server's setup, and its line in the payload (none while there
   // is no database and no target).
@@ -516,7 +532,7 @@ export async function startServer({
     // The user's presence: read, switched and set (the page, the phone, the Android app).
     ...presenceRoutes(presence),
     // The peer network: roster, threads, sends (local only; nothing answers while `team` is off).
-    ...teamRoutes(team),
+    ...teamRoutes(team, teamRouter, cfg),
     // Tasks (#202): points pinned on the board, done, reopened, removed; turned on or off.
     ...todosRoutes({ cfg, find: board.find, refresh }),
     // Secret requests (#273): the owner's submit writes the sink, or the owner declines; the phone too.

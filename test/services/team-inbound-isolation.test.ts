@@ -103,7 +103,11 @@ function imports(file: string): string[] {
   return found
 }
 
-test("the team service's import graph does not reach herdr, launches, terminals, the deps or a process", () => {
+test.each([
+  ['src/services/team-hub.ts', 'src/adapters/team-store.ts'],
+  // The router (#216) reaches a session only through the schedule, never herdr itself.
+  ['src/services/team-router.ts', 'src/adapters/schedule-store.ts'],
+])('%s: its import graph does not reach herdr, launches, terminals, the deps or a process', (start, must) => {
   const seen = new Set<string>()
   const modules = new Set<string>()
   const walk = (file: string): void => {
@@ -114,9 +118,9 @@ test("the team service's import graph does not reach herdr, launches, terminals,
       else modules.add(spec)
     }
   }
-  walk(join(ROOT, 'src/services/team-hub.ts'))
+  walk(join(ROOT, start))
   const rel = [...seen].map(f => f.slice(ROOT.length + 1).replaceAll('\\', '/'))
-  expect(rel).toContain('src/adapters/team-store.ts')
+  expect(rel).toContain(must)
   for (const banned of [
     'src/adapters/herdr.ts',
     'src/services/launch/',
