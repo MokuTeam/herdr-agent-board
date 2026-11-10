@@ -2,7 +2,7 @@
 // body is ever written anywhere but the queue itself.
 import { afterEach, beforeEach, describe, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { ackBytes, envelopeBytes, type KeyPair, sign, verify } from '../../src/core/team.ts'
+import { ackBytes, checkMessage, envelopeBytes, type KeyPair, sign, verify } from '../../src/core/team.ts'
 import { ackOf, type Harness, idOf, keys, msgOf, question, signPayload, startHarness } from './harness.ts'
 
 let h: Harness
@@ -26,10 +26,36 @@ test('a body with via "agent" is relayed unchanged, signature and all (#231)', a
   assert.deepEqual(d.env, env)
   assert.equal(msgOf(d.env).body.via, 'agent')
   assert.equal(await verify(A.pub, envelopeBytes(d.env.payload), d.env.sig), true)
-  // A via the board never writes is refused by the hub, not relayed.
+  // Since #216 the hub relays the body's other fields as signed; a via no board writes reaches
+  // the recipient, whose board refuses it (test/core/team.test.ts holds the board's check).
   const bad = await question(A, B.pub, 'x', { body: { text: 'x', via: 'human' } as never })
   a.send({ t: 'send', env: bad })
+  const relayed = await b.take('deliver')
+  assert.deepEqual(relayed.env, bad)
+  assert.equal(checkMessage(relayed.env.payload, A.pub).ok, false)
+  // The text is still the hub's to check: empty or too long is refused, not relayed.
+  const empty = await question(A, B.pub, 'x', { body: { text: '', thread: { id: 'general' } } as never })
+  a.send({ t: 'send', env: empty })
   assert.equal((await a.take('error')).code, 'bad_frame')
+})
+
+test('a topic thread and the agent session in the body are relayed, and the audit names the thread and via, never the text (#216)', async () => {
+  const a = await h.join(A, 'anna')
+  const b = await h.join(B, 'ben')
+  const thread = { id: crypto.randomUUID(), title: 'Hub setup', link: 'https://example.com/pr/1' }
+  const body = { text: `${MARKER} steps`, via: 'agent' as const, agent: 'board-216', thread }
+  const env = await question(A, B.pub, body.text, { body })
+  a.send({ t: 'send', env })
+  const d = await b.take('deliver')
+  assert.deepEqual(d.env, env)
+  assert.deepEqual(msgOf(d.env).body, body)
+  const row = h.db.auditRows().find(r => r.action === 'send' && JSON.parse(r.detail).id === idOf(env))
+  assert.ok(row)
+  assert.deepEqual(
+    { thread: JSON.parse(row.detail).thread, via: JSON.parse(row.detail).via },
+    { thread: thread.id, via: 'agent' },
+  )
+  assert.equal(row.detail.includes(MARKER) || row.detail.includes('Hub setup'), false)
 })
 
 test('offline recipient: queued, delivered on connect, signed ack comes back as acked', async () => {
@@ -403,4 +429,46 @@ describe('the payload is signed as the string it is (#217)', () => {
     assert.equal((await a.take('error')).code, 'bad_frame')
     assert.equal(h.db.raw.query<{ n: number }, []>('SELECT count(*) AS n FROM message').get()?.n, 0)
   })
+})
+
+test('no board is a centre: a message between two members reaches neither the third member nor anything it is told (#216)', async () => {
+  const a = await h.join(A, 'anna')
+  const b = await h.join(B, 'ben')
+  const c = await h.join(C, 'cara')
+  await c.settle()
+  c.frames.length = 0
+  const env = await question(A, B.pub, `${MARKER} between two`, {
+    body: { text: `${MARKER} between two`, via: 'agent', thread: { id: crypto.randomUUID(), title: 'Pair only' } },
+  })
+  a.send({ t: 'send', env })
+  await b.take('deliver')
+  b.send(await ackOf(B, env))
+  while ((await a.take('state')).state !== 'acked') {}
+  const seen = await c.settle(150)
+  assert.deepEqual(
+    seen.map(f => f.t),
+    [],
+  )
+  assert.equal(JSON.stringify(seen).includes(idOf(env)), false)
+})
+
+test('caps: kept from hello, sent in the roster and with presence, changed on a reconnect; none from an older board (#216)', async () => {
+  const a = await h.join(A, 'anna', undefined, ['threads'])
+  const b = await h.join(B, 'ben')
+  const p = await a.take('presence')
+  assert.equal(p.peer, B.pub)
+  assert.equal(p.caps, undefined)
+  const r = (await b.take('roster')).peers
+  assert.deepEqual(r.find(x => x.peer === A.pub)?.caps, ['threads'])
+  assert.equal(r.find(x => x.peer === B.pub)?.caps, undefined)
+  assert.equal(h.db.peer(A.pub)?.caps, '["threads"]')
+  // Ben's board is upgraded and reconnects: Anna learns it with the presence.
+  b.close()
+  await b.closed
+  await h.offline(B.pub)
+  a.frames.length = 0
+  await h.login(B, ['threads', 'junk value!'])
+  const back = await a.take('presence')
+  assert.deepEqual([back.online, back.caps], [true, ['threads']])
+  assert.equal(h.db.peer(B.pub)?.caps, '["threads"]')
 })

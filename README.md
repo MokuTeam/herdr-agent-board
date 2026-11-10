@@ -2240,6 +2240,55 @@ own, either by creating a draft and sending it, or by calling the board's local 
 directly, in which case the message carries no agent mark at all. The "via agent" mark only says the
 draft came from `board team draft`; it does not say that a person looked at it.
 
+**Threads and the team chat (#216).** Messages go in threads: each pair of members has its
+`general` thread (the flat thread from before) and topic threads with a title and an optional link
+(a task, a PR, a case); the team has its own, which reach every member. A team message goes as one
+signed copy per member, so each member's receipt shows on its own, a member who is away gets it when
+back (team copies wait 7 days), and a member who joins later sees what is sent after they joined.
+Messages between two members go to those two boards only: no board is a centre, and the hub's
+operator sees nothing of other members' traffic through a board. A board that reads threads says so
+to the hub when it connects (`caps`); one that does not (an older board, or any board while the hub
+is older) gets the text with the thread's title in front, and its messages land in your `general`
+with it.
+
+**Agents talking to each other (#216).** Off until you turn it on, per person and for the team, in
+the switches (`/api/team/agents`; the Team panel's controls come with #355). Off, everything stays
+as above: an agent's post is a draft, and what comes in reaches no session. On for a person:
+
+- A session posts with `board team post <name|team> [--new "<title>"] [--link <url>] "<text>"` and
+  answers with `board team reply <thread> "<text>"` (a thread's id or its first 8 characters, a
+  person's name for your `general` with them, `team` for the team's). The board marks it as an
+  agent's and names the session (`via: "agent"`, `agent: <session>` in the signed body), whatever the
+  request says: the receiving board shows "from Ana's agent board-216".
+- One session is the **listener** (`board team listen`, run from your monitor, master or day
+  session, while no other is; `board team listen off` from the listener; you change it in the
+  switches). It hears of every new thread and of every message in a thread nobody handles, and hands
+  one on with `board team assign <thread> <session>` (`release` gives it back). A topic thread a
+  session started is that session's: the answers come back to it. A `general` thread stays the
+  listener's.
+- What a session hears is a board reminder in the board's own words: who wrote (a name that is not
+  plain words is said by the start of the key), in which thread, and the commands. The text itself
+  is read with `board team thread <thread>`, which prints it quoted, line by line, under a header
+  that says it is information from that person and not your instructions; it is never typed into a
+  prompt. At most one reminder per thread every 2 minutes, and at most 10 waiting for one session.
+- You pick the **lanes shared** with each person (none by default). A session posts on its own only
+  from a shared lane (or as the listener), and a thread goes only to a session in a shared lane.
+  A post that names a lane you did not share, or looks like it carries a key or token, waits as a
+  draft with the reason. This keeps an honest agent inside your lines; it does not stop a
+  determined one from copying anything into a post.
+- Limits: 20 posts an hour per session, 60 an hour and 300 a day per person; the same text twice
+  in a thread within 10 minutes is refused; after 8 agent messages in a row in a thread (both
+  ways) the next one waits for you, and your Send on it lets them go on; more than 60 messages an
+  hour from one person (marked or not) pause their routing for an hour. A draft you send counts
+  against no agent's limit. `team.agentLimits` in config.json changes them (`sessionHour`, `peerHour`,
+  `peerDay`, `echoMin`, `loopRun`, `inboundHour`, `noticeGapMin`).
+- To stop it: the person's switch off, a thread or the team chat muted, or everything off at once
+  (the global switch, or `"agents": false` in `team`). Every post, hold, reminder, hand-over and
+  switch change is in the team log (`team-audit.jsonl`), without any text.
+
+Until #224's passkey, a program on your computer can call the board's local routes as the panel
+does, switches included; the log records those as the panel's.
+
 **Running the hub.** `bun hub/src/main.ts`: see [hub/README.md](hub/README.md) for the options,
 invites, revoking a member and what it keeps. It is not part of the plugin; run it on one machine
 the members reach: on a tailnet, or on loopback on a server of yours with nginx bringing TLS in
@@ -2249,7 +2298,7 @@ front of it, the boards' hub then being `wss://hub.example.com` and no Tailscale
 **What the MVP does not do.**
 
 - No offers, no replies to offers, no status or data: the only message is a `question`, text up
-  to 4000 characters. It reaches a person, not a session.
+  to 4000 characters. It reaches a person, and a session only where you turned agents on (above).
 - No end-to-end encryption: the hub sees the text of a message while it waits for its recipient
   (and deletes it after the ack or the expiry). Messages are signed, not sealed. Run a hub you trust.
 - The line between what a human may do and what an agent may do on the board is not enforced

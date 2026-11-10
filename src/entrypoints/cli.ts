@@ -163,7 +163,7 @@ import { type MoveOutcome, moveMany } from '../services/move.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | doctor | presence [here | away | call] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | doctor | presence [here | away | call] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -563,7 +563,9 @@ function presence(): void {
 }
 
 const TEAM_USAGE =
-  'usage: board team join <invite> --hub <ws://host:7443> --name <name> | board team roster | board team draft <name|peer-id> "<text>"'
+  'usage: board team join <invite> --hub <ws://host:7443> --name <name> | board team roster | board team draft <name|peer-id> "<text>" | board team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | board team reply <thread> "<text>" | board team thread <thread> | board team assign <thread> <session> | board team release <thread> | board team listen [off]'
+/** The `board team` ops of agents talking through the hub (#216), in entrypoints/team-agents-cli.ts. */
+const TEAM_AGENT_OPS = ['post', 'reply', 'thread', 'assign', 'release', 'listen']
 
 /**
  * When the board's port answered, but not as this install's board would (#356): the process that
@@ -694,7 +696,8 @@ async function team(): Promise<void> {
       `ok · joined ${hub} as ${name}${late} · your key ${T.fingerprint(key.pub)} · the running board connects in a few seconds`,
     )
   }
-  if (op === 'draft' ? more.length !== 2 : op !== 'roster' || more.length) throw new Error(TEAM_USAGE)
+  const agentOp = TEAM_AGENT_OPS.includes(op ?? '')
+  if (op === 'draft' ? more.length !== 2 : !agentOp && (op !== 'roster' || more.length)) throw new Error(TEAM_USAGE)
   if (!T.teamConfig(cfg.team)) {
     return console.log(
       'team is off (no "team" in config.json; `board team join <invite> --hub <url> --name <name>` turns it on)',
@@ -715,6 +718,27 @@ async function team(): Promise<void> {
           ? 'the board does not run: open it first (herdr plugin action invoke agent-board.open)'
           : 'the board does not run the team: restart it'),
     )
+  if (agentOp) {
+    const A = await import('./team-agents-cli.ts')
+    const line = await A.teamAgents(op ?? '', more, {
+      webPort,
+      roster: view.roster,
+      self: async () => {
+        const s = await resolveSession()
+        return { key: s.key, ...(s.name && { name: s.name }), ...(target && { claimed: true }) }
+      },
+      find: async word => {
+        if (UUID.test(word)) return { key: word }
+        const t = word.toLowerCase()
+        const item = (await collect(deps)).find(i =>
+          [i.name, i.autoName, i.pane, i.session, i.key].some(v => v && v.toLowerCase() === t),
+        )
+        if (!item) throw new Error(`no session "${T.printable(word)}" on the board`)
+        return { key: item.key, ...(item.name && { name: item.name }) }
+      },
+    })
+    return console.log(line)
+  }
   const me = isRecord(view.me) ? view.me : {}
   console.log(
     T.printable(

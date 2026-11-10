@@ -150,6 +150,8 @@ export const SAMPLES: Record<string, string> = Object.fromEntries(
       [/^\/api\/fs\//, '/api/fs/list'],
       [/^\/api\/team\/thread\/([^/]+)$/, '/api/team/thread/p1'],
       [/^\/api\/team\/draft\/([^/]+)\/(send|discard)$/, '/api/team/draft/d1/send'],
+      [/^\/api\/team\/threads\/([^/]+)\/([^/]+)$/, '/api/team/threads/team/general'],
+      [/^\/api\/team\/threads\/([^/]+)\/([^/]+)\/(assign|release|mute|unmute)$/, '/api/team/threads/team/general/mute'],
       [/^\/api\/launch\/([\w-]+)\/dismiss$/, '/api/launch/l1/dismiss'],
       [/^\/api\/launch\/([\w-]+)\/(focus|trust|close)$/, '/api/launch/l1/trust'],
       [/^\/api\/launch/, '/api/launch/l1'],

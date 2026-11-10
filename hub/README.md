@@ -118,6 +118,17 @@ authenticated, not even the roster. A second connection of the same peer replace
 4409). Close codes: 4400 bad request, 4401 unknown or bad signature, 4403 revoked or bad invite. What
 is signed, and the checks on it, are in `src/core/team.ts`, which the hub and the board both import.
 
+Since #216 a board says in its `hello` what it understands (`caps`, today `["threads"]`); the hub
+keeps that per member (the `caps` column, schema 2) and passes it on in the roster and with a
+member's presence, so a board sends threads only to boards that read them. The hub relays a
+message's body as signed: it holds `text` to its limits (1 to 4000 characters, the envelope to
+16 KiB) and passes the other fields on without reading them, so a new body field needs no new hub;
+each board checks what it acts on. The kind whitelist and the refusal of `to: "*"` stay: a team
+message is one signed copy per member. The audit's `send` rows name the thread and `via` (the
+sender's own signed words), never the text. Updating a hub is a restart on the new code: the
+schema moves on by itself, and boards reconnect. An older hub refuses a database a newer one moved
+on, so copy `hub.db` aside before the update if you may want to go back.
+
 ## Tests
 
 `bun test test/hub test/core/team.test.ts`: real sockets on port 0, an in-memory store, a clock the

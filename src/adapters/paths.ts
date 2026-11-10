@@ -52,3 +52,7 @@ export const teamPinsFile = (): string => join(stateDir(), 'team-pins.json')
 export const teamAuditFile = (): string => join(stateDir(), 'team-audit.jsonl')
 // What agents drafted for a person to send (`board team draft`); the running board with `team` set writes it.
 export const teamDraftsFile = (): string => join(stateDir(), 'team-drafts.json')
+// The threads this board has seen or started (#216): titles, links, who handles each, muted ones.
+export const teamThreadsFile = (): string => join(stateDir(), 'team-threads.json')
+// What agents may do with each peer and the team, the listener session, routing pauses (#216).
+export const teamAgentsFile = (): string => join(stateDir(), 'team-agents.json')

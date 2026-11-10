@@ -18,12 +18,14 @@ import {
 import { isRecord, readJson, updateJson } from './json-store.ts'
 import {
   stateDir,
+  teamAgentsFile,
   teamAuditFile,
   teamDraftsFile,
   teamInboxFile,
   teamKeyFile,
   teamOutboxFile,
   teamPinsFile,
+  teamThreadsFile,
 } from './paths.ts'
 
 /** Messages kept per peer, in each direction. */
@@ -96,6 +98,10 @@ export interface InboxItem {
   held: boolean
   /** The envelope carried the agent mark: the draft came from `board team draft`. */
   via?: Via
+  /** With via: the sending session's name, as the sender's board wrote it (#216). */
+  agent?: string
+  /** The thread's key (#216, threadKey); absent on what came before threads: that pair's general. */
+  thread?: string
   /** When the signed ack went out (null: not yet, or the hub was away). */
   ackedAt: number | null
 }
@@ -112,6 +118,24 @@ export interface OutboxItem {
   ack?: Ack
   /** refused: the hub's error code. */
   code?: ErrorCode
+  /** The thread's key (#216); absent on what went before threads: that pair's general. */
+  thread?: string
+  /** A team post goes as one copy per member; every copy keeps the first copy's id here (#216). */
+  post?: string
+  /** Who sent it here: a session through `board team post` (agent), or the Team panel (ui) (#216). */
+  by?: 'ui' | 'agent'
+  /** by agent: the session, as the board resolved it (with --session, the caller's own word). */
+  session?: SessionRef
+  /** An agent's draft the owner sent: a person's step, outside the agents' limits and loop count. */
+  pressed?: boolean
+  /** The post's text where this copy's differs (an older board's gets the title in front). */
+  text?: string
+}
+
+/** A session on this board, as the team keeps it (#216). */
+export interface SessionRef {
+  key: string
+  name?: string
 }
 
 /** A map with no prototype: a key such as `__proto__` is a key like any other, never the prototype. */
@@ -145,6 +169,7 @@ function changeLists<T, R>(file: string, fn: (peers: Record<string, T[]>) => R):
 }
 
 export const readInbox = (peer: string): InboxItem[] => readLists<InboxItem>(teamInboxFile())[peer] ?? []
+export const readAllInbox = (): Record<string, InboxItem[]> => readLists<InboxItem>(teamInboxFile())
 
 /** Saves a message by its id: true when it is new, false when it was there (a redelivery changes nothing). */
 export function addInbox(item: InboxItem): boolean {
@@ -224,9 +249,16 @@ export function refuseOut(id: string, code: ErrorCode, at: number): boolean {
 /** What an agent drafted for a person to send; nothing leaves the board until the person presses Send. */
 export interface Draft {
   id: string
+  /** A peer id, or `team` for a team thread (#216). */
   to: string
   text: string
   createdAt: number
+  /** Where it goes (#216): an existing thread's id, or a new one's title and link. Absent: general. */
+  thread?: { id?: string; title?: string; link?: string }
+  /** Why the board held it instead of sending it (#216): off, lane, lane_name, secret, loop. */
+  reason?: string
+  /** The session that wrote it. */
+  session?: SessionRef
 }
 type DraftsFile = { v: 1; drafts: Record<string, Draft> }
 const isDrafts = (v: unknown): v is DraftsFile => isRecord(v) && v.v === 1 && isRecord(v.drafts)
@@ -266,6 +298,101 @@ export const takeDraft = (id: string): Draft | null =>
     delete drafts[id]
     return d ?? null
   })
+
+// ---- Threads (#216)
+
+/** A thread as this board keeps it: in a pair (scope: the peer's id) or the team (scope: `team`). */
+export interface ThreadRecord {
+  scope: string
+  /** A UUID, or `general` for the thread with no topic. */
+  id: string
+  title: string | null
+  link: string | null
+  /** The session that gets notices of new messages in it; null: the listener's. */
+  handler: SessionRef | null
+  muted: boolean
+  /** `me`, or the peer that started it. */
+  by: string
+  createdAt: number
+  lastAt: number
+}
+type ThreadsFile = { v: 1; threads: Record<string, ThreadRecord> }
+const isThreads = (v: unknown): v is ThreadsFile => isRecord(v) && v.v === 1 && isRecord(v.threads)
+
+/** Every thread by its key. Creates nothing. */
+export const readThreads = (): Record<string, ThreadRecord> =>
+  bare(readJson(teamThreadsFile(), isThreads)?.threads ?? {})
+
+/** Changes the threads under their lock: `fn` edits the map in place. */
+export function changeThreads<R>(fn: (threads: Record<string, ThreadRecord>) => R): R {
+  mkdirSync(stateDir(), { recursive: true })
+  let result: R | undefined
+  updateJson(
+    teamThreadsFile(),
+    (cur: ThreadsFile | null) => {
+      const threads = bare(cur?.threads ?? {})
+      result = fn(threads)
+      return { v: 1 as const, threads }
+    },
+    isThreads,
+    PRIVATE,
+  )
+  return result as R
+}
+
+// ---- What agents may do (#216)
+
+/** One peer's (or the team's) switches: agents talk with it, the lanes it may hear about, muted (the team). */
+export interface PeerAgents {
+  on: boolean
+  lanes: string[]
+  muted?: boolean
+}
+export interface AgentSettings {
+  /** The owner's global off: overrides every peer. */
+  off: boolean
+  /** The session that gets notices of new threads and of threads nobody handles. */
+  listener: SessionRef | null
+  peers: Record<string, PeerAgents>
+  /** Routing paused for a peer until then (too many agent messages in an hour). */
+  paused: Record<string, number>
+}
+type AgentsFile = { v: 1 } & AgentSettings
+const isAgents = (v: unknown): v is AgentsFile => isRecord(v) && v.v === 1 && isRecord(v.peers)
+
+const freshAgents = (): AgentSettings => ({ off: false, listener: null, peers: bare({}), paused: bare({}) })
+
+/** The settings; everything off while there is no file. Creates nothing. */
+export function readAgents(): AgentSettings {
+  const f = readJson(teamAgentsFile(), isAgents)
+  return f ? readAgentsFrom(f) : freshAgents()
+}
+
+/** Changes the settings under their lock: `fn` edits them in place. */
+export function changeAgents<R>(fn: (s: AgentSettings) => R): R {
+  mkdirSync(stateDir(), { recursive: true })
+  let result: R | undefined
+  updateJson(
+    teamAgentsFile(),
+    (cur: AgentsFile | null) => {
+      const s = cur ? readAgentsFrom(cur) : freshAgents()
+      result = fn(s)
+      return { v: 1 as const, ...s }
+    },
+    isAgents,
+    PRIVATE,
+  )
+  return result as R
+}
+
+function readAgentsFrom(f: AgentsFile): AgentSettings {
+  return {
+    off: f.off === true,
+    listener: isRecord(f.listener) && typeof f.listener.key === 'string' ? f.listener : null,
+    peers: bare(f.peers),
+    paused: bare(isRecord(f.paused) ? (f.paused as Record<string, number>) : {}),
+  }
+}
 
 // ---- Pins
 

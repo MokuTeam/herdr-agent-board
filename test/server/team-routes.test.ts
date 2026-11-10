@@ -95,7 +95,15 @@ describe.each([
     expect(await answer(fetch(`${url}/api/team`))).toEqual([404, { error: 'not found' }])
     expect(await answer(fetch(`${url}/api/team/thread/x`))).toEqual([404, { error: 'not found' }])
     expect(await answer(fetch(`${url}/api/team/thread/${'A'.repeat(43)}`))).toEqual([404, { error: 'not found' }])
+    // #216's routes are not there either.
+    for (const path of ['/api/team/threads', `/api/team/threads/team/general`, '/api/team/agents'])
+      expect(await answer(fetch(url + path))).toEqual([404, { error: 'not found' }])
     for (const path of [
+      '/api/team/post',
+      '/api/team/listen',
+      '/api/team/agents',
+      '/api/team/threads/team/general/assign',
+      '/api/team/threads/team/general/mute',
       '/api/team/send',
       '/api/team/trust',
       '/api/team/draft',
@@ -314,5 +322,55 @@ describe('team on, against a hub in this process', () => {
     expect((await post(url, '/api/team/draft', draftBody('fits now'))).status).toBe(200)
     for (const m of await drafts()) await post(url, `/api/team/draft/${m.id}/discard`, {})
     expect(await drafts()).toEqual([])
+  })
+
+  test("a session's post is an agent's whatever its body claims; off by default it is held, on it goes marked (#216, #224)", async () => {
+    const session = { key: 'sess-1', name: 'worker' }
+    const claim = { to: anna.pub, text: 'from a session', session, by: 'ui', via: 'human', source: 'human' }
+    const held = (await (await post(url, '/api/team/post', claim)).json()) as Record<string, unknown>
+    expect(held).toMatchObject({ ok: true, sent: false, reason: 'off' })
+    const general = (await (await fetch(`${url}/api/team/threads/${anna.pub}/general`)).json()) as { lines: unknown[] }
+    expect(general.lines.at(-1)).toMatchObject({
+      dir: 'draft',
+      text: 'from a session',
+      via: 'agent',
+      agent: 'worker',
+      reason: 'off',
+    })
+    for (const m of await drafts()) await post(url, `/api/team/draft/${m.id}/discard`, {})
+    // The owner turns agents on for anna (no lane shared) and makes the session the listener.
+    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, on: true, lanes: ['no-such-lane'] }))).toEqual([
+      400,
+      { ok: false, error: 'lanes' },
+    ])
+    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, on: true }))).toEqual([200, { ok: true }])
+    expect(await answer(post(url, '/api/team/listen', { session }))).toEqual([200, { ok: true }])
+    const agents = (await (await fetch(`${url}/api/team/agents`)).json()) as Record<string, unknown>
+    expect(agents).toMatchObject({ off: false, listener: session, peers: { [anna.pub]: { on: true, lanes: [] } } })
+    const r = (await (await post(url, '/api/team/post', { ...claim, thread: { title: 'Routes' } })).json()) as {
+      sent: boolean
+      thread: string
+    }
+    expect(r.sent).toBe(true)
+    const d = await annaClient.take('deliver')
+    // anna's client said no caps: the plain body, with the title in front, and the agent mark.
+    expect(msgOf(d.env).body).toEqual({ text: '[Routes] from a session', via: 'agent' })
+    annaClient.send(await ackOf(anna, d.env))
+    const threads = (await (await fetch(`${url}/api/team/threads`)).json()) as {
+      threads: { key: string; title: string }[]
+    }
+    expect(threads.threads.find(t => t.key === r.thread)).toMatchObject({ title: 'Routes' })
+    const [scope, id] = r.thread.split('/')
+    const one = (await (await fetch(`${url}/api/team/threads/${scope}/${id}`)).json()) as { lines: unknown[] }
+    expect(one.lines[0]).toMatchObject({ dir: 'out', via: 'agent', agent: 'worker', text: '[Routes] from a session' })
+    // The switches and the session's routes keep the panel's guards.
+    for (const path of ['/api/team/post', '/api/team/listen', '/api/team/agents'])
+      expect(await answer(post(url, path, claim, {}))).toEqual([403, { error: 'header' }])
+    expect(await answer(post(url, '/api/team/post', { to: anna.pub, text: 'x' }))).toEqual([
+      400,
+      { ok: false, error: 'body' },
+    ])
+    await post(url, '/api/team/agents', { peer: anna.pub, on: false })
+    await post(url, '/api/team/listen', { session: null })
   })
 })

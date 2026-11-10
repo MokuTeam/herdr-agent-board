@@ -11,19 +11,26 @@ import {
   addOutbox,
   audit,
   changePins,
+  changeThreads,
+  type Draft,
   ensureKey,
   type InboxItem,
   markAcked,
   type OutboxItem,
+  readAgents,
+  readAllInbox,
   readAllOutbox,
   readDrafts,
   readInbox,
   readKey,
   readOutbox,
   readPins,
+  readThreads,
   refuseOut,
   releaseHeld,
+  type SessionRef,
   setOutState,
+  type ThreadRecord,
   takeDraft,
 } from '../adapters/team-store.ts'
 import {
@@ -36,11 +43,16 @@ import {
   type ErrorCode,
   type Frame,
   fingerprint,
+  GENERAL,
+  hasThreads,
   isMessageId,
   isPeerId,
+  isThreadId,
   MAX_DRAFTS,
   MAX_TEXT,
+  MAX_TTL_S,
   type Message,
+  OUR_CAPS,
   type OutState,
   openEnvelope,
   parseFrame,
@@ -49,10 +61,15 @@ import {
   sign,
   TEAM_PROTOCOL,
   type TeamConfig,
+  type ThreadRef,
   teamConfig,
   type Via,
+  validLink,
+  validName,
+  validTitle,
   verify,
 } from '../core/team.ts'
+import { inboundKey, legacyText, splitKey, TEAM, threadKey } from '../core/team-agents.ts'
 import { backoffMs } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
 import { type Clock, realClock } from './tunnel.ts'
@@ -78,6 +95,8 @@ export interface TeamRosterPeer {
   pin: 'trusted' | 'changed'
   /** Drafts an agent made for this person that wait for Send or Discard. */
   drafts: number
+  /** The peer's board reads topic and team threads (#216): its caps say so. */
+  threads?: boolean
 }
 
 export interface TeamView {
@@ -115,6 +134,66 @@ export interface ThreadMessage {
 
 export type SendResult = { ok: true; id: string } | { ok: false; error: string }
 
+/** Where a post goes (#216): a peer or the team, and a thread (an existing one's id, or a new one's title). */
+export interface PostTarget {
+  /** A peer id, or `team`. */
+  to: string
+  thread?: { id?: string; title?: string; link?: string }
+}
+
+/**
+ * A post's sender, set by the route that took it (#216): the panel, or a session's `board team
+ * post`. `pressed`: the owner sent an agent's draft. `claimed`: the session was named with
+ * --session, the caller's own word.
+ */
+export type PostSource = { by: 'ui' } | { by: 'agent'; session?: SessionRef; pressed?: boolean; claimed?: boolean }
+
+export type PostResult =
+  | { ok: true; id: string; thread: string; copies: number; skipped: string[] }
+  | { ok: false; error: string }
+
+/** What came in, for the router (#216): told after the message is kept, never before. */
+export interface InboundEvent {
+  id: string
+  from: string
+  thread: string
+  via?: Via
+  held: boolean
+  /** The thread was new to this board. */
+  fresh: boolean
+}
+
+/** A line of a thread (#216): a message either way, or a draft. */
+export interface ThreadLine {
+  /** in: the message's id; out: the post's (a team post's first copy); draft: the draft's. */
+  id: string
+  dir: 'in' | 'out' | 'draft'
+  /** in: the sender's key, and their name from this board's roster or pins (never from the message). */
+  from?: string
+  who?: string
+  /** null: held back from a key that changed, until it is trusted. */
+  text: string | null
+  ts: string
+  via?: Via
+  /** via agent: the sending session's name; in: as the sender's board wrote it. */
+  agent?: string
+  /** out to a pair: how far it got. */
+  state?: OutState
+  /** out to the team: how far each copy got. */
+  receipts?: { peer: string; name: string; state: OutState }[]
+  /** out: an agent's draft the owner sent. */
+  pressed?: boolean
+  held?: boolean
+  /** draft: why the board held it. */
+  reason?: string
+}
+
+export interface ThreadView extends ThreadRecord {
+  key: string
+  /** The pair's peer, as this board's roster calls them; null for the team. */
+  peerName: string | null
+}
+
 export type DraftResult = { ok: true; id: string } | { ok: false; error: string }
 
 export interface TeamService {
@@ -122,10 +201,23 @@ export interface TeamService {
   view(): TeamView | null
   /** The messages with a peer, oldest first; empty while off. */
   thread(peer: string): ThreadMessage[]
-  /** A question to a peer in the roster whose key is trusted ('changed' otherwise); kept and sent (again on every reconnect until it is answered by the hub). */
-  send(to: string, text: string): Promise<SendResult>
-  /** An agent's draft for a person on the roster: kept for the person to Send or Discard, never sent by the service. */
-  draft(to: string, text: string): DraftResult
+  /**
+   * The panel's message to a peer in the roster whose key is trusted ('changed' otherwise), or to
+   * the team, in general or a thread (#216); kept and sent (again on every reconnect until the hub settles it).
+   */
+  send(to: string, text: string, thread?: PostTarget['thread']): Promise<SendResult>
+  /** A post from the panel or a session (#216), with its source set by the route that took it. */
+  post(target: PostTarget, text: string, source: PostSource): Promise<PostResult>
+  /** An agent's draft for a person on the roster, or the team: kept for the person to Send or Discard, never sent by the service. */
+  draft(to: string, text: string, more?: Pick<Draft, 'thread' | 'reason' | 'session'>): DraftResult
+  /** The threads this board has, the latest first (#216); empty while off. */
+  threads(): ThreadView[]
+  /** One thread's lines by its key; empty while off or for no thread. */
+  threadLines(key: string): ThreadLine[]
+  /** What this board calls a peer: its roster's name, its pins', else the short fingerprint (#216). */
+  nameOf(peer: string): string
+  /** Changes who handles a thread, or whether it is muted (#216); false when there is no such thread. */
+  setThread(key: string, change: { handler?: SessionRef | null; muted?: boolean }): boolean
   /** Sends a draft as a question marked `via: "agent"`; the draft stays when the send is refused. */
   sendDraft(id: string): Promise<SendResult>
   /** Drops a draft; false when there is none. */
@@ -145,11 +237,16 @@ interface Options {
   log: (line: string) => void
   /** The board changed: publish it. */
   onChange: () => void
+  /** A message came in and was kept (#216): the router decides whether a session hears of it. */
+  onInbound?: (e: InboundEvent) => void
   socket?: (url: string) => WsLike
   clock?: Clock
   random?: () => number
   version?: string
 }
+
+/** Threads kept per peer (and for the team); past it the quietest one nobody handles goes (#216). */
+export const MAX_THREADS_PER_SCOPE = 200
 
 /** Up this long: the backoff starts over. */
 export const UP_RESETS_MS = 60_000
@@ -169,6 +266,7 @@ export function createTeam({
   cfg,
   log,
   onChange,
+  onInbound,
   socket = url => new WebSocket(url) as unknown as WsLike,
   clock = realClock,
   random = Math.random,
@@ -256,7 +354,7 @@ export function createTeam({
       w.onopen = () => {
         if (mine !== gen) return
         lastRx = clock.now()
-        frame({ t: 'hello', v: TEAM_PROTOCOL, peer: key.pub, client: `agent-board/${version}` })
+        frame({ t: 'hello', v: TEAM_PROTOCOL, peer: key.pub, client: `agent-board/${version}`, caps: OUR_CAPS })
       }
       w.onmessage = e => {
         if (mine !== gen || typeof e.data !== 'string') return
@@ -337,7 +435,16 @@ export function createTeam({
         takeRoster(f.peers)
         return
       case 'presence':
-        roster = roster.map(p => (p.peer === f.peer ? { ...p, online: f.online, last_seen: f.at } : p))
+        // Coming online says what the board understands now (an upgrade, #216); going offline says nothing of it.
+        roster = roster.map(p => {
+          if (p.peer !== f.peer) return p
+          const next: RosterPeer = { ...p, online: f.online, last_seen: f.at }
+          if (f.online) {
+            delete next.caps
+            if (f.caps) next.caps = f.caps
+          }
+          return next
+        })
         changed()
         return
       case 'state':
@@ -417,6 +524,7 @@ export function createTeam({
       return
     }
     const held = readPins()[msg.from]?.status !== 'trusted'
+    const thread = inboundKey(msg.from, msg.body.thread)
     const fresh = addInbox({
       id: msg.id,
       from: msg.from,
@@ -425,11 +533,22 @@ export function createTeam({
       receivedAt: clock.now(),
       held,
       ...(msg.body.via && { via: msg.body.via }),
+      ...(msg.body.agent && { agent: msg.body.agent }),
+      thread,
       ackedAt: null,
     })
     if (fresh) {
-      audit('inbox', msg.from, { id: msg.id, held })
+      const isNew = keepThread(thread, msg.body.thread, msg.from)
+      audit('inbox', msg.from, { id: msg.id, held, thread, ...(msg.body.via && { via: msg.body.via }) })
       changed()
+      onInbound?.({
+        id: msg.id,
+        from: msg.from,
+        thread,
+        held,
+        fresh: isNew,
+        ...(msg.body.via && { via: msg.body.via }),
+      })
     }
     // Acked again on a redelivery: the first ack may not have got through.
     const ts = new Date(clock.now()).toISOString()
@@ -438,37 +557,230 @@ export function createTeam({
     markAcked(msg.from, msg.id, clock.now())
   }
 
-  async function sendQuestion(to: string, text: string, via?: Via): Promise<SendResult> {
+  /** The name this board knows a peer by: its roster, its pins, else the short fingerprint. Never a message's word. */
+  const nameOf = (peer: string): string =>
+    roster.find(p => p.peer === peer)?.name ?? readPins()[peer]?.name ?? fingerprint(peer).slice(0, 14).trim()
+
+  /**
+   * Notes a thread seen in a message, or started here (#216): made on first sight with the title
+   * and link it came with, moved on after that. `handler`: the session that started it. True when new.
+   */
+  function keepThread(key: string, ref: ThreadRef | undefined, by: string, handler?: SessionRef): boolean {
+    const parts = splitKey(key)
+    if (!parts) return false
+    const now = clock.now()
+    return changeThreads(threads => {
+      const have = Object.hasOwn(threads, key) ? threads[key] : undefined
+      if (have) {
+        have.lastAt = now
+        if (!have.title && ref?.title) have.title = ref.title
+        if (!have.link && ref?.link) have.link = ref.link
+        return false
+      }
+      threads[key] = {
+        scope: parts.scope,
+        id: parts.id,
+        title: ref?.title ?? null,
+        link: ref?.link ?? null,
+        handler: handler ?? null,
+        muted: false,
+        by,
+        createdAt: now,
+        lastAt: now,
+      }
+      // A peer cannot grow the file without end: past the cap, its quietest thread nobody handles
+      // goes (its messages stay in the inbox, under the thread's key).
+      const mine = Object.entries(threads).filter(([, t]) => t.scope === parts.scope)
+      if (mine.length > MAX_THREADS_PER_SCOPE) {
+        const [quietest] = mine.filter(([, t]) => !t.handler).sort((a, b) => a[1].lastAt - b[1].lastAt)[0] ?? []
+        if (quietest) delete threads[quietest]
+      }
+      return true
+    })
+  }
+
+  /** The thread a post goes to: an existing one by id, a new one by title, else general. */
+  function threadOf(scope: string, t: PostTarget['thread']): { ok: true; ref?: ThreadRef } | { ok: false } {
+    if (t?.id !== undefined) {
+      if (!isThreadId(t.id)) return { ok: false }
+      if (t.id === GENERAL) return { ok: true }
+      const rec = readThreads()[threadKey(scope, t.id)]
+      if (!rec) return { ok: false }
+      return {
+        ok: true,
+        ref: { id: t.id, ...(rec.title && { title: rec.title }), ...(rec.link && { link: rec.link }) },
+      }
+    }
+    if (t?.title === undefined) return { ok: true }
+    if (!validTitle(t.title) || (t.link !== undefined && !validLink(t.link))) return { ok: false }
+    return { ok: true, ref: { id: crypto.randomUUID(), title: t.title, ...(t.link !== undefined && { link: t.link }) } }
+  }
+
+  /**
+   * A post to a peer or the team (#216). The team gets one copy per member, each signed for its
+   * recipient and carrying the same thread; a member whose key changed is skipped (named in the
+   * result). A peer whose board reads threads gets the thread and the session's name in the body,
+   * any other the text with the title in front. Every copy is built before any is kept, so a
+   * refused one sends nothing.
+   */
+  async function post(target: PostTarget, text: string, source: PostSource): Promise<PostResult> {
     if (!config()) return { ok: false, error: 'off' }
-    if (!isPeerId(to)) return { ok: false, error: 'peer' }
     const body = text.trim()
     if (!body || body.length > MAX_TEXT) return { ok: false, error: 'text' }
-    if (!roster.some(p => p.peer === to)) return { ok: false, error: 'peer' }
+    const team = target.to === TEAM
+    if (!team && (!isPeerId(target.to) || !roster.some(p => p.peer === target.to))) return { ok: false, error: 'peer' }
+    const pins = readPins()
     // A key that changed under a pinned name may be someone else's: nothing goes to it until Trust.
-    if (readPins()[to]?.status === 'changed') return { ok: false, error: 'changed' }
-    const key = await ensureKey()
-    const msg: Message = {
-      v: TEAM_PROTOCOL,
-      id: crypto.randomUUID(),
-      from: key.pub,
-      to,
-      kind: 'question',
-      reply_to: null,
-      ts: new Date(clock.now()).toISOString(),
-      ttl_s: DEFAULT_TTL_S,
-      body: via ? { text: body, via } : { text: body },
+    if (!team && pins[target.to]?.status === 'changed') return { ok: false, error: 'changed' }
+    const scope = team ? TEAM : target.to
+    const th = threadOf(scope, target.thread)
+    if (!th.ok) return { ok: false, error: 'thread' }
+    const ref: ThreadRef | undefined = team ? { ...(th.ref ?? { id: GENERAL }), group: true } : th.ref
+    const key = threadKey(scope, ref?.id ?? GENERAL)
+    const changedKey = (p: RosterPeer): boolean => pins[p.peer]?.status === 'changed'
+    const recipients = team ? roster.filter(p => !changedKey(p)) : roster.filter(p => p.peer === target.to)
+    const skipped = team ? roster.filter(changedKey).map(p => p.name) : []
+    if (!recipients.length) return { ok: false, error: 'nobody' }
+    const via: Via | undefined = source.by === 'agent' ? 'agent' : undefined
+    const session = source.by === 'agent' ? source.session : undefined
+    const pressed = source.by === 'agent' && source.pressed === true
+    const agentName = session?.name && validName(session.name) ? session.name : undefined
+    const me = await ensureKey()
+    const copies: { env: Envelope; msg: Message }[] = []
+    for (const p of recipients) {
+      const rich = hasThreads(p)
+      const words = rich
+        ? body
+        : legacyText(body, ref && { ...(ref.title && { title: ref.title }), group: ref.group === true })
+      if (words.length > MAX_TEXT) return { ok: false, error: 'text' }
+      const msgBody: Message['body'] = { text: words }
+      if (via) msgBody.via = via
+      if (rich && via && agentName) msgBody.agent = agentName
+      if (rich && ref) msgBody.thread = ref
+      const msg: Message = {
+        v: TEAM_PROTOCOL,
+        id: crypto.randomUUID(),
+        from: me.pub,
+        to: p.peer,
+        kind: 'question',
+        reply_to: null,
+        ts: new Date(clock.now()).toISOString(),
+        // A team copy waits as long as the hub keeps anything, for members who are away.
+        ttl_s: team ? MAX_TTL_S : DEFAULT_TTL_S,
+        body: msgBody,
+      }
+      // Written once and signed as written; that string is what every hop passes on.
+      const env: Envelope = await sealEnvelope(me, msg)
+      // What the hub would refuse (shape, the 16 KiB of the payload) is refused here, not queued.
+      const wire = checkEnvelope(env)
+      if (!wire.ok) return { ok: false, error: wire.code }
+      const checked = checkMessage(env.payload, env.from)
+      if (!checked.ok) return { ok: false, error: checked.code }
+      copies.push({ env, msg })
     }
-    // Written once and signed as written; that string is what every hop passes on.
-    const env: Envelope = await sealEnvelope(key, msg)
-    // What the hub would refuse (shape, the 16 KiB of the payload) is refused here, not queued.
-    const wire = checkEnvelope(env)
-    if (!wire.ok) return { ok: false, error: wire.code }
-    const checked = checkMessage(env.payload, env.from)
-    if (!checked.ok) return { ok: false, error: checked.code }
-    addOutbox({ env, msg, state: 'queued', at: clock.now() })
-    if (authed) frame({ t: 'send', env })
+    keepThread(key, ref, 'me')
+    const postId = copies[0]?.msg.id ?? ''
+    for (const c of copies) {
+      addOutbox({
+        env: c.env,
+        msg: c.msg,
+        state: 'queued',
+        at: clock.now(),
+        thread: key,
+        ...(team && { post: postId }),
+        by: source.by,
+        ...(session && { session }),
+        ...(pressed && { pressed: true }),
+        // The post's own text, where this copy's has a title in front (an older board's).
+        ...(c.msg.body.text !== body && { text: body }),
+      })
+      if (authed) frame({ t: 'send', env: c.env })
+    }
+    audit('post', team ? null : target.to, {
+      id: postId,
+      thread: key,
+      copies: copies.length,
+      by: source.by,
+      ...(session && { session: session.key }),
+      ...(pressed && { pressed: true }),
+      ...(source.by === 'agent' && source.claimed && { claimed: true }),
+    })
     changed()
-    return { ok: true, id: msg.id }
+    return { ok: true, id: postId, thread: key, copies: copies.length, skipped }
+  }
+
+  function setHandler(key: string, handler: SessionRef | null): boolean {
+    return changeThreads(threads => {
+      const t = Object.hasOwn(threads, key) ? threads[key] : undefined
+      if (t) t.handler = handler
+      return !!t
+    })
+  }
+
+  /** A thread's lines (#216): what came in and went out in it, a team post once with its receipts, then its drafts. */
+  function threadLines(key: string): ThreadLine[] {
+    const parts = splitKey(key)
+    if (!parts) return []
+    const team = parts.scope === TEAM
+    if (!team && !isPeerId(parts.scope)) return []
+    const keyOf = (thread: string | undefined, peer: string): string => thread ?? threadKey(peer, GENERAL)
+    const inLists: [string, InboxItem[]][] = team
+      ? Object.entries(readAllInbox())
+      : [[parts.scope, readInbox(parts.scope)]]
+    const incoming: ThreadLine[] = inLists.flatMap(([peer, list]) =>
+      list
+        .filter(i => keyOf(i.thread, peer) === key)
+        .map(
+          (i): ThreadLine => ({
+            id: i.id,
+            dir: 'in',
+            from: peer,
+            who: nameOf(peer),
+            text: i.held ? null : i.text,
+            ts: i.ts,
+            ...(i.held && { held: true }),
+            ...(i.via && { via: i.via }),
+            ...(i.agent && { agent: i.agent }),
+          }),
+        ),
+    )
+    const outLists = team ? Object.values(readAllOutbox()) : [readOutbox(parts.scope)]
+    const posts = new Map<string, OutboxItem[]>()
+    for (const list of outLists)
+      for (const o of list) {
+        if (keyOf(o.thread, o.msg.to) !== key) continue
+        const id = o.post ?? o.msg.id
+        posts.set(id, [...(posts.get(id) ?? []), o])
+      }
+    const outgoing: ThreadLine[] = [...posts.entries()].map(([id, copies]): ThreadLine => {
+      const first = copies[0] as OutboxItem
+      return {
+        id,
+        dir: 'out',
+        text: first.msg.body.text,
+        ts: first.msg.ts,
+        ...(first.msg.body.via && { via: first.msg.body.via }),
+        ...(first.session?.name && { agent: first.session.name }),
+        ...(first.pressed && { pressed: true }),
+        ...(team
+          ? { receipts: copies.map(c => ({ peer: c.msg.to, name: nameOf(c.msg.to), state: c.state })) }
+          : { state: first.state }),
+      }
+    })
+    const drafts: ThreadLine[] = readDrafts()
+      .filter(d => d.to === parts.scope && threadKey(parts.scope, d.thread?.id ?? GENERAL) === key)
+      .map(
+        (d): ThreadLine => ({
+          id: d.id,
+          dir: 'draft',
+          text: d.text,
+          ts: new Date(d.createdAt).toISOString(),
+          via: 'agent',
+          ...(d.session?.name && { agent: d.session.name }),
+          ...(d.reason && { reason: d.reason }),
+        }),
+      )
+    return [...[...incoming, ...outgoing].sort((a, b) => a.ts.localeCompare(b.ts)), ...drafts]
   }
 
   function begin(): void {
@@ -500,6 +812,7 @@ export function createTeam({
           fingerprint: fingerprint(p.peer),
           pin: pins[p.peer]?.status ?? 'trusted',
           drafts: drafts.filter(d => d.to === p.peer).length,
+          threads: hasThreads(p),
         })),
       }
     },
@@ -507,6 +820,8 @@ export function createTeam({
       if (!config() || !isPeerId(peer)) return []
       const known = roster.find(p => p.peer === peer)?.name ?? readPins()[peer]?.name
       const who = known ?? fingerprint(peer).slice(0, 14).trim()
+      // Everything with this peer, the team's copies too: the panel shows one flat thread until
+      // #355 draws the threads (threadLines).
       const incoming = readInbox(peer).map(
         (i: InboxItem): ThreadMessage => ({
           id: i.id,
@@ -533,17 +848,42 @@ export function createTeam({
         .map((d): ThreadMessage => ({ id: d.id, dir: 'draft', text: d.text, ts: new Date(d.createdAt).toISOString() }))
       return [...[...incoming, ...outgoing].sort((a, b) => a.ts.localeCompare(b.ts)), ...drafts]
     },
-    send: (to, text) => sendQuestion(to, text),
-    draft(to, text) {
+    async send(to, text, thread) {
+      const r = await post({ to, ...(thread && { thread }) }, text, { by: 'ui' })
+      return r.ok ? { ok: true, id: r.id } : r
+    },
+    post,
+    draft(to, text, more = {}) {
       if (!config()) return { ok: false, error: 'off' }
-      if (!isPeerId(to) || !roster.some(p => p.peer === to)) return { ok: false, error: 'peer' }
+      if (to !== TEAM && (!isPeerId(to) || !roster.some(p => p.peer === to))) return { ok: false, error: 'peer' }
       const body = text.trim()
       if (!body || body.length > MAX_TEXT) return { ok: false, error: 'text' }
       const id = crypto.randomUUID()
-      if (!addDraft({ id, to, text: body, createdAt: clock.now() }, MAX_DRAFTS)) return { ok: false, error: 'full' }
-      audit('draft', to, { id })
+      if (!addDraft({ id, to, text: body, createdAt: clock.now(), ...more }, MAX_DRAFTS))
+        return { ok: false, error: 'full' }
+      audit('draft', to === TEAM ? null : to, { id, ...(more.reason && { reason: more.reason }) })
       changed()
       return { ok: true, id }
+    },
+    threads() {
+      if (!config()) return []
+      return Object.entries(readThreads())
+        .map(([key, r]): ThreadView => ({ key, ...r, peerName: r.scope === TEAM ? null : nameOf(r.scope) }))
+        .sort((a, b) => b.lastAt - a.lastAt)
+    },
+    threadLines: key => (config() ? threadLines(key) : []),
+    nameOf,
+    setThread(key, change) {
+      if (!config()) return false
+      const ok = changeThreads(threads => {
+        const t = Object.hasOwn(threads, key) ? threads[key] : undefined
+        if (!t) return false
+        if (change.handler !== undefined) t.handler = change.handler
+        if (change.muted !== undefined) t.muted = change.muted
+        return true
+      })
+      if (ok) changed()
+      return ok
     },
     async sendDraft(id) {
       if (!config()) return { ok: false, error: 'off' }
@@ -551,11 +891,21 @@ export function createTeam({
       // Taken out first, so a second press finds nothing; put back when the send is refused.
       const d = takeDraft(id)
       if (!d) return { ok: false, error: 'draft' }
-      const r = await sendQuestion(d.to, d.text, 'agent')
+      const r = await post({ to: d.to, ...(d.thread && { thread: d.thread }) }, d.text, {
+        by: 'agent',
+        ...(d.session && { session: d.session }),
+        pressed: true,
+      })
       if (!r.ok) addDraft(d, Number.MAX_SAFE_INTEGER)
-      else audit('draft_sent', d.to, { id })
+      else {
+        audit('draft_sent', d.to === TEAM ? null : d.to, { id })
+        // The session that wrote it hears the answers, as it would have had it gone at once (#216).
+        const t = readThreads()[r.thread]
+        if (d.session && t && t.id !== GENERAL && !t.handler && readAgents().listener?.key !== d.session.key)
+          setHandler(r.thread, d.session)
+      }
       changed()
-      return r
+      return r.ok ? { ok: true, id: r.id } : r
     },
     discardDraft(id) {
       if (!config() || !isMessageId(id)) return false
