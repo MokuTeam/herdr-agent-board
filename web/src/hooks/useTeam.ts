@@ -135,12 +135,22 @@ export function teamSource(deps: TeamDeps): TeamSource {
       // Each thread's count, asked only while the payload says something is unread.
       const unread =
         unreadTotal > 0 ? { ...(await api.get('/api/team/unread', isUnread, { cache: 'no-store' })).threads } : {}
-      // The thread on show, in a page in front, is read: its messages leave the count.
+      if (mine !== asked) return
+      now.set({ ...now.get(), view, threads, thread, lines, agents, unread })
+      // The thread on show, in a page in front, is read: its messages leave the count. A read that
+      // fails leaves the count as it is; the panel stays drawn. A message that lands meanwhile moves
+      // teamRev, and the page that shows it is the page that read it.
       if (selected && (unread[selected] ?? 0) > 0 && visible()) {
-        await api.post('/api/team/read', { thread: selected })
-        delete unread[selected]
+        try {
+          await api.post('/api/team/read', { thread: selected })
+        } catch {
+          return
+        }
+        if (mine !== asked) return
+        const left = { ...now.get().unread }
+        delete left[selected]
+        now.set({ ...now.get(), unread: left })
       }
-      if (mine === asked) now.set({ ...now.get(), view, threads, thread, lines, agents, unread })
     } catch (err) {
       if (mine === asked) deps.toast(errorText(err, deps.t()), true)
     }

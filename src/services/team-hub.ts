@@ -878,6 +878,8 @@ export function createTeam({
     nameOf,
     setThread(key, change) {
       if (!config()) return false
+      // No such thread: nothing to change, and no file made for it.
+      if (!Object.hasOwn(readThreads(), key)) return false
       const ok = changeThreads(threads => {
         const t = Object.hasOwn(threads, key) ? threads[key] : undefined
         if (!t) return false

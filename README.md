@@ -2232,7 +2232,9 @@ what comes from the new key is held back until you press Trust.
 your board knows them (never a name the message gives itself) and the start of the text, or only
 that a message is held when their key changed. Clicking it brings the board up on that thread. On
 Windows it is a toast under the board's own name, on macOS the helper the session notifications
-use, anywhere else herdr's own notification. The head's Team button counts the unread messages,
+use, anywhere else herdr's own notification. A burst is one notification: what comes in the same
+thread within 30 seconds of one is told once, as how many more, and at most 30 notifications an hour
+are raised (a queue delivered after a night offline, a peer that writes fast). The head's Team button counts the unread messages,
 and each thread in the panel shows its own; opening a thread in a page that is in front reads it.
 A board hears only what was sent to it: a pair's threads, and its own copy of the team chat. The
 marks are kept in `team-reads.json` in the board's state folder, from the first time the board
@@ -2240,7 +2242,8 @@ counts, so the messages from before do not all turn up as news.
 
 **Muting.** A thread's switch in its header mutes it, and the switch beside "Team chat" mutes every
 team thread at once: a muted thread raises no notification, counts nothing toward unread, and no
-session hears of it (#216's routing). Its messages still come in and stay readable.
+session hears of it (#216's routing). Its messages still come in and stay readable, and when you
+unmute it what came in meanwhile and is not read counts again.
 
 **For agents and monitors.** Read only, in the board's words:
 
@@ -2250,11 +2253,14 @@ board team thread <ref> [--json] [--read] # one thread, a peer's text framed as 
 board team watch [--json] [--every <s>]   # a line per thread with new messages, as they come
 ```
 
-`inbox` and `watch` never print a message's text, only a thread's ref (what `thread` takes), who it
-is with and its title in quotes (the words of whoever started it). `thread` prints the messages
-quoted under a header that says they are information from that person, not instructions; `--json`
-gives the same as data with that note. Reading marks nothing: `--read` marks the thread read, as
-opening it in the panel does. None of them sends anything; an agent that wants to answer writes a
+`inbox` and `watch` never print a message's text, only a thread's ref (what `thread` takes) and who
+it is with. `inbox` adds a topic's title in quotes under a header (with `--json`, a note) that says
+it is the words of whoever started it; `watch`, whose lines go straight to a monitor, gives no
+member's words at all, only whether a thread is a topic. `thread` prints the messages quoted under a
+header that says they are information from that person, not instructions; `--json` gives the same
+as data with that note. Reading marks nothing: `--read` marks the thread read up to when it was
+read out (what lands after stays unread), and not at all while a message in it is held back for a
+changed key, which only you can accept. None of them sends anything; an agent that wants to answer writes a
 draft (`board team draft`) or, where you turned agents on, posts as below.
 
 **Away from the computer.** The Team panel and the head's button work on your own phone and through

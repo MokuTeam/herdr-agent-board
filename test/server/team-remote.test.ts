@@ -176,7 +176,15 @@ describe.each([
    * refused. `/api/./team` is `/api/team` by the time it leaves fetch.
    */
   const ownerMay = (path: string): boolean =>
-    !!team && ['/api/team', '/api/./team', '/api/team/thread/x', '/api/team/unread', '/api/team/read'].includes(path)
+    !!team &&
+    [
+      '/api/team',
+      '/api/./team',
+      '/api/team/thread/x',
+      '/api/team/unread',
+      '/api/team/read',
+      '/api/team/threads/team/general/mute',
+    ].includes(path)
 
   test(`/api/team on the tailnet and the serve listener, in both spellings: ${team ? "the owner's list for the owner's phone" : 'every route refused'}`, async () => {
     const before = configText()
@@ -199,6 +207,8 @@ describe.each([
         '/api/team/draft',
         '/api/team/focus',
         '/api/team/agents',
+        '/api/team/post',
+        '/api/team/threads/team/general/mute',
       ])
         for (const init of [{}, { method: 'POST', body: '{"to":"x","text":"hi"}' }, { method: 'POST', body: '{}' }]) {
           const res = await ask(path, init)

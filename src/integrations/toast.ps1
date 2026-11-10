@@ -29,8 +29,8 @@ $AppId = "Herdr.ClaudeAgent"
 $BoardAppId = "Herdr.AgentBoard"
 $ReminderId = '^[A-Za-z0-9_-]{16}$'
 # A team thread's key: a peer's id or "team", then "general" or a thread's UUID (core/team-unread.ts).
-$TeamThread = '^(?:[A-Za-z0-9_-]{43}|team)/(?:general|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$'
-$TeamMessageId = '^[A-Za-z0-9_-]{1,64}$'
+$TeamThread = '^(?:[A-Za-z0-9_-]{43}|team)/(?:general|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\z'
+$TeamMessageId = '^[A-Za-z0-9_-]{1,64}\z'
 $ProtocolKey = "HKCU:\Software\Classes\claude-pane"
 # This copy of the board (the script lives in its src\integrations folder); a click goes to its
 # web board first.
@@ -249,7 +249,7 @@ function Show-Reminder($R) {
 # A team message (#355): the sender, the start of the text, "Team" under it; a newer toast for
 # the same message replaces it. Its words come from the board, already one line and printable.
 function Show-TeamMessage($M) {
-    if ([string]$M.thread -notmatch $TeamThread -or [string]$M.id -notmatch $TeamMessageId) { return }
+    if ([string]$M.thread -cnotmatch $TeamThread -or [string]$M.id -cnotmatch $TeamMessageId) { return }
     Register-Handlers
     Register-BoardApp
     $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
@@ -359,7 +359,7 @@ if ($Action -eq "open") {
     }
 
     # A team message's click (#355): the board comes up on that thread.
-    if ([Uri]::UnescapeDataString($Uri) -match '^claude-pane:team/((?:[A-Za-z0-9_-]{43}|team)/(?:general|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))/?$') {
+    if ([Uri]::UnescapeDataString($Uri) -cmatch '^claude-pane:team/((?:[A-Za-z0-9_-]{43}|team)/(?:general|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))/?\z') {
         $thread = $Matches[1]
         $bun = Find-Bun
         if ($bun -and (Test-Path -LiteralPath $boardOpen)) { & $bun $boardOpen --team $thread | Out-Null }

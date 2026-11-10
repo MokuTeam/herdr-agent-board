@@ -232,6 +232,9 @@ function ListPane({
   const t = useT()
   const { now } = useBoardContext()
   const chatMuted = agents?.peers.team?.muted === true
+  // Threads with someone no longer in the roster: still there to read, and to clear their count.
+  const inRoster = new Set(view.roster.map(p => p.peer))
+  const gone = [...new Set(threads.map(x => x.scope))].filter(scope => scope !== 'team' && !inRoster.has(scope))
   const rows = (scope: string) =>
     scopeThreads(scope, threads).map(entry => (
       <ThreadRow key={entry.key} entry={entry} unread={unread[entry.key] ?? 0} onSelect={onSelect} />
@@ -250,7 +253,8 @@ function ListPane({
       <section className={classNames('team-scope', 'team-chat', chatMuted && 'muted')}>
         <div className="team-scope-head">
           <h3>{t('team.chat')}</h3>
-          {chatMuted && <span className="todo-meta team-muted">{t('team.muted')}</span>}
+          {!agents && chatMuted && <span className="todo-meta team-muted">{t('team.muted')}</span>}
+          {agents && <span className="todo-meta team-switch-label">{t('team.notifications')}</span>}
           {agents && (
             <Switch
               name="mute-chat"
@@ -280,15 +284,32 @@ function ListPane({
             {p.pin === 'changed' && (
               <div className="team-changed">
                 <p>{t('team.changed', { name: p.name })}</p>
-                <button type="button" className="mini" disabled={disabled} onClick={() => onTrust(p.peer)}>
-                  {t('team.trust')}
-                </button>
+                {agents ? (
+                  <button type="button" className="mini" disabled={disabled} onClick={() => onTrust(p.peer)}>
+                    {t('team.trust')}
+                  </button>
+                ) : (
+                  <p className="hint">{t('team.trustOnComputer')}</p>
+                )}
               </div>
             )}
             <div className="team-rows">{rows(p.peer)}</div>
           </div>
         ))}
       </section>
+      {gone.length > 0 && (
+        <section className="team-roster team-gone">
+          <h3>{t('team.former')}</h3>
+          {gone.map(scope => (
+            <div key={scope} className="team-peer">
+              <span className="team-name">
+                {threads.find(x => x.scope === scope)?.peerName ?? t('team.formerOne')}
+              </span>
+              <div className="team-rows">{rows(scope)}</div>
+            </div>
+          ))}
+        </section>
+      )}
       {agents && <AgentSwitches view={view} agents={agents} disabled={disabled} onAgents={onAgents} />}
     </>
   )
@@ -416,6 +437,7 @@ function ThreadPane({
         <button type="button" className="mini team-back" onClick={() => onSelect(null)}>
           {t('team.back')}
         </button>
+        {thread && <span className="todo-meta team-switch-label">{t('team.notifications')}</span>}
         {thread && (
           <Switch
             name="mute"
@@ -442,9 +464,13 @@ function ThreadPane({
       {changed && peer && (
         <div className="team-changed">
           <p>{t('team.changed', { name: peer.name })}</p>
-          <button type="button" className="mini" disabled={disabled} onClick={() => onTrust(peer.peer)}>
-            {t('team.trust')}
-          </button>
+          {agents ? (
+            <button type="button" className="mini" disabled={disabled} onClick={() => onTrust(peer.peer)}>
+              {t('team.trust')}
+            </button>
+          ) : (
+            <p className="hint">{t('team.trustOnComputer')}</p>
+          )}
         </div>
       )}
       {!lines.length && <p className="hint">{t('team.threadEmpty')}</p>}

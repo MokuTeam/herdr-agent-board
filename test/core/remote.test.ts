@@ -160,7 +160,6 @@ test("the owner's own logins may read and write the team away from the computer,
     '/api/team/threads/team/general/mute',
     '/api/team/threads/team/general/unmute',
     '/api/team/send',
-    '/api/team/post',
     '/api/team/draft/d1/send',
     '/api/team/draft/d1/discard',
     '/api/team/read',
@@ -169,6 +168,8 @@ test("the owner's own logins may read and write the team away from the computer,
     expect([path, ownerTeam(path)]).toEqual([path, true])
   for (const path of [
     '/api/team/',
+    // an agent's post names a session here as the thread's handler: as assign, the computer's only
+    '/api/team/post',
     '/api/team/trust',
     '/api/team/agents',
     '/api/team/listen',

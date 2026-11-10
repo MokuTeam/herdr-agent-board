@@ -110,7 +110,8 @@ export const localOnly = (path: string): boolean =>
 
 /**
  * The team's routes the owner's own logins may use away from the computer (#355, #218): reading
- * the team, its threads and what is unread, sending as the owner, sending or discarding a draft,
+ * the team, its threads and what is unread, sending as the owner (not as an agent: post names a
+ * session here, as assign does), sending or discarding a draft,
  * marking a thread read, muting one. Everything else under /api/team stays on the computer: accepting a changed key
  * (trust), what agents may do (agents, listen), handing a thread to a session (assign, release), an
  * agent's draft (draft), a notification's click (focus). Only the owner's own logins get even
@@ -118,7 +119,7 @@ export const localOnly = (path: string): boolean =>
  * a desk (isOwnerLogin); never a Tailscale user `remote.allow` lets in.
  */
 const OWNER_TEAM =
-  /^\/api\/team(?:\/(?:thread\/[^/]+|threads(?:\/[^/]+\/[^/]+(?:\/(?:mute|unmute))?)?|send|post|draft\/[^/]+\/(?:send|discard)|read|unread))?$/
+  /^\/api\/team(?:\/(?:thread\/[^/]+|threads(?:\/[^/]+\/[^/]+(?:\/(?:mute|unmute))?)?|send|draft\/[^/]+\/(?:send|discard)|read|unread))?$/
 
 export const ownerTeam = (path: string): boolean => OWNER_TEAM.test(path)
 

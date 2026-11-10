@@ -1,7 +1,8 @@
 // The team's unread count and its routes on a running board (#355): a peer's message through the
 // hub in this process raises the payload's teamUnread; GET /api/team/unread names its thread;
-// POST /api/team/read takes it off; POST /api/team/focus tells the open pages (`team-open`). With
-// no `team` none of it is there: no payload field, every route 409. The board runs in a sandbox
+// POST /api/team/read takes it off (up to a time, when given); POST /api/team/focus tells the open
+// pages (`team-open`). With no `team` none of it is there: no payload field, and every route goes on
+// as if it were not there (404 for the GET, 405 for a POST), as routes/team.ts's do. The board runs in a sandbox
 // whose PowerShell is missing, so no notification reaches this computer's desktop.
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -73,8 +74,10 @@ describe('with team', () => {
     expect(seen).toContain(JSON.stringify({ thread }))
     await reader.cancel()
 
-    for (const bad of [{}, { thread: 'x' }, { thread: `${anna.pub}/../general` }])
+    for (const bad of [{}, { thread: 'x' }, { thread: `${anna.pub}/../general` }, { thread, upTo: 'soon' }])
       expect((await post(url, '/api/team/read', bad)).status).toBe(400)
+    // Read up to a time before it came: still unread.
+    expect(await (await post(url, '/api/team/read', { thread, upTo: 1 })).json()).toEqual({ ok: true, unread: 1 })
     expect(await (await post(url, '/api/team/read', { thread })).json()).toEqual({ ok: true, unread: 0 })
     await waitFor(
       () => payloadOf(url),
@@ -86,13 +89,13 @@ describe('with team', () => {
 })
 
 describe('without team', () => {
-  test('no payload field, every route 409, no read marks written', async () => {
+  test('no payload field, every route as if it were not there', async () => {
     const box = await sandbox()
     const { url } = await serveBoard(box, { language: 'en' })
     expect(await payloadOf(url)).not.toHaveProperty('teamUnread')
-    expect((await fetch(`${url}/api/team/unread`)).status).toBe(409)
+    expect((await fetch(`${url}/api/team/unread`)).status).toBe(404)
     const thread = `${'A'.repeat(43)}/general`
-    expect((await post(url, '/api/team/read', { thread })).status).toBe(409)
-    expect((await post(url, '/api/team/focus', { thread })).status).toBe(409)
+    expect((await post(url, '/api/team/read', { thread })).status).toBe(405)
+    expect((await post(url, '/api/team/focus', { thread })).status).toBe(405)
   })
 })

@@ -11,7 +11,7 @@ import { generateKey, type KeyPair } from '../../src/core/team.ts'
 import { TOAST_CHARS } from '../../src/core/team-unread.ts'
 import type { TeamToast } from '../../src/integrations/team-toast.ts'
 import type { InboundEvent } from '../../src/services/team-hub.ts'
-import { createTeamNotify } from '../../src/services/team-notify.ts'
+import { BURST_MS, createTeamNotify, TOASTS_PER_HOUR } from '../../src/services/team-notify.ts'
 import { msgOf, question } from '../hub/harness.ts'
 import { isolatedHome } from '../support/env.ts'
 import { handshake, setup, stopAll, until } from '../support/team-service.ts'
@@ -24,14 +24,18 @@ const OTHER = 'B'.repeat(43)
 function notifier(at: { now: number }, muted?: (thread: string) => boolean) {
   isolatedHome()
   const shown: TeamToast[] = []
+  const due: { fn: () => void; ms: number }[] = []
   const n = createTeamNotify({
     desktop: { show: t => void shown.push(t) },
     nameOf: peer => (peer === PEER ? 'Anna' : 'Bob'),
     ...(muted && { mutes: () => muted }),
     now: () => at.now,
+    later: (fn, ms) => void due.push({ fn, ms }),
   })
-  return { n, shown }
+  return { n, shown, due }
 }
+
+const topic = (i: number) => `team/00000000-0000-4000-8000-${String(i).padStart(12, '0')}`
 
 /** Kept in the inbox as the service keeps it; `thread` absent: as before threads (that pair's general). */
 const keep = (
@@ -168,6 +172,74 @@ describe('createTeamNotify', () => {
     expect(topic?.endsWith('…')).toBe(true)
     expect(topic?.length).toBeLessThanOrEqual(61)
     expect([chat, pair]).toEqual(['Team chat', 'Team'])
+  })
+
+  test('a burst in a thread is one notification, then how many more once the window is up', () => {
+    const at = { now: 500 }
+    const { n, shown, due } = notifier(at)
+    n.unread() // the marks begin at 500
+    at.now = 1_000
+    n.inbound(keep(PEER, 'a1', 'one', 1_000))
+    at.now = 2_000
+    n.inbound(keep(PEER, 'a2', 'two', 2_000))
+    at.now = 3_000
+    n.inbound(keep(PEER, 'a3', 'three', 3_000))
+    n.inbound(keep(OTHER, 'b1', 'another thread', 3_000))
+    expect(shown.map(s => s.id)).toEqual(['a1', 'b1'])
+    expect(due.map(d => d.ms)).toEqual([BURST_MS - 1_000])
+    at.now = 1_000 + BURST_MS
+    due[0]?.fn()
+    expect(shown.at(-1)).toEqual({
+      id: 'a3',
+      thread: `${PEER}/general`,
+      title: 'Anna',
+      body: '2 more messages',
+      label: 'Team',
+    })
+    expect(JSON.stringify(shown.at(-1))).not.toContain('three')
+    expect(n.unread()).toBe(4)
+    // A window after the summary, a message is told on its own again.
+    at.now = 1_000 + 2 * BURST_MS
+    n.inbound(keep(PEER, 'a4', 'four', at.now))
+    expect(shown.at(-1)?.id).toBe('a4')
+  })
+
+  test('a burst summary in a thread muted meanwhile says nothing', () => {
+    const at = { now: 1_000 }
+    const muted = { now: false }
+    const { n, shown, due } = notifier(at, () => muted.now)
+    n.inbound(keep(PEER, 'a1', 'one', 1_000))
+    n.inbound(keep(PEER, 'a2', 'two', 1_000))
+    muted.now = true
+    due[0]?.fn()
+    expect(shown.map(s => s.id)).toEqual(['a1'])
+  })
+
+  test('at most TOASTS_PER_HOUR notifications an hour, whatever comes in; the count still moves', () => {
+    const at = { now: 500 }
+    const { n, shown } = notifier(at)
+    n.unread() // the marks begin at 500
+    at.now = 1_000
+    for (let i = 0; i < TOASTS_PER_HOUR + 5; i++) n.inbound(keep(PEER, `m${i}`, 'x', 1_000, false, topic(i)))
+    expect(shown).toHaveLength(TOASTS_PER_HOUR)
+    expect(n.unread()).toBe(TOASTS_PER_HOUR + 5)
+    at.now = 1_000 + 3_600_000
+    n.inbound(keep(PEER, 'late', 'x', at.now, false, topic(99)))
+    expect(shown).toHaveLength(TOASTS_PER_HOUR + 1)
+  })
+
+  test('read up to a time: what came after it stays unread; a time past now is now', () => {
+    const at = { now: 1_000 }
+    const { n } = notifier(at)
+    n.unread() // the marks begin at 1000
+    n.inbound(keep(PEER, 'a1', 'one', 1_500))
+    n.inbound(keep(PEER, 'a2', 'two', 2_500))
+    at.now = 3_000
+    n.read(`${PEER}/general`, 2_000)
+    expect(n.unreadByThread()).toEqual({ [`${PEER}/general`]: 1 })
+    n.read(`${PEER}/general`, 9_999_999)
+    expect(peekReads()?.threads[`${PEER}/general`]).toBe(3_000)
+    expect(n.unread()).toBe(0)
   })
 
   test('nothing is written until the board asks: no read marks file before the first count', () => {

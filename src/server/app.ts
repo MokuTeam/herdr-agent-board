@@ -32,7 +32,6 @@ import {
   sshVersion,
   writePidRecord,
 } from '../adapters/ssh.ts'
-import { readPins } from '../adapters/team-store.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payload.ts'
@@ -40,7 +39,8 @@ import type { Observation } from '../core/presence.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
-import { fingerprint, printable } from '../core/team.ts'
+import { toastBody } from '../core/team-unread.ts'
+import { MAX_NAME } from '../core/team-wire.ts'
 import { boardPorts, forwardSpec, publicHosts, sshArgs, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
 import { teamDesktop } from '../integrations/team-toast.ts'
@@ -433,19 +433,26 @@ export async function startServer({
   const notifyOf = (): TeamNotify =>
     (teamNotify ??= createTeamNotify({
       desktop: teamDesktop(log),
-      nameOf: peer => {
-        const name = team.view()?.roster.find(p => p.peer === peer)?.name ?? readPins()[peer]?.name
-        return name ? printable(name) : fingerprint(peer).slice(0, 14).trim()
-      },
+      // The service's own name for a peer (roster, pins, the key's start), one line, cut.
+      nameOf: peer => toastBody(team.nameOf(peer), MAX_NAME),
     }))
   const team = createTeam({
     cfg,
     log,
     version: PLUGIN_VERSION || 'dev',
     onChange: () => board.publish(),
+    // Each hearer on its own: one that throws keeps neither the other nor the message's ack back.
     onInbound: e => {
-      teamRouter.inbound(e)
-      notifyOf().inbound(e)
+      try {
+        teamRouter.inbound(e)
+      } catch (err) {
+        log(`team: the router failed on a message: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      try {
+        notifyOf().inbound(e)
+      } catch (err) {
+        log(`team: a notification failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
       board.publish()
     },
   })
@@ -466,7 +473,14 @@ export async function startServer({
       unreadRev = rev
       n.changed()
     }
-    return n.unread()
+    // The count reads (and the first time writes) team-reads.json: a file that fails is no count,
+    // never a payload that fails.
+    try {
+      return n.unread()
+    } catch (err) {
+      log(`team: the unread count failed: ${err instanceof Error ? err.message : String(err)}`)
+      return null
+    }
   }
   // The backup of the board's database (#233): its schedule (a look a minute, which only stats the
   // file while there is none), the server's setup, and its line in the payload (none while there

@@ -224,6 +224,18 @@ describe('the list', () => {
     expect(text(muted)).toContain('muted')
   })
 
+  test('threads with someone no longer in the team stay listed, to read and to clear their count', () => {
+    const GONE = 'C'.repeat(43)
+    const gone = thread(GONE, 'general', { peerName: 'Cleo' })
+    const nodes = render(props({ threads: [...THREADS, gone], unread: { [gone.key]: 3 } }))
+    const section = findAll(nodes, el => hasClass(el, 'team-gone'))
+    expect(section).toHaveLength(1)
+    expect(text(section)).toContain('No longer in the team')
+    expect(text(section)).toContain('Cleo')
+    expect(findAll(section, el => hasClass(el, 'team-row')).map(r => r.attrs.get('data-thread'))).toEqual([gone.key])
+    expect(findAll(render(props()), el => hasClass(el, 'team-gone'))).toHaveLength(0)
+  })
+
   test('a row shows its thread; nothing is on show: no box to write in', () => {
     const picked: (string | null)[] = []
     const p = props({ onSelect: k => void picked.push(k) })
@@ -273,10 +285,15 @@ describe('the owner’s switches (#216) and the team chat’s mute', () => {
     ])
   })
 
-  test('a remote page (no switches given): neither the switches nor the team chat’s mute', () => {
+  test('a remote page (no switches given): neither the switches nor the team chat’s mute, nor Trust', () => {
     const nodes = render(props({ agents: null }))
     expect(findAll(nodes, el => el.attrs.has('data-switch'))).toHaveLength(0)
     expect(findAll(nodes, el => hasClass(el, 'team-agents'))).toHaveLength(0)
+    // Accepting a changed key is the computer's only: the button would only be refused.
+    expect(buttons(nodes, 'Trust the new key')).toHaveLength(0)
+    expect(text(nodes)).toContain('Trust the new key on the computer the board runs on.')
+    const bob = render(props(on(`${BOB}/general`, { agents: null })))
+    expect(buttons(bob, 'Trust the new key')).toHaveLength(0)
   })
 })
 

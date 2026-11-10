@@ -29,6 +29,8 @@ export interface TeamNotifyOptions {
   /** The board's language by default. */
   t?: Translator
   now?: () => number
+  /** Runs `fn` after `ms`: a burst's summary (setTimeout, unref'd, by default). */
+  later?: (fn: () => void, ms: number) => void
 }
 
 export interface TeamNotify {
@@ -38,8 +40,8 @@ export interface TeamNotify {
   unread(): number
   /** Each thread's unread messages, for the panel. */
   unreadByThread(): Record<string, number>
-  /** The owner opened `thread`: read up to now. */
-  read(thread: string): void
+  /** The owner opened `thread`: read up to `upTo` (what was shown), never later than now. */
+  read(thread: string, upTo?: number): void
   /** The team changed some other way (a message trimmed, a mute): the count is read again. */
   changed(): void
 }
@@ -62,6 +64,21 @@ export function storeMutes(): (thread: string) => boolean {
 /** How long a topic's title is on a notification's small line, at most. */
 const MAX_LABEL = 60
 
+/**
+ * A burst is one notification: after one for a thread, what comes in it within BURST_MS is told
+ * once, as how many more, when that time is up. A queue delivered at once after a night offline, or
+ * a peer that writes fast, raises a notification or two, not one process each.
+ */
+export const BURST_MS = 30_000
+/** At most this many notifications an hour, whatever comes in: past it only the count moves. */
+export const TOASTS_PER_HOUR = 30
+const HOUR_MS = 3_600_000
+
+const unrefLater = (fn: () => void, ms: number): void => {
+  const timer = setTimeout(fn, ms)
+  timer.unref?.()
+}
+
 export function createTeamNotify(o: TeamNotifyOptions): TeamNotify {
   const now = o.now ?? Date.now
   const mutes = o.mutes ?? storeMutes
@@ -79,6 +96,31 @@ export function createTeamNotify(o: TeamNotifyOptions): TeamNotify {
     if (title) return toastBody(title, MAX_LABEL)
     return parts?.scope === TEAM ? t('team.chat') : t('team.title')
   }
+  const later = o.later ?? unrefLater
+  // The last notification of each thread, what waits to be told of a burst, and this hour's.
+  const lastShown = new Map<string, number>()
+  const waiting = new Map<string, { n: number; from: string; id: string }>()
+  const shownAt: number[] = []
+  const show = (toast: Parameters<TeamDesktop['show']>[0]): void => {
+    const at = now()
+    while (shownAt.length && (shownAt[0] ?? 0) <= at - HOUR_MS) shownAt.shift()
+    if (shownAt.length >= TOASTS_PER_HOUR) return
+    shownAt.push(at)
+    lastShown.set(toast.thread, at)
+    o.desktop.show(toast)
+  }
+  const tellBurst = (thread: string): void => {
+    const w = waiting.get(thread)
+    waiting.delete(thread)
+    if (!w || mutes()(thread)) return
+    show({
+      id: w.id,
+      thread,
+      title: o.nameOf(w.from),
+      body: t('team.toast.more', { n: w.n }),
+      label: labelOf(thread),
+    })
+  }
   // The count is read from the files only when something changed it: the payload asks often.
   let cached: { all: number; by: Record<string, number> } | null = null
   const counts = () => {
@@ -94,8 +136,15 @@ export function createTeamNotify(o: TeamNotifyOptions): TeamNotify {
     inbound(e) {
       cached = null
       if (mutes()(e.thread)) return
+      const since = now() - (lastShown.get(e.thread) ?? Number.NEGATIVE_INFINITY)
+      if (since < BURST_MS) {
+        const w = waiting.get(e.thread)
+        waiting.set(e.thread, { n: (w?.n ?? 0) + 1, from: e.from, id: e.id })
+        if (!w) later(() => tellBurst(e.thread), BURST_MS - since)
+        return
+      }
       const text = e.held ? null : (readInbox(e.from).find(i => i.id === e.id)?.text ?? null)
-      o.desktop.show({
+      show({
         id: e.id,
         thread: e.thread,
         title: o.nameOf(e.from),
@@ -105,8 +154,9 @@ export function createTeamNotify(o: TeamNotifyOptions): TeamNotify {
     },
     unread: () => counts().all,
     unreadByThread: () => ({ ...counts().by }),
-    read(thread) {
-      markRead(thread, now())
+    read(thread, upTo) {
+      const at = now()
+      markRead(thread, upTo === undefined ? at : Math.min(upTo, at))
       cached = null
     },
     changed() {

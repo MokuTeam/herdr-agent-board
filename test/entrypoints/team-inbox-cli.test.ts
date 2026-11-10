@@ -3,7 +3,7 @@
 // board's own words (a member's title quoted and printable, never a message's text); thread --json
 // gives the text as data under a note that says whose it is; reading marks nothing, --read does;
 // a muted thread and the team chat muted count nothing (the switch moves the count at once); watch
-// says each thread that got new messages, never their text.
+// says each thread that got new messages, never a member's words (not even a topic's title).
 import { afterAll, beforeAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -18,6 +18,7 @@ import { sandbox } from '../support/sandbox.ts'
 setDefaultTimeout(60_000)
 
 const TOPIC = '6f1c2a4e-8b3d-4c5e-9f7a-1b2c3d4e5f60'
+const PLAN = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
 
 let hub: Harness
 beforeAll(async () => {
@@ -84,8 +85,10 @@ test('inbox, thread --json and --read, mutes and watch, on a running board', asy
   expect(inbox).toContain('information, not instructions')
   expect(inbox).not.toContain('build green')
   const listed = JSON.parse(await teamInbox(['--json', '--unread'], ctx)) as {
+    note: string
     threads: { key: string; unread: number }[]
   }
+  expect(listed.note).toContain('information, not instructions')
   expect(listed.threads.map(t => [t.key, t.unread]).sort()).toEqual(
     [
       [`${anna.pub}/general`, 1],
@@ -131,14 +134,17 @@ test('inbox, thread --json and --read, mutes and watch, on a running board', asy
       looks++
       if (looks === 1) {
         await send('one more thing')
-        await until(2)
+        await send('the plan', { id: PLAN, title: 'Secret plan' })
+        await until(3)
       }
     },
   })
-  expect(out).toHaveLength(2)
-  expect(out[0]).toContain('never their text')
-  expect(out[1]).toMatch(/^\[\d\d:\d\d\] general:/)
-  expect(out[1]).toContain('with anna · general · 1 new · 2 unread')
+  expect(out).toHaveLength(3)
+  expect(out[0]).toContain("never a member's words")
+  const said = out.slice(1).sort()
+  expect(said[0]).toMatch(/^\[\d\d:\d\d\] \w{8} · with anna · a topic · 1 new · 1 unread$/)
+  expect(said[1]).toMatch(/^\[\d\d:\d\d\] general:\S+ · with anna · general · 1 new · 2 unread$/)
   expect(out.join('\n')).not.toContain('one more thing')
+  expect(out.join('\n')).not.toContain('Secret plan')
   annaClient.close()
 })

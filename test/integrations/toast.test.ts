@@ -485,9 +485,10 @@ test.skipIf(!windows)(
 
 test('toast.ps1: a team message’s link takes a thread key only, goes to this copy’s web-open.ts --team, and comes before the pane rule (#355)', () => {
   const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
-  const rule = /-match '(\^claude-pane:team\/[^']+)'/.exec(text)?.[1]
-  assert.ok(rule)
-  const re = new RegExp(rule)
+  // Case-sensitive (-cmatch) and to the very end (\z: `$` would let a newline through).
+  const rule = /-cmatch '(\^claude-pane:team\/[^']+)'/.exec(text)?.[1] ?? ''
+  assert.ok(rule.endsWith(String.raw`\z`))
+  const re = new RegExp(rule.replace(/\\z$/, '$'))
   const peer = 'Ab-_'.repeat(10).concat('xyz')
   for (const ok of [
     `claude-pane:team/${peer}/general`,
@@ -519,7 +520,7 @@ test('toast.ps1: a team message under the board’s own app id, its click the th
   const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
   const at = text.indexOf('function Show-TeamMessage($M) {')
   const fn = text.slice(at, text.indexOf('\n}\n', at))
-  assert.ok(fn.indexOf('-notmatch $TeamThread') < fn.indexOf('Register-Handlers'), 'checked before anything runs')
+  assert.ok(fn.indexOf('-cnotmatch $TeamThread') < fn.indexOf('Register-Handlers'), 'checked before anything runs')
   assert.ok(fn.includes('$open = "claude-pane:team/$($M.thread)"'))
   for (const field of ['$M.title', '$M.body', '$M.label']) assert.ok(fn.includes(`$(& $esc ${field})`), field)
   assert.ok(fn.includes('CreateToastNotifier($BoardAppId).Show($toast)'))

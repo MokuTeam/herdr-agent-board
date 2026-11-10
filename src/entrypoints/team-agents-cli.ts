@@ -194,19 +194,26 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
     const words = rest.filter(a => a !== '--json' && a !== '--read')
     if (words.length !== 1) throw new Error(`usage: ${AGENT_USAGE}`)
     const key = await threadKeyOf(ctx, words[0] ?? '')
+    // Read up to when the lines were asked for: what lands after is not marked unseen.
+    const asked = Date.now()
     const { status, reply } = await call(ctx.webPort, `/api/team/threads/${key}`)
     if (!isRecord(reply) || !isRecord(reply.thread) || !Array.isArray(reply.lines))
       throw new Error(status === 404 ? 'no such thread on this board' : `the board answered ${status}`)
     const agents = await call(ctx.webPort, '/api/team/agents')
     const who = whoOf(ctx, splitKey(key)?.scope ?? '')
     const lines = reply.lines.filter(isRecord)
-    // Marked read only when asked, and only after the thread was read out.
-    const marked = read ? await call(ctx.webPort, '/api/team/read', { thread: key }) : null
+    // Marked read only when asked, and only after the thread was read out. A thread with a message
+    // held back (its key changed) is left for the owner, who alone can trust the key and read it.
+    const held = lines.some(l => l.held === true)
+    const marked = read && !held ? await call(ctx.webPort, '/api/team/read', { thread: key, upTo: asked }) : null
     if (marked && (!isRecord(marked.reply) || marked.reply.ok !== true))
       throw new Error(`not marked read: the board answered ${marked.status}`)
-    if (json) return JSON.stringify(threadData(key, reply.thread, lines, who, read))
+    if (json) return JSON.stringify(threadData(key, reply.thread, lines, who, marked !== null))
     const framed = framedThread(key, reply.thread, lines, agents.reply, who)
-    return read ? `${framed}\n\n(marked read)` : framed
+    if (!read) return framed
+    return marked
+      ? `${framed}\n\n(marked read)`
+      : `${framed}\n\n(not marked read: a message is held back until the owner trusts the new key)`
   }
   if (op === 'assign' || op === 'release') {
     if (rest.length !== (op === 'assign' ? 2 : 1)) throw new Error(`usage: ${AGENT_USAGE}`)
