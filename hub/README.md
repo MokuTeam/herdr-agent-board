@@ -50,7 +50,7 @@ the boards' hub is `wss://hub.example.com`, and no tailnet is needed. Two sample
   the system read-only to it.
 
 The hub needs no `bun install`: it uses only Bun's and Node's own modules. Step by step, with the
-certificate and the invites: "Your own server with a domain" in
+certificate and the invites: "The hub's admin on your own server with a domain" in
 [docs/team-quickstart.md](../docs/team-quickstart.md). Another proxy works the same way if it
 upgrades WebSocket on `/v1` and puts the client's address last in `X-Forwarded-For` (Caddy does both
 by default). Behind a second proxy (a CDN in front of nginx) the rightmost entry is that proxy's

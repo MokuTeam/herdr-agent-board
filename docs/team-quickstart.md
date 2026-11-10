@@ -66,9 +66,11 @@ server; the commands are for Debian or Ubuntu with nginx, run as root.
    curl -s http://127.0.0.1:7443/    # agent-board hub
    ```
 3. The certificate and nginx. Ports 443 and 80 (for the certificate) must be open; 7443 never is.
+   certbot renews the certificate by itself, and the deploy hook makes nginx load the new one
+   (`certbot renew --dry-run` tries it).
 
    ```sh
-   certbot certonly --nginx -d hub.example.com
+   certbot certonly --nginx -d hub.example.com --deploy-hook "systemctl reload nginx"
    cp /opt/herdr-agent-board/hub/hab-hub.nginx.conf /etc/nginx/sites-available/hab-hub
    # put your name in place of every hub.example.com in it
    ln -s /etc/nginx/sites-available/hab-hub /etc/nginx/sites-enabled/hab-hub
@@ -223,9 +225,11 @@ Debian или Ubuntu с nginx, от root.
    curl -s http://127.0.0.1:7443/    # agent-board hub
    ```
 3. Сертификат и nginx. Порты 443 и 80 (для сертификата) должны быть открыты; 7443 никогда.
+   certbot продлевает сертификат сам, а deploy hook заставляет nginx взять новый
+   (`certbot renew --dry-run` это проверяет).
 
    ```sh
-   certbot certonly --nginx -d hub.example.com
+   certbot certonly --nginx -d hub.example.com --deploy-hook "systemctl reload nginx"
    cp /opt/herdr-agent-board/hub/hab-hub.nginx.conf /etc/nginx/sites-available/hab-hub
    # замените в нём каждый hub.example.com на своё имя
    ln -s /etc/nginx/sites-available/hab-hub /etc/nginx/sites-enabled/hab-hub

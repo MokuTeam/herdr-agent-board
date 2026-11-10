@@ -37,6 +37,7 @@ test('offline recipient: queued, delivered on connect, signed ack comes back as 
   const b0 = await h.join(B, 'ben')
   b0.close()
   await b0.closed
+  await h.offline(B.pub)
   const env = await question(A, B.pub, `${MARKER} hello`)
   a.send({ t: 'send', env })
   const queued = await a.take('state')
@@ -182,6 +183,7 @@ test('the sweeper expires what is due, drops the body and tells the sender', asy
   const b = await h.join(B, 'ben')
   b.close()
   await b.closed
+  await h.offline(B.pub)
   const env = await question(A, B.pub, `${MARKER} soon`, { ttl_s: 60 })
   a.send({ t: 'send', env })
   await a.take('state')
@@ -278,6 +280,7 @@ test("a revoked sender's queued messages expire (audited) and are never delivere
   const b0 = await h.join(B, 'ben')
   b0.close()
   await b0.closed
+  await h.offline(B.pub)
   const env = await question(A, B.pub, 'before I was revoked')
   a.send({ t: 'send', env })
   await a.take('state')
@@ -297,6 +300,7 @@ test('what a revoked sender left behind is not delivered even if only the peer r
   const b0 = await h.join(B, 'ben')
   b0.close()
   await b0.closed
+  await h.offline(B.pub)
   const env = await question(A, B.pub, 'queued')
   a.send({ t: 'send', env })
   await a.take('state')

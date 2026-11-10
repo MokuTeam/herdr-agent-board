@@ -28,6 +28,27 @@ const answer = async (res: Response | Promise<Response>): Promise<[number, unkno
   return [r.status, await r.json()]
 }
 
+/**
+ * The board's own start-up calls to herdr are done: its first snapshot was asked for, and no call
+ * came for 300 ms. A call kind counted before then could still be the board's own, landing late.
+ */
+async function startupSettled(box: Sandbox): Promise<void> {
+  const deadline = Date.now() + 15_000
+  let count = -1
+  let quietSince = Date.now()
+  for (;;) {
+    const calls = box.calls()
+    if (calls.length !== count) {
+      count = calls.length
+      quietSince = Date.now()
+    }
+    const snapshot = calls.some(c => c[0] === 'api' && c[1] === 'snapshot')
+    if (snapshot && Date.now() - quietSince >= 300) return
+    if (Date.now() > deadline) throw new Error(`the board's start-up calls did not settle: ${calls.length} so far`)
+    await new Promise(r => setTimeout(r, 20))
+  }
+}
+
 /** The first payload the event stream pushes. */
 async function firstEvent(url: string): Promise<Record<string, unknown>> {
   const res = await fetch(`${url}/api/events`)
@@ -66,6 +87,8 @@ describe.each([
     expect(payload).not.toHaveProperty('teamRev')
     expect(await firstEvent(url)).not.toHaveProperty('teamRev')
     // The board's own refresh may poll herdr meanwhile: what counts is that asking adds no new kind of call.
+    // Counted once the board's start-up calls are in, so none of them lands among the added ones.
+    await startupSettled(box)
     const kind = (c: string[]): string => c.slice(0, 2).join(' ')
     const before = box.calls().length
     const seen = new Set(box.calls().map(kind))

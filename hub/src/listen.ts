@@ -50,12 +50,12 @@ function isLoopback(address: string): boolean {
  * reverse proxy on this machine forwards to the hub), a connection from a loopback address is the
  * proxy's, and the address is the rightmost entry of its X-Forwarded-For: the one the proxy saw
  * (nginx's `$proxy_add_x_forwarded_for` and Caddy both put it last). That entry counts only as an IP
- * literal; anything else, a header from a peer that is not loopback, or no `trustProxy`, and it is
- * the socket's own address.
+ * literal without a zone (`fe80::1%eth0` would let any text after the % through); anything else, a
+ * header from a peer that is not loopback, or no `trustProxy`, and it is the socket's own address.
  */
 export function clientAddress(socket: string | undefined, forwarded: string | null, trustProxy: boolean): string {
   const own = socket ?? '-'
   if (!trustProxy || !socket || !isLoopback(socket) || !forwarded) return own
   const last = forwarded.split(',').pop()?.trim() ?? ''
-  return isIP(last) !== 0 ? last : own
+  return isIP(last) !== 0 && !last.includes('%') ? last : own
 }

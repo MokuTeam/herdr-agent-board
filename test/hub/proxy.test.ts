@@ -30,7 +30,8 @@ test('clientAddress: the rightmost forwarded IP, only with trustProxy and from a
   expect(clientAddress('127.0.0.1', null, true)).toBe('127.0.0.1')
   expect(clientAddress(undefined, xff, true)).toBe('-')
   // A last entry that is not an IP literal never reaches the log.
-  for (const bad of ['203.0.113.9, unknown', '203.0.113.9:443', 'x\nonline 00000000 mallory', ''])
+  const zone = `fe80::1%${'a'.repeat(4000)}`
+  for (const bad of ['203.0.113.9, unknown', '203.0.113.9:443', 'x\nonline 00000000 mallory', '', 'fe80::1%eth0', zone])
     expect(clientAddress('127.0.0.1', bad, true)).toBe('127.0.0.1')
 })
 
