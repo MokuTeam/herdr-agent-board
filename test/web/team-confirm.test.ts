@@ -199,3 +199,28 @@ test('the window words each action from the board’s description', () => {
   )
   expect(confirmLines({ kind: 'what' }, t).title).toBe('team.confirm.unknown')
 })
+
+test('the window words a channel, a welcome and a channel’s new members (#355)', () => {
+  const t = Object.assign(
+    (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
+    { lang: 'en' as const },
+  ) as unknown as Translator
+  expect(
+    confirmLines({ kind: 'send', who: null, text: 'hi', thread: 'Deals', members: ['ana', 'ben'] }, t).items,
+  ).toEqual(['team.confirm.thread {"title":"Deals"}', 'team.confirm.channelFor {"names":"ana, ben"}'])
+  expect(confirmLines({ kind: 'agents', channel: 'Deals', on: true }, t).title).toBe(
+    'team.confirm.agentsChannel {"channel":"Deals"}',
+  )
+  expect(confirmLines({ kind: 'welcome', who: 'cleo', on: true, lanes: ['Acme'], channels: ['Deals'] }, t)).toEqual({
+    title: 'team.confirm.welcome {"who":"cleo"}',
+    items: [
+      'team.confirm.item.on',
+      'team.confirm.item.lanes {"lanes":"Acme"}',
+      'team.confirm.item.channels {"channels":"Deals"}',
+    ],
+  })
+  expect(confirmLines({ kind: 'members', channel: 'Deals', members: ['ben'] }, t)).toEqual({
+    title: 'team.confirm.members {"channel":"Deals"}',
+    items: ['ben'],
+  })
+})

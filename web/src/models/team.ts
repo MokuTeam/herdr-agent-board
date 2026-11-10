@@ -77,7 +77,8 @@ const isThreadView = (v: unknown): v is ThreadView =>
   (v.handler === null || isSession(v.handler)) &&
   typeof v.muted === 'boolean' &&
   typeof v.lastAt === 'number' &&
-  (v.peerName === null || typeof v.peerName === 'string')
+  (v.peerName === null || typeof v.peerName === 'string') &&
+  (v.members === undefined || (Array.isArray(v.members) && v.members.every(m => typeof m === 'string')))
 
 /** GET /api/team/threads. */
 export const isThreadList = (v: unknown): v is { threads: ThreadView[] } =>
@@ -107,13 +108,18 @@ const isThreadLine = (v: unknown): v is ThreadLine =>
 export const isThreadLines = (v: unknown): v is { thread: ThreadView; lines: ThreadLine[] } =>
   isObj(v) && isThreadView(v.thread) && Array.isArray(v.lines) && v.lines.every(isThreadLine)
 
-/** The owner's agent switches (#216, GET /api/team/agents), as the panel shows them. */
+/**
+ * The owner's agent switches (#216, GET /api/team/agents), as the panel shows them: by a peer's id,
+ * `team`, or a channel's key (#355). `loop` (#360): a pause after that many agent messages in a row,
+ * the board's `loopDefault` when none is set.
+ */
 export interface AgentsView {
   off: boolean
   listener: { key: string; name?: string } | null
-  peers: Record<string, { on: boolean; lanes: string[]; muted?: boolean }>
+  peers: Record<string, { on: boolean; lanes: string[]; muted?: boolean; loop?: number }>
   paused: Record<string, number>
   lanes: { id: string; title: string }[]
+  loopDefault?: number
 }
 
 const isPeerAgents = (v: unknown): boolean =>
@@ -121,7 +127,8 @@ const isPeerAgents = (v: unknown): boolean =>
   typeof v.on === 'boolean' &&
   Array.isArray(v.lanes) &&
   v.lanes.every(l => typeof l === 'string') &&
-  (v.muted === undefined || typeof v.muted === 'boolean')
+  (v.muted === undefined || typeof v.muted === 'boolean') &&
+  (v.loop === undefined || typeof v.loop === 'number')
 
 export const isAgentsView = (v: unknown): v is AgentsView =>
   isObj(v) &&
@@ -132,13 +139,33 @@ export const isAgentsView = (v: unknown): v is AgentsView =>
   isObj(v.paused) &&
   Object.values(v.paused).every(n => typeof n === 'number') &&
   Array.isArray(v.lanes) &&
-  v.lanes.every(l => isObj(l) && typeof l.id === 'string' && typeof l.title === 'string')
+  v.lanes.every(l => isObj(l) && typeof l.id === 'string' && typeof l.title === 'string') &&
+  (v.loopDefault === undefined || typeof v.loopDefault === 'number')
 
 /** One change of the switches, as POST /api/team/agents takes it. */
 export type AgentsChange =
   | { off: boolean }
   | { listener: null }
-  | { peer: string; on?: boolean; lanes?: string[]; muted?: boolean }
+  | { peer: string; on?: boolean; lanes?: string[]; muted?: boolean; loop?: number | null }
+
+/** A new member's welcome, as POST /api/team/welcome takes it (#355). */
+export interface Welcome {
+  peer: string
+  on: boolean
+  lanes: string[]
+  channels: string[]
+}
+
+/** GET /api/team/welcome: who joined and is not welcomed yet. */
+export const isWelcomeList = (v: unknown): v is { pending: string[] } =>
+  isObj(v) && Array.isArray(v.pending) && v.pending.every(p => typeof p === 'string')
+
+/** A channel (#355): a team thread for some members only. */
+export const isChannel = (t: ThreadView | null | undefined): boolean => !!t?.members
+
+/** The channels, the latest first. */
+export const channelsOf = (threads: readonly ThreadView[]): ThreadView[] =>
+  threads.filter(t => t.scope === 'team' && t.members).sort((a, b) => b.lastAt - a.lastAt)
 
 /**
  * A scope's threads as the list shows them: its general first (there before anything was written
@@ -149,7 +176,10 @@ export function scopeThreads(
   threads: readonly ThreadView[],
 ): { key: string; thread: ThreadView | null }[] {
   const general = `${scope}/general`
-  const topics = threads.filter(t => t.scope === scope && t.key !== general).sort((a, b) => b.lastAt - a.lastAt)
+  // A channel is the team's but listed on its own (#355).
+  const topics = threads
+    .filter(t => t.scope === scope && t.key !== general && !t.members)
+    .sort((a, b) => b.lastAt - a.lastAt)
   return [
     { key: general, thread: threads.find(t => t.key === general) ?? null },
     ...topics.map(t => ({ key: t.key, thread: t })),

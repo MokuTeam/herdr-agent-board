@@ -54,11 +54,15 @@ function incoming(): Incoming[] {
   return out
 }
 
-/** The mutes as the board keeps them (#216): a thread's own, and the team chat's for each team thread. */
+/** The mutes as the board keeps them (#216): a thread's own, and the team chat's for each of its threads. */
 export function storeMutes(): (thread: string) => boolean {
   const threads = readThreads()
   const team = readAgents().peers[TEAM]?.muted === true
-  return key => (Object.hasOwn(threads, key) && threads[key]?.muted === true) || (team && splitKey(key)?.scope === TEAM)
+  return key => {
+    const own = Object.hasOwn(threads, key) ? threads[key] : undefined
+    // The team chat's mute is its own threads', not a channel's (#355): a channel has its own.
+    return own?.muted === true || (team && splitKey(key)?.scope === TEAM && !own?.members)
+  }
 }
 
 /** How long a topic's title is on a notification's small line, at most. */

@@ -34,6 +34,8 @@ export function confirmLines(a: Reply, t: Translator): ConfirmLines {
       const where = [
         typeof a.thread === 'string' ? t('team.confirm.thread', { title: a.thread }) : null,
         typeof a.link === 'string' ? t('team.confirm.link', { link: a.link }) : null,
+        // A new channel (#355): who will read it.
+        Array.isArray(a.members) ? t('team.confirm.channelFor', { names: a.members.map(String).join(', ') }) : null,
       ].filter((x): x is string => x !== null)
       return {
         title: who ? t('team.confirm.send', { who }) : t('team.confirm.sendTeam'),
@@ -71,11 +73,35 @@ export function confirmLines(a: Reply, t: Translator): ConfirmLines {
       if (a.muted === false) items.push(t('team.confirm.item.unmuted'))
       const title = who
         ? t('team.confirm.agentsFor', { who })
-        : a.team === true
-          ? t('team.confirm.agentsTeam')
-          : t('team.confirm.agentsBoard')
+        : typeof a.channel === 'string'
+          ? t('team.confirm.agentsChannel', { channel: a.channel })
+          : a.team === true
+            ? t('team.confirm.agentsTeam')
+            : t('team.confirm.agentsBoard')
       return { title, items: items.length ? items : [t('team.confirm.unknown')] }
     }
+    case 'welcome': {
+      const items: string[] = []
+      if (a.on === true) items.push(t('team.confirm.item.on'))
+      if (a.on === false) items.push(t('team.confirm.item.off'))
+      if (Array.isArray(a.lanes))
+        items.push(
+          a.lanes.length
+            ? t('team.confirm.item.lanes', { lanes: a.lanes.map(String).join(', ') })
+            : t('team.confirm.item.noLanes'),
+        )
+      if (Array.isArray(a.channels) && a.channels.length)
+        items.push(t('team.confirm.item.channels', { channels: a.channels.map(String).join(', ') }))
+      return {
+        title: t('team.confirm.welcome', { who: who ?? '' }),
+        items: items.length ? items : [t('team.confirm.unknown')],
+      }
+    }
+    case 'members':
+      return {
+        title: t('team.confirm.members', { channel: typeof a.channel === 'string' ? a.channel : '' }),
+        items: Array.isArray(a.members) ? a.members.map(String) : [t('team.confirm.unknown')],
+      }
     case 'passkey-add':
       return { title: t('team.confirm.add') }
     case 'passkey-remove':

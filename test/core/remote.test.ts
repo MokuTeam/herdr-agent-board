@@ -170,6 +170,9 @@ test("the owner's own logins may read and write the team away from the computer,
     '/api/team/',
     // an agent's post names a session here as the thread's handler: as assign, the computer's only
     '/api/team/post',
+    // widening what agents may do, or who reads a channel: the computer's only (#355)
+    '/api/team/welcome',
+    '/api/team/threads/team/x/members',
     '/api/team/trust',
     '/api/team/agents',
     '/api/team/listen',

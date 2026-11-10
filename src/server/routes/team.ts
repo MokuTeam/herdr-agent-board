@@ -27,12 +27,30 @@
 // that asked for 30 minutes: it sends the token back in X-Board-Unlock. GET and POST
 // /api/team/passkeys list, add and remove the passkeys (adding a later one and removing any
 // confirm with one there is).
+//
+// Channels and welcomes (#355): POST /api/team/send's new thread may carry `members` (the panel's
+// send only, never an agent's post), a channel takes more with POST
+// /api/team/threads/team/<id>/members { add }, and its switches are /api/team/agents by its key.
+// GET /api/team/welcome names who joined and is not welcomed yet; POST /api/team/welcome { peer,
+// on, lanes, channels } settles one, its body checked whole before anything changes. Adding a
+// channel's members, and a welcome that widens (Agents on, a lane, a channel), wait for the passkey
+// as the switches do.
 import { isRecord } from '../../adapters/json-store.ts'
-import { audit, changeAgents, readAgents, readDrafts, type SessionRef } from '../../adapters/team-store.ts'
+import {
+  audit,
+  changeAgents,
+  readAgents,
+  readDrafts,
+  readPins,
+  readThreads,
+  type SessionRef,
+} from '../../adapters/team-store.ts'
+import { markWelcomed, readWelcomed } from '../../adapters/team-welcome.ts'
 import { categoryInfo } from '../../core/categories.ts'
 import { isMessageId, isPeerId, isThreadId, MAX_TEXT, validName } from '../../core/team.ts'
 import { agentLimits, TEAM, threadKey, validLoop } from '../../core/team-agents.ts'
 import { type OwnerAction, unlocks, widens } from '../../core/team-confirm.ts'
+import { MAX_MEMBERS } from '../../core/team-wire.ts'
 import type { Config } from '../../core/types.ts'
 import type { TeamConfirm } from '../../services/team-confirm.ts'
 import type { PostTarget, TeamService } from '../../services/team-hub.ts'
@@ -41,14 +59,30 @@ import { json, type Route } from '../http.ts'
 
 const isTarget = (v: unknown): v is string => v === TEAM || isPeerId(v)
 
-/** A post's `thread` from a body: absent, { id }, or { title, link? }; null when it is none of them. */
-function threadFrom(v: unknown): PostTarget['thread'] | null | undefined {
+/** A channel's key (#355): a team thread kept here with a member list. */
+const isChannel = (v: unknown): v is string => {
+  if (typeof v !== 'string' || !v.startsWith(`${TEAM}/`)) return false
+  const all = readThreads()
+  return Object.hasOwn(all, v) && !!all[v]?.members
+}
+
+/**
+ * A post's `thread` from a body: absent, { id }, or { title, link? }; null when it is none of them.
+ * `members` (a new channel's others, #355) only where `channels` is true: the panel's send, never an
+ * agent's post.
+ */
+function threadFrom(v: unknown, channels = false): PostTarget['thread'] | null | undefined {
   if (v === undefined) return undefined
   if (!isRecord(v)) return null
-  if (typeof v.id === 'string') return isThreadId(v.id) ? { id: v.id } : null
+  if (typeof v.id === 'string') return isThreadId(v.id) && v.members === undefined ? { id: v.id } : null
   if (typeof v.title !== 'string') return null
   if (v.link !== undefined && typeof v.link !== 'string') return null
-  return { title: v.title, ...(typeof v.link === 'string' && { link: v.link }) }
+  if (v.members !== undefined && !(channels && Array.isArray(v.members) && v.members.every(isPeerId))) return null
+  return {
+    title: v.title,
+    ...(typeof v.link === 'string' && { link: v.link }),
+    ...(Array.isArray(v.members) && { members: v.members as string[] }),
+  }
 }
 
 /** The calling session as the CLI resolved it: a key and, when it is one, a name. */
@@ -108,8 +142,11 @@ function agentsChange(
       },
     }
   }
-  if (!isTarget(body.peer)) return { ok: false, error: 'peer' }
+  // A peer, the team, or a channel by its key (#355): a channel has switches of its own.
+  if (!isTarget(body.peer) && !isChannel(body.peer)) return { ok: false, error: 'peer' }
   const peer = body.peer
+  const channel = peer !== TEAM && !isPeerId(peer)
+  if (channel && body.muted !== undefined) return { ok: false, error: 'body' }
   const known = new Set(cfg.categories.map(c => c.id))
   if (body.on !== undefined && typeof body.on !== 'boolean') return { ok: false, error: 'body' }
   if (body.muted !== undefined && typeof body.muted !== 'boolean') return { ok: false, error: 'body' }
@@ -128,8 +165,9 @@ function agentsChange(
         else if (body.loop === null) delete p.loop
         s.peers[peer] = p
       })
-      audit('agents', peer === TEAM ? null : peer, {
+      audit('agents', peer === TEAM || channel ? null : peer, {
         by: 'ui',
+        ...(channel && { thread: peer }),
         ...(typeof body.on === 'boolean' && { on: body.on }),
         ...(Array.isArray(body.lanes) && { lanes: (body.lanes as string[]).join(',') }),
         ...(typeof body.muted === 'boolean' && { muted: body.muted }),
@@ -143,7 +181,8 @@ function agentsChange(
 function peerOf(a: OwnerAction): string | null {
   if (a.kind === 'send') return a.to === TEAM ? null : a.to
   if (a.kind === 'trust') return a.peer
-  if (a.kind === 'agents') return typeof a.change.peer === 'string' && a.change.peer !== TEAM ? a.change.peer : null
+  if (a.kind === 'agents') return typeof a.change.peer === 'string' && isPeerId(a.change.peer) ? a.change.peer : null
+  if (a.kind === 'welcome') return a.peer
   return null
 }
 
@@ -188,6 +227,32 @@ export function teamRoutes(
       onAgents?.()
       return { status: 200, body: { ok: true } }
     }
+    if (a.kind === 'members') {
+      const r = team.addMembers(a.key, a.add)
+      return { status: r.ok ? 200 : r.error === 'thread' ? 404 : 400, body: { ...r } }
+    }
+    if (a.kind === 'welcome') {
+      // Checked again as it stands now: the window may answer a while after the ask.
+      const w = welcomeFrom(a, team.view()?.roster ?? [], lanes())
+      if (!w.ok) return { status: 400, body: w }
+      if (w.on !== undefined || w.lanes !== undefined)
+        changeAgents(x => {
+          const p = x.peers[w.peer] ?? { on: false, lanes: [] }
+          if (w.on !== undefined) p.on = w.on
+          if (w.lanes !== undefined) p.lanes = w.lanes
+          x.peers[w.peer] = p
+        })
+      for (const key of w.channels) team.addMembers(key, [w.peer])
+      markWelcomed(w.peer, Date.now())
+      audit('welcome', w.peer, {
+        by: 'ui',
+        ...(w.on !== undefined && { on: w.on }),
+        ...(w.lanes !== undefined && { lanes: w.lanes.join(',') }),
+        channels: w.channels.length,
+      })
+      onAgents?.()
+      return { status: 200, body: { ok: true } }
+    }
     // A passkey added or removed: the confirmation did it.
     return { status: 200, body: { ok: true } }
   }
@@ -205,6 +270,8 @@ export function teamRoutes(
         text: a.text,
         ...(thread && { thread }),
         ...(link && { link }),
+        // A new channel: who will read it, by the board's names (#355).
+        ...(a.thread?.members && { members: a.thread.members.map(m => team.nameOf(m)) }),
       }
     }
     if (a.kind === 'draft') {
@@ -220,9 +287,15 @@ export function teamRoutes(
       const titles = new Map(lanes().categories.map(x => [x.id, categoryInfo(lanes(), x.id).title]))
       const listener = isRecord(c.listener) && typeof c.listener.key === 'string' ? c.listener.key : null
       // Every field the change carries, each said on its own: nothing it does stays off the window.
+      const channelTitle = typeof c.peer === 'string' && isChannel(c.peer) ? (readThreads()[c.peer]?.title ?? '') : null
       return {
         kind: a.kind,
-        ...(typeof c.peer === 'string' && (c.peer === TEAM ? { team: true } : { who: team.nameOf(c.peer) })),
+        ...(typeof c.peer === 'string' &&
+          (c.peer === TEAM
+            ? { team: true }
+            : channelTitle !== null
+              ? { channel: channelTitle }
+              : { who: team.nameOf(c.peer) })),
         ...(c.off === false && { allOn: true }),
         ...(typeof c.on === 'boolean' && { on: c.on }),
         ...(Array.isArray(c.lanes) && { lanes: c.lanes.map(l => titles.get(l as string) ?? String(l)) }),
@@ -230,6 +303,25 @@ export function teamRoutes(
         ...(typeof c.muted === 'boolean' && { muted: c.muted }),
         // The session by the board's own name for it, never the one the asker gave.
         ...(listener && { listener: router?.sessionName(listener) ?? `a session (${listener.slice(0, 8)})` }),
+      }
+    }
+    if (a.kind === 'welcome') {
+      const titles = new Map(lanes().categories.map(x => [x.id, categoryInfo(lanes(), x.id).title]))
+      const all = readThreads()
+      return {
+        kind: a.kind,
+        who: team.nameOf(a.peer),
+        ...(a.on !== undefined && { on: a.on }),
+        ...(a.lanes && { lanes: a.lanes.map(l => titles.get(l) ?? l) }),
+        channels: a.channels.map(k => (Object.hasOwn(all, k) ? (all[k]?.title ?? k) : k)),
+      }
+    }
+    if (a.kind === 'members') {
+      const all = readThreads()
+      return {
+        kind: a.kind,
+        channel: Object.hasOwn(all, a.key) ? (all[a.key]?.title ?? '') : '',
+        members: a.add.map(m => team.nameOf(m)),
       }
     }
     if (a.kind === 'passkey-remove')
@@ -267,7 +359,7 @@ export function teamRoutes(
         const body = isRecord(raw) ? raw : {}
         if (typeof body.to !== 'string' || typeof body.text !== 'string') return json(400, { ok: false, error: 'body' })
         if (!isTarget(body.to)) return json(400, { ok: false, error: 'peer' })
-        const thread = threadFrom(body.thread)
+        const thread = threadFrom(body.thread, true)
         if (thread === null) return json(400, { ok: false, error: 'thread' })
         // What the send would refuse is refused before it waits for a passkey.
         const words = body.text.trim()
@@ -449,8 +541,112 @@ export function teamRoutes(
         return json(r.status, r.body)
       },
     },
+    {
+      // A channel this board started takes more members (#355): { add: [peer ids] }. More boards
+      // read it from then on, so it waits for the passkey as widening does.
+      method: 'POST',
+      path: /^\/api\/team\/threads\/team\/([^/]+)\/members$/,
+      async handle(req, ctx) {
+        if (!team.view()) return undefined
+        const refused = ctx.refuse('board-header') ?? ctx.refuse('origin')
+        if (refused) return refused
+        const [id = ''] = ctx.params
+        if (!isMessageId(id)) return json(400, { ok: false, error: 'thread' })
+        const raw = await ctx.rawBody()
+        const add = isRecord(raw) ? raw.add : undefined
+        if (!Array.isArray(add) || !add.length || !add.every(isPeerId)) return json(400, { ok: false, error: 'body' })
+        const key = threadKey(TEAM, id)
+        if (!isChannel(key)) return json(404, { ok: false, error: 'thread' })
+        const action: OwnerAction = { kind: 'members', key, add }
+        const wait = held(req, action)
+        if (wait) return wait
+        const r = await perform(action)
+        return json(r.status, r.body)
+      },
+    },
+    {
+      // Who joined the team since this board began keeping welcomes, and is not welcomed yet (#355).
+      method: 'GET',
+      path: '/api/team/welcome',
+      handle() {
+        const view = team.view()
+        if (!view) return undefined
+        const { since, done } = readWelcomed(Date.now())
+        const pins = readPins()
+        // A key that changed is not welcomed: it may be someone else's until the owner trusts it.
+        const pending = view.roster
+          .map(p => p.peer)
+          .filter(
+            peer => !Object.hasOwn(done, peer) && pins[peer]?.status === 'trusted' && (pins[peer]?.at ?? 0) > since,
+          )
+        return json(200, { pending })
+      },
+    },
+    {
+      // The welcome screen settled (#355): { peer, on?, lanes?, channels? }, checked whole before
+      // anything changes; what widens waits for the passkey, then the person's switches, the
+      // channels they join, and the mark, in one go.
+      method: 'POST',
+      path: '/api/team/welcome',
+      async handle(req, ctx) {
+        const view = team.view()
+        if (!view) return undefined
+        const refused = ctx.refuse('board-header') ?? ctx.refuse('origin')
+        if (refused) return refused
+        const raw = await ctx.rawBody()
+        const w = welcomeFrom(isRecord(raw) ? raw : {}, view.roster, lanes())
+        if (!w.ok) return json(400, w)
+        const action: OwnerAction = {
+          kind: 'welcome',
+          peer: w.peer,
+          ...(w.on !== undefined && { on: w.on }),
+          ...(w.lanes !== undefined && { lanes: w.lanes }),
+          channels: w.channels,
+        }
+        if (widens(readAgents(), { peer: w.peer, on: w.on, lanes: w.lanes, channels: w.channels })) {
+          const wait = held(req, action)
+          if (wait) return wait
+        }
+        const r = await perform(action)
+        return json(r.status, r.body)
+      },
+    },
     ...(confirm ? confirmRoutes(team, confirm, describe, perform) : []),
   ]
+}
+
+/** A welcome's body, checked whole: a roster peer, agents on or off, this board's lanes, channels it started. */
+function welcomeFrom(
+  body: Record<string, unknown>,
+  roster: { peer: string }[],
+  cfg: Pick<Config, 'categories'>,
+):
+  | { ok: true; peer: string; on: boolean | undefined; lanes: string[] | undefined; channels: string[] }
+  | { ok: false; error: string } {
+  const peer = body.peer
+  if (!isPeerId(peer) || !roster.some(p => p.peer === peer)) return { ok: false, error: 'peer' }
+  if (readPins()[peer]?.status !== 'trusted') return { ok: false, error: 'changed' }
+  if (body.on !== undefined && typeof body.on !== 'boolean') return { ok: false, error: 'body' }
+  const known = new Set(cfg.categories.map(c => c.id))
+  if (body.lanes !== undefined && !(Array.isArray(body.lanes) && body.lanes.every(l => known.has(l))))
+    return { ok: false, error: 'lanes' }
+  const all = readThreads()
+  const channels = body.channels ?? []
+  if (
+    !Array.isArray(channels) ||
+    !channels.every(k => {
+      const c = typeof k === 'string' && Object.hasOwn(all, k) ? all[k] : undefined
+      return !!c?.members && c.by === 'me' && (c.members.includes(peer) || c.members.length < MAX_MEMBERS)
+    })
+  )
+    return { ok: false, error: 'channels' }
+  return {
+    ok: true,
+    peer,
+    on: typeof body.on === 'boolean' ? body.on : undefined,
+    lanes: Array.isArray(body.lanes) ? [...new Set(body.lanes as string[])] : undefined,
+    channels: [...new Set(channels as string[])],
+  }
 }
 
 /**

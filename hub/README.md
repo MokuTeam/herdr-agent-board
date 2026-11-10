@@ -118,7 +118,8 @@ authenticated, not even the roster. A second connection of the same peer replace
 4409). Close codes: 4400 bad request, 4401 unknown or bad signature, 4403 revoked or bad invite. What
 is signed, and the checks on it, are in `src/core/team.ts`, which the hub and the board both import.
 
-Since #216 a board says in its `hello` what it understands (`caps`, today `["threads"]`); the hub
+Since #216 a board says in its `hello` what it understands (`caps`, today `["threads", "channels"]`,
+the second since #355); the hub
 keeps that per member (the `caps` column, schema 2) and passes it on in the roster and with a
 member's presence, so a board sends threads only to boards that read them. The hub relays a
 message's body as signed: it holds `text` to its limits (1 to 4000 characters, the envelope to

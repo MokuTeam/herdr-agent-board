@@ -19,8 +19,10 @@ export const MAX_DRAFTS = 20
  * roster (#216). `threads`: topic threads, team threads and the agent's session name in the body
  * (Message.body.thread, .agent). A board sends those only to a peer whose caps say so; a peer
  * without them (an older board, or any peer while the hub is older) gets the plain body.
+ * `channels` (#355): a team thread with a member list (ThreadRef.members), sent only to them; a
+ * member whose board does not say so gets the post as a plain message in their pair's general.
  */
-export const CAPS = ['threads'] as const
+export const CAPS = ['threads', 'channels'] as const
 export type Cap = (typeof CAPS)[number]
 export const MAX_CAPS = 8
 export const MAX_CAP = 32
@@ -28,13 +30,20 @@ export const MAX_CAP = 32
 export const GENERAL = 'general'
 export const MAX_TITLE = 80
 export const MAX_LINK = 300
+/** A channel's members, its creator among them, at most (#355). */
+export const MAX_MEMBERS = 32
 
-/** The thread a message belongs to (#216): `id` a UUID or GENERAL; a title for a topic; `group` for the team's. */
+/**
+ * The thread a message belongs to (#216): `id` a UUID or GENERAL; a title for a topic; `group` for
+ * the team's. `members` (#355): a channel, a team topic for these boards only (peer ids, sorted, the
+ * sender's and the recipient's among them).
+ */
 export interface ThreadRef {
   id: string
   title?: string
   link?: string
   group?: true
+  members?: string[]
 }
 
 export const MAX_ENVELOPE_BYTES = 16 * 1024
