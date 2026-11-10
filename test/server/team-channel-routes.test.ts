@@ -1,8 +1,10 @@
 // Channels and a new member's welcome on a running board (#355), with a hub in this process: the
 // panel's send starts a channel for some members (only they get a copy), a channel has switches of
 // its own, the creator adds a member, and a member who joins after the board began keeping
-// welcomes is offered one screen whose body is checked whole before anything changes. The board
-// runs in a sandbox whose PowerShell is missing, so no notification reaches this computer's desktop.
+// welcomes is offered one screen whose body is checked whole before anything changes. What widens
+// (a send, Agents on, a lane, a channel's members, a welcome) waits for the owner's passkey (#224):
+// a soft authenticator answers the confirmation window here. The board runs in a sandbox whose
+// PowerShell is missing, so no notification reaches this computer's desktop.
 import { afterAll, beforeAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -11,6 +13,7 @@ import { teamInbox } from '../../src/entrypoints/team-inbox-cli.ts'
 import { type Harness, msgOf, startHarness } from '../hub/harness.ts'
 import { serveBoard } from '../support/board-server.ts'
 import { sandbox } from '../support/sandbox.ts'
+import { softAuthenticator } from '../support/soft-authenticator.ts'
 
 setDefaultTimeout(60_000)
 
@@ -56,6 +59,28 @@ test('a channel for some members, its switches, a member added, and a newcomer w
     })
     return [r.status, await r.json()] as [number, Record<string, unknown>]
   }
+  // The owner's passkey (#224): its window is on http://localhost:<port>, answered by a soft key.
+  const key = await softAuthenticator(-7)
+  const local = `http://localhost:${new URL(url).port}`
+  const confirmed = async (id: string): Promise<[number, Record<string, unknown>]> => {
+    const v = (await (await fetch(`${url}/api/team/confirm/${id}`)).json()) as {
+      step: string
+      options: { challenge: string }
+    }
+    const at = { challenge: v.options.challenge, origin: local, rpId: 'localhost' }
+    const cred = v.step === 'create' ? key.register(at) : key.assert(at)
+    const r = await fetch(`${url}/api/team/confirm/${id}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1', origin: local },
+      body: JSON.stringify({ ...cred, type: 'public-key' }),
+    })
+    return [r.status, await r.json()] as [number, Record<string, unknown>]
+  }
+  /** As the panel does it: asked, then confirmed in the window when the board says so. */
+  const owner = async (path: string, body: unknown): Promise<[number, Record<string, unknown>]> => {
+    const [status, reply] = await post(path, body)
+    return status === 428 ? confirmed(String(reply.id)) : [status, reply]
+  }
   const rosterHas = (n: number) =>
     waitFor(
       () => get('/api/team'),
@@ -65,16 +90,22 @@ test('a channel for some members, its switches, a member added, and a newcomer w
   await rosterHas(2)
   // The board begins keeping welcomes now: who is here already is not offered one.
   expect(await get('/api/team/welcome')).toEqual({ pending: [] })
+  // No passkey yet: what widens is refused; then the owner adds one.
+  expect(await post('/api/team/send', { to: 'team', text: 'x', thread: { title: 'T', members: [ana.pub] } })).toEqual([
+    403,
+    { ok: false, error: 'passkey' },
+  ])
+  expect((await owner('/api/team/passkeys', { op: 'add' }))[0]).toBe(200)
 
   // A channel with Ana only: Ben gets nothing.
-  const [status, sent] = await post('/api/team/send', {
+  const [status, sent] = await owner('/api/team/send', {
     to: 'team',
     text: 'the deal closes friday',
     thread: { title: 'Deals', members: [ana.pub] },
   })
   expect(status).toBe(200)
-  const key = String(sent.thread)
-  const id = key.split('/')[1] as string
+  const channel = String(sent.thread)
+  const id = channel.split('/')[1] as string
   const delivered = await anaClient.take('deliver', 5000)
   const msg: Message = msgOf(delivered.env)
   expect(msg.body.thread).toEqual({ id, title: 'Deals', group: true, members: [me.pub, ana.pub].sort() })
@@ -93,14 +124,19 @@ test('a channel for some members, its switches, a member added, and a newcomer w
   ).toBe(400)
 
   // Its own switches, by its key; a mute is the thread's, not the switches'.
-  expect((await post('/api/team/agents', { peer: key, on: true, lanes: ['other'] }))[0]).toBe(200)
-  expect((await post('/api/team/agents', { peer: key, muted: true }))[0]).toBe(400)
+  expect((await owner('/api/team/agents', { peer: channel, on: true, lanes: ['other'] }))[0]).toBe(200)
+  expect((await post('/api/team/agents', { peer: channel, muted: true }))[0]).toBe(400)
   expect((await post('/api/team/agents', { peer: 'team/general', on: true }))[0]).toBe(400)
   const agents = (await get('/api/team/agents')) as { peers: Record<string, { on: boolean; lanes: string[] }> }
-  expect(agents.peers[key]).toEqual({ on: true, lanes: ['other'] })
+  expect(agents.peers[channel]).toEqual({ on: true, lanes: ['other'] })
 
   // The creator adds Ben; a thread that is no channel takes no members.
-  expect(await post(`/api/team/threads/team/${id}/members`, { add: [ben.pub] })).toEqual([200, { ok: true }])
+  // Adding a member widens who reads it: the window says which channel and whom.
+  const [asked, ask] = await post(`/api/team/threads/team/${id}/members`, { add: [ben.pub] })
+  expect(asked).toBe(428)
+  const shownAsk = (await (await fetch(`${url}/api/team/confirm/${ask.id}`)).json()) as { action: unknown }
+  expect(shownAsk.action).toEqual({ kind: 'members', channel: 'Deals', members: ['ben'] })
+  expect(await confirmed(String(ask.id))).toEqual([200, { ok: true, done: true }])
   expect((await post('/api/team/threads/team/general/members', { add: [ben.pub] }))[0]).toBe(400)
   const shown = (await get(`/api/team/threads/team/${id}`)) as { thread: { members: string[] } }
   expect(shown.thread.members).toEqual([me.pub, ana.pub, ben.pub].sort())
@@ -121,7 +157,7 @@ test('a channel for some members, its switches, a member added, and a newcomer w
   expect(await post('/api/team/welcome', { peer: cleo.pub, on: true })).toEqual([400, { ok: false, error: 'changed' }])
   writeFileSync(pinsFile, pins)
   for (const bad of [
-    { peer: cleo.pub, on: true, lanes: ['nope'], channels: [key] },
+    { peer: cleo.pub, on: true, lanes: ['nope'], channels: [channel] },
     { peer: cleo.pub, on: true, lanes: ['other'], channels: ['team/general'] },
     { peer: (await generateKey()).pub, on: true },
     { peer: cleo.pub, on: 'yes' },
@@ -129,10 +165,17 @@ test('a channel for some members, its switches, a member added, and a newcomer w
     expect((await post('/api/team/welcome', bad))[0]).toBe(400)
   const untouched = (await get('/api/team/agents')) as { peers: Record<string, unknown> }
   expect(untouched.peers[cleo.pub]).toBeUndefined()
-  expect(await post('/api/team/welcome', { peer: cleo.pub, on: true, lanes: ['other'], channels: [key] })).toEqual([
-    200,
-    { ok: true },
-  ])
+  // A welcome that widens waits for the passkey; the window lists all of it.
+  const [waits, pending] = await post('/api/team/welcome', {
+    peer: cleo.pub,
+    on: true,
+    lanes: ['other'],
+    channels: [channel],
+  })
+  expect(waits).toBe(428)
+  const shownWelcome = (await (await fetch(`${url}/api/team/confirm/${pending.id}`)).json()) as { action: unknown }
+  expect(shownWelcome.action).toEqual({ kind: 'welcome', who: 'cleo', on: true, lanes: ['Other'], channels: ['Deals'] })
+  expect(await confirmed(String(pending.id))).toEqual([200, { ok: true, done: true }])
   const after = (await get('/api/team/agents')) as { peers: Record<string, unknown> }
   expect(after.peers[cleo.pub]).toEqual({ on: true, lanes: ['other'] })
   const joined = (await get(`/api/team/threads/team/${id}`)) as { thread: { members: string[] } }
