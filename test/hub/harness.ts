@@ -74,8 +74,11 @@ export class Client {
   private ws: WebSocket
   ready: Promise<void>
 
-  constructor(url: string) {
-    this.ws = new WebSocket(url)
+  /** `headers`: sent with the upgrade request, as a reverse proxy in front of the hub would. */
+  constructor(url: string, headers?: Record<string, string>) {
+    // Bun's WebSocket takes headers as an option, which the DOM type does not know.
+    type BunWebSocket = new (url: string, options: { headers: Record<string, string> }) => WebSocket
+    this.ws = headers ? new (WebSocket as unknown as BunWebSocket)(url, { headers }) : new WebSocket(url)
     this.ready = new Promise((res, rej) => {
       this.ws.onopen = () => res()
       this.ws.onerror = () => rej(new Error('socket error'))
@@ -144,12 +147,15 @@ export interface Harness {
   stop(): void
 }
 
-export async function startHarness(): Promise<Harness> {
+/** `trustProxy`: the server's own option; `headers`: what every client sends with its upgrade request. */
+export async function startHarness(
+  opts: { trustProxy?: boolean; headers?: Record<string, string> } = {},
+): Promise<Harness> {
   const db = openDb(':memory:')
   const clock = fakeClock()
   const logs: string[] = []
   const hub = createHub({ db, clock, log: m => logs.push(m) })
-  const server = startServer({ hub, hostname: '127.0.0.1', port: 0 })
+  const server = startServer({ hub, hostname: '127.0.0.1', port: 0, trustProxy: opts.trustProxy === true })
   const url = `ws://127.0.0.1:${server.port}/v1`
   const clients: Client[] = []
   const hubId = db.hubId()
@@ -164,7 +170,7 @@ export async function startHarness(): Promise<Harness> {
     clients,
     invite: (ttl = 3_600_000) => db.createInvite(clock.now(), ttl, null).code,
     connect: async () => {
-      const c = new Client(url)
+      const c = new Client(url, opts.headers)
       clients.push(c)
       await c.ready
       return c

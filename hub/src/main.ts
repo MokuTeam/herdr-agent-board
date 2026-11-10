@@ -1,7 +1,8 @@
-// The hub: `bun hub/src/main.ts [--dir D] [--listen host:port] [--allow-public] [--keep-days N]`. It keeps its
-// store, its admin socket and its key-less identity (a random hub id) in --dir, by default
-// ~/.local/state/hab-hub, and listens on 127.0.0.1:7443. Anything but loopback and Tailscale
-// addresses needs --allow-public.
+// The hub: `bun hub/src/main.ts [--dir D] [--listen host:port] [--allow-public] [--trust-proxy] [--keep-days N]`.
+// It keeps its store, its admin socket and its key-less identity (a random hub id) in --dir, by
+// default ~/.local/state/hab-hub, and listens on 127.0.0.1:7443. Anything but loopback and Tailscale
+// addresses needs --allow-public. --trust-proxy: a reverse proxy on this machine forwards to the
+// hub, and the log shows the address it forwards (listen.ts).
 import { chmodSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEFAULT_DIR, startAdmin } from './admin.ts'
@@ -10,7 +11,8 @@ import { createHub, realClock } from './hub.ts'
 import { DEFAULT_LISTEN, isPrivateHost, parseListen } from './listen.ts'
 import { startServer } from './server.ts'
 
-const USAGE = 'usage: bun hub/src/main.ts [--dir D] [--listen host:port] [--allow-public] [--keep-days N]'
+const USAGE =
+  'usage: bun hub/src/main.ts [--dir D] [--listen host:port] [--allow-public] [--trust-proxy] [--keep-days N]'
 
 function fail(msg: string): never {
   console.error(`agent-board hub: ${msg}`)
@@ -20,6 +22,7 @@ function fail(msg: string): never {
 let dir = DEFAULT_DIR
 let listen = DEFAULT_LISTEN
 let allowPublic = false
+let trustProxy = false
 let keepDays = DEFAULT_KEEP_DAYS
 const argv = process.argv.slice(2)
 for (let i = 0; i < argv.length; i++) {
@@ -35,6 +38,7 @@ for (let i = 0; i < argv.length; i++) {
         fail(`--keep-days is a whole number of ${MIN_KEEP_DAYS} or more (messages live up to 7 days), not ${v}`)
     }
   } else if (a === '--allow-public') allowPublic = true
+  else if (a === '--trust-proxy') trustProxy = true
   else fail(USAGE)
 }
 
@@ -54,7 +58,7 @@ try {
 } catch (e) {
   log(`prune failed: ${e instanceof Error ? e.message : e}`)
 }
-const server = startServer({ hub, hostname: where.hostname, port: where.port })
+const server = startServer({ hub, hostname: where.hostname, port: where.port, trustProxy })
 let admin: ReturnType<typeof startAdmin> | undefined
 try {
   admin = startAdmin({ dir, db, hub, clock: realClock })

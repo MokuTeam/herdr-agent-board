@@ -64,7 +64,8 @@ export interface HubOptions {
 }
 
 export interface Hub {
-  open(conn: Conn): ConnHandle
+  /** `from`: the address the connection came from, for the log only. */
+  open(conn: Conn, from?: string): ConnHandle
   /** Revokes a peer by id or by name, closes its connection at once; null when there is no active one. */
   revoke(ref: string): PeerRow | null
   online(peer: string): boolean
@@ -247,7 +248,8 @@ export function createHub(opts: HubOptions): Hub {
     }
   }, PRUNE_MS)
 
-  const open: Hub['open'] = conn => {
+  const open: Hub['open'] = (conn, from) => {
+    const fromWhere = from ? ` from ${from}` : ''
     handles.add(conn)
     let state: 'await_hello' | 'await_auth' | 'authed' = 'await_hello'
     let peer = ''
@@ -262,7 +264,7 @@ export function createHub(opts: HubOptions): Hub {
     }, CHALLENGE_LIVES_MS)
 
     const refuse = (code: ErrorCode, message: string, closeWith: number) => {
-      log(`refused ${peer.slice(0, 8) || '-'}: ${code}`)
+      log(`refused ${peer.slice(0, 8) || '-'}: ${code}${fromWhere}`)
       fail(conn, code, message, closeWith)
     }
 
@@ -283,7 +285,7 @@ export function createHub(opts: HubOptions): Hub {
       if (!old)
         for (const s of sessions.values())
           if (s.peer !== row.id) put(s.conn, { t: 'presence', peer: row.id, online: true, at: clock.now() })
-      log(`online ${row.id.slice(0, 8)} ${row.name}`)
+      log(`online ${row.id.slice(0, 8)} ${row.name}${fromWhere}`)
     }
 
     const challenged = (): boolean => {
