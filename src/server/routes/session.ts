@@ -17,6 +17,7 @@ import { t } from '../../core/lang.ts'
 import { checkName } from '../../core/launch/names.ts'
 import type { MessageGate } from '../../core/message-gate.ts'
 import type { Viewer } from '../../core/mokupilot-mode.ts'
+import { pause } from '../../core/pace.ts'
 import { isPiItem } from '../../core/pi.ts'
 import type { QueuedPrompt, QueueWindow } from '../../core/queue.ts'
 import type { Item, Pin } from '../../core/types.ts'
@@ -152,7 +153,7 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
  * seconds before it counts as gone.
  */
 async function freshItem(deps: Deps, item: Item): Promise<Item | undefined> {
-  for (const deadline = Date.now() + namedWaitMs(); ; await Bun.sleep(NAMED_POLL_MS)) {
+  for (const deadline = Date.now() + namedWaitMs(); ; await pause(NAMED_POLL_MS)) {
     const fresh = (await collect(deps)).find(next => next.key === item.key)
     if (fresh || !item.sleeping || Date.now() >= deadline) return fresh
   }

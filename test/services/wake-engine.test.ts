@@ -29,7 +29,11 @@ const outside = () => ({
   CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
   homedir: homedir(),
 })
-const OUTSIDE = outside()
+// As this file loads, homedir() can still give an earlier file's temp home: under bun's per-file
+// isolation (--parallel) a home that file set and put back in process.env reaches homedir() only
+// once a test here sets one again (#358). The home the environment names is the one found here.
+const found = outside()
+const OUTSIDE = { ...found, homedir: (process.platform === 'win32' ? found.USERPROFILE : found.HOME) || found.homedir }
 
 const SID3 = '1b2c3d4e-5f60-4718-8a9b-c0d1e2f3a4b5'
 const SID4 = '2c3d4e5f-6071-4829-9bac-d1e2f3a4b5c6'

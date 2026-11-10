@@ -56,6 +56,14 @@ function linesOf(child: SshChild): string[] {
 
 const ICACLS = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe')
 const WHOAMI = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'whoami.exe')
+// #226: icacls names a group in the system's language, and the rights test reads the English names
+// (in another language its "nobody else" checks would pass without looking). It runs where Windows
+// calls the Users group (S-1-5-32-545) BUILTIN\Users.
+const englishGroups =
+  process.platform === 'win32' &&
+  /^"BUILTIN\\Users","[^"]*","S-1-5-32-545"/m.test(
+    Bun.spawnSync([WHOAMI, '/groups', '/fo', 'csv', '/nh']).stdout.toString(),
+  )
 const icacls = (...args: string[]): string => {
   const r = Bun.spawnSync([ICACLS, ...args])
   if (r.exitCode !== 0) throw new Error(`icacls ${args.join(' ')}: ${r.stdout.toString()}${r.stderr.toString()}`)
@@ -227,7 +235,7 @@ test("the server's key: none before the first connection, the pinned one's finge
   forgetHostKey()
 })
 
-test.skipIf(process.platform !== 'win32')(
+test.skipIf(!englishGroups)(
   "Windows: the generated key and a protected one are the user's alone; a key the owner points to keeps its rights",
   async () => {
     const fake = await useFakeSsh()

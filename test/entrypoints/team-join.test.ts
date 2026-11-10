@@ -23,9 +23,9 @@ const writeConfig = (box: Sandbox, value: Record<string, unknown>): void => {
   writeFileSync(configPath(box), JSON.stringify({ language: 'en', wakeUrl: '', port: 9, ...value }, null, 2))
 }
 const configOf = (box: Sandbox): Record<string, unknown> => JSON.parse(readFileSync(configPath(box), 'utf8'))
-/** One try waits 1.5 s here, not 10. */
+/** One try waits 1.5 s here, not 10; the pause between tries a fiftieth of its 1 s, 2 s (core/pace.ts). */
 const board = (box: Sandbox, args: string[], env: Record<string, string> = {}): Promise<ChildResult> =>
-  box.run('cli', { args, env: { BOARD_TEAM_JOIN_MS: '1500', ...env } }).exited
+  box.run('cli', { args, env: { BOARD_TEAM_JOIN_MS: '1500', BOARD_TEST_PACE: '0.02', ...env } }).exited
 const keyOf = (box: Sandbox): { pkcs8: string; pub: string } =>
   JSON.parse(readFileSync(join(stateOf(box), 'team-key.json'), 'utf8'))
 

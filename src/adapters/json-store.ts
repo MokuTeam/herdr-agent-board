@@ -25,6 +25,16 @@ export function readJson<T>(path: string, guard: Guard<T>): T | null {
 // (a closed terminal, a hook cut off): it is taken over, or that file could never be written
 // again. Two writers taking over the same dead lock at the same instant is the one race left.
 const LOCK_TIMEOUT_MS = 2000
+
+/**
+ * How long a writer waits for a lock another holds: BOARD_LOCK_TIMEOUT_MS (tests only, unset in
+ * production) when a whole number of ms above 0, else 2 s. A test of a lock that stays held needs
+ * the refusal, not the 2 s (#358).
+ */
+function lockTimeoutMs(): number {
+  const ms = Number(process.env.BOARD_LOCK_TIMEOUT_MS)
+  return Number.isInteger(ms) && ms > 0 ? ms : LOCK_TIMEOUT_MS
+}
 const LOCK_STALE_MS = 30_000
 const pause = new Int32Array(new SharedArrayBuffer(4))
 
@@ -38,7 +48,7 @@ function lockAge(lock: string): number {
 
 function lockFile(path: string, recoverStale = true): () => void {
   const lock = `${path}.lock`
-  const deadline = performance.now() + LOCK_TIMEOUT_MS
+  const deadline = performance.now() + lockTimeoutMs()
   for (;;) {
     try {
       mkdirSync(lock)

@@ -50,11 +50,12 @@ describe('send', () => {
           await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
           try {
             cfg.wakeUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-            // The wait for herdr to name a just woken session, 3 s instead of 15.
+            // The wait for herdr to name a just woken session, 2 s instead of 15, asked every 10 ms
+            // in place of 500 (core/pace.ts): `late` is named on herdr's third read, well inside it.
             const out = await box.run(
               'send',
               { item: { pane: 'pane1', session: 'expected', name: 'Test', sleeping }, cfg, text: '-hello' },
-              { BOARD_NAMED_WAIT_MS: '3000' },
+              { BOARD_NAMED_WAIT_MS: '2000', BOARD_TEST_PACE: '0.02' },
             ).exited
             assert.equal(out.code, 0, out.stderr)
             assert.equal(JSON.parse(out.stdout).ok, sent)

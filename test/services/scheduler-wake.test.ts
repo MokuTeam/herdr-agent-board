@@ -64,6 +64,9 @@ const prompts = (box: Sandbox): string[] =>
     .filter(c => c[0] === 'agent' && c[1] === 'prompt')
     .map(c => c[3] as string)
 
+// Wake stays slow here: the board gives up on it at 500 ms in place of 2 s (BOARD_WAKE_ANSWER_MS).
+const SLOW_WAKE = { BOARD_WAKE_ANSWER_MS: '500' }
+
 async function scheduler(box: Sandbox, cfg: Record<string, unknown>, env: Record<string, string> = {}) {
   const proc = box.run(
     'scheduler',
@@ -108,7 +111,7 @@ test('a reminder for a sleeper waits while wake is slow, and is not counted miss
   await scheduler(
     box,
     { wake: { enabled: true, port: wake.port }, profiles: list, scheduleWaitMin: 0.001 },
-    boardOnPath(box),
+    { ...boardOnPath(box), ...SLOW_WAKE },
   )
   const asked = (): number => wake.requests().filter(q => q.method === 'GET' && q.path === '/alive').length
   await until(() => asked() >= 3 && read(box, 'eeee01')?.why === 'wake', 30_000)
@@ -140,7 +143,11 @@ test('a restart in its wake step waits while wake is slow, its tries not counted
   wake.slow = true
   wakeRuns(box)
   put(box, { id: 'eeee06', kind: 'restart', idle: true, by: 'agent', text: 'my note', step: 'wake' })
-  await scheduler(box, { wake: { enabled: true, port: wake.port }, profiles: list }, boardOnPath(box))
+  await scheduler(
+    box,
+    { wake: { enabled: true, port: wake.port }, profiles: list },
+    { ...boardOnPath(box), ...SLOW_WAKE },
+  )
   const asked = (): number => wake.requests().filter(q => q.method === 'GET' && q.path === '/alive').length
   // More than RESTART_TRIES (3) times: a counted retry would have given up by now.
   await until(() => asked() >= 4 && read(box, 'eeee06')?.why === 'wake', 30_000)

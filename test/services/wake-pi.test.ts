@@ -3,7 +3,7 @@
 // goes to sleep, all its processes are stopped, what wakes it is kept on disk and survives a
 // restart of wake and of herdr, it wakes on the same session file and account in its pane or in a
 // new tab, and Claude's answers stay as they were.
-import { expect, test } from 'bun:test'
+import { test as bunTest, expect } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ProcRow, ProcSys } from '../../src/adapters/pi-processes.ts'
@@ -201,6 +201,11 @@ function world(
   }
   return { dir, home, project, file, piFile, io, pane, ops, live, signals, tabs, log, clock, deps }
 }
+
+// #184: the fixture names pi's session folder after the cwd with only its slashes replaced, so on
+// Windows it keeps the drive's colon (C:), which a file name cannot have: every test here fails
+// there before it checks anything. Skipped on Windows until #184 is fixed.
+const test = bunTest.skipIf(process.platform === 'win32')
 
 const readPis = (w: World): PiSleepers => JSON.parse(readFileSync(w.piFile, 'utf8'))
 const typed = (io: FakeWakeHerdr): string[][] =>

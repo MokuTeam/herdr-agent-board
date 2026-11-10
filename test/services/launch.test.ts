@@ -390,7 +390,9 @@ async function boardServer(cfg: Of<Record<string, unknown>> = {}, env: Of<Record
       refreshSec: 3600,
       ...(typeof cfg === 'function' ? cfg(box) : cfg),
     },
-    typeof env === 'function' ? env(box) : env,
+    // The fake herdr answers at once: the launch's polls and pauses (meant for a real Claude) run
+    // at a fiftieth (core/pace.ts). Its deadlines (launch.timeoutSec) are not paced.
+    { BOARD_TEST_PACE: '0.02', ...(typeof env === 'function' ? env(box) : env) },
   )
   await until(() => proc.messages.some(m => (m as { ready?: boolean }).ready))
   const url = `http://127.0.0.1:${port}`
@@ -996,6 +998,10 @@ test('dismissing a running launch takes it off the board; it goes on and its ses
 
 // ---------------------------------------------------------------- Claude's folder-trust dialog
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+// The trust tests act between the board's polls: the fake herdr's screens follow its call count
+// (`seq`), and a paced board reads them all before the test asks for "Trust". They keep the pace
+// of a real launch.
+const UNPACED = { BOARD_TEST_PACE: '1' }
 const blocked = { result: { agent: { agent_session: { value: null }, agent_status: 'blocked', name: 'x' } } }
 const idle = { result: { agent: { agent_session: { value: null }, agent_status: 'idle', name: 'x' } } }
 type Box = Awaited<ReturnType<typeof sandbox>>
@@ -1025,7 +1031,7 @@ async function launchState(
 }
 
 test('Claude asks to trust a new folder: the launch waits on its card, and on request moves the cursor it sees to "Yes", then names and briefs it', async () => {
-  const { box, post, board, launched, started } = await boardServer(VIA_HERDR)
+  const { box, post, board, launched, started } = await boardServer(VIA_HERDR, UNPACED)
   const dir = join(box.dir, 'a fresh project') // a space: Claude may break the line there
   mkdirSync(dir)
   const dialog = (selected: 'no' | 'yes') => ({ text: trustScreen(dir, { selected, width: 30 }) })
@@ -1101,11 +1107,14 @@ test('"Close the tab" closes it and drops the launch; "Trust" refuses a screen w
 test('a launcher that gives up at the trust dialog: the launch is kept, and once trusted the board does what the launcher did not', async () => {
   const box0 = await sandbox()
   const record = join(box0.dir, 'launcher.json')
-  const { box, post, board, launched, started } = await boardServer({
-    launch: {
-      command: [process.execPath, launcher, record, '-Name', '{name}', '-Cwd', '{cwd}', '-Workspace', '{workspace}'],
+  const { box, post, board, launched, started } = await boardServer(
+    {
+      launch: {
+        command: [process.execPath, launcher, record, '-Name', '{name}', '-Cwd', '{cwd}', '-Workspace', '{workspace}'],
+      },
     },
-  })
+    UNPACED,
+  )
   const dir = join(box.dir, 'Will fail here')
   mkdirSync(dir)
   // The stand-in fails like spawn-agent: "Claude in wT:p9 waits for a dialog (folder trust?)".

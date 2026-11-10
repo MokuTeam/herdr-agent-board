@@ -10,6 +10,7 @@
 import { randomBytes } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 import type { PidRecord, SshChild } from '../adapters/ssh.ts'
+import { pace } from '../core/pace.ts'
 import {
   backoffMs,
   forwardAccepted,
@@ -427,7 +428,7 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
       h.connectedAt = clock.now()
       d.log('tunnel: connected')
       set({ state: 'connected', since: h.connectedAt })
-      probeIn(h, PROBE_FIRST_MS)
+      probeIn(h, PROBE_FIRST_MS * pace())
       return
     }
     keep(h.lines, line)

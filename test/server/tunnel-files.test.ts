@@ -86,11 +86,14 @@ describe('the board’s own files through the tunnel', () => {
    * Every route in the table, each method, once per planted file: its path as `path` and `paths`
    * and the state folder as `cwd`, in the query and, for a POST, in the body. What acts on this
    * computer's screen is left out (the tunnel refuses it; here it would open the file on the
-   * desktop). The requests made, and those whose answer holds the marker.
+   * desktop). The requests made, and those whose answer holds the marker. The requests go one
+   * after another, as before; each answer is read beside the next requests, so an event stream's
+   * second of listening is not waited out route by route (#358).
    */
   async function sweep(send: Send): Promise<{ count: number; holding: string[] }> {
     let count = 0
     const holding: string[] = []
+    const reads: Promise<void>[] = []
     for (const r of routeTable(proc)) {
       const path = rawOf(r.path)
       if (desktopOnly(path)) continue
@@ -99,9 +102,15 @@ describe('the board’s own files through the tunnel', () => {
           const query = `?path=${encodeURIComponent(m)}&paths=${encodeURIComponent(m)}&cwd=${encodeURIComponent(state)}&t=${fsToken}`
           const res = await send(method, path + query, { path: m, paths: [m], cwd: state, url: m })
           count++
-          if ((await textOf(res)).includes(MARKER)) holding.push(`${method} ${path} ${m}`)
+          const at = `${method} ${path} ${m}`
+          reads.push(
+            textOf(res).then(text => {
+              if (text.includes(MARKER)) holding.push(at)
+            }),
+          )
         }
     }
+    await Promise.all(reads)
     return { count, holding }
   }
 

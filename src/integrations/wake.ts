@@ -29,6 +29,14 @@ export interface BoardWake extends SleepProvider {
 const ASK_EVERY_MS = 5000
 /** How long wake has to answer. */
 const ANSWER_MS = 2000
+/**
+ * ANSWER_MS, or BOARD_WAKE_ANSWER_MS (tests only, unset in production) when a whole number of ms
+ * above 0: a test of a wake that stays slow needs the board to give up, not the 2 s (#358).
+ */
+function answerMs(): number {
+  const ms = Number(process.env.BOARD_WAKE_ANSWER_MS)
+  return Number.isInteger(ms) && ms > 0 ? ms : ANSWER_MS
+}
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 /** The port of wake's url, for what the board says. */
@@ -104,7 +112,7 @@ export function createBoardWake(o: {
     askedAt = now()
     try {
       // pi's sleepers too (#178); a wake without them answers /sleeping as before.
-      const res = await fetchFn(`${o.url}/sleeping?agents=all`, { signal: AbortSignal.timeout(ANSWER_MS) })
+      const res = await fetchFn(`${o.url}/sleeping?agents=all`, { signal: AbortSignal.timeout(answerMs()) })
       const list: unknown = res.ok ? await res.json() : null
       answer = Array.isArray(list) ? list.filter(isObject) : null
     } catch {
@@ -122,7 +130,7 @@ export function createBoardWake(o: {
    */
   async function reach(): Promise<Reach> {
     try {
-      const res = await fetchFn(`${o.url}/alive`, { signal: AbortSignal.timeout(ANSWER_MS) })
+      const res = await fetchFn(`${o.url}/alive`, { signal: AbortSignal.timeout(answerMs()) })
       const body: unknown = res.ok ? await res.json() : await res.body?.cancel()
       return isObject(body) && typeof body.pid === 'number' ? 'up' : 'down'
     } catch (err) {
@@ -153,7 +161,7 @@ export function createBoardWake(o: {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ session, dir }),
-          signal: AbortSignal.timeout(ANSWER_MS),
+          signal: AbortSignal.timeout(answerMs()),
         })
         if (res.status === 404) {
           await res.body?.cancel()

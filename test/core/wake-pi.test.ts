@@ -2,7 +2,7 @@
 // goes on with, the line and the command line that wake it, the env it wakes in, the sleepers'
 // file, and which pane is still a sleeper's own.
 import { expect, test } from 'bun:test'
-import { join } from 'node:path'
+import { posix } from 'node:path'
 import { piDraft, piEditor } from '../../src/core/dialogs/pi-dialogs.ts'
 import { piProvider, piSessionCwd, piSessionName, piTurnOver } from '../../src/core/pi.ts'
 import {
@@ -177,11 +177,12 @@ test('the command line it wakes with: pi’s own options, without what starts an
 })
 
 test('the env it wakes in: CLAUDE_CONFIG_DIR for the account it slept with, as board resume sets a Claude session’s', () => {
+  // A Linux home, as pi has it there: its paths with forward slashes on every OS (#184).
   const home = '/home/u'
-  const work = join(home, '.claude-work')
+  const work = posix.join(home, '.claude-work')
   const shell = { PATH: '/bin', CLAUDE_CONFIG_DIR: work }
   // Slept on the personal account; the shell points at Work: unset, so the bridge takes ~/.claude.
-  expect(piResumeEnv(shell, join(home, '.claude'), home, 'linux')).toEqual({ PATH: '/bin' })
+  expect(piResumeEnv(shell, posix.join(home, '.claude'), home, 'linux')).toEqual({ PATH: '/bin' })
   // Slept on Work, a shell with none: set.
   expect(piResumeEnv({ PATH: '/bin' }, work, home, 'linux')).toEqual({ PATH: '/bin', CLAUDE_CONFIG_DIR: work })
   // Already there, spelled another way: as it is.
@@ -189,7 +190,7 @@ test('the env it wakes in: CLAUDE_CONFIG_DIR for the account it slept with, as b
   expect(piResumeEnv(tilde, work, home, 'linux')).toBe(tilde)
   // Not known: as it is.
   expect(piResumeEnv(shell, undefined, home, 'linux')).toBe(shell)
-  expect(accountOf('', home, 'linux')).toBe(join(home, '.claude'))
+  expect(accountOf('', home, 'linux')).toBe(posix.join(home, '.claude'))
   expect(accountOf('~/.claude-work', home, 'linux')).toBe(work)
   expect(accountOf(null, home, 'linux')).toBeUndefined()
   expect(accountOf('relative/dir', home, 'linux')).toBeUndefined()

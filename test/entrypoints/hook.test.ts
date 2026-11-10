@@ -396,12 +396,16 @@ function boardOnPath(box: Sandbox): string {
   return `${bin}${delimiter}${box.env.PATH}`
 }
 
-/** The hook as Claude Code runs it in herdr pane w1:p1; `input` on top of a SessionStart of SID. */
+/**
+ * The hook as Claude Code runs it in herdr pane w1:p1; `input` on top of a SessionStart of SID. A
+ * reporter it starts tries at a fiftieth of its delays (core/pace.ts): its first try comes 20 ms
+ * after it is up, not a second.
+ */
 async function runInHerdr(box: Sandbox, env: Record<string, string>, input: Record<string, unknown> = {}) {
   const { BUN_FEATURE_FLAG_NO_ORPHANS: _, ...plain } = box.env
   const proc = Bun.spawn([process.execPath, join(root, 'src', 'entrypoints', 'hook.ts')], {
     cwd: root,
-    env: { ...plain, HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1', ...env },
+    env: { ...plain, HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1', BOARD_TEST_PACE: '0.02', ...env },
     stdin: new TextEncoder().encode(JSON.stringify({ ...sessionStart(box, SID), ...input })),
     stdout: 'pipe',
     stderr: 'pipe',
@@ -485,8 +489,9 @@ test("every other session keeps herdr's own claude --resume: no reporter, no her
   const team = profileFolder(box, '.claude-team')
   herdrWake(box, team, 'claude-tg --resume {session}')
   await runInHerdr(box, { PATH, CLAUDE_CONFIG_DIR: team })
-  // A reporter would have asked herdr by now (its first try is a second after the start).
-  await Bun.sleep(1800)
+  // A reporter would have asked herdr by now: its first try is 20 ms after it is up (paced), and a
+  // Bun takes well under the rest to start.
+  await Bun.sleep(900)
   expect(box.calls()).toEqual([])
 })
 
@@ -555,7 +560,7 @@ test("in ~/.claude, Telegram off, plain claude or herdr-wake's own hook: herdr's
   // No board on PATH: herdr could not run the command in the restored shell.
   writeFileSync(join(home, '.claude', 'settings.json'), '{}')
   await runInHerdr(box, {})
-  await Bun.sleep(1800)
+  await Bun.sleep(900) // a reporter would have asked herdr by now (see above)
   expect(box.calls()).toEqual([])
 })
 
@@ -568,7 +573,7 @@ test('a wake section with Telegram on but no enabled: reported as wake is by def
     await until(() => reported(box), 8000)
     expect(reported(box)?.slice(-3)).toEqual(['board', 'resume', SID])
   } else {
-    await Bun.sleep(1800)
+    await Bun.sleep(900)
     expect(box.calls()).toEqual([])
   }
 })

@@ -3928,7 +3928,8 @@ repository's full history:
 
 ```sh
 bun install     # react, react-dom and the viewers' libraries, and the dev tools: TypeScript, Biome, the types, jsdom
-bun test        # the whole suite (a couple of minutes); two symlink tests skip without symlink rights
+bun run test    # the whole suite in four workers (about 6 minutes); two symlink tests skip without symlink rights
+bun run test:fast  # the same without the end-to-end files (*.e2e.test.ts: real sh, awk, PowerShell)
 bun run check   # type check (tsc) and lint (Biome)
 ```
 

@@ -4,9 +4,9 @@ import { agentNames, herdr, herdrText } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { inputDraft } from '../../core/dialogs/input-box.ts'
 import { stillTyped } from '../../core/launch/spawn-args.ts'
+import { pause } from '../../core/pace.ts'
 import { PI_NAMING } from '../../core/pi.ts'
 
-const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 const stalled = (err: unknown): boolean => isRecord(err) && /agent_prompt_stalled/.test(`${err.code} ${err.message}`)
 const visible = (pane: string): Promise<string> =>
   herdrText(['pane', 'read', pane, '--source', 'visible'], 5000).catch(() => '')
@@ -30,7 +30,7 @@ export async function typeLine(pane: string, text: string, tries = 3): Promise<b
         await herdr(['pane', 'send-keys', pane, 'enter']).catch(() => {})
         return true
       }
-      await sleep(800)
+      await pause(800)
     }
   }
   return false
@@ -44,7 +44,7 @@ export async function claudeRename(pane: string, name: string): Promise<boolean>
     if (!stalled(err)) throw err
   }
   for (let i = 0; i < 10; i++) {
-    await sleep(500)
+    await pause(500)
     if (/Session renamed/i.test(await visible(pane))) return true
   }
   return false
@@ -63,7 +63,7 @@ export async function piName(pane: string, name: string): Promise<boolean> {
     if (!stalled(err)) throw err
   }
   for (let i = 0; i < 10; i++) {
-    await sleep(500)
+    await pause(500)
     const shown = await visible(pane)
     if (PI_NAMING.done.test(shown)) return true
     if (i === 1 && stillTyped(shown, line)) await herdr(['pane', 'send-keys', pane, 'enter']).catch(() => {})

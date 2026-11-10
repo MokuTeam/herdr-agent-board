@@ -145,7 +145,8 @@ test('wake slow to answer: no second wake is typed, and the user is told why', a
   const { post } = await board(
     box,
     { wake: { enabled: true, port: wake.port }, wakeUrl: null, profiles: list },
-    boardOnPath(box),
+    // Wake stays slow: the board gives up on it at 500 ms in place of 2 s (BOARD_WAKE_ANSWER_MS).
+    { ...boardOnPath(box), BOARD_WAKE_ANSWER_MS: '500' },
   )
   const r = await post(`/api/session/${SID}/wake`)
   assert.equal(r.status, 409)

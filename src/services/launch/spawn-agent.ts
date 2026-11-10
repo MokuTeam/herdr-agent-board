@@ -46,6 +46,7 @@ import {
   stillTyped,
 } from '../../core/launch/spawn-args.ts'
 import { forkCard } from '../../core/links.ts'
+import { pause } from '../../core/pace.ts'
 import { CLAUDE_NAMING, isPiSessionFile, type Naming, namingOf, PI_AGENT } from '../../core/pi.ts'
 import { defaultProfileDir, envRejected, type Profile, type SpawnEnv, spawnEnv } from '../../core/profiles.ts'
 
@@ -57,7 +58,6 @@ export function absoluteDir(p: string): string {
   return resolve(/^~([\\/]|$)/.test(s) ? homedir() + s.slice(1) : s)
 }
 
-const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const isFolder = (path: string): boolean => {
   try {
@@ -88,11 +88,11 @@ async function answerStartup(pane: string, cwd: string, home: string, claudeDirs
     if (key === null) return false
     if (key === '') {
       await herdr(['pane', 'send-keys', pane, 'enter'])
-      await sleep(1500)
+      await pause(1500)
       return true
     }
     await herdr(['pane', 'send-keys', pane, key])
-    await sleep(300)
+    await pause(300)
   }
   return false
 }
@@ -351,7 +351,7 @@ export async function spawnAgent(
   let kind = 'claude'
   let session: string | null = null
   while (Date.now() < deadline) {
-    await sleep(1500)
+    await pause(1500)
     let p: Awaited<ReturnType<typeof paneInfo>>
     try {
       p = await paneInfo(pane, 10_000)
@@ -397,7 +397,7 @@ export async function spawnAgent(
       if (!stalled(err)) log(`${line.split(' ')[0]} in ${pane}: ${messageOf(err)}`)
     }
     for (let i = 0; i < 10; i++) {
-      await sleep(500)
+      await pause(500)
       const shown = await screen(pane)
       if (naming.done.test(shown)) break
       // pi's first Enter on a slash command with an argument can take its completion instead:
@@ -413,7 +413,7 @@ export async function spawnAgent(
   if (text) {
     let sent = false
     for (let i = 1; i <= 3 && !sent; i++) {
-      await sleep(800)
+      await pause(800)
       try {
         await prompt(pane, text)
         sent = true

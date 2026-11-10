@@ -19,11 +19,14 @@ const claudeIn = (session: string) => ({
   result: { agent: { agent: 'claude', agent_status: 'idle', agent_session: { value: session } } },
 })
 
-/** The reporter as the hook starts it, to its end. */
+/**
+ * The reporter as the hook starts it, to its end. Its tries come at a fiftieth of their delays
+ * (core/pace.ts): the fake herdr answers at once, and what counts is their order.
+ */
 async function report(box: Sandbox): Promise<void> {
   const proc = Bun.spawn([process.execPath, join(root, 'src/entrypoints/resume-report.ts'), 'w1:p1', SID, ...COMMAND], {
     cwd: root,
-    env: box.env,
+    env: { ...box.env, BOARD_TEST_PACE: '0.02' },
     stdout: 'pipe',
     stderr: 'pipe',
   })

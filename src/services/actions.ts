@@ -15,6 +15,7 @@ import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
 import { sameDir } from '../core/launch/names.ts'
 import { boardNotice } from '../core/notices.ts'
+import { pause } from '../core/pace.ts'
 import { isPiItem, piTurnOver } from '../core/pi.ts'
 import {
   absoluteProfileDir,
@@ -451,7 +452,7 @@ export function namedWaitMs(): number {
  * answered as it is.
  */
 async function namedAgent(pane: string, session: string | null): Promise<HerdrAgent | null> {
-  for (const deadline = Date.now() + namedWaitMs(); ; await Bun.sleep(NAMED_POLL_MS)) {
+  for (const deadline = Date.now() + namedWaitMs(); ; await pause(NAMED_POLL_MS)) {
     const agent = await agentGet(pane)
     if (!agent || agent.session || !session || Date.now() >= deadline) return agent
   }

@@ -17,6 +17,7 @@ import { ROOT } from '../adapters/paths.ts'
 import { isAlive } from '../adapters/process.ts'
 import { wakeAlive } from '../adapters/wake-api.ts'
 import { boardPaneNow, readWakeStatus, takeWakeStartLock, wakeLog, writeWakeStatus } from '../adapters/wake-files.ts'
+import { pause } from '../core/pace.ts'
 import { wakeConfig, wakeSwitch } from '../core/wake/config.ts'
 import { type BoardPlace, START_DEADLINE_MS, startWake } from '../services/wake/start.ts'
 import { takeOverAtFirstStart } from '../services/wake/takeover.ts'
@@ -101,7 +102,7 @@ const result = await startWake(
     writeStatus: s => writeWakeStatus(s),
     alive: isAlive,
     log,
-    sleep: ms => Bun.sleep(ms),
+    sleep: pause,
     now: Date.now,
     bootedAt,
     root: ROOT,

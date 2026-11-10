@@ -42,6 +42,7 @@ import {
   worktreePath,
 } from '../../core/launch/names.ts'
 import { forkCard } from '../../core/links.ts'
+import { pause } from '../../core/pace.ts'
 import { PI_AGENT } from '../../core/pi.ts'
 import type { Item, LaunchFailure, LaunchState, LaunchStep } from '../../core/types.ts'
 import type { Deps } from '../deps.ts'
@@ -127,7 +128,6 @@ export interface LaunchRunner {
   answerTrust(l: Launch): Promise<TrustAnswer>
 }
 
-const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const ready = (agent: HerdrAgent | null): boolean => agent?.status === 'idle' || agent?.status === 'done'
 
@@ -362,7 +362,7 @@ export function launchRunner({
   async function untilReady(l: Launch, limit: number): Promise<HerdrAgent | null> {
     const deadline = Date.now() + limit
     while (Date.now() < deadline && !l.dismissed && !l.closed) {
-      await sleep(1500)
+      await pause(1500)
       const agent = await agentNow(l)
       if (ready(agent)) return agent
     }
@@ -386,7 +386,7 @@ export function launchRunner({
   async function trustShown(l: Launch, tries = 1): Promise<TrustDialog | null> {
     if (!l.pane) return null
     for (let i = 0; i < tries; i++) {
-      if (i) await sleep(700)
+      if (i) await pause(700)
       const screen = await herdrText(['pane', 'read', l.pane, '--source', 'visible'], 5000).catch(() => '')
       const d = trustDialog(screen)
       if (d && sameFolder(d.folder, l.cwd, homedir())) return d
@@ -404,7 +404,7 @@ export function launchRunner({
     step(l, 'trust')
     const deadline = Date.now() + 30 * 60_000
     while (Date.now() < deadline && !l.dismissed && !l.closed) {
-      await sleep(1500)
+      await pause(1500)
       const agent = await agentNow(l)
       if (ready(agent)) {
         l.state = 'starting'
@@ -484,7 +484,7 @@ export function launchRunner({
           return { ok: true }
         }
         await herdr(['pane', 'send-keys', l.pane, key])
-        await sleep(300)
+        await pause(300)
       }
       return { ok: false, error: t('launch.err.trustCursor') }
     } catch (err) {

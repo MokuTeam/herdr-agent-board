@@ -23,10 +23,14 @@ const STATE = {
   'pane send-keys': { result: null },
 }
 
+// The fake herdr answers at once: spawn-agent's polls and pauses (meant for a real Claude) run at
+// a fiftieth (core/pace.ts). Its deadlines (--timeout) are not paced.
+const PACED = { BOARD_TEST_PACE: '0.02' }
+
 async function runSpawn(box: Sandbox, args: string[], extra: Record<string, string> = {}) {
   const proc = Bun.spawn([process.execPath, SPAWN, ...args], {
     cwd: root,
-    env: { ...box.env, ...extra },
+    env: { ...box.env, ...PACED, ...extra },
     stdout: 'pipe',
     stderr: 'pipe',
   })

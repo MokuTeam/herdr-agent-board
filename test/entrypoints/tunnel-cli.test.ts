@@ -224,6 +224,8 @@ async function startBoard(
   await serveBoard(box, cfg, {
     ...env,
     BOARD_TUNNEL_PROBE_ORIGIN: `http://127.0.0.1:${probe}`,
+    // The first probe a fiftieth of its 3 s after the forward is up (core/pace.ts).
+    BOARD_TEST_PACE: '0.02',
     TEST_LIVE_CONFIG: '1',
   })
   return { env, status: await statusWhen(`http://127.0.0.1:${web}`, o.want) }
