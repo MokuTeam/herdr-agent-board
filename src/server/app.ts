@@ -495,6 +495,13 @@ export async function startServer({
   // The order of main's `if` chain: the first route that answers wins.
   routes.push(
     setupRoute(setup),
+    // Which process this board is and where it is installed (#356), for the board command and
+    // doctor on this computer: a server that does not answer it runs older code (core/board-port.ts).
+    {
+      method: 'GET',
+      path: '/api/process',
+      handle: () => json(200, { board: 'agent-board', pid: process.pid, root: ROOT }),
+    },
     ...remoteRoutes(listener, remote, cfg, port),
     ...accessRoutes(remoteAccess),
     ...boardRoutes(board, events),
