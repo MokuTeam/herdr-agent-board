@@ -6,7 +6,7 @@ import { OUT_STATES, type OutState, VIAS } from '../../../src/core/team-wire.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import type { TeamRosterPeer, TeamState, TeamView, ThreadMessage } from '../../../src/services/team-hub.ts'
 import { ago } from './card.ts'
-import { remotePage } from './remote-page.ts'
+import { remotePage, teamPage } from './remote-page.ts'
 
 export type { TeamRosterPeer, TeamView, ThreadMessage }
 
@@ -57,13 +57,53 @@ export const isThread = (v: unknown): v is { peer: string; messages: ThreadMessa
   isObj(v) && typeof v.peer === 'string' && Array.isArray(v.messages) && v.messages.every(isThreadMessage)
 
 /**
- * Whether the page offers the Team panel and its Settings entry: on the local board only, while the
- * payload carries `teamRev`. Anywhere else nothing of it is drawn and /api/team is never asked.
+ * Whether the page offers the Team panel, its Settings entry and the head's Team button: while the
+ * payload carries `teamRev`, on the local board, or on the owner's own phone or domain login (#355,
+ * hello's `team`). Anywhere else nothing of it is drawn and /api/team is never asked.
  */
 export const offersTeam = (
   payload?: { teamRev?: number | undefined } | null,
   remote: boolean = remotePage(),
-): boolean => !remote && payload?.teamRev !== undefined
+  team: boolean = teamPage(),
+): boolean => (!remote || team) && payload?.teamRev !== undefined
+
+/** A pair's thread without a topic, the one today's panel shows (#216 adds topics). */
+export const pairThread = (peer: string): string => `${peer}/general`
+
+/** The peer a thread's key is with; null for the team's own threads. */
+export const peerOfThread = (thread: string): string | null => {
+  const scope = thread.split('/')[0] ?? ''
+  return scope && scope !== 'team' ? scope : null
+}
+
+/** GET /api/team/unread: the head's count and each thread's. */
+export const isUnread = (v: unknown): v is { unread: number; threads: Record<string, number> } =>
+  isObj(v) &&
+  typeof v.unread === 'number' &&
+  isObj(v.threads) &&
+  Object.values(v.threads).every(n => typeof n === 'number')
+
+/** A thread a team notification's click asked for (#355: the stream's `team-open`); `n` tells two asks apart. */
+export interface TeamOpen {
+  thread: string
+  n: number
+}
+
+/** Listens for the stream's `team-open` event: its thread becomes the one to show. */
+export function listenForTeamOpens(
+  stream: { addEventListener(type: 'team-open', listener: (event: MessageEvent) => void): void },
+  set: (next: (prev: TeamOpen | null) => TeamOpen) => void,
+): void {
+  stream.addEventListener('team-open', event => {
+    try {
+      const v: unknown = JSON.parse(String(event.data))
+      if (isObj(v) && typeof v.thread === 'string') {
+        const thread = v.thread
+        set(prev => ({ thread, n: (prev?.n ?? 0) + 1 }))
+      }
+    } catch {}
+  })
+}
 
 /** The connection line: where it stands, and for reconnecting when the next try is. */
 export function stateLine(view: TeamView, t: Translator): string {

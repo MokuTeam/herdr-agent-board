@@ -4,11 +4,13 @@
 // picked: each of yours with how far it got (queued at the hub, delivered, received, expired, refused by the hub), what
 // came in from a changed key marked held. Under the thread a box to ask them a question. The view
 // is hooks/useTeam.ts's; the board sends only its revision.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTeam } from '../../hooks/useTeam.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import {
   agentLine,
+  pairThread,
+  peerOfThread,
   seenLine,
   stateLine,
   type TeamRosterPeer,
@@ -22,12 +24,22 @@ import { Panel } from '../panel/Panel.tsx'
 export interface TeamPanelProps {
   open: boolean
   onClose(): void
+  /** A thread a notification's click asked for (#355): its person is picked once, then onFocused. */
+  focus?: string | null
+  onFocused?(): void
 }
 
-export function TeamPanel({ open, onClose }: TeamPanelProps) {
+export function TeamPanel({ open, onClose, focus, onFocused }: TeamPanelProps) {
   const t = useT()
   const { canEdit } = useBoardContext()
   const team = useTeam(open)
+  const { select } = team
+  useEffect(() => {
+    if (!focus) return
+    const peer = peerOfThread(focus)
+    if (peer) select(peer)
+    onFocused?.()
+  }, [focus, select, onFocused])
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const send = async () => {
@@ -53,6 +65,7 @@ export function TeamPanel({ open, onClose }: TeamPanelProps) {
         view={team.view}
         peer={team.peer}
         thread={team.thread}
+        unread={team.unread}
         draft={draft}
         disabled={!canEdit || sending}
         onSelect={team.select}
@@ -71,6 +84,8 @@ export interface TeamBodyProps {
   view: TeamView | null
   peer: string | null
   thread: ThreadMessage[]
+  /** Each thread's unread messages (#355); none given: none shown. */
+  unread?: Record<string, number>
   draft: string
   disabled: boolean
   onSelect(peer: string | null): void
@@ -87,6 +102,7 @@ export function TeamBody({
   view,
   peer,
   thread,
+  unread = {},
   draft,
   disabled,
   onSelect,
@@ -122,6 +138,11 @@ export function TeamBody({
             <button type="button" className="team-pick" aria-pressed={p.peer === peer} onClick={() => onSelect(p.peer)}>
               <span className={classNames('dot', 'team-dot', p.online ? 'on' : 'idle')} aria-hidden="true" />
               <span className="team-name">{p.name}</span>
+              {(unread[pairThread(p.peer)] ?? 0) > 0 && (
+                <span className="n team-unread" title={t('team.unread', { n: unread[pairThread(p.peer)] ?? 0 })}>
+                  {unread[pairThread(p.peer)]}
+                </span>
+              )}
               <span className="todo-meta">{seenLine(p, now, t)}</span>
               {p.drafts > 0 && (
                 <span className="todo-meta team-drafts">{t('team.draftsCount', { n: String(p.drafts) })}</span>

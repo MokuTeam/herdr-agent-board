@@ -237,7 +237,8 @@ interface Options {
   log: (line: string) => void
   /** The board changed: publish it. */
   onChange: () => void
-  /** A message came in and was kept (#216): the router decides whether a session hears of it. */
+  /** A message came in and was kept: the router decides whether a session hears of it (#216), the
+   * board's notification and unread count hear of it too (#355). */
   onInbound?: (e: InboundEvent) => void
   socket?: (url: string) => WsLike
   clock?: Clock

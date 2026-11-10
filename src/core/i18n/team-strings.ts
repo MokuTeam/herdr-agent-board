@@ -6,6 +6,7 @@ export const TEAM_STRINGS: Record<Lang, Record<string, string | string[]>> = {
   en: {
     'set.team': 'Team…',
     'team.title': 'Team',
+    'team.openHint': 'Messages with your team',
     'team.about': 'Questions between boards of people you trust, through your team’s hub',
     'team.state.off': 'Off',
     'team.state.connecting': 'Connecting to {hub}…',
@@ -54,10 +55,13 @@ export const TEAM_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'team.discard': 'Discard',
     'team.agentRequest': 'via {name}’s agent',
     'team.agentRequestOut': 'via your agent',
+    'team.toast.held': 'A message is held: their key changed. Trust it on the board to read it.',
+    'team.unread': ['{n} unread team message', '{n} unread team messages'],
   },
   ru: {
     'set.team': 'Команда…',
     'team.title': 'Команда',
+    'team.openHint': 'Сообщения с командой',
     'team.about': 'Вопросы между досками людей, которым вы доверяете, через хаб команды',
     'team.state.off': 'Выключено',
     'team.state.connecting': 'Подключаемся к {hub}…',
@@ -106,5 +110,11 @@ export const TEAM_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'team.discard': 'Удалить',
     'team.agentRequest': 'через агента {name}',
     'team.agentRequestOut': 'через вашего агента',
+    'team.toast.held': 'Сообщение задержано: ключ отправителя сменился. Доверьтесь ему на доске, чтобы прочитать.',
+    'team.unread': [
+      '{n} непрочитанное сообщение команды',
+      '{n} непрочитанных сообщения команды',
+      '{n} непрочитанных сообщений команды',
+    ],
   },
 }

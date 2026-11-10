@@ -23,3 +23,6 @@
 .team-compose .mini:hover:not(:disabled) { color: var(--accent); }
 .team-compose .mini:disabled { opacity: 0.5; cursor: default; }
 .team-changed .mini { padding: 3px 9px; border: 0; border-radius: 6px; background: var(--fill); font-size: 12px; cursor: pointer; }
+/* Unread team messages (#355): the head's Team button and each person in the panel. */
+.pill-toggle.unread .n { background: var(--accent); color: #fff; }
+.team-unread { display: inline-grid; place-items: center; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }

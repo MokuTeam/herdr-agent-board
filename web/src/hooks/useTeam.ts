@@ -3,11 +3,22 @@
 // /api/team/trust { peer }), and an agent's drafts (POST /api/team/draft/<id>/send or /discard). As Remote access (hooks/useAccess.ts), the payload carries only
 // `teamRev`: the view is fetched when the panel opens and again whenever that number changes while
 // it is open. Nothing is asked while the panel is closed, or without `teamRev` (offersTeam).
+// Each thread's unread messages (GET /api/team/unread, #355) come with the view; a thread on show
+// in a page in front is read (POST /api/team/read { thread }), which takes it off the head's count.
 import { useEffect, useState } from 'react'
 import type { Translator } from '../../../src/core/types.ts'
 import { ApiError, api, errorText } from '../api/client.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
-import { isTeamView, isThread, offersTeam, sendError, type TeamView, type ThreadMessage } from '../models/team.ts'
+import {
+  isTeamView,
+  isThread,
+  isUnread,
+  offersTeam,
+  pairThread,
+  sendError,
+  type TeamView,
+  type ThreadMessage,
+} from '../models/team.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { Store, useStore } from '../state/store.ts'
 import { useLatest } from './useLatest.ts'
@@ -18,6 +29,8 @@ export interface TeamNow {
   /** The peer whose thread is on show, and its messages. */
   peer: string | null
   thread: ThreadMessage[]
+  /** Each thread's unread messages, by its key (a pair's: `<peer>/general`). */
+  unread: Record<string, number>
 }
 
 export interface TeamSource {
@@ -29,20 +42,29 @@ export interface TeamSource {
   /** Sends an agent's draft (it goes marked as an agent request); false: refused, and toasted. */
   sendDraft(id: string): Promise<boolean>
   discardDraft(id: string): Promise<void>
-  /** The panel open or not, and the payload's teamRev: fetched on opening and on each new revision while open. */
-  sync(open: boolean, rev: number): void
+  /**
+   * The panel open or not, the payload's teamRev and its unread count: fetched on opening and on
+   * each new revision or count while open.
+   */
+  sync(open: boolean, rev: number, unread?: number): void
 }
 
 export interface TeamDeps {
   t(): Translator
   toast(text: string, error?: boolean): void
+  /** The page is in front: what is on show there is read. */
+  visible?(): boolean
 }
+
+const inFront = (): boolean => typeof document === 'undefined' || document.visibilityState === 'visible'
 
 /** The view and the thread, without React: useTeam draws from it. */
 export function teamSource(deps: TeamDeps): TeamSource {
-  const now = new Store<TeamNow>({ view: null, peer: null, thread: [] })
+  const now = new Store<TeamNow>({ view: null, peer: null, thread: [], unread: {} })
   let open = false
   let rev = 0
+  let unreadTotal = 0
+  const visible = deps.visible ?? inFront
   // Only the latest fetch is drawn: an older one may come back after it.
   let asked = 0
 
@@ -54,7 +76,16 @@ export function teamSource(deps: TeamDeps): TeamSource {
       const thread = peer
         ? (await api.get(`/api/team/thread/${encodeURIComponent(peer)}`, isThread, { cache: 'no-store' })).messages
         : []
-      if (mine === asked) now.set({ ...now.get(), view, thread })
+      // Each thread's count, asked only while the payload says something is unread.
+      const unread =
+        unreadTotal > 0 ? { ...(await api.get('/api/team/unread', isUnread, { cache: 'no-store' })).threads } : {}
+      // The thread on show, in a page in front, is read: its messages leave the count.
+      const key = peer && pairThread(peer)
+      if (key && (unread[key] ?? 0) > 0 && visible()) {
+        await api.post('/api/team/read', { thread: key })
+        delete unread[key]
+      }
+      if (mine === asked) now.set({ ...now.get(), view, thread, unread })
     } catch (err) {
       if (mine === asked) deps.toast(errorText(err, deps.t()), true)
     }
@@ -103,10 +134,12 @@ export function teamSource(deps: TeamDeps): TeamSource {
       }
       void load()
     },
-    sync(nextOpen, nextRev) {
-      if (nextOpen && (!open || nextRev !== rev)) void load()
+    sync(nextOpen, nextRev, nextUnread = 0) {
+      const ask = nextOpen && (!open || nextRev !== rev || nextUnread !== unreadTotal)
       open = nextOpen
       rev = nextRev
+      unreadTotal = nextUnread
+      if (ask) void load()
     },
   }
 }
@@ -124,7 +157,8 @@ export function useTeam(
   const state = useStore(source.now)
   const offered = offersTeam(data)
   const rev = data?.teamRev ?? 0
-  useEffect(() => source.sync(open && offered, rev), [source, open, offered, rev])
+  const unread = data?.teamUnread ?? 0
+  useEffect(() => source.sync(open && offered, rev, unread), [source, open, offered, rev, unread])
   return {
     ...state,
     select: source.select,

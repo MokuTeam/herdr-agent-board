@@ -58,6 +58,7 @@ import {
   SearchIcon,
   TagIcon,
   TasksIcon,
+  TeamIcon,
   TimeIcon,
 } from './icons.tsx'
 import { Lanes } from './Lanes.tsx'
@@ -94,6 +95,8 @@ export interface ToolbarProps {
   onTodos?: () => void
   /** Time (#233): its panel, while the board has time tracking on. */
   onTime?: () => void
+  /** The Team panel (#355), while the page offers the team: the button carries the unread count. */
+  onTeam?: () => void
   /** The calendar (#328): its panel, while the board has the calendar on. */
   onCalendar?: () => void
 }
@@ -128,6 +131,7 @@ export function Toolbar({
   more,
   onTodos,
   onTime,
+  onTeam,
   onCalendar,
 }: ToolbarProps) {
   const t = useT()
@@ -176,6 +180,7 @@ export function Toolbar({
           schedule: badge,
           tasks: data?.todos ? { open: openTasks, proposed: proposedCount(data.items) } : null,
           next: data ? attentionCount(visible, ui.filter, categoryOf, ui.viewed) : 0,
+          team: onTeam ? { unread: data?.teamUnread ?? 0 } : null,
           usage,
           presence: presenceSwitch(data?.presence, t),
         },
@@ -193,6 +198,7 @@ export function Toolbar({
     else if (id === 'todos-open') onTodos?.()
     else if (id === 'cal-tb') onCalendar?.()
     else if (id === 'time-open') onTime?.()
+    else if (id === 'team-open') onTeam?.()
     else if (id === 'archive-open') onArchive?.()
     else if (id === 'next-attention') openNext()
     else if (id === 'limits') dispatch({ type: 'limits', open: !ui.limitsOpen })
@@ -325,6 +331,21 @@ export function Toolbar({
                       {t('todo.toConfirm', { n: proposedCount(data.items) })}
                     </span>
                   )}
+                </button>
+              )}
+              {onTeam && (
+                <button
+                  type="button"
+                  className={(data?.teamUnread ?? 0) > 0 ? 'pill-toggle icon-only unread' : 'pill-toggle icon-only'}
+                  id="team-open"
+                  title={
+                    (data?.teamUnread ?? 0) > 0 ? t('team.unread', { n: data?.teamUnread ?? 0 }) : t('team.openHint')
+                  }
+                  onClick={() => onTeam()}
+                >
+                  <TeamIcon />
+                  <span>{t('team.title')}</span>
+                  <span className="n">{data?.teamUnread || ''}</span>
                 </button>
               )}
               {data?.calendar && <CalendarButton onOpen={() => onCalendar?.()} />}

@@ -9,6 +9,7 @@ import { isRecord } from '../adapters/json-store.ts'
 import { ROOT } from '../adapters/paths.ts'
 import { REMINDER_ACTS, REMINDER_ID } from '../core/calendar-reminders.ts'
 import { t } from '../core/lang.ts'
+import { THREAD_KEY } from '../core/team-unread.ts'
 import type { Config } from '../core/types.ts'
 import { type BoardWindow, edgeWindow } from '../integrations/edge-window.ts'
 
@@ -79,6 +80,38 @@ export async function reminderClick(
   if (!isRecord(answer) || answer.ok !== true)
     return { ok: false, error: isRecord(answer) && typeof answer.error === 'string' ? answer.error : '' }
   if (act !== 'open') return { ok: true, url }
+  const win = options.window ?? edgeWindow(typeof cfg.browser === 'string' ? cfg.browser : undefined)
+  // a page in a minimized or covered window has no stream: it is told as it connects again
+  if (!(await win.raise())) win.launch(url)
+  return { ok: true, url }
+}
+
+/**
+ * A team message's click on the desktop (#355, toast.ps1's `claude-pane:team/<thread>`, the Mac
+ * helper's click): the board's pages open the Team panel on that thread, and its window comes up.
+ * Nothing for a thread that is no thread's key; the board is not started for it.
+ */
+export async function teamClick(
+  thread: string,
+  cfg: WebConfig = loadConfig(),
+  options: Pick<WebOpenOptions, 'window'> = {},
+): Promise<WebOpenResult> {
+  const url = `http://127.0.0.1:${cfg.port ?? 12422}/`
+  if (!THREAD_KEY.test(thread)) return { ok: false, error: 'usage: web-open.ts --team <thread key>' }
+  let answer: unknown
+  try {
+    const res = await fetch(`${url}api/team/focus`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({ thread }),
+      signal: AbortSignal.timeout(3000),
+    })
+    answer = await res.json()
+  } catch {
+    return { ok: false, missing: true, error: t('err.notRunning') }
+  }
+  if (!isRecord(answer) || answer.ok !== true)
+    return { ok: false, error: isRecord(answer) && typeof answer.error === 'string' ? answer.error : '' }
   const win = options.window ?? edgeWindow(typeof cfg.browser === 'string' ? cfg.browser : undefined)
   // a page in a minimized or covered window has no stream: it is told as it connects again
   if (!(await win.raise())) win.launch(url)

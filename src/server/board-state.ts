@@ -77,6 +77,8 @@ interface Options {
   accessRev?: () => number
   /** The peer network's revision (services/team-hub.ts); null while `team` is not on. */
   teamRev?: () => number | null
+  /** The team's unread messages (services/team-notify.ts, #355); null while `team` is not on. */
+  teamUnread?: () => number | null
   /** The Omarchy theme's stamp (adapters/omarchy.ts), on a computer with Omarchy only. */
   omarchy?: () => string | null
   /** The user's presence (services/presence.ts); null while it is not on. */
@@ -161,6 +163,11 @@ function teamRevOf(teamRev: Options['teamRev']): { teamRev?: number } {
   return rev !== null ? { teamRev: rev } : {}
 }
 
+function teamUnreadOf(teamUnread: Options['teamUnread']): { teamUnread?: number } {
+  const n = teamUnread?.() ?? null
+  return n !== null ? { teamUnread: n } : {}
+}
+
 function timeOf(time: Options['time']): { time?: TimePayload } {
   const line = time?.() ?? null
   return line ? { time: line } : {}
@@ -194,6 +201,7 @@ export function createBoardState({
   aside,
   accessRev,
   teamRev,
+  teamUnread,
   omarchy,
   presence,
   backup,
@@ -287,6 +295,8 @@ export function createBoardState({
       accessRev: accessRev?.() ?? 0,
       // teamRev: only while config.json turns the peer network on (#231).
       ...teamRevOf(teamRev),
+      // teamUnread: likewise, the head's count of unread team messages (#355).
+      ...teamUnreadOf(teamUnread),
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.
       ...omarchyOf(omarchy),
     }

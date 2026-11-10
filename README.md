@@ -2219,12 +2219,27 @@ the running board: the hub, the connection, who is
 online (`●`), who is not (`○`, with when they were last seen), and a flag on anyone whose key
 changed.
 
-**The panel.** Settings → "Team…" (the local board's page only; a phone's or the domain's page
-neither shows it nor can ask for it): the connection line, the roster with online dots and key
+**The panel.** Settings → "Team…", or the head's Team button: the connection line, the roster with online dots and key
 fingerprints, and the messages with the person you pick. Each question you sent shows how far it
 got: queued at the hub, delivered, received (their board's signed ack) or expired (it waits up to
 24 hours by default). A person whose key changed is marked, and what comes from the new key is
 held back until you press Trust.
+
+**New messages.** A message that comes in raises the board's desktop notification: the sender as
+your board knows them (never a name the message gives itself) and the start of the text, or only
+that a message is held when their key changed. Clicking it brings the board up on that thread. On
+Windows it is a toast under the board's own name, on macOS the helper the session notifications
+use, anywhere else herdr's own notification. The head's Team button counts the unread messages,
+and each person in the panel shows theirs; opening a thread in a page that is in front reads it.
+Only the page reads: an agent reading a thread changes nothing. The marks are kept in
+`team-reads.json` in the board's state folder, from the first time the board counts, so the
+messages from before do not all turn up as news.
+
+**Away from the computer.** The Team panel and the head's button work on your own phone and through
+your own domain too: the tunnel's login, and a phone paired from this computer's own Tailscale
+login (not a desk, and not another Tailscale user that `remote.allow` lets in). There it reads the
+team, sends as you, sends or discards a draft and marks read. Accepting a changed key, what agents
+may do, and an agent's draft stay on the computer.
 
 **Asking an agent to draft.** Tell your agent: `board team draft Roman "is the build green?"`
 (a name from the roster, or a peer id). It only leaves a draft in the panel, under Roman's thread

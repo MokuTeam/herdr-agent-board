@@ -1,7 +1,10 @@
-// The peer network through the remote mode (#231): every /api/team route is refused on the
-// tailnet listener and on the one `tailscale serve` forwards to, in both spellings, with `team` in
-// config.json and without it; /api/peers is not touched. One board per case with both listeners,
-// a phone paired on the tailnet and a browser paired through serve (as wake-remote.test.ts).
+// The peer network through the remote mode (#231, #355). Without `team` every /api/team route is
+// refused on the tailnet listener and on the one `tailscale serve` forwards to, in both spellings.
+// With it the owner's own phone (paired from the computer's own Tailscale login) reads the team,
+// sends, marks read; what changes who may act (trust, agents, an agent's draft, a click's focus),
+// an encoded spelling and a Tailscale user `remote.allow` lets in stay refused. /api/peers is not
+// touched. One board per case with both listeners, a phone paired on the tailnet, a browser paired
+// through serve, and a friend's browser through serve (as wake-remote.test.ts).
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -11,6 +14,7 @@ import type { Sandbox } from '../support/sandbox.ts'
 const NAME = 'box.tail0.ts.net'
 const ORIGIN = `https://${NAME}`
 const PHONE_IP = '100.78.86.80'
+const FRIEND_IP = '100.78.86.81'
 
 function tailscaleState(box: Sandbox, pwaPort: number): void {
   const status = {
@@ -38,6 +42,13 @@ function tailscaleState(box: Sandbox, pwaPort: number): void {
     'status --json': { text: JSON.stringify(status) },
     'whois --json 127.0.0.1': { text: JSON.stringify(whois) },
     [`whois --json ${PHONE_IP}`]: { text: JSON.stringify(whois) },
+    [`whois --json ${FRIEND_IP}`]: {
+      text: JSON.stringify({
+        ...whois,
+        Node: { ...whois.Node, StableID: 'nFriend' },
+        UserProfile: { LoginName: 'friend@example.com' },
+      }),
+    },
     'serve status --json': { text: JSON.stringify(serving) },
   })
 }
@@ -53,6 +64,7 @@ describe.each([
   let web = ''
   let token = ''
   let cookie = ''
+  let friendCookie = ''
   const local = (op: string, id: string) =>
     fetch(`${url}/api/remote`, {
       method: 'POST',
@@ -80,6 +92,21 @@ describe.each([
         ...(cookie ? { cookie } : {}),
       },
     })
+  /** A browser of a Tailscale user `remote.allow` lets in, through serve: paired, not the owner. */
+  const friend = (path: string, init: RequestInit = {}) =>
+    fetch(web + path, {
+      ...init,
+      headers: {
+        host: NAME,
+        'x-forwarded-for': FRIEND_IP,
+        'x-forwarded-proto': 'https',
+        'tailscale-user-login': 'friend@example.com',
+        'content-type': 'application/json',
+        'x-board': '1',
+        origin: ORIGIN,
+        ...(friendCookie ? { cookie: friendCookie } : {}),
+      },
+    })
   const teamFiles = (): string[] =>
     readdirSync(box.dir, { recursive: true })
       .map(String)
@@ -100,7 +127,7 @@ describe.each([
       box,
       {
         language: 'en',
-        remote: { on: true, port: remotePort, pwa: { on: true, port: pwaPort } },
+        remote: { on: true, port: remotePort, pwa: { on: true, port: pwaPort }, allow: ['friend@example.com'] },
         ...(team && { team }),
       },
       { TAILSCALE_BIN_PATH: box.env.HERDR_BIN_PATH as string },
@@ -134,26 +161,52 @@ describe.each([
     const answer = await browser(`/api/remote/pair/${begun.id}`)
     cookie = (answer.headers.get('set-cookie') ?? '').split(';')[0] ?? ''
     expect(cookie).toContain('__Host-board=')
+    // The friend pairs through serve too, approved on the computer.
+    const theirs = (await (
+      await friend('/api/remote/pair', { method: 'POST', body: '{"name":"Friend in Chrome"}' })
+    ).json()) as { id: string }
+    expect((await local('approve', theirs.id)).status).toBe(200)
+    const friendAnswer = await friend(`/api/remote/pair/${theirs.id}`)
+    friendCookie = (friendAnswer.headers.get('set-cookie') ?? '').split(';')[0] ?? ''
+    expect(friendCookie).toContain('__Host-board=')
   }, 30_000)
 
-  test('every /api/team route is refused on the tailnet and the serve listener, in both spellings', async () => {
+  /**
+   * What the owner's own phone may ask with the team on (#355); everything else under /api/team is
+   * refused. `/api/./team` is `/api/team` by the time it leaves fetch.
+   */
+  const ownerMay = (path: string): boolean =>
+    !!team && ['/api/team', '/api/./team', '/api/team/thread/x', '/api/team/unread', '/api/team/read'].includes(path)
+
+  test(`/api/team on the tailnet and the serve listener, in both spellings: ${team ? "the owner's list for the owner's phone" : 'every route refused'}`, async () => {
     const before = configText()
     const filesBefore = teamFiles()
     for (const [name, ask] of [
       ['tailnet', phone],
       ['serve', browser],
+      ['friend', friend],
     ] as const) {
       expect((await ask('/api/board')).status).toBe(200) // paired: the board itself answers
-      for (const path of ['/api/team', '/api/team/', '/api/%74eam/send', '/api/team/thread/x', '/api/./team'])
+      for (const path of [
+        '/api/team',
+        '/api/team/',
+        '/api/%74eam/send',
+        '/api/team/thread/x',
+        '/api/./team',
+        '/api/team/unread',
+        '/api/team/read',
+        '/api/team/trust',
+        '/api/team/draft',
+        '/api/team/focus',
+        '/api/team/agents',
+      ])
         for (const init of [{}, { method: 'POST', body: '{"to":"x","text":"hi"}' }, { method: 'POST', body: '{}' }]) {
           const res = await ask(path, init)
-          expect([name, path, init.method ?? 'GET', res.status, await res.json()]).toEqual([
-            name,
-            path,
-            init.method ?? 'GET',
-            403,
-            { error: 'local' },
-          ])
+          const refused = name === 'friend' || !ownerMay(path)
+          const body = await res.json()
+          const what = [name, path, init.method ?? 'GET']
+          if (refused) expect([...what, res.status, body]).toEqual([...what, 403, { error: 'local' }])
+          else expect([...what, res.status]).not.toEqual([...what, 403])
         }
       // /api/peers is what it was: its own answer, not the refusal.
       expect(await (await ask('/api/peers')).json()).toHaveProperty('peers')
