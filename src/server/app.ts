@@ -13,6 +13,7 @@ import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
+import { pace } from '../adapters/pacing.ts'
 import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
@@ -65,7 +66,14 @@ import { createTeam } from '../services/team-hub.ts'
 import { createTeamNotify, type TeamNotify } from '../services/team-notify.ts'
 import { createTeamRouter, noticeSchedule } from '../services/team-router.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
-import { createProbes, createSupervisor, networkSignature, realClock, type TunnelPlan } from '../services/tunnel.ts'
+import {
+  createProbes,
+  createSupervisor,
+  networkSignature,
+  PROBE_FIRST_MS,
+  realClock,
+  type TunnelPlan,
+} from '../services/tunnel.ts'
 import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, peerOf, type Route } from './http.ts'
@@ -368,6 +376,8 @@ export async function startServer({
     checkKey: () => publicKeyOf(keyPath(tunnelConf())),
     sshFound: () => sshBin(),
     openProbeListener,
+    // a test's paced board (adapters/pacing.ts) probes sooner
+    probeFirstMs: PROBE_FIRST_MS * pace(),
     onChange: accessChanged,
     log,
   })

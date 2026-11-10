@@ -51,7 +51,7 @@ describe('send', () => {
           try {
             cfg.wakeUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
             // The wait for herdr to name a just woken session, 2 s instead of 15, asked every 10 ms
-            // in place of 500 (core/pace.ts): `late` is named on herdr's third read, well inside it.
+            // in place of 500 (adapters/pacing.ts): `late` is named on herdr's third read, well inside it.
             const out = await box.run(
               'send',
               { item: { pane: 'pane1', session: 'expected', name: 'Test', sleeping }, cfg, text: '-hello' },

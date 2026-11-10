@@ -11,7 +11,7 @@
 // No Claude or no session yet, or herdr answering with an error: the next try (REPORT_DELAYS_MS).
 // After the last, nothing: herdr resumes the session its own way, as before.
 import { agentGet, herdrText } from '../adapters/herdr.ts'
-import { pause } from '../core/pace.ts'
+import { pause } from '../adapters/pacing.ts'
 import { REPORT_DELAYS_MS, RESUME_AGENT, reportArgs, SESSION_ID } from '../core/resume.ts'
 
 const [pane = '', session = '', ...command] = process.argv.slice(2)

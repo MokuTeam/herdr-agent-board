@@ -21,7 +21,7 @@ const claudeIn = (session: string) => ({
 
 /**
  * The reporter as the hook starts it, to its end. Its tries come at a fiftieth of their delays
- * (core/pace.ts): the fake herdr answers at once, and what counts is their order.
+ * (adapters/pacing.ts): the fake herdr answers at once, and what counts is their order.
  */
 async function report(box: Sandbox): Promise<void> {
   const proc = Bun.spawn([process.execPath, join(root, 'src/entrypoints/resume-report.ts'), 'w1:p1', SID, ...COMMAND], {

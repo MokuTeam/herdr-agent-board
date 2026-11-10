@@ -199,7 +199,7 @@ async function board(box: Sandbox, cfg: Record<string, unknown> = {}) {
       ...cfg,
     },
     // Return starts the board's own spawn-agent against the fake herdr, which answers at once: its
-    // polls and pauses run at a fiftieth (core/pace.ts).
+    // polls and pauses run at a fiftieth (adapters/pacing.ts).
     { BOARD_TEST_PACE: '0.02' },
   )
   await until(() => proc.messages.some(m => (m as { ready?: boolean }).ready), 10_000)

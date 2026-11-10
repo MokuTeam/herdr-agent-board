@@ -398,7 +398,7 @@ function boardOnPath(box: Sandbox): string {
 
 /**
  * The hook as Claude Code runs it in herdr pane w1:p1; `input` on top of a SessionStart of SID. A
- * reporter it starts tries at a fiftieth of its delays (core/pace.ts): its first try comes 20 ms
+ * reporter it starts tries at a fiftieth of its delays (adapters/pacing.ts): its first try comes 20 ms
  * after it is up, not a second.
  */
 async function runInHerdr(box: Sandbox, env: Record<string, string>, input: Record<string, unknown> = {}) {

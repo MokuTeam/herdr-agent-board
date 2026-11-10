@@ -4,6 +4,7 @@
 // sleep go to wake's API as they go to herdr-wake's (integrations/herdr-wake.ts), never to the
 // separate plugin's router should it still hold the port.
 import { dirname, join } from 'node:path'
+import { knobMs } from '../adapters/pacing.ts'
 import { peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
 import { t } from '../core/lang.ts'
 import { createHerdrWake, type SleepingSession, type SleepProvider } from './herdr-wake.ts'
@@ -29,14 +30,8 @@ export interface BoardWake extends SleepProvider {
 const ASK_EVERY_MS = 5000
 /** How long wake has to answer. */
 const ANSWER_MS = 2000
-/**
- * ANSWER_MS, or BOARD_WAKE_ANSWER_MS (tests only, unset in production) when a whole number of ms
- * above 0: a test of a wake that stays slow needs the board to give up, not the 2 s (#358).
- */
-function answerMs(): number {
-  const ms = Number(process.env.BOARD_WAKE_ANSWER_MS)
-  return Number.isInteger(ms) && ms > 0 ? ms : ANSWER_MS
-}
+/** ANSWER_MS; BOARD_WAKE_ANSWER_MS in a test of a wake that stays slow, which needs the board to give up, not the 2 s. */
+const answerMs = (): number => knobMs('BOARD_WAKE_ANSWER_MS', ANSWER_MS)
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 /** The port of wake's url, for what the board says. */

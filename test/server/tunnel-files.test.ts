@@ -94,21 +94,26 @@ describe('the board’s own files through the tunnel', () => {
     let count = 0
     const holding: string[] = []
     const reads: Promise<void>[] = []
-    for (const r of routeTable(proc)) {
-      const path = rawOf(r.path)
-      if (desktopOnly(path)) continue
-      for (const method of r.method === 'ANY' ? ['GET', 'POST'] : [r.method])
-        for (const m of marked) {
-          const query = `?path=${encodeURIComponent(m)}&paths=${encodeURIComponent(m)}&cwd=${encodeURIComponent(state)}&t=${fsToken}`
-          const res = await send(method, path + query, { path: m, paths: [m], cwd: state, url: m })
-          count++
-          const at = `${method} ${path} ${m}`
-          reads.push(
-            textOf(res).then(text => {
-              if (text.includes(MARKER)) holding.push(at)
-            }),
-          )
-        }
+    try {
+      for (const r of routeTable(proc)) {
+        const path = rawOf(r.path)
+        if (desktopOnly(path)) continue
+        for (const method of r.method === 'ANY' ? ['GET', 'POST'] : [r.method])
+          for (const m of marked) {
+            const query = `?path=${encodeURIComponent(m)}&paths=${encodeURIComponent(m)}&cwd=${encodeURIComponent(state)}&t=${fsToken}`
+            const res = await send(method, path + query, { path: m, paths: [m], cwd: state, url: m })
+            count++
+            const at = `${method} ${path} ${m}`
+            reads.push(
+              textOf(res).then(text => {
+                if (text.includes(MARKER)) holding.push(at)
+              }),
+            )
+          }
+      }
+    } finally {
+      // a request that failed leaves no answer unread behind it
+      await Promise.allSettled(reads)
     }
     await Promise.all(reads)
     return { count, holding }

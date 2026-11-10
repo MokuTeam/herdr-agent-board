@@ -10,7 +10,6 @@
 import { randomBytes } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 import type { PidRecord, SshChild } from '../adapters/ssh.ts'
-import { pace } from '../core/pace.ts'
 import {
   backoffMs,
   forwardAccepted,
@@ -109,6 +108,8 @@ export interface SupervisorDeps {
   sshFound(): string | null
   /** Test's probe-only listener (server/tunnel-probe.ts). */
   openProbeListener(nonce: string): Promise<{ port: number; close(): void }>
+  /** How long after the forward is up the first probe goes: PROBE_FIRST_MS unless given. */
+  probeFirstMs?: number
 }
 
 export interface TestOptions {
@@ -140,7 +141,7 @@ const TICK_MS = 5000
 const SLEPT_MS = 30_000
 const NETWORK_POLL_MS = 10_000
 /** The probe through the domain: this long after connecting, then this often while connected. */
-const PROBE_FIRST_MS = 3000
+export const PROBE_FIRST_MS = 3000
 const PROBE_EVERY_MS = 5 * 60_000
 /** How long Test waits for the server to take its forward (the probe-only listener outlives it and the probe). */
 const FORWARD_WAIT_MS = 25_000
@@ -428,7 +429,7 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
       h.connectedAt = clock.now()
       d.log('tunnel: connected')
       set({ state: 'connected', since: h.connectedAt })
-      probeIn(h, PROBE_FIRST_MS * pace())
+      probeIn(h, d.probeFirstMs ?? PROBE_FIRST_MS)
       return
     }
     keep(h.lines, line)

@@ -28,6 +28,7 @@ import { readCard, removeCard, writeCard } from '../../adapters/cards.ts'
 import { createClaudeHome } from '../../adapters/claude-home.ts'
 import { herdr, herdrText, tabCreateRoot } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
+import { pause } from '../../adapters/pacing.ts'
 import {
   forgetProfilePane,
   possibleProfilePanes,
@@ -46,7 +47,6 @@ import {
   stillTyped,
 } from '../../core/launch/spawn-args.ts'
 import { forkCard } from '../../core/links.ts'
-import { pause } from '../../core/pace.ts'
 import { CLAUDE_NAMING, isPiSessionFile, type Naming, namingOf, PI_AGENT } from '../../core/pi.ts'
 import { defaultProfileDir, envRejected, type Profile, type SpawnEnv, spawnEnv } from '../../core/profiles.ts'
 

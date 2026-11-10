@@ -24,7 +24,7 @@ const STATE = {
 }
 
 // The fake herdr answers at once: spawn-agent's polls and pauses (meant for a real Claude) run at
-// a fiftieth (core/pace.ts). Its deadlines (--timeout) are not paced.
+// a fiftieth (adapters/pacing.ts). Its deadlines (--timeout) are not paced.
 const PACED = { BOARD_TEST_PACE: '0.02' }
 
 async function runSpawn(box: Sandbox, args: string[], extra: Record<string, string> = {}) {

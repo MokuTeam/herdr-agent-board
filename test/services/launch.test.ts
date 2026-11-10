@@ -391,7 +391,7 @@ async function boardServer(cfg: Of<Record<string, unknown>> = {}, env: Of<Record
       ...(typeof cfg === 'function' ? cfg(box) : cfg),
     },
     // The fake herdr answers at once: the launch's polls and pauses (meant for a real Claude) run
-    // at a fiftieth (core/pace.ts). Its deadlines (launch.timeoutSec) are not paced.
+    // at a fiftieth (adapters/pacing.ts). Its deadlines (launch.timeoutSec) are not paced.
     { BOARD_TEST_PACE: '0.02', ...(typeof env === 'function' ? env(box) : env) },
   )
   await until(() => proc.messages.some(m => (m as { ready?: boolean }).ready))

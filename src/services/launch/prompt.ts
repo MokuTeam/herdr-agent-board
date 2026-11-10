@@ -2,9 +2,9 @@
 // come first. Shared by the launches (name and first message) and renaming a session.
 import { agentNames, herdr, herdrText } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
+import { pause } from '../../adapters/pacing.ts'
 import { inputDraft } from '../../core/dialogs/input-box.ts'
 import { stillTyped } from '../../core/launch/spawn-args.ts'
-import { pause } from '../../core/pace.ts'
 import { PI_NAMING } from '../../core/pi.ts'
 
 const stalled = (err: unknown): boolean => isRecord(err) && /agent_prompt_stalled/.test(`${err.code} ${err.message}`)

@@ -28,6 +28,7 @@ import {
   worktreeCreate,
   worktreeOpen,
 } from '../../adapters/herdr.ts'
+import { pause } from '../../adapters/pacing.ts'
 import { run } from '../../adapters/process.ts'
 import { keyTowardYes, sameFolder, type TrustDialog, trustDialog } from '../../core/dialogs/trust.ts'
 import { t } from '../../core/lang.ts'
@@ -42,7 +43,6 @@ import {
   worktreePath,
 } from '../../core/launch/names.ts'
 import { forkCard } from '../../core/links.ts'
-import { pause } from '../../core/pace.ts'
 import { PI_AGENT } from '../../core/pi.ts'
 import type { Item, LaunchFailure, LaunchState, LaunchStep } from '../../core/types.ts'
 import type { Deps } from '../deps.ts'
