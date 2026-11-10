@@ -81,3 +81,14 @@
 .team-confirm-note { margin: 0; color: var(--label-2); font-size: 12.5px; }
 .team-confirm-items { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
 .team-confirm-actions { display: flex; gap: 8px; }
+/* Channels, a new member's welcome, the loop pause (#355). */
+.team-new { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.team-welcome { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, var(--fill-2)); box-shadow: inset 3px 0 0 var(--accent); }
+.team-welcome h3 { margin: 0; }
+.team-channels .team-scope-head .mini { padding: 3px 10px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font-size: 12px; cursor: pointer; }
+.team-channels > .team-row { background: var(--fill-2); }
+.team-loop { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.team-loop .todo-meta { flex: none; }
+.team-loop input { width: 4.5em; padding: 2px 6px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font: inherit; font-size: 12px; }
+.team-add select { flex: 1; min-width: 0; padding: 3px 6px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font: inherit; font-size: 12px; }
+.team-add .mini { padding: 3px 10px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font-size: 12px; cursor: pointer; }

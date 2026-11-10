@@ -476,14 +476,17 @@ describe('the source', () => {
       [200, VIEW],
       [200, { threads: THREADS }],
       [200, AGENTS],
+      [200, { pending: [] }],
       [200, VIEW],
       [200, { threads: THREADS }],
       [200, { thread: THREADS[0], lines: LINES }],
       [200, AGENTS],
+      [200, { pending: [] }],
       [200, VIEW],
       [200, { threads: THREADS }],
       [404, { ok: false, error: 'thread' }],
       [200, AGENTS],
+      [200, { pending: [BOB] }],
     )
     const source = teamSource(deps())
     source.sync(false, 1)
@@ -491,7 +494,7 @@ describe('the source', () => {
     source.sync(true, 1)
     await Bun.sleep(5)
     source.sync(true, 1)
-    expect(calls.map(c => c.url)).toEqual(['/api/team', '/api/team/threads', '/api/team/agents'])
+    expect(calls.map(c => c.url)).toEqual(['/api/team', '/api/team/threads', '/api/team/agents', '/api/team/welcome'])
     source.select(`${ANA}/general`)
     await Bun.sleep(5)
     expect(source.now.get().lines).toEqual(LINES)
@@ -499,17 +502,19 @@ describe('the source', () => {
     // A thread nothing was written in yet (404): empty, and no error.
     source.select(`${BOB}/general`)
     await Bun.sleep(5)
-    expect(calls.slice(3).map(c => c.url)).toEqual([
+    expect(calls.slice(4).map(c => c.url)).toEqual([
       '/api/team',
       '/api/team/threads',
       `/api/team/threads/${ANA}/general`,
       '/api/team/agents',
+      '/api/team/welcome',
       '/api/team',
       '/api/team/threads',
       `/api/team/threads/${BOB}/general`,
       '/api/team/agents',
+      '/api/team/welcome',
     ])
-    expect(source.now.get()).toMatchObject({ selected: `${BOB}/general`, thread: null, lines: [] })
+    expect(source.now.get()).toMatchObject({ selected: `${BOB}/general`, thread: null, lines: [], pending: [BOB] })
   })
 
   test('a remote page never asks for the switches', async () => {

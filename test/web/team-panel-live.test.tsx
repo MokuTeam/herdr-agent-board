@@ -79,11 +79,13 @@ test('teamRev on the local page: asked on opening, again on a new revision', asy
     [200, VIEW],
     [200, { threads: [] }],
     [200, AGENTS],
+    [200, { pending: [] }],
     [200, VIEW],
     [200, { threads: [] }],
     [200, AGENTS],
+    [200, { pending: [] }],
   )
-  const once = ['/api/team', '/api/team/threads', '/api/team/agents']
+  const once = ['/api/team', '/api/team/threads', '/api/team/agents', '/api/team/welcome']
   await show(payload({ teamRev: 1 }))
   expect(calls.map(c => c.url)).toEqual(once)
   await show(payload({ teamRev: 2 }))

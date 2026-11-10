@@ -93,6 +93,23 @@ function whoOf(ctx: Ctx, scope: string): string {
   return printable(peersOf(ctx.roster).find(p => p.peer === scope)?.name ?? 'them')
 }
 
+/**
+ * Who a thread is with: a channel's members by this board's names for them (#355), so an agent
+ * replying there is not told it wrote to the whole team; else as whoOf.
+ */
+async function whoOfThread(ctx: Ctx, key: string): Promise<string> {
+  const scope = splitKey(key)?.scope ?? ''
+  if (scope !== TEAM) return whoOf(ctx, scope)
+  const { reply } = await call(ctx.webPort, '/api/team/threads')
+  const threads = isRecord(reply) && Array.isArray(reply.threads) ? reply.threads.filter(isRecord) : []
+  const members = threads.find(t => t.key === key)?.members
+  if (!Array.isArray(members)) return 'the team'
+  const names = peersOf(ctx.roster)
+    .filter(p => members.includes(p.peer))
+    .map(p => printable(p.name))
+  return `the channel's members (${names.join(', ')})`
+}
+
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name)
   if (i < 0) return undefined
@@ -200,7 +217,7 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
       ...(self.claimed && { claimed: true }),
       thread: { id: parts.id },
     })
-    return said(reply, status, whoOf(ctx, parts.scope))
+    return said(reply, status, await whoOfThread(ctx, key))
   }
   if (op === 'thread') {
     const json = rest.includes('--json')
@@ -214,7 +231,14 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
     if (!isRecord(reply) || !isRecord(reply.thread) || !Array.isArray(reply.lines))
       throw new Error(status === 404 ? 'no such thread on this board' : `the board answered ${status}`)
     const agents = await call(ctx.webPort, '/api/team/agents')
-    const who = whoOf(ctx, splitKey(key)?.scope ?? '')
+    // A channel (#355) is with its members, by this board's names for them.
+    const members = Array.isArray(reply.thread.members) ? reply.thread.members.map(String) : null
+    const who = members
+      ? `the channel's members (${peersOf(ctx.roster)
+          .filter(p => members.includes(p.peer))
+          .map(p => printable(p.name))
+          .join(', ')})`
+      : whoOf(ctx, splitKey(key)?.scope ?? '')
     const lines = reply.lines.filter(isRecord)
     // Marked read only when asked, and only after the thread was read out. A thread with a message
     // held back (its key changed) is left for the owner, who alone can trust the key and read it.
@@ -304,7 +328,9 @@ export function framedThread(
   who: string,
 ): string {
   const scope = splitKey(key)?.scope ?? ''
-  const peerCfg = isRecord(agents) && isRecord(agents.peers) ? agents.peers[scope] : undefined
+  // A channel has switches of its own, under its key (#355).
+  const rules = Array.isArray(thread.members) ? key : scope
+  const peerCfg = isRecord(agents) && isRecord(agents.peers) ? agents.peers[rules] : undefined
   const shared = isRecord(peerCfg) && Array.isArray(peerCfg.lanes) ? peerCfg.lanes.map(String) : []
   const titles = isRecord(agents) && Array.isArray(agents.lanes) ? agents.lanes.filter(isRecord) : []
   const laneNames = shared.map(id => String(titles.find(l => l.id === id)?.title ?? id))

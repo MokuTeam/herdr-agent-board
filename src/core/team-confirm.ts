@@ -19,11 +19,15 @@ export const MAX_PENDING = 20
 /** The RP ID of the owner's passkeys. */
 export const RP_ID = 'localhost'
 
-/** The thread of a send, as POST /api/team/send takes it: { id } or { title, link? }. */
+/**
+ * The thread of a send, as POST /api/team/send takes it: { id } or { title, link? }; `members`: a new
+ * channel's others (#355).
+ */
 export interface SendThread {
   id?: string
   title?: string
   link?: string
+  members?: string[]
 }
 
 export type OwnerAction =
@@ -31,6 +35,10 @@ export type OwnerAction =
   | { kind: 'draft'; id: string }
   | { kind: 'trust'; peer: string }
   | { kind: 'agents'; change: Record<string, unknown> }
+  /** A new member's welcome (#355): their switches and the channels they join, in one go. */
+  | { kind: 'welcome'; peer: string; on?: boolean; lanes?: string[]; channels: string[] }
+  /** More members for a channel this board started (#355): more boards read it from then on. */
+  | { kind: 'members'; key: string; add: string[] }
   | { kind: 'passkey-add' }
   | { kind: 'passkey-remove'; id: string }
 
@@ -56,6 +64,8 @@ export interface AgentsNow {
  * muting are free.
  */
 export function widens(now: AgentsNow, change: Record<string, unknown>): boolean {
+  // A welcome (#355) widens as its parts do: Agents on, a lane added, a channel joined.
+  if (Array.isArray(change.channels) && change.channels.length) return true
   if (change.listener !== undefined) return change.listener !== null
   if (change.off !== undefined) return change.off === false && now.off
   // A person's loop pause (#360): any change of it lets agents trade a different number of

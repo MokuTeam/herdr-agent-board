@@ -21,6 +21,7 @@ import {
   MAX_CAPS,
   MAX_ENVELOPE_BYTES,
   MAX_LINK,
+  MAX_MEMBERS,
   MAX_NAME,
   MAX_TEXT,
   MAX_TITLE,
@@ -102,6 +103,16 @@ export const OUR_CAPS: string[] = [...CAPS]
 
 /** Whether a roster peer's board understands threads (#216). */
 export const hasThreads = (p: { caps?: string[] | undefined } | undefined): boolean => !!p?.caps?.includes('threads')
+
+/** Whether a roster peer's board understands channels (#355). */
+export const hasChannels = (p: { caps?: string[] | undefined } | undefined): boolean => !!p?.caps?.includes('channels')
+
+/** A channel's member list as the wire takes it: 2 to MAX_MEMBERS peer ids, each once, sorted. */
+export function channelMembers(v: unknown): string[] | null {
+  if (!Array.isArray(v) || v.length < 2 || v.length > MAX_MEMBERS || !v.every(isPeerId)) return null
+  const sorted = [...v].sort()
+  return new Set(sorted).size === sorted.length ? sorted : null
+}
 
 /** `s` for a terminal: whatever is not printable is written as \u{hex}, so it cannot move the cursor or reorder text. */
 export const printable = (s: string): string =>
@@ -278,7 +289,7 @@ export function checkMessage(
 }
 
 const BODY_KEYS = ['text', 'via', 'agent', 'thread']
-const THREAD_KEYS = ['id', 'title', 'link', 'group']
+const THREAD_KEYS = ['id', 'title', 'link', 'group', 'members']
 
 /**
  * The body's fields besides `text`, as a board accepts them: `via` exactly "agent"; `agent` a
@@ -315,10 +326,18 @@ function readThread(v: unknown): ThreadRef | null {
   if (general ? Object.hasOwn(v, 'title') : !validTitle(v.title)) return null
   if (Object.hasOwn(v, 'link') && !validLink(v.link)) return null
   if (Object.hasOwn(v, 'group') && v.group !== true) return null
+  // A channel (#355): a team topic with its member list, sorted as sent.
+  const members = Object.hasOwn(v, 'members') ? channelMembers(v.members) : undefined
+  if (
+    members === null ||
+    (members && (general || v.group !== true || members.join() !== (v.members as string[]).join()))
+  )
+    return null
   const t: ThreadRef = { id: v.id }
   if (!general) t.title = v.title as string
   if (Object.hasOwn(v, 'link')) t.link = v.link as string
   if (v.group === true) t.group = true
+  if (members) t.members = members
   return t
 }
 

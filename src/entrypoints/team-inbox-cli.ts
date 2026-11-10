@@ -20,6 +20,8 @@ export interface InboxThread {
   key: string
   /** `team`, or the person's name as this board knows them. */
   with: string
+  /** A channel (#355): its members by this board's names for them, this board left out; else null. */
+  channel: string[] | null
   /** null: the thread without a topic (general). A member's words. */
   title: string | null
   link: string | null
@@ -44,6 +46,8 @@ export async function inboxOf(ctx: Ctx): Promise<InboxThread[]> {
   const names = new Map(
     ctx.roster.filter(isRecord).map(p => [String(p.peer), typeof p.name === 'string' ? p.name : 'them'] as const),
   )
+  const members = (v: unknown): string[] | null =>
+    Array.isArray(v) ? v.filter(m => names.has(String(m))).map(m => names.get(String(m)) ?? 'them') : null
   return threads.reply.threads
     .filter(isRecord)
     .map(
@@ -54,6 +58,7 @@ export async function inboxOf(ctx: Ctx): Promise<InboxThread[]> {
           t.scope === TEAM
             ? TEAM
             : (names.get(String(t.scope)) ?? (typeof t.peerName === 'string' ? t.peerName : 'them')),
+        channel: members(t.members),
         title: typeof t.title === 'string' ? t.title : null,
         link: typeof t.link === 'string' ? t.link : null,
         unread: Object.hasOwn(counts, String(t.key)) ? Number(counts[String(t.key)]) || 0 : 0,
@@ -77,7 +82,11 @@ const line = (t: InboxThread, titled: boolean, ...more: string[]): string =>
   printable(
     [
       t.ref,
-      t.with === TEAM ? 'team chat' : `with ${t.with}`,
+      t.channel
+        ? `channel with ${t.channel.join(', ') || 'nobody else'}`
+        : t.with === TEAM
+          ? 'team chat'
+          : `with ${t.with}`,
       t.title === null ? 'general' : titled ? `"${t.title}"` : 'a topic',
       ...more,
     ].join(' · '),

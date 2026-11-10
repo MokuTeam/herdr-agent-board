@@ -317,6 +317,11 @@ export interface ThreadRecord {
   by: string
   createdAt: number
   lastAt: number
+  /**
+   * A channel (#355): a team thread for these boards only (peer ids, this board's among them),
+   * sent to them alone. Absent: the whole team's.
+   */
+  members?: string[]
 }
 type ThreadsFile = { v: 1; threads: Record<string, ThreadRecord> }
 const isThreads = (v: unknown): v is ThreadsFile => isRecord(v) && v.v === 1 && isRecord(v.threads)

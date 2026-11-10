@@ -36,6 +36,7 @@ import {
 import {
   ackBytes,
   authBytes,
+  channelMembers,
   checkEnvelope,
   checkMessage,
   DEFAULT_TTL_S,
@@ -44,6 +45,7 @@ import {
   type Frame,
   fingerprint,
   GENERAL,
+  hasChannels,
   hasThreads,
   isMessageId,
   isPeerId,
@@ -139,7 +141,11 @@ export type SendResult = { ok: true; id: string; thread?: string } | { ok: false
 export interface PostTarget {
   /** A peer id, or `team`. */
   to: string
-  thread?: { id?: string; title?: string; link?: string }
+  /**
+   * An existing thread's id, or a new one's title and link. `members` (#355, to `team` only, from
+   * the panel): a new channel's other members, ids from the roster.
+   */
+  thread?: { id?: string; title?: string; link?: string; members?: string[] }
 }
 
 /**
@@ -220,6 +226,11 @@ export interface TeamService {
   nameOf(peer: string): string
   /** Changes who handles a thread, or whether it is muted (#216); false when there is no such thread. */
   setThread(key: string, change: { handler?: SessionRef | null; muted?: boolean }): boolean
+  /**
+   * Adds members to a channel this board started (#355): peers of the roster. They get its posts
+   * from the next one on, the list with them; what was said before stays with who was there.
+   */
+  addMembers(key: string, peers: string[]): { ok: true } | { ok: false; error: string }
   /** Sends a draft as a question marked `via: "agent"`; the draft stays when the send is refused. */
   sendDraft(id: string): Promise<SendResult>
   /** Drops a draft; false when there is none. */
@@ -528,6 +539,39 @@ export function createTeam({
     }
     const held = readPins()[msg.from]?.status !== 'trusted'
     const thread = inboundKey(msg.from, msg.body.thread)
+    if (!channelFits(thread, msg.body.thread, msg.from, me.peer)) {
+      // Acked all the same: the hub need not bring it again.
+      audit('drop', msg.from, { why: 'channel', id: msg.id })
+      log('team: dropped a message (a channel this board is not in, or a thread it does not fit)')
+    } else keep(msg, thread, held)
+    // Acked again on a redelivery: the first ack may not have got through.
+    const ts = new Date(clock.now()).toISOString()
+    const sig = await sign(me.pkcs8, ackBytes({ by: me.peer, id: msg.id, to: msg.from, ts }))
+    frame({ t: 'ack', id: msg.id, ts, sig })
+    markAcked(msg.from, msg.id, clock.now())
+  }
+
+  /**
+   * A channel's copy (#355) fits when it names this board and its sender as members, and its thread
+   * here is a channel too, or new. A plain team thread's copy never lands in a channel either: a
+   * channel's words stay with its members, and the team's stay the team's. A channel kept here takes
+   * copies only from its members as kept, or its creator (whose post brings a new member's name
+   * before that member can answer: the hub hands each board its copies in order). A new channel is
+   * not taken while the team's threads are at their cap: channels are never dropped to make room,
+   * so a full scope cannot be used to forget one.
+   */
+  function channelFits(key: string, ref: ThreadRef | undefined, from: string, self: string): boolean {
+    const all = readThreads()
+    const have = Object.hasOwn(all, key) ? all[key] : undefined
+    const members = ref?.members
+    if (!members) return !have?.members
+    if (!members.includes(self) || !members.includes(from)) return false
+    if (have) return !!have.members && (have.members.includes(from) || have.by === from)
+    return Object.values(all).filter(t => t.scope === TEAM).length < MAX_THREADS_PER_SCOPE
+  }
+
+  /** A message that came in, kept: the inbox, its thread, the audit and the hearers. */
+  function keep(msg: Message, thread: string, held: boolean): void {
     const fresh = addInbox({
       id: msg.id,
       from: msg.from,
@@ -553,11 +597,6 @@ export function createTeam({
         ...(msg.body.via && { via: msg.body.via }),
       })
     }
-    // Acked again on a redelivery: the first ack may not have got through.
-    const ts = new Date(clock.now()).toISOString()
-    const sig = await sign(me.pkcs8, ackBytes({ by: me.peer, id: msg.id, to: msg.from, ts }))
-    frame({ t: 'ack', id: msg.id, ts, sig })
-    markAcked(msg.from, msg.id, clock.now())
   }
 
   /** The name this board knows a peer by: its roster, its pins, else the short fingerprint. Never a message's word. */
@@ -578,6 +617,8 @@ export function createTeam({
         have.lastAt = now
         if (!have.title && ref?.title) have.title = ref.title
         if (!have.link && ref?.link) have.link = ref.link
+        // A channel's member list moves on with its creator's posts only (#355).
+        if (have.members && ref?.members && by === have.by) have.members = ref.members
         return false
       }
       threads[key] = {
@@ -590,12 +631,15 @@ export function createTeam({
         by,
         createdAt: now,
         lastAt: now,
+        ...(ref?.members && { members: ref.members }),
       }
       // A peer cannot grow the file without end: past the cap, its quietest thread nobody handles
-      // goes (its messages stay in the inbox, under the thread's key).
+      // goes (its messages stay in the inbox, under the thread's key). Never a channel (#355): its
+      // record is what keeps its words with its members.
       const mine = Object.entries(threads).filter(([, t]) => t.scope === parts.scope)
       if (mine.length > MAX_THREADS_PER_SCOPE) {
-        const [quietest] = mine.filter(([, t]) => !t.handler).sort((a, b) => a[1].lastAt - b[1].lastAt)[0] ?? []
+        const [quietest] =
+          mine.filter(([, t]) => !t.handler && !t.members).sort((a, b) => a[1].lastAt - b[1].lastAt)[0] ?? []
         if (quietest) delete threads[quietest]
       }
       return true
@@ -603,20 +647,43 @@ export function createTeam({
   }
 
   /** The thread a post goes to: an existing one by id, a new one by title, else general. */
-  function threadOf(scope: string, t: PostTarget['thread']): { ok: true; ref?: ThreadRef } | { ok: false } {
+  function threadOf(scope: string, t: PostTarget['thread'], me: string): { ok: true; ref?: ThreadRef } | { ok: false } {
     if (t?.id !== undefined) {
-      if (!isThreadId(t.id)) return { ok: false }
+      if (!isThreadId(t.id) || t.members !== undefined) return { ok: false }
       if (t.id === GENERAL) return { ok: true }
       const rec = readThreads()[threadKey(scope, t.id)]
       if (!rec) return { ok: false }
       return {
         ok: true,
-        ref: { id: t.id, ...(rec.title && { title: rec.title }), ...(rec.link && { link: rec.link }) },
+        ref: {
+          id: t.id,
+          ...(rec.title && { title: rec.title }),
+          ...(rec.link && { link: rec.link }),
+          ...(rec.members && { members: rec.members }),
+        },
       }
     }
     if (t?.title === undefined) return { ok: true }
     if (!validTitle(t.title) || (t.link !== undefined && !validLink(t.link))) return { ok: false }
-    return { ok: true, ref: { id: crypto.randomUUID(), title: t.title, ...(t.link !== undefined && { link: t.link }) } }
+    // A new channel (#355): the team's, its members in the roster now, this board among them.
+    let members: string[] | undefined
+    if (t.members !== undefined) {
+      const ids = Array.isArray(t.members) ? t.members : []
+      if (scope !== TEAM || !ids.length || !ids.every(id => id !== me && roster.some(p => p.peer === id)))
+        return { ok: false }
+      const list = channelMembers([me, ...ids])
+      if (!list) return { ok: false }
+      members = list
+    }
+    return {
+      ok: true,
+      ref: {
+        id: crypto.randomUUID(),
+        title: t.title,
+        ...(t.link !== undefined && { link: t.link }),
+        ...(members && { members }),
+      },
+    }
   }
 
   /**
@@ -635,26 +702,34 @@ export function createTeam({
     const pins = readPins()
     // A key that changed under a pinned name may be someone else's: nothing goes to it until Trust.
     if (!team && pins[target.to]?.status === 'changed') return { ok: false, error: 'changed' }
+    // Only the panel starts a channel (#355): an agent's post or a draft never names members.
+    if (target.thread?.members !== undefined && source.by !== 'ui') return { ok: false, error: 'thread' }
     const scope = team ? TEAM : target.to
-    const th = threadOf(scope, target.thread)
+    const me = await ensureKey()
+    const th = threadOf(scope, target.thread, me.pub)
     if (!th.ok) return { ok: false, error: 'thread' }
     const ref: ThreadRef | undefined = team ? { ...(th.ref ?? { id: GENERAL }), group: true } : th.ref
     const key = threadKey(scope, ref?.id ?? GENERAL)
     const changedKey = (p: RosterPeer): boolean => pins[p.peer]?.status === 'changed'
-    const recipients = team ? roster.filter(p => !changedKey(p)) : roster.filter(p => p.peer === target.to)
-    const skipped = team ? roster.filter(changedKey).map(p => p.name) : []
+    // A channel goes to its members only (#355); the team's other threads to everyone.
+    const inThread = (p: RosterPeer): boolean => !ref?.members || ref.members.includes(p.peer)
+    const recipients = team
+      ? roster.filter(p => inThread(p) && !changedKey(p))
+      : roster.filter(p => p.peer === target.to)
+    const skipped = team ? roster.filter(p => inThread(p) && changedKey(p)).map(p => p.name) : []
     if (!recipients.length) return { ok: false, error: 'nobody' }
     const via: Via | undefined = source.by === 'agent' ? 'agent' : undefined
     const session = source.by === 'agent' ? source.session : undefined
     const pressed = source.by === 'agent' && source.pressed === true
     const agentName = session?.name && validName(session.name) ? session.name : undefined
-    const me = await ensureKey()
     const copies: { env: Envelope; msg: Message }[] = []
     for (const p of recipients) {
-      const rich = hasThreads(p)
+      // A channel's copy goes as a channel only to a board that reads channels; any other gets it
+      // in its pair's general with the title in front, so an answer there reaches this board alone.
+      const rich = ref?.members ? hasChannels(p) : hasThreads(p)
       const words = rich
         ? body
-        : legacyText(body, ref && { ...(ref.title && { title: ref.title }), group: ref.group === true })
+        : legacyText(body, ref && { ...(ref.title && { title: ref.title }), group: ref.group === true && !ref.members })
       if (words.length > MAX_TEXT) return { ok: false, error: 'text' }
       const msgBody: Message['body'] = { text: words }
       if (via) msgBody.via = via
@@ -876,6 +951,22 @@ export function createTeam({
     },
     threadLines: key => (config() ? threadLines(key) : []),
     nameOf,
+    addMembers(key, peers) {
+      if (!config()) return { ok: false, error: 'off' }
+      const all = readThreads()
+      const rec = Object.hasOwn(all, key) ? all[key] : undefined
+      if (!rec?.members || rec.by !== 'me') return { ok: false, error: 'thread' }
+      if (!peers.length || !peers.every(p => roster.some(r => r.peer === p))) return { ok: false, error: 'peer' }
+      const list = channelMembers([...new Set([...rec.members, ...peers])])
+      if (!list) return { ok: false, error: 'members' }
+      changeThreads(threads => {
+        const t = Object.hasOwn(threads, key) ? threads[key] : undefined
+        if (t) t.members = list
+      })
+      audit('members', null, { thread: key, added: peers.length, members: list.length })
+      changed()
+      return { ok: true }
+    },
     setThread(key, change) {
       if (!config()) return false
       // No such thread: nothing to change, and no file made for it.

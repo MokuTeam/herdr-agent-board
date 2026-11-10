@@ -97,6 +97,16 @@ interface Options {
 }
 
 const HOUR = 3_600_000
+/**
+ * Whose switches rule a thread (#355): a channel's own entry, under its key, else its scope's (the
+ * pair's peer, or the team for the team chat and its topics).
+ */
+export function switchesKey(scope: string, key: string | null): string {
+  if (scope !== TEAM || !key) return scope
+  const all = readThreads()
+  return Object.hasOwn(all, key) && all[key]?.members ? key : scope
+}
+
 /** Notices waiting for one session at most; the schedule keeps 30 entries a session in all. */
 export const MAX_PENDING_NOTICES = 10
 const DAY = 24 * HOUR
@@ -151,9 +161,9 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       if (!view) return { ok: false, error: 'off' }
       if (to !== TEAM && !isPeerId(to)) return { ok: false, error: 'peer' }
       const s = readAgents()
-      const peer = s.peers[to]
       // A new thread (a title, no id) has no key yet: nothing to loop in, nothing to echo.
       const key = thread?.title !== undefined && thread.id === undefined ? null : threadKey(to, thread?.id ?? GENERAL)
+      const peer = s.peers[switchesKey(to, key)]
       const refused = overLimit(to, key, text, session)
       if (refused) return { ok: false, error: refused }
       const listener = s.listener?.key === session.key
@@ -212,8 +222,10 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const parts = splitKey(e.thread)
       if (!parts) return
       const isTeam = parts.scope === TEAM
-      if (!s.peers[isTeam ? TEAM : e.from]?.on) return
-      if (isTeam && s.peers[TEAM]?.muted) return
+      // A channel has switches of its own (#355); the team chat's mute is not a channel's.
+      const rules = isTeam ? switchesKey(TEAM, e.thread) : e.from
+      if (!s.peers[rules]?.on) return
+      if (rules === TEAM && s.peers[TEAM]?.muted) return
       const rec = readThreads()[e.thread]
       if (rec?.muted) return
       const t = now()
@@ -251,7 +263,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       if (!parts || !team.threads().some(t => t.key === key)) return { ok: false, error: 'thread' }
       if (session) {
         const s = readAgents()
-        const shared = new Set(s.peers[parts.scope]?.lanes ?? [])
+        const shared = new Set(s.peers[switchesKey(parts.scope, key)]?.lanes ?? [])
         if (s.listener?.key !== session.key && !shared.has(laneOf(session.key) ?? ''))
           return { ok: false, error: 'lane' }
       }

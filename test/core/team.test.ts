@@ -8,6 +8,7 @@ import {
   authBytes,
   b64u,
   canonicalJson,
+  channelMembers,
   checkEnvelope,
   checkMessage,
   cleanCaps,
@@ -15,6 +16,7 @@ import {
   envelopeBytes,
   fingerprint,
   generateKey,
+  hasChannels,
   hasThreads,
   joinBytes,
   type Message,
@@ -534,4 +536,32 @@ test('validName: no controls, no bidi controls, nothing that reorders or breaks 
     assert.equal(validName(bad), false, JSON.stringify(bad))
   assert.equal(printable('ok Анна ●'), 'ok Анна ●')
   assert.equal(printable('a\u001b[2Jb\u202ec\nd'), 'a\\u{1b}[2Jb\\u{202e}c\\u{a}d')
+})
+
+test('checkMessage: a channel is a team topic with its members, sorted, each once, 2 to 32 of them (#355)', () => {
+  const code = (body: unknown) => {
+    const r = checkMessage(JSON.stringify({ ...ENV, body }), A.pub)
+    return r.ok ? 'ok' : r.code
+  }
+  const id = '6f1c2a4e-8b3d-4c5e-9f7a-1b2c3d4e5f60'
+  const [p, q, r] = ['A', 'B', 'C'].map(c => c.repeat(43))
+  const channel = { id, title: 'release', group: true, members: [p, q] }
+  const ok = checkMessage(JSON.stringify({ ...ENV, body: { text: 'x', thread: channel } }), A.pub)
+  assert.deepEqual(ok.ok && ok.msg.body.thread, channel)
+  for (const thread of [
+    { ...channel, members: [q, p] },
+    { ...channel, members: [p, p] },
+    { ...channel, members: [p] },
+    { ...channel, members: [p, 'short'] },
+    { ...channel, members: 'all' },
+    { ...channel, members: Array.from({ length: 33 }, (_, i) => `${String(i).padStart(2, '0')}${'x'.repeat(41)}`) },
+    { id, title: 'release', members: [p, q] },
+    { id: 'general', group: true, members: [p, q] },
+  ])
+    assert.equal(code({ text: 'x', thread }), 'bad_frame', JSON.stringify(thread).slice(0, 80))
+  assert.equal(code({ text: 'x', thread: { ...channel, members: [p, q, r] } }), 'ok')
+  assert.deepEqual(channelMembers([q, p]), [p, q])
+  assert.equal(channelMembers([p]), null)
+  assert.equal(hasChannels({ caps: ['threads', 'channels'] }), true)
+  assert.equal(hasChannels({ caps: ['threads'] }), false)
 })

@@ -23,12 +23,14 @@ import {
   isThreadLines,
   isThreadList,
   isUnread,
+  isWelcomeList,
   keyParts,
   offersTeam,
   sendError,
   type TeamView,
   type ThreadLine,
   type ThreadView,
+  type Welcome,
 } from '../models/team.ts'
 import { confirmError, ownerPost } from '../models/team-confirm.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
@@ -48,12 +50,18 @@ export interface TeamNow {
   unread: Record<string, number>
   /** The owner's switches; null on a remote page, which may not change them. */
   agents: AgentsView | null
+  /** Who joined the team and waits for the owner's welcome (#355); none on a remote page. */
+  pending: string[]
 }
 
-/** A new topic: its title and an optional link (http or https). */
+/**
+ * A new topic: its title and an optional link (http or https). `members` (#355): a channel in the
+ * team chat, for these members (and this board) only.
+ */
 export interface NewTopic {
   title: string
   link?: string
+  members?: string[]
 }
 
 export interface TeamSource {
@@ -73,6 +81,10 @@ export interface TeamSource {
   mute(key: string, muted: boolean): Promise<void>
   /** One change of the owner's switches (the team chat's mute among them). */
   setAgents(change: AgentsChange): Promise<void>
+  /** More members for a channel this board started (#355). */
+  addMembers(key: string, peers: string[]): Promise<void>
+  /** A new member's welcome settled: their switches and the channels they join (#355). */
+  welcome(w: Welcome): Promise<void>
   /**
    * The panel open or not, the payload's teamRev and its unread count: fetched on opening and on
    * each new revision or count while open.
@@ -99,6 +111,7 @@ const EMPTY: TeamNow = {
   lines: [],
   unread: {},
   agents: null,
+  pending: [],
 }
 
 /** The panel's data without React: useTeam draws from it. */
@@ -133,11 +146,18 @@ export function teamSource(deps: TeamDeps): TeamSource {
       const selected = now.get().selected
       const { thread, lines } = await shown(selected)
       const agents = remote() ? null : await api.get('/api/team/agents', isAgentsView, { cache: 'no-store' })
+      // Who to welcome is a nicety: a look that fails offers nobody, and the panel is drawn all the same.
+      const pending = remote()
+        ? []
+        : await api
+            .get('/api/team/welcome', isWelcomeList, { cache: 'no-store' })
+            .then(w => w.pending)
+            .catch(() => [] as string[])
       // Each thread's count, asked only while the payload says something is unread.
       const unread =
         unreadTotal > 0 ? { ...(await api.get('/api/team/unread', isUnread, { cache: 'no-store' })).threads } : {}
       if (mine !== asked) return
-      now.set({ ...now.get(), view, threads, thread, lines, agents, unread })
+      now.set({ ...now.get(), view, threads, thread, lines, agents, unread, pending })
       // The thread on show, in a page in front, is read: its messages leave the count. A read that
       // fails leaves the count as it is; the panel stays drawn. A message that lands meanwhile moves
       // teamRev, and the page that shows it is the page that read it.
@@ -183,7 +203,11 @@ export function teamSource(deps: TeamDeps): TeamSource {
       const parts = keyParts(now.get().selected ?? '')
       if (!parts) return false
       const thread = topic
-        ? { title: topic.title, ...(topic.link && { link: topic.link }) }
+        ? {
+            title: topic.title,
+            ...(topic.link && { link: topic.link }),
+            ...(topic.members && { members: topic.members }),
+          }
         : parts.id === 'general'
           ? undefined
           : { id: parts.id }
@@ -218,6 +242,11 @@ export function teamSource(deps: TeamDeps): TeamSource {
       return change(`${path}/${muted ? 'mute' : 'unmute'}`, {})
     },
     setAgents: c => change('/api/team/agents', c),
+    addMembers(key, peers) {
+      const id = keyParts(key)?.id ?? ''
+      return change(`/api/team/threads/team/${encodeURIComponent(id)}/members`, { add: peers })
+    },
+    welcome: w => change('/api/team/welcome', w),
     sync(nextOpen, nextRev, nextUnread = 0) {
       const ask = nextOpen && (!open || nextRev !== rev || nextUnread !== unreadTotal)
       open = nextOpen
@@ -250,5 +279,7 @@ export function useTeam(open: boolean): TeamNow & Omit<TeamSource, 'now' | 'sync
     discardDraft: source.discardDraft,
     mute: source.mute,
     setAgents: source.setAgents,
+    addMembers: source.addMembers,
+    welcome: source.welcome,
   }
 }

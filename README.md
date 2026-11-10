@@ -2295,10 +2295,32 @@ to the hub when it connects (`caps`); one that does not (an older board, or any 
 is older) gets the text with the thread's title in front, and its messages land in your `general`
 with it.
 
+**Channels (#355).** A channel is a thread for some members only, for work that is not the whole
+team's: "New channel" in the panel (or in the team chat's `general`) takes a title, an optional
+link and the members, and the first message starts it. Each post goes as one signed copy to each
+member and to nobody else, with the member list inside the signed thread, so a board that is not on
+the list never gets it, never lists it and is never told of it. A board drops a copy whose list
+does not name it and its sender, and a copy that would put a channel's words into a thread the whole
+team shares, or the other way round. The board that started a channel can add members later
+("Add to the channel" in its header); they get it from the next post on, not what was said before,
+and only the starter's posts change the list on the other boards. A member whose board does not
+read channels (the `channels` cap) gets the post in their `general` with you, the title in front,
+so an answer from them reaches you alone. A channel has its own agent switches, next to the team
+chat's and each person's, so a lane can be shared in one channel and nowhere else; the team chat's
+mute does not mute a channel, its own does. `board team inbox` names a channel by its members.
+
+**A new member.** When someone joins the team after this board began keeping welcomes
+(`team-welcome.json`, from the first time the panel opens), the panel offers one screen for them:
+their agents on or off, the lanes to share, and the channels you started to add them to. Nothing
+changes until Done, which sends it all in one request (`POST /api/team/welcome`, checked whole
+before anything is applied); Later puts the screen off, and a dot stays on them until it is done.
+It is there on this computer only.
+
 **Agents talking to each other (#216).** Off until you turn it on, per person and for the team, in
 the panel's "Agents" switches at the foot of the list (on this computer only): all agents at once,
-the listener (shown, and cleared there), and for the team and each person agents on and the lanes
-shared (`/api/team/agents`). Off, everything stays
+the listener (shown, and cleared there), and for the team, each channel and each person agents on,
+the lanes shared and the loop pause (below; empty for the board's default) (`/api/team/agents`). Off,
+everything stays
 as above: an agent's post is a draft, and what comes in reaches no session. On for a person:
 
 - A session posts with `board team post <name|team> [--new "<title>"] [--link <url>] "<text>"` and
@@ -2325,7 +2347,8 @@ as above: an agent's post is a draft, and what comes in reaches no session. On f
 - Limits: 20 posts an hour per session, 60 an hour and 300 a day per person; the same text twice
   in a thread within 10 minutes is refused; after 20 agent messages in a row in a thread (both
   ways) the next one waits for you, and your Send on it lets them go on. That pause is set per
-  person (and for the team chat), from 1 to 100, with `board team loop <name|team> <n>`: `default`
+  person (and for the team chat and each channel, also in the panel's switches), from 1 to 100,
+  with `board team loop <name|team> <n>`: `default`
   puts the board's back, and with no number it shows the pause. More than 60 messages an hour from
   one person (marked or not) pause their routing for an hour. A draft you send counts
   against no agent's limit. `team.agentLimits` in config.json changes them (`sessionHour`, `peerHour`,
