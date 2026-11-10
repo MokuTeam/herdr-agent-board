@@ -4,7 +4,7 @@
 // between them, Return after if asked); the board reads which page has the focus itself, and the
 // card goes under "needs you" with that site, what will be typed and the vault's matches (names and
 // usernames only, once the vault is open). The owner approves with the vault's master password
-// (never kept; the vault may stay open in the board's memory for 15 minutes) or declines; the board
+// (never kept; the vault may stay open in the board's memory for an hour) or declines; the board
 // types the values by keys and locks the vault again. The agent learns ok, declined, expired, no
 // match, or why it did not go through, never a value. The rules here; the life of a request is
 // services/login-fill.ts. Pure, with no node: import: the page uses its types.
@@ -16,7 +16,7 @@ export type FillField = (typeof FILL_FIELDS)[number]
 /** How long a request waits for the owner. */
 export const FILL_EXPIRES_MS = 10 * 60_000
 /** The vault kept open after an approval with "keep unlocked". */
-export const HOLD_MS = 15 * 60_000
+export const HOLD_MS = 60 * 60_000
 /** The vault open while the owner picks among several matches, then locked again. */
 export const PICK_MS = 5 * 60_000
 

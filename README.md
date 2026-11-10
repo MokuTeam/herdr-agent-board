@@ -3240,7 +3240,7 @@ keys are copied for it) and run `claude` once to sign in; `herdr` attaches to th
   username,password,totp] [--enter]`) for a login typed into the field that has the focus in its
   browser: the board reads which page that is itself, its card goes under "needs you" with the site
   and what will be typed; you approve with the vault's master password (never kept; "keep unlocked
-  for 15 minutes" holds the Bitwarden CLI's session in the board's memory only), pick a login when
+  for an hour" holds the Bitwarden CLI's session in the board's memory only), pick a login when
   several match, or decline. The board types the values by keys (no clipboard) and locks the vault
   again; the agent hears only whether it was typed. Anything typed into a page can be read back by
   the agent's DevTools: approve only for the site you see on the card. The board's backup does not

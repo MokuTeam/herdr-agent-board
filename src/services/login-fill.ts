@@ -4,7 +4,7 @@
 // (services/vault.ts opens it with the Bitwarden CLI) or declines; the board finds the login for that
 // page, the owner picks one where several match, the board checks the page with the focus is still
 // that site and types the values by keys (services/desktop.ts typeKeys), then locks the vault (or
-// keeps it open in this process's memory for 15 minutes, as the owner said). The agent is told how
+// keeps it open in this process's memory for an hour, as the owner said). The agent is told how
 // it ended by a board reminder (browser_fill_login) or reads it (`board browser login` waits).
 //
 // Requests live in this process's memory only (a board restart forgets them, and the vault is

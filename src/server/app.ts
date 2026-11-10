@@ -318,7 +318,7 @@ export async function startServer({
     : null
   const vault = desktops ? createVault({ cfg: vaultNow, log }) : null
   // The one open vault, shared by the fills and the saves (services/vault-hold.ts): one Bitwarden
-  // CLI, one data file, one unlock the owner may keep open for 15 minutes.
+  // CLI, one data file, one unlock the owner may keep open for an hour.
   const vaultHold = desktops && vault ? createVaultHold({ vault, onChange: () => board.publish() }) : null
   const fills =
     desktops && vault && vaultHold

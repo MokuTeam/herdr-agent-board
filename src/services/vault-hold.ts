@@ -1,7 +1,7 @@
 // The one open vault, shared by the login fill (services/login-fill.ts) and the login save
 // (services/login-save.ts): there is one Bitwarden CLI with one data file, so there is one unlock.
 // A request opens it with the master password (services/vault.ts) and holds the session here, in
-// the board's memory only: kept for the owner ("keep unlocked for 15 minutes", `for` null, every
+// the board's memory only: kept for the owner ("keep unlocked for an hour", `for` null, every
 // request sees it), or for that one request's own turn, locked again after its time. The session
 // bw gives is never logged, said or written; a board restart forgets it, and the vault locks as the
 // board starts again (services/vault.ts).

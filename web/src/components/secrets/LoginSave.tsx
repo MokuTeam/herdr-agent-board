@@ -2,7 +2,7 @@
 // on the board's own server, answered in the session sheet: the site they signed in on and the
 // username (read by the board), whether it is a new login or a password to update; the vault's
 // master password (masked, kept in this form's state only, cleared once the board answers), "keep
-// it unlocked for 15 minutes", Save or Decline. One POST to /api/vault/save/<id>, which only the
+// it unlocked for an hour", Save or Decline. One POST to /api/vault/save/<id>, which only the
 // domain's login reaches. The password the owner typed is never shown here, nor anywhere but the
 // board's own memory until they answer.
 import { useState } from 'react'

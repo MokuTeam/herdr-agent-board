@@ -54,7 +54,7 @@ export const VAULT_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'fill.form.master': 'Vault master password',
     'fill.form.masterHint': 'Opens the vault for this fill only, kept nowhere',
     'fill.form.code': 'Two-step code of the vault account, if it has one',
-    'fill.form.keep': 'Keep the vault unlocked for 15 minutes',
+    'fill.form.keep': 'Keep the vault unlocked for an hour',
     'fill.form.unlocked': 'The vault is unlocked until {time}.',
     'fill.form.lock': 'Lock now',
     'fill.form.never':
@@ -156,7 +156,7 @@ export const VAULT_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'fill.form.master': 'Мастер-пароль хранилища',
     'fill.form.masterHint': 'Открывает хранилище только для этого ввода, нигде не хранится',
     'fill.form.code': 'Код двухэтапного входа аккаунта хранилища, если он есть',
-    'fill.form.keep': 'Не запирать хранилище 15 минут',
+    'fill.form.keep': 'Не запирать хранилище час',
     'fill.form.unlocked': 'Хранилище открыто до {time}.',
     'fill.form.lock': 'Запереть сейчас',
     'fill.form.never': 'Доска вводит значения клавишами в его браузер. Агент, карточка и журналы доски их не видят.',

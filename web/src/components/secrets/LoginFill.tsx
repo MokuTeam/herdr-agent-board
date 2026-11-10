@@ -2,7 +2,7 @@
 // the session sheet: the site its browser has in front (read by the board), the field with the
 // focus, what will be typed, the vault's matches once it is open; the vault's master password
 // (masked, kept in this form's state only, cleared once the board answers), "keep it unlocked for
-// 15 minutes", Fill in or Decline; with several matches, the one to fill in. One POST to
+// an hour", Fill in or Decline; with several matches, the one to fill in. One POST to
 // /api/vault/fill/<id>, which only the domain's login reaches.
 import { useState } from 'react'
 import type { FillField, LoginFillView } from '../../../../src/core/login-fill.ts'
