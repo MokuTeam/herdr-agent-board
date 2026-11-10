@@ -47,11 +47,13 @@ your setup must leave every other one as it was.
 
 While working, run the files that cover what you change (`bun test test/server/routes.test.ts`,
 seconds). Before the pull request, run the whole suite once with `bun run test`: six Bun workers
-(`--parallel=6`), about 5 minutes and 2.4 GB at its peak on an 8-core Windows laptop. With less
-memory free, `bun run test --parallel=4` (the last `--parallel` counts): about 6 minutes, 1.7 GB.
-One heavy run at a time on a machine others share. On Windows run it from Git Bash: the server
-tests need its sh and awk. `test/support/gc-between-files.ts`, preloaded by the scripts, collects
-the garbage after each file; without it each worker holds about twice the memory.
+(`--parallel=6`), about 5 minutes and 2.4 to 2.6 GB at its peak on an 8-core Windows laptop. On
+fewer cores or with less memory free, `bun run test --parallel=4` (the last `--parallel` counts):
+about 6 minutes, 1.7 GB; with 4 cores, `--parallel=2`. One heavy run at a time on a machine others
+share. On Windows run it from Git Bash: the server tests need its sh and awk.
+`test/support/gc-between-files.ts`, preloaded by the scripts, collects the garbage at the end of
+each file, which frees what the files before it left; without it a worker holds about twice the
+memory.
 
 - `bun run test:fast`: all but the end-to-end files, `*.e2e.test.ts`, which do nothing but run the
   real sh, awk or PowerShell (a few other files run them in some tests). `bun run test:e2e`: only
