@@ -564,56 +564,20 @@ function presence(): void {
 
 const TEAM_USAGE =
   'usage: board team join <invite> --hub <ws://host:7443> --name <name> | board team roster | board team draft <name|peer-id> "<text>"'
-const TEAM_JOIN_MS = 10_000
 
-type KeyPair = import('../core/team.ts').KeyPair
-
-/** What the hub said to a join: welcome (with the name it took), or why not. */
-function joinAt(
-  T: typeof import('../core/team.ts'),
-  hub: string,
-  invite: string,
-  name: string,
-  key: KeyPair,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  return new Promise(resolve => {
-    let ws: WebSocket
-    let done = false
-    const finish = (r: { ok: true } | { ok: false; error: string }): void => {
-      if (done) return
-      done = true
-      clearTimeout(timer)
-      try {
-        ws.close()
-      } catch {}
-      resolve(r)
-    }
-    const timer = setTimeout(() => finish({ ok: false, error: 'the hub did not answer in 10 s' }), TEAM_JOIN_MS)
-    try {
-      ws = new WebSocket(`${hub}/v1`)
-    } catch (err) {
-      return finish({ ok: false, error: messageOf(err) })
-    }
-    ws.onerror = () => finish({ ok: false, error: `cannot reach the hub at ${hub}` })
-    ws.onclose = e =>
-      finish({
-        ok: false,
-        error: `the hub closed the connection (${e.code}): the invite is not valid, or this key was revoked`,
-      })
-    ws.onopen = () =>
-      ws.send(JSON.stringify({ t: 'hello', v: T.TEAM_PROTOCOL, peer: key.pub, client: 'agent-board/cli' }))
-    ws.onmessage = e => {
-      const f = T.parseFrame(String(e.data))
-      if (!f) return
-      if (f.t === 'challenge')
-        void T.sign(key.pkcs8, T.joinBytes({ hub: f.hub, invite, name, nonce: f.nonce, peer: key.pub })).then(sig =>
-          ws.send(JSON.stringify({ t: 'join', invite, name, sig })),
-        )
-      else if (f.t === 'welcome') finish({ ok: true })
-      else if (f.t === 'error')
-        finish({ ok: false, error: `the hub refused: ${f.code}${f.message ? ` (${f.message})` : ''}` })
-    }
-  })
+/**
+ * When the board's port answered, but not as this install's board would (#356): the process that
+ * holds it, in a line (pid, folder, when it started, what /api/hello says). Null when it is this
+ * install's board after all, or the system does not say.
+ */
+async function strangerOnPort(port: number): Promise<string | null> {
+  const { whoHoldsPort } = await import('../adapters/port-owner.ts')
+  const { describeOwner } = await import('../core/board-port.ts')
+  const { ROOT } = await import('../adapters/paths.ts')
+  const { owner, says, why } = await whoHoldsPort(port, ROOT)
+  if (!owner || !why) return null
+  const who = describeOwner(owner, says, why, Date.now())
+  return `port ${port} is held by a process that is not this install's board (${ROOT}): ${who}. Stop it (often an old board server from another checkout) and open the board again`
 }
 
 /**
@@ -690,14 +654,44 @@ async function team(): Promise<void> {
     const hub = T.normalizeHub(given ?? have.hub) ?? ''
     const name = forkName ?? (typeof have.name === 'string' ? have.name : '')
     if (!invite || more.length !== 1 || !hub || !T.validName(name)) throw new Error(TEAM_USAGE)
-    const key = store.readKey() ?? (await T.generateKey())
-    const r = await joinAt(T, hub, invite, name, key)
-    if (!r.ok) throw new Error(r.error)
+    const saved = store.readKey()
+    const key = saved ?? (await T.generateKey())
+    const { joinHub, TRIES, TRY_MS } = await import('../services/team-join.ts')
+    const { probeHub } = await import('../adapters/hub-reach.ts')
+    // From the moment a join goes out the hub may take the invite for this key, so a new key is
+    // saved first: an interrupt between tries, or no answer at all, must not lose it. It is taken
+    // back once the hub has settled that the join did not land.
+    let wrote = false
+    const r = await joinHub(
+      { hub, invite, name, key, keyWasSaved: saved !== null },
+      {
+        tryMs: Number(process.env.BOARD_TEAM_JOIN_MS) || TRY_MS,
+        tries: TRIES,
+        probe: probeHub,
+        say: line => console.error(`board: ${line}`),
+        pause: ms => Bun.sleep(ms),
+        beforeJoin: async () => {
+          if (saved || wrote) return
+          await store.keepJoinedKey(key)
+          wrote = true
+        },
+      },
+    )
+    if (!r.ok) {
+      if (!r.unanswered) {
+        if (wrote) store.forgetKey(key.pub)
+        throw new Error(r.error)
+      }
+      throw new Error(
+        `${r.error}. The join went out and may have reached the hub: this board keeps its key, so the same command again finds out`,
+      )
+    }
     await store.keepJoinedKey(key)
     const w = (await import('../adapters/config-file.ts')).joinTeam({ hub, name })
     if (!w.ok) throw new Error(w.error)
+    const late = r.via === 'auth' ? ' (the hub knew this key already)' : ''
     return console.log(
-      `ok · joined ${hub} as ${name} · your key ${T.fingerprint(key.pub)} · the running board connects in a few seconds`,
+      `ok · joined ${hub} as ${name}${late} · your key ${T.fingerprint(key.pub)} · the running board connects in a few seconds`,
     )
   }
   if (op === 'draft' ? more.length !== 2 : op !== 'roster' || more.length) throw new Error(TEAM_USAGE)
@@ -707,13 +701,20 @@ async function team(): Promise<void> {
     )
   }
   const webPort = Number(cfg.port) || 12422
-  let view: unknown
+  let res: Response
   try {
-    view = await (await fetch(`http://127.0.0.1:${webPort}/api/team`, { signal: AbortSignal.timeout(3000) })).json()
+    res = await fetch(`http://127.0.0.1:${webPort}/api/team`, { signal: AbortSignal.timeout(3000) })
   } catch {
     throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
   }
-  if (!isRecord(view) || !Array.isArray(view.roster)) throw new Error('the board does not run the team: restart it')
+  const view: unknown = await res.json().catch(() => undefined)
+  if (!isRecord(view) || !Array.isArray(view.roster))
+    throw new Error(
+      (await strangerOnPort(webPort)) ??
+        (view === undefined
+          ? 'the board does not run: open it first (herdr plugin action invoke agent-board.open)'
+          : 'the board does not run the team: restart it'),
+    )
   const me = isRecord(view.me) ? view.me : {}
   console.log(
     T.printable(
@@ -797,6 +798,15 @@ async function main(): Promise<void> {
     // The secret sinks' config (#273), once config.json has `secrets`.
     const { secretsChecks } = await import('../services/secrets.ts')
     checks.push(...secretsChecks(cfg, t))
+    // Who holds the board's port (#356): the system is asked only when something listens there.
+    const port = await import('../adapters/port-owner.ts')
+    if (await port.listening(webPort)) {
+      const { portCheck } = await import('../core/board-port.ts')
+      const { ROOT } = await import('../adapters/paths.ts')
+      const { owner, says, why } = await port.whoHoldsPort(webPort, ROOT)
+      const c = portCheck(webPort, owner, says, why, ROOT, Date.now(), t)
+      if (c) checks.push(c)
+    }
     return console.log(report(checks, t))
   }
 

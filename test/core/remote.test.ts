@@ -77,6 +77,9 @@ test("the remote mode's, Remote access's, wake's, the backup's and Settings → 
     '/api/time-settings',
     // the edge log (#280): who worked with whom, for an audit on this computer
     '/api/links/log',
+    // which process the board is and its install folder (#356)
+    '/api/process',
+    '/api/process/',
   ])
     expect(localOnly(path)).toBe(true)
   for (const path of [
@@ -89,6 +92,7 @@ test("the remote mode's, Remote access's, wake's, the backup's and Settings → 
     // the Time panel's entries go through the remote page and a paired phone too
     '/api/time',
     '/api/links/logs',
+    '/api/processes',
   ])
     expect(localOnly(path)).toBe(false)
   expect(localOnly('/api/login/password')).toBe(false)
