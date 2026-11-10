@@ -3,7 +3,8 @@
 // what came in after `since`, when the board started keeping marks, for a thread never opened:
 // the messages from before this board counted are not all news at once. A muted thread counts
 // nothing. The marks live in team-reads.json (adapters/team-reads.ts).
-import { printable } from './team.ts'
+import { isPeerId, isThreadId, printable } from './team.ts'
+import { splitKey, TEAM } from './team-agents.ts'
 
 export interface Reads {
   /** When the board started keeping read marks (ms). */
@@ -18,9 +19,12 @@ export interface Incoming {
   at: number
 }
 
-/** A thread's key: a peer's id or `team`, a slash, `general` or a thread's UUID (#216). */
-export const THREAD_KEY =
-  /^(?:[A-Za-z0-9_-]{43}|team)\/(?:general|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/
+/** A thread's key as #216 makes it: a peer's id or `team`, a slash, `general` or a thread's UUID. */
+export function isThreadKey(key: unknown): key is string {
+  if (typeof key !== 'string') return false
+  const parts = splitKey(key)
+  return !!parts && (parts.scope === TEAM || isPeerId(parts.scope)) && isThreadId(parts.id)
+}
 
 /** The unread messages of each thread that has any; a muted thread has none. */
 export function unreadByThread(
@@ -37,18 +41,14 @@ export function unreadByThread(
   return out
 }
 
-/** All unread messages, the head's count. */
-export const unreadCount = (incoming: readonly Incoming[], reads: Reads, muted: (thread: string) => boolean): number =>
-  Object.values(unreadByThread(incoming, reads, muted)).reduce((a, b) => a + b, 0)
-
 /** How long the start of a message on the desktop is, at most. */
 export const TOAST_CHARS = 140
 
 /**
  * A peer's text for a notification: one line, nothing that is not printable (as the CLI shows it),
- * cut at TOAST_CHARS with an ellipsis.
+ * cut at `max` characters (TOAST_CHARS) with an ellipsis.
  */
-export function toastBody(text: string): string {
+export function toastBody(text: string, max = TOAST_CHARS): string {
   const line = printable(text.replace(/\s+/g, ' ').trim())
-  return line.length > TOAST_CHARS ? `${line.slice(0, TOAST_CHARS).trimEnd()}…` : line
+  return line.length > max ? `${line.slice(0, max).trimEnd()}…` : line
 }

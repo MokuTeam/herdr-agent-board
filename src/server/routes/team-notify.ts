@@ -5,7 +5,7 @@
 // pages open the Team panel on that thread (the stream's `team-open`), and a page that connects
 // within REVEAL_MS is told as it connects (one in a minimized window has no stream).
 // Each answers 409 while `team` is not on.
-import { THREAD_KEY } from '../../core/team-unread.ts'
+import { isThreadKey } from '../../core/team-unread.ts'
 import type { TeamNotify } from '../../services/team-notify.ts'
 import { json, type Route } from '../http.ts'
 import { type Broadcaster, namedEvent } from '../sse.ts'
@@ -42,7 +42,7 @@ export interface TeamNotifyRoutes {
 
 export function teamNotifyRoutes(o: TeamNotifyRoutes): Route[] {
   const threadOf = (body: Record<string, unknown>): string | null =>
-    typeof body.thread === 'string' && THREAD_KEY.test(body.thread) ? body.thread : null
+    typeof body.thread === 'string' && isThreadKey(body.thread) ? body.thread : null
   return [
     {
       method: 'GET',

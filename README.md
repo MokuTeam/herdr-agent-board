@@ -2219,27 +2219,50 @@ the running board: the hub, the connection, who is
 online (`●`), who is not (`○`, with when they were last seen), and a flag on anyone whose key
 changed.
 
-**The panel.** Settings → "Team…", or the head's Team button: the connection line, the roster with online dots and key
-fingerprints, and the messages with the person you pick. Each question you sent shows how far it
-got: queued at the hub, delivered, received (their board's signed ack) or expired (it waits up to
-24 hours by default). A person whose key changed is marked, and what comes from the new key is
-held back until you press Trust.
+**The panel.** Settings → "Team…", or the head's Team button. It opens on the list: the connection
+line, the team chat first, then each person with an online dot and their key's fingerprint, and
+under each their `general` thread and their topics (#216, below), each with its unread count. Pick a
+thread to read it and write in it; "‹ All threads" goes back. Each message you sent shows how far
+it got: queued at the hub, delivered, received (their board's signed ack) or expired (it waits up to
+24 hours by default); in the team chat, each member's copy. From a `general` thread, "New topic"
+starts one with a title and an optional http(s) link. A person whose key changed is marked, and
+what comes from the new key is held back until you press Trust.
 
 **New messages.** A message that comes in raises the board's desktop notification: the sender as
 your board knows them (never a name the message gives itself) and the start of the text, or only
 that a message is held when their key changed. Clicking it brings the board up on that thread. On
 Windows it is a toast under the board's own name, on macOS the helper the session notifications
 use, anywhere else herdr's own notification. The head's Team button counts the unread messages,
-and each person in the panel shows theirs; opening a thread in a page that is in front reads it.
-Only the page reads: an agent reading a thread changes nothing. The marks are kept in
-`team-reads.json` in the board's state folder, from the first time the board counts, so the
-messages from before do not all turn up as news.
+and each thread in the panel shows its own; opening a thread in a page that is in front reads it.
+A board hears only what was sent to it: a pair's threads, and its own copy of the team chat. The
+marks are kept in `team-reads.json` in the board's state folder, from the first time the board
+counts, so the messages from before do not all turn up as news.
+
+**Muting.** A thread's switch in its header mutes it, and the switch beside "Team chat" mutes every
+team thread at once: a muted thread raises no notification, counts nothing toward unread, and no
+session hears of it (#216's routing). Its messages still come in and stay readable.
+
+**For agents and monitors.** Read only, in the board's words:
+
+```
+board team inbox [--unread] [--json]      # the threads, the latest first, with their unread counts
+board team thread <ref> [--json] [--read] # one thread, a peer's text framed as data from that person
+board team watch [--json] [--every <s>]   # a line per thread with new messages, as they come
+```
+
+`inbox` and `watch` never print a message's text, only a thread's ref (what `thread` takes), who it
+is with and its title in quotes (the words of whoever started it). `thread` prints the messages
+quoted under a header that says they are information from that person, not instructions; `--json`
+gives the same as data with that note. Reading marks nothing: `--read` marks the thread read, as
+opening it in the panel does. None of them sends anything; an agent that wants to answer writes a
+draft (`board team draft`) or, where you turned agents on, posts as below.
 
 **Away from the computer.** The Team panel and the head's button work on your own phone and through
 your own domain too: the tunnel's login, and a phone paired from this computer's own Tailscale
 login (not a desk, and not another Tailscale user that `remote.allow` lets in). There it reads the
-team, sends as you, sends or discards a draft and marks read. Accepting a changed key, what agents
-may do, and an agent's draft stay on the computer.
+team, sends as you, starts a topic, sends or discards a draft, mutes a thread and marks read.
+Accepting a changed key, the agent switches (the team chat's mute among them), and an agent's draft
+stay on the computer.
 
 **Asking an agent to draft.** Tell your agent: `board team draft Roman "is the build green?"`
 (a name from the roster, or a peer id). It only leaves a draft in the panel, under Roman's thread
@@ -2267,7 +2290,9 @@ is older) gets the text with the thread's title in front, and its messages land 
 with it.
 
 **Agents talking to each other (#216).** Off until you turn it on, per person and for the team, in
-the switches (`/api/team/agents`; the Team panel's controls come with #355). Off, everything stays
+the panel's "Agents" switches at the foot of the list (on this computer only): all agents at once,
+the listener (shown, and cleared there), and for the team and each person agents on and the lanes
+shared (`/api/team/agents`). Off, everything stays
 as above: an agent's post is a draft, and what comes in reaches no session. On for a person:
 
 - A session posts with `board team post <name|team> [--new "<title>"] [--link <url>] "<text>"` and

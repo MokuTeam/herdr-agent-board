@@ -1,21 +1,32 @@
-// The team panel (#231), out of Settings → Team… on the local board, while the payload carries
-// `teamRev`: where the connection to the team's hub stands, who is in the team (online or not,
-// their key's fingerprint), a person whose key changed with Trust, and the messages with the one
-// picked: each of yours with how far it got (queued at the hub, delivered, received, expired, refused by the hub), what
-// came in from a changed key marked held. Under the thread a box to ask them a question. The view
-// is hooks/useTeam.ts's; the board sends only its revision.
+// The team panel (#231), out of Settings → Team… or the head's Team button, while the payload
+// carries `teamRev`. Two views, as in a chat app (#355):
+//
+// - The list: where the connection to the team's hub stands; the team chat first, then each person
+//   (online or not, their key's fingerprint, Trust when it changed), each with their general thread
+//   and their topics (#216) under them, every thread with its unread count and whether it is muted;
+//   on this computer, the owner's agent switches (#216): all agents, the listener, and for the team
+//   and each person agents on and the lanes shared.
+// - A thread: its title and link, its mute, the messages (each of yours with how far it got, a
+//   team post with each member's copy, what came from a changed key held, an agent's draft with
+//   Send and Discard), a box to write in it, and in a general thread a new topic.
+//
+// The data is hooks/useTeam.ts's; the board sends only its revision.
 import { useEffect, useState } from 'react'
-import { useTeam } from '../../hooks/useTeam.ts'
+import { type NewTopic, useTeam } from '../../hooks/useTeam.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import {
-  agentLine,
-  pairThread,
-  peerOfThread,
+  type AgentsChange,
+  type AgentsView,
+  keyParts,
+  lineMeta,
+  safeLink,
+  scopeThreads,
   seenLine,
   stateLine,
   type TeamRosterPeer,
   type TeamView,
-  type ThreadMessage,
+  type ThreadLine,
+  type ThreadView,
 } from '../../models/team.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
@@ -24,7 +35,7 @@ import { Panel } from '../panel/Panel.tsx'
 export interface TeamPanelProps {
   open: boolean
   onClose(): void
-  /** A thread a notification's click asked for (#355): its person is picked once, then onFocused. */
+  /** A thread a notification's click asked for (#355): it is shown once, then onFocused. */
   focus?: string | null
   onFocused?(): void
 }
@@ -34,18 +45,30 @@ export function TeamPanel({ open, onClose, focus, onFocused }: TeamPanelProps) {
   const { canEdit } = useBoardContext()
   const team = useTeam(open)
   const { select } = team
+  const [draft, setDraft] = useState('')
+  const [topic, setTopic] = useState<NewTopic | null>(null)
+  const [sending, setSending] = useState(false)
+  const show = (key: string | null) => {
+    setTopic(null)
+    select(key)
+  }
   useEffect(() => {
     if (!focus) return
-    const peer = peerOfThread(focus)
-    if (peer) select(peer)
+    setTopic(null)
+    select(focus)
     onFocused?.()
   }, [focus, select, onFocused])
-  const [draft, setDraft] = useState('')
-  const [sending, setSending] = useState(false)
   const send = async () => {
-    if (!team.peer || !draft.trim()) return
+    if (!draft.trim() || (topic && !topic.title.trim())) return
     setSending(true)
-    if (await team.send(team.peer, draft)) setDraft('')
+    const ok = await team.send(
+      draft,
+      topic ? { title: topic.title.trim(), ...(topic.link?.trim() && { link: topic.link.trim() }) } : undefined,
+    )
+    if (ok) {
+      setDraft('')
+      setTopic(null)
+    }
     setSending(false)
   }
   return (
@@ -63,17 +86,24 @@ export function TeamPanel({ open, onClose, focus, onFocused }: TeamPanelProps) {
     >
       <TeamBody
         view={team.view}
-        peer={team.peer}
+        threads={team.threads}
+        selected={team.selected}
         thread={team.thread}
+        lines={team.lines}
         unread={team.unread}
+        agents={team.agents}
         draft={draft}
+        topic={topic}
         disabled={!canEdit || sending}
-        onSelect={team.select}
+        onSelect={show}
         onTrust={peer => void team.trust(peer)}
         onSendDraft={id => void team.sendDraft(id)}
         onDiscardDraft={id => void team.discardDraft(id)}
         onDraft={setDraft}
+        onTopic={setTopic}
         onSend={() => void send()}
+        onMute={(key, muted) => void team.mute(key, muted)}
+        onAgents={change => void team.setAgents(change)}
       />
     </Panel>
   )
@@ -82,42 +112,132 @@ export function TeamPanel({ open, onClose, focus, onFocused }: TeamPanelProps) {
 export interface TeamBodyProps {
   /** GET /api/team's answer; null while the board is asked. */
   view: TeamView | null
-  peer: string | null
-  thread: ThreadMessage[]
+  threads: ThreadView[]
+  /** The key of the thread on show; null: the list. */
+  selected: string | null
+  /** The thread on show as the board keeps it; null while nothing was written in it. */
+  thread: ThreadView | null
+  lines: ThreadLine[]
   /** Each thread's unread messages (#355); none given: none shown. */
   unread?: Record<string, number>
+  /** The owner's switches; null (a remote page): not shown, and the team chat's mute neither. */
+  agents: AgentsView | null
   draft: string
+  /** A new topic being written in the thread's scope; null: a message in the thread on show. */
+  topic: NewTopic | null
   disabled: boolean
-  onSelect(peer: string | null): void
+  onSelect(key: string | null): void
   onTrust(peer: string): void
   /** Press Send on an agent's draft: it goes out marked as an agent request. */
   onSendDraft(id: string): void
   onDiscardDraft(id: string): void
   onDraft(text: string): void
+  onTopic(topic: NewTopic | null): void
   onSend(): void
+  onMute(key: string, muted: boolean): void
+  onAgents(change: AgentsChange): void
 }
 
-/** The connection line, the roster, and the thread with the person picked. */
-export function TeamBody({
+/** The list of threads, or the thread on show. */
+export function TeamBody(props: TeamBodyProps) {
+  if (!props.view) return <div className="sheet-body team-body" />
+  return (
+    <div className="sheet-body team-body">
+      {props.selected ? (
+        <ThreadPane {...props} view={props.view} selected={props.selected} />
+      ) : (
+        <ListPane {...props} view={props.view} />
+      )}
+    </div>
+  )
+}
+
+/** A switch: a track with a knob, the accent's when on. */
+function Switch({
+  on,
+  label,
+  name,
+  disabled,
+  onFlip,
+}: {
+  on: boolean
+  label: string
+  name: string
+  disabled: boolean
+  onFlip(on: boolean): void
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      className="team-switch"
+      data-switch={name}
+      aria-checked={on}
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={() => onFlip(!on)}
+    >
+      <span className="team-knob" aria-hidden="true" />
+    </button>
+  )
+}
+
+function Unread({ n }: { n: number }) {
+  const t = useT()
+  if (n <= 0) return null
+  return (
+    <span className="n team-unread" title={t('team.unread', { n })}>
+      {n}
+    </span>
+  )
+}
+
+/** A thread's row in the list: its title (General for none), its unread count, muted. */
+function ThreadRow({
+  entry,
+  unread,
+  onSelect,
+}: {
+  entry: { key: string; thread: ThreadView | null }
+  unread: number
+  onSelect(key: string): void
+}) {
+  const t = useT()
+  const muted = entry.thread?.muted === true
+  return (
+    <button
+      type="button"
+      className={classNames('team-row', muted && 'muted')}
+      data-thread={entry.key}
+      onClick={() => onSelect(entry.key)}
+    >
+      <span className="team-row-title">{entry.thread?.title ?? t('team.general')}</span>
+      {muted && <span className="todo-meta team-muted">{t('team.muted')}</span>}
+      <Unread n={muted ? 0 : unread} />
+    </button>
+  )
+}
+
+function ListPane({
   view,
-  peer,
-  thread,
+  threads,
   unread = {},
-  draft,
+  agents,
   disabled,
   onSelect,
   onTrust,
-  onSendDraft,
-  onDiscardDraft,
-  onDraft,
-  onSend,
-}: TeamBodyProps) {
+  onAgents,
+}: TeamBodyProps & { view: TeamView }) {
   const t = useT()
   const { now } = useBoardContext()
-  if (!view) return <div className="sheet-body team-body" />
-  const picked = view.roster.find(p => p.peer === peer)
+  const chatMuted = agents?.peers.team?.muted === true
+  const rows = (scope: string) =>
+    scopeThreads(scope, threads).map(entry => (
+      <ThreadRow key={entry.key} entry={entry} unread={unread[entry.key] ?? 0} onSelect={onSelect} />
+    ))
   return (
-    <div className="sheet-body team-body">
+    <>
       <section className="team-me">
         <p className={classNames('team-state', view.state)} data-state={view.state}>
           {stateLine(view, t)}
@@ -127,27 +247,35 @@ export function TeamBody({
           {view.me.fingerprint && ` · ${t('team.fingerprint', { fingerprint: view.me.fingerprint })}`}
         </p>
       </section>
+      <section className={classNames('team-scope', 'team-chat', chatMuted && 'muted')}>
+        <div className="team-scope-head">
+          <h3>{t('team.chat')}</h3>
+          {chatMuted && <span className="todo-meta team-muted">{t('team.muted')}</span>}
+          {agents && (
+            <Switch
+              name="mute-chat"
+              on={!chatMuted}
+              label={chatMuted ? t('team.unmuteChat') : t('team.muteChat')}
+              disabled={disabled}
+              onFlip={on => onAgents({ peer: 'team', muted: !on })}
+            />
+          )}
+        </div>
+        {rows('team')}
+      </section>
       <section className="team-roster">
         <h3>{t('team.roster')}</h3>
         {!view.roster.length && <p className="hint">{t('team.rosterEmpty')}</p>}
         {view.roster.map((p: TeamRosterPeer) => (
-          <div
-            key={p.peer}
-            className={classNames('team-peer', p.peer === peer && 'on', p.pin === 'changed' && 'changed')}
-          >
-            <button type="button" className="team-pick" aria-pressed={p.peer === peer} onClick={() => onSelect(p.peer)}>
+          <div key={p.peer} className={classNames('team-peer', p.pin === 'changed' && 'changed')}>
+            <div className="team-pick">
               <span className={classNames('dot', 'team-dot', p.online ? 'on' : 'idle')} aria-hidden="true" />
               <span className="team-name">{p.name}</span>
-              {(unread[pairThread(p.peer)] ?? 0) > 0 && (
-                <span className="n team-unread" title={t('team.unread', { n: unread[pairThread(p.peer)] ?? 0 })}>
-                  {unread[pairThread(p.peer)]}
-                </span>
-              )}
               <span className="todo-meta">{seenLine(p, now, t)}</span>
               {p.drafts > 0 && (
                 <span className="todo-meta team-drafts">{t('team.draftsCount', { n: String(p.drafts) })}</span>
               )}
-            </button>
+            </div>
             <span className="todo-meta team-fp">{t('team.fingerprint', { fingerprint: p.fingerprint })}</span>
             {p.pin === 'changed' && (
               <div className="team-changed">
@@ -157,69 +285,247 @@ export function TeamBody({
                 </button>
               </div>
             )}
+            <div className="team-rows">{rows(p.peer)}</div>
           </div>
         ))}
       </section>
-      <section className="team-thread">
-        {!picked && <p className="hint">{t('team.pick')}</p>}
-        {picked && (
-          <>
-            <h3>{t('team.thread', { name: picked.name })}</h3>
-            {!thread.length && <p className="hint">{t('team.threadEmpty')}</p>}
-            {thread.map(m => {
-              const agent = agentLine(m, t)
-              return (
-                <div key={`${m.dir}-${m.id}`} className={classNames('todo-row', 'team-msg', m.dir, m.held && 'held')}>
-                  <p className="todo-text">{m.text ?? t('team.heldText')}</p>
-                  <div className="todo-foot">
-                    <span className="todo-meta">
-                      {m.dir === 'draft' ? t('team.draftFromAgent') : m.dir === 'in' ? t('team.in') : t('team.out')}
-                      {m.dir === 'out' && m.state && ` · ${t(`team.delivery.${m.state}`, { code: m.code ?? '' })}`}
-                      {m.held && ` · ${t('team.held')}`}
-                      {agent && ` · ${agent}`}
-                    </span>
-                    {m.dir === 'draft' && (
-                      <>
-                        <button
-                          type="button"
-                          className="mini"
-                          disabled={disabled || picked.pin === 'changed'}
-                          title={t('team.draftSendHint')}
-                          onClick={() => onSendDraft(m.id)}
-                        >
-                          {t('team.send')}
-                        </button>
-                        <button type="button" className="mini" disabled={disabled} onClick={() => onDiscardDraft(m.id)}>
-                          {t('team.discard')}
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-            {picked.pin === 'changed' && <p className="hint">{t('team.sendChanged')}</p>}
-            <div className="team-compose">
-              <textarea
-                value={draft}
-                rows={3}
-                placeholder={t('team.placeholder', { name: picked.name })}
-                aria-label={t('team.placeholder', { name: picked.name })}
-                onChange={e => onDraft(e.target.value)}
+      {agents && <AgentSwitches view={view} agents={agents} disabled={disabled} onAgents={onAgents} />}
+    </>
+  )
+}
+
+/** The owner's agent switches (#216): everything at once, the listener, and per scope on and lanes. */
+function AgentSwitches({
+  view,
+  agents,
+  disabled,
+  onAgents,
+}: {
+  view: TeamView
+  agents: AgentsView
+  disabled: boolean
+  onAgents(change: AgentsChange): void
+}) {
+  const t = useT()
+  const { now } = useBoardContext()
+  const scopes = [{ scope: 'team', name: t('team.chat') }, ...view.roster.map(p => ({ scope: p.peer, name: p.name }))]
+  return (
+    <details className="team-agents">
+      <summary>
+        <h3>{t('team.agents')}</h3>
+      </summary>
+      <p className="hint">{t('team.agentsAbout')}</p>
+      <div className="team-switch-row">
+        <span>{t('team.agentsAll')}</span>
+        <Switch
+          name="agents"
+          on={!agents.off}
+          label={t('team.agentsAll')}
+          disabled={disabled}
+          onFlip={on => onAgents({ off: !on })}
+        />
+      </div>
+      <div className="team-switch-row">
+        <span>
+          {agents.listener
+            ? t('team.listener', { name: agents.listener.name ?? agents.listener.key })
+            : t('team.listenerNone')}
+        </span>
+        {agents.listener && (
+          <button type="button" className="mini" disabled={disabled} onClick={() => onAgents({ listener: null })}>
+            {t('team.listenerClear')}
+          </button>
+        )}
+      </div>
+      {scopes.map(({ scope, name }) => {
+        const p = agents.peers[scope] ?? { on: false, lanes: [] }
+        const paused = agents.paused[scope] ?? 0
+        return (
+          <div key={scope} className={classNames('team-agent', agents.off && 'off')} data-scope={scope}>
+            <div className="team-switch-row">
+              <span className="team-name">{name}</span>
+              <Switch
+                name={`agents-${scope}`}
+                on={p.on}
+                label={t('team.agentsWith', { name })}
+                disabled={disabled}
+                onFlip={on => onAgents({ peer: scope, on })}
               />
-              <button
-                type="button"
-                className="mini"
-                disabled={disabled || !draft.trim() || picked.pin === 'changed'}
-                title={t('team.sendHint')}
-                onClick={onSend}
-              >
-                {t('team.send')}
-              </button>
             </div>
+            {paused > now && (
+              <p className="hint">{t('team.paused', { time: new Date(paused).toLocaleTimeString() })}</p>
+            )}
+            <div className="team-lanes">
+              <span className="todo-meta">{t('team.lanes')}</span>
+              {agents.lanes.map(l => {
+                const shared = p.lanes.includes(l.id)
+                return (
+                  <button
+                    key={l.id}
+                    type="button"
+                    className="mini team-lane"
+                    aria-pressed={shared}
+                    disabled={disabled}
+                    onClick={() =>
+                      onAgents({ peer: scope, lanes: shared ? p.lanes.filter(x => x !== l.id) : [...p.lanes, l.id] })
+                    }
+                  >
+                    {l.title}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+    </details>
+  )
+}
+
+function ThreadPane({
+  view,
+  selected,
+  thread,
+  lines,
+  agents,
+  draft,
+  topic,
+  disabled,
+  onSelect,
+  onTrust,
+  onSendDraft,
+  onDiscardDraft,
+  onDraft,
+  onTopic,
+  onSend,
+  onMute,
+}: TeamBodyProps & { view: TeamView; selected: string }) {
+  const t = useT()
+  const parts = keyParts(selected)
+  const scope = parts?.scope ?? ''
+  const general = parts?.id === 'general'
+  const peer = scope === 'team' ? null : (view.roster.find(p => p.peer === scope) ?? null)
+  const changed = peer?.pin === 'changed'
+  const where = scope === 'team' ? t('team.chat') : t('team.with', { name: peer?.name ?? thread?.peerName ?? '' })
+  const link = safeLink(thread?.link)
+  const chatMuted = scope === 'team' && agents?.peers.team?.muted === true
+  const name = scope === 'team' ? t('team.chat') : (peer?.name ?? '')
+  return (
+    <section className="team-thread" data-thread={selected}>
+      <div className="team-thread-head">
+        <button type="button" className="mini team-back" onClick={() => onSelect(null)}>
+          {t('team.back')}
+        </button>
+        {thread && (
+          <Switch
+            name="mute"
+            on={!thread.muted}
+            label={thread.muted ? t('team.unmute') : t('team.mute')}
+            disabled={disabled}
+            onFlip={on => onMute(selected, !on)}
+          />
+        )}
+      </div>
+      <h3 className="team-thread-title">{thread?.title ?? t('team.general')}</h3>
+      <p className="sheet-meta">
+        {where}
+        {link && (
+          <>
+            {' · '}
+            <a href={link} target="_blank" rel="noopener noreferrer">
+              {link}
+            </a>
           </>
         )}
-      </section>
-    </div>
+        {(thread?.muted || chatMuted) && ` · ${t('team.mutedHint')}`}
+      </p>
+      {changed && peer && (
+        <div className="team-changed">
+          <p>{t('team.changed', { name: peer.name })}</p>
+          <button type="button" className="mini" disabled={disabled} onClick={() => onTrust(peer.peer)}>
+            {t('team.trust')}
+          </button>
+        </div>
+      )}
+      {!lines.length && <p className="hint">{t('team.threadEmpty')}</p>}
+      {lines.map(l => (
+        <div
+          key={`${l.dir}-${l.id}`}
+          className={classNames('todo-row', 'team-msg', l.dir, l.held && 'held')}
+          data-line={l.id}
+        >
+          <p className="todo-text">{l.text ?? t('team.heldText')}</p>
+          <div className="todo-foot">
+            <span className="todo-meta">{lineMeta(l, t)}</span>
+            {l.dir === 'draft' && (
+              <>
+                <button
+                  type="button"
+                  className="mini"
+                  disabled={disabled || changed}
+                  title={t('team.draftSendHint')}
+                  onClick={() => onSendDraft(l.id)}
+                >
+                  {t('team.send')}
+                </button>
+                <button type="button" className="mini" disabled={disabled} onClick={() => onDiscardDraft(l.id)}>
+                  {t('team.discard')}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      ))}
+      {changed && <p className="hint">{t('team.sendChanged')}</p>}
+      <div className="team-compose">
+        {topic && (
+          <>
+            <input
+              value={topic.title}
+              maxLength={80}
+              placeholder={t('team.topicTitle')}
+              aria-label={t('team.topicTitle')}
+              onChange={e => onTopic({ ...topic, title: e.target.value })}
+            />
+            <input
+              value={topic.link ?? ''}
+              type="url"
+              placeholder={t('team.topicLink')}
+              aria-label={t('team.topicLink')}
+              onChange={e => onTopic({ ...topic, link: e.target.value })}
+            />
+          </>
+        )}
+        <textarea
+          value={draft}
+          rows={3}
+          placeholder={t('team.placeholder', { name })}
+          aria-label={t('team.placeholder', { name })}
+          onChange={e => onDraft(e.target.value)}
+        />
+        <div className="team-compose-actions">
+          {general && !topic && (
+            <button type="button" className="mini" disabled={disabled} onClick={() => onTopic({ title: '' })}>
+              {t('team.newTopic')}
+            </button>
+          )}
+          {topic && (
+            <button type="button" className="mini" onClick={() => onTopic(null)}>
+              {t('team.cancel')}
+            </button>
+          )}
+          <button
+            type="button"
+            className="mini"
+            data-send
+            disabled={disabled || !draft.trim() || changed || (topic !== null && !topic.title.trim())}
+            title={t('team.sendHint')}
+            onClick={onSend}
+          >
+            {topic ? t('team.startTopic') : t('team.send')}
+          </button>
+        </div>
+      </div>
+    </section>
   )
 }

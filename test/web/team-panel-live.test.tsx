@@ -74,9 +74,18 @@ test('teamRev on a remote page: nothing is asked', async () => {
 })
 
 test('teamRev on the local page: asked on opening, again on a new revision', async () => {
-  const calls = answers([200, VIEW], [200, VIEW])
+  const AGENTS = { off: false, listener: null, peers: {}, paused: {}, lanes: [] }
+  const calls = answers(
+    [200, VIEW],
+    [200, { threads: [] }],
+    [200, AGENTS],
+    [200, VIEW],
+    [200, { threads: [] }],
+    [200, AGENTS],
+  )
+  const once = ['/api/team', '/api/team/threads', '/api/team/agents']
   await show(payload({ teamRev: 1 }))
-  expect(calls.map(c => c.url)).toEqual(['/api/team'])
+  expect(calls.map(c => c.url)).toEqual(once)
   await show(payload({ teamRev: 2 }))
-  expect(calls.map(c => c.url)).toEqual(['/api/team', '/api/team'])
+  expect(calls.map(c => c.url)).toEqual([...once, ...once])
 })

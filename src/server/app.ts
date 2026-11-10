@@ -60,8 +60,8 @@ import { startScheduler } from '../services/scheduler.ts'
 import { createServerSetup } from '../services/server-setup.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
 import { createTeam } from '../services/team-hub.ts'
-import { createTeamRouter, noticeSchedule } from '../services/team-router.ts'
 import { createTeamNotify, type TeamNotify } from '../services/team-notify.ts'
+import { createTeamRouter, noticeSchedule } from '../services/team-router.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
 import { createProbes, createSupervisor, networkSignature, realClock, type TunnelPlan } from '../services/tunnel.ts'
 import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
@@ -569,7 +569,10 @@ export async function startServer({
     // The user's presence: read, switched and set (the page, the phone, the Android app).
     ...presenceRoutes(presence),
     // The peer network: roster, threads, sends (local only; nothing answers while `team` is off).
-    ...teamRoutes(team, teamRouter, cfg),
+    ...teamRoutes(team, teamRouter, cfg, () => {
+      teamNotify?.changed()
+      board.publish()
+    }),
     // The owner read a thread, or clicked a team notification on the desktop (#355).
     ...teamNotifyRoutes({
       notify: () => (team.rev() === null ? null : notifyOf()),

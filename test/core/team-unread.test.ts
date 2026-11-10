@@ -1,21 +1,24 @@
 // The team's unread count and a notification's words (#355, core/team-unread.ts).
 import { expect, test } from 'bun:test'
-import { THREAD_KEY, TOAST_CHARS, toastBody, unreadByThread, unreadCount } from '../../src/core/team-unread.ts'
+import { isThreadKey, TOAST_CHARS, toastBody, unreadByThread } from '../../src/core/team-unread.ts'
 
 const A = 'A'.repeat(43)
 
-test('a thread key: a peer or team, then general or a UUID; nothing else', () => {
-  for (const ok of [`${A}/general`, 'team/general', `${A}/0123abcd-4567-89ab-cdef-0123456789ab`])
-    expect(THREAD_KEY.test(ok)).toBe(true)
+test('a thread key: a peer or team, then general or a thread id (#216); nothing else', () => {
+  for (const ok of [`${A}/general`, 'team/general', `${A}/0123abcd-4567-49ab-8def-0123456789ab`])
+    expect(isThreadKey(ok)).toBe(true)
   for (const bad of [
     A,
     `${A}/`,
     `${A}/topic`,
     `${A}/../general`,
-    'team/0123ABCD-4567-89AB-CDEF-0123456789AB',
+    'team/0123ABCD-4567-49AB-8DEF-0123456789AB',
+    'team/0123abcd-4567-89ab-cdef-0123456789ab',
     `x${A}/general`,
+    'other/general',
+    7,
   ])
-    expect(THREAD_KEY.test(bad)).toBe(false)
+    expect(isThreadKey(bad)).toBe(false)
 })
 
 test('unread: after the later of since and the thread’s mark; a muted thread none', () => {
@@ -28,8 +31,7 @@ test('unread: after the later of since and the thread’s mark; a muted thread n
     { thread: 'team/general', at: 150 },
   ]
   expect(unreadByThread(incoming, reads, () => false)).toEqual({ [`${A}/general`]: 1, 'team/general': 1 })
-  expect(unreadCount(incoming, reads, () => false)).toBe(2)
-  expect(unreadCount(incoming, reads, th => th === 'team/general')).toBe(1)
+  expect(unreadByThread(incoming, reads, th => th === 'team/general')).toEqual({ [`${A}/general`]: 1 })
 })
 
 test('a notification’s words: one line, printable, cut with an ellipsis', () => {
@@ -38,4 +40,5 @@ test('a notification’s words: one line, printable, cut with an ellipsis', () =
   const long = toastBody('x'.repeat(TOAST_CHARS + 50))
   expect(long).toBe(`${'x'.repeat(TOAST_CHARS)}…`)
   expect(toastBody('y'.repeat(TOAST_CHARS))).toBe('y'.repeat(TOAST_CHARS))
+  expect(toastBody('a long topic title', 6)).toBe('a long…')
 })
