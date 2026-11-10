@@ -53,6 +53,7 @@ import { useTodos } from './hooks/useTodos.ts'
 import { useToolbarMenu } from './hooks/useToolbarMore.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { remotePage } from './models/remote-page.ts'
+import { offersTeam } from './models/team.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
@@ -131,6 +132,13 @@ export function App() {
   // Time (#233), while the board has it on: its panel, out of the toolbar's button or a lane's day total.
   const [timeOpen, setTimeOpen] = useState(false)
   const [timeClient, setTimeClient] = useState<string | null>(null)
+  // Settings → Team… (#231), local page with the payload's teamRev: mounted at its first opening.
+  const [team, setTeam] = useState(false)
+  const [teamMounted, setTeamMounted] = useState(false)
+  const openTeam = () => {
+    setTeam(true)
+    setTeamMounted(true)
+  }
   // Tasks (#202), while the board has them on: their panel, out of the toolbar's button.
   const [todosOpen, setTodosOpen] = useState(false)
   // Settings → Paths on this computer…, on the board seen from another device only: mounted at its
@@ -196,6 +204,7 @@ export function App() {
     openTimeSettings,
     openLocalPaths,
     openCalendarSettings,
+    openTeam,
   )
   // Tasks' 📌 menu under an agent's message, and the panel's buttons.
   const todos = useTodos(menus.menu)
@@ -301,6 +310,7 @@ export function App() {
         {...(localPathsMounted && remotePage()
           ? { localPaths: { open: localPaths, onClose: () => setLocalPaths(false) } }
           : {})}
+        {...(teamMounted && offersTeam(data) ? { team: { open: team, onClose: () => setTeam(false) } } : {})}
         archive={archive}
         todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
         time={{ open: timeOpen, onClose: () => setTimeOpen(false), client: timeClient, onClient: setTimeClient }}

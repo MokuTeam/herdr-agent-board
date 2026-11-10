@@ -332,6 +332,10 @@ describe('the tunnel listener', () => {
       '/api/%72emote/x',
       '/api/wake',
       '/api/wak%65',
+      '/api/team',
+      '/api/team/',
+      '/api/team/thread/x',
+      '/api/%74eam/send',
       '/api/backup',
       '/api/%62ackup',
       '/api/./backup',
@@ -342,7 +346,14 @@ describe('the tunnel listener', () => {
       expect([path, ...(await answer(me.post(path, { op: 'off' })))]).toEqual([path, 403, { error: 'local' }])
     }
     // fetch resolves `.` itself: as written too.
-    for (const path of ['/api/./access', '/api/x/../access/', '/api/./backup', '/api/x/../backup/'])
+    for (const path of [
+      '/api/./access',
+      '/api/x/../access/',
+      '/api/./backup',
+      '/api/x/../backup/',
+      '/api/./team',
+      '/api/x/../team/',
+    ])
       expect([path, ...(await rawGet(tunnelPort, path, `${COOKIE}=${SEEDED}`))]).toEqual([
         path,
         403,

@@ -22,6 +22,7 @@ import { offersProfiles } from '../models/profiles.ts'
 import { keptAuth, remotePage, UNPAIRED } from '../models/remote-page.ts'
 import { offersMokupilot, settingPicked, settingsMenu } from '../models/settings-menu.ts'
 import { reducedMotion } from '../models/spring.ts'
+import { offersTeam } from '../models/team.ts'
 import { setTheme, THEME_KEY, themeNow } from '../models/theme.ts'
 import { isWakeView } from '../models/wake.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
@@ -79,6 +80,9 @@ export interface SettingsDeps {
   /** The local board's page: Calendar… is offered (#328). */
   calendarSettings?(): boolean
   openCalendarSettings?(): void
+  /** The local board's page with the payload's teamRev (#231): Team… is offered. */
+  team?(): boolean
+  openTeam?(): void
   /** This page signed in through the owner's domain: Sign out is offered. */
   signOut?(): boolean
   endLogin?(): void
@@ -120,6 +124,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       backup: deps.backup?.() ?? false,
       timeSettings: deps.timeSettings?.() ?? false,
       calendarSettings: deps.calendarSettings?.() ?? false,
+      team: deps.team?.() ?? false,
       signOut: deps.signOut?.() ?? false,
       presence: deps.presence?.(),
       idleMinutes: deps.idleMinutes?.(),
@@ -151,6 +156,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'backup') deps.openBackup?.()
         else if (pick?.kind === 'timeSettings') deps.openTimeSettings?.()
         else if (pick?.kind === 'calendarSettings') deps.openCalendarSettings?.()
+        else if (pick?.kind === 'team') deps.openTeam?.()
         else if (pick?.kind === 'signout') deps.endLogin?.()
         else if (pick?.kind === 'presence')
           deps.choosePresence?.(pick.value === 'none' ? { on: false } : { on: true, mode: pick.value })
@@ -291,7 +297,7 @@ const crossFade = (): ((apply: () => void) => unknown) | undefined =>
  * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake,
  * `openAccess` the Remote access panel, `openMokupilot` the MokuPilot panel, `openBackup` the Backup panel,
  * `openTimeSettings` Time tracking's, `openLocalPaths` Paths on this computer, `openCalendarSettings`
- * the calendar's (#328).
+ * the calendar's (#328), `openTeam` the Team panel (#231).
  */
 export function useSettingsMenu(
   menu: MenuEngine,
@@ -304,6 +310,7 @@ export function useSettingsMenu(
   openTimeSettings: () => void = () => {},
   openLocalPaths: () => void = () => {},
   openCalendarSettings: () => void = () => {},
+  openTeam: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
@@ -321,6 +328,7 @@ export function useSettingsMenu(
     openTimeSettings,
     openLocalPaths,
     openCalendarSettings,
+    openTeam,
   })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
@@ -396,6 +404,8 @@ export function useSettingsMenu(
       openTimeSettings: () => latest.current.openTimeSettings(),
       calendarSettings: () => !remotePage(),
       openCalendarSettings: () => latest.current.openCalendarSettings(),
+      team: () => offersTeam(latest.current.board.data),
+      openTeam: () => latest.current.openTeam(),
       signOut: () => remotePage() && keptAuth() === 'login',
       endLogin: () => {
         const { t, board } = latest.current

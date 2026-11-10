@@ -42,3 +42,13 @@ export const contextDir = (): string => join(stateDir(), 'context')
 export const terminalsFile = (): string => join(stateDir(), 'terminals.json')
 // The panes opened with a profile's CLAUDE_CONFIG_DIR (adapters/profile-panes.ts).
 export const profilePanesFile = (): string => join(stateDir(), 'profile-panes.json')
+// The peer network (#231, config.json's `team`): this board's Ed25519 key, the messages in and out,
+// the keys of the peers it has seen, and a log without bodies. Written only by `board team join`
+// and by the running board with `team` set (adapters/team-store.ts).
+export const teamKeyFile = (): string => join(stateDir(), 'team-key.json')
+export const teamInboxFile = (): string => join(stateDir(), 'team-inbox.json')
+export const teamOutboxFile = (): string => join(stateDir(), 'team-outbox.json')
+export const teamPinsFile = (): string => join(stateDir(), 'team-pins.json')
+export const teamAuditFile = (): string => join(stateDir(), 'team-audit.jsonl')
+// What agents drafted for a person to send (`board team draft`); the running board with `team` set writes it.
+export const teamDraftsFile = (): string => join(stateDir(), 'team-drafts.json')

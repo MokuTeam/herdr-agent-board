@@ -1,0 +1,51 @@
+# systemd system unit for the team hub on a server of your own behind nginx (hub/hab-hub.nginx.conf;
+# docs/team-quickstart.md, "The hub's admin on your own server with a domain"). The hub listens on
+# loopback only and runs as a user of its own; nginx brings TLS. As root:
+#   useradd --system --home-dir /var/lib/hab-hub --shell /usr/sbin/nologin hab-hub
+#   cp hub/hab-hub.system.service /etc/systemd/system/hab-hub.service    # then edit ExecStart
+#   systemctl daemon-reload && systemctl enable --now hab-hub
+# Invites and members, as that user (the admin socket is /var/lib/hab-hub/hub.sock, 0600):
+#   sudo -u hab-hub /usr/local/bin/bun /opt/herdr-agent-board/hub/src/cli.ts --dir /var/lib/hab-hub invite create
+[Unit]
+Description=agent-board team hub (behind a reverse proxy)
+After=network.target
+
+[Service]
+User=hab-hub
+Group=hab-hub
+# EDIT: the path to bun and to this repository; both must be readable by hab-hub, so not under
+# /root or /home, which ProtectHome hides (bun's installer puts bun in /usr/local/bin with
+# BUN_INSTALL=/usr/local).
+# --trust-proxy: the log shows the address nginx forwards, not 127.0.0.1.
+ExecStart=/usr/local/bin/bun /opt/herdr-agent-board/hub/src/main.ts --listen 127.0.0.1:7443 --trust-proxy --dir /var/lib/hab-hub
+# /var/lib/hab-hub: hub.db and hub.sock, made by systemd for hab-hub and the only place it writes.
+StateDirectory=hab-hub
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5
+
+# The hub needs its state directory, loopback TCP and its unix socket; nothing else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+# Not MemoryDenyWriteExecute: bun's JavaScript engine compiles code at run time.
+
+[Install]
+WantedBy=multi-user.target

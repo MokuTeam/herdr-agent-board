@@ -21,6 +21,7 @@ import { REMOTE_STRINGS } from './remote-strings.ts'
 import { SECRET_STRINGS } from './secret-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
+import { TEAM_STRINGS } from './team-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 import { TIME_STRINGS } from './time-strings.ts'
 import { TODO_STRINGS } from './todo-strings.ts'
@@ -1373,6 +1374,8 @@ for (const code of Object.keys(CALL_STRINGS) as Lang[]) Object.assign(STRINGS[co
 // And tasks (#202).
 for (const code of Object.keys(TODO_STRINGS) as Lang[]) Object.assign(STRINGS[code], TODO_STRINGS[code])
 for (const code of Object.keys(SECRET_STRINGS) as Lang[]) Object.assign(STRINGS[code], SECRET_STRINGS[code])
+// And the peer network (#231).
+for (const code of Object.keys(TEAM_STRINGS) as Lang[]) Object.assign(STRINGS[code], TEAM_STRINGS[code])
 // And the board's database and its backup (#233).
 for (const code of Object.keys(BACKUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], BACKUP_STRINGS[code])
 // And time tracking on it (#233).

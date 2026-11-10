@@ -8,8 +8,8 @@
     "board": "bun src/entrypoints/tui.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src test web/src",
-    "format": "biome check --write src test web/src",
+    "lint": "biome check src test web/src hub",
+    "format": "biome check --write src test web/src hub",
     "check": "bun run typecheck && bun run lint"
   },
   "engines": {

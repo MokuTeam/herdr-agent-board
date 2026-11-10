@@ -79,7 +79,9 @@ export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayloa
   // The program launch.claude types (a board before start commands did not say).
   (value.claudeProgram === undefined || typeof value.claudeProgram === 'string') &&
   // The Remote access view's revision (a board before it did not send one).
-  (value.accessRev === undefined || typeof value.accessRev === 'number')
+  (value.accessRev === undefined || typeof value.accessRev === 'number') &&
+  // The peer network's revision (only a board with `team` in config.json sends one).
+  (value.teamRev === undefined || typeof value.teamRev === 'number')
 
 /** One session as GET /api/session/<key> answers it (src/server/routes/session.ts). */
 export interface SessionDetail {
