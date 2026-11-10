@@ -662,6 +662,7 @@ async function team(): Promise<void> {
     const key = saved ?? (await T.generateKey())
     const { joinHub, TRIES, TRY_MS } = await import('../services/team-join.ts')
     const { probeHub } = await import('../adapters/hub-reach.ts')
+    const { pause } = await import('../adapters/pacing.ts')
     // From the moment a join goes out the hub may take the invite for this key, so a new key is
     // saved first: an interrupt between tries, or no answer at all, must not lose it. It is taken
     // back once the hub has settled that the join did not land.
@@ -673,7 +674,7 @@ async function team(): Promise<void> {
         tries: TRIES,
         probe: probeHub,
         say: line => console.error(`board: ${line}`),
-        pause: ms => Bun.sleep(ms),
+        pause,
         beforeJoin: async () => {
           if (saved || wrote) return
           await store.keepJoinedKey(key)

@@ -41,6 +41,7 @@ import { readCard } from '../adapters/cards.ts'
 import { cwdOf } from '../adapters/claude-home.ts'
 import { herdr, workspaceList } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { pause } from '../adapters/pacing.ts'
 import { listEntries, removeEntry, restoreEntry } from '../adapters/schedule-store.ts'
 import { type ArchiveRecord, type ArchiveReturning, archiveBlock } from '../core/archive.ts'
 import { noteOf } from '../core/board.ts'
@@ -73,7 +74,6 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 const codeOf = (err: unknown): unknown => (isRecord(err) ? err.code : undefined)
 const notFound = (err: unknown): boolean => /not.?found|no such/i.test(`${codeOf(err)} ${messageOf(err)}`)
 const lockTimeout = (err: unknown): boolean => /Timed out waiting for lock/.test(messageOf(err))
-const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 const text = (v: unknown): string => (typeof v === 'string' ? v : '')
 
 type Log = (line: string) => void
@@ -646,7 +646,7 @@ export async function bringBack(deps: Deps, app: ReturnApp, key: string): Promis
   const back = (): TakeBack => takeBack(key, { busy: ret => returningOn(app.launches, ret) })
   let r = back()
   // Its pane is being closed right now: Return comes once that is done.
-  for (const end = Date.now() + 20_000; 'wait' in r && Date.now() < end; r = back()) await sleep(300)
+  for (const end = Date.now() + 20_000; 'wait' in r && Date.now() < end; r = back()) await pause(300)
   if ('wait' in r) return { ok: false, error: t('archive.err.busy') }
   if ('gone' in r) return { ok: false, error: t('archive.err.gone') }
   if (!('resume' in r)) return { ok: true, back: 'back' in r, again: 'again' in r, name: r.name }

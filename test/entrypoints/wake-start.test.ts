@@ -48,7 +48,8 @@ async function runStart(
   const started = Date.now()
   const proc = Bun.spawn([process.execPath, START_ENTRY, ...args], {
     cwd: root,
-    env: { ...box.env, BOARD_WAKE_START_DEADLINE_MS: String(deadlineMs) },
+    // Its snapshot's tries at a fiftieth of their 0.5, 1 and 2 s (adapters/pacing.ts); the deadline as given.
+    env: { ...box.env, BOARD_WAKE_START_DEADLINE_MS: String(deadlineMs), BOARD_TEST_PACE: '0.02' },
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',

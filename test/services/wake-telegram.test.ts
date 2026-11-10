@@ -30,7 +30,11 @@ const outside = () => ({
   CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
   homedir: homedir(),
 })
-const OUTSIDE = outside()
+// As this file loads, homedir() can still give an earlier file's temp home: under bun's per-file
+// isolation (--parallel) a home that file set and put back in process.env reaches homedir() only
+// once a test here sets one again (#358). The home the environment names is the one found here.
+const found = outside()
+const OUTSIDE = { ...found, homedir: (process.platform === 'win32' ? found.USERPROFILE : found.HOME) || found.homedir }
 
 /** A project folder with spaces, Cyrillic and %: tg-mcp's key for it, as claude-tg sends it outside herdr. */
 const PROJECT = process.platform === 'win32' ? 'C:\\Work\\Проект x 50%' : '/work/Проект x 50%'

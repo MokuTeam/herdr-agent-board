@@ -6,7 +6,9 @@
   "description": "herdr plugin: kanban of Claude sessions with categories set by the agents themselves",
   "scripts": {
     "board": "bun src/entrypoints/tui.ts",
-    "test": "bun test",
+    "test": "bun test --parallel=4 --timeout=30000 --timings=test/timings.json",
+    "test:fast": "bun test --parallel=4 --timeout=30000 --timings=test/timings.json '--path-ignore-patterns=**/*.e2e.test.ts'",
+    "test:e2e": "bun test --parallel=2 --timeout=30000 --timings=test/timings.json .e2e.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src test web/src hub",
     "format": "biome check --write src test web/src hub",

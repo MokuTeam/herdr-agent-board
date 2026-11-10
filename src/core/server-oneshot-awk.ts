@@ -3,7 +3,7 @@
 // readRoundOne, readServerFacts; core/server-plan.ts chooseCase, stepOneNeeds and the parts of
 // buildPlan and undoPlan that pick the steps and their values; core/server-plain.ts plainPlan;
 // core/server-script.ts runScript, which puts the steps into a run) runs here, written once more.
-// Kept equal to the board's by test/core/server-oneshot.test.ts, which runs both on every Look
+// Kept equal to the board's by test/core/server-oneshot.e2e.test.ts, which runs both on every Look
 // fixture and on changed copies of them and compares the case, the reasons, the plan in plain words
 // and the run byte for byte. The steps themselves are the board's own text
 // (core/server-oneshot-templates.ts), filled in here.

@@ -6,6 +6,7 @@ import { type CardPatch, writeCard } from '../../adapters/cards.ts'
 import { checkoutChanges, isCheckout } from '../../adapters/git.ts'
 import { helpersOf } from '../../adapters/helpers.ts'
 import { herdrText } from '../../adapters/herdr.ts'
+import { pause } from '../../adapters/pacing.ts'
 import { uploadsDir } from '../../adapters/paths.ts'
 import { askRestart } from '../../adapters/schedule-store.ts'
 import { busy, PINS } from '../../core/board.ts'
@@ -152,7 +153,7 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
  * seconds before it counts as gone.
  */
 async function freshItem(deps: Deps, item: Item): Promise<Item | undefined> {
-  for (const deadline = Date.now() + namedWaitMs(); ; await Bun.sleep(NAMED_POLL_MS)) {
+  for (const deadline = Date.now() + namedWaitMs(); ; await pause(NAMED_POLL_MS)) {
     const fresh = (await collect(deps)).find(next => next.key === item.key)
     if (fresh || !item.sleeping || Date.now() >= deadline) return fresh
   }

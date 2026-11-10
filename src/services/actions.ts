@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { agentGet, type HerdrAgent, herdr, herdrText, paneTerminals, snapshot } from '../adapters/herdr.ts'
 import { reportToDay, runningDay } from '../adapters/mokupilot-day.ts'
+import { pause } from '../adapters/pacing.ts'
 import { possibleProfilePanes, provenProfilePanes } from '../adapters/profile-panes.ts'
 import { boardOnPath } from '../adapters/resume-report.ts'
 import { peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
@@ -451,7 +452,7 @@ export function namedWaitMs(): number {
  * answered as it is.
  */
 async function namedAgent(pane: string, session: string | null): Promise<HerdrAgent | null> {
-  for (const deadline = Date.now() + namedWaitMs(); ; await Bun.sleep(NAMED_POLL_MS)) {
+  for (const deadline = Date.now() + namedWaitMs(); ; await pause(NAMED_POLL_MS)) {
     const agent = await agentGet(pane)
     if (!agent || agent.session || !session || Date.now() >= deadline) return agent
   }

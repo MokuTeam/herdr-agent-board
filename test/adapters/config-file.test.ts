@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, onTestFinished, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import {
   existsSync,
@@ -642,6 +642,11 @@ test('two writers of config.json at once: one waits for the other’s lock, so n
 
 test('a writer that stopped holding the lock: a moment ago, an edit is refused in words and the file stays; past 30 s, it is taken over', () => {
   isolatedHome()
+  // The lock stays held: what counts is the refusal in words, not the 2 s each edit waits first.
+  process.env.BOARD_LOCK_TIMEOUT_MS = '300'
+  onTestFinished(() => {
+    delete process.env.BOARD_LOCK_TIMEOUT_MS
+  })
   seed({ language: 'en', keep: 1 })
   const lock = `${configFile()}.lock`
   // stopped a moment ago (killed mid-write): the edit waits for it, then says so

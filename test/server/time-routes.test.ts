@@ -487,7 +487,7 @@ test('Raise and Trim say the figure the page showed: a line that bills otherwise
  * A board as writableBoard's, reading config.json as it changes (TEST_LIVE_CONFIG), as the real
  * one does: Settings → Time and a new project write the file, and the board follows it.
  */
-async function liveBoard() {
+async function liveBoard(env: Record<string, string> = {}) {
   const box = await sandbox()
   const folder = join(box.dir, 'Sync')
   mkdirSync(folder)
@@ -515,7 +515,7 @@ async function liveBoard() {
   const file = join(box.dir, 'config', 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
   mkdirSync(join(file, '..'), { recursive: true })
   writeFileSync(file, JSON.stringify(cfg, null, 2))
-  const { url, proc } = await serveBoard(box, cfg, { TEST_LIVE_CONFIG: '1' })
+  const { url, proc } = await serveBoard(box, cfg, { TEST_LIVE_CONFIG: '1', ...env })
   /** Resolves once the board has read config.json again after `fn` changed it. */
   const reloaded = async (fn: () => Promise<unknown>) => {
     const count = () => proc.messages.filter(m => (m as { reloaded?: boolean }).reloaded).length
@@ -629,7 +629,8 @@ test('a change right after Settings → Time is checked against what it wrote, n
 })
 
 test('a new project while config.json’s lock is held (a writer stopped a moment ago): 409 in words, no entry written', async () => {
-  const { url, post, settings, file } = await liveBoard()
+  // The lock stays held: what counts is the refusal, not the 2 s a writer waits for it first.
+  const { url, post, settings, file } = await liveBoard({ BOARD_LOCK_TIMEOUT_MS: '300' })
   mkdirSync(`${file}.lock`)
   const [status, why] = await post({ ...add, project: 'Audit', newProject: true })
   assert.deepEqual([status, why.code], [409, 'configBusy'])

@@ -49,9 +49,10 @@ async function setup(): Promise<Sandbox> {
   b.state({ 'api snapshot': { result: { snapshot: { panes: [], tabs: [], workspaces: [] } } } })
   return b
 }
-const cli = (b: Sandbox, args: string[]): Promise<ChildResult> => b.run('cli', { args, env: {} }).exited
-const submit = (b: Sandbox, id = 'call-1', session = SID): Promise<ChildResult> =>
-  cli(b, ['call-report', '--session', session, '--report-id', id, '--file', join(b.dir, 'report.md')])
+const cli = (b: Sandbox, args: string[], env: Record<string, string> = {}): Promise<ChildResult> =>
+  b.run('cli', { args, env }).exited
+const submit = (b: Sandbox, id = 'call-1', session = SID, env: Record<string, string> = {}): Promise<ChildResult> =>
+  cli(b, ['call-report', '--session', session, '--report-id', id, '--file', join(b.dir, 'report.md')], env)
 const result = (out: ChildResult): Receipt => {
   assert.equal(out.code, 0, out.stderr)
   return JSON.parse(out.stdout)
@@ -282,7 +283,9 @@ test('concurrent retries never steal a stale receipt lock after an interrupted w
   mkdirSync(lock)
   utimesSync(lock, new Date(0), new Date(0))
   const before = readFileSync(journal(b), 'utf8')
-  const retries = await Promise.all([submit(b), submit(b)])
+  // The lock stays held: what counts is that both give up, not the 2 s each waits for it first.
+  const held = { BOARD_LOCK_TIMEOUT_MS: '300' }
+  const retries = await Promise.all([submit(b, 'call-1', SID, held), submit(b, 'call-1', SID, held)])
   for (const r of retries) {
     assert.notEqual(r.code, 0)
     assert.match(r.stderr, /Timed out waiting for lock/)
