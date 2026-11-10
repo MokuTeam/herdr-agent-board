@@ -9,6 +9,8 @@ import { ACCESS_STRINGS } from './access-strings.ts'
 import { ARCHIVE_STRINGS } from './archive-strings.ts'
 import { ASIDE_STRINGS } from './aside-strings.ts'
 import { BACKUP_STRINGS } from './backup-strings.ts'
+import { CAL_STRINGS } from './cal-strings.ts'
+import { CALL_STRINGS } from './call-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
@@ -16,12 +18,14 @@ import { ONESHOT_STRINGS } from './oneshot-strings.ts'
 import { PRESENCE_STRINGS } from './presence-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
 import { REMOTE_STRINGS } from './remote-strings.ts'
+import { SECRET_STRINGS } from './secret-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { TEAM_STRINGS } from './team-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 import { TIME_STRINGS } from './time-strings.ts'
 import { TODO_STRINGS } from './todo-strings.ts'
+import { TURN_STRINGS } from './turn-strings.ts'
 import { WAKE_STRINGS } from './wake-strings.ts'
 
 export type Entry = string | string[]
@@ -30,6 +34,14 @@ export type Dictionary = Record<string, Entry>
 export const STRINGS: Record<Lang, Dictionary> = {
   en: {
     'sheet.properties': 'Card details',
+    'sheet.details': 'Session details',
+    'sheet.detailsShow': 'Show details',
+    'sheet.detailsHide': 'Hide details',
+    'sheet.actions': 'Session actions',
+    'sheet.actionsShow': 'Show actions',
+    'sheet.actionsHide': 'Hide actions',
+    'asked.more': 'Show the whole question',
+    'asked.less': 'Show less',
     'sheet.more': 'More actions',
     'detail.error': 'Could not read the conversation: {error}',
     'detail.retry': 'Retry',
@@ -209,6 +221,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
       'background tasks (a command, a Monitor) kept running in it for 10 minutes; stop them or let them finish, then ask for the restart again',
     'err.restart.herdr': 'herdr did not answer ({why})',
     'err.noPane': 'The session has no pane',
+    'err.dayOver': '{name}: its MokuPilot day is over',
     'err.focus': 'Could not go to {name}: {why}',
     'err.emptyMessage': 'Empty message',
     'err.blocked': '{name} waits for a decision in the terminal',
@@ -328,6 +341,11 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'tb.search': 'Search',
     'tb.sleepersTitle': 'Show sleeping sessions',
     'tb.cats': 'Categories',
+    // the toolbar's overflow menu, and the folded toolbar's filter button (its name says what is filtered)
+    'tb.more': 'More',
+    'tb.moreAlert': 'More (something in it needs a look)',
+    'tb.filters': 'Filters',
+    'tb.filtersOn': 'Filters: {text}',
     'tb.catsTitle': 'Categories: titles, colors, folders, order',
     'set.title': 'Settings',
     'set.hint': 'Settings: appearance, language, panel, sleeping sessions',
@@ -451,6 +469,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'row.status': 'Status',
     'row.doing': 'Doing',
     'row.task': 'Task',
+    'card.recap': 'Recap',
+    'card.recapAge': 'When Claude Code wrote this recap of the session',
     'row.wait': 'Waits for',
     'row.add': 'Add',
     'row.addDoing': '+ Doing',
@@ -671,6 +691,14 @@ export const STRINGS: Record<Lang, Dictionary> = {
 
   ru: {
     'sheet.properties': 'Сведения о карточке',
+    'sheet.details': 'Сведения о сессии',
+    'sheet.detailsShow': 'Показать сведения',
+    'sheet.detailsHide': 'Скрыть сведения',
+    'sheet.actions': 'Действия сессии',
+    'sheet.actionsShow': 'Показать действия',
+    'sheet.actionsHide': 'Скрыть действия',
+    'asked.more': 'Показать вопрос целиком',
+    'asked.less': 'Свернуть',
     'sheet.more': 'Ещё действия',
     'detail.error': 'Не удалось прочитать переписку: {error}',
     'detail.retry': 'Повторить',
@@ -846,6 +874,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
       'в ней 10 минут шли фоновые задачи (команда, Monitor); останови их или дождись конца, потом попроси перезапуск снова',
     'err.restart.herdr': 'herdr не ответил ({why})',
     'err.noPane': 'У сессии нет панели',
+    'err.dayOver': '{name}: день в MokuPilot уже закончился',
     'err.focus': 'Не перешёл в {name}: {why}',
     'err.emptyMessage': 'Пустое сообщение',
     'err.blocked': '{name} ждёт решения в терминале',
@@ -967,6 +996,10 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'tb.search': 'Поиск',
     'tb.sleepersTitle': 'Показывать спящие сессии',
     'tb.cats': 'Категории',
+    'tb.more': 'Ещё',
+    'tb.moreAlert': 'Ещё (в нём есть, на что посмотреть)',
+    'tb.filters': 'Фильтры',
+    'tb.filtersOn': 'Фильтры: {text}',
     'tb.catsTitle': 'Категории: названия, цвета, папки, порядок',
     'set.title': 'Настройки',
     'set.hint': 'Настройки: оформление, язык, панель, спящие сессии',
@@ -1086,6 +1119,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'row.status': 'Статус',
     'row.doing': 'Делает',
     'row.task': 'Задача',
+    'card.recap': 'Сводка',
+    'card.recapAge': 'Когда Claude Code написал эту сводку сессии',
     'row.wait': 'Ждёт',
     'row.add': 'Добавить',
     'row.addDoing': '+ Делает',
@@ -1329,18 +1364,23 @@ for (const code of Object.keys(REMOTE_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(ARCHIVE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ARCHIVE_STRINGS[code])
 // And a fork of a session.
 for (const code of Object.keys(FORK_STRINGS) as Lang[]) Object.assign(STRINGS[code], FORK_STRINGS[code])
+// And Stop and Send now on a working session (#330).
+for (const code of Object.keys(TURN_STRINGS) as Lang[]) Object.assign(STRINGS[code], TURN_STRINGS[code])
 // And a side question to a session.
 for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ASIDE_STRINGS[code])
 // And the user's presence (#172).
 for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PRESENCE_STRINGS[code])
+for (const code of Object.keys(CALL_STRINGS) as Lang[]) Object.assign(STRINGS[code], CALL_STRINGS[code])
 // And tasks (#202).
 for (const code of Object.keys(TODO_STRINGS) as Lang[]) Object.assign(STRINGS[code], TODO_STRINGS[code])
+for (const code of Object.keys(SECRET_STRINGS) as Lang[]) Object.assign(STRINGS[code], SECRET_STRINGS[code])
 // And the peer network (#231).
 for (const code of Object.keys(TEAM_STRINGS) as Lang[]) Object.assign(STRINGS[code], TEAM_STRINGS[code])
 // And the board's database and its backup (#233).
 for (const code of Object.keys(BACKUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], BACKUP_STRINGS[code])
 // And time tracking on it (#233).
 for (const code of Object.keys(TIME_STRINGS) as Lang[]) Object.assign(STRINGS[code], TIME_STRINGS[code])
+for (const code of Object.keys(CAL_STRINGS) as Lang[]) Object.assign(STRINGS[code], CAL_STRINGS[code])
 // And the board through the owner's own domain: the tunnel and its login.
 for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[code], ACCESS_STRINGS[code])
 // And setting up the server's web server from the board.

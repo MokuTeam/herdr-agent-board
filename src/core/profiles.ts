@@ -398,8 +398,9 @@ export function mayWake(
 }
 
 /**
- * Whether a session runs in the board's own profile, the one MokuPilot's running copy is taken to
- * be in: a call with a fork of it from any other would run in MokuPilot's account, not the session's.
+ * Whether a session runs in the board's own profile: a MokuPilot call from it starts in the env as
+ * the board inherited it, one from any other with that profile's CLAUDE_CONFIG_DIR
+ * (services/mokupilot.ts).
  */
 export function inBoardProfile(item: Pick<Item, 'profile' | 'profileFolder'>, set: ProfileSet): boolean {
   const own = itemProfile(item, set.list)

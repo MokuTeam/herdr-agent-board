@@ -9,3 +9,36 @@
 .msg.user .unfold { background: rgba(255, 255, 255, 0.2); color: #fff; }
 .msg.user .unfold:hover { background: rgba(255, 255, 255, 0.3); }
 .msg .msg-cut { margin: 4px 0 0; font-size: 11.5px; font-style: italic; opacity: 0.7; }
+
+/* Send now on a queued message (#330): part of its foot, beside "Queued". It shows on hover or
+   focus, and always where nothing hovers (a touch screen). Pressed, the foot says "Sending now…"
+   until Claude takes the message in. */
+.msg.waiting .when .send-now { margin-left: 6px; padding: 1px 8px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font: 500 11.5px/1.4 var(--font); opacity: 0; transition: opacity 140ms ease, transform 100ms ease-out, background 120ms ease; }
+.msg.waiting:hover .send-now, .msg.waiting:focus-within .send-now { opacity: 1; }
+.msg.waiting .send-now:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.msg.waiting .send-now:active { transform: scale(0.96); }
+.msg.waiting .send-now:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.msg.waiting.sending-now .when { color: var(--accent); }
+@media (hover: none) {
+  .msg.waiting .when .send-now { opacity: 1; }
+}
+/* Taken in: the bubble that shows it in the conversation settles from the queued look into its
+   own, once (models/settle.ts); with reduced motion it is simply there. */
+@keyframes msg-settle { from { background: color-mix(in srgb, var(--accent) 12%, var(--panel)); color: var(--label); } }
+.msg.user.settle { animation: msg-settle 420ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .msg.user.settle { animation: none; }
+  .msg.waiting .when .send-now { transition: none; }
+}
+
+/* The message box's send button turns into Stop while the session's turn runs and the box is
+   empty (#340, sheet/SendButton.tsx): the arrow gives way to a square in the same place, one calm
+   cross-fade with no overshoot, and back. The square is the button's own ::after, so the markup is
+   Send's. */
+.send > svg, .send::after { grid-area: 1 / 1; transition: opacity 160ms ease, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.send::after { content: ""; width: 9px; height: 9px; border-radius: 2px; background: currentColor; opacity: 0; transform: scale(0.4); }
+.send.stop > svg { opacity: 0; transform: scale(0.4); }
+.send.stop::after { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .send > svg, .send::after { transition: none; }
+}

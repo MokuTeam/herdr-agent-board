@@ -20,6 +20,7 @@ import {
   entryTimes,
   isTimeDay,
   lineLabel,
+  lineSystems,
   localClock,
   markPlan,
   markState,
@@ -396,6 +397,33 @@ test('billed time not entered: a line with an entry missing in one of the system
   expect(notEntered(day, byId, ['erp'])).toBe(3600)
   expect(notEntered(day, byId, ['erp', 'tracker'])).toBe(5400)
   expect(notEntered(day, byId, [])).toBe(0)
+  // an entry of a project entered elsewhere (its own systems): not asked for in the rest
+  const a = { ...(byId.get('a') as NonNullable<ReturnType<typeof byId.get>>), systems: ['erp', 'tracker'] }
+  const elsewhere = new Map([
+    ['a', a],
+    ['b', { id: 'b', rev: 1, posts: a.posts.slice(0, 0), systems: ['tracker'] }],
+  ])
+  expect(notEntered(day, elsewhere, ['erp'])).toBe(0)
+  expect(notEntered(day, elsewhere, ['erp', 'tracker'])).toBe(5400)
+})
+
+test('a line’s marks: each system with the entries to be entered there; one none of them is, not offered', () => {
+  const systems = [
+    { id: 'erp', title: 'ERP' },
+    { id: 'tracker', title: 'Tracker' },
+  ]
+  const both = { id: 'a', rev: 1, posts: [], systems: ['erp', 'tracker'] }
+  const side = { id: 'b', rev: 1, posts: [], systems: ['tracker'] }
+  const nowhere = { id: 'c', rev: 1, posts: [], systems: [] }
+  const shown = (entries: (typeof both)[]) => lineSystems(entries, systems).map(x => [x.title, x.listed.map(e => e.id)])
+  expect(shown([both, side])).toEqual([
+    ['ERP', ['a']],
+    ['Tracker', ['a', 'b']],
+  ])
+  expect(shown([side])).toEqual([['Tracker', ['b']]])
+  expect(shown([nowhere])).toEqual([])
+  // entries the day gave without their systems: every system of the client's, as before
+  expect(lineSystems([{ id: 'd', rev: 1, posts: [] }], systems).map(x => x.id)).toEqual(['erp', 'tracker'])
 })
 
 test('billable in the editor: set on the entry or the config’s; what saving sends of it', () => {

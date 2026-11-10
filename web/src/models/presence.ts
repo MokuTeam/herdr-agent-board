@@ -1,6 +1,7 @@
 // The toolbar's presence switch (#172, src/core/presence.ts), its rules on their own: whether it
 // shows (only while the payload carries `presence`, so a board without presence looks as before),
-// what it says, what a press sends, and the offer detection makes in mode 'suggest'.
+// what it says, what a press sends, the offer detection makes in mode 'suggest', and "on a call"
+// by hand where MokuPilot runs (#276; its calls switch by themselves).
 import {
   isPresenceMode,
   isPresenceState,
@@ -29,7 +30,12 @@ export interface PresenceSwitchView {
   next: PresenceState
   /** Detection's offer (mode 'suggest'): its words and the state it offers; null: none. */
   offer: { text: string; state: PresenceState } | null
+  /** "On a call" by hand: its words, where MokuPilot runs and the user is not on one. */
+  call?: string
 }
+
+const LABEL = { here: 'presence.here', away: 'presence.away', call: 'presence.call' } as const
+const HINT = { here: 'presence.hereHint', away: 'presence.awayHint', call: 'presence.callHint' } as const
 
 /** What the switch shows, or null while presence is not on (no switch at all). */
 export function presenceSwitch(raw: unknown, t: Translator): PresenceSwitchView | null {
@@ -41,10 +47,12 @@ export function presenceSwitch(raw: unknown, t: Translator): PresenceSwitchView 
       : null
   return {
     state,
-    label: t(state === 'away' ? 'presence.away' : 'presence.here'),
-    hint: t(state === 'away' ? 'presence.awayHint' : 'presence.hereHint'),
-    next: state === 'away' ? 'here' : 'away',
+    label: t(LABEL[state]),
+    hint: t(HINT[state]),
+    // A call ends back where it started.
+    next: state === 'call' ? (raw.before ?? 'here') : state === 'away' ? 'here' : 'away',
     offer,
+    ...(raw.calls === true && state !== 'call' && { call: t('presence.setCall') }),
   }
 }
 

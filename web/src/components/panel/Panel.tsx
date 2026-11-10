@@ -25,6 +25,9 @@ export type PanelKind =
   | 'backup'
   | 'time'
   | 'timeSettings'
+  | 'calendar'
+  | 'calendarSettings'
+  | 'paths'
   | 'team'
 
 /** Each panel's name for screen readers, and the session sheet's close button id. */
@@ -42,6 +45,9 @@ const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
   backup: { label: 'backup.title' },
   time: { label: 'time.title' },
   timeSettings: { label: 'time.set.title' },
+  calendar: { label: 'cal.title' },
+  calendarSettings: { label: 'cal.set.title' },
+  paths: { label: 'paths.title' },
   team: { label: 'team.title' },
 }
 
@@ -56,6 +62,12 @@ interface ShellProps {
   className?: string | undefined
   /** Files dragged onto the panel (the session sheet takes them anywhere on it). */
   drop?: DropHandlers | undefined
+  /**
+   * How wide its content runs in a wide panel (#339, styles/panels.css): `reading` (the default)
+   * keeps lists and forms to one column of reading width, centred, the title over it; `full` takes
+   * the panel's width (the calendar's grid). The session sheet lays itself out (session-head.css).
+   */
+  measure?: 'reading' | 'full'
   children?: ReactNode
 }
 
@@ -103,6 +115,7 @@ export function PanelView(props: PanelViewProps) {
     tools,
     className,
     drop,
+    measure = 'reading',
     children,
     shown,
     chrome,
@@ -121,6 +134,7 @@ export function PanelView(props: PanelViewProps) {
       aria-hidden={!shown}
       aria-label={t(label)}
       data-dock={chrome.mode}
+      data-measure={measure === 'full' ? 'full' : undefined}
       ref={asideRef}
       {...drop}
     >

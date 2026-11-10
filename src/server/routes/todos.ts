@@ -1,5 +1,6 @@
 // Tasks (#202, core/todos.ts): POST { key, op: 'add', text, owner, anchor? } pins a point of a
-// session's message; { key, op: 'done' | 'reopen' | 'remove', id } changes one; { op: 'settings',
+// session's message; { key, op: 'done' | 'reopen' | 'keep' | 'remove', id } changes one (keep: an
+// agent proposed it done, the user keeps it open, #319); { op: 'settings',
 // mode } turns them on or off (config.json's `todos`). The points live on the cards, which the
 // board watches: the change goes out with the next board. While tasks are off only the setting is
 // taken.
@@ -40,7 +41,7 @@ function opOf(body: Record<string, unknown>): TodoOp | null {
   }
   if (!id) return null
   if (body.op === 'done') return { op: 'done', id, by: 'user' }
-  if (body.op === 'reopen' || body.op === 'remove') return { op: body.op, id }
+  if (body.op === 'reopen' || body.op === 'keep' || body.op === 'remove') return { op: body.op, id }
   return null
 }
 

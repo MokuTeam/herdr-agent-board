@@ -14,6 +14,9 @@ import {
 } from '../../../src/core/time.ts'
 import type { Translator } from '../../../src/core/types.ts'
 
+// a duration in one form everywhere: the command's day says it so too
+export { durationText } from '../../../src/core/time.ts'
+
 export interface TimeDay {
   date: string
   zone: string
@@ -50,18 +53,6 @@ export function isTimeDay(v: unknown): v is TimeDay {
     v.days.every(d => isObject(d) && Array.isArray(d.lines) && typeof d.billedSeconds === 'number') &&
     Array.isArray(v.entries)
   )
-}
-
-/**
- * Seconds as the board says a duration everywhere (the panel, a lane's total, the editor), to the
- * minute and in its language: "1h 30m", "45m", "2h"; "1 ч 30 мин".
- */
-export function durationText(seconds: number, t: Translator): string {
-  const minutes = Math.round(seconds / 60)
-  const h = Math.floor(minutes / 60)
-  const m = minutes % 60
-  if (!h) return t('time.dur.m', { m })
-  return m ? t('time.dur.hm', { h, m }) : t('time.dur.h', { h })
 }
 
 /** A line's name: "The day" for a day's group, the project for a project's, else its reference (a case, a ticket) or its project. */
@@ -421,7 +412,8 @@ export function addOf(d: Draft): Record<string, unknown> | null {
 /** A line's state in one system: every entry entered, some, none, or one changed after it was. */
 export type MarkState = 'entered' | 'partly' | 'not' | 'changed'
 
-type Posted = Pick<EntryView, 'id' | 'rev' | 'posts'>
+/** An entry as a mark reads it; `systems`, where it is to be entered (its project's), when the day said so. */
+type Posted = Pick<EntryView, 'id' | 'rev' | 'posts'> & { systems?: readonly string[] }
 
 /** Where entries stand in a system: a change after entering first, then all, none, or some. */
 export function markState(entries: readonly Posted[], system: string): MarkState {
@@ -429,6 +421,20 @@ export function markState(entries: readonly Posted[], system: string): MarkState
   if (posts.some(p => p?.changedAfter)) return 'changed'
   if (posts.every(Boolean)) return 'entered'
   return posts.some(Boolean) ? 'partly' : 'not'
+}
+
+/**
+ * A line's systems as its marks show them: each of the client's with the line's entries that are to
+ * be entered there (an entry's own `systems`: a project entered elsewhere is not); one none of
+ * them is, left out.
+ */
+export function lineSystems<E extends Posted, S extends { id: string }>(
+  entries: readonly E[],
+  systems: readonly S[],
+): (S & { listed: E[] })[] {
+  return systems
+    .map(x => ({ ...x, listed: entries.filter(e => !e.systems || e.systems.includes(x.id)) }))
+    .filter(x => x.listed.length > 0)
 }
 
 /** A post or an unpost as the page sends it (POST /api/time). */
@@ -477,10 +483,5 @@ export function markPlan(entries: readonly Posted[], system: string): { send: Ma
   return { send: { op: 'post', system, entries: [...fresh, ...stale].map(e => ({ id: e.id, rev: e.rev })) }, undo }
 }
 
-/** A client's billed time not yet entered: its lines with an entry missing a mark in one of the systems. */
-export function notEntered(day: ClientDay, byId: ReadonlyMap<string, Posted>, systems: readonly string[]): number {
-  if (!systems.length) return 0
-  return day.lines
-    .filter(l => systems.some(sys => l.entries.some(id => !byId.get(id)?.posts.some(p => p.system === sys))))
-    .reduce((n, l) => n + l.billedSeconds, 0)
-}
+// a client's billed time not yet entered: the day's figure and the week's and month's say it alike
+export { notEntered } from '../../../src/core/time.ts'

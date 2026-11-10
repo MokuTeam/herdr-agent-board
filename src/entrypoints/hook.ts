@@ -29,10 +29,12 @@ import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
+import { calendarConfig } from '../core/calendar.ts'
 import { heldQuestionOf } from '../core/held-question.ts'
 import { isNotice } from '../core/notices.ts'
 import { type Profile, profileReport } from '../core/profiles.ts'
-import { todosConfig } from '../core/todos.ts'
+import { secretsConfig, usableSinks } from '../core/secrets.ts'
+import { todosConfig, todosNews } from '../core/todos.ts'
 import type { Config } from '../core/types.ts'
 
 const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
@@ -136,7 +138,21 @@ async function main(): Promise<void> {
     cfg = loadConfig()
     // The user's presence (#172), only where config.json turned it on.
     const presence = presenceForBrief(cfg)
-    context = brief(cfg, card, text(input.cwd) ?? '', process.env, 'Claude', presence, todosConfig(cfg.todos))
+    // The secret sinks (#273), only where config.json has any: else the brief is as it was.
+    const sinks = cfg.secrets === undefined ? [] : usableSinks(secretsConfig(cfg.secrets, { home: homedir() }))
+    // The calendar (#328), only while config.json turns it on: else the brief is as it was.
+    const calendar = calendarConfig(cfg.calendar) !== null
+    context = brief(
+      cfg,
+      card,
+      text(input.cwd) ?? '',
+      process.env,
+      'Claude',
+      presence,
+      todosConfig(cfg.todos),
+      sinks,
+      calendar,
+    )
     Object.assign(patch, { briefedAt: Date.now(), briefV: BRIEF_VERSION })
     if (presence) patch.presenceSeen = presence.since
     else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''
@@ -147,6 +163,18 @@ async function main(): Promise<void> {
     if (news) {
       context = context ? `${context}\n${news.line}` : news.line
       patch.presenceSeen = news.seen
+    }
+  }
+  // Its open tasks changed since it was told (#319): their keys, so it closes what it sees done; on
+  // a start (a resume, a compaction) again, as its context lost them. Only a card with tasks, or
+  // one told of some before, reads config.json for it.
+  const start = event === 'SessionStart'
+  if ((start || event === 'UserPromptSubmit') && (card?.todos !== undefined || card?.todosSeen !== undefined)) {
+    cfg ??= loadConfig()
+    const tasks = todosConfig(cfg.todos)?.agents ? todosNews(start && card ? { ...card, todosSeen: '' } : card) : null
+    if (tasks) {
+      if (tasks.line) context = context ? `${context}\n${tasks.line}` : tasks.line
+      patch.todosSeen = tasks.seen
     }
   }
   if (Object.keys(patch).length) writeCard(sid, patch)

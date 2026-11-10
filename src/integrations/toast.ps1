@@ -5,18 +5,26 @@
 #   Notification               -> same title, body = Claude's message (permission prompt etc.)
 #   PreToolUse AskUserQuestion -> same title, body = the question
 # Skipped when this pane is focused in herdr and the terminal is the foreground window,
-# like herdr, which only pops up for background work.
+# like herdr, which only pops up for background work. While the board has the user on a call
+# (presence, #276) it goes quietly to the notification center, without popping up.
 # Clicking the toast opens claude-pane:<pane id>, a URL protocol registered below that runs
 # this script again as `open <uri>`: the agent board shows that session when it runs and has it
 # (its window comes up on the session's sheet), else herdr switches to that pane and the terminal
 # comes to front.
 # Runs as an async hook, so the herdr and WinRT calls do not hold up Claude.
+# The web board posts its calendar reminders (#335) through it too: `reminder` with the reminder as
+# JSON on stdin, under the board's own app id, with Join (the meeting's link itself) or Open,
+# Snooze and At start; the buttons that are not a link open claude-pane:cal/<act>/<id>, which goes
+# to the board (web-open.ts --reminder). `reminder-clear` (its id on stdin) takes one off the screen
+# and the notification centre once it was acted on elsewhere.
 # Try it from a herdr pane: a Stop payload on stdin and `force` (skips the focused-pane check):
 #   '{"hook_event_name":"Stop","last_assistant_message":"Hi"}' | powershell -File toast.ps1 force
 
 param([string]$Action = "", [string]$Uri = "")
 
 $AppId = "Herdr.ClaudeAgent"
+$BoardAppId = "Herdr.AgentBoard"
+$ReminderId = '^[A-Za-z0-9_-]{16}$'
 $ProtocolKey = "HKCU:\Software\Classes\claude-pane"
 # This copy of the board (the script lives in its src\integrations folder); a click goes to its
 # web board first.
@@ -164,6 +172,74 @@ function Register-Handlers {
     Set-ItemProperty -Path $commandKey -Name "(default)" -Value $command
 }
 
+# Bun from PATH, else where its installer puts it; null when neither has it.
+function Find-Bun {
+    $bun = (Get-Command bun -ErrorAction SilentlyContinue).Source
+    if (-not $bun) {
+        $bun = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
+        if (-not (Test-Path -LiteralPath $bun)) { $bun = $null }
+    }
+    $bun
+}
+
+# The board's calendar reminders come under an app id of their own, "Agent board" with its icon.
+function Register-BoardApp {
+    $key = "HKCU:\Software\Classes\AppUserModelId\$BoardAppId"
+    if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+    New-ItemProperty -Path $key -Name DisplayName -Value "Agent board" -PropertyType String -Force | Out-Null
+    $icon = Join-Path $BoardDir "web\icon-192.png"
+    if (Test-Path -LiteralPath $icon) {
+        New-ItemProperty -Path $key -Name IconUri -Value $icon -PropertyType String -Force | Out-Null
+    }
+}
+
+# A calendar reminder: it stays on the screen until it is acted on (the reminder scenario), with
+# the reminder chime; a newer one for the same event replaces it.
+function Show-Reminder($R) {
+    if ([string]$R.id -notmatch $ReminderId) { return }
+    Register-Handlers
+    Register-BoardApp
+    $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+    $esc = { param($s) [Security.SecurityElement]::Escape([string]$s) }
+    $open = "claude-pane:cal/open/$($R.id)"
+    $first = if ([string]$R.join -match '^https?://\S+$') {
+        "<action content=`"$(& $esc $R.labels.join)`" activationType=`"protocol`" arguments=`"$(& $esc $R.join)`"/>"
+    } else {
+        "<action content=`"$(& $esc $R.labels.open)`" activationType=`"protocol`" arguments=`"$(& $esc $open)`"/>"
+    }
+    $snooze = "<action content=`"$(& $esc $R.labels.snooze)`" activationType=`"protocol`" arguments=`"claude-pane:cal/snooze/$($R.id)`"/>"
+    $start = if ($R.labels.start) {
+        "<action content=`"$(& $esc $R.labels.start)`" activationType=`"protocol`" arguments=`"claude-pane:cal/start/$($R.id)`"/>"
+    } else { "" }
+    $xml = @"
+<toast scenario="reminder" activationType="protocol" launch="$(& $esc $open)">
+  <visual>
+    <binding template="ToastGeneric">
+      <text hint-maxLines="2">$(& $esc $R.title)</text>
+      <text>$(& $esc $R.body)</text>
+      <text placement="attribution">$(& $esc $R.whose)</text>
+    </binding>
+  </visual>
+  <actions>
+    $first
+    $snooze
+    $start
+  </actions>
+  <audio src="ms-winsoundevent:Notification.Reminder"/>
+</toast>
+"@
+    $doc = New-Object Windows.Data.Xml.Dom.XmlDocument
+    $doc.LoadXml($xml)
+    $toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
+    $toast.Group = "calendar"
+    $toast.Tag = $R.id
+    if ($R.expires -is [ValueType]) {
+        $toast.ExpirationTime = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$R.expires)
+    }
+    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($BoardAppId).Show($toast)
+}
+
 function ConvertTo-PlainText([string]$Text, [int]$Max) {
     if ([string]::IsNullOrWhiteSpace($Text)) { return "" }
     $t = $Text -replace '```[\s\S]*?```', ' '
@@ -190,7 +266,22 @@ function Get-LastAssistantText([string]$TranscriptPath) {
     ""
 }
 
-function Show-Toast([string]$Title, [string]$Body, [string]$Attribution, [string]$PaneId) {
+# The board's presence says the user is on a call. presence.json is in the board's state folder
+# only while presence is on; one left after presence was turned off with the board closed counts
+# only while config.json still turns presence on (`true` or a section, as the board reads it).
+function Test-OnCall {
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { return $false }
+    $file = Join-Path $env:LOCALAPPDATA "herdr\plugins\agent-board\presence.json"
+    if (-not (Test-Path -LiteralPath $file)) { return $false }
+    try {
+        if ((Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json).state -ne "call") { return $false }
+        $config = Join-Path $env:APPDATA "herdr\plugins\config\agent-board\config.json"
+        $on = (Get-Content -LiteralPath $config -Raw -Encoding UTF8 | ConvertFrom-Json).presence
+        ($on -is [bool] -and $on) -or $on -is [Management.Automation.PSCustomObject]
+    } catch { $false }
+}
+
+function Show-Toast([string]$Title, [string]$Body, [string]$Attribution, [string]$PaneId, [bool]$Quiet) {
     Register-Handlers
 
     $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
@@ -215,23 +306,30 @@ function Show-Toast([string]$Title, [string]$Body, [string]$Attribution, [string
     # One live toast per pane: a newer one replaces the old in the notification center.
     $toast.Group = "herdr"
     $toast.Tag = $PaneId -replace '[^A-Za-z0-9_.-]', '_'
+    # Straight to the notification center: seen after the call.
+    if ($Quiet) { $toast.SuppressPopup = $true }
     [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($AppId).Show($toast)
 }
 
 if ($Action -eq "open") {
+    $boardOpen = Join-Path $BoardDir "src\entrypoints\web-open.ts"
+
+    # A calendar reminder's button (#335): the board snoozes it, or shows its event.
+    if ([Uri]::UnescapeDataString($Uri) -match '^claude-pane:cal/(open|snooze|start)/([A-Za-z0-9_-]{16})/?$') {
+        $act = $Matches[1]
+        $id = $Matches[2]
+        $bun = Find-Bun
+        if ($bun -and (Test-Path -LiteralPath $boardOpen)) { & $bun $boardOpen --reminder $act $id | Out-Null }
+        exit 0
+    }
+
     # Any app or web page can open a claude-pane: link, so accept nothing but a pane id.
     if ([Uri]::UnescapeDataString($Uri) -notmatch '^claude-pane:([A-Za-z0-9]+:p[A-Za-z0-9]+)/?$') { exit 0 }
     $paneId = $Matches[1]
 
     # The board first: when it runs and has a session in this pane, its window comes up on that
     # session (web-open.ts does both). Exit code 3: it does not run or has no such session.
-    # Bun from PATH, else where its installer puts it.
-    $boardOpen = Join-Path $BoardDir "src\entrypoints\web-open.ts"
-    $bun = (Get-Command bun -ErrorAction SilentlyContinue).Source
-    if (-not $bun) {
-        $bun = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
-        if (-not (Test-Path -LiteralPath $bun)) { $bun = $null }
-    }
+    $bun = Find-Bun
     if ($bun -and (Test-Path -LiteralPath $boardOpen)) {
         & $bun $boardOpen --pane $paneId | Out-Null
         if ($LASTEXITCODE -eq 0) { exit 0 }
@@ -258,6 +356,23 @@ if ($Action -eq "open") {
             if (-not [ClaudeToast.Native]::IsMinimized($window) -and [ClaudeToast.Native]::IsForeground($window)) { break }
         }
     }
+    exit 0
+}
+
+# The web board's calendar reminders (#335), after a click's way (above), which they do not touch.
+if ($Action -eq "reminder") {
+    try { Show-Reminder (Read-Stdin | ConvertFrom-Json) } catch { }
+    exit 0
+}
+
+# The id on stdin ({ "id": … }): one that starts with a dash would read as a parameter's name.
+if ($Action -eq "reminder-clear") {
+    try {
+        $id = [string](Read-Stdin | ConvertFrom-Json).id
+        if ($id -notmatch $ReminderId) { exit 0 }
+        $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+        [Windows.UI.Notifications.ToastNotificationManager]::History.Remove($id, "calendar", $BoardAppId)
+    } catch { }
     exit 0
 }
 
@@ -317,6 +432,6 @@ if ($pane) {
 if ([string]::IsNullOrWhiteSpace($title)) { $title = "Claude" }
 
 try {
-    Show-Toast $title $body $attribution $env:HERDR_PANE_ID
+    Show-Toast $title $body $attribution $env:HERDR_PANE_ID (Test-OnCall)
 } catch {
 }

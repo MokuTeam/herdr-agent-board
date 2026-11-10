@@ -149,12 +149,13 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'The board’s spawn-agent types it into a new tab, and the PATH the board runs with has no {program} (the tab’s shell may still find it).',
     'setup.launch.notFoundFix': 'Set launch.claude in the board’s config.json to the command that starts Claude Code.',
 
-    'setup.toast.na': 'Desktop notifications: Windows only',
-    'setup.toast.naDetail':
-      'On Linux and macOS herdr shows its own: [ui.toast] delivery = "system" in herdr’s config.toml.',
+    'setup.toast.na': 'Desktop notifications: Windows and macOS only',
+    'setup.toast.naDetail': 'On Linux herdr shows its own: [ui.toast] delivery = "system" in herdr’s config.toml.',
     'setup.toast.off': 'Desktop notifications are off',
     'setup.toast.offDetail':
       'A Windows notification with the agent’s own words when a session finishes, asks a question or needs a permission; a click opens that session on the board.',
+    'setup.toast.offDetailMac':
+      'A macOS notification with the agent’s own words when a session finishes, asks a question or needs a permission; a click opens that session on the board.',
     'setup.toast.offFix': 'Turn them on:',
     'setup.toast.stale': 'Desktop notifications run another copy of the board',
     'setup.toast.twice': 'Desktop notifications come twice',
@@ -166,6 +167,9 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.toast.own': 'Desktop notifications from a hook of your own',
     'setup.toast.ok': 'Desktop notifications',
     'setup.toast.okDetail': 'when a session finishes, asks or needs a permission, except in the pane you look at',
+    'setup.toast.notBuilt': 'Desktop notifications: the macOS app that shows them is not built',
+    'setup.toast.notBuiltDetail': 'Its last build failed ({reason}); until it is built, herdr shows each notification.',
+    'setup.toast.notBuiltFix': 'With the Command Line Tools in (xcode-select --install), build it again:',
   },
   ru: {
     'setup.cards.title': 'Хранилище карточек',
@@ -309,12 +313,13 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'spawn-agent доски набирает её в новой вкладке, а в PATH, с которым работает доска, нет {program} (оболочка вкладки может всё же его найти).',
     'setup.launch.notFoundFix': 'Укажи в launch.claude (config.json доски) команду, которая запускает Claude Code.',
 
-    'setup.toast.na': 'Уведомления на рабочем столе: только Windows',
-    'setup.toast.naDetail':
-      'На Linux и macOS herdr показывает свои: [ui.toast] delivery = "system" в config.toml herdr.',
+    'setup.toast.na': 'Уведомления на рабочем столе: только Windows и macOS',
+    'setup.toast.naDetail': 'На Linux herdr показывает свои: [ui.toast] delivery = "system" в config.toml herdr.',
     'setup.toast.off': 'Уведомления на рабочем столе выключены',
     'setup.toast.offDetail':
       'Уведомление Windows словами самого агента, когда сессия закончила, спрашивает или просит разрешение; щелчок открывает эту сессию на доске.',
+    'setup.toast.offDetailMac':
+      'Уведомление macOS словами самого агента, когда сессия закончила, спрашивает или просит разрешение; щелчок открывает эту сессию на доске.',
     'setup.toast.offFix': 'Включить:',
     'setup.toast.stale': 'Уведомления запускают другую копию доски',
     'setup.toast.twice': 'Уведомления приходят дважды',
@@ -327,5 +332,9 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.toast.ok': 'Уведомления на рабочем столе',
     'setup.toast.okDetail':
       'когда сессия закончила, спрашивает или просит разрешение, кроме панели, на которую ты смотришь',
+    'setup.toast.notBuilt': 'Уведомления: приложение macOS, которое их показывает, не собрано',
+    'setup.toast.notBuiltDetail':
+      'Последняя сборка не удалась ({reason}); пока его нет, каждое уведомление показывает herdr.',
+    'setup.toast.notBuiltFix': 'Когда Command Line Tools стоят (xcode-select --install), собери его снова:',
   },
 }

@@ -4,6 +4,7 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { agentGet, type HerdrAgent, herdr, herdrText, paneTerminals, snapshot } from '../adapters/herdr.ts'
+import { reportToDay, runningDay } from '../adapters/mokupilot-day.ts'
 import { possibleProfilePanes, provenProfilePanes } from '../adapters/profile-panes.ts'
 import { boardOnPath } from '../adapters/resume-report.ts'
 import { peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
@@ -13,6 +14,7 @@ import { piDraft } from '../core/dialogs/pi-dialogs.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
 import { sameDir } from '../core/launch/names.ts'
+import { boardNotice } from '../core/notices.ts'
 import { isPiItem, piTurnOver } from '../core/pi.ts'
 import {
   absoluteProfileDir,
@@ -205,6 +207,7 @@ async function wakeHereIn(deps: Deps, item: Item, freed: FreedPlace | null): Pro
           cwd: item.cwd,
           label: item.name,
           ...(freed.tabLabel !== undefined && { tabLabel: freed.tabLabel }),
+          ...(freed.worktree && { worktree: freed.worktree }),
         },
         snap,
       )
@@ -427,6 +430,33 @@ export async function sleepSession(deps: Deps, item: Item): Promise<ActionResult
   return deps.wake.sleep(item)
 }
 
+/** How often a message to a session just woken asks whether herdr names it yet. */
+export const NAMED_POLL_MS = 500
+const NAMED_WAIT_MS = 15_000
+
+/**
+ * How long a message to a session just woken waits for herdr to name it in its pane:
+ * BOARD_NAMED_WAIT_MS (tests only, unset in production) when a whole number of ms, else 15 s.
+ */
+export function namedWaitMs(): number {
+  const ms = Number(process.env.BOARD_NAMED_WAIT_MS)
+  return Number.isInteger(ms) && ms >= 0 ? ms : NAMED_WAIT_MS
+}
+
+/**
+ * herdr's agent in the pane a wake just brought the session back to (#267). herdr names the
+ * session there only once its own SessionStart hook reported it (a PowerShell script on Windows),
+ * which can come seconds after Claude is up and idle, all a wake waits for: while the pane's agent
+ * has no session, it is asked again. No agent, another session, or none by the deadline is
+ * answered as it is.
+ */
+async function namedAgent(pane: string, session: string | null): Promise<HerdrAgent | null> {
+  for (const deadline = Date.now() + namedWaitMs(); ; await Bun.sleep(NAMED_POLL_MS)) {
+    const agent = await agentGet(pane)
+    if (!agent || agent.session || !session || Date.now() >= deadline) return agent
+  }
+}
+
 /** Focus the session's pane in herdr, waking it first; `raise` also brings the terminal window up. */
 export async function focus(
   deps: Deps,
@@ -452,20 +482,39 @@ export async function focus(
 }
 
 /**
+ * A message for a MokuPilot day session (#331): into its day's inbox, which MokuPilot types into
+ * the session as a report from the sender, one turn after another (a reminder set to wait until the
+ * session is free waits in the scheduler). Only the day that runs now, and only while it is still
+ * this session's.
+ */
+function toDay(item: Item, text: string): ActionResult {
+  const day = runningDay()
+  if (!day || day.session !== item.session) return { ok: false, error: t('err.dayOver', { name: item.name }) }
+  try {
+    reportToDay(day.folder, boardNotice(text) ? 'agent board' : 'the user, on the agent board', text)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: t('err.send', { name: item.name, why: messageOf(err) }) }
+  }
+}
+
+/**
  * Type a message into the session's prompt, waking it first. Refused while it waits for a
  * decision or Claude's visible screen has no recognizable input box, even if herdr says idle.
  * With `free`, also while it works (instead of queueing into its turn); with `draft`, also while
  * the user has unsent text in its input box (the scheduler's guards). Those refusals say `busy`,
- * plus `dialog` or `draft` for those two.
+ * plus `dialog` or `draft` for those two. `woken`: the caller woke the session itself just now
+ * (the scheduler), so herdr may not name it in its pane yet.
  */
 export async function send(
   deps: Deps,
   item: Item,
   message: string,
-  { free = false, draft: guardDraft = false }: { free?: boolean; draft?: boolean } = {},
+  { free = false, draft: guardDraft = false, woken = false }: { free?: boolean; draft?: boolean; woken?: boolean } = {},
 ): Promise<ActionResult> {
   const text = String(message ?? '').trim()
   if (!text) return { ok: false, error: t('err.emptyMessage') }
+  if (item?.day) return toDay(item, text)
   // A sleeping session whose pane is gone wakes in a new tab: pi's (#178), Claude's that wake closed (#204).
   if (!item?.pane && !item?.sleeping) return { ok: false, error: t('err.noPane') }
   const expectedSession = item.session ?? null
@@ -486,7 +535,9 @@ export async function send(
   }
   if (!pane) return { ok: false, error: t('err.noPane') }
   try {
-    const agent = await agentGet(pane)
+    // Only a Claude session just woken waits for its name; pi's names its session file at once.
+    const named = (item.sleeping || woken) && !isPiItem(item)
+    const agent = named ? await namedAgent(pane, expectedSession) : await agentGet(pane)
     // Recheck after wake too: the pane may now host a different session.
     const before = refused(agent)
     if (before) return before

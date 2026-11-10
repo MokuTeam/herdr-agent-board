@@ -4,6 +4,7 @@
 import { archiveBlock } from '../../../src/core/archive.ts'
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
+import { inMokupilot } from './call.ts'
 import { ago, dismissable, inTurn } from './card.ts'
 import type { DetailStatus, DetailValue } from './detail-resource.ts'
 import { restartOf, restartPending, restartText } from './restart.ts'
@@ -155,16 +156,18 @@ export function headButtons(
   const pending = restartPending(schedules, it.key) ? restartOf(schedules, it.key) : undefined
   // Gray with the reason while it works (a turn, a dialog, its helpers), as in its menu.
   const why = archiveBlock(it, schedules)
+  // A MokuPilot call agent with no pane (#326): none of herdr's buttons.
+  const away = inMokupilot(it)
   return {
     historyHidden: !it.session,
     wakeHidden: !it.sleeping,
-    sleepHidden: !!it.sleeping || !it.session,
+    sleepHidden: !!it.sleeping || !it.session || away,
     sleepTitle: t(inTurn(it) ? 'sheet.sleepBusy' : 'sheet.sleepHint'),
-    restartHidden: !!it.sleeping || !it.session || it.agent !== 'claude',
+    restartHidden: !!it.sleeping || !it.session || it.agent !== 'claude' || away,
     restartTitle: pending ? `${t('sheet.restartPending')}. ${restartText(pending, t)}` : t('sheet.restartHint'),
-    mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude'),
-    forkHidden: !(fork && it.session && it.agent === 'claude'),
-    archiveHidden: !it.session || it.agent !== 'claude',
+    mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude') || away,
+    forkHidden: !(fork && it.session && it.agent === 'claude') || away,
+    archiveHidden: !it.session || it.agent !== 'claude' || away,
     archiveTitle: why ? t(why) : t('archive.sheetHint'),
   }
 }

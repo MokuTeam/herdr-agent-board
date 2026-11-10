@@ -1,6 +1,6 @@
 // What the board does to a session through the server: move its card, go to it in herdr, wake it,
-// put it to sleep, restart it, dismiss its question, call in MokuPilot with a fork of it. Each says
-// how it went in a toast.
+// put it to sleep, restart it, stop its turn, dismiss its question, call in MokuPilot with a fork
+// of it. Each says how it went in a toast.
 import { useMemo } from 'react'
 import type { Item, Translator } from '../../../src/core/types.ts'
 import { ApiError, api, errorText, type Reply } from '../api/client.ts'
@@ -33,6 +33,10 @@ export interface SessionActions {
    * middle loses nothing.
    */
   restartSession(key: string): Promise<void>
+  /** Stop: its running turn interrupted with its program's own key (#330); says whether it took. */
+  stopSession(key: string): Promise<void>
+  /** Send now: the messages waiting in its queue into the running turn at once (#330); `text` the one pressed. */
+  sendNow(key: string, text: string): Promise<ActResult>
   /** A question that does not need an answer: off the "Needs me" column until the next one. */
   dismissAsk(key: string): Promise<void>
   /** Kept in sight (first in its column, whole), or back among the others; the board shows it once the server has it. */
@@ -97,6 +101,8 @@ const HERDR_ACTIONS = [
   'permit',
   'workspace',
   'fork',
+  'stop',
+  'sendnow',
 ]
 
 export function useSessionActions(): SessionActions {
@@ -167,6 +173,22 @@ export function useSessionActions(): SessionActions {
       toast(r.ok ? latest.current.t('asleep', { name: it.name }) : r.error, !r.ok)
     }
 
+    async function stopSession(key: string): Promise<void> {
+      const it = itemOf(key)
+      if (!it) return
+      busy(key, latest.current.t('turn.stopping'))
+      const r = await act(key, 'stop')
+      busy(key, null)
+      const { t } = latest.current
+      toast(r.ok ? t(r.already ? 'turn.already' : 'turn.stopped', { name: it.name }) : r.error, !r.ok)
+    }
+
+    async function sendNow(key: string, text: string): Promise<ActResult> {
+      const r = await act(key, 'sendnow', { text })
+      if (!r.ok) toast(r.error, true)
+      return r
+    }
+
     async function dismissAsk(key: string): Promise<void> {
       const it = itemOf(key)
       const r = await act(key, 'card', { dismiss: true })
@@ -191,6 +213,8 @@ export function useSessionActions(): SessionActions {
       wakeSession,
       sleepSession,
       restartSession: key => restartSession(key, { t: latest.current.t, itemOf, act, toast }),
+      stopSession,
+      sendNow,
       dismissAsk,
       setFavorite,
       callMokuPilot: key => callMokuPilot(key, { t: latest.current.t, itemOf, act, toast }),

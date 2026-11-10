@@ -34,7 +34,7 @@ import {
 } from '../adapters/ssh.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
-import type { BackupPayload, TimePayload } from '../core/payload.ts'
+import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payload.ts'
 import type { Observation } from '../core/presence.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
@@ -44,6 +44,8 @@ import type { Config } from '../core/types.ts'
 import { createAccess } from '../services/access.ts'
 import { backupView, startBackups } from '../services/backup.ts'
 import { createBackupServer } from '../services/backup-server.ts'
+import { createCalendarSync } from '../services/calendar.ts'
+import { createCalendarReminders } from '../services/calendar-reminders.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
@@ -65,8 +67,10 @@ import { accessRoutes } from './routes/access.ts'
 import { archiveRoutes } from './routes/archive.ts'
 import { backupRoutes } from './routes/backup.ts'
 import { boardRoutes } from './routes/board.ts'
+import { calendarRoutes, eventReveal } from './routes/calendar.ts'
 import { fsRoutes } from './routes/fs.ts'
 import { launchRoutes } from './routes/launch.ts'
+import { linksRoutes } from './routes/links.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { moveRoute } from './routes/move.ts'
 import { pageLogRoute } from './routes/page-log.ts'
@@ -74,6 +78,7 @@ import { presenceRoutes } from './routes/presence.ts'
 import { remoteRoutes } from './routes/remote.ts'
 import { revealRoute, revealState } from './routes/reveal.ts'
 import { scheduleRoute } from './routes/schedule.ts'
+import { secretsRoutes } from './routes/secrets.ts'
 import { sessionRoutes } from './routes/session.ts'
 import { categoriesRoute, profilesRoute, settingsRoute } from './routes/settings.ts'
 import { setupRoute } from './routes/setup.ts'
@@ -236,7 +241,9 @@ export async function startServer({
   const aside = () => true
   // A notification click asks for a session: pages that connect right after are told it too.
   const reveals = revealState()
-  const events = createBroadcaster(() => board.payload(), { greet: reveals.greet })
+  // A reminder's Open on the desktop asks for a calendar event the same way (#335).
+  const eventsShown = eventReveal()
+  const events = createBroadcaster(() => board.payload(), { greet: () => reveals.greet() + eventsShown.greet() })
   // The remote mode (core/remote.ts): pairing, and the listener on the Tailscale address while it
   // is on. Off, it reads the config and nothing else.
   const remote = createRemote({ onChange: () => board.publish() })
@@ -431,6 +438,31 @@ export async function startServer({
   // Time tracking (#233): while config.json turns it on, today's billed time by lane and the
   // journal's last seq, read from the database (one query a refresh); off, nothing is read.
   const timeLine = (): TimePayload | null => timeToday(cfg)
+  // The calendar (#328): while config.json turns it on, each source fetched on its own interval and
+  // the payload's line (its revision, the next call); off, no timer and nothing read.
+  const calendar = createCalendarSync({
+    cfg,
+    log,
+    onChange: () => {
+      reminders.changed()
+      board.publish()
+    },
+  })
+  // Its reminders (#335): while the calendar and its reminders are on, one timer for the next one
+  // due, the desktop's notification and the payload's reminders on show; off, no timer.
+  const reminders = createCalendarReminders({ cfg, log, onChange: () => board.publish() })
+  // The line's revision moves with every copy written and every board event changed, an agent's
+  // `board cal push` or `add` too: the reminders look again then.
+  let calendarRev = ''
+  const calendarLine = (): CalendarPayload | null => {
+    const line = calendar.line()
+    if (line && line.rev !== calendarRev) {
+      calendarRev = line.rev
+      reminders.changed()
+    }
+    const shown = line && reminders.line()
+    return shown ? { ...line, reminders: shown } : line
+  }
   const board = createBoardState({
     deps,
     launches,
@@ -448,6 +480,7 @@ export async function startServer({
     teamRev: team.rev,
     backup: backupLine,
     time: timeLine,
+    calendar: calendarLine,
   })
   board.publish()
   const refresh = (): void => void board.refresh()
@@ -465,6 +498,8 @@ export async function startServer({
     ...remoteRoutes(listener, remote, cfg, port),
     ...accessRoutes(remoteAccess),
     ...boardRoutes(board, events),
+    // The edge log, every link event read from the transcripts (adapters/edge-log.ts); this computer only.
+    ...linksRoutes(board),
     ...fsRoutes(),
     ...uploadRoutes(),
     revealRoute(board, events, reveals),
@@ -477,8 +512,12 @@ export async function startServer({
     ...teamRoutes(team),
     // Tasks (#202): points pinned on the board, done, reopened, removed; turned on or off.
     ...todosRoutes({ cfg, find: board.find, refresh }),
+    // Secret requests (#273): the owner's submit writes the sink, or the owner declines; the phone too.
+    ...secretsRoutes({ refresh }),
     // Time entries by day and client, as billed (#233): read only, the remote page too.
     ...timeRoutes(cfg),
+    // The calendar (#328): every source's events in a window, Sync, the board's own events; Settings → Calendar here only.
+    ...calendarRoutes(cfg, calendar, { reminders, events, shown: eventsShown }),
     // Settings → Backup… (#233): the passphrase, the targets, the server's setup; this computer only.
     ...backupRoutes({ cfg, server: backupServer, now: () => backups.now(true), changed: () => board.publish() }),
     // A line from the page for this log (a phone's browser says what it could not do there).
@@ -610,6 +649,8 @@ export async function startServer({
   // Wake on but not running (its startup entry did not run, or it ended): started once.
   void wake.ensure()
   presence.start()
+  calendar.configChanged()
+  reminders.configChanged()
   team.start()
 
   // What the Remote access view reads of config.json, and the tunnel's own settings in it, as of
@@ -643,6 +684,9 @@ export async function startServer({
       wake.configChanged()
       // Presence turned on or off: its sessions marked or unmarked, the board shown again.
       presence.refresh()
+      // The calendar turned on or off: its timer started or stopped, its reminders' too.
+      calendar.configChanged()
+      reminders.configChanged()
       team.refresh()
       await board.refresh()
     },
@@ -654,6 +698,8 @@ export async function startServer({
       backups.stop()
       wake.stop()
       presence.stop()
+      calendar.stop()
+      reminders.stop()
       team.stop()
       terminals.stopAll()
       setup.stop()

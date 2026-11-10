@@ -33,7 +33,7 @@ title = "Agent board: install the board and spawn-agent commands and the Claude 
 contexts = ["workspace"]
 command = ["bun", "src/entrypoints/install.ts"]
 
-# Windows: notifications with the agent's words; a click opens the session on the board.
+# Windows and macOS: notifications with the agent's words; a click opens the session on the board.
 [[actions]]
 id = "notifications"
 title = "Agent board: desktop notifications (Windows)"

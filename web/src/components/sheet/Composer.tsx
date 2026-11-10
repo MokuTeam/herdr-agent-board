@@ -3,14 +3,18 @@
 // put it to sleep, restart it, take it off the board to the archive, a new session here, as many
 // as the row's width holds (hooks/useActionRow.ts), and More at the row's end with the rest — the
 // files that go with the next message, and the message box: Enter sends, Shift+Enter breaks the
-// line, the box grows with the text; files come in through the clip or Ctrl+V (a screenshot).
+// line, the box grows with the text; files come in through the clip or Ctrl+V (a screenshot). While
+// the session's turn runs and the box is empty, its send button is Stop (SendButton.tsx, #340).
 import { type ClipboardEvent, type KeyboardEvent, useLayoutEffect, useRef, useState } from 'react'
 import { changesMeter } from '../../../../src/core/effort.ts'
+import { canStop } from '../../../../src/core/turn-keys.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { pageLog } from '../../api/client.ts'
 import { useActionRow } from '../../hooks/useActionRow.ts'
+import { useCollapse } from '../../hooks/useCollapse.ts'
 import type { ComposerControls } from '../../hooks/useComposer.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { inMokupilot } from '../../models/call.ts'
 import {
   canReadClipboard,
   keepPasteHintSeen,
@@ -18,8 +22,8 @@ import {
   pickInstead,
   readClipboardImages,
 } from '../../models/clipboard-image.ts'
-import { composerView, sendsOnKey } from '../../models/composer.ts'
-import { remotePage } from '../../models/remote-page.ts'
+import { composerView, sendIsStop, sendsOnKey } from '../../models/composer.ts'
+import { focusHere, remotePage } from '../../models/remote-page.ts'
 import type { HeadButtons, SheetAvailability } from '../../models/sheet.ts'
 import type { termButton } from '../../models/terminal.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
@@ -39,13 +43,13 @@ import {
   PhotoIcon,
   PlusIcon,
   RestartIcon,
-  SendIcon,
   SunIcon,
 } from '../icons.tsx'
 import { TermIcon } from '../terminal/Terminal.tsx'
 import { AsideToggle, useAsideBox } from './Aside.tsx'
 import { Attachments } from './Attachments.tsx'
-import { SessionMeter } from './SessionMeter.tsx'
+import { SendButton } from './SendButton.tsx'
+import { type FootFold, SessionMeter } from './SessionMeter.tsx'
 
 /** What the session's buttons do; each gets the button it was pressed on, for what opens from it. */
 export interface SessionButtons {
@@ -88,6 +92,8 @@ export interface ComposerProps {
   on?: SessionButtons | undefined
   /** The menu of the buttons is open. */
   moreOpen?: boolean
+  /** The compact sheet (#345): the action row folds behind the footer line; none, the row is always there. */
+  fold?: FootFold | undefined
 }
 
 /** The box grows with the text, up to 180 px. */
@@ -104,11 +110,13 @@ export function Composer({
   canMutate,
   on = {},
   moreOpen = false,
+  fold,
 }: ComposerProps) {
   const t = useT()
   const fileInput = useRef<HTMLInputElement>(null)
   const actions = useRef<HTMLDivElement>(null)
   const row = useActionRow(actions)
+  useCollapse(actions, !!fold?.folded)
   /** `.over`: the row leaves it to More (More itself: nothing is left over). */
   const over = (id: string) => row.over.has(id) && 'over'
   const { text, attachments, sending, messageRef } = composer
@@ -144,9 +152,15 @@ export function Composer({
       <p id="sheet-connection-state" role="status" hidden={!av.blocked}>
         {av.banner}
       </p>
-      <div className={classNames('composer-actions', row.icons && 'icons')} ref={actions}>
-        {/* Not in a phone's browser: herdr's window is on the computer (the row then fits without it). */}
-        {!remotePage() && (
+      <div
+        className={classNames('composer-actions', row.icons && 'icons')}
+        ref={actions}
+        id={fold ? 'sheet-actions' : undefined}
+        data-folded={fold?.folded ? '' : undefined}
+      >
+        {/* Not in a phone's browser: herdr's window is on the computer (the row then fits without it); on a desk, herdr follows. */}
+        {/* A MokuPilot call agent with no pane (#326) has nothing in herdr to go to. */}
+        {focusHere() && !(item && inMokupilot(item)) && (
           <button
             type="button"
             className={classNames('button', over('sheet-focus'))}
@@ -370,17 +384,24 @@ export function Composer({
         >
           <CrossIcon />
         </button>
-        <button
-          className="send"
-          type="submit"
+        <SendButton
+          item={item}
+          stop={sendIsStop({
+            present,
+            sending,
+            text,
+            attachments,
+            stoppable: canStop(item),
+            aside: aside.on || aside.asking,
+            unsent: !!item && composer.outbox.waiting(item.key).some(e => e.state === 'failed'),
+          })}
+          focusBox={() => messageRef.current?.focus()}
           title={aside.question === null ? view.sendTitle : t('aside.toggle')}
-          aria-label={t(aside.question === null ? 'compose.sendLabel' : 'aside.toggle')}
+          label={t(aside.question === null ? 'compose.sendLabel' : 'aside.toggle')}
           disabled={aside.question === null ? view.sendDisabled : !aside.question}
-        >
-          <SendIcon />
-        </button>
+        />
       </form>
-      {item && <SessionMeter key={item.key} item={item} asked={asked} />}
+      {item && <SessionMeter key={item.key} item={item} asked={asked} fold={fold} />}
     </footer>
   )
 }

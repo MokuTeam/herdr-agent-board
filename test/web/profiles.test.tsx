@@ -127,8 +127,8 @@ test('two shown profiles: the switch after the lanes, All profiles first, each w
   expect([control.tag, control.attrs.get('class'), control.attrs.get('role'), control.attrs.get('aria-label')]).toEqual(
     ['div', 'segmented profiles', 'tablist', 'Profiles'],
   )
-  // Right after the lanes control, with a thumb as it has.
-  const row = elementsIn(byClass(nodes, 'controls'))
+  // Right after the lanes control (in the filters, since #347), with a thumb as it has.
+  const row = elementsIn(byClass(nodes, 'toolbar-filters'))
   expect(row[row.findIndex(el => el.attrs.get('id') === 'lanes') + 1]).toBe(control)
   expect(elementsIn(control).filter(el => hasClass(el, 'thumb')).length).toBe(1)
   const buttons = tabs(control)

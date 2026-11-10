@@ -51,6 +51,11 @@ export async function sandbox(t?: Registrar): Promise<Sandbox> {
     TMP: dir,
     TEMP: dir,
     PATH: dirname(process.execPath),
+    // The children keep the clock the test has. `bun test` runs in UTC whatever the machine's zone
+    // is; a child with no TZ takes the system's. A folder named for today's date in a test (a
+    // MokuPilot day, #349) was then another day's than the one the board looked in, between local
+    // midnight and the zone's offset.
+    TZ: Intl.DateTimeFormat().resolvedOptions().timeZone,
     ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
     HERDR_BIN_PATH: herdr,
     FAKE_HERDR_STATE: join(dir, 'fake.json'),
@@ -58,6 +63,9 @@ export async function sandbox(t?: Registrar): Promise<Sandbox> {
     // Files that do not exist: a test that forgets the fake ssh (fake-ssh-bin.ts) reaches no real one.
     BOARD_SSH_BIN_PATH: join(dir, 'no-ssh.exe'),
     BOARD_SSH_KEYGEN_BIN_PATH: join(dir, 'no-ssh-keygen.exe'),
+    // Nor the owner's Bitwarden or PowerShell (a secret sink, #273): fake-secrets-bin.ts stands in.
+    BOARD_BW_BIN_PATH: join(dir, 'no-bw.exe'),
+    BOARD_POWERSHELL_BIN_PATH: join(dir, 'no-powershell.exe'),
     // A test run that is cut off (Ctrl+C, a stop button, a kill) runs no cleanup: every Bun started
     // with this env ends as soon as the process that started it is gone, and ends all it started
     // with it, detached ones included (a launcher's process group, a MokuPilot call).

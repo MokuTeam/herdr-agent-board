@@ -9,7 +9,7 @@ import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 // The notification script as a whole is only parsed here, never run: it registers a URL protocol
 // and shows notifications, which belong to the owner's computer (T30). Only a click's way to the
 // web board runs, cut off before herdr (below).
-const script = boardFiles(root).toast
+const script = boardFiles(root, 'win32').toast
 const windows = process.platform === 'win32'
 const powershell = join(
   process.env.SystemRoot ?? 'C:\\Windows',
@@ -288,6 +288,197 @@ test.skipIf(!windows)(
     assert.deepEqual(board.asked, [{ pane: 'w1:p9' }])
     boardConfig(box, { language: 'en', port: await unusedPort() })
     assert.deepEqual(await click(box, 'claude-pane:w1:p9', real), { code: 9, calls: [['--pane', 'w1:p9']], stderr: '' })
+  },
+  60_000,
+)
+
+// On a call (#276): the toast goes to the notification center without popping up. Test-OnCall
+// runs on its own here against a state folder in a sandbox; the toast itself is never shown.
+const onCallPart = (): string => {
+  const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
+  const fn = /^function Test-OnCall \{\n[\s\S]*?\n\}$/m.exec(text)?.[0]
+  assert.ok(fn)
+  return fn
+}
+
+test('toast.ps1: quiet only while the board has the user on a call', () => {
+  const text = readFileSync(script, 'utf8')
+  assert.ok(text.includes('if ($Quiet) { $toast.SuppressPopup = $true }'))
+  assert.ok(text.includes('Show-Toast $title $body $attribution $env:HERDR_PANE_ID (Test-OnCall)'))
+  assert.equal(text.match(/SuppressPopup/g)?.length, 1)
+  assert.deepEqual(unsafeIn(onCallPart()), [])
+})
+
+test.skipIf(!windows)(
+  'toast.ps1: Test-OnCall reads the board’s presence.json, no file or another state is no call',
+  async () => {
+    const box: Sandbox = await sandbox()
+    const local = join(box.dir, 'local')
+    const roaming = join(box.dir, 'roaming')
+    const dir = join(local, 'herdr', 'plugins', 'agent-board')
+    const configDir = join(roaming, 'herdr', 'plugins', 'config', 'agent-board')
+    const ask = (env: Record<string, string> = {}) =>
+      Bun.spawnSync([powershell, '-NoProfile', '-Command', `${onCallPart()}\nTest-OnCall`], {
+        env: { ...process.env, LOCALAPPDATA: local, APPDATA: roaming, ...env },
+      })
+        .stdout.toString()
+        .trim()
+    assert.equal(ask(), 'False')
+    mkdirSync(dir, { recursive: true })
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(configDir, 'config.json'), JSON.stringify({ language: 'en', presence: { mode: 'auto' } }))
+    for (const [content, want] of [
+      ['{"state":"call","since":1,"by":"auto","before":"here"}', 'True'],
+      ['{"state":"here","since":1,"by":"auto"}', 'False'],
+      ['{"state":"away","since":1,"by":"user"}', 'False'],
+      ['not json', 'False'],
+    ] as const) {
+      writeFileSync(join(dir, 'presence.json'), content)
+      assert.equal(ask(), want, content)
+    }
+    writeFileSync(join(dir, 'presence.json'), '{"state":"call","since":1,"by":"auto"}')
+    assert.equal(ask({ LOCALAPPDATA: '' }), 'False')
+    // Presence as config.json has it: `true` or a section is on; anything else, or none, is off.
+    for (const [presence, want] of [
+      [true, 'True'],
+      [{}, 'True'],
+      [false, 'False'],
+      [1, 'False'],
+      ['yes', 'False'],
+      [[], 'False'],
+      [null, 'False'],
+    ] as const) {
+      writeFileSync(join(configDir, 'config.json'), JSON.stringify({ presence }))
+      assert.equal(ask(), want, JSON.stringify(presence))
+    }
+    writeFileSync(join(configDir, 'config.json'), '{"language":"en"}')
+    assert.equal(ask(), 'False')
+  },
+  30_000,
+)
+
+test('toast.ps1: a calendar reminder’s link takes an act and an id only, goes to this copy’s web-open.ts, and comes before the pane rule', () => {
+  const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
+  const rule = /-match '(\^claude-pane:cal\/[^']+)'/.exec(text)?.[1]
+  assert.ok(rule)
+  const re = new RegExp(rule)
+  for (const ok of [
+    'claude-pane:cal/open/AbCdEfGhIjKlMn_-',
+    'claude-pane:cal/snooze/0123456789abcdef/',
+    'claude-pane:cal/start/________________',
+  ])
+    assert.match(ok, re)
+  for (const bad of [
+    'claude-pane:cal/delete/AbCdEfGhIjKlMn_-',
+    'claude-pane:cal/open/short',
+    'claude-pane:cal/open/AbCdEfGhIjKlMn_-x',
+    'claude-pane:cal/open/AbCdEfGhIjKlMn_;',
+    'claude-pane:cal/open/AbCdEfGhIjKlMn_-&calc',
+    'claude-pane:wP:p3G',
+  ])
+    assert.doesNotMatch(bad, re)
+  const open = text.indexOf('if ($Action -eq "open") {')
+  const cal = text.indexOf(rule)
+  const pane = text.indexOf("-notmatch '^claude-pane:([A-Za-z0-9]+:p[A-Za-z0-9]+)/?$'")
+  assert.ok(open < cal && cal < pane, 'inside the click, before the pane rule')
+  const branch = text.slice(cal, pane)
+  assert.ok(branch.includes('& $bun $boardOpen --reminder $act $id'))
+  assert.ok(branch.includes('exit 0'))
+  // a pane's click reads as it did: the cal rule never takes one
+  assert.doesNotMatch('claude-pane:wP:p3G', re)
+  // a link that is neither is turned away before bun is looked for
+  const first = text.indexOf('$bun = Find-Bun', pane)
+  assert.ok(pane < first && text.slice(open, cal).indexOf('Find-Bun') < 0)
+})
+
+test('toast.ps1: reminder-clear takes its id from stdin, of the reminders’ form only', () => {
+  const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
+  const at = text.indexOf('if ($Action -eq "reminder-clear") {')
+  const block = text.slice(at, text.indexOf('\n}\n', at))
+  assert.ok(block.includes('$id = [string](Read-Stdin | ConvertFrom-Json).id'))
+  assert.ok(block.indexOf('if ($id -notmatch $ReminderId) { exit 0 }') < block.indexOf('History.Remove('))
+  assert.ok(block.includes('History.Remove($id, "calendar", $BoardAppId)'))
+  assert.ok(!block.includes('$Uri'))
+})
+
+test('toast.ps1: the reminder itself under the board’s own app id, buttons only of its own forms, after a click’s way', () => {
+  const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
+  const show = text.slice(text.indexOf('function Show-Reminder'), text.indexOf('function ConvertTo-PlainText'))
+  assert.ok(show.includes('scenario="reminder"'))
+  assert.ok(show.includes('CreateToastNotifier($BoardAppId)'))
+  assert.ok(show.includes('if ([string]$R.id -notmatch $ReminderId) { return }'))
+  assert.ok(show.includes(String.raw`[string]$R.join -match '^https?://\S+$'`))
+  for (const arg of [
+    'claude-pane:cal/snooze/$($R.id)',
+    'claude-pane:cal/start/$($R.id)',
+    'claude-pane:cal/open/$($R.id)',
+  ])
+    assert.ok(show.includes(arg), arg)
+  assert.ok(text.includes('$BoardAppId = "Herdr.AgentBoard"'))
+  assert.ok(text.includes("$ReminderId = '^[A-Za-z0-9_-]{16}$'"))
+  // the board's actions sit after the click's way and before the hook's
+  const click = text.indexOf('if ($Action -eq "open") {')
+  const reminder = text.indexOf('if ($Action -eq "reminder") {')
+  const clear = text.indexOf('if ($Action -eq "reminder-clear") {')
+  const hook = text.indexOf('if ($env:HERDR_ENV -ne "1") { exit 0 }')
+  assert.ok(click < reminder && reminder < clear && clear < hook)
+})
+
+// The reminder's toast built as the script builds it, up to the notifier: Show-Reminder with the
+// registry's part stood in for and Show() swapped for printing the XML, so nothing reaches the
+// registry or the screen. WinRT's XmlDocument loads it, as Show would.
+test.skipIf(!windows)(
+  'toast.ps1: a reminder’s toast loads as XML, its words escaped, Join the link itself, At start only when asked',
+  async () => {
+    const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
+    const fn = text.slice(text.indexOf('function Show-Reminder'), text.indexOf('function ConvertTo-PlainText'))
+    const show = '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($BoardAppId).Show($toast)'
+    assert.ok(fn.includes(show))
+    const cut = fn.replace(show, '[Console]::Out.Write($doc.GetXml())')
+    const box = await sandbox()
+    const file = join(box.dir, 'reminder.ps1')
+    writeFileSync(
+      file,
+      [
+        "$ReminderId = '^[A-Za-z0-9_-]{16}$'",
+        'function Register-Handlers {}',
+        'function Register-BoardApp {}',
+        cut,
+        'Show-Reminder ([Console]::In.ReadToEnd() | ConvertFrom-Json)',
+      ].join('\n'),
+    )
+    const run = (input: unknown) =>
+      Bun.spawnSync([powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file], {
+        stdin: Buffer.from(JSON.stringify(input)),
+      })
+    const base = {
+      id: 'AbCdEfGhIjKlMn_-',
+      title: 'Q&A <with> "everyone" it\'s',
+      body: 'in 10 min',
+      whose: 'Work',
+      expires: Date.now() + 600_000,
+      labels: { join: 'Join', open: 'Open', snooze: 'Snooze 5 min', start: 'At start' },
+    }
+    const joined = run({ ...base, join: 'https://meet.example.com/a?b=1&c=2' })
+    const xml = joined.stdout.toString()
+    assert.equal(joined.exitCode, 0, joined.stderr.toString())
+    assert.ok(xml.includes('scenario="reminder"'))
+    assert.ok(xml.includes('Q&amp;A &lt;with&gt;'))
+    assert.ok(xml.includes('arguments="https://meet.example.com/a?b=1&amp;c=2"'))
+    assert.ok(xml.includes('arguments="claude-pane:cal/snooze/AbCdEfGhIjKlMn_-"'))
+    assert.ok(xml.includes('arguments="claude-pane:cal/start/AbCdEfGhIjKlMn_-"'))
+    assert.ok(xml.includes('launch="claude-pane:cal/open/AbCdEfGhIjKlMn_-"'))
+    // no link: Open first; no At start once it is near
+    const plain = run({ ...base, labels: { join: 'Join', open: 'Open', snooze: 'Snooze 5 min' } }).stdout.toString()
+    assert.ok(plain.includes('content="Open" activationType="protocol" arguments="claude-pane:cal/open/'))
+    assert.ok(!plain.includes('cal/start/'))
+    // an id not of its form, or a link that is not one, shows nothing of it
+    assert.equal(run({ ...base, id: 'x;calc' }).stdout.toString(), '')
+    assert.ok(
+      !run({ ...base, join: 'javascript:alert(1)' })
+        .stdout.toString()
+        .includes('javascript:'),
+    )
   },
   60_000,
 )

@@ -7,6 +7,8 @@
 // board.
 import { useEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
+import type { CalendarFocus } from './components/calendar/CalendarPanel.tsx'
+import { Reminders } from './components/calendar/Reminders.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
 import { QuickLook } from './components/files/QuickLook.tsx'
 import { ForkPop } from './components/fork/ForkPop.tsx'
@@ -19,6 +21,7 @@ import { SheetQuestion } from './components/questions/SheetQuestion.tsx'
 import { RenameField } from './components/RenameField.tsx'
 import { SetupPop } from './components/SetupPop.tsx'
 import { SidePanels } from './components/SidePanels.tsx'
+import { SecretRequests, secretsOf } from './components/secrets/SecretForm.tsx'
 import { Toasts } from './components/Toasts.tsx'
 import { Toolbar } from './components/Toolbar.tsx'
 import { Terminal } from './components/terminal/Terminal.tsx'
@@ -47,6 +50,7 @@ import { useSetupNote } from './hooks/useSetupNote.ts'
 import { useTerminal } from './hooks/useTerminal.ts'
 import { useTerminalKeys } from './hooks/useTerminalKeys.ts'
 import { useTodos } from './hooks/useTodos.ts'
+import { useToolbarMenu } from './hooks/useToolbarMore.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { remotePage } from './models/remote-page.ts'
 import { offersTeam } from './models/team.ts'
@@ -54,7 +58,7 @@ import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
   const limitsAnchor = useRef<HTMLButtonElement>(null)
-  const { ui, dispatch, data } = useBoardContext()
+  const { ui, dispatch, data, calOpen } = useBoardContext()
   const panels = usePanelLayout()
   // The categories and schedule panels, each opened at a lane or a session when asked.
   const [categories, setCategories] = useState(false)
@@ -105,6 +109,26 @@ export function App() {
     setTimeSettings(true)
     setTimeSettingsMounted(true)
   }
+  // Settings → Calendar (#328), on the local board only: mounted at its first opening, as Time tracking.
+  const [calendarSettings, setCalendarSettings] = useState(false)
+  const [calendarSettingsMounted, setCalendarSettingsMounted] = useState(false)
+  const openCalendarSettings = () => {
+    setCalendarSettings(true)
+    setCalendarSettingsMounted(true)
+  }
+  // The calendar (#328), while the board has it on: its panel, out of the toolbar's button; an
+  // event a reminder's Open asks for (#335: on the page, or its notification on the desktop).
+  const [calendarOpen, setCalendarOpen] = useState(false)
+  const [calendarFocus, setCalendarFocus] = useState<CalendarFocus | null>(null)
+  const showEvent = (e: Omit<CalendarFocus, 'n'>) => {
+    setCalendarOpen(true)
+    setCalendarFocus(f => ({ ...e, n: (f?.n ?? 0) + 1 }))
+  }
+  const asked = calOpen?.n ?? 0
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each ask once, by its count
+  useEffect(() => {
+    if (calOpen) showEvent(calOpen)
+  }, [asked])
   // Time (#233), while the board has it on: its panel, out of the toolbar's button or a lane's day total.
   const [timeOpen, setTimeOpen] = useState(false)
   const [timeClient, setTimeClient] = useState<string | null>(null)
@@ -117,6 +141,14 @@ export function App() {
   }
   // Tasks (#202), while the board has them on: their panel, out of the toolbar's button.
   const [todosOpen, setTodosOpen] = useState(false)
+  // Settings → Paths on this computer…, on the board seen from another device only: mounted at its
+  // first opening, as Remote access.
+  const [localPaths, setLocalPaths] = useState(false)
+  const [localPathsMounted, setLocalPathsMounted] = useState(false)
+  const openLocalPaths = () => {
+    setLocalPaths(true)
+    setLocalPathsMounted(true)
+  }
   // The reminders' buttons, shared by the schedule panel and the sheet.
   const reminders = useSchedule()
   // Sessions off the board and back, the archive's panel; Retry on a session back from it is its Return again.
@@ -170,12 +202,16 @@ export function App() {
     openMokupilot,
     openBackup,
     openTimeSettings,
+    openLocalPaths,
+    openCalendarSettings,
     openTeam,
   )
   // Tasks' 📌 menu under an agent's message, and the panel's buttons.
   const todos = useTodos(menus.menu)
   // The lanes control and the profile switch folded into pills: their choices as menus.
   const picks = useSegmentPicks(menus.menu)
+  // What left the toolbar's row at a narrow width: its More menu.
+  const more = useToolbarMenu(menus.menu)
   const terminalKeys = useTerminalKeys(menus)
   useOmarchyTheme(data?.omarchy)
   useBoardKeys({
@@ -224,12 +260,14 @@ export function App() {
           onWake={() => setWake(true)}
           settings={settings}
           picks={picks}
+          more={more}
           onTodos={() => setTodosOpen(!todosOpen)}
           onBackup={remotePage() ? undefined : openBackup}
           onTime={() => {
             setTimeClient(null)
             setTimeOpen(!timeOpen)
           }}
+          onCalendar={() => setCalendarOpen(!calendarOpen)}
         />
         <Board
           onNewSession={newSession}
@@ -256,6 +294,22 @@ export function App() {
         {...(timeSettingsMounted && !remotePage()
           ? { timeSettings: { open: timeSettings, onClose: () => setTimeSettings(false) } }
           : {})}
+        {...(calendarSettingsMounted && !remotePage()
+          ? { calendarSettings: { open: calendarSettings, onClose: () => setCalendarSettings(false) } }
+          : {})}
+        calendar={{
+          open: calendarOpen,
+          focus: calendarFocus,
+          onFocused: () => setCalendarFocus(null),
+          onClose: () => {
+            setCalendarOpen(false)
+            setCalendarFocus(null)
+          },
+          onSettings: remotePage() ? undefined : openCalendarSettings,
+        }}
+        {...(localPathsMounted && remotePage()
+          ? { localPaths: { open: localPaths, onClose: () => setLocalPaths(false) } }
+          : {})}
         {...(teamMounted && offersTeam(data) ? { team: { open: team, onClose: () => setTeam(false) } } : {})}
         archive={archive}
         todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
@@ -269,7 +323,18 @@ export function App() {
             onMode: reminders.mode,
             onMore: () => openSchedule(ui.open),
           },
-          question: (item, detail) => questions.mount(item, detail) && <SheetQuestion questions={questions} />,
+          question: (item, detail) => {
+            const asked = questions.mount(item, detail) && <SheetQuestion questions={questions} />
+            // a secret the session waits for (#273) comes first: it holds the session until filled in
+            return secretsOf(item).length ? (
+              <>
+                <SecretRequests item={item} />
+                {asked}
+              </>
+            ) : (
+              asked
+            )
+          },
           upgradeFiles: chips.upgrade,
           onChanges: quickLook.lookChanges,
           onHistory: quickLook.lookHistory,
@@ -297,6 +362,7 @@ export function App() {
       {!fork.hidden && <ForkPop fork={fork} />}
       <ContextMenu engine={menus.menu} />
       <RenameField rename={rename} />
+      {data?.calendar && <Reminders onOpen={showEvent} />}
       <Toasts />
     </>
   )

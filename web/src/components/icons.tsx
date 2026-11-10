@@ -16,6 +16,13 @@ export const SearchIcon = () => (
   </Icon>
 )
 
+/** A funnel: the filters the folded toolbar keeps behind one button. */
+export const FilterIcon = () => (
+  <Icon>
+    <path d="M3.5 5h13l-5 6v4.5l-3 1.5v-6Z" />
+  </Icon>
+)
+
 export const MoonIcon = () => (
   <Icon>
     <path d="M15.5 12.2A6.5 6.5 0 0 1 7.8 4.5a6.5 6.5 0 1 0 7.7 7.7Z" />
@@ -47,6 +54,21 @@ export const TimeIcon = () => (
   <Icon>
     <circle cx="10" cy="10" r="6.5" />
     <path d="M10 6.4V10l2.6 1.6" />
+  </Icon>
+)
+
+export const CalendarIcon = () => (
+  <Icon>
+    <rect x="3.5" y="4.5" width="13" height="12" rx="2.5" />
+    <path d="M3.5 8.5h13M7 3v3M13 3v3" />
+  </Icon>
+)
+
+/** A video call's join (#328). */
+export const VideoIcon = () => (
+  <Icon>
+    <rect x="2.8" y="5.5" width="10" height="9" rx="2" />
+    <path d="m12.8 9 4.2-2.4v6.8L12.8 11" />
   </Icon>
 )
 

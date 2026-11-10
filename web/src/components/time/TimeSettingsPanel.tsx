@@ -10,6 +10,7 @@
 // stay in config.json: a client that has some says so.
 import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useState } from 'react'
 import type { BoardCategory, Swatch } from '../../../../src/core/payload.ts'
+import { systemsOfProject } from '../../../../src/core/time.ts'
 import { errorText, postJson, replyOf } from '../../api/client.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
@@ -336,9 +337,16 @@ function ClientRow({ id, title, color, c, open, onToggle, disabled, send, said }
       </div>
       {open && (
         <div className="time-set-client-body" id={body}>
-          <div className="time-set-sub time-set-projects-head">
+          <div className="time-set-sub time-set-projects-head" style={columnsOf(c)}>
             <h5>{t('time.set.projects')}</h5>
             {c.projects?.length && c.billable ? <span>{t('time.set.projectBilled')}</span> : null}
+            {c.projects?.length
+              ? bySystem(c).map((s, i) => (
+                  <span key={s.id} className="time-set-system-head" style={{ gridColumn: 4 + i }} title={s.title}>
+                    {s.title}
+                  </span>
+                ))
+              : null}
           </div>
           {c.projects === null ? (
             <div className="access-actions">
@@ -362,11 +370,14 @@ function ClientRow({ id, title, color, c, open, onToggle, disabled, send, said }
           ) : (
             <>
               {c.projects.length === 0 && <p className="access-hint time-set-hint">{t('time.set.noProjects')}</p>}
-              <ul className="time-set-projects">
+              <ul className="time-set-projects" style={columnsOf(c)}>
                 {c.projects.map(p => (
                   <ProjectRow key={p} name={p} c={c} disabled={disabled} edit={edit} />
                 ))}
               </ul>
+              {c.projects.length > 0 && bySystem(c).length > 0 && (
+                <p className="access-hint time-set-hint">{t('time.set.projectSystemsHint')}</p>
+              )}
               <AddProject disabled={disabled} onAdd={name => edit({ op: 'project', name })} />
             </>
           )}
@@ -410,13 +421,30 @@ function ClientRow({ id, title, color, c, open, onToggle, disabled, send, said }
   )
 }
 
+/**
+ * The systems a project can be taken out of, a column each: where a client has two or more (or a
+ * project has its own already, to be put back). One alone is where all of its time goes.
+ */
+const bySystem = (c: TimeClientView) =>
+  c.systems.length > 1 || Object.keys(c.projectSystems ?? {}).length > 0 ? c.systems : []
+
+/** The project rows' columns for those systems, named once in the heading. */
+const columnsOf = (c: TimeClientView) => ({
+  '--systems': bySystem(c)
+    .map(() => 'var(--system-col)')
+    .join(' '),
+})
+
 /** A project's live entries; its cell kept when it has none, so the row's columns stay where they are. */
 function Uses({ n }: { n: number }) {
   const t = useT()
   return <small className="time-set-uses">{n ? t('time.set.entries', { n }) : ''}</small>
 }
 
-/** A project: its name and entries, billable or not (a billed client's), Rename in place, Retire. */
+/**
+ * A project: its name and entries, billable or not (a billed client's), the systems it is entered
+ * in (a client's with more than one), Rename in place, Retire.
+ */
 function ProjectRow(props: {
   name: string
   c: TimeClientView
@@ -479,6 +507,28 @@ function ProjectRow(props: {
           />
         )}
       </span>
+      {bySystem(c).map(s => {
+        const own = systemsOfProject(c, name).map(x => x.id)
+        const label = `${t('time.set.projectEntered', { system: s.title })}: ${name}`
+        return (
+          <span className="time-set-check" key={s.id}>
+            <input
+              type="checkbox"
+              checked={own.includes(s.id)}
+              aria-label={label}
+              title={label}
+              disabled={props.disabled}
+              onChange={e =>
+                void props.edit({
+                  op: 'projectSystems',
+                  project: name,
+                  systems: e.target.checked ? [...own, s.id] : own.filter(id => id !== s.id),
+                })
+              }
+            />
+          </span>
+        )
+      })}
       <button
         type="button"
         className="icon-button time-set-icon"

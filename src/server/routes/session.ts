@@ -18,8 +18,18 @@ import { checkName } from '../../core/launch/names.ts'
 import type { MessageGate } from '../../core/message-gate.ts'
 import type { Viewer } from '../../core/mokupilot-mode.ts'
 import { isPiItem } from '../../core/pi.ts'
+import type { QueuedPrompt, QueueWindow } from '../../core/queue.ts'
 import type { Item, Pin } from '../../core/types.ts'
-import { checkWake, focus, send, sleepSession, wake, wakeAnswers } from '../../services/actions.ts'
+import {
+  checkWake,
+  focus,
+  NAMED_POLL_MS,
+  namedWaitMs,
+  send,
+  sleepSession,
+  wake,
+  wakeAnswers,
+} from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
 import { askArchive, undoMs } from '../../services/archive.ts'
 import { askAside } from '../../services/aside.ts'
@@ -30,6 +40,7 @@ import type { Launches } from '../../services/launch/launches.ts'
 import { renameSession, renameWorkspace } from '../../services/launch/rename.ts'
 import { startCall } from '../../services/mokupilot.ts'
 import { ownAddresses } from '../../services/tunnel.ts'
+import { sendNow, stopTurn, turnIO } from '../../services/turn.ts'
 import { type Body, type Handler, json, type Route } from '../http.ts'
 import { helperRoute, withSessions } from './helpers.ts'
 
@@ -53,24 +64,38 @@ const changed = (item: Item): Result => ({ ok: false, error: t('err.sessionChang
 const PIN_NAMES: ReadonlySet<string> = PINS
 const isPin = (column: string): column is Pin => PIN_NAMES.has(column)
 
-async function detail(app: SessionApp, item: Item) {
-  const { deps } = app
-  const { transcript, claudeRoot, alive, since, pipe, ...shown } = item
-  // queued: the user's messages Claude has not taken in yet. Only a running Claude has a queue,
-  // and once it said its turn was over (its registry: idle, or a background shell) it had none.
-  // The registry is the one of the session's own profile.
-  const home = deps.homes.forDir(claudeRoot ?? deps.claude.root)
-  const reg = alive && item.session ? home.liveSessions().get(item.session) : null
+/**
+ * The window a Claude session's queue is read in (core/queue.ts): only a running Claude has a
+ * queue, and once it said its turn was over (its registry: idle, or a background shell) it had
+ * none. The registry is the one of the session's own profile.
+ */
+function queueWindow(deps: Deps, item: Item): QueueWindow {
+  const home = deps.homes.forDir(item.claudeRoot ?? deps.claude.root)
+  const reg = item.alive && item.session ? home.liveSessions().get(item.session) : null
   const idleSince =
     reg && ['idle', 'shell'].includes(reg.status ?? '') && typeof reg.statusUpdatedAt === 'number'
       ? reg.statusUpdatedAt
       : 0
+  return { since: item.since ?? 0, idleSince }
+}
+
+/** The user's messages still in a running Claude session's queue, as its detail shows them (Send now, #330). */
+function queueOf(deps: Deps, item: Item): QueuedPrompt[] {
+  if (!item.alive || isCodexItem(item) || isPiItem(item)) return []
+  // As far back as the detail reads it, so both see the same queue.
+  return deps.claude.sessionThread(item.transcript ?? '', 60, queueWindow(deps, item)).queued
+}
+
+async function detail(app: SessionApp, item: Item) {
+  const { deps } = app
+  const { transcript, claudeRoot, alive, since, pipe, ...shown } = item
+  // queued: the user's messages Claude has not taken in yet (queueWindow).
   // A pi session's turns are in its session file, its key.
   const thread = isCodexItem(item)
     ? deps.codex.sessionThread(item.session ?? '', 60)
     : isPiItem(item)
       ? deps.pi.sessionThread(item.session ?? '', 60)
-      : deps.claude.sessionThread(transcript ?? '', 60, { since: since ?? 0, idleSince })
+      : deps.claude.sessionThread(transcript ?? '', 60, queueWindow(deps, item))
   const conversation = withSessions(app.items(), thread.conversation)
   // helpers: every subagent, fork, workflow agent and teammate, newest first (adapters/helpers.ts).
   const own = helpersOf(transcript, { alive: !!alive, since: since ?? null })
@@ -113,10 +138,24 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
   return app.gate(item.key, body.requestId ?? randomUUID(), [body.session ?? null, body.text, files], async () => {
     // Always collect a new snapshot before accepting a message, even if SSE is connected: a
     // board that cannot reach herdr fails here rather than send on old data.
-    const fresh = (await collect(deps)).find(next => next.key === item.key)
-    if (!fresh || fresh.session !== item.session || fresh.pane !== item.pane) return changed(item)
+    const fresh = await freshItem(deps, item)
+    // A card shown asleep is for its session wherever it woke meanwhile: a new tab (#204) too.
+    const moved = item.sleeping && !!item.session
+    if (!fresh || fresh.session !== item.session || (fresh.pane !== item.pane && !moved)) return changed(item)
     return send(deps, fresh, [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n'))
   })
+}
+
+/**
+ * The card's session in a new snapshot. One the card shows asleep may have just woken (by wake,
+ * Telegram or by hand) in a pane herdr does not name it in yet (#267): looked for again for a few
+ * seconds before it counts as gone.
+ */
+async function freshItem(deps: Deps, item: Item): Promise<Item | undefined> {
+  for (const deadline = Date.now() + namedWaitMs(); ; await Bun.sleep(NAMED_POLL_MS)) {
+    const fresh = (await collect(deps)).find(next => next.key === item.key)
+    if (fresh || !item.sleeping || Date.now() >= deadline) return fresh
+  }
 }
 
 // A question form, a permission prompt or pi's menu or text input, answered with keys in the pane
@@ -217,6 +256,18 @@ async function restart(deps: SessionApp['deps'], item: Item): Promise<Result> {
   return { ok: true, id: entry.id, again }
 }
 
+/** What the board does not do to a MokuPilot call agent with no pane (#326) or day session (#331). */
+const IN_MOKUPILOT_REFUSED: ReadonlySet<string> = new Set([
+  'focus',
+  'sleep',
+  'restart',
+  'archive',
+  'mokupilot',
+  'fork',
+  'stop',
+  'sendnow',
+])
+
 /** `body`: its fields, taken only by the actions that read them (as main's did, so a null body fails only there). */
 async function act(
   app: SessionApp,
@@ -226,6 +277,11 @@ async function act(
   viewer?: Viewer,
 ): Promise<Result> {
   const { deps } = app
+  // A MokuPilot call agent with no pane (#326) or day session (#331) runs in MokuPilot: nothing of
+  // herdr's for it, and no fork or call of a session MokuPilot is running. Every other session goes
+  // on as before.
+  if ((item.call || item.day) && !item.pane && IN_MOKUPILOT_REFUSED.has(action))
+    return { ok: false, error: t('err.noPane') }
   switch (action) {
     case 'focus':
       return focus(deps, item, { raise: deps.cfg.raiseTerminal !== false })
@@ -240,6 +296,13 @@ async function act(
     case 'answer':
     case 'permit':
       return answer(app, item, action, await body())
+    // Stop and Send now (#330): the program's own keys in its pane (services/turn.ts).
+    case 'stop':
+      return stopTurn(deps, item, { io: turnIO(item.pane ?? '', item.transcript, () => queueOf(deps, item)) })
+    case 'sendnow':
+      return sendNow(deps, item, (await body()).text, {
+        io: turnIO(item.pane ?? '', item.transcript, () => queueOf(deps, item)),
+      })
     case 'rename':
       return rename(item, await body())
     // herdr's name for the workspace it is in, which every session there shows.
@@ -257,7 +320,7 @@ async function act(
       )
       return { ok: true, held: r.held, dropped: r.dropped, closeAt: r.record.closeAt }
     }
-    // A MokuPilot call whose agent is a fork of this session, only in the board's own profile; no herdr in it.
+    // A MokuPilot call whose agent is a fork of this session, in the session's own profile; no herdr in it.
     // Here or on the viewer's computer by the mode, and under `auto` by who asks (core/mokupilot-mode.ts).
     case 'mokupilot':
       return startCall(deps.cfg, item, { profiles: deps.profiles(), viewer, own: ownAddresses })
@@ -337,11 +400,12 @@ export function sessionRoutes(app: SessionApp): Route[] {
       handle: withItem(async item => json(200, await detail(app, item))),
     },
     helperRoute(app),
-    // Answering a dialog presses keys in a session, an archive closes a pane, a workspace's new name
-    // is every session's there, a fork starts one: like a launch, only from this page.
+    // Answering a dialog presses keys in a session, and so do Stop and Send now (#330), an archive
+    // closes a pane, a workspace's new name is every session's there, a fork starts one: like a
+    // launch, only from this page.
     {
       method: 'POST',
-      path: /^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace|fork)$/,
+      path: /^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace|fork|stop|sendnow)$/,
       guard: ['board-header', 'origin', 'fresh-data'],
       handle: action,
     },

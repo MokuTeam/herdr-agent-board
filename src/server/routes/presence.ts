@@ -1,5 +1,5 @@
 // The user's presence (#172, core/presence.ts): GET reads it, for the page, the phone and the
-// Android app; POST { state: 'here' | 'away', from? } is the user's switch; POST { op: 'settings',
+// Android app; POST { state: 'here' | 'away' | 'call', from? } is the user's switch; POST { op: 'settings',
 // on?, mode?, idleMinutes? } turns it on or off and sets detection, in config.json's `presence`
 // (the config watcher picks it up). A phone may do all of it, as it may change the settings.
 // While presence is not on, GET answers { presence: null } and a switch is refused: turning it on

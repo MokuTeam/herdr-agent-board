@@ -195,7 +195,11 @@ export async function cwdOf(file: string): Promise<string | null> {
 const normCwd = (s: string): string =>
   /^[a-z]:/i.test(s) ? s.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() : s.replace(/\/+$/, '')
 
-export function createClaudeHome(root: string): ClaudeHome {
+/**
+ * @param tempDir the folder whose own paths are never offered as recent (the temp folder by
+ *   default): a session that ran where the tests are checked out would otherwise list it.
+ */
+export function createClaudeHome(root: string, tempDir: string = tmpdir()): ClaudeHome {
   const sessionsDir = join(root, 'sessions')
   const projects = join(root, 'projects')
   const pathCache = new Map<string, string>() // session id -> transcript path
@@ -384,7 +388,7 @@ export function createClaudeHome(root: string): ClaudeHome {
       )
         .sort((a, b) => b.m - a.m)
         .slice(0, 40)
-      const temp = normDir(tmpdir())
+      const temp = normDir(tempDir)
       const cwds = await Promise.all(
         dirs.map(async ({ dir, m }) => {
           const files = (await readdir(dir).catch(() => [] as string[])).filter(f => f.endsWith('.jsonl'))
