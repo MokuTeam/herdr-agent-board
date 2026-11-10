@@ -145,7 +145,7 @@ describe('Team panel', () => {
     expect(all).toContain('from you · received')
     expect(all).toContain('from you · expired, not delivered')
     expect(all).toContain('from them · held back until the new key is trusted')
-    expect(all).toContain('held — key changed, Trust to read')
+    expect(all).toContain('held: key changed, Trust to read')
     expect(all).not.toContain('held one')
     expect(findAll(nodes, el => hasClass(el, 'held'))).toHaveLength(1)
     expect(findAll(nodes, el => el.tag === 'textarea')).toHaveLength(1)
