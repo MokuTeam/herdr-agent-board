@@ -2,9 +2,9 @@
 // id, the outbox and its states, the pins, the log without bodies; and joinTeam/leaveTeam in
 // config.json. Nothing is created by reading.
 import { expect, test } from 'bun:test'
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { configFile, joinTeam, leaveTeam, loadConfig } from '../../src/adapters/config-file.ts'
-import { stateDir, teamAuditFile, teamDraftsFile } from '../../src/adapters/paths.ts'
+import { stateDir, teamAuditFile, teamDraftsFile, teamInboxFile } from '../../src/adapters/paths.ts'
 import {
   AUDIT_MAX_BYTES,
   addDraft,
@@ -102,7 +102,12 @@ test('the outbox keeps states forward only, and the ack that came with acked', a
 
 test(`only the last ${KEEP_PER_PEER} per peer are kept`, () => {
   isolatedHome()
-  for (let i = 0; i < KEEP_PER_PEER + 3; i++) addInbox(item(`m${i}`))
+  // Most of the list is written as the file it would be: KEEP_PER_PEER locked writes one by one take
+  // longer than a test may on Windows. The last ones go through addInbox, which trims.
+  mkdirSync(stateDir(), { recursive: true })
+  const seeded = Array.from({ length: KEEP_PER_PEER }, (_, i) => item(`m${i}`))
+  writeFileSync(teamInboxFile(), JSON.stringify({ v: 1, peers: { [A]: seeded } }))
+  for (let i = KEEP_PER_PEER; i < KEEP_PER_PEER + 3; i++) addInbox(item(`m${i}`))
   addInbox(item('other', { from: 'B'.repeat(43) }))
   const list = readInbox(A)
   expect(list).toHaveLength(KEEP_PER_PEER)

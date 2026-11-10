@@ -136,6 +136,11 @@ export interface Harness {
   join(key: KeyPair, name: string, invite?: string): Promise<Client>
   /** A hello, a challenge and nothing else yet. */
   hello(key: KeyPair): Promise<{ c: Client; nonce: string }>
+  /**
+   * Waits until the hub has seen a peer's socket close. A client's close event can come before the
+   * hub's own close handler has run (it does on Windows), and a frame the hub writes in between is lost.
+   */
+  offline(peer: string, ms?: number): Promise<void>
   stop(): void
 }
 
@@ -183,6 +188,13 @@ export async function startHarness(): Promise<Harness> {
       c.send({ t: 'join', invite, name, sig })
       await c.take('welcome')
       return c
+    },
+    offline: async (peer, ms = 2000) => {
+      const deadline = Date.now() + ms
+      while (hub.online(peer)) {
+        if (Date.now() > deadline) throw new Error('the hub still has the peer online')
+        await new Promise(r => setTimeout(r, 5))
+      }
     },
     stop: () => {
       for (const c of clients) c.close()

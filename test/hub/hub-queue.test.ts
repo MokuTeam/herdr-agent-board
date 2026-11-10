@@ -205,11 +205,13 @@ test('a sender that was away is told of the expiry on its next welcome, once', a
     b.close()
     await b.closed
   })
+  await h.offline(B.pub)
   const env = await question(A, B.pub, 'while away', { ttl_s: 60 })
   a0.send({ t: 'send', env })
   await a0.take('state')
   a0.close()
   await a0.closed
+  await h.offline(A.pub)
   h.clock.tick(120_000)
   assert.equal(h.db.message(idOf(env))?.state, 'expired')
   const a = await h.login(A)
