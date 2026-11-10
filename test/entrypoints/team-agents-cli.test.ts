@@ -2,7 +2,7 @@
 // they are not the owner's instructions, then each message quoted line by line, with nothing in a
 // peer's words able to move the cursor, reorder the text or pass for the board's own lines.
 import { expect, test } from 'bun:test'
-import { framedThread } from '../../src/entrypoints/team-agents-cli.ts'
+import { framedThread, teamAgents } from '../../src/entrypoints/team-agents-cli.ts'
 
 const P = 'A'.repeat(43)
 
@@ -46,4 +46,41 @@ test('with no lane shared the header says so', () => {
   const out = framedThread(`${P}/general`, {}, [], { peers: {}, lanes: [] }, 'anna')
   expect(out.split('\n')[0]).toBe('Thread general with anna')
   expect(out).toContain('you may talk about no lane of this board')
+})
+
+test("#360: board team loop shows a peer's pause (its own or the default), sets 1 to 100, and goes back with default", async () => {
+  const posted: unknown[] = []
+  let peers: Record<string, unknown> = {}
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    async fetch(req) {
+      if (req.method === 'GET') return Response.json({ peers, loopDefault: 20 })
+      posted.push(await req.json())
+      return Response.json({ ok: true })
+    },
+  })
+  try {
+    const ctx = {
+      webPort: server.port as number,
+      roster: [{ peer: P, name: 'anna' }],
+      self: async () => ({ key: 'k1' }),
+      find: async () => ({ key: 'k1' }),
+    }
+    expect(await teamAgents('loop', ['anna'], ctx)).toBe('anna: agents pause after 20 messages in a row (the default)')
+    peers = { [P]: { on: true, lanes: [], loop: 7 } }
+    expect(await teamAgents('loop', ['anna'], ctx)).toBe('anna: agents pause after 7 messages in a row')
+    expect(await teamAgents('loop', ['anna', '40'], ctx)).toBe('ok · anna: agents pause after 40 messages in a row')
+    expect(await teamAgents('loop', ['team', 'default'], ctx)).toContain("the board's default")
+    expect(posted).toEqual([
+      { peer: P, loop: 40 },
+      { peer: 'team', loop: null },
+    ])
+    for (const bad of ['0', '101', '2.5', '-3', 'many'])
+      await expect(teamAgents('loop', ['anna', bad], ctx)).rejects.toThrow('from 1 to 100')
+    await expect(teamAgents('loop', ['nobody', '5'], ctx)).rejects.toThrow()
+    expect(posted).toHaveLength(2)
+  } finally {
+    server.stop(true)
+  }
 })

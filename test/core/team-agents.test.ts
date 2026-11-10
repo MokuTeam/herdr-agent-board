@@ -8,6 +8,7 @@ import {
   inboundKey,
   laneHit,
   legacyText,
+  loopFor,
   loopRun,
   noticeText,
   resolveThreadRef,
@@ -15,6 +16,7 @@ import {
   secretHit,
   splitKey,
   threadRef,
+  validLoop,
 } from '../../src/core/team-agents.ts'
 
 const P = 'A'.repeat(43)
@@ -86,7 +88,16 @@ test('limits: whole numbers of 1 or more from config.json, the defaults for anyt
     ...DEFAULT_LIMITS,
     sessionHour: 5,
   })
-  expect(DEFAULT_LIMITS).toMatchObject({ sessionHour: 20, peerHour: 60, peerDay: 300, loopRun: 8 })
+  expect(DEFAULT_LIMITS).toMatchObject({ sessionHour: 20, peerHour: 60, peerDay: 300, loopRun: 20 })
+})
+
+test("#360: a peer's own loop pause is a whole number from 1 to 100; anything else is the board's default", () => {
+  for (const ok of [1, 20, 100]) expect(validLoop(ok)).toBe(true)
+  for (const bad of [0, 101, 2.5, -1, '20', null, undefined, Number.NaN]) expect(validLoop(bad)).toBe(false)
+  expect(loopFor({ loop: 5 }, { loopRun: 20 })).toBe(5)
+  expect(loopFor({ loop: 500 }, { loopRun: 20 })).toBe(20)
+  expect(loopFor({}, { loopRun: 7 })).toBe(7)
+  expect(loopFor(undefined, DEFAULT_LIMITS)).toBe(20)
 })
 
 test('a post that seems to carry a secret is named by what it seems to carry; plain text is not', () => {

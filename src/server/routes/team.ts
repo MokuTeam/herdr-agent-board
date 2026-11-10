@@ -21,7 +21,7 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { audit, changeAgents, readAgents, type SessionRef } from '../../adapters/team-store.ts'
 import { categoryInfo } from '../../core/categories.ts'
 import { isMessageId, isPeerId, isThreadId, validName } from '../../core/team.ts'
-import { TEAM, threadKey } from '../../core/team-agents.ts'
+import { agentLimits, TEAM, threadKey, validLoop } from '../../core/team-agents.ts'
 import type { Config } from '../../core/types.ts'
 import type { PostTarget, TeamService } from '../../services/team-hub.ts'
 import type { TeamRouter } from '../../services/team-router.ts'
@@ -46,20 +46,24 @@ function sessionFrom(v: unknown): SessionRef | null {
 }
 
 /** The owner's agent switches as the panel shows them, with the lanes there are to share. */
-function agentsView(cfg: Pick<Config, 'categories'>): unknown {
+function agentsView(cfg: Pick<Config, 'categories' | 'team'>): unknown {
   const s = readAgents()
+  const team = typeof cfg.team === 'object' && cfg.team !== null ? (cfg.team as Record<string, unknown>) : {}
   return {
     off: s.off,
     listener: s.listener,
     peers: s.peers,
     paused: s.paused,
+    // The loop pause of a peer without its own (#360).
+    loopDefault: agentLimits(team.agentLimits).loopRun,
     lanes: cfg.categories.map(c => ({ id: c.id, title: categoryInfo(cfg, c.id).title })),
   }
 }
 
 /**
  * One change of the owner's switches: `off` (all agents), or for `peer` (an id or `team`) `on`,
- * `lanes` (ids of this board's lanes) and, for the team, `muted`.
+ * `lanes` (ids of this board's lanes), `loop` (its own loop pause, 1 to 100, or null for the
+ * board's default: #360) and, for the team, `muted`.
  */
 function changeAgentsFrom(
   cfg: Pick<Config, 'categories'>,
@@ -88,6 +92,7 @@ function changeAgentsFrom(
   const known = new Set(cfg.categories.map(c => c.id))
   if (body.on !== undefined && typeof body.on !== 'boolean') return { ok: false, error: 'body' }
   if (body.muted !== undefined && typeof body.muted !== 'boolean') return { ok: false, error: 'body' }
+  if (body.loop !== undefined && body.loop !== null && !validLoop(body.loop)) return { ok: false, error: 'loop' }
   if (body.lanes !== undefined && !(Array.isArray(body.lanes) && body.lanes.every(l => known.has(l))))
     return { ok: false, error: 'lanes' }
   changeAgents(s => {
@@ -95,6 +100,8 @@ function changeAgentsFrom(
     if (typeof body.on === 'boolean') p.on = body.on
     if (Array.isArray(body.lanes)) p.lanes = [...new Set(body.lanes as string[])]
     if (typeof body.muted === 'boolean') p.muted = body.muted
+    if (validLoop(body.loop)) p.loop = body.loop
+    else if (body.loop === null) delete p.loop
     s.peers[peer] = p
   })
   audit('agents', peer === TEAM ? null : peer, {
@@ -102,12 +109,13 @@ function changeAgentsFrom(
     ...(typeof body.on === 'boolean' && { on: body.on }),
     ...(Array.isArray(body.lanes) && { lanes: (body.lanes as string[]).join(',') }),
     ...(typeof body.muted === 'boolean' && { muted: body.muted }),
+    ...(body.loop !== undefined && { loop: validLoop(body.loop) ? body.loop : 'default' }),
   })
   return { ok: true }
 }
 
-export function teamRoutes(team: TeamService, router?: TeamRouter, cfg?: Pick<Config, 'categories'>): Route[] {
-  const lanes = (): Pick<Config, 'categories'> => cfg ?? { categories: [] }
+export function teamRoutes(team: TeamService, router?: TeamRouter, cfg?: Pick<Config, 'categories' | 'team'>): Route[] {
+  const lanes = (): Pick<Config, 'categories' | 'team'> => cfg ?? { categories: [] }
   return [
     {
       method: 'GET',

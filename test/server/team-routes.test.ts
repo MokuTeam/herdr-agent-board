@@ -373,4 +373,24 @@ describe('team on, against a hub in this process', () => {
     await post(url, '/api/team/agents', { peer: anna.pub, on: false })
     await post(url, '/api/team/listen', { session: null })
   })
+
+  test("#360: a peer's loop pause is set and cleared on POST /api/team/agents, shown with the default; out of range is refused", async () => {
+    for (const loop of [0, 101, 2.5, '5'])
+      expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, loop }))).toEqual([
+        400,
+        { ok: false, error: 'loop' },
+      ])
+    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, loop: 5 }))).toEqual([200, { ok: true }])
+    expect(await answer(post(url, '/api/team/agents', { peer: 'team', loop: 30 }))).toEqual([200, { ok: true }])
+    const agents = async () =>
+      (await (await fetch(`${url}/api/team/agents`)).json()) as {
+        loopDefault: number
+        peers: Record<string, { loop?: number }>
+      }
+    expect((await agents()).loopDefault).toBe(20)
+    expect((await agents()).peers[anna.pub]?.loop).toBe(5)
+    expect((await agents()).peers.team?.loop).toBe(30)
+    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, loop: null }))).toEqual([200, { ok: true }])
+    expect((await agents()).peers[anna.pub]).not.toHaveProperty('loop')
+  })
 })

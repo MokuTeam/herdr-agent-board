@@ -421,6 +421,36 @@ describe("an agent's post (#216)", () => {
     expect(await w.router.agentPost({ to: w.P.pub, thread: key, text: 'a3', session })).toMatchObject({ sent: true })
   })
 
+  test("#360: the pause fires at the peer's own value, not before; a person's message resets it; no value is the default", async () => {
+    const w = await world()
+    agentsOn(w.P.pub, ['acme'])
+    changeAgents(x => {
+      ;(x.peers[w.P.pub] as { loop?: number }).loop = 4
+    })
+    const session = { key: 'sess-acme' }
+    const id = crypto.randomUUID()
+    const thread = { id, title: 'Scope' }
+    const turn = async (n: number) => {
+      await deliver(w, w.P, `q${n}`, { via: 'agent', thread })
+      return w.router.agentPost({ to: w.P.pub, thread: { id }, text: `a${n}`, session })
+    }
+    // Four agent messages in a row (in, out, in, out), then one more in: the next of ours waits.
+    expect(await turn(1)).toMatchObject({ sent: true })
+    expect(await turn(2)).toMatchObject({ sent: true })
+    expect(await turn(3)).toMatchObject({ sent: false, reason: 'loop' })
+    await deliver(w, w.P, 'a person here', { thread })
+    expect(await w.router.agentPost({ to: w.P.pub, thread: { id }, text: 'after', session })).toMatchObject({
+      sent: true,
+    })
+    // A peer with no value of its own (as on a board before #360) gets the default, 20: four in
+    // a row go on.
+    changeAgents(x => {
+      delete (x.peers[w.P.pub] as { loop?: number }).loop
+    })
+    expect(await turn(4)).toMatchObject({ sent: true })
+    expect(await turn(5)).toMatchObject({ sent: true })
+  })
+
   test('the limits refuse, not hold: per session, and the same text again', async () => {
     const w = await world({ agentLimits: { sessionHour: 2 } })
     agentsOn(w.P.pub, ['acme'])
