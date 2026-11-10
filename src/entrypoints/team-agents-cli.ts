@@ -127,6 +127,13 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
     const self = await ctx.self()
     const session = rest[0] === 'off' ? null : asSession(self)
     const { status, reply } = await call(ctx.webPort, '/api/team/listen', { session, caller: asSession(self) })
+    // Becoming the listener widens what agents may do: the owner confirms it with a passkey (#224).
+    if (isRecord(reply) && reply.error === 'passkey')
+      throw new Error(
+        "this waits for the owner's passkey, and the board has none yet: the owner adds one in the Team panel",
+      )
+    if (status === 428 && isRecord(reply) && typeof reply.confirm === 'string')
+      return printable(`waits for the owner: open ${reply.confirm} within 2 minutes and confirm it with a passkey`)
     if (isRecord(reply) && reply.error === 'taken')
       throw new Error('another session is the listener: the owner changes that in the Team panel')
     if (isRecord(reply) && reply.error === 'not_listener') throw new Error('this session is not the listener')
@@ -168,6 +175,13 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
     const loop = n === 'default' ? null : /^\d{1,3}$/.test(n) ? Number(n) : Number.NaN
     if (loop !== null && !validLoop(loop)) throw new Error('the loop pause is a whole number from 1 to 100, or default')
     const { status, reply } = await call(ctx.webPort, '/api/team/agents', { peer: to, loop })
+    // A change of the pause widens what agents may do: the owner confirms it with a passkey (#224).
+    if (isRecord(reply) && reply.error === 'passkey')
+      throw new Error(
+        "this waits for the owner's passkey, and the board has none yet: the owner adds one in the Team panel",
+      )
+    if (status === 428 && isRecord(reply) && typeof reply.confirm === 'string')
+      return printable(`waits for the owner: open ${reply.confirm} within 2 minutes and confirm it with a passkey`)
     if (!isRecord(reply) || reply.ok !== true) throw new Error(`the board answered ${status}`)
     return loop === null
       ? `ok · ${whoOf(ctx, to)}: agents pause after the board's default number of messages in a row`

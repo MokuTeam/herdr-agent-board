@@ -39,6 +39,7 @@ import type { Observation } from '../core/presence.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
+import { teamConfig } from '../core/team.ts'
 import { toastBody } from '../core/team-unread.ts'
 import { MAX_NAME } from '../core/team-wire.ts'
 import { boardPorts, forwardSpec, publicHosts, sshArgs, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
@@ -59,6 +60,7 @@ import { createRemoteAccess } from '../services/remote-access.ts'
 import { startScheduler } from '../services/scheduler.ts'
 import { createServerSetup } from '../services/server-setup.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
+import { createTeamConfirm } from '../services/team-confirm.ts'
 import { createTeam } from '../services/team-hub.ts'
 import { createTeamNotify, type TeamNotify } from '../services/team-notify.ts'
 import { createTeamRouter, noticeSchedule } from '../services/team-router.ts'
@@ -482,6 +484,42 @@ export async function startServer({
       return null
     }
   }
+  // The owner's passkey for Send, trust and widening agents (#224): confirmed in a window on
+  // http://localhost:<port>, the port this board listens on.
+  const teamConfirm = createTeamConfirm({ port: () => Number(server?.port ?? port), safe: () => !loopbackTaken })
+  // The confirmation window is on http://localhost:<port>, and a browser may try [::1] for
+  // `localhost` before 127.0.0.1. While team is on the board holds [::1]:<port> as well, so no other
+  // program can stand there and show a window of its own; if one already does, confirmations are
+  // refused (teamConfirm.safe) until it is gone. Without `team` nothing listens on ::1, as before.
+  let loopback6: ReturnType<typeof Bun.serve> | null = null
+  let loopbackTaken = false
+  function holdLoopback6(): void {
+    const on = teamConfig(cfg.team) !== null
+    if (!on) {
+      void loopback6?.stop(true)
+      loopback6 = null
+      loopbackTaken = false
+      return
+    }
+    if (loopback6) return
+    try {
+      loopback6 = Bun.serve({
+        port: Number(server.port),
+        hostname: '::1',
+        idleTimeout: 0,
+        development: false,
+        reusePort: false,
+        fetch: answer,
+      })
+      loopbackTaken = false
+    } catch (err) {
+      // No IPv6 loopback on this computer: no browser reaches it either.
+      const taken = (err as { code?: string }).code === 'EADDRINUSE'
+      if (taken && !loopbackTaken)
+        log(`[::1]:${server.port} is held by another program: passkey confirmations wait until it is gone`)
+      loopbackTaken = taken
+    }
+  }
   // The backup of the board's database (#233): its schedule (a look a minute, which only stats the
   // file while there is none), the server's setup, and its line in the payload (none while there
   // is no database and no target).
@@ -583,10 +621,16 @@ export async function startServer({
     // The user's presence: read, switched and set (the page, the phone, the Android app).
     ...presenceRoutes(presence),
     // The peer network: roster, threads, sends (local only; nothing answers while `team` is off).
-    ...teamRoutes(team, teamRouter, cfg, () => {
-      teamNotify?.changed()
-      board.publish()
-    }),
+    ...teamRoutes(
+      team,
+      teamRouter,
+      cfg,
+      () => {
+        teamNotify?.changed()
+        board.publish()
+      },
+      teamConfirm,
+    ),
     // The owner read a thread, or clicked a team notification on the desktop (#355).
     ...teamNotifyRoutes({
       notify: () => (team.rev() === null ? null : notifyOf()),
@@ -736,6 +780,7 @@ export async function startServer({
   calendar.configChanged()
   reminders.configChanged()
   team.start()
+  holdLoopback6()
 
   // What the Remote access view reads of config.json, and the tunnel's own settings in it, as of
   // the last config change.
@@ -772,6 +817,7 @@ export async function startServer({
       calendar.configChanged()
       reminders.configChanged()
       team.refresh()
+      holdLoopback6()
       await board.refresh()
     },
     async close() {
@@ -796,6 +842,7 @@ export async function startServer({
       endLogins()
       process.off('exit', endLogins)
       await tunnel.close()
+      await loopback6?.stop(true)
       await server.stop(true)
     },
   }

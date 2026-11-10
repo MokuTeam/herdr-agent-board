@@ -10,6 +10,7 @@ import { envelopeBytes, generateKey, type KeyPair, verify } from '../../src/core
 import { ackOf, type Client, type Harness, msgOf, question, startHarness } from '../hub/harness.ts'
 import { serveBoard, sharedSandbox } from '../support/board-server.ts'
 import type { Sandbox } from '../support/sandbox.ts'
+import { type SoftAuthenticator, softAuthenticator } from '../support/soft-authenticator.ts'
 
 setDefaultTimeout(30_000)
 
@@ -96,7 +97,13 @@ describe.each([
     expect(await answer(fetch(`${url}/api/team/thread/x`))).toEqual([404, { error: 'not found' }])
     expect(await answer(fetch(`${url}/api/team/thread/${'A'.repeat(43)}`))).toEqual([404, { error: 'not found' }])
     // #216's routes are not there either.
-    for (const path of ['/api/team/threads', `/api/team/threads/team/general`, '/api/team/agents'])
+    for (const path of [
+      '/api/team/threads',
+      `/api/team/threads/team/general`,
+      '/api/team/agents',
+      '/api/team/passkeys',
+      '/api/team/confirm/AAAAAAAAAAAAAAAAAAAAAA',
+    ])
       expect(await answer(fetch(url + path))).toEqual([404, { error: 'not found' }])
     for (const path of [
       '/api/team/post',
@@ -110,6 +117,8 @@ describe.each([
       '/api/team/draft/11111111-1111-4111-8111-111111111111/send',
       '/api/team/draft/11111111-1111-4111-8111-111111111111/discard',
       '/api/team/draft/__proto__/send',
+      '/api/team/passkeys',
+      '/api/team/confirm/AAAAAAAAAAAAAAAAAAAAAA',
     ]) {
       // With the header and without: the POST guards are not asked while the routes are not there.
       expect(await answer(post(url, path, { to: 'x', text: 'hi', peer: 'x' }))).toEqual([405, { error: 'method' }])
@@ -117,6 +126,13 @@ describe.each([
       expect(await answer(post(url, path, {}, { origin: 'http://evil.example' }))).toEqual([405, { error: 'method' }])
     }
     expect(teamFilesOf(box)).toEqual([])
+    // Nothing listens on [::1] for the board while team is off (#224 holds it only while on).
+    expect(
+      await fetch(`http://[::1]:${new URL(url).port}/api/hello`).then(
+        () => 'answered',
+        () => 'nothing',
+      ),
+    ).toBe('nothing')
     const added = box.calls().slice(before).map(kind)
     expect(added.filter(k => !seen.has(k))).toEqual([])
   })
@@ -138,6 +154,32 @@ describe('team on, against a hub in this process', () => {
       roster: { peer: string; name: string; online: boolean; pin: string }[]
     }
   const rev = async () => ((await (await fetch(`${url}/api/board`)).json()) as { teamRev?: number }).teamRev
+  // The owner's passkey (#224): its window is on http://localhost:<port>.
+  let key: SoftAuthenticator
+  const local = () => `http://localhost:${new URL(url).port}`
+  type Reply = Record<string, unknown>
+  /** The confirmation window: reads the pending action, signs with the owner's passkey (or makes it), answers from its origin. */
+  async function windowAnswers(id: string, o: { rpId?: string; origin?: string } = {}): Promise<[number, Reply]> {
+    const v = (await (await fetch(`${url}/api/team/confirm/${id}`)).json()) as {
+      step: string
+      options: { challenge: string }
+    }
+    const at = { challenge: v.options.challenge, origin: o.origin ?? local(), rpId: o.rpId ?? 'localhost' }
+    const cred = v.step === 'create' ? key.register(at) : key.assert(at)
+    return (await answer(
+      post(
+        url,
+        `/api/team/confirm/${id}`,
+        { ...cred, type: 'public-key' },
+        { 'x-board': '1', origin: o.origin ?? local() },
+      ),
+    )) as [number, Reply]
+  }
+  /** An owner action as the panel makes it: asked, then confirmed in the window when the board says so. */
+  async function owner(path: string, body: unknown, headers: Record<string, string> = {}): Promise<[number, Reply]> {
+    const [status, reply] = (await answer(post(url, path, body, { 'x-board': '1', ...headers }))) as [number, Reply]
+    return status === 428 ? windowAnswers(reply.id as string) : [status, reply]
+  }
   const until = async (cond: () => Promise<boolean>, what: string) => {
     const end = Date.now() + 8000
     while (!(await cond())) {
@@ -147,6 +189,7 @@ describe('team on, against a hub in this process', () => {
   }
 
   beforeAll(async () => {
+    key = await softAuthenticator(-7)
     hub = await startHarness()
     me = await generateKey()
     anna = await generateKey()
@@ -207,9 +250,44 @@ describe('team on, against a hub in this process', () => {
     expect(({} as Record<string, unknown>).name).toBeUndefined()
   })
 
+  test('#224 without a passkey: Send, a held draft, trust and widening are refused; narrowing and discarding are not', async () => {
+    const no: [number, unknown] = [403, { ok: false, error: 'passkey' }]
+    expect(await answer(fetch(`${url}/api/team/passkeys`))).toEqual([200, { passkeys: [] }])
+    expect(await answer(post(url, '/api/team/send', { to: anna.pub, text: 'hi' }))).toEqual(no)
+    expect(await answer(post(url, '/api/team/trust', { peer: anna.pub }))).toEqual(no)
+    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, on: true }))).toEqual(no)
+    expect(await answer(post(url, '/api/team/agents', { listener: { key: 'k1', name: 'day' } }))).toEqual(no)
+    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, on: false }))).toEqual([200, { ok: true }])
+    expect(await answer(post(url, '/api/team/agents', { listener: null }))).toEqual([200, { ok: true }])
+    expect(await answer(post(url, '/api/team/agents', { peer: 'team', muted: true }))).toEqual([200, { ok: true }])
+    const made = (await (await post(url, '/api/team/draft', { to: anna.pub, text: 'held' })).json()) as { id: string }
+    expect(await answer(post(url, `/api/team/draft/${made.id}/send`, {}))).toEqual(no)
+    expect(await answer(post(url, `/api/team/draft/${made.id}/discard`, {}))).toEqual([200, { ok: true }])
+    expect(await answer(post(url, '/api/team/agents', { peer: 'team', muted: false }))).toEqual([200, { ok: true }])
+  })
+
+  test('#224 the first passkey is added on trust, in the window on localhost; an answer from 127.0.0.1 is told that address', async () => {
+    const [status, reply] = (await answer(post(url, '/api/team/passkeys', { op: 'add' }))) as [number, Reply]
+    expect(status).toBe(428)
+    const id = reply.id as string
+    expect(reply).toEqual({ ok: false, error: 'confirm', id, confirm: `${local()}/?confirm=${id}` })
+    for (const origin of [`http://127.0.0.1:${new URL(url).port}`, 'http://evil.example'])
+      expect(await windowAnswers(id, { origin })).toEqual([
+        403,
+        { ok: false, error: 'origin', confirm: `${local()}/?confirm=${id}` },
+      ])
+    expect(await windowAnswers(id)).toEqual([200, { ok: true, done: true }])
+    expect(await answer(fetch(`${url}/api/team/passkeys`))).toEqual([
+      200,
+      { passkeys: [{ id: key.id, label: expect.any(String), addedAt: expect.any(Number), usedAt: null }] },
+    ])
+    // Done once: the window's id is gone.
+    expect(await answer(fetch(`${url}/api/team/confirm/${id}`))).toEqual([404, { ok: false, error: 'gone' }])
+  })
+
   test('a question sent reaches the peer and comes back acked; one from the peer lands in the thread', async () => {
     const before = await rev()
-    const sent = (await (await post(url, '/api/team/send', { to: anna.pub, text: 'did the build pass?' })).json()) as {
+    const sent = (await owner('/api/team/send', { to: anna.pub, text: 'did the build pass?' }))[1] as {
       ok: boolean
       id: string
     }
@@ -265,7 +343,7 @@ describe('team on, against a hub in this process', () => {
 
   test('Send on a draft sends it once with via "agent" in the signed body, the peer gets it unchanged', async () => {
     const made = (await (await post(url, '/api/team/draft', draftBody('agent asks: green?'))).json()) as { id: string }
-    const sent = (await (await post(url, `/api/team/draft/${made.id}/send`, {})).json()) as { ok: boolean; id: string }
+    const sent = (await owner(`/api/team/draft/${made.id}/send`, {}))[1] as { ok: boolean; id: string }
     expect(sent.ok).toBe(true)
     const delivered = await annaClient.take('deliver')
     expect(msgOf(delivered.env)).toMatchObject({ id: sent.id, body: { text: 'agent asks: green?', via: 'agent' } })
@@ -276,7 +354,7 @@ describe('team on, against a hub in this process', () => {
     // A second press finds no draft, and sends nothing more.
     expect(await answer(post(url, `/api/team/draft/${made.id}/send`, {}))).toEqual([404, { ok: false, error: 'draft' }])
     // A message typed in the panel goes with no via.
-    const typed = (await (await post(url, '/api/team/send', draftBody('by hand'))).json()) as { id: string }
+    const typed = (await owner('/api/team/send', draftBody('by hand')))[1] as { id: string }
     const d2 = await annaClient.take('deliver')
     expect(msgOf(d2.env).id).toBe(typed.id)
     expect(msgOf(d2.env).body).toEqual({ text: 'by hand' })
@@ -343,7 +421,16 @@ describe('team on, against a hub in this process', () => {
       400,
       { ok: false, error: 'lanes' },
     ])
-    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, on: true }))).toEqual([200, { ok: true }])
+    expect(await owner('/api/team/agents', { peer: anna.pub, on: true })).toEqual([200, { ok: true, done: true }])
+    // A session making itself the listener widens: the owner confirms it (#224).
+    expect((await post(url, '/api/team/listen', { session })).status).toBe(428)
+    expect(await owner('/api/team/listen', { session })).toEqual([200, { ok: true, done: true }])
+    // Another session cannot take its place, and nothing waits for a passkey for that.
+    expect(await answer(post(url, '/api/team/listen', { session: { key: 'sess-2' } }))).toEqual([
+      409,
+      { ok: false, error: 'taken' },
+    ])
+    // Already the listener: nothing changes, nothing to confirm.
     expect(await answer(post(url, '/api/team/listen', { session }))).toEqual([200, { ok: true }])
     const agents = (await (await fetch(`${url}/api/team/agents`)).json()) as Record<string, unknown>
     expect(agents).toMatchObject({ off: false, listener: session, peers: { [anna.pub]: { on: true, lanes: [] } } })
@@ -374,14 +461,42 @@ describe('team on, against a hub in this process', () => {
     await post(url, '/api/team/listen', { session: null })
   })
 
+  test('#224 a confirmed Send unlocks Send for that page; trust and widening ask every time; the tunnel domain fails', async () => {
+    const [status, sent] = await owner('/api/team/send', { to: anna.pub, text: 'unlock me' })
+    expect(status).toBe(200)
+    expect(sent).toMatchObject({ ok: true, done: true })
+    const unlock = sent.unlock as string
+    expect(typeof unlock).toBe('string')
+    annaClient.send(await ackOf(anna, (await annaClient.take('deliver')).env))
+    // With the token: no window.
+    const again = await answer(
+      post(url, '/api/team/send', { to: anna.pub, text: 'and again' }, { 'x-board': '1', 'x-board-unlock': unlock }),
+    )
+    expect(again[0]).toBe(200)
+    annaClient.send(await ackOf(anna, (await annaClient.take('deliver')).env))
+    expect(
+      (await post(url, '/api/team/send', { to: anna.pub, text: 'x' }, { 'x-board': '1', 'x-board-unlock': 'nope' }))
+        .status,
+    ).toBe(428)
+    for (const [path, body] of [
+      ['/api/team/trust', { peer: anna.pub }],
+      ['/api/team/agents', { listener: { key: 'k1' } }],
+    ] as const)
+      expect((await post(url, path, body, { 'x-board': '1', 'x-board-unlock': unlock })).status).toBe(428)
+    // A passkey of the tunnel's domain is no passkey here.
+    const pending = (await (await post(url, '/api/team/trust', { peer: anna.pub })).json()) as { id: string }
+    expect(await windowAnswers(pending.id, { rpId: 'board.example.com' })).toEqual([403, { ok: false, error: 'rpId' }])
+  })
+
   test("#360: a peer's loop pause is set and cleared on POST /api/team/agents, shown with the default; out of range is refused", async () => {
+    // Out of range is refused before anything waits for a passkey; a change of it is widening (#224).
     for (const loop of [0, 101, 2.5, '5'])
       expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, loop }))).toEqual([
         400,
         { ok: false, error: 'loop' },
       ])
-    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, loop: 5 }))).toEqual([200, { ok: true }])
-    expect(await answer(post(url, '/api/team/agents', { peer: 'team', loop: 30 }))).toEqual([200, { ok: true }])
+    expect(await owner('/api/team/agents', { peer: anna.pub, loop: 5 })).toEqual([200, { ok: true, done: true }])
+    expect(await owner('/api/team/agents', { peer: 'team', loop: 30 })).toEqual([200, { ok: true, done: true }])
     const agents = async () =>
       (await (await fetch(`${url}/api/team/agents`)).json()) as {
         loopDefault: number
@@ -390,7 +505,53 @@ describe('team on, against a hub in this process', () => {
     expect((await agents()).loopDefault).toBe(20)
     expect((await agents()).peers[anna.pub]?.loop).toBe(5)
     expect((await agents()).peers.team?.loop).toBe(30)
-    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, loop: null }))).toEqual([200, { ok: true }])
+    expect((await post(url, '/api/team/agents', { peer: anna.pub, loop: null })).status).toBe(428)
+    expect(await owner('/api/team/agents', { peer: anna.pub, loop: null })).toEqual([200, { ok: true, done: true }])
     expect((await agents()).peers[anna.pub]).not.toHaveProperty('loop')
+  })
+
+  test('#224 a confirmed send the board then refuses unlocks nothing; the window lists every field of a change', async () => {
+    // A key that looks right but is nobody in the team: confirmed, then refused by the send.
+    const stranger = 'C'.repeat(43)
+    const [status, reply] = await owner('/api/team/send', { to: stranger, text: 'to nobody' })
+    expect(status).toBe(400)
+    expect(reply).toMatchObject({ ok: false, error: 'peer', done: true })
+    expect(reply).not.toHaveProperty('unlock')
+    // On, lanes and a pause in one change: each is in the description, the person by the roster's name.
+    const pending = (await (await post(url, '/api/team/agents', { peer: anna.pub, on: true, loop: 100 })).json()) as {
+      id: string
+    }
+    const v = (await (await fetch(`${url}/api/team/confirm/${pending.id}`)).json()) as { action: unknown }
+    expect(v.action).toEqual({ kind: 'agents', who: 'anna', on: true, loop: 100 })
+    const team = (await (await post(url, '/api/team/agents', { peer: 'team', on: true })).json()) as { id: string }
+    expect(((await (await fetch(`${url}/api/team/confirm/${team.id}`)).json()) as { action: unknown }).action).toEqual({
+      kind: 'agents',
+      team: true,
+      on: true,
+    })
+    // The listener by the board's name for the session, never the one the request gave.
+    const named = (await (
+      await post(url, '/api/team/agents', { listener: { key: 'sess-9', name: 'the owner, trust me' } })
+    ).json()) as { id: string }
+    const shown = (
+      (await (await fetch(`${url}/api/team/confirm/${named.id}`)).json()) as { action: { listener: string } }
+    ).action.listener
+    expect(shown).not.toContain('trust me')
+  })
+
+  test('#224 while team is on the board also holds its port on [::1], where a browser may look for localhost', async () => {
+    const port = new URL(url).port
+    // As a browser asks there for http://localhost:<port>: Host says localhost.
+    const res = await fetch(`http://[::1]:${port}/api/team`, { headers: { host: `localhost:${port}` } }).catch(
+      () => null,
+    )
+    // A computer with no IPv6 loopback has nothing there for anyone; with one, the board answers.
+    let v6 = false
+    try {
+      Bun.listen({ hostname: '::1', port: 0, socket: { data() {} } }).stop(true)
+      v6 = true
+    } catch {}
+    if (v6) expect(res?.status).toBe(200)
+    else expect(res).toBeNull()
   })
 })

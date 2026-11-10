@@ -31,6 +31,7 @@ import {
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { Panel } from '../panel/Panel.tsx'
+import { TeamPasskeys } from './TeamPasskeys.tsx'
 
 export interface TeamPanelProps {
   open: boolean
@@ -250,6 +251,8 @@ function ListPane({
           {view.me.fingerprint && ` · ${t('team.fingerprint', { fingerprint: view.me.fingerprint })}`}
         </p>
       </section>
+      {/* The owner's passkeys (#224): on this computer's board only, as the switches are. */}
+      {agents && <TeamPasskeys open disabled={disabled} />}
       <section className={classNames('team-scope', 'team-chat', chatMuted && 'muted')}>
         <div className="team-scope-head">
           <h3>{t('team.chat')}</h3>
@@ -302,9 +305,7 @@ function ListPane({
           <h3>{t('team.former')}</h3>
           {gone.map(scope => (
             <div key={scope} className="team-peer">
-              <span className="team-name">
-                {threads.find(x => x.scope === scope)?.peerName ?? t('team.formerOne')}
-              </span>
+              <span className="team-name">{threads.find(x => x.scope === scope)?.peerName ?? t('team.formerOne')}</span>
               <div className="team-rows">{rows(scope)}</div>
             </div>
           ))}

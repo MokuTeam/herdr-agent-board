@@ -50,6 +50,7 @@ test('with no lane shared the header says so', () => {
 
 test("#360: board team loop shows a peer's pause (its own or the default), sets 1 to 100, and goes back with default", async () => {
   const posted: unknown[] = []
+  let postAnswer = () => Response.json({ ok: true })
   let peers: Record<string, unknown> = {}
   const server = Bun.serve({
     port: 0,
@@ -57,7 +58,7 @@ test("#360: board team loop shows a peer's pause (its own or the default), sets 
     async fetch(req) {
       if (req.method === 'GET') return Response.json({ peers, loopDefault: 20 })
       posted.push(await req.json())
-      return Response.json({ ok: true })
+      return postAnswer()
     },
   })
   try {
@@ -80,6 +81,19 @@ test("#360: board team loop shows a peer's pause (its own or the default), sets 
       await expect(teamAgents('loop', ['anna', bad], ctx)).rejects.toThrow('from 1 to 100')
     await expect(teamAgents('loop', ['nobody', '5'], ctx)).rejects.toThrow()
     expect(posted).toHaveLength(2)
+    // #224: a change of the pause waits for the owner's passkey.
+    const url = 'http://localhost:12422/?confirm=AAAAAAAAAAAAAAAAAAAAAA'
+    postAnswer = () =>
+      Response.json({ ok: false, error: 'confirm', id: 'AAAAAAAAAAAAAAAAAAAAAA', confirm: url }, { status: 428 })
+    expect(await teamAgents('loop', ['anna', '50'], ctx)).toBe(
+      `waits for the owner: open ${url} within 2 minutes and confirm it with a passkey`,
+    )
+    expect(await teamAgents('listen', [], ctx)).toBe(
+      `waits for the owner: open ${url} within 2 minutes and confirm it with a passkey`,
+    )
+    postAnswer = () => Response.json({ ok: false, error: 'passkey' }, { status: 403 })
+    await expect(teamAgents('loop', ['anna', '50'], ctx)).rejects.toThrow("the owner's passkey")
+    await expect(teamAgents('listen', [], ctx)).rejects.toThrow("the owner's passkey")
   } finally {
     server.stop(true)
   }

@@ -44,6 +44,8 @@ import type { InboundEvent, PostResult, PostTarget, TeamService } from './team-h
 export interface RouterItem {
   key: string
   name?: string
+  /** The name the board gave the card when it has none of its own. */
+  autoName?: string
   category: string
 }
 
@@ -80,6 +82,8 @@ export interface TeamRouter {
    * not take the place of another listener: the owner changes that in the switches.
    */
   listen(session: SessionRef | null, caller?: SessionRef): { ok: true } | { ok: false; error: string }
+  /** What the board calls a session (its card's name), never what a caller said; null when it has none. */
+  sessionName(key: string): string | null
 }
 
 interface Options {
@@ -269,6 +273,11 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       })
       if (r.ok) audit('listener', null, session ? { session: session.key } : {})
       return r
+    },
+
+    sessionName(key) {
+      const item = items().find(i => i.key === key)
+      return item?.name || item?.autoName || null
     },
   }
 
