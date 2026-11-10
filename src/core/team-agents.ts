@@ -114,11 +114,25 @@ export function legacyText(text: string, thread: { title?: string | null; group?
   return thread.title ? `[${thread.title}] ${text}` : text
 }
 
-/** How a notice names a thread for `board team thread | reply | assign`. */
-export function threadRef(scope: string, id: string, peerName: string): string {
+/**
+ * How a notice names a thread for `board team thread | reply | assign`: words the board makes, never
+ * a peer's. A topic thread by the first 8 characters of its id (a UUID), the team's general as
+ * `team`, a pair's general as `general:` and the first 10 characters of the peer's key (base64url:
+ * the prefix keeps a leading `-` from reading as a flag).
+ */
+export function threadRef(scope: string, id: string): string {
   if (id !== GENERAL) return id.slice(0, 8)
   if (scope === TEAM) return TEAM
-  return /\s/.test(peerName) ? `"${peerName}"` : peerName
+  return `general:${scope.slice(0, 10)}`
+}
+
+/**
+ * A peer's name as a notice may say it: letters, digits, spaces and `._'-` only, starting with a
+ * letter or digit. Any other name (it is the peer's own choice, up to 40 characters) is said as
+ * "a member" with the start of the key, so nothing a peer picked can read as a command or an order.
+ */
+export function safeName(name: string, peer: string): string {
+  return /^[\p{L}\p{N}][\p{L}\p{N} ._'-]{0,39}$/u.test(name) ? name : `a member (key ${peer.slice(0, 10)})`
 }
 
 export interface NoticeParts {
@@ -147,7 +161,7 @@ export function noticeText(p: NoticeParts): string {
 
 /** The line the listener gets once when a peer's agents send too much: routing for it pauses. */
 export const pausedText = (who: string, minutes: number): string =>
-  `${who}'s board sent more agent messages in the last hour than the limit, so they are not routed to sessions for ${minutes} minutes. They are all in the Team panel.`
+  `${who}'s board sent more messages in the last hour than the limit, so they are not routed to sessions for ${minutes} minutes. They are all in the Team panel.`
 
 /** A thread as `board team` resolves a word against: its key, scope, id and the pair's peer name. */
 export interface RefThread {
@@ -171,6 +185,13 @@ export function resolveThreadRef(
   if (!w) return { ok: false, error: 'name a thread' }
   if (w.toLowerCase() === TEAM) return { ok: true, key: threadKey(TEAM, GENERAL) }
   if (threads.some(t => t.key === w)) return { ok: true, key: w }
+  if (w.startsWith('general:')) {
+    const start = w.slice('general:'.length)
+    const scopes = new Set([...roster.map(p => p.peer), ...threads.filter(t => t.scope !== TEAM).map(t => t.scope)])
+    const hits = start ? [...scopes].filter(s => s.startsWith(start)) : []
+    if (hits.length === 1 && hits[0]) return { ok: true, key: threadKey(hits[0], GENERAL) }
+    return { ok: false, error: hits.length ? `${w} fits more than one person` : `nobody's key starts with ${start}` }
+  }
   if (/^[0-9a-f-]{8,36}$/i.test(w)) {
     const hits = threads.filter(t => t.id !== GENERAL && t.id.startsWith(w.toLowerCase()))
     if (hits.length === 1 && hits[0]) return { ok: true, key: hits[0].key }

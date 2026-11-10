@@ -126,7 +126,8 @@ message's body as signed: it holds `text` to its limits (1 to 4000 characters, t
 each board checks what it acts on. The kind whitelist and the refusal of `to: "*"` stay: a team
 message is one signed copy per member. The audit's `send` rows name the thread and `via` (the
 sender's own signed words), never the text. Updating a hub is a restart on the new code: the
-schema moves on by itself, and boards reconnect.
+schema moves on by itself, and boards reconnect. An older hub refuses a database a newer one moved
+on, so copy `hub.db` aside before the update if you may want to go back.
 
 ## Tests
 

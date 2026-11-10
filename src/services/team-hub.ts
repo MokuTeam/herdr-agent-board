@@ -141,8 +141,12 @@ export interface PostTarget {
   thread?: { id?: string; title?: string; link?: string }
 }
 
-/** A post's sender, set by the route that took it (#216): the panel, or a session's `board team post`. */
-export type PostSource = { by: 'ui' } | { by: 'agent'; session?: SessionRef }
+/**
+ * A post's sender, set by the route that took it (#216): the panel, or a session's `board team
+ * post`. `pressed`: the owner sent an agent's draft. `claimed`: the session was named with
+ * --session, the caller's own word.
+ */
+export type PostSource = { by: 'ui' } | { by: 'agent'; session?: SessionRef; pressed?: boolean; claimed?: boolean }
 
 export type PostResult =
   | { ok: true; id: string; thread: string; copies: number; skipped: string[] }
@@ -177,6 +181,8 @@ export interface ThreadLine {
   state?: OutState
   /** out to the team: how far each copy got. */
   receipts?: { peer: string; name: string; state: OutState }[]
+  /** out: an agent's draft the owner sent. */
+  pressed?: boolean
   held?: boolean
   /** draft: why the board held it. */
   reason?: string
@@ -238,6 +244,9 @@ interface Options {
   random?: () => number
   version?: string
 }
+
+/** Threads kept per peer (and for the team); past it the quietest one nobody handles goes (#216). */
+export const MAX_THREADS_PER_SCOPE = 200
 
 /** Up this long: the backoff starts over. */
 export const UP_RESETS_MS = 60_000
@@ -579,6 +588,13 @@ export function createTeam({
         createdAt: now,
         lastAt: now,
       }
+      // A peer cannot grow the file without end: past the cap, its quietest thread nobody handles
+      // goes (its messages stay in the inbox, under the thread's key).
+      const mine = Object.entries(threads).filter(([, t]) => t.scope === parts.scope)
+      if (mine.length > MAX_THREADS_PER_SCOPE) {
+        const [quietest] = mine.filter(([, t]) => !t.handler).sort((a, b) => a[1].lastAt - b[1].lastAt)[0] ?? []
+        if (quietest) delete threads[quietest]
+      }
       return true
     })
   }
@@ -627,6 +643,7 @@ export function createTeam({
     if (!recipients.length) return { ok: false, error: 'nobody' }
     const via: Via | undefined = source.by === 'agent' ? 'agent' : undefined
     const session = source.by === 'agent' ? source.session : undefined
+    const pressed = source.by === 'agent' && source.pressed === true
     const agentName = session?.name && validName(session.name) ? session.name : undefined
     const me = await ensureKey()
     const copies: { env: Envelope; msg: Message }[] = []
@@ -673,6 +690,9 @@ export function createTeam({
         ...(team && { post: postId }),
         by: source.by,
         ...(session && { session }),
+        ...(pressed && { pressed: true }),
+        // The post's own text, where this copy's has a title in front (an older board's).
+        ...(c.msg.body.text !== body && { text: body }),
       })
       if (authed) frame({ t: 'send', env: c.env })
     }
@@ -682,6 +702,8 @@ export function createTeam({
       copies: copies.length,
       by: source.by,
       ...(session && { session: session.key }),
+      ...(pressed && { pressed: true }),
+      ...(source.by === 'agent' && source.claimed && { claimed: true }),
     })
     changed()
     return { ok: true, id: postId, thread: key, copies: copies.length, skipped }
@@ -739,6 +761,7 @@ export function createTeam({
         ts: first.msg.ts,
         ...(first.msg.body.via && { via: first.msg.body.via }),
         ...(first.session?.name && { agent: first.session.name }),
+        ...(first.pressed && { pressed: true }),
         ...(team
           ? { receipts: copies.map(c => ({ peer: c.msg.to, name: nameOf(c.msg.to), state: c.state })) }
           : { state: first.state }),
@@ -797,33 +820,29 @@ export function createTeam({
       if (!config() || !isPeerId(peer)) return []
       const known = roster.find(p => p.peer === peer)?.name ?? readPins()[peer]?.name
       const who = known ?? fingerprint(peer).slice(0, 14).trim()
-      // The pair's threads, all of them; the team's are threadLines('team/...').
-      const pair = (thread: string | undefined): boolean => !thread?.startsWith(`${TEAM}/`)
-      const incoming = readInbox(peer)
-        .filter(i => pair(i.thread))
-        .map(
-          (i: InboxItem): ThreadMessage => ({
-            id: i.id,
-            dir: 'in',
-            text: i.held ? null : i.text,
-            ts: i.ts,
-            held: i.held,
-            ...(i.via && { via: i.via, agentOf: who }),
-          }),
-        )
-      const outgoing = readOutbox(peer)
-        .filter(o => pair(o.thread))
-        .map(
-          (i: OutboxItem): ThreadMessage => ({
-            id: i.msg.id,
-            dir: 'out',
-            text: i.msg.body.text,
-            ts: i.msg.ts,
-            state: i.state,
-            ...(i.code && { code: i.code }),
-            ...(i.msg.body.via && { via: i.msg.body.via }),
-          }),
-        )
+      // Everything with this peer, the team's copies too: the panel shows one flat thread until
+      // #355 draws the threads (threadLines).
+      const incoming = readInbox(peer).map(
+        (i: InboxItem): ThreadMessage => ({
+          id: i.id,
+          dir: 'in',
+          text: i.held ? null : i.text,
+          ts: i.ts,
+          held: i.held,
+          ...(i.via && { via: i.via, agentOf: who }),
+        }),
+      )
+      const outgoing = readOutbox(peer).map(
+        (i: OutboxItem): ThreadMessage => ({
+          id: i.msg.id,
+          dir: 'out',
+          text: i.msg.body.text,
+          ts: i.msg.ts,
+          state: i.state,
+          ...(i.code && { code: i.code }),
+          ...(i.msg.body.via && { via: i.msg.body.via }),
+        }),
+      )
       const drafts = readDrafts()
         .filter(d => d.to === peer)
         .map((d): ThreadMessage => ({ id: d.id, dir: 'draft', text: d.text, ts: new Date(d.createdAt).toISOString() }))
@@ -875,13 +894,14 @@ export function createTeam({
       const r = await post({ to: d.to, ...(d.thread && { thread: d.thread }) }, d.text, {
         by: 'agent',
         ...(d.session && { session: d.session }),
+        pressed: true,
       })
       if (!r.ok) addDraft(d, Number.MAX_SAFE_INTEGER)
       else {
         audit('draft_sent', d.to === TEAM ? null : d.to, { id })
         // The session that wrote it hears the answers, as it would have had it gone at once (#216).
         const t = readThreads()[r.thread]
-        if (d.session && t && !t.handler && readAgents().listener?.key !== d.session.key)
+        if (d.session && t && t.id !== GENERAL && !t.handler && readAgents().listener?.key !== d.session.key)
           setHandler(r.thread, d.session)
       }
       changed()

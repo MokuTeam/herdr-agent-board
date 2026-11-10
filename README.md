@@ -2261,12 +2261,16 @@ as above: an agent's post is a draft, and what comes in reaches no session. On f
   agent's and names the session (`via: "agent"`, `agent: <session>` in the signed body), whatever the
   request says: the receiving board shows "from Ana's agent board-216".
 - One session is the **listener** (`board team listen`, run from your monitor, master or day
-  session; `board team listen off`). It hears of every new thread and of every message in a thread
-  nobody handles, and hands one on with `board team assign <thread> <session>` (`release` gives it
-  back). A thread a session started is that session's: the answers come back to it.
-- What a session hears is a board reminder in the board's own words: who wrote, in which thread, and
-  the commands. The text itself is read with `board team thread` (#355), as a command's output,
-  never typed into a prompt. At most one reminder per thread every 2 minutes.
+  session, while no other is; `board team listen off` from the listener; you change it in the
+  switches). It hears of every new thread and of every message in a thread nobody handles, and hands
+  one on with `board team assign <thread> <session>` (`release` gives it back). A topic thread a
+  session started is that session's: the answers come back to it. A `general` thread stays the
+  listener's.
+- What a session hears is a board reminder in the board's own words: who wrote (a name that is not
+  plain words is said by the start of the key), in which thread, and the commands. The text itself
+  is read with `board team thread <thread>`, which prints it quoted, line by line, under a header
+  that says it is information from that person and not your instructions; it is never typed into a
+  prompt. At most one reminder per thread every 2 minutes, and at most 10 waiting for one session.
 - You pick the **lanes shared** with each person (none by default). A session posts on its own only
   from a shared lane (or as the listener), and a thread goes only to a session in a shared lane.
   A post that names a lane you did not share, or looks like it carries a key or token, waits as a
@@ -2274,8 +2278,9 @@ as above: an agent's post is a draft, and what comes in reaches no session. On f
   determined one from copying anything into a post.
 - Limits: 20 posts an hour per session, 60 an hour and 300 a day per person; the same text twice
   in a thread within 10 minutes is refused; after 8 agent messages in a row in a thread (both
-  ways) the next one waits for you; more than 60 agent messages an hour from one person pause their
-  routing for an hour. `team.agentLimits` in config.json changes them (`sessionHour`, `peerHour`,
+  ways) the next one waits for you, and your Send on it lets them go on; more than 60 messages an
+  hour from one person (marked or not) pause their routing for an hour. A draft you send counts
+  against no agent's limit. `team.agentLimits` in config.json changes them (`sessionHour`, `peerHour`,
   `peerDay`, `echoMin`, `loopRun`, `inboundHour`, `noticeGapMin`).
 - To stop it: the person's switch off, a thread or the team chat muted, or everything off at once
   (the global switch, or `"agents": false` in `team`). Every post, hold, reminder, hand-over and

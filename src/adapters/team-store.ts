@@ -126,6 +126,10 @@ export interface OutboxItem {
   by?: 'ui' | 'agent'
   /** by agent: the session, as the board resolved it (with --session, the caller's own word). */
   session?: SessionRef
+  /** An agent's draft the owner sent: a person's step, outside the agents' limits and loop count. */
+  pressed?: boolean
+  /** The post's text where this copy's differs (an older board's gets the title in front). */
+  text?: string
 }
 
 /** A session on this board, as the team keeps it (#216). */

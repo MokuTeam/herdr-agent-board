@@ -65,6 +65,15 @@ function changeAgentsFrom(
   cfg: Pick<Config, 'categories'>,
   body: Record<string, unknown>,
 ): { ok: true } | { ok: false; error: string } {
+  if (body.listener !== undefined) {
+    const listener = body.listener === null ? null : sessionFrom(body.listener)
+    if (body.listener !== null && !listener) return { ok: false, error: 'body' }
+    changeAgents(s => {
+      s.listener = listener
+    })
+    audit('listener', null, { by: 'ui', ...(listener && { session: listener.key }) })
+    return { ok: true }
+  }
   if (body.off !== undefined) {
     if (typeof body.off !== 'boolean') return { ok: false, error: 'body' }
     const off = body.off
@@ -171,7 +180,13 @@ export function teamRoutes(team: TeamService, router?: TeamRouter, cfg?: Pick<Co
         if (!isTarget(body.to)) return json(400, { ok: false, error: 'peer' })
         const thread = threadFrom(body.thread)
         if (thread === null) return json(400, { ok: false, error: 'thread' })
-        const r = await router.agentPost({ to: body.to, ...(thread && { thread }), text: body.text, session })
+        const r = await router.agentPost({
+          to: body.to,
+          ...(thread && { thread }),
+          text: body.text,
+          session,
+          ...(body.claimed === true && { claimed: true }),
+        })
         return json(r.ok ? 200 : r.error.startsWith('rate') || r.error === 'echo' ? 429 : 400, r)
       },
     },
@@ -207,8 +222,9 @@ export function teamRoutes(team: TeamService, router?: TeamRouter, cfg?: Pick<Co
         const given = isRecord(raw) ? raw.session : undefined
         const session = given === null ? null : sessionFrom(given)
         if (given !== null && !session) return json(400, { ok: false, error: 'body' })
-        router.listen(session)
-        return json(200, { ok: true })
+        const caller = sessionFrom(isRecord(raw) ? raw.caller : undefined) ?? undefined
+        const r = router.listen(session, caller)
+        return json(r.ok ? 200 : 409, r)
       },
     },
     {
