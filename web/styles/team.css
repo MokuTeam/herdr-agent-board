@@ -70,3 +70,14 @@
 .team-switch:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); outline: 0; }
 .team-knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.25); transition: transform 150ms ease; }
 .team-switch[aria-checked="true"] .team-knob { transform: translateX(16px); }
+/* The owner's passkeys (#224): the list in the panel, and the confirmation window on localhost. */
+.team-passkeys ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.team-passkeys li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.team-passkeys li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-passkeys .mini { padding: 3px 9px; border: 0; border-radius: 6px; background: var(--fill); font-size: 12px; cursor: pointer; }
+.team-confirm { max-width: 420px; margin: 32px auto; padding: 0 16px; display: flex; flex-direction: column; gap: 12px; }
+.team-confirm-title { margin: 0; font-size: 17px; font-weight: 600; }
+.team-confirm-text { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--fill-2); white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; max-height: 240px; overflow: auto; }
+.team-confirm-note { margin: 0; color: var(--label-2); font-size: 12.5px; }
+.team-confirm-items { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.team-confirm-actions { display: flex; gap: 8px; }

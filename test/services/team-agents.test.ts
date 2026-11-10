@@ -442,13 +442,19 @@ describe("an agent's post (#216)", () => {
     expect(await w.router.agentPost({ to: w.P.pub, thread: { id }, text: 'after', session })).toMatchObject({
       sent: true,
     })
-    // A peer with no value of its own (as on a board before #360) gets the default, 20: four in
-    // a row go on.
+    // A peer with no value of its own (as on a board before #360) gets the default, 20, not the
+    // old 8: in a thread of agents only, ten turns (19 agent messages before the last post) go on,
+    // the eleventh waits.
     changeAgents(x => {
       delete (x.peers[w.P.pub] as { loop?: number }).loop
     })
-    expect(await turn(4)).toMatchObject({ sent: true })
-    expect(await turn(5)).toMatchObject({ sent: true })
+    const fresh = { id: crypto.randomUUID(), title: 'Status' }
+    const again = async (n: number) => {
+      await deliver(w, w.P, `s${n}`, { via: 'agent', thread: fresh })
+      return w.router.agentPost({ to: w.P.pub, thread: { id: fresh.id }, text: `r${n}`, session })
+    }
+    for (let n = 1; n <= 10; n++) expect(await again(n)).toMatchObject({ sent: true })
+    expect(await again(11)).toMatchObject({ sent: false, reason: 'loop' })
   })
 
   test('the limits refuse, not hold: per session, and the same text again', async () => {

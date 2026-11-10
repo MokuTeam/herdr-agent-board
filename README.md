@@ -2307,8 +2307,8 @@ as above: an agent's post is a draft, and what comes in reaches no session. On f
   agent's and names the session (`via: "agent"`, `agent: <session>` in the signed body), whatever the
   request says: the receiving board shows "from Ana's agent board-216".
 - One session is the **listener** (`board team listen`, run from your monitor, master or day
-  session, while no other is; `board team listen off` from the listener; you change it in the
-  switches). It hears of every new thread and of every message in a thread nobody handles, and hands
+  session while no other is, and confirmed with your passkey; `board team listen off` from the
+  listener; you change it in the switches). It hears of every new thread and of every message in a thread nobody handles, and hands
   one on with `board team assign <thread> <session>` (`release` gives it back). A topic thread a
   session started is that session's: the answers come back to it. A `general` thread stays the
   listener's.
@@ -2334,8 +2334,31 @@ as above: an agent's post is a draft, and what comes in reaches no session. On f
   (the global switch, or `"agents": false` in `team`). Every post, hold, reminder, hand-over and
   switch change is in the team log (`team-audit.jsonl`), without any text.
 
-Until #224's passkey, a program on your computer can call the board's local routes as the panel
-does, switches included; the log records those as the panel's.
+**Your passkey (#224).** What sends as you, or lets agents do more, waits for a passkey of yours:
+Send in the Team panel, sending an agent's held draft, trusting a changed key, Agents on for a
+person (or all of them back on), a lane shared, a listener set, and any change of a loop pause
+(`board team loop` and `board team listen` included, which then print the address to confirm at). Turning things off,
+removing lanes, muting and discarding never wait. Add the passkey under Passkeys in the Team panel
+(Windows Hello, Touch ID, a security key, or a phone by QR, whatever the browser offers); until
+there is one, those actions are refused. The first one is added by whoever is at the screen;
+adding another or removing one takes one you already have.
+
+The board is opened on `127.0.0.1`, and a passkey cannot belong to an IP, so the confirmation
+opens in a small window of the board's own on `http://localhost:<port>`, which says what is about
+to happen in the board's words (the person by their roster name, the text as it will go) before you
+touch the passkey. Allow the board's pop-ups for it. One confirmed send lets that board page send
+without asking for 30 minutes; a reload or a restart of the board ends that. Trusting a key and
+widening agents ask every time. These passkeys are not the ones of your domain's sign-in (Remote
+access through your own domain): those are for the domain, these for `localhost`, and neither works
+for the other. A change of the board's port keeps them. While team is on, the board also holds its port on `[::1]`,
+where a browser may look for `localhost` first, so no other program can stand there and show a
+window of its own; if one already holds it, confirmations wait until it is gone.
+
+What this stops: an agent sending as you, or switching itself on, through the board's routes, which
+before this took one `curl`. What it cannot stop: a program that works on the board's files
+directly, since an agent runs as the same user as the board (`team-key.json` holds the board's
+signing key, `team-agents.json` is a plain file). Nothing on one computer closes that; keep it in
+mind before giving an agent free rein over your user's files.
 
 **Running the hub.** `bun hub/src/main.ts`: see [hub/README.md](hub/README.md) for the options,
 invites, revoking a member and what it keeps. It is not part of the plugin; run it on one machine

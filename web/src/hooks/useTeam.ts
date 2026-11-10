@@ -30,6 +30,7 @@ import {
   type ThreadLine,
   type ThreadView,
 } from '../models/team.ts'
+import { confirmError, ownerPost } from '../models/team-confirm.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { Store, useStore } from '../state/store.ts'
 import { useLatest } from './useLatest.ts'
@@ -157,11 +158,17 @@ export function teamSource(deps: TeamDeps): TeamSource {
   }
 
   /** A POST whose refusal is toasted; the panel is fetched again either way. */
+  /**
+   * One of the owner's changes. What widens (trust, Agents on, a lane shared) waits for the owner's
+   * passkey in the confirmation window (#224, models/team-confirm.ts); what narrows goes at once.
+   * A window the owner closed is no error.
+   */
   async function change(path: string, body: unknown): Promise<void> {
     try {
-      await api.post(path, body)
+      await ownerPost(path, body)
     } catch (err) {
-      deps.toast(errorText(err, deps.t()), true)
+      if (!(err instanceof ApiError && err.reply.error === 'cancelled'))
+        deps.toast(confirmError(err, deps.t()) ?? errorText(err, deps.t()), true)
     }
     void load()
   }
@@ -182,7 +189,7 @@ export function teamSource(deps: TeamDeps): TeamSource {
           : { id: parts.id }
       let key: unknown
       try {
-        key = (await api.post('/api/team/send', { to: parts.scope, text, ...(thread && { thread }) })).thread
+        key = (await ownerPost('/api/team/send', { to: parts.scope, text, ...(thread && { thread }) })).thread
       } catch (err) {
         deps.toast(sendError(err instanceof ApiError ? err.reply.error : undefined, deps.t()), true)
         return false
@@ -194,7 +201,7 @@ export function teamSource(deps: TeamDeps): TeamSource {
     trust: peer => change('/api/team/trust', { peer }),
     async sendDraft(id) {
       try {
-        await api.post(`/api/team/draft/${encodeURIComponent(id)}/send`, {})
+        await ownerPost(`/api/team/draft/${encodeURIComponent(id)}/send`, {})
       } catch (err) {
         deps.toast(sendError(err instanceof ApiError ? err.reply.error : undefined, deps.t()), true)
         void load()

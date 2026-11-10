@@ -245,7 +245,15 @@ export function lineMeta(l: ThreadLine, t: Translator): string {
 export const sendError = (code: unknown, t: Translator): string =>
   t('team.sendFailed', {
     why:
-      code === 'peer' || code === 'text' || code === 'too_big' || code === 'changed' || code === 'draft'
+      code === 'peer' ||
+      code === 'text' ||
+      code === 'too_big' ||
+      code === 'changed' ||
+      code === 'draft' ||
+      code === 'passkey' ||
+      code === 'blocked' ||
+      code === 'cancelled' ||
+      code === 'loopback'
         ? t(`team.err.${code}`)
         : String(code ?? ''),
   })

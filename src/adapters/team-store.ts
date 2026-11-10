@@ -15,6 +15,7 @@ import {
   type OutState,
   type Via,
 } from '../core/team.ts'
+import type { Alg } from '../core/webauthn.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
 import {
   stateDir,
@@ -24,6 +25,7 @@ import {
   teamInboxFile,
   teamKeyFile,
   teamOutboxFile,
+  teamPasskeysFile,
   teamPinsFile,
   teamThreadsFile,
 } from './paths.ts'
@@ -397,6 +399,64 @@ function readAgentsFrom(f: AgentsFile): AgentSettings {
     peers: bare(f.peers),
     paused: bare(isRecord(f.paused) ? (f.paused as Record<string, number>) : {}),
   }
+}
+
+// ---- The owner's passkeys (#224)
+
+/** A passkey of the owner for this board (RP ID `localhost`), as core/webauthn.ts checks it. */
+export interface OwnerPasskey {
+  id: string
+  jwk: JsonWebKey
+  alg: Alg
+  counter: number
+  transports: string[]
+  /** The browser and system it was added on, as the panel shows it. */
+  label: string
+  addedAt: number
+  usedAt: number | null
+}
+export interface OwnerKeys {
+  /** The WebAuthn user id (base64url), made with the first passkey. */
+  userId: string | null
+  passkeys: OwnerPasskey[]
+}
+type KeysFile = { v: 1 } & OwnerKeys
+const isKeys = (v: unknown): v is KeysFile => isRecord(v) && v.v === 1 && Array.isArray(v.passkeys)
+
+const isPasskey = (p: unknown): p is OwnerPasskey =>
+  isRecord(p) &&
+  typeof p.id === 'string' &&
+  isRecord(p.jwk) &&
+  (p.alg === -7 || p.alg === -257) &&
+  typeof p.counter === 'number' &&
+  Array.isArray(p.transports) &&
+  typeof p.label === 'string' &&
+  typeof p.addedAt === 'number' &&
+  (p.usedAt === null || typeof p.usedAt === 'number')
+
+const keysFrom = (f: KeysFile | null): OwnerKeys => ({
+  userId: typeof f?.userId === 'string' ? f.userId : null,
+  passkeys: (f?.passkeys ?? []).filter(isPasskey),
+})
+
+/** The owner's passkeys; none while there is no file. Creates nothing. */
+export const readOwnerKeys = (): OwnerKeys => keysFrom(readJson(teamPasskeysFile(), isKeys))
+
+/** Changes them under their lock: `fn` edits them in place. */
+export function changeOwnerKeys<R>(fn: (k: OwnerKeys) => R): R {
+  mkdirSync(stateDir(), { recursive: true })
+  let result: R | undefined
+  updateJson(
+    teamPasskeysFile(),
+    (cur: KeysFile | null) => {
+      const k = keysFrom(cur)
+      result = fn(k)
+      return { v: 1 as const, ...k }
+    },
+    isKeys,
+    PRIVATE,
+  )
+  return result as R
 }
 
 // ---- Pins
