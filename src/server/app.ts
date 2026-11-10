@@ -39,8 +39,11 @@ import type { Observation } from '../core/presence.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
+import { toastBody } from '../core/team-unread.ts'
+import { MAX_NAME } from '../core/team-wire.ts'
 import { boardPorts, forwardSpec, publicHosts, sshArgs, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
+import { teamDesktop } from '../integrations/team-toast.ts'
 import { createAccess } from '../services/access.ts'
 import { backupView, startBackups } from '../services/backup.ts'
 import { createBackupServer } from '../services/backup-server.ts'
@@ -57,6 +60,7 @@ import { startScheduler } from '../services/scheduler.ts'
 import { createServerSetup } from '../services/server-setup.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
 import { createTeam } from '../services/team-hub.ts'
+import { createTeamNotify, type TeamNotify } from '../services/team-notify.ts'
 import { createTeamRouter, noticeSchedule } from '../services/team-router.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
 import { createProbes, createSupervisor, networkSignature, realClock, type TunnelPlan } from '../services/tunnel.ts'
@@ -86,6 +90,7 @@ import { setupRoute } from './routes/setup.ts'
 import { sleepRoute } from './routes/sleep.ts'
 import { staticRoute } from './routes/static.ts'
 import { teamRoutes } from './routes/team.ts'
+import { teamNotifyRoutes, teamReveal } from './routes/team-notify.ts'
 import { terminalRoute } from './routes/terminal.ts'
 import { keepTimeDb, timeRoutes, timeToday } from './routes/time.ts'
 import { todosRoutes } from './routes/todos.ts'
@@ -244,7 +249,11 @@ export async function startServer({
   const reveals = revealState()
   // A reminder's Open on the desktop asks for a calendar event the same way (#335).
   const eventsShown = eventReveal()
-  const events = createBroadcaster(() => board.payload(), { greet: () => reveals.greet() + eventsShown.greet() })
+  // A team notification's click asks for a thread the same way (#355).
+  const teamShown = teamReveal()
+  const events = createBroadcaster(() => board.payload(), {
+    greet: () => reveals.greet() + eventsShown.greet() + teamShown.greet(),
+  })
   // The remote mode (core/remote.ts): pairing, and the listener on the Tailscale address while it
   // is on. Off, it reads the config and nothing else.
   const remote = createRemote({ onChange: () => board.publish() })
@@ -418,12 +427,34 @@ export async function startServer({
   // The peer network (#231): no socket, timer or file while config.json has no valid `team`.
   // What comes in goes to the router (#216), which tells a session only when the owner turned
   // Agents on for that peer, and only through the schedule, with a notice of its own words.
+  // Its notifications and unread count (#355) are made the first time a message comes in or the
+  // payload asks while `team` is on: off, nothing of them runs.
+  let teamNotify: TeamNotify | null = null
+  const notifyOf = (): TeamNotify =>
+    (teamNotify ??= createTeamNotify({
+      desktop: teamDesktop(log),
+      // The service's own name for a peer (roster, pins, the key's start), one line, cut.
+      nameOf: peer => toastBody(team.nameOf(peer), MAX_NAME),
+    }))
   const team = createTeam({
     cfg,
     log,
     version: PLUGIN_VERSION || 'dev',
     onChange: () => board.publish(),
-    onInbound: e => teamRouter.inbound(e),
+    // Each hearer on its own: one that throws keeps neither the other nor the message's ack back.
+    onInbound: e => {
+      try {
+        teamRouter.inbound(e)
+      } catch (err) {
+        log(`team: the router failed on a message: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      try {
+        notifyOf().inbound(e)
+      } catch (err) {
+        log(`team: a notification failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      board.publish()
+    },
   })
   const teamRouter = createTeamRouter({
     team,
@@ -432,6 +463,25 @@ export async function startServer({
     schedule: noticeSchedule,
     log,
   })
+  // The head's count: read again whenever the team changed (a message, a trim, a trust).
+  let unreadRev: number | null = null
+  const teamUnread = (): number | null => {
+    const rev = team.rev()
+    if (rev === null) return null
+    const n = notifyOf()
+    if (rev !== unreadRev) {
+      unreadRev = rev
+      n.changed()
+    }
+    // The count reads (and the first time writes) team-reads.json: a file that fails is no count,
+    // never a payload that fails.
+    try {
+      return n.unread()
+    } catch (err) {
+      log(`team: the unread count failed: ${err instanceof Error ? err.message : String(err)}`)
+      return null
+    }
+  }
   // The backup of the board's database (#233): its schedule (a look a minute, which only stats the
   // file while there is none), the server's setup, and its line in the payload (none while there
   // is no database and no target).
@@ -494,6 +544,7 @@ export async function startServer({
     ...(omarchy && { omarchy: omarchy.stamp }),
     presence: presence.view,
     teamRev: team.rev,
+    teamUnread,
     backup: backupLine,
     time: timeLine,
     calendar: calendarLine,
@@ -532,7 +583,17 @@ export async function startServer({
     // The user's presence: read, switched and set (the page, the phone, the Android app).
     ...presenceRoutes(presence),
     // The peer network: roster, threads, sends (local only; nothing answers while `team` is off).
-    ...teamRoutes(team, teamRouter, cfg),
+    ...teamRoutes(team, teamRouter, cfg, () => {
+      teamNotify?.changed()
+      board.publish()
+    }),
+    // The owner read a thread, or clicked a team notification on the desktop (#355).
+    ...teamNotifyRoutes({
+      notify: () => (team.rev() === null ? null : notifyOf()),
+      events,
+      shown: teamShown,
+      changed: () => board.publish(),
+    }),
     // Tasks (#202): points pinned on the board, done, reopened, removed; turned on or off.
     ...todosRoutes({ cfg, find: board.find, refresh }),
     // Secret requests (#273): the owner's submit writes the sink, or the owner declines; the phone too.

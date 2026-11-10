@@ -132,7 +132,8 @@ export interface ThreadMessage {
   agentOf?: string
 }
 
-export type SendResult = { ok: true; id: string } | { ok: false; error: string }
+/** `thread`: the key of the thread it went to (a new topic's too, #355: the panel opens it). */
+export type SendResult = { ok: true; id: string; thread?: string } | { ok: false; error: string }
 
 /** Where a post goes (#216): a peer or the team, and a thread (an existing one's id, or a new one's title). */
 export interface PostTarget {
@@ -177,8 +178,9 @@ export interface ThreadLine {
   via?: Via
   /** via agent: the sending session's name; in: as the sender's board wrote it. */
   agent?: string
-  /** out to a pair: how far it got. */
+  /** out to a pair: how far it got, and the hub's code when it refused it. */
   state?: OutState
+  code?: ErrorCode
   /** out to the team: how far each copy got. */
   receipts?: { peer: string; name: string; state: OutState }[]
   /** out: an agent's draft the owner sent. */
@@ -237,7 +239,8 @@ interface Options {
   log: (line: string) => void
   /** The board changed: publish it. */
   onChange: () => void
-  /** A message came in and was kept (#216): the router decides whether a session hears of it. */
+  /** A message came in and was kept: the router decides whether a session hears of it (#216), the
+   * board's notification and unread count hear of it too (#355). */
   onInbound?: (e: InboundEvent) => void
   socket?: (url: string) => WsLike
   clock?: Clock
@@ -764,7 +767,7 @@ export function createTeam({
         ...(first.pressed && { pressed: true }),
         ...(team
           ? { receipts: copies.map(c => ({ peer: c.msg.to, name: nameOf(c.msg.to), state: c.state })) }
-          : { state: first.state }),
+          : { state: first.state, ...(first.code && { code: first.code }) }),
       }
     })
     const drafts: ThreadLine[] = readDrafts()
@@ -850,7 +853,7 @@ export function createTeam({
     },
     async send(to, text, thread) {
       const r = await post({ to, ...(thread && { thread }) }, text, { by: 'ui' })
-      return r.ok ? { ok: true, id: r.id } : r
+      return r.ok ? { ok: true, id: r.id, thread: r.thread } : r
     },
     post,
     draft(to, text, more = {}) {
@@ -875,6 +878,8 @@ export function createTeam({
     nameOf,
     setThread(key, change) {
       if (!config()) return false
+      // No such thread: nothing to change, and no file made for it.
+      if (!Object.hasOwn(readThreads(), key)) return false
       const ok = changeThreads(threads => {
         const t = Object.hasOwn(threads, key) ? threads[key] : undefined
         if (!t) return false

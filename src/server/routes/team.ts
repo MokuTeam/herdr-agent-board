@@ -114,7 +114,13 @@ function changeAgentsFrom(
   return { ok: true }
 }
 
-export function teamRoutes(team: TeamService, router?: TeamRouter, cfg?: Pick<Config, 'categories' | 'team'>): Route[] {
+export function teamRoutes(
+  team: TeamService,
+  router?: TeamRouter,
+  cfg?: Pick<Config, 'categories' | 'team'>,
+  /** The owner's switches changed (the team chat's mute among them): the unread count follows (#355). */
+  onAgents?: () => void,
+): Route[] {
   const lanes = (): Pick<Config, 'categories' | 'team'> => cfg ?? { categories: [] }
   return [
     {
@@ -252,6 +258,7 @@ export function teamRoutes(team: TeamService, router?: TeamRouter, cfg?: Pick<Co
         if (refused) return refused
         const raw = await ctx.rawBody()
         const r = changeAgentsFrom(lanes(), isRecord(raw) ? raw : {})
+        if (r.ok) onAgents?.()
         return json(r.ok ? 200 : 400, r)
       },
     },

@@ -34,6 +34,7 @@ import {
   RateLimiter,
 } from '../core/access.ts'
 import { REMOTE_API } from '../core/remote.ts'
+import { teamConfig } from '../core/team.ts'
 import { boardPorts, publicHosts, publicOrigin, tunnelConfig, tunnelPort, tunnelProblems } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
 import type { Access, SignIn, Who } from '../services/access.ts'
@@ -185,6 +186,8 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         auth: 'login',
         signedIn,
         language: o.cfg.language ?? null,
+        // The Team panel (#355), while the team is on; else hello is as it was.
+        ...(signedIn && teamConfig(o.cfg.team) !== null && { team: true }),
       })
       return signedIn ? res : clearedFor(res, cookie)
     }
@@ -250,7 +253,8 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
       const path = decoded(raw)
       if (path === null) return json(400, { error: 'path' })
       if (NOT_HERE.test(raw) || NOT_HERE.test(path)) return json(404, { error: 'not found' })
-      const refused = remoteRefusal(raw, path)
+      // The tunnel's login is the owner's own: with the team on, the Team panel works here (#355).
+      const refused = remoteRefusal(raw, path, false, teamConfig(o.cfg.team) !== null)
       if (refused) return refused
       if (req.method === 'POST' && raw === '/api/logout') {
         o.access.endToken(token)

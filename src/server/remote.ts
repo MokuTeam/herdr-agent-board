@@ -37,6 +37,7 @@ import {
   allowedLogin,
   bearerOf,
   DESK_REMOTE_OPS,
+  isOwnerLogin,
   type PwaView,
   REMOTE_API,
   type RemoteConfig,
@@ -46,6 +47,7 @@ import {
   statusVerdict,
   WHOIS_GRACE_MS,
 } from '../core/remote.ts'
+import { teamConfig } from '../core/team.ts'
 import type { Config } from '../core/types.ts'
 import type { Remote } from '../services/remote.ts'
 import { dispatch, type GuardState, json, peerOf, type Route, readBody } from './http.ts'
@@ -149,6 +151,10 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
     return who
   }
 
+  /** The team's routes (#355): a device of the owner's own login, not a desk, while the team is on. */
+  const teamOwnerOf = (device: { desk?: boolean | undefined }, who: { login: string }): boolean =>
+    !device.desk && isOwnerLogin(who.login, owner) && teamConfig(o.cfg.team) !== null
+
   function hello(): Hello {
     return {
       board: 'agent-board',
@@ -215,6 +221,8 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
           desk: !!known?.desk,
           device: known?.id ?? null,
           language: o.cfg.language ?? null,
+          // The Team panel (#355): only for the owner's own phone, while the team is on; else hello is as it was.
+          ...(known && teamOwnerOf(known, who) && { team: true }),
         })
       }
       if (req.method === 'POST' && raw === '/api/remote/pair') {
@@ -247,7 +255,7 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
       // computer is refused in both spellings, or an encoded letter (/api/fs/%6Fpen) would get by.
       const path = decoded(raw)
       if (path === null) return json(400, { error: 'path' })
-      const refused = remoteRefusal(raw, path, !!device.desk)
+      const refused = remoteRefusal(raw, path, !!device.desk, teamOwnerOf(device, who))
       if (refused) return refused
       if (req.method === 'POST' && raw === '/api/remote') {
         // A body that is not a JSON object (null, a string, a broken or oversized one) is no op

@@ -58,7 +58,7 @@ import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
   const limitsAnchor = useRef<HTMLButtonElement>(null)
-  const { ui, dispatch, data, calOpen } = useBoardContext()
+  const { ui, dispatch, data, calOpen, teamOpen } = useBoardContext()
   const panels = usePanelLayout()
   // The categories and schedule panels, each opened at a lane or a session when asked.
   const [categories, setCategories] = useState(false)
@@ -139,6 +139,15 @@ export function App() {
     setTeam(true)
     setTeamMounted(true)
   }
+  // A team notification's click (#355): the panel opens on that thread.
+  const [teamFocus, setTeamFocus] = useState<string | null>(null)
+  const teamAsked = teamOpen?.n ?? 0
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each ask once, by its count
+  useEffect(() => {
+    if (!teamOpen || !offersTeam(data)) return
+    openTeam()
+    setTeamFocus(teamOpen.thread)
+  }, [teamAsked])
   // Tasks (#202), while the board has them on: their panel, out of the toolbar's button.
   const [todosOpen, setTodosOpen] = useState(false)
   // Settings → Paths on this computer…, on the board seen from another device only: mounted at its
@@ -268,6 +277,7 @@ export function App() {
             setTimeOpen(!timeOpen)
           }}
           onCalendar={() => setCalendarOpen(!calendarOpen)}
+          {...(offersTeam(data) && { onTeam: () => (team ? setTeam(false) : openTeam()) })}
         />
         <Board
           onNewSession={newSession}
@@ -310,7 +320,16 @@ export function App() {
         {...(localPathsMounted && remotePage()
           ? { localPaths: { open: localPaths, onClose: () => setLocalPaths(false) } }
           : {})}
-        {...(teamMounted && offersTeam(data) ? { team: { open: team, onClose: () => setTeam(false) } } : {})}
+        {...(teamMounted && offersTeam(data)
+          ? {
+              team: {
+                open: team,
+                onClose: () => setTeam(false),
+                focus: teamFocus,
+                onFocused: () => setTeamFocus(null),
+              },
+            }
+          : {})}
         archive={archive}
         todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
         time={{ open: timeOpen, onClose: () => setTimeOpen(false), client: timeClient, onClient: setTimeClient }}

@@ -1,7 +1,11 @@
-// The Team panel (#231, components/team/TeamPanel.tsx): the roster with its online dots, the
-// connection line, a person whose key changed with Trust, the thread with the delivery states,
-// Send posting { to, text } with the board's header; and nothing of it, no /api/team fetch, on a
-// page without the payload's teamRev or on a remote page.
+// The Team panel (#231, components/team/TeamPanel.tsx) on #216's threads (#355): the list (the
+// connection line, the team chat first, each person with their online dot, fingerprint, Trust when
+// their key changed, and their general thread and topics under them, each with its unread count and
+// whether it is muted), a thread on show (delivery states, held, a team post's copies, a link only
+// when it is http(s), the mute, a new topic from a general thread), the owner's agent switches on
+// this computer only, and the source's calls with the board's header; and nothing of it, no
+// /api/team fetch, on a page without the payload's teamRev or on a remote page that is not the
+// owner's.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { SidePanels } from '../../web/src/components/SidePanels.tsx'
@@ -10,13 +14,17 @@ import type { Schedule } from '../../web/src/hooks/useSchedule.ts'
 import { teamSource } from '../../web/src/hooks/useTeam.ts'
 import { settingPicked, settingsMenu } from '../../web/src/models/settings-menu.ts'
 import {
+  type AgentsView,
+  isAgentsView,
   isTeamView,
-  isThread,
+  isThreadLines,
+  isThreadList,
   offersTeam,
   sendError,
   stateLine,
   type TeamView,
-  type ThreadMessage,
+  type ThreadLine,
+  type ThreadView,
 } from '../../web/src/models/team.ts'
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
 import { board, payload, renderInBoard } from './support/board.tsx'
@@ -30,6 +38,8 @@ const t = translator('en')
 const text = (nodes: Node[]): string => nodes.map(n => (n.kind === 'text' ? n.text : text(n.children))).join('')
 const ANA = 'A'.repeat(43)
 const BOB = 'B'.repeat(43)
+const TOPIC = '0123abcd-4567-49ab-8def-0123456789ab'
+const DEPLOY = '89abcdef-0123-4567-89ab-cdef01234567'
 
 const VIEW: TeamView = {
   state: 'online',
@@ -57,38 +67,107 @@ const VIEW: TeamView = {
   ],
 }
 
-const THREAD: ThreadMessage[] = [
+const thread = (scope: string, id: string, over: Partial<ThreadView> = {}): ThreadView => ({
+  key: `${scope}/${id}`,
+  scope,
+  id,
+  title: null,
+  link: null,
+  handler: null,
+  muted: false,
+  by: 'me',
+  createdAt: 1,
+  lastAt: 1,
+  peerName: scope === 'team' ? null : scope === ANA ? 'Ana' : 'Bob',
+  ...over,
+})
+
+const THREADS: ThreadView[] = [
+  thread(ANA, 'general', { lastAt: 5 }),
+  thread(ANA, TOPIC, { title: 'Release', link: 'https://example.com/pr/1', lastAt: 3 }),
+  thread('team', 'general', { lastAt: 4 }),
+  thread('team', DEPLOY, { title: 'Deploy', muted: true, lastAt: 2 }),
+]
+
+const LINES: ThreadLine[] = [
   { id: 'q1', dir: 'out', text: 'queued one', ts: '2026-10-28T10:00:00Z', state: 'queued' },
   { id: 'q2', dir: 'out', text: 'delivered one', ts: '2026-10-28T10:01:00Z', state: 'delivered' },
   { id: 'q3', dir: 'out', text: 'acked one', ts: '2026-10-28T10:02:00Z', state: 'acked' },
   { id: 'q4', dir: 'out', text: 'expired one', ts: '2026-10-28T10:03:00Z', state: 'expired' },
-  { id: 'i1', dir: 'in', text: null, ts: '2026-10-28T10:04:00Z', held: true },
+  { id: 'i1', dir: 'in', from: ANA, who: 'Ana', text: null, ts: '2026-10-28T10:04:00Z', held: true },
 ]
+
+const AGENTS: AgentsView = {
+  off: false,
+  listener: { key: 'k1', name: 'day' },
+  peers: { [ANA]: { on: true, lanes: ['work'] } },
+  paused: {},
+  lanes: [
+    { id: 'work', title: 'Work' },
+    { id: 'personal', title: 'Personal' },
+  ],
+}
 
 function props(over: Partial<TeamBodyProps> = {}): TeamBodyProps {
   return {
     view: VIEW,
-    peer: null,
-    thread: [],
+    threads: THREADS,
+    selected: null,
+    thread: null,
+    lines: [],
+    agents: AGENTS,
     draft: '',
+    topic: null,
     disabled: false,
     onSelect() {},
     onTrust() {},
     onSendDraft() {},
     onDiscardDraft() {},
     onDraft() {},
+    onTopic() {},
     onSend() {},
+    onMute() {},
+    onAgents() {},
     ...over,
   }
 }
 
+/** A thread on show: its key, and the thread as the board keeps it. */
+const on = (key: string, over: Partial<TeamBodyProps> = {}): Partial<TeamBodyProps> => ({
+  selected: key,
+  thread: THREADS.find(x => x.key === key) ?? null,
+  ...over,
+})
+
 const render = (p: TeamBodyProps, lang = 'en') => renderInBoard(<TeamBody {...p} />, board(), lang)
 
-describe('Team panel', () => {
-  test('roster: an online dot for who is on, none for who is not, and fingerprints', () => {
+/** The panel's host elements, to press its buttons. */
+function hostsOf(p: TeamBodyProps): Host[] {
+  let hosts: Host[] = []
+  function Probe() {
+    hosts = hostElements(<TeamBody {...p} />)
+    return null
+  }
+  renderInBoard(<Probe />, board())
+  return hosts
+}
+
+function press(hosts: Host[], pick: (h: Host) => boolean): void {
+  const click = hosts.find(h => h.tag === 'button' && pick(h))?.props.onClick
+  if (typeof click !== 'function') throw new Error('no such button')
+  click()
+}
+
+/** A host element's class names hold `name`, as hasClass does for the markup. */
+const hasClassOf = (h: Host, name: string): boolean =>
+  typeof h.props.className === 'string' && h.props.className.split(' ').includes(name)
+
+const buttons = (nodes: Node[], label: string) => findAll(nodes, el => el.tag === 'button' && text([el]) === label)
+
+describe('the list', () => {
+  test('people: an online dot for who is on, none for who is not, and fingerprints', () => {
     const nodes = render(props())
-    const rows = findAll(nodes, el => hasClass(el, 'team-peer'))
-    expect(rows).toHaveLength(2)
+    expect(findAll(nodes, el => hasClass(el, 'team-peer'))).toHaveLength(2)
     const dots = findAll(nodes, el => hasClass(el, 'team-dot'))
     expect(dots.map(d => hasClass(d, 'on'))).toEqual([true, false])
     const all = text(nodes)
@@ -120,39 +199,126 @@ describe('Team panel', () => {
   test('a key that changed: its row says so, with Trust, which asks for that person', () => {
     const trusted: string[] = []
     const p = props({ onTrust: x => void trusted.push(x) })
-    let hosts: Host[] = []
-    function Probe() {
-      hosts = hostElements(<TeamBody {...p} />)
-      return null
-    }
-    renderInBoard(<Probe />, board())
     const nodes = render(p)
     expect(findAll(nodes, el => hasClass(el, 'team-changed'))).toHaveLength(1)
     expect(text([byClass(nodes, 'team-changed')])).toContain('The key of Bob changed')
-    const trust = hosts.find(h => h.tag === 'button' && h.props.children === 'Trust the new key')
-    if (typeof trust?.props.onClick !== 'function') throw new Error('no Trust button')
-    trust.props.onClick()
+    press(hostsOf(p), h => h.props.children === 'Trust the new key')
     expect(trusted).toEqual([BOB])
   })
 
-  test('nothing picked: no thread and no box; picked: the thread with delivery states and held', () => {
-    expect(findAll(render(props()), el => el.tag === 'textarea')).toHaveLength(0)
-    const nodes = render(props({ peer: ANA, thread: THREAD }))
+  test('the team chat first, then each person: their general, then their topics, the latest first', () => {
+    const nodes = render(props())
+    const rows = findAll(nodes, el => hasClass(el, 'team-row')).map(r => r.attrs.get('data-thread'))
+    // Bob has written nothing yet: his general is there all the same.
+    expect(rows).toEqual(['team/general', `team/${DEPLOY}`, `${ANA}/general`, `${ANA}/${TOPIC}`, `${BOB}/general`])
+    const titles = findAll(nodes, el => hasClass(el, 'team-row-title')).map(r => text([r]))
+    expect(titles).toEqual(['General', 'Deploy', 'General', 'Release', 'General'])
+    expect(text(render(props(), 'ru'))).toContain('Общий чат')
+  })
+
+  test('each thread’s unread count; a muted thread is marked and counts none', () => {
+    const nodes = render(props({ unread: { [`${ANA}/${TOPIC}`]: 2, [`team/${DEPLOY}`]: 4 } }))
+    expect(findAll(nodes, el => hasClass(el, 'team-unread')).map(c => text([c]))).toEqual(['2'])
+    const muted = findAll(nodes, el => hasClass(el, 'team-row') && hasClass(el, 'muted'))
+    expect(muted.map(r => r.attrs.get('data-thread'))).toEqual([`team/${DEPLOY}`])
+    expect(text(muted)).toContain('muted')
+  })
+
+  test('threads with someone no longer in the team stay listed, to read and to clear their count', () => {
+    const GONE = 'C'.repeat(43)
+    const gone = thread(GONE, 'general', { peerName: 'Cleo' })
+    const nodes = render(props({ threads: [...THREADS, gone], unread: { [gone.key]: 3 } }))
+    const section = findAll(nodes, el => hasClass(el, 'team-gone'))
+    expect(section).toHaveLength(1)
+    expect(text(section)).toContain('No longer in the team')
+    expect(text(section)).toContain('Cleo')
+    expect(findAll(section, el => hasClass(el, 'team-row')).map(r => r.attrs.get('data-thread'))).toEqual([gone.key])
+    expect(findAll(render(props()), el => hasClass(el, 'team-gone'))).toHaveLength(0)
+  })
+
+  test('a row shows its thread; nothing is on show: no box to write in', () => {
+    const picked: (string | null)[] = []
+    const p = props({ onSelect: k => void picked.push(k) })
+    press(hostsOf(p), h => h.props['data-thread'] === `${ANA}/${TOPIC}`)
+    expect(picked).toEqual([`${ANA}/${TOPIC}`])
+    expect(findAll(render(p), el => el.tag === 'textarea')).toHaveLength(0)
+  })
+})
+
+describe('the owner’s switches (#216) and the team chat’s mute', () => {
+  const sw = (nodes: Node[], name: string) => findAll(nodes, el => el.attrs.get('data-switch') === name)[0]
+
+  test('as they stand: all agents, the listener, each scope on or off and its lanes', () => {
+    const nodes = render(props())
+    expect(sw(nodes, 'agents')?.attrs.get('aria-checked')).toBe('true')
+    expect(sw(nodes, `agents-${ANA}`)?.attrs.get('aria-checked')).toBe('true')
+    expect(sw(nodes, `agents-${BOB}`)?.attrs.get('aria-checked')).toBe('false')
+    expect(sw(nodes, 'agents-team')?.attrs.get('aria-checked')).toBe('false')
+    expect(sw(nodes, 'mute-chat')?.attrs.get('aria-checked')).toBe('true')
+    expect(text(nodes)).toContain('Listener: day')
+    const ana = findAll(nodes, el => el.attrs.get('data-scope') === ANA)[0] as Node
+    const lanes = findAll([ana], el => hasClass(el, 'team-lane')).map(l => [text([l]), l.attrs.get('aria-pressed')])
+    expect(lanes).toEqual([
+      ['Work', 'true'],
+      ['Personal', 'false'],
+    ])
+  })
+
+  test('each change is one call: all off, the listener cleared, a person on, a lane shared, the chat muted', () => {
+    const changes: unknown[] = []
+    const p = props({ onAgents: c => void changes.push(c) })
+    const hosts = hostsOf(p)
+    press(hosts, h => h.props['data-switch'] === 'agents')
+    press(hosts, h => h.props.children === 'Clear')
+    press(hosts, h => h.props['data-switch'] === `agents-${BOB}`)
+    // Ana's lanes come after the team chat's: her Personal is the second.
+    const personal = hosts.filter(h => hasClassOf(h, 'team-lane') && h.props.children === 'Personal')[1]
+    if (typeof personal?.props.onClick !== 'function') throw new Error('no lane button')
+    personal.props.onClick()
+    press(hosts, h => h.props['data-switch'] === 'mute-chat')
+    expect(changes).toEqual([
+      { off: true },
+      { listener: null },
+      { peer: BOB, on: true },
+      { peer: ANA, lanes: ['work', 'personal'] },
+      { peer: 'team', muted: true },
+    ])
+  })
+
+  test('a remote page (no switches given): neither the switches nor the team chat’s mute, nor Trust', () => {
+    const nodes = render(props({ agents: null }))
+    expect(findAll(nodes, el => el.attrs.has('data-switch'))).toHaveLength(0)
+    expect(findAll(nodes, el => hasClass(el, 'team-agents'))).toHaveLength(0)
+    // Accepting a changed key is the computer's only: the button would only be refused.
+    expect(buttons(nodes, 'Trust the new key')).toHaveLength(0)
+    expect(text(nodes)).toContain('Trust the new key on the computer the board runs on.')
+    const bob = render(props(on(`${BOB}/general`, { agents: null })))
+    expect(buttons(bob, 'Trust the new key')).toHaveLength(0)
+  })
+})
+
+describe('a thread on show', () => {
+  test('a person’s general: delivery states, held, back to the list, a box to write in', () => {
+    const back: (string | null)[] = []
+    const p = props(on(`${ANA}/general`, { lines: LINES, onSelect: k => void back.push(k) }))
+    const nodes = render(p)
     const all = text(nodes)
-    expect(all).toContain('Messages with Ana')
+    expect(all).toContain('General')
+    expect(all).toContain('with Ana')
     expect(all).toContain('from you · queued at the hub')
     expect(all).toContain('from you · delivered')
     expect(all).toContain('from you · received')
     expect(all).toContain('from you · expired, not delivered')
-    expect(all).toContain('from them · held back until the new key is trusted')
+    expect(all).toContain('Ana · held back until the new key is trusted')
     expect(all).toContain('held: key changed, Trust to read')
-    expect(all).not.toContain('held one')
     expect(findAll(nodes, el => hasClass(el, 'held'))).toHaveLength(1)
     expect(findAll(nodes, el => el.tag === 'textarea')).toHaveLength(1)
+    press(hostsOf(p), h => h.props.children === '‹ All threads')
+    expect(back).toEqual([null])
   })
 
-  test('a message the hub refused says so with the code, in both languages; the thread is accepted as such (#231)', () => {
-    const refused: ThreadMessage = {
+  test('a message the hub refused says so, with the code when there is one, in both languages', () => {
+    const refused: ThreadLine = {
       id: 'r1',
       dir: 'out',
       text: 'refused one',
@@ -160,102 +326,219 @@ describe('Team panel', () => {
       state: 'refused',
       code: 'not_member',
     }
-    expect(isThread({ peer: ANA, messages: [refused] })).toBe(true)
-    expect(isThread({ peer: ANA, messages: [{ ...refused, state: 'nonsense' }] })).toBe(false)
-    expect(text(render(props({ peer: ANA, thread: [refused] })))).toContain(
-      'from you · refused by the hub (not_member), not sent',
+    expect(isThreadLines({ thread: THREADS[0], lines: [refused] })).toBe(true)
+    expect(isThreadLines({ thread: THREADS[0], lines: [{ ...refused, state: 'nonsense' }] })).toBe(false)
+    const p = props(on(`${ANA}/general`, { lines: [refused] }))
+    expect(text(render(p))).toContain('from you · refused by the hub (not_member), not sent')
+    expect(text(render(p, 'ru'))).toContain('хаб отклонил (not_member)')
+    const bare = props(
+      on(`${ANA}/general`, {
+        lines: [{ id: 'r2', dir: 'out', text: 'r', ts: '2026-10-28T10:06:00Z', state: 'refused' }],
+      }),
     )
-    expect(text(render(props({ peer: ANA, thread: [refused] }), 'ru'))).toContain('хаб отклонил (not_member)')
+    expect(text(render(bare))).toContain('from you · refused by the hub, not sent')
   })
 
-  test('a person whose key changed: Send is off and says why; the refusal code is explained (#231)', () => {
-    const send = (peer: string) =>
-      findAll(render(props({ peer, draft: 'hi' })), el => el.tag === 'button' && text([el]) === 'Send')[0]
-    expect(send(ANA)?.attrs.has('disabled')).toBe(false)
-    expect(send(BOB)?.attrs.has('disabled')).toBe(true)
-    expect(text(render(props({ peer: BOB })))).toContain('trust the new key before you send')
+  test('a person whose key changed: Send is off and says why, with Trust there too', () => {
+    const send = (key: string) => buttons(render(props(on(key, { draft: 'hi' }))), 'Send')[0]
+    expect(send(`${ANA}/general`)?.attrs.has('disabled')).toBe(false)
+    expect(send(`${BOB}/general`)?.attrs.has('disabled')).toBe(true)
+    const bob = text(render(props(on(`${BOB}/general`))))
+    expect(bob).toContain('trust the new key before you send')
+    expect(bob).toContain('Trust the new key')
     expect(sendError('changed', t)).toContain('their key changed')
   })
 
   test('Send is off for an empty draft and while disabled', () => {
-    const send = (over: Partial<TeamBodyProps>) =>
-      findAll(render(props({ peer: ANA, ...over })), el => el.tag === 'button' && text([el]) === 'Send')[0]
+    const send = (over: Partial<TeamBodyProps>) => buttons(render(props(on(`${ANA}/general`, over))), 'Send')[0]
     expect(send({ draft: '' })?.attrs.has('disabled')).toBe(true)
     expect(send({ draft: 'hi', disabled: true })?.attrs.has('disabled')).toBe(true)
     expect(send({ draft: 'hi' })?.attrs.has('disabled')).toBe(false)
   })
 
-  test('Trust and Send go through the source: POST /api/team/trust { peer }, /api/team/send { to, text }, with X-Board', async () => {
-    const toasts: string[] = []
-    const calls = answers(
-      [200, { ok: true }],
-      [200, VIEW],
-      [200, { ok: true, id: 'x' }],
-      [200, VIEW],
-      [200, { ok: false }],
-    )
-    const source = teamSource({ t: () => t, toast: x => void toasts.push(x) })
+  test('a topic: its title and link, the link drawn only when it is http(s); its mute', () => {
+    const muted: [string, boolean][] = []
+    const p = props(on(`${ANA}/${TOPIC}`, { onMute: (k, m) => void muted.push([k, m]) }))
+    const nodes = render(p)
+    expect(text(nodes)).toContain('Release')
+    expect(findAll(nodes, el => el.tag === 'a').map(a => a.attrs.get('href'))).toEqual(['https://example.com/pr/1'])
+    const bad = { ...(THREADS[1] as ThreadView), link: 'javascript:alert(1)' }
+    expect(findAll(render(props({ selected: bad.key, thread: bad })), el => el.tag === 'a')).toHaveLength(0)
+    press(hostsOf(p), h => h.props['data-switch'] === 'mute')
+    expect(muted).toEqual([[`${ANA}/${TOPIC}`, true]])
+  })
+
+  test('a muted thread says what that means; a thread nothing was written in has no mute yet', () => {
+    const deploy = text(render(props(on(`team/${DEPLOY}`))))
+    expect(deploy).toContain('muted: no notifications, not counted as unread')
+    const bob = render(props(on(`${BOB}/general`)))
+    expect(findAll(bob, el => el.attrs.get('data-switch') === 'mute')).toHaveLength(0)
+    // The team chat muted as a whole: every team thread says so.
+    const chat = { ...AGENTS, peers: { ...AGENTS.peers, team: { on: false, lanes: [], muted: true } } }
+    expect(text(render(props(on('team/general', { agents: chat }))))).toContain('muted: no notifications')
+  })
+
+  test('a new topic starts from a general thread: a title (needed) and a link, then Start the topic', () => {
+    const topics: unknown[] = []
+    const general = props(on(`${ANA}/general`, { onTopic: x => void topics.push(x) }))
+    press(hostsOf(general), h => h.props.children === 'New topic')
+    expect(topics).toEqual([{ title: '' }])
+    expect(buttons(render(props(on(`${ANA}/${TOPIC}`))), 'New topic')).toHaveLength(0)
+    const start = (title: string) =>
+      buttons(render(props(on(`${ANA}/general`, { topic: { title }, draft: 'hi' }))), 'Start the topic')[0]
+    expect(start('')?.attrs.has('disabled')).toBe(true)
+    expect(start('Release')?.attrs.has('disabled')).toBe(false)
+    const inputs = findAll(render(props(on(`${ANA}/general`, { topic: { title: '' } }))), el => el.tag === 'input')
+    expect(inputs.map(i => i.attrs.get('aria-label'))).toEqual(['Topic', 'Link (optional, http or https)'])
+  })
+
+  test('the team chat: who wrote each message, and how far each member’s copy of yours got', () => {
+    const lines: ThreadLine[] = [
+      { id: 'i1', dir: 'in', from: ANA, who: 'Ana', text: 'ship it?', ts: '2026-10-28T10:00:00Z' },
+      {
+        id: 'o1',
+        dir: 'out',
+        text: 'yes',
+        ts: '2026-10-28T10:01:00Z',
+        receipts: [
+          { peer: ANA, name: 'Ana', state: 'acked' },
+          { peer: BOB, name: 'Bob', state: 'queued' },
+        ],
+      },
+    ]
+    const all = text(render(props(on('team/general', { lines }))))
+    expect(all).toContain('Team chat')
+    expect(all).toContain('Ana')
+    expect(all).toContain('from you · Ana: received, Bob: queued at the hub')
+  })
+})
+
+describe('the source', () => {
+  const deps = (toasts: string[] = []) => ({
+    t: () => t,
+    toast: (x: string) => void toasts.push(x),
+    remote: () => false,
+  })
+
+  test('Trust and Send: POST /api/team/trust { peer }; a general gets { to, text }, a topic { thread: { id } }', async () => {
+    const calls = answers()
+    const source = teamSource(deps())
     await source.trust(BOB)
-    expect(await source.send(ANA, 'hello')).toBe(true)
-    expect(sent(calls).slice(0, 3)).toEqual([
+    source.select(`${ANA}/general`)
+    expect(await source.send('hello')).toBe(true)
+    source.select(`team/${DEPLOY}`)
+    expect(await source.send('deploy now?')).toBe(true)
+    expect(sent(calls).filter(c => c[1] === 'POST')).toEqual([
       ['/api/team/trust', 'POST', '1', { peer: BOB }],
-      ['/api/team', undefined, undefined, undefined],
       ['/api/team/send', 'POST', '1', { to: ANA, text: 'hello' }],
+      ['/api/team/send', 'POST', '1', { to: 'team', text: 'deploy now?', thread: { id: DEPLOY } }],
     ])
+  })
+
+  test('a new topic goes with its title and link, and is the thread on show after', async () => {
+    const calls = answers([200, { ok: true, id: 'm1', thread: `${ANA}/${TOPIC}` }])
+    const source = teamSource(deps())
+    source.select(`${ANA}/general`)
+    expect(await source.send('notes?', { title: 'Release', link: 'https://example.com/pr/1' })).toBe(true)
+    expect(sent(calls)[0]).toEqual([
+      '/api/team/send',
+      'POST',
+      '1',
+      { to: ANA, text: 'notes?', thread: { title: 'Release', link: 'https://example.com/pr/1' } },
+    ])
+    expect(source.now.get().selected).toBe(`${ANA}/${TOPIC}`)
   })
 
   test('a refused send says why and is not sent as done', async () => {
     const toasts: string[] = []
     answers([400, { ok: false, error: 'peer' }])
-    const source = teamSource({ t: () => t, toast: x => void toasts.push(x) })
-    expect(await source.send(ANA, 'hello')).toBe(false)
+    const source = teamSource(deps(toasts))
+    source.select(`${ANA}/general`)
+    expect(await source.send('hello')).toBe(false)
     expect(toasts).toEqual(['Not sent: not in the team'])
   })
 
-  test('the view is fetched on opening and on each new teamRev while open, with the thread of the peer picked', async () => {
+  test('mutes and switches: POST …/mute | unmute and /api/team/agents, with X-Board', async () => {
+    const calls = answers()
+    const source = teamSource(deps())
+    await source.mute(`${ANA}/${TOPIC}`, true)
+    await source.mute('team/general', false)
+    await source.setAgents({ peer: 'team', muted: true })
+    expect(sent(calls).filter(c => c[1] === 'POST')).toEqual([
+      [`/api/team/threads/${ANA}/${TOPIC}/mute`, 'POST', '1', {}],
+      ['/api/team/threads/team/general/unmute', 'POST', '1', {}],
+      ['/api/team/agents', 'POST', '1', { peer: 'team', muted: true }],
+    ])
+  })
+
+  test('fetched on opening and on each new teamRev while open: the view, the threads, the switches, the thread on show', async () => {
     const calls = answers(
       [200, VIEW],
+      [200, { threads: THREADS }],
+      [200, AGENTS],
       [200, VIEW],
-      [200, { peer: ANA, messages: THREAD }],
+      [200, { threads: THREADS }],
+      [200, { thread: THREADS[0], lines: LINES }],
+      [200, AGENTS],
       [200, VIEW],
-      [200, { peer: ANA, messages: [] }],
+      [200, { threads: THREADS }],
+      [404, { ok: false, error: 'thread' }],
+      [200, AGENTS],
     )
-    const source = teamSource({ t: () => t, toast: () => {} })
+    const source = teamSource(deps())
     source.sync(false, 1)
     expect(calls).toHaveLength(0)
     source.sync(true, 1)
     await Bun.sleep(5)
     source.sync(true, 1)
-    expect(calls.map(c => c.url)).toEqual(['/api/team'])
-    source.select(ANA)
+    expect(calls.map(c => c.url)).toEqual(['/api/team', '/api/team/threads', '/api/team/agents'])
+    source.select(`${ANA}/general`)
     await Bun.sleep(5)
-    expect(source.now.get().thread).toEqual(THREAD)
-    source.sync(true, 2)
+    expect(source.now.get().lines).toEqual(LINES)
+    expect(source.now.get().agents).toEqual(AGENTS)
+    // A thread nothing was written in yet (404): empty, and no error.
+    source.select(`${BOB}/general`)
     await Bun.sleep(5)
-    expect(calls.map(c => c.url)).toEqual([
+    expect(calls.slice(3).map(c => c.url)).toEqual([
       '/api/team',
+      '/api/team/threads',
+      `/api/team/threads/${ANA}/general`,
+      '/api/team/agents',
       '/api/team',
-      `/api/team/thread/${ANA}`,
-      '/api/team',
-      `/api/team/thread/${ANA}`,
+      '/api/team/threads',
+      `/api/team/threads/${BOB}/general`,
+      '/api/team/agents',
     ])
+    expect(source.now.get()).toMatchObject({ selected: `${BOB}/general`, thread: null, lines: [] })
   })
 
-  test('the answers are checked: a view and a thread of another shape are refused', () => {
+  test('a remote page never asks for the switches', async () => {
+    const calls = answers([200, VIEW], [200, { threads: [] }])
+    const source = teamSource({ ...deps(), remote: () => true })
+    source.sync(true, 1)
+    await Bun.sleep(5)
+    expect(calls.map(c => c.url)).toEqual(['/api/team', '/api/team/threads'])
+    expect(source.now.get().agents).toBeNull()
+  })
+
+  test('the answers are checked: a view, threads, a thread and switches of another shape are refused', () => {
     expect(isTeamView(VIEW)).toBe(true)
     expect(isTeamView({ ...VIEW, state: 'weird' })).toBe(false)
     expect(isTeamView({ ...VIEW, roster: [{ peer: 'x' }] })).toBe(false)
-    expect(isThread({ peer: ANA, messages: THREAD })).toBe(true)
-    expect(isThread({ peer: ANA, messages: [{ id: 1 }] })).toBe(false)
+    expect(isThreadList({ threads: THREADS })).toBe(true)
+    expect(isThreadList({ threads: [{ ...THREADS[0], muted: 'no' }] })).toBe(false)
+    expect(isThreadLines({ thread: THREADS[0], lines: LINES })).toBe(true)
+    expect(isThreadLines({ thread: THREADS[0], lines: [{ id: 1 }] })).toBe(false)
+    expect(isAgentsView(AGENTS)).toBe(true)
+    expect(isAgentsView({ ...AGENTS, peers: { [ANA]: { on: 'yes', lanes: [] } } })).toBe(false)
   })
 })
 
-describe('agent drafts and agent requests (#231)', () => {
-  const DRAFT: ThreadMessage = { id: 'd1', dir: 'draft', text: 'is the build green?', ts: '2026-10-28T11:00:00Z' }
-  const buttons = (nodes: Node[], label: string) => findAll(nodes, el => el.tag === 'button' && text([el]) === label)
+describe('agent drafts and agent requests (#231, #216)', () => {
+  const DRAFT: ThreadLine = { id: 'd1', dir: 'draft', text: 'is the build green?', ts: '2026-10-28T11:00:00Z' }
 
-  test('a draft shows in the thread labelled "draft from an agent" with Send and Discard; the roster row counts it', () => {
-    const nodes = render(props({ peer: ANA, thread: [DRAFT] }))
+  test('a draft shows in the thread labelled "draft from an agent" with Send and Discard; the person counts it', () => {
+    const nodes = render(props(on(`${ANA}/general`, { lines: [DRAFT] })))
     const all = text(nodes)
     expect(all).toContain('is the build green?')
     expect(all).toContain('draft from an agent')
@@ -269,48 +552,47 @@ describe('agent drafts and agent requests (#231)', () => {
     const counted = { ...VIEW, roster: VIEW.roster.map(p => (p.peer === ANA ? { ...p, drafts: 2 } : p)) }
     expect(text(render(props({ view: counted })))).toContain('2 draft(s) from an agent')
     expect(text(render(props({ view: counted }), 'ru'))).toContain('черновиков от агента: 2')
-    expect(text(render(props({ peer: ANA, thread: [DRAFT] }), 'ru'))).toContain('черновик от агента')
+    expect(text(render(props(on(`${ANA}/general`, { lines: [DRAFT] })), 'ru'))).toContain('черновик от агента')
+  })
+
+  test('a draft the board held says why', () => {
+    const held = { ...DRAFT, reason: 'loop' }
+    expect(text(render(props(on(`${ANA}/general`, { lines: [held] }))))).toContain(
+      'draft from an agent · held: the last messages all came from agents',
+    )
   })
 
   test('Send and Discard on a draft call back with its id; Send waits while the key changed or editing is off', () => {
     const calls: string[] = []
-    const over = {
-      onSendDraft: (id: string) => calls.push(`send ${id}`),
-      onDiscardDraft: (id: string) => calls.push(`discard ${id}`),
-    }
-    const p = props({ peer: ANA, thread: [DRAFT], ...over })
-    let hosts: Host[] = []
-    function Probe() {
-      hosts = hostElements(<TeamBody {...p} />)
-      return null
-    }
-    renderInBoard(<Probe />, board())
-    const press = (label: string) => {
-      const hit = hosts.filter(h => h.tag === 'button' && h.props.children === label)
-      const click = hit[0]?.props.onClick
-      if (typeof click !== 'function') throw new Error(`no ${label} button`)
-      click()
-    }
-    press('Send') // the draft's comes first, the composer's after the thread
-    press('Discard')
+    const p = props(
+      on(`${ANA}/general`, {
+        lines: [DRAFT],
+        onSendDraft: id => void calls.push(`send ${id}`),
+        onDiscardDraft: id => void calls.push(`discard ${id}`),
+      }),
+    )
+    const hosts = hostsOf(p)
+    press(hosts, h => h.props.children === 'Send') // the draft's comes first, the composer's after the thread
+    press(hosts, h => h.props.children === 'Discard')
     expect(calls).toEqual(['send d1', 'discard d1'])
-    const bob = render(props({ peer: BOB, thread: [{ ...DRAFT, id: 'd2' }] }))
+    const bob = render(props(on(`${BOB}/general`, { lines: [{ ...DRAFT, id: 'd2' }] })))
     expect(buttons(bob, 'Send').every(b => b.attrs.has('disabled'))).toBe(true)
-    expect(
-      buttons(render(props({ peer: ANA, thread: [DRAFT], disabled: true })), 'Discard')[0]?.attrs.has('disabled'),
-    ).toBe(true)
+    const off = render(props(on(`${ANA}/general`, { lines: [DRAFT], disabled: true })))
+    expect(buttons(off, 'Discard')[0]?.attrs.has('disabled')).toBe(true)
   })
 
   test('an agent request is labelled with whose agent it came through, on both sides, in both languages; a plain message is not', () => {
-    const incoming: ThreadMessage = {
+    const incoming: ThreadLine = {
       id: 'a1',
       dir: 'in',
+      from: ANA,
+      who: 'Ana',
       text: 'deploy?',
       ts: '2026-10-28T11:01:00Z',
       via: 'agent',
-      agentOf: 'Ana',
+      agent: 'board-216',
     }
-    const outgoing: ThreadMessage = {
+    const outgoing: ThreadLine = {
       id: 'a2',
       dir: 'out',
       text: 'ok?',
@@ -318,44 +600,39 @@ describe('agent drafts and agent requests (#231)', () => {
       state: 'acked',
       via: 'agent',
     }
-    const plain: ThreadMessage = {
+    const pressed: ThreadLine = { ...outgoing, id: 'a4', pressed: true }
+    const plain: ThreadLine = {
       id: 'a3',
       dir: 'out',
       text: 'typed by hand',
       ts: '2026-10-28T11:03:00Z',
       state: 'acked',
     }
-    const all = text(render(props({ peer: ANA, thread: [incoming, outgoing, plain] })))
-    expect(all).toContain('from them · via Ana’s agent')
+    const all = text(render(props(on(`${ANA}/general`, { lines: [incoming, outgoing, plain, pressed] }))))
+    expect(all).toContain('Ana · via Ana’s agent')
     expect(all).toContain('from you · received · via your agent')
+    expect(all).toContain('from you · received · an agent’s draft you sent')
     expect(all.match(/ · via (Ana’s|your) agent/g)).toHaveLength(2)
     expect(all).not.toContain('approved')
-    expect(text(render(props({ peer: ANA, thread: [incoming] }), 'ru'))).toContain('через агента Ana')
-    expect(isThread({ peer: ANA, messages: [incoming, DRAFT] })).toBe(true)
-    expect(isThread({ peer: ANA, messages: [{ ...incoming, via: 'human' }] })).toBe(false)
+    expect(text(render(props(on(`${ANA}/general`, { lines: [incoming] })), 'ru'))).toContain('через агента Ana')
   })
 
   test('through the source: send is POST /api/team/draft/<id>/send, discard /discard, both with X-Board and no text of their own', async () => {
-    const calls = answers([200, { ok: true, id: 'x' }], [200, VIEW], [200, { ok: true }], [200, VIEW])
-    const source = teamSource({ t: () => t, toast: () => {} })
+    const calls = answers()
+    const source = teamSource({ t: () => t, toast: () => {}, remote: () => false })
     const id = '11111111-1111-4111-8111-111111111111'
     expect(await source.sendDraft(id)).toBe(true)
     await source.discardDraft(id)
-    const posts = sent(calls).filter(c => c[1] === 'POST')
-    expect(posts).toEqual([
+    expect(sent(calls).filter(c => c[1] === 'POST')).toEqual([
       [`/api/team/draft/${id}/send`, 'POST', '1', {}],
       [`/api/team/draft/${id}/discard`, 'POST', '1', {}],
     ])
-    // A message typed in the panel carries no `via`.
-    const typed = answers([200, { ok: true, id: 'y' }], [200, VIEW])
-    await source.send(ANA, 'by hand')
-    expect(sent(typed)[0]).toEqual(['/api/team/send', 'POST', '1', { to: ANA, text: 'by hand' }])
   })
 
   test('a refused draft send says why', async () => {
     const toasts: string[] = []
     answers([404, { ok: false, error: 'draft' }], [200, VIEW])
-    const source = teamSource({ t: () => t, toast: x => void toasts.push(x) })
+    const source = teamSource({ t: () => t, toast: x => void toasts.push(x), remote: () => false })
     expect(await source.sendDraft('11111111-1111-4111-8111-111111111111')).toBe(false)
     expect(toasts).toEqual(['Not sent: that draft is gone'])
   })

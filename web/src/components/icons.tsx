@@ -50,6 +50,13 @@ export const TasksIcon = () => (
   </Icon>
 )
 
+export const TeamIcon = () => (
+  <Icon>
+    <path d="M3.5 5.5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H8.5L6 12.5v-2h-.5a2 2 0 0 1-2-2z" />
+    <path d="M10.5 12.5h1.5l2.5 2v-2h.5a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2" />
+  </Icon>
+)
+
 export const TimeIcon = () => (
   <Icon>
     <circle cx="10" cy="10" r="6.5" />

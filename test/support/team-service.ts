@@ -61,13 +61,17 @@ export function setup(...given: [unknown?, { onInbound?: (e: InboundEvent) => vo
   const clock = fakeClock()
   const sockets: FakeWs[] = []
   const logs: string[] = []
+  const inbound: InboundEvent[] = []
   let changes = 0
   const svc = createTeam({
     cfg,
     clock,
     log: l => logs.push(l),
     onChange: () => void changes++,
-    ...(onInbound && { onInbound }),
+    onInbound: e => {
+      inbound.push(e)
+      onInbound?.(e)
+    },
     random: () => 0.5,
     socket: url => {
       const w = new FakeWs(url)
@@ -76,7 +80,7 @@ export function setup(...given: [unknown?, { onInbound?: (e: InboundEvent) => vo
     },
   })
   live.push(svc)
-  return { svc, cfg, clock, sockets, logs, changes: () => changes }
+  return { svc, cfg, clock, sockets, logs, inbound, changes: () => changes }
 }
 
 export type Setup = ReturnType<typeof setup>

@@ -563,9 +563,11 @@ function presence(): void {
 }
 
 const TEAM_USAGE =
-  'usage: board team join <invite> --hub <ws://host:7443> --name <name> | board team roster | board team draft <name|peer-id> "<text>" | board team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | board team reply <thread> "<text>" | board team thread <thread> | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default]'
+  'usage: board team join <invite> --hub <ws://host:7443> --name <name> | board team roster | board team draft <name|peer-id> "<text>" | board team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | board team reply <thread> "<text>" | board team thread <thread> [--json] [--read] | board team inbox [--unread] [--json] | board team watch [--json] [--every <seconds>] | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default]'
 /** The `board team` ops of agents talking through the hub (#216), in entrypoints/team-agents-cli.ts. */
 const TEAM_AGENT_OPS = ['post', 'reply', 'thread', 'assign', 'release', 'listen', 'loop']
+/** What came in, read only (#355), in entrypoints/team-inbox-cli.ts. */
+const TEAM_INBOX_OPS = ['inbox', 'watch']
 
 /**
  * When the board's port answered, but not as this install's board would (#356): the process that
@@ -697,7 +699,9 @@ async function team(): Promise<void> {
     )
   }
   const agentOp = TEAM_AGENT_OPS.includes(op ?? '')
-  if (op === 'draft' ? more.length !== 2 : !agentOp && (op !== 'roster' || more.length)) throw new Error(TEAM_USAGE)
+  const inboxOp = TEAM_INBOX_OPS.includes(op ?? '')
+  if (op === 'draft' ? more.length !== 2 : !agentOp && !inboxOp && (op !== 'roster' || more.length))
+    throw new Error(TEAM_USAGE)
   if (!T.teamConfig(cfg.team)) {
     return console.log(
       'team is off (no "team" in config.json; `board team join <invite> --hub <url> --name <name>` turns it on)',
@@ -718,6 +722,14 @@ async function team(): Promise<void> {
           ? 'the board does not run: open it first (herdr plugin action invoke agent-board.open)'
           : 'the board does not run the team: restart it'),
     )
+  if (inboxOp) {
+    const I = await import('./team-inbox-cli.ts')
+    const ctx = { webPort, roster: view.roster }
+    if (op === 'inbox') return console.log(await I.teamInbox(more, ctx))
+    const words = more.filter((a, i) => a !== '--json' && a !== '--every' && more[i - 1] !== '--every')
+    if (words.length) throw new Error(TEAM_USAGE)
+    return await I.teamWatch(ctx, { json: more.includes('--json'), everyMs: I.everyMs(more), out: l => console.log(l) })
+  }
   if (agentOp) {
     const A = await import('./team-agents-cli.ts')
     const line = await A.teamAgents(op ?? '', more, {

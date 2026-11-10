@@ -14,6 +14,8 @@ export interface EntryInput {
   tasks: { open: number; proposed: number } | null
   /** Cards on show that need the user. */
   next: number
+  /** The team's unread messages (#355); null: the page does not offer the team. */
+  team?: { unread: number } | null
   /** The usage pill's own text. */
   usage: string
   presence: PresenceSwitchView | null
@@ -21,7 +23,7 @@ export interface EntryInput {
 
 /** Every action's entry; More lists those that left the row (moreEntries). */
 export function toolbarEntries(input: EntryInput, t: Translator): ToolbarEntry[] {
-  const { canMutate, schedule, tasks, next, usage, presence } = input
+  const { canMutate, schedule, tasks, next, usage, presence, team } = input
   const proposed = tasks?.proposed ?? 0
   return [
     ...(presence
@@ -36,6 +38,11 @@ export function toolbarEntries(input: EntryInput, t: Translator): ToolbarEntry[]
       label: t('todo.open'),
       ...(tasks && tasks.open > 0 && { count: tasks.open }),
       ...(proposed > 0 && { hint: t('todo.toConfirm', { n: proposed }), alert: true }),
+    },
+    {
+      id: 'team-open',
+      label: t('team.title'),
+      ...(team && team.unread > 0 && { count: team.unread, alert: true }),
     },
     {
       id: 'new-session',

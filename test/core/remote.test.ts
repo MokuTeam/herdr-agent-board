@@ -4,7 +4,9 @@ import {
   bearerOf,
   deskSteps,
   desktopOnly,
+  isOwnerLogin,
   localOnly,
+  ownerTeam,
   remoteConfig,
   STATUS_RETRY_MS,
   statusVerdict,
@@ -147,4 +149,42 @@ test('marking a desk says how to attach herdr from it: user, host, ssh config, h
   expect(lines).toContain('HostName vps.tail1.ts.net  User claude')
   expect(lines).toContain('herdr --remote board')
   expect(deskSteps('claude', null).join('\n')).toContain('ssh claude@<this computer>')
+})
+
+test("the owner's own logins may read and write the team away from the computer, not what changes who may act (#355)", () => {
+  for (const path of [
+    '/api/team',
+    '/api/team/thread/x',
+    '/api/team/threads',
+    '/api/team/threads/team/general',
+    '/api/team/threads/team/general/mute',
+    '/api/team/threads/team/general/unmute',
+    '/api/team/send',
+    '/api/team/draft/d1/send',
+    '/api/team/draft/d1/discard',
+    '/api/team/read',
+    '/api/team/unread',
+  ])
+    expect([path, ownerTeam(path)]).toEqual([path, true])
+  for (const path of [
+    '/api/team/',
+    // an agent's post names a session here as the thread's handler: as assign, the computer's only
+    '/api/team/post',
+    '/api/team/trust',
+    '/api/team/agents',
+    '/api/team/listen',
+    '/api/team/draft',
+    '/api/team/focus',
+    '/api/team/threads/team/general/assign',
+    '/api/team/threads/team/general/release',
+    '/api/team/thread/x/y',
+    '/api/%74eam',
+    '/api/teams',
+    '/api/remote',
+  ])
+    expect([path, ownerTeam(path)]).toEqual([path, false])
+  expect(isOwnerLogin('Me@Example.com', 'me@example.com')).toBe(true)
+  expect(isOwnerLogin('friend@example.com', 'me@example.com')).toBe(false)
+  expect(isOwnerLogin(null, 'me@example.com')).toBe(false)
+  expect(isOwnerLogin('me@example.com', null)).toBe(false)
 })

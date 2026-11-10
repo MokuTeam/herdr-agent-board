@@ -144,6 +144,8 @@ export interface BoardPayload {
    * config.json's `team` is on; a board without it sends none.
    */
   teamRev?: number
+  /** The team's unread messages (#355), only while `team` is on. */
+  teamUnread?: number
   /**
    * The Omarchy theme the Terminal style takes its colors from (src/adapters/omarchy.ts): a stamp
    * that changes with it, only on a computer with Omarchy. The page loads omarchy-theme.css again.

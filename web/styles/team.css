@@ -4,12 +4,11 @@
 .team-body .hint { margin: 0; color: var(--label-2); font-size: 12.5px; }
 .team-state { margin: 0; font-weight: 600; }
 .team-state.revoked, .team-state.error { color: var(--red, var(--accent)); }
-.team-roster, .team-thread { display: flex; flex-direction: column; gap: 6px; }
+.team-roster, .team-thread, .team-scope { display: flex; flex-direction: column; gap: 6px; }
 .team-peer { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 8px; background: var(--fill-2); }
 .team-peer.on { box-shadow: inset 3px 0 0 var(--accent); }
 .team-peer.changed { box-shadow: inset 3px 0 0 var(--orange, var(--accent)); }
-.team-pick { display: flex; align-items: center; gap: 8px; padding: 0; border: 0; background: none; text-align: start; cursor: pointer; }
-.team-pick:hover .team-name { color: var(--accent); }
+.team-pick { display: flex; align-items: center; gap: 8px; }
 .team-name { font-weight: 600; }
 .team-dot.on { --c: var(--green, var(--accent)); }
 .team-fp { font-family: ui-monospace, monospace; }
@@ -18,8 +17,56 @@
 .team-msg.in { box-shadow: inset 3px 0 0 var(--accent); }
 .team-msg.held { opacity: 0.7; }
 .team-compose { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
-.team-compose textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 0; border-radius: 8px; resize: vertical; background: var(--fill-2); }
+.team-compose textarea, .team-compose input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 0; border-radius: 8px; resize: vertical; background: var(--fill-2); }
 .team-compose .mini { padding: 3px 12px; border: 0; border-radius: 6px; background: var(--fill); font-size: 12px; cursor: pointer; }
 .team-compose .mini:hover:not(:disabled) { color: var(--accent); }
 .team-compose .mini:disabled { opacity: 0.5; cursor: default; }
 .team-changed .mini { padding: 3px 9px; border: 0; border-radius: 6px; background: var(--fill); font-size: 12px; cursor: pointer; }
+/* Unread team messages (#355): the head's Team button and each person in the panel. */
+.pill-toggle.unread .n { background: var(--accent); color: #fff; }
+.team-unread { display: inline-grid; place-items: center; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Threads (#355 on #216's model): the list (the team chat first, each person's threads under them)
+   and the thread on show, which comes in from the side it goes back to. */
+.team-scope-head { display: flex; align-items: center; gap: 8px; }
+.team-scope-head h3 { margin: 0; flex: 1; }
+.team-rows { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
+.team-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: 0; border-radius: 7px; background: none; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+.team-scope > .team-row { background: var(--fill-2); }
+.team-row:hover { background: var(--fill); }
+.team-row:active { transform: scale(0.99); }
+.team-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-row.muted .team-row-title, .team-scope.muted > .team-row .team-row-title { color: var(--label-2); }
+.team-muted, .team-switch-label, .team-lanes .todo-meta { flex: none; font-size: 11.5px; }
+.team-thread-head { display: flex; align-items: center; gap: 8px; }
+.team-thread-head .team-back { margin-inline-end: auto; }
+.team-body .team-thread-title { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; text-transform: none; color: var(--label); }
+.team-thread .sheet-meta { margin: 0; overflow-wrap: anywhere; }
+.team-back, .team-compose-actions .mini, .team-lane, .team-agents .mini { padding: 3px 10px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font-size: 12px; cursor: pointer; }
+.team-back:hover, .team-lane:hover:not(:disabled) { color: var(--accent); }
+.team-compose-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.team-thread { animation: team-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.team-me { animation: team-back 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes team-in { from { opacity: 0; transform: translateX(24px); } }
+@keyframes team-back { from { opacity: 0; transform: translateX(-24px); } }
+@media (prefers-reduced-motion: reduce) {
+  .team-thread, .team-me { animation: team-fade 150ms ease; }
+  @keyframes team-fade { from { opacity: 0; } }
+}
+/* The owner's agent switches (#216's routes, #355's controls). */
+.team-agents { display: flex; flex-direction: column; gap: 8px; }
+.team-agents summary { list-style: none; cursor: pointer; }
+.team-agents summary::-webkit-details-marker { display: none; }
+.team-agents summary h3::after { content: " ›"; }
+.team-agents[open] summary h3::after { content: " ⌄"; }
+.team-agents > * + * { margin-top: 8px; }
+.team-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.team-agent { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; border-radius: 8px; background: var(--fill-2); }
+.team-agent.off { opacity: 0.6; }
+.team-lanes { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.team-lane[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 20%, var(--fill)); color: var(--accent); }
+.team-switch { position: relative; flex: none; width: 38px; height: 22px; padding: 0; border: 0; border-radius: 11px; background: var(--fill); cursor: pointer; transition: background 150ms ease; }
+.team-switch[aria-checked="true"] { background: var(--accent); }
+.team-switch:disabled { opacity: 0.5; cursor: default; }
+.team-switch:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); outline: 0; }
+.team-knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.25); transition: transform 150ms ease; }
+.team-switch[aria-checked="true"] .team-knob { transform: translateX(16px); }
