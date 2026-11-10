@@ -2,8 +2,8 @@
 // in the row (components/Toolbar.tsx, `.toolbar-actions`) with the rest in More. models/toolbar-fit.ts
 // decides; this measures and draws.
 //
-// One row while the title, the filters (folded into pills) and every action fit side by side, else two:
-// the title and the actions on top, the filters under them. In two rows the actions show as many as
+// One row while the summary (a wide board's only), the filters (folded into pills) and every action fit
+// side by side, else two: the actions on top, the filters under them. In two rows the actions show as many as
 // their row holds, in PRIORITY order, and More the rest. The row's width does not depend on what it
 // shows (the stylesheet gives it what is left of its row in two rows), so fitting it again never resizes it. The
 // widths are taken once per set of actions and words, all shown within one task so nothing flickers;
@@ -35,8 +35,6 @@ interface Sizes {
   more: number
   /** The pinned buttons and the gap before each. */
   pinned: number
-  /** The title's width. */
-  title: number
 }
 
 interface Measured {
@@ -47,7 +45,7 @@ interface Measured {
   two: Sizes
 }
 
-const NONE_SIZED: Sizes = { items: [], more: 0, pinned: 0, title: 0 }
+const NONE_SIZED: Sizes = { items: [], more: 0, pinned: 0 }
 const NOT_MEASURED: Measured = { key: '', one: NONE_SIZED, two: NONE_SIZED }
 
 /** The row's actions on show in the order the page draws them: those that may leave, the pinned ones. */
@@ -71,7 +69,6 @@ function measure(el: Elements, now: ReturnType<typeof actionsIn>): Measured {
       items: now.items.map(item => ({ id: item.id, width: width(item) })),
       more: more ? width(more) : 0,
       pinned: now.pinned.reduce((sum, pin) => sum + gap + width(pin), 0),
-      title: el.title ? width(el.title) : 0,
     }
     el.actions.classList.remove('measuring')
     return sizes
@@ -82,7 +79,7 @@ function measure(el: Elements, now: ReturnType<typeof actionsIn>): Measured {
 }
 
 export interface ToolbarShape {
-  /** Two rows: the title and the actions, then the filters. */
+  /** Two rows: the actions, then the filters. */
   rows: boolean
   /** The ids that left the row for More (two rows only). */
   over: ReadonlySet<string>
@@ -93,7 +90,7 @@ interface Elements {
   fit: HTMLElement
   /** `.toolbar-actions`. */
   actions: HTMLElement
-  /** The title's `h1`. */
+  /** The summary (`#summary`), the only thing at the start of the row: no width while it is not shown. */
   title: HTMLElement | null
 }
 
@@ -105,8 +102,10 @@ export function fitToolbarIn(el: Elements, widths: Measured): { shape: ToolbarSh
   const measured = now.key === widths.key ? widths : measure(el, now)
   const gap = Number.parseFloat(getComputedStyle(el.actions).columnGap) || 0
   const { one, two } = measured
+  // The summary is not measured with the rest: it shows only on a wide board (a container query of app.css), so its width goes with the toolbar's, not with the actions.
+  const title = el.title ? width(el.title) : 0
   const natural = one.items.reduce((sum, it, i) => sum + (i ? gap : 0) + it.width, 0) + one.pinned
-  const rows = !oneRowFits(total, { title: one.title, actions: natural })
+  const rows = !oneRowFits(total, { title, actions: natural })
   if (!rows) return { shape: { rows, over: NONE }, widths: measured }
   // The row's own width is the two-row layout's: drawn first, then read.
   el.fit.toggleAttribute('data-rows', true)
@@ -146,7 +145,7 @@ export function useToolbarFit(
     const container = fit.current
     const row = actions.current
     if (!container || !row) return null
-    return { fit: container, actions: row, title: container.querySelector<HTMLElement>('h1') }
+    return { fit: container, actions: row, title: container.querySelector<HTMLElement>('#summary') }
   }
 
   // On every draw: the actions on show and their words; fitted again (and drawn before the frame

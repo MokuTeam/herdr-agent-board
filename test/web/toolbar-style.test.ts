@@ -38,8 +38,11 @@ describe('no row of the toolbar wraps', () => {
     expect(plain(app)).toMatch(/\.toolbar-row \{ flex-wrap: wrap; gap: 0 6px; \}/)
     expect(plain(app)).toMatch(/\.toolbar-row::after \{ content: ""; order: 2; flex: 0 0 100%; \}/)
     expect(plain(app)).toMatch(/\.titles \{ order: 0; flex: 1 1 auto; margin-right: 10px; \}/)
-    // `.toolbar .toolbar-row` (two classes) over `.toolbar-row` (one); `.toolbar .titles` likewise.
-    expect(rule(css, '.toolbar .titles')).toMatchObject({ flex: 'none', order: '0', margin: '0' })
+    // `.toolbar .toolbar-row` (two classes) over `.toolbar-row` (one). `.titles` (the page's name for screen
+    // readers, and the summary) draws no box, so its flex, order and margin apply to nothing; the summary,
+    // its only thing in the row, answers for itself.
+    expect(rule(css, '.toolbar .titles')).toMatchObject({ display: 'contents' })
+    expect(rule(css, '.toolbar .summary')).toMatchObject({ flex: 'none', order: '0', margin: '0' })
     expect(rule(css, '.toolbar #next-attention, .toolbar .limits')).toMatchObject({ 'margin-top': '0', order: '0' })
     expect(rule(css, '.toolbar .live')).toMatchObject({ 'margin-top': '0', order: '0' })
     expect(rule(css, '.toolbar .controls')).toMatchObject({ display: 'contents' })
@@ -52,12 +55,19 @@ describe('no row of the toolbar wraps', () => {
     expect(links.indexOf('toolbar.css')).toBeLessThan(links.indexOf('look-terminal.css'))
   })
 
-  test('the two-row layout is a grid of two lines: the title and the actions, then the filters on a line of their own', () => {
+  test('the two-row layout is a grid of two lines: the actions (after the summary, where there is one), then the filters on a line of their own', () => {
+    // No gap between the columns: the summary's own margin is the gap after it, so while it is hidden
+    // (no box, an empty first column) the actions have the whole row.
     expect(rule(css, '.toolbar-fit[data-rows] .toolbar-row')).toMatchObject({
       display: 'grid',
       'grid-template-columns': 'auto minmax(0, 1fr)',
+      gap: '0',
     })
-    expect(rule(css, '.toolbar-fit[data-rows] .titles')).toMatchObject({ 'grid-column': '1', 'grid-row': '1' })
+    expect(rule(css, '.toolbar-fit[data-rows] .summary')).toMatchObject({
+      'grid-column': '1',
+      'grid-row': '1',
+      margin: '0 8px 0 0',
+    })
     expect(rule(css, '.toolbar-fit[data-rows] .toolbar-actions')).toMatchObject({ 'grid-column': '2', 'grid-row': '1' })
     expect(rule(css, '.toolbar-fit[data-rows] .toolbar-filters')).toMatchObject({
       'grid-column': '1 / -1',
@@ -94,14 +104,19 @@ describe('what leaves the row and what is folded', () => {
     )
   })
 
-  test('the actions take what is left of the row, whatever they hold, and the first may shrink', () => {
+  test('the actions take what is left of the row, whatever they hold, and the first (Next) may shrink', () => {
     expect(rule(css, '.toolbar-actions')).toMatchObject({
       flex: '1 1 0',
       'min-width': '0',
       'justify-content': 'flex-end',
     })
-    expect(rule(css, '.toolbar-actions > #presence-switch')).toMatchObject({ flex: '0 1 auto', 'min-width': '0' })
-    expect(rule(css, '#presence-switch > span:last-child')).toMatchObject({ 'text-overflow': 'ellipsis' })
+    expect(rule(css, '.toolbar-actions > #next-attention')).toMatchObject({ flex: '0 1 auto', 'min-width': '0' })
+    expect(rule(css, '#next-attention > span')).toMatchObject({ 'text-overflow': 'ellipsis' })
+  })
+
+  test('there is no title to tap: nothing in the sheet makes the title a pointer', () => {
+    expect(plain(css)).not.toMatch(/\.titles\s*\{[^}]*cursor/)
+    expect(plain(css)).not.toMatch(/\.folded \.titles/)
   })
 
   test('folded filters have no height and no gap above them, cannot be reached, and may move while they fold', () => {

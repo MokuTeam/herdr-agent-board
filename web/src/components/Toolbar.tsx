@@ -1,12 +1,13 @@
-// The toolbar: the title with the board's summary under it while the row has room (else in the
-// title's tooltip), the filters (the lanes control, the profile switch when two or more profiles
-// are shown, search) and the actions (new session, categories, the schedule, Tasks, the calendar,
-// Time, the archive, Next, the presence switch, the quiet notes, the usage pill), then More, Settings
-// (the gear) and the live dot; the read-only banner and the column heads under it. Over 1200 px of
-// its own width it is one row, the filters beside the title; below that two, the title and the
-// actions on top and the filters under them, and the lanes scroll the filters away (#347,
+// The toolbar: the board's summary at the start of the row while the board is wide enough for it, the
+// filters (the lanes control, the profile switch when two or more profiles are shown, search) and
+// the actions (new session, categories, the schedule, Tasks, the calendar, Time, the archive, Next,
+// the presence switch, the quiet notes, the usage pill), then More, Settings (the gear) and the
+// live dot; the read-only banner and the column heads under it. The page's name is a heading for
+// screen readers only (#351): it carried nothing a sighted user needed, and its room goes to the
+// actions. When the whole of it fits the toolbar is one row, the filters beside the actions; else two,
+// the actions on top and the filters under them, and the lanes scroll the filters away (#347,
 // hooks/useToolbarCollapse.ts): a button with the filters' count stands for them while they are
-// folded, and the title brings them back. The actions in the row are as many as its width holds, in
+// folded, and brings them back. The actions in the row are as many as its width holds, in
 // the order of models/toolbar-fit.ts; the rest are in More (hooks/useToolbarFit.ts), which lists them
 // with their counts. The lanes control and the profile switch each fold into a pill where the row has no
 // room for all of their segments (hooks/useSegmentFolds.ts). The icon-only buttons' labels carry their
@@ -38,7 +39,6 @@ import {
   laneOptions,
   scheduleBadge,
   summaryParts,
-  summaryText,
 } from '../models/toolbar.ts'
 import { filterCount, filterText } from '../models/toolbar-collapse.ts'
 import { moreAlert, moreEntries, TOOLBAR_PRIORITY } from '../models/toolbar-fit.ts'
@@ -136,7 +136,6 @@ export function Toolbar({
   const lanes = data && laneOptions(data.categories, visible, ui.filter, categoryOf, t)
   const profiles = data && profileOptions(data.profiles, anyProfile, t)
   const profile = pickedProfile(ui.profile, data?.profiles)
-  const titles = useRef<HTMLDivElement>(null)
   const fit = useRef<HTMLDivElement>(null)
   const row = useRef<HTMLDivElement>(null)
   const filters = useRef<HTMLDivElement>(null)
@@ -156,15 +155,6 @@ export function Toolbar({
   useEffect(() => {
     if (data) document.title = documentTitle(data.items)
   }, [data])
-
-  // A tap on the title brings the folded filters back: the pointer's way to what the filters button is for the keys.
-  const { collapsed, open: openFilters } = collapse
-  useEffect(() => {
-    const el = titles.current
-    if (!el || !collapsed) return
-    el.addEventListener('click', openFilters)
-    return () => el.removeEventListener('click', openFilters)
-  }, [collapsed, openFilters])
 
   // The usage popover and the setup list go under their pill, or under More while it is in it (a
   // button out of the row has no place on the page). Set on every draw: a pill drawn anew has its own again.
@@ -223,9 +213,9 @@ export function Toolbar({
       {/* The row's own width: the page's, less a side panel lying over the board (--over-*). */}
       <div className="toolbar-fit" ref={fit}>
         <div className="toolbar-row" ref={row}>
-          {/* The summary hides in a narrower toolbar: its words are the title's tooltip too. */}
-          <div className="titles" ref={titles} title={parts ? summaryText(parts) : undefined}>
-            <h1>{t('tb.title')}</h1>
+          {/* The name of the page is for screen readers; the summary hides in a narrower toolbar. */}
+          <div className="titles">
+            <h1 className="sr-only">{t('tb.title')}</h1>
             <Summary parts={parts} />
           </div>
           <div className="controls">

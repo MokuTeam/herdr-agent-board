@@ -1,8 +1,8 @@
 // The toolbar (#347) on a real DOM (jsdom): at each width it is one row or two and the actions that
 // do not fit are in More, in the order of the priority list; More lists them with their counts and
 // what it picks does what the button does; in two rows scrolling down folds the filters away on the
-// board's spring, the filters' button says how many are on and what, scrolling up, the title and the
-// button bring them back, a filter in use keeps them; one row has nothing to fold; reduced motion
+// board's spring, the filters' button says how many are on and what, scrolling up or the button
+// bring them back, a filter in use keeps them; one row has nothing to fold; reduced motion
 // cross-fades. Layout is not here (jsdom has none): what the stylesheet would make of each control
 // is stood in by a fake getComputedStyle and clientWidth, the observers and the frames are run by
 // hand. What the stylesheet does with the attributes is read from its text in toolbar-style.test.ts.
@@ -59,7 +59,9 @@ let clock = 1000
 /** What a fade started on an element was asked for. */
 const fades: { el: Element; keyframes: unknown }[] = []
 
-const TITLE = 62
+/** The summary, which only a wide board shows (app.css hides it below 1580 px): then it is the start of the row. */
+const SUMMARY = 240
+const summaryShown = () => world.total > 1580
 /** What the stylesheet would make of each action: icons 28, the pills and the usage chip wider. */
 const WIDTHS: Record<string, number> = {
   'presence-switch': 130,
@@ -77,13 +79,14 @@ const WIDTHS: Record<string, number> = {
   settings: 28,
   live: 8,
 }
-/** The actions' row: what is left of the toolbar beside the title and the gap (two rows). */
-const room = () => world.total - TITLE - 10
+/** The actions' row (two rows): the page's width less its 16 px gutters, and the summary where it is shown. */
+const room = () => world.total - 32 - (summaryShown() ? SUMMARY + 8 : 0)
 
 function fakeStyle(el: Element): Record<string, string> {
   const px = (n: number) => `${n}px`
   if (el.classList.contains('toolbar-actions')) return { width: px(room()), columnGap: '6px' }
-  if (el.tagName === 'H1') return { width: px(TITLE), columnGap: '0px' }
+  // Hidden, the summary has no box and so no width: the row has no gap before the filters either.
+  if (el.id === 'summary') return { width: px(summaryShown() ? SUMMARY : 0), columnGap: '0px' }
   if (el.classList.contains('toolbar-filters')) {
     const folded = el.hasAttribute('data-folded')
     return {
@@ -376,8 +379,8 @@ test('two rows from 320 to 1200 px: the actions that do not fit are the end of t
     // What is in More is the end of the list as it is on show now, never a pick of it.
     expect(left).toEqual(all.slice(all.length - left.length))
     expect(moreShown()).toBe(left.length > 0)
-    // The first stays whatever the width: the presence pill, which shrinks with an ellipsis.
-    expect(left).not.toContain('presence-switch')
+    // The first stays whatever the width: Next, which shrinks with an ellipsis.
+    expect(left).not.toContain('next-attention')
     // More leaves a wider toolbar fewer actions, never more.
     expect(left.length).toBeLessThanOrEqual(before)
     before = left.length
@@ -395,15 +398,31 @@ test('two rows from 320 to 1200 px: the actions that do not fit are the end of t
   expect(before).toBe(0)
 })
 
-test('a phone keeps the presence pill and Tasks and the rest is in More; a wider toolbar grows back to one row', async () => {
+test('a board that started wide takes one row where everything fits: the summary it showed there takes no room now', async () => {
+  world.total = 2560
+  await mount()
+  expect(rows()).toBe(false)
+  // Everything and the filters need about 1160 px; the summary (240 px, wide boards only) is gone below 1580.
+  await resizeTo(1300)
+  expect(rows()).toBe(false)
+  expect(over()).toEqual([])
+  await resizeTo(1100)
+  expect(rows()).toBe(true)
+})
+
+test('a phone keeps Next, and the presence pill beside it where the row holds both; a wider toolbar grows back to one row', async () => {
   await mount()
   await resizeTo(390)
   expect(rows()).toBe(true)
-  expect(over().slice(0, 1)).not.toContain('presence-switch')
+  expect(over()).not.toContain('next-attention')
+  expect(over()).not.toContain('presence-switch')
+  expect(over()).toContain('todos-open')
   expect(over()).toContain('limits')
   expect(over()).toContain('cats-open')
-  expect(over()).not.toContain('todos-open')
+  // The narrowest phone: Next alone, and the pill in More with the rest.
   await resizeTo(320)
+  expect(over()).not.toContain('next-attention')
+  expect(over()).toContain('presence-switch')
   expect(over()).toContain('todos-open')
   await resizeTo(2000)
   expect(rows()).toBe(false)
@@ -437,14 +456,16 @@ test('More lists what left the row in its order with the counts, and its dot say
   expect(calls.dispatched).toEqual([{ type: 'limits', open: true }])
 })
 
-test('the offer of detection is the second action in the row, and in More once it no longer fits', async () => {
+test('the offer of detection comes right after the presence pill, and is in More once the row does not hold it', async () => {
   const { opened } = await mount({ presence: { hint: 'away' } })
-  await resizeTo(390)
+  await resizeTo(600)
   expect(present()).toContain('presence-offer')
-  expect(over()).toContain('todos-open')
   expect(over()).not.toContain('presence-offer')
-  await resizeTo(320)
+  expect(over()).not.toContain('presence-switch')
+  await resizeTo(390)
   expect(over()).toContain('presence-offer')
+  expect(over()).toContain('todos-open')
+  expect(over()).not.toContain('presence-switch')
   await clickOn(need('#toolbar-more'))
   const entries = opened[0]?.entries ?? []
   expect(entries.map(e => e.id)).toEqual(over())
@@ -514,7 +535,7 @@ test('the folded toolbar says what is filtered: how many, and which', async () =
   expect(peek.classList.contains('on')).toBe(true)
 })
 
-test('the filters button, and a tap on the title, bring the folded filters back, for a little scrolling down', async () => {
+test('the filters button brings the folded filters back, for a little scrolling down', async () => {
   await mount()
   await resizeTo(390)
   await scrollTo(300)
@@ -528,11 +549,13 @@ test('the filters button, and a tap on the title, bring the folded filters back,
   expect(filters.hasAttribute('data-folded')).toBe(false)
   await scrollTo(380)
   expect(filters.hasAttribute('data-folded')).toBe(true)
+  // There is no title to tap (#351): the summary and the page's name do nothing to the filters.
   await clickOn(need('.titles'))
+  await clickOn(need('h1'))
   await frames()
-  expect(filters.hasAttribute('data-folded')).toBe(false)
-  // The title does nothing while the filters are open.
-  await clickOn(need('.titles'))
+  expect(filters.hasAttribute('data-folded')).toBe(true)
+  await clickOn(need('#toolbar-peek'))
+  await frames()
   expect(filters.hasAttribute('data-folded')).toBe(false)
 })
 
@@ -652,18 +675,18 @@ test('another typeface (the Terminal look) takes the widths anew: what fitted in
   await mount()
   await resizeTo(390)
   const before = over()
-  expect(before).not.toContain('todos-open')
-  // Wider in the monospace look, with no word changed: Tasks no longer fits.
-  WIDTHS['todos-open'] = 140
+  expect(before).not.toContain('presence-switch')
+  // Wider in the monospace look, with no word changed: the presence pill no longer fits.
+  WIDTHS['presence-switch'] = 240
   await act(async () => {
     dom.window.document.documentElement.setAttribute('data-look', 'terminal')
     await Promise.resolve()
   })
   await frames()
   try {
-    expect(over()).toContain('todos-open')
+    expect(over()).toContain('presence-switch')
   } finally {
-    WIDTHS['todos-open'] = 52
+    WIDTHS['presence-switch'] = 130
     dom.window.document.documentElement.removeAttribute('data-look')
   }
 })

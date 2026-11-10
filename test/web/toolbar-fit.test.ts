@@ -6,6 +6,8 @@ import {
   fitToolbar,
   moreAlert,
   moreEntries,
+  oneRowFits,
+  ROW_GAP,
   TOOLBAR_PRIORITY,
   type ToolbarEntry,
   type ToolbarItem,
@@ -36,8 +38,8 @@ const ALL: ToolbarItem[] = TOOLBAR_PRIORITY.map(id => ({ id, width: WIDTHS[id] ?
 const PINNED = 28 + GAP + 8 + GAP
 const opts = { gap: GAP, more: MORE, pinned: PINNED }
 
-/** The room of the actions at a toolbar `width` px wide: less the title and the gap after it. */
-const roomAt = (width: number) => width - 32 - 62 - 10
+/** The room of the actions at a toolbar `width` px wide: less the page's gutters (there is no title: #351). */
+const roomAt = (width: number) => width - 32
 
 describe('the toolbar fit', () => {
   test('a row with room for all of them shows all of them and no More', () => {
@@ -71,13 +73,13 @@ describe('the toolbar fit', () => {
         fit.shown.reduce((sum, id, i) => sum + (i ? GAP : 0) + (WIDTHS[id] ?? 28), 0) +
         PINNED +
         (fit.over.length ? GAP + MORE : 0)
-      // The first alone may not fit at the very narrowest: it shrinks (the pill cuts its words).
+      // The first alone may not fit at the very narrowest: it shrinks (Next cuts its words).
       if (fit.shown.length > 1 || fit.over.length === 0) expect(used).toBeLessThanOrEqual(room)
     }
   })
 
   test('the first action always stays: the row is never only More', () => {
-    for (const room of [0, 10, 60, 100]) expect(fitToolbar(ALL, room, opts).shown).toEqual(['presence-switch'])
+    for (const room of [0, 10, 60, 100]) expect(fitToolbar(ALL, room, opts).shown).toEqual(['next-attention'])
   })
 
   test('an action too wide for the room does not let a narrower one after it jump the queue', () => {
@@ -106,11 +108,19 @@ describe('the toolbar fit', () => {
       i => !['presence-offer', 'presence-call', 'setup-note', 'backup-note', 'wake-note'].includes(i.id),
     )
     const at = (width: number) => fitToolbar(usual, roomAt(width), opts).shown
-    // A phone keeps what it uses most; a tablet most of the list; a desk all of it.
-    expect(at(320)).toEqual(['presence-switch'])
-    expect(at(390)).toEqual(['presence-switch', 'todos-open'])
+    // A phone keeps what it uses most, Next first (#351); a tablet most of the list; a desk all of it.
+    expect(at(320)).toEqual(['next-attention'])
+    expect(at(390)).toEqual(['next-attention', 'presence-switch'])
     expect(at(768).length).toBeGreaterThan(at(390).length)
     expect(at(1280)).toEqual(usual.map(i => i.id))
+  })
+
+  test('Next is in the row wherever the presence pill is, and the pill leaves before it', () => {
+    for (let width = 280; width <= 2560; width += 1) {
+      const { shown, over } = fitToolbar(ALL, roomAt(width), opts)
+      expect(shown).toContain('next-attention')
+      if (shown.includes('presence-switch')) expect(over).not.toContain('next-attention')
+    }
   })
 
   test('nothing is shown for a list with no actions', () => {
@@ -124,11 +134,23 @@ describe('the list in priority order', () => {
     expect(byPriority(drawn).map(i => i.id)).toEqual(['presence-switch', 'new-session', 'cats-open'])
   })
 
-  test('presence first, then Tasks and New, the quiet notes last', () => {
-    expect(TOOLBAR_PRIORITY[0]).toBe('presence-switch')
+  test('Next first, then presence (pill, offer), Tasks and New, the quiet notes last', () => {
+    expect(TOOLBAR_PRIORITY.slice(0, 3)).toEqual(['next-attention', 'presence-switch', 'presence-offer'])
     expect(TOOLBAR_PRIORITY.indexOf('todos-open')).toBeLessThan(TOOLBAR_PRIORITY.indexOf('new-session'))
     expect(TOOLBAR_PRIORITY.slice(-3)).toEqual(['setup-note', 'backup-note', 'wake-note'])
     expect(new Set(TOOLBAR_PRIORITY).size).toBe(TOOLBAR_PRIORITY.length)
+  })
+})
+
+describe('one row or two', () => {
+  test('with no summary at the start of the row there is no gap for it either', () => {
+    const actions = 600
+    const need = 420 + ROW_GAP + actions
+    expect(oneRowFits(need, { title: 0, actions })).toBe(true)
+    expect(oneRowFits(need - 1, { title: 0, actions })).toBe(false)
+    // A summary (a wide board's) takes its width and the gap after it.
+    expect(oneRowFits(need + 200 + ROW_GAP, { title: 200, actions })).toBe(true)
+    expect(oneRowFits(need + 200 + ROW_GAP - 1, { title: 200, actions })).toBe(false)
   })
 })
 

@@ -13,34 +13,35 @@ export const FILTERS_MIN = 420
 
 /** What the one row is made of, in px. */
 export interface RowSizes {
-  /** The title. */
+  /** The summary at the start of the row: 0 while it is not shown (it is only on a wide board). */
   title: number
   /** Every action, the pinned buttons and the gaps between them, whole. */
   actions: number
 }
 
 /**
- * Whether a toolbar `width` px wide holds everything in one row: the title, the filters (folded into
- * pills if they must) and every action, none of them in More. Else it takes two rows (the title and
- * the actions, then the filters). The filters fold before an action leaves for More: this is what
- * keeps them from taking the room first.
+ * Whether a toolbar `width` px wide holds everything in one row: the summary where there is one, the
+ * filters (folded into pills if they must) and every action, none of them in More. Else it takes two
+ * rows (the actions, then the filters). The filters fold before an action leaves for More: this is
+ * what keeps them from taking the room first. No summary, no gap before the filters.
  */
 export const oneRowFits = (width: number, { title, actions }: RowSizes, filters = FILTERS_MIN): boolean =>
-  title + ROW_GAP + filters + ROW_GAP + actions <= width
+  (title > 0 ? title + ROW_GAP : 0) + filters + ROW_GAP + actions <= width
 
 /**
  * The actions that may leave the row, the most used first: what stays longest comes first, what
  * goes first comes last. Each is the id of its button (the calendar's: of its wrapper). Settings,
- * More and the live dot are not here: they never leave.
+ * More and the live dot are not here: they never leave. Next is first (#351): it is used all the
+ * time, where presence is mostly glanced at, so a phone's row keeps Next and gives presence to More.
  */
 export const TOOLBAR_PRIORITY: readonly string[] = [
+  'next-attention',
   'presence-switch',
   'presence-offer',
   'todos-open',
   'new-session',
   'presence-call',
   'sched-open',
-  'next-attention',
   'cal-tb',
   'time-open',
   'limits',
@@ -76,7 +77,7 @@ export interface ToolbarFit {
 /**
  * How a row `room` px wide holds `items`, given in priority order: as many from the front as fit
  * beside what is pinned, and More (`more` px) for the rest; no More when all of them fit. The
- * first always stays, shrinking if it must (the presence pill cuts its words with an ellipsis): a
+ * first always stays, shrinking if it must (Next cuts its words with an ellipsis): a
  * row never has nothing but More. No later item takes the place of one that does not fit, so
  * what is in More is always the end of the list, never a pick of it.
  */
