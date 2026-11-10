@@ -128,6 +128,12 @@ const ui = (fields: Partial<BoardUi>) => fields
  * are toolbar-dom.test.tsx and toolbar-menu.test.ts), the rest is the old page's markup moved, not changed.
  */
 function asToolbarRows(toolbar: Node[], actual: Node[]): void {
+  // #351: the page's name is for screen readers only, and the summary's words are no title's tooltip.
+  setAttr(
+    find(toolbar, el => el.tag === 'h1'),
+    'class',
+    'sr-only',
+  )
   const controls = byClass(toolbar, 'controls')
   const els = controls.children.filter((n): n is Element => n.kind === 'element')
   const take = (id: string) => {
@@ -222,7 +228,6 @@ describe('toolbar markup parity', () => {
         '<div class="col-head" data-col="done"><span class="dot" style="--c:var(--blue)"></span><span class="t">Done</span><span class="n">1</span></div>' +
         '<div class="col-head" data-col="idle"><span class="dot" style="--c:var(--gray)"></span><span class="t">Idle</span><span class="n">1</span></div>',
     )
-    setAttr(byClass(old, 'titles'), 'title', '5 sessions · 1 working · 1 needs you · 1 waits on others · 1 asleep')
     const limits = byId(old, 'limits')
     removeAttr(limits, 'hidden')
     setAttr(limits, 'aria-label', 'Claude usage')
@@ -279,7 +284,6 @@ describe('toolbar markup parity', () => {
         '<div class="col-head" data-col="done"><span class="dot" style="--c:var(--blue)"></span><span class="t">Готово</span><span class="n">1</span></div>' +
         '<div class="col-head vacant" data-col="idle"><span class="dot" style="--c:var(--gray)"></span><span class="t">Простой</span><span class="n">0</span></div>',
     )
-    setAttr(byClass(page, 'titles'), 'title', '5 сессий · 1 работает · 1 ждёт тебя · 1 ждёт ответа извне · 1 спит')
     const limits = byId(page, 'limits')
     removeAttr(limits, 'hidden')
     setAttr(limits, 'aria-label', 'Расход Claude')

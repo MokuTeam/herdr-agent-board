@@ -2,8 +2,8 @@
 // in the row (components/Toolbar.tsx, `.toolbar-actions`) with the rest in More. models/toolbar-fit.ts
 // decides; this measures and draws.
 //
-// One row while the title, the filters (folded into pills) and every action fit side by side, else two:
-// the title and the actions on top, the filters under them. In two rows the actions show as many as
+// One row while the summary (a wide board's only), the filters (folded into pills) and every action fit
+// side by side, else two: the actions on top, the filters under them. In two rows the actions show as many as
 // their row holds, in PRIORITY order, and More the rest. The row's width does not depend on what it
 // shows (the stylesheet gives it what is left of its row in two rows), so fitting it again never resizes it. The
 // widths are taken once per set of actions and words, all shown within one task so nothing flickers;
@@ -35,7 +35,7 @@ interface Sizes {
   more: number
   /** The pinned buttons and the gap before each. */
   pinned: number
-  /** The title's width. */
+  /** The summary's width (0 while it is not shown). */
   title: number
 }
 
@@ -82,7 +82,7 @@ function measure(el: Elements, now: ReturnType<typeof actionsIn>): Measured {
 }
 
 export interface ToolbarShape {
-  /** Two rows: the title and the actions, then the filters. */
+  /** Two rows: the actions, then the filters. */
   rows: boolean
   /** The ids that left the row for More (two rows only). */
   over: ReadonlySet<string>
@@ -93,7 +93,7 @@ interface Elements {
   fit: HTMLElement
   /** `.toolbar-actions`. */
   actions: HTMLElement
-  /** The title's `h1`. */
+  /** The summary (`#summary`), the only thing at the start of the row: no width while it is not shown. */
   title: HTMLElement | null
 }
 
@@ -146,7 +146,7 @@ export function useToolbarFit(
     const container = fit.current
     const row = actions.current
     if (!container || !row) return null
-    return { fit: container, actions: row, title: container.querySelector<HTMLElement>('h1') }
+    return { fit: container, actions: row, title: container.querySelector<HTMLElement>('#summary') }
   }
 
   // On every draw: the actions on show and their words; fitted again (and drawn before the frame

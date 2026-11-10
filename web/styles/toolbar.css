@@ -27,7 +27,12 @@
    the controls on rows of their own and moved the pills about; none of that is the toolbar's now. */
 .toolbar .toolbar-row { flex-wrap: nowrap; gap: 16px; }
 .toolbar .toolbar-row::after { display: none; }
-.toolbar .titles { flex: none; order: 0; margin: 0; }
+/* The page's name (the h1, for screen readers only) and the summary: `.titles` draws no box of its own, so
+   upstream's rules for it (flex, order, margin) have nothing to apply to, and the summary is the one
+   thing at the start of the row, with no gap before it while it is hidden (app.css hides it below a
+   wide board). */
+.toolbar .titles { display: contents; }
+.toolbar .summary { flex: none; order: 0; margin: 0; }
 .toolbar .search input { width: 150px; }
 
 .toolbar-filters { display: flex; flex: 0 1 auto; align-items: center; gap: 6px; min-width: 0; order: 1; }
@@ -42,9 +47,9 @@
 .toolbar-actions { display: flex; flex: 1 1 0; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; order: 2; }
 .toolbar-actions > * { flex: none; }
 .toolbar-fit:not([data-rows]) .toolbar-actions { flex: 0 0 auto; margin-left: auto; }
-/* The first may shrink (its words end in an ellipsis) at a width where nothing else fits beside it. */
-.toolbar-actions > #presence-switch { flex: 0 1 auto; min-width: 0; }
-#presence-switch > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* The first (Next) may shrink (its words end in an ellipsis) at a width where nothing else fits beside it. */
+.toolbar-actions > #next-attention { flex: 0 1 auto; min-width: 0; }
+#next-attention > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* What left the row is hidden, kept in the row so its width is known; measuring shows all of it. */
 .toolbar-actions:not(.measuring) > [data-over] { display: none; }
 .toolbar-actions.measuring { justify-content: flex-start; }
@@ -66,11 +71,12 @@
   grid-template-columns: auto minmax(0, 1fr);
   grid-template-rows: minmax(36px, auto) auto;
   align-items: center;
-  gap: 0 8px;
+  gap: 0;
   min-height: 0;
 }
 .toolbar-fit[data-rows] .toolbar-row::after { display: none; }
-.toolbar-fit[data-rows] .titles { grid-column: 1; grid-row: 1; margin: 0; }
+/* The gap after the summary is its own margin, so the actions have the whole row while it is hidden. */
+.toolbar-fit[data-rows] .summary { grid-column: 1; grid-row: 1; margin: 0 8px 0 0; }
 .toolbar-fit[data-rows] .toolbar-actions { grid-column: 2; grid-row: 1; }
 .toolbar-fit[data-rows] .toolbar-filters { grid-column: 1 / -1; grid-row: 2; margin-top: 8px; }
 /* Tasks as an icon with its counts, the words left to screen readers (as the icon-only buttons' are),
@@ -92,8 +98,6 @@
   opacity: 0;
 }
 .toolbar-fit[data-rows] .toolbar-filters[data-moving] { overflow: hidden; }
-/* Folded, the title is the way back for a pointer. */
-.toolbar.folded .titles { cursor: pointer; }
 
 /* ---------------------------------------------------------------- touch, pointers and motion */
 .toolbar-more:active, #toolbar-peek:active { transform: scale(0.94); }

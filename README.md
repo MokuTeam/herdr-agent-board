@@ -197,17 +197,19 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
 - Lanes by category, columns by state, live over Server-Sent Events. A column with no card on
   show narrows to its head (name and count) and the others share its room, gliding as it fills
   or empties.
-- One toolbar row while the title, the filters (the lanes, the profile switch, search) and every
-  action fit side by side, else two, never more and never a row that wraps: the title and the
-  actions on top, the filters under them. The summary sits under the title while there is room
-  (else it is the title's tooltip). In two rows the actions stay as long as the row holds them, in
-  the order they are used: the presence switch, Tasks, New session, the schedule, Next, the
-  calendar, Time, usage, the archive, categories, then the quiet notes (setup, backup, wake).
+- One toolbar row while the filters (the lanes, the profile switch, search) and every action fit
+  side by side, else two, never more and never a row that wraps: the actions on top, the filters
+  under them. There is no title: the page's name is there for screen readers, and on a wide
+  board the summary ("5 sessions · 1 working ...") stands at the start of the row. In two rows
+  the actions stay as long as the row holds them, in the order they are used: Next, the
+  presence switch, Tasks, New session, the schedule, the calendar, Time, usage, the archive,
+  categories, then the quiet notes (setup, backup, wake). On a phone that is Next first, with
+  presence beside it where the row holds both and in "More" where it does not.
   What does not fit is in "More", one menu that lists it with its counts, and its button carries
   a dot while something in it needs a look (a due reminder, a task to confirm, a note). Settings
   (the gear) and the live dot always stay. Scrolling down the lanes folds the filters away on
   the board's spring, from wherever it is and interruptible; scrolling up a little, reaching the
-  top, or tapping the title brings them back, and a filter in use keeps them open. While they are
+  top, or tapping the funnel button brings them back, and a filter in use keeps them open. While they are
   folded a funnel button stands for them, saying how many are on and which; with reduced motion
   they cross-fade instead of sliding. Where the row has no room for all of the lanes, they fold
   into one pill naming the lane on show with its count; it opens every lane, with its count, in a
