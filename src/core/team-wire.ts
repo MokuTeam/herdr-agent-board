@@ -14,6 +14,29 @@ export type Via = (typeof VIAS)[number]
 /** Drafts an agent made that nobody has sent or discarded yet; the next one is refused. */
 export const MAX_DRAFTS = 20
 
+/**
+ * What a board understands beyond protocol v1, said in `hello` and passed on by the hub in the
+ * roster (#216). `threads`: topic threads, team threads and the agent's session name in the body
+ * (Message.body.thread, .agent). A board sends those only to a peer whose caps say so; a peer
+ * without them (an older board, or any peer while the hub is older) gets the plain body.
+ */
+export const CAPS = ['threads'] as const
+export type Cap = (typeof CAPS)[number]
+export const MAX_CAPS = 8
+export const MAX_CAP = 32
+/** The thread with no topic, in a pair or the team; today's flat thread with a peer is its pair's. */
+export const GENERAL = 'general'
+export const MAX_TITLE = 80
+export const MAX_LINK = 300
+
+/** The thread a message belongs to (#216): `id` a UUID or GENERAL; a title for a topic; `group` for the team's. */
+export interface ThreadRef {
+  id: string
+  title?: string
+  link?: string
+  group?: true
+}
+
 export const MAX_ENVELOPE_BYTES = 16 * 1024
 export const MAX_TEXT = 4000
 export const MAX_NAME = 40
@@ -47,7 +70,8 @@ export interface Message {
   reply_to: string | null
   ts: string
   ttl_s: number
-  body: { text: string; via?: Via }
+  /** `agent`: the sending session's name, only with `via`; `thread`: only to a peer with the `threads` cap. */
+  body: { text: string; via?: Via; agent?: string; thread?: ThreadRef }
 }
 
 /**
@@ -84,16 +108,18 @@ export interface RosterPeer {
   name: string
   online: boolean
   last_seen: number | null
+  /** What the peer's board said it understands (#216); absent from an older hub. */
+  caps?: string[]
 }
 
 export type Frame =
-  | { t: 'hello'; v: number; peer: string; client: string }
+  | { t: 'hello'; v: number; peer: string; client: string; caps?: string[] }
   | { t: 'challenge'; hub: string; nonce: string }
   | { t: 'auth'; sig: string }
   | { t: 'join'; invite: string; name: string; sig: string }
   | { t: 'welcome'; peer: string; name: string; hub: string }
   | { t: 'roster'; peers: RosterPeer[] }
-  | { t: 'presence'; peer: string; online: boolean; at: number }
+  | { t: 'presence'; peer: string; online: boolean; at: number; caps?: string[] }
   | { t: 'send'; env: Envelope }
   | { t: 'deliver'; env: Envelope }
   | { t: 'state'; id: string; state: DeliveryState; at: number; ack?: Ack }

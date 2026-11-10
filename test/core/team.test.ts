@@ -10,10 +10,12 @@ import {
   canonicalJson,
   checkEnvelope,
   checkMessage,
+  cleanCaps,
   type Envelope,
   envelopeBytes,
   fingerprint,
   generateKey,
+  hasThreads,
   joinBytes,
   type Message,
   normalizeHub,
@@ -262,6 +264,88 @@ test('checkMessage: body.via is accepted as "agent" only, kept in the rebuilt bo
   assert.equal(code({ ...viaAgent, body: { text: 'x', via: 'agent', more: 1 } }), 'bad_frame')
   assert.equal(code({ ...viaAgent, body: { via: 'agent' } }), 'bad_frame')
   assert.equal(code({ ...viaAgent, body: { text: 'x'.repeat(4001), via: 'agent' } }), 'bad_frame')
+})
+
+test('checkMessage: a thread and the agent session are read by a board, held to their shape (#216)', () => {
+  const code = (body: unknown, mode?: 'board' | 'relay') => {
+    const r = checkMessage(JSON.stringify({ ...ENV, body }), A.pub, mode)
+    return r.ok ? 'ok' : r.code
+  }
+  const id = '6f1c2a4e-8b3d-4c5e-9f7a-1b2c3d4e5f60'
+  const full = {
+    text: 'steps',
+    via: 'agent',
+    agent: 'board-216',
+    thread: { id, title: 'Hub setup', link: 'https://example.com/pr/1', group: true },
+  }
+  const r = checkMessage(JSON.stringify({ ...ENV, body: full }), A.pub)
+  assert.deepEqual(r.ok && r.msg.body, full)
+  assert.equal(code({ text: 'x', thread: { id: 'general' } }), 'ok')
+  assert.equal(code({ text: 'x', thread: { id: 'general', group: true } }), 'ok')
+  for (const thread of [
+    { id: 'general', title: 'a title on general' },
+    { id },
+    { id, title: '' },
+    { id, title: ' padded' },
+    { id, title: 'x'.repeat(81) },
+    { id, title: 'bidi ‮' },
+    { id, title: 't', link: 'ftp://example.com/x' },
+    { id, title: 't', link: 'https://example.com/a b' },
+    { id, title: 't', link: `https://example.com/${'x'.repeat(300)}` },
+    { id, title: 't', group: false },
+    { id, title: 't', extra: 1 },
+    { id: 'not-a-uuid', title: 't' },
+    'general',
+    null,
+  ])
+    assert.equal(code({ text: 'x', thread }), 'bad_frame', JSON.stringify(thread))
+  // The session's name comes only with the agent mark, and is a name.
+  assert.equal(code({ text: 'x', agent: 'board-216' }), 'bad_frame')
+  assert.equal(code({ text: 'x', via: 'agent', agent: '' }), 'bad_frame')
+  assert.equal(code({ text: 'x', via: 'agent', agent: 'x'.repeat(41) }), 'bad_frame')
+  // The hub relays: only the text is its to check (#216).
+  assert.equal(code({ text: 'x', via: 'human', more: { any: 1 } }, 'relay'), 'ok')
+  assert.equal(code({ text: '' }, 'relay'), 'bad_frame')
+  assert.equal(code({ text: 'x'.repeat(4001) }, 'relay'), 'bad_frame')
+  assert.equal(code({ via: 'agent' }, 'relay'), 'bad_frame')
+  const relayed = checkMessage(
+    JSON.stringify({ ...ENV, body: { text: 'x', via: 'agent', thread: { id } } }),
+    A.pub,
+    'relay',
+  )
+  assert.deepEqual(relayed.ok && relayed.msg.body, { text: 'x', via: 'agent' })
+})
+
+test('caps: read from hello, presence and roster entries; junk is no caps (#216)', () => {
+  const P = 'A'.repeat(43)
+  assert.deepEqual(parseFrame(JSON.stringify({ t: 'hello', v: 1, peer: 'p', client: 'c', caps: ['threads'] })), {
+    t: 'hello',
+    v: 1,
+    peer: 'p',
+    client: 'c',
+    caps: ['threads'],
+  })
+  assert.deepEqual(
+    parseFrame(JSON.stringify({ t: 'presence', peer: P, online: true, at: 1, caps: ['threads', 7, 'Bad Cap'] })),
+    {
+      t: 'presence',
+      peer: P,
+      online: true,
+      at: 1,
+      caps: ['threads'],
+    },
+  )
+  const roster = parseFrame(
+    JSON.stringify({
+      t: 'roster',
+      peers: [{ peer: P, name: 'a', online: false, last_seen: null, caps: 'threads', x: 1 }],
+    }),
+  )
+  assert.deepEqual(roster, { t: 'roster', peers: [{ peer: P, name: 'a', online: false, last_seen: null }] })
+  assert.equal(cleanCaps(Array.from({ length: 9 }, (_, i) => `c${i}`)), undefined)
+  assert.equal(hasThreads({ caps: ['threads'] }), true)
+  assert.equal(hasThreads({}), false)
+  assert.equal(hasThreads(undefined), false)
 })
 
 // #217: no canonical JSON for the envelope. The ready payload string is signed and passed on as it

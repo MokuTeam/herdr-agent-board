@@ -15,6 +15,8 @@ export interface PeerRow {
   last_seen_at: number | null
   revoked_at: number | null
   invite_id: string | null
+  /** What the peer's board said it understands, as JSON (#216); null before it said anything. */
+  caps: string | null
 }
 
 export interface InviteRow {
@@ -103,6 +105,8 @@ export const MIGRATIONS: readonly string[] = [
     hash TEXT NOT NULL
   );
   `,
+  // #216: what each board says it understands (its hello's caps), for the roster.
+  `ALTER TABLE peer ADD COLUMN caps TEXT`,
 ]
 
 export type MessageState = 'queued' | 'delivered' | 'acked' | 'expired'
@@ -202,6 +206,8 @@ export interface HubDb {
   activePeerByName(name: string): PeerRow | null
   peers(): PeerRow[]
   touchSeen(id: string, at: number): void
+  /** Keeps what a peer's board said it understands (#216); true when that changed. */
+  setCaps(id: string, caps: string[] | null): boolean
   /** Revokes a peer; false when there is none, or it is revoked already. */
   revokePeer(id: string, at: number): boolean
   // invites
@@ -305,6 +311,12 @@ export function openDb(path: string): HubDb {
       db.query<PeerRow, [string]>("SELECT * FROM peer WHERE name = ? AND status = 'active'").get(name),
     peers: () => db.query<PeerRow, []>('SELECT * FROM peer ORDER BY created_at, id').all(),
     touchSeen: (id, at) => void db.query('UPDATE peer SET last_seen_at = ? WHERE id = ?').run(at, id),
+    setCaps: (id, caps) => {
+      const json = caps?.length ? JSON.stringify(caps) : null
+      if ((peerRow.get(id)?.caps ?? null) === json) return false
+      db.query('UPDATE peer SET caps = ? WHERE id = ?').run(json, id)
+      return true
+    },
     revokePeer: (id, at) =>
       db.query("UPDATE peer SET status = 'revoked', revoked_at = ? WHERE id = ? AND status = 'active'").run(at, id)
         .changes > 0,

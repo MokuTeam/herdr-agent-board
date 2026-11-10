@@ -135,10 +135,10 @@ export interface Harness {
   invite(ttlMs?: number): string
   connect(): Promise<Client>
   /** hello, then auth with the key; the client is returned after welcome. */
-  login(key: KeyPair): Promise<Client>
-  join(key: KeyPair, name: string, invite?: string): Promise<Client>
-  /** A hello, a challenge and nothing else yet. */
-  hello(key: KeyPair): Promise<{ c: Client; nonce: string }>
+  login(key: KeyPair, caps?: string[]): Promise<Client>
+  join(key: KeyPair, name: string, invite?: string, caps?: string[]): Promise<Client>
+  /** A hello (with caps, #216, when given), a challenge and nothing else yet. */
+  hello(key: KeyPair, caps?: string[]): Promise<{ c: Client; nonce: string }>
   /**
    * Waits until the hub has seen a peer's socket close. A client's close event can come before the
    * hub's own close handler has run (it does on Windows), and a frame the hub writes in between is lost.
@@ -175,21 +175,21 @@ export async function startHarness(
       await c.ready
       return c
     },
-    hello: async key => {
+    hello: async (key, caps) => {
       const c = await h.connect()
-      c.send({ t: 'hello', v: 1, peer: key.pub, client: 'test/0' })
+      c.send({ t: 'hello', v: 1, peer: key.pub, client: 'test/0', ...(caps && { caps }) })
       const ch = await c.take('challenge')
       assert.equal(ch.hub, hubId)
       return { c, nonce: ch.nonce }
     },
-    login: async key => {
-      const { c, nonce } = await h.hello(key)
+    login: async (key, caps) => {
+      const { c, nonce } = await h.hello(key, caps)
       c.send({ t: 'auth', sig: await sign(key.pkcs8, authBytes({ hub: hubId, nonce, peer: key.pub })) })
       await c.take('welcome')
       return c
     },
-    join: async (key, name, invite = h.invite()) => {
-      const { c, nonce } = await h.hello(key)
+    join: async (key, name, invite = h.invite(), caps) => {
+      const { c, nonce } = await h.hello(key, caps)
       const sig = await sign(key.pkcs8, joinBytes({ hub: hubId, invite, name, nonce, peer: key.pub }))
       c.send({ t: 'join', invite, name, sig })
       await c.take('welcome')

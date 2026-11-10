@@ -8,19 +8,26 @@
 // Only an object with a ws:// or wss:// hub counts.
 import { createHash } from 'node:crypto'
 import {
+  CAPS,
   DELIVERY_STATES,
   type DeliveryState,
   type Envelope,
   ERROR_CODES,
   type ErrorCode,
   type Frame,
+  GENERAL,
   KINDS,
+  MAX_CAP,
+  MAX_CAPS,
   MAX_ENVELOPE_BYTES,
+  MAX_LINK,
   MAX_NAME,
   MAX_TEXT,
+  MAX_TITLE,
   type Message,
   type RosterPeer,
   TEAM_PROTOCOL,
+  type ThreadRef,
   VIAS,
   type Via,
 } from './team-wire.ts'
@@ -63,6 +70,38 @@ const UNPRINTABLE = /[\p{Cc}\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u
 
 export const validName = (v: unknown): v is string =>
   typeof v === 'string' && v.trim() === v && v.length >= 1 && v.length <= MAX_NAME && !new RegExp(UNPRINTABLE).test(v)
+
+/** A thread's title (#216): trimmed, 1 to MAX_TITLE characters, nothing unprintable. */
+export const validTitle = (v: unknown): v is string =>
+  typeof v === 'string' && v.trim() === v && v.length >= 1 && v.length <= MAX_TITLE && !new RegExp(UNPRINTABLE).test(v)
+
+/** A thread's link (#216): an http(s) URL of at most MAX_LINK characters, no spaces, nothing unprintable. */
+export function validLink(v: unknown): v is string {
+  if (typeof v !== 'string' || v.length > MAX_LINK || /\s/.test(v) || new RegExp(UNPRINTABLE).test(v)) return false
+  try {
+    const u = new URL(v)
+    return u.protocol === 'https:' || u.protocol === 'http:'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Caps as a board keeps them (#216): words of lowercase letters, digits and `._/-`, at most
+ * MAX_CAP long, at most MAX_CAPS of them, duplicates dropped. Anything else counts as no caps.
+ */
+export function cleanCaps(v: unknown): string[] | undefined {
+  if (!Array.isArray(v) || v.length > MAX_CAPS) return undefined
+  const ok = v.filter((c): c is string => typeof c === 'string' && c.length <= MAX_CAP && /^[a-z0-9._/-]+$/.test(c))
+  const out = [...new Set(ok)]
+  return out.length ? out : undefined
+}
+
+/** What this board says it understands, in `hello`. */
+export const OUR_CAPS: string[] = [...CAPS]
+
+/** Whether a roster peer's board understands threads (#216). */
+export const hasThreads = (p: { caps?: string[] | undefined } | undefined): boolean => !!p?.caps?.includes('threads')
 
 /** `s` for a terminal: whatever is not printable is written as \u{hex}, so it cannot move the cursor or reorder text. */
 export const printable = (s: string): string =>
@@ -151,6 +190,11 @@ const SIG = /^[A-Za-z0-9_-]{86}$/
 export const isMessageId = (v: unknown): v is string => isStr(v) && UUID.test(v)
 export const isPeerId = (v: unknown): v is string => isStr(v) && PEER.test(v)
 export const isSig = (v: unknown): v is string => isStr(v) && SIG.test(v)
+/** A thread id: a UUID v4, or GENERAL for the thread with no topic (#216). */
+export const isThreadId = (v: unknown): v is string => v === GENERAL || isMessageId(v)
+
+/** `board`: everything a board reads is held to the whitelist. `relay`: the hub's check, `text` only (#216). */
+export type CheckMode = 'board' | 'relay'
 
 const WIRE_FIELDS = ['from', 'payload', 'sig']
 const MESSAGE_FIELDS = ['v', 'id', 'from', 'to', 'kind', 'reply_to', 'ts', 'ttl_s', 'body']
@@ -179,6 +223,7 @@ export function checkEnvelope(v: unknown): { ok: true; env: Envelope } | { ok: f
 export function checkMessage(
   payload: string,
   from: string,
+  mode: CheckMode = 'board',
 ): { ok: true; msg: Message } | { ok: false; code: ErrorCode; id?: string } {
   let v: unknown
   try {
@@ -209,16 +254,13 @@ export function checkMessage(
   if (!KINDS.some(k => k === v.kind)) return no('kind')
   if (v.to === '*') return no('broadcast')
   if (!isPeerId(v.to)) return no('bad_frame')
-  // The body is `text`, and `via` when it is exactly "agent"; any other key or value is not a body.
-  const via = Object.hasOwn(body, 'via') ? body.via : undefined
-  const bodyKeys = Object.keys(body).length
-  if (
-    body.text.length < 1 ||
-    body.text.length > MAX_TEXT ||
-    bodyKeys !== (Object.hasOwn(body, 'via') ? 2 : 1) ||
-    (Object.hasOwn(body, 'via') && !VIAS.some(x => x === via))
-  )
-    return no('bad_frame')
+  if (body.text.length < 1 || body.text.length > MAX_TEXT) return no('bad_frame')
+  // A board reads the body as `text`, `via` when it is exactly "agent", `agent` (only with `via`)
+  // and `thread` (#216); any other key or value is not a body. The hub relays: it holds `text` to
+  // its limits and passes the rest on as signed, so a new body field needs no new hub (the boards
+  // that do not know it never get it: the sender asks the roster's caps first).
+  const extras = readBodyExtras(body)
+  if (mode === 'board' && !extras.ok) return no('bad_frame')
   if (Object.keys(v).some(k => !MESSAGE_FIELDS.includes(k))) return no('bad_frame')
   // Only the signed fields are kept; what the board keeps is this rebuilt message.
   const msg: Message = {
@@ -230,9 +272,54 @@ export function checkMessage(
     reply_to: v.reply_to,
     ts: v.ts,
     ttl_s: v.ttl_s,
-    body: via === undefined ? { text: body.text } : { text: body.text, via: via as Via },
+    body: { text: body.text, ...extras.extras },
   }
   return { ok: true, msg }
+}
+
+const BODY_KEYS = ['text', 'via', 'agent', 'thread']
+const THREAD_KEYS = ['id', 'title', 'link', 'group']
+
+/**
+ * The body's fields besides `text`, as a board accepts them: `via` exactly "agent"; `agent` a
+ * name, only with `via`; `thread` with an id (a UUID, or GENERAL with no title), a title for a
+ * UUID, an optional http(s) link and `group: true` for a team thread. ok is false when anything is
+ * off or a key is unknown; `extras` then holds only the fields that were well formed (the hub's audit).
+ */
+function readBodyExtras(body: Record<string, unknown>): {
+  ok: boolean
+  extras: Omit<Message['body'], 'text'>
+} {
+  const extras: Omit<Message['body'], 'text'> = {}
+  let ok = Object.keys(body).every(k => BODY_KEYS.includes(k))
+  if (Object.hasOwn(body, 'via')) {
+    if (VIAS.some(x => x === body.via)) extras.via = body.via as Via
+    else ok = false
+  }
+  if (Object.hasOwn(body, 'agent')) {
+    if (extras.via && validName(body.agent)) extras.agent = body.agent
+    else ok = false
+  }
+  if (Object.hasOwn(body, 'thread')) {
+    const t = readThread(body.thread)
+    if (t) extras.thread = t
+    else ok = false
+  }
+  return { ok, extras }
+}
+
+function readThread(v: unknown): ThreadRef | null {
+  if (!isRecord(v) || Object.keys(v).some(k => !THREAD_KEYS.includes(k))) return null
+  if (!isThreadId(v.id)) return null
+  const general = v.id === GENERAL
+  if (general ? Object.hasOwn(v, 'title') : !validTitle(v.title)) return null
+  if (Object.hasOwn(v, 'link') && !validLink(v.link)) return null
+  if (Object.hasOwn(v, 'group') && v.group !== true) return null
+  const t: ThreadRef = { id: v.id }
+  if (!general) t.title = v.title as string
+  if (Object.hasOwn(v, 'link')) t.link = v.link as string
+  if (v.group === true) t.group = true
+  return t
 }
 
 /** What an envelope's signature covers: the domain prefix, then the payload string as it is, nothing rebuilt. */
@@ -256,13 +343,13 @@ export type Opened =
  * parsed and held to checkMessage. A payload changed by one byte, or written with its keys in
  * another order, fails at the signature. On a refusal `from` is given back once the shape passed.
  */
-export async function openEnvelope(v: unknown, from?: string): Promise<Opened> {
+export async function openEnvelope(v: unknown, from?: string, mode: CheckMode = 'board'): Promise<Opened> {
   const wire = checkEnvelope(v)
   if (!wire.ok) return wire
   const env = wire.env
   if ((from !== undefined && env.from !== from) || !(await verify(env.from, envelopeBytes(env.payload), env.sig)))
     return { ok: false, code: 'bad_sig', from: env.from }
-  const checked = checkMessage(env.payload, env.from)
+  const checked = checkMessage(env.payload, env.from, mode)
   return checked.ok ? { ok: true, env, msg: checked.msg } : { ...checked, from: env.from }
 }
 
@@ -277,9 +364,8 @@ export function parseFrame(text: string): Frame | null {
   if (!isRecord(v) || !isStr(v.t)) return null
   switch (v.t) {
     case 'hello':
-      return typeof v.v === 'number' && isStr(v.peer) && isStr(v.client)
-        ? { t: 'hello', v: v.v, peer: v.peer, client: v.client }
-        : null
+      if (typeof v.v !== 'number' || !isStr(v.peer) || !isStr(v.client)) return null
+      return withCaps({ t: 'hello' as const, v: v.v, peer: v.peer, client: v.client }, v.caps)
     case 'challenge':
       return isStr(v.hub) && isStr(v.nonce) ? { t: 'challenge', hub: v.hub, nonce: v.nonce } : null
     case 'auth':
@@ -293,11 +379,12 @@ export function parseFrame(text: string): Frame | null {
         ? { t: 'welcome', peer: v.peer, name: v.name, hub: v.hub }
         : null
     case 'roster':
-      return Array.isArray(v.peers) && v.peers.every(isRosterPeer) ? { t: 'roster', peers: v.peers } : null
-    case 'presence':
-      return isStr(v.peer) && typeof v.online === 'boolean' && typeof v.at === 'number'
-        ? { t: 'presence', peer: v.peer, online: v.online, at: v.at }
+      return Array.isArray(v.peers) && v.peers.every(isRosterPeer)
+        ? { t: 'roster', peers: v.peers.map(rosterPeer) }
         : null
+    case 'presence':
+      if (!isStr(v.peer) || typeof v.online !== 'boolean' || typeof v.at !== 'number') return null
+      return withCaps({ t: 'presence' as const, peer: v.peer, online: v.online, at: v.at }, v.caps)
     case 'send':
     case 'deliver':
       return isRecord(v.env) ? { t: v.t, env: v.env as unknown as Envelope } : null
@@ -330,6 +417,16 @@ const isRosterPeer = (v: unknown): v is RosterPeer =>
   isStr(v.name) &&
   typeof v.online === 'boolean' &&
   (v.last_seen === null || typeof v.last_seen === 'number')
+
+/** A roster entry as kept: its known fields, and caps only when they read as caps (#216). */
+const rosterPeer = (p: RosterPeer): RosterPeer =>
+  withCaps({ peer: p.peer, name: p.name, online: p.online, last_seen: p.last_seen }, p.caps)
+
+/** `o` with `caps` when `raw` reads as caps; without the key otherwise. */
+function withCaps<T extends object>(o: T, raw: unknown): T & { caps?: string[] } {
+  const caps = cleanCaps(raw)
+  return caps ? { ...o, caps } : o
+}
 
 // ---- Keys and signatures (WebCrypto Ed25519)
 

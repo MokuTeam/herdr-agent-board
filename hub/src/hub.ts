@@ -7,6 +7,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import {
   ackBytes,
   authBytes,
+  cleanCaps,
   type Envelope,
   type ErrorCode,
   envelopeBytes,
@@ -113,7 +114,25 @@ export function createHub(opts: HubOptions): Hub {
     db
       .peers()
       .filter(p => p.status === 'active')
-      .map(p => ({ peer: p.id, name: p.name, online: sessions.has(p.id), last_seen: p.last_seen_at }))
+      .map(p => {
+        const caps = capsOf(p)
+        return {
+          peer: p.id,
+          name: p.name,
+          online: sessions.has(p.id),
+          last_seen: p.last_seen_at,
+          ...(caps && { caps }),
+        }
+      })
+
+  /** A peer's caps as its board last said them (#216), or undefined. */
+  const capsOf = (p: PeerRow): string[] | undefined => {
+    try {
+      return cleanCaps(p.caps ? JSON.parse(p.caps) : undefined)
+    } catch {
+      return undefined
+    }
+  }
 
   const broadcastRoster = () => {
     const f: Frame = { t: 'roster', peers: roster() }
@@ -159,7 +178,8 @@ export function createHub(opts: HubOptions): Hub {
 
   const send = async (conn: Conn, peer: string, f: { env: unknown }) => {
     // The signature is checked over the payload string as it came, and only then is it read (#217).
-    const opened = await openEnvelope(f.env, peer)
+    // As a relay: `text` is held to its limits, the other body fields go on as signed (#216).
+    const opened = await openEnvelope(f.env, peer, 'relay')
     if (!opened.ok) {
       log(`dropped from ${peer.slice(0, 8)}: ${opened.code}`)
       return fail(conn, opened.code, `envelope refused: ${opened.code}`, undefined, opened.id)
@@ -194,7 +214,14 @@ export function createHub(opts: HubOptions): Hub {
       body_hash: hash,
       payload: stored,
     })
-    db.audit(now, peer, 'send', { id: msg.id, to: msg.to, size: Buffer.byteLength(stored) })
+    db.audit(now, peer, 'send', {
+      id: msg.id,
+      to: msg.to,
+      size: Buffer.byteLength(stored),
+      // The sender's own signed words, never the text (#216).
+      ...(msg.body.thread && { thread: msg.body.thread.id }),
+      ...(msg.body.via && { via: msg.body.via }),
+    })
     const row = db.message(msg.id) as MessageRow
     notify(row)
     const s = sessions.get(msg.to)
@@ -253,6 +280,7 @@ export function createHub(opts: HubOptions): Hub {
     handles.add(conn)
     let state: 'await_hello' | 'await_auth' | 'authed' = 'await_hello'
     let peer = ''
+    let caps: string[] | undefined
     let nonce = ''
     let challengedAt = 0
     let closed = false
@@ -279,12 +307,18 @@ export function createHub(opts: HubOptions): Hub {
         db.presenceEvent(row.id, true, clock.now())
       }
       db.touchSeen(row.id, clock.now())
+      // What the board said it understands goes to the others with its presence, or with a new
+      // roster when it changed on a connection that replaced another (#216).
+      const capsChanged = db.setCaps(row.id, caps ?? null)
       put(conn, { t: 'welcome', peer: row.id, name: row.name, hub: db.hubId() })
       put(conn, { t: 'roster', peers: roster() })
       flush({ conn, peer: row.id })
       if (!old)
         for (const s of sessions.values())
-          if (s.peer !== row.id) put(s.conn, { t: 'presence', peer: row.id, online: true, at: clock.now() })
+          if (s.peer !== row.id)
+            put(s.conn, { t: 'presence', peer: row.id, online: true, at: clock.now(), ...(caps && { caps }) })
+      if (old && capsChanged)
+        for (const s of sessions.values()) if (s.peer !== row.id) put(s.conn, { t: 'roster', peers: roster() })
       log(`online ${row.id.slice(0, 8)} ${row.name}${fromWhere}`)
     }
 
@@ -307,6 +341,7 @@ export function createHub(opts: HubOptions): Hub {
         if (f.v !== TEAM_PROTOCOL) return refuse('version', `protocol ${TEAM_PROTOCOL} only`, CLOSE_BAD_REQUEST)
         if (!isPeerId(f.peer)) return refuse('bad_frame', 'peer is no key', CLOSE_BAD_REQUEST)
         peer = f.peer
+        caps = f.caps
         nonce = randomBytes(32).toString('base64url')
         challengedAt = clock.now()
         state = 'await_auth'
