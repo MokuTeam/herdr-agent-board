@@ -134,9 +134,9 @@ const agentsOn = (peer: string, lanes: string[] = [], listener = true): void =>
 // ---- The hub client: caps, threads, copies
 
 describe('the hub client (#216)', () => {
-  test('hello says this board reads threads', async () => {
+  test('hello says this board reads threads, channels (#355) and replies (#370)', async () => {
     const w = await world()
-    expect(w.ws.of('hello')[0]).toMatchObject({ caps: ['threads', 'channels'] })
+    expect(w.ws.of('hello')[0]).toMatchObject({ caps: ['threads', 'channels', 'replies'] })
   })
 
   test('a new thread to a board that reads threads: thread, mark and session name in the signed body; the session handles it', async () => {

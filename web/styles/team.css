@@ -263,23 +263,3 @@ button.team-quote:hover { background: color-mix(in srgb, var(--accent) 15%, tran
 .team-confirm-note { margin: 0; color: var(--label-2); font-size: 12.5px; }
 .team-confirm-items { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
 .team-confirm-actions { display: flex; gap: 8px; }
-
-/* ---- The Terminal style (look-terminal.css): outlines on a bare background, no fills or blur. */
-:root[data-look="terminal"] .team-msg:is(.in, .out) .team-bubble { border-radius: var(--radius); }
-:root[data-look="terminal"] .team-msg.out .team-bubble { background: none; box-shadow: inset 0 0 0 1px var(--accent); color: var(--label); }
-:root[data-look="terminal"] .team-msg.out .md a { color: var(--accent); text-decoration: none; }
-:root[data-look="terminal"] .team-msg.out .md code, :root[data-look="terminal"] .team-msg.out .md pre { background: var(--fill-2); }
-:root[data-look="terminal"] .team-msg.out .unfold { background: none; box-shadow: inset 0 0 0 1px var(--t-edge); color: var(--accent); }
-:root[data-look="terminal"] .team-msg.out:not(.agent) .team-quote { background: none; box-shadow: inset 2px 0 0 var(--accent); }
-:root[data-look="terminal"] .team-msg.out:not(.agent) .team-quote b { color: var(--accent); }
-:root[data-look="terminal"] .team-msg.agent .team-bubble { background: none; box-shadow: inset 0 0 0 1px var(--purple); }
-:root[data-look="terminal"] .team-msg.agent.out .team-bubble { box-shadow: inset 0 0 0 1px var(--accent); }
-:root[data-look="terminal"] .team-quote { border-radius: 4px; background: none; box-shadow: inset 2px 0 0 var(--accent); }
-:root[data-look="terminal"] .team-avatar { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--tone, var(--label-3)); }
-:root[data-look="terminal"] .team-day span, :root[data-look="terminal"] .team-jump { border-radius: var(--radius); background: var(--t-bg); backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: 0 0 0 1px var(--t-edge); }
-:root[data-look="terminal"] .team-row, :root[data-look="terminal"] .team-compose-row, :root[data-look="terminal"] .team-draft, :root[data-look="terminal"] .team-topic { border-radius: var(--radius); }
-:root[data-look="terminal"] .team-row.active { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
-:root[data-look="terminal"] .team-send { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
-:root[data-look="terminal"] .team-send:disabled { box-shadow: inset 0 0 0 1px var(--t-edge); color: var(--label-3); }
-:root[data-look="terminal"] .team-body .team-send-text, :root[data-look="terminal"] .team-body .mini.primary { background: none; box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
-:root[data-look="terminal"] .team-unread { border-radius: 4px; }
