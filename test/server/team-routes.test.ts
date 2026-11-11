@@ -207,6 +207,29 @@ describe('team on, against a hub in this process', () => {
   })
   afterAll(() => hub.stop())
 
+  // First of all: nothing has been written with anna yet.
+  test('#370 an agent’s draft in a thread nothing was written in yet is there to Send or Discard', async () => {
+    const general = `${url}/api/team/threads/${anna.pub}/general`
+    const list = async () =>
+      ((await (await fetch(`${url}/api/team/threads`)).json()) as { threads: { key: string }[] }).threads
+    expect((await list()).some(t => t.key === `${anna.pub}/general`)).toBe(false)
+    expect((await fetch(general)).status).toBe(404)
+    const made = (await (await post(url, '/api/team/draft', { to: anna.pub, text: 'standup?' })).json()) as {
+      ok: boolean
+      id: string
+    }
+    expect(made.ok).toBe(true)
+    try {
+      expect(await answer(fetch(general))).toEqual([
+        200,
+        { thread: null, lines: [expect.objectContaining({ id: made.id, dir: 'draft', text: 'standup?' })] },
+      ])
+    } finally {
+      expect((await post(url, `/api/team/draft/${made.id}/discard`, {})).status).toBe(200)
+    }
+    expect((await fetch(general)).status).toBe(404)
+  })
+
   test('GET /api/team: online, who I am, the roster with pins and fingerprints; teamRev in the payload', async () => {
     const v = await view()
     expect(v).toMatchObject({ state: 'online', me: { peer: me.pub, name: 'me' } })
@@ -310,6 +333,49 @@ describe('team on, against a hub in this process', () => {
     annaClient.send({ t: 'send', env: asked })
     await until(async () => (await thread()).messages.some(m => m.dir === 'in' && m.text === 'yes, green'), 'the inbox')
     expect((await thread()).messages.map(m => m.dir).sort()).toEqual(['in', 'out'])
+  })
+
+  test('#370 a reply carries replyTo in the signed body only to a board whose caps say replies; the list has each thread’s latest', async () => {
+    type Line = { id: string; dir: string; text: string | null; replyTo?: string }
+    const lines = async () =>
+      ((await (await fetch(`${url}/api/team/threads/${anna.pub}/general`)).json()) as { lines: Line[] }).lines
+    const asked = await question(anna, me.pub, 'which branch?')
+    annaClient.send({ t: 'send', env: asked })
+    await until(async () => (await lines()).some(l => l.text === 'which branch?'), 'the question')
+    const q = msgOf(asked).id
+    expect(await answer(post(url, '/api/team/send', { to: anna.pub, text: 'x', replyTo: 'nope' }))).toEqual([
+      400,
+      { ok: false, error: 'reply' },
+    ])
+    // anna's board said no caps: the reply reaches her as the plain body; this board still shows what it answers.
+    const plain = (await owner('/api/team/send', { to: anna.pub, text: 'main', replyTo: q }))[1] as { id: string }
+    const d1 = await annaClient.take('deliver')
+    expect(msgOf(d1.env).body).toEqual({ text: 'main' })
+    annaClient.send(await ackOf(anna, d1.env))
+    expect((await lines()).find(l => l.id === plain.id)?.replyTo).toBe(q)
+    // Back with a board that reads replies: the next reply names the question, signed in the body.
+    const roster = async () => (await view()).roster as { name: string; online: boolean; threads?: boolean }[]
+    const relogin = async (caps?: string[]) => {
+      annaClient.close()
+      annaClient = await hub.login(anna, caps)
+      await until(
+        async () => (await roster()).some(p => p.name === 'anna' && p.online && !!p.threads === !!caps),
+        'caps',
+      )
+    }
+    await relogin(['threads', 'channels', 'replies'])
+    try {
+      expect((await owner('/api/team/send', { to: anna.pub, text: 'still main', replyTo: q }))[0]).toBe(200)
+      const d2 = await annaClient.take('deliver')
+      expect(msgOf(d2.env).body).toEqual({ text: 'still main', replyTo: q })
+      annaClient.send(await ackOf(anna, d2.env))
+    } finally {
+      await relogin()
+    }
+    const { threads } = (await (await fetch(`${url}/api/team/threads`)).json()) as {
+      threads: { key: string; last?: { dir: string; text: string } }[]
+    }
+    expect(threads.find(t => t.key === `${anna.pub}/general`)?.last).toMatchObject({ dir: 'out', text: 'still main' })
   })
 
   const draftBody = (text: string) => ({ to: anna.pub, text })

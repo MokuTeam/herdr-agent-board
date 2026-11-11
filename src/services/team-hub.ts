@@ -46,6 +46,7 @@ import {
   fingerprint,
   GENERAL,
   hasChannels,
+  hasReplies,
   hasThreads,
   isMessageId,
   isPeerId,
@@ -146,6 +147,8 @@ export interface PostTarget {
    * the panel): a new channel's other members, ids from the roster.
    */
   thread?: { id?: string; title?: string; link?: string; members?: string[] }
+  /** The line of that thread it answers (#370): a message's id, or a team post's (ThreadLine.id). */
+  replyTo?: string
 }
 
 /**
@@ -194,12 +197,31 @@ export interface ThreadLine {
   held?: boolean
   /** draft: why the board held it. */
   reason?: string
+  /**
+   * in or out: the message it answers (#370), as a line of this thread (its id) when this board
+   * has it, else the id as the sender wrote it.
+   */
+  replyTo?: string
 }
 
 export interface ThreadView extends ThreadRecord {
   key: string
   /** The pair's peer, as this board's roster calls them; null for the team. */
   peerName: string | null
+  /** Its latest message (#370), in GET /api/team/threads only. */
+  last?: ThreadLast
+}
+
+/**
+ * A thread's latest message for the list (#370): which way it went, who wrote it (this board's
+ * name for them, never the message's), its text (null while held) and when.
+ */
+export interface ThreadLast {
+  dir: 'in' | 'out'
+  who?: string
+  text: string | null
+  ts: string
+  via?: Via
 }
 
 export type DraftResult = { ok: true; id: string } | { ok: false; error: string }
@@ -213,7 +235,7 @@ export interface TeamService {
    * The panel's message to a peer in the roster whose key is trusted ('changed' otherwise), or to
    * the team, in general or a thread (#216); kept and sent (again on every reconnect until the hub settles it).
    */
-  send(to: string, text: string, thread?: PostTarget['thread']): Promise<SendResult>
+  send(to: string, text: string, thread?: PostTarget['thread'], replyTo?: string): Promise<SendResult>
   /** A post from the panel or a session (#216), with its source set by the route that took it. */
   post(target: PostTarget, text: string, source: PostSource): Promise<PostResult>
   /** An agent's draft for a person on the roster, or the team: kept for the person to Send or Discard, never sent by the service. */
@@ -222,6 +244,8 @@ export interface TeamService {
   threads(): ThreadView[]
   /** One thread's lines by its key; empty while off or for no thread. */
   threadLines(key: string): ThreadLine[]
+  /** Each thread's latest message, by its key (#370); empty while off. */
+  lasts?(): Record<string, ThreadLast>
   /** What this board calls a peer: its roster's name, its pins', else the short fingerprint (#216). */
   nameOf(peer: string): string
   /** Changes who handles a thread, or whether it is muted (#216); false when there is no such thread. */
@@ -258,6 +282,9 @@ interface Options {
   random?: () => number
   version?: string
 }
+
+/** How much of a thread's latest message the list gets (#370). */
+export const LAST_CHARS = 160
 
 /** Threads kept per peer (and for the team); past it the quietest one nobody handles goes (#216). */
 export const MAX_THREADS_PER_SCOPE = 200
@@ -582,6 +609,8 @@ export function createTeam({
       ...(msg.body.via && { via: msg.body.via }),
       ...(msg.body.agent && { agent: msg.body.agent }),
       thread,
+      ...(msg.body.replyTo && { replyTo: msg.body.replyTo }),
+      ...(msg.body.post && { post: msg.body.post }),
       ackedAt: null,
     })
     if (fresh) {
@@ -718,11 +747,21 @@ export function createTeam({
       : roster.filter(p => p.peer === target.to)
     const skipped = team ? roster.filter(p => inThread(p) && changedKey(p)).map(p => p.name) : []
     if (!recipients.length) return { ok: false, error: 'nobody' }
+    // A reply (#370): a line of this thread, named on the wire as its sender's board named it.
+    let replyTo: string | undefined
+    if (target.replyTo !== undefined) {
+      const wire = wireId(key, target.replyTo)
+      if (!wire) return { ok: false, error: 'reply' }
+      replyTo = wire
+    }
     const via: Via | undefined = source.by === 'agent' ? 'agent' : undefined
     const session = source.by === 'agent' ? source.session : undefined
     const pressed = source.by === 'agent' && source.pressed === true
     const agentName = session?.name && validName(session.name) ? session.name : undefined
     const copies: { env: Envelope; msg: Message }[] = []
+    // The first copy's id is the post's: every copy of a team post carries it to a board with
+    // `replies` (#370), so a reply to it names one message on every member's board.
+    const postId = crypto.randomUUID()
     for (const p of recipients) {
       // A channel's copy goes as a channel only to a board that reads channels; any other gets it
       // in its pair's general with the title in front, so an answer there reaches this board alone.
@@ -735,9 +774,13 @@ export function createTeam({
       if (via) msgBody.via = via
       if (rich && via && agentName) msgBody.agent = agentName
       if (rich && ref) msgBody.thread = ref
+      if (rich && hasReplies(p)) {
+        if (replyTo) msgBody.replyTo = replyTo
+        if (team) msgBody.post = postId
+      }
       const msg: Message = {
         v: TEAM_PROTOCOL,
-        id: crypto.randomUUID(),
+        id: copies.length ? crypto.randomUUID() : postId,
         from: me.pub,
         to: p.peer,
         kind: 'question',
@@ -757,7 +800,6 @@ export function createTeam({
       copies.push({ env, msg })
     }
     keepThread(key, ref, 'me')
-    const postId = copies[0]?.msg.id ?? ''
     for (const c of copies) {
       addOutbox({
         env: c.env,
@@ -771,6 +813,7 @@ export function createTeam({
         ...(pressed && { pressed: true }),
         // The post's own text, where this copy's has a title in front (an older board's).
         ...(c.msg.body.text !== body && { text: body }),
+        ...(replyTo && { replyTo }),
       })
       if (authed) frame({ t: 'send', env: c.env })
     }
@@ -795,32 +838,19 @@ export function createTeam({
     })
   }
 
-  /** A thread's lines (#216): what came in and went out in it, a team post once with its receipts, then its drafts. */
-  function threadLines(key: string): ThreadLine[] {
+  const keyOf = (thread: string | undefined, peer: string): string => thread ?? threadKey(peer, GENERAL)
+
+  /** A thread's messages either way, as kept: what came in with its peer, and each post's copies. */
+  function threadItems(key: string): { incoming: [string, InboxItem][]; posts: Map<string, OutboxItem[]> } | null {
     const parts = splitKey(key)
-    if (!parts) return []
+    if (!parts) return null
     const team = parts.scope === TEAM
-    if (!team && !isPeerId(parts.scope)) return []
-    const keyOf = (thread: string | undefined, peer: string): string => thread ?? threadKey(peer, GENERAL)
+    if (!team && !isPeerId(parts.scope)) return null
     const inLists: [string, InboxItem[]][] = team
       ? Object.entries(readAllInbox())
       : [[parts.scope, readInbox(parts.scope)]]
-    const incoming: ThreadLine[] = inLists.flatMap(([peer, list]) =>
-      list
-        .filter(i => keyOf(i.thread, peer) === key)
-        .map(
-          (i): ThreadLine => ({
-            id: i.id,
-            dir: 'in',
-            from: peer,
-            who: nameOf(peer),
-            text: i.held ? null : i.text,
-            ts: i.ts,
-            ...(i.held && { held: true }),
-            ...(i.via && { via: i.via }),
-            ...(i.agent && { agent: i.agent }),
-          }),
-        ),
+    const incoming = inLists.flatMap(([peer, list]) =>
+      list.filter(i => keyOf(i.thread, peer) === key).map((i): [string, InboxItem] => [peer, i]),
     )
     const outLists = team ? Object.values(readAllOutbox()) : [readOutbox(parts.scope)]
     const posts = new Map<string, OutboxItem[]>()
@@ -830,7 +860,63 @@ export function createTeam({
         const id = o.post ?? o.msg.id
         posts.set(id, [...(posts.get(id) ?? []), o])
       }
-    const outgoing: ThreadLine[] = [...posts.entries()].map(([id, copies]): ThreadLine => {
+    return { incoming, posts }
+  }
+
+  /**
+   * A line of a thread as the wire names it in a reply (#370): a message by its id, a team post by
+   * its post id (the sender's first copy's, carried on every copy); null when the thread has no
+   * such line, or it is held.
+   */
+  function wireId(key: string, line: string): string | null {
+    const items = isMessageId(line) ? threadItems(key) : null
+    if (!items) return null
+    const i = items.incoming.find(([, x]) => x.id === line)?.[1]
+    if (i) return i.held ? null : (i.post ?? i.id)
+    return items.posts.has(line) ? line : null
+  }
+
+  /** A thread's lines (#216): what came in and went out in it, a team post once with its receipts, then its drafts. */
+  function threadLines(key: string): ThreadLine[] {
+    const parts = splitKey(key)
+    const items = threadItems(key)
+    if (!parts || !items) return []
+    const team = parts.scope === TEAM
+    // What a reply names, as a line here (#370): a message by its own id, a post by its id or any
+    // copy's, then a team copy by the post id it carries. The first to claim a name keeps it, so a
+    // copy cannot take over the name of a message that came before it; a post id two senders carry
+    // (one of them copied it) names nothing, and a held copy claims none.
+    const lineOf = new Map<string, string>()
+    const claim = (name: string | undefined, id: string): void => {
+      if (name && !lineOf.has(name)) lineOf.set(name, id)
+    }
+    for (const [, i] of items.incoming) claim(i.id, i.id)
+    for (const [id, copies] of items.posts) {
+      claim(id, id)
+      for (const c of copies) claim(c.msg.id, id)
+    }
+    const senders = new Map<string, Set<string>>()
+    for (const [peer, i] of items.incoming)
+      if (i.post && !i.held) senders.set(i.post, new Set([...(senders.get(i.post) ?? []), peer]))
+    for (const [, i] of [...items.incoming].sort((a, b) => a[1].receivedAt - b[1].receivedAt))
+      if (i.post && !i.held && senders.get(i.post)?.size === 1) claim(i.post, i.id)
+    const answers = (name: string | undefined): { replyTo?: string } =>
+      name ? { replyTo: lineOf.get(name) ?? name } : {}
+    const incoming: ThreadLine[] = items.incoming.map(
+      ([peer, i]): ThreadLine => ({
+        id: i.id,
+        dir: 'in',
+        from: peer,
+        who: nameOf(peer),
+        text: i.held ? null : i.text,
+        ts: i.ts,
+        ...(i.held && { held: true }),
+        ...(i.via && { via: i.via }),
+        ...(i.agent && { agent: i.agent }),
+        ...(!i.held && answers(i.replyTo)),
+      }),
+    )
+    const outgoing: ThreadLine[] = [...items.posts.entries()].map(([id, copies]): ThreadLine => {
       const first = copies[0] as OutboxItem
       return {
         id,
@@ -843,6 +929,7 @@ export function createTeam({
         ...(team
           ? { receipts: copies.map(c => ({ peer: c.msg.to, name: nameOf(c.msg.to), state: c.state })) }
           : { state: first.state, ...(first.code && { code: first.code }) }),
+        ...answers(first.replyTo),
       }
     })
     const drafts: ThreadLine[] = readDrafts()
@@ -926,8 +1013,8 @@ export function createTeam({
         .map((d): ThreadMessage => ({ id: d.id, dir: 'draft', text: d.text, ts: new Date(d.createdAt).toISOString() }))
       return [...[...incoming, ...outgoing].sort((a, b) => a.ts.localeCompare(b.ts)), ...drafts]
     },
-    async send(to, text, thread) {
-      const r = await post({ to, ...(thread && { thread }) }, text, { by: 'ui' })
+    async send(to, text, thread, replyTo) {
+      const r = await post({ to, ...(thread && { thread }), ...(replyTo && { replyTo }) }, text, { by: 'ui' })
       return r.ok ? { ok: true, id: r.id, thread: r.thread } : r
     },
     post,
@@ -950,6 +1037,34 @@ export function createTeam({
         .sort((a, b) => b.lastAt - a.lastAt)
     },
     threadLines: key => (config() ? threadLines(key) : []),
+    lasts() {
+      if (!config()) return {}
+      const out: Record<string, ThreadLast> = {}
+      const put = (key: string, l: ThreadLast): void => {
+        const was = out[key]
+        if (!was || was.ts < l.ts) out[key] = l
+      }
+      // A line of it is enough for the list; the thread itself shows the whole text.
+      const line = (text: string): string => [...text.slice(0, LAST_CHARS + 1)].slice(0, LAST_CHARS).join('')
+      for (const [peer, list] of Object.entries(readAllInbox()))
+        for (const i of list)
+          put(keyOf(i.thread, peer), {
+            dir: 'in',
+            who: nameOf(peer),
+            text: i.held ? null : line(i.text),
+            ts: i.ts,
+            ...(i.via && { via: i.via }),
+          })
+      for (const list of Object.values(readAllOutbox()))
+        for (const o of list)
+          put(keyOf(o.thread, o.msg.to), {
+            dir: 'out',
+            text: line(o.text ?? o.msg.body.text),
+            ts: o.msg.ts,
+            ...(o.msg.body.via && { via: o.msg.body.via }),
+          })
+      return out
+    },
     nameOf,
     addMembers(key, peers) {
       if (!config()) return { ok: false, error: 'off' }

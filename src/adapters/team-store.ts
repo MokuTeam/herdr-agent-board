@@ -104,6 +104,10 @@ export interface InboxItem {
   agent?: string
   /** The thread's key (#216, threadKey); absent on what came before threads: that pair's general. */
   thread?: string
+  /** The id of the message it answers (#370), as the sender's board wrote it: a message's or a team post's. */
+  replyTo?: string
+  /** A team post's copy (#370): the post's id, the same on every member's copy. */
+  post?: string
   /** When the signed ack went out (null: not yet, or the hub was away). */
   ackedAt: number | null
 }
@@ -132,6 +136,11 @@ export interface OutboxItem {
   pressed?: boolean
   /** The post's text where this copy's differs (an older board's gets the title in front). */
   text?: string
+  /**
+   * The message it answers (#370), on every copy, as the wire names it (a message's id, or a team
+   * post's): kept here too, since a copy to a board without `replies` goes without it.
+   */
+  replyTo?: string
 }
 
 /** A session on this board, as the team keeps it (#216). */

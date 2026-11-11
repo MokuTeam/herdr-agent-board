@@ -2221,14 +2221,24 @@ the running board: the hub, the connection, who is
 online (`●`), who is not (`○`, with when they were last seen), and a flag on anyone whose key
 changed.
 
-**The panel.** Settings → "Team…", or the head's Team button. It opens on the list: the connection
-line, the team chat first, then each person with an online dot and their key's fingerprint, and
-under each their `general` thread and their topics (#216, below), each with its unread count. Pick a
-thread to read it and write in it; "‹ All threads" goes back. Each message you sent shows how far
-it got: queued at the hub, delivered, received (their board's signed ack) or expired (it waits up to
-24 hours by default); in the team chat, each member's copy. From a `general` thread, "New topic"
-starts one with a title and an optional http(s) link. A person whose key changed is marked, and
-what comes from the new key is held back until you press Trust.
+**The panel.** Settings → "Team…", or the head's Team button. It reads as a messenger (#370): a
+wide panel shows the conversations on the left and the one you picked on the right; a narrow one
+(a docked panel, a phone) shows the list, then the conversation, with a back button. The list has
+the connection line, the team chat first, the channels, then each person with an online dot, their
+`general` thread and their topics (#216, below) under them; every row shows its latest message,
+its time and its unread count. A conversation has a separator for each day, one sender's messages a
+few minutes apart under one name, the time on each message (the full date on hover, or a long press
+on a phone), and a "New messages" line where the unread start, which is where it opens. Each
+message you sent shows how far it got: a clock while queued at the hub, one tick delivered, two
+received (their board's signed ack), expired (it waits up to 24 hours by default) in words; in the
+team chat the slowest member's copy, every member's in its tooltip. An agent's message is outlined,
+with the session's name and whose board it is on. Reply on a message (hover, or the long press)
+quotes it over yours, and a click on a quote goes back to the original; a board whose caps say
+`replies` gets the reply with what it answers, an older one the plain text. Enter sends, Shift+Enter
+breaks the line, and what you were writing waits in each thread while you read another. From a
+`general` thread, "New topic" starts one with a title and an optional http(s) link. "People and
+agents" shows each person's key fingerprint, your passkeys and the agent switches. A person whose key
+changed is marked, and what comes from the new key is held back until you press Trust.
 
 **New messages.** A message that comes in raises the board's desktop notification: the sender as
 your board knows them (never a name the message gives itself) and the start of the text, or only
@@ -2242,8 +2252,8 @@ A board hears only what was sent to it: a pair's threads, and its own copy of th
 marks are kept in `team-reads.json` in the board's state folder, from the first time the board
 counts, so the messages from before do not all turn up as news.
 
-**Muting.** A thread's switch in its header mutes it, and the switch beside "Team chat" mutes every
-team thread at once: a muted thread raises no notification, counts nothing toward unread, and no
+**Muting.** A thread's switch in its header mutes it, and the team chat's switch in "People and
+agents" mutes every team thread at once: a muted thread raises no notification, counts nothing toward unread, and no
 session hears of it (#216's routing). Its messages still come in and stay readable, and when you
 unmute it what came in meanwhile and is not read counts again.
 

@@ -98,3 +98,27 @@ test("#360: board team loop shows a peer's pause (its own or the default), sets 
     server.stop(true)
   }
 })
+
+test('#370 board team thread: a thread with only an agent draft waiting is still no thread to an agent', async () => {
+  const draft = { id: 'd1', dir: 'draft', text: 'standup?', ts: '2026-11-11T08:00:00.000Z' }
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch(req) {
+      const path = new URL(req.url).pathname
+      if (path === '/api/team/threads') return Response.json({ threads: [] })
+      return Response.json({ thread: null, lines: [draft] })
+    },
+  })
+  try {
+    const ctx = {
+      webPort: server.port as number,
+      roster: [{ peer: P, name: 'anna' }],
+      self: async () => ({ key: 'k1' }),
+      find: async () => ({ key: 'k1' }),
+    }
+    await expect(teamAgents('thread', ['anna'], ctx)).rejects.toThrow('no such thread on this board')
+  } finally {
+    server.stop(true)
+  }
+})

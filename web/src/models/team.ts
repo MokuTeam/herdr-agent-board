@@ -67,6 +67,15 @@ export function keyParts(key: string): { scope: string; id: string } | null {
 const isSession = (v: unknown): v is { key: string; name?: string } =>
   isObj(v) && typeof v.key === 'string' && (v.name === undefined || typeof v.name === 'string')
 
+/** A thread's latest message, as GET /api/team/threads gives it with each (#370). */
+const isLast = (v: unknown): boolean =>
+  isObj(v) &&
+  (v.dir === 'in' || v.dir === 'out') &&
+  (v.who === undefined || typeof v.who === 'string') &&
+  (v.text === null || typeof v.text === 'string') &&
+  typeof v.ts === 'string' &&
+  (v.via === undefined || VIAS.some(x => x === v.via))
+
 const isThreadView = (v: unknown): v is ThreadView =>
   isObj(v) &&
   typeof v.key === 'string' &&
@@ -78,7 +87,8 @@ const isThreadView = (v: unknown): v is ThreadView =>
   typeof v.muted === 'boolean' &&
   typeof v.lastAt === 'number' &&
   (v.peerName === null || typeof v.peerName === 'string') &&
-  (v.members === undefined || (Array.isArray(v.members) && v.members.every(m => typeof m === 'string')))
+  (v.members === undefined || (Array.isArray(v.members) && v.members.every(m => typeof m === 'string'))) &&
+  (v.last === undefined || isLast(v.last))
 
 /** GET /api/team/threads. */
 export const isThreadList = (v: unknown): v is { threads: ThreadView[] } =>
@@ -102,11 +112,12 @@ const isThreadLine = (v: unknown): v is ThreadLine =>
   (v.pressed === undefined || typeof v.pressed === 'boolean') &&
   (v.via === undefined || VIAS.some(x => x === v.via)) &&
   (v.agent === undefined || typeof v.agent === 'string') &&
-  (v.reason === undefined || typeof v.reason === 'string')
+  (v.reason === undefined || typeof v.reason === 'string') &&
+  (v.replyTo === undefined || typeof v.replyTo === 'string')
 
-/** GET /api/team/threads/<scope>/<id>. */
-export const isThreadLines = (v: unknown): v is { thread: ThreadView; lines: ThreadLine[] } =>
-  isObj(v) && isThreadView(v.thread) && Array.isArray(v.lines) && v.lines.every(isThreadLine)
+/** GET /api/team/threads/<scope>/<id>; `thread` null: nothing written in it yet, an agent's draft waits there (#370). */
+export const isThreadLines = (v: unknown): v is { thread: ThreadView | null; lines: ThreadLine[] } =>
+  isObj(v) && (v.thread === null || isThreadView(v.thread)) && Array.isArray(v.lines) && v.lines.every(isThreadLine)
 
 /**
  * The owner's agent switches (#216, GET /api/team/agents), as the panel shows them: by a peer's id,
@@ -247,29 +258,14 @@ export const seenLine = (p: TeamRosterPeer, now: number, t: Translator): string 
   p.online ? t('team.online') : p.lastSeen ? t('team.lastSeen', { when: ago(p.lastSeen, now, t) }) : t('team.neverSeen')
 
 /** How far a message got; refused with the hub's code when there is one. */
-const delivery = (state: OutState, code: string | undefined, t: Translator): string =>
+export const delivery = (state: OutState, code: string | undefined, t: Translator): string =>
   state === 'refused' && !code ? t('team.delivery.refusedPlain') : t(`team.delivery.${state}`, { code: code ?? '' })
 
 const WHY = ['off', 'lane', 'secret', 'lane_name', 'loop']
 
-/**
- * A line's small print: who wrote it (this board's name for them, never the message's), how far
- * it got (each member's copy for a team post), whose agent, held, and why a draft waits.
- */
-export function lineMeta(l: ThreadLine, t: Translator): string {
-  const out: string[] = []
-  if (l.dir === 'draft') out.push(t('team.draftFromAgent'))
-  else if (l.dir === 'in') out.push(l.who ?? t('team.in'))
-  else out.push(t('team.out'))
-  if (l.dir === 'out' && l.state) out.push(delivery(l.state, l.code, t))
-  if (l.dir === 'out' && l.receipts?.length)
-    out.push(l.receipts.map(r => `${r.name}: ${delivery(r.state, undefined, t)}`).join(', '))
-  if (l.held) out.push(t('team.held'))
-  if (l.via === 'agent' && l.dir === 'in') out.push(t('team.agentRequest', { name: l.who ?? '' }))
-  if (l.via === 'agent' && l.dir === 'out') out.push(l.pressed ? t('team.pressed') : t('team.agentRequestOut'))
-  if (l.dir === 'draft' && l.reason) out.push(WHY.includes(l.reason) ? t(`team.why.${l.reason}`) : l.reason)
-  return out.join(' · ')
-}
+/** Why the board held an agent's draft, in words; a reason it does not know, as it came. */
+export const draftWhy = (reason: string, t: Translator): string =>
+  WHY.includes(reason) ? t(`team.why.${reason}`) : reason
 
 /** What a refused send says (the route's error code). */
 export const sendError = (code: unknown, t: Translator): string =>
@@ -283,7 +279,8 @@ export const sendError = (code: unknown, t: Translator): string =>
       code === 'passkey' ||
       code === 'blocked' ||
       code === 'cancelled' ||
-      code === 'loopback'
+      code === 'loopback' ||
+      code === 'reply'
         ? t(`team.err.${code}`)
         : String(code ?? ''),
   })

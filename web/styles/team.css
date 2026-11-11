@@ -1,57 +1,229 @@
-/* The team panel (#231): the rows and buttons are the tasks panel's. */
-.team-body { display: flex; flex-direction: column; gap: 14px; }
-.team-body h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--label-2); }
+/* The team panel (#231), a messenger since #370 (components/team/TeamPanel.tsx). A wide panel
+   (720 px and up) shows the conversations on the left and the one on show on the right; a narrow
+   one shows one at a time, the list first, and `data-pane` says which. The body does not scroll
+   as a whole: the list scrolls, and in a thread the messages do, between its head and its box. */
+.sheet-body.team-body { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); min-height: 0; padding: 0; overflow: hidden; mask-image: none; }
+.team-body > .team-side, .team-body > .team-main { min-width: 0; min-height: 0; }
+.team-body[data-pane="list"] > .team-main, .team-body:not([data-pane="list"]) > .team-side { display: none; }
+.team-body h3 { margin: 0 0 4px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--label-2); }
 .team-body .hint { margin: 0; color: var(--label-2); font-size: 12.5px; }
-.team-state { margin: 0; font-weight: 600; }
-.team-state.revoked, .team-state.error { color: var(--red, var(--accent)); }
-.team-roster, .team-thread, .team-scope { display: flex; flex-direction: column; gap: 6px; }
-.team-peer { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 8px; background: var(--fill-2); }
-.team-peer.on { box-shadow: inset 3px 0 0 var(--accent); }
-.team-peer.changed { box-shadow: inset 3px 0 0 var(--orange, var(--accent)); }
-.team-pick { display: flex; align-items: center; gap: 8px; }
-.team-name { font-weight: 600; }
-.team-dot.on { --c: var(--green, var(--accent)); }
-.team-fp { font-family: ui-monospace, monospace; }
-.team-changed { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
-.team-changed p { margin: 0; font-size: 12.5px; }
-.team-msg.in { box-shadow: inset 3px 0 0 var(--accent); }
-.team-msg.held { opacity: 0.7; }
-.team-compose { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
-.team-compose textarea, .team-compose input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 0; border-radius: 8px; resize: vertical; background: var(--fill-2); }
-.team-compose .mini { padding: 3px 12px; border: 0; border-radius: 6px; background: var(--fill); font-size: 12px; cursor: pointer; }
-.team-compose .mini:hover:not(:disabled) { color: var(--accent); }
-.team-compose .mini:disabled { opacity: 0.5; cursor: default; }
-.team-changed .mini { padding: 3px 9px; border: 0; border-radius: 6px; background: var(--fill); font-size: 12px; cursor: pointer; }
-/* Unread team messages (#355): the head's Team button and each person in the panel. */
+.team-body .mini { padding: 3px 10px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font: inherit; font-size: 12px; cursor: pointer; transition: transform 100ms ease-out, background 120ms ease; }
+.team-body .mini:hover:not(:disabled) { color: var(--accent); }
+.team-body .mini:active:not(:disabled) { transform: scale(0.96); }
+.team-body .mini:disabled { opacity: 0.5; cursor: default; }
+.team-body .mini.primary { background: var(--accent); color: #fff; }
+.team-body .mini.primary:hover:not(:disabled) { color: #fff; background: color-mix(in srgb, var(--accent) 88%, #000); }
+.team-icon-button { flex: none; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--label-2); cursor: pointer; transition: transform 100ms ease-out, background 120ms ease; }
+.team-icon-button:hover { background: var(--fill); color: var(--label); }
+.team-icon-button:active { transform: scale(0.92); }
+.team-icon-button svg, .team-jump svg, .team-send svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.team-body :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+@container sheet (min-width: 720px) {
+  .sheet-body.team-body { grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); }
+  .team-body[data-pane] > .team-side, .team-body[data-pane] > .team-main { display: flex; }
+  .team-side { box-shadow: 1px 0 0 var(--separator); }
+  .team-back, .team-people .team-back { display: none; }
+}
+
+/* ---- The list: where the connection stands, then the conversations, each a row. */
+.team-side { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; overscroll-behavior: contain; padding: 2px 10px 16px 14px; mask-image: linear-gradient(transparent, #000 12px, #000 calc(100% - 12px), transparent); }
+.team-side-head { display: flex; flex-direction: column; gap: 6px; padding: 4px 4px 0; }
+.team-state { display: flex; align-items: center; gap: 6px; margin: 0; min-width: 0; font-size: 12px; color: var(--label-2); }
+.team-state > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-state-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--gray); }
+.team-state.online .team-state-dot { background: var(--green); }
+.team-state.connecting .team-state-dot, .team-state.reconnecting .team-state-dot { background: var(--orange); }
+.team-state.revoked, .team-state.error { color: var(--red); }
+.team-state.revoked .team-state-dot, .team-state.error .team-state-dot { background: var(--red); }
+.team-side-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.team-scope { display: flex; flex-direction: column; gap: 1px; }
+.team-scope > h3 { padding: 0 4px; }
+.team-peer { display: flex; flex-direction: column; gap: 1px; }
+.team-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 6px 8px; border: 0; border-radius: 10px; background: none; color: inherit; font: inherit; text-align: start; cursor: pointer; transition: transform 100ms ease-out, background 120ms ease; }
+.team-row:hover { background: var(--fill-2); }
+.team-row:active { transform: scale(0.985); }
+.team-row.active { background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.team-row.sub { min-height: 34px; padding: 4px 8px 4px 50px; }
+.team-row-main { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; }
+.team-row-top, .team-row-bottom { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.team-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 600; }
+.team-row.sub .team-row-title { font-size: 13px; font-weight: 500; }
+.team-row-meta, .team-row-when { flex: none; font-size: 11.5px; color: var(--label-2); font-variant-numeric: tabular-nums; }
+.team-row-changed { flex: none; font-size: 11px; color: var(--orange); }
+.team-row-last { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--label-2); }
+.team-row.sub .team-row-last { font-size: 12px; }
+.team-row.muted .team-row-title { color: var(--label-2); font-weight: 500; }
+.team-row.muted .team-row-last { color: var(--label-3); }
+.team-muted { flex: none; display: inline-grid; }
+.team-muted svg { width: 14px; height: 14px; fill: none; stroke: var(--label-3); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.team-unread { display: inline-grid; flex: none; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .pill-toggle.unread .n { background: var(--accent); color: #fff; }
-.team-unread { display: inline-grid; place-items: center; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
-/* Threads (#355 on #216's model): the list (the team chat first, each person's threads under them)
-   and the thread on show, which comes in from the side it goes back to. */
-.team-scope-head { display: flex; align-items: center; gap: 8px; }
-.team-scope-head h3 { margin: 0; flex: 1; }
-.team-rows { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
-.team-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: 0; border-radius: 7px; background: none; color: inherit; font: inherit; text-align: start; cursor: pointer; }
-.team-scope > .team-row { background: var(--fill-2); }
-.team-row:hover { background: var(--fill); }
-.team-row:active { transform: scale(0.99); }
-.team-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.team-row.muted .team-row-title, .team-scope.muted > .team-row .team-row-title { color: var(--label-2); }
-.team-muted, .team-switch-label, .team-lanes .todo-meta { flex: none; font-size: 11.5px; }
-.team-thread-head { display: flex; align-items: center; gap: 8px; }
-.team-thread-head .team-back { margin-inline-end: auto; }
-.team-body .team-thread-title { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; text-transform: none; color: var(--label); }
-.team-thread .sheet-meta { margin: 0; overflow-wrap: anywhere; }
-.team-back, .team-compose-actions .mini, .team-lane, .team-agents .mini { padding: 3px 10px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font-size: 12px; cursor: pointer; }
-.team-back:hover, .team-lane:hover:not(:disabled) { color: var(--accent); }
-.team-compose-actions { display: flex; gap: 6px; justify-content: flex-end; }
-.team-thread { animation: team-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
-.team-me { animation: team-back 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+/* A row's mark: a person's initial in their tone with their online dot, a channel's #, the team's. */
+.tone-0 { --tone: var(--blue); }
+.tone-1 { --tone: var(--green); }
+.tone-2 { --tone: var(--orange); }
+.tone-3 { --tone: var(--purple); }
+.team-avatar { position: relative; flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: color-mix(in srgb, var(--tone, var(--label-2)) 16%, var(--surface)); color: var(--tone, var(--label-2)); font: 600 14px/1 var(--font-display); }
+.team-avatar.team { --tone: var(--accent); }
+.team-avatar.channel { font-size: 16px; font-weight: 500; }
+.team-avatar.gone { background: var(--fill); }
+.team-avatar svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; }
+.team-avatar-dot { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; background: var(--gray); box-shadow: 0 0 0 2px var(--panel-float); }
+.team-avatar-dot.on { background: var(--green); }
+
+/* ---- A thread: its head, the messages between, the drafts and the box under them. */
+.team-main { position: relative; display: flex; flex-direction: column; overflow: hidden; }
+.team-thread, .team-people { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.team-body .team-pick-hint { margin: auto; padding: 24px; text-align: center; }
+.team-thread-head { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 2px 18px 6px; }
+.team-thread-bar { display: flex; align-items: center; gap: 8px; min-height: 36px; }
+.team-thread-id { flex: 1; min-width: 0; }
+.team-body .team-thread-title { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 16px/1.25 var(--font-display); letter-spacing: -0.01em; text-transform: none; color: var(--label); }
+.team-thread-id .sheet-meta { display: -webkit-box; margin: 1px 0 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; font-size: 12px; }
+.team-back { margin-left: -8px; }
+.team-changed { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--orange) 12%, transparent); }
+.team-changed p { margin: 0; font-size: 12.5px; }
+.team-scroll-wrap { position: relative; display: flex; flex: 1; min-height: 0; }
+.team-scroll { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px 18px 10px; mask-image: linear-gradient(transparent, #000 8px, #000 calc(100% - 10px), transparent); }
+.team-scroll > :first-child { margin-top: auto; }
+.team-empty { align-self: center; padding: 24px 0; }
+.team-day { position: sticky; top: 8px; z-index: 1; display: flex; justify-content: center; margin: 14px 0 4px; pointer-events: none; }
+.team-day span { padding: 3px 10px; border-radius: 999px; background: color-mix(in srgb, var(--panel-float) 82%, transparent); backdrop-filter: blur(16px) saturate(180%); -webkit-backdrop-filter: blur(16px) saturate(180%); box-shadow: 0 0 0 0.5px var(--separator); color: var(--label-2); font-size: 11.5px; font-weight: 600; }
+.team-unread-line { display: flex; align-items: center; gap: 10px; margin: 12px 0 2px; color: var(--accent); font-size: 11.5px; font-weight: 600; }
+.team-unread-line::before, .team-unread-line::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--accent) 40%, transparent); }
+
+/* A message: a bubble, the others' on the left, this board's on the right in the accent. One
+   sender's messages in a row keep their corners small where they meet. */
+.team-msg { display: flex; flex-direction: column; align-items: flex-start; margin-top: 2px; }
+.team-msg.first { margin-top: 10px; }
+.team-msg.out { align-items: flex-end; }
+.team-msg-name { margin: 0 0 3px 12px; color: var(--tone); font-size: 12px; font-weight: 600; }
+.team-msg-row { display: flex; align-items: center; gap: 4px; max-width: min(86%, 640px); }
+.team-msg.out .team-msg-row { flex-direction: row-reverse; }
+.team-bubble { min-width: 0; padding: 7px 12px 5px; border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-card); font-size: 13.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.team-msg.in .team-bubble { border-bottom-left-radius: 6px; }
+.team-msg.in:not(.first) .team-bubble { border-top-left-radius: 6px; }
+.team-msg.out .team-bubble { border-bottom-right-radius: 6px; background: var(--accent); box-shadow: none; color: #fff; }
+.team-msg.out:not(.first) .team-bubble { border-top-right-radius: 6px; }
+.team-msg.out .md a { color: #fff; text-decoration: underline; }
+.team-msg.out .md code, .team-msg.out .md pre { background: rgba(255, 255, 255, 0.18); }
+.team-bubble code { padding: 1px 4px; border-radius: 4px; background: var(--fill); font: 12px var(--mono); overflow-wrap: anywhere; }
+.team-bubble .md pre { max-width: 100%; overflow-x: auto; }
+.team-bubble .unfold { display: block; min-height: 24px; margin-top: 6px; padding: 3px 10px; border: 0; border-radius: 999px; background: var(--fill); color: var(--accent); font: 500 12px/1.3 var(--font); }
+.team-msg.out .unfold { background: rgba(255, 255, 255, 0.2); color: #fff; }
+.team-bubble .md.folded { overflow: hidden; mask-image: linear-gradient(to bottom, #000 calc(100% - 72px), transparent); }
+.team-held-text { margin: 0; color: var(--label-2); font-style: italic; }
+.team-msg.held .team-bubble { opacity: 0.75; }
+.team-msg-foot { display: flex; justify-content: flex-end; align-items: center; gap: 3px; margin: 2px -4px 0 12px; font-size: 11px; line-height: 1.2; font-variant-numeric: tabular-nums; opacity: 0.62; }
+.team-delivery { display: inline-grid; }
+.team-delivery svg { width: 16px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.team-delivery.bad { color: var(--red); font-weight: 500; }
+.team-msg.out:has(.team-delivery.bad) .team-bubble { background: color-mix(in srgb, var(--red) 8%, var(--panel)); box-shadow: inset 0 0 0 1px var(--red); color: var(--label); }
+.team-msg.out:has(.team-delivery.bad) .team-msg-foot { opacity: 1; }
+.team-msg-reply { opacity: 0; transition: opacity 120ms ease, transform 100ms ease-out, background 120ms ease; }
+.team-msg:hover .team-msg-reply, .team-msg:focus-within .team-msg-reply { opacity: 1; }
+@media (hover: none) { .team-msg-reply { display: none; } }
+.team-msg-when { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; color: var(--label-2); font-size: 11.5px; }
+
+/* An agent's message: outlined, not filled, with the agent's mark over its text. */
+.team-msg.agent.in .team-bubble { background: color-mix(in srgb, var(--purple) 6%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--purple) 45%, transparent); }
+.team-msg.agent.out .team-bubble { background: color-mix(in srgb, var(--accent) 8%, var(--panel)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); color: var(--label); }
+.team-msg.agent.out .md a { color: var(--accent); text-decoration: none; }
+.team-msg.agent.out .md code, .team-msg.agent.out .md pre { background: var(--fill); }
+.team-agent-mark { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin-bottom: 3px; color: var(--purple); font-size: 11.5px; font-weight: 500; }
+.team-msg.agent.out .team-agent-mark { color: var(--accent); }
+.team-agent-mark code { padding: 0; background: none; font: 600 11.5px var(--mono); }
+.team-agent-mark span + span::before, .team-agent-mark code + span::before { content: "· "; }
+.team-glyph { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+
+/* A reply's quote: the message answered, its sender and a line, a bar on its edge; a click goes there. */
+.team-quote { display: flex; flex-direction: column; align-items: flex-start; width: 100%; min-width: 0; margin: 2px 0 5px; padding: 3px 8px 4px 10px; border: 0; border-radius: 8px; background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: inset 3px 0 0 var(--accent); color: inherit; font: inherit; font-size: 12.5px; line-height: 1.35; text-align: start; cursor: pointer; transition: background 120ms ease; }
+button.team-quote:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.team-quote b { color: var(--accent); font-size: 12px; font-weight: 600; }
+.team-quote span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85; }
+.team-quote.gone { cursor: default; font-style: italic; opacity: 0.7; }
+.team-quote.static { flex: 1; margin: 0; cursor: default; }
+.team-msg.out:not(.agent) .team-quote { background: rgba(255, 255, 255, 0.16); box-shadow: inset 3px 0 0 rgba(255, 255, 255, 0.85); }
+.team-msg.out:not(.agent) .team-quote b { color: #fff; }
+@keyframes team-flash { 0%, 35% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent); } }
+.team-msg.flash .team-bubble { animation: team-flash 1.6s ease-out; }
+
+/* The jump to the latest, over the messages' end while the reader is above it. */
+.team-jump { position: absolute; right: 18px; bottom: 10px; z-index: 2; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: var(--material-thick); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%); box-shadow: var(--shadow-lift); color: var(--label); cursor: pointer; animation: team-pop 180ms cubic-bezier(0.2, 0.8, 0.2, 1); transition: transform 100ms ease-out; }
+.team-jump:active { transform: scale(0.92); }
+.team-jump .team-unread { position: absolute; top: -6px; right: -4px; }
+@keyframes team-pop { from { opacity: 0; transform: scale(0.8); } }
+
+/* Under the messages: an agent's held drafts, then the box. */
+.team-foot { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 4px 18px 14px; }
+.team-foot > .hint { padding: 0 4px; }
+.team-draft { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 14px; background: color-mix(in srgb, var(--purple) 7%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--purple) 38%, transparent); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.team-draft .team-agent-mark { margin: 0; }
+.team-draft-actions, .team-welcome-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.team-compose { display: flex; flex-direction: column; gap: 6px; }
+.team-compose-reply { display: flex; align-items: center; gap: 4px; padding: 0 2px 0 4px; }
+.team-compose-attachments { display: flex; flex-wrap: wrap; gap: 6px; }
+.team-compose-row { display: flex; align-items: flex-end; gap: 6px; padding: 4px 4px 4px 14px; border-radius: 20px; background: var(--surface); box-shadow: var(--shadow-card); transition: box-shadow 120ms ease; }
+.team-compose-row:focus-within { box-shadow: var(--shadow-card), 0 0 0 2px color-mix(in srgb, var(--accent) 32%, transparent); }
+.team-compose-actions { display: flex; align-self: center; gap: 4px; margin-left: -8px; }
+.team-compose textarea { flex: 1; min-width: 0; min-height: 30px; max-height: 168px; margin: 0; padding: 5px 0; border: 0; background: none; color: inherit; font: inherit; font-size: 13.5px; line-height: 1.45; resize: none; outline: none; box-sizing: border-box; }
+.team-compose textarea:focus-visible { outline: none; }
+.team-send { flex: none; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: #fff; cursor: pointer; transition: transform 100ms ease-out, background 120ms ease; }
+.team-send svg { stroke-width: 2; }
+.team-send:active:not(:disabled) { transform: scale(0.9); }
+.team-send:disabled { background: var(--fill); color: var(--label-3); cursor: default; }
+.team-body .team-send-text { align-self: center; min-height: 28px; border-radius: 14px; background: var(--accent); color: #fff; font-weight: 500; }
+.team-body .team-send-text:hover:not(:disabled) { color: #fff; }
+.team-topic { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: 14px; background: var(--fill-2); }
+.team-topic-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; }
+.team-topic input { width: 100%; box-sizing: border-box; padding: 7px 10px; border: 0; border-radius: 8px; background: var(--surface); color: inherit; font: inherit; font-size: 13px; box-shadow: var(--shadow-card); }
+
+/* The thread comes in from the side it goes back to; the list comes back from the other. */
+.team-body[data-pane="thread"] .team-thread, .team-body[data-pane="people"] .team-people { animation: team-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.team-body[data-pane="list"] .team-side { animation: team-back 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 @keyframes team-in { from { opacity: 0; transform: translateX(24px); } }
 @keyframes team-back { from { opacity: 0; transform: translateX(-24px); } }
-@media (prefers-reduced-motion: reduce) {
-  .team-thread, .team-me { animation: team-fade 150ms ease; }
-  @keyframes team-fade { from { opacity: 0; } }
+@container sheet (min-width: 720px) {
+  .team-body[data-pane="thread"] .team-thread, .team-body[data-pane="people"] .team-people { animation: team-fade 160ms ease; }
+  .team-body[data-pane="list"] .team-side { animation: none; }
 }
+@keyframes team-fade { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .team-body[data-pane] .team-thread, .team-body[data-pane] .team-people, .team-body[data-pane="list"] .team-side { animation: team-fade 150ms ease; }
+  .team-jump { animation: team-fade 150ms ease; }
+  .team-msg.flash .team-bubble { animation: none; outline: 2px solid var(--accent); outline-offset: 2px; }
+  .team-row, .team-icon-button, .team-send, .team-body .mini { transition: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .team-day span, .team-jump { background: var(--panel-float); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+
+/* A phone, or a panel as narrow: tighter gutters, wider bubbles. */
+@container sheet (max-width: 480px) {
+  .team-scroll { padding-inline: 12px; }
+  .team-thread-head, .team-foot { padding-inline: 12px; }
+  .team-side { padding-inline: 8px; }
+  .team-msg-row { max-width: 92%; }
+  .team-jump { right: 12px; }
+}
+
+/* ---- People and agents: this board, the roster with keys and Trust, the passkeys, the switches. */
+.team-people-body { display: flex; flex: 1; flex-direction: column; gap: 14px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 18px 18px; }
+.team-me { display: flex; flex-direction: column; gap: 2px; }
+.team-me .team-state { font-size: 13px; font-weight: 600; color: var(--label); }
+.team-me .sheet-meta { margin: 0; }
+.team-roster { display: flex; flex-direction: column; gap: 6px; }
+.team-card { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 10px; background: var(--fill-2); }
+.team-card.changed { box-shadow: inset 3px 0 0 var(--orange); }
+.team-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.team-pick .team-open { margin-left: auto; }
+.team-name { font-weight: 600; }
+.team-dot.on { --c: var(--green, var(--accent)); }
+.team-fp { font-family: var(--mono); }
+.team-new { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+
 /* The owner's agent switches (#216's routes, #355's controls). */
 .team-agents { display: flex; flex-direction: column; gap: 8px; }
 .team-agents summary { list-style: none; cursor: pointer; }
@@ -63,6 +235,7 @@
 .team-agent { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; border-radius: 8px; background: var(--fill-2); }
 .team-agent.off { opacity: 0.6; }
 .team-lanes { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.team-lanes .todo-meta { flex: none; font-size: 11.5px; }
 .team-lane[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 20%, var(--fill)); color: var(--accent); }
 .team-switch { position: relative; flex: none; width: 38px; height: 22px; padding: 0; border: 0; border-radius: 11px; background: var(--fill); cursor: pointer; transition: background 150ms ease; }
 .team-switch[aria-checked="true"] { background: var(--accent); }
@@ -70,6 +243,15 @@
 .team-switch:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); outline: 0; }
 .team-knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.25); transition: transform 150ms ease; }
 .team-switch[aria-checked="true"] .team-knob { transform: translateX(16px); }
+.team-loop { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.team-loop .todo-meta { flex: none; }
+.team-loop input { width: 4.5em; padding: 2px 6px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font: inherit; font-size: 12px; }
+.team-add select { flex: 1; min-width: 0; padding: 3px 6px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font: inherit; font-size: 12px; }
+
+/* A new member's welcome (#355), on top of the list while it waits. */
+.team-welcome { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, var(--fill-2)); box-shadow: inset 3px 0 0 var(--accent); }
+.team-welcome h3 { margin: 0; }
+
 /* The owner's passkeys (#224): the list in the panel, and the confirmation window on localhost. */
 .team-passkeys ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
 .team-passkeys li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
@@ -81,14 +263,3 @@
 .team-confirm-note { margin: 0; color: var(--label-2); font-size: 12.5px; }
 .team-confirm-items { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
 .team-confirm-actions { display: flex; gap: 8px; }
-/* Channels, a new member's welcome, the loop pause (#355). */
-.team-new { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
-.team-welcome { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, var(--fill-2)); box-shadow: inset 3px 0 0 var(--accent); }
-.team-welcome h3 { margin: 0; }
-.team-channels .team-scope-head .mini { padding: 3px 10px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font-size: 12px; cursor: pointer; }
-.team-channels > .team-row { background: var(--fill-2); }
-.team-loop { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.team-loop .todo-meta { flex: none; }
-.team-loop input { width: 4.5em; padding: 2px 6px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font: inherit; font-size: 12px; }
-.team-add select { flex: 1; min-width: 0; padding: 3px 6px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font: inherit; font-size: 12px; }
-.team-add .mini { padding: 3px 10px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font-size: 12px; cursor: pointer; }
