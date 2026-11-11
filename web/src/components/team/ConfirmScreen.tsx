@@ -36,6 +36,8 @@ export function confirmLines(a: Reply, t: Translator): ConfirmLines {
         typeof a.link === 'string' ? t('team.confirm.link', { link: a.link }) : null,
         // A new channel (#355): who will read it.
         Array.isArray(a.members) ? t('team.confirm.channelFor', { names: a.members.map(String).join(', ') }) : null,
+        // A file with it (#371), by the name it goes under.
+        typeof a.file === 'string' ? t('team.confirm.file', { name: a.file }) : null,
       ].filter((x): x is string => x !== null)
       return {
         title: who ? t('team.confirm.send', { who }) : t('team.confirm.sendTeam'),
@@ -48,6 +50,8 @@ export function confirmLines(a: Reply, t: Translator): ConfirmLines {
       return {
         title: who ? t('team.confirm.draft', { who }) : t('team.confirm.draftTeam'),
         ...(typeof a.text === 'string' && { text: a.text }),
+        // An agent's file (#371): the owner sees it goes with the draft.
+        ...(typeof a.file === 'string' && { items: [t('team.confirm.file', { name: a.file })] }),
         note: unlocks,
       }
     case 'trust':

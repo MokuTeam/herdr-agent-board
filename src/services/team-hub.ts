@@ -57,6 +57,7 @@ import {
   channelMembers,
   checkEnvelope,
   checkMessage,
+  DEFAULT_MAX_FILE_BYTES,
   DEFAULT_TTL_S,
   type Envelope,
   type ErrorCode,
@@ -96,7 +97,7 @@ import {
   verifyBox,
 } from '../core/team.ts'
 import { inboundKey, legacyText, splitKey, TEAM, threadKey } from '../core/team-agents.ts'
-import { NONCE_BYTES, TAG_BYTES, wrapSecret } from '../core/team-box.ts'
+import { NONCE_BYTES, TAG_BYTES, usableBox, wrapSecret } from '../core/team-box.ts'
 import { checkMeta, fileContext, mimeOf, sealFile } from '../core/team-file.ts'
 import { backoffMs } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
@@ -408,6 +409,9 @@ export function createTeam({
     authed: () => authed,
     me: () => me?.peer ?? null,
     now: () => clock.now(),
+    setTimeout: (fn, ms) => clock.setTimeout(fn, ms),
+    clearTimeout: h => clock.clearTimeout(h),
+    hubMax: () => hubFiles?.max ?? 0,
     log,
     changed: () => changed(),
     release: blob => {
@@ -480,8 +484,15 @@ export function createTeam({
     try {
       const key = await ensureKey()
       // The box key goes in the hello signed with this board's key (#371), so no hub can swap it.
-      const box = await ensureBoxKey()
-      const claim: BoxClaim = { key: box.pub, sig: await sign(key.pkcs8, boxBytes({ box: box.pub, peer: key.pub })) }
+      // Without a box key (a state folder it cannot write, a runtime without X25519) the board still
+      // connects, as an older one does: no box, no `files` cap, text as ever.
+      let claim: BoxClaim | undefined
+      try {
+        const box = await ensureBoxKey()
+        claim = { key: box.pub, sig: await sign(key.pkcs8, boxBytes({ box: box.pub, peer: key.pub })) }
+      } catch (err) {
+        log(`team: no box key, so no files: ${err instanceof Error ? err.message : String(err)}`)
+      }
       if (mine !== gen) return
       me = { peer: key.pub, pkcs8: key.pkcs8 }
       const w = socket(hubUrl(active.hub))
@@ -494,8 +505,8 @@ export function createTeam({
           v: TEAM_PROTOCOL,
           peer: key.pub,
           client: `agent-board/${version}`,
-          caps: OUR_CAPS,
-          box: claim,
+          caps: claim ? OUR_CAPS : OUR_CAPS.filter(c => c !== 'files'),
+          ...(claim && { box: claim }),
         })
       }
       w.onmessage = e => {
@@ -645,7 +656,8 @@ export function createTeam({
     for (const [peer, claim] of claims) {
       if (!claim) continue
       const id = `${peer}\n${claim.key}\n${claim.sig}`
-      if (!checked.has(id)) checked.set(id, await verifyBox(peer, claim))
+      // A signed key nothing can be sealed to (of low order) is no box either.
+      if (!checked.has(id)) checked.set(id, (await verifyBox(peer, claim)) && (await usableBox(claim.key)))
     }
     boxes.clear()
     for (const [peer, claim] of claims)
@@ -930,16 +942,18 @@ export function createTeam({
     // get the text and FILE_LINE. Nobody who can take it: nothing goes.
     const takers = bytes?.ok ? recipients.filter(canFile) : []
     if (bytes?.ok && !takers.length) return { ok: false, error: 'files_nobody' }
+    // Each taker's box as it was pinned when it was chosen, before anything awaits.
+    const boxesOf = takers.map(p => ({ peer: p.peer, box: boxes.get(p.peer) as string }))
     const blob = bytes?.ok ? crypto.randomUUID() : null
-    const sealed = bytes?.ok && blob ? await sealFile(bytes.bytes, bytes.meta, blob) : null
-    const wrapped =
-      sealed && blob
-        ? await wrapSecret(
-            sealed.secret,
-            takers.map(p => ({ peer: p.peer, box: boxes.get(p.peer) as string })),
-            fileContext(blob),
-          )
-        : null
+    let sealed: Awaited<ReturnType<typeof sealFile>> | null = null
+    let wrapped: Awaited<ReturnType<typeof wrapSecret>> | null = null
+    try {
+      sealed = bytes?.ok && blob ? await sealFile(bytes.bytes, bytes.meta, blob) : null
+      wrapped = sealed && blob ? await wrapSecret(sealed.secret, boxesOf, fileContext(blob)) : null
+    } catch (err) {
+      log(`team: a file could not be sealed: ${err instanceof Error ? err.message : String(err)}`)
+      return { ok: false, error: 'file' }
+    }
     const ttl_s = team ? MAX_TTL_S : DEFAULT_TTL_S
     const via: Via | undefined = source.by === 'agent' ? 'agent' : undefined
     const session = source.by === 'agent' ? source.session : undefined
@@ -1244,15 +1258,16 @@ export function createTeam({
   }
 
   /** A file an agent attached to a draft (#371): a regular file within what the hub takes, under a name a meta can carry. */
-  function checkDraftFile(file: PostFile): { ok: true; size: number } | { ok: false; error: string } {
+  function checkDraftFile(file: PostFile): { ok: true; size: number; max: number } | { ok: false; error: string } {
     try {
       const st = statSync(file.path)
       if (!st.isFile()) return { ok: false, error: 'file' }
-      const max = (hubFiles?.max ?? 0) - NONCE_BYTES - TAG_BYTES
-      if (hubFiles && st.size > max) return { ok: false, error: 'file_big' }
+      // Before the hub said its limit (offline, an older hub), the default one holds.
+      const max = (hubFiles?.max ?? DEFAULT_MAX_FILE_BYTES) - NONCE_BYTES - TAG_BYTES
+      if (st.size > max) return { ok: false, error: 'file_big' }
       if (!checkMeta({ name: file.name, type: mimeOf(file.name), size: st.size }))
         return { ok: false, error: 'file_name' }
-      return { ok: true, size: st.size }
+      return { ok: true, size: st.size, max }
     } catch {
       return { ok: false, error: 'file' }
     }
@@ -1343,7 +1358,14 @@ export function createTeam({
         const checked = checkDraftFile(file)
         if (!checked.ok) return checked
         try {
-          kept = { path: keepDraftFile(id, file.path), name: file.name, size: checked.size }
+          const path = keepDraftFile(id, file.path)
+          // The file may have grown between the look and the copy: the copy is what counts.
+          const size = statSync(path).size
+          if (size > checked.max) {
+            dropDraftFile(path)
+            return { ok: false, error: 'file_big' }
+          }
+          kept = { path, name: file.name, size }
         } catch {
           return { ok: false, error: 'file' }
         }
@@ -1437,10 +1459,15 @@ export function createTeam({
       const target = { to: d.to, ...(d.thread && { thread: d.thread }) }
       const source = { by: 'agent' as const, ...(d.session && { session: d.session }), pressed: true }
       const file = d.file && { path: d.file.path, name: d.file.name }
-      let r = await post({ ...target, ...(d.replyTo && { replyTo: d.replyTo }) }, d.text, source, file)
-      if (!r.ok && r.error === 'reply' && d.replyTo) r = await post(target, d.text, source, file)
-      if (!r.ok) addDraft(d, Number.MAX_SAFE_INTEGER)
-      else {
+      let r: PostResult = { ok: false, error: 'draft' }
+      try {
+        r = await post({ ...target, ...(d.replyTo && { replyTo: d.replyTo }) }, d.text, source, file)
+        if (!r.ok && r.error === 'reply' && d.replyTo) r = await post(target, d.text, source, file)
+      } finally {
+        // Put back when the send is refused, or throws: a draft is never lost on the way.
+        if (!r.ok) addDraft(d, Number.MAX_SAFE_INTEGER)
+      }
+      if (r.ok) {
         if (d.file) dropDraftFile(d.file.path)
         audit('draft_sent', d.to === TEAM ? null : d.to, { id })
         // The session that wrote it hears the answers, as it would have had it gone at once (#216).

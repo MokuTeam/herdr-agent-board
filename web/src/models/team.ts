@@ -113,7 +113,18 @@ const isThreadLine = (v: unknown): v is ThreadLine =>
   (v.via === undefined || VIAS.some(x => x === v.via)) &&
   (v.agent === undefined || typeof v.agent === 'string') &&
   (v.reason === undefined || typeof v.reason === 'string') &&
-  (v.replyTo === undefined || typeof v.replyTo === 'string')
+  (v.replyTo === undefined || typeof v.replyTo === 'string') &&
+  (v.file === undefined || isLineFile(v.file))
+
+/** A line's file (#371): its state, and its name, size and address when the board has them. */
+const isLineFile = (v: unknown): boolean =>
+  isObj(v) &&
+  typeof v.state === 'string' &&
+  (v.name === undefined || typeof v.name === 'string') &&
+  (v.size === undefined || typeof v.size === 'number') &&
+  (v.url === undefined || (typeof v.url === 'string' && v.url.startsWith('/uploads/'))) &&
+  (v.why === undefined || typeof v.why === 'string') &&
+  (v.progress === undefined || typeof v.progress === 'number')
 
 /** GET /api/team/threads/<scope>/<id>; `thread` null: nothing written in it yet, an agent's draft waits there (#370). */
 export const isThreadLines = (v: unknown): v is { thread: ThreadView | null; lines: ThreadLine[] } =>
@@ -261,7 +272,7 @@ export const seenLine = (p: TeamRosterPeer, now: number, t: Translator): string 
 export const delivery = (state: OutState, code: string | undefined, t: Translator): string =>
   state === 'refused' && !code ? t('team.delivery.refusedPlain') : t(`team.delivery.${state}`, { code: code ?? '' })
 
-const WHY = ['off', 'lane', 'secret', 'lane_name', 'loop']
+const WHY = ['off', 'lane', 'secret', 'lane_name', 'loop', 'file']
 
 /** Why the board held an agent's draft, in words; a reason it does not know, as it came. */
 export const draftWhy = (reason: string, t: Translator): string =>

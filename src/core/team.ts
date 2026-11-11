@@ -289,8 +289,8 @@ export function checkMessage(
     !isStr(body.text)
   )
     return no('bad_frame')
-  // A copy with a file may come without a caption (#371); the relay sees only that a file is there.
-  const hasFile = isRecord(body.file)
+  // A copy with a file may come without a caption (#371); the relay checks only the file's shape.
+  const hasFile = readFileRef(body.file) !== null
   if (!KINDS.some(k => k === v.kind)) return no('kind')
   if (v.to === '*') return no('broadcast')
   if (!isPeerId(v.to)) return no('bad_frame')

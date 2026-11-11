@@ -9,7 +9,7 @@
 // team-agents.json, and the global off (the panel's, or config.json's `team.agents: false`) wins.
 // Off, an agent's post becomes a draft, as before #216, and nothing that comes in reaches a session.
 
-import { closeSync, openSync, readSync } from 'node:fs'
+import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs'
 import { basename } from 'node:path'
 import { addEntry, listEntries, updateEntry } from '../adapters/schedule-store.ts'
 import {
@@ -82,7 +82,9 @@ const SCAN_BYTES = 1024 * 1024
 export function fileText(path: string): string {
   let fd: number | undefined
   try {
-    fd = openSync(path, 'r')
+    // Without blocking on what is no file (a FIFO would hold the board until a writer came), and only a file.
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
+    if (!fstatSync(fd).isFile()) return ''
     const buf = Buffer.alloc(SCAN_BYTES)
     const n = readSync(fd, buf, 0, buf.length, 0)
     const head = buf.subarray(0, n)

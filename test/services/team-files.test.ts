@@ -351,3 +351,116 @@ async function boxOfBoard(m: Member, peer: string): Promise<string> {
     await m.c.settle(30)
   }
 }
+
+describe('what the review found (#371)', () => {
+  /** A board on a fake hub that takes files up to `max`, with ben (files, `box`) on its roster. */
+  async function fake(benBox: unknown, max = MB) {
+    const s = setup()
+    s.svc.start()
+    const ben = await generateKey()
+    const { ws, me } = await handshake(s, [{ peer: ben.pub, name: 'ben', caps: FILES, box: benBox }], 1, {
+      files: { max, quota: 4 * MB },
+    })
+    const box = ws.of('hello')[0]?.box?.key as string
+    return { s, ws, me, ben, box }
+  }
+
+  test('a signed box nothing can be sealed to (all zeros) is no box: no file goes, nothing throws', async () => {
+    const key = await generateKey()
+    const zeros = b64u(new Uint8Array(32))
+    const claim = { key: zeros, sig: await sign(key.pkcs8, boxBytes({ box: zeros, peer: key.pub })) }
+    expect(await verifyBox(key.pub, claim)).toBe(true)
+    const { usableBox } = await import('../../src/core/team-box.ts')
+    expect(await usableBox(zeros)).toBe(false)
+    expect(await usableBox((await generateBoxKey()).pub)).toBe(true)
+    // The hub takes no such claim.
+    const c = await h.join(key, 'dora', undefined, FILES, { box: claim })
+    c.close()
+    expect(h.db.peer(key.pub)?.box).toBeNull()
+    // A board takes none either, from whatever hub.
+    const s = setup()
+    s.svc.start()
+    await handshake(s, [{ peer: key.pub, name: 'dora', caps: FILES, box: claim }], 1, { files: { max: MB, quota: MB } })
+    await Bun.sleep(50)
+    expect(s.svc.view()?.roster[0]?.files).toBeUndefined()
+    const dir = isolatedHome()
+    const path = writeTemp(dir, 'a.txt', 'x')
+    expect(await s.svc.post({ to: key.pub }, 'x', { by: 'ui' }, { path, name: 'a.txt' })).toEqual({
+      ok: false,
+      error: 'files_nobody',
+    })
+  })
+
+  test('a copy whose signed size is not its blob fails at once, and the next file still comes', async () => {
+    const w = await world()
+    const meBox = await boxOfBoard(w.ben, w.me.pub)
+    const bytes = new TextEncoder().encode('one')
+    const blob = crypto.randomUUID()
+    const sealed = await sealFile(bytes, { name: 'a.txt', type: 'text/plain', size: 3 }, blob)
+    const wr = await wrapSecret(sealed.secret, [{ peer: w.me.pub, box: meBox }], fileContext(blob))
+    w.ben.c.send({ t: 'blob_open', id: blob, size: sealed.blob.length, hash: sealed.hash, to: [w.me.pub], ttl_s: 600 })
+    await w.ben.c.take('blob_have')
+    w.ben.c.send({ t: 'blob_put', id: blob, at: 0, data: b64u(sealed.blob) })
+    await w.ben.c.take('blob_ready')
+    const file = {
+      blob,
+      size: sealed.blob.length + 1,
+      hash: sealed.hash,
+      eph: wr.eph,
+      key: wr.keys[w.me.pub] as string,
+      meta: sealed.meta,
+    }
+    w.ben.c.send({
+      t: 'send',
+      env: await question(w.ben.key, w.me.pub, '', { id: crypto.randomUUID(), body: { text: '', file } }),
+    })
+    await until(() => readInbox(w.ben.key.pub)[0]?.file?.state === 'failed', 'failed', 5000)
+    expect(readInbox(w.ben.key.pub)[0]?.file?.why).toBe('data')
+    await sendFrom(w.ben, w.me.pub, meBox, new TextEncoder().encode('two'), 'b.txt')
+    await until(() => readInbox(w.ben.key.pub)[1]?.file?.state === 'ready', 'the next one came', 5000)
+  })
+
+  test('a fetch the hub never answers fails after a minute; a file over what the board takes fails as big before any fetch', async () => {
+    const { s, ws, me, ben, box } = await fake(undefined, 2000)
+    const send = async (size: number) => {
+      const blob = crypto.randomUUID()
+      const sealed = await sealFile(
+        new Uint8Array(size),
+        { name: 'x.bin', type: 'application/octet-stream', size },
+        blob,
+      )
+      const wr = await wrapSecret(sealed.secret, [{ peer: me, box }], fileContext(blob))
+      const file = {
+        blob,
+        size: sealed.blob.length,
+        hash: sealed.hash,
+        eph: wr.eph,
+        key: wr.keys[me] as string,
+        meta: sealed.meta,
+      }
+      ws.recv({ t: 'deliver', env: await question(ben, me, '', { id: crypto.randomUUID(), body: { text: '', file } }) })
+      return blob
+    }
+    const big = await send(3000)
+    await until(() => readInbox(ben.pub)[0]?.file?.state === 'failed', 'big', 2000)
+    expect(readInbox(ben.pub)[0]?.file?.why).toBe('big')
+    expect(ws.of('blob_get').some(f => f.id === big)).toBe(false)
+    const quiet = await send(100)
+    await until(() => ws.of('blob_get').some(f => f.id === quiet), 'asked', 2000)
+    s.clock.tick(59_000)
+    expect(readInbox(ben.pub)[1]?.file?.state).toBe('pending')
+    s.clock.tick(2_000)
+    expect(readInbox(ben.pub)[1]?.file).toMatchObject({ state: 'failed', why: 'timeout' })
+  })
+
+  test("an agent's file over the default limit is refused while the hub has not said its own", async () => {
+    const s = setup()
+    s.svc.start()
+    const ben = await generateKey()
+    await handshake(s, [{ peer: ben.pub, name: 'ben', caps: FILES }])
+    const dir = isolatedHome()
+    const path = writeTemp(dir, 'disk.img', new Uint8Array(25 * MB))
+    expect(s.svc.draft(ben.pub, 'x', { file: { path, name: 'disk.img' } })).toEqual({ ok: false, error: 'file_big' })
+    expect(readDrafts()).toEqual([])
+  })
+})

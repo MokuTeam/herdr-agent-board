@@ -24,9 +24,17 @@ import {
   setInFile,
 } from '../adapters/team-store.ts'
 import { BLOB_CHUNK, BLOB_WINDOW, b64u, type ErrorCode, type FileRef, type Frame, unb64u } from '../core/team.ts'
-import { unwrapSecret } from '../core/team-box.ts'
+import { NONCE_BYTES, TAG_BYTES, unwrapSecret } from '../core/team-box.ts'
 import { type FileMeta, fileContext, openFile, openMeta } from '../core/team-file.ts'
 import { safeName } from '../core/upload-name.ts'
+
+/** The largest file this board fetches on its own, whatever the hub takes (#371). */
+export const MAX_IN_BYTES = 100 * 1024 * 1024
+/** What one member's files may bring in a day; past it, theirs wait on the hub until the day's count falls. */
+export const MAX_IN_PER_DAY = 1024 * 1024 * 1024
+/** A fetch that gets no chunk for this long fails, and the next file goes. */
+export const STALL_MS = 60_000
+const DAY_MS = 86_400_000
 
 export interface FileTransferDeps {
   frame(f: Frame): void
@@ -35,6 +43,10 @@ export interface FileTransferDeps {
   /** This board's peer id. */
   me(): string | null
   now(): number
+  setTimeout(fn: () => void, ms: number): unknown
+  clearTimeout(h: unknown): void
+  /** The largest sealed file the hub takes, from its welcome. */
+  hubMax(): number
   log(line: string): void
   changed(): void
   /** The copies of a post that waited for its blob: send them now. */
@@ -89,7 +101,8 @@ interface Down {
   ref: FileRef
   secret: Uint8Array
   meta: FileMeta
-  parts: Uint8Array[]
+  /** The blob as it comes, its size known and checked before the first byte. */
+  buf: Uint8Array
   have: number
   /** Where the last blob_get asked from. */
   asked: number
@@ -101,6 +114,20 @@ export function createFileTransfer(deps: FileTransferDeps): FileTransfer {
   /** A fetch that is being started or finished (an await is under way). */
   let busy = false
   let gen = 0
+  let stall: unknown
+
+  /** A fetch that hears nothing for STALL_MS fails, so one file cannot hold up the others. */
+  function watch(d: Down | null): void {
+    if (stall !== undefined) deps.clearTimeout(stall)
+    stall = undefined
+    if (!d) return
+    stall = deps.setTimeout(() => {
+      if (down !== d) return
+      down = null
+      failDown(d.peer, d.id, 'timeout')
+      kick()
+    }, STALL_MS)
+  }
 
   const settle = (id: string, change: Partial<OutBlob>) =>
     changeBlobs(all => {
@@ -136,11 +163,20 @@ export function createFileTransfer(deps: FileTransferDeps): FileTransfer {
     deps.changed()
   }
 
-  /** The next file to fetch: one that came in, is not held back, and was not settled. */
+  /**
+   * The next file to fetch: one that came in, is not held back, and was not settled; not from a
+   * member whose files brought MAX_IN_PER_DAY in the last day (theirs wait on the hub meanwhile).
+   */
   function nextPending(): { peer: string; item: InboxItem; ref: FileRef } | null {
-    for (const [peer, list] of Object.entries(readAllInbox()))
+    const since = deps.now() - DAY_MS
+    for (const [peer, list] of Object.entries(readAllInbox())) {
+      const today = list
+        .filter(i => i.file?.state === 'ready' && i.receivedAt >= since)
+        .reduce((n, i) => n + (i.file?.size ?? 0), 0)
+      if (today >= MAX_IN_PER_DAY) continue
       for (const item of list)
         if (!item.held && item.file?.state === 'pending' && item.file.ref) return { peer, item, ref: item.file.ref }
+    }
     return null
   }
 
@@ -165,17 +201,26 @@ export function createFileTransfer(deps: FileTransferDeps): FileTransfer {
       failDown(peer, item.id, 'key')
       return true
     }
+    // The signed size is the sealed meta's, sealed: a copy that says otherwise would wait forever.
+    if (ref.size !== meta.size + NONCE_BYTES + TAG_BYTES) {
+      failDown(peer, item.id, 'data')
+      return true
+    }
+    if (ref.size > Math.min(deps.hubMax(), MAX_IN_BYTES)) {
+      failDown(peer, item.id, 'big')
+      return true
+    }
     // The name and size show while the bytes come.
     setInFile(peer, item.id, { state: 'pending', ref, name: meta.name, type: meta.type, size: meta.size })
     deps.changed()
-    down = { peer, id: item.id, ref, secret, meta, parts: [], have: 0, asked: 0 }
+    down = { peer, id: item.id, ref, secret, meta, buf: new Uint8Array(ref.size), have: 0, asked: 0 }
+    watch(down)
     deps.frame({ t: 'blob_get', id: ref.blob, at: 0 })
     return false
   }
 
   async function finish(d: Down, mine: number): Promise<void> {
-    const bytes = new Uint8Array(Buffer.concat(d.parts))
-    const opened = await openFile(d.ref, bytes, d.secret)
+    const opened = await openFile(d.ref, d.buf, d.secret)
     if (mine !== gen) return
     if (!opened.ok) return failDown(d.peer, d.id, opened.why)
     let saved: { path: string; url: string }
@@ -220,18 +265,25 @@ export function createFileTransfer(deps: FileTransferDeps): FileTransfer {
     const bytes = unb64u(f.data)
     if (!bytes?.length || d.have + bytes.length > d.ref.size) {
       down = null
+      watch(null)
       failDown(d.peer, d.id, 'data')
       kick()
       return
     }
-    d.parts.push(bytes)
+    d.buf.set(bytes, d.have)
     d.have += bytes.length
+    watch(d)
     if (d.have === d.ref.size) {
       down = null
+      watch(null)
       busy = true
       const mine = gen
       void finish(d, mine)
-        .catch(err => deps.log(`team: ${err instanceof Error ? err.message : String(err)}`))
+        .catch(err => {
+          deps.log(`team: ${err instanceof Error ? err.message : String(err)}`)
+          // Settled all the same: a file that throws is not tried again and again.
+          if (mine === gen) failDown(d.peer, d.id, 'data')
+        })
         .finally(() => {
           if (mine !== gen) return
           busy = false
@@ -254,6 +306,7 @@ export function createFileTransfer(deps: FileTransferDeps): FileTransfer {
       gen++
       ups.clear()
       down = null
+      watch(null)
       busy = false
       for (const b of readBlobs()) if (b.state === 'uploading') open(b)
       kick()
@@ -297,6 +350,7 @@ export function createFileTransfer(deps: FileTransferDeps): FileTransfer {
       const d = down
       if (d && d.ref.blob === id) {
         down = null
+        watch(null)
         failDown(d.peer, d.id, code)
         kick()
         return true
@@ -314,6 +368,7 @@ export function createFileTransfer(deps: FileTransferDeps): FileTransfer {
       gen++
       ups.clear()
       down = null
+      watch(null)
       busy = false
     },
   }

@@ -40,8 +40,10 @@ for (let i = 0; i < argv.length; i++) {
     if (a === '--dir') dir = v
     else if (a === '--listen') listen = v
     else if (a === '--max-file-mb' || a === '--quota-mb') {
+      // A file is hashed in one pass when its last chunk is in: kept to a size that pass stays short for.
+      const top = a === '--max-file-mb' ? 1024 : 4096
       const n = /^\d+$/.test(v) ? Number(v) : Number.NaN
-      if (!(n >= 1 && n <= 4096)) fail(`${a} is a whole number of megabytes from 1 to 4096, not ${v}`)
+      if (!(n >= 1 && n <= top)) fail(`${a} is a whole number of megabytes from 1 to ${top}, not ${v}`)
       if (a === '--max-file-mb') maxFileBytes = n * MB
       else quotaBytes = n * MB
     } else {

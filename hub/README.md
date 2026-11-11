@@ -20,8 +20,8 @@ bun hub/src/main.ts [--dir D] [--listen host:port] [--allow-public] [--trust-pro
   socket (`hub.sock`) and the files' sealed bytes (`blobs/`, one file each). The directory is made
   mode 0700. On Windows, 0600/0700 protect nothing; keep the directory where only you can read it.
 - `--max-file-mb` (default 25) and `--quota-mb` (default 200, at least the first): the largest file
-  a member may send, and how much of their files the hub holds for one member at a time. Both 1 to
-  4096.
+  a member may send, and how much of their files the hub holds for one member at a time (1 to 1024,
+  and 1 to 4096). A member also has at most 64 files on the hub at once.
 - `--listen` (default `127.0.0.1:7443`): loopback and Tailscale addresses (100.64.0.0/10,
   fd7a:115c:a1e0::/48) are taken as they are. Any other address, the wildcard `0.0.0.0` included,
   needs `--allow-public`. The hub speaks plain `ws://`; on anything but loopback or a tailnet put

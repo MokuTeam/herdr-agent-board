@@ -2423,7 +2423,10 @@ through an older hub a file is refused and text goes as before. The text of a po
 to the hub as any text. An agent's file (`board team post | reply --file <path>`) always waits for
 you as a draft, as a text with a secret in it does, with the board's own copy of the file taken when
 the agent asked; your Send sends it. `board team thread` lists a file that came in by its name and
-size and where it was saved. The panel's attach button comes with the composer of #370.
+size and where it was saved. In the panel a file shows on its line with its name and size, a
+picture inline once it is here, and a draft that carries one says so, as the confirmation window
+does. A board fetches at most 100 MB a file and 1 GB a day from one member on its own; past that
+theirs wait on the hub. The panel's attach button comes with the composer of #370.
 
 **Running the hub.** `bun hub/src/main.ts`: see [hub/README.md](hub/README.md) for the options,
 invites, revoking a member and what it keeps. It is not part of the plugin; run it on one machine

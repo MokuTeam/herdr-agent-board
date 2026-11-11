@@ -86,7 +86,13 @@ export function setup(...given: [unknown?, { onInbound?: (e: InboundEvent) => vo
 export type Setup = ReturnType<typeof setup>
 
 /** The hub's side of a handshake on the newest socket, ending with welcome and a roster. */
-export async function handshake(s: Setup, roster: Array<{ peer: string; name: string; caps?: string[] }> = [], n = 1) {
+export async function handshake(
+  s: Setup,
+  roster: Array<{ peer: string; name: string; caps?: string[]; box?: unknown }> = [],
+  n = 1,
+  /** More fields of the welcome (#371: `files`). */
+  welcome: Record<string, unknown> = {},
+) {
   await until(() => s.sockets.length >= n, 'a socket')
   const ws = s.sockets[n - 1] as FakeWs
   ws.open()
@@ -102,7 +108,7 @@ export async function handshake(s: Setup, roster: Array<{ peer: string; name: st
       auth?.sig ?? '',
     ),
   ).toBe(true)
-  ws.recv({ t: 'welcome', peer: hello?.peer, name: 'me', hub: 'hub-1' })
+  ws.recv({ t: 'welcome', peer: hello?.peer, name: 'me', hub: 'hub-1', ...welcome })
   ws.recv({ t: 'roster', peers: roster.map(p => ({ ...p, online: true, last_seen: null })) })
   await until(() => s.svc.view()?.state === 'online' && (s.svc.view()?.roster.length ?? 0) === roster.length, 'online')
   return { ws, me: hello?.peer ?? '' }

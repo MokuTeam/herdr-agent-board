@@ -306,3 +306,54 @@ test('gone blobs are pruned with the other finished rows, and the count is audit
   const prune = h.db.auditRows().find(r => r.action === 'prune')
   assert.ok((JSON.parse(prune?.detail ?? '{}').blobs ?? 0) >= 1)
 })
+
+test('a message that names a blob not its sender ready for its recipient is refused, not relayed (#371 review)', async () => {
+  const ca = await h.join(A, 'anna', undefined, FILES)
+  const cb = await h.join(B, 'ben', undefined, FILES)
+  const cc = await h.join(C, 'cleo', undefined, FILES)
+  const id = blobId()
+  const bytes = crypto.getRandomValues(new Uint8Array(100))
+  await upload(ca, id, bytes, [B.pub])
+  const sealedish = {
+    blob: id,
+    size: 100,
+    hash: await sha256(bytes),
+    eph: b64u(new Uint8Array(32).fill(9)),
+    key: b64u(new Uint8Array(60)),
+    meta: b64u(new Uint8Array(40)),
+  }
+  // Cleo names Anna's blob; Anna names it for Cleo, who is not its recipient; and a blob nobody opened.
+  for (const [c, from, to, file] of [
+    [cc, C, B.pub, sealedish],
+    [ca, A, C.pub, sealedish],
+    [ca, A, B.pub, { ...sealedish, blob: blobId() }],
+  ] as const) {
+    const env = await question(from, to, '', { id: crypto.randomUUID(), body: { text: '', file } as never })
+    c.send({ t: 'send', env })
+    const e = await c.take('error')
+    assert.deepEqual([e.code, e.id], ['no_blob', msgOf(env).id])
+  }
+  // A file that is no file shape is no caption-less message either.
+  const junk = await question(A, B.pub, '', { id: crypto.randomUUID(), body: { text: '', file: {} } as never })
+  ca.send({ t: 'send', env: junk })
+  assert.equal((await ca.take('error')).code, 'bad_frame')
+  assert.equal(
+    (await cb.settle()).some(f => f.t === 'deliver'),
+    false,
+  )
+})
+
+test('a peer has at most 64 blobs on the hub at once, whatever their size (#371 review)', async () => {
+  const ca = await h.join(A, 'anna', undefined, FILES)
+  await h.join(B, 'ben', undefined, FILES)
+  const one = new Uint8Array([1])
+  const hash = await sha256(one)
+  for (let i = 0; i < 64; i++) {
+    ca.send({ t: 'blob_open', id: blobId(), size: 1, hash, to: [B.pub], ttl_s: 60 })
+    await ca.take('blob_have')
+  }
+  const last = blobId()
+  ca.send({ t: 'blob_open', id: last, size: 1, hash, to: [B.pub], ttl_s: 60 })
+  const e = await ca.take('error')
+  assert.deepEqual([e.code, e.id], ['quota', last])
+})

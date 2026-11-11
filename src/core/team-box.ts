@@ -192,3 +192,17 @@ export async function unwrapSecret(
   const info = wrapInfo(context, me.peer)
   return open(await kekOf(shared, ephPub, mine, info), sealed, info)
 }
+
+let probe: Promise<BoxKeyPair> | null = null
+
+/**
+ * Whether a box key can be sealed to at all (#371): X25519 with it gives a secret that is not all
+ * zeros. A signed key of low order (zeros, one) verifies as a claim but would make every wrap for
+ * it fail, so the hub and each board take no such claim.
+ */
+export async function usableBox(pub: string): Promise<boolean> {
+  const raw = unb64u(pub)
+  if (raw?.length !== KEY_BYTES) return false
+  probe ??= generateBoxKey()
+  return (await x25519((await probe).pkcs8, raw)) !== null
+}

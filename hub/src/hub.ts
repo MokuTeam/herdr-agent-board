@@ -38,6 +38,7 @@ import {
   verify,
   verifyBox,
 } from '../../src/core/team.ts'
+import { usableBox } from '../../src/core/team-box.ts'
 import { type BlobStore, memoryBlobs } from './blobs.ts'
 import {
   type BlobRow,
@@ -118,6 +119,9 @@ export const PRUNE_MS = 3_600_000
 /** An upload that got no chunk for this long is dropped, and its bytes leave the sender's quota (#371). */
 export const STALE_UPLOAD_MS = 3_600_000
 
+/** Blobs one peer may have on the hub at once, uploading or ready, whatever their size (#371). */
+export const MAX_LIVE_BLOBS = 64
+
 export const CLOSE_BAD_REQUEST = 4400
 export const CLOSE_UNKNOWN = 4401
 export const CLOSE_REVOKED = 4403
@@ -130,7 +134,10 @@ interface Session {
 
 /** A box claim as the hub keeps it (#371): only one whose signature is the peer's; null otherwise. */
 async function boxClaimOf(peer: string, box: BoxClaim | undefined): Promise<string | null> {
-  return box && (await verifyBox(peer, box)) ? JSON.stringify({ key: box.key, sig: box.sig }) : null
+  // A signed key nothing can be sealed to (one of low order) is no box either.
+  return box && (await verifyBox(peer, box)) && (await usableBox(box.key))
+    ? JSON.stringify({ key: box.key, sig: box.sig })
+    : null
 }
 
 export function createHub(opts: HubOptions): Hub {
@@ -249,6 +256,13 @@ export function createHub(opts: HubOptions): Hub {
       put(conn, stateOf(have))
       return
     }
+    // A message that names a file names a blob of its sender's, all there, for its recipient (#371):
+    // a copy no board could fetch is refused here instead of being brought again and again.
+    if (msg.body.file) {
+      const blob = db.blob(msg.body.file.blob)
+      if (!blob || blob.owner !== peer || blob.state !== 'ready' || !recipientsOf(blob).includes(msg.to))
+        return fail(conn, 'no_blob', 'the file it names is not on the hub for that member', undefined, msg.id)
+    }
     const now = clock.now()
     const ttl = Math.min(MAX_TTL_S, Math.max(MIN_TTL_S, msg.ttl_s))
     // The row keeps the envelope as it came: the payload string is stored and sent on as it is.
@@ -335,7 +349,7 @@ export function createHub(opts: HubOptions): Hub {
       return no('bad_frame', `a blob is for 1 to ${MAX_MEMBERS} other members`)
     if (db.peer(peer)?.status !== 'active') return fail(conn, 'revoked', 'this peer is revoked', CLOSE_REVOKED, f.id)
     if (!to.every(p => db.peer(p)?.status === 'active')) return no('not_member', 'a recipient is not a member')
-    if (db.heldBytes(peer) + f.size > quota) {
+    if (db.heldBytes(peer) + f.size > quota || db.liveBlobs(peer).length >= MAX_LIVE_BLOBS) {
       db.audit(now, peer, 'blob_refused', { why: 'quota', size: f.size })
       return no(
         'quota',
@@ -360,6 +374,7 @@ export function createHub(opts: HubOptions): Hub {
 
   const blobPut = (conn: Conn, peer: string, f: Extract<Frame, { t: 'blob_put' }>) => {
     const no = (code: ErrorCode, message: string) => fail(conn, code, message, undefined, f.id)
+    if (db.peer(peer)?.status !== 'active') return fail(conn, 'revoked', 'this peer is revoked', CLOSE_REVOKED, f.id)
     const row = db.blob(f.id)
     if (!row || row.owner !== peer || row.state === 'gone') return no('no_blob', 'no such upload')
     if (row.state === 'ready') return put(conn, { t: 'blob_ready', id: f.id })
@@ -388,6 +403,7 @@ export function createHub(opts: HubOptions): Hub {
 
   const blobGet = (conn: Conn, peer: string, f: Extract<Frame, { t: 'blob_get' }>) => {
     const no = (code: ErrorCode, message: string) => fail(conn, code, message, undefined, f.id)
+    if (db.peer(peer)?.status !== 'active') return fail(conn, 'revoked', 'this peer is revoked', CLOSE_REVOKED, f.id)
     const row = db.blob(f.id)
     if (!row) return no('no_blob', 'no such blob')
     if (!recipientsOf(row).includes(peer)) return no('not_member', 'that blob is not for you')
@@ -399,6 +415,7 @@ export function createHub(opts: HubOptions): Hub {
   }
 
   const blobDone = (conn: Conn, peer: string, f: Extract<Frame, { t: 'blob_done' }>) => {
+    if (db.peer(peer)?.status !== 'active') return fail(conn, 'revoked', 'this peer is revoked', CLOSE_REVOKED, f.id)
     const row = db.blob(f.id)
     if (!row || !recipientsOf(row).includes(peer))
       return fail(conn, 'not_member', 'that blob is not for you', undefined, f.id)
