@@ -65,6 +65,14 @@ test('every frame a hub can send, bad ones too, reaches neither herdr, launches,
     ws.recv({ t: 'state', id: idOf(real), state: 'acked', at: 1 })
     ws.recv({ t: 'error', code: 'kind', message: 'nope' })
     ws.recv({ t: 'ping' })
+    // Blob frames (#371), asked for or not, good and junk: bytes, never a call.
+    const blob = '11111111-1111-4111-8111-111111111111'
+    ws.recv({ t: 'blob_have', id: blob, have: 0 })
+    ws.recv({ t: 'blob_ready', id: blob })
+    ws.recv({ t: 'blob_data', id: blob, at: 0, data: 'cm0gLXJmIH4' })
+    ws.recv({ t: 'blob_data', id: blob, at: 0, data: '!!' })
+    ws.recv({ t: 'blob_open', id: blob, size: 5, hash: 'x', to: [], ttl_s: 1 })
+    ws.recv({ t: 'error', code: 'no_blob', id: blob, message: 'gone' })
     ws.recv({ t: 'welcome', peer: me, name: 'me', hub: 'h' })
     // An agent request that came in, and a draft made and sent: still only messages.
     ws.recv({

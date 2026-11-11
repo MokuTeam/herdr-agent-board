@@ -58,3 +58,8 @@ export const teamThreadsFile = (): string => join(stateDir(), 'team-threads.json
 export const teamAgentsFile = (): string => join(stateDir(), 'team-agents.json')
 /** The owner's passkeys for the board on this computer (#224): the RP ID is `localhost`. */
 export const teamPasskeysFile = (): string => join(stateDir(), 'team-passkeys.json')
+// Files (#371): this board's X25519 box key, the blobs it sends and how far each got, and their
+// sealed bytes until the hub has them, and the copies of files agents left in drafts.
+export const teamBoxFile = (): string => join(stateDir(), 'team-box.json')
+export const teamBlobsFile = (): string => join(stateDir(), 'team-blobs.json')
+export const teamFilesDir = (): string => join(stateDir(), 'team-files')

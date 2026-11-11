@@ -1,27 +1,45 @@
 // What the peer network (#231) keeps on this computer, in the state folder: team-key.json (this
 // board's Ed25519 key, 0600), team-inbox.json and team-outbox.json (the last 500 messages per peer),
 // team-pins.json (the keys of the peers seen) and team-audit.jsonl (what happened, never a message's
-// text). Nothing here creates a file until it is asked to write: `board team join` and the running
-// board with `team` set are the only callers.
-import { appendFileSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs'
+// text). Files (#371): team-box.json (this board's X25519 key, 0600), team-blobs.json (the blobs it
+// sends and how far each got) and team-files/ (their sealed bytes until the hub has them, and the
+// copies of files left in drafts). Nothing here creates a file until it is asked to write: `board
+// team join` and the running board with `team` set are the only callers.
+import {
+  appendFileSync,
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { join } from 'node:path'
 import {
   type Ack,
   type DeliveryState,
   type Envelope,
   type ErrorCode,
+  type FileRef,
   generateKey,
+  isMessageId,
   type KeyPair,
   type Message,
   type OutState,
   type Via,
 } from '../core/team.ts'
+import { type BoxKeyPair, generateBoxKey } from '../core/team-box.ts'
 import type { Alg } from '../core/webauthn.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
 import {
   stateDir,
   teamAgentsFile,
   teamAuditFile,
+  teamBlobsFile,
+  teamBoxFile,
   teamDraftsFile,
+  teamFilesDir,
   teamInboxFile,
   teamKeyFile,
   teamOutboxFile,
@@ -88,7 +106,56 @@ export function forgetKey(pub: string): void {
   } catch {}
 }
 
+// ---- The box key (#371)
+
+/** This board's box key, or null while there is none. Creates nothing. */
+export function readBoxKey(): BoxKeyPair | null {
+  const k = readJson(teamBoxFile(), isKeyFile)
+  return k ? { pkcs8: k.pkcs8, pub: k.pub } : null
+}
+
+/** This board's box key; made and saved with 0600 the first time. Two writers end with one key. */
+export async function ensureBoxKey(): Promise<BoxKeyPair> {
+  const have = readBoxKey()
+  if (have) return have
+  const fresh = await generateBoxKey()
+  mkdirSync(stateDir(), { recursive: true })
+  const kept = updateJson(
+    teamBoxFile(),
+    (cur: KeyFile | null) => cur ?? { v: 1 as const, pkcs8: fresh.pkcs8, pub: fresh.pub },
+    isKeyFile,
+    PRIVATE,
+  )
+  return { pkcs8: kept.pkcs8, pub: kept.pub }
+}
+
 // ---- Messages
+
+/**
+ * A file that came in (#371): `ref` as signed until it is fetched; then where it was saved, under
+ * its name as the sender's board sealed it. `failed`: the hub had it no more, or it did not open.
+ */
+export interface InFile {
+  state: 'pending' | 'ready' | 'failed'
+  ref?: FileRef
+  name?: string
+  type?: string
+  size?: number
+  /** ready: the board's address for it, and the path on this computer. */
+  url?: string
+  path?: string
+  /** failed: why (a hub code, `hash`, `key`, `data`, `big`). */
+  why?: string
+}
+
+/** A file that went out (#371): what this board sealed, and its own copy to show. */
+export interface OutFile {
+  blob: string
+  name: string
+  type: string
+  size: number
+  url?: string
+}
 
 /** A question that came in. `held`: from a key that changed under a pinned name, until it is trusted. */
 export interface InboxItem {
@@ -110,6 +177,8 @@ export interface InboxItem {
   post?: string
   /** When the signed ack went out (null: not yet, or the hub was away). */
   ackedAt: number | null
+  /** A file in it (#371). */
+  file?: InFile
 }
 
 /**
@@ -141,6 +210,8 @@ export interface OutboxItem {
    * post's): kept here too, since a copy to a board without `replies` goes without it.
    */
   replyTo?: string
+  /** A file in the post (#371); its blob goes up before this copy is sent. */
+  file?: OutFile
 }
 
 /** A session on this board, as the team keeps it (#216). */
@@ -196,6 +267,16 @@ export function addInbox(item: InboxItem): boolean {
 export function markAcked(peer: string, id: string, at: number): void {
   changeLists<InboxItem, void>(teamInboxFile(), peers => {
     for (const i of peers[peer] ?? []) if (i.id === id) i.ackedAt = at
+  })
+}
+
+/** Changes the file of a message that came in (#371); false when there is no such message with a file. */
+export function setInFile(peer: string, id: string, file: InFile): boolean {
+  return changeLists<InboxItem, boolean>(teamInboxFile(), peers => {
+    const i = (peers[peer] ?? []).find(x => x.id === id)
+    if (!i?.file) return false
+    i.file = file
+    return true
   })
 }
 
@@ -272,6 +353,13 @@ export interface Draft {
   session?: SessionRef
   /** The line of its thread it answers (#373), as `board team reply --to` named it. */
   replyTo?: string
+  /** A file the agent attached (#371): the board's own copy, taken when the draft was made. */
+  file?: DraftFile
+}
+export interface DraftFile {
+  path: string
+  name: string
+  size: number
 }
 type DraftsFile = { v: 1; drafts: Record<string, Draft> }
 const isDrafts = (v: unknown): v is DraftsFile => isRecord(v) && v.v === 1 && isRecord(v.drafts)
@@ -487,11 +575,16 @@ export function changeOwnerKeys<R>(fn: (k: OwnerKeys) => R): R {
 
 // ---- Pins
 
-/** A peer's key as first seen (trusted) or as it appeared under a name already pinned (changed). */
+/**
+ * A peer's key as first seen (trusted) or as it appeared under a name already pinned (changed).
+ * `box` (#371): the box key trusted for it, first seen or accepted with Trust; a different one
+ * makes the pin `changed` as a new key does, and nothing is sealed to it until Trust.
+ */
 export interface Pin {
   name: string
   status: 'trusted' | 'changed'
   at: number
+  box?: string
 }
 type PinsFile = { v: 1; pins: Record<string, Pin> }
 const isPins = (v: unknown): v is PinsFile => isRecord(v) && v.v === 1 && isRecord(v.pins)
@@ -513,6 +606,94 @@ export function changePins<R>(fn: (pins: Record<string, Pin>) => R): R {
     PRIVATE,
   )
   return result as R
+}
+
+// ---- Files that go out (#371)
+
+/** A blob this board sends: for whom, how far it got, and the hub's code when it refused it. */
+export interface OutBlob {
+  id: string
+  to: string[]
+  size: number
+  hash: string
+  ttl_s: number
+  state: 'uploading' | 'up' | 'refused'
+  code?: ErrorCode
+  at: number
+}
+type BlobsFile = { v: 1; blobs: Record<string, OutBlob> }
+const isBlobs = (v: unknown): v is BlobsFile => isRecord(v) && v.v === 1 && isRecord(v.blobs)
+
+/** The blobs this board sends, oldest first. Creates nothing. */
+export const readBlobs = (): OutBlob[] =>
+  Object.values(bare(readJson(teamBlobsFile(), isBlobs)?.blobs ?? {})).sort((a, b) => a.at - b.at)
+
+/** Blobs kept in the list at most; the oldest settled ones go first. */
+const KEEP_BLOBS = 200
+
+/** Changes the list of blobs under its lock: `fn` edits the map in place. */
+export function changeBlobs<R>(fn: (blobs: Record<string, OutBlob>) => R): R {
+  mkdirSync(stateDir(), { recursive: true })
+  let result: R | undefined
+  updateJson(
+    teamBlobsFile(),
+    (cur: BlobsFile | null) => {
+      const blobs = bare(cur?.blobs ?? {})
+      result = fn(blobs)
+      const settled = Object.values(blobs)
+        .filter(b => b.state !== 'uploading')
+        .sort((a, b) => a.at - b.at)
+      for (const b of settled.slice(0, Math.max(0, Object.keys(blobs).length - KEEP_BLOBS))) delete blobs[b.id]
+      return { v: 1 as const, blobs }
+    },
+    isBlobs,
+    PRIVATE,
+  )
+  return result as R
+}
+
+const filesIn = (sub: 'out' | 'drafts'): string => join(teamFilesDir(), sub)
+const fileAt = (sub: 'out' | 'drafts', id: string): string => {
+  if (!isMessageId(id)) throw new TypeError('a team file is named by a UUID')
+  return join(filesIn(sub), id)
+}
+
+/** Keeps the sealed bytes of a blob until the hub has them all (0600). */
+export function keepSealed(id: string, bytes: Uint8Array): void {
+  mkdirSync(filesIn('out'), { recursive: true, mode: 0o700 })
+  writeFileSync(fileAt('out', id), bytes, PRIVATE)
+}
+
+/** The sealed bytes of a blob, or null once they are gone. */
+export function readSealed(id: string): Uint8Array | null {
+  try {
+    return new Uint8Array(readFileSync(fileAt('out', id)))
+  } catch {
+    return null
+  }
+}
+
+export function dropSealed(id: string): void {
+  try {
+    unlinkSync(fileAt('out', id))
+  } catch {}
+}
+
+/** Copies a file an agent attached to a draft into the board's own folder (0600); its path there. */
+export function keepDraftFile(draft: string, from: string): string {
+  mkdirSync(filesIn('drafts'), { recursive: true, mode: 0o700 })
+  const to = fileAt('drafts', draft)
+  copyFileSync(from, to)
+  return to
+}
+
+/** Removes a draft's copy of its file; only a path in the board's own drafts folder. */
+export function dropDraftFile(path: string): void {
+  const name = path.slice(filesIn('drafts').length + 1)
+  if (!path.startsWith(filesIn('drafts')) || !isMessageId(name)) return
+  try {
+    unlinkSync(path)
+  } catch {}
 }
 
 // ---- The log

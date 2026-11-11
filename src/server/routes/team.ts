@@ -37,7 +37,10 @@
 // on, lanes, channels } settles one, its body checked whole before anything changes. Adding a
 // channel's members, and a welcome that widens (Agents on, a lane, a channel), wait for the passkey
 // as the switches do.
+import { statSync } from 'node:fs'
+import { isAbsolute, join } from 'node:path'
 import { isRecord } from '../../adapters/json-store.ts'
+import { uploadsDir } from '../../adapters/paths.ts'
 import {
   audit,
   changeAgents,
@@ -52,8 +55,10 @@ import { categoryInfo } from '../../core/categories.ts'
 import { isMessageId, isPeerId, isThreadId, MAX_TEXT, validName } from '../../core/team.ts'
 import { agentLimits, TEAM, threadKey, validLoop } from '../../core/team-agents.ts'
 import { type OwnerAction, unlocks, widens } from '../../core/team-confirm.ts'
+import { checkMeta } from '../../core/team-file.ts'
 import { MAX_MEMBERS } from '../../core/team-wire.ts'
 import type { Config } from '../../core/types.ts'
+import { safeName } from '../../core/upload-name.ts'
 import type { TeamConfirm } from '../../services/team-confirm.ts'
 import type { PostTarget, TeamService } from '../../services/team-hub.ts'
 import type { TeamRouter } from '../../services/team-router.ts'
@@ -179,6 +184,34 @@ function agentsChange(
   }
 }
 
+/**
+ * A file in the board's uploads, as the panel names it for a send (#371): `upload` its place there
+ * (`<day>/<saved name>`, as /api/upload answered it) and `name` the name it goes under, by default
+ * the saved name without its time. Undefined when the body has none, null when it is no such file.
+ */
+export function uploadFrom(v: unknown): { path: string; name: string } | null | undefined {
+  if (v === undefined) return undefined
+  if (!isRecord(v) || typeof v.upload !== 'string') return null
+  const m = /^(\d{4}-\d{2}-\d{2})\/([^/]+)$/.exec(v.upload)
+  const saved = m?.[2] ?? ''
+  if (!m || safeName(saved) !== saved) return null
+  const path = join(uploadsDir(), m[1] as string, saved)
+  try {
+    if (!statSync(path).isFile()) return null
+  } catch {
+    return null
+  }
+  const name = typeof v.name === 'string' ? v.name : saved.replace(/^\d{6}-/, '')
+  return checkMeta({ name, type: 'application/octet-stream', size: 0 }) ? { path, name } : null
+}
+
+/** A file a session names for its post (#371): an absolute path on this computer; the router checks the rest. */
+function agentFileFrom(v: unknown): { path: string } | null | undefined {
+  if (v === undefined) return undefined
+  if (!isRecord(v) || typeof v.path !== 'string' || v.path.length > 4096 || !isAbsolute(v.path)) return null
+  return { path: v.path }
+}
+
 /** The peer an owner action is about, for the audit. */
 function peerOf(a: OwnerAction): string | null {
   if (a.kind === 'send') return a.to === TEAM ? null : a.to
@@ -210,7 +243,7 @@ export function teamRoutes(
   /** Does an owner action: at once when it needs no confirmation, or once the window confirmed it. */
   async function perform(a: OwnerAction): Promise<{ status: number; body: Record<string, unknown> }> {
     if (a.kind === 'send') {
-      const r = await team.send(a.to, a.text, a.thread, a.replyTo)
+      const r = await team.send(a.to, a.text, a.thread, a.replyTo, a.file)
       return { status: r.ok ? 200 : 400, body: { ...r } }
     }
     if (a.kind === 'draft') {
@@ -273,11 +306,17 @@ export function teamRoutes(
         ...(link && { link }),
         // A new channel: who will read it, by the board's names (#355).
         ...(a.thread?.members && { members: a.thread.members.map(m => team.nameOf(m)) }),
+        // A file with it (#371), by the name it goes under.
+        ...(a.file && { file: a.file.name }),
       }
     }
     if (a.kind === 'draft') {
       const d = readDrafts().find(x => x.id === a.id)
-      return { kind: a.kind, ...(d && { who: d.to === TEAM ? null : team.nameOf(d.to), text: d.text }) }
+      return {
+        kind: a.kind,
+        ...(d && { who: d.to === TEAM ? null : team.nameOf(d.to), text: d.text }),
+        ...(d?.file && { file: d.file.name }),
+      }
     }
     if (a.kind === 'trust') {
       const p = team.view()?.roster.find(r => r.peer === a.peer)
@@ -362,9 +401,11 @@ export function teamRoutes(
         if (!isTarget(body.to)) return json(400, { ok: false, error: 'peer' })
         const thread = threadFrom(body.thread, true)
         if (thread === null) return json(400, { ok: false, error: 'thread' })
+        const file = uploadFrom(body.file)
+        if (file === null) return json(400, { ok: false, error: 'file' })
         // What the send would refuse is refused before it waits for a passkey.
         const words = body.text.trim()
-        if (!words || words.length > MAX_TEXT) return json(400, { ok: false, error: 'text' })
+        if ((!words && !file) || words.length > MAX_TEXT) return json(400, { ok: false, error: 'text' })
         // A reply (#370): a line of the thread it goes to, by its id; the send finds it there.
         if (body.replyTo !== undefined && !isMessageId(body.replyTo)) return json(400, { ok: false, error: 'reply' })
         const replyTo = body.replyTo as string | undefined
@@ -374,6 +415,7 @@ export function teamRoutes(
           text: body.text,
           ...(thread && { thread }),
           ...(replyTo && { replyTo }),
+          ...(file && { file }),
         }
         const wait = held(req, action)
         if (wait) return wait
@@ -427,6 +469,8 @@ export function teamRoutes(
         // A reply to one message (#373): a line of that thread by its id; the router checks it is there.
         if (body.replyTo !== undefined && !isMessageId(body.replyTo)) return json(400, { ok: false, error: 'reply' })
         const replyTo = body.replyTo as string | undefined
+        const file = agentFileFrom(body.file)
+        if (file === null) return json(400, { ok: false, error: 'file' })
         const r = await router.agentPost({
           to: body.to,
           ...(thread && { thread }),
@@ -434,6 +478,7 @@ export function teamRoutes(
           text: body.text,
           session,
           ...(body.claimed === true && { claimed: true }),
+          ...(file && { file }),
         })
         return json(r.ok ? 200 : r.error.startsWith('rate') || r.error === 'echo' ? 429 : 400, r)
       },

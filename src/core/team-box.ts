@@ -86,10 +86,19 @@ export async function x25519(pkcs8: string, pub: Uint8Array): Promise<Uint8Array
 }
 
 /** HKDF-SHA256 (RFC 5869), extract and expand in one. */
-export async function hkdf(ikm: Uint8Array, salt: Uint8Array, info: Uint8Array, length = KEY_BYTES): Promise<Uint8Array> {
+export async function hkdf(
+  ikm: Uint8Array,
+  salt: Uint8Array,
+  info: Uint8Array,
+  length = KEY_BYTES,
+): Promise<Uint8Array> {
   const key = await crypto.subtle.importKey('raw', buf(ikm), 'HKDF', false, ['deriveBits'])
   return new Uint8Array(
-    await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: buf(salt), info: buf(info) }, key, length * 8),
+    await crypto.subtle.deriveBits(
+      { name: 'HKDF', hash: 'SHA-256', salt: buf(salt), info: buf(info) },
+      key,
+      length * 8,
+    ),
   )
 }
 
@@ -100,7 +109,8 @@ export async function seal(
   aad: Uint8Array,
   nonce: Uint8Array = randomBytes(NONCE_BYTES),
 ): Promise<Uint8Array> {
-  if (key.length !== KEY_BYTES || nonce.length !== NONCE_BYTES) throw new TypeError('seal: a 32-byte key, a 12-byte nonce')
+  if (key.length !== KEY_BYTES || nonce.length !== NONCE_BYTES)
+    throw new TypeError('seal: a 32-byte key, a 12-byte nonce')
   const k = await crypto.subtle.importKey('raw', buf(key), 'AES-GCM', false, ['encrypt'])
   const ct = new Uint8Array(
     await crypto.subtle.encrypt({ name: 'AES-GCM', iv: buf(nonce), additionalData: buf(aad) }, k, buf(plain)),

@@ -88,9 +88,10 @@ export function memoryBlobs(): BlobStore & { bytes(id: string): Uint8Array | und
     have: id => m.get(id)?.length ?? 0,
     append: (id, data) => void m.set(named(id), Buffer.concat([m.get(id) ?? Buffer.alloc(0), data])),
     read: (id, at, n) => new Uint8Array((m.get(id) ?? Buffer.alloc(0)).subarray(at, at + n)),
-    hash: id => createHash('sha256')
-      .update(m.get(id) ?? Buffer.alloc(0))
-      .digest('base64url'),
+    hash: id =>
+      createHash('sha256')
+        .update(m.get(id) ?? Buffer.alloc(0))
+        .digest('base64url'),
     remove: id => void m.delete(id),
     ids: () => [...m.keys()],
     bytes: id => {

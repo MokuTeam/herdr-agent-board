@@ -1,9 +1,10 @@
 # agent-board hub
 
-The small server that peer boards (#231) connect to. It does three things: it knows who the members
-are (an ed25519 key and a name each), it keeps a queue of questions for members who are away, and it
-tells members who is online. It is not part of the board and not in `herdr-plugin.toml`; run it
-yourself, on one machine the members can reach.
+The small server that peer boards (#231) connect to. It does four things: it knows who the members
+are (an ed25519 key and a name each), it keeps a queue of questions for members who are away, it
+tells members who is online, and it keeps the sealed bytes of files until their members fetch them
+(#371). It is not part of the board and not in `herdr-plugin.toml`; run it yourself, on one machine
+the members can reach.
 
 It never reads the boards, the sessions or the herdr of anyone. A board that joins sends it signed
 frames and gets signed frames back; everything else stays on the board.
@@ -12,11 +13,15 @@ frames and gets signed frames back; everything else stays on the board.
 
 ```
 bun hub/src/main.ts [--dir D] [--listen host:port] [--allow-public] [--trust-proxy] [--keep-days N]
+                    [--max-file-mb N] [--quota-mb N]
 ```
 
-- `--dir` (default `~/.local/state/hab-hub`): the store (`hub.db`, SQLite in WAL mode) and the admin
-  socket (`hub.sock`). The directory is made mode 0700. On Windows, 0600/0700 protect nothing; keep
-  the directory where only you can read it.
+- `--dir` (default `~/.local/state/hab-hub`): the store (`hub.db`, SQLite in WAL mode), the admin
+  socket (`hub.sock`) and the files' sealed bytes (`blobs/`, one file each). The directory is made
+  mode 0700. On Windows, 0600/0700 protect nothing; keep the directory where only you can read it.
+- `--max-file-mb` (default 25) and `--quota-mb` (default 200, at least the first): the largest file
+  a member may send, and how much of their files the hub holds for one member at a time. Both 1 to
+  4096.
 - `--listen` (default `127.0.0.1:7443`): loopback and Tailscale addresses (100.64.0.0/10,
   fd7a:115c:a1e0::/48) are taken as they are. Any other address, the wildcard `0.0.0.0` included,
   needs `--allow-public`. The hub speaks plain `ws://`; on anything but loopback or a tailnet put
@@ -90,8 +95,14 @@ how many rows it deleted.
   be read from the files. Backups and snapshots made before that keep it, and so does disk
   free space that was written before `secure_delete` was on (this version's first run).
 - An audit log whose rows are chained by hash (`prev_hash`, `hash`): joins, revokes, invites, sends,
-  acks, expiries, prunes. Ids and counts only, never a body. There is no screen for it; read the
-  `audit` table in `hub.db`.
+  acks, expiries, prunes, and files (`blob_open`, `blob_ready`, `blob_refused`, `blob_fetched`,
+  `blob_gone`). Ids, sizes and counts only, never a body, a file's name, type, hash or bytes. There
+  is no screen for it; read the `audit` table in `hub.db`.
+- Files (#371): the sealed bytes of each one once, in `blobs/<id>`, and a row with its sender, its
+  size, the members it is for and who fetched it. The sender's board seals it; no key to it ever
+  reaches the hub. It is deleted when every member it is for (and still a member) fetched it, at
+  its TTL (that of its messages, 60 s to 7 days), an hour after its upload stopped, or when its
+  sender is revoked; at start, bytes no row keeps go too. Its row goes after `--keep-days`.
 
 Retention: once an hour (and on `prune`) the hub deletes what is older than `--keep-days`, counted
 from when it ended. Acked and expired messages (from the ack, or the expiry time), presence events,
@@ -118,8 +129,8 @@ authenticated, not even the roster. A second connection of the same peer replace
 4409). Close codes: 4400 bad request, 4401 unknown or bad signature, 4403 revoked or bad invite. What
 is signed, and the checks on it, are in `src/core/team.ts`, which the hub and the board both import.
 
-Since #216 a board says in its `hello` what it understands (`caps`, today `["threads", "channels", "replies"]`,
-the second since #355, the third since #370); the hub
+Since #216 a board says in its `hello` what it understands (`caps`, today `["threads", "channels",
+"replies", "files"]`, the second since #355, the third since #370, the fourth since #371); the hub
 keeps that per member (the `caps` column, schema 2) and passes it on in the roster and with a
 member's presence, so a board sends threads only to boards that read them. The hub relays a
 message's body as signed: it holds `text` to its limits (1 to 4000 characters, the envelope to
@@ -129,6 +140,27 @@ message is one signed copy per member. The audit's `send` rows name the thread a
 sender's own signed words), never the text. Updating a hub is a restart on the new code: the
 schema moves on by itself, and boards reconnect. An older hub refuses a database a newer one moved
 on, so copy `hub.db` aside before the update if you may want to go back.
+
+Files (#371). A board's `hello` also carries `box: { key, sig }`, its X25519 key and its Ed25519
+signature over it; the hub keeps it only when that signature verifies (schema 3: `peer.box`) and
+passes it on in the roster and with presence, as caps. Its `welcome` says `files: { max, quota }`.
+A copy of a message may then carry `body.file` (the blob's id, size and hash, a one-time key, the
+file key wrapped for that member, the sealed name and size) and an empty `text`; the hub reads
+neither, only that a file is there. The bytes move as frames on the same socket, 32 KiB of data
+each, eight in flight:
+
+- `blob_open { id, size, hash, to, ttl_s }`: the sender opens a blob for members of the hub; the
+  hub answers `blob_have { id, have }` (what it holds already, so an upload resumes) or an error
+  naming the id: `too_big`, `quota`, `not_member`, `dup_id`.
+- `blob_put { id, at, data }`, answered with `blob_have`; with the last byte the hub checks the
+  SHA-256 and answers `blob_ready { id }`, or `bad_hash` and drops it. The board sends the
+  messages that name a blob only after `blob_ready`.
+- `blob_get { id, at }`: a member the blob is for gets up to eight `blob_data { id, at, data }`;
+  anyone else `not_member`, and a blob that is gone `no_blob`.
+- `blob_done { id }`: that member has it. When all have, the hub deletes it.
+
+The new error codes go only to a board that sent blob frames; an older board never gets one, and
+ignores the new fields of `welcome`, the roster and presence.
 
 ## Tests
 

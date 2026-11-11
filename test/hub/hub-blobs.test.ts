@@ -6,17 +6,9 @@ import { afterEach, beforeEach, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { memoryBlobs } from '../../hub/src/blobs.ts'
 import { STALE_UPLOAD_MS, SWEEP_MS } from '../../hub/src/hub.ts'
+import { BLOB_CHUNK, b64u, boxBytes, type KeyPair, type RosterPeer, sign, unb64u } from '../../src/core/team.ts'
 import { generateBoxKey, wrapSecret } from '../../src/core/team-box.ts'
 import { fileContext, openFile, sealFile, sha256 } from '../../src/core/team-file.ts'
-import {
-  b64u,
-  BLOB_CHUNK,
-  boxBytes,
-  type KeyPair,
-  type RosterPeer,
-  sign,
-  unb64u,
-} from '../../src/core/team.ts'
 import { type Client, type Harness, keys, msgOf, question, startHarness } from './harness.ts'
 
 const MB = 1024 * 1024
@@ -126,20 +118,33 @@ test('what the hub keeps is the sealed file: no byte, no name, no key of it in t
   assert.ok(Buffer.from(held).equals(Buffer.from(sealed.blob)))
   assert.equal(Buffer.from(held).toString('latin1').includes('zebra-marker'), false)
   // The message that names it, with no caption: relayed as signed.
-  const file = { blob: id, size: sealed.blob.length, hash: sealed.hash, eph: w.eph, key: w.keys[B.pub], meta: sealed.meta }
+  const file = {
+    blob: id,
+    size: sealed.blob.length,
+    hash: sealed.hash,
+    eph: w.eph,
+    key: w.keys[B.pub],
+    meta: sealed.meta,
+  }
   const env = await question(A, B.pub, '', { body: { text: '', file } as never })
   ca.send({ t: 'send', env })
   const d = await cb.take('deliver')
   assert.deepEqual(msgOf(d.env).body.file, file)
   // The hub has nothing that opens it, and nothing that names it.
   const everything = JSON.stringify([h.db.auditRows(), h.db.blob(id), h.db.peers()])
-  for (const s of ['acme-plan', 'zebra-marker', 'text/plain', b64u(sealed.secret)]) assert.equal(everything.includes(s), false, s)
+  for (const s of ['acme-plan', 'zebra-marker', 'text/plain', b64u(sealed.secret)])
+    assert.equal(everything.includes(s), false, s)
   const sendRow = h.db.auditRows().find(r => r.action === 'send')
   assert.equal(JSON.parse(sendRow?.detail ?? '{}').file, id)
   // Ben's board opens it.
   const got = await download(cb, id, sealed.blob.length)
   const { unwrapSecret } = await import('../../src/core/team-box.ts')
-  const secret = (await unwrapSecret(file.key as string, file.eph, { peer: B.pub, box: ben }, fileContext(id))) as Uint8Array
+  const secret = (await unwrapSecret(
+    file.key as string,
+    file.eph,
+    { peer: B.pub, box: ben },
+    fileContext(id),
+  )) as Uint8Array
   const opened = await openFile(file, got, secret)
   assert.ok(opened.ok && Buffer.from(opened.bytes).equals(Buffer.from(marker)))
 })
@@ -157,7 +162,10 @@ test('a member the blob is not for cannot fetch it, nor put into it, nor say it 
   assert.equal((await cc.take('error')).code, 'no_blob')
   cc.send({ t: 'blob_done', id })
   assert.equal((await cc.take('error')).code, 'not_member')
-  assert.equal((await cc.settle()).some(f => f.t === 'blob_data'), false)
+  assert.equal(
+    (await cc.settle()).some(f => f.t === 'blob_data'),
+    false,
+  )
   assert.equal(h.db.blob(id)?.state, 'ready')
   // An id nobody opened: no such blob.
   cc.send({ t: 'blob_get', id: blobId(), at: 0 })

@@ -3,8 +3,9 @@
 // the file key wrapped per board. The blob the hub keeps is the sealed bytes; the signed message
 // carries its SHA-256, the sealed meta and the wrapped key, so the hub reads no name, no type and
 // no byte of it. One shot over the whole file: 25 MB fits in memory, as the board's uploads do.
-import { concat, hkdf, open, randomBytes, seal } from './team-box.ts'
+
 import { b64u, hasUnprintable, unb64u } from './team.ts'
+import { concat, hkdf, open, randomBytes, seal } from './team-box.ts'
 import { MAX_FILE_NAME } from './team-wire.ts'
 
 /** What a file is, as only its boards read it. */
@@ -64,7 +65,12 @@ export interface SealFixed {
 }
 
 /** Seals a file for the blob `blob`: its bytes and its meta, under a new file key. */
-export async function sealFile(bytes: Uint8Array, meta: FileMeta, blob: string, fixed: SealFixed = {}): Promise<SealedFile> {
+export async function sealFile(
+  bytes: Uint8Array,
+  meta: FileMeta,
+  blob: string,
+  fixed: SealFixed = {},
+): Promise<SealedFile> {
   const checked = checkMeta(meta)
   if (!checked || checked.size !== bytes.length) throw new TypeError('sealFile: a meta that does not fit the file')
   const secret = fixed.secret ?? randomBytes(32)
@@ -113,3 +119,31 @@ export const chunkOf = (blob: Uint8Array, at: number, n: number): string => b64u
 
 /** The parts one after the other, for a blob fetched in chunks. */
 export const joinChunks = (parts: Uint8Array[]): Uint8Array => concat(...parts)
+
+const TYPES: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  pdf: 'application/pdf',
+  txt: 'text/plain',
+  log: 'text/plain',
+  md: 'text/markdown',
+  csv: 'text/csv',
+  json: 'application/json',
+  xml: 'application/xml',
+  yaml: 'application/yaml',
+  yml: 'application/yaml',
+  zip: 'application/zip',
+  gz: 'application/gzip',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+}
+
+/** A file's media type by its extension, for what a board shows; never how it is served (that is by the saved name). */
+export function mimeOf(name: string): string {
+  const ext = /\.([A-Za-z0-9]+)$/.exec(name)?.[1]?.toLowerCase() ?? ''
+  return TYPES[ext] ?? 'application/octet-stream'
+}

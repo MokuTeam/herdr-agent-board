@@ -3,6 +3,7 @@
 // vector of AES-256), on whichever OS runs the suite; then known answers for the construction with
 // every key and nonce fixed, so a change to it shows; then round trips and every way to fail.
 import { describe, expect, test } from 'bun:test'
+import { b64u, readFileRef, unb64u } from '../../src/core/team.ts'
 import {
   boxKeyOf,
   generateBoxKey,
@@ -14,7 +15,6 @@ import {
   x25519,
 } from '../../src/core/team-box.ts'
 import { checkMeta, fileContext, openFile, openMeta, sealFile } from '../../src/core/team-file.ts'
-import { b64u, readFileRef, unb64u } from '../../src/core/team.ts'
 
 const hex = (s: string): Uint8Array => Uint8Array.from(Buffer.from(s, 'hex'))
 const toHex = (b: Uint8Array | null): string => (b ? Buffer.from(b).toString('hex') : 'null')
@@ -43,9 +43,7 @@ describe('the platform does what the code takes it for', () => {
 
   test('HKDF-SHA256: RFC 5869, test case 1', async () => {
     const okm = await hkdf(hex('0b'.repeat(22)), hex('000102030405060708090a0b0c'), hex('f0f1f2f3f4f5f6f7f8f9'), 42)
-    expect(toHex(okm)).toBe(
-      '3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865',
-    )
+    expect(toHex(okm)).toBe('3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865')
   })
 
   test('AES-256-GCM: the GCM spec, test case 16 (nonce, then ciphertext and tag)', async () => {

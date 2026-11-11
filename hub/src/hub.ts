@@ -13,10 +13,10 @@ import { createHash, randomBytes } from 'node:crypto'
 import {
   ackBytes,
   authBytes,
-  b64u,
   BLOB_CHUNK,
   BLOB_WINDOW,
   type BoxClaim,
+  b64u,
   cleanCaps,
   DEFAULT_MAX_FILE_BYTES,
   DEFAULT_QUOTA_BYTES,
@@ -319,7 +319,8 @@ export function createHub(opts: HubOptions): Hub {
     const no = (code: ErrorCode, message: string) => fail(conn, code, message, undefined, f.id)
     const have = db.blob(f.id)
     if (have) {
-      if (have.owner !== peer || have.size !== f.size || have.hash !== f.hash) return no('dup_id', 'that blob id is taken')
+      if (have.owner !== peer || have.size !== f.size || have.hash !== f.hash)
+        return no('dup_id', 'that blob id is taken')
       if (have.state === 'gone') return no('no_blob', 'that blob is gone')
       if (have.state === 'ready') return put(conn, { t: 'blob_ready', id: f.id })
       return put(conn, { t: 'blob_have', id: f.id, have: blobs.have(f.id) })

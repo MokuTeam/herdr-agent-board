@@ -4,6 +4,8 @@
 // reaches a session only through the schedule it is handed here; with any switch off it adds
 // nothing there.
 import { afterEach, describe, expect, test } from 'bun:test'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   changeAgents,
   readAgents,
@@ -136,7 +138,7 @@ const agentsOn = (peer: string, lanes: string[] = [], listener = true): void =>
 describe('the hub client (#216)', () => {
   test('hello says this board reads threads, channels (#355) and replies (#370)', async () => {
     const w = await world()
-    expect(w.ws.of('hello')[0]).toMatchObject({ caps: ['threads', 'channels', 'replies'] })
+    expect(w.ws.of('hello')[0]).toMatchObject({ caps: ['threads', 'channels', 'replies', 'files'] })
   })
 
   test('a new thread to a board that reads threads: thread, mark and session name in the signed body; the session handles it', async () => {
@@ -567,3 +569,44 @@ test('a peer cannot grow the thread file without end: past the cap its quietest 
   expect(mine).toHaveLength(MAX_THREADS_PER_SCOPE)
   expect(mine.some(t => t.id === first)).toBe(true)
 }, 60_000)
+
+// ---- An agent's file (#371)
+
+describe("an agent's file (#371)", () => {
+  test('always a draft for the owner (reason file), with the board copy of the file; a text file with a secret says so', async () => {
+    const w = await world()
+    agentsOn(w.P.pub, ['acme'])
+    // The isolated home, removed after the test.
+    const dir = process.env.HOME as string
+    const plain = join(dir, 'report.csv')
+    writeFileSync(plain, 'a,b\n1,2\n')
+    const r = await w.router.agentPost({
+      to: w.P.pub,
+      text: 'the report',
+      session: { key: 'sess-acme' },
+      file: { path: plain },
+    })
+    expect(r).toMatchObject({ ok: true, sent: false, reason: 'file' })
+    expect(sent(w.ws)).toEqual([])
+    const d = readDrafts()[0]
+    expect(d?.file).toMatchObject({ name: 'report.csv', size: 8 })
+    expect(d?.file?.path).not.toBe(plain)
+    const leaky = join(dir, 'env.txt')
+    writeFileSync(leaky, 'TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123\n')
+    const s = await w.router.agentPost({
+      to: w.P.pub,
+      text: 'config',
+      session: { key: 'sess-acme' },
+      file: { path: leaky },
+    })
+    expect(s).toMatchObject({ ok: true, sent: false, reason: 'secret' })
+    // A file that is not there is refused, not drafted.
+    const none = await w.router.agentPost({
+      to: w.P.pub,
+      text: 'x',
+      session: { key: 'sess-acme' },
+      file: { path: join(dir, 'none') },
+    })
+    expect(none).toEqual({ ok: false, error: 'file' })
+  })
+})
