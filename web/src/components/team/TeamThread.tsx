@@ -45,8 +45,8 @@ export interface TeamThreadProps {
   thread: ThreadView | null
   lines: ThreadLine[]
   agents: AgentsView | null
-  /** The thread's unread count when it opened: where the "new messages" line goes. */
-  unread: number
+  /** The first unread line when the thread opened: where the "new messages" line goes; null: none. */
+  unreadFrom: string | null
   draft: string
   topic: NewTopic | null
   /** The line the message being written answers; null: none. */
@@ -65,7 +65,7 @@ export interface TeamThreadProps {
 }
 
 export function TeamThread(props: TeamThreadProps) {
-  const { view, selected, thread, lines, unread, draft, topic, replyTo, disabled } = props
+  const { view, selected, thread, lines, unreadFrom, draft, topic, replyTo, disabled } = props
   const t = useT()
   const { now } = useBoardContext()
   const box = useRef<HTMLTextAreaElement>(null)
@@ -78,9 +78,9 @@ export function TeamThread(props: TeamThreadProps) {
   const channel = isChannel(thread)
   const messages = lines.filter(l => l.dir !== 'draft')
   const drafts = lines.filter(l => l.dir === 'draft')
-  const items = chatItems(messages, { t, now, unread })
+  const items = chatItems(messages, { t, now, unreadFrom })
   const scroll = useChatScroll(selected, messages)
-  const reply = replyTo ? quoteOf(replyTo, messages, t) : null
+  const reply = replyTo && !topic ? quoteOf(replyTo, messages, t) : null
   const named = team || channel
   const canWrite = !disabled && !changed
   const sendable =

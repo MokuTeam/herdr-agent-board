@@ -228,8 +228,10 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
     // Read up to when the lines were asked for: what lands after is not marked unseen.
     const asked = Date.now()
     const { status, reply } = await call(ctx.webPort, `/api/team/threads/${key}`)
+    // Nothing written in it yet comes back with only an agent's draft waiting there (#370): no thread.
+    const none = status === 404 || (isRecord(reply) && reply.thread === null)
     if (!isRecord(reply) || !isRecord(reply.thread) || !Array.isArray(reply.lines))
-      throw new Error(status === 404 ? 'no such thread on this board' : `the board answered ${status}`)
+      throw new Error(none ? 'no such thread on this board' : `the board answered ${status}`)
     const agents = await call(ctx.webPort, '/api/team/agents')
     // A channel (#355) is with its members, by this board's names for them.
     const members = Array.isArray(reply.thread.members) ? reply.thread.members.map(String) : null

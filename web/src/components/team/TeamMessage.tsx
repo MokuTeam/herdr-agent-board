@@ -5,6 +5,7 @@
 // on hover, and for this board's own how far it got. Hover or focus shows Reply; on a touch screen
 // a long press shows the full date with Reply.
 import {
+  memo,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   useEffect,
@@ -71,11 +72,7 @@ export function TeamMessage({ line, first, last, named, quote, flash, onReply, o
             </div>
           )}
           {quote && <QuoteView quote={quote} onQuote={onQuote} />}
-          {line.text === null ? (
-            <p className="team-held-text">{t('team.heldText')}</p>
-          ) : (
-            <MessageText text={line.text} />
-          )}
+          {line.text === null ? <p className="team-held-text">{t('team.heldText')}</p> : <Text text={line.text} />}
           <span className="team-msg-foot">
             <time dateTime={line.ts} title={when}>
               {bubbleTime(line.ts, t)}
@@ -118,6 +115,11 @@ export function TeamMessage({ line, first, last, named, quote, flash, onReply, o
     </div>
   )
 }
+
+/** A message's text, drawn again only when it changes: a key typed in the box leaves it alone. */
+const Text = memo(function Text({ text }: { text: string }) {
+  return <MessageText text={text} />
+})
 
 /** The message a reply answers: its sender and a line of it; a click goes there. Not found: said so, not a link. */
 function QuoteView({ quote, onQuote }: { quote: Quote; onQuote(id: string): void }) {

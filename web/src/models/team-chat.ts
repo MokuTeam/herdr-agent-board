@@ -47,18 +47,22 @@ export function unreadStart(lines: readonly ThreadLine[], n: number): number {
   return at
 }
 
+/** The first unread line's id, by the thread's unread count (unreadStart); null: nothing unread. */
+export const firstUnread = (lines: readonly ThreadLine[], n: number): string | null =>
+  lines[unreadStart(lines, n)]?.id ?? null
+
 /**
  * A thread's messages (no drafts) as the conversation draws them: a day's separator before its
- * first message, the "new messages" line before the first unread (`unread`: the thread's count
- * when it opened), and each message with whether it opens or closes its sender's group. A day,
- * the unread line, another sender or a gap of more than GROUP_MS starts a new group.
+ * first message, the "new messages" line before the first unread (`unreadFrom`: its id, kept from
+ * when the thread opened), and each message with whether it opens or closes its sender's group. A
+ * day, the unread line, another sender or a gap of more than GROUP_MS starts a new group.
  */
 export function chatItems(
   lines: readonly ThreadLine[],
-  opts: { t: Translator; now: number; unread?: number },
+  opts: { t: Translator; now: number; unreadFrom?: string | null },
 ): ChatItem[] {
   const out: ChatItem[] = []
-  const start = unreadStart(lines, opts.unread ?? 0)
+  const start = opts.unreadFrom ? lines.findIndex(l => l.id === opts.unreadFrom) : -1
   let day = ''
   let prev: { line: ThreadLine; at: number } | null = null
   lines.forEach((l, i) => {
@@ -115,8 +119,9 @@ export function listWhen(ts: string, t: Translator, now: number): string {
 
 /** One line of a text: its whitespace folded, cut at `max` characters with an ellipsis. */
 export function oneLine(text: string, max = LINE_CHARS): string {
-  const line = text.replace(/\s+/g, ' ').trim()
-  return line.length > max ? `${line.slice(0, max).trimEnd()}…` : line
+  // By code point: an emoji is never cut in half.
+  const line = [...text.replace(/\s+/g, ' ').trim()]
+  return line.length > max ? `${line.slice(0, max).join('').trimEnd()}…` : line.join('')
 }
 
 /** Who wrote a line, by this board's name for them: "You" for this board's own. */

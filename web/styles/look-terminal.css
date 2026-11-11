@@ -594,6 +594,7 @@
    as outlines on the bare background, the sent bubble no longer filled, no blur. */
 :root[data-look="terminal"] .team-msg:is(.in, .out) .team-bubble { border-radius: var(--radius); }
 :root[data-look="terminal"] .team-msg.out .team-bubble { background: none; box-shadow: inset 0 0 0 1px var(--accent); color: var(--label); }
+:root[data-look="terminal"] .team-msg.out:has(.team-delivery.bad) .team-bubble { box-shadow: inset 0 0 0 1px var(--red); }
 :root[data-look="terminal"] .team-msg.out .md a { color: var(--accent); text-decoration: none; }
 :root[data-look="terminal"] .team-msg.out .md code, :root[data-look="terminal"] .team-msg.out .md pre { background: var(--fill-2); }
 :root[data-look="terminal"] .team-msg.out .unfold { background: none; box-shadow: inset 0 0 0 1px var(--t-edge); color: var(--accent); }

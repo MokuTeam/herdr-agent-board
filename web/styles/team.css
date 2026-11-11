@@ -86,10 +86,10 @@
 .team-changed { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--orange) 12%, transparent); }
 .team-changed p { margin: 0; font-size: 12.5px; }
 .team-scroll-wrap { position: relative; display: flex; flex: 1; min-height: 0; }
-.team-scroll { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px 18px 10px; mask-image: linear-gradient(transparent, #000 14px, #000 calc(100% - 10px), transparent); }
+.team-scroll { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px 18px 10px; mask-image: linear-gradient(transparent, #000 8px, #000 calc(100% - 10px), transparent); }
 .team-scroll > :first-child { margin-top: auto; }
 .team-empty { align-self: center; padding: 24px 0; }
-.team-day { position: sticky; top: 2px; z-index: 1; display: flex; justify-content: center; margin: 14px 0 4px; pointer-events: none; }
+.team-day { position: sticky; top: 8px; z-index: 1; display: flex; justify-content: center; margin: 14px 0 4px; pointer-events: none; }
 .team-day span { padding: 3px 10px; border-radius: 999px; background: color-mix(in srgb, var(--panel-float) 82%, transparent); backdrop-filter: blur(16px) saturate(180%); -webkit-backdrop-filter: blur(16px) saturate(180%); box-shadow: 0 0 0 0.5px var(--separator); color: var(--label-2); font-size: 11.5px; font-weight: 600; }
 .team-unread-line { display: flex; align-items: center; gap: 10px; margin: 12px 0 2px; color: var(--accent); font-size: 11.5px; font-weight: 600; }
 .team-unread-line::before, .team-unread-line::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--accent) 40%, transparent); }

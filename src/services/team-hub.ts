@@ -884,7 +884,8 @@ export function createTeam({
     const team = parts.scope === TEAM
     // What a reply names, as a line here (#370): a message by its own id, a post by its id or any
     // copy's, then a team copy by the post id it carries. The first to claim a name keeps it, so a
-    // copy cannot take over the name of a message that came before it.
+    // copy cannot take over the name of a message that came before it; a post id two senders carry
+    // (one of them copied it) names nothing, and a held copy claims none.
     const lineOf = new Map<string, string>()
     const claim = (name: string | undefined, id: string): void => {
       if (name && !lineOf.has(name)) lineOf.set(name, id)
@@ -894,7 +895,11 @@ export function createTeam({
       claim(id, id)
       for (const c of copies) claim(c.msg.id, id)
     }
-    for (const [, i] of [...items.incoming].sort((a, b) => a[1].receivedAt - b[1].receivedAt)) claim(i.post, i.id)
+    const senders = new Map<string, Set<string>>()
+    for (const [peer, i] of items.incoming)
+      if (i.post && !i.held) senders.set(i.post, new Set([...(senders.get(i.post) ?? []), peer]))
+    for (const [, i] of [...items.incoming].sort((a, b) => a[1].receivedAt - b[1].receivedAt))
+      if (i.post && !i.held && senders.get(i.post)?.size === 1) claim(i.post, i.id)
     const answers = (name: string | undefined): { replyTo?: string } =>
       name ? { replyTo: lineOf.get(name) ?? name } : {}
     const incoming: ThreadLine[] = items.incoming.map(

@@ -17,6 +17,7 @@ import {
   bubbleTime,
   chatItems,
   deliveryOf,
+  firstUnread,
   fullWhen,
   GROUP_MS,
   listWhen,
@@ -118,7 +119,7 @@ describe('days and times, on a fixed clock', () => {
 
 describe('groups', () => {
   const groups = (lines: ThreadLine[], unread = 0) =>
-    chatItems(lines, { t: en, now: NOW, unread }).flatMap(i =>
+    chatItems(lines, { t: en, now: NOW, unreadFrom: firstUnread(lines, unread) }).flatMap(i =>
       i.kind === 'msg' ? [`${i.first ? '[' : ''}${i.line.id}${i.last ? ']' : ''}`] : [i.kind],
     )
 
@@ -199,6 +200,8 @@ describe('marks and quotes', () => {
     expect(quoteOf('h', lines, en)).toMatchObject({ found: true, text: null })
     expect(quoteOf('gone', lines, en)).toEqual({ id: 'gone', found: false, who: '', text: null })
     expect(oneLine('x'.repeat(130))).toBe(`${'x'.repeat(120)}…`)
+    // Cut by code point: an emoji is never cut in half.
+    expect(oneLine('🙂'.repeat(130))).toBe(`${'🙂'.repeat(120)}…`)
   })
 })
 
@@ -496,8 +499,10 @@ beforeAll(async () => {
   }
 })
 
-afterAll(() => {
+afterAll(async () => {
   Object.assign(mini.layout, saved)
+  // What React scheduled after the last test runs while the window is still there.
+  await new Promise(done => setTimeout(done, 20))
   dom.uninstall()
 })
 
@@ -520,18 +525,44 @@ describe('scrolling', () => {
     await new Promise(done => setTimeout(done, 20))
   }
 
+  /** The line the "new messages" line stands before, or null. */
+  const lineAfterUnread = (): string | null => {
+    const kids = scroller()?.childNodes ?? []
+    const at = kids.findIndex(k => k instanceof mini.MiniElement && k.hasAttribute('data-unread-line'))
+    const next = at >= 0 ? kids[at + 1] : undefined
+    return next instanceof mini.MiniElement ? next.getAttribute('data-line') : null
+  }
+
   test('the thread opens at the "new messages" line, clear of the day’s pill; the line stays while the count drops', () => {
     const page = mount()
     sized()
     page.draw(<TeamBody {...props({ unread: { 'team/general': 2 } })} />)
     expect(scroller()?.scrollTop).toBe(900 - 44)
+    expect(lineAfterUnread()).toBe('b1')
     // Read: the count is gone, the line is where it was.
     page.draw(<TeamBody {...props({ unread: {} })} />)
-    expect(all('[data-unread-line]')).toHaveLength(1)
-    // Another thread, then back: nothing is new any more.
-    page.draw(<TeamBody {...props({ selected: null, unread: {} })} />)
-    page.draw(<TeamBody {...props({ unread: {} })} />)
+    expect(lineAfterUnread()).toBe('b1')
+    // More comes in while it is open: the line stays before the same message.
+    const more = [...CHAT_LINES, msg('n1', '2026-11-11T08:05:00Z')]
+    page.draw(<TeamBody {...props({ lines: more, unread: {} })} />)
+    expect(lineAfterUnread()).toBe('b1')
+    // Back to the list (useTeam drops the lines with it), then the thread again: nothing is new.
+    page.draw(<TeamBody {...props({ selected: null, thread: null, lines: [], unread: {} })} />)
+    page.draw(<TeamBody {...props({ lines: [], unread: {} })} />)
+    page.draw(<TeamBody {...props({ lines: more, unread: {} })} />)
     expect(all('[data-unread-line]')).toHaveLength(0)
+    page.unmount()
+  })
+
+  test('the panel opened again: what came in while it was closed is new, even in the thread left on show', () => {
+    const page = mount()
+    sized()
+    page.draw(<TeamBody {...props({ visit: 1 })} />)
+    expect(all('[data-unread-line]')).toHaveLength(0)
+    // Closed with the thread on show; one message came in; opened again.
+    const more = [...CHAT_LINES, msg('n1', '2026-11-11T08:05:00Z')]
+    page.draw(<TeamBody {...props({ visit: 2, lines: more, unread: { 'team/general': 1 } })} />)
+    expect(lineAfterUnread()).toBe('n1')
     page.unmount()
   })
 

@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from 'react'
 import { type NewTopic, useTeam } from '../../hooks/useTeam.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import type { AgentsChange, AgentsView, TeamView, ThreadLine, ThreadView, Welcome } from '../../models/team.ts'
+import { firstUnread } from '../../models/team-chat.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { TeamList } from './TeamList.tsx'
@@ -34,6 +35,11 @@ export function TeamPanel({ open, onClose, focus, onFocused }: TeamPanelProps) {
   const [topic, setTopic] = useState<NewTopic | null>(null)
   const [people, setPeople] = useState(false)
   const [sending, setSending] = useState(false)
+  // Each opening of the panel is a visit: what came in meanwhile is new again (#370).
+  const [visit, setVisit] = useState(0)
+  useEffect(() => {
+    if (open) setVisit(v => v + 1)
+  }, [open])
   const key = team.selected ?? ''
   const show = (k: string | null) => {
     setTopic(null)
@@ -101,6 +107,7 @@ export function TeamPanel({ open, onClose, focus, onFocused }: TeamPanelProps) {
         topic={topic}
         replyTo={drafts.replyTo(key)}
         people={people}
+        visit={visit}
         disabled={!canEdit || sending}
         onSelect={show}
         onPeople={on => {
@@ -168,6 +175,8 @@ export interface TeamBodyProps {
   replyTo?: string | null
   /** People and agents on show instead of a thread (#370). */
   people?: boolean
+  /** Counts the panel's openings: a thread shown again in a new one opens at what is new since (#370). */
+  visit?: number
   disabled: boolean
   onSelect(key: string | null): void
   onPeople?(open: boolean): void
@@ -194,8 +203,8 @@ export interface TeamBodyProps {
 /** The list and the thread on show (or People and agents); which of them a narrow panel shows is `data-pane`. */
 export function TeamBody(props: TeamBodyProps) {
   const t = useT()
-  const { view, selected, people = false, unread = {}, pending = [] } = props
-  const frozen = useFrozenUnread(selected, unread, props.lines.length > 0)
+  const { view, selected, people = false, unread = {}, pending = [], visit = 0 } = props
+  const unreadFrom = useUnreadFrom(selected, visit, unread, props.lines)
   if (!view) return <div className="sheet-body team-body" />
   const pane = selected ? 'thread' : people ? 'people' : 'list'
   return (
@@ -216,13 +225,13 @@ export function TeamBody(props: TeamBodyProps) {
       <div className="team-main">
         {selected ? (
           <TeamThread
-            key={selected}
+            key={`${visit}:${selected}`}
             view={view}
             selected={selected}
             thread={props.thread}
             lines={props.lines}
             agents={props.agents}
-            unread={frozen}
+            unreadFrom={unreadFrom}
             draft={props.draft}
             topic={props.topic}
             replyTo={props.replyTo ?? null}
@@ -259,16 +268,31 @@ export function TeamBody(props: TeamBodyProps) {
 }
 
 /**
- * The thread on show's unread count as it was when it opened: the "new messages" line stays where
- * it was while the thread is read and the count drops to 0, until another thread is shown.
+ * Where the "new messages" line goes in the thread on show: its first unread line as it was when
+ * the thread opened in this visit of the panel. It stays on that line while the thread is read
+ * (the count drops to 0) and while more comes in, until the list, another thread or a new visit.
  */
-function useFrozenUnread(selected: string | null, unread: Record<string, number>, loaded: boolean): number {
-  const kept = useRef<{ key: string | null; n: number }>({ key: null, n: 0 })
-  if (kept.current.key !== selected) {
-    const n = selected ? (unread[selected] ?? 0) : 0
-    // Its lines come with its count: until then (a notification's click opens it before the fetch) it is not kept.
-    if (!loaded) return n
-    kept.current = { key: selected, n }
+function useUnreadFrom(
+  selected: string | null,
+  visit: number,
+  unread: Record<string, number>,
+  lines: readonly ThreadLine[],
+): string | null {
+  const kept = useRef<{ at: string; id: string | null } | null>(null)
+  const at = `${visit}:${selected ?? ''}`
+  if (!selected) {
+    kept.current = null
+    return null
   }
-  return kept.current.n
+  if (kept.current?.at !== at) {
+    const id = firstUnread(
+      lines.filter(l => l.dir !== 'draft'),
+      unread[selected] ?? 0,
+    )
+    // Its lines come with its count: until they are here (a notification's click opens it before
+    // the fetch) nothing is kept.
+    if (!lines.length) return id
+    kept.current = { at, id }
+  }
+  return kept.current.id
 }

@@ -5,6 +5,7 @@
 // team post among them; a copy cannot take over the name of a message that came before it. The
 // list gets each thread's latest message. The hub relays the new fields as signed.
 import { afterEach, describe, expect, test } from 'bun:test'
+import { changePins } from '../../src/adapters/team-store.ts'
 import {
   checkMessage,
   type Envelope,
@@ -166,7 +167,33 @@ describe('a reply over the wire', () => {
     }
     // anna's pair message is not a line of the team chat.
     expect(await w.s.svc.send('team', 'x', undefined, q)).toEqual({ ok: false, error: 'reply' })
+    // cleo's key changed: what she wrote in the team chat is held, and no reply may name it.
+    changePins(pins => {
+      pins[w.C.pub] = { name: 'cleo', status: 'changed', at: 1 }
+    })
+    await deliver(w, w.C, 'held words', { thread: TEAM_GENERAL })
+    const held = w.s.svc.threadLines('team/general').find(l => l.held)
+    expect(held?.text).toBeNull()
+    expect(await w.s.svc.send('team', 'x', { id: GENERAL }, held?.id)).toEqual({ ok: false, error: 'reply' })
     expect(sent(w.ws)).toEqual([])
+  })
+
+  test('a post id two senders carry names nothing, and a held copy claims none', async () => {
+    const w = await world()
+    const P = '00000000-0000-4000-8000-00000000f003'
+    // anna's real post, then ben's copy of its id: neither keeps the name.
+    await deliver(w, w.A, 'ship today?', { thread: TEAM_GENERAL, post: P })
+    await deliver(w, w.B, 'me too', { thread: TEAM_GENERAL, post: P })
+    await deliver(w, w.C, 'which one?', { thread: TEAM_GENERAL, replyTo: P })
+    expect(lineOf(w, 'team/general', 'which one?')?.replyTo).toBe(P)
+    // A held copy (cleo's key changed) claims no post id.
+    const Q = '00000000-0000-4000-8000-00000000f004'
+    changePins(pins => {
+      pins[w.C.pub] = { name: 'cleo', status: 'changed', at: 1 }
+    })
+    await deliver(w, w.C, 'held', { thread: TEAM_GENERAL, post: Q })
+    await deliver(w, w.A, 'about that', { thread: TEAM_GENERAL, replyTo: Q })
+    expect(lineOf(w, 'team/general', 'about that')?.replyTo).toBe(Q)
   })
 })
 
