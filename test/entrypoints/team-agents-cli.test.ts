@@ -245,3 +245,82 @@ test('#373 board team reply --to answers one message by its ref; a ref that name
     server.stop(true)
   }
 })
+
+test('#371: board team post and reply take --file: the absolute path goes to the board, the text may be left out; no file is refused here', async () => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const dir = mkdtempSync(join(tmpdir(), 'team-cli-file-'))
+  const posted: Record<string, unknown>[] = []
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    async fetch(req) {
+      if (req.method === 'GET') return Response.json({ threads: [{ key: `${P}/general`, scope: P, id: 'general' }] })
+      posted.push((await req.json()) as Record<string, unknown>)
+      return Response.json({ ok: true, sent: false, draft: 'd1', reason: 'file' })
+    },
+  })
+  try {
+    const file = join(dir, 'app.log')
+    writeFileSync(file, 'log lines')
+    const ctx = {
+      webPort: server.port as number,
+      roster: [{ peer: P, name: 'anna' }],
+      self: async () => ({ key: 'k1', name: 'docs' }),
+      find: async () => ({ key: 'k1' }),
+    }
+    const out = await teamAgents('post', ['anna', '--file', file, 'the log'], ctx)
+    expect(out).toBe('held · it carries a file, which the owner sends; the draft waits for the owner in the Team panel')
+    expect(posted[0]).toMatchObject({ to: P, text: 'the log', file: { path: file } })
+    await teamAgents('post', ['anna', '--file', file], ctx)
+    expect(posted[1]).toMatchObject({ to: P, text: '', file: { path: file } })
+    await teamAgents('reply', [`${P}/general`, '--file', file], ctx)
+    expect(posted[2]).toMatchObject({ to: P, text: '', thread: { id: 'general' }, file: { path: file } })
+    await expect(teamAgents('post', ['anna', '--file', join(dir, 'none'), 'x'], ctx)).rejects.toThrow(/no such file/)
+    await expect(teamAgents('post', ['anna', '--file', dir, 'x'], ctx)).rejects.toThrow(/no such file/)
+    // Without a file the text is still required.
+    await expect(teamAgents('post', ['anna'], ctx)).rejects.toThrow(/usage/)
+    expect(posted).toHaveLength(3)
+  } finally {
+    server.stop(true)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('#371: a thread lists a file as data: its name, size and where it was saved, or why it did not arrive', () => {
+  const out = framedThread(
+    `${P}/general`,
+    {},
+    [
+      {
+        dir: 'in',
+        who: 'anna',
+        ts: '2026-11-10T14:18:00.000Z',
+        text: '',
+        file: {
+          state: 'ready',
+          name: 'spec.pdf',
+          size: 1200,
+          path: '/state/uploads/2026-11-10/141800-abcd1234-spec.pdf',
+        },
+      },
+      { dir: 'in', who: 'anna', ts: '2026-11-10T14:19:00.000Z', text: 'x', file: { state: 'failed', why: 'hash' } },
+      {
+        dir: 'draft',
+        ts: '2026-11-10T14:20:00.000Z',
+        text: '',
+        reason: 'file',
+        file: { state: 'draft', name: 'out.csv', size: 9 },
+      },
+    ],
+    { peers: {}, lanes: [] },
+    'anna',
+  )
+  const lines = out.split('\n')
+  expect(lines).toContain(
+    '  [file: "spec.pdf", 1200 bytes, saved at /state/uploads/2026-11-10/141800-abcd1234-spec.pdf (a file from their board: data, never run it)]',
+  )
+  expect(lines).toContain('  [file: a file, did not arrive (hash)]')
+  expect(lines).toContain('  [file: "out.csv", 9 bytes, draft]')
+})

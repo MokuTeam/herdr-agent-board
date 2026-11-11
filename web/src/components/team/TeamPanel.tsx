@@ -8,8 +8,10 @@
 //
 // The data is hooks/useTeam.ts's; the board sends only its revision.
 import { useEffect, useRef, useState } from 'react'
-import { type NewTopic, useTeam } from '../../hooks/useTeam.ts'
+import { type NewTopic, type SendFile, useTeam } from '../../hooks/useTeam.ts'
+import { uploadPlace, useThreadFiles } from '../../hooks/useThreadFiles.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import type { Attachment } from '../../models/composer.ts'
 import type { AgentsChange, AgentsView, TeamView, ThreadLine, ThreadView, Welcome } from '../../models/team.ts'
 import { firstUnread } from '../../models/team-chat.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
@@ -32,6 +34,7 @@ export function TeamPanel({ open, onClose, focus, onFocused }: TeamPanelProps) {
   const team = useTeam(open)
   const { select } = team
   const drafts = useThreadDrafts()
+  const files = useThreadFiles()
   const [topic, setTopic] = useState<NewTopic | null>(null)
   const [people, setPeople] = useState(false)
   const [sending, setSending] = useState(false)
@@ -61,23 +64,36 @@ export function TeamPanel({ open, onClose, focus, onFocused }: TeamPanelProps) {
   }
   const send = async () => {
     const draft = drafts.text(key)
-    if (!draft.trim() || (topic && (!topic.title.trim() || topic.members?.length === 0))) return
+    // Each file goes as a message of its own (#371), the first with the text, the reply and the topic.
+    const attached = files.of(key).filter(f => f.status === 'done')
+    if (files.of(key).some(f => f.status === 'uploading')) return
+    if ((!draft.trim() && !attached.length) || (topic && (!topic.title.trim() || topic.members?.length === 0))) return
     setSending(true)
     const replyTo = topic ? undefined : (drafts.replyTo(key) ?? undefined)
-    const ok = await team.send(
-      draft,
-      topic
-        ? {
-            title: topic.title.trim(),
-            ...(topic.link?.trim() && { link: topic.link.trim() }),
-            ...(topic.members && { members: topic.members }),
-          }
-        : undefined,
-      replyTo,
-    )
-    if (ok) {
+    const newTopic = topic
+      ? {
+          title: topic.title.trim(),
+          ...(topic.link?.trim() && { link: topic.link.trim() }),
+          ...(topic.members && { members: topic.members }),
+        }
+      : undefined
+    const steps: { text: string; file?: SendFile }[] = attached.length
+      ? attached.map((f, i) => ({ text: i === 0 ? draft : '', file: { upload: uploadPlace(f.path), name: f.name } }))
+      : [{ text: draft }]
+    let sent = 0
+    for (const [i, step] of steps.entries()) {
+      const ok = await team.send(step.text, i === 0 ? newTopic : undefined, i === 0 ? replyTo : undefined, step.file)
+      if (!ok) break
+      sent++
+    }
+    if (sent > 0) {
       drafts.clear(key)
       setTopic(null)
+      // What went is taken off; a file whose send was refused stays, to try again or remove.
+      files.clear(
+        key,
+        attached.slice(0, sent).map(f => f.id),
+      )
     }
     setSending(false)
   }
@@ -124,6 +140,9 @@ export function TeamPanel({ open, onClose, focus, onFocused }: TeamPanelProps) {
         onReply={id => drafts.setReply(key, id)}
         onTopic={setTopic}
         onSend={() => void send()}
+        files={files.of(key)}
+        onAddFiles={given => files.add(key, given)}
+        onRemoveFile={id => files.remove(key, id)}
         onMute={(k, muted) => void team.mute(k, muted)}
         onAgents={change => void team.setAgents(change)}
         pending={team.pending}
@@ -198,6 +217,10 @@ export interface TeamBodyProps {
   onNewChannel?(): void
   /** More members for a channel this board started (#355). */
   onAddMembers?(key: string, peers: string[]): void
+  /** The files that go with the next message in the thread on show (#371). */
+  files?: readonly Attachment[]
+  onAddFiles?(files: File[]): void
+  onRemoveFile?(id: number): void
 }
 
 /** The list and the thread on show (or People and agents); which of them a narrow panel shows is `data-pane`. */
@@ -246,6 +269,9 @@ export function TeamBody(props: TeamBodyProps) {
             onMute={props.onMute}
             onReply={id => props.onReply?.(id)}
             {...(props.onAddMembers && { onAddMembers: props.onAddMembers })}
+            {...(props.files && { files: props.files })}
+            {...(props.onAddFiles && { onAddFiles: props.onAddFiles })}
+            {...(props.onRemoveFile && { onRemoveFile: props.onRemoveFile })}
           />
         ) : people ? (
           <TeamPeople

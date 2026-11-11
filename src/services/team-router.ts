@@ -9,6 +9,8 @@
 // team-agents.json, and the global off (the panel's, or config.json's `team.agents: false`) wins.
 // Off, an agent's post becomes a draft, as before #216, and nothing that comes in reaches a session.
 
+import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs'
+import { basename } from 'node:path'
 import { addEntry, listEntries, updateEntry } from '../adapters/schedule-store.ts'
 import {
   audit,
@@ -70,9 +72,39 @@ export type AgentPostResult =
   | { ok: true; sent: false; draft: string; reason: string; detail?: string }
   | { ok: false; error: string; detail?: string }
 
+/** What of a file the secret check reads (#371): its start, when it reads as text. */
+const SCAN_BYTES = 1024 * 1024
+
+/**
+ * The start of a file as text, for the secret check (#371): up to SCAN_BYTES, and nothing when it
+ * has a NUL in its first 8 KB (a binary) or cannot be read (the draft refuses it then).
+ */
+export function fileText(path: string): string {
+  let fd: number | undefined
+  try {
+    // Without blocking on what is no file (a FIFO would hold the board until a writer came), and only a file.
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
+    if (!fstatSync(fd).isFile()) return ''
+    const buf = Buffer.alloc(SCAN_BYTES)
+    const n = readSync(fd, buf, 0, buf.length, 0)
+    const head = buf.subarray(0, n)
+    if (head.subarray(0, 8192).includes(0)) return ''
+    return head.toString('utf8')
+  } catch {
+    return ''
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
+}
+
 export interface TeamRouter {
-  /** A session's post (`board team post | reply`): sent, held as a draft with the reason, or refused. */
-  agentPost(p: PostTarget & { text: string; session: SessionRef; claimed?: boolean }): Promise<AgentPostResult>
+  /**
+   * A session's post (`board team post | reply`): sent, held as a draft with the reason, or refused.
+   * With a file (#371) it is always held: the owner sends it.
+   */
+  agentPost(
+    p: PostTarget & { text: string; session: SessionRef; claimed?: boolean; file?: { path: string } },
+  ): Promise<AgentPostResult>
   /** The hub client kept a message: a notice for the session that handles its thread, or the listener. */
   inbound(e: InboundEvent): void
   /** Hands a thread to a session (a lane shared with the peer, or the listener), or back (null). */
@@ -156,7 +188,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
   }
 
   return {
-    async agentPost({ to, thread, text, session, claimed, replyTo }) {
+    async agentPost({ to, thread, text, session, claimed, replyTo, file }) {
       const view = team.view()
       if (!view) return { ok: false, error: 'off' }
       if (to !== TEAM && !isPeerId(to)) return { ok: false, error: 'peer' }
@@ -178,8 +210,11 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const shared = new Set(peer?.lanes ?? [])
       let reason: string | null = null
       let detail: string | undefined
-      // A new thread's title and link go out as well as the text: they are checked with it.
-      const words = [text, thread?.title, thread?.link].filter(w => typeof w === 'string').join('\n')
+      // A new thread's title and link go out as well as the text: they are checked with it, and a
+      // file's text too (#371).
+      const words = [text, thread?.title, thread?.link, file && fileText(file.path)]
+        .filter(w => typeof w === 'string')
+        .join('\n')
       if (globalOff(s.off) || !peer?.on) reason = 'off'
       else if (!listener && !shared.has(laneOf(session.key) ?? '')) reason = 'lane'
       else {
@@ -199,8 +234,16 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
           if (loopRun(vias, loopFor(peer, limits()))) reason = 'loop'
         }
       }
+      // An agent's file always waits for the owner (#371), as a text with a secret in it does.
+      if (!reason && file) reason = 'file'
       if (reason) {
-        const d = team.draft(to, text, { ...(thread && { thread }), reason, session, ...(replyTo && { replyTo }) })
+        const d = team.draft(to, text, {
+          ...(thread && { thread }),
+          reason,
+          session,
+          ...(replyTo && { replyTo }),
+          ...(file && { file: { path: file.path, name: basename(file.path) } }),
+        })
         if (!d.ok) return d
         audit('held', to === TEAM ? null : to, {
           id: d.id,

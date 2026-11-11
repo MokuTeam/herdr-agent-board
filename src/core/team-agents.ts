@@ -230,6 +230,8 @@ export function heldWhy(reason: string, who: string, detail?: string): string {
       return `this session's lane is not shared with ${who}`
     case 'secret':
       return `it looks like it carries ${detail ?? 'a secret'}`
+    case 'file':
+      return 'it carries a file, which the owner sends'
     case 'lane_name':
       return `it names the lane ${detail ?? ''}, which is not shared with ${who}`
     case 'loop':
@@ -265,6 +267,17 @@ export function refusedWhy(error: string): string {
       return 'the team is off'
     case 'reply':
       return "that message is not one to answer in that thread: board team thread prints each one's ref"
+    // Files (#371).
+    case 'file':
+      return 'no such file, or it is not a regular file'
+    case 'file_big':
+      return 'the file is larger than the hub takes'
+    case 'file_name':
+      return "the file's name cannot go with it (1 to 200 printable characters)"
+    case 'files_hub':
+      return 'the hub takes no files: it needs an update'
+    case 'files_nobody':
+      return 'nobody in this thread can receive files yet: their boards need an update'
     default:
       return error
   }

@@ -58,6 +58,12 @@ export interface TeamNow {
  * A new topic: its title and an optional link (http or https). `members` (#355): a channel in the
  * team chat, for these members (and this board) only.
  */
+/** A file in the board's uploads that goes with a message (#371): its place there and its name. */
+export interface SendFile {
+  upload: string
+  name: string
+}
+
 export interface NewTopic {
   title: string
   link?: string
@@ -72,7 +78,7 @@ export interface TeamSource {
    * Writes in the thread on show, or starts a topic in its scope: true when sent (kept at the hub's
    * door, delivery follows), and a new topic is then the thread on show; false: refused, and toasted.
    */
-  send(text: string, topic?: NewTopic, replyTo?: string): Promise<boolean>
+  send(text: string, topic?: NewTopic, replyTo?: string, file?: SendFile): Promise<boolean>
   trust(peer: string): Promise<void>
   /** Sends an agent's draft (it goes marked as an agent request); false: refused, and toasted. */
   sendDraft(id: string): Promise<boolean>
@@ -199,7 +205,7 @@ export function teamSource(deps: TeamDeps): TeamSource {
       now.set({ ...now.get(), selected: key, thread: null, lines: [] })
       if (open) void load()
     },
-    async send(text, topic, replyTo) {
+    async send(text, topic, replyTo, file) {
       const parts = keyParts(now.get().selected ?? '')
       if (!parts) return false
       const thread = topic
@@ -219,6 +225,7 @@ export function teamSource(deps: TeamDeps): TeamSource {
             text,
             ...(thread && { thread }),
             ...(replyTo && { replyTo }),
+            ...(file && { file }),
           })
         ).thread
       } catch (err) {

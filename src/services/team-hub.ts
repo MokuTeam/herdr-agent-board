@@ -5,21 +5,37 @@
 // terminals and any process are out of its reach by construction (test/services/
 // team-inbound-isolation.test.ts keeps it so). With `team` unset, or not an object with a ws:// or
 // wss:// hub, no socket is opened, no timer runs, no file is read or written and view() is null.
+//
+// Files (#371): the board says its box key in its hello, signed with its key; a peer's box is used
+// only when its signature verifies and it is the one pinned for that peer (a different one makes the
+// pin `changed`, as a new key does). A post with a file seals it once, wraps its key for each member
+// whose board takes files, and sends the copies only once the hub has the blob (team-files.ts); the
+// others get the post's text with FILE_LINE. A file that came in is fetched and opened there too.
+import { readFileSync, statSync } from 'node:fs'
 import {
   addDraft,
   addInbox,
   addOutbox,
   audit,
+  changeBlobs,
   changePins,
   changeThreads,
   type Draft,
+  type DraftFile,
+  dropDraftFile,
+  ensureBoxKey,
   ensureKey,
   type InboxItem,
+  type InFile,
+  keepDraftFile,
+  keepSealed,
   markAcked,
   type OutboxItem,
+  type OutFile,
   readAgents,
   readAllInbox,
   readAllOutbox,
+  readBlobs,
   readDrafts,
   readInbox,
   readKey,
@@ -36,16 +52,23 @@ import {
 import {
   ackBytes,
   authBytes,
+  type BoxClaim,
+  boxBytes,
   channelMembers,
   checkEnvelope,
   checkMessage,
+  DEFAULT_MAX_FILE_BYTES,
   DEFAULT_TTL_S,
   type Envelope,
   type ErrorCode,
+  FILE_LINE,
+  type FileRef,
   type Frame,
   fingerprint,
   GENERAL,
+  type HubFiles,
   hasChannels,
+  hasFiles,
   hasReplies,
   hasThreads,
   isMessageId,
@@ -71,10 +94,14 @@ import {
   validName,
   validTitle,
   verify,
+  verifyBox,
 } from '../core/team.ts'
 import { inboundKey, legacyText, splitKey, TEAM, threadKey } from '../core/team-agents.ts'
+import { NONCE_BYTES, TAG_BYTES, usableBox, wrapSecret } from '../core/team-box.ts'
+import { checkMeta, fileContext, mimeOf, sealFile } from '../core/team-file.ts'
 import { backoffMs } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
+import { createFileTransfer, saveIncoming } from './team-files.ts'
 import { type Clock, realClock } from './tunnel.ts'
 
 export type TeamState = 'off' | 'connecting' | 'online' | 'reconnecting' | 'revoked' | 'error'
@@ -100,6 +127,8 @@ export interface TeamRosterPeer {
   drafts: number
   /** The peer's board reads topic and team threads (#216): its caps say so. */
   threads?: boolean
+  /** A file can be sealed for the peer's board (#371): it takes files and its box verified and is the pinned one. */
+  files?: boolean
 }
 
 export interface TeamView {
@@ -110,6 +139,30 @@ export interface TeamView {
   me: { peer: string | null; fingerprint: string; name: string | null }
   hub: string
   roster: TeamRosterPeer[]
+  /** The hub takes files (#371): the largest one this board can send through it, in bytes. */
+  files?: { max: number }
+}
+
+/**
+ * A file on a thread's line (#371). in: `pending` while it comes, `ready` once saved here, `failed`
+ * with why; out: `uploading` to the hub, `up` once it has it, `refused` with the hub's code; a
+ * draft's: `draft`. `progress`: how far the bytes are, while they move.
+ */
+export interface LineFile {
+  state: 'pending' | 'ready' | 'failed' | 'uploading' | 'up' | 'refused' | 'draft'
+  name?: string
+  type?: string
+  size?: number
+  url?: string
+  path?: string
+  why?: string
+  progress?: number
+}
+
+/** A file for a post (#371): a path on this computer the board reads at once, and the name it goes under. */
+export interface PostFile {
+  path: string
+  name: string
 }
 
 /** One line of a thread with a peer, either way. */
@@ -202,6 +255,8 @@ export interface ThreadLine {
    * has it, else the id as the sender wrote it.
    */
   replyTo?: string
+  /** A file with it (#371). */
+  file?: LineFile
 }
 
 export interface ThreadView extends ThreadRecord {
@@ -235,11 +290,18 @@ export interface TeamService {
    * The panel's message to a peer in the roster whose key is trusted ('changed' otherwise), or to
    * the team, in general or a thread (#216); kept and sent (again on every reconnect until the hub settles it).
    */
-  send(to: string, text: string, thread?: PostTarget['thread'], replyTo?: string): Promise<SendResult>
-  /** A post from the panel or a session (#216), with its source set by the route that took it. */
-  post(target: PostTarget, text: string, source: PostSource): Promise<PostResult>
-  /** An agent's draft for a person on the roster, or the team: kept for the person to Send or Discard, never sent by the service. */
-  draft(to: string, text: string, more?: Pick<Draft, 'thread' | 'reason' | 'session' | 'replyTo'>): DraftResult
+  send(to: string, text: string, thread?: PostTarget['thread'], replyTo?: string, file?: PostFile): Promise<SendResult>
+  /** A post from the panel or a session (#216), with its source set by the route that took it; a file with it (#371). */
+  post(target: PostTarget, text: string, source: PostSource, file?: PostFile): Promise<PostResult>
+  /**
+   * An agent's draft for a person on the roster, or the team: kept for the person to Send or Discard,
+   * never sent by the service. A file with it (#371) is copied into the board's folder at once.
+   */
+  draft(
+    to: string,
+    text: string,
+    more?: Pick<Draft, 'thread' | 'reason' | 'session' | 'replyTo'> & { file?: PostFile },
+  ): DraftResult
   /** The threads this board has, the latest first (#216); empty while off. */
   threads(): ThreadView[]
   /** One thread's lines by its key; empty while off or for no thread. */
@@ -330,6 +392,32 @@ export function createTeam({
   let retry: unknown
   let upTimer: unknown
   let pinger: unknown
+  /** What the hub said of files in its welcome (#371); null for a hub that keeps none. */
+  let hubFiles: HubFiles | null = null
+  /** The peers' box keys whose signatures verified (#371), by peer; and the claims checked already. */
+  const boxes = new Map<string, string>()
+  const checked = new Map<string, boolean>()
+
+  const files = createFileTransfer({
+    frame: f => frame(f),
+    authed: () => authed,
+    me: () => me?.peer ?? null,
+    now: () => clock.now(),
+    setTimeout: (fn, ms) => clock.setTimeout(fn, ms),
+    clearTimeout: h => clock.clearTimeout(h),
+    hubMax: () => hubFiles?.max ?? 0,
+    log,
+    changed: () => changed(),
+    release: blob => {
+      if (!authed) return
+      for (const list of Object.values(readAllOutbox()))
+        for (const i of list) if (i.file?.blob === blob && i.state === 'queued') frame({ t: 'send', env: i.env })
+    },
+    refuse: (blob, code) => {
+      for (const list of Object.values(readAllOutbox()))
+        for (const i of list) if (i.file?.blob === blob) refuseOut(i.msg.id, code, clock.now())
+    },
+  })
 
   const config = (): TeamConfig | null => teamConfig(cfg.team)
   const changed = (): void => {
@@ -355,6 +443,7 @@ export function createTeam({
     gen++
     clearTimers()
     authed = false
+    files.stop()
     const w = ws
     ws = null
     if (w) {
@@ -388,6 +477,16 @@ export function createTeam({
     if (!(state === 'error' && error === 'unknown_peer')) setState(attempt > 0 ? 'reconnecting' : 'connecting')
     try {
       const key = await ensureKey()
+      // The box key goes in the hello signed with this board's key (#371), so no hub can swap it.
+      // Without a box key (a state folder it cannot write, a runtime without X25519) the board still
+      // connects, as an older one does: no box, no `files` cap, text as ever.
+      let claim: BoxClaim | undefined
+      try {
+        const box = await ensureBoxKey()
+        claim = { key: box.pub, sig: await sign(key.pkcs8, boxBytes({ box: box.pub, peer: key.pub })) }
+      } catch (err) {
+        log(`team: no box key, so no files: ${err instanceof Error ? err.message : String(err)}`)
+      }
       if (mine !== gen) return
       me = { peer: key.pub, pkcs8: key.pkcs8 }
       const w = socket(hubUrl(active.hub))
@@ -395,7 +494,14 @@ export function createTeam({
       w.onopen = () => {
         if (mine !== gen) return
         lastRx = clock.now()
-        frame({ t: 'hello', v: TEAM_PROTOCOL, peer: key.pub, client: `agent-board/${version}`, caps: OUR_CAPS })
+        frame({
+          t: 'hello',
+          v: TEAM_PROTOCOL,
+          peer: key.pub,
+          client: `agent-board/${version}`,
+          caps: claim ? OUR_CAPS : OUR_CAPS.filter(c => c !== 'files'),
+          ...(claim && { box: claim }),
+        })
       }
       w.onmessage = e => {
         if (mine !== gen || typeof e.data !== 'string') return
@@ -453,6 +559,7 @@ export function createTeam({
         if (authed) return
         authed = true
         myName = f.name
+        hubFiles = f.files ?? null
         if (upTimer !== undefined) clock.clearTimeout(upTimer)
         if (pinger !== undefined) clock.clearInterval(pinger)
         upTimer = clock.setTimeout(() => {
@@ -471,9 +578,11 @@ export function createTeam({
         }, PING_MS)
         setState('online')
         resend()
+        files.welcome()
         return
       case 'roster':
         takeRoster(f.peers)
+        await takeBoxes()
         return
       case 'presence':
         // Coming online says what the board understands now (an upgrade, #216); going offline says nothing of it.
@@ -483,10 +592,13 @@ export function createTeam({
           if (f.online) {
             delete next.caps
             if (f.caps) next.caps = f.caps
+            delete next.box
+            if (f.box) next.box = f.box
           }
           return next
         })
         changed()
+        if (f.online) await takeBoxes()
         return
       case 'state':
         await takeState(f)
@@ -494,9 +606,16 @@ export function createTeam({
       case 'deliver':
         if (authed) await takeDeliver(f.env)
         return
+      case 'blob_have':
+      case 'blob_ready':
+      case 'blob_data':
+        if (authed) files.frame(f)
+        return
       case 'error':
         log(`team: the hub says ${f.code}${f.id ? ` for ${f.id}` : ''}`)
         audit('hub-error', null, { code: f.code })
+        // A blob of ours, or one being fetched (#371), is settled there.
+        if (f.id && files.error(f.id, f.code)) return
         // An error naming a message of ours settles it: it is not sent again on the next connect.
         if (f.id && refuseOut(f.id, f.code, clock.now())) changed()
         return
@@ -508,10 +627,61 @@ export function createTeam({
     }
   }
 
-  /** The questions the hub has not settled go again, same id: it answers with their state. */
+  /** The questions the hub has not settled go again, same id: it answers with their state. A post with a file waits for its blob (#371). */
   function resend(): void {
+    const up = new Set(
+      readBlobs()
+        .filter(b => b.state === 'up')
+        .map(b => b.id),
+    )
     for (const list of Object.values(readAllOutbox()))
-      for (const i of list) if (i.state === 'queued' || i.state === 'delivered') frame({ t: 'send', env: i.env })
+      for (const i of list)
+        if ((i.state === 'queued' || i.state === 'delivered') && (!i.file || up.has(i.file.blob)))
+          frame({ t: 'send', env: i.env })
+  }
+
+  /**
+   * The peers' box keys (#371): each claim's signature checked once against the peer's key, and
+   * held to the box pinned for that peer. A trusted pin without a box takes the first that verifies;
+   * a different one later makes the pin `changed`, as a new key under a pinned name does, until Trust.
+   */
+  async function takeBoxes(): Promise<void> {
+    const claims = roster.map(p => [p.peer, p.box] as const)
+    for (const [peer, claim] of claims) {
+      if (!claim) continue
+      const id = `${peer}\n${claim.key}\n${claim.sig}`
+      // A signed key nothing can be sealed to (of low order) is no box either.
+      if (!checked.has(id)) checked.set(id, (await verifyBox(peer, claim)) && (await usableBox(claim.key)))
+    }
+    boxes.clear()
+    for (const [peer, claim] of claims)
+      if (claim && checked.get(`${peer}\n${claim.key}\n${claim.sig}`)) boxes.set(peer, claim.key)
+    const moved = changePins(pins => {
+      let n = 0
+      for (const [peer, key] of boxes) {
+        const pin = Object.hasOwn(pins, peer) ? pins[peer] : undefined
+        if (pin?.status !== 'trusted' || pin.box === key) continue
+        if (pin.box === undefined) pin.box = key
+        else {
+          pin.status = 'changed'
+          pin.at = clock.now()
+          n++
+        }
+      }
+      return n
+    })
+    if (moved) {
+      audit('box_changed', null, { peers: moved })
+      log('team: a peer box key changed; trust it in the Team panel before files go to it')
+    }
+    changed()
+  }
+
+  /** Whether a file can be sealed for a peer (#371): its board takes files, its box verified and is the trusted one. */
+  function canFile(p: RosterPeer): boolean {
+    const pin = readPins()[p.peer]
+    const box = boxes.get(p.peer)
+    return hasFiles(p) && !!box && pin?.status === 'trusted' && pin.box === box
   }
 
   function takeRoster(peers: RosterPeer[]): void {
@@ -570,7 +740,10 @@ export function createTeam({
       // Acked all the same: the hub need not bring it again.
       audit('drop', msg.from, { why: 'channel', id: msg.id })
       log('team: dropped a message (a channel this board is not in, or a thread it does not fit)')
-    } else keep(msg, thread, held)
+    } else {
+      keep(msg, thread, held)
+      if (msg.body.file) files.kick()
+    }
     // Acked again on a redelivery: the first ack may not have got through.
     const ts = new Date(clock.now()).toISOString()
     const sig = await sign(me.pkcs8, ackBytes({ by: me.peer, id: msg.id, to: msg.from, ts }))
@@ -612,6 +785,7 @@ export function createTeam({
       ...(msg.body.replyTo && { replyTo: msg.body.replyTo }),
       ...(msg.body.post && { post: msg.body.post }),
       ackedAt: null,
+      ...(msg.body.file && { file: { state: 'pending' as const, ref: msg.body.file } }),
     })
     if (fresh) {
       const isNew = keepThread(thread, msg.body.thread, msg.from)
@@ -722,10 +896,14 @@ export function createTeam({
    * any other the text with the title in front. Every copy is built before any is kept, so a
    * refused one sends nothing.
    */
-  async function post(target: PostTarget, text: string, source: PostSource): Promise<PostResult> {
+  async function post(target: PostTarget, text: string, source: PostSource, file?: PostFile): Promise<PostResult> {
     if (!config()) return { ok: false, error: 'off' }
     const body = text.trim()
-    if (!body || body.length > MAX_TEXT) return { ok: false, error: 'text' }
+    // With a file the text is its caption, and may be left out (#371).
+    if ((!body && !file) || body.length > MAX_TEXT) return { ok: false, error: 'text' }
+    if (file && !hubFiles) return { ok: false, error: 'files_hub' }
+    const bytes = file ? readPostFile(file) : null
+    if (bytes && !bytes.ok) return { ok: false, error: bytes.error }
     const team = target.to === TEAM
     if (!team && (!isPeerId(target.to) || !roster.some(p => p.peer === target.to))) return { ok: false, error: 'peer' }
     const pins = readPins()
@@ -754,6 +932,23 @@ export function createTeam({
       if (!wire) return { ok: false, error: 'reply' }
       replyTo = wire
     }
+    // A file (#371) is sealed once and its key wrapped for each board that can take it; the others
+    // get the text and FILE_LINE. Nobody who can take it: nothing goes.
+    const takers = bytes?.ok ? recipients.filter(canFile) : []
+    if (bytes?.ok && !takers.length) return { ok: false, error: 'files_nobody' }
+    // Each taker's box as it was pinned when it was chosen, before anything awaits.
+    const boxesOf = takers.map(p => ({ peer: p.peer, box: boxes.get(p.peer) as string }))
+    const blob = bytes?.ok ? crypto.randomUUID() : null
+    let sealed: Awaited<ReturnType<typeof sealFile>> | null = null
+    let wrapped: Awaited<ReturnType<typeof wrapSecret>> | null = null
+    try {
+      sealed = bytes?.ok && blob ? await sealFile(bytes.bytes, bytes.meta, blob) : null
+      wrapped = sealed && blob ? await wrapSecret(sealed.secret, boxesOf, fileContext(blob)) : null
+    } catch (err) {
+      log(`team: a file could not be sealed: ${err instanceof Error ? err.message : String(err)}`)
+      return { ok: false, error: 'file' }
+    }
+    const ttl_s = team ? MAX_TTL_S : DEFAULT_TTL_S
     const via: Via | undefined = source.by === 'agent' ? 'agent' : undefined
     const session = source.by === 'agent' ? source.session : undefined
     const pressed = source.by === 'agent' && source.pressed === true
@@ -766,9 +961,26 @@ export function createTeam({
       // A channel's copy goes as a channel only to a board that reads channels; any other gets it
       // in its pair's general with the title in front, so an answer there reaches this board alone.
       const rich = ref?.members ? hasChannels(p) : hasThreads(p)
-      const words = rich
-        ? body
-        : legacyText(body, ref && { ...(ref.title && { title: ref.title }), group: ref.group === true && !ref.members })
+      const fileRef: FileRef | undefined =
+        sealed && blob && wrapped?.keys[p.peer]
+          ? {
+              blob,
+              size: sealed.blob.length,
+              hash: sealed.hash,
+              eph: wrapped.eph,
+              key: wrapped.keys[p.peer] as string,
+              meta: sealed.meta,
+            }
+          : undefined
+      // A board that cannot take the file reads that one was sent, after the text.
+      const said = sealed && !fileRef ? (body ? `${body}\n\n${FILE_LINE}` : FILE_LINE) : body
+      const words =
+        rich || (fileRef && !body)
+          ? said
+          : legacyText(
+              said,
+              ref && { ...(ref.title && { title: ref.title }), group: ref.group === true && !ref.members },
+            )
       if (words.length > MAX_TEXT) return { ok: false, error: 'text' }
       const msgBody: Message['body'] = { text: words }
       if (via) msgBody.via = via
@@ -778,6 +990,7 @@ export function createTeam({
         if (replyTo) msgBody.replyTo = replyTo
         if (team) msgBody.post = postId
       }
+      if (fileRef) msgBody.file = fileRef
       const msg: Message = {
         v: TEAM_PROTOCOL,
         id: copies.length ? crypto.randomUUID() : postId,
@@ -787,7 +1000,7 @@ export function createTeam({
         reply_to: null,
         ts: new Date(clock.now()).toISOString(),
         // A team copy waits as long as the hub keeps anything, for members who are away.
-        ttl_s: team ? MAX_TTL_S : DEFAULT_TTL_S,
+        ttl_s,
         body: msgBody,
       }
       // Written once and signed as written; that string is what every hop passes on.
@@ -800,6 +1013,26 @@ export function createTeam({
       copies.push({ env, msg })
     }
     keepThread(key, ref, 'me')
+    // The file's own copy here, to show in the thread, and its sealed bytes until the hub has them.
+    let outFile: OutFile | undefined
+    if (bytes?.ok && sealed && blob) {
+      const mine = saveIncoming(bytes.bytes, bytes.meta.name, blob, new Date(clock.now()))
+      outFile = { blob, name: bytes.meta.name, type: bytes.meta.type, size: bytes.meta.size, url: mine.url }
+      keepSealed(blob, sealed.blob)
+      const rec = {
+        id: blob,
+        to: takers.map(p => p.peer),
+        size: sealed.blob.length,
+        hash: sealed.hash,
+        ttl_s,
+        state: 'uploading' as const,
+        at: clock.now(),
+      }
+      changeBlobs(all => {
+        all[blob] = rec
+      })
+      sealed.secret.fill(0)
+    }
     for (const c of copies) {
       addOutbox({
         env: c.env,
@@ -814,13 +1047,20 @@ export function createTeam({
         // The post's own text, where this copy's has a title in front (an older board's).
         ...(c.msg.body.text !== body && { text: body }),
         ...(replyTo && { replyTo }),
+        ...(outFile && { file: outFile }),
       })
-      if (authed) frame({ t: 'send', env: c.env })
+      // A copy with a file goes once the hub has the blob (#371).
+      if (authed && !outFile) frame({ t: 'send', env: c.env })
+    }
+    if (outFile) {
+      const rec = readBlobs().find(b => b.id === outFile.blob)
+      if (rec) files.send(rec)
     }
     audit('post', team ? null : target.to, {
       id: postId,
       thread: key,
       copies: copies.length,
+      ...(outFile && { file: outFile.blob, size: outFile.size }),
       by: source.by,
       ...(session && { session: session.key }),
       ...(pressed && { pressed: true }),
@@ -829,6 +1069,65 @@ export function createTeam({
     changed()
     return { ok: true, id: postId, thread: key, copies: copies.length, skipped }
   }
+
+  /**
+   * A file for a post (#371), read now: a regular file within what the hub takes (less the seal's
+   * nonce and tag), under a name a meta can carry and a type from its extension.
+   */
+  function readPostFile(
+    file: PostFile,
+  ):
+    | { ok: true; bytes: Uint8Array; meta: { name: string; type: string; size: number } }
+    | { ok: false; error: string } {
+    const max = (hubFiles?.max ?? 0) - NONCE_BYTES - TAG_BYTES
+    let size: number
+    try {
+      const st = statSync(file.path)
+      if (!st.isFile()) return { ok: false, error: 'file' }
+      size = st.size
+    } catch {
+      return { ok: false, error: 'file' }
+    }
+    if (size > max) return { ok: false, error: 'file_big' }
+    const meta = checkMeta({ name: file.name, type: mimeOf(file.name), size })
+    if (!meta) return { ok: false, error: 'file_name' }
+    try {
+      const bytes = new Uint8Array(readFileSync(file.path))
+      if (bytes.length !== size || bytes.length > max) return { ok: false, error: 'file' }
+      return { ok: true, bytes, meta }
+    } catch {
+      return { ok: false, error: 'file' }
+    }
+  }
+
+  /** A line's file (#371): what came in, what went out with how far its blob got, or a draft's. */
+  function lineFileIn(f: InFile, blob?: string): LineFile {
+    const progress = blob ? files.progress(blob) : undefined
+    return {
+      state: f.state,
+      ...(f.name !== undefined && { name: f.name }),
+      ...(f.type !== undefined && { type: f.type }),
+      ...(f.size !== undefined && { size: f.size }),
+      ...(f.url !== undefined && { url: f.url }),
+      ...(f.path !== undefined && { path: f.path }),
+      ...(f.why !== undefined && { why: f.why }),
+      ...(progress !== undefined && { progress }),
+    }
+  }
+  function lineFileOut(f: OutFile): LineFile {
+    const rec = readBlobs().find(b => b.id === f.blob)
+    const progress = files.progress(f.blob)
+    return {
+      state: rec?.state ?? 'up',
+      name: f.name,
+      type: f.type,
+      size: f.size,
+      ...(f.url && { url: f.url }),
+      ...(rec?.code && { why: rec.code }),
+      ...(progress !== undefined && { progress }),
+    }
+  }
+  const lineFileDraft = (f: DraftFile): LineFile => ({ state: 'draft', name: f.name, size: f.size })
 
   function setHandler(key: string, handler: SessionRef | null): boolean {
     return changeThreads(threads => {
@@ -914,6 +1213,7 @@ export function createTeam({
         ...(i.via && { via: i.via }),
         ...(i.agent && { agent: i.agent }),
         ...(!i.held && answers(i.replyTo)),
+        ...(i.file && !i.held && { file: lineFileIn(i.file, i.file.ref?.blob) }),
       }),
     )
     const outgoing: ThreadLine[] = [...items.posts.entries()].map(([id, copies]): ThreadLine => {
@@ -926,6 +1226,7 @@ export function createTeam({
         ...(first.msg.body.via && { via: first.msg.body.via }),
         ...(first.session?.name && { agent: first.session.name }),
         ...(first.pressed && { pressed: true }),
+        ...(first.file && { file: lineFileOut(first.file) }),
         ...(team
           ? { receipts: copies.map(c => ({ peer: c.msg.to, name: nameOf(c.msg.to), state: c.state })) }
           : { state: first.state, ...(first.code && { code: first.code }) }),
@@ -944,9 +1245,26 @@ export function createTeam({
           ...(d.session?.name && { agent: d.session.name }),
           ...(d.reason && { reason: d.reason }),
           ...answers(d.replyTo),
+          ...(d.file && { file: lineFileDraft(d.file) }),
         }),
       )
     return [...[...incoming, ...outgoing].sort((a, b) => a.ts.localeCompare(b.ts)), ...drafts]
+  }
+
+  /** A file an agent attached to a draft (#371): a regular file within what the hub takes, under a name a meta can carry. */
+  function checkDraftFile(file: PostFile): { ok: true; size: number; max: number } | { ok: false; error: string } {
+    try {
+      const st = statSync(file.path)
+      if (!st.isFile()) return { ok: false, error: 'file' }
+      // Before the hub said its limit (offline, an older hub), the default one holds.
+      const max = (hubFiles?.max ?? DEFAULT_MAX_FILE_BYTES) - NONCE_BYTES - TAG_BYTES
+      if (st.size > max) return { ok: false, error: 'file_big' }
+      if (!checkMeta({ name: file.name, type: mimeOf(file.name), size: st.size }))
+        return { ok: false, error: 'file_name' }
+      return { ok: true, size: st.size, max }
+    } catch {
+      return { ok: false, error: 'file' }
+    }
   }
 
   function begin(): void {
@@ -979,7 +1297,9 @@ export function createTeam({
           pin: pins[p.peer]?.status ?? 'trusted',
           drafts: drafts.filter(d => d.to === p.peer).length,
           threads: hasThreads(p),
+          ...(canFile(p) && { files: true }),
         })),
+        ...(hubFiles && { files: { max: hubFiles.max - NONCE_BYTES - TAG_BYTES } }),
       }
     },
     thread(peer) {
@@ -1014,8 +1334,8 @@ export function createTeam({
         .map((d): ThreadMessage => ({ id: d.id, dir: 'draft', text: d.text, ts: new Date(d.createdAt).toISOString() }))
       return [...[...incoming, ...outgoing].sort((a, b) => a.ts.localeCompare(b.ts)), ...drafts]
     },
-    async send(to, text, thread, replyTo) {
-      const r = await post({ to, ...(thread && { thread }), ...(replyTo && { replyTo }) }, text, { by: 'ui' })
+    async send(to, text, thread, replyTo, file) {
+      const r = await post({ to, ...(thread && { thread }), ...(replyTo && { replyTo }) }, text, { by: 'ui' }, file)
       return r.ok ? { ok: true, id: r.id, thread: r.thread } : r
     },
     post,
@@ -1023,11 +1343,36 @@ export function createTeam({
       if (!config()) return { ok: false, error: 'off' }
       if (to !== TEAM && (!isPeerId(to) || !roster.some(p => p.peer === to))) return { ok: false, error: 'peer' }
       const body = text.trim()
-      if (!body || body.length > MAX_TEXT) return { ok: false, error: 'text' }
+      const { file, ...rest } = more
+      if ((!body && !file) || body.length > MAX_TEXT) return { ok: false, error: 'text' }
       const id = crypto.randomUUID()
-      if (!addDraft({ id, to, text: body, createdAt: clock.now(), ...more }, MAX_DRAFTS))
+      // The draft keeps a copy of the file as it is now: a change to it later changes nothing (#371).
+      let kept: DraftFile | undefined
+      if (file) {
+        const checked = checkDraftFile(file)
+        if (!checked.ok) return checked
+        try {
+          const path = keepDraftFile(id, file.path)
+          // The file may have grown between the look and the copy: the copy is what counts.
+          const size = statSync(path).size
+          if (size > checked.max) {
+            dropDraftFile(path)
+            return { ok: false, error: 'file_big' }
+          }
+          kept = { path, name: file.name, size }
+        } catch {
+          return { ok: false, error: 'file' }
+        }
+      }
+      if (!addDraft({ id, to, text: body, createdAt: clock.now(), ...rest, ...(kept && { file: kept }) }, MAX_DRAFTS)) {
+        if (kept) dropDraftFile(kept.path)
         return { ok: false, error: 'full' }
-      audit('draft', to === TEAM ? null : to, { id, ...(more.reason && { reason: more.reason }) })
+      }
+      audit('draft', to === TEAM ? null : to, {
+        id,
+        ...(more.reason && { reason: more.reason }),
+        ...(kept && { size: kept.size }),
+      })
       changed()
       return { ok: true, id }
     },
@@ -1107,10 +1452,17 @@ export function createTeam({
       // message is gone from this board by then, it goes as a plain message rather than never.
       const target = { to: d.to, ...(d.thread && { thread: d.thread }) }
       const source = { by: 'agent' as const, ...(d.session && { session: d.session }), pressed: true }
-      let r = await post({ ...target, ...(d.replyTo && { replyTo: d.replyTo }) }, d.text, source)
-      if (!r.ok && r.error === 'reply' && d.replyTo) r = await post(target, d.text, source)
-      if (!r.ok) addDraft(d, Number.MAX_SAFE_INTEGER)
-      else {
+      const file = d.file && { path: d.file.path, name: d.file.name }
+      let r: PostResult = { ok: false, error: 'draft' }
+      try {
+        r = await post({ ...target, ...(d.replyTo && { replyTo: d.replyTo }) }, d.text, source, file)
+        if (!r.ok && r.error === 'reply' && d.replyTo) r = await post(target, d.text, source, file)
+      } finally {
+        // Put back when the send is refused, or throws: a draft is never lost on the way.
+        if (!r.ok) addDraft(d, Number.MAX_SAFE_INTEGER)
+      }
+      if (r.ok) {
+        if (d.file) dropDraftFile(d.file.path)
         audit('draft_sent', d.to === TEAM ? null : d.to, { id })
         // The session that wrote it hears the answers, as it would have had it gone at once (#216).
         const t = readThreads()[r.thread]
@@ -1124,6 +1476,7 @@ export function createTeam({
       if (!config() || !isMessageId(id)) return false
       const d = takeDraft(id)
       if (d) {
+        if (d.file) dropDraftFile(d.file.path)
         audit('draft_discarded', d.to, { id })
         changed()
       }
@@ -1135,6 +1488,9 @@ export function createTeam({
         const p = Object.hasOwn(pins, peer) ? pins[peer] : undefined
         if (!p) return false
         p.status = 'trusted'
+        // The box the roster has for it now is the one files are sealed to from here on (#371).
+        const box = boxes.get(peer)
+        if (box) p.box = box
         for (const [id, x] of Object.entries(pins)) if (id !== peer && x.name === p.name) delete pins[id]
         return true
       })
@@ -1142,6 +1498,7 @@ export function createTeam({
         releaseHeld(peer)
         audit('trust', peer)
         changed()
+        files.kick()
       }
       return ok
     },

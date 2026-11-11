@@ -17,6 +17,7 @@ import { delivery, type ThreadLine } from '../../models/team.ts'
 import { agentMark, bubbleTime, deliveryOf, fullWhen, type Quote, senderName, toneOf } from '../../models/team-chat.ts'
 import { classNames } from '../class-names.ts'
 import { MessageText } from '../sheet/MessageText.tsx'
+import { TeamFile } from './TeamFile.tsx'
 
 /** How long a touch holds before it counts as a long press (ms), and how far it may wander (px). */
 const LONG_PRESS_MS = 450
@@ -72,7 +73,12 @@ export function TeamMessage({ line, first, last, named, quote, flash, onReply, o
             </div>
           )}
           {quote && <QuoteView quote={quote} onQuote={onQuote} />}
-          {line.text === null ? <p className="team-held-text">{t('team.heldText')}</p> : <Text text={line.text} />}
+          {line.text === null ? (
+            <p className="team-held-text">{t('team.heldText')}</p>
+          ) : (
+            (line.text !== '' || !line.file) && <Text text={line.text} />
+          )}
+          {line.file && line.text !== null && <TeamFile file={line.file} />}
           <span className="team-msg-foot">
             <time dateTime={line.ts} title={when}>
               {bubbleTime(line.ts, t)}

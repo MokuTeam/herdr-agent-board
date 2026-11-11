@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { extname, join } from 'node:path'
 import { uploadsDir } from '../adapters/paths.ts'
 import { t } from '../core/lang.ts'
+import { safeName } from '../core/upload-name.ts'
 import { json, type Route } from './http.ts'
 
 const MAX_UPLOAD = 30 << 20
@@ -16,25 +17,11 @@ const IMAGE_TYPES: Record<string, string> = {
   '.webp': 'image/webp',
 }
 
+export { safeName }
+
 export type UploadResult =
   | { ok: true; path: string; name: string; size: number; url: string }
   | { ok: false; error: string }
-
-/** A file name that is safe on disk and in a URL: letters, digits, dot and dash. */
-export function safeName(name: unknown): string {
-  const clean = (
-    String(name ?? '')
-      .split(/[\\/]/)
-      .pop() ?? ''
-  )
-    .normalize('NFC')
-    .replace(/[^\p{L}\p{N}.-]+/gu, '-')
-    .replace(/-{2,}/g, '-')
-    .replace(/-+\./g, '.')
-    .replace(/^[-.]+|-+$/g, '')
-    .slice(-120)
-  return clean || 'file'
-}
 
 /** Day folders of uploads older than `days` go; the sessions have read them by then. */
 export function pruneUploads(days: number): void {

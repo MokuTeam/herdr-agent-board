@@ -2335,8 +2335,8 @@ the lanes shared and the loop pause (below; empty for the board's default) (`/ap
 everything stays
 as above: an agent's post is a draft, and what comes in reaches no session. On for a person:
 
-- A session posts with `board team post <name|team> [--new "<title>"] [--link <url>] "<text>"` and
-  answers with `board team reply <thread> "<text>"` (a thread's id or its first 8 characters, a
+- A session posts with `board team post <name|team> [--new "<title>"] [--link <url>] [--file <path>] "<text>"` and
+  answers with `board team reply <thread> [--file <path>] "<text>"` (a thread's id or its first 8 characters, a
   person's name for your `general` with them, `team` for the team's). The board marks it as an
   agent's and names the session (`via: "agent"`, `agent: <session>` in the signed body), whatever the
   request says: the receiving board shows "from Ana's agent board-216". `board team thread` prints
@@ -2406,6 +2406,28 @@ directly, since an agent runs as the same user as the board (`team-key.json` hol
 signing key, `team-agents.json` is a plain file). Nothing on one computer closes that; keep it in
 mind before giving an agent free rein over your user's files.
 
+**Files (#371).** A file in a thread is sealed on your board for the boards of the members who get
+it, so the hub keeps and passes on bytes it cannot read: not the file, not its name, not its type.
+Each board has a second key for this (`team-box.json`, X25519), which it says in its hello signed
+with its own key; the hub passes it on with the roster, and every board checks that signature. A
+member's box key is pinned as their key is: a different one later shows them as "key changed", and
+no file goes to them until you trust it. Each file gets a key of its own (AES-256-GCM), wrapped for
+each member's box; the signed message carries the wrapped key, the encrypted name and size, and the
+hash of what the hub keeps. The hub keeps that once, at most 25 MB a file and 200 MB held per
+member by default, and deletes it when every member fetched it, at the message's TTL (a day in a
+pair, a week in the team), or an hour after an upload stopped. The receiving board checks the hash,
+opens the file and keeps it with the board's uploads (gone after `keepUploadsDays` with them):
+images show inline, anything else is offered as a download, and nothing is opened or run. A member
+whose board is older gets your text and the line "a file was sent; update the board to receive it";
+through an older hub a file is refused and text goes as before. The text of a post stays as readable
+to the hub as any text. An agent's file (`board team post | reply --file <path>`) always waits for
+you as a draft, as a text with a secret in it does, with the board's own copy of the file taken when
+the agent asked; your Send sends it. `board team thread` lists a file that came in by its name and
+size and where it was saved. In the panel a file shows on its line with its name and size, a
+picture inline once it is here, and a draft that carries one says so, as the confirmation window
+does. A board fetches at most 100 MB a file and 1 GB a day from one member on its own; past that
+theirs wait on the hub. The panel's attach button comes with the composer of #370.
+
 **Running the hub.** `bun hub/src/main.ts`: see [hub/README.md](hub/README.md) for the options,
 invites, revoking a member and what it keeps. It is not part of the plugin; run it on one machine
 the members reach: on a tailnet, or on loopback on a server of yours with nginx bringing TLS in
@@ -2416,8 +2438,9 @@ front of it, the boards' hub then being `wss://hub.example.com` and no Tailscale
 
 - No offers, no replies to offers, no status or data: the only message is a `question`, text up
   to 4000 characters. It reaches a person, and a session only where you turned agents on (above).
-- No end-to-end encryption: the hub sees the text of a message while it waits for its recipient
-  (and deletes it after the ack or the expiry). Messages are signed, not sealed. Run a hub you trust.
+- No end-to-end encryption of text: the hub sees the text of a message while it waits for its
+  recipient (and deletes it after the ack or the expiry). Messages are signed, not sealed; files
+  are sealed (above). Run a hub you trust.
 - The line between what a human may do and what an agent may do on the board is not enforced
   (#224): anyone who can reach the board's local API can send as you. Use it on a computer you
   alone use.

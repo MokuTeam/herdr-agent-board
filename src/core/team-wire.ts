@@ -24,8 +24,11 @@ export const MAX_DRAFTS = 20
  * `replies` (#370): the message answered (Message.body.replyTo) and, on a team post's copies, the
  * post's id (Message.body.post), so every member's board finds the same original; a peer without
  * it gets the plain body.
+ * `files` (#371): a file in a message (Message.body.file), end-to-end encrypted to the board's box
+ * key (RosterPeer.box); a member whose board does not say so, or whose box did not come through,
+ * gets FILE_LINE instead.
  */
-export const CAPS = ['threads', 'channels', 'replies'] as const
+export const CAPS = ['threads', 'channels', 'replies', 'files'] as const
 export type Cap = (typeof CAPS)[number]
 export const MAX_CAPS = 8
 export const MAX_CAP = 32
@@ -49,6 +52,44 @@ export interface ThreadRef {
   members?: string[]
 }
 
+/**
+ * A file in a message (#371), as signed by its sender: `blob` the hub's id for the encrypted bytes,
+ * `size` and `hash` (SHA-256, base64url) of those bytes, `eph` the sender's one-time X25519 key,
+ * `key` the file's key wrapped for this copy's recipient, `meta` the name, type and size, encrypted
+ * with the file's key. The hub reads none of it but the shape.
+ */
+export interface FileRef {
+  blob: string
+  size: number
+  hash: string
+  eph: string
+  key: string
+  meta: string
+}
+
+/**
+ * A board's box key (#371): its X25519 public key, and its Ed25519 signature over it (boxBytes),
+ * so the hub that passes it on cannot put a key of its own in its place.
+ */
+export interface BoxClaim {
+  key: string
+  sig: string
+}
+
+/** What a board with `files` shows an older board in a file's place, after the post's text. */
+export const FILE_LINE = 'a file was sent; update the board to receive it'
+/** Bytes of a blob in one frame: about 44 KB of base64url, under the hub's 64 KiB frames. */
+export const BLOB_CHUNK = 32 * 1024
+/** Frames of a blob in flight at once, either way. */
+export const BLOB_WINDOW = 8
+/** The encrypted meta of a file, as base64url, at most. */
+export const MAX_FILE_META = 2048
+/** A file's name, at most. */
+export const MAX_FILE_NAME = 200
+/** The hub's defaults (#371): one file, and what one peer may hold on the hub at once. */
+export const DEFAULT_MAX_FILE_BYTES = 25 * 1024 * 1024
+export const DEFAULT_QUOTA_BYTES = 200 * 1024 * 1024
+
 export const MAX_ENVELOPE_BYTES = 16 * 1024
 export const MAX_TEXT = 4000
 export const MAX_NAME = 40
@@ -69,6 +110,10 @@ export const ERROR_CODES = [
   'dup_id',
   'kind',
   'broadcast',
+  // #371: only to a board that sent blob frames.
+  'quota',
+  'bad_hash',
+  'no_blob',
 ] as const
 export type ErrorCode = (typeof ERROR_CODES)[number]
 
@@ -86,8 +131,17 @@ export interface Message {
    * `agent`: the sending session's name, only with `via`; `thread`: only to a peer with the `threads`
    * cap. `replyTo` (#370): the id of the message this one answers, a pair's message or a team post's;
    * `post`: on a team post's copy, the post's id (its first copy's). Both only to a peer with `replies`.
+   * `file` (#371): only to a peer with `files` and a box, and then `text` may be empty.
    */
-  body: { text: string; via?: Via; agent?: string; thread?: ThreadRef; replyTo?: string; post?: string }
+  body: {
+    text: string
+    via?: Via
+    agent?: string
+    thread?: ThreadRef
+    replyTo?: string
+    post?: string
+    file?: FileRef
+  }
 }
 
 /**
@@ -126,16 +180,24 @@ export interface RosterPeer {
   last_seen: number | null
   /** What the peer's board said it understands (#216); absent from an older hub. */
   caps?: string[]
+  /** The peer's box key (#371); absent from an older hub or board. Checked by each board. */
+  box?: BoxClaim
+}
+
+/** What a hub that keeps files says in its welcome (#371): its limits, in bytes. */
+export interface HubFiles {
+  max: number
+  quota: number
 }
 
 export type Frame =
-  | { t: 'hello'; v: number; peer: string; client: string; caps?: string[] }
+  | { t: 'hello'; v: number; peer: string; client: string; caps?: string[]; box?: BoxClaim }
   | { t: 'challenge'; hub: string; nonce: string }
   | { t: 'auth'; sig: string }
   | { t: 'join'; invite: string; name: string; sig: string }
-  | { t: 'welcome'; peer: string; name: string; hub: string }
+  | { t: 'welcome'; peer: string; name: string; hub: string; files?: HubFiles }
   | { t: 'roster'; peers: RosterPeer[] }
-  | { t: 'presence'; peer: string; online: boolean; at: number; caps?: string[] }
+  | { t: 'presence'; peer: string; online: boolean; at: number; caps?: string[]; box?: BoxClaim }
   | { t: 'send'; env: Envelope }
   | { t: 'deliver'; env: Envelope }
   | { t: 'state'; id: string; state: DeliveryState; at: number; ack?: Ack }
@@ -143,3 +205,11 @@ export type Frame =
   | { t: 'error'; code: ErrorCode; id?: string; message: string }
   | { t: 'ping' }
   | { t: 'pong' }
+  // #371: a blob, kept once on the hub for the peers in `to`; `data` is base64url, BLOB_CHUNK at most.
+  | { t: 'blob_open'; id: string; size: number; hash: string; to: string[]; ttl_s: number }
+  | { t: 'blob_have'; id: string; have: number }
+  | { t: 'blob_put'; id: string; at: number; data: string }
+  | { t: 'blob_ready'; id: string }
+  | { t: 'blob_get'; id: string; at: number }
+  | { t: 'blob_data'; id: string; at: number; data: string }
+  | { t: 'blob_done'; id: string }
