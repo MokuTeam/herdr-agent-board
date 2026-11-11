@@ -97,11 +97,11 @@ describe('days and times, on a fixed clock', () => {
     })
   })
 
-  test('the board’s time zone decides the day: 21:30 UTC yesterday is 01:30 today in Tbilisi', () => {
+  test('the board’s time zone decides the day: 21:30 UTC yesterday is 01:30 today in Dubai', () => {
     const late = [msg('x', '2026-11-10T21:30:00Z')]
     expect(inZone('UTC', () => days(late))).toEqual(['Yesterday'])
-    expect(inZone('Asia/Tbilisi', () => days(late))).toEqual(['Today'])
-    expect(inZone('Asia/Tbilisi', () => bubbleTime('2026-11-10T21:30:00Z', ru))).toBe('1:30')
+    expect(inZone('Asia/Dubai', () => days(late))).toEqual(['Today'])
+    expect(inZone('Asia/Dubai', () => bubbleTime('2026-11-10T21:30:00Z', ru))).toBe('1:30')
   })
 
   test('the bubble’s time, the full date and time on hover, the list’s time', () => {
