@@ -6,6 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { TEAM_SKILL } from '../../src/core/setup.ts'
+import { DEFAULT_LIMITS, MAX_LOOP } from '../../src/core/team-agents.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 
 const file = join(root, 'skills', TEAM_SKILL, 'SKILL.md')
@@ -67,6 +68,15 @@ describe('skills/agent-board-team', () => {
     expect(text).toContain('ben')
   })
 
+  test('the limits it gives are the board’s defaults', () => {
+    const l = DEFAULT_LIMITS
+    expect(text).toContain(
+      `by default ${l.sessionHour} posts an hour per session, ${l.peerHour} an hour and ${l.peerDay} a day`,
+    )
+    expect(text).toContain(`within ${l.echoMin} minutes`)
+    expect(text).toContain(`a number from 1 to ${MAX_LOOP}`)
+  })
+
   test('the parsers find a renamed command and a renamed flag', () => {
     const usage = teamUsage(
       'usage: board team post <name|team> [--new "<title>"] [--link <url>] "<text>" | board team listen [off]',
@@ -102,6 +112,11 @@ describe('skills/agent-board-team', () => {
       for (const flag of use.flags)
         expect({ op: use.op, flag, known: usage.get(use.op)?.has(flag) }).toEqual({ op: use.op, flag, known: true })
     }
+    // A flag written apart from its command (`--read`, `--link` in prose) is some command's flag still.
+    const flags = new Set([...usage.values()].flatMap(s => [...s]))
+    const written = [...text.matchAll(/(?<![\w-])--[a-z][a-z-]*/g)].map(f => f[0])
+    expect(written.length).toBeGreaterThan(5)
+    for (const flag of written) expect({ flag, known: flags.has(flag) }).toEqual({ flag, known: true })
     // The other board commands it gives (`board ask`, `board list`) are in board --help.
     const help = await boardSays(box, ['--help'])
     const top = new Set(
