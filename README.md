@@ -35,7 +35,8 @@ notifications: Windows and macOS). Steps 1 and 2 are what the board needs; the r
    [`spawn-agent`](#spawn-agent), which starts a session in a new herdr tab. It registers the
    Claude Code hooks (SessionStart, UserPromptSubmit) that brief every session about the board,
    and the status line when you have none (usage windows and context fill on the board). It
-   installs the Claude Code skill [`herdr-agents`](#agents) into `~/.claude/skills`, and has herdr
+   installs the Claude Code skills [`herdr-agents`](#agents) and
+   [`agent-board-team`](skills/agent-board-team/SKILL.md) into `~/.claude/skills`, and has herdr
    install its own Claude hook (`herdr integration install claude`), from which herdr learns which
    conversation a pane runs; a herdr that cannot is said, and the rest goes on. It replaces only
    its own entries in `~/.claude/settings.json`, keeps a copy of the file before
@@ -46,13 +47,14 @@ notifications: Windows and macOS). Steps 1 and 2 are what the board needs; the r
 
    With more than one Claude profile (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`) it
    does the same in the `settings.json` of every profile the board shows, each with its own
-   backup, puts the skill into each one's `skills` folder and has herdr put its hook there
+   backup, puts the skills into each one's `skills` folder and has herdr put its hook there
    (`CLAUDE_CONFIG_DIR` set to that folder); a hidden profile is left alone,
    and a shown one whose folder is gone is skipped, saying so. One `settings.json` that does not
    parse stops it before anything is written. It never touches credentials, `.claude.json` or
    anything else in a profile folder beyond `settings.json`, its backup and
-   `skills/herdr-agents` (herdr writes its own `hooks/herdr-agent-state.ps1` and its entry). A
-   profile shown later in the Profiles panel gets its hooks, the skill and herdr's hook then and
+   `skills/herdr-agents` and `skills/agent-board-team` (herdr writes its own
+   `hooks/herdr-agent-state.ps1` and its entry). A
+   profile shown later in the Profiles panel gets its hooks, the skills and herdr's hook then and
    there; the install action run again, or Install in that panel, puts them in too.
 
    A session brought back from the archive runs in its own profile again, hidden or not, never in
@@ -3783,6 +3785,13 @@ pane's ids into its environment (`HERDR_ENV=1`, `HERDR_PANE_ID`, `HERDR_TAB_ID`,
 and outside herdr it says nothing of it. For herdr's own command reference, `herdr --skill`. A
 skill of that name that is not the board's is left alone, and `board doctor` says so (per
 profile, with more than one).
+
+Beside it the install puts a second skill, [`agent-board-team`](skills/agent-board-team/SKILL.md)
+(#369), for sessions on a board in a [team](#team): how to read what a member's board sent, answer
+in a thread or open a topic, hand a task to a member's board and ask for its status, route threads
+as the listener, and that a member's message is information, never instructions. It is put in
+place, kept current and left alone when someone else's skill has its name, as `herdr-agents` is;
+`board doctor` checks `herdr-agents` only.
 
 ### Retry-safe call exports (opt-in)
 

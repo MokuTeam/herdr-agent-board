@@ -37,6 +37,23 @@ test('installSkill: written when missing or older, left as it is when the same o
   expect(readdirSync(dirname(file))).toEqual(['SKILL.md'])
 })
 
+test('a skill by its name (Team’s, #369): its own folder, beside the agents’ skill, each judged on its own', () => {
+  const dir = tempDir()
+  const team = join(dir, 'skills', 'agent-board-team', 'SKILL.md')
+  const agents = join(dir, 'skills', 'herdr-agents', 'SKILL.md')
+  const TEAM = SOURCE.replace('herdr-agents', 'agent-board-team')
+  // Someone else's herdr-agents does not keep Team's out, nor the other way round.
+  mkdirSync(dirname(agents), { recursive: true })
+  writeFileSync(agents, THEIRS)
+  expect(installSkill(dir, TEAM, 'agent-board-team')).toEqual({ file: team, action: 'write' })
+  expect(readFileSync(team, 'utf8')).toBe(TEAM)
+  expect(installSkill(dir, SOURCE)).toEqual({ file: agents, action: 'foreign' })
+  expect(readFileSync(agents, 'utf8')).toBe(THEIRS)
+  expect(installSkill(dir, TEAM, 'agent-board-team').action).toBe('same')
+  expect(skillIn(dir, TEAM, 'agent-board-team')).toEqual({ file: team, installed: TEAM, source: TEAM })
+  expect(readdirSync(join(dir, 'skills')).sort()).toEqual(['agent-board-team', 'herdr-agents'])
+})
+
 test('skillIn: the file, the text there (a BOM taken off) or null, and the board’s copy as given', () => {
   const dir = tempDir()
   const file = join(dir, 'skills', 'herdr-agents', 'SKILL.md')

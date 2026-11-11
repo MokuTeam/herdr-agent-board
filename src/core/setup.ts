@@ -35,6 +35,8 @@ export interface BoardFiles {
   wakeHook: string
   /** The agents' skill (skills/herdr-agents/SKILL.md), which install copies into each shown profile. */
   skill: string
+  /** The Team skill (skills/agent-board-team/SKILL.md, #369), which install copies beside it. */
+  teamSkill: string
 }
 
 /**
@@ -51,6 +53,7 @@ export function boardFiles(root: string, platform: NodeJS.Platform = process.pla
     toast: platform === 'darwin' ? entrypoint('toast.ts') : join(root, 'src', 'integrations', 'toast.ps1'),
     wakeHook: entrypoint('wake-hook.ts'),
     skill: join(root, 'skills', SKILL, 'SKILL.md'),
+    teamSkill: join(root, 'skills', TEAM_SKILL, 'SKILL.md'),
   }
 }
 
@@ -60,10 +63,13 @@ export function boardFiles(root: string, platform: NodeJS.Platform = process.pla
 // Code's user skills, in every shown profile's folder (~/.claude/skills with one); the marker in
 // it tells a copy of ours from someone else's skill of that name.
 export const SKILL = 'herdr-agents'
+// How sessions use Team between boards (skills/agent-board-team, #369): install copies it beside
+// the agents' skill, with the same marker; `board doctor` checks the agents' skill only.
+export const TEAM_SKILL = 'agent-board-team'
 const SKILL_MARK = 'agent-board: installed by'
 
-/** The skill's file in the Claude profile folder `dir` (~/.claude: ~/.claude/skills/herdr-agents/SKILL.md). */
-export const skillFile = (dir: string): string => join(dir, 'skills', SKILL, 'SKILL.md')
+/** A skill's file in the Claude profile folder `dir` (~/.claude: ~/.claude/skills/herdr-agents/SKILL.md). */
+export const skillFile = (dir: string, name: string = SKILL): string => join(dir, 'skills', name, 'SKILL.md')
 
 export type SkillAction = 'write' | 'same' | 'foreign'
 
