@@ -291,7 +291,12 @@ export const sendError = (code: unknown, t: Translator): string =>
       code === 'blocked' ||
       code === 'cancelled' ||
       code === 'loopback' ||
-      code === 'reply'
+      code === 'reply' ||
+      code === 'file' ||
+      code === 'file_big' ||
+      code === 'file_name' ||
+      code === 'files_hub' ||
+      code === 'files_nobody'
         ? t(`team.err.${code}`)
         : String(code ?? ''),
   })

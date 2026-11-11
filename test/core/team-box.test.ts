@@ -14,7 +14,7 @@ import {
   wrapSecret,
   x25519,
 } from '../../src/core/team-box.ts'
-import { checkMeta, fileContext, openFile, openMeta, sealFile } from '../../src/core/team-file.ts'
+import { checkMeta, fileContext, mimeOf, openFile, openMeta, sealFile } from '../../src/core/team-file.ts'
 
 const hex = (s: string): Uint8Array => Uint8Array.from(Buffer.from(s, 'hex'))
 const toHex = (b: Uint8Array | null): string => (b ? Buffer.from(b).toString('hex') : 'null')
@@ -162,6 +162,12 @@ describe('round trips and failures', () => {
 
   test('a meta must be a name, a media type and a size, nothing else', () => {
     expect(checkMeta(NOTE)).toEqual(NOTE)
+    expect([mimeOf('Shot.PNG'), mimeOf('notes.md'), mimeOf('run.exe'), mimeOf('noext')]).toEqual([
+      'image/png',
+      'text/markdown',
+      'application/octet-stream',
+      'application/octet-stream',
+    ])
     for (const bad of [
       { ...NOTE, name: '' },
       { ...NOTE, name: 'a/b.txt' },

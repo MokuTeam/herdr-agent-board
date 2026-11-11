@@ -12,6 +12,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { NewTopic } from '../../hooks/useTeam.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import type { Attachment } from '../../models/composer.ts'
 import { reducedMotion } from '../../models/spring.ts'
 import {
   type AgentsView,
@@ -27,9 +28,12 @@ import {
 } from '../../models/team.ts'
 import { chatItems, type Quote, quoteOf } from '../../models/team-chat.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
+import { Attachments } from '../sheet/Attachments.tsx'
 import { MessageText } from '../sheet/MessageText.tsx'
+import { AttachButton } from './AttachButton.tsx'
 import { Switch } from './Switch.tsx'
 import { TeamComposer } from './TeamComposer.tsx'
+import { TeamFile } from './TeamFile.tsx'
 import { QuoteView, TeamMessage } from './TeamMessage.tsx'
 
 /** Closer to the end than this (px), the reader is at the end: new messages scroll into view. */
@@ -62,10 +66,15 @@ export interface TeamThreadProps {
   onMute(key: string, muted: boolean): void
   onReply(id: string | null): void
   onAddMembers?(key: string, peers: string[]): void
+  /** The files that go with the next message (#371): uploading, ready or failed. */
+  files?: readonly Attachment[]
+  /** Files picked, pasted or dropped; none given: the thread takes no files. */
+  onAddFiles?(files: File[]): void
+  onRemoveFile?(id: number): void
 }
 
 export function TeamThread(props: TeamThreadProps) {
-  const { view, selected, thread, lines, unreadFrom, draft, topic, replyTo, disabled } = props
+  const { view, selected, thread, lines, unreadFrom, draft, topic, replyTo, disabled, files = [] } = props
   const t = useT()
   const { now } = useBoardContext()
   const box = useRef<HTMLTextAreaElement>(null)
@@ -83,15 +92,41 @@ export function TeamThread(props: TeamThreadProps) {
   const reply = replyTo && !topic ? quoteOf(replyTo, messages, t) : null
   const named = team || channel
   const canWrite = !disabled && !changed
+  // A message of files alone goes too (#371); not while one still uploads.
+  const ready = files.filter(f => f.status === 'done')
+  const takesFiles = !!props.onAddFiles && !changed && view.files !== undefined
   const sendable =
-    draft.trim() !== '' && !changed && !(topic !== null && (!topic.title.trim() || topic.members?.length === 0))
+    (draft.trim() !== '' || ready.length > 0) &&
+    !files.some(f => f.status === 'uploading') &&
+    !changed &&
+    !(topic !== null && (!topic.title.trim() || topic.members?.length === 0))
+  /** Files dropped on the thread, or pasted into its box. */
+  const take = (list: FileList | null | undefined): boolean => {
+    const given = [...(list ?? [])]
+    if (!given.length || !takesFiles || disabled) return false
+    props.onAddFiles?.(given)
+    return true
+  }
   const name = channel ? (thread?.title ?? '') : team ? t('team.chat') : (peer?.name ?? thread?.peerName ?? '')
   const pickReply = (id: string) => {
     props.onReply(id)
     box.current?.focus()
   }
   return (
-    <section className="team-thread" data-thread={selected}>
+    // biome-ignore lint/a11y/noStaticElementInteractions: a drop and a paste of files anywhere on the thread (#371); the clip and the box are the keyboard's way
+    <section
+      className="team-thread"
+      data-thread={selected}
+      onDragOver={e => {
+        if (takesFiles && e.dataTransfer?.types.includes('Files')) e.preventDefault()
+      }}
+      onDrop={e => {
+        if (take(e.dataTransfer?.files)) e.preventDefault()
+      }}
+      onPaste={e => {
+        if (take(e.clipboardData?.files)) e.preventDefault()
+      }}
+    >
       <ThreadHead {...props} name={name} peer={peer} channel={channel} general={general} />
       <div className="team-scroll-wrap">
         <div className="team-scroll" ref={scroll.ref} onScroll={scroll.onScroll}>
@@ -162,6 +197,12 @@ export function TeamThread(props: TeamThreadProps) {
           reply={reply}
           onCancelReply={() => props.onReply(null)}
           sendTitle={t('team.sendHint')}
+          {...(files.length > 0 && {
+            attachments: <Attachments id="team-attachments" list={files} onRemove={id => props.onRemoveFile?.(id)} />,
+          })}
+          {...(takesFiles && {
+            actions: <AttachButton disabled={disabled} onFiles={given => props.onAddFiles?.(given)} />,
+          })}
           {...(topic && {
             sendLabel: topic.members ? t('team.startChannel') : t('team.startTopic'),
             header: <TopicFields view={view} topic={topic} onTopic={props.onTopic} />,
@@ -309,7 +350,8 @@ function AgentDraft({
         {line.reason && <span>{draftWhy(line.reason, t)}</span>}
       </div>
       {quote && <QuoteView quote={quote} onQuote={onQuote} />}
-      <MessageText text={line.text ?? ''} />
+      {(line.text !== '' || !line.file) && <MessageText text={line.text ?? ''} />}
+      {line.file && <TeamFile file={line.file} />}
       <div className="team-draft-actions">
         <button type="button" className="mini" disabled={disabled} onClick={() => onDiscard(line.id)}>
           {t('team.discard')}

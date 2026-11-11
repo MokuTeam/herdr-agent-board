@@ -36,6 +36,9 @@ export const MAX_IN_PER_DAY = 1024 * 1024 * 1024
 export const STALL_MS = 60_000
 const DAY_MS = 86_400_000
 
+/** How far bytes are, in tenths: the page hears of progress ten times a file, not on every chunk. */
+const step = (have: number, size: number): number => (size ? Math.floor((have / size) * 10) : 10)
+
 export interface FileTransferDeps {
   frame(f: Frame): void
   /** Whether the socket is up and authenticated. */
@@ -295,7 +298,7 @@ export function createFileTransfer(deps: FileTransferDeps): FileTransfer {
       d.asked = d.have
       deps.frame({ t: 'blob_get', id: d.ref.blob, at: d.have })
     }
-    deps.changed()
+    if (step(d.have, d.ref.size) !== step(d.have - bytes.length, d.ref.size)) deps.changed()
   }
 
   return {
@@ -321,9 +324,10 @@ export function createFileTransfer(deps: FileTransferDeps): FileTransfer {
             u.opened = true
             u.sent = f.have
           }
+          const before = step(u.have, u.size)
           u.have = f.have
           pump(f.id, u)
-          deps.changed()
+          if (step(u.have, u.size) !== before) deps.changed()
           return true
         }
         case 'blob_ready': {
