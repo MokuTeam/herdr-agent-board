@@ -1,7 +1,8 @@
 // The hub's store (#231): one SQLite file in the hub's directory, WAL, with a schema version in
 // `meta`. Peers, invites, messages, presence events and an audit log whose rows are chained by
 // hash. Nothing here reads a clock: every write is told the time, so tests keep their own.
-// Bodies live only in message.payload, and only until a message is acked or expired.
+// Bodies live only in message.payload, and only until a message is acked or expired. Blobs
+// (#371) live in files of their own (blobs.ts); their rows here hold ids, sizes and peers.
 import { Database } from 'bun:sqlite'
 import { createHash, randomBytes } from 'node:crypto'
 import { canonicalJson } from '../../src/core/team.ts'
@@ -17,7 +18,29 @@ export interface PeerRow {
   invite_id: string | null
   /** What the peer's board said it understands, as JSON (#216); null before it said anything. */
   caps: string | null
+  /** The peer's box claim as JSON (#371), verified by the hub when it came; null without one. */
+  box: string | null
 }
+
+export type BlobState = 'uploading' | 'ready' | 'gone'
+export interface BlobRow {
+  id: string
+  owner: string
+  size: number
+  hash: string
+  /** The peers that may fetch it, as JSON. */
+  recipients: string
+  /** The peers that fetched it, as JSON. */
+  fetched: string
+  state: BlobState
+  created_at: number
+  /** The last chunk in (an upload that stops is dropped after a while). */
+  touched_at: number
+  expires_at: number
+  gone_at: number | null
+  gone_why: string | null
+}
+export type NewBlob = Pick<BlobRow, 'id' | 'owner' | 'size' | 'hash' | 'recipients' | 'created_at' | 'expires_at'>
 
 export interface InviteRow {
   id: string
@@ -107,6 +130,26 @@ export const MIGRATIONS: readonly string[] = [
   `,
   // #216: what each board says it understands (its hello's caps), for the roster.
   `ALTER TABLE peer ADD COLUMN caps TEXT`,
+  // #371: each board's box key, for the roster, and the blobs the hub keeps for a while.
+  `
+  ALTER TABLE peer ADD COLUMN box TEXT;
+  CREATE TABLE blob (
+    id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    hash TEXT NOT NULL,
+    recipients TEXT NOT NULL,
+    fetched TEXT NOT NULL DEFAULT '[]',
+    state TEXT NOT NULL CHECK (state IN ('uploading', 'ready', 'gone')),
+    created_at INTEGER NOT NULL,
+    touched_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    gone_at INTEGER,
+    gone_why TEXT
+  );
+  CREATE INDEX blob_owner_state ON blob (owner, state);
+  CREATE INDEX blob_live ON blob (expires_at) WHERE state IN ('uploading', 'ready');
+  `,
 ]
 
 export type MessageState = 'queued' | 'delivered' | 'acked' | 'expired'
@@ -159,12 +202,13 @@ export interface AuditAnchor {
   hash: string
 }
 
-/** How many rows a prune removed, per table. */
+/** How many rows a prune removed, per table. `blobs` (#371) only when some went. */
 export interface PruneCounts {
   messages: number
   presence: number
   invites: number
   audit: number
+  blobs?: number
 }
 
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex')
@@ -208,6 +252,8 @@ export interface HubDb {
   touchSeen(id: string, at: number): void
   /** Keeps what a peer's board said it understands (#216); true when that changed. */
   setCaps(id: string, caps: string[] | null): boolean
+  /** Keeps a peer's verified box claim as JSON (#371), null for none; true when that changed. */
+  setBox(id: string, box: string | null): boolean
   /** Revokes a peer; false when there is none, or it is revoked already. */
   revokePeer(id: string, at: number): boolean
   // invites
@@ -231,6 +277,20 @@ export interface HubDb {
   /** What the sender has not been told of yet. */
   unnotified(sender: string): MessageRow[]
   setNotified(id: string, state: MessageState): void
+  // blobs (#371)
+  blob(id: string): BlobRow | null
+  insertBlob(b: NewBlob): void
+  touchBlob(id: string, at: number): void
+  readyBlob(id: string, at: number): void
+  /** Notes that `peer` fetched the blob; the peers that have, after. */
+  blobFetched(id: string, peer: string): string[]
+  goneBlob(id: string, at: number, why: string): void
+  /** The bytes a peer's blobs take on the hub now: uploading or ready. */
+  heldBytes(owner: string): number
+  /** Uploading or ready blobs past `now`, and uploads untouched since `staleBefore`. */
+  dueBlobs(now: number, staleBefore: number): BlobRow[]
+  /** Every blob that is uploading or ready, a peer's only when `owner` is given. */
+  liveBlobs(owner?: string): BlobRow[]
   // presence
   presenceEvent(peer: string, online: boolean, at: number): void
   // audit
@@ -317,6 +377,52 @@ export function openDb(path: string): HubDb {
       db.query('UPDATE peer SET caps = ? WHERE id = ?').run(json, id)
       return true
     },
+    setBox: (id, box) => {
+      if ((peerRow.get(id)?.box ?? null) === box) return false
+      db.query('UPDATE peer SET box = ? WHERE id = ?').run(box, id)
+      return true
+    },
+    blob: id => db.query<BlobRow, [string]>('SELECT * FROM blob WHERE id = ?').get(id),
+    insertBlob: b =>
+      void db
+        .query(
+          `INSERT INTO blob (id, owner, size, hash, recipients, state, created_at, touched_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, 'uploading', ?, ?, ?)`,
+        )
+        .run(b.id, b.owner, b.size, b.hash, b.recipients, b.created_at, b.created_at, b.expires_at),
+    touchBlob: (id, at) => void db.query('UPDATE blob SET touched_at = ? WHERE id = ?').run(at, id),
+    readyBlob: (id, at) =>
+      void db.query("UPDATE blob SET state = 'ready', touched_at = ? WHERE id = ? AND state = 'uploading'").run(at, id),
+    blobFetched: (id, peer) =>
+      db.transaction((): string[] => {
+        const row = db.query<{ fetched: string }, [string]>('SELECT fetched FROM blob WHERE id = ?').get(id)
+        const have = row ? (JSON.parse(row.fetched) as string[]) : []
+        if (!have.includes(peer)) have.push(peer)
+        db.query('UPDATE blob SET fetched = ? WHERE id = ?').run(JSON.stringify(have), id)
+        return have
+      })(),
+    goneBlob: (id, at, why) =>
+      void db
+        .query("UPDATE blob SET state = 'gone', gone_at = ?, gone_why = ? WHERE id = ? AND state != 'gone'")
+        .run(at, why, id),
+    heldBytes: owner =>
+      db
+        .query<{ n: number | null }, [string]>(
+          "SELECT SUM(size) AS n FROM blob WHERE owner = ? AND state IN ('uploading', 'ready')",
+        )
+        .get(owner)?.n ?? 0,
+    dueBlobs: (now, staleBefore) =>
+      db
+        .query<BlobRow, [number, number]>(
+          "SELECT * FROM blob WHERE state IN ('uploading', 'ready') AND (expires_at < ? OR (state = 'uploading' AND touched_at < ?))",
+        )
+        .all(now, staleBefore),
+    liveBlobs: owner =>
+      owner === undefined
+        ? db.query<BlobRow, []>("SELECT * FROM blob WHERE state IN ('uploading', 'ready')").all()
+        : db
+            .query<BlobRow, [string]>("SELECT * FROM blob WHERE owner = ? AND state IN ('uploading', 'ready')")
+            .all(owner),
     revokePeer: (id, at) =>
       db.query("UPDATE peer SET status = 'revoked', revoked_at = ? WHERE id = ? AND status = 'active'").run(at, id)
         .changes > 0,
@@ -436,6 +542,7 @@ export function openDb(path: string): HubDb {
           )
           .run(cutoff).changes
         const presence = db.query('DELETE FROM presence_event WHERE at < ?').run(cutoff).changes
+        const blobs = db.query("DELETE FROM blob WHERE state = 'gone' AND gone_at < ?").run(cutoff).changes
         const invites = db
           .query('DELETE FROM invite WHERE COALESCE(used_at, revoked_at, expires_at) < ?')
           .run(cutoff).changes
@@ -455,7 +562,7 @@ export function openDb(path: string): HubDb {
             JSON.stringify({ seq: last.seq, hash: last.hash }),
           )
         }
-        return { messages, presence, invites, audit }
+        return { messages, presence, invites, audit, ...(blobs > 0 && { blobs }) }
       })(),
     auditBroken: () => {
       let prev = readAnchor()?.hash ?? AUDIT_GENESIS

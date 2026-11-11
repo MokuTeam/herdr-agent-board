@@ -8,18 +8,23 @@
 // Only an object with a ws:// or wss:// hub counts.
 import { createHash } from 'node:crypto'
 import {
+  BLOB_CHUNK,
+  type BoxClaim,
   CAPS,
   DELIVERY_STATES,
   type DeliveryState,
   type Envelope,
   ERROR_CODES,
   type ErrorCode,
+  type FileRef,
   type Frame,
   GENERAL,
+  type HubFiles,
   KINDS,
   MAX_CAP,
   MAX_CAPS,
   MAX_ENVELOPE_BYTES,
+  MAX_FILE_META,
   MAX_LINK,
   MAX_MEMBERS,
   MAX_NAME,
@@ -69,6 +74,9 @@ export function teamConfig(raw: unknown): TeamConfig | null {
 /** Controls (C0, DEL, C1), line and paragraph separators, and the bidi controls that reorder what is around them. */
 const UNPRINTABLE = /[\p{Cc}\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu
 
+/** Whether `s` has anything unprintable in it, as validName counts it. */
+export const hasUnprintable = (s: string): boolean => new RegExp(UNPRINTABLE).test(s)
+
 export const validName = (v: unknown): v is string =>
   typeof v === 'string' && v.trim() === v && v.length >= 1 && v.length <= MAX_NAME && !new RegExp(UNPRINTABLE).test(v)
 
@@ -109,6 +117,8 @@ export const hasChannels = (p: { caps?: string[] | undefined } | undefined): boo
 
 /** Whether a roster peer's board understands replies to a message (#370). */
 export const hasReplies = (p: { caps?: string[] | undefined } | undefined): boolean => !!p?.caps?.includes('replies')
+/** Whether a roster peer's board takes files (#371); its box must verify too before one goes to it. */
+export const hasFiles = (p: { caps?: string[] | undefined } | undefined): boolean => !!p?.caps?.includes('files')
 
 /** A channel's member list as the wire takes it: 2 to MAX_MEMBERS peer ids, each once, sorted. */
 export function channelMembers(v: unknown): string[] | null {
@@ -162,7 +172,7 @@ export function canonicalJson(v: unknown): string {
   throw new TypeError(`canonicalJson: cannot write a ${typeof v}`)
 }
 
-export type Purpose = 'auth' | 'join' | 'envelope' | 'ack'
+export type Purpose = 'auth' | 'join' | 'envelope' | 'ack' | 'box'
 
 /** The purpose binds a signature to one use, so none works as another. */
 const domain = (purpose: Purpose): string => `hab-team/${TEAM_PROTOCOL} ${purpose}\n`
@@ -191,6 +201,15 @@ export const authBytes = (p: AuthParts): Uint8Array => signedBytes('auth', { hub
 export const joinBytes = (p: JoinParts): Uint8Array =>
   signedBytes('join', { hub: p.hub, invite: p.invite, name: p.name, nonce: p.nonce, peer: p.peer })
 export const ackBytes = (p: AckParts): Uint8Array => signedBytes('ack', { by: p.by, id: p.id, to: p.to, ts: p.ts })
+/** What a board signs of its box key (#371): the key and the peer it is for. */
+export const boxBytes = (p: { box: string; peer: string }): Uint8Array =>
+  signedBytes('box', { box: p.box, peer: p.peer })
+
+/** Whether `claim` is `peer`'s own box key: a 32-byte key, signed by the peer's Ed25519 key (#371). */
+export async function verifyBox(peer: string, claim: BoxClaim | undefined): Promise<boolean> {
+  if (!claim || unb64u(claim.key)?.length !== 32) return false
+  return verify(peer, boxBytes({ box: claim.key, peer }), claim.sig)
+}
 
 // ---- Envelopes and frames
 
@@ -206,6 +225,11 @@ export const isPeerId = (v: unknown): v is string => isStr(v) && PEER.test(v)
 export const isSig = (v: unknown): v is string => isStr(v) && SIG.test(v)
 /** A thread id: a UUID v4, or GENERAL for the thread with no topic (#216). */
 export const isThreadId = (v: unknown): v is string => v === GENERAL || isMessageId(v)
+/** A SHA-256 as base64url (#371). */
+export const isHash = (v: unknown): v is string => unb64u(v)?.length === 32
+/** A whole number of bytes from 0 to `max`. */
+const isCount = (v: unknown, max = Number.MAX_SAFE_INTEGER): v is number =>
+  typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= max
 
 /** `board`: everything a board reads is held to the whitelist. `relay`: the hub's check, `text` only (#216). */
 export type CheckMode = 'board' | 'relay'
@@ -265,15 +289,17 @@ export function checkMessage(
     !isStr(body.text)
   )
     return no('bad_frame')
+  // A copy with a file may come without a caption (#371); the relay sees only that a file is there.
+  const hasFile = isRecord(body.file)
   if (!KINDS.some(k => k === v.kind)) return no('kind')
   if (v.to === '*') return no('broadcast')
   if (!isPeerId(v.to)) return no('bad_frame')
-  if (body.text.length < 1 || body.text.length > MAX_TEXT) return no('bad_frame')
+  if (body.text.length < (hasFile ? 0 : 1) || body.text.length > MAX_TEXT) return no('bad_frame')
   // A board reads the body as `text`, `via` when it is exactly "agent", `agent` (only with `via`),
-  // `thread` (#216), `replyTo` and `post` (#370); any other key or value is not a body. The hub
-  // relays: it holds `text` to its limits and passes the rest on as signed, so a new body field
-  // needs no new hub (the boards that do not know it never get it: the sender asks the roster's
-  // caps first).
+  // `thread` (#216), `replyTo` and `post` (#370), `file` (#371); any other key or value is not a
+  // body. The hub relays: it holds `text` to its limits and passes the rest on as signed, so a new
+  // body field needs no new hub (the boards that do not know it never get it: the sender asks the
+  // roster's caps first).
   const extras = readBodyExtras(body)
   if (mode === 'board' && !extras.ok) return no('bad_frame')
   if (Object.keys(v).some(k => !MESSAGE_FIELDS.includes(k))) return no('bad_frame')
@@ -292,7 +318,7 @@ export function checkMessage(
   return { ok: true, msg }
 }
 
-const BODY_KEYS = ['text', 'via', 'agent', 'thread', 'replyTo', 'post']
+const BODY_KEYS = ['text', 'via', 'agent', 'thread', 'replyTo', 'post', 'file']
 const THREAD_KEYS = ['id', 'title', 'link', 'group', 'members']
 
 /**
@@ -328,7 +354,28 @@ function readBodyExtras(body: Record<string, unknown>): {
     if (isMessageId(v)) extras[k] = v
     else ok = false
   }
+  if (Object.hasOwn(body, 'file')) {
+    const f = readFileRef(body.file)
+    if (f) extras.file = f
+    else ok = false
+  }
   return { ok, extras }
+}
+
+const FILE_KEYS = ['blob', 'size', 'hash', 'eph', 'key', 'meta']
+/** A wrapped file key: a nonce, the 32-byte key, the tag (team-box.ts). */
+const WRAPPED_BYTES = 12 + 32 + 16
+
+/** A file as a board accepts it (#371): exactly its six fields, each well formed. */
+export function readFileRef(v: unknown): FileRef | null {
+  if (!isRecord(v) || Object.keys(v).length !== FILE_KEYS.length || !FILE_KEYS.every(k => Object.hasOwn(v, k)))
+    return null
+  if (!isMessageId(v.blob) || !isCount(v.size) || v.size < 1 || !isHash(v.hash) || unb64u(v.eph)?.length !== 32)
+    return null
+  if (unb64u(v.key)?.length !== WRAPPED_BYTES || !isStr(v.meta) || v.meta.length > MAX_FILE_META) return null
+  const meta = unb64u(v.meta)
+  if (!meta || meta.length < 12 + 16 + 1) return null
+  return { blob: v.blob, size: v.size, hash: v.hash, eph: v.eph as string, key: v.key as string, meta: v.meta }
 }
 
 function readThread(v: unknown): ThreadRef | null {
@@ -396,7 +443,7 @@ export function parseFrame(text: string): Frame | null {
   switch (v.t) {
     case 'hello':
       if (typeof v.v !== 'number' || !isStr(v.peer) || !isStr(v.client)) return null
-      return withCaps({ t: 'hello' as const, v: v.v, peer: v.peer, client: v.client }, v.caps)
+      return withBox(withCaps({ t: 'hello' as const, v: v.v, peer: v.peer, client: v.client }, v.caps), v.box)
     case 'challenge':
       return isStr(v.hub) && isStr(v.nonce) ? { t: 'challenge', hub: v.hub, nonce: v.nonce } : null
     case 'auth':
@@ -405,17 +452,20 @@ export function parseFrame(text: string): Frame | null {
       return isStr(v.invite) && isStr(v.name) && isStr(v.sig)
         ? { t: 'join', invite: v.invite, name: v.name, sig: v.sig }
         : null
-    case 'welcome':
-      return isStr(v.peer) && isStr(v.name) && isStr(v.hub)
-        ? { t: 'welcome', peer: v.peer, name: v.name, hub: v.hub }
-        : null
+    case 'welcome': {
+      if (!isStr(v.peer) || !isStr(v.name) || !isStr(v.hub)) return null
+      const f: Frame = { t: 'welcome', peer: v.peer, name: v.name, hub: v.hub }
+      const files = hubFiles(v.files)
+      if (files) f.files = files
+      return f
+    }
     case 'roster':
       return Array.isArray(v.peers) && v.peers.every(isRosterPeer)
         ? { t: 'roster', peers: v.peers.map(rosterPeer) }
         : null
     case 'presence':
       if (!isStr(v.peer) || typeof v.online !== 'boolean' || typeof v.at !== 'number') return null
-      return withCaps({ t: 'presence' as const, peer: v.peer, online: v.online, at: v.at }, v.caps)
+      return withBox(withCaps({ t: 'presence' as const, peer: v.peer, online: v.online, at: v.at }, v.caps), v.box)
     case 'send':
     case 'deliver':
       return isRecord(v.env) ? { t: v.t, env: v.env as unknown as Envelope } : null
@@ -437,9 +487,48 @@ export function parseFrame(text: string): Frame | null {
     case 'ping':
     case 'pong':
       return { t: v.t }
+    case 'blob_open':
+      return isMessageId(v.id) &&
+        isCount(v.size) &&
+        isHash(v.hash) &&
+        Array.isArray(v.to) &&
+        v.to.every(isPeerId) &&
+        typeof v.ttl_s === 'number' &&
+        Number.isFinite(v.ttl_s)
+        ? { t: 'blob_open', id: v.id, size: v.size, hash: v.hash, to: [...v.to], ttl_s: v.ttl_s }
+        : null
+    case 'blob_have':
+      return isMessageId(v.id) && isCount(v.have) ? { t: 'blob_have', id: v.id, have: v.have } : null
+    case 'blob_put':
+    case 'blob_data':
+      return isMessageId(v.id) && isCount(v.at) && isChunk(v.data) ? { t: v.t, id: v.id, at: v.at, data: v.data } : null
+    case 'blob_get':
+      return isMessageId(v.id) && isCount(v.at) ? { t: 'blob_get', id: v.id, at: v.at } : null
+    case 'blob_ready':
+    case 'blob_done':
+      return isMessageId(v.id) ? { t: v.t, id: v.id } : null
     default:
       return null
   }
+}
+
+/** A chunk of a blob as a frame carries it: base64url of 1 to BLOB_CHUNK bytes (decoded by the reader). */
+const isChunk = (v: unknown): v is string =>
+  isStr(v) && v.length > 0 && v.length <= Math.ceil((BLOB_CHUNK * 4) / 3) && /^[A-Za-z0-9_-]+$/.test(v)
+
+/** A hub's file limits from its welcome (#371), or undefined. */
+function hubFiles(v: unknown): HubFiles | undefined {
+  return isRecord(v) && isCount(v.max) && isCount(v.quota) && v.max > 0 ? { max: v.max, quota: v.quota } : undefined
+}
+
+/** A box claim's shape (#371): a 32-byte key and a signature; whether it verifies is the reader's check. */
+const boxClaim = (v: unknown): BoxClaim | undefined =>
+  isRecord(v) && unb64u(v.key)?.length === 32 && isSig(v.sig) ? { key: v.key as string, sig: v.sig } : undefined
+
+/** `o` with `box` when `raw` has a box claim's shape; without the key otherwise. */
+function withBox<T extends object>(o: T, raw: unknown): T & { box?: BoxClaim } {
+  const box = boxClaim(raw)
+  return box ? { ...o, box } : o
 }
 
 const isRosterPeer = (v: unknown): v is RosterPeer =>
@@ -449,9 +538,9 @@ const isRosterPeer = (v: unknown): v is RosterPeer =>
   typeof v.online === 'boolean' &&
   (v.last_seen === null || typeof v.last_seen === 'number')
 
-/** A roster entry as kept: its known fields, and caps only when they read as caps (#216). */
+/** A roster entry as kept: its known fields, caps only when they read as caps (#216), a box of a box's shape (#371). */
 const rosterPeer = (p: RosterPeer): RosterPeer =>
-  withCaps({ peer: p.peer, name: p.name, online: p.online, last_seen: p.last_seen }, p.caps)
+  withBox(withCaps({ peer: p.peer, name: p.name, online: p.online, last_seen: p.last_seen }, p.caps), p.box)
 
 /** `o` with `caps` when `raw` reads as caps; without the key otherwise. */
 function withCaps<T extends object>(o: T, raw: unknown): T & { caps?: string[] } {

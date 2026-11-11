@@ -3,27 +3,51 @@
 // the roster. The hub holds no sockets of its own: server.ts hands it a Conn per socket, tests
 // hand it plain objects. Time comes from the injected clock; logs carry ids and codes, never
 // bodies.
+//
+// Blobs (#371): a sender opens one for the peers it names, puts its bytes in chunks on its socket,
+// and only then sends the messages that name it; each of those peers gets it in chunks and says
+// when it is done. The hub keeps it once (blobs.ts), checks its size, the sender's quota and its
+// SHA-256, and deletes it when every peer still a member is done, at its TTL, or an hour after its
+// upload stopped. What it holds is sealed on the sender's board; no key to it ever reaches the hub.
 import { createHash, randomBytes } from 'node:crypto'
 import {
   ackBytes,
   authBytes,
+  b64u,
+  BLOB_CHUNK,
+  BLOB_WINDOW,
+  type BoxClaim,
   cleanCaps,
+  DEFAULT_MAX_FILE_BYTES,
+  DEFAULT_QUOTA_BYTES,
   type Envelope,
   type ErrorCode,
   envelopeBytes,
   type Frame,
   isPeerId,
   joinBytes,
+  MAX_MEMBERS,
   MAX_TTL_S,
   MIN_TTL_S,
   openEnvelope,
   parseFrame,
   type RosterPeer,
   TEAM_PROTOCOL,
+  unb64u,
   validName,
   verify,
+  verifyBox,
 } from '../../src/core/team.ts'
-import { DEFAULT_KEEP_DAYS, type HubDb, type MessageRow, MIN_KEEP_DAYS, type PeerRow, type PruneCounts } from './db.ts'
+import { type BlobStore, memoryBlobs } from './blobs.ts'
+import {
+  type BlobRow,
+  DEFAULT_KEEP_DAYS,
+  type HubDb,
+  type MessageRow,
+  MIN_KEEP_DAYS,
+  type PeerRow,
+  type PruneCounts,
+} from './db.ts'
 
 export interface Clock {
   now(): number
@@ -62,6 +86,11 @@ export interface HubOptions {
   log: (msg: string) => void
   /** How many days finished rows are kept (default 90, at least 8). */
   keepDays?: number
+  /** Where blobs are kept (#371); in memory when not given. */
+  blobs?: BlobStore
+  /** The largest file, and what one peer may hold at once, in bytes (#371). */
+  maxFileBytes?: number
+  quotaBytes?: number
 }
 
 export interface Hub {
@@ -86,6 +115,9 @@ export const SWEEP_MS = 60_000
 /** How often rows older than keep-days are deleted. */
 export const PRUNE_MS = 3_600_000
 
+/** An upload that got no chunk for this long is dropped, and its bytes leave the sender's quota (#371). */
+export const STALE_UPLOAD_MS = 3_600_000
+
 export const CLOSE_BAD_REQUEST = 4400
 export const CLOSE_UNKNOWN = 4401
 export const CLOSE_REVOKED = 4403
@@ -96,6 +128,11 @@ interface Session {
   peer: string
 }
 
+/** A box claim as the hub keeps it (#371): only one whose signature is the peer's; null otherwise. */
+async function boxClaimOf(peer: string, box: BoxClaim | undefined): Promise<string | null> {
+  return box && (await verifyBox(peer, box)) ? JSON.stringify({ key: box.key, sig: box.sig }) : null
+}
+
 export function createHub(opts: HubOptions): Hub {
   const { db, clock, log } = opts
   const keepDays = opts.keepDays ?? DEFAULT_KEEP_DAYS
@@ -103,6 +140,10 @@ export function createHub(opts: HubOptions): Hub {
     throw new Error(`keep-days must be a whole number of ${MIN_KEEP_DAYS} or more, not ${keepDays}`)
   const sessions = new Map<string, Session>()
   const handles = new Set<Conn>()
+  const blobs = opts.blobs ?? memoryBlobs()
+  const maxFile = opts.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES
+  const quota = opts.quotaBytes ?? DEFAULT_QUOTA_BYTES
+  const mb = (n: number): string => String(Math.round((n / 1048576) * 10) / 10)
 
   const put = (conn: Conn, f: Frame) => conn.send(JSON.stringify(f))
   const fail = (conn: Conn, code: ErrorCode, message: string, closeWith?: number, id?: string) => {
@@ -116,12 +157,14 @@ export function createHub(opts: HubOptions): Hub {
       .filter(p => p.status === 'active')
       .map(p => {
         const caps = capsOf(p)
+        const box = boxOf(p)
         return {
           peer: p.id,
           name: p.name,
           online: sessions.has(p.id),
           last_seen: p.last_seen_at,
           ...(caps && { caps }),
+          ...(box && { box }),
         }
       })
 
@@ -129,6 +172,15 @@ export function createHub(opts: HubOptions): Hub {
   const capsOf = (p: PeerRow): string[] | undefined => {
     try {
       return cleanCaps(p.caps ? JSON.parse(p.caps) : undefined)
+    } catch {
+      return undefined
+    }
+  }
+
+  /** A peer's box claim as its board last said it (#371), checked when it came; or undefined. */
+  const boxOf = (p: PeerRow): BoxClaim | undefined => {
+    try {
+      return p.box ? (JSON.parse(p.box) as BoxClaim) : undefined
     } catch {
       return undefined
     }
@@ -218,9 +270,10 @@ export function createHub(opts: HubOptions): Hub {
       id: msg.id,
       to: msg.to,
       size: Buffer.byteLength(stored),
-      // The sender's own signed words, never the text (#216).
+      // The sender's own signed words, never the text (#216), nor a file's name (#371).
       ...(msg.body.thread && { thread: msg.body.thread.id }),
       ...(msg.body.via && { via: msg.body.via }),
+      ...(msg.body.file && { file: msg.body.file.blob }),
     })
     const row = db.message(msg.id) as MessageRow
     notify(row)
@@ -244,6 +297,129 @@ export function createHub(opts: HubOptions): Hub {
     if (done) notify(done)
   }
 
+  // ---- Blobs (#371)
+
+  const recipientsOf = (r: BlobRow): string[] => JSON.parse(r.recipients) as string[]
+
+  const dropBlob = (r: BlobRow, why: string) => {
+    const now = clock.now()
+    blobs.remove(r.id)
+    db.goneBlob(r.id, now, why)
+    db.audit(now, null, 'blob_gone', { id: r.id, why })
+  }
+
+  /** Deletes a blob every recipient still a member has fetched. */
+  const doneWith = (r: BlobRow, fetched: string[]) => {
+    if (r.state !== 'ready') return
+    const waiting = recipientsOf(r).filter(p => db.peer(p)?.status === 'active' && !fetched.includes(p))
+    if (!waiting.length) dropBlob(r, 'fetched')
+  }
+
+  const blobOpen = (conn: Conn, peer: string, f: Extract<Frame, { t: 'blob_open' }>) => {
+    const no = (code: ErrorCode, message: string) => fail(conn, code, message, undefined, f.id)
+    const have = db.blob(f.id)
+    if (have) {
+      if (have.owner !== peer || have.size !== f.size || have.hash !== f.hash) return no('dup_id', 'that blob id is taken')
+      if (have.state === 'gone') return no('no_blob', 'that blob is gone')
+      if (have.state === 'ready') return put(conn, { t: 'blob_ready', id: f.id })
+      return put(conn, { t: 'blob_have', id: f.id, have: blobs.have(f.id) })
+    }
+    const now = clock.now()
+    if (f.size < 1 || f.size > maxFile) {
+      db.audit(now, peer, 'blob_refused', { why: 'too_big', size: f.size })
+      return no('too_big', `a file is at most ${mb(maxFile)} MB on this hub`)
+    }
+    const to = [...new Set(f.to)]
+    if (!to.length || to.length > MAX_MEMBERS || to.includes(peer))
+      return no('bad_frame', `a blob is for 1 to ${MAX_MEMBERS} other members`)
+    if (db.peer(peer)?.status !== 'active') return fail(conn, 'revoked', 'this peer is revoked', CLOSE_REVOKED, f.id)
+    if (!to.every(p => db.peer(p)?.status === 'active')) return no('not_member', 'a recipient is not a member')
+    if (db.heldBytes(peer) + f.size > quota) {
+      db.audit(now, peer, 'blob_refused', { why: 'quota', size: f.size })
+      return no(
+        'quota',
+        `the hub keeps at most ${mb(quota)} MB of your files at a time; it frees them as members fetch them, or at their TTL`,
+      )
+    }
+    const ttl = Math.min(MAX_TTL_S, Math.max(MIN_TTL_S, f.ttl_s))
+    // A file left from a blob of this id that has no row (a crash between the two) goes first.
+    blobs.remove(f.id)
+    db.insertBlob({
+      id: f.id,
+      owner: peer,
+      size: f.size,
+      hash: f.hash,
+      recipients: JSON.stringify(to),
+      created_at: now,
+      expires_at: now + ttl * 1000,
+    })
+    db.audit(now, peer, 'blob_open', { id: f.id, size: f.size, to: to.length })
+    put(conn, { t: 'blob_have', id: f.id, have: 0 })
+  }
+
+  const blobPut = (conn: Conn, peer: string, f: Extract<Frame, { t: 'blob_put' }>) => {
+    const no = (code: ErrorCode, message: string) => fail(conn, code, message, undefined, f.id)
+    const row = db.blob(f.id)
+    if (!row || row.owner !== peer || row.state === 'gone') return no('no_blob', 'no such upload')
+    if (row.state === 'ready') return put(conn, { t: 'blob_ready', id: f.id })
+    const data = unb64u(f.data)
+    if (!data?.length || data.length > BLOB_CHUNK) return no('bad_frame', 'a chunk is 1 to 32 KiB of base64url')
+    const have = blobs.have(f.id)
+    // Not where the bytes end (a chunk again, or one ahead of a lost one): the sender is told where.
+    if (f.at !== have) return put(conn, { t: 'blob_have', id: f.id, have })
+    if (have + data.length > row.size) {
+      dropBlob(row, 'too_big')
+      return no('too_big', 'more bytes than the blob was opened for')
+    }
+    const now = clock.now()
+    blobs.append(f.id, data)
+    db.touchBlob(f.id, now)
+    const next = have + data.length
+    if (next < row.size) return put(conn, { t: 'blob_have', id: f.id, have: next })
+    if (blobs.hash(f.id) !== row.hash) {
+      dropBlob(row, 'bad_hash')
+      return no('bad_hash', 'the bytes do not match their hash')
+    }
+    db.readyBlob(f.id, now)
+    db.audit(now, peer, 'blob_ready', { id: f.id })
+    put(conn, { t: 'blob_ready', id: f.id })
+  }
+
+  const blobGet = (conn: Conn, peer: string, f: Extract<Frame, { t: 'blob_get' }>) => {
+    const no = (code: ErrorCode, message: string) => fail(conn, code, message, undefined, f.id)
+    const row = db.blob(f.id)
+    if (!row) return no('no_blob', 'no such blob')
+    if (!recipientsOf(row).includes(peer)) return no('not_member', 'that blob is not for you')
+    if (row.state === 'gone') return no('no_blob', 'that blob is gone')
+    if (row.state !== 'ready') return no('no_blob', 'that blob is not all there yet')
+    if (f.at >= row.size) return no('bad_frame', 'past the end of the blob')
+    for (let i = 0, at = f.at; i < BLOB_WINDOW && at < row.size; i++, at += BLOB_CHUNK)
+      put(conn, { t: 'blob_data', id: f.id, at, data: b64u(blobs.read(f.id, at, BLOB_CHUNK)) })
+  }
+
+  const blobDone = (conn: Conn, peer: string, f: Extract<Frame, { t: 'blob_done' }>) => {
+    const row = db.blob(f.id)
+    if (!row || !recipientsOf(row).includes(peer))
+      return fail(conn, 'not_member', 'that blob is not for you', undefined, f.id)
+    if (row.state !== 'ready') return
+    const fetched = db.blobFetched(f.id, peer)
+    db.audit(clock.now(), peer, 'blob_fetched', { id: f.id })
+    doneWith(row, fetched)
+  }
+
+  /** What the hub holds that no row keeps, and ready rows whose bytes are not all there: gone, at start. */
+  const tidyBlobs = () => {
+    const live = new Map(db.liveBlobs().map(r => [r.id, r]))
+    for (const id of blobs.ids()) if (!live.has(id)) blobs.remove(id)
+    for (const r of live.values()) if (r.state === 'ready' && blobs.have(r.id) !== r.size) dropBlob(r, 'lost')
+  }
+  tidyBlobs()
+
+  const sweepBlobs = (now: number) => {
+    for (const r of db.dueBlobs(now, now - STALE_UPLOAD_MS)) dropBlob(r, r.expires_at < now ? 'expired' : 'stale')
+    for (const r of db.liveBlobs()) doneWith(r, JSON.parse(r.fetched) as string[])
+  }
+
   const sweep = (): number => {
     const now = clock.now()
     const gone = db.expireDue(now)
@@ -251,6 +427,7 @@ export function createHub(opts: HubOptions): Hub {
       db.audit(now, null, 'expired', { id: r.id, from: r.from_peer, to: r.to_peer })
       notify(r)
     }
+    sweepBlobs(now)
     return gone.length
   }
   const sweeper = clock.setInterval(sweep, SWEEP_MS)
@@ -259,7 +436,7 @@ export function createHub(opts: HubOptions): Hub {
     const now = clock.now()
     const counts = db.prune(now - keepDays * 86_400_000)
     db.checkpoint()
-    if (counts.messages + counts.presence + counts.invites + counts.audit > 0) {
+    if (counts.messages + counts.presence + counts.invites + counts.audit + (counts.blobs ?? 0) > 0) {
       db.audit(now, null, 'prune', { ...counts, keep_days: keepDays })
       log(
         `pruned ${counts.messages} messages, ${counts.presence} presence events, ${counts.invites} invites, ${counts.audit} audit rows`,
@@ -281,6 +458,9 @@ export function createHub(opts: HubOptions): Hub {
     let state: 'await_hello' | 'await_auth' | 'authed' = 'await_hello'
     let peer = ''
     let caps: string[] | undefined
+    let box: BoxClaim | undefined
+    /** The box claim as kept, once its signature verified (#371); null without one. */
+    let boxJson: string | null = null
     let nonce = ''
     let challengedAt = 0
     let closed = false
@@ -310,14 +490,24 @@ export function createHub(opts: HubOptions): Hub {
       // What the board said it understands goes to the others with its presence, or with a new
       // roster when it changed on a connection that replaced another (#216).
       const capsChanged = db.setCaps(row.id, caps ?? null)
-      put(conn, { t: 'welcome', peer: row.id, name: row.name, hub: db.hubId() })
+      // Its box key goes the same way (#371); an older board says none, and has none in the roster.
+      const boxChanged = db.setBox(row.id, boxJson)
+      const said = boxJson ? (JSON.parse(boxJson) as BoxClaim) : undefined
+      put(conn, { t: 'welcome', peer: row.id, name: row.name, hub: db.hubId(), files: { max: maxFile, quota } })
       put(conn, { t: 'roster', peers: roster() })
       flush({ conn, peer: row.id })
       if (!old)
         for (const s of sessions.values())
           if (s.peer !== row.id)
-            put(s.conn, { t: 'presence', peer: row.id, online: true, at: clock.now(), ...(caps && { caps }) })
-      if (old && capsChanged)
+            put(s.conn, {
+              t: 'presence',
+              peer: row.id,
+              online: true,
+              at: clock.now(),
+              ...(caps && { caps }),
+              ...(said && { box: said }),
+            })
+      if (old && (capsChanged || boxChanged))
         for (const s of sessions.values()) if (s.peer !== row.id) put(s.conn, { t: 'roster', peers: roster() })
       log(`online ${row.id.slice(0, 8)} ${row.name}${fromWhere}`)
     }
@@ -342,6 +532,7 @@ export function createHub(opts: HubOptions): Hub {
         if (!isPeerId(f.peer)) return refuse('bad_frame', 'peer is no key', CLOSE_BAD_REQUEST)
         peer = f.peer
         caps = f.caps
+        box = f.box
         nonce = randomBytes(32).toString('base64url')
         challengedAt = clock.now()
         state = 'await_auth'
@@ -353,6 +544,7 @@ export function createHub(opts: HubOptions): Hub {
           if (!challenged()) return
           if (!(await verify(peer, authBytes({ hub: db.hubId(), nonce, peer }), f.sig)))
             return refuse('bad_sig', 'the signature does not verify', CLOSE_UNKNOWN)
+          boxJson = await boxClaimOf(peer, box)
           const row = db.peer(peer)
           if (!row) return refuse('unknown_peer', 'not a member; join with an invite', CLOSE_UNKNOWN)
           if (row.status === 'revoked') return refuse('revoked', 'this peer is revoked', CLOSE_REVOKED)
@@ -364,6 +556,7 @@ export function createHub(opts: HubOptions): Hub {
           if (!validName(f.name)) return refuse('bad_frame', 'name must be 1..40 characters', CLOSE_BAD_REQUEST)
           if (!(await verify(peer, joinBytes({ hub: db.hubId(), invite: f.invite, name: f.name, nonce, peer }), f.sig)))
             return refuse('bad_sig', 'the signature does not verify', CLOSE_UNKNOWN)
+          boxJson = await boxClaimOf(peer, box)
           if (closed) return
           const now = clock.now()
           const r = db.join(f.invite, peer, f.name, now)
@@ -394,6 +587,14 @@ export function createHub(opts: HubOptions): Hub {
           return send(conn, peer, f)
         case 'ack':
           return ack(conn, peer, f)
+        case 'blob_open':
+          return blobOpen(conn, peer, f)
+        case 'blob_put':
+          return blobPut(conn, peer, f)
+        case 'blob_get':
+          return blobGet(conn, peer, f)
+        case 'blob_done':
+          return blobDone(conn, peer, f)
         default:
           return fail(conn, 'bad_frame', `${f.t} is not for the hub`)
       }
@@ -432,6 +633,9 @@ export function createHub(opts: HubOptions): Hub {
       // of it (the sender cannot connect again; the recipient never sees these).
       for (const m of db.expireFrom(row.id))
         db.audit(clock.now(), row.id, 'expired', { id: m.id, to: m.to_peer, why: 'sender_revoked' })
+      // Its blobs go (#371); and a blob that waited for it alone is done with.
+      for (const b of db.liveBlobs(row.id)) dropBlob(b, 'revoked')
+      for (const b of db.liveBlobs()) doneWith(b, JSON.parse(b.fetched) as string[])
       const s = sessions.get(row.id)
       if (s) fail(s.conn, 'revoked', 'this peer is revoked', CLOSE_REVOKED)
       broadcastRoster()

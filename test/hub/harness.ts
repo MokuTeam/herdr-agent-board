@@ -1,6 +1,7 @@
 // A hub in the test's process (#231): the real server on port 0, an in-memory store, a clock the
 // test moves, and clients that speak the wire protocol over the global WebSocket.
 import assert from 'node:assert/strict'
+import type { BlobStore } from '../../hub/src/blobs.ts'
 import { type HubDb, openDb } from '../../hub/src/db.ts'
 import { type Clock, createHub, type Hub } from '../../hub/src/hub.ts'
 import { type HubServer, startServer } from '../../hub/src/server.ts'
@@ -134,11 +135,11 @@ export interface Harness {
   clients: Client[]
   invite(ttlMs?: number): string
   connect(): Promise<Client>
-  /** hello, then auth with the key; the client is returned after welcome. */
-  login(key: KeyPair, caps?: string[]): Promise<Client>
-  join(key: KeyPair, name: string, invite?: string, caps?: string[]): Promise<Client>
+  /** hello, then auth with the key; the client is returned after welcome. `extra`: more fields of the hello (#371: box). */
+  login(key: KeyPair, caps?: string[], extra?: Record<string, unknown>): Promise<Client>
+  join(key: KeyPair, name: string, invite?: string, caps?: string[], extra?: Record<string, unknown>): Promise<Client>
   /** A hello (with caps, #216, when given), a challenge and nothing else yet. */
-  hello(key: KeyPair, caps?: string[]): Promise<{ c: Client; nonce: string }>
+  hello(key: KeyPair, caps?: string[], extra?: Record<string, unknown>): Promise<{ c: Client; nonce: string }>
   /**
    * Waits until the hub has seen a peer's socket close. A client's close event can come before the
    * hub's own close handler has run (it does on Windows), and a frame the hub writes in between is lost.
@@ -149,12 +150,26 @@ export interface Harness {
 
 /** `trustProxy`: the server's own option; `headers`: what every client sends with its upgrade request. */
 export async function startHarness(
-  opts: { trustProxy?: boolean; headers?: Record<string, string> } = {},
+  opts: {
+    trustProxy?: boolean
+    headers?: Record<string, string>
+    /** #371: the hub's blob store and its limits. */
+    blobs?: BlobStore
+    maxFileBytes?: number
+    quotaBytes?: number
+  } = {},
 ): Promise<Harness> {
   const db = openDb(':memory:')
   const clock = fakeClock()
   const logs: string[] = []
-  const hub = createHub({ db, clock, log: m => logs.push(m) })
+  const hub = createHub({
+    db,
+    clock,
+    log: m => logs.push(m),
+    ...(opts.blobs && { blobs: opts.blobs }),
+    ...(opts.maxFileBytes !== undefined && { maxFileBytes: opts.maxFileBytes }),
+    ...(opts.quotaBytes !== undefined && { quotaBytes: opts.quotaBytes }),
+  })
   const server = startServer({ hub, hostname: '127.0.0.1', port: 0, trustProxy: opts.trustProxy === true })
   const url = `ws://127.0.0.1:${server.port}/v1`
   const clients: Client[] = []
@@ -175,21 +190,21 @@ export async function startHarness(
       await c.ready
       return c
     },
-    hello: async (key, caps) => {
+    hello: async (key, caps, extra) => {
       const c = await h.connect()
-      c.send({ t: 'hello', v: 1, peer: key.pub, client: 'test/0', ...(caps && { caps }) })
+      c.send({ t: 'hello', v: 1, peer: key.pub, client: 'test/0', ...(caps && { caps }), ...extra })
       const ch = await c.take('challenge')
       assert.equal(ch.hub, hubId)
       return { c, nonce: ch.nonce }
     },
-    login: async (key, caps) => {
-      const { c, nonce } = await h.hello(key, caps)
+    login: async (key, caps, extra) => {
+      const { c, nonce } = await h.hello(key, caps, extra)
       c.send({ t: 'auth', sig: await sign(key.pkcs8, authBytes({ hub: hubId, nonce, peer: key.pub })) })
       await c.take('welcome')
       return c
     },
-    join: async (key, name, invite = h.invite(), caps) => {
-      const { c, nonce } = await h.hello(key, caps)
+    join: async (key, name, invite = h.invite(), caps, extra) => {
+      const { c, nonce } = await h.hello(key, caps, extra)
       const sig = await sign(key.pkcs8, joinBytes({ hub: hubId, invite, name, nonce, peer: key.pub }))
       c.send({ t: 'join', invite, name, sig })
       await c.take('welcome')
