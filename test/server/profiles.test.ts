@@ -224,10 +224,11 @@ test('Install from the board writes a shown profile’s hooks and refuses a hidd
   expect(work.hooks.SessionStart[0]).toEqual(ours)
   expect(work.hooks.UserPromptSubmit).toEqual([ours])
   expect(readFileSync(join(dir('.claude-work'), 'settings.json.bak-agent-board'), 'utf8')).toBe('{}')
-  // The agents' skill too, as the install action puts it there.
-  expect(readFileSync(join(dir('.claude-work'), 'skills', 'herdr-agents', 'SKILL.md'), 'utf8')).toBe(
-    readFileSync(join(root, 'skills', 'herdr-agents', 'SKILL.md'), 'utf8'),
-  )
+  // The agents' skill and Team's too, as the install action puts them there.
+  for (const name of ['herdr-agents', 'agent-board-team'])
+    expect(readFileSync(join(dir('.claude-work'), 'skills', name, 'SKILL.md'), 'utf8')).toBe(
+      readFileSync(join(root, 'skills', name, 'SKILL.md'), 'utf8'),
+    )
   // herdr's own Claude hook too, after them: herdr wrote it into work's folder (CLAUDE_CONFIG_DIR).
   expect(existsSync(join(dir('.claude-work'), 'hooks', 'herdr-agent-state.ps1'))).toBe(true)
   expect(JSON.stringify(work.hooks.SessionStart.at(-1))).toContain('herdr-agent-state.ps1')
@@ -391,9 +392,10 @@ test('showing a hidden profile installs into it as Install does, and the board g
   const settings = JSON.parse(readFileSync(join(dir('.claude-work'), 'settings.json'), 'utf8'))
   expect(settings.hooks.UserPromptSubmit).toHaveLength(1)
   expect(JSON.stringify(settings.hooks.SessionStart.at(-1))).toContain('herdr-agent-state.ps1')
-  expect(readFileSync(join(dir('.claude-work'), 'skills', 'herdr-agents', 'SKILL.md'), 'utf8')).toBe(
-    readFileSync(join(root, 'skills', 'herdr-agents', 'SKILL.md'), 'utf8'),
-  )
+  for (const name of ['herdr-agents', 'agent-board-team'])
+    expect(readFileSync(join(dir('.claude-work'), 'skills', name, 'SKILL.md'), 'utf8')).toBe(
+      readFileSync(join(root, 'skills', name, 'SKILL.md'), 'utf8'),
+    )
   expect(existsSync(join(dir('.claude-work'), 'hooks', 'herdr-agent-state.ps1'))).toBe(true)
   expect(integrations()).toEqual([['integration', 'install', 'claude']])
   expect(readdirSync(dir('.claude'))).toEqual(['settings.json'])

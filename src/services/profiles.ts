@@ -1,5 +1,5 @@
 // Install from the Profiles panel: the board's hooks and status line (wake's too while wake is on)
-// into one profile's settings.json, the agents' skill into its skills folder, and herdr's own
+// into one profile's settings.json, the agents' and Team's skills into its skills folder, and herdr's own
 // Claude hook (herdr writes it), as the install action puts them into every shown profile
 // (adapters/hook-settings.ts, adapters/agents-skill.ts, adapters/herdr.ts). Only into a shown
 // profile, and only into a folder that is there. The panel's edits go through here too: one that
@@ -18,7 +18,7 @@ import { readText } from '../adapters/setup-facts.ts'
 import type { InstallPaths, WakeHooksState } from '../core/install-plan.ts'
 import { t } from '../core/lang.ts'
 import type { Profile } from '../core/profiles.ts'
-import { boardFiles } from '../core/setup.ts'
+import { boardFiles, SKILL, TEAM_SKILL } from '../core/setup.ts'
 import { wakeSwitch } from '../core/wake/config.ts'
 import type { Deps } from './deps.ts'
 
@@ -74,9 +74,14 @@ async function installShown(profile: Profile): Promise<InstallResult> {
   const wake = wakeSwitch({ exists: existsSync(configFile()), raw: readConfigFile() })
   const out = installInto(profile.dir, paths, { wake })
   if (!out.ok) return { ok: false, error: out.error }
-  const skill = readText(FILES.skill)
   try {
-    if (skill !== null) installSkill(profile.dir, skill)
+    for (const [name, from] of [
+      [SKILL, FILES.skill],
+      [TEAM_SKILL, FILES.teamSkill],
+    ] as const) {
+      const skill = readText(from)
+      if (skill !== null) installSkill(profile.dir, skill, name)
+    }
   } catch (err) {
     return { ok: false, error: messageOf(err) }
   }

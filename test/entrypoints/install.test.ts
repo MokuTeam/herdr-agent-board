@@ -150,8 +150,15 @@ test('install in a sandbox: the commands, the hooks once, a backup, and notifica
     assert.ok(existsSync(join(home, '.local', 'bin', name)), name)
   const skill = join(home, '.claude', 'skills', 'herdr-agents', 'SKILL.md')
   assert.equal(readFileSync(skill, 'utf8'), readFileSync(join(root, 'skills', 'herdr-agents', 'SKILL.md'), 'utf8'))
-  // Where upstream says it: after the commands, before the hooks.
-  assert.match(first.out, new RegExp(`^commands: .*\\nskill: ${literal(skill)}\\nhooks: `, 'm'))
+  // Team's skill beside it (#369), word for word.
+  const teamSkill = join(home, '.claude', 'skills', 'agent-board-team', 'SKILL.md')
+  const teamSource = readFileSync(join(root, 'skills', 'agent-board-team', 'SKILL.md'), 'utf8')
+  assert.equal(readFileSync(teamSkill, 'utf8'), teamSource)
+  // Where upstream says it: after the commands, before the hooks; Team's right after it.
+  assert.match(
+    first.out,
+    new RegExp(`^commands: .*\\nskill: ${literal(skill)}\\nskill: ${literal(teamSkill)}\\nhooks: `, 'm'),
+  )
   assert.ok(existsSync(`${settingsFile}.bak-agent-board`))
   const after = JSON.parse(readFileSync(settingsFile, 'utf8'))
   assert.equal(after.hooks.SessionStart.length, 1)
@@ -168,10 +175,22 @@ test('install in a sandbox: the commands, the hooks once, a backup, and notifica
   writeFileSync(join(home, '.local', 'bin', 'spawn-agent'), '#!/bin/sh\necho mine\n')
   assert.match((await run()).out, /skipped .*spawn-agent: exists and is not ours/)
   assert.equal(readFileSync(join(home, '.local', 'bin', 'spawn-agent'), 'utf8'), '#!/bin/sh\necho mine\n')
-  // And so is someone else's skill of that name.
+  // An older copy of Team's skill is brought up to date; it was the same, so it was left as it was.
+  assert.match(second.out, new RegExp(`^skill: ${literal(teamSkill)}$`, 'm'))
+  writeFileSync(teamSkill, teamSource.replace('# Working with other boards', '# Once, working with other boards'))
+  assert.equal((await run()).code, 0)
+  assert.equal(readFileSync(teamSkill, 'utf8'), teamSource)
+  // And so is someone else's skill of that name, each on its own: the other is still put in place.
   writeFileSync(skill, '---\nname: herdr-agents\n---\nmine\n')
   assert.match((await run()).out, /skipped .*SKILL\.md: a skill of that name that is not ours/)
   assert.equal(readFileSync(skill, 'utf8'), '---\nname: herdr-agents\n---\nmine\n')
+  assert.equal(readFileSync(teamSkill, 'utf8'), teamSource)
+  writeFileSync(teamSkill, '---\nname: agent-board-team\n---\nmine\n')
+  assert.match(
+    (await run()).out,
+    new RegExp(`^skipped ${literal(teamSkill)}: a skill of that name that is not ours$`, 'm'),
+  )
+  assert.equal(readFileSync(teamSkill, 'utf8'), '---\nname: agent-board-team\n---\nmine\n')
   // Windows PowerShell 5.1 writes UTF-8 with a BOM: still read.
   writeFileSync(settingsFile, `\uFEFF${JSON.stringify({ model: 'opus' })}`)
   assert.equal((await run()).code, 0)
@@ -218,13 +237,15 @@ test('install writes into every shown profile and touches no hidden one', async 
   expect(code).toBe(0)
   expect(stderr).toBe('')
   const skill = read(root, 'skills', 'herdr-agents', 'SKILL.md')
+  const teamSkill = read(root, 'skills', 'agent-board-team', 'SKILL.md')
   for (const p of ['.claude', '.claude-work']) {
     expect(JSON.parse(read(home, p, 'settings.json')).hooks.SessionStart.at(-1)).toEqual(ours())
     expect(read(home, p, 'settings.json.bak-agent-board')).toBe(before)
-    // The agents' skill too, each profile its own copy, said before its hooks.
+    // The agents' skill and Team's too, each profile its own copies, said before its hooks.
     expect(read(home, p, 'skills', 'herdr-agents', 'SKILL.md')).toBe(skill)
+    expect(read(home, p, 'skills', 'agent-board-team', 'SKILL.md')).toBe(teamSkill)
     expect(stdout).toContain(
-      `skill: ${join(home, p, 'skills', 'herdr-agents', 'SKILL.md')}\nhooks: SessionStart, UserPromptSubmit, PreToolUse (AskUserQuestion) -> ${entry('hook.ts')} in ${join(home, p, 'settings.json')}\nstatus line: ${entry('statusline.ts')}\n`,
+      `skill: ${join(home, p, 'skills', 'herdr-agents', 'SKILL.md')}\nskill: ${join(home, p, 'skills', 'agent-board-team', 'SKILL.md')}\nhooks: SessionStart, UserPromptSubmit, PreToolUse (AskUserQuestion) -> ${entry('hook.ts')} in ${join(home, p, 'settings.json')}\nstatus line: ${entry('statusline.ts')}\n`,
     )
   }
   expect(read(home, '.claude-gamedev', 'settings.json')).toBe(before)
@@ -234,8 +255,9 @@ test('install writes into every shown profile and touches no hidden one', async 
     'settings.json.bak-agent-board',
     'skills',
   ])
-  expect(readdirSync(join(home, '.claude-work', 'skills'))).toEqual(['herdr-agents'])
+  expect(readdirSync(join(home, '.claude-work', 'skills')).sort()).toEqual(['agent-board-team', 'herdr-agents'])
   expect(readdirSync(join(home, '.claude-work', 'skills', 'herdr-agents'))).toEqual(['SKILL.md'])
+  expect(readdirSync(join(home, '.claude-work', 'skills', 'agent-board-team'))).toEqual(['SKILL.md'])
   // The commands once; the check after it per shown profile, by name, and not the hidden one.
   expect(stdout.match(/^commands: /gm)).toHaveLength(1)
   expect(stdout).toMatch(/^ok Private: Claude Code hooks · /m)

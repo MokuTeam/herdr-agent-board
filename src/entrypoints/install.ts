@@ -1,6 +1,7 @@
 // The "install" action: puts the `board` and `spawn-agent` commands on PATH (~/.local/bin, a sh
 // script for Git Bash, Linux and macOS and a .cmd for PowerShell), copies the agents' skill
-// (skills/herdr-agents) into the skills folder of every shown Claude profile and registers the
+// (skills/herdr-agents) and Team's (skills/agent-board-team, #369) into the skills folder of
+// every shown Claude profile and registers the
 // SessionStart / UserPromptSubmit hooks, the PreToolUse hook on AskUserQuestion and the status
 // line in its settings.json (~/.claude, and each CLAUDE_CONFIG_DIR folder the board shows; a
 // hidden one is left alone), has herdr put its
@@ -34,7 +35,7 @@ import { gatherFacts, herdrConfigFile, readText } from '../adapters/setup-facts.
 import { type InstallPaths, planSettings, planShims } from '../core/install-plan.ts'
 import { t } from '../core/lang.ts'
 import { DEFAULT_PROFILE, shownProfiles } from '../core/profiles.ts'
-import { boardFiles, checkSetup, report, tomlValue } from '../core/setup.ts'
+import { boardFiles, checkSetup, report, SKILL, TEAM_SKILL, tomlValue } from '../core/setup.ts'
 import { wakeSwitch } from '../core/wake/config.ts'
 import { ensureToastApp, toastAppState } from '../integrations/toast-mac.ts'
 
@@ -149,9 +150,13 @@ try {
   installShims()
   // claude-tg is wake's Telegram's: with wake off, a herdr-wake one stays as it was.
   if (wake) refreshLaunchers()
-  // --- the agents' skill (how sessions in herdr work with each other), read by Claude on demand
-  const skillText = readText(files.skill)
-  if (skillText === null) console.log(`skill: ${files.skill} is missing from this copy of the board`)
+  // --- the skills Claude reads on demand: the agents' (how sessions in herdr work with each
+  // other), then Team's (how they work with other people's boards, #369)
+  const skills = [
+    { name: SKILL, from: files.skill },
+    { name: TEAM_SKILL, from: files.teamSkill },
+  ].map(s => ({ ...s, text: readText(s.from) }))
+  for (const s of skills) if (s.text === null) console.log(`skill: ${s.from} is missing from this copy of the board`)
   // --- per profile: the skill, then hooks, status line, notifications; the default folder is made when it is not there
   let toastOn = false
   for (const profile of profiles) {
@@ -160,8 +165,9 @@ try {
       console.log(`skipped ${profile.dir}: the folder is not there`)
       continue
     }
-    if (skillText !== null) {
-      const skill = installSkill(profile.dir, skillText)
+    for (const s of skills) {
+      if (s.text === null) continue
+      const skill = installSkill(profile.dir, s.text, s.name)
       console.log(
         skill.action === 'foreign'
           ? `skipped ${skill.file}: a skill of that name that is not ours`
