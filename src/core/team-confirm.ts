@@ -37,7 +37,8 @@ export interface SendThread {
 }
 
 export type OwnerAction =
-  | { kind: 'send'; to: string; text: string; thread?: SendThread }
+  /** `replyTo` (#370): the line of the thread it answers. */
+  | { kind: 'send'; to: string; text: string; thread?: SendThread; replyTo?: string }
   | { kind: 'draft'; id: string }
   | { kind: 'trust'; peer: string }
   | { kind: 'agents'; change: Record<string, unknown> }

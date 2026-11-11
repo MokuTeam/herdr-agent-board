@@ -210,7 +210,7 @@ export function teamRoutes(
   /** Does an owner action: at once when it needs no confirmation, or once the window confirmed it. */
   async function perform(a: OwnerAction): Promise<{ status: number; body: Record<string, unknown> }> {
     if (a.kind === 'send') {
-      const r = await team.send(a.to, a.text, a.thread)
+      const r = await team.send(a.to, a.text, a.thread, a.replyTo)
       return { status: r.ok ? 200 : 400, body: { ...r } }
     }
     if (a.kind === 'draft') {
@@ -365,7 +365,16 @@ export function teamRoutes(
         // What the send would refuse is refused before it waits for a passkey.
         const words = body.text.trim()
         if (!words || words.length > MAX_TEXT) return json(400, { ok: false, error: 'text' })
-        const action: OwnerAction = { kind: 'send', to: body.to, text: body.text, ...(thread && { thread }) }
+        // A reply (#370): a line of the thread it goes to, by its id; the send finds it there.
+        if (body.replyTo !== undefined && !isMessageId(body.replyTo)) return json(400, { ok: false, error: 'reply' })
+        const replyTo = body.replyTo as string | undefined
+        const action: OwnerAction = {
+          kind: 'send',
+          to: body.to,
+          text: body.text,
+          ...(thread && { thread }),
+          ...(replyTo && { replyTo }),
+        }
         const wait = held(req, action)
         if (wait) return wait
         const r = await perform(action)
@@ -377,7 +386,11 @@ export function teamRoutes(
       path: '/api/team/threads',
       handle() {
         if (!team.view()) return undefined
-        return json(200, { threads: team.threads() })
+        // Each with its latest message for the list (#370), where there is one.
+        const lasts = team.lasts?.() ?? {}
+        return json(200, {
+          threads: team.threads().map(t => (Object.hasOwn(lasts, t.key) ? { ...t, last: lasts[t.key] } : t)),
+        })
       },
     },
     {
@@ -389,8 +402,11 @@ export function teamRoutes(
         if (!isTarget(scope) || !isThreadId(id)) return json(400, { ok: false, error: 'thread' })
         const key = threadKey(scope, id)
         const thread = team.threads().find(t => t.key === key)
-        if (!thread) return json(404, { ok: false, error: 'thread' })
-        return json(200, { thread, lines: team.threadLines(key) })
+        if (thread) return json(200, { thread, lines: team.threadLines(key) })
+        // Nothing written in it yet, but an agent's draft waits there (#370): the draft, no thread.
+        const drafts = team.threadLines(key).filter(l => l.dir === 'draft')
+        if (!drafts.length) return json(404, { ok: false, error: 'thread' })
+        return json(200, { thread: null, lines: drafts })
       },
     },
     {

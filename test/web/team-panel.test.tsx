@@ -163,11 +163,19 @@ const hasClassOf = (h: Host, name: string): boolean =>
   typeof h.props.className === 'string' && h.props.className.split(' ').includes(name)
 
 const buttons = (nodes: Node[], label: string) => findAll(nodes, el => el.tag === 'button' && text([el]) === label)
+/** The box's Send (#370: an arrow, named by its label). */
+const sendOf = (nodes: Node[]) => findAll(nodes, el => el.tag === 'button' && el.attrs.has('data-send'))[0]
+const marks = (nodes: Node[]) => findAll(nodes, el => hasClass(el, 'team-delivery'))
 
 describe('the list', () => {
-  test('people: an online dot for who is on, none for who is not, and fingerprints', () => {
-    const nodes = render(props())
-    expect(findAll(nodes, el => hasClass(el, 'team-peer'))).toHaveLength(2)
+  test('people: an online dot for who is on, none for who is not, and fingerprints (People and agents, #370)', () => {
+    const list = render(props())
+    expect(findAll(list, el => hasClass(el, 'team-peer'))).toHaveLength(2)
+    expect(findAll(list, el => hasClass(el, 'team-avatar-dot')).map(d => hasClass(d, 'on'))).toEqual([true, false])
+    // The keys are People and agents' (#370): the list is a list of conversations.
+    expect(text(list)).not.toContain('Key 1111')
+    const nodes = render(props({ people: true }))
+    expect(findAll(nodes, el => hasClass(el, 'team-card'))).toHaveLength(2)
     const dots = findAll(nodes, el => hasClass(el, 'team-dot'))
     expect(dots.map(d => hasClass(d, 'on'))).toEqual([true, false])
     const all = text(nodes)
@@ -198,7 +206,9 @@ describe('the list', () => {
 
   test('a key that changed: its row says so, with Trust, which asks for that person', () => {
     const trusted: string[] = []
-    const p = props({ onTrust: x => void trusted.push(x) })
+    const row = findAll(render(props()), el => hasClass(el, 'team-row-changed'))
+    expect(text(row)).toBe('key changed')
+    const p = props({ people: true, onTrust: x => void trusted.push(x) })
     const nodes = render(p)
     expect(findAll(nodes, el => hasClass(el, 'team-changed'))).toHaveLength(1)
     expect(text([byClass(nodes, 'team-changed')])).toContain('The key of Bob changed')
@@ -212,7 +222,7 @@ describe('the list', () => {
     // Bob has written nothing yet: his general is there all the same.
     expect(rows).toEqual(['team/general', `team/${DEPLOY}`, `${ANA}/general`, `${ANA}/${TOPIC}`, `${BOB}/general`])
     const titles = findAll(nodes, el => hasClass(el, 'team-row-title')).map(r => text([r]))
-    expect(titles).toEqual(['General', 'Deploy', 'General', 'Release', 'General'])
+    expect(titles).toEqual(['Team chat', 'Deploy', 'Ana', 'Release', 'Bob'])
     expect(text(render(props(), 'ru'))).toContain('Общий чат')
   })
 
@@ -221,7 +231,7 @@ describe('the list', () => {
     expect(findAll(nodes, el => hasClass(el, 'team-unread')).map(c => text([c]))).toEqual(['2'])
     const muted = findAll(nodes, el => hasClass(el, 'team-row') && hasClass(el, 'muted'))
     expect(muted.map(r => r.attrs.get('data-thread'))).toEqual([`team/${DEPLOY}`])
-    expect(text(muted)).toContain('muted')
+    expect(findAll(muted, el => hasClass(el, 'team-muted')).map(m => m.attrs.get('aria-label'))).toEqual(['muted'])
   })
 
   test('threads with someone no longer in the team stay listed, to read and to clear their count', () => {
@@ -249,7 +259,8 @@ describe('the owner’s switches (#216) and the team chat’s mute', () => {
   const sw = (nodes: Node[], name: string) => findAll(nodes, el => el.attrs.get('data-switch') === name)[0]
 
   test('as they stand: all agents, the listener, each scope on or off and its lanes', () => {
-    const nodes = render(props())
+    expect(findAll(render(props()), el => hasClass(el, 'team-agents'))).toHaveLength(0)
+    const nodes = render(props({ people: true }))
     expect(sw(nodes, 'agents')?.attrs.get('aria-checked')).toBe('true')
     expect(sw(nodes, `agents-${ANA}`)?.attrs.get('aria-checked')).toBe('true')
     expect(sw(nodes, `agents-${BOB}`)?.attrs.get('aria-checked')).toBe('false')
@@ -266,7 +277,7 @@ describe('the owner’s switches (#216) and the team chat’s mute', () => {
 
   test('each change is one call: all off, the listener cleared, a person on, a lane shared, the chat muted', () => {
     const changes: unknown[] = []
-    const p = props({ onAgents: c => void changes.push(c) })
+    const p = props({ people: true, onAgents: c => void changes.push(c) })
     const hosts = hostsOf(p)
     press(hosts, h => h.props['data-switch'] === 'agents')
     press(hosts, h => h.props.children === 'Clear')
@@ -286,7 +297,7 @@ describe('the owner’s switches (#216) and the team chat’s mute', () => {
   })
 
   test('a remote page (no switches given): neither the switches nor the team chat’s mute, nor Trust', () => {
-    const nodes = render(props({ agents: null }))
+    const nodes = render(props({ agents: null, people: true }))
     expect(findAll(nodes, el => el.attrs.has('data-switch'))).toHaveLength(0)
     expect(findAll(nodes, el => hasClass(el, 'team-agents'))).toHaveLength(0)
     // Accepting a changed key is the computer's only: the button would only be refused.
@@ -303,17 +314,22 @@ describe('a thread on show', () => {
     const p = props(on(`${ANA}/general`, { lines: LINES, onSelect: k => void back.push(k) }))
     const nodes = render(p)
     const all = text(nodes)
-    expect(all).toContain('General')
-    expect(all).toContain('with Ana')
-    expect(all).toContain('from you · queued at the hub')
-    expect(all).toContain('from you · delivered')
-    expect(all).toContain('from you · received')
-    expect(all).toContain('from you · expired, not delivered')
-    expect(all).toContain('Ana · held back until the new key is trusted')
+    // A person's general is titled by them, with whether they are on (#370).
+    expect(text(findAll(nodes, el => hasClass(el, 'team-thread-title')))).toBe('Ana')
+    expect(all).toContain('online')
+    const states = marks(nodes)
+    expect(states.map(m => m.attrs.get('data-state'))).toEqual(['queued', 'delivered', 'acked', 'expired'])
+    expect(states.slice(0, 3).map(m => m.attrs.get('aria-label'))).toEqual([
+      'queued at the hub',
+      'delivered',
+      'received',
+    ])
+    // Expired is said in words.
+    expect(text(states.slice(3))).toBe('expired, not delivered')
     expect(all).toContain('held: key changed, Trust to read')
     expect(findAll(nodes, el => hasClass(el, 'held'))).toHaveLength(1)
     expect(findAll(nodes, el => el.tag === 'textarea')).toHaveLength(1)
-    press(hostsOf(p), h => h.props.children === '‹ All threads')
+    press(hostsOf(p), h => h.props['aria-label'] === 'All threads')
     expect(back).toEqual([null])
   })
 
@@ -329,18 +345,18 @@ describe('a thread on show', () => {
     expect(isThreadLines({ thread: THREADS[0], lines: [refused] })).toBe(true)
     expect(isThreadLines({ thread: THREADS[0], lines: [{ ...refused, state: 'nonsense' }] })).toBe(false)
     const p = props(on(`${ANA}/general`, { lines: [refused] }))
-    expect(text(render(p))).toContain('from you · refused by the hub (not_member), not sent')
+    expect(text(marks(render(p)))).toBe('refused by the hub (not_member), not sent')
     expect(text(render(p, 'ru'))).toContain('хаб отклонил (not_member)')
     const bare = props(
       on(`${ANA}/general`, {
         lines: [{ id: 'r2', dir: 'out', text: 'r', ts: '2026-10-28T10:06:00Z', state: 'refused' }],
       }),
     )
-    expect(text(render(bare))).toContain('from you · refused by the hub, not sent')
+    expect(text(marks(render(bare)))).toBe('refused by the hub, not sent')
   })
 
   test('a person whose key changed: Send is off and says why, with Trust there too', () => {
-    const send = (key: string) => buttons(render(props(on(key, { draft: 'hi' }))), 'Send')[0]
+    const send = (key: string) => sendOf(render(props(on(key, { draft: 'hi' }))))
     expect(send(`${ANA}/general`)?.attrs.has('disabled')).toBe(false)
     expect(send(`${BOB}/general`)?.attrs.has('disabled')).toBe(true)
     const bob = text(render(props(on(`${BOB}/general`))))
@@ -350,7 +366,7 @@ describe('a thread on show', () => {
   })
 
   test('Send is off for an empty draft and while disabled', () => {
-    const send = (over: Partial<TeamBodyProps>) => buttons(render(props(on(`${ANA}/general`, over))), 'Send')[0]
+    const send = (over: Partial<TeamBodyProps>) => sendOf(render(props(on(`${ANA}/general`, over))))
     expect(send({ draft: '' })?.attrs.has('disabled')).toBe(true)
     expect(send({ draft: 'hi', disabled: true })?.attrs.has('disabled')).toBe(true)
     expect(send({ draft: 'hi' })?.attrs.has('disabled')).toBe(false)
@@ -406,10 +422,14 @@ describe('a thread on show', () => {
         ],
       },
     ]
-    const all = text(render(props(on('team/general', { lines }))))
+    const nodes = render(props(on('team/general', { lines })))
+    const all = text(nodes)
     expect(all).toContain('Team chat')
-    expect(all).toContain('Ana')
-    expect(all).toContain('from you · Ana: received, Bob: queued at the hub')
+    expect(text(findAll(nodes, el => hasClass(el, 'team-msg-name')))).toBe('Ana')
+    // The post's mark is its slowest copy; its label names every member's.
+    expect(marks(nodes).map(m => [m.attrs.get('data-state'), m.attrs.get('aria-label')])).toEqual([
+      ['queued', 'Ana: received, Bob: queued at the hub'],
+    ])
   })
 })
 
@@ -548,23 +568,26 @@ describe('agent drafts and agent requests (#231, #216)', () => {
     expect(all).toContain('is the build green?')
     expect(all).toContain('draft from an agent')
     expect(buttons(nodes, 'Discard')).toHaveLength(1)
-    // The composer's Send and the draft's Send.
-    expect(buttons(nodes, 'Send')).toHaveLength(2)
+    // The draft's Send, beside the box's.
+    expect(buttons(nodes, 'Send')).toHaveLength(1)
+    expect(sendOf(nodes)).toBeDefined()
     // The hint on the draft's Send says where it came from, not that anyone approved it.
     expect(buttons(nodes, 'Send')[0]?.attrs.get('title')).toBe(
       'Sends it as a question marked as coming from your agent',
     )
     const counted = { ...VIEW, roster: VIEW.roster.map(p => (p.peer === ANA ? { ...p, drafts: 2 } : p)) }
-    expect(text(render(props({ view: counted })))).toContain('2 draft(s) from an agent')
-    expect(text(render(props({ view: counted }), 'ru'))).toContain('черновиков от агента: 2')
+    expect(text(render(props({ view: counted, people: true })))).toContain('2 draft(s) from an agent')
+    expect(text(render(props({ view: counted, people: true }), 'ru'))).toContain('черновиков от агента: 2')
     expect(text(render(props(on(`${ANA}/general`, { lines: [DRAFT] })), 'ru'))).toContain('черновик от агента')
   })
 
   test('a draft the board held says why', () => {
     const held = { ...DRAFT, reason: 'loop' }
-    expect(text(render(props(on(`${ANA}/general`, { lines: [held] }))))).toContain(
-      'draft from an agent · held: the last messages all came from agents',
-    )
+    const mark = findAll(render(props(on(`${ANA}/general`, { lines: [held] }))), el => hasClass(el, 'team-agent-mark'))
+    expect(mark.flatMap(m => m.children).map(c => text([c]))).toEqual([
+      'draft from an agent',
+      'held: the last messages all came from agents',
+    ])
   })
 
   test('Send and Discard on a draft call back with its id; Send waits while the key changed or editing is off', () => {
@@ -577,7 +600,7 @@ describe('agent drafts and agent requests (#231, #216)', () => {
       }),
     )
     const hosts = hostsOf(p)
-    press(hosts, h => h.props.children === 'Send') // the draft's comes first, the composer's after the thread
+    press(hosts, h => h.props.children === 'Send') // the draft's: the box's is an arrow
     press(hosts, h => h.props.children === 'Discard')
     expect(calls).toEqual(['send d1', 'discard d1'])
     const bob = render(props(on(`${BOB}/general`, { lines: [{ ...DRAFT, id: 'd2' }] })))
@@ -613,13 +636,25 @@ describe('agent drafts and agent requests (#231, #216)', () => {
       ts: '2026-10-28T11:03:00Z',
       state: 'acked',
     }
-    const all = text(render(props(on(`${ANA}/general`, { lines: [incoming, outgoing, plain, pressed] }))))
-    expect(all).toContain('Ana · via Ana’s agent')
-    expect(all).toContain('from you · received · via your agent')
-    expect(all).toContain('from you · received · an agent’s draft you sent')
-    expect(all.match(/ · via (Ana’s|your) agent/g)).toHaveLength(2)
-    expect(all).not.toContain('approved')
-    expect(text(render(props(on(`${ANA}/general`, { lines: [incoming] })), 'ru'))).toContain('через агента Ana')
+    const nodes = render(props(on(`${ANA}/general`, { lines: [incoming, outgoing, plain, pressed] })))
+    // The agent's mark (#370): the session, whose board; a person's message has none.
+    const agentMarks = findAll(nodes, el => hasClass(el, 'team-agent-mark')).map(m =>
+      m.children.filter(c => c.kind === 'element' && c.tag !== 'svg').map(c => text([c])),
+    )
+    expect(agentMarks).toEqual([
+      ['board-216', 'Ana’s board'],
+      ['agent', 'your board'],
+      ['agent', 'your board', 'an agent’s draft you sent'],
+    ])
+    const msgs = findAll(nodes, el => hasClass(el, 'team-msg'))
+    expect(msgs.map(m => [m.attrs.get('data-line'), hasClass(m, 'agent')])).toEqual([
+      ['a1', true],
+      ['a2', true],
+      ['a3', false],
+      ['a4', true],
+    ])
+    expect(text(nodes)).not.toContain('approved')
+    expect(text(render(props(on(`${ANA}/general`, { lines: [incoming] })), 'ru'))).toContain('доска Ana')
   })
 
   test('through the source: send is POST /api/team/draft/<id>/send, discard /discard, both with X-Board and no text of their own', async () => {

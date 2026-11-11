@@ -21,8 +21,11 @@ export const MAX_DRAFTS = 20
  * without them (an older board, or any peer while the hub is older) gets the plain body.
  * `channels` (#355): a team thread with a member list (ThreadRef.members), sent only to them; a
  * member whose board does not say so gets the post as a plain message in their pair's general.
+ * `replies` (#370): the message answered (Message.body.replyTo) and, on a team post's copies, the
+ * post's id (Message.body.post), so every member's board finds the same original; a peer without
+ * it gets the plain body.
  */
-export const CAPS = ['threads', 'channels'] as const
+export const CAPS = ['threads', 'channels', 'replies'] as const
 export type Cap = (typeof CAPS)[number]
 export const MAX_CAPS = 8
 export const MAX_CAP = 32
@@ -79,8 +82,12 @@ export interface Message {
   reply_to: string | null
   ts: string
   ttl_s: number
-  /** `agent`: the sending session's name, only with `via`; `thread`: only to a peer with the `threads` cap. */
-  body: { text: string; via?: Via; agent?: string; thread?: ThreadRef }
+  /**
+   * `agent`: the sending session's name, only with `via`; `thread`: only to a peer with the `threads`
+   * cap. `replyTo` (#370): the id of the message this one answers, a pair's message or a team post's;
+   * `post`: on a team post's copy, the post's id (its first copy's). Both only to a peer with `replies`.
+   */
+  body: { text: string; via?: Via; agent?: string; thread?: ThreadRef; replyTo?: string; post?: string }
 }
 
 /**

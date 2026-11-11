@@ -107,6 +107,9 @@ export const hasThreads = (p: { caps?: string[] | undefined } | undefined): bool
 /** Whether a roster peer's board understands channels (#355). */
 export const hasChannels = (p: { caps?: string[] | undefined } | undefined): boolean => !!p?.caps?.includes('channels')
 
+/** Whether a roster peer's board understands replies to a message (#370). */
+export const hasReplies = (p: { caps?: string[] | undefined } | undefined): boolean => !!p?.caps?.includes('replies')
+
 /** A channel's member list as the wire takes it: 2 to MAX_MEMBERS peer ids, each once, sorted. */
 export function channelMembers(v: unknown): string[] | null {
   if (!Array.isArray(v) || v.length < 2 || v.length > MAX_MEMBERS || !v.every(isPeerId)) return null
@@ -266,10 +269,11 @@ export function checkMessage(
   if (v.to === '*') return no('broadcast')
   if (!isPeerId(v.to)) return no('bad_frame')
   if (body.text.length < 1 || body.text.length > MAX_TEXT) return no('bad_frame')
-  // A board reads the body as `text`, `via` when it is exactly "agent", `agent` (only with `via`)
-  // and `thread` (#216); any other key or value is not a body. The hub relays: it holds `text` to
-  // its limits and passes the rest on as signed, so a new body field needs no new hub (the boards
-  // that do not know it never get it: the sender asks the roster's caps first).
+  // A board reads the body as `text`, `via` when it is exactly "agent", `agent` (only with `via`),
+  // `thread` (#216), `replyTo` and `post` (#370); any other key or value is not a body. The hub
+  // relays: it holds `text` to its limits and passes the rest on as signed, so a new body field
+  // needs no new hub (the boards that do not know it never get it: the sender asks the roster's
+  // caps first).
   const extras = readBodyExtras(body)
   if (mode === 'board' && !extras.ok) return no('bad_frame')
   if (Object.keys(v).some(k => !MESSAGE_FIELDS.includes(k))) return no('bad_frame')
@@ -288,13 +292,14 @@ export function checkMessage(
   return { ok: true, msg }
 }
 
-const BODY_KEYS = ['text', 'via', 'agent', 'thread']
+const BODY_KEYS = ['text', 'via', 'agent', 'thread', 'replyTo', 'post']
 const THREAD_KEYS = ['id', 'title', 'link', 'group', 'members']
 
 /**
  * The body's fields besides `text`, as a board accepts them: `via` exactly "agent"; `agent` a
  * name, only with `via`; `thread` with an id (a UUID, or GENERAL with no title), a title for a
- * UUID, an optional http(s) link and `group: true` for a team thread. ok is false when anything is
+ * UUID, an optional http(s) link and `group: true` for a team thread; `replyTo` and `post` message
+ * ids (#370). ok is false when anything is
  * off or a key is unknown; `extras` then holds only the fields that were well formed (the hub's audit).
  */
 function readBodyExtras(body: Record<string, unknown>): {
@@ -314,6 +319,13 @@ function readBodyExtras(body: Record<string, unknown>): {
   if (Object.hasOwn(body, 'thread')) {
     const t = readThread(body.thread)
     if (t) extras.thread = t
+    else ok = false
+  }
+  // A reply (#370): the answered message's id, and a team copy's post id, each a message id.
+  for (const k of ['replyTo', 'post'] as const) {
+    if (!Object.hasOwn(body, k)) continue
+    const v = body[k]
+    if (isMessageId(v)) extras[k] = v
     else ok = false
   }
   return { ok, extras }

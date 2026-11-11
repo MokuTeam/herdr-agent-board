@@ -116,7 +116,12 @@ describe('channels in the list', () => {
     const section = findAll(nodes, el => hasClass(el, 'team-channels'))
     expect(text(section)).toContain('Channels')
     const rows = findAll(section, el => hasClass(el, 'team-row'))
-    expect(rows.map(r => text([r]))).toEqual(['Deals2 members', 'Theirs3 members'])
+    const words = (r: Node, name: string) => text(findAll([r], el => hasClass(el, name)))
+    expect(rows.map(r => [words(r, 'team-row-title'), words(r, 'team-row-meta')])).toEqual([
+      ['Deals', '2 members'],
+      ['Theirs', '3 members'],
+    ])
+    expect(findAll(section, el => hasClass(el, 'team-avatar') && hasClass(el, 'channel'))).toHaveLength(2)
     const chat = findAll(nodes, el => hasClass(el, 'team-chat'))
     expect(findAll(chat, el => hasClass(el, 'team-row')).map(r => r.attrs.get('data-thread'))).toEqual(['team/general'])
   })
@@ -140,7 +145,7 @@ describe('a new channel', () => {
     expect(start(on({ title: 'Deals', members: [] }))?.attrs.has('disabled')).toBe(true)
     expect(start(on({ title: '', members: [ANA] }))?.attrs.has('disabled')).toBe(true)
     expect(start(on({ title: 'Deals', members: [ANA] }))?.attrs.has('disabled')).toBe(false)
-    click(hostsOf(on({ title: 'Deals', members: [] })).find(h => h.props.children === 'Bob'))
+    click(hostsOf(on({ title: 'Deals', members: [] })).find(h => h.tag === 'button' && h.props.children === 'Bob'))
     expect(topics).toEqual([{ title: 'Deals', members: [BOB] }])
     // A plain new topic has no members to pick.
     const plain = render(on({ title: 'x' }))
@@ -207,8 +212,10 @@ describe('a new member’s welcome', () => {
     const p = props({ pending: [BOB], onWelcome: w => void done.push(w), onAgents: c => void changes.push(c) })
     const nodes = render(p)
     expect(text(findAll(nodes, el => hasClass(el, 'team-welcome')))).toContain('Bob joined the team')
-    // Bob's row carries the mark until it is done.
-    expect(findAll(nodes, el => hasClass(el, 'team-new'))).toHaveLength(1)
+    // Bob's row carries the mark until it is done, in the list and in People and agents.
+    const bob = findAll(nodes, el => el.attrs.get('data-thread') === `${BOB}/general`)
+    expect(findAll(bob, el => hasClass(el, 'team-new'))).toHaveLength(1)
+    expect(findAll(render({ ...p, people: true }), el => hasClass(el, 'team-new'))).toHaveLength(2)
     // Only channels this board started are offered.
     const offered = findAll(nodes, el => el.attrs.has('data-channel')).map(c => c.attrs.get('data-channel'))
     expect(offered).toEqual([`team/${DEALS}`])
@@ -239,7 +246,7 @@ describe('a new member’s welcome', () => {
 describe('switches for a channel, and the loop pause (#360)', () => {
   test('a channel’s row among the switches; each scope’s loop pause, empty for the board’s default', () => {
     const changes: unknown[] = []
-    const p = props({ onAgents: c => void changes.push(c) })
+    const p = props({ people: true, onAgents: c => void changes.push(c) })
     const nodes = render(p)
     const scopes = findAll(nodes, el => hasClass(el, 'team-agent')).map(a => a.attrs.get('data-scope'))
     expect(scopes).toEqual(['team', `team/${DEALS}`, `team/${THEIRS}`, ANA, BOB])

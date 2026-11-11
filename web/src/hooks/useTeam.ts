@@ -1,7 +1,7 @@
 // The Team panel's data: the view (GET /api/team), the threads (GET /api/team/threads, #216), the
 // thread on show (GET /api/team/threads/<scope>/<id>) and the owner's agent switches (GET
 // /api/team/agents, on this computer only: a remote page never asks). Its changes: a message or a
-// new topic (POST /api/team/send { to, text, thread? }), Trust (POST /api/team/trust { peer }), an
+// new topic (POST /api/team/send { to, text, thread?, replyTo? }), Trust (POST /api/team/trust { peer }), an
 // agent's drafts (POST /api/team/draft/<id>/send or /discard), a thread's mute (POST
 // /api/team/threads/<scope>/<id>/mute or /unmute) and the switches with the team chat's mute (POST
 // /api/team/agents). As Remote access (hooks/useAccess.ts), the payload carries only `teamRev`: all
@@ -72,7 +72,7 @@ export interface TeamSource {
    * Writes in the thread on show, or starts a topic in its scope: true when sent (kept at the hub's
    * door, delivery follows), and a new topic is then the thread on show; false: refused, and toasted.
    */
-  send(text: string, topic?: NewTopic): Promise<boolean>
+  send(text: string, topic?: NewTopic, replyTo?: string): Promise<boolean>
   trust(peer: string): Promise<void>
   /** Sends an agent's draft (it goes marked as an agent request); false: refused, and toasted. */
   sendDraft(id: string): Promise<boolean>
@@ -199,7 +199,7 @@ export function teamSource(deps: TeamDeps): TeamSource {
       now.set({ ...now.get(), selected: key, thread: null, lines: [] })
       if (open) void load()
     },
-    async send(text, topic) {
+    async send(text, topic, replyTo) {
       const parts = keyParts(now.get().selected ?? '')
       if (!parts) return false
       const thread = topic
@@ -213,7 +213,14 @@ export function teamSource(deps: TeamDeps): TeamSource {
           : { id: parts.id }
       let key: unknown
       try {
-        key = (await ownerPost('/api/team/send', { to: parts.scope, text, ...(thread && { thread }) })).thread
+        key = (
+          await ownerPost('/api/team/send', {
+            to: parts.scope,
+            text,
+            ...(thread && { thread }),
+            ...(replyTo && { replyTo }),
+          })
+        ).thread
       } catch (err) {
         deps.toast(sendError(err instanceof ApiError ? err.reply.error : undefined, deps.t()), true)
         return false
