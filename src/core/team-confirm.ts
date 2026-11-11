@@ -12,8 +12,9 @@
 //
 // All of it is the owner's choice (#367), off by default: a Mac without Touch ID, or without
 // iCloud Keychain allowed for its browser, has no passkey to offer for `localhost`, and a phone
-// cannot sign for it. Off, the gated actions go at once, as before. Turning it on needs a passkey
-// there; turning it off is confirmed with one, as widening is, so an agent cannot.
+// cannot sign for it. Off, the gated actions go at once, as before. Turning it on or off is
+// confirmed with a passkey there: off so that an agent cannot, on so that the passkey is shown to
+// sign on this computer before anything waits for it.
 
 /** A pending action waits this long for its confirmation, and a challenge for its one use. */
 export const CONFIRM_MS = 2 * 60_000
@@ -46,7 +47,8 @@ export type OwnerAction =
   | { kind: 'members'; key: string; add: string[] }
   | { kind: 'passkey-add' }
   | { kind: 'passkey-remove'; id: string }
-  /** The switch "Confirm with a passkey" off (#367). */
+  /** The switch "Confirm with a passkey" on or off (#367). */
+  | { kind: 'passkey-on' }
   | { kind: 'passkey-off' }
 
 /** Asks the computer's own authenticator first (Touch ID, Windows Hello) over a phone by QR (#367). */

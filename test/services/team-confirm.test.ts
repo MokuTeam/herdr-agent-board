@@ -239,21 +239,25 @@ test('what widens: on, a listener, a lane added; off, clearing, fewer lanes and 
 
 const fileOf = (): Record<string, unknown> => JSON.parse(readFileSync(teamPasskeysFile(), 'utf8'))
 
-test('#367 off by default; it turns on only with a passkey there; the first passkey added leaves it off', async () => {
+test('#367 off by default; on only once a passkey there confirms it; the first passkey added leaves it off', async () => {
   const w = world()
   const c = w.make()
   expect(c.required()).toBe(false)
-  expect(c.turnOn()).toBe(false)
-  // A refusal writes nothing.
+  // No passkey to confirm with: the window has nothing to sign, and nothing is written.
+  expect(c.view(c.pend({ kind: 'passkey-on' }))).toBe('passkey')
   expect(existsSync(teamPasskeysFile())).toBe(false)
-  addFirst(c, await softAuthenticator(-7))
+  const key = await softAuthenticator(-7)
+  addFirst(c, key)
   expect(c.required()).toBe(false)
   expect(fileOf().required).toBe(false)
-  expect(c.turnOn()).toBe(true)
+  // Asked, not yet confirmed: still off. A passkey that cannot sign here leaves it so.
+  const on = c.pend({ kind: 'passkey-on' })
+  expect(read(c, on).step).toBe('get')
+  expect(c.required()).toBe(false)
+  expect(confirmWith(c, on, key)).toEqual({ ok: true, done: true, action: { kind: 'passkey-on' } })
   expect(c.required()).toBe(true)
   // Kept on disk: a restart keeps it on.
   expect(w.make().required()).toBe(true)
-  expect(c.turnOn()).toBe(true)
   const ops = readFileSync(teamAuditFile(), 'utf8')
     .trim()
     .split('\n')
@@ -282,22 +286,22 @@ test('#367 the upgrade: a file with a passkey and no switch keeps it on; one wit
   expect(w.make().required()).toBe(false)
 })
 
-test('#367 off is confirmed with a passkey; removing the last one turns it off; a hand-set switch with none is off', async () => {
+test('#367 on and off are confirmed with a passkey; removing the last one turns it off; a hand-set switch with none is off', async () => {
   const w = world()
   const c = w.make()
   const key = await softAuthenticator(-7)
   addFirst(c, key)
-  c.turnOn()
+  expect(confirmWith(c, c.pend({ kind: 'passkey-on' }), key, { counter: 1 }).ok).toBe(true)
   const off = c.pend({ kind: 'passkey-off' })
   expect(read(c, off).step).toBe('get')
   expect(c.required()).toBe(true)
-  expect(confirmWith(c, off, key)).toEqual({ ok: true, done: true, action: { kind: 'passkey-off' } })
+  expect(confirmWith(c, off, key, { counter: 2 })).toEqual({ ok: true, done: true, action: { kind: 'passkey-off' } })
   expect(c.required()).toBe(false)
   expect(fileOf().required).toBe(false)
 
-  c.turnOn()
+  expect(confirmWith(c, c.pend({ kind: 'passkey-on' }), key, { counter: 3 }).ok).toBe(true)
   const gone = c.pend({ kind: 'passkey-remove', id: key.id })
-  expect(confirmWith(c, gone, key, { counter: 2 }).ok).toBe(true)
+  expect(confirmWith(c, gone, key, { counter: 4 }).ok).toBe(true)
   expect(c.hasPasskey()).toBe(false)
   expect(c.required()).toBe(false)
   expect(fileOf().required).toBe(false)
@@ -305,7 +309,6 @@ test('#367 off is confirmed with a passkey; removing the last one turns it off; 
   // A file that says on with no passkey (edited by hand) locks nobody out.
   writeFileSync(teamPasskeysFile(), JSON.stringify({ v: 1, userId: null, passkeys: [], required: true }))
   expect(c.required()).toBe(false)
-  expect(c.turnOn()).toBe(false)
 })
 
 test('#367 the WebAuthn options ask for the computer’s own authenticator first, on create and on get', async () => {

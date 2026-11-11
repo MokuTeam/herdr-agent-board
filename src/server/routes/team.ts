@@ -27,8 +27,8 @@
 // window answers (POST /api/team/confirm/<id>, from that origin only). A confirmed send unlocks
 // sending in the page that asked for 30 minutes: it sends the token back in X-Board-Unlock. GET and
 // POST /api/team/passkeys list, add and remove the passkeys (adding a later one and removing any
-// confirm with one there is), and turn the switch on (only with a passkey there) and off (confirmed
-// with one).
+// confirm with one there is), and turn the switch on and off (each confirmed with one, so on needs
+// a passkey there first).
 //
 // Channels and welcomes (#355): POST /api/team/send's new thread may carry `members` (the panel's
 // send only, never an agent's post), a channel takes more with POST
@@ -653,9 +653,9 @@ function welcomeFrom(
 /**
  * The passkeys and the confirmation window's routes (#224): GET /api/team/passkeys lists them and
  * says whether the switch is on (`required`, #367); POST /api/team/passkeys { op: 'add' } or
- * { op: 'remove', id } is confirmed in the window like any gated action, { op: 'on' } turns the
- * switch on at once (403 { error: 'passkey' } with none to confirm with) and { op: 'off' } off once
- * the window confirms it. GET /api/team/confirm/<id> is what the window shows and the WebAuthn options;
+ * { op: 'remove', id } is confirmed in the window like any gated action, and so are { op: 'on' }
+ * (403 { error: 'passkey' } with none to confirm with) and { op: 'off' }; either answers 200 at once
+ * when the switch already stands that way. GET /api/team/confirm/<id> is what the window shows and the WebAuthn options;
  * POST /api/team/confirm/<id> is its answer, taken only from the window's origin
  * (http://localhost:<port>): a page on 127.0.0.1 is told the localhost address instead.
  */
@@ -686,12 +686,13 @@ function confirmRoutes(
         const body = isRecord(raw) ? raw : {}
         let action: OwnerAction
         if (body.op === 'add') action = { kind: 'passkey-add' }
-        else if (body.op === 'on')
-          return confirm.turnOn() ? json(200, { ok: true }) : json(403, { ok: false, error: 'passkey' })
-        else if (body.op === 'off') {
-          // Already off: nothing to confirm. On: an agent could not switch it off, so the owner confirms.
-          if (!confirm.required()) return json(200, { ok: true })
-          action = { kind: 'passkey-off' }
+        else if (body.op === 'on' || body.op === 'off') {
+          const on = body.op === 'on'
+          if (confirm.required() === on) return json(200, { ok: true })
+          if (on && !confirm.hasPasskey()) return json(403, { ok: false, error: 'passkey' })
+          // Off: an agent could not switch it off. On: the passkey shows it signs on this computer
+          // before anything waits for it.
+          action = { kind: on ? 'passkey-on' : 'passkey-off' }
         } else if (body.op === 'remove' && typeof body.id === 'string') {
           if (!confirm.passkeys().some(p => p.id === body.id)) return json(404, { ok: false, error: 'passkey' })
           action = { kind: 'passkey-remove', id: body.id }

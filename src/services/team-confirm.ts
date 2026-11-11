@@ -14,7 +14,8 @@
 //
 // The switch (#367): required() says whether the gated actions wait at all. It is on only while a
 // passkey is there, so a board cannot lock its owner out; removing the last passkey turns it off.
-// Turning it on is free (it narrows); turning it off is a pending action, confirmed like the rest.
+// Turning it on and turning it off are pending actions, confirmed like the rest: off so that an
+// agent cannot, on so that a passkey that cannot sign here (a key left elsewhere) locks nobody out.
 import { createHash, randomBytes } from 'node:crypto'
 import { audit, changeOwnerKeys, type OwnerPasskey, readOwnerKeys } from '../adapters/team-store.ts'
 import { deviceLabel } from '../core/access.ts'
@@ -82,8 +83,6 @@ export interface TeamConfirm {
   hasPasskey(): boolean
   /** Whether the gated actions wait for a confirmation (#367): the switch on, and a passkey there. */
   required(): boolean
-  /** Turns the switch on; false while there is no passkey to confirm with. */
-  turnOn(): boolean
   passkeys(): PublicPasskey[]
   /** Keeps a gated action for its confirmation; its id. */
   pend(action: OwnerAction): string
@@ -208,20 +207,6 @@ export function createTeamConfirm({
       return k.required && k.passkeys.length > 0
     },
 
-    turnOn() {
-      // No passkey: refused before anything is written (a refusal makes no file).
-      if (!readOwnerKeys().passkeys.length) return false
-      const was = changeOwnerKeys(k => {
-        if (!k.passkeys.length) return null
-        const before = k.required
-        k.required = true
-        return before
-      })
-      if (was === null) return false
-      if (!was) audit('passkey', null, { op: 'on' })
-      return true
-    },
-
     passkeys: () =>
       readOwnerKeys().passkeys.map(p => ({ id: p.id, label: p.label, addedAt: p.addedAt, usedAt: p.usedAt })),
 
@@ -283,11 +268,13 @@ export function createTeamConfirm({
         })
         audit('passkey', null, { op: 'remove', count: readOwnerKeys().passkeys.length })
       }
-      if (p.action.kind === 'passkey-off') {
+      if (p.action.kind === 'passkey-on' || p.action.kind === 'passkey-off') {
+        const on = p.action.kind === 'passkey-on'
         changeOwnerKeys(k => {
-          k.required = false
+          // A passkey just signed, so one is there; under the lock, a removal in between wins.
+          k.required = on && k.passkeys.length > 0
         })
-        audit('passkey', null, { op: 'off' })
+        audit('passkey', null, { op: on ? 'on' : 'off' })
       }
       if (!unlocks(p.action)) return { ok: true, done: true, action: p.action }
       const token = random(TOKEN_BYTES)

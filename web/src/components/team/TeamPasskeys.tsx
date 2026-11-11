@@ -1,6 +1,6 @@
 // The owner's passkeys for this board (#224), in the Team panel. The switch "Confirm with a passkey"
 // (#367, off by default): on, Send, trust and turning agents on wait for one (src/core/team-confirm.ts);
-// it turns on only once a passkey is there, and off with a confirmation by one. The list (GET
+// it turns on only once a passkey is there, and on and off each with a confirmation by one. The list (GET
 // /api/team/passkeys), Add and Remove; both are confirmed in the window on localhost
 // (models/team-confirm.ts), Add of the first one on trust, every other with a passkey there is.
 import { useEffect, useState } from 'react'

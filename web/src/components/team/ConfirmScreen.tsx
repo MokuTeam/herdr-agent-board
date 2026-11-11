@@ -106,6 +106,8 @@ export function confirmLines(a: Reply, t: Translator): ConfirmLines {
       return { title: t('team.confirm.add') }
     case 'passkey-remove':
       return { title: t('team.confirm.remove', { label: typeof a.label === 'string' ? a.label : '' }) }
+    case 'passkey-on':
+      return { title: t('team.confirm.on'), note: t('team.confirm.onNote') }
     case 'passkey-off':
       return { title: t('team.confirm.off'), note: t('team.confirm.offNote') }
     default:

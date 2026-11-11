@@ -2363,8 +2363,9 @@ for a passkey of yours: Send in the Team panel, sending an agent's held draft, t
 key, Agents on for a person (or all of them back on), a lane shared, a listener set, and any change
 of a loop pause (`board team loop` and `board team listen` included, which then print the address
 to confirm at). Turning things off, removing lanes, muting and discarding never wait. Off, all of
-it goes at once. The switch turns on only once you have added a passkey, and turning it off is
-confirmed with one, so an agent cannot switch it off; removing your last passkey turns it off. A
+it goes at once. The switch turns on only once you have added a passkey, and turning it on or
+off is confirmed with one: on, so a passkey that cannot sign on this computer locks nobody out;
+off, so an agent cannot switch it off. Removing your last passkey turns it off. A
 board that had a passkey before the switch came keeps it on; one without keeps it off.
 
 The passkey has to be on the computer the board runs on: Touch ID, or iCloud Keychain allowed for

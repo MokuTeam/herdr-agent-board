@@ -158,6 +158,8 @@ export const TEAM_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'team.confirm.done': 'Done. This window closes by itself.',
     'team.confirm.devices':
       'A passkey on this computer works: Touch ID or iCloud Keychain on a Mac, Windows Hello on Windows, or a security key. A phone cannot sign for localhost.',
+    'team.confirm.on': 'Confirm with a passkey from now on',
+    'team.confirm.onNote': 'Sending, trusting a new key and turning agents on then wait for this window.',
     'team.confirm.off': 'Stop confirming with a passkey',
     'team.confirm.offNote': 'Sending, trusting a new key and turning agents on then go without this window.',
     'team.passkeys': 'Passkeys',
@@ -328,6 +330,8 @@ export const TEAM_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'team.confirm.done': 'Готово. Окно закроется само.',
     'team.confirm.devices':
       'Подойдёт passkey этого компьютера: Touch ID или iCloud Keychain на Mac, Windows Hello в Windows или ключ безопасности. Телефон не может подписать для localhost.',
+    'team.confirm.on': 'Подтверждать passkey с этого момента',
+    'team.confirm.onNote': 'После этого отправка, доверие новому ключу и включение агентов ждут этого окна.',
     'team.confirm.off': 'Больше не подтверждать passkey',
     'team.confirm.offNote': 'После этого отправка, доверие новому ключу и включение агентов идут без этого окна.',
     'team.passkeys': 'Passkeys',

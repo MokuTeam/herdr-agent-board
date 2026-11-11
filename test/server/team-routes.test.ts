@@ -280,9 +280,12 @@ describe('team on, against a hub in this process', () => {
     expect(await answer(fetch(`${url}/api/team/passkeys`))).toEqual([200, { passkeys: one, required: false }])
     // Done once: the window's id is gone.
     expect(await answer(fetch(`${url}/api/team/confirm/${id}`))).toEqual([404, { ok: false, error: 'gone' }])
-    // On from here, so the rest of this file meets #224's gates.
-    expect(await answer(post(url, '/api/team/passkeys', { op: 'on' }))).toEqual([200, { ok: true }])
-    expect(await answer(fetch(`${url}/api/team/passkeys`))).toEqual([200, { passkeys: one, required: true }])
+    // On from here (confirmed with the passkey), so the rest of this file meets #224's gates.
+    expect(await owner('/api/team/passkeys', { op: 'on' })).toEqual([200, { ok: true, done: true }])
+    expect(await answer(fetch(`${url}/api/team/passkeys`))).toEqual([
+      200,
+      { passkeys: [{ ...one[0], usedAt: expect.any(Number) }], required: true },
+    ])
   })
 
   test('a question sent reaches the peer and comes back acked; one from the peer lands in the thread', async () => {
@@ -642,8 +645,13 @@ describe('#367 the switch "Confirm with a passkey", off by default', () => {
     expect(((await (await fetch(`${url}/api/team/passkeys`)).json()) as Reply).required).toBe(false)
     await sentAtOnce(post(url, '/api/team/send', { to: anna.pub, text: 'still no window' }))
 
-    expect(await answer(post(url, '/api/team/passkeys', { op: 'on' }))).toEqual(ok)
+    // On is asked in the window too: the passkey shows it signs here before anything waits for it.
+    const [asked, on] = (await answer(post(url, '/api/team/passkeys', { op: 'on' }))) as [number, Reply]
+    expect(asked).toBe(428)
+    expect(((await (await fetch(`${url}/api/team/passkeys`)).json()) as Reply).required).toBe(false)
+    expect(await windowAnswers(on.id as string)).toEqual([200, { ok: true, done: true }])
     expect(((await (await fetch(`${url}/api/team/passkeys`)).json()) as Reply).required).toBe(true)
+    expect(await answer(post(url, '/api/team/passkeys', { op: 'on' }))).toEqual(ok)
     expect((await post(url, '/api/team/send', { to: anna.pub, text: 'waits' })).status).toBe(428)
     expect((await post(url, '/api/team/agents', { peer: anna.pub, on: true })).status).toBe(428)
     // Narrowing stays free.
