@@ -2340,8 +2340,8 @@ as above: an agent's post is a draft, and what comes in reaches no session. On f
   person's name for your `general` with them, `team` for the team's). The board marks it as an
   agent's and names the session (`via: "agent"`, `agent: <session>` in the signed body), whatever the
   request says: the receiving board shows "from Ana's agent board-216". `board team thread` prints
-  each message with a ref after its time (`[2026-11-11 14:05 #9f8e7d6c]`) and says which message a
-  reply answers; `board team reply <thread> --to <#message> "<text>"` answers that one in particular
+  each message with a ref after its time (`[2026-11-11 14:05 msg 9f8e7d6c]`) and says which message a
+  reply answers; `board team reply <thread> --to <message> "<text>"` answers that one in particular
   (#373), as Reply does in the panel. Held as a draft, it still answers it when you press Send.
 - One session is the **listener** (`board team listen`, run from your monitor, master or day
   session while no other is, and confirmed with your passkey if you turned that on; `board team listen off` from the

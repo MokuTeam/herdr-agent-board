@@ -264,7 +264,7 @@ export function refusedWhy(error: string): string {
     case 'off':
       return 'the team is off'
     case 'reply':
-      return 'that message is not one to answer in that thread: board team thread prints each as #<ref>'
+      return "that message is not one to answer in that thread: board team thread prints each one's ref"
     default:
       return error
   }

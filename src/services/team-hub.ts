@@ -1103,13 +1103,12 @@ export function createTeam({
       // Taken out first, so a second press finds nothing; put back when the send is refused.
       const d = takeDraft(id)
       if (!d) return { ok: false, error: 'draft' }
-      // A reply an agent wrote (#373) still answers its message when the owner sends it.
-      const target = { to: d.to, ...(d.thread && { thread: d.thread }), ...(d.replyTo && { replyTo: d.replyTo }) }
-      const r = await post(target, d.text, {
-        by: 'agent',
-        ...(d.session && { session: d.session }),
-        pressed: true,
-      })
+      // A reply an agent wrote (#373) still answers its message when the owner sends it; when that
+      // message is gone from this board by then, it goes as a plain message rather than never.
+      const target = { to: d.to, ...(d.thread && { thread: d.thread }) }
+      const source = { by: 'agent' as const, ...(d.session && { session: d.session }), pressed: true }
+      let r = await post({ ...target, ...(d.replyTo && { replyTo: d.replyTo }) }, d.text, source)
+      if (!r.ok && r.error === 'reply' && d.replyTo) r = await post(target, d.text, source)
       if (!r.ok) addDraft(d, Number.MAX_SAFE_INTEGER)
       else {
         audit('draft_sent', d.to === TEAM ? null : d.to, { id })

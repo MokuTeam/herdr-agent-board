@@ -4,7 +4,7 @@
 // prints what a peer wrote as quoted data under a header that says whose it is and what it is not
 // (instructions from the owner); with --json the same as data under a note that says so, and with
 // --read it also marks the thread read for the owner (#355: reading alone marks nothing). Each
-// message there has a ref (#373), `#1a2b3c4d`, and says which message it answers; `reply --to`
+// message there has a ref (#373), `msg 1a2b3c4d`, and says which message it answers; `reply --to`
 // takes a ref to answer that one. Loaded only by `board team`, so no other board command pays for it.
 import { isRecord } from '../adapters/json-store.ts'
 import { isMessageId, printable } from '../core/team.ts'
@@ -19,7 +19,7 @@ import {
 } from '../core/team-agents.ts'
 
 export const AGENT_USAGE =
-  'board team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | board team reply <thread> [--to <#message>] "<text>" | board team thread <thread> [--json] [--read] | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default]'
+  'board team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | board team reply <thread> [--to <message>] "<text>" | board team thread <thread> [--json] [--read] | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default]'
 
 export interface SessionWord {
   key: string
@@ -80,26 +80,32 @@ async function threadKeyOf(ctx: Ctx, word: string): Promise<string> {
   return r.key
 }
 
-/** How `board team thread` names a message (#373): `#` and the first 8 characters of its id. */
-export const messageRef = (id: string): string => `#${id.slice(0, 8)}`
+/**
+ * How `board team thread` names a message (#373): the first 8 characters of its id. No `#` in front:
+ * a shell takes what follows one for a comment, and `--to #1a2b3c4d` would reach the board empty.
+ */
+export const messageRef = (id: string): string => id.slice(0, 8)
 
 /**
- * A message of a thread by its ref (#373): `#1a2b3c4d` as `board team thread` prints it, or more of
- * its id, `#` or not. Only a message either way that may be answered: not a draft, not one held back.
+ * A message of a thread by its ref (#373): `1a2b3c4d` as `board team thread` prints it, or more of
+ * its id, `#` in front or not. Only a message either way that may be answered: not a draft, not one held back.
  */
 async function messageOf(ctx: Ctx, key: string, ref: string): Promise<string> {
   const word = ref.replace(/^#/, '').toLowerCase()
   if (!/^[0-9a-f-]{6,36}$/.test(word))
-    throw new Error('a message is named by its ref as board team thread prints it, such as #1a2b3c4d')
+    throw new Error('a message is named by its ref as board team thread prints it, such as 1a2b3c4d')
   const { status, reply } = await call(ctx.webPort, `/api/team/threads/${key}`)
   const lines = isRecord(reply) && Array.isArray(reply.lines) ? reply.lines.filter(isRecord) : []
   if (status !== 200 || !isRecord(reply) || !isRecord(reply.thread)) throw new Error('no such thread on this board')
   const hits = lines.filter(
     l => (l.dir === 'in' || l.dir === 'out') && typeof l.id === 'string' && l.id.toLowerCase().startsWith(word),
   )
-  if (hits.length > 1) throw new Error(`#${word} names more than one message there: give more of its id`)
+  if (hits.length > 1)
+    throw new Error(
+      `${word} names more than one message there: give more of its id (board team thread --json has them whole)`,
+    )
   const hit = hits[0]
-  if (!hit) throw new Error(`no message #${word} in that thread: board team thread prints each one's ref`)
+  if (!hit) throw new Error(`no message ${word} in that thread: board team thread prints each one's ref`)
   if (hit.held === true) throw new Error('that message is held back until the owner trusts the new key')
   return String(hit.id)
 }
@@ -230,6 +236,11 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
       : `ok · ${whoOf(ctx, to)}: agents pause after ${loop} messages in a row`
   }
   if (op === 'reply') {
+    // A ref after --to that a shell took for a comment (`#...`) arrives as nothing.
+    if (rest.at(-1) === '--to')
+      throw new Error(
+        "--to takes the message's ref as board team thread prints it, such as 1a2b3c4d, without a # in front",
+      )
     const to = flag(rest, '--to')
     if (rest.length !== 2) throw new Error(`usage: ${AGENT_USAGE}`)
     const key = await threadKeyOf(ctx, rest[0] ?? '')
@@ -380,18 +391,26 @@ export function framedThread(
   // A message's ref (#373), what `board team reply --to` takes: only for a message either way, as
   // the board names it; never anything from the message itself.
   const refOf = (l: Record<string, unknown>): string =>
-    (l.dir === 'in' || l.dir === 'out') && typeof l.id === 'string' && isMessageId(l.id) ? ` ${messageRef(l.id)}` : ''
-  const byId = new Map(lines.filter(l => typeof l.id === 'string').map(l => [String(l.id), l]))
+    (l.dir === 'in' || l.dir === 'out') && typeof l.id === 'string' && isMessageId(l.id)
+      ? ` msg ${messageRef(l.id)}`
+      : ''
+  // An id two messages carry (a sender chose it) names neither: the board cannot tell which is meant.
+  const seen = new Map<string, number>()
+  for (const l of lines) if (typeof l.id === 'string') seen.set(l.id, (seen.get(l.id) ?? 0) + 1)
+  const byId = new Map(lines.filter(l => typeof l.id === 'string' && seen.get(l.id) === 1).map(l => [String(l.id), l]))
   /** What a message answers, in the board's words: whose message and its ref, never its text. */
   const answers = (l: Record<string, unknown>): string | null => {
     if (typeof l.replyTo !== 'string') return null
     const o = byId.get(l.replyTo)
+    if ((seen.get(l.replyTo) ?? 0) > 1) return '  (answers a message this board cannot tell apart from another)'
     if (!o || !refOf(o)) return '  (answers a message this board does not have)'
     const whose = o.dir === 'in' ? `${printable(String(o.who ?? 'them'))}'s message` : "this board's message"
-    return `  (answers ${whose}${refOf(o)})`
+    return `  (answers ${whose} ${messageRef(String(o.id))})`
   }
   for (const l of lines) {
-    const when = typeof l.ts === 'string' ? l.ts.slice(0, 16).replace('T', ' ') : ''
+    // The time as the board reads it, never the sender's text: a date string may carry more than a date.
+    const at = typeof l.ts === 'string' ? new Date(l.ts) : null
+    const when = at && !Number.isNaN(at.getTime()) ? at.toISOString().slice(0, 16).replace('T', ' ') : ''
     const stamp = `[${when}${refOf(l)}]`
     const agent = typeof l.agent === 'string' ? ` (${printable(l.agent)})` : ''
     const mark = l.via === 'agent' ? `'s agent${agent}` : ''

@@ -253,6 +253,15 @@ describe('an agent’s reply to one message (#373)', () => {
     expect(sent(w.ws)[0]?.body).toMatchObject({ text: 'main', via: 'agent', replyTo: q })
   })
 
+  test('a draft whose message is gone from this board by the time the owner presses Send goes as a plain message', async () => {
+    const w = await world()
+    const d = w.s.svc.draft(w.A.pub, 'main', { replyTo: '00000000-0000-4000-8000-00000000dead' })
+    if (!d.ok) throw new Error('no draft')
+    expect((await w.s.svc.sendDraft(d.id)).ok).toBe(true)
+    expect(sent(w.ws)[0]?.body).toEqual({ text: 'main', via: 'agent' })
+    expect(readDrafts()).toEqual([])
+  })
+
   test('a reply to what is not a message of that thread, a held one or a draft is refused: nothing sent, no draft', async () => {
     const w = await world()
     const r = router(w)
