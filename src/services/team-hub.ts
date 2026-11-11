@@ -68,8 +68,8 @@ import {
   GENERAL,
   type HubFiles,
   hasChannels,
-  hasReplies,
   hasFiles,
+  hasReplies,
   hasThreads,
   isMessageId,
   isPeerId,
@@ -290,13 +290,7 @@ export interface TeamService {
    * The panel's message to a peer in the roster whose key is trusted ('changed' otherwise), or to
    * the team, in general or a thread (#216); kept and sent (again on every reconnect until the hub settles it).
    */
-  send(
-    to: string,
-    text: string,
-    thread?: PostTarget['thread'],
-    replyTo?: string,
-    file?: PostFile,
-  ): Promise<SendResult>
+  send(to: string, text: string, thread?: PostTarget['thread'], replyTo?: string, file?: PostFile): Promise<SendResult>
   /** A post from the panel or a session (#216), with its source set by the route that took it; a file with it (#371). */
   post(target: PostTarget, text: string, source: PostSource, file?: PostFile): Promise<PostResult>
   /**
