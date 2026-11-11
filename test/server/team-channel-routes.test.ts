@@ -90,12 +90,12 @@ test('a channel for some members, its switches, a member added, and a newcomer w
   await rosterHas(2)
   // The board begins keeping welcomes now: who is here already is not offered one.
   expect(await get('/api/team/welcome')).toEqual({ pending: [] })
-  // No passkey yet: what widens is refused; then the owner adds one.
-  expect(await post('/api/team/send', { to: 'team', text: 'x', thread: { title: 'T', members: [ana.pub] } })).toEqual([
-    403,
-    { ok: false, error: 'passkey' },
-  ])
+  // No passkey yet: the switch "Confirm with a passkey" (#367) cannot go on; the owner adds one and
+  // turns it on, so what widens waits for the passkey from here.
+  expect(await post('/api/team/passkeys', { op: 'on' })).toEqual([403, { ok: false, error: 'passkey' }])
   expect((await owner('/api/team/passkeys', { op: 'add' }))[0]).toBe(200)
+  expect((await owner('/api/team/passkeys', { op: 'on' }))[0]).toBe(200)
+  expect(await get('/api/team/passkeys')).toMatchObject({ required: true })
 
   // A channel with Ana only: Ben gets nothing.
   const [status, sent] = await owner('/api/team/send', {

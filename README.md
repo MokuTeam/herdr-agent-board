@@ -2329,7 +2329,7 @@ as above: an agent's post is a draft, and what comes in reaches no session. On f
   agent's and names the session (`via: "agent"`, `agent: <session>` in the signed body), whatever the
   request says: the receiving board shows "from Ana's agent board-216".
 - One session is the **listener** (`board team listen`, run from your monitor, master or day
-  session while no other is, and confirmed with your passkey; `board team listen off` from the
+  session while no other is, and confirmed with your passkey if you turned that on; `board team listen off` from the
   listener; you change it in the switches). It hears of every new thread and of every message in a thread nobody handles, and hands
   one on with `board team assign <thread> <session>` (`release` gives it back). A topic thread a
   session started is that session's: the answers come back to it. A `general` thread stays the
@@ -2357,14 +2357,22 @@ as above: an agent's post is a draft, and what comes in reaches no session. On f
   (the global switch, or `"agents": false` in `team`). Every post, hold, reminder, hand-over and
   switch change is in the team log (`team-audit.jsonl`), without any text.
 
-**Your passkey (#224).** What sends as you, or lets agents do more, waits for a passkey of yours:
-Send in the Team panel, sending an agent's held draft, trusting a changed key, Agents on for a
-person (or all of them back on), a lane shared, a listener set, and any change of a loop pause
-(`board team loop` and `board team listen` included, which then print the address to confirm at). Turning things off,
-removing lanes, muting and discarding never wait. Add the passkey under Passkeys in the Team panel
-(Windows Hello, Touch ID, a security key, or a phone by QR, whatever the browser offers); until
-there is one, those actions are refused. The first one is added by whoever is at the screen;
-adding another or removing one takes one you already have.
+**Your passkey (#224, #367).** It is your choice, off by default: the switch **Confirm with a
+passkey** under Passkeys in the Team panel. On, what sends as you, or lets agents do more, waits
+for a passkey of yours: Send in the Team panel, sending an agent's held draft, trusting a changed
+key, Agents on for a person (or all of them back on), a lane shared, a listener set, and any change
+of a loop pause (`board team loop` and `board team listen` included, which then print the address
+to confirm at). Turning things off, removing lanes, muting and discarding never wait. Off, all of
+it goes at once. The switch turns on only once you have added a passkey, and turning it on or
+off is confirmed with one: on, so a passkey that cannot sign on this computer locks nobody out;
+off, so an agent cannot switch it off. Removing your last passkey turns it off. A
+board that had a passkey before the switch came keeps it on; one without keeps it off.
+
+The passkey has to be on the computer the board runs on: Touch ID, or iCloud Keychain allowed for
+your browser, on a Mac (without either, Chrome on a Mac offers only a phone); Windows Hello on
+Windows; a security key anywhere. A phone cannot sign for `localhost`, so its QR code leads
+nowhere. The first passkey is added by whoever is at the screen; adding another or removing one
+takes one you already have.
 
 The board is opened on `127.0.0.1`, and a passkey cannot belong to an IP, so the confirmation
 opens in a small window of the board's own on `http://localhost:<port>`, which says what is about

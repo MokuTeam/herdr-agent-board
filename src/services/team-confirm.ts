@@ -11,6 +11,11 @@
 // removal, waits for an assertion by one already there. The checks are the tunnel's
 // (core/webauthn.ts), with RP ID `localhost`, so a passkey of the tunnel's domain fails here and
 // one of here fails there.
+//
+// The switch (#367): required() says whether the gated actions wait at all. It is on only while a
+// passkey is there, so a board cannot lock its owner out; removing the last passkey turns it off.
+// Turning it on and turning it off are pending actions, confirmed like the rest: off so that an
+// agent cannot, on so that a passkey that cannot sign here (a key left elsewhere) locks nobody out.
 import { createHash, randomBytes } from 'node:crypto'
 import { audit, changeOwnerKeys, type OwnerPasskey, readOwnerKeys } from '../adapters/team-store.ts'
 import { deviceLabel } from '../core/access.ts'
@@ -18,6 +23,7 @@ import {
   CONFIRM_MS,
   confirmOrigin,
   confirmUrl,
+  HINTS,
   MAX_PENDING,
   type OwnerAction,
   RP_ID,
@@ -73,8 +79,10 @@ export interface PublicPasskey {
 }
 
 export interface TeamConfirm {
-  /** Whether the owner has added a passkey: until then the gated actions are refused. */
+  /** Whether the owner has added a passkey. */
   hasPasskey(): boolean
+  /** Whether the gated actions wait for a confirmation (#367): the switch on, and a passkey there. */
+  required(): boolean
   passkeys(): PublicPasskey[]
   /** Keeps a gated action for its confirmation; its id. */
   pend(action: OwnerAction): string
@@ -134,6 +142,7 @@ export function createTeamConfirm({
       ],
       authenticatorSelection: { residentKey: 'preferred', userVerification: 'required' },
       attestation: 'none',
+      hints: HINTS,
       excludeCredentials: have.map(p => ({ type: 'public-key', id: p.id })),
       timeout: CONFIRM_MS,
     }
@@ -145,6 +154,7 @@ export function createTeamConfirm({
       rpId: RP_ID,
       allowCredentials: have.map(p => ({ type: 'public-key', id: p.id, transports: p.transports })),
       userVerification: 'required',
+      hints: HINTS,
       timeout: CONFIRM_MS,
     }
   }
@@ -191,6 +201,11 @@ export function createTeamConfirm({
 
   return {
     hasPasskey: () => readOwnerKeys().passkeys.length > 0,
+
+    required() {
+      const k = readOwnerKeys()
+      return k.required && k.passkeys.length > 0
+    },
 
     passkeys: () =>
       readOwnerKeys().passkeys.map(p => ({ id: p.id, label: p.label, addedAt: p.addedAt, usedAt: p.usedAt })),
@@ -248,8 +263,18 @@ export function createTeamConfirm({
         const gone = p.action.id
         changeOwnerKeys(k => {
           k.passkeys = k.passkeys.filter(x => x.id !== gone)
+          // Without a passkey nothing could confirm, nor turn the switch off: it goes off with the last.
+          if (!k.passkeys.length) k.required = false
         })
         audit('passkey', null, { op: 'remove', count: readOwnerKeys().passkeys.length })
+      }
+      if (p.action.kind === 'passkey-on' || p.action.kind === 'passkey-off') {
+        const on = p.action.kind === 'passkey-on'
+        changeOwnerKeys(k => {
+          // A passkey just signed, so one is there; under the lock, a removal in between wins.
+          k.required = on && k.passkeys.length > 0
+        })
+        audit('passkey', null, { op: on ? 'on' : 'off' })
       }
       if (!unlocks(p.action)) return { ok: true, done: true, action: p.action }
       const token = random(TOKEN_BYTES)

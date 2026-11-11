@@ -424,6 +424,12 @@ export interface OwnerKeys {
   /** The WebAuthn user id (base64url), made with the first passkey. */
   userId: string | null
   passkeys: OwnerPasskey[]
+  /**
+   * The owner's switch "Confirm with a passkey" (#367): off, the gated actions go at once, as
+   * before #224. A file from before the switch has no field: on when it holds a passkey (the
+   * owner had chosen one), off when not; the first change writes that down.
+   */
+  required: boolean
 }
 type KeysFile = { v: 1 } & OwnerKeys
 const isKeys = (v: unknown): v is KeysFile => isRecord(v) && v.v === 1 && Array.isArray(v.passkeys)
@@ -439,10 +445,14 @@ const isPasskey = (p: unknown): p is OwnerPasskey =>
   typeof p.addedAt === 'number' &&
   (p.usedAt === null || typeof p.usedAt === 'number')
 
-const keysFrom = (f: KeysFile | null): OwnerKeys => ({
-  userId: typeof f?.userId === 'string' ? f.userId : null,
-  passkeys: (f?.passkeys ?? []).filter(isPasskey),
-})
+function keysFrom(f: KeysFile | null): OwnerKeys {
+  const passkeys = (f?.passkeys ?? []).filter(isPasskey)
+  return {
+    userId: typeof f?.userId === 'string' ? f.userId : null,
+    passkeys,
+    required: typeof f?.required === 'boolean' ? f.required : passkeys.length > 0,
+  }
+}
 
 /** The owner's passkeys; none while there is no file. Creates nothing. */
 export const readOwnerKeys = (): OwnerKeys => keysFrom(readJson(teamPasskeysFile(), isKeys))

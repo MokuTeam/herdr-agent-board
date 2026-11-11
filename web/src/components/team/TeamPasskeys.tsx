@@ -1,19 +1,21 @@
-// The owner's passkeys for this board (#224), in the Team panel: Send, trust and turning agents on
-// wait for one (src/core/team-confirm.ts). The list (GET /api/team/passkeys), Add and Remove; both
-// are confirmed in the window on localhost (models/team-confirm.ts), Add of the first one on trust,
-// every other with a passkey there is.
+// The owner's passkeys for this board (#224), in the Team panel. The switch "Confirm with a passkey"
+// (#367, off by default): on, Send, trust and turning agents on wait for one (src/core/team-confirm.ts);
+// it turns on only once a passkey is there, and on and off each with a confirmation by one. The list (GET
+// /api/team/passkeys), Add and Remove; both are confirmed in the window on localhost
+// (models/team-confirm.ts), Add of the first one on trust, every other with a passkey there is.
 import { useEffect, useState } from 'react'
 import { ApiError, api, errorText } from '../../api/client.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { confirmError, ownerPost } from '../../models/team-confirm.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
+import { Switch } from './Switch.tsx'
 
 interface Passkey {
   id: string
   label: string
   addedAt: number
 }
-const isList = (v: unknown): v is { passkeys: Passkey[] } =>
+const isList = (v: unknown): v is { passkeys: Passkey[]; required?: boolean } =>
   typeof v === 'object' &&
   v !== null &&
   Array.isArray((v as { passkeys?: unknown }).passkeys) &&
@@ -29,11 +31,14 @@ export function TeamPasskeys({ open, disabled }: { open: boolean; disabled: bool
   const t = useT()
   const { toast } = useBoardContext()
   const [list, setList] = useState<Passkey[] | null>(null)
+  const [required, setRequired] = useState(false)
   const [busy, setBusy] = useState(false)
 
   async function load(): Promise<void> {
     try {
-      setList((await api.get('/api/team/passkeys', isList, { cache: 'no-store' })).passkeys)
+      const r = await api.get('/api/team/passkeys', isList, { cache: 'no-store' })
+      setList(r.passkeys)
+      setRequired(r.required === true)
     } catch {
       setList(null)
     }
@@ -60,7 +65,18 @@ export function TeamPasskeys({ open, disabled }: { open: boolean; disabled: bool
   return (
     <section className="team-passkeys">
       <h3>{t('team.passkeys')}</h3>
-      <p className="hint">{list.length ? t('team.passkeys.about') : t('team.passkeys.none')}</p>
+      <div className="team-switch-row">
+        <span>{t('team.passkeys.confirm')}</span>
+        <Switch
+          name="passkey"
+          on={required}
+          label={t('team.passkeys.confirm')}
+          disabled={disabled || busy || (!required && !list.length)}
+          onFlip={on => void change({ op: on ? 'on' : 'off' })}
+        />
+      </div>
+      <p className="hint">{t('team.passkeys.about')}</p>
+      {!list.length && <p className="hint">{t('team.passkeys.none')}</p>}
       {list.length > 0 && (
         <ul>
           {list.map(p => (

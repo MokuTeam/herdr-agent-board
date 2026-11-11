@@ -4,7 +4,7 @@
 // for 30 minutes, in memory only. The passkeys are for RP ID `localhost`: one of the tunnel's
 // domain fails here, and a change of port keeps them.
 import { expect, test } from 'bun:test'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { teamAuditFile, teamPasskeysFile } from '../../src/adapters/paths.ts'
 import { readOwnerKeys } from '../../src/adapters/team-store.ts'
 import { CONFIRM_MS, MAX_PENDING, UNLOCK_MS, widens } from '../../src/core/team-confirm.ts'
@@ -233,4 +233,94 @@ test('what widens: on, a listener, a lane added; off, clearing, fewer lanes and 
   expect(widens(now, { peer: 'team', muted: false })).toBe(false)
   // #360: the loop pause, up or down or back to the default.
   for (const loop of [5, 100, null]) expect(widens(now, { peer: P, loop })).toBe(true)
+})
+
+// ---- The switch "Confirm with a passkey" (#367)
+
+const fileOf = (): Record<string, unknown> => JSON.parse(readFileSync(teamPasskeysFile(), 'utf8'))
+
+test('#367 off by default; on only once a passkey there confirms it; the first passkey added leaves it off', async () => {
+  const w = world()
+  const c = w.make()
+  expect(c.required()).toBe(false)
+  // No passkey to confirm with: the window has nothing to sign, and nothing is written.
+  expect(c.view(c.pend({ kind: 'passkey-on' }))).toBe('passkey')
+  expect(existsSync(teamPasskeysFile())).toBe(false)
+  const key = await softAuthenticator(-7)
+  addFirst(c, key)
+  expect(c.required()).toBe(false)
+  expect(fileOf().required).toBe(false)
+  // Asked, not yet confirmed: still off. A passkey that cannot sign here leaves it so.
+  const on = c.pend({ kind: 'passkey-on' })
+  expect(read(c, on).step).toBe('get')
+  expect(c.required()).toBe(false)
+  expect(confirmWith(c, on, key)).toEqual({ ok: true, done: true, action: { kind: 'passkey-on' } })
+  expect(c.required()).toBe(true)
+  // Kept on disk: a restart keeps it on.
+  expect(w.make().required()).toBe(true)
+  const ops = readFileSync(teamAuditFile(), 'utf8')
+    .trim()
+    .split('\n')
+    .map(l => JSON.parse(l))
+    .filter(l => l.action === 'passkey')
+    .map(l => l.op)
+  expect(ops).toEqual(['add', 'on'])
+})
+
+test('#367 the upgrade: a file with a passkey and no switch keeps it on; one without a passkey keeps it off', async () => {
+  const w = world()
+  const c = w.make()
+  const key = await softAuthenticator(-7)
+  addFirst(c, key)
+  // As #224 wrote it: no `required` field.
+  const { required: _, ...before } = fileOf()
+  writeFileSync(teamPasskeysFile(), JSON.stringify(before))
+  const after = w.make()
+  expect(after.required()).toBe(true)
+  expect(readOwnerKeys().required).toBe(true)
+  // The first change of the file (a send confirmed notes the passkey's use) writes it down as it was.
+  expect(confirmWith(after, after.pend(SEND), key).ok).toBe(true)
+  expect(fileOf().required).toBe(true)
+  // #224's file with no passkey: off.
+  writeFileSync(teamPasskeysFile(), JSON.stringify({ v: 1, userId: null, passkeys: [] }))
+  expect(w.make().required()).toBe(false)
+})
+
+test('#367 on and off are confirmed with a passkey; removing the last one turns it off; a hand-set switch with none is off', async () => {
+  const w = world()
+  const c = w.make()
+  const key = await softAuthenticator(-7)
+  addFirst(c, key)
+  expect(confirmWith(c, c.pend({ kind: 'passkey-on' }), key, { counter: 1 }).ok).toBe(true)
+  const off = c.pend({ kind: 'passkey-off' })
+  expect(read(c, off).step).toBe('get')
+  expect(c.required()).toBe(true)
+  expect(confirmWith(c, off, key, { counter: 2 })).toEqual({ ok: true, done: true, action: { kind: 'passkey-off' } })
+  expect(c.required()).toBe(false)
+  expect(fileOf().required).toBe(false)
+
+  expect(confirmWith(c, c.pend({ kind: 'passkey-on' }), key, { counter: 3 }).ok).toBe(true)
+  const gone = c.pend({ kind: 'passkey-remove', id: key.id })
+  expect(confirmWith(c, gone, key, { counter: 4 }).ok).toBe(true)
+  expect(c.hasPasskey()).toBe(false)
+  expect(c.required()).toBe(false)
+  expect(fileOf().required).toBe(false)
+
+  // A file that says on with no passkey (edited by hand) locks nobody out.
+  writeFileSync(teamPasskeysFile(), JSON.stringify({ v: 1, userId: null, passkeys: [], required: true }))
+  expect(c.required()).toBe(false)
+})
+
+test('#367 the WebAuthn options ask for the computer’s own authenticator first, on create and on get', async () => {
+  const w = world()
+  const c = w.make()
+  const create = c.view(c.pend({ kind: 'passkey-add' }))
+  if (create === null || create === 'passkey') throw new Error('no view')
+  expect(create.step).toBe('create')
+  expect(create.options.hints).toEqual(['client-device'])
+  addFirst(c, await softAuthenticator(-7))
+  const get = c.view(c.pend(SEND))
+  if (get === null || get === 'passkey') throw new Error('no view')
+  expect(get.step).toBe('get')
+  expect(get.options.hints).toEqual(['client-device'])
 })

@@ -250,18 +250,16 @@ describe('team on, against a hub in this process', () => {
     expect(({} as Record<string, unknown>).name).toBeUndefined()
   })
 
-  test('#224 without a passkey: Send, a held draft, trust and widening are refused; narrowing and discarding are not', async () => {
-    const no: [number, unknown] = [403, { ok: false, error: 'passkey' }]
-    expect(await answer(fetch(`${url}/api/team/passkeys`))).toEqual([200, { passkeys: [] }])
-    expect(await answer(post(url, '/api/team/send', { to: anna.pub, text: 'hi' }))).toEqual(no)
-    expect(await answer(post(url, '/api/team/trust', { peer: anna.pub }))).toEqual(no)
-    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, on: true }))).toEqual(no)
-    expect(await answer(post(url, '/api/team/agents', { listener: { key: 'k1', name: 'day' } }))).toEqual(no)
+  test('#367 no passkey: the switch is off and cannot be turned on; narrowing and discarding go as ever', async () => {
+    expect(await answer(fetch(`${url}/api/team/passkeys`))).toEqual([200, { passkeys: [], required: false }])
+    expect(await answer(post(url, '/api/team/passkeys', { op: 'on' }))).toEqual([403, { ok: false, error: 'passkey' }])
+    expect(await answer(post(url, '/api/team/passkeys', { op: 'off' }))).toEqual([200, { ok: true }])
+    expect(await answer(fetch(`${url}/api/team/passkeys`))).toEqual([200, { passkeys: [], required: false }])
+    expect(teamFilesOf(box)).not.toContain('team-passkeys.json')
     expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, on: false }))).toEqual([200, { ok: true }])
     expect(await answer(post(url, '/api/team/agents', { listener: null }))).toEqual([200, { ok: true }])
     expect(await answer(post(url, '/api/team/agents', { peer: 'team', muted: true }))).toEqual([200, { ok: true }])
     const made = (await (await post(url, '/api/team/draft', { to: anna.pub, text: 'held' })).json()) as { id: string }
-    expect(await answer(post(url, `/api/team/draft/${made.id}/send`, {}))).toEqual(no)
     expect(await answer(post(url, `/api/team/draft/${made.id}/discard`, {}))).toEqual([200, { ok: true }])
     expect(await answer(post(url, '/api/team/agents', { peer: 'team', muted: false }))).toEqual([200, { ok: true }])
   })
@@ -277,12 +275,17 @@ describe('team on, against a hub in this process', () => {
         { ok: false, error: 'origin', confirm: `${local()}/?confirm=${id}` },
       ])
     expect(await windowAnswers(id)).toEqual([200, { ok: true, done: true }])
-    expect(await answer(fetch(`${url}/api/team/passkeys`))).toEqual([
-      200,
-      { passkeys: [{ id: key.id, label: expect.any(String), addedAt: expect.any(Number), usedAt: null }] },
-    ])
+    const one = [{ id: key.id, label: expect.any(String), addedAt: expect.any(Number), usedAt: null }]
+    // A passkey added leaves the switch as it was (#367): off until the owner turns it on.
+    expect(await answer(fetch(`${url}/api/team/passkeys`))).toEqual([200, { passkeys: one, required: false }])
     // Done once: the window's id is gone.
     expect(await answer(fetch(`${url}/api/team/confirm/${id}`))).toEqual([404, { ok: false, error: 'gone' }])
+    // On from here (confirmed with the passkey), so the rest of this file meets #224's gates.
+    expect(await owner('/api/team/passkeys', { op: 'on' })).toEqual([200, { ok: true, done: true }])
+    expect(await answer(fetch(`${url}/api/team/passkeys`))).toEqual([
+      200,
+      { passkeys: [{ ...one[0], usedAt: expect.any(Number) }], required: true },
+    ])
   })
 
   test('a question sent reaches the peer and comes back acked; one from the peer lands in the thread', async () => {
@@ -553,5 +556,116 @@ describe('team on, against a hub in this process', () => {
     } catch {}
     if (v6) expect(res?.status).toBe(200)
     else expect(res).toBeNull()
+  })
+})
+
+describe('#367 the switch "Confirm with a passkey", off by default', () => {
+  const sandbox = sharedSandbox()
+  let box: Sandbox
+  let url = ''
+  let hub: Harness
+  let me: KeyPair
+  let anna: KeyPair
+  let annaClient: Client
+  let key: SoftAuthenticator
+  type Reply = Record<string, unknown>
+  const local = () => `http://localhost:${new URL(url).port}`
+  const ok: [number, unknown] = [200, { ok: true }]
+
+  /** The confirmation window: reads the pending action, signs with the passkey (or makes it), answers from its origin. */
+  async function windowAnswers(id: string): Promise<[number, Reply]> {
+    const v = (await (await fetch(`${url}/api/team/confirm/${id}`)).json()) as {
+      step: string
+      options: { challenge: string }
+    }
+    const at = { challenge: v.options.challenge, origin: local(), rpId: 'localhost' }
+    const cred = v.step === 'create' ? key.register(at) : key.assert(at)
+    return (await answer(
+      post(url, `/api/team/confirm/${id}`, { ...cred, type: 'public-key' }, { 'x-board': '1', origin: local() }),
+    )) as [number, Reply]
+  }
+  /** A send that went out at once: anna gets it, and acks it. */
+  async function sentAtOnce(res: Promise<Response>): Promise<void> {
+    const [status, reply] = (await answer(res)) as [number, Reply]
+    expect(status).toBe(200)
+    expect(reply.ok).toBe(true)
+    expect(reply).not.toHaveProperty('unlock')
+    annaClient.send(await ackOf(anna, (await annaClient.take('deliver')).env))
+  }
+
+  beforeAll(async () => {
+    key = await softAuthenticator(-7)
+    hub = await startHarness()
+    me = await generateKey()
+    anna = await generateKey()
+    ;(await hub.join(me, 'me')).close()
+    annaClient = await hub.join(anna, 'anna')
+    box = await sandbox()
+    mkdirSync(stateOf(box), { recursive: true })
+    writeFileSync(join(stateOf(box), 'team-key.json'), JSON.stringify({ v: 1, ...me }), { mode: 0o600 })
+    ;({ url } = await serveBoard(box, {
+      language: 'en',
+      team: { hub: hub.url.replace(/\/v1$/, ''), name: 'me' },
+    }))
+    const end = Date.now() + 8000
+    for (;;) {
+      const v = (await (await fetch(`${url}/api/team`)).json()) as { roster: { name: string; online: boolean }[] }
+      if (v.roster.some(p => p.name === 'anna' && p.online)) break
+      if (Date.now() > end) throw new Error('timed out: the roster')
+      await Bun.sleep(25)
+    }
+  })
+  afterAll(() => hub.stop())
+
+  test('off: Send, a held draft, trust and every widening go at once, as before #224 (no 403, no 428)', async () => {
+    expect(await answer(fetch(`${url}/api/team/passkeys`))).toEqual([200, { passkeys: [], required: false }])
+    await sentAtOnce(post(url, '/api/team/send', { to: anna.pub, text: 'no window' }))
+    const made = (await (await post(url, '/api/team/draft', { to: anna.pub, text: 'held' })).json()) as { id: string }
+    await sentAtOnce(post(url, `/api/team/draft/${made.id}/send`, {}))
+    expect(await answer(post(url, '/api/team/trust', { peer: anna.pub }))).toEqual(ok)
+    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, on: true }))).toEqual(ok)
+    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, loop: 5 }))).toEqual(ok)
+    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, loop: null }))).toEqual(ok)
+    expect(await answer(post(url, '/api/team/agents', { listener: { key: 'k1', name: 'day' } }))).toEqual(ok)
+    expect(await answer(post(url, '/api/team/agents', { listener: null }))).toEqual(ok)
+    expect(await answer(post(url, '/api/team/listen', { session: { key: 'sess-1', name: 'worker' } }))).toEqual(ok)
+    expect(await answer(post(url, '/api/team/listen', { session: null }))).toEqual(ok)
+    expect(await answer(post(url, '/api/team/agents', { off: true }))).toEqual(ok)
+    expect(await answer(post(url, '/api/team/agents', { off: false }))).toEqual(ok)
+    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, on: false }))).toEqual(ok)
+    expect(await answer(post(url, '/api/team/welcome', { peer: anna.pub, on: true, channels: [] }))).toEqual(ok)
+    const agents = (await (await fetch(`${url}/api/team/agents`)).json()) as Record<string, unknown>
+    expect(agents).toMatchObject({ off: false, listener: null, peers: { [anna.pub]: { on: true } } })
+    await post(url, '/api/team/agents', { peer: anna.pub, on: false })
+  })
+
+  test('a passkey added leaves it off; on, the actions wait for it; off again only once a passkey confirms it', async () => {
+    const add = (await (await post(url, '/api/team/passkeys', { op: 'add' })).json()) as { id: string }
+    expect(await windowAnswers(add.id)).toEqual([200, { ok: true, done: true }])
+    expect(((await (await fetch(`${url}/api/team/passkeys`)).json()) as Reply).required).toBe(false)
+    await sentAtOnce(post(url, '/api/team/send', { to: anna.pub, text: 'still no window' }))
+
+    // On is asked in the window too: the passkey shows it signs here before anything waits for it.
+    const [asked, on] = (await answer(post(url, '/api/team/passkeys', { op: 'on' }))) as [number, Reply]
+    expect(asked).toBe(428)
+    expect(((await (await fetch(`${url}/api/team/passkeys`)).json()) as Reply).required).toBe(false)
+    expect(await windowAnswers(on.id as string)).toEqual([200, { ok: true, done: true }])
+    expect(((await (await fetch(`${url}/api/team/passkeys`)).json()) as Reply).required).toBe(true)
+    expect(await answer(post(url, '/api/team/passkeys', { op: 'on' }))).toEqual(ok)
+    expect((await post(url, '/api/team/send', { to: anna.pub, text: 'waits' })).status).toBe(428)
+    expect((await post(url, '/api/team/agents', { peer: anna.pub, on: true })).status).toBe(428)
+    // Narrowing stays free.
+    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, on: false }))).toEqual(ok)
+
+    // Off is not done by a request alone: an agent's curl gets a window to confirm, nothing more.
+    const [status, off] = (await answer(post(url, '/api/team/passkeys', { op: 'off' }))) as [number, Reply]
+    expect(status).toBe(428)
+    expect(off).toEqual({ ok: false, error: 'confirm', id: off.id, confirm: `${local()}/?confirm=${off.id}` })
+    expect(((await (await fetch(`${url}/api/team/passkeys`)).json()) as Reply).required).toBe(true)
+    const shown = (await (await fetch(`${url}/api/team/confirm/${off.id}`)).json()) as { action: unknown; step: string }
+    expect(shown).toMatchObject({ action: { kind: 'passkey-off' }, step: 'get' })
+    expect(await windowAnswers(off.id as string)).toEqual([200, { ok: true, done: true }])
+    expect(((await (await fetch(`${url}/api/team/passkeys`)).json()) as Reply).required).toBe(false)
+    await sentAtOnce(post(url, '/api/team/send', { to: anna.pub, text: 'off again' }))
   })
 })
