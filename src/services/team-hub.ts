@@ -239,7 +239,7 @@ export interface TeamService {
   /** A post from the panel or a session (#216), with its source set by the route that took it. */
   post(target: PostTarget, text: string, source: PostSource): Promise<PostResult>
   /** An agent's draft for a person on the roster, or the team: kept for the person to Send or Discard, never sent by the service. */
-  draft(to: string, text: string, more?: Pick<Draft, 'thread' | 'reason' | 'session'>): DraftResult
+  draft(to: string, text: string, more?: Pick<Draft, 'thread' | 'reason' | 'session' | 'replyTo'>): DraftResult
   /** The threads this board has, the latest first (#216); empty while off. */
   threads(): ThreadView[]
   /** One thread's lines by its key; empty while off or for no thread. */
@@ -943,6 +943,7 @@ export function createTeam({
           via: 'agent',
           ...(d.session?.name && { agent: d.session.name }),
           ...(d.reason && { reason: d.reason }),
+          ...answers(d.replyTo),
         }),
       )
     return [...[...incoming, ...outgoing].sort((a, b) => a.ts.localeCompare(b.ts)), ...drafts]
@@ -1102,11 +1103,12 @@ export function createTeam({
       // Taken out first, so a second press finds nothing; put back when the send is refused.
       const d = takeDraft(id)
       if (!d) return { ok: false, error: 'draft' }
-      const r = await post({ to: d.to, ...(d.thread && { thread: d.thread }) }, d.text, {
-        by: 'agent',
-        ...(d.session && { session: d.session }),
-        pressed: true,
-      })
+      // A reply an agent wrote (#373) still answers its message when the owner sends it; when that
+      // message is gone from this board by then, it goes as a plain message rather than never.
+      const target = { to: d.to, ...(d.thread && { thread: d.thread }) }
+      const source = { by: 'agent' as const, ...(d.session && { session: d.session }), pressed: true }
+      let r = await post({ ...target, ...(d.replyTo && { replyTo: d.replyTo }) }, d.text, source)
+      if (!r.ok && r.error === 'reply' && d.replyTo) r = await post(target, d.text, source)
       if (!r.ok) addDraft(d, Number.MAX_SAFE_INTEGER)
       else {
         audit('draft_sent', d.to === TEAM ? null : d.to, { id })

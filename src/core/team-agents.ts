@@ -263,6 +263,8 @@ export function refusedWhy(error: string): string {
       return 'too many drafts are waiting: the owner has to send or discard some first'
     case 'off':
       return 'the team is off'
+    case 'reply':
+      return "that message is not one to answer in that thread: board team thread prints each one's ref"
     default:
       return error
   }

@@ -156,13 +156,21 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
   }
 
   return {
-    async agentPost({ to, thread, text, session, claimed }) {
+    async agentPost({ to, thread, text, session, claimed, replyTo }) {
       const view = team.view()
       if (!view) return { ok: false, error: 'off' }
       if (to !== TEAM && !isPeerId(to)) return { ok: false, error: 'peer' }
       const s = readAgents()
       // A new thread (a title, no id) has no key yet: nothing to loop in, nothing to echo.
       const key = thread?.title !== undefined && thread.id === undefined ? null : threadKey(to, thread?.id ?? GENERAL)
+      // A reply to one message (#373) names a line of this thread that may be answered: a message
+      // either way, not a draft, not one held back. Refused at once, held or not, so a draft the owner
+      // would send later does not fail then.
+      if (
+        replyTo !== undefined &&
+        !(key && team.threadLines(key).some(l => l.id === replyTo && l.dir !== 'draft' && !l.held))
+      )
+        return { ok: false, error: 'reply' }
       const peer = s.peers[switchesKey(to, key)]
       const refused = overLimit(to, key, text, session)
       if (refused) return { ok: false, error: refused }
@@ -192,7 +200,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         }
       }
       if (reason) {
-        const d = team.draft(to, text, { ...(thread && { thread }), reason, session })
+        const d = team.draft(to, text, { ...(thread && { thread }), reason, session, ...(replyTo && { replyTo }) })
         if (!d.ok) return d
         audit('held', to === TEAM ? null : to, {
           id: d.id,
@@ -202,7 +210,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         })
         return { ok: true, sent: false, draft: d.id, reason, ...(detail && { detail }) }
       }
-      const r = await team.post({ to, ...(thread && { thread }) }, text, {
+      const r = await team.post({ to, ...(thread && { thread }), ...(replyTo && { replyTo }) }, text, {
         by: 'agent',
         session,
         ...(claimed && { claimed: true }),

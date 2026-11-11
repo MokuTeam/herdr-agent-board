@@ -122,7 +122,7 @@ const Text = memo(function Text({ text }: { text: string }) {
 })
 
 /** The message a reply answers: its sender and a line of it; a click goes there. Not found: said so, not a link. */
-function QuoteView({ quote, onQuote }: { quote: Quote; onQuote(id: string): void }) {
+export function QuoteView({ quote, onQuote }: { quote: Quote; onQuote(id: string): void }) {
   const t = useT()
   if (!quote.found)
     return (

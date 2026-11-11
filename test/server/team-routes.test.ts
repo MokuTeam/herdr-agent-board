@@ -335,6 +335,17 @@ describe('team on, against a hub in this process', () => {
     expect((await thread()).messages.map(m => m.dir).sort()).toEqual(['in', 'out'])
   })
 
+  test('#373 a session’s reply names its message by id: anything else is refused before the router', async () => {
+    const body = { to: anna.pub, text: 'x', session: { key: 'sess-1' }, thread: { id: 'general' } }
+    expect(await answer(post(url, '/api/team/post', { ...body, replyTo: 'nope' }))).toEqual([
+      400,
+      { ok: false, error: 'reply' },
+    ])
+    expect(
+      await answer(post(url, '/api/team/post', { ...body, replyTo: '00000000-0000-4000-8000-00000000beef' })),
+    ).toEqual([400, { ok: false, error: 'reply' }])
+  })
+
   test('#370 a reply carries replyTo in the signed body only to a board whose caps say replies; the list has each thread’s latest', async () => {
     type Line = { id: string; dir: string; text: string | null; replyTo?: string }
     const lines = async () =>
