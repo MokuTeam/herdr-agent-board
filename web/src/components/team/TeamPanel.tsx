@@ -34,6 +34,7 @@ import {
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { Panel } from '../panel/Panel.tsx'
+import { Switch } from './Switch.tsx'
 import { TeamPasskeys } from './TeamPasskeys.tsx'
 
 export interface TeamPanelProps {
@@ -175,37 +176,6 @@ export function TeamBody(props: TeamBodyProps) {
         <ListPane {...props} view={props.view} />
       )}
     </div>
-  )
-}
-
-/** A switch: a track with a knob, the accent's when on. */
-function Switch({
-  on,
-  label,
-  name,
-  disabled,
-  onFlip,
-}: {
-  on: boolean
-  label: string
-  name: string
-  disabled: boolean
-  onFlip(on: boolean): void
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      className="team-switch"
-      data-switch={name}
-      aria-checked={on}
-      aria-label={label}
-      title={label}
-      disabled={disabled}
-      onClick={() => onFlip(!on)}
-    >
-      <span className="team-knob" aria-hidden="true" />
-    </button>
   )
 }
 

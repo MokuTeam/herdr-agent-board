@@ -9,6 +9,11 @@
 // WebAuthn takes no IP as its RP ID, and the board is opened on 127.0.0.1, so a confirmation
 // happens in a window of its own on `http://localhost:<port>`; its passkeys are for `localhost`,
 // which a change of port keeps (the port is in the origin, not in the RP ID).
+//
+// All of it is the owner's choice (#367), off by default: a Mac without Touch ID, or without
+// iCloud Keychain allowed for its browser, has no passkey to offer for `localhost`, and a phone
+// cannot sign for it. Off, the gated actions go at once, as before. Turning it on needs a passkey
+// there; turning it off is confirmed with one, as widening is, so an agent cannot.
 
 /** A pending action waits this long for its confirmation, and a challenge for its one use. */
 export const CONFIRM_MS = 2 * 60_000
@@ -41,6 +46,11 @@ export type OwnerAction =
   | { kind: 'members'; key: string; add: string[] }
   | { kind: 'passkey-add' }
   | { kind: 'passkey-remove'; id: string }
+  /** The switch "Confirm with a passkey" off (#367). */
+  | { kind: 'passkey-off' }
+
+/** Asks the computer's own authenticator first (Touch ID, Windows Hello) over a phone by QR (#367). */
+export const HINTS = ['client-device']
 
 /** The actions whose confirmation unlocks the owner's sending for a while. */
 export const unlocks = (a: OwnerAction): boolean => a.kind === 'send' || a.kind === 'draft'

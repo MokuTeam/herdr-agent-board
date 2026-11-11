@@ -156,10 +156,16 @@ export const TEAM_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'team.confirm.notSigned': 'No passkey was used. Try again, or cancel.',
     'team.confirm.refused': 'The board did not accept it ({why}). Try again, or cancel.',
     'team.confirm.done': 'Done. This window closes by itself.',
+    'team.confirm.devices':
+      'A passkey on this computer works: Touch ID or iCloud Keychain on a Mac, Windows Hello on Windows, or a security key. A phone cannot sign for localhost.',
+    'team.confirm.off': 'Stop confirming with a passkey',
+    'team.confirm.offNote': 'Sending, trusting a new key and turning agents on then go without this window.',
     'team.passkeys': 'Passkeys',
+    'team.passkeys.confirm': 'Confirm with a passkey',
+    'team.passkeys.about':
+      'On, sending, trusting a new key and turning agents on wait for your passkey. It stops an agent doing these through the board; it cannot stop a program that edits the board’s files, as agents run as your user.',
     'team.passkeys.none':
-      'Sending, trusting a new key and turning agents on wait for a passkey of yours. Add one: Windows Hello, Touch ID, a security key or your phone.',
-    'team.passkeys.about': 'Sending, trusting a new key and turning agents on are confirmed with one of these.',
+      'To turn it on, add a passkey first: Touch ID or iCloud Keychain on a Mac, Windows Hello, or a security key. A phone cannot sign for this board.',
     'team.passkeys.item': '{label}, added {date}',
     'team.passkeys.add': 'Add a passkey',
     'team.passkeys.remove': 'Remove',
@@ -320,10 +326,16 @@ export const TEAM_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'team.confirm.notSigned': 'Passkey не использован. Попробуйте ещё раз или отмените.',
     'team.confirm.refused': 'Доска не приняла подтверждение ({why}). Попробуйте ещё раз или отмените.',
     'team.confirm.done': 'Готово. Окно закроется само.',
+    'team.confirm.devices':
+      'Подойдёт passkey этого компьютера: Touch ID или iCloud Keychain на Mac, Windows Hello в Windows или ключ безопасности. Телефон не может подписать для localhost.',
+    'team.confirm.off': 'Больше не подтверждать passkey',
+    'team.confirm.offNote': 'После этого отправка, доверие новому ключу и включение агентов идут без этого окна.',
     'team.passkeys': 'Passkeys',
+    'team.passkeys.confirm': 'Подтверждать passkey',
+    'team.passkeys.about':
+      'Когда включено, отправка, доверие новому ключу и включение агентов ждут вашего passkey. Это не даёт агенту сделать их через доску, но не защищает от программы, которая правит файлы доски: агенты работают под вашим пользователем.',
     'team.passkeys.none':
-      'Отправка, доверие новому ключу и включение агентов ждут вашего passkey. Добавьте его: Windows Hello, Touch ID, ключ безопасности или телефон.',
-    'team.passkeys.about': 'Отправка, доверие новому ключу и включение агентов подтверждаются одним из них.',
+      'Чтобы включить, сначала добавьте passkey: Touch ID или iCloud Keychain на Mac, Windows Hello или ключ безопасности. Телефон не может подписать для этой доски.',
     'team.passkeys.item': '{label}, добавлен {date}',
     'team.passkeys.add': 'Добавить passkey',
     'team.passkeys.remove': 'Удалить',

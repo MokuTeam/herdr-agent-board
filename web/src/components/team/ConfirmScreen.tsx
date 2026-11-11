@@ -106,6 +106,8 @@ export function confirmLines(a: Reply, t: Translator): ConfirmLines {
       return { title: t('team.confirm.add') }
     case 'passkey-remove':
       return { title: t('team.confirm.remove', { label: typeof a.label === 'string' ? a.label : '' }) }
+    case 'passkey-off':
+      return { title: t('team.confirm.off'), note: t('team.confirm.offNote') }
     default:
       return { title: t('team.confirm.unknown') }
   }
@@ -207,6 +209,9 @@ export function ConfirmScreen({
       )}
       {lines.text !== undefined && <pre className="team-confirm-text">{lines.text}</pre>}
       {lines.note && <p className="team-confirm-note">{lines.note}</p>}
+      {/* Before the browser's own dialog: what can sign here (#367). A Mac without Touch ID or
+          iCloud Keychain offers only a phone, which cannot sign for localhost. */}
+      <p className="team-confirm-note">{t('team.confirm.devices')}</p>
       {state.note && (
         <p className="team-confirm-note" role="alert">
           {state.note}
