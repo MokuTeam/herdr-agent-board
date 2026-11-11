@@ -563,7 +563,7 @@ function presence(): void {
 }
 
 const TEAM_USAGE =
-  'usage: board team join <invite> --hub <ws://host:7443> --name <name> | board team roster | board team draft <name|peer-id> "<text>" | board team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | board team reply <thread> "<text>" | board team thread <thread> [--json] [--read] | board team inbox [--unread] [--json] | board team watch [--json] [--every <seconds>] | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default]'
+  'usage: board team join <invite> --hub <ws://host:7443> --name <name> | board team roster | board team draft <name|peer-id> "<text>" | board team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | board team reply <thread> [--to <#message>] "<text>" | board team thread <thread> [--json] [--read] | board team inbox [--unread] [--json] | board team watch [--json] [--every <seconds>] | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default]'
 /** The `board team` ops of agents talking through the hub (#216), in entrypoints/team-agents-cli.ts. */
 const TEAM_AGENT_OPS = ['post', 'reply', 'thread', 'assign', 'release', 'listen', 'loop']
 /** What came in, read only (#355), in entrypoints/team-inbox-cli.ts. */

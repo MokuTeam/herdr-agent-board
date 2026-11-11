@@ -424,9 +424,13 @@ export function teamRoutes(
         if (!isTarget(body.to)) return json(400, { ok: false, error: 'peer' })
         const thread = threadFrom(body.thread)
         if (thread === null) return json(400, { ok: false, error: 'thread' })
+        // A reply to one message (#373): a line of that thread by its id; the router checks it is there.
+        if (body.replyTo !== undefined && !isMessageId(body.replyTo)) return json(400, { ok: false, error: 'reply' })
+        const replyTo = body.replyTo as string | undefined
         const r = await router.agentPost({
           to: body.to,
           ...(thread && { thread }),
+          ...(replyTo && { replyTo }),
           text: body.text,
           session,
           ...(body.claimed === true && { claimed: true }),

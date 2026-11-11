@@ -5,7 +5,7 @@
 // team post among them; a copy cannot take over the name of a message that came before it. The
 // list gets each thread's latest message. The hub relays the new fields as signed.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { changePins } from '../../src/adapters/team-store.ts'
+import { changeAgents, changePins, readDrafts } from '../../src/adapters/team-store.ts'
 import {
   checkMessage,
   type Envelope,
@@ -16,6 +16,7 @@ import {
   OUR_CAPS,
 } from '../../src/core/team.ts'
 import { LAST_CHARS } from '../../src/services/team-hub.ts'
+import { createTeamRouter } from '../../src/services/team-router.ts'
 import { msgOf, question } from '../hub/harness.ts'
 import { type FakeWs, handshake, type Setup, setup, stopAll, until } from '../support/team-service.ts'
 
@@ -208,5 +209,71 @@ describe('the list’s latest message', () => {
     expect(lasts['team/general']).toMatchObject({ dir: 'in', who: 'ben', text: 'x'.repeat(LAST_CHARS) })
     expect(lasts[`${w.C.pub}/general`]).toMatchObject({ dir: 'out', text: 'hi cleo' })
     expect(lasts[`${w.C.pub}/general`]).not.toHaveProperty('who')
+  })
+})
+
+describe('an agent’s reply to one message (#373)', () => {
+  /** A router over the world: anna's agents on, the acme lane shared with her, sess-acme in it. */
+  function router(w: World, on = true) {
+    changeAgents(x => {
+      x.peers[w.A.pub] = { on, lanes: ['acme'] }
+    })
+    return createTeamRouter({
+      team: w.s.svc,
+      cfg: { team: { hub: 'ws://127.0.0.1:7443', name: 'me' }, categories: [{ id: 'acme', color: 'blue', paths: [] }] },
+      items: () => [{ key: 'sess-acme', name: 'acme-work', category: 'acme' }],
+      schedule: { list: () => [], add: () => {}, update: () => false },
+      now: () => w.s.clock.now(),
+    } as never)
+  }
+  const session = { key: 'sess-acme', name: 'acme-work' }
+
+  test('sent at once: the copy names the message it answers, and the line says so', async () => {
+    const w = await world()
+    const r = router(w)
+    const q = await deliver(w, w.A, 'which branch?')
+    expect(await r.agentPost({ to: w.A.pub, text: 'main', session, replyTo: q })).toMatchObject({
+      ok: true,
+      sent: true,
+    })
+    expect(sent(w.ws)[0]?.body).toEqual({ text: 'main', via: 'agent', agent: 'acme-work', replyTo: q })
+    expect(lineOf(w, `${w.A.pub}/general`, 'main')?.replyTo).toBe(q)
+  })
+
+  test('held as a draft it keeps what it answers, shows it, and still answers it when the owner sends it', async () => {
+    const w = await world()
+    const r = router(w, false)
+    const q = await deliver(w, w.A, 'which branch?')
+    const held = await r.agentPost({ to: w.A.pub, text: 'main', session, replyTo: q })
+    expect(held).toMatchObject({ ok: true, sent: false, reason: 'off' })
+    expect(readDrafts()[0]).toMatchObject({ text: 'main', replyTo: q })
+    const draft = w.s.svc.threadLines(`${w.A.pub}/general`).find(l => l.dir === 'draft')
+    expect(draft?.replyTo).toBe(q)
+    expect((await w.s.svc.sendDraft(String(draft?.id))).ok).toBe(true)
+    expect(sent(w.ws)[0]?.body).toMatchObject({ text: 'main', via: 'agent', replyTo: q })
+  })
+
+  test('a reply to what is not a message of that thread, a held one or a draft is refused: nothing sent, no draft', async () => {
+    const w = await world()
+    const r = router(w)
+    const q = await deliver(w, w.A, 'in the pair')
+    const draft = w.s.svc.draft(w.A.pub, 'a draft')
+    if (!draft.ok) throw new Error('no draft')
+    changePins(pins => {
+      pins[w.B.pub] = { name: 'ben', status: 'changed', at: 1 }
+    })
+    await deliver(w, w.B, 'held words', { thread: TEAM_GENERAL })
+    const heldId = w.s.svc.threadLines('team/general').find(l => l.held)?.id ?? ''
+    const cases: [string, Parameters<typeof r.agentPost>[0]][] = [
+      ['an id of no message', { to: w.A.pub, text: 'x', session, replyTo: '00000000-0000-4000-8000-00000000beef' }],
+      ['a draft', { to: w.A.pub, text: 'x', session, replyTo: draft.id }],
+      ['another thread’s message', { to: 'team', text: 'x', session, replyTo: q }],
+      ['a held message', { to: 'team', text: 'x', session, replyTo: heldId }],
+      ['a new topic', { to: w.A.pub, thread: { title: 'New' }, text: 'x', session, replyTo: q }],
+    ]
+    for (const [what, post] of cases)
+      expect([what, await r.agentPost(post)]).toEqual([what, { ok: false, error: 'reply' }])
+    expect(sent(w.ws)).toEqual([])
+    expect(readDrafts()).toHaveLength(1)
   })
 })

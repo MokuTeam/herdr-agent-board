@@ -309,6 +309,24 @@ describe('the conversation', () => {
     expect(replies(props({ lines: held }))).toHaveLength(4)
   })
 
+  test('an agent’s draft that answers a message shows its quote, which points at the line (#373)', () => {
+    const draft: ThreadLine = {
+      id: 'd1',
+      dir: 'draft',
+      text: 'main, I think',
+      ts: '2026-11-11T08:05:00Z',
+      via: 'agent',
+      agent: 'deploy-bot',
+      reason: 'off',
+      replyTo: 'q1',
+    }
+    const card = findAll(render(props({ lines: [...CHAT_LINES, draft] })), el => hasClass(el, 'team-draft'))
+    const quotes = findAll(card, el => hasClass(el, 'team-quote'))
+    expect(quotes.map(q => [q.tag, q.attrs.get('data-quote'), text([q])])).toEqual([
+      ['button', 'q1', 'annaship today?'],
+    ])
+  })
+
   test('a reply being written: its quote over the box, and its id is what the panel was told', () => {
     const nodes = render(props({ replyTo: 'q1' }))
     const bar = findAll(nodes, el => el.attrs.has('data-reply'))

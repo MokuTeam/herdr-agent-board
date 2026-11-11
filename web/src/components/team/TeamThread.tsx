@@ -25,12 +25,12 @@ import {
   type ThreadLine,
   type ThreadView,
 } from '../../models/team.ts'
-import { chatItems, quoteOf } from '../../models/team-chat.ts'
+import { chatItems, type Quote, quoteOf } from '../../models/team-chat.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { MessageText } from '../sheet/MessageText.tsx'
 import { Switch } from './Switch.tsx'
 import { TeamComposer } from './TeamComposer.tsx'
-import { TeamMessage } from './TeamMessage.tsx'
+import { QuoteView, TeamMessage } from './TeamMessage.tsx'
 
 /** Closer to the end than this (px), the reader is at the end: new messages scroll into view. */
 const AT_END_PX = 48
@@ -144,6 +144,8 @@ export function TeamThread(props: TeamThreadProps) {
             changed={changed}
             onSend={props.onSendDraft}
             onDiscard={props.onDiscardDraft}
+            quote={d.replyTo ? quoteOf(d.replyTo, messages, t) : null}
+            onQuote={scroll.jumpTo}
           />
         ))}
         {changed && <p className="hint">{t('team.sendChanged')}</p>}
@@ -277,19 +279,26 @@ function ThreadHead({
   )
 }
 
-/** An agent's draft the board held (#231, #216): over the box, with why, Send and Discard. */
+/**
+ * An agent's draft the board held (#231, #216): over the box, with why, Send and Discard, and the
+ * quote of the message it answers when the agent replied to one (#373).
+ */
 function AgentDraft({
   line,
   disabled,
   changed,
   onSend,
   onDiscard,
+  quote,
+  onQuote,
 }: {
   line: ThreadLine
   disabled: boolean
   changed: boolean
   onSend(id: string): void
   onDiscard(id: string): void
+  quote: Quote | null
+  onQuote(id: string): void
 }) {
   const t = useT()
   return (
@@ -299,6 +308,7 @@ function AgentDraft({
         {line.agent && <code>{line.agent}</code>}
         {line.reason && <span>{draftWhy(line.reason, t)}</span>}
       </div>
+      {quote && <QuoteView quote={quote} onQuote={onQuote} />}
       <MessageText text={line.text ?? ''} />
       <div className="team-draft-actions">
         <button type="button" className="mini" disabled={disabled} onClick={() => onDiscard(line.id)}>

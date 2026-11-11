@@ -270,6 +270,8 @@ export interface Draft {
   reason?: string
   /** The session that wrote it. */
   session?: SessionRef
+  /** The line of its thread it answers (#373), as `board team reply --to` named it. */
+  replyTo?: string
 }
 type DraftsFile = { v: 1; drafts: Record<string, Draft> }
 const isDrafts = (v: unknown): v is DraftsFile => isRecord(v) && v.v === 1 && isRecord(v.drafts)
