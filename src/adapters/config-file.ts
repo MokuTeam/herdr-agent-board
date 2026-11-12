@@ -33,6 +33,7 @@ import { isTodoMode } from '../core/todos.ts'
 import { fieldProblem, type TunnelField } from '../core/tunnel.ts'
 import type { Category, Config } from '../core/types.ts'
 import { wakeConfig } from '../core/wake/config.ts'
+import { isThreadMode, type ThreadMode, threadsConfig, threadsSetting } from '../core/work-threads.ts'
 import { allCards, writeCard } from './cards.ts'
 import { isRecord, readJson, replaceFile, withLock } from './json-store.ts'
 import { configDir } from './paths.ts'
@@ -276,6 +277,33 @@ export function editTodos(body: unknown): EditResult {
     else raw.todos = mode === 'agents' ? true : mode === 'auto' ? { autoClose: true } : { agents: false }
     return { ok: true }
   })
+}
+
+/**
+ * Threads (#410) from Settings → Threads: { mode?: 'none' | 'mine' | 'agents', share?: boolean }
+ * into config.json's `threads` (core/work-threads.ts threadsSetting): none deletes the key (the
+ * stored threads stay), mine is `{ agents: false }`, agents `true`, the section's other fields
+ * kept. `share` alone is refused while threads are off. `on` says whether they are on after it.
+ * The running board picks the change up as any edit (liveConfig).
+ */
+export function editThreads(body: unknown): EditResult & { on?: boolean } {
+  const b: Raw = isRecord(body) ? body : {}
+  const change: { mode?: ThreadMode; share?: boolean } = {}
+  if (isThreadMode(b.mode)) change.mode = b.mode
+  else if (b.mode !== undefined) return { ok: false, error: t('thread.err.mode') }
+  if (typeof b.share === 'boolean') change.share = b.share
+  else if (b.share !== undefined) return { ok: false, error: t('thread.err.mode') }
+  if (change.mode === undefined && change.share === undefined) return { ok: false, error: t('thread.err.mode') }
+  let on = false
+  const r = editConfig(raw => {
+    if (change.mode === undefined && !threadsConfig(raw.threads)) return { ok: false, error: t('thread.err.off') }
+    const next = threadsSetting(raw.threads, change)
+    if (next === undefined) delete raw.threads
+    else raw.threads = next
+    on = threadsConfig(next) !== null
+    return { ok: true }
+  })
+  return r.ok ? { ok: true, on } : r
 }
 
 /**

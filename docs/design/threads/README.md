@@ -1023,7 +1023,9 @@ With threads off:
 - MokuPilot shows its own task board.
 
 Turning threads off later keeps the stored threads; turning them on again shows them. Settings
-gets a row for the switch beside the to-do points', written through `editConfig`.
+gets a row for the switch beside the to-do points', written through `editConfig`. Built in #410:
+Off, Only me, Me and agents, and with Team on, shared or kept on this board; on copies the skill
+into the shown profiles as the install does, off leaves it there.
 
 ## 15. Phases and the issues to open
 

@@ -208,6 +208,34 @@ export function threadsConfig(raw: unknown): ThreadsConfig | null {
   }
 }
 
+/** Settings → Threads (#410): off (the key absent), on for the owner only (`agents: false`), on with agents. */
+export const THREAD_MODES = ['none', 'mine', 'agents'] as const
+export type ThreadMode = (typeof THREAD_MODES)[number]
+export const isThreadMode = (v: unknown): v is ThreadMode => THREAD_MODES.includes(v as ThreadMode)
+export const threadModeOf = (c: Pick<ThreadsConfig, 'agents'> | null): ThreadMode =>
+  !c ? 'none' : c.agents ? 'agents' : 'mine'
+
+/**
+ * config.json's `threads` once Settings has set `mode` and, when given, `share` (#410); undefined:
+ * the key goes. Off takes the key out, as Tasks' Off does. On keeps the section's other fields
+ * (`events`, ...): `agents` and `share` are written only where they are not the default, and a
+ * section left with nothing else in it is `true`. `share` alone changes threads that are on;
+ * off, it leaves the value as it was.
+ */
+export function threadsSetting(raw: unknown, change: { mode?: ThreadMode; share?: boolean }): unknown {
+  const now = threadsConfig(raw)
+  const mode = change.mode ?? threadModeOf(now)
+  if (mode === 'none') return change.mode === undefined ? raw : undefined
+  const section: Record<string, unknown> =
+    now && typeof raw === 'object' && raw !== null ? { ...(raw as Record<string, unknown>) } : {}
+  if (mode === 'mine') section.agents = false
+  else delete section.agents
+  const share = change.share ?? now?.share ?? true
+  if (share) delete section.share
+  else section.share = false
+  return Object.keys(section).length ? section : true
+}
+
 // ------------------------------------------------------------------ limits
 
 export const TITLE_MAX = 80

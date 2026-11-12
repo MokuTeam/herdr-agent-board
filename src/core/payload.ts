@@ -183,6 +183,10 @@ export interface ThreadsPayload {
   needsOwner: number
   /** Moves when a shared entry's way to the hub changed (#394): absent until one did. */
   out?: number
+  /** Threads are the owner's (config.json's `agents: false`, #410): absent while agents write too. */
+  agents?: false
+  /** Kept on this board also with Team on (`share: false`, #410): absent while they may be shared. */
+  share?: false
 }
 
 /** What the board's payload says of the calendar (#328). */

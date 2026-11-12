@@ -104,10 +104,13 @@ export const DESK_REMOTE_OPS: ReadonlySet<unknown> = new Set(['approve', 'deny',
  * (#328: a source's address is typed there), and the peer network's roster, threads and sends
  * (#231: /api/team, not /api/peers), and which process the board is and its folder (#356:
  * /api/process), and threads (#392: /api/threads, which the owner's own logins reach,
- * ownerThreads). Refused on every remote listener, in both spellings of a path.
+ * ownerThreads), and Settings → Threads (#410: /api/threads-settings, which writes into the Claude
+ * profiles here). Refused on every remote listener, in both spellings of a path.
  */
 export const localOnly = (path: string): boolean =>
-  /^\/api\/(remote|access|wake|backup|time-settings|calendar-settings|links\/log|team|process|threads)(\/|$)/.test(path)
+  /^\/api\/(remote|access|wake|backup|time-settings|calendar-settings|links\/log|team|process|threads|threads-settings)(\/|$)/.test(
+    path,
+  )
 
 /**
  * Threads (#392, docs/design/threads 5.3): away from the computer, the owner's own logins only (the

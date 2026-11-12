@@ -56,7 +56,7 @@ import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
 import { createPresence } from '../services/presence.ts'
-import { editProfile, installProfile, wakeHooksInPlace } from '../services/profiles.ts'
+import { editProfile, installProfile, installThreadsSkill, wakeHooksInPlace } from '../services/profiles.ts'
 import { createRemote } from '../services/remote.ts'
 import { createRemoteAccess } from '../services/remote-access.ts'
 import { startScheduler } from '../services/scheduler.ts'
@@ -729,6 +729,8 @@ export async function startServer({
         },
         work,
         confirm: teamConfirm,
+        // Settings turned them on (#410): the skill where the install action puts it.
+        skill: () => installThreadsSkill(deps.profiles().list),
       },
       threadRevs,
     ),

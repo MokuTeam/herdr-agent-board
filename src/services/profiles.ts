@@ -17,7 +17,7 @@ import { loadProfiles } from '../adapters/profiles.ts'
 import { readText } from '../adapters/setup-facts.ts'
 import type { InstallPaths, WakeHooksState } from '../core/install-plan.ts'
 import { t } from '../core/lang.ts'
-import type { Profile } from '../core/profiles.ts'
+import { DEFAULT_PROFILE, type Profile } from '../core/profiles.ts'
 import { boardFiles, SKILL, TEAM_SKILL, THREADS_SKILL } from '../core/setup.ts'
 import { wakeSwitch } from '../core/wake/config.ts'
 import { threadsConfig } from '../core/work-threads.ts'
@@ -94,6 +94,22 @@ async function installShown(profile: Profile): Promise<InstallResult> {
     return { ok: false, error: t('err.profile.herdrHook', { title: profile.title, error: firstLine(messageOf(err)) }) }
   }
   return out.wakeHooks === 'old' ? { ok: true, wakeHooks: 'old' } : { ok: true }
+}
+
+/**
+ * Threads turned on from Settings (#410): their skill into the shown `profiles` as the install
+ * action puts it while config.json turns threads on: the default profile's folder made when it is
+ * not there, another profile's skipped then. Someone else's skill of that name stays, and a copy
+ * that is current is not written again. Turning threads off takes nothing out, as the install
+ * action does not. Throws what the file system said.
+ */
+export function installThreadsSkill(profiles: readonly Profile[]): void {
+  const skill = readText(FILES.threadsSkill)
+  if (skill === null) throw new Error(`${FILES.threadsSkill} is missing from this copy of the board`)
+  for (const profile of profiles) {
+    if (profile.hidden || (profile.id !== DEFAULT_PROFILE && !isFolder(profile.dir))) continue
+    installSkill(profile.dir, skill, THREADS_SKILL)
+  }
 }
 
 /**

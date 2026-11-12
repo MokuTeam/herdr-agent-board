@@ -677,13 +677,22 @@ function dropKept(): void {
 
 /**
  * The payload's line for the live config `cfg`: null while threads are off (nothing is read, no
- * connection is kept), zeros while there is no database yet (none is made for it).
+ * connection is kept), zeros while there is no database yet (none is made for it). Settings'
+ * Threads row (#410) reads the mode from it: `agents: false` and `share: false` only where config.json
+ * says so, so `"threads": true` goes out as it did.
  */
 export function threadsPayload(cfg: Pick<Config, 'threads'>): ThreadsPayload | null {
-  if (!threadsConfig(cfg.threads)) {
+  const c = threadsConfig(cfg.threads)
+  if (!c) {
     if (kept) dropKept()
     return null
   }
+  const mode = { ...(!c.agents && { agents: false as const }), ...(!c.share && { share: false as const }) }
+  return { ...threadsRead(), ...mode }
+}
+
+/** The revision and the count, through the kept connection. */
+function threadsRead(): ThreadsPayload {
   const path = dbFile()
   if (!existsSync(path)) {
     if (kept) dropKept()
