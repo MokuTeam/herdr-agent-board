@@ -269,7 +269,9 @@ describe('the owner’s switches (#216) and the team chat’s mute', () => {
     expect(text(nodes)).toContain('Listener: day')
     const ana = findAll(nodes, el => el.attrs.get('data-scope') === ANA)[0] as Node
     const lanes = findAll([ana], el => hasClass(el, 'team-lane')).map(l => [text([l]), l.attrs.get('aria-pressed')])
+    // #386: All lanes comes first, off for a peer without it.
     expect(lanes).toEqual([
+      ['All lanes', 'false'],
       ['Work', 'true'],
       ['Personal', 'false'],
     ])
