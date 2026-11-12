@@ -71,9 +71,9 @@ class FakeModule {
     await new Promise(r => setTimeout(r, ms))
     return this.frames.filter(f => f.t === t) as Extract<BridgeFrame, { t: T }>[]
   }
-  async hello(): Promise<void> {
+  async hello(topics = TOPICS): Promise<void> {
     await this.ready
-    this.send({ t: 'hello', v: 1, topics: TOPICS })
+    this.send({ t: 'hello', v: 1, topics })
     await this.take('welcome')
   }
   async call(
@@ -174,6 +174,32 @@ async function say(w: World, who: 'anna' | 'ben', text: string, body: Partial<Me
   ;(who === 'anna' ? w.anna : w.ben).send({ t: 'send', env })
   return msgId
 }
+
+describe('an inbox topic that is not there yet', () => {
+  test('what is for the inbox waits until the module lists the topic, then goes there', async () => {
+    const w = await setup({ inbox: { topic: 'Inbox' } })
+    await say(w, 'anna', 'are you there?')
+    await say(w, 'anna', 'new topic', { thread: { id: TOPIC, title: 'Plans' } })
+    expect(await w.mod.none('deliver', 200)).toEqual([])
+    expect(await w.mod.none('notice')).toEqual([])
+    // The owner makes the topic and writes in it; the bot records it; the module says hello again.
+    w.mod.close()
+    await until(() => !w.bridge.status().module)
+    w.mod = new FakeModule(w.socketPath)
+    await w.mod.hello([...TOPICS, { id: 'telegram:100:11', name: 'inbox' }])
+    const first = await w.mod.take('deliver')
+    expect(first.at).toBe('host:telegram:100:11')
+    expect(first.text).toEndWith('are you there?')
+    expect((await w.mod.take('notice')).at).toBe('host:telegram:100:11')
+    expect((await w.mod.take('deliver')).at).toBe('host:telegram:100:11')
+  })
+
+  test('a thread id with a colon is taken as it is', async () => {
+    const w = await setup({ inbox: { topic: 'telegram:100:12' } })
+    await say(w, 'anna', 'by id')
+    expect((await w.mod.take('deliver')).at).toBe('host:telegram:100:12')
+  })
+})
 
 describe('from the board to the assistant', () => {
   test('a pair message wakes the inbox topic, under the bridge header, and is acked', async () => {

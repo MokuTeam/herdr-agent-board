@@ -156,12 +156,24 @@ export function createBridge(o: BridgeOptions): Bridge {
 
   const findTopic = (s: string): Topic | undefined =>
     topics.find(t => t.id === s) ?? topics.find(t => t.name !== undefined && t.name.toLowerCase() === s.toLowerCase())
+  /**
+   * The inbox topic's place: the module's topic with that id or name. A name the module does not
+   * list (the topic is not made yet, or the bot has not seen a message in it) leaves the inbox
+   * unresolved, and what is for the inbox waits in the store: sent to a guessed place, the module
+   * would drop it. A value with a colon is taken as a thread id as it is.
+   */
   function resolveInbox(): void {
     const want = cfg.inbox.topic.startsWith('host:') ? cfg.inbox.topic.slice(5) : cfg.inbox.topic
     const found = findTopic(want)
-    if (!found && topics.length > 0)
-      o.log(`config: no topic "${want}" among the module's topics; using it as a thread id`)
-    inboxTopic = `host:${found?.id ?? want}`
+    if (found || want.includes(':')) {
+      inboxTopic = `host:${found?.id ?? want}`
+      return
+    }
+    if (topics.length > 0)
+      o.log(
+        `config: the host assistant has no topic "${want}" yet; hub messages for the inbox wait until it does (write once in the topic, then restart the bridge)`,
+      )
+    inboxTopic = null
   }
   const toModule = (loc: Location): Location | null => (loc === INBOX ? inboxTopic : loc)
   const fromModule = (loc: Location): Location => (loc === inboxTopic ? INBOX : loc)

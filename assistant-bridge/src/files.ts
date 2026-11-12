@@ -50,6 +50,30 @@ export function writePrivate(file: string, text: string): void {
   renameSync(tmp, file)
 }
 
+/**
+ * Writes status.json at most once per `ms`, and always the latest: a change inside the window is
+ * written when the window ends, so the file never stays on a state that was left a moment later.
+ */
+export function statusWriter(file: string, ms = 1000): (s: object) => void {
+  let last = 0
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let latest: object | null = null
+  const write = (): void => {
+    timer = undefined
+    last = Date.now()
+    try {
+      writePrivate(file, `${JSON.stringify({ ...latest, at: new Date(last).toISOString() }, null, 2)}\n`)
+    } catch {}
+  }
+  return s => {
+    latest = s
+    if (timer !== undefined) return
+    const wait = ms - (Date.now() - last)
+    if (wait <= 0) write()
+    else timer = setTimeout(write, wait)
+  }
+}
+
 /** The key, made and saved the first time. */
 export async function ensureKey(dir: string): Promise<{ key: KeyPair; fresh: boolean }> {
   const had = readKey(dir)
