@@ -15,7 +15,11 @@ import type { Card, Item } from './types.ts'
 /** A limit: so many tokens, so many percent of the session's window, or never for this session. */
 export type CompactLimit = { tokens: number } | { share: number } | 'never'
 
-/** The smallest limit in tokens, and the range of a share: below them a session would compact on every turn. */
+/**
+ * The smallest limit in tokens, and the range of a share. A limit should sit well above what a
+ * fresh session carries anyway (its system prompt and tools, often 20k to 90k): one below it is held
+ * after its first compaction (measureRun), one just above it compacts again after a few turns.
+ */
 export const MIN_COMPACT_TOKENS = 10_000
 export const MIN_COMPACT_SHARE = 5
 export const MAX_COMPACT_SHARE = 95
@@ -53,7 +57,11 @@ export function shortTokens(n: number): string {
 export function limitText(limit: CompactLimit): string {
   if (limit === 'never') return 'never'
   if ('share' in limit) return `${limit.share}%`
-  return shortTokens(limit.tokens).toLowerCase()
+  // Exact, as the owner wrote it: 1.25m stays 1.25m, 12500 is 12.5k.
+  const n = limit.tokens
+  if (n >= 1_000_000 && n % 1000 === 0) return `${n / 1_000_000}m`
+  if (n % 100 === 0) return `${n / 1000}k`
+  return String(n)
 }
 
 /** Settings' default (config.json `compact`): `{ at, note }`, or a bare limit; off when it has none. */
@@ -217,7 +225,14 @@ export type CompactItem = Pick<
   Item,
   'key' | 'session' | 'pane' | 'agent' | 'status' | 'sleeping' | 'attention' | 'context' | 'contextSize'
 > &
-  Partial<Pick<Item, 'day' | 'call'>>
+  Partial<Pick<Item, 'day' | 'call' | 'auto'>>
+
+/**
+ * How long a /compact no compaction followed holds the session (a board that died between its
+ * claim and the command, a transcript the board could not read): then it is armed again, so a
+ * session is never left without auto-compact for good, nor compacted more often than this.
+ */
+export const FAILED_RETRY_MS = 6 * 3600_000
 
 /**
  * What to do for a session now:
@@ -237,7 +252,12 @@ export function compactable(item: CompactItem): boolean {
   return item.agent === 'claude' && !!item.pane && !!item.session && !item.day && !item.call
 }
 
-export function compactStep(item: CompactItem, rule: CompactRule, run: CompactRun | null): CompactStep {
+export function compactStep(
+  item: CompactItem,
+  rule: CompactRule,
+  run: CompactRun | null,
+  now = Date.now(),
+): CompactStep {
   if (!compactable(item)) return { do: 'none' }
   // A /compact on its way, or one whose result is not measured yet: the compactor settles it
   // (settleRun, measureRun), nothing else is typed meanwhile.
@@ -246,8 +266,12 @@ export function compactStep(item: CompactItem, rule: CompactRule, run: CompactRu
   const setting = rule.limit ? limitText(rule.limit) : ''
   const context = typeof item.context === 'number' ? item.context : null
   if (run?.hold) {
-    // Below the limit again (any compaction, a /clear), another limit, or none: armed again.
-    if (limit === null || run.setting !== setting || (context !== null && context < limit)) return { do: 'release' }
+    // No limit any more, another limit, or the context below it again (any compaction, a /clear):
+    // armed again. A share whose window size is not known now decides nothing: it stays held.
+    if (!rule.limit || run.setting !== setting) return { do: 'release' }
+    if (limit !== null && context !== null && context < limit) return { do: 'release' }
+    // One no compaction followed is tried again after a long while.
+    if (run.state === 'failed' && now - run.at >= FAILED_RETRY_MS) return { do: 'release' }
     return { do: 'none' }
   }
   if (limit === null || context === null || context < limit) return { do: 'none' }
@@ -255,7 +279,10 @@ export function compactStep(item: CompactItem, rule: CompactRule, run: CompactRu
   if (item.sleeping) return { do: 'wait', why: 'asleep' }
   if (item.status === 'working') return { do: 'wait', why: 'busy' }
   if (item.status === 'blocked' || item.attention === 'decision') return { do: 'wait', why: 'dialog' }
-  if (item.attention === 'ask' || item.attention === 'question') return { do: 'wait', why: 'asked' }
+  // A question waiting on the owner, also one whose card the owner dragged to another column (the
+  // pin hides it from `attention`; `auto` is where the card would be without it).
+  if (item.attention === 'ask' || item.attention === 'question' || item.auto === 'me')
+    return { do: 'wait', why: 'asked' }
   if (item.status !== 'idle' && item.status !== 'done') return { do: 'wait', why: item.status }
   return { do: 'compact', limit, setting }
 }

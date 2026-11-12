@@ -505,13 +505,19 @@ function toDay(item: Item, text: string): ActionResult {
  * With `free`, also while it works (instead of queueing into its turn); with `draft`, also while
  * the user has unsent text in its input box (the scheduler's guards). Those refusals say `busy`,
  * plus `dialog` or `draft` for those two. `woken`: the caller woke the session itself just now
- * (the scheduler), so herdr may not name it in its pane yet.
+ * (the scheduler), so herdr may not name it in its pane yet. `probe` (auto-compact, #378): every
+ * check, nothing typed, for a sleeping session nothing at all (it is not woken).
  */
 export async function send(
   deps: Deps,
   item: Item,
   message: string,
-  { free = false, draft: guardDraft = false, woken = false }: { free?: boolean; draft?: boolean; woken?: boolean } = {},
+  {
+    free = false,
+    draft: guardDraft = false,
+    woken = false,
+    probe = false,
+  }: { free?: boolean; draft?: boolean; woken?: boolean; probe?: boolean } = {},
 ): Promise<ActionResult> {
   const text = String(message ?? '').trim()
   if (!text) return { ok: false, error: t('err.emptyMessage') }
@@ -529,6 +535,7 @@ export async function send(
     return null
   }
   let pane = item.pane
+  if (item.sleeping && probe) return { ok: false, busy: true, error: t('err.sessionChanged', { name: item.name }) }
   if (item.sleeping) {
     const r = await wake(deps, item)
     if (!r.ok) return r
@@ -563,6 +570,7 @@ export async function send(
       if (after) return after
       if (fresh?.kind !== agent?.kind) return { ok: false, error: t('err.sessionChanged', { name: item.name }) }
     }
+    if (probe) return { ok: true }
     // This read and prompt are separate CLI calls, not an atomic identity check and send.
     // A leading dash would be read as an option by the herdr CLI.
     await herdr(['agent', 'prompt', pane, /^-/.test(text) ? ` ${text}` : text])

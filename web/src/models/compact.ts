@@ -18,6 +18,10 @@ export function compactPlaceholder(view: CompactView | undefined, def: string, t
   return limit ? t('compact.byDefault', { limit }) : t('compact.offHint')
 }
 
+/** A share of the window whose size the board does not know yet (no status line for it so far): nothing happens until it does. */
+export const windowUnknown = (view: CompactView | undefined): boolean =>
+  !!view?.limit.endsWith('%') && view.tokens === null
+
 export const compactNotePlaceholder = (_view: CompactView | undefined, t: Translator): string => t('compact.notePh')
 
 /** The board's last /compact in words; `held`: no other until the context is below the limit or the limit changes. */
@@ -32,7 +36,9 @@ export function compactRunText(
   const held = !!run.hold
   if (run.state === 'sent') return { text: t('compact.run.sent', { when, from }), held: false, hint: '' }
   if (run.state === 'failed')
-    return { text: t('compact.run.failed', { when, from }), held, hint: t('compact.held', { limit }) }
+    return held
+      ? { text: t('compact.run.failed', { when, from }), held, hint: t('compact.held', { limit }) }
+      : { text: t('compact.run.failedFree', { when, from }), held, hint: '' }
   const to = run.to === undefined ? '?' : tokens(run.to)
   if (held) return { text: t('compact.run.high', { when, from, to, limit }), held, hint: t('compact.held', { limit }) }
   return { text: t('compact.run.done', { when, from, to }), held: false, hint: '' }

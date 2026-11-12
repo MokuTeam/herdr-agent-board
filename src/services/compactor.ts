@@ -23,6 +23,7 @@ import {
   compactRule,
   compactStep,
   doneTimes,
+  FAILED_RETRY_MS,
   firstRequestAfter,
   measureRun,
   parseCompactLimit,
@@ -38,6 +39,8 @@ import type { Deps } from './deps.ts'
 
 /** How much of a transcript's end is read for the compaction after a /compact (its summary line can be long). */
 const TAIL_BYTES = 4 << 20
+/** How far back a transcript is read once more before a /compact is called one no compaction followed. */
+const DEEP_TAIL_BYTES = 32 << 20
 /** A compaction a little before the /compact was typed (the clocks of two processes) still counts. */
 const SKEW_MS = 5000
 /** A run typed by another board and still on its way holds this long before this board may type again. */
@@ -96,14 +99,14 @@ function claim(key: string, run: CompactRun): { ok: true; before: CompactRun | n
   return ok ? { ok: true, before } : { ok: false }
 }
 
-/** The transcript's lines from its end, for the compaction after a /compact; none when it cannot be read. */
-function tailLines(path: string | null | undefined): string[] {
-  if (!path) return []
+/** The transcript's last `bytes`, in lines, for the compaction after a /compact; null when it cannot be read. */
+function tailLines(path: string | null | undefined, bytes = TAIL_BYTES): string[] | null {
+  if (!path) return null
   try {
     const size = statSync(path).size
-    return readTail(path, size, TAIL_BYTES).split('\n')
+    return readTail(path, size, bytes).split('\n')
   } catch {
-    return []
+    return null
   }
 }
 
@@ -135,6 +138,8 @@ export function startCompactor({ deps, onChange = () => {} }: CompactorOptions):
   let timer: ReturnType<typeof setTimeout> | undefined
   let ticking = false
   let stopped = false
+  // The last error a session's /compact met that was not its being busy, logged once until it changes.
+  const lastError = new Map<string, string>()
 
   async function tick(): Promise<void> {
     if (ticking || stopped) return
@@ -167,11 +172,21 @@ export function startCompactor({ deps, onChange = () => {} }: CompactorOptions):
     const run = runOf(card?.compactRun)
     const context = typeof item.context === 'number' ? item.context : null
     if (run?.state === 'sent') {
-      const lines = tailLines(item.transcript)
-      let settled = settleRun(run, compactionSince(lines, run.at - SKEW_MS), item.status, context, Date.now())
+      const now = Date.now()
+      let lines = tailLines(item.transcript)
+      // A transcript the board cannot read says nothing: the run waits (FAILED_RETRY_MS at most).
+      if (lines === null && now - run.at < FAILED_RETRY_MS) return false
+      let found = compactionSince(lines ?? [], run.at - SKEW_MS)
+      let settled = settleRun(run, found, item.status, context, now)
+      // Before it is called one no compaction followed: once more, further back.
+      if (settled?.state === 'failed' && lines !== null) {
+        lines = tailLines(item.transcript, DEEP_TAIL_BYTES) ?? lines
+        found = compactionSince(lines, run.at - SKEW_MS)
+        if (found) settled = settleRun(run, found, item.status, context, now)
+      }
       if (!settled) return false
       // A request after it already (the board was off meanwhile): measured at once.
-      const after = pending(settled) && settled.doneAt ? firstRequestAfter(lines, settled.doneAt) : null
+      const after = pending(settled) && settled.doneAt ? firstRequestAfter(lines ?? [], settled.doneAt) : null
       if (after !== null) settled = measureRun(settled, after)
       if (!writeRun(item.key, run.at, settled)) return false
       if (settled.state === 'failed') log(`compact: ${item.name}: /compact typed, no compaction followed; held`)
@@ -180,7 +195,7 @@ export function startCompactor({ deps, onChange = () => {} }: CompactorOptions):
     }
     // What the compaction left, on the first request after it: the system prompt and tools included.
     if (run && pending(run) && run.doneAt) {
-      const after = firstRequestAfter(tailLines(item.transcript), run.doneAt)
+      const after = firstRequestAfter(tailLines(item.transcript) ?? [], run.doneAt)
       if (after === null) return false
       const measured = measureRun(run, after)
       if (!writeRun(item.key, run.at, measured)) return false
@@ -188,7 +203,7 @@ export function startCompactor({ deps, onChange = () => {} }: CompactorOptions):
       return true
     }
     const rule = compactRule(card, cfg.compact)
-    const step = compactStep(item, rule, run)
+    const step = compactStep(item, rule, run, Date.now())
     if (step.do === 'release' && run) {
       // Settled for good: the context was seen below the limit (or the limit changed).
       const { hold, ...rest } = run
@@ -197,21 +212,37 @@ export function startCompactor({ deps, onChange = () => {} }: CompactorOptions):
       return true
     }
     if (step.do !== 'compact' || context === null) return false
+    // Never woken for it: the item's `sleeping` may be a moment old, so send is told it is awake,
+    // and refuses a pane that no longer holds the session.
+    const awake: Item = { ...item, sleeping: false }
+    const command = compactCommand(rule.note)
+    // Free to type, as herdr and the screen say now, before anything is written on the card: a
+    // session busy, in a dialog or with the owner's draft leaves its card as it is.
+    const free = await send(deps, awake, command, { free: true, draft: true, probe: true })
+    if (!free.ok) return refused(item, free)
     const now = Date.now()
     const next: CompactRun = { state: 'sent', at: now, from: context, limit: step.limit, setting: step.setting }
     const claimed = claim(item.key, next)
     if (!claimed.ok) return false
-    const r = await send(deps, item, compactCommand(rule.note), { free: true, draft: true })
+    const r = await send(deps, awake, command, { free: true, draft: true })
     if (!r.ok) {
-      // Not free after all (a turn began, a dialog, the owner's draft): as it was, tried next tick.
+      // Not free after all (a turn began just now): as it was, tried next tick.
       writeRun(item.key, now, claimed.before)
-      if (!r.busy) log(`compact: ${item.name}: ${r.error}`)
-      return false
+      return refused(item, r)
     }
+    lastError.delete(item.key)
     log(
       `compact: ${item.name}: context ${shortTokens(context)} at or above ${shortTokens(step.limit)} (${rule.source}), /compact typed`,
     )
     return true
+  }
+
+  /** Not typed: a busy session says nothing; another reason is logged once, until it changes. */
+  function refused(item: Item, r: { busy?: boolean; error: string }): false {
+    if (r.busy || lastError.get(item.key) === r.error) return false
+    lastError.set(item.key, r.error)
+    log(`compact: ${item.name}: ${r.error}`)
+    return false
   }
 
   async function loop(): Promise<void> {

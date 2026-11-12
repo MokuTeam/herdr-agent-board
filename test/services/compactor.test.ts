@@ -13,6 +13,9 @@ setDefaultTimeout(20_000)
 const S1 = 'c0a1e5f2-0000-4000-8000-0000000000a1'
 const S2 = 'c0a1e5f2-0000-4000-8000-0000000000a2'
 const S3 = 'c0a1e5f2-0000-4000-8000-0000000000a3'
+const S4 = 'c0a1e5f2-0000-4000-8000-0000000000a4'
+const S5 = 'c0a1e5f2-0000-4000-8000-0000000000a5'
+const S6 = 'c0a1e5f2-0000-4000-8000-0000000000a6'
 
 const RULE = '─'.repeat(40)
 /** Claude's input box as `herdr agent read --ansi` shows it; `typed`: the owner's unsent text. */
@@ -147,33 +150,62 @@ describe('auto-compact', () => {
     expect(prompts(box)).toEqual([{ pane: 'p1', text: '/compact' }])
   })
 
-  test("never into a dialog, a question waiting on the owner, the owner's unsent text, or a sleeping session", async () => {
+  test("never into a dialog, a question waiting on the owner (a pinned card too), or the owner's unsent text; the one free session does get it", async () => {
     const box = await sandbox()
+    const [blocked, asks, asked, dialog, pinned, free] = [S1, S2, S3, S4, S5, S6]
     herdrWith(box, [
-      { pane: 'p1', session: S1, status: 'blocked' },
-      { pane: 'p2', session: S2, status: 'idle' },
+      { pane: 'p1', session: blocked, status: 'blocked' },
+      { pane: 'p2', session: asks, status: 'idle' },
+      { pane: 'p3', session: asked, status: 'idle' },
+      { pane: 'p4', session: dialog, status: 'idle' },
+      { pane: 'p5', session: pinned, status: 'idle' },
+      { pane: 'p6', session: free, status: 'idle' },
     ])
-    for (const s of [S1, S2]) {
-      transcript(box, s)
+    // herdr says idle, but a dialog is on the screen: no input box to type into.
+    const state = JSON.parse(readFileSync(box.env.FAKE_HERDR_STATE as string, 'utf8'))
+    box.state({
+      ...state,
+      'agent read p4': { text: ['Do you want to make this edit?', ' 1. Yes', ' 2. No', 'Esc to cancel'].join('\n') },
+    })
+    for (const s of [blocked, asks, dialog, pinned, free]) transcript(box, s)
+    // Its turn ended with a question nobody answered.
+    transcript(box, asked, [
+      {
+        type: 'assistant',
+        timestamp: new Date().toISOString(),
+        message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Which branch should I take?' }] },
+      },
+    ])
+    for (const s of [blocked, asks, asked, dialog, pinned, free]) {
       context(box, s, 150_000)
+      card(box, s, { compactAt: '100k' })
     }
-    card(box, S1, { compactAt: '100k' })
-    card(box, S2, { compactAt: '100k', ask: 'Which branch?', askSince: Date.now() })
+    card(box, asks, { compactAt: '100k', ask: 'Which branch?', askSince: Date.now() })
+    // The owner dragged a card that asks to "Done": the pin hides the question, it still waits.
+    card(box, pinned, { compactAt: '100k', ask: 'Ship it?', askSince: Date.now(), pin: 'done', pinAt: Date.now() })
     await compactor(box)
+    await until(() => prompts(box).length >= 1)
     await sleep(1000)
-    expect(prompts(box)).toEqual([])
+    expect(prompts(box)).toEqual([{ pane: 'p6', text: '/compact' }])
+    for (const s of [blocked, asks, asked, dialog, pinned]) expect(cardOf(box, s)?.compactRun).toBeUndefined()
 
-    // An idle session with the owner's text in its input box: Enter would send that too.
+    // An idle session with the owner's text in its input box: Enter would send that too. Its card
+    // is left as it was meanwhile; once the text is gone, it gets /compact.
     const draft = await sandbox()
     herdrWith(draft, [{ pane: 'p1', session: S1, status: 'idle' }], 'half a sentence')
     transcript(draft, S1)
     context(draft, S1, 150_000)
     card(draft, S1, { compactAt: '100k' })
+    const before = readFileSync(join(draft.cards, `${S1}.json`), 'utf8')
     await compactor(draft)
     await sleep(1000)
     expect(prompts(draft)).toEqual([])
+    expect(readFileSync(join(draft.cards, `${S1}.json`), 'utf8')).toBe(before)
+    herdrWith(draft, [{ pane: 'p1', session: S1, status: 'idle' }])
+    await until(() => prompts(draft).length === 1)
+  })
 
-    // Asleep: not woken for it, nothing typed.
+  test('a sleeping session is not woken for it, and nothing is typed', async () => {
     const asleep = await sandbox()
     const cwd = projectDir(asleep)
     herdrAsleep(asleep, cwd)
@@ -183,9 +215,41 @@ describe('auto-compact', () => {
     await compactor(asleep)
     await sleep(1000)
     const calls = asleep.calls().map(a => a.slice(0, 2).join(' '))
+    // It looked: the board's snapshot was asked for.
     expect(calls).toContain('api snapshot')
     expect(calls).not.toContain('agent prompt')
     expect(calls).not.toContain('pane run')
+  })
+
+  test('two boards at once (a restart that overlaps): one /compact', async () => {
+    const box = await sandbox()
+    herdrWith(box, [{ pane: 'p1', session: S1, status: 'idle' }])
+    transcript(box, S1)
+    context(box, S1, 150_000)
+    card(box, S1, { compactAt: '100k' })
+    await Promise.all([compactor(box), compactor(box)])
+    await until(() => prompts(box).length >= 1)
+    await sleep(1000)
+    expect(prompts(box)).toHaveLength(1)
+  })
+
+  test('a share of the window: of the size the status line says', async () => {
+    const box = await sandbox()
+    herdrWith(box, [
+      { pane: 'p1', session: S1, status: 'idle' },
+      { pane: 'p2', session: S2, status: 'idle' },
+    ])
+    for (const s of [S1, S2]) {
+      transcript(box, s)
+      context(box, s, 150_000)
+    }
+    card(box, S1, { compactAt: '10%' })
+    card(box, S2, { compactAt: '20%' })
+    await compactor(box)
+    await until(() => prompts(box).length >= 1)
+    await sleep(800)
+    expect(prompts(box)).toEqual([{ pane: 'p1', text: '/compact' }])
+    expect(cardOf(box, S1)?.compactRun).toMatchObject({ limit: 100_000, setting: '10%' })
   })
 
   test("Settings' default applies; a session's own limit beats it, its own never beats both", async () => {

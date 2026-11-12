@@ -67,8 +67,10 @@ export interface ClaudeHome {
   transcriptPath(sessionId: string, cwd: string): string | null
   transcriptInfo(path: string | null): TranscriptInfo | null
   conversation(path: string, limit?: number, opts?: ConversationOptions): ConversationTurn[]
-  /** The session's conversation() and its queuedPrompts(), from one read of the transcript. */
-  /** `opts.compactions`: compactions as lines of their own (#378), for a session auto-compact is in force for. */
+  /**
+   * The session's conversation() and its queuedPrompts(), from one read of the transcript;
+   * `opts.compactions`: compactions as lines of their own (#378), for a session auto-compact is in force for.
+   */
   sessionThread(path: string, limit?: number, queue?: QueueWindow, opts?: ConversationOptions): SessionThread
   searchHistory(cwd: string, query: string | null, excludeSession?: string | null): Promise<HistoryResult>
   recentFolders(limit?: number): Promise<string[]>

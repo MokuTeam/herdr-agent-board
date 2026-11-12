@@ -90,8 +90,9 @@ export function runLine(run: CompactRun): string {
 }
 
 /** What `board compact` prints for a session: the limit in force and where it comes from, its instructions, its last run. */
-export function compactLine(card: Card | null, cfg: Pick<Config, 'compact'>, windowSize: number | null = null): string {
-  const view = compactView(card, cfg.compact, windowSize)
+export function compactLine(card: Card | null, cfg: Pick<Config, 'compact'>): string {
+  // A share's tokens need the window's size, which only the running board reads (the status line's).
+  const view = compactView(card, cfg.compact, null)
   if (!view)
     return 'compact: off (no limit for this session, no default in Settings) · set one: board compact --at 300k'
   const where =
@@ -103,7 +104,6 @@ export function compactLine(card: Card | null, cfg: Pick<Config, 'compact'>, win
           ? "never, this session's own"
           : 'off'
   const parts = [`compact: ${where}`]
-  if (view.tokens !== null && view.limit.endsWith('%')) parts.push(`${shortTokens(view.tokens)} of this window`)
   const note = noteText(card?.compactNote)
   if (note) parts.push(`keeps: ${note}`)
   else {

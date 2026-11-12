@@ -16,6 +16,7 @@ import {
   compactPlaceholder,
   compactRunText,
   offersCompact,
+  windowUnknown,
 } from '../../models/compact.ts'
 import { doingLabel, type FieldEdit, type FieldScene, liveEdit, typing } from '../../models/sheet.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
@@ -105,7 +106,12 @@ function CompactRows({ item, open, disabled }: Pick<SheetCardProps, 'item' | 'op
   const { data, now } = useBoardContext()
   const view = item.compact
   if (!offersCompact(item, open)) return null
-  const run = view?.run ? compactRunText(view.run, t, now) : null
+  // The last run, else why a share does nothing yet.
+  const run = view?.run
+    ? compactRunText(view.run, t, now)
+    : windowUnknown(view)
+      ? { text: t('compact.noWindow'), held: false, hint: '' }
+      : null
   const showNote = !!view?.note || (open && !!view?.limit)
   return (
     <>
