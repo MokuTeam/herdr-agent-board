@@ -15,12 +15,14 @@ import { statSync } from 'node:fs'
 import { allCards, readCard, updateCard } from '../adapters/cards.ts'
 import { readTail } from '../adapters/claude-home.ts'
 import {
+  COMPACT_DONE_KEPT,
   type CompactRun,
   compactCommand,
   compactConfig,
   compactionSince,
   compactRule,
   compactStep,
+  doneTimes,
   firstRequestAfter,
   measureRun,
   parseCompactLimit,
@@ -68,6 +70,11 @@ function writeRun(key: string, expect: number | null, run: CompactRun | null): b
     const card: Card = { ...(saved ?? { key }) }
     if (run) card.compactRun = run
     else delete card.compactRun
+    // A compaction that just ended: its time joins the ones the conversation marks as the board's.
+    if (run?.state === 'done' && run.doneAt && now?.state === 'sent') {
+      const times = doneTimes(saved?.compactDone).filter(t => t !== run.doneAt)
+      card.compactDone = [...times, run.doneAt].slice(-COMPACT_DONE_KEPT)
+    }
     return card
   })
   return wrote

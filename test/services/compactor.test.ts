@@ -226,6 +226,8 @@ describe('auto-compact', () => {
       doneAt: typed + 20_000,
       hold: true,
     })
+    // Its time is kept, so the conversation marks this compaction as the board's.
+    expect(cardOf(box, S1)?.compactDone).toEqual([typed + 20_000])
     await sleep(800)
     expect(prompts(box)).toEqual([])
     expect(

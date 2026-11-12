@@ -73,6 +73,8 @@ export interface Card {
   compactNote?: string
   /** The board's last /compact for it (#378, core/compact.ts CompactRun). */
   compactRun?: unknown
+  /** When the board's compactions of it ended (#378, the newest 20), for its conversation's lines. */
+  compactDone?: unknown
   [extra: string]: unknown
 }
 

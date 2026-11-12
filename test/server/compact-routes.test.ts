@@ -81,6 +81,8 @@ describe('auto-compact on the web board', () => {
           setting: '300k',
           doneAt: DONE,
         },
+        // The board's compactions: this one, and one long before that the transcript no longer shows.
+        compactDone: [DONE - 86_400_000, DONE],
       }),
     )
     const contexts = join(box.dir, 'state', 'herdr', 'plugins', 'agent-board', 'context')
@@ -129,6 +131,7 @@ describe('auto-compact on the web board', () => {
         setting: '300k',
         doneAt: DONE,
       },
+      done: [DONE - 86_400_000, DONE],
     })
   })
 

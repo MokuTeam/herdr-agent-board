@@ -89,13 +89,12 @@ function queueOf(deps: Deps, item: Item): QueuedPrompt[] {
   return deps.claude.sessionThread(item.transcript ?? '', 60, queueWindow(deps, item)).queued
 }
 
-/** The compaction the board's auto-compact made (#378, the card's last run) marked as the board's in the conversation. */
+/** The compactions the board's auto-compact made (#378, their times on the card) marked as the board's in the conversation. */
 function byBoard(item: Item, conv: ConversationTurn[]): ConversationTurn[] {
-  const run = item.compact?.run
-  const at = run?.state === 'done' ? run.doneAt : undefined
-  if (!at) return conv
+  const times = new Set(item.compact?.done ?? [])
+  if (!times.size) return conv
   return conv.map(m =>
-    m.role === 'notice' && m.kind === 'compact' && m.at === at ? { ...m, by: 'board' as const } : m,
+    m.role === 'notice' && m.kind === 'compact' && times.has(m.at) ? { ...m, by: 'board' as const } : m,
   )
 }
 

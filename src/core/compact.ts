@@ -167,7 +167,18 @@ export interface CompactView {
   tokens: number | null
   /** The board's last /compact for it, null for none. */
   run: CompactRun | null
+  /** When the board's compactions ended (the newest COMPACT_DONE_KEPT), for the conversation's lines; absent when none. */
+  done?: number[]
 }
+
+/** How many of the board's compactions a card keeps the time of (`compactDone`). */
+export const COMPACT_DONE_KEPT = 20
+
+/** The times of the board's compactions a card keeps, oldest first; [] for none or anything else. */
+export const doneTimes = (v: unknown): number[] =>
+  Array.isArray(v)
+    ? v.filter((x): x is number => typeof x === 'number' && Number.isFinite(x)).slice(-COMPACT_DONE_KEPT)
+    : []
 
 /**
  * A session's auto-compact for the board, or null when there is nothing to show: no limit of its
@@ -183,6 +194,7 @@ export function compactView(
   const own = ownLimit ? limitText(ownLimit) : ''
   const note = noteText(card?.compactNote)
   const run = runOf(card?.compactRun)
+  const done = doneTimes(card?.compactDone)
   const rule = compactRule(card, cfg)
   if (!own && !note && !run && rule.source === 'off') return null
   return {
@@ -192,6 +204,7 @@ export function compactView(
     source: rule.source,
     tokens: limitTokens(rule.limit, windowSize),
     run,
+    ...(done.length && { done }),
   }
 }
 
