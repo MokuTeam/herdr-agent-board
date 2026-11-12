@@ -30,6 +30,13 @@ export const MAX_DRAFTS = 20
  */
 export const CAPS = ['threads', 'channels', 'replies', 'files'] as const
 export type Cap = (typeof CAPS)[number]
+/**
+ * Shared threads (#394, docs/design/threads 11): a topic that carries a status, in the signed body
+ * field `work` (Message.body.work). Said in `hello` only while config.json's `threads` (with
+ * `share`) and `team` are on, after the caps above; a board that does not say it never gets the
+ * field, and reads a shared thread as a topic with status replies.
+ */
+export const WORK_CAP = 'work'
 export const MAX_CAPS = 8
 export const MAX_CAP = 32
 /** The thread with no topic, in a pair or the team; today's flat thread with a peer is its pair's. */
@@ -74,6 +81,70 @@ export interface FileRef {
 export interface BoxClaim {
   key: string
   sig: string
+}
+
+/** A shared thread's statuses on the wire (#394): core/work-threads.ts THREAD_STATUSES. */
+export const WORK_STATUSES = ['next', 'doing', 'waiting', 'owner', 'done', 'dropped'] as const
+export const WORK_TYPES = ['note', 'ask', 'answer', 'system'] as const
+/** A shared thread's summary and what it waits on: one line, at most. */
+export const MAX_WORK_LINE = 160
+/** An entry counter, at most. */
+export const MAX_WORK_N = 999_999_999
+
+/**
+ * Who a shared thread is assigned to, as the wire names it (#394): a board by its peer id, and the
+ * session's name when one of its sessions holds it. Each board says it of its own sessions only.
+ */
+export interface WorkParty {
+  peer: string
+  agent?: string
+}
+
+/** The head fields an entry of a shared thread changes (11.1): what a peer may set at all. */
+export interface WorkSet {
+  status?: (typeof WORK_STATUSES)[number]
+  summary?: string
+  title?: string
+  waitingOn?: string
+  assignee?: WorkParty | null
+}
+
+/** The sender's head after the entry (4.3, rule 3): a board that missed entries takes it. */
+export interface WorkHead {
+  key: string
+  title: string
+  status: (typeof WORK_STATUSES)[number]
+  summary: string
+  rev: number
+}
+
+/**
+ * A shared thread's entry (#394, 11.1), in the signed body of the message that carries it; the
+ * message's id (a team post's id) is the entry's. `n` the per-thread counter, `auto` the text is
+ * the line the board wrote for a peer without `work` (not shown twice), `share` the thread was
+ * shared with this message, `unshare` it no longer is, `hist` the message's file is the thread's
+ * history (a JSON export, "Send history").
+ */
+export interface WorkBody {
+  n: number
+  type: (typeof WORK_TYPES)[number]
+  set?: WorkSet
+  head: WorkHead
+  auto?: true
+  share?: true
+  unshare?: true
+  hist?: true
+}
+
+/**
+ * A shared thread's entry as the board posts it (#394): the entry's id, which the post takes as its
+ * own (a team post's first copy's), its `work`, and `open` for the post that shares the thread, which
+ * starts the topic under the thread's id.
+ */
+export interface WorkPost {
+  id: string
+  body: WorkBody
+  open?: true
 }
 
 /** What a board with `files` shows an older board in a file's place, after the post's text. */
@@ -132,6 +203,7 @@ export interface Message {
    * cap. `replyTo` (#370): the id of the message this one answers, a pair's message or a team post's;
    * `post`: on a team post's copy, the post's id (its first copy's). Both only to a peer with `replies`.
    * `file` (#371): only to a peer with `files` and a box, and then `text` may be empty.
+   * `work` (#394): a shared thread's entry, only to a peer with `work`, in a topic.
    */
   body: {
     text: string
@@ -141,6 +213,7 @@ export interface Message {
     replyTo?: string
     post?: string
     file?: FileRef
+    work?: WorkBody
   }
 }
 

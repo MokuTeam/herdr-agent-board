@@ -606,6 +606,31 @@ describe('every lane shared (#386)', () => {
     expect(secret).toMatchObject({ sent: false, reason: 'secret' })
     const nowhere = await w.router.agentPost({ to: w.P.pub, text: 'hi', session: { key: 'sess-in-no-lane' } })
     expect(nowhere).toMatchObject({ sent: false, reason: 'lane' })
+    // A shared thread's entry (#394): its summary goes out in `work`, and is checked with the text.
+    const id = crypto.randomUUID()
+    await deliver(w, w.P, 'start', { thread: { id, title: 'T' } })
+    const inWork = await w.router.agentPost({
+      to: w.P.pub,
+      thread: { id },
+      text: 'done: mapped',
+      session: { key: 'sess-globex' },
+      work: {
+        id: crypto.randomUUID(),
+        body: {
+          n: 2,
+          type: 'note',
+          set: { status: 'done', summary: 'key ghp_abcdefghijklmnopqrstuvwxyz0123' },
+          head: {
+            key: 'acme-1',
+            title: 'T',
+            status: 'done',
+            summary: 'key ghp_abcdefghijklmnopqrstuvwxyz0123',
+            rev: 2,
+          },
+        },
+      },
+    })
+    expect(inWork).toMatchObject({ sent: false, reason: 'secret' })
   })
 
   test('a thread can be handed to a session in any lane; to a session in no lane it cannot', async () => {

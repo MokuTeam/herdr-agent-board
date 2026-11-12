@@ -25,6 +25,13 @@ export interface ConfirmLines {
   note?: string
 }
 
+/** A shared thread as the confirmation names it (#394): its key and title, as the board said them. */
+function threadName(a: Reply): string {
+  const key = typeof a.thread === 'string' ? a.thread : ''
+  const title = typeof a.title === 'string' ? a.title : ''
+  return [key, title].filter(Boolean).join(' ')
+}
+
 /** The lines that say what is being confirmed, from the board's description of the action. */
 export function confirmLines(a: Reply, t: Translator): ConfirmLines {
   const who = typeof a.who === 'string' ? a.who : null
@@ -118,6 +125,25 @@ export function confirmLines(a: Reply, t: Translator): ConfirmLines {
       return { title: t('team.confirm.on'), note: t('team.confirm.onNote') }
     case 'passkey-off':
       return { title: t('team.confirm.off'), note: t('team.confirm.offNote') }
+    // Shared threads (#394): what goes to the teammates' boards as the owner.
+    case 'thread-send':
+      return {
+        title: t('wt.confirm.send', { thread: threadName(a) }),
+        ...(typeof a.text === 'string' && a.text !== '' && { text: a.text }),
+        note: unlocks,
+      }
+    case 'thread-share':
+      return {
+        title: t('wt.confirm.share', { thread: threadName(a), who: who ?? '' }),
+        items: [a.history === true ? t('wt.confirm.withHistory') : t('wt.confirm.noHistory')],
+      }
+    case 'thread-history':
+      return { title: t('wt.confirm.history', { thread: threadName(a) }), items: [t('wt.confirm.historyItem')] }
+    case 'thread-track':
+      return {
+        title: t('wt.confirm.track'),
+        ...(typeof a.lane === 'string' && { items: [t('wt.confirm.trackLane', { lane: a.lane })] }),
+      }
     default:
       return { title: t('team.confirm.unknown') }
   }

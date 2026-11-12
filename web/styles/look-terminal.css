@@ -631,3 +631,13 @@
 :root[data-look="terminal"] .wt-body[data-wide] .wt-filter { background: none; }
 :root[data-look="terminal"] .wt-body .mini { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
 :root[data-look="terminal"] .wt-body .mini.primary { background: none; box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
+/* Shared threads (#394, threads.css): the Share pill and a topic's thread pill outlined, the
+   offer and an agent's request as rules on the left, the picker framed. */
+:root[data-look="terminal"] .wt-share-pill, :root[data-look="terminal"] .wt-topic-pill { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .wt-topic-pill { box-shadow: inset 0 0 0 1px var(--c, var(--gray)); }
+:root[data-look="terminal"] .wt-share-pill:hover { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .wt-offer { border-radius: 0; background: none; box-shadow: inset 2px 0 0 var(--orange); }
+:root[data-look="terminal"] .wt-request { border-radius: 0; background: none; box-shadow: inset 2px 0 0 var(--purple); }
+:root[data-look="terminal"] .wt-share-pick { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .wt-share-to select { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .team-body .wt-topic .mini, :root[data-look="terminal"] .wt-share .mini, :root[data-look="terminal"] .wt-out .mini { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }

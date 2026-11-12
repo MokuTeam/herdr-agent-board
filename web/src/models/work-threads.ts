@@ -7,6 +7,7 @@ import {
   applyEntry,
   KEY_IN_TEXT,
   type Party,
+  sharingOf,
   THREAD_KEY,
   type ThreadEntryView,
   type ThreadHead,
@@ -177,14 +178,31 @@ export type FeedItem =
   | {
       kind: 'status'
       entry: ThreadEntryView
-      /** What the entry did, for the line's words. */
-      did: 'created' | 'status' | 'proposed' | 'confirmed' | 'kept' | 'closed' | 'fields'
+      /**
+       * What the entry did, for the line's words. On a shared thread (#394): `shared`, `unshared`,
+       * and `said`, a line the board wrote (entries missing here, a history read in), shown as written.
+       */
+      did:
+        | 'created'
+        | 'status'
+        | 'proposed'
+        | 'confirmed'
+        | 'kept'
+        | 'closed'
+        | 'fields'
+        | 'shared'
+        | 'unshared'
+        | 'said'
       to: ThreadStatus
     }
   | { kind: 'ask'; entry: ThreadEntryView; open: boolean }
   | { kind: 'message'; entry: ThreadEntryView }
 
 const dayOf = (at: number): string => new Date(at).toDateString()
+
+/** The words of the board's system entries that share and unshare a thread (src/services/work-share.ts, #394). */
+export const SHARED_TEXT = 'shared'
+export const UNSHARED_TEXT = 'stopped sharing'
 
 /**
  * The feed in the order written: a day line where the day changes; an entry with words or files is
@@ -194,6 +212,7 @@ const dayOf = (at: number): string => new Date(at).toDateString()
  */
 export function feedOf(head: ThreadHead, entries: readonly ThreadEntryView[], openAsk: string | null): FeedItem[] {
   const out: FeedItem[] = []
+  const shared = sharingOf(head) !== null
   let h: ThreadHead | null = null
   let day = ''
   const blank: ThreadHead = {
@@ -227,21 +246,33 @@ export function feedOf(head: ThreadHead, entries: readonly ThreadEntryView[], op
     const created = e.type === 'system' && e.n === 1
     const changed = !before || before.status !== after.status
     const words = !!e.text && e.type !== 'system'
+    // A system entry with words on a thread that is or was shared (#394): sharing, or the board's line.
+    // A teammate's share comes as its first entry here, without words (its text was the board's line).
+    const sharedHere = shared && e.type === 'system' && !e.text && !before && e.author.kind === 'peer'
+    // Only this board's own lines are said as such; a teammate's system entry carries no words (#394).
+    const ownWords = !!e.text && (e.author.kind !== 'peer' || e.private === true)
+    const said = shared && e.type === 'system' && (ownWords || sharedHere) && !e.closed && !created
     const did: Extract<FeedItem, { kind: 'status' }>['did'] | null = created
       ? 'created'
-      : e.closed
-        ? 'closed'
-        : proposed
-          ? 'proposed'
-          : confirmed
-            ? 'confirmed'
-            : kept
-              ? 'kept'
-              : set.status !== undefined && changed
-                ? 'status'
-                : !words && !e.files?.length && !e.links?.length && Object.keys(set).length
-                  ? 'fields'
-                  : null
+      : said
+        ? e.text === SHARED_TEXT || sharedHere
+          ? 'shared'
+          : e.text === UNSHARED_TEXT
+            ? 'unshared'
+            : 'said'
+        : e.closed
+          ? 'closed'
+          : proposed
+            ? 'proposed'
+            : confirmed
+              ? 'confirmed'
+              : kept
+                ? 'kept'
+                : set.status !== undefined && changed
+                  ? 'status'
+                  : !words && !e.files?.length && !e.links?.length && Object.keys(set).length
+                    ? 'fields'
+                    : null
     if (did) out.push({ kind: 'status', entry: e, did, to: after.status })
     if (words || e.files?.length || e.links?.length) out.push({ kind: 'message', entry: e })
   }
@@ -251,4 +282,13 @@ export function feedOf(head: ThreadHead, entries: readonly ThreadEntryView[], op
 /** Who wrote an entry, for its mark: the owner's own words are "out", everyone else's "in". */
 export const isOwnerParty = (p: Party | null | undefined): boolean => p?.kind === 'owner'
 export const partyLabel = (p: Party | null | undefined, you: string): string =>
-  !p ? '' : p.kind === 'owner' ? you : p.kind === 'session' ? p.name || p.key.slice(0, 8) : p.name || p.peer
+  !p
+    ? ''
+    : p.kind === 'owner'
+      ? you
+      : p.kind === 'session'
+        ? p.name || p.key.slice(0, 8)
+        : // A teammate's agent at their board (#394): `atlas-mapper@ben`.
+          p.agent
+          ? `${p.agent}@${p.name || p.peer.slice(0, 8)}`
+          : p.name || p.peer

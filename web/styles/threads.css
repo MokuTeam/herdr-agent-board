@@ -144,6 +144,39 @@ button.wt-who:active { transform: scale(0.96); }
 .wt-fold-rows[hidden] { display: none; }
 .wt-fold-more { align-self: flex-start; margin: 2px 8px; padding: 0; border: 0; background: none; color: var(--accent); font: 12.5px var(--font); cursor: pointer; }
 
+/* ---------------------------------------------------------------- shared threads (#394, design 11) */
+.wt-share-pill { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; padding: 2px 10px 2px 8px; border: 0; border-radius: 999px; background: var(--fill-2); color: var(--label-2); font: 600 12px var(--font); cursor: pointer; transition: transform 100ms ease-out, background-color 120ms ease, color 120ms ease; }
+.wt-share-pill:hover { background: color-mix(in srgb, var(--accent) 12%, var(--fill-2)); color: var(--accent); }
+.wt-share-pill:active { transform: scale(0.96); }
+.wt-share-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wt-share-pill svg, .wt-share svg { flex: none; width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.wt-share { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; color: color-mix(in srgb, var(--purple) 78%, var(--label)); font-size: 12.5px; }
+.wt-share-text { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
+.wt-share.ended { color: var(--label-3); }
+.wt-offer, .wt-request { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 12px; background: var(--fill-2); font-size: 12.5px; }
+.wt-offer { box-shadow: inset 3px 0 0 var(--orange); }
+.wt-request { box-shadow: inset 3px 0 0 var(--purple); }
+.wt-offer p, .wt-request p { flex: 1 1 220px; margin: 0; overflow-wrap: anywhere; }
+.wt-share-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-card); font-size: 12.5px; }
+.wt-share-to { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.wt-share-to span { color: var(--label-2); }
+.wt-share-to select { min-width: 0; max-width: 220px; min-height: 26px; border: 0; border-radius: 7px; background: var(--fill-2); color: var(--label); font: inherit; font-size: 16px; }
+@media (pointer: fine) { .wt-share-to select { font-size: 12.5px; } }
+.wt-share-history { display: inline-flex; align-items: center; gap: 5px; color: var(--label-2); cursor: pointer; }
+.wt-share-history:has(input:disabled) { opacity: 0.55; cursor: default; }
+.wt-share-note { flex: 1 1 100%; order: 9; color: var(--label-3); font-size: 11.5px; }
+.wt-out { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; color: var(--label-3); font-size: 11.5px; }
+.wt-notice-text .wt-out { margin-top: 0; }
+.wt-out-held { color: var(--orange); }
+.wt-out-refused { color: var(--red); }
+.wt-out-copy { color: color-mix(in srgb, var(--purple) 78%, var(--label)); }
+.wt-out .mini { min-height: 22px; }
+/* A Team topic that is a shared thread: its key with a status dot, on the row and in the head. */
+.wt-topic-pill { display: inline-flex; align-items: center; gap: 4px; flex: none; height: 18px; padding: 0 6px 0 5px; border-radius: 6px; background: color-mix(in srgb, var(--c, var(--gray)) 14%, transparent); color: var(--c, var(--gray)); font: 500 10.5px/1 var(--mono); white-space: nowrap; }
+.wt-topic-pill .wt-dot { width: 6px; height: 6px; }
+.wt-topic { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 2px 0; font-size: 12.5px; }
+.wt-topic-status { color: var(--label-2); }
+
 /* ---------------------------------------------------------------- phone and narrow panels */
 @container sheet (max-width: 480px) {
   .wt-head, .wt-scroll, .wt-foot { padding-inline: 12px; }
@@ -152,14 +185,16 @@ button.wt-who:active { transform: scale(0.96); }
 @media (pointer: coarse) {
   .wt-chip { height: 28px; padding: 0 9px 0 8px; }
   .wt-row { min-height: 48px; }
-  .wt-status, .wt-assignee .wt-who, .wt-lane-pill { min-height: 32px; }
+  .wt-status, .wt-assignee .wt-who, .wt-lane-pill, .wt-share-pill { min-height: 32px; }
+  .wt-share-to select { min-height: 36px; }
+  .wt-share .mini, .wt-offer .mini, .wt-request .mini, .wt-share-pick .mini, .wt-out .mini, .wt-topic .mini { min-height: 44px; padding-inline: 14px; }
 }
 
 /* ---------------------------------------------------------------- motion */
 @keyframes wt-fade { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .wt-body:not([data-wide]) > .wt-main, .wt-body:not([data-wide]) > .wt-side { transform: none; opacity: 1; animation: wt-fade 160ms ease; }
-  .wt-chip, .wt-row, button.wt-who, .wt-body .mini, .wt-fold-head, .wt-fold-head .chevron { transition: none; }
+  .wt-chip, .wt-row, button.wt-who, .wt-body .mini, .wt-fold-head, .wt-fold-head .chevron, .wt-share-pill { transition: none; }
 }
 @media (prefers-reduced-transparency: reduce) {
   .wt-filter { background: var(--panel); }

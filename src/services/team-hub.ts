@@ -72,6 +72,7 @@ import {
   hasFiles,
   hasReplies,
   hasThreads,
+  hasWork,
   isMessageId,
   isPeerId,
   isThreadId,
@@ -79,9 +80,9 @@ import {
   MAX_TEXT,
   MAX_TTL_S,
   type Message,
-  OUR_CAPS,
   type OutState,
   openEnvelope,
+  ourCaps,
   parseFrame,
   type RosterPeer,
   sealEnvelope,
@@ -96,6 +97,8 @@ import {
   validTitle,
   verify,
   verifyBox,
+  type WorkBody,
+  type WorkPost,
 } from '../core/team.ts'
 import { inboundKey, legacyText, splitKey, TEAM, threadKey } from '../core/team-agents.ts'
 import { NONCE_BYTES, TAG_BYTES, usableBox, wrapSecret } from '../core/team-box.ts'
@@ -132,6 +135,8 @@ export interface TeamRosterPeer {
   files?: boolean
   /** The peer is an assistant's bridge (#386): its caps say `assistant`. Absent for every other peer. */
   assistant?: boolean
+  /** The peer's board keeps shared threads (#394): its caps say `work`, shown while this board keeps them too. */
+  work?: boolean
 }
 
 export interface TeamView {
@@ -227,6 +232,32 @@ export interface InboundEvent {
   held: boolean
   /** The thread was new to this board. */
   fresh: boolean
+  /**
+   * A message in a topic while shared threads are on (#394): what the threads take of it. The
+   * text is a peer's, data for the store: it never goes into a session.
+   */
+  work?: InboundWorkPart
+}
+
+/** What a topic's message gives the threads (#394): the entry's id (the post's), the sender's words, time and `work`. */
+export interface InboundWorkPart {
+  id: string
+  text: string
+  ts: string
+  ref: ThreadRef
+  agent?: string
+  replyTo?: string
+  body?: WorkBody
+}
+
+/**
+ * Shared threads as the hub client sees them (#394): whether they are on (the hello says `work`
+ * then), and whether a message that carries `work` may be kept (11.4); one that may not is dropped
+ * as a bad frame, as every message with an unknown field is on a board without them.
+ */
+export interface WorkHooks {
+  on(): boolean
+  mayTake(m: { from: string; topic: string; ref: ThreadRef }): boolean
 }
 
 /** A line of a thread (#216): a message either way, or a draft. */
@@ -294,8 +325,12 @@ export interface TeamService {
    * the team, in general or a thread (#216); kept and sent (again on every reconnect until the hub settles it).
    */
   send(to: string, text: string, thread?: PostTarget['thread'], replyTo?: string, file?: PostFile): Promise<SendResult>
-  /** A post from the panel or a session (#216), with its source set by the route that took it; a file with it (#371). */
-  post(target: PostTarget, text: string, source: PostSource, file?: PostFile): Promise<PostResult>
+  /**
+   * A post from the panel or a session (#216), with its source set by the route that took it; a
+   * file with it (#371); a shared thread's entry (#394), whose `work` goes to the boards that say
+   * `work` and whose id the post takes.
+   */
+  post(target: PostTarget, text: string, source: PostSource, file?: PostFile, work?: WorkPost): Promise<PostResult>
   /**
    * An agent's draft for a person on the roster, or the team: kept for the person to Send or Discard,
    * never sent by the service. A file with it (#371) is copied into the board's folder at once.
@@ -303,7 +338,7 @@ export interface TeamService {
   draft(
     to: string,
     text: string,
-    more?: Pick<Draft, 'thread' | 'reason' | 'session' | 'replyTo'> & { file?: PostFile },
+    more?: Pick<Draft, 'thread' | 'reason' | 'session' | 'replyTo' | 'work'> & { file?: PostFile },
   ): DraftResult
   /** The threads this board has, the latest first (#216); empty while off. */
   threads(): ThreadView[]
@@ -346,6 +381,8 @@ interface Options {
   clock?: Clock
   random?: () => number
   version?: string
+  /** Shared threads (#394); without it the board says and takes nothing of them. */
+  work?: WorkHooks
 }
 
 /** How much of a thread's latest message the list gets (#370). */
@@ -377,7 +414,9 @@ export function createTeam({
   clock = realClock,
   random = Math.random,
   version = 'dev',
+  work,
 }: Options): TeamService {
+  const workOn = (): boolean => !!work?.on()
   let active: TeamConfig | null = null
   let signature = ''
   let state: TeamState = 'off'
@@ -502,7 +541,7 @@ export function createTeam({
           v: TEAM_PROTOCOL,
           peer: key.pub,
           client: `agent-board/${version}`,
-          caps: claim ? OUR_CAPS : OUR_CAPS.filter(c => c !== 'files'),
+          caps: ourCaps({ files: !!claim, work: workOn() }),
           ...(claim && { box: claim }),
         })
       }
@@ -739,7 +778,13 @@ export function createTeam({
     }
     const held = readPins()[msg.from]?.status !== 'trusted'
     const thread = inboundKey(msg.from, msg.body.thread)
-    if (!channelFits(thread, msg.body.thread, msg.from, me.peer)) {
+    const ref = msg.body.thread
+    // A shared thread's entry (#394) only while this board keeps them, and only where it fits (11.4).
+    const workMisfit = !!msg.body.work && (!workOn() || !ref || !work?.mayTake({ from: msg.from, topic: thread, ref }))
+    if (workMisfit) {
+      audit('drop', msg.from, { why: 'work', id: msg.id })
+      log('team: dropped a message (a shared thread this board does not keep, or one it does not fit)')
+    } else if (!channelFits(thread, msg.body.thread, msg.from, me.peer)) {
       // Acked all the same: the hub need not bring it again.
       audit('drop', msg.from, { why: 'channel', id: msg.id })
       log('team: dropped a message (a channel this board is not in, or a thread it does not fit)')
@@ -794,6 +839,20 @@ export function createTeam({
       const isNew = keepThread(thread, msg.body.thread, msg.from)
       audit('inbox', msg.from, { id: msg.id, held, thread, ...(msg.body.via && { via: msg.body.via }) })
       changed()
+      const ref = msg.body.thread
+      // A topic's message, for the shared threads (#394); without them the event is as it was.
+      const part: InboundWorkPart | null =
+        workOn() && ref && ref.id !== GENERAL
+          ? {
+              id: msg.body.post ?? msg.id,
+              text: msg.body.text,
+              ts: msg.ts,
+              ref,
+              ...(msg.body.via && msg.body.agent && { agent: msg.body.agent }),
+              ...(msg.body.replyTo && { replyTo: msg.body.replyTo }),
+              ...(msg.body.work && { body: msg.body.work }),
+            }
+          : null
       onInbound?.({
         id: msg.id,
         from: msg.from,
@@ -801,6 +860,7 @@ export function createTeam({
         held,
         fresh: isNew,
         ...(msg.body.via && { via: msg.body.via }),
+        ...(part && { work: part }),
       })
     }
   }
@@ -853,9 +913,20 @@ export function createTeam({
   }
 
   /** The thread a post goes to: an existing one by id, a new one by title, else general. */
-  function threadOf(scope: string, t: PostTarget['thread'], me: string): { ok: true; ref?: ThreadRef } | { ok: false } {
+  function threadOf(
+    scope: string,
+    t: PostTarget['thread'],
+    me: string,
+    open = false,
+  ): { ok: true; ref?: ThreadRef } | { ok: false } {
+    // A shared thread's first post (#394) starts its topic under the thread's own id.
+    if (open && t?.id !== undefined && isMessageId(t.id) && !readThreads()[threadKey(scope, t.id)]) {
+      const { id, ...rest } = t
+      const fresh = threadOf(scope, rest, me)
+      return fresh.ok && fresh.ref ? { ok: true, ref: { ...fresh.ref, id } } : { ok: false }
+    }
     if (t?.id !== undefined) {
-      if (!isThreadId(t.id) || t.members !== undefined) return { ok: false }
+      if (!isThreadId(t.id) || (t.members !== undefined && !open)) return { ok: false }
       if (t.id === GENERAL) return { ok: true }
       const rec = readThreads()[threadKey(scope, t.id)]
       if (!rec) return { ok: false }
@@ -899,8 +970,15 @@ export function createTeam({
    * any other the text with the title in front. Every copy is built before any is kept, so a
    * refused one sends nothing.
    */
-  async function post(target: PostTarget, text: string, source: PostSource, file?: PostFile): Promise<PostResult> {
+  async function post(
+    target: PostTarget,
+    text: string,
+    source: PostSource,
+    file?: PostFile,
+    work?: WorkPost,
+  ): Promise<PostResult> {
     if (!config()) return { ok: false, error: 'off' }
+    if (work && !isMessageId(work.id)) return { ok: false, error: 'work' }
     const body = text.trim()
     // With a file the text is its caption, and may be left out (#371).
     if ((!body && !file) || body.length > MAX_TEXT) return { ok: false, error: 'text' }
@@ -912,11 +990,12 @@ export function createTeam({
     const pins = readPins()
     // A key that changed under a pinned name may be someone else's: nothing goes to it until Trust.
     if (!team && pins[target.to]?.status === 'changed') return { ok: false, error: 'changed' }
-    // Only the panel starts a channel (#355): an agent's post or a draft never names members.
-    if (target.thread?.members !== undefined && source.by !== 'ui') return { ok: false, error: 'thread' }
+    // Only the panel starts a channel (#355): an agent's post or a draft never names members. A
+    // shared thread's first post (#394) names its channel's members, as the owner shared it.
+    if (target.thread?.members !== undefined && source.by !== 'ui' && !work?.open) return { ok: false, error: 'thread' }
     const scope = team ? TEAM : target.to
     const me = await ensureKey()
-    const th = threadOf(scope, target.thread, me.pub)
+    const th = threadOf(scope, target.thread, me.pub, work?.open === true)
     if (!th.ok) return { ok: false, error: 'thread' }
     const ref: ThreadRef | undefined = team ? { ...(th.ref ?? { id: GENERAL }), group: true } : th.ref
     const key = threadKey(scope, ref?.id ?? GENERAL)
@@ -959,7 +1038,7 @@ export function createTeam({
     const copies: { env: Envelope; msg: Message }[] = []
     // The first copy's id is the post's: every copy of a team post carries it to a board with
     // `replies` (#370), so a reply to it names one message on every member's board.
-    const postId = crypto.randomUUID()
+    const postId = work?.id ?? crypto.randomUUID()
     for (const p of recipients) {
       // A channel's copy goes as a channel only to a board that reads channels; any other gets it
       // in its pair's general with the title in front, so an answer there reaches this board alone.
@@ -994,6 +1073,9 @@ export function createTeam({
         if (team) msgBody.post = postId
       }
       if (fileRef) msgBody.file = fileRef
+      // A shared thread's entry (#394): its fields to a board that keeps shared threads; any other
+      // reads the text, the board's line when the entry had none.
+      if (work && rich && ref && hasWork(p)) msgBody.work = work.body
       const msg: Message = {
         v: TEAM_PROTOCOL,
         id: copies.length ? crypto.randomUUID() : postId,
@@ -1270,9 +1352,13 @@ export function createTeam({
     }
   }
 
+  /** What a change of reconnects for: the hub, the name, and (#394) whether the hello says `work`. */
+  const signatureOf = (c: TeamConfig | null): string =>
+    c ? `${c.hub}\n${c.name ?? ''}${workOn() ? '\nwork' : ''}` : ''
+
   function begin(): void {
     const c = config()
-    signature = c ? `${c.hub}\n${c.name ?? ''}` : ''
+    signature = signatureOf(c)
     active = c
     attempt = 0
     if (c) void connect()
@@ -1302,6 +1388,7 @@ export function createTeam({
           threads: hasThreads(p),
           ...(canFile(p) && { files: true }),
           ...(hasAssistant(p) && { assistant: true }),
+          ...(workOn() && hasWork(p) && { work: true }),
         })),
         ...(hubFiles && { files: { max: hubFiles.max - NONCE_BYTES - TAG_BYTES } }),
       }
@@ -1459,8 +1546,8 @@ export function createTeam({
       const file = d.file && { path: d.file.path, name: d.file.name }
       let r: PostResult = { ok: false, error: 'draft' }
       try {
-        r = await post({ ...target, ...(d.replyTo && { replyTo: d.replyTo }) }, d.text, source, file)
-        if (!r.ok && r.error === 'reply' && d.replyTo) r = await post(target, d.text, source, file)
+        r = await post({ ...target, ...(d.replyTo && { replyTo: d.replyTo }) }, d.text, source, file, d.work)
+        if (!r.ok && r.error === 'reply' && d.replyTo) r = await post(target, d.text, source, file, d.work)
       } finally {
         // Put back when the send is refused, or throws: a draft is never lost on the way.
         if (!r.ok) addDraft(d, Number.MAX_SAFE_INTEGER)
@@ -1511,7 +1598,7 @@ export function createTeam({
     },
     refresh() {
       const c = config()
-      const sig = c ? `${c.hub}\n${c.name ?? ''}` : ''
+      const sig = signatureOf(c)
       if (sig === signature) return
       const wasOn = !!active
       drop()

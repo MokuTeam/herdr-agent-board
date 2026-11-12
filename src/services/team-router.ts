@@ -23,7 +23,7 @@ import {
   type SessionRef,
 } from '../adapters/team-store.ts'
 import { categoryInfo } from '../core/categories.ts'
-import { GENERAL, isPeerId } from '../core/team.ts'
+import { GENERAL, isPeerId, type WorkPost } from '../core/team.ts'
 import {
   type AgentLimits,
   agentLimits,
@@ -104,7 +104,14 @@ export interface TeamRouter {
    * With a file (#371) it is always held: the owner sends it.
    */
   agentPost(
-    p: PostTarget & { text: string; session: SessionRef; claimed?: boolean; file?: { path: string } },
+    p: PostTarget & {
+      text: string
+      session: SessionRef
+      claimed?: boolean
+      file?: { path: string }
+      /** A shared thread's entry (#394): it goes, or is held, as any post of the session's does. */
+      work?: WorkPost
+    },
   ): Promise<AgentPostResult>
   /** The hub client kept a message: a notice for the session that handles its thread, or the listener. */
   inbound(e: InboundEvent): void
@@ -189,7 +196,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
   }
 
   return {
-    async agentPost({ to, thread, text, session, claimed, replyTo, file }) {
+    async agentPost({ to, thread, text, session, claimed, replyTo, file, work }) {
       const view = team.view()
       if (!view) return { ok: false, error: 'off' }
       if (to !== TEAM && !isPeerId(to)) return { ok: false, error: 'peer' }
@@ -214,7 +221,17 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       let detail: string | undefined
       // A new thread's title and link go out as well as the text: they are checked with it, and a
       // file's text too (#371).
-      const words = [text, thread?.title, thread?.link, file && fileText(file.path)]
+      // A shared thread's entry (#394): its fields go out as well, in `work`, and are checked with it.
+      const fields = work
+        ? [
+            work.body.set?.summary,
+            work.body.set?.waitingOn,
+            work.body.set?.title,
+            work.body.head.title,
+            work.body.head.summary,
+          ]
+        : []
+      const words = [text, thread?.title, thread?.link, file && fileText(file.path), ...fields]
         .filter(w => typeof w === 'string')
         .join('\n')
       if (globalOff(s.off) || !peer?.on) reason = 'off'
@@ -245,6 +262,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
           session,
           ...(replyTo && { replyTo }),
           ...(file && { file: { path: file.path, name: basename(file.path) } }),
+          ...(work && { work }),
         })
         if (!d.ok) return d
         audit('held', to === TEAM ? null : to, {
@@ -255,11 +273,13 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         })
         return { ok: true, sent: false, draft: d.id, reason, ...(detail && { detail }) }
       }
-      const r = await team.post({ to, ...(thread && { thread }), ...(replyTo && { replyTo }) }, text, {
-        by: 'agent',
-        session,
-        ...(claimed && { claimed: true }),
-      })
+      const r = await team.post(
+        { to, ...(thread && { thread }), ...(replyTo && { replyTo }) },
+        text,
+        { by: 'agent', session, ...(claimed && { claimed: true }) },
+        undefined,
+        work,
+      )
       if (!r.ok) return r
       // A topic thread nobody here handled is the poster's now, unless the poster is the listener.
       // A general thread stays the listener's: whatever an older board sends lands there.

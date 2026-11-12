@@ -61,12 +61,21 @@ export type OwnerAction =
   /** The switch "Confirm with a passkey" on or off (#367). */
   | { kind: 'passkey-on' }
   | { kind: 'passkey-off' }
+  /**
+   * Shared threads (#394): the owner's entry of a shared thread sent to the peers; a thread shared
+   * (to a teammate's name or id, `team`, or a channel), with its history or not; its history sent
+   * as a file; a Team topic tracked as a thread in a lane.
+   */
+  | { kind: 'thread-send'; entry: string }
+  | { kind: 'thread-share'; thread: string; to: string; history: boolean }
+  | { kind: 'thread-history'; thread: string }
+  | { kind: 'thread-track'; topic: string; lane: string }
 
 /** Asks the computer's own authenticator first (Touch ID, Windows Hello) over a phone by QR (#367). */
 export const HINTS = ['client-device']
 
 /** The actions whose confirmation unlocks the owner's sending for a while. */
-export const unlocks = (a: OwnerAction): boolean => a.kind === 'send' || a.kind === 'draft'
+export const unlocks = (a: OwnerAction): boolean => a.kind === 'send' || a.kind === 'draft' || a.kind === 'thread-send'
 
 /** The origin of the confirmation window. */
 export const confirmOrigin = (port: number): string => `http://localhost:${port}`

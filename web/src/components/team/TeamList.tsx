@@ -17,8 +17,11 @@ import {
   type Welcome,
 } from '../../models/team.ts'
 import { initialOf, lastLine, listWhen, toneOf } from '../../models/team-chat.ts'
+import { topicWork } from '../../models/work-share.ts'
+import { statusColor } from '../../models/work-threads.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
+import { StatusDot, statusWord } from '../threads/bits.tsx'
 import { WelcomeCard } from './TeamPeople.tsx'
 
 export interface TeamListProps {
@@ -178,6 +181,8 @@ function ThreadRow({ entry, mark, unread, active, onSelect, title, meta, sub, mu
   const muted = thread?.muted === true || mutedAbove === true
   const last = thread?.last
   const person = mark.kind === 'person' ? mark.peer : null
+  // A topic that is a shared thread (#394): its key and status on the row.
+  const work = topicWork(thread)
   return (
     <button
       type="button"
@@ -190,6 +195,16 @@ function ThreadRow({ entry, mark, unread, active, onSelect, title, meta, sub, mu
       <span className="team-row-main">
         <span className="team-row-top">
           <span className="team-row-title">{title ?? thread?.title ?? t('team.general')}</span>
+          {work && (
+            <span
+              className="wt-topic-pill"
+              style={{ '--c': statusColor(work.status) }}
+              title={t('wt.topic.pill', { key: work.key, status: statusWord(work.status, t) })}
+            >
+              <StatusDot status={work.status} />
+              {work.key}
+            </span>
+          )}
           {meta && <span className="team-row-meta">{meta}</span>}
           {fresh && !sub && (
             <span className="team-new" title={t('team.newMember')} role="img" aria-label={t('team.newMember')} />

@@ -30,12 +30,20 @@ import {
   MAX_NAME,
   MAX_TEXT,
   MAX_TITLE,
+  MAX_WORK_LINE,
+  MAX_WORK_N,
   type Message,
   type RosterPeer,
   TEAM_PROTOCOL,
   type ThreadRef,
   VIAS,
   type Via,
+  WORK_CAP,
+  WORK_STATUSES,
+  WORK_TYPES,
+  type WorkBody,
+  type WorkParty,
+  type WorkSet,
 } from './team-wire.ts'
 
 export * from './team-wire.ts'
@@ -74,6 +82,9 @@ export function teamConfig(raw: unknown): TeamConfig | null {
 /** Controls (C0, DEL, C1), line and paragraph separators, and the bidi controls that reorder what is around them. */
 const UNPRINTABLE = /[\p{Cc}\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu
 
+/** `s` without what validName counts unprintable (#394: a shared thread's line, before it goes out). */
+export const withoutUnprintable = (s: string): string => s.replace(new RegExp(UNPRINTABLE), '')
+
 /** Whether `s` has anything unprintable in it, as validName counts it. */
 export const hasUnprintable = (s: string): boolean => new RegExp(UNPRINTABLE).test(s)
 
@@ -108,6 +119,18 @@ export function cleanCaps(v: unknown): string[] | undefined {
 
 /** What this board says it understands, in `hello`. */
 export const OUR_CAPS: string[] = [...CAPS]
+
+/**
+ * The caps of this board's `hello`: `files` only with a box key (#371), `work` only while shared
+ * threads are on (#394), after the others; off, exactly what a board without #394 says.
+ */
+export function ourCaps({ files, work }: { files: boolean; work: boolean }): string[] {
+  const caps = files ? [...OUR_CAPS] : OUR_CAPS.filter(c => c !== 'files')
+  return work ? [...caps, WORK_CAP] : caps
+}
+
+/** Whether a roster peer's board keeps shared threads (#394): its caps say `work`. */
+export const hasWork = (p: { caps?: string[] | undefined } | undefined): boolean => !!p?.caps?.includes(WORK_CAP)
 
 /** Whether a roster peer's board understands threads (#216). */
 export const hasThreads = (p: { caps?: string[] | undefined } | undefined): boolean => !!p?.caps?.includes('threads')
@@ -325,7 +348,7 @@ export function checkMessage(
   return { ok: true, msg }
 }
 
-const BODY_KEYS = ['text', 'via', 'agent', 'thread', 'replyTo', 'post', 'file']
+const BODY_KEYS = ['text', 'via', 'agent', 'thread', 'replyTo', 'post', 'file', 'work']
 const THREAD_KEYS = ['id', 'title', 'link', 'group', 'members']
 
 /**
@@ -366,7 +389,89 @@ function readBodyExtras(body: Record<string, unknown>): {
     if (f) extras.file = f
     else ok = false
   }
+  // A shared thread's entry (#394): only in a topic, each field held to its limits.
+  if (Object.hasOwn(body, 'work')) {
+    const w = readWork(body.work)
+    const t = extras.thread
+    if (w && t && t.id !== GENERAL) extras.work = w
+    else ok = false
+  }
   return { ok, extras }
+}
+
+const WORK_KEYS = ['n', 'type', 'set', 'head', 'auto', 'share', 'unshare', 'hist']
+const WORK_SET_KEYS = ['status', 'summary', 'title', 'waitingOn', 'assignee']
+const WORK_HEAD_KEYS = ['key', 'title', 'status', 'summary', 'rev']
+/** A thread's key as its sharer minted it: a lane id, a dash, a number (core/work-threads.ts THREAD_KEY). */
+const WORK_KEY = /^[a-z0-9_-]{1,64}-\d{1,9}$/
+const isWorkStatus = (v: unknown): v is (typeof WORK_STATUSES)[number] => WORK_STATUSES.some(s => s === v)
+/** A line of a shared thread: trimmed, nothing unprintable, at most MAX_WORK_LINE; may be empty. */
+const isWorkLine = (v: unknown): v is string =>
+  typeof v === 'string' && v.trim() === v && v.length <= MAX_WORK_LINE && !new RegExp(UNPRINTABLE).test(v)
+const isWorkN = (v: unknown, min: number): v is number => isCount(v, MAX_WORK_N) && v >= min
+const onlyKeys = (v: Record<string, unknown>, keys: readonly string[]): boolean =>
+  Object.keys(v).every(k => keys.includes(k))
+
+function readWorkParty(v: unknown): WorkParty | null | undefined {
+  if (v === null) return null
+  if (!isRecord(v) || !onlyKeys(v, ['peer', 'agent']) || !isPeerId(v.peer)) return undefined
+  if (Object.hasOwn(v, 'agent') && !validName(v.agent)) return undefined
+  return { peer: v.peer, ...(typeof v.agent === 'string' && { agent: v.agent }) }
+}
+
+/**
+ * A shared thread's entry as a board accepts it (#394, 11.4): exactly its known keys, the counter
+ * a whole number, the type and statuses from their lists, every line within its limit and
+ * printable, the head's revision at least the entry's counter, the flags `true` only. Null for
+ * anything else.
+ */
+export function readWork(v: unknown): WorkBody | null {
+  if (!isRecord(v) || !onlyKeys(v, WORK_KEYS)) return null
+  if (!isWorkN(v.n, 1) || !WORK_TYPES.some(t => t === v.type)) return null
+  for (const flag of ['auto', 'share', 'unshare', 'hist'] as const)
+    if (Object.hasOwn(v, flag) && v[flag] !== true) return null
+  const h = v.head
+  if (!isRecord(h) || Object.keys(h).length !== WORK_HEAD_KEYS.length || !onlyKeys(h, WORK_HEAD_KEYS)) return null
+  if (typeof h.key !== 'string' || !WORK_KEY.test(h.key) || !validTitle(h.title) || !isWorkStatus(h.status)) return null
+  if (!isWorkLine(h.summary) || !isWorkN(h.rev, v.n)) return null
+  const work: WorkBody = {
+    n: v.n,
+    type: v.type as WorkBody['type'],
+    head: {
+      key: h.key,
+      title: h.title,
+      status: h.status as WorkBody['head']['status'],
+      summary: h.summary,
+      rev: h.rev,
+    },
+  }
+  if (Object.hasOwn(v, 'set')) {
+    const s = v.set
+    if (!isRecord(s) || !onlyKeys(s, WORK_SET_KEYS)) return null
+    const set: WorkSet = {}
+    if (Object.hasOwn(s, 'status')) {
+      if (!isWorkStatus(s.status)) return null
+      set.status = s.status
+    }
+    for (const k of ['summary', 'waitingOn'] as const) {
+      if (!Object.hasOwn(s, k)) continue
+      const line = s[k]
+      if (!isWorkLine(line)) return null
+      set[k] = line
+    }
+    if (Object.hasOwn(s, 'title')) {
+      if (!validTitle(s.title)) return null
+      set.title = s.title
+    }
+    if (Object.hasOwn(s, 'assignee')) {
+      const a = readWorkParty(s.assignee)
+      if (a === undefined) return null
+      set.assignee = a
+    }
+    work.set = set
+  }
+  for (const flag of ['auto', 'share', 'unshare', 'hist'] as const) if (v[flag] === true) work[flag] = true
+  return work
 }
 
 const FILE_KEYS = ['blob', 'size', 'hash', 'eph', 'key', 'meta']

@@ -93,8 +93,11 @@ export function ThreadsProvider({ children }: { children: ReactNode }) {
 const isView = (v: unknown): v is ThreadView & { rev: number } =>
   typeof v === 'object' && v !== null && typeof (v as { head?: unknown }).head === 'object'
 
-/** One thread with its whole feed, read again when the revision moves; null while it comes or when it is gone. */
-export function useThreadView(key: string | null, rev: number): { view: ThreadView | null; gone: boolean } {
+/**
+ * One thread with its whole feed, read again when the revision moves (any value that changes: the
+ * threads revision, with a shared entry's way to the hub, #394); null while it comes or when it is gone.
+ */
+export function useThreadView(key: string | null, rev: number | string): { view: ThreadView | null; gone: boolean } {
   const [state, setState] = useState<{ key: string | null; view: ThreadView | null; gone: boolean }>({
     key: null,
     view: null,

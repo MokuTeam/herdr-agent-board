@@ -192,7 +192,8 @@ test('keys: a bare number in the lane, an id prefix, the whole key; refusals say
   assert.equal((await json(master, ['post', 'atlas-1', '--status', 'finished'])).error, 'usage')
   assert.equal((await json(master, ['new', 'x'.repeat(81)])).error, 'title_long')
   assert.equal((await json(master, ['post', 'atlas-1', '--summary', 'y'.repeat(161)])).error, 'summary_long')
-  assert.equal((await json(master, ['share', 'atlas-1', 'ben'])).error, 'later')
+  // share is a request for the owner (#394): it is taken, and nothing goes anywhere from here
+  assert.equal((await json(master, ['share', 'atlas-1', 'ben'])).ok, true)
   const r = await run(master, ['frobnicate'])
   assert.equal(r.code, 1)
   assert.match(r.err, /^no command "board thread frobnicate"\nboard thread new/)
@@ -449,4 +450,35 @@ test("a lane id in another case than the categories' is the same lane", async ()
     (await run(master, ['show', '1'], { lane: 'Atlas' })).out.split('\n')[0],
     'atlas-1 · next · Import mapping',
   )
+})
+
+test("a shared thread (#394): the owner's entry from the command waits for the page; a session's goes to the board", async () => {
+  const { run, json } = setUp()
+  await run(master, ['new', 'Import mapping'])
+  const { withThreadsDb } = await import('../../src/services/work-threads.ts')
+  const { shareThread } = await import('../../src/services/work-share.ts')
+  const { findThread } = await import('../../src/adapters/work-thread-store.ts')
+  withThreadsDb(true, db => {
+    if (!db) throw new Error('no db')
+    const h = findThread(db, 'atlas-1', null)
+    shareThread({ db, cfg: { agents: true, gapSec: 60, share: true }, actor: { kind: 'owner' }, now: NOW, me: '' }, h, {
+      kind: 'peer',
+      peer: `B${'b'.repeat(42)}`,
+      topic: `B${'b'.repeat(42)}/${h.id}`,
+    })
+  })
+  const asked: string[] = []
+  const sendOut = async (_t: string, entry: string) => {
+    asked.push(entry)
+    return { out: 'sent' }
+  }
+  const owner = await run({ kind: 'owner' }, ['post', 'atlas-1', 'from a plain terminal'], { sendOut })
+  expect(owner.out).toContain("held for the owner: the owner's own: send it from the board's page")
+  expect(asked).toEqual([])
+  const agent = await json(master, ['post', 'atlas-1', '--status', 'doing', 'on it'], { sendOut })
+  expect(agent.out).toBe('sent')
+  expect(asked).toEqual([agent.entry.id])
+  const quiet = await json(master, ['post', 'atlas-1', '--private', 'notes'], { sendOut })
+  expect(quiet.out).toBeUndefined()
+  expect(asked).toHaveLength(1)
 })

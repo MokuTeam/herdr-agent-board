@@ -24,6 +24,7 @@ import { join } from 'node:path'
 import { type BoardDb, dbFile, openDb, type Tx } from '../adapters/db.ts'
 import { stateDir } from '../adapters/paths.ts'
 import { addEntry, listEntries, type NewEntry, updateEntry } from '../adapters/schedule-store.ts'
+import { readKey } from '../adapters/team-store.ts'
 import {
   appendEntry,
   childrenOf,
@@ -53,6 +54,7 @@ import {
   cleanText,
   type DigestItem,
   digestLine,
+  type EntryOut,
   type EntrySet,
   EVENT_FROM,
   FILE_MAX_BYTES,
@@ -68,6 +70,7 @@ import {
   oneLine,
   type Party,
   SUMMARY_MAX,
+  sharedOf,
   statusChanged,
   TEXT_MAX,
   type ThreadEntry,
@@ -118,6 +121,16 @@ export interface ThreadsCtx {
   state?: string
   /** The board copying a pi task board (services/thread-import.ts): the one writer of mirrored threads. */
   mirror?: boolean
+  /**
+   * This board's peer id on the hub (#394): a shared thread's entries are folded in the order
+   * (n, at, author's peer id). Read from the board's key when it is not given.
+   */
+  me?: string
+  /**
+   * The owner's entry of a shared thread waits for the owner's Send on the board's page (#394):
+   * written by the `board` command outside a session, which any program could run as the owner.
+   */
+  ownerHolds?: boolean
 }
 
 /** One write done: the thread's head after it and the entry, and the entries the board added (a parent's close). */
@@ -217,8 +230,8 @@ export function newThread(
 }
 
 export interface PostInput {
-  /** `answer` is the owner's, to a question (answerAsk). */
-  type?: 'note' | 'ask' | 'answer'
+  /** `answer` is the owner's, to a question (answerAsk); `system` the board's own (sharing, #394). */
+  type?: 'note' | 'ask' | 'answer' | 'system'
   text?: string
   status?: ThreadStatus
   summary?: string
@@ -229,6 +242,8 @@ export interface PostInput {
   replyTo?: string
   private?: boolean
   set?: EntrySet
+  /** How the entry starts on the hub's way (#394): `queued` on a shared thread unless private. */
+  out?: EntryOut
 }
 
 const URL_LIKE = /^https?:\/\/\S+$/i
@@ -303,6 +318,17 @@ export function postEntry(ctx: ThreadsCtx, head: ThreadHead, input: PostInput): 
   if (links.length > LINKS_MAX) throw new ThreadError('links', `${links.length} links; ${LINKS_MAX} at most`)
   if (!text && !Object.keys(set).length && !links.length && !input.files?.length)
     throw new ThreadError('empty', 'nothing to post: give text, --status, --summary, --waiting, --file or --link')
+  // A shared thread (#394): its entry goes to the peers unless private, one file at most, and only
+  // the owner drops it; its head is folded in the order every board folds it in.
+  const shared = sharedOf(head)
+  if (shared) {
+    if (set.status === 'dropped' && ctx.actor.kind !== 'owner')
+      throw new ThreadError('owner_only', `${head.key} is shared: only the owner drops it`)
+    if ((input.files?.length ?? 0) > 1) throw new ThreadError('files', `${head.key} is shared: one file per entry`)
+  }
+  const held = ctx.ownerHolds && ctx.actor.kind === 'owner'
+  const out: EntryOut | undefined = input.out ?? (shared && !input.private ? (held ? 'held' : 'queued') : undefined)
+  const me = shared || input.out ? (ctx.me ?? readKey()?.pub ?? '') : undefined
   const entryId = randomUUID()
   const files = input.files?.length ? copyFiles(ctx, head.id, entryId, input.files) : []
   let done: { written: Written; heads: ThreadHead[] }
@@ -319,8 +345,9 @@ export function postEntry(ctx: ThreadsCtx, head: ThreadHead, input: PostInput): 
         files,
         ...(input.replyTo && { replyTo: input.replyTo }),
         ...(input.private && { private: true }),
+        ...(out && { out }),
       }
-      const r = appendEntry(tx, head.id, entryInput)
+      const r = appendEntry(tx, head.id, entryInput, me)
       const heads = [r.head]
       // A new assignee hears the owner's answers to its questions.
       const theirs = set.assignee && sessionWatch(set.assignee, head.id, 'answers')
@@ -463,16 +490,20 @@ export function heardSince(db: BoardDb, session: string, since: number, until: n
     // Each entry's head before and after it, folded from the start: whether its status changed.
     const states = new Map<string, { before: ThreadHead | null; after: ThreadHead }>()
     let h: ThreadHead | null = null
+    // Who wrote the words the line would say (#394): on a shared thread a teammate's summary or what it
+    // waits on stays in the head after a local entry that did not change it.
+    let saidBy: Party | null = null
     for (const e of entriesOf(db, id)) {
       const after: ThreadHead = applyEntry(h ?? blankOf(head), e)
       states.set(e.id, { before: h, after })
+      if (e.set?.summary !== undefined || e.set?.waitingOn !== undefined) saidBy = e.author
       h = after
     }
     const heard: ThreadEntry[] = []
     let status = false
     let ask: string | undefined
     let closed: number | undefined
-    let local = true
+    let local = saidBy === null || isLocal(saidBy)
     for (const e of list) {
       const st = states.get(e.id)
       const level = st ? entryLevel(e, st.before, st.after) : LEVEL.all
