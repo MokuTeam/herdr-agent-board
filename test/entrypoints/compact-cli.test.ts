@@ -76,4 +76,8 @@ test('board compact refuses what is no limit, a stray word, and --clear with a v
     expect(r.out).toContain('usage: board compact')
   }
   expect(cardOf(box)?.compactAt).toBe('200k')
+  const long = await compact(box, '--note', 'x'.repeat(501))
+  expect(long.code).not.toBe(0)
+  expect(long.out).toContain('longer than 500 characters')
+  expect(cardOf(box)?.compactNote).toBeUndefined()
 })

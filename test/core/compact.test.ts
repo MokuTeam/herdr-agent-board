@@ -10,6 +10,7 @@ import {
   compactRule,
   compactStep,
   compactView,
+  FAILED_RETRY_MS,
   firstRequestAfter,
   limitText,
   limitTokens,
@@ -62,6 +63,10 @@ describe('limits', () => {
     expect(limitText({ tokens: 300_000 })).toBe('300k')
     expect(limitText({ tokens: 1_200_000 })).toBe('1.2m')
     expect(limitText({ share: 60 })).toBe('60%')
+    // Kept as written, not rounded.
+    expect(limitText(parseCompactLimit('1.25m') as never)).toBe('1.25m')
+    expect(limitText(parseCompactLimit('12500') as never)).toBe('12.5k')
+    expect(limitText(parseCompactLimit('123456') as never)).toBe('123456')
     expect(limitText('never')).toBe('never')
   })
 
@@ -135,6 +140,8 @@ describe('when /compact goes in', () => {
     })
     expect(compactStep({ ...idle, attention: 'ask' }, rule, null)).toEqual({ do: 'wait', why: 'asked' })
     expect(compactStep({ ...idle, attention: 'question' }, rule, null)).toEqual({ do: 'wait', why: 'asked' })
+    // The owner dragged the card that asks elsewhere: the question still waits on them.
+    expect(compactStep({ ...idle, attention: '', auto: 'me' }, rule, null)).toEqual({ do: 'wait', why: 'asked' })
     expect(compactStep({ ...idle, status: 'sleeping', sleeping: true }, rule, null)).toEqual({
       do: 'wait',
       why: 'asleep',
@@ -162,6 +169,17 @@ describe('when /compact goes in', () => {
     expect(compactStep({ ...idle, context: 90_000 }, rule, held)).toEqual({ do: 'release' })
     expect(compactStep(idle, compactRule(own('200k'), undefined), held)).toEqual({ do: 'release' })
     expect(compactStep(idle, compactRule(own('never'), undefined), held)).toEqual({ do: 'release' })
+    // A share whose window size is not known now decides nothing: still held.
+    const share = compactRule(own('10%'), undefined)
+    const heldShare = { ...held, setting: '10%' }
+    expect(compactStep({ ...idle, contextSize: null }, share, heldShare)).toEqual({ do: 'none' })
+    expect(compactStep({ ...idle, contextSize: 1_000_000, context: 90_000 }, share, heldShare)).toEqual({
+      do: 'release',
+    })
+    // One no compaction followed: tried again after FAILED_RETRY_MS, not before.
+    const failed: CompactRun = { ...base, state: 'failed', at: 1_000, hold: true }
+    expect(compactStep(idle, rule, failed, 1_000 + FAILED_RETRY_MS - 1)).toEqual({ do: 'none' })
+    expect(compactStep(idle, rule, failed, 1_000 + FAILED_RETRY_MS)).toEqual({ do: 'release' })
     // Done but not measured yet (no request since): nothing, what it left is not known.
     expect(compactStep(idle, rule, base)).toEqual({ do: 'none' })
     // Measured below the limit: over it again later, it compacts again.

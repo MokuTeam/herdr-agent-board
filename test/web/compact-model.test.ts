@@ -72,6 +72,10 @@ test("the sheet: a Claude session's card offers it; its empty field says what ap
   expect(compactRunText({ ...done, state: 'failed', hold: true }, en, at).text).toMatch(
     /^\/compact typed .+ at 612k, no compaction followed: paused$/,
   )
+  // Armed again since: no longer paused.
+  const free = compactRunText({ ...done, state: 'failed' }, en, at)
+  expect(free.text).toMatch(/no compaction followed$/)
+  expect(free.held).toBe(false)
 })
 
 test('the conversation: who compacted it and what it left', () => {

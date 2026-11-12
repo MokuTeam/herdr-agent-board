@@ -156,6 +156,11 @@ describe('auto-compact on the web board', () => {
       },
     ])
     expect(card(PLAIN).compactAt).toBe('300k')
+    expect(await answer(post(`/api/session/${PLAIN}/card`, { compactNote: 'x'.repeat(501) }))).toEqual([
+      409,
+      { ok: false, error: 'The instructions are longer than 500 characters' },
+    ])
+    expect(card(PLAIN).compactNote).toBe('keep the plan')
     // Emptied: the default applies again (none here), the instructions stay until emptied too.
     expect(await answer(post(`/api/session/${PLAIN}/card`, { compactAt: '' }))).toEqual([200, { ok: true }])
     expect(card(PLAIN).compactAt).toBeUndefined()

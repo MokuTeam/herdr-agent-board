@@ -69,6 +69,13 @@ test("nothing set: folded, no row; open, the empty field says Settings' default 
   expect(card(byDefault, true, '400k')).toContain('id="compactNote"')
 })
 
+test('a share of the window whose size the board does not know yet says so', () => {
+  const share = item({ key: 'e', agent: 'claude', compact: view({ own: '60%', note: '', limit: '60%', tokens: null }) })
+  expect(card(share, false)).toContain(
+    'Waits for the window size: the status line has not said it for this session yet',
+  )
+})
+
 test('a pi session, a MokuPilot day session: no auto-compact on their card', () => {
   expect(card(item({ key: 'c', agent: 'pi' }), true)).not.toContain('Compact at')
   expect(card(item({ key: 'd', agent: 'claude', day: true }), true)).not.toContain('Compact at')
