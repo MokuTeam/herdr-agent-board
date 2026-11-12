@@ -906,14 +906,15 @@ gets a row for the switch beside the to-do points', written through `editConfig`
 
 ## 15. Phases and the issues to open
 
-Six issues in this repository and three in MokuPilot's. Each phase is useful when it lands and
+Five issues are open in this repository (#391 to #395) and three in MokuPilot's (#274 to #276
+there); the sixth is opened when someone asks for it. Each phase is useful when it lands and
 leaves every setup that has threads off exactly as it was. Per AGENTS.md, every pull request says
 which setups it is for, shows the comparison with `main` for the ones it must not touch, and
 carries tests that fail on `main`.
 
 ### Phase 1. The store, the command and events
 
-Issue: "Threads 1: the store, `board thread` and events".
+Issue: #391, "Threads 1: the store, `board thread` and events".
 
 - Scope: migration 5; `work-threads.ts`, the store, the service; every `board thread` command
   except `share` and `import`; the brief block; the skill `agent-board-threads`; watches, the
@@ -930,21 +931,22 @@ Issue: "Threads 1: the store, `board thread` and events".
 
 ### Phase 2. The board's view
 
-Issue: "Threads 2: the panel, card chips and links". Depends on 1.
+Issue: #392, "Threads 2: the panel, card chips and links". Depends on 1.
 
 - Scope: the routes of 5.3 and the SSE `rev`; `threads.css`; the toolbar pill; the panel (list and
   thread, both looks, phone); card chips; the sheet's fold; `#thread=`, `thread-open`,
   `web-open.ts --thread`, `board thread open`; keys as links in text; the owner's answer (6.6) and
   the proposed close.
-- Done when: every screen of `mockups/board.html` exists in the light and dark Classic look and
-  the Terminal look, at desktop and phone width; a card without threads renders as on `main`.
+- Done when: every board screen of the mockups (`mockups/index.html#board`) exists in the light and
+  dark Classic look and the Terminal look, at desktop and phone width; a card without threads renders as on `main`.
 
 ### Phase 3. MokuPilot
 
-Issues in MokuPilot's repository: "Threads tab reads the board's threads", "Thread tools for the
-day session in place of the whole-board tool", "Import the day's task files into threads". One
-here: "Threads 3: what MokuPilot needs from the board" (`board thread link --base`, `import`, the
-one-way mirror for pi days). Depends on 1; can run beside 2.
+Issues in MokuPilot's repository: MokuTeam/MokuPilot#274, "Threads tab reads the board's threads";
+MokuTeam/MokuPilot#275, "Thread tools for the day session in place of the whole-board tool";
+MokuTeam/MokuPilot#276, "Import the day's task files into threads". One here: #393, "Threads 3:
+what MokuPilot needs from the board" (`board thread link --base`, `import`, the one-way mirror for
+pi days). Depends on 1; can run beside 2.
 
 - Done when: a day runs with no task file written; every owner chip opens its session; MokuPilot
   #271 and #273 can be closed as no longer needed; with the board absent or threads off MokuPilot
@@ -952,8 +954,8 @@ one-way mirror for pi days). Depends on 1; can run beside 2.
 
 ### Phase 4. The hub
 
-Issue: "Threads 4: shared threads over the hub". Depends on 1; the Team panel shows shared
-threads without phase 2.
+Issue: #394, "Threads 4: shared threads over the hub". Depends on 1; the Team panel shows shared
+threads without phase 2. #390 (the assistant bridge) builds on this phase.
 
 - Scope: the `work` capability and body field in `team-wire.ts` and `team.ts`; share, unshare and
   the owner's confirmation; outbound through `agentPost`; inbound validation and the merge rules
@@ -968,12 +970,12 @@ threads without phase 2.
 
 ### Phase 5. To-do points as threads
 
-Issue: "Threads 5: to-do points become threads". Depends on 2. As in 13.2.
+Issue: #395, "Threads 5: to-do points become threads". Depends on 2. As in 13.2.
 
 ### Phase 6. A digest to an outside chat
 
-Issue: "Threads 6: status digest to an outside chat". Opened only when someone asks for a specific
-chat (12, option B).
+Issue: "Threads 6: status digest to an outside chat". Not opened yet: it is opened when someone
+asks for a specific chat (12, option B).
 
 Order: 1 first. Then 2, 3 and 4 by different agents at once, since they touch different files (the
 page, MokuPilot, Team's wire). 5 after 2. Phase 1 with phase 3 is what takes the reports out of the
