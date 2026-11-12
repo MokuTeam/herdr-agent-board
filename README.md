@@ -2140,7 +2140,7 @@ points in the sheet.
 ## Threads
 
 Off unless you turn it on (#379, the design is [docs/design/threads](docs/design/threads/README.md);
-phase 1 of it is built). A long-lived session that hands work out used to get every worker's full
+phases 1 and the board's side of 3 are built). A long-lived session that hands work out used to get every worker's full
 report in its own conversation. With threads a worker posts its result to a thread the board keeps,
 and the session that handed the work out gets one line:
 
@@ -2164,8 +2164,19 @@ to one session. Then run the install once, which copies the agents' skill for th
 
 `board thread --help` lists the commands: `new`, `post`, `done`, `ask` (the thread waits on you and
 the card goes under "Needs me", as `board ask` does), `set`, `show`, `list`, `changes`, `watch`,
-`unwatch`, `link`, `open`. Every write prints one line and works with the board stopped. Who wrote
-an entry is the session that ran the command; outside a session, you.
+`unwatch`, `link`, `open`, `import`. Every write prints one line and works with the board stopped. Who
+wrote an entry is the session that ran the command (or the one `--session` names, MokuPilot's day
+session by its id); outside a session, you.
+
+**MokuPilot's task boards** (#393). `board thread import <file>` makes a thread of each item of a
+task board in the "agent-board" format (`~/.agent-boards/<harness>/<session>.json`): its text the
+title, its note the summary, its owner the assignee, its step's root the parent, its times kept.
+Run again, it adds nothing and applies only what changed in the file since the last run, so what was
+changed on the board stays. On a pi day the task tool is the pi-task-board package's, which writes
+that file itself: while threads are on (and agents may write), the board copies the running pi day's
+file into threads on each refresh, marked as pi's, and refuses an edit of them on the board (it
+changes in pi; you can still close one). Once that day is over they are ordinary threads. Without
+MokuPilot, or with `"mokupilot": false`, nothing of it is read.
 
 The session that creates a thread hears of its status changes; a session hears no line about its own
 change, and several changes before a line goes out are one line. A sleeping session is not woken for
@@ -2173,8 +2184,9 @@ a line (unless its watch asked for `--wake`): it gets the line when it is next a
 session gets it through its inbox.
 
 With the key absent nothing changes: no brief line, nothing in the payload, nothing in the hook that
-runs on every prompt, and the tables in `board.db` stay empty. Not yet: the board's view of threads,
-sharing a thread with a teammate, MokuPilot's tab (phases 2 to 4 of the design).
+runs on every prompt, the tables in `board.db` stay empty, and no task board is read. Not yet: the
+board's view of threads, sharing a thread with a teammate, MokuPilot's own side (phases 2 to 4 of the
+design).
 
 ## Secrets
 

@@ -4,8 +4,11 @@ import { randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { type DaySession, dayName, parseDayState, reportName } from '../core/mokupilot-day.ts'
+import { type DaySession, dayName, type PiDay, parseDayState, parsePiDay, reportName } from '../core/mokupilot-day.ts'
+
 import { mokupilotHere } from './mokupilot-call.ts'
+
+export type { PiDay }
 
 /** The days' folder: MOKUPILOT_DAY_ROOT (a leading ~ is the home), else ~/.meeting-copilot/day. */
 export function dayRoot(home = homedir()): string {
@@ -26,6 +29,15 @@ export function runningDay({
   try {
     const day = parseDayState(JSON.parse(readFileSync(join(folder, 'state.json'), 'utf8')))
     return day && { ...day, folder }
+  } catch {
+    return null
+  }
+}
+
+/** The pi day running now (#393), null for none or a state.json that cannot be read. */
+export function runningPiDay({ root = dayRoot(), now = new Date() }: { root?: string; now?: Date } = {}): PiDay | null {
+  try {
+    return parsePiDay(JSON.parse(readFileSync(join(root, dayName(now), 'state.json'), 'utf8')))
   } catch {
     return null
   }

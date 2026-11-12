@@ -38,6 +38,27 @@ export function parseDayState(raw: unknown): DaySession | null {
   return { session, pane: paneId(d.herdr_pane) }
 }
 
+/** A pi day (#393): its task board is pi's file, which the board copies into threads while they are on. */
+export interface PiDay {
+  /** Its pi session id: the task board is ~/.agent-boards/pi/<session>.json. */
+  session: string
+  /** Its folder, which decides the lane of the threads copied from it. */
+  cwd: string
+  /** The name MokuPilot gave the day, '' when none. */
+  name: string
+}
+
+/** The pi day a state.json says runs, null for none: not pi's, no session yet, or ended. */
+export function parsePiDay(raw: unknown): PiDay | null {
+  const d = rec(raw)
+  if (d?.provider !== 'pi') return null
+  const session = typeof d.fork_session === 'string' ? d.fork_session : ''
+  if (!SAFE_NAME.test(session)) return null
+  if (d.ended_at !== undefined && d.ended_at !== null) return null
+  const text = (v: unknown, max: number): string => (typeof v === 'string' ? v.trim().slice(0, max) : '')
+  return { session, cwd: text(d.cwd, 1000), name: text(d.name, 60) }
+}
+
 /** The day folder's name for a time: its local date, as MokuPilot names it. */
 export function dayName(at: Date): string {
   const two = (n: number): string => String(n).padStart(2, '0')

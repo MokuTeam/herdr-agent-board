@@ -59,12 +59,12 @@ function herdrState(box: Sandbox): void {
 }
 
 /** The day session in a profile's registry (the default one's), as Claude writes it; this test's pid: alive. */
-function registry(box: Sandbox, status = 'idle', profile = '.claude'): void {
+function registry(box: Sandbox, status = 'idle', profile = '.claude', cwd = 'C:\\Work'): void {
   put(join(home(box), profile, 'settings.json'), {})
   put(join(home(box), profile, 'sessions', `${process.pid}.json`), {
     pid: process.pid,
     sessionId: DAY,
-    cwd: 'C:\\Work',
+    cwd,
     startedAt: Date.now() - 600_000,
     kind: 'interactive',
     entrypoint: 'sdk-cli',
@@ -301,4 +301,87 @@ test('threads (#379): a day session writes with --session as itself, and its eve
   ])
   // Nothing typed into a pane: the day has none.
   expect(box.calls().filter(c => c[0] === 'agent' && c[1] === 'prompt')).toEqual([])
+})
+
+test('threads (#393): a day session with no pane writes by its id, in the lane of its own folder; its event goes to its inbox', async () => {
+  const box = await sandbox()
+  herdrState(box)
+  const work = join(box.dir, 'atlas')
+  registry(box, 'idle', '.claude', work)
+  dayState(box, { herdr_pane: undefined, cwd: work })
+  const wake = await fakeWake({ sleeping: [] })
+  const categories = [
+    { id: 'atlas', title: 'Atlas', color: 'gray', paths: [work] },
+    { id: 'inbox', title: 'Inbox', color: 'gray', paths: [box.dir] },
+  ]
+  put(join(configDir(box), 'config.json'), { language: 'en', port: 9, wakeUrl: wake.url, threads: true, categories })
+  await serveBoard(box, { language: 'en', wakeUrl: wake.url, threads: true, categories, scheduleTickSec: 0.2 })
+  // MokuPilot knows the day by its Claude session id; the command runs in MokuPilot's own folder.
+  expect(await cli(box, ['thread', 'new', '--session', DAY, 'Collect the invoices'])).toBe('ok · atlas-1 · next')
+  const made = JSON.parse(await cli(box, ['thread', 'show', 'atlas-1', '--json']))
+  expect(made.thread.createdBy).toEqual({ kind: 'session', key: DAY, name: 'work-a7' })
+  // Another session by its id goes as before: its lane is the command's folder (none here), not its card's.
+  const other = await box.run('cli', { args: ['thread', 'new', '--session', OTHER, 'Not the day'], env: {} }).exited
+  expect([other.code, other.stderr]).toEqual([1, expect.stringContaining('no lane')])
+  expect(
+    await cli(box, ['thread', 'done', 'atlas-1', '12 invoices collected'], { CLAUDE_CODE_SESSION_ID: OTHER }),
+  ).toBe('ok · atlas-1 · done')
+  for (let tries = 0; inbox(box).length < 1; tries++) {
+    if (tries > 200) throw new Error('the event did not reach the inbox')
+    await Bun.sleep(50)
+  }
+  expect(inbox(box).map(m => m.text)).toEqual([
+    '[board reminder from threads] atlas-1 done: 12 invoices collected. More: board thread changes',
+  ])
+  expect(box.calls().filter(c => c[0] === 'agent' && c[1] === 'prompt')).toEqual([])
+})
+
+test("threads (#393): a pi day's task board is in threads within a refresh, and a change of it follows", async () => {
+  const box = await sandbox()
+  herdrState(box)
+  const PI = 'pi-session-0393'
+  const work = join(box.dir, 'atlas')
+  dayState(box, { provider: 'pi', fork_session: PI, herdr_pane: undefined, cwd: work })
+  const tasks = join(home(box), '.agent-boards', 'pi', `${PI}.json`)
+  const board = (items: Record<string, unknown>[]) =>
+    put(tasks, { format: 'agent-board', version: 1, harness: 'pi', session_id: PI, writer: 'pi', items })
+  const at = new Date().toISOString()
+  const item = { owner: '', owner_id: '', created_at: at, started_at: null, done_at: null, updated_at: at }
+  board([
+    { ...item, id: 't1', text: 'Draft the import plan', status: 'doing', started_at: at },
+    { ...item, id: 't2', text: 'Ask ben for the price list', status: 'next' },
+  ])
+  const wake = await fakeWake({ sleeping: [] })
+  const categories = [{ id: 'atlas', title: 'Atlas', color: 'gray', paths: [work] }]
+  const cfg = { language: 'en', wakeUrl: wake.url, threads: true, categories }
+  put(join(configDir(box), 'config.json'), { ...cfg, port: 9 })
+  const { url } = await serveBoard(box, { ...cfg, refreshSec: 1 })
+  const rev = async (): Promise<number> =>
+    ((await (await fetch(`${url}/api/board`)).json()) as { threads?: { rev: number } }).threads?.rev ?? 0
+  const until = async (ok: () => Promise<boolean>): Promise<void> => {
+    for (let tries = 0; !(await ok()); tries++) {
+      if (tries > 200) throw new Error('the board did not copy the task board')
+      await Bun.sleep(50)
+    }
+  }
+  await until(async () => (await rev()) > 0)
+  const list = JSON.parse(await cli(box, ['thread', 'list', '--all', '--json'])) as {
+    threads: { key: string; status: string; title: string; origin: unknown }[]
+  }
+  expect(list.threads.map(t => [t.key, t.status, t.title]).sort()).toEqual([
+    ['atlas-1', 'doing', 'Draft the import plan'],
+    ['atlas-2', 'next', 'Ask ben for the price list'],
+  ])
+  expect(list.threads[0]?.origin).toMatchObject({ agentBoard: { harness: 'pi', session: PI }, mirrored: true })
+  const before = await rev()
+  board([
+    { ...item, id: 't1', text: 'Draft the import plan', status: 'done', started_at: at, done_at: at },
+    { ...item, id: 't2', text: 'Ask ben for the price list', status: 'next' },
+  ])
+  await until(async () => (await rev()) > before)
+  expect(JSON.parse(await cli(box, ['thread', 'show', 'atlas-1', '--json'])).thread.status).toBe('done')
+  // On the board it is pi's: the owner's edit is refused with the reason.
+  const out = await box.run('cli', { args: ['thread', 'post', 'atlas-2', '--status', 'doing'], env: {} }).exited
+  expect(out.code).toBe(1)
+  expect(out.stderr).toContain("pi's task board")
 })

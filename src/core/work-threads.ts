@@ -351,7 +351,8 @@ export function entryWords(
   if (s.assignee !== undefined) parts.push(s.assignee ? `to ${partyName(s.assignee)}` : 'no assignee')
   if (s.parent !== undefined) parts.push(s.parent ? `in ${keyOfId(s.parent)}` : 'no parent')
   if (s.lane !== undefined && !(e.type === 'system' && e.n === 1)) parts.push(`lane ${s.lane}`)
-  if (e.text && e.type !== 'ask' && e.type !== 'answer' && e.type !== 'system') parts.push(e.text)
+  // A system entry's own words (an imported item's whole text, #393); a closed parent's are said above.
+  if (e.text && e.type !== 'ask' && e.type !== 'answer' && !(e.type === 'system' && e.closed)) parts.push(e.text)
   for (const f of e.files ?? []) parts.push(`file ${f.name} (${sizeText(f.size)}) ${fileAt(f)}`)
   for (const l of e.links ?? []) parts.push(`link ${l.url}`)
   if (e.private) parts.push('private')

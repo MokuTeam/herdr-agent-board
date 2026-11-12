@@ -337,7 +337,8 @@ What each one does:
   the board.
 - `share` leaves a request for the owner (11.2).
 
-As built in phase 1: `share` and `import` answer that they are not built yet; `open` raises the
+As built in phase 1: `share` answers that it is not built yet (`import` is built with phase 3,
+#393; `import --todos` waits for phase 5); `open` raises the
 board's window and prints the thread's address, which the page follows from phase 2 on. A flag a
 command does not take is refused, so a mistyped one never becomes text; text that starts with `--`
 goes after a lone `--`. `done` takes `post`'s `--file`, `--link`, `--reply` and `--private`, and its
@@ -889,9 +890,36 @@ of its own.
   (as it already does for call agents) and mirrors it one way into threads marked "mirrored", which
   cannot be edited on the board. This keeps one list on screen without changing a tool the board
   does not own.
+
 - The other viewers of those files keep working for as long as the files are written, which for
   Claude days ends with the import. If one of them is still needed, MokuPilot can write a snapshot
   in the old format from the threads list (16).
+
+As built in phase 3 (#393):
+
+- An item's owner that is no session on the board is kept by its name, with its `owner_id` (or the
+  name) as the key.
+- A thread keeps what the import last read of its item, in `origin.agentBoard.seen` (text, note,
+  status, owner, parent, `updated_at`). An import run again applies only the fields that changed in
+  the file since then, in one `system` entry at the item's time for its new status (`done_at`,
+  `started_at`) or its `updated_at`. A status, summary, title or assignee set on the board stays
+  until the file changes that field, and an item that did not change writes nothing. `owner` and
+  `waiting` count as the file's `doing`. A system entry's text (the whole text of a cut title, why a
+  thread was dropped) shows in `show`.
+- The mirror reads the running pi day (`state.json` with `provider: "pi"`, its `fork_session`, `cwd`
+  and `name`), `~/.agent-boards/pi/<fork_session>.json`, before each of the board's refreshes, and
+  imports it again when its time or size changed (a file over 1 MB, or one it cannot read, is tried
+  again once it changes). Its threads go into the lane of the day's folder (`day` when no lane has
+  that folder), written as the pi session; an open one whose item left the file is dropped. With
+  `"threads": { "agents": false }` there is no mirror, since pi's tool is an agent writing.
+- Any write on a mirrored thread, or a new sub-thread under one, is refused with `mirrored`, except
+  the owner's close (status `done` or `dropped`), so that no copy is stuck open. A plain `import`
+  leaves a mirrored thread alone. When the copied day is over (no pi day runs, or another one does),
+  its threads lose the mark and become the board's own.
+- With threads on, a board looks once a minute whether MokuPilot has run on the computer, as its
+  call agents' gate does; without MokuPilot nothing more is read.
+- `--session <id>` of the running day session looks its card up on the board, so a day session with
+  no pane writes in the lane of its own folder. Any other session is found as before.
 
 ### 13.2 The to-do points
 
