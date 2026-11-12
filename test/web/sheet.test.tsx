@@ -456,6 +456,29 @@ describe('the mounted sheet', () => {
     expect(text).toContain('Effort: medium')
     // Read only for now: no menus.
     expect(text).not.toContain('<select')
+    // On the profile's default: nothing more said.
+    expect(text).not.toContain('this session only')
+  })
+
+  test('a session started on a model of its own (#380): the meter says so beside the model, before its first reply too', () => {
+    const own = item({
+      key: 'a',
+      name: 'Alpha',
+      status: 'idle',
+      column: 'idle',
+      model: 'Haiku 5.5',
+      modelAsked: 'haiku',
+    })
+    const text = canonical([byClass(mounted('a', payload({ items: [own], categories: CATEGORIES })), 'session-meter')])
+    expect(text).toContain('Model: Haiku 5.5')
+    expect(text).toContain('class="meter-own"> · this session only')
+    expect(text).toContain('title="Started on haiku, not the profile’s default; the profile keeps its own"')
+    // No reply yet, so no model read: the one it was started on.
+    const fresh = item({ key: 'a', name: 'Alpha', status: 'idle', column: 'idle', modelAsked: 'haiku' })
+    const first = canonical([
+      byClass(mounted('a', payload({ items: [fresh], categories: CATEGORIES })), 'session-meter'),
+    ])
+    expect(first).toContain('Model: haiku')
   })
 
   test('the slot for a question form fills #sheet-question in place of what the session asks', () => {

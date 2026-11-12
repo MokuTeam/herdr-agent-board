@@ -38,6 +38,8 @@ export interface LaunchDraft {
   worktree: { branch: string } | null
   /** The agent picked in it (models/launch-agent.ts); none while it followed the board's default. */
   agent?: string
+  /** The model typed in it (#380); none for the profile's default. */
+  model?: string
 }
 
 export interface DraftBookOptions {

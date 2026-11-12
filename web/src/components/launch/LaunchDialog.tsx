@@ -5,6 +5,7 @@
 // and what the form does are launch-window.ts's (and folder-field.ts's for the folder).
 import { type RefObject, useLayoutEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
+import { MODEL_MAX } from '../../../../src/core/launch/model.ts'
 import { NAME_MAX } from '../../../../src/core/launch/names.ts'
 import type { Translator } from '../../../../src/core/types.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
@@ -33,6 +34,7 @@ export type LaunchHandlers = Pick<
   | 'worktree'
   | 'branch'
   | 'message'
+  | 'model'
   | 'pickCategory'
   | 'pickAgent'
   | 'pickProfile'
@@ -48,6 +50,7 @@ export const launchHandlers = (w: LaunchWindow): LaunchHandlers => ({
   worktree: w.worktree,
   branch: w.branch,
   message: w.message,
+  model: w.model,
   pickCategory: w.pickCategory,
   pickAgent: w.pickAgent,
   pickProfile: w.pickProfile,
@@ -196,6 +199,34 @@ export function LaunchDialogView({ view, folder, launcher, t, on, refs }: Launch
                   </div>
                 </div>
                 <Note field="profile" note={view.notes.profile} />
+              </>
+            )}
+            {/* The model it starts on (#380), when the launcher takes one: empty is the profile's default. */}
+            {view.model.offered && (
+              <>
+                <label className="row model-row">
+                  <span className="row-label">{t('launch.model')}</span>
+                  <input
+                    className="row-value"
+                    name="model"
+                    list={view.model.aliases.length ? 'launch-models' : undefined}
+                    maxLength={MODEL_MAX}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    placeholder={t('launch.modelPlaceholder')}
+                    title={t('launch.modelHint')}
+                    value={f.model}
+                    onChange={e => on.model(e.currentTarget.value)}
+                  />
+                </label>
+                {view.model.aliases.length > 0 && (
+                  <datalist id="launch-models">
+                    {view.model.aliases.map(m => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                )}
+                <Note field="model" note={view.notes.model} />
               </>
             )}
             <div className="row where-row">

@@ -176,7 +176,12 @@ export function launchRunner({
     session: id => {
       l.sessionId = id
       // A fork's card says whose fork it is, and since when (core/links.ts).
-      writeCard(id, { category: l.category, profileWant: l.profile, ...(l.fork && forkCard(l.fork)) })
+      writeCard(id, {
+        category: l.category,
+        profileWant: l.profile,
+        ...(l.model && { modelWant: l.model }),
+        ...(l.fork && forkCard(l.fork)),
+      })
       l.carded = id
     },
   })
@@ -188,7 +193,8 @@ export function launchRunner({
     // run in, as for any start.
     if (l.resume) {
       l.sessionId = l.resume
-      writeCard(l.resume, { profileWant: l.profile })
+      // The model it comes back on: none runs it on the profile's default again.
+      writeCard(l.resume, { profileWant: l.profile, modelWant: l.model ?? '' })
       l.carded = l.resume
     }
     const linked = deps.cfg.launch?.linkedWorkspaces === true

@@ -4,6 +4,8 @@
 // a closed form stays as a draft of the place it was opened for. What it draws is a
 // LaunchWindowView (LaunchDialog.tsx); the folder field is folder-field.ts, the Claude profile it
 // starts in models/launch-profile.ts, the agent it starts as (Claude Code or pi) models/launch-agent.ts.
+
+import { CLAUDE_MODEL_ALIASES } from '../../../../src/core/launch/model.ts'
 import {
   baseName,
   categoryForDir,
@@ -78,6 +80,11 @@ export interface LaunchWindowView {
   profile: ProfileRow
   /** The agent choice, only when the board offers more than one. */
   agent: AgentRow
+  /**
+   * The Model field (#380), offered when the launcher takes a model; `aliases`: Claude's, as
+   * suggestions while the agent is Claude Code (pi names its models its own way).
+   */
+  model: { offered: boolean; aliases: readonly string[] }
   /** The worktree row shows: the folder is in a git checkout. */
   worktree: boolean
   branchHidden: boolean
@@ -95,15 +102,16 @@ export interface LaunchWindowView {
 export const CLOSED_VIEW: LaunchWindowView = {
   shown: false,
   retry: false,
-  fields: { name: '', workspace: '', newWorkspace: '', wt: false, branch: '', message: '' },
+  fields: { name: '', workspace: '', newWorkspace: '', wt: false, branch: '', message: '', model: '' },
   workspaces: [],
   newWorkspaceHidden: true,
   cats: [],
   profile: { offered: false, options: [], chosen: null },
   agent: NO_AGENT_ROW,
+  model: { offered: false, aliases: [] },
   worktree: false,
   branchHidden: true,
-  notes: { name: NO_NOTE, cwd: NO_NOTE, profile: NO_NOTE, workspace: NO_NOTE, worktree: NO_NOTE },
+  notes: { name: NO_NOTE, cwd: NO_NOTE, profile: NO_NOTE, model: NO_NOTE, workspace: NO_NOTE, worktree: NO_NOTE },
   lanesNote: '',
   error: { text: '', hidden: true },
   go: null,
@@ -342,7 +350,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
     patch({ lanesNote: lanes ? t()('launch.lanesNote', { lanes, lane: catTitle(start.category) }) : '' })
     s.workspace = start.workspace
     folder.setText(start.cwd)
-    setFields({ name: start.name, message: start.message, wt: start.wt, branch: start.branch })
+    setFields({ name: start.name, message: start.message, wt: start.wt, branch: start.branch, model: start.model })
     s.profile = startingProfile(s)
     patch({ profile: profileRow(s.profile, d().profiles) })
     // A failed launch's agent, or one picked in the draft, counts as picked; the rest follows the board's default.
@@ -355,6 +363,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
         name: { ...notes.name, hidden: true },
         cwd: { ...notes.cwd, hidden: true },
         profile: { ...notes.profile, hidden: true },
+        model: { ...notes.model, hidden: true },
         workspace: { ...notes.workspace, hidden: true },
         worktree: { ...notes.worktree, hidden: true },
       },
@@ -457,7 +466,13 @@ export function launchWindow(deps: LaunchWindowDeps) {
 
   function renderAgent(): void {
     if (!s) return
-    patch({ agent: agentRow(s.agent, options.agents) })
+    patch({
+      agent: agentRow(s.agent, options.agents),
+      model: {
+        offered: options.takesModel,
+        aliases: s.agent === null || s.agent === 'claude' ? CLAUDE_MODEL_ALIASES : [],
+      },
+    })
     launcher.set(launcherFor(options.launcher, s.agent))
   }
 
@@ -465,7 +480,14 @@ export function launchWindow(deps: LaunchWindowDeps) {
   const parentOf = (ctx: LaunchContext): string | null => ctx.item?.key ?? ctx.retry?.parent ?? null
 
   function noteFor(field: string, text: string, error = true): void {
-    if (field !== 'name' && field !== 'cwd' && field !== 'profile' && field !== 'workspace' && field !== 'worktree')
+    if (
+      field !== 'name' &&
+      field !== 'cwd' &&
+      field !== 'profile' &&
+      field !== 'model' &&
+      field !== 'workspace' &&
+      field !== 'worktree'
+    )
       return
     patch({ notes: { ...view.get().notes, [field]: { text, hidden: !text, error: !!text && error } } })
   }
@@ -555,6 +577,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
       label: labelOf(view.get().fields.workspace),
       ...profileBody(st.profile, d().profiles, parentOf(st.ctx)),
       ...agentBody(st.agent, options.agents),
+      takesModel: options.takesModel,
     })
     const draftVersion = drafts.write(st.draftKey, draftForm())
     st.sending = true
@@ -698,6 +721,10 @@ export function launchWindow(deps: LaunchWindowDeps) {
       renderWorktree()
     },
     message: (value: string) => setFields({ message: value }),
+    model(value: string): void {
+      setFields({ model: value })
+      noteFor('model', '')
+    },
     submit: () => void submit(),
     /** A click beside the window closes it only while nothing was written in it yet. */
     scrim(): void {

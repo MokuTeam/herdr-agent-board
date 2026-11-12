@@ -46,6 +46,8 @@ export interface Card {
   profileDir?: string
   /** The profile a start asked for (the board's launch or spawn-agent). */
   profileWant?: string
+  /** The model a start asked for (#380: spawn-agent --model, the board's launch); absent: the profile's default. */
+  modelWant?: string
   /** The Claude id inherited by the root Codex hook, false when none. A Claude child has its own id. */
   codexParentClaude?: string | false
   /** A fork's: the id of the session it is a fork of, and when it started (its copied lines are older). */
@@ -157,6 +159,8 @@ export interface LaunchView {
   parent?: string | null
   /** The agent the request asked for (core/launch/agents.ts); `claude` when it named none. */
   agent?: string
+  /** The model it starts on (#380), null for the profile's default. */
+  model?: string | null
 }
 
 export interface Config {
@@ -279,6 +283,8 @@ export interface Item {
   contextSize?: number | null
   /** The model it runs, as Claude's status line names it. */
   model?: string | null
+  /** The model its start asked for (#380, card.modelWant): not the profile's default. Absent for the others. */
+  modelAsked?: string
   /** The effort it thinks with (low, medium, high, xhigh, max), from its transcript. */
   effort?: string | null
   tool?: ToolCall | null

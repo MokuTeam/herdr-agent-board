@@ -6,7 +6,7 @@
 //   spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
 //               [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
 //               [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--pane <herdr pane id>]
-//               [--profile <id>] [--agent claude|pi] [--trust]
+//               [--profile <id>] [--model <id or alias>] [--agent claude|pi] [--trust]
 //   PowerShell-style names work too: -Name, -Cwd, -Label, -BriefFile, -Brief, -Workspace, -TimeoutSec.
 //
 // --resume brings back a session that ended (the board's archive): Claude resumes it by its id, in
@@ -27,6 +27,10 @@
 // for --cwd itself, and "Allow external CLAUDE.md file imports?" when every file it lists is in
 // the user's own Claude folders. Any other dialog still stops the start.
 //
+// --model starts the session on that model: `--model <id>` after the start command and the
+// profile's arguments (pi's own --model for pi), so the profile's default stays as it is; typing
+// /model into the session would save it as the default of every later one in the profile.
+//
 // Prints "pane=<id> name=<Name> agent=<herdr name>", with " kind=pi" after it when the start
 // command started pi; exits 1 with the reason when it fails. The board reads that line
 // (services/launch/launcher.ts).
@@ -34,13 +38,13 @@ import { homedir } from 'node:os'
 import { loadConfig } from '../adapters/config-file.ts'
 import { loadProfiles } from '../adapters/profiles.ts'
 import { piCommand } from '../core/launch/agents.ts'
-import { claudeCommand, parseArgs, USAGE } from '../core/launch/spawn-args.ts'
+import { claudeCommand, HELP, parseArgs } from '../core/launch/spawn-args.ts'
 import { spawnAgent } from '../services/launch/spawn-agent.ts'
 
 try {
   const o = parseArgs(process.argv.slice(2))
   if (o.help) {
-    console.log(USAGE)
+    console.log(HELP)
   } else {
     const launch = loadConfig().launch ?? {}
     const home = homedir()

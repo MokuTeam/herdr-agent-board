@@ -21,6 +21,9 @@
 // the tab (spawn-agent's --config-dir; herdr's launcher), or in a launcher command's process env.
 // A start that asks for pi (core/launch/agents.ts) is the board's own launcher's: spawn-agent is
 // run with --agent pi and types `launch.pi` in place of the profile's start command and arguments.
+// A start on a model of its own (#380) passes it on: spawn-agent's --model, `--model <id>` to
+// herdr's Claude or pi, {model} to a launch.command that takes it. One that cannot is refused
+// before anything runs (launches.ts), and the new-session window offers no model field for it.
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -39,6 +42,7 @@ import {
   parseLauncherOutput,
   usesPlaceholder,
 } from '../../core/launch/launcher-command.ts'
+import { modelArgs } from '../../core/launch/model.ts'
 import { slugName, ticketSlugName, uniqueSlug } from '../../core/launch/names.ts'
 import { choosesSession, claudeCommand } from '../../core/launch/spawn-args.ts'
 import { envRejected } from '../../core/profiles.ts'
@@ -80,6 +84,8 @@ export interface LaunchContext {
   readonly profileCommand: readonly string[] | null
   /** The agent the board's own launcher starts (core/launch/agents.ts): `claude` unless the request asked for pi. */
   readonly agent: string
+  /** The model it starts on (`--model`), null for the profile's default. */
+  readonly model: string | null
   /** A new workspace's first pane and tab: herdr's launcher starts the agent there, not in a new tab. */
   readonly rootPane: string | null
   readonly rootTab: string | null
@@ -125,6 +131,8 @@ export type LauncherInfo = { kind: 'herdr'; agent: string } | { kind: 'command';
 
 export interface Launcher {
   readonly kind: 'herdr' | 'command' | 'builtin'
+  /** It can start a session on a model of its own (LaunchContext.model). */
+  readonly takesModel: boolean
   describe(): LauncherInfo
   start(l: LaunchContext, on: LaunchEvents): Promise<LaunchResult>
 }
@@ -199,11 +207,15 @@ export function herdrCannotResume(spec: LaunchSpec, profileArgs: readonly string
   return kind !== 'claude' || picksSession(args)
 }
 
+/** The agents herdr's launcher starts that take `--model <id>`. */
+const MODEL_AGENTS = new Set(['claude', 'pi'])
+
 /** `herdr agent start <name> --kind <agent> … -- --session-id <id>` in a tab of its own. */
 export function herdrLauncher(spec: LaunchSpec): Launcher {
   const kind = String(spec.agent ?? 'claude')
   return {
     kind: 'herdr',
+    takesModel: MODEL_AGENTS.has(kind),
     describe: () => ({ kind: 'herdr', agent: kind }),
     async start(l, on) {
       const { args } = herdrAgent(spec, l.profileArgs)
@@ -223,6 +235,8 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
         notePane(l, pane, opened.terminal)
       }
       on.pane(pane)
+      // After launch.args and the profile's: of two --model, the last is the one taken.
+      if (l.model && MODEL_AGENTS.has(kind)) args.push(...modelArgs(l.model))
       let sessionId: string | null = null
       if (l.resume) {
         sessionId = l.resume
@@ -278,6 +292,7 @@ export function commandLauncher(spec: LaunchSpec): Launcher {
   const template = spec.command
   return {
     kind: 'command',
+    takesModel: usesPlaceholder(template, 'model'),
     describe: () => ({ kind: 'command', name: launcherLabel(template) }),
     async start(l, on) {
       const vars = {
@@ -294,6 +309,7 @@ export function commandLauncher(spec: LaunchSpec): Launcher {
         fork: l.fork ?? '',
         profile: l.profile,
         profileDir: l.profileDir,
+        model: l.model ?? '',
       }
       // A resumed session has its own id.
       let sessionId: string | null = l.resume
@@ -331,6 +347,7 @@ export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
   const readySec = Math.max(10, Number(spec.timeoutSec) || 120)
   return {
     kind: 'builtin',
+    takesModel: true,
     describe: () => ({ kind: 'herdr', agent: 'claude' }),
     async start(l, on) {
       // A line that picks its own session (--resume, in the profile's start command, launch.claude
@@ -351,6 +368,7 @@ export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
       // The profile: the env as herdr makes it, or the folder the board checked.
       args.push(...(l.configDir === null ? ['--keep-env'] : ['--config-dir', l.configDir]))
       if (pi) args.push('--agent', l.agent)
+      args.push(...modelArgs(l.model))
       return runLauncher(l, on, {
         command: messageFile => ({
           file: process.execPath,

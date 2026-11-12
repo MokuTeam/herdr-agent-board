@@ -2,12 +2,14 @@ import { describe, expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { useLanguage } from '../../src/core/lang.ts'
 import { failureKind, launcherError } from '../../src/core/launch/launcher-command.ts'
+import { CLAUDE_MODEL_ALIASES, MODEL_MAX, modelArgs, modelProblem } from '../../src/core/launch/model.ts'
 import {
   choosesSession,
   claudeCommand,
   claudeProgram,
   commandText,
   envSetting,
+  HELP,
   parseArgs,
   profileCommand,
   type SpawnArgs,
@@ -151,6 +153,74 @@ describe('spawn-agent options', () => {
       )
     expect(parseArgs(['--name', 'A', '--cwd', 'x', '--agent', 'claude', '--resume', id])).toMatchObject({ resume: id })
     expect(USAGE).toContain('[--agent claude|pi]')
+  })
+
+  test('the model (#380): --model, -Model or --model=, with a new session, a resume, a fork or pi; blank is none', () => {
+    const id = '0f9c3b8e-1d2a-4c5b-9e8f-7a6b5c4d3e2f'
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '--model', 'haiku'])).toEqual({
+      name: 'A',
+      cwd: 'x',
+      timeoutSec: 120,
+      model: 'haiku',
+    })
+    expect(parseArgs(['-Name', 'A', '-Cwd', 'x', '-Model', 'opus'])).toMatchObject({ model: 'opus' })
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '--model=claude-opus-5-5'])).toMatchObject({
+      model: 'claude-opus-5-5',
+    })
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '--resume', id, '--model', ' sonnet '])).toMatchObject({
+      resume: id,
+      model: 'sonnet',
+    })
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '--fork', id, '--model', 'haiku'])).toMatchObject({ fork: id })
+    expect(
+      parseArgs(['--name', 'A', '--cwd', 'x', '--agent', 'pi', '--model', 'claude-bridge/claude-haiku-5-5']),
+    ).toMatchObject({ agent: 'pi', model: 'claude-bridge/claude-haiku-5-5' })
+    // Blank is the profile's default, as without it.
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '--model', '  '])).toEqual({ name: 'A', cwd: 'x', timeoutSec: 120 })
+    expect(() => parseArgs(['--name', 'A', '--cwd', 'x', '--model'])).toThrow('--model needs a value')
+    for (const bad of ['opus 5', "it's", '-x', '--resume', 'a;b', 'sonnet\nhaiku'])
+      expect(() => parseArgs(['--name', 'A', '--cwd', 'x', `--model=${bad}`])).toThrow(
+        `--model must be a model name or alias`,
+      )
+    expect(() => parseArgs(['--name', 'A', '--cwd', 'x', '--model', 'a'.repeat(MODEL_MAX + 1)])).toThrow(
+      `--model is longer than ${MODEL_MAX} characters`,
+    )
+    expect(USAGE).toContain('[--model <id or alias>]')
+  })
+
+  test('--help says how to start on a model, and not to type /model for it', () => {
+    expect(HELP.startsWith(USAGE)).toBe(true)
+    expect(HELP).toContain('--model')
+    expect(HELP).toContain('Do not type /model')
+    expect(HELP).toContain('default of every later session in the profile')
+  })
+})
+
+describe('a model a start asks for (#380)', () => {
+  test('aliases, full names, Vertex, Bedrock and pi’s provider/id go; spaces, quotes, a leading dash do not', () => {
+    for (const ok of [
+      'opus',
+      'sonnet[1m]',
+      'claude-opus-5-5',
+      'claude-sonnet-5-5@20260101',
+      'us.anthropic.claude-haiku-5-5-v1:0',
+      'arn:aws:bedrock:us-east-1:123456789012:inference-profile/claude',
+      'claude-bridge/claude-opus-5-5',
+      'sonnet:high',
+      ...CLAUDE_MODEL_ALIASES,
+    ])
+      expect(modelProblem(ok)).toBeNull()
+    for (const bad of ['', 'opus 5', "o'pus", '"opus"', '-opus', '/opus', 'op$us', 'op`us', 'ópus', 'a\tb'])
+      expect(modelProblem(bad)).toBe('chars')
+    expect(modelProblem('a'.repeat(MODEL_MAX))).toBeNull()
+    expect(modelProblem('a'.repeat(MODEL_MAX + 1))).toBe('long')
+  })
+
+  test('the arguments: --model <id>, none for none', () => {
+    expect(modelArgs('haiku')).toEqual(['--model', 'haiku'])
+    expect(modelArgs(null)).toEqual([])
+    expect(modelArgs(undefined)).toEqual([])
+    expect(modelArgs('')).toEqual([])
   })
 })
 

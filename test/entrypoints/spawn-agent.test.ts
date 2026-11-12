@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { failureKind } from '../../src/core/launch/launcher-command.ts'
 import { parseArgs } from '../../src/core/launch/spawn-args.ts'
@@ -1034,4 +1034,248 @@ test('pi waiting for a dialog before it is ready: said as pi’s, with /name to 
     box.calls().some(a => a[0] === 'agent' && a[1] === 'prompt'),
     false,
   )
+}, 30_000)
+
+// ---------------------------------------------------------------- a model of its own (#380)
+
+/** The bytes of every file in a folder, by name: what a start must leave as it was. */
+const filesOf = (dir: string): Record<string, string> =>
+  Object.fromEntries(
+    readdirSync(dir, { recursive: true, withFileTypes: true })
+      .filter(e => e.isFile())
+      .map(e => {
+        const file = join(e.parentPath, e.name)
+        return [file, readFileSync(file).toString('base64')]
+      }),
+  )
+const SETTINGS = '{\n  "model": "opus",\n  "effortLevel": "high"\n}\n'
+const seedCard = (box: Sandbox, key: string, card: Record<string, unknown>) => {
+  mkdirSync(box.cards, { recursive: true })
+  writeFileSync(join(box.cards, `${key}.json`), JSON.stringify(card))
+}
+
+test('--model lands on the typed line after the start command and the profile’s args: a plain start, a profile’s own command, -Model', async () => {
+  // A plain start in the default profile: launch.claude, then --model, then the session id.
+  const plain = await profileBox({ claude: ['claude-tg', '--dangerously-skip-permissions'] })
+  const r = await runSpawn(plain.box, [
+    '--name',
+    'Helper',
+    '--cwd',
+    plain.dir,
+    '--workspace',
+    'wA',
+    '--session-id',
+    SID,
+    '--model',
+    'haiku',
+  ])
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(
+    callList(plain.box)[1],
+    `pane run wA:p9 claude-tg --dangerously-skip-permissions --model haiku --session-id ${SID}`,
+  )
+  expect(cardOf(plain.box, SID)).toMatchObject({ profileWant: 'default', modelWant: 'haiku' })
+  // A work agent's helper: work's own command and its args (--model sonnet), then ours, which Claude takes.
+  const work = await profileBox({}, () => [], { work: { command: 'cld-work' } })
+  const w = await runSpawn(
+    work.box,
+    ['-Name', 'Helper', '-Cwd', work.dir, '-Workspace', 'wA', '-SessionId', SID, '-Model', 'claude-opus-5-5'],
+    { CLAUDE_CONFIG_DIR: work.work },
+  )
+  assert.equal(w.code, 0, w.stderr)
+  assert.deepEqual(callList(work.box).slice(0, 2), [
+    `tab create --workspace wA --cwd ${work.dir} --label Helper --env CLAUDE_CONFIG_DIR=${work.work} --no-focus`,
+    `pane run wA:p9 cld-work --model sonnet --model claude-opus-5-5 --session-id ${SID}`,
+  ])
+  expect(cardOf(work.box, SID)).toMatchObject({ profileWant: 'work', modelWant: 'claude-opus-5-5' })
+  // --profile names the profile: its args, then the model.
+  const named = await profileBox()
+  const n = await runSpawn(named.box, [
+    '--name',
+    'Helper',
+    '--cwd',
+    named.dir,
+    '--workspace',
+    'wA',
+    '--session-id',
+    SID,
+    '--profile',
+    'work',
+    '--model',
+    'haiku',
+  ])
+  assert.equal(n.code, 0, n.stderr)
+  assert.equal(callList(named.box)[1], `pane run wA:p9 claude --model sonnet --model haiku --session-id ${SID}`)
+}, 60_000)
+
+test('--model without --session-id gives the start an id of its own, so its card says the model; no --model types what it did', async () => {
+  const { box, dir } = await profileBox()
+  const r = await runSpawn(box, ['--name', 'Helper', '--cwd', dir, '--workspace', 'wA', '--model', 'haiku'])
+  assert.equal(r.code, 0, r.stderr)
+  const typed = callList(box)[1] ?? ''
+  const id = /^pane run wA:p9 claude --model haiku --session-id ([0-9a-f-]{36})$/.exec(typed)?.[1]
+  assert.ok(id, typed)
+  expect(cardOf(box, id)).toMatchObject({ profileWant: 'default', modelWant: 'haiku' })
+  // Without it: no id, no card, the line as before.
+  const before = await profileBox()
+  const b = await runSpawn(before.box, ['--name', 'Helper', '--cwd', before.dir, '--workspace', 'wA'])
+  assert.equal(b.code, 0, b.stderr)
+  assert.equal(callList(before.box)[1], 'pane run wA:p9 claude')
+  assert.deepEqual(existsSync(before.box.cards) ? readdirSync(before.box.cards) : [], [])
+  // With an id and no model: the card as before, no modelWant.
+  const carded = await profileBox()
+  const c = await runSpawn(carded.box, [
+    '--name',
+    'Helper',
+    '--cwd',
+    carded.dir,
+    '--workspace',
+    'wA',
+    '--session-id',
+    SID,
+  ])
+  assert.equal(c.code, 0, c.stderr)
+  assert.equal(callList(carded.box)[1], `pane run wA:p9 claude --session-id ${SID}`)
+  expect(Object.keys(cardOf(carded.box, SID) ?? {}).sort()).toEqual(['key', 'profileWant', 'updatedAt'])
+  // A start command that picks its own session gets no id for it either.
+  const picks = await profileBox({}, () => [], { default: { command: 'cld --continue' } })
+  const p = await runSpawn(picks.box, ['--name', 'Helper', '--cwd', picks.dir, '--workspace', 'wA', '--model', 'haiku'])
+  assert.equal(p.code, 0, p.stderr)
+  assert.equal(callList(picks.box)[1], 'pane run wA:p9 cld --continue --model haiku')
+}, 60_000)
+
+test('--resume with --model resumes on it; a resume without it runs on the profile’s default, and its card says so', async () => {
+  const { box, dir, default: own } = await profileBox({ claude: ['claude-tg'] })
+  transcript(own, dir)
+  seedCard(box, SID, { key: SID, category: 'acme', modelWant: 'opus' })
+  const r = await runSpawn(box, [
+    '--name',
+    'Acme',
+    '--cwd',
+    dir,
+    '--workspace',
+    'wA',
+    '--resume',
+    SID,
+    '--model',
+    'haiku',
+  ])
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(callList(box)[1], `pane run wA:p9 claude-tg --model haiku --resume ${SID}`)
+  expect(cardOf(box, SID)).toMatchObject({ category: 'acme', profileWant: 'default', modelWant: 'haiku' })
+  // Again without --model: the line as before, the card's model gone.
+  const again = await profileBox({ claude: ['claude-tg'] })
+  transcript(again.default, again.dir)
+  seedCard(again.box, SID, { key: SID, category: 'acme', modelWant: 'haiku' })
+  const a = await runSpawn(again.box, ['--name', 'Acme', '--cwd', again.dir, '--workspace', 'wA', '--resume', SID])
+  assert.equal(a.code, 0, a.stderr)
+  assert.equal(callList(again.box)[1], `pane run wA:p9 claude-tg --resume ${SID}`)
+  const card = cardOf(again.box, SID)
+  expect(card).toMatchObject({ category: 'acme', profileWant: 'default' })
+  expect(card).not.toHaveProperty('modelWant')
+}, 60_000)
+
+test('--fork with --model: the copy starts on it', async () => {
+  const { box, dir, default: own } = await profileBox()
+  transcript(own, dir)
+  const FORK = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
+  const r = await runSpawn(box, [
+    '--name',
+    'Acme fork',
+    '--cwd',
+    dir,
+    '--workspace',
+    'wA',
+    '--fork',
+    SID,
+    '--session-id',
+    FORK,
+    '--model',
+    'haiku',
+  ])
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(
+    callList(box)[1],
+    `pane run wA:p9 claude --model haiku --resume ${SID} --fork-session --session-id ${FORK}`,
+  )
+  expect(cardOf(box, FORK)).toMatchObject({ modelWant: 'haiku', forkOf: SID })
+}, 30_000)
+
+test('a start on a model writes nothing into the profile’s folder: its settings stay byte for byte', async () => {
+  const { box, dir, default: own, work } = await profileBox()
+  writeFileSync(join(own, 'settings.json'), SETTINGS)
+  writeFileSync(join(work, 'settings.json'), SETTINGS.replace('opus', 'sonnet'))
+  const before = { own: filesOf(own), work: filesOf(work) }
+  for (const extra of [[], ['--profile', 'work']]) {
+    const r = await runSpawn(box, [
+      '--name',
+      'Helper',
+      '--cwd',
+      dir,
+      '--workspace',
+      'wA',
+      '--session-id',
+      SID,
+      '--model',
+      'haiku',
+      ...extra,
+    ])
+    assert.equal(r.code, 0, r.stderr)
+  }
+  assert.deepEqual({ own: filesOf(own), work: filesOf(work) }, before)
+}, 30_000)
+
+test('pi takes the model in its own form: --agent pi and a start command that starts pi', async () => {
+  const MODEL = 'claude-bridge/claude-haiku-5-5'
+  const piState = {
+    ...STATE,
+    'pane get': { seq: [{ result: { pane: { pane_id: 'wA:p9', agent: null } } }, PI_READY] },
+    'pane read': { text: 'Session name set: Acme invoices' },
+  }
+  const asked = await profileBox({ pi: ['pi', '--thinking', 'low'] })
+  asked.box.state(piState)
+  const r = await runSpawn(asked.box, [
+    '--name',
+    'Acme invoices',
+    '--cwd',
+    asked.dir,
+    '--workspace',
+    'wA',
+    '--session-id',
+    SID,
+    '--agent',
+    'pi',
+    '--model',
+    MODEL,
+  ])
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(callList(asked.box)[1], `pane run wA:p9 pi --thinking low --model ${MODEL} --session-id ${SID}`)
+  // The card is pi's, under its file, with the model too.
+  expect(cardOf(asked.box, PI_CARD)).toMatchObject({ key: PI_FILE, profileWant: 'default', modelWant: MODEL })
+  expect(cardOf(asked.box, SID)).toBeNull()
+  const cmd = await profileBox({}, () => [], { default: { command: 'pi' } })
+  cmd.box.state(piState)
+  const c = await runSpawn(cmd.box, [
+    '--name',
+    'Acme invoices',
+    '--cwd',
+    cmd.dir,
+    '--workspace',
+    'wA',
+    '--model',
+    MODEL,
+  ])
+  assert.equal(c.code, 0, c.stderr)
+  assert.match(
+    callList(cmd.box)[1] ?? '',
+    new RegExp(`^pane run wA:p9 pi --model ${MODEL} --session-id [0-9a-f-]{36}$`),
+  )
+}, 60_000)
+
+test('a model that is no model is refused before herdr is asked', async () => {
+  const { box, dir } = await profileBox()
+  const r = await runSpawn(box, ['--name', 'Helper', '--cwd', dir, '--workspace', 'wA', '--model', 'opus 5'])
+  assert.equal(r.code, 1)
+  assert.match(r.stderr, /--model must be a model name or alias/)
+  assert.deepEqual(box.calls(), [])
 }, 30_000)
