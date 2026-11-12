@@ -95,6 +95,10 @@
 //   board cal list | sources | sync | add | edit | rm | push   the owner's calendar (#328,
 //                            entrypoints/cal-cli.ts, where each is spelled out): every source's events,
 //                            the board's own changed as this session; while config.json turns it on
+//   board thread new | post | done | ask | set | show | list | changes | watch | unwatch | link | open
+//                            threads (#379, entrypoints/thread-cli.ts, where each is spelled out):
+//                            written as this session (or --session's), its watchers told in one line;
+//                            while config.json turns them on
 //   board db restore [--target folder|server] [--snapshot <name>] [--file <path>]
 //                            [--passphrase-file <file> | --passphrase-stdin] [--replace-file]   the database back as a
 //                            snapshot has it (the newest of the target when none is named); without
@@ -169,7 +173,7 @@ import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | doctor | presence [here | away | call] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | doctor | presence [here | away | call] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open (board thread --help) | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -879,6 +883,7 @@ async function main(): Promise<void> {
   if (cmd === 'backup') return backupCmd()
   if (cmd === 'time') return timeCommand()
   if (cmd === 'cal') return calCommand()
+  if (cmd === 'thread') return threadCommand()
   if (cmd === 'secret') return secretCommand()
   if (cmd === 'db') return dbCmd()
   if (cmd === 'archive') return archive()
@@ -1570,6 +1575,47 @@ async function calCommand(): Promise<void> {
   const own = await ownSession()
   const { calCmd } = await import('./cal-cli.ts')
   process.exitCode = await calCmd(rest, { cfg, actor: own ? { key: own.key, name: own.name ?? '' } : 'user' })
+}
+
+/**
+ * `board thread …` (#379, entrypoints/thread-cli.ts): written as the session that runs it, or the one
+ * --session names (MokuPilot's day session), its lane the card's; outside a session, as the owner.
+ */
+async function threadCommand(): Promise<void> {
+  const s = target ? await resolveSession() : await ownSession()
+  const key = s?.key
+  const name = s ? s.name || (target ? liveSessions().get(s.key)?.session.name : '') || s.key.slice(0, 8) : ''
+  const card = key ? readCard(key) : null
+  const cwd = s && 'cwd' in s && typeof s.cwd === 'string' && s.cwd ? s.cwd : process.cwd()
+  const lane = key ? (typeof card?.category === 'string' && card.category) || categoryFor(cfg, cwd) || null : null
+  const { threadCmd } = await import('./thread-cli.ts')
+  process.exitCode = await threadCmd(rest, {
+    cfg,
+    actor: key ? { kind: 'session', key, name } : { kind: 'owner' },
+    lane,
+    idle,
+    findSession: async word => {
+      const w = word.toLowerCase()
+      const items = (await collect(deps)).filter(i =>
+        [i.name, i.autoName, i.pane, i.session, i.key].some(v => v && v.toLowerCase() === w),
+      )
+      if (items.length > 1)
+        throw new Error(
+          `"${word}" names ${items.length} sessions (${items.map(i => i.pane || i.key).join(', ')}): give its pane`,
+        )
+      const [item] = items
+      if (item) return { kind: 'session', key: item.key, name: item.name || item.autoName || item.key.slice(0, 8) }
+      return UUID.test(word) || /^pane-\S+$/.test(word) ? { kind: 'session', key: word, name: word.slice(0, 8) } : null
+    },
+    setAsk: question => {
+      if (key) writeCard(key, { ask: question, askSince: Date.now(), by: 'agent' })
+    },
+    openBoard: async () => {
+      const { openWeb } = await import('../services/web-open.ts')
+      const r = await openWeb(cfg)
+      return r.ok ? { ok: true, url: r.url } : { ok: false, error: r.error }
+    },
+  })
 }
 
 /** `board secret …` (#273, entrypoints/secret-cli.ts): the request goes on this session's card. */

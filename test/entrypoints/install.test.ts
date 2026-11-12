@@ -649,3 +649,27 @@ test('the every-prompt hook and SessionStart entries are as on main', async () =
   // With wake on, settings.json is wake off's plus wake's two entries.
   expect(installed[0]).toEqual(installed[1] as Record<string, Record<string, unknown>>)
 }, 60_000)
+
+test('install copies the threads skill (#379) only while config.json turns threads on; without them it installs what it did', async () => {
+  const box = await sandbox()
+  const home = homeOf(box)
+  const skills = join(home, '.claude', 'skills')
+  const threadsSkill = join(skills, 'agent-board-threads', 'SKILL.md')
+  const teamSkill = join(skills, 'agent-board-team', 'SKILL.md')
+  const off = await install(box)
+  assert.equal(off.code, 0, off.stdout + off.stderr)
+  assert.equal(existsSync(threadsSkill), false)
+  assert.doesNotMatch(off.stdout, /agent-board-threads/)
+  writeFileSync(
+    join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board', 'config.json'),
+    JSON.stringify({ language: 'en', wakeUrl: '', wake: false, threads: true }),
+  )
+  const on = await install(box)
+  assert.equal(on.code, 0, on.stdout + on.stderr)
+  assert.equal(
+    readFileSync(threadsSkill, 'utf8'),
+    readFileSync(join(root, 'skills', 'agent-board-threads', 'SKILL.md'), 'utf8'),
+  )
+  // Right after Team's.
+  assert.match(on.stdout, new RegExp(`^skill: ${literal(teamSkill)}\nskill: ${literal(threadsSkill)}\nhooks: `, 'm'))
+})

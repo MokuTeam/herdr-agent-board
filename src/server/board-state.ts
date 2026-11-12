@@ -24,6 +24,7 @@ import type {
   BoardPayload,
   BoardProfile,
   CalendarPayload,
+  ThreadsPayload,
   TimePayload,
 } from '../core/payload.ts'
 import type { PresenceView } from '../core/presence.ts'
@@ -90,6 +91,8 @@ interface Options {
   time?: () => TimePayload | null
   /** The calendar's line (#328); null while it is off. */
   calendar?: () => CalendarPayload | null
+  /** Threads' line (#379); null while they are off. */
+  threads?: () => ThreadsPayload | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -179,6 +182,11 @@ function calendarOf(calendar: Options['calendar']): { calendar?: CalendarPayload
   return line ? { calendar: line } : {}
 }
 
+function threadsOf(threads: Options['threads']): { threads?: ThreadsPayload } {
+  const line = threads?.() ?? null
+  return line ? { threads: line } : {}
+}
+
 function backupOf(backup: Options['backup']): { backup?: BackupPayload } {
   const line = backup?.() ?? null
   return line ? { backup: line } : {}
@@ -208,6 +216,7 @@ export function createBoardState({
   backup,
   time,
   calendar,
+  threads,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -294,6 +303,8 @@ export function createBoardState({
       ...timeOf(time),
       // calendar: only while config.json turns it on (#328)
       ...calendarOf(calendar),
+      // threads: only while config.json turns them on (#379)
+      ...threadsOf(threads),
       // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
       accessRev: accessRev?.() ?? 0,
       // teamRev: only while config.json turns the peer network on (#231).

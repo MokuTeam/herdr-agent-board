@@ -136,6 +136,12 @@ export interface BoardPayload {
    */
   calendar?: CalendarPayload
   /**
+   * Threads (#379), only while config.json turns them on: the threads revision (the journal seq of
+   * the last entry; a page that shows threads reads its own routes again when it moves) and how
+   * many wait on the owner. The threads themselves never ride in the payload.
+   */
+  threads?: ThreadsPayload
+  /**
    * The Remote access view's revision (GET /api/access, local only): it changes when the view does,
    * and the panel fetches the view again then; the view itself never goes out with the board. The
    * server always sends it; a board before it sent none.
@@ -169,6 +175,12 @@ export interface TimePayload {
   today: Record<string, number>
   /** config.json's `time` does not check out (the panel says what): no entry is written. */
   problems?: boolean
+}
+
+/** What the board's payload says of threads (#379). */
+export interface ThreadsPayload {
+  rev: number
+  needsOwner: number
 }
 
 /** What the board's payload says of the calendar (#328). */

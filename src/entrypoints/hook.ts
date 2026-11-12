@@ -36,6 +36,7 @@ import { type Profile, profileReport } from '../core/profiles.ts'
 import { secretsConfig, usableSinks } from '../core/secrets.ts'
 import { todosConfig, todosNews } from '../core/todos.ts'
 import type { Config } from '../core/types.ts'
+import { threadsConfig } from '../core/work-threads.ts'
 
 const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
 
@@ -152,6 +153,8 @@ async function main(): Promise<void> {
       todosConfig(cfg.todos),
       sinks,
       calendar,
+      // Threads (#379), only while config.json turns them on: else the brief is as it was.
+      threadsConfig(cfg.threads),
     )
     Object.assign(patch, { briefedAt: Date.now(), briefV: BRIEF_VERSION })
     if (presence) patch.presenceSeen = presence.since

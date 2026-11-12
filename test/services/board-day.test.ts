@@ -271,3 +271,34 @@ test('`board list` without MokuPilot on the computer prints what it printed befo
   expect(out).toContain('pwsh.exe')
   expect(out).not.toContain('work-a7')
 })
+
+test('threads (#379): a day session writes with --session as itself, and its event goes to its inbox', async () => {
+  const box = await sandbox()
+  herdrState(box)
+  registry(box)
+  dayState(box)
+  const wake = await fakeWake({ sleeping: [] })
+  // The command reads config.json itself: threads on, and the fake wake, never the live one.
+  put(join(configDir(box), 'config.json'), { language: 'en', port: 9, wakeUrl: wake.url, threads: true })
+  await serveBoard(box, { language: 'en', wakeUrl: wake.url, threads: true, scheduleTickSec: 0.2 })
+  // MokuPilot passes the day session by its Claude name, as its MCP tools will (5.4).
+  expect(await cli(box, ['thread', 'new', '--session', 'work-a7', '--lane', 'atlas', 'Collect the invoices'])).toBe(
+    'ok · atlas-1 · next',
+  )
+  expect(
+    await cli(box, ['thread', 'done', 'atlas-1', '12 invoices collected'], { CLAUDE_CODE_SESSION_ID: OTHER }),
+  ).toBe('ok · atlas-1 · done')
+  for (let tries = 0; inbox(box).length < 1; tries++) {
+    if (tries > 200) throw new Error('the event did not reach the inbox')
+    await Bun.sleep(50)
+  }
+  expect(inbox(box)).toEqual([
+    {
+      from: 'agent board',
+      text: '[board reminder from threads] atlas-1 done: 12 invoices collected. More: board thread changes',
+      at: expect.any(Number),
+    },
+  ])
+  // Nothing typed into a pane: the day has none.
+  expect(box.calls().filter(c => c[0] === 'agent' && c[1] === 'prompt')).toEqual([])
+})
