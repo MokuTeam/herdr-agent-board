@@ -798,8 +798,8 @@ has any thread view of its own.
 
 An agent's entry on a shared thread is an agent's Team post, and goes through `agentPost` in
 `src/services/team-router.ts` unchanged: held as a draft for the owner when agents are off for
-that peer, when the lane is not shared, when the text looks like a secret or names an unshared
-lane, when the loop pause is reached, and always when it carries a file; refused past the rate
+that peer, when the lane is not shared, when the text (or a text file it carries, #415) looks like
+a secret or the text names an unshared lane, when the loop pause is reached; refused past the rate
 limits (20 an hour per session, 60 an hour per peer, 300 a day). A held entry is in the feed
 locally at once, marked "waits for you to send", and the command prints `held` with the reason.
 
@@ -1114,8 +1114,8 @@ day orchestrator's context, so if only two things can be built soon, those are t
    `owner`. Recommendation: no wake by default, `--wake` per watch.
 3. **Sharing is the owner's act, and the earlier feed stays local.** Agents can only ask for a
    share. Is that the right default, also between two people who share a project lane already?
-4. **Files in shared threads.** An agent's file is always held for the owner today. Keep it for
-   the pilot, or add the per-peer switch at once (11.3)?
+4. **Files in shared threads.** Settled by #415: an agent's file goes as its text does, held only
+   when the text would be or when a text file looks like it carries a secret.
 5. **Thread text on the hub is not end-to-end encrypted**, as Team's text is not. Start the pilot
    that way, or wait for text encryption first?
 6. **Keys.** `<lane>-<n>` with `@name` only on a clash (11.5), against Team's 8-character refs

@@ -131,10 +131,9 @@ test("a draft's Send and Discard act on it; its head opens its thread; Send wait
     const end = hosts.findIndex((h, i) => i > at && h.props['data-draft'] !== undefined)
     return hosts.slice(at, end < 0 ? undefined : end).filter(h => h.tag === 'button')
   }
-  const [where, discard, send] = card(DRAFTS[0]?.id as string)
-  ;(where?.props.onClick as () => void)()
-  ;(discard?.props.onClick as () => void)()
-  ;(send?.props.onClick as () => void)()
+  const buttons = card(DRAFTS[0]?.id as string)
+  expect(buttons).toHaveLength(3)
+  for (const b of buttons) (b.props.onClick as () => void)()
   expect(did).toEqual([`open ${ANNA}/${TOPIC}`, `discard ${DRAFTS[0]?.id}`, `send ${DRAFTS[0]?.id}`])
   probe({ view: { ...VIEW, roster: [{ ...VIEW.roster[0], pin: 'changed' }] } as never })
   expect(card(DRAFTS[0]?.id as string)[2]?.props.disabled).toBe(true)

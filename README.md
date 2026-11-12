@@ -2389,7 +2389,7 @@ unmute it what came in meanwhile and is not read counts again.
 board team inbox [--unread] [--json]      # the threads, the latest first, with their unread counts
 board team thread <ref> [--json] [--read] # one thread, a peer's text framed as data from that person
 board team watch [--json] [--every <s>]   # a line per thread with new messages, as they come
-board team drafts                         # the agents' drafts that wait for you: thread, time, file, why
+board team drafts                         # agents' drafts waiting for you: thread, time, file, why
 ```
 
 `inbox` and `watch` never print a message's text, only a thread's ref (what `thread` takes) and who
@@ -2550,15 +2550,18 @@ through an older hub a file is refused and text goes as before. The text of a po
 to the hub as any text. An agent's file (`board team post | reply --file <path>`) goes as its text
 would (#415): held for you only when the text would be (agents off for that person, the lane not
 shared, the loop pause), or when a text file (no NUL in its first 8 KB, or UTF-16 with its mark)
-looks like it carries a secret; a binary goes as it is. A held one waits as a draft with the board's
-own copy of the file taken when the agent asked; your Send sends it. The Team panel lists every
-thread's drafts at the top of its list, each with where it goes, when it was made, its file and size
-and why it was held, with Send and Discard; `board team drafts` lists the same for a session, which
-cannot send or discard one. A text over 4000 characters is refused with its length and the limit. `board team thread` lists a file that came in by its name and
-size and where it was saved. In the panel a file shows on its line with its name and size, a
-picture inline once it is here, and a draft that carries one says so, as the confirmation window
-does. A board fetches at most 100 MB a file and 1 GB a day from one member on its own; past that
-theirs wait on the hub. The panel's attach button comes with the composer of #370.
+looks like it carries a secret, and a file from the board's own folders (its keys, its settings; not
+the uploads or a shared thread's files) is held as one; a binary goes as it is. The check is for
+slips, not for an agent set on getting round it: a secret in a zip goes as the zip. A held one waits
+as a draft with the board's own copy of the file taken when the agent asked; your Send sends it. The
+Team panel lists every thread's drafts at the top of its list, each with where it goes, when it was
+made, its file and size and why it was held, with Send and Discard; `board team drafts` lists the
+same for a session, which cannot send or discard one. A text over 4000 characters is refused with
+its length and the limit. `board team thread` lists a file that came in by its name and size and
+where it was saved. In the panel a file shows on its line with its name and size, a picture inline
+once it is here, and a draft that carries one says so, as the confirmation window does. A board
+fetches at most 100 MB a file and 1 GB a day from one member on its own; past that theirs wait on
+the hub. The panel's attach button comes with the composer of #370.
 
 **Running the hub.** `bun hub/src/main.ts`: see [hub/README.md](hub/README.md) for the options,
 invites, revoking a member and what it keeps. It is not part of the plugin; run it on one machine

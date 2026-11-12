@@ -9,8 +9,9 @@
 // team-agents.json, and the global off (the panel's, or config.json's `team.agents: false`) wins.
 // Off, an agent's post becomes a draft, as before #216, and nothing that comes in reaches a session.
 
-import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs'
-import { basename } from 'node:path'
+import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
+import { basename, join, sep } from 'node:path'
+import { configDir, stateDir, uploadsDir } from '../adapters/paths.ts'
 import { addEntry, listEntries, updateEntry } from '../adapters/schedule-store.ts'
 import {
   audit,
@@ -76,16 +77,20 @@ export type AgentPostResult =
 
 /**
  * An agent's file read once, whole (#415): its bytes, which the secret check reads and the post
- * sends. Null when it is no regular file, larger than `max`, or cannot be read: the post or the
- * draft then reads the path itself and refuses it with its own reason.
+ * sends; nothing reads the path again for the post. `file` when it is no regular file, cannot be
+ * read or changed size while it was read; `file_big` past `max`.
  */
-export function readAgentFile(path: string, max: number): Uint8Array | null {
+export function readAgentFile(
+  path: string,
+  max: number,
+): { ok: true; bytes: Uint8Array } | { ok: false; error: 'file' | 'file_big' } {
   let fd: number | undefined
   try {
     // Without blocking on what is no file (a FIFO would hold the board until a writer came), and only a file.
     fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
     const st = fstatSync(fd)
-    if (!st.isFile() || st.size > max) return null
+    if (!st.isFile()) return { ok: false, error: 'file' }
+    if (st.size > max) return { ok: false, error: 'file_big' }
     // One byte more than it said: a file that grew meanwhile is caught, not cut short.
     const buf = Buffer.alloc(st.size + 1)
     let n = 0
@@ -94,13 +99,48 @@ export function readAgentFile(path: string, max: number): Uint8Array | null {
       if (got === 0) break
       n += got
     }
-    if (n !== st.size) return null
-    return new Uint8Array(buf.buffer, buf.byteOffset, n)
+    if (n !== st.size) return { ok: false, error: 'file' }
+    return { ok: true, bytes: new Uint8Array(buf.buffer, buf.byteOffset, n) }
   } catch {
-    return null
+    return { ok: false, error: 'file' }
   } finally {
     if (fd !== undefined) closeSync(fd)
   }
+}
+
+/** A file's size now, for the echo check; undefined when it cannot be read (the read refuses it then). */
+function sizeOf(path: string): number | undefined {
+  try {
+    return statSync(path).size
+  } catch {
+    return undefined
+  }
+}
+
+/** A path as compared: its real one (links and junctions followed), in one case on Windows. */
+function realOf(path: string): string | null {
+  try {
+    const real = realpathSync.native(path)
+    return process.platform === 'win32' ? real.toLowerCase() : real
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Whether a file is the board's own (#415): in its state or config folder, where its keys, its
+ * settings and its logs are. What came in (the uploads) and a shared thread's files are not: an
+ * agent passes those on.
+ */
+export function boardOwnFile(path: string): boolean {
+  const file = realOf(path)
+  if (!file) return false
+  const inside = (dir: string): boolean => {
+    const d = realOf(dir)
+    return !!d && (file === d || file.startsWith(d.endsWith(sep) ? d : d + sep))
+  }
+  if (inside(uploadsDir()) || inside(join(stateDir(), 'thread-files'))) return false
+  return inside(stateDir()) || inside(configDir())
 }
 
 export interface TeamRouter {
@@ -185,15 +225,15 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
 
   /**
    * Why a post may not go now at all (a refusal, not a draft), or null. An echo is the same text
-   * with the same file's name, or with no file both times (#415): a second file under one caption,
-   * or under none, is no echo.
+   * with a file of the same name and size, or with no file both times (#415): another file under
+   * one caption, or under none, is no echo, nor is the same file changed.
    */
   function overLimit(
     to: string,
     key: string | null,
     text: string,
     session: SessionRef,
-    fileName: string | undefined,
+    file: { name: string; size: number | undefined } | undefined,
   ): string | null {
     const l = limits()
     const t = now()
@@ -213,7 +253,8 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
           o.thread === key &&
           Date.parse(o.msg.ts) >= echo &&
           (o.text ?? o.msg.body.text) === same &&
-          o.file?.name === fileName,
+          o.file?.name === file?.name &&
+          o.file?.size === file?.size,
       )
     )
       return 'echo'
@@ -241,7 +282,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       if (length > MAX_TEXT) return { ok: false, error: 'text', detail: `${length} of ${MAX_TEXT}` }
       const peer = s.peers[switchesKey(to, key)]
       const name = file && basename(file.path)
-      const refused = overLimit(to, key, text, session, name)
+      const refused = overLimit(to, key, text, session, name ? { name, size: sizeOf(file.path) } : undefined)
       if (refused) return { ok: false, error: refused }
       const listener = s.listener?.key === session.key
       // A peer with every lane (#386) shares any lane a session is in, and no lane is left to name.
@@ -261,16 +302,25 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
           ]
         : []
       const words = [text, thread?.title, thread?.link, name, ...fields].filter(w => typeof w === 'string').join('\n')
-      // The file is read once (#415): the check reads these bytes and the post sends them. Past
-      // what the hub takes it is not read; the post or the draft refuses it then.
-      const bytes = file ? readAgentFile(file.path, view.files?.max ?? DEFAULT_MAX_FILE_BYTES) : null
+      let bytes: Uint8Array | undefined
       if (globalOff(s.off) || !peer?.on) reason = 'off'
       else if (!listener && !has(laneOf(session.key) ?? '')) reason = 'lane'
       else {
-        // A text-like file's content runs the secret check the text runs (#415); a binary goes as it is.
-        const inFile = bytes ? fileScanText(bytes) : null
-        const fileSecret = inFile === null ? null : secretHit(inFile)
-        const secret = secretHit(words) ?? (fileSecret && `${fileSecret} in the file`)
+        // The file (#415): one of the board's own (its keys, its settings) is held as a secret;
+        // any other is read once, here, and these bytes are what the check reads and the post
+        // sends. A text-like file's content runs the secret check the text runs; a binary goes
+        // as it is. A file that cannot be read whole is refused: nothing reads the path again.
+        let fileSecret: string | null = null
+        if (file && boardOwnFile(file.path)) fileSecret = "a file of the board's own (its keys or settings)"
+        else if (file) {
+          const read = readAgentFile(file.path, view.files?.max ?? DEFAULT_MAX_FILE_BYTES)
+          if (!read.ok) return { ok: false, error: read.error }
+          bytes = read.bytes
+          const inFile = fileScanText(bytes)
+          const hit = inFile === null ? null : secretHit(inFile)
+          if (hit) fileSecret = `${hit} in the file`
+        }
+        const secret = secretHit(words) ?? fileSecret
         const others = cfg.categories
           .filter(c => !has(c.id))
           .map(c => ({ id: c.id, title: categoryInfo(cfg, c.id).title }))
@@ -304,11 +354,13 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         })
         return { ok: true, sent: false, draft: d.id, reason, ...(detail && { detail }) }
       }
+      // Not held, a file went through the read above: only those bytes go.
+      if (file && (!bytes || !name)) return { ok: false, error: 'file' }
       const r = await team.post(
         { to, ...(thread && { thread }), ...(replyTo && { replyTo }) },
         text,
         { by: 'agent', session, ...(claimed && { claimed: true }) },
-        file && name ? { path: file.path, name, ...(bytes && { bytes }) } : undefined,
+        file && name && bytes ? { path: file.path, name, bytes } : undefined,
         work,
       )
       if (!r.ok) return r

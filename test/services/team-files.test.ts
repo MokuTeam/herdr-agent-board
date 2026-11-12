@@ -5,7 +5,7 @@
 // fetched, checked and kept with the uploads, and the hub forgets it. A box key that changes waits
 // for Trust; limits and an older hub are refused with their codes; an agent's file is a draft.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { memoryBlobs } from '../../hub/src/blobs.ts'
 import { uploadsDir } from '../../src/adapters/paths.ts'
@@ -27,7 +27,7 @@ import { TEAM } from '../../src/core/team-agents.ts'
 import { type BoxKeyPair, generateBoxKey, unwrapSecret, wrapSecret } from '../../src/core/team-box.ts'
 import { fileContext, openFile, sealFile } from '../../src/core/team-file.ts'
 import { createTeam, type TeamService } from '../../src/services/team-hub.ts'
-import { createTeamRouter } from '../../src/services/team-router.ts'
+import { createTeamRouter, readAgentFile } from '../../src/services/team-router.ts'
 import { type Client, fakeClock, type Harness, msgOf, question, startHarness } from '../hub/harness.ts'
 import { isolatedHome } from '../support/env.ts'
 import { handshake, setup, stopAll, until } from '../support/team-service.ts'
@@ -438,13 +438,57 @@ describe("an agent's file goes as its text does (#415)", () => {
     expect(Buffer.from((await fetchAs(w.ben, ref)) ?? []).toString()).toBe('checked')
   })
 
-  test('two files under no caption are no echo of each other; the same file under the same caption is', async () => {
+  test('two files under no caption are no echo of each other; the same file under the same caption is, until it changes', async () => {
     const w = await routed()
     const a = writeTemp(w.home, 'a.csv', '1')
     const b = writeTemp(w.home, 'b.csv', '2')
     expect(await w.post(a, '')).toMatchObject({ sent: true })
     expect(await w.post(b, '')).toMatchObject({ sent: true })
     expect(await w.post(a, '')).toEqual({ ok: false, error: 'echo' })
+    writeFileSync(a, '1,2')
+    expect(await w.post(a, '')).toMatchObject({ sent: true })
+  })
+
+  test("the board's own files are held as a secret, a copy of its key anywhere too; a file that came in is passed on", async () => {
+    const w = await routed()
+    // world() saved this board's key in its state folder, as a joined board has it.
+    const key = join(process.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board', 'team-key.json')
+    expect(existsSync(key)).toBe(true)
+    expect(await w.post(key, 'my key')).toMatchObject({
+      sent: false,
+      reason: 'secret',
+      detail: "a file of the board's own (its keys or settings)",
+    })
+    const copy = writeTemp(w.home, 'k.json', readFileSync(key, 'utf8'))
+    expect(await w.post(copy, 'a copy')).toMatchObject({
+      sent: false,
+      reason: 'secret',
+      detail: 'a private key in the file',
+    })
+    mkdirSync(join(uploadsDir(), '2026-11-12'), { recursive: true })
+    const got = join(uploadsDir(), '2026-11-12', '120000-abcd1234-spec.md')
+    writeFileSync(got, '# spec')
+    expect(await w.post(got, 'passing it on')).toMatchObject({ sent: true })
+    expect(
+      Buffer.from(
+        (await fetchAs(w.ben, msgOf((await w.ben.c.take('deliver', 5000)).env).body.file as FileRef)) ?? [],
+      ).toString(),
+    ).toBe('# spec')
+  })
+
+  test('a file that cannot be read whole is refused with its reason, never read again for the post', async () => {
+    const w = await routed()
+    expect(await w.post(w.home, 'a folder')).toEqual({ ok: false, error: 'file' })
+    expect(await w.post(join(w.home, 'none.md'), 'none')).toEqual({ ok: false, error: 'file' })
+    const big = writeTemp(w.home, 'big.txt', 'x'.repeat(MB + 1))
+    expect(await w.post(big, 'too big')).toEqual({ ok: false, error: 'file_big' })
+    expect(readAgentFile(big, MB)).toEqual({ ok: false, error: 'file_big' })
+    expect(readAgentFile(w.home, MB)).toEqual({ ok: false, error: 'file' })
+    const small = readAgentFile(writeTemp(w.home, 's.txt', 'abc'), MB)
+    expect(small.ok && Buffer.from(small.bytes).toString()).toBe('abc')
+    expect(readDrafts()).toEqual([])
+    await w.ben.c.settle(100)
+    expect(w.ben.c.frames.filter(f => f.t === 'deliver')).toHaveLength(0)
   })
 
   test('a text over the limit is refused with its length and the limit', async () => {

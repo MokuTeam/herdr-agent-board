@@ -71,6 +71,8 @@ const SECRETS: [string, RegExp][] = [
   ['an AWS key', /\bAKIA[0-9A-Z]{16}\b/],
   ['a Google API key', /\bAIza[0-9A-Za-z_-]{35}/],
   ['a private key', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+  // A board's own key as its team-key.json and team-box.json keep it (#415), copied anywhere.
+  ['a private key', /"pkcs8"\s*:\s*"[A-Za-z0-9_-]{40,}/],
 ]
 
 /** What kind of secret the text seems to carry, or null. */

@@ -722,14 +722,14 @@ describe("an agent's file (#371)", () => {
     const d = readDrafts()[0]
     expect(d?.file).toMatchObject({ name: 'env.txt', size: 41 })
     expect(d?.file?.path).not.toBe(leaky)
-    // A file that is not there is refused, not drafted: here by the hub that takes no files, first.
+    // A file that is not there is refused, not drafted.
     const none = await w.router.agentPost({
       to: w.P.pub,
       text: 'x',
       session: { key: 'sess-acme' },
       file: { path: join(dir, 'none') },
     })
-    expect(none).toEqual({ ok: false, error: 'files_hub' })
+    expect(none).toEqual({ ok: false, error: 'file' })
     expect(readDrafts()).toHaveLength(1)
   })
 })
