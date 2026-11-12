@@ -71,6 +71,8 @@ export function confirmLines(a: Reply, t: Translator): ConfirmLines {
             ? t('team.confirm.item.lanes', { lanes: a.lanes.map(String).join(', ') })
             : t('team.confirm.item.noLanes'),
         )
+      if (a.allLanes === true) items.push(t('team.confirm.item.allLanes'))
+      if (a.allLanes === false) items.push(t('team.confirm.item.notAllLanes'))
       if (typeof a.loop === 'number') items.push(t('team.confirm.item.loop', { n: a.loop }))
       if (a.loop === null) items.push(t('team.confirm.item.loopDefault'))
       if (a.muted === true) items.push(t('team.confirm.item.muted'))
@@ -94,6 +96,8 @@ export function confirmLines(a: Reply, t: Translator): ConfirmLines {
             ? t('team.confirm.item.lanes', { lanes: a.lanes.map(String).join(', ') })
             : t('team.confirm.item.noLanes'),
         )
+      if (a.allLanes === true) items.push(t('team.confirm.item.allLanes'))
+      if (a.allLanes === false) items.push(t('team.confirm.item.notAllLanes'))
       if (Array.isArray(a.channels) && a.channels.length)
         items.push(t('team.confirm.item.channels', { channels: a.channels.map(String).join(', ') }))
       return {

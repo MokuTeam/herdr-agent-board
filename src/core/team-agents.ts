@@ -101,6 +101,21 @@ export function laneHit(text: string, lanes: { id: string; title: string }[]): s
   return null
 }
 
+/**
+ * Whether a peer's switches share every lane with it (#386): this board's lanes now and any added
+ * later. Only exactly `true` counts; anything else in the file is a peer without it.
+ */
+export const allLanes = (peer: { allLanes?: unknown } | undefined): boolean => peer?.allLanes === true
+
+/**
+ * Whether `lane` is shared with a peer by its switches: in its list, or every lane is (#386). No
+ * lane at all (a session nobody put in one) is shared with nobody, as without allLanes.
+ */
+export const sharesLane = (
+  peer: { lanes?: readonly string[]; allLanes?: unknown } | undefined,
+  lane: string,
+): boolean => lane !== '' && (allLanes(peer) || (peer?.lanes ?? []).includes(lane))
+
 /** The highest loop pause a peer may have (#360); the lowest is 1. */
 export const MAX_LOOP = 100
 

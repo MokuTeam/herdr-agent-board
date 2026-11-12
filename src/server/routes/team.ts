@@ -34,9 +34,9 @@
 // send only, never an agent's post), a channel takes more with POST
 // /api/team/threads/team/<id>/members { add }, and its switches are /api/team/agents by its key.
 // GET /api/team/welcome names who joined and is not welcomed yet; POST /api/team/welcome { peer,
-// on, lanes, channels } settles one, its body checked whole before anything changes. Adding a
-// channel's members, and a welcome that widens (Agents on, a lane, a channel), wait for the passkey
-// as the switches do.
+// on, lanes, allLanes, channels } settles one, its body checked whole before anything changes.
+// Adding a channel's members, and a welcome that widens (Agents on, a lane, every lane: #386, a
+// channel), wait for the passkey as the switches do.
 import { statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { isRecord } from '../../adapters/json-store.ts'
@@ -115,8 +115,9 @@ function agentsView(cfg: Pick<Config, 'categories' | 'team'>): unknown {
 
 /**
  * One change of the owner's switches: `listener`, `off` (all agents), or for `peer` (an id or
- * `team`) `on`, `lanes` (ids of this board's lanes), `loop` (its own loop pause, 1 to 100, or null
- * for the board's default: #360) and, for the team, `muted`. Checked whole first; `apply` makes it
+ * `team`) `on`, `lanes` (ids of this board's lanes), `allLanes` (every lane, later ones too: #386),
+ * `loop` (its own loop pause, 1 to 100, or null for the board's default: #360) and, for the team,
+ * `muted`. Checked whole first; `apply` makes it
  * and audits it.
  */
 function agentsChange(
@@ -157,6 +158,7 @@ function agentsChange(
   const known = new Set(cfg.categories.map(c => c.id))
   if (body.on !== undefined && typeof body.on !== 'boolean') return { ok: false, error: 'body' }
   if (body.muted !== undefined && typeof body.muted !== 'boolean') return { ok: false, error: 'body' }
+  if (body.allLanes !== undefined && typeof body.allLanes !== 'boolean') return { ok: false, error: 'body' }
   if (body.loop !== undefined && body.loop !== null && !validLoop(body.loop)) return { ok: false, error: 'loop' }
   if (body.lanes !== undefined && !(Array.isArray(body.lanes) && body.lanes.every(l => known.has(l))))
     return { ok: false, error: 'lanes' }
@@ -167,6 +169,8 @@ function agentsChange(
         const p = s.peers[peer] ?? { on: false, lanes: [] }
         if (typeof body.on === 'boolean') p.on = body.on
         if (Array.isArray(body.lanes)) p.lanes = [...new Set(body.lanes as string[])]
+        if (body.allLanes === true) p.allLanes = true
+        else if (body.allLanes === false) delete p.allLanes
         if (typeof body.muted === 'boolean') p.muted = body.muted
         if (validLoop(body.loop)) p.loop = body.loop
         else if (body.loop === null) delete p.loop
@@ -177,6 +181,7 @@ function agentsChange(
         ...(channel && { thread: peer }),
         ...(typeof body.on === 'boolean' && { on: body.on }),
         ...(Array.isArray(body.lanes) && { lanes: (body.lanes as string[]).join(',') }),
+        ...(typeof body.allLanes === 'boolean' && { allLanes: body.allLanes }),
         ...(typeof body.muted === 'boolean' && { muted: body.muted }),
         ...(body.loop !== undefined && { loop: validLoop(body.loop) ? body.loop : 'default' }),
       })
@@ -269,11 +274,13 @@ export function teamRoutes(
       // Checked again as it stands now: the window may answer a while after the ask.
       const w = welcomeFrom(a, team.view()?.roster ?? [], lanes())
       if (!w.ok) return { status: 400, body: w }
-      if (w.on !== undefined || w.lanes !== undefined)
+      if (w.on !== undefined || w.lanes !== undefined || w.allLanes !== undefined)
         changeAgents(x => {
           const p = x.peers[w.peer] ?? { on: false, lanes: [] }
           if (w.on !== undefined) p.on = w.on
           if (w.lanes !== undefined) p.lanes = w.lanes
+          if (w.allLanes === true) p.allLanes = true
+          else if (w.allLanes === false) delete p.allLanes
           x.peers[w.peer] = p
         })
       for (const key of w.channels) team.addMembers(key, [w.peer])
@@ -282,6 +289,7 @@ export function teamRoutes(
         by: 'ui',
         ...(w.on !== undefined && { on: w.on }),
         ...(w.lanes !== undefined && { lanes: w.lanes.join(',') }),
+        ...(w.allLanes !== undefined && { allLanes: w.allLanes }),
         channels: w.channels.length,
       })
       onAgents?.()
@@ -339,6 +347,7 @@ export function teamRoutes(
         ...(c.off === false && { allOn: true }),
         ...(typeof c.on === 'boolean' && { on: c.on }),
         ...(Array.isArray(c.lanes) && { lanes: c.lanes.map(l => titles.get(l as string) ?? String(l)) }),
+        ...(typeof c.allLanes === 'boolean' && { allLanes: c.allLanes }),
         ...(c.loop !== undefined && { loop: c.loop }),
         ...(typeof c.muted === 'boolean' && { muted: c.muted }),
         // The session by the board's own name for it, never the one the asker gave.
@@ -353,6 +362,7 @@ export function teamRoutes(
         who: team.nameOf(a.peer),
         ...(a.on !== undefined && { on: a.on }),
         ...(a.lanes && { lanes: a.lanes.map(l => titles.get(l) ?? l) }),
+        ...(a.allLanes !== undefined && { allLanes: a.allLanes }),
         channels: a.channels.map(k => (Object.hasOwn(all, k) ? (all[k]?.title ?? k) : k)),
       }
     }
@@ -667,9 +677,12 @@ export function teamRoutes(
           peer: w.peer,
           ...(w.on !== undefined && { on: w.on }),
           ...(w.lanes !== undefined && { lanes: w.lanes }),
+          ...(w.allLanes !== undefined && { allLanes: w.allLanes }),
           channels: w.channels,
         }
-        if (widens(readAgents(), { peer: w.peer, on: w.on, lanes: w.lanes, channels: w.channels })) {
+        if (
+          widens(readAgents(), { peer: w.peer, on: w.on, lanes: w.lanes, allLanes: w.allLanes, channels: w.channels })
+        ) {
           const wait = held(req, action)
           if (wait) return wait
         }
@@ -687,12 +700,20 @@ function welcomeFrom(
   roster: { peer: string }[],
   cfg: Pick<Config, 'categories'>,
 ):
-  | { ok: true; peer: string; on: boolean | undefined; lanes: string[] | undefined; channels: string[] }
+  | {
+      ok: true
+      peer: string
+      on: boolean | undefined
+      lanes: string[] | undefined
+      allLanes: boolean | undefined
+      channels: string[]
+    }
   | { ok: false; error: string } {
   const peer = body.peer
   if (!isPeerId(peer) || !roster.some(p => p.peer === peer)) return { ok: false, error: 'peer' }
   if (readPins()[peer]?.status !== 'trusted') return { ok: false, error: 'changed' }
   if (body.on !== undefined && typeof body.on !== 'boolean') return { ok: false, error: 'body' }
+  if (body.allLanes !== undefined && typeof body.allLanes !== 'boolean') return { ok: false, error: 'body' }
   const known = new Set(cfg.categories.map(c => c.id))
   if (body.lanes !== undefined && !(Array.isArray(body.lanes) && body.lanes.every(l => known.has(l))))
     return { ok: false, error: 'lanes' }
@@ -711,6 +732,7 @@ function welcomeFrom(
     peer,
     on: typeof body.on === 'boolean' ? body.on : undefined,
     lanes: Array.isArray(body.lanes) ? [...new Set(body.lanes as string[])] : undefined,
+    allLanes: typeof body.allLanes === 'boolean' ? body.allLanes : undefined,
     channels: [...new Set(channels as string[])],
   }
 }

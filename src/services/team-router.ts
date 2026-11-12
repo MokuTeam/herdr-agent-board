@@ -34,6 +34,7 @@ import {
   pausedText,
   safeName,
   secretHit,
+  sharesLane,
   splitKey,
   TEAM,
   threadKey,
@@ -207,7 +208,8 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const refused = overLimit(to, key, text, session)
       if (refused) return { ok: false, error: refused }
       const listener = s.listener?.key === session.key
-      const shared = new Set(peer?.lanes ?? [])
+      // A peer with every lane (#386) shares any lane a session is in, and no lane is left to name.
+      const has = (lane: string): boolean => sharesLane(peer, lane)
       let reason: string | null = null
       let detail: string | undefined
       // A new thread's title and link go out as well as the text: they are checked with it, and a
@@ -216,11 +218,11 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         .filter(w => typeof w === 'string')
         .join('\n')
       if (globalOff(s.off) || !peer?.on) reason = 'off'
-      else if (!listener && !shared.has(laneOf(session.key) ?? '')) reason = 'lane'
+      else if (!listener && !has(laneOf(session.key) ?? '')) reason = 'lane'
       else {
         const secret = secretHit(words)
         const others = cfg.categories
-          .filter(c => !shared.has(c.id))
+          .filter(c => !has(c.id))
           .map(c => ({ id: c.id, title: categoryInfo(cfg, c.id).title }))
         const lane = secret ? null : laneHit(words, others)
         if (secret) [reason, detail] = ['secret', secret]
@@ -314,8 +316,8 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       if (!parts || !team.threads().some(t => t.key === key)) return { ok: false, error: 'thread' }
       if (session) {
         const s = readAgents()
-        const shared = new Set(s.peers[switchesKey(parts.scope, key)]?.lanes ?? [])
-        if (s.listener?.key !== session.key && !shared.has(laneOf(session.key) ?? ''))
+        const peer = s.peers[switchesKey(parts.scope, key)]
+        if (s.listener?.key !== session.key && !sharesLane(peer, laneOf(session.key) ?? ''))
           return { ok: false, error: 'lane' }
       }
       team.setThread(key, { handler: session })

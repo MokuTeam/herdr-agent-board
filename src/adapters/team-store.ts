@@ -451,11 +451,14 @@ export function changeThreads<R>(fn: (threads: Record<string, ThreadRecord>) => 
 /**
  * One peer's (or the team's) switches: agents talk with it, the lanes it may hear about, muted (the
  * team), and its own loop pause (#360: agent messages in a row before the next waits for the owner;
- * the board's default while unset).
+ * the board's default while unset). `allLanes` (#386): every lane is shared with it, also lanes
+ * added later; only exactly `true` counts (core/team-agents.ts allLanes), and without it `lanes`
+ * means what it always did.
  */
 export interface PeerAgents {
   on: boolean
   lanes: string[]
+  allLanes?: true
   muted?: boolean
   loop?: number
 }

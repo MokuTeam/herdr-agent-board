@@ -161,6 +161,7 @@ test('a channel for some members, its switches, a member added, and a newcomer w
     { peer: cleo.pub, on: true, lanes: ['other'], channels: ['team/general'] },
     { peer: (await generateKey()).pub, on: true },
     { peer: cleo.pub, on: 'yes' },
+    { peer: cleo.pub, allLanes: 'yes' },
   ])
     expect((await post('/api/team/welcome', bad))[0]).toBe(400)
   const untouched = (await get('/api/team/agents')) as { peers: Record<string, unknown> }
@@ -187,5 +188,21 @@ test('a channel for some members, its switches, a member added, and a newcomer w
   const line = inbox.split('\n').find(l => l.startsWith(id.slice(0, 8))) ?? ''
   expect(line).toContain('channel with ')
   for (const name of ['ana', 'ben', 'cleo']) expect(line).toContain(name)
-  for (const c of [anaClient, benClient, cleoClient]) c.close()
+  // #386: an assistant's bridge welcomed with every lane: it widens, the window says so, and it is kept.
+  const dan = await generateKey()
+  await Bun.sleep(5)
+  const danClient = await hub.join(dan, 'dan-assistant', undefined, [...CAPS, 'assistant'])
+  await rosterHas(4)
+  const danView = ((await get('/api/team')).roster as { peer: string; assistant?: boolean }[]).find(
+    p => p.peer === dan.pub,
+  )
+  expect(danView?.assistant).toBe(true)
+  const [danWaits, danPending] = await post('/api/team/welcome', { peer: dan.pub, allLanes: true, channels: [] })
+  expect(danWaits).toBe(428)
+  const shownDan = (await (await fetch(`${url}/api/team/confirm/${danPending.id}`)).json()) as { action: unknown }
+  expect(shownDan.action).toEqual({ kind: 'welcome', who: 'dan-assistant', allLanes: true, channels: [] })
+  expect(await confirmed(String(danPending.id))).toEqual([200, { ok: true, done: true }])
+  const withDan = (await get('/api/team/agents')) as { peers: Record<string, unknown> }
+  expect(withDan.peers[dan.pub]).toEqual({ on: false, lanes: [], allLanes: true })
+  for (const c of [anaClient, benClient, cleoClient, danClient]) c.close()
 })

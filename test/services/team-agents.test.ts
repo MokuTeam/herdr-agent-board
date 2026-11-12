@@ -558,6 +558,102 @@ describe("an agent's post, the edges (#216)", () => {
   })
 })
 
+test('#386 the roster marks an assistant’s bridge by its caps; every other peer’s entry is as before', async () => {
+  const s = setup({ hub: 'ws://127.0.0.1:7443', name: 'me' })
+  const [P, Q, E] = [await generateKey(), await generateKey(), await generateKey()]
+  s.svc.start()
+  await handshake(s, [
+    { peer: P.pub, name: 'anna', caps: ['threads'] },
+    { peer: Q.pub, name: 'ben' },
+    { peer: E.pub, name: 'anna-assistant', caps: ['threads', 'replies', 'assistant'] },
+  ])
+  const roster = s.svc.view()?.roster ?? []
+  expect(roster.find(p => p.peer === E.pub)).toMatchObject({ name: 'anna-assistant', assistant: true })
+  expect(roster.find(p => p.peer === P.pub)).not.toHaveProperty('assistant')
+  expect(roster.find(p => p.peer === Q.pub)).not.toHaveProperty('assistant')
+})
+
+describe('every lane shared (#386)', () => {
+  const every = (scope: string, lanes: string[] = []): void =>
+    changeAgents(x => {
+      x.peers[scope] = { on: true, lanes, allLanes: true }
+      x.listener = { key: 'sess-listener', name: 'day' }
+    })
+
+  test('a session in any lane posts without a draft, and naming another lane holds nothing', async () => {
+    const w = await world()
+    every(w.P.pub, ['acme'])
+    const r = await w.router.agentPost({ to: w.P.pub, text: 'plain words', session: { key: 'sess-globex' } })
+    expect(r).toMatchObject({ ok: true, sent: true })
+    const named = await w.router.agentPost({
+      to: w.P.pub,
+      text: 'the Acme and Globex deadlines moved',
+      session: { key: 'sess-globex' },
+    })
+    expect(named).toMatchObject({ ok: true, sent: true })
+    expect(sent(w.ws).map(m => m.body.text)).toEqual(['plain words', 'the Acme and Globex deadlines moved'])
+    expect(readDrafts()).toEqual([])
+  })
+
+  test('the other holds stay: a secret, the loop pause, a file; a session in no lane is held for its lane', async () => {
+    const w = await world()
+    every(w.P.pub)
+    const secret = await w.router.agentPost({
+      to: w.P.pub,
+      text: 'the key is ghp_abcdefghijklmnopqrstuvwxyz0123',
+      session: { key: 'sess-globex' },
+    })
+    expect(secret).toMatchObject({ sent: false, reason: 'secret' })
+    const nowhere = await w.router.agentPost({ to: w.P.pub, text: 'hi', session: { key: 'sess-in-no-lane' } })
+    expect(nowhere).toMatchObject({ sent: false, reason: 'lane' })
+  })
+
+  test('a thread can be handed to a session in any lane; to a session in no lane it cannot', async () => {
+    const w = await world()
+    every(w.P.pub)
+    const id = crypto.randomUUID()
+    await deliver(w, w.P, 'start', { thread: { id, title: 'T' } })
+    const key = `${w.P.pub}/${id}`
+    expect(w.router.assign(key, { key: 'sess-globex' })).toEqual({ ok: true })
+    expect(w.router.assign(key, { key: 'sess-in-no-lane' })).toEqual({ ok: false, error: 'lane' })
+  })
+
+  test('the team chat and a channel take every lane from their own switches', async () => {
+    const w = await world()
+    every('team')
+    const r = await w.router.agentPost({ to: 'team', text: 'to everyone', session: { key: 'sess-globex' } })
+    expect(r).toMatchObject({ ok: true, sent: true })
+    const id = crypto.randomUUID()
+    const members = [w.me, w.P.pub].sort()
+    await deliver(w, w.P, 'in a channel', { thread: { id, title: 'Deals', group: true, members } })
+    const key = `team/${id}`
+    changeAgents(x => {
+      x.peers[key] = { on: true, lanes: ['acme'] }
+    })
+    expect(w.router.assign(key, { key: 'sess-globex' })).toEqual({ ok: false, error: 'lane' })
+    every(key)
+    expect(w.router.assign(key, { key: 'sess-globex' })).toEqual({ ok: true })
+  })
+
+  test('as on main: a stored list holds a lane not in it, a peer with no switches holds everything, junk is no allLanes', async () => {
+    const w = await world()
+    agentsOn(w.P.pub, ['acme'])
+    const listed = await w.router.agentPost({ to: w.P.pub, text: 'hi', session: { key: 'sess-globex' } })
+    expect(listed).toMatchObject({ sent: false, reason: 'lane' })
+    const named = await w.router.agentPost({ to: w.P.pub, text: 'Globex news', session: { key: 'sess-acme' } })
+    expect(named).toMatchObject({ sent: false, reason: 'lane_name' })
+    const stranger = await w.router.agentPost({ to: w.Q.pub, text: 'hi', session: { key: 'sess-acme' } })
+    expect(stranger).toMatchObject({ sent: false, reason: 'off' })
+    // What a hand-edited file may hold instead of true counts as no allLanes.
+    changeAgents(x => {
+      x.peers[w.P.pub] = { on: true, lanes: ['acme'], allLanes: 'yes' } as never
+    })
+    const junk = await w.router.agentPost({ to: w.P.pub, text: 'hi again', session: { key: 'sess-globex' } })
+    expect(junk).toMatchObject({ sent: false, reason: 'lane' })
+    expect(sent(w.ws)).toEqual([])
+  })
+})
+
 test('a peer cannot grow the thread file without end: past the cap its quietest thread nobody handles goes (#216)', async () => {
   const w = await world()
   const first = crypto.randomUUID()

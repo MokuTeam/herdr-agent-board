@@ -9,6 +9,7 @@ import { useT } from '../../i18n/I18nProvider.tsx'
 import {
   type AgentsChange,
   type AgentsView,
+  allLanesOn,
   channelsOf,
   pairThread,
   seenLine,
@@ -148,7 +149,9 @@ export function TeamPeople({
 
 /**
  * The owner's agent switches (#216): everything at once, the listener, and for the team chat, each
- * channel (#355) and each person: agents on, the lanes shared, and the loop pause (#360).
+ * channel (#355) and each person: agents on, the lanes shared (or all of them, #386), and the loop
+ * pause (#360). Agents turned on for an assistant's bridge that shares no lane yet share every lane
+ * with it: the owner's default for an assistant (#386).
  */
 function AgentSwitches({
   view,
@@ -166,9 +169,9 @@ function AgentSwitches({
   const t = useT()
   const { now } = useBoardContext()
   const scopes = [
-    { scope: 'team', name: t('team.chat') },
-    ...channels.map(c => ({ scope: c.key, name: c.title ?? t('team.general') })),
-    ...view.roster.map(p => ({ scope: p.peer, name: p.name })),
+    { scope: 'team', name: t('team.chat'), assistant: false },
+    ...channels.map(c => ({ scope: c.key, name: c.title ?? t('team.general'), assistant: false })),
+    ...view.roster.map(p => ({ scope: p.peer, name: p.name, assistant: p.assistant === true })),
   ]
   return (
     <details className="team-agents">
@@ -198,8 +201,9 @@ function AgentSwitches({
           </button>
         )}
       </div>
-      {scopes.map(({ scope, name }) => {
+      {scopes.map(({ scope, name, assistant }) => {
         const p = agents.peers[scope] ?? { on: false, lanes: [] }
+        const all = allLanesOn(p)
         const paused = agents.paused[scope] ?? 0
         return (
           <div key={scope} className={classNames('team-agent', agents.off && 'off')} data-scope={scope}>
@@ -210,7 +214,13 @@ function AgentSwitches({
                 on={p.on}
                 label={t('team.agentsWith', { name })}
                 disabled={disabled}
-                onFlip={on => onAgents({ peer: scope, on })}
+                onFlip={on =>
+                  onAgents(
+                    on && assistant && !all && p.lanes.length === 0
+                      ? { peer: scope, on, allLanes: true }
+                      : { peer: scope, on },
+                  )
+                }
               />
             </div>
             {paused > now && (
@@ -218,6 +228,16 @@ function AgentSwitches({
             )}
             <div className="team-lanes">
               <span className="todo-meta">{t('team.lanes')}</span>
+              <button
+                type="button"
+                className="mini team-lane"
+                aria-pressed={all}
+                disabled={disabled}
+                data-all-lanes={scope}
+                onClick={() => onAgents({ peer: scope, allLanes: !all })}
+              >
+                {t('team.allLanes')}
+              </button>
               {agents.lanes.map(l => {
                 const shared = p.lanes.includes(l.id)
                 return (
@@ -225,8 +245,8 @@ function AgentSwitches({
                     key={l.id}
                     type="button"
                     className="mini team-lane"
-                    aria-pressed={shared}
-                    disabled={disabled}
+                    aria-pressed={all || shared}
+                    disabled={disabled || all}
                     onClick={() =>
                       onAgents({ peer: scope, lanes: shared ? p.lanes.filter(x => x !== l.id) : [...p.lanes, l.id] })
                     }
@@ -265,8 +285,9 @@ function AgentSwitches({
 }
 
 /**
- * A new member's one screen (#355): the lanes to open to them, their agents on, the channels of
- * this board's to add them to. Nothing changes until Done; Later puts it off, their mark stays.
+ * A new member's one screen (#355): the lanes to open to them (all of them, ticked by default for an
+ * assistant's bridge: #386), their agents on, the channels of this board's to add them to. Nothing
+ * changes until Done; Later puts it off, their mark stays.
  */
 export function WelcomeCard({
   peer,
@@ -287,6 +308,8 @@ export function WelcomeCard({
   const now = agents.peers[peer.peer]
   const [on, setOn] = useState(now?.on ?? false)
   const [lanes, setLanes] = useState<string[]>(now?.lanes ?? [])
+  const had = allLanesOn(now)
+  const [all, setAll] = useState(now ? had : peer.assistant === true)
   const [joins, setJoins] = useState<string[]>([])
   const flip = (list: string[], id: string) => (list.includes(id) ? list.filter(x => x !== id) : [...list, id])
   return (
@@ -305,13 +328,23 @@ export function WelcomeCard({
       </div>
       <div className="team-lanes">
         <span className="todo-meta">{t('team.lanes')}</span>
+        <button
+          type="button"
+          className="mini team-lane"
+          aria-pressed={all}
+          disabled={disabled}
+          data-all-lanes={peer.peer}
+          onClick={() => setAll(x => !x)}
+        >
+          {t('team.allLanes')}
+        </button>
         {agents.lanes.map(l => (
           <button
             key={l.id}
             type="button"
             className="mini team-lane"
-            aria-pressed={lanes.includes(l.id)}
-            disabled={disabled}
+            aria-pressed={all || lanes.includes(l.id)}
+            disabled={disabled || all}
             onClick={() => setLanes(x => flip(x, l.id))}
           >
             {l.title}
@@ -345,7 +378,9 @@ export function WelcomeCard({
           className="mini"
           data-welcome-done
           disabled={disabled}
-          onClick={() => onDone({ peer: peer.peer, on, lanes, channels: joins })}
+          onClick={() =>
+            onDone({ peer: peer.peer, on, lanes, ...((all || had) && { allLanes: all }), channels: joins })
+          }
         >
           {t('team.done')}
         </button>

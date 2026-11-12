@@ -53,7 +53,7 @@ export type OwnerAction =
   | { kind: 'trust'; peer: string }
   | { kind: 'agents'; change: Record<string, unknown> }
   /** A new member's welcome (#355): their switches and the channels they join, in one go. */
-  | { kind: 'welcome'; peer: string; on?: boolean; lanes?: string[]; channels: string[] }
+  | { kind: 'welcome'; peer: string; on?: boolean; lanes?: string[]; allLanes?: boolean; channels: string[] }
   /** More members for a channel this board started (#355): more boards read it from then on. */
   | { kind: 'members'; key: string; add: string[] }
   | { kind: 'passkey-add' }
@@ -77,14 +77,14 @@ export const confirmUrl = (port: number, id: string): string => `${confirmOrigin
 /** What the agents' switches are now, as far as widening goes. */
 export interface AgentsNow {
   off: boolean
-  peers: Record<string, { on: boolean; lanes: string[] } | undefined>
+  peers: Record<string, { on: boolean; lanes: string[]; allLanes?: unknown } | undefined>
 }
 
 /**
  * Whether a change to the agents' switches (the body of POST /api/team/agents) gives agents more
  * than they have: the global switch back on, a listener set, a member's Agents on, a lane added,
- * a loop pause changed (#360). Turning things off, clearing the listener, removing lanes and
- * muting are free.
+ * every lane shared (#386), a loop pause changed (#360). Turning things off, clearing the
+ * listener, removing lanes, unsharing every lane and muting are free.
  */
 export function widens(now: AgentsNow, change: Record<string, unknown>): boolean {
   // A welcome (#355) widens as its parts do: Agents on, a lane added, a channel joined.
@@ -96,6 +96,7 @@ export function widens(now: AgentsNow, change: Record<string, unknown>): boolean
   if (change.loop !== undefined) return true
   const peer = typeof change.peer === 'string' ? now.peers[change.peer] : undefined
   if (change.on === true && !peer?.on) return true
+  if (change.allLanes === true && peer?.allLanes !== true) return true
   if (Array.isArray(change.lanes)) {
     const had = new Set(peer?.lanes ?? [])
     if (change.lanes.some(l => !had.has(l as string))) return true
