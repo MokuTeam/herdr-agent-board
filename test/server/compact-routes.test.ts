@@ -28,7 +28,8 @@ describe('auto-compact on the web board', () => {
     const r = await res
     return [r.status, await r.json()]
   }
-  const board = async () => (await (await fetch(`${url}/api/board`)).json()) as { items: Item[]; compactDefault?: string }
+  const board = async () =>
+    (await (await fetch(`${url}/api/board`)).json()) as { items: Item[]; compactDefault?: string }
   const item = async (key: string) => (await board()).items.find(i => i.key === key)
   /** The session's item once the board shows what `ok` asks for (a card write redraws it a moment later). */
   const itemOnce = async (key: string, ok: (it: Item | undefined) => boolean) => {
@@ -51,7 +52,11 @@ describe('auto-compact on the web board', () => {
     writeFileSync(
       join(projects, `${OWN}.jsonl`),
       `${[
-        row({ type: 'user', message: { content: 'watch the queue' }, timestamp: new Date(DONE - 60_000).toISOString() }),
+        row({
+          type: 'user',
+          message: { content: 'watch the queue' },
+          timestamp: new Date(DONE - 60_000).toISOString(),
+        }),
         row({
           type: 'system',
           subtype: 'compact_boundary',
@@ -67,7 +72,15 @@ describe('auto-compact on the web board', () => {
       join(box.cards, `${OWN}.json`),
       JSON.stringify({
         key: OWN,
-        compactRun: { state: 'done', at: DONE - 30_000, from: 612_000, to: 48_000, limit: 300_000, setting: '300k', doneAt: DONE },
+        compactRun: {
+          state: 'done',
+          at: DONE - 30_000,
+          from: 612_000,
+          to: 48_000,
+          limit: 300_000,
+          setting: '300k',
+          doneAt: DONE,
+        },
       }),
     )
     const contexts = join(box.dir, 'state', 'herdr', 'plugins', 'agent-board', 'context')
@@ -107,14 +120,22 @@ describe('auto-compact on the web board', () => {
       limit: '',
       source: 'off',
       tokens: null,
-      run: { state: 'done', at: DONE - 30_000, from: 612_000, to: 48_000, limit: 300_000, setting: '300k', doneAt: DONE },
+      run: {
+        state: 'done',
+        at: DONE - 30_000,
+        from: 612_000,
+        to: 48_000,
+        limit: 300_000,
+        setting: '300k',
+        doneAt: DONE,
+      },
     })
   })
 
   test("the sheet sets a session's own limit and instructions on its card; what is no limit is refused", async () => {
-    expect(await answer(post(`/api/session/${PLAIN}/card`, { compactAt: '300K', compactNote: 'keep the plan\n' }))).toEqual(
-      [200, { ok: true }],
-    )
+    expect(
+      await answer(post(`/api/session/${PLAIN}/card`, { compactAt: '300K', compactNote: 'keep the plan\n' })),
+    ).toEqual([200, { ok: true }])
     expect(card(PLAIN)).toMatchObject({ compactAt: '300k', compactNote: 'keep the plan' })
     expect((await itemOnce(PLAIN, it => !!it?.compact))?.compact).toEqual({
       own: '300k',
@@ -154,7 +175,14 @@ describe('auto-compact on the web board', () => {
       conversation: Record<string, unknown>[]
     }
     expect(detail.conversation.filter(m => m.role === 'notice')).toEqual([
-      expect.objectContaining({ kind: 'compact', trigger: 'manual', pre: 612_000, post: 48_000, by: 'board', at: DONE }),
+      expect.objectContaining({
+        kind: 'compact',
+        trigger: 'manual',
+        pre: 612_000,
+        post: 48_000,
+        by: 'board',
+        at: DONE,
+      }),
     ])
   })
 })

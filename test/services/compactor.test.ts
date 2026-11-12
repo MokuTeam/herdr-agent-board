@@ -229,9 +229,9 @@ describe('auto-compact', () => {
     })
     await sleep(800)
     expect(prompts(box)).toEqual([])
-    expect(logs(proc).some(l => /compacted 612k → 120k \(limit 100k\), still at or above the limit; held/.test(l))).toBe(
-      true,
-    )
+    expect(
+      logs(proc).some(l => /compacted 612k → 120k \(limit 100k\), still at or above the limit; held/.test(l)),
+    ).toBe(true)
     // The owner's own /compact brought it down: armed again, and over the limit later it compacts.
     context(box, S1, 40_000)
     await until(() => cardOf(box, S1)?.compactRun?.hold === undefined)

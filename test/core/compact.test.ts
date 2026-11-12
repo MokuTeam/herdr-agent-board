@@ -41,7 +41,21 @@ describe('limits', () => {
     expect(parseCompactLimit(400_000)).toEqual({ tokens: 400_000 })
     expect(parseCompactLimit('60%')).toEqual({ share: 60 })
     expect(parseCompactLimit('Never')).toBe('never')
-    for (const bad of ['', 'off', '5k', '9999', '2%', '96%', 'k', '300 tokens', '-300k', null, undefined, {}, Number.NaN])
+    for (const bad of [
+      '',
+      'off',
+      '5k',
+      '9999',
+      '2%',
+      '96%',
+      'k',
+      '300 tokens',
+      '-300k',
+      null,
+      undefined,
+      {},
+      Number.NaN,
+    ])
       expect(parseCompactLimit(bad)).toBeNull()
     expect(limitText({ tokens: 300_000 })).toBe('300k')
     expect(limitText({ tokens: 1_200_000 })).toBe('1.2m')

@@ -51,7 +51,9 @@ test('board compact sets, shows and clears the limit; instructions too; never be
 
   // Settings' default: shown while the session has none of its own; its own never beats it.
   config(box, { compact: { at: '400k', note: 'keep the plan' } })
-  expect((await compact(box, '--clear')).out).toBe("ok · compact: 400k, Settings' default · keeps (Settings): keep the plan")
+  expect((await compact(box, '--clear')).out).toBe(
+    "ok · compact: 400k, Settings' default · keeps (Settings): keep the plan",
+  )
   expect(cardOf(box)?.compactAt).toBeUndefined()
   expect((await compact(box, '--at', 'never')).out).toBe("ok · compact: never, this session's own")
   expect(cardOf(box)?.compactAt).toBe('never')
@@ -61,7 +63,14 @@ test('board compact refuses what is no limit, a stray word, and --clear with a v
   const box = await sandbox()
   config(box)
   await compact(box, '--at', '200k')
-  for (const args of [['--at', '5k'], ['--at', 'soon'], ['--at', '120%'], ['now'], ['--clear', '--at', '300k'], ['--at']]) {
+  for (const args of [
+    ['--at', '5k'],
+    ['--at', 'soon'],
+    ['--at', '120%'],
+    ['now'],
+    ['--clear', '--at', '300k'],
+    ['--at'],
+  ]) {
     const r = await compact(box, ...args)
     expect(r.code).not.toBe(0)
     expect(r.out).toContain('usage: board compact')
