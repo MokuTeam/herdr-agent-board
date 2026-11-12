@@ -21,7 +21,10 @@ import {
   compactionSince,
   compactRule,
   compactStep,
+  firstRequestAfter,
+  measureRun,
   parseCompactLimit,
+  pending,
   runOf,
   settleRun,
   shortTokens,
@@ -45,7 +48,7 @@ const positive = (v: unknown, fallback: number): number => (Number(v) > 0 ? Numb
 function cardWants(card: Card): boolean {
   const own = parseCompactLimit(card.compactAt)
   const run = runOf(card.compactRun)
-  return (own !== null && own !== 'never') || run?.state === 'sent' || !!run?.hold
+  return (own !== null && own !== 'never') || run?.state === 'sent' || pending(run) || !!run?.hold
 }
 
 /** Whether anything is set up at all: Settings' default, or a card that asks. */
@@ -96,6 +99,9 @@ function tailLines(path: string | null | undefined): string[] {
     return []
   }
 }
+
+/** A run that holds the session, for the log line. */
+const heldWords = (run: CompactRun): string => (run.hold ? ', still at or above the limit; held' : '')
 
 /** A run in words for the log: "612k → 48k (limit 300k)". */
 export function runWords(run: CompactRun): string {
@@ -154,21 +160,32 @@ export function startCompactor({ deps, onChange = () => {} }: CompactorOptions):
     const run = runOf(card?.compactRun)
     const context = typeof item.context === 'number' ? item.context : null
     if (run?.state === 'sent') {
-      const found = compactionSince(tailLines(item.transcript), run.at - SKEW_MS)
-      const settled = settleRun(run, found, item.status, context, Date.now())
-      if (!settled || !writeRun(item.key, run.at, settled)) return false
+      const lines = tailLines(item.transcript)
+      let settled = settleRun(run, compactionSince(lines, run.at - SKEW_MS), item.status, context, Date.now())
+      if (!settled) return false
+      // A request after it already (the board was off meanwhile): measured at once.
+      const after = pending(settled) && settled.doneAt ? firstRequestAfter(lines, settled.doneAt) : null
+      if (after !== null) settled = measureRun(settled, after)
+      if (!writeRun(item.key, run.at, settled)) return false
       if (settled.state === 'failed') log(`compact: ${item.name}: /compact typed, no compaction followed; held`)
-      else
-        log(
-          `compact: ${item.name}: compacted ${runWords(settled)}${settled.hold ? ', still at or above the limit; held' : ''}`,
-        )
+      else log(`compact: ${item.name}: compacted ${runWords(settled)}${heldWords(settled)}`)
+      return true
+    }
+    // What the compaction left, on the first request after it: the system prompt and tools included.
+    if (run && pending(run) && run.doneAt) {
+      const after = firstRequestAfter(tailLines(item.transcript), run.doneAt)
+      if (after === null) return false
+      const measured = measureRun(run, after)
+      if (!writeRun(item.key, run.at, measured)) return false
+      log(`compact: ${item.name}: after the compaction the context is ${shortTokens(after)}${heldWords(measured)}`)
       return true
     }
     const rule = compactRule(card, cfg.compact)
     const step = compactStep(item, rule, run)
     if (step.do === 'release' && run) {
+      // Settled for good: the context was seen below the limit (or the limit changed).
       const { hold, ...rest } = run
-      if (!writeRun(item.key, run.at, rest)) return false
+      if (!writeRun(item.key, run.at, { ...rest, measured: true })) return false
       log(`compact: ${item.name}: armed again (context ${context === null ? '?' : shortTokens(context)})`)
       return true
     }

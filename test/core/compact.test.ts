@@ -10,8 +10,10 @@ import {
   compactRule,
   compactStep,
   compactView,
+  firstRequestAfter,
   limitText,
   limitTokens,
+  measureRun,
   noteText,
   parseCompactLimit,
   SENT_IDLE_MS,
@@ -160,8 +162,10 @@ describe('when /compact goes in', () => {
     expect(compactStep({ ...idle, context: 90_000 }, rule, held)).toEqual({ do: 'release' })
     expect(compactStep(idle, compactRule(own('200k'), undefined), held)).toEqual({ do: 'release' })
     expect(compactStep(idle, compactRule(own('never'), undefined), held)).toEqual({ do: 'release' })
-    // A run that did not hold (it went below the limit): over it again later, it compacts again.
-    expect(compactStep(idle, rule, base)).toMatchObject({ do: 'compact' })
+    // Done but not measured yet (no request since): nothing, what it left is not known.
+    expect(compactStep(idle, rule, base)).toEqual({ do: 'none' })
+    // Measured below the limit: over it again later, it compacts again.
+    expect(compactStep(idle, rule, { ...base, to: 60_000, measured: true })).toMatchObject({ do: 'compact' })
   })
 })
 
@@ -210,5 +214,32 @@ describe('a run on its way', () => {
       hold: true,
     })
     expect(settleRun(sent, null, 'working', 612_000, sent.at + SENT_WORKING_MS)).toMatchObject({ state: 'failed' })
+  })
+
+  test('what it left is the first request after it, system prompt and tools included: at or above the limit it holds', () => {
+    const at = sent.at + 30_000
+    const reply = (when: number, cached: number, extra: Record<string, unknown> = {}) =>
+      line({
+        type: 'assistant',
+        timestamp: new Date(when).toISOString(),
+        message: { model: 'claude-opus-5-5', usage: { input_tokens: 3, cache_read_input_tokens: cached } },
+        ...extra,
+      })
+    const lines = [
+      reply(at - 1000, 611_000),
+      boundary(at),
+      reply(at + 500, 0, { message: { model: '<synthetic>', usage: { input_tokens: 9 } } }),
+      reply(at + 800, 70_000, { isSidechain: true }),
+      reply(at + 1000, 41_000),
+      reply(at + 2000, 45_000),
+    ]
+    expect(firstRequestAfter(lines, at)).toBe(41_003)
+    expect(firstRequestAfter(lines.slice(0, 4), at)).toBeNull()
+    const done = settleRun(sent, { at, pre: 611_000, post: 13_000 }, 'idle', 13_000, at)
+    if (!done) throw new Error('not settled')
+    expect(done.hold).toBeUndefined()
+    expect(measureRun(done, 41_003)).toEqual({ ...done, to: 41_003, measured: true })
+    // A limit below what the session carries anyway: held, never a /compact on every turn.
+    expect(measureRun({ ...done, limit: 30_000 }, 41_003)).toMatchObject({ to: 41_003, measured: true, hold: true })
   })
 })

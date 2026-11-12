@@ -172,7 +172,6 @@ describe('auto-compact', () => {
     await compactor(draft)
     await sleep(1000)
     expect(prompts(draft)).toEqual([])
-    expect(cardOf(draft, S1)?.compactRun).toBeUndefined()
 
     // Asleep: not woken for it, nothing typed.
     const asleep = await sandbox()
@@ -239,6 +238,38 @@ describe('auto-compact', () => {
     context(box, S1, 130_000)
     await until(() => prompts(box).length === 1)
     expect(prompts(box)).toEqual([{ pane: 'p1', text: '/compact' }])
+  })
+
+  test('a small summary but a first request after it still above the limit: measured there, held, no /compact on every turn', async () => {
+    const box = await sandbox()
+    herdrWith(box, [{ pane: 'p1', session: S1, status: 'idle' }])
+    const typed = Date.now() - 60_000
+    const reply = (at: number, cached: number) => ({
+      type: 'assistant',
+      timestamp: new Date(at).toISOString(),
+      message: { model: 'claude-opus-5-5', usage: { input_tokens: 2, cache_read_input_tokens: cached }, content: [] },
+    })
+    transcript(box, S1, [boundary(typed + 20_000, 612_000, 8_000)])
+    // No request since the compaction: what the transcript says it left.
+    context(box, S1, 8_000)
+    card(box, S1, {
+      compactAt: '30k',
+      compactRun: { state: 'sent', at: typed, from: 612_000, limit: 30_000, setting: '30k' },
+    })
+    const proc = await compactor(box)
+    await until(() => cardOf(box, S1)?.compactRun?.state === 'done')
+    expect(cardOf(box, S1)?.compactRun).toMatchObject({ to: 8_000 })
+    expect(cardOf(box, S1)?.compactRun?.hold).toBeUndefined()
+    // The next turn: the system prompt and tools are back in the context, above the limit.
+    transcript(box, S1, [boundary(typed + 20_000, 612_000, 8_000), reply(typed + 40_000, 41_000)])
+    context(box, S1, 41_002)
+    await until(() => cardOf(box, S1)?.compactRun?.measured === true)
+    expect(cardOf(box, S1)?.compactRun).toMatchObject({ state: 'done', to: 41_002, measured: true, hold: true })
+    await sleep(800)
+    expect(prompts(box)).toEqual([])
+    expect(
+      logs(proc).some(l => /after the compaction the context is 41k, still at or above the limit; held/.test(l)),
+    ).toBe(true)
   })
 
   test('a /compact no compaction followed holds it too, until its limit changes', async () => {

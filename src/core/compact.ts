@@ -111,10 +111,12 @@ export function limitTokens(limit: CompactRule['limit'], windowSize: number | nu
 /**
  * The board's last /compact for a session, on its card (`compactRun`):
  *   sent    typed at `at` with the context at `from`, the limit `limit` (tokens, as `setting` gave it)
- *   done    the compaction came: `to` is what it left (`doneAt` when it ended)
+ *   done    the compaction came (`doneAt` when it ended): `to` is what it left, Claude Code's own
+ *           count of the summary at first, then (`measured`) the context of the first request after
+ *           it, which carries the system prompt and the tools too: what the session really has now
  *   failed  typed, but no compaction followed in time
- * `hold`: done at or above the limit, or failed: no second /compact until the context is below the
- * limit again or the session's limit changes.
+ * `hold`: what it left is at or above the limit, or it failed: no second /compact until the context
+ * is below the limit again or the session's limit changes.
  */
 export interface CompactRun {
   state: 'sent' | 'done' | 'failed'
@@ -124,6 +126,7 @@ export interface CompactRun {
   setting: string
   to?: number
   doneAt?: number
+  measured?: true
   hold?: true
 }
 
@@ -146,6 +149,7 @@ export function runOf(v: unknown): CompactRun | null {
     setting: typeof r.setting === 'string' ? r.setting : '',
     ...(to !== undefined && { to }),
     ...(doneAt !== undefined && { doneAt }),
+    ...(r.measured === true && { measured: true }),
     ...(r.hold === true && { hold: true }),
   }
 }
@@ -222,8 +226,9 @@ export function compactable(item: CompactItem): boolean {
 
 export function compactStep(item: CompactItem, rule: CompactRule, run: CompactRun | null): CompactStep {
   if (!compactable(item)) return { do: 'none' }
-  // A /compact on its way: the compactor settles it (settleRun), nothing else is typed meanwhile.
-  if (run?.state === 'sent') return { do: 'none' }
+  // A /compact on its way, or one whose result is not measured yet: the compactor settles it
+  // (settleRun, measureRun), nothing else is typed meanwhile.
+  if (run?.state === 'sent' || pending(run)) return { do: 'none' }
   const limit = limitTokens(rule.limit, item.contextSize)
   const setting = rule.limit ? limitText(rule.limit) : ''
   const context = typeof item.context === 'number' ? item.context : null
@@ -241,6 +246,9 @@ export function compactStep(item: CompactItem, rule: CompactRule, run: CompactRu
   if (item.status !== 'idle' && item.status !== 'done') return { do: 'wait', why: item.status }
   return { do: 'compact', limit, setting }
 }
+
+/** A compaction the board made whose first request after it has not come yet: what it left is not known. */
+export const pending = (run: CompactRun | null): boolean => run?.state === 'done' && !run.measured && !run.hold
 
 /** What goes into the session's prompt: /compact, with the instructions for its summary when there are any. */
 export const compactCommand = (note: string): string => (note ? `/compact ${note}` : '/compact')
@@ -278,8 +286,35 @@ export function compactionSince(lines: readonly string[], since: number): Compac
 }
 
 /**
- * A run on its way, settled: done when the transcript shows the compaction (held when it left the
- * context at or above the limit), failed (held) when none came in time, else null (still waiting).
+ * The context of the first real request after `since` (a compaction's time) in a transcript's
+ * lines, as transcript.ts counts it (cached parts included), else null: none came yet.
+ */
+export function firstRequestAfter(lines: readonly string[], since: number): number | null {
+  for (const line of lines) {
+    if (!line?.includes('"type":"assistant"') || !line.includes('"usage"')) continue
+    let o: Record<string, unknown>
+    try {
+      o = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (o?.type !== 'assistant' || o.isSidechain) continue
+    const at = Date.parse(String(o.timestamp ?? ''))
+    if (!at || at <= since) continue
+    const message = typeof o.message === 'object' && o.message ? (o.message as Record<string, unknown>) : {}
+    if (message.model === '<synthetic>') continue
+    const u = typeof message.usage === 'object' && message.usage ? (message.usage as Record<string, unknown>) : {}
+    const num = (v: unknown): number => (typeof v === 'number' ? v : 0)
+    const tokens = num(u.input_tokens) + num(u.cache_creation_input_tokens) + num(u.cache_read_input_tokens)
+    if (tokens) return tokens
+  }
+  return null
+}
+
+/**
+ * A run on its way, settled: done when the transcript shows the compaction, failed (held) when none
+ * came in time, else null (still waiting). Done, what it left is measured on the first request after
+ * it (measureRun); a summary Claude Code counts at or above the limit already holds it.
  * `context`: the session's context now, for a compaction whose counts the transcript lacks.
  */
 export function settleRun(
@@ -293,7 +328,7 @@ export function settleRun(
   if (found) {
     const to = found.post ?? context ?? undefined
     const from = found.pre ?? run.from
-    const high = to === undefined || to >= run.limit
+    const high = to !== undefined && to >= run.limit
     return {
       ...run,
       state: 'done',
@@ -306,4 +341,13 @@ export function settleRun(
   const waited = now - run.at
   if (waited < SENT_IDLE_MS || (status === 'working' && waited < SENT_WORKING_MS)) return null
   return { ...run, state: 'failed', hold: true }
+}
+
+/**
+ * A done run measured: `tokens` is the context of the first request after the compaction (what the
+ * session really has now); at or above the limit it holds, so a limit below what a session carries
+ * anyway (its system prompt and tools) never compacts it on every turn.
+ */
+export function measureRun(run: CompactRun, tokens: number): CompactRun {
+  return { ...run, to: tokens, measured: true, ...(tokens >= run.limit && { hold: true }) }
 }
