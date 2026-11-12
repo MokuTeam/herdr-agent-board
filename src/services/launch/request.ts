@@ -8,7 +8,7 @@ import { SLOW, statOf } from '../../adapters/folders.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
 import { CLAUDE_AGENT, type LaunchAgent, type LaunchAgentId, piCommand } from '../../core/launch/agents.ts'
-import { MODEL_MAX, modelProblem } from '../../core/launch/model.ts'
+import { MODEL_MAX, readModel } from '../../core/launch/model.ts'
 import { checkBranch, checkName, NAME_MAX, UNSAFE_CHARS } from '../../core/launch/names.ts'
 import { profileCommand } from '../../core/launch/spawn-args.ts'
 import { type LaunchTarget, launchTarget, type ProfileSet } from '../../core/profiles.ts'
@@ -121,11 +121,10 @@ export async function checkRequest(
   const message = String(b.message ?? '').trim()
   if (message.length > MESSAGE_MAX) return fail('message', 'launch.err.message', { n: MESSAGE_MAX })
   // A model as Claude or pi takes it on its command line; blank is the profile's default.
-  if (b.model !== undefined && b.model !== null && typeof b.model !== 'string') return fail('model', 'launch.err.model')
-  const model = typeof b.model === 'string' && b.model.trim() ? b.model.trim() : null
-  const modelBad = model === null ? null : modelProblem(model)
-  if (modelBad)
-    return fail('model', modelBad === 'long' ? 'launch.err.modelLong' : 'launch.err.model', { max: MODEL_MAX })
+  const read = readModel(b.model)
+  if (!read.ok)
+    return fail('model', read.why === 'long' ? 'launch.err.modelLong' : 'launch.err.model', { max: MODEL_MAX })
+  const model = read.model
   let worktree: LaunchRequest['worktree'] = null
   if (b.worktree) {
     const branch = String((isRecord(b.worktree) ? b.worktree.branch : undefined) ?? '').trim()

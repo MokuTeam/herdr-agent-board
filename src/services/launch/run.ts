@@ -193,8 +193,8 @@ export function launchRunner({
     // run in, as for any start.
     if (l.resume) {
       l.sessionId = l.resume
-      // The model it comes back on: none runs it on the profile's default again.
-      writeCard(l.resume, { profileWant: l.profile, modelWant: l.model ?? '' })
+      // The model it comes back on, when one was asked for; else Claude goes on with its last one.
+      writeCard(l.resume, { profileWant: l.profile, ...(l.model && { modelWant: l.model }) })
       l.carded = l.resume
     }
     const linked = deps.cfg.launch?.linkedWorkspaces === true

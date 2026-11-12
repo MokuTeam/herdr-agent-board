@@ -1144,7 +1144,7 @@ test('--model without --session-id gives the start an id of its own, so its card
   assert.equal(callList(picks.box)[1], 'pane run wA:p9 cld --continue --model haiku')
 }, 60_000)
 
-test('--resume with --model resumes on it; a resume without it runs on the profile’s default, and its card says so', async () => {
+test('--resume with --model resumes on it; a resume without it types the line as before and leaves the card’s model', async () => {
   const { box, dir, default: own } = await profileBox({ claude: ['claude-tg'] })
   transcript(own, dir)
   seedCard(box, SID, { key: SID, category: 'acme', modelWant: 'opus' })
@@ -1163,16 +1163,15 @@ test('--resume with --model resumes on it; a resume without it runs on the profi
   assert.equal(r.code, 0, r.stderr)
   assert.equal(callList(box)[1], `pane run wA:p9 claude-tg --model haiku --resume ${SID}`)
   expect(cardOf(box, SID)).toMatchObject({ category: 'acme', profileWant: 'default', modelWant: 'haiku' })
-  // Again without --model: the line as before, the card's model gone.
+  // Again without --model: the line as before; Claude goes on with the model the session last ran,
+  // so the card keeps saying it.
   const again = await profileBox({ claude: ['claude-tg'] })
   transcript(again.default, again.dir)
   seedCard(again.box, SID, { key: SID, category: 'acme', modelWant: 'haiku' })
   const a = await runSpawn(again.box, ['--name', 'Acme', '--cwd', again.dir, '--workspace', 'wA', '--resume', SID])
   assert.equal(a.code, 0, a.stderr)
   assert.equal(callList(again.box)[1], `pane run wA:p9 claude-tg --resume ${SID}`)
-  const card = cardOf(again.box, SID)
-  expect(card).toMatchObject({ category: 'acme', profileWant: 'default' })
-  expect(card).not.toHaveProperty('modelWant')
+  expect(cardOf(again.box, SID)).toMatchObject({ category: 'acme', profileWant: 'default', modelWant: 'haiku' })
 }, 60_000)
 
 test('--fork with --model: the copy starts on it', async () => {
@@ -1278,4 +1277,27 @@ test('a model that is no model is refused before herdr is asked', async () => {
   assert.equal(r.code, 1)
   assert.match(r.stderr, /--model must be a model name or alias/)
   assert.deepEqual(box.calls(), [])
+}, 30_000)
+
+test('--resume with --model in a profile with its own command and args: the command, its args, the model, --resume', async () => {
+  const { box, dir, work } = await profileBox({}, () => [], { work: { command: 'cld-work' } })
+  transcript(work, dir)
+  const r = await runSpawn(box, [
+    '--name',
+    'Acme invoices',
+    '--cwd',
+    dir,
+    '--workspace',
+    'wA',
+    '--resume',
+    SID,
+    '--model',
+    'haiku',
+  ])
+  assert.equal(r.code, 0, r.stderr)
+  assert.deepEqual(callList(box).slice(0, 2), [
+    `tab create --workspace wA --cwd ${dir} --label Acme invoices --env CLAUDE_CONFIG_DIR=${work} --no-focus`,
+    `pane run wA:p9 cld-work --model sonnet --model haiku --resume ${SID}`,
+  ])
+  expect(cardOf(box, SID)).toMatchObject({ profileWant: 'work', modelWant: 'haiku' })
 }, 30_000)

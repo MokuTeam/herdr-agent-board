@@ -1,6 +1,6 @@
 // The model a start asks for (#380): spawn-agent's --model, the launch request's `model`. It goes
 // on the agent's command line, `--model <id>` for Claude and pi alike, after the profile's own
-// arguments (the last --model is the one both take), and never into the profile's settings: a
+// arguments (Claude takes the last of two --model), and never into the profile's settings: a
 // `/model` typed into the session would save it as the default of every later session there.
 // The card keeps it (`modelWant`), so the session sheet can say the session runs on a model of its own.
 
@@ -16,6 +16,19 @@ const MODEL = /^[A-Za-z0-9][\w.:/@+[\]-]*$/
 export function modelProblem(value: string): 'long' | 'chars' | null {
   if (value.length > MODEL_MAX) return 'long'
   return MODEL.test(value) ? null : 'chars'
+}
+
+/**
+ * A model as a start gives it: blank (or none) is the profile's default, null; a string is trimmed
+ * and must be a model name (modelProblem); anything else is no model name.
+ */
+export function readModel(value: unknown): { ok: true; model: string | null } | { ok: false; why: 'long' | 'chars' } {
+  if (value === undefined || value === null) return { ok: true, model: null }
+  if (typeof value !== 'string') return { ok: false, why: 'chars' }
+  const model = value.trim()
+  if (!model) return { ok: true, model: null }
+  const why = modelProblem(model)
+  return why ? { ok: false, why } : { ok: true, model }
 }
 
 /** The arguments that start an agent on `model`: none for none. */

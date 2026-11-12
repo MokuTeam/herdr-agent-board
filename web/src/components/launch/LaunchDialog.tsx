@@ -209,7 +209,7 @@ export function LaunchDialogView({ view, folder, launcher, t, on, refs }: Launch
                   <input
                     className="row-value"
                     name="model"
-                    list={view.model.aliases.length ? 'launch-models' : undefined}
+                    list="launch-models"
                     maxLength={MODEL_MAX}
                     spellCheck={false}
                     autoCapitalize="off"
@@ -219,13 +219,12 @@ export function LaunchDialogView({ view, folder, launcher, t, on, refs }: Launch
                     onChange={e => on.model(e.currentTarget.value)}
                   />
                 </label>
-                {view.model.aliases.length > 0 && (
-                  <datalist id="launch-models">
-                    {view.model.aliases.map(m => (
-                      <option key={m} value={m} />
-                    ))}
-                  </datalist>
-                )}
+                {/* Claude's aliases while the agent is Claude Code; pi names its models its own way. */}
+                <datalist id="launch-models">
+                  {view.model.aliases.map(m => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
                 <Note field="model" note={view.notes.model} />
               </>
             )}

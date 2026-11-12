@@ -23,8 +23,8 @@
 //
 // --model starts the session on that model (#380): `--model <id>` after the start command and the
 // profile's arguments, Claude's and pi's alike, never written to the profile's settings. Its card
-// says so (`modelWant`), so a start with it gets a session id of its own when none was given; a
-// resume without it runs on the profile's default again, and its card says that too.
+// says so (`modelWant`), so a start with it gets a session id of its own when none was given. A
+// resume without it leaves the card as it was: Claude goes on with the model the session last ran.
 import { randomUUID } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -233,8 +233,8 @@ const START_ONLY = ['key', 'category', 'updatedAt', 'profileWant', 'modelWant', 
  * goes on that card, and the card written under the id before pi was up goes when it holds
  * nothing else.
  */
-function movePiCard(carded: string, file: string, profile: string, model: string | undefined): void {
-  writeCard(file, { profileWant: profile, ...(model && { modelWant: model }) })
+function movePiCard(carded: string, file: string, profile: string | undefined, model: string | undefined): void {
+  writeCard(file, { ...(profile && { profileWant: profile }), ...(model && { modelWant: model }) })
   if (Object.keys(readCard(carded) ?? {}).every(k => START_ONLY.includes(k))) removeCard(carded)
 }
 
@@ -350,11 +350,11 @@ export async function spawnAgent(
   // start that leaves the env as herdr makes it too, as herdr's env may point elsewhere; a resume too.
   const carded = sessionId ?? o.resume
   // A fork's card says whose fork it is, and since when: its copied lines are older (core/links.ts).
-  // The model it starts on, or none: a resume without one runs on the profile's default again.
+  // The model it starts on, when one was asked for.
   if (carded && (profile || o.model))
     writeCard(carded, {
       ...(profile && { profileWant: profile.id }),
-      modelWant: o.model ?? '',
+      ...(o.model && { modelWant: o.model }),
       ...(o.fork && forkCard(o.fork)),
     })
   await herdr(['pane', 'run', pane, command])
@@ -398,8 +398,8 @@ export async function spawnAgent(
     }
   }
   if (!ready) throw new Error(`Claude did not get ready in ${pane} within ${o.timeoutSec} s`)
-  if (kind === PI_AGENT && profile && carded && isPiSessionFile(session))
-    movePiCard(carded, session, profile.id, o.model)
+  if (kind === PI_AGENT && (profile || o.model) && carded && isPiSessionFile(session))
+    movePiCard(carded, session, profile?.id, o.model)
 
   const agent = await nameInHerdr(pane, o.name, ticketNames)
 

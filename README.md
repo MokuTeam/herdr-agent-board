@@ -843,8 +843,9 @@ session, `--profile`, `--resume` and `--fork` alike; pi gets it in its own form,
 <provider/id>`. Nothing is written to the profile's settings, so every other session there keeps
 the profile's default: do not type `/model` into the new session for this, as Claude saves that as
 the default of every later session in the profile. A new session with `--model` and no
-`--session-id` gets an id of its own, so its card can say the model (`modelWant`); a resume
-without `--model` runs on the profile's default again. `--agent pi` types `launch.pi` (default `pi`) instead of the
+`--session-id` gets an id of its own, so its card can say the model (`modelWant`). A resume
+without `--model` (Return, a wake, herdr's restore) goes on with the model the session last ran:
+Claude keeps it with the conversation. `--agent pi` types `launch.pi` (default `pi`) instead of the
 profile's `command` and `args` or `launch.claude`, for a new session only (no `--resume` or
 `--fork`); see [pi](#pi). It opens a tab in the workspace (inside herdr the current one, from
 `HERDR_WORKSPACE_ID`), labelled with `--label` or the name, and types the profile's `command`, or

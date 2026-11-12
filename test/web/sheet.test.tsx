@@ -472,7 +472,7 @@ describe('the mounted sheet', () => {
     const text = canonical([byClass(mounted('a', payload({ items: [own], categories: CATEGORIES })), 'session-meter')])
     expect(text).toContain('Model: Haiku 5.5')
     expect(text).toContain('class="meter-own"> · this session only')
-    expect(text).toContain('title="Started on haiku, not the profile’s default; the profile keeps its own"')
+    expect(text).toContain('title="Haiku 5.5 · Started on haiku, not the profile’s default; the profile keeps its own"')
     // No reply yet, so no model read: the one it was started on.
     const fresh = item({ key: 'a', name: 'Alpha', status: 'idle', column: 'idle', modelAsked: 'haiku' })
     const first = canonical([

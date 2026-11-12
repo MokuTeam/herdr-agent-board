@@ -1195,8 +1195,36 @@ describe('the model', () => {
       board,
     )
     expect(shots[4]).toContain(MODEL_ROW)
-    expect(shots[4]).not.toContain('launch-models')
+    expect(shots[4]).toContain('<datalist id="launch-models"></datalist>')
     expect(startBodyOf(shots.at(-1))).toEndWith(',"agent":"pi","model":"claude-bridge/claude-haiku-5-5"}')
+  })
+
+  test('another agent picked: the model typed for the one before goes, the same agent keeps it', async () => {
+    const shots = await react(
+      [
+        offerModel([CLAUDE_CODE, PI], 'pi'),
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        type('model', 'claude-bridge/claude-haiku-5-5'),
+        click(inWindow('[data-agent="pi"]')),
+        click(inWindow('[data-agent="claude"]')),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ],
+      board,
+    )
+    expect(startBodyOf(shots.at(-1))).toEndWith(',"agent":"claude"}')
+    const kept = await react(
+      [
+        offerModel([CLAUDE_CODE, PI], 'pi'),
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        type('model', 'claude-bridge/claude-haiku-5-5'),
+        click(inWindow('[data-agent="pi"]')),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ],
+      board,
+    )
+    expect(startBodyOf(kept.at(-1))).toEndWith(',"agent":"pi","model":"claude-bridge/claude-haiku-5-5"}')
   })
 
   test('refused about the model: its note under the field and the focus; typing clears it', async () => {

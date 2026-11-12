@@ -660,6 +660,11 @@ export function launchWindow(deps: LaunchWindowDeps) {
     /** An agent picked (the choice is offered): it stops following the board's default. */
     pickAgent(id: string): void {
       if (!s || !offersAgents(options.agents) || !options.agents.some(a => a.id === id)) return
+      // A model is the agent's own (pi's provider/id is no Claude model): another agent starts from none.
+      if (id !== s.agent && view.get().fields.model) {
+        setFields({ model: '' })
+        noteFor('model', '')
+      }
       s.agent = id
       s.agentSet = true
       if (s.agentRefused) patch({ error: { ...view.get().error, hidden: true } })

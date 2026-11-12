@@ -3,7 +3,7 @@
 // text typed into a prompt is still on screen. The board's own launcher
 // (services/launch/launcher.ts) uses the same rules.
 import { t } from '../lang.ts'
-import { MODEL_MAX, modelProblem } from './model.ts'
+import { MODEL_MAX, readModel } from './model.ts'
 import { checkName } from './names.ts'
 
 export const USAGE =
@@ -147,10 +147,9 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
   if (out.fork !== undefined && out.resume !== undefined) throw new Error('give --resume or --fork, not both')
   const { label, briefFile, brief, workspace, sessionId, resume, fork, pane, profile, configDir } = out
   // A model as Claude or pi takes it; blank is none, the profile's default.
-  const model = out.model?.trim() || undefined
-  const modelBad = model === undefined ? null : modelProblem(model)
-  if (modelBad === 'long') throw new Error(`--model is longer than ${MODEL_MAX} characters`)
-  if (modelBad)
+  const read = readModel(out.model)
+  if (!read.ok && read.why === 'long') throw new Error(`--model is longer than ${MODEL_MAX} characters`)
+  if (!read.ok)
     throw new Error(
       `--model must be a model name or alias (opus, sonnet, claude-opus-5-5, provider/id for pi), not "${out.model}"`,
     )
@@ -176,7 +175,7 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     ...(fork !== undefined && { fork }),
     ...(pane !== undefined && { pane }),
     ...(profile !== undefined && { profile }),
-    ...(model !== undefined && { model }),
+    ...(read.model !== null && { model: read.model }),
     ...(configDir !== undefined && { configDir }),
     ...(keepEnv && { keepEnv }),
     ...(pi && { agent: 'pi' as const }),

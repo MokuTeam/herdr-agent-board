@@ -63,8 +63,12 @@ export function SessionMeter({ item, asked = 0, fold }: { item: Item; asked?: nu
         {context ? t('meter.ctx', { value: context }) : t('meter.ctxNone')}
       </span>
       <span
-        className={item.modelAsked ? 'meter-fact own' : 'meter-fact'}
-        title={item.modelAsked ? t('meter.modelOwnHint', { model: item.modelAsked }) : (item.model ?? undefined)}
+        className="meter-fact"
+        title={
+          item.modelAsked
+            ? [item.model, t('meter.modelOwnHint', { model: item.modelAsked })].filter(Boolean).join(' · ')
+            : (item.model ?? undefined)
+        }
       >
         {t('meter.model')}: {liveModel || item.model || item.modelAsked || t('meter.unknown')}
         {item.modelAsked && <span className="meter-own"> · {t('meter.modelOwn')}</span>}
