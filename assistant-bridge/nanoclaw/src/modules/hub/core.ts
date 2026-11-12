@@ -217,14 +217,16 @@ export function startHubCore(opts: CoreOptions): HubCore | null {
       }
       case 'deliver': {
         const outcome = await host.write(f.at, { id: f.id, text: f.text, trigger: f.trigger });
-        if (outcome === 'unknown') host.log('warn', 'hub: no session for that place; the message is dropped', { at: f.at });
+        if (outcome === 'unknown')
+          host.log('warn', 'hub: no session for that place; the message is dropped', { at: f.at });
         else if (outcome === 'written' && f.trigger === 1) await host.wake(f.at);
         send({ t: 'confirm', id: f.id });
         return;
       }
       case 'schedule': {
         const outcome = await host.write(f.at, { id: f.id, text: f.text, trigger: 1, processAfter: f.when });
-        if (outcome === 'unknown') host.log('warn', 'hub: no session for that place; the read is dropped', { at: f.at });
+        if (outcome === 'unknown')
+          host.log('warn', 'hub: no session for that place; the read is dropped', { at: f.at });
         send({ t: 'confirm', id: f.id });
         return;
       }
@@ -266,7 +268,8 @@ export function startHubCore(opts: CoreOptions): HubCore | null {
     const req = `r${Date.now().toString(36)}-${++seq}`;
     // Held to the protocol's shape here, so a bad argument is answered at once and never reaches the bridge.
     const frame = parseModuleFrame(JSON.stringify({ t: 'call', req, from, op, args }));
-    if (!frame || frame.t !== 'call') return { ok: false, text: 'not sent: those are not arguments the hub tools take' };
+    if (!frame || frame.t !== 'call')
+      return { ok: false, text: 'not sent: those are not arguments the hub tools take' };
     if (!(await waitReady(callMs))) return { ok: false, text: 'not sent: the hub bridge is not connected' };
     return new Promise((resolve) => {
       const timer = timers.setTimeout(() => {

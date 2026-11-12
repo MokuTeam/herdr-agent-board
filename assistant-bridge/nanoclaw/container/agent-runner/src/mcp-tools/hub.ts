@@ -93,7 +93,10 @@ export const hubSend: McpToolDefinition = {
           type: 'string',
           description: 'The hub thread to answer, as the hub message header names it (e.g. 1a2b3c4d or general:anna)',
         },
-        to: { type: 'string', description: "A board's name on the hub, for a new topic (with title) or its general thread" },
+        to: {
+          type: 'string',
+          description: "A board's name on the hub, for a new topic (with title) or its general thread",
+        },
         title: { type: 'string', description: 'Title of a new topic (1 to 80 characters), with to' },
         text: { type: 'string', description: 'The message, up to 4000 characters. No secrets.' },
         replyTo: { type: 'string', description: 'The msg ref from a hub header, to answer that message in particular' },

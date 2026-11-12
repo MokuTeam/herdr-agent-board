@@ -5,7 +5,7 @@
 // makes the key and joins the hub first.
 
 import { createBridge } from './bridge.ts'
-import { DEFAULT_DIR, ensureDir, paths, readConfig, readKey, writePrivate } from './files.ts'
+import { DEFAULT_DIR, ensureDir, paths, readConfig, readKey, statusWriter } from './files.ts'
 import { openStore } from './store.ts'
 
 const USAGE = 'usage: bun assistant-bridge/src/main.ts [--dir D]'
@@ -34,22 +34,13 @@ if (!key) fail(`no key in ${dir}; run: bun assistant-bridge/src/cli.ts join <inv
 
 const log = (line: string): void => console.log(`${new Date().toISOString()} ${line}`)
 const store = openStore(paths(dir).db)
-let lastStatus = 0
 const bridge = createBridge({
   cfg: first.cfg,
   store,
   key,
   log,
   version: '1',
-  onStatus: s => {
-    // At most once a second: it is for `status`, not a log.
-    const now = Date.now()
-    if (now - lastStatus < 1000) return
-    lastStatus = now
-    try {
-      writePrivate(paths(dir).status, `${JSON.stringify({ ...s, at: new Date(now).toISOString() }, null, 2)}\n`)
-    } catch {}
-  },
+  onStatus: statusWriter(paths(dir).status),
 })
 
 process.on('SIGHUP', () => {
