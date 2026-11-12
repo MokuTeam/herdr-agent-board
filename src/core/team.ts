@@ -119,6 +119,13 @@ export const hasChannels = (p: { caps?: string[] | undefined } | undefined): boo
 export const hasReplies = (p: { caps?: string[] | undefined } | undefined): boolean => !!p?.caps?.includes('replies')
 /** Whether a roster peer's board takes files (#371); its box must verify too before one goes to it. */
 export const hasFiles = (p: { caps?: string[] | undefined } | undefined): boolean => !!p?.caps?.includes('files')
+/**
+ * Whether a roster peer is an assistant's bridge (#386, docs/design/assistant-bridge): it says so
+ * with the `assistant` cap. A board never says it of itself; the panel only ticks "All lanes" by
+ * default for such a peer, and the owner still turns its agents on.
+ */
+export const hasAssistant = (p: { caps?: string[] | undefined } | undefined): boolean =>
+  !!p?.caps?.includes('assistant')
 
 /** A channel's member list as the wire takes it: 2 to MAX_MEMBERS peer ids, each once, sorted. */
 export function channelMembers(v: unknown): string[] | null {

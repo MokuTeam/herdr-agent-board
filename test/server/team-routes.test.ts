@@ -590,6 +590,32 @@ describe('team on, against a hub in this process', () => {
     expect((await agents()).peers[anna.pub]).not.toHaveProperty('loop')
   })
 
+  test('#386 every lane: anything but a boolean is refused; on waits for the passkey and is shown; off goes at once', async () => {
+    for (const allLanes of ['yes', 1, null])
+      expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, allLanes }))).toEqual([
+        400,
+        { ok: false, error: 'body' },
+      ])
+    const agents = async () =>
+      ((await (await fetch(`${url}/api/team/agents`)).json()) as { peers: Record<string, Record<string, unknown>> })
+        .peers
+    const pending = (await (await post(url, '/api/team/agents', { peer: anna.pub, allLanes: true })).json()) as {
+      id: string
+    }
+    const v = (await (await fetch(`${url}/api/team/confirm/${pending.id}`)).json()) as { action: unknown }
+    expect(v.action).toEqual({ kind: 'agents', who: 'anna', allLanes: true })
+    expect((await agents())[anna.pub]).not.toHaveProperty('allLanes')
+    expect(await windowAnswers(pending.id)).toEqual([200, { ok: true, done: true }])
+    expect((await agents())[anna.pub]).toMatchObject({ allLanes: true })
+    // Already on, on again widens nothing; off is free.
+    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, allLanes: true }))).toEqual([200, { ok: true }])
+    expect(await answer(post(url, '/api/team/agents', { peer: anna.pub, allLanes: false }))).toEqual([
+      200,
+      { ok: true },
+    ])
+    expect((await agents())[anna.pub]).not.toHaveProperty('allLanes')
+  })
+
   test('#224 a confirmed send the board then refuses unlocks nothing; the window lists every field of a change', async () => {
     // A key that looks right but is nobody in the team: confirmed, then refused by the send.
     const stranger = 'C'.repeat(43)

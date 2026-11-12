@@ -67,6 +67,7 @@ import {
   fingerprint,
   GENERAL,
   type HubFiles,
+  hasAssistant,
   hasChannels,
   hasFiles,
   hasReplies,
@@ -129,6 +130,8 @@ export interface TeamRosterPeer {
   threads?: boolean
   /** A file can be sealed for the peer's board (#371): it takes files and its box verified and is the pinned one. */
   files?: boolean
+  /** The peer is an assistant's bridge (#386): its caps say `assistant`. Absent for every other peer. */
+  assistant?: boolean
 }
 
 export interface TeamView {
@@ -1298,6 +1301,7 @@ export function createTeam({
           drafts: drafts.filter(d => d.to === p.peer).length,
           threads: hasThreads(p),
           ...(canFile(p) && { files: true }),
+          ...(hasAssistant(p) && { assistant: true }),
         })),
         ...(hubFiles && { files: { max: hubFiles.max - NONCE_BYTES - TAG_BYTES } }),
       }

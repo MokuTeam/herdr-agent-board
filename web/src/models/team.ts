@@ -133,12 +133,12 @@ export const isThreadLines = (v: unknown): v is { thread: ThreadView | null; lin
 /**
  * The owner's agent switches (#216, GET /api/team/agents), as the panel shows them: by a peer's id,
  * `team`, or a channel's key (#355). `loop` (#360): a pause after that many agent messages in a row,
- * the board's `loopDefault` when none is set.
+ * the board's `loopDefault` when none is set. `allLanes` (#386): every lane is shared, later ones too.
  */
 export interface AgentsView {
   off: boolean
   listener: { key: string; name?: string } | null
-  peers: Record<string, { on: boolean; lanes: string[]; muted?: boolean; loop?: number }>
+  peers: Record<string, { on: boolean; lanes: string[]; allLanes?: unknown; muted?: boolean; loop?: number }>
   paused: Record<string, number>
   lanes: { id: string; title: string }[]
   loopDefault?: number
@@ -168,15 +168,20 @@ export const isAgentsView = (v: unknown): v is AgentsView =>
 export type AgentsChange =
   | { off: boolean }
   | { listener: null }
-  | { peer: string; on?: boolean; lanes?: string[]; muted?: boolean; loop?: number | null }
+  | { peer: string; on?: boolean; lanes?: string[]; allLanes?: boolean; muted?: boolean; loop?: number | null }
 
 /** A new member's welcome, as POST /api/team/welcome takes it (#355). */
 export interface Welcome {
   peer: string
   on: boolean
   lanes: string[]
+  /** Every lane, later ones too (#386); sent only when ticked or when it was on before. */
+  allLanes?: boolean
   channels: string[]
 }
+
+/** Whether a peer's switches share every lane (#386): only exactly `true` counts, as on the board. */
+export const allLanesOn = (p: { allLanes?: unknown } | undefined): boolean => p?.allLanes === true
 
 /** GET /api/team/welcome: who joined and is not welcomed yet. */
 export const isWelcomeList = (v: unknown): v is { pending: string[] } =>
