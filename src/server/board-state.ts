@@ -12,6 +12,7 @@ import { forgetProfilePanes } from '../adapters/profile-panes.ts'
 import { listEntries, readLog } from '../adapters/schedule-store.ts'
 import { COLUMNS } from '../core/board.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts'
+import { compactDefaultText } from '../core/compact.ts'
 import { foldModeOf } from '../core/fold-mode.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
@@ -280,6 +281,8 @@ export function createBoardState({
       // What a profile without a start command types: the Profiles panel's placeholder.
       claudeProgram: claudeProgram(cfg.launch?.claude, cfg.launch?.args),
       foldWaiting: foldModeOf(cfg.foldWaiting),
+      // Auto-compact's default (#378), '' for off: Settings shows it checked.
+      compactDefault: compactDefaultText(cfg.compact),
       // remote: only while the remote mode is on; a board without it sends none.
       ...remoteOf(remote),
       // presence: only while config.json turns it on (#172).

@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, statSync, watch } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { builtinTitle, DEFAULT_CONFIG, normalizeConfig, validColor } from '../core/categories.ts'
+import { limitText, parseCompactLimit } from '../core/compact.ts'
 import { isFoldMode } from '../core/fold-mode.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
@@ -200,6 +201,17 @@ export function editSettings(body: unknown): EditResult {
     if (fold !== undefined) {
       if (!isFoldMode(fold)) return { ok: false, error: t('err.foldWaiting', { mode: String(fold) }) }
       raw.foldWaiting = fold
+    }
+    // Auto-compact's default (#378): a limit, or '' (off); its instructions in config.json stay.
+    const compactAt = isRecord(body) ? body.compactAt : undefined
+    if (compactAt !== undefined) {
+      const limit = compactAt === '' ? null : parseCompactLimit(compactAt)
+      if (compactAt !== '' && (!limit || limit === 'never'))
+        return { ok: false, error: t('err.compactAt', { value: String(compactAt) }) }
+      const { at: _old, ...rest } = isRecord(raw.compact) ? raw.compact : {}
+      const next = limit ? { ...rest, at: limitText(limit) } : rest
+      if (Object.keys(next).length) raw.compact = next
+      else delete raw.compact
     }
     return { ok: true }
   })

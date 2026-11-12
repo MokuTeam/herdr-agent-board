@@ -18,6 +18,8 @@
 // Tasks (#202, src/core/todos.ts) are the board's: Off, the user's pins only, or agents too.
 // Presence (#172, src/core/presence.ts) is the board's: Off, or on with how it notices the user
 // went away (by itself, only an offer, by hand only), and after how many idle minutes.
+// Auto-compact (#378, src/core/compact.ts) is the board's: Off, or the default limit every session
+// without one of its own compacts at (a session's own is set on its sheet or with `board compact`).
 import { FOLD_MODES, type FoldMode, isFoldMode } from '../../../src/core/fold-mode.ts'
 import { isPresenceMode, PRESENCE_MODES, type PresenceMode } from '../../../src/core/presence.ts'
 import { isTodoMode, TODO_MODES, type TodoMode } from '../../../src/core/todos.ts'
@@ -73,6 +75,35 @@ export interface SettingsNow {
   todos?: TodoMode | undefined
   /** The board on another device (models/remote-page.ts): Paths on this computer… is offered. */
   localPaths?: boolean
+  /** Auto-compact's default limit as the board has it (#378, '' for off); none given: no item (an older board). */
+  compact?: string | undefined
+}
+
+/** The default limits Settings → Auto-compact offers (#378); config.json or the CLI may hold any other. */
+export const COMPACT_CHOICES = ['200k', '300k', '400k', '500k', '50%', '75%'] as const
+
+function compactItem(now: SettingsNow, edit: { disabled?: boolean; reason?: string }): MenuEntry[] {
+  const { t, compact } = now
+  if (compact === undefined) return []
+  // One config.json holds that the menu does not offer is shown too, checked.
+  const choices: string[] = [...COMPACT_CHOICES]
+  if (compact && !choices.includes(compact)) choices.push(compact)
+  return [
+    {
+      id: 'compact',
+      label: t('set.compact'),
+      ...edit,
+      submenu: [
+        { id: 'compact:off', label: t('set.compact.off'), checked: compact === '' },
+        { separator: true as const },
+        ...choices.map(at => ({
+          id: `compact:${at}`,
+          label: at.endsWith('%') ? t('set.compact.share', { share: at }) : t('set.compact.tokens', { tokens: at }),
+          checked: compact === at,
+        })),
+      ],
+    },
+  ]
 }
 
 /** The idle minutes Settings → Presence offers; config.json may hold any other. */
@@ -173,6 +204,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
           },
         ]
       : []),
+    ...compactItem(now, edit),
     ...(now.profiles ? [{ id: 'profiles', label: t('set.profiles') }] : []),
     ...(now.wake ? [{ id: 'wake', label: t('set.wake') }] : []),
     ...(now.phones ? [{ id: 'phones', label: t('set.phones') }] : []),
@@ -222,6 +254,7 @@ export type SettingPick =
   | { kind: 'presence'; value: PresenceMode | 'none' }
   | { kind: 'presenceIdle'; value: number }
   | { kind: 'todos'; value: TodoMode }
+  | { kind: 'compact'; value: string }
   | { kind: 'localPaths' }
   | null
 
@@ -253,6 +286,8 @@ export function settingPicked(id: string): SettingPick {
   if (kind === 'presence' && (value === 'none' || isPresenceMode(value))) return { kind, value }
   if (kind === 'presenceIdle' && /^\d+$/.test(value)) return { kind, value: Number(value) }
   if (kind === 'todos' && isTodoMode(value)) return { kind, value }
+  // Off is '' for the board; a limit as the menu wrote it.
+  if (kind === 'compact' && value) return { kind, value: value === 'off' ? '' : value }
   if (id === 'localPaths') return { kind: 'localPaths' }
   return null
 }

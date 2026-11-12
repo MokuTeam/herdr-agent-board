@@ -1,8 +1,9 @@
 // The line a notice gets in the conversation (src/core/notices.ts): a background task reporting
 // back, a board reminder or a MokuPilot call's results, shown small and apart from what the user
 // typed.
-import { isCall, isReminder, type Notice } from '../../../src/core/notices.ts'
+import { isCall, isCompact, isReminder, type Notice } from '../../../src/core/notices.ts'
 import type { Translator } from '../../../src/core/types.ts'
+import { tokens } from './helper-model.ts'
 
 export type NoticeTone = 'ok' | 'fail' | 'stop' | 'info'
 
@@ -20,6 +21,13 @@ export interface NoticeLine {
  * mark's color: ok | fail | stop | info.
  */
 export function noticeLine(n: Notice, t: Translator): NoticeLine {
+  // A compaction (#378): who did it, and what it left.
+  if (isCompact(n)) {
+    const who =
+      n.by === 'board' ? 'compact.noticeBoard' : n.trigger === 'auto' ? 'compact.noticeAuto' : 'compact.notice'
+    const sizes = n.pre && n.post ? `${tokens(n.pre)} → ${tokens(n.post)}` : n.post ? `→ ${tokens(n.post)}` : ''
+    return { text: sizes ? `${t(who)}: ${sizes}` : t(who), sub: '', tone: 'info' }
+  }
   // A MokuPilot call's results: its title; the report opens from the line.
   if (isCall(n))
     return { text: n.name ? `${t('notice.call')}: ${n.name}` : t('notice.call'), sub: n.note || '', tone: 'info' }

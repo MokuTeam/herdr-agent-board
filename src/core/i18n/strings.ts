@@ -11,6 +11,7 @@ import { ASIDE_STRINGS } from './aside-strings.ts'
 import { BACKUP_STRINGS } from './backup-strings.ts'
 import { CAL_STRINGS } from './cal-strings.ts'
 import { CALL_STRINGS } from './call-strings.ts'
+import { COMPACT_STRINGS } from './compact-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
@@ -1387,3 +1388,5 @@ for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(SERVER_STRINGS) as Lang[]) Object.assign(STRINGS[code], SERVER_STRINGS[code])
 // And what the one command says on the server ("Do it myself").
 for (const code of Object.keys(ONESHOT_STRINGS) as Lang[]) Object.assign(STRINGS[code], ONESHOT_STRINGS[code])
+// And auto-compact (#378).
+for (const code of Object.keys(COMPACT_STRINGS) as Lang[]) Object.assign(STRINGS[code], COMPACT_STRINGS[code])

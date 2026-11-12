@@ -75,7 +75,25 @@ export interface CallNotice {
   detail: string
 }
 
-export type Notice = TaskNotice | ReminderNotice | CallNotice
+/**
+ * A compaction in the conversation (#378): its compact_boundary line, with Claude Code's own counts
+ * before and after it. `by: 'board'` when the board's auto-compact typed the /compact (the session
+ * route marks it from the card's run).
+ */
+export interface CompactNotice {
+  kind: 'compact'
+  status: 'event'
+  name: ''
+  note: ''
+  detail: ''
+  /** manual (a /compact) or auto (Claude Code's own, near the window's end); '' when not said. */
+  trigger: string
+  pre: number | null
+  post: number | null
+  by?: 'board'
+}
+
+export type Notice = TaskNotice | ReminderNotice | CallNotice | CompactNotice
 
 /** A board reminder, not a background task. */
 export const isReminder = (n: Notice): n is ReminderNotice => n.kind === 'reminder' || n.kind === 'schedule'
@@ -83,8 +101,30 @@ export const isReminder = (n: Notice): n is ReminderNotice => n.kind === 'remind
 /** A MokuPilot call's results. */
 export const isCall = (n: Notice): n is CallNotice => n.kind === 'call'
 
-/** A background task reporting back: neither the board's reminder nor a call's results. */
-export const isTask = (n: Notice): n is TaskNotice => !isReminder(n) && !isCall(n)
+/** A compaction (#378). */
+export const isCompact = (n: Notice): n is CompactNotice => n.kind === 'compact'
+
+/** A background task reporting back: neither the board's reminder, a call's results nor a compaction. */
+export const isTask = (n: Notice): n is TaskNotice => !isReminder(n) && !isCall(n) && !isCompact(n)
+
+/** A compact_boundary line's notice (#378), or null for any other line or a subagent's own. */
+export function compactNotice(o: Record<string, unknown> | null | undefined): CompactNotice | null {
+  if (o?.type !== 'system' || o.subtype !== 'compact_boundary' || o.isSidechain) return null
+  const meta =
+    typeof o.compactMetadata === 'object' && o.compactMetadata ? (o.compactMetadata as Record<string, unknown>) : {}
+  const count = (v: unknown): number | null => (typeof v === 'number' && v > 0 ? v : null)
+  const trigger = typeof meta.trigger === 'string' ? meta.trigger.slice(0, 20) : ''
+  return {
+    kind: 'compact',
+    status: 'event',
+    name: '',
+    note: '',
+    detail: '',
+    trigger,
+    pre: count(meta.preTokens),
+    post: count(meta.postTokens),
+  }
+}
 
 /**
  * A task notification as { kind, status, name, exit, summary, note, detail, file, id }, or null

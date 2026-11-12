@@ -20,6 +20,7 @@ import type { ColumnId, Item } from '../core/types.ts'
 import { type BoardServer, startServer } from '../server/app.ts'
 import * as actions from '../services/actions.ts'
 import { collect } from '../services/board.ts'
+import { startCompactor } from '../services/compactor.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { goBack } from '../services/nav.ts'
 import { startScheduler } from '../services/scheduler.ts'
@@ -428,5 +429,8 @@ draw()
 void refresh()
 
 if (cfg.web !== false) void serve()
-// The web board's server runs the schedule; without it, this board does.
-else startScheduler({ deps, onChange: () => void refresh() })
+// The web board's server runs the schedule and auto-compact (#378); without it, this board does.
+else {
+  startScheduler({ deps, onChange: () => void refresh() })
+  startCompactor({ deps, onChange: () => void refresh() })
+}

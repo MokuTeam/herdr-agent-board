@@ -1,6 +1,7 @@
 // Types shared across the board. Grows with each ported module.
 
 import type { CallView } from './call-agent.ts'
+import type { CompactView } from './compact.ts'
 import type { FormQuestion } from './dialogs/question-form.ts'
 import type { HelperSummary } from './helpers.ts'
 import type { FailureKind } from './launch/launcher-command.ts'
@@ -66,6 +67,14 @@ export interface Card {
   todoSeq?: number
   /** The open tasks this session was last told of (#319, core/todos.ts todosNews). */
   todosSeen?: string
+  /** Its own auto-compact limit (#378, core/compact.ts): tokens, `60%` of the window, or `never`; absent: Settings' default. */
+  compactAt?: number | string
+  /** What its summary must keep, typed after /compact (#378); absent: Settings' default's. */
+  compactNote?: string
+  /** The board's last /compact for it (#378, core/compact.ts CompactRun). */
+  compactRun?: unknown
+  /** When the board's compactions of it ended (#378, the newest 20), for its conversation's lines. */
+  compactDone?: unknown
   [extra: string]: unknown
 }
 
@@ -201,6 +210,8 @@ export interface Config {
   secrets?: unknown
   /** The calendar (#328), as config.json has it: read through core/calendar.ts calendarConfig. */
   calendar?: unknown
+  /** Auto-compact's default (#378, `{ at, note }`), as config.json has it: read through core/compact.ts compactConfig. */
+  compact?: unknown
   [extra: string]: unknown
 }
 
@@ -314,5 +325,7 @@ export interface Item {
   claudeRoot?: string | null
   /** Its tasks from its card (#202), while config.json turns them on; absent when none. */
   todos?: Todo[]
+  /** Its auto-compact (#378, core/compact.ts compactView): absent when neither it nor Settings has a limit. */
+  compact?: CompactView
   [extra: string]: unknown
 }
