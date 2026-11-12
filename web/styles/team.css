@@ -247,6 +247,8 @@ button.team-quote:hover { background: color-mix(in srgb, var(--accent) 15%, tran
 .team-loop .todo-meta { flex: none; }
 .team-loop input { width: 4.5em; padding: 2px 6px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font: inherit; font-size: 12px; }
 .team-add select { flex: 1; min-width: 0; padding: 3px 6px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font: inherit; font-size: 12px; }
+/* Its list in the panel's colors, not the system's light one under the dark theme's text (#412, as profiles.css). */
+.team-add option { background: var(--panel-float); color: var(--label); }
 
 /* A new member's welcome (#355), on top of the list while it waits. */
 .team-welcome { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, var(--fill-2)); box-shadow: inset 3px 0 0 var(--accent); }

@@ -342,7 +342,9 @@ export function App() {
           : {})}
         archive={archive}
         todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
-        {...(threads && { threads: { open: threads.shown, onClose: () => threads.setShown(false) } })}
+        {...(threads && {
+          threads: { open: threads.shown, onClose: () => threads.setShown(false), menu: menus.menu },
+        })}
         time={{ open: timeOpen, onClose: () => setTimeOpen(false), client: timeClient, onClient: setTimeClient }}
         sheet={{
           onNewSession: newSession,

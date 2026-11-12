@@ -14,6 +14,7 @@ import {
   type ThreadRow,
   type ThreadStatus,
 } from '../../../src/core/work-threads.ts'
+import type { MenuEntry } from './menu-model.ts'
 import { COLUMN_COLORS } from './toolbar.ts'
 
 export type { ThreadEntryView, ThreadRow, ThreadStatus, ThreadView } from '../../../src/core/work-threads.ts'
@@ -67,6 +68,27 @@ export function lanesOf(rows: readonly ThreadRow[]): string[] {
   for (const r of rows) n.set(r.lane, (n.get(r.lane) ?? 0) + 1)
   return [...n.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([lane]) => lane)
 }
+
+/**
+ * The lane filter's menu (#412), on the board's own menu instead of the browser's list: every lane
+ * first, then the threads' lanes as lanesOf orders them, the one shown checked.
+ */
+export function laneMenu(
+  lanes: readonly string[],
+  lane: string | null,
+  titleOf: (lane: string) => string,
+  all: string,
+): MenuEntry[] {
+  return [
+    { id: 'lane:', label: all, checked: lane === null },
+    { separator: true },
+    ...lanes.map(l => ({ id: `lane:${l}`, label: titleOf(l), checked: lane === l })),
+  ]
+}
+
+/** A pick of laneMenu: the lane, null for every lane; undefined for anything else. */
+export const lanePicked = (id: string): string | null | undefined =>
+  id.startsWith('lane:') ? id.slice('lane:'.length) || null : undefined
 
 /** A card's chips (10.1): the open threads its session is assigned, two at most, then how many more. */
 export const CHIPS_MAX = 2
