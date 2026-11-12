@@ -1,6 +1,7 @@
 // The "install" action: puts the `board` and `spawn-agent` commands on PATH (~/.local/bin, a sh
 // script for Git Bash, Linux and macOS and a .cmd for PowerShell), copies the agents' skill
-// (skills/herdr-agents) and Team's (skills/agent-board-team, #369) into the skills folder of
+// (skills/herdr-agents) and Team's (skills/agent-board-team, #369), and threads' while config.json
+// turns them on (skills/agent-board-threads, #379), into the skills folder of
 // every shown Claude profile and registers the
 // SessionStart / UserPromptSubmit hooks, the PreToolUse hook on AskUserQuestion and the status
 // line in its settings.json (~/.claude, and each CLAUDE_CONFIG_DIR folder the board shows; a
@@ -35,8 +36,9 @@ import { gatherFacts, herdrConfigFile, readText } from '../adapters/setup-facts.
 import { type InstallPaths, planSettings, planShims } from '../core/install-plan.ts'
 import { t } from '../core/lang.ts'
 import { DEFAULT_PROFILE, shownProfiles } from '../core/profiles.ts'
-import { boardFiles, checkSetup, report, SKILL, TEAM_SKILL, tomlValue } from '../core/setup.ts'
+import { boardFiles, checkSetup, report, SKILL, TEAM_SKILL, THREADS_SKILL, tomlValue } from '../core/setup.ts'
 import { wakeSwitch } from '../core/wake/config.ts'
+import { threadsConfig } from '../core/work-threads.ts'
 import { ensureToastApp, toastAppState } from '../integrations/toast-mac.ts'
 
 const args = process.argv.slice(2)
@@ -155,6 +157,8 @@ try {
   const skills = [
     { name: SKILL, from: files.skill },
     { name: TEAM_SKILL, from: files.teamSkill },
+    // threads' (#379), only while config.json turns them on
+    ...(threadsConfig(loadConfig().threads) ? [{ name: THREADS_SKILL, from: files.threadsSkill }] : []),
   ].map(s => ({ ...s, text: readText(s.from) }))
   for (const s of skills) if (s.text === null) console.log(`skill: ${s.from} is missing from this copy of the board`)
   // --- per profile: the skill, then hooks, status line, notifications; the default folder is made when it is not there

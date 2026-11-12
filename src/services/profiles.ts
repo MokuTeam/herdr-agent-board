@@ -8,7 +8,7 @@ import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { installSkill } from '../adapters/agents-skill.ts'
-import { configFile, type EditResult, editProfiles, readConfigFile } from '../adapters/config-file.ts'
+import { configFile, type EditResult, editProfiles, loadConfig, readConfigFile } from '../adapters/config-file.ts'
 import { claudeIntegrationInstall } from '../adapters/herdr.ts'
 import { herdrHookInstalled, hooksInstalled, installInto, wakeHooksIn } from '../adapters/hook-settings.ts'
 import { isRecord } from '../adapters/json-store.ts'
@@ -18,8 +18,9 @@ import { readText } from '../adapters/setup-facts.ts'
 import type { InstallPaths, WakeHooksState } from '../core/install-plan.ts'
 import { t } from '../core/lang.ts'
 import type { Profile } from '../core/profiles.ts'
-import { boardFiles, SKILL, TEAM_SKILL } from '../core/setup.ts'
+import { boardFiles, SKILL, TEAM_SKILL, THREADS_SKILL } from '../core/setup.ts'
 import { wakeSwitch } from '../core/wake/config.ts'
+import { threadsConfig } from '../core/work-threads.ts'
 import type { Deps } from './deps.ts'
 
 // The files of this copy of the board: a profile's settings.json has its hooks when they run these.
@@ -78,6 +79,8 @@ async function installShown(profile: Profile): Promise<InstallResult> {
     for (const [name, from] of [
       [SKILL, FILES.skill],
       [TEAM_SKILL, FILES.teamSkill],
+      // threads' (#379), only while config.json turns them on, as the install action does
+      ...(threadsConfig(loadConfig().threads) ? ([[THREADS_SKILL, FILES.threadsSkill]] as const) : []),
     ] as const) {
       const skill = readText(from)
       if (skill !== null) installSkill(profile.dir, skill, name)

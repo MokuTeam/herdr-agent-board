@@ -76,6 +76,7 @@ import {
   type TunnelPlan,
 } from '../services/tunnel.ts'
 import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
+import { threadsPayload } from '../services/work-threads.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, peerOf, type Route } from './http.ts'
 import { createRemoteListener } from './remote.ts'
@@ -597,6 +598,9 @@ export async function startServer({
     backup: backupLine,
     time: timeLine,
     calendar: calendarLine,
+    // Threads (#379): while config.json turns them on, the revision and the count that waits on
+    // the owner (two queries a refresh); off, nothing is read.
+    threads: () => threadsPayload(cfg),
   })
   board.publish()
   const refresh = (): void => void board.refresh()

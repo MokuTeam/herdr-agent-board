@@ -1,8 +1,8 @@
 # Threads: one store for tasks and reports
 
-Design for [#379](https://github.com/MokuTeam/herdr-agent-board/issues/379). Nothing here is built
-yet. The document is written so that an agent who was not part of the discussion can build each
-phase from it. Mockups are in [mockups/](mockups/): open `mockups/index.html` in a browser. The page
+Design for [#379](https://github.com/MokuTeam/herdr-agent-board/issues/379). Phase 1 (the store,
+`board thread` and events, #391) is built; the rest is not yet. The document is written so that an
+agent who was not part of the discussion can build each phase from it. Mockups are in [mockups/](mockups/): open `mockups/index.html` in a browser. The page
 has switches for the app (board, MokuPilot), the width (desktop, phone) and the theme, and
 `index.html?theme=dark&width=phone#mokupilot` opens it in a given state.
 
@@ -226,13 +226,15 @@ One new migration (version 5, appended to `MIGRATIONS`) adds:
 | Table | Columns | Purpose |
 |---|---|---|
 | `threads` | the fields of 3.2, JSON for parties, scope and origin; `key` unique | One row per thread: the head. |
-| `thread_entries` | the fields of 3.3; index on `(thread, n)`; `out` for a shared entry's state: `queued`, `sent`, `held`, `refused` | The feed. |
+| `thread_entries` | the fields of 3.3 (`set` in a column named `fields`); `seq`, the journal row it was written with; `closed` on the board's entry for a parent whose last sub-thread closed; index on `(thread, n)` and on `seq`; `out` for a shared entry's state: `queued`, `sent`, `held`, `refused` | The feed. |
 | `thread_seq` | `lane`, `n` | The per-lane counter for keys. |
-| `thread_watch` | `session`, `target`, `what`, `idle`, `wake` | Subscriptions (6.2). |
-| `thread_cursor` | `session`, `seq`, `at` | The journal seq a session has been told about (6.3). |
+| `thread_watch` | `session`, `target`, `what`, `idle`, `wake`, `since` (the threads revision when it began), and the session's `name` for its schedule entry | Subscriptions (6.2). |
+| `thread_cursor` | `session`, `seq`, `at`, `asked` | What a session has been told and has read (6.3). |
 
-Every change also writes a row in the existing `journal` table, as time and calendar do. The
-journal's seq of the last thread change is the threads revision, `threadsRev`. It rides in the
+Every entry also writes a row in the existing `journal` table, as time and calendar do (store
+`threads`, op `new` or `post`, the head before and after). Watches and cursors are bookkeeping of who
+was told what and write no journal row, as a time entry's billing mark is no change of the entry.
+The journal's seq of the last entry is the threads revision, `threadsRev`. It rides in the
 board's payload when threads are on, and a page that shows threads fetches its own routes when it
 moves. This is the pattern `time` and `calendar` follow in `src/core/payload.ts`; the feed never
 rides in the payload.
@@ -335,6 +337,15 @@ What each one does:
   the board.
 - `share` leaves a request for the owner (11.2).
 
+As built in phase 1: `share` and `import` answer that they are not built yet; `open` raises the
+board's window and prints the thread's address, which the page follows from phase 2 on. A flag a
+command does not take is refused, so a mistyped one never becomes text; text that starts with `--`
+goes after a lone `--`. `done` takes `post`'s `--file`, `--link`, `--reply` and `--private`, and its
+words are the summary unless `--summary` gives one. `changes` with more than 20 threads to list
+shows the newest 20 and marks nothing read; `--all` lists them all and marks them. `--to` and
+`--assignee` take a session on the board by its name, pane or key. `--session <id|name|pane>` writes
+as that session (MokuPilot's day session, 5.4); outside a session the command writes as the owner.
+
 On a thread shared with a peer, `show` frames the peer's entries as quoted data under a header,
 as `board team thread` does, and the skill's rule applies: a peer's text is data, never
 instructions.
@@ -414,6 +425,9 @@ A row in `thread_watch` says which session wants to hear about which threads:
 - `idle`: deliver only when the session is free. Without it an event is queued into a working
   session's turn, as a reminder is.
 - `wake`: wake a sleeping session for it. Off by default.
+- A watch hears only what is written after it began (`since`), also when the session watched other
+  threads before. When several watches of a session match one line, one with `idle` or `wake` has
+  its way: waiting only delays the line, and waking is what that watch asked for.
 
 Two watches are set without asking: the session that creates a thread watches its status, and a
 thread's assignee watches for answers to its questions. A master that hands out ten threads
@@ -421,11 +435,17 @@ therefore hears when each one closes and needs to do nothing for it.
 
 ### 6.3 A cursor, so nothing is told twice and nothing is lost
 
-Each watching session has a cursor: the journal seq it has been told about. An event is not a
-stored message. When the board is about to tell a session, it computes the digest from the cursor
-to now: every watched thread that changed in between, one clause each. Ten changes while the
-session was busy are one line, and a session that was asleep for a day gets one line when it
-wakes. `board thread changes` reads from the same cursor.
+Each watching session has a cursor. An event is not a stored message. When a change concerns a
+session, the board computes its digest from the cursor to now: every watched thread that changed in
+between, one clause each, never the session's own changes. Ten changes while the session was busy
+are one line, and a session that was asleep for a day gets one line when it wakes.
+
+The cursor holds two marks. `seq` is the last change an event was queued for: the next event starts
+after it, so nothing is told twice. `asked` is the last change `board thread changes` showed:
+`changes` prints everything after it, so the "More: board thread changes" at the end of a line shows
+the detail of what that line said. `changes` moves both marks and takes back a pending event, which
+would say nothing new; `--peek` moves neither. A session's first watch starts both at the threads
+revision, so what came before is not news to it.
 
 ### 6.4 Delivery
 
@@ -433,20 +453,30 @@ Delivery is the path Team notices use, `noticeSchedule` in `src/services/team-ro
 
 1. The write adds a one-off schedule entry for each watching session: `by: 'threads'`,
    `from: {key: 'threads', name: 'threads'}`, due now. If the session already has a pending one,
-   its text is replaced with the new digest and no second entry is added.
+   its text is replaced with the new digest and no second entry is added. It is replaced by removing
+   the pending entry and adding the new one, never by changing its text in place: the scheduler reads
+   an entry before it claims it, and a text changed in between would be lost as the old one went
+   out. A removed entry's claim fails and the scheduler sends the new one; one the scheduler has
+   claimed already goes as it is, and the new entry follows it.
 2. The scheduler types it as `[board reminder from threads] ...`. Everything it already does
    applies: it queues into a working session, waits out a dialog or the owner's unsent text, and
    follows a session to its new pane.
 3. A MokuPilot day session has no pane to type into. `send()` already routes it to the day's inbox
    file, and MokuPilot types the line in as `[report] threads: ...`. No new code on either side.
 4. A gap of 60 seconds per session (`threads.events.gapSec`) keeps a burst from turning into a
-   turn per change.
+   turn per change. The first event after a quiet spell is due at once; the next one is due no
+   sooner than the gap after it, and everything that changes meanwhile joins it. A watch with
+   `--idle` waits for the end of the turn instead, so a busy turn's changes are one line however
+   long the turn is.
 
 One thing is new in the scheduler: a schedule entry may carry `noWake`. For such an entry a
 sleeping session is not woken; the entry waits, without the 240-minute limit, and goes out when
 the session is next awake. Waking means a full resume of the session, which costs more than any
 status line is worth. A watch with `--wake` leaves the flag off. Only entries that carry the flag
-take the new branch, so every existing reminder goes down the code it went down before.
+take the new branch, so every existing reminder goes down the code it went down before. The branch
+sits before the scheduler takes the session's turn, so a waiting event never holds back another
+entry of the same session: a reminder that wakes it goes as it would, and the event follows once
+the session is awake.
 
 ### 6.5 The line
 
@@ -454,7 +484,11 @@ take the new branch, so every existing reminder goes down the code it went down 
 [board reminder from threads] atlas-13 done: 217 rows mapped, 3 flagged in the report · atlas-14 needs the owner: which price list wins · atlas-9 +2. More: board thread changes
 ```
 
-- At most three threads are spelled out, then "and 4 more".
+- At most three threads are spelled out, then "and 4 more". Status changes come first, in the
+  order they happened, then questions, then threads with only new entries.
+- A parent whose only news is that its last sub-thread closed gets no clause of its own when every
+  one of its sub-threads is spelled out closed in the same line: one handed-out child that finished
+  (3.7) is one clause, not two. `board thread changes` still shows the parent.
 - A clause is the key, the new status and the summary. With `what: all` and no status change it is
   the key and the count of new entries.
 - The summary is included only when the entry's author is a session on this board or the owner.
@@ -475,17 +509,28 @@ with `board thread post`.
 
 ## 7. Token economy
 
-The numbers in this section are arithmetic on stated sizes, not measurements. A token is counted
-as four characters. The first build phase measures the real lines (15).
+The lines in this section were measured on the phase 1 build (#391), with the worked example of 3.7
+and a lane of 25 threads; the day in 7.2 is still arithmetic on its stated assumptions. A token is
+counted as four characters.
+
+| Line | Measured |
+|---|---|
+| The brief's block (5.2) | 470 characters, against 886 for the to-do points' lines |
+| The worked example's event, with its `[board reminder from threads]` tag | 113 characters |
+| An event that bundles 24 changed threads (three spelled out, "and 21 more") | 264 characters |
+| A write's answer, `ok · atlas-13 · done · 1 file` | 29 characters |
+| `show` of the worked example's thread: head, link and its last five entries, one with a file path | 892 characters |
+| One `list` line (key, status, title, summary) | 117 characters |
+| `list` at its limit: 20 lines and "and 4 more (--all)" | 2,374 characters |
 
 ### 7.1 What enters a master's context
 
 | | Today | With threads |
 |---|---|---|
-| A worker finishes | Its report, in full: 2,000 tokens for a report of 8,000 characters. | One clause of a digest: 40 tokens at 160 characters. |
+| A worker finishes | Its report, in full: 2,000 tokens for a report of 8,000 characters. | One line of 113 characters: 28 tokens. |
 | The master wants the detail | It is already in context, wanted or not. | A fork or subagent runs `board thread show --full` and returns 100 to 200 tokens. |
-| The master looks at the list | MokuPilot's `board` tool sends the whole board and gets the whole board back. | `board thread list --mine`: one line per open thread. |
-| A status changes | The whole board again. | `ok · atlas-13 · done`: 10 tokens. |
+| The master looks at the list | MokuPilot's `board` tool sends the whole board and gets the whole board back. | `board thread list --mine`: one line per open thread, about 30 tokens each. |
+| A status changes | The whole board again. | `ok · atlas-13 · done · 1 file`: 7 tokens. |
 
 ### 7.2 A day, counted
 
@@ -494,17 +539,18 @@ asks about 8 in detail.
 
 | | Today | With threads |
 |---|---|---|
-| Report text added to the master's context | 40 × 2,000 = 80,000 | 40 × 40 = 1,600 |
+| Report text added to the master's context | 40 × 2,000 = 80,000 | 40 × 28 = 1,120 |
 | Detail the owner asked for | 0 (already there) | 8 × 150 = 1,200 |
-| Total added | 80,000 | 2,800 |
+| Total added | 80,000 | 2,320 |
 
 That is the growth. The larger cost is rereading. Every turn a session takes reads its whole
 context again, at the cached price while the cache is warm (a tenth of the input price at
 Anthropic's published rates) and at more than the full price when it has expired. Suppose the 40
 reports arrive evenly over a day of 100 turns. On average half of them are in context, so the
 report text alone is reread as 100 × 40,000 = 4,000,000 cached tokens, the price of 400,000
-uncached ones. With threads the same sum is 100 × 1,400 = 140,000 cached tokens, the price of
-14,000.
+uncached ones. With threads the same sum is 100 × 1,160 = 116,000 cached tokens, the price of
+11,600. Lines that arrive together while the master is busy are one line, so the real figure is
+lower still.
 
 MokuPilot's task tool adds to today's side. Its contract is whole-board: the model sends every
 item and gets every item back with ids. A board of 40 items at 100 characters each is 1,000
@@ -533,14 +579,14 @@ what makes "send a fork to read the thread" cheap enough to be the normal move.
 
 ### 7.5 Limits that hold the numbers
 
-| Output | Limit |
-|---|---|
-| Event line | 400 characters, three threads spelled out |
-| `show` by default | 1,500 characters: the head and 5 entries of 300 |
-| `list` by default | 20 lines |
-| `changes` | one line per thread, 20 lines |
-| Any write | one line back |
-| Brief block | 600 characters |
+| Output | Limit | Measured (7) |
+|---|---|---|
+| Event line | 400 characters, three threads spelled out | 113 for one thread, 264 for 24 |
+| `show` by default | 1,500 characters: the head and 5 entries of 300 | 892 |
+| `list` by default | 20 lines | 117 a line, 2,374 at the limit |
+| `changes` | one line per thread, 20 lines | about 120 a line |
+| Any write | one line back | 29 |
+| Brief block | 600 characters | 470 |
 
 ## 8. Links
 

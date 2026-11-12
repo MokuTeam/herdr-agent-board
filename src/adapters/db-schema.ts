@@ -110,6 +110,85 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX cal_by_start ON cal_events (start);
     `,
   },
+  {
+    version: 5,
+    store: 'threads',
+    // Threads (#379, adapters/work-thread-store.ts): one row per thread, its head, which is what
+    // applying its entries' `set` in order gives (core/work-threads.ts applyEntry); parties, scope
+    // and origin as JSON. The feed: entries are never changed or removed; `seq` is the journal row
+    // an entry was written with, what a session's cursor counts in; `fields` its `set`; `out` a
+    // shared entry's state (phase 4). The per-lane counter for keys. Watches: which session hears
+    // of which thread, lane or `mine`, how much, whether only while free, whether it wakes it, and
+    // the threads revision when it began (it hears only what came after). A
+    // session's cursor: `seq` the last change an event was queued for, `at` when that event was
+    // due (the gap counts from it), `asked` the last change `board thread changes` showed. Watches
+    // and cursors are bookkeeping of who was told what: no journal row. Nothing reads the tables
+    // while threads are off.
+    sql: `
+      CREATE TABLE threads (
+        id TEXT PRIMARY KEY,
+        key TEXT NOT NULL UNIQUE,
+        lane TEXT NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL,
+        waiting_on TEXT NOT NULL DEFAULT '',
+        proposed TEXT,
+        assignee TEXT,
+        parent TEXT,
+        scope TEXT NOT NULL DEFAULT '"local"',
+        created_by TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        done_at INTEGER,
+        rev INTEGER NOT NULL DEFAULT 0,
+        origin TEXT
+      ) STRICT;
+      CREATE INDEX threads_by_lane ON threads (lane, status);
+      CREATE INDEX threads_by_parent ON threads (parent) WHERE parent IS NOT NULL;
+      CREATE TABLE thread_entries (
+        id TEXT PRIMARY KEY,
+        thread TEXT NOT NULL REFERENCES threads (id),
+        n INTEGER NOT NULL,
+        seq INTEGER NOT NULL,
+        at INTEGER NOT NULL,
+        author TEXT NOT NULL,
+        type TEXT NOT NULL,
+        text TEXT NOT NULL DEFAULT '',
+        fields TEXT,
+        links TEXT,
+        files TEXT,
+        reply_to TEXT,
+        private INTEGER NOT NULL DEFAULT 0,
+        closed INTEGER,
+        out TEXT
+      ) STRICT;
+      CREATE INDEX thread_entries_by_n ON thread_entries (thread, n);
+      CREATE INDEX thread_entries_by_seq ON thread_entries (seq);
+      CREATE TABLE thread_seq (
+        lane TEXT PRIMARY KEY,
+        n INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE thread_watch (
+        session TEXT NOT NULL,
+        target TEXT NOT NULL,
+        what TEXT NOT NULL,
+        idle INTEGER NOT NULL DEFAULT 0,
+        wake INTEGER NOT NULL DEFAULT 0,
+        name TEXT NOT NULL DEFAULT '',
+        at INTEGER NOT NULL,
+        since INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (session, target)
+      ) STRICT;
+      CREATE INDEX thread_watch_by_target ON thread_watch (target);
+      CREATE TABLE thread_cursor (
+        session TEXT PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        at INTEGER NOT NULL,
+        asked INTEGER NOT NULL
+      ) STRICT;
+    `,
+  },
 ]
 
 /** The version the code makes a file: the last step's. */

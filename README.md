@@ -2137,6 +2137,45 @@ other's change. Only sessions on the board count: an archived session's points c
 Not yet (see #202): a jump to the message a point came from (1b), a badge on the card, the open
 points in the sheet.
 
+## Threads
+
+Off unless you turn it on (#379, the design is [docs/design/threads](docs/design/threads/README.md);
+phase 1 of it is built). A long-lived session that hands work out used to get every worker's full
+report in its own conversation. With threads a worker posts its result to a thread the board keeps,
+and the session that handed the work out gets one line:
+
+```
+[board reminder from threads] atlas-13 done: 217 rows mapped, 3 flagged in the report. More: board thread changes
+```
+
+A thread has a key (`atlas-13`: the lane and a number), a title, a one-line summary, a status
+(next, doing, waiting, owner, done, dropped), an assignee and a feed of entries with text, links
+and files. It lives in the board's database, and a file posted to it is copied into the board's
+state folder.
+
+```json
+"threads": true
+```
+
+or `"threads": { "agents": false }` to keep them the owner's (sessions read but do not write, and
+their brief says nothing of them), `"events": { "gapSec": 60 }` for the least time between two lines
+to one session. Then run the install once, which copies the agents' skill for threads
+(`agent-board-threads`) into each profile; it is not copied while threads are off.
+
+`board thread --help` lists the commands: `new`, `post`, `done`, `ask` (the thread waits on you and
+the card goes under "Needs me", as `board ask` does), `set`, `show`, `list`, `changes`, `watch`,
+`unwatch`, `link`, `open`. Every write prints one line and works with the board stopped. Who wrote
+an entry is the session that ran the command; outside a session, you.
+
+The session that creates a thread hears of its status changes; a session hears no line about its own
+change, and several changes before a line goes out are one line. A sleeping session is not woken for
+a line (unless its watch asked for `--wake`): it gets the line when it is next awake. A MokuPilot day
+session gets it through its inbox.
+
+With the key absent nothing changes: no brief line, nothing in the payload, nothing in the hook that
+runs on every prompt, and the tables in `board.db` stay empty. Not yet: the board's view of threads,
+sharing a thread with a teammate, MokuPilot's tab (phases 2 to 4 of the design).
+
 ## Secrets
 
 An agent that needs a token, a password or OAuth keys it must never see used to write a script

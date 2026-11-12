@@ -216,6 +216,8 @@ export interface Config {
   calendar?: unknown
   /** Auto-compact's default (#378, `{ at, note }`), as config.json has it: read through core/compact.ts compactConfig. */
   compact?: unknown
+  /** Threads (#379, `true` or an object), as config.json has it: read through core/work-threads.ts threadsConfig. */
+  threads?: unknown
   [extra: string]: unknown
 }
 

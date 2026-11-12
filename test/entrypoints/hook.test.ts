@@ -8,6 +8,7 @@ import { useLanguage } from '../../src/core/lang.ts'
 import { sameDir } from '../../src/core/launch/names.ts'
 import { promptOf } from '../../src/core/schedule-rules.ts'
 import { WAKE_SHIPPED } from '../../src/core/wake/config.ts'
+import { threadsBrief, threadsConfig } from '../../src/core/work-threads.ts'
 import { unusedPort } from '../support/board-server.ts'
 import { root, type Sandbox, sandbox, until } from '../support/sandbox.ts'
 import { notification } from '../support/task-notification.ts'
@@ -576,4 +577,30 @@ test('a wake section with Telegram on but no enabled: reported as wake is by def
     await Bun.sleep(900)
     expect(box.calls()).toEqual([])
   }
+})
+
+test('threads on (#379): the start brief gains their block, with agents only; a prompt hears nothing of them', async () => {
+  const box = await sandbox()
+  mkdirSync(join(configFile(box), '..'), { recursive: true })
+  writeFileSync(configFile(box), JSON.stringify({ language: 'en', threads: true }))
+  putCard(box, { key: 's1', category: 'atlas', wait: 'the client', briefV: BRIEF_VERSION })
+  const start = await runHook(box, sessionStart(box, 's1'))
+  useLanguage('en')
+  const cfg = normalizeConfig({ language: 'en', threads: true })
+  const env = { ...box.env, HERDR_PANE_ID: 'p1' }
+  const card = cardOf(box, 's1')
+  assert.equal(
+    start,
+    context('SessionStart', brief(cfg, card, box.dir, env, 'Claude', null, null, [], false, threadsConfig(true))),
+  )
+  assert.ok(start.includes(JSON.stringify(threadsBrief()).slice(1, -1)))
+  // Without the switch: the brief as it was.
+  assert.equal(brief(cfg, card, box.dir, env), brief(cfg, card, box.dir, env, 'Claude', null, null, [], false, null))
+  assert.ok(!brief(cfg, card, box.dir, env).includes('board thread'))
+  // A prompt: the wait reminder alone, as without threads; nothing read or said for them.
+  const prompt = { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: box.dir, prompt: 'go on' }
+  assert.equal(await runHook(box, prompt), context('UserPromptSubmit', waitReminder({ wait: 'the client' })))
+  // Agents off: the owner's threads, no block.
+  writeFileSync(configFile(box), JSON.stringify({ language: 'en', threads: { agents: false } }))
+  assert.ok(!(await runHook(box, sessionStart(box, 's1'))).includes('board thread'))
 })
