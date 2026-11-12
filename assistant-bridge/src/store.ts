@@ -241,9 +241,9 @@ export function openStore(path: string) {
       const marks = states.map(() => '?').join(', ')
       return (
         location === null
-          ? all(`SELECT * FROM messages WHERE state IN (${marks}) ORDER BY at, id`, ...states)
+          ? all(`SELECT * FROM messages WHERE state IN (${marks}) ORDER BY at, rowid`, ...states)
           : all(
-              `SELECT * FROM messages WHERE state IN (${marks}) AND location = ? ORDER BY at, id`,
+              `SELECT * FROM messages WHERE state IN (${marks}) AND location = ? ORDER BY at, rowid`,
               ...states,
               location,
             )
@@ -300,7 +300,7 @@ export function openStore(path: string) {
         : null
     },
     unsettled: (): OutItem[] =>
-      all(`SELECT * FROM outbox WHERE state IN ('queued', 'delivered') ORDER BY at, id`).map(r => ({
+      all(`SELECT * FROM outbox WHERE state IN ('queued', 'delivered') ORDER BY at, rowid`).map(r => ({
         id: String(r.id),
         to: String(r.to_peer),
         env: String(r.env),
@@ -322,7 +322,7 @@ export function openStore(path: string) {
         j.due,
         j.createdAt,
       ) > 0,
-    openJobs: (): Job[] => all('SELECT * FROM jobs WHERE confirmed_at IS NULL ORDER BY created_at, id').map(toJob),
+    openJobs: (): Job[] => all('SELECT * FROM jobs WHERE confirmed_at IS NULL ORDER BY created_at, rowid').map(toJob),
     confirm: (id: string, at: number): boolean =>
       run('UPDATE jobs SET confirmed_at = ? WHERE id = ? AND confirmed_at IS NULL', at, id) > 0,
     /** The schedule job for a location that is still ahead (due after `now`), if any. */

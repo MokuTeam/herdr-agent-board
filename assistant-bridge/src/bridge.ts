@@ -555,6 +555,7 @@ export function createBridge(o: BridgeOptions): Bridge {
         return
       case 'confirm':
         store.confirm(f.id, clock.now())
+        changed()
         return
       case 'call': {
         const from = fromModule(f.from)
