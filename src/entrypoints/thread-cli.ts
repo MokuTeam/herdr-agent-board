@@ -17,7 +17,10 @@
 //   board thread unwatch <key> | --lane <id> | --mine
 //   board thread link <key> | --base
 //   board thread open <key>
+//   board thread import <task board file> [--lane <id>]
 // <key>: a key (atlas-12), the first 8 characters of an id, or a bare number in the session's lane.
+import { readFileSync } from 'node:fs'
+import { basename, dirname, resolve } from 'node:path'
 import { type BoardDb, DbError, openDb } from '../adapters/db.ts'
 import {
   childrenOf,
@@ -31,6 +34,7 @@ import {
   ThreadError,
   watchesOf,
 } from '../adapters/work-thread-store.ts'
+import { parseTaskFile, TaskFileError } from '../core/thread-import.ts'
 import type { Config } from '../core/types.ts'
 import {
   isOpen,
@@ -52,6 +56,7 @@ import {
   type Watch,
   writeLine,
 } from '../core/work-threads.ts'
+import { importTaskFile } from '../services/thread-import.ts'
 import {
   askOwner,
   changesFor,
@@ -79,6 +84,7 @@ board thread watch <key> | --lane <id> | --mine  [--what status|asks|all] [--idl
 board thread unwatch <key> | --lane <id> | --mine
 board thread link <key> | --base
 board thread open <key>
+board thread import <task board file> [--lane <id>]
   <key>: a key (atlas-12), the first 8 characters of an id, or a bare number in your lane. Every
   command takes --json. A thread's creator hears of its status changes, its assignee of the owner's
   answers: one line, "[board reminder from threads] atlas-13 done: <summary>", never its own changes.`
@@ -97,6 +103,7 @@ const FLAGS: Record<string, { values: readonly string[]; bare: readonly string[]
   unwatch: { values: ['--lane'], bare: ['--mine'] },
   link: { values: [], bare: ['--base'] },
   open: { values: [], bare: [] },
+  import: { values: ['--lane'], bare: ['--todos'] },
 }
 const EVERY = ['--json', '--help']
 
@@ -149,6 +156,8 @@ export interface ThreadCmdContext {
   lane: string | null
   /** A session on the board by its name, pane or key, for --to and --assignee; null when none is. */
   findSession: (word: string) => Promise<Party | null>
+  /** A session on the board by its key alone (an imported item's owner_id); null when none has it. */
+  sessionByKey?: (key: string) => Promise<Party | null>
   /** Puts the question on the session's card, as `board ask` does. */
   setAsk?: (question: string) => void
   /** Raises the board's window; its address, or why not. */
@@ -195,8 +204,7 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
       return 0
     }
     if (!cfg) throw new ThreadError('off', 'threads are off')
-    if (sub === 'share' || sub === 'import')
-      throw new ThreadError('later', `board thread ${sub} is not built yet on this board`)
+    if (sub === 'share') throw new ThreadError('later', `board thread ${sub} is not built yet on this board`)
     db = ctx.db ?? openDb({ create: true })
     if (!db) throw new ThreadError('db', 'no database')
     const now = ctx.now ?? Date.now()
@@ -364,6 +372,8 @@ class Run {
         else this.out(r.ok ? `ok · ${head.key} · ${url}` : `${r.error} · ${head.key} · ${url}`)
         return
       }
+      case 'import':
+        return this.importFile()
       default:
         throw new Usage(`no command "board thread ${sub}"`)
     }
@@ -478,6 +488,71 @@ class Run {
     for (const c of shown) this.out(`${listLine(c.head)} · +${c.entries}`)
     if (more > 0)
       this.out(`and ${more} more: board thread changes --all lists them all; none is marked read until then`)
+  }
+
+  /** `import <file>` (#393, 13.1): a task board's items as threads, again and again without doubles. */
+  async importFile(): Promise<void> {
+    const a = this.a
+    if (a.has('--todos'))
+      throw new ThreadError('later', 'board thread import --todos comes with the to-do points as threads (#395)')
+    const path = a.words[0]
+    if (!path || a.words.length > 1) throw new Usage('usage: board thread import <task board file> [--lane <id>]')
+    let text: string
+    try {
+      text = readFileSync(path, 'utf8')
+    } catch {
+      throw new ThreadError('file', `${path}: no such file`)
+    }
+    let raw: unknown
+    try {
+      raw = JSON.parse(text)
+    } catch {
+      throw new ThreadError('format', `${path}: not JSON`)
+    }
+    let file: ReturnType<typeof parseTaskFile>
+    try {
+      const at = resolve(path)
+      file = parseTaskFile(raw, { harness: basename(dirname(at)), session: basename(at).replace(/\.json$/i, '') })
+    } catch (err) {
+      if (err instanceof TaskFileError) throw new ThreadError('format', `${path}: ${err.message}`)
+      throw err
+    }
+    const lane = a.one('--lane') ?? this.ctx.lane
+    if (!lane) throw new ThreadError('no_lane', 'this session has no lane: board cat <id> first, or give --lane <id>')
+    // Each owner_id looked up once on the board, before the write.
+    const owners = new Map<string, Party>()
+    for (const id of new Set(file.items.map(i => i.owner?.id ?? '').filter(Boolean))) {
+      const p = await this.ctx.sessionByKey?.(id).catch(() => null)
+      if (p) owners.set(id, p)
+    }
+    const r = importTaskFile(this.write, file, { lane, sessionOf: key => owners.get(key) ?? null })
+    const from = `${file.harness}/${file.session.slice(0, 8)}`
+    if (this.json) {
+      this.out(
+        JSON.stringify({
+          ok: true,
+          harness: file.harness,
+          session: file.session,
+          created: r.created,
+          updated: r.updated,
+          dropped: r.dropped,
+          unchanged: r.unchanged,
+          skipped: r.skipped,
+          keys: r.keys,
+          told: r.told.length,
+          untold: r.untold,
+        }),
+      )
+      return
+    }
+    const parts = [
+      ...(r.created.length ? [`${r.created.length} new`] : []),
+      ...(r.updated.length ? [`${r.updated.length} updated`] : []),
+      ...(r.unchanged ? [`${r.unchanged} unchanged`] : []),
+      ...(r.skipped ? [`${r.skipped} skipped`] : []),
+      ...(r.untold ? [`${r.untold} watching not told: they read board thread changes`] : []),
+    ]
+    this.out(['ok', from, ...(parts.length ? parts : ['no items'])].join(' · '))
   }
 
   watch(on: boolean): void {

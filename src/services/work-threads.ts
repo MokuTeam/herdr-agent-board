@@ -44,6 +44,7 @@ import {
 } from '../adapters/work-thread-store.ts'
 import type { ThreadsPayload } from '../core/payload.ts'
 import type { ScheduleEntry } from '../core/schedule-rules.ts'
+import { agentBoardOf, isMirrored } from '../core/thread-import.ts'
 import type { Config } from '../core/types.ts'
 import { safeName } from '../core/upload-name.ts'
 import {
@@ -115,6 +116,8 @@ export interface ThreadsCtx {
   schedule?: EventSchedule
   /** The state folder, where entries' files are kept. */
   state?: string
+  /** The board copying a pi task board (services/thread-import.ts): the one writer of mirrored threads. */
+  mirror?: boolean
 }
 
 /** One write done: the thread's head after it and the entry, and the entries the board added (a parent's close). */
@@ -134,6 +137,25 @@ function mayWrite(ctx: ThreadsCtx): void {
     throw new ThreadError('agents_off', "threads are the owner's on this board: agents do not write to them")
 }
 
+/**
+ * A thread copied from a pi task board changes there, never on the board (#393). The owner may still
+ * close one (`set`: a status done or dropped, with a summary or a note), so that a copy the board can
+ * no longer follow is never stuck open.
+ */
+export function notMirrored(ctx: Pick<ThreadsCtx, 'mirror' | 'actor'>, head: ThreadHead, set?: EntrySet): void {
+  if (ctx.mirror || !isMirrored(head)) return
+  const closes =
+    !!set &&
+    (set.status === 'done' || set.status === 'dropped') &&
+    Object.keys(set).every(k => k === 'status' || k === 'summary')
+  if (ctx.actor.kind === 'owner' && closes) return
+  const from = agentBoardOf(head.origin)?.agentBoard
+  throw new ThreadError(
+    'mirrored',
+    `${head.key} is a copy of ${from?.harness ?? 'pi'}'s task board${from ? ` (session ${from.session.slice(0, 8)})` : ''}: change it there, the board follows (the owner can close it here: done or dropped)`,
+  )
+}
+
 function titleOf(v: unknown): string {
   const t = oneLine(v, 1000)
   if (!t) throw new ThreadError('no_title', 'a thread needs a title')
@@ -149,6 +171,7 @@ function lineOf(v: unknown, max: number, what: string): string {
 
 /** The parent a thread may name: one with no parent of its own and room for another child. */
 function parentFor(ctx: ThreadsCtx, parent: ThreadHead, child?: ThreadHead): void {
+  notMirrored(ctx, parent)
   if (parent.parent) throw new ThreadError('nested', `${parent.key} is a sub-thread itself: one level only`)
   if (child && parent.id === child.id) throw new ThreadError('nested', 'a thread is not its own parent')
   if (child && childrenOf(ctx.db, child.id).length)
@@ -265,6 +288,7 @@ export function postEntry(ctx: ThreadsCtx, head: ThreadHead, input: PostInput): 
   const set: EntrySet = { ...input.set }
   if (input.status !== undefined) set.status = input.status
   if (input.summary !== undefined) set.summary = lineOf(input.summary, SUMMARY_MAX, 'summary')
+  notMirrored(ctx, head, input.waitingOn !== undefined ? { ...set, waitingOn: input.waitingOn } : set)
   if (input.waitingOn !== undefined) {
     set.waitingOn = lineOf(input.waitingOn, WAITING_MAX, 'waiting')
     if (set.status === undefined && head.status !== 'waiting' && head.status !== 'owner') set.status = 'waiting'

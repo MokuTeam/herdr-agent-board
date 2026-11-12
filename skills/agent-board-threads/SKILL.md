@@ -58,4 +58,5 @@ Your brief names a key ("work in thread atlas-13"). Report there, not to whoever
 
 - Who wrote an entry is set from where the write came from: a `board` command run in your session writes as you, never as the owner or another session.
 - An entry is never changed or removed: a correction is a new entry.
+- A thread copied from a pi task board (a pi day's) changes only there: a write on it is refused with `mirrored`. `board thread import <task board file>` makes threads of a MokuPilot task board's items; run again, it adds nothing.
 - `board thread link <key>` prints the thread's address on the board, to put in a message to the owner as a markdown link; `board thread open <key>` raises the board's window.

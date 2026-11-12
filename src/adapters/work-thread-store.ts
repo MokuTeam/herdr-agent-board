@@ -207,6 +207,37 @@ export function listThreads(db: BoardDb, f: ListFilter = {}): ThreadHead[] {
   return (db.db.query(sql).all(...params) as HeadRow[]).map(headOf)
 }
 
+/** The threads imported from one session's task board (#393), whatever their status. */
+export function threadsFromBoard(db: BoardDb, harness: string, session: string): ThreadHead[] {
+  return (
+    db.db
+      .query(
+        `SELECT ${HEAD_COLUMNS} FROM threads WHERE origin IS NOT NULL AND json_valid(origin) AND json_extract(origin, '$.agentBoard.harness') = ? AND json_extract(origin, '$.agentBoard.session') = ?`,
+      )
+      .all(harness, session) as HeadRow[]
+  ).map(headOf)
+}
+
+/**
+ * What an import last read of an item, kept in the thread's origin (#393). Bookkeeping, as watches
+ * are: no journal row, the thread's feed and revision stay as they are.
+ */
+export function setOrigin(tx: Tx, id: string, origin: unknown): void {
+  tx.db.query('UPDATE threads SET origin = ? WHERE id = ?').run(json(origin), id)
+}
+
+/**
+ * Threads copied from `harness`'s task boards of every session but `keep` become the board's own:
+ * the copy of a day that is over stops, and they can be written to and closed (#393). How many.
+ */
+export function releaseMirrored(tx: Tx, harness: string, keep: string): number {
+  return tx.db
+    .query(
+      `UPDATE threads SET origin = json_remove(origin, '$.mirrored') WHERE origin IS NOT NULL AND json_valid(origin) AND json_extract(origin, '$.mirrored') = 1 AND json_extract(origin, '$.agentBoard.harness') = ? AND json_extract(origin, '$.agentBoard.session') IS NOT ?`,
+    )
+    .run(harness, keep).changes
+}
+
 export function childrenOf(db: BoardDb, parent: string): ThreadHead[] {
   return (
     db.db.query(`SELECT ${HEAD_COLUMNS} FROM threads WHERE parent = ? ORDER BY key`).all(parent) as HeadRow[]
@@ -353,6 +384,11 @@ export function createThread(
     assignee?: Party | null
     parent?: string | null
     id?: string
+    /** The first summary, and the first entry's text (an imported item's whole text, #393). */
+    summary?: string
+    text?: string
+    /** Where an imported thread came from (3.2). */
+    origin?: unknown
   },
 ): { head: ThreadHead; entry: ThreadEntry } {
   const id = input.id ?? randomUUID()
@@ -374,6 +410,7 @@ export function createThread(
     updatedAt: input.at,
     doneAt: null,
     rev: 0,
+    ...(input.origin !== undefined && { origin: input.origin }),
   }
   const set: EntrySet = {
     title: input.title,
@@ -381,6 +418,7 @@ export function createThread(
     lane: input.lane,
     ...(input.assignee && { assignee: input.assignee }),
     ...(input.parent && { parent: input.parent }),
+    ...(input.summary && { summary: input.summary }),
   }
   const head = applyEntry(empty, {
     id: '',
@@ -403,7 +441,7 @@ export function createThread(
     at: input.at,
     author: input.author,
     type: 'system',
-    text: '',
+    text: input.text ?? '',
     set,
   }
   insertEntry(tx, entry)

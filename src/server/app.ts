@@ -67,6 +67,7 @@ import { createTeam } from '../services/team-hub.ts'
 import { createTeamNotify, type TeamNotify } from '../services/team-notify.ts'
 import { createTeamRouter, noticeSchedule } from '../services/team-router.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
+import { piDayMirror } from '../services/thread-import.ts'
 import {
   createProbes,
   createSupervisor,
@@ -603,7 +604,20 @@ export async function startServer({
     threads: () => threadsPayload(cfg),
   })
   board.publish()
-  const refresh = (): void => void board.refresh()
+  // A pi day's task board copied into threads (#393), before each refresh: a change of pi's file is in
+  // the payload's threads revision with it. Off, it returns at the config's threads key.
+  const piTasks = piDayMirror({
+    cfg,
+    log,
+    sessionOf: key => {
+      const item = board.items().find(i => i.key === key || i.session === key)
+      return item ? { kind: 'session', key: item.key, name: item.name || item.autoName || item.key.slice(0, 8) } : null
+    },
+  })
+  const refresh = (): void => {
+    piTasks.tick()
+    void board.refresh()
+  }
   // After Install from the Profiles panel, and the install a show runs: the panel's note and "Setup
   // incomplete" follow at once, not at the next refresh and the next check in up to 10 minutes;
   // also when only herdr's own hook failed, after the board's went in.
