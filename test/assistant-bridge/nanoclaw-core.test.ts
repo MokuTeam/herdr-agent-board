@@ -349,8 +349,20 @@ describe('the NanoClaw hub module', () => {
   })
 })
 
-test("the module's protocol.ts is the bridge's, byte for byte", () => {
-  const bridge = readFileSync(join(import.meta.dir, '../../assistant-bridge/src/protocol.ts'))
-  const module = readFileSync(join(import.meta.dir, '../../assistant-bridge/nanoclaw/src/modules/hub/protocol.ts'))
-  expect(module.equals(bridge)).toBe(true)
+/**
+ * The code of a file without what a formatter decides: whitespace, semicolons, parentheses and
+ * trailing commas. NanoClaw's prettier writes the module's copy with semicolons and `(c) =>`;
+ * this repository's biome writes the bridge's without; both must be the same code.
+ */
+function codeOf(text: string): string {
+  const bare = [...text].filter(c => c.trim() !== '' && c !== ';' && c !== '(' && c !== ')').join('')
+  return bare.replaceAll(',]', ']').replaceAll(',}', '}')
+}
+
+test("the module's protocol.ts is the bridge's code, formatted either way", () => {
+  const bridge = readFileSync(join(import.meta.dir, '../../assistant-bridge/src/protocol.ts'), 'utf8')
+  const module = readFileSync(join(import.meta.dir, '../../assistant-bridge/nanoclaw/src/modules/hub/protocol.ts'), 'utf8')
+  expect(codeOf(module)).toBe(codeOf(bridge))
+  // The check sees a change of code: one character of a string differs.
+  expect(codeOf(module.replace("'host:'", "'hostx:'"))).not.toBe(codeOf(bridge))
 })

@@ -2,8 +2,9 @@
 // object per line over a unix socket, mode 0600. The bridge holds the hub; the module lives in
 // NanoClaw's host process and is the only one that writes into NanoClaw's sessions.
 //
-// This file has no imports so that it can be copied as it is into the NanoClaw module
-// (assistant-bridge/nanoclaw/src/modules/hub/protocol.ts); a test keeps the two copies the same.
+// This file has no imports so that it can be copied into the NanoClaw module
+// (assistant-bridge/nanoclaw/src/modules/hub/protocol.ts), where NanoClaw's prettier formats it its
+// own way (semicolons, parentheses); a test keeps the two the same code.
 
 export const BRIDGE_PROTOCOL = 1
 

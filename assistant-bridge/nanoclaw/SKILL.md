@@ -17,11 +17,14 @@ Copy from this folder into the NanoClaw checkout, same paths:
 |---|---|
 | `src/modules/hub/protocol.ts` | `src/modules/hub/protocol.ts` |
 | `src/modules/hub/core.ts` | `src/modules/hub/core.ts` |
+| `src/modules/hub/core.test.ts` | `src/modules/hub/core.test.ts` (vitest) |
 | `src/modules/hub/index.ts` | `src/modules/hub/index.ts` |
 | `container/agent-runner/src/mcp-tools/hub.ts` | `container/agent-runner/src/mcp-tools/hub.ts` |
 | `container/skills/hub/SKILL.md` | `container/skills/hub/SKILL.md` |
 
-`protocol.ts` must stay byte for byte the bridge's own `assistant-bridge/src/protocol.ts`.
+`protocol.ts` must stay the same code as the bridge's own `assistant-bridge/src/protocol.ts`; NanoClaw's prettier formats it its own way (the pre-commit hook does), and a test in the agent-board repository compares the two without the formatting.
+
+Checked against NanoClaw 2.0.64: `pnpm run typecheck`, eslint (no errors in these files), prettier, `pnpm exec vitest run` (the core's 14 tests; the rest as without the module) and, in `container/agent-runner`, `tsc --noEmit` and `bun test` (as without the module). On Windows the core test uses a named pipe, since Node takes a socket path only on Linux and macOS.
 
 ## Two one-line edits
 
