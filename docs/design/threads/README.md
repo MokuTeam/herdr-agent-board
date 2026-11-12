@@ -1,7 +1,7 @@
 # Threads: one store for tasks and reports
 
 Design for [#379](https://github.com/MokuTeam/herdr-agent-board/issues/379). Phase 1 (the store,
-`board thread` and events, #391) is built; the rest is not yet. The document is written so that an
+`board thread` and events, #391) and phase 2 (the board's view, #392) are built; the rest is not yet. The document is written so that an
 agent who was not part of the discussion can build each phase from it. Mockups are in [mockups/](mockups/): open `mockups/index.html` in a browser. The page
 has switches for the app (board, MokuPilot), the width (desktop, phone) and the theme, and
 `index.html?theme=dark&width=phone#mokupilot` opens it in a given state.

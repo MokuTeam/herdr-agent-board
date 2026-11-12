@@ -6,6 +6,7 @@ import { boardConnection } from '../models/lifecycle.ts'
 import { nextRetryMs, remotePage, UNPAIRED } from '../models/remote-page.ts'
 import { type CalOpen, listenForCalOpens, listenForReveals, type Reveal } from '../models/reveal.ts'
 import { listenForTeamOpens, type TeamOpen } from '../models/team.ts'
+import { listenForThreadOpens, type ThreadOpen } from '../models/work-threads.ts'
 import { api, type BoardPayload, isBoardPayload } from './client.ts'
 
 export interface LiveBoard {
@@ -28,6 +29,8 @@ export interface LiveBoard {
   calOpen: CalOpen | null
   /** The last team thread a notification's click asked for (#355: the stream's `team-open`). */
   teamOpen: TeamOpen | null
+  /** The last thread `board thread open` or a link outside asked for (#392: the stream's `thread-open`). */
+  threadOpen: ThreadOpen | null
 }
 
 const pageAway = () => document.hidden || navigator.onLine === false
@@ -39,6 +42,7 @@ export function useBoard(): LiveBoard {
   const [reveal, setReveal] = useState<Reveal | null>(null)
   const [calOpen, setCalOpen] = useState<CalOpen | null>(null)
   const [teamOpen, setTeamOpen] = useState<TeamOpen | null>(null)
+  const [threadOpen, setThreadOpen] = useState<ThreadOpen | null>(null)
   const resumeRef = useRef<() => void>(() => {})
 
   useEffect(() => {
@@ -64,6 +68,7 @@ export function useBoard(): LiveBoard {
         listenForReveals(stream, () => latest, setReveal)
         listenForCalOpens(stream, setCalOpen)
         listenForTeamOpens(stream, setTeamOpen)
+        listenForThreadOpens(stream, setThreadOpen)
         // In a phone's browser: unpaired on the computer, the board says so as it ends the stream.
         if (remotePage()) {
           stream.addEventListener('unpaired', () => dispatchEvent(new Event(UNPAIRED)))
@@ -132,7 +137,7 @@ export function useBoard(): LiveBoard {
   const resume = useCallback(() => resumeRef.current(), [])
   const canMutate = connected && data?.stale === false && data.lastSuccessfulRefreshAt != null
   return useMemo(
-    () => ({ data, connected, dropped, canMutate, canEdit: connected, resume, reveal, calOpen, teamOpen }),
-    [data, connected, dropped, canMutate, resume, reveal, calOpen, teamOpen],
+    () => ({ data, connected, dropped, canMutate, canEdit: connected, resume, reveal, calOpen, teamOpen, threadOpen }),
+    [data, connected, dropped, canMutate, resume, reveal, calOpen, teamOpen, threadOpen],
   )
 }

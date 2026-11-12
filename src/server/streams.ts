@@ -1,7 +1,7 @@
 // What the board's remote listeners share (server/remote.ts: Tailscale and serve; server/tunnel.ts:
 // the owner's domain): a path decoded, what they refuse whoever calls, and event streams that end
 // the moment the caller's pairing or login does.
-import { deskFocus, desktopOnly, localOnly, ownerTeam } from '../core/remote.ts'
+import { deskFocus, desktopOnly, localOnly, ownerTeam, ownerThreads } from '../core/remote.ts'
 import { json } from './http.ts'
 import { namedEvent } from './sse.ts'
 
@@ -21,13 +21,21 @@ export function decoded(raw: string): string | null {
  * letter (/api/fs/%6Fpen, /api/%61ccess) would get by. A desk (RemoteDevice.desk) may focus herdr
  * and reach /api/remote, whose ops the listener narrows for it (DESK_REMOTE_OPS).
  */
-export function remoteRefusal(raw: string, path: string, desk = false, teamOwner = false): Response | null {
+export function remoteRefusal(
+  raw: string,
+  path: string,
+  desk = false,
+  teamOwner = false,
+  owner = false,
+): Response | null {
   const focus = desk && deskFocus(raw) && deskFocus(path)
   if (!focus && (desktopOnly(raw) || desktopOnly(path))) return json(403, { error: 'desktop' })
   const pairing = desk && raw === '/api/remote' && path === '/api/remote'
   // The owner's own login, with the team on, reads and writes the team as on the computer (#355).
   const team = teamOwner && ownerTeam(raw) && ownerTeam(path)
-  if (!pairing && !team && (localOnly(raw) || localOnly(path))) return json(403, { error: 'local' })
+  // The owner's own login reads and writes threads as on the computer (#392).
+  const threads = owner && ownerThreads(raw) && ownerThreads(path)
+  if (!pairing && !team && !threads && (localOnly(raw) || localOnly(path))) return json(403, { error: 'local' })
   return null
 }
 

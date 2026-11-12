@@ -49,6 +49,7 @@ import {
 } from '../core/remote.ts'
 import { teamConfig } from '../core/team.ts'
 import type { Config } from '../core/types.ts'
+import { threadsConfig } from '../core/work-threads.ts'
 import type { Remote } from '../services/remote.ts'
 import { dispatch, type GuardState, json, peerOf, type Route, readBody } from './http.ts'
 import { decoded, endsWhenGone, remoteRefusal } from './streams.ts'
@@ -223,6 +224,11 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
           language: o.cfg.language ?? null,
           // The Team panel (#355): only for the owner's own phone, while the team is on; else hello is as it was.
           ...(known && teamOwnerOf(known, who) && { team: true }),
+          // Threads (#392): the owner's own phone, while threads are on; else hello is as it was.
+          ...(known &&
+            !known.desk &&
+            isOwnerLogin(who.login, owner) &&
+            threadsConfig(o.cfg.threads) && { threads: true }),
         })
       }
       if (req.method === 'POST' && raw === '/api/remote/pair') {
@@ -255,7 +261,13 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
       // computer is refused in both spellings, or an encoded letter (/api/fs/%6Fpen) would get by.
       const path = decoded(raw)
       if (path === null) return json(400, { error: 'path' })
-      const refused = remoteRefusal(raw, path, !!device.desk, teamOwnerOf(device, who))
+      const refused = remoteRefusal(
+        raw,
+        path,
+        !!device.desk,
+        teamOwnerOf(device, who),
+        !device.desk && isOwnerLogin(who.login, owner),
+      )
       if (refused) return refused
       if (req.method === 'POST' && raw === '/api/remote') {
         // A body that is not a JSON object (null, a string, a broken or oversized one) is no op

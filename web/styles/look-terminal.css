@@ -611,3 +611,23 @@
 :root[data-look="terminal"] .team-send:disabled { box-shadow: inset 0 0 0 1px var(--t-edge); color: var(--label-3); }
 :root[data-look="terminal"] .team-body .team-send-text, :root[data-look="terminal"] .team-body .mini.primary { background: none; box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
 :root[data-look="terminal"] .team-unread { border-radius: 4px; }
+
+/* Threads (#392, threads.css): square chips and rows, outlined status and lane pills, the
+   question and the proposed close as rules on the left, as the rest of the look does. */
+:root[data-look="terminal"] .wt-chip, :root[data-look="terminal"] .wt-who, :root[data-look="terminal"] .wt-key, :root[data-look="terminal"] .wt-title code { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .wt-chip:hover, :root[data-look="terminal"] button.wt-who:hover { background: none; box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
+:root[data-look="terminal"] .wt-dot { border-radius: 2px; }
+:root[data-look="terminal"] .wt-row { border-radius: var(--radius); }
+:root[data-look="terminal"] .wt-row.active { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .wt-status { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--c, var(--gray)); }
+:root[data-look="terminal"] .wt-lane-pill, :root[data-look="terminal"] .wt-lane, :root[data-look="terminal"] .wt-search { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .wt-subs { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .wt-subs .wt-row:first-child, :root[data-look="terminal"] .wt-subs .wt-row:last-child { border-radius: 0; }
+:root[data-look="terminal"] .wt-asked { border-radius: 0; background: none; box-shadow: inset 2px 0 0 var(--orange); }
+:root[data-look="terminal"] .wt-proposed { border-radius: 0; background: none; box-shadow: inset 2px 0 0 var(--green); }
+:root[data-look="terminal"] .wt-main { background: var(--t-bg, var(--panel)); }
+:root[data-look="terminal"] .wt-body[data-wide] > .wt-main { background: none; }
+:root[data-look="terminal"] .wt-filter { background: var(--t-bg, var(--panel)); }
+:root[data-look="terminal"] .wt-body[data-wide] .wt-filter { background: none; }
+:root[data-look="terminal"] .wt-body .mini { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .wt-body .mini.primary { background: none; box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }

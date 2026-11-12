@@ -20,6 +20,13 @@ export const deskPage = (): boolean =>
 export const teamPage = (): boolean =>
   typeof document !== 'undefined' && document.documentElement.hasAttribute('data-team')
 
+/**
+ * The owner's own phone or domain login, with threads on (hello's `threads`, RemoteGate's
+ * `data-threads`): threads are offered here too (#392); any other remote page has none.
+ */
+export const threadsPage = (): boolean =>
+  typeof document !== 'undefined' && document.documentElement.hasAttribute('data-threads')
+
 /** This browser's id among the paired devices (hello's device; RemoteGate sets `data-device`): what `board remote desk <id>` takes. */
 export const deviceId = (): string | null =>
   (typeof document !== 'undefined' && document.documentElement.getAttribute?.('data-device')) || null
@@ -87,6 +94,8 @@ export interface PhoneHello {
   signedIn: boolean
   /** The owner's own phone or domain login, with the team on: the Team panel works here (#355). */
   team: boolean
+  /** The same, with threads on (#392); absent otherwise, as hello was. */
+  threads?: true
 }
 
 export function helloOf(value: unknown): PhoneHello | null {
@@ -103,6 +112,7 @@ export function helloOf(value: unknown): PhoneHello | null {
     auth: v.auth === 'login' ? 'login' : 'pair',
     signedIn: v.signedIn === true,
     team: v.team === true,
+    ...(v.threads === true && { threads: true as const }),
   }
 }
 

@@ -17,6 +17,7 @@ import { foldLine, sheetHead, type WorkspaceFact } from '../../models/sheet.ts'
 import { COLUMN_COLORS } from '../../models/toolbar.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { ChevronGlyph, MoonGlyph, StarGlyph, UpDownGlyph, WriteGlyph } from '../icons.tsx'
+import { SheetThreads } from '../threads/bits.tsx'
 import type { ScheduleActions } from './ScheduleRow.tsx'
 import { SheetCard } from './SheetCard.tsx'
 
@@ -293,6 +294,8 @@ export function SheetHead({
               onSession={key => card.onSession?.(key)}
             />
           </div>
+          {/* Threads (#392): the session's threads, a row each; nothing while it has none. */}
+          <SheetThreads session={item.key} />
         </div>
       </div>
     </>

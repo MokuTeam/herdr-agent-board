@@ -1,6 +1,7 @@
 // A session to show (entrypoints/web-open.ts, when a notification is clicked): pages open its sheet,
 // those connected now and those that connect within REVEAL_MS (a window being raised).
-// { ok, key, pages } or 404 when the board has no session in that pane.
+// { ok, key, pages } or 404 when the board has no session in that pane. `{ thread }` instead (#392,
+// `board thread open`, web-open.ts --thread) goes to `thread` (routes/threads.ts threadReveal).
 import { t } from '../../core/lang.ts'
 import type { BoardState } from '../board-state.ts'
 import { json, type Route } from '../http.ts'
@@ -37,6 +38,7 @@ export function revealRoute(
   board: Pick<BoardState, 'find' | 'items'>,
   events: Pick<Broadcaster, 'event' | 'size'>,
   state: Pick<RevealState, 'asked'>,
+  thread?: (word: unknown) => Response,
 ): Route {
   return {
     method: 'POST',
@@ -44,6 +46,8 @@ export function revealRoute(
     guard: ['board-header'],
     async handle(_req, ctx) {
       const body = await ctx.body()
+      if (thread && body.thread !== undefined && body.key === undefined && body.pane === undefined)
+        return thread(body.thread)
       const item = body.key
         ? board.find(String(body.key))
         : body.pane

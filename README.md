@@ -2184,9 +2184,20 @@ a line (unless its watch asked for `--wake`): it gets the line when it is next a
 session gets it through its inbox.
 
 With the key absent nothing changes: no brief line, nothing in the payload, nothing in the hook that
-runs on every prompt, the tables in `board.db` stay empty, and no task board is read. Not yet: the
-board's view of threads, sharing a thread with a teammate, MokuPilot's own side (phases 2 to 4 of the
-design).
+runs on every prompt, the tables in `board.db` stay empty, and no task board is read. Not yet:
+sharing a thread with a teammate (phase 4 of the design) and MokuPilot's own side of phase 3 (in its
+repository).
+
+On the page, while threads are on, a **Threads** pill beside Tasks counts what needs you and opens
+the threads panel: the list by status on the left, one thread on the right (one screen at a time
+in a narrow panel and on the phone). There you change a thread's status and who holds it, add a
+note with files, answer a question an agent asked you (the answer goes into the thread and is
+typed into the session that asked), and confirm or keep open a close an agent proposed. A card
+shows its session's open threads as chips, the session sheet has a Threads fold, and a thread's
+key in a card, an entry or a message opens it. `http://127.0.0.1:<port>/#thread=<key>` opens a
+thread from anywhere (`board thread link` prints it), and `board thread open <key>` brings the
+board's window up on it. The routes are `/api/threads` (docs/design/threads, 5.3); away from the
+computer only your own logins reach them.
 
 ## Secrets
 

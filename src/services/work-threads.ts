@@ -217,7 +217,8 @@ export function newThread(
 }
 
 export interface PostInput {
-  type?: 'note' | 'ask'
+  /** `answer` is the owner's, to a question (answerAsk). */
+  type?: 'note' | 'ask' | 'answer'
   text?: string
   status?: ThreadStatus
   summary?: string
@@ -669,4 +670,127 @@ export function threadsPayload(cfg: Pick<Config, 'threads'>): ThreadsPayload | n
     dropKept()
     return { rev: 0, needsOwner: 0 }
   }
+}
+
+let keep = false
+/** The web board keeps one connection for the routes, the payload's (server/app.ts); elsewhere each call opens and closes its own. */
+export function keepThreadsDb(on: boolean): void {
+  keep = on
+  if (!on) dropKept()
+}
+
+/**
+ * The database for one call of the routes (server/routes/threads.ts): null when there is none and
+ * `create` is false (nothing to read yet). On the web board the connection the payload keeps; a
+ * failure that is not a thread's refusal drops it, so the next call opens it afresh.
+ */
+export function withThreadsDb<T>(create: boolean, fn: (db: BoardDb | null) => T): T {
+  const path = dbFile()
+  if (!keep) {
+    if (!create && !existsSync(path)) return fn(null)
+    const db = openDb({ path, create })
+    try {
+      return fn(db)
+    } finally {
+      db?.close()
+    }
+  }
+  if (kept && (kept.path !== path || !existsSync(path))) dropKept()
+  if (!kept) {
+    if (!create && !existsSync(path)) return fn(null)
+    const db = openDb({ path, create })
+    if (!db) return fn(null)
+    kept = { path, db }
+  }
+  try {
+    return fn(kept.db)
+  } catch (err) {
+    if (!(err instanceof ThreadError)) dropKept()
+    throw err
+  }
+}
+
+// ------------------------------------------------------------------ the owner's answers (6.6, 3.5)
+
+/**
+ * The question the owner has not answered yet: the newest `ask` entry, while the thread has waited
+ * on the owner ever since. An answer closes it, and so does any entry that moved the thread off
+ * the owner (the agent recorded an answer given in its terminal, or went on); a proposed close
+ * keeps the thread with the owner and leaves the question open.
+ */
+export function openAsk(head: ThreadHead, entries: readonly ThreadEntry[]): ThreadEntry | null {
+  let h: ThreadHead | null = null
+  let open: ThreadEntry | null = null
+  for (const e of entries) {
+    h = applyEntry(h ?? blankOf(head), e)
+    if (e.type === 'ask') open = e
+    else if (e.type === 'answer' || h.status !== 'owner') open = null
+  }
+  return head.status === 'owner' ? open : null
+}
+
+/** What a thread was before its question for the owner: the status an answer puts back, and what it waited on then. */
+export function beforeAsk(
+  head: ThreadHead,
+  entries: readonly ThreadEntry[],
+  ask: ThreadEntry,
+): { status: ThreadStatus; waitingOn: string } {
+  let h: ThreadHead | null = null
+  let before: { status: ThreadStatus; waitingOn: string } = { status: 'doing', waitingOn: '' }
+  for (const e of entries) {
+    if (e.id === ask.id) break
+    h = applyEntry(h ?? blankOf(head), e)
+    if (h.status !== 'owner' && isOpen(h.status)) before = { status: h.status, waitingOn: h.waitingOn }
+  }
+  return before
+}
+
+/** The owner's answer written: the head after it, the session that asked (to be told), the words. */
+export interface Answered extends Written {
+  asker: Extract<Party, { kind: 'session' }> | null
+  text: string
+  /** The question it answers, as the asker's card holds it. */
+  question: string
+}
+
+/**
+ * The owner answers the thread's open question (6.6): an `answer` entry in reply to it, which puts
+ * the status back to what it was before the question. Telling the session is the caller's (the
+ * board's send(), and its card's ask cleared). Refused when nothing is asked.
+ */
+export function answerAsk(ctx: ThreadsCtx, head: ThreadHead, words: string): Answered {
+  const text = cleanText(words, TEXT_MAX + 1)
+  if (!text) throw new ThreadError('empty', 'an answer needs words')
+  if (text.length > TEXT_MAX) throw new ThreadError('text_long', `the answer has more than ${TEXT_MAX} characters`)
+  const entries = entriesOf(ctx.db, head.id)
+  const ask = openAsk(head, entries)
+  if (!ask) throw new ThreadError('no_ask', `${head.key} asks the owner nothing`)
+  // A close the agent proposed meanwhile is the owner's to confirm or keep: an answer leaves it.
+  if (head.proposed) throw new ThreadError('proposed', `${head.key} waits for Confirm or Keep open first`)
+  const before = beforeAsk(head, entries, ask)
+  const written = postEntry(ctx, head, {
+    text,
+    replyTo: ask.id,
+    set: {
+      status: before.status,
+      ...(before.status === 'waiting' && before.waitingOn && { waitingOn: before.waitingOn }),
+    },
+    type: 'answer',
+  })
+  const asker = ask.author.kind === 'session' ? ask.author : null
+  // `board thread ask` put the question on the card as the thread's waitingOn.
+  return { ...written, asker, text, question: oneLine(ask.text, WAITING_MAX) }
+}
+
+/** The owner confirms an agent's proposed close (3.5): done, with the agent's words as the summary. */
+export function confirmClose(ctx: ThreadsCtx, head: ThreadHead): Written {
+  if (!head.proposed) throw new ThreadError('no_proposal', `nobody proposed ${head.key} done`)
+  const summary = oneLine(head.proposed.why, SUMMARY_MAX)
+  return postEntry(ctx, head, { status: 'done', ...(summary && { summary }) })
+}
+
+/** The owner keeps a proposed close open: the thread stays with the owner, the proposal goes. */
+export function keepOpen(ctx: ThreadsCtx, head: ThreadHead): Written {
+  if (!head.proposed) throw new ThreadError('no_proposal', `nobody proposed ${head.key} done`)
+  return postEntry(ctx, head, { status: 'owner' })
 }

@@ -468,6 +468,37 @@ export function digestLine(items: readonly DigestItem[]): string {
 /** The tag a thread event is typed with, from the scheduler's `from`: `[board reminder from threads]`. */
 export const EVENT_FROM = { key: 'threads', name: 'threads' } as const
 
+// ------------------------------------------------------------------ the routes (5.3)
+
+/** A thread as GET /api/threads lists it: its head, the parent's key, the sub-threads counted. */
+export interface ThreadRow extends ThreadHead {
+  parentKey: string | null
+  children: { done: number; all: number }
+}
+
+/** A file of an entry as the routes give it: where it is on the board's computer too. */
+export interface ThreadFileView extends ThreadFile {
+  path: string
+}
+
+export interface ThreadEntryView extends Omit<ThreadEntry, 'files'> {
+  files?: ThreadFileView[]
+}
+
+/** GET /api/threads/<key or id>: the head, its sub-threads and the entries asked for. */
+export interface ThreadView {
+  head: ThreadRow
+  children: ThreadRow[]
+  entries: ThreadEntryView[]
+  /** Entries before the first one given. */
+  earlier: number
+  /** The open question for the owner, by entry id. */
+  ask: string | null
+}
+
+/** The page's own word for a thread in a text: a known key, as a link (8). */
+export const KEY_IN_TEXT = /(?<![\w/#.-])([a-z0-9_]+(?:-[a-z0-9_]+)*-\d{1,9})(?![\w-])/g
+
 // ------------------------------------------------------------------ the brief
 
 /** The brief's block while threads are on and agents take part (5.2): at most BRIEF_MAX characters. */

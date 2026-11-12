@@ -10,6 +10,7 @@ import { App } from './App.tsx'
 import { ErrorBoundary } from './components/ErrorBoundary.tsx'
 import { RemoteGate } from './components/remote/RemoteGate.tsx'
 import { ConfirmScreen } from './components/team/ConfirmScreen.tsx'
+import { ThreadsProvider } from './hooks/useThreads.tsx'
 import { I18nProvider } from './i18n/I18nProvider.tsx'
 import { startPace } from './models/pace.ts'
 import { keptLanguage, remotePage } from './models/remote-page.ts'
@@ -22,9 +23,11 @@ const root = document.getElementById('root')
 const confirming = confirmPage()
 const board = (
   <BoardProvider>
-    <PanelProvider>
-      <App />
-    </PanelProvider>
+    <ThreadsProvider>
+      <PanelProvider>
+        <App />
+      </PanelProvider>
+    </ThreadsProvider>
   </BoardProvider>
 )
 if (root && confirming)

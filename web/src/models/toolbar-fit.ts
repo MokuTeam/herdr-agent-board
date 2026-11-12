@@ -40,6 +40,7 @@ export const TOOLBAR_PRIORITY: readonly string[] = [
   'presence-offer',
   'todos-open',
   'team-open',
+  'threads-open',
   'new-session',
   'presence-call',
   'sched-open',

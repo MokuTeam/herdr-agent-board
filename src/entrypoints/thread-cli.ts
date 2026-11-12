@@ -160,8 +160,8 @@ export interface ThreadCmdContext {
   sessionByKey?: (key: string) => Promise<Party | null>
   /** Puts the question on the session's card, as `board ask` does. */
   setAsk?: (question: string) => void
-  /** Raises the board's window; its address, or why not. */
-  openBoard?: () => Promise<{ ok: true; url: string } | { ok: false; error: string }>
+  /** Raises the board's window on the thread `key` (#392: its page opens it); its address, or why not. */
+  openBoard?: (key: string) => Promise<{ ok: true; url: string } | { ok: false; error: string }>
   /** `--idle`, which the `board` command takes out of the words for every command. */
   idle?: boolean
   out?: (line: string) => void
@@ -366,7 +366,7 @@ class Run {
         const head = this.thread(a.words[0])
         const url = threadLink(this.base, head.key)
         const r = this.ctx.openBoard
-          ? await this.ctx.openBoard()
+          ? await this.ctx.openBoard(head.key)
           : { ok: false as const, error: 'cannot open the board' }
         if (this.json) this.out(JSON.stringify({ ok: r.ok, key: head.key, url, ...(!r.ok && { message: r.error }) }))
         else this.out(r.ok ? `ok · ${head.key} · ${url}` : `${r.error} · ${head.key} · ${url}`)
