@@ -10,8 +10,8 @@
     "test:fast": "bun test --parallel=6 --timeout=30000 --timings=test/timings.json --preload ./test/support/gc-between-files.ts '--path-ignore-patterns=**/*.e2e.test.ts'",
     "test:e2e": "bun test --parallel=2 --timeout=30000 --timings=test/timings.json .e2e.test.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src test web/src hub",
-    "format": "biome check --write src test web/src hub",
+    "lint": "biome check src test web/src hub assistant-bridge",
+    "format": "biome check --write src test web/src hub assistant-bridge",
     "check": "bun run typecheck && bun run lint"
   },
   "engines": {
