@@ -1,0 +1,60 @@
+/* The session sheet on a phone (#417): the width goes to the conversation. Upstream's phone sheet
+   sat 12px inside the screen, its conversation kept the desktop's gutters (22px and 18px), and each
+   bubble took 12px more on each side and at most 88% of the row: a message ran in about two thirds
+   of the screen. A table in it was squeezed into that column, its cells broken inside times and
+   amounts (the bubble's overflow-wrap: anywhere lets a cell shrink to one letter). On a phone:
+   - the sheet sits 8px inside the screen, as the phone's other windows do (the quick look, New
+     session); pwa.css says the same for the phone's own page, clear of the notch;
+   - the conversation has 16px on both sides, as the message box, the open question and the
+     helpers' strip have, so a bubble's edge lines up with the box under it;
+   - a bubble keeps 10px inside, as the open question's box does; an agent's take the row's whole
+     width, the owner's keep their 88%, so a turn still reads as a turn; a bulleted list indents
+     16px (a numbered one keeps its 20px, room for "10.");
+   - a table's cells wrap between words only, never inside one, and a short cell not at all (a
+     date, a lane, a time, an amount stay on one line): a table wider than the bubble scrolls
+     sideways inside it, its edge fading where there is more of it (where the browser runs an
+     animation on a scroll; elsewhere it is cut at the bubble's text);
+   - a code block's long line scrolls inside the block, as it did (app.css: white-space: pre).
+   Every rule is inside the phone's query: a wider window draws the page as before. This is the
+   board's own sheet; upstream's stay as they were, rule for rule. */
+
+/* The fade's widths, registered so that they slide with the scroll instead of jumping. */
+@property --table-fade-start { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --table-fade-end { syntax: '<length>'; inherits: false; initial-value: 0px; }
+
+@media (max-width: 760px) {
+  .sheet { top: 8px; right: 8px; bottom: 8px; width: min(560px, calc(100vw - 16px)); }
+  #sheet .sheet-body { padding-right: 16px; padding-left: 16px; }
+  #sheet .msg { padding-right: 10px; padding-left: 10px; }
+  #sheet .msg:not(.user) { max-width: 100%; }
+  #sheet .md ul { padding-left: 16px; }
+  /* Code in a cell sets its own overflow-wrap (app.css: .msg code), so it is named too. */
+  #sheet .md th, #sheet .md td, #sheet .md :is(th, td) code { overflow-wrap: normal; word-break: normal; }
+  /* A short cell or one of one word (models/markdown.ts) does not wrap at all: 2026-11-12 or a lane's
+     name would still break after a hyphen. A longer one keeps a measure when the table is squeezed,
+     instead of a word to a line: the table scrolls first. */
+  #sheet .md .whole { white-space: nowrap; }
+  #sheet .md :is(th, td):not(.whole) { min-width: 10em; }
+}
+
+/* The table's scroll edge: a fade at the side there is more to scroll to, as wide as what is left
+   to scroll up to 24px (a table that overflows by 6px fades 6px, and its last digits stay clear),
+   none when it fits (a scroller with nothing to scroll has no timeline, and draws no animation). */
+@supports (animation-timeline: scroll()) {
+  @media (max-width: 760px) {
+    #sheet .md .table {
+      mask-image: linear-gradient(to right, transparent, #000 var(--table-fade-start), #000 calc(100% - var(--table-fade-end)), transparent);
+      animation: table-edge-start linear both, table-edge-end linear both;
+      animation-timeline: scroll(self inline), scroll(self inline);
+      animation-range: 0px 24px, calc(100% - 24px) 100%;
+    }
+    @keyframes table-edge-start {
+      from { --table-fade-start: 0px; }
+      to { --table-fade-start: 24px; }
+    }
+    @keyframes table-edge-end {
+      from { --table-fade-end: 24px; }
+      to { --table-fade-end: 0px; }
+    }
+  }
+}

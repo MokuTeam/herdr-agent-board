@@ -190,10 +190,14 @@ export function bothSheets(scene: SheetScene): { old: string; react: string } {
   const sides = drawSheet(scene)
   // The session meter beside the message box is the board's own: the old page has none.
   const withoutMeter = (html: string) => html.replace(/[ \t]*<div class="session-meter">[\s\S]*?<\/div>\n?/g, '')
+  // A table's cell of one word is marked whole, for a phone (#417, models/markdown.ts): the old page has no mark.
+  const unmarked = (html: string) => html.replaceAll(' class="whole"', '')
   return {
     old: withoutMeter(`${sides.session ? sides.schedule : sides.title}\n${sides.body}`),
-    react: withoutMeter(
-      `${canonical(sides.session ? sides.reactSchedule : sides.reactTitle)}\n${canonical(sides.reactBody)}`,
+    react: unmarked(
+      withoutMeter(
+        `${canonical(sides.session ? sides.reactSchedule : sides.reactTitle)}\n${canonical(sides.reactBody)}`,
+      ),
     ),
   }
 }
