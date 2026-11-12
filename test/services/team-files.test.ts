@@ -376,6 +376,17 @@ describe("an agent's file goes as its text does (#415)", () => {
     expect(lines[0]?.file).toMatchObject({ name: 'report.md', size: 20 })
   })
 
+  test('a path with spaces, Cyrillic and % goes under its own name; a folder named like the state folder elsewhere is no board file', async () => {
+    const w = await routed()
+    const dir = join(w.home, 'my docs 100%', 'agent-board')
+    mkdirSync(dir, { recursive: true })
+    const path = writeTemp(dir, 'отчёт 100% v2.md', 'всё хорошо')
+    expect(await w.post(path, '')).toMatchObject({ ok: true, sent: true })
+    const ref = msgOf((await w.ben.c.take('deliver', 5000)).env).body.file as FileRef
+    expect(Buffer.from((await fetchAs(w.ben, ref)) ?? []).toString()).toBe('всё хорошо')
+    expect(w.svc.threadLines(`${w.ben.key.pub}/general`)[0]?.file?.name).toBe('отчёт 100% v2.md')
+  })
+
   test('a binary file goes as it is, even with what reads like a secret in its bytes', async () => {
     const w = await routed()
     const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0, ...Buffer.from('AKIAABCDEFGHIJKLMNOP')])
