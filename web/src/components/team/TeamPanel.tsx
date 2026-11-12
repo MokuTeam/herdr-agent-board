@@ -14,6 +14,7 @@ import { useT } from '../../i18n/I18nProvider.tsx'
 import type { Attachment } from '../../models/composer.ts'
 import type { AgentsChange, AgentsView, TeamView, ThreadLine, ThreadView, Welcome } from '../../models/team.ts'
 import { firstUnread } from '../../models/team-chat.ts'
+import { topicWork } from '../../models/work-share.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { TeamList } from './TeamList.tsx'
@@ -272,6 +273,7 @@ export function TeamBody(props: TeamBodyProps) {
             {...(props.files && { files: props.files })}
             {...(props.onAddFiles && { onAddFiles: props.onAddFiles })}
             {...(props.onRemoveFile && { onRemoveFile: props.onRemoveFile })}
+            work={topicWork(props.threads.find(x => x.key === selected))}
           />
         ) : people ? (
           <TeamPeople

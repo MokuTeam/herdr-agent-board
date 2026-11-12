@@ -4,11 +4,15 @@
 // quiet lines, entries as Team's bubbles, a question for the owner as a block) and Team's composer,
 // whose words answer the open question (6.6) or go in as the owner's note.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { api, errorText } from '../../api/client.ts'
+import { sharingOf } from '../../../../src/core/work-threads.ts'
+import { ApiError, api, errorText } from '../../api/client.ts'
+import { useTeamRoster } from '../../hooks/useTeamRoster.ts'
 import { useThreadFiles } from '../../hooks/useThreadFiles.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import type { ThreadLine } from '../../models/team.ts'
 import type { Quote } from '../../models/team-chat.ts'
+import { confirmError, ownerPost } from '../../models/team-confirm.ts'
+import { offerPeers, outWord, sendable, sentToast, shareStateOf } from '../../models/work-share.ts'
 import {
   feedOf,
   isOwnerParty,
@@ -27,6 +31,10 @@ import { AttachButton } from '../team/AttachButton.tsx'
 import { TeamComposer } from '../team/TeamComposer.tsx'
 import { TeamMessage } from '../team/TeamMessage.tsx'
 import { KeyText, MiniRow, StatusDot, statusWord, WhoChip } from './bits.tsx'
+import { ShareButton, ThreadShare, useShareable } from './ThreadShare.tsx'
+
+/** The ops that share, unshare, take or send (#394): the owner's, through the passkey when it is on. */
+const SHARE_OPS = new Set(['share', 'unshare', 'decline-share', 'take', 'decline', 'history', 'send'])
 
 export interface ThreadPaneProps {
   view: ThreadView
@@ -79,6 +87,27 @@ function Mark({ entry }: { entry: ThreadEntryView }) {
   )
 }
 
+/**
+ * How a shared entry got on (#394, 11.3): held for the owner, with Send; not sent yet; not sent;
+ * discarded; or copied from a teammate's history. Nothing for an entry on its way as it should be.
+ */
+function OutMark({ entry, busy, onSend }: { entry: ThreadEntryView; busy: boolean; onSend(id: string): void }) {
+  const t = useT()
+  const { canEdit } = useBoardContext()
+  const word = outWord(entry.out)
+  if (!word) return null
+  return (
+    <span className={classNames('wt-out', `wt-out-${entry.out}`)} data-out={entry.out}>
+      <span>{t(word)}</span>
+      {canEdit && sendable(entry.out) && (
+        <button type="button" className="mini" disabled={busy} onClick={() => onSend(entry.id)}>
+          {t('wt.out.send')}
+        </button>
+      )}
+    </span>
+  )
+}
+
 export function ThreadPane({ view, onOpen, onBack }: ThreadPaneProps) {
   const t = useT()
   const { data, canEdit, toast } = useBoardContext()
@@ -86,6 +115,7 @@ export function ThreadPane({ view, onOpen, onBack }: ThreadPaneProps) {
   const [draft, setDraft] = useState('')
   const [reply, setReply] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [picking, setPicking] = useState(false)
   const files = useThreadFiles()
   const attached = files.of(head.key)
   const scroll = useRef<HTMLDivElement | null>(null)
@@ -100,22 +130,37 @@ export function ThreadPane({ view, onOpen, onBack }: ThreadPaneProps) {
     const el = scroll.current
     if (el) el.scrollTop = el.scrollHeight
   }, [head.id, last])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: another thread is when the reply goes
-  useEffect(() => setReply(null), [head.id])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: another thread is when the reply and the Share picker go
+  useEffect(() => {
+    setReply(null)
+    setPicking(false)
+  }, [head.id])
 
-  const write = async (body: Record<string, unknown>, done?: () => void) => {
-    if (busy) return
+  // On a shared thread, and for the share ops, a write is the owner's that goes out (#394): through
+  // ownerPost, which opens the passkey's window when the board answers 428. Any other goes as it did.
+  const viaOwner = (body: Record<string, unknown>): boolean =>
+    sharingOf(head) !== null || SHARE_OPS.has(String(body.op))
+  const write = async (body: Record<string, unknown>, done?: () => void): Promise<boolean> => {
+    if (busy) return false
     setBusy(true)
+    const path = `/api/threads/${encodeURIComponent(head.key)}`
     try {
-      const r = await api.post(`/api/threads/${encodeURIComponent(head.key)}`, body)
+      const r = viaOwner(body) ? await ownerPost(path, body) : await api.post(path, body)
       done?.()
       if (r.told === false) toast(t('wt.notTold', { why: String(r.why ?? '') }), true)
+      const said = sentToast(r, t)
+      if (said) toast(said.text, said.error)
+      return true
     } catch (err) {
-      toast(errorText(err, t), true)
+      // A confirmation window the owner closed is no error.
+      if (!(err instanceof ApiError && err.reply.error === 'cancelled'))
+        toast(confirmError(err, t) ?? errorText(err, t), true)
+      return false
     } finally {
       setBusy(false)
     }
   }
+  const sendOut = (entry: string) => void write({ op: 'send', entry })
   const send = () => {
     const text = draft.trim()
     const paths = attached.filter(f => f.status === 'done').map(f => f.path)
@@ -137,6 +182,17 @@ export function ThreadPane({ view, onOpen, onBack }: ThreadPaneProps) {
     scroll.current?.querySelector(`[data-line="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'center' })
 
   const sessions = (data?.items ?? []).filter(i => !i.call)
+  // A shared thread (#394): the Team view for its names, and the teammates' boards it can be offered to.
+  const { teamOn } = useShareable()
+  const share = shareStateOf(head)
+  const team = useTeamRoster(teamOn && (share.kind !== 'local' || picking), data?.teamRev)
+  const offerTo =
+    share.kind === 'shared'
+      ? offerPeers(share.scope, team.view?.roster ?? [], team.view?.me.peer ?? null, t, head.assignee)
+      : []
+  const assigned = head.assignee
+  const assignValue =
+    assigned?.kind === 'session' ? assigned.key : assigned?.kind === 'peer' ? `peer:${assigned.peer}` : ''
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(threadHref(head.key, location.origin))
@@ -209,10 +265,18 @@ export function ThreadPane({ view, onOpen, onBack }: ThreadPaneProps) {
               className="wt-assign"
               aria-label={t('wt.assignHint')}
               title={t('wt.assignHint')}
-              value={head.assignee?.kind === 'session' ? head.assignee.key : ''}
+              value={assignValue}
               disabled={!canEdit || busy}
               onChange={e => {
-                const item = sessions.find(i => i.key === e.target.value)
+                const v = e.target.value
+                // A teammate's board (11.6): an offer, which their owner takes or declines.
+                if (v.startsWith('peer:')) {
+                  const peer = v.slice(5)
+                  const name = offerTo.find(p => p.peer === peer)?.name ?? ''
+                  void write({ op: 'set', assignee: { peer, name } })
+                  return
+                }
+                const item = sessions.find(i => i.key === v)
                 void write({ op: 'set', assignee: item ? { key: item.key, name: item.name } : null })
               }}
             >
@@ -226,10 +290,24 @@ export function ThreadPane({ view, onOpen, onBack }: ThreadPaneProps) {
                   {i.name}
                 </option>
               ))}
+              {assigned?.kind === 'peer' && !offerTo.some(p => p.peer === assigned.peer) && (
+                <option value={assignValue}>{partyLabel(assigned, t('wt.you'))}</option>
+              )}
+              {offerTo.length > 0 && (
+                <optgroup label={t('wt.offer.group')}>
+                  {offerTo.map(p => (
+                    <option key={p.peer} value={`peer:${p.peer}`}>
+                      {t('wt.offer.to', { name: p.name })}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </span>
           <span className="wt-lane-pill">{data?.categories?.find(c => c.id === head.lane)?.title ?? head.lane}</span>
+          <ShareButton head={head} busy={busy} onPicking={setPicking} />
         </div>
+        <ThreadShare head={head} busy={busy} act={write} picking={picking} onPicking={setPicking} team={team} />
         {head.waitingOn && (head.status === 'waiting' || head.status === 'owner') && !head.proposed && (
           <p className="wt-summary wt-waiting">
             <KeyText text={head.waitingOn} onOpen={onOpen} />
@@ -293,10 +371,18 @@ export function ThreadPane({ view, onOpen, onBack }: ThreadPaneProps) {
               <div key={`s:${e.id}`} className="wt-notice" data-line={e.id}>
                 <span className="wt-notice-mark" style={{ '--c': statusColor(item.to) }} aria-hidden="true" />
                 <span className="wt-notice-text">
-                  <b>{partyLabel(e.author, t('wt.you'))}</b>{' '}
-                  {t(`wt.did.${item.did}`, { status: statusWord(item.to, t) })}
-                  {e.set?.summary ? ': ' : ''}
-                  {e.set?.summary && <KeyText text={e.set.summary} onOpen={onOpen} />}
+                  {item.did === 'said' ? (
+                    // The board's own line on a shared thread (entries missing, a history read in).
+                    e.text
+                  ) : (
+                    <>
+                      <b>{partyLabel(e.author, t('wt.you'))}</b>{' '}
+                      {t(`wt.did.${item.did}`, { status: statusWord(item.to, t) })}
+                      {e.set?.summary && item.did !== 'shared' ? ': ' : ''}
+                      {e.set?.summary && item.did !== 'shared' && <KeyText text={e.set.summary} onOpen={onOpen} />}
+                    </>
+                  )}{' '}
+                  <OutMark entry={e} busy={busy} onSend={sendOut} />
                 </span>
                 <time className="when" dateTime={iso(e.at)}>
                   {new Date(e.at).toLocaleTimeString(t.lang, { hour: '2-digit', minute: '2-digit' })}
@@ -328,7 +414,12 @@ export function ThreadPane({ view, onOpen, onBack }: ThreadPaneProps) {
               onQuote={jump}
               {...(canEdit && { onReply: (id: string) => setReply(id) })}
               {...(!isOwnerParty(e.author) && { mark: <Mark entry={e} /> })}
-              extra={<Files entry={e} />}
+              extra={
+                <>
+                  <Files entry={e} />
+                  <OutMark entry={e} busy={busy} onSend={sendOut} />
+                </>
+              }
             />
           )
         })}

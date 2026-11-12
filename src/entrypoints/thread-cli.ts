@@ -18,6 +18,7 @@
 //   board thread link <key> | --base
 //   board thread open <key>
 //   board thread import <task board file> [--lane <id>]
+//   board thread share <key> <name|team|channel> [--history]   a request the owner confirms (#394)
 // <key>: a key (atlas-12), the first 8 characters of an id, or a bare number in the session's lane.
 import { readFileSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
@@ -48,6 +49,7 @@ import {
   type Party,
   partyName,
   SHOW_LAST,
+  sharingOf,
   showText,
   type ThreadHead,
   type ThreadsConfig,
@@ -57,6 +59,7 @@ import {
   writeLine,
 } from '../core/work-threads.ts'
 import { importTaskFile } from '../services/thread-import.ts'
+import { requestShare } from '../services/work-share.ts'
 import {
   askOwner,
   changesFor,
@@ -85,9 +88,12 @@ board thread unwatch <key> | --lane <id> | --mine
 board thread link <key> | --base
 board thread open <key>
 board thread import <task board file> [--lane <id>]
+board thread share <key> <name|team|channel> [--history]
   <key>: a key (atlas-12), the first 8 characters of an id, or a bare number in your lane. Every
   command takes --json. A thread's creator hears of its status changes, its assignee of the owner's
-  answers: one line, "[board reminder from threads] atlas-13 done: <summary>", never its own changes.`
+  answers: one line, "[board reminder from threads] atlas-13 done: <summary>", never its own changes.
+  share asks the owner to share the thread with a teammate's board; on a shared thread every entry
+  that is not --private goes to them (or waits for the owner, as a team post of yours would).`
 
 /** The flags each command takes: with a value, and bare. `--json` and `--help` go with every one. */
 const FLAGS: Record<string, { values: readonly string[]; bare: readonly string[] }> = {
@@ -104,6 +110,7 @@ const FLAGS: Record<string, { values: readonly string[]; bare: readonly string[]
   link: { values: [], bare: ['--base'] },
   open: { values: [], bare: [] },
   import: { values: ['--lane'], bare: ['--todos'] },
+  share: { values: [], bare: ['--history'] },
 }
 const EVERY = ['--json', '--help']
 
@@ -172,6 +179,31 @@ export interface ThreadCmdContext {
   db?: BoardDb
   schedule?: EventSchedule
   state?: string
+  /**
+   * An entry of a shared thread goes to the peers (#394): the running board sends it and says how
+   * it went; null while no board answers (it goes when the board runs).
+   */
+  sendOut?: (thread: string, entry: string) => Promise<SentLine | null>
+}
+
+/** What the board answered a send of a shared entry (routes/threads.ts sendReply). */
+export interface SentLine {
+  out: string
+  reason?: string
+  detail?: string
+  why?: string
+  error?: string
+}
+
+/** A send's answer in words, after a write's `ok · <key> · <status>`. */
+export function sentWords(r: SentLine | null): string {
+  if (!r) return 'saved, goes out when the board runs'
+  if (r.out === 'sent') return 'sent'
+  if (r.out === 'held') return `held for the owner: ${r.reason ?? 'held'}${r.detail ? ` (${r.detail})` : ''}`
+  if (r.out === 'confirm') return "waits for the owner's passkey on the board"
+  if (r.out === 'queued') return `saved, goes out later${r.why ? `: ${r.why}` : ''}`
+  if (r.out === 'refused') return `not sent: ${r.error ?? 'refused'}`
+  return r.out
 }
 
 const intOf = (v: string | undefined, flag: string): number | undefined => {
@@ -204,7 +236,6 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
       return 0
     }
     if (!cfg) throw new ThreadError('off', 'threads are off')
-    if (sub === 'share') throw new ThreadError('later', `board thread ${sub} is not built yet on this board`)
     db = ctx.db ?? openDb({ create: true })
     if (!db) throw new ThreadError('db', 'no database')
     const now = ctx.now ?? Date.now()
@@ -244,6 +275,9 @@ class Run {
       now: this.now,
       ...(this.ctx.schedule && { schedule: this.ctx.schedule }),
       ...(this.ctx.state && { state: this.ctx.state }),
+      // Outside a session the command writes as the owner; on a shared thread that waits for the
+      // owner's Send on the page (#394), since any program can run the command.
+      ownerHolds: true,
     }
   }
 
@@ -266,14 +300,30 @@ class Run {
     return p
   }
 
-  /** A write's one line, or its JSON. */
-  wrote(w: Written, extra: string[] = []): void {
+  /** A write's one line, or its JSON; an entry of a shared thread is sent first (#394), and how it went said. */
+  async wrote(w: Written, extra: string[] = []): Promise<void> {
+    const sent =
+      w.entry.out === 'queued'
+        ? await (this.ctx.sendOut?.(w.head.id, w.entry.id) ?? Promise.resolve(null)).catch(() => null)
+        : w.entry.out === 'held'
+          ? { out: 'held', reason: "the owner's own: send it from the board's page" }
+          : undefined
     if (this.json)
-      this.out(JSON.stringify({ ok: true, thread: w.head, entry: w.entry, told: w.told.length, untold: w.untold }))
+      this.out(
+        JSON.stringify({
+          ok: true,
+          thread: w.head,
+          entry: w.entry,
+          told: w.told.length,
+          untold: w.untold,
+          ...(sent !== undefined && { out: sent?.out ?? 'queued', ...(sent && { sent }) }),
+        }),
+      )
     else
       this.out(
         writeLine(w.head, [
           ...extra,
+          ...(sent !== undefined ? [sentWords(sent)] : []),
           ...(w.untold ? [`${w.untold} watching not told: they read board thread changes`] : []),
         ]),
       )
@@ -374,6 +424,17 @@ class Run {
       }
       case 'import':
         return this.importFile()
+      case 'share': {
+        // Only the owner shares (11.2): from here it is a request, which the owner confirms on the board.
+        const [key, ...words] = a.words
+        const head = this.thread(key)
+        const to = words.join(' ').trim()
+        if (!to) throw new Usage('usage: board thread share <key> <name|team|channel> [--history]')
+        const w = requestShare(this.write, head, to, a.has('--history'))
+        if (this.json) this.out(JSON.stringify({ ok: true, thread: w.head, asked: to }))
+        else this.out(`ok · ${w.head.key} · share with ${to} asked: the owner confirms on the board`)
+        return
+      }
       default:
         throw new Usage(`no command "board thread ${sub}"`)
     }
@@ -422,6 +483,7 @@ class Run {
         keyOfId: id => getThread(this.db, id)?.key ?? id.slice(0, 8),
         fileAt: f => filePath(f.ref, this.ctx.state),
         full,
+        ...(sharingOf(head) && { shared: true }),
       }),
     )
   }
@@ -457,7 +519,8 @@ class Run {
       this.out(closed ? 'no threads' : 'no open threads')
       return
     }
-    for (const h of shown) this.out(listLine(h))
+    // A shared thread's row says so (#394): its summary may be a teammate's words, data like the rest.
+    for (const h of shown) this.out(sharingOf(h) ? `${listLine(h)} · shared` : listLine(h))
     if (more > 0) this.out(`and ${more} more (--all)`)
   }
 

@@ -62,7 +62,9 @@ import { safeName } from '../../core/upload-name.ts'
 import type { TeamConfirm } from '../../services/team-confirm.ts'
 import type { PostTarget, TeamService } from '../../services/team-hub.ts'
 import type { TeamRouter } from '../../services/team-router.ts'
+import type { WorkHub } from '../../services/work-hub.ts'
 import { json, type Route } from '../http.ts'
+import { describeThreadAction, performThreadAction } from './threads.ts'
 
 const isTarget = (v: unknown): v is string => v === TEAM || isPeerId(v)
 
@@ -233,6 +235,8 @@ export function teamRoutes(
   /** The owner's switches changed (the team chat's mute among them): the unread count follows (#355). */
   onAgents?: () => void,
   confirm?: TeamConfirm,
+  /** Shared threads (#394): their owner actions, confirmed here, and the Team list's status pills. */
+  work?: WorkHub,
 ): Route[] {
   const lanes = (): Pick<Config, 'categories' | 'team'> => cfg ?? { categories: [] }
 
@@ -247,6 +251,8 @@ export function teamRoutes(
 
   /** Does an owner action: at once when it needs no confirmation, or once the window confirmed it. */
   async function perform(a: OwnerAction): Promise<{ status: number; body: Record<string, unknown> }> {
+    if (a.kind.startsWith('thread-'))
+      return work ? performThreadAction(work, a) : { status: 409, body: { ok: false, error: 'off' } }
     if (a.kind === 'send') {
       const r = await team.send(a.to, a.text, a.thread, a.replyTo, a.file)
       return { status: r.ok ? 200 : 400, body: { ...r } }
@@ -301,6 +307,7 @@ export function teamRoutes(
 
   /** What the confirmation window shows, in the board's words: names from the roster, never the asker's. */
   function describe(a: OwnerAction): Record<string, unknown> {
+    if (a.kind.startsWith('thread-')) return describeThreadAction(a, peer => team.nameOf(peer))
     if (a.kind === 'send') {
       const id = a.thread?.id
       const known = id ? team.threads().find(t => t.key === threadKey(a.to, id)) : undefined
@@ -438,10 +445,15 @@ export function teamRoutes(
       path: '/api/team/threads',
       handle() {
         if (!team.view()) return undefined
-        // Each with its latest message for the list (#370), where there is one.
+        // Each with its latest message for the list (#370), where there is one; a topic that is a
+        // shared thread with its key and status (#394), while shared threads are on.
         const lasts = team.lasts?.() ?? {}
+        const shared = work?.on() ? work.topics() : {}
         return json(200, {
-          threads: team.threads().map(t => (Object.hasOwn(lasts, t.key) ? { ...t, last: lasts[t.key] } : t)),
+          threads: team.threads().map(t => {
+            const withLast = Object.hasOwn(lasts, t.key) ? { ...t, last: lasts[t.key] } : t
+            return Object.hasOwn(shared, t.key) ? { ...withLast, work: shared[t.key] } : withLast
+          }),
         })
       },
     },
@@ -454,7 +466,10 @@ export function teamRoutes(
         if (!isTarget(scope) || !isThreadId(id)) return json(400, { ok: false, error: 'thread' })
         const key = threadKey(scope, id)
         const thread = team.threads().find(t => t.key === key)
-        if (thread) return json(200, { thread, lines: team.threadLines(key) })
+        // A topic that is a shared thread says so (#394), as its row in the list does.
+        const shared = thread && work?.on() ? work.topics()[key] : undefined
+        if (thread)
+          return json(200, { thread: shared ? { ...thread, work: shared } : thread, lines: team.threadLines(key) })
         // Nothing written in it yet, but an agent's draft waits there (#370): the draft, no thread.
         const drafts = team.threadLines(key).filter(l => l.dir === 'draft')
         if (!drafts.length) return json(404, { ok: false, error: 'thread' })

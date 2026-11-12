@@ -247,7 +247,11 @@ export function ThreadsPanel({ open, onClose }: ThreadsPanelProps) {
 
   const rows = threads?.rows ?? []
   const rev = threads?.rev ?? 0
-  const { view, gone } = useThreadView(open ? selected : null, data?.threads?.rev ?? rev)
+  // A shared entry's way to the hub moving (#394, `threads.out`) reads the thread again too.
+  const { view, gone } = useThreadView(
+    open ? selected : null,
+    `${data?.threads?.rev ?? rev}:${data?.threads?.out ?? 0}`,
+  )
   const openKey = (key: string) => {
     setSelected(key)
     setPane('thread')

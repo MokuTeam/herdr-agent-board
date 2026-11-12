@@ -9,6 +9,7 @@ import { COLUMN_COLORS } from '../../models/toolbar.ts'
 import {
   chipsOf,
   keyParts,
+  partyLabel,
   sessionThreads,
   statusColor,
   type ThreadRow,
@@ -41,7 +42,12 @@ export function WhoChip({ party, plain = false }: { party: Party | null; plain?:
   const { data, dispatch } = useBoardContext()
   if (!party) return <span className="wt-who none">{t('wt.nobody')}</span>
   if (party.kind === 'owner') return <span className="wt-who">{t('wt.you')}</span>
-  if (party.kind === 'peer') return <span className="wt-who peer">{party.name || party.peer}</span>
+  if (party.kind === 'peer')
+    return (
+      <span className="wt-who peer" title={t('wt.peerHint')}>
+        {partyLabel(party, '')}
+      </span>
+    )
   const item = data?.items.find(i => i.key === party.key)
   const name = item?.name || party.name || party.key.slice(0, 8)
   const dot = item && <span className="wt-dot" style={{ '--c': COLUMN_COLORS[item.column] }} aria-hidden="true" />

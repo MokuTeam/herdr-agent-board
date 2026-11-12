@@ -10,7 +10,9 @@
 //   (with what came in meanwhile) while you are not. A quote scrolls to the message it answers.
 // - Under them: an agent's held drafts with Send and Discard, then the box to write in.
 import { useLayoutEffect, useRef, useState } from 'react'
+import { ApiError, errorText } from '../../api/client.ts'
 import type { NewTopic } from '../../hooks/useTeam.ts'
+import { useThreadsContext } from '../../hooks/useThreads.tsx'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import type { Attachment } from '../../models/composer.ts'
 import { reducedMotion } from '../../models/spring.ts'
@@ -27,9 +29,13 @@ import {
   type ThreadView,
 } from '../../models/team.ts'
 import { chatItems, type Quote, quoteOf } from '../../models/team-chat.ts'
+import { confirmError, ownerPost } from '../../models/team-confirm.ts'
+import type { TopicWork } from '../../models/work-share.ts'
+import { statusColor } from '../../models/work-threads.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { Attachments } from '../sheet/Attachments.tsx'
 import { MessageText } from '../sheet/MessageText.tsx'
+import { StatusDot, statusWord } from '../threads/bits.tsx'
 import { AttachButton } from './AttachButton.tsx'
 import { Switch } from './Switch.tsx'
 import { TeamComposer } from './TeamComposer.tsx'
@@ -71,6 +77,8 @@ export interface TeamThreadProps {
   /** Files picked, pasted or dropped; none given: the thread takes no files. */
   onAddFiles?(files: File[]): void
   onRemoveFile?(id: number): void
+  /** The shared thread this topic is (#394), from the list; null: none. */
+  work?: TopicWork | null
 }
 
 export function TeamThread(props: TeamThreadProps) {
@@ -230,6 +238,7 @@ function ThreadHead({
   onTopic,
   onMute,
   onAddMembers,
+  work = null,
 }: TeamThreadProps & { name: string; peer: TeamRosterPeer | null; channel: boolean; general: boolean }) {
   const t = useT()
   const { now } = useBoardContext()
@@ -301,6 +310,7 @@ function ThreadHead({
           />
         )}
       </div>
+      {!general && thread && <TopicAsThread topic={selected} work={work} agents={agents} disabled={disabled} />}
       {addable.length > 0 && thread && (
         <AddMember peers={addable} disabled={disabled} onAdd={id => onAddMembers?.(thread.key, [id])} />
       )}
@@ -541,4 +551,94 @@ function useChatScroll(key: string, messages: readonly ThreadLine[]) {
       flashTimer.current = setTimeout(() => setFlash(null), FLASH_MS)
     },
   }
+}
+
+/**
+ * A topic and threads (#394, docs/design/threads 13.3), while threads are on: one that is a shared
+ * thread opens it in the threads panel, its status beside; any other can be tracked as one, in a
+ * lane the owner picks (on the owner's computer, behind the passkey when that gate is on).
+ */
+function TopicAsThread({
+  topic,
+  work,
+  agents,
+  disabled,
+}: {
+  topic: string
+  work: TopicWork | null
+  agents: AgentsView | null
+  disabled: boolean
+}) {
+  const t = useT()
+  const threads = useThreadsContext()
+  const { data, toast } = useBoardContext()
+  const [picking, setPicking] = useState(false)
+  const [lane, setLane] = useState('')
+  const [busy, setBusy] = useState(false)
+  if (!threads) return null
+  if (work)
+    return (
+      <div className="wt-topic" data-topic-thread={work.key}>
+        <span className="wt-topic-pill" style={{ '--c': statusColor(work.status) }}>
+          <StatusDot status={work.status} />
+          {work.key}
+        </span>
+        <span className="wt-topic-status">{statusWord(work.status, t)}</span>
+        <button type="button" className="mini" onClick={() => threads.open(work.key)}>
+          {t('wt.topic.open')}
+        </button>
+      </div>
+    )
+  // Tracking shares as the owner: only where the owner's switches are (the computer, not a phone).
+  if (!agents) return null
+  const lanes = data?.categories ?? []
+  const track = async () => {
+    if (!lane || busy) return
+    setBusy(true)
+    try {
+      const r = await ownerPost('/api/threads', { op: 'track', topic, lane })
+      setPicking(false)
+      if (typeof r.key === 'string') threads.open(r.key)
+    } catch (err) {
+      if (!(err instanceof ApiError && err.reply.error === 'cancelled'))
+        toast(confirmError(err, t) ?? errorText(err, t), true)
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (!picking)
+    return (
+      <div className="wt-topic">
+        <button
+          type="button"
+          className="mini"
+          disabled={disabled}
+          title={t('wt.topic.trackHint')}
+          onClick={() => setPicking(true)}
+        >
+          {t('wt.topic.track')}
+        </button>
+      </div>
+    )
+  return (
+    <div className="wt-topic picking">
+      <label className="wt-share-to">
+        <span>{t('wt.topic.lane')}</span>
+        <select value={lane} disabled={busy} onChange={e => setLane(e.target.value)}>
+          <option value="">{t('wt.topic.pickLane')}</option>
+          {lanes.map(c => (
+            <option key={c.id} value={c.id}>
+              {c.title}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button type="button" className="mini" onClick={() => setPicking(false)}>
+        {t('wt.share.cancel')}
+      </button>
+      <button type="button" className="mini primary" disabled={!lane || busy || disabled} onClick={() => void track()}>
+        {t('wt.topic.trackGo')}
+      </button>
+    </div>
+  )
 }

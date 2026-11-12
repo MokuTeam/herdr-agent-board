@@ -6,6 +6,10 @@
 //   GET  /api/threads/<key or id>?last=&since=&full=1                      the head and entries
 //   POST /api/threads {op: 'new', lane, title, parent?, to?, doing?}
 //   POST /api/threads/<key or id> {op: 'post' | 'set' | 'ask' | 'answer' | 'confirm' | 'keep', ...}
+//   POST /api/threads/<key or id> {op: 'send', entry}        a shared entry to the peers (#394)
+//   POST /api/threads/<key or id> {op: 'share', to, history?} | 'unshare' | 'decline-share'
+//                                 | 'take' | 'decline' (an offer) | 'history'
+//   POST /api/threads {op: 'track', topic, lane}               a Team topic as a thread (13.3)
 //   GET  /api/threads/events                                               SSE: `rev` on each change
 //
 // A write over HTTP is the owner's: the party comes from the path, never from the body (3.2). A
@@ -27,6 +31,7 @@ import {
   watchesOf,
 } from '../../adapters/work-thread-store.ts'
 import { t } from '../../core/lang.ts'
+import { type OwnerAction, unlocks } from '../../core/team-confirm.ts'
 import type { Config } from '../../core/types.ts'
 import {
   isOpen,
@@ -34,6 +39,7 @@ import {
   MINE,
   OWNER,
   type Party,
+  sharedOf,
   THREAD_KEY,
   type ThreadEntry,
   type ThreadEntryView,
@@ -43,6 +49,9 @@ import {
   type ThreadView,
   threadsConfig,
 } from '../../core/work-threads.ts'
+import type { TeamConfirm } from '../../services/team-confirm.ts'
+import type { SendOut, WorkHub } from '../../services/work-hub.ts'
+import { declineOffer, declineShare, myPeer, takeOffer, unshareThread } from '../../services/work-share.ts'
 import {
   answerAsk,
   askOwner,
@@ -104,6 +113,10 @@ export interface ThreadsApp {
   schedule?: EventSchedule
   state?: string
   now?: () => number
+  /** Shared threads over the hub (#394): absent, every share op is refused. */
+  work?: WorkHub
+  /** The owner's passkey (#224): what sends as the owner waits for it while it is on. */
+  confirm?: Pick<TeamConfirm, 'required' | 'unlocked' | 'safe' | 'pend' | 'urlOf'>
 }
 
 /** The revision's own stream: made on its first client, so a board with threads off keeps no timer for it. */
@@ -252,7 +265,7 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
   function one(word: string, url: URL): Response {
     return withDb(false, db => {
       if (!db) return json(404, { ok: false, error: t('thread.err.gone'), code: 'not_found' })
-      const head = findThread(db, word, null)
+      const head = findThread(db, word, null, true)
       const p = url.searchParams
       const since = intParam(p.get('since'))
       const last = intParam(p.get('last'))
@@ -278,16 +291,112 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
 
   /** A thread a body names as a parent, or none. */
   const parentOf = (db: BoardDb, v: unknown): ThreadHead | null | undefined =>
-    v === null || v === 'none' ? null : typeof v === 'string' && v ? findThread(db, v, null) : undefined
+    v === null || v === 'none' ? null : typeof v === 'string' && v ? findThread(db, v, null, true) : undefined
 
   /** The assignee a body names: a session on this board by its card key, or nobody; refused otherwise. */
-  const assigneeOf = (v: unknown): Party | null => {
+  /**
+   * The assignee a body names: a session on this board by its card key, or nobody; on a shared
+   * thread also a teammate's board in its scope by its peer id (11.6, an offer). Refused otherwise.
+   */
+  const assigneeOf = (v: unknown, head?: ThreadHead): Party | null => {
     if (v === null || v === 'none') return null
+    if (isRecord(v) && typeof v.peer === 'string') {
+      const s = head ? sharedOf(head) : null
+      const inScope =
+        !!s && (s.kind === 'peer' ? s.peer === v.peer : s.kind === 'team' || !!s.members?.includes(v.peer))
+      if (!inScope || !/^[A-Za-z0-9_-]{43}$/.test(v.peer)) throw new ThreadError('assignee', t('thread.err.bad'))
+      return { kind: 'peer', peer: v.peer, name: typeof v.name === 'string' ? v.name.slice(0, 40) : v.peer.slice(0, 8) }
+    }
     if (!isRecord(v) || typeof v.key !== 'string' || !v.key) throw new ThreadError('assignee', t('thread.err.bad'))
     return { kind: 'session', key: v.key, name: typeof v.name === 'string' ? v.name.slice(0, 80) : v.key.slice(0, 8) }
   }
 
-  async function write(body: Record<string, unknown>, word: string | null): Promise<Response> {
+  /** Why an owner's action that goes out may not go now (428 with its confirmation), or null (#224). */
+  function gate(req: Request, action: OwnerAction): Response | null {
+    const c = app.confirm
+    if (!c?.required()) return null
+    if (unlocks(action) && c.unlocked(req.headers.get('x-board-unlock'))) return null
+    if (!c.safe()) return json(503, { ok: false, error: 'loopback' })
+    const id = c.pend(action)
+    return json(428, { ok: false, error: 'confirm', id, confirm: c.urlOf(id) })
+  }
+
+  const unlockedBy = (req: Request): boolean =>
+    !app.confirm?.required() || app.confirm.unlocked(req.headers.get('x-board-unlock'))
+
+  /** The share ops (#394): what goes to the hub, behind the passkey; what only narrows, at once. */
+  async function shareOp(body: Record<string, unknown>, word: string, req: Request): Promise<Response | null> {
+    const op = body.op
+    if (!['share', 'unshare', 'decline-share', 'take', 'decline', 'history', 'send'].includes(String(op))) return null
+    const work = app.work
+    if (!work?.on()) throw new ThreadError('share_off', t('thread.err.shareOff'))
+    if (op === 'send') {
+      const entry = String(body.entry ?? '')
+      const r = await work.send(entry, unlockedBy(req))
+      if (r.state === 'confirm') return gate(req, { kind: 'thread-send', entry }) ?? json(200, sendReply(r))
+      app.changed()
+      return json(200, sendReply(r))
+    }
+    if (op === 'share' || op === 'history') {
+      const to = String(body.to ?? '')
+      const action: OwnerAction =
+        op === 'share'
+          ? { kind: 'thread-share', thread: word, to, history: body.history === true }
+          : { kind: 'thread-history', thread: word }
+      const wait = gate(req, action)
+      if (wait) return wait
+      const r = await performThreadAction(work, action)
+      app.changed()
+      return json(r.status, r.body)
+    }
+    // Unshare and declines narrow; Take and Decline write the owner's entry, which then goes as any does.
+    const written = withDb(true, db => {
+      if (!db) throw new ThreadError('no_db', t('thread.err.noDb'))
+      const head = findThread(db, word, null, true)
+      const ctx = { ...ctxOf(db), me: myPeer() }
+      if (op === 'unshare') return unshareThread(ctx, head)
+      if (op === 'decline-share') return declineShare(ctx, head)
+      if (op === 'take') return takeOffer(ctx, head)
+      return declineOffer(ctx, head, typeof body.text === 'string' ? body.text : '')
+    })
+    app.changed()
+    return sendWritten(written, req, { ok: true, key: written.head.key, head: written.head, entry: written.entry })
+  }
+
+  /** After an owner's write on a shared thread: its entry goes, or waits for the passkey (428). */
+  async function sendWritten(
+    written: { entry: ThreadEntry },
+    req: Request,
+    out: Record<string, unknown>,
+  ): Promise<Response> {
+    if (written.entry.out !== 'queued' || !app.work?.on()) return json(200, out)
+    const r = await app.work.send(written.entry.id, unlockedBy(req))
+    app.changed()
+    if (r.state === 'confirm') {
+      const wait = gate(req, { kind: 'thread-send', entry: written.entry.id })
+      if (wait) return wait
+    }
+    return json(200, { ...out, ...sendReply(r) })
+  }
+
+  async function write(body: Record<string, unknown>, word: string | null, req: Request): Promise<Response> {
+    if (word !== null) {
+      const shared = await shareOp(body, word, req)
+      if (shared) return shared
+    } else if (body.op === 'track') {
+      const work = app.work
+      if (!work?.on()) throw new ThreadError('share_off', t('thread.err.shareOff'))
+      const action: OwnerAction = {
+        kind: 'thread-track',
+        topic: String(body.topic ?? ''),
+        lane: String(body.lane ?? ''),
+      }
+      const wait = gate(req, action)
+      if (wait) return wait
+      const r = await performThreadAction(work, action)
+      app.changed()
+      return json(r.status, r.body)
+    }
     // Only what the page uploaded: a path inside the board's uploads, resolved, that is there.
     const root = resolve(uploadsDir()) + sep
     const files = strings(body.files, 5).map(p => resolve(p))
@@ -308,7 +417,7 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
           }),
         }
       }
-      const head = findThread(db, word, null)
+      const head = findThread(db, word, null, true)
       switch (body.op) {
         case 'post': {
           const status = body.status
@@ -330,7 +439,7 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
           return {
             written: setFields(ctx, head, {
               ...(typeof body.title === 'string' && { title: body.title }),
-              ...(body.assignee !== undefined && { assignee: assigneeOf(body.assignee) }),
+              ...(body.assignee !== undefined && { assignee: assigneeOf(body.assignee, head) }),
               ...(typeof body.lane === 'string' && { lane: body.lane }),
               ...(body.parent !== undefined && { parent: parentOf(db, body.parent) ?? null }),
             }),
@@ -346,8 +455,6 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
         case 'keep':
           return { written: keepOpen(ctx, head) }
         case 'watch':
-        case 'share':
-        case 'unshare':
           throw new ThreadError('later', t('thread.err.later'))
         default:
           throw new ThreadError('bad', t('thread.err.bad'))
@@ -355,7 +462,7 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
     })
     app.changed()
     const { written } = done
-    const out: Record<string, unknown> = { ok: true, key: written.head.key, head: written.head, entry: written.entry }
+    let out: Record<string, unknown> = { ok: true, key: written.head.key, head: written.head, entry: written.entry }
     const answered = 'answered' in done ? done.answered : undefined
     if (answered?.asker) {
       // The owner's own words, typed in full into the session that asked (6.6); its card's question goes.
@@ -368,6 +475,12 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
       if (told.ok) await app.clearAsk(asker, answered.question)
       out.told = told.ok
       if (!told.ok) out.why = told.error
+    }
+    // A shared thread's entry (#394): sent now, or waiting for the passkey.
+    if (written.entry.out === 'queued') {
+      const sent = await sendWritten(written, req, out)
+      if (sent.status !== 200) return sent
+      out = (await sent.json()) as Record<string, unknown>
     }
     return json(200, out)
   }
@@ -410,11 +523,11 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
       method: 'POST',
       path: '/api/threads',
       guard: ['board-header'],
-      async handle(_req, ctx) {
+      async handle(req, ctx) {
         if (!on()) return off()
         const raw = await ctx.rawBody()
         try {
-          return await write(isRecord(raw) ? raw : {}, null)
+          return await write(isRecord(raw) ? raw : {}, null, req)
         } catch (err) {
           return refusal(err)
         }
@@ -424,11 +537,11 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
       method: 'POST',
       path: /^\/api\/threads\/([^/]+)$/,
       guard: ['board-header'],
-      async handle(_req, ctx) {
+      async handle(req, ctx) {
         if (!on()) return off()
         const raw = await ctx.rawBody()
         try {
-          return await write(isRecord(raw) ? raw : {}, ctx.params[0] ?? '')
+          return await write(isRecord(raw) ? raw : {}, ctx.params[0] ?? '', req)
         } catch (err) {
           return refusal(err)
         }
@@ -455,7 +568,7 @@ export function threadReveal(
   const known = (db: BoardDb | null): boolean => {
     if (!db) return false
     try {
-      return findThread(db, key, null).key === key
+      return findThread(db, key, null, true).key === key
     } catch {
       return false
     }
@@ -464,4 +577,114 @@ export function threadReveal(
   state.asked(key)
   events.event('thread-open', { key })
   return json(200, { ok: true, thread: key, pages: events.size() })
+}
+
+/** What a send of a shared entry answers (#394): its state, and the reason a held one waits. */
+function sendReply(r: SendOut): Record<string, unknown> {
+  return {
+    ok: r.state !== 'refused',
+    out: r.state,
+    ...(r.state === 'held' && { reason: r.reason, ...(r.detail && { detail: r.detail }) }),
+    ...(r.state === 'queued' && { why: r.why }),
+    ...(r.state === 'refused' && { error: r.error }),
+  }
+}
+
+/**
+ * A shared thread's owner action, once it may go (#394): at once with the passkey off, or when
+ * the confirmation window confirmed it (server/routes/team.ts perform).
+ */
+export async function performThreadAction(
+  work: WorkHub,
+  a: OwnerAction,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  try {
+    if (a.kind === 'thread-send') {
+      const r = await work.send(a.entry, true)
+      return { status: r.state === 'refused' ? 400 : 200, body: sendReply(r) }
+    }
+    if (a.kind === 'thread-share') {
+      const r = await work.share(a.thread, a.to, a.history)
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          key: r.written.head.key,
+          head: r.written.head,
+          ...sendReply(r.sent),
+          ...(r.history && { history: r.history.state }),
+        },
+      }
+    }
+    if (a.kind === 'thread-history') {
+      const r = await work.history(a.thread)
+      return { status: r.state === 'refused' ? 400 : 200, body: sendReply(r) }
+    }
+    if (a.kind === 'thread-track') {
+      const r = await work.track(a.topic, a.lane)
+      return { status: 200, body: { ok: true, key: r.written.head.key, head: r.written.head, ...sendReply(r.sent) } }
+    }
+    return { status: 400, body: { ok: false, error: 'kind' } }
+  } catch (err) {
+    if (err instanceof ThreadError)
+      return { status: err.code === 'not_found' ? 404 : 400, body: { ok: false, error: err.message, code: err.code } }
+    return { status: 500, body: { ok: false, error: err instanceof Error ? err.message : String(err) } }
+  }
+}
+
+/** What the confirmation window shows of a shared thread's action (#394), in the board's words. */
+export function describeThreadAction(a: OwnerAction, nameOf: (peer: string) => string): Record<string, unknown> {
+  const head = (word: string): ThreadHead | null => {
+    try {
+      return withThreadsDb(false, db => (db ? findThread(db, word, null, true) : null))
+    } catch {
+      return null
+    }
+  }
+  if (a.kind === 'thread-send') {
+    const found = withThreadsDb(false, db => {
+      if (!db) return null
+      const e = db.db.query('SELECT thread, text, fields, files FROM thread_entries WHERE id = ?').get(a.entry) as {
+        thread: string
+        text: string
+        fields: string | null
+        files: string | null
+      } | null
+      if (!e) return null
+      const h = db.db.query('SELECT key, title FROM threads WHERE id = ?').get(e.thread) as {
+        key: string
+        title: string
+      } | null
+      // Everything the entry sends, said: its words, what it changes, its file.
+      const set = (e.fields ? JSON.parse(e.fields) : {}) as Record<string, unknown>
+      const files = (e.files ? JSON.parse(e.files) : []) as { name?: string }[]
+      const changes = [
+        typeof set.status === 'string' && `status: ${set.status}`,
+        typeof set.summary === 'string' && set.summary && `summary: ${set.summary}`,
+        typeof set.waitingOn === 'string' && set.waitingOn && `waiting on: ${set.waitingOn}`,
+        typeof set.title === 'string' && `title: ${set.title}`,
+        set.assignee !== undefined && 'a new assignee',
+        ...files.map(f => `file: ${String(f.name ?? '')}`),
+      ].filter(Boolean)
+      const text = [e.text, changes.join(' · ')].filter(Boolean).join('\n')
+      return h ? { text, key: h.key, title: h.title } : null
+    })
+    return { kind: a.kind, ...(found && { thread: found.key, title: found.title, text: found.text }) }
+  }
+  if (a.kind === 'thread-share') {
+    const h = head(a.thread)
+    const isPeer = /^[A-Za-z0-9_-]{43}$/.test(a.to)
+    return {
+      kind: a.kind,
+      ...(h && { thread: h.key, title: h.title }),
+      who: isPeer ? nameOf(a.to) : a.to,
+      history: a.history,
+    }
+  }
+  if (a.kind === 'thread-history') {
+    const h = head(a.thread)
+    return { kind: a.kind, ...(h && { thread: h.key, title: h.title }) }
+  }
+  if (a.kind === 'thread-track') return { kind: a.kind, lane: a.lane }
+  return { kind: a.kind }
 }

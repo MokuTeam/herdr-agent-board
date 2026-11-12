@@ -1,7 +1,8 @@
 # Threads: one store for tasks and reports
 
-Design for [#379](https://github.com/MokuTeam/herdr-agent-board/issues/379). Phase 1 (the store,
-`board thread` and events, #391) and phase 2 (the board's view, #392) are built; the rest is not yet. The document is written so that an
+Design for [#379](https://github.com/MokuTeam/herdr-agent-board/issues/379). Phases 1 to 4 (the
+store, `board thread` and events, #391; the board's view, #392; what MokuPilot needs, #393; shared
+threads over the hub, #394) are built; phases 5 and 6 are not yet. The document is written so that an
 agent who was not part of the discussion can build each phase from it. Mockups are in [mockups/](mockups/): open `mockups/index.html` in a browser. The page
 has switches for the app (board, MokuPilot), the width (desktop, phone) and the theme, and
 `index.html?theme=dark&width=phone#mokupilot` opens it in a given state.
@@ -845,6 +846,52 @@ threads cover the same ground:
 
 The recommendation is to close #212 and #213 in favour of the hub phase here, once the owner has
 agreed to this design.
+
+### 11.7 As built in phase 4 (#394)
+
+- The wire: `work` is said in `hello` after the other caps only while `threads` (with `share`) and
+  `team` are on; off, the hello, the payload and the inbound event are what they were. `readWork`
+  (`core/team.ts`) holds the field to its keys and limits, and only in a topic. A message with
+  `work` on a board that does not keep shared threads, or one that does not fit a thread it shares
+  with the sender, is dropped and acked, as a bad frame is.
+- The rules are in `core/work-share.ts` (the order, the fold, what goes on the wire, what a peer may
+  set, the board's line for a peer without `work`), the database side in `services/work-share.ts`,
+  the side that holds the Team service in `services/work-hub.ts`.
+- A shared entry starts `queued`. `board thread` asks the running board to send it and prints
+  `sent`, `held for the owner: <reason>`, `waits for the owner's passkey on the board`, or `saved,
+  goes out when the board runs`; the board sends what waits once it is online. A session's entry
+  goes through `agentPost` (a held one is a Team draft that carries the entry, and its state follows
+  the draft: `sent` when the owner sends it, `discarded` when the owner drops it); the owner's goes
+  behind the passkey when that gate is on (`thread-send`, which unlocks sending as a Send does).
+- `board thread share` is a request on the thread from any caller of the command: only the page
+  shares (`thread-share`, gated). The owner's own entry written by the command outside a session
+  waits as `held` for the owner's Send on the page, since any program can run the command as the
+  owner; an agent's entry is checked by `agentPost` with its `work` fields (summary, what it waits
+  on, title) as well as its text. Sharing writes one system entry that carries the head; its text
+  for a board without `work` is `shared as a thread: atlas-13 · doing: <summary>`. "Send history"
+  (`thread-history`) sends the shared entries as a JSON file through the end-to-end encrypted files;
+  the receiving board reads it in once the file is there, each entry it lacks marked as a copy, never
+  one the file says it wrote itself. Unsharing sends `stopped sharing` and keeps the feed.
+- The entry that adopts a sender's head (rule 3) is a private system entry in the sender's name,
+  ordered right after the sender's entry. A local session's close that only proposed (3.5) goes out
+  without its status and summary, so no copy closes what the owner has not confirmed.
+- An assignee from a peer that names this board is an offer (`scope.offer`), counted under "needs
+  you" until the owner's Take or Decline; one that names a session of this board is refused (the
+  rest of the entry is kept). Any other peer, or nobody, is taken.
+- A bare key that names a local thread and a peer's `key@name` is refused as ambiguous by the
+  command; the page asks by the exact key.
+- One file per entry on a shared thread; only the owner drops a shared thread.
+- What one peer can make this board hold is bounded: 500 threads it started (closed ones count),
+  2,000 of its entries in one thread, a counter that moves by 100,000 at most per entry. A peer's
+  thread sits in the lane its key names only when that lane is one of this board's and shared with
+  the peer, else in `shared`; a peer's key far above this board's own numbers in a lane does not
+  move them. A peer's system entry keeps no words (only this board's own lines do), its time is held
+  to a day ahead, and a history file's entries are held to the same checks as the wire's (`readWork`),
+  never offer anything, and are folded once.
+- A topic's message that is a shared thread's entry tells the thread's watchers only; the Team
+  router's notice for the topic is not sent as well. A message held because its sender's key
+  changed is not taken into the thread.
+- `board mcp` is a stdio MCP server with the two tools of 5.4.
 
 ## 12. Chats
 

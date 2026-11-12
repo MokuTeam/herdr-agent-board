@@ -28,6 +28,7 @@ import {
   type Message,
   type OutState,
   type Via,
+  type WorkPost,
 } from '../core/team.ts'
 import { type BoxKeyPair, generateBoxKey } from '../core/team-box.ts'
 import type { Alg } from '../core/webauthn.ts'
@@ -355,6 +356,8 @@ export interface Draft {
   replyTo?: string
   /** A file the agent attached (#371): the board's own copy, taken when the draft was made. */
   file?: DraftFile
+  /** A shared thread's entry (#394): its id (the message's when sent) and its `work`. */
+  work?: WorkPost
 }
 export interface DraftFile {
   path: string

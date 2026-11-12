@@ -181,6 +181,8 @@ export interface TimePayload {
 export interface ThreadsPayload {
   rev: number
   needsOwner: number
+  /** Moves when a shared entry's way to the hub changed (#394): absent until one did. */
+  out?: number
 }
 
 /** What the board's payload says of the calendar (#328). */

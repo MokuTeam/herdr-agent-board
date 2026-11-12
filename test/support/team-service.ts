@@ -2,7 +2,13 @@
 // a handshake from the hub's side, and a service in an isolated home with a clock the test moves.
 import { expect } from 'bun:test'
 import { authBytes, type Frame, parseFrame, verify } from '../../src/core/team.ts'
-import { createTeam, type InboundEvent, type TeamService, type WsLike } from '../../src/services/team-hub.ts'
+import {
+  createTeam,
+  type InboundEvent,
+  type TeamService,
+  type WorkHooks,
+  type WsLike,
+} from '../../src/services/team-hub.ts'
 import { fakeClock } from '../hub/harness.ts'
 import { isolatedHome } from './env.ts'
 
@@ -53,9 +59,10 @@ export function stopAll(): void {
 }
 
 /** `onInbound`: the router's hook (#216). */
-export function setup(...given: [unknown?, { onInbound?: (e: InboundEvent) => void }?]) {
+export function setup(...given: [unknown?, { onInbound?: (e: InboundEvent) => void; work?: WorkHooks }?]) {
   const team = given.length ? given[0] : { hub: HUB, name: 'me' }
   const onInbound = given[1]?.onInbound
+  const work = given[1]?.work
   isolatedHome()
   const cfg: { team: unknown } = { team }
   const clock = fakeClock()
@@ -73,6 +80,7 @@ export function setup(...given: [unknown?, { onInbound?: (e: InboundEvent) => vo
       onInbound?.(e)
     },
     random: () => 0.5,
+    ...(work && { work }),
     socket: url => {
       const w = new FakeWs(url)
       sockets.push(w)

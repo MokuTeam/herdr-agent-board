@@ -77,6 +77,7 @@ import {
   type TunnelPlan,
 } from '../services/tunnel.ts'
 import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
+import { createWorkHub, type WorkHub } from '../services/work-hub.ts'
 import { keepThreadsDb, threadsPayload } from '../services/work-threads.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, peerOf, type Route } from './http.ts'
@@ -458,15 +459,33 @@ export async function startServer({
       // The service's own name for a peer (roster, pins, the key's start), one line, cut.
       nameOf: peer => toastBody(team.nameOf(peer), MAX_NAME),
     }))
+  // Shared threads (#394): a topic that carries a status, while threads (with `share`) and Team are
+  // on. Off, its hooks answer no and the hub client says and takes nothing of them.
+  let workHub: WorkHub | null = null
   const team = createTeam({
     cfg,
     log,
     version: PLUGIN_VERSION || 'dev',
-    onChange: () => board.publish(),
+    onChange: () => {
+      board.publish()
+      // What waits for the hub goes once it is there; drafts and history files are followed up.
+      if (workHub?.on()) void workHub.flush()
+    },
+    work: {
+      on: () => workHub?.on() ?? false,
+      mayTake: m => workHub?.mayTake(m) ?? false,
+    },
     // Each hearer on its own: one that throws keeps neither the other nor the message's ack back.
     onInbound: e => {
+      // An entry of a shared thread tells the thread's watchers (#394); the topic's notice would say it twice.
+      let taken = false
       try {
-        teamRouter.inbound(e)
+        taken = workHub?.inbound(e) ?? false
+      } catch (err) {
+        log(`threads: a shared entry failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      try {
+        if (!taken) teamRouter.inbound(e)
       } catch (err) {
         log(`team: the router failed on a message: ${err instanceof Error ? err.message : String(err)}`)
       }
@@ -485,6 +504,15 @@ export async function startServer({
     schedule: noticeSchedule,
     log,
   })
+  workHub = createWorkHub({
+    cfg,
+    team,
+    router: teamRouter,
+    gated: () => teamConfirm.required(),
+    log,
+    changed: () => board.publish(),
+  })
+  const work = workHub
   // The head's count: read again whenever the team changed (a message, a trim, a trust).
   let unreadRev: number | null = null
   const teamUnread = (): number | null => {
@@ -611,7 +639,9 @@ export async function startServer({
     threads: () => {
       const line = threadsPayload(cfg)
       if (line) threadRevs.moved(line.rev)
-      return line
+      // An entry's way to the hub moved (#394): the page reads its thread again.
+      const out = work.rev()
+      return line && out ? { ...line, out } : line
     },
   })
   board.publish()
@@ -670,6 +700,7 @@ export async function startServer({
         board.publish()
       },
       teamConfirm,
+      work,
     ),
     // The owner read a thread, or clicked a team notification on the desktop (#355).
     ...teamNotifyRoutes({
@@ -696,6 +727,8 @@ export async function startServer({
           const { readCard, writeCard } = await import('../adapters/cards.ts')
           if (readCard(key)?.ask === question) writeCard(key, { ask: '', askSince: '' })
         },
+        work,
+        confirm: teamConfirm,
       },
       threadRevs,
     ),
