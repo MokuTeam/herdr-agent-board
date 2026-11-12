@@ -10,39 +10,42 @@ assistant's server joins the hub as the peer `anna-assistant`; ben and cleo are 
 host assistant has topics such as `hub`, `travel` and `garden`, and runs a group assistant for a
 group chat called `book-club`.
 
-## Open questions for the owner
+## What the owner wants first
 
-Each has a recommendation; the design follows it until the owner says otherwise.
+Two things, and phase 1 does both:
 
-1. **Who may address the assistant.** Default: the owner's own board only (the owner in the Team
-   panel and the owner's sessions). A teammate is added by name later, as a `member` (8.1). Should
-   a member's request get the same free hand as the owner's? Recommendation: no. The assistant
-   handles a member's request the way it handles a request from a person in one of its group
-   chats, and anything that commits the owner goes to the owner first.
-2. **The roster.** The hub has no way to hide a peer, so ben and cleo will see `anna-assistant` in
-   the roster. Their messages are dropped, and the bridge answers once with one line, "this
-   assistant takes messages from anna's board only". Acceptable, or should the hub learn to show a
-   peer to chosen members only (a hub change, an extra phase)? Recommendation: acceptable.
-3. **The bridge's own system user.** Run the bridge as a system user of its own, as the hub runs,
-   so that the host assistant (which runs with the owner's user rights) cannot read the bridge's
-   key; or as the NanoClaw user, which is simpler to install. Recommendation: its own user (7.3).
-4. **What the owner sees in the inbox topic.** The owner creates one Telegram topic for hub
-   traffic by hand. The bridge writes one line there for each new hub topic (who and the title,
-   never the text), and the assistant writes what it decides to. Or nothing from the bridge, only
-   the assistant's own lines. Recommendation: the bridge's title lines.
-5. **What the directory publishes.** Only the topics and groups the owner lists in the bridge's
-   config, each under an alias the owner picks; or every topic the host assistant has.
-   Recommendation: only the listed ones (4.5).
-6. **Limits.** Batched traffic is read twice a day (09:00 and 18:00 server time) and only when
-   something waits; at most 10 wakes an hour from the hub; the loop pause after 20 agent messages
-   in a row in a thread, the board's default. Keep these numbers?
-7. **Lanes for the bridge peer on the owner's board.** The board lets a session write to a peer
-   without a draft only from a lane shared with that peer. Which lanes may the owner's sessions
-   talk about with the server assistant? Recommendation: personal lanes; client lanes only when a
-   task needs one, since whatever the assistant receives sits on the server.
-8. **Where the NanoClaw part goes.** A change in the owner's NanoClaw checkout, reviewed there like
-   any other change, with the same files kept in this repository as a NanoClaw skill for other
-   owners (9.1). Recommendation: yes, both.
+- **From the board to the assistant.** The owner, or one of the owner's sessions, sends something
+  from the board to the assistant on the server: a task, a file's contents, a question.
+- **From the assistant back to the board.** The owner, talking to the assistant in any of its
+  Telegram topics, has it send something to the board: a result, a note for a session, a task.
+
+Everything else in this document (moving threads between topics, the directory, group assistants,
+files, shared threads) builds on those two paths.
+
+## The owner's decisions
+
+The open questions of the first draft, answered by the owner on 2026-11-12. The document below
+follows these answers.
+
+1. **Who may address the assistant:** the owner's own board only (the owner in the Team panel and
+   the owner's sessions). A teammate can be added later as a `member` (8.1), whose requests the
+   assistant handles the way it handles a request from a person in one of its group chats; anything
+   that commits the owner goes to the owner first.
+2. **The roster:** teammates see `anna-assistant` in the roster and get one line back if they write,
+   "this assistant takes messages from anna's board only". No hub change.
+3. **No separate system user.** The bridge runs as the same user as NanoClaw, and the key is
+   protected by file permissions (7.3).
+4. **The inbox topic:** the bridge writes one line there for each new hub topic (who and the title,
+   never the text), and the assistant writes what it decides to.
+5. **The directory** publishes only the aliases the owner lists in the bridge's config (4.5).
+6. **Limits:** batched traffic is read at 09:00 and 18:00 server time and only when something
+   waits; at most 10 wakes an hour from the hub; the loop pause after 20 agent messages in a row in
+   a thread.
+7. **Lanes:** the owner's sessions may talk with the assistant from every lane. Which lanes the
+   board shares with the bridge peer is a setting, and its default is all lanes (8.4).
+8. **The NanoClaw part** is a change in the owner's NanoClaw checkout, reviewed there like any
+   other change, and the same files are kept in this repository as a NanoClaw skill for other
+   owners (9.1).
 
 ## Contents
 
@@ -147,8 +150,10 @@ Read from the code at `main` 0995603b.
 
 ### 2.2 NanoClaw
 
-Read from a NanoClaw 2.0 checkout (the v2 architecture, 2.0.64 at the time of writing). File names
-are relative to NanoClaw's root; line numbers drift between versions and are left out.
+The design targets the NanoClaw the owner runs: a fork of NanoClaw 2.0.64 (the v2 architecture)
+with the owner's own commits, and after that the fork's main branch. Upstream NanoClaw has moved on
+since; this design does not track it. The facts below were read from the owner's checkout. File
+names are relative to NanoClaw's root; line numbers are left out.
 
 - **One host process.** A single Node process runs the channels, the router, delivery and a sweep.
   A central SQLite DB holds agent groups, messaging groups (chats), the wirings between them,
@@ -277,8 +282,6 @@ The hub part does not have to, and four things argue for keeping it out:
 - **NanoClaw restarts often** (an owner may deploy it automatically from a branch). The bridge keeps
   its hub connection and its queue through those restarts and delivers what arrived once the module
   is back.
-- **The key can be out of the agents' reach.** The host assistant runs with the NanoClaw user's
-  rights; a bridge under a user of its own keeps the key away from it (7.3).
 - **Off is simple to prove.** Without the bridge's socket configured, the module's factory returns
   null and NanoClaw runs exactly its old code (9.4).
 
@@ -287,6 +290,9 @@ phase ships both halves.
 
 The alternative, all of it inside NanoClaw, works too: one process, no socket. It is the fallback
 if the owner prefers one piece over the reasons above.
+
+Both run as the same user (the owner's decision 3). The bridge's state directory lies outside every
+directory NanoClaw mounts into a container.
 
 ### 3.2 The bridge's store
 
@@ -306,8 +312,8 @@ peer not on the allow list), so the hub does not hold it for days.
 
 ### 3.3 The socket
 
-Newline-delimited JSON over a unix socket in the bridge's runtime directory, group-writable for
-NanoClaw's user and nobody else. Every frame has `v: 1`.
+Newline-delimited JSON over a unix socket in the bridge's state directory, mode 0600, owned by the
+user both run as. Every frame has `v: 1`.
 
 | Frame | From | What it does |
 |---|---|---|
@@ -449,11 +455,12 @@ humans' chat. The tool names its thread and has no default that leads into Teleg
 - The bridge advertises the caps `threads`, `replies` and `channels` in phase 1, `files` in phase 4,
   `work` in phase 5, and `assistant` from the start. The board ignores caps it does not use;
   `assistant` is there so that a later board can show the directory and compose an assignee.
-- On anna's board, `anna-assistant` is a peer like ben. The owner turns Agents on for it and shares
-  the lanes the sessions may talk about (open question 7). Notices, `board team thread`, drafts and
-  the loop pause work unchanged.
-- Nothing in the board's code changes in phases 1 to 4. Phase 2 adds a paragraph to the
-  `agent-board-team` skill: how to read an assistant's directory and name a target.
+- On anna's board, `anna-assistant` is a peer like ben. The owner turns Agents on for it, and every
+  lane is shared with it unless the owner narrows that (8.4). Notices, `board team thread`, drafts
+  and the loop pause work unchanged.
+- The board's code changes in one place before phase 5: the "all lanes" setting of 8.4, in phase 1.
+  Phase 2 adds a paragraph to the `agent-board-team` skill: how to read an assistant's directory
+  and name a target.
 
 ### 4.8 A worked example
 
@@ -664,12 +671,15 @@ characters:
 
 ### 7.3 The host assistant
 
-The host assistant runs as a plain process with the NanoClaw user's rights and skips permission
-prompts. If the bridge ran as that user, the host assistant could read the bridge's key, and a host
-assistant misled by a message could hand it out. The damage would be bounded (an impostor could
-write to the owner's board as the assistant, and the board treats that as a peer's data) and
-revocable (7.1), but it is avoidable: the bridge runs as a system user of its own, as the hub does,
-and the socket is the only surface it shares with NanoClaw (open question 3).
+The bridge runs as the same user as NanoClaw (the owner's decision 3: the owner is the only user of
+that server). The key's file permissions keep it from other users and from containers, which never
+get the state directory mounted. They do not keep it from the host assistant, which runs as a plain
+process with that user's rights and skips permission prompts: it could read the key, and a host
+assistant misled by a message could hand it out. The owner accepts that, because the damage is
+bounded and revocable. An impostor with the key could write to the owner's board as the assistant,
+and the board treats that as a peer's data, behind its notices, drafts and loop pause; revoking the
+peer on the hub (7.1) ends it. A system user of its own for the bridge would close this gap and can
+be added later without changing anything else in the design.
 
 ### 7.4 Gates
 
@@ -731,8 +741,8 @@ reconnect.
 The hub shows every peer to every member and lets every member send to every peer. With the default
 setting, ben and cleo see `anna-assistant` in their roster and get the one-line refusal if they
 write. Hiding the peer from them would be a hub change: a per-peer roster filter, and a refusal at
-`send` for senders the peer does not accept. The design does not need it; it is the extra phase in
-10 if the owner wants it (open question 2).
+`send` for senders the peer does not accept. The owner accepted the roster entry (decision 2), so
+the design does not build it.
 
 ### 8.3 Team chat and channels
 
@@ -740,6 +750,24 @@ A team post reaches every member's board, the bridge included, so the bridge rec
 chat and team topic message. With the default setting, team messages from anna's board are batched
 for the inbox and the rest are dropped. The assistant never writes to the team chat or to a channel
 unless every member of it is on the allow list, since a team post goes to everyone.
+
+### 8.4 Lanes on the owner's board
+
+The other side of visibility is what the owner's sessions may send the assistant. The board holds
+a session's post to a peer as a draft unless the session's lane is shared with that peer
+(`PeerAgents.lanes` in `src/adapters/team-store.ts`, a list of lane ids, read in `agentPost` and
+`assign` in `src/services/team-router.ts`). The owner wants every lane open to the assistant,
+lanes added later included (decision 7), so phase 1 adds one setting to a peer's switches:
+
+- `allLanes: true` on a peer means every lane is shared with it, now and later. Absent, the stored
+  list means exactly what it means today.
+- The Team panel shows "All lanes" above the list of lanes for every peer. When the owner turns
+  Agents on for a peer that advertises the `assistant` cap, "All lanes" is ticked by default and the
+  owner can untick it and pick lanes. For every other peer nothing is ticked by default, as today.
+- Turning it on widens what agents may say, so it goes through the owner's passkey confirmation
+  when that is on (`src/core/team-confirm.ts`), as adding a lane does.
+- The checks that read a peer's lanes (an agent's post, the `lane_name` check, `assign`) take
+  `allLanes` as containing every lane, and go down their old code when it is absent.
 
 ## 9. Packaging and the switch
 
@@ -751,7 +779,7 @@ not under herdr:
 ```
 assistant-bridge/
   README.md                     how to run it, the config, the socket protocol
-  assistant-bridge.service      a systemd system unit sample (own user, like hab-hub.system.service)
+  assistant-bridge.service      a systemd user unit sample, for the user NanoClaw runs as
   src/                          main.ts, bridge.ts (routing, wake, batch), store.ts, socket.ts, cli.ts
   nanoclaw/                     the NanoClaw part, as a NanoClaw utility skill
     SKILL.md                    what to copy where, the env key, how to check it
@@ -763,8 +791,9 @@ test/assistant-bridge/          the bridge's tests, in the board's suite, agains
 
 - The bridge imports `src/core/team.ts` and `team-wire.ts`, as the hub does, and nothing from the
   board's services. Zero dependencies, Bun.
-- The NanoClaw part is reviewed here and applied to an owner's NanoClaw checkout as a change there
-  (open question 8). Its tests live in that checkout, beside NanoClaw's own.
+- The NanoClaw part is reviewed here and applied to the owner's NanoClaw checkout as a change there
+  (decision 8). Its tests live in that checkout, beside NanoClaw's own. It targets the NanoClaw the
+  owner runs (2.2), not upstream.
 
 ### 9.2 The config
 
@@ -774,7 +803,7 @@ test/assistant-bridge/          the bridge's tests, in the board's suite, agains
 {
   "hub": "ws://127.0.0.1:<hub port>/v1",
   "name": "anna-assistant",
-  "socket": "<runtime dir>/bridge.sock",
+  "socket": "<state dir>/bridge.sock",
   "allow": [{ "peer": "<id>", "name": "anna", "role": "owner" }],
   "inbox": { "topic": "<thread id of the hub topic>", "notice": "title" },
   "publish": [
@@ -792,13 +821,14 @@ test/assistant-bridge/          the bridge's tests, in the board's suite, agains
 ### 9.3 Switching it on
 
 1. The hub's admin mints an invite.
-2. On the server: install the unit, write the config, run `assistant-bridge join <invite>` once, start
-   the unit.
+2. On the server, as NanoClaw's user: install the user unit, write the config, run
+   `assistant-bridge join <invite>` once, start the unit.
 3. In the NanoClaw checkout: apply the skill (one import line for the module, one for the tool
    module, the container skill), set the bridge's socket path in NanoClaw's environment, restart
    NanoClaw.
 4. The owner creates the inbox topic in Telegram and puts its thread id in the config.
-5. On the owner's board: Team panel → `anna-assistant` → Agents on, the lanes to share.
+5. On the owner's board: Team panel → `anna-assistant` → Agents on, with "All lanes" ticked by
+   default (8.4).
 
 ### 9.4 Off is the old path
 
@@ -806,17 +836,21 @@ test/assistant-bridge/          the bridge's tests, in the board's suite, agains
   no delivery actions, no hub flag passed to agents, so no tools and no container skill. NanoClaw's
   start, its tool list and its prompts are what they were.
 - Without the bridge's unit, nothing runs on the server for this.
-- Boards are unchanged in phases 1 to 4. A board that never talks to an assistant goes down exactly
-  its old code; one that does treats the bridge as a peer.
+- On a board, a peer without `allLanes` and without the `assistant` cap goes down exactly the old
+  code. A board that never talks to an assistant sees no change; one that does treats the bridge as
+  a peer.
 
 ### 9.5 Everyone's setup
 
 Per AGENTS.md, a change must leave every other setup as it was:
 
-- **Board users without an assistant** (all of them but one, today): no board code changes before
-  phase 5. Phase 2 changes only the `agent-board-team` skill's text; phase 5 adds an assignee form
-  to #379's `board thread new`, gated on the peer's `assistant` cap.
-- **The hub**: no change in any phase, unless the owner asks for the roster filter.
+- **Board users without an assistant** (all of them but one, today): phase 1 adds `allLanes` (8.4).
+  Its pull request compares old and new on a peer with a stored list, a peer with no entry, the
+  team's switches and a channel, and shows the same drafts, sends and assigns as on `main`; the
+  panel's default changes only for a peer with the `assistant` cap. Phase 2 changes only the
+  `agent-board-team` skill's text; phase 5 adds an assignee form to #379's `board thread new`, gated
+  on the peer's `assistant` cap.
+- **The hub**: no change in any phase.
 - **`src/core/team.ts` and `team-wire.ts`**: the bridge only imports them. If a phase needs an
   export they do not have, its pull request shows that the board's and the hub's tests are unchanged.
 - **NanoClaw without the bridge**: 9.4, compared in the NanoClaw pull request (start, tool list,
@@ -824,41 +858,51 @@ Per AGENTS.md, a change must leave every other setup as it was:
 
 ## 10. Phases and the issues to open
 
-Five issues in this repository, each with a NanoClaw half opened in the owner's NanoClaw checkout's
-repository. Each phase is useful when it lands and leaves every setup without the bridge as it was.
+Five issues in this repository, #386 to #390. Each phase's NanoClaw half is kept in `assistant-bridge/nanoclaw/`
+and applied to the owner's NanoClaw checkout as a change there. Each phase is useful when it lands
+and leaves every setup without the bridge as it was.
 
-### Phase 1. A hub peer for the host assistant's inbox
+### Phase 1. Both directions: the board to the assistant and back
 
-Issue: "Assistant bridge 1: a hub peer for the host assistant's inbox topic".
+Issue: [#386](https://github.com/MokuTeam/herdr-agent-board/issues/386), "Assistant bridge 1: send from the board to a NanoClaw assistant and back". This is
+what the owner wants first.
 
-- Scope: `assistant-bridge/` with enrolment, the connection loop (ping, dead timer, backoff, resend,
-  ack on every delivery: the board's shape), the store, the allow list with pins and refusals, rules
-  1, 4 and 5 of 4.2 (everything to `host:inbox`), the wake rules of 5.1 for pair and team traffic,
-  the batch with the scheduled read, loop and rate guards, the socket, the CLI (`join`, `trust`,
-  `status`), the unit sample, the README. NanoClaw half: the module for `host:inbox` only,
-  `hub_send` and `hub_inbox`, the container skill, the title notices.
+- Scope, the bridge: `assistant-bridge/` with enrolment, the connection loop (ping, dead timer,
+  backoff, resend, ack on every delivery: the board's shape), the store, the allow list with pins
+  and refusals, rules 1, 2, 4 and 5 of 4.2, the wake rules of 5.1 for pair and team traffic, the
+  batch with the scheduled read, loop and rate guards, the socket, the CLI (`join`, `trust`,
+  `status`), the unit sample, the README.
+- Scope, the way back: `hub_send` from any host topic. With `to` and `title` it opens a topic with
+  the owner's board, bound to the topic it was sent from, so the board's answers come back there
+  (rule 2). Without `thread` it answers the thread that brought the newest message (4.6).
+  `hub_inbox` reads what waits.
+- Scope, NanoClaw half: the module (the host assistant's topics as locations, the session lookup
+  per topic, injection with `trigger`, the scheduled read, the title notices in the inbox topic),
+  the `hub_send` and `hub_inbox` tools, the container skill.
+- Scope, the board: `allLanes` (8.4).
 - Done when: in the suite, against the real hub, the bridge enrols, takes a pair message from a
-  board, hands it to a fake module with `trigger: 1`, batches a team message and schedules its read,
-  sends a reply as `via: agent`; drops a peer not on the list with one refusal; survives a module
-  restart without losing a message. On the server: anna's board and the inbox topic talk both ways.
-  Without the env key NanoClaw is as before (9.4).
+  board and hands it to a fake module with `trigger: 1` for the inbox; a `hub_send` from another
+  topic opens a topic on the board and the board's reply is handed to that same topic; a team
+  message is batched and its read scheduled; a peer not on the list is dropped with one refusal; a
+  module restart loses nothing. On the server, after the owner's go: a session on the owner's board
+  and the inbox topic talk both ways, and a topic in Telegram sends to the board and gets the answer
+  back. Without the env key NanoClaw is as before (9.4); a peer without `allLanes` is as on `main`.
 - Measures: real sizes of the header, the digest row and `hub_inbox` output, and the wakes of a
   real week, put into 5.5 in place of the assumptions.
 
-### Phase 2. Bindings, topics and the directory
+### Phase 2. Moving threads, title targets and the directory
 
-Issue: "Assistant bridge 2: bind hub threads to topics, publish a directory". Depends on 1.
+Issue: [#387](https://github.com/MokuTeam/herdr-agent-board/issues/387), "Assistant bridge 2: move hub threads between topics, name a target, publish a
+directory". Depends on 1.
 
-- Scope: `hub_bind` and `hub_threads`; rules 2 and 3 of 4.2; `publish` and the directory topic;
-  outbound new topics bound to their location; the reply-to-newest rule of 4.6. NanoClaw half: any
-  host topic as a location, session lookup per topic. Here: a paragraph in the `agent-board-team`
-  skill on assistant peers.
+- Scope: `hub_bind` and `hub_threads`; rule 3 of 4.2; `publish` and the directory topic; the notice
+  row on a move. Here: a paragraph in the `agent-board-team` skill on assistant peers.
 - Done when: the worked example of 4.8 runs end to end; a title cannot move a bound thread; a move
   reaches the new topic as one row.
 
 ### Phase 3. Group assistants
 
-Issue: "Assistant bridge 3: group assistants, silently". Depends on 2.
+Issue: [#388](https://github.com/MokuTeam/herdr-agent-board/issues/388), "Assistant bridge 3: group assistants, silently". Depends on 2.
 
 - Scope: `group:` locations; the scoping of 6.2 and 7.2 in the module; the group's instructions.
 - Done when: a hub message bound to a group reaches the group's agent and nothing reaches the
@@ -868,7 +912,7 @@ Issue: "Assistant bridge 3: group assistants, silently". Depends on 2.
 
 ### Phase 4. Files
 
-Issue: "Assistant bridge 4: files both ways". Depends on 1.
+Issue: [#389](https://github.com/MokuTeam/herdr-agent-board/issues/389), "Assistant bridge 4: files both ways". Depends on 1.
 
 - Scope: the box key, blobs in and out (the board's #371 code paths reused), an inbound file saved
   in the session's inbox folder, `hub_send {file}` from a path in the session's folder, the `files`
@@ -876,7 +920,8 @@ Issue: "Assistant bridge 4: files both ways". Depends on 1.
 
 ### Phase 5. Shared threads
 
-Issue: "Assistant bridge 5: shared threads (#379 phase 4)". Depends on 2 and on #379 phase 4.
+Issue: [#390](https://github.com/MokuTeam/herdr-agent-board/issues/390), "Assistant bridge 5: shared threads (#379 phase 4)". Depends on 2 and on #379
+phase 4.
 
 - Scope: the `work` cap and body field read and written by the bridge; an assignee naming an alias
   as a target (4.4); `hub_send {status, summary}` as a `work` entry, with the fallback line for
@@ -884,16 +929,15 @@ Issue: "Assistant bridge 5: shared threads (#379 phase 4)". Depends on 2 and on 
   <peer>/<alias>` for a peer with the `assistant` cap, in the same PR or as an item of #379 phase 4.
 - Then: the title convention of 4.4 is documented as legacy.
 
-### If the owner asks: hiding the peer
-
-Issue: "Hub: a peer visible to chosen members only". A per-peer roster filter and a refusal at
-`send`; opened only on a yes to open question 2.
-
 Order: 1, then 2, then 3. 4 can run beside 2 or 3. 5 waits for #379.
 
 ## 11. Not in this design
 
 - **Mirroring Telegram.** People's messages in Telegram never go to the hub (3.4).
+- **Hiding the peer from the roster.** It would be a hub change; the owner accepted the roster entry
+  (8.2).
+- **Upstream NanoClaw.** The NanoClaw half targets the owner's NanoClaw (2.2). Porting it to a later
+  NanoClaw is that version's own change.
 - **Several assistants per server.** One bridge serves one NanoClaw install. A second install
   (another bot) gets a second bridge with its own key and name.
 - **Drafts on the server.** The bridge refuses what it will not send; the owner's board keeps its
