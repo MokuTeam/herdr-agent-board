@@ -1,0 +1,19 @@
+# The assistant bridge as a systemd user unit, for the user NanoClaw runs as (#384).
+# Install: copy to ~/.config/systemd/user/, set the two paths, then
+#   systemctl --user daemon-reload && systemctl --user enable --now assistant-bridge
+# Reload the config: systemctl --user kill -s HUP assistant-bridge
+[Unit]
+Description=assistant bridge: team hub peer for a NanoClaw assistant
+After=network-online.target
+
+[Service]
+Type=simple
+# The agent-board checkout and the bridge's state directory.
+ExecStart=/usr/local/bin/bun %h/agent-board/assistant-bridge/src/main.ts --dir %h/.local/state/assistant-bridge
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=default.target
