@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Threads Mockups</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+<header class="mock-bar">
+  <h1>Threads <small>mockups for #379</small></h1>
+  <div class="segmented" data-set="view" role="group" aria-label="Which app">
+    <button data-v="board">Board</button><button data-v="mokupilot">MokuPilot</button>
+  </div>
+  <div class="segmented" data-set="width" role="group" aria-label="Width">
+    <button data-v="desktop">Desktop</button><button data-v="phone">Phone</button>
+  </div>
+  <div class="segmented" data-set="theme" role="group" aria-label="Theme">
+    <button data-v="auto">Auto</button><button data-v="light">Light</button><button data-v="dark">Dark</button>
+  </div>
+</header>
+
+<main class="mock-main" data-view="board" data-width="desktop">
+  <noscript><p>These mockups are drawn by mock.js from one set of sample threads. Turn scripts on to see them.</p></noscript>
+
+  <!-- the board, desktop -->
+  <section class="scene view-board only-desktop">
+    <h2>A card shows the threads its session works on</h2>
+    <p>The board as it is today, with two additions: the <b>Threads</b> pill in the toolbar, counting what needs you, and a row of thread chips on a card. A chip is the thread's status dot and its key, and it opens the thread. A card whose session has no thread does not change.</p>
+    <div class="scroller"><div class="frame desk" data-mount="board"></div></div>
+  </section>
+  <section class="scene view-board only-desktop">
+    <h2>The threads panel: the list on the left, one thread on the right</h2>
+    <p>Built like the Team panel and from its parts. The list is grouped by the five statuses, which are the card's five columns in the same colours. Pick any row: the three sub-threads of <b>atlas-12</b>, the thread shared with ben (<b>atlas-16</b>, with an agent's file held for you), the proposed close (<b>atlas-10</b>) and a thread with no feed (<b>atlas-17</b>) each show a different state. Chips and links say where they lead.</p>
+    <div class="scroller"><div class="frame desk sheet-stage"><aside class="sheet" data-mount="panel" data-open="atlas-13"></aside></div></div>
+  </section>
+
+  <!-- the board, phone -->
+  <section class="scene view-board only-phone">
+    <h2>On the phone the list and the thread are two screens</h2>
+    <p>One column. A thread is pushed over the list from the right and leaves the same way; the back arrow returns to the list where you left it. The panel is the board's full-height sheet, inset 12 px, as every panel is on the phone.</p>
+    <div class="scroller"><div class="phones">
+      <figure><figcaption>The board</figcaption><div class="frame phone" data-mount="board"></div></figure>
+      <figure><figcaption>Threads, the list</figcaption><div class="frame phone sheet-stage"><aside class="sheet" data-mount="panel" data-open="atlas-13" data-pane="list"></aside></div></figure>
+      <figure><figcaption>A thread that needs you</figcaption><div class="frame phone sheet-stage"><aside class="sheet" data-mount="panel" data-open="atlas-13" data-pane="thread"></aside></div></figure>
+    </div></div>
+  </section>
+
+  <!-- MokuPilot, desktop -->
+  <section class="scene view-mokupilot only-desktop">
+    <h2>MokuPilot shows the board's threads where its task board was</h2>
+    <p>Drawn in MokuPilot's own palette, since this view is built in its Qt window and not on the board's page. The same threads as on the board, read through the board. The sections MokuPilot has today stay (Now, Handed off, Next, Done) and two are new (<b>Needs you</b>, <b>Waiting</b>). An owner chip is a button now: it opens that session on the board. In the chat, the two blue lines are everything the day orchestrator received about the work; a thread key anywhere in the chat opens the thread. Click a row.</p>
+    <div class="scroller"><div class="mp" data-mount="mokupilot"></div></div>
+  </section>
+  <section class="scene view-mokupilot only-desktop">
+    <h2>An item opens into its thread</h2>
+    <p>The list slides out and the thread comes in, in the same panel: the head with its status, who holds it, the parent and the link to the board; then the feed, with a question for you as a block you answer in place. "Threads" at the top goes back.</p>
+    <div class="scroller"><div class="mp" data-mount="mokupilot" data-open="atlas-13"></div></div>
+  </section>
+
+  <!-- MokuPilot, narrow -->
+  <section class="scene view-mokupilot only-phone">
+    <h2>The inspector at its narrowest</h2>
+    <p>MokuPilot is a desktop app and has no phone build. This is its inspector alone at 360 px, the width a phone would give it: rows keep one line of title, and a thread uses the full width.</p>
+    <div class="scroller"><div class="phones">
+      <figure><figcaption>Threads, the list</figcaption><div class="mp narrow" data-mount="mokupilot"></div></figure>
+      <figure><figcaption>A thread shared with a teammate</figcaption><div class="mp narrow" data-mount="mokupilot" data-open="atlas-16"></div></figure>
+    </div></div>
+  </section>
+</main>
+<script src="mock.js"></script>
+</body>
+</html>
