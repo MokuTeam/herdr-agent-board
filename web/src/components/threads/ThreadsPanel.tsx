@@ -9,10 +9,18 @@ import { type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, use
 import { useThreadsContext, useThreadView } from '../../hooks/useThreads.tsx'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { type PointerSample, project, reducedMotion, Spring, velocityOf } from '../../models/spring.ts'
-import { type ListFilter, lanesOf, sectionsOf, type ThreadRow } from '../../models/work-threads.ts'
+import {
+  type ListFilter,
+  laneMenu,
+  lanePicked,
+  lanesOf,
+  sectionsOf,
+  type ThreadRow,
+} from '../../models/work-threads.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { SearchIcon } from '../icons.tsx'
+import type { MenuEngine } from '../menu/menu-engine.ts'
 import { Panel } from '../panel/Panel.tsx'
 import { StatusDot, WhoChip } from './bits.tsx'
 import { ThreadPane } from './ThreadPane.tsx'
@@ -24,9 +32,82 @@ export const PUSH = { damping: 1, response: 0.34 }
 /** How far from the thread's left edge a finger takes it back (px). */
 const EDGE_PX = 28
 
+/** The board's one menu (hooks/useContextMenus.ts), as far as the lane filter opens it. */
+export type LaneMenuEngine = Pick<MenuEngine, 'open' | 'openNow' | 'isOpen'>
+
 export interface ThreadsPanelProps {
   open: boolean
   onClose(): void
+  /** The lane filter's menu (#412): the board's own, in its look, not the browser's list. */
+  menu: LaneMenuEngine
+}
+
+/**
+ * The lane filter (#412): a button that opens the board's menu of lanes under it, as the toolbar's
+ * pills do; the browser's own list would be drawn in its light scheme. Arrows, Enter and Space
+ * open it from the keyboard with the first item lit; Escape and a click outside close it (the
+ * menu's own), and the focus comes back here.
+ */
+function LaneFilter({
+  lanes,
+  lane,
+  titleOf,
+  menu,
+  onPick,
+}: {
+  lanes: readonly string[]
+  lane: string | null
+  titleOf(lane: string): string
+  menu: LaneMenuEngine
+  onPick(lane: string | null): void
+}) {
+  const t = useT()
+  const [expanded, setExpanded] = useState(false)
+  useEffect(
+    () =>
+      menu.openNow.subscribe(() => {
+        if (!menu.isOpen()) setExpanded(false)
+      }),
+    [menu],
+  )
+  const open = (button: HTMLElement, keyboard: boolean) => {
+    const rect = button.getBoundingClientRect()
+    menu.open(laneMenu(lanes, lane, titleOf, t('wt.allLanes')), {
+      x: rect.left,
+      y: rect.bottom + 4,
+      source: keyboard ? 'keyboard' : matchMedia('(pointer: coarse)').matches ? 'touch' : 'mouse',
+      origin: button,
+      label: t('wt.lane'),
+      onPick: id => {
+        const picked = lanePicked(id)
+        if (picked !== undefined) onPick(picked)
+      },
+    })
+    // After it is up: a menu it replaced said none was, closing first.
+    setExpanded(true)
+  }
+  const text = lane === null ? t('wt.allLanes') : titleOf(lane)
+  return (
+    <button
+      type="button"
+      className="wt-lane"
+      // The lane shown in the name too, as a select says its value.
+      aria-label={`${t('wt.lane')}: ${text}`}
+      aria-haspopup="menu"
+      aria-expanded={expanded}
+      onClick={e => open(e.currentTarget, e.detail === 0)}
+      onKeyDown={e => {
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+        e.preventDefault()
+        open(e.currentTarget, true)
+      }}
+    >
+      <span className="wt-lane-text">{text}</span>
+      <svg className="wt-lane-chev" viewBox="0 0 12 12" aria-hidden="true">
+        <path d="M3 4.5 6 7.5 9 4.5" />
+      </svg>
+    </button>
+  )
 }
 
 const timeOf = (at: number, now: number, lang: string): string => {
@@ -80,14 +161,17 @@ function Row({ row, active, onOpen }: { row: ThreadRow; active: boolean; onOpen(
 /** Done folds after a few; every other section shows whole. */
 const DONE_SHOWN = 3
 
-function ThreadList({
+/** The list beside a thread: the lane filter, the search, the sections (exported for its DOM test). */
+export function ThreadList({
   rows,
   selected,
   onOpen,
+  menu,
 }: {
   rows: readonly ThreadRow[]
   selected: string | null
   onOpen(key: string): void
+  menu: LaneMenuEngine
 }) {
   const t = useT()
   const { data } = useBoardContext()
@@ -100,19 +184,13 @@ function ThreadList({
     <nav className="wt-side" aria-label={t('wt.title')}>
       <div className="wt-filter">
         {lanes.length > 1 && (
-          <select
-            className="wt-lane"
-            aria-label={t('wt.lane')}
-            value={filter.lane ?? ''}
-            onChange={e => setFilter({ ...filter, lane: e.target.value || null })}
-          >
-            <option value="">{t('wt.allLanes')}</option>
-            {lanes.map(l => (
-              <option key={l} value={l}>
-                {titleOf(l)}
-              </option>
-            ))}
-          </select>
+          <LaneFilter
+            lanes={lanes}
+            lane={filter.lane}
+            titleOf={titleOf}
+            menu={menu}
+            onPick={lane => setFilter(f => ({ ...f, lane }))}
+          />
         )}
         <label className="wt-search">
           <SearchIcon />
@@ -206,7 +284,7 @@ function usePush(body: React.RefObject<HTMLDivElement | null>, pane: 'list' | 't
   }
 }
 
-export function ThreadsPanel({ open, onClose }: ThreadsPanelProps) {
+export function ThreadsPanel({ open, onClose, menu }: ThreadsPanelProps) {
   const t = useT()
   const threads = useThreadsContext()
   const { data } = useBoardContext()
@@ -313,7 +391,7 @@ export function ThreadsPanel({ open, onClose }: ThreadsPanelProps) {
         data-settled={push.settled}
         data-wide={wide ? '' : undefined}
       >
-        <ThreadList rows={rows} selected={pane === 'thread' || wide ? selected : null} onOpen={openKey} />
+        <ThreadList rows={rows} selected={pane === 'thread' || wide ? selected : null} onOpen={openKey} menu={menu} />
         <div
           className="wt-main"
           onPointerDown={onPointerDown}

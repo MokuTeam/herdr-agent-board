@@ -47,7 +47,12 @@ button.wt-who:active { transform: scale(0.96); }
 
 .wt-filter { display: flex; align-items: center; gap: 6px; position: sticky; top: 0; z-index: 1; padding: 4px 0 2px; background: var(--panel); }
 .wt-body[data-wide] .wt-filter { background: none; }
-.wt-lane { flex: none; max-width: 40%; height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: var(--fill-2); color: var(--label); font: 500 12.5px var(--font); }
+.wt-lane { flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 40%; height: 30px; padding: 0 7px 0 9px; border: 0; border-radius: 8px; background: var(--fill-2); color: var(--label); font: 500 12.5px var(--font); cursor: pointer; }
+/* The lane filter is a button that opens the board's menu (#412): its text cut short, a chevron after it. */
+.wt-lane-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-lane-chev { flex: none; width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; opacity: 0.6; }
+.wt-lane:active { background: var(--fill); }
+.wt-lane:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .wt-search { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; height: 30px; padding: 0 9px; border-radius: 8px; background: var(--fill-2); color: var(--label-3); }
 .wt-search svg { flex: none; width: 15px; height: 15px; }
 .wt-search input { flex: 1; min-width: 0; border: 0; background: none; color: var(--label); font: 13px var(--font); outline: none; }
@@ -161,6 +166,10 @@ button.wt-who:active { transform: scale(0.96); }
 .wt-share-to { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .wt-share-to span { color: var(--label-2); }
 .wt-share-to select { min-width: 0; max-width: 220px; min-height: 26px; border: 0; border-radius: 7px; background: var(--fill-2); color: var(--label); font: inherit; font-size: 16px; }
+/* The list it opens (#412): the system draws it from its options' colors, over white where the
+   select's fill is see-through, so the options take the panel's, as profiles.css's do (else the
+   dark theme's light text sits on white). */
+.wt-share-to option { background: var(--panel-float); color: var(--label); }
 @media (pointer: fine) { .wt-share-to select { font-size: 12.5px; } }
 .wt-share-history { display: inline-flex; align-items: center; gap: 5px; color: var(--label-2); cursor: pointer; }
 .wt-share-history:has(input:disabled) { opacity: 0.55; cursor: default; }
