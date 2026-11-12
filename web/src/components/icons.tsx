@@ -57,6 +57,16 @@ export const TeamIcon = () => (
   </Icon>
 )
 
+/** Threads (#392): a list whose lines carry a status dot. */
+export const ThreadsIcon = () => (
+  <Icon>
+    <circle cx="5" cy="6" r="1.4" />
+    <circle cx="5" cy="10" r="1.4" />
+    <circle cx="5" cy="14" r="1.4" />
+    <path d="M8.5 6h8M8.5 10h8M8.5 14h5" />
+  </Icon>
+)
+
 export const TimeIcon = () => (
   <Icon>
     <circle cx="10" cy="10" r="6.5" />

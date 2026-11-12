@@ -77,7 +77,7 @@ import {
   type TunnelPlan,
 } from '../services/tunnel.ts'
 import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
-import { threadsPayload } from '../services/work-threads.ts'
+import { keepThreadsDb, threadsPayload } from '../services/work-threads.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, peerOf, type Route } from './http.ts'
 import { createRemoteListener } from './remote.ts'
@@ -105,6 +105,7 @@ import { staticRoute } from './routes/static.ts'
 import { teamRoutes } from './routes/team.ts'
 import { teamNotifyRoutes, teamReveal } from './routes/team-notify.ts'
 import { terminalRoute } from './routes/terminal.ts'
+import { revStream, threadOpenState, threadReveal, threadsRoutes } from './routes/threads.ts'
 import { keepTimeDb, timeRoutes, timeToday } from './routes/time.ts'
 import { todosRoutes } from './routes/todos.ts'
 import { wakeRoutes } from './routes/wake.ts'
@@ -264,9 +265,15 @@ export async function startServer({
   const eventsShown = eventReveal()
   // A team notification's click asks for a thread the same way (#355).
   const teamShown = teamReveal()
+  // `board thread open` asks for a thread the same way (#392).
+  const threadShown = threadOpenState()
   const events = createBroadcaster(() => board.payload(), {
-    greet: () => reveals.greet() + eventsShown.greet() + teamShown.greet(),
+    greet: () => reveals.greet() + eventsShown.greet() + teamShown.greet() + threadShown.greet(),
   })
+  // GET /api/threads/events (#392): its own stream, made on its first client. The routes use the
+  // connection the payload keeps.
+  const threadRevs = revStream()
+  keepThreadsDb(true)
   // The remote mode (core/remote.ts): pairing, and the listener on the Tailscale address while it
   // is on. Off, it reads the config and nothing else.
   const remote = createRemote({ onChange: () => board.publish() })
@@ -601,7 +608,11 @@ export async function startServer({
     calendar: calendarLine,
     // Threads (#379): while config.json turns them on, the revision and the count that waits on
     // the owner (two queries a refresh); off, nothing is read.
-    threads: () => threadsPayload(cfg),
+    threads: () => {
+      const line = threadsPayload(cfg)
+      if (line) threadRevs.moved(line.rev)
+      return line
+    },
   })
   board.publish()
   // A pi day's task board copied into threads (#393), before each refresh: a change of pi's file is in
@@ -643,7 +654,7 @@ export async function startServer({
     ...linksRoutes(board),
     ...fsRoutes(),
     ...uploadRoutes(),
-    revealRoute(board, events, reveals),
+    revealRoute(board, events, reveals, word => threadReveal({ cfg }, events, threadShown, word)),
     settingsRoute(),
     // Settings → MokuPilot…: where a call starts, here or on the viewer's computer.
     ...mokupilotRoutes(cfg),
@@ -667,6 +678,27 @@ export async function startServer({
       shown: teamShown,
       changed: () => board.publish(),
     }),
+    // Threads (#392): the page's, MokuPilot's and the MCP adapter's reads and the owner's writes.
+    ...threadsRoutes(
+      {
+        cfg,
+        changed: () => board.publish(),
+        async tell(key, text) {
+          const { t } = await import('../core/lang.ts')
+          const { collect } = await import('../services/board.ts')
+          const { send } = await import('../services/actions.ts')
+          const item = (await collect(deps)).find(i => i.key === key)
+          if (!item) return { ok: false, error: t('err.gone') }
+          const r = await send(deps, item, text)
+          return r.ok ? { ok: true } : { ok: false, error: String(r.error ?? '') }
+        },
+        async clearAsk(key, question) {
+          const { readCard, writeCard } = await import('../adapters/cards.ts')
+          if (readCard(key)?.ask === question) writeCard(key, { ask: '', askSince: '' })
+        },
+      },
+      threadRevs,
+    ),
     // Tasks (#202): points pinned on the board, done, reopened, removed; turned on or off.
     ...todosRoutes({ cfg, find: board.find, refresh }),
     // Secret requests (#273): the owner's submit writes the sink, or the owner declines; the phone too.
@@ -867,6 +899,8 @@ export async function startServer({
       setup.stop()
       accessOut.cancel()
       events.close()
+      threadRevs.close()
+      keepThreadsDb(false)
       await listener.close()
       // ssh before the listener it forwards to.
       await supervisor.close()

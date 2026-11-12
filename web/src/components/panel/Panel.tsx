@@ -22,6 +22,7 @@ export type PanelKind =
   | 'mokupilot'
   | 'access'
   | 'todos'
+  | 'threads'
   | 'backup'
   | 'time'
   | 'timeSettings'
@@ -42,6 +43,7 @@ const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
   mokupilot: { label: 'mokupilot.title' },
   access: { label: 'access.title' },
   todos: { label: 'todo.title' },
+  threads: { label: 'wt.title' },
   backup: { label: 'backup.title' },
   time: { label: 'time.title' },
   timeSettings: { label: 'time.set.title' },

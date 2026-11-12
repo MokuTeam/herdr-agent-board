@@ -1633,9 +1633,9 @@ async function threadCommand(): Promise<void> {
     setAsk: question => {
       if (key) writeCard(key, { ask: question, askSince: Date.now(), by: 'agent' })
     },
-    openBoard: async () => {
+    openBoard: async key => {
       const { openWeb } = await import('../services/web-open.ts')
-      const r = await openWeb(cfg)
+      const r = await openWeb(cfg, { thread: key })
       return r.ok ? { ok: true, url: r.url } : { ok: false, error: r.error }
     },
   })

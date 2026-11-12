@@ -57,6 +57,7 @@ import {
 } from './icons.tsx'
 import { ProfileTag } from './ProfileTag.tsx'
 import { StopButton } from './StopButton.tsx'
+import { CardThreadChips, KeyText } from './threads/bits.tsx'
 
 /** What a session on its way shows on the board (hooks/useLaunch.ts). */
 export interface LaunchSlots {
@@ -252,7 +253,9 @@ function CardBody({ item, launch, folding }: { item: Item; launch: LaunchSlots |
   const what = words.recap ? (
     <RecapLine item={item} words={words} />
   ) : words.own ? (
-    <div className="what">{words.own}</div>
+    <div className="what">
+      <KeyText text={words.own} />
+    </div>
   ) : words.asked ? (
     <div className="what">
       <span className="you">{t('card.you')}</span> {words.asked}
@@ -270,6 +273,7 @@ function CardBody({ item, launch, folding }: { item: Item; launch: LaunchSlots |
         {wait}
         <div className="fold-more">
           {what}
+          <CardThreadChips session={item.key} />
           <CardRest item={item} launch={launch} />
         </div>
       </>
@@ -277,6 +281,8 @@ function CardBody({ item, launch, folding }: { item: Item; launch: LaunchSlots |
   return (
     <>
       {item.call ? <CallParts item={item}>{what}</CallParts> : what}
+      {/* Threads (#392): the session's open threads as chips; nothing for a session with none. */}
+      <CardThreadChips session={item.key} />
       {/* A launch held at the trust dialog says what it asks itself (its note), with its buttons. */}
       {item.column === 'me' && started?.state !== 'trust' && <CardAsk item={item} />}
       {wait}

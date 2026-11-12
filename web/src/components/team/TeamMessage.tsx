@@ -7,6 +7,7 @@
 import {
   memo,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
   type PointerEvent as ReactPointerEvent,
   useEffect,
   useRef,
@@ -37,13 +38,27 @@ export interface TeamMessageProps {
   /** Reply to it; absent: no Reply (held, or nothing may be sent). */
   onReply?: ((id: string) => void) | undefined
   onQuote(id: string): void
+  /** A thread's entry (#392): its author's mark in place of the agent's, and its files under the text. */
+  mark?: ReactNode
+  extra?: ReactNode
 }
 
-export function TeamMessage({ line, first, last, named, quote, flash, onReply, onQuote }: TeamMessageProps) {
+export function TeamMessage({
+  line,
+  first,
+  last,
+  named,
+  quote,
+  flash,
+  onReply,
+  onQuote,
+  mark,
+  extra,
+}: TeamMessageProps) {
   const t = useT()
   const [open, setOpen] = useState(false)
   const press = useLongPress(() => setOpen(true))
-  const agent = agentMark(line, t)
+  const agent = mark === undefined ? agentMark(line, t) : null
   const when = fullWhen(line.ts, t)
   return (
     <div
@@ -52,7 +67,7 @@ export function TeamMessage({ line, first, last, named, quote, flash, onReply, o
         line.dir,
         first && 'first',
         last && 'last',
-        agent && 'agent',
+        (agent || mark !== undefined) && 'agent',
         line.held && 'held',
         flash && 'flash',
         open && 'open',
@@ -72,6 +87,7 @@ export function TeamMessage({ line, first, last, named, quote, flash, onReply, o
               {line.pressed && <span>{t('team.pressed')}</span>}
             </div>
           )}
+          {mark}
           {quote && <QuoteView quote={quote} onQuote={onQuote} />}
           {line.text === null ? (
             <p className="team-held-text">{t('team.heldText')}</p>
@@ -79,6 +95,7 @@ export function TeamMessage({ line, first, last, named, quote, flash, onReply, o
             (line.text !== '' || !line.file) && <Text text={line.text} />
           )}
           {line.file && line.text !== null && <TeamFile file={line.file} />}
+          {extra}
           <span className="team-msg-foot">
             <time dateTime={line.ts} title={when}>
               {bubbleTime(line.ts, t)}

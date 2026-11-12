@@ -16,6 +16,8 @@ export interface EntryInput {
   next: number
   /** The team's unread messages (#355); null: the page does not offer the team. */
   team?: { unread: number } | null
+  /** Threads that wait on the owner (#392); null: threads are off. */
+  threads?: { needsOwner: number } | null
   /** The usage pill's own text. */
   usage: string
   presence: PresenceSwitchView | null
@@ -23,7 +25,7 @@ export interface EntryInput {
 
 /** Every action's entry; More lists those that left the row (moreEntries). */
 export function toolbarEntries(input: EntryInput, t: Translator): ToolbarEntry[] {
-  const { canMutate, schedule, tasks, next, usage, presence, team } = input
+  const { canMutate, schedule, tasks, next, usage, presence, team, threads } = input
   const proposed = tasks?.proposed ?? 0
   return [
     ...(presence
@@ -43,6 +45,11 @@ export function toolbarEntries(input: EntryInput, t: Translator): ToolbarEntry[]
       id: 'team-open',
       label: t('team.title'),
       ...(team && team.unread > 0 && { count: team.unread, alert: true }),
+    },
+    {
+      id: 'threads-open',
+      label: t('wt.title'),
+      ...(threads && threads.needsOwner > 0 && { count: threads.needsOwner, alert: true }),
     },
     {
       id: 'new-session',

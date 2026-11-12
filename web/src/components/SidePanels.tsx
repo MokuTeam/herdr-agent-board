@@ -26,6 +26,7 @@ import { ProfilesPanel, type ProfilesPanelProps } from './profiles/ProfilesPanel
 import { SchedulePanel, type SchedulePanelProps } from './schedule/SchedulePanel.tsx'
 import { Sheet, type SheetSlots } from './sheet/Sheet.tsx'
 import { TeamPanel, type TeamPanelProps } from './team/TeamPanel.tsx'
+import { ThreadsPanel, type ThreadsPanelProps } from './threads/ThreadsPanel.tsx'
 import { TimePanel, type TimePanelProps } from './time/TimePanel.tsx'
 import { TimeSettingsPanel, type TimeSettingsPanelProps } from './time/TimeSettingsPanel.tsx'
 import { TodosPanel, type TodosPanelProps } from './todos/TodosPanel.tsx'
@@ -52,6 +53,8 @@ export interface SidePanelsProps {
   archive?: Archive
   /** Tasks (#202): drawn while the board has them on. */
   todos?: TodosPanelProps
+  /** Threads (#392): given by the page while the payload carries `threads`. */
+  threads?: ThreadsPanelProps
   /** Settings → Backup… (#233); drawn when given (the page gives it once opened, on the local board only). */
   backup?: BackupPanelProps
   /** Time (#233): drawn while the board has time tracking on. */
@@ -78,6 +81,7 @@ export function SidePanels({
   sheet,
   archive,
   todos,
+  threads,
   backup,
   time,
   timeSettings,
@@ -100,6 +104,7 @@ export function SidePanels({
       {mokupilot && <MokupilotPanel {...mokupilot} />}
       {access && <AccessPanel {...access} />}
       {todos && data?.todos && <TodosPanel {...todos} />}
+      {threads && data?.threads && <ThreadsPanel {...threads} />}
       {backup && <BackupPanel {...backup} />}
       {time && data?.time && <TimePanel {...time} />}
       {timeSettings && <TimeSettingsPanel {...timeSettings} />}

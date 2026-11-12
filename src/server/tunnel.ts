@@ -37,6 +37,7 @@ import { REMOTE_API } from '../core/remote.ts'
 import { teamConfig } from '../core/team.ts'
 import { boardPorts, publicHosts, publicOrigin, tunnelConfig, tunnelPort, tunnelProblems } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
+import { threadsConfig } from '../core/work-threads.ts'
 import type { Access, SignIn, Who } from '../services/access.ts'
 import type { Probes } from '../services/tunnel.ts'
 import { type Body, dispatch, type GuardState, json, peerOf, type Route, readBody } from './http.ts'
@@ -188,6 +189,8 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         language: o.cfg.language ?? null,
         // The Team panel (#355), while the team is on; else hello is as it was.
         ...(signedIn && teamConfig(o.cfg.team) !== null && { team: true }),
+        // Threads (#392): the tunnel's login is the owner's own, while threads are on.
+        ...(signedIn && threadsConfig(o.cfg.threads) && { threads: true }),
       })
       return signedIn ? res : clearedFor(res, cookie)
     }
@@ -254,7 +257,8 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
       if (path === null) return json(400, { error: 'path' })
       if (NOT_HERE.test(raw) || NOT_HERE.test(path)) return json(404, { error: 'not found' })
       // The tunnel's login is the owner's own: with the team on, the Team panel works here (#355).
-      const refused = remoteRefusal(raw, path, false, teamConfig(o.cfg.team) !== null)
+      // Its login is the owner's own: threads too (#392).
+      const refused = remoteRefusal(raw, path, false, teamConfig(o.cfg.team) !== null, true)
       if (refused) return refused
       if (req.method === 'POST' && raw === '/api/logout') {
         o.access.endToken(token)

@@ -63,6 +63,7 @@ export function board(fields: Partial<Omit<Board, 'ui'>> & { ui?: Partial<BoardU
     reveal: null,
     calOpen: null,
     teamOpen: null,
+    threadOpen: null,
     dispatch() {},
     toast() {},
     now: Date.now(),

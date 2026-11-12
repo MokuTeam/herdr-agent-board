@@ -103,10 +103,18 @@ export const DESK_REMOTE_OPS: ReadonlySet<unknown> = new Set(['approve', 'deny',
  * billing settings), the edge log (#280: who worked with whom, for an audit), Settings → Calendar
  * (#328: a source's address is typed there), and the peer network's roster, threads and sends
  * (#231: /api/team, not /api/peers), and which process the board is and its folder (#356:
- * /api/process). Refused on every remote listener, in both spellings of a path.
+ * /api/process), and threads (#392: /api/threads, which the owner's own logins reach,
+ * ownerThreads). Refused on every remote listener, in both spellings of a path.
  */
 export const localOnly = (path: string): boolean =>
-  /^\/api\/(remote|access|wake|backup|time-settings|calendar-settings|links\/log|team|process)(\/|$)/.test(path)
+  /^\/api\/(remote|access|wake|backup|time-settings|calendar-settings|links\/log|team|process|threads)(\/|$)/.test(path)
+
+/**
+ * Threads (#392, docs/design/threads 5.3): away from the computer, the owner's own logins only (the
+ * tunnel's login, a device paired from the owner's own Tailscale login that is not a desk), as for
+ * the Team panel; every other remote caller is refused.
+ */
+export const ownerThreads = (path: string): boolean => /^\/api\/threads(\/[^/]+)?$/.test(path)
 
 /**
  * The team's routes the owner's own logins may use away from the computer (#355, #218): reading

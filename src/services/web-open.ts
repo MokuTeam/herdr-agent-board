@@ -124,6 +124,8 @@ export type WebConfig = Pick<Config, 'port' | 'browser'>
 export interface WebOpenOptions {
   /** The session in that herdr pane, its sheet open (a notification clicked). */
   pane?: string | undefined
+  /** A thread by its key, open in the threads panel (#392: `board thread open`, web-open.ts --thread). */
+  thread?: string | undefined
   /** The board's window (Edge --app by default). */
   window?: BoardWindow
 }
@@ -145,18 +147,47 @@ export async function openWeb(cfg: WebConfig = loadConfig(), options: WebOpenOpt
     win.launch(`${url}#session=${encodeURIComponent(r.key)}`)
     return { ok: true, url }
   }
-  if (!(await up(url))) {
-    await new Promise(r =>
-      execFile(
-        process.execPath,
-        [join(ROOT, 'src', 'entrypoints', 'open.ts'), '--background'],
-        { windowsHide: true },
-        r,
-      ),
-    )
-    for (let i = 0; i < 40 && !(await up(url)); i++) await sleep(250)
-    if (!(await up(url))) return { ok: false, error: t('err.notRunning') }
+  if (!(await started(url))) return { ok: false, error: t('err.notRunning') }
+  if (options.thread) {
+    const key = options.thread
+    const r = await revealThread(url, key)
+    if (!r.ok) return { ok: false, error: r.error }
+    // Pages open now are told through their stream, one that connects within a few seconds as it
+    // does (server/routes/threads.ts); a new window opens on the thread's own address.
+    if (await win.raise()) return { ok: true, url, key }
+    win.launch(`${url}#thread=${encodeURIComponent(key)}`)
+    return { ok: true, url, key }
   }
   await win.open(url)
   return { ok: true, url }
+}
+
+/** The board running at `url`, started in the background when it was not; whether it answers. */
+async function started(url: string): Promise<boolean> {
+  if (await up(url)) return true
+  await new Promise(r =>
+    execFile(process.execPath, [join(ROOT, 'src', 'entrypoints', 'open.ts'), '--background'], { windowsHide: true }, r),
+  )
+  for (let i = 0; i < 40 && !(await up(url)); i++) await sleep(250)
+  return up(url)
+}
+
+/** Asks the running board to show a thread on its pages (POST /api/reveal { thread }). */
+async function revealThread(url: string, thread: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(`${url}api/reveal`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({ thread }),
+      signal: AbortSignal.timeout(3000),
+    })
+    const answer: unknown = await res.json()
+    if (isRecord(answer) && answer.ok === true) return { ok: true }
+    return {
+      ok: false,
+      error: isRecord(answer) && typeof answer.error === 'string' ? answer.error : `HTTP ${res.status}`,
+    }
+  } catch {
+    return { ok: false, error: t('err.notRunning') }
+  }
 }

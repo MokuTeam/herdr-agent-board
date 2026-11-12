@@ -49,6 +49,8 @@ import { useSettingsMenu } from './hooks/useSettingsMenu.ts'
 import { useSetupNote } from './hooks/useSetupNote.ts'
 import { useTerminal } from './hooks/useTerminal.ts'
 import { useTerminalKeys } from './hooks/useTerminalKeys.ts'
+import { useThreadLinks } from './hooks/useThreadLinks.ts'
+import { linkThreadsSheet, useThreadsContext } from './hooks/useThreads.tsx'
 import { useTodos } from './hooks/useTodos.ts'
 import { useToolbarMenu } from './hooks/useToolbarMore.ts'
 import { pageLayers } from './models/lifecycle.ts'
@@ -150,6 +152,13 @@ export function App() {
   }, [teamAsked])
   // Tasks (#202), while the board has them on: their panel, out of the toolbar's button.
   const [todosOpen, setTodosOpen] = useState(false)
+  // Threads (#392), while the payload carries them: the panel, and links that open a thread.
+  const threads = useThreadsContext()
+  useThreadLinks()
+  const threadsOn = !!threads
+  useEffect(() => {
+    if (threadsOn) linkThreadsSheet()
+  }, [threadsOn])
   // Settings → Paths on this computer…, on the board seen from another device only: mounted at its
   // first opening, as Remote access.
   const [localPaths, setLocalPaths] = useState(false)
@@ -271,6 +280,7 @@ export function App() {
           picks={picks}
           more={more}
           onTodos={() => setTodosOpen(!todosOpen)}
+          {...(threads && { onThreads: () => threads.setShown(!threads.shown) })}
           onBackup={remotePage() ? undefined : openBackup}
           onTime={() => {
             setTimeClient(null)
@@ -332,6 +342,7 @@ export function App() {
           : {})}
         archive={archive}
         todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
+        {...(threads && { threads: { open: threads.shown, onClose: () => threads.setShown(false) } })}
         time={{ open: timeOpen, onClose: () => setTimeOpen(false), client: timeClient, onClient: setTimeClient }}
         sheet={{
           onNewSession: newSession,

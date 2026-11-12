@@ -59,6 +59,7 @@ import {
   TagIcon,
   TasksIcon,
   TeamIcon,
+  ThreadsIcon,
   TimeIcon,
 } from './icons.tsx'
 import { Lanes } from './Lanes.tsx'
@@ -97,6 +98,8 @@ export interface ToolbarProps {
   onTime?: () => void
   /** The Team panel (#355), while the page offers the team: the button carries the unread count. */
   onTeam?: () => void
+  /** Threads (#392), while the payload carries them: the button counts what needs the owner. */
+  onThreads?: () => void
   /** The calendar (#328): its panel, while the board has the calendar on. */
   onCalendar?: () => void
 }
@@ -132,6 +135,7 @@ export function Toolbar({
   onTodos,
   onTime,
   onTeam,
+  onThreads,
   onCalendar,
 }: ToolbarProps) {
   const t = useT()
@@ -181,6 +185,7 @@ export function Toolbar({
           tasks: data?.todos ? { open: openTasks, proposed: proposedCount(data.items) } : null,
           next: data ? attentionCount(visible, ui.filter, categoryOf, ui.viewed) : 0,
           team: onTeam ? { unread: data?.teamUnread ?? 0 } : null,
+          threads: onThreads && data?.threads ? { needsOwner: data.threads.needsOwner } : null,
           usage,
           presence: presenceSwitch(data?.presence, t),
         },
@@ -199,6 +204,7 @@ export function Toolbar({
     else if (id === 'cal-tb') onCalendar?.()
     else if (id === 'time-open') onTime?.()
     else if (id === 'team-open') onTeam?.()
+    else if (id === 'threads-open') onThreads?.()
     else if (id === 'archive-open') onArchive?.()
     else if (id === 'next-attention') openNext()
     else if (id === 'limits') dispatch({ type: 'limits', open: !ui.limitsOpen })
@@ -331,6 +337,21 @@ export function Toolbar({
                       {t('todo.toConfirm', { n: proposedCount(data.items) })}
                     </span>
                   )}
+                </button>
+              )}
+              {onThreads && data?.threads && (
+                <button
+                  type="button"
+                  className={data.threads.needsOwner > 0 ? 'pill-toggle icon-only unread' : 'pill-toggle icon-only'}
+                  id="threads-open"
+                  title={
+                    data.threads.needsOwner > 0 ? t('wt.needsHint', { n: data.threads.needsOwner }) : t('wt.openHint')
+                  }
+                  onClick={() => onThreads()}
+                >
+                  <ThreadsIcon />
+                  <span>{t('wt.title')}</span>
+                  <span className="n">{data.threads.needsOwner || ''}</span>
                 </button>
               )}
               {onTeam && (
