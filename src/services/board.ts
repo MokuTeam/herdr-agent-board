@@ -18,6 +18,7 @@ import { attentionOf, busy, columnOf, isAgentStatus, PINS } from '../core/board.
 import { besideParents, type CallAgent, type CallView } from '../core/call-agent.ts'
 import { categoryFor } from '../core/categories.ts'
 import { isCodexItem } from '../core/codex.ts'
+import { compactView } from '../core/compact.ts'
 import { waitingTool } from '../core/held-question.ts'
 import { type HelperSummary, summarize } from '../core/helpers.ts'
 import { t } from '../core/lang.ts'
@@ -345,6 +346,11 @@ export async function collect(
     const callOf = call ? callView(call, base.key) : null
     // Its own words on the board, else what its task board says it does.
     const doing = card.doing || callOf?.tasks.find(x => x.status === 'doing')?.text || ''
+    const context = contextOf(codex ? null : base.session, info, home?.root ?? null) // Codex has no Claude status line file.
+    // Auto-compact (#378): a Claude session in a pane of its own, only where it or Settings has a
+    // limit, instructions or a run to show.
+    const compact =
+      base.agent === 'claude' && !base.day && !call ? compactView(card, cfg.compact, context.contextSize) : null
     let own: HelperSummary | null = null
     if (helpers && path) {
       try {
@@ -377,7 +383,7 @@ export async function collect(
             recap: info.recap ?? '',
             recapAt: info.recapAt ?? null,
           }),
-      ...contextOf(codex ? null : base.session, info, home?.root ?? null), // Codex has no Claude status line file.
+      ...context,
       tool,
       attention,
       question: askedText(attention, card, told, tool),
@@ -388,6 +394,7 @@ export async function collect(
       auto: columnOf(base.status, { ...card, pin: '' }, told), // where it would be without the pin
       ...(card.favorite === true && { favorite: true }), // the user keeps it in sight
       ...todosField(card), // its tasks (#202), when it has any
+      ...(compact && { compact }), // its auto-compact (#378), when there is any
       ...secretsField(cfg, card), // what it asks the user to fill in (#273), when it does
       helpers: own, // its subagents, forks, workflow agents and teammates in short, or null
       // a fork's card says whose fork it is, and when it started; a call agent's file says it

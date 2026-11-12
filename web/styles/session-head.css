@@ -192,6 +192,10 @@
   #sheet .sheet-helpers { flex-shrink: 1; }
   #sheet .sheet-body { min-height: 96px; }
 }
+/* Auto-compact's last run (#378): the line's quiet text, in orange while it holds the session (no
+   other /compact until its context is below the limit or the limit changes). */
+#sheet .sheet-card .compact-run { padding: 3px 0; color: var(--label-2); font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; }
+#sheet .sheet-card .compact-run.held { color: color-mix(in srgb, var(--orange) 65%, var(--label)); }
 @media (prefers-reduced-motion: reduce) {
   .sheet-pills button, .sheet-fold .chevron { transition: none; }
 }

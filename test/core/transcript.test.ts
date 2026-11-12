@@ -245,6 +245,46 @@ test('a session never compacted keeps its context: lines that only name a compac
   assert.equal(parseTranscriptTail(lines).context, 153012)
 })
 
+test('a compaction in the conversation (#378): a line of its own only where asked for; otherwise as before', () => {
+  const lines = [
+    line({ type: 'user', message: { content: 'review the branch' }, timestamp: '2026-11-12T09:00:00.000Z' }),
+    ...compaction(
+      { trigger: 'manual', preTokens: 161754, postTokens: 13853 },
+      { timestamp: '2026-11-12T09:05:00.000Z' },
+    ),
+    ...compaction({ trigger: 'auto', postTokens: 900 }, { isSidechain: true }),
+  ]
+  const plain = parseConversation(lines)
+  assert.equal(
+    plain.some(m => m.role === 'notice'),
+    false,
+  )
+  const conv = parseConversation(lines, 40, { compactions: true })
+  // The same conversation, with the compaction's line where it came; a subagent's own is not the session's.
+  assert.deepEqual(
+    conv.filter(m => m.role !== 'notice'),
+    plain,
+  )
+  assert.deepEqual(
+    conv.filter(m => m.role === 'notice'),
+    [
+      {
+        role: 'notice',
+        kind: 'compact',
+        status: 'event',
+        name: '',
+        note: '',
+        detail: '',
+        trigger: 'manual',
+        pre: 161754,
+        post: 13853,
+        at: Date.parse('2026-11-12T09:05:00.000Z'),
+      },
+    ],
+  )
+  assert.equal(conv.indexOf(conv.find(m => m.role === 'notice') as never), 1)
+})
+
 test('updates kept as thinking (thinkingDisplay "updates") are said like any message; other thinking is not', () => {
   const lines = [
     line({ type: 'user', message: { content: 'is the sandbox free? then merge' } }),

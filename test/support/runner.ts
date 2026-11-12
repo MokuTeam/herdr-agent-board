@@ -4,7 +4,17 @@ import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { Config, Item } from '../../src/core/types.ts'
 
-export type RunnerMode = 'open' | 'send' | 'answer' | 'server' | 'cli' | 'scheduler' | 'write' | 'detached' | 'wake-io'
+export type RunnerMode =
+  | 'open'
+  | 'send'
+  | 'answer'
+  | 'server'
+  | 'cli'
+  | 'scheduler'
+  | 'compactor'
+  | 'write'
+  | 'detached'
+  | 'wake-io'
 
 // The input a test handed over: each mode reads the fields its test wrote.
 type RunnerInput = {
@@ -135,6 +145,15 @@ if (mode === 'open') {
   // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
   useLanguage('en')
   startScheduler({ deps: defaultDeps(input(), (text: string) => send({ log: text })) })
+  send({ ready: true })
+} else if (mode === 'compactor') {
+  // Auto-compact (#378) on its own, as the board runs it beside the scheduler.
+  const { useLanguage } = await import('../../src/core/lang.ts')
+  const { startCompactor } = await import('../../src/services/compactor.ts')
+  const { defaultDeps } = await import('../../src/services/deps.ts')
+  // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
+  useLanguage('en')
+  startCompactor({ deps: defaultDeps(input(), (text: string) => send({ log: text })) })
   send({ ready: true })
 } else if (mode === 'write') {
   const { existsSync } = await import('node:fs')

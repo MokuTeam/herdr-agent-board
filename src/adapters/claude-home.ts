@@ -68,7 +68,8 @@ export interface ClaudeHome {
   transcriptInfo(path: string | null): TranscriptInfo | null
   conversation(path: string, limit?: number, opts?: ConversationOptions): ConversationTurn[]
   /** The session's conversation() and its queuedPrompts(), from one read of the transcript. */
-  sessionThread(path: string, limit?: number, queue?: QueueWindow): SessionThread
+  /** `opts.compactions`: compactions as lines of their own (#378), for a session auto-compact is in force for. */
+  sessionThread(path: string, limit?: number, queue?: QueueWindow, opts?: ConversationOptions): SessionThread
   searchHistory(cwd: string, query: string | null, excludeSession?: string | null): Promise<HistoryResult>
   recentFolders(limit?: number): Promise<string[]>
   /** The same folders, each with when its project last changed (what puts them newest first). */
@@ -151,8 +152,13 @@ export function readConversation(path: string, limit = 40, opts: ConversationOpt
 }
 
 /** The session's readConversation() and its queuedPrompts() (core/queue.ts), from one read of the transcript. */
-export function readSessionThread(path: string, limit = 40, queue: QueueWindow = {}): SessionThread {
-  const { items, text } = readThread(path, limit)
+export function readSessionThread(
+  path: string,
+  limit = 40,
+  queue: QueueWindow = {},
+  opts: ConversationOptions = {},
+): SessionThread {
+  const { items, text } = readThread(path, limit, opts)
   return { conversation: items, queued: queuedPrompts(text, queue) }
 }
 

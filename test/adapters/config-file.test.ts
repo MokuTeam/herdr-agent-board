@@ -165,6 +165,27 @@ test('editSettings keeps how sessions asleep in "Waiting" fold; refuses a way it
   assert.equal(saved().foldWaiting, 'over')
 })
 
+test("editSettings keeps auto-compact's default (#378): a limit or off, its instructions kept; never refused", () => {
+  isolatedHome()
+  seed({ language: 'en', compact: { note: 'keep the plan' } })
+  assert.deepEqual(editSettings({ compactAt: '300K' }), { ok: true })
+  assert.deepEqual(saved().compact, { note: 'keep the plan', at: '300k' })
+  assert.deepEqual(editSettings({ compactAt: '60%' }), { ok: true })
+  assert.deepEqual(saved().compact, { note: 'keep the plan', at: '60%' })
+  for (const bad of ['never', 'soon', '5k', 7]) assert.equal(editSettings({ compactAt: bad }).ok, false)
+  assert.deepEqual(saved().compact, { note: 'keep the plan', at: '60%' })
+  assert.deepEqual(editSettings({ compactAt: '' }), { ok: true })
+  assert.deepEqual(saved().compact, { note: 'keep the plan' })
+  // Off with no instructions: the key goes, config.json as it was before.
+  seed({ language: 'en', compact: { at: '400k' } })
+  assert.deepEqual(editSettings({ compactAt: '' }), { ok: true })
+  assert.equal('compact' in saved(), false)
+  // Other settings leave it as it was.
+  seed({ language: 'en', compact: { at: '400k' } })
+  assert.deepEqual(editSettings({ foldWaiting: 'over' }), { ok: true })
+  assert.deepEqual(saved().compact, { at: '400k' })
+})
+
 test('editCategories creates, updates, orders and deletes; unknown fields survive', () => {
   isolatedHome()
   seed({

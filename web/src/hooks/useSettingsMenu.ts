@@ -93,6 +93,9 @@ export interface SettingsDeps {
   /** Tasks as the board has them (#202, 'none': off); none: no Tasks item. */
   todos?(): TodoMode | undefined
   chooseTodos?(mode: TodoMode): void
+  /** Auto-compact's default limit (#378, '' for off; undefined from an older board: no item). */
+  compact?(): string | undefined
+  chooseCompact?(at: string): void
   /** The board on another device: Paths on this computer… is offered. */
   localPaths?(): boolean
   openLocalPaths?(): void
@@ -129,6 +132,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       presence: deps.presence?.(),
       idleMinutes: deps.idleMinutes?.(),
       todos: deps.todos?.(),
+      compact: deps.compact?.(),
       localPaths: deps.localPaths?.() ?? false,
     })
     const source: MenuSource = keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse'
@@ -162,6 +166,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
           deps.choosePresence?.(pick.value === 'none' ? { on: false } : { on: true, mode: pick.value })
         else if (pick?.kind === 'presenceIdle') deps.choosePresence?.({ on: true, idleMinutes: pick.value })
         else if (pick?.kind === 'todos') deps.chooseTodos?.(pick.value)
+        else if (pick?.kind === 'compact') deps.chooseCompact?.(pick.value)
         else if (pick?.kind === 'localPaths') deps.openLocalPaths?.()
       },
     })
@@ -213,6 +218,26 @@ export async function chooseFold(
   if (!canEdit) return toast(t('live.off'), true)
   try {
     await save({ foldWaiting: mode })
+  } catch (err) {
+    toast(errorText(err, t), true)
+  }
+}
+
+/** Auto-compact's default limit for every board (#378, config.json's `compact.at`); '' turns it off. */
+export async function chooseCompact(
+  at: string,
+  {
+    t,
+    canEdit,
+    save,
+    toast,
+  }: Pick<LanguageDeps, 't' | 'canEdit' | 'toast'> & {
+    save(body: { compactAt: string }): Promise<unknown>
+  },
+): Promise<void> {
+  if (!canEdit) return toast(t('live.off'), true)
+  try {
+    await save({ compactAt: at })
   } catch (err) {
     toast(errorText(err, t), true)
   }
@@ -435,6 +460,17 @@ export function useSettingsMenu(
         const { t, board } = latest.current
         if (!board.canEdit) return board.toast(t('live.off'), true)
         api.post('/api/todos', { op: 'settings', mode }).catch(err => board.toast(errorText(err, t), true))
+      },
+      // An older board sends no default: no Auto-compact item.
+      compact: () => latest.current.board.data?.compactDefault,
+      chooseCompact: at => {
+        const { t, board } = latest.current
+        void chooseCompact(at, {
+          t,
+          canEdit: board.canEdit,
+          save: body => api.post('/api/settings', body),
+          toast: board.toast,
+        })
       },
       localPaths: remotePage,
       openLocalPaths: () => latest.current.openLocalPaths(),

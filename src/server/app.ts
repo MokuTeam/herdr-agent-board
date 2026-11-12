@@ -51,6 +51,7 @@ import { backupView, startBackups } from '../services/backup.ts'
 import { createBackupServer } from '../services/backup-server.ts'
 import { createCalendarSync } from '../services/calendar.ts'
 import { createCalendarReminders } from '../services/calendar-reminders.ts'
+import { startCompactor } from '../services/compactor.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
@@ -777,6 +778,8 @@ export async function startServer({
   refresh()
   // The port makes it one board per machine, so one scheduler; claims cover an overlap.
   const scheduler = startScheduler({ deps, onChange: refresh })
+  // Auto-compact (#378) beside it, for the same reason: one board types /compact.
+  const compactor = startCompactor({ deps, onChange: refresh })
   // Shells a board before this one opened and that are gone by now are forgotten.
   if (terminalOn(cfg)) void terminals.prune()
   setup.start()
@@ -835,6 +838,7 @@ export async function startServer({
       for (const watcher of watchers) watcher.close()
       omarchy?.close()
       scheduler.stop()
+      compactor.stop()
       backups.stop()
       wake.stop()
       presence.stop()
