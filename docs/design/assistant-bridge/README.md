@@ -137,8 +137,8 @@ Read from the code at `main` 0995603b.
   text with `board team thread <ref>`, framed as data.
 - **What the board holds back** from an agent's post (`agentPost`): a draft for the owner when
   Agents are off for that peer, the session's lane is not shared with the peer, the text looks like
-  a secret or names an unshared lane, it carries a file, or the last 20 lines of the thread all came
-  from agents (the loop pause, 1 to 100 per peer). Refused past 20 posts an hour per session, 60 an
+  a secret or names an unshared lane, a text file it carries looks like a secret (#415), or the
+  last 20 lines of the thread all came from agents (the loop pause, 1 to 100 per peer). Refused past 20 posts an hour per session, 60 an
   hour and 300 a day per peer.
 - **No handoff or mention on the wire.** Task offers and statuses are conventions in the
   `agent-board-team` skill (`taken`, `done: ...`). #379 turns them into shared threads with a `work`

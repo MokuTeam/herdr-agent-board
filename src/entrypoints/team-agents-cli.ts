@@ -5,7 +5,8 @@
 // (instructions from the owner); with --json the same as data under a note that says so, and with
 // --read it also marks the thread read for the owner (#355: reading alone marks nothing). Each
 // message there has a ref (#373), `msg 1a2b3c4d`, and says which message it answers; `reply --to`
-// takes a ref to answer that one. Loaded only by `board team`, so no other board command pays for it.
+// takes a ref to answer that one. `drafts` (#415) lists what waits for the owner, read only.
+// Loaded only by `board team`, so no other board command pays for it.
 import { statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { isRecord } from '../adapters/json-store.ts'
@@ -17,11 +18,12 @@ import {
   resolveThreadRef,
   splitKey,
   TEAM,
+  threadRef,
   validLoop,
 } from '../core/team-agents.ts'
 
 export const AGENT_USAGE =
-  'board team post <name|peer-id|team> [--new "<title>"] [--link <url>] [--file <path>] "<text>" | board team reply <thread> [--to <message>] [--file <path>] "<text>" | board team thread <thread> [--json] [--read] | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default]'
+  'board team post <name|peer-id|team> [--new "<title>"] [--link <url>] [--file <path>] "<text>" | board team reply <thread> [--to <message>] [--file <path>] "<text>" | board team thread <thread> [--json] [--read] | board team drafts | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default]'
 
 export interface SessionWord {
   key: string
@@ -178,7 +180,10 @@ function flag(args: string[], name: string): string | undefined {
 /** A post's answer from the board, said in a line; throws on a refusal. */
 function said(reply: unknown, status: number, who: string): string {
   if (!isRecord(reply)) throw new Error(`the board answered ${status}`)
-  if (reply.ok !== true) throw new Error(`not sent: ${refusedWhy(String(reply.error ?? status))}`)
+  if (reply.ok !== true)
+    throw new Error(
+      `not sent: ${refusedWhy(String(reply.error ?? status), typeof reply.detail === 'string' ? reply.detail : undefined)}`,
+    )
   if (reply.sent === false)
     return `held · ${heldWhy(String(reply.reason), who, typeof reply.detail === 'string' ? reply.detail : undefined)}; the draft waits for the owner in the Team panel`
   const key = String(reply.thread ?? '')
@@ -324,6 +329,16 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
       ? `${framed}\n\n(marked read)`
       : `${framed}\n\n(not marked read: a message is held back until the owner trusts the new key)`
   }
+  if (op === 'drafts') {
+    // Read only (#415): which drafts wait, so a session can point the owner at the exact one.
+    // Sending or discarding one stays the owner's step, in the Team panel.
+    if (rest.length) throw new Error(`usage: ${AGENT_USAGE}`)
+    const { status, reply } = await call(ctx.webPort, '/api/team/threads')
+    if (!isRecord(reply) || !Array.isArray(reply.threads)) throw new Error(`the board answered ${status}`)
+    const threads = reply.threads.filter(isRecord)
+    const drafts = Array.isArray(reply.drafts) ? reply.drafts.filter(isRecord) : []
+    return draftsList(drafts, threads, ctx)
+  }
   if (op === 'assign' || op === 'release') {
     if (rest.length !== (op === 'assign' ? 2 : 1)) throw new Error(`usage: ${AGENT_USAGE}`)
     const key = await threadKeyOf(ctx, rest[0] ?? '')
@@ -341,6 +356,54 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
     )
   }
   throw new Error(`usage: ${AGENT_USAGE}`)
+}
+
+/** A time as the panel shows it, on this computer's clock: `2026-11-12 22:08`. */
+function localStamp(iso: unknown): string {
+  const at = typeof iso === 'string' ? new Date(iso) : null
+  if (!at || Number.isNaN(at.getTime())) return ''
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${at.getFullYear()}-${p(at.getMonth() + 1)}-${p(at.getDate())} ${p(at.getHours())}:${p(at.getMinutes())}`
+}
+
+/**
+ * `board team drafts` (#415): each draft that waits for the owner, by its id's first 8 characters
+ * (what the Team panel's draft is marked with), when the agent made it, its thread as `board team
+ * thread` takes it, its file, why it was held and which session wrote it, then its text's first line.
+ */
+export function draftsList(drafts: Record<string, unknown>[], threads: Record<string, unknown>[], ctx: Ctx): string {
+  if (!drafts.length) return 'no drafts wait for the owner'
+  const lines = [
+    drafts.length === 1
+      ? '1 draft waits for the owner in the Team panel; only the owner sends or discards it:'
+      : `${drafts.length} drafts wait for the owner in the Team panel; only the owner sends or discards them:`,
+  ]
+  for (const d of drafts) {
+    const key = String(d.key ?? '')
+    const parts = splitKey(key)
+    const scope = parts?.scope ?? ''
+    const t = threads.find(x => x.key === key)
+    const title = (v: unknown): string => (typeof v === 'string' ? ` "${printable(v)}"` : '')
+    const who = Array.isArray(t?.members) ? `the channel's members` : scope === TEAM ? 'the team' : whoOf(ctx, scope)
+    const where =
+      typeof d.title === 'string'
+        ? `a new topic${title(d.title)} with ${who}`
+        : parts && parts.id !== 'general'
+          ? `thread ${threadRef(scope, parts.id)}${title(t?.title)} with ${who}`
+          : scope === TEAM
+            ? 'the team chat (team)'
+            : `general with ${who} (${threadRef(scope, 'general')})`
+    const f = isRecord(d.file) ? d.file : null
+    const file = f ? ` · file "${printable(String(f.name ?? ''))}", ${Number(f.size) || 0} bytes` : ''
+    const why = typeof d.reason === 'string' ? ` · held: ${heldWhy(d.reason, who)}` : ''
+    const by = typeof d.agent === 'string' ? ` · by ${printable(d.agent)}` : ''
+    lines.push(`- ${String(d.id ?? '').slice(0, 8)} · ${localStamp(d.ts)} · ${where}${file}${why}${by}`)
+    const first = String(d.text ?? '')
+      .split(/\r?\n/)
+      .find(l => l.trim())
+    if (first) lines.push(`  | ${printable(first.length > 100 ? `${first.slice(0, 100)}...` : first)}`)
+  }
+  return lines.join('\n')
 }
 
 /**

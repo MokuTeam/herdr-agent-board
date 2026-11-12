@@ -71,12 +71,27 @@ const SECRETS: [string, RegExp][] = [
   ['an AWS key', /\bAKIA[0-9A-Z]{16}\b/],
   ['a Google API key', /\bAIza[0-9A-Za-z_-]{35}/],
   ['a private key', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+  // A board's own key as its team-key.json and team-box.json keep it (#415), copied anywhere.
+  ['a private key', /"pkcs8"\s*:\s*"[A-Za-z0-9_-]{40,}/],
 ]
 
 /** What kind of secret the text seems to carry, or null. */
 export function secretHit(text: string): string | null {
   for (const [what, re] of SECRETS) if (re.test(text)) return what
   return null
+}
+
+/**
+ * A file's bytes as text for the secret check (#415), or null for a binary, which goes as it is.
+ * Text with a UTF-16 byte order mark (what Windows PowerShell's `>` writes) is read as UTF-16; any
+ * other file is text when its first 8 KB hold no NUL, and is read as UTF-8 whole.
+ */
+export function fileScanText(bytes: Uint8Array): string | null {
+  const le = bytes[0] === 0xff && bytes[1] === 0xfe
+  const be = bytes[0] === 0xfe && bytes[1] === 0xff
+  if (le || be) return new TextDecoder(le ? 'utf-16le' : 'utf-16be').decode(bytes)
+  if (bytes.subarray(0, 8192).includes(0)) return null
+  return new TextDecoder('utf-8').decode(bytes)
 }
 
 /** Lanes named with everyday words: naming them says nothing about anyone's work. */
@@ -245,6 +260,7 @@ export function heldWhy(reason: string, who: string, detail?: string): string {
       return `this session's lane is not shared with ${who}`
     case 'secret':
       return `it looks like it carries ${detail ?? 'a secret'}`
+    // A draft held before #415, when every agent's file waited for the owner.
     case 'file':
       return 'it carries a file, which the owner sends'
     case 'lane_name':
@@ -256,8 +272,13 @@ export function heldWhy(reason: string, who: string, detail?: string): string {
   }
 }
 
-/** What `board team post | reply` says when the board refused the post, by its error code. */
-export function refusedWhy(error: string): string {
+/**
+ * What `board team post | reply` says when the board refused the post, by its error code; `detail`
+ * of a text too long is its length against the limit, `4062 of 4000` (#415).
+ */
+export function refusedWhy(error: string, detail?: string): string {
+  if (error === 'text' && detail)
+    return `the text is too long: ${detail} characters; send anything longer as a file (--file)`
   switch (error) {
     case 'rate_session':
       return 'this session sent as many posts as an hour allows: try again later'

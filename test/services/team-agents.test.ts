@@ -694,7 +694,7 @@ test('a peer cannot grow the thread file without end: past the cap its quietest 
 // ---- An agent's file (#371)
 
 describe("an agent's file (#371)", () => {
-  test('always a draft for the owner (reason file), with the board copy of the file; a text file with a secret says so', async () => {
+  test('goes as its text does (#415): refused by a hub that takes no files, as the owner would be; a secret in it holds it with the board copy of the file', async () => {
     const w = await world()
     agentsOn(w.P.pub, ['acme'])
     // The isolated home, removed after the test.
@@ -707,11 +707,9 @@ describe("an agent's file (#371)", () => {
       session: { key: 'sess-acme' },
       file: { path: plain },
     })
-    expect(r).toMatchObject({ ok: true, sent: false, reason: 'file' })
+    expect(r).toEqual({ ok: false, error: 'files_hub' })
     expect(sent(w.ws)).toEqual([])
-    const d = readDrafts()[0]
-    expect(d?.file).toMatchObject({ name: 'report.csv', size: 8 })
-    expect(d?.file?.path).not.toBe(plain)
+    expect(readDrafts()).toEqual([])
     const leaky = join(dir, 'env.txt')
     writeFileSync(leaky, 'TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123\n')
     const s = await w.router.agentPost({
@@ -720,7 +718,10 @@ describe("an agent's file (#371)", () => {
       session: { key: 'sess-acme' },
       file: { path: leaky },
     })
-    expect(s).toMatchObject({ ok: true, sent: false, reason: 'secret' })
+    expect(s).toMatchObject({ ok: true, sent: false, reason: 'secret', detail: 'a GitHub token in the file' })
+    const d = readDrafts()[0]
+    expect(d?.file).toMatchObject({ name: 'env.txt', size: 41 })
+    expect(d?.file?.path).not.toBe(leaky)
     // A file that is not there is refused, not drafted.
     const none = await w.router.agentPost({
       to: w.P.pub,
@@ -729,5 +730,6 @@ describe("an agent's file (#371)", () => {
       file: { path: join(dir, 'none') },
     })
     expect(none).toEqual({ ok: false, error: 'file' })
+    expect(readDrafts()).toHaveLength(1)
   })
 })

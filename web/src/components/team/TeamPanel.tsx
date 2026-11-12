@@ -12,7 +12,15 @@ import { type NewTopic, type SendFile, useTeam } from '../../hooks/useTeam.ts'
 import { uploadPlace, useThreadFiles } from '../../hooks/useThreadFiles.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import type { Attachment } from '../../models/composer.ts'
-import type { AgentsChange, AgentsView, TeamView, ThreadLine, ThreadView, Welcome } from '../../models/team.ts'
+import type {
+  AgentsChange,
+  AgentsView,
+  DraftLine,
+  TeamView,
+  ThreadLine,
+  ThreadView,
+  Welcome,
+} from '../../models/team.ts'
 import { firstUnread } from '../../models/team-chat.ts'
 import { topicWork } from '../../models/work-share.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
@@ -118,6 +126,7 @@ export function TeamPanel({ open, onClose, focus, onFocused }: TeamPanelProps) {
         selected={team.selected}
         thread={team.thread}
         lines={team.lines}
+        drafts={team.drafts}
         unread={team.unread}
         agents={team.agents}
         draft={drafts.text(key)}
@@ -184,6 +193,8 @@ export interface TeamBodyProps {
   /** The thread on show as the board keeps it; null while nothing was written in it. */
   thread: ThreadView | null
   lines: ThreadLine[]
+  /** The agents' drafts that wait, every thread's (#415); none given: none listed. */
+  drafts?: readonly DraftLine[]
   /** Each thread's unread messages (#355); none given: none shown. */
   unread?: Record<string, number>
   /** The owner's switches; null (a remote page): not shown, and the team chat's mute neither. */
@@ -243,6 +254,9 @@ export function TeamBody(props: TeamBodyProps) {
         disabled={props.disabled}
         onSelect={props.onSelect}
         onPeople={() => props.onPeople?.(true)}
+        {...(props.drafts && { drafts: props.drafts })}
+        onSendDraft={props.onSendDraft}
+        onDiscardDraft={props.onDiscardDraft}
         {...(props.onWelcome && { onWelcome: props.onWelcome })}
         {...(props.onNewChannel && { onNewChannel: props.onNewChannel })}
       />

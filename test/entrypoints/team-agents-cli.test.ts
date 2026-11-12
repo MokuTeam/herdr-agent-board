@@ -324,3 +324,94 @@ test('#371: a thread lists a file as data: its name, size and where it was saved
   expect(lines).toContain('  [file: a file, did not arrive (hash)]')
   expect(lines).toContain('  [file: "out.csv", 9 bytes, draft]')
 })
+
+test('#415: board team drafts lists each held draft with its thread, file, reason and author; it sends nothing', async () => {
+  const T = '6f1c2a4e-8b3d-4c5e-9f7a-1b2c3d4e5f60'
+  const asked: string[] = []
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch(req) {
+      asked.push(`${req.method} ${new URL(req.url).pathname}`)
+      return Response.json({
+        threads: [{ key: `${P}/${T}`, scope: P, id: T, title: 'Proposal' }],
+        drafts: [
+          {
+            id: 'ba370f97-03d9-441d-b958-4dff693e9c9e',
+            to: P,
+            key: `${P}/${T}`,
+            reason: 'secret',
+            agent: 'docs',
+            ts: '2026-11-12T18:08:18.000Z',
+            text: '\nthe proposal, v2',
+            file: { name: 'PROPOSAL.md', size: 19762 },
+          },
+          {
+            id: '5ef28f2b-0000-4000-8000-000000000000',
+            to: P,
+            key: `${P}/general`,
+            title: 'Plan',
+            reason: 'off',
+            ts: '2026-11-12T13:17:00.000Z',
+            text: 'a plan',
+          },
+          {
+            id: '7a7a7a7a-0000-4000-8000-000000000000',
+            to: 'team',
+            key: 'team/general',
+            reason: 'loop',
+            ts: '2026-11-12T13:18:00.000Z',
+            text: '',
+          },
+        ],
+      })
+    },
+  })
+  try {
+    const ctx = {
+      webPort: server.port as number,
+      roster: [{ peer: P, name: 'anna' }],
+      self: async () => ({ key: 'k1' }),
+      find: async () => ({ key: 'k1' }),
+    }
+    expect((await teamAgents('drafts', [], ctx)).split('\n')).toEqual([
+      '3 drafts wait for the owner in the Team panel; only the owner sends or discards them:',
+      '- ba370f97 · 2026-11-12 18:08 · thread 6f1c2a4e "Proposal" with anna · file "PROPOSAL.md", 19762 bytes · held: it looks like it carries a secret · by docs',
+      '  | the proposal, v2',
+      `- 5ef28f2b · 2026-11-12 13:17 · a new topic "Plan" with anna · held: the owner has not let agents write to anna on their own`,
+      '  | a plan',
+      '- 7a7a7a7a · 2026-11-12 13:18 · the team chat (team) · held: the last messages in this thread all came from agents: a person has to step in',
+    ])
+    // Read only: no op of `board team` sends or discards a draft.
+    await expect(teamAgents('drafts', ['send', 'ba370f97'], ctx)).rejects.toThrow(/usage/)
+    await expect(teamAgents('send', ['ba370f97'], ctx)).rejects.toThrow(/usage/)
+    expect(asked).toEqual(['GET /api/team/threads'])
+  } finally {
+    server.stop(true)
+  }
+})
+
+test('#415: no drafts says so; a text over the limit is refused with its length and the limit', async () => {
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch(req) {
+      if (req.method === 'GET') return Response.json({ threads: [], drafts: [] })
+      return Response.json({ ok: false, error: 'text', detail: '4062 of 4000' }, { status: 400 })
+    },
+  })
+  try {
+    const ctx = {
+      webPort: server.port as number,
+      roster: [{ peer: P, name: 'anna' }],
+      self: async () => ({ key: 'k1' }),
+      find: async () => ({ key: 'k1' }),
+    }
+    expect(await teamAgents('drafts', [], ctx)).toBe('no drafts wait for the owner')
+    await expect(teamAgents('post', ['anna', 'x'.repeat(4062)], ctx)).rejects.toThrow(
+      'not sent: the text is too long: 4062 of 4000 characters; send anything longer as a file (--file)',
+    )
+  } finally {
+    server.stop(true)
+  }
+})

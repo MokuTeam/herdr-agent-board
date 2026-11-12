@@ -1,8 +1,8 @@
 // Shared threads on the running board (#394, docs/design/threads 11): the side that holds the Team
 // service. It sends an entry of a shared thread as a post in the thread's topic: a session's through
 // the router's agentPost unchanged (held as a draft for the owner when agents are off for that peer,
-// the lane is not shared, the text looks like a secret or names an unshared lane, the loop pause is
-// reached, and always with a file; refused past the rate limits), the owner's as the owner's, behind
+// the lane is not shared, the text or a text-like file looks like a secret, the text names an
+// unshared lane, the loop pause is reached; refused past the rate limits), the owner's as the owner's, behind
 // the passkey when that gate is on. It takes a peer's message in a topic in as an entry
 // (work-share.ts ingest), sends what was written while the board was down, follows the drafts it
 // left to their end, and reads in a history file once its bytes are here.

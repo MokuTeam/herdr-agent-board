@@ -1,7 +1,8 @@
 // The Team panel's list of conversations (#370), the sidebar of a wide panel and the first screen
 // of a narrow one. On top: where the connection stands, People and agents (the roster, the keys,
 // the passkeys and the switches have a view of their own: TeamPeople.tsx), New channel, and a new
-// member's welcome while it waits. Then the team chat first with the team's topics under it, the
+// member's welcome while it waits, and the agents' drafts that wait for the owner (TeamDrafts.tsx,
+// #415). Then the team chat first with the team's topics under it, the
 // channels, each person's general with their topics under them, and who left. Every row: its
 // mark, title, the latest message's line, its time and the unread count; a muted one is dimmed.
 import { useState } from 'react'
@@ -9,6 +10,7 @@ import { useT } from '../../i18n/I18nProvider.tsx'
 import {
   type AgentsView,
   channelsOf,
+  type DraftLine,
   scopeThreads,
   stateLine,
   type TeamRosterPeer,
@@ -22,6 +24,7 @@ import { statusColor } from '../../models/work-threads.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { StatusDot, statusWord } from '../threads/bits.tsx'
+import { TeamDrafts } from './TeamDrafts.tsx'
 import { WelcomeCard } from './TeamPeople.tsx'
 
 export interface TeamListProps {
@@ -36,6 +39,10 @@ export interface TeamListProps {
   onPeople(): void
   onWelcome?(w: Welcome): void
   onNewChannel?(): void
+  /** The agents' drafts that wait, every thread's (#415), with Send and Discard. */
+  drafts?: readonly DraftLine[]
+  onSendDraft?(id: string): void
+  onDiscardDraft?(id: string): void
 }
 
 export function TeamList({
@@ -50,6 +57,9 @@ export function TeamList({
   onPeople,
   onWelcome,
   onNewChannel,
+  drafts = [],
+  onSendDraft,
+  onDiscardDraft,
 }: TeamListProps) {
   const t = useT()
   // A welcome put off for now (Later): the person keeps their mark until it is done.
@@ -106,6 +116,15 @@ export function TeamList({
           onLater={() => setLater(l => [...l, welcoming.peer])}
         />
       )}
+      <TeamDrafts
+        drafts={drafts}
+        threads={threads}
+        view={view}
+        disabled={disabled}
+        onSelect={onSelect}
+        onSend={id => onSendDraft?.(id)}
+        onDiscard={id => onDiscardDraft?.(id)}
+      />
       <section className={classNames('team-scope', 'team-chat', chatMuted && 'muted')}>
         {scopeRows('team', { kind: 'team' }, t('team.chat'), chatMuted ? { muted: true } : {})}
       </section>

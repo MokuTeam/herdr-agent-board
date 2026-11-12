@@ -586,10 +586,15 @@ describe('agent drafts and agent requests (#231, #216)', () => {
   test('a draft the board held says why', () => {
     const held = { ...DRAFT, reason: 'loop' }
     const mark = findAll(render(props(on(`${ANA}/general`, { lines: [held] }))), el => hasClass(el, 'team-agent-mark'))
-    expect(mark.flatMap(m => m.children).map(c => text([c]))).toEqual([
+    const parts = mark.flatMap(m => m.children)
+    expect(parts.slice(0, 2).map(c => text([c]))).toEqual([
       'draft from an agent',
       'held: the last messages all came from agents',
     ])
+    // Then when the agent wrote it (#415).
+    expect(parts).toHaveLength(3)
+    expect(hasClass(parts[2] as never, 'team-draft-when')).toBe(true)
+    expect(text([parts[2] as never])).not.toBe('')
   })
 
   test('Send and Discard on a draft call back with its id; Send waits while the key changed or editing is off', () => {

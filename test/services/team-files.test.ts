@@ -5,11 +5,11 @@
 // fetched, checked and kept with the uploads, and the hub forgets it. A box key that changes waits
 // for Trust; limits and an older hub are refused with their codes; an agent's file is a draft.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { memoryBlobs } from '../../hub/src/blobs.ts'
 import { uploadsDir } from '../../src/adapters/paths.ts'
-import { ensureKey, readBlobs, readDrafts, readInbox, readPins } from '../../src/adapters/team-store.ts'
+import { changeAgents, ensureKey, readBlobs, readDrafts, readInbox, readPins } from '../../src/adapters/team-store.ts'
 import {
   BLOB_CHUNK,
   b64u,
@@ -27,6 +27,7 @@ import { TEAM } from '../../src/core/team-agents.ts'
 import { type BoxKeyPair, generateBoxKey, unwrapSecret, wrapSecret } from '../../src/core/team-box.ts'
 import { fileContext, openFile, sealFile } from '../../src/core/team-file.ts'
 import { createTeam, type TeamService } from '../../src/services/team-hub.ts'
+import { createTeamRouter, readAgentFile } from '../../src/services/team-router.ts'
 import { type Client, fakeClock, type Harness, msgOf, question, startHarness } from '../hub/harness.ts'
 import { isolatedHome } from '../support/env.ts'
 import { handshake, setup, stopAll, until } from '../support/team-service.ts'
@@ -330,6 +331,182 @@ describe("an agent's file", () => {
     const copy = readDrafts()[0]?.file?.path as string
     expect(w.svc.discardDraft((other as { id: string }).id)).toBe(true)
     expect(existsSync(copy)).toBe(false)
+  })
+})
+
+describe("an agent's file goes as its text does (#415)", () => {
+  const LANES = [
+    { id: 'acme', title: 'Acme Corp', color: 'blue', paths: [] },
+    { id: 'globex', title: 'Globex', color: 'red', paths: [] },
+  ]
+  const ITEMS = [
+    { key: 'sess-acme', name: 'acme-work', category: 'acme' },
+    { key: 'sess-globex', name: 'globex-work', category: 'globex' },
+  ]
+
+  /** The board with its router: agents on for ben with the lane acme shared, a session in each lane. */
+  async function routed() {
+    const w = await world()
+    changeAgents(x => {
+      x.peers[w.ben.key.pub] = { on: true, lanes: ['acme'] }
+    })
+    const router = createTeamRouter({
+      team: w.svc,
+      cfg: { team: { hub: 'ws://unused', name: 'me' }, categories: LANES } as never,
+      items: () => ITEMS,
+      schedule: { list: () => [], add: () => {}, update: () => false },
+    })
+    const post = (path: string, text = 'the report', session = 'sess-acme') =>
+      router.agentPost({ to: w.ben.key.pub, text, session: { key: session, name: 'acme-work' }, file: { path } })
+    return { ...w, router, post }
+  }
+
+  test('a clean text file in a shared lane, agents on: sent at once, marked as an agent message; ben opens it', async () => {
+    const w = await routed()
+    const path = writeTemp(w.home, 'report.md', '# Report\n\nAll fine.\n')
+    expect(await w.post(path)).toMatchObject({ ok: true, sent: true })
+    expect(readDrafts()).toEqual([])
+    const msg = msgOf((await w.ben.c.take('deliver', 5000)).env)
+    expect(msg.body).toMatchObject({ text: 'the report', via: 'agent', agent: 'acme-work' })
+    const ref = msg.body.file as FileRef
+    expect(Buffer.from((await fetchAs(w.ben, ref)) ?? []).toString()).toBe('# Report\n\nAll fine.\n')
+    // In the thread as this board's agent's message with its file, not as a draft.
+    const lines = w.svc.threadLines(`${w.ben.key.pub}/general`)
+    expect(lines.map(l => l.dir)).toEqual(['out'])
+    expect(lines[0]?.file).toMatchObject({ name: 'report.md', size: 20 })
+  })
+
+  test('a path with spaces, Cyrillic and % goes under its own name; a folder named like the state folder elsewhere is no board file', async () => {
+    const w = await routed()
+    const dir = join(w.home, 'my docs 100%', 'agent-board')
+    mkdirSync(dir, { recursive: true })
+    const path = writeTemp(dir, 'отчёт 100% v2.md', 'всё хорошо')
+    expect(await w.post(path, '')).toMatchObject({ ok: true, sent: true })
+    const ref = msgOf((await w.ben.c.take('deliver', 5000)).env).body.file as FileRef
+    expect(Buffer.from((await fetchAs(w.ben, ref)) ?? []).toString()).toBe('всё хорошо')
+    expect(w.svc.threadLines(`${w.ben.key.pub}/general`)[0]?.file?.name).toBe('отчёт 100% v2.md')
+  })
+
+  test('a binary file goes as it is, even with what reads like a secret in its bytes', async () => {
+    const w = await routed()
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0, ...Buffer.from('AKIAABCDEFGHIJKLMNOP')])
+    const path = join(w.home, 'shot.png')
+    writeFileSync(path, bytes)
+    expect(await w.post(path, '')).toMatchObject({ ok: true, sent: true })
+    const ref = msgOf((await w.ben.c.take('deliver', 5000)).env).body.file as FileRef
+    expect(Buffer.from((await fetchAs(w.ben, ref)) ?? []).equals(Buffer.from(bytes))).toBe(true)
+  })
+
+  test('held exactly as the same text would be: a secret in a text file, a lane not shared, agents off, the loop pause', async () => {
+    const w = await routed()
+    const leaky = writeTemp(w.home, 'env.txt', 'TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123\n')
+    expect(await w.post(leaky)).toMatchObject({ sent: false, reason: 'secret', detail: 'a GitHub token in the file' })
+    // What Windows PowerShell's `>` writes: UTF-16 with its byte order mark.
+    const wide = join(w.home, 'wide.txt')
+    writeFileSync(wide, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('key AKIAABCDEFGHIJKLMNOP', 'utf16le')]))
+    expect(await w.post(wide)).toMatchObject({ sent: false, reason: 'secret', detail: 'an AWS key in the file' })
+    const clean = writeTemp(w.home, 'clean.csv', 'a,b\n1,2\n')
+    expect(await w.post(clean, 'from globex', 'sess-globex')).toMatchObject({ sent: false, reason: 'lane' })
+    changeAgents(x => {
+      x.peers[w.ben.key.pub] = { on: false, lanes: ['acme'] }
+    })
+    expect(await w.post(clean, 'agents off')).toMatchObject({ sent: false, reason: 'off' })
+    changeAgents(x => {
+      x.peers[w.ben.key.pub] = { on: true, lanes: ['acme'], loop: 1 }
+    })
+    expect(await w.router.agentPost({ to: w.ben.key.pub, text: 'hello', session: { key: 'sess-acme' } })).toMatchObject(
+      {
+        sent: true,
+      },
+    )
+    expect(await w.post(clean, 'after the loop')).toMatchObject({ sent: false, reason: 'loop' })
+    // Each held one keeps its file, and the drafts list says so.
+    expect(w.svc.drafts().map(d => [d.reason, d.file?.name, d.key])).toEqual([
+      ['secret', 'env.txt', `${w.ben.key.pub}/general`],
+      ['secret', 'wide.txt', `${w.ben.key.pub}/general`],
+      ['lane', 'clean.csv', `${w.ben.key.pub}/general`],
+      ['off', 'clean.csv', `${w.ben.key.pub}/general`],
+      ['loop', 'clean.csv', `${w.ben.key.pub}/general`],
+    ])
+    // The text went; no file did.
+    const msg = msgOf((await w.ben.c.take('deliver', 5000)).env)
+    expect(msg.body.text).toBe('hello')
+    await w.ben.c.settle(100)
+    expect(w.ben.c.frames.filter(f => f.t === 'deliver')).toHaveLength(0)
+  })
+
+  test('what was checked is what goes: the bytes read for the check, not the path read again', async () => {
+    const w = await routed()
+    const path = writeTemp(w.home, 'notes.md', 'on disk now')
+    const r = await w.svc.post(
+      { to: w.ben.key.pub },
+      '',
+      { by: 'agent' },
+      { path, name: 'notes.md', bytes: Buffer.from('checked') },
+    )
+    expect(r.ok).toBe(true)
+    const ref = msgOf((await w.ben.c.take('deliver', 5000)).env).body.file as FileRef
+    expect(Buffer.from((await fetchAs(w.ben, ref)) ?? []).toString()).toBe('checked')
+  })
+
+  test('two files under no caption are no echo of each other; the same file under the same caption is, until it changes', async () => {
+    const w = await routed()
+    const a = writeTemp(w.home, 'a.csv', '1')
+    const b = writeTemp(w.home, 'b.csv', '2')
+    expect(await w.post(a, '')).toMatchObject({ sent: true })
+    expect(await w.post(b, '')).toMatchObject({ sent: true })
+    expect(await w.post(a, '')).toEqual({ ok: false, error: 'echo' })
+    writeFileSync(a, '1,2')
+    expect(await w.post(a, '')).toMatchObject({ sent: true })
+  })
+
+  test("the board's own files are held as a secret, a copy of its key anywhere too; a file that came in is passed on", async () => {
+    const w = await routed()
+    // world() saved this board's key in its state folder, as a joined board has it.
+    const key = join(process.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board', 'team-key.json')
+    expect(existsSync(key)).toBe(true)
+    expect(await w.post(key, 'my key')).toMatchObject({
+      sent: false,
+      reason: 'secret',
+      detail: "a file of the board's own (its keys or settings)",
+    })
+    const copy = writeTemp(w.home, 'k.json', readFileSync(key, 'utf8'))
+    expect(await w.post(copy, 'a copy')).toMatchObject({
+      sent: false,
+      reason: 'secret',
+      detail: 'a private key in the file',
+    })
+    mkdirSync(join(uploadsDir(), '2026-11-12'), { recursive: true })
+    const got = join(uploadsDir(), '2026-11-12', '120000-abcd1234-spec.md')
+    writeFileSync(got, '# spec')
+    expect(await w.post(got, 'passing it on')).toMatchObject({ sent: true })
+    expect(
+      Buffer.from(
+        (await fetchAs(w.ben, msgOf((await w.ben.c.take('deliver', 5000)).env).body.file as FileRef)) ?? [],
+      ).toString(),
+    ).toBe('# spec')
+  })
+
+  test('a file that cannot be read whole is refused with its reason, never read again for the post', async () => {
+    const w = await routed()
+    expect(await w.post(w.home, 'a folder')).toEqual({ ok: false, error: 'file' })
+    expect(await w.post(join(w.home, 'none.md'), 'none')).toEqual({ ok: false, error: 'file' })
+    const big = writeTemp(w.home, 'big.txt', 'x'.repeat(MB + 1))
+    expect(await w.post(big, 'too big')).toEqual({ ok: false, error: 'file_big' })
+    expect(readAgentFile(big, MB)).toEqual({ ok: false, error: 'file_big' })
+    expect(readAgentFile(w.home, MB)).toEqual({ ok: false, error: 'file' })
+    const small = readAgentFile(writeTemp(w.home, 's.txt', 'abc'), MB)
+    expect(small.ok && Buffer.from(small.bytes).toString()).toBe('abc')
+    expect(readDrafts()).toEqual([])
+    await w.ben.c.settle(100)
+    expect(w.ben.c.frames.filter(f => f.t === 'deliver')).toHaveLength(0)
+  })
+
+  test('a text over the limit is refused with its length and the limit', async () => {
+    const w = await routed()
+    expect(
+      await w.router.agentPost({ to: w.ben.key.pub, text: 'x'.repeat(4062), session: { key: 'sess-acme' } }),
+    ).toEqual({ ok: false, error: 'text', detail: '4062 of 4000' })
   })
 })
 

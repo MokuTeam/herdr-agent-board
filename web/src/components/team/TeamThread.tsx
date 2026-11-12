@@ -8,7 +8,7 @@
 //   name, the "new messages" line where the unread start. The thread opens at that line, or at the
 //   end; it follows new messages while you are at the end, and offers a jump to the latest
 //   (with what came in meanwhile) while you are not. A quote scrolls to the message it answers.
-// - Under them: an agent's held drafts with Send and Discard, then the box to write in.
+// - Under them: an agent's held drafts with when, Send and Discard, then the box to write in.
 import { useLayoutEffect, useRef, useState } from 'react'
 import { ApiError, errorText } from '../../api/client.ts'
 import type { NewTopic } from '../../hooks/useTeam.ts'
@@ -28,7 +28,7 @@ import {
   type ThreadLine,
   type ThreadView,
 } from '../../models/team.ts'
-import { chatItems, type Quote, quoteOf } from '../../models/team-chat.ts'
+import { chatItems, listWhen, type Quote, quoteOf } from '../../models/team-chat.ts'
 import { confirmError, ownerPost } from '../../models/team-confirm.ts'
 import type { TopicWork } from '../../models/work-share.ts'
 import { statusColor } from '../../models/work-threads.ts'
@@ -179,18 +179,23 @@ export function TeamThread(props: TeamThreadProps) {
         )}
       </div>
       <div className="team-foot">
-        {drafts.map(d => (
-          <AgentDraft
-            key={d.id}
-            line={d}
-            disabled={disabled}
-            changed={changed}
-            onSend={props.onSendDraft}
-            onDiscard={props.onDiscardDraft}
-            quote={d.replyTo ? quoteOf(d.replyTo, messages, t) : null}
-            onQuote={scroll.jumpTo}
-          />
-        ))}
+        {drafts.length > 0 && (
+          // Long drafts scroll in a box of their own (#415): the box to write in stays in reach.
+          <div className="team-foot-drafts">
+            {drafts.map(d => (
+              <AgentDraft
+                key={d.id}
+                line={d}
+                disabled={disabled}
+                changed={changed}
+                onSend={props.onSendDraft}
+                onDiscard={props.onDiscardDraft}
+                quote={d.replyTo ? quoteOf(d.replyTo, messages, t) : null}
+                onQuote={scroll.jumpTo}
+              />
+            ))}
+          </div>
+        )}
         {changed && <p className="hint">{t('team.sendChanged')}</p>}
         <TeamComposer
           value={draft}
@@ -352,12 +357,15 @@ function AgentDraft({
   onQuote(id: string): void
 }) {
   const t = useT()
+  const { now } = useBoardContext()
   return (
     <div className="team-draft" data-line={line.id}>
       <div className="team-agent-mark">
         <span>{t('team.draftFromAgent')}</span>
         {line.agent && <code>{line.agent}</code>}
         {line.reason && <span>{draftWhy(line.reason, t)}</span>}
+        {/* When the agent wrote it (#415): two drafts of one file are told apart by it. */}
+        <span className="team-draft-when">{listWhen(line.ts, t, now)}</span>
       </div>
       {quote && <QuoteView quote={quote} onQuote={onQuote} />}
       {(line.text !== '' || !line.file) && <MessageText text={line.text ?? ''} />}
