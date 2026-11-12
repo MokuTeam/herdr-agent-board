@@ -1480,7 +1480,9 @@ window stays as it is: this one runs earlier and on purpose.
 - Off unless set. A session's own limit goes on its card: "Compact at" in the sheet (open the
   card's details), or `board compact --at 300k` from the session (`--session <id|name|pane>` for
   another one). A limit is tokens (`300k`, `1.2m`, at least 10k) or a share of the session's
-  window (`60%`, 5% to 95%, read from the status line's window size). Settings → Auto-compact sets
+  window (`60%`, 5% to 95%, read from the status line's window size). Set it well above what a fresh
+  session carries anyway (its system prompt and tools, often 20k to 90k): the sheet shows what each
+  compaction left. Settings → Auto-compact sets
   a default for every Claude session without a limit of its own (config.json
   `"compact": { "at": "400k" }`); `never` on a session keeps its full history whatever the default.
   `board compact --clear`, or emptying the field, puts the session back on the default.
@@ -1489,14 +1491,17 @@ window stays as it is: this one runs earlier and on purpose.
   the default's.
 - The board's compactor (`src/services/compactor.ts`) looks every 30 seconds and types `/compact`
   only when the session is free between turns: never during a turn, over a terminal dialog, into
-  a question waiting on you (`board ask`, a question it ended its turn with), over text you
-  started typing in its input box, or into a sleeping session (a sleeper does not grow; it is
-  looked at again once it wakes and goes idle). Only Claude Code sessions in a pane of their own.
+  a question waiting on you (`board ask`, a question it ended its turn with, also on a card you
+  dragged to another column), over text you started typing in its input box, or into a sleeping
+  session (it is never woken for it; a sleeper does not grow, and is looked at again once it wakes
+  and goes idle). Only Claude Code sessions in a pane of their own.
 - Once at the limit, one `/compact`, never history trimmed bit by bit (the prompt cache is rebuilt
-  once). A compaction that leaves the context at or above the limit (a large summary), or a
-  `/compact` that no compaction followed within 10 minutes (30 while the session works on it),
-  pauses it for that session: no second `/compact` until its context is below the limit again
-  (your own `/compact`, Claude Code's, a `/clear`) or its limit changes.
+  once). What a compaction left is the context of the first request after it, the system prompt and
+  tools included (Claude Code's own count of the summary leaves them out). At or above the limit, or
+  after a `/compact` that no compaction followed within 10 minutes (30 while the session works on
+  it), auto-compact pauses for that session: no second `/compact` until its context is below the
+  limit again (your own `/compact`, Claude Code's, a `/clear`) or its limit changes. One that no
+  compaction followed is tried again after six hours.
 - The card says it: "Compacted" in the sheet with the time and the sizes, `14:05: 612k → 48k`, in
   orange with "paused" while it holds. The session's conversation gets a line of its own for each
   compaction, "Compacted by the board: 612k → 48k" for the board's. `board compact` prints the
