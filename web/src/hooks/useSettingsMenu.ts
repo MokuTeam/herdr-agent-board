@@ -12,6 +12,7 @@ import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
 import type { PresenceMode } from '../../../src/core/presence.ts'
 import { type TodoMode, todoModeOf } from '../../../src/core/todos.ts'
 import type { Translator } from '../../../src/core/types.ts'
+import type { ThreadMode } from '../../../src/core/work-threads.ts'
 import { ApiError, api, errorText, isReply, postJson, replyOf } from '../api/client.ts'
 import type { MenuEngine, MenuSource } from '../components/menu/menu-engine.ts'
 import { useLanguage } from '../i18n/I18nProvider.tsx'
@@ -20,7 +21,7 @@ import { LOOK_KEY, lookNow, setLook } from '../models/look.ts'
 import { type Dock, isDock } from '../models/panel-layout.ts'
 import { offersProfiles } from '../models/profiles.ts'
 import { keptAuth, remotePage, UNPAIRED } from '../models/remote-page.ts'
-import { offersMokupilot, settingPicked, settingsMenu } from '../models/settings-menu.ts'
+import { offersMokupilot, settingPicked, settingsMenu, threadsNow } from '../models/settings-menu.ts'
 import { reducedMotion } from '../models/spring.ts'
 import { offersTeam } from '../models/team.ts'
 import { setTheme, THEME_KEY, themeNow } from '../models/theme.ts'
@@ -93,6 +94,11 @@ export interface SettingsDeps {
   /** Tasks as the board has them (#202, 'none': off); none: no Tasks item. */
   todos?(): TodoMode | undefined
   chooseTodos?(mode: TodoMode): void
+  /** Threads as the board has them (#410, 'none': off); none: no Threads item. */
+  threads?(): ThreadMode | undefined
+  /** Threads shared over Team (#410); none: no choice. */
+  threadsShare?(): boolean | undefined
+  chooseThreads?(body: ThreadsSetting): void
   /** Auto-compact's default limit (#378, '' for off; undefined from an older board: no item). */
   compact?(): string | undefined
   chooseCompact?(at: string): void
@@ -100,6 +106,9 @@ export interface SettingsDeps {
   localPaths?(): boolean
   openLocalPaths?(): void
 }
+
+/** What Settings → Threads asks the board for (POST /api/threads-settings, #410). */
+export type ThreadsSetting = { mode: ThreadMode } | { share: boolean }
 
 /** What Settings → Presence asks the board for (POST /api/presence { op: 'settings', … }). */
 export type PresenceSetting = { on: false } | { on: true; mode?: PresenceMode; idleMinutes?: number }
@@ -132,6 +141,8 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       presence: deps.presence?.(),
       idleMinutes: deps.idleMinutes?.(),
       todos: deps.todos?.(),
+      threads: deps.threads?.(),
+      threadsShare: deps.threadsShare?.(),
       compact: deps.compact?.(),
       localPaths: deps.localPaths?.() ?? false,
     })
@@ -166,6 +177,8 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
           deps.choosePresence?.(pick.value === 'none' ? { on: false } : { on: true, mode: pick.value })
         else if (pick?.kind === 'presenceIdle') deps.choosePresence?.({ on: true, idleMinutes: pick.value })
         else if (pick?.kind === 'todos') deps.chooseTodos?.(pick.value)
+        else if (pick?.kind === 'threads') deps.chooseThreads?.({ mode: pick.value })
+        else if (pick?.kind === 'threadsShare') deps.chooseThreads?.({ share: pick.value })
         else if (pick?.kind === 'compact') deps.chooseCompact?.(pick.value)
         else if (pick?.kind === 'localPaths') deps.openLocalPaths?.()
       },
@@ -460,6 +473,20 @@ export function useSettingsMenu(
         const { t, board } = latest.current
         if (!board.canEdit) return board.toast(t('live.off'), true)
         api.post('/api/todos', { op: 'settings', mode }).catch(err => board.toast(errorText(err, t), true))
+      },
+      // Threads (#410), on the local board's page: off without the payload's line.
+      threads: () => {
+        const data = latest.current.board.data
+        return data && !remotePage() ? threadsNow(data).mode : undefined
+      },
+      threadsShare: () => {
+        const data = latest.current.board.data
+        return data && !remotePage() ? threadsNow(data).share : undefined
+      },
+      chooseThreads: body => {
+        const { t, board } = latest.current
+        if (!board.canEdit) return board.toast(t('live.off'), true)
+        api.post('/api/threads-settings', body).catch(err => board.toast(errorText(err, t), true))
       },
       // An older board sends no default: no Auto-compact item.
       compact: () => latest.current.board.data?.compactDefault,

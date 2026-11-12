@@ -10,13 +10,16 @@
 //   POST /api/threads/<key or id> {op: 'share', to, history?} | 'unshare' | 'decline-share'
 //                                 | 'take' | 'decline' (an offer) | 'history'
 //   POST /api/threads {op: 'track', topic, lane}               a Team topic as a thread (13.3)
+//   POST /api/threads-settings {mode?, share?}                 Settings → Threads (#410), also while off
 //   GET  /api/threads/events                                               SSE: `rev` on each change
 //
 // A write over HTTP is the owner's: the party comes from the path, never from the body (3.2). A
-// POST carries X-Board: 1. With threads off every route answers 409 and reads nothing. Away from
-// the computer only the owner's own logins reach them (core/remote.ts ownerThreads).
+// POST carries X-Board: 1. With threads off every route but the setting answers 409 and reads nothing. Away from
+// the computer only the owner's own logins reach them (core/remote.ts ownerThreads); the setting
+// stays on the computer (localOnly), as it writes into the Claude profiles there.
 import { existsSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
+import { editThreads } from '../../adapters/config-file.ts'
 import type { BoardDb } from '../../adapters/db.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { uploadsDir } from '../../adapters/paths.ts'
@@ -115,6 +118,8 @@ export interface ThreadsApp {
   now?: () => number
   /** Shared threads over the hub (#394): absent, every share op is refused. */
   work?: WorkHub
+  /** Settings turned threads on (#410): their skill into the shown profiles, as the install action puts it. */
+  skill?(): void
   /** The owner's passkey (#224): what sends as the owner waits for it while it is on. */
   confirm?: Pick<TeamConfirm, 'required' | 'unlocked' | 'safe' | 'pend' | 'urlOf'>
 }
@@ -485,7 +490,37 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
     return json(200, out)
   }
 
+  /**
+   * Settings → Threads (#410), { mode?, share? }: config.json's `threads` under its lock; turned on,
+   * the skill goes where the install action puts it. The running board follows the file (liveConfig).
+   */
+  function settings(body: Record<string, unknown>): Response {
+    const r = editThreads(body)
+    if (!r.ok) return json(400, r)
+    if (r.on && app.skill) {
+      try {
+        app.skill()
+      } catch (err) {
+        return json(500, {
+          ok: false,
+          error: t('thread.err.skill', { error: err instanceof Error ? err.message : String(err) }),
+        })
+      }
+    }
+    return json(200, { ok: true })
+  }
+
   return [
+    {
+      // Taken while threads are off too, as Tasks' setting is.
+      method: 'POST',
+      path: '/api/threads-settings',
+      guard: ['board-header'],
+      async handle(_req, ctx) {
+        const raw = await ctx.rawBody()
+        return settings(isRecord(raw) ? raw : {})
+      },
+    },
     {
       method: 'GET',
       path: '/api/threads',

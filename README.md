@@ -2153,14 +2153,20 @@ A thread has a key (`atlas-13`: the lane and a number), a title, a one-line summ
 and files. It lives in the board's database, and a file posted to it is copied into the board's
 state folder.
 
+Settings → Threads turns it on (#410): Off, Only me, or Me and agents; with Team on, also whether
+they are shared over Team or kept on this board. It writes config.json and copies the agents' skill
+for threads (`agent-board-threads`) into each shown profile, as the install does. Off takes the key
+out of config.json (a hand-written `events` goes with it) and keeps the stored threads and the
+copied skill. Only on the computer: a phone or the tunnel's page has no such row. By hand:
+
 ```json
 "threads": true
 ```
 
 or `"threads": { "agents": false }` to keep them the owner's (sessions read but do not write, and
 their brief says nothing of them), `"events": { "gapSec": 60 }` for the least time between two lines
-to one session. Then run the install once, which copies the agents' skill for threads
-(`agent-board-threads`) into each profile; it is not copied while threads are off.
+to one session. Then run the install once, which copies the skill into each profile; it is not
+copied while threads are off.
 
 `board thread --help` lists the commands: `new`, `post`, `done`, `ask` (the thread waits on you and
 the card goes under "Needs me", as `board ask` does), `set`, `show`, `list`, `changes`, `watch`,
