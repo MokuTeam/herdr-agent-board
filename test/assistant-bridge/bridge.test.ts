@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { connect, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { type Bridge, createBridge } from '../../assistant-bridge/src/bridge.ts'
+import { type Bridge, type BridgeStatus, createBridge } from '../../assistant-bridge/src/bridge.ts'
 import { type BridgeConfig, parseConfig } from '../../assistant-bridge/src/config.ts'
 import {
   type BridgeFrame,
@@ -106,6 +106,8 @@ interface World {
   mod: FakeModule
   socketPath: string
   logs: string[]
+  /** Every status the bridge reported, the way status.json gets them. */
+  statuses: BridgeStatus[]
 }
 
 let world: World | null = null
@@ -153,12 +155,20 @@ async function setup(over: Record<string, unknown> = {}): Promise<World> {
   const store = openStore(':memory:')
   const clock = fakeClock(Date.parse('2026-11-12T10:00:00Z'))
   const logs: string[] = []
-  const bridge = createBridge({ cfg, store, key: bridgeKey, clock, log: l => logs.push(l) })
+  const statuses: BridgeStatus[] = []
+  const bridge = createBridge({
+    cfg,
+    store,
+    key: bridgeKey,
+    clock,
+    log: l => logs.push(l),
+    onStatus: s => statuses.push(s),
+  })
   await bridge.start()
   await until(() => bridge.status().link === 'online' && store.pins().length > 0)
   const mod = new FakeModule(socketPath)
   await mod.hello()
-  world = { h, anna, ben, annaKey, benKey, bridgeKey, bridge, store, clock, mod, socketPath, logs }
+  world = { h, anna, ben, annaKey, benKey, bridgeKey, bridge, store, clock, mod, socketPath, logs, statuses }
   return world
 }
 
@@ -215,6 +225,17 @@ describe('from the board to the assistant', () => {
     const st = await w.anna.take('state')
     expect(st.id).toBe(msgId)
     await until(() => w.store.openJobs().length === 0)
+  })
+
+  test('the status reports a delivery done once the module confirms it, even with no event after it', async () => {
+    const w = await setup()
+    await say(w, 'anna', 'Is the train on time?')
+    const d = await w.mod.take('deliver')
+    await until(() => w.statuses.at(-1)?.counts.jobsOpen === 1)
+    w.mod.send({ t: 'confirm', id: d.id })
+    await until(() => w.store.openJobs().length === 0)
+    // status.json is the last status reported: it must not keep the confirmed job open.
+    await until(() => w.statuses.at(-1)?.counts.jobsOpen === 0, 1000)
   })
 
   test('a new topic tells the owner its title in the inbox topic, never its text', async () => {
