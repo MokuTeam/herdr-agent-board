@@ -402,6 +402,8 @@ export async function collect(
         ? { fork: { of: card.forkOf, at: Number(card.forkAt) || 0 } }
         : callOf?.parent && { fork: { of: callOf.parent, at: callOf.since } }),
       ...(callOf && { call: callOf }), // a MokuPilot call agent (#326): its call and its task board
+      // the model its start asked for (#380), when not the profile's default
+      ...(typeof card.modelWant === 'string' && card.modelWant && { modelAsked: card.modelWant }),
       transcript: path,
       ...formerPanes(card), // panes wake closed as it went to sleep (#204), for the links
       ...sessionProfile(card, profiles.list), // its profile, as its hooks reported it

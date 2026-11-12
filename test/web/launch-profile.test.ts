@@ -256,6 +256,7 @@ describe('what the window shows and sends', () => {
       wt: false,
       branch: '',
       message: '',
+      model: '',
       ...f,
     })
     const ok = { input: 'C:\\Work\\acme', path: 'C:\\Work\\acme', exists: true, dir: true }

@@ -721,7 +721,13 @@ folder field completes folder names as you type (Tab or Enter takes one), lists 
 suggestions when it has the focus, and "Browse" opens columns to walk the disk, Finder style;
 the server says whether the folder exists. The lane follows the folder (by the lanes' folders)
 until you pick one. For a folder in a git checkout, "In a new git worktree" makes a branch in a
-sibling folder (`repo-branch`) and starts there. Ctrl+Enter starts.
+sibling folder (`repo-branch`) and starts there. "Model" starts that one session on a model of its
+own (an alias such as `opus`, `sonnet` or `haiku`, or a full name; pi's `provider/id` for pi): it
+goes on the agent's command line as `--model <id>`, so the profile's default stays as it is. Empty
+is the profile's default. The field shows when the launcher can pass a model on (`model` in
+`POST /api/launch`, `takesModel` in `GET /api/launch/options`): the board's own spawn-agent,
+`launch.agent` for Claude or pi, a `launch.command` with `{model}`; any other refuses a start that
+names one. The session sheet then says "this session only" beside the model. Ctrl+Enter starts.
 
 The new card shows in its lane at once, under "Working" while it starts, and becomes the
 session's own card once herdr sees it. If it fails, it moves under "Needs me" with the reason
@@ -765,8 +771,9 @@ How it starts, by `launch` in config.json:
   in a UTF-8 file), `{sessionId}`, `{resume}` (the id of a session coming back from the
   [archive](#archive), empty for a new one), `{fork}` (the id of the session a [fork](#fork)
   starts from, empty otherwise; a launcher without it leaves forks to the board's own
-  spawn-agent), `{profile}` (the Claude profile's id) or `{profileDir}` (its
-  folder) filled in; a nested list is left out when a value in it is empty. Nothing from the request becomes a program or an option: values only fill those
+  spawn-agent), `{profile}` (the Claude profile's id), `{profileDir}` (its
+  folder) or `{model}` (the model the new-session window asked for, empty for the profile's
+  default: `["--model", "{model}"]`) filled in; a nested list is left out when a value in it is empty. Nothing from the request becomes a program or an option: values only fill those
   places. It runs with `HERDR_WORKSPACE_ID` set to the chosen workspace (the board itself lives
   in a workspace of its own) and should print `pane=<pane id>` when the session is up; it fails
   with a non-zero exit, its last error line is the reason shown. A new workspace's first tab is
@@ -824,11 +831,21 @@ puts it on PATH; it is `bun src/entrypoints/spawn-agent.ts`):
 spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
             [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
             [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>]
-            [--pane <herdr pane id>] [--profile <id>] [--agent claude|pi] [--trust]
+            [--pane <herdr pane id>] [--profile <id>] [--model <id or alias>]
+            [--agent claude|pi] [--trust]
 ```
 
 PowerShell's spelling works too: `-Name`, `-Cwd`, `-Label`, `-BriefFile`, `-Brief`, `-Workspace`,
-`-TimeoutSec`, `-Profile`, `-Agent`, `-Trust`. `--agent pi` types `launch.pi` (default `pi`) instead of the
+`-TimeoutSec`, `-Profile`, `-Model`, `-Agent`, `-Trust`. `--model` starts that one session on a
+model of its own (an alias such as `opus`, `sonnet` or `haiku`, or a full name), as
+`--model <id>` after the profile's `command` and `args` (of two, Claude takes the last), with a new
+session, `--profile`, `--resume` and `--fork` alike; pi gets it in its own form, `--model
+<provider/id>`. Nothing is written to the profile's settings, so every other session there keeps
+the profile's default: do not type `/model` into the new session for this, as Claude saves that as
+the default of every later session in the profile. A new session with `--model` and no
+`--session-id` gets an id of its own, so its card can say the model (`modelWant`). A resume
+without `--model` (Return, a wake, herdr's restore) goes on with the model the session last ran:
+Claude keeps it with the conversation. `--agent pi` types `launch.pi` (default `pi`) instead of the
 profile's `command` and `args` or `launch.claude`, for a new session only (no `--resume` or
 `--fork`); see [pi](#pi). It opens a tab in the workspace (inside herdr the current one, from
 `HERDR_WORKSPACE_ID`), labelled with `--label` or the name, and types the profile's `command`, or

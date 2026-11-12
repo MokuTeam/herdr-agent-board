@@ -25,6 +25,11 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.where': 'Open in',
     // the agent choice, when the board offers Claude Code and pi (web/src/models/launch-agent.ts)
     'launch.agent': 'Agent',
+    // the model it starts on (#380), passed on the agent's command line; empty is the profile's default
+    'launch.model': 'Model',
+    'launch.modelPlaceholder': 'Profile default',
+    'launch.modelHint':
+      'Only this session starts on it (an alias such as opus, sonnet or haiku, or a full name); the profile keeps its default',
     // under Category, when several lanes are on show and the form starts in the first picked
     'launch.lanesNote': 'Categories on show: {lanes}. It starts in {lane}, the first picked, unless you pick another.',
     'launch.newWorkspace': 'New workspace…',
@@ -118,6 +123,10 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'launch.command: cmd, .bat and .cmd are not run as launchers (cmd.exe would read the values as commands); use a program, or a script run by one such as pwsh -File',
     'launch.err.category': 'The board has no lane {id}',
     'launch.err.agent': 'The board does not start {id} here',
+    'launch.err.model': 'Not a model name: an alias such as opus or sonnet, or a full name, one word',
+    'launch.err.modelLong': 'The model name is longer than {max} characters',
+    'launch.err.modelLauncher':
+      'The board starts sessions with a launcher that takes no model (launch.command without {model}, or launch.agent for another agent than Claude or pi)',
     'launch.err.agentLauncher':
       'The board starts sessions with launch.command or launch.agent, which pick the agent themselves',
     'launch.err.piCommand':
@@ -199,6 +208,10 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.browse': 'Обзор',
     'launch.where': 'Где открыть',
     'launch.agent': 'Агент',
+    'launch.model': 'Модель',
+    'launch.modelPlaceholder': 'Как в профиле',
+    'launch.modelHint':
+      'На ней начнётся только эта сессия (псевдоним вроде opus, sonnet или haiku, или полное имя); у профиля останется своя',
     'launch.lanesNote':
       'На доске категории: {lanes}. Сессия начнётся в «{lane}», первой выбранной, если не выбрать другую.',
     'launch.newWorkspace': 'Новый workspace…',
@@ -288,6 +301,10 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'launch.command: cmd, .bat и .cmd запускателями не бывают (cmd.exe прочтёт значения как команды); нужна программа или скрипт, который она запускает, например pwsh -File',
     'launch.err.category': 'На доске нет дорожки {id}',
     'launch.err.agent': 'Доска не запускает здесь {id}',
+    'launch.err.model': 'Это не имя модели: псевдоним вроде opus или sonnet или полное имя, одним словом',
+    'launch.err.modelLong': 'Имя модели длиннее {max} символов',
+    'launch.err.modelLauncher':
+      'Доска запускает сессии запускателем, который не берёт модель (launch.command без {model} или launch.agent для агента, который не Claude и не pi)',
     'launch.err.agentLauncher':
       'Доска запускает сессии через launch.command или launch.agent, а они сами выбирают агента',
     'launch.err.piCommand':

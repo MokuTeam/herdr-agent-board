@@ -179,6 +179,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'meter.contextHint': 'How full the context its last request carried is',
     'meter.model': 'Model',
     'meter.modelHint': 'The model this session runs',
+    // a session started on a model of its own (#380: spawn-agent --model, the Model field of a new session)
+    'meter.modelOwn': 'this session only',
+    'meter.modelOwnHint': 'Started on {model}, not the profile’s default; the profile keeps its own',
     'meter.effort': 'Effort',
     'meter.effortHint': 'The effort this session thinks with',
     'meter.unknown': '—',
@@ -833,6 +836,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'meter.contextHint': 'Насколько заполнен контекст последнего запроса',
     'meter.model': 'Модель',
     'meter.modelHint': 'Модель этой сессии',
+    'meter.modelOwn': 'только эта сессия',
+    'meter.modelOwnHint': 'Запущена на {model}, а не на модели профиля; у профиля осталась своя',
     'meter.effort': 'Усилие',
     'meter.effortHint': 'Усилие, с которым думает эта сессия',
     'meter.unknown': '—',

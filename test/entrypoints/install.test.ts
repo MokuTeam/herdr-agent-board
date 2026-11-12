@@ -341,7 +341,11 @@ test('the skill install copies is upstream’s, word for word, but for what `boa
   // line; nothing since, up to f0cef14); a later upstream change moves the pin. #60 added `board sleep`: its
   // section, the line pointing to it and its words in the description, taken out here; #130 its `--self`, in
   // the same section and words. #279: what becomes of an archived session's reminders, after `board archive`.
+  // #380: --model, in the command line, the PowerShell names and a line of its own.
   const ours = read(root, 'skills', 'herdr-agents', 'SKILL.md')
+    .replace(' [--model <id or alias>]\n```', '\n```')
+    .replace(' -Workspace -Model`)', ' -Workspace`)')
+    .replace(/- An agent on another model than the profile's default: [^\n]*\n/, '')
     .replace(
       ' Its board reminders wait with it, parked: `board schedule --session <name>` lists them, `board schedule --move <id>` moves one to you, `board unschedule <id>` removes one.',
       '',

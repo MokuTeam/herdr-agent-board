@@ -19,6 +19,8 @@ export const PLACEHOLDERS = [
   // The Claude profile the session starts in: its id, and its folder (set or inherited).
   'profile',
   'profileDir',
+  // The model the start asked for (#380), for `--model {model}` in an optional group; empty for none.
+  'model',
 ] as const
 export type Placeholder = (typeof PLACEHOLDERS)[number]
 

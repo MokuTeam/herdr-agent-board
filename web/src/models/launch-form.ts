@@ -37,6 +37,8 @@ export interface LaunchFields {
   wt: boolean
   branch: string
   message: string
+  /** The model it starts on (#380); '' for the profile's default. */
+  model: string
 }
 
 /** The workspace the form wants: by id, by label, or a new one by that name. */
@@ -63,6 +65,8 @@ export interface FormStart {
   message: string
   wt: boolean
   branch: string
+  /** A failed launch's or a draft's model; '' for the profile's default. */
+  model: string
   workspace: WorkspaceWant | null
   set: SetByUser
   /**
@@ -73,7 +77,7 @@ export interface FormStart {
 }
 
 /** What a form was started again from: a draft of the same place, or a failed launch. */
-type Restored = Partial<LaunchDraft> & { workspaceId?: string | null }
+type Restored = Omit<Partial<LaunchDraft>, 'model'> & { workspaceId?: string | null; model?: string | null }
 
 /**
  * The form for `ctx`: a failed launch's or a draft's values first, else the card's, the context's,
@@ -112,6 +116,7 @@ export function formStart(
     message: r?.message ?? '',
     wt: !!r?.worktree,
     branch: r?.worktree?.branch ?? '',
+    model: r?.model ?? '',
     workspace,
     set: {
       category: !!picked,
@@ -219,7 +224,7 @@ export function worktreeNote(
 /** The server's answer about the folder field, with what was typed when it was asked. */
 export type FolderCheck = DirListing & { input: string }
 
-export type ProblemField = 'name' | 'cwd' | 'profile' | 'workspace' | 'worktree'
+export type ProblemField = 'name' | 'cwd' | 'profile' | 'model' | 'workspace' | 'worktree'
 export type Problems = Partial<Record<ProblemField, string>>
 
 /**
@@ -277,6 +282,7 @@ export const draftOf = (f: LaunchFields, category: string, label: string, agent?
   newWorkspace: !f.workspace,
   worktree: f.wt ? { branch: f.branch } : null,
   ...(agent === undefined ? {} : { agent }),
+  ...(f.model.trim() ? { model: f.model } : {}),
 })
 
 /** The workspace a start goes to: the picked one (by id, with its label), or a new one. */
@@ -298,6 +304,8 @@ export interface StartBody {
   parent?: string
   /** The agent picked, while the board offers a choice (models/launch-agent.ts). */
   agent?: string
+  /** The model it starts on (#380); left out for the profile's default. */
+  model?: string
 }
 
 /**
@@ -315,8 +323,11 @@ export function startBody(
     profile?: string
     parent?: string
     agent?: string
+    /** The launcher takes a model (the window offers the field): a model typed goes. */
+    takesModel?: boolean
   },
 ): StartBody {
+  const model = s.takesModel ? f.model.trim() : ''
   const cwd = f.cwd.trim()
   const workspace: StartWorkspace = f.workspace
     ? { id: f.workspace, label: s.label }
@@ -331,6 +342,7 @@ export function startBody(
     ...(s.profile === undefined ? {} : { profile: s.profile }),
     ...(s.parent === undefined ? {} : { parent: s.parent }),
     ...(s.agent === undefined ? {} : { agent: s.agent }),
+    ...(model ? { model } : {}),
   }
 }
 
@@ -358,5 +370,6 @@ export function startedLaunch(id: string, body: StartBody, now: number): LaunchV
     ...(body.profile === undefined ? {} : { profile: body.profile }),
     ...(body.parent === undefined ? {} : { parent: body.parent }),
     ...(body.agent === undefined ? {} : { agent: body.agent }),
+    ...(body.model === undefined ? {} : { model: body.model }),
   }
 }

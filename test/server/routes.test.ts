@@ -331,6 +331,7 @@ describe('routes', () => {
       'launcher',
       'linkedWorkspaces',
       'recent',
+      'takesModel',
       'workspaces',
     ])
   })
