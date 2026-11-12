@@ -1,7 +1,8 @@
 // Files on the board's local API (#371), against a hub in this process: the panel puts a file in
 // the uploads (/api/upload), its Send names it (`file: { upload }`) and the member gets it sealed
-// to their box; a session's post with a file (`file: { path }`) is held as a draft whatever the
-// switches say; a name outside the uploads is refused. The board runs in a sandbox.
+// to their box; a session's post with a file (`file: { path }`) goes as its text would (#415), so
+// with the switches off it is held, and the thread list names the draft with its file; a name
+// outside the uploads is refused. The board runs in a sandbox.
 import { afterAll, beforeAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -92,7 +93,7 @@ test('a name outside the uploads, or a file that is not there, is refused before
   expect(await post(url, '/api/team/send', { to: anna.pub, text: '' })).toEqual([400, { ok: false, error: 'text' }])
 })
 
-test("a session's post with a file is held as a draft for the owner, with the board's copy; a relative path is refused", async () => {
+test("a session's post with a file, agents off: held as a draft with the board's copy, listed with the threads; a relative path is refused", async () => {
   const file = join(box.dir, 'report.csv')
   writeFileSync(file, 'a,b\n')
   const session = { key: 'sess-1', name: 'worker' }
@@ -103,12 +104,24 @@ test("a session's post with a file is held as a draft for the owner, with the bo
     file: { path: file },
   })
   expect(status).toBe(200)
-  // The switches are off by default, so `off` is the reason here; on, it would be `file`.
-  expect(reply).toMatchObject({ ok: true, sent: false })
+  // The switches are off by default: held, as the same text would be.
+  expect(reply).toMatchObject({ ok: true, sent: false, reason: 'off' })
   const lines = (await (await fetch(`${url}/api/team/threads/${anna.pub}/general`)).json()) as {
     lines: { dir: string; file?: unknown }[]
   }
   expect(lines.lines.find(l => l.dir === 'draft')?.file).toMatchObject({ state: 'draft', name: 'report.csv', size: 4 })
+  // Every thread's drafts come with the thread list (#415): what the panel and `board team drafts` read.
+  const list = (await (await fetch(`${url}/api/team/threads`)).json()) as { drafts: Record<string, unknown>[] }
+  expect(list.drafts).toEqual([
+    expect.objectContaining({
+      to: anna.pub,
+      key: `${anna.pub}/general`,
+      reason: 'off',
+      agent: 'worker',
+      text: 'report',
+      file: { name: 'report.csv', size: 4 },
+    }),
+  ])
   expect(await post(url, '/api/team/post', { to: anna.pub, text: 'x', session, file: { path: 'report.csv' } })).toEqual(
     [400, { ok: false, error: 'file' }],
   )

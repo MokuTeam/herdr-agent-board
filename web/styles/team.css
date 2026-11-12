@@ -162,6 +162,19 @@ button.team-quote:hover { background: color-mix(in srgb, var(--accent) 15%, tran
 .team-draft { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 14px; background: color-mix(in srgb, var(--purple) 7%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--purple) 38%, transparent); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
 .team-draft .team-agent-mark { margin: 0; }
 .team-draft-actions, .team-welcome-actions { display: flex; justify-content: flex-end; gap: 6px; }
+/* A thread's drafts scroll in a box of their own, the box to write in stays in reach (#415). */
+.team-foot-drafts { display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow-y: auto; overscroll-behavior: contain; }
+.team-draft-when { color: var(--label-2); font-weight: 400; font-variant-numeric: tabular-nums; }
+/* Every thread's drafts at the top of the list (#415, TeamDrafts.tsx), in the drafts' purple. */
+.team-drafts > h3 { display: flex; align-items: center; gap: 6px; }
+.team-drafts .team-unread { background: var(--purple); }
+.team-draft-card { margin-top: 4px; }
+.team-draft-where { display: flex; align-items: baseline; gap: 6px; width: 100%; min-height: 24px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: start; cursor: pointer; transition: opacity 100ms ease-out; }
+.team-draft-where:hover .team-row-title { color: var(--purple); }
+.team-draft-where:active { opacity: 0.6; }
+.team-draft-line { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--label); }
+.team-draft-file { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--label-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.team-draft-file span { color: var(--label); font-weight: 600; }
 .team-compose { display: flex; flex-direction: column; gap: 6px; }
 .team-compose-reply { display: flex; align-items: center; gap: 4px; padding: 0 2px 0 4px; }
 .team-compose-attachments { display: flex; flex-wrap: wrap; gap: 6px; }

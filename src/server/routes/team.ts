@@ -446,7 +446,8 @@ export function teamRoutes(
       handle() {
         if (!team.view()) return undefined
         // Each with its latest message for the list (#370), where there is one; a topic that is a
-        // shared thread with its key and status (#394), while shared threads are on.
+        // shared thread with its key and status (#394), while shared threads are on. Then the
+        // agents' drafts that wait for the owner, each with its thread's key (#415).
         const lasts = team.lasts?.() ?? {}
         const shared = work?.on() ? work.topics() : {}
         return json(200, {
@@ -454,6 +455,7 @@ export function teamRoutes(
             const withLast = Object.hasOwn(lasts, t.key) ? { ...t, last: lasts[t.key] } : t
             return Object.hasOwn(shared, t.key) ? { ...withLast, work: shared[t.key] } : withLast
           }),
+          drafts: team.drafts(),
         })
       },
     },

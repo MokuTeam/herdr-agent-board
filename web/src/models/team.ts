@@ -5,11 +5,18 @@
 // or login (#355), while the payload carries `teamRev` (config.json's `team` is on).
 import { OUT_STATES, type OutState, VIAS } from '../../../src/core/team-wire.ts'
 import type { Translator } from '../../../src/core/types.ts'
-import type { TeamRosterPeer, TeamState, TeamView, ThreadLine, ThreadView } from '../../../src/services/team-hub.ts'
+import type {
+  DraftLine,
+  TeamRosterPeer,
+  TeamState,
+  TeamView,
+  ThreadLine,
+  ThreadView,
+} from '../../../src/services/team-hub.ts'
 import { ago } from './card.ts'
 import { remotePage, teamPage } from './remote-page.ts'
 
-export type { TeamRosterPeer, TeamView, ThreadLine, ThreadView }
+export type { DraftLine, TeamRosterPeer, TeamView, ThreadLine, ThreadView }
 
 const STATES: readonly TeamState[] = ['off', 'connecting', 'online', 'reconnecting', 'revoked', 'error']
 
@@ -90,9 +97,42 @@ const isThreadView = (v: unknown): v is ThreadView =>
   (v.members === undefined || (Array.isArray(v.members) && v.members.every(m => typeof m === 'string'))) &&
   (v.last === undefined || isLast(v.last))
 
-/** GET /api/team/threads. */
-export const isThreadList = (v: unknown): v is { threads: ThreadView[] } =>
-  isObj(v) && Array.isArray(v.threads) && v.threads.every(isThreadView)
+const isDraftLine = (v: unknown): v is DraftLine =>
+  isObj(v) &&
+  typeof v.id === 'string' &&
+  typeof v.to === 'string' &&
+  typeof v.key === 'string' &&
+  typeof v.ts === 'string' &&
+  typeof v.text === 'string' &&
+  (v.title === undefined || typeof v.title === 'string') &&
+  (v.reason === undefined || typeof v.reason === 'string') &&
+  (v.agent === undefined || typeof v.agent === 'string') &&
+  (v.file === undefined || (isObj(v.file) && typeof v.file.name === 'string' && typeof v.file.size === 'number'))
+
+/** GET /api/team/threads: the threads, and the agents' drafts that wait for the owner (#415; none from an older board). */
+export const isThreadList = (v: unknown): v is { threads: ThreadView[]; drafts?: DraftLine[] } =>
+  isObj(v) &&
+  Array.isArray(v.threads) &&
+  v.threads.every(isThreadView) &&
+  (v.drafts === undefined || (Array.isArray(v.drafts) && v.drafts.every(isDraftLine)))
+
+/**
+ * Where a draft waits (#415), as the list names it: the team chat, a channel or topic by its title,
+ * a person by this board's name for them with the topic after; a new topic's draft by the title it
+ * would start.
+ */
+export function draftWhere(d: DraftLine, threads: readonly ThreadView[], view: TeamView, t: Translator): string {
+  const parts = keyParts(d.key)
+  const thread = threads.find(x => x.key === d.key)
+  const general = parts?.id === 'general'
+  const topic = d.title !== undefined ? t('team.draftNewTopic', { title: d.title }) : general ? null : thread?.title
+  if (parts?.scope === 'team') {
+    if (thread?.members) return thread.title ?? t('team.channelTitle')
+    return topic ? `${t('team.chat')} · ${topic}` : t('team.chat')
+  }
+  const who = view.roster.find(p => p.peer === parts?.scope)?.name ?? thread?.peerName ?? t('team.formerOne')
+  return topic ? `${who} · ${topic}` : who
+}
 
 const isReceipt = (v: unknown): boolean =>
   isObj(v) && typeof v.peer === 'string' && typeof v.name === 'string' && isDelivery(v.state)

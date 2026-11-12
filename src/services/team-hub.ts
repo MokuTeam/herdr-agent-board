@@ -171,6 +171,29 @@ export interface LineFile {
 export interface PostFile {
   path: string
   name: string
+  /**
+   * The file as the router read it for its check (#415): these bytes go, not the path read again,
+   * so what was checked is what is sent.
+   */
+  bytes?: Uint8Array
+}
+
+/**
+ * An agent's draft as the panel and `board team drafts` list it (#415): its thread's key (a new
+ * topic's draft sits in the pair's or the team's general, with the title it would start), why it
+ * waits, who wrote it, when, its text and its file.
+ */
+export interface DraftLine {
+  id: string
+  to: string
+  key: string
+  /** A new topic's title, which the draft starts when it is sent. */
+  title?: string
+  reason?: string
+  agent?: string
+  ts: string
+  text: string
+  file?: { name: string; size: number }
 }
 
 /** One line of a thread with a peer, either way. */
@@ -355,6 +378,8 @@ export interface TeamService {
    * from the next one on, the list with them; what was said before stays with who was there.
    */
   addMembers(key: string, peers: string[]): { ok: true } | { ok: false; error: string }
+  /** The agents' drafts that wait for the owner, oldest first (#415); empty while off. */
+  drafts(): DraftLine[]
   /** Sends a draft as a question marked `via: "agent"`; the draft stays when the send is refused. */
   sendDraft(id: string): Promise<SendResult>
   /** Drops a draft; false when there is none. */
@@ -1165,6 +1190,11 @@ export function createTeam({
     | { ok: true; bytes: Uint8Array; meta: { name: string; type: string; size: number } }
     | { ok: false; error: string } {
     const max = (hubFiles?.max ?? 0) - NONCE_BYTES - TAG_BYTES
+    if (file.bytes) {
+      if (file.bytes.length > max) return { ok: false, error: 'file_big' }
+      const meta = checkMeta({ name: file.name, type: mimeOf(file.name), size: file.bytes.length })
+      return meta ? { ok: true, bytes: file.bytes, meta } : { ok: false, error: 'file_name' }
+    }
     let size: number
     try {
       const st = statSync(file.path)
@@ -1532,6 +1562,22 @@ export function createTeam({
       })
       if (ok) changed()
       return ok
+    },
+    drafts() {
+      if (!config()) return []
+      return readDrafts().map(
+        (d): DraftLine => ({
+          id: d.id,
+          to: d.to,
+          key: threadKey(d.to, d.thread?.id ?? GENERAL),
+          ...(d.thread?.id === undefined && d.thread?.title !== undefined && { title: d.thread.title }),
+          ...(d.reason && { reason: d.reason }),
+          ...(d.session?.name && { agent: d.session.name }),
+          ts: new Date(d.createdAt).toISOString(),
+          text: d.text,
+          ...(d.file && { file: { name: d.file.name, size: d.file.size } }),
+        }),
+      )
     },
     async sendDraft(id) {
       if (!config()) return { ok: false, error: 'off' }

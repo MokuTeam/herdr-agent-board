@@ -2389,6 +2389,7 @@ unmute it what came in meanwhile and is not read counts again.
 board team inbox [--unread] [--json]      # the threads, the latest first, with their unread counts
 board team thread <ref> [--json] [--read] # one thread, a peer's text framed as data from that person
 board team watch [--json] [--every <s>]   # a line per thread with new messages, as they come
+board team drafts                         # the agents' drafts that wait for you: thread, time, file, why
 ```
 
 `inbox` and `watch` never print a message's text, only a thread's ref (what `thread` takes) and who
@@ -2546,9 +2547,14 @@ opens the file and keeps it with the board's uploads (gone after `keepUploadsDay
 images show inline, anything else is offered as a download, and nothing is opened or run. A member
 whose board is older gets your text and the line "a file was sent; update the board to receive it";
 through an older hub a file is refused and text goes as before. The text of a post stays as readable
-to the hub as any text. An agent's file (`board team post | reply --file <path>`) always waits for
-you as a draft, as a text with a secret in it does, with the board's own copy of the file taken when
-the agent asked; your Send sends it. `board team thread` lists a file that came in by its name and
+to the hub as any text. An agent's file (`board team post | reply --file <path>`) goes as its text
+would (#415): held for you only when the text would be (agents off for that person, the lane not
+shared, the loop pause), or when a text file (no NUL in its first 8 KB, or UTF-16 with its mark)
+looks like it carries a secret; a binary goes as it is. A held one waits as a draft with the board's
+own copy of the file taken when the agent asked; your Send sends it. The Team panel lists every
+thread's drafts at the top of its list, each with where it goes, when it was made, its file and size
+and why it was held, with Send and Discard; `board team drafts` lists the same for a session, which
+cannot send or discard one. A text over 4000 characters is refused with its length and the limit. `board team thread` lists a file that came in by its name and
 size and where it was saved. In the panel a file shows on its line with its name and size, a
 picture inline once it is here, and a draft that carries one says so, as the confirmation window
 does. A board fetches at most 100 MB a file and 1 GB a day from one member on its own; past that

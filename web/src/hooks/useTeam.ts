@@ -1,5 +1,6 @@
-// The Team panel's data: the view (GET /api/team), the threads (GET /api/team/threads, #216), the
-// thread on show (GET /api/team/threads/<scope>/<id>) and the owner's agent switches (GET
+// The Team panel's data: the view (GET /api/team), the threads with the agents' drafts that wait
+// (GET /api/team/threads, #216, #415), the thread on show (GET /api/team/threads/<scope>/<id>)
+// and the owner's agent switches (GET
 // /api/team/agents, on this computer only: a remote page never asks). Its changes: a message or a
 // new topic (POST /api/team/send { to, text, thread?, replyTo? }), Trust (POST /api/team/trust { peer }), an
 // agent's drafts (POST /api/team/draft/<id>/send or /discard), a thread's mute (POST
@@ -18,6 +19,7 @@ import { remotePage } from '../models/remote-page.ts'
 import {
   type AgentsChange,
   type AgentsView,
+  type DraftLine,
   isAgentsView,
   isTeamView,
   isThreadLines,
@@ -52,6 +54,8 @@ export interface TeamNow {
   agents: AgentsView | null
   /** Who joined the team and waits for the owner's welcome (#355); none on a remote page. */
   pending: string[]
+  /** The agents' drafts that wait for the owner, every thread's (#415), oldest first. */
+  drafts: DraftLine[]
 }
 
 /**
@@ -118,6 +122,7 @@ const EMPTY: TeamNow = {
   unread: {},
   agents: null,
   pending: [],
+  drafts: [],
 }
 
 /** The panel's data without React: useTeam draws from it. */
@@ -148,7 +153,7 @@ export function teamSource(deps: TeamDeps): TeamSource {
     const mine = ++asked
     try {
       const view = await api.get('/api/team', isTeamView, { cache: 'no-store' })
-      const { threads } = await api.get('/api/team/threads', isThreadList, { cache: 'no-store' })
+      const { threads, drafts = [] } = await api.get('/api/team/threads', isThreadList, { cache: 'no-store' })
       const selected = now.get().selected
       const { thread, lines } = await shown(selected)
       const agents = remote() ? null : await api.get('/api/team/agents', isAgentsView, { cache: 'no-store' })
@@ -163,7 +168,7 @@ export function teamSource(deps: TeamDeps): TeamSource {
       const unread =
         unreadTotal > 0 ? { ...(await api.get('/api/team/unread', isUnread, { cache: 'no-store' })).threads } : {}
       if (mine !== asked) return
-      now.set({ ...now.get(), view, threads, thread, lines, agents, unread, pending })
+      now.set({ ...now.get(), view, threads, thread, lines, agents, unread, pending, drafts })
       // The thread on show, in a page in front, is read: its messages leave the count. A read that
       // fails leaves the count as it is; the panel stays drawn. A message that lands meanwhile moves
       // teamRev, and the page that shows it is the page that read it.
