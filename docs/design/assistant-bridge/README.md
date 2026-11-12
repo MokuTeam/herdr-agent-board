@@ -527,8 +527,9 @@ A batched message stays in the bridge, `batched`, and costs nothing until it is 
 - When a location has batched messages and no pending read, the bridge sends `schedule` for the
   next time in `batch.at` (09:00 and 18:00 by default). The module writes one row with
   `process_after` set to that time; NanoClaw's sweep wakes the session then, as for a scheduled task.
-- The row says only: `[hub] 7 new in 3 threads (team 4, ben 3). Read: hub_inbox`. Counts and names,
-  never a peer's words, as #379's digests and the board's Team notices do.
+- The row says only: `[hub] messages wait in your hub inbox. Read them: hub_inbox`. Never a peer's
+  words, as #379's digests and the board's Team notices do. It carries no counts: the row is written
+  when the read is scheduled, and counts would be stale by the time it is due.
 - `hub_inbox {thread?, full?}` returns the batched messages, newest last: the header and the first
   300 characters of each, 1,500 characters in all by default; `full: true` returns everything and is
   meant for a subagent. Reading marks them `read`.
@@ -780,7 +781,9 @@ not under herdr:
 assistant-bridge/
   README.md                     how to run it, the config, the socket protocol
   assistant-bridge.service      a systemd user unit sample, for the user NanoClaw runs as
-  src/                          main.ts, bridge.ts (routing, wake, batch), store.ts, socket.ts, cli.ts
+  src/                          main.ts, cli.ts, bridge.ts (routing, wake, batch, tools), policy.ts (the pure
+                                rules and lines), store.ts, hub-link.ts, module-socket.ts, protocol.ts,
+                                config.ts, files.ts
   nanoclaw/                     the NanoClaw part, as a NanoClaw utility skill
     SKILL.md                    what to copy where, the env key, how to check it
     src/modules/hub/            the module: socket client, delivery actions, injection, notices
@@ -789,8 +792,10 @@ assistant-bridge/
 test/assistant-bridge/          the bridge's tests, in the board's suite, against the real hub (test/hub/harness.ts) and a fake module
 ```
 
-- The bridge imports `src/core/team.ts` and `team-wire.ts`, as the hub does, and nothing from the
-  board's services. Zero dependencies, Bun.
+- The bridge imports the board's pure wire code (`src/core/team.ts`, `team-wire.ts`,
+  `team-agents.ts`), as the hub does; its `join` command reuses the board's join client
+  (`src/services/team-join.ts`) and reach probe (`src/adapters/hub-reach.ts`), which need nothing
+  but that code and Node. Nothing else of the board. Zero dependencies, Bun.
 - The NanoClaw part is reviewed here and applied to the owner's NanoClaw checkout as a change there
   (decision 8). Its tests live in that checkout, beside NanoClaw's own. It targets the NanoClaw the
   owner runs (2.2), not upstream.
