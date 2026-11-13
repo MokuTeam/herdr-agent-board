@@ -72,7 +72,7 @@ The invite comes from the hub's admin (`bun hub/src/cli.ts invite create` on the
 | `allow` | | Peers heard, by roster name; `role` `owner` (default) or `member`; `peer` pins a name to a key, else the first key the roster shows under it is pinned. |
 | `inbox.topic` | | The inbox topic, by NanoClaw's thread id or by its name as the bot recorded it. |
 | `inbox.notice` | `title` | `none`: no line for a new hub topic. |
-| `publish` | `[]` | Aliases for topics (`host:inbox`, `host:<thread id or name>`). Phase 1 uses an alias as the name the assistant writes under from that topic; elsewhere it writes as `host`. |
+| `publish` | `[]` | Aliases for places (`host:inbox`, `host:<thread id or name>`, `group:<agent group id>`): the name the assistant writes under from there (elsewhere `host`), and a new topic titled `[<alias>] ...` from the owner goes there (from members too with `"members": true`). A `group:` place also needs the group's folder in NanoClaw's `HUB_BRIDGE_GROUPS`. |
 | `wake` | `{"gapSec": 60, "maxPerHour": 10}` | Close messages to one topic share a wake; past the cap they wait. |
 | `batch.at` | `["09:00", "18:00"]` | When waiting messages are read, server time. |
 | `loop` | `20` | Agent messages in a row in a thread before the bridge stops waking for it and refuses to post there. |

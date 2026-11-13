@@ -154,6 +154,25 @@ describe('config.json (design 9.2)', () => {
     expect(r.errors.join('\n')).toContain('inbox.topic')
     expect(r.errors.join('\n')).toContain('batch.at')
   })
+  test('a publish entry names a host topic or another agent group (phase 3)', () => {
+    const r = parseConfig(
+      {
+        ...ok,
+        publish: [
+          { alias: 'travel', at: 'host:travel' },
+          { alias: 'ops', at: 'group:ag-1', about: 'the ops chat', members: true },
+        ],
+      },
+      '/s',
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.cfg.publish[1]).toEqual({ alias: 'ops', at: 'group:ag-1', about: 'the ops chat', members: true })
+    for (const at of ['group:', 'group:ag-1/telegram:1:5', 'agent:1', 'host:']) {
+      const bad = parseConfig({ ...ok, publish: [{ alias: 'x', at }] }, '/s')
+      expect(bad.ok).toBe(false)
+    }
+  })
 })
 
 describe('the socket protocol (design 3.3)', () => {
@@ -173,7 +192,12 @@ describe('the socket protocol (design 3.3)', () => {
       v: 1,
       topics: [{ id: 'a', name: 'x' }, { id: 'b' }],
     })
-    expect(parseModuleFrame(JSON.stringify({ ...call, from: 'group:1' }))).toBeNull()
+    // Phase 3: another agent group is a place, alone or one of its topics; nothing else is.
+    expect(parseModuleFrame(JSON.stringify({ ...call, from: 'group:ag-1' }))?.t).toBe('call')
+    expect(parseModuleFrame(JSON.stringify({ ...call, from: 'group:ag-1/telegram:1:5' }))?.t).toBe('call')
+    expect(parseModuleFrame(JSON.stringify({ ...call, from: 'group:' }))).toBeNull()
+    expect(parseModuleFrame(JSON.stringify({ ...call, from: 'host:' }))).toBeNull()
+    expect(parseModuleFrame(JSON.stringify({ ...call, from: 'agent:1' }))).toBeNull()
     expect(parseModuleFrame(JSON.stringify({ ...call, args: { text: 3 } }))).toBeNull()
     expect(parseModuleFrame('{"t":"confirm"}')).toBeNull()
     expect(parseModuleFrame('not json')).toBeNull()

@@ -406,3 +406,113 @@ describe('from the assistant back to the board', () => {
     )
   })
 })
+
+describe('another agent group (phase 3, design 6.2)', () => {
+  const GROUP = 'group:ag-1'
+  const GROUP_TOPIC = 'group:ag-1/telegram:5:50867'
+  const groupPublish = (members = false) => ({
+    publish: [
+      { alias: 'travel', at: 'host:travel', about: 'trips' },
+      { alias: 'dead-internet', at: GROUP, about: 'the work chat', members },
+    ],
+  })
+  const both = { allow: [{ name: 'anna', role: 'owner' }, { name: 'ben', role: 'member' }] }
+
+  test('a new topic titled [alias] goes to that group, and the owner is told where it went', async () => {
+    const w = await setup(groupPublish())
+    await say(w, 'anna', 'can the chat look at the release?', { thread: { id: TOPIC, title: '[dead-internet] Release' } })
+    const note = await w.mod.take('notice')
+    expect(note.at).toBe(`host:${INBOX_ID}`)
+    expect(note.text).toBe('hub: new topic from anna: "[dead-internet] Release" (to dead-internet)')
+    const d = await w.mod.take('deliver')
+    expect(d.at).toBe(GROUP)
+    expect(d.trigger).toBe(1)
+    expect(d.text).toEndWith('can the chat look at the release?')
+    // The group answers it without naming the thread, under its alias; the next word comes back to it.
+    const r = await w.mod.call(GROUP, 'send', { text: 'looking now' })
+    expect(r).toEqual({ ok: true, text: 'ok · sent to anna in thread aaaaaaaa' })
+    const got = msgOf((await w.anna.take('deliver')).env)
+    expect(got.body.agent).toBe('dead-internet')
+    expect(got.body.thread?.id).toBe(TOPIC)
+    await say(w, 'anna', 'thanks, and the changelog?', { thread: { id: TOPIC, title: '[dead-internet] Release' } })
+    expect((await w.mod.take('deliver')).at).toBe(GROUP)
+  })
+
+  test('a title does not move a thread that is already somewhere, and an unknown alias stays in the inbox', async () => {
+    const w = await setup(groupPublish())
+    await say(w, 'anna', 'first', { thread: { id: TOPIC, title: 'Release' } })
+    expect((await w.mod.take('deliver')).at).toBe(`host:${INBOX_ID}`)
+    await say(w, 'anna', 'second', { thread: { id: TOPIC, title: '[dead-internet] Release' } })
+    expect((await w.mod.take('deliver')).at).toBe(`host:${INBOX_ID}`)
+    await say(w, 'anna', 'third', { thread: { id: 'bbbbbbbb-1111-4111-8111-111111111111', title: '[nobody] x' } })
+    expect((await w.mod.take('deliver')).at).toBe(`host:${INBOX_ID}`)
+  })
+
+  test("a member's titled topic goes to the group only when the entry is published to members", async () => {
+    const off = await setup({ ...both, ...groupPublish(false) })
+    await say(off, 'ben', 'hi chat', { thread: { id: TOPIC, title: '[dead-internet] From ben' } })
+    expect((await off.mod.take('deliver')).at).toBe(`host:${INBOX_ID}`)
+    off.mod.close()
+    await off.bridge.stop()
+    off.store.close()
+    off.h.stop()
+    world = null
+    const on = await setup({ ...both, ...groupPublish(true) })
+    await say(on, 'ben', 'hi chat', { thread: { id: TOPIC, title: '[dead-internet] From ben' } })
+    expect((await on.mod.take('deliver')).at).toBe(GROUP)
+  })
+
+  test('a group answers only in its own threads and opens new topics only with the owner', async () => {
+    const w = await setup({ ...both, ...groupPublish() })
+    await say(w, 'anna', 'for the host', { thread: { id: TOPIC, title: 'Budget' } })
+    expect((await w.mod.take('deliver')).at).toBe(`host:${INBOX_ID}`)
+    const foreign = await w.mod.call(GROUP, 'send', { thread: 'aaaaaaaa', text: 'butting in' })
+    expect(foreign.ok).toBe(false)
+    expect(foreign.text).toStartWith("not sent: that hub thread is not this group's")
+    // The pair's general belongs to the host assistant.
+    expect((await w.mod.call(GROUP, 'send', { to: 'anna', text: 'hello' })).ok).toBe(false)
+    // Nothing of its own to answer yet.
+    expect((await w.mod.call(GROUP, 'send', { text: 'hello?' })).ok).toBe(false)
+    expect((await w.mod.call(GROUP, 'send', { to: 'ben', title: 'Notes', text: 'hi ben' })).text).toBe(
+      'not sent: a group opens new hub topics only with anna',
+    )
+    await new Promise(r => setTimeout(r, 100))
+    expect(w.anna.frames.filter(f => f.t === 'deliver')).toEqual([])
+    expect(w.ben.frames.filter(f => f.t === 'deliver')).toEqual([])
+    // The host assistant still reaches everything.
+    expect((await w.mod.call(`host:${INBOX_ID}`, 'send', { thread: 'aaaaaaaa', text: 'on it' })).ok).toBe(true)
+  })
+
+  test("a group's new topic with the owner is bound to the group topic it came from", async () => {
+    const w = await setup(groupPublish())
+    const r = await w.mod.call(GROUP_TOPIC, 'send', { to: 'anna', title: 'Weekly', text: 'Notes from the chat' })
+    expect(r.ok).toBe(true)
+    const got = msgOf((await w.anna.take('deliver')).env)
+    expect(got.body.agent).toBe('dead-internet')
+    expect(got.body.thread?.title).toBe('Weekly')
+    const topic = got.body.thread?.id ?? ''
+    await say(w, 'anna', 'good, keep going', { thread: { id: topic, title: 'Weekly' }, replyTo: got.id })
+    const d = await w.mod.take('deliver')
+    expect(d.at).toBe(GROUP_TOPIC)
+    expect(await w.mod.none('notice')).toEqual([])
+  })
+
+  test("a group's hub_inbox reads what waits anywhere in the group, and no other thread", async () => {
+    const w = await setup({ loop: 2, ...groupPublish() })
+    const agentBody = { via: 'agent' as const, agent: 'planner', thread: { id: TOPIC, title: '[dead-internet] Ping' } }
+    await say(w, 'anna', 'one', agentBody)
+    expect((await w.mod.take('deliver')).at).toBe(GROUP)
+    await say(w, 'anna', 'two', agentBody)
+    expect((await w.mod.take('schedule')).at).toBe(GROUP)
+    await say(w, 'anna', 'for the host', { thread: { id: 'bbbbbbbb-1111-4111-8111-111111111111', title: 'Other' } })
+    await w.mod.take('deliver')
+    expect((await w.mod.call(GROUP_TOPIC, 'inbox', { thread: 'bbbbbbbb' })).text).toBe(
+      "hub thread bbbbbbbb is not this group's",
+    )
+    expect((await w.mod.call(`host:${INBOX_ID}`, 'inbox', {})).text).toBe('nothing waits in the hub inbox')
+    const r = await w.mod.call(GROUP_TOPIC, 'inbox', {})
+    expect(r.ok).toBe(true)
+    expect(r.text).toContain('two')
+    expect(r.text).not.toContain('for the host')
+  })
+})

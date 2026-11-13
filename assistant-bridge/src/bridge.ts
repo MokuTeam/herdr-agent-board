@@ -1,8 +1,13 @@
-// The assistant bridge (#384, phase 1, issue #386): one hub peer for a NanoClaw assistant. Hub
-// messages go to the host assistant's inbox topic, or to the topic a thread is bound to; the ones
-// addressed to the assistant wake it, the rest wait for a scheduled read. The assistant writes back
-// with hub_send from any topic: a new topic is bound to the topic it came from, so the answers
-// come back there. The allow list decides who is heard at all; the hub cannot.
+// The assistant bridge (#384, phases 1 and 3, issues #386 and #388): one hub peer for a NanoClaw
+// assistant. Hub messages go to the host assistant's inbox topic, or to the place a thread is bound
+// to; the ones addressed to the assistant wake it, the rest wait for a scheduled read. The assistant
+// writes back with hub_send from any topic: a new topic is bound to the topic it came from, so the
+// answers come back there. The allow list decides who is heard at all; the hub cannot.
+//
+// Other agent groups of the same NanoClaw are places too (`group:<id>`, design 6.2). A new topic
+// whose title starts with `[<alias>]` goes to that alias's place and stays bound there (rule 3 of
+// 4.2). A group speaks only in its own threads, opens new topics only with an owner, and its
+// hub_inbox shows only its own; the host assistant keeps reaching everything.
 import { randomUUID } from 'node:crypto'
 import {
   ackBytes,
@@ -177,13 +182,38 @@ export function createBridge(o: BridgeOptions): Bridge {
   }
   const toModule = (loc: Location): Location | null => (loc === INBOX ? inboxTopic : loc)
   const fromModule = (loc: Location): Location => (loc === inboxTopic ? INBOX : loc)
-  /** The name the assistant writes under from a location: its published alias, else `host`. */
-  function aliasOf(loc: Location): string {
-    for (const p of cfg.publish) {
-      if (p.at === 'host:inbox' ? loc === INBOX : resolvePublished(p.at) === loc) return p.alias
-    }
-    return 'host'
+  /** The agent group a location is in; null for the host assistant's topics. */
+  const groupOf = (loc: Location): string | null => (loc.startsWith('group:') ? (loc.slice(6).split('/')[0] ?? null) : null)
+  /** A published `at` as a location. */
+  function placeOf(at: string): Location {
+    if (at === 'host:inbox') return INBOX
+    if (at.startsWith('group:')) return at as Location
+    return resolvePublished(at)
   }
+  /**
+   * The name the assistant writes under from a location: its published alias; in a group, the
+   * group's alias wherever in it; else `host` (or `group` for a group published under no alias).
+   */
+  function aliasOf(loc: Location): string {
+    for (const p of cfg.publish) if (placeOf(p.at) === loc) return p.alias
+    const g = groupOf(loc)
+    if (g === null) return 'host'
+    return cfg.publish.find(p => p.at.startsWith('group:') && groupOf(p.at as Location) === g)?.alias ?? 'group'
+  }
+  /**
+   * Rule 3 of 4.2: a new pair topic titled `[<alias>] ...` goes to that alias's place, when the alias
+   * is published to the sender (owners always, members when the entry says so). Null: the inbox.
+   */
+  function titledPlace(title: string, role: Role): Location | null {
+    const m = /^\s*\[([a-z0-9][a-z0-9-]{0,31})\]/i.exec(title)
+    const alias = m?.[1]?.toLowerCase()
+    const p = alias ? cfg.publish.find(x => x.alias === alias) : undefined
+    if (!p || (role !== 'owner' && !p.members)) return null
+    const loc = placeOf(p.at)
+    return loc === INBOX ? null : loc
+  }
+  /** Whether a thread is bound into the group (a group's hub tools reach only those). */
+  const inGroup = (t: Thread, g: string): boolean => t.location !== null && groupOf(t.location) === g
   function resolvePublished(at: string): Location {
     const s = at.slice(5)
     const t = findTopic(s)
@@ -293,7 +323,8 @@ export function createBridge(o: BridgeOptions): Bridge {
       maxPerHour: cfg.wake.maxPerHour,
     })
     if (d.why === 'cap' && store.tellOnce('cap', now - HOUR, now)) notice(capNotice(cfg.wake.maxPerHour))
-    if (isNew && t.id !== GENERAL && t.title) notice(newTopicNotice(scope, m.name, m.peer, t.title))
+    if (isNew && t.id !== GENERAL && t.title)
+      notice(newTopicNotice(scope, m.name, m.peer, t.title) + (location === INBOX ? '' : ` (to ${aliasOf(location)})`))
     store.setState(m.id, d.wake ? 'delivered' : 'batched')
     store.touchThread(t.key, now)
     if (d.wake) queueWake(location, delivered(headerFor(m, t, role), m.text))
@@ -330,6 +361,9 @@ export function createBridge(o: BridgeOptions): Bridge {
       changed()
       return
     }
+    // A thread already known keeps its place (rule 2); only a new topic is placed by its title.
+    const place =
+      role && ref?.title && scopeOf(ref) === 'pair' && !store.thread(key) ? titledPlace(ref.title, role) : null
     const isNew = store.addThread({
       key,
       scope: splitKey(key)?.scope ?? msg.from,
@@ -338,7 +372,7 @@ export function createBridge(o: BridgeOptions): Bridge {
       members: ref?.members ?? null,
       by: msg.from,
       createdAt: now,
-      location: null,
+      location: place,
     })
     const t = store.thread(key)
     if (!t) return
@@ -460,8 +494,15 @@ export function createBridge(o: BridgeOptions): Bridge {
       if (!t) return no('no hub thread here to answer; give to (with a title for a new topic) or thread')
     }
     if (t && t.scope === TEAM) return no('the bridge does not post to the team chat or a channel')
+    const group = groupOf(from)
+    if (group !== null && t && !inGroup(t, group))
+      return no(
+        `that hub thread is not this group's; a group answers only in its own threads, or opens a new topic with ${ownerName()} (to and title)`,
+      )
     const peer = fresh?.peer ?? t?.scope ?? ''
     if (!roleOf(peer)) return no(`${nameOf(peer)} is not on the bridge's allow list`)
+    if (group !== null && fresh && roleOf(peer) !== 'owner')
+      return no(`a group opens new hub topics only with ${ownerName()}`)
     const key = fresh ? threadKey(peer, fresh.id) : (t?.key ?? '')
     if (t && t.run >= cfg.loop) return no('loop pause: a person has to write in the thread first')
 
@@ -527,10 +568,16 @@ export function createBridge(o: BridgeOptions): Bridge {
   }
 
   function handleInbox(from: Location, a: InboxArgs): { ok: boolean; text: string } {
-    let items = store.byState(['batched'], from)
+    const group = groupOf(from)
+    // A group reads what waits anywhere in it; a host topic reads its own.
+    let items =
+      group === null
+        ? store.byState(['batched'], from)
+        : store.byState(['batched'], null).filter(m => m.location !== null && groupOf(m.location) === group)
     if (a.thread) {
       const t = findThread(a.thread)
       if (!t) return { ok: false, text: `there is no hub thread ${a.thread}` }
+      if (group !== null && !inGroup(t, group)) return { ok: false, text: `hub thread ${a.thread} is not this group's` }
       items = items.filter(m => m.thread === t.key)
     }
     const shown = items.flatMap(m => {
