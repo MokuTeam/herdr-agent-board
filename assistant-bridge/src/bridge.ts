@@ -183,7 +183,8 @@ export function createBridge(o: BridgeOptions): Bridge {
   const toModule = (loc: Location): Location | null => (loc === INBOX ? inboxTopic : loc)
   const fromModule = (loc: Location): Location => (loc === inboxTopic ? INBOX : loc)
   /** The agent group a location is in; null for the host assistant's topics. */
-  const groupOf = (loc: Location): string | null => (loc.startsWith('group:') ? (loc.slice(6).split('/')[0] ?? null) : null)
+  const groupOf = (loc: Location): string | null =>
+    loc.startsWith('group:') ? (loc.slice(6).split('/')[0] ?? null) : null
   /** A published `at` as a location. */
   function placeOf(at: string): Location {
     if (at === 'host:inbox') return INBOX

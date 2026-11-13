@@ -416,11 +416,18 @@ describe('another agent group (phase 3, design 6.2)', () => {
       { alias: 'dead-internet', at: GROUP, about: 'the work chat', members },
     ],
   })
-  const both = { allow: [{ name: 'anna', role: 'owner' }, { name: 'ben', role: 'member' }] }
+  const both = {
+    allow: [
+      { name: 'anna', role: 'owner' },
+      { name: 'ben', role: 'member' },
+    ],
+  }
 
   test('a new topic titled [alias] goes to that group, and the owner is told where it went', async () => {
     const w = await setup(groupPublish())
-    await say(w, 'anna', 'can the chat look at the release?', { thread: { id: TOPIC, title: '[dead-internet] Release' } })
+    await say(w, 'anna', 'can the chat look at the release?', {
+      thread: { id: TOPIC, title: '[dead-internet] Release' },
+    })
     const note = await w.mod.take('notice')
     expect(note.at).toBe(`host:${INBOX_ID}`)
     expect(note.text).toBe('hub: new topic from anna: "[dead-internet] Release" (to dead-internet)')
