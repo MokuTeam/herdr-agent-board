@@ -78,14 +78,16 @@ interface SnapPane {
 }
 
 /**
- * lastBoard, and when the board's process lives and board.json names its host too, herdr asked what
- * runs in the pane: Windows gives a dead process's id to the next program that starts (after a
- * restart, a driver's helper, say), so a live pid is no proof that the board runs. The pane is stale
- * when neither the pid nor the host is among its processes and none of them may be the board. Only
- * a pane with the board's label is judged so (herdr gives a pane's id out again, so one without it
- * may be the user's now). When herdr cannot say (an error, an older herdr), the pane is trusted as
- * before; a board.json without a host (an older board wrote it) is judged as before, and herdr is
- * not asked.
+ * lastBoard, but a pane whose board process is gone counts only with the board's label: herdr gives
+ * a pane's id out again, so one without it may be the user's now. It is no board then, and not to
+ * be closed: null, as when the pane is gone. When the board's process lives and board.json names its
+ * host too, herdr is asked what runs in the pane: Windows gives a dead process's id to the next
+ * program that starts (after a restart, a driver's helper, say), so a live pid is no proof that the
+ * board runs. The pane is stale when neither the pid nor the host is among its processes and none of
+ * them may be the board. Only a pane with the board's label is judged so; one without it is trusted
+ * as before. When herdr cannot say (an error, an older herdr), the pane is trusted as before; a
+ * board.json without a pid or a host (an older board wrote it) is judged as before, and herdr is not
+ * asked.
  */
 export async function lastBoardChecked(
   saved: SavedBoard | null,
@@ -94,8 +96,10 @@ export async function lastBoardChecked(
   inPane: PaneLookup,
 ): Promise<{ pane: string; stale: boolean } | null> {
   const last = lastBoard(saved, panes, alive)
-  if (!saved || !last || last.stale || saved.pid === undefined || saved.host === undefined) return last
-  if (panes.find(p => p.pane_id === last.pane)?.label !== BOARD_LABEL) return last
+  if (!saved || !last) return last
+  const labelled = panes.find(p => p.pane_id === last.pane)?.label === BOARD_LABEL
+  if (last.stale) return labelled ? last : null
+  if (saved.pid === undefined || saved.host === undefined || !labelled) return last
   const info = await inPane(last.pane).catch(() => null)
   return info && !runsBoard(info, saved) ? { pane: last.pane, stale: true } : last
 }

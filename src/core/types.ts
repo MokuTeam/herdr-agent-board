@@ -1,6 +1,7 @@
 // Types shared across the board. Grows with each ported module.
 
 import type { CallView } from './call-agent.ts'
+import type { CompactView } from './compact.ts'
 import type { FormQuestion } from './dialogs/question-form.ts'
 import type { HelperSummary } from './helpers.ts'
 import type { FailureKind } from './launch/launcher-command.ts'
@@ -46,6 +47,8 @@ export interface Card {
   profileDir?: string
   /** The profile a start asked for (the board's launch or spawn-agent). */
   profileWant?: string
+  /** The model a start asked for (#380: spawn-agent --model, the board's launch); absent: the profile's default. */
+  modelWant?: string
   /** The Claude id inherited by the root Codex hook, false when none. A Claude child has its own id. */
   codexParentClaude?: string | false
   /** A fork's: the id of the session it is a fork of, and when it started (its copied lines are older). */
@@ -66,6 +69,14 @@ export interface Card {
   todoSeq?: number
   /** The open tasks this session was last told of (#319, core/todos.ts todosNews). */
   todosSeen?: string
+  /** Its own auto-compact limit (#378, core/compact.ts): tokens, `60%` of the window, or `never`; absent: Settings' default. */
+  compactAt?: number | string
+  /** What its summary must keep, typed after /compact (#378); absent: Settings' default's. */
+  compactNote?: string
+  /** The board's last /compact for it (#378, core/compact.ts CompactRun). */
+  compactRun?: unknown
+  /** When the board's compactions of it ended (#378, the newest 20), for its conversation's lines. */
+  compactDone?: unknown
   [extra: string]: unknown
 }
 
@@ -157,6 +168,8 @@ export interface LaunchView {
   parent?: string | null
   /** The agent the request asked for (core/launch/agents.ts); `claude` when it named none. */
   agent?: string
+  /** The model it starts on (#380), null for the profile's default. */
+  model?: string | null
 }
 
 export interface Config {
@@ -191,6 +204,8 @@ export interface Config {
   presence?: unknown
   /** Tasks (#202, `true` or an object), as config.json has it: read through core/todos.ts todosConfig. */
   todos?: unknown
+  /** The peer network (#231, an object with the hub's ws:// or wss:// address), as config.json has it: read through core/team.ts teamConfig. */
+  team?: unknown
   /** The backup of the board's database (#233), as config.json has it: read through core/backup.ts backupConfig. */
   backup?: unknown
   /** Time tracking (#233), as config.json has it: read through core/time.ts timeConfig. */
@@ -199,6 +214,10 @@ export interface Config {
   secrets?: unknown
   /** The calendar (#328), as config.json has it: read through core/calendar.ts calendarConfig. */
   calendar?: unknown
+  /** Auto-compact's default (#378, `{ at, note }`), as config.json has it: read through core/compact.ts compactConfig. */
+  compact?: unknown
+  /** Threads (#379, `true` or an object), as config.json has it: read through core/work-threads.ts threadsConfig. */
+  threads?: unknown
   [extra: string]: unknown
 }
 
@@ -277,6 +296,8 @@ export interface Item {
   contextSize?: number | null
   /** The model it runs, as Claude's status line names it. */
   model?: string | null
+  /** The model its start asked for (#380, card.modelWant): not the profile's default. Absent for the others. */
+  modelAsked?: string
   /** The effort it thinks with (low, medium, high, xhigh, max), from its transcript. */
   effort?: string | null
   tool?: ToolCall | null
@@ -312,5 +333,7 @@ export interface Item {
   claudeRoot?: string | null
   /** Its tasks from its card (#202), while config.json turns them on; absent when none. */
   todos?: Todo[]
+  /** Its auto-compact (#378, core/compact.ts compactView): absent when neither it nor Settings has a limit. */
+  compact?: CompactView
   [extra: string]: unknown
 }

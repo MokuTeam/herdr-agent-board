@@ -18,6 +18,12 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.incomplete': 'Setup incomplete',
     'setup.incompleteHint': 'Some of the board is not set up on this computer',
     'setup.allSet': 'Everything the board needs is set up.',
+    'setup.port.title': 'Board port {port}',
+    'setup.port.own': 'this install’s board answers (pid {pid})',
+    'setup.port.other':
+      'Another process holds the port, not this install’s board ({root}): {owner}. The board command talks to it, and this board cannot listen there.',
+    'setup.port.fix':
+      'Stop that process (often an old board server from another checkout), then open the board again: kill {pid} (Stop-Process -Id {pid} on Windows)',
     'setup.todo': ['{n} thing needs a look.', '{n} things need a look.'],
     'setup.recheck': 'Check again',
     'setup.checking': 'Checking…',
@@ -185,6 +191,12 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.incomplete': 'Настроено не всё',
     'setup.incompleteHint': 'Часть доски на этом компьютере не настроена',
     'setup.allSet': 'Всё, что нужно доске, настроено.',
+    'setup.port.title': 'Порт доски {port}',
+    'setup.port.own': 'отвечает доска этой установки (pid {pid})',
+    'setup.port.other':
+      'Порт занят другим процессом, не доской этой установки ({root}): {owner}. Команда board говорит с ним, а эта доска не может там слушать.',
+    'setup.port.fix':
+      'Остановите этот процесс (обычно это старый сервер доски из другой копии) и откройте доску снова: kill {pid} (в Windows Stop-Process -Id {pid})',
     'setup.todo': ['{n} пункт требует внимания.', '{n} пункта требуют внимания.', '{n} пунктов требуют внимания.'],
     'setup.recheck': 'Проверить снова',
     'setup.checking': 'Проверяю…',

@@ -222,6 +222,7 @@ const fields = (f: Partial<LaunchFields> = {}): LaunchFields => ({
   wt: false,
   branch: '',
   message: '',
+  model: '',
   ...f,
 })
 const ok: FolderCheck = { input: 'C:\\Work\\acme', path: 'C:\\Work\\acme', exists: true, dir: true }
@@ -238,6 +239,7 @@ describe('what the form starts with', () => {
       message: '',
       wt: false,
       branch: '',
+      model: '',
       workspace: { label: 'Acme' },
       set: { category: true, cwd: true, name: false, branch: false, workspace: true, newWorkspace: true },
       lanes: [],
@@ -546,6 +548,7 @@ describe("the server's answers, narrowed", () => {
       board: '',
       recent: [],
       linkedWorkspaces: false,
+      takesModel: false,
     })
     // The agents a start may pick, and the board's default; what is not an agent is left out.
     expect(

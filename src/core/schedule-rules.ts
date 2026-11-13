@@ -56,6 +56,11 @@ export type ScheduleEntry = {
    */
   fromProfile?: string
   replyTo?: string
+  /**
+   * A sleeping session is not woken for it: it waits until the session is awake (a thread's event,
+   * services/work-threads.ts; services/scheduler.ts).
+   */
+  noWake?: boolean
   [extra: string]: unknown
 }
 

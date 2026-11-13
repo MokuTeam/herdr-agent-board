@@ -11,7 +11,7 @@
 //   must be there;
 // - it carries the cookie of a live login;
 // - it does not act on this computer's screen (desktopOnly), nor manage the remote mode, Remote
-//   access or wake (localOnly), in either spelling of its path; pairing and peers are not here at
+//   access, wake or the team (localOnly), in either spelling of its path; pairing and peers are not here at
 //   all.
 // The routes' own guards apply as for the web board, with the domain's origin as the board's own,
 // and the routes that read by a path refuse the board's own files (ownFiles). WebAuthn expects
@@ -34,8 +34,10 @@ import {
   RateLimiter,
 } from '../core/access.ts'
 import { REMOTE_API } from '../core/remote.ts'
+import { teamConfig } from '../core/team.ts'
 import { boardPorts, publicHosts, publicOrigin, tunnelConfig, tunnelPort, tunnelProblems } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
+import { threadsConfig } from '../core/work-threads.ts'
 import type { Access, SignIn, Who } from '../services/access.ts'
 import type { Probes } from '../services/tunnel.ts'
 import { type Body, dispatch, type GuardState, json, peerOf, type Route, readBody } from './http.ts'
@@ -185,6 +187,10 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         auth: 'login',
         signedIn,
         language: o.cfg.language ?? null,
+        // The Team panel (#355), while the team is on; else hello is as it was.
+        ...(signedIn && teamConfig(o.cfg.team) !== null && { team: true }),
+        // Threads (#392): the tunnel's login is the owner's own, while threads are on.
+        ...(signedIn && threadsConfig(o.cfg.threads) && { threads: true }),
       })
       return signedIn ? res : clearedFor(res, cookie)
     }
@@ -250,7 +256,9 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
       const path = decoded(raw)
       if (path === null) return json(400, { error: 'path' })
       if (NOT_HERE.test(raw) || NOT_HERE.test(path)) return json(404, { error: 'not found' })
-      const refused = remoteRefusal(raw, path)
+      // The tunnel's login is the owner's own: with the team on, the Team panel works here (#355).
+      // Its login is the owner's own: threads too (#392).
+      const refused = remoteRefusal(raw, path, false, teamConfig(o.cfg.team) !== null, true)
       if (refused) return refused
       if (req.method === 'POST' && raw === '/api/logout') {
         o.access.endToken(token)

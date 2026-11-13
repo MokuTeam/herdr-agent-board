@@ -35,7 +35,8 @@ notifications: Windows and macOS). Steps 1 and 2 are what the board needs; the r
    [`spawn-agent`](#spawn-agent), which starts a session in a new herdr tab. It registers the
    Claude Code hooks (SessionStart, UserPromptSubmit) that brief every session about the board,
    and the status line when you have none (usage windows and context fill on the board). It
-   installs the Claude Code skill [`herdr-agents`](#agents) into `~/.claude/skills`, and has herdr
+   installs the Claude Code skills [`herdr-agents`](#agents) and
+   [`agent-board-team`](skills/agent-board-team/SKILL.md) into `~/.claude/skills`, and has herdr
    install its own Claude hook (`herdr integration install claude`), from which herdr learns which
    conversation a pane runs; a herdr that cannot is said, and the rest goes on. It replaces only
    its own entries in `~/.claude/settings.json`, keeps a copy of the file before
@@ -46,13 +47,14 @@ notifications: Windows and macOS). Steps 1 and 2 are what the board needs; the r
 
    With more than one Claude profile (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`) it
    does the same in the `settings.json` of every profile the board shows, each with its own
-   backup, puts the skill into each one's `skills` folder and has herdr put its hook there
+   backup, puts the skills into each one's `skills` folder and has herdr put its hook there
    (`CLAUDE_CONFIG_DIR` set to that folder); a hidden profile is left alone,
    and a shown one whose folder is gone is skipped, saying so. One `settings.json` that does not
    parse stops it before anything is written. It never touches credentials, `.claude.json` or
    anything else in a profile folder beyond `settings.json`, its backup and
-   `skills/herdr-agents` (herdr writes its own `hooks/herdr-agent-state.ps1` and its entry). A
-   profile shown later in the Profiles panel gets its hooks, the skill and herdr's hook then and
+   `skills/herdr-agents` and `skills/agent-board-team` (herdr writes its own
+   `hooks/herdr-agent-state.ps1` and its entry). A
+   profile shown later in the Profiles panel gets its hooks, the skills and herdr's hook then and
    there; the install action run again, or Install in that panel, puts them in too.
 
    A session brought back from the archive runs in its own profile again, hidden or not, never in
@@ -110,7 +112,10 @@ run this copy of the plugin; with more than one profile shown, in each, by its n
 Claude hook (in each shown profile too: without it a session's card has no conversation and no
 profile), the key, sleep and wake (running, off, crashed with its error, held by the separate
 herdr-wake plugin, or not answering, and its hooks in each shown profile), how new sessions start,
-MokuPilot, the notifications. It also says what herdr's panes hold: how many run an agent, sleep
+MokuPilot, the notifications, and who holds the board's port when something listens there (this
+install's board, or another process by its pid, folder and age: an old board server left running
+from another checkout keeps this board from listening and answers the board command in its place).
+It also says what herdr's panes hold: how many run an agent, sleep
 in their pane, are herdr-sidebar's or something else, with the memory their processes take, and
 how many of the sidebars and the others are a bare shell (a sidebar pane herdr restored without its
 sidebar, a terminal left open). While the board's sleep and wake runs, it names the panes labelled
@@ -197,12 +202,23 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
 - Lanes by category, columns by state, live over Server-Sent Events. A column with no card on
   show narrows to its head (name and count) and the others share its room, gliding as it fills
   or empties.
-- One compact toolbar row: the title with the board's summary under it while the row has room
-  (else in the title's tooltip), the lanes, search, categories and the schedule as small buttons
-  named by their tooltips, and Settings (the gear). A narrower window takes two rows, a phone
-  three. Where the row has no room for all of the lanes, they fold into one pill naming the lane
-  on show with its count; it opens every lane, with its count, in a menu. The profile switch
-  folds the same way, on its own.
+- One toolbar row while the filters (the lanes, the profile switch, search) and every action fit
+  side by side, else two, never more and never a row that wraps: the actions on top, the filters
+  under them. There is no title: the page's name is there for screen readers, and on a wide
+  board the summary ("5 sessions · 1 working ...") stands at the start of the row. In two rows
+  the actions stay as long as the row holds them, in the order they are used: Next, the
+  presence switch, Tasks, New session, the schedule, the calendar, Time, usage, the archive,
+  categories, then the quiet notes (setup, backup, wake). On a phone that is Next first, with
+  presence beside it where the row holds both and in "More" where it does not.
+  What does not fit is in "More", one menu that lists it with its counts, and its button carries
+  a dot while something in it needs a look (a due reminder, a task to confirm, a note). Settings
+  (the gear) and the live dot always stay. Scrolling down the lanes folds the filters away on
+  the board's spring, from wherever it is and interruptible; scrolling up a little, reaching the
+  top, or tapping the funnel button brings them back, and a filter in use keeps them open. While they are
+  folded a funnel button stands for them, saying how many are on and which; with reduced motion
+  they cross-fade instead of sliding. Where the row has no room for all of the lanes, they fold
+  into one pill naming the lane on show with its count; it opens every lane, with its count, in a
+  menu. The profile switch folds the same way, on its own.
 - Settings (the gear): appearance (as the system has it, light or dark; kept in this browser),
   style (Classic, the board's own, or Terminal: a terminal-style look with a One Dark palette,
   One Light in the light theme, monospace and 1px outlines, and the terminal board's keys, see
@@ -245,7 +261,16 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   the moon on a card), "Wake" for sleeping sessions, "Restart" (also in a card's menu) for one
   that lost an MCP server or acts up, see [Restart](#restart). To close: click the board beside
   it, flick it out the way it came, or Esc. Another card switches it to that session.
-  Attachments stay with their session through a close.
+  Attachments stay with their session through a close. The chevron in the head's row folds the
+  sheet so the conversation gets the room: the row keeps the status, the name and a count of the
+  helpers (a tap opens their list), the lane, the star, the facts and the card's fields fold
+  under it, the question it waits on stays as two lines that open on a tap, with its "no reply
+  needed" button, and the row of actions folds behind the footer line (context, model, effort).
+  What folds goes back up the way it came, and a tap in the middle of it turns it back. A phone
+  starts folded, a wider panel whole; the choice is this browser's, kept once for the phone's
+  width and once for the wider one. In the wide, low layout the head is a column beside the
+  conversation: its fold stays open there, and the chevron folds the helpers' strip, the question
+  and the row of actions, which take the conversation's height.
 - "MokuPilot", a call (the sheet, a card's menu), when [MokuPilot](https://github.com/MokuTeam/MokuPilot)
   is on this computer: a MokuPilot call starts at once, its agent a fork of the session
   (`claude --resume <id> --fork-session`, in the folder the session started in), so it knows what
@@ -696,7 +721,13 @@ folder field completes folder names as you type (Tab or Enter takes one), lists 
 suggestions when it has the focus, and "Browse" opens columns to walk the disk, Finder style;
 the server says whether the folder exists. The lane follows the folder (by the lanes' folders)
 until you pick one. For a folder in a git checkout, "In a new git worktree" makes a branch in a
-sibling folder (`repo-branch`) and starts there. Ctrl+Enter starts.
+sibling folder (`repo-branch`) and starts there. "Model" starts that one session on a model of its
+own (an alias such as `opus`, `sonnet` or `haiku`, or a full name; pi's `provider/id` for pi): it
+goes on the agent's command line as `--model <id>`, so the profile's default stays as it is. Empty
+is the profile's default. The field shows when the launcher can pass a model on (`model` in
+`POST /api/launch`, `takesModel` in `GET /api/launch/options`): the board's own spawn-agent,
+`launch.agent` for Claude or pi, a `launch.command` with `{model}`; any other refuses a start that
+names one. The session sheet then says "this session only" beside the model. Ctrl+Enter starts.
 
 The new card shows in its lane at once, under "Working" while it starts, and becomes the
 session's own card once herdr sees it. If it fails, it moves under "Needs me" with the reason
@@ -740,8 +771,9 @@ How it starts, by `launch` in config.json:
   in a UTF-8 file), `{sessionId}`, `{resume}` (the id of a session coming back from the
   [archive](#archive), empty for a new one), `{fork}` (the id of the session a [fork](#fork)
   starts from, empty otherwise; a launcher without it leaves forks to the board's own
-  spawn-agent), `{profile}` (the Claude profile's id) or `{profileDir}` (its
-  folder) filled in; a nested list is left out when a value in it is empty. Nothing from the request becomes a program or an option: values only fill those
+  spawn-agent), `{profile}` (the Claude profile's id), `{profileDir}` (its
+  folder) or `{model}` (the model the new-session window asked for, empty for the profile's
+  default: `["--model", "{model}"]`) filled in; a nested list is left out when a value in it is empty. Nothing from the request becomes a program or an option: values only fill those
   places. It runs with `HERDR_WORKSPACE_ID` set to the chosen workspace (the board itself lives
   in a workspace of its own) and should print `pane=<pane id>` when the session is up; it fails
   with a non-zero exit, its last error line is the reason shown. A new workspace's first tab is
@@ -799,11 +831,21 @@ puts it on PATH; it is `bun src/entrypoints/spawn-agent.ts`):
 spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
             [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
             [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>]
-            [--pane <herdr pane id>] [--profile <id>] [--agent claude|pi] [--trust]
+            [--pane <herdr pane id>] [--profile <id>] [--model <id or alias>]
+            [--agent claude|pi] [--trust]
 ```
 
 PowerShell's spelling works too: `-Name`, `-Cwd`, `-Label`, `-BriefFile`, `-Brief`, `-Workspace`,
-`-TimeoutSec`, `-Profile`, `-Agent`, `-Trust`. `--agent pi` types `launch.pi` (default `pi`) instead of the
+`-TimeoutSec`, `-Profile`, `-Model`, `-Agent`, `-Trust`. `--model` starts that one session on a
+model of its own (an alias such as `opus`, `sonnet` or `haiku`, or a full name), as
+`--model <id>` after the profile's `command` and `args` (of two, Claude takes the last), with a new
+session, `--profile`, `--resume` and `--fork` alike; pi gets it in its own form, `--model
+<provider/id>`. Nothing is written to the profile's settings, so every other session there keeps
+the profile's default: do not type `/model` into the new session for this, as Claude saves that as
+the default of every later session in the profile. A new session with `--model` and no
+`--session-id` gets an id of its own, so its card can say the model (`modelWant`). A resume
+without `--model` (Return, a wake, herdr's restore) goes on with the model the session last ran:
+Claude keeps it with the conversation. `--agent pi` types `launch.pi` (default `pi`) instead of the
 profile's `command` and `args` or `launch.claude`, for a new session only (no `--resume` or
 `--fork`); see [pi](#pi). It opens a tab in the workspace (inside herdr the current one, from
 `HERDR_WORKSPACE_ID`), labelled with `--label` or the name, and types the profile's `command`, or
@@ -1445,6 +1487,47 @@ agent cannot reconnect from inside its own turn (`/mcp` is a menu in its own ter
   running" is read in the session's own profile's registry (`<profile folder>/sessions`). With
   one profile it is all as above.
 
+## Auto-compact
+
+A session that runs for days (a monitor, a day orchestrator, a master) grows to 400k or 600k
+tokens of context. The board can compact it by itself once its context reaches a limit you set,
+by typing `/compact` into it between turns. Claude Code's own auto-compact near the end of the
+window stays as it is: this one runs earlier and on purpose.
+
+- Off unless set. A session's own limit goes on its card: "Compact at" in the sheet (open the
+  card's details), or `board compact --at 300k` from the session (`--session <id|name|pane>` for
+  another one). A limit is tokens (`300k`, `1.2m`, at least 10k) or a share of the session's
+  window (`60%`, 5% to 95%, read from the status line's window size). Set it well above what a fresh
+  session carries anyway (its system prompt and tools, often 20k to 90k): the sheet shows what each
+  compaction left. Settings → Auto-compact sets
+  a default for every Claude session without a limit of its own (config.json
+  `"compact": { "at": "400k" }`); `never` on a session keeps its full history whatever the default.
+  `board compact --clear`, or emptying the field, puts the session back on the default.
+- What the summary must keep: "Keep" in the sheet, or `board compact --note "<text>"` (`--note
+  none` drops it). It goes after the command, `/compact <text>`; config.json's `compact.note` is
+  the default's.
+- The board's compactor (`src/services/compactor.ts`) looks every 30 seconds and types `/compact`
+  only when the session is free between turns: never during a turn, over a terminal dialog, into
+  a question waiting on you (`board ask`, a question it ended its turn with, also on a card you
+  dragged to another column), over text you started typing in its input box, or into a sleeping
+  session (it is never woken for it; a sleeper does not grow, and is looked at again once it wakes
+  and goes idle). Only Claude Code sessions in a pane of their own.
+- Once at the limit, one `/compact`, never history trimmed bit by bit (the prompt cache is rebuilt
+  once). What a compaction left is the context of the first request after it, the system prompt and
+  tools included (Claude Code's own count of the summary leaves them out). At or above the limit, or
+  after a `/compact` that no compaction followed within 10 minutes (30 while the session works on
+  it), auto-compact pauses for that session: no second `/compact` until its context is below the
+  limit again (your own `/compact`, Claude Code's, a `/clear`) or its limit changes. One that no
+  compaction followed is tried again after six hours.
+- The card says it: "Compacted" in the sheet with the time and the sizes, `14:05: 612k → 48k`, in
+  orange with "paused" while it holds. The session's conversation gets a line of its own for each
+  compaction, "Compacted by the board: 612k → 48k" for the board's. `board compact` prints the
+  limit in force, where it comes from, and the last run; the board's log has each step.
+- The limit, the instructions and the last run live on the session's card, so they survive a
+  board restart, sleep and wake, and a resume under the same session id. A `/compact` typed just
+  before the board restarted is not typed again by the next one.
+- With no limit on any card and no default, the compactor asks herdr nothing.
+
 ## Several to sleep at once
 
 A session that coordinates others (one that polls every session at the end of the day, say) puts
@@ -2054,6 +2137,74 @@ other's change. Only sessions on the board count: an archived session's points c
 Not yet (see #202): a jump to the message a point came from (1b), a badge on the card, the open
 points in the sheet.
 
+## Threads
+
+Off unless you turn it on (#379, the design is [docs/design/threads](docs/design/threads/README.md);
+phases 1 and the board's side of 3 are built). A long-lived session that hands work out used to get every worker's full
+report in its own conversation. With threads a worker posts its result to a thread the board keeps,
+and the session that handed the work out gets one line:
+
+```
+[board reminder from threads] atlas-13 done: 217 rows mapped, 3 flagged in the report. More: board thread changes
+```
+
+A thread has a key (`atlas-13`: the lane and a number), a title, a one-line summary, a status
+(next, doing, waiting, owner, done, dropped), an assignee and a feed of entries with text, links
+and files. It lives in the board's database, and a file posted to it is copied into the board's
+state folder.
+
+Settings → Threads turns it on (#410): Off, Only me, or Me and agents; with Team on, also whether
+they are shared over Team or kept on this board. It writes config.json and copies the agents' skill
+for threads (`agent-board-threads`) into each shown profile, as the install does. Off takes the key
+out of config.json (a hand-written `events` goes with it) and keeps the stored threads and the
+copied skill. Only on the computer: a phone or the tunnel's page has no such row. By hand:
+
+```json
+"threads": true
+```
+
+or `"threads": { "agents": false }` to keep them the owner's (sessions read but do not write, and
+their brief says nothing of them), `"events": { "gapSec": 60 }` for the least time between two lines
+to one session. Then run the install once, which copies the skill into each profile; it is not
+copied while threads are off.
+
+`board thread --help` lists the commands: `new`, `post`, `done`, `ask` (the thread waits on you and
+the card goes under "Needs me", as `board ask` does), `set`, `show`, `list`, `changes`, `watch`,
+`unwatch`, `link`, `open`, `import`. Every write prints one line and works with the board stopped. Who
+wrote an entry is the session that ran the command (or the one `--session` names, MokuPilot's day
+session by its id); outside a session, you.
+
+**MokuPilot's task boards** (#393). `board thread import <file>` makes a thread of each item of a
+task board in the "agent-board" format (`~/.agent-boards/<harness>/<session>.json`): its text the
+title, its note the summary, its owner the assignee, its step's root the parent, its times kept.
+Run again, it adds nothing and applies only what changed in the file since the last run, so what was
+changed on the board stays. On a pi day the task tool is the pi-task-board package's, which writes
+that file itself: while threads are on (and agents may write), the board copies the running pi day's
+file into threads on each refresh, marked as pi's, and refuses an edit of them on the board (it
+changes in pi; you can still close one). Once that day is over they are ordinary threads. Without
+MokuPilot, or with `"mokupilot": false`, nothing of it is read.
+
+The session that creates a thread hears of its status changes; a session hears no line about its own
+change, and several changes before a line goes out are one line. A sleeping session is not woken for
+a line (unless its watch asked for `--wake`): it gets the line when it is next awake. A MokuPilot day
+session gets it through its inbox.
+
+With the key absent nothing changes: no brief line, nothing in the payload, nothing in the hook that
+runs on every prompt, the tables in `board.db` stay empty, and no task board is read. Not yet:
+sharing a thread with a teammate (phase 4 of the design) and MokuPilot's own side of phase 3 (in its
+repository).
+
+On the page, while threads are on, a **Threads** pill beside Tasks counts what needs you and opens
+the threads panel: the list by status on the left, one thread on the right (one screen at a time
+in a narrow panel and on the phone). There you change a thread's status and who holds it, add a
+note with files, answer a question an agent asked you (the answer goes into the thread and is
+typed into the session that asked), and confirm or keep open a close an agent proposed. A card
+shows its session's open threads as chips, the session sheet has a Threads fold, and a thread's
+key in a card, an entry or a message opens it. `http://127.0.0.1:<port>/#thread=<key>` opens a
+thread from anywhere (`board thread link` prints it), and `board thread open <key>` brings the
+board's window up on it. The routes are `/api/threads` (docs/design/threads, 5.3); away from the
+computer only your own logins reach them.
+
 ## Secrets
 
 An agent that needs a token, a password or OAuth keys it must never see used to write a script
@@ -2159,6 +2310,293 @@ writes: an agent's request writes nothing. It does not guard against an agent th
 you: it runs as your user and can read the file a sink writes, or change config.json (the form
 shows where a value goes, so read it). What it is for is keeping secrets out of the agent's
 conversation, its transcripts and its provider.
+
+## Team
+
+An experiment (#231), off unless a `team` key is in config.json. Boards of people you trust talk
+through one small hub that you or a teammate runs: a board asks a question of another person's
+board, the hub holds it while that board is away, and the answer to "did it arrive" is signed by
+the board that received it. Nothing else crosses: no sessions, no files, no herdr commands. What
+comes in is shown in Settings → Team… and kept in a thread; it never starts, types into or
+launches anything.
+
+Step by step, for the hub's admin and for each member, with what to do when it does not work:
+[docs/team-quickstart.md](docs/team-quickstart.md) (English, then Russian).
+
+**The `team` key.** `"team": { "hub": "ws://host:7443", "name": "Ana" }`: the hub's address
+(`ws://` or `wss://`) and the name the others see (up to 40 characters). Without it, or with
+`false`, the board opens no connection, keeps no team file, and the page has no Team entry. It is
+written by `board team join`, and the running board connects within seconds. This board's key
+(ed25519) is made at the first join and kept in the board's state directory, readable by you
+only; its fingerprint is what the others compare.
+
+**Joining.** The hub's admin makes an invite (`hub/README.md`) and hands you the code out of band:
+
+```
+board team join hab-xxxx-xxxx-xxxx-xxxx-xxxx-xxxx --hub ws://hub.example:7443 --name Ana
+board team roster
+board team draft Roman "is the build green?"
+```
+
+`join` reaches the hub first and writes `team` only once the hub says welcome; a bad or used
+invite changes nothing. A try that gets no answer in 10 s is made again, up to three tries, and a
+failure says what got through on the way: the name's addresses, TCP to each family, TLS. The key
+is saved just before the join goes out and taken back when the hub refuses it, so a join whose
+welcome was lost is not lost with it: the same command again logs in with that key. `roster` asks
+the running board: the hub, the connection, who is
+online (`●`), who is not (`○`, with when they were last seen), and a flag on anyone whose key
+changed.
+
+**The panel.** Settings → "Team…", or the head's Team button. It reads as a messenger (#370): a
+wide panel shows the conversations on the left and the one you picked on the right; a narrow one
+(a docked panel, a phone) shows the list, then the conversation, with a back button. The list has
+the connection line, the team chat first, the channels, then each person with an online dot, their
+`general` thread and their topics (#216, below) under them; every row shows its latest message,
+its time and its unread count. A conversation has a separator for each day, one sender's messages a
+few minutes apart under one name, the time on each message (the full date on hover, or a long press
+on a phone), and a "New messages" line where the unread start, which is where it opens. Each
+message you sent shows how far it got: a clock while queued at the hub, one tick delivered, two
+received (their board's signed ack), expired (it waits up to 24 hours by default) in words; in the
+team chat the slowest member's copy, every member's in its tooltip. An agent's message is outlined,
+with the session's name and whose board it is on. Reply on a message (hover, or the long press)
+quotes it over yours, and a click on a quote goes back to the original; a board whose caps say
+`replies` gets the reply with what it answers, an older one the plain text. Enter sends, Shift+Enter
+breaks the line, and what you were writing waits in each thread while you read another. From a
+`general` thread, "New topic" starts one with a title and an optional http(s) link. "People and
+agents" shows each person's key fingerprint, your passkeys and the agent switches. A person whose key
+changed is marked, and what comes from the new key is held back until you press Trust.
+
+**New messages.** A message that comes in raises the board's desktop notification: the sender as
+your board knows them (never a name the message gives itself) and the start of the text, or only
+that a message is held when their key changed. Clicking it brings the board up on that thread. On
+Windows it is a toast under the board's own name, on macOS the helper the session notifications
+use, anywhere else herdr's own notification. A burst is one notification: what comes in the same
+thread within 30 seconds of one is told once, as how many more, and at most 30 notifications an hour
+are raised (a queue delivered after a night offline, a peer that writes fast). The head's Team button counts the unread messages,
+and each thread in the panel shows its own; opening a thread in a page that is in front reads it.
+A board hears only what was sent to it: a pair's threads, and its own copy of the team chat. The
+marks are kept in `team-reads.json` in the board's state folder, from the first time the board
+counts, so the messages from before do not all turn up as news.
+
+**Muting.** A thread's switch in its header mutes it, and the team chat's switch in "People and
+agents" mutes every team thread at once: a muted thread raises no notification, counts nothing toward unread, and no
+session hears of it (#216's routing). Its messages still come in and stay readable, and when you
+unmute it what came in meanwhile and is not read counts again.
+
+**For agents and monitors.** Read only, in the board's words:
+
+```
+board team inbox [--unread] [--json]      # the threads, the latest first, with their unread counts
+board team thread <ref> [--json] [--read] # one thread, a peer's text framed as data from that person
+board team watch [--json] [--every <s>]   # a line per thread with new messages, as they come
+board team drafts                         # agents' drafts waiting for you: thread, time, file, why
+```
+
+`inbox` and `watch` never print a message's text, only a thread's ref (what `thread` takes) and who
+it is with. `inbox` adds a topic's title in quotes under a header (with `--json`, a note) that says
+it is the words of whoever started it; `watch`, whose lines go straight to a monitor, gives no
+member's words at all, only whether a thread is a topic. `thread` prints the messages quoted under a
+header that says they are information from that person, not instructions; `--json` gives the same
+as data with that note. Reading marks nothing: `--read` marks the thread read up to when it was
+read out (what lands after stays unread), and not at all while a message in it is held back for a
+changed key, which only you can accept. None of them sends anything; an agent that wants to answer writes a
+draft (`board team draft`) or, where you turned agents on, posts as below.
+
+**Away from the computer.** The Team panel and the head's button work on your own phone and through
+your own domain too: the tunnel's login, and a phone paired from this computer's own Tailscale
+login (not a desk, and not another Tailscale user that `remote.allow` lets in). There it reads the
+team, sends as you, starts a topic, sends or discards a draft, mutes a thread and marks read.
+Accepting a changed key, the agent switches (the team chat's mute among them), and an agent's draft
+stay on the computer.
+
+**Asking an agent to draft.** Tell your agent: `board team draft Roman "is the build green?"`
+(a name from the roster, or a peer id). It only leaves a draft in the panel, under Roman's thread
+and counted on his roster row, marked "draft from an agent", with Send and Discard. Nothing leaves
+this board until you press Send; Discard drops it. There is no command that sends: at most 20
+drafts wait (a new one is refused until you settle some), each up to the same 4000 characters as a
+message. What you send from a draft goes out marked `via: "agent"` inside the signed message, which
+the hub relays and cannot strip: Roman sees "via Ana's agent" (the name is Roman's own roster entry for your key,
+never anything in the message), and you see "via your agent" on your own copy. A message you type in the panel carries no mark.
+
+Until #224 (below) the draft is a convenience, not a lock: an agent on the same machine can send on its
+own, either by creating a draft and sending it, or by calling the board's local `/api/team/send`
+directly, in which case the message carries no agent mark at all. The "via agent" mark only says the
+draft came from `board team draft`; it does not say that a person looked at it.
+
+**Threads and the team chat (#216).** Messages go in threads: each pair of members has its
+`general` thread (the flat thread from before) and topic threads with a title and an optional link
+(a task, a PR, a case); the team has its own, which reach every member. A team message goes as one
+signed copy per member, so each member's receipt shows on its own, a member who is away gets it when
+back (team copies wait 7 days), and a member who joins later sees what is sent after they joined.
+Messages between two members go to those two boards only: no board is a centre, and the hub's
+operator sees nothing of other members' traffic through a board. A board that reads threads says so
+to the hub when it connects (`caps`); one that does not (an older board, or any board while the hub
+is older) gets the text with the thread's title in front, and its messages land in your `general`
+with it.
+
+**Channels (#355).** A channel is a thread for some members only, for work that is not the whole
+team's: "New channel" in the panel (or in the team chat's `general`) takes a title, an optional
+link and the members, and the first message starts it. Each post goes as one signed copy to each
+member and to nobody else, with the member list inside the signed thread, so a board that is not on
+the list never gets it, never lists it and is never told of it. A board drops a copy whose list
+does not name it and its sender, and a copy that would put a channel's words into a thread the whole
+team shares, or the other way round. The board that started a channel can add members later
+("Add to the channel" in its header); they get it from the next post on, not what was said before,
+and only the starter's posts change the list on the other boards. A member whose board does not
+read channels (the `channels` cap) gets the post in their `general` with you, the title in front,
+so an answer from them reaches you alone. A channel has its own agent switches, next to the team
+chat's and each person's, so a lane can be shared in one channel and nowhere else; the team chat's
+mute does not mute a channel, its own does. `board team inbox` names a channel by its members.
+
+**A new member.** When someone joins the team after this board began keeping welcomes
+(`team-welcome.json`, from the first time the panel opens), the panel offers one screen for them:
+their agents on or off, the lanes to share, and the channels you started to add them to. Nothing
+changes until Done, which sends it all in one request (`POST /api/team/welcome`, checked whole
+before anything is applied); Later puts the screen off, and a dot stays on them until it is done.
+It is there on this computer only.
+
+**Agents talking to each other (#216).** Off until you turn it on, per person and for the team, in
+the panel's "Agents" switches at the foot of the list (on this computer only): all agents at once,
+the listener (shown, and cleared there), and for the team, each channel and each person agents on,
+the lanes shared and the loop pause (below; empty for the board's default) (`/api/team/agents`). Off,
+everything stays
+as above: an agent's post is a draft, and what comes in reaches no session. On for a person:
+
+- A session posts with `board team post <name|team> [--new "<title>"] [--link <url>] [--file <path>] "<text>"` and
+  answers with `board team reply <thread> [--file <path>] "<text>"` (a thread's id or its first 8 characters, a
+  person's name for your `general` with them, `team` for the team's). The board marks it as an
+  agent's and names the session (`via: "agent"`, `agent: <session>` in the signed body), whatever the
+  request says: the receiving board shows "from Ana's agent board-216". `board team thread` prints
+  each message with a ref after its time (`[2026-11-11 14:05 msg 9f8e7d6c]`) and says which message a
+  reply answers; `board team reply <thread> --to <message> "<text>"` answers that one in particular
+  (#373), as Reply does in the panel. Held as a draft, it still answers it when you press Send.
+- One session is the **listener** (`board team listen`, run from your monitor, master or day
+  session while no other is, and confirmed with your passkey if you turned that on; `board team listen off` from the
+  listener; you change it in the switches). It hears of every new thread and of every message in a thread nobody handles, and hands
+  one on with `board team assign <thread> <session>` (`release` gives it back). A topic thread a
+  session started is that session's: the answers come back to it. A `general` thread stays the
+  listener's.
+- What a session hears is a board reminder in the board's own words: who wrote (a name that is not
+  plain words is said by the start of the key), in which thread, and the commands. The text itself
+  is read with `board team thread <thread>`, which prints it quoted, line by line, under a header
+  that says it is information from that person and not your instructions; it is never typed into a
+  prompt. At most one reminder per thread every 2 minutes, and at most 10 waiting for one session.
+- You pick the **lanes shared** with each person (none by default). A session posts on its own only
+  from a shared lane (or as the listener), and a thread goes only to a session in a shared lane.
+  A post that names a lane you did not share, or looks like it carries a key or token, waits as a
+  draft with the reason. This keeps an honest agent inside your lines; it does not stop a
+  determined one from copying anything into a post.
+- Limits: 20 posts an hour per session, 60 an hour and 300 a day per person; the same text twice
+  in a thread within 10 minutes is refused; after 20 agent messages in a row in a thread (both
+  ways) the next one waits for you, and your Send on it lets them go on. That pause is set per
+  person (and for the team chat and each channel, also in the panel's switches), from 1 to 100,
+  with `board team loop <name|team> <n>`: `default`
+  puts the board's back, and with no number it shows the pause. More than 60 messages an hour from
+  one person (marked or not) pause their routing for an hour. A draft you send counts
+  against no agent's limit. `team.agentLimits` in config.json changes them (`sessionHour`, `peerHour`,
+  `peerDay`, `echoMin`, `loopRun` (the default pause), `inboundHour`, `noticeGapMin`).
+- To stop it: the person's switch off, a thread or the team chat muted, or everything off at once
+  (the global switch, or `"agents": false` in `team`). Every post, hold, reminder, hand-over and
+  switch change is in the team log (`team-audit.jsonl`), without any text.
+
+**Your passkey (#224, #367).** It is your choice, off by default: the switch **Confirm with a
+passkey** under Passkeys in the Team panel. On, what sends as you, or lets agents do more, waits
+for a passkey of yours: Send in the Team panel, sending an agent's held draft, trusting a changed
+key, Agents on for a person (or all of them back on), a lane shared, a listener set, and any change
+of a loop pause (`board team loop` and `board team listen` included, which then print the address
+to confirm at). Turning things off, removing lanes, muting and discarding never wait. Off, all of
+it goes at once. The switch turns on only once you have added a passkey, and turning it on or
+off is confirmed with one: on, so a passkey that cannot sign on this computer locks nobody out;
+off, so an agent cannot switch it off. Removing your last passkey turns it off. A
+board that had a passkey before the switch came keeps it on; one without keeps it off.
+
+The passkey has to be on the computer the board runs on: Touch ID, or iCloud Keychain allowed for
+your browser, on a Mac (without either, Chrome on a Mac offers only a phone); Windows Hello on
+Windows; a security key anywhere. A phone cannot sign for `localhost`, so its QR code leads
+nowhere. The first passkey is added by whoever is at the screen; adding another or removing one
+takes one you already have.
+
+The board is opened on `127.0.0.1`, and a passkey cannot belong to an IP, so the confirmation
+opens in a small window of the board's own on `http://localhost:<port>`, which says what is about
+to happen in the board's words (the person by their roster name, the text as it will go) before you
+touch the passkey. Allow the board's pop-ups for it. One confirmed send lets that board page send
+without asking for 30 minutes; a reload or a restart of the board ends that. Trusting a key and
+widening agents ask every time. These passkeys are not the ones of your domain's sign-in (Remote
+access through your own domain): those are for the domain, these for `localhost`, and neither works
+for the other. A change of the board's port keeps them. While team is on, the board also holds its port on `[::1]`,
+where a browser may look for `localhost` first, so no other program can stand there and show a
+window of its own; if one already holds it, confirmations wait until it is gone.
+
+What this stops: an agent sending as you, or switching itself on, through the board's routes, which
+before this took one `curl`. What it cannot stop: a program that works on the board's files
+directly, since an agent runs as the same user as the board (`team-key.json` holds the board's
+signing key, `team-agents.json` is a plain file). Nothing on one computer closes that; keep it in
+mind before giving an agent free rein over your user's files.
+
+**Files (#371).** A file in a thread is sealed on your board for the boards of the members who get
+it, so the hub keeps and passes on bytes it cannot read: not the file, not its name, not its type.
+Each board has a second key for this (`team-box.json`, X25519), which it says in its hello signed
+with its own key; the hub passes it on with the roster, and every board checks that signature. A
+member's box key is pinned as their key is: a different one later shows them as "key changed", and
+no file goes to them until you trust it. Each file gets a key of its own (AES-256-GCM), wrapped for
+each member's box; the signed message carries the wrapped key, the encrypted name and size, and the
+hash of what the hub keeps. The hub keeps that once, at most 25 MB a file and 200 MB held per
+member by default, and deletes it when every member fetched it, at the message's TTL (a day in a
+pair, a week in the team), or an hour after an upload stopped. The receiving board checks the hash,
+opens the file and keeps it with the board's uploads (gone after `keepUploadsDays` with them):
+images show inline, anything else is offered as a download, and nothing is opened or run. A member
+whose board is older gets your text and the line "a file was sent; update the board to receive it";
+through an older hub a file is refused and text goes as before. The text of a post stays as readable
+to the hub as any text. An agent's file (`board team post | reply --file <path>`) goes as its text
+would (#415): held for you only when the text would be (agents off for that person, the lane not
+shared, the loop pause), or when a text file (no NUL in its first 8 KB, or UTF-16 with its mark)
+looks like it carries a secret, and a file from the board's own folders (its keys, its settings; not
+the uploads or a shared thread's files) is held as one; a binary goes as it is. The check is for
+slips, not for an agent set on getting round it: a secret in a zip goes as the zip. A held one waits
+as a draft with the board's own copy of the file taken when the agent asked; your Send sends it. The
+Team panel lists every thread's drafts at the top of its list, each with where it goes, when it was
+made, its file and size and why it was held, with Send and Discard; `board team drafts` lists the
+same for a session, which cannot send or discard one. A text over 4000 characters is refused with
+its length and the limit. `board team thread` lists a file that came in by its name and size and
+where it was saved. In the panel a file shows on its line with its name and size, a picture inline
+once it is here, and a draft that carries one says so, as the confirmation window does. A board
+fetches at most 100 MB a file and 1 GB a day from one member on its own; past that theirs wait on
+the hub. The panel's attach button comes with the composer of #370.
+
+**Running the hub.** `bun hub/src/main.ts`: see [hub/README.md](hub/README.md) for the options,
+invites, revoking a member and what it keeps. It is not part of the plugin; run it on one machine
+the members reach: on a tailnet, or on loopback on a server of yours with nginx bringing TLS in
+front of it, the boards' hub then being `wss://hub.example.com` and no Tailscale needed
+(`hub/hab-hub.nginx.conf`, `hub/hab-hub.system.service`; step by step in the quickstart).
+
+**What the MVP does not do.**
+
+- No offers, no replies to offers, no status or data: the only message is a `question`, text up
+  to 4000 characters. It reaches a person, and a session only where you turned agents on (above).
+- No end-to-end encryption of text: the hub sees the text of a message while it waits for its
+  recipient (and deletes it after the ack or the expiry). Messages are signed, not sealed; files
+  are sealed (above). Run a hub you trust.
+- The line between what a human may do and what an agent may do on the board is not enforced
+  (#224): anyone who can reach the board's local API can send as you. Use it on a computer you
+  alone use.
+- The hub is trusted by the address given at join; it has no identity of its own yet. Over
+  `wss://` the board checks the hub's certificate for that name, as a browser does.
+
+**Checking it by hand, on two machines** (the hub on one machine, two boards on two others, all in
+one tailnet):
+
+1. On the hub's machine: `bun hub/src/main.ts --listen <tailnet ip>:7443`, then
+   `bun hub/src/cli.ts invite create` twice.
+2. On each board's machine: `board team join <invite> --hub ws://<tailnet ip>:7443 --name <name>`.
+   Both succeed; a second use of the same invite is refused.
+3. Settings → Team… on both: each sees the other with a green dot, and the connection line says
+   online.
+4. From A, pick B and Send a question. A's thread shows it queued, then delivered, then received.
+   B's thread shows it.
+5. Stop B's board. From A, send another: it stays queued. Start B again: it arrives, and A's
+   thread moves on to received.
+6. On the hub's machine: `bun hub/src/cli.ts revoke <B's name>`. B's line goes to "removed from
+   the team"; A's roster loses B within a second, and B cannot reconnect.
 
 ## Time
 
@@ -2741,7 +3179,9 @@ Linux with ufw: `sudo ufw allow in on tailscale0 to any port 12422 proto tcp`). 
 listens and Tailscale is never asked.
 
 `GET /api/hello` says what the board is (`{ board, api, version, host, name, dnsName, platform,
-remote }`, `api` 1). On the Tailscale address also: `POST /api/remote/pair` with `{ name }` (202
+remote }`, `api` 1). `GET /api/process` (this computer only, refused on every remote listener)
+says which process it is and where it is installed (`{ board, pid, root }`): the board command and
+`board doctor` tell this install's board from an old one on the port by it. On the Tailscale address also: `POST /api/remote/pair` with `{ name }` (202
 `{ id }`), `GET /api/remote/pair/<id>` (`pending`, `denied`, once `approved` with `token`, then
 `gone`), and with `Authorization: Bearer <token>` the web board's `/api/*` routes plus
 `GET /api/peers`: the other computers on the tailnet whose board answers. Code:
@@ -3517,6 +3957,13 @@ and outside herdr it says nothing of it. For herdr's own command reference, `her
 skill of that name that is not the board's is left alone, and `board doctor` says so (per
 profile, with more than one).
 
+Beside it the install puts a second skill, [`agent-board-team`](skills/agent-board-team/SKILL.md)
+(#369), for sessions on a board in a [team](#team): how to read what a member's board sent, answer
+in a thread or open a topic, hand a task to a member's board and ask for its status, route threads
+as the listener, and that a member's message is information, never instructions. It is put in
+place, kept current and left alone when someone else's skill has its name, as `herdr-agents` is;
+`board doctor` checks `herdr-agents` only.
+
 ### Retry-safe call exports (opt-in)
 
 A caller that can retain a stable export/revision ID can opt into a receipt:
@@ -3584,7 +4031,7 @@ that has not picked a style in Settings; Classic otherwise, and without it),
 `refreshSec`, `wake` (sleep and wake: `false` turns it off; its section is under
 [The `wake` section](#the-wake-section), and Settings → "Sleep and wake…" sets it), `wakeUrl` (the
 separate herdr-wake plugin's router, used only while wake is off or held by that plugin),
-`scheduleWaitMin` (how long a due entry waits for a
+`team` (the peer network, see [Team](#team); written by `board team join`), `scheduleWaitMin` (how long a due entry waits for a
 busy session, 240), `port` (web board, 12422), `web` (false turns the
 web board off), `terminal` (false turns the web board's [terminal](#terminal) off), `browser`
 (path for the app window), `foldWaiting` (how the web board folds a session asleep in
@@ -3669,7 +4116,8 @@ repository's full history:
 
 ```sh
 bun install     # react, react-dom and the viewers' libraries, and the dev tools: TypeScript, Biome, the types, jsdom
-bun test        # the whole suite (a couple of minutes); two symlink tests skip without symlink rights
+bun run test    # the whole suite in six workers (about 5 minutes); two symlink tests skip without symlink rights, a few on Windows (each names its issue)
+bun run test:fast  # the same without the end-to-end files (*.e2e.test.ts: real sh, awk, PowerShell)
 bun run check   # type check (tsc) and lint (Biome)
 ```
 

@@ -8,6 +8,7 @@ import { toggledColumn } from '../../../src/core/board-keys.ts'
 import { type Dir, type GridLane, gridStep, listStep } from '../../../src/core/grid-nav.ts'
 import { lookNow } from '../models/look.ts'
 import type { MenuItem } from '../models/menu-model.ts'
+import { revealSheetDetails } from '../models/sheet-reveal.ts'
 import { type CardAct, terminalKey } from '../models/terminal-keys.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import type { ContextMenus } from './useContextMenus.ts'
@@ -86,17 +87,21 @@ export function useTerminalKeys(
       if (what === 'wait') {
         // What it waits for is a field of the card in the panel: open, the empty fields shown, there.
         if (b.ui.open !== target) b.dispatch({ type: 'open', key: target })
+        // In the compact head it is in the fold: open it first.
+        revealSheetDetails(target)
         untilDone(() => {
           const field = document.getElementById('wait')
           if (field instanceof HTMLTextAreaElement && !field.disabled) {
             field.focus()
+            // Still in the fold that is opening: it takes no focus yet, look again on the next frame.
+            if (document.activeElement !== field) return false
             field.setSelectionRange(field.value.length, field.value.length)
             return true
           }
           const toggle = document.getElementById('sheet-properties-toggle')
           if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click()
           return false
-        })
+        }, 60)
         return
       }
       if (what === 'category') {

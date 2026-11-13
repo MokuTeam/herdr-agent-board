@@ -11,6 +11,7 @@ import { canStop } from '../../../../src/core/turn-keys.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { pageLog } from '../../api/client.ts'
 import { useActionRow } from '../../hooks/useActionRow.ts'
+import { useCollapse } from '../../hooks/useCollapse.ts'
 import type { ComposerControls } from '../../hooks/useComposer.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { inMokupilot } from '../../models/call.ts'
@@ -48,7 +49,7 @@ import { TermIcon } from '../terminal/Terminal.tsx'
 import { AsideToggle, useAsideBox } from './Aside.tsx'
 import { Attachments } from './Attachments.tsx'
 import { SendButton } from './SendButton.tsx'
-import { SessionMeter } from './SessionMeter.tsx'
+import { type FootFold, SessionMeter } from './SessionMeter.tsx'
 
 /** What the session's buttons do; each gets the button it was pressed on, for what opens from it. */
 export interface SessionButtons {
@@ -91,6 +92,8 @@ export interface ComposerProps {
   on?: SessionButtons | undefined
   /** The menu of the buttons is open. */
   moreOpen?: boolean
+  /** The compact sheet (#345): the action row folds behind the footer line; none, the row is always there. */
+  fold?: FootFold | undefined
 }
 
 /** The box grows with the text, up to 180 px. */
@@ -107,11 +110,13 @@ export function Composer({
   canMutate,
   on = {},
   moreOpen = false,
+  fold,
 }: ComposerProps) {
   const t = useT()
   const fileInput = useRef<HTMLInputElement>(null)
   const actions = useRef<HTMLDivElement>(null)
   const row = useActionRow(actions)
+  useCollapse(actions, !!fold?.folded)
   /** `.over`: the row leaves it to More (More itself: nothing is left over). */
   const over = (id: string) => row.over.has(id) && 'over'
   const { text, attachments, sending, messageRef } = composer
@@ -147,7 +152,12 @@ export function Composer({
       <p id="sheet-connection-state" role="status" hidden={!av.blocked}>
         {av.banner}
       </p>
-      <div className={classNames('composer-actions', row.icons && 'icons')} ref={actions}>
+      <div
+        className={classNames('composer-actions', row.icons && 'icons')}
+        ref={actions}
+        id={fold ? 'sheet-actions' : undefined}
+        data-folded={fold?.folded ? '' : undefined}
+      >
         {/* Not in a phone's browser: herdr's window is on the computer (the row then fits without it); on a desk, herdr follows. */}
         {/* A MokuPilot call agent with no pane (#326) has nothing in herdr to go to. */}
         {focusHere() && !(item && inMokupilot(item)) && (
@@ -391,7 +401,7 @@ export function Composer({
           disabled={aside.question === null ? view.sendDisabled : !aside.question}
         />
       </form>
-      {item && <SessionMeter key={item.key} item={item} asked={asked} />}
+      {item && <SessionMeter key={item.key} item={item} asked={asked} fold={fold} />}
     </footer>
   )
 }

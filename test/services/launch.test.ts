@@ -66,6 +66,7 @@ test('a launch request is checked before anything runs', async () => {
       profileArgs: [],
       profileCommand: null,
       agent: 'claude',
+      model: null,
     },
   )
   assert.equal((await launchOf({ name: 'A', cwd: dir, workspace: { create: 'Fresh' } })).newWorkspace, true)
@@ -265,6 +266,7 @@ type LaunchView = {
   profile?: string
   parent?: string | null
   agent?: string
+  model?: string | null
 }
 type BoardPayload = {
   stale: boolean
@@ -390,7 +392,9 @@ async function boardServer(cfg: Of<Record<string, unknown>> = {}, env: Of<Record
       refreshSec: 3600,
       ...(typeof cfg === 'function' ? cfg(box) : cfg),
     },
-    typeof env === 'function' ? env(box) : env,
+    // The fake herdr answers at once: the launch's polls and pauses (meant for a real Claude) run
+    // at a fiftieth (adapters/pacing.ts). Its deadlines (launch.timeoutSec) are not paced.
+    { BOARD_TEST_PACE: '0.02', ...(typeof env === 'function' ? env(box) : env) },
   )
   await until(() => proc.messages.some(m => (m as { ready?: boolean }).ready))
   const url = `http://127.0.0.1:${port}`
@@ -996,6 +1000,10 @@ test('dismissing a running launch takes it off the board; it goes on and its ses
 
 // ---------------------------------------------------------------- Claude's folder-trust dialog
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+// The trust tests act between the board's polls: the fake herdr's screens follow its call count
+// (`seq`), and a paced board reads them all before the test asks for "Trust". They keep the pace
+// of a real launch.
+const UNPACED = { BOARD_TEST_PACE: '1' }
 const blocked = { result: { agent: { agent_session: { value: null }, agent_status: 'blocked', name: 'x' } } }
 const idle = { result: { agent: { agent_session: { value: null }, agent_status: 'idle', name: 'x' } } }
 type Box = Awaited<ReturnType<typeof sandbox>>
@@ -1025,7 +1033,7 @@ async function launchState(
 }
 
 test('Claude asks to trust a new folder: the launch waits on its card, and on request moves the cursor it sees to "Yes", then names and briefs it', async () => {
-  const { box, post, board, launched, started } = await boardServer(VIA_HERDR)
+  const { box, post, board, launched, started } = await boardServer(VIA_HERDR, UNPACED)
   const dir = join(box.dir, 'a fresh project') // a space: Claude may break the line there
   mkdirSync(dir)
   const dialog = (selected: 'no' | 'yes') => ({ text: trustScreen(dir, { selected, width: 30 }) })
@@ -1098,14 +1106,95 @@ test('"Close the tab" closes it and drops the launch; "Trust" refuses a screen w
   noEnv(box)
 }, 30_000)
 
+test('"Close the tab" leaves a tab alone whose pane holds another terminal than the launch’s: herdr gave its id out again', async () => {
+  const { box, post, board, started } = await boardServer(VIA_HERDR)
+  const tabCreate = { result: { tab: { tab_id: 'wA:t9' }, root_pane: { pane_id: 'wA:p9', terminal_id: 'term-9' } } }
+  const paneGet = (terminal: string) => ({
+    result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'claude', terminal_id: terminal } },
+  })
+  const closes = () => box.calls().filter(a => a[0] === 'tab' && a[1] === 'close')
+  const launch = async (name: string) => {
+    const dir = join(box.dir, name)
+    mkdirSync(dir)
+    const state = {
+      ...HERDR,
+      'tab create': tabCreate,
+      'agent start': { code: 'agent_not_ready', error: 'agent_not_ready: blocked' },
+      'agent get': blocked,
+      'pane read': { text: trustScreen(dir) },
+      'pane get': paneGet('term-9'),
+    }
+    box.state(state)
+    const id = await started({ name, cwd: dir, category: 'acme', workspace: { id: 'wA' } })
+    await launchState(board, id, l => l?.state === 'trust', 'never asked to trust')
+    return { id, state }
+  }
+  // herdr started over: wA:p9 is someone else's terminal now. Nothing is closed; the launch goes.
+  const { id: gone, state } = await launch('reused')
+  box.state({ ...state, 'pane get': paneGet('term-other') })
+  assert.equal((await post(`/api/launch/${gone}/close`, {})).status, 200)
+  assert.deepEqual(closes(), [])
+  assert.equal(
+    (await board()).launches.some(l => l.id === gone),
+    false,
+  )
+  // The launch's own terminal still there: its tab is closed as before.
+  const { id: own } = await launch('own')
+  assert.equal((await post(`/api/launch/${own}/close`, {})).status, 200)
+  assert.deepEqual(
+    closes().map(a => a.join(' ')),
+    ['tab close wA:t9'],
+  )
+  noEnv(box)
+}, 40_000)
+
+test('the tab a new workspace came with stays when its first pane holds another terminal: herdr gave the ids out again', async () => {
+  const box0 = await sandbox()
+  const record = join(box0.dir, 'launcher.json')
+  const command = [process.execPath, launcher, record, '-Name', '{name}', '-Cwd', '{cwd}', '-Workspace', '{workspace}']
+  const { box, started, launched } = await boardServer({ launch: { command } })
+  const dir = join(box.dir, 'Gamma')
+  mkdirSync(dir)
+  const run = async (name: string, terminal: string): Promise<string[]> => {
+    box.state({
+      ...HERDR,
+      'workspace create': {
+        result: {
+          workspace: { workspace_id: 'wN' },
+          tab: { tab_id: 'wN:t1' },
+          root_pane: { pane_id: 'wN:p1', terminal_id: 'term-1' },
+        },
+      },
+      'pane list': {
+        result: { panes: [{ pane_id: 'wN:p1', agent: null, tab_id: 'wN:t1', terminal_id: terminal }] },
+      },
+    })
+    const before = box.calls().length
+    const l = await launched(await started({ name, cwd: dir, workspace: { create: name } }))
+    assert.equal(l.state, 'done', l.error)
+    return box
+      .calls()
+      .slice(before)
+      .filter(a => a[0] === 'tab' && a[1] === 'close')
+      .map(a => a.join(' '))
+  }
+  // herdr started over while the launch ran: wN:t1 holds someone else's terminal now. It stays.
+  assert.deepEqual(await run('Gamma one', 'term-other'), [])
+  // The tab's own shell is still there: the tab goes, as before.
+  assert.deepEqual(await run('Gamma two', 'term-1'), ['tab close wN:t1'])
+}, 30_000)
+
 test('a launcher that gives up at the trust dialog: the launch is kept, and once trusted the board does what the launcher did not', async () => {
   const box0 = await sandbox()
   const record = join(box0.dir, 'launcher.json')
-  const { box, post, board, launched, started } = await boardServer({
-    launch: {
-      command: [process.execPath, launcher, record, '-Name', '{name}', '-Cwd', '{cwd}', '-Workspace', '{workspace}'],
+  const { box, post, board, launched, started } = await boardServer(
+    {
+      launch: {
+        command: [process.execPath, launcher, record, '-Name', '{name}', '-Cwd', '{cwd}', '-Workspace', '{workspace}'],
+      },
     },
-  })
+    UNPACED,
+  )
   const dir = join(box.dir, 'Will fail here')
   mkdirSync(dir)
   // The stand-in fails like spawn-agent: "Claude in wT:p9 waits for a dialog (folder trust?)".
@@ -2024,3 +2113,140 @@ test('worktree canonicalization is bounded and distinguishes parent traversal fr
       error.kind === 'worktree' && /did not answer in time/.test(error.message ?? ''),
   )
 })
+
+// ---------------------------------------------------------------- a model of its own (#380)
+
+const modelOf = (cards: string, key: string | undefined) =>
+  (JSON.parse(readFileSync(join(cards, `${key}.json`), 'utf8')) as { modelWant?: string }).modelWant
+
+test('a launch request’s model: one word Claude or pi takes, trimmed; empty, blank or none is the profile’s default', async () => {
+  const box = await sandbox()
+  const home = join(box.dir, 'home folder')
+  const profiles = profileSet(mergeProfiles([], [], home).list, defaultProfileDir(home))
+  const body = { name: 'A', cwd: box.dir, workspace: { id: 'w2' } }
+  const modelOfRequest = async (model: unknown) => {
+    const r = await checkRequest({ ...body, model }, { profiles })
+    assert.ok(r.ok, JSON.stringify(r))
+    return r.launch.model
+  }
+  for (const none of [undefined, null, '', '   ']) assert.equal(await modelOfRequest(none), null, String(none))
+  assert.equal(await modelOfRequest(' haiku '), 'haiku')
+  assert.equal(await modelOfRequest('claude-bridge/claude-opus-5-5'), 'claude-bridge/claude-opus-5-5')
+  for (const bad of ['opus 5', '-x', "it's", 5, ['opus']])
+    assert.deepEqual(
+      await checkRequest({ ...body, model: bad }, { profiles }),
+      {
+        ok: false,
+        field: 'model',
+        error: 'Not a model name: an alias such as opus or sonnet, or a full name, one word',
+      },
+      String(bad),
+    )
+  assert.deepEqual(await checkRequest({ ...body, model: 'a'.repeat(201) }, { profiles }), {
+    ok: false,
+    field: 'model',
+    error: 'The model name is longer than 200 characters',
+  })
+})
+
+test('the board’s spawn-agent starts the session on the model asked for, and its card says so; no model types what it did', async () => {
+  const { box, started, launched } = await boardServer()
+  box.state({ ...HERDR, 'pane get': PANE_READY, 'pane run': { result: null } })
+  const dir = join(box.dir, 'Gamma')
+  mkdirSync(dir)
+  const l = await launched(
+    await started({ name: 'Gamma job', cwd: dir, category: 'acme', workspace: { id: 'wA' }, model: 'haiku' }),
+  )
+  assert.equal(l.state, 'done', l.error)
+  assert.equal(l.model, 'haiku')
+  const run = box.calls().find(a => a[0] === 'pane' && a[1] === 'run') ?? []
+  const sid = /^claude --model haiku --session-id ([0-9a-f-]{36})$/.exec(run[3] ?? '')?.[1]
+  assert.ok(sid, String(run[3]))
+  assert.equal(modelOf(box.cards, sid), 'haiku')
+  // Without one: the line as before, no model on the card.
+  const plain = await boardServer()
+  plain.box.state({ ...HERDR, 'pane get': PANE_READY, 'pane run': { result: null } })
+  const pdir = join(plain.box.dir, 'Delta')
+  mkdirSync(pdir)
+  const p = await plain.launched(
+    await plain.started({ name: 'Delta job', cwd: pdir, category: 'acme', workspace: { id: 'wA' }, model: '' }),
+  )
+  assert.equal(p.state, 'done', p.error)
+  assert.equal(p.model, null)
+  const prun = plain.box.calls().find(a => a[0] === 'pane' && a[1] === 'run') ?? []
+  const psid = /^claude --session-id ([0-9a-f-]{36})$/.exec(prun[3] ?? '')?.[1]
+  assert.ok(psid, String(prun[3]))
+  assert.equal(modelOf(plain.box.cards, psid), undefined)
+  noEnv(box)
+}, 60_000)
+
+test('through herdr (launch.agent claude): --model before the session id; another agent than Claude or pi refuses a model before anything runs', async () => {
+  const { box, launched, started } = await boardServer(VIA_HERDR)
+  const dir = join(box.dir, 'Alpha project')
+  mkdirSync(dir)
+  const l = await launched(await started({ name: 'Alpha job', cwd: dir, workspace: { id: 'wA' }, model: 'opus' }))
+  assert.equal(l.state, 'done', l.error)
+  const start = box.calls().find(a => a[0] === 'agent' && a[1] === 'start') ?? []
+  assert.deepEqual(start.slice(-5, -1), ['--', '--model', 'opus', '--session-id'])
+  assert.equal(modelOf(box.cards, start.at(-1)), 'opus')
+  const other = await boardServer({ launch: { agent: 'codex' } })
+  const odir = join(other.box.dir, 'Omega')
+  mkdirSync(odir)
+  const res = await other.post('/api/launch', { name: 'Omega', cwd: odir, workspace: { id: 'wA' }, model: 'opus' })
+  assert.equal(res.status, 400)
+  assert.equal(((await res.json()) as { field: string }).field, 'model')
+  assert.equal(
+    other.box.calls().some(a => a[0] === 'tab' || a[0] === 'agent'),
+    false,
+  )
+}, 60_000)
+
+test('launch.command gets {model} when it takes it; one without {model} refuses a model before it runs', async () => {
+  const box0 = await sandbox()
+  const record = join(box0.dir, 'launcher.json')
+  const command = [process.execPath, launcher, record, '-Name', '{name}', ['--model', '{model}']]
+  const { box, started, launched } = await boardServer({ launch: { command } })
+  const dir = join(box.dir, 'Beta')
+  mkdirSync(dir)
+  const args = async (body: Record<string, unknown>) => {
+    const l = await launched(await started({ name: 'Beta work', cwd: dir, workspace: { id: 'wA' }, ...body }))
+    assert.equal(l.state, 'done', l.error)
+    return (JSON.parse(readFileSync(record, 'utf8')) as { args: string[] }).args
+  }
+  assert.deepEqual(await args({ model: 'haiku' }), ['-Name', 'Beta work', '--model', 'haiku'])
+  // No model: the group is left out, as before.
+  assert.deepEqual(await args({}), ['-Name', 'Beta work'])
+  const without = await boardServer({ launch: { command: [process.execPath, launcher, record, '-Name', '{name}'] } })
+  const wdir = join(without.box.dir, 'Beta')
+  mkdirSync(wdir)
+  rmSync(record, { force: true })
+  const res = await without.post('/api/launch', { name: 'Beta', cwd: wdir, workspace: { id: 'wA' }, model: 'haiku' })
+  assert.equal(res.status, 400)
+  assert.deepEqual(await res.json(), {
+    ok: false,
+    error:
+      'The board starts sessions with a launcher that takes no model (launch.command without {model}, or launch.agent for another agent than Claude or pi)',
+    field: 'model',
+  })
+  assert.equal(existsSync(record), false)
+}, 60_000)
+
+test('the new-session window is told whether the launcher takes a model: its own spawn-agent, Claude or pi through herdr, a launch.command with {model}', async () => {
+  const cases: [string, Record<string, unknown>, boolean][] = [
+    ['spawn-agent', {}, true],
+    ['launch.agent claude', VIA_HERDR, true],
+    ['launch.agent pi', { launch: { agent: 'pi' } }, true],
+    ['launch.agent codex', { launch: { agent: 'codex' } }, false],
+    [
+      'launch.command with {model}',
+      { launch: { command: [process.execPath, launcher, ['--model', '{model}']] } },
+      true,
+    ],
+    ['launch.command without', { launch: { command: [process.execPath, launcher] } }, false],
+  ]
+  for (const [what, cfg, takes] of cases) {
+    const { url } = await boardServer(cfg)
+    const options = (await (await fetch(`${url}/api/launch/options`)).json()) as { takesModel: unknown }
+    assert.equal(options.takesModel, takes, what)
+  }
+}, 90_000)

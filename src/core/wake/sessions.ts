@@ -36,6 +36,16 @@ export interface WakeEntry {
   [extra: string]: unknown
 }
 
+/**
+ * The labels wake gives a sleeper's pane: `💤 <name>` when put to sleep (by the reaper, or by name,
+ * pane or session id: a session with no name of its own gets `💤` alone), and its title for a name
+ * when it was exited by hand (sessions.ts rememberSeen).
+ */
+export const sleepLabels = (s: Pick<WakeEntry, 'name' | 'title'>): string[] => [
+  `💤 ${s.name}`,
+  `💤 ${s.name || s.title || ''}`,
+]
+
 /** Pane id → its last Claude session; a sleeper whose pane wake closed, by its session id (#204). */
 export type WakeSessions = Record<string, WakeEntry>
 

@@ -435,6 +435,7 @@ body.dragging { cursor: grabbing; }
 .session-meter { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 2px 0; color: var(--label-3); font-size: 11.5px; }
 .session-meter .meter-ctx { flex: none; font-variant-numeric: tabular-nums; }
 .session-meter .meter-fact { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.session-meter .meter-own { color: var(--accent); }
 .card.compact { padding: 7px 12px; background: var(--fill-2); box-shadow: none; }
 .card.compact .name { font-size: 12.5px; font-weight: 500; color: var(--label-2); }
 .card.compact .card-top { height: 18px; }

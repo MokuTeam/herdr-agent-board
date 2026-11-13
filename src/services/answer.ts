@@ -29,6 +29,7 @@ import {
   type SelectDialog,
   sameText,
   screenIndex,
+  tooTall,
   typedOther,
 } from '../core/dialogs/questions.ts'
 import { answeredIn, waitingTool } from '../core/held-question.ts'
@@ -65,7 +66,7 @@ export interface Step {
 /** `step` is set unless herdr failed (reason 'herdr'), which sets `why` instead. */
 export interface DriveFailure {
   ok: false
-  reason: 'changed' | 'stuck' | 'review' | 'unconfirmed' | 'herdr'
+  reason: 'changed' | 'stuck' | 'cut' | 'review' | 'unconfirmed' | 'herdr'
   step?: Step
   why?: string
   screen: string
@@ -94,7 +95,7 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 /** A step that did not end as expected: why, the step, and the screen it ended on. */
 class Stop extends Error {
   constructor(
-    readonly reason: 'changed' | 'stuck' | 'review' | 'unconfirmed',
+    readonly reason: 'changed' | 'stuck' | 'cut' | 'review' | 'unconfirmed',
     readonly step: Step,
     readonly screen = '',
   ) {
@@ -246,11 +247,16 @@ const stopped = (err: Stop, seen: Seen): DriveFailure => ({
   sent: seen.sent,
 })
 
+/** How long the first look waits for the dialog, in ms: a screen read while Claude Code redraws may show half of it. */
+const START_MS = 1000
+
 /**
  * Drives the question dialog to these answers and submits it. `picks` from resolveAnswers.
  * Resolves { ok: true } once the dialog is surely gone, or { ok: false, reason, step, screen, sent }:
  *   changed      the screen does not show these questions (nothing was pressed in that state)
  *   stuck        a key did not do what it should have
+ *   cut          as changed or stuck, on a dialog taller than its pane that shows too little of
+ *                its question to tell it from another one (tooTall)
  *   review       the review screen lists other answers than these, or no "Submit answers" (not submitted)
  *   unconfirmed  submitted, but the screen never showed the dialog gone
  *   herdr        herdr failed (why); `sent` says whether keys went in before
@@ -267,7 +273,16 @@ export async function driveQuestions({
   timing?: Timing | undefined
 }): Promise<DriveResult> {
   const { io, seen } = counted(raw)
-  const wait: Wait = (ok, step) => until(io, ok, step, timing)
+  // A wait that ends on a dialog too tall for its pane says so, rather than that it is another one.
+  const tall = (err: unknown): unknown => {
+    if (!(err instanceof Stop) || (err.reason !== 'stuck' && err.reason !== 'changed')) return err
+    const d = parseDialog(err.screen)
+    return questions.some(q => tooTall(d, q)) ? new Stop('cut', err.step, err.screen) : err
+  }
+  const wait: Wait = (ok, step) =>
+    until(io, ok, step, timing).catch(err => {
+      throw tall(err)
+    })
   const leaveText = async (d: Dialog | null, i: number, step: Step): Promise<Dialog | null> => {
     // On the own-answer row keys are text: up puts the cursor back on the options.
     if (d?.kind !== 'question' || !d.editing) return d
@@ -276,9 +291,13 @@ export async function driveQuestions({
   }
   const ours = (x: Dialog | null): boolean => screenIndex(x, questions) >= 0
   try {
-    let d = parseDialog(await io.read())
+    // A screen read while Claude Code redraws may show half a dialog: a moment more before it counts as another one.
+    const start = { what: 'start' }
+    const first = { timeout: Math.min(timing?.timeout ?? START_MS, START_MS), every: timing?.every ?? 100 }
+    let d = await until(io, x => screenIndex(x, questions) >= 0, start, first).catch(err => {
+      throw tall(err instanceof Stop ? new Stop('changed', start, err.screen) : err)
+    })
     let at = screenIndex(d, questions)
-    if (at < 0) throw new Stop('changed', { what: 'start' }, seen.screen)
     // Begun in the terminal: back to the first question (left moves one tab back).
     while (at > 0) {
       if (d?.kind === 'question') d = await leaveText(d, at, { what: 'back' })
@@ -524,6 +543,7 @@ function failure(item: Item, r: DriveFailure): AnswerResult {
       ? { ok: false, error: t('err.qa.herdrMidway', { name, why }), stopped: true, screen: tail(r.screen) }
       : { ok: false, error: t('err.qa.herdr', { why }) }
   }
+  const step = stepText(r.step ?? { what: 'start' })
   const error =
     r.reason === 'changed'
       ? t('err.qa.changed', { name })
@@ -531,7 +551,9 @@ function failure(item: Item, r: DriveFailure): AnswerResult {
         ? t('err.qa.review', { name })
         : r.reason === 'unconfirmed'
           ? t('err.qa.unconfirmed', { name })
-          : t('err.qa.stuck', { name, step: stepText(r.step ?? { what: 'start' }) })
+          : r.reason === 'cut'
+            ? t('err.qa.cut', { name, step })
+            : t('err.qa.stuck', { name, step })
   return { ok: false, error, stopped: r.sent > 0, screen: tail(r.screen) }
 }
 

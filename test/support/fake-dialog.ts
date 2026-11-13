@@ -7,8 +7,13 @@ const RULE = '─'.repeat(60)
 
 export type Option = { label: string; description?: string }
 export type Question = { header: string; question: string; options: Option[]; multiSelect?: boolean; preview?: boolean }
-/** bar: the question drawn with "│ " before each of its lines, as Claude Code 2.1.303 does. */
-export type DialogOptions = { lag?: number; ignore?: boolean; bar?: boolean }
+/**
+ * bar: the question drawn with "│ " before each of its lines, as Claude Code 2.1.303 does, and in
+ * the review wrapped over two lines with the bar before both, as 2.1.322 draws a long one there.
+ * height: the screen shows only that many lines from the bottom, as Claude Code 2.1.323 keeps a
+ * dialog taller than its pane (the cursor's row may be above them).
+ */
+export type DialogOptions = { lag?: number; ignore?: boolean; bar?: boolean; height?: number }
 type QuestionState = {
   cursor: number
   checked: Set<number>
@@ -22,6 +27,7 @@ export class FakeDialog {
   lag: number
   ignore: boolean // a terminal that takes no keys at all
   bar: boolean
+  height: number | null
   tab = 0
   state: QuestionState[]
   submitted: (string | null)[] | null = null
@@ -30,11 +36,12 @@ export class FakeDialog {
   stale = 0
   shown: string
 
-  constructor(questions: Question[], { lag = 0, ignore = false, bar = false }: DialogOptions = {}) {
+  constructor(questions: Question[], { lag = 0, ignore = false, bar = false, height }: DialogOptions = {}) {
     this.questions = questions
     this.lag = lag
     this.ignore = ignore
     this.bar = bar
+    this.height = height ?? null
     this.state = questions.map(() => ({ cursor: 1, checked: new Set<number>(), other: '', answer: null }))
     this.shown = this.render()
   }
@@ -191,18 +198,30 @@ export class FakeDialog {
   }
 
   render() {
+    const lines = this.draw()
+    return (this.height ? lines.slice(-this.height) : lines).join('\n')
+  }
+
+  draw(): string[] {
     const top = ['❯ an earlier prompt that mentions 1. Red and Review your answers', '', '● Sure.', '']
     if (this.submitted)
-      return [...top, "● User answered Claude's questions:", RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on'].join('\n')
+      return [...top, "● User answered Claude's questions:", RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on']
     const bar = this.tabbed
       ? `←  ${this.questions.map((q, i) => `${this.state[i]?.answer !== null ? '☒' : '☐'} ${q.header}`).join('  ')}  ✔ Submit  →`
       : ` ☐ ${this.questions[0]?.header}`
     const out = [...top, RULE, bar, '']
     if (this.tab === this.total) {
       out.push('Review your answers', '')
-      for (const [i, q] of this.questions.entries()) out.push(` ● ${q.question}`, `   → ${this.state[i]?.answer ?? ''}`)
+      for (const [i, q] of this.questions.entries()) {
+        const words = q.question.split(' ')
+        const half = Math.ceil(words.length / 2)
+        if (this.bar && words.length > 1)
+          out.push(` │ ● ${words.slice(0, half).join(' ')}`, ` │   ${words.slice(half).join(' ')}`)
+        else out.push(` ● ${q.question}`)
+        out.push(`   → ${this.state[i]?.answer ?? ''}`)
+      }
       out.push('', 'Ready to submit your answers?', '', '❯ 1. Submit answers', '  2. Cancel')
-      return out.join('\n')
+      return out
     }
     const q = this.q
     const s = this.s
@@ -223,6 +242,6 @@ export class FakeDialog {
       out.push(`${s.cursor === n + 2 ? '❯' : ' '}    ${this.tabbed && this.total > 1 ? 'Next' : 'Submit'}`)
     out.push(RULE, `  ${q.preview ? '' : `${n + 2}. `}Chat about this`, '')
     out.push(`Enter to select · ↑/↓ to navigate${this.editing() ? ' · ctrl+g to edit in Notepad' : ''} · Esc to cancel`)
-    return out.join('\n')
+    return out
   }
 }

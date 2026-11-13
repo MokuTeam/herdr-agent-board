@@ -109,6 +109,8 @@ export interface BoardPayload {
   claudeProgram?: string
   /** How a session asleep in "Waiting" folds (core/fold-mode.ts); a board before the setting sent none. */
   foldWaiting?: FoldMode
+  /** Auto-compact's default limit as written (#378, core/compact.ts: `300k`, `60%`), '' for off; a board before it sent none. */
+  compactDefault?: string
   /** The remote mode (core/remote.ts), only while it is on. */
   remote?: RemoteView
   /** The user's presence (#172, core/presence.ts), only while config.json turns it on. */
@@ -134,11 +136,24 @@ export interface BoardPayload {
    */
   calendar?: CalendarPayload
   /**
+   * Threads (#379), only while config.json turns them on: the threads revision (the journal seq of
+   * the last entry; a page that shows threads reads its own routes again when it moves) and how
+   * many wait on the owner. The threads themselves never ride in the payload.
+   */
+  threads?: ThreadsPayload
+  /**
    * The Remote access view's revision (GET /api/access, local only): it changes when the view does,
    * and the panel fetches the view again then; the view itself never goes out with the board. The
    * server always sends it; a board before it sent none.
    */
   accessRev?: number
+  /**
+   * The peer network's revision (#231): the panel's cue to fetch GET /api/team again. Only while
+   * config.json's `team` is on; a board without it sends none.
+   */
+  teamRev?: number
+  /** The team's unread messages (#355), only while `team` is on. */
+  teamUnread?: number
   /**
    * The Omarchy theme the Terminal style takes its colors from (src/adapters/omarchy.ts): a stamp
    * that changes with it, only on a computer with Omarchy. The page loads omarchy-theme.css again.
@@ -160,6 +175,18 @@ export interface TimePayload {
   today: Record<string, number>
   /** config.json's `time` does not check out (the panel says what): no entry is written. */
   problems?: boolean
+}
+
+/** What the board's payload says of threads (#379). */
+export interface ThreadsPayload {
+  rev: number
+  needsOwner: number
+  /** Moves when a shared entry's way to the hub changed (#394): absent until one did. */
+  out?: number
+  /** Threads are the owner's (config.json's `agents: false`, #410): absent while agents write too. */
+  agents?: false
+  /** Kept on this board also with Team on (`share: false`, #410): absent while they may be shared. */
+  share?: false
 }
 
 /** What the board's payload says of the calendar (#328). */

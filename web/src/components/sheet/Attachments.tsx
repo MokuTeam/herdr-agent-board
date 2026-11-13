@@ -8,14 +8,16 @@ import { FileGlyph } from '../icons.tsx'
 export interface AttachmentsProps {
   list: readonly Attachment[]
   onRemove(id: number): void
+  /** The element's id: the session's box by default, another where a second list shows (#371's Team panel). */
+  id?: string
 }
 
-export function Attachments({ list, onRemove }: AttachmentsProps) {
+export function Attachments({ list, onRemove, id = 'attachments' }: AttachmentsProps) {
   const t = useT()
   const sizeOf = (a: Attachment) =>
     a.status === 'uploading' ? t('file.uploading') : a.status === 'error' ? t('file.failed') : sizeText(a.size, t)
   return (
-    <div className={classNames('attachments', list.length > 0 && 'has')} id="attachments">
+    <div className={classNames('attachments', list.length > 0 && 'has')} id={id}>
       {list.map(a => (
         <div key={a.id} className={`attachment ${a.status}`} data-id={a.id} title={a.name}>
           {a.image ? (

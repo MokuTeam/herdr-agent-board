@@ -17,6 +17,9 @@
 # Snooze and At start; the buttons that are not a link open claude-pane:cal/<act>/<id>, which goes
 # to the board (web-open.ts --reminder). `reminder-clear` (its id on stdin) takes one off the screen
 # and the notification centre once it was acted on elsewhere.
+# And the team's messages (#355): `team` with the toast as JSON on stdin ({ id, thread, title, body,
+# label }), under the board's own app id; a click opens claude-pane:team/<thread key>, which goes
+# to the board (web-open.ts --team) and brings it up on that thread.
 # Try it from a herdr pane: a Stop payload on stdin and `force` (skips the focused-pane check):
 #   '{"hook_event_name":"Stop","last_assistant_message":"Hi"}' | powershell -File toast.ps1 force
 
@@ -25,6 +28,9 @@ param([string]$Action = "", [string]$Uri = "")
 $AppId = "Herdr.ClaudeAgent"
 $BoardAppId = "Herdr.AgentBoard"
 $ReminderId = '^[A-Za-z0-9_-]{16}$'
+# A team thread's key: a peer's id or "team", then "general" or a thread's UUID (core/team-unread.ts).
+$TeamThread = '^(?:[A-Za-z0-9_-]{43}|team)/(?:general|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\z'
+$TeamMessageId = '^[A-Za-z0-9_-]{1,64}\z'
 $ProtocolKey = "HKCU:\Software\Classes\claude-pane"
 # This copy of the board (the script lives in its src\integrations folder); a click goes to its
 # web board first.
@@ -240,6 +246,35 @@ function Show-Reminder($R) {
     [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($BoardAppId).Show($toast)
 }
 
+# A team message (#355): the sender, the start of the text, "Team" under it; a newer toast for
+# the same message replaces it. Its words come from the board, already one line and printable.
+function Show-TeamMessage($M) {
+    if ([string]$M.thread -cnotmatch $TeamThread -or [string]$M.id -cnotmatch $TeamMessageId) { return }
+    Register-Handlers
+    Register-BoardApp
+    $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+    $esc = { param($s) [Security.SecurityElement]::Escape([string]$s) }
+    $open = "claude-pane:team/$($M.thread)"
+    $xml = @"
+<toast activationType="protocol" launch="$(& $esc $open)">
+  <visual>
+    <binding template="ToastGeneric">
+      <text hint-maxLines="1">$(& $esc $M.title)</text>
+      <text>$(& $esc $M.body)</text>
+      <text placement="attribution">$(& $esc $M.label)</text>
+    </binding>
+  </visual>
+</toast>
+"@
+    $doc = New-Object Windows.Data.Xml.Dom.XmlDocument
+    $doc.LoadXml($xml)
+    $toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
+    $toast.Group = "team"
+    $toast.Tag = ([string]$M.id).Substring(0, [Math]::Min(64, ([string]$M.id).Length))
+    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($BoardAppId).Show($toast)
+}
+
 function ConvertTo-PlainText([string]$Text, [int]$Max) {
     if ([string]::IsNullOrWhiteSpace($Text)) { return "" }
     $t = $Text -replace '```[\s\S]*?```', ' '
@@ -323,6 +358,14 @@ if ($Action -eq "open") {
         exit 0
     }
 
+    # A team message's click (#355): the board comes up on that thread.
+    if ([Uri]::UnescapeDataString($Uri) -cmatch '^claude-pane:team/((?:[A-Za-z0-9_-]{43}|team)/(?:general|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))/?\z') {
+        $thread = $Matches[1]
+        $bun = Find-Bun
+        if ($bun -and (Test-Path -LiteralPath $boardOpen)) { & $bun $boardOpen --team $thread | Out-Null }
+        exit 0
+    }
+
     # Any app or web page can open a claude-pane: link, so accept nothing but a pane id.
     if ([Uri]::UnescapeDataString($Uri) -notmatch '^claude-pane:([A-Za-z0-9]+:p[A-Za-z0-9]+)/?$') { exit 0 }
     $paneId = $Matches[1]
@@ -362,6 +405,12 @@ if ($Action -eq "open") {
 # The web board's calendar reminders (#335), after a click's way (above), which they do not touch.
 if ($Action -eq "reminder") {
     try { Show-Reminder (Read-Stdin | ConvertFrom-Json) } catch { }
+    exit 0
+}
+
+# The team's messages (#355), the same way.
+if ($Action -eq "team") {
+    try { Show-TeamMessage (Read-Stdin | ConvertFrom-Json) } catch { }
     exit 0
 }
 

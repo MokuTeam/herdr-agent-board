@@ -1,14 +1,22 @@
 // The session's numbers under its message box: how full its context is, the model it runs and the
 // effort it thinks with. Read only: the same facts the card's sheet shows, for reading while you
-// type. Changing them is Claude's own /model and /effort for now.
+// type. Changing them is Claude's own /model and /effort for now. A session started on a model of
+// its own (#380, Item.modelAsked) says so beside the model, as the profile's default is another.
 import { useEffect, useState } from 'react'
 import { meterReads } from '../../../../src/core/effort.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { api } from '../../api/client.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { ChevronGlyph } from '../icons.tsx'
+
+/** The compact sheet's action row (#345): folded behind the footer line, a chevron at its end opens it. */
+export interface FootFold {
+  folded: boolean
+  onToggle(): void
+}
 
 /** asked: counts the /model and /effort messages sent from the box (Composer). */
-export function SessionMeter({ item, asked = 0 }: { item: Item; asked?: number }) {
+export function SessionMeter({ item, asked = 0, fold }: { item: Item; asked?: number; fold?: FootFold | undefined }) {
   const t = useT()
   // /model and /effort change only the screen, and only for this session. It is read when the sheet
   // opens, when the session's status moves, and after a /model or /effort sent from the box; not
@@ -54,12 +62,33 @@ export function SessionMeter({ item, asked = 0 }: { item: Item; asked?: number }
       <span className="meter-ctx" title={t('meter.contextHint')}>
         {context ? t('meter.ctx', { value: context }) : t('meter.ctxNone')}
       </span>
-      <span className="meter-fact" title={item.model ?? undefined}>
-        {t('meter.model')}: {liveModel || item.model || t('meter.unknown')}
+      <span
+        className="meter-fact"
+        title={
+          item.modelAsked
+            ? [item.model, t('meter.modelOwnHint', { model: item.modelAsked })].filter(Boolean).join(' · ')
+            : (item.model ?? undefined)
+        }
+      >
+        {t('meter.model')}: {liveModel || item.model || item.modelAsked || t('meter.unknown')}
+        {item.modelAsked && <span className="meter-own"> · {t('meter.modelOwn')}</span>}
       </span>
       <span className="meter-fact" title={t('meter.effortHint')}>
         {t('meter.effort')}: {live || item.effort || t('meter.unknown')}
       </span>
+      {fold && (
+        <button
+          type="button"
+          className="foot-toggle"
+          aria-expanded={!fold.folded}
+          aria-controls="sheet-actions"
+          title={t(fold.folded ? 'sheet.actionsShow' : 'sheet.actionsHide')}
+          aria-label={t('sheet.actions')}
+          onClick={() => fold.onToggle()}
+        >
+          <ChevronGlyph />
+        </button>
+      )}
     </div>
   )
 }

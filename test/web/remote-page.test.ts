@@ -55,6 +55,7 @@ test("pairing goes by the board's answers; hello says whether this browser is pa
     language: 'ru',
     auth: 'pair',
     signedIn: false,
+    team: false,
   })
   expect(helloOf({ board: 'agent-board', host: 'BOX' })).toEqual({
     name: null,
@@ -65,8 +66,15 @@ test("pairing goes by the board's answers; hello says whether this browser is pa
     language: null,
     auth: 'pair',
     signedIn: false,
+    team: false,
   })
   expect(helloOf({ error: 'user' })).toBeNull()
+})
+
+test("the owner's own phone or login with the team on: hello says team, anything else does not (#355)", () => {
+  expect(helloOf({ board: 'agent-board', host: 'BOX', paired: true, team: true })?.team).toBe(true)
+  expect(helloOf({ board: 'agent-board', auth: 'login', signedIn: true, team: true })?.team).toBe(true)
+  expect(helloOf({ board: 'agent-board', host: 'BOX', paired: true, team: 'yes' })?.team).toBe(false)
 })
 
 test("through the owner's domain hello says to sign in, and whether this browser is; the page keeps how it gets in", () => {
@@ -79,6 +87,7 @@ test("through the owner's domain hello says to sign in, and whether this browser
     language: 'ru',
     auth: 'login',
     signedIn: true,
+    team: false,
   })
   expect(helloOf({ board: 'agent-board', auth: 'login', signedIn: false, language: null })).toMatchObject({
     auth: 'login',
@@ -89,6 +98,7 @@ test("through the owner's domain hello says to sign in, and whether this browser
   expect(helloOf({ board: 'agent-board', auth: 'passwordless', signedIn: 'yes' })).toMatchObject({
     auth: 'pair',
     signedIn: false,
+    team: false,
   })
 
   const world = new FakeWorld({ viewport: { w: 390, h: 844 } })

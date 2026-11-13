@@ -1,12 +1,14 @@
 // A launch request from the new-session window, checked before anything runs: the name, a folder
 // that is there, a lane the board has, a workspace herdr takes, the first message, a branch, the
 // Claude profile it starts in, refused when the board cannot be sure of it, and the agent it
-// starts as (core/launch/agents.ts), one the board offers.
+// starts as (core/launch/agents.ts), one the board offers, and the model it starts on, if one is
+// asked for (core/launch/model.ts): empty is the profile's default.
 import { resolvePath } from '../../adapters/files.ts'
 import { SLOW, statOf } from '../../adapters/folders.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
 import { CLAUDE_AGENT, type LaunchAgent, type LaunchAgentId, piCommand } from '../../core/launch/agents.ts'
+import { MODEL_MAX, readModel } from '../../core/launch/model.ts'
 import { checkBranch, checkName, NAME_MAX, UNSAFE_CHARS } from '../../core/launch/names.ts'
 import { profileCommand } from '../../core/launch/spawn-args.ts'
 import { type LaunchTarget, launchTarget, type ProfileSet } from '../../core/profiles.ts'
@@ -47,6 +49,8 @@ export interface LaunchRequest {
   profileCommand: string[] | null
   /** The agent the board's own launcher starts: the one the request picked, else the board's default. */
   agent: LaunchAgentId
+  /** The model it starts on (`--model`), null for the profile's default. */
+  model: string | null
 }
 
 export type CheckResult = { ok: true; launch: LaunchRequest } | { ok: false; field: string; error: string }
@@ -116,6 +120,11 @@ export async function checkRequest(
   }
   const message = String(b.message ?? '').trim()
   if (message.length > MESSAGE_MAX) return fail('message', 'launch.err.message', { n: MESSAGE_MAX })
+  // A model as Claude or pi takes it on its command line; blank is the profile's default.
+  const read = readModel(b.model)
+  if (!read.ok)
+    return fail('model', read.why === 'long' ? 'launch.err.modelLong' : 'launch.err.model', { max: MODEL_MAX })
+  const model = read.model
   let worktree: LaunchRequest['worktree'] = null
   if (b.worktree) {
     const branch = String((isRecord(b.worktree) ? b.worktree.branch : undefined) ?? '').trim()
@@ -186,6 +195,7 @@ export async function checkRequest(
       profileArgs: (profile.args ?? []).filter((a): a is string => typeof a === 'string'),
       profileCommand: profileCommandWords,
       agent,
+      model,
     },
   }
 }

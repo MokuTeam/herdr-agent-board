@@ -11,6 +11,7 @@ import { ASIDE_STRINGS } from './aside-strings.ts'
 import { BACKUP_STRINGS } from './backup-strings.ts'
 import { CAL_STRINGS } from './cal-strings.ts'
 import { CALL_STRINGS } from './call-strings.ts'
+import { COMPACT_STRINGS } from './compact-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
@@ -21,7 +22,9 @@ import { REMOTE_STRINGS } from './remote-strings.ts'
 import { SECRET_STRINGS } from './secret-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
+import { TEAM_STRINGS } from './team-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
+import { THREAD_STRINGS } from './thread-strings.ts'
 import { TIME_STRINGS } from './time-strings.ts'
 import { TODO_STRINGS } from './todo-strings.ts'
 import { TURN_STRINGS } from './turn-strings.ts'
@@ -33,6 +36,14 @@ export type Dictionary = Record<string, Entry>
 export const STRINGS: Record<Lang, Dictionary> = {
   en: {
     'sheet.properties': 'Card details',
+    'sheet.details': 'Session details',
+    'sheet.detailsShow': 'Show details',
+    'sheet.detailsHide': 'Hide details',
+    'sheet.actions': 'Session actions',
+    'sheet.actionsShow': 'Show actions',
+    'sheet.actionsHide': 'Hide actions',
+    'asked.more': 'Show the whole question',
+    'asked.less': 'Show less',
     'sheet.more': 'More actions',
     'detail.error': 'Could not read the conversation: {error}',
     'detail.retry': 'Retry',
@@ -169,6 +180,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'meter.contextHint': 'How full the context its last request carried is',
     'meter.model': 'Model',
     'meter.modelHint': 'The model this session runs',
+    // a session started on a model of its own (#380: spawn-agent --model, the Model field of a new session)
+    'meter.modelOwn': 'this session only',
+    'meter.modelOwnHint': 'Started on {model}, not the profile’s default; the profile keeps its own',
     'meter.effort': 'Effort',
     'meter.effortHint': 'The effort this session thinks with',
     'meter.unknown': '—',
@@ -229,6 +243,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
       'The terminal of {name} did not respond as expected at {step}, so the board stopped there. The dialog may be partly filled in: finish it in herdr',
     'err.qa.review':
       'The summary in the terminal of {name} lists other answers than yours, so nothing was submitted. Check it in herdr',
+    'err.qa.cut':
+      'The dialog in the terminal of {name} is taller than its pane, so the board cannot see all of it at {step} and stopped there. Make the pane taller, or answer it in herdr',
     'err.qa.herdr': 'herdr did not answer: {why}',
     'err.qa.busy': 'An answer to {name} is already being typed',
     'err.qa.notClaude': '{name} is not a Claude session: answer it in herdr',
@@ -332,6 +348,11 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'tb.search': 'Search',
     'tb.sleepersTitle': 'Show sleeping sessions',
     'tb.cats': 'Categories',
+    // the toolbar's overflow menu, and the folded toolbar's filter button (its name says what is filtered)
+    'tb.more': 'More',
+    'tb.moreAlert': 'More (something in it needs a look)',
+    'tb.filters': 'Filters',
+    'tb.filtersOn': 'Filters: {text}',
     'tb.catsTitle': 'Categories: titles, colors, folders, order',
     'set.title': 'Settings',
     'set.hint': 'Settings: appearance, language, panel, sleeping sessions',
@@ -677,6 +698,14 @@ export const STRINGS: Record<Lang, Dictionary> = {
 
   ru: {
     'sheet.properties': 'Сведения о карточке',
+    'sheet.details': 'Сведения о сессии',
+    'sheet.detailsShow': 'Показать сведения',
+    'sheet.detailsHide': 'Скрыть сведения',
+    'sheet.actions': 'Действия сессии',
+    'sheet.actionsShow': 'Показать действия',
+    'sheet.actionsHide': 'Скрыть действия',
+    'asked.more': 'Показать вопрос целиком',
+    'asked.less': 'Свернуть',
     'sheet.more': 'Ещё действия',
     'detail.error': 'Не удалось прочитать переписку: {error}',
     'detail.retry': 'Повторить',
@@ -810,6 +839,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'meter.contextHint': 'Насколько заполнен контекст последнего запроса',
     'meter.model': 'Модель',
     'meter.modelHint': 'Модель этой сессии',
+    'meter.modelOwn': 'только эта сессия',
+    'meter.modelOwnHint': 'Запущена на {model}, а не на модели профиля; у профиля осталась своя',
     'meter.effort': 'Усилие',
     'meter.effortHint': 'Усилие, с которым думает эта сессия',
     'meter.unknown': '—',
@@ -869,6 +900,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
       'Терминал {name} повёл себя не так, как ожидалось ({step}), и доска остановилась. Диалог может быть заполнен частично: доделай его в herdr',
     'err.qa.review':
       'Сводка в терминале {name} показывает другие ответы, поэтому ничего не отправлено. Проверь в herdr',
+    'err.qa.cut':
+      'Диалог в терминале {name} выше панели, и доска не видит его целиком ({step}), поэтому остановилась. Сделай панель выше или ответь в herdr',
     'err.qa.herdr': 'herdr не ответил: {why}',
     'err.qa.busy': 'Ответ для {name} уже набирается',
     'err.qa.notClaude': '{name}: не сессия Claude, ответь в herdr',
@@ -974,6 +1007,10 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'tb.search': 'Поиск',
     'tb.sleepersTitle': 'Показывать спящие сессии',
     'tb.cats': 'Категории',
+    'tb.more': 'Ещё',
+    'tb.moreAlert': 'Ещё (в нём есть, на что посмотреть)',
+    'tb.filters': 'Фильтры',
+    'tb.filtersOn': 'Фильтры: {text}',
     'tb.catsTitle': 'Категории: названия, цвета, папки, порядок',
     'set.title': 'Настройки',
     'set.hint': 'Настройки: оформление, язык, панель, спящие сессии',
@@ -1347,7 +1384,10 @@ for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRING
 for (const code of Object.keys(CALL_STRINGS) as Lang[]) Object.assign(STRINGS[code], CALL_STRINGS[code])
 // And tasks (#202).
 for (const code of Object.keys(TODO_STRINGS) as Lang[]) Object.assign(STRINGS[code], TODO_STRINGS[code])
+for (const code of Object.keys(THREAD_STRINGS) as Lang[]) Object.assign(STRINGS[code], THREAD_STRINGS[code])
 for (const code of Object.keys(SECRET_STRINGS) as Lang[]) Object.assign(STRINGS[code], SECRET_STRINGS[code])
+// And the peer network (#231).
+for (const code of Object.keys(TEAM_STRINGS) as Lang[]) Object.assign(STRINGS[code], TEAM_STRINGS[code])
 // And the board's database and its backup (#233).
 for (const code of Object.keys(BACKUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], BACKUP_STRINGS[code])
 // And time tracking on it (#233).
@@ -1359,3 +1399,5 @@ for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(SERVER_STRINGS) as Lang[]) Object.assign(STRINGS[code], SERVER_STRINGS[code])
 // And what the one command says on the server ("Do it myself").
 for (const code of Object.keys(ONESHOT_STRINGS) as Lang[]) Object.assign(STRINGS[code], ONESHOT_STRINGS[code])
+// And auto-compact (#378).
+for (const code of Object.keys(COMPACT_STRINGS) as Lang[]) Object.assign(STRINGS[code], COMPACT_STRINGS[code])

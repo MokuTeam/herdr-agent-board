@@ -13,6 +13,7 @@ import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
+import { pace } from '../adapters/pacing.ts'
 import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
@@ -39,26 +40,45 @@ import type { Observation } from '../core/presence.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
+import { teamConfig } from '../core/team.ts'
+import { toastBody } from '../core/team-unread.ts'
+import { MAX_NAME } from '../core/team-wire.ts'
 import { boardPorts, forwardSpec, publicHosts, sshArgs, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
+import { teamDesktop } from '../integrations/team-toast.ts'
 import { createAccess } from '../services/access.ts'
 import { backupView, startBackups } from '../services/backup.ts'
 import { createBackupServer } from '../services/backup-server.ts'
 import { createCalendarSync } from '../services/calendar.ts'
 import { createCalendarReminders } from '../services/calendar-reminders.ts'
+import { startCompactor } from '../services/compactor.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
 import { createPresence } from '../services/presence.ts'
-import { editProfile, installProfile, wakeHooksInPlace } from '../services/profiles.ts'
+import { editProfile, installProfile, installThreadsSkill, wakeHooksInPlace } from '../services/profiles.ts'
 import { createRemote } from '../services/remote.ts'
 import { createRemoteAccess } from '../services/remote-access.ts'
 import { startScheduler } from '../services/scheduler.ts'
 import { createServerSetup } from '../services/server-setup.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
+import { createTeamConfirm } from '../services/team-confirm.ts'
+import { createTeam } from '../services/team-hub.ts'
+import { createTeamNotify, type TeamNotify } from '../services/team-notify.ts'
+import { createTeamRouter, noticeSchedule } from '../services/team-router.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
-import { createProbes, createSupervisor, networkSignature, realClock, type TunnelPlan } from '../services/tunnel.ts'
+import { piDayMirror } from '../services/thread-import.ts'
+import {
+  createProbes,
+  createSupervisor,
+  networkSignature,
+  PROBE_FIRST_MS,
+  realClock,
+  type TunnelPlan,
+} from '../services/tunnel.ts'
 import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
+import { createWorkHub, type WorkHub } from '../services/work-hub.ts'
+import { keepThreadsDb, threadsPayload } from '../services/work-threads.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, peerOf, type Route } from './http.ts'
 import { createRemoteListener } from './remote.ts'
@@ -83,7 +103,10 @@ import { categoriesRoute, profilesRoute, settingsRoute } from './routes/settings
 import { setupRoute } from './routes/setup.ts'
 import { sleepRoute } from './routes/sleep.ts'
 import { staticRoute } from './routes/static.ts'
+import { teamRoutes } from './routes/team.ts'
+import { teamNotifyRoutes, teamReveal } from './routes/team-notify.ts'
 import { terminalRoute } from './routes/terminal.ts'
+import { revStream, threadOpenState, threadReveal, threadsRoutes } from './routes/threads.ts'
 import { keepTimeDb, timeRoutes, timeToday } from './routes/time.ts'
 import { todosRoutes } from './routes/todos.ts'
 import { wakeRoutes } from './routes/wake.ts'
@@ -241,7 +264,17 @@ export async function startServer({
   const reveals = revealState()
   // A reminder's Open on the desktop asks for a calendar event the same way (#335).
   const eventsShown = eventReveal()
-  const events = createBroadcaster(() => board.payload(), { greet: () => reveals.greet() + eventsShown.greet() })
+  // A team notification's click asks for a thread the same way (#355).
+  const teamShown = teamReveal()
+  // `board thread open` asks for a thread the same way (#392).
+  const threadShown = threadOpenState()
+  const events = createBroadcaster(() => board.payload(), {
+    greet: () => reveals.greet() + eventsShown.greet() + teamShown.greet() + threadShown.greet(),
+  })
+  // GET /api/threads/events (#392): its own stream, made on its first client. The routes use the
+  // connection the payload keeps.
+  const threadRevs = revStream()
+  keepThreadsDb(true)
   // The remote mode (core/remote.ts): pairing, and the listener on the Tailscale address while it
   // is on. Off, it reads the config and nothing else.
   const remote = createRemote({ onChange: () => board.publish() })
@@ -354,6 +387,8 @@ export async function startServer({
     checkKey: () => publicKeyOf(keyPath(tunnelConf())),
     sshFound: () => sshBin(),
     openProbeListener,
+    // a test's paced board (adapters/pacing.ts) probes sooner
+    probeFirstMs: PROBE_FIRST_MS * pace(),
     onChange: accessChanged,
     log,
   })
@@ -412,6 +447,127 @@ export async function startServer({
     onChange: () => board.publish(),
     sessions: () => board.items().map(i => i.key),
   })
+  // The peer network (#231): no socket, timer or file while config.json has no valid `team`.
+  // What comes in goes to the router (#216), which tells a session only when the owner turned
+  // Agents on for that peer, and only through the schedule, with a notice of its own words.
+  // Its notifications and unread count (#355) are made the first time a message comes in or the
+  // payload asks while `team` is on: off, nothing of them runs.
+  let teamNotify: TeamNotify | null = null
+  const notifyOf = (): TeamNotify =>
+    (teamNotify ??= createTeamNotify({
+      desktop: teamDesktop(log),
+      // The service's own name for a peer (roster, pins, the key's start), one line, cut.
+      nameOf: peer => toastBody(team.nameOf(peer), MAX_NAME),
+    }))
+  // Shared threads (#394): a topic that carries a status, while threads (with `share`) and Team are
+  // on. Off, its hooks answer no and the hub client says and takes nothing of them.
+  let workHub: WorkHub | null = null
+  const team = createTeam({
+    cfg,
+    log,
+    version: PLUGIN_VERSION || 'dev',
+    onChange: () => {
+      board.publish()
+      // What waits for the hub goes once it is there; drafts and history files are followed up.
+      if (workHub?.on()) void workHub.flush()
+    },
+    work: {
+      on: () => workHub?.on() ?? false,
+      mayTake: m => workHub?.mayTake(m) ?? false,
+    },
+    // Each hearer on its own: one that throws keeps neither the other nor the message's ack back.
+    onInbound: e => {
+      // An entry of a shared thread tells the thread's watchers (#394); the topic's notice would say it twice.
+      let taken = false
+      try {
+        taken = workHub?.inbound(e) ?? false
+      } catch (err) {
+        log(`threads: a shared entry failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      try {
+        if (!taken) teamRouter.inbound(e)
+      } catch (err) {
+        log(`team: the router failed on a message: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      try {
+        notifyOf().inbound(e)
+      } catch (err) {
+        log(`team: a notification failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      board.publish()
+    },
+  })
+  const teamRouter = createTeamRouter({
+    team,
+    cfg,
+    items: () => board.items(),
+    schedule: noticeSchedule,
+    log,
+  })
+  workHub = createWorkHub({
+    cfg,
+    team,
+    router: teamRouter,
+    gated: () => teamConfirm.required(),
+    log,
+    changed: () => board.publish(),
+  })
+  const work = workHub
+  // The head's count: read again whenever the team changed (a message, a trim, a trust).
+  let unreadRev: number | null = null
+  const teamUnread = (): number | null => {
+    const rev = team.rev()
+    if (rev === null) return null
+    const n = notifyOf()
+    if (rev !== unreadRev) {
+      unreadRev = rev
+      n.changed()
+    }
+    // The count reads (and the first time writes) team-reads.json: a file that fails is no count,
+    // never a payload that fails.
+    try {
+      return n.unread()
+    } catch (err) {
+      log(`team: the unread count failed: ${err instanceof Error ? err.message : String(err)}`)
+      return null
+    }
+  }
+  // The owner's passkey for Send, trust and widening agents (#224): confirmed in a window on
+  // http://localhost:<port>, the port this board listens on.
+  const teamConfirm = createTeamConfirm({ port: () => Number(server?.port ?? port), safe: () => !loopbackTaken })
+  // The confirmation window is on http://localhost:<port>, and a browser may try [::1] for
+  // `localhost` before 127.0.0.1. While team is on the board holds [::1]:<port> as well, so no other
+  // program can stand there and show a window of its own; if one already does, confirmations are
+  // refused (teamConfirm.safe) until it is gone. Without `team` nothing listens on ::1, as before.
+  let loopback6: ReturnType<typeof Bun.serve> | null = null
+  let loopbackTaken = false
+  function holdLoopback6(): void {
+    const on = teamConfig(cfg.team) !== null
+    if (!on) {
+      void loopback6?.stop(true)
+      loopback6 = null
+      loopbackTaken = false
+      return
+    }
+    if (loopback6) return
+    try {
+      loopback6 = Bun.serve({
+        port: Number(server.port),
+        hostname: '::1',
+        idleTimeout: 0,
+        development: false,
+        reusePort: false,
+        fetch: answer,
+      })
+      loopbackTaken = false
+    } catch (err) {
+      // No IPv6 loopback on this computer: no browser reaches it either.
+      const taken = (err as { code?: string }).code === 'EADDRINUSE'
+      if (taken && !loopbackTaken)
+        log(`[::1]:${server.port} is held by another program: passkey confirmations wait until it is gone`)
+      loopbackTaken = taken
+    }
+  }
   // The backup of the board's database (#233): its schedule (a look a minute, which only stats the
   // file while there is none), the server's setup, and its line in the payload (none while there
   // is no database and no target).
@@ -473,12 +629,36 @@ export async function startServer({
     accessRev: () => accessRev,
     ...(omarchy && { omarchy: omarchy.stamp }),
     presence: presence.view,
+    teamRev: team.rev,
+    teamUnread,
     backup: backupLine,
     time: timeLine,
     calendar: calendarLine,
+    // Threads (#379): while config.json turns them on, the revision and the count that waits on
+    // the owner (two queries a refresh); off, nothing is read.
+    threads: () => {
+      const line = threadsPayload(cfg)
+      if (line) threadRevs.moved(line.rev)
+      // An entry's way to the hub moved (#394): the page reads its thread again.
+      const out = work.rev()
+      return line && out ? { ...line, out } : line
+    },
   })
   board.publish()
-  const refresh = (): void => void board.refresh()
+  // A pi day's task board copied into threads (#393), before each refresh: a change of pi's file is in
+  // the payload's threads revision with it. Off, it returns at the config's threads key.
+  const piTasks = piDayMirror({
+    cfg,
+    log,
+    sessionOf: key => {
+      const item = board.items().find(i => i.key === key || i.session === key)
+      return item ? { kind: 'session', key: item.key, name: item.name || item.autoName || item.key.slice(0, 8) } : null
+    },
+  })
+  const refresh = (): void => {
+    piTasks.tick()
+    void board.refresh()
+  }
   // After Install from the Profiles panel, and the install a show runs: the panel's note and "Setup
   // incomplete" follow at once, not at the next refresh and the next check in up to 10 minutes;
   // also when only herdr's own hook failed, after the board's went in.
@@ -490,6 +670,13 @@ export async function startServer({
   // The order of main's `if` chain: the first route that answers wins.
   routes.push(
     setupRoute(setup),
+    // Which process this board is and where it is installed (#356), for the board command and
+    // doctor on this computer: a server that does not answer it runs older code (core/board-port.ts).
+    {
+      method: 'GET',
+      path: '/api/process',
+      handle: () => json(200, { board: 'agent-board', pid: process.pid, root: ROOT }),
+    },
     ...remoteRoutes(listener, remote, cfg, port),
     ...accessRoutes(remoteAccess),
     ...boardRoutes(board, events),
@@ -497,12 +684,56 @@ export async function startServer({
     ...linksRoutes(board),
     ...fsRoutes(),
     ...uploadRoutes(),
-    revealRoute(board, events, reveals),
+    revealRoute(board, events, reveals, word => threadReveal({ cfg }, events, threadShown, word)),
     settingsRoute(),
     // Settings → MokuPilot…: where a call starts, here or on the viewer's computer.
     ...mokupilotRoutes(cfg),
     // The user's presence: read, switched and set (the page, the phone, the Android app).
     ...presenceRoutes(presence),
+    // The peer network: roster, threads, sends (local only; nothing answers while `team` is off).
+    ...teamRoutes(
+      team,
+      teamRouter,
+      cfg,
+      () => {
+        teamNotify?.changed()
+        board.publish()
+      },
+      teamConfirm,
+      work,
+    ),
+    // The owner read a thread, or clicked a team notification on the desktop (#355).
+    ...teamNotifyRoutes({
+      notify: () => (team.rev() === null ? null : notifyOf()),
+      events,
+      shown: teamShown,
+      changed: () => board.publish(),
+    }),
+    // Threads (#392): the page's, MokuPilot's and the MCP adapter's reads and the owner's writes.
+    ...threadsRoutes(
+      {
+        cfg,
+        changed: () => board.publish(),
+        async tell(key, text) {
+          const { t } = await import('../core/lang.ts')
+          const { collect } = await import('../services/board.ts')
+          const { send } = await import('../services/actions.ts')
+          const item = (await collect(deps)).find(i => i.key === key)
+          if (!item) return { ok: false, error: t('err.gone') }
+          const r = await send(deps, item, text)
+          return r.ok ? { ok: true } : { ok: false, error: String(r.error ?? '') }
+        },
+        async clearAsk(key, question) {
+          const { readCard, writeCard } = await import('../adapters/cards.ts')
+          if (readCard(key)?.ask === question) writeCard(key, { ask: '', askSince: '' })
+        },
+        work,
+        confirm: teamConfirm,
+        // Settings turned them on (#410): the skill where the install action puts it.
+        skill: () => installThreadsSkill(deps.profiles().list),
+      },
+      threadRevs,
+    ),
     // Tasks (#202): points pinned on the board, done, reopened, removed; turned on or off.
     ...todosRoutes({ cfg, find: board.find, refresh }),
     // Secret requests (#273): the owner's submit writes the sink, or the owner declines; the phone too.
@@ -632,6 +863,8 @@ export async function startServer({
   refresh()
   // The port makes it one board per machine, so one scheduler; claims cover an overlap.
   const scheduler = startScheduler({ deps, onChange: refresh })
+  // Auto-compact (#378) beside it, for the same reason: one board types /compact.
+  const compactor = startCompactor({ deps, onChange: refresh })
   // Shells a board before this one opened and that are gone by now are forgotten.
   if (terminalOn(cfg)) void terminals.prune()
   setup.start()
@@ -644,6 +877,8 @@ export async function startServer({
   presence.start()
   calendar.configChanged()
   reminders.configChanged()
+  team.start()
+  holdLoopback6()
 
   // What the Remote access view reads of config.json, and the tunnel's own settings in it, as of
   // the last config change.
@@ -679,6 +914,8 @@ export async function startServer({
       // The calendar turned on or off: its timer started or stopped, its reminders' too.
       calendar.configChanged()
       reminders.configChanged()
+      team.refresh()
+      holdLoopback6()
       await board.refresh()
     },
     async close() {
@@ -686,15 +923,19 @@ export async function startServer({
       for (const watcher of watchers) watcher.close()
       omarchy?.close()
       scheduler.stop()
+      compactor.stop()
       backups.stop()
       wake.stop()
       presence.stop()
       calendar.stop()
       reminders.stop()
+      team.stop()
       terminals.stopAll()
       setup.stop()
       accessOut.cancel()
       events.close()
+      threadRevs.close()
+      keepThreadsDb(false)
       await listener.close()
       // ssh before the listener it forwards to.
       await supervisor.close()
@@ -702,6 +943,7 @@ export async function startServer({
       endLogins()
       process.off('exit', endLogins)
       await tunnel.close()
+      await loopback6?.stop(true)
       await server.stop(true)
     },
   }

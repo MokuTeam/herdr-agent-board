@@ -13,6 +13,7 @@ import { existsSync } from 'node:fs'
 import { homedir, uptime } from 'node:os'
 import { configFile, readConfigFile } from '../adapters/config-file.ts'
 import { herdr } from '../adapters/herdr.ts'
+import { pause } from '../adapters/pacing.ts'
 import { ROOT } from '../adapters/paths.ts'
 import { isAlive } from '../adapters/process.ts'
 import { wakeAlive } from '../adapters/wake-api.ts'
@@ -101,7 +102,7 @@ const result = await startWake(
     writeStatus: s => writeWakeStatus(s),
     alive: isAlive,
     log,
-    sleep: ms => Bun.sleep(ms),
+    sleep: pause,
     now: Date.now,
     bootedAt,
     root: ROOT,

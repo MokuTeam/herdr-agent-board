@@ -3,12 +3,13 @@
 // newest one in a line, which says how and when it ended if it did. A row opens the helper's conversation, "All" the whole list (the helpers
 // window, hooks/useHelpers.ts). A redraw keeps the focus on what opens the same thing
 // (hooks/useKeepFocus.ts).
-import type { MouseEvent, ReactNode } from 'react'
+import { type MouseEvent, type ReactNode, useRef } from 'react'
 import type { PublicHelper, WorkflowRun } from '../../../../src/core/helpers.ts'
+import { useCollapse } from '../../hooks/useCollapse.ts'
 import { useKeepFocus } from '../../hooks/useKeepFocus.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { ago } from '../../models/card.ts'
-import { endedLine, helperTitle } from '../../models/helper-model.ts'
+import { endedLine, helpersSum, helperTitle } from '../../models/helper-model.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { ChevGlyph } from '../icons.tsx'
 import { HelperRow, KindIcon, RunRow, StatusMark } from './HelperRows.tsx'
@@ -20,11 +21,15 @@ export interface HelpersStripProps {
   onHelper(id: string, el: HTMLElement): void
   /** The list, at a workflow run's agents (`run`) or from the top. */
   onList(run: string | null, el: HTMLElement): void
+  /** The compact head holds their count instead (#345): the strip folds up (data-folded, styles/sheet-compact.css). */
+  folded?: boolean | undefined
 }
 
-export function HelpersStrip({ helpers: list, workflows: runs, onHelper, onList }: HelpersStripProps) {
+export function HelpersStrip({ helpers: list, workflows: runs, onHelper, onList, folded = false }: HelpersStripProps) {
   const t = useT()
   const keepFocus = useKeepFocus()
+  const strip = useRef<HTMLElement>(null)
+  useCollapse(strip, folded)
   const shown = list.length > 0 || runs.length > 0
   return (
     <section
@@ -32,6 +37,8 @@ export function HelpersStrip({ helpers: list, workflows: runs, onHelper, onList 
       id="sheet-helpers"
       aria-labelledby="sheet-helpers-title"
       hidden={!shown}
+      ref={strip}
+      data-folded={folded ? '' : undefined}
       {...keepFocus}
     >
       {shown && <Strip helpers={list} workflows={runs} onHelper={onHelper} onList={onList} t={t} />}
@@ -50,10 +57,7 @@ function Strip({
   const running = list.filter(h => h.status === 'running')
   const own = running.filter(h => !h.workflow)
   const liveRuns = runs.filter(w => w.status === 'running')
-  const done = list.length - running.length
-  const sum = [running.length && t('helpers.running', { n: running.length }), done && t('helpers.done', { n: done })]
-    .filter(Boolean)
-    .join(' · ')
+  const sum = helpersSum(list, t)
   const more = own.length - 4
   const from = (open: (el: HTMLElement) => void) => (e: MouseEvent<HTMLElement>) => open(e.currentTarget)
   let rows: ReactNode = (

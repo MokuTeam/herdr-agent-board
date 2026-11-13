@@ -28,6 +28,7 @@ import {
   worktreeCreate,
   worktreeOpen,
 } from '../../adapters/herdr.ts'
+import { pause } from '../../adapters/pacing.ts'
 import { run } from '../../adapters/process.ts'
 import { keyTowardYes, sameFolder, type TrustDialog, trustDialog } from '../../core/dialogs/trust.ts'
 import { t } from '../../core/lang.ts'
@@ -63,6 +64,11 @@ export interface Launch extends LaunchRequest {
   /** The panes on the board when it started: one matched to it while its launcher runs is new. */
   knownPanes: Set<string | null>
   pane: string | null
+  /**
+   * The terminal `pane` held when the board opened it, null when unknown (an older herdr, a pane a
+   * launcher command or spawn-agent opened): herdr gives a pane's id out again after it starts over.
+   */
+  terminal: string | null
   key: string | null
   error: string
   kind: LaunchFailure | ''
@@ -70,9 +76,13 @@ export interface Launch extends LaunchRequest {
   /** The key whose card has its lane. */
   carded: string | null
   rootPane: string | null
+  /** The terminal of `rootPane` when herdr said, else null. */
+  rootTerminal: string | null
   rootTab: string | null
   /** A tab the worktree came with, left over once the profile's own tab was opened. */
   spareTab: string | null
+  /** The pane `spareTab` came with and its terminal, as herdr said when it opened the tab. */
+  spareRoot: { pane: string | null; terminal: string | null } | null
   /** The setup's ticket convention: case- names, -wt/<ticket> paths, linked workspaces. */
   ticketNames: boolean
   worktreeMade: boolean
@@ -102,14 +112,17 @@ export function newLaunch(
     doneAt: null,
     knownPanes: new Set(items.map(i => i.pane)),
     pane: null,
+    terminal: null,
     key: null,
     error: '',
     kind: '',
     sessionId: null,
     carded: null,
     rootPane: null,
+    rootTerminal: null,
     rootTab: null,
     spareTab: null,
+    spareRoot: null,
     ticketNames: false,
     worktreeMade: false,
     dismissed: false,
@@ -127,7 +140,6 @@ export interface LaunchRunner {
   answerTrust(l: Launch): Promise<TrustAnswer>
 }
 
-const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const ready = (agent: HerdrAgent | null): boolean => agent?.status === 'idle' || agent?.status === 'done'
 
@@ -170,13 +182,19 @@ export function launchRunner({
 }): LaunchRunner {
   const events = (l: Launch): LaunchEvents => ({
     step: name => step(l, name),
-    pane: pane => {
+    pane: (pane, terminal) => {
       l.pane = pane
+      l.terminal = terminal ?? (pane === l.rootPane ? l.rootTerminal : null)
     },
     session: id => {
       l.sessionId = id
       // A fork's card says whose fork it is, and since when (core/links.ts).
-      writeCard(id, { category: l.category, profileWant: l.profile, ...(l.fork && forkCard(l.fork)) })
+      writeCard(id, {
+        category: l.category,
+        profileWant: l.profile,
+        ...(l.model && { modelWant: l.model }),
+        ...(l.fork && forkCard(l.fork)),
+      })
       l.carded = id
     },
   })
@@ -188,7 +206,8 @@ export function launchRunner({
     // run in, as for any start.
     if (l.resume) {
       l.sessionId = l.resume
-      writeCard(l.resume, { profileWant: l.profile })
+      // The model it comes back on, when one was asked for; else Claude goes on with its last one.
+      writeCard(l.resume, { profileWant: l.profile, ...(l.model && { modelWant: l.model }) })
       l.carded = l.resume
     }
     const linked = deps.cfg.launch?.linkedWorkspaces === true
@@ -214,6 +233,7 @@ export function launchRunner({
         const ws = await openInProfile(l, env => workspaceCreate(l.cwd, l.workspaceLabel, env))
         l.workspaceId = ws.id
         l.rootPane = ws.pane
+        l.rootTerminal = ws.terminal
         l.rootTab = ws.tab
         if (ws.pane) notePane(l, ws.pane, ws.terminal)
       }
@@ -246,10 +266,11 @@ export function launchRunner({
     }
     // A new workspace starts with a tab of shells; a launcher command opened its own tab beside it.
     // A worktree opened with a profile's env leaves its first tab empty: it goes too.
-    if (l.spareTab && l.pane) await tidy(l.workspaceId, l.spareTab, l.pane)
+    if (l.spareTab && l.pane) await tidy(l.workspaceId, l.spareTab, l.pane, l.spareRoot)
     else if (launcher.kind !== 'herdr' && l.rootTab && l.pane && l.pane !== l.rootPane)
-      await tidy(l.workspaceId, l.rootTab, l.pane)
+      await tidy(l.workspaceId, l.rootTab, l.pane, { pane: l.rootPane, terminal: l.rootTerminal })
     l.spareTab = null
+    l.spareRoot = null
   }
 
   /**
@@ -261,12 +282,17 @@ export function launchRunner({
     l.rootTab = ws.alreadyOpen ? null : ws.tab
     if (l.configDir === null && !ws.alreadyOpen) {
       l.rootPane = ws.pane
+      l.rootTerminal = ws.terminal
       if (ws.pane) notePane(l, ws.pane, ws.terminal)
       return
     }
     const opened = await openInProfile(l, env => tabCreateRoot(ws.id, l.cwd, l.label, env))
     l.rootPane = opened.pane
-    if (spareRootTab && ws.tab && !ws.alreadyOpen) l.spareTab = ws.tab
+    l.rootTerminal = opened.terminal
+    if (spareRootTab && ws.tab && !ws.alreadyOpen) {
+      l.spareTab = ws.tab
+      l.spareRoot = { pane: ws.pane, terminal: ws.terminal }
+    }
     notePane(l, opened.pane, opened.terminal)
   }
 
@@ -362,18 +388,30 @@ export function launchRunner({
   async function untilReady(l: Launch, limit: number): Promise<HerdrAgent | null> {
     const deadline = Date.now() + limit
     while (Date.now() < deadline && !l.dismissed && !l.closed) {
-      await sleep(1500)
+      await pause(1500)
       const agent = await agentNow(l)
       if (ready(agent)) return agent
     }
     throw new LaunchError(t(l.dismissed ? 'launch.err.dismissed' : 'launch.err.dialogTimeout'), 'dialog')
   }
 
-  /** Close the tab a new workspace came with, if no agent runs in it (the session is elsewhere). */
-  async function tidy(workspace: string, tab: string, pane: string): Promise<void> {
+  /**
+   * Close the tab a new workspace came with, if no agent runs in it (the session is elsewhere).
+   * herdr gives ids out again once it starts over: the pane the tab came with holding another
+   * terminal than herdr named for it then means the tab is someone else's now, and it stays.
+   */
+  async function tidy(
+    workspace: string,
+    tab: string,
+    pane: string,
+    root: { pane: string | null; terminal: string | null } | null,
+  ): Promise<void> {
     try {
       const panes = (await workspacePanes(workspace)).filter(p => p.tab === tab)
-      if (panes.length && !panes.some(p => p.agent || p.pane === pane)) await herdr(['tab', 'close', tab])
+      const reused = panes.some(
+        p => !!root?.terminal && p.pane === root.pane && !!p.terminal && p.terminal !== root.terminal,
+      )
+      if (panes.length && !reused && !panes.some(p => p.agent || p.pane === pane)) await herdr(['tab', 'close', tab])
     } catch {}
   }
 
@@ -386,7 +424,7 @@ export function launchRunner({
   async function trustShown(l: Launch, tries = 1): Promise<TrustDialog | null> {
     if (!l.pane) return null
     for (let i = 0; i < tries; i++) {
-      if (i) await sleep(700)
+      if (i) await pause(700)
       const screen = await herdrText(['pane', 'read', l.pane, '--source', 'visible'], 5000).catch(() => '')
       const d = trustDialog(screen)
       if (d && sameFolder(d.folder, l.cwd, homedir())) return d
@@ -404,7 +442,7 @@ export function launchRunner({
     step(l, 'trust')
     const deadline = Date.now() + 30 * 60_000
     while (Date.now() < deadline && !l.dismissed && !l.closed) {
-      await sleep(1500)
+      await pause(1500)
       const agent = await agentNow(l)
       if (ready(agent)) {
         l.state = 'starting'
@@ -484,7 +522,7 @@ export function launchRunner({
           return { ok: true }
         }
         await herdr(['pane', 'send-keys', l.pane, key])
-        await sleep(300)
+        await pause(300)
       }
       return { ok: false, error: t('launch.err.trustCursor') }
     } catch (err) {

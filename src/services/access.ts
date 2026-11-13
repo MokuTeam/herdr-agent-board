@@ -44,7 +44,15 @@ import {
 } from '../core/access.ts'
 import { t } from '../core/lang.ts'
 import { base32, base32Bytes, totpMatch, totpUri } from '../core/totp.ts'
-import { b64url, verifyAssertion, verifyRegistration } from '../core/webauthn.ts'
+import {
+  assertionOf,
+  b64url,
+  CREDENTIAL_ID_MAX,
+  challengeOf,
+  registrationOf,
+  verifyAssertion,
+  verifyRegistration,
+} from '../core/webauthn.ts'
 import { hashToken } from './remote.ts'
 
 /** Longer than this is never the password: refused before argon2 spends any time on it. */
@@ -62,11 +70,8 @@ const CHALLENGE_BYTES = 32
 const CHALLENGE_MS = 2 * 60_000
 const CHALLENGES_MAX = 50
 const USER_ID_BYTES = 16
-/** WebAuthn's longest user id and credential id, in bytes. */
+/** WebAuthn's longest user id, in bytes. */
 const USER_ID_MAX = 64
-const CREDENTIAL_ID_MAX = 1023
-/** How a passkey's authenticator is reached (WebAuthn's AuthenticatorTransport): only these are kept. */
-const TRANSPORTS = new Set(['usb', 'nfc', 'ble', 'smart-card', 'hybrid', 'internal'])
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -175,54 +180,6 @@ async function passwordMatches(password: unknown, hash: string | null): Promise<
     return await Bun.password.verify(password, hash)
   } catch {
     return false // a hash edited by hand into something argon2 cannot read
-  }
-}
-
-const isText = (v: unknown): v is string => typeof v === 'string' && v.length > 0
-
-/** The credential as the page sends it, { id, rawId, type, response } (base64url); rawId and type may be left out. */
-function credentialOf(body: unknown): { id: string; response: Record<string, unknown> } | null {
-  if (!isRecord(body) || !isText(body.id) || !isRecord(body.response)) return null
-  if (body.rawId !== undefined && body.rawId !== body.id) return null
-  if (body.type !== undefined && body.type !== 'public-key') return null
-  return { id: body.id, response: body.response }
-}
-
-/** A passkey sign-in (navigator.credentials.get) as core/webauthn.ts checks it; null for any other shape. */
-function assertionOf(body: unknown): Parameters<typeof verifyAssertion>[0] | null {
-  const c = credentialOf(body)
-  if (!c) return null
-  const { clientDataJSON, authenticatorData, signature, userHandle } = c.response
-  if (!isText(clientDataJSON) || !isText(authenticatorData) || !isText(signature)) return null
-  if (userHandle != null && typeof userHandle !== 'string') return null
-  return { id: c.id, clientDataJSON, authenticatorData, signature, userHandle: userHandle ?? null }
-}
-
-/** A passkey made (navigator.credentials.create) as core/webauthn.ts checks it, with its known transports; null for any other shape. */
-function registrationOf(
-  body: unknown,
-): { id: string; clientDataJSON: string; attestationObject: string; transports: string[] } | null {
-  const c = credentialOf(body)
-  if (!c) return null
-  const { clientDataJSON, attestationObject, transports } = c.response
-  if (!isText(clientDataJSON) || !isText(attestationObject)) return null
-  const known = Array.isArray(transports)
-    ? transports.filter((x): x is string => typeof x === 'string' && TRANSPORTS.has(x))
-    : []
-  return { id: c.id, clientDataJSON, attestationObject, transports: [...new Set(known)] }
-}
-
-const utf8 = new TextDecoder('utf-8', { fatal: true })
-
-/** The challenge a credential's client data carries; null when there is none to read. */
-function challengeOf(clientDataJSON: string): string | null {
-  const bytes = b64url.decode(clientDataJSON)
-  if (!bytes) return null
-  try {
-    const data: unknown = JSON.parse(utf8.decode(bytes))
-    return isRecord(data) && typeof data.challenge === 'string' ? data.challenge : null
-  } catch {
-    return null
   }
 }
 

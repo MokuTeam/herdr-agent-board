@@ -3,7 +3,7 @@
 
 import { type FormQuestion, questionsOf } from './dialogs/question-form.ts'
 import { t } from './lang.ts'
-import { boardNotice, isNotice, type Notice, taskNotice } from './notices.ts'
+import { boardNotice, compactNotice, isNotice, type Notice, taskNotice } from './notices.ts'
 import { DEFAULT_PROMPT_FILTERS, type PromptFilter } from './prompt-filters.ts'
 import {
   type CallLinks,
@@ -407,6 +407,11 @@ export function fitThread(turns: ConversationTurn[], budget = THREAD_TEXT_BUDGET
 export interface ConversationOptions {
   /** A helper's own transcript (adapters/helpers.ts), whose lines are all sidechain lines. */
   sidechain?: boolean
+  /**
+   * Compactions as lines of their own (#378): for a session auto-compact is in force for, so its
+   * conversation says when it was compacted and what that left. Off, the conversation is as before.
+   */
+  compactions?: boolean
 }
 
 /** What tells one notice from another: the copy a queued notice leaves when it is sent again matches. */
@@ -451,7 +456,7 @@ function askAnswers(ask: readonly { question: string }[], result: unknown): stri
 export function parseConversation(
   lines: string[],
   limit = 40,
-  { sidechain = false }: ConversationOptions = {},
+  { sidechain = false, compactions = false }: ConversationOptions = {},
 ): ConversationTurn[] {
   const items: ConversationTurn[] = []
   const tools = new Map<string, ToolTurn>() // tool_use id -> item
@@ -490,11 +495,18 @@ export function parseConversation(
       !(
         line.includes('"type":"user"') ||
         line.includes('"type":"assistant"') ||
-        line.includes('"type":"queued_command"')
+        line.includes('"type":"queued_command"') ||
+        (compactions && line.includes('"compact_boundary"'))
       )
     )
       continue
     const o = parse(line)
+    // A compaction (#378): a line of its own, with what it left.
+    const compacted = compactions && o?.type === 'system' ? compactNotice(o) : null
+    if (compacted) {
+      notice(compacted, Date.parse(str(o?.timestamp)) || 0)
+      continue
+    }
     // Claude Code keeps another session's message, and in a helper's transcript a task reporting
     // back, as a meta line: they are shown all the same.
     const kind = rec(o?.origin)?.kind

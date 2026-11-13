@@ -39,6 +39,20 @@ test('sandbox() lays out the env and the compiled fake herdr answers a canned re
   expect(readFileSync(box.env.FAKE_HERDR_LOG as string, 'utf8')).toContain('"agent","list"')
 })
 
+test('a sandbox child keeps the test process’s clock: the same calendar day for the same instant, at any hour (#349)', async () => {
+  const box = await sandbox()
+  // 00:30 and 23:30 UTC: a zone that is not UTC puts one of them on another calendar day.
+  const instants = [Date.UTC(2026, 10, 10, 0, 30), Date.UTC(2026, 10, 10, 23, 30)]
+  const dayOf = (at: number): string => {
+    const d = new Date(at)
+    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
+  }
+  const script = `const dayOf = ${dayOf}; console.log(JSON.stringify(${JSON.stringify(instants)}.map(dayOf)))`
+  const child = Bun.spawnSync([process.execPath, '-e', script], { env: box.env })
+  expect(child.exitCode).toBe(0)
+  expect(JSON.parse(child.stdout.toString())).toEqual(instants.map(dayOf))
+})
+
 const alive = (pid: number): boolean => {
   try {
     process.kill(pid, 0)

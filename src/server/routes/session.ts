@@ -6,10 +6,12 @@ import { type CardPatch, writeCard } from '../../adapters/cards.ts'
 import { checkoutChanges, isCheckout } from '../../adapters/git.ts'
 import { helpersOf } from '../../adapters/helpers.ts'
 import { herdrText } from '../../adapters/herdr.ts'
+import { pause } from '../../adapters/pacing.ts'
 import { uploadsDir } from '../../adapters/paths.ts'
 import { askRestart } from '../../adapters/schedule-store.ts'
 import { busy, PINS } from '../../core/board.ts'
 import { isCodexItem } from '../../core/codex.ts'
+import { limitText, MAX_COMPACT_NOTE, noteText, parseCompactLimit } from '../../core/compact.ts'
 import { type PublicDialog, parseDialog, publicDialog } from '../../core/dialogs/questions.ts'
 import { effortFromScreen, meterReads, modelFromScreen } from '../../core/effort.ts'
 import { publicHelper } from '../../core/helpers.ts'
@@ -19,6 +21,7 @@ import type { MessageGate } from '../../core/message-gate.ts'
 import type { Viewer } from '../../core/mokupilot-mode.ts'
 import { isPiItem } from '../../core/pi.ts'
 import type { QueuedPrompt, QueueWindow } from '../../core/queue.ts'
+import type { ConversationTurn } from '../../core/transcript.ts'
 import type { Item, Pin } from '../../core/types.ts'
 import {
   checkWake,
@@ -86,6 +89,15 @@ function queueOf(deps: Deps, item: Item): QueuedPrompt[] {
   return deps.claude.sessionThread(item.transcript ?? '', 60, queueWindow(deps, item)).queued
 }
 
+/** The compactions the board's auto-compact made (#378, their times on the card) marked as the board's in the conversation. */
+function byBoard(item: Item, conv: ConversationTurn[]): ConversationTurn[] {
+  const times = new Set(item.compact?.done ?? [])
+  if (!times.size) return conv
+  return conv.map(m =>
+    m.role === 'notice' && m.kind === 'compact' && times.has(m.at) ? { ...m, by: 'board' as const } : m,
+  )
+}
+
 async function detail(app: SessionApp, item: Item) {
   const { deps } = app
   const { transcript, claudeRoot, alive, since, pipe, ...shown } = item
@@ -95,8 +107,8 @@ async function detail(app: SessionApp, item: Item) {
     ? deps.codex.sessionThread(item.session ?? '', 60)
     : isPiItem(item)
       ? deps.pi.sessionThread(item.session ?? '', 60)
-      : deps.claude.sessionThread(transcript ?? '', 60, queueWindow(deps, item))
-  const conversation = withSessions(app.items(), thread.conversation)
+      : deps.claude.sessionThread(transcript ?? '', 60, queueWindow(deps, item), { compactions: !!item.compact })
+  const conversation = byBoard(item, withSessions(app.items(), thread.conversation))
   // helpers: every subagent, fork, workflow agent and teammate, newest first (adapters/helpers.ts).
   const own = helpersOf(transcript, { alive: !!alive, since: since ?? null })
   // checkout: whether its folder is in git, for the sheet's Changes button.
@@ -152,7 +164,7 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
  * seconds before it counts as gone.
  */
 async function freshItem(deps: Deps, item: Item): Promise<Item | undefined> {
-  for (const deadline = Date.now() + namedWaitMs(); ; await Bun.sleep(NAMED_POLL_MS)) {
+  for (const deadline = Date.now() + namedWaitMs(); ; await pause(NAMED_POLL_MS)) {
     const fresh = (await collect(deps)).find(next => next.key === item.key)
     if (fresh || !item.sleeping || Date.now() >= deadline) return fresh
   }
@@ -210,6 +222,18 @@ function card(item: Item, body: Body): Result {
   if (typeof body.doing === 'string') patch.doing = body.doing.trim()
   // Kept in sight, or not any more.
   if (typeof body.favorite === 'boolean') patch.favorite = body.favorite || ''
+  // Auto-compact (#378): its own limit ('' or null: Settings' default applies) and instructions.
+  if (body.compactAt !== undefined) {
+    const raw = body.compactAt
+    const limit = raw === '' || raw === null ? null : parseCompactLimit(raw)
+    if (raw !== '' && raw !== null && !limit) return { ok: false, error: t('err.compactAt', { value: String(raw) }) }
+    patch.compactAt = limit ? limitText(limit) : ''
+  }
+  if (typeof body.compactNote === 'string') {
+    if (body.compactNote.trim().length > MAX_COMPACT_NOTE)
+      return { ok: false, error: t('err.compactNote', { max: MAX_COMPACT_NOTE }) }
+    patch.compactNote = noteText(body.compactNote)
+  }
   // A card dragged to another column stays there until the session works again; dropped
   // back where the board would put it by itself, it is unpinned.
   if (typeof body.column === 'string') {

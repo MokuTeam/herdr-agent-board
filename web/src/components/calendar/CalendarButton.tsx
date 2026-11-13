@@ -26,7 +26,7 @@ export function CalendarButton({ onOpen }: { onOpen(): void }) {
   const color = next?.color ?? lane ?? 'var(--accent)'
   const when = soon ? untilText(start, end, now, t) : ''
   return (
-    <span className={classNames('cal-tb', soon && 'soon')} style={{ '--ev': color } as CSSProperties}>
+    <span className={classNames('cal-tb', soon && 'soon')} id="cal-tb" style={{ '--ev': color } as CSSProperties}>
       <button
         type="button"
         className={classNames('pill-toggle', !soon && 'icon-only')}

@@ -12,6 +12,7 @@ import { forgetProfilePanes } from '../adapters/profile-panes.ts'
 import { listEntries, readLog } from '../adapters/schedule-store.ts'
 import { COLUMNS } from '../core/board.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts'
+import { compactDefaultText } from '../core/compact.ts'
 import { foldModeOf } from '../core/fold-mode.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
@@ -23,6 +24,7 @@ import type {
   BoardPayload,
   BoardProfile,
   CalendarPayload,
+  ThreadsPayload,
   TimePayload,
 } from '../core/payload.ts'
 import type { PresenceView } from '../core/presence.ts'
@@ -75,6 +77,10 @@ interface Options {
   aside?: () => boolean
   /** The Remote access view's revision (app.ts counts its changes). */
   accessRev?: () => number
+  /** The peer network's revision (services/team-hub.ts); null while `team` is not on. */
+  teamRev?: () => number | null
+  /** The team's unread messages (services/team-notify.ts, #355); null while `team` is not on. */
+  teamUnread?: () => number | null
   /** The Omarchy theme's stamp (adapters/omarchy.ts), on a computer with Omarchy only. */
   omarchy?: () => string | null
   /** The user's presence (services/presence.ts); null while it is not on. */
@@ -85,6 +91,8 @@ interface Options {
   time?: () => TimePayload | null
   /** The calendar's line (#328); null while it is off. */
   calendar?: () => CalendarPayload | null
+  /** Threads' line (#379); null while they are off. */
+  threads?: () => ThreadsPayload | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -154,6 +162,16 @@ function presenceOf(presence: Options['presence']): { presence?: PresenceView } 
   return view ? { presence: view } : {}
 }
 
+function teamRevOf(teamRev: Options['teamRev']): { teamRev?: number } {
+  const rev = teamRev?.() ?? null
+  return rev !== null ? { teamRev: rev } : {}
+}
+
+function teamUnreadOf(teamUnread: Options['teamUnread']): { teamUnread?: number } {
+  const n = teamUnread?.() ?? null
+  return n !== null ? { teamUnread: n } : {}
+}
+
 function timeOf(time: Options['time']): { time?: TimePayload } {
   const line = time?.() ?? null
   return line ? { time: line } : {}
@@ -162,6 +180,11 @@ function timeOf(time: Options['time']): { time?: TimePayload } {
 function calendarOf(calendar: Options['calendar']): { calendar?: CalendarPayload } {
   const line = calendar?.() ?? null
   return line ? { calendar: line } : {}
+}
+
+function threadsOf(threads: Options['threads']): { threads?: ThreadsPayload } {
+  const line = threads?.() ?? null
+  return line ? { threads: line } : {}
 }
 
 function backupOf(backup: Options['backup']): { backup?: BackupPayload } {
@@ -186,11 +209,14 @@ export function createBoardState({
   remote,
   aside,
   accessRev,
+  teamRev,
+  teamUnread,
   omarchy,
   presence,
   backup,
   time,
   calendar,
+  threads,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -264,6 +290,8 @@ export function createBoardState({
       // What a profile without a start command types: the Profiles panel's placeholder.
       claudeProgram: claudeProgram(cfg.launch?.claude, cfg.launch?.args),
       foldWaiting: foldModeOf(cfg.foldWaiting),
+      // Auto-compact's default (#378), '' for off: Settings shows it checked.
+      compactDefault: compactDefaultText(cfg.compact),
       // remote: only while the remote mode is on; a board without it sends none.
       ...remoteOf(remote),
       // presence: only while config.json turns it on (#172).
@@ -275,8 +303,14 @@ export function createBoardState({
       ...timeOf(time),
       // calendar: only while config.json turns it on (#328)
       ...calendarOf(calendar),
+      // threads: only while config.json turns them on (#379)
+      ...threadsOf(threads),
       // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
       accessRev: accessRev?.() ?? 0,
+      // teamRev: only while config.json turns the peer network on (#231).
+      ...teamRevOf(teamRev),
+      // teamUnread: likewise, the head's count of unread team messages (#355).
+      ...teamUnreadOf(teamUnread),
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.
       ...omarchyOf(omarchy),
     }

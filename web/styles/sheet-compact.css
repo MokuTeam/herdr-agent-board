@@ -1,0 +1,194 @@
+/* The session sheet's compact head (#345, web/src/components/sheet/SheetHead.tsx and the parts that
+   fold with it), so the conversation gets the room on a phone and on a desk alike. Whole, the head is
+   what it always was: the row of pills (where the card shows, its lane, the pencil, the star), the
+   name under it, then the facts and the card's fields; the chevron sits at the end of the name's line.
+   Compact (`#sheet.sheet-compact`) it is one row: where the card shows, the name on one line, the
+   helpers' count, the chevron; the lane, the pencil and the star are out of it, and the facts and the
+   card's fields fold away under it. Compact also holds the helpers' strip behind their count, cuts the
+   open question to two lines and folds the action row behind the footer line. Every part that folds
+   carries data-folded, which gives it its folded size here; the spring that moves it between the two
+   is hooks/useCollapse.ts (data-moving and inline sizes while it moves, nothing at rest). The board's
+   own sheet, laid over upstream's, which stay theirs rule for rule. */
+
+/* ---------------------------------------------------------------- the head's rows */
+/* Whole: the pills' row, then the name's line with the chevron at its end. */
+#sheet .sheet-headline { display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: 8px; min-width: 0; }
+#sheet .sheet-headline > .sheet-pills { flex: 1 0 100%; min-width: 0; }
+/* The name leaves the chevron its place on its line (28px and the gap): a name as wide as the row would
+   push it to a line of its own. */
+#sheet .sheet-headline > h2 { min-width: 0; max-width: calc(100% - 36px); }
+
+.sheet-compact-toggle,
+.sheet-helpers-chip {
+  flex: none;
+  border: 0;
+  font-family: inherit;
+  cursor: pointer;
+  transition: transform 100ms ease-out, background-color 150ms ease, color 150ms ease;
+}
+.sheet-compact-toggle:active, .sheet-helpers-chip:active { transform: scale(0.94); }
+.sheet-compact-toggle:focus-visible, .sheet-helpers-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.sheet-compact-toggle {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  /* Level with the name's first line (the name has 6px of margin above it), and no taller than that
+     line: the head is as tall as it always was. */
+  margin: 3px 0 -3px auto;
+  padding: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--label-3);
+}
+.sheet-compact-toggle .chevron { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.sheet-compact-toggle[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+
+/* The helpers' count: in the row only while the strip is folded away. */
+.sheet-helpers-chip {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  margin: 6px 0 -6px;
+  padding: 0 9px 0 8px;
+  border-radius: 999px;
+  background: var(--fill-2);
+  color: var(--label-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+#sheet.sheet-compact .sheet-helpers-chip { display: inline-flex; margin-left: auto; }
+#sheet.sheet-compact .sheet-helpers-chip + .sheet-compact-toggle { margin-left: 0; }
+.sheet-helpers-chip .dot { width: 7px; height: 7px; }
+
+/* Compact: one row. The pills' row dissolves into it, and the lane, the pencil and the star leave it;
+   the name has one line. Not in the wide, low layout (below), where the head is a column beside the
+   conversation and keeps its rows. */
+@container sheet not ((min-width: 680px) and (min-aspect-ratio: 5 / 4) and (height < 600px)) {
+  #sheet.sheet-compact .sheet-headline { flex-wrap: nowrap; align-items: center; min-height: 30px; }
+  #sheet.sheet-compact .sheet-headline > .sheet-pills { display: contents; }
+  #sheet.sheet-compact .sheet-pills > :not(.status-pill) { display: none; }
+  /* A long name gives way, not the pill: it takes the shrinking. */
+  #sheet.sheet-compact .sheet-pills > .status-pill { flex: 0 0 auto; }
+  #sheet.sheet-compact .sheet-pills > .status-pill .pill-label { white-space: nowrap; }
+  #sheet.sheet-compact .sheet-helpers-chip, #sheet.sheet-compact .sheet-compact-toggle { margin-top: 0; margin-bottom: 0; }
+  #sheet.sheet-compact .sheet-headline > h2 {
+    display: block;
+    overflow: hidden;
+    margin-top: 0;
+    font-size: 16px;
+    line-height: 1.3;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    -webkit-line-clamp: unset;
+    flex-shrink: 100;
+  }
+  #sheet.sheet-compact .sheet-compact-toggle { margin-left: auto; }
+  #sheet.sheet-compact .sheet-helpers-chip + .sheet-compact-toggle { margin-left: 0; }
+}
+
+/* ---------------------------------------------------------------- the fold under the row */
+#sheet .sheet-details[data-folded]:not([data-moving]) { height: 0; overflow: hidden; visibility: hidden; opacity: 0; }
+#sheet .sheet-details[data-moving] { overflow: hidden; }
+
+/* ---------------------------------------------------------------- the helpers' strip */
+#sheet .sheet-helpers[data-folded]:not([data-moving]) {
+  height: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  overflow: hidden;
+  visibility: hidden;
+  opacity: 0;
+}
+#sheet .sheet-helpers[data-moving] { overflow: hidden; }
+
+/* ---------------------------------------------------------------- the open question */
+#sheet .asked-compact { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 10px; }
+.asked-compact .asked-text {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.asked-compact button.asked-text { cursor: pointer; border-radius: 6px; }
+.asked-compact button.asked-text:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.asked-clip { display: block; flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+.asked-clip[data-folded]:not([data-moving]) { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.asked-clip[data-moving] { overflow: hidden; }
+.asked-compact b { display: inline; margin: 0 5px 0 0; font-size: 11px; }
+.asked-compact .asked-text .chevron { flex: none; width: 16px; height: 16px; margin-top: 1px; fill: none; stroke: var(--label-3); stroke-width: 1.8; transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.asked-compact .asked-text[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+#sheet .asked-compact .asked-dismiss { margin: 0; height: 28px; }
+
+/* ---------------------------------------------------------------- the footer */
+/* The action row folded behind the footer line: its height and the gap under it go, the buttons
+   stay laid out (the row's fit reads their widths). */
+#sheet .composer-actions[data-folded]:not([data-moving]) { height: 0; margin-bottom: 0; overflow: hidden; visibility: hidden; opacity: 0; }
+#sheet .composer-actions[data-moving] { overflow: hidden; }
+.session-meter { position: relative; }
+.session-meter .foot-toggle {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  margin: -9px -6px -9px auto;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--label-3);
+  cursor: pointer;
+  transition: transform 100ms ease-out, background-color 150ms ease, color 150ms ease;
+}
+.session-meter .foot-toggle:active { transform: scale(0.94); }
+.session-meter .foot-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.session-meter .foot-toggle .chevron { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; transform: rotate(0deg); transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.session-meter .foot-toggle[aria-expanded="false"] .chevron { transform: rotate(180deg); }
+
+/* ---------------------------------------------------------------- the wide, low layout */
+/* The head is a column beside the conversation there (session-head.css): its fold takes no height
+   from the conversation, so it stays open whatever the density says. The chevron stays: it holds the
+   conversation's own parts (the helpers' strip, the question, the action row), which do take height
+   from it, and the count with them. */
+@container sheet (min-width: 680px) and (min-aspect-ratio: 5 / 4) and (height < 600px) {
+  #sheet .sheet-details[data-folded]:not([data-moving]), #sheet .sheet-details[data-moving] { height: auto !important; overflow: visible !important; visibility: visible !important; opacity: 1 !important; }
+  #sheet .sheet-details-inner { transform: none !important; }
+  /* The count joins the chevron at the end of the name's line, and the name leaves room for both. */
+  #sheet.sheet-compact .sheet-headline > h2 { max-width: calc(100% - 84px); }
+}
+
+/* ---------------------------------------------------------------- touch, pointers and motion */
+/* A phone's compact row gives the name what room it can: the pill goes without its arrows (it still opens its menu). */
+@media (max-width: 760px) {
+  #sheet.sheet-compact .sheet-pills .status-pill .updown { display: none; }
+}
+/* A touch screen keeps :hover on what was last tapped: the lift is for a pointer that hovers. On a
+   touch screen the footer line is the whole target of its chevron, the facts included. */
+@media (hover: hover) {
+  .sheet-compact-toggle:hover { background: var(--fill-2); color: var(--label-2); }
+  .sheet-helpers-chip:hover { background: var(--fill); color: var(--label); }
+  .session-meter .foot-toggle:hover { background: var(--fill-2); color: var(--label-2); }
+}
+@media (hover: none) {
+  .session-meter .foot-toggle::after { content: ""; position: absolute; inset: 0; }
+  /* A transformed button is the containing block of its ::after: pressed and scaled, it would shrink the
+     target to the button between the press and the release, and the click would miss it. */
+  .session-meter .foot-toggle:active { transform: none; background: var(--fill-2); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sheet-compact-toggle, .sheet-helpers-chip, .sheet-compact-toggle .chevron, .asked-compact .asked-text .chevron, .session-meter .foot-toggle, .session-meter .foot-toggle .chevron { transition: none; }
+}

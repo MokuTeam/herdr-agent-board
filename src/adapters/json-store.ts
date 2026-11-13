@@ -1,6 +1,7 @@
 // JSON files shared by several processes (cards, schedule entries): read with a type guard,
 // changed under a lock.
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { knobMs } from './pacing.ts'
 
 export type Guard<T> = (value: unknown) => value is T
 
@@ -38,7 +39,8 @@ function lockAge(lock: string): number {
 
 function lockFile(path: string, recoverStale = true): () => void {
   const lock = `${path}.lock`
-  const deadline = performance.now() + LOCK_TIMEOUT_MS
+  // BOARD_LOCK_TIMEOUT_MS (tests only): a test of a lock that stays held needs the refusal, not the 2 s.
+  const deadline = performance.now() + knobMs('BOARD_LOCK_TIMEOUT_MS', LOCK_TIMEOUT_MS)
   for (;;) {
     try {
       mkdirSync(lock)

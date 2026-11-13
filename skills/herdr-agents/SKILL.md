@@ -26,13 +26,14 @@ The agent-board hook told you at the start how to keep your card current (`board
 ## Start another session
 
 ```bash
-spawn-agent --name <Name> --cwd <folder> [--label "<tab label>"] [--brief-file <utf-8 file> | --brief "<text>"] [--workspace <herdr workspace id>]
+spawn-agent --name <Name> --cwd <folder> [--label "<tab label>"] [--brief-file <utf-8 file> | --brief "<text>"] [--workspace <herdr workspace id>] [--model <id or alias>]
 ```
 
-PowerShell-style names work too (`-Name -Cwd -Label -BriefFile -Brief -Workspace`). It opens a tab, starts Claude the way this computer is set up to (`launch.claude` in the board's config), names the session in Claude and in herdr, sends the brief and prints `pane=<id> name=<Name> agent=<herdr name>`. The board links the two sessions by that line.
+PowerShell-style names work too (`-Name -Cwd -Label -BriefFile -Brief -Workspace -Model`). It opens a tab, starts Claude the way this computer is set up to (`launch.claude` in the board's config), names the session in Claude and in herdr, sends the brief and prints `pane=<id> name=<Name> agent=<herdr name>`. The board links the two sessions by that line.
 
 - `--workspace` takes the workspace id (`wP`), not its label. Without it the session lands in your workspace.
 - Put a long brief in a UTF-8 file: quoting a long text on a command line breaks.
+- An agent on another model than the profile's default: `--model <id or alias>` (`opus`, `sonnet`, `haiku`, or a full name; pi's `provider/id` for pi). It goes on that session's command line only. Never type `/model` into the new session for this: Claude saves it as the default of every later session in the profile, and someone has to put it back by hand.
 - Do not start Claude with `herdr agent start --kind claude` or a bare `claude` in a pane: it gets no name, no brief, and the permission mode and launcher this computer uses are skipped.
 - A new folder may show Claude's "trust this folder" dialog: spawn-agent stops and says so; the user answers it in that tab.
 - A one-off session that has finished can be taken off the board with `board archive --session <name>` (its tab closes; the user can bring it back from the board's archive), but only one you started, or when the user asks. Its board reminders wait with it, parked: `board schedule --session <name>` lists them, `board schedule --move <id>` moves one to you, `board unschedule <id>` removes one.

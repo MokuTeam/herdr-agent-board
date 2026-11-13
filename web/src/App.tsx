@@ -49,14 +49,18 @@ import { useSettingsMenu } from './hooks/useSettingsMenu.ts'
 import { useSetupNote } from './hooks/useSetupNote.ts'
 import { useTerminal } from './hooks/useTerminal.ts'
 import { useTerminalKeys } from './hooks/useTerminalKeys.ts'
+import { useThreadLinks } from './hooks/useThreadLinks.ts'
+import { linkThreadsSheet, useThreadsContext } from './hooks/useThreads.tsx'
 import { useTodos } from './hooks/useTodos.ts'
+import { useToolbarMenu } from './hooks/useToolbarMore.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { remotePage } from './models/remote-page.ts'
+import { offersTeam } from './models/team.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
   const limitsAnchor = useRef<HTMLButtonElement>(null)
-  const { ui, dispatch, data, calOpen } = useBoardContext()
+  const { ui, dispatch, data, calOpen, teamOpen } = useBoardContext()
   const panels = usePanelLayout()
   // The categories and schedule panels, each opened at a lane or a session when asked.
   const [categories, setCategories] = useState(false)
@@ -130,8 +134,31 @@ export function App() {
   // Time (#233), while the board has it on: its panel, out of the toolbar's button or a lane's day total.
   const [timeOpen, setTimeOpen] = useState(false)
   const [timeClient, setTimeClient] = useState<string | null>(null)
+  // Settings → Team… (#231), local page with the payload's teamRev: mounted at its first opening.
+  const [team, setTeam] = useState(false)
+  const [teamMounted, setTeamMounted] = useState(false)
+  const openTeam = () => {
+    setTeam(true)
+    setTeamMounted(true)
+  }
+  // A team notification's click (#355): the panel opens on that thread.
+  const [teamFocus, setTeamFocus] = useState<string | null>(null)
+  const teamAsked = teamOpen?.n ?? 0
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each ask once, by its count
+  useEffect(() => {
+    if (!teamOpen || !offersTeam(data)) return
+    openTeam()
+    setTeamFocus(teamOpen.thread)
+  }, [teamAsked])
   // Tasks (#202), while the board has them on: their panel, out of the toolbar's button.
   const [todosOpen, setTodosOpen] = useState(false)
+  // Threads (#392), while the payload carries them: the panel, and links that open a thread.
+  const threads = useThreadsContext()
+  useThreadLinks()
+  const threadsOn = !!threads
+  useEffect(() => {
+    if (threadsOn) linkThreadsSheet()
+  }, [threadsOn])
   // Settings → Paths on this computer…, on the board seen from another device only: mounted at its
   // first opening, as Remote access.
   const [localPaths, setLocalPaths] = useState(false)
@@ -195,11 +222,14 @@ export function App() {
     openTimeSettings,
     openLocalPaths,
     openCalendarSettings,
+    openTeam,
   )
   // Tasks' 📌 menu under an agent's message, and the panel's buttons.
   const todos = useTodos(menus.menu)
   // The lanes control and the profile switch folded into pills: their choices as menus.
   const picks = useSegmentPicks(menus.menu)
+  // What left the toolbar's row at a narrow width: its More menu.
+  const more = useToolbarMenu(menus.menu)
   const terminalKeys = useTerminalKeys(menus)
   useOmarchyTheme(data?.omarchy)
   useBoardKeys({
@@ -248,13 +278,16 @@ export function App() {
           onWake={() => setWake(true)}
           settings={settings}
           picks={picks}
+          more={more}
           onTodos={() => setTodosOpen(!todosOpen)}
+          {...(threads && { onThreads: () => threads.setShown(!threads.shown) })}
           onBackup={remotePage() ? undefined : openBackup}
           onTime={() => {
             setTimeClient(null)
             setTimeOpen(!timeOpen)
           }}
           onCalendar={() => setCalendarOpen(!calendarOpen)}
+          {...(offersTeam(data) && { onTeam: () => (team ? setTeam(false) : openTeam()) })}
         />
         <Board
           onNewSession={newSession}
@@ -297,8 +330,21 @@ export function App() {
         {...(localPathsMounted && remotePage()
           ? { localPaths: { open: localPaths, onClose: () => setLocalPaths(false) } }
           : {})}
+        {...(teamMounted && offersTeam(data)
+          ? {
+              team: {
+                open: team,
+                onClose: () => setTeam(false),
+                focus: teamFocus,
+                onFocused: () => setTeamFocus(null),
+              },
+            }
+          : {})}
         archive={archive}
         todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
+        {...(threads && {
+          threads: { open: threads.shown, onClose: () => threads.setShown(false), menu: menus.menu },
+        })}
         time={{ open: timeOpen, onClose: () => setTimeOpen(false), client: timeClient, onClient: setTimeClient }}
         sheet={{
           onNewSession: newSession,

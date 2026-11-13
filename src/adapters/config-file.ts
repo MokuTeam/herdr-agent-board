@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, statSync, watch } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { builtinTitle, DEFAULT_CONFIG, normalizeConfig, validColor } from '../core/categories.ts'
+import { limitText, parseCompactLimit } from '../core/compact.ts'
 import { isFoldMode } from '../core/fold-mode.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
@@ -32,6 +33,7 @@ import { isTodoMode } from '../core/todos.ts'
 import { fieldProblem, type TunnelField } from '../core/tunnel.ts'
 import type { Category, Config } from '../core/types.ts'
 import { wakeConfig } from '../core/wake/config.ts'
+import { isThreadMode, type ThreadMode, threadsConfig, threadsSetting } from '../core/work-threads.ts'
 import { allCards, writeCard } from './cards.ts'
 import { isRecord, readJson, replaceFile, withLock } from './json-store.ts'
 import { configDir } from './paths.ts'
@@ -201,6 +203,17 @@ export function editSettings(body: unknown): EditResult {
       if (!isFoldMode(fold)) return { ok: false, error: t('err.foldWaiting', { mode: String(fold) }) }
       raw.foldWaiting = fold
     }
+    // Auto-compact's default (#378): a limit, or '' (off); its instructions in config.json stay.
+    const compactAt = isRecord(body) ? body.compactAt : undefined
+    if (compactAt !== undefined) {
+      const limit = compactAt === '' ? null : parseCompactLimit(compactAt)
+      if (compactAt !== '' && (!limit || limit === 'never'))
+        return { ok: false, error: t('err.compactAt', { value: String(compactAt) }) }
+      const { at: _old, ...rest } = isRecord(raw.compact) ? raw.compact : {}
+      const next = limit ? { ...rest, at: limitText(limit) } : rest
+      if (Object.keys(next).length) raw.compact = next
+      else delete raw.compact
+    }
     return { ok: true }
   })
 }
@@ -264,6 +277,54 @@ export function editTodos(body: unknown): EditResult {
     else raw.todos = mode === 'agents' ? true : mode === 'auto' ? { autoClose: true } : { agents: false }
     return { ok: true }
   })
+}
+
+/**
+ * Threads (#410) from Settings → Threads: { mode?: 'none' | 'mine' | 'agents', share?: boolean }
+ * into config.json's `threads` (core/work-threads.ts threadsSetting): none deletes the key (the
+ * stored threads stay), mine is `{ agents: false }`, agents `true`, the section's other fields
+ * kept. `share` alone is refused while threads are off. `on` says whether they are on after it.
+ * The running board picks the change up as any edit (liveConfig).
+ */
+export function editThreads(body: unknown): EditResult & { on?: boolean } {
+  const b: Raw = isRecord(body) ? body : {}
+  const change: { mode?: ThreadMode; share?: boolean } = {}
+  if (isThreadMode(b.mode)) change.mode = b.mode
+  else if (b.mode !== undefined) return { ok: false, error: t('thread.err.mode') }
+  if (typeof b.share === 'boolean') change.share = b.share
+  else if (b.share !== undefined) return { ok: false, error: t('thread.err.mode') }
+  if (change.mode === undefined && change.share === undefined) return { ok: false, error: t('thread.err.mode') }
+  let on = false
+  const r = editConfig(raw => {
+    if (change.mode === undefined && !threadsConfig(raw.threads)) return { ok: false, error: t('thread.err.off') }
+    const next = threadsSetting(raw.threads, change)
+    if (next === undefined) delete raw.threads
+    else raw.threads = next
+    on = threadsConfig(next) !== null
+    return { ok: true }
+  })
+  return r.ok ? { ok: true, on } : r
+}
+
+/**
+ * Join the peer network (#231): config.json's `team` becomes { hub, name }, its other fields kept.
+ * `board team join` calls it once the hub has said welcome. The running board picks it up as any
+ * edit (liveConfig).
+ */
+export function joinTeam(team: { hub: string; name: string }): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  raw.team = { ...(isRecord(raw.team) ? raw.team : {}), hub: team.hub, name: team.name }
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/** Leave it: `team` goes out of config.json. The key and the messages stay in the state folder. */
+export function leaveTeam(): EditResult {
+  const raw = readConfigFile()
+  if (!raw || !('team' in raw)) return { ok: true }
+  delete raw.team
+  writeRaw(raw)
+  return { ok: true }
 }
 
 /**

@@ -16,12 +16,17 @@
 // How sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
 // On a page signed in through the owner's domain, Sign out ends this browser's own login (Call 15).
 // Tasks (#202, src/core/todos.ts) are the board's: Off, the user's pins only, or agents too.
+// Threads (#410, src/core/work-threads.ts) beside them, on the local board's page: Off, the owner's
+// only, or agents too, and with Team on, shared over it or kept on this board.
 // Presence (#172, src/core/presence.ts) is the board's: Off, or on with how it notices the user
 // went away (by itself, only an offer, by hand only), and after how many idle minutes.
+// Auto-compact (#378, src/core/compact.ts) is the board's: Off, or the default limit every session
+// without one of its own compacts at (a session's own is set on its sheet or with `board compact`).
 import { FOLD_MODES, type FoldMode, isFoldMode } from '../../../src/core/fold-mode.ts'
 import { isPresenceMode, PRESENCE_MODES, type PresenceMode } from '../../../src/core/presence.ts'
 import { isTodoMode, TODO_MODES, type TodoMode } from '../../../src/core/todos.ts'
 import type { Translator } from '../../../src/core/types.ts'
+import { isThreadMode, THREAD_MODES, type ThreadMode } from '../../../src/core/work-threads.ts'
 import { CARD_TEXTS, type CardText, isCardText } from './card-text.ts'
 import { isLook, LOOKS } from './look.ts'
 import type { MenuEntry } from './menu-model.ts'
@@ -61,6 +66,8 @@ export interface SettingsNow {
   timeSettings?: boolean
   /** The local board's page: Calendar… is offered (#328). */
   calendarSettings?: boolean
+  /** The local board's page with the payload's teamRev (#231): Team… is offered. */
+  team?: boolean
   /** This page signed in through the owner's domain: Sign out is offered, last. */
   signOut?: boolean
   /** Presence as the board has it ('none': not on); none given: no Presence item (an older board). */
@@ -69,8 +76,77 @@ export interface SettingsNow {
   idleMinutes?: number | undefined
   /** Tasks as the board has them (#202, 'none': off); none given: no Tasks item (an older board). */
   todos?: TodoMode | undefined
+  /** Threads as the board has them (#410, 'none': off); none given: no Threads item (another device's page, an older board). */
+  threads?: ThreadMode | undefined
+  /** Threads shared over Team (#410); none given: no choice (Team off, or threads off). */
+  threadsShare?: boolean | undefined
   /** The board on another device (models/remote-page.ts): Paths on this computer… is offered. */
   localPaths?: boolean
+  /** Auto-compact's default limit as the board has it (#378, '' for off); none given: no item (an older board). */
+  compact?: string | undefined
+}
+
+/** The default limits Settings → Auto-compact offers (#378); config.json or the CLI may hold any other. */
+export const COMPACT_CHOICES = ['200k', '300k', '400k', '500k', '50%', '75%'] as const
+
+function compactItem(now: SettingsNow, edit: { disabled?: boolean; reason?: string }): MenuEntry[] {
+  const { t, compact } = now
+  if (compact === undefined) return []
+  // One config.json holds that the menu does not offer is shown too, checked.
+  const choices: string[] = [...COMPACT_CHOICES]
+  if (compact && !choices.includes(compact)) choices.push(compact)
+  return [
+    {
+      id: 'compact',
+      label: t('set.compact'),
+      ...edit,
+      submenu: [
+        { id: 'compact:off', label: t('set.compact.off'), checked: compact === '' },
+        { separator: true as const },
+        ...choices.map(at => ({
+          id: `compact:${at}`,
+          label: at.endsWith('%') ? t('set.compact.share', { share: at }) : t('set.compact.tokens', { tokens: at }),
+          checked: compact === at,
+        })),
+      ],
+    },
+  ]
+}
+
+/** Threads as the payload says (#410): off without its line; `agents: false` and `share: false` only where config.json says so. */
+export function threadsNow(payload: {
+  threads?: { agents?: boolean; share?: boolean } | undefined
+  teamRev?: number | undefined
+}): { mode: ThreadMode; share?: boolean } {
+  const line = payload.threads
+  if (!line) return { mode: 'none' }
+  const mode = line.agents === false ? 'mine' : 'agents'
+  return payload.teamRev === undefined ? { mode } : { mode, share: line.share !== false }
+}
+
+function threadsItem(now: SettingsNow, edit: { disabled?: boolean; reason?: string }): MenuEntry[] {
+  const { t, threads, threadsShare } = now
+  if (!threads) return []
+  return [
+    {
+      id: 'threads',
+      label: t('set.threads'),
+      ...edit,
+      submenu: [
+        ...THREAD_MODES.map(id => ({ id: `threads:${id}`, label: t(`set.threads.${id}`), checked: threads === id })),
+        ...(threads === 'none' || threadsShare === undefined
+          ? []
+          : [
+              { separator: true as const },
+              ...(['shared', 'local'] as const).map(id => ({
+                id: `threadsShare:${id}`,
+                label: t(`set.threads.${id}`),
+                checked: threadsShare === (id === 'shared'),
+              })),
+            ]),
+      ],
+    },
+  ]
 }
 
 /** The idle minutes Settings → Presence offers; config.json may hold any other. */
@@ -171,6 +247,8 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
           },
         ]
       : []),
+    ...threadsItem(now, edit),
+    ...compactItem(now, edit),
     ...(now.profiles ? [{ id: 'profiles', label: t('set.profiles') }] : []),
     ...(now.wake ? [{ id: 'wake', label: t('set.wake') }] : []),
     ...(now.phones ? [{ id: 'phones', label: t('set.phones') }] : []),
@@ -180,6 +258,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
     ...(now.timeSettings ? [{ id: 'timeSettings', label: t('set.time') }] : []),
     ...(now.calendarSettings ? [{ id: 'calendarSettings', label: t('set.calendar') }] : []),
     ...(now.localPaths ? [{ id: 'localPaths', label: t('set.localPaths') }] : []),
+    ...(now.team ? [{ id: 'team', label: t('set.team') }] : []),
     { separator: true },
     { id: 'sleepers', label: t('tb.sleepersTitle'), checked: now.sleepers },
     ...(now.fold
@@ -214,10 +293,14 @@ export type SettingPick =
   | { kind: 'backup' }
   | { kind: 'timeSettings' }
   | { kind: 'calendarSettings' }
+  | { kind: 'team' }
   | { kind: 'signout' }
   | { kind: 'presence'; value: PresenceMode | 'none' }
   | { kind: 'presenceIdle'; value: number }
   | { kind: 'todos'; value: TodoMode }
+  | { kind: 'threads'; value: ThreadMode }
+  | { kind: 'threadsShare'; value: boolean }
+  | { kind: 'compact'; value: string }
   | { kind: 'localPaths' }
   | null
 
@@ -244,10 +327,15 @@ export function settingPicked(id: string): SettingPick {
   if (id === 'backup') return { kind: 'backup' }
   if (id === 'timeSettings') return { kind: 'timeSettings' }
   if (id === 'calendarSettings') return { kind: 'calendarSettings' }
+  if (id === 'team') return { kind: 'team' }
   if (id === 'signout') return { kind: 'signout' }
   if (kind === 'presence' && (value === 'none' || isPresenceMode(value))) return { kind, value }
   if (kind === 'presenceIdle' && /^\d+$/.test(value)) return { kind, value: Number(value) }
   if (kind === 'todos' && isTodoMode(value)) return { kind, value }
+  if (kind === 'threads' && isThreadMode(value)) return { kind, value }
+  if (kind === 'threadsShare' && (value === 'shared' || value === 'local')) return { kind, value: value === 'shared' }
+  // Off is '' for the board; a limit as the menu wrote it.
+  if (kind === 'compact' && value) return { kind, value: value === 'off' ? '' : value }
   if (id === 'localPaths') return { kind: 'localPaths' }
   return null
 }

@@ -23,6 +23,8 @@ export interface LaunchOptions {
   recent: string[]
   /** The setup's ticket conventions: linked workspaces, -wt/<ticket> paths, case- names. */
   linkedWorkspaces: boolean
+  /** The launcher can start a session on a model of its own (#380): the window offers the Model field. */
+  takesModel: boolean
 }
 
 /** What the window offers before the server said: herdr opening Claude, nothing else. */
@@ -35,6 +37,7 @@ export const NO_OPTIONS: LaunchOptions = {
   board: '',
   recent: [],
   linkedWorkspaces: false,
+  takesModel: false,
 }
 
 const text = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined)
@@ -63,6 +66,7 @@ export function asOptions(value: unknown): LaunchOptions | null {
     board: text(value.board) ?? '',
     recent: strings(value.recent),
     linkedWorkspaces: value.linkedWorkspaces === true,
+    takesModel: value.takesModel === true,
   }
 }
 
