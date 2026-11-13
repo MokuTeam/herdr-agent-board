@@ -9,7 +9,13 @@
 // - Several questions, or one multiSelect question: a tab bar
 //   ("←  ☒ Size  ☐ Toppings  ✔ Submit  →", ☒ answered), one question at a time, and at the end a
 //   "Review your answers" screen that lists every answer above "1. Submit answers" and
-//   "2. Cancel". Left and right arrows move between the tabs.
+//   "2. Cancel" (from 2.1.322 a question there that takes more than one line has "│ " before
+//   each of them). Left and right arrows move between the tabs.
+// - A dialog taller than the pane: Claude Code (2.1.323 draws in the alternate screen) keeps its
+//   bottom in view wherever the cursor is, and herdr reads nothing above the screen while the
+//   session waits. The top (the rule and the tab bar, on a shorter pane the question and the first
+//   options too) is then off the screen: a cut dialog. It is answered only while all of its
+//   question shows, as nothing else on the screen tells it from another question.
 // - Single select: a digit picks that option and moves on at once (a lone question is submitted).
 //   On the own-answer row a digit does the same with the text it holds, so that row is reached
 //   with the arrow keys instead: there it takes text (the footer offers "ctrl+g to edit"), up
@@ -42,6 +48,8 @@ export interface DialogOption {
   spaced?: boolean
   /** The option as drawn (its lines, without the cursor), for the fingerprint. */
   raw?: string[]
+  /** Above the screen's edge in a cut dialog: nothing of it is read. */
+  hidden?: boolean
 }
 export interface Tab {
   header: string
@@ -56,6 +64,11 @@ export interface QuestionDialog {
   cursor: number | 'next' | null
   editing: boolean
   preview: boolean
+  /**
+   * The top is off the screen: `question` is what shows of it ('' for nothing), the options above
+   * the first row shown are `hidden`, and the cursor is null while it stands on one of them.
+   */
+  cut: boolean
 }
 export interface ReviewDialog {
   kind: 'review'
@@ -190,11 +203,12 @@ export function answerText(question: FormQuestion, pick: AnswerPick): string {
 
 /**
  * What the screen shows, or null when it shows no dialog the board knows:
- *   { kind: 'question', tabs, question, options, next, cursor, editing, preview }
+ *   { kind: 'question', tabs, question, options, next, cursor, editing, preview, cut }
  *   { kind: 'review', tabs, answers: [{ question, answer }], options, cursor }
  *   { kind: 'permission', title, body, prompt, options, cursor, fingerprint }
  * options: [{ n, label, text, checked, cursor }]; text has the wrapped lines under the first;
- * checked is null outside multiSelect. cursor: the option number, 'next', or null.
+ * checked is null outside multiSelect. cursor: the option number, 'next', or null. cut: the
+ * question dialog's top is off the screen (cutQuestion).
  * `agent`: what herdr says the pane runs. A pi pane is read for pi's dialogs only
  * (pi-dialogs.ts: 'select' and 'input'); every other one for Claude Code's.
  */
@@ -215,39 +229,99 @@ function questionDialog(lines: string[]): QuestionDialog | ReviewDialog | null {
       break
     }
   }
-  if (bar < 0) return null
-  const tabs: Tab[] = [...(lines[bar] ?? '').matchAll(/([☐☒])\s(.+?)(?=\s{2,}|\s*[✔→]|$)/g)].map(m => ({
-    header: (m[2] ?? '').trim(),
-    answered: m[1] === '☒',
-  }))
+  if (bar < 0) return cutQuestion(lines)
+  const tabs = tabsOf(lines[bar] ?? '')
   let i = bar + 1
   while (i < lines.length && !(lines[i] ?? '').trim()) i++
   if (lines[i]?.trim() === 'Review your answers') return review(lines, i + 1, tabs)
   const text: string[] = []
   for (; i < lines.length && (lines[i] ?? '').trim() && !OPTION.test(lines[i] ?? ''); i++) text.push(lines[i] ?? '')
   if (!text.length) return null
-  // The bar only when every line has it: then it is Claude Code's, not the question's own text.
-  const barred = text.every(l => QUESTION_BAR.test(l))
-  const question = barred ? text.map(l => l.replace(QUESTION_BAR, '')) : text
   const block = optionBlock(lines, i)
   if (!block.options.length) return null
-  const footer = lines.slice(block.end).find(l => /Esc to cancel/.test(l)) ?? ''
   return {
     kind: 'question',
     tabs,
-    question: norm(question.join(' ')),
+    question: questionText(text),
     options: block.options,
     next: block.next,
-    cursor: block.next?.cursor ? 'next' : (block.options.find(o => o.cursor)?.n ?? null),
-    editing: /ctrl\+g to edit/.test(footer),
+    cursor: cursorOf(block),
+    editing: editing(lines, block.end),
     preview: block.preview,
+    cut: false,
   }
 }
 
-/** Numbered rows from `start`, each with the lines indented under it, until a rule or the footer. */
+const tabsOf = (line: string): Tab[] =>
+  [...line.matchAll(/([☐☒])\s(.+?)(?=\s{2,}|\s*[✔→]|$)/g)].map(m => ({
+    header: (m[2] ?? '').trim(),
+    answered: m[1] === '☒',
+  }))
+
+/** The question's lines as one text. The bar goes only when every line has it: then it is Claude Code's, not the question's own. */
+function questionText(text: string[]): string {
+  const barred = text.every(l => QUESTION_BAR.test(l))
+  return norm((barred ? text.map(l => l.replace(QUESTION_BAR, '')) : text).join(' '))
+}
+
+const cursorOf = (block: { options: DialogOption[]; next: { cursor: boolean } | null }): number | 'next' | null =>
+  block.next?.cursor ? 'next' : (block.options.find(o => o.cursor)?.n ?? null)
+
+/** The footer below the options offers "ctrl+g to edit": the cursor is on the own-answer row. A narrow pane wraps the footer. */
+const editing = (lines: string[], from: number): boolean => /ctrl\+g to edit/.test(norm(lines.slice(from).join(' ')))
+
+// The footer's first line, and "Chat about this" under the rule (numbered unless beside previews).
+const FOOTER = /^\s*Enter to select\b/
+const CHAT = /^(?:❯| ) (?:\d+\. )?Chat about this$/
+
+/**
+ * The bottom of a question dialog whose top is off the screen. What shows must end the way that
+ * dialog ends (option rows, the own-answer row, a rule, "Chat about this", the footer) and hold
+ * nothing above the first option row but the end of the question, or the end of the option
+ * before it. Not read cut: a dialog with previews, and the review.
+ */
+function cutQuestion(lines: string[]): QuestionDialog | null {
+  let last = lines.length - 1
+  while (last >= 0 && !(lines[last] ?? '').trim()) last--
+  if (!/Esc to cancel/.test(lines[last] ?? '')) return null
+  let foot = last
+  while (foot > 0 && !FOOTER.test(lines[foot] ?? '') && (lines[foot - 1] ?? '').trim()) foot--
+  if (!FOOTER.test(lines[foot] ?? '')) return null
+  let chat = foot - 1
+  while (chat >= 0 && !(lines[chat] ?? '').trim()) chat--
+  const rule = chat - 1
+  if (!CHAT.test(lines[chat] ?? '') || !RULE.test(lines[rule] ?? '')) return null
+  const top = lines.findIndex(l => OPTION.test(l))
+  if (top < 0 || top > rule) return null
+  const first = Number(OPTION.exec(lines[top] ?? '')?.[2])
+  const block = optionBlock(lines.slice(0, rule), top, first)
+  if (block.preview || !block.options.length || block.end !== rule) return null
+  const above = lines.slice(0, top).filter(l => l.trim())
+  const hidden: DialogOption[] = []
+  for (let n = 1; n < first; n++) hidden.push({ n, label: '', text: '', checked: null, cursor: false, hidden: true })
+  // Above option 1: the question, under its tab bar when that still shows. Above a later one:
+  // the end of the option before it, indented as its description is.
+  const bar = first === 1 ? above.findIndex(l => TABS.test(l)) : -1
+  const question = first === 1 ? above.slice(bar + 1) : []
+  if (first === 1 ? question.some(l => /^\s{3,}/.test(l)) : !above.every(l => /^\s{3,}\S/.test(l))) return null
+  return {
+    kind: 'question',
+    tabs: bar >= 0 ? tabsOf(above[bar] ?? '') : [],
+    question: question.length ? questionText(question) : '',
+    options: [...hidden, ...block.options],
+    next: block.next,
+    cursor: cursorOf(block),
+    editing: editing(lines, block.end),
+    preview: false,
+    cut: true,
+  }
+}
+
+/** Numbered rows from `start` (the first numbered `first`), each with the lines indented under it, until a rule or the footer. */
 function optionBlock(
   lines: string[],
   start: number,
+  first = 1,
 ): { options: DialogOption[]; next: { label: string; cursor: boolean } | null; preview: boolean; end: number } {
   const options: DialogOption[] = []
   let next: { label: string; cursor: boolean } | null = null
@@ -257,7 +331,7 @@ function optionBlock(
     const line = lines[i] ?? ''
     if (RULE.test(line) || /Esc to cancel/.test(line) || /^\s*Ready to submit/.test(line)) break
     const m = OPTION.exec(line)
-    if (m && Number(m[2]) === options.length + 1) {
+    if (m && Number(m[2]) === first + options.length) {
       const rest = m[4] ?? ''
       if (BOX.test(rest)) preview = true
       const label = rest.replace(BOX, '').trim()
@@ -288,17 +362,21 @@ function optionBlock(
 
 function review(lines: string[], start: number, tabs: Tab[]): ReviewDialog | null {
   const answers: { question: string; answer: string | null }[] = []
+  // A question drawn with a bar before its dot has it before every line it wraps to as well.
+  let barred = false
   let i = start
   for (; i < lines.length; i++) {
     const line = lines[i] ?? ''
     if (/^\s*Ready to submit/.test(line) || OPTION.test(line)) break
-    const q = /^\s*●\s+(.*)$/.exec(line)
+    const q = /^\s*(│\s+)?●\s+(.*)$/.exec(line)
     const a = /^\s*→\s+(.*)$/.exec(line)
     const last = answers.at(-1)
-    if (q) answers.push({ question: (q[1] ?? '').trim(), answer: null })
-    else if (a && last) last.answer = (a[1] ?? '').trim()
+    if (q) {
+      barred = !!q[1]
+      answers.push({ question: (q[2] ?? '').trim(), answer: null })
+    } else if (a && last) last.answer = (a[1] ?? '').trim()
     else if (line.trim() && last) {
-      if (last.answer === null) last.question = wrapJoin(last.question, line)
+      if (last.answer === null) last.question = wrapJoin(last.question, barred ? line.replace(/^\s*│ ?/, '') : line)
       else last.answer = wrapJoin(last.answer, line)
     }
   }
@@ -425,11 +503,27 @@ export function publicDialog(d: Dialog | null | undefined): PublicDialog | null 
   return { kind: d.kind, question: clip(d.question, LIMITS.question) }
 }
 
-/** The screen shows question `q` of the dialog: its text and its options in order. */
+/**
+ * The screen shows question `q` of the dialog: its text and its options in order. A cut dialog is
+ * held to the same: all of the question must show, so one cut into its question or its options
+ * is never taken for it (tooTall says why).
+ */
 export function onQuestion(d: Dialog | null | undefined, q: FormQuestion): d is QuestionDialog {
   if (d?.kind !== 'question' || flat(d.question) !== flat(q.question)) return false
   if (d.options.length !== q.options.length + (q.preview ? 0 : 1)) return false
   return q.options.every((o, j) => flat(d.options[j]?.text).startsWith(flat(o.label)))
+}
+
+/**
+ * A cut dialog that may well be question `q`, though too little of it shows to tell it from
+ * another one with the same options: what shows of the question ends it, and the options on the
+ * screen are its options. It only says why nothing was pressed; keys go in by onQuestion alone.
+ */
+export function tooTall(d: Dialog | null | undefined, q: FormQuestion): boolean {
+  if (d?.kind !== 'question' || !d.cut || q.preview) return false
+  if (d.options.length !== q.options.length + 1 || !flat(q.question).endsWith(flat(d.question))) return false
+  const fits = q.options.every((o, j) => d.options[j]?.hidden || flat(d.options[j]?.text).startsWith(flat(o.label)))
+  return fits && !onQuestion(d, q)
 }
 
 /** Which of `questions` the screen shows: its index, questions.length for the review, -1 for neither. */

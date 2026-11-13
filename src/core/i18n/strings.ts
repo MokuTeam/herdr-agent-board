@@ -243,6 +243,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
       'The terminal of {name} did not respond as expected at {step}, so the board stopped there. The dialog may be partly filled in: finish it in herdr',
     'err.qa.review':
       'The summary in the terminal of {name} lists other answers than yours, so nothing was submitted. Check it in herdr',
+    'err.qa.cut':
+      'The dialog in the terminal of {name} is taller than its pane, so the board cannot see all of it at {step} and stopped there. Make the pane taller, or answer it in herdr',
     'err.qa.herdr': 'herdr did not answer: {why}',
     'err.qa.busy': 'An answer to {name} is already being typed',
     'err.qa.notClaude': '{name} is not a Claude session: answer it in herdr',
@@ -898,6 +900,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
       'Терминал {name} повёл себя не так, как ожидалось ({step}), и доска остановилась. Диалог может быть заполнен частично: доделай его в herdr',
     'err.qa.review':
       'Сводка в терминале {name} показывает другие ответы, поэтому ничего не отправлено. Проверь в herdr',
+    'err.qa.cut':
+      'Диалог в терминале {name} выше панели, и доска не видит его целиком ({step}), поэтому остановилась. Сделай панель выше или ответь в herdr',
     'err.qa.herdr': 'herdr не ответил: {why}',
     'err.qa.busy': 'Ответ для {name} уже набирается',
     'err.qa.notClaude': '{name}: не сессия Claude, ответь в herdr',

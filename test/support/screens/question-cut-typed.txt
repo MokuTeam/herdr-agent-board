@@ -1,0 +1,32 @@
+
+│ Spring clean-up of the shared photo library (1300
+│ pictures, all of them already in the family album). Cleo
+│ asked for a zip of the originals before anything is
+│ deleted, but the library is not mounted on this machine
+│ and the sync tool hands out one picture at a time. How do
+│ we keep a copy?
+
+  1. Move them to an archive folder (Recommended)
+     I make a folder beside the library
+     (\PHOTOS_archive_spring) and move the 1300 pictures
+     there instead of deleting them. They leave the library,
+     stay exactly as they are, and can be moved back. We
+     remove the folder later with a separate OK. Downside:
+     one more folder in the library, ben should know about
+     it.
+  2. Delete them, keep a list
+     anna says she can sync them again if needed, the album
+     has them all. I delete them as planned, and the copy
+     keeps only a list (name, size, date taken), without the
+     pictures. Cannot be undone.
+  3. A one-off export job for the zip
+     I set up a one-off export job that pulls every picture,
+     build the zip on this machine, then delete the
+     pictures and the job. Exactly what cleo asked for, but
+     one more job to clean up and about an hour of work.
+❯ 4. Keep them where they are for now
+────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · ctrl+g to edit in
+Notepad · Esc to cancel

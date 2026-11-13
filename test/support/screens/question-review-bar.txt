@@ -1,0 +1,18 @@
+❯ ask
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Test  ☒ Schedule  ✔ Submit  →
+
+Review your answers
+
+ │ ● The reminder bot for the book club runs (both calendars look fine, nothing is overdue right now), but its
+ │   message step has never fired yet. Check it with a test message?
+   → Yes, send a test message (Recommended)
+ │ ● Switch the reminders to a schedule (every morning at eight, about thirty runs a month) for the main
+ │   calendar only, and add the others later?
+   → Switch it on now (Recommended)
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel

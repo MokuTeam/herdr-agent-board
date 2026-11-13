@@ -18,6 +18,7 @@ import {
   reviewMatches,
   sameText,
   screenIndex,
+  tooTall,
   typedOther,
 } from '../../src/core/dialogs/questions.ts'
 import { drivePermission, driveQuestions } from '../../src/services/answer.ts'
@@ -119,6 +120,81 @@ const LAYOUT = form({
       options: [
         { label: 'Sidebar', description: 'Nav on the left', preview: '+--+\n|  |' },
         { label: 'Tabs', description: 'Tabs on top', preview: '+----+' },
+      ],
+    },
+  ],
+})
+// The question-cut-* screens: Claude Code 2.1.323 in panes too short for it (112 × 20, 60 × 32,
+// 50 × 30 and 50 × 20 cells), its bottom kept in view.
+const PHOTOS = form({
+  questions: [
+    {
+      question:
+        'Spring clean-up of the shared photo library (1300 pictures, all of them already in the family album). Cleo asked for a zip of the originals before anything is deleted, but the library is not mounted on this machine and the sync tool hands out one picture at a time. How do we keep a copy?',
+      header: 'Photos',
+      multiSelect: false,
+      options: [
+        {
+          label: 'Move them to an archive folder (Recommended)',
+          description:
+            'I make a folder beside the library (\\PHOTOS_archive_spring) and move the 1300 pictures there instead of deleting them. They leave the library, stay exactly as they are, and can be moved back. We remove the folder later with a separate OK. Downside: one more folder in the library, ben should know about it.',
+        },
+        {
+          label: 'Delete them, keep a list',
+          description:
+            'anna says she can sync them again if needed, the album has them all. I delete them as planned, and the copy keeps only a list (name, size, date taken), without the pictures. Cannot be undone.',
+        },
+        {
+          label: 'A one-off export job for the zip',
+          description:
+            'I set up a one-off export job that pulls every picture, build the zip on this machine, then delete the pictures and the job. Exactly what cleo asked for, but one more job to clean up and about an hour of work.',
+        },
+      ],
+    },
+  ],
+})
+// The question-review-bar screen: Claude Code 2.1.323, 112 cells wide.
+const CLUB = form({
+  questions: [
+    {
+      question:
+        'The reminder bot for the book club runs (both calendars look fine, nothing is overdue right now), but its message step has never fired yet. Check it with a test message?',
+      header: 'Test',
+      multiSelect: false,
+      options: [
+        {
+          label: 'Yes, send a test message (Recommended)',
+          description: 'One message to anna in a direct chat, then I say what arrived and when.',
+        },
+        { label: 'Not needed', description: 'It stays untested until the first real reminder.' },
+      ],
+    },
+    {
+      question:
+        'Switch the reminders to a schedule (every morning at eight, about thirty runs a month) for the main calendar only, and add the others later?',
+      header: 'Schedule',
+      multiSelect: false,
+      options: [
+        {
+          label: 'Switch it on now (Recommended)',
+          description: 'The main calendar from tomorrow, ben adds the other two next week.',
+        },
+        { label: 'Not yet', description: 'It waits until all three calendars are ready.' },
+      ],
+    },
+  ],
+})
+// A question that FakeDialog in a pane of 10 lines cuts into its options: option 1 above the edge.
+const TALL = form({
+  questions: [
+    {
+      question: 'Which plan for the old pictures?',
+      header: 'Plan',
+      multiSelect: false,
+      options: [
+        { label: 'Move them', description: 'To an archive folder beside the library' },
+        { label: 'Delete them', description: 'Keep only a list of what was there' },
+        { label: 'Zip them', description: 'Through a one-off export job' },
       ],
     },
   ],
@@ -428,6 +504,118 @@ test('a long label wrapped at a space or in the middle of a word is the same lab
   assert.ok(!onQuestion(parseDialog(draw('Keep the generated files under C:\\work\\other', 'folder')), q))
 })
 
+test('a question taller than its pane is read cut, and as that question while all of its question shows', () => {
+  const q = first(PHOTOS)
+  // 112 cells wide: the rule and the tab bar are off the screen, the question shows whole.
+  const wide = asQuestion(parseDialog(screen('question-cut-wide')))
+  assert.equal(wide.cut, true)
+  assert.equal(wide.question, q.question)
+  assert.equal(wide.cursor, 1)
+  // 60 wide: the tab bar is the top line, its rule is off the screen.
+  const narrow = asQuestion(parseDialog(screen('question-cut-narrow')))
+  assert.deepEqual(narrow.tabs, [{ header: 'Photos', answered: false }])
+  // An own answer typed in: the footer that says so wraps over two lines, the tab bar goes off.
+  const typed = asQuestion(parseDialog(screen('question-cut-typed')))
+  assert.equal(typed.cursor, 4)
+  assert.equal(typed.editing, true)
+  assert.equal(typedOther(typed), 'Keep them where they are for now')
+  for (const d of [wide, narrow, typed]) {
+    assert.ok(onQuestion(d, q))
+    assert.equal(screenIndex(d, PHOTOS), 0)
+    assert.ok(!tooTall(d, q))
+    assert.equal(publicDialog(d)?.kind, 'question')
+  }
+  // Another question over the same options, or other options under the same question.
+  assert.ok(!onQuestion(wide, { ...q, question: 'How do we keep a copy of the old pictures?' }))
+  assert.ok(!onQuestion(wide, { ...q, options: q.options.slice(0, 2) }))
+  assert.ok(
+    !onQuestion(wide, { ...q, options: q.options.map((o, j) => (j === 1 ? { ...o, label: 'Delete all' } : o)) }),
+  )
+})
+
+test('a dialog cut into its question or its options is never taken for it, and tooTall says why', () => {
+  const q = first(PHOTOS)
+  // 50 wide: the end of the question shows.
+  const deep = asQuestion(parseDialog(screen('question-cut-deep')))
+  assert.equal(
+    deep.question,
+    'library is not mounted on this machine and the sync tool hands out one picture at a time. How do we keep a copy?',
+  )
+  // Shorter: option 1, and the cursor on it, are off the screen too.
+  const options = asQuestion(parseDialog(screen('question-cut-options')))
+  assert.equal(options.question, '')
+  assert.deepEqual(
+    options.options.map(o => [o.n, o.label, !!o.hidden]),
+    [
+      [1, '', true],
+      [2, 'Delete them, keep a list', false],
+      [3, 'A one-off export job for the zip', false],
+      [4, 'Type something.', false],
+    ],
+  )
+  assert.equal(options.cursor, null)
+  for (const d of [deep, options]) {
+    assert.ok(!onQuestion(d, q))
+    assert.equal(screenIndex(d, PHOTOS), -1)
+    assert.ok(tooTall(d, q))
+  }
+  // tooTall of another question: what shows of the question or of the options is not its own.
+  assert.ok(!tooTall(deep, { ...q, question: 'Which pictures go to the archive folder this spring?' }))
+  assert.ok(
+    !tooTall(options, { ...q, options: q.options.map((o, j) => (j === 1 ? { ...o, label: 'Delete all' } : o)) }),
+  )
+  assert.ok(!tooTall(options, { ...q, options: q.options.slice(0, 2) }))
+  assert.ok(!tooTall(options, { ...q, preview: true }))
+  // A dialog that shows whole is never too tall.
+  assert.ok(!tooTall(parseDialog(screen('question-single')), first(COLOR)))
+  assert.ok(!tooTall(parseDialog(screen('question-single')), q))
+})
+
+test('only the bottom of a question dialog is read cut', () => {
+  const cut = screen('question-cut-options')
+  for (const other of [
+    `${cut}\n  ⏵⏵ auto mode on`, // something under the footer
+    cut.replace(/\n {2}5\. Chat about this/, ''), // no "Chat about this"
+    cut.replace('Enter to select', 'Press Enter'), // another footer
+    cut.replace('     later with a separate OK', 'later with a separate OK'), // above option 2, not the end of option 1
+  ])
+    assert.equal(parseDialog(other), null, other.slice(0, 80))
+  // Above option 1 only the question and its tab bar: an indented line there is something else.
+  const wide = screen('question-cut-wide')
+  assert.ok(wide.includes('│ and the sync tool'))
+  assert.equal(parseDialog(wide.replace('│ and the sync tool', '     and the sync tool')), null)
+  // A dialog with previews is not read cut.
+  const preview = screen('question-preview').split('\n')
+  assert.equal(parseDialog(preview.slice(preview.findIndex(l => /1\. Sidebar/.test(l))).join('\n')), null)
+  // Every screen that showed a whole dialog reads as before.
+  for (const name of [
+    'question-single',
+    'question-single-bar',
+    'question-tabs-1',
+    'question-tabs-2-multi',
+    'question-tabs-3',
+    'question-tabs-3-other',
+    'question-tabs-3-typed',
+    'question-lone-multi',
+    'question-preview',
+  ])
+    assert.equal(asQuestion(parseDialog(screen(name))).cut, false, name)
+})
+
+test('a review that draws a long question with a bar before each of its lines (Claude Code 2.1.322)', () => {
+  const d = asReview(parseDialog(screen('question-review-bar')))
+  assert.deepEqual(d.answers, [
+    { question: must(CLUB[0]).question, answer: 'Yes, send a test message (Recommended)' },
+    { question: must(CLUB[1]).question, answer: 'Switch it on now (Recommended)' },
+  ])
+  const yes = { choose: [1], other: '' }
+  assert.ok(reviewMatches(d, CLUB, [yes, yes]))
+  assert.ok(!reviewMatches(d, CLUB, [{ choose: [2], other: '' }, yes]))
+  // The bar goes only before the dot: one after it is the question's own.
+  const own = asReview(parseDialog(screen('question-review-bar').replace(' │ ● The reminder', ' ● │ The reminder')))
+  assert.ok(own.answers[0]?.question.startsWith('│ The reminder'))
+})
+
 test('parseDialog finds nothing on a plain screen or another dialog', () => {
   assert.equal(parseDialog(''), null)
   assert.equal(parseDialog('❯ \n──────────\n  ⏵⏵ bypass permissions on'), null)
@@ -603,6 +791,122 @@ test('another question on the screen: nothing is pressed', async () => {
   assert.ok(!r.ok)
   assert.equal(r.reason, 'changed')
   assert.deepEqual(fake.keysLog, [])
+})
+
+test('a dialog taller than its pane is answered while all of its question shows', async () => {
+  // 13 lines: the rule and the tab bar are off the screen, the question is the top line.
+  for (const lag of [0, 2]) {
+    const option = new FakeDialog(COLOR, { height: 13, lag })
+    assert.equal(asQuestion(parseDialog(option.render())).cut, true)
+    const r = await driveQuestions({
+      questions: COLOR,
+      picks: picksOf(COLOR, [{ options: ['Blue'] }]),
+      io: option.io(),
+      timing: fast,
+    })
+    assert.deepEqual(r, { ok: true })
+    assert.deepEqual(option.keysLog, ['3'])
+    assert.deepEqual(option.submitted, ['Blue'])
+    const own = new FakeDialog(COLOR, { height: 13, lag })
+    const typed = await driveQuestions({
+      questions: COLOR,
+      picks: picksOf(COLOR, [{ other: 'Teal' }]),
+      io: own.io(),
+      timing: fast,
+    })
+    assert.deepEqual(typed, { ok: true })
+    assert.deepEqual(own.keysLog, ['down', 'down', 'down', 'ctrl+u', 'enter'])
+    assert.deepEqual(own.submitted, ['Teal'])
+  }
+  // A multiSelect with an own answer, then its review.
+  const multi = new FakeDialog(PLATFORMS, { height: 14 })
+  assert.equal(asQuestion(parseDialog(multi.render())).cut, true)
+  const ticked = await driveQuestions({
+    questions: PLATFORMS,
+    picks: picksOf(PLATFORMS, [{ options: ['Linux'], other: 'FreeBSD' }]),
+    io: multi.io(),
+    timing: fast,
+  })
+  assert.ok(ticked.ok, JSON.stringify(ticked))
+  assert.deepEqual(multi.submitted, ['Linux, FreeBSD'])
+  // A set whose tallest question loses its rule: its tab bar is the top line.
+  const set = new FakeDialog(ORDER, { height: 16, lag: 1 })
+  const picks = picksOf(ORDER, [
+    { options: ['Large'] },
+    { options: ['Cheese', 'Basil'] },
+    { other: 'Tomorrow at noon' },
+  ])
+  const all = await driveQuestions({ questions: ORDER, picks, io: set.io(), timing: fast })
+  assert.ok(all.ok, JSON.stringify(all))
+  assert.deepEqual(set.submitted, ['Large', 'Cheese, Basil', 'Tomorrow at noon'])
+})
+
+test('a dialog cut into its question: nothing is pressed, and the user is told the pane is too short', async () => {
+  const drive = (fake: FakeDialog, questions: FormQuestion[], answers: unknown) =>
+    driveQuestions({ questions, picks: picksOf(questions, answers), io: fake.io(), timing: fast })
+  // Option 1 above the edge (10 lines), or only the own-answer row on the screen (5 lines).
+  for (const height of [10, 5]) {
+    const fake = new FakeDialog(TALL, { height })
+    const r = await drive(fake, TALL, [{ options: ['Delete them'] }])
+    assert.ok(!r.ok)
+    assert.equal(r.reason, 'cut')
+    assert.deepEqual(r.step, { what: 'start' })
+    assert.deepEqual(fake.keysLog, [])
+  }
+  // Another question with the same options, its text off the screen: the board cannot tell, so
+  // it presses nothing.
+  const other = form({ questions: [{ ...must(TALL[0]), question: 'Which plan for the new pictures?' }] })
+  const same = new FakeDialog(other, { height: 10 })
+  const r = await drive(same, TALL, [{ options: ['Delete them'] }])
+  assert.ok(!r.ok)
+  assert.deepEqual(same.keysLog, [])
+  // That question with all of it on the screen is another one, as ever.
+  const shown = new FakeDialog(other, { height: 13 })
+  const changed = await drive(shown, TALL, [{ options: ['Delete them'] }])
+  assert.ok(!changed.ok)
+  assert.equal(changed.reason, 'changed')
+  assert.deepEqual(shown.keysLog, [])
+  // A multiSelect cut into its question.
+  const multi = new FakeDialog(PLATFORMS, { height: 11 })
+  const ticks = await drive(multi, PLATFORMS, [{ options: ['Linux'] }])
+  assert.ok(!ticks.ok)
+  assert.equal(ticks.reason, 'cut')
+  assert.deepEqual(multi.keysLog, [])
+  // A set whose second question is taller than the pane: stopped there, after the first answer.
+  const set = new FakeDialog(ORDER, { height: 13 })
+  const midway = await drive(set, ORDER, [{ options: ['Large'] }, { options: ['Cheese'] }, { options: ['Now'] }])
+  assert.ok(!midway.ok)
+  assert.equal(midway.reason, 'cut')
+  assert.deepEqual(midway.step, { q: 2, what: 'question' })
+  assert.deepEqual(set.keysLog, ['2'])
+})
+
+test('a screen read while Claude Code redraws: the board looks again before it refuses', async () => {
+  const fake = new FakeDialog(COLOR)
+  const io = fake.io()
+  const read = io.read
+  let reads = 0
+  // The first read catches the dialog half drawn: its question, none of its options yet.
+  io.read = async () => {
+    const shown = await read()
+    return ++reads === 1 ? shown.split('\n').slice(0, 9).join('\n') : shown
+  }
+  const r = await driveQuestions({
+    questions: COLOR,
+    picks: picksOf(COLOR, [{ options: ['Blue'] }]),
+    io,
+    timing: fast,
+  })
+  assert.deepEqual(r, { ok: true })
+  assert.deepEqual(fake.keysLog, ['3'])
+})
+
+test('a set whose review draws long questions with a bar is submitted', async () => {
+  const fake = new FakeDialog(ORDER, { bar: true, lag: 1 })
+  const picks = picksOf(ORDER, [{ options: ['Large'] }, { options: ['Cheese'] }, { options: ['Now'] }])
+  const r = await driveQuestions({ questions: ORDER, picks, io: fake.io(), timing: fast })
+  assert.ok(r.ok, JSON.stringify(r))
+  assert.deepEqual(fake.submitted, ['Large', 'Cheese', 'Now'])
 })
 
 test('a terminal that does not respond: it stops after the first key', async () => {
