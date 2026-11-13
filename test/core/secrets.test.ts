@@ -292,14 +292,18 @@ test('a request expires by itself, and says so in one line without a value', () 
   assert.equal(parseExpires('2h'), 7_200_000)
   assert.equal(parseExpires('10s'), null)
   assert.equal(parseExpires('2d'), null)
-  const views = secretViews(
-    conf(),
-    { secrets: [request({ expires: Date.now() + 60_000 }), request({ id: 'old000000000' })] },
-    en,
-  )
+  const pending = { secrets: [request({ expires: Date.now() + 60_000 }), request({ id: 'old000000000' })] }
+  // the config is parsed for Windows, so the path is joined for Windows on every machine (#278)
+  const views = secretViews(conf(), pending, en, Date.now(), 'win32')
   assert.deepEqual(
     views.map(v => [v.id, v.kind, v.where]),
     [['abcdef012345', 'file', 'C:\\Users\\owner\\.wss_netrc']],
+  )
+  // without a platform: the machine's own, as the board calls it
+  const host = process.platform === 'win32' ? 'win32' : 'linux'
+  assert.deepEqual(
+    secretViews(conf(host), pending, en).map(v => v.where),
+    [host === 'win32' ? 'C:\\Users\\owner\\.wss_netrc' : '/home/owner/.wss_netrc'],
   )
   const gone = secretViews(conf('win32', {}), { secrets: [request({ expires: Date.now() + 60_000 })] }, en)
   assert.equal(gone[0]?.problem, 'The sink “netrc” is no longer in config.json')
