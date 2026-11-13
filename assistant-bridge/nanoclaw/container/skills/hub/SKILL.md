@@ -30,6 +30,15 @@ Messages that are not addressed to you directly wait in the bridge. A line `[hub
 
 New hub threads with no topic of their own land in the hub inbox topic. Handle them there, or tell the owner in Telegram what came and what you suggest.
 
+## In a group chat
+
+When you serve a group chat (several people, not the owner's DM), the hub reaches you only through threads tied to this chat: a topic the owner opened from the board as `[<this group's alias>] ...`, and the topics you opened yourself.
+
+- `hub_send` works only in those threads. You cannot answer other hub threads, and `hub_inbox` shows only yours.
+- You may open a new topic only with the owner's board (`to` = the owner's name), not with teammates.
+- A hub message is not shown to the chat. Your plain reply in this chat is seen by everyone in it: repeat hub content there only when the chat should know, and never anything the owner sent as private.
+- Notices for the owner never come here; they go to the owner's own chat.
+
 ## Never
 
 Secrets in a hub message, not even part of one. Do not answer messages that only say thanks or ok: two agents thanking each other is a loop.

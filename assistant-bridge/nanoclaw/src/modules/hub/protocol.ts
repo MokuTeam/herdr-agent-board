@@ -12,11 +12,13 @@ export const BRIDGE_PROTOCOL = 1;
 export const MAX_LINE = 64 * 1024;
 
 /**
- * A place in NanoClaw a hub message can go: one of the host assistant's topics, by NanoClaw's own
- * thread id for it. The inbox is one of them; which one is the bridge's business (its config).
- * Phase 3 adds `group:<agent group id>`.
+ * A place in NanoClaw a hub message can go:
+ * - `host:<thread id>`: one of the host assistant's topics, by NanoClaw's own thread id for it. The
+ *   inbox is one of them; which one is the bridge's business (its config).
+ * - `group:<agent group id>`: another agent group of the same NanoClaw (phase 3, design 6.2), its
+ *   chat's main session; `group:<agent group id>/<thread id>` is one topic of that chat.
  */
-export type Location = `host:${string}`;
+export type Location = `host:${string}` | `group:${string}`;
 
 /** A topic of the host assistant as the module sees it: NanoClaw's thread id and the name the bot recorded. */
 export interface Topic {
@@ -72,7 +74,10 @@ const isId = (v: unknown): v is string => isStr(v) && v.length >= 1 && v.length 
 const printable = (s: string): boolean => [...s].every((c) => c.charCodeAt(0) >= 32 && c.charCodeAt(0) !== 127);
 
 export const isLocation = (v: unknown): v is Location =>
-  isStr(v) && v.length > 5 && v.length <= 200 && v.startsWith('host:') && printable(v);
+  isStr(v) &&
+  v.length <= 200 &&
+  ((v.startsWith('host:') && v.length > 5) || (v.startsWith('group:') && v.length > 6)) &&
+  printable(v);
 
 function readJson(line: string): Record<string, unknown> | null {
   if (line.length > MAX_LINE) return null;

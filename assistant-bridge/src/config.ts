@@ -2,6 +2,7 @@
 // but `hub`, `name`, `allow` and `inbox.topic` has a default.
 import { join } from 'node:path'
 import { normalizeHub, validName } from '../../src/core/team.ts'
+import { isLocation } from './protocol.ts'
 
 export type Role = 'owner' | 'member'
 
@@ -12,10 +13,13 @@ export interface AllowEntry {
   peer?: string
 }
 
-/** A name a location is published and spoken under (design 4.1). Phase 1 uses it for `agent` only. */
+/**
+ * A name a location is published and spoken under (design 4.1): the `agent` of what it sends, and a
+ * new topic titled `[<alias>] ...` goes there (rule 3 of 4.2) when the alias is published to its sender.
+ */
 export interface PublishEntry {
   alias: string
-  /** `host:inbox` or `host:<topic id or name>`. */
+  /** `host:inbox`, `host:<topic id or name>` or `group:<agent group id>` (phase 3). */
   at: string
   about: string
   members: boolean
@@ -93,8 +97,8 @@ export function parseConfig(raw: unknown, dir: string): ConfigResult {
       errors.push(`publish[${i}].alias: lowercase letters, digits and -, up to 32`)
       continue
     }
-    if (typeof p.at !== 'string' || !p.at.startsWith('host:') || p.at.length <= 5) {
-      errors.push(`publish[${i}].at: host:inbox or host:<topic>`)
+    if (!isLocation(p.at) || (p.at.startsWith('group:') && p.at.includes('/'))) {
+      errors.push(`publish[${i}].at: host:inbox, host:<topic> or group:<agent group id>`)
       continue
     }
     if (publish.some(x => x.alias === p.alias)) {
