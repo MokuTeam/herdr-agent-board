@@ -2,12 +2,22 @@
 // pills): what it does and what it waits for when they say something (Enter saves a field,
 // Escape puts it back), its reminders, and the sessions it works with. Opened, the empty fields
 // are one quiet Add row, so they do not cost two rows until they are asked for. A field being
-// edited keeps what is typed while the board moves on.
+// edited keeps what is typed while the board moves on. A Claude session's auto-compact (#378):
+// its own limit and what its summary keeps, with the board's last /compact, shown while the card
+// is open or once anything is set (models/compact.ts).
 import { type KeyboardEvent, useState } from 'react'
 import type { Item } from '../../../../src/core/types.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { plain } from '../../models/card.ts'
+import {
+  compactLabel,
+  compactNotePlaceholder,
+  compactPlaceholder,
+  compactRunText,
+  offersCompact,
+  windowUnknown,
+} from '../../models/compact.ts'
 import { doingLabel, type FieldEdit, type FieldScene, liveEdit, typing } from '../../models/sheet.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { RelationsRow } from '../helpers/RelationsRow.tsx'
@@ -80,9 +90,62 @@ export function SheetCard({ item, open, disabled, schedule, onSession }: SheetCa
           </div>
         </div>
       )}
+      <CompactRows item={item} open={open} disabled={disabled} />
       <Reminders item={item} disabled={disabled} schedule={schedule} />
       <RelationsRow item={item} onSession={key => onSession?.(key)} />
     </div>
+  )
+}
+
+/**
+ * Auto-compact (#378): the session's own limit (empty: Settings' default, shown as the
+ * placeholder), what its summary keeps once a limit applies, and the board's last /compact.
+ */
+function CompactRows({ item, open, disabled }: Pick<SheetCardProps, 'item' | 'open' | 'disabled'>) {
+  const t = useT()
+  const { data, now } = useBoardContext()
+  const view = item.compact
+  if (!offersCompact(item, open)) return null
+  // The last run, else why a share does nothing yet.
+  const run = view?.run
+    ? compactRunText(view.run, t, now)
+    : windowUnknown(view)
+      ? { text: t('compact.noWindow'), held: false, hint: '' }
+      : null
+  const showNote = !!view?.note || (open && !!view?.limit)
+  return (
+    <>
+      <div className="row compact-row">
+        <span className="row-label">{compactLabel(t)}</span>
+        <CardField
+          item={item}
+          field="compactAt"
+          saved={view?.own ?? ''}
+          placeholder={compactPlaceholder(view, data?.compactDefault ?? '', t)}
+          disabled={disabled}
+        />
+      </div>
+      {showNote && (
+        <div className="row compact-row">
+          <span className="row-label">{t('compact.keeps')}</span>
+          <CardField
+            item={item}
+            field="compactNote"
+            saved={view?.note ?? ''}
+            placeholder={compactNotePlaceholder(view, t)}
+            disabled={disabled}
+          />
+        </div>
+      )}
+      {run && (
+        <div className="row compact-row">
+          <span className="row-label">{t('compact.last')}</span>
+          <span className={`row-value compact-run${run.held ? ' held' : ''}`} title={run.hint || undefined}>
+            {run.text}
+          </span>
+        </div>
+      )}
+    </>
   )
 }
 
@@ -105,7 +168,9 @@ function Reminders({ item, disabled, schedule = {} }: Pick<SheetCardProps, 'item
 
 interface CardFieldProps {
   item: Item
-  field: 'doing' | 'wait'
+  field: 'doing' | 'wait' | 'compactAt' | 'compactNote'
+  /** What the card holds for the field, when it is not the item's own field of that name. */
+  saved?: string
   placeholder: string
   disabled: boolean
 }
@@ -115,13 +180,14 @@ interface CardFieldProps {
  * A long one wraps (three lines, then it scrolls; the tooltip has it whole) and stays one line of
  * text: a line break pasted in is a space.
  */
-function CardField({ item, field, placeholder, disabled }: CardFieldProps) {
+function CardField({ item, field, saved, placeholder, disabled }: CardFieldProps) {
   const t = useT()
   const { toast } = useBoardContext()
   const actions = useSessionActions()
   const [edit, setEdit] = useState<FieldEdit | null>(null)
   const [focused, setFocused] = useState(false)
-  const scene: FieldScene = { focused, saved: item[field] ?? '', session: item.key }
+  const own = saved ?? (field === 'doing' || field === 'wait' ? item[field] : '')
+  const scene: FieldScene = { focused, saved: own ?? '', session: item.key }
   // An edit that is over is dropped, so a value coming back later cannot bring it back.
   const live = liveEdit(edit, scene)
   if (live !== edit) setEdit(live)

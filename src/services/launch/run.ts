@@ -28,6 +28,7 @@ import {
   worktreeCreate,
   worktreeOpen,
 } from '../../adapters/herdr.ts'
+import { pause } from '../../adapters/pacing.ts'
 import { run } from '../../adapters/process.ts'
 import { keyTowardYes, sameFolder, type TrustDialog, trustDialog } from '../../core/dialogs/trust.ts'
 import { t } from '../../core/lang.ts'
@@ -139,7 +140,6 @@ export interface LaunchRunner {
   answerTrust(l: Launch): Promise<TrustAnswer>
 }
 
-const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const ready = (agent: HerdrAgent | null): boolean => agent?.status === 'idle' || agent?.status === 'done'
 
@@ -189,7 +189,12 @@ export function launchRunner({
     session: id => {
       l.sessionId = id
       // A fork's card says whose fork it is, and since when (core/links.ts).
-      writeCard(id, { category: l.category, profileWant: l.profile, ...(l.fork && forkCard(l.fork)) })
+      writeCard(id, {
+        category: l.category,
+        profileWant: l.profile,
+        ...(l.model && { modelWant: l.model }),
+        ...(l.fork && forkCard(l.fork)),
+      })
       l.carded = id
     },
   })
@@ -201,7 +206,8 @@ export function launchRunner({
     // run in, as for any start.
     if (l.resume) {
       l.sessionId = l.resume
-      writeCard(l.resume, { profileWant: l.profile })
+      // The model it comes back on, when one was asked for; else Claude goes on with its last one.
+      writeCard(l.resume, { profileWant: l.profile, ...(l.model && { modelWant: l.model }) })
       l.carded = l.resume
     }
     const linked = deps.cfg.launch?.linkedWorkspaces === true
@@ -382,7 +388,7 @@ export function launchRunner({
   async function untilReady(l: Launch, limit: number): Promise<HerdrAgent | null> {
     const deadline = Date.now() + limit
     while (Date.now() < deadline && !l.dismissed && !l.closed) {
-      await sleep(1500)
+      await pause(1500)
       const agent = await agentNow(l)
       if (ready(agent)) return agent
     }
@@ -418,7 +424,7 @@ export function launchRunner({
   async function trustShown(l: Launch, tries = 1): Promise<TrustDialog | null> {
     if (!l.pane) return null
     for (let i = 0; i < tries; i++) {
-      if (i) await sleep(700)
+      if (i) await pause(700)
       const screen = await herdrText(['pane', 'read', l.pane, '--source', 'visible'], 5000).catch(() => '')
       const d = trustDialog(screen)
       if (d && sameFolder(d.folder, l.cwd, homedir())) return d
@@ -436,7 +442,7 @@ export function launchRunner({
     step(l, 'trust')
     const deadline = Date.now() + 30 * 60_000
     while (Date.now() < deadline && !l.dismissed && !l.closed) {
-      await sleep(1500)
+      await pause(1500)
       const agent = await agentNow(l)
       if (ready(agent)) {
         l.state = 'starting'
@@ -516,7 +522,7 @@ export function launchRunner({
           return { ok: true }
         }
         await herdr(['pane', 'send-keys', l.pane, key])
-        await sleep(300)
+        await pause(300)
       }
       return { ok: false, error: t('launch.err.trustCursor') }
     } catch (err) {

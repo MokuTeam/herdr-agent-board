@@ -35,6 +35,10 @@
 // the session as gone, so no reminder is missed and no cron entry dropped for it; once wake answers,
 // or the session is awake, it goes as usual.
 //
+// An entry that carries `noWake` (a thread's event, services/work-threads.ts) never wakes a
+// sleeping session: it waits, without counting the wait, and goes once the session is awake. Only
+// such entries take that branch; every other one goes down the code above.
+//
 // It also closes the panes of sessions put in the archive once their time to come back from the
 // page's toast is over (archive.ts closeDue): a board that restarts meanwhile does it on start.
 import { type FSWatcher, mkdirSync, watch } from 'node:fs'
@@ -134,6 +138,14 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
           continue
         }
         const { item, other } = targetOf(entry, items, profileIdOf)
+        // An entry that does not wake (`noWake`, a thread's event, services/work-threads.ts): a
+        // sleeping session gets it once it is awake again, however long that takes. It waits
+        // without taking the session's turn, so another entry of it (a reminder that wakes it)
+        // goes as it would.
+        if (entry.noWake === true && item?.sleeping) {
+          untilAwake(entry, now)
+          continue
+        }
         if (flying.has(entry.key) || (item && flying.has(item.key)) || (item?.sleeping && waking >= MAX_WAKING))
           continue
         const keys = [entry.key, item?.key].filter((k): k is string => !!k)
@@ -498,6 +510,20 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
       pendingSince: e.pendingSince ?? now,
       tried: now,
       why: 'wake',
+      claim: undefined,
+    }))
+  }
+
+  /**
+   * A `noWake` entry for a sleeping session: tried again on the next tick, the wait not counted,
+   * so it is never missed for this; it goes once the session is awake.
+   */
+  function untilAwake(entry: ScheduleEntry, now: number): void {
+    updateEntry(entry.id, e => ({
+      ...e,
+      pendingSince: e.pendingSince ?? now,
+      tried: now,
+      why: 'asleep',
       claim: undefined,
     }))
   }

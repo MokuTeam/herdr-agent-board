@@ -81,6 +81,10 @@ const CONVERSATION: ConversationTurn[] = [
   { role: 'tool', label: 'Grep', detail: 'login', path: '', done: false, at: ago(1) },
 ]
 
+// A draft in the box of a working Claude session: with the box empty, its send button is Stop
+// (#340), which the old page never had (test/web/turn-controls.test.tsx); with a draft both say Send.
+const DRAFT = { message: 'a draft' }
+
 const working = item({
   key: 'a',
   name: 'Alpha',
@@ -177,13 +181,13 @@ describe('session sheet markup parity', () => {
 
   test('Call in MokuPilot: with MokuPilot here, for a Claude session; it waits for the board, not for herdr', () => {
     const claude = { ...working, agent: 'claude', session: '0b3f8c2e-5d1a-4c6b-9e7f-1a2b3c4d5e6f' }
-    const on = bothSheets({ items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: true })
+    const on = bothSheets({ ...DRAFT, items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: true })
     expect(on.react).toBe(on.old)
     expect(on.react).toContain('id="sheet-mokupilot" title="Start a MokuPilot call')
-    same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: true, stale: true })
-    same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: true, connected: false })
-    same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: true, lang: 'ru' })
-    same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: false })
+    same({ ...DRAFT, items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: true, stale: true })
+    same({ ...DRAFT, items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: true, connected: false })
+    same({ ...DRAFT, items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: true, lang: 'ru' })
+    same({ ...DRAFT, items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: false })
     same({ items: [{ ...claude, agent: 'codex' }], open: 'a', detail: ready(detailOf(claude)), mokupilot: true })
     same({ items: [], open: 'a', selected: claude, detail: ready(detailOf(claude)), mokupilot: true })
   })
@@ -193,7 +197,7 @@ describe('session sheet markup parity', () => {
     const at = (fields: Partial<ScheduleEntry> = {}): ScheduleEntry[] => [
       { id: 'r1', key: 'a', kind: 'restart', idle: true, by: 'agent', text: '', next: Date.now() - MIN, ...fields },
     ]
-    const shown = bothSheets({ items: [claude], open: 'a', detail: ready(detailOf(claude)) })
+    const shown = bothSheets({ ...DRAFT, items: [claude], open: 'a', detail: ready(detailOf(claude)) })
     expect(shown.react).toBe(shown.old)
     expect(shown.react).toContain('id="sheet-restart" title="Once the session is free')
     for (const schedules of [
@@ -207,11 +211,12 @@ describe('session sheet markup parity', () => {
       at({ step: 'note' }),
       at({ failed: 'herdr-wake is down', text: 'the note' }),
     ]) {
-      same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), schedules })
-      same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), schedules, lang: 'ru' })
+      same({ ...DRAFT, items: [claude], open: 'a', detail: ready(detailOf(claude)), schedules })
+      same({ ...DRAFT, items: [claude], open: 'a', detail: ready(detailOf(claude)), schedules, lang: 'ru' })
     }
     // A restart and a reminder: the restart shows, the rest count under it.
     const many = bothSheets({
+      ...DRAFT,
       items: [claude],
       open: 'a',
       detail: ready(detailOf(claude)),
@@ -219,9 +224,9 @@ describe('session sheet markup parity', () => {
     })
     expect(many.react).toContain('2 scheduled')
     expect(many.react).not.toContain('later')
-    same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), schedules: at(), armed: 'r1' })
-    same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), stale: true })
-    same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), connected: false, schedules: at() })
+    same({ ...DRAFT, items: [claude], open: 'a', detail: ready(detailOf(claude)), schedules: at(), armed: 'r1' })
+    same({ ...DRAFT, items: [claude], open: 'a', detail: ready(detailOf(claude)), stale: true })
+    same({ ...DRAFT, items: [claude], open: 'a', detail: ready(detailOf(claude)), connected: false, schedules: at() })
     same({
       items: [{ ...claude, status: 'idle', column: 'idle', sleeping: true }],
       open: 'a',
@@ -451,6 +456,29 @@ describe('the mounted sheet', () => {
     expect(text).toContain('Effort: medium')
     // Read only for now: no menus.
     expect(text).not.toContain('<select')
+    // On the profile's default: nothing more said.
+    expect(text).not.toContain('this session only')
+  })
+
+  test('a session started on a model of its own (#380): the meter says so beside the model, before its first reply too', () => {
+    const own = item({
+      key: 'a',
+      name: 'Alpha',
+      status: 'idle',
+      column: 'idle',
+      model: 'Haiku 5.5',
+      modelAsked: 'haiku',
+    })
+    const text = canonical([byClass(mounted('a', payload({ items: [own], categories: CATEGORIES })), 'session-meter')])
+    expect(text).toContain('Model: Haiku 5.5')
+    expect(text).toContain('class="meter-own"> · this session only')
+    expect(text).toContain('title="Haiku 5.5 · Started on haiku, not the profile’s default; the profile keeps its own"')
+    // No reply yet, so no model read: the one it was started on.
+    const fresh = item({ key: 'a', name: 'Alpha', status: 'idle', column: 'idle', modelAsked: 'haiku' })
+    const first = canonical([
+      byClass(mounted('a', payload({ items: [fresh], categories: CATEGORIES })), 'session-meter'),
+    ])
+    expect(first).toContain('Model: haiku')
   })
 
   test('the slot for a question form fills #sheet-question in place of what the session asks', () => {

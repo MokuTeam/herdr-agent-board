@@ -13,9 +13,10 @@ body {
 .toolbar { padding-top: calc(10px + env(safe-area-inset-top)); }
 .toasts { bottom: calc(28px + var(--room-bottom, 0px) + env(safe-area-inset-bottom)); }
 @media (max-width: 760px) {
+  /* 8px inside the screen, as styles/sheet-phone.css has it (#417). */
   .sheet {
-    top: calc(12px + env(safe-area-inset-top));
-    bottom: calc(12px + env(safe-area-inset-bottom));
+    top: calc(8px + env(safe-area-inset-top));
+    bottom: calc(8px + env(safe-area-inset-bottom));
   }
   .ql-win { height: calc(100vh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
 }

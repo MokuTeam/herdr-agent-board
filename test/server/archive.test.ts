@@ -186,16 +186,22 @@ type Answer = { status: number; body: Record<string, unknown> & { done?: Record<
 
 async function board(box: Sandbox, cfg: Record<string, unknown> = {}) {
   const port = await unusedPort()
-  const proc: Child = box.run('server', {
-    port,
-    categories: CATEGORIES,
-    wakeUrl: null,
-    refreshSec: 3600,
-    language: 'en',
-    scheduleTickSec: 0.2,
-    archiveUndoSec: 30,
-    ...cfg,
-  })
+  const proc: Child = box.run(
+    'server',
+    {
+      port,
+      categories: CATEGORIES,
+      wakeUrl: null,
+      refreshSec: 3600,
+      language: 'en',
+      scheduleTickSec: 0.2,
+      archiveUndoSec: 30,
+      ...cfg,
+    },
+    // Return starts the board's own spawn-agent against the fake herdr, which answers at once: its
+    // polls and pauses run at a fiftieth (adapters/pacing.ts).
+    { BOARD_TEST_PACE: '0.02' },
+  )
   await until(() => proc.messages.some(m => (m as { ready?: boolean }).ready), 10_000)
   const url = `http://127.0.0.1:${port}`
   const payload = async () => (await (await fetch(`${url}/api/board`)).json()) as Record<string, unknown>

@@ -95,6 +95,11 @@ function actionsWorld(fields: Partial<{ canEdit: boolean; canMutate: boolean; ac
     wakeSession: note('wakeSession'),
     sleepSession: note('sleepSession'),
     restartSession: note('restartSession'),
+    stopSession: note('stopSession'),
+    sendNow: async (key, text) => {
+      calls.push(`sendNow ${key} ${text}`)
+      return { ok: true }
+    },
     dismissAsk: note('dismissAsk'),
     setFavorite: note('setFavorite'),
     callMokuPilot: note('callMokuPilot'),

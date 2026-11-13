@@ -98,14 +98,45 @@ export const DESK_REMOTE_OPS: ReadonlySet<unknown> = new Set(['approve', 'deny',
 
 /**
  * For the board on this computer only: the remote mode's and Remote access's management (approving
- * pairings, the login, the tunnel), wake's switches, Start and Log (#119), and the backup's setup
+ * pairings, the login, the tunnel), wake's switches, Start and Log (#119), the backup's setup
  * (#233: it logs in to the owner's server as the admin), Settings → Time (#237: clients, lanes and
  * billing settings), the edge log (#280: who worked with whom, for an audit), Settings → Calendar
- * (#328: a source's address is typed there). Refused on every remote listener, in both spellings
- * of a path.
+ * (#328: a source's address is typed there), and the peer network's roster, threads and sends
+ * (#231: /api/team, not /api/peers), and which process the board is and its folder (#356:
+ * /api/process), and threads (#392: /api/threads, which the owner's own logins reach,
+ * ownerThreads), and Settings → Threads (#410: /api/threads-settings, which writes into the Claude
+ * profiles here). Refused on every remote listener, in both spellings of a path.
  */
 export const localOnly = (path: string): boolean =>
-  /^\/api\/(remote|access|wake|backup|time-settings|calendar-settings|links\/log)(\/|$)/.test(path)
+  /^\/api\/(remote|access|wake|backup|time-settings|calendar-settings|links\/log|team|process|threads|threads-settings)(\/|$)/.test(
+    path,
+  )
+
+/**
+ * Threads (#392, docs/design/threads 5.3): away from the computer, the owner's own logins only (the
+ * tunnel's login, a device paired from the owner's own Tailscale login that is not a desk), as for
+ * the Team panel; every other remote caller is refused.
+ */
+export const ownerThreads = (path: string): boolean => /^\/api\/threads(\/[^/]+)?$/.test(path)
+
+/**
+ * The team's routes the owner's own logins may use away from the computer (#355, #218): reading
+ * the team, its threads and what is unread, sending as the owner (not as an agent: post names a
+ * session here, as assign does), sending or discarding a draft,
+ * marking a thread read, muting one. Everything else under /api/team stays on the computer: accepting a changed key
+ * (trust), what agents may do (agents, listen), handing a thread to a session (assign, release), an
+ * agent's draft (draft), a notification's click (focus). Only the owner's own logins get even
+ * these: the tunnel's login, and a device paired from the owner's own Tailscale login that is not
+ * a desk (isOwnerLogin); never a Tailscale user `remote.allow` lets in.
+ */
+const OWNER_TEAM =
+  /^\/api\/team(?:\/(?:thread\/[^/]+|threads(?:\/[^/]+\/[^/]+(?:\/(?:mute|unmute))?)?|send|draft\/[^/]+\/(?:send|discard)|read|unread))?$/
+
+export const ownerTeam = (path: string): boolean => OWNER_TEAM.test(path)
+
+/** The Tailscale login is the owner's own (the computer's), not one `remote.allow` lets in. */
+export const isOwnerLogin = (login: string | null, owner: string | null): boolean =>
+  !!login && !!owner && login.toLowerCase() === owner.toLowerCase()
 
 /**
  * What pairs: the app, or the board in a phone's browser (core/pwa.ts). A phone can have both,

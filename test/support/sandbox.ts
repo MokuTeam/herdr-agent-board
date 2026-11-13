@@ -51,6 +51,11 @@ export async function sandbox(t?: Registrar): Promise<Sandbox> {
     TMP: dir,
     TEMP: dir,
     PATH: dirname(process.execPath),
+    // The children keep the clock the test has. `bun test` runs in UTC whatever the machine's zone
+    // is; a child with no TZ takes the system's. A folder named for today's date in a test (a
+    // MokuPilot day, #349) was then another day's than the one the board looked in, between local
+    // midnight and the zone's offset.
+    TZ: Intl.DateTimeFormat().resolvedOptions().timeZone,
     ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
     HERDR_BIN_PATH: herdr,
     FAKE_HERDR_STATE: join(dir, 'fake.json'),

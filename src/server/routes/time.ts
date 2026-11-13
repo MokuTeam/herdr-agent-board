@@ -1,6 +1,8 @@
 // Time entries for the page (#233, core/time.ts, adapters/time-store.ts). GET /api/time?date=<d>
 // [&client=<lane>] answers that day by client, as billed, with its entries and what an entry may
-// be (the lanes that take time, their projects, billable and systems, the tags entries have). POST
+// be (the lanes that take time, their projects, billable and systems, the tags entries have).
+// GET /api/time?from=<d>&to=<d> (at most MAX_SPAN_DAYS) answers the panel's week and month (#241):
+// each day with each client's figures (worked, billed, not entered), no entries. POST
 // /api/time { op: add | edit | move | remove | restore | raise | trim | post | unpost, … } changes
 // one as the owner, who may change any (raise and trim bring a line's time worked to its billed
 // figure, up or down, and say the figure the page showed: one the line no longer bills is
@@ -48,6 +50,9 @@ import {
   isDate,
   plausible,
   problemsText,
+  type SpanDay,
+  spanDays,
+  spanLength,
   type TimeConfig,
   type TimeEntry,
   type TimeSystem,
@@ -185,6 +190,40 @@ export function timeDay(cfg: Pick<Config, 'time'>, date: string, client?: string
     projects: projectsOf(conf),
     tags: [...new Set([...conf.excludeTags, ...used])],
     settings: settingsOf(conf),
+  }
+}
+
+/** The most days a span answers: a month's grid, six weeks. */
+export const MAX_SPAN_DAYS = 42
+
+export interface TimeSpanView {
+  from: string
+  to: string
+  /** The board's zone. */
+  zone: string
+  problems: string | null
+  days: SpanDay[]
+}
+
+/** The days from `from` to `to` with each client's figures (core/time.ts spanDays); null while time is off. */
+export function timeSpan(cfg: Pick<Config, 'time'>, from: string, to: string): TimeSpanView | null {
+  const conf = timeConfig(cfg.time)
+  if (!conf) return null
+  const views = withDb(false, db => {
+    if (!db) return []
+    const entries = listEntries(db, { from, to })
+    const marks = marksOf(
+      db,
+      entries.map(e => e.id),
+    )
+    return entries.map(e => entryView(conf, e, marks.get(e.id)))
+  })
+  return {
+    from,
+    to,
+    zone: conf.zone,
+    problems: conf.problems.length ? problemsText(conf.problems, t) : null,
+    days: spanDays(conf, from, to, views),
   }
 }
 
@@ -389,6 +428,17 @@ export function timeRoutes(cfg: Config): Route[] {
         const url = ctx.url
         const conf = timeConfig(cfg.time)
         if (!conf) return json(409, { ok: false, error: t('time.err.off') })
+        const from = url.searchParams.get('from')
+        const to = url.searchParams.get('to')
+        if (from !== null || to !== null) {
+          const days = from && to && isDate(from) && isDate(to) ? spanLength(from, to) : 0
+          if (days < 1 || days > MAX_SPAN_DAYS) return json(400, { ok: false, error: t('time.err.usage') })
+          try {
+            return json(200, timeSpan(cfg, from as string, to as string))
+          } catch (err) {
+            return json(500, { ok: false, error: err instanceof Error ? err.message : String(err) })
+          }
+        }
         const date = url.searchParams.get('date') || dateIn(Date.now(), conf.zone)
         if (!isDate(date)) return json(400, { ok: false, error: t('time.err.usage') })
         const client = url.searchParams.get('client') || undefined

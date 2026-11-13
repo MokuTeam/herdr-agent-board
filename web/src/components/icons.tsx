@@ -16,6 +16,13 @@ export const SearchIcon = () => (
   </Icon>
 )
 
+/** A funnel: the filters the folded toolbar keeps behind one button. */
+export const FilterIcon = () => (
+  <Icon>
+    <path d="M3.5 5h13l-5 6v4.5l-3 1.5v-6Z" />
+  </Icon>
+)
+
 export const MoonIcon = () => (
   <Icon>
     <path d="M15.5 12.2A6.5 6.5 0 0 1 7.8 4.5a6.5 6.5 0 1 0 7.7 7.7Z" />
@@ -40,6 +47,23 @@ export const TasksIcon = () => (
   <Icon>
     <rect x="3.5" y="3.5" width="13" height="13" rx="2.5" />
     <path d="m6.6 10.2 2.2 2.2 4.6-4.8" />
+  </Icon>
+)
+
+export const TeamIcon = () => (
+  <Icon>
+    <path d="M3.5 5.5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H8.5L6 12.5v-2h-.5a2 2 0 0 1-2-2z" />
+    <path d="M10.5 12.5h1.5l2.5 2v-2h.5a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2" />
+  </Icon>
+)
+
+/** Threads (#392): a list whose lines carry a status dot. */
+export const ThreadsIcon = () => (
+  <Icon>
+    <circle cx="5" cy="6" r="1.4" />
+    <circle cx="5" cy="10" r="1.4" />
+    <circle cx="5" cy="14" r="1.4" />
+    <path d="M8.5 6h8M8.5 10h8M8.5 14h5" />
   </Icon>
 )
 

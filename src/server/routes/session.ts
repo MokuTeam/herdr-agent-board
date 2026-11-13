@@ -6,10 +6,12 @@ import { type CardPatch, writeCard } from '../../adapters/cards.ts'
 import { checkoutChanges, isCheckout } from '../../adapters/git.ts'
 import { helpersOf } from '../../adapters/helpers.ts'
 import { herdrText } from '../../adapters/herdr.ts'
+import { pause } from '../../adapters/pacing.ts'
 import { uploadsDir } from '../../adapters/paths.ts'
 import { askRestart } from '../../adapters/schedule-store.ts'
 import { busy, PINS } from '../../core/board.ts'
 import { isCodexItem } from '../../core/codex.ts'
+import { limitText, MAX_COMPACT_NOTE, noteText, parseCompactLimit } from '../../core/compact.ts'
 import { type PublicDialog, parseDialog, publicDialog } from '../../core/dialogs/questions.ts'
 import { effortFromScreen, meterReads, modelFromScreen } from '../../core/effort.ts'
 import { publicHelper } from '../../core/helpers.ts'
@@ -18,6 +20,8 @@ import { checkName } from '../../core/launch/names.ts'
 import type { MessageGate } from '../../core/message-gate.ts'
 import type { Viewer } from '../../core/mokupilot-mode.ts'
 import { isPiItem } from '../../core/pi.ts'
+import type { QueuedPrompt, QueueWindow } from '../../core/queue.ts'
+import type { ConversationTurn } from '../../core/transcript.ts'
 import type { Item, Pin } from '../../core/types.ts'
 import {
   checkWake,
@@ -39,6 +43,7 @@ import type { Launches } from '../../services/launch/launches.ts'
 import { renameSession, renameWorkspace } from '../../services/launch/rename.ts'
 import { startCall } from '../../services/mokupilot.ts'
 import { ownAddresses } from '../../services/tunnel.ts'
+import { sendNow, stopTurn, turnIO } from '../../services/turn.ts'
 import { type Body, type Handler, json, type Route } from '../http.ts'
 import { helperRoute, withSessions } from './helpers.ts'
 
@@ -62,25 +67,48 @@ const changed = (item: Item): Result => ({ ok: false, error: t('err.sessionChang
 const PIN_NAMES: ReadonlySet<string> = PINS
 const isPin = (column: string): column is Pin => PIN_NAMES.has(column)
 
-async function detail(app: SessionApp, item: Item) {
-  const { deps } = app
-  const { transcript, claudeRoot, alive, since, pipe, ...shown } = item
-  // queued: the user's messages Claude has not taken in yet. Only a running Claude has a queue,
-  // and once it said its turn was over (its registry: idle, or a background shell) it had none.
-  // The registry is the one of the session's own profile.
-  const home = deps.homes.forDir(claudeRoot ?? deps.claude.root)
-  const reg = alive && item.session ? home.liveSessions().get(item.session) : null
+/**
+ * The window a Claude session's queue is read in (core/queue.ts): only a running Claude has a
+ * queue, and once it said its turn was over (its registry: idle, or a background shell) it had
+ * none. The registry is the one of the session's own profile.
+ */
+function queueWindow(deps: Deps, item: Item): QueueWindow {
+  const home = deps.homes.forDir(item.claudeRoot ?? deps.claude.root)
+  const reg = item.alive && item.session ? home.liveSessions().get(item.session) : null
   const idleSince =
     reg && ['idle', 'shell'].includes(reg.status ?? '') && typeof reg.statusUpdatedAt === 'number'
       ? reg.statusUpdatedAt
       : 0
+  return { since: item.since ?? 0, idleSince }
+}
+
+/** The user's messages still in a running Claude session's queue, as its detail shows them (Send now, #330). */
+function queueOf(deps: Deps, item: Item): QueuedPrompt[] {
+  if (!item.alive || isCodexItem(item) || isPiItem(item)) return []
+  // As far back as the detail reads it, so both see the same queue.
+  return deps.claude.sessionThread(item.transcript ?? '', 60, queueWindow(deps, item)).queued
+}
+
+/** The compactions the board's auto-compact made (#378, their times on the card) marked as the board's in the conversation. */
+function byBoard(item: Item, conv: ConversationTurn[]): ConversationTurn[] {
+  const times = new Set(item.compact?.done ?? [])
+  if (!times.size) return conv
+  return conv.map(m =>
+    m.role === 'notice' && m.kind === 'compact' && times.has(m.at) ? { ...m, by: 'board' as const } : m,
+  )
+}
+
+async function detail(app: SessionApp, item: Item) {
+  const { deps } = app
+  const { transcript, claudeRoot, alive, since, pipe, ...shown } = item
+  // queued: the user's messages Claude has not taken in yet (queueWindow).
   // A pi session's turns are in its session file, its key.
   const thread = isCodexItem(item)
     ? deps.codex.sessionThread(item.session ?? '', 60)
     : isPiItem(item)
       ? deps.pi.sessionThread(item.session ?? '', 60)
-      : deps.claude.sessionThread(transcript ?? '', 60, { since: since ?? 0, idleSince })
-  const conversation = withSessions(app.items(), thread.conversation)
+      : deps.claude.sessionThread(transcript ?? '', 60, queueWindow(deps, item), { compactions: !!item.compact })
+  const conversation = byBoard(item, withSessions(app.items(), thread.conversation))
   // helpers: every subagent, fork, workflow agent and teammate, newest first (adapters/helpers.ts).
   const own = helpersOf(transcript, { alive: !!alive, since: since ?? null })
   // checkout: whether its folder is in git, for the sheet's Changes button.
@@ -136,7 +164,7 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
  * seconds before it counts as gone.
  */
 async function freshItem(deps: Deps, item: Item): Promise<Item | undefined> {
-  for (const deadline = Date.now() + namedWaitMs(); ; await Bun.sleep(NAMED_POLL_MS)) {
+  for (const deadline = Date.now() + namedWaitMs(); ; await pause(NAMED_POLL_MS)) {
     const fresh = (await collect(deps)).find(next => next.key === item.key)
     if (fresh || !item.sleeping || Date.now() >= deadline) return fresh
   }
@@ -194,6 +222,18 @@ function card(item: Item, body: Body): Result {
   if (typeof body.doing === 'string') patch.doing = body.doing.trim()
   // Kept in sight, or not any more.
   if (typeof body.favorite === 'boolean') patch.favorite = body.favorite || ''
+  // Auto-compact (#378): its own limit ('' or null: Settings' default applies) and instructions.
+  if (body.compactAt !== undefined) {
+    const raw = body.compactAt
+    const limit = raw === '' || raw === null ? null : parseCompactLimit(raw)
+    if (raw !== '' && raw !== null && !limit) return { ok: false, error: t('err.compactAt', { value: String(raw) }) }
+    patch.compactAt = limit ? limitText(limit) : ''
+  }
+  if (typeof body.compactNote === 'string') {
+    if (body.compactNote.trim().length > MAX_COMPACT_NOTE)
+      return { ok: false, error: t('err.compactNote', { max: MAX_COMPACT_NOTE }) }
+    patch.compactNote = noteText(body.compactNote)
+  }
   // A card dragged to another column stays there until the session works again; dropped
   // back where the board would put it by itself, it is unpinned.
   if (typeof body.column === 'string') {
@@ -240,8 +280,17 @@ async function restart(deps: SessionApp['deps'], item: Item): Promise<Result> {
   return { ok: true, id: entry.id, again }
 }
 
-/** What the board does not do to a MokuPilot call agent with no pane (#326). */
-const IN_MOKUPILOT_REFUSED: ReadonlySet<string> = new Set(['focus', 'sleep', 'restart', 'archive', 'mokupilot', 'fork'])
+/** What the board does not do to a MokuPilot call agent with no pane (#326) or day session (#331). */
+const IN_MOKUPILOT_REFUSED: ReadonlySet<string> = new Set([
+  'focus',
+  'sleep',
+  'restart',
+  'archive',
+  'mokupilot',
+  'fork',
+  'stop',
+  'sendnow',
+])
 
 /** `body`: its fields, taken only by the actions that read them (as main's did, so a null body fails only there). */
 async function act(
@@ -252,9 +301,11 @@ async function act(
   viewer?: Viewer,
 ): Promise<Result> {
   const { deps } = app
-  // A MokuPilot call agent with no pane (#326) runs in MokuPilot: nothing of herdr's for it, and no
-  // fork or call of a session MokuPilot is running. Every other session goes on as before.
-  if (item.call && !item.pane && IN_MOKUPILOT_REFUSED.has(action)) return { ok: false, error: t('err.noPane') }
+  // A MokuPilot call agent with no pane (#326) or day session (#331) runs in MokuPilot: nothing of
+  // herdr's for it, and no fork or call of a session MokuPilot is running. Every other session goes
+  // on as before.
+  if ((item.call || item.day) && !item.pane && IN_MOKUPILOT_REFUSED.has(action))
+    return { ok: false, error: t('err.noPane') }
   switch (action) {
     case 'focus':
       return focus(deps, item, { raise: deps.cfg.raiseTerminal !== false })
@@ -269,6 +320,13 @@ async function act(
     case 'answer':
     case 'permit':
       return answer(app, item, action, await body())
+    // Stop and Send now (#330): the program's own keys in its pane (services/turn.ts).
+    case 'stop':
+      return stopTurn(deps, item, { io: turnIO(item.pane ?? '', item.transcript, () => queueOf(deps, item)) })
+    case 'sendnow':
+      return sendNow(deps, item, (await body()).text, {
+        io: turnIO(item.pane ?? '', item.transcript, () => queueOf(deps, item)),
+      })
     case 'rename':
       return rename(item, await body())
     // herdr's name for the workspace it is in, which every session there shows.
@@ -366,11 +424,12 @@ export function sessionRoutes(app: SessionApp): Route[] {
       handle: withItem(async item => json(200, await detail(app, item))),
     },
     helperRoute(app),
-    // Answering a dialog presses keys in a session, an archive closes a pane, a workspace's new name
-    // is every session's there, a fork starts one: like a launch, only from this page.
+    // Answering a dialog presses keys in a session, and so do Stop and Send now (#330), an archive
+    // closes a pane, a workspace's new name is every session's there, a fork starts one: like a
+    // launch, only from this page.
     {
       method: 'POST',
-      path: /^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace|fork)$/,
+      path: /^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace|fork|stop|sendnow)$/,
       guard: ['board-header', 'origin', 'fresh-data'],
       handle: action,
     },

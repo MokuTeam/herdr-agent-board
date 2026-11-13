@@ -28,8 +28,10 @@ export function hostElements(node: unknown): Host[] {
     if (!isValidElement(n)) return
     const { type } = n
     const props = propsOf(n.props)
+    // A memo component is its inner function (#370's bubble text).
+    const inner: unknown = typeof type === 'object' && type !== null ? Reflect.get(type, 'type') : type
     if (type === Fragment) walk(props.children)
-    else if (typeof type === 'function') walk(Reflect.apply(type, undefined, [props]))
+    else if (typeof inner === 'function') walk(Reflect.apply(inner, undefined, [props]))
     else if (typeof type !== 'string') throw new Error('only host elements, fragments and function components')
     else {
       out.push({ tag: type, props })

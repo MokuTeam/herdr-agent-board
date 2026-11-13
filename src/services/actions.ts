@@ -4,6 +4,8 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { agentGet, type HerdrAgent, herdr, herdrText, paneTerminals, snapshot } from '../adapters/herdr.ts'
+import { reportToDay, runningDay } from '../adapters/mokupilot-day.ts'
+import { pause } from '../adapters/pacing.ts'
 import { possibleProfilePanes, provenProfilePanes } from '../adapters/profile-panes.ts'
 import { boardOnPath } from '../adapters/resume-report.ts'
 import { peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
@@ -13,6 +15,7 @@ import { piDraft } from '../core/dialogs/pi-dialogs.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
 import { sameDir } from '../core/launch/names.ts'
+import { boardNotice } from '../core/notices.ts'
 import { isPiItem, piTurnOver } from '../core/pi.ts'
 import {
   absoluteProfileDir,
@@ -449,7 +452,7 @@ export function namedWaitMs(): number {
  * answered as it is.
  */
 async function namedAgent(pane: string, session: string | null): Promise<HerdrAgent | null> {
-  for (const deadline = Date.now() + namedWaitMs(); ; await Bun.sleep(NAMED_POLL_MS)) {
+  for (const deadline = Date.now() + namedWaitMs(); ; await pause(NAMED_POLL_MS)) {
     const agent = await agentGet(pane)
     if (!agent || agent.session || !session || Date.now() >= deadline) return agent
   }
@@ -480,21 +483,45 @@ export async function focus(
 }
 
 /**
+ * A message for a MokuPilot day session (#331): into its day's inbox, which MokuPilot types into
+ * the session as a report from the sender, one turn after another (a reminder set to wait until the
+ * session is free waits in the scheduler). Only the day that runs now, and only while it is still
+ * this session's.
+ */
+function toDay(item: Item, text: string): ActionResult {
+  const day = runningDay()
+  if (!day || day.session !== item.session) return { ok: false, error: t('err.dayOver', { name: item.name }) }
+  try {
+    reportToDay(day.folder, boardNotice(text) ? 'agent board' : 'the user, on the agent board', text)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: t('err.send', { name: item.name, why: messageOf(err) }) }
+  }
+}
+
+/**
  * Type a message into the session's prompt, waking it first. Refused while it waits for a
  * decision or Claude's visible screen has no recognizable input box, even if herdr says idle.
  * With `free`, also while it works (instead of queueing into its turn); with `draft`, also while
  * the user has unsent text in its input box (the scheduler's guards). Those refusals say `busy`,
  * plus `dialog` or `draft` for those two. `woken`: the caller woke the session itself just now
- * (the scheduler), so herdr may not name it in its pane yet.
+ * (the scheduler), so herdr may not name it in its pane yet. `probe` (auto-compact, #378): every
+ * check, nothing typed, for a sleeping session nothing at all (it is not woken).
  */
 export async function send(
   deps: Deps,
   item: Item,
   message: string,
-  { free = false, draft: guardDraft = false, woken = false }: { free?: boolean; draft?: boolean; woken?: boolean } = {},
+  {
+    free = false,
+    draft: guardDraft = false,
+    woken = false,
+    probe = false,
+  }: { free?: boolean; draft?: boolean; woken?: boolean; probe?: boolean } = {},
 ): Promise<ActionResult> {
   const text = String(message ?? '').trim()
   if (!text) return { ok: false, error: t('err.emptyMessage') }
+  if (item?.day) return toDay(item, text)
   // A sleeping session whose pane is gone wakes in a new tab: pi's (#178), Claude's that wake closed (#204).
   if (!item?.pane && !item?.sleeping) return { ok: false, error: t('err.noPane') }
   const expectedSession = item.session ?? null
@@ -508,6 +535,7 @@ export async function send(
     return null
   }
   let pane = item.pane
+  if (item.sleeping && probe) return { ok: false, busy: true, error: t('err.sessionChanged', { name: item.name }) }
   if (item.sleeping) {
     const r = await wake(deps, item)
     if (!r.ok) return r
@@ -542,6 +570,7 @@ export async function send(
       if (after) return after
       if (fresh?.kind !== agent?.kind) return { ok: false, error: t('err.sessionChanged', { name: item.name }) }
     }
+    if (probe) return { ok: true }
     // This read and prompt are separate CLI calls, not an atomic identity check and send.
     // A leading dash would be read as an option by the herdr CLI.
     await herdr(['agent', 'prompt', pane, /^-/.test(text) ? ` ${text}` : text])

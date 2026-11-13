@@ -7,7 +7,7 @@
 // (data-path; components/sheet/Sheet.tsx hands them over after every draw).
 // The helpers window draws a helper's own conversation with it too. At its foot (Waiting): the
 // user's messages Claude has not taken in yet, and the board's own on their way or not sent.
-import { type ReactNode, useLayoutEffect, useRef } from 'react'
+import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { isCall, isReminder, isTask } from '../../../../src/core/notices.ts'
 import type { QueuedPrompt } from '../../../../src/core/queue.ts'
 import type { ConversationTurn, NoticeTurn } from '../../../../src/core/transcript.ts'
@@ -16,6 +16,7 @@ import { useT } from '../../i18n/I18nProvider.tsx'
 import type { OutboxEntry } from '../../models/composer-session.ts'
 import { markdown } from '../../models/markdown.ts'
 import { noticeLine } from '../../models/notice.ts'
+import { takeSettling } from '../../models/settle.ts'
 import { clockText } from '../../models/sheet.ts'
 import { reducedMotion } from '../../models/spring.ts'
 import { type AskTurn, askState, type ThreadPart, threadParts, uploadThumbs } from '../../models/thread.ts'
@@ -110,8 +111,25 @@ interface TurnProps {
   helper: ThreadHelper
 }
 
+/**
+ * A user's message that just left the queue (models/settle.ts) settles from the queued look into
+ * its own, once, as it first shows; with reduced motion it is simply there.
+ */
+function useSettle(text: string | null): RefObject<HTMLDivElement | null> {
+  const ref = useRef<HTMLDivElement>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once, as the bubble first shows
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el || text === null || !takeSettling(text) || reducedMotion.matches) return
+    el.classList.add('settle')
+    el.addEventListener('animationend', () => el.classList.remove('settle'), { once: true })
+  }, [])
+  return ref
+}
+
 function ThreadTurn({ part, item, links, helper }: TurnProps) {
   const t = useT()
+  const settle = useSettle(part.kind === 'message' && part.turn.role === 'user' ? part.turn.text : null)
   if (part.kind === 'ask') return <AskedTurn turn={part.turn} live={part.live} />
   if (part.kind === 'link') return <LinkLine turn={part.turn} item={item} helper={helper} links={links} />
   if (part.kind === 'peer') return <PeerBubble turn={part.turn} item={item} helper={helper} links={links} />
@@ -121,7 +139,7 @@ function ThreadTurn({ part, item, links, helper }: TurnProps) {
     const turn = part.turn
     const pinned = turn.role === 'assistant' && links.onPin ? pinnedCount(links.todos, turn) : 0
     return (
-      <div className={`msg ${role}`}>
+      <div ref={settle} className={`msg ${role}`}>
         <MessageText text={text} cut={cut} onResize={links.onResize} />
         <Thumbs text={text} />
         <span className="when">{clockText(at, t)}</span>
@@ -183,33 +201,73 @@ export interface WaitingProps {
   own: readonly OutboxEntry[]
   onRetry?: ((id: string) => void) | undefined
   onEdit?: ((id: string) => void) | undefined
+  /**
+   * Send now on a queued message (#330): set only while the session works and the board knows its
+   * program's send-now key (core/turn-keys.ts canSendNow). `text` is the message pressed.
+   */
+  onSendNow?: ((text: string) => Promise<{ ok: boolean; already?: unknown }>) | undefined
 }
+
+/** How long a message stays "Sending now…" without leaving the queue before it offers Send now again. */
+const SEND_NOW_MS = 15_000
 
 /**
  * The foot of the thread: the user's messages waiting in the session's queue, which Claude has
  * not taken in yet (typed in its terminal or sent from here), then the board's own on their way
  * or not sent. Quiet bubbles; once Claude has one, it is an ordinary bubble in the same place.
  */
-export function Waiting({ queued, own, onRetry, onEdit }: WaitingProps) {
-  const t = useT()
+export function Waiting({ queued, own, onRetry, onEdit, onSendNow }: WaitingProps) {
   return (
     <>
       {queued.map((m, n) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: a queued message has no id; the queue keeps its order
-        <div key={n} className="msg user waiting" title={t('queue.hint')}>
-          {/* biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags */}
-          <div className="md" dangerouslySetInnerHTML={{ __html: markdown(m.text) }} />
-          <Thumbs text={m.text} />
-          <span className="when">
-            <ClockGlyph />
-            {t('queue.queued')}
-          </span>
-        </div>
+        // A queued message has no id: when it was queued, and its place among those queued at once.
+        <QueuedBubble
+          key={`${m.at}-${queued.slice(0, n).filter(o => o.at === m.at).length}`}
+          m={m}
+          onSendNow={onSendNow}
+        />
       ))}
       {own.map(e => (
         <OwnBubble key={e.id} entry={e} onRetry={onRetry} onEdit={onEdit} />
       ))}
     </>
+  )
+}
+
+/**
+ * A message in the session's queue: "Queued", and Send now as part of it (on hover or focus, always
+ * on a touch screen) while the board can send it in now. Pressed, it says "Sending now…" until it
+ * leaves the queue, or offers Send now again if it has not after a while.
+ */
+function QueuedBubble({ m, onSendNow }: { m: QueuedPrompt; onSendNow: WaitingProps['onSendNow'] }) {
+  const t = useT()
+  const [sending, setSending] = useState(false)
+  useEffect(() => {
+    if (!sending) return
+    const id = setTimeout(() => setSending(false), SEND_NOW_MS)
+    return () => clearTimeout(id)
+  }, [sending])
+  async function sendNow(): Promise<void> {
+    if (!onSendNow) return
+    setSending(true)
+    const r = await onSendNow(m.text)
+    if (!r.ok || r.already) setSending(false)
+  }
+  return (
+    <div className={classNames('msg user waiting', sending && 'sending-now')} title={t('queue.hint')}>
+      {/* biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags */}
+      <div className="md" dangerouslySetInnerHTML={{ __html: markdown(m.text) }} />
+      <Thumbs text={m.text} />
+      <span className="when">
+        <ClockGlyph />
+        {t(sending ? 'turn.sendingNow' : 'queue.queued')}
+        {onSendNow && !sending && (
+          <button type="button" className="send-now" title={t('turn.sendNow.hint')} onClick={() => void sendNow()}>
+            {t('turn.sendNow')}
+          </button>
+        )}
+      </span>
+    </div>
   )
 }
 

@@ -58,3 +58,36 @@ export function revealStep(
   if (!items.some(i => i.key === key)) return null
   return { openSheet: open !== key }
 }
+
+/** A calendar event a reminder's Open on the desktop asked the board to show (#335); `n` tells two asks apart. */
+export interface CalOpen {
+  source: string
+  id: string
+  start: string
+  n: number
+}
+
+/** The event a `cal-open` event names ({ source, id, start }), or null for anything else. */
+export function calOpenOf(data: unknown): Omit<CalOpen, 'n'> | null {
+  try {
+    const v: unknown = JSON.parse(String(data))
+    if (typeof v !== 'object' || v === null) return null
+    const { source, id, start } = v as Record<string, unknown>
+    return typeof source === 'string' && typeof id === 'string' && typeof start === 'string'
+      ? { source, id, start }
+      : null
+  } catch {
+    return null
+  }
+}
+
+/** Listens for the stream's `cal-open` event: the event it names becomes the one to show. */
+export function listenForCalOpens(
+  stream: { addEventListener(type: 'cal-open', listener: (event: MessageEvent) => void): void },
+  set: (next: (prev: CalOpen | null) => CalOpen) => void,
+): void {
+  stream.addEventListener('cal-open', event => {
+    const e = calOpenOf(event.data)
+    if (e) set(prev => ({ ...e, n: (prev?.n ?? 0) + 1 }))
+  })
+}

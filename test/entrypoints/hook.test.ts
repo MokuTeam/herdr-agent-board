@@ -8,6 +8,7 @@ import { useLanguage } from '../../src/core/lang.ts'
 import { sameDir } from '../../src/core/launch/names.ts'
 import { promptOf } from '../../src/core/schedule-rules.ts'
 import { WAKE_SHIPPED } from '../../src/core/wake/config.ts'
+import { threadsBrief, threadsConfig } from '../../src/core/work-threads.ts'
 import { unusedPort } from '../support/board-server.ts'
 import { root, type Sandbox, sandbox, until } from '../support/sandbox.ts'
 import { notification } from '../support/task-notification.ts'
@@ -396,12 +397,16 @@ function boardOnPath(box: Sandbox): string {
   return `${bin}${delimiter}${box.env.PATH}`
 }
 
-/** The hook as Claude Code runs it in herdr pane w1:p1; `input` on top of a SessionStart of SID. */
+/**
+ * The hook as Claude Code runs it in herdr pane w1:p1; `input` on top of a SessionStart of SID. A
+ * reporter it starts tries at a fiftieth of its delays (adapters/pacing.ts): its first try comes 20 ms
+ * after it is up, not a second.
+ */
 async function runInHerdr(box: Sandbox, env: Record<string, string>, input: Record<string, unknown> = {}) {
   const { BUN_FEATURE_FLAG_NO_ORPHANS: _, ...plain } = box.env
   const proc = Bun.spawn([process.execPath, join(root, 'src', 'entrypoints', 'hook.ts')], {
     cwd: root,
-    env: { ...plain, HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1', ...env },
+    env: { ...plain, HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1', BOARD_TEST_PACE: '0.02', ...env },
     stdin: new TextEncoder().encode(JSON.stringify({ ...sessionStart(box, SID), ...input })),
     stdout: 'pipe',
     stderr: 'pipe',
@@ -485,8 +490,9 @@ test("every other session keeps herdr's own claude --resume: no reporter, no her
   const team = profileFolder(box, '.claude-team')
   herdrWake(box, team, 'claude-tg --resume {session}')
   await runInHerdr(box, { PATH, CLAUDE_CONFIG_DIR: team })
-  // A reporter would have asked herdr by now (its first try is a second after the start).
-  await Bun.sleep(1800)
+  // A reporter would have asked herdr by now: its first try is 20 ms after it is up (paced), and a
+  // Bun takes well under the rest to start.
+  await Bun.sleep(900)
   expect(box.calls()).toEqual([])
 })
 
@@ -555,7 +561,7 @@ test("in ~/.claude, Telegram off, plain claude or herdr-wake's own hook: herdr's
   // No board on PATH: herdr could not run the command in the restored shell.
   writeFileSync(join(home, '.claude', 'settings.json'), '{}')
   await runInHerdr(box, {})
-  await Bun.sleep(1800)
+  await Bun.sleep(900) // a reporter would have asked herdr by now (see above)
   expect(box.calls()).toEqual([])
 })
 
@@ -568,7 +574,33 @@ test('a wake section with Telegram on but no enabled: reported as wake is by def
     await until(() => reported(box), 8000)
     expect(reported(box)?.slice(-3)).toEqual(['board', 'resume', SID])
   } else {
-    await Bun.sleep(1800)
+    await Bun.sleep(900)
     expect(box.calls()).toEqual([])
   }
+})
+
+test('threads on (#379): the start brief gains their block, with agents only; a prompt hears nothing of them', async () => {
+  const box = await sandbox()
+  mkdirSync(join(configFile(box), '..'), { recursive: true })
+  writeFileSync(configFile(box), JSON.stringify({ language: 'en', threads: true }))
+  putCard(box, { key: 's1', category: 'atlas', wait: 'the client', briefV: BRIEF_VERSION })
+  const start = await runHook(box, sessionStart(box, 's1'))
+  useLanguage('en')
+  const cfg = normalizeConfig({ language: 'en', threads: true })
+  const env = { ...box.env, HERDR_PANE_ID: 'p1' }
+  const card = cardOf(box, 's1')
+  assert.equal(
+    start,
+    context('SessionStart', brief(cfg, card, box.dir, env, 'Claude', null, null, [], false, threadsConfig(true))),
+  )
+  assert.ok(start.includes(JSON.stringify(threadsBrief()).slice(1, -1)))
+  // Without the switch: the brief as it was.
+  assert.equal(brief(cfg, card, box.dir, env), brief(cfg, card, box.dir, env, 'Claude', null, null, [], false, null))
+  assert.ok(!brief(cfg, card, box.dir, env).includes('board thread'))
+  // A prompt: the wait reminder alone, as without threads; nothing read or said for them.
+  const prompt = { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: box.dir, prompt: 'go on' }
+  assert.equal(await runHook(box, prompt), context('UserPromptSubmit', waitReminder({ wait: 'the client' })))
+  // Agents off: the owner's threads, no block.
+  writeFileSync(configFile(box), JSON.stringify({ language: 'en', threads: { agents: false } }))
+  assert.ok(!(await runHook(box, sessionStart(box, 's1'))).includes('board thread'))
 })

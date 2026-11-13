@@ -12,6 +12,7 @@ import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
 import type { PresenceMode } from '../../../src/core/presence.ts'
 import { type TodoMode, todoModeOf } from '../../../src/core/todos.ts'
 import type { Translator } from '../../../src/core/types.ts'
+import type { ThreadMode } from '../../../src/core/work-threads.ts'
 import { ApiError, api, errorText, isReply, postJson, replyOf } from '../api/client.ts'
 import type { MenuEngine, MenuSource } from '../components/menu/menu-engine.ts'
 import { useLanguage } from '../i18n/I18nProvider.tsx'
@@ -20,8 +21,9 @@ import { LOOK_KEY, lookNow, setLook } from '../models/look.ts'
 import { type Dock, isDock } from '../models/panel-layout.ts'
 import { offersProfiles } from '../models/profiles.ts'
 import { keptAuth, remotePage, UNPAIRED } from '../models/remote-page.ts'
-import { offersMokupilot, settingPicked, settingsMenu } from '../models/settings-menu.ts'
+import { offersMokupilot, settingPicked, settingsMenu, threadsNow } from '../models/settings-menu.ts'
 import { reducedMotion } from '../models/spring.ts'
+import { offersTeam } from '../models/team.ts'
 import { setTheme, THEME_KEY, themeNow } from '../models/theme.ts'
 import { isWakeView } from '../models/wake.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
@@ -79,6 +81,9 @@ export interface SettingsDeps {
   /** The local board's page: Calendar… is offered (#328). */
   calendarSettings?(): boolean
   openCalendarSettings?(): void
+  /** The local board's page with the payload's teamRev (#231): Team… is offered. */
+  team?(): boolean
+  openTeam?(): void
   /** This page signed in through the owner's domain: Sign out is offered. */
   signOut?(): boolean
   endLogin?(): void
@@ -89,10 +94,21 @@ export interface SettingsDeps {
   /** Tasks as the board has them (#202, 'none': off); none: no Tasks item. */
   todos?(): TodoMode | undefined
   chooseTodos?(mode: TodoMode): void
+  /** Threads as the board has them (#410, 'none': off); none: no Threads item. */
+  threads?(): ThreadMode | undefined
+  /** Threads shared over Team (#410); none: no choice. */
+  threadsShare?(): boolean | undefined
+  chooseThreads?(body: ThreadsSetting): void
+  /** Auto-compact's default limit (#378, '' for off; undefined from an older board: no item). */
+  compact?(): string | undefined
+  chooseCompact?(at: string): void
   /** The board on another device: Paths on this computer… is offered. */
   localPaths?(): boolean
   openLocalPaths?(): void
 }
+
+/** What Settings → Threads asks the board for (POST /api/threads-settings, #410). */
+export type ThreadsSetting = { mode: ThreadMode } | { share: boolean }
 
 /** What Settings → Presence asks the board for (POST /api/presence { op: 'settings', … }). */
 export type PresenceSetting = { on: false } | { on: true; mode?: PresenceMode; idleMinutes?: number }
@@ -120,10 +136,14 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       backup: deps.backup?.() ?? false,
       timeSettings: deps.timeSettings?.() ?? false,
       calendarSettings: deps.calendarSettings?.() ?? false,
+      team: deps.team?.() ?? false,
       signOut: deps.signOut?.() ?? false,
       presence: deps.presence?.(),
       idleMinutes: deps.idleMinutes?.(),
       todos: deps.todos?.(),
+      threads: deps.threads?.(),
+      threadsShare: deps.threadsShare?.(),
+      compact: deps.compact?.(),
       localPaths: deps.localPaths?.() ?? false,
     })
     const source: MenuSource = keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse'
@@ -151,11 +171,15 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'backup') deps.openBackup?.()
         else if (pick?.kind === 'timeSettings') deps.openTimeSettings?.()
         else if (pick?.kind === 'calendarSettings') deps.openCalendarSettings?.()
+        else if (pick?.kind === 'team') deps.openTeam?.()
         else if (pick?.kind === 'signout') deps.endLogin?.()
         else if (pick?.kind === 'presence')
           deps.choosePresence?.(pick.value === 'none' ? { on: false } : { on: true, mode: pick.value })
         else if (pick?.kind === 'presenceIdle') deps.choosePresence?.({ on: true, idleMinutes: pick.value })
         else if (pick?.kind === 'todos') deps.chooseTodos?.(pick.value)
+        else if (pick?.kind === 'threads') deps.chooseThreads?.({ mode: pick.value })
+        else if (pick?.kind === 'threadsShare') deps.chooseThreads?.({ share: pick.value })
+        else if (pick?.kind === 'compact') deps.chooseCompact?.(pick.value)
         else if (pick?.kind === 'localPaths') deps.openLocalPaths?.()
       },
     })
@@ -207,6 +231,26 @@ export async function chooseFold(
   if (!canEdit) return toast(t('live.off'), true)
   try {
     await save({ foldWaiting: mode })
+  } catch (err) {
+    toast(errorText(err, t), true)
+  }
+}
+
+/** Auto-compact's default limit for every board (#378, config.json's `compact.at`); '' turns it off. */
+export async function chooseCompact(
+  at: string,
+  {
+    t,
+    canEdit,
+    save,
+    toast,
+  }: Pick<LanguageDeps, 't' | 'canEdit' | 'toast'> & {
+    save(body: { compactAt: string }): Promise<unknown>
+  },
+): Promise<void> {
+  if (!canEdit) return toast(t('live.off'), true)
+  try {
+    await save({ compactAt: at })
   } catch (err) {
     toast(errorText(err, t), true)
   }
@@ -291,7 +335,7 @@ const crossFade = (): ((apply: () => void) => unknown) | undefined =>
  * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake,
  * `openAccess` the Remote access panel, `openMokupilot` the MokuPilot panel, `openBackup` the Backup panel,
  * `openTimeSettings` Time tracking's, `openLocalPaths` Paths on this computer, `openCalendarSettings`
- * the calendar's (#328).
+ * the calendar's (#328), `openTeam` the Team panel (#231).
  */
 export function useSettingsMenu(
   menu: MenuEngine,
@@ -304,6 +348,7 @@ export function useSettingsMenu(
   openTimeSettings: () => void = () => {},
   openLocalPaths: () => void = () => {},
   openCalendarSettings: () => void = () => {},
+  openTeam: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
@@ -321,6 +366,7 @@ export function useSettingsMenu(
     openTimeSettings,
     openLocalPaths,
     openCalendarSettings,
+    openTeam,
   })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
@@ -396,6 +442,8 @@ export function useSettingsMenu(
       openTimeSettings: () => latest.current.openTimeSettings(),
       calendarSettings: () => !remotePage(),
       openCalendarSettings: () => latest.current.openCalendarSettings(),
+      team: () => offersTeam(latest.current.board.data),
+      openTeam: () => latest.current.openTeam(),
       signOut: () => remotePage() && keptAuth() === 'login',
       endLogin: () => {
         const { t, board } = latest.current
@@ -425,6 +473,31 @@ export function useSettingsMenu(
         const { t, board } = latest.current
         if (!board.canEdit) return board.toast(t('live.off'), true)
         api.post('/api/todos', { op: 'settings', mode }).catch(err => board.toast(errorText(err, t), true))
+      },
+      // Threads (#410), on the local board's page: off without the payload's line.
+      threads: () => {
+        const data = latest.current.board.data
+        return data && !remotePage() ? threadsNow(data).mode : undefined
+      },
+      threadsShare: () => {
+        const data = latest.current.board.data
+        return data && !remotePage() ? threadsNow(data).share : undefined
+      },
+      chooseThreads: body => {
+        const { t, board } = latest.current
+        if (!board.canEdit) return board.toast(t('live.off'), true)
+        api.post('/api/threads-settings', body).catch(err => board.toast(errorText(err, t), true))
+      },
+      // An older board sends no default: no Auto-compact item.
+      compact: () => latest.current.board.data?.compactDefault,
+      chooseCompact: at => {
+        const { t, board } = latest.current
+        void chooseCompact(at, {
+          t,
+          canEdit: board.canEdit,
+          save: body => api.post('/api/settings', body),
+          toast: board.toast,
+        })
       },
       localPaths: remotePage,
       openLocalPaths: () => latest.current.openLocalPaths(),

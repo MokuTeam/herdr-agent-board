@@ -4,9 +4,11 @@
 // copy and for its file chips, but out of the Tab order: the keyboard reaches "Show all" first. A
 // message the thread's budget cut says so under it (core/transcript.ts fitThread).
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { useThreadsContext } from '../../hooks/useThreads.tsx'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { markdown } from '../../models/markdown.ts'
 import { FOLD_SCREENS, folds } from '../../models/thread.ts'
+import { linkKeys } from '../../models/work-thread-links.ts'
 
 export interface MessageTextProps {
   text: string
@@ -24,6 +26,12 @@ export function MessageText({ text, cut = false, onResize }: MessageTextProps) {
   const screen = useScreenHeight()
   const [long, setLong] = useState(false)
   const [open, setOpen] = useState(false)
+  // Threads (#392): the known keys in the text become links to them; off, the text is left alone.
+  const known = useThreadsContext()?.known
+  // biome-ignore lint/correctness/useExhaustiveDependencies: new text is drawn afresh and linked again
+  useLayoutEffect(() => {
+    if (known?.size && body.current) linkKeys(body.current, known)
+  }, [text, known])
   // Measured when drawn, when its text or the window's height changes, and when its box does (a
   // narrower panel).
   // biome-ignore lint/correctness/useExhaustiveDependencies: new text is when to measure, not what it reads

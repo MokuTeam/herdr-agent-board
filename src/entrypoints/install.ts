@@ -1,6 +1,8 @@
 // The "install" action: puts the `board` and `spawn-agent` commands on PATH (~/.local/bin, a sh
 // script for Git Bash, Linux and macOS and a .cmd for PowerShell), copies the agents' skill
-// (skills/herdr-agents) into the skills folder of every shown Claude profile and registers the
+// (skills/herdr-agents) and Team's (skills/agent-board-team, #369), and threads' while config.json
+// turns them on (skills/agent-board-threads, #379), into the skills folder of
+// every shown Claude profile and registers the
 // SessionStart / UserPromptSubmit hooks, the PreToolUse hook on AskUserQuestion and the status
 // line in its settings.json (~/.claude, and each CLAUDE_CONFIG_DIR folder the board shows; a
 // hidden one is left alone), has herdr put its
@@ -14,8 +16,9 @@
 // ran this (an absolute path, no PATH lookup).
 //
 //   bun src/entrypoints/install.ts              the above; desktop notifications stay as they were
-//   bun src/entrypoints/install.ts --toast      also Windows notifications with the agent's words
-//                                               (the "notifications" action)
+//   bun src/entrypoints/install.ts --toast      also desktop notifications with the agent's words
+//                                               (the "notifications" action: Windows' PowerShell
+//                                               script, macOS' toast.ts)
 //   bun src/entrypoints/install.ts --no-toast   and without them
 //   bun src/entrypoints/install.ts --codex      Codex's hooks and the commands, leaving Claude alone
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -33,16 +36,19 @@ import { gatherFacts, herdrConfigFile, readText } from '../adapters/setup-facts.
 import { type InstallPaths, planSettings, planShims } from '../core/install-plan.ts'
 import { t } from '../core/lang.ts'
 import { DEFAULT_PROFILE, shownProfiles } from '../core/profiles.ts'
-import { boardFiles, checkSetup, report, tomlValue } from '../core/setup.ts'
+import { boardFiles, checkSetup, report, SKILL, TEAM_SKILL, THREADS_SKILL, tomlValue } from '../core/setup.ts'
 import { wakeSwitch } from '../core/wake/config.ts'
+import { threadsConfig } from '../core/work-threads.ts'
+import { ensureToastApp, toastAppState } from '../integrations/toast-mac.ts'
 
 const args = process.argv.slice(2)
 for (const a of args.filter(a => a !== '--toast' && a !== '--no-toast' && a !== '--codex'))
   console.log(`ignored ${a}: the options are --toast, --no-toast and --codex`)
 let toast = args.includes('--toast') ? true : args.includes('--no-toast') ? false : undefined
-if (toast && process.platform !== 'win32') {
+const toasts = process.platform === 'win32' || process.platform === 'darwin'
+if (toast && !toasts) {
   console.log(
-    'desktop notifications: Windows only; on Linux and macOS herdr shows its own ([ui.toast] delivery = "system")',
+    'desktop notifications: Windows and macOS only; on Linux herdr shows its own ([ui.toast] delivery = "system")',
   )
   toast = undefined
 }
@@ -146,9 +152,15 @@ try {
   installShims()
   // claude-tg is wake's Telegram's: with wake off, a herdr-wake one stays as it was.
   if (wake) refreshLaunchers()
-  // --- the agents' skill (how sessions in herdr work with each other), read by Claude on demand
-  const skillText = readText(files.skill)
-  if (skillText === null) console.log(`skill: ${files.skill} is missing from this copy of the board`)
+  // --- the skills Claude reads on demand: the agents' (how sessions in herdr work with each
+  // other), then Team's (how they work with other people's boards, #369)
+  const skills = [
+    { name: SKILL, from: files.skill },
+    { name: TEAM_SKILL, from: files.teamSkill },
+    // threads' (#379), only while config.json turns them on
+    ...(threadsConfig(loadConfig().threads) ? [{ name: THREADS_SKILL, from: files.threadsSkill }] : []),
+  ].map(s => ({ ...s, text: readText(s.from) }))
+  for (const s of skills) if (s.text === null) console.log(`skill: ${s.from} is missing from this copy of the board`)
   // --- per profile: the skill, then hooks, status line, notifications; the default folder is made when it is not there
   let toastOn = false
   for (const profile of profiles) {
@@ -157,8 +169,9 @@ try {
       console.log(`skipped ${profile.dir}: the folder is not there`)
       continue
     }
-    if (skillText !== null) {
-      const skill = installSkill(profile.dir, skillText)
+    for (const s of skills) {
+      if (s.text === null) continue
+      const skill = installSkill(profile.dir, s.text, s.name)
       console.log(
         skill.action === 'foreign'
           ? `skipped ${skill.file}: a skill of that name that is not ours`
@@ -171,7 +184,7 @@ try {
     console.log(
       out.statusLineSet ? `status line: ${paths.statusline}` : `status line in ${out.file}: left as it was (not ours)`,
     )
-    if (process.platform === 'win32')
+    if (toasts)
       console.log(
         out.toast
           ? `desktop notifications: on (Stop, Notification, PreToolUse AskUserQuestion -> ${paths.toast})`
@@ -194,12 +207,29 @@ try {
         "wake hooks: not added: the separate herdr-wake plugin's are there (Settings → Sleep and wake… → Switch over…)",
       )
   }
-  if (process.platform === 'win32') {
+  if (toasts) {
     const delivery = tomlValue(readText(herdrConfigFile()), 'ui.toast', 'delivery') ?? 'off'
     if (toastOn && delivery !== 'off')
       console.log(
         `  herdr shows its own too: set [ui.toast] delivery = "off" in ${herdrConfigFile()}, then herdr server reload-config`,
       )
+  }
+  // macOS: the notification app (macOS shows notifications only for an app LaunchServices knows).
+  // Built here so the first notification comes at once; a click on it opens the session's sheet.
+  // An app that is there and current is kept; one that failed to build is tried again (a hook does not).
+  if (process.platform === 'darwin' && toastOn) {
+    const app = ensureToastApp({ retry: true })
+    if (app) {
+      console.log(`desktop notifications: the app that shows them: ${app}`)
+      console.log('  the first one asks to allow "Claude": allow it, or turn it on in System Settings > Notifications')
+    } else {
+      console.log(
+        `desktop notifications: the app that shows them was not built (${toastAppState().failed ?? 'it could not be built'}); until it is, the hook shows herdr's own notification`,
+      )
+      console.log(
+        '  to build it, install the Command Line Tools if they are missing (xcode-select --install), then run the install with --toast again',
+      )
+    }
   }
 } catch (err) {
   console.error(`agent-board install: ${messageOf(err)}`)

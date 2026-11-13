@@ -15,6 +15,8 @@ const ITEM = /^(\s*)([-*+•]|\d+[.)])\s+(.*)$/
 const FENCE = /^\s*(`{3,}|~{3,})\s*([\w+#.-]*)\s*$/
 const RULE = /^\s*([-*_])(?:\s*\1){2,}\s*$/
 const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?\s*$/
+/** A table's cell this long or shorter is kept on one line on a phone (table below). */
+const WHOLE_CELL = 20
 const indentOf = (l: string): number => (l.match(/^\s*/)?.[0] ?? '').replace(/\t/g, '  ').length
 
 function safeUrl(u: string): boolean {
@@ -148,11 +150,16 @@ function table(lines: string[], i: number): Block {
     c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : '',
   )
   const at = (k: number) => (align[k] ? ` style="text-align:${align[k]}"` : '')
+  // A short cell (a date, a lane, a time, an amount, a few words) or one of one word is "whole": a
+  // phone keeps it on one line (styles/sheet-phone.css, #417), where a squeezed column would break it
+  // after a hyphen or between its words; a longer one wraps there at a measure of its own.
+  const cell = (tag: 'th' | 'td', c: string, k: number) =>
+    `<${tag}${c.length <= WHOLE_CELL || !/\s/.test(c) ? ' class="whole"' : ''}${at(k)}>${inline(c)}</${tag}>`
   i += 2
   const rows: string[][] = []
   while (i < lines.length && lines[i]?.includes('|') && lines[i]?.trim()) rows.push(cells(lines[i++] ?? ''))
-  const thead = `<tr>${head.map((c, k) => `<th${at(k)}>${inline(c)}</th>`).join('')}</tr>`
-  const tbody = rows.map(r => `<tr>${r.map((c, k) => `<td${at(k)}>${inline(c)}</td>`).join('')}</tr>`).join('')
+  const thead = `<tr>${head.map((c, k) => cell('th', c, k)).join('')}</tr>`
+  const tbody = rows.map(r => `<tr>${r.map((c, k) => cell('td', c, k)).join('')}</tr>`).join('')
   return [`<div class="table"><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`, i]
 }
 

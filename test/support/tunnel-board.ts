@@ -148,6 +148,13 @@ export const SAMPLES: Record<string, string> = Object.fromEntries(
   (
     [
       [/^\/api\/fs\//, '/api/fs/list'],
+      [/^\/api\/team\/thread\/([^/]+)$/, '/api/team/thread/p1'],
+      [/^\/api\/team\/draft\/([^/]+)\/(send|discard)$/, '/api/team/draft/d1/send'],
+      [/^\/api\/team\/threads\/([^/]+)\/([^/]+)$/, '/api/team/threads/team/general'],
+      [/^\/api\/team\/threads\/([^/]+)\/([^/]+)\/(assign|release|mute|unmute)$/, '/api/team/threads/team/general/mute'],
+      [/^\/api\/team\/threads\/team\/([^/]+)\/members$/, '/api/team/threads/team/general/members'],
+      [/^\/api\/threads\/([^/]+)$/, '/api/threads/atlas-1'],
+      [/^\/api\/team\/confirm\/([^/]+)$/, '/api/team/confirm/AAAAAAAAAAAAAAAAAAAAAA'],
       [/^\/api\/launch\/([\w-]+)\/dismiss$/, '/api/launch/l1/dismiss'],
       [/^\/api\/launch\/([\w-]+)\/(focus|trust|close)$/, '/api/launch/l1/trust'],
       [/^\/api\/launch/, '/api/launch/l1'],
@@ -157,7 +164,7 @@ export const SAMPLES: Record<string, string> = Object.fromEntries(
       [/^\/api\/session\/([^/]+)\/meter$/, '/api/session/s1/meter'],
       [/^\/api\/session\/([^/]+)$/, '/api/session/s1'],
       [/^\/api\/session\/([^/]+)\/helper\/([A-Za-z0-9-]{1,120})$/, '/api/session/s1/helper/h1'],
-      [/^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace|fork)$/, '/api/session/s1/permit'],
+      [/^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace|fork|stop|sendnow)$/, '/api/session/s1/permit'],
       [/^\/api\/session\/([^/]+)\/(mokupilot)$/, '/api/session/s1/mokupilot'],
       [/^\/api\/session\/([^/]+)\/aside$/, '/api/session/s1/aside'],
       [/^\/api\/session\/([^/]+)\/(focus|wake|sleep|restart|message)$/, '/api/session/s1/message'],

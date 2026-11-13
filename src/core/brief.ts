@@ -4,6 +4,7 @@ import { languageName } from './lang.ts'
 import { type Presence, presenceBrief } from './presence.ts'
 import { type TodosConfig, todosBrief } from './todos.ts'
 import type { Card, Config } from './types.ts'
+import { type ThreadsConfig, threadsBrief } from './work-threads.ts'
 
 // Bump when the brief says something new: every running session gets it again on its next prompt.
 export const BRIEF_VERSION = 6
@@ -43,6 +44,8 @@ export function brief(
   sinks: readonly string[] = [],
   /** The calendar is on (#328): agents hear of `board cal`. */
   calendar = false,
+  /** Threads (#379, core/work-threads.ts), only where config.json turned them on; agents hear of them only with agents on. */
+  threads: ThreadsConfig | null = null,
 ): string {
   const cat = card?.category
   const guess = categoryFor(cfg, cwd)
@@ -69,6 +72,7 @@ export function brief(
     agent === 'Claude' && todos?.agents && todosBrief(),
     agent === 'Claude' && sinks.length > 0 && secretsBrief(sinks),
     agent === 'Claude' && calendar && calendarBrief(),
+    agent === 'Claude' && threads?.agents && threadsBrief(),
     `Card texts in ${languageName()}, short. Call it only when the state changes, not every turn.${state ? ` Card now: ${state}.` : ''}`,
     presence && presenceBrief(presence),
     herdrLine(env, agent),

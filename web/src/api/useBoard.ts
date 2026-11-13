@@ -1,9 +1,12 @@
 // The live board: the event stream plus an uncached snapshot (models/lifecycle.ts), suspended
-// while the page is hidden or offline and resumed when it is back.
+// while the page is hidden, offline or not drawn (models/drawn.ts) and resumed when it is back.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { watchDrawn } from '../models/drawn.ts'
 import { boardConnection } from '../models/lifecycle.ts'
 import { nextRetryMs, remotePage, UNPAIRED } from '../models/remote-page.ts'
-import { listenForReveals, type Reveal } from '../models/reveal.ts'
+import { type CalOpen, listenForCalOpens, listenForReveals, type Reveal } from '../models/reveal.ts'
+import { listenForTeamOpens, type TeamOpen } from '../models/team.ts'
+import { listenForThreadOpens, type ThreadOpen } from '../models/work-threads.ts'
 import { api, type BoardPayload, isBoardPayload } from './client.ts'
 
 export interface LiveBoard {
@@ -15,13 +18,19 @@ export interface LiveBoard {
   canMutate: boolean
   /** Edits the board keeps itself (cards, lanes, language, files) need only the board. */
   canEdit: boolean
-  /** Opens a new stream and snapshot, unless the page is hidden or offline. */
+  /** Opens a new stream and snapshot, unless the page is hidden, offline or not drawn. */
   resume(): void
   /**
    * The last session the board was asked to show (a notification clicked: the stream's `reveal`
    * event), one the board had; `n` tells two asks for the same session apart.
    */
   reveal: Reveal | null
+  /** The last calendar event a reminder's Open on the desktop asked for (#335: the stream's `cal-open`). */
+  calOpen: CalOpen | null
+  /** The last team thread a notification's click asked for (#355: the stream's `team-open`). */
+  teamOpen: TeamOpen | null
+  /** The last thread `board thread open` or a link outside asked for (#392: the stream's `thread-open`). */
+  threadOpen: ThreadOpen | null
 }
 
 const pageAway = () => document.hidden || navigator.onLine === false
@@ -31,6 +40,9 @@ export function useBoard(): LiveBoard {
   const [connected, setConnected] = useState(false)
   const [dropped, setDropped] = useState(false)
   const [reveal, setReveal] = useState<Reveal | null>(null)
+  const [calOpen, setCalOpen] = useState<CalOpen | null>(null)
+  const [teamOpen, setTeamOpen] = useState<TeamOpen | null>(null)
+  const [threadOpen, setThreadOpen] = useState<ThreadOpen | null>(null)
   const resumeRef = useRef<() => void>(() => {})
 
   useEffect(() => {
@@ -54,6 +66,9 @@ export function useBoard(): LiveBoard {
         const stream = new EventSource('/api/events')
         // A notification clicked while this page is open (entrypoints/web-open.ts through /api/reveal).
         listenForReveals(stream, () => latest, setReveal)
+        listenForCalOpens(stream, setCalOpen)
+        listenForTeamOpens(stream, setTeamOpen)
+        listenForThreadOpens(stream, setThreadOpen)
         // In a phone's browser: unpaired on the computer, the board says so as it ends the stream.
         if (remotePage()) {
           stream.addEventListener('unpaired', () => dispatchEvent(new Event(UNPAIRED)))
@@ -79,8 +94,11 @@ export function useBoard(): LiveBoard {
         if (!value && started) setDropped(true)
       },
     })
+    // On show but not drawn (a window covered by another one, #333): suspended as while hidden,
+    // until a frame comes again (models/drawn.ts).
+    let undrawn = false
     const resume = () => {
-      if (!pageAway()) connection.resume()
+      if (!pageAway() && !undrawn) connection.resume()
     }
     const suspend = () => connection.suspend()
     const visibility = () => (document.hidden ? suspend() : resume())
@@ -89,6 +107,19 @@ export function useBoard(): LiveBoard {
     addEventListener('online', resume)
     addEventListener('offline', suspend)
     document.addEventListener('visibilitychange', visibility)
+    const drawn =
+      typeof requestAnimationFrame === 'function'
+        ? watchDrawn({
+            undrawn() {
+              undrawn = true
+              suspend()
+            },
+            drawn() {
+              undrawn = false
+              resume()
+            },
+          })
+        : null
     resume()
     started = true
     return () => {
@@ -96,6 +127,7 @@ export function useBoard(): LiveBoard {
       removeEventListener('online', resume)
       removeEventListener('offline', suspend)
       document.removeEventListener('visibilitychange', visibility)
+      drawn?.stop()
       started = false
       clearTimeout(retry)
       suspend()
@@ -105,7 +137,7 @@ export function useBoard(): LiveBoard {
   const resume = useCallback(() => resumeRef.current(), [])
   const canMutate = connected && data?.stale === false && data.lastSuccessfulRefreshAt != null
   return useMemo(
-    () => ({ data, connected, dropped, canMutate, canEdit: connected, resume, reveal }),
-    [data, connected, dropped, canMutate, resume, reveal],
+    () => ({ data, connected, dropped, canMutate, canEdit: connected, resume, reveal, calOpen, teamOpen, threadOpen }),
+    [data, connected, dropped, canMutate, resume, reveal, calOpen, teamOpen, threadOpen],
   )
 }

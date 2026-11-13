@@ -1,0 +1,112 @@
+/* The toolbar's rows and sizes (#347, web/src/components/Toolbar.tsx), the board's own sheet laid over
+   upstream's app.css, which stays theirs rule for rule. One row while the title, the filters and every
+   action fit side by side (web/src/hooks/useToolbarFit.ts decides, and sets `data-rows` on
+   .toolbar-fit when they do not): then two, the title and the actions on top, the filters under
+   them. No row wraps at any width: what does not fit leaves for More (`data-over`) or folds into
+   a pill, and in two rows the filters fold away on scroll (`data-folded`, the spring of
+   hooks/useCollapse.ts, as the session sheet's compact head does in sheet-compact.css). Every
+   control in it is 28 px high with the same radius and the same 6 px gap. */
+
+/* ---------------------------------------------------------------- one size, one shape */
+.toolbar .pill-toggle,
+.toolbar .setup-note,
+.toolbar .search,
+.toolbar .segmented,
+.toolbar .limits { height: 28px; border-radius: 9px; }
+.toolbar .limits { align-items: center; padding: 0 10px; }
+/* An icon on its own is a square of that size: 16 px of icon between 6 px. */
+.toolbar .pill-toggle.icon-only { min-width: 28px; padding: 0 6px; }
+/* The segments fill the control's height; the thumb and the lit lane sit inside it, 2 px from its edge. */
+.toolbar .segmented button { display: inline-flex; align-items: center; align-self: stretch; padding: 0 12px; }
+
+/* ---------------------------------------------------------------- the pieces */
+/* `.controls` is only the tests' and the fold's handle on the filters and the actions: its children are
+   the row's own. */
+.toolbar .controls { display: contents; }
+/* upstream's narrow rules (app.css, at 1200 and 560 px of the toolbar's width) wrapped the row, put
+   the controls on rows of their own and moved the pills about; none of that is the toolbar's now. */
+.toolbar .toolbar-row { flex-wrap: nowrap; gap: 16px; }
+.toolbar .toolbar-row::after { display: none; }
+/* The page's name (the h1, for screen readers only) and the summary: `.titles` draws no box of its own, so
+   upstream's rules for it (flex, order, margin) have nothing to apply to, and the summary is the one
+   thing at the start of the row, with no gap before it while it is hidden (app.css hides it below a
+   wide board). */
+.toolbar .titles { display: contents; }
+.toolbar .summary { flex: none; order: 0; margin: 0; }
+.toolbar .search input { width: 150px; }
+
+.toolbar-filters { display: flex; flex: 0 1 auto; align-items: center; gap: 6px; min-width: 0; order: 1; }
+.toolbar-filters > * { flex: none; }
+.toolbar-filters > .segmented { flex: 0 1 auto; min-width: 0; }
+.toolbar-filters > .segment-pick { flex: 0 1 auto; min-width: 0; }
+
+/* In two rows the actions take what is left of their row, whatever they hold, so their room does not
+   depend on how many of them are in it (the fit reads it). In one row they are as wide as they are,
+   at the end of it, and the filters give way to them: the lanes control and the profile switch fold
+   into pills by the room they are left (hooks/useSegmentFolds.ts). */
+.toolbar-actions { display: flex; flex: 1 1 0; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; order: 2; }
+.toolbar-actions > * { flex: none; }
+.toolbar-fit:not([data-rows]) .toolbar-actions { flex: 0 0 auto; margin-left: auto; }
+/* The first (Next) may shrink (its words end in an ellipsis) at a width where nothing else fits beside it. */
+.toolbar-actions > #next-attention { flex: 0 1 auto; min-width: 0; }
+#next-attention > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* What left the row is hidden, kept in the row so its width is known; measuring shows all of it. */
+.toolbar-actions:not(.measuring) > [data-over] { display: none; }
+.toolbar-actions.measuring { justify-content: flex-start; }
+.toolbar-actions.measuring > * { flex: none !important; }
+.toolbar .live { margin-top: 0; order: 0; }
+.toolbar #next-attention, .toolbar .limits { margin-top: 0; order: 0; }
+
+/* More: a dot while something in it needs a look (a due reminder, a task to confirm, a note). */
+.toolbar-more { position: relative; }
+.more-dot { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 0 2px var(--material); }
+
+/* The folded filters' button: lit, with how many are on (the Terminal look's: look-terminal.css). */
+#toolbar-peek.on { color: var(--accent); }
+#toolbar-peek.on .n { background: var(--accent); color: #fff; }
+
+/* ---------------------------------------------------------------- two rows */
+.toolbar-fit[data-rows] .toolbar-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: minmax(36px, auto) auto;
+  align-items: center;
+  gap: 0;
+  min-height: 0;
+}
+.toolbar-fit[data-rows] .toolbar-row::after { display: none; }
+/* The gap after the summary is its own margin, so the actions have the whole row while it is hidden. */
+.toolbar-fit[data-rows] .summary { grid-column: 1; grid-row: 1; margin: 0 8px 0 0; }
+.toolbar-fit[data-rows] .toolbar-actions { grid-column: 2; grid-row: 1; }
+.toolbar-fit[data-rows] .toolbar-filters { grid-column: 1 / -1; grid-row: 2; margin-top: 8px; }
+/* Tasks as an icon with its counts, the words left to screen readers (as the icon-only buttons' are),
+   and what waits for a confirmation a dot: the same button is a pill with words and "1 to confirm"
+   where the toolbar is one row. The words are still the button's name and the dot's title says what it is. */
+.toolbar-fit[data-rows] #todos-open > span:not(.n) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.toolbar-fit[data-rows] #todos-open .n.confirm { width: 8px; min-width: 0; height: 8px; padding: 0; border-radius: 50%; font-size: 0; }
+/* Search takes what the pills leave, and gives way to them at the narrowest. */
+.toolbar-fit[data-rows] .toolbar-filters > .search { flex: 1 1 90px; min-width: 0; max-width: 480px; }
+.toolbar-fit[data-rows] .search input { width: 100%; min-width: 0; text-overflow: ellipsis; }
+
+/* The filters folded away: their height and the gap above them go, they stay laid out (the lanes
+   control and the profile switch fold into pills by their widths) and are not reachable. */
+.toolbar-fit[data-rows] .toolbar-filters[data-folded]:not([data-moving]) {
+  height: 0;
+  margin-top: 0;
+  overflow: hidden;
+  visibility: hidden;
+  opacity: 0;
+}
+.toolbar-fit[data-rows] .toolbar-filters[data-moving] { overflow: hidden; }
+
+/* ---------------------------------------------------------------- touch, pointers and motion */
+.toolbar-more:active, #toolbar-peek:active { transform: scale(0.94); }
+@media (hover: none) {
+  .toolbar-more:active, #toolbar-peek:active { transform: none; background: var(--fill-2); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toolbar-more, #toolbar-peek { transition: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .more-dot { box-shadow: 0 0 0 2px var(--bg); }
+}

@@ -513,7 +513,7 @@ describe('the toolbar’s quiet note', () => {
     expect(note.attrs.get('title')).toBe('Sleep and wake is on but not running: open its settings')
     // Drawn as "Setup incomplete" is, right after it.
     expect(note.attrs.get('class')).toBe('setup-note wake-note')
-    const controls = find(nodes, el => hasClass(el, 'controls')).children.filter(
+    const controls = find(nodes, el => hasClass(el, 'toolbar-actions')).children.filter(
       (n): n is Element => n.kind === 'element',
     )
     const at = controls.findIndex(el => el.attrs.get('id') === 'wake-note')

@@ -32,6 +32,8 @@ export interface LaunchOptions {
   recent: string[]
   /** The setup's ticket conventions: linked workspaces, -wt/<ticket> paths, case- names. */
   linkedWorkspaces: boolean
+  /** The launcher can start a session on a model of its own: the window offers the field. */
+  takesModel: boolean
   error: string
 }
 
@@ -73,7 +75,17 @@ const codeOf = (err: unknown): string | undefined =>
 
 // A card with nothing else on it was only the launch's: the board wrote the lane and the profile
 // it is meant to run in, the hooks the profile it reports.
-const LANE_ONLY = ['key', 'category', 'updatedAt', 'profileWant', 'profile', 'profileDir', 'forkOf', 'forkAt']
+const LANE_ONLY = [
+  'key',
+  'category',
+  'updatedAt',
+  'profileWant',
+  'modelWant',
+  'profile',
+  'profileDir',
+  'forkOf',
+  'forkAt',
+]
 const laneOnly = (key: string): boolean => Object.keys(readCard(key) ?? {}).every(k => LANE_ONLY.includes(k))
 
 // What a retry starts from: a worktree or a workspace this launch made already is used, not
@@ -101,6 +113,7 @@ const view = (l: Launch): LaunchView => ({
   profile: l.profile,
   parent: l.parent,
   agent: l.agent,
+  model: l.model,
 })
 
 /** Whether `pi` is a command on the board's PATH (a .ps1 or .cmd on Windows too). */
@@ -147,6 +160,9 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       return { ok: false, field: 'launcher', error: t('archive.err.cannotResume') }
     if (fork && launcher.kind === 'herdr' && herdrCannotResume(deps.cfg.launch ?? {}, r.launch.profileArgs))
       return { ok: false, field: 'launcher', error: t('fork.err.launcher') }
+    // A model it cannot pass on is refused, not left out: the session would run on another one.
+    if (r.launch.model && !launcher.takesModel)
+      return { ok: false, field: 'model', error: t('launch.err.modelLauncher') }
     // A resumed session keeps its conversation: no first message goes into it. A fork starts with
     // a copy of its source's in the source's folder: no worktree.
     const request = resume ? { ...r.launch, message: '' } : fork ? { ...r.launch, worktree: null } : r.launch
@@ -235,7 +251,7 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       // in a moment, so only other agents get a card by their pane.
       if (l.carded !== it.key && (it.session || it.agent !== 'claude')) {
         try {
-          writeCard(it.key, { category: l.category, profileWant: l.profile })
+          writeCard(it.key, { category: l.category, profileWant: l.profile, ...(l.model && { modelWant: l.model }) })
           // pi's card is under its file: the one written under the board's id before pi was up goes.
           if (isPiItem(it) && l.carded && laneOnly(l.carded)) removeCard(l.carded)
           l.carded = it.key
@@ -307,8 +323,9 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
     }
     const cfg = deps.cfg
     const agents = launchAgents(cfg.launch, piOnPath)
+    const launcher = launcherFor(cfg.launch)
     return {
-      launcher: launcherFor(cfg.launch).describe(),
+      launcher: launcher.describe(),
       agents,
       agent: defaultAgent(cfg.launch, () => agents),
       workspaces,
@@ -317,6 +334,7 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       // Of the profiles the owner shows: a hidden one's folders are not offered.
       recent: await deps.homes.recentFolders(shownProfiles(deps.profiles().list).map(p => p.dir)),
       linkedWorkspaces: cfg.launch?.linkedWorkspaces === true,
+      takesModel: launcher.takesModel,
       error,
     }
   }

@@ -49,7 +49,15 @@ test('markdown: blocks and inline markup, nothing executable gets through', () =
   assert.match(html, /<b>Done<\/b>, see <code>x<\/code>\./)
   assert.match(
     html,
-    /<table><thead><tr><th>a<\/th><th>b<\/th><\/tr><\/thead><tbody><tr><td>1<\/td><td>2<\/td><\/tr><\/tbody><\/table>/,
+    /<table><thead><tr><th class="whole">a<\/th><th class="whole">b<\/th><\/tr><\/thead><tbody><tr><td class="whole">1<\/td><td class="whole">2<\/td><\/tr><\/tbody><\/table>/,
+  )
+  // A short cell, or one of one word, is whole (a phone keeps it on one line, #417); a longer one of
+  // words is not.
+  assert.match(
+    markdown(
+      '| Note | Day | Path |\n|---|--:|---|\n| a call with anna about the notes | 2026-11-12 | docs/a-rather-long-name-of-a-file.md |\n| two words | | |',
+    ),
+    /<td>a call with anna about the notes<\/td><td class="whole" style="text-align:right">2026-11-12<\/td><td class="whole">docs\/a-rather-long-name-of-a-file\.md<\/td><\/tr><tr><td class="whole">two words<\/td>/,
   )
   assert.match(html, /<ul><li>one<ul><li>two<\/li><\/ul><\/li><\/ul>/)
   assert.match(html, /<pre><code>&lt;b&gt;x&lt;\/b&gt;<\/code><\/pre>/)
@@ -116,9 +124,11 @@ const CORPUS = [
 
 test('the ported renderer writes what the old one wrote, for chat and documents alike', async () => {
   const old = await oldRenderer()
+  // A table's cell of one word is marked whole, for a phone (#417): the old renderer has no mark.
+  const unmarked = (html: string) => html.replaceAll(' class="whole"', '')
   for (const src of CORPUS) {
-    assert.equal(markdown(src), old.markdown(src), JSON.stringify(src))
-    assert.equal(markdown(src, { soft: true }), old.markdown(src, { soft: true }), JSON.stringify(src))
+    assert.equal(unmarked(markdown(src)), old.markdown(src), JSON.stringify(src))
+    assert.equal(unmarked(markdown(src, { soft: true })), old.markdown(src, { soft: true }), JSON.stringify(src))
     for (const line of src.split(/\r?\n/)) {
       assert.equal(inline(line), old.inline(line), JSON.stringify(line))
       assert.equal(looksLikePath(line), old.looksLikePath(line), JSON.stringify(line))

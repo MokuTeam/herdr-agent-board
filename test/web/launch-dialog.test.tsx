@@ -1132,3 +1132,152 @@ const OPTIONS_COMMAND = {
   recent: [],
   error: '',
 }
+
+// ---------------------------------------------------------------- the model (#380)
+
+const offerModel =
+  (agents: unknown[] = [], standard = 'claude'): Step =>
+  async side => {
+    side.server.options = { ...OPTIONS, agents, agent: standard, takesModel: true }
+  }
+const MODEL_ROW = '<label class="model-row row">'
+
+describe('the model', () => {
+  test('a launcher that takes none: no Model row, nothing sent, as before', async () => {
+    const shots = await react(
+      [
+        offer([CLAUDE_CODE]),
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ],
+      board,
+    )
+    expect(shots.at(-2)).not.toContain(MODEL_ROW)
+    expect(startBodyOf(shots.at(-1))).not.toContain('"model"')
+  })
+
+  test('one that takes it: the row, empty for the profile’s default with Claude’s aliases; a model typed goes in the body, trimmed', async () => {
+    const shots = await react(
+      [
+        offerModel(),
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        key('Enter', { ctrlKey: true }),
+        settle,
+        ...openAndSettle({ category: 'web' }, 'lane-new'),
+        type('model', ' haiku '),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ],
+      board,
+    )
+    // Opened and settled (openAndSettle is four steps): the row, its suggestions, nothing typed.
+    const shown = shots[4] ?? ''
+    expect(shown).toContain(MODEL_ROW)
+    expect(shown).toContain('list="launch-models"')
+    expect(shown).toContain('placeholder="Profile default"')
+    expect(shown).toContain('<datalist id="launch-models">')
+    const sent = sentBodies(shots.at(-1))
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).not.toContain('"model"')
+    expect(sent[1]).toEndWith(',"model":"haiku"}')
+  })
+
+  test('pi picked: no Claude aliases, the model goes with pi', async () => {
+    const shots = await react(
+      [
+        offerModel([CLAUDE_CODE, PI], 'pi'),
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        type('model', 'claude-bridge/claude-haiku-5-5'),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ],
+      board,
+    )
+    expect(shots[4]).toContain(MODEL_ROW)
+    expect(shots[4]).toContain('<datalist id="launch-models"></datalist>')
+    expect(startBodyOf(shots.at(-1))).toEndWith(',"agent":"pi","model":"claude-bridge/claude-haiku-5-5"}')
+  })
+
+  test('another agent picked: the model typed for the one before goes, the same agent keeps it', async () => {
+    const shots = await react(
+      [
+        offerModel([CLAUDE_CODE, PI], 'pi'),
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        type('model', 'claude-bridge/claude-haiku-5-5'),
+        click(inWindow('[data-agent="pi"]')),
+        click(inWindow('[data-agent="claude"]')),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ],
+      board,
+    )
+    expect(startBodyOf(shots.at(-1))).toEndWith(',"agent":"claude"}')
+    const kept = await react(
+      [
+        offerModel([CLAUDE_CODE, PI], 'pi'),
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        type('model', 'claude-bridge/claude-haiku-5-5'),
+        click(inWindow('[data-agent="pi"]')),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ],
+      board,
+    )
+    expect(startBodyOf(kept.at(-1))).toEndWith(',"agent":"pi","model":"claude-bridge/claude-haiku-5-5"}')
+  })
+
+  test('refused about the model: its note under the field and the focus; typing clears it', async () => {
+    const refuse: Step = async side => {
+      side.server.start = {
+        status: 400,
+        body: {
+          ok: false,
+          field: 'model',
+          error: 'Not a model name: an alias such as opus or sonnet, or a full name, one word',
+        },
+      }
+    }
+    const shots = await react(
+      [
+        offerModel(),
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        type('model', 'opus5'),
+        refuse,
+        key('Enter', { ctrlKey: true }),
+        type('model', 'opus'),
+      ],
+      board,
+    )
+    expect(shots[7]).toContain('data-for="model">Not a model name')
+    expect(focusLine(shots[7])).toBe('focus: input[name=model].row-value')
+    expect(shots[8]).toContain('<p class="field-note" data-for="model" hidden="">')
+  })
+
+  test('a failed launch started again keeps its model; a draft keeps the one typed in it', async () => {
+    const shots = await react(
+      [
+        offerModel(),
+        ...openAndSettle({ retry: { ...FAILED, model: 'haiku' } }, 'card'),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ],
+      () => board({ launches: [FAILED] }),
+    )
+    expect(startBodyOf(shots.at(-1))).toEndWith(',"model":"haiku"}')
+    const drafted = await react(
+      [
+        offerModel(),
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        type('model', 'sonnet'),
+        key('Escape'),
+        settle,
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ],
+      board,
+    )
+    expect(startBodyOf(drafted.at(-1))).toEndWith(',"model":"sonnet"}')
+  })
+})

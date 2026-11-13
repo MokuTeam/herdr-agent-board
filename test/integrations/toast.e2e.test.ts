@@ -9,7 +9,7 @@ import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 // The notification script as a whole is only parsed here, never run: it registers a URL protocol
 // and shows notifications, which belong to the owner's computer (T30). Only a click's way to the
 // web board runs, cut off before herdr (below).
-const script = boardFiles(root).toast
+const script = boardFiles(root, 'win32').toast
 const windows = process.platform === 'win32'
 const powershell = join(
   process.env.SystemRoot ?? 'C:\\Windows',
@@ -356,3 +356,174 @@ test.skipIf(!windows)(
   },
   30_000,
 )
+
+test('toast.ps1: a calendar reminder’s link takes an act and an id only, goes to this copy’s web-open.ts, and comes before the pane rule', () => {
+  const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
+  const rule = /-match '(\^claude-pane:cal\/[^']+)'/.exec(text)?.[1]
+  assert.ok(rule)
+  const re = new RegExp(rule)
+  for (const ok of [
+    'claude-pane:cal/open/AbCdEfGhIjKlMn_-',
+    'claude-pane:cal/snooze/0123456789abcdef/',
+    'claude-pane:cal/start/________________',
+  ])
+    assert.match(ok, re)
+  for (const bad of [
+    'claude-pane:cal/delete/AbCdEfGhIjKlMn_-',
+    'claude-pane:cal/open/short',
+    'claude-pane:cal/open/AbCdEfGhIjKlMn_-x',
+    'claude-pane:cal/open/AbCdEfGhIjKlMn_;',
+    'claude-pane:cal/open/AbCdEfGhIjKlMn_-&calc',
+    'claude-pane:wP:p3G',
+  ])
+    assert.doesNotMatch(bad, re)
+  const open = text.indexOf('if ($Action -eq "open") {')
+  const cal = text.indexOf(rule)
+  const pane = text.indexOf("-notmatch '^claude-pane:([A-Za-z0-9]+:p[A-Za-z0-9]+)/?$'")
+  assert.ok(open < cal && cal < pane, 'inside the click, before the pane rule')
+  const branch = text.slice(cal, pane)
+  assert.ok(branch.includes('& $bun $boardOpen --reminder $act $id'))
+  assert.ok(branch.includes('exit 0'))
+  // a pane's click reads as it did: the cal rule never takes one
+  assert.doesNotMatch('claude-pane:wP:p3G', re)
+  // a link that is neither is turned away before bun is looked for
+  const first = text.indexOf('$bun = Find-Bun', pane)
+  assert.ok(pane < first && text.slice(open, cal).indexOf('Find-Bun') < 0)
+})
+
+test('toast.ps1: reminder-clear takes its id from stdin, of the reminders’ form only', () => {
+  const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
+  const at = text.indexOf('if ($Action -eq "reminder-clear") {')
+  const block = text.slice(at, text.indexOf('\n}\n', at))
+  assert.ok(block.includes('$id = [string](Read-Stdin | ConvertFrom-Json).id'))
+  assert.ok(block.indexOf('if ($id -notmatch $ReminderId) { exit 0 }') < block.indexOf('History.Remove('))
+  assert.ok(block.includes('History.Remove($id, "calendar", $BoardAppId)'))
+  assert.ok(!block.includes('$Uri'))
+})
+
+test('toast.ps1: the reminder itself under the board’s own app id, buttons only of its own forms, after a click’s way', () => {
+  const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
+  const show = text.slice(text.indexOf('function Show-Reminder'), text.indexOf('function ConvertTo-PlainText'))
+  assert.ok(show.includes('scenario="reminder"'))
+  assert.ok(show.includes('CreateToastNotifier($BoardAppId)'))
+  assert.ok(show.includes('if ([string]$R.id -notmatch $ReminderId) { return }'))
+  assert.ok(show.includes(String.raw`[string]$R.join -match '^https?://\S+$'`))
+  for (const arg of [
+    'claude-pane:cal/snooze/$($R.id)',
+    'claude-pane:cal/start/$($R.id)',
+    'claude-pane:cal/open/$($R.id)',
+  ])
+    assert.ok(show.includes(arg), arg)
+  assert.ok(text.includes('$BoardAppId = "Herdr.AgentBoard"'))
+  assert.ok(text.includes("$ReminderId = '^[A-Za-z0-9_-]{16}$'"))
+  // the board's actions sit after the click's way and before the hook's
+  const click = text.indexOf('if ($Action -eq "open") {')
+  const reminder = text.indexOf('if ($Action -eq "reminder") {')
+  const clear = text.indexOf('if ($Action -eq "reminder-clear") {')
+  const hook = text.indexOf('if ($env:HERDR_ENV -ne "1") { exit 0 }')
+  assert.ok(click < reminder && reminder < clear && clear < hook)
+})
+
+// The reminder's toast built as the script builds it, up to the notifier: Show-Reminder with the
+// registry's part stood in for and Show() swapped for printing the XML, so nothing reaches the
+// registry or the screen. WinRT's XmlDocument loads it, as Show would.
+test.skipIf(!windows)(
+  'toast.ps1: a reminder’s toast loads as XML, its words escaped, Join the link itself, At start only when asked',
+  async () => {
+    const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
+    const fn = text.slice(text.indexOf('function Show-Reminder'), text.indexOf('function ConvertTo-PlainText'))
+    const show = '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($BoardAppId).Show($toast)'
+    assert.ok(fn.includes(show))
+    const cut = fn.replace(show, '[Console]::Out.Write($doc.GetXml())')
+    const box = await sandbox()
+    const file = join(box.dir, 'reminder.ps1')
+    writeFileSync(
+      file,
+      [
+        "$ReminderId = '^[A-Za-z0-9_-]{16}$'",
+        'function Register-Handlers {}',
+        'function Register-BoardApp {}',
+        cut,
+        'Show-Reminder ([Console]::In.ReadToEnd() | ConvertFrom-Json)',
+      ].join('\n'),
+    )
+    const run = (input: unknown) =>
+      Bun.spawnSync([powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file], {
+        stdin: Buffer.from(JSON.stringify(input)),
+      })
+    const base = {
+      id: 'AbCdEfGhIjKlMn_-',
+      title: 'Q&A <with> "everyone" it\'s',
+      body: 'in 10 min',
+      whose: 'Work',
+      expires: Date.now() + 600_000,
+      labels: { join: 'Join', open: 'Open', snooze: 'Snooze 5 min', start: 'At start' },
+    }
+    const joined = run({ ...base, join: 'https://meet.example.com/a?b=1&c=2' })
+    const xml = joined.stdout.toString()
+    assert.equal(joined.exitCode, 0, joined.stderr.toString())
+    assert.ok(xml.includes('scenario="reminder"'))
+    assert.ok(xml.includes('Q&amp;A &lt;with&gt;'))
+    assert.ok(xml.includes('arguments="https://meet.example.com/a?b=1&amp;c=2"'))
+    assert.ok(xml.includes('arguments="claude-pane:cal/snooze/AbCdEfGhIjKlMn_-"'))
+    assert.ok(xml.includes('arguments="claude-pane:cal/start/AbCdEfGhIjKlMn_-"'))
+    assert.ok(xml.includes('launch="claude-pane:cal/open/AbCdEfGhIjKlMn_-"'))
+    // no link: Open first; no At start once it is near
+    const plain = run({ ...base, labels: { join: 'Join', open: 'Open', snooze: 'Snooze 5 min' } }).stdout.toString()
+    assert.ok(plain.includes('content="Open" activationType="protocol" arguments="claude-pane:cal/open/'))
+    assert.ok(!plain.includes('cal/start/'))
+    // an id not of its form, or a link that is not one, shows nothing of it
+    assert.equal(run({ ...base, id: 'x;calc' }).stdout.toString(), '')
+    assert.ok(
+      !run({ ...base, join: 'javascript:alert(1)' })
+        .stdout.toString()
+        .includes('javascript:'),
+    )
+  },
+  60_000,
+)
+
+test('toast.ps1: a team message’s link takes a thread key only, goes to this copy’s web-open.ts --team, and comes before the pane rule (#355)', () => {
+  const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
+  // Case-sensitive (-cmatch) and to the very end (\z: `$` would let a newline through).
+  const rule = /-cmatch '(\^claude-pane:team\/[^']+)'/.exec(text)?.[1] ?? ''
+  assert.ok(rule.endsWith(String.raw`\z`))
+  const re = new RegExp(rule.replace(/\\z$/, '$'))
+  const peer = 'Ab-_'.repeat(10).concat('xyz')
+  for (const ok of [
+    `claude-pane:team/${peer}/general`,
+    `claude-pane:team/${peer}/general/`,
+    'claude-pane:team/team/general',
+    'claude-pane:team/team/0123abcd-4567-89ab-cdef-0123456789ab',
+  ])
+    assert.match(ok, re)
+  for (const bad of [
+    `claude-pane:team/${peer}`,
+    `claude-pane:team/${peer.slice(1)}/general`,
+    `claude-pane:team/${peer}/general&calc`,
+    `claude-pane:team/${peer}/topic`,
+    'claude-pane:team/team/0123ABCD-4567-89ab-cdef-0123456789ab',
+    'claude-pane:team/../general',
+    'claude-pane:wP:p3G',
+  ])
+    assert.doesNotMatch(bad, re)
+  const open = text.indexOf('if ($Action -eq "open") {')
+  const team = text.indexOf(rule)
+  const pane = text.indexOf("-notmatch '^claude-pane:([A-Za-z0-9]+:p[A-Za-z0-9]+)/?$'")
+  assert.ok(open < team && team < pane, 'inside the click, before the pane rule')
+  const branch = text.slice(team, pane)
+  assert.ok(branch.includes('& $bun $boardOpen --team $thread'))
+  assert.ok(branch.includes('exit 0'))
+})
+
+test('toast.ps1: a team message under the board’s own app id, its click the thread’s link, its words escaped (#355)', () => {
+  const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
+  const at = text.indexOf('function Show-TeamMessage($M) {')
+  const fn = text.slice(at, text.indexOf('\n}\n', at))
+  assert.ok(fn.indexOf('-cnotmatch $TeamThread') < fn.indexOf('Register-Handlers'), 'checked before anything runs')
+  assert.ok(fn.includes('$open = "claude-pane:team/$($M.thread)"'))
+  for (const field of ['$M.title', '$M.body', '$M.label']) assert.ok(fn.includes(`$(& $esc ${field})`), field)
+  assert.ok(fn.includes('CreateToastNotifier($BoardAppId).Show($toast)'))
+  const action = text.indexOf('if ($Action -eq "team") {')
+  assert.ok(action > 0 && text.slice(action, action + 200).includes('Show-TeamMessage (Read-Stdin | ConvertFrom-Json)'))
+})

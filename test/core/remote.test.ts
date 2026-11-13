@@ -4,7 +4,9 @@ import {
   bearerOf,
   deskSteps,
   desktopOnly,
+  isOwnerLogin,
   localOnly,
+  ownerTeam,
   remoteConfig,
   STATUS_RETRY_MS,
   statusVerdict,
@@ -77,6 +79,9 @@ test("the remote mode's, Remote access's, wake's, the backup's and Settings → 
     '/api/time-settings',
     // the edge log (#280): who worked with whom, for an audit on this computer
     '/api/links/log',
+    // which process the board is and its install folder (#356)
+    '/api/process',
+    '/api/process/',
   ])
     expect(localOnly(path)).toBe(true)
   for (const path of [
@@ -89,9 +94,17 @@ test("the remote mode's, Remote access's, wake's, the backup's and Settings → 
     // the Time panel's entries go through the remote page and a paired phone too
     '/api/time',
     '/api/links/logs',
+    '/api/processes',
   ])
     expect(localOnly(path)).toBe(false)
   expect(localOnly('/api/login/password')).toBe(false)
+})
+
+test("the peer network's routes are for the board on this computer only, /api/peers is not", () => {
+  for (const path of ['/api/team', '/api/team/', '/api/team/x', '/api/team/thread/abc', '/api/team/send'])
+    expect(localOnly(path)).toBe(true)
+  for (const path of ['/api/peers', '/api/teams', '/api/teamwork', '/api/session/s1/team', '/api/teamx/y'])
+    expect(localOnly(path)).toBe(false)
 })
 
 test('the token comes as Authorization: Bearer', () => {
@@ -136,4 +149,45 @@ test('marking a desk says how to attach herdr from it: user, host, ssh config, h
   expect(lines).toContain('HostName vps.tail1.ts.net  User claude')
   expect(lines).toContain('herdr --remote board')
   expect(deskSteps('claude', null).join('\n')).toContain('ssh claude@<this computer>')
+})
+
+test("the owner's own logins may read and write the team away from the computer, not what changes who may act (#355)", () => {
+  for (const path of [
+    '/api/team',
+    '/api/team/thread/x',
+    '/api/team/threads',
+    '/api/team/threads/team/general',
+    '/api/team/threads/team/general/mute',
+    '/api/team/threads/team/general/unmute',
+    '/api/team/send',
+    '/api/team/draft/d1/send',
+    '/api/team/draft/d1/discard',
+    '/api/team/read',
+    '/api/team/unread',
+  ])
+    expect([path, ownerTeam(path)]).toEqual([path, true])
+  for (const path of [
+    '/api/team/',
+    // an agent's post names a session here as the thread's handler: as assign, the computer's only
+    '/api/team/post',
+    // widening what agents may do, or who reads a channel: the computer's only (#355)
+    '/api/team/welcome',
+    '/api/team/threads/team/x/members',
+    '/api/team/trust',
+    '/api/team/agents',
+    '/api/team/listen',
+    '/api/team/draft',
+    '/api/team/focus',
+    '/api/team/threads/team/general/assign',
+    '/api/team/threads/team/general/release',
+    '/api/team/thread/x/y',
+    '/api/%74eam',
+    '/api/teams',
+    '/api/remote',
+  ])
+    expect([path, ownerTeam(path)]).toEqual([path, false])
+  expect(isOwnerLogin('Me@Example.com', 'me@example.com')).toBe(true)
+  expect(isOwnerLogin('friend@example.com', 'me@example.com')).toBe(false)
+  expect(isOwnerLogin(null, 'me@example.com')).toBe(false)
+  expect(isOwnerLogin('me@example.com', null)).toBe(false)
 })

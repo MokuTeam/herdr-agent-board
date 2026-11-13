@@ -1,6 +1,6 @@
 // Checking that the board is set up on this computer: what the install action writes (the board
 // and spawn-agent commands on PATH, the Claude Code hooks, the status line, desktop notifications
-// on Windows; core/install-plan.ts; the agents' skill and herdr's own Claude hook, below) and what
+// on Windows and macOS; core/install-plan.ts; the agents' skill and herdr's own Claude hook, below) and what
 // `board doctor`, the install action and the web board check (those, herdr's key for the board,
 // sleep and wake, how new sessions start).
 //
@@ -35,19 +35,28 @@ export interface BoardFiles {
   wakeHook: string
   /** The agents' skill (skills/herdr-agents/SKILL.md), which install copies into each shown profile. */
   skill: string
+  /** The Team skill (skills/agent-board-team/SKILL.md, #369), which install copies beside it. */
+  teamSkill: string
+  /** The threads skill (skills/agent-board-threads/SKILL.md, #379), which install copies while threads are on. */
+  threadsSkill: string
 }
 
-/** The files of the copy of the board at `root`. */
-export function boardFiles(root: string): BoardFiles {
+/**
+ * The files of the copy of the board at `root`. The notification script is Windows' PowerShell
+ * one or macOS' entrypoint (toast.ts), as the platform shows notifications.
+ */
+export function boardFiles(root: string, platform: NodeJS.Platform = process.platform): BoardFiles {
   const entrypoint = (name: string): string => join(root, 'src', 'entrypoints', name)
   return {
     cli: entrypoint('cli.ts'),
     spawn: entrypoint('spawn-agent.ts'),
     hook: entrypoint('hook.ts'),
     statusline: entrypoint('statusline.ts'),
-    toast: join(root, 'src', 'integrations', 'toast.ps1'),
+    toast: platform === 'darwin' ? entrypoint('toast.ts') : join(root, 'src', 'integrations', 'toast.ps1'),
     wakeHook: entrypoint('wake-hook.ts'),
     skill: join(root, 'skills', SKILL, 'SKILL.md'),
+    teamSkill: join(root, 'skills', TEAM_SKILL, 'SKILL.md'),
+    threadsSkill: join(root, 'skills', THREADS_SKILL, 'SKILL.md'),
   }
 }
 
@@ -57,10 +66,16 @@ export function boardFiles(root: string): BoardFiles {
 // Code's user skills, in every shown profile's folder (~/.claude/skills with one); the marker in
 // it tells a copy of ours from someone else's skill of that name.
 export const SKILL = 'herdr-agents'
+// How sessions use Team between boards (skills/agent-board-team, #369): install copies it beside
+// the agents' skill, with the same marker; `board doctor` checks the agents' skill only.
+export const TEAM_SKILL = 'agent-board-team'
+// How sessions work by threads (skills/agent-board-threads, #379): install copies it beside the
+// others only while config.json turns threads on, so a board without them installs what it did.
+export const THREADS_SKILL = 'agent-board-threads'
 const SKILL_MARK = 'agent-board: installed by'
 
-/** The skill's file in the Claude profile folder `dir` (~/.claude: ~/.claude/skills/herdr-agents/SKILL.md). */
-export const skillFile = (dir: string): string => join(dir, 'skills', SKILL, 'SKILL.md')
+/** A skill's file in the Claude profile folder `dir` (~/.claude: ~/.claude/skills/herdr-agents/SKILL.md). */
+export const skillFile = (dir: string, name: string = SKILL): string => join(dir, 'skills', name, 'SKILL.md')
 
 export type SkillAction = 'write' | 'same' | 'foreign'
 
@@ -226,6 +241,12 @@ export interface SetupFacts {
   mokupilot?: MokupilotLauncher | null
   /** Where a call starts (core/mokupilot-mode.ts mokupilotMode); none: `auto`. */
   mokupilotMode?: MokupilotMode
+  /**
+   * macOS: whether the app that shows the notifications is built and current with its source, and
+   * why its last build failed (adapters/toast-app.ts toastAppState). None: not looked at (any other
+   * system).
+   */
+  toastApp?: { built: boolean; failed?: string } | undefined
 }
 
 export type SetupLevel = 'ok' | 'error' | 'warn' | 'off' | 'na'
@@ -265,6 +286,7 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
   }
   const f = facts.files
   const win = facts.platform === 'win32'
+  const mac = facts.platform === 'darwin'
   const both = (...parts: string[]): string => parts.filter(Boolean).join(' ')
 
   const major = Number(String(facts.node ?? '').split('.')[0])
@@ -656,7 +678,7 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
   }
 
   // Desktop notifications with the agent's words. Optional too, until they are on.
-  if (!win) {
+  if (!win && !mac) {
     add('toast', 'na', t('setup.toast.na'), t('setup.toast.naDetail'))
   } else {
     const per = TOAST_EVENTS.map(([event]) => commandsOf(facts.settings, event).filter(c => ours.toast(c.command)))
@@ -667,7 +689,15 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
     )?.command
     if (per.every(list => !list.length)) {
       if (theirs) add('toast', 'ok', t('setup.toast.own'), theirs)
-      else add('toast', 'off', t('setup.toast.off'), t('setup.toast.offDetail'), t('setup.toast.offFix'), NOTIFICATIONS)
+      else
+        add(
+          'toast',
+          'off',
+          t('setup.toast.off'),
+          t(mac ? 'setup.toast.offDetailMac' : 'setup.toast.offDetail'),
+          t('setup.toast.offFix'),
+          NOTIFICATIONS,
+        )
     } else if (theirs)
       add(
         'toast',
@@ -678,6 +708,17 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
       )
     else if (!here)
       add('toast', 'warn', t('setup.toast.stale'), per.flat()[0]?.command ?? '', t('setup.run'), NOTIFICATIONS)
+    // On macOS the hooks show the board's own app, which a notification builds when it is not
+    // there; once that build fails, each notification is herdr's until the app is built again.
+    else if (mac && facts.toastApp?.failed !== undefined && !facts.toastApp.built)
+      add(
+        'toast',
+        'warn',
+        t('setup.toast.notBuilt'),
+        t('setup.toast.notBuiltDetail', { reason: facts.toastApp.failed }),
+        t('setup.toast.notBuiltFix'),
+        NOTIFICATIONS,
+      )
     else if (delivery !== 'off')
       add(
         'toast',

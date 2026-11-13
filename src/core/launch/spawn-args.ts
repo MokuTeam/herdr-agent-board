@@ -3,10 +3,19 @@
 // text typed into a prompt is still on screen. The board's own launcher
 // (services/launch/launcher.ts) uses the same rules.
 import { t } from '../lang.ts'
+import { MODEL_MAX, readModel } from './model.ts'
 import { checkName } from './names.ts'
 
 export const USAGE =
-  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>] [--pane <pane id>] [--profile <id>] [--agent claude|pi] [--trust]'
+  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>] [--pane <pane id>] [--profile <id>] [--model <id or alias>] [--agent claude|pi] [--trust]'
+
+/** `spawn-agent --help`: the usage, then what is easy to get wrong. */
+export const HELP = `${USAGE}
+
+--model starts that one session on a model (an alias such as opus, sonnet or haiku, or a full name),
+passed on the agent's command line, so the profile's default stays as it is; pi takes it in its own
+form (provider/id). Do not type /model into the new session for that: Claude saves it as the
+default of every later session in the profile.`
 
 /** What spawn-agent was asked to start. */
 export interface SpawnOptions {
@@ -28,6 +37,11 @@ export interface SpawnOptions {
   pane?: string
   /** The Claude profile to start in, not the one of the agent that runs spawn-agent. */
   profile?: string
+  /**
+   * The model to start on (core/launch/model.ts): `--model <id>` on the agent's command line, so
+   * the profile's default stays as it is.
+   */
+  model?: string
   /** The board's start: CLAUDE_CONFIG_DIR for the tab, a folder the board checked. */
   configDir?: string
   /** The board's start: the tab's env as herdr makes it. */
@@ -61,6 +75,7 @@ const OPTIONS: Record<string, Key> = {
   fork: 'fork',
   pane: 'pane',
   profile: 'profile',
+  model: 'model',
   configdir: 'configDir',
   keepenv: 'keepEnv',
   agent: 'agent',
@@ -131,6 +146,13 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     throw new Error(`--fork must be a session id (a UUID), not "${out.fork}"`)
   if (out.fork !== undefined && out.resume !== undefined) throw new Error('give --resume or --fork, not both')
   const { label, briefFile, brief, workspace, sessionId, resume, fork, pane, profile, configDir } = out
+  // A model as Claude or pi takes it; blank is none, the profile's default.
+  const read = readModel(out.model)
+  if (!read.ok && read.why === 'long') throw new Error(`--model is longer than ${MODEL_MAX} characters`)
+  if (!read.ok)
+    throw new Error(
+      `--model must be a model name or alias (opus, sonnet, claude-opus-5-5, provider/id for pi), not "${out.model}"`,
+    )
   if ([profile !== undefined, configDir !== undefined, keepEnv].filter(Boolean).length > 1)
     throw new Error('give one of --profile, --config-dir and --keep-env')
   // Claude is what it starts anyway; pi only as a new session (its --resume and --fork are not Claude's).
@@ -153,6 +175,7 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     ...(fork !== undefined && { fork }),
     ...(pane !== undefined && { pane }),
     ...(profile !== undefined && { profile }),
+    ...(read.model !== null && { model: read.model }),
     ...(configDir !== undefined && { configDir }),
     ...(keepEnv && { keepEnv }),
     ...(pi && { agent: 'pi' as const }),
