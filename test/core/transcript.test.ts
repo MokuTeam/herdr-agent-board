@@ -1,6 +1,6 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { DEFAULT_PROMPT_FILTERS, telegramEnvelope } from '../../src/core/prompt-filters.ts'
+import { channelEnvelope, DEFAULT_PROMPT_FILTERS, telegramEnvelope } from '../../src/core/prompt-filters.ts'
 import {
   type ConversationTurn,
   cleanPrompt,
@@ -26,7 +26,7 @@ test('prompts are cleaned for one line', () => {
 test('telegramEnvelope strips a leading envelope only', () => {
   assert.equal(telegramEnvelope('[Telegram message_id=5 ts=1] hi'), 'hi')
   assert.equal(telegramEnvelope('hi [telegram x] there'), 'hi [telegram x] there')
-  assert.deepEqual(DEFAULT_PROMPT_FILTERS, [telegramEnvelope])
+  assert.deepEqual(DEFAULT_PROMPT_FILTERS, [telegramEnvelope, channelEnvelope])
 })
 
 test('without filters the envelope stays; userText takes the same seam', () => {

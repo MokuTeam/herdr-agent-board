@@ -1,6 +1,7 @@
 // Reading what Claude Code wrote into a transcript (JSONL lines): the end of it for a card, the
 // last turns for the detail view. Pure: the file reading lives with the adapter.
 
+import { attachedText, type ChannelFacts, type ChannelMessage, channelMessage } from './channel-message.ts'
 import { type FormQuestion, questionsOf } from './dialogs/question-form.ts'
 import { t } from './lang.ts'
 import { boardNotice, compactNotice, isNotice, type Notice, taskNotice } from './notices.ts'
@@ -76,6 +77,13 @@ export function userText(content: unknown, filters: readonly PromptFilter[] = DE
     // Pasted text comes between <pasted_content id="…"> and </pasted_content id="…">: the text only.
     .replace(/<pasted_content id="[^"]*">\n?|\n?<\/pasted_content id="[^"]*">/g, '')
   return filters.reduce((s, filter) => filter(s), stripped).trim()
+}
+
+/** The owner's message a line or a queued command with origin kind 'channel' carries; null for any other. */
+function channelOf(origin: unknown, content: unknown): ChannelMessage | null {
+  const o = rec(origin)
+  if (o?.kind !== 'channel') return null
+  return channelMessage(userText(content, []), str(o.server))
 }
 
 /**
@@ -230,6 +238,7 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
   const info: TranscriptInfo = { title: '', prompt: '', lastText: '', question: '', replied: false, tool: null }
   const results = new Set<string>() // tool_use ids that already have a result (seen later in the file)
   let compacted = false // a compaction came after every request still to be read: they say nothing of the context now
+  let typed = false // a prompt typed after the lines still to be read: a channel message there is not the last one
   let i = lines.length - 1
   for (; i >= 0 && !tailComplete(info); i--) {
     const line = lines[i]
@@ -272,6 +281,22 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
           if (block?.type === 'tool_result') results.add(str(block.tool_use_id))
         }
       }
+      // The owner's message through a channel (Telegram) is a meta line: their prompt all the same,
+      // unless they typed one after it.
+      const channel = o.isMeta ? channelOf(o.origin, content) : null
+      if (channel) {
+        if (!info.prompt && !typed) info.prompt = cleanPrompt(channel.text) || attachedText(channel, t)
+        if (!info.lastText) info.replied = true
+        continue
+      }
+      if (
+        !o.isMeta &&
+        !o.isCompactSummary &&
+        rec(o.origin)?.kind !== 'task-notification' &&
+        userText(content) &&
+        !isNotice(userText(content))
+      )
+        typed = true
       // A reminder the board typed in (services/scheduler.ts) or a background task reporting back is not the user answering.
       if (
         !info.lastText &&
@@ -330,7 +355,7 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
   return info
 }
 
-export interface UserTurn {
+export interface UserTurn extends Partial<ChannelFacts> {
   role: 'user'
   text: string
   at: number
@@ -475,6 +500,16 @@ export function parseConversation(
     if (p.pipe && p.from) pipes.set(p.pipe, p.from)
     items.push({ role: 'peer', ...p, at })
   }
+  // The owner's message through a channel (core/channel-message.ts): queued into a running turn, it
+  // comes again as a line of its own; shown once, by its id or else its text right after itself.
+  const channels = new Set<string>()
+  const owner = ({ id, text, ...facts }: ChannelMessage, at: number) => {
+    const key = id && `${facts.via}:${id}`
+    const prev = items.at(-1)
+    if (key ? channels.has(key) : prev?.role === 'user' && prev.via === facts.via && prev.text === text) return
+    if (key) channels.add(key)
+    if (text || facts.attached || facts.fileName) items.push({ role: 'user', text, at, ...facts })
+  }
   // A background task reporting back or a board reminder: a line of its own (core/notices.ts). One
   // can be queued into a running turn and then sent again as a turn of its own: shown once. A
   // task id alone is not enough, a monitor or a resumed agent reports again under the same one.
@@ -526,7 +561,7 @@ export function parseConversation(
     if (
       !o ||
       (o.isSidechain && !sidechain) ||
-      (o.isMeta && kind !== 'peer' && kind !== 'task-notification') ||
+      (o.isMeta && kind !== 'peer' && kind !== 'task-notification' && kind !== 'channel') ||
       o.isCompactSummary
     )
       continue
@@ -539,6 +574,11 @@ export function parseConversation(
       const a = rec(o.attachment)
       if (a?.type !== 'queued_command') continue
       const when = Date.parse(str(a.timestamp)) || at
+      const channel = channelOf(a.origin, a.prompt)
+      if (channel) {
+        owner(channel, when)
+        continue
+      }
       if (rec(a.origin)?.kind === 'peer') {
         const p = peerOf(a.origin, a.prompt)
         if (p) peer(p, when)
@@ -568,6 +608,11 @@ export function parseConversation(
       if (kind === 'peer') {
         const p = peerOf(o.origin, userText(content))
         if (p) peer(p, at)
+        continue
+      }
+      const channel = channelOf(o.origin, content)
+      if (channel || kind === 'channel') {
+        if (channel) owner(channel, at)
         continue
       }
       let text = userText(content)

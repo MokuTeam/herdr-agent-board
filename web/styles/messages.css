@@ -42,3 +42,7 @@
 @media (prefers-reduced-motion: reduce) {
   .send > svg, .send::after { transition: none; }
 }
+/* The owner's message through a channel (Telegram, sheet/Thread.tsx ViaMark): its name before the time, a file without text in italics. */
+.msg .when .via-mark { display: inline-flex; align-items: center; gap: 3px; }
+.msg .when .via-mark svg { width: 11px; height: 11px; }
+.msg .md.attached { font-style: italic; opacity: 0.85; }

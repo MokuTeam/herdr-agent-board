@@ -375,6 +375,13 @@ export const StopGlyph = () => (
   </Glyph>
 )
 
+/** A paper plane: a message that came through a channel (Telegram). */
+export const PlaneGlyph = () => (
+  <Glyph>
+    <path d="M17 3 3 9l5 2 2 5 7-13Z" />
+    <path d="m8 11 9-8" />
+  </Glyph>
+)
 export const PinGlyph = () => (
   <Glyph>
     <circle cx="10" cy="7" r="3.5" />

@@ -8,9 +8,10 @@
 // The helpers window draws a helper's own conversation with it too. At its foot (Waiting): the
 // user's messages Claude has not taken in yet, and the board's own on their way or not sent.
 import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { attachedText, channelLabel } from '../../../../src/core/channel-message.ts'
 import { isCall, isReminder, isTask } from '../../../../src/core/notices.ts'
 import type { QueuedPrompt } from '../../../../src/core/queue.ts'
-import type { ConversationTurn, NoticeTurn } from '../../../../src/core/transcript.ts'
+import type { ConversationTurn, NoticeTurn, UserTurn } from '../../../../src/core/transcript.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import type { OutboxEntry } from '../../models/composer-session.ts'
@@ -31,6 +32,7 @@ import {
   CrossGlyph,
   PhoneGlyph,
   PinGlyph,
+  PlaneGlyph,
   SpinGlyph,
   StopGlyph,
 } from '../icons.tsx'
@@ -139,10 +141,17 @@ function ThreadTurn({ part, item, links, helper }: TurnProps) {
     const turn = part.turn
     const pinned = turn.role === 'assistant' && links.onPin ? pinnedCount(links.todos, turn) : 0
     return (
-      <div ref={settle} className={`msg ${role}`}>
-        <MessageText text={text} cut={cut} onResize={links.onResize} />
+      <div ref={settle} className={classNames('msg', role, turn.role === 'user' && turn.via && 'via')}>
+        {text ? (
+          <MessageText text={text} cut={cut} onResize={links.onResize} />
+        ) : (
+          turn.role === 'user' && turn.via && <div className="md attached">{attachedText(turn, t)}</div>
+        )}
         <Thumbs text={text} />
-        <span className="when">{clockText(at, t)}</span>
+        <span className="when">
+          {turn.role === 'user' && turn.via && <ViaMark turn={turn} via={turn.via} />}
+          {clockText(at, t)}
+        </span>
         {turn.role === 'assistant' && links.onPin && (
           <button
             type="button"
@@ -175,6 +184,26 @@ function ThreadTurn({ part, item, links, helper }: TurnProps) {
         </div>
       ))}
     </details>
+  )
+}
+
+/**
+ * Where the owner's message came from when not from the board or the terminal (a channel such as
+ * Telegram, core/channel-message.ts): its name before the time, and "voice · transcribed" for a
+ * voice message the channel turned into text.
+ */
+function ViaMark({ turn, via }: { turn: UserTurn; via: string }) {
+  const t = useT()
+  const label = channelLabel(via)
+  const voice = turn.attached === 'voice'
+  return (
+    <span className="via-mark" data-via={via} title={t('chan.via', { via: label })}>
+      <PlaneGlyph />
+      {label}
+      {voice && ` · ${t('chan.voice')}`}
+      {voice && turn.transcribed && ` · ${t('chan.transcribed')}`}
+      {' · '}
+    </span>
   )
 }
 
