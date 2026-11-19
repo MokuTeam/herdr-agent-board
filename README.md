@@ -181,7 +181,8 @@ from SessionStart and UserPromptSubmit in Codex's `hooks.json`; remove an enclos
 only if it is then empty. Keep herdr's and other handlers. Do not restore the whole backup over
 hooks installed later. The shared `board` and `spawn-agent` commands can stay for Claude.
 
-Codex session actions follow separately under [#126](https://github.com/MokuTeam/herdr-agent-board/issues/126).
+Codex sessions now offer [Fork](#fork). Sleep, wake, restart, archive and other session actions
+follow separately under [#126](https://github.com/MokuTeam/herdr-agent-board/issues/126).
 Claude Code and pi keep their existing hooks, brief and readers.
 
 ## Web board
@@ -859,7 +860,8 @@ spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
             [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
             [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>]
             [--pane <herdr pane id>] [--profile <id>] [--model <id or alias>]
-            [--agent claude|pi] [--trust]
+            [--agent claude|pi|codex] [--trust]
+            [--effort <level>] [--approval on-request|never] [--sandbox <mode>]   (codex only)
 ```
 
 PowerShell's spelling works too: `-Name`, `-Cwd`, `-Label`, `-BriefFile`, `-Brief`, `-Workspace`,
@@ -883,6 +885,21 @@ when taken), types `/rename <Name>`, then the brief. It prints
 ```
 pane=<pane id> name=<Name> agent=<herdr name>
 ```
+
+`--agent codex` starts Codex CLI: `launch.codex` (default `codex`) typed into a new tab, for a new
+session only. It takes no `--resume`, `--fork`, `--session-id`, `--profile`, `--config-dir`,
+`--keep-env` or `--trust` (Codex picks its own session id, has no Claude profile and asks about the
+folder in its own dialog), and is refused with them. `--model` is Codex's own; `--effort <level>`
+is `-c model_reasoning_effort=<level>` and needs a `--model` whose levels Codex's `models_cache.json`
+lists; `--approval` (`on-request`, `never`) and `--sandbox` (`read-only`, `workspace-write`,
+`danger-full-access`) are `-a` and `-s`. With none of them Codex runs on the user's `config.toml`;
+`--dangerously-bypass-approvals-and-sandbox` is not offered. Codex is started with `--no-daemon`
+when it takes the option: without it the session runs in Codex's shared background server, in its
+env, and herdr never learns the session's id (no card, no hooks, no `board` for the agent). When
+`codexHome` is set in config.json (`install.ts --codex --codex-home`), the new tab gets
+`CODEX_HOME=<that folder>`, from the board's window too; `--pane` is then refused, as a pane keeps
+the env it has. Codex has no session id until its first prompt, so the card of a session started
+on a model (`modelWant`) is written once the brief went in; the output line ends with ` kind=codex`.
 
 which is how the board knows who started whom. It fails (exit code 1, the reason on stderr) when
 the folder is not there, Claude is not ready in time, or Claude waits for a dialog first (the
@@ -956,7 +973,7 @@ removed when the board starts again.
 
 ## Fork
 
-"Fork" in the sheet's row of actions (or under "⋯") and in a Claude session's card menu: a small
+"Fork" in the sheet's row of actions (or under "⋯") and in a Claude or Codex session's card menu: a small
 window grown out of the button or the card, with the fork's name (the session's with "· fork"
 after it, ready to type over) and an optional first message. Fork (Enter in the name, Ctrl+Enter
 in the message) starts a new session in a new tab of the session's workspace, in its folder (the
@@ -980,8 +997,22 @@ without arguments that pick the session (`--resume`, `--continue`, `--session-id
 its own session (or another's, with `--session`) with `board fork [--name "<Name>"] ["<note>"]`:
 the web board starts it as its Fork does, the note is its first message.
 
+A Codex fork uses `herdr agent start --kind codex` and `codex fork <id>`, independently
+of `launch.claude`, `launch.command`, `launch.agent` and Claude profiles. It needs the source's local
+rollout in the board's `CODEX_HOME` (default `~/.codex`); the new Codex uses herdr's shell environment
+and its Codex configuration. Keep those pointed at the same Codex home. The folder comes from the
+rollout header and is set when the tab is created, so folder names and messages do not travel through
+the Codex shell command. After herdr reports a distinct new id, the board writes the fork's name,
+lane and source link and sends the optional first message with `herdr agent prompt`, without waiting
+for that first turn to finish. Without a message the fork waits for input. A delayed identity leaves
+one pending launch, rather than offering Retry for a live fork; Dismiss stops waiting. A startup
+dialog waits for the user in herdr. The board does not answer it or type a Claude command into it. This needs
+herdr's Codex identity integration, but does not require installing the board's Codex brief hook.
+The board records links for Codex forks it starts; discovering forks made elsewhere is still pending.
+Fork is offered for Codex only when the board finds its command on PATH; the route checks this too.
+
 `POST /api/session/<key>/fork` with `{ name?, message? }` (the page only, like a launch), and the
-board payload's `fork`. Code: `src/services/launch/fork.ts`, `web/src/hooks/useFork.ts`,
+board payload's `fork` (Claude) and `codexFork` (Codex). Code: `src/services/launch/fork.ts`, `web/src/hooks/useFork.ts`,
 `web/src/components/fork/ForkPop.tsx`.
 
 ## When a card is under "Needs me"

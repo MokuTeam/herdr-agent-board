@@ -350,3 +350,12 @@ test('a recap older than doing leaves the card as the old board drew it (#321)',
     'o',
   )
 })
+
+test('a Codex card says its model and effort under its name (#426); a Claude card with both does not', () => {
+  const codex = item({ key: 'c', name: 'Codex', agent: 'codex', column: 'work', model: 'gpt-6.1-sol', effort: 'low' })
+  expect(bothCards({ items: [codex] }, 'c').react).toContain('<div class="card-meter">gpt-6.1-sol · low</div>')
+  const claude = item({ key: 'd', name: 'Claude', agent: 'claude', column: 'work', model: 'opus', effort: 'high' })
+  expect(bothCards({ items: [claude] }, 'd').react).not.toContain('card-meter')
+  // Without an effort (no turn yet): nothing.
+  expect(bothCards({ items: [{ ...codex, effort: null }] }, 'c').react).not.toContain('card-meter')
+})

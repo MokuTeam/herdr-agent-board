@@ -111,6 +111,8 @@ export interface LaunchSpec {
   claude?: string | string[]
   /** What it types for a start that asks for pi (core/launch/agents.ts): as `claude`; `pi` when unset. */
   pi?: string | string[]
+  /** What spawn-agent --agent codex types: as `claude`; `codex` when unset. */
+  codex?: string | string[]
   /** The agent a start that names none starts as (core/launch/agents.ts): `claude` or `pi`; Claude Code when unset. */
   default?: string
   /**

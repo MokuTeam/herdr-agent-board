@@ -152,6 +152,11 @@ function CardContent({ item, launch, folding }: { item: Item; launch: LaunchSlot
   return (
     <>
       <CardTop item={item} />
+      {item.agent === 'codex' && item.model && item.effort && (
+        <div className="card-meter">
+          {item.model} · {item.effort}
+        </div>
+      )}
       {!oneLine && <CardBody item={item} launch={launch} folding={folding} />}
       <CardActions item={item} />
     </>

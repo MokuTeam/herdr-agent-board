@@ -65,6 +65,8 @@ export interface Naming {
   title: string
   command: (name: string) => string
   done: RegExp
+  /** An agent that prints no confirmation: what its screen shows once `name` took. Asked before `done`. */
+  doneFor?: (name: string) => RegExp
 }
 
 export const CLAUDE_NAMING: Naming = { title: 'Claude', command: name => `/rename ${name}`, done: /Session renamed/i }

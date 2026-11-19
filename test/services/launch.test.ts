@@ -27,6 +27,88 @@ import { trustScreen } from '../support/trust-screen.ts'
 // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
 useLanguage('en')
 
+test('a Codex request (#426): no Claude profile asked for; an effort only with a model whose cache lists it', async () => {
+  const box = await sandbox()
+  const dir = join(box.dir, 'Codex – проект 100%')
+  mkdirSync(dir)
+  const home = join(box.dir, 'home folder')
+  const own = defaultProfileDir(home)
+  const workDir = join(home, '.claude-work')
+  mkdirSync(workDir, { recursive: true })
+  // Two Claude profiles shown: a Claude start must choose; a Codex start has none to choose.
+  const two = profileSet(
+    [...mergeProfiles([], [], home).list, { id: 'work', title: 'Work', dir: workDir, color: 'teal', hidden: false }],
+    own,
+  )
+  const codexHome = join(box.dir, 'codex home')
+  mkdirSync(codexHome)
+  writeFileSync(
+    join(codexHome, 'models_cache.json'),
+    JSON.stringify({
+      models: [{ slug: 'gpt-6.1-sol', visibility: 'list', supported_reasoning_levels: [{ effort: 'low' }] }],
+    }),
+  )
+  const was = process.env.CODEX_HOME
+  process.env.CODEX_HOME = codexHome
+  try {
+    const offered = () => [
+      { id: 'claude' as const, title: 'Claude Code' },
+      { id: 'codex' as const, title: 'Codex CLI' },
+    ]
+    const ask = (extra: Record<string, unknown>) =>
+      checkRequest(
+        { name: 'A', cwd: dir, workspace: { id: 'w2' }, agent: 'codex', profile: 'work', ...extra },
+        { profiles: two, agents: offered, typesCommand: true },
+      )
+    const plain = await ask({})
+    assert.ok(plain.ok, JSON.stringify(plain))
+    assert.deepEqual(
+      [plain.launch.agent, plain.launch.profile, plain.launch.configDir, plain.launch.profileArgs, plain.launch.model],
+      ['codex', '', null, [], null],
+    )
+    assert.equal('effort' in plain.launch, false)
+    const low = await ask({ model: 'gpt-6.1-sol', effort: 'low' })
+    assert.ok(low.ok, JSON.stringify(low))
+    assert.deepEqual([low.launch.model, low.launch.effort], ['gpt-6.1-sol', 'low'])
+    // An effort without a model, one the model does not list, or for a model the cache does not have.
+    for (const extra of [
+      { effort: 'low' },
+      { model: 'gpt-6.1-sol', effort: 'high' },
+      { model: 'gpt-7', effort: 'low' },
+    ])
+      assert.deepEqual(await ask(extra), {
+        ok: false,
+        field: 'model',
+        error: 'Choose an effort supported by this Codex model.',
+      })
+    // Claude Code: an effort is not read, and the profile is asked for as before.
+    assert.deepEqual(
+      await checkRequest(
+        { name: 'A', cwd: dir, workspace: { id: 'w2' }, agent: 'claude', effort: 'low' },
+        { profiles: two, agents: offered },
+      ),
+      { ok: false, field: 'profile', error: 'Choose a profile' },
+    )
+    // An agent the board does not offer with no profile chosen: the profile is refused first, as on main.
+    assert.deepEqual(
+      await checkRequest(
+        { name: 'A', cwd: dir, workspace: { id: 'w2' }, agent: 'gemini' },
+        { profiles: two, agents: offered },
+      ),
+      { ok: false, field: 'profile', error: 'Choose a profile' },
+    )
+    // Codex not offered (not on PATH): refused like any agent the board does not start.
+    const noCodex = await checkRequest(
+      { name: 'A', cwd: dir, workspace: { id: 'w2' }, agent: 'codex', profile: 'work' },
+      { profiles: two, agents: () => [{ id: 'claude' as const, title: 'Claude Code' }] },
+    )
+    assert.equal(noCodex.ok ? '' : noCodex.field, 'agent')
+  } finally {
+    if (was === undefined) delete process.env.CODEX_HOME
+    else process.env.CODEX_HOME = was
+  }
+})
+
 test('a launch request is checked before anything runs', async () => {
   const box = await sandbox()
   const dir = join(box.dir, 'Acme project')
@@ -1741,6 +1823,139 @@ test('the new-session window is told the agents a start may pick: pi when launch
   }
 }, 60_000)
 
+/** PATH with a `codex` in it, and a Codex home whose models_cache.json lists one model. */
+const codexOnPath = (box: Sandbox) => {
+  const dir = join(box.dir, 'bin-codex')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'codex'), '#!/bin/sh\n', { mode: 0o755 })
+  const home = join(box.dir, 'codex home')
+  mkdirSync(home, { recursive: true })
+  writeFileSync(
+    join(home, 'models_cache.json'),
+    JSON.stringify({
+      models: [
+        {
+          slug: 'gpt-6.1-sol',
+          visibility: 'list',
+          supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }],
+        },
+      ],
+    }),
+  )
+  return { PATH: dir, CODEX_HOME: home }
+}
+
+test('Codex on PATH (#426): offered with its models; a start goes through herdr’s launcher with its model and effort, no Claude profile', async () => {
+  const { box, url, post, started, launched } = await boardServer(PROFILES, codexOnPath)
+  const options = (await (await fetch(`${url}/api/launch/options`)).json()) as Record<string, unknown>
+  assert.deepEqual(options.agents, [
+    { id: 'claude', title: 'Claude Code' },
+    { id: 'codex', title: 'Codex CLI' },
+  ])
+  assert.deepEqual(options.codexModels, { 'gpt-6.1-sol': ['low', 'high'] })
+  const S = '01a1e9a1-0037-7510-b480-5ee1c3f01e5a'
+  box.state({
+    ...HERDR,
+    'agent get': { result: { agent: { agent: 'codex', agent_session: { value: S }, agent_status: 'idle' } } },
+  })
+  const dir = join(box.dir, 'Codex – проект 100%')
+  mkdirSync(dir)
+  const job = { cwd: dir, category: 'acme', workspace: { id: 'wA' }, message: '-a first message' }
+  const l = await launched(
+    await started({ ...job, name: 'Codex job', agent: 'codex', profile: 'work', model: 'gpt-6.1-sol', effort: 'high' }),
+  )
+  assert.equal(l.state, 'done', l.error)
+  assert.equal(l.agent, 'codex')
+  // The first message goes in as typed: a space before its dash, no wait for an empty input box.
+  assert.deepEqual(promptsSent(box), ['wA:p9  -a first message'])
+  const start = callOf(box, 'agent', 'start')
+  assert.deepEqual(start.slice(start.indexOf('--kind'), start.indexOf('--kind') + 2), ['--kind', 'codex'])
+  assert.deepEqual(start.slice(start.indexOf('--')), [
+    '--',
+    '--model',
+    'gpt-6.1-sol',
+    '-c',
+    'model_reasoning_effort="high"',
+  ])
+  // No Claude profile: neither its env on the tab, nor its arguments, nor a session id Codex would not take.
+  assert.equal(callOf(box, 'tab', 'create').includes('--env'), false)
+  assert.equal(start.includes('--session-id'), false)
+  // Refused before anything runs: an effort the model does not list.
+  const bad = await post('/api/launch', {
+    ...job,
+    name: 'Codex two',
+    agent: 'codex',
+    model: 'gpt-6.1-sol',
+    effort: 'max',
+  })
+  assert.equal(bad.status, 400)
+  assert.equal(((await bad.json()) as { field: string }).field, 'model')
+}, 60_000)
+
+test('a Codex from the window gets --no-daemon when its --help lists it, so the pane’s env reaches the session; Claude’s start is as it was', async () => {
+  const withHelp = (box: Sandbox) => {
+    const env = codexOnPath(box)
+    writeFileSync(join(env.PATH, 'codex'), '#!/bin/sh\necho "      --no-daemon"\n', { mode: 0o755 })
+    return env
+  }
+  const { box, started, launched } = await boardServer(PROFILES, withHelp)
+  box.state({
+    ...HERDR,
+    'agent get': {
+      result: {
+        agent: {
+          agent: 'codex',
+          agent_session: { value: '01a1e9a1-0037-7510-b480-5ee1c3f01e5c' },
+          agent_status: 'idle',
+        },
+      },
+    },
+  })
+  const dir = join(box.dir, 'Codex')
+  mkdirSync(dir)
+  const l = await launched(
+    await started({
+      cwd: dir,
+      category: 'acme',
+      workspace: { id: 'wA' },
+      name: 'Codex nd',
+      agent: 'codex',
+      model: 'gpt-6.1-sol',
+    }),
+  )
+  assert.equal(l.state, 'done', l.error)
+  const start = callOf(box, 'agent', 'start')
+  assert.deepEqual(start.slice(start.indexOf('--')), ['--', '--model', 'gpt-6.1-sol', '--no-daemon'])
+}, 60_000)
+
+test('Codex from the window with codexHome in config.json: the tab gets CODEX_HOME; a Claude start beside it does not', async () => {
+  const cfg = (box: Sandbox) => ({ ...PROFILES(box), codexHome: join(box.dir, 'herdr codex 100%') })
+  const { box, started, launched } = await boardServer(cfg, codexOnPath)
+  writeConfig(box, cfg(box))
+  const S = '01a1e9a1-0037-7510-b480-5ee1c3f01e5b'
+  box.state({
+    ...HERDR,
+    'agent get': { result: { agent: { agent: 'codex', agent_session: { value: S }, agent_status: 'idle' } } },
+  })
+  const dir = join(box.dir, 'Codex – проект')
+  mkdirSync(dir)
+  const job = { cwd: dir, category: 'acme', workspace: { id: 'wA' }, message: 'Go.' }
+  const l = await launched(await started({ ...job, name: 'Codex home', agent: 'codex' }))
+  assert.equal(l.state, 'done', l.error)
+  const tab = callOf(box, 'tab', 'create')
+  assert.deepEqual(tab.slice(-3), ['--env', `CODEX_HOME=${join(box.dir, 'herdr codex 100%')}`, '--no-focus'])
+  // Claude, on the same board: its tab as it was, whatever config.json says about Codex.
+  box.state({ ...HERDR, ...OPENED, 'pane get': PANE_READY, 'pane run': { result: null } })
+  const c = await launched(await started({ ...job, name: 'Claude home', profile: 'work' }))
+  assert.equal(c.state, 'done', c.error)
+  const claudeTab =
+    box
+      .calls()
+      .filter(a => a[0] === 'tab' && a[1] === 'create')
+      .at(-1) ?? []
+  assert.equal(claudeTab.join(' ').includes('CODEX_HOME'), false)
+}, 60_000)
+
 test('the new-session window is told the board’s default: launch.default when the board offers that agent, else Claude Code', async () => {
   const claude = { id: 'claude', title: 'Claude Code' }
   const pi = { id: 'pi', title: 'pi' }
@@ -2180,7 +2395,7 @@ test('the board’s spawn-agent starts the session on the model asked for, and i
   noEnv(box)
 }, 60_000)
 
-test('through herdr (launch.agent claude): --model before the session id; another agent than Claude or pi refuses a model before anything runs', async () => {
+test('through herdr (launch.agent claude): --model before the session id; another agent than Claude, pi or Codex refuses a model before anything runs', async () => {
   const { box, launched, started } = await boardServer(VIA_HERDR)
   const dir = join(box.dir, 'Alpha project')
   mkdirSync(dir)
@@ -2189,7 +2404,16 @@ test('through herdr (launch.agent claude): --model before the session id; anothe
   const start = box.calls().find(a => a[0] === 'agent' && a[1] === 'start') ?? []
   assert.deepEqual(start.slice(-5, -1), ['--', '--model', 'opus', '--session-id'])
   assert.equal(modelOf(box.cards, start.at(-1)), 'opus')
-  const other = await boardServer({ launch: { agent: 'codex' } })
+  // Codex takes --model too since #426: launch.agent codex starts it on the model asked for.
+  const codex = await boardServer({ launch: { agent: 'codex' } })
+  const cdir = join(codex.box.dir, 'Codex')
+  mkdirSync(cdir)
+  const c = await codex.launched(
+    await codex.started({ name: 'Codex job', cwd: cdir, workspace: { id: 'wA' }, model: 'gpt-5.5' }),
+  )
+  const cstart = codex.box.calls().find(a => a[0] === 'agent' && a[1] === 'start') ?? []
+  assert.deepEqual(cstart.slice(cstart.indexOf('--'), cstart.indexOf('--') + 3), ['--', '--model', 'gpt-5.5'], c.error)
+  const other = await boardServer({ launch: { agent: 'opencode' } })
   const odir = join(other.box.dir, 'Omega')
   mkdirSync(odir)
   const res = await other.post('/api/launch', { name: 'Omega', cwd: odir, workspace: { id: 'wA' }, model: 'opus' })
@@ -2225,18 +2449,19 @@ test('launch.command gets {model} when it takes it; one without {model} refuses 
   assert.deepEqual(await res.json(), {
     ok: false,
     error:
-      'The board starts sessions with a launcher that takes no model (launch.command without {model}, or launch.agent for another agent than Claude or pi)',
+      'The board starts sessions with a launcher that takes no model (launch.command without {model}, or launch.agent for another agent than Claude, pi or Codex)',
     field: 'model',
   })
   assert.equal(existsSync(record), false)
 }, 60_000)
 
-test('the new-session window is told whether the launcher takes a model: its own spawn-agent, Claude or pi through herdr, a launch.command with {model}', async () => {
+test('the new-session window is told whether the launcher takes a model: its own spawn-agent, Claude, pi or Codex through herdr, a launch.command with {model}', async () => {
   const cases: [string, Record<string, unknown>, boolean][] = [
     ['spawn-agent', {}, true],
     ['launch.agent claude', VIA_HERDR, true],
     ['launch.agent pi', { launch: { agent: 'pi' } }, true],
-    ['launch.agent codex', { launch: { agent: 'codex' } }, false],
+    ['launch.agent codex', { launch: { agent: 'codex' } }, true],
+    ['launch.agent opencode', { launch: { agent: 'opencode' } }, false],
     [
       'launch.command with {model}',
       { launch: { command: [process.execPath, launcher, ['--model', '{model}']] } },

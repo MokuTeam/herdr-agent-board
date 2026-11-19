@@ -4,10 +4,15 @@ import { readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { isCodexSession, parseCodexConversation, parseCodexTail } from '../core/codex.ts'
+import { modelProblem } from '../core/launch/model.ts'
 import type { TranscriptInfo } from '../core/types.ts'
-import { readTail, type SessionThread } from './claude-home.ts'
+import { cwdOf as readCwd, readTail, type SessionThread } from './claude-home.ts'
+import { readConfigFile } from './config-file.ts'
+import { isRecord } from './json-store.ts'
 
 export interface CodexHome {
+  /** The folder in the rollout header, rather than the enclosing shell's folder. */
+  cwdOf(session: string): Promise<string | null>
   transcriptInfo(session: string | null): TranscriptInfo | null
   sessionThread(session: string, limit?: number): SessionThread
 }
@@ -16,7 +21,62 @@ const DISCOVERY_MS = 1000
 const CARD_WINDOWS = [256 << 10, 2 << 20]
 const THREAD_WINDOWS = [2 << 20, 8 << 20]
 
-export function createCodexHome(root = process.env.CODEX_HOME || join(homedir(), '.codex')): CodexHome {
+const codexRoot = (): string => process.env.CODEX_HOME || join(homedir(), '.codex')
+
+/**
+ * Where rollouts are looked for: the folder Codex uses here, then the dedicated one for sessions
+ * herdr runs (config.json `codexHome`, written by install.ts --codex-home). Without that key the
+ * list is the one folder it always was.
+ */
+function codexRoots(first: string): string[] {
+  const dedicated = dedicatedCodexHome()
+  return dedicated && dedicated !== first ? [first, dedicated] : [first]
+}
+
+/** The dedicated CODEX_HOME for sessions herdr runs (config.json `codexHome`); null when none is set. */
+export function dedicatedCodexHome(): string | null {
+  const dedicated = readConfigFile()?.codexHome
+  return typeof dedicated === 'string' && dedicated ? dedicated : null
+}
+
+export async function cachedCodexModels(root = codexRoot()): Promise<Record<string, string[]>> {
+  try {
+    const cache: unknown = await Bun.file(join(root, 'models_cache.json')).json()
+    if (!isRecord(cache) || !Array.isArray(cache.models)) return {}
+    return Object.fromEntries(
+      cache.models.flatMap(model => {
+        if (
+          !isRecord(model) ||
+          model.visibility !== 'list' ||
+          typeof model.slug !== 'string' ||
+          modelProblem(model.slug)
+        )
+          return []
+        const levels: unknown[] = Array.isArray(model.supported_reasoning_levels)
+          ? model.supported_reasoning_levels
+          : []
+        return [
+          [
+            model.slug,
+            [
+              ...new Set(
+                levels.flatMap(level =>
+                  isRecord(level) && typeof level.effort === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(level.effort)
+                    ? [level.effort]
+                    : [],
+                ),
+              ),
+            ],
+          ],
+        ]
+      }),
+    )
+  } catch {
+    return {}
+  }
+}
+
+export function createCodexHome(root = codexRoot()): CodexHome {
   const files = new Map<string, string>()
   const cache = new Map<string, { mtimeMs: number; size: number; info: TranscriptInfo }>()
   let scannedAt = -Infinity
@@ -44,7 +104,10 @@ export function createCodexHome(root = process.env.CODEX_HOME || join(homedir(),
       if (!st?.isFile() && Date.now() - scannedAt >= DISCOVERY_MS) {
         scannedAt = Date.now()
         files.clear()
-        discover(join(root, 'sessions'))
+        for (const base of codexRoots(root))
+          try {
+            discover(join(base, 'sessions'))
+          } catch {} // A folder that is not there hides no other.
         file = files.get(id)
         st = file ? statSync(file, { throwIfNoEntry: false }) : null
       }
@@ -92,5 +155,12 @@ export function createCodexHome(root = process.env.CODEX_HOME || join(homedir(),
     }
   }
 
-  return { transcriptInfo, sessionThread }
+  return {
+    transcriptInfo,
+    sessionThread,
+    async cwdOf(session) {
+      const found = locate(session)
+      return found ? readCwd(found.file) : null
+    },
+  }
 }

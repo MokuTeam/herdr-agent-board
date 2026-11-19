@@ -30,6 +30,7 @@ import {
 } from '../../adapters/herdr.ts'
 import { pause } from '../../adapters/pacing.ts'
 import { run } from '../../adapters/process.ts'
+import { CODEX_AGENT, isCodexSession } from '../../core/codex.ts'
 import { keyTowardYes, sameFolder, type TrustDialog, trustDialog } from '../../core/dialogs/trust.ts'
 import { t } from '../../core/lang.ts'
 import { launcherError } from '../../core/launch/launcher-command.ts'
@@ -191,7 +192,7 @@ export function launchRunner({
       // A fork's card says whose fork it is, and since when (core/links.ts).
       writeCard(id, {
         category: l.category,
-        profileWant: l.profile,
+        ...(l.codexFork ? { name: l.name } : { profileWant: l.profile }),
         ...(l.model && { modelWant: l.model }),
         ...(l.fork && forkCard(l.fork)),
       })
@@ -238,8 +239,18 @@ export function launchRunner({
         if (ws.pane) notePane(l, ws.pane, ws.terminal)
       }
     }
-    const launcher = launcherFor(deps.cfg.launch, { resume: !!l.resume, fork: !!l.fork })
+    const launcher = launcherFor(deps.cfg.launch, {
+      resume: !!l.resume,
+      fork: !!l.fork,
+      ...(l.codexFork && { codexFork: l.codexFork }),
+      codex: l.agent === CODEX_AGENT,
+    })
     const r = await launcher.start(l, events(l))
+    if (l.codexFork) {
+      if (r.failure) throw r.failure
+      await finishCodexFork(l)
+      return
+    }
     // The agent herdr says came up once a dialog was answered: the board's spawn-agent stops at
     // one before it can say whether its start command started Claude or pi.
     let kind = r.agent
@@ -294,6 +305,35 @@ export function launchRunner({
       l.spareRoot = { pane: ws.pane, terminal: ws.terminal }
     }
     notePane(l, opened.pane, opened.terminal)
+  }
+
+  async function finishCodexFork(l: Launch): Promise<void> {
+    const pane = paneOf(l)
+    // A live fork waiting for its hook stays pending, so Retry cannot create a duplicate.
+    l.state = 'waiting'
+    step(l, 'agent')
+    for (;;) {
+      if (l.dismissed || l.closed) throw new LaunchError(t('launch.err.dismissed'), 'other')
+      const agent = await agentNow(l)
+      if (l.dismissed || l.closed) throw new LaunchError(t('launch.err.dismissed'), 'other')
+      if (agent?.kind && (agent.kind !== 'codex' || agent.session?.toLowerCase() === l.fork?.toLowerCase()))
+        throw new LaunchError(t('fork.err.identity'), 'other')
+      if (agent?.kind === 'codex' && agent.session && isCodexSession(agent.session)) {
+        if (!l.sessionId) events(l).session(agent.session)
+        else if (agent.session.toLowerCase() !== l.sessionId.toLowerCase())
+          throw new LaunchError(t('fork.err.identity'), 'other')
+        if (!l.message || ready(agent)) {
+          if (l.message) {
+            step(l, 'message')
+            // Submit once, without --wait. Neither the shell nor the first turn's duration is involved.
+            await herdr(['agent', 'prompt', pane, /^-/.test(l.message) ? ` ${l.message}` : l.message])
+          }
+          l.state = 'starting'
+          return
+        }
+      }
+      await pause(500)
+    }
   }
 
   async function makeWorktree(l: Launch, branch: string, linked: boolean): Promise<void> {
@@ -496,7 +536,7 @@ export function launchRunner({
     }
     if (l.message) {
       step(l, 'message')
-      if (kind !== PI_AGENT && !(await inputEmpty(pane)))
+      if (kind !== PI_AGENT && kind !== CODEX_AGENT && !(await inputEmpty(pane)))
         throw new LaunchError(t('launch.err.message.draft'), 'message')
       if (!(await typeLine(pane, l.message))) throw new LaunchError(t('launch.err.message.lost'), 'message')
     }

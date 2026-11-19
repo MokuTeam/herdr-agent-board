@@ -34,7 +34,12 @@ import {
   wake,
   wakeAnswers,
 } from '../../services/actions.ts'
-import { answerPermission, answerQuestions } from '../../services/answer.ts'
+import {
+  answerPermission,
+  answerQuestions,
+  codexApprovalFingerprint,
+  codexApprovalIdentity,
+} from '../../services/answer.ts'
 import { askArchive, undoMs } from '../../services/archive.ts'
 import { askAside } from '../../services/aside.ts'
 import { collect } from '../../services/board.ts'
@@ -130,7 +135,16 @@ async function detail(app: SessionApp, item: Item) {
         .join('\n')
       // The dialog on it, for the sheet to answer: a permission prompt, or pi's menu or text
       // input in a pane herdr says runs pi, goes by its fingerprint.
-      dialog = publicDialog(parseDialog(text, item.agent))
+      const parsed = parseDialog(text, item.agent)
+      if (isCodexItem(item) && parsed?.kind === 'permission') {
+        const identity = await codexApprovalIdentity(item)
+        if (identity) {
+          const current = await herdrText(['agent', 'read', item.pane, '--source', 'visible'], 5000)
+          const same = parseDialog(current, item.agent)
+          if (same?.kind === 'permission' && same.fingerprint === parsed.fingerprint)
+            dialog = publicDialog({ ...parsed, fingerprint: codexApprovalFingerprint(identity, parsed.fingerprint) })
+        }
+      } else dialog = publicDialog(parsed)
     } catch {}
   }
   const helpers = own.helpers.map(publicHelper)

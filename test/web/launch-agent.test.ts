@@ -56,5 +56,9 @@ describe('the agent row', () => {
     expect(launcherFor(own, null)).toBe(own)
     const command = { kind: 'command', name: 'my-cli' } as const
     expect(launcherFor(command, 'pi')).toBe(command)
+    expect(launcherFor(command, 'claude')).toBe(command)
+    // Codex starts through herdr's launcher whatever the config's (#426).
+    expect(launcherFor(command, 'codex')).toEqual({ kind: 'herdr', agent: 'codex' })
+    expect(launcherFor(own, 'codex')).toEqual({ kind: 'herdr', agent: 'codex' })
   })
 })

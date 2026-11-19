@@ -6,7 +6,8 @@
 //   spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
 //               [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
 //               [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--pane <herdr pane id>]
-//               [--profile <id>] [--model <id or alias>] [--agent claude|pi] [--trust]
+//               [--profile <id>] [--model <id or alias>] [--agent claude|pi|codex] [--trust]
+//               [--effort <level>] [--approval on-request|never] [--sandbox <mode>]   (the last three: codex)
 //   PowerShell-style names work too: -Name, -Cwd, -Label, -BriefFile, -Brief, -Workspace, -TimeoutSec.
 //
 // --resume brings back a session that ended (the board's archive): Claude resumes it by its id, in
@@ -20,6 +21,11 @@
 // prompt) instead of a new tab. --agent pi starts pi instead: `launch.pi` (default: pi) is typed,
 // with no profile start command or arguments (those are Claude's), in the profile's env all the same.
 //
+// --agent codex starts Codex CLI: `launch.codex` (default: codex) typed into a new tab, a new
+// session only (no --resume/--fork/--session-id, no Claude profile, no --trust). --model, --effort,
+// --approval and --sandbox become Codex's own options; none given, Codex runs on its config.toml.
+// config.json's `codexHome` (install.ts --codex-home) becomes CODEX_HOME of the tab.
+//
 // The session starts in the Claude profile of the agent that runs it (its CLAUDE_CONFIG_DIR), or
 // in the one --profile names; the board's own starts pass --config-dir <folder> or --keep-env.
 //
@@ -32,12 +38,13 @@
 // /model into the session would save it as the default of every later one in the profile.
 //
 // Prints "pane=<id> name=<Name> agent=<herdr name>", with " kind=pi" after it when the start
-// command started pi; exits 1 with the reason when it fails. The board reads that line
+// command started pi or --agent codex started Codex; exits 1 with the reason when it fails. The board reads that line
 // (services/launch/launcher.ts).
 import { homedir } from 'node:os'
+import { dedicatedCodexHome } from '../adapters/codex-home.ts'
 import { loadConfig } from '../adapters/config-file.ts'
 import { loadProfiles } from '../adapters/profiles.ts'
-import { piCommand } from '../core/launch/agents.ts'
+import { codexCommand, piCommand } from '../core/launch/agents.ts'
 import { claudeCommand, HELP, parseArgs } from '../core/launch/spawn-args.ts'
 import { spawnAgent } from '../services/launch/spawn-agent.ts'
 
@@ -49,7 +56,11 @@ try {
     const launch = loadConfig().launch ?? {}
     const home = homedir()
     const r = await spawnAgent(o, {
-      ...(o.agent === 'pi' ? { pi: piCommand(launch.pi) } : { claude: claudeCommand(launch.claude, launch.args) }),
+      ...(o.agent === 'pi'
+        ? { pi: piCommand(launch.pi) }
+        : o.agent === 'codex'
+          ? { codex: codexCommand(launch.codex), codexHome: dedicatedCodexHome() }
+          : { claude: claudeCommand(launch.claude, launch.args) }),
       log: msg => console.error(`spawn-agent: ${msg}`),
       profiles: loadProfiles({ home }),
       env: process.env,

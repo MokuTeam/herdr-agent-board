@@ -4,6 +4,7 @@
 // start what they start, so with either set nothing is offered. A start that names no agent is
 // the board's default: `launch.default` when the board offers that agent, else Claude Code, as it
 // was before there was a choice.
+import { CODEX_AGENT } from '../codex.ts'
 import { t } from '../lang.ts'
 import { PI_AGENT } from '../pi.ts'
 import type { LaunchSpec } from '../types.ts'
@@ -12,7 +13,7 @@ import { typingProblem } from './spawn-args.ts'
 export const CLAUDE_AGENT = 'claude'
 
 /** The agents a start can name: herdr's kind for it. */
-export type LaunchAgentId = typeof CLAUDE_AGENT | typeof PI_AGENT
+export type LaunchAgentId = typeof CLAUDE_AGENT | typeof PI_AGENT | typeof CODEX_AGENT
 
 /** An agent the new-session window offers: its id for the request, and its name. */
 export interface LaunchAgent {
@@ -22,6 +23,7 @@ export interface LaunchAgent {
 
 const CLAUDE_CODE: LaunchAgent = { id: CLAUDE_AGENT, title: 'Claude Code' }
 const PI: LaunchAgent = { id: PI_AGENT, title: 'pi' }
+const CODEX: LaunchAgent = { id: CODEX_AGENT, title: 'Codex CLI' }
 
 /** Whether config.json says how to start pi (`launch.pi` set to anything but blank). */
 export const piConfigured = (spec: LaunchSpec | undefined): boolean => {
@@ -34,9 +36,13 @@ export const piConfigured = (spec: LaunchSpec | undefined): boolean => {
  * (`launch.command`, `launch.agent`) starts sessions. `piFound`: `pi` is on the board's PATH; asked
  * only when the config does not say how to start it.
  */
-export function launchAgents(spec: LaunchSpec | undefined, piFound: () => boolean): LaunchAgent[] {
+export function launchAgents(
+  spec: LaunchSpec | undefined,
+  piFound: () => boolean,
+  codexFound: () => boolean = () => false,
+): LaunchAgent[] {
   if (spec?.command || spec?.agent) return []
-  return piConfigured(spec) || piFound() ? [CLAUDE_CODE, PI] : [CLAUDE_CODE]
+  return [CLAUDE_CODE, ...(piConfigured(spec) || piFound() ? [PI] : []), ...(codexFound() ? [CODEX] : [])]
 }
 
 /**
@@ -48,6 +54,26 @@ export function defaultAgent(spec: LaunchSpec | undefined, offered: () => readon
   const wanted = typeof spec?.default === 'string' ? spec.default.trim().toLowerCase() : ''
   if (!wanted || wanted === CLAUDE_AGENT) return CLAUDE_AGENT
   return offered().find(a => a.id === wanted)?.id ?? CLAUDE_AGENT
+}
+
+/**
+ * `launch.codex` from config.json as a list, as piCommand reads `launch.pi`: `codex` when it is
+ * unset. spawn-agent --agent codex types it, with the options it was given after it.
+ */
+export function codexCommand(setting: unknown, win: boolean = process.platform === 'win32'): string[] {
+  if (setting === undefined || setting === null || (typeof setting === 'string' && !setting.trim()))
+    return [CODEX_AGENT]
+  const list: unknown = typeof setting === 'string' ? [setting] : setting
+  if (
+    !Array.isArray(list) ||
+    !list.length ||
+    !list.every((s): s is string => typeof s === 'string') ||
+    !String(list[0]).trim()
+  )
+    throw new Error(t('launch.err.codexCommand'))
+  const problem = typingProblem(list, win)
+  if (problem) throw new Error(t('launch.err.codexTyping', { word: problem.word }))
+  return [...list]
 }
 
 /**

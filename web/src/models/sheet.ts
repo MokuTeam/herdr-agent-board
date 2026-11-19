@@ -152,6 +152,7 @@ export function headButtons(
   mokupilot = false,
   schedules: readonly ScheduleEntry[] = [],
   fork = false,
+  codexFork = false,
 ): HeadButtons {
   const pending = restartPending(schedules, it.key) ? restartOf(schedules, it.key) : undefined
   // Gray with the reason while it works (a turn, a dialog, its helpers), as in its menu.
@@ -166,7 +167,7 @@ export function headButtons(
     restartHidden: !!it.sleeping || !it.session || it.agent !== 'claude' || away,
     restartTitle: pending ? `${t('sheet.restartPending')}. ${restartText(pending, t)}` : t('sheet.restartHint'),
     mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude') || away,
-    forkHidden: !(fork && it.session && it.agent === 'claude') || away,
+    forkHidden: !(it.session && ((fork && it.agent === 'claude') || (codexFork && it.agent === 'codex'))) || away,
     archiveHidden: !it.session || it.agent !== 'claude' || away,
     archiveTitle: why ? t(why) : t('archive.sheetHint'),
   }

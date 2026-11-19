@@ -21,6 +21,13 @@
 // file, which herdr reports once pi is up: the profile it is meant for goes on that card. A start
 // asked for pi (--agent pi; the board's, when its request picks pi) types `launch.pi` instead.
 //
+// --agent codex starts Codex CLI (`launch.codex`, default codex) in a tab of its own: a new session
+// only, with no Claude profile. Its options go on the command line (--model -> -m's long form, --effort
+// -> -c model_reasoning_effort=, --approval -> -a, --sandbox -> -s); without them Codex runs on the
+// user's config.toml. When config.json sets `codexHome` the tab gets CODEX_HOME (and --pane is refused:
+// a pane keeps the env it has). Codex names the session with /rename (core/codex.ts CODEX_NAMING),
+// and has no session id until its first prompt: the card (`modelWant`) is written once the brief went in.
+//
 // --model starts the session on that model (#380): `--model <id>` after the start command and the
 // profile's arguments, Claude's and pi's alike, never written to the profile's settings. Its card
 // says so (`modelWant`), so a start with it gets a session id of its own when none was given. A
@@ -31,6 +38,8 @@ import { homedir } from 'node:os'
 import { isAbsolute, resolve } from 'node:path'
 import { readCard, removeCard, writeCard } from '../../adapters/cards.ts'
 import { createClaudeHome } from '../../adapters/claude-home.ts'
+import { noDaemonArgs } from '../../adapters/codex-flags.ts'
+import { cachedCodexModels } from '../../adapters/codex-home.ts'
 import { herdr, herdrText, tabCreateRoot } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { pause } from '../../adapters/pacing.ts'
@@ -41,6 +50,7 @@ import {
   recordProfilePane,
 } from '../../adapters/profile-panes.ts'
 import { type Env, inheritedProfileDir, loadProfiles } from '../../adapters/profiles.ts'
+import { CODEX_AGENT, CODEX_NAMING } from '../../core/codex.ts'
 import { importsDialog, keyTowardYes, ownImports, sameFolder, trustDialog } from '../../core/dialogs/trust.ts'
 import { t } from '../../core/lang.ts'
 import { modelArgs } from '../../core/launch/model.ts'
@@ -245,13 +255,16 @@ function movePiCard(carded: string, file: string, profile: string | undefined, m
  * comes from the options, else from `env` (the agent's own); `profiles` are the board's (default:
  * config.json's merged with the folders found in `home`). A profile's start command (its
  * `command`) is typed in place of `claude`, the profile's arguments after it. With `agent` pi,
- * `pi` (`launch.pi`, default: pi) is typed instead, without them: they are Claude's.
+ * `pi` (`launch.pi`, default: pi) is typed instead, without them: they are Claude's. So is
+ * `codex` (`launch.codex`) for `agent` codex, with Codex's own options.
  */
 export async function spawnAgent(
   o: SpawnOptions,
   {
     claude = ['claude'],
     pi = ['pi'],
+    codex = ['codex'],
+    codexHome = null,
     log = () => {},
     profiles,
     env = process.env,
@@ -260,6 +273,9 @@ export async function spawnAgent(
   }: {
     claude?: string[]
     pi?: string[]
+    codex?: string[]
+    /** config.json's `codexHome`: CODEX_HOME for a Codex tab; null leaves the env as herdr makes it. */
+    codexHome?: string | null
     log?: (text: string) => void
     profiles?: Profile[]
     env?: Env
@@ -276,8 +292,14 @@ export async function spawnAgent(
   if (!isDir) throw new Error(`No such folder: ${cwd}`)
   const workspace = o.workspace || process.env.HERDR_WORKSPACE_ID
   if (!o.pane && !workspace) throw new Error('No herdr workspace: run it inside herdr or pass --workspace')
-  const known = profiles ?? loadProfiles({ home })
-  const start = startProfile(o, { profiles: known, env, home, cwd })
+  const isCodex = o.agent === CODEX_AGENT
+  // Codex has no Claude profile: nothing of the profile's is looked at, the tab's env stays herdr's.
+  if (isCodex && o.pane && codexHome)
+    throw new Error('--pane keeps the env the pane has, so it cannot get CODEX_HOME: leave out --pane to get a new tab')
+  const known = isCodex ? [] : (profiles ?? loadProfiles({ home }))
+  const start: Start = isCodex
+    ? { configDir: null, profile: null }
+    : startProfile(o, { profiles: known, env, home, cwd })
   const { configDir, profile } = start
   // The user's own Claude folders: the profile of the agent that runs it, the default one, and the board's.
   const claudeDirs = [...new Set([inheritedProfileDir(env, home), defaultProfileDir(home), ...known.map(p => p.dir)])]
@@ -289,8 +311,12 @@ export async function spawnAgent(
           .trim()
       : (o.brief ?? '').trim()
   // The profile's start command, else `claude`; a bad one throws here, before herdr is asked. pi's own when asked for.
-  const program =
-    o.agent === 'pi' ? [...pi] : [...(profileCommand(profile?.command) ?? claude), ...(profile?.args ?? [])]
+  const program = isCodex
+    ? [...codex]
+    : o.agent === 'pi'
+      ? [...pi]
+      : [...(profileCommand(profile?.command) ?? claude), ...(profile?.args ?? [])]
+  if (isCodex && o.effort) await checkEffort(o.model, o.effort)
   // A launch.claude that picks its own session (--resume, --continue) cannot resume another one.
   if (o.resume && choosesSession(program))
     throw new Error(`launch.claude picks its own session (${program.join(' ')}), so it cannot resume ${o.resume}`)
@@ -298,10 +324,17 @@ export async function spawnAgent(
     throw new Error(`launch.claude picks its own session (${program.join(' ')}), so it cannot fork ${o.fork}`)
   // A fork is a new session: its id is the one given, else one of its own, so its card is known.
   // So is a start on a model of its own, whose card says so; not one whose line picks its session.
-  const ownId = !!o.fork || (!!o.model && !o.resume && !choosesSession(program))
+  // Codex picks its own id: none is given.
+  const ownId = !isCodex && (!!o.fork || (!!o.model && !o.resume && !choosesSession(program)))
   const sessionId = ownId ? (o.sessionId ?? randomUUID()) : o.sessionId
   // The model goes after the profile's arguments: of two --model, Claude and pi take the last.
-  const line = [...program, ...modelArgs(o.model)]
+  // Codex: the pane's env must reach the session (adapters/codex-flags.ts).
+  const line = [
+    ...program,
+    ...(isCodex ? await noDaemonArgs(program) : []),
+    ...modelArgs(o.model),
+    ...(isCodex ? codexOptions(o) : []),
+  ]
   const argv = o.resume
     ? [...line, '--resume', o.resume]
     : o.fork
@@ -331,9 +364,17 @@ export async function spawnAgent(
         workspace ?? '',
         cwd,
         label,
-        configDir === null ? undefined : { CLAUDE_CONFIG_DIR: configDir },
+        configDir !== null
+          ? { CLAUDE_CONFIG_DIR: configDir }
+          : isCodex && codexHome
+            ? { CODEX_HOME: codexHome }
+            : undefined,
       )
     } catch (err) {
+      if (isCodex && codexHome && envRejected(err))
+        throw new Error(
+          'herdr cannot set CODEX_HOME for the new tab (--env needs herdr 0.9.5 or newer): nothing was started',
+        )
       if (configDir !== null && envRejected(err))
         throw new Error(
           'herdr cannot set CLAUDE_CONFIG_DIR for the new tab (--env needs herdr 0.9.5 or newer): nothing was started',
@@ -362,8 +403,9 @@ export async function spawnAgent(
   const deadline = Date.now() + o.timeoutSec * 1000
   let ready = false
   let answered = 0
-  // The agent that came up (herdr says): Claude, or pi for a start command that starts it.
-  let naming: Naming = CLAUDE_NAMING
+  // The agent that came up (herdr says): Claude, or pi for a start command that starts it; for
+  // --agent codex, Codex and nothing else.
+  let naming: Naming = isCodex ? CODEX_NAMING : CLAUDE_NAMING
   let kind = 'claude'
   let session: string | null = null
   while (Date.now() < deadline) {
@@ -373,10 +415,10 @@ export async function spawnAgent(
       p = await paneInfo(pane, 10_000)
     } catch (err) {
       if (/not.?found|no such/i.test(messageOf(err)))
-        throw new Error(`The tab of ${pane} was closed before Claude got ready`)
+        throw new Error(`The tab of ${pane} was closed before ${isCodex ? 'Codex' : 'Claude'} got ready`)
       continue
     }
-    const own = namingOf(p.agent)
+    const own = isCodex ? (p.agent === CODEX_AGENT ? CODEX_NAMING : null) : namingOf(p.agent)
     if (!own || !p.agent) continue
     naming = own
     kind = p.agent
@@ -391,13 +433,15 @@ export async function spawnAgent(
         continue
       }
       throw new Error(
-        kind === PI_AGENT
-          ? `pi in ${pane} waits for a dialog. Answer it in that tab, then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`
-          : `Claude in ${pane} waits for a dialog (folder trust?). Answer it in that tab, then: herdr agent prompt ${pane} "/rename ${o.name}" and send the brief.`,
+        isCodex
+          ? `Codex in ${pane} waits for a dialog (folder trust?). Answer it in that tab, then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`
+          : kind === PI_AGENT
+            ? `pi in ${pane} waits for a dialog. Answer it in that tab, then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`
+            : `Claude in ${pane} waits for a dialog (folder trust?). Answer it in that tab, then: herdr agent prompt ${pane} "/rename ${o.name}" and send the brief.`,
       )
     }
   }
-  if (!ready) throw new Error(`Claude did not get ready in ${pane} within ${o.timeoutSec} s`)
+  if (!ready) throw new Error(`${isCodex ? 'Codex' : 'Claude'} did not get ready in ${pane} within ${o.timeoutSec} s`)
   if (kind === PI_AGENT && (profile || o.model) && carded && isPiSessionFile(session))
     movePiCard(carded, session, profile?.id, o.model)
 
@@ -416,7 +460,7 @@ export async function spawnAgent(
     for (let i = 0; i < 10; i++) {
       await pause(500)
       const shown = await screen(pane)
-      if (naming.done.test(shown)) break
+      if ((naming.doneFor?.(o.name) ?? naming.done).test(shown)) break
       // pi's first Enter on a slash command with an argument can take its completion instead:
       // the line still in the editor gets one more.
       if (kind === PI_AGENT && i === 1 && stillTyped(shown, line))
@@ -451,5 +495,39 @@ export async function spawnAgent(
         `The brief did not reach ${naming.title} in ${pane}. Send it by hand: herdr agent prompt ${pane} "<brief>"`,
       )
   }
+  if (isCodex && o.model && text) await cardCodex(pane, o.model)
   return { pane, name: o.name, agent, kind }
+}
+
+/** Codex's own options for a start: --effort, --approval and --sandbox as its `-c`, `-a` and `-s`. */
+function codexOptions(o: SpawnOptions): string[] {
+  return [
+    // A plain word: -c takes a value that is no TOML as a string, and `"high"` would not type into PowerShell.
+    ...(o.effort ? ['-c', `model_reasoning_effort=${o.effort}`] : []),
+    ...(o.approval ? ['-a', o.approval] : []),
+    ...(o.sandbox ? ['-s', o.sandbox] : []),
+  ]
+}
+
+/** An effort only for a model whose levels Codex's cache lists, as the board's own start checks it. */
+async function checkEffort(model: string | undefined, effort: string): Promise<void> {
+  const levels = model ? (await cachedCodexModels())[model] : undefined
+  if (!model) throw new Error('--effort needs --model: the levels are those of the model')
+  if (!levels) throw new Error(`--effort: Codex's model list has no model ${model}`)
+  if (!levels.includes(effort)) throw new Error(`--effort ${effort}: ${model} takes ${levels.join(', ') || 'none'}`)
+}
+
+/**
+ * The card of a Codex session started on a model of its own: keyed by the id herdr reports, which
+ * Codex has only after its first prompt, so after the brief. Never a reason to fail a start that works.
+ */
+async function cardCodex(pane: string, model: string): Promise<void> {
+  for (let i = 0; i < 20; i++) {
+    const { session } = await paneInfo(pane, 5000).catch(() => ({ session: null }))
+    if (session) {
+      writeCard(session, { modelWant: model })
+      return
+    }
+    await pause(500)
+  }
 }

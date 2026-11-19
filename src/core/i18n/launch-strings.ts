@@ -56,6 +56,9 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.step.worktree': 'Making the worktree…',
     'launch.step.workspace': 'Making the workspace…',
     'launch.step.tab': 'Opening a tab…',
+    'launch.effort': 'Reasoning effort',
+    'launch.effortDefault': 'Codex default',
+    'launch.err.codexEffort': 'Choose an effort supported by this Codex model.',
     'launch.step.agent': 'Claude is starting…',
     'launch.step.dialog': 'Waits for you in herdr: a dialog holds it',
     'launch.step.rename': 'Naming the session…',
@@ -126,11 +129,15 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.err.model': 'Not a model name: an alias such as opus or sonnet, or a full name, one word',
     'launch.err.modelLong': 'The model name is longer than {max} characters',
     'launch.err.modelLauncher':
-      'The board starts sessions with a launcher that takes no model (launch.command without {model}, or launch.agent for another agent than Claude or pi)',
+      'The board starts sessions with a launcher that takes no model (launch.command without {model}, or launch.agent for another agent than Claude, pi or Codex)',
     'launch.err.agentLauncher':
       'The board starts sessions with launch.command or launch.agent, which pick the agent themselves',
     'launch.err.piCommand':
       'launch.pi in config.json must be a program, or a list of the program and its arguments: ["pi", "--model", "sonnet"]',
+    'launch.err.codexCommand':
+      'launch.codex in config.json must be a program, or a list of the program and its arguments: ["codex", "--search"]',
+    'launch.err.codexTyping':
+      'launch.codex: “{word}” cannot be typed at the tab’s shell prompt (the program a name on PATH or a path without spaces, no quotes or control characters)',
     'launch.err.piTyping':
       'launch.pi: “{word}” cannot be typed at the tab’s shell prompt (the program a name on PATH or a path without spaces, no quotes or control characters)',
     'launch.err.gone': 'That start is no longer on the board',
@@ -237,6 +244,9 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.step.worktree': 'Создаю worktree…',
     'launch.step.workspace': 'Создаю workspace…',
     'launch.step.tab': 'Открываю вкладку…',
+    'launch.effort': 'Уровень рассуждения',
+    'launch.effortDefault': 'По умолчанию в Codex',
+    'launch.err.codexEffort': 'Выбери уровень рассуждения, который поддерживает эта модель Codex.',
     'launch.step.agent': 'Claude запускается…',
     'launch.step.dialog': 'Ждёт тебя в herdr: висит диалог',
     'launch.step.rename': 'Даю сессии имя…',
@@ -304,11 +314,15 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.err.model': 'Это не имя модели: псевдоним вроде opus или sonnet или полное имя, одним словом',
     'launch.err.modelLong': 'Имя модели длиннее {max} символов',
     'launch.err.modelLauncher':
-      'Доска запускает сессии запускателем, который не берёт модель (launch.command без {model} или launch.agent для агента, который не Claude и не pi)',
+      'Доска запускает сессии запускателем, который не берёт модель (launch.command без {model} или launch.agent для агента, который не Claude, не pi и не Codex)',
     'launch.err.agentLauncher':
       'Доска запускает сессии через launch.command или launch.agent, а они сами выбирают агента',
     'launch.err.piCommand':
       'launch.pi в config.json должен быть программой или списком: программа, потом её аргументы: ["pi", "--model", "sonnet"]',
+    'launch.err.codexCommand':
+      'launch.codex в config.json должен быть программой или списком: программа, потом её аргументы: ["codex", "--search"]',
+    'launch.err.codexTyping':
+      'launch.codex: «{word}» не набрать в командной строке вкладки (программа — имя из PATH или путь без пробелов, без кавычек и управляющих символов)',
     'launch.err.piTyping':
       'launch.pi: «{word}» не набрать в командной строке вкладки (программа — имя из PATH или путь без пробелов, без кавычек и управляющих символов)',
     'launch.err.gone': 'Этого запуска на доске уже нет',

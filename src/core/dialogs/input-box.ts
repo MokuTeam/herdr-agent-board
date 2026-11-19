@@ -10,7 +10,7 @@ const RULE = /^\s*─{8,}/
 export const stripAnsi = (s: string): string => s.replace(ESCAPES, '')
 
 /** A line without its escapes and without the parts drawn dim. */
-function nonDimText(line: string): string {
+export function nonDimText(line: string): string {
   let dim = false
   let out = ''
   let last = 0

@@ -6,9 +6,10 @@ import { agentGet } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { readStdin } from '../adapters/stdin.ts'
-import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
+import { brief, CODEX_BRIEF_VERSION, waitReminder } from '../core/brief.ts'
 import { CODEX_AGENT, isCodexSession } from '../core/codex.ts'
 import { isNotice } from '../core/notices.ts'
+import { threadsConfig } from '../core/work-threads.ts'
 
 async function main(): Promise<void> {
   const input: unknown = JSON.parse((await readStdin()) || '{}')
@@ -31,14 +32,25 @@ async function main(): Promise<void> {
     if (!isNotice(input.prompt)) Object.assign(patch, { ask: '', askSince: '' })
   }
   let context: string | null = null
-  if (event === 'SessionStart' || Number(card?.briefV ?? 0) < BRIEF_VERSION) {
+  if (event === 'SessionStart' || Number(card?.briefV ?? 0) < CODEX_BRIEF_VERSION) {
     const cfg = loadConfig()
     const presence = presenceForBrief(cfg)
     context = [
-      brief(cfg, card, typeof input.cwd === 'string' ? input.cwd : '', process.env, 'Codex', presence),
+      brief(
+        cfg,
+        card,
+        typeof input.cwd === 'string' ? input.cwd : '',
+        process.env,
+        'Codex',
+        presence,
+        null,
+        [],
+        false,
+        threadsConfig(cfg.threads),
+      ),
       `Use \`board --session ${sid} <command>\` for the commands above, so a tool's shell targets this session even when it does not inherit the pane environment.`,
     ].join('\n')
-    Object.assign(patch, { briefedAt: Date.now(), briefV: BRIEF_VERSION })
+    Object.assign(patch, { briefedAt: Date.now(), briefV: CODEX_BRIEF_VERSION })
     if (presence) patch.presenceSeen = presence.since
     else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''
   } else {

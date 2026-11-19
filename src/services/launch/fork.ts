@@ -8,7 +8,9 @@
 import { cwdOf } from '../../adapters/claude-home.ts'
 import { workspaceList } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
+import { findCommand } from '../../adapters/setup-facts.ts'
 import { categoryInfo } from '../../core/categories.ts'
+import { isCodexItem, isCodexSession } from '../../core/codex.ts'
 import { t } from '../../core/lang.ts'
 import { forkName, sessionWorkspace } from '../../core/launch/names.ts'
 import { callable } from '../../core/mokupilot.ts'
@@ -39,18 +41,32 @@ export function canFork(cfg: Pick<Config, 'launch'>): boolean {
   return launcher.kind !== 'herdr' || !herdrCannotResume(cfg.launch ?? {}, [])
 }
 
+export function canCodexFork(): boolean {
+  const found = findCommand('codex')
+  return !!(found.ps ?? found.sh)
+}
+
 /**
  * Start a fork of `item` (`body`: { name?, message? }): { ok, id, name, launch } once its launch
  * is on its way (its card shows at once), or { ok: false, error } before anything started. Only a
- * Claude session with an id and a conversation on disk can be forked; its profile is kept, hidden
- * or not, and one the board cannot be sure of is refused (request.ts, as for "New here").
+ * Claude or Codex session with an id and a local conversation can be forked. Claude keeps its
+ * profile, hidden or not (request.ts); Codex uses its own launcher and herdr's Codex environment.
  */
 export async function forkSession(deps: Deps, app: ForkApp, item: Item, body: unknown): Promise<ForkResult> {
   const b = isRecord(body) ? body : {}
-  if (!callable(item) || !item.session) return { ok: false, error: t('fork.err.notClaude', { name: item.name }) }
-  if (!item.transcript) return { ok: false, error: t('fork.err.noTranscript', { session: item.session }) }
+  const codex = isCodexItem(item) && isCodexSession(item.session ?? '')
+  if ((!callable(item) && !codex) || !item.session)
+    return { ok: false, error: t('fork.err.notClaude', { name: item.name }) }
+  const transcript = codex ? deps.codex.transcriptInfo(item.session) : item.transcript
+  if (!transcript) return { ok: false, error: t('fork.err.noTranscript', { session: item.session }) }
+  if (codex && !canCodexFork()) return { ok: false, error: t('fork.err.codexMissing') }
   // Claude finds a session by the folder it ran in.
-  const cwd = (await cwdOf(item.transcript)) || item.cwd
+  const cwd = codex
+    ? await deps.codex.cwdOf(item.session)
+    : item.transcript
+      ? (await cwdOf(item.transcript)) || item.cwd
+      : item.cwd
+  if (!cwd) return { ok: false, error: t('fork.err.noFolder') }
   let workspaces: { id: string; label: string }[]
   try {
     workspaces = (await workspaceList(8000)).map(w => ({ id: w.id, label: w.label ?? '' }))
@@ -72,7 +88,7 @@ export async function forkSession(deps: Deps, app: ForkApp, item: Item, body: un
   const started = await app.launches.start(
     { name, cwd, category: item.category, workspace, message, parent: item.key },
     items,
-    { fork: item.session },
+    { fork: item.session, ...(codex && { codexFork: true }) },
   )
   if (!started.ok) return { ok: false, error: started.error, field: started.field }
   deps.log(`fork ${item.name}: ${name} from ${item.session} in ${cwd}`)

@@ -35,6 +35,7 @@ export type LaunchHandlers = Pick<
   | 'branch'
   | 'message'
   | 'model'
+  | 'effort'
   | 'pickCategory'
   | 'pickAgent'
   | 'pickProfile'
@@ -51,6 +52,7 @@ export const launchHandlers = (w: LaunchWindow): LaunchHandlers => ({
   branch: w.branch,
   message: w.message,
   model: w.model,
+  effort: w.effort,
   pickCategory: w.pickCategory,
   pickAgent: w.pickAgent,
   pickProfile: w.pickProfile,
@@ -84,6 +86,8 @@ export interface LaunchDialogViewProps {
 /** The window as drawn for one state. */
 export function LaunchDialogView({ view, folder, launcher, t, on, refs }: LaunchDialogViewProps) {
   const f = view.fields
+  // Codex has no Claude profile: no profile row, and its own default model.
+  const codex = view.agent.options.some(a => a.id === 'codex' && a.pressed)
   return (
     <div className="launch" hidden={!view.shown} ref={refs?.layer}>
       {/* biome-ignore lint/a11y/noStaticElementInteractions: a click beside the window, as before; Esc is the way by keys */}
@@ -178,7 +182,7 @@ export function LaunchDialogView({ view, folder, launcher, t, on, refs }: Launch
                 </div>
               </div>
             )}
-            {view.profile.offered && (
+            {view.profile.offered && !codex && (
               <>
                 <div className="row profile-row">
                   <span className="row-label">{t('launch.profile')}</span>
@@ -213,7 +217,7 @@ export function LaunchDialogView({ view, folder, launcher, t, on, refs }: Launch
                     maxLength={MODEL_MAX}
                     spellCheck={false}
                     autoCapitalize="off"
-                    placeholder={t('launch.modelPlaceholder')}
+                    placeholder={t(codex ? 'launch.effortDefault' : 'launch.modelPlaceholder')}
                     title={t('launch.modelHint')}
                     value={f.model}
                     onChange={e => on.model(e.currentTarget.value)}
@@ -226,6 +230,24 @@ export function LaunchDialogView({ view, folder, launcher, t, on, refs }: Launch
                   ))}
                 </datalist>
                 <Note field="model" note={view.notes.model} />
+                {!!view.model.efforts?.length && (
+                  <label className="row">
+                    <span className="row-label">{t('launch.effort')}</span>
+                    <select
+                      className="row-value"
+                      name="effort"
+                      value={view.model.effort ?? ''}
+                      onChange={e => on.effort(e.currentTarget.value)}
+                    >
+                      <option value="">{t('launch.effortDefault')}</option>
+                      {view.model.efforts.map(level => (
+                        <option key={level} value={level}>
+                          {level}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
               </>
             )}
             <div className="row where-row">

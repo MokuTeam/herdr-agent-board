@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { BRIEF_VERSION } from '../../src/core/brief.ts'
+import { BRIEF_VERSION, CODEX_BRIEF_VERSION } from '../../src/core/brief.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 
 const ID = '01a15a8a-bd97-7701-a7f7-401e4bec3147'
@@ -45,7 +45,7 @@ test('Codex SessionStart gives the card brief, without Claude profile metadata o
   expect(out.hookSpecificOutput.additionalContext).toContain('board doing')
   expect(out.hookSpecificOutput.additionalContext).toContain(`board --session ${ID}`)
   expect(out.hookSpecificOutput.additionalContext).not.toContain('CronCreate')
-  expect(readCard(box)).toMatchObject({ briefV: BRIEF_VERSION })
+  expect(readCard(box)).toMatchObject({ briefV: CODEX_BRIEF_VERSION })
   expect(readCard(box)?.profileDir).toBeUndefined()
 })
 
@@ -91,7 +91,7 @@ test('a pure Codex root can update its board card without a Claude identity or p
 test('a reminder preserves ask; waiting sessions get the same wait reminder as Claude', async () => {
   const box = await sandbox()
   configure(box)
-  putCard(box, { briefV: BRIEF_VERSION, ask: 'Push?', askSince: 1, pin: 'me', wait: 'CI' })
+  putCard(box, { briefV: CODEX_BRIEF_VERSION, ask: 'Push?', askSince: 1, pin: 'me', wait: 'CI' })
   expect(await hook(box, 'UserPromptSubmit', '[board reminder] check CI')).toContain(
     'This session\u0027s card says it waits for',
   )
@@ -254,4 +254,32 @@ test('a Claude or pi bridge session carrying an inherited CODEX_THREAD_ID keeps 
     expect(JSON.parse(readFileSync(join(box.cards, 'claude-own.json'), 'utf8')).doing).toBe(agent)
     expect(readCard(box)).toBeNull()
   }
+})
+
+test('Codex hears of threads where config.json turns them on, and is not promised a wake from sleep', async () => {
+  const off = await sandbox()
+  configure(off)
+  const plain = JSON.parse(await hook(off, 'SessionStart')).hookSpecificOutput.additionalContext
+  expect(plain).not.toContain('board thread post')
+  expect(plain).not.toContain('waking it if it sleeps')
+
+  const on = await sandbox()
+  configure(on)
+  const config = join(on.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
+  writeFileSync(config, '{"language":"en","port":9,"threads":true}')
+  const text = JSON.parse(await hook(on, 'SessionStart')).hookSpecificOutput.additionalContext
+  expect(text).toContain('board thread post <key>')
+  expect(text).toContain('board remind <when>')
+  expect(text).not.toContain('waking it if it sleeps')
+  writeFileSync(config, '{"language":"en","port":9,"threads":{"agents":false}}')
+  expect(JSON.parse(await hook(on, 'SessionStart')).hookSpecificOutput.additionalContext).not.toContain('board thread')
+})
+
+test('a Codex card briefed with the Claude count is briefed again once; one at the Codex count is not', async () => {
+  const box = await sandbox()
+  configure(box)
+  putCard(box, { briefV: BRIEF_VERSION })
+  expect(await hook(box, 'UserPromptSubmit', 'next task')).toContain('every Codex session')
+  expect(readCard(box)).toMatchObject({ briefV: CODEX_BRIEF_VERSION })
+  expect(await hook(box, 'UserPromptSubmit', 'next task')).toBe('')
 })

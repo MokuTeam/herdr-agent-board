@@ -10,6 +10,8 @@ import { possibleProfilePanes, provenProfilePanes } from '../adapters/profile-pa
 import { boardOnPath } from '../adapters/resume-report.ts'
 import { peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
 import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
+import { CODEX_AGENT } from '../core/codex.ts'
+import { codexDraft } from '../core/dialogs/codex-input.ts'
 import { inputDraft } from '../core/dialogs/input-box.ts'
 import { piDraft } from '../core/dialogs/pi-dialogs.ts'
 import { itemProfile } from '../core/item-profile.ts'
@@ -569,6 +571,15 @@ export async function send(
       const after = refused(fresh)
       if (after) return after
       if (fresh?.kind !== agent?.kind) return { ok: false, error: t('err.sessionChanged', { name: item.name }) }
+    }
+    // Codex has the same trouble with a draft: Enter sends it together with the text. Only a scheduled
+    // message looks, and only at a Codex session, so every other session makes the calls it made.
+    if (guardDraft && (agent?.kind === CODEX_AGENT || item.agent === CODEX_AGENT)) {
+      const draft = codexDraft(await herdrText(['agent', 'read', pane, '--source', 'visible', '--ansi'], 10_000))
+      if (draft) return { ok: false, busy: true, draft: true, error: t('err.draft', { name: item.name }) }
+      const fresh = await agentGet(pane)
+      const after = refused(fresh)
+      if (after) return after
     }
     if (probe) return { ok: true }
     // This read and prompt are separate CLI calls, not an atomic identity check and send.

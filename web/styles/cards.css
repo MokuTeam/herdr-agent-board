@@ -98,3 +98,5 @@
 @media (prefers-reduced-motion: reduce) {
   .card-actions .stop-word { animation: none; }
 }
+
+.card-meter { margin-top: 2px; font-size: 12px; color: var(--label-2); overflow-wrap: anywhere; }

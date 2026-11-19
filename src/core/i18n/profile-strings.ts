@@ -33,6 +33,8 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'launch.err.profileParent': 'A session started from {name} runs in its profile, {title}',
     'launch.err.profileUnknown': 'The profile of {name} is not one the board knows: choose one',
     'launch.err.profileFolder': 'The folder of the profile {title} is not there: {path}',
+    'launch.err.codexEnv':
+      'herdr cannot set CODEX_HOME={dir} for the new tab (--env needs herdr 0.9.5 or newer): update herdr, or start this session yourself',
     'launch.err.env':
       'herdr cannot set CLAUDE_CONFIG_DIR={dir} for the new tab (--env needs herdr 0.9.5 or newer): update herdr, or start this session yourself',
     // a session's profile in a message when the board knows neither it nor its folder (core/profiles.ts)
@@ -159,6 +161,8 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'launch.err.profileParent': 'Сессия, начатая из {name}, работает в её профиле, {title}',
     'launch.err.profileUnknown': 'Профиль сессии {name} доске не известен: выбери профиль',
     'launch.err.profileFolder': 'Папки профиля {title} нет: {path}',
+    'launch.err.codexEnv':
+      'herdr не умеет задать CODEX_HOME={dir} для новой вкладки (--env нужен herdr 0.9.5 или новее): обновите herdr или запустите сессию сами',
     'launch.err.env':
       'herdr не может задать CLAUDE_CONFIG_DIR={dir} для новой вкладки (--env есть в herdr с 0.9.5): обнови herdr или запусти эту сессию сам',
     // a session's profile in a message when the board knows neither it nor its folder (core/profiles.ts)

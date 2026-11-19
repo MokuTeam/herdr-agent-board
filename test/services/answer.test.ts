@@ -8,6 +8,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { parseDialog } from '../../src/core/dialogs/questions.ts'
+import { codexApprovalFingerprint } from '../../src/services/answer.ts'
 import { inputScreen, PI_IDLE, PI_INPUT, PI_SELECT, selectScreen } from '../support/fake-pi.ts'
 import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
 
@@ -73,9 +74,10 @@ test('refusals come before any key: not Claude, another session, not waiting, no
   const box = await sandbox()
   transcript(join(box.dir, 's1.jsonl'), 'toolu_1')
   box.state({ 'agent get': agent(), 'agent read': { text: screen('question-single') } })
+  // Codex answers its own prompts since #426 (see below): another agent is still refused.
   const notClaude = await run(box, {
     kind: 'permit',
-    item: item(box, { agent: 'codex' }),
+    item: item(box, { agent: 'opencode' }),
     body: { fingerprint: FINGERPRINT, option: 1 },
   })
   assert.match(notClaude.error, /not a Claude session/)
@@ -578,3 +580,88 @@ it('a question Claude Code holds back: the hook’s copy on the board, answered 
   assert.match(old.body.error, /no longer open/)
   assert.equal(keysSent(box).length, 1)
 }, 40_000)
+
+// ---------------------------------------------------------------- Codex's command approval (#426)
+
+const CODEX_3 = screen('codex-permission-3')
+const CODEX_2 = screen('codex-permission-2')
+const CODEX_SESSION = '01a1e9a1-0037-7510-b480-5ee1c3f01e5a'
+// What herdr says of a Codex pane waiting on its prompt; `seq` moves with each of its state changes.
+const codexAgent = (status = 'blocked', seq = 7, session: string | null = CODEX_SESSION) => ({
+  result: {
+    agent: {
+      agent: 'codex',
+      agent_status: status,
+      terminal_id: 'term_1',
+      state_change_seq: seq,
+      ...(session && { agent_session: { value: session } }),
+    },
+  },
+})
+const codexItem = (box: Sandbox) => item(box, { agent: 'codex', key: CODEX_SESSION, session: CODEX_SESSION })
+// The fingerprint the sheet got: the screen's, bound to herdr's terminal and state change (session.ts).
+const codexFingerprint = (text: string, seq = 7): string => {
+  const d = parseDialog(text, 'codex')
+  if (d?.kind !== 'permission') throw new Error('not a Codex prompt')
+  return codexApprovalFingerprint(JSON.stringify(['p1', 'term_1', seq, CODEX_SESSION]), d.fingerprint)
+}
+// The prompt gone: Codex's input box again.
+const CODEX_IDLE = [
+  '• Ran pwd',
+  '  └ /tmp/codex-probe',
+  '',
+  '› Ask Codex to do anything',
+  '',
+  '  GPT-6.1-Sol low · /tmp',
+].join('\n')
+
+test('a Codex prompt: allowed once with y, denied with esc, done once its input box is back', async () => {
+  for (const [text, option, sent] of [
+    [CODEX_3, 1, 'y'],
+    [CODEX_3, 3, 'esc'],
+    [CODEX_2, 1, 'y'],
+    [CODEX_2, 2, 'esc'],
+  ] as const) {
+    const box = await sandbox()
+    box.state({ 'agent get': codexAgent(), 'agent read': { text }, 'agent send-keys': { result: null } })
+    const running = box.run('answer', {
+      kind: 'permit',
+      item: codexItem(box),
+      body: { fingerprint: codexFingerprint(text), option },
+    })
+    await until(() => keysSent(box).length > 0, 10_000)
+    box.state({ 'agent get': codexAgent('working', 8), 'agent read': { text: CODEX_IDLE } })
+    const out = await running.exited
+    assert.equal(out.code, 0, out.stderr)
+    assert.deepEqual(JSON.parse(out.stdout), { ok: true }, `${option} on ${text === CODEX_3 ? 3 : 2} options`)
+    assert.deepEqual(keysSent(box), [['agent', 'send-keys', 'p1', sent]])
+  }
+}, 60_000)
+
+test('a Codex prompt is refused before any key: another state change, not waiting, another session, the screen’s own fingerprint, "don’t ask again"', async () => {
+  const box = await sandbox()
+  const permit = (body: Record<string, unknown>) => run(box, { kind: 'permit', item: codexItem(box), body })
+  // herdr's state moved on since the sheet read it: the same text is another request.
+  box.state({ 'agent get': codexAgent('blocked', 9), 'agent read': { text: CODEX_3 } })
+  const moved = await permit({ fingerprint: codexFingerprint(CODEX_3, 7), option: 1 })
+  assert.equal(moved.ok, false)
+  assert.match(moved.error, /another dialog/)
+  // Not blocked, or another session in the pane: it no longer waits.
+  box.state({ 'agent get': codexAgent('working'), 'agent read': { text: CODEX_3 } })
+  assert.equal((await permit({ fingerprint: codexFingerprint(CODEX_3), option: 1 })).gone, true)
+  box.state({
+    'agent get': codexAgent('blocked', 7, '01a1e9a1-0000-7510-b480-5ee1c3f01e5a'),
+    'agent read': { text: CODEX_3 },
+  })
+  assert.equal((await permit({ fingerprint: codexFingerprint(CODEX_3), option: 1 })).gone, true)
+  // The bare screen fingerprint, not bound to herdr's state; option 2 of three is never offered.
+  box.state({ 'agent get': codexAgent(), 'agent read': { text: CODEX_3 } })
+  const bare = parseDialog(CODEX_3, 'codex')
+  assert.equal(bare?.kind, 'permission')
+  assert.equal((await permit({ fingerprint: bare?.fingerprint, option: 1 })).ok, false)
+  assert.equal((await permit({ fingerprint: codexFingerprint(CODEX_3), option: 2 })).ok, false)
+  // Another prompt on screen than the one seen.
+  box.state({ 'agent get': codexAgent(), 'agent read': { text: CODEX_3.replace('$ pwd', '$ rm -rf build') } })
+  assert.equal((await permit({ fingerprint: codexFingerprint(CODEX_3), option: 1 })).ok, false)
+  assert.deepEqual(keysSent(box), [])
+}, 30_000)

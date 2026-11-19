@@ -145,3 +145,23 @@ test('the sheet has every message whole; the card keeps its short preview (#174)
   expect(parseCodexConversation(lines).map(t => ('text' in t ? t.text : t.role))).toEqual([prompt, answer])
   expect(parseCodexTail(lines).lastText).toBe(`${answer.slice(0, 699)}…`)
 })
+
+test('the card’s model and effort are the last turn’s, from its turn_context (#426); none before a turn', () => {
+  const turn = (model: string, effort?: string, mode?: string) =>
+    row('turn_context', {
+      model,
+      ...(effort && { effort }),
+      ...(mode && { collaboration_mode: { mode: 'default', settings: { model, reasoning_effort: mode } } }),
+    })
+  const first = [turn('gpt-6.1-sol', 'low'), message('user', 'fix it'), message('assistant', 'Done.')]
+  expect(parseCodexTail(first)).toMatchObject({ model: 'gpt-6.1-sol', effort: 'low' })
+  // /model between turns: the newer turn wins.
+  expect(parseCodexTail([...first, turn('gpt-6-luna', 'high'), message('user', 'again')])).toMatchObject({
+    model: 'gpt-6-luna',
+    effort: 'high',
+  })
+  // An older Codex wrote the effort only in its collaboration mode.
+  expect(parseCodexTail([turn('gpt-5.6-sol', undefined, 'medium')])).toMatchObject({ effort: 'medium' })
+  const none = parseCodexTail([message('user', 'fix it')])
+  expect('model' in none || 'effort' in none).toBe(false)
+})

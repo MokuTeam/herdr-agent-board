@@ -141,6 +141,7 @@ export interface BoardMenuDeps {
       terminal?: boolean | undefined
       mokupilot?: boolean | undefined
       fork?: boolean | undefined
+      codexFork?: boolean | undefined
       /** The schedule: a restart of a session on its way grays its Restart. */
       schedules?: readonly ScheduleEntry[] | undefined
       /** The Claude profiles (a board before them sent none). */
@@ -274,6 +275,7 @@ function forCard(board: BoardMenuDeps, key: string, it: Item, el: Element, at: P
       terminal: state.data.terminal !== false,
       mokupilot: !!state.data.mokupilot,
       fork: !!state.data.fork,
+      codexFork: !!state.data.codexFork,
       categories: state.data.categories,
       column: board.column(it),
       category: board.category(it),

@@ -6,9 +6,11 @@
 // session, another dialog, or a question already answered; anything unexpected stops it and the
 // user is told where it stopped.
 
+import { createHash } from 'node:crypto'
 import { readCard } from '../adapters/cards.ts'
 import { agentGet, herdr, herdrText } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { CODEX_AGENT, isCodexItem } from '../core/codex.ts'
 import { inputDraft } from '../core/dialogs/input-box.ts'
 import { piEditor } from '../core/dialogs/pi-dialogs.ts'
 import type { FormQuestion } from '../core/dialogs/question-form.ts'
@@ -625,8 +627,75 @@ export async function answerPermission(
   const n = Number(body.option)
   if (!Number.isInteger(n) || n < 1 || n > 9 || typeof body.fingerprint !== 'string')
     return { ok: false, error: t('err.qa.invalid') }
+  if (isCodexItem(item)) {
+    const identity = await codexApprovalIdentity(item)
+    if (!identity) return { ok: false, gone: true, error: t('err.qa.notWaiting', { name: item.name }) }
+    const r = await driveCodexPermission(
+      body.fingerprint,
+      n,
+      io,
+      identity,
+      async () => (await codexApprovalIdentity(item)) === identity,
+    )
+    return r.ok ? { ok: true } : failure(item, r)
+  }
   const bad = await checkPane(item)
   if (bad) return bad
   const r = await drivePermission({ fingerprint: body.fingerprint, n, io })
   return r.ok ? { ok: true } : failure(item, r)
+}
+
+/** Herdr's terminal and state transition identify this request even before Codex reports a session ID. */
+export async function codexApprovalIdentity(item: Item): Promise<string | null> {
+  if (!item.pane || item.sleeping) return null
+  try {
+    const result = await herdr(['agent', 'get', item.pane], 5000)
+    const agent = isRecord(result) ? result.agent : null
+    if (
+      !isRecord(agent) ||
+      agent.agent !== CODEX_AGENT ||
+      agent.agent_status !== 'blocked' ||
+      typeof agent.terminal_id !== 'string' ||
+      !Number.isSafeInteger(agent.state_change_seq)
+    )
+      return null
+    const session = isRecord(agent.agent_session) ? agent.agent_session.value : null
+    if ((session ?? null) !== item.session) return null
+    return JSON.stringify([item.pane, agent.terminal_id, agent.state_change_seq, session])
+  } catch {
+    return null
+  }
+}
+
+export const codexApprovalFingerprint = (identity: string, fingerprint: string): string =>
+  createHash('sha256')
+    .update(JSON.stringify([identity, fingerprint]))
+    .digest('hex')
+
+/** Codex's explicit shortcuts approve once or cancel. The persistent approval is never exposed. */
+export async function driveCodexPermission(
+  fingerprint: string,
+  n: number,
+  raw: DriveIO,
+  identity: string,
+  stillCurrent: () => Promise<boolean>,
+): Promise<DriveResult> {
+  const { io, seen } = counted(raw)
+  const parse = (screen: string) => parseDialog(screen, CODEX_AGENT)
+  const ours = (d: Dialog | null): d is PermissionDialog =>
+    d?.kind === 'permission' && codexApprovalFingerprint(identity, d.fingerprint) === fingerprint
+  const step = { what: 'option', n }
+  try {
+    const d = parse(await io.read())
+    if (!ours(d) || !d.options.some(o => o.n === n) || !(await stillCurrent()))
+      return { ok: false, reason: 'changed', step, screen: seen.screen, sent: 0 }
+    await io.keys(n === 1 ? 'y' : 'esc')
+    await settled(io, ours, step, undefined, {
+      parse,
+      idle: screen => !!screen.trim() && !screen.includes('Would you like to run the following command?'),
+    })
+    return { ok: true }
+  } catch (err) {
+    return err instanceof Stop ? stopped(err, seen) : broken(err, seen)
+  }
 }

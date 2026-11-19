@@ -39,6 +39,8 @@ export interface BoardFiles {
   teamSkill: string
   /** The threads skill (skills/agent-board-threads/SKILL.md, #379), which install copies while threads are on. */
   threadsSkill: string
+  /** The agents' skill written for Codex (skills/herdr-agents/SKILL.codex.md), which install copies into a dedicated Codex home. */
+  codexSkill: string
 }
 
 /**
@@ -57,6 +59,7 @@ export function boardFiles(root: string, platform: NodeJS.Platform = process.pla
     skill: join(root, 'skills', SKILL, 'SKILL.md'),
     teamSkill: join(root, 'skills', TEAM_SKILL, 'SKILL.md'),
     threadsSkill: join(root, 'skills', THREADS_SKILL, 'SKILL.md'),
+    codexSkill: join(root, 'skills', SKILL, 'SKILL.codex.md'),
   }
 }
 

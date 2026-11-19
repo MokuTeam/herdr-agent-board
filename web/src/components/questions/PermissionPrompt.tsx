@@ -36,6 +36,8 @@ export function PermissionPrompt({ shown, form, canMutate, on = { click() {} } }
       <div className="qa-opts">
         {d.options.map(o => {
           const chosen = form.chosen === o.n
+          const label =
+            d.kind === 'permission' && d.title === 'Codex' ? t(o.n === 1 ? 'qa.codexAllow' : 'qa.codexDeny') : o.label
           return (
             <button
               key={o.n}
@@ -50,7 +52,7 @@ export function PermissionPrompt({ shown, form, canMutate, on = { click() {} } }
                 {o.n}
               </span>
               <span className="qa-body">
-                <span className="qa-label">{o.label}</span>
+                <span className="qa-label">{label}</span>
               </span>
               {chosen && form.status === 'sending' && <SpinQa />}
             </button>

@@ -1281,3 +1281,78 @@ describe('the model', () => {
     expect(startBodyOf(drafted.at(-1))).toEndWith(',"model":"sonnet"}')
   })
 })
+
+// ---------------------------------------------------------------- Codex (#426)
+
+const CODEX = { id: 'codex', title: 'Codex CLI' }
+const offerCodex: Step = async side => {
+  side.server.options = {
+    ...OPTIONS,
+    agents: [CLAUDE_CODE, CODEX],
+    agent: 'claude',
+    takesModel: true,
+    codexModels: { 'gpt-5.5': ['low', 'high'], 'gpt-5.5-mini': ['medium'] },
+  }
+}
+const EFFORT_ROW = '<span class="row-label">Reasoning effort</span>'
+
+describe('Codex', () => {
+  test('picked: no profile to choose, its models suggested, an effort of the model typed goes in the body', async () => {
+    const shots = await react([
+      offerCodex,
+      ...openAndSettle({ category: 'acme' }, 'lane-new'),
+      click(inWindow('[data-agent="codex"]')),
+      type('model', 'gpt-5.5'),
+      choose('effort', 'high'),
+      // The fake DOM loses the focused field when the profile row goes (a browser keeps it).
+      focus(field('name')),
+      key('Enter', { ctrlKey: true }),
+      settle,
+    ])
+    // Claude Code first: two profiles shown, Start waits for one.
+    expect(shots[4]).toContain(PROFILE_ROW)
+    expect(goLine(shots[4])).toContain('disabled')
+    // Codex picked: no profile row, Start on, Codex's models suggested, no effort before a model.
+    expect(shots[5]).not.toContain('profile-row')
+    expect(goLine(shots[5])).not.toContain('disabled')
+    expect(shots[5]).toContain(
+      '<datalist id="launch-models">\n          <option></option>\n          <option></option>\n        </datalist>',
+    )
+    expect(shots[5]).toContain('placeholder="Codex default"')
+    expect(subLine(shots[5])).toContain('Opens codex in a new herdr tab')
+    expect(shots[5]).not.toContain(EFFORT_ROW)
+    // A model of the cache typed: its efforts, the default first.
+    expect(shots[6]).toContain(EFFORT_ROW)
+    expect(shots[6]).toMatch(
+      /name="effort"[^>]*>\n\s*<option>Codex default<\/option>\n\s*<option>low<\/option>\n\s*<option>high<\/option>\n\s*<\/select>/,
+    )
+    const body = startBodyOf(shots.at(-1))
+    expect(body).not.toContain('"profile"')
+    expect(body).toEndWith(',"agent":"codex","model":"gpt-5.5","effort":"high"}')
+  })
+
+  test('the effort goes when the model changes; none picked, none sent; Claude Code keeps its profile and sends no effort', async () => {
+    const shots = await react([
+      offerCodex,
+      ...openAndSettle({ category: 'acme' }, 'lane-new'),
+      click(inWindow('[data-agent="codex"]')),
+      type('model', 'gpt-5.5'),
+      choose('effort', 'high'),
+      type('model', 'gpt-5.5-mini'),
+      focus(field('name')),
+      key('Enter', { ctrlKey: true }),
+      settle,
+    ])
+    expect(startBodyOf(shots.at(-1))).toEndWith(',"agent":"codex","model":"gpt-5.5-mini"}')
+    const claude = await react([
+      offerCodex,
+      ...openAndSettle({ category: 'acme' }, 'lane-new'),
+      click(inWindow('[data-profile="work"]')),
+      type('model', 'haiku'),
+      key('Enter', { ctrlKey: true }),
+      settle,
+    ])
+    expect(claude.at(-2)).not.toContain(EFFORT_ROW)
+    expect(startBodyOf(claude.at(-1))).toEndWith(',"profile":"work","agent":"claude","model":"haiku"}')
+  })
+})

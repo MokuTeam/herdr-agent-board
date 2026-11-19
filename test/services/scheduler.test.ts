@@ -146,6 +146,36 @@ describe('startScheduler', () => {
     assert.deepEqual([...prompts(dialog), ...prompts(draft)], [])
   })
 
+  test("a Codex session: a reminder is not typed over a draft in its composer; Claude's screen read stays Claude's", async () => {
+    const codexHerdr = (box: Sandbox, status: string, text: string): void => {
+      const snapshot = {
+        panes: [{ pane_id: 'p1', agent: 'codex', agent_session: { value: 's1' }, agent_status: status, cwd: box.dir }],
+        tabs: [],
+        workspaces: [],
+      }
+      box.state({
+        'api snapshot': { result: { snapshot } },
+        'agent get': { result: { agent: { agent: 'codex', agent_status: status, agent_session: { value: 's1' } } } },
+        'agent read': { text },
+        'agent prompt': { result: {} },
+      })
+    }
+    const free = await sandbox()
+    codexHerdr(free, 'idle', '\x1b[1m›\x1b[22m \x1b[2mAsk Codex to do anything\x1b[0m\n \x1b[2m? for shortcuts\x1b[0m')
+    put(free, { id: 'cdcd11', text: 'into the empty composer', at: Date.now() - 1000, next: Date.now() - 1000 })
+    await scheduler(free)
+    await until(() => prompts(free).length === 1)
+    assert.deepEqual(prompts(free), ['[board reminder] into the empty composer'])
+
+    const draft = await sandbox()
+    codexHerdr(draft, 'working', '\x1b[1m›\x1b[22m the user types\n \x1b[2m? for shortcuts\x1b[0m')
+    put(draft, { id: 'cdcd12', text: 'not over a draft', at: Date.now() - 1000, next: Date.now() - 1000 })
+    await scheduler(draft)
+    await until(() => read(draft, 'cdcd12')?.why === 'draft')
+    await sleep(400)
+    assert.deepEqual(prompts(draft), [])
+  })
+
   test('--idle: a working session gets it once it is free; one that stays busy has it logged as missed', async () => {
     const box = await sandbox()
     herdrWith(box, 'working')

@@ -9,6 +9,11 @@ import { type ThreadsConfig, threadsBrief } from './work-threads.ts'
 // Bump when the brief says something new: every running session gets it again on its next prompt.
 export const BRIEF_VERSION = 6
 
+// The same for Codex sessions (entrypoints/codex-hook.ts), counted on its own: what a brief says only
+// to Codex raises this and leaves the Claude sessions as they are. It starts above BRIEF_VERSION
+// because Codex cards were stamped with that one, and they must hear the new text once.
+export const CODEX_BRIEF_VERSION = 7
+
 type Env = Record<string, string | undefined>
 
 /**
@@ -66,13 +71,14 @@ export function brief(
     '- board ask "<the question, short>": before ending a turn that needs the user\'s answer or decision (approve a draft, pick an option, give data). Puts the card under "needs the user"; cleared by itself when the user replies.',
     '- board wait "<who/what>": before ending a turn blocked on something outside this chat (client reply, CI, another session, a date). The card stays in "waiting" until you run doing or done.',
     '- board done ["<result>"]: task finished; clears doing, wait and ask.',
-    '- board remind <when> "<text>": at that time the board types "[board reminder] <text>" into this session as a prompt, waking it if it sleeps; on time, so a working session gets it queued into its turn (add --idle to wait until it is free, for work that needs a fresh turn rather than a time). when: in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time). board every "<cron, 5 fields>" "<text>" repeats it (runs at least 5 minutes apart); board schedule lists this session\'s entries, board unschedule <id> removes one. Write the text as an instruction to yourself.',
+    `- board remind <when> "<text>": at that time the board types "[board reminder] <text>" into this session as a prompt${agent === 'Claude' ? ', waking it if it sleeps' : ''}; on time, so a working session gets it queued into its turn (add --idle to wait until it is free, for work that needs a fresh turn rather than a time). when: in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time). board every "<cron, 5 fields>" "<text>" repeats it (runs at least 5 minutes apart); board schedule lists this session's entries, board unschedule <id> removes one. Write the text as an instruction to yourself.`,
     agent === 'Claude' &&
       "  More reliable than CronCreate or ScheduleWakeup: those live in this Claude process and die when the idle session is put to sleep; the board's entries survive sleep and restarts. Use it for anything due later than a few minutes.",
     agent === 'Claude' && todos?.agents && todosBrief(),
     agent === 'Claude' && sinks.length > 0 && secretsBrief(sinks),
     agent === 'Claude' && calendar && calendarBrief(),
-    agent === 'Claude' && threads?.agents && threadsBrief(),
+    // Codex hears of threads too: its sessions report into them and run the masters' (skills/herdr-agents/SKILL.codex.md).
+    threads?.agents && threadsBrief(),
     `Card texts in ${languageName()}, short. Call it only when the state changes, not every turn.${state ? ` Card now: ${state}.` : ''}`,
     presence && presenceBrief(presence),
     herdrLine(env, agent),

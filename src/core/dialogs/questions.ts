@@ -30,6 +30,7 @@
 // pi's menu and text input are read in pi-dialogs.ts, and only for panes that run pi.
 
 import { createHash } from 'node:crypto'
+import { CODEX_AGENT } from '../codex.ts'
 import { PI_AGENT } from '../pi.ts'
 import { stripAnsi } from './input-box.ts'
 import { type InputDialog, type PiDialog, parsePiDialog, type SelectDialog } from './pi-dialogs.ts'
@@ -218,6 +219,7 @@ export function parseDialog(screen: unknown, agent?: string | null): Dialog | nu
     .split('\n')
     .map(l => l.trimEnd())
   if (agent === PI_AGENT) return parsePiDialog(lines)
+  if (agent === CODEX_AGENT) return codexPermission(lines)
   return questionDialog(lines) ?? permissionDialog(lines)
 }
 
@@ -389,6 +391,50 @@ function review(lines: string[], start: number, tabs: Tab[]): ReviewDialog | nul
     answers: answers.map(a => ({ question: norm(a.question), answer: norm(a.answer ?? '') })),
     options,
     cursor: options.find(o => o.cursor)?.n ?? null,
+  }
+}
+
+const CODEX_PERMISSION_TITLE = 'Would you like to run the following command?'
+
+function codexPermission(lines: string[]): PermissionDialog | null {
+  const title = lines.findLastIndex(line => line.trim() === CODEX_PERMISSION_TITLE)
+  const footer = lines.findLastIndex(line => /^\s*Press enter to confirm or esc to cancel\s*$/i.test(line))
+  if (title < 0 || footer <= title) return null
+
+  const rows = lines.slice(title + 1, footer).filter(line => line.trim())
+  const first = rows.findIndex(line => /^\s*(?:›\s+)?1\. Yes, proceed \(y\)$/.test(line))
+  if (first < 2) return null
+  const body = rows.slice(0, first)
+  if (!/^\s*Environment: .+/.test(body[0] ?? '') || !body.some(line => /^\s*\$ .+/.test(line))) return null
+  const choices = rows.slice(first)
+  const reject = /^\s*(›\s+)?([23])\. No, and tell Codex what to do differently \(esc\)$/.exec(choices.at(-1) ?? '')
+  if (!reject || Number(reject[2]) !== choices.length) return null
+  if (choices.length === 3 && !/^\s*(?:›\s+)?2\. Yes, and don't ask again.+\(p\)$/.test(choices[1] ?? '')) return null
+  // Require the entire command and the choices to fit in the card.
+  if (body.length > BODY_LINES || body.some(line => line.length > LINE)) return null
+  // "Yes" alone, so the sheet draws it as a one-time yes, not as "don't ask again" (permissionTone).
+  const options = [
+    {
+      n: 1,
+      label: 'Yes',
+      text: 'Yes, proceed (y)',
+      checked: null,
+      cursor: /^\s*›/.test(choices[0] ?? ''),
+    },
+    { n: Number(reject[2]), label: 'No, cancel (esc)', text: 'No, cancel (esc)', checked: null, cursor: !!reject[1] },
+  ]
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify([CODEX_AGENT, body, choices.map(line => line.replace(/^\s*(?:›\s+)?/, ''))]))
+    .digest('hex')
+    .slice(0, 24)
+  return {
+    kind: 'permission',
+    title: 'Codex',
+    body,
+    prompt: CODEX_PERMISSION_TITLE,
+    options,
+    cursor: options.find(option => option.cursor)?.n ?? null,
+    fingerprint,
   }
 }
 

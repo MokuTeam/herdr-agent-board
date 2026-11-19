@@ -84,7 +84,7 @@ export interface LaunchWindowView {
    * The Model field (#380), offered when the launcher takes a model; `aliases`: Claude's, as
    * suggestions while the agent is Claude Code (pi names its models its own way).
    */
-  model: { offered: boolean; aliases: readonly string[] }
+  model: { offered: boolean; aliases: readonly string[]; efforts?: string[]; effort?: string }
   /** The worktree row shows: the folder is in a git checkout. */
   worktree: boolean
   branchHidden: boolean
@@ -470,7 +470,18 @@ export function launchWindow(deps: LaunchWindowDeps) {
       agent: agentRow(s.agent, options.agents),
       model: {
         offered: options.takesModel,
-        aliases: s.agent === null || s.agent === 'claude' ? CLAUDE_MODEL_ALIASES : [],
+        ...(s.agent === 'codex' && {
+          efforts: Object.hasOwn(options.codexModels ?? {}, fields().model.trim())
+            ? (options.codexModels?.[fields().model.trim()] ?? [])
+            : [],
+          effort: view.get().model.effort ?? '',
+        }),
+        aliases:
+          s.agent === 'codex'
+            ? Object.keys(options.codexModels ?? {})
+            : s.agent === null || s.agent === 'claude'
+              ? CLAUDE_MODEL_ALIASES
+              : [],
       },
     })
     launcher.set(launcherFor(options.launcher, s.agent))
@@ -531,7 +542,8 @@ export function launchWindow(deps: LaunchWindowDeps) {
     syncGo()
   }
 
-  const problems = () => formProblems(fields(), folder.check(), folder.git(), t(), s?.profile)
+  const problems = () =>
+    formProblems(fields(), folder.check(), folder.git(), t(), s?.agent === 'codex' ? undefined : s?.profile)
 
   function syncGo(): void {
     if (!s) return
@@ -567,7 +579,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
     }
     // The check brought the folder's or the lane's profile while the choice is offered: nothing
     // goes in a profile the user did not see; it is drawn, and Start is pressed again.
-    if (s.profile !== seen && (seen.offered || s.profile.offered)) return renderProfile()
+    if (s.agent !== 'codex' && s.profile !== seen && (seen.offered || s.profile.offered)) return renderProfile()
     if (!deps.canMutate()) return deps.toast(t()('mobile.readOnly'), true)
     const st = s
     const body = startBody(fields(), {
@@ -575,10 +587,12 @@ export function launchWindow(deps: LaunchWindowDeps) {
       git: folder.git(),
       category: st.category,
       label: labelOf(view.get().fields.workspace),
-      ...profileBody(st.profile, d().profiles, parentOf(st.ctx)),
+      ...(st.agent === 'codex' ? {} : profileBody(st.profile, d().profiles, parentOf(st.ctx))),
       ...agentBody(st.agent, options.agents),
       takesModel: options.takesModel,
     })
+    const effort = view.get().model.effort
+    if (st.agent === 'codex' && effort && view.get().model.efforts?.includes(effort)) Object.assign(body, { effort })
     const draftVersion = drafts.write(st.draftKey, draftForm())
     st.sending = true
     syncGo()
@@ -665,11 +679,13 @@ export function launchWindow(deps: LaunchWindowDeps) {
         setFields({ model: '' })
         noteFor('model', '')
       }
+      patch({ model: { ...view.get().model, effort: '' } })
       s.agent = id
       s.agentSet = true
       if (s.agentRefused) patch({ error: { ...view.get().error, hidden: true } })
       s.agentRefused = false
       renderAgent()
+      syncGo()
     },
     /** A profile picked (the choice is offered): it stops following the lane and the folder. */
     pickProfile(id: string): void {
@@ -727,8 +743,13 @@ export function launchWindow(deps: LaunchWindowDeps) {
     },
     message: (value: string) => setFields({ message: value }),
     model(value: string): void {
+      patch({ model: { ...view.get().model, effort: '' } })
       setFields({ model: value })
+      renderAgent()
       noteFor('model', '')
+    },
+    effort(value: string): void {
+      patch({ model: { ...view.get().model, effort: value } })
     },
     submit: () => void submit(),
     /** A click beside the window closes it only while nothing was written in it yet. */

@@ -1,8 +1,10 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
+import { join } from 'node:path'
 import { commandArgs } from '../../src/core/launch/launcher-command.ts'
 import { canFork } from '../../src/services/launch/fork.ts'
 import { launcherFor } from '../../src/services/launch/launcher.ts'
+import { root, sandbox } from '../support/sandbox.ts'
 
 const S = '0f8fad5b-d9cb-469f-a165-70867728950e'
 
@@ -32,4 +34,23 @@ test('the board offers a fork where its launcher can make one', () => {
   assert.equal(canFork({ launch: { agent: 'claude' } }), true)
   assert.equal(canFork({ launch: { agent: 'codex' } }), false)
   assert.equal(canFork({ launch: { agent: 'claude', args: ['--continue'] } }), false)
+})
+
+test('the configured Codex launcher itself refuses a Claude fork without the explicit server flag', async () => {
+  const box = await sandbox()
+  const code = `
+    import { herdrLauncher, LaunchError } from ${JSON.stringify(join(root, 'src/services/launch/launcher.ts'))};
+    import { t } from ${JSON.stringify(join(root, 'src/core/lang.ts'))};
+    try {
+      await herdrLauncher({agent: 'codex'}).start({profileArgs: [], resume: null, fork: ${JSON.stringify(S)}}, {step() {}});
+      process.exit(2);
+    } catch (err) {
+      if (!(err instanceof LaunchError) || err.kind !== 'launcher' || err.message !== t('archive.err.cannotResume')) process.exit(3);
+      process.stdout.write('refused');
+    }
+  `
+  const proc = Bun.spawn([process.execPath, '-e', code], { env: box.env, stdout: 'pipe', stderr: 'pipe' })
+  assert.equal(await proc.exited, 0)
+  assert.equal(await new Response(proc.stdout).text(), 'refused')
+  assert.deepEqual(box.calls(), [])
 })

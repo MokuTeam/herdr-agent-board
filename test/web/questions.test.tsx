@@ -316,6 +316,41 @@ describe('a permission prompt', () => {
   })
 })
 
+describe("Codex's command approval (#426)", () => {
+  const CODEX: PublicDialog = {
+    kind: 'permission',
+    title: 'Codex',
+    body: ['  Environment: local', '  $ pwd'],
+    more: 0,
+    prompt: 'Would you like to run the following command?',
+    options: [
+      { n: 1, label: 'Yes' },
+      { n: 3, label: 'No, cancel (esc)' },
+    ],
+    fingerprint: 'cx1',
+  }
+  test('allow once and deny, by the number Codex gives them; the choice posts that number', async () => {
+    const react = new NewQuestions({ pointerFine: true })
+    const codex = { ...held, agent: 'codex' }
+    expect(react.mount(codex, onScreen(CODEX, codex))).toBe(true)
+    const html = serializeNodes(react.markup())
+    expect(html).toContain(translator('en')('qa.codexAllow'))
+    expect(html).toContain(translator('en')('qa.codexDeny'))
+    // Allow by its tone, deny as a No.
+    expect(html).toContain('class="qa-opt perm-opt yes" data-perm="1"')
+    expect(html).toContain('class="qa-opt perm-opt no" data-perm="3"')
+    react.clock += 600
+    await react.click({ kind: 'permit', n: 3 })
+    expect(react.posted).toEqual([
+      { key: 'k2', action: 'permit', body: { session: 'k2', fingerprint: 'cx1', option: 3 } },
+    ])
+    // Claude's prompt keeps its own words.
+    const claude = new NewQuestions({ pointerFine: true })
+    claude.mount(held, onScreen(PERMISSION))
+    expect(serializeNodes(claude.markup())).not.toContain(translator('en')('qa.codexAllow'))
+  })
+})
+
 // pi's menu and text input (src/core/dialogs/pi-dialogs.ts): the old page never had them, so the
 // React side alone.
 const PI_MENU: PublicDialog = {

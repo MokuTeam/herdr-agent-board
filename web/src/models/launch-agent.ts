@@ -48,6 +48,9 @@ export function agentRow(picked: string | null, offered: readonly AgentOption[])
 export const agentBody = (picked: string | null, offered: readonly AgentOption[]): { agent?: string } =>
   picked !== null && offersAgents(offered) && offered.some(a => a.id === picked) ? { agent: picked } : {}
 
-/** The line under the title names the picked agent when the board's own launcher starts it. */
+/**
+ * The line under the title names the picked agent when the board's own launcher starts it; Codex
+ * always starts through herdr's launcher, whatever the config's (services/launch/run.ts).
+ */
 export const launcherFor = (launcher: LauncherInfo, picked: string | null): LauncherInfo =>
-  picked !== null && launcher.kind === 'herdr' ? { kind: 'herdr', agent: picked } : launcher
+  picked === 'codex' || (picked !== null && launcher.kind === 'herdr') ? { kind: 'herdr', agent: picked } : launcher

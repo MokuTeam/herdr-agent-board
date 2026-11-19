@@ -1,6 +1,7 @@
 // Codex rollouts contain response items and event copies of those same messages. Read the
 // response items only; system instructions, reasoning and tool outputs stay out of the thread.
 import { boardNotice } from './notices.ts'
+import type { Naming } from './pi.ts'
 import {
   type ConversationTurn,
   cleanPrompt,
@@ -77,6 +78,9 @@ interface Rollout {
   conversation: ConversationTurn[]
   tool: ToolCall | null
   context?: number
+  /** The model and effort of the last turn (its turn_context), what the card shows. */
+  model?: string
+  effort?: string
 }
 
 function readRollout(lines: readonly string[]): Rollout {
@@ -84,10 +88,16 @@ function readRollout(lines: readonly string[]): Rollout {
   const calls = new Map<string, ToolTurn>()
   let tool: ToolCall | null = null
   let context: number | undefined
+  let model: string | undefined
+  let effort: string | undefined
   for (const line of lines) {
     const entry = parse(line)
     const item = rec(entry?.payload)
     if (!entry || !item) continue
+    if (entry.type === 'turn_context') {
+      model = str(item.model) || model
+      effort = str(item.effort) || str(rec(rec(item.collaboration_mode)?.settings)?.reasoning_effort) || effort
+    }
     if (entry.type === 'event_msg' && item.type === 'token_count') {
       const usage = rec(rec(item.info)?.last_token_usage)
       if (typeof usage?.input_tokens === 'number' && Number.isFinite(usage.input_tokens)) context = usage.input_tokens
@@ -118,12 +128,18 @@ function readRollout(lines: readonly string[]): Rollout {
       if (tool?.id === id) tool.pending = false
     }
   }
-  return { conversation, tool, ...(context !== undefined && { context }) }
+  return {
+    conversation,
+    tool,
+    ...(context !== undefined && { context }),
+    ...(model && { model }),
+    ...(effort && { effort }),
+  }
 }
 
 /** The last prompt, answer, question, tool and request size for a Codex card. */
 export function parseCodexTail(lines: readonly string[]): TranscriptInfo {
-  const { conversation, tool, context } = readRollout(lines)
+  const { conversation, tool, context, model, effort } = readRollout(lines)
   let prompt = ''
   let lastText = ''
   let question = ''
@@ -139,7 +155,17 @@ export function parseCodexTail(lines: readonly string[]): TranscriptInfo {
     }
     if (prompt && lastText) break
   }
-  return { title: '', prompt, lastText, question, replied, tool, ...(context !== undefined && { context }) }
+  return {
+    title: '',
+    prompt,
+    lastText,
+    question,
+    replied,
+    tool,
+    ...(context !== undefined && { context }),
+    ...(model && { model }),
+    ...(effort && { effort }),
+  }
 }
 
 /**
@@ -148,4 +174,18 @@ export function parseCodexTail(lines: readonly string[]): TranscriptInfo {
  */
 export function parseCodexConversation(lines: readonly string[], limit = 40): ConversationTurn[] {
   return fitThread(readRollout(lines).conversation.slice(-limit))
+}
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * Codex's /rename runs without a turn and prints nothing: the name shows at the end of the status
+ * line under the input (`GPT-6.1-Sol low · <folder> · <name>`), cut with … when it is long.
+ */
+export const CODEX_NAMING: Naming = {
+  title: 'Codex',
+  command: name => `/rename ${name}`,
+  done: /(?!)/,
+  // The first 40 characters: a long name is cut in the status line.
+  doneFor: name => new RegExp(`·\\s*${escapeRe(name.trim().slice(0, 40)).replace(/\s+/g, '\\s+')}`),
 }

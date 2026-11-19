@@ -269,6 +269,7 @@ export interface CardMenuContext extends MenuContext {
   mokupilot?: boolean | undefined
   /** The board can fork a session into a new tab. */
   fork?: boolean | undefined
+  codexFork?: boolean | undefined
   /** A restart of it is on its way. */
   restarting?: boolean | undefined
   /** Why it cannot go to the archive now, a text key, or '' (src/core/archive.ts archiveBlock). */
@@ -375,7 +376,13 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
       claude &&
       it.agent === 'claude' && { id: 'mokupilot', label: t('mokupilot.call'), ...edit() },
     // A fork in a new tab starts a session through herdr, as a new one does.
-    own && ctx.fork && claude && it.agent === 'claude' && { id: 'fork', label: t('fork.menu'), ...herdr() },
+    own &&
+      claude &&
+      ((ctx.fork && it.agent === 'claude') || (ctx.codexFork && it.agent === 'codex')) && {
+        id: 'fork',
+        label: t('fork.menu'),
+        ...herdr(),
+      },
     // A sleeper without a pane wakes in a new tab first (#178, #204); a MokuPilot day session (#331)
     // takes it through its day's inbox.
     {

@@ -7,7 +7,7 @@ import { MODEL_MAX, readModel } from './model.ts'
 import { checkName } from './names.ts'
 
 export const USAGE =
-  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>] [--pane <pane id>] [--profile <id>] [--model <id or alias>] [--agent claude|pi] [--trust]'
+  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>] [--pane <pane id>] [--profile <id>] [--model <id or alias>] [--agent claude|pi|codex] [--trust] [--effort <level>] [--approval on-request|never] [--sandbox read-only|workspace-write|danger-full-access]'
 
 /** `spawn-agent --help`: the usage, then what is easy to get wrong. */
 export const HELP = `${USAGE}
@@ -15,7 +15,13 @@ export const HELP = `${USAGE}
 --model starts that one session on a model (an alias such as opus, sonnet or haiku, or a full name),
 passed on the agent's command line, so the profile's default stays as it is; pi takes it in its own
 form (provider/id). Do not type /model into the new session for that: Claude saves it as the
-default of every later session in the profile.`
+default of every later session in the profile.
+
+--agent codex starts Codex CLI: new sessions only (no --resume, --fork or --session-id: Codex picks its
+own id), no Claude profile (--profile, --config-dir, --keep-env) and no --trust (Codex asks about the
+folder in its own dialog). --model is Codex's -m; --effort <level> is model_reasoning_effort for that
+model; --approval and --sandbox are Codex's -a and -s. Without them Codex runs on the user's
+config.toml. If config.json sets \`codexHome\`, the tab gets CODEX_HOME=<that folder>.`
 
 /** What spawn-agent was asked to start. */
 export interface SpawnOptions {
@@ -46,8 +52,17 @@ export interface SpawnOptions {
   configDir?: string
   /** The board's start: the tab's env as herdr makes it. */
   keepEnv?: boolean
-  /** pi: `launch.pi` is typed in place of the profile's start command and arguments (core/launch/agents.ts). */
-  agent?: 'pi'
+  /**
+   * pi or Codex: `launch.pi` or `launch.codex` is typed in place of the profile's start command and
+   * arguments (core/launch/agents.ts).
+   */
+  agent?: 'pi' | 'codex'
+  /** Codex: model_reasoning_effort (`-c`) for --model. */
+  effort?: string
+  /** Codex: `-a`, when it asks before it runs a command. */
+  approval?: string
+  /** Codex: `-s`, what a command it runs may touch. */
+  sandbox?: string
   /**
    * Answer two startup dialogs with Yes instead of stopping there: the folder-trust dialog for
    * --cwd itself, and "Allow external CLAUDE.md file imports?" when every file it lists is in the
@@ -56,6 +71,18 @@ export interface SpawnOptions {
   trust?: boolean
   help?: never
 }
+
+/** What Codex's -a and -s take (codex 0.169): the board passes those and no others. */
+export const CODEX_APPROVALS: readonly string[] = ['on-request', 'never']
+export const CODEX_SANDBOXES: readonly string[] = ['read-only', 'workspace-write', 'danger-full-access']
+// What only Claude has: a codex start is refused with any of them rather than starting without it.
+const CLAUDE_ONLY: readonly (readonly [Key, string])[] = [
+  ['resume', '--resume'],
+  ['fork', '--fork'],
+  ['sessionId', '--session-id'],
+  ['profile', '--profile'],
+  ['configDir', '--config-dir'],
+]
 
 export type SpawnArgs = SpawnOptions | { help: true }
 
@@ -79,6 +106,9 @@ const OPTIONS: Record<string, Key> = {
   configdir: 'configDir',
   keepenv: 'keepEnv',
   agent: 'agent',
+  effort: 'effort',
+  approval: 'approval',
+  sandbox: 'sandbox',
   trust: 'trust',
   help: 'help',
   h: 'help',
@@ -157,11 +187,31 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     throw new Error('give one of --profile, --config-dir and --keep-env')
   // Claude is what it starts anyway; pi only as a new session (its --resume and --fork are not Claude's).
   const agent = out.agent?.trim().toLowerCase()
-  if (agent !== undefined && agent !== 'claude' && agent !== 'pi')
-    throw new Error(`--agent must be claude or pi, not "${out.agent}"`)
+  if (agent !== undefined && agent !== 'claude' && agent !== 'pi' && agent !== 'codex')
+    throw new Error(`--agent must be claude, pi or codex, not "${out.agent}"`)
   const pi = agent === 'pi'
+  const codex = agent === 'codex'
   if (pi && (resume !== undefined || fork !== undefined))
     throw new Error('--agent pi starts a new session: give it no --resume or --fork')
+  // Codex: its own ids, no Claude profiles, its own folder dialog; its options are no one else's.
+  if (codex) {
+    const claudes = [...CLAUDE_ONLY.filter(([key]) => out[key] !== undefined).map(([, flag]) => flag)]
+    if (keepEnv) claudes.push('--keep-env')
+    if (trust) claudes.push('--trust')
+    if (claudes.length) throw new Error(`--agent codex starts a new Codex session: give it no ${claudes.join(', ')}`)
+  } else {
+    for (const key of ['effort', 'approval', 'sandbox'] as const)
+      if (out[key] !== undefined) throw new Error(`--${key} is for --agent codex`)
+  }
+  const approval = out.approval?.trim().toLowerCase()
+  if (approval !== undefined && !CODEX_APPROVALS.includes(approval))
+    throw new Error(`--approval must be ${CODEX_APPROVALS.join(' or ')}, not "${out.approval}"`)
+  const sandbox = out.sandbox?.trim().toLowerCase()
+  if (sandbox !== undefined && !CODEX_SANDBOXES.includes(sandbox))
+    throw new Error(`--sandbox must be ${CODEX_SANDBOXES.join(', ')}, not "${out.sandbox}"`)
+  const effort = out.effort?.trim()
+  if (effort !== undefined && !/^[a-z][a-z0-9_-]{0,31}$/i.test(effort))
+    throw new Error(`--effort must be a reasoning level such as low, medium or high, not "${out.effort}"`)
   return {
     name,
     cwd: out.cwd,
@@ -179,6 +229,10 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     ...(configDir !== undefined && { configDir }),
     ...(keepEnv && { keepEnv }),
     ...(pi && { agent: 'pi' as const }),
+    ...(codex && { agent: 'codex' as const }),
+    ...(effort !== undefined && { effort }),
+    ...(approval !== undefined && { approval }),
+    ...(sandbox !== undefined && { sandbox }),
     ...(trust && { trust: true }),
   }
 }

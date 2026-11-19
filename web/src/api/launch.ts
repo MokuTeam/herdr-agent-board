@@ -12,6 +12,7 @@ export interface LaunchOptions {
   launcher: LauncherInfo
   /** The agents a start may pick (Claude Code first); none from a board before the choice, or a launcher of the config's own. */
   agents: AgentOption[]
+  codexModels?: Record<string, string[]>
   /** The one a start that names none starts as: the board's default. */
   agent: string
   workspaces: WorkspaceOption[]
@@ -60,6 +61,9 @@ export function asOptions(value: unknown): LaunchOptions | null {
   return {
     launcher,
     agents: Array.isArray(value.agents) ? value.agents.filter(isAgent).map(a => ({ id: a.id, title: a.title })) : [],
+    ...(isReply(value.codexModels) && {
+      codexModels: Object.fromEntries(Object.entries(value.codexModels).map(([id, levels]) => [id, strings(levels)])),
+    }),
     agent: text(value.agent) ?? 'claude',
     workspaces: value.workspaces.filter(isReply).map(w => ({ id: String(w.id ?? ''), label: text(w.label) })),
     focused: text(value.focused) ?? '',

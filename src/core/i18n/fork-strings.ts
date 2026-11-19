@@ -24,7 +24,10 @@ export const FORK_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'fork.started': 'Fork of “{name}” is starting: “{fork}”',
     'fork.label': 'fork',
     // why it cannot be forked
-    'fork.err.notClaude': 'Only a Claude session with an id can be forked, and “{name}” is not one',
+    'fork.err.notClaude': 'Only a Claude or Codex session with an id can be forked, and “{name}” is not one',
+    'fork.err.identity': 'herdr did not report a new Codex session for the fork; its card was not changed',
+    'fork.err.codexMissing': 'Codex is not on the board’s PATH: it cannot start the fork',
+    'fork.err.noFolder': 'The Codex rollout does not record its folder: it cannot be forked here',
     'fork.err.noTranscript': 'The conversation of {session} is not on this computer: there is nothing to fork',
     'fork.err.herdr': 'herdr did not list its workspaces: {why}',
     'fork.err.launcher':
@@ -48,7 +51,10 @@ export const FORK_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'fork.cancel': 'Отмена',
     'fork.started': 'Форк «{name}» запускается: «{fork}»',
     'fork.label': 'форк',
-    'fork.err.notClaude': 'Форк можно сделать только у сессии Claude с id, а «{name}» не такая',
+    'fork.err.notClaude': 'Форк можно сделать только у сессии Claude или Codex с id, а «{name}» не такая',
+    'fork.err.identity': 'herdr не подтвердил новую сессию Codex для форка; её карточка не изменена',
+    'fork.err.codexMissing': 'Codex не найден в PATH доски: запустить форк не получится',
+    'fork.err.noFolder': 'В rollout Codex не записана его папка: запустить форк здесь не получится',
     'fork.err.noTranscript': 'Переписки {session} нет на этом компьютере: форкать нечего',
     'fork.err.herdr': 'herdr не отдал список рабочих пространств: {why}',
     'fork.err.launcher':
