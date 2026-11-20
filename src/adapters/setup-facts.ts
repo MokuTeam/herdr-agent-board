@@ -319,7 +319,10 @@ export async function gatherFacts(
 ): Promise<SetupFacts> {
   const shown =
     given ??
-    shownProfiles(mergeProfiles(cfg?.profiles, findProfileDirs(home), home, inheritedProfileDir(env, home)).list)
+    shownProfiles(
+      mergeProfiles(cfg?.profiles, findProfileDirs(home), home, inheritedProfileDir(env, home, platform), platform)
+        .list,
+    )
   // The board's own copy of the agents' skill, which each profile's is compared with.
   const source = readText(boardFiles(root).skill)
   const settingsIn = (
@@ -343,7 +346,7 @@ export async function gatherFacts(
   }))
   // The first one's at the top, where the checks with one profile and the notification check read
   // it (none shown, in a hand-edited config.json: ~/.claude's, as before).
-  const first = profiles[0] ?? settingsIn(defaultProfileDir(home))
+  const first = profiles[0] ?? settingsIn(defaultProfileDir(home, platform))
   const configFile = herdrConfigFile(env, home)
   const wakeUrl = typeof cfg?.wakeUrl === 'string' && cfg.wakeUrl ? cfg.wakeUrl : null
   const wakeNew = await wakeFacts(cfg, probeMs)
