@@ -64,6 +64,20 @@ export function isOurCommand(command: string): boolean {
   return OUR_HOOK.test(command) || OUR_STATUS_LINE.test(command)
 }
 
+/**
+ * Whether a command is one any install of the board writes, from any copy: its hook (the question
+ * form's too), status line, notification and wake hooks. Profile sync never sends these; a node's
+ * own install writes them with its paths (core/bundle.ts).
+ */
+export function isBoardCommand(command: string): boolean {
+  return (
+    OUR_HOOK.test(command) ||
+    OUR_STATUS_LINE.test(command) ||
+    OUR_MAC_TOAST.test(command) ||
+    OUR_WAKE_HOOK.test(command)
+  )
+}
+
 /** A path for comparing: forward slashes, no trailing one, lower case. */
 export const normPath = (p: unknown): string =>
   String(p ?? '')
