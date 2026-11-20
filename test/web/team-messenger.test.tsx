@@ -29,6 +29,7 @@ import {
 import { board, renderInBoard } from './support/board.tsx'
 import { findAll, hasClass, type Node } from './support/markup.ts'
 import { type Host, hostElements } from './support/react-events.ts'
+import { inZone } from './support/zone.ts'
 
 const en = translator('en')
 const ru = translator('ru')
@@ -58,17 +59,6 @@ const mine = (id: string, ts: string, over: Partial<ThreadLine> = {}): ThreadLin
 })
 const days = (lines: ThreadLine[], t = en, now = NOW) =>
   chatItems(lines, { t, now }).flatMap(i => (i.kind === 'day' ? [i.label] : []))
-
-/** In another time zone for the length of `fn`. */
-function inZone<T>(zone: string, fn: () => T): T {
-  const was = process.env.TZ
-  process.env.TZ = zone
-  try {
-    return fn()
-  } finally {
-    process.env.TZ = was ?? 'UTC'
-  }
-}
 
 describe('days and times, on a fixed clock', () => {
   const LINES = [
@@ -124,18 +114,27 @@ describe('days and times, on a fixed clock', () => {
         '2026-11-10T08:05:00Z',
         '2026-11-10T18:40:00Z',
         '2026-11-08T08:05:00Z',
+        '2026-11-05T08:05:00Z',
+        '2026-11-04T08:05:00Z',
         '2026-10-22T08:05:00Z',
         '2026-10-22T16:30:00Z',
         '2025-12-31T08:05:00Z',
+        // A clock a little ahead: tomorrow is the bare time as in the list, further on a date.
+        '2026-11-12T08:05:00Z',
+        '2026-11-13T08:05:00Z',
       ]
       expect(list.map(ts => plain(draftWhen(ts, en, NOW)))).toEqual([
         '8:05 AM',
         'Yesterday 8:05 AM',
         'Yesterday 6:40 PM',
         'Sun 8:05 AM',
+        'Thu 8:05 AM',
+        'Nov 4, 8:05 AM',
         'Oct 22, 8:05 AM',
         'Oct 22, 4:30 PM',
         'Dec 31, 2025, 8:05 AM',
+        '8:05 AM',
+        'Nov 13, 8:05 AM',
       ])
       expect(draftWhen('2026-11-10T08:05:00Z', ru, NOW)).toBe('Вчера 8:05')
       expect(draftWhen('2026-10-22T08:05:00Z', ru, NOW)).toBe('22 окт., 8:05')

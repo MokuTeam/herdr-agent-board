@@ -105,29 +105,38 @@ export function fullWhen(ts: string, t: Translator): string {
   return `${capital(day, t)}, ${timeOf(ms, t)}`
 }
 
+/**
+ * The day part of a time that is not today, as the list shows it ("Yesterday", "Mon" this week,
+ * else "9 Nov" and the year when not this one); `near`: a word for a day this week, not a date.
+ * null today (and tomorrow, a clock a little ahead).
+ */
+function dayOf(ms: number, t: Translator, now: number): { day: string; near: boolean } | null {
+  const days = daysFrom(ms, now)
+  if (days >= 0 && days <= 1) return null
+  if (days === -1) return { day: capital(t('when.yesterday'), t), near: true }
+  const d = new Date(ms)
+  if (days < 0 && days > -7) return { day: d.toLocaleDateString(t.lang, { weekday: 'short' }), near: true }
+  const sameYear = d.getFullYear() === new Date(now).getFullYear()
+  const day = d.toLocaleDateString(t.lang, { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) })
+  return { day, near: false }
+}
+
 /** A thread's latest time in the list: "14:05" today, "Yesterday", "Mon" this week, else "9 Nov" (and the year when not this one). */
 export function listWhen(ts: string, t: Translator, now: number): string {
   const ms = msOf({ ts })
-  const days = daysFrom(ms, now)
-  if (days >= 0 && days <= 1) return timeOf(ms, t)
-  if (days === -1) return capital(t('when.yesterday'), t)
-  const d = new Date(ms)
-  if (days < 0 && days > -7) return d.toLocaleDateString(t.lang, { weekday: 'short' })
-  const sameYear = d.getFullYear() === new Date(now).getFullYear()
-  return d.toLocaleDateString(t.lang, { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) })
+  return dayOf(ms, t, now)?.day ?? timeOf(ms, t)
 }
 
 /**
  * A draft's time over it in its thread (#465): the time today, else the list's day and the time
  * ("Yesterday 2:05 PM", "Mon 2:05 PM", "Nov 12, 2:05 PM"), so two drafts of one earlier day differ.
+ * A day this week takes the time as a card's clock does ("Fri 9:00"); a date, after a comma.
  */
 export function draftWhen(ts: string, t: Translator, now: number): string {
   const ms = msOf({ ts })
-  const days = daysFrom(ms, now)
   const time = timeOf(ms, t)
-  if (days >= 0 && days <= 1) return time
-  // A weekday or "Yesterday" takes the time as a card's clock does ("Fri 9:00"); a date, after a comma.
-  return `${listWhen(ts, t, now)}${days < 0 && days > -7 ? ' ' : ', '}${time}`
+  const day = dayOf(ms, t, now)
+  return day ? `${day.day}${day.near ? ' ' : ', '}${time}` : time
 }
 
 /** One line of a text: its whitespace folded, cut at `max` characters with an ellipsis. */

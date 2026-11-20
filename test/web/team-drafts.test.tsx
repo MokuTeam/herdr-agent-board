@@ -11,6 +11,7 @@ import { board, renderInBoard } from './support/board.tsx'
 import { answers, restoreFetch } from './support/fetch-answers.ts'
 import { findAll, type Node } from './support/markup.ts'
 import { type Host, hostElements } from './support/react-events.ts'
+import { inZone } from './support/zone.ts'
 
 afterEach(restoreFetch)
 
@@ -176,10 +177,8 @@ test('two drafts of one earlier day say their times (#465), the full date on hov
     via: 'agent' as const,
     file: { state: 'draft' as const, name: 'PROPOSAL.md', size: 19762 },
   })
-  const whens = (zone: string) => {
-    const was = process.env.TZ
-    process.env.TZ = zone
-    try {
+  const whens = (zone: string) =>
+    inZone(zone, () => {
       const out = renderInBoard(
         <TeamBody
           {...body({
@@ -195,10 +194,7 @@ test('two drafts of one earlier day say their times (#465), the full date on hov
         label: text([n]).replace(/\s/g, ' '),
         title: (n.kind === 'element' && n.attrs.get('title')?.replace(/\s/g, ' ')) || '',
       }))
-    } finally {
-      process.env.TZ = was ?? 'UTC'
-    }
-  }
+    })
   expect(whens('UTC')).toEqual([
     { label: 'Yesterday 1:17 PM', title: 'Thursday, November 12, 2026, 1:17 PM' },
     { label: 'Yesterday 6:08 PM', title: 'Thursday, November 12, 2026, 6:08 PM' },
