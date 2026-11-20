@@ -1413,6 +1413,9 @@ an hour to sleep, when it is on). The board's entries are files, and the board k
 - With no board running the scheduler, `board remind` says so; the entry goes out once one runs.
 - At most two sleeping sessions are woken at once. An entry cancelled while its session wakes
   up is not sent.
+- Plain one-off reminders for one Claude session due in the same minute, with the same `--idle`,
+  go as one prompt, a line each with its own tag, so the session spends one turn on them. Cron
+  entries, restarts, sleeps and call reports always go on their own.
 - A run for a sleeping session waits while wake is slow to answer, or down and herdr cannot be
   reached, without the wait counting against `scheduleWaitMin` and without the session counting as
   gone: no reminder is lost, and no cron entry dropped, because wake was down. With wake turned off

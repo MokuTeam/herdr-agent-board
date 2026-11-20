@@ -97,6 +97,9 @@ const numberOf = (v: unknown): number | undefined => (typeof v === 'number' ? v 
 
 /** A plain one-off reminder, which goes in one prompt with others due beside it (#306). */
 const joins = (e: ScheduleEntry): boolean => !e.kind && !e.cron && !e.receipt
+// The texts of a joined prompt, at most: herdr gets the prompt as one argument, and Windows refuses
+// a long one. What is left over goes on the next tick, as the next prompt.
+const JOINED_MAX = 8000
 
 /**
  * Start sending due entries. `deps.cfg` is the live config: scheduleTickSec (15), scheduleWaitMin
@@ -180,7 +183,7 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
             })
           : ''
         run(entry, item, held, more)
-          .catch(err => log(`schedule ${entry.id}: ${messageOf(err)}`))
+          .catch(err => log(`schedule ${[entry, ...more].map(e => e.id).join(',')}: ${messageOf(err)}`))
           .finally(() => {
             for (const k of keys) flying.delete(k)
             onChange()
@@ -198,18 +201,21 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
    * with it as one prompt (#306). Only one-off reminders join: a cron entry, a restart, a sleep, a
    * call's results and a retry-safe report go on their own, as do one that waits for the session to
    * wake (`noWake`) and one that would go to another session (another profile's in its pane).
+   * Claude sessions only: another agent (pi) gets each in a prompt of its own, as before.
    */
   function alongside(
     entry: ScheduleEntry,
     item: Item,
-    due: ScheduleEntry[],
+    ready: ScheduleEntry[],
     items: Item[],
     profileIdOf: (key: string) => string | undefined,
   ): ScheduleEntry[] {
-    if (!joins(entry)) return []
+    if (!joins(entry) || (item.agent !== undefined && item.agent !== 'claude')) return []
     const minute = Math.floor(entry.next / 60_000)
-    return due.filter(
-      e =>
+    let size = String(entry.text).length
+    const more: ScheduleEntry[] = []
+    for (const e of ready) {
+      const joined =
         e !== entry &&
         joins(e) &&
         Math.floor(e.next / 60_000) === minute &&
@@ -218,8 +224,13 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
         !flying.has(e.key) &&
         delivered.get(e.id) !== e.next &&
         workdeskDue(e) &&
-        targetOf(e, items, profileIdOf).item?.key === item.key,
-    )
+        targetOf(e, items, profileIdOf).item?.key === item.key
+      if (!joined) continue
+      size += String(e.text).length + 1
+      if (size > JOINED_MAX) break
+      more.push(e)
+    }
+    return more
   }
 
   /**
