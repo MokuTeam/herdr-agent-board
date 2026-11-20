@@ -5,9 +5,10 @@
 import { describe, expect, test } from 'bun:test'
 import createDOMPurify from 'dompurify'
 import { JSDOM } from 'jsdom'
+import { zipEntries, zipRead } from '../../web/src/models/zip.ts'
 import { cleanDocument } from '../../web/src/viewers/document.ts'
 import { documentOf, UNPACKED_LIMIT } from '../../web/src/viewers/document-worker.ts'
-import { zip } from './support/zip.ts'
+import { deflatedRun, zip } from './support/zip.ts'
 
 const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 const R = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
@@ -113,6 +114,21 @@ describe('a Word document as the worker reads it', () => {
       gap: { bytes: 16, second: [{ name: 'word/document.xml', data: 'x', claims: UNPACKED_LIMIT }] },
     })
     expect(await documentOf(gapped.buffer as ArrayBuffer)).toMatchObject({ ok: false, why: 'broken' })
+  })
+
+  test('a document.xml whose directory says 100 bytes but which unpacks past the limit: too big, before JSZip unpacks it (#230)', async () => {
+    const plain = new Uint8Array(docx(`<w:p>${run('x')}</w:p>`))
+    const kept = (zipEntries(plain) ?? []).filter(e => e.name !== 'word/document.xml')
+    const parts = await Promise.all(kept.map(async e => ({ name: e.name, data: await zipRead(plain, e) })))
+    const mb = (UNPACKED_LIMIT >> 20) + 1
+    const document = deflatedRun(
+      `<?xml version="1.0"?><w:document ${W} ${R}><w:body><w:p>`,
+      mb,
+      '</w:p></w:body></w:document>',
+    )
+    const lying = zip([...parts, { name: 'word/document.xml', data: '', deflated: document, claims: 100 }])
+    const reply = await documentOf(lying.buffer as ArrayBuffer)
+    expect(reply).toMatchObject({ ok: false, why: 'big' })
   })
 })
 

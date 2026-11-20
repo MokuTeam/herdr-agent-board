@@ -285,3 +285,45 @@ test('from the third review: the owner’s once holds at submit, for a request a
   const blank = await submitSecret(cfg, before.id, { values: { token: '   ' }, fingerprint: fingerprint(cfg, before) })
   assert.deepEqual(blank, { status: 400, body: { ok: false, error: '“token” is empty' } })
 })
+
+// #275: an agent that asks and cancels in a loop would push the audit's real lines out.
+test('asks are limited per card in a while, settled or not, and the audit keeps five old files', () => {
+  const { cfg } = setUp()
+  const now = Date.parse('2026-11-20T10:00:00Z')
+  for (let i = 0; i < 10; i++) {
+    const r = ask(cfg, now + i * 1000)
+    assert.ok(cancelSecret(me.key, r.id, now + i * 1000 + 500))
+  }
+  const refused = askSecret(
+    cfg,
+    me,
+    { title: 'Token', sink: 'tok', params: {}, fields: [], expiresMs: 60_000 },
+    now + 20_000,
+  )
+  assert.deepEqual(refused, { ok: false, error: t('secret.err.askedMany', { n: 10, minutes: 10 }) })
+  // another card is its own, and the first may ask again once the while is past
+  const other = askSecret(
+    cfg,
+    { key: 's2', name: 'Two' },
+    { title: 'Token', sink: 'tok', params: {}, fields: [], expiresMs: 60_000 },
+    now + 20_000,
+  )
+  assert.ok(other.ok)
+  ask(cfg, now + 10 * 60_000 + 1000)
+
+  // a full log moves to .1, the older ones one place on, the sixth gone
+  const file = auditFile()
+  writeFileSync(file, 'x'.repeat((1 << 20) + 1))
+  for (let n = 1; n <= 5; n++) writeFileSync(`${file}.${n}`, `old ${n}`)
+  ask(cfg, now + 20 * 60_000)
+  assert.deepEqual(
+    [2, 3, 4, 5].map(n => readFileSync(`${file}.${n}`, 'utf8')),
+    ['old 1', 'old 2', 'old 3', 'old 4'],
+  )
+  assert.equal(readFileSync(`${file}.1`, 'utf8').length, (1 << 20) + 1)
+  assert.equal(existsSync(`${file}.6`), false)
+  assert.deepEqual(
+    audit().map(x => x.op),
+    ['asked'],
+  )
+})

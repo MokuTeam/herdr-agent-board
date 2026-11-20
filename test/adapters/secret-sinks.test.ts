@@ -4,12 +4,14 @@
 import { onTestFinished, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { runTree } from '../../src/adapters/process.ts'
 import { ENV_SCRIPT, writeSink } from '../../src/adapters/secret-sinks.ts'
 import { checkRequest, type SecretField, type Sink, secretsConfig } from '../../src/core/secrets.ts'
 import { isolatedHome } from '../support/env.ts'
+import { compileFake } from '../support/fake-herdr-bin.ts'
 import { fakeSecretBins } from '../support/fake-secrets-bin.ts'
 
 const VALUE = 'Tv-9f3!"q\\uote$ x'
@@ -140,6 +142,117 @@ test('a link where the file goes is not followed', async () => {
   assert.equal(!r.ok && r.error, 'secret.err.notFile')
   assert.equal(readFileSync(elsewhere, 'utf8'), 'untouched')
 })
+
+// #275: a process of the same user that swaps the file for a link while the board sets the rights
+// (Windows: whoami and icacls, here fakes under the test's own SystemRoot that do the swap) gets
+// nothing written through the link, and no copy of the value stays beside it.
+test.skipIf(process.platform !== 'win32')(
+  'a link swapped in while the rights are set is not written through (#275)',
+  async () => {
+    const dir = isolatedHome()
+    const home = join(dir, 'home')
+    const victim = join(dir, 'victim.txt')
+    const target = join(home, 'token.txt')
+    writeFileSync(victim, 'untouched')
+    writeFileSync(target, 'old')
+    try {
+      symlinkSync(victim, join(dir, 'probe'))
+    } catch {
+      return // no symlink rights here (Windows without developer mode)
+    }
+    const root = join(dir, 'system-root')
+    mkdirSync(join(root, 'System32'), { recursive: true })
+    const exe = await compileFake(
+      fileURLToPath(new URL('../support/fake-system32.ts', import.meta.url)),
+      'fake-system32',
+    )
+    for (const name of ['whoami.exe', 'icacls.exe']) copyFileSync(exe, join(root, 'System32', name))
+    const saved = process.env.SystemRoot
+    Object.assign(process.env, { SystemRoot: root, FAKE_SWAP_PATH: target, FAKE_SWAP_TO: victim })
+    onTestFinished(() => {
+      process.env.SystemRoot = saved
+      delete process.env.FAKE_SWAP_PATH
+      delete process.env.FAKE_SWAP_TO
+    })
+    const r = await write(sinkOf({ kind: 'file', path: '~/token.txt', template: '{{v}}' }, home), {}, { v: VALUE })
+    assert.equal(readFileSync(victim, 'utf8'), 'untouched')
+    assert.equal(!r.ok && r.error, 'secret.err.notFile')
+    assert.deepEqual(
+      readdirSync(home).filter(n => n.endsWith('.tmp')),
+      [],
+    )
+  },
+  60_000,
+)
+
+test('the file is replaced whole: its other keys kept, only the user’s, nothing left beside it (#275)', async () => {
+  const dir = isolatedHome()
+  const home = join(dir, 'home')
+  const path = join(home, 'creds.json')
+  writeFileSync(path, JSON.stringify({ other: { keep: 1 } }))
+  const sink = sinkOf(
+    { kind: 'file', path: '~/creds.json', format: 'json', at: ['svc'], template: { token: '{{v}}' } },
+    home,
+  )
+  const r = await write(sink, {}, { v: VALUE })
+  assert.ok(r.ok, JSON.stringify(r))
+  assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), { other: { keep: 1 }, svc: { token: VALUE } })
+  onlyMine(path)
+  const once = await write(sink, {}, { v: 'again' }, [{ name: 'v', hidden: true, once: true }])
+  assert.equal(!once.ok && once.error, 'secret.err.onceThere')
+  assert.deepEqual(readdirSync(home), ['creds.json'])
+})
+
+// #275: the real Windows PowerShell runs the board's script with [Environment] swapped for a class
+// of the test's, which keeps the variables in a file and refuses BOOM: the script's own all or none
+// runs as written, and this computer's variables are never touched.
+test.skipIf(process.platform !== 'win32')(
+  'the env script sets all the variables or none: one that fails puts the others back (#275)',
+  async () => {
+    const dir = isolatedHome()
+    const store = join(dir, 'user-env.txt')
+    const fake = [
+      "Add-Type -TypeDefinition @'",
+      'using System; using System.Collections.Generic;',
+      'public static class FakeEnv {',
+      '  static string Store = Environment.GetEnvironmentVariable("FAKE_ENV_FILE");',
+      '  static Dictionary<string, string> Read() {',
+      '    var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);',
+      "    if (System.IO.File.Exists(Store)) foreach (var l in System.IO.File.ReadAllLines(Store)) { var i = l.IndexOf('='); d[l.Substring(0, i)] = l.Substring(i + 1); }",
+      '    return d;',
+      '  }',
+      '  public static string GetEnvironmentVariable(string n, string scope) { string v; return Read().TryGetValue(n, out v) ? v : null; }',
+      '  public static void SetEnvironmentVariable(string n, string v, string scope) {',
+      '    if (n == "BOOM") throw new Exception("refused");',
+      '    var d = Read(); if (v == null) d.Remove(n); else d[n] = v;',
+      '    var lines = new List<string>(); foreach (var kv in d) lines.Add(kv.Key + "=" + kv.Value);',
+      '    System.IO.File.WriteAllLines(Store, lines.ToArray());',
+      '  }',
+      '}',
+      "'@",
+      '',
+    ].join('\n')
+    const script = fake + ENV_SCRIPT.replaceAll('[Environment]::', '[FakeEnv]::')
+    const ps = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64')
+    const run = (set: Record<string, string>) =>
+      runTree(ps, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+        input: JSON.stringify({ check: [], set }),
+        env: { ...process.env, FAKE_ENV_FILE: store },
+        timeout: 60_000,
+      })
+    const stored = () => readFileSync(store, 'utf8').split(/\r?\n/).filter(Boolean).sort()
+    writeFileSync(store, 'ANNA_TOKEN=before\r\n')
+    const failed = await run({ ANNA_TOKEN: b64('v-Anna-7'), BOOM: b64('v-Boom-7'), CLEO_TOKEN: b64('v-Cleo-7') })
+    assert.deepEqual([failed.code, failed.stdout.trim()], [4, 'failed'], failed.stderr)
+    assert.deepEqual(stored(), ['ANNA_TOKEN=before'])
+    assert.equal(/v-(Anna|Boom|Cleo)-7/.test(failed.stdout + failed.stderr), false)
+    const ok = await run({ ANNA_TOKEN: b64('v-Anna-8'), CLEO_TOKEN: b64('v-Cleo-8') })
+    assert.deepEqual([ok.code, ok.stdout.trim()], [0, 'ok'], ok.stderr)
+    assert.deepEqual(stored(), ['ANNA_TOKEN=v-Anna-8', 'CLEO_TOKEN=v-Cleo-8'])
+  },
+  60_000,
+)
 
 async function withFakes() {
   const dir = isolatedHome()

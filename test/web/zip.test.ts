@@ -2,8 +2,8 @@
 // unpacked by its central directory, before a library unpacks all of it; a part's first bytes,
 // or all of it.
 import { describe, expect, test } from 'bun:test'
-import { looksLikeZip, unpackedSize, zipEntries, zipRead, zipText } from '../../web/src/models/zip.ts'
-import { zip } from './support/zip.ts'
+import { looksLikeZip, measureUnpacked, unpackedSize, zipEntries, zipRead, zipText } from '../../web/src/models/zip.ts'
+import { deflatedRun, zip } from './support/zip.ts'
 
 describe('a zip read by its central directory', () => {
   const body = `<worksheet><sheetViews><pane ySplit="1" state="frozen"/></sheetViews><sheetData>${'<row/>'.repeat(50_000)}</sheetData></worksheet>`
@@ -109,5 +109,55 @@ describe('a zip’s directory as JSZip reads it', () => {
     })
     expect(zipEntries(shifted)).toBeNull()
     expect(zipEntries(zip([{ name: 'a', data: 'x' }]))?.length).toBe(1)
+  })
+})
+
+// #230: the directory's sizes can lie; what the parts really unpack to is counted before a library unpacks them.
+describe('what a zip’s parts really unpack to', () => {
+  const MB = 1 << 20
+  const measure = (bytes: Uint8Array, limit = MB) => measureUnpacked(bytes, zipEntries(bytes) ?? [], limit)
+
+  test('a truthful zip: the sizes its parts unpack to, stored and deflated', async () => {
+    const bytes = zip([
+      { name: 'a.xml', data: '<a/>'.repeat(1000) },
+      { name: 'b.bin', data: 'stored', stored: true },
+    ])
+    expect(await measure(bytes)).toEqual({ ok: true, size: 4006 })
+  })
+
+  test('a part that says 100 bytes and unpacks to 64 MB: too big, the inflating stopped soon past the limit', async () => {
+    const bytes = zip([
+      { name: 'xl/worksheets/sheet1.xml', data: '', deflated: deflatedRun('<a>', 64, '</a>'), claims: 100 },
+    ])
+    expect(unpackedSize(zipEntries(bytes) ?? [])).toBe(100)
+    const measured = await measure(bytes)
+    expect(measured).toMatchObject({ ok: false, why: 'big' })
+    // one step of 4 KB unpacks to 4.2 MB at most: no more than that is counted past the limit
+    expect(measured.size).toBeGreaterThan(MB)
+    expect(measured.size).toBeLessThan(MB + 5 * MB)
+  })
+
+  test('a data descriptor (the local sizes 0) that says 100 bytes: counted as it unpacks', async () => {
+    const lying = zip([{ name: 'xl/media/a.bin', data: new Uint8Array(2 * MB), claims: 100, descriptor: true }])
+    expect(await measure(lying)).toMatchObject({ ok: false, why: 'big' })
+    const truthful = zip([{ name: 'xl/media/a.bin', data: 'abc'.repeat(100), descriptor: true }])
+    expect(await measure(truthful)).toEqual({ ok: true, size: 300 })
+  })
+
+  test('a deflate stream that does not end at its compressed size: broken (SheetJS inflates to its end)', async () => {
+    // the directory says 64 bytes of a stream that goes on: SheetJS would inflate all of it
+    const runsOn = zip([{ name: 'a.xml', data: new Uint8Array(MB), claimsCompressed: 64 }])
+    expect(await measure(runsOn)).toMatchObject({ ok: false, why: 'broken' })
+    // more bytes than the stream: the next part's header read as data
+    const shortStream = zip([
+      { name: 'a.xml', data: '<a/>', claimsCompressed: 2000 },
+      { name: 'b.bin', data: new Uint8Array(4000), stored: true },
+    ])
+    expect(await measure(shortStream)).toMatchObject({ ok: false, why: 'broken' })
+  })
+
+  test('a local header that says deflated where the directory says stored: broken', async () => {
+    const bytes = zip([{ name: 'a.bin', data: 'plain', stored: true, localMethod: 8 }])
+    expect(await measure(bytes)).toMatchObject({ ok: false, why: 'broken' })
   })
 })

@@ -4,7 +4,7 @@
 // counterpart (fonts, colors, page layout) is dropped, not imitated. Bundled apart from app.js
 // (server/viewers.ts); it reads the file through the board's file route, with its token.
 import mammoth from 'mammoth'
-import { unpackedSize, zipEntries } from '../models/zip.ts'
+import { measureUnpacked, unpackedSize, zipEntries } from '../models/zip.ts'
 
 export type DocumentReply =
   | { ok: true; html: string }
@@ -45,8 +45,14 @@ export async function documentOf(buffer: ArrayBuffer): Promise<DocumentReply> {
   // A .docx that is not an OLE file is a zip, and one whose directory cannot be read is not handed
   // on: its size unread is not known (JSZip also reads a zip after bytes put before it).
   if (!entries) return { ok: false, why: 'broken', message: 'no central directory' }
-  if (entries && unpackedSize(entries) > UNPACKED_LIMIT)
+  if (unpackedSize(entries) > UNPACKED_LIMIT)
     return { ok: false, why: 'big', message: `${unpackedSize(entries)} bytes unpacked` }
+  // what the directory says can be a lie: what the parts really unpack to, before JSZip unpacks them
+  const measured = await measureUnpacked(bytes, entries, UNPACKED_LIMIT)
+  if (!measured.ok)
+    return measured.why === 'big'
+      ? { ok: false, why: 'big', message: `more than ${UNPACKED_LIMIT} bytes unpacked` }
+      : { ok: false, why: 'broken', message: 'a part does not unpack as its directory says' }
   try {
     // The browser build (bundled for the page) takes the ArrayBuffer; the Node build (Bun, in the
     // tests) the same bytes as a Buffer.

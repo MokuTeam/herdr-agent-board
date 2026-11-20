@@ -15,7 +15,7 @@ import {
 } from '../../web/src/models/spreadsheet.ts'
 import { zipEntries, zipRead } from '../../web/src/models/zip.ts'
 import { bookOf, UNPACKED_LIMIT } from '../../web/src/viewers/spreadsheet-worker.ts'
-import { zip } from './support/zip.ts'
+import { deflatedRun, zip } from './support/zip.ts'
 
 /** An .xlsx with its first sheet's XML changed: what Excel writes and SheetJS's writer does not. */
 async function rezip(bytes: Uint8Array, change: (sheetXml: string) => string): Promise<Uint8Array> {
@@ -194,6 +194,10 @@ describe('a workbook as the worker reads it', () => {
   })
 
   test('a workbook that unpacks to more than the limit (a zip bomb) is not read', async () => {
+    const book = workbook()
+    const plainParts = await Promise.all(
+      (zipEntries(book) ?? []).map(async e => ({ name: e.name, data: await zipRead(book, e) })),
+    )
     const bomb = zip([
       { name: '[Content_Types].xml', data: '<Types/>' },
       { name: 'xl/worksheets/sheet1.xml', data: '<worksheet/>', claims: UNPACKED_LIMIT },
@@ -202,6 +206,14 @@ describe('a workbook as the worker reads it', () => {
     // The same with 70 KB put after its end: the directory is found all the same.
     const tailed = new Uint8Array([...bomb, ...new Uint8Array(70 << 10)])
     expect(await bookOf(tailed, 'en', 'bomb.xlsx')).toMatchObject({ ok: false, why: 'big' })
+    // A part whose data descriptor (the local sizes 0) and directory say 100 bytes, and which
+    // unpacks past the limit: SheetJS would grow its buffer to all of it (#230).
+    const mb = (UNPACKED_LIMIT >> 20) + 1
+    const lying = zip([
+      ...plainParts,
+      { name: 'xl/media/a.bin', data: '', deflated: deflatedRun('', mb, ''), claims: 100, descriptor: true },
+    ])
+    expect(await bookOf(lying, 'en', 'lying.xlsx')).toMatchObject({ ok: false, why: 'big' })
     // A zip whose directory cannot be found at all is not handed on to SheetJS either.
     const headless = tailed.subarray(0, 64)
     expect(await bookOf(headless, 'en', 'cut.ods')).toMatchObject({ ok: false, why: 'broken' })

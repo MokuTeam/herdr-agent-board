@@ -1,7 +1,8 @@
 // The little of a zip the quick look's Office workers read themselves (viewers/*-worker.ts):
 // its central directory, to know how big it is once unpacked before a library unpacks all of
 // it (a zip of 400 KB can hold 400 MB), and a part's first bytes or all of it (a sheet's frozen
-// rows, an .ods's hidden sheets), never more than the directory says it holds. Stored and
+// rows, an .ods's hidden sheets), never more than the directory says it holds; and what the parts
+// really unpack to, since a directory can lie (measureUnpacked). Stored and
 // deflated parts; ZIP64 sizes and directories as their extra records give them.
 
 export interface ZipEntry {
@@ -126,8 +127,74 @@ export function zipEntries(bytes: Uint8Array): ZipEntry[] | null {
 /** Whether the bytes start as a zip does (a local file header): one with no directory to read is broken. */
 export const looksLikeZip = (bytes: Uint8Array): boolean => u32(bytes, 0) === 0x04034b50
 
-/** All of a zip's parts, unpacked, in bytes. */
+/** All of a zip's parts, unpacked, in bytes, as the directory says. */
 export const unpackedSize = (entries: ZipEntry[]): number => entries.reduce((sum, e) => sum + e.size, 0)
+
+export type Measured = { ok: true; size: number } | { ok: false; why: 'big' | 'broken'; size: number }
+
+/**
+ * What the parts really unpack to (#230), not what the directory says: each deflated part is
+ * inflated, its output counted and dropped, and the count stops one byte past `limit` (all the
+ * parts together). The libraries read a part by its local header, from where its data starts:
+ * JSZip (mammoth's) inflates the directory's compressed size of it, SheetJS from there to the
+ * deflate stream's end, whatever the sizes say. So a part's stream must end exactly at its
+ * compressed size, and its local method be the directory's: then both inflate what was counted
+ * here, and nothing else. A part that does not is broken. Stored parts count as their bytes.
+ */
+export async function measureUnpacked(bytes: Uint8Array, entries: ZipEntry[], limit: number): Promise<Measured> {
+  let size = 0
+  for (const entry of entries) {
+    const at = entry.offset
+    if (u32(bytes, at) !== 0x04034b50 || u16(bytes, at + 8) !== entry.method) return { ok: false, why: 'broken', size }
+    const start = at + 30 + u16(bytes, at + 26) + u16(bytes, at + 28)
+    if (entry.method === 0) {
+      // SheetJS takes the local header's size, JSZip the directory's: no more than the file holds
+      size += Math.min(Math.max(entry.compressed, u32(bytes, at + 18)), Math.max(0, bytes.length - start))
+    } else if (entry.method === 8) {
+      if (start + entry.compressed > bytes.length) return { ok: false, why: 'broken', size }
+      const counted = await inflatedSize(bytes.subarray(start, start + entry.compressed), limit - size)
+      if (counted === null) return { ok: false, why: 'broken', size }
+      size += counted
+    }
+    // other methods neither library unpacks: they refuse the file themselves
+    if (size > limit) return { ok: false, why: 'big', size }
+  }
+  return { ok: true, size }
+}
+
+/** The compressed bytes fed to the inflater at a time: what one step can unpack is bounded by it (deflate packs 1032 to 1 at most). */
+const STEP = 4 << 10
+
+/**
+ * A deflate stream's output, counted, up to one byte past `budget`: the bytes go in a step at a
+ * time and the inflating stops there, so no more than a step's output is held at once. Null when
+ * the stream does not end exactly where its bytes do (cut short, or more after it).
+ */
+async function inflatedSize(data: Uint8Array, budget: number): Promise<number | null> {
+  const inflater = new DecompressionStream('deflate-raw')
+  const writer = inflater.writable.getWriter()
+  const reader = inflater.readable.getReader()
+  // Each write waits while its output is unread; one that fails is said by the read.
+  const feeding = (async () => {
+    for (let at = 0; at < data.length; at += STEP)
+      await writer.write(data.subarray(at, at + STEP) as Uint8Array<ArrayBuffer>)
+    await writer.close()
+  })().catch(() => {})
+  let got = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) return got
+      got += value.length
+      if (got > budget) return got
+    }
+  } catch {
+    return null
+  } finally {
+    await reader.cancel().catch(() => {})
+    await feeding
+  }
+}
 
 /**
  * A part's bytes, unpacked: all of it, or its first `limit` bytes, and never more than the

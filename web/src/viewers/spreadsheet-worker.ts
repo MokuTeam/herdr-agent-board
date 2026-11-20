@@ -22,7 +22,7 @@ import {
   sheetGrid,
   shortDate,
 } from '../models/spreadsheet.ts'
-import { looksLikeZip, unpackedSize, type ZipEntry, zipEntries, zipText } from '../models/zip.ts'
+import { looksLikeZip, measureUnpacked, unpackedSize, type ZipEntry, zipEntries, zipText } from '../models/zip.ts'
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -49,6 +49,12 @@ export async function bookOf(input: ArrayBuffer | Uint8Array, lang: string, name
   if (!entries && looksLikeZip(bytes)) return { ok: false, why: 'broken', message: 'no central directory' }
   if (entries && unpackedSize(entries) > UNPACKED_LIMIT)
     return { ok: false, why: 'big', message: `${unpackedSize(entries)} bytes unpacked` }
+  // what the directory says can be a lie: what the parts really unpack to, before SheetJS unpacks them
+  const measured = entries ? await measureUnpacked(bytes, entries, UNPACKED_LIMIT) : null
+  if (measured && !measured.ok)
+    return measured.why === 'big'
+      ? { ok: false, why: 'big', message: `more than ${UNPACKED_LIMIT} bytes unpacked` }
+      : { ok: false, why: 'broken', message: 'a part does not unpack as its directory says' }
   let wb: WorkBook
   try {
     wb = read(bytes, { type: 'array', cellNF: true, cellStyles: true, sheetRows: SHEET_LIMITS.rows + 1 })
