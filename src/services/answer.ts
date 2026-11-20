@@ -10,7 +10,7 @@ import { readCard } from '../adapters/cards.ts'
 import { agentGet, herdr, herdrText } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { inputDraft } from '../core/dialogs/input-box.ts'
-import { piEditor } from '../core/dialogs/pi-dialogs.ts'
+import { piAbove, piEditor } from '../core/dialogs/pi-dialogs.ts'
 import type { FormQuestion } from '../core/dialogs/question-form.ts'
 import {
   type AnswerPick,
@@ -66,7 +66,7 @@ export interface Step {
 /** `step` is set unless herdr failed (reason 'herdr'), which sets `why` instead. */
 export interface DriveFailure {
   ok: false
-  reason: 'changed' | 'stuck' | 'cut' | 'review' | 'unconfirmed' | 'herdr'
+  reason: 'changed' | 'stuck' | 'cut' | 'review' | 'unconfirmed' | 'same' | 'herdr'
   step?: Step
   why?: string
   screen: string
@@ -95,7 +95,7 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 /** A step that did not end as expected: why, the step, and the screen it ended on. */
 class Stop extends Error {
   constructor(
-    readonly reason: 'changed' | 'stuck' | 'cut' | 'review' | 'unconfirmed',
+    readonly reason: 'changed' | 'stuck' | 'cut' | 'review' | 'unconfirmed' | 'same',
     readonly step: Step,
     readonly screen = '',
   ) {
@@ -184,6 +184,12 @@ const PI_SCREEN: Reader = { parse: screen => parseDialog(screen, PI_AGENT), idle
  * transcript has the answer (io.answered, when the caller can tell), or two reads in a row show
  * the agent's input box with no dialog, or a whole other dialog. `ours(dialog)`: the dialog is
  * still the one answered. Throws Stop('unconfirmed') after `timeout` ms.
+ *
+ * With `again` (pi's dialogs, #153), the same dialog back on the screen counts too, once the screen
+ * shows the answer went in: one read of the input box or another dialog in between, or `again`
+ * holds for the dialog as drawn now (its cursor or field not as the keys left it, the
+ * conversation above it moved on). A session that asks the same thing again at once draws a
+ * dialog with the same fingerprint. Still the same dialog at the end: Stop('same').
  */
 async function settled(
   io: DriveIO,
@@ -191,16 +197,21 @@ async function settled(
   step: Step,
   { timeout = 5000, every = 100 }: Timing = {},
   { parse, idle }: Reader = CLAUDE_SCREEN,
+  again?: (d: Dialog, screen: string) => boolean,
 ): Promise<void> {
   const end = Date.now() + timeout
   let streak = 0
+  let between = false
   for (;;) {
     if (io.answered && (await io.answered())) return
     const screen = await io.read()
     const d = parse(screen)
-    streak = !ours(d) && (d || idle(screen)) ? streak + 1 : 0
+    if (again && d && ours(d) && (between || again(d, screen))) return
+    const other = !ours(d) && !!(d || idle(screen))
+    between ||= other
+    streak = other ? streak + 1 : 0
     if (streak >= 2) return
-    if (Date.now() > end) throw new Stop('unconfirmed', step, screen)
+    if (Date.now() > end) throw new Stop(again && ours(d) ? 'same' : 'unconfirmed', step, screen)
     await sleep(every)
   }
 }
@@ -441,8 +452,13 @@ export async function driveSelect({
       d = await until(io, x => ours(x) && x.cursor === to, step, timing, PI_SCREEN.parse)
       at = to
     }
+    const before = piAbove(seen.screen)
     await io.keys('enter')
-    await settled(io, ours, step, timing, PI_SCREEN)
+    // The same menu again: the cursor where pi puts it on a new menu, or the conversation moved on.
+    await settled(io, ours, step, timing, PI_SCREEN, (x, screen) => {
+      const above = piAbove(screen)
+      return (x.kind === 'select' && x.cursor !== n) || (before !== null && above !== null && above !== before)
+    })
     return { ok: true }
   } catch (err) {
     return err instanceof Stop ? stopped(err, seen) : broken(err, seen)
@@ -484,8 +500,13 @@ export async function driveInput({
     }
     await io.text(text)
     await until(io, x => ours(x) && fieldHolds(x.value, text), step, timing, PI_SCREEN.parse)
+    const before = piAbove(seen.screen)
     await io.keys('enter')
-    await settled(io, ours, step, timing, PI_SCREEN)
+    // The same input again: its field without the text, or the conversation moved on.
+    await settled(io, ours, step, timing, PI_SCREEN, (x, screen) => {
+      const above = piAbove(screen)
+      return (x.kind === 'input' && !fieldHolds(x.value, text)) || (before !== null && above !== null && above !== before)
+    })
     return { ok: true }
   } catch (err) {
     return err instanceof Stop ? stopped(err, seen) : broken(err, seen)
@@ -551,6 +572,8 @@ function failure(item: Item, r: DriveFailure): AnswerResult {
         ? t('err.qa.review', { name })
         : r.reason === 'unconfirmed'
           ? t('err.qa.unconfirmed', { name })
+          : r.reason === 'same'
+            ? t('err.qa.same', { name })
           : r.reason === 'cut'
             ? t('err.qa.cut', { name, step })
             : t('err.qa.stuck', { name, step })

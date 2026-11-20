@@ -256,6 +256,69 @@ test("driveSelect: done needs proof, pi's input box twice or another dialog; a b
   }
 })
 
+test('driveSelect: the same menu again at once is answered when the screen shows the answer went in (#153)', async () => {
+  // Approve, and pi asks the very same thing again: one read of its input box between the two.
+  const between = new FakePi()
+  let reads = 0
+  between.render = () => {
+    if (!between.picked) return selectScreen(between.cursor)
+    return reads++ === 0 ? PI_IDLE : selectScreen(1)
+  }
+  assert.deepEqual(await driveSelect({ fingerprint: MENU.fingerprint, n: 1, io: between.io(), timing: fast }), {
+    ok: true,
+  })
+  // No read caught the gap, but the new menu starts on its first option, not where Enter was.
+  const reset = new FakePi({ cursor: 2 })
+  reset.render = () => selectScreen(reset.picked ? 1 : reset.cursor)
+  assert.deepEqual(await driveSelect({ fingerprint: MENU.fingerprint, n: 2, io: reset.io(), timing: fast }), {
+    ok: true,
+  })
+  // Approve on the first option, the same menu at once: the conversation above it moved on.
+  const later = PI_SELECT.replace(' Running the commit exactly as given, as one bash call.\n', ' Committed. Pushing next.\n')
+  assert.equal(asSelect(pi(later)).fingerprint, MENU.fingerprint)
+  const moved = new FakePi()
+  moved.render = () => (moved.picked ? selectScreen(1, later) : selectScreen(moved.cursor))
+  assert.deepEqual(await driveSelect({ fingerprint: MENU.fingerprint, n: 1, io: moved.io(), timing: fast }), {
+    ok: true,
+  })
+})
+
+test('driveSelect: the same menu with nothing else changed is not taken for answered; the error says so (#153)', async () => {
+  // Enter that did not take and a menu asked again identically look the same: neither is proof.
+  const deaf = new FakePi({ ignore: true })
+  const r = await driveSelect({ fingerprint: MENU.fingerprint, n: 1, io: deaf.io(), timing: fast })
+  assert.ok(!r.ok)
+  assert.equal(r.reason, 'same')
+  assert.equal(r.sent, 1)
+  // A half-drawn read between two menus is not the input box: no proof either.
+  const half = new FakePi()
+  let reads = 0
+  half.render = () => {
+    if (!half.picked) return selectScreen(half.cursor)
+    return reads++ === 0 ? PI_SELECT.split('\n').slice(0, 60).join('\n') : selectScreen(1)
+  }
+  const h = await driveSelect({ fingerprint: MENU.fingerprint, n: 1, io: half.io(), timing: fast })
+  assert.ok(!h.ok)
+  assert.equal(h.reason, 'same')
+})
+
+test('driveInput: the same input again at once, its field empty, is answered (#153)', async () => {
+  const input = asInput(pi(PI_INPUT))
+  const fake = new FakePi({ state: 'input' })
+  fake.render = () => (fake.submitted !== null ? inputScreen('') : inputScreen(fake.value))
+  const r = await driveInput({ fingerprint: input.fingerprint, text: 'use a branch', io: fake.io(), timing: fast })
+  assert.deepEqual(r, { ok: true })
+  assert.equal(fake.submitted, 'use a branch')
+  // Enter that did not take leaves the text in the field: not answered.
+  const stuck = new FakePi({ state: 'input' })
+  const io = stuck.io()
+  const keys = io.keys
+  io.keys = async (...k: string[]) => (k.includes('enter') ? void stuck.keysLog.push(...k) : keys(...k))
+  const s = await driveInput({ fingerprint: input.fingerprint, text: 'use a branch', io, timing: fast })
+  assert.ok(!s.ok)
+  assert.equal(s.reason, 'same')
+})
+
 test('driveInput: clears the field, types the note, Enter once the field shows it', async () => {
   const input = asInput(pi(PI_INPUT))
   const fake = new FakePi({ state: 'input' })

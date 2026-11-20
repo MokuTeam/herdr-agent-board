@@ -174,6 +174,21 @@ function input(lines: string[], hint: number): InputDialog | null {
   }
 }
 
+/**
+ * What the screen shows above the frame of the dialog at its bottom: the conversation, which goes
+ * on once the dialog is answered (#153). Null when the frame's top is above the screen.
+ */
+export function piAbove(screen: unknown): string | null {
+  const lines = stripAnsi(String(screen ?? ''))
+    .replace(/\r/g, '')
+    .split('\n')
+    .map(l => l.trimEnd())
+  const rules: number[] = []
+  for (let i = lines.length - 1; i >= 0 && rules.length < 2; i--) if (RULE.test(lines[i] ?? '')) rules.push(i)
+  const open = rules[1]
+  return open === undefined ? null : lines.slice(0, open).join('\n')
+}
+
 // pi's input box at the bottom of the screen: a few lines between its two rules, and under it only
 // the footer (the model, the context, an extension's status line or two).
 const BOX_LINES = 20

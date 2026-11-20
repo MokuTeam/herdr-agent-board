@@ -263,6 +263,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.qa.herdrMidway':
       'herdr failed midway ({why}). The dialog of {name} may be partly filled in: finish it in herdr',
     'err.qa.unconfirmed': 'The keys went to {name}, but its screen never showed the dialog closing. Check it in herdr',
+    'err.qa.same':
+      'The keys went to {name}, and its screen still shows the same dialog: it may be asking again, or the keys did not take. Check it in herdr',
     'qa.stopped': 'Stopped midway',
     'qa.perm.more': ['{n} more line: see the terminal screen', '{n} more lines: see the terminal screen'],
     'qa.step.start': 'the start',
@@ -933,6 +935,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
       'herdr сломался на полпути ({why}). Диалог {name} может быть заполнен частично: доделай его в herdr',
     'err.qa.unconfirmed':
       'Клавиши ушли в {name}, но на экране так и не было видно, что диалог закрылся. Проверь в herdr',
+    'err.qa.same':
+      'Клавиши ушли в {name}, а на экране всё тот же диалог: либо сессия спрашивает снова, либо клавиши не дошли. Проверь в herdr',
     'qa.stopped': 'Остановлено на полпути',
     'qa.perm.more': [
       'Ещё {n} строка: смотри экран терминала',
