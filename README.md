@@ -396,9 +396,10 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   document's HTML is then cleaned on the page's own thread, which takes about a second for one of
   tens of thousands of paragraphs. One over 20 MB (a document) or 10 MB (a spreadsheet), unpacked
   to more than 150 MB or 120 MB, read for over a minute, broken or with a password says so,
-  beside the button that opens it with the system. The unpacked size is the one the zip's own
-  directory gives: a zip that understates a part is unpacked before the library notices (see
-  #230), and only the one-minute limit holds it. Columns are not limited before the reading: a
+  beside the button that opens it with the system. The unpacked size is what the parts really
+  unpack to, not what the zip's own directory says: the worker unpacks them under the limit,
+  stopping past it, and mammoth or SheetJS get them stored again in a zip of its own making, so
+  neither reads the file's own headers (#230). Columns are not limited before the reading: a
   sheet of thousands of columns under those limits can take tens of seconds and a gigabyte or more
   of memory on the computer before it is shown or the minute runs out.
 - Images and SVG in the quick look zoom as in Preview and Photos: Ctrl+wheel or a trackpad
@@ -2365,11 +2366,15 @@ whole value must match), and otherwise a **field**, which you type. A file's nam
 - `file`: `path`, or `folder` and `name` (absolute or `~/…`; the folder must be there). `format`
   `json` puts the template under the keys of `at` and keeps the file's other keys (the file is
   written again as JSON, two spaces; without `at` the template is the whole file); `env` sets its
-  variables and keeps the file's other lines; `netrc` and `text` are the whole file. The file is
-  written in place, never through a temp file, and made yours alone before anything goes in (mode
-  600; on Windows an existing file's own entries reset, inheritance off, full control to your user
-  only, and the rights read back: anything else and nothing is written). A link or a folder where
-  the file goes is refused.
+  variables and keeps the file's other lines; `netrc` and `text` are the whole file. The values
+  go into a new file beside it (`.<name>.<random>.tmp`, made by the write alone), made yours alone
+  before anything goes in (mode 600; on Windows inheritance off, full control to your user only,
+  and the rights read back: anything else and nothing is written), then renamed over the file: a
+  crash midway leaves the old file whole, and at worst that file beside it, as private. So the
+  folder must be writable, and the file that takes the name is a new one (a hard link to it, or
+  its owner and other rights, do not carry over). A link or a folder where the file goes is
+  refused; the file is read through a handle that must be the plain file seen there, and a link
+  put there meanwhile is replaced by the rename, never written through (#275).
 - `bitwarden`: an item by name in `folder` (made when missing), created or updated, with
   `organization` and `collection` (both, or neither) for a new item of an organization. The fields
   a request names are the item's `username`, `password`, `totp`, `notes`, `uri`, or custom fields
@@ -2377,7 +2382,8 @@ whole value must match), and otherwise a **field**, which you type. A file's nam
   the session you paste into the form (`bw unlock --raw`), in bw's environment only, for this one
   write: it is kept nowhere. The item goes to `bw` on its stdin, never on its command line.
 - `env` (Windows): your user's environment variables (`vars`: their names, or one regular
-  expression), set by Windows PowerShell with the values on its stdin; new programs see them.
+  expression), set by Windows PowerShell with the values on its stdin; new programs see them. All
+  are set or none: the old values are read first and put back when one fails.
 - `http`: `method` (POST, PUT, PATCH), `url`, `headers`, `auth` (`{ "user", "password" }`, basic),
   `body` (JSON with templates in its strings, or text). The scheme and host are written out in
   full (https; http only for localhost): parameters go into the path and the query, encoded, and
@@ -2396,8 +2402,10 @@ JSON key, the .env variable, the file, the Bitwarden part, the variable), never 
 is there. The command waits until you answer or it expires (30 minutes by default, a day at most),
 so an agent runs it in the background, and prints `ok · <id> · <where> · <time>`, or `declined` /
 `expired`; `--no-wait` returns at once, then `board secret status <id> [--wait]`. Also
-`board secret cancel <id>`, `list` and `sinks` (what each takes). Claude sessions hear of it in
-their brief, only where config.json has sinks.
+`board secret cancel <id>`, `list` and `sinks` (what each takes). A session has at most five
+requests waiting and asks at most ten times in ten minutes, cancelled ones counted, so a loop of
+asks cannot push the audit's lines out (#275). Claude sessions hear of it in their brief, only
+where config.json has sinks.
 
 **The form**, at the top of the session's sheet: what it is for, where the values go (the file and
 where in it, the vault's folder and item, the variables, the method and URL) with the request's
@@ -2413,10 +2421,11 @@ the new place. **Decline** answers the agent without a write.
 **What it keeps from whom.** A value goes from the form to the sink and nowhere else: not to the
 agent, the card, the board's payload or its event stream, board.db, a log, an error text (a
 failure of bw or PowerShell is said by its step and exit code, never by what it printed; a
-server's answer is not read), a temp file or the backup; the board holds
+server's answer is not read), a temp file anywhere but the one beside the sink's file that becomes
+it, or the backup; the board holds
 it in memory for the one write. No route returns one. The request on its card holds the title, the
 sink, the parameters and the field names; the audit (`secrets/audit.jsonl` in the state folder, a
-megabyte, then the one before) has a line for each step: who asked, the sink, the fields, the
+megabyte, then it moves aside and five of those are kept) has a line for each step: who asked, the sink, the fields, the
 parameters, when, what came of it. The route is guarded as the board's other changes (X-Board, the
 board's own Origin; through the phone's pairing or the tunnel's login), and only your submit
 writes: an agent's request writes nothing. It does not guard against an agent that works against
@@ -3937,7 +3946,7 @@ worker fetches as a PDF needs it under `pdfjs/` (decoders, character maps, fonts
 `document-viewer.js` and `document-worker.js` (mammoth turns the .docx into HTML in the worker,
 DOMPurify keeps only its text, structure, web links and pictures as data: URLs in the page);
 `spreadsheet-viewer.js` and `spreadsheet-worker.js` (SheetJS reads the workbook in the worker,
-only the rows shown and one more, after the zip's own directory said how big it is unpacked; the
+only the rows shown and one more, from a zip the worker made of the parts as they really unpack; the
 page puts each cell in as text). Each worker runs under a policy of its own
 (`WORKER_POLICIES`): PDF.js's may also compile its decoders, the others only read from the
 board.

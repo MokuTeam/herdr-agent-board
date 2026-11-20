@@ -1,7 +1,8 @@
 // whoami.exe and icacls.exe under a SystemRoot of a test's own (secret-sinks.test.ts, #275): one
 // program, which of the two by its file name. whoami says the user is anna; icacls says anna alone
 // has the file, and on its first change of rights it swaps FAKE_SWAP_PATH for a link to
-// FAKE_SWAP_TO, as a process of the same user racing the board would.
+// FAKE_SWAP_TO (or writes FAKE_SWAP_WRITE into it), as a process of the same user racing the
+// board would.
 import { existsSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
 
@@ -19,7 +20,10 @@ const swap = process.env.FAKE_SWAP_PATH
 const to = process.env.FAKE_SWAP_TO
 const done = `${to}.swapped`
 if (swap && to && !existsSync(done)) {
-  rmSync(swap, { force: true })
-  symlinkSync(to, swap)
+  if (process.env.FAKE_SWAP_WRITE !== undefined) writeFileSync(swap, process.env.FAKE_SWAP_WRITE)
+  else {
+    rmSync(swap, { force: true })
+    symlinkSync(to, swap)
+  }
   writeFileSync(done, '')
 }

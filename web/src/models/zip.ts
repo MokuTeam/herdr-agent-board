@@ -1,8 +1,8 @@
 // The little of a zip the quick look's Office workers read themselves (viewers/*-worker.ts):
 // its central directory, to know how big it is once unpacked before a library unpacks all of
 // it (a zip of 400 KB can hold 400 MB), and a part's first bytes or all of it (a sheet's frozen
-// rows, an .ods's hidden sheets), never more than the directory says it holds; and what the parts
-// really unpack to, since a directory can lie (measureUnpacked). Stored and
+// rows, an .ods's hidden sheets), never more than the directory says it holds; and the zip the
+// libraries are given, rebuilt from what its parts really unpack to (storedZip). Stored and
 // deflated parts; ZIP64 sizes and directories as their extra records give them.
 
 export interface ZipEntry {
@@ -12,6 +12,8 @@ export interface ZipEntry {
   /** Unpacked, in bytes: Infinity when the directory says ZIP64 and gives no size. */
   size: number
   offset: number
+  /** Where its central directory record is. */
+  record: number
 }
 
 const u16 = (b: Uint8Array, at: number) => (b[at] ?? 0) | ((b[at + 1] ?? 0) << 8)
@@ -118,59 +120,123 @@ export function zipEntries(bytes: Uint8Array): ZipEntry[] | null {
       compressed,
       size,
       offset,
+      record: at,
     })
     at += 46 + nameLength + extraLength + u16(bytes, at + 32)
   }
   return entries.length && entries.length >= Math.min(count, 0xffff) ? entries : null
 }
 
-/** Whether the bytes start as a zip does (a local file header): one with no directory to read is broken. */
-export const looksLikeZip = (bytes: Uint8Array): boolean => u32(bytes, 0) === 0x04034b50
+/**
+ * Whether SheetJS reads the bytes as a zip: `PK` and two bytes below 9, a local file header's
+ * start among them. One with no directory to read is broken.
+ */
+export const looksLikeZip = (bytes: Uint8Array): boolean =>
+  bytes[0] === 0x50 && bytes[1] === 0x4b && (bytes[2] ?? 9) < 9 && (bytes[3] ?? 9) < 9
 
 /** All of a zip's parts, unpacked, in bytes, as the directory says. */
 export const unpackedSize = (entries: ZipEntry[]): number => entries.reduce((sum, e) => sum + e.size, 0)
 
-export type Measured = { ok: true; size: number } | { ok: false; why: 'big' | 'broken'; size: number }
+export type Rezipped =
+  | { ok: true; bytes: Uint8Array; size: number }
+  | { ok: false; why: 'big' | 'broken'; size: number }
 
 /**
- * What the parts really unpack to (#230), not what the directory says: each deflated part is
- * inflated, its output counted and dropped, and the count stops one byte past `limit` (all the
- * parts together). The libraries read a part by its local header, from where its data starts:
- * JSZip (mammoth's) inflates the directory's compressed size of it, SheetJS from there to the
- * deflate stream's end, whatever the sizes say. So a part's stream must end exactly at its
- * compressed size, and its local method be the directory's: then both inflate what was counted
- * here, and nothing else. A part that does not is broken. Stored parts count as their bytes.
+ * The zip as the libraries are given it (#230): every part unpacked, all of them together no more
+ * than `limit`, and stored again in a zip of this file's own making. JSZip (mammoth's) and SheetJS
+ * each read a zip's headers their own way (where the directory is, which ZIP64 field counts, the
+ * size they allocate before inflating), and a directory can say a part is smaller than it is:
+ * neither library ever reads this file's headers, only parts whose sizes were counted here, with
+ * nothing in their headers but those sizes. Two passes: the first counts what each part unpacks
+ * to, stopping one byte past the limit; the second unpacks it again into the new zip, whose size is
+ * known by then. A part neither stored nor deflated, one that does not unpack whole, or more parts
+ * than a plain zip holds: broken.
  */
-export async function measureUnpacked(bytes: Uint8Array, entries: ZipEntry[], limit: number): Promise<Measured> {
+export async function storedZip(bytes: Uint8Array, entries: ZipEntry[], limit: number): Promise<Rezipped> {
+  if (entries.length > 0xffff) return { ok: false, why: 'broken', size: 0 }
+  const parts: { data: Uint8Array; size: number; name: Uint8Array }[] = []
   let size = 0
   for (const entry of entries) {
-    const at = entry.offset
-    if (u32(bytes, at) !== 0x04034b50 || u16(bytes, at + 8) !== entry.method) return { ok: false, why: 'broken', size }
-    const start = at + 30 + u16(bytes, at + 26) + u16(bytes, at + 28)
-    if (entry.method === 0) {
-      // SheetJS takes the local header's size, JSZip the directory's: no more than the file holds
-      size += Math.min(Math.max(entry.compressed, u32(bytes, at + 18)), Math.max(0, bytes.length - start))
-    } else if (entry.method === 8) {
-      if (start + entry.compressed > bytes.length) return { ok: false, why: 'broken', size }
-      const counted = await inflatedSize(bytes.subarray(start, start + entry.compressed), limit - size)
-      if (counted === null) return { ok: false, why: 'broken', size }
-      size += counted
-    }
-    // other methods neither library unpacks: they refuse the file themselves
+    const data = partData(bytes, entry)
+    if (!data) return { ok: false, why: 'broken', size }
+    const unpacked = entry.method === 0 ? data.length : await inflate(data, limit - size)
+    if (unpacked === null) return { ok: false, why: 'broken', size }
+    size += unpacked
     if (size > limit) return { ok: false, why: 'big', size }
+    const name = bytes.subarray(entry.record + 46, entry.record + 46 + u16(bytes, entry.record + 28))
+    parts.push({ data, size: unpacked, name })
   }
-  return { ok: true, size }
+  const out = new Uint8Array(parts.reduce((n, p) => n + 76 + 2 * p.name.length + p.size, 22))
+  const view = new DataView(out.buffer)
+  const offsets: number[] = []
+  let at = 0
+  for (const [i, part] of parts.entries()) {
+    const entry = entries[i] as ZipEntry
+    offsets.push(at)
+    view.setUint32(at, 0x04034b50, true)
+    header(view, at + 4, bytes, entry, part.size, part.name.length)
+    out.set(part.name, at + 30)
+    at += 30 + part.name.length
+    if (entry.method === 0) out.set(part.data, at)
+    else {
+      const room = out.subarray(at, at + part.size)
+      if ((await inflate(part.data, part.size, room)) !== part.size) return { ok: false, why: 'broken', size }
+    }
+    at += part.size
+  }
+  const directory = at
+  for (const [i, part] of parts.entries()) {
+    const entry = entries[i] as ZipEntry
+    view.setUint32(at, 0x02014b50, true)
+    view.setUint16(at + 4, 20, true)
+    header(view, at + 6, bytes, entry, part.size, part.name.length)
+    // no comment, disk 0, internal attributes 0, the external ones (a folder's) as they were
+    view.setUint32(at + 38, u32(bytes, entry.record + 38), true)
+    view.setUint32(at + 42, offsets[i] as number, true)
+    out.set(part.name, at + 46)
+    at += 46 + part.name.length
+  }
+  view.setUint32(at, 0x06054b50, true)
+  view.setUint16(at + 8, parts.length, true)
+  view.setUint16(at + 10, parts.length, true)
+  view.setUint32(at + 12, at - directory, true)
+  view.setUint32(at + 16, directory, true)
+  return { ok: true, bytes: out, size }
+}
+
+/**
+ * The 26 bytes a local header and a directory record share, from "version needed" on: stored, the
+ * size as it unpacked, no extra field; the UTF-8 name flag, time, date and CRC as the directory had them.
+ */
+function header(view: DataView, at: number, bytes: Uint8Array, entry: ZipEntry, size: number, nameLength: number) {
+  view.setUint16(at, 20, true)
+  view.setUint16(at + 2, u16(bytes, entry.record + 8) & 0x0800, true)
+  view.setUint16(at + 4, 0, true)
+  view.setUint32(at + 6, u32(bytes, entry.record + 12), true)
+  view.setUint32(at + 10, u32(bytes, entry.record + 16), true)
+  view.setUint32(at + 14, size, true)
+  view.setUint32(at + 18, size, true)
+  view.setUint16(at + 22, nameLength, true)
+  view.setUint16(at + 24, 0, true)
+}
+
+/** A part's compressed bytes, from where its local header says they start; null when they are not all in the file or it has no local header. */
+function partData(bytes: Uint8Array, entry: ZipEntry): Uint8Array | null {
+  if (u32(bytes, entry.offset) !== 0x04034b50 || (entry.method !== 0 && entry.method !== 8)) return null
+  const start = entry.offset + 30 + u16(bytes, entry.offset + 26) + u16(bytes, entry.offset + 28)
+  return start + entry.compressed <= bytes.length ? bytes.subarray(start, start + entry.compressed) : null
 }
 
 /** The compressed bytes fed to the inflater at a time: what one step can unpack is bounded by it (deflate packs 1032 to 1 at most). */
 const STEP = 4 << 10
 
 /**
- * A deflate stream's output, counted, up to one byte past `budget`: the bytes go in a step at a
- * time and the inflating stops there, so no more than a step's output is held at once. Null when
- * the stream does not end exactly where its bytes do (cut short, or more after it).
+ * A deflate stream inflated: its output counted up to one byte past `budget`, where the inflating
+ * stops, and written into `into` as far as it holds. The bytes go in a step at a time, so no more
+ * than a step's output is held at once. Null when the stream does not end exactly where its bytes
+ * do (cut short, or more after it).
  */
-async function inflatedSize(data: Uint8Array, budget: number): Promise<number | null> {
+async function inflate(data: Uint8Array, budget: number, into?: Uint8Array): Promise<number | null> {
   const inflater = new DecompressionStream('deflate-raw')
   const writer = inflater.writable.getWriter()
   const reader = inflater.readable.getReader()
@@ -185,6 +251,7 @@ async function inflatedSize(data: Uint8Array, budget: number): Promise<number | 
     for (;;) {
       const { done, value } = await reader.read()
       if (done) return got
+      if (into && got < into.length) into.set(value.subarray(0, into.length - got), got)
       got += value.length
       if (got > budget) return got
     }

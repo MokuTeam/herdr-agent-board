@@ -150,12 +150,6 @@ export function askSecret(
   if (!title) return { ok: false, error: t('secret.err.title') }
   const check = checkRequest(sink, input.params, input.fields)
   if (!check.ok) return { ok: false, error: t(check.error, check.vars) }
-  const asked = requestsOf(readCard(by.key)?.secrets)
-  if (pendingOf(asked, now).length >= MAX_PENDING)
-    return { ok: false, error: t('secret.err.pendingMany', { n: MAX_PENDING }) }
-  // asking and cancelling in a loop would fill the audit: so many asks a card in a while, settled or not
-  if (asked.filter(r => r.at > now - ASK_WINDOW_MS).length >= MAX_ASKS)
-    return { ok: false, error: t('secret.err.askedMany', { n: MAX_ASKS, minutes: ASK_WINDOW_MS / 60_000 }) }
   const request: SecretRequest = {
     id: randomBytes(6).toString('hex'),
     title,
@@ -167,10 +161,18 @@ export function askSecret(
     expires: now + input.expiresMs,
     status: 'pending',
   }
-  updateCard(by.key, saved => ({
-    ...(saved ?? { key: by.key }),
-    secrets: [...pruned(requestsOf(saved?.secrets), now), request],
-  }))
+  // counted under the card's lock: two asks at once do not both pass at the last place
+  let refused: string | null = null
+  updateCard(by.key, saved => {
+    const asked = requestsOf(saved?.secrets)
+    if (pendingOf(asked, now).length >= MAX_PENDING) refused = t('secret.err.pendingMany', { n: MAX_PENDING })
+    // asking and cancelling in a loop would fill the audit: so many asks a card in a while, settled or not
+    else if (asked.filter(r => r.at > now - ASK_WINDOW_MS).length >= MAX_ASKS)
+      refused = t('secret.err.askedMany', { n: MAX_ASKS, minutes: ASK_WINDOW_MS / 60_000 })
+    if (refused) return undefined
+    return { ...(saved ?? { key: by.key }), secrets: [...pruned(asked, now), request] }
+  })
+  if (refused) return { ok: false, error: refused }
   audit('asked', request, 'agent', { expires: new Date(request.expires).toISOString() }, now)
   return { ok: true, request }
 }

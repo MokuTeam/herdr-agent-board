@@ -55,6 +55,10 @@ export function deflatedRun(head: string, mb: number, tail: string): Deflated {
 }
 
 export interface ZipOptions {
+  /** Bytes the archive will follow: added to every offset it gives (an archive appended to others). */
+  base?: number
+  /** The end record's comment. */
+  comment?: Uint8Array
   /** Bytes after the end of central directory record. */
   tail?: number
   /** Bytes before the archive (its offsets left as they are, as a self-extracting stub has it). */
@@ -121,7 +125,7 @@ export function zip(parts: ZipPart[], options: ZipOptions = {}): Uint8Array {
     entry.writeUInt32LE(part.zip64 ? 0xffffffff : (part.claims ?? size), 24)
     entry.writeUInt16LE(name.length, 28)
     entry.writeUInt16LE(extra.length, 30)
-    entry.writeUInt32LE(offset, 42)
+    entry.writeUInt32LE(offset + (options.base ?? 0), 42)
     central.push(entry, name, extra)
     if (options.zip64End?.decoy?.includes(part.name)) decoy.push(entry, name, extra)
     offset += head.length + name.length + body.length + descriptor.length
@@ -132,7 +136,8 @@ export function zip(parts: ZipPart[], options: ZipOptions = {}): Uint8Array {
   end.writeUInt16LE(options.onDisk ?? parts.length, 8)
   end.writeUInt16LE(options.total ?? parts.length, 10)
   end.writeUInt32LE(directory.length, 12)
-  end.writeUInt32LE(offset, 16)
+  end.writeUInt32LE(offset + (options.base ?? 0), 16)
+  end.writeUInt16LE(options.comment?.length ?? 0, 20)
   const out: Buffer[] = [Buffer.alloc(options.head ?? 0), ...local, directory]
   if (options.gap) {
     // The second directory lists the same parts' places with other names and sizes.
@@ -172,5 +177,7 @@ export function zip(parts: ZipPart[], options: ZipOptions = {}): Uint8Array {
       end.writeUInt32LE(0xffffffff, 16)
     }
   }
-  return new Uint8Array(Buffer.concat([...out, end, Buffer.alloc(options.tail ?? 0)]))
+  return new Uint8Array(
+    Buffer.concat([...out, end, Buffer.from(options.comment ?? new Uint8Array()), Buffer.alloc(options.tail ?? 0)]),
+  )
 }

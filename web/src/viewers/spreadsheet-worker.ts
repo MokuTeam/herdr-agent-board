@@ -22,7 +22,7 @@ import {
   sheetGrid,
   shortDate,
 } from '../models/spreadsheet.ts'
-import { looksLikeZip, measureUnpacked, unpackedSize, type ZipEntry, zipEntries, zipText } from '../models/zip.ts'
+import { looksLikeZip, storedZip, unpackedSize, type ZipEntry, zipEntries, zipText } from '../models/zip.ts'
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -49,15 +49,18 @@ export async function bookOf(input: ArrayBuffer | Uint8Array, lang: string, name
   if (!entries && looksLikeZip(bytes)) return { ok: false, why: 'broken', message: 'no central directory' }
   if (entries && unpackedSize(entries) > UNPACKED_LIMIT)
     return { ok: false, why: 'big', message: `${unpackedSize(entries)} bytes unpacked` }
-  // what the directory says can be a lie: what the parts really unpack to, before SheetJS unpacks them
-  const measured = entries ? await measureUnpacked(bytes, entries, UNPACKED_LIMIT) : null
-  if (measured && !measured.ok)
-    return measured.why === 'big'
+  // What the directory says can be a lie, and SheetJS reads a zip's headers its own way (and
+  // allocates what they say): it gets the parts as they really unpack, stored again in a zip of
+  // the worker's making.
+  const zip = entries ? await storedZip(bytes, entries, UNPACKED_LIMIT) : null
+  if (zip && !zip.ok)
+    return zip.why === 'big'
       ? { ok: false, why: 'big', message: `more than ${UNPACKED_LIMIT} bytes unpacked` }
-      : { ok: false, why: 'broken', message: 'a part does not unpack as its directory says' }
+      : { ok: false, why: 'broken', message: 'a part does not unpack' }
+  const book = zip ? zip.bytes : bytes
   let wb: WorkBook
   try {
-    wb = read(bytes, { type: 'array', cellNF: true, cellStyles: true, sheetRows: SHEET_LIMITS.rows + 1 })
+    wb = read(book, { type: 'array', cellNF: true, cellStyles: true, sheetRows: SHEET_LIMITS.rows + 1 })
   } catch (err) {
     const message = messageOf(err)
     // SheetJS's words for a file with a password (an .xlsx's encrypted package, an .xls's or an
@@ -72,12 +75,14 @@ export async function bookOf(input: ArrayBuffer | Uint8Array, lang: string, name
     booleans: booleanText(lang),
   }
   // What this reads from the zip itself only adds to what SheetJS read: if it cannot, no rows
-  // are frozen and no sheet is hidden, and the workbook is shown all the same.
-  const frozen = entries
-    ? await frozenBySheet(bytes, entries, wb).catch(() => new Map<number, number>())
+  // are frozen and no sheet is hidden, and the workbook is shown all the same. It reads the zip
+  // SheetJS read, whose sizes are the true ones.
+  const parts = zip ? zipEntries(book) : null
+  const frozen = parts
+    ? await frozenBySheet(book, parts, wb).catch(() => new Map<number, number>())
     : new Map<number, number>()
-  const hidden = entries?.some(e => e.name === 'content.xml')
-    ? await zipText(bytes, entries, 'content.xml').then(odsHiddenTables, () => new Set<string>())
+  const hidden = parts?.some(e => e.name === 'content.xml')
+    ? await zipText(book, parts, 'content.xml').then(odsHiddenTables, () => new Set<string>())
     : new Set<string>()
   let budget = SHEET_LIMITS.cells
   const sheets: SheetData[] = []

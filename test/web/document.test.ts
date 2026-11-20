@@ -3,6 +3,7 @@
 // .doc, a broken file or one too big said so instead; and as the page cleans it before it is
 // drawn (viewers/document.ts cleanDocument), on a real DOM (jsdom).
 import { describe, expect, test } from 'bun:test'
+import { deflateRawSync } from 'node:zlib'
 import createDOMPurify from 'dompurify'
 import { JSDOM } from 'jsdom'
 import { zipEntries, zipRead } from '../../web/src/models/zip.ts'
@@ -12,6 +13,45 @@ import { deflatedRun, zip } from './support/zip.ts'
 
 const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 const R = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+
+/** A raw deflate stream of one stored block: streams of texts of one length are of one length too. */
+const storedBlock = (text: string): Buffer => {
+  const data = Buffer.from(text)
+  const head = Buffer.alloc(5)
+  head.writeUInt8(1, 0)
+  head.writeUInt16LE(data.length, 1)
+  head.writeUInt16LE(~data.length & 0xffff, 3)
+  return Buffer.concat([head, data])
+}
+
+/** A local header and its data: deflated, its sizes as given. */
+function localPart(name: string, data: Buffer, size: number): Buffer {
+  const n = Buffer.from(name)
+  const h = Buffer.alloc(30)
+  h.writeUInt32LE(0x04034b50, 0)
+  h.writeUInt16LE(20, 4)
+  h.writeUInt16LE(8, 8)
+  h.writeUInt32LE(data.length, 18)
+  h.writeUInt32LE(size, 22)
+  h.writeUInt16LE(n.length, 26)
+  return Buffer.concat([h, n, data])
+}
+
+/** A directory record for a deflated part. */
+function record(name: string, compressed: number, size: number, offset: number, extra = Buffer.alloc(0)): Buffer {
+  const n = Buffer.from(name)
+  const r = Buffer.alloc(46)
+  r.writeUInt32LE(0x02014b50, 0)
+  r.writeUInt16LE(45, 4)
+  r.writeUInt16LE(20, 6)
+  r.writeUInt16LE(8, 10)
+  r.writeUInt32LE(compressed, 20)
+  r.writeUInt32LE(size, 24)
+  r.writeUInt16LE(n.length, 28)
+  r.writeUInt16LE(extra.length, 30)
+  r.writeUInt32LE(offset, 42)
+  return Buffer.concat([r, n, extra])
+}
 
 /** A .docx of these parts, zipped. */
 function docx(body: string, extra: { name: string; data: string; claims?: number }[] = []): ArrayBuffer {
@@ -114,6 +154,51 @@ describe('a Word document as the worker reads it', () => {
       gap: { bytes: 16, second: [{ name: 'word/document.xml', data: 'x', claims: UNPACKED_LIMIT }] },
     })
     expect(await documentOf(gapped.buffer as ArrayBuffer)).toMatchObject({ ok: false, why: 'broken' })
+  })
+
+  test('JSZip reads the part the worker counted, not the one its own reading of ZIP64 finds (#230)', async () => {
+    // The document's record gives its offset in ZIP64 blocks, twice: the worker reads the first
+    // (the document that says "ours"), JSZip on its own the last (one that says "theirs").
+    const xml = (word: string) =>
+      `<?xml version="1.0"?><w:document ${W}><w:body><w:p>${run(word)}</w:p></w:body></w:document>`
+    const plain = new Uint8Array(docx(''))
+    const kept = (zipEntries(plain) ?? []).filter(e => e.name === '[Content_Types].xml' || e.name === '_rels/.rels')
+    const locals: Buffer[] = []
+    const records: Buffer[] = []
+    let at = 0
+    const add = (name: string, data: Buffer, size: number) => {
+      const offset = at
+      locals.push(localPart(name, data, size))
+      at += locals.at(-1)?.length ?? 0
+      return offset
+    }
+    for (const e of kept) {
+      const text = Buffer.from(await zipRead(plain, e))
+      const data = deflateRawSync(text)
+      records.push(record(e.name, data.length, text.length, add(e.name, data, text.length)))
+    }
+    const ours = storedBlock(xml('ours__'))
+    const oursAt = add('word/document.xml', ours, xml('ours__').length)
+    const theirsAt = add('word/document.xml', storedBlock(xml('theirs')), xml('theirs').length)
+    const extra = Buffer.alloc(24)
+    for (const [i, offset] of [oursAt, theirsAt].entries()) {
+      extra.writeUInt16LE(1, i * 12)
+      extra.writeUInt16LE(8, i * 12 + 2)
+      extra.writeBigUInt64LE(BigInt(offset), i * 12 + 4)
+    }
+    records.push(record('word/document.xml', ours.length, xml('ours__').length, 0xffffffff, extra))
+    const directory = Buffer.concat(records)
+    const end = Buffer.alloc(22)
+    end.writeUInt32LE(0x06054b50, 0)
+    end.writeUInt16LE(records.length, 8)
+    end.writeUInt16LE(records.length, 10)
+    end.writeUInt32LE(directory.length, 12)
+    end.writeUInt32LE(at, 16)
+    const bytes = new Uint8Array(Buffer.concat([...locals, directory, end]))
+    const reply = await documentOf(bytes.buffer as ArrayBuffer)
+    if (!reply.ok) throw new Error(reply.message)
+    expect(reply.html).toContain('ours__')
+    expect(reply.html).not.toContain('theirs')
   })
 
   test('a document.xml whose directory says 100 bytes but which unpacks past the limit: too big, before JSZip unpacks it (#230)', async () => {

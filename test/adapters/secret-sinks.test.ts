@@ -4,7 +4,18 @@
 import { onTestFinished, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runTree } from '../../src/adapters/process.ts'
@@ -143,10 +154,45 @@ test('a link where the file goes is not followed', async () => {
   assert.equal(readFileSync(elsewhere, 'utf8'), 'untouched')
 })
 
+/** Whether this computer lets the tests make a symlink (Windows: developer mode or admin). */
+const canLink = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-link-'))
+  try {
+    symlinkSync(join(dir, 'a'), join(dir, 'b'))
+    return true
+  } catch {
+    return false
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})()
+
+/**
+ * whoami and icacls as fakes under a SystemRoot of the test's own: the first change of rights
+ * swaps `target` for a link to `victim`, or writes `write` into it.
+ */
+async function racingRights(target: string, victim: string, write?: string): Promise<void> {
+  const root = join(victim, '..', 'system-root')
+  mkdirSync(join(root, 'System32'), { recursive: true })
+  const exe = await compileFake(fileURLToPath(new URL('../support/fake-system32.ts', import.meta.url)), 'fake-system32')
+  for (const name of ['whoami.exe', 'icacls.exe']) copyFileSync(exe, join(root, 'System32', name))
+  const saved = process.env.SystemRoot
+  Object.assign(process.env, {
+    SystemRoot: root,
+    FAKE_SWAP_PATH: target,
+    FAKE_SWAP_TO: victim,
+    ...(write !== undefined && { FAKE_SWAP_WRITE: write }),
+  })
+  onTestFinished(() => {
+    process.env.SystemRoot = saved
+    for (const k of ['FAKE_SWAP_PATH', 'FAKE_SWAP_TO', 'FAKE_SWAP_WRITE']) delete process.env[k]
+  })
+}
+
 // #275: a process of the same user that swaps the file for a link while the board sets the rights
-// (Windows: whoami and icacls, here fakes under the test's own SystemRoot that do the swap) gets
-// nothing written through the link, and no copy of the value stays beside it.
-test.skipIf(process.platform !== 'win32')(
+// (Windows: whoami and icacls, here fakes that do the swap) gets nothing written through the link,
+// and no copy of the value stays beside it.
+test.skipIf(process.platform !== 'win32' || !canLink)(
   'a link swapped in while the rights are set is not written through (#275)',
   async () => {
     const dir = isolatedHome()
@@ -155,25 +201,7 @@ test.skipIf(process.platform !== 'win32')(
     const target = join(home, 'token.txt')
     writeFileSync(victim, 'untouched')
     writeFileSync(target, 'old')
-    try {
-      symlinkSync(victim, join(dir, 'probe'))
-    } catch {
-      return // no symlink rights here (Windows without developer mode)
-    }
-    const root = join(dir, 'system-root')
-    mkdirSync(join(root, 'System32'), { recursive: true })
-    const exe = await compileFake(
-      fileURLToPath(new URL('../support/fake-system32.ts', import.meta.url)),
-      'fake-system32',
-    )
-    for (const name of ['whoami.exe', 'icacls.exe']) copyFileSync(exe, join(root, 'System32', name))
-    const saved = process.env.SystemRoot
-    Object.assign(process.env, { SystemRoot: root, FAKE_SWAP_PATH: target, FAKE_SWAP_TO: victim })
-    onTestFinished(() => {
-      process.env.SystemRoot = saved
-      delete process.env.FAKE_SWAP_PATH
-      delete process.env.FAKE_SWAP_TO
-    })
+    await racingRights(target, victim)
     const r = await write(sinkOf({ kind: 'file', path: '~/token.txt', template: '{{v}}' }, home), {}, { v: VALUE })
     assert.equal(readFileSync(victim, 'utf8'), 'untouched')
     assert.equal(!r.ok && r.error, 'secret.err.notFile')
@@ -181,6 +209,28 @@ test.skipIf(process.platform !== 'win32')(
       readdirSync(home).filter(n => n.endsWith('.tmp')),
       [],
     )
+  },
+  60_000,
+)
+
+// A refusal once the file beside it is made (the file changed into one that is no JSON while the
+// rights were set): the file stays as it is, and the one beside it, made for the value, is gone.
+test.skipIf(process.platform !== 'win32')(
+  'a refusal after the file beside it is made leaves the file whole and nothing beside it (#275)',
+  async () => {
+    const dir = isolatedHome()
+    const home = join(dir, 'home')
+    const path = join(home, 'creds.json')
+    writeFileSync(path, '{"other":1}')
+    await racingRights(path, join(dir, 'victim.txt'), 'not json, written meanwhile')
+    const sink = sinkOf(
+      { kind: 'file', path: '~/creds.json', format: 'json', at: ['svc'], template: { t: '{{v}}' } },
+      home,
+    )
+    const r = await write(sink, {}, { v: VALUE })
+    assert.equal(!r.ok && r.error, 'secret.err.notJson')
+    assert.equal(readFileSync(path, 'utf8'), 'not json, written meanwhile')
+    assert.deepEqual(readdirSync(home), ['creds.json'])
   },
   60_000,
 )

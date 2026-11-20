@@ -187,8 +187,11 @@ function oneAtATime<T>(path: string, fn: () => Promise<T>): Promise<T> {
   return run
 }
 
-/** POSIX opens a file without following a link (ELOOP); Windows has no such flag here, and the handle's check stands in. */
-const NO_FOLLOW = constants.O_NOFOLLOW ?? 0
+/**
+ * POSIX opens a file without following a link (ELOOP), and without waiting on a FIFO swapped in;
+ * Windows has neither flag here, and the handle's check stands in.
+ */
+const NO_FOLLOW = (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
 
 /** Whether two stats are of one file: its device and inode (on Windows the volume and the file id). */
 const sameFile = (a: BigIntStats, b: BigIntStats): boolean => a.dev === b.dev && a.ino === b.ino
@@ -210,8 +213,11 @@ function readPlain(path: string): string | null | 'notFile' {
   let fd: number
   try {
     fd = openSync(path, constants.O_RDONLY | NO_FOLLOW)
-  } catch {
-    return 'notFile'
+  } catch (err) {
+    // a link swapped in (FreeBSD says EMLINK); anything else is a failure of its own
+    const code = (err as { code?: unknown }).code
+    if (code === 'ELOOP' || code === 'EMLINK') return 'notFile'
+    throw err
   }
   try {
     const held = fstatSync(fd, { bigint: true })
@@ -267,13 +273,18 @@ async function writeFile(sink: FileSink, input: WriteInput): Promise<WriteResult
       if (typeof content !== 'string') return content
       writeSync(fd, content)
       fsyncSync(fd)
-      closeSync(fd)
-      open = false
       renameSync(temp, path)
       renamed = true
+      // what took the name is the file written here, not one swapped in for it before the rename
+      if (!holds(path, fd)) return refuse('secret.err.notFile', { path })
+      closeSync(fd)
+      open = false
     } finally {
       if (open) closeSync(fd)
-      if (!renamed) rmSync(temp, { force: true })
+      if (!renamed)
+        try {
+          rmSync(temp, { force: true })
+        } catch {}
     }
     return { ok: true, target: sink.at ? `${path} › ${sink.at.map(k => fillText(k, input.params)).join(' › ')}` : path }
   })

@@ -4,7 +4,7 @@
 // counterpart (fonts, colors, page layout) is dropped, not imitated. Bundled apart from app.js
 // (server/viewers.ts); it reads the file through the board's file route, with its token.
 import mammoth from 'mammoth'
-import { measureUnpacked, unpackedSize, zipEntries } from '../models/zip.ts'
+import { storedZip, unpackedSize, zipEntries } from '../models/zip.ts'
 
 export type DocumentReply =
   | { ok: true; html: string }
@@ -47,16 +47,18 @@ export async function documentOf(buffer: ArrayBuffer): Promise<DocumentReply> {
   if (!entries) return { ok: false, why: 'broken', message: 'no central directory' }
   if (unpackedSize(entries) > UNPACKED_LIMIT)
     return { ok: false, why: 'big', message: `${unpackedSize(entries)} bytes unpacked` }
-  // what the directory says can be a lie: what the parts really unpack to, before JSZip unpacks them
-  const measured = await measureUnpacked(bytes, entries, UNPACKED_LIMIT)
-  if (!measured.ok)
-    return measured.why === 'big'
+  // What the directory says can be a lie, and JSZip reads a zip's headers its own way: it gets the
+  // parts as they really unpack, stored again in a zip of the worker's making.
+  const zip = await storedZip(bytes, entries, UNPACKED_LIMIT)
+  if (!zip.ok)
+    return zip.why === 'big'
       ? { ok: false, why: 'big', message: `more than ${UNPACKED_LIMIT} bytes unpacked` }
-      : { ok: false, why: 'broken', message: 'a part does not unpack as its directory says' }
+      : { ok: false, why: 'broken', message: 'a part does not unpack' }
   try {
     // The browser build (bundled for the page) takes the ArrayBuffer; the Node build (Bun, in the
     // tests) the same bytes as a Buffer.
-    const input = typeof Buffer === 'undefined' ? { arrayBuffer: buffer } : { buffer: Buffer.from(buffer) }
+    const rezipped = zip.bytes.buffer as ArrayBuffer
+    const input = typeof Buffer === 'undefined' ? { arrayBuffer: rezipped } : { buffer: Buffer.from(rezipped) }
     const { value } = await mammoth.convertToHtml(input, { styleMap: STYLES })
     return { ok: true, html: value }
   } catch (err) {

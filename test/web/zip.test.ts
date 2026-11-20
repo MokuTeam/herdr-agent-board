@@ -2,7 +2,7 @@
 // unpacked by its central directory, before a library unpacks all of it; a part's first bytes,
 // or all of it.
 import { describe, expect, test } from 'bun:test'
-import { looksLikeZip, measureUnpacked, unpackedSize, zipEntries, zipRead, zipText } from '../../web/src/models/zip.ts'
+import { looksLikeZip, storedZip, unpackedSize, zipEntries, zipRead, zipText } from '../../web/src/models/zip.ts'
 import { deflatedRun, zip } from './support/zip.ts'
 
 describe('a zip read by its central directory', () => {
@@ -112,17 +112,52 @@ describe('a zip’s directory as JSZip reads it', () => {
   })
 })
 
-// #230: the directory's sizes can lie; what the parts really unpack to is counted before a library unpacks them.
-describe('what a zip’s parts really unpack to', () => {
+// #230: the directory's sizes can lie, and JSZip and SheetJS each read a zip's headers their own
+// way: the libraries get the parts as they really unpack, in a stored zip of the worker's making.
+describe('the zip the libraries are given', () => {
   const MB = 1 << 20
-  const measure = (bytes: Uint8Array, limit = MB) => measureUnpacked(bytes, zipEntries(bytes) ?? [], limit)
+  const rezip = (bytes: Uint8Array, limit = MB) => storedZip(bytes, zipEntries(bytes) ?? [], limit)
 
-  test('a truthful zip: the sizes its parts unpack to, stored and deflated', async () => {
+  /** Every header of a zip: what its local headers and directory records say, and its end record's place. */
+  function headers(bytes: Uint8Array) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    const end = bytes.length - 22
+    const parts = (zipEntries(bytes) ?? []).map(e => ({
+      name: e.name,
+      method: e.method,
+      local: [8, 18, 22, 28].map(
+        at =>
+          view.getUint16(e.offset + at, true) +
+          (at === 18 || at === 22 ? view.getUint16(e.offset + at + 2, true) * 65536 : 0),
+      ),
+      central: [10, 20, 24, 30, 32].map(at =>
+        at === 20 || at === 24 ? view.getUint32(e.record + at, true) : view.getUint16(e.record + at, true),
+      ),
+    }))
+    return { parts, end: view.getUint32(end, true) === 0x06054b50, comment: view.getUint16(end + 20, true) }
+  }
+
+  test('a truthful zip: its parts stored as they unpack, the same bytes, nothing in the headers but the sizes', async () => {
+    const xml = '<a/>'.repeat(1000)
     const bytes = zip([
-      { name: 'a.xml', data: '<a/>'.repeat(1000) },
+      { name: 'a.xml', data: xml },
       { name: 'b.bin', data: 'stored', stored: true },
     ])
-    expect(await measure(bytes)).toEqual({ ok: true, size: 4006 })
+    const out = await rezip(bytes)
+    if (!out.ok) throw new Error(out.why)
+    expect(out.size).toBe(4006)
+    const entries = zipEntries(out.bytes) ?? []
+    expect(await zipText(out.bytes, entries, 'a.xml')).toBe(xml)
+    expect(await zipText(out.bytes, entries, 'b.bin')).toBe('stored')
+    expect(headers(out.bytes)).toEqual({
+      parts: [
+        // method 0; local: method, compressed and unpacked size, no extra field
+        { name: 'a.xml', method: 0, local: [0, 4000, 4000, 0], central: [0, 4000, 4000, 0, 0] },
+        { name: 'b.bin', method: 0, local: [0, 6, 6, 0], central: [0, 6, 6, 0, 0] },
+      ],
+      end: true,
+      comment: 0,
+    })
   })
 
   test('a part that says 100 bytes and unpacks to 64 MB: too big, the inflating stopped soon past the limit', async () => {
@@ -130,34 +165,75 @@ describe('what a zip’s parts really unpack to', () => {
       { name: 'xl/worksheets/sheet1.xml', data: '', deflated: deflatedRun('<a>', 64, '</a>'), claims: 100 },
     ])
     expect(unpackedSize(zipEntries(bytes) ?? [])).toBe(100)
-    const measured = await measure(bytes)
-    expect(measured).toMatchObject({ ok: false, why: 'big' })
+    const out = await rezip(bytes)
+    expect(out).toMatchObject({ ok: false, why: 'big' })
     // one step of 4 KB unpacks to 4.2 MB at most: no more than that is counted past the limit
-    expect(measured.size).toBeGreaterThan(MB)
-    expect(measured.size).toBeLessThan(MB + 5 * MB)
+    expect(out.size).toBeGreaterThan(MB)
+    expect(out.size).toBeLessThan(MB + 5 * MB)
   })
 
   test('a data descriptor (the local sizes 0) that says 100 bytes: counted as it unpacks', async () => {
     const lying = zip([{ name: 'xl/media/a.bin', data: new Uint8Array(2 * MB), claims: 100, descriptor: true }])
-    expect(await measure(lying)).toMatchObject({ ok: false, why: 'big' })
+    expect(await rezip(lying)).toMatchObject({ ok: false, why: 'big' })
     const truthful = zip([{ name: 'xl/media/a.bin', data: 'abc'.repeat(100), descriptor: true }])
-    expect(await measure(truthful)).toEqual({ ok: true, size: 300 })
+    const out = await rezip(truthful)
+    if (!out.ok) throw new Error(out.why)
+    expect(await zipText(out.bytes, zipEntries(out.bytes) ?? [], 'xl/media/a.bin')).toBe('abc'.repeat(100))
   })
 
-  test('a deflate stream that does not end at its compressed size: broken (SheetJS inflates to its end)', async () => {
-    // the directory says 64 bytes of a stream that goes on: SheetJS would inflate all of it
+  test('a deflate stream that does not end at its compressed size, or a part past the file’s end: broken', async () => {
     const runsOn = zip([{ name: 'a.xml', data: new Uint8Array(MB), claimsCompressed: 64 }])
-    expect(await measure(runsOn)).toMatchObject({ ok: false, why: 'broken' })
-    // more bytes than the stream: the next part's header read as data
+    expect(await rezip(runsOn)).toMatchObject({ ok: false, why: 'broken' })
     const shortStream = zip([
       { name: 'a.xml', data: '<a/>', claimsCompressed: 2000 },
       { name: 'b.bin', data: new Uint8Array(4000), stored: true },
     ])
-    expect(await measure(shortStream)).toMatchObject({ ok: false, why: 'broken' })
+    expect(await rezip(shortStream)).toMatchObject({ ok: false, why: 'broken' })
+    const pastEnd = zip([{ name: 'a.bin', data: 'plain', stored: true, claimsCompressed: 1 << 20 }])
+    expect(await rezip(pastEnd)).toMatchObject({ ok: false, why: 'broken' })
   })
 
-  test('a local header that says deflated where the directory says stored: broken', async () => {
-    const bytes = zip([{ name: 'a.bin', data: 'plain', stored: true, localMethod: 8 }])
-    expect(await measure(bytes)).toMatchObject({ ok: false, why: 'broken' })
+  test('the hints a library would size by never reach it: a local size of 4 GB, ZIP64 extras, a comment', async () => {
+    // the part's local header says it unpacks to 0xFFFFFFFF (SheetJS allocates that much first),
+    // its directory record carries two ZIP64 blocks, and the end record a comment
+    const plain = zip([{ name: 'xl/workbook.xml', data: '<workbook/>' }])
+    const bytes = new Uint8Array(plain)
+    const view = new DataView(bytes.buffer)
+    view.setUint32(22, 0xffffffff, true)
+    const out = await rezip(withExtraAndComment(bytes))
+    if (!out.ok) throw new Error(out.why)
+    expect(headers(out.bytes)).toEqual({
+      parts: [{ name: 'xl/workbook.xml', method: 0, local: [0, 11, 11, 0], central: [0, 11, 11, 0, 0] }],
+      end: true,
+      comment: 0,
+    })
   })
 })
+
+/** The zip with two ZIP64 blocks in its one directory record's extra field and a comment on its end record. */
+function withExtraAndComment(bytes: Uint8Array): Uint8Array {
+  const entry = (zipEntries(bytes) ?? [])[0]
+  if (!entry) throw new Error('no part')
+  const nameEnd = entry.record + 46 + new DataView(bytes.buffer).getUint16(entry.record + 28, true)
+  const extra = new Uint8Array(24)
+  const xv = new DataView(extra.buffer)
+  for (const at of [0, 12]) {
+    xv.setUint16(at, 1, true)
+    xv.setUint16(at + 2, 8, true)
+    xv.setUint32(at + 4, 0x7fffffff, true)
+  }
+  const comment = new TextEncoder().encode('PK\u0006\u0007 not a locator')
+  const end = bytes.length - 22
+  const out = new Uint8Array([
+    ...bytes.subarray(0, nameEnd),
+    ...extra,
+    ...bytes.subarray(nameEnd, end),
+    ...bytes.subarray(end),
+    ...comment,
+  ])
+  const view = new DataView(out.buffer)
+  view.setUint16(entry.record + 30, extra.length, true)
+  view.setUint32(end + extra.length + 12, view.getUint32(end + extra.length + 12, true) + extra.length, true)
+  view.setUint16(end + extra.length + 20, comment.length, true)
+  return out
+}

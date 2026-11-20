@@ -219,6 +219,41 @@ describe('a workbook as the worker reads it', () => {
     expect(await bookOf(headless, 'en', 'cut.ods')).toMatchObject({ ok: false, why: 'broken' })
   })
 
+  test('SheetJS reads the workbook the worker counted, not one an end record cut short points it to (#230)', async () => {
+    // Two workbooks in one file: "Theirs" first, then "Ours" with its end record. The last 20
+    // bytes, its comment, are an end record cut short that points to the first workbook's
+    // directory: SheetJS on its own searches from 4 bytes before the end and finds that one.
+    const parts = async (sheet: string) => {
+      const wb = utils.book_new()
+      utils.book_append_sheet(wb, utils.aoa_to_sheet([[sheet]]), sheet)
+      const bytes = new Uint8Array(write(wb, { type: 'array', bookType: 'xlsx', compression: true }) as ArrayBuffer)
+      return Promise.all((zipEntries(bytes) ?? []).map(async e => ({ name: e.name, data: await zipRead(bytes, e) })))
+    }
+    const theirParts = await parts('Theirs')
+    const theirs = zip(theirParts)
+    const theirDirectory = (zipEntries(theirs) ?? [])[0]?.record ?? 0
+    const head = theirs.subarray(0, theirs.length - 22)
+    const cut = new Uint8Array(20)
+    const view = new DataView(cut.buffer)
+    view.setUint32(0, 0x06054b50, true)
+    view.setUint16(8, theirParts.length, true)
+    view.setUint32(16, theirDirectory, true)
+    const ours = zip(await parts('Ours'), { base: head.length, comment: cut })
+    const read = await bookOf(new Uint8Array([...head, ...ours]), 'en', 'two.xlsx')
+    if (!read.ok) throw new Error(read.message)
+    expect(read.sheets.map(s => s.name)).toEqual(['Ours'])
+  })
+
+  test('a file SheetJS reads as a zip (PK and two small bytes) whose directory the worker cannot read: broken (#230)', async () => {
+    const wb = utils.book_new()
+    utils.book_append_sheet(wb, utils.aoa_to_sheet([['x']]), 'Sheet')
+    const ods = new Uint8Array(write(wb, { type: 'array', bookType: 'ods' }) as ArrayBuffer)
+    // a byte between the directory and its end record, and the first header's signature PK 1 1
+    const odd = new Uint8Array([...ods.subarray(0, ods.length - 22), 0, ...ods.subarray(ods.length - 22)])
+    odd.set([0x50, 0x4b, 1, 1], 0)
+    expect(await bookOf(odd, 'en', 'odd.ods')).toMatchObject({ ok: false, why: 'broken' })
+  })
+
   test('frozen rows read from the head of the sheet’s own XML in the zip', async () => {
     const wb = utils.book_new()
     utils.book_append_sheet(wb, utils.aoa_to_sheet([['Дата'], [1], [2]]), 'Лист')

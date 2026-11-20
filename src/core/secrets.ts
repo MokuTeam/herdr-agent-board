@@ -677,11 +677,11 @@ export const MAX_EXPIRES_MS = 24 * 3_600_000
 export const WRITING_MS = 8 * 60_000
 /** The requests a card may have waiting at once. */
 export const MAX_PENDING = 5
-/** Asks a card may make in ASK_WINDOW_MS, settled or not (#275): no more than KEPT_MAX, which the card keeps to count them. */
-export const MAX_ASKS = 10
-export const ASK_WINDOW_MS = 10 * 60_000
 const KEPT_MS = 24 * 3_600_000
 const KEPT_MAX = 20
+/** Asks a card may make in ASK_WINDOW_MS, settled or not (#275): counted from the KEPT_MAX the card keeps. */
+export const MAX_ASKS = Math.min(10, KEPT_MAX)
+export const ASK_WINDOW_MS = 10 * 60_000
 
 /** `30m`, `2h`, `90s`, `1d`: ms, between a minute and a day; null for anything else. */
 export function parseExpires(text: string): number | null {
