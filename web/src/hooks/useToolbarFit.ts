@@ -13,8 +13,8 @@
 // the row (and on More while nothing is left over); the stylesheet draws them (styles/toolbar.css).
 import { type RefObject, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { withoutSpill } from '../models/no-spill.ts'
 import { byPriority, fitToolbar, oneRowFits, TOOLBAR_PRIORITY, type ToolbarItem } from '../models/toolbar-fit.ts'
+import { withoutSpill } from './no-spill.ts'
 
 const NONE: ReadonlySet<string> = new Set()
 
@@ -95,20 +95,13 @@ interface Elements {
   title: HTMLElement | null
 }
 
-/**
- * How the toolbar shows at the width it has, with the widths it went by; null while it has no width.
- * What it tries out to measure stays inside the container: wider than the page, it would move the
- * scroll of a phone (models/no-spill.ts).
- */
+/** How the toolbar shows at the width it has, with the widths it went by; null while it has no width. */
 export function fitToolbarIn(el: Elements, widths: Measured): { shape: ToolbarShape; widths: Measured } | null {
-  return withoutSpill(el.fit, () => fitIn(el, widths))
-}
-
-function fitIn(el: Elements, widths: Measured): { shape: ToolbarShape; widths: Measured } | null {
   const total = el.fit.clientWidth
   if (!total) return null
   const now = actionsIn(el.actions)
-  const measured = now.key === widths.key ? widths : measure(el, now)
+  // Every action shown in one row is wider than a phone: it stays inside the container (hooks/no-spill.ts).
+  const measured = now.key === widths.key ? widths : withoutSpill(el.fit, () => measure(el, now))
   const gap = Number.parseFloat(getComputedStyle(el.actions).columnGap) || 0
   const { one, two } = measured
   // The summary is not measured with the rest: it shows only on a wide board (a container query of app.css), so its width goes with the toolbar's, not with the actions.

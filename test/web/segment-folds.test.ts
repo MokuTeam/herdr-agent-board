@@ -168,7 +168,7 @@ describe('in one row, shrinking alike', () => {
   })
 })
 
-test('a control tried at full width does not widen the page: the row contains its paint meanwhile, and is as it was after (#474)', () => {
+test('a control tried at full width: the row contains its paint meanwhile, and is as it was after (#474)', () => {
   scene = { natural: NATURAL, room: 330 }
   const el = draw(new Set(['lanes', 'profiles']))
   expect(segmentFoldIn(asDom(el))).toBe(null)

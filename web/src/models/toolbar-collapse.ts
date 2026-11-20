@@ -12,7 +12,7 @@ export const TOP = 8
 /** After a tap that opened it, this much more downward travel than TURN folds it again. */
 export const HOLD = 24
 /** Within this many px of the end of the page the page is at its end (a scroll can stop a fraction short). */
-export const END = 1
+export const END = 2
 
 export interface ToolbarScroll {
   collapsed: boolean

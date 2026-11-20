@@ -7,8 +7,8 @@
 // segments change (their lanes or profiles, counts, the one picked, the language).
 import { type RefObject, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { withoutSpill } from '../models/no-spill.ts'
 import { FOLD_SLACK, foldsNow, nextFold, type SegmentsRoom, withFold } from '../models/segment-fold.ts'
+import { withoutSpill } from './no-spill.ts'
 
 /** No control folded: the page as it starts, and as the server draws it. */
 const NONE: ReadonlySet<string> = new Set()
@@ -55,22 +55,15 @@ function tried({ seg, pick }: Control, others: readonly HTMLElement[], slack: nu
   return whole ? { natural, room } : null
 }
 
-/**
- * The next control of `row` to fold or unfold (models/segment-fold.ts nextFold); null: they stay as
- * they are. A control tried at full width stays inside the row: wider than the page, it would move
- * the scroll of a phone (models/no-spill.ts).
- */
+/** The next control of `row` to fold or unfold (models/segment-fold.ts nextFold); null: they stay as they are. */
 export function segmentFoldIn(row: HTMLElement, slack = FOLD_SLACK): { id: string; folded: boolean } | null {
-  return withoutSpill(row, () => nextFoldIn(row, slack))
-}
-
-function nextFoldIn(row: HTMLElement, slack: number): { id: string; folded: boolean } | null {
   const controls = controlsIn(row)
   const drawn = controls.filter(c => !c.seg.hidden).map(c => c.seg)
   const i = nextFold(
     controls.map(c => ({
       folded: !!c.seg.hidden,
-      room: () => (c.seg.hidden ? tried(c, drawn, slack) : drawnRoom(c.seg)),
+      // Tried at full width, a folded control can be wider than a phone: it stays inside the row (hooks/no-spill.ts).
+      room: () => (c.seg.hidden ? withoutSpill(row, () => tried(c, drawn, slack)) : drawnRoom(c.seg)),
     })),
     slack,
   )
