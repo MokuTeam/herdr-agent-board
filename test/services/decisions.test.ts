@@ -6,7 +6,7 @@ import { expect, test } from 'bun:test'
 import { readCard, writeCard } from '../../src/adapters/cards.ts'
 import { openDb } from '../../src/adapters/db.ts'
 import { closedDecisions, getDecision } from '../../src/adapters/decision-store.ts'
-import { getEntry, listEntries } from '../../src/adapters/schedule-store.ts'
+import { getEntry, listEntries, removeEntry } from '../../src/adapters/schedule-store.ts'
 import { type AskSpec, cardDecisionOf } from '../../src/core/decisions.ts'
 import type { Card, Item } from '../../src/core/types.ts'
 import {
@@ -244,4 +244,17 @@ test('an open row no card points at any more is withdrawn by the queue, not befo
   expect(row(r.id)).toMatchObject({ answeredBy: 'withdrawn', via: 'cleared' })
   const db = openDb({ create: false })
   db?.close()
+})
+
+test('a default taken out of the schedule by hand is held: the card stops counting down', () => {
+  isolatedHome()
+  const r = ask()
+  const entry = row(r.id)?.entry as string
+  removeEntry(entry)
+  const cards = new Map<string, Card>([[ANNA, readCard(ANNA) as Card]])
+  decisionsPayload([], cards, { now: NOW + 60_000, defaults: true, seen: 0 })
+  expect(row(r.id)).toMatchObject({ held: NOW + 60_000, defaultAt: null, answeredAt: null })
+  const cd = cardDecisionOf(readCard(ANNA)?.decision)
+  expect(cd?.held).toBe(NOW + 60_000)
+  expect(cd?.defaultAt).toBeUndefined()
 })

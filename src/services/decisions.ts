@@ -20,7 +20,7 @@ import {
 } from '../adapters/decision-store.ts'
 import { isRecord, readJson, replaceFile } from '../adapters/json-store.ts'
 import { stateDir } from '../adapters/paths.ts'
-import { addEntry, removeEntry } from '../adapters/schedule-store.ts'
+import { addEntry, getEntry, removeEntry } from '../adapters/schedule-store.ts'
 import { entriesOf, getThread } from '../adapters/work-thread-store.ts'
 import {
   type AskSpec,
@@ -337,13 +337,29 @@ const SETTLE_MS = 10_000
 
 /**
  * Open rows no card points at any more (an ask cleared by `board doing`, by a Codex session's
- * hook, by another session's message): withdrawn, so the record never shows them open.
+ * hook, by another session's message): withdrawn, so the record never shows them open. An open
+ * one whose default left the schedule by hand: held.
  */
 function settleLeftOvers(db: BoardDb, cards: ReadonlyMap<string, Card>, now: number): void {
   for (const row of openDecisions(db)) {
     if (now - row.askedAt < SETTLE_MS) continue
     const card = cards.get(row.session)
-    if (card?.ask && cardDecisionOf(card.decision)?.id === row.id) continue
+    if (card?.ask && cardDecisionOf(card.decision)?.id === row.id) {
+      // Its default taken out of the schedule by hand (the Schedule row's delete, `board unschedule`):
+      // held, so the card no longer counts down to a default that will not come.
+      if (row.entry && row.defaultAt !== null && row.held === null && !getEntry(row.entry)) {
+        try {
+          if (holdDecision(db, row.id, now, 'board'))
+            updateCard(row.session, c => {
+              const cd = cardDecisionOf(c?.decision)
+              if (!c || cd?.id !== row.id) return undefined
+              const { defaultAt, ...rest } = cd
+              return { ...c, decision: { ...rest, held: now } }
+            })
+        } catch {}
+      }
+      continue
+    }
     try {
       closeDecision(db, row.id, { answer: null, answeredBy: 'withdrawn', via: 'cleared', at: now }, 'board')
       removeQuietly(fileSchedule, row.entry)
