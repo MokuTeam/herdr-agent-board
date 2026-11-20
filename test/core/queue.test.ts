@@ -100,6 +100,50 @@ test("Code Mode's background results are not the user's queued messages", () => 
     assert.deepEqual(queued([...busy, q(10, 'enqueue', typed)]), [typed])
 })
 
+// Claude Code 2.1.329 (#445) queues the envelope without its nonce, and adds that only when it
+// hands the event to Claude.
+const bare = (n: number, kind = 'repl-eval', body = `<result>${n} files</result>`) =>
+  `<event kind="${kind}" at="${ts(n)}" eval="${n}" ms="306" status="settled">\n${body}\n</event>`
+
+test("Code Mode's background results queued without a nonce are not the user's messages either", () => {
+  const real = q(15, 'enqueue', 'also check the logs')
+  const refused = bare(12, 'repl-eval', '<refused>Bash: denied</refused>\n<result>0</result>')
+  const monitor = `<event kind="monitor" at="${ts(20)}" pending="1">\n<line>build ok</line>\n</event>`
+  const status = `<event kind="repl-status" at="${ts(21)}" pending="1">\r\nstill running: #3\r\n</event>\r\n`
+  // Waiting, then taken into the running turn (remove): only the real one shows.
+  const waiting = [...busy, q(10, 'enqueue', bare(10)), q(12, 'enqueue', refused), real, q(20, 'enqueue', monitor)]
+  assert.deepEqual(queued([...waiting, q(21, 'enqueue', status)]), ['also check the logs'])
+  assert.deepEqual(
+    queued([
+      ...waiting,
+      q(22, 'remove', bare(10)),
+      polled(22, bare(10)),
+      q(23, 'remove', refused),
+      q(24, 'remove', monitor),
+    ]),
+    ['also check the logs'],
+  )
+  // At the turn's end (dequeue): it is the one taken, and owes no user line.
+  const dequeued = [...busy, q(10, 'enqueue', bare(10)), q(10, 'dequeue'), result(10, 'p1'), real]
+  assert.deepEqual(queued(dequeued), ['also check the logs'])
+  assert.deepEqual(queued([...dequeued, user(20, 'typed elsewhere')]), ['also check the logs'])
+  assert.deepEqual(queued([...dequeued, q(60, 'dequeue'), user(60, 'also check the logs')]), [])
+  // The old form with its nonce is still left out.
+  assert.deepEqual(queued([...busy, q(10, 'enqueue', event(10)), real]), ['also check the logs'])
+})
+
+test("a typed message that quotes or mimics an event tag is still the user's", () => {
+  for (const typed of [
+    'why does <event kind="x"> show up here?',
+    'the chat shows <event kind="repl-eval" at="2026-11-20T06:58:27.985Z"> as mine',
+    `<event kind="repl-eval" at="${ts(10)}"> came in, what is it?`,
+    '<event kind="repl-eval" at="yesterday">\n</event>',
+    `<event at="${ts(10)}">\nno kind\n</event>`,
+    `<event-log kind="x" at="${ts(10)}">\n</event>`,
+  ])
+    assert.deepEqual(queued([...busy, q(10, 'enqueue', typed)]), [typed])
+})
+
 test('a dequeue takes the one its user line names, whatever else waits', () => {
   const lines = [
     ...busy,

@@ -8,6 +8,7 @@ import {
   CALL_NOTE,
   callNotice,
   callTitle,
+  codeModeEvent,
   isNotice,
   reminderNotice,
   type TaskNotice,
@@ -294,4 +295,30 @@ test("in the conversation a call's results are a notice, not the user answering"
     ['call', 'Release 2.4 call · Oct 17 · 32 min', REPORT],
   )
   assert.equal(parseTranscriptTail(lines).replied, false)
+})
+
+test("codeModeEvent: Code Mode's queued envelope with or without its nonce (#424, #445), not a typed line", () => {
+  const at = '2026-11-20T06:58:27.985Z'
+  for (const envelope of [
+    `<event nonce="kcxdYBtG" kind="repl-eval" at="${at}" eval="10" ms="1683" status="settled">\n<result>ok</result>\n</event>`,
+    `<event kind="repl-eval" at="${at}" eval="65" ms="306" status="settled">\n<refused>x</refused>\n<result>y</result>\n</event>`,
+    `<event kind="repl-status" at="${at}" pending="1">\nstill running\n</event>`,
+    `  <event kind="repl-status" at="${at}" pending="1">\r\nstill running\r\n</event>\r\n`,
+    `<event kind="monitor" at="2026-11-20T06:58:27Z" pending="2">\n<line>a</line>\n</event>\n`,
+  ])
+    assert.equal(codeModeEvent(envelope), true, envelope)
+  for (const typed of [
+    'why does <event kind="x"> show up here?',
+    `see <event kind="repl-eval" at="${at}">\n</event>`,
+    '<event kind="x"> is the tag',
+    `<event kind="repl-eval" at="${at}"> came in, what is it?`,
+    '<event kind="repl-eval" at="yesterday">\n</event>',
+    `<event at="${at}">\nno kind\n</event>`,
+    `<event kind="" at="${at}">\n</event>`,
+    `<event-log kind="x" at="${at}">\n</event>`,
+    '<event-log nonce="x"> too',
+    '',
+    null,
+  ])
+    assert.equal(codeModeEvent(typed), false, String(typed))
 })

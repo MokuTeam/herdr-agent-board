@@ -247,13 +247,28 @@ export function callNotice(text: unknown): CallNotice | null {
 export const boardNotice = (text: unknown): ReminderNotice | CallNotice | null =>
   reminderNotice(text) ?? callNotice(text)
 
+const EVENT_OPEN = /^\s*<event\s([^>]*)>/
+const EVENT_NONCE = /(?:^|\s)nonce="[^"]*"/
+const EVENT_KIND = /(?:^|\s)kind="[^"]+"/
+const EVENT_AT = /(?:^|\s)at="\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z"/
+const EVENT_CLOSE = /<\/event>\s*$/
+
 /**
  * Code Mode's delivery of a background result (#424): Claude Code queues it as an
- * `<event nonce="…" kind="…">` envelope and hands it to Claude as a tool result, never as the
- * user's line. Any kind: repl-eval, a monitor, whatever comes next.
+ * `<event kind="…" at="…">…</event>` envelope and hands it to Claude as a tool result, never as
+ * the user's line. Any kind: repl-eval, repl-status, whatever comes next. Up to
+ * Claude Code 2.1.328 the queued copy carried a `nonce`; since 2.1.329 only the delivery to
+ * Claude does (#445), so without one the tag must have Code Mode's shape (a kind and an ISO
+ * `at`) and the text must end with `</event>`. A typed line that only mentions `<event` stays
+ * the user's.
  */
-export const codeModeEvent = (text: unknown): boolean =>
-  /^\s*<event\s(?:[^>]*\s)?nonce="[^"]*"/.test(String(text ?? ''))
+export function codeModeEvent(text: unknown): boolean {
+  const s = String(text ?? '')
+  const open = EVENT_OPEN.exec(s)
+  if (!open) return false
+  const attrs = open[1] ?? ''
+  return EVENT_NONCE.test(attrs) || (EVENT_KIND.test(attrs) && EVENT_AT.test(attrs) && EVENT_CLOSE.test(s))
+}
 
 /** True for a prompt the user did not type: a task notification, a board reminder or a call's results. */
 export const isNotice = (text: unknown): boolean => !!(taskNotice(text) || boardNotice(text))
