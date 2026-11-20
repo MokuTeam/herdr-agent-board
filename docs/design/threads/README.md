@@ -627,7 +627,9 @@ because this view is painted in MokuPilot's window and not on the board's page.
 When the board answers and threads are on, the first segment reads "Threads" and shows the
 threads view; otherwise MokuPilot shows its own board as today. MokuPilot finds the board through
 the `board` command it already locates for call reports (`call_report.find_board()`):
-`board thread link --base --json` prints the board's address and whether threads are on.
+`board thread link --base --json` prints the board's address and whether threads are on, and
+`day_watches: true` on a board that carries a day's watches to its next conversation (#461). The
+key describes the `board` command's build, so a board pulled but not yet restarted already says it.
 
 ### 9.2 The list
 

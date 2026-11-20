@@ -49,6 +49,22 @@ const deliver = (key: string): void => {
   for (const e of events(key)) removeEntry(e.id)
 }
 
+test("threads on: link --base says so and that a day's watches carry over (#472)", async () => {
+  const { run, json } = setUp()
+  assert.deepEqual(await run(master, ['link', '--base']), {
+    code: 0,
+    out: 'http://127.0.0.1:12422/ · threads on',
+    err: '',
+  })
+  assert.deepEqual(await json(master, ['link', '--base']), {
+    ok: true,
+    url: 'http://127.0.0.1:12422/',
+    threads: true,
+    agents: true,
+    day_watches: true,
+  })
+})
+
 test('threads off: every command says so and fails; link --base answers, saying they are off', async () => {
   const { run, json } = setUp({})
   const r = await run(master, ['new', 'Import mapping'])
