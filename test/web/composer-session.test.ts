@@ -263,6 +263,27 @@ test('a sleeping session wakes for it; a refusal stays at the foot with why, its
   expect(p.log.at(-1)).toBe('toast: Sent to Beta') // no Claude session: no transcript, a toast
 })
 
+test('a refusal for a dialog herdr reports but the screen does not show offers Send anyway, which says so to the server (#164)', async () => {
+  const p = page([a])
+  p.open('a')
+  p.box.input('hello')
+  const sent = p.box.send()
+  p.answer({ ok: false, error: 'herdr says Alpha waits for a decision', code: 'stale' })
+  await sent
+  const [entry] = p.waiting('a')
+  expect(entry).toMatchObject({ state: 'failed', anyway: true })
+  expect(p.posts[0]?.body).not.toHaveProperty('anyway')
+  const again = p.box.retry(entry?.id ?? '', true)
+  expect(p.waiting('a')).toMatchObject([{ state: 'sending' }])
+  expect(p.waiting('a')[0]?.anyway).toBeUndefined()
+  expect(p.posts.at(-1)?.body).toEqual({ ...p.posts[0]?.body, anyway: true })
+  p.answer({ ok: false, error: 'Alpha waits for a decision in the terminal' })
+  await again
+  // Any other refusal: Retry and Edit only.
+  expect(p.waiting('a')).toMatchObject([{ state: 'failed' }])
+  expect(p.waiting('a')[0]?.anyway).toBeUndefined()
+})
+
 test('not on show, a refusal says why in a toast', async () => {
   const p = page([a])
   p.open('a')

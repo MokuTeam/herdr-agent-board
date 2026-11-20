@@ -20,7 +20,7 @@ import { useSessionActions } from './useSessionActions.ts'
 export interface OutboxControls {
   /** The ones the thread of `key` shows now: on their way, taken but not in its transcript yet, or not sent. */
   waiting(key: string | null): readonly OutboxEntry[]
-  retry(id: string): void
+  retry(id: string, anyway?: boolean): void
   edit(id: string): void
   /** Counts their changes: the thread's foot is drawn anew. */
   version: number
@@ -140,7 +140,7 @@ export function useComposer(
     removeFile: attachments.remove,
     outbox: {
       waiting: key => session.waiting(key, open, openDetail),
-      retry: id => void session.retry(id),
+      retry: (id, anyway) => void session.retry(id, anyway),
       edit: session.edit,
       version,
       foot,

@@ -56,7 +56,11 @@ const shot: Attachment = {
  * The composer's model after five messages to `it`: one refused with why, one refused without
  * (files only), two sent, and one still on its way.
  */
-async function outboxOf(it: Item, lang: string): Promise<ComposerSession> {
+async function outboxOf(
+  it: Item,
+  lang: string,
+  first: SendResult = { ok: false, error: 'herdr is <out> of date' },
+): Promise<ComposerSession> {
   const t = translator(lang)
   const state = { text: '', files: [] as readonly Attachment[] }
   let answer: (r: SendResult) => void = () => {}
@@ -103,7 +107,7 @@ async function outboxOf(it: Item, lang: string): Promise<ComposerSession> {
       await sent
     }
   }
-  await send('Please **rebase** first', [], { ok: false, error: 'herdr is <out> of date' })
+  await send('Please **rebase** first', [], first)
   await send('', [shot], { ok: false, error: '' })
   await send('run the e2e suite', [], { ok: true })
   await send('settled one', [], { ok: true })
@@ -263,4 +267,13 @@ describe('the foot of the thread, markup parity with upstream', () => {
     same({ conversation: [] })
     same({ conversation: [], box })
   })
+})
+
+test('a message herdr refused for a dialog the screen does not show has Send anyway beside Retry and Edit (#164)', async () => {
+  const box = await outboxOf(working, 'en', { ok: false, error: 'herdr says Alpha waits', code: 'stale' })
+  const react = reactThread({ conversation: CONVERSATION, queued: QUEUED, box })
+  const anyway = findAll([react], el => el.attrs.has('data-out-anyway'))
+  expect(anyway.length).toBe(1)
+  expect(canonical(anyway)).toContain('Send anyway')
+  expect(findAll([react], el => el.attrs.has('data-out-retry')).length).toBe(2)
 })

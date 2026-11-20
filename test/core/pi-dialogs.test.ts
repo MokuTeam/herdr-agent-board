@@ -115,6 +115,36 @@ test("pi's menu: a long option wraps onto the margin; a menu taller than the pan
   )
 })
 
+test("pi's menu: a title of several lines and four options, as upsun-mcp and mokutab-guard draw them (#164)", () => {
+  const top = PI_SELECT.lastIndexOf(' Git approval needed: git commit\n')
+  const end = PI_SELECT.indexOf(' ↑↓ navigate')
+  const frame = [
+    ' Linear approval needed: save_issue',
+    ' Why (from atlas): file the bug ben found',
+    ' Arguments: {"title":"Login fails","team":"cleo","labels":["bug","p1"]}',
+    '',
+    ' → Approve',
+    '   Approve for this session',
+    '   Reject',
+    '   Reject with a note',
+    '',
+    '',
+  ].join('\n')
+  const menu = asSelect(pi(PI_SELECT.slice(0, top) + frame + PI_SELECT.slice(end)))
+  assert.equal(menu.title, 'Linear approval needed: save_issue')
+  assert.deepEqual(menu.body, [
+    'Why (from atlas): file the bug ben found',
+    'Arguments: {"title":"Login fails","team":"cleo","labels":["bug","p1"]}',
+  ])
+  assert.deepEqual(
+    menu.options.map(o => o.label),
+    ['Approve', 'Approve for this session', 'Reject', 'Reject with a note'],
+  )
+  const shown = publicDialog(menu)
+  assert.equal(shown?.kind, 'select')
+  assert.equal((shown as { options: unknown[] }).options.length, 4)
+})
+
 test("pi's text input: its title and what the field holds, the same input whatever is typed", () => {
   const empty = asInput(pi(PI_INPUT))
   assert.equal(empty.title, 'Note for Lobster')
@@ -274,7 +304,10 @@ test('driveSelect: the same menu again at once is answered when the screen shows
     ok: true,
   })
   // Approve on the first option, the same menu at once: the conversation above it moved on.
-  const later = PI_SELECT.replace(' Running the commit exactly as given, as one bash call.\n', ' Committed. Pushing next.\n')
+  const later = PI_SELECT.replace(
+    ' Running the commit exactly as given, as one bash call.\n',
+    ' Committed. Pushing next.\n',
+  )
   assert.equal(asSelect(pi(later)).fingerprint, MENU.fingerprint)
   const moved = new FakePi()
   moved.render = () => (moved.picked ? selectScreen(1, later) : selectScreen(moved.cursor))

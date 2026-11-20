@@ -505,7 +505,9 @@ export async function driveInput({
     // The same input again: its field without the text, or the conversation moved on.
     await settled(io, ours, step, timing, PI_SCREEN, (x, screen) => {
       const above = piAbove(screen)
-      return (x.kind === 'input' && !fieldHolds(x.value, text)) || (before !== null && above !== null && above !== before)
+      return (
+        (x.kind === 'input' && !fieldHolds(x.value, text)) || (before !== null && above !== null && above !== before)
+      )
     })
     return { ok: true }
   } catch (err) {
@@ -574,9 +576,9 @@ function failure(item: Item, r: DriveFailure): AnswerResult {
           ? t('err.qa.unconfirmed', { name })
           : r.reason === 'same'
             ? t('err.qa.same', { name })
-          : r.reason === 'cut'
-            ? t('err.qa.cut', { name, step })
-            : t('err.qa.stuck', { name, step })
+            : r.reason === 'cut'
+              ? t('err.qa.cut', { name, step })
+              : t('err.qa.stuck', { name, step })
   return { ok: false, error, stopped: r.sent > 0, screen: tail(r.screen) }
 }
 

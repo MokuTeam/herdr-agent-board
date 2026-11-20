@@ -149,14 +149,20 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
   // The card is for one session: a pane that holds another one now gets nothing. Panes with
   // no Claude session id (other agents) are matched by the card alone.
   if ((body.session ?? null) !== (item.session ?? null)) return Promise.resolve(changed(item))
-  return app.gate(item.key, body.requestId ?? randomUUID(), [body.session ?? null, body.text, files], async () => {
+  // "Send anyway" (#164): herdr says a dialog holds the session, but the screen shows none.
+  const anyway = body.anyway === true
+  const payload = [body.session ?? null, body.text, files, ...(anyway ? [true] : [])]
+  return app.gate(item.key, body.requestId ?? randomUUID(), payload, async () => {
     // Always collect a new snapshot before accepting a message, even if SSE is connected: a
     // board that cannot reach herdr fails here rather than send on old data.
     const fresh = await freshItem(deps, item)
     // A card shown asleep is for its session wherever it woke meanwhile: a new tab (#204) too.
     const moved = item.sleeping && !!item.session
     if (!fresh || fresh.session !== item.session || (fresh.pane !== item.pane && !moved)) return changed(item)
-    return send(deps, fresh, [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n'))
+    return send(deps, fresh, [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n'), {
+      look: true,
+      anyway,
+    })
   })
 }
 

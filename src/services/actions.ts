@@ -21,11 +21,12 @@ import { peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
 import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
 import { inputDraft } from '../core/dialogs/input-box.ts'
 import { piDraft } from '../core/dialogs/pi-dialogs.ts'
+import { parseDialog } from '../core/dialogs/questions.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
 import { sameDir } from '../core/launch/names.ts'
 import { boardNotice } from '../core/notices.ts'
-import { isPiItem, piTurnOver } from '../core/pi.ts'
+import { isPiItem, PI_AGENT, piTurnOver } from '../core/pi.ts'
 import {
   absoluteProfileDir,
   defaultProfileDir,
@@ -50,6 +51,7 @@ import { defaultTabOps, openTab } from './wake/tabs.ts'
 
 /**
  * `busy` (plus `dialog` or `draft`) says send refused because the session is occupied, not broken.
+ * `code: 'stale'` with `dialog`: herdr says it waits in a dialog, but its screen shows none (#164).
  * A wake refused because wake is slow to answer (it may be waking that very session: nothing was
  * typed) says `wakeBusy`; the board's own wake that failed on a herdr call says `herdrDown`. A
  * reminder waits for either without counting the wait (services/scheduler.ts).
@@ -62,6 +64,7 @@ export type ActionResult =
       busy?: boolean
       dialog?: boolean
       draft?: boolean
+      code?: 'stale'
       wakeBusy?: boolean
       herdrDown?: boolean
     }
@@ -492,6 +495,36 @@ export async function focus(
 }
 
 /**
+ * What the agent's own input box holds when its screen shows that box and no dialog: Claude's
+ * (inputDraft) or pi's (piDraft); null when a dialog, or anything the board cannot read, is there.
+ */
+async function shownDraft(pane: string, kind: string): Promise<string | null> {
+  const screen = await herdrText(['agent', 'read', pane, '--source', 'visible', '--ansi'], 10_000)
+  if (parseDialog(screen, kind)) return null
+  return kind === PI_AGENT ? piDraft(screen) : inputDraft(screen)
+}
+
+/** How long sendAnyway waits for its text to show in the input box before it gives up on Enter. */
+const ANYWAY_SHOWN_MS = 3000
+const sameWords = (a: string, b: string): boolean => a.replace(/\s+/g, '') === b.replace(/\s+/g, '')
+
+/**
+ * The message typed into an input box herdr wrongly takes for a dialog (#164): `agent prompt`
+ * refuses a pane herdr calls blocked, so the text goes with `pane send-text`, and Enter only once
+ * the box shows it, still with no dialog over it. Otherwise it stays typed there, unsent.
+ */
+async function sendAnyway(pane: string, kind: string, text: string, name: string): Promise<ActionResult> {
+  await herdr(['pane', 'send-text', pane, /^-/.test(text) ? ` ${text}` : text], 10_000)
+  for (const end = Date.now() + ANYWAY_SHOWN_MS; ; await pause(100)) {
+    const draft = await shownDraft(pane, kind)
+    if (draft !== null && sameWords(draft, text)) break
+    if (Date.now() >= end) return { ok: false, error: t('err.anywayUnsent', { name }) }
+  }
+  await herdr(['agent', 'send-keys', pane, 'enter'], 10_000)
+  return { ok: true }
+}
+
+/**
  * A message for a MokuPilot day session (#331): into its day's inbox, which MokuPilot types into
  * the session as a report from the sender, one turn after another (a reminder set to wait until the
  * session is free waits in the scheduler). Only the day that runs now, and only while it is still
@@ -518,6 +551,10 @@ function toDay(item: Item, text: string): ActionResult {
  * check, nothing typed, for a sleeping session nothing at all (it is not woken).
  * `boundTerminal` pins a Board event to the original native SID and terminal. It cannot wake
  * a sleeper or follow a session to another pane.
+ * `look` (the page's messages, #164): herdr says the session waits in a dialog, yet a Claude or
+ * pi screen shows its own input box and no dialog: refused with `code: 'stale'`, which the page
+ * offers to send anyway. `anyway`: then typed all the same (sendAnyway), the screen checked again
+ * first. A screen the board cannot read stays a dialog.
  */
 export async function send(
   deps: Deps,
@@ -529,17 +566,30 @@ export async function send(
     woken = false,
     probe = false,
     boundTerminal,
-  }: { free?: boolean; draft?: boolean; woken?: boolean; probe?: boolean; boundTerminal?: string } = {},
+    look = false,
+    anyway = false,
+  }: {
+    free?: boolean
+    draft?: boolean
+    woken?: boolean
+    probe?: boolean
+    boundTerminal?: string
+    look?: boolean
+    anyway?: boolean
+  } = {},
 ): Promise<ActionResult> {
   const text = String(message ?? '').trim()
   if (!text) return { ok: false, error: t('err.emptyMessage') }
-  const changed = (): ActionResult => ({ ok: false, error: t('err.sessionChanged', { name: item.name }) })
+  const changed = (): Extract<ActionResult, { ok: false }> => ({
+    ok: false,
+    error: t('err.sessionChanged', { name: item.name }),
+  })
   if (boundTerminal !== undefined && (!item.session || !item.pane || item.day || item.sleeping)) return changed()
   if (item?.day) return toDay(item, text)
   // A sleeping session whose pane is gone wakes in a new tab: pi's (#178), Claude's that wake closed (#204).
   if (!item?.pane && !item?.sleeping) return { ok: false, error: t('err.noPane') }
   const expectedSession = item.session ?? null
-  const refused = (agent: HerdrAgent | null): ActionResult | null => {
+  const refused = (agent: HerdrAgent | null): Extract<ActionResult, { ok: false }> | null => {
     if (!agent || agent.session !== expectedSession) return changed()
     if (agent.status === 'blocked')
       return { ok: false, busy: true, dialog: true, error: t('err.blocked', { name: item.name }) }
@@ -561,6 +611,16 @@ export async function send(
     const agent = named ? await namedAgent(pane, expectedSession) : await agentGet(pane)
     // Recheck after wake too: the pane may now host a different session.
     const before = refused(agent)
+    if (before?.dialog && (look || anyway) && boundTerminal === undefined && !probe) {
+      const kind = agent?.kind === 'claude' || agent?.kind === PI_AGENT ? agent.kind : null
+      const draft = kind ? await shownDraft(pane, kind) : null
+      if (draft === null) return before
+      if (!anyway) return { ...before, code: 'stale', error: t('err.blockedNoDialog', { name: item.name }) }
+      if (draft !== '') return { ok: false, busy: true, draft: true, error: t('err.draft', { name: item.name }) }
+      const fresh = await agentGet(pane)
+      if (!fresh || fresh.session !== expectedSession || fresh.kind !== agent?.kind) return changed()
+      return await sendAnyway(pane, kind as string, text, item.name)
+    }
     if (before) return before
     if (agent?.kind === 'claude' || item.agent === 'claude') {
       // Herdr can miss a dialog (e.g. Teach auto mode). Require the visible prompt for every

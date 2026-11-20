@@ -11,7 +11,8 @@ import type { Draft, DraftBook } from './drafts.ts'
 import { newestAt, type OutState, type ShownThread, sentKey, unsettled } from './outbox.ts'
 import { draftKey } from './sheet.ts'
 
-export type SendResult = { ok: true } | { ok: false; error: string }
+/** `code: 'stale'`: herdr says a dialog holds the session, its screen shows none (#164). */
+export type SendResult = { ok: true } | { ok: false; error: string; code?: string }
 
 /** One of the board's messages at the foot of its session's thread. */
 export interface OutboxEntry {
@@ -31,6 +32,8 @@ export interface OutboxEntry {
   state: OutState
   /** Why it was not sent ('' when the server did not say). */
   error: string
+  /** Not sent because herdr says a dialog holds the session, which its screen does not show: "Send anyway". */
+  anyway?: boolean | undefined
   /** When the session took it (0 until then). */
   sentAt: number
 }
@@ -91,8 +94,8 @@ export interface ComposerSession {
   waiting(key: string | null, open: string | null, detail: ShownThread | null): readonly OutboxEntry[]
   /** The ones the open session's thread has now (or that waited long enough) go for good. */
   settle(): void
-  /** A message not sent goes again. */
-  retry(id: string): Promise<void>
+  /** A message not sent goes again; `anyway`: past herdr's dialog its screen does not show (#164). */
+  retry(id: string, anyway?: boolean): Promise<void>
   /** A message not sent goes back into the box, files and all, to change or drop. */
   edit(id: string): void
 }
@@ -155,8 +158,8 @@ export function composerSession(deps: ComposerDeps): ComposerSession {
   }
 
   /** Send one of the board's messages (again); its bubble says how it goes. */
-  async function deliver(key: string, id: string): Promise<void> {
-    patch(key, id, { state: 'sending', error: '' })
+  async function deliver(key: string, id: string, anyway = false): Promise<void> {
+    patch(key, id, { state: 'sending', error: '', anyway: undefined })
     const entry = find(key, id)
     if (!entry) return
     const page = deps.page()
@@ -166,7 +169,13 @@ export function composerSession(deps: ComposerDeps): ComposerSession {
     if (page.open === key) deps.foot()
     if (it?.sleeping) deps.busy(key, page.t('busy.waking'))
     const r: SendResult = it
-      ? await deps.post(key, { text: entry.text, files: entry.files, session: it.session ?? null, requestId: id })
+      ? await deps.post(key, {
+          text: entry.text,
+          files: entry.files,
+          session: it.session ?? null,
+          requestId: id,
+          ...(anyway && { anyway: true }),
+        })
       : { ok: false, error: page.t('detail.missing') }
     mark(key, false)
     deps.busy(key, null)
@@ -192,7 +201,7 @@ export function composerSession(deps: ComposerDeps): ComposerSession {
       }, REDRAW_AFTER_SEND_MS)
     } else {
       const error = r.ok ? '' : r.error
-      patch(key, id, { state: 'failed', error })
+      patch(key, id, { state: 'failed', error, anyway: !r.ok && r.code === 'stale' ? true : undefined })
       if (!onShow) deps.toast(error, true)
     }
     deps.changed()
@@ -286,11 +295,11 @@ export function composerSession(deps: ComposerDeps): ComposerSession {
       deps.changed()
     },
 
-    async retry(id) {
+    async retry(id, anyway = false) {
       const page = deps.page()
       const key = page.open
       if (!key || !find(key, id)) return
-      if (page.canMutate && !onTheirWay.has(key)) return deliver(key, id)
+      if (page.canMutate && !onTheirWay.has(key)) return deliver(key, id, anyway)
     },
 
     edit(id) {

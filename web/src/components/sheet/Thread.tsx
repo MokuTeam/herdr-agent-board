@@ -199,7 +199,7 @@ export interface WaitingProps {
   queued: readonly QueuedPrompt[]
   /** The board's own messages on their way, not in the transcript yet, or not sent (useComposer). */
   own: readonly OutboxEntry[]
-  onRetry?: ((id: string) => void) | undefined
+  onRetry?: ((id: string, anyway?: boolean) => void) | undefined
   onEdit?: ((id: string) => void) | undefined
   /**
    * Send now on a queued message (#330): set only while the session works and the board knows its
@@ -308,6 +308,11 @@ function OwnBubble({ entry: e, onRetry, onEdit }: { entry: OutboxEntry } & Omit<
             <button type="button" data-out-retry={e.id} onClick={() => onRetry?.(e.id)}>
               {t('detail.retry')}
             </button>
+            {e.anyway && (
+              <button type="button" data-out-anyway={e.id} onClick={() => onRetry?.(e.id, true)}>
+                {t('queue.anyway')}
+              </button>
+            )}
             <button type="button" data-out-edit={e.id} onClick={() => onEdit?.(e.id)}>
               {t('queue.edit')}
             </button>
