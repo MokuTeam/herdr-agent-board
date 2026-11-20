@@ -30,6 +30,9 @@ test('every Settings field has the fill at rest and a ring while focused, not on
   expect(declarations(css, '.path-add:not(.access-input):focus, .draft-id:focus')).toBe(
     'box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);',
   )
+  expect(declarations(css, '.path-add:not(.access-input):disabled, .draft-id:disabled')).toBe('opacity: 0.5;')
+  // as the Remote access fields' own
+  expect(declarations(sheet('access.css'), '.access-field .path-add:disabled')).toBe('opacity: 0.5;')
   // the cause: the fields themselves are bare at rest
   expect(declarations(sheet('app.css'), '.path-add, .draft-id')).toContain('background: none;')
   // the fill is the Login fields' own

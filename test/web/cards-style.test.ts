@@ -17,15 +17,17 @@ test('Classic: the question under "Needs me" ends at its third line, nothing of 
   expect(ask).toContain('-webkit-line-clamp: 3;')
   expect(ask).toContain('overflow: hidden;')
   const css = sheet('cards.css')
-  const rule = /^\.card \.ask \{([^}]*)\}/m.exec(css)?.[1] ?? ''
+  const rule = /^\.card \.ask:not\(\.qa-card\) \{([^}]*)\}/m.exec(css)?.[1] ?? ''
   // the top and bottom padding become a transparent border of the same width: the box keeps its
   // size and tint, and the text is clipped where the third line ends
   expect(rule).toContain('padding-block: 0;')
-  expect(px(css, /^\.card \.ask \{([^}]*)\}/m, 'border-block')).toBe(7)
+  expect(px(css, /^\.card \.ask:not\(\.qa-card\) \{([^}]*)\}/m, 'border-block')).toBe(7)
   expect(rule).toContain('solid transparent')
   expect(/^\.ask \{[^}]*background-clip/m.test(sheet('app.css'))).toBe(false)
   // in forced colors the border takes the page's color instead of being drawn
-  expect(css).toMatch(/@media \(forced-colors: active\) \{\s*\.card \.ask \{ border-block-color: Canvas; \}/)
+  expect(css).toMatch(
+    /@media \(forced-colors: active\) \{\s*\.card \.ask:not\(\.qa-card\) \{ border-block-color: Canvas; \}/,
+  )
   // the Terminal style, which has no padding or tint there, takes the border off again (it outranks .card .ask)
   expect(sheet('look-terminal.css')).toMatch(/^:root\[data-look="terminal"\] \.ask \{[^}]*padding: 0; border: 0;/m)
 })

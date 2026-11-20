@@ -9,3 +9,5 @@
 
 .path-add:not(.access-input), .draft-id { background: var(--fill-2); }
 .path-add:not(.access-input):focus, .draft-id:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
+/* A filled field that can't be edited no longer looks as if it could, as a Remote access one. */
+.path-add:not(.access-input):disabled, .draft-id:disabled { opacity: 0.5; }

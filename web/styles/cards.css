@@ -104,9 +104,10 @@
    padding. Its top and bottom padding become a transparent border of the same width: the tint
    still fills it (the background reaches the border's outer edge) and the text is clipped inside
    it, so the box keeps its size and ends at the third line. The Terminal style has no padding and
-   no tint there, and takes the border off again (look-terminal.css). In forced colors a
+   no tint there, and takes the border off again (look-terminal.css). A question form's box
+   (.qa-card) clamps inside, not the padded box, so it keeps its padding. In forced colors a
    transparent border is drawn, so there it takes the page's color. */
-.card .ask { padding-block: 0; border-block: 7px solid transparent; }
+.card .ask:not(.qa-card) { padding-block: 0; border-block: 7px solid transparent; }
 @media (forced-colors: active) {
-  .card .ask { border-block-color: Canvas; }
+  .card .ask:not(.qa-card) { border-block-color: Canvas; }
 }

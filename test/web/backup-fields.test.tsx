@@ -23,7 +23,7 @@ const ACTIONS: BackupActions = {
   newKey: noop,
 }
 
-test('every field of the panel is a .path-add inside .backup-body: the passphrase, the folder, the server and its sudo password', () => {
+test('every field of the panel is a .path-add: the passphrase, the folder, the server and its sudo password', () => {
   const now = Date.now()
   const view: BackupPanelView = {
     needed: true,
