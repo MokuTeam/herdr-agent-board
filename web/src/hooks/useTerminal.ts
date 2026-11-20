@@ -90,6 +90,8 @@ export interface TerminalDeps {
   /** Fresh herdr data: typing and opening a shell need it; looking does not. */
   canMutate(): boolean
   item(key: string): Item | undefined
+  /** The cards in the latest board snapshot, for a session that took over the same terminal. */
+  items(): readonly Item[]
   /** The per-run token for the stream (the board payload's fsToken). */
   token(): string | null
   /** The sessions the board has a shell open for. */
@@ -170,6 +172,11 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
     pending: [] as TermStep[],
     sending: false,
     seq: 0,
+    inputSeq: 0,
+    anchor: null as { pane: string; id: string } | null,
+    agentAddress: null as string | null,
+    binding: null as string | null,
+    streamToken: null as string | null,
     paste: null as PendingPaste | null,
     closeArmed: 0,
     waitingSend: false, // a request herdr takes long over
@@ -230,6 +237,8 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
   // The click a tap leaves behind (a menu item picked on a phone) lands on what just opened.
   const fresh = () => performance.now() - openedAt < 450
   const it = () => (s.key ? deps.item(s.key) : undefined)
+  const agentAddress = (x: Item | undefined) =>
+    x?.terminalAgent && x.pane ? JSON.stringify([x.pane, x.agent, x.terminalAgent]) : null
   const hasShell = (key: string | null) => !!key && (deps.shells() ?? []).includes(key)
 
   function open(key: string, el?: Element | null, target?: TermTarget): void {
@@ -239,6 +248,7 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
     const switching = !hidden && s.key !== key
     s.key = key
     s.target = targetFor(want, x)
+    s.anchor = null
     if (hidden || (!growing && motion.target === 0)) {
       openedAt = performance.now()
       origin = el ?? null
@@ -292,13 +302,25 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
     s.es?.close()
     s.es = null
     s.seq++
+    s.paused = false
+    s.binding = null
+    clearInput()
+    changed()
+  }
+
+  function clearInput(): void {
+    s.inputSeq++
     s.pending = []
+    s.sending = false
     s.waitingSend = false
     s.slowNote = false
-    s.paused = false
     s.paste = null
-    if (s.typing) refs.input.current?.blur()
-    changed()
+    composing = null
+    const field = refs.input.current
+    if (field) {
+      field.value = ''
+      if (s.typing) field.blur()
+    }
   }
 
   /** Start showing the chosen terminal: open the shell first when there is none yet. */
@@ -309,10 +331,14 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
     clearScreen()
     s.cols = null
     s.closeArmed = 0
+    s.agentAddress = null
     s.missing = !x
     if (!x) return setStatus('gone')
     if (s.target === 'agent') {
       if (x.sleeping) return setStatus('asleep')
+      if (s.anchor && (x.pane !== s.anchor.pane || x.terminalAgent?.id !== s.anchor.id)) return setStatus('gone')
+      if (x.pane && x.terminalAgent) s.anchor = { pane: x.pane, id: x.terminalAgent.id }
+      s.agentAddress = agentAddress(x)
       return stream(seq, focusScreen)
     }
     if (hasShell(x.key)) return stream(seq, focusScreen)
@@ -328,7 +354,9 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
     setStatus('connecting')
     const x = it()
     if (!x) return
-    const es = api.stream(x.key, s.target, deps.token() ?? '')
+    const tracked = !!s.agentAddress
+    s.streamToken = deps.token()
+    const es = api.stream(x.key, s.target, s.streamToken ?? '', tracked ? x.terminalAgent?.id : undefined)
     s.es = es
     let first = true
     let takeFocus = focusScreen
@@ -342,10 +370,14 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
       }
       if (!isRecord(msg)) return
       if (msg.t === 'frame') {
-        if (first) {
+        const binding = typeof msg.binding === 'string' ? msg.binding : null
+        if (tracked && !binding) return
+        if (first || (tracked && s.binding !== binding)) {
           first = false
           clearScreen()
+          if (tracked) clearInput()
         }
+        s.binding = binding
         frame(frameOf(msg))
         if (s.status === 'live' && s.error) setStatus('live') // herdr answers again
         if (s.status !== 'live') {
@@ -354,13 +386,36 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
           if (takeFocus && !deps.coarse()) takeKeys()
           takeFocus = false
         }
+      } else if (msg.t === 'changed') {
+        s.binding = null
+        clearInput()
+        clearScreen()
+        setStatus('connecting')
       } else if (msg.t === 'gone') {
         es.close()
+        if (tracked) {
+          s.binding = null
+          clearInput()
+          clearScreen()
+        }
         setStatus('gone')
-      } else if (msg.t === 'error') setStatus('live', tr('term.error', { why: String(msg.why) }))
+      } else if (msg.t === 'error') {
+        const error = tr('term.error', { why: String(msg.why) })
+        if (tracked) {
+          s.binding = null
+          clearInput()
+          clearScreen()
+          setStatus('error', error)
+        } else setStatus('live', error)
+      }
     }
     es.onerror = () => {
       if (seq !== s.seq) return es.close()
+      if (tracked) {
+        s.binding = null
+        clearInput()
+        clearScreen()
+      }
       // Closed for good: the server said no (no shell any more, the session left, the token).
       if (es.readyState === STREAM_CLOSED)
         setStatus(
@@ -477,7 +532,14 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
   }
 
   // ------------------------------------------------------------ state
-  const canInput = () => deps.canMutate() && s.status === 'live' && !!it() && !(s.target === 'agent' && it()?.sleeping)
+  function canInput(): boolean {
+    const x = it()
+    if (!deps.canMutate() || s.status !== 'live' || !x) return false
+    if (s.target !== 'agent') return true
+    if (x.sleeping) return false
+    if (s.anchor) return !!s.binding && agentAddress(x) === s.agentAddress
+    return true
+  }
 
   function setStatus(status: TermStatus, error = ''): void {
     s.status = status
@@ -519,14 +581,17 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
 
   async function flush(): Promise<void> {
     const key = s.key
-    if (s.sending || !s.pending.length || !key) return
+    if (s.sending || !s.pending.length || !key || !canInput()) return
     s.sending = true
-    const seq = s.seq
+    const seq = s.inputSeq
+    const session = it()?.session ?? null
+    const binding = s.binding
     // As much as one request takes: so many steps, so much text.
     const batch = mergeSteps(s.pending.splice(0, batchSize(s.pending)))
     // A request herdr takes long over says so; one it does not answer in time is given up, and
     // the server types nothing of it that late either (services/terminals.ts).
     const waiting = setTimeout(() => {
+      if (seq !== s.inputSeq) return
       s.waitingSend = true
       changed()
     }, 1500)
@@ -534,14 +599,14 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
       key,
       s.target,
       'input',
-      { session: deps.item(key)?.session ?? null, steps: batch },
+      { session, steps: batch, ...(binding && { binding }) },
       INPUT_TIMEOUT,
     )
     clearTimeout(waiting)
+    // A late reply belongs only to the window generation that sent it.
+    if (seq !== s.inputSeq) return
     s.sending = false
     s.waitingSend = false
-    // Switched meanwhile: what was queued for the other terminal went; what came since goes now.
-    if (seq !== s.seq) return flush()
     if (!r.ok) {
       // What was queued behind it would land somewhere unknown: it goes.
       s.pending = []
@@ -581,7 +646,7 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
   }
 
   // ------------------------------------------------------------ the field the keys arrive in
-  let composing = false
+  let composing: number | null = null
   const onFocus = () => {
     s.typing = true
     if (refs.input.current) refs.input.current.value = ''
@@ -616,15 +681,16 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
     queue([{ key: step.key }])
   }
   const onCompositionStart = () => {
-    composing = true
+    composing = s.inputSeq
   }
   const onCompositionEnd = (e: CompositionEvent) => {
-    composing = false
-    queue(textSteps(e.data))
+    const current = composing === s.inputSeq
+    composing = null
+    if (current) queue(textSteps(e.data))
     if (refs.input.current) refs.input.current.value = ''
   }
   const onBeforeInput = (e: InputEvent) => {
-    if (e.isComposing || composing) return
+    if (e.isComposing || composing !== null) return
     const kind = e.inputType
     if (kind === 'insertText' || kind === 'insertReplacementText') {
       e.preventDefault()
@@ -646,7 +712,7 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
   // Where the browser would not let the text be taken before it lands (some phone keyboards).
   const onInput = () => {
     const input = refs.input.current
-    if (composing || !input?.value) return
+    if (composing !== null || !input?.value) return
     queue(textSteps(input.value))
     input.value = ''
   }
@@ -782,6 +848,28 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
     mount,
     boardChanged() {
       if (!isOpen()) return
+      const anchor = s.target === 'agent' ? s.anchor : null
+      if (anchor) {
+        const same = deps.items().find(x => x.pane === anchor.pane && x.terminalAgent?.id === anchor.id && !x.sleeping)
+        if (!same) {
+          if (!s.missing) {
+            disconnect()
+            clearScreen()
+            s.missing = true
+            setStatus('gone')
+          }
+        } else if (
+          s.missing ||
+          same.key !== s.key ||
+          agentAddress(same) !== s.agentAddress ||
+          deps.token() !== s.streamToken
+        ) {
+          s.key = same.key
+          label = { name: same.name, agent: same.agent }
+          void connect()
+        } else changed()
+        return
+      }
       const x = it()
       // A session can be off the board for a refresh or two (waking up, say): it comes back.
       if (!x && s.status !== 'gone') {
@@ -799,7 +887,7 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
       ) {
         // Woke up, or was put to sleep: its terminal is another program now.
         void connect()
-      }
+      } else if (s.target === 'agent' && agentAddress(x)) void connect()
       changed()
     },
     pickTarget(target) {
@@ -808,6 +896,7 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
       const off = target === 'agent' ? !x?.pane : !x?.cwd
       if (off || target === s.target) return
       s.target = target
+      s.anchor = null
       deps.storage.set(TARGET_KEY, s.target)
       void connect({ focusScreen: s.target === 'shell' })
     },
@@ -881,6 +970,7 @@ export function useTerminal(openUrl: (href: string) => void): TerminalUI {
       toast: (text, error) => page().board.toast(text, error),
       canMutate: () => page().board.canMutate,
       item: itemOf,
+      items: () => page().board.data?.items ?? [],
       token: () => page().board.data?.fsToken ?? null,
       shells: () => page().board.data?.shells ?? [],
       // As "Wake" in the sheet, saying only what went wrong: the window shows the rest.

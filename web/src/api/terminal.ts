@@ -25,7 +25,7 @@ export const STREAM_CLOSED = 2
 
 export interface TerminalApi {
   /** The screen of session `key`'s agent pane or shell. */
-  stream(key: string, target: string, token: string): TermStream
+  stream(key: string, target: string, token: string, terminal?: string): TermStream
   /** POST /api/term/<key>/<target>/<op>; `timeout` (ms) gives up on it. */
   post(key: string, target: string, op: string, body: unknown, timeout?: number): Promise<TermReply>
 }
@@ -35,8 +35,9 @@ export const termPath = (key: string, target: string, op: string): string =>
 
 export function terminalApi(t: () => Translator): TerminalApi {
   return {
-    stream(key, target, token) {
-      const es = new EventSource(`${termPath(key, target, 'stream')}?t=${encodeURIComponent(token)}`)
+    stream(key, target, token, terminal) {
+      const pane = terminal ? `&a=${encodeURIComponent(terminal)}` : ''
+      const es = new EventSource(`${termPath(key, target, 'stream')}?t=${encodeURIComponent(token)}${pane}`)
       const stream: TermStream = {
         onmessage: null,
         onerror: null,

@@ -7,7 +7,13 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
 import type { Config, Item, Vars } from '../../core/types.ts'
 import { raiseTerminal } from '../../integrations/terminal-window.ts'
-import { type Terminals, type TermMessage, type TermResult, terminalOn } from '../../services/terminals.ts'
+import {
+  type Terminals,
+  type TermMessage,
+  type TermResult,
+  terminalBinding,
+  terminalOn,
+} from '../../services/terminals.ts'
 import { json, type Route } from '../http.ts'
 
 export interface TerminalApp {
@@ -106,7 +112,13 @@ export function terminalRoute(app: TerminalApp): Route {
     if (target === 'agent' && item.sleeping) return json(409, { error: t('term.err.asleep') })
     const pane = target === 'shell' ? terminals.shellOf(item.key)?.pane : item.pane
     if (!pane) return json(404, { error: t(target === 'shell' ? 'term.err.noShell' : 'err.noPane') })
-    return eventStream(req, send => terminals.watch(pane, { shell: target === 'shell', key: item.key }, send))
+    const agent = target === 'agent' ? terminalBinding(item) : undefined
+    const expected = new URL(req.url).searchParams.get('a')
+    if (expected !== null && expected !== agent?.id)
+      return json(409, { error: t('err.sessionChanged', { name: item.name }) })
+    return eventStream(req, send =>
+      terminals.watch(pane, { shell: target === 'shell', key: item.key, ...(agent && { agent }) }, send),
+    )
   }
 
   /** What the terminal's buttons and keys do. Errors come back as text keys (core/i18n). */
@@ -118,9 +130,9 @@ export function terminalRoute(app: TerminalApp): Route {
     try {
       if (op === 'input') {
         const fields = fieldsOf(body)
-        const p = await terminals.inputPane(item, target, fields.session)
+        const p = await terminals.inputPane(item, target, fields.session, fields.binding)
         if ('error' in p) return fail(p.error)
-        const r = await terminals.input(p.pane, fields.steps)
+        const r = await terminals.input(p.pane, fields.steps, p.verify)
         return r.ok ? r : fail(r.error, { why: r.why ?? '' })
       }
       if (target !== 'shell') return fail('term.err.target')

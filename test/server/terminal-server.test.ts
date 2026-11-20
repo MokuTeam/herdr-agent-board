@@ -250,3 +250,98 @@ test('terminal is on only when the setting is missing or true', async () => {
     assert.equal((await fetch(`${url}/api/term/s1/agent/stream?t=${data.fsToken}`)).status, 404)
   }
 }, 60_000)
+
+test('a same-terminal restart replaces the screened agent before SID, then binds its identified session', async () => {
+  const box = await sandbox()
+  const pane = 'w1:p1'
+  const terminal = 'physical-terminal-1'
+  const old = '01a15a8a-bd97-7701-a7f7-401e4bec3147'
+  const next = '01a15a8a-bd97-7701-a7f7-401e4bec3148'
+  const pending = `pane-${pane}`
+  const start = (kind: 'codex' | 'claude', sid: string | null, pid: number, screen: string, resume?: string) => {
+    const agent = {
+      agent: kind,
+      pane_id: pane,
+      terminal_id: terminal,
+      agent_session: sid ? { value: sid } : null,
+      agent_status: sid ? 'idle' : 'blocked',
+      cwd: box.dir,
+    }
+    const argv = kind === 'claude' ? ['C:\\Program Files\\Claude\\claude.exe'] : ['/test/bin/codex']
+    if (resume) argv.push('resume', resume)
+    box.state({
+      'api snapshot': { result: { snapshot: { panes: [agent], tabs: [], workspaces: [] } } },
+      'agent get': { result: { agent } },
+      'pane process-info': {
+        result: { process_info: { pane_id: pane, shell_pid: 20, foreground_processes: [{ pid, argv }] } },
+      },
+      'pane read': { text: screen },
+      'pane layout': { result: { layout: { panes: [] } } },
+      'pane send-keys': { result: null },
+    })
+  }
+  start('codex', old, 21, 'Old Codex screen')
+  const { proc, url } = await serveBoard(box, { language: 'en' })
+  async function find(key: string, session: string | null) {
+    for (let i = 0; i < 30; i++) {
+      const data = await (await fetch(`${url}/api/board`)).json()
+      if (
+        !data.stale &&
+        data.items.some(
+          (item: { key: string; terminalAgent?: { session: string | null } }) =>
+            item.key === key && item.terminalAgent?.session === session,
+        )
+      )
+        return String(data.fsToken)
+      proc.send('refresh')
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    throw new Error(`Board did not publish the current session ${key}`)
+  }
+  async function frame(key: string, session: string | null, line: string) {
+    const token = await find(key, session)
+    const received = await firstEvent(`${url}/api/term/${encodeURIComponent(key)}/agent/stream?t=${token}`)
+    assert.ok(received && typeof received === 'object' && 'binding' in received && typeof received.binding === 'string')
+    assert.deepEqual(received, { t: 'frame', drop: 0, keep: 0, lines: [line], cols: null, binding: received.binding })
+    return received.binding
+  }
+  const input = (key: string, session: string | null, binding: string, step: string) =>
+    fetch(`${url}/api/term/${encodeURIComponent(key)}/agent/input`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({ session, binding, steps: [{ key: step }] }),
+    })
+  const oldBinding = await frame(old, old, 'Old Codex screen')
+  start('codex', null, 22, 'Synthetic Folder access')
+  assert.equal((await input(old, old, oldBinding, 'enter')).status, 409)
+  const folder = await frame(pending, null, 'Synthetic Folder access')
+  assert.equal((await input(pending, null, folder, 'down')).status, 200)
+  start('codex', null, 23, 'Replacement Folder access')
+  assert.equal((await input(pending, null, folder, 'enter')).status, 409)
+  const replacement = await frame(pending, null, 'Replacement Folder access')
+  assert.notEqual(replacement, folder)
+  start('codex', next, 23, 'New Codex session')
+  const fresh = await frame(next, next, 'New Codex session')
+  assert.equal((await input(next, next, replacement, 'enter')).status, 409)
+  assert.equal((await input(next, next, fresh, 'up')).status, 200)
+  start('codex', null, 24, 'Synthetic Folder access for resume', old)
+  const resume = await frame(pending, null, 'Synthetic Folder access for resume')
+  assert.equal((await input(pending, null, replacement, 'enter')).status, 409)
+  assert.equal((await input(pending, null, resume, 'right')).status, 200)
+  start('codex', old, 24, 'Resumed Codex session', old)
+  const resumed = await frame(old, old, 'Resumed Codex session')
+  assert.notEqual(resumed, oldBinding)
+  assert.equal((await input(old, old, oldBinding, 'enter')).status, 409)
+  start('claude', null, 25, 'Synthetic Claude startup')
+  const claude = await frame(pending, null, 'Synthetic Claude startup')
+  assert.equal((await input(pending, null, claude, 'left')).status, 200)
+  start('claude', 'claude-next', 25, 'Claude session ready')
+  await frame('claude-next', 'claude-next', 'Claude session ready')
+  assert.deepEqual(
+    box
+      .calls()
+      .filter(args => args[0] === 'pane' && args[1] === 'send-keys')
+      .map(args => args[3]),
+    ['down', 'up', 'right', 'left'],
+  )
+}, 15_000)

@@ -392,6 +392,7 @@ export async function newTerminal(scene: TermScene, { phone = false } = {}): Pro
     toast: base.toast,
     canMutate: () => scene.canMutate,
     item: base.item,
+    items: () => scene.items,
     token: () => scene.token,
     shells: () => scene.shells,
     wake: async key => void log.push(`wake ${key}`),

@@ -492,3 +492,60 @@ describe('the window’s parts', () => {
     expect(normal(ours)).toBe(normal(theirs))
   })
 })
+
+test('the open agent terminal follows the physical pane and drops input from its previous session', async () => {
+  const old = {
+    ...probe,
+    session: 's1',
+    sleeping: false,
+    terminalAgent: { id: 'term1', session: 's1' },
+    agent: 'codex',
+  }
+  const side = await newTerminal(scene({ items: [old] }))
+  try {
+    await side.open('s1', 'agent')
+    await side.message(frame(['Old conversation'], { binding: 'old-process' }))
+    await side.wait(500)
+    await side.click('screen')
+    side.server.replies['agent/input'] = 'hold'
+    await side.key({ key: 'ArrowDown' })
+    await side.input('insertText', 'queued in old session')
+    await side.paste('old paste\nsecond line')
+    expect(side.snapshot()).toContain('old paste')
+    expect(side.server.posts).toHaveLength(1)
+
+    await side.message({ t: 'changed' })
+    expect(side.snapshot()).not.toContain('Old conversation')
+    expect(side.snapshot()).not.toContain('old paste')
+    await side.board({ items: [] })
+    const reused = { ...old, key: 'different', terminalAgent: { id: 'new-terminal', session: 'different' } }
+    await side.board({ items: [reused] })
+    expect(side.server.streams).toHaveLength(1)
+
+    const pending = { ...old, key: 'pane-w1:p1', session: null, terminalAgent: { id: 'term1', session: null } }
+    await side.board({ items: [reused, pending] })
+    expect(side.server.streams.at(-1)?.url).toBe('/api/term/pane-w1%3Ap1/agent/stream?t=tok&a=term1')
+    await side.message(frame(['Synthetic Folder access'], { binding: 'replacement-before-sid' }))
+    await side.message(frame(['Late old frame'], { binding: 'old-process' }), 0)
+    expect(side.snapshot()).toContain('Synthetic Folder access')
+    expect(side.snapshot()).not.toContain('Late old frame')
+    delete side.server.replies['agent/input']
+    await side.click('screen')
+    await side.key({ key: 'ArrowUp' })
+    side.server.release()
+    await side.wait(1)
+
+    const next = { ...old, key: 's2', session: 's2', terminalAgent: { id: 'term1', session: 's2' } }
+    await side.board({ items: [next] })
+    await side.message(frame(['New conversation'], { binding: 'replacement-with-sid' }))
+    expect(side.isOpen()).toBe(true)
+    expect(side.snapshot()).toContain('New conversation')
+    expect(side.snapshot()).not.toContain('Synthetic Folder access')
+    expect(side.server.posts).toEqual([
+      '/api/term/s1/agent/input {"session":"s1","steps":[{"key":"down"}],"binding":"old-process"}',
+      '/api/term/pane-w1%3Ap1/agent/input {"session":null,"steps":[{"key":"up"}],"binding":"replacement-before-sid"}',
+    ])
+  } finally {
+    await side.dispose()
+  }
+})

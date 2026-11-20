@@ -523,3 +523,25 @@ test('a tab herdr gives no id for is not kept as a shell of the board’s', asyn
   assert.deepEqual(terms.keys(), [])
   assert.ok(!existsSync(file))
 })
+
+test('queued keys and remaining steps are checked after the terminal process changes', async () => {
+  const { h, make, item } = setup()
+  const terms = make()
+  const pane = paneOf(await terms.openShell(item, 'x'))
+  let sameProcess = true
+  const verify = async () => sameProcess
+  const release = h.holdSends()
+  const first = terms.input(pane, [{ text: 'synthetic text in the old process' }, { key: 'enter' }], verify)
+  for (let i = 0; i < 100 && !h.calls.some(c => c[1] === 'send-text'); i++) await new Promise(r => setTimeout(r, 5))
+  assert.ok(h.calls.some(c => c[1] === 'send-text'))
+  const queued = terms.input(pane, [{ key: 'down' }], verify)
+  sameProcess = false
+  release()
+  assert.deepEqual(await first, { ok: false, error: 'err.sessionChanged' })
+  assert.deepEqual(await queued, { ok: false, error: 'err.sessionChanged' })
+  assert.deepEqual(await terms.input(pane, [{ key: 'up' }], async () => true), { ok: true })
+  assert.deepEqual(
+    h.calls.filter(c => c[1]?.startsWith('send-')).map(c => c[3]),
+    ['synthetic text in the old process', 'up'],
+  )
+})
