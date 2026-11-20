@@ -13,6 +13,7 @@
 // the row (and on More while nothing is left over); the stylesheet draws them (styles/toolbar.css).
 import { type RefObject, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
+import { withoutSpill } from '../models/no-spill.ts'
 import { byPriority, fitToolbar, oneRowFits, TOOLBAR_PRIORITY, type ToolbarItem } from '../models/toolbar-fit.ts'
 
 const NONE: ReadonlySet<string> = new Set()
@@ -94,8 +95,16 @@ interface Elements {
   title: HTMLElement | null
 }
 
-/** How the toolbar shows at the width it has, with the widths it went by; null while it has no width. */
+/**
+ * How the toolbar shows at the width it has, with the widths it went by; null while it has no width.
+ * What it tries out to measure stays inside the container: wider than the page, it would move the
+ * scroll of a phone (models/no-spill.ts).
+ */
 export function fitToolbarIn(el: Elements, widths: Measured): { shape: ToolbarShape; widths: Measured } | null {
+  return withoutSpill(el.fit, () => fitIn(el, widths))
+}
+
+function fitIn(el: Elements, widths: Measured): { shape: ToolbarShape; widths: Measured } | null {
   const total = el.fit.clientWidth
   if (!total) return null
   const now = actionsIn(el.actions)

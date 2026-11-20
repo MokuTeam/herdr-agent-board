@@ -48,11 +48,14 @@ const OWN_GLOBALS = [
   'addEventListener',
   'removeEventListener',
   'scrollY',
+  'innerHeight',
 ] as const
 const saved = new Map<string, PropertyDescriptor | undefined>()
 
 // What the page's media queries and the layout say now.
-const world = { reduce: false, total: 390, scroll: 0 }
+const world = { reduce: false, total: 390, scroll: 0, page: 100_000, view: 844 }
+/** The container's `contain` each time an action was measured with every action shown (`.measuring`). */
+let containWhileMeasuring: string[] = []
 const watching: { notify: () => void; el: Element }[] = []
 let queue: ((now: number) => void)[] = []
 let clock = 1000
@@ -84,6 +87,8 @@ const room = () => world.total - 32 - (summaryShown() ? SUMMARY + 8 : 0)
 
 function fakeStyle(el: Element): Record<string, string> {
   const px = (n: number) => `${n}px`
+  if (el.closest('.toolbar-actions.measuring'))
+    containWhileMeasuring.push((el.closest('.toolbar-fit') as HTMLElement | null)?.style.contain ?? 'none')
   if (el.classList.contains('toolbar-actions')) return { width: px(room()), columnGap: '6px' }
   // Hidden, the summary has no box and so no width: the row has no gap before the filters either.
   if (el.id === 'summary') return { width: px(summaryShown() ? SUMMARY : 0), columnGap: '0px' }
@@ -143,8 +148,14 @@ beforeAll(async () => {
     addEventListener: { value: dom.window.addEventListener.bind(dom.window) },
     removeEventListener: { value: dom.window.removeEventListener.bind(dom.window) },
     scrollY: { get: () => world.scroll },
+    innerHeight: { get: () => world.view },
   }
   for (const k of OWN_GLOBALS) Object.defineProperty(g, k, { configurable: true, ...own[k] })
+  // The page's height, for where it ends; jsdom has no layout.
+  Object.defineProperty(dom.window.document.documentElement, 'scrollHeight', {
+    configurable: true,
+    get: () => world.page,
+  })
   // The container's width, which a stylesheet's container query reads; jsdom has no layout.
   Object.defineProperty(dom.window.HTMLElement.prototype, 'clientWidth', {
     configurable: true,
@@ -184,6 +195,9 @@ beforeEach(() => {
   world.reduce = false
   world.total = 390
   world.scroll = 0
+  world.page = 100_000
+  world.view = 844
+  containWhileMeasuring = []
   queue = []
   watching.length = 0
   fades.length = 0
@@ -656,6 +670,38 @@ test('opened from the keys, the filters button leaves the focus on the first fil
   const focused = dom.window.document.activeElement
   expect(focused && focused !== dom.window.document.body).toBe(true)
   expect(focused?.closest('#lanes, #lanes-pick, .search') || focused?.id === 'lanes-pick').toBeTruthy()
+})
+
+test('measuring every action in one row does not widen the page: the container contains its paint meanwhile (#474)', async () => {
+  await mount()
+  await resizeTo(390)
+  await resizeTo(1440)
+  await resizeTo(390)
+  expect(containWhileMeasuring.length).toBeGreaterThan(0)
+  expect(containWhileMeasuring.every(c => c === 'paint')).toBe(true)
+  expect(need('.toolbar-fit').style.contain).toBe('')
+})
+
+test('at the end of the page the folded filters stay folded as the end moves up, and open for the finger going up (#474)', async () => {
+  await mount()
+  await resizeTo(390)
+  // A page that scrolls 1000 px, folded on the way down.
+  world.page = 1844
+  await scrollTo(300)
+  await scrollTo(1000)
+  const filters = need('#toolbar-filters')
+  expect(filters.hasAttribute('data-folded')).toBe(true)
+  // The browser's bar hides: the page ends 56 px higher, and the scroll goes with it.
+  world.page = 1788
+  await scrollTo(944)
+  expect(filters.hasAttribute('data-folded')).toBe(true)
+  // A rubber band past the end and back.
+  await scrollTo(1020)
+  await scrollTo(944)
+  expect(filters.hasAttribute('data-folded')).toBe(true)
+  // The finger takes the page up a turn: the filters come back.
+  await scrollTo(944 - 24)
+  expect(filters.hasAttribute('data-folded')).toBe(false)
 })
 
 test('scrolling on while folded, or up a little while open, is not a render', async () => {

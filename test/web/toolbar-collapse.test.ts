@@ -2,6 +2,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   COLLAPSE_AFTER,
+  END,
   filterCount,
   filterText,
   foldedAt,
@@ -15,7 +16,8 @@ import {
 } from '../../web/src/models/toolbar-collapse.ts'
 
 /** The state after the page goes through these positions one after the other. */
-const through = (ys: readonly number[], from: ToolbarScroll = OPEN): ToolbarScroll => ys.reduce(toolbarScroll, from)
+const through = (ys: readonly number[], from: ToolbarScroll = OPEN): ToolbarScroll =>
+  ys.reduce((state, y) => toolbarScroll(state, y), from)
 
 describe('folding the toolbar with the scroll', () => {
   test('the top of the page has it whole, whatever came before', () => {
@@ -88,6 +90,40 @@ describe('folding the toolbar with the scroll', () => {
 
   test('a long flick to the top is one step back to whole', () => {
     expect(through([200, 900, 3]).collapsed).toBe(false)
+  })
+})
+
+describe('at the end of the page (#474)', () => {
+  /** The state after positions on a page that scrolls no further than `end`. */
+  const atEnd = (ys: readonly number[], end: number, from: ToolbarScroll = OPEN): ToolbarScroll =>
+    ys.reduce((state, y) => toolbarScroll(state, y, end), from)
+
+  test('a phone’s rubber band past the end and back leaves the folded toolbar folded', () => {
+    const folded = atEnd([300, 1000], 1000)
+    expect(folded.collapsed).toBe(true)
+    // The bounce goes 80 px past the end and comes back to it: more than a turn of "up" from its top.
+    expect(atEnd([1040, 1080, 1040, 1000], 1000, folded).collapsed).toBe(true)
+    expect(toolbarScroll(folded, 1080, 1000)).toBe(folded)
+  })
+
+  test('the end moving up under it (the browser’s bar hides, a card leaves) leaves it folded', () => {
+    const folded = atEnd([300, 1000], 1000)
+    // The page now ends 56 px higher, and the scroll went with it.
+    const after = toolbarScroll(folded, 944, 944)
+    expect(after.collapsed).toBe(true)
+    // A scroll that stops a fraction short of the end is at the end too.
+    expect(toolbarScroll(after, 944 - END, 944).collapsed).toBe(true)
+  })
+
+  test('the finger going up from the end opens it after a turn, from the end it is at now', () => {
+    const moved = toolbarScroll(atEnd([300, 1000], 1000), 944, 944)
+    expect(toolbarScroll(moved, 944 - TURN + 1, 944).collapsed).toBe(true)
+    expect(toolbarScroll(moved, 944 - TURN, 944).collapsed).toBe(false)
+  })
+
+  test('open at the end, it folds as anywhere else; a page with nothing to scroll keeps it whole', () => {
+    expect(atEnd([30, 200], 200).collapsed).toBe(true)
+    expect(atEnd([0, 40, 120], 0).collapsed).toBe(false)
   })
 })
 

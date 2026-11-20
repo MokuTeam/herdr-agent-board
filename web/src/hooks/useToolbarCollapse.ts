@@ -6,7 +6,8 @@
 // the other way. The filters' own height is what counts, not the toolbar's (a banner coming or
 // going moves the page too, and is not the filters'). A filter that has the focus keeps them open.
 // The scroll is read once a frame, and only a change of fold is a render: where the direction began
-// is kept beside the state, not in it.
+// is kept beside the state, not in it. At the end of the page what moves the scroll is not the finger
+// (a phone's rubber band, the browser's bar, the end moving up): the end goes in with it (#474).
 import { type RefObject, useCallback, useEffect, useRef, useState } from 'react'
 import { OPEN, openedAt, type ToolbarScroll, toolbarScroll } from '../models/toolbar-collapse.ts'
 
@@ -31,18 +32,21 @@ export function useToolbarCollapse(filters: RefObject<HTMLElement | null>, enabl
   /** The filters' height whole and at rest. */
   const whole = useRef(0)
 
-  /** How far down the page is, counting what the filters have given up. */
-  const position = useCallback((): number => {
+  /** How far down the page is, and the furthest it scrolls, both counting what the filters have given up. */
+  const position = useCallback((): { y: number; end: number } => {
     const el = filters.current
-    if (!el) return scrollY
+    const end = document.documentElement.scrollHeight - innerHeight
+    if (!el) return { y: scrollY, end }
     const height = taken(el)
     if (!state.current.collapsed && !el.hasAttribute('data-moving')) whole.current = height
-    return scrollY + Math.max(0, whole.current - height)
+    const given = Math.max(0, whole.current - height)
+    return { y: scrollY + given, end: end + given }
   }, [filters])
 
   /** The state after the page is where it is now; a render only if the fold changed. */
   const read = useCallback(() => {
-    const next = toolbarScroll(state.current, position())
+    const { y, end } = position()
+    const next = toolbarScroll(state.current, y, end)
     // A filter being used keeps them as they are: a folded part would take the focus with it.
     if (next.collapsed && !state.current.collapsed && filters.current?.contains(document.activeElement)) return
     const was = state.current.collapsed
@@ -74,7 +78,7 @@ export function useToolbarCollapse(filters: RefObject<HTMLElement | null>, enabl
 
   const open = useCallback(() => {
     const was = state.current.collapsed
-    state.current = openedAt(position())
+    state.current = openedAt(position().y)
     if (was) setCollapsed(false)
   }, [position])
   return { collapsed: enabled && collapsed, open }

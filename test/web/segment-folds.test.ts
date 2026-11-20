@@ -27,6 +27,7 @@ let world: FakeWorld
 let scene: Scene = { natural: {}, room: 0 }
 let row: FakeElement | null = null
 beforeEach(() => {
+  containWhileTried = []
   world = new FakeWorld({ viewport: { w: 1440, h: 900 }, rects: el => rectOf(el) })
   world.install()
 })
@@ -71,7 +72,11 @@ function layout(): Map<FakeElement, number> {
   return widths
 }
 
+/** What the row's `contain` was each time a control was measured at full width. */
+let containWhileTried: unknown[] = []
+
 function rectOf(el: FakeElement): RectBox | null {
+  if (el.style.width === 'max-content') containWhileTried.push(row?.style.contain)
   const width = layout().get(el)
   return width === undefined ? null : box(0, 0, width, 28)
 }
@@ -161,6 +166,15 @@ describe('in one row, shrinking alike', () => {
     expect(segmentFoldIn(asDom(el))).toBe(null)
     expect(canonical([el.node])).toBe(before)
   })
+})
+
+test('a control tried at full width does not widen the page: the row contains its paint meanwhile, and is as it was after (#474)', () => {
+  scene = { natural: NATURAL, room: 330 }
+  const el = draw(new Set(['lanes', 'profiles']))
+  expect(segmentFoldIn(asDom(el))).toBe(null)
+  expect(containWhileTried.length).toBeGreaterThan(0)
+  expect(containWhileTried.every(c => c === 'paint')).toBe(true)
+  expect(el.style.contain || '').toBe('')
 })
 
 describe('each control on a line of its own (a phone)', () => {
