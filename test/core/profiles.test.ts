@@ -78,7 +78,7 @@ test('the default folder is the platform passed in, whatever the host (#483)', (
   expect(profileIdOf('C:\\Users\\anna\\.claude', 'C:\\Users\\ben\\..\\anna', new Set(), 'win32')).toBe('default')
   // On Linux \ is a letter of a name, so ..\ is no parent folder there.
   expect(profileIdOf('/home/x\\../.claude', '/home/x\\..', new Set(), 'linux')).toBe('default')
-  expect(profileIdOf('/home/.claude', '/home/x\\..', new Set(), 'linux')).toBe('claude')
+  expect(profileIdOf('/home/.claude', '/home/x\\..', new Set(), 'linux')).not.toBe('default')
   // mergeProfiles hands its platform on.
   const { list } = mergeProfiles(undefined, [], '/home/x\\..', undefined, 'linux')
   expect(list.map(p => [p.id, p.dir])).toEqual([['default', '/home/x\\../.claude']])

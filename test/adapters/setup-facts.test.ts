@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 } from 'node:path'
 import { findCommand, gatherFacts, herdrConfigFile, readText } from '../../src/adapters/setup-facts.ts'
 import {
   wakeSessionsFile,
@@ -77,7 +77,8 @@ describe('gatherFacts', () => {
       const none = await gatherFacts({ wakeUrl: null, wake: false }, { root: ROOT_A, env, platform: 'win32', home })
       assert.equal(none.settings, null)
       assert.equal(none.settingsError, '')
-      assert.equal(none.herdrConfigFile, join(dir, 'appdata', 'herdr', 'config.toml'))
+      // Joined with Windows' rules, the platform passed in, on any host (#483).
+      assert.equal(none.herdrConfigFile, win32.join(dir, 'appdata', 'herdr', 'config.toml'))
       assert.equal(none.herdrConfig, null)
       assert.equal(none.wake, null)
       assert.deepEqual(none.commands, { board: { ps: null, sh: null }, 'spawn-agent': { ps: null, sh: null } })
@@ -112,7 +113,7 @@ describe('gatherFacts', () => {
       assert.deepEqual(command.launcher, {
         kind: 'command',
         name: 'start',
-        program: { file: join(dir, 'pwsh.exe'), found: false },
+        program: { file: win32.resolve(join(dir, 'pwsh.exe')), found: false },
         script: { file: script, found: false },
       })
     } finally {
@@ -309,12 +310,15 @@ describe('gatherFacts', () => {
 
   test('bin folder, herdr config and a launcher path joined for the platform passed in (#483)', async () => {
     const facts = (platform: string, home: string, env: Record<string, string>, command: string) =>
-      gatherFacts({ wakeUrl: null, wake: false, launch: { command: [command] } } as Parameters<typeof gatherFacts>[0], {
-        root: ROOT_A,
-        env: { PATH: '', ...env },
-        platform,
-        home,
-      })
+      gatherFacts(
+        { wakeUrl: null, wake: false, launch: { command: [command] } },
+        {
+          root: ROOT_A,
+          env: { PATH: '', ...env },
+          platform,
+          home,
+        },
+      )
     // Windows on any host: \ throughout, a C:\ program taken as it is.
     const win = await facts('win32', 'C:\\Users\\anna', {}, 'C:\\Tools\\claude.exe')
     expect(win.binDir).toBe('C:\\Users\\anna\\.local\\bin')

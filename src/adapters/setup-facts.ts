@@ -152,6 +152,7 @@ function program(name: string, env: Env, platform: string): ProgramFound | null 
   const path = pathOf(platform)
   if (path.isAbsolute(name) || /[\\/]/.test(name)) {
     const file = path.resolve(name)
+    // Looked for on this disk: for another platform's path (a test) found says nothing.
     return { file, found: existsSync(file) }
   }
   const f = findCommand(name, { env, platform })
