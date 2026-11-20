@@ -156,7 +156,9 @@ test('in its thread a draft says when the agent wrote it, so two drafts of one f
         lines: [line('d1', '2026-11-12T13:17:00.000Z'), line('d2', '2026-11-12T18:08:00.000Z')],
       })}
     />,
-    board(),
+    // A minute after the later draft (#423): it says its time, the earlier one its own time or, in a
+    // zone where midnight falls between them, "Yesterday". With the real clock both read one date.
+    board({ now: Date.parse('2026-11-12T18:09:00.000Z') }),
   )
   const whens = findAll(out, n => n.kind === 'element' && n.attrs.get('class') === 'team-draft-when').map(n =>
     text([n]),

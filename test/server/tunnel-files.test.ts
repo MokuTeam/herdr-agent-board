@@ -151,6 +151,15 @@ describe('the board’s own files through the tunnel', () => {
       { TEST_ROUTE_TABLE: '1' },
     ))
     me = viaCaddy(tunnel, `${COOKIE}=${SEEDED}`)
+    // s1 and s2 on the board before a test asks for them (#430): the board may answer before its
+    // first refresh has read herdr, and a session it does not have yet is "no longer on the board".
+    for (const end = Date.now() + 10_000; ; ) {
+      const items = ((await (await local('GET', '/api/board')).json()) as { items: { key: string }[] }).items
+      if (['s1', 's2'].every(id => items.some(i => i.key === id))) break
+      if (Date.now() > end) throw new Error(`not on the board: ${JSON.stringify(items.map(i => i.key))}`)
+      proc.send('refresh')
+      await Bun.sleep(50)
+    }
     const board = await me.get('/api/board')
     expect(board.status).toBe(200)
     fsToken = ((await board.json()) as { fsToken: string }).fsToken

@@ -109,10 +109,13 @@ test('a wake that hangs never holds sleepers() up', async () => {
   const f = fakeFetch()
   let now = 1_000_000
   const w = createBoardWake({ url: URL, sessionsFile: sessionsFile(FILE), fetch: f.fn, now: () => now })
+  // The fake fetch never answers: a sleepers() that waited on it would never give its list. The bound
+  // only turns that wait into a failure, and stays under the wake's own 2 s timeout, so a sleepers()
+  // that waited the question out would not pass either (#407: no wall-clock bound of a few ms).
+  const held = Symbol('held')
   for (let i = 0; i < 5; i++) {
-    const started = performance.now()
-    expect(await w.sleepers()).toEqual(FROM_FILE)
-    expect(performance.now() - started).toBeLessThan(10)
+    const timer = Bun.sleep(1000).then(() => held)
+    expect(await Promise.race([w.sleepers(), timer])).toEqual(FROM_FILE)
     now += 6000
   }
   // One question at a time: the one that hangs is not asked again on top of itself.

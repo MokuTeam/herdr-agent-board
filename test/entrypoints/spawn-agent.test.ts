@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { openDb } from '../../src/adapters/db.ts'
 import { workdeskStore } from '../../src/adapters/workdesk-store.ts'
 import { workerRoster } from '../../src/adapters/workdesk-worker-store.ts'
@@ -9,6 +9,7 @@ import { failureKind } from '../../src/core/launch/launcher-command.ts'
 import { parseArgs } from '../../src/core/launch/spawn-args.ts'
 import { profileReport, profileTag, sessionProfile } from '../../src/core/profiles.ts'
 import { absoluteDir } from '../../src/services/launch/spawn-agent.ts'
+import { isolatedHome } from '../support/env.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 
 // spawn-agent end to end against the sandbox's fake herdr.
@@ -106,7 +107,12 @@ const callList = (box: Sandbox) => {
 }
 
 test('a folder as given: ~ is the home folder', () => {
-  assert.equal(absoluteDir('~'), absoluteDir(process.env.USERPROFILE || process.env.HOME || ''))
+  // A home of the test's own (#419): under --parallel a worker's process.env starts each file afresh,
+  // while homedir() can still read a home an earlier file in that worker set and left behind.
+  const home = join(isolatedHome(), 'home')
+  assert.equal(absoluteDir('~'), resolve(home))
+  assert.equal(absoluteDir('~/Acme project'), join(home, 'Acme project'))
+  if (process.platform === 'win32') assert.equal(absoluteDir('~\\Acme project'), join(home, 'Acme project'))
   assert.equal(absoluteDir('"C:\\Work"'), absoluteDir('C:\\Work'))
 })
 
