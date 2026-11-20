@@ -17,12 +17,11 @@
 // POST carries X-Board: 1. With threads off every route but the setting answers 409 and reads nothing. Away from
 // the computer only the owner's own logins reach them (core/remote.ts ownerThreads); the setting
 // stays on the computer (localOnly), as it writes into the Claude profiles there.
-import { existsSync } from 'node:fs'
-import { resolve, sep } from 'node:path'
+import { resolve } from 'node:path'
 import { editThreads } from '../../adapters/config-file.ts'
 import type { BoardDb } from '../../adapters/db.ts'
 import { isRecord } from '../../adapters/json-store.ts'
-import { uploadsDir } from '../../adapters/paths.ts'
+import { uploadsCheck } from '../../adapters/own-files.ts'
 import {
   childrenOf,
   entriesOf,
@@ -403,11 +402,12 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
       app.changed()
       return json(r.status, r.body)
     }
-    // Only what the page uploaded: a path inside the board's uploads, resolved, that is there.
-    const root = resolve(uploadsDir()) + sep
-    const files = strings(body.files, 5).map(p => resolve(p))
-    const outside = files.find(p => !p.startsWith(root) || !existsSync(p))
-    if (outside !== undefined) return json(400, { ok: false, error: t('thread.err.file'), code: 'file' })
+    // Only what the page uploaded: a file in the board's uploads by real paths, so a link or a
+    // junction out of them is refused (#457).
+    const raw = strings(body.files, 5)
+    if (raw.length && !raw.every(uploadsCheck()))
+      return json(400, { ok: false, error: t('thread.err.file'), code: 'file' })
+    const files = raw.map(p => resolve(p))
     const done = withDb(true, db => {
       if (!db) throw new ThreadError('no_db', t('thread.err.noDb'))
       const ctx = ctxOf(db)

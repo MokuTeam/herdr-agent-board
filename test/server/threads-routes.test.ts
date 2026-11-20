@@ -4,7 +4,7 @@
 // from outside. With threads off every route answers 409 and no database is made.
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stateDir, uploadsDir } from '../../src/adapters/paths.ts'
 import type { Party, ThreadRow, ThreadView } from '../../src/core/work-threads.ts'
@@ -220,6 +220,40 @@ test("the owner's writes: X-Board needed, the party is the owner's whatever the 
   // A malformed assignee is refused, never read as nobody.
   assert.equal((await call('POST', '/api/threads/atlas-1', { op: 'set', assignee: { nonsense: true } })).status, 400)
   assert.equal((await call('POST', '/api/threads/atlas-1', { op: 'share' })).status, 400)
+})
+
+test('a post takes a file by its real path in the uploads (#457): a link out of them is refused, an upload goes', async () => {
+  const { call } = setUp()
+  assert.equal((await call('POST', '/api/threads', { op: 'new', lane: 'atlas', title: 'x' })).status, 200)
+  const up = join(uploadsDir(), '2026-11-20')
+  mkdirSync(up, { recursive: true })
+  const notes = join(up, 'notes.txt')
+  writeFileSync(notes, 'anna')
+  const outside = join(stateDir(), 'outside')
+  mkdirSync(outside, { recursive: true })
+  writeFileSync(join(outside, 'atlas.txt'), 'atlas')
+  // a junction on win32, a plain link elsewhere
+  symlinkSync(outside, join(uploadsDir(), 'out'), 'junction')
+  const post = (files: string[]) => call('POST', '/api/threads/atlas-1', { op: 'post', text: 'x', files })
+  const refused = [join(uploadsDir(), 'out', 'atlas.txt'), uploadsDir(), join(up, 'missing.txt'), 'relative/notes.txt']
+  if (process.platform === 'win32') refused.push(`\\\\localhost\\${notes.replace(':', '$')}`)
+  for (const bad of refused) {
+    const r = await post([notes, bad])
+    assert.equal(r.status, 400, bad)
+    assert.equal((r.body as { code?: string }).code, 'file', bad)
+  }
+  const goes = [notes, ...(process.platform === 'win32' ? [notes.toUpperCase(), notes.replaceAll('\\', '/')] : [])]
+  for (const good of goes) {
+    const r = await post([good])
+    assert.equal(r.status, 200, good)
+    assert.deepEqual(
+      (r.body as { entry: ThreadView['entries'][number] }).entry.files?.map(f => f.name.toLowerCase()),
+      ['notes.txt'],
+    )
+  }
+  // nothing refused was written: the thread holds only the posts that went
+  const view = (await call('GET', '/api/threads/atlas-1')).body as ThreadView
+  assert.equal(view.entries.filter(e => e.files?.length).length, goes.length)
 })
 
 test("the owner answers a question (6.6): the status goes back, the asker's card question goes, the words are typed into it", async () => {
