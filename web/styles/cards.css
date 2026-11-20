@@ -15,6 +15,18 @@
   .card:hover .age, .card:hover .alarm { opacity: 1; }
 }
 
+/* A Claude session's context and effort (#193): one quiet line at the card's foot, in figures that
+   keep their width as they change; the context tinted from 70% and 90%, as the status line does.
+   Each part brings its "·" before it and the row starts that far to the left, clipped: the first
+   part's, and a part's that wrapped onto a line of its own, fall outside, so no width, look or
+   language leaves a "·" at either end of a line. */
+.card-meter { min-width: 0; margin-top: 5px; overflow: hidden; color: var(--label-3); font-size: 11.5px; line-height: 16px; font-variant-numeric: tabular-nums; }
+.card-meter .meter-row { display: flex; flex-wrap: wrap; margin-left: -1.2em; }
+.card-meter .meter-row > span { white-space: nowrap; }
+.card-meter .meter-row > span::before { content: "·"; content: "·" / ""; display: inline-block; width: 1.2em; text-align: center; }
+.card-meter .meter-ctx.warn { color: var(--orange); }
+.card-meter .meter-ctx.full { color: var(--red); }
+
 /* A narrow card (five columns in a window between a phone's and a wide monitor's; #114) keeps
    its name readable: the head's extras give way first. The clock is a glyph, as on a one-line
    card (orange while due), its time in the glyph's tooltip and in the session's panel, and the

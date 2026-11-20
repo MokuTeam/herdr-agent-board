@@ -71,6 +71,26 @@ const runIn = (box: Sandbox, env: Record<string, string> = {}) =>
     env: { ...box.env, HERDR_PANE_ID: 'p1', ...env },
   })
 
+test('the context file keeps the live effort, and drops it when a later run reports none (#193)', async () => {
+  const box = await sandbox()
+  const script = join(root, 'src', 'entrypoints', 'statusline.ts')
+  const run = (stdin: unknown) =>
+    spawnSync(process.execPath, [script], { input: JSON.stringify(stdin), encoding: 'utf8', env: box.env })
+  const file = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board', 'context', 'abc-123.json')
+  const line = plain(run(input).stdout)
+  expect(readJson(file).effort).toBeNull() // a model without effort
+  expect(run({ ...input, effort: { level: 'high' } }).status).toBe(0)
+  expect(readJson(file)).toMatchObject({ effort: 'high', usedPercentage: 8, tokens: 15500, size: 200000 })
+  // A session-only /effort: Claude Code runs the status line again with the new level.
+  run({ ...input, effort: { level: 'max' } })
+  expect(readJson(file).effort).toBe('max')
+  // Compacted onto a model without effort: no count and no effort, neither kept from before.
+  run({ session_id: 'abc-123', model: { display_name: 'Haiku 5.5' }, context_window: { current_usage: null } })
+  expect(readJson(file)).toEqual({ model: 'Haiku 5.5', effort: null })
+  // The line under the prompt is as it was.
+  expect(plain(run({ ...input, effort: { level: 'high' } }).stdout)).toBe(line)
+})
+
 test('usage goes to its profile: default as before, work in its own file, an unknown folder nowhere; the line is the same', async () => {
   const box = await sandbox()
   const home = box.env.USERPROFILE as string

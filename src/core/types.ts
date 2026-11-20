@@ -313,8 +313,16 @@ export interface Item {
    * the model it runs and the family expected. Absent for the others, and always while the rule is off.
    */
   modelWrong?: { runs: string; want: string }
-  /** The effort it thinks with (low, medium, high, xhigh, max), from its transcript. */
+  /**
+   * The effort it thinks with (low, medium, high, xhigh, max): what Claude's status line last said
+   * (null when it said none), else from its transcript or its profile's settings.
+   */
   effort?: string | null
+  /**
+   * `effort` is the one Claude's status line last reported, the live level (#193); absent when it
+   * came from the transcript or settings. The card shows effort only then.
+   */
+  effortLive?: true
   tool?: ToolCall | null
   question?: string
   askSince?: number | null

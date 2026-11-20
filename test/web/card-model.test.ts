@@ -9,6 +9,7 @@ import {
   alarmOf,
   askLine,
   cardAge,
+  cardMeter,
   cardWords,
   clipWords,
   compact,
@@ -18,6 +19,7 @@ import {
   plain,
   questionLine,
   RECAP_STALE_MS,
+  tokenCount,
 } from '../../web/src/models/card.ts'
 import { item } from './support/board.tsx'
 import { OLD_WHEN, oldCode, oldFunction, oldModule } from './support/old-app.ts'
@@ -324,5 +326,76 @@ describe('alarmOf', () => {
       expect(alarmOf(schedules, 'a', now, tr)?.title).toBe(title)
     }
     expect(alarmOf(schedules, 'a', now, t)?.title).toContain('MokuPilot call results: Release 2.4 call')
+  })
+})
+
+describe('cardMeter: a Claude session’s context and effort for its card (#193)', () => {
+  const claude = (fields: Parameters<typeof cardMeter>[0]) =>
+    cardMeter({ agent: 'claude', effortLive: true, ...fields }, t)
+
+  test('the count of the window, its percentage and the effort, in one line', () => {
+    expect(claude({ context: 85_000, contextPct: 42, contextSize: 200_000, effort: 'high' })).toEqual({
+      context: '85k / 200k (42%)',
+      tone: '',
+      effort: 'Effort high',
+    })
+    expect(claude({ context: 850_000, contextPct: 85, contextSize: 1_000_000, effort: 'xhigh' })?.context).toBe(
+      '850k / 1M (85%)',
+    )
+  })
+
+  test('no percentage from the newest report: the tokens over the window, rounded as Claude Code does', () => {
+    // After a compaction, or a reply the status line has not run for yet (services/board.ts contextOf).
+    expect(claude({ context: 13_853, contextPct: null, contextSize: 1_000_000 })?.context).toBe('14k / 1M (1%)')
+    expect(claude({ context: 85_000, contextPct: null, contextSize: 200_000 })?.context).toBe('85k / 200k (43%)')
+    // Over the window (a smaller model since): never past 100%.
+    expect(claude({ context: 300_000, contextSize: 200_000 })?.context).toBe('300k / 200k (100%)')
+  })
+
+  test('a zero shows; what is not known is left out, not made up', () => {
+    expect(claude({ context: 0, contextPct: 0, contextSize: 200_000, effort: 'low' })).toEqual({
+      context: '0 / 200k (0%)',
+      tone: '',
+      effort: 'Effort low',
+    })
+    expect(claude({ context: 85_000 })).toEqual({ context: '85k', tone: '', effort: '' })
+    expect(claude({ contextPct: 42 })).toEqual({ context: '42%', tone: '', effort: '' })
+    expect(claude({ effort: 'medium' })).toEqual({ context: '', tone: '', effort: 'Effort medium' })
+    expect(claude({ context: null, contextPct: null, contextSize: 200_000, effort: null })).toBeNull()
+    expect(claude({ context: Number.NaN, contextSize: 0, effort: '' })).toBeNull()
+  })
+
+  test('tinted from 70% and 90%, as the status line tints it', () => {
+    const tone = (contextPct: number) => claude({ context: 1000, contextPct, contextSize: 200_000 })?.tone
+    expect([tone(69), tone(70), tone(89), tone(90), tone(100)]).toEqual(['', 'warn', 'warn', 'full', 'full'])
+  })
+
+  test('another agent, or none named: nothing, as before', () => {
+    const fields = { context: 85_000, contextPct: 42, contextSize: 200_000, effort: 'high', effortLive: true as const }
+    for (const agent of ['pi', 'codex']) expect(cardMeter({ agent, ...fields }, t)).toBeNull()
+    expect(cardMeter(fields, t)).toBeNull()
+  })
+
+  test('an effort the status line did not report (the transcript’s, a settings default) is not shown', () => {
+    const fields = { context: 85_000, contextPct: 42, contextSize: 200_000, effort: 'high' }
+    expect(cardMeter({ agent: 'claude', ...fields }, t)).toEqual({ context: '85k / 200k (42%)', tone: '', effort: '' })
+    expect(cardMeter({ agent: 'claude', effort: 'high' }, t)).toBeNull()
+  })
+
+  test('Russian words around the same figures', () => {
+    expect(cardMeter({ agent: 'claude', effort: 'high', effortLive: true }, translator('ru'))?.effort).toBe(
+      'Усилие high',
+    )
+  })
+
+  test('tokenCount: 850, 85k, 1M, 1.5M', () => {
+    expect([850, 85_000, 999_400, 999_600, 1_000_000, 1_500_000].map(tokenCount)).toEqual([
+      '850',
+      '85k',
+      '999k',
+      '1M',
+      '1M',
+      '1.5M',
+    ])
   })
 })

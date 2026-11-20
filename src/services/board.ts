@@ -141,6 +141,8 @@ interface ContextFile {
   usedPercentage: number | undefined
   size: number | undefined
   model: string | undefined
+  /** The effort its last run reported; null: that run had none; undefined: written before effort was kept. */
+  effort: string | null | undefined
 }
 
 const contextCache = new Map<string, { mtimeMs: number; data: ContextFile }>() // session -> file
@@ -153,6 +155,7 @@ function asContextFile(value: unknown): ContextFile {
     usedPercentage: numberOf(d.usedPercentage),
     size: numberOf(d.size),
     model: typeof d.model === 'string' && d.model ? d.model : undefined,
+    effort: typeof d.effort === 'string' && d.effort ? d.effort.slice(0, 20) : 'effort' in d ? null : undefined,
   }
 }
 
@@ -166,6 +169,8 @@ interface ContextFill {
   contextSize: number | null
   model: string | null
   effort: string | null
+  /** `effort` is what Claude's status line last reported (#193): the card shows only that one. */
+  effortLive?: true
   /** When `model` was reported: the status line's last run (its file's time), else its assistant line's time (server only). */
   modelAt: number | null
 }
@@ -222,11 +227,16 @@ function contextOf(session: string | null, info: TranscriptInfo, settingsDir: st
   // The transcript can be newer (a reply the status line has not run for yet): its tokens win then.
   const fresh = !info.activity || (d.at !== undefined && d.at >= info.activity - 5000)
   return {
-    context: (fresh && d.tokens) || own.context,
+    // A zero it counted is a count; no count leaves the transcript's.
+    context: fresh && d.tokens != null ? d.tokens : own.context,
     contextPct: fresh ? (d.usedPercentage ?? null) : null,
     contextSize: d.size ?? null,
     model: d.model ?? own.model,
-    effort: own.effort,
+    // The status line's effort is the live one (a session-only /effort too, #193), and it runs again
+    // on every change: what it said wins, none included, so a level it stopped reporting is not kept.
+    // A file from before it was kept leaves the transcript's and the settings' as they were.
+    effort: d.effort !== undefined ? d.effort : own.effort,
+    ...(typeof d.effort === 'string' && { effortLive: true as const }),
     // The status line rewrites the file on every run, before the first reply too (a model, no tokens).
     modelAt: d.model ? st.mtimeMs : own.modelAt,
   }

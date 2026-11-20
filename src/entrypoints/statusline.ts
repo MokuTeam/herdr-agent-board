@@ -2,7 +2,9 @@
 // none). Claude runs it after every reply with the session's state on stdin. The board keeps:
 //   the account's usage windows (rate_limits: 5 hours, 7 days) per Claude profile in
 //   usageFileFor(), the same shape as the usagebar cache, so one reader serves both (claude-home.ts)
-//   each session's context fill (context_window) in contextDir()/<session id>.json
+//   each session's context fill (context_window), model and effort (effort.level) in
+//   contextDir()/<session id>.json; effort null when the input has none, so a level a later run no
+//   longer reports is gone from the card, not kept
 //   in a herdr pane, the Claude profile the session runs in on its card, as the hooks write it
 // and it prints one short line under the prompt, e.g. "ctx 34% · 5h 23% · 7d 41%".
 // It never fails loudly: a bad input leaves the line blank and the files as they were.
@@ -50,10 +52,13 @@ async function main(): Promise<void> {
     const id = sameDir(dir, defaultProfileDir(home)) ? DEFAULT_PROFILE : profileForDir(list(), dir)?.id
     if (id) save(usageFileFor(id), d.usage)
   }
-  if (d.session && (d.context || d.model)) {
+  // Claude Code always names the model, so every run of a session rewrites its file (and clears an
+  // effort it no longer reports); an input with none of the three leaves the file as it was.
+  if (d.session && (d.context || d.model || d.effort)) {
     save(join(contextDir(), `${safe(d.session)}.json`), {
       ...(d.context ?? {}),
       ...(d.model ? { model: d.model } : {}),
+      effort: d.effort,
     })
     if (Math.random() < 0.02) prune(now)
   }

@@ -32,6 +32,20 @@ test('Classic: the question under "Needs me" ends at its third line, nothing of 
   expect(sheet('look-terminal.css')).toMatch(/^:root\[data-look="terminal"\] \.ask \{[^}]*padding: 0; border: 0;/m)
 })
 
+test('the card’s context and effort (#193): each part brings its "·", the first one and a wrapped one are clipped', () => {
+  const css = sheet('cards.css')
+  const rule = (sel: RegExp) => sel.exec(css)?.[1] ?? ''
+  expect(rule(/^\.card-meter \{([^}]*)\}/m)).toContain('overflow: hidden;')
+  const row = rule(/^\.card-meter \.meter-row \{([^}]*)\}/m)
+  const dot = rule(/^\.card-meter \.meter-row > span::before \{([^}]*)\}/m)
+  expect(row).toContain('flex-wrap: wrap;')
+  // the row starts exactly one "·" to the left, so a line's first "·" is outside the clip
+  const shift = /margin-left: -([\d.]+em)/.exec(row)?.[1]
+  expect(shift).toBeTruthy()
+  expect(dot).toContain(`width: ${shift};`)
+  expect(dot).toContain('content: "·" / "";') // not read aloud
+})
+
 test('the dot of an awake card takes the moon’s width, so names line up across the column', () => {
   const app = sheet('app.css')
   const moon = px(app, /^\.moon \{([^}]*)\}/m, 'width')

@@ -26,6 +26,7 @@ import {
   askLine,
   type CardWords,
   cardAge,
+  cardMeter,
   cardWords,
   compact,
   dismissable,
@@ -343,9 +344,37 @@ function CardRest({ item, launch }: { item: Item; launch: LaunchSlots | undefine
       <RestartLine item={item} />
       <HelpersChip item={item} />
       <Relations item={item} />
+      <MeterLine item={item} />
       {/* Started from the board and not done starting: how it goes, or why it failed. */}
       {started && launch?.note(started)}
     </>
+  )
+}
+
+/**
+ * A Claude session's context and effort (#193), quietly at the card's foot: "85k / 200k (42%) ·
+ * Effort high", either part alone when only one is known, nothing when neither is or for another
+ * agent (models/card.ts cardMeter).
+ */
+function MeterLine({ item }: { item: Item }) {
+  const t = useT()
+  const meter = cardMeter(item, t)
+  if (!meter) return null
+  return (
+    <div className="card-meter">
+      <div className="meter-row">
+        {meter.context && (
+          <span className={classNames('meter-ctx', meter.tone)} title={t('card.contextHint')}>
+            {meter.context}
+          </span>
+        )}
+        {meter.effort && (
+          <span className="meter-effort" title={t('meter.effortHint')}>
+            {meter.effort}
+          </span>
+        )}
+      </div>
+    </div>
   )
 }
 

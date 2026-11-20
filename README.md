@@ -3929,10 +3929,14 @@ Claude usage (`src/entrypoints/statusline.ts`, `src/adapters/claude-home.ts`): t
 to the board's own command when there is none (a status line someone else set stays). Claude runs it
 after every reply with the session's state; it keeps the account's 5h and 7d usage windows
 (`claude-limits-latest.json` in the state folder, the usagebar shape) and each session's context fill
-(`context/<session id>.json`), and prints a short line under the prompt: `ctx 34% · 5h 23% · 7d 41%`.
-The board shows the windows as a pill by the live dot (windows past their reset left out) and the
-context fill in the sheet; without the status line it falls back to the usagebar cache and to the
-tokens of the last request in the transcript.
+and effort level (`context/<session id>.json`), and prints a short line under the prompt:
+`ctx 34% · 5h 23% · 7d 41%`. The board shows the windows as a pill by the live dot (windows past
+their reset left out), and a Claude session's context fill and effort at the foot of its card
+(`85k / 200k (42%) · Effort high`) and in the sheet. The effort is the live one, a session-only
+`/effort` included (Claude Code runs the status line again for it); a model without effort, or a
+Claude Code that does not report it, shows none on the card. Without the status line the board
+falls back to the usagebar cache and to the tokens of the last request in the transcript, and the
+card shows no effort.
 
 Files (`src/adapters/files.ts`, `src/server/routes/fs.ts`, `web/src/components/files/`): `POST /api/fs/stat` (which of these paths exist),
 `POST /api/fs/preview`, `POST /api/fs/open` (`open` or `reveal`, through explorer.exe, `open`

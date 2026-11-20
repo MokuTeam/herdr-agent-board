@@ -17,6 +17,52 @@ export const plain = (s: unknown): string =>
     .replace(/\s+/g, ' ')
     .trim()
 
+/** A token count as the card writes it: 850, 85k, 1M, 1.5M. */
+export function tokenCount(n: number): string {
+  if (n < 1000) return String(Math.round(n))
+  if (n < 999_500) return `${Math.round(n / 1000)}k`
+  return `${Number((n / 1_000_000).toFixed(1))}M`
+}
+
+export interface CardMeter {
+  /** "85k / 200k (42%)", "85k" or "42%": what the board knows of its context; '' for nothing. */
+  context: string
+  /** Its context from 70% (warn) and from 90% (full), as the status line tints it; '' below or unknown. */
+  tone: '' | 'warn' | 'full'
+  /** "Effort high"; '' when its effort is not known (a model without one, no report yet). */
+  effort: string
+}
+
+/**
+ * How full a Claude session's context is and the effort it thinks with, for its card (#193). The
+ * percentage is the status line's when that report is the newest; else the tokens over the window,
+ * rounded as Claude Code rounds its own, so the count and the percentage always agree. The effort
+ * is the status line's live level only (effortLive). A zero is shown, nothing is made up: null for
+ * another agent and for a session the board knows neither of.
+ */
+export function cardMeter(
+  it: Pick<Item, 'agent' | 'context' | 'contextPct' | 'contextSize' | 'effort' | 'effortLive'>,
+  t: Translator,
+): CardMeter | null {
+  if (it.agent !== 'claude') return null
+  const tokens = typeof it.context === 'number' && it.context >= 0 ? it.context : null
+  const size = typeof it.contextSize === 'number' && it.contextSize > 0 ? it.contextSize : null
+  const clamp = (p: number) => Math.min(100, Math.max(0, Math.round(p)))
+  const pct =
+    typeof it.contextPct === 'number'
+      ? clamp(it.contextPct)
+      : tokens != null && size != null
+        ? clamp((tokens / size) * 100)
+        : null
+  const count = tokens == null ? '' : size == null ? tokenCount(tokens) : `${tokenCount(tokens)} / ${tokenCount(size)}`
+  const context = count ? (pct == null ? count : `${count} (${pct}%)`) : pct == null ? '' : `${pct}%`
+  // Only the level the status line reported: never a default from settings or the last turn's.
+  const effort =
+    it.effortLive && typeof it.effort === 'string' && it.effort ? t('card.effort', { level: it.effort }) : ''
+  if (!context && !effort) return null
+  return { context, tone: pct == null || pct < 70 ? '' : pct < 90 ? 'warn' : 'full', effort }
+}
+
 /** "5 min ago" and the like, against the board's clock `now`; nothing for no time. */
 export function ago(ms: number | null | undefined, now: number, t: Translator): string {
   if (!ms) return ''
