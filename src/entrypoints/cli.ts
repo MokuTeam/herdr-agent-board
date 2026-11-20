@@ -3,6 +3,10 @@
 //   board cat <id> [title]   set the category (lane); a new id with a title is added to the config
 //   board doing <text>       what the session works on now
 //   board wait <text>        what it waits for outside the chat (moves the card to "waiting")
+//   board wait <text> --probe "<command>" [--every 10m] [--timeout 20s] [--silence 3d]
+//                            with `watches` on in config.json: the board runs the command on the
+//                            interval with no model and wakes the session when it exits 0
+//                            (entrypoints/watch-cli.ts); doing, done, clear or a new wait end it
 //   board ask <question>     needs the user: "Needs me" until the user's next prompt
 //   board done [text]        task finished: clears doing, wait and ask, keeps the result
 //   board clear              clears doing, wait, ask and result
@@ -146,9 +150,12 @@ import type { LiveHit } from '../adapters/profile-homes.ts'
 import {
   addEntry,
   askRestart,
+  endWatches,
   listEntries,
+  listWatches,
   type NewEntry,
   removeEntry,
+  removeWatch,
   schedulerRuns as schedulerRunsNow,
 } from '../adapters/schedule-store.ts'
 import { peekPiSleepers } from '../adapters/wake-files.ts'
@@ -171,6 +178,7 @@ import type { Item } from '../core/types.ts'
 import { wakeConfig } from '../core/wake/config.ts'
 import { parsePiResume, piResumeArgv, piResumeEnv } from '../core/wake/pi.ts'
 import { keyFor, type TopicSnapshot } from '../core/wake/topics.ts'
+import { type WatchEntry, watchesConfig } from '../core/watches.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
 import { shortWhen } from '../core/when-format.ts'
 import { checkWake, wakeAnswers } from '../services/actions.ts'
@@ -202,8 +210,15 @@ const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal'])
  * `board <command> --help` (#305): the usage's alternatives for that command, one a line; all of
  * the usage for a command it does not name.
  */
+/** `board wait`'s watch flags (#486), in the usage only while config.json turns watches on. */
+const WATCH_FLAGS = '[--probe "<command>" [--every 10m] [--timeout 20s] [--silence 3d]]'
+/** The usage line as this board has it: with the watch flags while watches are on, else as before. */
+const usageText = (): string =>
+  watchesConfig(cfg.watches) ? USAGE.replace('| wait <text> |', `| wait <text> ${WATCH_FLAGS} |`) : USAGE
+
 function usageOf(command: string): string {
-  const inner = USAGE.slice(USAGE.indexOf('[') + 1, USAGE.lastIndexOf('] [--session'))
+  const usage = usageText()
+  const inner = usage.slice(usage.indexOf('[') + 1, usage.lastIndexOf('] [--session'))
   const alternatives: string[] = []
   let depth = 0
   let from = 0
@@ -217,7 +232,7 @@ function usageOf(command: string): string {
   }
   alternatives.push(inner.slice(from))
   const own = alternatives.filter(a => a.split(' ')[0] === command)
-  return own.length ? own.map(a => `usage: board ${a}`).join('\n') : USAGE
+  return own.length ? own.map(a => `usage: board ${a}`).join('\n') : usage
 }
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -854,7 +869,7 @@ async function team(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  if (cmd === 'help' || cmd === '--help' || cmd === '-h') return console.log(USAGE)
+  if (cmd === 'help' || cmd === '--help' || cmd === '-h') return console.log(usageText())
   // A command's help, and nothing else: before any session is looked for (#305). thread, time and
   // cal print their own, fuller one.
   if (helpAsked && !OWN_HELP.has(cmd)) {
@@ -940,8 +955,10 @@ async function main(): Promise<void> {
   if (cmd === 'schedule' && flagWords.includes('--all')) {
     const list = listEntries()
     const parked = listArchive().flatMap(r => r.held)
-    if (!list.length && !parked.length) return console.log('nothing scheduled')
+    const watches = listWatches()
+    if (!list.length && !parked.length && !watches.length) return console.log('nothing scheduled')
     for (const e of list) console.log(entryLine(e, Date.now(), true))
+    for (const l of await watchLines(watches, true)) console.log(l)
     for (const l of parkedLines(parked, Date.now(), true)) console.log(l)
     return
   }
@@ -951,6 +968,12 @@ async function main(): Promise<void> {
     const removed = removeEntry(id)
     const held = removed ? null : heldEntry(id)
     const e = removed ?? (held && dropHeld(held.record.key, id)[0])
+    // A watch (#486), whether watches are on or not: removing one runs nothing.
+    const watch = e ? null : removeWatch(id)
+    if (watch)
+      return console.log(
+        `ok · removed watch ${watch.id}${watch.name ? ` (${watch.name})` : ''}: ${clip(watch.probe.cmd)}`,
+      )
     if (!e) throw new Error(`no entry "${words[0]}"; see board schedule`)
     return console.log(
       `ok · removed ${e.id} (${e.cron ? `every "${e.cron}"` : stamp(e.next)}${e.name ? `, ${e.name}` : ''}${held ? ', parked in the archive' : ''}): ${clip(e.text)}`,
@@ -988,6 +1011,8 @@ async function main(): Promise<void> {
   // Listing and removing reach an archived session's parked entries; nothing else is for one.
   const s = await resolveSession({ archived: (cmd === 'schedule' && moving === null) || cmd === 'unschedule' })
   const now = Date.now()
+  // A watch that doing, done, clear or a new wait ended (#486), for the line.
+  let ended = ''
   switch (cmd) {
     case 'show':
       break
@@ -1009,11 +1034,31 @@ async function main(): Promise<void> {
       if (!text) throw new Error('usage: board doing <text>')
       // Back at work: whatever it waited for has arrived, whatever it asked is settled.
       writeCard(s.key, { doing: text, wait: '', waitSince: '', ask: '', askSince: '', result: '', by: 'agent' })
+      ended = endWatch(s.key)
       break
-    case 'wait':
+    case 'wait': {
+      // With watches on (#486), --probe before a `--` makes a watch (entrypoints/watch-cli.ts).
+      if (watchesConfig(cfg.watches) && flagWords.includes('--probe')) {
+        const { waitProbe } = await import('./watch-cli.ts')
+        return console.log(
+          await waitProbe({
+            entry: await entryFor(s),
+            flagWords,
+            after: dashes < 0 ? [] : argv.slice(dashes + 1),
+            now,
+            setWait: wait => writeCard(s.key, { wait, waitSince: now, by: 'agent' }),
+            note: schedulerNote,
+          }),
+        )
+      }
       if (!text) throw new Error('usage: board wait <text>')
       writeCard(s.key, { wait: text, waitSince: now, by: 'agent' })
+      ended = endWatch(s.key)
+      // Watches off (#486): --probe is words of the text, as before; said only where it was given.
+      if (!watchesConfig(cfg.watches) && flagWords.includes('--probe'))
+        ended = ' · note: watches are off in config.json, so --probe is part of the wait text and nothing will check it'
       break
+    }
     case 'ask':
       // Needs the user: the card goes to "Needs me" until the user's next prompt (entrypoints/hook.ts clears it).
       if (!text) throw new Error('usage: board ask <question>')
@@ -1021,9 +1066,11 @@ async function main(): Promise<void> {
       break
     case 'done':
       writeCard(s.key, { doing: '', wait: '', waitSince: '', ask: '', askSince: '', result: text, by: 'agent' })
+      ended = endWatch(s.key)
       break
     case 'clear':
       writeCard(s.key, { doing: '', wait: '', waitSince: '', ask: '', askSince: '', result: '' })
+      ended = endWatch(s.key)
       break
     case 'favorite': {
       const off = words[0]?.toLowerCase()
@@ -1084,8 +1131,10 @@ async function main(): Promise<void> {
       if (moving !== null) return moveParked(moving, s, now)
       const list = listEntries().filter(e => e.key === s.key)
       const parked = getArchived(s.key)?.held ?? []
-      if (!list.length && !parked.length) return console.log('nothing scheduled for this session')
+      const watches = listWatches().filter(w => w.key === s.key)
+      if (!list.length && !parked.length && !watches.length) return console.log('nothing scheduled for this session')
       for (const e of list) console.log(entryLine(e, now, false))
+      for (const l of await watchLines(watches, false)) console.log(l)
       for (const l of parkedLines(parked, now, false)) console.log(l)
       return
     }
@@ -1098,15 +1147,29 @@ async function main(): Promise<void> {
       if (words[0]?.toLowerCase() !== 'all') throw new Error('usage: board unschedule <id|all>')
       const mine = listEntries().filter(e => e.key === s.key)
       for (const e of mine) removeEntry(e.id)
-      const n = mine.length + dropHeld(s.key).length
+      const n = mine.length + dropHeld(s.key).length + endWatches(s.key).length
       return console.log(`ok · removed ${n} ${n === 1 ? 'entry' : 'entries'}`)
     }
     default:
-      throw new Error(`unknown command "${cmd}". ${USAGE}`)
+      throw new Error(`unknown command "${cmd}". ${usageText()}`)
   }
   const cat = readCard(s.key)?.category
   const extra = cat && !cfg.categories.some(c => c.id === cat) ? ` (new lane "${categoryInfo(cfg, cat).title}")` : ''
-  console.log(`ok · ${line(s.key, s.cwd)}${extra}`)
+  console.log(`ok · ${line(s.key, s.cwd)}${extra}${ended}`)
+}
+
+/** Ends the session's watch while watches are on (#486); the words its line gets for that. */
+function endWatch(key: string): string {
+  if (!watchesConfig(cfg.watches)) return ''
+  const gone = endWatches(key)
+  return gone.length ? ` · watch ${gone.map(w => w.id).join(', ')} ended` : ''
+}
+
+/** The lines of watches in `board schedule` (entrypoints/watch-cli.ts). */
+async function watchLines(list: WatchEntry[], withSession: boolean): Promise<string[]> {
+  const { watchLine } = await import('./watch-cli.ts')
+  const on = !!watchesConfig(cfg.watches)
+  return list.map(w => watchLine(w, Date.now(), withSession, on))
 }
 
 /**

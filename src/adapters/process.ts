@@ -12,6 +12,8 @@ export interface RunResult {
   error: (Error & { code?: number | string }) | null
   stdout: string
   stderr: string
+  /** runTree: the signal that ended it, when one did (its code then reads 1). */
+  signal?: NodeJS.Signals | null
 }
 
 export interface RunOptions {
@@ -62,12 +64,13 @@ export function runTree(
       if (stderr.length < OUTPUT_LIMIT) stderr += d
     })
     let code = 0
+    let ended: NodeJS.Signals | null = null
     const finish = (): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       signal?.removeEventListener('abort', end)
-      res({ code: error ? (error.code ?? 1) : code, killed, error, stdout, stderr })
+      res({ code: error ? (error.code ?? 1) : code, killed, error, stdout, stderr, signal: ended })
     }
     const end = (): void => {
       if (killed || settled) return
@@ -89,6 +92,7 @@ export function runTree(
     })
     child.on('exit', (c, signal) => {
       code = c ?? (signal ? 1 : 0)
+      ended = signal
       clearTimeout(timer)
       // What it printed last may still be on its way; the pipes may also stay open for good.
       setTimeout(finish, 300)

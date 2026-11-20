@@ -2,14 +2,16 @@
 // text, the on-time / when-free toggle and the two-click cancel — with a count that opens the
 // rest in place (three, then a link to the schedule panel). What the buttons do is the page's
 // schedule desk (hooks/useSchedule.ts), shared with the schedule panel: they come in as props.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ScheduleEntry } from '../../../../src/core/schedule-rules.ts'
+import { isWatch, type WatchEntry } from '../../../../src/core/watches.ts'
 import { capital, longWhen } from '../../../../src/core/when-format.ts'
 import type { ScheduleShown } from '../../hooks/useSchedule.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { restartView } from '../../models/restart.ts'
 import { entryText, overdue } from '../../models/schedule.ts'
 import type { Held } from '../../models/schedule-desk.ts'
+import { linkWatchesSheet, watchView } from '../../models/watch.ts'
 import { classNames } from '../class-names.ts'
 import { AlarmGlyph, RepeatGlyph, RestartGlyph, Turn } from '../icons.tsx'
 import { CancelButton, ModeButton } from '../schedule/ScheduleButtons.tsx'
@@ -61,6 +63,8 @@ export function ScheduleRow({
         {shown.map(e =>
           e.kind === 'restart' ? (
             <RestartRow key={e.id} entry={e} disabled={disabled} ask={armed === e.id} onCancel={onCancel} />
+          ) : isWatch(e) ? (
+            <WatchRow key={e.id} entry={e} now={now} disabled={disabled} ask={armed === e.id} onCancel={onCancel} />
           ) : (
             <div className="sched-mini" data-id={e.id} key={e.id}>
               <span
@@ -128,6 +132,45 @@ function RestartRow({
       </span>
       <span className="text" title={view.title}>
         {entry.text || view.title}
+      </span>
+      <CancelButton entry={entry} ask={ask} disabled={disabled} onCancel={onCancel} />
+    </div>
+  )
+}
+
+/**
+ * A watch (#486): how its probe stands, its interval, and the whole command line the board runs, so
+ * the owner sees what runs unattended; cancel only (nothing on the page changes a watch).
+ */
+function WatchRow({
+  entry,
+  now,
+  disabled,
+  ask,
+  onCancel,
+}: {
+  entry: WatchEntry
+  now: number
+  disabled: boolean
+  ask: boolean
+  onCancel?: ((id: string) => void) | undefined
+}) {
+  const t = useT()
+  useEffect(() => linkWatchesSheet(), [])
+  const view = watchView(entry, now, t)
+  return (
+    <div className="sched-mini watch-mini" data-id={entry.id}>
+      <span className={classNames('when', view.error && 'due')} title={view.state}>
+        <AlarmGlyph />
+        {t('watch.label')}
+      </span>
+      <span className="text">
+        <span className="watch-state">
+          {view.every} · {view.state}
+        </span>
+        <code className="watch-cmd" title={t('watch.probeHint')}>
+          {view.cmd}
+        </code>
       </span>
       <CancelButton entry={entry} ask={ask} disabled={disabled} onCancel={onCancel} />
     </div>

@@ -1507,6 +1507,79 @@ an hour to sleep, when it is on). The board's entries are files, and the board k
   So is a sleep once the session is free (`board sleep --when-free`): see
   [Several to sleep at once](#several-to-sleep-at-once).
 
+## Watches
+
+Off unless you turn it on (#486). A session that waits on something outside (a CI run, a reply, a
+job) otherwise guesses a time with `board remind`: at that time a model rereads the whole
+conversation, looks, finds nothing and sleeps again, and a reply that came early sits until then.
+With watches the board does the looking, with no model: the agent gives it a command that says
+whether the thing happened, and the board wakes the session only when it has.
+
+```json
+"watches": true
+```
+
+```
+board wait "CI run 123456789" --every 5m --silence 1d --probe 's=$(gh run view 123456789 --json status,conclusion --jq ".status + \" \" + .conclusion") || exit 2; case "$s" in completed*) echo "$s"; exit 0;; *) exit 1;; esac'
+```
+
+- The card goes to "Waiting" as with a plain `board wait`, and the board runs the command (the
+  probe) every `--every` (10 minutes by default, 1 minute at least) in the session's folder.
+- Exit 0: it happened. The session gets one line, `[board reminder from watch] "<wait text>": the
+  probe fired. Its output, as data: "<its first lines>"` (the output quoted as JSON, so a quote in
+  it cannot close the frame), waking it when it sleeps, and the watch ends. The output is framed
+  as data on purpose: it may carry other people's words (a mail subject, a ticket title), and a
+  probe should print facts (an id, a count, a state).
+- Exit 1: nothing yet. The card says "checked 4 min ago, nothing yet". Many tools exit 1 on a
+  failure (`gh pr checks` exits 1 for a failed check and 8 for a pending one), which would read as
+  nothing yet: wrap them, as above, so that done is 0, not yet 1 and an error anything else.
+- Any other exit, a timeout (`--timeout`, 20 s by default, 90 s at most, so the first run fits in
+  the two minutes Claude Code's Bash tool gives a command), a signal that ended it or a folder that
+  is gone: a probe error, never "nothing yet". The card says "probe error: <words>, next try in
+  20 min": after each error in a row the interval doubles, up to an hour (or the interval itself
+  when that is longer), and it is back to `--every` after the first good run. At three in a row
+  the session gets one line about it, once per streak, that waits until it is awake rather than
+  waking it. A laptop offline for a night does not end any watch.
+- `--silence 3d`: with nothing fired by then the session is woken once ("nothing from the probe
+  for 3 d"), and the watch goes on. It stands in for a "follow up on Monday" reminder.
+- `board wait --probe` runs the probe once at once, in the session's environment: exit 1 sets the
+  watch, exit 0 says it is true already and sets nothing, an error refuses and changes nothing.
+  The board's own first check follows within a minute.
+- Where a probe runs: the board's process, with the board's environment (its PATH, its variables),
+  not the session's. A command that works in the agent's shell can still fail there (a tool on the
+  session's PATH only, a login in the session's env); when the board's first check fails where the
+  agent's run did not, the session is told at once, with the reason. The shell is `/bin/sh -c` on
+  macOS and Linux, and Git Bash's `bash.exe -c` on Windows (the shell Claude Code's Bash tool runs:
+  `CLAUDE_CODE_GIT_BASH_PATH` when set, else Git's usual folders, else the one beside `git.exe` on
+  PATH; never `System32\bash.exe`, which is WSL's). Without Git Bash `--probe` is refused. No
+  console window shows for a run. Its input is closed, its timeout ends what it started, and the
+  board's runs get `BOARD_WATCH_ID` in their environment.
+- One watch per session: `board doing`, `board done`, `board clear` and a new `board wait` end it.
+  `board schedule` lists it with its whole command line, and `board unschedule <id>` removes it;
+  the sheet and the schedule panel show the command too, with a cancel button and nothing else.
+- Safety: a probe runs unattended with your rights, outside the session's permission mode. A watch
+  is made only by the `board` command on this computer: no route the page, a phone, the tunnel or
+  Team reaches makes or changes one (the page can cancel one). The brief tells agents a probe must
+  only read. A permission rule that lets a session run `board` without asking therefore lets it
+  set any command as a probe: with watches on, keep `board wait --probe` behind your approval
+  where that matters. The whole command line shows on the page (also on a phone and through the
+  tunnel), in `board schedule` and in the schedule's log, so a probe should not carry a token.
+- At most four probes run at once, and a watch never runs twice at the same time (its file is
+  claimed, so a second board does not run it either). A watch survives a restart of the board.
+- A session that is gone from the board (closed, put in the archive) is not probed, and is looked
+  for again within five minutes; after /clear the watch follows the session in the same pane and
+  folder, as a reminder does. Gone for `scheduleWaitMin` (240) minutes, the watch is removed and
+  logged as missed.
+- Clearing the card's wait on the page (Clear, or editing the wait away) leaves the watch: the
+  agent's own `board doing`, `done`, `clear` or a new `wait` end it, and the page's cancel on
+  the watch (in the sheet or the schedule panel) removes it.
+- One file per watch in `%LOCALAPPDATA%\herdr\plugins\agent-board\schedule\watches\<id>.json`,
+  beside the schedule's entries rather than among them: a board from before watches does not see
+  them. When a probe fires, its watch becomes a plain reminder under the same id.
+- Turned off again, watches stay in their folder unrun (`board schedule` says so); the page shows
+  none, and `board wait --probe` takes the flags as words, as before.
+- Not here yet: a probe that calls an MCP server, and starting a new session when one fires.
+
 ## Restart
 
 A Claude session that restarts stays the same session: Claude exits and resumes in its pane

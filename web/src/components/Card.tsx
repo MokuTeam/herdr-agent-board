@@ -62,6 +62,7 @@ import { ModelTag } from './ModelTag.tsx'
 import { ProfileTag } from './ProfileTag.tsx'
 import { StopButton } from './StopButton.tsx'
 import { CardThreadChips, KeyText } from './threads/bits.tsx'
+import { WatchLine } from './WatchLine.tsx'
 
 /** What a session on its way shows on the board (hooks/useLaunch.ts). */
 export interface LaunchSlots {
@@ -272,10 +273,14 @@ function CardBody({ item, launch, folding }: { item: Item; launch: LaunchSlots |
     </div>
   ) : null
   const wait = item.column === 'ext' && (
-    <div className="chip">
-      <ClockGlyph />
-      <span>{item.wait || t('note.parked')}</span>
-    </div>
+    <>
+      <div className="chip">
+        <ClockGlyph />
+        <span>{item.wait || t('note.parked')}</span>
+      </div>
+      {/* Watches (#486): how its probe stands; nothing without one. */}
+      <WatchLine item={item} />
+    </>
   )
   if (folding)
     return (
