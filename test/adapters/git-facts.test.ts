@@ -178,6 +178,57 @@ describe('checkoutFacts', () => {
   )
 })
 
+describe('which remote branch counts', () => {
+  test(
+    'an upstream of another name; a push with no -u; detached HEAD',
+    async () => {
+      const { dir } = cloned()
+      git(dir, ['checkout', '--quiet', '-b', 'topic'])
+      git(dir, ['update-ref', 'refs/remotes/origin/other', 'HEAD'])
+      git(dir, ['config', 'branch.topic.remote', 'origin'])
+      git(dir, ['config', 'branch.topic.merge', 'refs/heads/other'])
+      expect(await checkoutFacts(dir)).toMatchObject({ headPushed: true })
+      expect(await branchPushed(dir, 'topic')).toBe(true)
+      // `git push origin solo` leaves origin/solo and no upstream.
+      git(dir, ['checkout', '--quiet', '-b', 'solo'])
+      git(dir, ['update-ref', 'refs/remotes/origin/solo', 'HEAD'])
+      expect(await checkoutFacts(dir)).toMatchObject({ headPushed: true })
+      expect(await branchPushed(dir, 'solo')).toBe(true)
+      git(dir, ['checkout', '--quiet', '--detach'])
+      expect(await checkoutFacts(dir)).toMatchObject({ clean: true, headPushed: false, remote: { name: 'origin' } })
+    },
+    GIT_MS,
+  )
+
+  test(
+    'an upstream that is a local branch is not pushed anywhere',
+    async () => {
+      const { dir } = cloned()
+      commit(dir, 'ahead.txt')
+      git(dir, ['checkout', '--quiet', '-b', 'feature', '--track', 'main'])
+      expect(await checkoutFacts(dir)).toMatchObject({ headPushed: false })
+      expect(await branchPushed(dir, 'feature')).toBe(false)
+    },
+    GIT_MS,
+  )
+
+  test(
+    'no origin: the first remote; a password in its URL is not kept; a repository with no commit yet',
+    async () => {
+      const dir = temp('board-remotes-')
+      git(dir, ['init', '--quiet', '--initial-branch=main'])
+      git(dir, ['remote', 'add', 'upstream', 'https://bot:secret-token@github.com/a/b.git'])
+      expect(await checkoutFacts(dir)).toEqual({
+        root: dir,
+        remote: { name: 'upstream', url: 'https://bot@github.com/a/b.git', address: 'github.com/a/b' },
+        clean: true,
+        headPushed: false,
+      })
+    },
+    GIT_MS,
+  )
+})
+
 describe('branchPushed', () => {
   test(
     'a new worktree from a pushed branch, and from one with commits not pushed',

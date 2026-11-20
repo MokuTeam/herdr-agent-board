@@ -78,6 +78,8 @@ const POSIX = String.raw`(?<![A-Za-z0-9._~\-/\\:])/(?=[^\s/])`
 const QUOTED = new RegExp(String.raw`(["'\`])((?:${DRIVE}|${UNC}|${POSIX})[^"'\`\r\n]*)\1`, 'g')
 const BARE = new RegExp(`(?:${DRIVE}|${UNC}|${POSIX})${CHARS}*`, 'g')
 const TRAILING = /[.,;:!?]+$/
+// `x.ts:42` or `x.ts:42:7`: a place in the file, not part of its name.
+const LINE = /(?::\d+){1,2}$/
 
 /**
  * Absolute paths in a text, by shape alone, in the order they appear, each once and at most
@@ -88,12 +90,12 @@ export function pathsIn(text: string): string[] {
   const found: { at: number; path: string }[] = []
   const taken: [number, number][] = []
   for (const m of text.matchAll(QUOTED)) {
-    found.push({ at: m.index, path: m[2] ?? '' })
+    found.push({ at: m.index, path: (m[2] ?? '').replace(LINE, '') })
     taken.push([m.index, m.index + m[0].length])
   }
   for (const m of text.matchAll(BARE)) {
     if (taken.some(([a, b]) => m.index >= a && m.index < b)) continue
-    const path = m[0].replace(TRAILING, '')
+    const path = m[0].replace(TRAILING, '').replace(LINE, '').replace(TRAILING, '')
     if (path.length > 1 && !/^[A-Za-z]:[\\/]?$/.test(path)) found.push({ at: m.index, path })
   }
   const out: string[] = []

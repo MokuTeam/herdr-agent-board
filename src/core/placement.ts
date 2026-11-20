@@ -97,6 +97,15 @@ export const STATUS_MAX_AGE_MS = 45_000
 /** The memory gate opens again only this far above its threshold, so a device does not flap. */
 export const GATE_RETURN = 1.15
 
+/**
+ * The memory test of 8.2 on a free figure: at least `min`, or with the gate closed more than
+ * `min × 1.15`, compared as whole numbers (free × 20 against min × 23) so a threshold at
+ * equality does not land on either side by a float's rounding.
+ */
+function memoryPasses(free: number, min: number, closed: boolean): boolean {
+  return closed ? free * 20 > min * 23 : free >= min
+}
+
 /** One start counted against a device: from the decision until its session shows, it fails or 180 s pass. */
 export interface Reservation {
   id: string
@@ -131,7 +140,7 @@ export function gateNext(
 ): boolean {
   const min = settings.minFreeMemMb
   if (min === null || !status) return min === null ? false : closed
-  return closed ? status.memAvailableMb <= min * GATE_RETURN : status.memAvailableMb < min
+  return !memoryPasses(status.memAvailableMb, min, closed)
 }
 
 /**
@@ -143,10 +152,13 @@ export function gateNext(
  * the placer reads its own status, it does not ask for it.
  */
 export function needsFresh(task: Task, view: PlacementView, now: number): DeviceId[] {
-  return candidates(task, view).filter(id => {
+  const list = homeWhy(task, view.config) ? [task.origin] : candidates(task, view)
+  return list.filter(id => {
     if (id === LOCAL) return false
     const d = view.devices[id]
-    return !!d?.online && !d.revoked && (!d.status || now - d.status.at > STATUS_MAX_AGE_MS)
+    const s = settingsOf(view.config, id)
+    if (!s || s.paused || s.drain || !d?.online || d.revoked) return false
+    return !d.status || now - d.status.at > STATUS_MAX_AGE_MS
   })
 }
 
@@ -202,7 +214,7 @@ function candidates(task: Task, view: PlacementView): DeviceId[] {
   const pin = task.pin
   if (!pin) return all
   if ('device' in pin) return all.filter(id => id === pin.device)
-  return all.filter(id => settingsOf(view.config, id)?.tags.includes(pin.tag))
+  return all.filter(id => (settingsOf(view.config, id)?.tags ?? []).includes(pin.tag))
 }
 
 const pinText = (pin: NonNullable<Task['pin']>): string => ('device' in pin ? pin.device : `tag ${pin.tag}`)
@@ -221,22 +233,23 @@ function unfitWhy(id: DeviceId, task: Task, view: PlacementView): string | null 
   if (state?.revoked) return 'revoked'
   if (settings?.paused) return 'paused'
   if (settings?.drain) return 'draining'
+  const tags = settings?.tags ?? []
+  const missing = (task.needs ?? []).filter(t => !tags.includes(t))
+  if (missing.length) return `no tag ${missing.join(', ')}`
   const status = state?.status
-  // Never heard from: nothing says it cannot take the task; it has no room until it answers.
+  // Never heard from: nothing it reports says it cannot take the task; it has no room until it answers.
   if (!status) return null
   if (id !== LOCAL) {
     if (status.api !== view.master.api) return `link version ${status.api}, this board ${view.master.api}`
     if (status.commit !== view.master.commit) return `version ${status.commit}, this board ${view.master.commit}`
   }
-  const profile = settings?.profiles?.[task.profile] ?? task.profile
+  // The profile map is the master's to a node's: this computer's profiles are its own ids.
+  const profile = (id !== LOCAL && settings?.profiles?.[task.profile]) || task.profile
   const there = status.profiles.find(p => p.id === profile)
   if (!there) return `no profile ${profile}`
   // null is a device that cannot tell (an agent with no login of its own to read): not a refusal.
   if (there.loggedIn === false) return `profile ${profile} is not logged in`
   if (!status.agents.includes(task.agent)) return `no ${task.agent}`
-  const tags = settings?.tags ?? []
-  const missing = (task.needs ?? []).filter(t => !tags.includes(t))
-  if (missing.length) return `no tag ${missing.join(', ')}`
   return null
 }
 
@@ -252,8 +265,10 @@ export function roomBlocker(id: DeviceId, view: PlacementView, now: number): str
   if (s?.maxSessions != null && busy >= s.maxSessions) return `${busy} of ${s.maxSessions} sessions`
   if (s?.minFreeMemMb != null) {
     const free = status.memAvailableMb - reserved * RESERVED_MB
-    const need = state.gateClosed ? s.minFreeMemMb * GATE_RETURN : s.minFreeMemMb
-    if (state.gateClosed ? free <= need : free < need) return `${Math.round(free)} MB free, needs ${Math.round(need)}`
+    if (!memoryPasses(free, s.minFreeMemMb, state.gateClosed)) {
+      const need = state.gateClosed ? s.minFreeMemMb * GATE_RETURN : s.minFreeMemMb
+      return `${Math.round(free)} MB free, needs ${Math.round(need)}`
+    }
   }
   if (s?.maxLoad != null && status.load && status.cpus > 0) {
     const perCore = status.load[1] / status.cpus

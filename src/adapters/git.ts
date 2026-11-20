@@ -139,18 +139,59 @@ async function gitLine(cwd: string, args: string[]): Promise<string | null> {
 /** What the portability rule (core/portable.ts) reads of a checkout, without a fetch. */
 export interface CheckoutFacts {
   root: string
-  /** The remote HEAD's upstream is on, else `origin`, else the first; null when there is none. */
+  /**
+   * The remote HEAD's branch is pushed to (its upstream's, else `origin`, else the first); null
+   * when there is none. The URL without a password; the address as core/portable.ts's repoAddress.
+   */
   remote: { name: string; url: string; address: string | null } | null
   /** No changes in the tree or the index, untracked files included. */
   clean: boolean
-  /** HEAD equals its upstream as last fetched; false with no upstream or no commit. */
+  /** HEAD is a branch that equals its remote branch (see branchPushed); false detached or with no commit. */
   headPushed: boolean
 }
 
-/** The remotes of a checkout, and the one a branch with no upstream would go to. */
-async function remotes(root: string): Promise<{ names: string[]; fallback: string | null }> {
-  const names = ((await gitLine(root, ['remote'])) ?? '').split(/\r?\n/).filter(Boolean)
+interface Remotes {
+  names: string[]
+  /** Where a branch with no upstream on a remote goes: `origin`, else the first. */
+  fallback: string | null
+}
+
+async function remotes(dir: string): Promise<Remotes> {
+  const names = ((await gitLine(dir, ['remote'])) ?? '').split(/\r?\n/).filter(Boolean)
   return { names, fallback: names.includes('origin') ? 'origin' : (names[0] ?? null) }
+}
+
+/**
+ * The commit of a local branch's remote branch, as last fetched, and the remote it is on: its
+ * upstream when that is a remote-tracking branch (one tracking a local branch is not pushed
+ * anywhere), else the same name on the fallback remote, which is what `git push origin <branch>`
+ * without `-u` leaves. Null when neither exists.
+ */
+async function remoteBranch(
+  dir: string,
+  branch: string,
+  known: Remotes,
+): Promise<{ remote: string; commit: string } | null> {
+  const up = await gitLine(dir, ['rev-parse', '--verify', '--quiet', '--symbolic-full-name', `${branch}@{upstream}`])
+  if (up?.startsWith('refs/remotes/')) {
+    // refs/remotes/<remote>/<branch>; a remote's name may hold a slash, so the longest that fits.
+    const remote = known.names.filter(n => up.startsWith(`refs/remotes/${n}/`)).sort((a, b) => b.length - a.length)[0]
+    const commit = await gitLine(dir, ['rev-parse', '--verify', '--quiet', `${up}^{commit}`])
+    if (remote && commit) return { remote, commit }
+  }
+  if (!known.fallback) return null
+  const commit = await gitLine(dir, [
+    'rev-parse',
+    '--verify',
+    '--quiet',
+    `refs/remotes/${known.fallback}/${branch}^{commit}`,
+  ])
+  return commit ? { remote: known.fallback, commit } : null
+}
+
+/** A remote's URL as it may be shown and sent on: `https://user:token@host/x` loses its password. */
+function shownUrl(url: string): string {
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/[^/@:]*):[^/@]*@/i, '$1@')
 }
 
 /** The facts of the checkout a folder is in, or null when it is in none. */
@@ -158,42 +199,33 @@ export async function checkoutFacts(dir: string): Promise<CheckoutFacts | null> 
   const top = await gitLine(dir, ['rev-parse', '--show-toplevel'])
   if (!top) return null
   const root = resolve(top)
-  const [known, status, head, upstream, upstreamRef] = await Promise.all([
+  const [known, status, head, branch] = await Promise.all([
     remotes(root),
     git(root, ['status', '--porcelain=v1', '--untracked-files=normal']).catch(() => null),
     gitLine(root, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']),
-    gitLine(root, ['rev-parse', '--verify', '--quiet', '@{upstream}^{commit}']),
-    gitLine(root, ['rev-parse', '--symbolic-full-name', '@{upstream}']),
+    gitLine(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
   ])
   if (!status) return null
-  // refs/remotes/<remote>/<branch>; a remote's name may hold a slash, so the longest that fits.
-  const tracked = upstreamRef?.startsWith('refs/remotes/')
-    ? known.names.filter(n => upstreamRef.startsWith(`refs/remotes/${n}/`)).sort((a, b) => b.length - a.length)[0]
-    : undefined
-  const name = tracked ?? known.fallback
+  const pushed = head && branch ? await remoteBranch(root, branch, known) : null
+  const name = pushed?.remote ?? known.fallback
   const url = name ? await gitLine(root, ['remote', 'get-url', name]) : null
   return {
     root,
-    remote: name && url ? { name, url, address: repoAddress(url) } : null,
+    remote: name && url ? { name, url: shownUrl(url), address: repoAddress(url) } : null,
     clean: !status.truncated && status.text.trim() === '',
-    headPushed: !!head && head === upstream,
+    headPushed: !!pushed && pushed.commit === head,
   }
 }
 
 /**
- * Whether a branch equals its remote branch, as last fetched: its upstream, or the same name on
- * the checkout's remote when it has none. A remote-tracking branch itself (`origin/main`) is on
- * the remote already. A branch on neither side: false.
+ * Whether a branch equals its remote branch, as last fetched (see remoteBranch). A
+ * remote-tracking branch itself (`origin/main`) is on the remote already. A branch on neither
+ * side: false.
  */
 export async function branchPushed(dir: string, branch: string): Promise<boolean> {
   if (!branch) return false
   const local = await gitLine(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`])
   if (!local) return !!(await gitLine(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/${branch}^{commit}`]))
-  let remote = await gitLine(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}@{upstream}^{commit}`])
-  if (!remote) {
-    const { fallback } = await remotes(dir)
-    if (fallback)
-      remote = await gitLine(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/${fallback}/${branch}^{commit}`])
-  }
-  return !!remote && remote === local
+  const pushed = await remoteBranch(dir, branch, await remotes(dir))
+  return pushed?.commit === local
 }

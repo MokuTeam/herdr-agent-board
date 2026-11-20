@@ -121,6 +121,14 @@ describe('pathsIn', () => {
     ])
   })
 
+  test('a line and column after a path are not part of it', () => {
+    assert.deepEqual(pathsIn(String.raw`Fix C:\Work\x\a.ts:42 and /home/me/b.ts:12:5, then "C:\My Docs\c.ts:7".`), [
+      String.raw`C:\Work\x\a.ts`,
+      '/home/me/b.ts',
+      String.raw`C:\My Docs\c.ts`,
+    ])
+  })
+
   test('a quoted path keeps its spaces', () => {
     assert.deepEqual(pathsIn(String.raw`Read "C:\Program Files\App\x y.txt" and '/mnt/my files/z'`), [
       String.raw`C:\Program Files\App\x y.txt`,
