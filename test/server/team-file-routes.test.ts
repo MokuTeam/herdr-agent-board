@@ -98,7 +98,8 @@ test('an upload is taken by its real path (#467): a link or junction out of the 
   const outside = join(box.dir, 'outside')
   mkdirSync(outside, { recursive: true })
   writeFileSync(join(outside, 'atlas.png'), 'atlas')
-  // a folder beside the uploads whose name only starts the same
+  // a folder beside the uploads whose name only starts the same; it and `..` are refused by the
+  // name's pattern before any file call, kept here so a looser pattern cannot let them through
   mkdirSync(join(stateOf(box), 'uploads2', '2026-01-03'), { recursive: true })
   writeFileSync(join(stateOf(box), 'uploads2', '2026-01-03', 'ben.png'), 'ben')
   // a day folder that is a junction out (a plain link off win32)
@@ -127,7 +128,18 @@ test('an upload is taken by its real path (#467): a link or junction out of the 
   expect(
     await post(url, '/api/team/send', { to: anna.pub, text: '', file: { upload: '2026-01-04/120000-cleo.png' } }),
   ).toMatchObject([200, { ok: true }])
-  expect(msgOf((await annaClient.take('deliver', 8000)).env).body.file).toBeTruthy()
+  const ref = msgOf((await annaClient.take('deliver', 8000)).env).body.file as FileRef
+  annaClient.send({ t: 'blob_get', id: ref.blob, at: 0 })
+  const data = await annaClient.take('blob_data', 8000)
+  const secret = (await unwrapSecret(
+    ref.key,
+    ref.eph,
+    { peer: anna.pub, box: annaBox },
+    fileContext(ref.blob),
+  )) as Uint8Array
+  const opened = await openFile(ref, unb64u(data.data) as Uint8Array, secret)
+  expect(opened.ok && opened.meta.name).toBe('cleo.png')
+  expect(opened.ok && Buffer.from(opened.bytes).toString()).toBe('cleo')
 })
 
 test("a session's post with a file, agents off: held as a draft with the board's copy, listed with the threads; a relative path is refused", async () => {
