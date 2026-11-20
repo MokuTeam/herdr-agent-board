@@ -1,16 +1,40 @@
+import { randomUUID } from 'node:crypto'
+import type { ScheduleEntry } from '../core/schedule-rules.ts'
 import { isMirrored } from '../core/thread-import.ts'
 import type { Item } from '../core/types.ts'
 import type { WorkdeskTask } from '../core/workdesk.ts'
-import type { DialogProblem, DialogTarget, LegacyDialogBinding, OwnerEvent } from '../core/workdesk-dialog.ts'
+import {
+  type DialogProblem,
+  type DialogTarget,
+  type LegacyDialogBinding,
+  type OwnerEvent,
+  type OwnerMessage,
+  sameDialogTarget,
+} from '../core/workdesk-dialog.ts'
 import { workdeskAgent } from '../core/workdesk-topology.ts'
-import type { BoardDb } from './db.ts'
+import { type BoardDb, openDb, type Tx } from './db.ts'
+import { addEntry, listEntries, updateEntry } from './schedule-store.ts'
 import { appendEntry, getThread } from './work-thread-store.ts'
 import { workdeskHandoffReader } from './workdesk-store.ts'
 
 type Handoff = NonNullable<ReturnType<ReturnType<typeof workdeskHandoffReader>>>
-type Binding = DialogTarget & { revision: number }
+type Binding = DialogTarget & { revision: number; acknowledged: number }
 type Pending = { board_task_id: number; assignment_id: string; count: number }
+type Wake = { id: string; task_id: number; assignment_id: string; schedule_id: string | null; released: number }
+const PARKED = 8_640_000_000_000_000
 type Resolved = { binding: Binding } | { problem: DialogProblem }
+
+/**
+ * Only a protected reader can supply this, after establishing its durable recipient and
+ * authenticated read path. It must stage synchronously using tx, never through the common
+ * work thread. The board server does not yet have a sink with those guarantees.
+ */
+export interface ProtectedDialogSink {
+  permits(target: DialogTarget): boolean
+  stage(tx: Tx, target: DialogTarget, message: OwnerMessage): void
+  /** A replay must still be readable by the current protected recipient before it can be ACKed. */
+  contains(tx: Tx, target: DialogTarget, message: OwnerMessage): boolean
+}
 
 export function workdeskDialogStore(db: BoardDb, items: () => readonly Item[] | null) {
   const cursor = () =>
@@ -62,11 +86,7 @@ export function workdeskDialogStore(db: BoardDb, items: () => readonly Item[] | 
     const resolved = resolve(group)
     if ('problem' in resolved) return resolved
     const { binding } = resolved
-    return binding.thread_id === expected.thread_id &&
-      binding.sid === expected.sid &&
-      binding.executor === expected.executor
-      ? resolved
-      : { problem: 'assignment_mismatch' }
+    return sameDialogTarget(binding, expected) ? resolved : { problem: 'assignment_mismatch' }
   }
 
   return {
@@ -129,6 +149,7 @@ export function workdeskDialogStore(db: BoardDb, items: () => readonly Item[] | 
           thread_id: pin.threadId,
           sid: pin.sessionId,
           revision: task.assignment.revision,
+          acknowledged: 0,
         }
         const problem = localTarget(handoff, binding)
         if (problem) return { problem }
@@ -150,6 +171,11 @@ export function workdeskDialogStore(db: BoardDb, items: () => readonly Item[] | 
       })
     },
     resolve,
+    current,
+    permitsRead(target: DialogTarget): boolean {
+      const resolved = resolve({ board_task_id: target.task_id, assignment_id: target.assignment_id, count: 0 })
+      return 'binding' in resolved && sameDialogTarget(target, resolved.binding)
+    },
     notice(group: Pending, expected: Binding, now: number): DialogProblem | null {
       return db.write('workdesk-dialog', tx => {
         const resolved = current(group, expected)
@@ -174,11 +200,132 @@ export function workdeskDialogStore(db: BoardDb, items: () => readonly Item[] | 
             type: 'note',
             author: { kind: 'owner' },
             at: now,
-            text: 'В Workdesk появилось обновление диалога по этой карточке. Доставка ответа ожидает подключения получателя.',
-            private: true,
+            text: 'В Workdesk появилось обновление диалога по этой карточке.',
           })
         return null
       })
     },
+    stage(
+      group: Pending,
+      expected: Binding,
+      revision: number,
+      messages: OwnerMessage[],
+      through: number,
+      sink: ProtectedDialogSink,
+      queueWake = false,
+    ): DialogProblem | null {
+      return db.write('workdesk-dialog', tx => {
+        const resolved = current(group, expected)
+        if ('problem' in resolved) return resolved.problem
+        const { binding } = resolved
+        if (binding.acknowledged !== expected.acknowledged || binding.revision > revision) return 'invalid_page'
+        if (!sink.permits(binding)) return 'protected_delivery_unavailable'
+        const known = tx.db
+          .query<OwnerEvent, [number, string, number, number]>(`
+          SELECT * FROM workdesk_dialog_events
+          WHERE board_task_id = ? AND assignment_id = ? AND id > ? AND id <= ?
+        `)
+          .all(binding.task_id, binding.assignment_id, binding.acknowledged, through)
+        const page = new Map(messages.map(message => [message.id, message]))
+        if (
+          known.some(event => {
+            const message = page.get(event.id)
+            return message?.kind !== event.kind || message.revision !== event.revision
+          })
+        )
+          return 'invalid_page'
+        const receipt = tx.db.query('INSERT OR IGNORE INTO workdesk_dialog_receipts VALUES (?, ?)')
+        let added = false
+        for (const message of messages) {
+          if (receipt.run(binding.assignment_id, message.id).changes) {
+            sink.stage(tx, binding, message)
+            added = true
+          } else if (!sink.contains(tx, binding, message)) throw new Error('Protected Workdesk receipt unavailable')
+        }
+        if (added && queueWake)
+          tx.db
+            .query('INSERT INTO workdesk_dialog_wakes (id, task_id, assignment_id) VALUES (?, ?, ?)')
+            .run(randomUUID(), binding.task_id, binding.assignment_id)
+        tx.db.query('UPDATE workdesk_dialog_bindings SET revision = ? WHERE task_id = ?').run(revision, binding.task_id)
+        return null
+      })
+    },
+    wakeAllowed(entry: ScheduleEntry, permits: (target: DialogTarget) => boolean): boolean {
+      if (typeof entry.workdeskDialogWake !== 'string') return false
+      const row = db.db
+        .query<Wake, [string]>('SELECT * FROM workdesk_dialog_wakes WHERE id = ?')
+        .get(entry.workdeskDialogWake)
+      if (!row || row.schedule_id !== entry.id || row.task_id !== entry.workdeskTaskId) return false
+      const resolved = resolve({ board_task_id: row.task_id, assignment_id: row.assignment_id, count: 0 })
+      return 'binding' in resolved && resolved.binding.sid === entry.key && permits(resolved.binding)
+    },
+    releaseWakes(onlyTaskId: number | undefined, now: number, permits: (target: DialogTarget) => boolean): void {
+      const rows = db.db
+        .query<Wake, [number | null]>(`
+        SELECT * FROM workdesk_dialog_wakes WHERE released = 0 AND (?1 IS NULL OR task_id = ?1)
+      `)
+        .all(onlyTaskId ?? null)
+      const get = db.db.query<Wake, [string]>('SELECT * FROM workdesk_dialog_wakes WHERE id = ?')
+      for (const row of rows) {
+        const scheduleId = db.write('workdesk-dialog', ({ db: sql }) => {
+          const fresh = get.get(row.id)
+          if (!fresh || fresh.released) return null
+          const resolved = resolve({ board_task_id: row.task_id, assignment_id: row.assignment_id, count: 0 })
+          if ('problem' in resolved || !permits(resolved.binding)) return null
+          if (fresh.schedule_id) return fresh.schedule_id
+          const { binding } = resolved
+          const thread = getThread(db, binding.thread_id)
+          if (!thread) return null
+          // Recover a parked file created before the SQLite transaction committed.
+          const entry =
+            listEntries().find(e => e.workdeskDialogWake === row.id) ??
+            addEntry({
+              key: binding.sid,
+              name: binding.executor,
+              by: 'workdesk-dialog',
+              text: `В Workdesk есть ответ владельца для ${thread.key}. Для текста вызови защищённое чтение Workdesk.`,
+              at: PARKED,
+              next: PARKED,
+              workdeskDialogWake: row.id,
+              workdeskTaskId: row.task_id,
+            })
+          sql.query('UPDATE workdesk_dialog_wakes SET schedule_id = ? WHERE id = ?').run(entry.id, row.id)
+          return entry.id
+        })
+        if (!scheduleId) continue
+        updateEntry(scheduleId, entry =>
+          entry.workdeskDialogWake === row.id && entry.next === PARKED ? { ...entry, next: now, at: now } : undefined,
+        )
+        db.write('workdesk-dialog', ({ db: sql }) =>
+          sql.query('UPDATE workdesk_dialog_wakes SET released = 1 WHERE id = ?').run(row.id),
+        )
+      }
+    },
+    confirm(expected: Binding, through: number): void {
+      db.write('workdesk-dialog', ({ db: sql }) => {
+        sql
+          .query(`UPDATE workdesk_dialog_bindings SET acknowledged = MAX(acknowledged, ?)
+                   WHERE task_id = ? AND assignment_id = ?`)
+          .run(through, expected.task_id, expected.assignment_id)
+        sql
+          .query('DELETE FROM workdesk_dialog_events WHERE board_task_id = ? AND assignment_id = ? AND id <= ?')
+          .run(expected.task_id, expected.assignment_id, through)
+      })
+    },
+  }
+}
+
+/** Verify the current native recipient of a neutral reminder before waking it. */
+export function workdeskDialogWakeAllowed(
+  entry: ScheduleEntry,
+  items: readonly Item[],
+  permits: (target: DialogTarget) => boolean,
+): boolean {
+  const db = openDb({ create: false })
+  if (!db) return false
+  try {
+    return workdeskDialogStore(db, () => items).wakeAllowed(entry, permits)
+  } finally {
+    db.close()
   }
 }

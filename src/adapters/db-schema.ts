@@ -220,6 +220,40 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX workdesk_dialog_pending ON workdesk_dialog_events (board_task_id, assignment_id, id);
     `,
   },
+  {
+    version: 7,
+    store: 'workdesk-dialog',
+    sql: `
+      ALTER TABLE workdesk_dialog_bindings ADD COLUMN acknowledged INTEGER NOT NULL DEFAULT 0;
+      CREATE TABLE workdesk_dialog_receipts (
+        assignment_id TEXT NOT NULL,
+        message_id INTEGER NOT NULL,
+        PRIMARY KEY (assignment_id, message_id)
+      ) STRICT;
+      CREATE TABLE workdesk_dialog_messages (
+        assignment_id TEXT NOT NULL,
+        message_id INTEGER NOT NULL,
+        sealed BLOB NOT NULL,
+        PRIMARY KEY (assignment_id, message_id),
+        FOREIGN KEY (assignment_id, message_id)
+          REFERENCES workdesk_dialog_receipts (assignment_id, message_id)
+      ) STRICT;
+    `,
+  },
+  {
+    version: 8,
+    store: 'workdesk-dialog',
+    sql: `
+      CREATE TABLE workdesk_dialog_wakes (
+        id TEXT PRIMARY KEY,
+        task_id INTEGER NOT NULL,
+        assignment_id TEXT NOT NULL,
+        schedule_id TEXT,
+        released INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+      CREATE INDEX workdesk_dialog_wake_pending ON workdesk_dialog_wakes (task_id) WHERE released = 0;
+    `,
+  },
 ]
 
 /** The version the code makes a file: the last step's. */

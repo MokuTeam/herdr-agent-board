@@ -156,7 +156,15 @@ export function targetOf(
 ): { item?: Item; other?: Item } {
   const own = items.find(i => i.key === entry.key)
   if (own) return { item: own }
-  if (entry.receipt || entry.kind === 'restart' || entry.kind === 'sleep' || !entry.pane || !entry.cwd) return {}
+  if (
+    entry.receipt ||
+    entry.workdeskDialogWake !== undefined ||
+    entry.kind === 'restart' ||
+    entry.kind === 'sleep' ||
+    !entry.pane ||
+    !entry.cwd
+  )
+    return {}
   const next = items.find(i => i.pane === entry.pane && i.session && !i.sleeping && folder(i.cwd) === folder(entry.cwd))
   if (!next) return {}
   const was = profileOf(entry.key)

@@ -82,6 +82,7 @@ import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
 import { createWorkHub, type WorkHub } from '../services/work-hub.ts'
 import { keepThreadsDb, threadsPayload, withThreadsDb } from '../services/work-threads.ts'
 import { createWorkdeskDialog } from '../services/workdesk-dialog.ts'
+import { connectWorkdeskDialogLauncher } from '../services/workdesk-dialog-launcher.ts'
 import { createWorkdeskWatcher } from '../services/workdesk-watcher.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, peerOf, type Route } from './http.ts'
@@ -626,9 +627,17 @@ export async function startServer({
     onChange: () => board.publish(),
     log,
   })
+  const dialogLauncher = connectWorkdeskDialogLauncher(
+    cfg,
+    () => board.observation()?.items ?? null,
+    () => board.publish(),
+  )
   const workdeskDialog = createWorkdeskDialog({
     cfg,
     items: () => board.observation()?.items ?? null,
+    sink: dialogLauncher.sink,
+    recipientReady: dialogLauncher.ready,
+    recipientDelivering: dialogLauncher.delivering,
     onChange: () => board.publish(),
   })
   const board = createBoardState({
@@ -895,7 +904,7 @@ export async function startServer({
   ]
   refresh()
   // The port makes it one board per machine, so one scheduler; claims cover an overlap.
-  const scheduler = startScheduler({ deps, onChange: refresh })
+  const scheduler = startScheduler({ deps, onChange: refresh, dialogRecipient: dialogLauncher.sink.permits })
   workdesk.configChanged()
   workdeskDialog.configChanged()
   // Auto-compact (#378) beside it, for the same reason: one board types /compact.
@@ -950,6 +959,7 @@ export async function startServer({
       calendar.configChanged()
       reminders.configChanged()
       workdesk.configChanged()
+      dialogLauncher.configChanged()
       workdeskDialog.configChanged()
       team.refresh()
       holdLoopback6()
@@ -961,6 +971,7 @@ export async function startServer({
       for (const watcher of watchers) watcher.close()
       omarchy?.close()
       scheduler.stop()
+      dialogLauncher.close()
       await Promise.all([workdesk.stop(), workdeskDialog.stop()])
       compactor.stop()
       backups.stop()

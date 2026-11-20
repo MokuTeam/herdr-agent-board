@@ -1,5 +1,5 @@
 import { openDb } from '../adapters/db.ts'
-import { workdeskDialogStore } from '../adapters/workdesk-dialog-store.ts'
+import { type ProtectedDialogSink, workdeskDialogStore } from '../adapters/workdesk-dialog-store.ts'
 import { WorkdeskToolError, withWorkdeskMcp } from '../adapters/workdesk-mcp.ts'
 import type { Config, Item } from '../core/types.ts'
 import { threadsConfig } from '../core/work-threads.ts'
@@ -10,6 +10,8 @@ import {
   type DialogStatus,
   OWNER_EVENT_LIMIT,
   ownerEvents,
+  ownerMessages,
+  validCursor,
   type WorkdeskDialogConfig,
   workdeskDialogConfig,
 } from '../core/workdesk-dialog.ts'
@@ -18,6 +20,9 @@ type Options = {
   cfg: Config
   items(): readonly Item[] | null
   onChange(): void
+  sink?: ProtectedDialogSink
+  recipientReady?(): boolean
+  recipientDelivering?(): boolean
 }
 
 const idle = (): DialogStatus => ({
@@ -38,7 +43,7 @@ function toolProblem(error: unknown, fallback: DialogProblem): DialogProblem {
   return fallback
 }
 
-export function createWorkdeskDialog({ cfg, items, onChange }: Options) {
+export function createWorkdeskDialog({ cfg, items, onChange, sink, recipientReady, recipientDelivering }: Options) {
   let status: DialogStatus | null = null
   let config: WorkdeskDialogConfig | null = null
   let signature = ''
@@ -67,6 +72,15 @@ export function createWorkdeskDialog({ cfg, items, onChange }: Options) {
           if (!db) throw new Error('Workdesk dialog store unavailable')
           try {
             const store = workdeskDialogStore(db, items)
+            const releaseWakes = () => {
+              if (!sink || signal.aborted || !threadsConfig(cfg.threads)) return
+              try {
+                store.releaseWakes(active.onlyTaskId, Date.now(), sink.permits)
+              } catch {
+                next.problem ??= 'wake'
+              }
+            }
+            releaseWakes()
             for (let n = 0; n < MAX_DISCOVERY_PAGES; n++) {
               const after = store.cursor()
               let data: unknown
@@ -122,7 +136,58 @@ export function createWorkdeskDialog({ cfg, items, onChange }: Options) {
               }
               if ('problem' in resolved) return resolved.problem
               const { binding } = resolved
-              return store.notice(group, binding, Date.now()) ?? 'protected_delivery_unavailable'
+              const notice = store.notice(group, binding, Date.now())
+              if (notice) return notice
+              if (!sink?.permits(binding)) return 'protected_delivery_unavailable'
+
+              const { task_id, assignment_id, executor, acknowledged } = binding
+              const key = { task_id, assignment_id, executor }
+              const cursor = store.cursor()
+              let data: unknown
+              try {
+                data = await mcp.call('read_owner_messages', { ...key, after: acknowledged })
+              } catch (error) {
+                return toolProblem(error, 'read')
+              }
+              signal.throwIfAborted()
+              if (!threadsConfig(cfg.threads)) return 'threads_disabled'
+              const page = ownerMessages(data, binding, acknowledged)
+              if (!page) return 'invalid_page'
+              // Only deliver a prefix already covered by the durable discovery cursor.
+              const messages = page.entries.filter(message => message.id <= cursor)
+              const through = messages.at(-1)?.id
+              if (through === undefined) return 'invalid_page'
+              try {
+                const problem = store.stage(group, binding, page.revision, messages, through, sink, !!recipientReady)
+                if (problem) return problem
+              } catch {
+                return 'protected_delivery_failed'
+              }
+
+              releaseWakes()
+              const authority = store.current(group, binding)
+              if ('problem' in authority) return authority.problem
+              if (!sink.permits(authority.binding)) return 'protected_delivery_unavailable'
+              signal.throwIfAborted()
+              // Recovery after a lost ACK response: local staging above must still succeed,
+              // then the authenticated read can prove that Workdesk already applied the ACK.
+              if (page.deliveredThrough < through) {
+                try {
+                  const receipt = object(await mcp.call('ack_owner_messages', { ...key, through }))
+                  if (
+                    receipt?.task_id !== task_id ||
+                    receipt.assignment_id !== assignment_id ||
+                    !validCursor(receipt.delivered_through) ||
+                    receipt.delivered_through < through ||
+                    typeof receipt.replayed !== 'boolean'
+                  )
+                    return 'ack'
+                } catch (error) {
+                  return toolProblem(error, 'ack')
+                }
+              }
+              store.confirm(binding, through)
+              return null
             }
 
             const pending = store.pending(active.onlyTaskId)
@@ -168,7 +233,15 @@ export function createWorkdeskDialog({ cfg, items, onChange }: Options) {
   }
 
   return {
-    view: () => status,
+    view: (): DialogStatus | null => {
+      if (!status) return null
+      const attached = recipientReady?.() === true
+      return {
+        ...status,
+        delivery: attached ? 'recipient_attached' : 'awaiting_recipient',
+        ...(attached && { deliverEnabled: recipientDelivering?.() === true }),
+      }
+    },
     configChanged(): void {
       const next = JSON.stringify(cfg.workdeskDialog ? [cfg.workdeskDialog, cfg.workdesk] : null)
       if (signature === next) return

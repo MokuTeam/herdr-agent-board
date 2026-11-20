@@ -23,6 +23,16 @@ export type OwnerEvent = {
   created_at: number
 }
 
+export type OwnerMessage = {
+  id: number
+  revision: number
+  kind: OwnerKind
+  text: string
+  question_id: number | null
+  option_id: string | null
+  created_at: number
+}
+
 export type LegacyDialogBinding = {
   taskId: number
   assignmentId: string
@@ -33,20 +43,23 @@ export type LegacyDialogBinding = {
 export type WorkdeskDialogConfig = WorkdeskMcpConfig & {
   legacyBindings: Map<number, LegacyDialogBinding>
   onlyTaskId?: number
+  receiver?: 'launcher'
 }
 
-/** Reuse the W1 transport and credential, with a separate cadence and delivery scope. */
+/** Use the same transport and credential as W1, with an independent poll interval. */
 export function workdeskDialogConfig(raw: unknown, source: unknown): WorkdeskDialogConfig | null {
   const dialog = object(raw)
   const watch = workdeskConfig(source)
   if (!dialog || !watch) return null
-  const { intervalSec = 60, legacyBindings: entries = [], onlyTaskId = watch.onlyTaskId } = dialog
+  const { intervalSec = 60, legacyBindings: entries = [], onlyTaskId = watch.onlyTaskId, receiver, deliver } = dialog
   const mcp = workdeskMcpConfig({ ...watch, intervalSec })
   if (
     !mcp ||
     !Array.isArray(entries) ||
     (onlyTaskId !== undefined && !validTaskId(onlyTaskId)) ||
-    (watch.onlyTaskId !== undefined && onlyTaskId !== watch.onlyTaskId)
+    (watch.onlyTaskId !== undefined && onlyTaskId !== watch.onlyTaskId) ||
+    (receiver !== undefined && (receiver !== 'launcher' || !validTaskId(onlyTaskId))) ||
+    (deliver !== undefined && (receiver !== 'launcher' || typeof deliver !== 'boolean'))
   )
     return null
   const legacyBindings = new Map<number, LegacyDialogBinding>()
@@ -70,10 +83,17 @@ export function workdeskDialogConfig(raw: unknown, source: unknown): WorkdeskDia
     assignments.add(assignmentId)
     threads.add(threadId)
   }
-  return { ...mcp, legacyBindings, ...(onlyTaskId !== undefined && { onlyTaskId }) }
+  return { ...mcp, legacyBindings, ...(onlyTaskId !== undefined && { onlyTaskId }), ...(receiver && { receiver }) }
 }
 
 export type DialogTarget = { task_id: number; assignment_id: string; executor: string; thread_id: string; sid: string }
+export const sameDialogTarget = (a: DialogTarget, b: DialogTarget): boolean =>
+  a.task_id === b.task_id &&
+  a.assignment_id === b.assignment_id &&
+  a.executor === b.executor &&
+  a.thread_id === b.thread_id &&
+  a.sid === b.sid
+
 type Page<T> = { entries: T[]; cursor: number; more: boolean }
 
 export type DialogProblem =
@@ -93,12 +113,17 @@ export type DialogProblem =
   | 'thread_missing'
   | 'thread_reassigned'
   | 'thread_scope'
+  | 'wake'
   | 'session_unavailable'
   | 'threads_disabled'
   | 'protected_delivery_unavailable'
+  | 'protected_delivery_failed'
+  | 'read'
+  | 'ack'
 
 export type DialogStatus = {
-  delivery: 'awaiting_recipient'
+  delivery: 'awaiting_recipient' | 'recipient_attached'
+  deliverEnabled?: boolean
   pending: number | null
   more: boolean | null
   polledAt: number | null
@@ -154,4 +179,43 @@ export function ownerEvents(raw: unknown, after: number): Page<OwnerEvent> | nul
       return null
     return { id, board_task_id, assignment_id, revision, executor, board_status, kind, created_at }
   })
+}
+
+export function ownerMessages(
+  raw: unknown,
+  target: DialogTarget,
+  after: number,
+): (Page<OwnerMessage> & { revision: number; deliveredThrough: number }) | null {
+  const body = object(raw)
+  if (
+    !body ||
+    body.task_id !== target.task_id ||
+    body.assignment_id !== target.assignment_id ||
+    body.executor !== target.executor ||
+    !validTaskId(body.revision) ||
+    !boardStatus(body.status) ||
+    !validCursor(body.delivered_through) ||
+    body.delivered_through < after
+  )
+    return null
+  const revision = body.revision
+  const parsed = page(body, 'messages', after, value => {
+    const payload = object(value)
+    if (!payload) return null
+    const { id, revision: messageRevision, kind, text, question_id, option_id, created_at } = payload
+    if (
+      !validTaskId(id) ||
+      !validTaskId(messageRevision) ||
+      messageRevision > revision ||
+      !kindOf(kind) ||
+      typeof text !== 'string' ||
+      !validCursor(created_at)
+    )
+      return null
+    if (kind === 'choice') {
+      if (!validTaskId(question_id) || typeof option_id !== 'string' || !option_id) return null
+    } else if (question_id !== null || option_id !== null) return null
+    return { id, revision: messageRevision, kind, text, question_id, option_id, created_at }
+  })
+  return parsed && { ...parsed, revision, deliveredThrough: body.delivered_through }
 }

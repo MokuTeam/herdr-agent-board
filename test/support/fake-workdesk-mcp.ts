@@ -2,7 +2,7 @@ import { appendFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { isRecord, readJson, updateJson } from '../../src/adapters/json-store.ts'
 import type { WorkdeskTask } from '../../src/core/workdesk.ts'
-import type { OwnerEvent } from '../../src/core/workdesk-dialog.ts'
+import type { OwnerEvent, OwnerMessage } from '../../src/core/workdesk-dialog.ts'
 
 type State = {
   tasks: WorkdeskTask[]
@@ -14,8 +14,17 @@ type State = {
   invalidList?: boolean
   dialog?: {
     events: OwnerEvent[]
+    messages: OwnerMessage[]
+    assignment: string
+    executor: string
+    task: number
+    revision: number
+    delivered: number
+    omitMessage?: number
+    readDelayMs?: number
     pageSize?: number
     invalidList?: boolean
+    dropAck?: 'before' | 'after' | undefined
     deny?: string
   }
 }
@@ -64,11 +73,11 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (params.name === 'list_board_tasks') send(id, response({ tasks: state.invalidList ? null : state.tasks }))
   if (state.dialog && dialogTools.includes(params.name)) {
     const dialog = state.dialog
-    const { after } = params.arguments
+    const { after, through, task_id, assignment_id, executor } = params.arguments
     if (dialog.deny === params.name) {
       send(id, response({ code: 'role_denied', status: 403 }, true))
     } else if (params.name === 'list_owner_events') {
-      const remaining = dialog.events.filter(e => e.id > after)
+      const remaining = dialog.events.filter(e => e.id > after && e.id > dialog.delivered)
       const events = remaining.slice(0, dialog.pageSize ?? params.arguments.limit)
       send(
         id,
@@ -78,9 +87,51 @@ for await (const line of createInterface({ input: process.stdin })) {
           more: remaining.length > events.length,
         }),
       )
+    } else if (task_id !== dialog.task || assignment_id !== dialog.assignment) {
+      send(id, response({ code: 'assignment_mismatch', status: 409 }, true))
+    } else if (executor !== dialog.executor) {
+      send(id, response({ code: 'conflict', status: 409 }, true))
+    } else if (params.name === 'read_owner_messages') {
+      if (dialog.readDelayMs) await Bun.sleep(dialog.readDelayMs)
+      const remaining = dialog.messages.filter(m => m.id > after && m.id !== dialog.omitMessage)
+      const messages = remaining.slice(0, 50)
+      send(
+        id,
+        response({
+          task_id,
+          assignment_id,
+          executor,
+          revision: dialog.revision,
+          status: 'done',
+          delivered_through: dialog.delivered,
+          messages,
+          cursor: messages.at(-1)?.id ?? after,
+          more: remaining.length > 50,
+        }),
+      )
     } else {
-      // This path is outside the metadata watcher. Fail tests if it tries to call it.
-      send(id, response({ code: 'unexpected_dialog_call', status: 403 }, true))
+      if (dialog.dropAck === 'before') process.exit(1)
+      const next = updateJson(
+        statePath,
+        live => {
+          if (!live?.dialog) throw new Error('fixture dialog removed')
+          return {
+            ...live,
+            dialog: { ...live.dialog, delivered: Math.max(live.dialog.delivered, through), dropAck: undefined },
+          }
+        },
+        isState,
+      )
+      if (dialog.dropAck === 'after') process.exit(1)
+      send(
+        id,
+        response({
+          task_id,
+          assignment_id,
+          delivered_through: next.dialog?.delivered,
+          replayed: through <= dialog.delivered,
+        }),
+      )
     }
   }
   if (params.name !== 'claim_task') continue
