@@ -1,6 +1,7 @@
 // Git, read-only: the checkout a folder is in, and a bounded view of its changes.
 import { execFile } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
+import { repoAddress } from '../core/portable.ts'
 import { run } from './process.ts'
 
 const LIMIT = 256 * 1024
@@ -124,4 +125,75 @@ export async function repoRoot(dir: string): Promise<string | null> {
   if (r.code !== 0) return null
   const common = resolve(r.stdout.trim())
   return /(^|[\\/])\.git$/.test(common) ? dirname(common) : null
+}
+
+/** git's answer, trimmed, or null when it fails (a ref that does not exist, no checkout). */
+async function gitLine(cwd: string, args: string[]): Promise<string | null> {
+  try {
+    return (await git(cwd, args)).text.trim()
+  } catch {
+    return null
+  }
+}
+
+/** What the portability rule (core/portable.ts) reads of a checkout, without a fetch. */
+export interface CheckoutFacts {
+  root: string
+  /** The remote HEAD's upstream is on, else `origin`, else the first; null when there is none. */
+  remote: { name: string; url: string; address: string | null } | null
+  /** No changes in the tree or the index, untracked files included. */
+  clean: boolean
+  /** HEAD equals its upstream as last fetched; false with no upstream or no commit. */
+  headPushed: boolean
+}
+
+/** The remotes of a checkout, and the one a branch with no upstream would go to. */
+async function remotes(root: string): Promise<{ names: string[]; fallback: string | null }> {
+  const names = ((await gitLine(root, ['remote'])) ?? '').split(/\r?\n/).filter(Boolean)
+  return { names, fallback: names.includes('origin') ? 'origin' : (names[0] ?? null) }
+}
+
+/** The facts of the checkout a folder is in, or null when it is in none. */
+export async function checkoutFacts(dir: string): Promise<CheckoutFacts | null> {
+  const top = await gitLine(dir, ['rev-parse', '--show-toplevel'])
+  if (!top) return null
+  const root = resolve(top)
+  const [known, status, head, upstream, upstreamRef] = await Promise.all([
+    remotes(root),
+    git(root, ['status', '--porcelain=v1', '--untracked-files=normal']).catch(() => null),
+    gitLine(root, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']),
+    gitLine(root, ['rev-parse', '--verify', '--quiet', '@{upstream}^{commit}']),
+    gitLine(root, ['rev-parse', '--symbolic-full-name', '@{upstream}']),
+  ])
+  if (!status) return null
+  // refs/remotes/<remote>/<branch>; a remote's name may hold a slash, so the longest that fits.
+  const tracked = upstreamRef?.startsWith('refs/remotes/')
+    ? known.names.filter(n => upstreamRef.startsWith(`refs/remotes/${n}/`)).sort((a, b) => b.length - a.length)[0]
+    : undefined
+  const name = tracked ?? known.fallback
+  const url = name ? await gitLine(root, ['remote', 'get-url', name]) : null
+  return {
+    root,
+    remote: name && url ? { name, url, address: repoAddress(url) } : null,
+    clean: !status.truncated && status.text.trim() === '',
+    headPushed: !!head && head === upstream,
+  }
+}
+
+/**
+ * Whether a branch equals its remote branch, as last fetched: its upstream, or the same name on
+ * the checkout's remote when it has none. A remote-tracking branch itself (`origin/main`) is on
+ * the remote already. A branch on neither side: false.
+ */
+export async function branchPushed(dir: string, branch: string): Promise<boolean> {
+  if (!branch) return false
+  const local = await gitLine(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`])
+  if (!local) return !!(await gitLine(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/${branch}^{commit}`]))
+  let remote = await gitLine(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}@{upstream}^{commit}`])
+  if (!remote) {
+    const { fallback } = await remotes(dir)
+    if (fallback)
+      remote = await gitLine(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/${fallback}/${branch}^{commit}`])
+  }
+  return !!remote && remote === local
 }
