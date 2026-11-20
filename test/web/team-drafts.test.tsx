@@ -167,6 +167,48 @@ test('in its thread a draft says when the agent wrote it, so two drafts of one f
   expect(whens[0]).not.toBe(whens[1])
 })
 
+test('two drafts of one earlier day say their times (#465), the full date on hover; in UTC and in Dubai', () => {
+  const line = (id: string, ts: string) => ({
+    id,
+    dir: 'draft' as const,
+    text: '',
+    ts,
+    via: 'agent' as const,
+    file: { state: 'draft' as const, name: 'PROPOSAL.md', size: 19762 },
+  })
+  const whens = (zone: string) => {
+    const was = process.env.TZ
+    process.env.TZ = zone
+    try {
+      const out = renderInBoard(
+        <TeamBody
+          {...body({
+            selected: `${ANNA}/${TOPIC}`,
+            thread: THREADS[0] as ThreadView,
+            lines: [line('d1', '2026-11-12T13:17:00.000Z'), line('d2', '2026-11-12T18:08:00.000Z')],
+          })}
+        />,
+        // The next day in UTC, so both are yesterday's; a minute past midnight in Dubai, so both are Thursday's.
+        board({ now: Date.parse('2026-11-13T20:01:00.000Z') }),
+      )
+      return findAll(out, n => n.kind === 'element' && n.attrs.get('class') === 'team-draft-when').map(n => ({
+        label: text([n]).replace(/\s/g, ' '),
+        title: (n.kind === 'element' && n.attrs.get('title')?.replace(/\s/g, ' ')) || '',
+      }))
+    } finally {
+      process.env.TZ = was ?? 'UTC'
+    }
+  }
+  expect(whens('UTC')).toEqual([
+    { label: 'Yesterday 1:17 PM', title: 'Thursday, November 12, 2026, 1:17 PM' },
+    { label: 'Yesterday 6:08 PM', title: 'Thursday, November 12, 2026, 6:08 PM' },
+  ])
+  expect(whens('Asia/Dubai')).toEqual([
+    { label: 'Thu 5:17 PM', title: 'Thursday, November 12, 2026, 5:17 PM' },
+    { label: 'Thu 10:08 PM', title: 'Thursday, November 12, 2026, 10:08 PM' },
+  ])
+})
+
 test('draftWhere: a new topic by the title it would start; a former member; a channel by its title', () => {
   const t = translator('en')
   const v = VIEW as never

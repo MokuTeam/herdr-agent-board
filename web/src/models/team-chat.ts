@@ -117,6 +117,19 @@ export function listWhen(ts: string, t: Translator, now: number): string {
   return d.toLocaleDateString(t.lang, { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) })
 }
 
+/**
+ * A draft's time over it in its thread (#465): the time today, else the list's day and the time
+ * ("Yesterday 2:05 PM", "Mon 2:05 PM", "Nov 12, 2:05 PM"), so two drafts of one earlier day differ.
+ */
+export function draftWhen(ts: string, t: Translator, now: number): string {
+  const ms = msOf({ ts })
+  const days = daysFrom(ms, now)
+  const time = timeOf(ms, t)
+  if (days >= 0 && days <= 1) return time
+  // A weekday or "Yesterday" takes the time as a card's clock does ("Fri 9:00"); a date, after a comma.
+  return `${listWhen(ts, t, now)}${days < 0 && days > -7 ? ' ' : ', '}${time}`
+}
+
 /** One line of a text: its whitespace folded, cut at `max` characters with an ellipsis. */
 export function oneLine(text: string, max = LINE_CHARS): string {
   // By code point: an emoji is never cut in half.

@@ -28,7 +28,7 @@ import {
   type ThreadLine,
   type ThreadView,
 } from '../../models/team.ts'
-import { chatItems, listWhen, type Quote, quoteOf } from '../../models/team-chat.ts'
+import { chatItems, draftWhen, fullWhen, type Quote, quoteOf } from '../../models/team-chat.ts'
 import { confirmError, ownerPost } from '../../models/team-confirm.ts'
 import type { TopicWork } from '../../models/work-share.ts'
 import { statusColor } from '../../models/work-threads.ts'
@@ -364,8 +364,10 @@ function AgentDraft({
         <span>{t('team.draftFromAgent')}</span>
         {line.agent && <code>{line.agent}</code>}
         {line.reason && <span>{draftWhy(line.reason, t)}</span>}
-        {/* When the agent wrote it (#415): two drafts of one file are told apart by it. */}
-        <span className="team-draft-when">{listWhen(line.ts, t, now)}</span>
+        {/* When the agent wrote it (#415, #465): two drafts of one file are told apart by it. */}
+        <span className="team-draft-when" title={fullWhen(line.ts, t)}>
+          {draftWhen(line.ts, t, now)}
+        </span>
       </div>
       {quote && <QuoteView quote={quote} onQuote={onQuote} />}
       {(line.text !== '' || !line.file) && <MessageText text={line.text ?? ''} />}

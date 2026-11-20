@@ -17,6 +17,7 @@ import {
   bubbleTime,
   chatItems,
   deliveryOf,
+  draftWhen,
   firstUnread,
   fullWhen,
   GROUP_MS,
@@ -114,6 +115,44 @@ describe('days and times, on a fixed clock', () => {
       expect(listWhen('2025-12-31T08:05:00Z', en, NOW)).toBe('Dec 31, 2025')
       expect(listWhen('2026-11-10T08:05:00Z', ru, NOW)).toBe('Вчера')
     })
+  })
+
+  test('a draft’s time (#465): the time today, else the day and the time, so one earlier day’s drafts differ', () => {
+    inZone('UTC', () => {
+      const list = [
+        '2026-11-11T08:05:00Z',
+        '2026-11-10T08:05:00Z',
+        '2026-11-10T18:40:00Z',
+        '2026-11-08T08:05:00Z',
+        '2026-10-22T08:05:00Z',
+        '2026-10-22T16:30:00Z',
+        '2025-12-31T08:05:00Z',
+      ]
+      expect(list.map(ts => plain(draftWhen(ts, en, NOW)))).toEqual([
+        '8:05 AM',
+        'Yesterday 8:05 AM',
+        'Yesterday 6:40 PM',
+        'Sun 8:05 AM',
+        'Oct 22, 8:05 AM',
+        'Oct 22, 4:30 PM',
+        'Dec 31, 2025, 8:05 AM',
+      ])
+      expect(draftWhen('2026-11-10T08:05:00Z', ru, NOW)).toBe('Вчера 8:05')
+      expect(draftWhen('2026-10-22T08:05:00Z', ru, NOW)).toBe('22 окт., 8:05')
+    })
+  })
+
+  test('a draft’s time around midnight goes by the board’s time zone: UTC and Dubai disagree on the day', () => {
+    const pair = (now: string, zone: string) =>
+      inZone(zone, () =>
+        ['2026-11-10T23:50:00Z', '2026-11-11T00:10:00Z'].map(ts => plain(draftWhen(ts, en, Date.parse(now)))),
+      )
+    // Ten minutes past midnight in UTC: the earlier draft was yesterday. In Dubai both are this morning's.
+    expect(pair('2026-11-11T00:20:00Z', 'UTC')).toEqual(['Yesterday 11:50 PM', '12:10 AM'])
+    expect(pair('2026-11-11T00:20:00Z', 'Asia/Dubai')).toEqual(['3:50 AM', '4:10 AM'])
+    // A day later both are yesterday's in UTC, and still told apart by their times.
+    expect(pair('2026-11-12T00:20:00Z', 'UTC')).toEqual(['Tue 11:50 PM', 'Yesterday 12:10 AM'])
+    expect(pair('2026-11-12T00:20:00Z', 'Asia/Dubai')).toEqual(['Yesterday 3:50 AM', 'Yesterday 4:10 AM'])
   })
 })
 
