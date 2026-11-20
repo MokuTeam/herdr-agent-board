@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { normalizeConfig } from '../../src/core/categories.ts'
 import {
   DEVICE_ID,
+  type DeviceConfig,
   defaultThresholds,
   deviceIdFromHost,
   LOCAL,
@@ -20,6 +21,8 @@ import {
 } from '../../src/core/nodes.ts'
 
 const ssh = { kind: 'ssh', host: '203.0.113.10', user: 'agent-board-link' }
+/** A device with its bare maps as plain objects, for deepEqual. */
+const plain = (d: DeviceConfig | undefined) => d && { ...d, profiles: { ...d.profiles }, mcp: { ...d.mcp } }
 const conf = (raw: unknown, host = 'LAPTOP'): NodesConfig => {
   const c = nodesConfig(raw, host)
   assert.ok(c)
@@ -77,7 +80,7 @@ describe('nodesConfig', () => {
     assert.equal(c.whenFull, 'local')
     assert.deepEqual(c.lanes, ['atlas', 'tools'])
     assert.deepEqual(c.relay, { host: 'relay.example.com', sshPort: 22, user: 'agent-board-relay-m' })
-    assert.deepEqual(c.devices['server-1'], {
+    assert.deepEqual(plain(c.devices['server-1']), {
       id: 'server-1',
       title: 'Server 1',
       link: { kind: 'ssh', host: '203.0.113.10', sshPort: 22, user: 'agent-board-link', port: 12430 },
@@ -104,7 +107,7 @@ describe('nodesConfig', () => {
     assert.equal(c.id, 'laptop')
     assert.deepEqual(c.order, [LOCAL])
     assert.deepEqual(Object.keys(c.devices), [LOCAL])
-    assert.deepEqual(c.devices.local, {
+    assert.deepEqual(plain(c.devices.local), {
       id: 'local',
       title: 'local',
       link: null,
@@ -171,12 +174,20 @@ describe('nodesConfig', () => {
       [{}, 'link', 'required'],
       [{ link: 'ssh://x' }, 'link', 'type'],
       [{ link: { kind: 'carrier-pigeon' } }, 'link.kind', 'kind'],
+      [{ link: { host: 'h' } }, 'link.kind', 'required'],
       [{ link: { ...ssh, user: undefined } }, 'link.user', 'required'],
       [{ link: { ...ssh, host: 'two words' } }, 'link.host', 'type'],
       [{ link: { ...ssh, sshPort: 0 } }, 'link.sshPort', 'port'],
       [{ link: { ...ssh, port: '12430' } }, 'link.port', 'port'],
       [{ link: { ...ssh, password: 'hunter2' } }, 'link.password', 'unknown'],
       [{ link: { kind: 'direct', url: 'file:///etc/passwd' } }, 'link.url', 'url'],
+      [{ link: { kind: 'direct', url: 'http://203.0.113.9:12430' } }, 'link.url', 'url'],
+      [{ link: { kind: 'direct', url: 'https://user:hunter2@node.example.com' } }, 'link.url', 'url'],
+      [{ link: { ...ssh, host: '-oProxyCommand=x' } }, 'link.host', 'type'],
+      [{ link: { ...ssh, user: '-oFoo=bar' } }, 'link.user', 'type'],
+      [{ link: { kind: 'tailnet', address: 'a\u202eb' } }, 'link.address', 'type'],
+      [{ link: ssh, title: 'a\u001b[2Jb' }, 'title', 'type'],
+      [{ link: ssh, title: 'x'.repeat(201) }, 'title', 'type'],
       [{ link: { kind: 'relay', socket: 's' } }, 'link.kind', 'relay'],
       [{ link: ssh, maxSessions: 0 }, 'maxSessions', 'number'],
       [{ link: ssh, maxSessions: 2.5 }, 'maxSessions', 'number'],
@@ -188,16 +199,13 @@ describe('nodesConfig', () => {
       [{ link: ssh, profiles: { work: 3 } }, 'profiles.work', 'type'],
       [{ link: ssh, mcp: { x: true } }, 'mcp.x', 'type'],
       [{ link: ssh, sinks: [] }, 'sinks', 'type'],
-      ['server', '', 'type'],
+      ['server', 'id', 'type'],
     ]
     for (const [dev, key, why] of cases) {
       const c = conf({ devices: { s1: dev } })
       assert.equal(c.devices.s1, undefined, JSON.stringify(dev))
       assert.deepEqual(c.order, ['local'], JSON.stringify(dev))
-      assert.ok(
-        c.problems.some(p => p.device === 's1' && p.key === key && p.why === why),
-        `${JSON.stringify(dev)}: ${JSON.stringify(c.problems)}`,
-      )
+      assert.deepEqual(c.problems, [{ device: 's1', key, why }], JSON.stringify(dev))
       assert.ok(!JSON.stringify(c.problems).includes('hunter2'))
     }
   })
@@ -209,17 +217,17 @@ describe('nodesConfig', () => {
     })
     assert.deepEqual(Object.keys(c.devices), ['local'])
     assert.deepEqual(
-      c.problems.map(p => [p.device, p.why]),
+      c.problems.map(p => [p.device, p.key, p.why]),
       [
-        ['Server-1', 'id'],
-        ['a:b', 'id'],
-        ['@x', 'id'],
-        ['laptop', 'self'],
+        ['Server-1', 'id', 'id'],
+        ['a:b', 'id', 'id'],
+        ['@x', 'id', 'id'],
+        ['laptop', 'id', 'self'],
       ],
     )
   })
 
-  test('local holds thresholds only: a link there is a problem, and local stays with none', () => {
+  test('local has no link: one there is a problem, and local stays with no thresholds of its own', () => {
     const c = conf({ devices: { local: { link: ssh, maxSessions: 3 } } })
     assert.deepEqual(c.problems, [{ device: 'local', key: 'link', why: 'local' }])
     assert.equal(c.devices.local?.link, null)
@@ -241,6 +249,9 @@ describe('nodesConfig', () => {
   })
 
   test('relay: read, and one that does not check out is named and is none', () => {
+    assert.deepEqual(conf({ relay: { host: 'r', user: 'm', sshPort: 0 } }).problems, [
+      { key: 'relay.sshPort', why: 'port' },
+    ])
     const c = conf({ relay: { host: 'relay.example.com', user: 'm' } })
     assert.deepEqual(c.relay, { host: 'relay.example.com', sshPort: 22, user: 'm' })
     const d = conf({
@@ -254,6 +265,77 @@ describe('nodesConfig', () => {
     ])
     assert.deepEqual(conf({ relay: 'x' }).problems, [{ key: 'relay', why: 'type' }])
     assert.deepEqual(conf({ relay: { user: 'm' } }).problems, [{ key: 'relay.host', why: 'required' }])
+  })
+})
+
+describe('nodesConfig on what JSON.parse makes', () => {
+  test('__proto__ and constructor are keys like any other, never a prototype', () => {
+    const c = conf(
+      JSON.parse(
+        '{"devices":{"s1":{"link":{"kind":"ssh","host":"h","user":"u"},"profiles":{"__proto__":"work","constructor":"x"},"mcp":{"__proto__":{"command":"evil"}}},"__proto__":{"link":{"kind":"ssh","host":"h","user":"u"}}}}',
+      ),
+    )
+    const s1 = c.devices.s1
+    assert.ok(s1)
+    assert.deepEqual(Object.keys(s1.profiles), ['__proto__', 'constructor'])
+    assert.equal(Object.getOwnPropertyDescriptor(s1.profiles, '__proto__')?.value, 'work')
+    assert.deepEqual(Object.keys(s1.mcp), ['__proto__'])
+    assert.equal((s1.mcp as { command?: unknown }).command, undefined)
+    assert.deepEqual(Object.keys(c.devices).sort(), ['local', 's1'])
+    assert.deepEqual(c.problems, [{ device: '__proto__', key: 'id', why: 'id' }])
+  })
+
+  test('a device id taken from a key finds only devices that were given', () => {
+    const c = conf({})
+    for (const id of ['constructor', 'tostring', 'valueof', 'hasownproperty']) {
+      const parsed = parseNodeKey(`@${id}:pane-1`)
+      assert.equal(parsed?.device, id)
+      assert.equal(c.devices[id], undefined, id)
+    }
+    assert.equal(c.devices.local?.profiles.valueOf, undefined)
+  })
+})
+
+describe('nodesConfig, the rest of the section', () => {
+  test('a key set to null counts as absent', () => {
+    const c = conf({ id: null, order: null, whenFull: null, lanes: null, relay: null, devices: null })
+    assert.deepEqual(c.problems, [])
+    assert.equal(c.id, 'laptop')
+    assert.deepEqual(c.order, ['local'])
+    assert.equal(c.whenFull, 'local')
+    assert.deepEqual(c.lanes, [])
+    assert.equal(c.relay, null)
+  })
+
+  test('devices that is not an object is named; this computer stays', () => {
+    for (const devices of [[], 'server-1', 3]) {
+      const c = conf({ devices })
+      assert.deepEqual(c.problems, [{ key: 'devices', why: 'type' }], JSON.stringify(devices))
+      assert.deepEqual(c.order, ['local'])
+      assert.deepEqual(Object.keys(c.devices), ['local'])
+    }
+  })
+
+  test('no host name: the id is "board"', () => {
+    assert.equal(nodesConfig({})?.id, 'board')
+  })
+
+  test('a title is trimmed, tags lose their repeats', () => {
+    const c = conf({ devices: { s: { link: ssh, title: '  Server 1 ', tags: ['linux', 'tests', 'linux'] } } })
+    assert.equal(c.devices.s?.title, 'Server 1')
+    assert.deepEqual(c.devices.s?.tags, ['linux', 'tests'])
+  })
+
+  test('a direct link to this computer over plain http, and to anywhere over https', () => {
+    for (const url of [
+      'http://127.0.0.1:45001',
+      'http://localhost:45001/',
+      'http://[::1]:45001',
+      'https://node.example.com',
+    ]) {
+      const c = conf({ devices: { t: { link: { kind: 'direct', url } } } })
+      assert.deepEqual(c.problems, [], url)
+    }
   })
 })
 
@@ -395,6 +477,18 @@ describe('nodeConfig', () => {
         { id: 's', relay: { host: 'r', user: 'u' } },
         { key: 'relay.socket', why: 'required' },
       ],
+      [
+        { id: 's', relay: { host: 'r', user: 'u', socket: 's', key: 'k' } },
+        { key: 'relay.key', why: 'unknown' },
+      ],
+      [
+        { id: 's', relay: { host: 'r', user: 'u', socket: 's', sshPort: 'x' } },
+        { key: 'relay.sshPort', why: 'port' },
+      ],
+      [
+        { id: 's', workRoot: '/a\n[Service]' },
+        { key: 'workRoot', why: 'type' },
+      ],
     ]
     for (const [raw, problem] of cases) {
       assert.equal(nodeConfig(raw), null, JSON.stringify(raw))
@@ -426,6 +520,17 @@ describe('defaultThresholds', () => {
     assert.equal(defaultThresholds({ memTotalMb: 32768, cpus: 2 }).maxSessions, 8)
     assert.equal(defaultThresholds({ memTotalMb: 512, cpus: 1 }).maxSessions, 1)
     assert.equal(defaultThresholds({ memTotalMb: 32768, cpus: 0 }).maxSessions, 4)
+  })
+
+  test('a status figure that is not a number counts as the least', () => {
+    const least = { maxSessions: 1, minFreeMemMb: 1024, maxLoad: 0.9 }
+    assert.deepEqual(defaultThresholds({ memTotalMb: Number.NaN, cpus: 4 }), least)
+    assert.deepEqual(defaultThresholds({ memTotalMb: 8192, cpus: Number.NaN }), {
+      ...least,
+      maxSessions: 4,
+      minFreeMemMb: 1229,
+    })
+    assert.deepEqual(defaultThresholds({ memTotalMb: Number.POSITIVE_INFINITY, cpus: 1 }), least)
   })
 })
 

@@ -6,6 +6,7 @@
 // Roles are keys. A board without either key sees nothing of this anywhere; one board may hold both:
 //   "nodes": { "id": "laptop", "order": ["server-1", "local"], "devices": { "server-1": { ... } } }
 //   "node": { "id": "server-1", "port": 12430, "workRoot": "~/work" }
+import { hasUnprintable } from './team.ts'
 
 /** This computer in the master's own `order` and `devices`. Only a word there: what crosses a link names the id. */
 export const LOCAL = 'local'
@@ -32,19 +33,22 @@ export interface DeviceConfig {
   minFreeMemMb: number | null
   maxLoad: number | null
   tags: string[]
-  /** The master's profile id to the node's; a profile not named keeps its id. */
+  /** The master's profile id to the node's; a profile not named keeps its id. No prototype: look ids up as they come. */
   profiles: Record<string, string>
   paused: boolean
   drain: boolean
   /** The node's `secrets.sinks`, sent with the bundle and read there by secretsConfig. */
   sinks: unknown
-  /** Per MCP server: false, or { command, args, env }. */
+  /** Per MCP server: false, or { command, args, env }. No prototype. */
   mcp: Record<string, unknown>
   /** Differences the owner has seen and accepts. */
   accept: string[]
 }
 
-/** What does not check out. Never a value: config.json may hold what the owner typed by mistake. */
+/**
+ * What does not check out. Never a value: config.json may hold what the owner typed by mistake.
+ * `key` is the key as written under the section or the device; `id` for a device's own id.
+ */
 export interface NodesProblem {
   device?: string
   key: string
@@ -60,7 +64,10 @@ export interface NodesConfig {
   /** The lanes that may leave this computer, lower-cased; an empty list: none. */
   lanes: 'all' | string[]
   relay: { host: string; sshPort: number; user: string } | null
-  /** The usable devices, `local` always among them. A device with a problem is not here. */
+  /**
+   * The usable devices, `local` always among them. A device with a problem is not here. No
+   * prototype, so a device id taken from a key (`constructor`) finds nothing it was not given.
+   */
   devices: Record<string, DeviceConfig>
   problems: NodesProblem[]
 }
@@ -76,10 +83,21 @@ export interface NodeConfig {
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const isPort = (v: unknown): v is number => Number.isInteger(v) && (v as number) > 0 && (v as number) < 65536
-/** A host, a user or a socket name: a string with no spaces and nothing that could end a command line. */
+/**
+ * A host, a user, an address or a socket name: no spaces, nothing unprintable, and no leading "-"
+ * that ssh would read as an option.
+ */
 const isWord = (v: unknown): v is string =>
-  typeof v === 'string' && v.length > 0 && v.length <= 255 && !/[\s\p{Cc}]/u.test(v)
+  typeof v === 'string' && v.length > 0 && v.length <= 255 && !v.startsWith('-') && !/\s/.test(v) && !hasUnprintable(v)
+/** A title or a folder: trimmed, not empty, at most `max` long, nothing unprintable. */
+const isText = (v: unknown, max: number): v is string =>
+  typeof v === 'string' && v.trim() === v && v.length > 0 && v.length <= max && !hasUnprintable(v)
 const isDevice = (v: unknown): v is string => typeof v === 'string' && DEVICE_ID.test(v) && v !== LOCAL
+/** null where config.json has a key, read as the key not being there. */
+const given = (v: unknown): boolean => v !== undefined && v !== null
+/** A map built from what the owner typed: no prototype, so `__proto__` is a key like any other. */
+const bare = <T>(): Record<string, T> => Object.create(null) as Record<string, T>
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 
 const TOP_KEYS = ['id', 'order', 'whenFull', 'lanes', 'relay', 'devices']
 const DEVICE_KEYS = [
@@ -105,8 +123,10 @@ const LINK_KEYS: Record<LinkConfig['kind'], string[]> = {
 const RELAY_KEYS = ['host', 'sshPort', 'user']
 const NODE_KEYS = ['id', 'port', 'workRoot', 'listen', 'tls', 'relay']
 
-function unknownKeys(o: Record<string, unknown>, known: readonly string[], at: string, out: string[]): void {
-  for (const k of Object.keys(o)) if (!known.includes(k)) out.push(at ? `${at}.${k}` : k)
+type Flag = (key: string, why: string) => void
+
+function unknownKeys(o: Record<string, unknown>, known: readonly string[], at: string, flag: Flag): void {
+  for (const k of Object.keys(o)) if (!known.includes(k)) flag(at ? `${at}.${k}` : k, 'unknown')
 }
 
 /**
@@ -123,43 +143,64 @@ export function deviceIdFromHost(host: string): string {
   return id && id !== LOCAL ? id : 'board'
 }
 
-/** The thresholds a device is given from its first status (design 7.1); the owner may change them. */
+/**
+ * The thresholds a device is given from its first status (design 7.1); the owner may change them.
+ * The status is the node's word: a figure that is not a number counts as the least there is.
+ */
 export function defaultThresholds(hw: { memTotalMb: number; cpus: number }): {
   maxSessions: number
   minFreeMemMb: number
   maxLoad: number
 } {
-  const cpus = Math.max(1, Math.floor(hw.cpus))
-  const bySize = Math.floor((hw.memTotalMb - 1500) / 1500)
+  const mem = Number.isFinite(hw.memTotalMb) ? hw.memTotalMb : 0
+  const cpus = Number.isFinite(hw.cpus) ? Math.max(1, Math.floor(hw.cpus)) : 1
+  const bySize = Math.floor((mem - 1500) / 1500)
   return {
     maxSessions: Math.min(Math.max(bySize, 1), 4 * cpus),
-    minFreeMemMb: Math.max(1024, Math.round(0.15 * hw.memTotalMb)),
+    minFreeMemMb: Math.max(1024, Math.round(0.15 * mem)),
     maxLoad: 0.9,
   }
 }
 
-/** A link as config.json has it, or the keys that do not check out. */
-function linkOf(raw: unknown, relay: boolean, bad: string[]): LinkConfig | null {
+/**
+ * A `direct` link's URL: http(s), no login in it. Plain http only to this computer, as `direct`
+ * is for tests and for a loopback forward the owner keeps up himself.
+ */
+function directUrl(v: unknown): boolean {
+  if (!isWord(v)) return false
+  try {
+    const u = new URL(v)
+    if (u.username || u.password) return false
+    return u.protocol === 'https:' || (u.protocol === 'http:' && LOOPBACK.has(u.hostname))
+  } catch {
+    return false
+  }
+}
+
+/** A link as config.json has it, or null with what does not check out flagged. */
+function linkOf(raw: unknown, relay: boolean, flag: Flag): LinkConfig | null {
   if (!isObject(raw)) {
-    bad.push(raw === undefined ? 'link:required' : 'link:type')
+    flag('link', raw === undefined ? 'required' : 'type')
     return null
   }
   const kind = raw.kind as LinkConfig['kind']
   if (typeof kind !== 'string' || !Object.hasOwn(LINK_KEYS, kind)) {
-    bad.push('link.kind:kind')
+    flag('link.kind', raw.kind === undefined ? 'required' : 'kind')
     return null
   }
-  const before = bad.length
-  const unknown: string[] = []
-  unknownKeys(raw, LINK_KEYS[kind], 'link', unknown)
-  for (const k of unknown) bad.push(`${k}:unknown`)
+  let ok = true
+  const bad: Flag = (key, why) => {
+    ok = false
+    flag(key, why)
+  }
+  unknownKeys(raw, LINK_KEYS[kind], 'link', bad)
   const port = (key: string, dflt: number): number => {
     if (raw[key] === undefined) return dflt
-    if (!isPort(raw[key])) bad.push(`link.${key}:port`)
+    if (!isPort(raw[key])) bad(`link.${key}`, 'port')
     return raw[key] as number
   }
   const word = (key: string): string => {
-    if (!isWord(raw[key])) bad.push(`link.${key}:${raw[key] === undefined ? 'required' : 'type'}`)
+    if (!isWord(raw[key])) bad(`link.${key}`, raw[key] === undefined ? 'required' : 'type')
     return raw[key] as string
   }
   let link: LinkConfig
@@ -167,24 +208,21 @@ function linkOf(raw: unknown, relay: boolean, bad: string[]): LinkConfig | null 
     link = { kind, host: word('host'), sshPort: port('sshPort', 22), user: word('user'), port: port('port', NODE_PORT) }
   } else if (kind === 'relay') {
     link = { kind, socket: word('socket') }
-    if (!relay) bad.push('link.kind:relay')
+    if (!relay) bad('link.kind', 'relay')
   } else if (kind === 'tailnet') {
     link = { kind, address: word('address'), port: port('port', NODE_PORT) }
   } else {
-    const url = raw.url
-    let ok = false
-    if (typeof url === 'string' && isWord(url))
-      try {
-        const u = new URL(url)
-        ok = u.protocol === 'http:' || u.protocol === 'https:'
-      } catch {}
-    if (!ok) bad.push(`link.url:${url === undefined ? 'required' : 'url'}`)
-    link = { kind, url: url as string }
+    if (!directUrl(raw.url)) bad('link.url', raw.url === undefined ? 'required' : 'url')
+    link = { kind, url: raw.url as string }
   }
-  return bad.length === before ? link : null
+  return ok ? link : null
 }
 
-/** One device as config.json has it, or null with its problems added to `problems`. */
+/**
+ * One device as config.json has it, or null with its problems added. A device whose id is this
+ * board's own `nodes.id` is refused too: the records name devices by id, and two with one id
+ * could not be told apart there.
+ */
 function deviceOf(
   id: string,
   raw: unknown,
@@ -192,145 +230,144 @@ function deviceOf(
   selfId: string,
   problems: NodesProblem[],
 ): DeviceConfig | null {
-  const bad: string[] = []
-  if (!DEVICE_ID.test(id)) bad.push(':id')
-  else if (id === selfId) bad.push(':self')
-  const o = isObject(raw) ? raw : {}
-  if (!isObject(raw)) bad.push(':type')
-  const unknown: string[] = []
-  unknownKeys(o, DEVICE_KEYS, '', unknown)
-  for (const k of unknown) bad.push(`${k}:unknown`)
-  const local = id === LOCAL
+  let ok = true
+  const flag: Flag = (key, why) => {
+    ok = false
+    problems.push({ device: id, key, why })
+  }
+  if (!DEVICE_ID.test(id)) flag('id', 'id')
+  else if (id === selfId) flag('id', 'self')
+  if (!isObject(raw)) {
+    flag('id', 'type')
+    return null
+  }
+  const o = raw
+  unknownKeys(o, DEVICE_KEYS, '', flag)
   let link: LinkConfig | null = null
-  if (local) {
-    if (o.link !== undefined) bad.push('link:local')
-  } else if (isObject(raw)) link = linkOf(o.link, relay, bad)
-  const num = (key: string, ok: (n: number) => boolean): number | null => {
+  if (id === LOCAL) {
+    if (o.link !== undefined) flag('link', 'local')
+  } else link = linkOf(o.link, relay, flag)
+  const num = (key: string, fits: (n: number) => boolean): number | null => {
     const v = o[key]
-    if (v === undefined || v === null) return null
-    if (typeof v !== 'number' || !Number.isFinite(v) || !ok(v)) bad.push(`${key}:number`)
+    if (!given(v)) return null
+    if (typeof v !== 'number' || !Number.isFinite(v) || !fits(v)) flag(key, 'number')
     return v as number
   }
-  const strings = (key: string): string[] => {
+  const words = (key: string): string[] => {
     const v = o[key]
     if (v === undefined) return []
     if (!Array.isArray(v) || !v.every(isWord)) {
-      bad.push(`${key}:type`)
+      flag(key, 'type')
       return []
     }
     return [...new Set(v as string[])]
   }
-  const flag = (key: string): boolean => {
+  const yes = (key: string): boolean => {
     const v = o[key]
     if (v === undefined) return false
-    if (typeof v !== 'boolean') bad.push(`${key}:type`)
+    if (typeof v !== 'boolean') flag(key, 'type')
     return v === true
   }
-  const title = o.title === undefined ? id : typeof o.title === 'string' && o.title.trim() ? o.title.trim() : null
-  if (title === null) bad.push('title:type')
-  const profiles: Record<string, string> = {}
+  const title = o.title === undefined ? id : typeof o.title === 'string' ? o.title.trim() : ''
+  if (!isText(title, 200)) flag('title', 'type')
+  const profiles = bare<string>()
   if (o.profiles !== undefined) {
-    if (!isObject(o.profiles)) bad.push('profiles:type')
+    if (!isObject(o.profiles)) flag('profiles', 'type')
     else
       for (const [from, to] of Object.entries(o.profiles))
         if (isWord(from) && isWord(to)) profiles[from] = to
-        else bad.push(`profiles.${from}:type`)
+        else flag(`profiles.${from}`, 'type')
   }
-  const mcp: Record<string, unknown> = {}
+  const mcp = bare<unknown>()
   if (o.mcp !== undefined) {
-    if (!isObject(o.mcp)) bad.push('mcp:type')
+    if (!isObject(o.mcp)) flag('mcp', 'type')
     else
       for (const [name, v] of Object.entries(o.mcp))
         if (v === false || isObject(v)) mcp[name] = v
-        else bad.push(`mcp.${name}:type`)
+        else flag(`mcp.${name}`, 'type')
   }
-  if (o.sinks !== undefined && !isObject(o.sinks)) bad.push('sinks:type')
+  if (o.sinks !== undefined && !isObject(o.sinks)) flag('sinks', 'type')
   const device: DeviceConfig = {
     id,
-    title: title ?? id,
+    title,
     link,
     maxSessions: num('maxSessions', n => Number.isInteger(n) && n >= 1),
     minFreeMemMb: num('minFreeMemMb', n => Number.isInteger(n) && n >= 0),
     maxLoad: num('maxLoad', n => n > 0),
-    tags: strings('tags'),
+    tags: words('tags'),
     profiles,
-    paused: flag('paused'),
-    drain: flag('drain'),
+    paused: yes('paused'),
+    drain: yes('drain'),
     sinks: o.sinks ?? {},
     mcp,
-    accept: strings('accept'),
+    accept: words('accept'),
   }
-  for (const b of bad) {
-    const at = b.lastIndexOf(':')
-    problems.push({ device: id, key: b.slice(0, at), why: b.slice(at + 1) })
-  }
-  return bad.length ? null : device
+  return ok ? device : null
 }
 
-/** An ssh login on the owner's server: `nodes.relay`, and `node.relay` with its socket. */
-function relayOf(raw: unknown, at: string, keys: readonly string[], problems: NodesProblem[]) {
-  const bad: string[] = []
+/** An ssh login on the owner's server: `nodes.relay`, and `node.relay` with `socket` among `keys`. */
+function relayOf(
+  raw: unknown,
+  keys: readonly string[],
+  problems: NodesProblem[],
+): Record<string, string | number> | null {
   if (!isObject(raw)) {
-    problems.push({ key: at, why: 'type' })
+    problems.push({ key: 'relay', why: 'type' })
     return null
   }
-  unknownKeys(raw, keys, at, bad)
-  for (const k of bad) problems.push({ key: k, why: 'unknown' })
-  let ok = !bad.length
-  for (const k of keys)
-    if (k === 'sshPort' ? raw[k] !== undefined && !isPort(raw[k]) : !isWord(raw[k])) {
-      problems.push({ key: `${at}.${k}`, why: raw[k] === undefined ? 'required' : 'type' })
-      ok = false
-    }
-  if (!ok) return null
-  return {
-    host: raw.host as string,
-    sshPort: (raw.sshPort as number | undefined) ?? 22,
-    user: raw.user as string,
-    ...(keys.includes('socket') && { socket: raw.socket as string }),
+  let ok = true
+  const flag: Flag = (key, why) => {
+    ok = false
+    problems.push({ key, why })
   }
+  unknownKeys(raw, keys, 'relay', flag)
+  for (const k of keys)
+    if (k === 'sshPort') {
+      if (raw[k] !== undefined && !isPort(raw[k])) flag('relay.sshPort', 'port')
+    } else if (!isWord(raw[k])) flag(`relay.${k}`, raw[k] === undefined ? 'required' : 'type')
+  if (!ok) return null
+  const out: Record<string, string | number> = { host: raw.host as string, sshPort: (raw.sshPort as number) ?? 22 }
+  for (const k of keys) if (k !== 'host' && k !== 'sshPort') out[k] = raw[k] as string
+  return out
 }
 
 /**
  * config.json's `nodes` as the master uses it, or null while it is not on (no key, `false`,
  * anything but an object). A device with an unknown key or a bad value is left out of `devices`
- * and `order` and named in `problems`, never guessed at. A bad value of the section's own keys
- * is named too and gives what a board without the key does: `lanes` none, `whenFull` local,
- * no relay, the id from the host name.
+ * and `order` and named in `problems`, never guessed at; a `local` entry with a problem leaves
+ * this computer with no thresholds of its own. A bad value of the section's own keys is named too
+ * and gives what that key's absence does: `lanes` none, `whenFull` local, no relay, the id from
+ * `hostName` ("board" without one). A key set to null counts as absent.
  */
 export function nodesConfig(raw: unknown, hostName = ''): NodesConfig | null {
   if (!isObject(raw)) return null
   const problems: NodesProblem[] = []
-  const unknown: string[] = []
-  unknownKeys(raw, TOP_KEYS, '', unknown)
-  for (const k of unknown) problems.push({ key: k, why: 'unknown' })
+  const flag: Flag = (key, why) => problems.push({ key, why })
+  unknownKeys(raw, TOP_KEYS, '', flag)
 
   let id = deviceIdFromHost(hostName)
-  if (raw.id !== undefined) {
+  if (given(raw.id)) {
     if (isDevice(raw.id)) id = raw.id
-    else problems.push({ key: 'id', why: raw.id === LOCAL ? 'reserved' : 'id' })
+    else flag('id', raw.id === LOCAL ? 'reserved' : 'id')
   }
 
   let whenFull: NodesConfig['whenFull'] = 'local'
   if (raw.whenFull === 'wait') whenFull = 'wait'
-  else if (raw.whenFull !== undefined && raw.whenFull !== 'local') problems.push({ key: 'whenFull', why: 'type' })
+  else if (given(raw.whenFull) && raw.whenFull !== 'local') flag('whenFull', 'type')
 
   let lanes: NodesConfig['lanes'] = []
   if (raw.lanes === 'all') lanes = 'all'
   else if (Array.isArray(raw.lanes) && raw.lanes.every(l => typeof l === 'string' && l.trim()))
     lanes = [...new Set((raw.lanes as string[]).map(l => l.trim().toLowerCase()))]
-  else if (raw.lanes !== undefined && raw.lanes !== null) problems.push({ key: 'lanes', why: 'type' })
+  else if (given(raw.lanes)) flag('lanes', 'type')
 
-  const relay =
-    raw.relay === undefined || raw.relay === null
-      ? null
-      : (relayOf(raw.relay, 'relay', RELAY_KEYS, problems) as NodesConfig['relay'])
+  const relay = given(raw.relay) ? (relayOf(raw.relay, RELAY_KEYS, problems) as NodesConfig['relay']) : null
 
-  const devices: Record<string, DeviceConfig> = {}
+  const devices = bare<DeviceConfig>()
   const named: string[] = []
-  if (raw.devices !== undefined && !isObject(raw.devices)) problems.push({ key: 'devices', why: 'type' })
-  else
-    for (const [dev, v] of Object.entries(raw.devices ?? {})) {
+  if (given(raw.devices) && !isObject(raw.devices)) flag('devices', 'type')
+  else if (isObject(raw.devices))
+    for (const [dev, v] of Object.entries(raw.devices)) {
       named.push(dev)
       const d = deviceOf(dev, v, relay !== null, id, problems)
       if (d) devices[dev] = d
@@ -338,10 +375,10 @@ export function nodesConfig(raw: unknown, hostName = ''): NodesConfig | null {
   devices[LOCAL] ??= deviceOf(LOCAL, {}, false, id, []) as DeviceConfig
 
   const order: string[] = []
-  const listed = raw.order === undefined ? [] : Array.isArray(raw.order) ? raw.order : null
-  if (listed === null) problems.push({ key: 'order', why: 'type' })
+  const listed = !given(raw.order) ? [] : Array.isArray(raw.order) ? raw.order : null
+  if (listed === null) flag('order', 'type')
   for (const dev of listed ?? []) {
-    if (typeof dev !== 'string') problems.push({ key: 'order', why: 'type' })
+    if (typeof dev !== 'string') flag('order', 'type')
     else if (order.includes(dev)) problems.push({ key: 'order', why: 'duplicate', device: dev })
     else if (Object.hasOwn(devices, dev)) order.push(dev)
     // a device left out for a problem of its own is named there already
@@ -357,28 +394,23 @@ export function nodesConfig(raw: unknown, hostName = ''): NodesConfig | null {
 function readNode(raw: unknown): { config: NodeConfig | null; problems: NodesProblem[] } {
   if (!isObject(raw)) return { config: null, problems: [] }
   const problems: NodesProblem[] = []
-  const unknown: string[] = []
-  unknownKeys(raw, NODE_KEYS, '', unknown)
-  for (const k of unknown) problems.push({ key: k, why: 'unknown' })
-  if (!isDevice(raw.id))
-    problems.push({ key: 'id', why: raw.id === undefined ? 'required' : raw.id === LOCAL ? 'reserved' : 'id' })
-  if (raw.port !== undefined && !isPort(raw.port)) problems.push({ key: 'port', why: 'port' })
-  if (raw.workRoot !== undefined && !(typeof raw.workRoot === 'string' && raw.workRoot.trim()))
-    problems.push({ key: 'workRoot', why: 'type' })
-  if (raw.listen !== undefined && raw.listen !== 'loopback' && raw.listen !== 'tailnet')
-    problems.push({ key: 'listen', why: 'type' })
-  if (raw.tls !== undefined && typeof raw.tls !== 'boolean') problems.push({ key: 'tls', why: 'type' })
-  const relay =
-    raw.relay === undefined || raw.relay === null
-      ? null
-      : (relayOf(raw.relay, 'relay', [...RELAY_KEYS, 'socket'], problems) as NodeConfig['relay'])
+  const flag: Flag = (key, why) => problems.push({ key, why })
+  unknownKeys(raw, NODE_KEYS, '', flag)
+  if (!isDevice(raw.id)) flag('id', raw.id === undefined ? 'required' : raw.id === LOCAL ? 'reserved' : 'id')
+  if (given(raw.port) && !isPort(raw.port)) flag('port', 'port')
+  if (given(raw.workRoot) && !isText(raw.workRoot, 1024)) flag('workRoot', 'type')
+  if (given(raw.listen) && raw.listen !== 'loopback' && raw.listen !== 'tailnet') flag('listen', 'type')
+  if (given(raw.tls) && typeof raw.tls !== 'boolean') flag('tls', 'type')
+  const relay = given(raw.relay)
+    ? (relayOf(raw.relay, [...RELAY_KEYS, 'socket'], problems) as NodeConfig['relay'])
+    : null
   if (problems.length) return { config: null, problems }
   return {
     config: {
       id: raw.id as string,
-      port: (raw.port as number | undefined) ?? NODE_PORT,
-      workRoot: (raw.workRoot as string | undefined)?.trim() ?? '~/work',
-      listen: (raw.listen as NodeConfig['listen'] | undefined) ?? 'loopback',
+      port: (raw.port as number | null | undefined) ?? NODE_PORT,
+      workRoot: (raw.workRoot as string | null | undefined) ?? '~/work',
+      listen: (raw.listen as NodeConfig['listen'] | null | undefined) ?? 'loopback',
       tls: raw.tls === true,
       relay,
     },
@@ -399,7 +431,11 @@ export function nodeProblems(raw: unknown): NodesProblem[] {
   return readNode(raw).problems
 }
 
-/** A key of another device's item as the master's payload and routes carry it: `@server-1:` + key. */
+/**
+ * A key of another device's item as the master's payload and routes carry it: `@server-1:` + key.
+ * Throws on a device that is not one and on an empty key, which no item has: whoever takes keys
+ * from a node's payload drops an item without one before it gets here.
+ */
 export function nodeKey(device: string, key: string): string {
   if (!isDevice(device)) throw new Error(`not a device id: ${JSON.stringify(device)}`)
   if (!key) throw new Error('an empty key')
