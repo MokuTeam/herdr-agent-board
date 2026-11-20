@@ -41,8 +41,10 @@ describe('readFront', () => {
 })
 
 test('commandName takes what the agents take after the slash', () => {
-  for (const ok of ['compact', 'pr-comments', 'skill:review', 'a.b', 'x_1']) expect([ok, commandName(ok)]).toEqual([ok, true])
-  for (const bad of ['', 'two words', '-x', 'a/b', 'x'.repeat(65)]) expect([bad, commandName(bad)]).toEqual([bad, false])
+  for (const ok of ['compact', 'pr-comments', 'skill:review', 'a.b', 'x_1'])
+    expect([ok, commandName(ok)]).toEqual([ok, true])
+  for (const bad of ['', 'two words', '-x', 'a/b', 'x'.repeat(65)])
+    expect([bad, commandName(bad)]).toEqual([bad, false])
 })
 
 test('mergeCommands keeps the first of a name: the folder before the profile before the agent', () => {

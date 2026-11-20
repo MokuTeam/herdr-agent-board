@@ -1,7 +1,7 @@
 // The chat box's slash command list (#191): over the box, as the box sits at the sheet's foot. A
 // row is the command, what it takes and what it does; a tap or a click completes the box with it
 // and leaves the keyboard where it was (hooks/useSlash.ts).
-import { useLayoutEffect, useRef } from 'react'
+import { type RefObject, useLayoutEffect, useRef } from 'react'
 import type { SlashBox } from '../../hooks/useSlash.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { classNames } from '../class-names.ts'
@@ -9,7 +9,16 @@ import { classNames } from '../class-names.ts'
 export const SLASH_MENU_ID = 'slash-menu'
 export const slashOptionId = (i: number): string => `slash-option-${i}`
 
-export function SlashMenu({ slash }: { slash: SlashBox }) {
+export function SlashMenu({
+  slash,
+  text,
+  box,
+}: {
+  slash: SlashBox
+  /** The box's text: what the hint goes after (the box itself still holds the old one while this draws). */
+  text: string
+  box: RefObject<HTMLTextAreaElement | null>
+}) {
   const t = useT()
   const menu = useRef<HTMLDivElement>(null)
   const { open, list, active, argument } = slash
@@ -21,14 +30,7 @@ export function SlashMenu({ slash }: { slash: SlashBox }) {
     row?.scrollIntoView?.({ block: 'nearest' })
   }, [open, active])
 
-  if (!open) {
-    if (!argument?.hint) return null
-    return (
-      <div className="slash-hint" aria-hidden="true">
-        <span className="slash-name">/{argument.name}</span> <span className="slash-arg">{argument.hint}</span>
-      </div>
-    )
-  }
+  if (!open) return argument?.hint ? <ArgumentHint text={text} hint={argument.hint} box={box} /> : null
   return (
     <div className="slash-menu">
       <div className="slash-list" id={SLASH_MENU_ID} role="listbox" aria-label={t('slash.label')} ref={menu}>
@@ -62,5 +64,39 @@ export function SlashMenu({ slash }: { slash: SlashBox }) {
         {t('slash.keys')}
       </p>
     </div>
+  )
+}
+
+/**
+ * What a picked command takes, as grey text right after the caret ("/compact [instructions]"),
+ * as Claude Code shows it in its own input: laid over the box in the box's own font, the typed
+ * part kept invisible so the hint starts where the text ends.
+ */
+function ArgumentHint({ text, hint, box }: { text: string; hint: string; box: RefObject<HTMLTextAreaElement | null> }) {
+  const ghost = useRef<HTMLSpanElement>(null)
+  useLayoutEffect(() => {
+    const b = box.current
+    const g = ghost.current
+    if (!b || !g) return
+    const cs = getComputedStyle(b)
+    Object.assign(g.style, {
+      left: `${b.offsetLeft}px`,
+      top: `${b.offsetTop}px`,
+      width: `${b.clientWidth}px`,
+      paddingTop: cs.paddingTop,
+      paddingLeft: cs.paddingLeft,
+      paddingRight: cs.paddingRight,
+      fontFamily: cs.fontFamily,
+      fontSize: cs.fontSize,
+      fontWeight: cs.fontWeight,
+      lineHeight: cs.lineHeight,
+      letterSpacing: cs.letterSpacing,
+    })
+  })
+  return (
+    <span className="slash-hint" aria-hidden="true" ref={ghost}>
+      <span className="slash-typed">{text}</span>
+      {hint}
+    </span>
   )
 }

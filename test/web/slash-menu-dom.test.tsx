@@ -61,9 +61,7 @@ afterAll(() => {
 })
 
 const q = (sel: string) => dom.window.document.querySelector(sel) as HTMLElement | null
-const send = () => q('#composer .send') as HTMLButtonElement | null
 const box = () => q('#message') as HTMLTextAreaElement | null
-const wait = (ms: number) => act(async () => void (await new Promise(r => setTimeout(r, ms))))
 
 async function key(el: Element | null, k: string, repeat = false) {
   let prevented = false
@@ -176,10 +174,14 @@ async function mount(it: Item = idle) {
     )
   })
   const commandReads = () => asked.filter(u => u.endsWith('/commands'))
+  await act(async () => box()?.focus())
   return { asked, commandReads, messages, root }
 }
 
-const rows = () => [...dom.window.document.querySelectorAll('#slash-menu [role="option"]')].map(r => r.querySelector('.slash-name')?.textContent)
+const rows = () =>
+  [...dom.window.document.querySelectorAll('#slash-menu [role="option"]')].map(
+    r => r.querySelector('.slash-name')?.textContent,
+  )
 const lit = () => dom.window.document.querySelector('#slash-menu [aria-selected="true"] .slash-name')?.textContent
 const settle = () => act(async () => void (await new Promise(r => setTimeout(r, 20))))
 
@@ -281,6 +283,21 @@ test('the commands sent most from this browser come first', async () => {
   await act(async () => root.unmount())
 })
 
+test('the list shows only while the box has the focus: a draft from before opens nothing until then', async () => {
+  const { commandReads, root } = await mount()
+  await act(async () => box()?.blur())
+  await type('/co')
+  await settle()
+  expect(rows()).toEqual([])
+  expect(commandReads()).toEqual([])
+  await act(async () => box()?.focus())
+  await settle()
+  expect(rows()).toEqual(['/compact', '/context', '/cost', '/clear'])
+  await act(async () => box()?.blur())
+  expect(rows()).toEqual([])
+  await act(async () => root.unmount())
+})
+
 test('a message with no leading slash asks for nothing and sends as before', async () => {
   const { commandReads, messages, root } = await mount()
   await type('please check /tmp and the build')
@@ -294,7 +311,7 @@ test('a message with no leading slash asks for nothing and sends as before', asy
 
 test('an agent with no commands: a slash shows no list and Enter sends', async () => {
   const { messages, root } = await mount({ ...idle, agent: 'agy' } as Item)
-  globalThis.fetch = (async () => Response.json({ commands: [] })) as typeof fetch
+  globalThis.fetch = (async () => Response.json({ commands: [] })) as unknown as typeof fetch
   await type('/x')
   await settle()
   expect(rows()).toEqual([])

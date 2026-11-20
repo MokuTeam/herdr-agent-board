@@ -334,7 +334,7 @@ export function Composer({
         >
           <ClipIcon />
         </button>
-        <SlashMenu slash={slash} />
+        <SlashMenu slash={slash} text={text} box={messageRef} />
         {remotePage() && (pickInstead(navigator.userAgent) || canReadClipboard(navigator.clipboard)) && (
           <PastePicture
             disabled={av.edit}
@@ -381,6 +381,8 @@ export function Composer({
           onChange={e => composer.input(e.currentTarget.value)}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
+          onFocus={() => slash.focus(true)}
+          onBlur={() => slash.focus(false)}
         />
         <button
           type="button"

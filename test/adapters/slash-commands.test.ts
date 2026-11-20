@@ -47,7 +47,7 @@ describe('a Claude session', () => {
     expect(list.length).toBe(4 + CLAUDE_BUILTINS.length)
   })
 
-  test('no folders at all: Claude\'s own only; no folder for the session (the board\'s own files): the profile\'s and Claude\'s', () => {
+  test("no folders at all: Claude's own only; no folder for the session (the board's own files): the profile's and Claude's", () => {
     const none = join(dir, 'nowhere')
     expect(sessionCommands({ agent: 'claude', session: 'x', cwd: none }, { claudeRoot: none })).toEqual([
       ...CLAUDE_BUILTINS,
@@ -88,13 +88,16 @@ test("a pi session: its prompt templates and skills (as skill:<name>) from its o
 test('pi without PI_CODING_AGENT_DIR reads ~/.pi/agent', () => {
   const home = join(dir, 'home ben')
   put(join(home, '.pi', 'agent', 'prompts', 'daily.md'), 'Daily')
-  const list = sessionCommands({ agent: 'pi', session: join(dir, 's.jsonl'), cwd: '' }, { claudeRoot: '', env: {}, home })
+  const list = sessionCommands(
+    { agent: 'pi', session: join(dir, 's.jsonl'), cwd: '' },
+    { claudeRoot: '', env: {}, home },
+  )
   expect(list[0]).toEqual({ name: 'daily', description: 'Daily', source: 'user' })
 })
 
-test("Codex gets its own; an unknown agent, or pi with no session file, gets nothing and reads no folder", () => {
+test('Codex gets its own; an unknown agent, or pi with no session file, gets nothing and reads no folder', () => {
   expect(sessionCommands({ agent: 'codex', session: null, cwd: dir }, { claudeRoot: dir })).toEqual([...CODEX_BUILTINS])
   expect(sessionCommands({ agent: 'agy', session: null, cwd: dir }, { claudeRoot: dir })).toEqual([])
-  expect(sessionCommands({ agent: undefined, session: null, cwd: dir }, { claudeRoot: dir })).toEqual([])
+  expect(sessionCommands({ session: null, cwd: dir }, { claudeRoot: dir })).toEqual([])
   expect(sessionCommands({ agent: 'pi', session: 'pane-x', cwd: dir }, { claudeRoot: dir })).toEqual([])
 })

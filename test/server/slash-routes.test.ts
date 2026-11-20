@@ -41,7 +41,10 @@ describe('the slash commands of a session', () => {
     const piDir = join(box.dir, 'pi дом 100%')
     put(join(piDir, 'prompts', 'review.md'), '---\ndescription: Review staged changes\n---')
     const piFile = join(box.dir, 'pi session 100%.jsonl')
-    put(piFile, JSON.stringify({ type: 'message', id: 'p1', parentId: null, message: { role: 'assistant', content: [] } }))
+    put(
+      piFile,
+      JSON.stringify({ type: 'message', id: 'p1', parentId: null, message: { role: 'assistant', content: [] } }),
+    )
     const pane = (pane_id: string, agent: string, cwd: string, session?: string) => ({
       pane_id,
       agent,

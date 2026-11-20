@@ -45,21 +45,9 @@
 .slash-about { flex: 1; min-width: 0; overflow: hidden; color: var(--label-2); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
 .slash-source { margin-left: 6px; color: var(--label-3); font-size: 11px; }
 .slash-keys { margin: 0; padding: 5px 14px 6px; border-top: 0.5px solid var(--separator); color: var(--label-3); font-size: 11px; }
-/* What a picked command takes, until it is typed. */
-.slash-hint {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 10px;
-  z-index: 30;
-  padding: 3px 9px;
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow: var(--shadow-card);
-  color: var(--label-3);
-  font-size: 12px;
-  pointer-events: none;
-}
-.slash-hint .slash-name { color: var(--label-2); font-size: 12px; }
+/* What a picked command takes, until it is typed: grey text after the caret, in the box's own font (SlashMenu.tsx). */
+.slash-hint { position: absolute; box-sizing: border-box; overflow: hidden; color: var(--label-3); text-overflow: ellipsis; white-space: pre; pointer-events: none; }
+.slash-typed { visibility: hidden; }
 
 /* A finger: rows tall enough to hit, what a command does under its name; no keys to name. */
 @media (pointer: coarse), (max-width: 520px) {
@@ -82,5 +70,3 @@
 @media (prefers-reduced-transparency: reduce) {
   .slash-menu { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
-:root[data-look="terminal"] .slash-menu { border-radius: var(--radius); background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 0 0 1px var(--separator); }
-:root[data-look="terminal"] .slash-option { border-radius: 0; }

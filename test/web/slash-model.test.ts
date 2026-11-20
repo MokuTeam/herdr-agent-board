@@ -30,7 +30,8 @@ const LIST = [
 test('slashQuery: only a leading slash and a name still being typed', () => {
   expect(slashQuery('/')).toBe('')
   expect(slashQuery('/comp')).toBe('comp')
-  for (const no of ['', 'hello', ' /comp', '/compact ', '/compact now', '/a\nb', '/c/Users', 'a/b']) expect([no, slashQuery(no)]).toEqual([no, null])
+  for (const no of ['', 'hello', ' /comp', '/compact ', '/compact now', '/a\nb', '/c/Users', 'a/b'])
+    expect([no, slashQuery(no)]).toEqual([no, null])
 })
 
 test('slashArgument: a command that takes something, right after its space', () => {
@@ -62,7 +63,11 @@ test('rankCommands: the ones sent most from this browser first, then by name', (
     'skill:review',
   ])
   const uses = { cost: 5, model: 2 }
-  expect(rankCommands(LIST, '', uses).map(x => x.name).slice(0, 3)).toEqual(['cost', 'model', 'clear'])
+  expect(
+    rankCommands(LIST, '', uses)
+      .map(x => x.name)
+      .slice(0, 3),
+  ).toEqual(['cost', 'model', 'clear'])
   // Popularity orders within a match's closeness, never above a closer match.
   expect(rankCommands(LIST, 'co', { 'pr-comments': 9, cost: 1 }).map(x => x.name)).toEqual([
     'cost',

@@ -33,11 +33,14 @@ export interface SlashBox {
   hover(index: number): void
   /** The message is going: a command in it counts one more send in this browser. */
   sent(text: string): void
+  /** The box took or lost the focus: the list shows only while it has it (a draft kept from before opens nothing). */
+  focus(on: boolean): void
 }
 
 export function useSlash(item: Pick<Item, 'key'> | null, text: string, setText: (text: string) => void): SlashBox {
   const key = item?.key ?? null
-  const query = key ? slashQuery(text) : null
+  const [focused, setFocused] = useState(false)
+  const query = key && focused ? slashQuery(text) : null
   const asking = query !== null
   const [loaded, setLoaded] = useState<{ key: string; at: number; list: SlashCommand[] } | null>(null)
   const loading = useRef<string | null>(null)
@@ -116,6 +119,7 @@ export function useSlash(item: Pick<Item, 'key'> | null, text: string, setText: 
     },
     pick,
     hover: setActive,
+    focus: setFocused,
     sent(sentText) {
       if (!/^\s*\//.test(sentText)) return
       noteUse(sentText, own)
