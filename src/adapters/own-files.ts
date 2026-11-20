@@ -1,7 +1,7 @@
 // The board's own files on this PC (core/own-files.ts): the folders as real paths, and the check
 // the tunnel listener's routes ask before they read a file by a path the request names. Real paths
 // on both sides, so a link, a junction, another case or an 8.3 short name is seen for what it is.
-import { realpathSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { isOwnFile, type OwnFolders, oddWindowsPath, underFolder } from '../core/own-files.ts'
@@ -23,6 +23,24 @@ export function realOrNearest(path: string): string {
       rest.unshift(basename(at))
       at = up
     }
+  }
+}
+
+/**
+ * Whether `path` is a file in the board's uploads, by real paths on both sides: `..`, a sibling
+ * folder whose name only starts the same, a link or junction out of the uploads, another case or
+ * the other separator on win32 are each seen for what they are. On win32 a UNC, device or stream
+ * path is not, before any file-system call (one on a UNC path would reach that server).
+ */
+export function uploadedFile(path: string, platform: string = process.platform): boolean {
+  const odd = (p: string): boolean => platform === 'win32' && oddWindowsPath(p)
+  if (odd(path) || odd(resolve(path))) return false
+  try {
+    const real = realpathSync.native(resolve(path))
+    const uploads = realOrNearest(uploadsDir())
+    return !odd(real) && real !== uploads && underFolder(real, uploads, platform) && statSync(real).isFile()
+  } catch {
+    return false
   }
 }
 

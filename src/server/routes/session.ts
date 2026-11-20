@@ -6,8 +6,8 @@ import { type CardPatch, writeCard } from '../../adapters/cards.ts'
 import { checkoutChanges, isCheckout } from '../../adapters/git.ts'
 import { helpersOf } from '../../adapters/helpers.ts'
 import { herdrText } from '../../adapters/herdr.ts'
+import { uploadedFile } from '../../adapters/own-files.ts'
 import { pause } from '../../adapters/pacing.ts'
-import { uploadsDir } from '../../adapters/paths.ts'
 import { askRestart } from '../../adapters/schedule-store.ts'
 import { busy, PINS } from '../../core/board.ts'
 import { isCodexItem } from '../../core/codex.ts'
@@ -141,9 +141,9 @@ async function detail(app: SessionApp, item: Item) {
 function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
   const { deps } = app
   // Attached files go as their paths: Claude reads them, and picks up image paths as images.
-  const files = (Array.isArray(body.files) ? body.files : []).filter(
-    (p): p is string => typeof p === 'string' && p.startsWith(uploadsDir()),
-  )
+  // Only files the board took in its uploads (#401): one outside refuses the message.
+  const files = (Array.isArray(body.files) ? body.files : []).filter((p): p is string => typeof p === 'string')
+  if (!files.every(p => uploadedFile(p))) return Promise.resolve({ ok: false, error: t('msg.err.file'), code: 'file' })
   const list = files.length ? `${t('msg.files', { n: files.length })}:\n${files.join('\n')}` : ''
   // The card is for one session: a pane that holds another one now gets nothing. Panes with
   // no Claude session id (other agents) are matched by the card alone.
@@ -384,7 +384,7 @@ export function sessionRoutes(app: SessionApp): Route[] {
       what === 'mokupilot' ? { peer: ctx.peer(), forwardedFor: req.headers.get('x-forwarded-for') } : undefined
     const r = await act(app, item, what, ctx.body, viewer)
     app.refresh()
-    return json(r.ok ? 200 : 409, r)
+    return json(r.ok ? 200 : r.code === 'file' ? 400 : 409, r)
   })
   return [
     {
