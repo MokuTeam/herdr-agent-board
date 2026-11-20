@@ -226,6 +226,10 @@ export interface Config {
   boardEvents?: unknown
   /** The model rule (#429, an object), as config.json has it: read through core/model-check.ts modelsConfig. */
   models?: unknown
+  /** Nodes, this board as a master (#496, an object), as config.json has it: read through core/nodes.ts nodesConfig. */
+  nodes?: unknown
+  /** Nodes, this board as a node (#496, an object), as config.json has it: read through core/nodes.ts nodeConfig. */
+  node?: unknown
   [extra: string]: unknown
 }
 
