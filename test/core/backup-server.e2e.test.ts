@@ -1,4 +1,4 @@
-import { test } from 'bun:test'
+import { onTestFinished, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -505,14 +505,24 @@ test.skipIf(!sh)(
     }
     const upTo = (k: number) => Array.from({ length: k }, (_, i) => i + 1)
     const cases = [...upTo(writes).map(n => () => firstRun(n)), ...upTo(writes2).map(n => () => secondRun(n))]
-    // Four at a time: the gain without a storm of sh processes on a shared machine.
+    // Four at a time: the gain without a storm of sh processes on a shared machine. A test that
+    // timed out starts no more of them, and what still runs then fails into nothing.
+    let over = false
+    onTestFinished(() => {
+      over = true
+    })
     await Promise.all(
       Array.from({ length: 4 }, async () => {
-        for (let next = cases.shift(); next; next = cases.shift()) await next()
+        for (let next = cases.shift(); next && !over; next = cases.shift())
+          await next().catch(err => {
+            if (!over) throw err
+          })
       }),
     )
   },
-  120_000,
+  // An Apply run takes 15 s to 36 s in Git Bash's sh on a laptop (milliseconds on Linux), and
+  // the test makes about 13 (#521).
+  process.platform === 'win32' ? 300_000 : 120_000,
 )
 
 test.skipIf(!sh)(
