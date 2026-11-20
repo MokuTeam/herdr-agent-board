@@ -238,7 +238,7 @@ export function newThread(
       at: ctx.now,
       assignee: input.to ?? null,
       parent: input.parent?.id ?? null,
-      ...((input.verify || byLane) && { verify: { on: true, lane: byLane && !input.verify } }),
+      ...((input.verify || byLane) && { verify: { on: true, lane: byLane } }),
     })
     // Acceptance lines given with it: an entry each, by its creator (#492).
     for (const line of accept)
@@ -393,7 +393,14 @@ export function postEntry(ctx: ThreadsCtx, head: ThreadHead, input: PostInput): 
     )
   const [accept, ...moreAccept] = acceptLines(input.accept ?? [], head.verify?.accept.length ?? 0)
   if (accept) set.accept = accept
-  if (holdsDone(ctx, head, set)) set.hold = true
+  if (holdsDone(ctx, head, set)) {
+    if (head.proposed?.verify)
+      throw new ThreadError(
+        'held',
+        `${head.key}: its done is being verified; wait for the verdict, or post --status doing to take it back`,
+      )
+    set.hold = true
+  }
   notMirrored(ctx, head, input.waitingOn !== undefined ? { ...set, waitingOn: input.waitingOn } : set)
   if (input.waitingOn !== undefined) {
     set.waitingOn = lineOf(input.waitingOn, WAITING_MAX, 'waiting')
@@ -416,6 +423,15 @@ export function postEntry(ctx: ThreadsCtx, head: ThreadHead, input: PostInput): 
       throw new ThreadError('owner_only', `${head.key} is shared: only the owner drops it`)
     if ((input.files?.length ?? 0) > 1) throw new ThreadError('files', `${head.key} is shared: one file per entry`)
   }
+  // Verification's own fields (#492) stay on this board: a teammate's board would get an empty line.
+  const verifyOnly =
+    !!shared &&
+    !text &&
+    !links.length &&
+    !input.files?.length &&
+    Object.keys(set).length > 0 &&
+    Object.keys(set).every(k => k === 'verify' || k === 'verifyLane' || k === 'accept')
+  if (verifyOnly) input = { ...input, private: true }
   const out = input.out ?? outOf(ctx, head, input.private)
   const me = shared || input.out ? meOf(ctx) : undefined
   const entryId = randomUUID()
@@ -527,6 +543,12 @@ function mayLiftGate(actor: Party, head: ThreadHead): void {
     throw new ThreadError('owner_only', `${head.key} is verified because of its lane: only the owner turns that off`)
   if (isSession(head.assignee, actor.key) || isSession(head.proposed?.by, actor.key))
     throw new ThreadError('owner_only', `${head.key}: the session it verifies does not turn verification off`)
+  // Only the session that made the thread, besides the owner: one that just gave the thread up is no less gated.
+  if (!isSession(head.createdBy, actor.key))
+    throw new ThreadError(
+      'owner_only',
+      `${head.key}: only the session that made it, or the owner, turns verification off`,
+    )
 }
 
 // ------------------------------------------------------------------ watches
@@ -679,6 +701,7 @@ export function heardSince(db: BoardDb, session: string, since: number, until: n
     let status = false
     let ask: string | undefined
     let failed: string | undefined
+    let verified = false
     let closed: number | undefined
     let local = saidBy === null || isLocal(saidBy)
     for (const e of list) {
@@ -693,6 +716,7 @@ export function heardSince(db: BoardDb, session: string, since: number, until: n
       if (level <= LEVEL.status && !fails) status = true
       if (e.type === 'ask') ask = e.text
       if (fails) failed = e.text
+      if (e.set?.verdict === 'pass') verified = true
       if (e.closed) closed = e.closed
       if (!isLocal(e.author)) local = false
     }
@@ -703,6 +727,7 @@ export function heardSince(db: BoardDb, session: string, since: number, until: n
       status,
       ...(ask !== undefined && { ask: oneLine(ask, SUMMARY_MAX) }),
       ...(failed !== undefined && { failed: oneLine(failed, SUMMARY_MAX) }),
+      ...(verified && { verified }),
       ...(closed && { closed }),
       entries: heard.length,
       local,

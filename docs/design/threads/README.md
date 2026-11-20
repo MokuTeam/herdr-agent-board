@@ -226,13 +226,19 @@ verdict). `Proposed` gains `verify: true`: a done held for verification, not a p
 Every change is an entry, folded by `applyEntry`: `set.verify`, `set.accept`, `set.hold` (with a
 `done`: the service decided to hold it, the fold follows, so a board whose config changed later folds
 the same feed the same way), `set.verifier` (started, or null) and `set.verdict` (`pass`, `fail`,
-`unsure`, `timeout`, `error`, with the status it leads to). A restart of the board loses nothing.
+`unsure`, `timeout`, `error`, with the status it leads to). A restart of the board finds it all
+again: a held done with no verifier is started on the next tick; a verifier the thread names that never
+got a card (the board stopped between the entry and the launch) is started afresh after a three-minute
+grace; one that had a card and is gone from the board sends the thread to the owner.
 
 **Holding.** A session's done is held while `threads.verify` is set, the thread asks for it, is open
 and is not waiting on the owner (there the owner is the gate: the proposal of 3.5). The owner's done is
-never held, and the owner may confirm a held done or keep it open (it goes back to `doing`). The gate
-is not lifted by the session it gates: `set --verify off` is refused for the assignee and for the
-session whose done is held, and on a thread its lane put verification on, for every session.
+never held, and the owner may confirm a held done or keep it open (it goes back to `doing`). A second
+done while one is held is refused: the verifier checks the words it was given (`post --status doing`
+takes the first back). The gate is not lifted by the session it gates: `set --verify off` is refused
+for the assignee, for the session whose done is held and for any session but the one that made the
+thread, and on a thread its lane put verification on (also when it was asked for with `--verify`), for
+every session: there only the owner turns it off.
 
 **Starting.** The web board's scheduler runs a sweep each tick while `threads.verify` is set: a held
 done with no verifier gets one while fewer than `max` (2) run. The board mints a Claude session id,
@@ -257,8 +263,12 @@ lands, its block replaces the thread part.
 
 **The verdict.** `board thread verdict <key> pass|fail|unsure [--file report.md] "<one line>"` is
 accepted only from the session the thread names in `verify.run`, as the command's own session
-(`CLAUDE_CODE_SESSION_ID` or its pane, never `--session`). This keeps a confused agent from closing
-its own work; it is no wall against a hostile process on the same computer. A pass needs its report and
+(`CLAUDE_CODE_SESSION_ID` or its pane, never `--session`), and the pane herdr says it runs in must
+hold that session too, so a session id put in the environment of another pane does not pass. No
+session but the verifier reads a running verifier's id from `board thread` (it is replaced in what
+the command prints); the owner's command and the page show it. This keeps a confused agent from closing
+its own work; it is no wall against a hostile process on the same computer, which can read the board's
+files. A pass needs its report and
 closes the thread done with the held done's words as its summary. A fail sends it back to `doing`; the
 second in a row goes to the owner. `unsure` goes to the owner and is no fail. Anything else the
 verifier writes is refused. The verdict moves the `verify` entry to now.
@@ -266,19 +276,24 @@ verifier writes is refused. The verdict moves the `verify` entry to now.
 **The time limit and the archive** are that one schedule entry, which the scheduler hands to the
 verifier side before anything is typed: due while the thread still waits on that verifier (30 minutes
 by default), the thread goes to the owner (`timeout`); after the verdict the verifier is archived once
-it is free (tried each minute, half an hour at most). The sweep puts back the entry of a running
-verifier whose entry went, and moves to now the entry of one whose thread no longer waits on it.
+it is free (tried each minute, half an hour at most; a verifier that never gets free stays on the
+board, it is not killed). Only a held done times out: a verifier started as the done went (confirmed,
+taken back) runs for nothing and is archived. The sweep puts back the entry of a running verifier whose
+entry went, and moves to now the entry of one whose thread no longer waits on it.
 
 **Who hears what.** A held done is no news (level `all`): a `status` watcher hears nothing until the
 verdict; its writer gets an `answers` watch. A fail is the writer's, as an answer is: "atlas-13
-verification failed: <line>. Reasons: board thread show atlas-13", and nobody else's. A pass is a
-status change: "atlas-13 done (verified): <summary>". A fail that reaches the owner, `unsure`, a
+verification failed: <line>. Reasons: board thread show atlas-13"; a `status` or `asks` watcher hears
+nothing of it, an `all` watcher `atlas-13 +1`. A pass is a status change: "atlas-13 done (verified):
+<summary>", said only when the entries heard hold that pass. A fail that reaches the owner, `unsure`, a
 timeout and an error are status changes to the owner, with what it waits on.
 
 **A shared thread.** The held done goes to the peers as a proposal to the owner does (its note, not its
 status or summary), so a teammate's board shows the thread still `doing`. The verifier's start, a
-fail, `unsure`, a timeout and an error are private; a pass goes out as a plain `done` with the
-summary, the entry main would have sent at once, later. A verdict as such does not cross the hub.
+fail, `unsure`, a timeout, an error, and entries that only set `verify` or add an acceptance line are
+private; a pass goes out as a plain `done` with the summary ("done: <summary>"), without the
+verifier's line or report: the entry main would have sent at once, later. A verdict as such does not
+cross the hub.
 
 **With the key absent** `--verify`, `--accept`, `set --verify` and `verdict` are refused
 (`verify_off`), no done is held, the scheduler reads nothing for it, and every head, line and payload

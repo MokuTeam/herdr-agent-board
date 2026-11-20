@@ -511,7 +511,8 @@ function foldVerify(head: ThreadHead, next: ThreadHead, s: EntrySet): VerifyHead
     else if (s.verifyLane) v.lane = true
   }
   if (s.accept !== undefined && s.accept && v.accept.length < ACCEPT_MAX) v.accept.push(s.accept)
-  if (s.verifier !== undefined) v.run = s.verifier
+  // A verifier counts only for a done that is held: one started as the done went (confirmed, taken back) runs for nothing.
+  if (s.verifier !== undefined) v.run = s.verifier && next.proposed?.verify ? s.verifier : null
   if (s.verdict !== undefined) {
     v.run = null
     v.last = s.verdict
@@ -519,10 +520,6 @@ function foldVerify(head: ThreadHead, next: ThreadHead, s: EntrySet): VerifyHead
   } else if (head.proposed?.verify && !next.proposed?.verify && s.verifier === undefined) v.run = null
   return v
 }
-
-/** Whether a held done waits for its verifier (#492): one is running, or none is yet. */
-export const heldForVerify = (h: Pick<ThreadHead, 'proposed'>): boolean => h.proposed?.verify === true
-
 /** What a parent's system entry says when its last open sub-thread closed. */
 export const closedText = (n: number): string => (n === 1 ? 'its sub-thread closed' : `all ${n} sub-threads closed`)
 
@@ -737,6 +734,8 @@ export interface DigestItem {
   local: boolean
   /** A verification failed and the worker hears it (#492): the verifier's line. */
   failed?: string
+  /** A verifier passed it among the entries heard (#492): its done is a verified one. */
+  verified?: boolean
 }
 
 function clause(d: DigestItem, detailMax: number): { text: string; detail: string } {
@@ -744,8 +743,7 @@ function clause(d: DigestItem, detailMax: number): { text: string; detail: strin
   const detail = (s: string): string => (d.local && s ? clip(s, Math.max(8, detailMax)) : '')
   if (d.status) {
     if (h.proposed && h.status === 'owner') return { text: `${h.key} proposed done`, detail: detail(h.proposed.why) }
-    if (h.status === 'done' && h.verify?.last === 'pass')
-      return { text: `${h.key} done (verified)`, detail: detail(h.summary) }
+    if (h.status === 'done' && d.verified) return { text: `${h.key} done (verified)`, detail: detail(h.summary) }
     if (d.closed && h.status !== 'done' && h.status !== 'dropped')
       return { text: `${h.key}: ${closedText(d.closed)}`, detail: '' }
     const word = STATUS_WORD[h.status]

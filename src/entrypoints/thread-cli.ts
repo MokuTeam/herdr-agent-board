@@ -315,7 +315,10 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
     const now = ctx.now ?? Date.now()
     // A lane id as categories have them, whatever case config.json wrote it in.
     const lane = ctx.lane ? ctx.lane.toLowerCase() : null
-    const run = new Run(db, cfg, { ...ctx, lane }, a, base, now, out, json)
+    // A running verifier's session id is no session's to read (#492): it is what a verdict is told by.
+    const self = ctx.actor.kind === 'session' ? ctx.actor.key : ''
+    const said = cfg.verify && self ? (line: string) => out(hideVerifiers(db as BoardDb, line, self)) : out
+    const run = new Run(db, cfg, { ...ctx, lane }, a, base, now, said, json)
     await run.dispatch(sub)
     return 0
   } catch (err) {
@@ -421,6 +424,16 @@ const callBoard =
       return null
     }
   }
+
+/** `line` with the session id of every verifier running now replaced, but the reader's own. */
+function hideVerifiers(db: BoardDb, line: string, self: string): string {
+  let out = line
+  for (const h of verifyingThreads(db)) {
+    const key = h.verify?.run?.key
+    if (key && key !== self) out = out.replaceAll(key, 'hidden')
+  }
+  return out
+}
 
 class Run {
   constructor(

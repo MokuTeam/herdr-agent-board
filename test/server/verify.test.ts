@@ -155,6 +155,35 @@ test('a held done gets one verifier, started by the board with the brief, model,
   assert.match(brief, /You are the verifier of thread atlas-1/)
   assert.match(brief, /- every row mapped/)
   assert.match(brief, /all rows mapped/)
+  // A session id put in the env does not make a verifier: the pane herdr says it runs in holds another one.
+  const cli = async (env: Record<string, string>, args: string[]) => {
+    const r = await box.run('cli', { args, env }).exited
+    return `${r.code} ${r.stdout}${r.stderr}`.trim()
+  }
+  assert.match(
+    await cli({ CLAUDE_CODE_SESSION_ID: id, HERDR_PANE_ID: 'wP:p1' }, [
+      'thread',
+      'verdict',
+      'atlas-1',
+      'fail',
+      'forged',
+    ]),
+    /^1 only the verifier the board started for atlas-1 gives its verdict/,
+  )
+  const report = join(box.dir, 'report.md')
+  writeFileSync(report, '- every row mapped: rows 1-217 read\n')
+  assert.equal(
+    await cli({ CLAUDE_CODE_SESSION_ID: id, HERDR_PANE_ID: 'wP:p9' }, [
+      'thread',
+      'verdict',
+      'atlas-1',
+      'pass',
+      '--file',
+      report,
+      'rows read',
+    ]),
+    '0 ok · atlas-1 · done · verdict pass',
+  )
   // Once: more ticks start nothing more.
   await new Promise(resolve => setTimeout(resolve, 1500))
   assert.equal(calls(box).filter(c => c.startsWith('tab create')).length, 1)

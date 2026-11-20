@@ -99,7 +99,8 @@ function setUp(threads: unknown = VERIFY) {
       // As askArchive does: a record, and the session's entries taken into it.
       updateArchived(
         item.key,
-        () => ({ key: item.key, session: item.key, name: item.name, state: 'closing', closeAt: now, held: [] }) as never,
+        () =>
+          ({ key: item.key, session: item.key, name: item.name, state: 'closing', closeAt: now, held: [] }) as never,
       )
       holdEntries(item.key)
       return 'ok'
@@ -278,7 +279,8 @@ test('the board starts one verifier for a held done, with the brief, model, fold
   )
   // Once: the next tick starts none, nor does a second done held on the same thread.
   await v.sweep(async () => s.items)
-  await s.run(ben, ['done', 'atlas-1', 'all rows mapped, again'])
+  assert.equal((await s.json(ben, ['done', 'atlas-1', 'all rows mapped, again'])).error, 'held')
+  assert.equal(s.head('atlas-1').proposed?.why, 'all rows mapped')
   await v.sweep(async () => s.items)
   assert.equal(s.started.length, 1)
   assert.match(
@@ -587,6 +589,12 @@ test('a shared thread: a held done goes out without its status, a fail stays her
   const passed = await s.json(verifierOf(s.head('atlas-1')), ['verdict', 'atlas-1', 'pass', '--file', report, 'fine'])
   const p = look(passed.entry.id)
   expect(p?.work.set).toMatchObject({ status: 'done', summary: 'all rows now' })
+  // The verifier's line and report stay here: the peers get the plain done main would have sent.
+  assert.equal(p?.file, undefined)
+  assert.equal(p?.text, 'done: all rows now')
+  // Verification's own fields are private there too.
+  const acc = await s.json(master, ['post', 'atlas-1', '--accept', 'one more check'])
+  assert.equal(acc.entry.private, true)
 })
 
 test('a launcher that cannot start Claude under the board’s session id refuses a verifier before it opens anything', async () => {
@@ -623,4 +631,99 @@ test('a launcher that cannot start Claude under the board’s session id refuses
   await expect(herdrLauncher({ agent: 'codex' }).start(l, on)).rejects.toThrow(refused)
   await expect(herdrLauncher({ agent: 'claude', args: ['--continue'] }).start(l, on)).rejects.toThrow(refused)
   await expect(spawnAgentLauncher({ claude: ['claude', '--continue'] }).start(l, on)).rejects.toThrow(refused)
+})
+
+test('review: the gate is not lifted by giving the thread up, nor by asking for verify in a verified lane', async () => {
+  const s = setUp()
+  await verifyThread(s)
+  assert.equal((await s.run(ben, ['set', 'atlas-1', '--assignee', 'none'])).code, 0)
+  assert.equal((await s.json(ben, ['set', 'atlas-1', '--verify', 'off'])).error, 'owner_only')
+  await s.run(ben, ['new', '--lane', 'vlane', '--verify', '--doing', 'Mine'])
+  expect(s.head('vlane-1').verify).toMatchObject({ on: true, lane: true })
+  assert.equal((await s.json(ben, ['set', 'vlane-1', '--verify', 'off'])).error, 'owner_only')
+  // Its maker, which is neither its assignee nor holds a done, may.
+  await s.run(cleo, ['new', '--to', 'ben', '--verify', 'Made by cleo'])
+  assert.equal((await s.run(cleo, ['set', 'atlas-2', '--verify', 'off'])).code, 0)
+})
+
+test('review: no session reads a running verifier’s session id, but the verifier itself', async () => {
+  const s = setUp()
+  await verifyThread(s)
+  await s.run(ben, ['done', 'atlas-1', 'all rows mapped'])
+  await s.verifier().sweep(async () => s.items)
+  const key = s.head('atlas-1').verify?.run?.key as string
+  for (const args of [
+    ['show', 'atlas-1', '--json', '--full'],
+    ['list', '--json'],
+    ['show', 'atlas-1', '--full'],
+  ])
+    assert.equal((await s.run(ben, args)).out.includes(key), false, args.join(' '))
+  assert.equal((await s.run(verifierOf(s.head('atlas-1')), ['show', 'atlas-1', '--json'])).out.includes(key), true)
+  // The owner's command is the owner's.
+  assert.equal((await s.run(owner, ['show', 'atlas-1', '--json'])).out.includes(key), true)
+})
+
+test('review: a done confirmed while its verifier was being started gets none, and is never sent to the owner', async () => {
+  const s = setUp()
+  await verifyThread(s)
+  await s.run(ben, ['done', 'atlas-1', 'all rows mapped'])
+  const { confirmClose } = await import('../../src/services/work-threads.ts')
+  const workspaces = s.host.workspaces
+  s.host.workspaces = async () => {
+    const db = openDb() as BoardDb
+    try {
+      confirmClose(
+        { db, cfg: { agents: true, gapSec: 60, share: true, verify: null }, actor: owner, now: NOW },
+        getThread(db, s.head('atlas-1').id) as ThreadHead,
+      )
+    } finally {
+      db.close()
+    }
+    return workspaces()
+  }
+  const v = s.verifier()
+  await v.sweep(async () => s.items)
+  assert.deepEqual(s.started, [])
+  expect(s.head('atlas-1')).toMatchObject({ status: 'done', verify: { run: null } })
+  assert.deepEqual(limits(), [])
+})
+
+test('review: a verifier named before a restart that never launched is started afresh; one that went from the board goes to the owner', async () => {
+  const s = setUp()
+  await verifyThread(s)
+  await s.run(ben, ['done', 'atlas-1', 'all rows mapped'])
+  await s.verifier().sweep(async () => s.items)
+  const first = s.head('atlas-1').verify?.run?.key
+  // A new board process, minutes later: the session never came (no card), so it starts again.
+  s.at(NOW + 4 * 60_000)
+  const again = s.verifier()
+  await again.sweep(async () => s.items)
+  const second = s.head('atlas-1').verify?.run?.key
+  assert.ok(second && second !== first)
+  assert.equal(s.started.length, 2)
+  // It had a card and is gone from the board: the owner hears it.
+  const { writeCard } = await import('../../src/adapters/cards.ts')
+  writeCard(second, { category: 'atlas' })
+  s.at(NOW + 8 * 60_000)
+  await s.verifier().sweep(async () => s.items)
+  expect(s.head('atlas-1')).toMatchObject({
+    status: 'owner',
+    waitingOn: 'no verifier: the verifier verify-atlas-1 is gone from the board',
+  })
+})
+
+test('review: "done (verified)" only for a done a verifier passed', async () => {
+  const s = setUp()
+  await verifyThread(s)
+  await s.run(ben, ['done', 'atlas-1', 'all rows mapped'])
+  await s.verifier().sweep(async () => s.items)
+  const report = join(s.dir, 'r.md')
+  writeFileSync(report, 'ok')
+  await s.run(verifierOf(s.head('atlas-1')), ['verdict', 'atlas-1', 'pass', '--file', report, 'fine'])
+  // Reopened, verification off, done again: a plain done.
+  await s.run(owner, ['post', 'atlas-1', '--status', 'doing'])
+  await s.run(owner, ['set', 'atlas-1', '--verify', 'off'])
+  deliver(master)
+  await s.run(ben, ['done', 'atlas-1', 'second done, never verified'])
+  assert.equal(events(master)[0]?.text, 'atlas-1 done: second done, never verified. More: board thread changes')
 })

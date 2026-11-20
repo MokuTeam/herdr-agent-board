@@ -74,6 +74,7 @@ the checklist, knowing nothing of your conversation. Write the done so a strange
 you changed, where (paths, record ids, the pull request), how you tested it, and what you could not
 do. A fail comes back to you as one line ("verification failed: ..."): read the reasons with
 `board thread show <key>`, fix, and say done again. The second fail in a row goes to the owner.
+While your done is held, another done is refused: `post --status doing` takes it back first.
 You cannot turn verification off on a thread you hold or whose done is held.
 
 Handing work out: `board thread new --verify --accept "<what must be true>" ... "<title>"`, one

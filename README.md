@@ -2308,8 +2308,10 @@ or keep it open (back to its worker) on the panel at any time. The verifier is a
 for a Claude worker in the worker's profile, for a pi or Codex worker in `"profile"`, else the one
 profile the board shows. A launcher that cannot start Claude under a given session id (`launch.agent`
 that is not Claude, or whose arguments pick the session; a `launch.command` without `{sessionId}`)
-cannot start verifiers: the thread comes to you saying so. With the key absent, a done is a done as
-before and nothing is read for it.
+cannot start verifiers: the thread comes to you saying so. The verdict's identity check (the
+command's own session, in the pane herdr says it runs in) keeps a confused agent from passing its own
+work; it is no wall against a hostile process on your computer. With the key absent, a done is a done
+as before and nothing is read for it.
 
 On the page, while threads are on, a **Threads** pill beside Tasks counts what needs you and opens
 the threads panel: the list by status on the left, one thread on the right (one screen at a time

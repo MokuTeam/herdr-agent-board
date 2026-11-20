@@ -9,9 +9,10 @@
 // the middle finds it all again: a running verifier keeps its entry (the sweep puts back one that
 // went), a held done with none is started on the next tick.
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { listArchive } from '../adapters/archive-store.ts'
+import { readCard } from '../adapters/cards.ts'
 import type { BoardDb } from '../adapters/db.ts'
 import { ROOT } from '../adapters/paths.ts'
 import { addEntry, listEntries, removeEntry, updateEntry } from '../adapters/schedule-store.ts'
@@ -33,6 +34,7 @@ import {
   threadsConfig,
   type Verdict,
   type VerifyConfig,
+  type VerifyRun,
 } from '../core/work-threads.ts'
 import { ownerLine, verifierName, verifyBrief } from '../core/work-verify.ts'
 import { dropHeld } from './archive.ts'
@@ -40,15 +42,16 @@ import type { LaunchState, StartOptions, StartResult } from './launch/launches.t
 import type { ParentFacts } from './launch/request.ts'
 import { filePath, postEntry, type ThreadsCtx, type Written } from './work-threads.ts'
 
-/** The default checklists in the repository: general, and the one for code a lane may name. */
+/** The default checklist in the repository (docs/agents/verify-checklist-code.md is the one for code a lane may name). */
 export const CHECKLIST = join(ROOT, 'docs', 'agents', 'verify-checklist.md')
-export const CHECKLIST_CODE = join(ROOT, 'docs', 'agents', 'verify-checklist-code.md')
 
 /** The schedule entry of a verifier: its time limit, then its archive. */
 export const VERIFY_KIND = 'verify'
 /** An archive the verifier is not free for yet is tried again after this long, this many times. */
 const ARCHIVE_RETRY_MS = 60_000
 const ARCHIVE_TRIES = 30
+/** A verifier that has not shown up on the board this long after its start, and was not started by this process, is lost. */
+const LOST_GRACE_MS = 3 * 60_000
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -138,7 +141,8 @@ export function createVerifier(host: VerifyHost): Verifier {
     return record ? { item: null, cwd: record.cwd, record } : null
   }
 
-  async function startOne(db: BoardDb, cfg: ThreadsConfig, head: ThreadHead, items: Item[]): Promise<void> {
+  async function startOne(db: BoardDb, cfg: ThreadsConfig, held: ThreadHead, items: Item[]): Promise<void> {
+    let head = held
     const v = cfg.verify as VerifyConfig
     const key = randomUUID()
     const fail = (why: string): void => {
@@ -192,7 +196,11 @@ export function createVerifier(host: VerifyHost): Verifier {
       workspaces,
       board: (host.cfg.placement ?? 'workspace') === 'workspace' ? (host.cfg.workspace ?? 'Board') : '',
     })
-    // The thread knows its verifier first: a verdict that comes quickly finds it there.
+    // The thread knows its verifier first: a verdict that comes quickly finds it there. Read again
+    // after the waits above: a done confirmed or taken back meanwhile gets no verifier.
+    const now2 = getThread(db, head.id)
+    if (!now2?.proposed?.verify || now2.verify?.run) return
+    head = now2
     try {
       postEntry(ctxOf(db, cfg, verifierParty(key, head.key)), head, {
         type: 'system',
@@ -252,6 +260,28 @@ export function createVerifier(host: VerifyHost): Verifier {
           toOwner(db, cfg, head, s.key, 'error', st.error || 'the launch failed')
         }
       }
+      // A verifier the thread names that this process never started and that never got a card (the
+      // board stopped between the entry and the launch): started afresh. One that had a card and is
+      // gone from the board: the owner hears it is gone. Both only after a grace for a launch on its way.
+      const lost = verifyingThreads(db).filter(h => {
+        const run = h.verify?.run
+        return !!run && ![...started.values()].some(s => s.key === run.key) && run.at < now() - LOST_GRACE_MS
+      })
+      if (lost.length) {
+        const board = await items()
+        for (const h of lost) {
+          const run = h.verify?.run as VerifyRun
+          if (board.some(i => i.key === run.key)) continue
+          removeLimit(run.key)
+          if (!readCard(run.key))
+            postEntry(ctxOf(db, cfg, verifierParty(run.key, h.key)), h, {
+              type: 'system',
+              set: { verifier: null },
+              ...(sharingOf(h) && { private: true }),
+            })
+          else toOwner(db, cfg, h, run.key, 'error', `the verifier ${run.name} is gone from the board`)
+        }
+      }
       // Each running verifier keeps its time limit; a limit whose thread no longer waits on it goes now (to the archive).
       const running = verifyingThreads(db)
       const limits = listEntries().filter(e => e.kind === VERIFY_KIND)
@@ -284,7 +314,8 @@ export function createVerifier(host: VerifyHost): Verifier {
       if (!db || !cfg?.verify) return
       const head = getThread(db, thread)
       const run = head?.verify?.run
-      if (!head || run?.key !== entry.key) return
+      // Only a held done times out; anything else that still names it has nothing left to wait for.
+      if (!head || run?.key !== entry.key || !head.proposed?.verify) return
       if (run.until > now()) {
         updateEntry(entry.id, x => ({ ...x, next: run.until, at: run.until }))
         return 'later'
@@ -430,6 +461,3 @@ export function giveVerdict(ctx: ThreadsCtx, head: ThreadHead, input: VerdictInp
     if (e.kind === VERIFY_KIND && e.key === run.key) updateEntry(e.id, x => ({ ...x, next: ctx.now, at: ctx.now }))
   return w
 }
-
-/** The default checklist exists in the repository (tests, install). */
-export const checklistsThere = (): boolean => existsSync(CHECKLIST) && existsSync(CHECKLIST_CODE)

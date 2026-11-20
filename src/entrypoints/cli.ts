@@ -2078,7 +2078,19 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
     lane,
     idle,
     // The session that runs it, for a verdict (#492): its own, never the one --session names; asked only then.
-    self: async () => (target ? ((await ownSession())?.key ?? null) : (s?.key ?? null)),
+    // The pane herdr says it runs in must hold that session too: a session id put in the env does not pass.
+    self: async () => {
+      const key = (target ? (await ownSession())?.key : s?.key) ?? null
+      const pane = process.env.HERDR_PANE_ID
+      if (key && pane) {
+        const held = await paneOf(pane).then(
+          p => p?.agent_session?.value,
+          () => undefined,
+        )
+        if (held && held !== key) return null
+      }
+      return key
+    },
     findSession: async word => {
       const w = word.toLowerCase()
       const items = (await sessions()).filter(i =>

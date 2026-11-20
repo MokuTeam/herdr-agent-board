@@ -397,9 +397,11 @@ export function outgoing(
   } as { share?: true; unshare?: true }
   // The share and the unshare say what happened in the board's words: a board without `work` reads
   // them as a topic's lines, one with it shows its own.
-  const own = flags.share || flags.unshare ? '' : entry.text
+  // A verdict (#492) goes as the plain status it leads to: the verifier's line and report stay here.
+  const verdict = entry.set?.verdict !== undefined
+  const own = flags.share || flags.unshare || verdict ? '' : entry.text
   const text = own || fallbackLine(entry, theirs, flags)
-  const file = entry.files?.[0]
+  const file = verdict ? undefined : entry.files?.[0]
   return {
     target,
     text,
