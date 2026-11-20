@@ -94,7 +94,8 @@ function expectOwnerOnly(file: string): void {
   // "<domain>\<user>","S-1-5-21-…": the SID is ASCII in any language.
   const me = /"(S-1-[\d-]+)"/.exec(Bun.spawnSync([WHOAMI, '/user', '/fo', 'csv', '/nh']).stdout.toString())?.[1]
   expect(me).toBeTruthy()
-  const sids = allowed(file)
+  // SDDL names the built-in Administrator account LA.
+  const sids = allowed(file).map(sid => (sid === 'LA' && me?.endsWith('-500') ? me : sid))
   expect(sids).toContain(me as string)
   for (const other of OTHERS) expect(sids).not.toContain(other)
 }

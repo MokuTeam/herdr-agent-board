@@ -198,6 +198,8 @@ function world(
     sleep: async ms => {
       clock.at += ms
     },
+    // The keys wake types (ctrl+u, not esc) as on Linux, which the tests below expect; only the
+    // paths in ops above are the host's.
     platform: 'linux',
     pi: ops,
     piCard: () => ({ name: 'Billing' }),

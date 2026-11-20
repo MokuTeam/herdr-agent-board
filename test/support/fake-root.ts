@@ -179,15 +179,14 @@ export function fakeRoot(mode: 'include' | 'plain'): FakeRoot {
     runAsync(script, extra = {}) {
       return new Promise(resolve => {
         const child = spawn(sh as string, [file(script)], { env: env(extra), stdio: ['ignore', 'pipe', 'pipe'] })
-        let out = ''
-        let err = ''
-        child.stdout.on('data', (chunk: Buffer) => {
-          out += chunk.toString()
-        })
-        child.stderr.on('data', (chunk: Buffer) => {
-          err += chunk.toString()
-        })
-        child.on('close', code => resolve({ lines: out.split(/\r?\n/), code, err }))
+        const out: Buffer[] = []
+        const err: Buffer[] = []
+        child.stdout.on('data', (chunk: Buffer) => void out.push(chunk))
+        child.stderr.on('data', (chunk: Buffer) => void err.push(chunk))
+        child.on('error', e => resolve({ lines: [], code: null, err: String(e) }))
+        child.on('close', code =>
+          resolve({ lines: Buffer.concat(out).toString().split(/\r?\n/), code, err: Buffer.concat(err).toString() }),
+        )
       })
     },
     runCut(script, after, extra = {}) {

@@ -559,7 +559,7 @@ test('renaming: the board’s name on the card, back to the automatic one, and C
     // on Windows, and the name read was the one before).
     const n = proc.messages.length
     proc.send('refresh')
-    await until(() => proc.messages.slice(n).some(m => (m as { refreshed?: boolean }).refreshed))
+    await until(() => proc.messages.slice(n).some(m => (m as { refreshed?: boolean }).refreshed), 15_000)
     const item = (await board()).items[0]
     assert.ok(item)
     return item

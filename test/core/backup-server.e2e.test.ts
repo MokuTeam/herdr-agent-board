@@ -504,7 +504,13 @@ test.skipIf(!sh)(
       assert.ok(existsSync(again.path(SNAP)), `second run, write ${n}: the snapshot stays`)
     }
     const upTo = (k: number) => Array.from({ length: k }, (_, i) => i + 1)
-    await Promise.all([...upTo(writes).map(firstRun), ...upTo(writes2).map(secondRun)])
+    const cases = [...upTo(writes).map(n => () => firstRun(n)), ...upTo(writes2).map(n => () => secondRun(n))]
+    // Four at a time: the gain without a storm of sh processes on a shared machine.
+    await Promise.all(
+      Array.from({ length: 4 }, async () => {
+        for (let next = cases.shift(); next; next = cases.shift()) await next()
+      }),
+    )
   },
   120_000,
 )

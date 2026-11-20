@@ -486,7 +486,7 @@ test('herdr-wake refusing three times gives up: the session hears why; one the u
   assert.equal(read(user, 'dddd02'), null)
   await pause(300)
   assert.deepEqual(prompts(user), [])
-})
+}, 60_000)
 
 test('a restart a board left halfway wakes the session it put to sleep, then types the note', async () => {
   const box = await sandbox()

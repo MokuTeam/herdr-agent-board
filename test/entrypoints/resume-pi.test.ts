@@ -92,9 +92,19 @@ async function wakesOnItsAccount(name = PROJECT): Promise<void> {
 test('board resume --pi: the session’s file, its options but not its model, name or message, its account and folder', () =>
   wakesOnItsAccount())
 
-if (WINDOWS)
-  test.failing('board resume --pi on Windows: a % in the session’s folder (#491, pi.cmd)', () =>
-    wakesOnItsAccount(PERCENT))
+// #491 as it is today: Bun's refusal, and pi not run. Fixed, this test fails: run
+// wakesOnItsAccount(PERCENT) on Windows too instead.
+test.skipIf(!WINDOWS)(
+  'board resume --pi on Windows: a % in the session’s folder does not start pi.cmd (#491)',
+  async () => {
+    const box = await sandbox()
+    const s = setUp(box, PERCENT)
+    sleeper(box, s, { account: join(s.home, '.claude-work') })
+    const r = await resumePi(box, ['--pi', ID], s)
+    expect([r.code, r.pi]).toEqual([1, null])
+    expect(r.out).toMatch(/pi did not start: .*cmd\.exe special character/)
+  },
+)
 
 test('board resume --pi: slept on the personal account, a shell on Work’s: back on the personal one', async () => {
   const box = await sandbox()

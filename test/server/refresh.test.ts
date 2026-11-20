@@ -40,3 +40,19 @@ test('a refresh asked for while the start’s one runs ends after a collect that
     ['b'],
   )
 }, 30_000)
+
+test('one asked for while the start’s one runs ends too when the collect after it fails', async () => {
+  const box = await sandbox()
+  const gate = join(box.dir, 'go')
+  box.state({ 'api snapshot': { ...snapshot('a'), waitFor: gate } })
+  const { url, proc } = await serveBoard(box)
+  await until(() => box.calls().some(a => a.join(' ') === 'api snapshot'), 10_000)
+  const n = proc.messages.length
+  proc.send('refresh')
+  box.state({ 'api snapshot': { error: 'offline' } })
+  writeFileSync(gate, '')
+  await until(() => proc.messages.slice(n).some(m => (m as { refreshed?: boolean }).refreshed), 10_000)
+  assert.ok(proc.messages.some(m => String((m as { log?: string }).log).includes('offline')))
+  const board = (await (await fetch(`${url}/api/board`)).json()) as { stale: boolean }
+  assert.equal(board.stale, true)
+}, 30_000)

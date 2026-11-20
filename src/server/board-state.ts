@@ -456,9 +456,10 @@ export function createBoardState({
       again = false
       const done = waiting
       waiting = []
-      void refresh().then(() => {
+      const release = (): void => {
         for (const resolve of done) resolve()
-      })
+      }
+      void refresh().then(release, release)
     }
   }
 
