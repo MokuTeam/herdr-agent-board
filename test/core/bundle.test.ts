@@ -13,6 +13,7 @@ import {
   classifyCommand,
   classifyMcp,
   classifySettings,
+  filesIn,
   hookKey,
   nextVersion,
   owned,
@@ -158,7 +159,7 @@ describe('9.1 settings.json: hooks', () => {
           kind: 'hook',
           name: 'lint',
           verdict: 'translated',
-          why: 'profile-path',
+          why: 'script-sent',
           detail: 'PostToolUse',
         })
         const sent = part.hooks.PostToolUse as { matcher: string; hooks: { timeout: number }[] }[]
@@ -195,6 +196,7 @@ describe('9.1 settings.json: hooks', () => {
           ok: true,
           command: `/usr/bin/env bash ${PROFILE_DIR}/hooks/lint.sh 2>/dev/null`,
           translated: true,
+          files: ['hooks/lint.sh'],
         })
       })
     })
@@ -214,6 +216,7 @@ describe('9.1 settings.json: hooks', () => {
         ok: true,
         command: `bash "${PROFILE_DIR}/hooks/a.sh"`,
         translated: true,
+        files: ['hooks/a.sh'],
       })
   })
 
@@ -225,13 +228,13 @@ describe('9.1 settings.json: hooks', () => {
   test('PowerShell, cmd or a Windows script on the way to a Linux node is not sent', () => {
     const toast = 'powershell -NoProfile -File "C:\\Users\\Roma\\.claude\\hooks\\notify-toast.ps1"'
     for (const command of [toast, 'pwsh -c Write-Host hi', 'cmd /c echo hi', 'C:/Users/Roma/.claude/hooks/x.bat'])
-      assert.deepEqual(classifyCommand(command, WIN), { ok: false, why: 'windows-shell' })
+      assert.deepEqual(classifyCommand(command, WIN), { ok: false, why: 'windows-only' })
     const part = classifySettings(hookSettings(toast), WIN)
     assert.deepEqual(entry(part.report, 'hook', 'notify-toast'), {
       kind: 'hook',
       name: 'notify-toast',
       verdict: 'not-sent',
-      why: 'windows-shell',
+      why: 'windows-only',
       detail: toast,
     })
   })
@@ -416,7 +419,7 @@ describe('9.1 MCP servers of the user scope', () => {
     )
     assert.deepEqual(part.mcp, {
       a: { command: 'npx', args: ['-y', 'pkg-a'] },
-      b: { command: 'npx', args: ['-y', 'pkg-b'], env: { GITHUB_TOKEN: ref('GITHUB_TOKEN'), MODE: 'ro' } },
+      b: { command: 'npx', args: ['-y', 'pkg-b'], env: { GITHUB_TOKEN: ref('MCP_B_GITHUB_TOKEN'), MODE: 'ro' } },
     })
     assert.deepEqual(entry(part.report, 'mcp', 'a'), {
       kind: 'mcp',
@@ -424,7 +427,7 @@ describe('9.1 MCP servers of the user scope', () => {
       verdict: 'translated',
       why: 'unwrapped',
     })
-    assert.equal(entry(part.report, 'mcp', 'GITHUB_TOKEN')?.verdict, 'needs-secret')
+    assert.equal(entry(part.report, 'mcp', 'MCP_B_GITHUB_TOKEN')?.verdict, 'needs-secret')
   })
 
   test('docker with a volume of this computer is bound', () => {
@@ -542,7 +545,7 @@ describe('9.1 files and the whole manifest', () => {
     expect(JSON.stringify(m)).not.toContain(CANARY)
     assert.deepEqual(
       m.report.filter(e => e.verdict === 'needs-secret').map(e => e.name),
-      ['API_TOKEN', 'MCP_REMOTE_KEY', 'MCP_REMOTE_AUTHORIZATION', 'SERVICE_PASSWORD'],
+      ['API_TOKEN', 'MCP_REMOTE_KEY', 'MCP_REMOTE_AUTHORIZATION', 'MCP_LOCAL_SERVICE_PASSWORD'],
     )
   })
 
@@ -663,5 +666,206 @@ describe('9.3 what the node owns', () => {
     assert.deepEqual(owned(rec), ownedAfter(prev, next, ['commands/new.md']))
     // The kept file stays the node's on the next apply: nothing removes it.
     assert.deepEqual(toRemove(rec, manifest({ files: [file('skills/a/SKILL.md')] })).files, [])
+  })
+})
+
+describe('9.1 the script a hook runs travels with it', () => {
+  const lint = hookSettings('bash ~/.claude/hooks/lint.sh --fix')
+
+  test('a hook naming a file of the profile folder lists it in scripts; doctor is told what is not checked', () => {
+    const part = classifySettings(lint, WIN)
+    assert.deepEqual(part.scripts, ['hooks/lint.sh'])
+    assert.equal(entry(part.report, 'hook', 'lint')?.why, 'script-sent')
+  })
+
+  test('a hook whose script the walk did not read is not sent, with the path', () => {
+    const part = classifySettings(lint, WIN, new Set(['skills/a/SKILL.md']))
+    assert.deepEqual(part.hooks, {})
+    assert.deepEqual(entry(part.report, 'hook', 'lint'), {
+      kind: 'hook',
+      name: 'lint',
+      verdict: 'not-sent',
+      why: 'script-missing',
+      detail: 'hooks/lint.sh',
+    })
+    assert.equal(classifySettings(lint, WIN, new Set(['hooks/lint.sh'])).report[0]?.verdict, 'translated')
+  })
+
+  test("herdr's own hook is never sent and names no script to send", () => {
+    const part = classifySettings(
+      hookSettings(
+        'powershell -NoProfile -File "C:\\Users\\Roma\\.claude\\hooks\\herdr-agent-state.ps1"',
+        'bash ~/.claude/hooks/herdr-agent-state.sh',
+      ),
+      WIN,
+    )
+    assert.deepEqual(part.hooks, {})
+    assert.deepEqual(part.scripts, [])
+    assert.deepEqual(part.report, [])
+  })
+
+  test('filesIn: the paths after the placeholder, a folder and the folder itself not', () => {
+    assert.deepEqual(filesIn(`bash ${PROFILE_DIR}/hooks/a.sh --conf "${PROFILE_DIR}/x.json"; cd ${PROFILE_DIR}/`), [
+      'hooks/a.sh',
+      'x.json',
+    ])
+  })
+})
+
+describe('what the review of the first draft found', () => {
+  test('a count of tokens is not a secret', () => {
+    const part = classifySettings({ env: { MAX_THINKING_TOKENS: '8000', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '9' } }, WIN)
+    assert.deepEqual(part.settings.env, { MAX_THINKING_TOKENS: '8000', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '9' })
+  })
+
+  test("a secret in a launcher's arguments becomes a reference, per server", () => {
+    const part = classifyMcp(
+      {
+        ctx7: { command: 'npx', args: ['-y', '@upstash/context7-mcp', '--api-key', 'SECRET1'] },
+        gh: { command: 'docker', args: ['run', '-e', 'GITHUB_TOKEN=SECRET2', '--token=SECRET3', 'img'] },
+      },
+      LINUX,
+    )
+    expect(JSON.stringify(part)).not.toMatch(/SECRET\d/)
+    assert.deepEqual((part.mcp.ctx7 as { args: string[] }).args, [
+      '-y',
+      '@upstash/context7-mcp',
+      '--api-key',
+      ref('MCP_CTX7_API_KEY'),
+    ])
+    assert.deepEqual((part.mcp.gh as { args: string[] }).args, [
+      'run',
+      '-e',
+      `GITHUB_TOKEN=${ref('MCP_GH_GITHUB_TOKEN')}`,
+      `--token=${ref('MCP_GH_TOKEN')}`,
+      'img',
+    ])
+    assert.equal(entry(part.report, 'mcp', 'ctx7')?.why, 'secret-value')
+  })
+
+  test('two servers with the same secret name ask for two variables', () => {
+    const part = classifyMcp(
+      { a: { command: 'npx', env: { API_KEY: 'k1' } }, b: { command: 'npx', env: { API_KEY: 'k2' } } },
+      LINUX,
+    )
+    assert.deepEqual(part.mcp, {
+      a: { command: 'npx', args: [], env: { API_KEY: ref('MCP_A_API_KEY') } },
+      b: { command: 'npx', args: [], env: { API_KEY: ref('MCP_B_API_KEY') } },
+    })
+  })
+
+  test("a user and password in a server's address become references; the report shows neither", () => {
+    const part = classifyMcp({ x: { type: 'http', url: 'https://me:pw123@x.example.com/mcp' } }, WIN)
+    assert.deepEqual(part.mcp, {
+      x: { type: 'http', url: `https://${ref('MCP_X_USER')}:${ref('MCP_X_PASSWORD')}@x.example.com/mcp` },
+    })
+    const loop = classifyMcp({ y: { type: 'http', url: 'http://me:pw123@localhost:1/mcp' } }, WIN)
+    assert.equal(entry(loop.report, 'mcp', 'y')?.detail, 'http://localhost:1/mcp')
+  })
+
+  test('a reference the master already has is reported as a secret the node needs', () => {
+    const part = classifyMcp(
+      {
+        gh: {
+          type: 'http',
+          url: 'https://api.example.com/mcp',
+          headers: { Authorization: `Bearer ${ref('GH_TOKEN')}` },
+        },
+        s: { command: 'npx', args: ['pkg'], env: { KEY: ref('S_KEY') } },
+      },
+      WIN,
+    )
+    assert.deepEqual(entry(part.report, 'mcp', 'GH_TOKEN'), {
+      kind: 'mcp',
+      name: 'GH_TOKEN',
+      verdict: 'needs-secret',
+      why: 'reference',
+      detail: 'gh',
+    })
+    assert.equal(entry(part.report, 'mcp', 'S_KEY')?.why, 'reference')
+  })
+
+  test("a launcher pointed at this computer's loopback is bound", () => {
+    const part = classifyMcp({ r: { command: 'npx', args: ['mcp-remote', 'http://localhost:3000/sse'] } }, WIN)
+    assert.deepEqual(entry(part.report, 'mcp', 'r'), {
+      kind: 'mcp',
+      name: 'r',
+      verdict: 'bound',
+      why: 'local-url',
+      detail: 'http://localhost:3000/sse',
+    })
+  })
+
+  test('an unknown type and an override without a command are invalid; an override env loses its secrets', () => {
+    const part = classifyMcp(
+      { w: { type: 'ws', url: 'wss://x' }, o: { command: 'npx' }, p: { command: 'npx' } },
+      { ...WIN, mcp: { o: { args: ['x'] }, p: { command: 'p-server', env: { API_KEY: 'LITERAL5' } } } },
+    )
+    assert.deepEqual(entry(part.report, 'mcp', 'w'), {
+      kind: 'mcp',
+      name: 'w',
+      verdict: 'not-sent',
+      why: 'invalid',
+      detail: 'ws',
+    })
+    assert.deepEqual(entry(part.report, 'mcp', 'o'), { kind: 'mcp', name: 'o', verdict: 'not-sent', why: 'invalid' })
+    expect(JSON.stringify(part)).not.toContain('LITERAL5')
+    assert.equal(entry(part.report, 'mcp', 'MCP_P_API_KEY')?.verdict, 'needs-secret')
+  })
+
+  test('a query key that does not decode does not stop the build', () => {
+    const part = classifyMcp({ q: { type: 'http', url: 'https://x.example.com/mcp?%zz=1&token=abc' } }, WIN)
+    assert.equal((part.mcp.q as { url: string }).url, `https://x.example.com/mcp?%zz=1&token=${ref('MCP_Q_TOKEN')}`)
+  })
+
+  test('.. after the placeholder leaves the folder; a backslash on Linux stays', () => {
+    assert.deepEqual(classifyCommand('bash /home/roma/.claude/../bin/x.sh', LINUX), { ok: false, why: 'local-path' })
+    const v = classifyCommand('bash /home/roma/.claude/hooks/a\\ b.sh', LINUX)
+    assert.equal(v.ok && v.command, `bash ${PROFILE_DIR}/hooks/a\\ b.sh`)
+  })
+
+  test("any setting Claude runs as a command goes by the hooks' rule", () => {
+    const part = classifySettings({ fileSuggestion: { type: 'command', command: 'C:/x/f.sh' } }, WIN)
+    assert.equal('fileSuggestion' in part.settings, false)
+    assert.equal(entry(part.report, 'hook', 'fileSuggestion')?.why, 'local-path')
+  })
+
+  test('a Windows program by name does not run on a Linux node', () => {
+    assert.deepEqual(classifyCommand('notify.exe --done', WIN), { ok: false, why: 'windows-only' })
+  })
+
+  test('a hook with a secret in its command is not sent, and the report does not show the value', () => {
+    for (const command of [
+      'GITHUB_TOKEN=ghp_LEAK1 gh pr list',
+      'curl -H "X-Api-Key: LEAK1" https://x',
+      'tool --password LEAK1',
+    ]) {
+      const part = classifySettings(hookSettings(command), WIN)
+      assert.deepEqual(part.hooks, {})
+      const line = part.report[0]
+      assert.equal(line?.why, 'secret-inline')
+      expect(JSON.stringify(part)).not.toContain('LEAK1')
+    }
+  })
+
+  test("a not-sent hook's command is redacted in the report", () => {
+    const part = classifySettings(hookSettings('powershell -File C:/x/a.ps1 -Token LEAK2'), WIN)
+    expect(JSON.stringify(part.report)).not.toContain('LEAK2')
+  })
+
+  test('the hash moves with a hook and with a server', () => {
+    const base = buildManifest(parts(), { config: {}, sinks: {} }, WIN)
+    const h = bundleHash(base)
+    assert.notEqual(bundleHash({ ...base, hooks: { Stop: [{ hooks: [{ type: 'command', command: 'jq .' }] }] } }), h)
+    assert.notEqual(bundleHash({ ...base, mcp: { ...base.mcp, extra: { command: 'npx' } } }), h)
+  })
+
+  test('accept marks an env secret and a launcher too', () => {
+    const accept = ['env:API_TOKEN', 'launcher:launch.claude']
+    assert.equal(
+      entry(classifySettings({ env: { API_TOKEN: 'x' } }, { ...WIN, accept }).report, 'env', 'API_TOKEN')?.accepted,
+      true,
+    )
+    assert.equal(boardSlice({ launch: { claude: 'wrap' } }, {}, accept).report[0]?.accepted, true)
   })
 })

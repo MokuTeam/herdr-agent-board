@@ -129,6 +129,9 @@ export const KEY_SNIPPET =
 // into every shown profile.
 const HERDR_HOOK = /(["'])([^"']*herdr-agent-state[^"']*)\1|(\S*herdr-agent-state\S*)/
 
+/** Whether a hook command is herdr's own Claude hook (it runs herdr-agent-state). */
+export const isHerdrHook = (command: string): boolean => HERDR_HOOK.test(command)
+
 /** The script herdr's own Claude hook runs at SessionStart in these settings, or null when none does. */
 export function herdrHookScript(settings: unknown): string | null {
   for (const { command } of commandsOf(settings, 'SessionStart')) {

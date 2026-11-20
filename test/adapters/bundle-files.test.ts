@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { MAX_FILE_BYTES, modeOf, readProfile } from '../../src/adapters/bundle-files.ts'
+import { MAX_FILE_BYTES, modeOf, type ReadOptions, readProfile } from '../../src/adapters/bundle-files.ts'
 import { buildManifest, bundleHash } from '../../src/core/bundle.ts'
 
 const CANARY = 'canary-51d0e2'
@@ -65,8 +65,8 @@ function profile(): { root: string; dir: string; outside: string } {
   return { root, dir, outside }
 }
 
-const walk = (dir: string, opts = {}) => {
-  const read = readProfile(dir, opts)
+const walk = (dir: string, opts: Partial<ReadOptions> = {}) => {
+  const read = readProfile(dir, { claudeJson: join(dir, '.claude.json'), to: 'linux', ...opts })
   assert.equal(read.ok, true)
   if (!read.ok) throw new Error('not read')
   return read.parts
@@ -206,10 +206,11 @@ describe('readProfile', () => {
   test('settings.json or .claude.json that does not parse: nothing is built', () => {
     const { dir } = profile()
     put(join(dir, 'settings.json'), '{ not json')
-    assert.deepEqual(readProfile(dir), { ok: false, why: 'settings', file: join(dir, 'settings.json') })
+    const opts = { claudeJson: join(dir, '.claude.json'), to: 'linux' }
+    assert.deepEqual(readProfile(dir, opts), { ok: false, why: 'settings', file: join(dir, 'settings.json') })
     put(join(dir, 'settings.json'), '{}')
     put(join(dir, '.claude.json'), '{ not json')
-    assert.deepEqual(readProfile(dir), { ok: false, why: 'claude-json', file: join(dir, '.claude.json') })
+    assert.deepEqual(readProfile(dir, opts), { ok: false, why: 'claude-json', file: join(dir, '.claude.json') })
   })
 })
 
@@ -223,5 +224,87 @@ describe('modeOf', () => {
   test('elsewhere the file system says', () => {
     assert.equal(modeOf({ mode: 0o100750 }, md, 'linux'), 0o750)
     assert.equal(modeOf({ mode: 0o100644 }, sh, 'darwin'), 0o644)
+  })
+})
+
+describe('readProfile: hook scripts and the fence', () => {
+  const hooked = (dir: string, ...commands: string[]): void =>
+    put(
+      join(dir, 'settings.json'),
+      JSON.stringify({ hooks: { Stop: [{ hooks: commands.map(command => ({ type: 'command', command })) }] } }),
+    )
+
+  test("the script a portable hook names travels, exactly that file: not hooks/ as a folder, not herdr's", () => {
+    const { root, dir } = profile()
+    put(join(dir, 'hooks/lint.sh'), '#!/bin/sh\nexit 0\n')
+    put(join(dir, 'hooks/other.sh'), 'unnamed')
+    put(join(dir, 'hooks/herdr-agent-state.sh'), 'herdr')
+    hooked(dir, `bash "${join(dir, 'hooks/lint.sh')}"`, 'bash ~/.claude/hooks/herdr-agent-state.sh')
+    const parts = walk(dir, { home: root })
+    const paths = parts.files.map(f => f.path)
+    assert.ok(paths.includes('hooks/lint.sh'))
+    assert.ok(!paths.includes('hooks/other.sh'))
+    assert.ok(!paths.includes('hooks/herdr-agent-state.sh'))
+    const m = buildManifest(
+      parts,
+      { config: {}, sinks: {} },
+      { from: process.platform, to: 'linux', profileDir: dir, home: root },
+    )
+    assert.equal(m.report.find(e => e.kind === 'hook' && e.name === 'lint')?.why, 'script-sent')
+    // Windows keeps no executable bit: the script's #! makes it 0755.
+    if (process.platform === 'win32') assert.equal(m.files.find(f => f.path === 'hooks/lint.sh')?.mode, 0o755)
+  })
+
+  test('a script that is not there: reported missing, and its hook is not sent', () => {
+    const { dir } = profile()
+    hooked(dir, `bash "${join(dir, 'hooks/gone.sh')}"`)
+    const parts = walk(dir)
+    assert.deepEqual(
+      parts.skipped.find(s => s.path === 'hooks/gone.sh'),
+      { path: 'hooks/gone.sh', why: 'missing' },
+    )
+    const m = buildManifest(parts, { config: {}, sinks: {} }, { from: process.platform, to: 'linux', profileDir: dir })
+    assert.deepEqual(m.hooks, {})
+    assert.equal(m.report.find(e => e.kind === 'hook' && e.name === 'gone')?.why, 'script-missing')
+  })
+
+  test('a link to the folder above the profile, or to .claude.json beside it, is never followed', () => {
+    const { root, dir } = profile()
+    put(join(root, '.claude.json'), JSON.stringify({ userID: CANARY }))
+    put(join(root, '.ssh/id_ed25519'), CANARY)
+    linkFolder(root, join(dir, 'skills/home'))
+    linkFolder(join(root, '.ssh'), join(dir, 'commands/keys'))
+    let fileLink = true
+    try {
+      symlinkSync(join(root, '.claude.json'), join(dir, 'commands/state.json'), 'file')
+    } catch {
+      fileLink = false // Windows without the right to make file links
+    }
+    const parts = walk(dir)
+    expect(JSON.stringify(parts.files)).not.toContain('home/')
+    expect(JSON.stringify(parts.files)).not.toContain('keys')
+    expect(JSON.stringify(parts.files)).not.toContain('state.json')
+    assert.deepEqual(
+      parts.skipped.find(s => s.path === 'skills/home'),
+      { path: 'skills/home', why: 'link-into-profile' },
+    )
+    assert.deepEqual(
+      parts.skipped.find(s => s.path === 'commands/keys'),
+      { path: 'commands/keys', why: 'denied' },
+    )
+    if (fileLink)
+      assert.deepEqual(
+        parts.skipped.find(s => s.path === 'commands/state.json'),
+        { path: 'commands/state.json', why: 'denied' },
+      )
+  })
+
+  test('a profile folder that is not there: nothing is built', () => {
+    const missing = join(temp(), 'nope')
+    assert.deepEqual(readProfile(missing, { claudeJson: join(missing, '.claude.json'), to: 'linux' }), {
+      ok: false,
+      why: 'no-folder',
+      file: missing,
+    })
   })
 })

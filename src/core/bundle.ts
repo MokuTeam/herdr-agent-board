@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto'
 import { isBoardCommand, normPath } from './install-plan.ts'
 import { claudeCommand } from './launch/spawn-args.ts'
 import { pathsIn } from './portable.ts'
+import { isHerdrHook } from './setup.ts'
 
 /** The manifest's shape; a node refuses one it does not know. */
 export const BUNDLE_FORMAT = 1
@@ -35,11 +36,15 @@ export type Verdict = 'sent' | 'translated' | 'not-sent' | 'needs-secret' | 'bou
 export type ReportWhy =
   | 'copied' // sent as it is
   | 'profile-path' // the profile folder's path in it became PROFILE_DIR
+  | 'script-sent' // as profile-path, and the files it names there travel; what they need is not checked
+  | 'script-missing' // it names a file of the profile folder the walk did not read (detail: the path)
   | 'local-path' // it names a path of this computer
-  | 'windows-shell' // PowerShell, cmd or a Windows script, for a node that is not Windows
+  | 'windows-only' // PowerShell, cmd, a Windows script or program, for a node that is not Windows
+  | 'secret-inline' // a hook with a value that looks like a secret in its command
   | 'credentials' // a setting that fetches credentials: the node logs in on its own
   | 'secret-name' // an env name that looks like a secret: give the node the value
   | 'secret-value' // a header or a value that looks like a secret became a ${VAR}
+  | 'reference' // the server already refers to a ${VAR}: give the node its value
   | 'launcher' // a stdio server run by a launcher the node has
   | 'unwrapped' // the launcher's path, `.cmd` or `cmd /c` taken off
   | 'local-command' // a stdio server whose program is not a launcher
@@ -58,6 +63,9 @@ export type SkipWhy =
   | 'link-broken' // a link whose target is not there
   | 'link-into-profile' // a link to a part of the profile folder that is never sent
   | 'link-loop' // a link back to a folder the walk is already in
+  | 'missing' // a file a hook names that is not there, or is not a file
+  | 'denied' // credentials, .claude.json or .ssh, wherever a link leads to them
+  | 'unreadable' // gone or locked while the walk read it
 
 export interface ReportEntry {
   kind: ReportKind
@@ -118,12 +126,15 @@ export interface BundleContext {
 
 /** The launchers a node is expected to have (9.1). */
 export const LAUNCHERS: ReadonlySet<string> = new Set(['npx', 'uvx', 'bunx', 'node', 'python', 'python3', 'docker'])
-/** Names that look like a secret's: their value never goes into a bundle. */
-export const SECRET_NAME = /token|key|secret|password/i
+/**
+ * Names that look like a secret's: their value never goes into a bundle. A count of tokens
+ * (`MAX_THINKING_TOKENS`) is a number, not a secret.
+ */
+export const SECRET_NAME = /token(?!s)|key|secret|password/i
 /** Settings whose command fetches credentials: never sent, a node logs in with its own profile. */
 const CREDENTIAL_KEYS = new Set(['apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport', 'otelHeadersHelper'])
 const WINDOWS_SHELLS = new Set(['powershell', 'pwsh', 'cmd'])
-const WINDOWS_SCRIPT = /\.(ps1|bat|cmd)$/i
+const WINDOWS_ONLY = /\.(ps1|bat|cmd|exe)$/i
 // Paths every POSIX node has, and Git Bash on a Windows master has the same: not a path of this computer.
 const EVERYWHERE = /^\/(dev\/[\w.-]+|bin\/(ba)?sh|usr\/bin\/env|tmp(\/[^\s]*)?)$/
 // A path from a home or a variable: ~/x, $HOME/x, ${HOME}/x, %USERPROFILE%\x.
@@ -206,7 +217,7 @@ export function withProfileDir(command: string, ctx: BundleContext): string {
     const re = new RegExp(`(?<![\\w\\\\/.~-])${body}(?=[\\\\/"'\`\\s]|$)`, caseFree(ctx.from) ? 'gi' : 'g')
     out = out.replace(re, () => PROFILE_DIR)
   }
-  return out.replace(PLACED, run => run.replace(/\\/g, '/'))
+  return ctx.from === 'win32' ? out.replace(PLACED, run => run.replace(/\\/g, '/')) : out
 }
 
 /** The paths of this computer a command or an argument names, PROFILE_DIR's excepted. */
@@ -217,13 +228,52 @@ function localPaths(text: string): string[] {
   return home ? [...found, home[0]] : found
 }
 
-type CommandVerdict =
-  | { ok: true; command: string; translated: boolean }
-  | { ok: false; why: 'local-path' | 'windows-shell' }
+const holdsValue = (v: unknown): v is string => typeof v === 'string' && v !== '' && !v.includes('${')
+const SECRET_HEADER = /^(authorization|proxy-authorization|[\w-]*(token|key|secret|password)[\w-]*)\s*:\s*(.+)$/i
 
-/** Whether a hook's command is the board's own (any copy's, or one running a file of `boardDir`). */
+/**
+ * Where a value that looks like a secret is in a command's words: `NAME=value`, `--name=value`,
+ * `--name value` and a header `Name: value`, each with a name like a secret's. `at` is the word,
+ * `name` the name, `value` the value as written; `next`: the value is the word after.
+ */
+export function secretsIn(words: readonly string[]): { at: number; name: string; value: string; next: boolean }[] {
+  const found: { at: number; name: string; value: string; next: boolean }[] = []
+  words.forEach((w, at) => {
+    const assign = /^(-{0,2})([A-Za-z_][\w.-]*)=(.*)$/s.exec(w)
+    if (assign) {
+      const [, , name = '', value = ''] = assign
+      if (SECRET_NAME.test(name) && holdsValue(value)) found.push({ at, name, value, next: false })
+      return
+    }
+    const flag = /^--?([A-Za-z][\w-]*)$/.exec(w)
+    const after = words[at + 1]
+    if (flag && SECRET_NAME.test(flag[1] ?? '') && after !== undefined && !after.startsWith('-') && holdsValue(after)) {
+      found.push({ at, name: flag[1] ?? '', value: after, next: true })
+      return
+    }
+    const header = SECRET_HEADER.exec(w)
+    if (header && holdsValue(header[3])) found.push({ at, name: header[1] ?? '', value: header[3] ?? '', next: false })
+  })
+  return found
+}
+
+/** A command for the report: each value that looks like a secret (secretsIn) as `***`. */
+export function redacted(command: string): string {
+  let out = command
+  for (const s of secretsIn(wordsOf(command))) out = out.split(s.value).join('***')
+  return out
+}
+
+type CommandVerdict =
+  | { ok: true; command: string; translated: boolean; files: string[] }
+  | { ok: false; why: 'local-path' | 'windows-only' | 'secret-inline' }
+
+/**
+ * Whether a hook's command is never sent: the board's own (any copy's, or one running a file of
+ * `boardDir`), or herdr's own SessionStart hook, which the node's herdr installs with its paths.
+ */
 export function isBoardHook(command: string, ctx: Pick<BundleContext, 'boardDir'>): boolean {
-  if (isBoardCommand(command)) return true
+  if (isBoardCommand(command) || isHerdrHook(command)) return true
   return !!ctx.boardDir && normPath(command).includes(`${normPath(ctx.boardDir)}/`)
 }
 
@@ -236,11 +286,30 @@ export function classifyCommand(command: string, ctx: BundleContext): CommandVer
   const rewritten = withProfileDir(command, ctx)
   const words = wordsOf(rewritten)
   if (ctx.to !== 'win32') {
-    if (WINDOWS_SHELLS.has(programName(programOf(words)))) return { ok: false, why: 'windows-shell' }
-    if (words.some(w => WINDOWS_SCRIPT.test(w))) return { ok: false, why: 'windows-shell' }
+    if (WINDOWS_SHELLS.has(programName(programOf(words)))) return { ok: false, why: 'windows-only' }
+    if (words.some(w => WINDOWS_ONLY.test(w))) return { ok: false, why: 'windows-only' }
   }
   if (localPaths(rewritten).length) return { ok: false, why: 'local-path' }
-  return { ok: true, command: rewritten, translated: rewritten !== command }
+  // `{{profile-dir}}/../x` leaves the folder.
+  if ([...rewritten.matchAll(PLACED)].some(m => /(^|\/)\.\.(\/|$)/.test(m[0].slice(PROFILE_DIR.length))))
+    return { ok: false, why: 'local-path' }
+  if (secretsIn(words).length) return { ok: false, why: 'secret-inline' }
+  return { ok: true, command: rewritten, translated: rewritten !== command, files: filesIn(rewritten) }
+}
+
+/**
+ * The files of the profile folder a rewritten command names, by path in the folder: the script a
+ * hook runs and whatever else it names there. They travel with it (9.1); what they read or run in
+ * turn is not followed.
+ */
+export function filesIn(command: string): string[] {
+  const paths = [...command.matchAll(PLACED)].map(m =>
+    m[0]
+      .slice(PROFILE_DIR.length)
+      .replace(/^\/+/, '')
+      .replace(/[;&|)]+$/, ''),
+  )
+  return [...new Set(paths.filter(p => p && !p.endsWith('/')))]
 }
 
 /** A hook's name in the report: the script it runs without its extension, or its program. */
@@ -255,19 +324,41 @@ export interface SettingsPart {
   settings: Record<string, unknown>
   hooks: Record<string, unknown[]>
   report: ReportEntry[]
+  /** The files of the profile folder the hooks and command settings that travel name (filesIn). */
+  scripts: string[]
 }
 
 /**
  * settings.json for the node (9.1): plain keys copied; `env` copied but for names that look like
  * a secret, which are reported to be given to the node; the board's own hooks never sent (the
  * node's install writes them with its paths); another hook, and a status line, only when its
- * command runs there (classifyCommand); a setting that fetches credentials never. The input is
- * not changed.
+ * command runs there (classifyCommand), with the files it names in the profile folder; a setting
+ * that fetches credentials never. `walked`: the files the walk read; a command naming one it did
+ * not read is not sent. The input is not changed.
  */
-export function classifySettings(settings: unknown, ctx: BundleContext): SettingsPart {
+export function classifySettings(settings: unknown, ctx: BundleContext, walked?: ReadonlySet<string>): SettingsPart {
   const out: Record<string, unknown> = {}
   const hooks: Record<string, unknown[]> = {}
   const report: ReportEntry[] = []
+  const scripts: string[] = []
+  // A command's verdict with its files: sent when the walk read every one of them.
+  const judge = (command: string): CommandVerdict | { ok: false; why: 'script-missing'; path: string } => {
+    const v = classifyCommand(command, ctx)
+    if (!v.ok) return v
+    const missing = walked && v.files.find(f => !walked.has(f))
+    if (missing) return { ok: false, why: 'script-missing', path: missing }
+    scripts.push(...v.files)
+    return v
+  }
+  const sentLine = (kind: ReportKind, name: string, v: { translated: boolean; files: string[] }): ReportEntry =>
+    v.files.length ? { kind, name, verdict: 'translated', why: 'script-sent' } : sentEntry(kind, name, v.translated)
+  const notSent = (name: string, v: { why: ReportWhy; path?: string }, command: string): ReportEntry => ({
+    kind: 'hook',
+    name,
+    verdict: 'not-sent',
+    why: v.why,
+    detail: v.path ?? redacted(command),
+  })
   for (const [key, value] of entriesOf(settings)) {
     if (key === 'hooks') continue
     if (key === 'env') {
@@ -282,13 +373,14 @@ export function classifySettings(settings: unknown, ctx: BundleContext): Setting
       if (Object.keys(env).length) put(out, key, env)
     } else if (CREDENTIAL_KEYS.has(key)) {
       report.push({ kind: 'hook', name: key, verdict: 'not-sent', why: 'credentials' })
-    } else if (key === 'statusLine' && isRecord(value) && typeof value.command === 'string') {
+    } else if (isRecord(value) && value.type === 'command' && typeof value.command === 'string') {
+      // The status line, and any other setting Claude runs as a command, by the hooks' rule.
       if (isBoardHook(value.command, ctx)) continue
-      const v = classifyCommand(value.command, ctx)
+      const v = judge(value.command)
       if (v.ok) {
         put(out, key, { ...clone(value), command: v.command })
-        report.push(sentEntry('hook', key, v.translated))
-      } else report.push({ kind: 'hook', name: key, verdict: 'not-sent', why: v.why, detail: value.command })
+        report.push(sentLine('hook', key, v))
+      } else report.push(notSent(key, v, value.command))
     } else put(out, key, clone(value))
   }
   const source = isRecord(settings) ? settings.hooks : undefined
@@ -307,17 +399,17 @@ export function classifySettings(settings: unknown, ctx: BundleContext): Setting
         }
         if (isBoardHook(hook.command, ctx)) continue
         const name = hookName(hook.command)
-        const v = classifyCommand(hook.command, ctx)
+        const v = judge(hook.command)
         if (v.ok) {
           sent.push({ ...clone(hook), command: v.command })
-          report.push({ ...sentEntry('hook', name, v.translated), detail: event })
-        } else report.push({ kind: 'hook', name, verdict: 'not-sent', why: v.why, detail: hook.command })
+          report.push({ ...sentLine('hook', name, v), detail: event })
+        } else report.push(notSent(name, v, hook.command))
       }
       if (sent.length) kept.push({ ...clone(entry), hooks: sent })
     }
     if (kept.length) put(hooks, event, kept)
   }
-  return { settings: out, hooks, report: accepted(report, ctx.accept) }
+  return { settings: out, hooks, report: accepted(report, ctx.accept), scripts: [...new Set(scripts)].sort() }
 }
 
 const sentEntry = (kind: ReportKind, name: string, translated: boolean): ReportEntry =>
@@ -373,13 +465,14 @@ export function classifyMcp(servers: unknown, ctx: BundleContext): McpPart {
         report.push({ kind: 'mcp', name, verdict: 'not-sent', why: 'invalid' })
         continue
       }
-      put(mcp, name, {
+      const secrets: string[] = []
+      const server: Record<string, unknown> = {
         type: 'stdio',
         command: own.command,
-        args: Array.isArray(own.args) ? own.args.map(String) : [],
-        ...(isRecord(own.env) && { env: clone(own.env) }),
-      })
-      report.push({ kind: 'mcp', name, verdict: 'translated', why: 'override' })
+        args: secretArgs(name, Array.isArray(own.args) ? own.args.map(String) : [], secrets),
+      }
+      if (isRecord(own.env)) server.env = secretEnv(name, own.env, secrets)
+      done(name, server, { verdict: 'translated', why: 'override' }, secrets, mcp, report)
       continue
     }
     if (!isRecord(raw)) {
@@ -389,12 +482,72 @@ export function classifyMcp(servers: unknown, ctx: BundleContext): McpPart {
     const type = typeof raw.type === 'string' ? raw.type.toLowerCase() : typeof raw.url === 'string' ? 'http' : 'stdio'
     if (type === 'http' || type === 'sse') remoteServer(name, raw, mcp, report)
     else if (type === 'stdio') stdioServer(name, raw, ctx, mcp, report)
-    else report.push({ kind: 'mcp', name, verdict: 'bound', why: 'local-command', detail: type })
+    else report.push({ kind: 'mcp', name, verdict: 'not-sent', why: 'invalid', detail: type })
   }
   return { mcp, report: accepted(report, ctx.accept) }
 }
 
-const holdsValue = (v: unknown): v is string => typeof v === 'string' && v !== '' && !v.includes('${')
+const decoded = (s: string): string => {
+  try {
+    return decodeURIComponent(s)
+  } catch {
+    return s
+  }
+}
+
+/** An env with each value whose name looks like a secret's as a reference to \${MCP_<SERVER>_<NAME>}. */
+function secretEnv(server: string, env: Record<string, unknown>, secrets: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (SECRET_NAME.test(key) && holdsValue(value)) {
+      const v = secretVar(server, key)
+      secrets.push(v)
+      put(out, key, `\${${v}}`)
+    } else put(out, key, clone(value))
+  }
+  return out
+}
+
+/** Arguments with each value that looks like a secret (secretsIn) as a reference. */
+function secretArgs(server: string, args: readonly string[], secrets: string[]): string[] {
+  const out = [...args]
+  for (const s of secretsIn(args)) {
+    const v = secretVar(server, s.name)
+    secrets.push(v)
+    const at = s.next ? s.at + 1 : s.at
+    out[at] = (out[at] ?? '').split(s.value).join(`\${${v}}`)
+  }
+  return out
+}
+
+/** The names a server refers to as \${NAME} or \${NAME:-default}, anywhere in it. */
+function refsIn(server: unknown): string[] {
+  const names = [...JSON.stringify(server ?? null).matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}/g)].map(
+    m => m[1] ?? '',
+  )
+  return [...new Set(names)]
+}
+
+/**
+ * A server that travels: in the bundle, its line in the report, a line for each secret it now
+ * refers to, and one for each reference it already had (its value is the node's to be given).
+ */
+function done(
+  name: string,
+  server: Record<string, unknown>,
+  line: Pick<ReportEntry, 'verdict' | 'why'>,
+  secrets: readonly string[],
+  mcp: Record<string, unknown>,
+  report: ReportEntry[],
+): void {
+  put(mcp, name, server)
+  report.push({ kind: 'mcp', name, ...line })
+  for (const v of secrets)
+    report.push({ kind: 'mcp', name: v, verdict: 'needs-secret', why: 'secret-value', detail: name })
+  for (const v of refsIn(server))
+    if (!secrets.includes(v))
+      report.push({ kind: 'mcp', name: v, verdict: 'needs-secret', why: 'reference', detail: name })
+}
 
 function remoteServer(
   name: string,
@@ -408,18 +561,30 @@ function remoteServer(
     return
   }
   if (onLoopback(url)) {
-    report.push({ kind: 'mcp', name, verdict: 'bound', why: 'local-url', detail: url.replace(/[?#].*$/, '') })
+    report.push({ kind: 'mcp', name, verdict: 'bound', why: 'local-url', detail: withoutSecrets(url) })
     return
   }
   const server = clone(raw)
   const secrets: string[] = []
-  // The query by hand: URLSearchParams would percent-encode the reference's `${}`.
-  server.url = url.replace(/([?&])([^=&#]+)=([^&#]*)/g, (whole, sep: string, key: string, value: string) => {
-    if (!SECRET_NAME.test(decodeURIComponent(key)) || !holdsValue(value)) return whole
-    const v = secretVar(name, key)
-    secrets.push(v)
-    return `${sep}${key}=\${${v}}`
-  })
+  // A user and password in the address, then the query, by hand: URL and URLSearchParams would
+  // percent-encode the reference's `${}`.
+  server.url = url
+    .replace(/^([a-z][a-z0-9+.-]*:\/\/)([^@/?#]*)@/i, (_whole, scheme: string, info: string) => {
+      const [user = '', password] = info.split(/:(.*)/s)
+      const parts = [user, password].map((part, i) => {
+        if (part === undefined || !holdsValue(part)) return part
+        const v = secretVar(name, i ? 'password' : 'user')
+        secrets.push(v)
+        return `\${${v}}`
+      })
+      return parts[1] === undefined ? `${scheme}${parts[0]}@` : `${scheme}${parts[0]}:${parts[1]}@`
+    })
+    .replace(/([?&])([^=&#]+)=([^&#]*)/g, (whole, sep: string, key: string, value: string) => {
+      if (!SECRET_NAME.test(decoded(key)) || !holdsValue(value)) return whole
+      const v = secretVar(name, key)
+      secrets.push(v)
+      return `${sep}${key}=\${${v}}`
+    })
   if (isRecord(raw.headers)) {
     const headers: Record<string, unknown> = {}
     for (const [header, value] of Object.entries(raw.headers)) {
@@ -431,15 +596,15 @@ function remoteServer(
     }
     server.headers = headers
   }
-  put(mcp, name, server)
-  report.push(
-    secrets.length
-      ? { kind: 'mcp', name, verdict: 'translated', why: 'secret-value' }
-      : { kind: 'mcp', name, verdict: 'sent', why: 'copied' },
-  )
-  for (const v of secrets)
-    report.push({ kind: 'mcp', name: v, verdict: 'needs-secret', why: 'secret-value', detail: name })
+  const line = secrets.length
+    ? ({ verdict: 'translated', why: 'secret-value' } as const)
+    : ({ verdict: 'sent', why: 'copied' } as const)
+  done(name, server, line, secrets, mcp, report)
 }
+
+/** A URL for the report: no user, password or query. */
+const withoutSecrets = (url: string): string =>
+  url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/?#]*@/i, '$1').replace(/[?#].*$/, '')
 
 function stdioServer(
   name: string,
@@ -474,23 +639,17 @@ function stdioServer(
     report.push({ kind: 'mcp', name, verdict: 'bound', why: 'local-path', detail: local[0] ?? '' })
     return
   }
-  const server: Record<string, unknown> = { ...clone(raw), command, args }
-  const secrets: string[] = []
-  if (isRecord(raw.env)) {
-    const env: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(raw.env)) {
-      if (SECRET_NAME.test(key) && holdsValue(value)) {
-        secrets.push(key)
-        put(env, key, `\${${key}}`)
-      } else put(env, key, clone(value))
-    }
-    server.env = env
+  // `npx mcp-remote http://localhost:3000/sse`: a server on this computer behind a launcher.
+  const loop = args.flatMap(a => a.match(/[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi) ?? []).find(onLoopback)
+  if (loop) {
+    report.push({ kind: 'mcp', name, verdict: 'bound', why: 'local-url', detail: withoutSecrets(loop) })
+    return
   }
-  put(mcp, name, server)
+  const secrets: string[] = []
+  const server: Record<string, unknown> = { ...clone(raw), command, args: secretArgs(name, args, secrets) }
+  if (isRecord(raw.env)) server.env = secretEnv(name, raw.env, secrets)
   const why: ReportWhy = unwrapped ? 'unwrapped' : secrets.length ? 'secret-value' : 'launcher'
-  report.push({ kind: 'mcp', name, verdict: unwrapped || secrets.length ? 'translated' : 'sent', why })
-  for (const v of secrets)
-    report.push({ kind: 'mcp', name: v, verdict: 'needs-secret', why: 'secret-value', detail: name })
+  done(name, server, { verdict: unwrapped || secrets.length ? 'translated' : 'sent', why }, secrets, mcp, report)
 }
 
 /**
@@ -567,7 +726,7 @@ export function buildManifest(
     report.push({ ...partOf(path), name: path, verdict: 'translated', why: 'link-followed' })
   for (const s of [...parts.skipped].sort(byPath))
     report.push({ ...partOf(s.path), name: s.path, verdict: 'not-sent', why: s.why })
-  const settings = classifySettings(parts.settings, ctx)
+  const settings = classifySettings(parts.settings, ctx, new Set(files.map(f => f.path)))
   const mcp = classifyMcp(parts.mcpServers, ctx)
   const slice = boardSlice(board.config, board.sinks, ctx.accept)
   return {
