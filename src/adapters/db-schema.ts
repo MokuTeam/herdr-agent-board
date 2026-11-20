@@ -220,6 +220,38 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX workdesk_dialog_pending ON workdesk_dialog_events (board_task_id, assignment_id, id);
     `,
   },
+  {
+    version: 7,
+    store: 'decisions',
+    // Decisions (#487, adapters/decision-store.ts): every `board ask` while `decisions` is on, with
+    // its options (JSON labels), the recommended one (1-based), its default (the --default-after in
+    // ms, when it fires, its schedule entry), Hold, and how it closed: the answer, who gave it
+    // (owner, default, withdrawn), by what (button, text, prompt, default, replaced, cleared) and
+    // when. Nothing reads the table while decisions are off.
+    sql: `
+      CREATE TABLE decisions (
+        id TEXT PRIMARY KEY,
+        session TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        lane TEXT,
+        thread TEXT,
+        question TEXT NOT NULL,
+        options TEXT NOT NULL DEFAULT '[]',
+        recommend INTEGER,
+        default_ms INTEGER,
+        default_at INTEGER,
+        entry TEXT,
+        held INTEGER,
+        asked_at INTEGER NOT NULL,
+        answer TEXT,
+        answered_by TEXT,
+        via TEXT,
+        answered_at INTEGER
+      ) STRICT;
+      CREATE INDEX decisions_open ON decisions (answered_at, asked_at);
+      CREATE INDEX decisions_by_session ON decisions (session, asked_at);
+    `,
+  },
 ]
 
 /** The version the code makes a file: the last step's. */

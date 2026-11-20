@@ -32,6 +32,7 @@ import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
 import { calendarConfig } from '../core/calendar.ts'
+import { decisionsConfig } from '../core/decisions.ts'
 import { heldQuestionOf } from '../core/held-question.ts'
 import { isNotice } from '../core/notices.ts'
 import { type Profile, profileReport } from '../core/profiles.ts'
@@ -125,9 +126,15 @@ async function main(): Promise<void> {
   // user dragged the card to has done its job either way: the session works again, which drops
   // the pin anyway (services/board.ts pinOf).
   const fromBoard = isNotice(input.prompt)
+  // A card with an open decision (#487) loses it with its ask; only such a card has one.
   const answered = (c: typeof card): CardPatch | null =>
     c?.pin || (c?.ask && !fromBoard)
-      ? { ...(!fromBoard && { ask: '', askSince: '' }), pin: '', pinAt: '', pinBusy: '' }
+      ? {
+          ...(!fromBoard && { ask: '', askSince: '', ...(c?.decision !== undefined && { decision: '' }) }),
+          pin: '',
+          pinAt: '',
+          pinBusy: '',
+        }
       : null
   // A pi session's ask and wait are on pi's card; the brief stays with the Claude session it went to.
   // pi's card is told the profile too: the folder this Claude runs in is the account pi's turn
@@ -163,6 +170,8 @@ async function main(): Promise<void> {
       calendar,
       // Threads (#379), only while config.json turns them on: else the brief is as it was.
       threadsConfig(cfg.threads),
+      // Decisions (#487), likewise.
+      decisionsConfig(cfg.decisions),
     )
     Object.assign(patch, { briefedAt: Date.now(), briefV: BRIEF_VERSION })
     if (presence) patch.presenceSeen = presence.since
@@ -189,6 +198,16 @@ async function main(): Promise<void> {
     }
   }
   if (Object.keys(patch).length) writeCard(sid, patch)
+  // Decisions (#487): the decision the ask carried is closed, the owner's answer or withdrawn.
+  if (event === 'UserPromptSubmit' && !fromBoard) {
+    for (const c of [card, boardKey ? boardCard : null]) {
+      if (!c?.ask || c.decision === undefined) continue
+      const { closeOnPrompt } = await import('../services/decisions.ts')
+      try {
+        closeOnPrompt(c, input.prompt, Date.now())
+      } catch {}
+    }
+  }
   if (event === 'SessionStart') await reportResume(input, sid, pane, dir, profiles, cfg)
   if (context) console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }))
 }

@@ -3,7 +3,11 @@
 //   board cat <id> [title]   set the category (lane); a new id with a title is added to the config
 //   board doing <text>       what the session works on now
 //   board wait <text>        what it waits for outside the chat (moves the card to "waiting")
-//   board ask <question>     needs the user: "Needs me" until the user's next prompt
+//   board ask <question>     needs the user: "Needs me" until the user's next prompt; while
+//                            config.json turns decisions on (#487), also --option "<label>" (2 to
+//                            4), --recommend <n>, --default-after <30m|2h> (needs --recommend)
+//   board decisions [--done] what waits on the owner across lanes (decisions on), or the last
+//                            ones closed
 //   board done [text]        task finished: clears doing, wait and ask, keeps the result
 //   board clear              clears doing, wait, ask and result
 //   board favorite [off]     keeps the session in sight: first in its column, whole however long
@@ -156,6 +160,7 @@ import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { withBoardPaths } from '../core/board-paths.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { CODEX_AGENT } from '../core/codex.ts'
+import { decisionsConfig } from '../core/decisions.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
 import { parseMove } from '../core/move.ts'
@@ -193,7 +198,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | presence [here | away | call] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | presence [here | away | call] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal'])
@@ -981,6 +986,10 @@ async function main(): Promise<void> {
   if (cmd === 'tg-key') return tgKey()
   if (cmd === 'presence' || cmd === 'away') return presence()
   if (cmd === 'team') return team()
+  if (cmd === 'decisions') {
+    if (!decisionsConfig(cfg.decisions)) throw new Error('decisions are off on this board (config.json "decisions")')
+    return (await import('./decisions-cli.ts')).decisionsCommand(words, Date.now())
+  }
 
   // schedule --move <id>: a parked entry to this session (or --session's, which must be on the board).
   const mv = cmd === 'schedule' ? flagWords.indexOf('--move') : -1
@@ -988,6 +997,9 @@ async function main(): Promise<void> {
   // Listing and removing reach an archived session's parked entries; nothing else is for one.
   const s = await resolveSession({ archived: (cmd === 'schedule' && moving === null) || cmd === 'unschedule' })
   const now = Date.now()
+  // Decisions (#487): only while config.json turns them on; `tail` is what `board ask` adds to the card's line.
+  const decisionsOn = decisionsConfig(cfg.decisions)
+  let tail = ''
   switch (cmd) {
     case 'show':
       break
@@ -1007,6 +1019,7 @@ async function main(): Promise<void> {
     }
     case 'doing':
       if (!text) throw new Error('usage: board doing <text>')
+      if (decisionsOn) (await import('./decisions-cli.ts')).withdrawDecision(s.key, now)
       // Back at work: whatever it waited for has arrived, whatever it asked is settled.
       writeCard(s.key, { doing: text, wait: '', waitSince: '', ask: '', askSince: '', result: '', by: 'agent' })
       break
@@ -1015,14 +1028,24 @@ async function main(): Promise<void> {
       writeCard(s.key, { wait: text, waitSince: now, by: 'agent' })
       break
     case 'ask':
+      // Decisions (#487): options, a recommendation and a default, only while config.json turns them on.
+      if (decisionsOn) {
+        const { askCommand } = await import('./decisions-cli.ts')
+        const card = readCard(s.key)
+        const lane = (typeof card?.category === 'string' && card.category) || categoryFor(cfg, s.cwd) || null
+        tail = askCommand(decisionsOn, { ...s, lane }, flagWords, dashes < 0 ? [] : argv.slice(dashes + 1), now)
+        break
+      }
       // Needs the user: the card goes to "Needs me" until the user's next prompt (entrypoints/hook.ts clears it).
       if (!text) throw new Error('usage: board ask <question>')
       writeCard(s.key, { ask: text, askSince: now, by: 'agent' })
       break
     case 'done':
+      if (decisionsOn) (await import('./decisions-cli.ts')).withdrawDecision(s.key, now)
       writeCard(s.key, { doing: '', wait: '', waitSince: '', ask: '', askSince: '', result: text, by: 'agent' })
       break
     case 'clear':
+      if (decisionsOn) (await import('./decisions-cli.ts')).withdrawDecision(s.key, now)
       writeCard(s.key, { doing: '', wait: '', waitSince: '', ask: '', askSince: '', result: '' })
       break
     case 'favorite': {
@@ -1106,7 +1129,7 @@ async function main(): Promise<void> {
   }
   const cat = readCard(s.key)?.category
   const extra = cat && !cfg.categories.some(c => c.id === cat) ? ` (new lane "${categoryInfo(cfg, cat).title}")` : ''
-  console.log(`ok · ${line(s.key, s.cwd)}${extra}`)
+  console.log(`ok · ${line(s.key, s.cwd)}${extra}${tail}`)
 }
 
 /**
@@ -2096,9 +2119,17 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
       const item = (await sessions()).find(i => i.key === word || i.session === word)
       return item ? { kind: 'session', key: item.key, name: item.name || item.autoName || item.key.slice(0, 8) } : null
     },
-    setAsk: question => {
-      if (key) writeCard(key, { ask: question, askSince: Date.now(), by: 'agent' })
+    setAsk: async (question, decision) => {
+      if (!key) return undefined
+      // Decisions (#487): the question's options and default with it, while config.json turns them on.
+      if (!decision || !decisionsConfig(c.decisions)) {
+        writeCard(key, { ask: question, askSince: Date.now(), by: 'agent' })
+        return undefined
+      }
+      const { askThreadDecision } = await import('./decisions-cli.ts')
+      return askThreadDecision({ key, name, lane }, question, decision, Date.now())
     },
+    decisions: decisionsConfig(c.decisions),
     openBoard: async key => {
       const { openWeb } = await import('../services/web-open.ts')
       const r = await openWeb(c, { thread: key })

@@ -8,7 +8,7 @@
 //   board thread post <key> [--status <s>] [--summary "<line>"] [--waiting "<on what>"]
 //                           [--file <path>]... [--link <url>]... [--reply <entry>] [--private] ["<text>"]
 //   board thread done <key> ["<summary>"]
-//   board thread ask <key> "<question for the owner>"
+//   board thread ask <key> "<question for the owner>" [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] (the flags: decisions on)
 //   board thread set <key> [--title "<t>"] [--assignee <session|none>] [--lane <id>] [--parent <key|none>]
 //   board thread show <key> [--last <n>] [--since <n>] [--full]
 //   board thread list [--mine | --lane <id> | --all] [--status <s>] [--done]
@@ -39,6 +39,7 @@ import {
 } from '../adapters/work-thread-store.ts'
 import { KEPT_SUBS } from '../core/node-uplink.ts'
 import { nodeConfig } from '../core/nodes.ts'
+import { type AskSpec, askSpec, type DecisionsConfig } from '../core/decisions.ts'
 import { OWNER } from '../core/owner-watch.ts'
 import { parseTaskFile, TaskFileError } from '../core/thread-import.ts'
 import type { Config } from '../core/types.ts'
@@ -83,7 +84,7 @@ export const THREAD_USAGE = `board thread new [--lane <id>] [--parent <key>] [--
 board thread post <key> [--status next|doing|waiting|owner|done|dropped] [--summary "<line>"] [--waiting "<on what>"]
                         [--file <path>]... [--link <url>]... [--reply <entry>] [--private] ["<text>"]
 board thread done <key> ["<summary>"] [--file <path>]... [--link <url>]...
-board thread ask <key> "<question for the owner>"
+board thread ask <key> "<question for the owner>" [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] (the flags: decisions on)
 board thread set <key> [--title "<t>"] [--assignee <session|none>] [--lane <id>] [--parent <key|none>]
 board thread show <key> [--last <n>] [--since <n>] [--full]
 board thread list [--mine | --lane <id> | --all] [--status <s>] [--done]
@@ -108,7 +109,8 @@ const FLAGS: Record<string, { values: readonly string[]; bare: readonly string[]
   new: { values: ['--lane', '--parent', '--to'], bare: ['--doing'] },
   post: { values: ['--status', '--summary', '--waiting', '--file', '--link', '--reply'], bare: ['--private'] },
   done: { values: ['--summary', '--file', '--link', '--reply'], bare: ['--private'] },
-  ask: { values: [], bare: [] },
+  // --option, --recommend, --default-after: decisions (#487), refused as before while they are off.
+  ask: { values: ['--option', '--recommend', '--default-after'], bare: [] },
   set: { values: ['--title', '--assignee', '--lane', '--parent'], bare: [] },
   show: { values: ['--last', '--since'], bare: ['--full'] },
   list: { values: ['--lane', '--status'], bare: ['--mine', '--all', '--done'] },
@@ -174,8 +176,10 @@ export interface ThreadCmdContext {
   findSession: (word: string) => Promise<Party | null>
   /** A session on the board by its key alone (an imported item's owner_id); null when none has it. */
   sessionByKey?: (key: string) => Promise<Party | null>
-  /** Puts the question on the session's card, as `board ask` does. */
-  setAsk?: (question: string) => void
+  /** Puts the question on the session's card, as `board ask` does; with decisions on (#487), its decision too, whose line it returns. */
+  setAsk?: (question: string, decision?: { spec: AskSpec; thread: { id: string; key: string } }) => unknown
+  /** config.json's `decisions` (#487), read: null while off. */
+  decisions?: DecisionsConfig | null
   /** Raises the board's window on the thread `key` (#392: its page opens it); its address, or why not. */
   openBoard?: (key: string) => Promise<{ ok: true; url: string } | { ok: false; error: string }>
   /** `--idle`, which the `board` command takes out of the words for every command. */
@@ -526,11 +530,26 @@ class Run {
       }
       case 'ask': {
         const [key, ...words] = a.words
-        const head = this.thread(key)
         const question = words.join(' ')
+        // Decisions (#487): the flags only while they are on; off, refused as a flag ask never took.
+        const decisions = this.ctx.decisions ?? null
+        const given = ['--option', '--recommend', '--default-after'].find(f => a.all(f).length)
+        if (given && !decisions)
+          throw new Usage(`board thread ask does not take ${given} (put -- before text that starts with --)`)
+        const spec = decisions
+          ? askSpec(question, a.all('--option'), a.one('--recommend'), a.one('--default-after'), decisions)
+          : null
+        const head = this.thread(key)
         const w = askOwner(this.write, head, question)
-        if (this.ctx.actor.kind === 'session') this.ctx.setAsk?.(w.head.waitingOn)
-        return this.wrote(w)
+        // What the decision adds to the line ("decision <id> · default in 2 h"), when there is one.
+        const extra =
+          this.ctx.actor.kind === 'session'
+            ? await this.ctx.setAsk?.(
+                w.head.waitingOn,
+                spec ? { spec, thread: { id: w.head.id, key: w.head.key } } : undefined,
+              )
+            : undefined
+        return this.wrote(w, typeof extra === 'string' && extra ? [extra] : [])
       }
       case 'set': {
         const head = this.thread(a.words[0])

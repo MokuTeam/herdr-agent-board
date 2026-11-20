@@ -67,6 +67,7 @@ import { workdeskConfig } from '../core/workdesk.ts'
 import { type ActionResult, checkWake, readyToSleep, send, sleepSession, wake } from './actions.ts'
 import { closeDue, listArchive } from './archive.ts'
 import { collect } from './board.ts'
+import { defaultDue, defaulted } from './decisions.ts'
 import type { Deps } from './deps.ts'
 import { moveAsleep, moveTarget } from './move.ts'
 import { currentWakeMode } from './wake/mode.ts'
@@ -99,7 +100,7 @@ const waitsForWake = (item: Item, r: ActionResult): boolean =>
 const numberOf = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
 
 /** A plain one-off reminder, which goes in one prompt with others due beside it (#306). */
-const joins = (e: ScheduleEntry): boolean => !e.kind && !e.cron && !e.receipt
+const joins = (e: ScheduleEntry): boolean => !e.kind && !e.cron && !e.receipt && e.decision === undefined
 // The texts of a joined prompt, at most: herdr gets the prompt as one argument, and Windows refuses
 // a long one. What is left over goes on the next tick, as the next prompt.
 const JOINED_MAX = 8000
@@ -186,6 +187,16 @@ export function startScheduler({
         if (delivered.get(entry.id) === entry.next) {
           finish(entry)
           continue
+        }
+        // A decision's default (#487, services/decisions.ts): only while its question is still open.
+        if (entry.decision !== undefined) {
+          const open = defaultDue(entry)
+          if (open === 'wait') continue
+          if (open === 'drop') {
+            removeEntry(entry.id, 'cancelled')
+            logRun(record(entry, now, 'cancelled', 'answered'))
+            continue
+          }
         }
         // Another device's session (#501): through its node, never this computer's herdr.
         const via = parseNodeKey(entry.key) ? (remote?.() ?? null) : null
@@ -594,6 +605,13 @@ export function startScheduler({
   function sent(entry: ScheduleEntry, result = 'sent', why?: string): void {
     const now = Date.now()
     if (entry.receipt) settleReport(entry, 'sent')
+    if (entry.decision !== undefined) {
+      try {
+        defaulted(entry, now)
+      } catch (err) {
+        log(`decision ${String(entry.decision)}: ${messageOf(err)}`)
+      }
+    }
     delivered.set(entry.id, entry.next)
     finish(entry, now)
     logRun(record(entry, now, result, why))
