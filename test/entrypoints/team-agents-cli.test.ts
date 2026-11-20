@@ -288,6 +288,60 @@ test('#371: board team post and reply take --file: the absolute path goes to the
   }
 })
 
+test('#459: post and reply read no flag after a lone --: the words after it are the text; before it they still count', async () => {
+  const posted: Record<string, unknown>[] = []
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    async fetch(req) {
+      if (req.method === 'GET') return Response.json({ threads: [{ key: `${P}/general`, scope: P, id: 'general' }] })
+      posted.push((await req.json()) as Record<string, unknown>)
+      return Response.json({ ok: true, sent: true, thread: `${P}/general` })
+    },
+  })
+  try {
+    const ctx = {
+      webPort: server.port as number,
+      roster: [{ peer: P, name: 'anna' }],
+      self: async () => ({ key: 'k1', name: 'docs' }),
+      find: async () => ({ key: 'k1' }),
+    }
+    const key = `${P}/general`
+    await teamAgents('post', ['anna', '--', '--link'], ctx)
+    await teamAgents('post', ['anna', '--', '--new'], ctx)
+    await teamAgents('post', ['anna', '--new', 'Hub', '--link', 'https://example.com/pr/1', '--', '--file x'], ctx)
+    await teamAgents('post', ['anna', '--new', 'Hub', 'plain'], ctx)
+    await teamAgents('reply', [key, '--', '--to'], ctx)
+    await teamAgents('reply', [key, '--', '--file'], ctx)
+    await teamAgents('reply', ['--', key, '-- 50%'], ctx)
+    await teamAgents('post', ['--', 'anna', 'first'], ctx)
+    await teamAgents('post', ['anna', '--', '--'], ctx)
+    const session = { key: 'k1', name: 'docs' }
+    expect(posted).toEqual([
+      { to: P, text: '--link', session },
+      { to: P, text: '--new', session },
+      { to: P, text: '--file x', session, thread: { title: 'Hub', link: 'https://example.com/pr/1' } },
+      { to: P, text: 'plain', session, thread: { title: 'Hub' } },
+      { to: P, text: '--to', session, thread: { id: 'general' } },
+      { to: P, text: '--file', session, thread: { id: 'general' } },
+      { to: P, text: '-- 50%', session, thread: { id: 'general' } },
+      { to: P, text: 'first', session },
+      { to: P, text: '--', session },
+    ])
+    // A flag after -- is a word like any other: one too many is the usage, as without the --.
+    await expect(teamAgents('post', ['anna', '--', '--new', 'Hub', 'x'], ctx)).rejects.toThrow(/usage/)
+    // --link still needs --new before the --, and --to still needs its ref there.
+    await expect(teamAgents('post', ['anna', '--link', 'https://example.com', '--', 'x'], ctx)).rejects.toThrow(/usage/)
+    await expect(teamAgents('reply', [key, '--to', '--', 'x'], ctx)).rejects.toThrow('without a # in front')
+    // A lone -- is no flag's value either.
+    await expect(teamAgents('post', ['anna', '--new', '--', 'x'], ctx)).rejects.toThrow(/usage/)
+    await expect(teamAgents('post', ['anna', '--file', '--', 'x'], ctx)).rejects.toThrow(/usage/)
+    expect(posted).toHaveLength(9)
+  } finally {
+    server.stop(true)
+  }
+})
+
 test('#371: a thread lists a file as data: its name, size and where it was saved, or why it did not arrive', () => {
   const out = framedThread(
     `${P}/general`,

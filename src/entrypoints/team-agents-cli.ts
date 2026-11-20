@@ -168,6 +168,15 @@ function wordsOf(rest: string[], want: number, file: unknown): string[] {
   throw new Error(`usage: ${AGENT_USAGE}`)
 }
 
+/**
+ * Post's or reply's words split at the first lone `--` (#459): the flags are read before it only,
+ * and every word after it is text, a flag's name included.
+ */
+function cutAtDashes(args: string[]): { flags: string[]; after: string[] } {
+  const i = args.indexOf('--')
+  return i < 0 ? { flags: args, after: [] } : { flags: args.slice(0, i), after: args.slice(i + 1) }
+}
+
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name)
   if (i < 0) return undefined
@@ -221,11 +230,12 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
       : 'ok · no listener: what comes in waits in the Team panel'
   }
   if (op === 'post') {
-    const title = flag(rest, '--new')
-    const link = flag(rest, '--link')
-    const file = fileFlag(rest)
+    const { flags, after } = cutAtDashes(rest)
+    const title = flag(flags, '--new')
+    const link = flag(flags, '--link')
+    const file = fileFlag(flags)
     if (link !== undefined && title === undefined) throw new Error(`usage: ${AGENT_USAGE}`)
-    const [who = '', text = ''] = wordsOf(rest, 2, file)
+    const [who = '', text = ''] = wordsOf([...flags, ...after], 2, file)
     const to = targetOf(ctx, who)
     const self = await ctx.self()
     const thread = title !== undefined ? { title, ...(link !== undefined && { link }) } : undefined
@@ -269,13 +279,14 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
   }
   if (op === 'reply') {
     // A ref after --to that a shell took for a comment (`#...`) arrives as nothing.
-    if (rest.at(-1) === '--to')
+    const { flags, after } = cutAtDashes(rest)
+    if (flags.at(-1) === '--to')
       throw new Error(
         "--to takes the message's ref as board team thread prints it, such as 1a2b3c4d, without a # in front",
       )
-    const to = flag(rest, '--to')
-    const file = fileFlag(rest)
-    const [where = '', text = ''] = wordsOf(rest, 2, file)
+    const to = flag(flags, '--to')
+    const file = fileFlag(flags)
+    const [where = '', text = ''] = wordsOf([...flags, ...after], 2, file)
     const key = await threadKeyOf(ctx, where)
     const parts = splitKey(key)
     if (!parts) throw new Error('no such thread')

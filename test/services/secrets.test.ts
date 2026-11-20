@@ -189,6 +189,25 @@ test('`board secret request` waits for the owner and prints what came of it; --n
   assert.equal(lines[0], 'tok · file · fields: token')
 })
 
+test('#459: `board secret` reads no flag after a lone --; before it they still count', async () => {
+  const { cfg } = setUp()
+  const lines: string[] = []
+  const ctx = { cfg, session: me, out: (l: string) => lines.push(l), pollMs: 20 }
+  assert.equal(await secretCmd(['request', '--title', 'x', '--sink', 'tok', '--', '--no-wait'], ctx), 1)
+  assert.match(lines.at(-1) ?? '', /^usage: unexpected: --no-wait$/m)
+  assert.equal(await secretCmd(['request', '--title', 'x', '--', '--sink', 'tok'], ctx), 1)
+  assert.match(lines.at(-1) ?? '', /^usage: unexpected: --sink tok$/m)
+  assert.equal(requestsOf(readCard('s1')?.secrets).length, 0)
+  assert.equal(await secretCmd(['request', '--title', 'x', '--sink', 'tok', '--no-wait', '--'], ctx), 2)
+  const id = /pending · ([0-9a-f]{12})/.exec(lines.at(-1) ?? '')?.[1] ?? ''
+  assert.ok(id)
+  // The id after the --; a --wait there is a word, so status answers at once.
+  assert.equal(await secretCmd(['status', '--', id], ctx), 2)
+  assert.equal(await secretCmd(['status', id, '--', '--wait'], ctx), 2)
+  assert.equal(await secretCmd(['cancel', '--', id], ctx), 0)
+  assert.equal(lines.at(-1), `cancelled · ${id} · tok`)
+})
+
 test('a pane-keyed session, a name with spaces and another alphabet, a value with % and Cyrillic: as any other', async () => {
   const { home, cfg } = setUp()
   const pane = { key: 'pane-wP:p8Y', name: 'Сессия с пробелом' }
