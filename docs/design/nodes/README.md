@@ -185,7 +185,7 @@ The plugin declares `windows, linux, macos` (`herdr-plugin.toml`). Whether herdr
         └────────────────────┘   └────────────────────┘   └────────────────────┘
 ```
 
-- **A node is a whole board with one more door.** It runs `bun src/entrypoints/server.ts` (the web board alone, which exists) under a service unit, with a `node` key in its config.json. There is no reduced "node role" build: cards, hooks, the `board` command, sleep and wake, the scheduler and the terminal run on the node exactly as on any board today. That is what keeps the change small and keeps a node working while the master is away.
+- **A node is a whole board with one more door.** herdr runs there as a service (`herdr server`) with the plugin linked, and the plugin's own startup entries bring up the board and sleep and wake, as on any computer, with nobody attached (tried on a server, section 18). The board's config.json has a `node` key. There is no reduced "node role" build: cards, hooks, the `board` command, sleep and wake, the scheduler and the terminal run on the node exactly as on any board today. That is what keeps the change small and keeps a node working while the master is away.
 - **Roles are keys.** `nodes` makes a board a master, `node` makes it a node, and one board may hold both. Nothing in the code path says "this build is a node". That is what keeps section 21 possible.
 - **The master door** is a new listener on the node, on 127.0.0.1, for its master, by a bearer token. It serves an allowlist of the board's existing routes plus a few under `/api/node/`. The phones' listener and its pairing are not touched.
 - **The master aggregates at publish time.** Each node's `/api/events` stream gives its whole payload, as a page gets it. The master adds those items to its own payload, each with a `device` and a key prefixed `@<device>:`. The board's own item list stays local: the scheduler, auto-compact, Workdesk, wake and the links never see a remote item, so they cannot act on one through local herdr.
@@ -481,7 +481,7 @@ The owner's second demand: access on a node works as on the master. What that me
 
 Settings, "Devices...", "Add a server". The flow is "Set up the server"'s, with a plan of its own: log in once (the password in memory only, through the askpass listener; the host key pinned at first sight and shown), Look, a plan in plain words, Apply, undo of a failed step, a record, Undo later. Steps:
 
-1. Two users. `agent-board`: a login user with a home, lingering enabled, who owns herdr, the agents and the work. `agent-board-link`: a system user without a shell, fenced in an sshd drop-in to one thing, a forward to `127.0.0.1:12430` (`restrict,port-forwarding,permitopen=...` on its key, `ForceCommand /bin/false`, `PermitTTY no`, `AllowTcpForwarding local`, no stream-local forwarding).
+1. Two users. `agent-board`: a login user with a home, lingering enabled, who owns herdr, the agents and the work, under the slice ceiling of step 9. `agent-board-link`: a system user without a shell, fenced in an sshd drop-in to one thing, a forward to `127.0.0.1:12430` (`restrict,port-forwarding,permitopen=...` on its key, `ForceCommand /bin/false`, `PermitTTY no`, `AllowTcpForwarding local`, no stream-local forwarding).
 2. Packages: git, curl, unzip, ca-certificates. Behind a tick in the plan, like Docker today.
 3. Bun at a pinned version, for `agent-board`.
 4. herdr at a pinned version (0.9.5 or newer, for `--env`) and its user unit.
@@ -489,7 +489,7 @@ Settings, "Devices...", "Add a server". The flow is "Set up the server"'s, with 
 6. The plugin, sent from the master: the master's own checkout at its commit as one archive over ssh's stdin (the way the backup drop exchanges bytes, `src/adapters/backup-ssh.ts:61`), then `bun install --production` and `herdr plugin link`. The node needs no access to the repository, and its code is the master's code.
 7. config.json with `node`, and `masters.json` with the hash of a token the master made. Only the hash crosses.
 8. The board's install action (commands, hooks, skills).
-9. A user unit that runs `bun src/entrypoints/server.ts`, restarted always with a random delay.
+9. A user unit that runs `herdr server`, restarted on failure. Nothing else is needed for the board: with the plugin linked, herdr's startup opens the Board workspace, whose process serves the web board and the door, and the Wake workspace (section 18). A drop-in for the user's slice (`MemoryHigh`, `MemoryMax`, `MemorySwapMax`, `CPUWeight`) gives everything the node runs a ceiling, so a session's test run cannot starve what else lives on the server; the plan proposes figures from the server's memory and what is free of it at Look.
 10. The check: through the link user, `/api/hello` answers with `node.api: 1`.
 
 Then the master writes the device into `nodes`, starts the link, takes the first status, writes the default thresholds, sends the bundle, and shows "Log in to Claude on server-1". The record is `/etc/agent-board-node/setup.json`; Undo removes what the run made and never the work folders unless ticked. Root is needed again only for Undo and OS packages; the plugin's updates ride the link.
@@ -708,7 +708,8 @@ AGENTS.md asks that a change for one setup leaves every other on the code path i
 ## 18. What was not verified
 
 - Line numbers come from six read-only passes over `ee32fc89`. The seams the plan depends on were read again by hand: `launches.start`, the refresh and `find` in `board-state.ts`, `remoteRefusal`, the route list and the local listener in `app.ts`, `thread-cli`'s and `time-cli`'s database access, `server.ts`, `herdr-plugin.toml`, the launch request's checks. The rest are as reported.
-- herdr with no terminal on a server, and everything about Claude Code on such a server (T0). The README describes a board on a server with a person attached to it; the unattended case is not described.
+- Tried on a server (Ubuntu 24.04, 2026-11-21), as T0 asked: herdr 0.9.5 installed for an unprivileged user by its own script, `herdr server` under a systemd user unit with lingering on, the plugin cloned and linked with `herdr plugin link`. After a restart of that unit, with no client attached, herdr ran the plugin's startup entries: the Board workspace (its process listens on 127.0.0.1:12422) and the Wake workspace (12421). The board's install action and `board doctor` passed there; doctor's one complaint, the missing herdr key, means nothing on a node and T15 leaves it out for a board with a `node` key. herdr, the board and wake together held about 150 MB. So a node needs no unit of the board's own.
+- Still not tried there: Claude Code's login by link, which needs the owner, and an event stream held for an hour through a fenced forward.
 - Whether Claude Code fills `${VAR}` in a user-scope MCP server and installs enabled plugins by itself. If not, 9.1's rows for those become "reported, set up by hand".
 - The Android app's tolerance of a `device` field and prefixed keys (another repository).
 - For slice E: a forward to a unix socket from Windows' OpenSSH, `AuthorizedKeysCommand` on the supported systems, and Bun's `fetch` with a pinned self-signed certificate over a long event stream. The repository already gives a `ca` to a `fetch` (`src/adapters/workdesk-events.ts:128`); the rest is in T0.
