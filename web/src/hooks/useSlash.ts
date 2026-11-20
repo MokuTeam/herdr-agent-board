@@ -1,10 +1,11 @@
 // The chat box's slash command list (#191, models/slash.ts): read from the server once the box
 // starts with a slash (a message that does not asks for nothing), again after a minute or for
 // another session; the lit row, the keys that move it, the pick that completes the box.
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { type KeyboardEvent, useEffect, useMemo, useState } from 'react'
 import type { Item } from '../../../src/core/types.ts'
 import { api } from '../api/client.ts'
 import {
+  completes,
   completion,
   noteUse,
   rankCommands,
@@ -43,29 +44,22 @@ export function useSlash(item: Pick<Item, 'key'> | null, text: string, setText: 
   const query = key && focused ? slashQuery(text) : null
   const asking = query !== null
   const [loaded, setLoaded] = useState<{ key: string; at: number; list: SlashCommand[] } | null>(null)
-  const loading = useRef<string | null>(null)
   const [active, setActive] = useState(0)
+  // The text Esc closed the list at: it stays closed until the text moves or the slash goes.
   const [closedAt, setClosedAt] = useState<string | null>(null)
   const [uses, setUses] = useState<Record<string, number>>({})
 
   useEffect(() => {
     if (!asking || !key) return
     if (loaded?.key === key && Date.now() - loaded.at < SLASH_FRESH_MS) return
-    if (loading.current === key) return
-    loading.current = key
     setUses(readUses())
     const ctl = new AbortController()
     api
       .sessionCommands(key, ctl.signal)
       .then(list => setLoaded({ key, at: Date.now(), list }))
+      // Not read (the session went, the board is away): no list; the next slash asks again.
       .catch(() => {})
-      .finally(() => {
-        if (loading.current === key) loading.current = null
-      })
-    return () => {
-      ctl.abort()
-      if (loading.current === key) loading.current = null
-    }
+    return () => ctl.abort()
   }, [asking, key, loaded])
 
   const own = loaded && loaded.key === key ? loaded.list : null
@@ -78,8 +72,11 @@ export function useSlash(item: Pick<Item, 'key'> | null, text: string, setText: 
   if (litFor !== query) {
     setLitFor(query)
     setActive(0)
+    if (query === null) setClosedAt(null)
   }
-  const open = query !== null && list.length > 0 && closedAt !== text
+  // Esc's close is for this session's text only.
+  const closedHere = `${key}\n${text}`
+  const open = query !== null && list.length > 0 && closedAt !== closedHere
   const at = Math.min(active, Math.max(0, list.length - 1))
   const argument = own ? slashArgument(text, own) : null
 
@@ -95,7 +92,9 @@ export function useSlash(item: Pick<Item, 'key'> | null, text: string, setText: 
     argument,
     onKeyDown(e) {
       if (!open) return false
-      const typed = list[at]?.name.toLowerCase() === (query ?? '').toLowerCase()
+      // Enter completes only a name the lit row goes on with; on the whole name, or a row found
+      // by its description alone, it sends as before.
+      const typed = !completes(list[at], query ?? '')
       const action = slashKey(
         {
           key: e.key,
@@ -114,7 +113,7 @@ export function useSlash(item: Pick<Item, 'key'> | null, text: string, setText: 
       if (action === 'next') setActive((at + 1) % list.length)
       else if (action === 'prev') setActive((at - 1 + list.length) % list.length)
       else if (action === 'complete') pick(at)
-      else setClosedAt(text)
+      else setClosedAt(closedHere)
       return true
     },
     pick,

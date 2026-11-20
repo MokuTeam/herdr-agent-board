@@ -425,7 +425,7 @@ export function sessionRoutes(app: SessionApp): Route[] {
       handle: withItem(async (item, _req, ctx) => {
         const claudeRoot = item.claudeRoot ?? app.deps.claude.root
         const own = ctx.ownFile(item.cwd)
-        return json(200, { commands: sessionCommands(own ? { ...item, cwd: '' } : item, { claudeRoot }) })
+        return json(200, { commands: await sessionCommands(own ? { ...item, cwd: '' } : item, { claudeRoot }) })
       }),
     },
     {

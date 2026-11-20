@@ -373,7 +373,7 @@ export function Composer({
             aside.on ? 'aside.placeholder' : remotePage() ? 'compose.placeholderPhone' : 'compose.placeholder',
           )}
           aria-label={t('compose.label')}
-          aria-autocomplete="list"
+          aria-autocomplete={slash.open ? 'list' : undefined}
           aria-controls={slash.open ? SLASH_MENU_ID : undefined}
           aria-activedescendant={slash.open ? slashOptionId(slash.active) : undefined}
           ref={messageRef}

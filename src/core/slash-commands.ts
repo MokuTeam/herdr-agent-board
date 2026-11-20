@@ -127,6 +127,8 @@ export function readFront(text: string): Front {
   const out: Front = {}
   let body = src
   const head = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(src)
+  // Frontmatter whose end is past the head that was read: nothing in it is trusted, nor the body.
+  if (!head && src.startsWith('---\n')) return out
   if (head) {
     body = src.slice(head[0].length)
     const lines = (head[1] ?? '').split('\n')
@@ -148,14 +150,15 @@ export function readFront(text: string): Front {
     }
   }
   if (!out.description) {
-    const first = body.split('\n').find(l => l.trim() && !/^\s*#/.test(l))
+    // Not a heading, and not a code fence ("```bash" says nothing of the command).
+    const first = body.split('\n').find(l => l.trim() && !/^\s*(#|```|~~~)/.test(l))
     if (first) out.description = oneLine(first)
   }
   return out
 }
 
 /** A name a command can have: what Claude Code and pi accept after the slash. */
-export const commandName = (s: string): boolean => /^[\w][\w.:-]{0,63}$/.test(s)
+export const commandName = (s: string): boolean => /^[\p{L}\p{N}_][\p{L}\p{N}_.:-]{0,63}$/u.test(s)
 
 /**
  * The commands of one session: its own folder's first, then the profile's, then the agent's; a

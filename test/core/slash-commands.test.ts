@@ -30,6 +30,9 @@ describe('readFront', () => {
     expect(readFront('# Title\n\nFix the build for anna\nmore')).toEqual({ description: 'Fix the build for anna' })
     expect(readFront('---\nargument-hint: <n>\n---\n# H\nDo it')).toEqual({ hint: '<n>', description: 'Do it' })
     expect(readFront('')).toEqual({})
+    expect(readFront('```bash\nmake\n```\nRun it')).toEqual({ description: 'make' })
+    // Frontmatter that does not end in what was read: nothing from it, nor a "---" for a description.
+    expect(readFront('---\ndescription: x\nmore: y')).toEqual({})
   })
 
   test('user-invocable: false hides a skill; a long line is cut', () => {
@@ -41,7 +44,7 @@ describe('readFront', () => {
 })
 
 test('commandName takes what the agents take after the slash', () => {
-  for (const ok of ['compact', 'pr-comments', 'skill:review', 'a.b', 'x_1'])
+  for (const ok of ['compact', 'pr-comments', 'skill:review', 'a.b', 'x_1', 'отчёт'])
     expect([ok, commandName(ok)]).toEqual([ok, true])
   for (const bad of ['', 'two words', '-x', 'a/b', 'x'.repeat(65)])
     expect([bad, commandName(bad)]).toEqual([bad, false])

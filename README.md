@@ -332,6 +332,9 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
 - A side question (the bubble in the message box, or a message that starts with `/btw`): typed
   into the session as Claude Code's own `/btw`, answered in a card over the box, while nothing
   goes into the session's conversation; see [Side questions](#side-questions).
+- Slash commands in the message box: a `/` at its start lists the session's commands over the
+  box, filtered as you type, the ones sent most from this browser first; see
+  [Slash commands](#slash-commands).
 - Stop (a working card, and the sheet's send button while the message box is empty) and Send
   now (on a message waiting in the session's queue): the turn interrupted, or the queue taken
   into the turn at once, as Esc and Ctrl+Enter do in Claude Code's terminal; see
@@ -1133,6 +1136,36 @@ error, busy? }` (the page only, with herdr's data recent enough to act on); the 
 `aside` says whether the board can ask. Code: `src/core/aside.ts` (the overlay on the screen),
 `src/services/aside.ts` (the steps through herdr), `web/src/hooks/useAside.ts`,
 `web/src/components/sheet/Aside.tsx`.
+
+## Slash commands
+
+A `/` at the start of the message box, while the box has the focus, lists the session's slash
+commands over the box: each with what it takes (`[instructions]`) and what it does. Typing
+filters it (the name first, then a word in it, then the description); among equals the ones sent
+most from this browser (localStorage) come first, then the rest by name. ↑ and ↓ move, Tab or
+Enter completes the box with the command and a space, Esc closes the list; Enter on a name typed
+whole, or on a row found by its description alone, sends the message as before. A tap on a row
+completes it on a phone. After a command that takes something, what it takes shows as grey text
+after the caret until it is typed.
+
+Where the list comes from, by the session's agent:
+
+- Claude Code: its own commands (those that end the session or its login left out), the
+  profile's `commands/` and `skills/` (the profile the session's records are in), and the
+  session folder's `.claude/commands` and `.claude/skills`; a name only once, the folder's
+  first. A skill with `user-invocable: false` is not listed.
+- pi: its prompt templates (`prompts/` in its folder, `PI_CODING_AGENT_DIR` or `~/.pi/agent`,
+  and the session folder's `.pi/prompts`), its skills as `/skill:<name>` (its folder, `.pi/skills`,
+  `~/.agents/skills`, `.agents/skills`), then its own commands.
+- Codex: its own commands. Any other agent: none, and the box is as it was.
+
+A message that does not start with `/` asks the server for nothing. `GET
+/api/session/<key>/commands` answers `{ commands: [{ name, description, hint?, source }] }`,
+`source` one of `builtin`, `user`, `project`; it reads the head of each file (at most 8 KB,
+regular files only, at most 1000 entries a folder). Through the tunnel, a card working in the
+board's own files gets no commands from its folder. Code: `src/core/slash-commands.ts`,
+`src/adapters/slash-commands.ts`, `web/src/models/slash.ts`, `web/src/hooks/useSlash.ts`,
+`web/src/components/sheet/SlashMenu.tsx`.
 
 ## Stop and Send now
 

@@ -2,8 +2,10 @@
 // (core/slash-commands.ts) and the ones its files add. Claude Code: the profile's commands/ and
 // skills/ and the session folder's .claude/commands and .claude/skills. pi: its prompt templates
 // and skills (pi's own folder, the session folder's .pi, ~/.agents and .agents). Read when the box
-// asks (a leading /), only the head of each file; a folder that is not there adds nothing.
-import { closeSync, openSync, readdirSync, readSync, statSync } from 'node:fs'
+// asks (a leading /), only the head of each regular file, at most so many entries per folder;
+// a folder that is not there adds nothing. Off the server's loop (fs/promises).
+import type { Dirent } from 'node:fs'
+import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { isCodexItem } from '../core/codex.ts'
@@ -21,87 +23,102 @@ import type { Item } from '../core/types.ts'
 
 /** The head of a file the frontmatter is looked for in. */
 const HEAD_BYTES = 8192
-/** The most files one folder gives, its subfolders with it. */
-const MAX_FILES = 300
+/** The most entries one folder (its subfolders with it) is looked through for commands. */
+const MAX_ENTRIES = 1000
 
-function head(file: string): string {
-  let fd: number | null = null
+/** The head of a regular file ('' for anything else: a folder, a pipe, a device, one not there). */
+async function head(file: string): Promise<string> {
   try {
-    fd = openSync(file, 'r')
-    const buf = Buffer.alloc(HEAD_BYTES)
-    const n = readSync(fd, buf, 0, HEAD_BYTES, 0)
-    return buf.subarray(0, n).toString('utf8')
+    if (!(await stat(file)).isFile()) return ''
+    const fd = await open(file, 'r')
+    try {
+      const buf = Buffer.alloc(HEAD_BYTES)
+      const { bytesRead } = await fd.read(buf, 0, HEAD_BYTES, 0)
+      return buf.subarray(0, bytesRead).toString('utf8')
+    } finally {
+      await fd.close()
+    }
   } catch {
     return ''
-  } finally {
-    if (fd !== null) closeSync(fd)
   }
 }
 
-const entries = (dir: string) => {
+async function entries(dir: string): Promise<Dirent[]> {
   try {
-    return readdirSync(dir, { withFileTypes: true })
+    return await readdir(dir, { withFileTypes: true })
   } catch {
     return []
   }
 }
 
-const isDir = (path: string, e: { isDirectory(): boolean; isSymbolicLink(): boolean }): boolean => {
+async function isDir(path: string, e: Dirent): Promise<boolean> {
   if (e.isDirectory()) return true
   if (!e.isSymbolicLink()) return false
   try {
-    return statSync(path).isDirectory()
+    return (await stat(path)).isDirectory()
   } catch {
     return false
   }
 }
 
 /** Markdown files in `dir`, its subfolders too when `deep` (Claude Code's commands/frontend/x.md is /x). */
-function markdown(dir: string, deep: boolean): string[] {
+async function markdown(dir: string, deep: boolean): Promise<string[]> {
   const out: string[] = []
-  const walk = (at: string, depth: number) => {
-    for (const e of entries(at)) {
-      if (out.length >= MAX_FILES) return
+  let seen = 0
+  const walk = async (at: string, depth: number): Promise<void> => {
+    for (const e of await entries(at)) {
+      if (++seen > MAX_ENTRIES) return
       const path = join(at, e.name)
       if (e.name.startsWith('.')) continue
-      if (isDir(path, e)) {
-        if (deep && depth < 3) walk(path, depth + 1)
-      } else if (/\.md$/i.test(e.name)) out.push(path)
+      if (/\.md$/i.test(e.name) && !e.isDirectory()) out.push(path)
+      else if (deep && depth < 3 && (await isDir(path, e))) await walk(path, depth + 1)
     }
   }
-  walk(dir, 0)
+  await walk(dir, 0)
   return out
+}
+
+/** The files read at once: a folder of hundreds goes in batches, under any open-file limit. */
+const BATCH = 32
+
+/** `f` over `list`, BATCH at a time, in order; the nulls dropped. */
+async function batched<T, R>(list: readonly T[], f: (x: T) => Promise<R | null>): Promise<R[]> {
+  const out: R[] = []
+  for (let i = 0; i < list.length; i += BATCH)
+    for (const r of await Promise.all(list.slice(i, i + BATCH).map(f))) if (r !== null) out.push(r)
+  return out
+}
+
+const command = (name: string, text: string, source: SlashCommand['source']): SlashCommand => {
+  const front = readFront(text)
+  return { name, description: front.description ?? '', source, ...(front.hint && { hint: front.hint }) }
 }
 
 /** Prompt files (a command each, named after the file). */
-function commandsIn(dir: string, source: SlashCommand['source'], deep: boolean): SlashCommand[] {
-  const out: SlashCommand[] = []
-  for (const file of markdown(dir, deep)) {
-    const name = basename(file).replace(/\.md$/i, '')
-    if (!commandName(name)) continue
-    const front = readFront(head(file))
-    out.push({ name, description: front.description ?? '', source, ...(front.hint && { hint: front.hint }) })
-  }
-  return out
+async function commandsIn(dir: string, source: SlashCommand['source'], deep: boolean): Promise<SlashCommand[]> {
+  const files = (await markdown(dir, deep))
+    .map(file => ({ file, name: basename(file).replace(/\.md$/i, '') }))
+    .filter(f => commandName(f.name))
+  return batched(files, async ({ file, name }) => {
+    const text = await head(file)
+    return text ? command(name, text, source) : null
+  })
 }
 
 /** Skill folders (`<name>/SKILL.md`), each named by its frontmatter or its folder; `prefix`: pi's "skill:". */
-function skillsIn(dir: string, source: SlashCommand['source'], prefix = ''): SlashCommand[] {
-  const out: SlashCommand[] = []
-  for (const e of entries(dir)) {
-    if (out.length >= MAX_FILES) break
+async function skillsIn(dir: string, source: SlashCommand['source'], prefix = ''): Promise<SlashCommand[]> {
+  const folders = (await entries(dir)).slice(0, MAX_ENTRIES).filter(e => !e.name.startsWith('.'))
+  return batched(folders, async e => {
     const path = join(dir, e.name)
-    if (e.name.startsWith('.') || !isDir(path, e)) continue
-    const text = head(join(path, 'SKILL.md'))
-    if (!text) continue
+    if (!(await isDir(path, e))) return null
+    const text = await head(join(path, 'SKILL.md'))
+    if (!text) return null
     const front = readFront(text)
-    if (front.hidden) continue
+    if (front.hidden) return null
     const own = front.name && commandName(front.name) ? front.name : e.name
     const name = `${prefix}${own}`
-    if (!commandName(name)) continue
-    out.push({ name, description: front.description ?? '', source, ...(front.hint && { hint: front.hint }) })
-  }
-  return out
+    return commandName(name) ? command(name, text, source) : null
+  })
 }
 
 export interface CommandRoots {
@@ -112,29 +129,32 @@ export interface CommandRoots {
 }
 
 /** The commands the box offers for `item`; none for an agent the board knows no commands of. */
-export function sessionCommands(item: Pick<Item, 'agent' | 'session' | 'cwd'>, roots: CommandRoots): SlashCommand[] {
+export async function sessionCommands(
+  item: Pick<Item, 'agent' | 'session' | 'cwd'>,
+  roots: CommandRoots,
+): Promise<SlashCommand[]> {
   const env = roots.env ?? process.env
   const home = roots.home ?? homedir()
   const cwd = item.cwd
   if (isCodexItem(item)) return [...CODEX_BUILTINS]
   if (isPiItem(item)) {
     const own = env.PI_CODING_AGENT_DIR || join(home, '.pi', 'agent')
-    return mergeCommands(
+    const found = await Promise.all([
       cwd ? commandsIn(join(cwd, '.pi', 'prompts'), 'project', false) : [],
       commandsIn(join(own, 'prompts'), 'user', false),
       cwd ? skillsIn(join(cwd, '.pi', 'skills'), 'project', 'skill:') : [],
       cwd ? skillsIn(join(cwd, '.agents', 'skills'), 'project', 'skill:') : [],
       skillsIn(join(own, 'skills'), 'user', 'skill:'),
       skillsIn(join(home, '.agents', 'skills'), 'user', 'skill:'),
-      PI_BUILTINS,
-    )
+    ])
+    return mergeCommands(...found, PI_BUILTINS)
   }
   if (item.agent !== 'claude') return []
-  return mergeCommands(
+  const found = await Promise.all([
     cwd ? commandsIn(join(cwd, '.claude', 'commands'), 'project', true) : [],
     cwd ? skillsIn(join(cwd, '.claude', 'skills'), 'project') : [],
     commandsIn(join(roots.claudeRoot, 'commands'), 'user', true),
     skillsIn(join(roots.claudeRoot, 'skills'), 'user'),
-    CLAUDE_BUILTINS,
-  )
+  ])
+  return mergeCommands(...found, CLAUDE_BUILTINS)
 }

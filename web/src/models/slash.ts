@@ -19,10 +19,11 @@ export function slashArgument(text: string, list: readonly SlashCommand[]): Slas
   return list.find(c => c.hint && c.name.toLowerCase() === name) ?? null
 }
 
-/** How well a command's name meets the query: 0 starts with it, 1 a word in it does, 2 has it, 3 its description has it; null none. */
+/** How well a command's name meets the query: -1 is it, 0 starts with it, 1 a word in it does, 2 has it, 3 its description has it; null none. */
 function tier(c: SlashCommand, q: string): number | null {
   if (!q) return 0
   const name = c.name.toLowerCase()
+  if (name === q) return -1
   if (name.startsWith(q)) return 0
   if (name.split(/[:\-_.]/).some(w => w.startsWith(q))) return 1
   if (name.includes(q)) return 2
@@ -43,10 +44,18 @@ export function rankCommands(
   const scored: { c: SlashCommand; t: number; n: number }[] = []
   for (const c of list) {
     const t = tier(c, q)
-    if (t !== null) scored.push({ c, t, n: uses[c.name] ?? 0 })
+    if (t !== null) scored.push({ c, t, n: Object.hasOwn(uses, c.name) ? (uses[c.name] ?? 0) : 0 })
   }
   scored.sort((a, b) => a.t - b.t || b.n - a.n || a.c.name.localeCompare(b.c.name))
   return scored.map(s => s.c)
+}
+
+/** Whether Enter on `c` completes what is typed: its name goes on from it (not the whole name, not a description match). */
+export function completes(c: SlashCommand | undefined, query: string): boolean {
+  if (!c) return false
+  const name = c.name.toLowerCase()
+  const q = query.toLowerCase()
+  return name !== q && name.startsWith(q)
 }
 
 /** The box's text once a command is picked: the command and a space, for what follows. */
@@ -71,7 +80,8 @@ export function slashKey(e: SlashKeyPress, typed: boolean): SlashKey {
   if (e.isComposing || e.altKey || e.ctrlKey || e.metaKey) return null
   if (e.key === 'ArrowDown') return 'next'
   if (e.key === 'ArrowUp') return 'prev'
-  if (e.key === 'Tab') return e.shiftKey ? 'prev' : 'complete'
+  // Shift+Tab leaves the box as it always did.
+  if (e.key === 'Tab') return e.shiftKey ? null : 'complete'
   if (e.key === 'Enter' && !e.shiftKey) return typed ? null : 'complete'
   if (e.key === 'Escape') return 'close'
   return null
@@ -104,7 +114,7 @@ export function noteUse(
   const name = m?.[1]
   if (!name || !known?.some(c => c.name === name) || !store) return
   const uses = readUses(store)
-  uses[name] = (uses[name] ?? 0) + 1
+  uses[name] = (Object.hasOwn(uses, name) ? (uses[name] ?? 0) : 0) + 1
   const kept = Object.entries(uses)
     .sort((a, b) => b[1] - a[1])
     .slice(0, MAX_USES)

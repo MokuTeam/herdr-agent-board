@@ -32,7 +32,9 @@ export function SlashMenu({
 
   if (!open) return argument?.hint ? <ArgumentHint text={text} hint={argument.hint} box={box} /> : null
   return (
-    <div className="slash-menu">
+    // A press anywhere on it (a row, its padding, the keys line, its scrollbar) leaves the focus in the box.
+    // biome-ignore lint/a11y/noStaticElementInteractions: it only keeps the focus where it is, it acts on nothing
+    <div className="slash-menu" onPointerDown={e => e.preventDefault()} onMouseDown={e => e.preventDefault()}>
       <div className="slash-list" id={SLASH_MENU_ID} role="listbox" aria-label={t('slash.label')} ref={menu}>
         {list.map((c, i) => (
           // biome-ignore lint/a11y/useKeyWithClickEvents: the box's arrows, Tab and Enter pick (aria-activedescendant)

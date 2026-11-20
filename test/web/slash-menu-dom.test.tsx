@@ -252,6 +252,46 @@ test('Esc closes the list and nothing more: the board does not see it, the text 
   await act(async () => root.unmount())
 })
 
+test('after Esc, the next slash opens the list again', async () => {
+  const { messages, root } = await mount()
+  await type('/')
+  await settle()
+  await key(box(), 'Escape')
+  expect(rows()).toEqual([])
+  await type('')
+  await type('hello')
+  await enter()
+  expect(messages).toEqual(['hello'])
+  await type('/')
+  expect(rows()).toHaveLength(COMMANDS.length)
+  await act(async () => root.unmount())
+})
+
+test('a row found by its description alone: Enter sends what was typed', async () => {
+  const { messages, root } = await mount()
+  await type('/window')
+  await settle()
+  expect(rows()).toEqual(['/context'])
+  await enter()
+  expect(messages).toEqual(['/window'])
+  await act(async () => root.unmount())
+})
+
+test('a press on the list outside its rows leaves the focus in the box', async () => {
+  const { root } = await mount()
+  await type('/')
+  await settle()
+  const keys = dom.window.document.querySelector('.slash-keys') as HTMLElement
+  const down = new dom.window.Event('pointerdown', { bubbles: true, cancelable: true })
+  const mouse = new dom.window.MouseEvent('mousedown', { bubbles: true, cancelable: true })
+  await act(async () => {
+    keys.dispatchEvent(down)
+    keys.dispatchEvent(mouse)
+  })
+  expect([down.defaultPrevented, mouse.defaultPrevented]).toEqual([true, true])
+  await act(async () => root.unmount())
+})
+
 test('a tap on a row completes the box and keeps the focus there', async () => {
   const { root } = await mount()
   box()?.focus()

@@ -1,6 +1,7 @@
 // The chat box's slash list as a model (#191): when it shows, the order, the keys, the counts.
 import { expect, test } from 'bun:test'
 import {
+  completes,
   completion,
   noteUse,
   rankCommands,
@@ -78,6 +79,24 @@ test('rankCommands: the ones sent most from this browser first, then by name', (
   ])
 })
 
+test('the whole name comes first, however often a longer one was sent', () => {
+  const list = [c('costly'), c('cost'), c('review-pr'), c('review')]
+  expect(rankCommands(list, 'cost', { costly: 5 }).map(x => x.name)).toEqual(['cost', 'costly'])
+  expect(rankCommands(list, 'review', { 'review-pr': 9 }).map(x => x.name)).toEqual(['review', 'review-pr'])
+})
+
+test('completes: Enter completes only a name that goes on from what is typed', () => {
+  expect(completes(c('compact'), 'comp')).toBe(true)
+  expect(completes(c('compact'), 'compact')).toBe(false)
+  expect(completes(c('context'), 'window')).toBe(false)
+  expect(completes(c('skill:review'), 're')).toBe(false)
+  expect(completes(undefined, 'x')).toBe(false)
+})
+
+test('a command named like an Object method counts as any other', () => {
+  expect(rankCommands([c('constructor'), c('toString')], '', {}).map(x => x.name)).toEqual(['constructor', 'toString'])
+})
+
 test('completion: the command and a space', () => {
   expect(completion(c('compact'))).toBe('/compact ')
 })
@@ -92,7 +111,7 @@ test('slashKey: arrows move, Tab and Enter complete, Enter on a whole command se
   expect(slashKey(k('ArrowDown'), false)).toBe('next')
   expect(slashKey(k('ArrowUp'), false)).toBe('prev')
   expect(slashKey(k('Tab'), false)).toBe('complete')
-  expect(slashKey(k('Tab', { shiftKey: true }), false)).toBe('prev')
+  expect(slashKey(k('Tab', { shiftKey: true }), false)).toBeNull()
   expect(slashKey(k('Enter'), false)).toBe('complete')
   expect(slashKey(k('Enter'), true)).toBeNull()
   expect(slashKey(k('Enter', { shiftKey: true }), false)).toBeNull()
