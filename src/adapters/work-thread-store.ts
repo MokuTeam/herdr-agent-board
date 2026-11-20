@@ -781,6 +781,22 @@ export function dropWatch(tx: Tx, session: string, target: WatchTarget): number 
   return tx.db.query('DELETE FROM thread_watch WHERE session = ? AND target = ?').run(session, target).changes
 }
 
+/** A watch as given, `since` and all, unless the session watches that target already (#403). */
+export function addWatchKept(tx: Tx, w: Watch, at: number): void {
+  tx.db
+    .query(
+      'INSERT INTO thread_watch (session, target, what, idle, wake, name, at, since) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (session, target) DO NOTHING',
+    )
+    .run(w.session, w.target, w.what, w.idle ? 1 : 0, w.wake ? 1 : 0, w.name, at, w.since)
+}
+
+/** Every watch of `session` but those on the targets `keep` names; how many went. */
+export function dropWatchesOf(tx: Tx, session: string, keep: readonly WatchTarget[] = []): number {
+  const marks = keep.map(() => '?').join(', ')
+  const sql = `DELETE FROM thread_watch WHERE session = ?${keep.length ? ` AND target NOT IN (${marks})` : ''}`
+  return tx.db.query(sql).run(session, ...keep).changes
+}
+
 export interface Cursor {
   /** The last change an event was queued for. */
   seq: number
@@ -805,6 +821,19 @@ export function moveCursor(tx: Tx, session: string, to: Partial<Cursor>): void {
          seq = max(seq, coalesce(?2, seq)), at = max(at, coalesce(?3, at)), asked = max(asked, coalesce(?4, asked))`,
     )
     .run(session, to.seq ?? null, to.at ?? null, to.asked ?? null)
+}
+
+/** A session's cursor as given, back or forward (#403); null removes it. */
+export function setCursor(tx: Tx, session: string, to: Cursor | null): void {
+  if (!to) {
+    tx.db.query('DELETE FROM thread_cursor WHERE session = ?').run(session)
+    return
+  }
+  tx.db
+    .query(
+      'INSERT INTO thread_cursor (session, seq, at, asked) VALUES (?1, ?2, ?3, ?4) ON CONFLICT (session) DO UPDATE SET seq = ?2, at = ?3, asked = ?4',
+    )
+    .run(session, to.seq, to.at, to.asked)
 }
 
 /** The threads a session counts as its own: those it created or is assigned. */

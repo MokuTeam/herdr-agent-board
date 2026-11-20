@@ -1,10 +1,19 @@
 // MokuPilot's day folder (#331, core/mokupilot-day.ts): the day running now, and a message put in
 // its inbox for MokuPilot to type into the day session.
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { type DaySession, dayName, type PiDay, parseDayState, parsePiDay, reportName } from '../core/mokupilot-day.ts'
+import {
+  type DaySession,
+  dayName,
+  endedAgentDay,
+  type PiDay,
+  parseDayState,
+  parsePiDay,
+  reportName,
+  rotatedFrom,
+} from '../core/mokupilot-day.ts'
 
 import { mokupilotHere } from './mokupilot-call.ts'
 
@@ -32,6 +41,37 @@ export function runningDay({
   } catch {
     return null
   }
+}
+
+/**
+ * The conversations the running day `session` follows on from (#403), oldest first: the latest
+ * earlier day's when that was a Claude day MokuPilot ran as its agent, then today's own earlier
+ * ones. null while today's state.json cannot be read or does not name `session` as its running
+ * conversation (yet): the caller may look again.
+ */
+export function dayPredecessors(
+  session: string,
+  { root = dayRoot(), now = new Date() }: { root?: string; now?: Date } = {},
+): string[] | null {
+  const read = (folder: string): unknown => {
+    try {
+      return JSON.parse(readFileSync(join(root, folder, 'state.json'), 'utf8'))
+    } catch {
+      return null
+    }
+  }
+  const today = dayName(now)
+  const state = read(today)
+  if (parseDayState(state)?.session !== session) return null
+  let earlier: string[] = []
+  try {
+    const before = readdirSync(root)
+      .filter(n => /^\d{4}-\d{2}-\d{2}$/.test(n) && n < today)
+      .sort()
+      .at(-1)
+    if (before) earlier = endedAgentDay(read(before))
+  } catch {}
+  return [...new Set([...earlier, ...rotatedFrom(state)])].filter(s => s !== session)
 }
 
 /** The pi day running now (#393), null for none or a state.json that cannot be read. */

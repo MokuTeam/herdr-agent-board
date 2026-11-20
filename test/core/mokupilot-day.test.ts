@@ -1,11 +1,11 @@
 // MokuPilot's day folder as the board reads and writes it (#331): the running day's state.json, and
 // a message in its inbox in `meet day --report`'s format (MokuPilot day_inbox.py).
 import { expect, test } from 'bun:test'
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { dayGate, reportToDay, runningDay } from '../../src/adapters/mokupilot-day.ts'
-import { dayName, parseDayState, reportName } from '../../src/core/mokupilot-day.ts'
+import { dayGate, dayPredecessors, reportToDay, runningDay } from '../../src/adapters/mokupilot-day.ts'
+import { dayName, endedAgentDay, parseDayState, reportName, rotatedFrom } from '../../src/core/mokupilot-day.ts'
 
 const SID = '3dbb2396-0539-4168-a668-213f1041ed3f'
 
@@ -71,4 +71,43 @@ test('runningDay reads today’s folder only; the gate reads nothing where MokuP
   expect(dayGate({ here: () => false, read })({})).toBeNull()
   expect(reads).toBe(0)
   expect(dayGate({ here: () => true, read })({})).toEqual({ session: SID, pane: '' })
+})
+
+test('rotatedFrom and endedAgentDay: the conversations a day had, ids only, each once', () => {
+  const day = { provider: 'claude', fork_session: SID, ended_at: null }
+  expect(rotatedFrom({ ...day, rotated_from: ['a1', '../x', 5, 'a2', 'a1', SID] })).toEqual(['a1', 'a2'])
+  expect(rotatedFrom(day)).toEqual([])
+  expect(rotatedFrom({ ...day, ended_at: 1, rotated_from: ['a1'] })).toEqual([])
+  expect(rotatedFrom({ ...day, provider: 'pi', rotated_from: ['a1'] })).toEqual([])
+  // A terminal day's session is the owner's own: nothing before it is the day's.
+  expect(rotatedFrom({ ...day, mode: 'terminal', rotated_from: ['a1'] })).toEqual([])
+  expect(rotatedFrom({ ...day, mode: 'agent', rotated_from: ['a1'] })).toEqual(['a1'])
+  const ended = { provider: 'claude', mode: 'agent', fork_session: SID, ended_at: 1795104031.0, rotated_from: ['a1'] }
+  expect(endedAgentDay(ended)).toEqual(['a1', SID])
+  // Still running, the owner's own terminal session, or not Claude's: nothing to follow on from.
+  for (const not of [{ ...ended, ended_at: null }, { ...ended, mode: 'terminal' }, { ...ended, provider: 'pi' }, null])
+    expect(endedAgentDay(not)).toEqual([])
+})
+
+test("dayPredecessors: the latest earlier agent day's conversations, then today's rotated ones", () => {
+  const root = mkdtempSync(join(tmpdir(), 'дни 100% '))
+  const now = new Date(2026, 10, 20, 9, 0)
+  const put = (name: string, state: unknown) => {
+    mkdirSync(join(root, name), { recursive: true })
+    writeFileSync(join(root, name, 'state.json'), JSON.stringify(state))
+  }
+  const ended = { provider: 'claude', mode: 'agent', ended_at: 1795104031.0 }
+  put('2026-11-17', { ...ended, fork_session: 'old' })
+  put('2026-11-19', { ...ended, fork_session: 'y2', rotated_from: ['y1'] })
+  put('2026-11-21', { ...ended, fork_session: 'tomorrow' })
+  mkdirSync(join(root, 'notes'))
+  expect(dayPredecessors('t3', { root, now })).toBeNull() // no day today
+  put('2026-11-20', { provider: 'claude', fork_session: 't3', ended_at: null, rotated_from: ['t1', 't2'] })
+  expect(dayPredecessors('t3', { root, now })).toEqual(['y1', 'y2', 't1', 't2'])
+  // Not today's running conversation (yet): look again later.
+  expect(dayPredecessors('t2', { root, now })).toBeNull()
+  // The day before was the owner's terminal day: today's own only.
+  put('2026-11-19', { ...ended, mode: 'terminal', fork_session: 'own' })
+  expect(dayPredecessors('t3', { root, now })).toEqual(['t1', 't2'])
+  expect(dayPredecessors('t3', { root: join(root, 'missing'), now })).toBeNull()
 })

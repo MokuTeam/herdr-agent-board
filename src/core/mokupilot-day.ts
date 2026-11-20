@@ -38,6 +38,32 @@ export function parseDayState(raw: unknown): DaySession | null {
   return { session, pane: paneId(d.herdr_pane) }
 }
 
+/** The ids in a state.json list that may be Claude session ids, in order, each once. */
+const ids = (v: unknown): string[] =>
+  Array.isArray(v) ? [...new Set(v.filter((s): s is string => typeof s === 'string' && SAFE_NAME.test(s)))] : []
+
+/**
+ * The conversations a running Claude day had before the one it runs now (#403): `rotated_from`,
+ * which MokuPilot extends each time it rotates the day into a new conversation, oldest first. []
+ * for a state.json that is no running Claude day, or a terminal day (its session is the owner's).
+ */
+export function rotatedFrom(raw: unknown): string[] {
+  const day = parseDayState(raw)
+  if (!day || rec(raw)?.mode === 'terminal') return []
+  return ids(rec(raw)?.rotated_from).filter(s => s !== day.session)
+}
+
+/**
+ * The conversations of an earlier day that the next day follows on from (#403): a Claude day that
+ * MokuPilot ran as its own agent (`mode: agent`; a terminal day's session is the owner's own) and
+ * that has ended, its rotated ones first, then its last. [] for any other.
+ */
+export function endedAgentDay(raw: unknown): string[] {
+  const d = rec(raw)
+  if (d?.provider !== 'claude' || d.mode !== 'agent' || d.ended_at === undefined || d.ended_at === null) return []
+  return ids([...(Array.isArray(d.rotated_from) ? d.rotated_from : []), d.fork_session])
+}
+
 /** A pi day (#393): its task board is pi's file, which the board copies into threads while they are on. */
 export interface PiDay {
   /** Its pi session id: the task board is ~/.agent-boards/pi/<session>.json. */

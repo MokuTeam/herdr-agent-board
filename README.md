@@ -2214,7 +2214,11 @@ MokuPilot, or with `"mokupilot": false`, nothing of it is read.
 The session that creates a thread hears of its status changes; a session hears no line about its own
 change, and several changes before a line goes out are one line. A sleeping session is not woken for
 a line (unless its watch asked for `--wake`): it gets the line when it is next awake. A MokuPilot day
-session gets it through its inbox.
+session gets it through its inbox. Its watches follow the day (#403): when the day goes on in a new
+conversation (MokuPilot rotated a long one, or a new day started after a day MokuPilot ran as its
+agent), the web board moves the earlier conversation's watches to the new one, with a line still
+pending for it, so the new one hears the same threads without watching them again. The owner watch
+is MokuPilot's to move.
 
 With the key absent nothing changes: no brief line, nothing in the payload, nothing in the hook that
 runs on every prompt, the tables in `board.db` stay empty, and no task board is read. Not yet:

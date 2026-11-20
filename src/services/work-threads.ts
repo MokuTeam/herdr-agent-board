@@ -26,23 +26,28 @@ import { stateDir } from '../adapters/paths.ts'
 import { addEntry, listEntries, type NewEntry, updateEntry } from '../adapters/schedule-store.ts'
 import { readKey } from '../adapters/team-store.ts'
 import {
+  addWatchKept,
   appendEntry,
   childrenOf,
   createThread,
   cursorOf,
   dropWatch,
+  dropWatchesOf,
   type EntryInput,
   entriesAfter,
   entriesOf,
   getThread,
+  mineIds,
   moveCursor,
   needsOwner,
   putWatch,
+  setCursor,
   ThreadError,
   threadsRev,
   watchesFor,
   watchesOf,
 } from '../adapters/work-thread-store.ts'
+import { OWNER } from '../core/owner-watch.ts'
 import type { ThreadsPayload } from '../core/payload.ts'
 import type { ScheduleEntry } from '../core/schedule-rules.ts'
 import { agentBoardOf, isMirrored } from '../core/thread-import.ts'
@@ -425,6 +430,59 @@ export function watch(ctx: ThreadsCtx, w: Omit<Watch, 'session' | 'name' | 'sinc
 
 export function unwatch(ctx: ThreadsCtx, session: string, target: string): number {
   return ctx.db.write(byOf(ctx.actor), tx => dropWatch(tx, session, target))
+}
+
+/** The `by` of a line carried over from a day's earlier conversation (#403): no later line replaces it. */
+export const CARRIED_BY = 'threads-carried'
+
+/**
+ * A MokuPilot day's new conversation `to` takes over the watches of the day's earlier ones,
+ * `from`, oldest first (#403), so it hears what they heard without watching again. Each earlier
+ * one is first told what it has not heard yet, as it would be (never its own entries), and that
+ * line goes to `to` as it is, one no later change replaces; then its watches move with what they
+ * hear and when they began (a target `to` watches already keeps `to`'s, the newest earlier
+ * conversation's before an older one's), its `mine` also as watches on the open threads it created
+ * or was given (their creator and assignee are the old session), and its cursor goes. `to`'s
+ * cursor starts after everything that line covers and never moves back; the gap after the line
+ * holds. The owner watch stays: MokuPilot moves that one itself. How many watches moved.
+ */
+export function carryWatches(
+  ctx: ThreadsCtx,
+  to: Extract<Party, { kind: 'session' }>,
+  from: readonly string[],
+): number {
+  const schedule = ctx.schedule ?? fileSchedule
+  return ctx.db.write(byOf(ctx.actor), tx => {
+    let moved = 0
+    for (const old of [...from].reverse()) {
+      if (old === to.key) continue
+      const ws = watchesOf(ctx.db, old).filter(w => w.target !== OWNER)
+      if (!ws.length) continue
+      tellOne(ctx, schedule, old, tx)
+      const pending = pendingOf(schedule, old)
+      if (pending) {
+        const { id, created, claim, key, name, by, ...line } = pending
+        // Added before it is taken back: a refused add leaves the old line where it was.
+        schedule.add({ ...line, key: to.key, ...((to.name || name) && { name: to.name || name }), by: CARRIED_BY })
+        schedule.takeBack(id)
+      }
+      const cursor = cursorOf(ctx.db, old)
+      const open = ws.some(w => w.target === MINE)
+        ? mineIds(ctx.db, old).filter(id => {
+            const h = getThread(ctx.db, id)
+            return !!h && isOpen(h.status)
+          })
+        : []
+      for (const w of ws)
+        for (const target of w.target === MINE ? [MINE, ...open] : [w.target])
+          addWatchKept(tx, { ...w, session: to.key, name: to.name || w.name, target }, ctx.now)
+      moved += ws.length
+      dropWatchesOf(tx, old, [OWNER])
+      setCursor(tx, old, null)
+      moveCursor(tx, to.key, { seq: threadsRev(ctx.db), at: cursor?.at ?? 0, asked: cursor?.asked ?? 0 })
+    }
+    return moved
+  })
 }
 
 // ------------------------------------------------------------------ what a session hears

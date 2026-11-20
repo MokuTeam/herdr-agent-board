@@ -53,6 +53,7 @@ import { createBackupServer } from '../services/backup-server.ts'
 import { createCalendarSync } from '../services/calendar.ts'
 import { createCalendarReminders } from '../services/calendar-reminders.ts'
 import { startCompactor } from '../services/compactor.ts'
+import { dayWatchTick } from '../services/day-watches.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
@@ -673,17 +674,21 @@ export async function startServer({
       return item ? { kind: 'session', key: item.key, name: item.name || item.autoName || item.key.slice(0, 8) } : null
     },
   })
+  // A MokuPilot day's watches carried to its new conversation (#403, services/day-watches.ts), then
   // `board thread watch --owner` (#434, services/owner-watch.ts): after each refresh, what waits on
-  // the owner told to the sessions that watch it. Threads off: nothing; no such watch: one query.
+  // the owner told to the sessions that watch it. Threads off: nothing; no day card and no such
+  // watch: one query.
+  const dayWatches = dayWatchTick()
   const ownerTick = (): void => {
     const c = threadsConfig(cfg.threads)
     if (!c) return
     try {
-      withThreadsDb(
-        false,
-        db =>
-          db && tellOwnerWatchers({ db, cfg: c, items: board.stale() ? null : board.items(), now: Date.now(), log }),
-      )
+      const items = board.stale() ? null : board.items()
+      withThreadsDb(false, db => {
+        if (!db) return
+        dayWatches({ db, cfg: c, items, now: Date.now(), log })
+        tellOwnerWatchers({ db, cfg: c, items, now: Date.now(), log })
+      })
     } catch (err) {
       log(`owner watch: ${err instanceof Error ? err.message : String(err)}`)
     }
