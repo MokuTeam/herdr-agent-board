@@ -325,7 +325,8 @@ export function linkOf(name: string, rawInput: unknown): CallLinks | null {
       send: {
         to,
         summary: clip(String(input.summary ?? ''), 200),
-        text: typeof input.message === 'string' ? clip(input.message, 4000) : '',
+        // Whole (#187): the thread's budget counts it with the rest (core/transcript.ts fitThread).
+        text: typeof input.message === 'string' ? input.message : '',
       },
     }
   }

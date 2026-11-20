@@ -4,6 +4,7 @@
 // Tab order while folded, stays open as the thread is read again and moves on, and follows the
 // window's height.
 import { afterAll, beforeAll, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import type { ConversationTurn } from '../../src/core/transcript.ts'
 import type { Thread as ThreadView } from '../../web/src/components/sheet/Thread.tsx'
 import type { I18nProvider as Provider } from '../../web/src/i18n/I18nProvider.tsx'
@@ -134,6 +135,95 @@ test("it follows the window's height: no fold once two screens hold it, a fold a
   expect(button(bubbles()[0])).toBeUndefined()
   flush(() => dom.resize(800))
   expect(body(bubbles()[0])?.className).toBe('md folded')
+})
+
+const ASK = 'Which file goes first?'
+const asked = (answer: string, cut = false): ConversationTurn => ({
+  role: 'tool',
+  label: 'AskUserQuestion',
+  detail: ASK,
+  path: '',
+  done: true,
+  at: 40,
+  id: 'q1',
+  ask: [{ question: ASK, header: 'Order', multiSelect: false }],
+  answers: [answer],
+  ...(cut && { cut: true }),
+})
+const byClass = (name: string) => all(dom.document.body).filter(el => el.className.split(' ').includes(name))
+
+test('#187: a very long answer to a question form folds as a long message does; a short one is left as it came', () => {
+  const long = `${'Start with the oldest file, then '.repeat(200)}stop`
+  render([asked(long)])
+  const [answer] = byClass('qa-ans')
+  expect(answer?.className).toBe('qa-ans folded')
+  expect(answer?.textContent).toBe(long)
+  expect(answer?.style.maxHeight).toBe('1600px')
+  const toggle = button(byClass('qa-msg')[0])
+  expect(toggle?.textContent).toBe('Show all')
+  click(toggle)
+  expect(byClass('qa-ans')[0]?.className).toBe('qa-ans')
+  expect(toggle?.textContent).toBe('Show less')
+  // Short: no fold, and the text is the user's as typed, not Markdown.
+  render([asked('**the oldest**, then the rest')])
+  const [short] = byClass('qa-ans')
+  expect(short?.className).toBe('qa-ans')
+  expect(short?.textContent).toBe('**the oldest**, then the rest')
+  expect(all(short ?? dom.document.body).some(el => el.localName === 'strong')).toBe(false)
+  expect(button(byClass('qa-msg')[0])).toBeUndefined()
+  expect(byClass('msg-cut')).toEqual([])
+  // The fold's own look comes from the stylesheet, which this small DOM does not apply: an answer
+  // folds under the same rule as a message, and keeps its lines.
+  const sheet = readFileSync(new URL('../../web/styles/messages.css', import.meta.url), 'utf8')
+  expect(sheet).toMatch(/\.msg \.md\.folded, \.msg \.qa-ans\.folded \{ overflow: hidden;/)
+  expect(sheet).toContain('.msg .qa-ans { white-space: pre-wrap; }')
+})
+
+test('#187: what the budget cut says so: a sent message, a task report, a call report and answers', () => {
+  const cutNote = "Cut for length: the rest is in the session's file"
+  const sent: ConversationTurn = {
+    role: 'tool',
+    label: 'SendMessage',
+    detail: '',
+    path: '',
+    done: true,
+    at: 50,
+    id: 's1',
+    send: { to: 'atlas', summary: 'the brief', text: 'A brief…' },
+    cut: true,
+  }
+  const report: ConversationTurn = {
+    role: 'notice',
+    kind: 'agent',
+    status: 'completed',
+    name: 'Review the diff',
+    exit: null,
+    summary: 'Agent "Review the diff" finished',
+    note: '',
+    detail: 'Ship it…',
+    file: '',
+    id: 'a1',
+    at: 51,
+    cut: true,
+  }
+  const call: ConversationTurn = {
+    role: 'notice',
+    kind: 'call',
+    status: 'event',
+    name: 'Call',
+    note: '',
+    detail: 'Decided…',
+    at: 52,
+    cut: true,
+  }
+  render([sent, report, call, asked('Oldest…', true)])
+  const notes = byClass('msg-cut')
+  expect(notes.map(n => n.textContent)).toEqual([cutNote, cutNote, cutNote, cutNote])
+  // Uncut, none says so.
+  const { cut: _s, ...whole } = sent
+  const { cut: _r, ...wholeReport } = report
+  render([whole as ConversationTurn, wholeReport as ConversationTurn, asked('Oldest')])
+  expect(byClass('msg-cut')).toEqual([])
 })
 
 test('the small window’s document has input events, as a browser’s: react-dom, loaded here first for the whole run, watches fields as in a browser for every file after', () => {

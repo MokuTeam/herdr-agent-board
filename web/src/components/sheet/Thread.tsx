@@ -130,7 +130,7 @@ function useSettle(text: string | null): RefObject<HTMLDivElement | null> {
 function ThreadTurn({ part, item, links, helper }: TurnProps) {
   const t = useT()
   const settle = useSettle(part.kind === 'message' && part.turn.role === 'user' ? part.turn.text : null)
-  if (part.kind === 'ask') return <AskedTurn turn={part.turn} live={part.live} />
+  if (part.kind === 'ask') return <AskedTurn turn={part.turn} live={part.live} onResize={links.onResize} />
   if (part.kind === 'link') return <LinkLine turn={part.turn} item={item} helper={helper} links={links} />
   if (part.kind === 'peer') return <PeerBubble turn={part.turn} item={item} helper={helper} links={links} />
   if (part.kind === 'notice') return <Notice turn={part.turn} links={links} />
@@ -320,8 +320,11 @@ function OwnBubble({ entry: e, onRetry, onEdit }: { entry: OutboxEntry } & Omit<
   )
 }
 
-/** A question form in the conversation: what was asked and what was answered. */
-function AskedTurn({ turn, live }: { turn: AskTurn; live: boolean }) {
+/**
+ * A question form in the conversation: what was asked and what was answered, each answer whole and
+ * a very long one folded as a long message is (#187).
+ */
+function AskedTurn({ turn, live, onResize }: { turn: AskTurn; live: boolean; onResize?: (() => void) | undefined }) {
   const t = useT()
   const state = askState(turn, live)
   return (
@@ -334,10 +337,11 @@ function AskedTurn({ turn, live }: { turn: AskTurn; live: boolean }) {
           <div key={n} className="qa-line">
             {q.header && <span className="qa-tag">{q.header}</span>}
             <span className="qa-line-q">{q.question}</span>
-            {answer && <span className="qa-ans">{answer}</span>}
+            {answer && <MessageText text={answer} plain className="qa-ans" onResize={onResize} />}
           </div>
         )
       })}
+      {turn.cut && <p className="msg-cut">{t('thread.cut')}</p>}
       {state && <div className="qa-wait">{t(state === 'waiting' ? 'qa.thread.waiting' : 'qa.thread.closed')}</div>}
       <span className="when">{clockText(turn.at, t)}</span>
     </div>
@@ -399,6 +403,7 @@ function Notice({ turn: m, links }: { turn: NoticeTurn; links: ThreadLinks }) {
         ) : (
           <pre>{detail}</pre>
         )}
+        {m.cut && <p className="msg-cut">{t('thread.cut')}</p>}
       </div>
     </details>
   )

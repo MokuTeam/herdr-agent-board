@@ -3,7 +3,17 @@
 
 import { type FormQuestion, questionsOf } from './dialogs/question-form.ts'
 import { t } from './lang.ts'
-import { boardNotice, compactNotice, isNotice, type Notice, taskNotice } from './notices.ts'
+import {
+  boardNotice,
+  type CallNotice,
+  compactNotice,
+  isCall,
+  isNotice,
+  isTask,
+  type Notice,
+  type TaskNotice,
+  taskNotice,
+} from './notices.ts'
 import { DEFAULT_PROMPT_FILTERS, type PromptFilter } from './prompt-filters.ts'
 import {
   type CallLinks,
@@ -357,25 +367,61 @@ export interface ToolTurn extends CallLinks {
   id?: string
   ask?: Pick<FormQuestion, 'question' | 'header' | 'multiSelect'>[]
   answers?: string[] | null
+  /** Only when the thread's budget cut what it sent or an answer (fitThread). */
+  cut?: true
 }
-/** A background task reporting back or a board reminder (core/notices.ts), at its time. */
-export type NoticeTurn = Notice & { role: 'notice'; at: number }
+/**
+ * A background task reporting back or a board reminder (core/notices.ts), at its time; `cut` only
+ * when the thread's budget cut its report (fitThread).
+ */
+export type NoticeTurn = Notice & { role: 'notice'; at: number; cut?: true }
 /** Another session's or a teammate's message; `cut` only when the thread's budget cut it (fitThread). */
 export type PeerTurn = Peer & { role: 'peer'; at: number; cut?: true }
 export type ConversationTurn = UserTurn | AssistantTurn | ToolTurn | NoticeTurn | PeerTurn
 
 /**
- * The most message text (prompts, answers and other sessions' messages, in characters) a thread
- * carries (#174). Messages come whole; a thread over it, as one with a pasted log of hundreds of
- * KB, has its longest messages cut to one length until it fits (fitThread), so the detail read on
- * every step stays small. The longest real message measured was under 20,000 characters, the most
- * in one real thread about 60,000.
+ * The most text (in characters) a thread carries: its messages (prompts, answers and other
+ * sessions' messages, #174), what it sent to other sessions, the answers to its question forms and
+ * the reports of its tasks and calls (#187). All come whole; a thread over it, as one with a pasted
+ * log of hundreds of KB, has its longest texts cut to one length until it fits (fitThread), so the
+ * detail read on every step stays small. The longest real message measured was under 20,000
+ * characters, the most message text in one real thread about 60,000; with the rest counted too, the
+ * last 40 turns of the largest local transcripts measured stayed under 30,000.
  */
 export const THREAD_TEXT_BUDGET = 100_000
 
 type MessageTurn = UserTurn | AssistantTurn | PeerTurn
 const isMessage = (t: ConversationTurn): t is MessageTurn =>
   t.role === 'user' || t.role === 'assistant' || t.role === 'peer'
+
+/** A notice that carries a report: a task's or a call's results; not a reminder or a compaction. */
+const isReport = (t: ConversationTurn): t is NoticeTurn & (TaskNotice | CallNotice) =>
+  t.role === 'notice' && (isTask(t) || isCall(t))
+
+/**
+ * The texts of a turn the budget counts: a message's, what a SendMessage sent and a question form's
+ * answers, a task's report or a call's results (#187).
+ */
+function textsOf(t: ConversationTurn): string[] {
+  if (isMessage(t)) return [t.text]
+  if (t.role === 'tool') return [t.send?.text ?? '', ...(t.answers ?? [])].filter(Boolean)
+  return isReport(t) && t.detail ? [t.detail] : []
+}
+
+/** `t` with each of its texts over `cap` cut to it, and `cut` when one was. */
+function capTurn(t: ConversationTurn, cap: number): ConversationTurn {
+  if (!textsOf(t).some(s => s.length > cap)) return t
+  const fit = (s: string): string => (s.length > cap ? clipWhole(s, cap) : s)
+  if (isMessage(t)) return { ...t, text: fit(t.text), cut: true }
+  if (t.role === 'tool')
+    return {
+      ...t,
+      ...(t.send && { send: { ...t.send, text: fit(t.send.text) } }),
+      ...(t.answers && { answers: t.answers.map(fit) }),
+      cut: true,
+    }
+  return isReport(t) ? { ...t, detail: fit(t.detail), cut: true } : t
+}
 
 /** `s` cut to `n` characters with "…" at the end, never between the halves of a character (an emoji). */
 function clipWhole(s: string, n: number): string {
@@ -386,11 +432,11 @@ function clipWhole(s: string, n: number): string {
 }
 
 /**
- * `turns` with their messages within `budget` (THREAD_TEXT_BUDGET): only the longest are cut, all
- * to the same length, and say so (`cut`).
+ * `turns` with their texts (textsOf) within `budget` (THREAD_TEXT_BUDGET): only the longest are
+ * cut, all to the same length, and their turns say so (`cut`).
  */
 export function fitThread(turns: ConversationTurn[], budget = THREAD_TEXT_BUDGET): ConversationTurn[] {
-  const sizes = turns.flatMap(t => (isMessage(t) ? [t.text.length] : []))
+  const sizes = turns.flatMap(t => textsOf(t).map(s => s.length))
   if (sizes.reduce((a, b) => a + b, 0) <= budget) return turns
   // Shortest first: a message that fits in its share of what is left stays whole.
   sizes.sort((a, b) => a - b)
@@ -405,7 +451,7 @@ export function fitThread(turns: ConversationTurn[], budget = THREAD_TEXT_BUDGET
     }
     left -= size
   }
-  return turns.map(t => (isMessage(t) && t.text.length > cap ? { ...t, text: clipWhole(t.text, cap), cut: true } : t))
+  return turns.map(t => capTurn(t, cap))
 }
 
 export interface ConversationOptions {
@@ -440,7 +486,8 @@ function askAnswers(ask: readonly { question: string }[], result: unknown): stri
   // Keyed by the full question text, which questionsOf keeps whole.
   return ask.map(q => {
     const a = answers[q.question]
-    return typeof a === 'string' ? clip(a, 2000) : ''
+    // Whole (#187): the thread's budget counts them with the rest (fitThread).
+    return typeof a === 'string' ? a : ''
   })
 }
 

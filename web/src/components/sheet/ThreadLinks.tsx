@@ -266,6 +266,7 @@ export function LinkLine({ turn: m, item, helper, links }: LinkLineProps) {
       <div className="notice-body">
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags */}
         <div className="md" dangerouslySetInnerHTML={{ __html: markdown(send.text) }} />
+        {m.cut && <p className="msg-cut">{t('thread.cut')}</p>}
       </div>
     </details>
   )

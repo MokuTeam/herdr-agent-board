@@ -2,7 +2,8 @@
 // One taller than two screens (models/thread.ts folds) folds there, with "Show all" under it that
 // turns into "Show less" once open. What is folded away is drawn all the same, for a selection to
 // copy and for its file chips, but out of the Tab order: the keyboard reaches "Show all" first. A
-// message the thread's budget cut says so under it (core/transcript.ts fitThread).
+// message the thread's budget cut says so under it (core/transcript.ts fitThread). `plain` keeps
+// the text as it came, for an answer to a question form (#187).
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { useThreadsContext } from '../../hooks/useThreads.tsx'
 import { useT } from '../../i18n/I18nProvider.tsx'
@@ -16,9 +17,13 @@ export interface MessageTextProps {
   cut?: boolean | undefined
   /** It opened or folded again: the thread changed height where the reader is. */
   onResize?: (() => void) | undefined
+  /** The text as it came, not Markdown, in a span (an answer's own element, a flex item there). */
+  plain?: boolean | undefined
+  /** The text's own class; Markdown's `md` by default. */
+  className?: string | undefined
 }
 
-export function MessageText({ text, cut = false, onResize }: MessageTextProps) {
+export function MessageText({ text, cut = false, onResize, plain = false, className = 'md' }: MessageTextProps) {
   const t = useT()
   const id = useId()
   const body = useRef<HTMLDivElement>(null)
@@ -59,16 +64,20 @@ export function MessageText({ text, cut = false, onResize }: MessageTextProps) {
     if (!open) toggle.current?.scrollIntoView?.({ block: 'nearest' })
     onResize?.()
   }, [open])
+  const box = {
+    ref: body,
+    id: long ? id : undefined,
+    className: folded ? `${className} folded` : className,
+    style: folded ? { maxHeight: FOLD_SCREENS * screen } : undefined,
+  }
   return (
     <>
-      <div
-        ref={body}
-        id={long ? id : undefined}
-        className={folded ? 'md folded' : 'md'}
-        style={folded ? { maxHeight: FOLD_SCREENS * screen } : undefined}
+      {plain ? (
+        <span {...box}>{text}</span>
+      ) : (
         // biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags
-        dangerouslySetInnerHTML={{ __html: markdown(text) }}
-      />
+        <div {...box} dangerouslySetInnerHTML={{ __html: markdown(text) }} />
+      )}
       {cut && <p className="msg-cut">{t('thread.cut')}</p>}
       {long && (
         <button

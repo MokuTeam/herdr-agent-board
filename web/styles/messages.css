@@ -2,13 +2,18 @@
    screens (its height inline, from the window's, as the fold measures it), its end fading out above
    "Show all", a pill like the board's own message actions (.out-actions). A message the thread's
    budget cut says so in a quiet line under it. */
-.msg .md.folded { overflow: hidden; mask-image: linear-gradient(to bottom, #000 calc(100% - 72px), transparent); }
+.msg .md.folded, .msg .qa-ans.folded { overflow: hidden; mask-image: linear-gradient(to bottom, #000 calc(100% - 72px), transparent); }
 .msg .unfold { display: block; min-height: 24px; margin-top: 6px; padding: 3px 10px; border: 0; border-radius: 999px; background: var(--fill); color: var(--accent); font: 500 12px/1.3 var(--font); transition: transform 100ms ease-out, background 120ms ease; }
 .msg .unfold:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .msg .unfold:active { transform: scale(0.96); }
 .msg.user .unfold { background: rgba(255, 255, 255, 0.2); color: #fff; }
 .msg.user .unfold:hover { background: rgba(255, 255, 255, 0.3); }
-.msg .msg-cut { margin: 4px 0 0; font-size: 11.5px; font-style: italic; opacity: 0.7; }
+.msg .msg-cut, .notice-body .msg-cut { margin: 4px 0 0; font-size: 11.5px; font-style: italic; opacity: 0.7; }
+/* What else the thread carries whole (#187): an answer to a question form keeps its lines and a
+   very long one folds as a message does (above); the budget's line goes under a question form, a
+   sent message and a task's report or a call's results, whose open body already scrolls. */
+.msg .qa-ans { white-space: pre-wrap; }
+.notice-body .msg-cut { margin-top: 6px; }
 
 /* Send now on a queued message (#330): part of its foot, beside "Queued". It shows on hover or
    focus, and always where nothing hovers (a touch screen). Pressed, the foot says "Sending now…"

@@ -3,8 +3,6 @@
 // the board's own reminders and MokuPilot call results (core/schedule-rules.ts promptOf). The
 // detail view shows them as a line of their own, and they never count as the user answering.
 
-const DETAIL_LIMIT = 4000
-
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
 // Claude Code escapes <, > and & inside the tags; &amp; last, so "&amp;lt;" stays "&lt;".
@@ -44,7 +42,7 @@ export interface TaskNotice {
   summary: string
   /** What the summary says beyond the usual ending: why it failed, a turn limit. */
   note: string
-  /** An agent's final report or a monitor's event lines, clipped. */
+  /** An agent's final report or a monitor's event lines, whole (the thread's budget counts them, #187). */
   detail: string
   /** The task's output file. */
   file: string
@@ -134,7 +132,7 @@ export function compactNotice(o: Record<string, unknown> | null | undefined): Co
  *   name     the task's own description, as quoted in the summary ('' when it has none)
  *   exit     a command's exit code, or null
  *   note     what the summary says beyond the usual ending: why it failed, a turn limit
- *   detail   an agent's final report or a monitor's event lines, clipped
+ *   detail   an agent's final report or a monitor's event lines, whole
  *   file     the task's output file
  *   id       the task's id: a monitor or a resumed agent reports again under the same one
  */
@@ -165,7 +163,7 @@ export function taskNotice(text: unknown): TaskNotice | null {
     exit: exit ? Number(exit[1]) : null,
     summary: clip(summary, 300),
     note: name && rest && !PLAIN_END.test(rest) ? clip(rest, 300) : '',
-    detail: clip(tag(t, 'result') || event, DETAIL_LIMIT),
+    detail: tag(t, 'result') || event,
     file: tag(t, 'output-file'),
     id: tag(t, 'task-id'),
   }
@@ -219,9 +217,6 @@ export const callTitle = (report: unknown): string =>
  */
 export const CALL_NOTE =
   'This is for your information: the results of a MokuPilot call the user held with a fork of this session. Take the decisions into account; do not start work on them unless the user asks.'
-// The report's own body is shown whole when the line opens; a cut copy only guards the page.
-const CALL_LIMIT = 20_000
-
 /**
  * A MokuPilot call's results the board typed in (`board call-report`, core/schedule-rules.ts
  * promptOf), "[mokupilot call report; notes]\n<report>\n\n<CALL_NOTE>", as { kind: 'call', status:
@@ -239,7 +234,8 @@ export function callNotice(text: unknown): CallNotice | null {
     status: 'event',
     name: clip(title, 200),
     note: clip((m[1] ?? '').replace(/^\s*;/, '').trim(), 300),
-    detail: clip(body, CALL_LIMIT),
+    // Whole (#187): the thread's budget counts it with the rest (core/transcript.ts fitThread).
+    detail: body,
   }
 }
 
