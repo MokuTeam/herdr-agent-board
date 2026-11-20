@@ -65,11 +65,16 @@ describe('a message with files', () => {
     const before = prompts().length
     const r = await send(files)
     expect(r.status, JSON.stringify(r.body)).toBe(200)
-    expect(prompts().slice(before)).toEqual([['agent', 'prompt', 'p', `hi\n\nFile:\n${files.join('\n')}`]])
+    expect(prompts().slice(before)).toEqual([
+      ['agent', 'prompt', 'p', `hi\n\n${files.length === 1 ? 'File' : 'Files'}:\n${files.join('\n')}`],
+    ])
   }
 
-  test('an upload goes as its path, as before', async () => {
+  test('an upload goes as its path, as before, a name with spaces, another alphabet and % too', async () => {
     await typed([upload])
+    const odd = join(uploads, '2026-11-20', 'заметки 100% ben.png')
+    writeFileSync(odd, 'ben')
+    await typed([upload, odd])
   })
 
   test('a sibling folder whose name starts like the uploads is refused, and so is the whole message', async () => {
