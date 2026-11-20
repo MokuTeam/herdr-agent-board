@@ -14,6 +14,7 @@ import type { PublicDialog } from '../../../src/core/dialogs/questions.ts'
 import type { PublicHelper, WorkflowRun } from '../../../src/core/helpers.ts'
 import type { BoardPayload, BoardProfile } from '../../../src/core/payload.ts'
 import type { QueuedPrompt } from '../../../src/core/queue.ts'
+import type { SlashCommand } from '../../../src/core/slash-commands.ts'
 import type { ConversationTurn } from '../../../src/core/transcript.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 
@@ -220,6 +221,23 @@ function sessionMeter(key: string, signal: AbortSignal): Promise<SessionMeterInf
   })
 }
 
+/** The slash commands the session's chat box offers (GET /api/session/<key>/commands, #191). */
+const isSessionCommands: Guard<{ commands: SlashCommand[] }> = (value): value is { commands: SlashCommand[] } & Reply =>
+  isReply(value) &&
+  Array.isArray(value.commands) &&
+  value.commands.every(
+    (c: unknown) =>
+      !!c && typeof (c as SlashCommand).name === 'string' && typeof (c as SlashCommand).description === 'string',
+  )
+
+async function sessionCommands(key: string, signal: AbortSignal): Promise<SlashCommand[]> {
+  const r = await get(`/api/session/${encodeURIComponent(key)}/commands`, isSessionCommands, {
+    signal,
+    cache: 'no-store',
+  })
+  return r.commands
+}
+
 /** A file into the board's uploads folder, under its own name; resolves where it was saved. */
 async function upload(name: string, file: Blob): Promise<string> {
   const res = await fetch('/api/upload', {
@@ -242,7 +260,7 @@ export function pageLog(text: string): void {
   void postJson('/api/log', { text }).catch(() => {})
 }
 
-export const api = { board, get, post, session, sessionMeter, upload }
+export const api = { board, get, post, session, sessionCommands, sessionMeter, upload }
 
 // ---------------------------------------------------------------- the archive
 

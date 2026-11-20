@@ -1,0 +1,86 @@
+/* The slash command list of the message box (#191): over the box, as the box sits at the sheet's
+   foot. It grows up out of the box it belongs to; a translucent layer over the conversation. */
+.composer-box { position: relative; }
+.slash-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 0.5px solid var(--separator);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  box-shadow: var(--shadow-card), 0 10px 30px rgb(0 0 0 / 14%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  transform-origin: 50% 100%;
+  animation: slash-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.slash-list {
+  max-height: min(268px, 42vh);
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+}
+.slash-option {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-height: 32px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.slash-option.active { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.slash-head { display: flex; flex: none; align-items: baseline; gap: 6px; max-width: 50%; min-width: 0; }
+.slash-name { overflow: hidden; color: var(--label); font-size: 13px; font-weight: 600; letter-spacing: -0.005em; text-overflow: ellipsis; white-space: nowrap; }
+.slash-option.active .slash-name { color: var(--accent); }
+.slash-arg { color: var(--label-3); font-size: 12px; white-space: nowrap; }
+.slash-about { flex: 1; min-width: 0; overflow: hidden; color: var(--label-2); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.slash-source { margin-left: 6px; color: var(--label-3); font-size: 11px; }
+.slash-keys { margin: 0; padding: 5px 14px 6px; border-top: 0.5px solid var(--separator); color: var(--label-3); font-size: 11px; }
+/* What a picked command takes, until it is typed. */
+.slash-hint {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 10px;
+  z-index: 30;
+  padding: 3px 9px;
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  color: var(--label-3);
+  font-size: 12px;
+  pointer-events: none;
+}
+.slash-hint .slash-name { color: var(--label-2); font-size: 12px; }
+
+/* A finger: rows tall enough to hit, what a command does under its name; no keys to name. */
+@media (pointer: coarse), (max-width: 520px) {
+  .slash-option { flex-direction: column; align-items: stretch; justify-content: center; gap: 1px; min-height: 44px; }
+  .slash-head { max-width: none; }
+}
+@media (pointer: coarse) {
+  .slash-keys { display: none; }
+}
+
+@keyframes slash-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+}
+@keyframes slash-fade {
+  from { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .slash-menu { animation: slash-fade 120ms ease; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .slash-menu { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+:root[data-look="terminal"] .slash-menu { border-radius: var(--radius); background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 0 0 1px var(--separator); }
+:root[data-look="terminal"] .slash-option { border-radius: 0; }

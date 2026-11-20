@@ -13,6 +13,7 @@ import { pageLog } from '../../api/client.ts'
 import { useActionRow } from '../../hooks/useActionRow.ts'
 import { useCollapse } from '../../hooks/useCollapse.ts'
 import type { ComposerControls } from '../../hooks/useComposer.ts'
+import { useSlash } from '../../hooks/useSlash.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { inMokupilot } from '../../models/call.ts'
 import {
@@ -50,6 +51,7 @@ import { AsideToggle, useAsideBox } from './Aside.tsx'
 import { Attachments } from './Attachments.tsx'
 import { SendButton } from './SendButton.tsx'
 import { type FootFold, SessionMeter } from './SessionMeter.tsx'
+import { SLASH_MENU_ID, SlashMenu, slashOptionId } from './SlashMenu.tsx'
 
 /** What the session's buttons do; each gets the button it was pressed on, for what opens from it. */
 export interface SessionButtons {
@@ -125,6 +127,8 @@ export function Composer({
   const aside = useAsideBox(text, composer.input)
   // The /model and /effort messages sent from here: the meter reads the screen after each.
   const [asked, setAsked] = useState(0)
+  // The slash command list over the box (#191): only for a message that starts with a slash.
+  const slash = useSlash(item, text, composer.input)
 
   // On every draw, as syncComposer ran on every one: the text, the language or the panel's width may have moved.
   useLayoutEffect(() => {
@@ -135,6 +139,7 @@ export function Composer({
   })
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (slash.onKeyDown(e)) return
     if (!sendsOnKey({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) return
     e.preventDefault()
     e.currentTarget.form?.requestSubmit()
@@ -312,6 +317,7 @@ export function Composer({
         id="composer"
         onSubmit={e => {
           e.preventDefault()
+          slash.sent(text)
           if (aside.submit()) return
           if (changesMeter(text)) setAsked(n => n + 1)
           composer.send()
@@ -328,6 +334,7 @@ export function Composer({
         >
           <ClipIcon />
         </button>
+        <SlashMenu slash={slash} />
         {remotePage() && (pickInstead(navigator.userAgent) || canReadClipboard(navigator.clipboard)) && (
           <PastePicture
             disabled={av.edit}
@@ -366,6 +373,9 @@ export function Composer({
             aside.on ? 'aside.placeholder' : remotePage() ? 'compose.placeholderPhone' : 'compose.placeholder',
           )}
           aria-label={t('compose.label')}
+          aria-autocomplete="list"
+          aria-controls={slash.open ? SLASH_MENU_ID : undefined}
+          aria-activedescendant={slash.open ? slashOptionId(slash.active) : undefined}
           ref={messageRef}
           value={text}
           onChange={e => composer.input(e.currentTarget.value)}

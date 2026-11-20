@@ -9,6 +9,7 @@ import { herdrText } from '../../adapters/herdr.ts'
 import { uploadsCheck } from '../../adapters/own-files.ts'
 import { pause } from '../../adapters/pacing.ts'
 import { askRestart } from '../../adapters/schedule-store.ts'
+import { sessionCommands } from '../../adapters/slash-commands.ts'
 import { busy, PINS } from '../../core/board.ts'
 import { isCodexItem } from '../../core/codex.ts'
 import { limitText, MAX_COMPACT_NOTE, noteText, parseCompactLimit } from '../../core/compact.ts'
@@ -414,6 +415,17 @@ export function sessionRoutes(app: SessionApp): Route[] {
       handle: withItem(async (item, _req, ctx) => {
         const home = app.deps.homes.forDir(item.claudeRoot ?? app.deps.claude.root)
         return json(200, await home.searchHistory(item.cwd, ctx.url.searchParams.get('q'), item.session))
+      }),
+    },
+    {
+      method: 'GET',
+      path: /^\/api\/session\/([^/]+)\/commands$/,
+      // The slash commands its chat box offers (#191): asked only once the box starts with a slash.
+      // Claude's from the session's own profile; a card working in the board's own files gets the agent's alone.
+      handle: withItem(async (item, _req, ctx) => {
+        const claudeRoot = item.claudeRoot ?? app.deps.claude.root
+        const own = ctx.ownFile(item.cwd)
+        return json(200, { commands: sessionCommands(own ? { ...item, cwd: '' } : item, { claudeRoot }) })
       }),
     },
     {

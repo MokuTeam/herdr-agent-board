@@ -132,6 +132,7 @@ describe('routes', () => {
       'styles/sheet-compact.css',
       'styles/fork.css',
       'styles/aside.css',
+      'styles/slash.css',
       'styles/favorites.css',
       'styles/cards.css',
       'styles/card-wrap.css',

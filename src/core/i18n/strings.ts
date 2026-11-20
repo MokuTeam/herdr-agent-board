@@ -22,6 +22,7 @@ import { REMOTE_STRINGS } from './remote-strings.ts'
 import { SECRET_STRINGS } from './secret-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
+import { SLASH_STRINGS } from './slash-strings.ts'
 import { TEAM_STRINGS } from './team-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 import { THREAD_STRINGS } from './thread-strings.ts'
@@ -1415,6 +1416,7 @@ for (const code of Object.keys(FORK_STRINGS) as Lang[]) Object.assign(STRINGS[co
 for (const code of Object.keys(TURN_STRINGS) as Lang[]) Object.assign(STRINGS[code], TURN_STRINGS[code])
 // And a side question to a session.
 for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ASIDE_STRINGS[code])
+for (const code of Object.keys(SLASH_STRINGS) as Lang[]) Object.assign(STRINGS[code], SLASH_STRINGS[code])
 // And the user's presence (#172).
 for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PRESENCE_STRINGS[code])
 for (const code of Object.keys(CALL_STRINGS) as Lang[]) Object.assign(STRINGS[code], CALL_STRINGS[code])
