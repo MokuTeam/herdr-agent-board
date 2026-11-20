@@ -328,6 +328,23 @@ describe('startScheduler', () => {
     }
   })
 
+  test('long reminders due together go in more than one prompt, none over the cap (#306)', async () => {
+    const box = await sandbox()
+    herdrWith(box, 'idle')
+    const minute = thisMinute()
+    const long = (c: string) => c.repeat(2000)
+    for (const [i, c] of ['a', 'b', 'c', 'd', 'e'].entries())
+      put(box, { id: `a7a70${i}`, text: long(c), at: minute, next: minute, created: minute + i })
+    await scheduler(box)
+    await until(() => runs(box).length === 5, 12_000)
+    await sleep(400)
+    // 8000 characters of text at most: three of them, then the other two.
+    assert.deepEqual(
+      prompts(box).map(p => p.split('\n').length),
+      [3, 2],
+    )
+  })
+
   test('a pi session gets each reminder in a prompt of its own, as before (#306)', async () => {
     const box = await sandbox()
     const snapshot = {
