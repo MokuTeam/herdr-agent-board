@@ -65,6 +65,7 @@ test('threads off: every command says so and fails; link --base answers, saying 
     url: 'http://127.0.0.1:12422/',
     threads: false,
     agents: false,
+    day_watches: true,
   })
   // Nothing was made: no database, no schedule.
   assert.equal(existsSync(join(stateDir(), 'board.db')), false)

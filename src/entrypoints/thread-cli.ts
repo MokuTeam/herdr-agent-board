@@ -238,7 +238,8 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
     // How MokuPilot finds the board (9.1): its address and whether threads are on, on or off.
     if (sub === 'link' && a.has('--base')) {
       const on = !!cfg
-      if (json) out(JSON.stringify({ ok: true, url: base, threads: on, agents: !!cfg?.agents }))
+      // day_watches: a day's watches follow it to its next conversation (#461), so MokuPilot skips its watch-again step.
+      if (json) out(JSON.stringify({ ok: true, url: base, threads: on, agents: !!cfg?.agents, day_watches: true }))
       else out(`${base} · threads ${on ? 'on' : 'off'}`)
       return 0
     }
