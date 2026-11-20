@@ -73,6 +73,17 @@ test('ids and titles from the folder', () => {
   expect([profileTitleOf('default'), profileTitleOf('work')]).toEqual(['Default', 'Work'])
 })
 
+test('the default folder is the platform passed in, whatever the host (#483)', () => {
+  // A home with .. in it: only that platform's join folds it into the default folder.
+  expect(profileIdOf('C:\\Users\\anna\\.claude', 'C:\\Users\\ben\\..\\anna', new Set(), 'win32')).toBe('default')
+  // On Linux \ is a letter of a name, so ..\ is no parent folder there.
+  expect(profileIdOf('/home/x\\../.claude', '/home/x\\..', new Set(), 'linux')).toBe('default')
+  expect(profileIdOf('/home/.claude', '/home/x\\..', new Set(), 'linux')).toBe('claude')
+  // mergeProfiles hands its platform on.
+  const { list } = mergeProfiles(undefined, [], '/home/x\\..', undefined, 'linux')
+  expect(list.map(p => [p.id, p.dir])).toEqual([['default', '/home/x\\../.claude']])
+})
+
 test('found folders join the list: default shown, the others hidden, colors in order', () => {
   const found = [`${H}\\.claude`, `${H}\\.claude-gamedev`, `${H}\\.claude-work`]
   const { list, added } = mergeProfiles(undefined, found, H)

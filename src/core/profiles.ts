@@ -99,10 +99,16 @@ export function absoluteProfileDir(value: unknown, home: string, platform: strin
 /**
  * The id of a profile in `dir`: `default` for the default folder, `<name>` for `.claude-<name>`,
  * else the folder's name; lower-case letters, digits, `_` and `-`, at most 32, unique in `taken`.
+ * The default folder is joined with `platform`'s rules (#483).
  */
-export function profileIdOf(dir: string, home: string, taken: ReadonlySet<string> = new Set()): string {
+export function profileIdOf(
+  dir: string,
+  home: string,
+  taken: ReadonlySet<string> = new Set(),
+  platform: string = process.platform,
+): string {
   let id = DEFAULT_PROFILE
-  if (!sameDir(dir, defaultProfileDir(home))) {
+  if (!sameDir(dir, defaultProfileDir(home, platform))) {
     const name = baseName(dir)
     const own = /^\.claude-(.*)$/is.exec(name)
     id =
@@ -187,7 +193,7 @@ export function mergeProfiles(
   const added: Profile[] = []
   for (const dir of dirs) {
     if (profileForDir(list, dir)) continue
-    const id = profileIdOf(dir, home, new Set(list.map(p => p.id)))
+    const id = profileIdOf(dir, home, new Set(list.map(p => p.id)), platform)
     const shown = sameDir(dir, shownOne) || (foundDefault !== undefined && sameDir(dir, defaultDir))
     const profile: Profile = { id, title: profileTitleOf(id), dir, color: nextColor(), hidden: !shown }
     list.push(profile)

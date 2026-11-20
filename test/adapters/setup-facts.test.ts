@@ -307,6 +307,28 @@ describe('gatherFacts', () => {
     ])
   })
 
+  test('bin folder, herdr config and a launcher path joined for the platform passed in (#483)', async () => {
+    const facts = (platform: string, home: string, env: Record<string, string>, command: string) =>
+      gatherFacts({ wakeUrl: null, wake: false, launch: { command: [command] } } as Parameters<typeof gatherFacts>[0], {
+        root: ROOT_A,
+        env: { PATH: '', ...env },
+        platform,
+        home,
+      })
+    // Windows on any host: \ throughout, a C:\ program taken as it is.
+    const win = await facts('win32', 'C:\\Users\\anna', {}, 'C:\\Tools\\claude.exe')
+    expect(win.binDir).toBe('C:\\Users\\anna\\.local\\bin')
+    expect(win.herdrConfigFile).toBe('C:\\Users\\anna\\.config\\herdr\\config.toml')
+    expect(win.launcher).toMatchObject({ kind: 'command', program: { file: 'C:\\Tools\\claude.exe' } })
+    const roaming = await facts('win32', 'C:\\Users\\anna', { APPDATA: 'C:\\Users\\anna\\AppData\\Roaming' }, 'claude')
+    expect(roaming.herdrConfigFile).toBe('C:\\Users\\anna\\AppData\\Roaming\\herdr\\config.toml')
+    // Linux on any host: / throughout, a /opt program with no drive put in front.
+    const linux = await facts('linux', '/home/ben', {}, '/opt/claude/bin/claude')
+    expect(linux.binDir).toBe('/home/ben/.local/bin')
+    expect(linux.herdrConfigFile).toBe('/home/ben/.config/herdr/config.toml')
+    expect(linux.launcher).toMatchObject({ kind: 'command', program: { file: '/opt/claude/bin/claude' } })
+  })
+
   // Before wake ships, wake off is herdr-wake's line at wakeUrl; once it ships the board's own wake
   // has the line whether on or off, and herdr-wake is not asked (the twin below).
   test.skipIf(WAKE_SHIPPED)(
@@ -469,6 +491,12 @@ describe('gatherFacts', () => {
       join('C:\\Users\\u\\AppData\\Roaming', 'herdr', 'config.toml'),
     )
     assert.equal(herdrConfigFile({}, '/home/u'), join('/home/u', '.config', 'herdr', 'config.toml'))
+    // The platform passed in, whatever the host (#483).
+    assert.equal(herdrConfigFile({}, '/home/u', 'linux'), '/home/u/.config/herdr/config.toml')
+    assert.equal(
+      herdrConfigFile({ APPDATA: 'C:\\Users\\u\\AppData\\Roaming' }, 'C:\\Users\\u', 'win32'),
+      'C:\\Users\\u\\AppData\\Roaming\\herdr\\config.toml',
+    )
     const dir = mkdtempSync(join(tmpdir(), 'board-setup-'))
     try {
       writeFileSync(join(dir, 'a.toml'), '\uFEFFkey = 1\n')
