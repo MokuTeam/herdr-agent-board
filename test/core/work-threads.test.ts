@@ -10,6 +10,8 @@ import {
   listLine,
   SHOW_MAX,
   showText,
+  similarNote,
+  similarTitles,
   type ThreadEntry,
   type ThreadHead,
   threadsBrief,
@@ -161,4 +163,23 @@ test('a list line: key, status, assignee, title, summary', () => {
     listLine(head({ status: 'done', summary: '217 rows mapped' })),
     'atlas-13 · done · atlas-mapper · Map the 2019 price columns · 217 rows mapped',
   )
+})
+
+test('similar titles (#453): case, spacing, punctuation and small word changes read alike; other tasks do not', () => {
+  assert.equal(similarTitles('Fix login bug', 'fix  the login bug'), true)
+  assert.equal(similarTitles('Fix login bug', '  FIX   LOGIN   BUG! '), true)
+  assert.equal(similarTitles('Map the 2019 price columns', 'Map the 2019 price column'), true)
+  assert.equal(similarTitles('Исправить вход', 'исправить  ВХОД'), true)
+  assert.equal(similarTitles('100% done', '100%   Done'), true)
+  assert.equal(similarTitles('Fix login bug', 'Write the release notes'), false)
+  assert.equal(similarTitles('Fix login bug', 'Fix logout bug'), false)
+  assert.equal(similarTitles('', 'x'), false)
+  assert.equal(similarTitles('!!!', '???'), false)
+})
+
+test('similar note: one bracket per thread, the title on one line and short', () => {
+  assert.deepEqual(similarNote(undefined), [])
+  assert.deepEqual(similarNote([{ key: 'atlas-12', title: 'fix the\nlogin bug' }]), [
+    '[similar: atlas-12 "fix the login bug"]',
+  ])
 })

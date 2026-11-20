@@ -383,3 +383,16 @@ test("from outside: the owner's own login reaches the threads routes, every othe
   assert.equal(remoteRefusal('/api/team', '/api/team', false, false, true)?.status, 403)
   assert.equal(remoteRefusal('/api/team', '/api/team', false, true, false), null)
 })
+
+test('duplicate guard (#453): the web new-thread reply carries similar, and nothing when no open thread is alike', async () => {
+  const { call } = setUp()
+  const first = await call('POST', '/api/threads', { op: 'new', lane: 'atlas', title: 'Fix the login bug' })
+  assert.equal(first.status, 200)
+  assert.equal('similar' in (first.body as object), false)
+  const dup = await call('POST', '/api/threads', { op: 'new', lane: 'atlas', title: 'fix  login bug' })
+  assert.equal(dup.status, 200, 'the thread is made anyway')
+  const body = dup.body as { head: ThreadView['head']; similar?: { key: string; title: string }[] }
+  assert.equal(body.similar?.[0]?.title, 'Fix the login bug')
+  const other = await call('POST', '/api/threads', { op: 'new', lane: 'atlas', title: 'Write the release notes' })
+  assert.equal('similar' in (other.body as object), false)
+})

@@ -35,6 +35,7 @@ import {
   entriesAfter,
   entriesOf,
   getThread,
+  listThreads,
   moveCursor,
   needsOwner,
   putWatch,
@@ -71,6 +72,7 @@ import {
   type Party,
   SUMMARY_MAX,
   sharedOf,
+  similarTitles,
   statusChanged,
   TEXT_MAX,
   type ThreadEntry,
@@ -140,6 +142,8 @@ export interface Written {
   /** Sessions told of it, by key; watchers that could not be told. */
   told: string[]
   untold: number
+  /** Open threads with a similar title (#453), same lane first; only when there are any. The write was done anyway. */
+  similar?: { key: string; title: string; lane: string }[]
 }
 
 const byOf = (p: Party): string => JSON.stringify(p)
@@ -176,6 +180,16 @@ function titleOf(v: unknown): string {
     throw new ThreadError('title_long', `the title has ${t.length} characters; ${TITLE_MAX} at most`)
   return t
 }
+/** The open threads whose title reads like `title` (#453), the lane's own first, three at most. */
+function similarOpen(ctx: ThreadsCtx, title: string, lane: string, except?: string): Written['similar'] {
+  const hits = listThreads(ctx.db)
+    .filter(h => h.id !== except && similarTitles(title, h.title))
+    .sort((a, b) => Number(b.lane === lane) - Number(a.lane === lane))
+    .slice(0, 3)
+    .map(h => ({ key: h.key, title: h.title, lane: h.lane }))
+  return hits.length ? hits : undefined
+}
+
 function lineOf(v: unknown, max: number, what: string): string {
   const t = oneLine(v, 10_000)
   if (t.length > max) throw new ThreadError(`${what}_long`, `the ${what} has ${t.length} characters; ${max} at most`)
@@ -208,6 +222,7 @@ export function newThread(
   if (!LANE.test(lane)) throw new ThreadError('lane', `"${input.lane}" is not a lane id (letters, digits, - and _)`)
   const title = titleOf(input.title)
   if (input.parent) parentFor(ctx, input.parent)
+  const similar = similarOpen(ctx, title, lane)
   const status: ThreadStatus = input.doing || input.to ? 'doing' : 'next'
   const done = ctx.db.write(byOf(ctx.actor), tx => {
     const made = createThread(tx, {
@@ -226,7 +241,7 @@ export function newThread(
     if (theirs) putWatch(tx, theirs, ctx.now, true)
     return made
   })
-  return { ...done, ...tellWatchers(ctx, [done.head]) }
+  return { ...done, ...tellWatchers(ctx, [done.head]), ...(similar && { similar }) }
 }
 
 export interface PostInput {
@@ -405,7 +420,12 @@ export function setFields(
   }
   if (!Object.keys(set).length)
     throw new ThreadError('empty', 'nothing to set: --title, --assignee, --lane or --parent')
-  return postEntry(ctx, head, { set })
+  const similar =
+    set.title !== undefined && isOpen(head.status)
+      ? similarOpen(ctx, set.title, set.lane ?? head.lane, head.id)
+      : undefined
+  const w = postEntry(ctx, head, { set })
+  return similar ? { ...w, similar } : w
 }
 
 // ------------------------------------------------------------------ watches

@@ -53,6 +53,7 @@ import {
   SHOW_LAST,
   sharingOf,
   showText,
+  similarNote,
   type ThreadHead,
   type ThreadsConfig,
   threadLink,
@@ -321,6 +322,7 @@ class Run {
           entry: w.entry,
           told: w.told.length,
           untold: w.untold,
+          ...(w.similar && { similar: w.similar }),
           ...(sent !== undefined && { out: sent?.out ?? 'queued', ...(sent && { sent }) }),
         }),
       )
@@ -330,6 +332,7 @@ class Run {
           ...extra,
           ...(sent !== undefined ? [sentWords(sent)] : []),
           ...(w.untold ? [`${w.untold} watching not told: they read board thread changes`] : []),
+          ...similarNote(w.similar),
         ]),
       )
   }

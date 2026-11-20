@@ -482,3 +482,36 @@ test("a shared thread (#394): the owner's entry from the command waits for the p
   expect(quiet.out).toBeUndefined()
   expect(asked).toHaveLength(1)
 })
+
+test('duplicate guard (#453): a similar open title is warned about, the thread is made anyway; closed ones and other titles are not', async () => {
+  const { run, json } = setUp()
+  assert.equal((await json(master, ['new', 'fix the login bug'])).ok, true)
+  // another lane's open thread
+  assert.equal((await json(master, ['new', 'Fix the login bug', '--lane', 'beta'])).thread.key, 'beta-1')
+
+  const dup = await json(master, ['new', 'Fix login bug'])
+  assert.equal(dup.ok, true)
+  assert.equal(dup.thread.key, 'atlas-2')
+  assert.deepEqual(
+    dup.similar.map((s: { key: string }) => s.key),
+    ['atlas-1', 'beta-1'],
+    'the lane first, then the others',
+  )
+  const line = await run(master, ['new', '  FIX   login bug '])
+  assert.match(line.out, /^ok · atlas-3 · .* \[similar: atlas-1 "fix the login bug"\]/)
+
+  // a different title and a closed thread's identical title warn nothing
+  assert.equal((await json(master, ['new', 'Write the release notes'])).similar, undefined)
+  await run(master, ['post', 'atlas-4', '--status', 'done', '--summary', 'ok'])
+  const again = await json(master, ['new', 'Write the release notes'])
+  assert.equal(again.ok, true)
+  assert.equal(again.similar, undefined)
+  assert.doesNotMatch((await run(master, ['new', 'Plan the migration'])).out, /similar/)
+
+  // set --title: the same warning, never itself
+  const set = await json(master, ['set', 'atlas-5', '--title', 'fix login bug'])
+  assert.equal(set.ok, true)
+  assert.ok(set.similar.some((s: { key: string }) => s.key === 'atlas-1'))
+  assert.ok(!set.similar.some((s: { key: string }) => s.key === 'atlas-5'))
+  assert.equal((await json(master, ['set', 'atlas-5', '--title', 'Totally other thing'])).similar, undefined)
+})

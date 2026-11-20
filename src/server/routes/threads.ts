@@ -468,7 +468,13 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
     })
     app.changed()
     const { written } = done
-    let out: Record<string, unknown> = { ok: true, key: written.head.key, head: written.head, entry: written.entry }
+    let out: Record<string, unknown> = {
+      ok: true,
+      key: written.head.key,
+      head: written.head,
+      entry: written.entry,
+      ...(written.similar && { similar: written.similar }),
+    }
     const answered = 'answered' in done ? done.answered : undefined
     if (answered?.asker) {
       // The owner's own words, typed in full into the session that asked (6.6); its card's question goes.

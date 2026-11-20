@@ -395,6 +395,47 @@ export function listLine(h: ThreadHead): string {
     .join(' · ')
 }
 
+/** A title as the duplicate guard compares it: case folded, punctuation and runs of spaces gone. */
+export function titleWords(title: string): string[] {
+  return title.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+}
+
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j)
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i]
+    for (let j = 1; j <= b.length; j++)
+      cur[j] = Math.min((prev[j] ?? 0) + 1, (cur[j - 1] ?? 0) + 1, (prev[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1))
+    prev = cur
+  }
+  return prev[b.length] ?? 0
+}
+
+/**
+ * Whether two titles read as the same task (#453): the same words once case, punctuation and
+ * spacing are folded, or at least three quarters of their words shared (two words or more), or
+ * one typo's distance apart (a tenth of the length). Cheap: titles are one line.
+ */
+export function similarTitles(a: string, b: string): boolean {
+  const x = titleWords(a)
+  const y = titleWords(b)
+  if (!x.length || !y.length) return false
+  const fa = x.join(' ')
+  const fb = y.join(' ')
+  if (fa === fb) return true
+  const sa = new Set(x)
+  const sb = new Set(y)
+  const shared = [...sa].filter(w => sb.has(w)).length
+  if (sa.size >= 2 && sb.size >= 2 && shared / (sa.size + sb.size - shared) >= 0.75) return true
+  const longest = Math.max(fa.length, fb.length)
+  return longest >= 8 && editDistance(fa, fb) <= Math.floor(longest / 10)
+}
+
+/** ` [similar: atlas-12 "Fix the login bug"]`, one per thread; nothing for none. */
+export function similarNote(similar: readonly { key: string; title: string }[] | undefined): string[] {
+  return (similar ?? []).map(s => `[similar: ${s.key} "${oneLine(s.title, 80)}"]`)
+}
+
 /** What a write prints: `ok · atlas-13 · done · 1 file`. */
 export function writeLine(h: ThreadHead, extra: string[] = []): string {
   return ['ok', h.key, h.status, ...(h.proposed ? ['proposed done, the owner confirms'] : []), ...extra]
