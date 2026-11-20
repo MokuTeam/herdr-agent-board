@@ -121,7 +121,7 @@ describe('the acceptance run of 8.2', () => {
       }),
       7,
     )
-    assert.deepEqual(full[6], { wait: 'server-1: 3 of 3 sessions' })
+    assert.deepEqual(full[6], { wait: { device: 'server-1', kind: 'sessions', busy: 3, max: 3 } })
     const zero = run(view({ config: { whenFull: 'wait' }, settings: { local: { maxSessions: 0 } } }), 7)
     assert.deepEqual(where(zero).slice(5), ['server-2', 'wait'])
   })
@@ -205,7 +205,7 @@ describe('the memory gate', () => {
         NOW,
       )
     assert.deepEqual(at(false), { on: 'server-1', why: 'room' })
-    assert.deepEqual(at(true), { wait: 'server-1: 1300 MB free, needs 1380' })
+    assert.deepEqual(at(true), { wait: { device: 'server-1', kind: 'memory', freeMb: 1300, needMb: 1380 } })
   })
 
   test('free memory is the gate whatever the session count says', () => {
@@ -223,7 +223,7 @@ describe('load', () => {
       settings: { 'server-2': { paused: true }, local: { maxSessions: 0 } },
       devices: { 'server-1': { status: status({ load: [0.1, 9.6, 0.1] }) } },
     })
-    assert.deepEqual(place(task(), wait, NOW), { wait: 'server-1: load 1.20 per core, limit 0.9' })
+    assert.deepEqual(place(task(), wait, NOW), { wait: { device: 'server-1', kind: 'load', perCore: 1.2, max: 0.9 } })
     // The 1 and 15 minute figures are not the test.
     const spike = view({ devices: { 'server-1': { status: status({ load: [60, 0.5, 60] }) } } })
     assert.deepEqual(place(task(), spike, NOW), { on: 'server-1', why: 'room' })
@@ -267,7 +267,7 @@ describe('devices that cannot take a start', () => {
       settings: { local: { maxSessions: 0 } },
       devices: { 'server-1': { online: false }, 'server-2': { status: null } },
     })
-    assert.deepEqual(place(task(), v, NOW), { wait: 'server-1: offline' })
+    assert.deepEqual(place(task(), v, NOW), { wait: { device: 'server-1', kind: 'offline' } })
   })
 
   test('paused, draining, revoked: skipped; none left: refuse with each reason', () => {
@@ -287,7 +287,14 @@ describe('devices that cannot take a start', () => {
       settings: { 'server-1': { paused: true }, 'server-2': { drain: true }, local: { paused: true } },
     })
     assert.deepEqual(place(task(), none, NOW), {
-      refuse: 'server-1: paused; server-2: draining; local: paused',
+      refuse: {
+        kind: 'unfit',
+        devices: [
+          { device: 'server-1', kind: 'paused' },
+          { device: 'server-2', kind: 'draining' },
+          { device: 'local', kind: 'paused' },
+        ],
+      },
     })
   })
 
@@ -301,11 +308,16 @@ describe('devices that cannot take a start', () => {
         local: { status: status({ commit: 'whatever', api: 9, sessions: { awake: 0, working: 0, asleep: 0 } }) },
       },
     })
-    assert.deepEqual(place(task(), v, NOW), { wait: 'local: 0 of 0 sessions' })
+    assert.deepEqual(place(task(), v, NOW), { wait: { device: 'local', kind: 'sessions', busy: 0, max: 0 } })
     const pinned = place(task({ pin: { device: 'server-1' } }), v, NOW)
-    assert.deepEqual(pinned, { refuse: 'server-1: version 4d7154cb, this board ee32fc89' })
+    assert.deepEqual(pinned, {
+      refuse: {
+        kind: 'unfit',
+        devices: [{ device: 'server-1', kind: 'commit', theirs: '4d7154cb', ours: 'ee32fc89' }],
+      },
+    })
     assert.deepEqual(place(task({ pin: { device: 'server-2' } }), v, NOW), {
-      refuse: 'server-2: link version 2, this board 1',
+      refuse: { kind: 'unfit', devices: [{ device: 'server-2', kind: 'api', theirs: 2, ours: 1 }] },
     })
   })
 
@@ -340,15 +352,21 @@ describe('a pin', () => {
       devices: { 'server-2': { status: status({ sessions: { awake: 3, working: 3, asleep: 0 } }) } },
     })
     // Full: it waits for that device, it does not start here even by hand with whenFull "local".
-    assert.deepEqual(place(task({ pin: { device: 'server-2' } }), full, NOW), { wait: 'server-2: 3 of 3 sessions' })
-    assert.deepEqual(place(task({ pin: { device: 'server-9' } }), view(), NOW), { refuse: 'no device for server-9' })
+    assert.deepEqual(place(task({ pin: { device: 'server-2' } }), full, NOW), {
+      wait: { device: 'server-2', kind: 'sessions', busy: 3, max: 3 },
+    })
+    assert.deepEqual(place(task({ pin: { device: 'server-9' } }), view(), NOW), {
+      refuse: { kind: 'no-device', pin: { device: 'server-9' } },
+    })
   })
 
   test('to a tag: the devices that have it, in order', () => {
     const v = view({ settings: { 'server-2': { tags: ['tests'] }, local: { tags: ['tests'] } } })
     assert.deepEqual(place(task({ pin: { tag: 'tests' } }), v, NOW), { on: 'server-2', why: 'room' })
     assert.deepEqual(where(run(v, 4, task({ pin: { tag: 'tests' } }))), ['server-2', 'server-2', 'server-2', 'local'])
-    assert.deepEqual(place(task({ pin: { tag: 'gpu' } }), v, NOW), { refuse: 'no device for tag gpu' })
+    assert.deepEqual(place(task({ pin: { tag: 'gpu' } }), v, NOW), {
+      refuse: { kind: 'no-device', pin: { tag: 'gpu' } },
+    })
   })
 })
 
@@ -366,12 +384,18 @@ describe('whenFull', () => {
 
   test('"local": a start by hand goes here whatever this computer\'s thresholds say; one not by hand waits', () => {
     assert.deepEqual(place(task(), full('local'), NOW), { on: 'local', why: 'full' })
-    assert.deepEqual(place(task({ byHand: false }), full('local'), NOW), { wait: 'server-1: 3 of 3 sessions' })
+    assert.deepEqual(place(task({ byHand: false }), full('local'), NOW), {
+      wait: { device: 'server-1', kind: 'sessions', busy: 3, max: 3 },
+    })
   })
 
   test('"wait": by hand or not, it waits', () => {
-    assert.deepEqual(place(task(), full('wait'), NOW), { wait: 'server-1: 3 of 3 sessions' })
-    assert.deepEqual(place(task({ byHand: false }), full('wait'), NOW), { wait: 'server-1: 3 of 3 sessions' })
+    assert.deepEqual(place(task(), full('wait'), NOW), {
+      wait: { device: 'server-1', kind: 'sessions', busy: 3, max: 3 },
+    })
+    assert.deepEqual(place(task({ byHand: false }), full('wait'), NOW), {
+      wait: { device: 'server-1', kind: 'sessions', busy: 3, max: 3 },
+    })
   })
 
   test('"local" only when this computer fits', () => {
@@ -380,7 +404,7 @@ describe('whenFull', () => {
       ...v,
       devices: { ...v.devices, local: state({ status: status({ profiles: [{ id: 'default', loggedIn: false }] }) }) },
     }
-    assert.deepEqual(place(task(), noLogin, NOW), { wait: 'server-1: 3 of 3 sessions' })
+    assert.deepEqual(place(task(), noLogin, NOW), { wait: { device: 'server-1', kind: 'sessions', busy: 3, max: 3 } })
   })
 })
 
@@ -407,7 +431,9 @@ describe('lanes', () => {
     const changes = task({ portable: { ok: false, why: { kind: 'changes' } } })
     assert.deepEqual(place(changes, view(), NOW), { on: 'local', why: 'home', home: { kind: 'changes' } })
     const busy = view({ devices: { local: { status: status({ sessions: { awake: 20, working: 0, asleep: 0 } }) } } })
-    assert.deepEqual(place({ ...changes, byHand: false }, busy, NOW), { wait: 'local: 20 of 20 sessions' })
+    assert.deepEqual(place({ ...changes, byHand: false }, busy, NOW), {
+      wait: { device: 'local', kind: 'sessions', busy: 20, max: 20 },
+    })
     assert.deepEqual(place(changes, busy, NOW), { on: 'local', why: 'full', home: { kind: 'changes' } })
     // Its folder on a node: there or nowhere.
     const onNode = task({ origin: 'server-2', portable: { ok: false, why: { kind: 'unpushed' } } })
@@ -418,13 +444,22 @@ describe('lanes', () => {
 describe('refuse', () => {
   test('when no candidate fits at all, with every reason', () => {
     assert.deepEqual(place(task({ agent: 'codex' }), view(), NOW), {
-      refuse: 'server-1: no codex; server-2: no codex; local: no codex',
+      refuse: {
+        kind: 'unfit',
+        devices: ['server-1', 'server-2', 'local'].map(device => ({ device, kind: 'no-agent', agent: 'codex' })),
+      },
     })
     assert.deepEqual(place(task({ profile: 'work' }), view({ config: { order: ['server-1'] } }), NOW), {
-      refuse: 'server-1: no profile work; server-2: no profile work; local: no profile work',
+      refuse: {
+        kind: 'unfit',
+        devices: ['server-1', 'server-2', 'local'].map(device => ({ device, kind: 'no-profile', profile: 'work' })),
+      },
     })
     assert.deepEqual(place(task({ needs: ['gpu'] }), view({ config: { order: ['server-1', 'local'] } }), NOW), {
-      refuse: 'server-1: no tag gpu; local: no tag gpu; server-2: no tag gpu',
+      refuse: {
+        kind: 'unfit',
+        devices: ['server-1', 'local', 'server-2'].map(device => ({ device, kind: 'tags', missing: ['gpu'] })),
+      },
     })
   })
 
@@ -434,7 +469,7 @@ describe('refuse', () => {
       settings: { local: { paused: true }, 'server-2': { paused: true } },
       devices: { 'server-1': { status: null } },
     })
-    assert.deepEqual(place(task(), v, NOW), { wait: 'server-1: no status yet' })
+    assert.deepEqual(place(task(), v, NOW), { wait: { device: 'server-1', kind: 'no-status' } })
   })
 })
 
@@ -464,10 +499,17 @@ describe('edges', () => {
       devices: { 'server-1': { status: null }, local: { status: null } },
     })
     assert.deepEqual(place(task({ needs: ['gpu'] }), v, NOW), {
-      refuse: 'server-1: no tag gpu; server-2: paused; local: no tag gpu',
+      refuse: {
+        kind: 'unfit',
+        devices: [
+          { device: 'server-1', kind: 'tags', missing: ['gpu'] },
+          { device: 'server-2', kind: 'paused' },
+          { device: 'local', kind: 'tags', missing: ['gpu'] },
+        ],
+      },
     })
     const tagged = view({ settings: { 'server-1': { tags: ['gpu'] } }, devices: { 'server-1': { status: null } } })
-    assert.deepEqual(place(task({ needs: ['gpu'] }), tagged, NOW), { wait: 'server-1: no status yet' })
+    assert.deepEqual(place(task({ needs: ['gpu'] }), tagged, NOW), { wait: { device: 'server-1', kind: 'no-status' } })
   })
 
   test('needsFresh asks only devices the task could use: home, not paused, draining or revoked', () => {
@@ -489,10 +531,38 @@ describe('edges', () => {
     assert.deepEqual(needsFresh(task(), revoked, NOW), ['server-2'])
   })
 
-  test('a pin and a task that cannot leave: it starts where its folder is, with the reason', () => {
-    const v = view()
-    const pinned = task({ pin: { device: 'server-1' }, portable: { ok: false, why: { kind: 'changes' } } })
-    assert.deepEqual(place(pinned, v, NOW), { on: 'local', why: 'home', home: { kind: 'changes' } })
+  test('a pin and a task that must stay home: refused when the pin points elsewhere, kept when it allows the origin', () => {
+    const v = view({ settings: { 'server-1': { tags: ['tests'] }, local: { tags: ['win'] } } })
+    const changes = { portable: { ok: false, why: { kind: 'changes' } } } as const
+    assert.deepEqual(place(task({ pin: { device: 'server-1' }, ...changes }), v, NOW), {
+      refuse: { kind: 'pinned-away', pin: { device: 'server-1' }, origin: 'local', home: { kind: 'changes' } },
+    })
+    assert.deepEqual(place(task({ pin: { tag: 'tests' }, ...changes }), v, NOW), {
+      refuse: { kind: 'pinned-away', pin: { tag: 'tests' }, origin: 'local', home: { kind: 'changes' } },
+    })
+    const lane = { ...v, config: { ...v.config, lanes: ['tools'] } }
+    assert.deepEqual(place(task({ pin: { device: 'server-2' } }), lane, NOW), {
+      refuse: { kind: 'pinned-away', pin: { device: 'server-2' }, origin: 'local', home: { kind: 'lane' } },
+    })
+    assert.deepEqual(needsFresh(task({ pin: { device: 'server-1' }, ...changes }), v, NOW), [])
+    // A pin to the origin itself, or to a tag the origin has: it starts there as before.
+    assert.deepEqual(place(task({ pin: { device: 'local' }, ...changes }), v, NOW), {
+      on: 'local',
+      why: 'home',
+      home: { kind: 'changes' },
+    })
+    assert.deepEqual(place(task({ pin: { tag: 'win' } }), lane, NOW), {
+      on: 'local',
+      why: 'home',
+      home: { kind: 'lane' },
+    })
+  })
+
+  test('lane ids match trimmed and in any case', () => {
+    assert.deepEqual(place(task({ lane: 'Atlas ' }), view({ config: { lanes: [' ATLAS'] } }), NOW), {
+      on: 'server-1',
+      why: 'room',
+    })
   })
 
   test('the gate counts reservations in the free figure, and its return threshold is exact', () => {
@@ -508,7 +578,7 @@ describe('edges', () => {
         NOW,
       )
     assert.deepEqual(at(false), { on: 'server-1', why: 'room' })
-    assert.deepEqual(at(true), { wait: 'server-1: 1350 MB free, needs 1380' })
+    assert.deepEqual(at(true), { wait: { device: 'server-1', kind: 'memory', freeMb: 1350, needMb: 1380 } })
     // 100 × 1.15 is 114.99999999999999 in floating point: 115 is not above it.
     assert.equal(gateNext({ minFreeMemMb: 100 }, status({ memAvailableMb: 115 }), true), true)
     assert.equal(gateNext({ minFreeMemMb: 100 }, status({ memAvailableMb: 116 }), true), false)

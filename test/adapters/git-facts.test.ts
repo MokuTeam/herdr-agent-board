@@ -213,16 +213,24 @@ describe('which remote branch counts', () => {
   )
 
   test(
-    'no origin: the first remote; a password in its URL is not kept; a repository with no commit yet',
+    'no origin: the first remote; no commit yet; over https the whole login goes, a token as the user too; over ssh the user stays',
     async () => {
       const dir = temp('board-remotes-')
       git(dir, ['init', '--quiet', '--initial-branch=main'])
       git(dir, ['remote', 'add', 'upstream', 'https://bot:secret-token@github.com/a/b.git'])
       expect(await checkoutFacts(dir)).toEqual({
         root: dir,
-        remote: { name: 'upstream', url: 'https://bot@github.com/a/b.git', address: 'github.com/a/b' },
+        remote: { name: 'upstream', url: 'https://github.com/a/b.git', address: 'github.com/a/b' },
         clean: true,
         headPushed: false,
+      })
+      git(dir, ['remote', 'set-url', 'upstream', 'https://ghp_0123456789abcdef@github.com/a/b.git'])
+      expect((await checkoutFacts(dir))?.remote?.url).toBe('https://github.com/a/b.git')
+      git(dir, ['remote', 'set-url', 'upstream', 'ssh://git:pw@example.invalid/a/b.git'])
+      expect((await checkoutFacts(dir))?.remote).toEqual({
+        name: 'upstream',
+        url: 'ssh://git@example.invalid/a/b.git',
+        address: 'example.invalid/a/b',
       })
     },
     GIT_MS,

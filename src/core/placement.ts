@@ -83,10 +83,44 @@ export interface Task {
   byHand: boolean
 }
 
+export type Pin = NonNullable<Task['pin']>
+
+/** What keeps a device that fits from taking one more start now (8.2). */
+export type Blocker =
+  | { device: DeviceId; kind: 'no-status' | 'offline' }
+  | { device: DeviceId; kind: 'sessions'; busy: number; max: number }
+  /** needMb is the gate's return threshold when it is closed. */
+  | { device: DeviceId; kind: 'memory'; freeMb: number; needMb: number }
+  /** The 5 minute load per core. */
+  | { device: DeviceId; kind: 'load'; perCore: number; max: number }
+
+/** Why a device can never take this task as it is (8.1, step 3). */
+export type Unfit =
+  | { device: DeviceId; kind: 'not-set-up' | 'revoked' | 'paused' | 'draining' }
+  | { device: DeviceId; kind: 'tags'; missing: string[] }
+  | { device: DeviceId; kind: 'api'; theirs: number; ours: number }
+  | { device: DeviceId; kind: 'commit'; theirs: string; ours: string }
+  | { device: DeviceId; kind: 'no-profile' | 'not-logged-in'; profile: string }
+  | { device: DeviceId; kind: 'no-agent'; agent: string }
+
+/** Why no device could ever take the task. */
+export type Refusal =
+  /** The pin names no device in the order (or the order is empty). */
+  | { kind: 'no-device'; pin?: Pin }
+  /** Every candidate failed step 3, each with its reason, in order. */
+  | { kind: 'unfit'; devices: Unfit[] }
+  /** The task must stay at its origin and the pin points elsewhere: both are kept for the card. */
+  | { kind: 'pinned-away'; pin: Pin; origin: DeviceId; home: PortableWhy }
+
+/**
+ * The decision, as data the page words in the board's language: core builds no sentence.
+ * `why`: a device had room, the task stays at its origin (`home` says why), or every device was
+ * full and a start by hand came here (`whenFull: "local"`).
+ */
 export type Verdict =
-  | { on: DeviceId; why: 'room' | 'home' | 'full'; home?: PortableWhy } // start here; home: why it stays there
-  | { wait: string } // queue it; the line goes on the launch's card
-  | { refuse: string } // no device could ever take it
+  | { on: DeviceId; why: 'room' | 'home' | 'full'; home?: PortableWhy } // start here
+  | { wait: Blocker } // queue it; the first candidate's blocker goes on the launch's card
+  | { refuse: Refusal } // no device could ever take it
 
 /** What one start is counted as on its device until the device shows it (8.2). */
 export const RESERVED_MB = 800
@@ -152,8 +186,9 @@ export function gateNext(
  * the placer reads its own status, it does not ask for it.
  */
 export function needsFresh(task: Task, view: PlacementView, now: number): DeviceId[] {
-  const list = homeWhy(task, view.config) ? [task.origin] : candidates(task, view)
-  return list.filter(id => {
+  const route = routeOf(task, view)
+  if (!('list' in route)) return []
+  return route.list.filter(id => {
     if (id === LOCAL) return false
     const d = view.devices[id]
     const s = settingsOf(view.config, id)
@@ -167,27 +202,44 @@ export function needsFresh(task: Task, view: PlacementView, now: number): Device
  * Fills in order, never spreads: the first device with room wins.
  */
 export function place(task: Task, view: PlacementView, now: number): Verdict {
-  const pinned = candidates(task, view)
-  if (!pinned.length) return { refuse: task.pin ? `no device for ${pinText(task.pin)}` : 'no device in the order' }
-  const home = homeWhy(task, view.config)
-  const list = home ? [task.origin] : pinned
+  const route = routeOf(task, view)
+  if ('refuse' in route) return route
+  const { list, home } = route
   const fits: DeviceId[] = []
-  const unfit: string[] = []
+  const unfit: Unfit[] = []
   for (const id of list) {
     const why = unfitWhy(id, task, view)
-    if (why) unfit.push(`${id}: ${why}`)
+    if (why) unfit.push(why)
     else fits.push(id)
   }
-  if (!fits.length) return { refuse: unfit.join('; ') }
-  const blockers: string[] = []
+  if (!fits.length) return { refuse: { kind: 'unfit', devices: unfit } }
+  const blockers: Blocker[] = []
   for (const id of fits) {
     const blocker = roomBlocker(id, view, now)
     if (!blocker) return home ? { on: id, why: 'home', home } : { on: id, why: 'room' }
-    blockers.push(`${id}: ${blocker}`)
+    blockers.push(blocker)
   }
   if (task.byHand && view.config.whenFull === 'local' && fits.includes(LOCAL))
     return home ? { on: LOCAL, why: 'full', home } : { on: LOCAL, why: 'full' }
-  return { wait: blockers[0] ?? '' }
+  return { wait: blockers[0] as Blocker }
+}
+
+/**
+ * Steps 1 and 2: the devices the task may go to, in order, and why it stays home when it must.
+ * A task that must stay at its origin keeps the owner's pin when the pin allows the origin (the
+ * origin itself, or a tag it has); a pin that points elsewhere is refused rather than ignored.
+ */
+function routeOf(
+  task: Task,
+  view: PlacementView,
+): { list: DeviceId[]; home: PortableWhy | null } | { refuse: Refusal } {
+  const pinned = candidates(task, view)
+  if (!pinned.length) return { refuse: task.pin ? { kind: 'no-device', pin: task.pin } : { kind: 'no-device' } }
+  const home = homeWhy(task, view.config)
+  if (!home) return { list: pinned, home: null }
+  if (task.pin && !pinned.includes(task.origin))
+    return { refuse: { kind: 'pinned-away', pin: task.pin, origin: task.origin, home } }
+  return { list: [task.origin], home }
 }
 
 /** The order with what 7.1 says of it: devices it does not name after it, `local` last when missing. */
@@ -217,8 +269,6 @@ function candidates(task: Task, view: PlacementView): DeviceId[] {
   return all.filter(id => (settingsOf(view.config, id)?.tags ?? []).includes(pin.tag))
 }
 
-const pinText = (pin: NonNullable<Task['pin']>): string => ('device' in pin ? pin.device : `tag ${pin.tag}`)
-
 /** Step 2: why the task may run only where its folder is, or null when it may go anywhere. */
 function homeWhy(task: Task, config: PlacementConfig): PortableWhy | null {
   if (!laneLeaves(task.lane, config.lanes)) return { kind: 'lane' }
@@ -226,53 +276,54 @@ function homeWhy(task: Task, config: PlacementConfig): PortableWhy | null {
 }
 
 /** Step 3, nothing to do with load: why the device can never take this task as it is, or null. */
-function unfitWhy(id: DeviceId, task: Task, view: PlacementView): string | null {
-  const settings = settingsOf(view.config, id)
-  const state = view.devices[id]
-  if (!settings && id !== LOCAL) return 'not set up'
-  if (state?.revoked) return 'revoked'
-  if (settings?.paused) return 'paused'
-  if (settings?.drain) return 'draining'
+function unfitWhy(device: DeviceId, task: Task, view: PlacementView): Unfit | null {
+  const settings = settingsOf(view.config, device)
+  const state = view.devices[device]
+  if (!settings && device !== LOCAL) return { device, kind: 'not-set-up' }
+  if (state?.revoked) return { device, kind: 'revoked' }
+  if (settings?.paused) return { device, kind: 'paused' }
+  if (settings?.drain) return { device, kind: 'draining' }
   const tags = settings?.tags ?? []
   const missing = (task.needs ?? []).filter(t => !tags.includes(t))
-  if (missing.length) return `no tag ${missing.join(', ')}`
+  if (missing.length) return { device, kind: 'tags', missing }
   const status = state?.status
   // Never heard from: nothing it reports says it cannot take the task; it has no room until it answers.
   if (!status) return null
-  if (id !== LOCAL) {
-    if (status.api !== view.master.api) return `link version ${status.api}, this board ${view.master.api}`
-    if (status.commit !== view.master.commit) return `version ${status.commit}, this board ${view.master.commit}`
+  if (device !== LOCAL) {
+    if (status.api !== view.master.api) return { device, kind: 'api', theirs: status.api, ours: view.master.api }
+    if (status.commit !== view.master.commit)
+      return { device, kind: 'commit', theirs: status.commit, ours: view.master.commit }
   }
   // The profile map is the master's to a node's: this computer's profiles are its own ids.
-  const profile = (id !== LOCAL && settings?.profiles?.[task.profile]) || task.profile
+  const profile = (device !== LOCAL && settings?.profiles?.[task.profile]) || task.profile
   const there = status.profiles.find(p => p.id === profile)
-  if (!there) return `no profile ${profile}`
+  if (!there) return { device, kind: 'no-profile', profile }
   // null is a device that cannot tell (an agent with no login of its own to read): not a refusal.
-  if (there.loggedIn === false) return `profile ${profile} is not logged in`
-  if (!status.agents.includes(task.agent)) return `no ${task.agent}`
+  if (there.loggedIn === false) return { device, kind: 'not-logged-in', profile }
+  if (!status.agents.includes(task.agent)) return { device, kind: 'no-agent', agent: task.agent }
   return null
 }
 
 /** Step 4, the room test of 8.2: what keeps a device from taking one more start now, or null. */
-export function roomBlocker(id: DeviceId, view: PlacementView, now: number): string | null {
-  const state = view.devices[id]
+export function roomBlocker(device: DeviceId, view: PlacementView, now: number): Blocker | null {
+  const state = view.devices[device]
   const status = state?.status
-  if (!status) return 'no status yet'
-  if (id !== LOCAL && (!state.online || now - status.at > STATUS_MAX_AGE_MS)) return 'offline'
-  const s = settingsOf(view.config, id)
+  if (!status) return { device, kind: 'no-status' }
+  if (device !== LOCAL && (!state.online || now - status.at > STATUS_MAX_AGE_MS)) return { device, kind: 'offline' }
+  const s = settingsOf(view.config, device)
   const reserved = Math.max(0, state.reserved)
   const busy = status.sessions.awake + reserved
-  if (s?.maxSessions != null && busy >= s.maxSessions) return `${busy} of ${s.maxSessions} sessions`
+  if (s?.maxSessions != null && busy >= s.maxSessions) return { device, kind: 'sessions', busy, max: s.maxSessions }
   if (s?.minFreeMemMb != null) {
     const free = status.memAvailableMb - reserved * RESERVED_MB
     if (!memoryPasses(free, s.minFreeMemMb, state.gateClosed)) {
-      const need = state.gateClosed ? s.minFreeMemMb * GATE_RETURN : s.minFreeMemMb
-      return `${Math.round(free)} MB free, needs ${Math.round(need)}`
+      const needMb = state.gateClosed ? Math.round(s.minFreeMemMb * GATE_RETURN) : s.minFreeMemMb
+      return { device, kind: 'memory', freeMb: free, needMb }
     }
   }
   if (s?.maxLoad != null && status.load && status.cpus > 0) {
     const perCore = status.load[1] / status.cpus
-    if (perCore > s.maxLoad) return `load ${perCore.toFixed(2)} per core, limit ${s.maxLoad}`
+    if (perCore > s.maxLoad) return { device, kind: 'load', perCore, max: s.maxLoad }
   }
   return null
 }

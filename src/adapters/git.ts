@@ -189,8 +189,13 @@ async function remoteBranch(
   return commit ? { remote: known.fallback, commit } : null
 }
 
-/** A remote's URL as it may be shown and sent on: `https://user:token@host/x` loses its password. */
+/**
+ * A remote's URL as it may be shown and sent on. Over http and https the login goes whole, since a
+ * token is often the user itself (`https://<token>@host/x`); over other schemes the user stays
+ * (`ssh://git@host/x`) and only a password goes.
+ */
 function shownUrl(url: string): string {
+  if (/^https?:\/\//i.test(url)) return url.replace(/^(https?:\/\/)[^/@]*@/i, '$1')
   return url.replace(/^([a-z][a-z0-9+.-]*:\/\/[^/@:]*):[^/@]*@/i, '$1@')
 }
 

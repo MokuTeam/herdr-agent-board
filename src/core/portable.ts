@@ -37,10 +37,15 @@ export interface PortableFacts {
   exists: (path: string) => boolean
 }
 
-/** Whether a lane's sessions may run on another device. Absent or empty lanes: none. */
+/**
+ * Whether a lane's sessions may run on another device. Absent or empty lanes: none. Lane ids are
+ * compared trimmed and in lower case, as config.json may write them either way.
+ */
 export function laneLeaves(lane: string, lanes: Lanes): boolean {
   if (lanes === 'all') return true
-  return Array.isArray(lanes) && lanes.includes(lane)
+  if (!Array.isArray(lanes)) return false
+  const id = lane.trim().toLowerCase()
+  return lanes.some(l => typeof l === 'string' && l.trim().toLowerCase() === id)
 }
 
 /**
@@ -106,11 +111,17 @@ export function pathsIn(text: string): string[] {
   return out
 }
 
+// What a node may make a folder of: a host of letters, digits, dots and dashes; path segments of
+// letters, digits, dots, dashes and underscores that do not start with a dot or a dash.
+const HOST = /^[A-Za-z0-9.-]+$/
+const SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/
+
 /**
  * A remote's address as host/path, the name a node gives its checkout
  * (`<workRoot>/<host>/<path>`): `https://github.com/a/b.git`, `git@github.com:a/b` and
- * `ssh://git@github.com:22/a/b` are all `github.com/a/b`. A path on this computer (a local
- * bare repository, `file://`) has no host: null.
+ * `ssh://git@github.com:22/a/b` are all `github.com/a/b`. Strict, since it becomes a folder on
+ * another machine: anything outside HOST and SEGMENT is null, and so is a path on this computer
+ * (a local bare repository, `file://`), which has no host.
  */
 export function repoAddress(url: string): string | null {
   const u = url.trim()
@@ -128,10 +139,11 @@ export function repoAddress(url: string): string | null {
     host = h
     path = p
   } else return null
-  path = path
-    .replace(/^\/+|\/+$/g, '')
+  if (!HOST.test(host)) return null
+  const segments = path
+    .replace(/^\/|\/+$/g, '')
     .replace(/\.git$/i, '')
-    .replace(/\/+$/, '')
-  if (!path || path.split('/').some(p => p === '..' || p === '.')) return null
-  return `${host.toLowerCase()}/${path}`
+    .split('/')
+  if (!segments.every(s => SEGMENT.test(s))) return null
+  return `${host.toLowerCase()}/${segments.join('/')}`
 }

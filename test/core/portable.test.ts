@@ -30,6 +30,8 @@ describe('portable', () => {
   test('the lane: ticked or "all" may leave; unticked, absent or empty stays home, before any other fact', () => {
     assert.equal(laneLeaves('atlas', ['atlas']), true)
     assert.equal(laneLeaves('atlas', 'all'), true)
+    // Lane ids as config.json may write them: trimmed, any case.
+    assert.equal(laneLeaves(' Atlas', ['ATLAS ']), true)
     for (const lanes of [['tools'], [], null, undefined] as const) {
       assert.equal(laneLeaves('atlas', lanes), false)
       assert.deepEqual(portable(facts({ lanes, checkout: null })), { ok: false, why: { kind: 'lane' } })
@@ -162,6 +164,21 @@ describe('repoAddress', () => {
       'ssh://git@github.com:22/MokuTeam/herdr-agent-board.git',
     ])
       assert.equal(repoAddress(url), 'github.com/MokuTeam/herdr-agent-board', url)
+  })
+
+  test('strict, since it becomes a folder on another machine', () => {
+    for (const url of [
+      'https://github.com/a b/c.git',
+      'https://github.com/a;rm/c',
+      'https://github.com/-x/c',
+      'https://github.com/a/.git/c',
+      'https://github.com/a/.hidden',
+      'git@git hub.com:a/b.git',
+      'https://github.com//a',
+      'https://github.com/a/%2e%2e/b',
+    ])
+      assert.equal(repoAddress(url), null, url)
+    assert.equal(repoAddress('https://github.com/my_org/repo.name-x.git'), 'github.com/my_org/repo.name-x')
   })
 
   test('a path on this computer has no host', () => {
