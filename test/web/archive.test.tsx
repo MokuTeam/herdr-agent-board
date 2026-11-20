@@ -224,6 +224,9 @@ const RESTING: Archive = {
   togglePanel() {},
   setQuery() {},
   async remove() {},
+  async dropParked() {},
+  armMove() {},
+  async moveParked() {},
   disarm() {},
 }
 

@@ -144,7 +144,10 @@ export interface ArchivePanelState {
   records: readonly PublicArchiveRecord[]
   /** Keys whose Return is on its way from this page. */
   returning: ReadonlySet<string>
-  /** The row whose trash can asks "Remove?". */
+  /**
+   * The row whose trash can asks "Remove?" (its key), the parked entry that asks "Unschedule?"
+   * (`held:<id>`), or the one whose Move asks "Move to …?" (`move:<id>:<target key>`).
+   */
   armed: string | null
   query: string
   /** Counts the openings: rows that come in after one materialize, those it opened with do not. */
@@ -174,6 +177,12 @@ export interface Archive {
   setQuery(text: string): void
   /** The trash can: the first click arms it ("Remove?"), a second one within four seconds removes the record. */
   remove(key: string, row: HTMLElement | null): Promise<void>
+  /** An entry parked with session `key` unscheduled for good: armed first ("Unschedule?"), as the trash can. */
+  dropParked(key: string, id: string, row?: HTMLElement | null): Promise<void>
+  /** Move's first step: the target picked, its pill asks "Move to …?" for four seconds. */
+  armMove(id: string, to: string): void
+  /** Move's second step: the entry parked with session `key` into the schedule of session `to`, on the board. */
+  moveParked(key: string, id: string, to: string, row?: HTMLElement | null): Promise<void>
   disarm(): void
 }
 
@@ -394,6 +403,58 @@ export function useArchive(): Archive {
       void load()
     }
 
+    /** The record without the entry `id` (its line folded away first), until the next read says so too. */
+    async function withoutParked(key: string, id: string, row: HTMLElement | null | undefined): Promise<void> {
+      own.current.collapsing++
+      try {
+        if (row) await collapse(row)
+      } finally {
+        own.current.collapsing--
+      }
+      setPanel(p => ({
+        ...p,
+        records: p.records.map(r =>
+          r.key === key && r.parked?.some(e => e.id === id)
+            ? { ...r, held: Math.max(0, r.held - 1), parked: r.parked.filter(e => e.id !== id) }
+            : r,
+        ),
+      }))
+    }
+
+    async function dropParked(key: string, id: string, row?: HTMLElement | null): Promise<void> {
+      if (!page().board.canEdit) return refused()
+      const armed = `held:${id}`
+      if (page().panel.armed !== armed) {
+        disarm()
+        own.current.armTimer = setTimeout(disarm, ARMED_MS)
+        return void setPanel(p => ({ ...p, armed }))
+      }
+      disarm()
+      const r = await archiveApi.held({ op: 'drop', key, id }, page().t)
+      if (r.ok) {
+        await withoutParked(key, id, row)
+        toast(page().t('archive.parked.dropped'))
+      } else toast(r.error, true)
+      void load()
+    }
+
+    function armMove(id: string, to: string): void {
+      disarm()
+      own.current.armTimer = setTimeout(disarm, ARMED_MS)
+      setPanel(p => ({ ...p, armed: `move:${id}:${to}` }))
+    }
+
+    async function moveParked(key: string, id: string, to: string, row?: HTMLElement | null): Promise<void> {
+      if (!page().board.canEdit) return refused()
+      disarm()
+      const r = await archiveApi.held({ op: 'move', key, id, to }, page().t)
+      if (r.ok) {
+        await withoutParked(key, id, row)
+        toast(page().t('archive.parked.moved', { name: r.name || itemOf(to)?.name || page().t('session') }))
+      } else toast(r.error, true)
+      void load()
+    }
+
     function openPanel(): void {
       setPanel(p => ({ ...p, open: true, opened: p.opened + 1 }))
       void load()
@@ -426,6 +487,9 @@ export function useArchive(): Archive {
       togglePanel: () => (page().panel.open ? closePanel() : openPanel()),
       setQuery: (text: string) => setPanel(p => ({ ...p, query: text })),
       remove,
+      dropParked,
+      armMove,
+      moveParked,
       disarm,
       load,
     }

@@ -252,7 +252,8 @@ export const isArchiveRecord: Guard<PublicArchiveRecord> = (value): value is Pub
   typeof value.key === 'string' &&
   typeof value.name === 'string' &&
   typeof value.category === 'string' &&
-  typeof value.archivedAt === 'number'
+  typeof value.archivedAt === 'number' &&
+  (value.parked === undefined || Array.isArray(value.parked))
 
 /** GET /api/archive: what the archive holds, newest first, and how long a session keeps its pane for Return. */
 export interface ArchiveListing {
@@ -320,4 +321,23 @@ async function archivePost<O extends ArchiveOp>(
   }
 }
 
-export const archiveApi = { list: archiveList, post: archivePost }
+/** POST /api/archive/held: what the page asks of an entry parked with an archived session. */
+export type HeldAsk = { op: 'drop'; key: string; id: string } | { op: 'move'; key: string; id: string; to: string }
+
+/** Its answer as the page reads it: the session it went to (a move), or why not, as text. Never throws. */
+export interface HeldReply {
+  ok: boolean
+  name: string
+  error: string
+}
+
+async function archiveHeld(ask: HeldAsk, t: Translator): Promise<HeldReply> {
+  try {
+    const reply = await post('/api/archive/held', ask)
+    return { ok: true, name: typeof reply.name === 'string' ? reply.name : '', error: '' }
+  } catch (err) {
+    return { ok: false, name: '', error: errorText(err, t) }
+  }
+}
+
+export const archiveApi = { list: archiveList, post: archivePost, held: archiveHeld }

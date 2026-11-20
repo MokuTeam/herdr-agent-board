@@ -209,20 +209,58 @@ export interface ArchiveRecord extends ArchiveFacts {
   moved?: boolean
 }
 
+/**
+ * An entry that waits with an archived session, as the archive's panel lists it (#295): what it
+ * says, once or repeating, and `due`, when it is due once Return puts it back (services/archive.ts
+ * dueAgain; null: a repeating one that runs no more, which Return drops).
+ */
+export interface ParkedEntry {
+  id: string
+  text: string
+  due: number | null
+  cron?: string
+  kind?: string
+  /** It waits until the session is free (Item's schedule entry `idle`). */
+  idle?: true
+}
+
 /** A record as the page gets it (GET /api/archive): no claims, the held entries as a count. */
 export interface PublicArchiveRecord extends ArchiveFacts {
   held: number
+  /** The held entries themselves, only on a record that has some (a board before #295 sends none). */
+  parked?: ParkedEntry[]
   /** A Return of it is on its way. */
   returning: boolean
 }
 
-/** What the page shows of a record: no claims, the held entries as a count. */
+/** A held entry as the page lists it, due when `due` says. */
+export function parkedEntry(e: ScheduleEntry, due: number | null): ParkedEntry {
+  return {
+    id: e.id,
+    text: e.text,
+    due,
+    ...(e.cron && { cron: e.cron }),
+    ...(typeof e.kind === 'string' && e.kind && { kind: e.kind }),
+    ...(e.idle === true && { idle: true }),
+  }
+}
+
+/**
+ * What the page shows of a record: no claims, the held entries as a count, and with `due` (when
+ * one is due once it is back) the entries themselves, on a record that has some.
+ */
 export function publicRecord(
   r: ArchiveRecord,
-  { returning = false }: { returning?: boolean } = {},
+  { returning = false, due }: { returning?: boolean; due?: ((e: ScheduleEntry) => number | null) | undefined } = {},
 ): PublicArchiveRecord {
   const { claim, held, tries, moved, ...rest } = r
-  return { ...rest, held: (held ?? []).length, returning }
+  const list = held ?? []
+  return {
+    ...rest,
+    held: list.length,
+    ...(due && list.length && { parked: list.map(e => parkedEntry(e, due(e))) }),
+    returning,
+  }
 }
 
 /** What became of a session: its pane closed, it stayed on the board, came back, was removed, or an entry of it did not go back. */

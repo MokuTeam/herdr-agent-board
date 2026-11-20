@@ -536,6 +536,10 @@
 :root[data-look="terminal"] .arch-return:hover:not(:disabled) { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
 :root[data-look="terminal"] .arch-row.returning .arch-return { background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
 :root[data-look="terminal"] .arch-tidy { border-radius: var(--radius); }
+:root[data-look="terminal"] .arch-parked { border-radius: var(--radius); }
+:root[data-look="terminal"] .arch-move:not([data-confirm]),
+:root[data-look="terminal"] .arch-move:not([data-confirm]):hover:not(:disabled):not(:has(select:disabled)) { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .arch-parked-cron { background: none; }
 :root[data-look="terminal"] .drop-archive { border-radius: var(--radius); }
 :root[data-look="terminal"] .drop-archive.over { background: var(--bg); box-shadow: 0 0 0 2px var(--accent); color: var(--accent); }
 :root[data-look="terminal"] .drop-archive.blocked.over { background: var(--bg); box-shadow: 0 0 0 2px var(--red); color: var(--red); }

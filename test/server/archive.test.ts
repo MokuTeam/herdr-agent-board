@@ -1141,3 +1141,101 @@ test('the page’s own calls (web/src/api/client.ts) against these routes: archi
     globalThis.fetch = realFetch
   }
 }, 60_000)
+
+test('#295: the list carries the parked entries with their due time; the page unschedules one and moves one to a session on the board', async () => {
+  const box = await sandbox()
+  const dir = project(box)
+  // ben, another Claude session on the board, in a tab of its own.
+  const ben = {
+    pane_id: 'wP:p4',
+    tab_id: 'wP:t4',
+    workspace_id: 'wP',
+    agent: 'claude',
+    agent_session: { value: OTHER },
+    agent_status: 'idle',
+    cwd: join(box.dir, 'ben'),
+  }
+  writeFileSync(join(box.cards, `${OTHER}.json`), JSON.stringify({ key: OTHER, name: 'ben', category: 'other' }))
+  herdrWith(box, dir, { extra: [ben] })
+  schedule(box)
+  const b = await board(box, { archiveUndoSec: 0.5 })
+  assert.equal((await b.archive()).body.ok, true)
+  await until(() => record(box)?.state === 'archived', 10_000)
+  // A repeating one whose last run came due while it waited: Return would put it back at its next run.
+  const held = record(box) as Rec
+  const rep = { id: 'fed789', key: S, name: 'Probe', pane: 'wP:p1', next: Date.now() - 3600e3, cron: '0 9 * * *' }
+  // And one whose rule has no run left (30 February): Return drops it, Move cannot take it.
+  const ended = { ...rep, id: 'eee000', cron: '0 0 30 2 *', text: 'never again' }
+  writeFileSync(archiveFile(box), JSON.stringify({ ...held, held: [...held.held, { ...rep, text: 'standup' }, ended] }))
+  await b.refresh()
+  const realFetch = globalThis.fetch
+  const toBoard = (input: string | URL | Request, init?: RequestInit) =>
+    realFetch(typeof input === 'string' && input.startsWith('/') ? `${b.url}${input}` : input, init)
+  globalThis.fetch = Object.assign(toBoard, { preconnect: realFetch.preconnect })
+  try {
+    const t = translator('en')
+    const [rec] = (await archiveApi.list()).records
+    assert.equal(rec?.held, 3)
+    const parked = new Map((rec?.parked ?? []).map(e => [e.id, e]))
+    assert.deepEqual([...parked.keys()].sort(), ['abc123', 'eee000', 'fed789'])
+    assert.equal(parked.get('eee000')?.due, null)
+    assert.equal(parked.get('abc123')?.text, 'check the CI')
+    assert.equal(parked.get('abc123')?.cron, undefined)
+    const due = parked.get('fed789')?.due ?? 0
+    assert.equal(parked.get('fed789')?.cron, '0 9 * * *')
+    assert.ok(due > Date.now() && new Date(due).getHours() === 9, String(due))
+
+    // Only from the board's own page; a wrong op, another session's key, an id no record holds.
+    const send = (body: unknown, headers: Record<string, string>) =>
+      realFetch(`${b.url}/api/archive/held`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+      })
+    const drop = { op: 'drop', key: S, id: 'abc123' }
+    assert.equal((await send(drop, {})).status, 403)
+    assert.equal((await send(drop, { 'x-board': '1', origin: 'http://evil.example' })).status, 403)
+    assert.equal((await send({ ...drop, op: 'nope' }, { 'x-board': '1' })).status, 400)
+    assert.equal((await send({ ...drop, key: OTHER }, { 'x-board': '1' })).status, 404)
+    assert.deepEqual(await archiveApi.held({ op: 'drop', key: S, id: 'nope42' }, t), {
+      ok: false,
+      name: '',
+      error: 'That reminder is not in the archive any more',
+    })
+    assert.equal(record(box)?.held.length, 3)
+
+    // Unschedule: out of the record for good, nothing in the schedule.
+    assert.deepEqual(await archiveApi.held({ op: 'drop', key: S, id: 'ABC123' }, t), { ok: true, name: '', error: '' })
+    assert.deepEqual(
+      record(box)?.held.map(e => e.id),
+      ['fed789', 'eee000'],
+    )
+    assert.equal(existsSync(entryFile(box, 'abc123')), false)
+
+    // Move: to a session not on the board (the archived one itself), refused; to ben, into its schedule.
+    const nowhere = await archiveApi.held({ op: 'move', key: S, id: 'fed789', to: S }, t)
+    assert.deepEqual([nowhere.ok, nowhere.error], [false, 'The session is no longer on the board'])
+    const moved = await archiveApi.held({ op: 'move', key: S, id: 'fed789', to: OTHER }, t)
+    assert.deepEqual(moved, { ok: true, name: 'ben', error: '' })
+    const entry = JSON.parse(readFileSync(entryFile(box, 'fed789'), 'utf8'))
+    assert.deepEqual(
+      [entry.key, entry.name, entry.pane, entry.cwd, entry.next, entry.cron, entry.text, entry.from?.key],
+      [OTHER, 'ben', 'wP:p4', ben.cwd, due, '0 9 * * *', 'standup', S],
+    )
+    assert.deepEqual(
+      record(box)?.held.map(e => e.id),
+      ['eee000'],
+    )
+    // One that runs no more does not move; Unschedule takes it, and the record lists none.
+    const never = await archiveApi.held({ op: 'move', key: S, id: 'eee000', to: OTHER }, t)
+    assert.deepEqual([never.ok, never.error], [false, 'It runs no more: there is nothing to move'])
+    assert.equal(existsSync(entryFile(box, 'eee000')), false)
+    assert.equal((await archiveApi.held({ op: 'drop', key: S, id: 'eee000' }, t)).ok, true)
+    assert.deepEqual(record(box)?.held, [])
+    assert.equal((await archiveApi.list()).records[0]?.parked, undefined)
+    const again = await archiveApi.held({ op: 'move', key: S, id: 'fed789', to: OTHER }, t)
+    assert.equal(again.ok, false)
+  } finally {
+    globalThis.fetch = realFetch
+  }
+}, 60_000)

@@ -4,18 +4,37 @@
 // sleeping sessions pile up in "Idle", a quiet offer to take them along. Read from the server when
 // the panel opens and again whenever the board changes while it is open (hooks/useArchive.ts);
 // rows that come in while it is open materialize. With more than one profile shown, a row carries
-// its session's profile tag, as its card did.
-import { Fragment, type KeyboardEvent, useLayoutEffect, useRef } from 'react'
+// its session's profile tag, as its card did. A session that took reminders with it lists them
+// under its row (#295): when each is due once Return puts it back, Move (to a session on the
+// board, a native picker) and Unschedule (two clicks, as the trash can).
+import { Fragment, type KeyboardEvent, useLayoutEffect, useMemo, useRef } from 'react'
 import { type PublicArchiveRecord, searchArchive } from '../../../../src/core/archive.ts'
 import type { BoardCategory } from '../../../../src/core/payload.ts'
 import type { Translator } from '../../../../src/core/types.ts'
 import type { Archive } from '../../hooks/useArchive.ts'
 import { appear } from '../../hooks/useFlip.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { archiveDayText, archiveGroups, archiveRowView } from '../../models/archive-view.ts'
-import { categoryInfo } from '../../models/board-view.ts'
+import {
+  archiveDayText,
+  archiveGroups,
+  archiveRowView,
+  moveTargets,
+  type ParkedView,
+  parkedViews,
+} from '../../models/archive-view.ts'
+import { categoryInfo, catOf } from '../../models/board-view.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
-import { ArchiveGlyph, BackGlyph, MoonGlyph, SearchIcon, SpinGlyph, TrashGlyph } from '../icons.tsx'
+import { classNames } from '../class-names.ts'
+import {
+  ArchiveGlyph,
+  ArrowIcon,
+  BackGlyph,
+  MoonGlyph,
+  RepeatGlyph,
+  SearchIcon,
+  SpinGlyph,
+  TrashGlyph,
+} from '../icons.tsx'
 import { ProfileTag } from '../ProfileTag.tsx'
 import { Panel } from '../panel/Panel.tsx'
 
@@ -24,12 +43,25 @@ export const OFFER_DAYS = 3
 
 export function ArchivePanel({ archive }: { archive: Archive }) {
   const t = useT()
-  const { data, canMutate, canEdit } = useBoardContext()
+  const { data, ui, canMutate, canEdit } = useBoardContext()
   const body = useRef<HTMLDivElement>(null)
   const { panel } = archive
   // Drawn from the first opening on; closed, it keeps what it showed while it slides out.
   const drawn = panel.opened > 0
   const sleepy = drawn && !panel.query ? archive.tidyItems(OFFER_DAYS).length : 0
+  // Where Move sends a parked entry: the sessions on the board, none on its way into the archive.
+  const categories = data?.categories
+  const items = data?.items
+  const targets = useMemo(
+    () =>
+      moveTargets(
+        (items ?? []).map(it => ({ ...it, category: catOf(ui.moves, it) })),
+        categories ?? [],
+        key => ui.archiving.has(key),
+        t,
+      ),
+    [items, categories, ui.moves, ui.archiving, t],
+  )
 
   // New rows materialize; on opening the panel its own slide is motion enough.
   const seen = useRef<{ opened: number; keys: ReadonlySet<string> } | null>(null)
@@ -98,6 +130,10 @@ export function ArchivePanel({ archive }: { archive: Archive }) {
             onReturn={key => void archive.returnSessions([key])}
             onTidy={days => void archive.archiveMany(archive.tidyItems(days).map(i => i.key))}
             onRemove={(key, row) => void archive.remove(key, row)}
+            targets={targets}
+            onDropParked={(key, id, row) => void archive.dropParked(key, id, row)}
+            onArmMove={(id, to) => archive.armMove(id, to)}
+            onMoveParked={(key, id, to, row) => void archive.moveParked(key, id, to, row)}
           />
         )}
       </div>
@@ -121,6 +157,12 @@ export interface ArchiveBodyProps {
   onReturn?: (key: string) => void
   onTidy?: (days: number) => void
   onRemove?: (key: string, row: HTMLElement | null) => void
+  /** Where Move can send a parked entry, by lane (models/archive-view.ts moveTargets). */
+  targets?: readonly { lane: string; sessions: readonly { key: string; name: string }[] }[]
+  onDropParked?: (key: string, id: string, row: HTMLElement | null) => void
+  /** Move's first step (a pick in the picker); the second, a click on "Move to …?", moves it. */
+  onArmMove?: (id: string, to: string) => void
+  onMoveParked?: (key: string, id: string, to: string, row: HTMLElement | null) => void
 }
 
 /** What #archive-body shows: the tidy-up's offer, the archive by day, or why it is empty. */
@@ -184,6 +226,7 @@ function ArchiveRow({ record, ...props }: ArchiveBodyProps & { record: PublicArc
     canMutate: props.canMutate,
     canEdit: props.canEdit,
   })
+  const parked = parkedViews(record, t, props.now)
   return (
     <div className={row.returning ? 'arch-row returning' : 'arch-row'} data-key={row.key}>
       <div className="arch-main">
@@ -234,6 +277,94 @@ function ArchiveRow({ record, ...props }: ArchiveBodyProps & { record: PublicArc
           <span>{row.armed ? t('archive.removeConfirm') : ''}</span>
         </button>
       </div>
+      {parked.length > 0 && (
+        <ul className="arch-parked" aria-label={t('archive.parked.label')}>
+          {parked.map(entry => (
+            <ParkedRow key={entry.id} entry={entry} record={record} {...props} />
+          ))}
+        </ul>
+      )}
     </div>
+  )
+}
+
+/** One entry parked with the session: when it is due once back, what it says, Move and Unschedule. */
+function ParkedRow({ entry, record, ...props }: ArchiveBodyProps & { entry: ParkedView; record: PublicArchiveRecord }) {
+  const { t } = props
+  const armed = props.armed === `held:${entry.id}`
+  const busy = !props.canEdit || !!record.returning || props.returning.has(record.key)
+  const targets = props.targets ?? []
+  // Move asks first, as Unschedule does: an arrow key on the closed picker changes it at once.
+  const asking = `move:${entry.id}:`
+  const to = props.armed?.startsWith(asking) ? props.armed.slice(asking.length) : null
+  const toName = to === null ? '' : (targets.flatMap(g => g.sessions).find(s => s.key === to)?.name ?? '')
+  return (
+    <li
+      className={classNames('arch-parked-entry', entry.overdue && 'overdue', entry.ended && 'ended')}
+      data-id={entry.id}
+    >
+      <span className="arch-parked-time" title={entry.timeTitle}>
+        {entry.repeats && <RepeatGlyph />}
+        <b>{entry.time}</b>
+      </span>
+      <span className="arch-parked-what">
+        <span className="arch-parked-text">{entry.text}</span>
+        {entry.cron && <code className="arch-parked-cron">{entry.cron}</code>}
+      </span>
+      {to !== null && toName ? (
+        <button
+          type="button"
+          className="arch-move"
+          data-arch-move-to={entry.id}
+          data-confirm=""
+          disabled={busy}
+          onClick={e => props.onMoveParked?.(record.key, entry.id, to, e.currentTarget.closest<HTMLElement>('li'))}
+        >
+          <ArrowIcon />
+          <span>{t('archive.parked.moveConfirm', { name: toName })}</span>
+        </button>
+      ) : (
+        <label className="arch-move" title={t('archive.parked.moveHint')}>
+          <ArrowIcon />
+          <span>{t('archive.parked.move')}</span>
+          <select
+            data-arch-move={entry.id}
+            aria-label={t('archive.parked.move')}
+            value=""
+            disabled={busy || entry.ended || !targets.length}
+            onChange={e => {
+              const picked = e.currentTarget.value
+              if (picked) props.onArmMove?.(entry.id, picked)
+            }}
+          >
+            <option value="" disabled>
+              {t('archive.parked.move')}
+            </option>
+            {targets.map(group => (
+              <optgroup key={group.lane} label={group.lane}>
+                {group.sessions.map(s => (
+                  <option key={s.key} value={s.key}>
+                    {s.name}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+      )}
+      <button
+        type="button"
+        className="sched-x"
+        data-arch-drop={entry.id}
+        data-confirm={armed ? '' : undefined}
+        title={t('archive.parked.dropHint')}
+        aria-label={t(armed ? 'archive.parked.dropConfirm' : 'archive.parked.drop')}
+        disabled={busy}
+        onClick={e => props.onDropParked?.(record.key, entry.id, e.currentTarget.closest<HTMLElement>('li'))}
+      >
+        <TrashGlyph />
+        <span>{armed ? t('archive.parked.dropConfirm') : ''}</span>
+      </button>
+    </li>
   )
 }

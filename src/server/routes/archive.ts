@@ -1,14 +1,21 @@
 // The archive (services/archive.ts): its list, and archiving, bringing back or removing sessions,
 // one or many. Archiving closes panes and Return starts sessions: like a launch, only from this
-// page (origin), and through herdr only on fresh data; removing needs neither.
+// page (origin), and through herdr only on fresh data; removing needs neither. The entries that
+// wait with a session (#295): one dropped for good, or moved to a session on the board, as
+// `board unschedule <id>` and `board schedule --move <id> --session <s>` do.
 import { publicRecord } from '../../core/archive.ts'
 import { t } from '../../core/lang.ts'
 import type { Item } from '../../core/types.ts'
 import {
   askArchive,
   bringBack,
+  dropHeld,
+  dueAgain,
   forgetArchived,
+  getArchived,
+  heldEntry,
   listArchive,
+  moveHeld,
   type ReturnApp,
   returningOn,
   undoMs,
@@ -33,13 +40,58 @@ export function archiveRoutes(app: ArchiveApp): Route[] {
     {
       method: 'GET',
       path: '/api/archive',
-      handle: () =>
-        json(200, {
+      handle: () => {
+        const now = Date.now()
+        return json(200, {
           records: listArchive().map(r =>
-            publicRecord(r, { returning: !!r.returning && returningOn(app.launches, r.returning) }),
+            publicRecord(r, {
+              returning: !!r.returning && returningOn(app.launches, r.returning),
+              due: e => dueAgain(e, now),
+            }),
           ),
           undoMs: undoMs(deps.cfg),
-        }),
+        })
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/archive/held',
+      guard: ['board-header', 'origin'],
+      async handle(_req, ctx) {
+        const body = await ctx.body()
+        if (body.op !== 'drop' && body.op !== 'move') return json(400, { error: `unknown op ${body.op}` })
+        const key = String(body.key ?? '')
+        const id = String(body.id ?? '').toLowerCase()
+        const found = id ? heldEntry(id) : null
+        if (!found || found.record.key !== key) return json(404, { ok: false, error: t('archive.err.heldGone') })
+        // Return is putting its entries back right now: they go with it.
+        if (found.record.state === 'restoring')
+          return json(409, { ok: false, error: t('archive.err.heldReturning', { name: found.record.name }) })
+        if (body.op === 'drop') {
+          const [e] = dropHeld(key, id)
+          if (!e) return json(404, { ok: false, error: t('archive.err.heldGone') })
+          app.refresh()
+          return json(200, { ok: true, id: e.id })
+        }
+        // To a session on the board, as the board command moves one; not to one in the archive.
+        const to = app.find(String(body.to ?? ''))
+        if (!to) return json(409, { ok: false, error: t('err.gone') })
+        if (getArchived(to.key))
+          return json(409, { ok: false, error: t('archive.err.heldArchived', { name: to.name }) })
+        if (dueAgain(found.entry, Date.now()) === null)
+          return json(409, { ok: false, error: t('archive.err.heldEnded') })
+        let moved: ReturnType<typeof moveHeld>
+        try {
+          moved = moveHeld(id, { key: to.key, name: to.name, pane: to.pane, ...(to.cwd && { cwd: to.cwd }) })
+        } catch (err) {
+          // What the schedule said (that session's entries full, a lock held too long), as the board command says it.
+          return json(409, { ok: false, error: err instanceof Error ? err.message : String(err) })
+        }
+        if (!moved) return json(404, { ok: false, error: t('archive.err.heldGone') })
+        deps.log(`archive: entry ${moved.id} of ${found.record.name} moved to ${to.name}`)
+        app.refresh()
+        return json(200, { ok: true, id: moved.id, next: moved.next, name: to.name })
+      },
     },
     {
       method: 'POST',

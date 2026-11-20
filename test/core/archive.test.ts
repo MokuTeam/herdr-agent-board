@@ -179,4 +179,14 @@ test('what the page gets of a record: no claims, its held entries as a count, wh
   assert.equal(shown.returning, true)
   assert.equal(shown.profile, 'work')
   assert.equal(publicRecord(record).returning, false)
+  // The entries themselves only when asked with a due time (#295), and only on a record with some.
+  assert.equal('parked' in shown, false)
+  const repeating = { id: 'r2', key: S, text: 'standup', next: now - DAY, cron: '0 9 * * *', idle: true, kind: 'call' }
+  const parked = publicRecord({ ...record, held: [...record.held, repeating] }, { due: e => (e.cron ? null : e.next) })
+  assert.deepEqual(parked.parked, [
+    { id: 'r1', text: 'look again', due: now + DAY },
+    { id: 'r2', text: 'standup', due: null, cron: '0 9 * * *', kind: 'call', idle: true },
+  ])
+  assert.equal(parked.held, 2)
+  assert.equal('parked' in publicRecord({ ...record, held: [] }, { due: e => e.next }), false)
 })

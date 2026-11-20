@@ -1942,6 +1942,8 @@ it); Claude keeps the conversation on disk, so it can come back.
   --session <id|name|pane>` (and `--all`) lists them, marked parked; `board unschedule <id>`
   removes one; `board schedule --move <id>` moves one to the session that runs it (`--session`: to
   that one, which must be on the board), as Return would put it back, the prompt saying whose it was.
+  The archive's panel lists them under the session's row, each with when it is due once Return puts
+  it back, Move (to a session on the board; it asks "Move to …?" first) and Unschedule (two clicks).
 - The card file stays as it was (name, lane, notes), so the session comes back with them, also
   when you resume it by hand elsewhere.
 - Many at once: the menu of the "Idle" column (its head, or a lane's "Idle" in a narrow window)
@@ -3964,7 +3966,11 @@ own `Origin` when the browser sends one, and fresh herdr data like every action 
 Renaming: `POST /api/session/<key>/rename` with `{ name, claude }`. Restarting:
 `POST /api/session/<key>/restart` (a schedule entry, see [Restart](#restart); `{ id, again }`).
 Archive: `POST /api/session/<key>/archive` (`{ held, dropped, closeAt }`), `GET /api/archive` (its
-records), `POST /api/archive` with `{ op: "archive" | "return" | "remove", keys }` (`{ done, failed }`);
+records; one with parked entries also has `parked`, each `{ id, text, due, cron?, kind?, idle? }`, `due` as
+Return would put it back, null when it runs no more), `POST /api/archive` with
+`{ op: "archive" | "return" | "remove", keys }` (`{ done, failed }`), `POST /api/archive/held` with
+`{ op: "drop" | "move", key, id, to? }` (an entry parked with session `key`: dropped, or moved to the
+session `to` on the board);
 the board payload has `archive: { log }`. Archiving and Return need fresh herdr data and the
 page's own `Origin`, as a launch does.
 

@@ -2,13 +2,14 @@
 // how long a toast offers Return, what the toasts say when sessions go and come back, the rows of
 // the archive's panel by the day they went, and how the archive went for this page (a close the
 // server called off, said once). hooks/useArchive.ts and components/archive/ArchivePanel.tsx use it.
-import type { ArchiveLogEntry, PublicArchiveRecord, ReturnedOne } from '../../../src/core/archive.ts'
+import type { ArchiveLogEntry, ParkedEntry, PublicArchiveRecord, ReturnedOne } from '../../../src/core/archive.ts'
 import { baseName } from '../../../src/core/launch/names.ts'
 import type { BoardCategory } from '../../../src/core/payload.ts'
-import type { Translator } from '../../../src/core/types.ts'
-import { capital, dayLabel, longWhen, timeOf } from '../../../src/core/when-format.ts'
+import type { Item, Translator } from '../../../src/core/types.ts'
+import { capital, dayLabel, longWhen, shortWhen, timeOf } from '../../../src/core/when-format.ts'
 import { categoryInfo } from './board-view.ts'
 import { plain } from './card.ts'
+import { entryText } from './schedule.ts'
 
 /** A text's first letter in lower case, for a reason inside a sentence. */
 export const lowerFirst = (s: string, t: Translator): string =>
@@ -125,7 +126,12 @@ export function archiveRowView(r: PublicArchiveRecord, s: RowScene): ArchiveRowV
   const where = [lane.title, baseName(r.cwd), r.workspace && t('meta.workspace', { name: r.workspace })].filter(
     (x): x is string => !!x,
   )
-  const extra = [r.held && t('archive.held', { n: r.held }), r.from?.name && t('archive.by', { name: r.from.name })]
+  // The count, unless the row lists the entries themselves (#295).
+  const listed = !!r.parked?.length
+  const extra = [
+    r.held && !listed && t('archive.held', { n: r.held }),
+    r.from?.name && t('archive.by', { name: r.from.name }),
+  ]
   return {
     key: r.key,
     name: r.name,
@@ -136,7 +142,7 @@ export function archiveRowView(r: PublicArchiveRecord, s: RowScene): ArchiveRowV
     where: where.join(' · '),
     cwd: r.cwd,
     extra: extra.filter((x): x is string => !!x).join(' · '),
-    extraTitle: r.held ? t('archive.heldHint') : null,
+    extraTitle: r.held && !listed ? t('archive.heldHint') : null,
     returning,
     returnDisabled: returning || !s.canMutate,
     armed: s.armed,
@@ -165,3 +171,66 @@ export const archiveDayText =
   (t: Translator, now = Date.now()) =>
   (ms: number): string =>
     `${dayLabel(ms, t, now)} ${timeOf(ms, t)}`
+
+// ---------------------------------------------------------------- the entries parked with a session
+
+/** One entry that waits with an archived session, as its row lists it (#295). */
+export interface ParkedView {
+  id: string
+  /** When it is due once Return puts it back: "15:30", "Fri 9:00", "20 Oct"; "runs no more". */
+  time: string
+  timeTitle: string
+  /** A one-off that came due while it waited: it goes out once the session is back and free (orange). */
+  overdue: boolean
+  /** A repeating one whose rule has no run left: Return drops it, Move cannot take it. */
+  ended: boolean
+  repeats: boolean
+  cron: string
+  text: string
+}
+
+/** The entries of a record, soonest first (those that run no more last), as its row lists them. */
+export function parkedViews(r: Pick<PublicArchiveRecord, 'parked'>, t: Translator, now = Date.now()): ParkedView[] {
+  const list = (r.parked ?? []).filter((e): e is ParkedEntry => typeof e?.id === 'string' && typeof e.text === 'string')
+  return [...list]
+    .sort((a, b) => (a.due ?? Number.POSITIVE_INFINITY) - (b.due ?? Number.POSITIVE_INFINITY))
+    .map(e => {
+      const ended = typeof e.due !== 'number'
+      const due = ended ? 0 : (e.due as number)
+      return {
+        id: e.id,
+        time: ended ? t('archive.parked.ended') : shortWhen(due, t, now),
+        timeTitle: ended
+          ? t('archive.parked.endedHint')
+          : `${capital(longWhen(due, t, now), t)} · ${t('archive.parked.due')}`,
+        overdue: !ended && due <= now,
+        ended,
+        repeats: !!e.cron,
+        cron: e.cron ?? '',
+        text: entryText(e, t),
+      }
+    })
+}
+
+/** Where Move can send an entry: the sessions on the board (none on its way into the archive), by lane in the board's order, by name within one. */
+export function moveTargets(
+  items: readonly Pick<Item, 'key' | 'name' | 'category'>[],
+  categories: readonly BoardCategory[],
+  skip: (key: string) => boolean,
+  t: Translator,
+): { lane: string; sessions: { key: string; name: string }[] }[] {
+  const order = new Map(categories.map((c, i) => [c.id, i]))
+  const lanes = new Map<string, { key: string; name: string }[]>()
+  for (const it of items) {
+    if (skip(it.key)) continue
+    const list = lanes.get(it.category) ?? []
+    list.push({ key: it.key, name: it.name || t('session') })
+    lanes.set(it.category, list)
+  }
+  return [...lanes]
+    .sort(([a], [b]) => (order.get(a) ?? categories.length) - (order.get(b) ?? categories.length))
+    .map(([id, sessions]) => ({
+      lane: categoryInfo([...categories], id).title,
+      sessions: sessions.sort((a, b) => a.name.localeCompare(b.name, t.lang)),
+    }))
+}
