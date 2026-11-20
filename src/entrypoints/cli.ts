@@ -176,9 +176,37 @@ import type { ThreadCmdContext } from './thread-cli.ts'
 
 const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | doctor | presence [here | away | call] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
+/** The commands that print a help of their own for `--help` (#305). */
+const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal'])
+
+/**
+ * `board <command> --help` (#305): the usage's alternatives for that command, one a line; all of
+ * the usage for a command it does not name.
+ */
+function usageOf(command: string): string {
+  const inner = USAGE.slice(USAGE.indexOf('[') + 1, USAGE.lastIndexOf('] [--session'))
+  const alternatives: string[] = []
+  let depth = 0
+  let from = 0
+  for (let i = 0; i < inner.length; i++) {
+    if (inner[i] === '[') depth++
+    else if (inner[i] === ']') depth--
+    else if (depth === 0 && inner.startsWith(' | ', i)) {
+      alternatives.push(inner.slice(from, i))
+      from = i + 3
+    }
+  }
+  alternatives.push(inner.slice(from))
+  const own = alternatives.filter(a => a.split(' ')[0] === command)
+  return own.length ? own.map(a => `usage: board ${a}`).join('\n') : USAGE
+}
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
-const args = process.argv.slice(2)
+// Everything after the first `--` is the command's own words, as they are (#404): neither the
+// board's flags below nor --help are read there.
+const argv = process.argv.slice(2)
+const dashes = argv.indexOf('--')
+const args = dashes < 0 ? argv : argv.slice(0, dashes)
 let target: string | undefined
 const si = args.indexOf('--session')
 if (si >= 0) {
@@ -213,8 +241,19 @@ if (pi >= 0) {
   args.splice(pi, 2)
 }
 const modeText = (): string => (idle ? ', when the session is free' : '')
-const [cmd = 'show', ...rest] = args
-const text = rest.join(' ').replace(/\s+/g, ' ').trim()
+// `board -- x` is no command, as before: not the bare `board`.
+const [cmd = dashes < 0 ? 'show' : '--', ...flagWords] = args
+/** The command's words, the `--` kept for the parsers that read it themselves (thread, time, cal). */
+const rest = dashes < 0 ? flagWords : [...flagWords, ...argv.slice(dashes)]
+/** The same without that `--`: what this file's commands take as their words and text. */
+const words = dashes < 0 ? flagWords : [...flagWords, ...argv.slice(dashes + 1)]
+const text = words.join(' ').replace(/\s+/g, ' ').trim()
+/** Where remind and every find their time: before a `--`, when there is one. */
+const leading = dashes < 0 ? words : flagWords
+/** How many words the time leaves at least for the text: one, unless a `--` marks where it starts. */
+const spare = dashes < 0 ? 1 : 0
+/** `board <command> --help` or `-h`, a word of its own before any `--` (#305). */
+const helpAsked = flagWords.includes('--help') || flagWords.includes('-h')
 const cfg = loadConfig()
 const deps = defaultDeps(cfg)
 
@@ -475,13 +514,20 @@ function todo(key: string): void {
   if (!conf) throw new Error(t('todo.err.off'))
   if (!conf.agents) throw new Error(t('todo.err.agentsOff'))
   const [sub = 'list', ...args] = rest
-  // --ref and --why with their values, --mine; the rest is the text (add) or the task (done).
+  // --ref and --why with their values, --mine; the rest is the text (add) or the task (done), and
+  // all of it after a `--`.
   const flags: Record<string, string> = {}
   const words: string[] = []
+  let mine = false
   for (let i = 0; i < args.length; i++) {
     const a = args[i] ?? ''
+    if (a === '--') {
+      words.push(...args.slice(i + 1))
+      break
+    }
     if ((a === '--ref' || a === '--why') && i + 1 < args.length) flags[a.slice(2)] = args[++i] ?? ''
-    else if (a !== '--mine') words.push(a)
+    else if (a === '--mine') mine = true
+    else words.push(a)
   }
   const card = () => readCard(key)
   const listed = (): Todo[] => {
@@ -502,7 +548,6 @@ function todo(key: string): void {
     return
   }
   if (sub === 'add') {
-    const mine = args.includes('--mine')
     const text = words.join(' ').trim()
     if (!text) throw new Error(usage)
     const r = changeTodos(key, {
@@ -543,7 +588,7 @@ function todo(key: string): void {
  * While config.json has no `presence` it is off, and a switch is refused: no file appears.
  */
 function presence(): void {
-  const word = (rest[0] ?? '').toLowerCase()
+  const word = (words[0] ?? '').toLowerCase()
   const state: PresenceState | null =
     cmd === 'away'
       ? word === '' || word === 'on'
@@ -786,6 +831,15 @@ async function team(): Promise<void> {
 
 async function main(): Promise<void> {
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') return console.log(USAGE)
+  // A command's help, and nothing else: before any session is looked for (#305). thread, time and
+  // cal print their own, fuller one.
+  if (helpAsked && !OWN_HELP.has(cmd)) {
+    // team and workdesk keep the fuller usage they print for a wrong word.
+    if (cmd === 'team') return console.log(TEAM_USAGE)
+    if (cmd === 'workdesk')
+      return console.log(`usage: ${(await import('../services/workdesk-workers.ts')).WORKERS_USAGE}`)
+    return console.log(usageOf(cmd))
+  }
 
   if (cmd === 'cats') {
     const known = cfg.categories.map(c => `${c.id} (${categoryInfo(cfg, c.id).title})`).join(', ')
@@ -859,7 +913,7 @@ async function main(): Promise<void> {
   }
 
   // Neither needs to know which session asks.
-  if (cmd === 'schedule' && rest.includes('--all')) {
+  if (cmd === 'schedule' && flagWords.includes('--all')) {
     const list = listEntries()
     const parked = listArchive().flatMap(r => r.held)
     if (!list.length && !parked.length) return console.log('nothing scheduled')
@@ -867,13 +921,13 @@ async function main(): Promise<void> {
     for (const l of parkedLines(parked, Date.now(), true)) console.log(l)
     return
   }
-  if (cmd === 'unschedule' && rest[0] && rest[0].toLowerCase() !== 'all') {
-    const id = rest[0].toLowerCase()
+  if (cmd === 'unschedule' && words[0] && words[0].toLowerCase() !== 'all') {
+    const id = words[0].toLowerCase()
     // Not in the schedule: one parked with an archived session goes from its record.
     const removed = removeEntry(id)
     const held = removed ? null : heldEntry(id)
     const e = removed ?? (held && dropHeld(held.record.key, id)[0])
-    if (!e) throw new Error(`no entry "${rest[0]}"; see board schedule`)
+    if (!e) throw new Error(`no entry "${words[0]}"; see board schedule`)
     return console.log(
       `ok · removed ${e.id} (${e.cron ? `every "${e.cron}"` : stamp(e.next)}${e.name ? `, ${e.name}` : ''}${held ? ', parked in the archive' : ''}): ${clip(e.text)}`,
     )
@@ -888,7 +942,7 @@ async function main(): Promise<void> {
   if (cmd === 'workdesk') {
     if (target !== undefined) throw new Error('Workdesk workers uses the calling master session')
     const { workdeskWorkerCommand } = await import('../services/workdesk-workers.ts')
-    return workdeskWorkerCommand(rest, cfg.workdesk)
+    return workdeskWorkerCommand(words, cfg.workdesk)
   }
   if (cmd === 'mcp') return mcpCommand()
   if (cmd === 'secret') return secretCommand()
@@ -897,14 +951,14 @@ async function main(): Promise<void> {
   if (cmd === 'sleep') return sleep()
   if (cmd === 'move') return move()
   if (cmd === 'fork') return fork()
-  if (cmd === 'resume') return rest.includes('--pi') ? resumePi() : resume()
+  if (cmd === 'resume') return flagWords.includes('--pi') ? resumePi() : resume()
   if (cmd === 'tg-key') return tgKey()
   if (cmd === 'presence' || cmd === 'away') return presence()
   if (cmd === 'team') return team()
 
   // schedule --move <id>: a parked entry to this session (or --session's, which must be on the board).
-  const mv = cmd === 'schedule' ? rest.indexOf('--move') : -1
-  const moving = mv >= 0 ? (rest[mv + 1] ?? '') : null
+  const mv = cmd === 'schedule' ? flagWords.indexOf('--move') : -1
+  const moving = mv >= 0 ? (flagWords[mv + 1] ?? '') : null
   // Listing and removing reach an archived session's parked entries; nothing else is for one.
   const s = await resolveSession({ archived: (cmd === 'schedule' && moving === null) || cmd === 'unschedule' })
   const now = Date.now()
@@ -912,10 +966,10 @@ async function main(): Promise<void> {
     case 'show':
       break
     case 'cat': {
-      const id = (rest[0] ?? '').toLowerCase().replace(/[^a-z0-9_-]/g, '')
+      const id = (words[0] ?? '').toLowerCase().replace(/[^a-z0-9_-]/g, '')
       if (!id) throw new Error(`usage: board cat <id> ["<Title>"]; known: ${cfg.categories.map(c => c.id).join(', ')}`)
       // A new id with a title becomes a real category (config.json), not just a lane named by its id.
-      const title = rest.slice(1).join(' ').trim()
+      const title = words.slice(1).join(' ').trim()
       if (title && !cfg.categories.some(c => c.id === id)) {
         const r = editCategories({ op: 'create', id, title })
         if (!r.ok) throw new Error(r.error)
@@ -946,7 +1000,7 @@ async function main(): Promise<void> {
       writeCard(s.key, { doing: '', wait: '', waitSince: '', ask: '', askSince: '', result: '' })
       break
     case 'favorite': {
-      const off = rest[0]?.toLowerCase()
+      const off = words[0]?.toLowerCase()
       if (off !== undefined && off !== 'off') throw new Error('usage: board favorite [off]')
       writeCard(s.key, { favorite: off ? '' : true })
       break
@@ -954,12 +1008,12 @@ async function main(): Promise<void> {
     case 'remind': {
       // The time is the first one to five words that read as one; the rest is the text.
       let at: number | null = null
-      let words = 0
-      for (let k = Math.min(5, rest.length - 1); k >= 1 && at === null; k--) {
-        at = parseWhen(rest.slice(0, k).join(' '), now)
-        words = k
+      let used = 0
+      for (let k = Math.min(5, leading.length - spare); k >= 1 && at === null; k--) {
+        at = parseWhen(leading.slice(0, k).join(' '), now)
+        used = k
       }
-      const msg = rest.slice(words).join(' ').replace(/\s+/g, ' ').trim()
+      const msg = words.slice(used).join(' ').replace(/\s+/g, ' ').trim()
       if (at === null || !msg) throw new Error(`usage: board remind <when> "<text>"; when: ${WHEN_HELP}`)
       if (at <= now) throw new Error(`${stamp(at)} is in the past`)
       if (at > now + 5 * 366 * 86_400_000) throw new Error(`${stamp(at)} is more than five years ahead`)
@@ -970,11 +1024,11 @@ async function main(): Promise<void> {
     }
     case 'every': {
       // The cron in one quoted word, or its five fields as they are (PowerShell leaves * alone).
-      let expr = rest[0] ?? ''
-      let words = 1
-      if (!/\s/.test(expr) && !expr.startsWith('@') && rest.length > 5) {
-        expr = rest.slice(0, 5).join(' ')
-        words = 5
+      let expr = leading[0] ?? ''
+      let used = 1
+      if (!/\s/.test(expr) && !expr.startsWith('@') && leading.length >= 5 + spare) {
+        expr = leading.slice(0, 5).join(' ')
+        used = 5
       }
       let cron: Cron
       try {
@@ -984,7 +1038,7 @@ async function main(): Promise<void> {
           `${messageOf(err)}. usage: board every "<minute hour day month weekday>" "<text>", e.g. board every "0 9 * * 1-5" "check the inbox"; quote the schedule`,
         )
       }
-      const msg = rest.slice(words).join(' ').replace(/\s+/g, ' ').trim()
+      const msg = words.slice(used).join(' ').replace(/\s+/g, ' ').trim()
       if (!msg) throw new Error('usage: board every "<cron>" "<text>"')
       const next = nextRun(cron, now)
       if (next === null) throw new Error(`"${cron.expr}" never runs`)
@@ -1015,7 +1069,7 @@ async function main(): Promise<void> {
       return console.log(compactCli(s.key, rest, cfg))
     case 'unschedule': {
       // An id is removed above, whoever set it; here only "all" of this session's, parked ones too.
-      if (rest[0]?.toLowerCase() !== 'all') throw new Error('usage: board unschedule <id|all>')
+      if (words[0]?.toLowerCase() !== 'all') throw new Error('usage: board unschedule <id|all>')
       const mine = listEntries().filter(e => e.key === s.key)
       for (const e of mine) removeEntry(e.id)
       const n = mine.length + dropHeld(s.key).length
@@ -1332,7 +1386,7 @@ function sleepLine(o: SleepOutcome): string {
  */
 async function sleep(): Promise<void> {
   if (piSessionFile !== undefined) return adoptPi()
-  const targets = [...rest, ...(target ? [target] : [])]
+  const targets = [...words, ...(target ? [target] : [])]
   if (!targets.length && !self)
     throw new Error(
       'usage: board sleep <id|name|pane>... [--when-free] [--self]: the sessions to put to sleep (a name with spaces in quotes; --self: this one, once its turn is over)',
@@ -1420,9 +1474,9 @@ async function move(): Promise<void> {
  * sleeping and wakes it, as if wake had put it to sleep. Only through the board's own wake.
  */
 async function adoptPi(): Promise<void> {
-  const pane = rest[0] ?? ''
+  const pane = words[0] ?? ''
   const file = piSessionFile ?? ''
-  if (rest.length !== 1 || !pane || !isPiSessionFile(file))
+  if (words.length !== 1 || !pane || !isPiSessionFile(file))
     throw new Error(
       'usage: board sleep <pane> --pi-session <pi session file>: the pane, a shell now, and the file of the pi session that ran in it',
     )
@@ -1458,7 +1512,7 @@ async function adoptPi(): Promise<void> {
  * argument: where it listens, who waits, who is paired.
  */
 async function remote(): Promise<void> {
-  const [op = 'status', id = ''] = rest
+  const [op = 'status', id = ''] = words
   const usage = 'usage: board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]]'
   const webPort = Number(cfg.port) || 12422
   if (op === 'pwa') {
@@ -1496,8 +1550,8 @@ async function remote(): Promise<void> {
     }
   }
   if (op === 'desk') {
-    if (!id || (rest[2] !== undefined && rest[2] !== 'off')) throw new Error(usage)
-    const off = rest[2] === 'off'
+    if (!id || (words[2] !== undefined && words[2] !== 'off')) throw new Error(usage)
+    const off = words[2] === 'off'
     const body = JSON.stringify({ op: off ? 'undesk' : 'desk', id })
     const r = await call({ method: 'POST', headers: { 'content-type': 'application/json', 'x-board': '1' }, body })
     if (!isRecord(r) || r.ok !== true) {
@@ -1719,13 +1773,13 @@ async function secretCommand(): Promise<void> {
 
 /** A flag's value: `--name value` in the command's words; undefined when it is not there. */
 function option(name: string): string | undefined {
-  const i = rest.indexOf(name)
-  return i >= 0 ? rest[i + 1] : undefined
+  const i = flagWords.indexOf(name)
+  return i >= 0 ? flagWords[i + 1] : undefined
 }
 
 /** `board backup …` (#233): the backup of the board's database (services/backup.ts). */
 async function backupCmd(): Promise<void> {
-  const [op = 'status', arg] = rest
+  const [op = 'status', arg] = words
   const backup = await import('../services/backup.ts')
   const { activeTargets, backupConfig, isTarget, problemSentence } = await import('../core/backup.ts')
   const c = backupConfig(cfg.backup)
@@ -1797,7 +1851,7 @@ async function backupCmd(): Promise<void> {
 
 /** `board db restore …` (#233): the board's database back as a snapshot has it (services/backup.ts restore). */
 async function dbCmd(): Promise<void> {
-  const [op] = rest
+  const [op] = words
   if (op !== 'restore') throw new Error(t('backup.cli.restoreUsage'))
   const backup = await import('../services/backup.ts')
   const { activeTargets, backupConfig, isTarget } = await import('../core/backup.ts')
@@ -1820,7 +1874,7 @@ async function dbCmd(): Promise<void> {
   const { passphraseFrom } = await import('../core/backup-file.ts')
   let passphrase: string | null = null
   if (passFile) passphrase = passphraseFrom(readFileSync(passFile))
-  else if (rest.includes('--passphrase-stdin')) {
+  else if (flagWords.includes('--passphrase-stdin')) {
     // never typed on a terminal here (it would show): piped, as `board backup passphrase` takes it
     if (process.stdin.isTTY) throw new Error(t('backup.cli.restoreUsage'))
     const { readStdin } = await import('../adapters/stdin.ts')
@@ -1838,7 +1892,7 @@ async function dbCmd(): Promise<void> {
       cfg,
       passphrase,
       by: 'user',
-      replaceFile: rest.includes('--replace-file'),
+      replaceFile: flagWords.includes('--replace-file'),
       boardRunning: async () => {
         try {
           await fetch(`http://127.0.0.1:${webPort}/api/hello`, { signal: AbortSignal.timeout(1500) })
@@ -1859,7 +1913,7 @@ async function dbCmd(): Promise<void> {
 }
 
 async function tunnel(): Promise<void> {
-  const [op = 'status'] = rest
+  const [op = 'status'] = words
   const webPort = Number(cfg.port) || 12422
   // The settings' checks speak the board's language; this command speaks English.
   // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
@@ -1955,18 +2009,18 @@ async function callReport(): Promise<void> {
   const usage = 'usage: board call-report --session <Claude session id> --file <report.md>'
   if (!target || !UUID.test(target)) throw new Error(`${usage}; the session id is a UUID`)
   const session = target
-  const ri = rest.indexOf('--report-id')
-  const reportId = ri >= 0 ? rest[ri + 1] : null
+  const ri = flagWords.indexOf('--report-id')
+  const reportId = ri >= 0 ? flagWords[ri + 1] : null
   if (ri >= 0 && (!reportId || reportId.startsWith('--'))) throw new Error('missing report-id')
   if (reportId) reportIdentity(session, reportId)
-  if (rest.includes('--status')) {
+  if (flagWords.includes('--status')) {
     if (!reportId) throw new Error('--status requires --report-id')
     const receipt = getReceipt(session, reportId)
     if (!receipt) throw new Error('no receipt for this session and report-id')
     return printReceipt(receipt)
   }
-  const fi = rest.indexOf('--file')
-  const file = fi >= 0 ? (rest[fi + 1] ?? '') : ''
+  const fi = flagWords.indexOf('--file')
+  const file = fi >= 0 ? (flagWords[fi + 1] ?? '') : ''
   if (!file) throw new Error(usage)
   let report: string
   try {

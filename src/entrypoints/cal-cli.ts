@@ -254,11 +254,13 @@ function timesOf(
 export async function calCmd(rest: readonly string[], ctx: CalCmdContext): Promise<number> {
   const out = ctx.out ?? ((line: string) => console.log(line))
   const errOut = ctx.err ?? ((line: string) => console.error(line))
-  const json = rest.includes('--json')
+  // The flags stop at a lone --: after it a word is text (#404).
+  const flags = rest.includes('--') ? rest.slice(0, rest.indexOf('--')) : rest
+  const json = flags.includes('--json')
   const now = ctx.now ?? Date.now()
   const zone = ctx.zone ?? localZone()
   const [cmd = 'list', ...more] = rest
-  if (cmd === 'help' || rest.includes('--help') || rest.includes('-h')) {
+  if (cmd === 'help' || flags.includes('--help') || flags.includes('-h')) {
     out(CAL_USAGE)
     return 0
   }

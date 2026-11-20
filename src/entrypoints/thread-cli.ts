@@ -221,11 +221,13 @@ const intOf = (v: string | undefined, flag: string): number | undefined => {
 export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext): Promise<number> {
   const out = ctx.out ?? ((line: string) => console.log(line))
   // --json among the flags; after a lone -- it is text.
-  const json = (rest.includes('--') ? rest.slice(0, rest.indexOf('--')) : rest).includes('--json')
+  const flags = rest.includes('--') ? rest.slice(0, rest.indexOf('--')) : rest
+  const json = flags.includes('--json')
   let db: BoardDb | null = null
   try {
     const [sub = 'help', ...args] = rest
-    if (sub === 'help' || sub === '--help' || args.includes('--help')) {
+    // --help or -h among the flags (#305); after a lone -- it is text too.
+    if (sub === 'help' || flags.includes('--help') || flags.includes('-h')) {
       if (json) out(JSON.stringify({ ok: true, usage: THREAD_USAGE }))
       else out(THREAD_USAGE)
       return 0
