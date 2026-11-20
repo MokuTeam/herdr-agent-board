@@ -198,7 +198,7 @@ test('the scheduler and every other caller keep the plain refusal, with no scree
     })
     expect(box.calls()).toEqual([['agent', 'get', 'pane1']])
   }
-})
+}, 30_000)
 
 test('send anyway types into the input box and presses Enter once the box shows the text (#164)', async () => {
   const box = await sandbox()
@@ -222,7 +222,7 @@ test('send anyway types into the input box and presses Enter once the box shows 
   const claude = await sandbox()
   claude.state({
     'agent get': agent('blocked'),
-    'agent read': { seq: [{ text: prompt() }, { text: prompt('hello') }] },
+    'agent read': { seq: [{ text: prompt() }, { text: prompt() }, { text: prompt('hello') }] },
     'pane send-text': { result: {} },
     'agent send-keys': { result: {} },
   })
@@ -232,19 +232,38 @@ test('send anyway types into the input box and presses Enter once the box shows 
     ['pane', 'send-text', 'pane1', 'hello'],
     ['agent', 'send-keys', 'pane1', 'enter'],
   ])
-})
+}, 30_000)
 
-test('send anyway: not over a draft, and no Enter when the box never shows the text (#164)', async () => {
-  const box = await sandbox()
-  box.state({ 'agent get': piAgent(), 'agent read': { text: piTyped('half a thought') } })
+test('send anyway: not over text in the box, and no Enter when the box never shows the text (#164)', async () => {
+  // Text in the box: the user's own, or a frame the board does not know. A dialog all the same.
+  for (const anyway of [false, true]) {
+    const box = await sandbox()
+    box.state({ 'agent get': piAgent(), 'agent read': { text: piTyped('half a thought') } })
+    const opts = { look: true, anyway }
+    const out = await box.run('send', { item: piItem, cfg: { language: 'en' }, text: 'hello', opts }).exited
+    expect(JSON.parse(out.stdout)).toEqual({
+      ok: false,
+      busy: true,
+      dialog: true,
+      error: 'Test waits for a decision in the terminal',
+    })
+    expect(typing(box.calls())).toEqual([])
+  }
+  // A dialog that comes up between the look and the typing gets nothing.
+  const late = await sandbox()
+  late.state({
+    'agent get': piAgent(),
+    'agent read': { seq: [{ text: screen('pi-idle') }, { text: screen('pi-select') }] },
+    'pane send-text': { result: {} },
+  })
   const opts = { look: true, anyway: true }
-  const out = await box.run('send', { item: piItem, cfg: { language: 'en' }, text: 'hello', opts }).exited
-  expect(JSON.parse(out.stdout)).toMatchObject({ ok: false, busy: true, draft: true })
-  expect(typing(box.calls())).toEqual([])
+  const l1 = await late.run('send', { item: piItem, cfg: { language: 'en' }, text: 'hello', opts }).exited
+  expect(JSON.parse(l1.stdout)).toMatchObject({ ok: false, dialog: true })
+  expect(typing(late.calls())).toEqual([])
   const lost = await sandbox()
   lost.state({
     'agent get': piAgent(),
-    'agent read': { seq: [{ text: screen('pi-idle') }, { text: screen('pi-select') }] },
+    'agent read': { seq: [{ text: screen('pi-idle') }, { text: screen('pi-idle') }, { text: screen('pi-select') }] },
     'pane send-text': { result: {} },
     'agent send-keys': { result: {} },
   })
@@ -255,4 +274,63 @@ test('send anyway: not over a draft, and no Enter when the box never shows the t
       'The message is typed into Test, but its screen did not show it in the input box, so it was not sent. Check it in herdr',
   })
   expect(typing(lost.calls())).toEqual([['pane', 'send-text', 'pane1', 'hello']])
-})
+}, 30_000)
+
+test('a message of several lines (or with files) is told there is no dialog, but not offered Send anyway (#164)', async () => {
+  for (const anyway of [false, true]) {
+    const box = await sandbox()
+    box.state({ 'agent get': piAgent(), 'agent read': { text: screen('pi-idle') }, 'pane send-text': { result: {} } })
+    const opts = { look: true, anyway }
+    const text = 'look at this\n\nFiles:\nC:\\Team Work\\shot 100%.png'
+    const out = await box.run('send', { item: piItem, cfg: { language: 'en' }, text, opts }).exited
+    expect(JSON.parse(out.stdout)).toEqual({
+      ok: false,
+      busy: true,
+      dialog: true,
+      error: 'herdr says Test waits for a decision, but its screen shows no dialog',
+    })
+    expect(typing(box.calls())).toEqual([])
+  }
+}, 30_000)
+
+test('looking at the screen: a failed read is the plain refusal; herdr no longer blocked sends as usual (#164)', async () => {
+  const failed = await sandbox()
+  failed.state({ 'agent get': piAgent(), 'agent read': { error: 'capture unavailable' } })
+  const f = await failed.run('send', { item: piItem, cfg: { language: 'en' }, text: 'hello', opts: { look: true } })
+    .exited
+  expect(JSON.parse(f.stdout)).toEqual({
+    ok: false,
+    busy: true,
+    dialog: true,
+    error: 'Test waits for a decision in the terminal',
+  })
+  const freed = await sandbox()
+  freed.state({
+    'agent get': { seq: [piAgent(), piAgent('idle')] },
+    'agent read': { text: screen('pi-idle') },
+    'agent prompt': { result: {} },
+    'pane send-text': { result: {} },
+  })
+  const opts = { look: true, anyway: true }
+  const r = await freed.run('send', { item: piItem, cfg: { language: 'en' }, text: 'hello', opts }).exited
+  expect(JSON.parse(r.stdout)).toEqual({ ok: true })
+  expect(typing(freed.calls())).toEqual([['agent', 'prompt', 'pane1', 'hello']])
+  // Another session in the pane by then: nothing typed.
+  const moved = await sandbox()
+  moved.state({
+    'agent get': {
+      seq: [
+        piAgent(),
+        { result: { agent: { agent: 'pi', agent_status: 'blocked', agent_session: { value: 'other' } } } },
+      ],
+    },
+    'agent read': { text: screen('pi-idle') },
+    'pane send-text': { result: {} },
+  })
+  const m = await moved.run('send', { item: piItem, cfg: { language: 'en' }, text: 'hello', opts }).exited
+  expect(JSON.parse(m.stdout)).toMatchObject({
+    ok: false,
+    error: 'Test: another session is in that pane now, refresh the board',
+  })
+  expect(typing(moved.calls())).toEqual([])
+}, 30_000)

@@ -499,8 +499,8 @@ export async function focus(
  * (inputDraft) or pi's (piDraft); null when a dialog, or anything the board cannot read, is there.
  */
 async function shownDraft(pane: string, kind: string): Promise<string | null> {
-  const screen = await herdrText(['agent', 'read', pane, '--source', 'visible', '--ansi'], 10_000)
-  if (parseDialog(screen, kind)) return null
+  const screen = await herdrText(['agent', 'read', pane, '--source', 'visible', '--ansi'], 10_000).catch(() => null)
+  if (screen === null || parseDialog(screen, kind)) return null
   return kind === PI_AGENT ? piDraft(screen) : inputDraft(screen)
 }
 
@@ -509,9 +509,10 @@ const ANYWAY_SHOWN_MS = 3000
 const sameWords = (a: string, b: string): boolean => a.replace(/\s+/g, '') === b.replace(/\s+/g, '')
 
 /**
- * The message typed into an input box herdr wrongly takes for a dialog (#164): `agent prompt`
- * refuses a pane herdr calls blocked, so the text goes with `pane send-text`, and Enter only once
- * the box shows it, still with no dialog over it. Otherwise it stays typed there, unsent.
+ * The message (one line, no control characters) typed into an empty input box herdr wrongly takes
+ * for a dialog (#164): `agent prompt` refuses a pane herdr calls blocked, so the text goes with
+ * `pane send-text`, and Enter only once the box shows it, still with no dialog over it. Otherwise
+ * it stays typed there, unsent.
  */
 async function sendAnyway(pane: string, kind: string, text: string, name: string): Promise<ActionResult> {
   await herdr(['pane', 'send-text', pane, /^-/.test(text) ? ` ${text}` : text], 10_000)
@@ -611,17 +612,24 @@ export async function send(
     const agent = named ? await namedAgent(pane, expectedSession) : await agentGet(pane)
     // Recheck after wake too: the pane may now host a different session.
     const before = refused(agent)
-    if (before?.dialog && (look || anyway) && boundTerminal === undefined && !probe) {
-      const kind = agent?.kind === 'claude' || agent?.kind === PI_AGENT ? agent.kind : null
-      const draft = kind ? await shownDraft(pane, kind) : null
-      if (draft === null) return before
-      if (!anyway) return { ...before, code: 'stale', error: t('err.blockedNoDialog', { name: item.name }) }
-      if (draft !== '') return { ok: false, busy: true, draft: true, error: t('err.draft', { name: item.name }) }
+    const kind = agent?.kind === 'claude' || agent?.kind === PI_AGENT ? agent.kind : null
+    if (before?.dialog && look && kind && boundTerminal === undefined && !probe) {
+      // Only an empty input box with no dialog over it: text in the box may be a frame the board
+      // does not know, or the user's own.
+      if ((await shownDraft(pane, kind)) !== '') return before
+      // send-text types every character as it is: a line break could submit half the message.
+      const typeable = [...text].every(c => c >= ' ' && c !== '\x7f')
+      if (!anyway || !typeable)
+        return { ...before, error: t('err.blockedNoDialog', { name: item.name }), ...(typeable && { code: 'stale' }) }
       const fresh = await agentGet(pane)
-      if (!fresh || fresh.session !== expectedSession || fresh.kind !== agent?.kind) return changed()
-      return await sendAnyway(pane, kind as string, text, item.name)
-    }
-    if (before) return before
+      if (!fresh || fresh.session !== expectedSession || fresh.kind !== kind) return changed()
+      if (fresh.status === 'blocked') {
+        // The screen once more, right before typing: a dialog that came up meanwhile gets nothing.
+        if ((await shownDraft(pane, kind)) !== '') return before
+        return await sendAnyway(pane, kind, text, item.name)
+      }
+      // herdr no longer says blocked: the usual send below.
+    } else if (before) return before
     if (agent?.kind === 'claude' || item.agent === 'claude') {
       // Herdr can miss a dialog (e.g. Teach auto mode). Require the visible prompt for every
       // send; recent scrollback could still contain an old input box. Only scheduled messages

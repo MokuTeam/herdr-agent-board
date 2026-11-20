@@ -176,7 +176,9 @@ function input(lines: string[], hint: number): InputDialog | null {
 
 /**
  * What the screen shows above the frame of the dialog at its bottom: the conversation, which goes
- * on once the dialog is answered (#153). Null when the frame's top is above the screen.
+ * on once the dialog is answered (#153). Null when the frame's top is above the screen. pi 1.3
+ * draws nothing there that moves while a dialog waits (no loader, screens/pi-select.txt); an
+ * extension's widget that did would pass for an answer.
  */
 export function piAbove(screen: unknown): string | null {
   const lines = stripAnsi(String(screen ?? ''))

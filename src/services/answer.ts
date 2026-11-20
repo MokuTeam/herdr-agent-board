@@ -186,7 +186,7 @@ const PI_SCREEN: Reader = { parse: screen => parseDialog(screen, PI_AGENT), idle
  * still the one answered. Throws Stop('unconfirmed') after `timeout` ms.
  *
  * With `again` (pi's dialogs, #153), the same dialog back on the screen counts too, once the screen
- * shows the answer went in: one read of the input box or another dialog in between, or `again`
+ * shows the answer went in: one read of the agent's input box in between, or `again`
  * holds for the dialog as drawn now (its cursor or field not as the keys left it, the
  * conversation above it moved on). A session that asks the same thing again at once draws a
  * dialog with the same fingerprint. Still the same dialog at the end: Stop('same').
@@ -208,7 +208,7 @@ async function settled(
     const d = parse(screen)
     if (again && d && ours(d) && (between || again(d, screen))) return
     const other = !ours(d) && !!(d || idle(screen))
-    between ||= other
+    between ||= !d && idle(screen)
     streak = other ? streak + 1 : 0
     if (streak >= 2) return
     if (Date.now() > end) throw new Stop(again && ours(d) ? 'same' : 'unconfirmed', step, screen)
@@ -422,6 +422,12 @@ export async function drivePermission({
   }
 }
 
+/** The conversation above pi's dialog is not what it was (`before`: piAbove of the screen before the key). */
+function movedOn(before: string | null, screen: string): boolean {
+  const above = piAbove(screen)
+  return before !== null && above !== null && above !== before
+}
+
 /**
  * Picks option `n` of pi's menu whose fingerprint the user saw: no digit picks there, so the
  * cursor goes one row at a time, and every key waits for the screen to show the same menu with
@@ -455,10 +461,14 @@ export async function driveSelect({
     const before = piAbove(seen.screen)
     await io.keys('enter')
     // The same menu again: the cursor where pi puts it on a new menu, or the conversation moved on.
-    await settled(io, ours, step, timing, PI_SCREEN, (x, screen) => {
-      const above = piAbove(screen)
-      return (x.kind === 'select' && x.cursor !== n) || (before !== null && above !== null && above !== before)
-    })
+    await settled(
+      io,
+      ours,
+      step,
+      timing,
+      PI_SCREEN,
+      (x, screen) => (x.kind === 'select' && x.cursor !== n) || movedOn(before, screen),
+    )
     return { ok: true }
   } catch (err) {
     return err instanceof Stop ? stopped(err, seen) : broken(err, seen)
@@ -503,12 +513,14 @@ export async function driveInput({
     const before = piAbove(seen.screen)
     await io.keys('enter')
     // The same input again: its field without the text, or the conversation moved on.
-    await settled(io, ours, step, timing, PI_SCREEN, (x, screen) => {
-      const above = piAbove(screen)
-      return (
-        (x.kind === 'input' && !fieldHolds(x.value, text)) || (before !== null && above !== null && above !== before)
-      )
-    })
+    await settled(
+      io,
+      ours,
+      step,
+      timing,
+      PI_SCREEN,
+      (x, screen) => (x.kind === 'input' && !fieldHolds(x.value, text)) || movedOn(before, screen),
+    )
     return { ok: true }
   } catch (err) {
     return err instanceof Stop ? stopped(err, seen) : broken(err, seen)
