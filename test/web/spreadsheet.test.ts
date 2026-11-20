@@ -254,6 +254,12 @@ describe('a workbook as the worker reads it', () => {
     expect(await bookOf(odd, 'en', 'odd.ods')).toMatchObject({ ok: false, why: 'broken' })
   })
 
+  test('a Numbers package (parts SheetJS would unpack again, past what was counted) is not read (#230)', async () => {
+    const numbers = zip([{ name: 'Index/Document.iwa', data: new Uint8Array(64) }])
+    // refused before SheetJS sees it, not by SheetJS failing on it afterwards
+    expect(await bookOf(numbers, 'en', 'renamed.xlsx')).toEqual({ ok: false, why: 'broken', message: 'a Numbers package' })
+  })
+
   test('frozen rows read from the head of the sheet’s own XML in the zip', async () => {
     const wb = utils.book_new()
     utils.book_append_sheet(wb, utils.aoa_to_sheet([['Дата'], [1], [2]]), 'Лист')

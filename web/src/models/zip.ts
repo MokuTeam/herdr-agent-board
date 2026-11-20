@@ -23,8 +23,9 @@ const u64 = (b: Uint8Array, at: number) => u32(b, at) + u32(b, at + 4) * 2 ** 32
 const FULL32 = 0xffffffff
 
 /**
- * Where the end of central directory record is: searched from the end of the whole file, as
- * SheetJS and JSZip search, so bytes put after it (past a comment's 64 KB) do not hide it.
+ * Where the end of central directory record is: searched from the end of the whole file, so bytes
+ * put after it (past a comment's 64 KB) do not hide it. The libraries never read this file's own
+ * records (storedZip), so a reading of theirs that differs gets them nothing.
  */
 function endRecord(bytes: Uint8Array): number {
   for (let at = bytes.length - 22; at >= 0; at--)
@@ -77,10 +78,10 @@ function zip64Extra(bytes: Uint8Array, from: number, length: number, need: Wante
 }
 
 /**
- * The entries of a zip by its central directory, or null when it has none to read. Read as JSZip
- * (mammoth's) reads them: the ZIP64 directory whenever any field of the end record is full, and
- * then every entry as long as their signature goes on, whatever the counts say (a second entry
- * the counts leave out is unpacked all the same); fewer than the counts say is no directory.
+ * The entries of a zip by its central directory, or null when it has none to read: the ZIP64
+ * directory whenever any field of the end record is full, and then every entry as long as their
+ * signature goes on, whatever the counts say (a second entry the counts leave out is unpacked all
+ * the same); fewer than the counts say is no directory.
  */
 export function zipEntries(bytes: Uint8Array): ZipEntry[] | null {
   const end = endRecord(bytes)
@@ -153,7 +154,8 @@ export type Rezipped =
  * than a plain zip holds: broken.
  */
 export async function storedZip(bytes: Uint8Array, entries: ZipEntry[], limit: number): Promise<Rezipped> {
-  if (entries.length > 0xffff) return { ok: false, why: 'broken', size: 0 }
+  // 0xFFFF in the end record's counts reads as ZIP64 (JSZip then looks for its locator)
+  if (entries.length >= 0xffff) return { ok: false, why: 'broken', size: 0 }
   const parts: { data: Uint8Array; size: number; name: Uint8Array }[] = []
   let size = 0
   for (const entry of entries) {
@@ -166,7 +168,13 @@ export async function storedZip(bytes: Uint8Array, entries: ZipEntry[], limit: n
     const name = bytes.subarray(entry.record + 46, entry.record + 46 + u16(bytes, entry.record + 28))
     parts.push({ data, size: unpacked, name })
   }
-  const out = new Uint8Array(parts.reduce((n, p) => n + 76 + 2 * p.name.length + p.size, 22))
+  let out: Uint8Array
+  try {
+    out = new Uint8Array(parts.reduce((n, p) => n + 76 + 2 * p.name.length + p.size, 22))
+  } catch {
+    // no memory for it here: too big to show, as a part past the limit is
+    return { ok: false, why: 'big', size }
+  }
   const view = new DataView(out.buffer)
   const offsets: number[] = []
   let at = 0

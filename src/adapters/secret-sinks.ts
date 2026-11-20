@@ -18,7 +18,6 @@ import {
   lstatSync,
   openSync,
   readFileSync,
-  renameSync,
   rmSync,
   statSync,
   writeSync,
@@ -37,7 +36,7 @@ import {
   safeName,
   scrub,
 } from '../core/secrets.ts'
-import { isRecord } from './json-store.ts'
+import { isRecord, renameWithRetry } from './json-store.ts'
 import { type RunResult, run, runTree } from './process.ts'
 
 export interface WriteInput {
@@ -273,7 +272,8 @@ async function writeFile(sink: FileSink, input: WriteInput): Promise<WriteResult
       if (typeof content !== 'string') return content
       writeSync(fd, content)
       fsyncSync(fd)
-      renameSync(temp, path)
+      // Windows: a scanner or an indexer holding either file a moment is waited out briefly
+      renameWithRetry(temp, path)
       renamed = true
       // what took the name is the file written here, not one swapped in for it before the rename
       if (!holds(path, fd)) return refuse('secret.err.notFile', { path })

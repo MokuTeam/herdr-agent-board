@@ -52,6 +52,10 @@ export async function bookOf(input: ArrayBuffer | Uint8Array, lang: string, name
   // What the directory says can be a lie, and SheetJS reads a zip's headers its own way (and
   // allocates what they say): it gets the parts as they really unpack, stored again in a zip of
   // the worker's making.
+  // A Numbers package's parts SheetJS unpacks again (snappy, about 21 times what they hold), past
+  // what was counted here: the quick look does not show those.
+  if (entries?.some(e => e.name.toLowerCase().endsWith('.iwa')))
+    return { ok: false, why: 'broken', message: 'a Numbers package' }
   const zip = entries ? await storedZip(bytes, entries, UNPACKED_LIMIT) : null
   if (zip && !zip.ok)
     return zip.why === 'big'
