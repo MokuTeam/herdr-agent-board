@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
-import { ownFileCheck, ownFolders, realOrNearest } from '../../src/adapters/own-files.ts'
+import { basename, dirname, join, relative } from 'node:path'
+import { ownFileCheck, ownFolders, realOrNearest, uploadsCheck } from '../../src/adapters/own-files.ts'
 import { configDir, stateDir, uploadsDir } from '../../src/adapters/paths.ts'
 import { DEFAULT_CONFIG } from '../../src/core/categories.ts'
 import type { Config } from '../../src/core/types.ts'
@@ -201,5 +201,78 @@ describe('the board’s own files', () => {
       expect(own(`\\\\?\\${state}\\access.json`)).toBe(true)
       expect(own(`\\\\.\\${state}\\access.json`)).toBe(true)
     })
+  })
+})
+
+describe('a file in the uploads (#401)', () => {
+  /** A board with one upload, and the check made after it. */
+  function uploaded() {
+    const { state } = board()
+    const day = join(uploadsDir(), '2026-11-20')
+    mkdirSync(day, { recursive: true })
+    const file = join(day, 'notes.txt')
+    writeFileSync(file, 'anna')
+    return { state, file, inUploads: uploadsCheck() }
+  }
+
+  test('an upload is; a sibling folder sharing the prefix, a path out through .., the folder or a missing file is not', () => {
+    const { state, file, inUploads } = uploaded()
+    mkdirSync(`${uploadsDir()}-other`, { recursive: true })
+    writeFileSync(join(`${uploadsDir()}-other`, 'x.txt'), 'ben')
+    writeFileSync(join(state, 'secret.txt'), 'cleo')
+    expect(inUploads(file)).toBe(true)
+    expect(inUploads(join(uploadsDir(), '2026-11-20', '..', '2026-11-20', 'notes.txt'))).toBe(true)
+    expect(inUploads(join(`${uploadsDir()}-other`, 'x.txt'))).toBe(false)
+    expect(inUploads(`${uploadsDir()}/../secret.txt`)).toBe(false)
+    expect(inUploads(uploadsDir())).toBe(false)
+    expect(inUploads(join(uploadsDir(), '2026-11-20'))).toBe(false)
+    expect(inUploads(join(uploadsDir(), '2026-11-20', 'missing.txt'))).toBe(false)
+  })
+
+  test('only an absolute path: a relative one names another file in the session it is typed into', () => {
+    const { file, inUploads } = uploaded()
+    expect(inUploads(relative(process.cwd(), file))).toBe(false)
+    if (onWindows) expect(inUploads(file.slice(2))).toBe(false)
+  })
+
+  test.skipIf(!canLink)('a link inside the uploads that leads out of them is not', () => {
+    const { state, inUploads } = uploaded()
+    const outside = join(dirname(state), 'outside')
+    mkdirSync(outside, { recursive: true })
+    writeFileSync(join(outside, 'atlas.txt'), 'atlas')
+    symlinkSync(outside, join(uploadsDir(), 'out'), onWindows ? 'junction' : 'dir')
+    expect(inUploads(join(uploadsDir(), 'out', 'atlas.txt'))).toBe(false)
+  })
+
+  test.if(onWindows)(
+    'on Windows: another case, forward slashes and an 8.3 name are; UNC, device, stream and trailing-dot spellings are not',
+    () => {
+      const { file, inUploads } = uploaded()
+      expect(inUploads(file.toUpperCase())).toBe(true)
+      expect(inUploads(file.replaceAll('\\', '/'))).toBe(true)
+      if (shortNames) expect(inUploads(shortName(file))).toBe(true)
+      expect(inUploads(`\\\\localhost\\${file.replace(':', '$')}`)).toBe(false)
+      expect(inUploads(`\\\\?\\${file}`)).toBe(false)
+      expect(inUploads(`\\\\.\\${file}`)).toBe(false)
+      expect(inUploads(`${file}:x`)).toBe(false)
+      expect(inUploads(`${file}::$DATA`)).toBe(false)
+      expect(inUploads(`${uploadsDir()}.\\2026-11-20\\notes.txt`)).toBe(false)
+    },
+  )
+
+  test.if(onWindows)('on Windows: with the state folder on a share, its uploads by their UNC path still are', () => {
+    const { file } = uploaded()
+    const unc = (p: string) => `\\\\localhost\\${p.replace(':', '$')}`
+    if (!existsSync(unc(file))) return // no admin share here
+    const before = process.env.LOCALAPPDATA
+    process.env.LOCALAPPDATA = unc(before as string)
+    try {
+      const inUploads = uploadsCheck()
+      expect(inUploads(unc(file))).toBe(true)
+      expect(inUploads(`${unc(file)}:x`)).toBe(false)
+      expect(inUploads(`\\\\?\\UNC\\${unc(file).slice(2)}`)).toBe(false)
+    } finally {
+      process.env.LOCALAPPDATA = before
+    }
   })
 })

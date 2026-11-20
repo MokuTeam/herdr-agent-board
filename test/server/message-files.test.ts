@@ -108,7 +108,7 @@ describe('a message with files', () => {
     },
   )
 
-  test.if(process.platform === 'win32')('on Windows: a UNC path is refused before any file call', async () => {
+  test.if(process.platform === 'win32')('on Windows: a UNC path is refused', async () => {
     await refused([`\\\\localhost\\${upload.replace(':', '$')}`])
   })
 })

@@ -6,7 +6,7 @@ import { type CardPatch, writeCard } from '../../adapters/cards.ts'
 import { checkoutChanges, isCheckout } from '../../adapters/git.ts'
 import { helpersOf } from '../../adapters/helpers.ts'
 import { herdrText } from '../../adapters/herdr.ts'
-import { uploadedFile } from '../../adapters/own-files.ts'
+import { uploadsCheck } from '../../adapters/own-files.ts'
 import { pause } from '../../adapters/pacing.ts'
 import { askRestart } from '../../adapters/schedule-store.ts'
 import { busy, PINS } from '../../core/board.ts'
@@ -143,7 +143,8 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
   // Attached files go as their paths: Claude reads them, and picks up image paths as images.
   // Only files the board took in its uploads (#401): one outside refuses the message.
   const files = (Array.isArray(body.files) ? body.files : []).filter((p): p is string => typeof p === 'string')
-  if (!files.every(p => uploadedFile(p))) return Promise.resolve({ ok: false, error: t('msg.err.file'), code: 'file' })
+  if (files.length && !files.every(uploadsCheck()))
+    return Promise.resolve({ ok: false, error: t('msg.err.file'), code: 'file' })
   const list = files.length ? `${t('msg.files', { n: files.length })}:\n${files.join('\n')}` : ''
   // The card is for one session: a pane that holds another one now gets nothing. Panes with
   // no Claude session id (other agents) are matched by the card alone.
