@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { tidyList } from '../../src/core/archive.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { Item } from '../../src/core/types.ts'
+import { hides } from '../../src/services/archive.ts'
 import { archiveApi, isBoardPayload } from '../../web/src/api/client.ts'
 import { archiveNotes } from '../../web/src/models/archive-view.ts'
 import { unusedPort } from '../support/board-server.ts'
@@ -516,6 +517,18 @@ test('a sleeping session goes too; a pane that shares its tab closes alone; Remo
     await new Promise(resolve => wake.close(resolve))
   }
 }, 30_000)
+
+test('#323: an archived sleeper with no pane stays hidden; a call agent with no pane, or the session in a pane, shows', () => {
+  const rec = { key: S, pane: '', state: 'archived' } as unknown as Parameters<typeof hides>[0]
+  assert.equal(hides(rec, { pane: null, sleeping: true }), true)
+  // MokuPilot going on in it for a call (#326): no pane, not asleep.
+  assert.equal(hides(rec, { pane: null, sleeping: false }), false)
+  assert.equal(hides(rec, { pane: 'wP:p9', sleeping: false }), false)
+  // Archived from its pane: hidden there only, as before.
+  const inPane = { ...rec, pane: 'wP:p1' } as Parameters<typeof hides>[0]
+  assert.equal(hides(inPane, { pane: 'wP:p1', sleeping: false }), true)
+  assert.equal(hides(inPane, { pane: null, sleeping: true }), false)
+})
 
 test('#323: a sleeper whose pane wake closed, archived by name or id, stays archived; resumed by hand elsewhere it is back', async () => {
   for (const target of ['Probe card', S]) {

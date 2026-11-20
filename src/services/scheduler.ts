@@ -266,10 +266,14 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
    */
   async function nameAgain(item: Item): Promise<void> {
     const { pane, cwd } = item
-    const script = pane && cwd ? nameScript() : null
-    if (!script || !pane || !cwd) return
+    if (!pane || !cwd) return
+    const script = nameScript()
+    if (!script) return
     const name = await nameForCwd(script, cwd)
-    if (name) await herdr(['agent', 'rename', pane, name]).catch(() => {})
+    if (!name) return
+    await herdr(['agent', 'rename', pane, name]).catch(err =>
+      log(`restart ${item.name}: ${pane} not named ${name}: ${messageOf(err)}`),
+    )
   }
 
   const whyNot = (r: { draft?: boolean; dialog?: boolean; busy?: boolean; error: string }): string =>
@@ -341,8 +345,8 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
       // Woken in a new tab when its pane was closed as it went to sleep (#204): the note goes there.
       item = { ...item, sleeping: false, ...(woke.pane && { pane: woke.pane }) }
       await new Promise(resolve => setTimeout(resolve, settleMs()))
-      if (stopped || !getEntry(entry.id)) return
       await nameAgain(item)
+      if (stopped || !getEntry(entry.id)) return
     }
     const r = await send(deps, item, promptOf(entry, Date.now()), { free: true, draft: true })
     if (!r.ok) return wait(entry, now, whyNot(r), false)

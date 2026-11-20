@@ -92,14 +92,17 @@ function update(
  * in still shows for a moment (herdr's snapshot can lag the close). Seen in another pane once it
  * is archived, the session is back (resumed by Return, or by hand); one being put back shows.
  */
-export const hides = (record: ArchiveRecord | null, item: Pick<Item, 'pane'>): boolean =>
+export const hides = (record: ArchiveRecord | null, item: Pick<Item, 'pane' | 'sleeping'>): boolean =>
   !!record && (record.state === 'closing' || (record.state === 'archived' && archivedPane(record, item)))
 
 /**
  * Whether the item is in the pane its record was archived in. A sleeper whose pane wake closed
- * (#204) has none: null on the board, '' in its record. Read as different, it came straight back (#323).
+ * (#204) has none: null on the board, '' in its record. Read as different, it came straight back
+ * (#323). Only a sleeper: a MokuPilot call agent going on in the session has no pane either, and
+ * shows (#326).
  */
-const archivedPane = (record: ArchiveRecord, item: Pick<Item, 'pane'>): boolean => record.pane === (item.pane ?? '')
+const archivedPane = (record: ArchiveRecord, item: Pick<Item, 'pane' | 'sleeping'>): boolean =>
+  record.pane === item.pane || (record.pane === '' && item.pane == null && !!item.sleeping)
 
 // ------------------------------------------------------------------ the session's profile
 
@@ -594,7 +597,7 @@ export function markReturning(key: string, launch: string | null): void {
  * by hand. Its entries go back with its pane and folder now, the record goes. Also finishes a
  * record a board left `restoring` when it stopped. Returns whether the record is gone.
  */
-export function settleReturned(item: Pick<Item, 'key' | 'pane' | 'cwd'>): boolean {
+export function settleReturned(item: Pick<Item, 'key' | 'pane' | 'cwd' | 'sleeping'>): boolean {
   const seen: { r: ArchiveRecord | null; fresh: boolean } = { r: null, fresh: false }
   update(item.key, rec => {
     if (rec.state === 'restoring') {

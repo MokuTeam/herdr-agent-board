@@ -1482,6 +1482,11 @@ agent cannot reconnect from inside its own turn (`/mcp` is a menu in its own ter
   skills and CLAUDE.md are loaded anew.
 - How far it got is kept in the entry (`step`): a board that stops halfway leaves the session
   asleep at worst, and the next one wakes it and types the note.
+- Pane names from a script of your own: when `~/.local/bin/herdr-name-for-cwd` exists (another path
+  in env `BOARD_NAME_FOR_CWD`; on Windows a `.cmd` or `.exe`), the board runs it with the
+  session's folder after the wake and names the pane's agent what it prints (`herdr agent
+  rename`), before it types the note. No script, nothing printed, an error or no answer in 5
+  seconds: no rename. Without the script nothing of this runs.
 - Wake refusing or failing is tried again, three times in all. Then an agent hears
   `[board reminder] restart did not happen: <why>. Your note for after it: <note>` once it is
   free; so it does when background tasks held it for 10 minutes. Asked again meanwhile, the new

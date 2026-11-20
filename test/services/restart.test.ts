@@ -320,7 +320,7 @@ test('#204: woken in a new tab (its pane closed as it went to sleep), the note g
  * A name-for-folder script (#307) that writes the folder it was given to `seen` and prints
  * `name`: a .cmd on Windows, a shell script elsewhere. At `path` without its extension when given.
  */
-function nameScript(box: Sandbox, name: string, path?: string): { script: string; seen: string } {
+function nameScript(box: Sandbox, name: string, path?: string, exit = 0): { script: string; seen: string } {
   const seen = join(box.dir, 'name-seen.txt')
   const win = process.platform === 'win32'
   const script = (path ?? join(box.dir, 'name-for-cwd')) + (win && !path ? '.cmd' : '')
@@ -328,8 +328,8 @@ function nameScript(box: Sandbox, name: string, path?: string): { script: string
   writeFileSync(
     script,
     win
-      ? `@echo off\r\n<nul set /p="%~1" > "${seen}"\r\n${name ? `echo ${name}` : 'rem nothing'}\r\n`
-      : `#!/bin/sh\nprintf '%s' "$1" > '${seen}'\n${name ? `echo '${name}'` : ':'}\n`,
+      ? `@echo off\r\n<nul set /p="%~1" > "${seen}"\r\n${name ? `echo ${name}` : 'rem nothing'}\r\nexit /b ${exit}\r\n`
+      : `#!/bin/sh\nprintf '%s' "$1" > '${seen}'\n${name ? `echo '${name}'` : ':'}\nexit ${exit}\n`,
     { mode: 0o755 },
   )
   return { script, seen }
@@ -351,17 +351,19 @@ test('#307: after the wake, a name-for-folder script names the pane again, befor
   assert.deepEqual(prompts(box), ['[board reminder; restarted as you asked] go on'])
 })
 
-test('#307: a script that prints nothing, or none at all, leaves the pane as it was: no rename', async () => {
-  for (const kind of ['empty', 'missing', 'gone']) {
+test('#307: a script that prints nothing, fails, or none at all, leaves the pane as it was: no rename', async () => {
+  for (const kind of ['empty', 'fails', 'missing', 'nowhere']) {
     const box = await sandbox()
     herdrWith(box, 'idle')
     const wake = await fakeWake(box)
     const env =
       kind === 'empty'
         ? { BOARD_NAME_FOR_CWD: nameScript(box, '').script }
-        : kind === 'gone'
-          ? { BOARD_NAME_FOR_CWD: join(box.dir, 'no-such-script') }
-          : {}
+        : kind === 'fails'
+          ? { BOARD_NAME_FOR_CWD: nameScript(box, 'cleo-draft', undefined, 1).script }
+          : kind === 'nowhere'
+            ? { BOARD_NAME_FOR_CWD: join(box.dir, 'no-such-script') }
+            : {}
     put(box, { id: 'aaab02', text: 'go on' })
     await scheduler(box, { wakeUrl: wake.url }, env)
     await until(() => runs(box).length === 1, 15_000)

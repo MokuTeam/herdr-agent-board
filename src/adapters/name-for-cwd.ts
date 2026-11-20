@@ -16,17 +16,28 @@ export function nameScript(): string | null {
 }
 
 /**
- * The name the script prints for `cwd`: its first line, trimmed, without control characters. ''
- * when it prints nothing, fails, or takes longer than SCRIPT_MS.
+ * The name the script prints for `cwd`: its first line that is not blank, trimmed, without control
+ * characters. '' when it prints nothing, exits with an error, or takes longer than SCRIPT_MS (a
+ * child of its own that keeps the output open does not hold the restart either).
  */
 export async function nameForCwd(script: string, cwd: string): Promise<string> {
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    const child = Bun.spawn([script, cwd], { stdout: 'pipe', stderr: 'ignore', stdin: 'ignore', timeout: SCRIPT_MS })
-    const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
-    if (code !== 0) return ''
+    const child = Bun.spawn([script, cwd], { stdout: 'pipe', stderr: 'ignore', stdin: 'ignore' })
+    const late = new Promise<null>(resolve => {
+      timer = setTimeout(() => {
+        child.kill()
+        resolve(null)
+      }, SCRIPT_MS)
+    })
+    const done = Promise.all([new Response(child.stdout).text(), child.exited])
+    const r = await Promise.race([done, late])
+    if (r === null || r[1] !== 0) return ''
     // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it strips
-    return (out.split(/\r?\n/).find(l => l.trim()) ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim()
+    return (r[0].split(/\r?\n/).find(l => l.trim()) ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim()
   } catch {
     return ''
+  } finally {
+    clearTimeout(timer)
   }
 }
