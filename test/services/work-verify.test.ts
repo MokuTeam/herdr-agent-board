@@ -6,13 +6,15 @@ import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { getArchived, updateArchived } from '../../src/adapters/archive-store.ts'
 import { type BoardDb, openDb } from '../../src/adapters/db.ts'
-import { listEntries, removeEntry, updateEntry } from '../../src/adapters/schedule-store.ts'
+import { listEntries, removeEntry } from '../../src/adapters/schedule-store.ts'
 import { getThread, setScope, threadByKey } from '../../src/adapters/work-thread-store.ts'
 import type { ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import type { Item } from '../../src/core/types.ts'
 import type { Party, ThreadHead } from '../../src/core/work-threads.ts'
 import { type ThreadCmdContext, threadCmd } from '../../src/entrypoints/thread-cli.ts'
+import { holdEntries } from '../../src/services/archive.ts'
 import {
   commandLauncher,
   herdrLauncher,
@@ -94,6 +96,12 @@ function setUp(threads: unknown = VERIFY) {
     archive: async item => {
       if (busy) return 'busy'
       archived.push(item.key)
+      // As askArchive does: a record, and the session's entries taken into it.
+      updateArchived(
+        item.key,
+        () => ({ key: item.key, session: item.key, name: item.name, state: 'closing', closeAt: now, held: [] }) as never,
+      )
+      holdEntries(item.key)
       return 'ok'
     },
     withDb: fn => {
@@ -359,6 +367,8 @@ test('pass: done (verified), the master hears it, the verifier is archived once 
   await v.due(limits()[0] as ScheduleEntry, [verifierItem])
   assert.deepEqual(s.archived, [(vf as { key: string }).key])
   assert.deepEqual(limits(), [])
+  // Its limit does not wait in the archive record to come back with it.
+  assert.deepEqual(getArchived((vf as { key: string }).key)?.held, [])
 })
 
 test('fail: back to the worker, who hears it in one line; the second fail in a row goes to the owner', async () => {

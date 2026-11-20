@@ -35,6 +35,7 @@ import {
   type VerifyConfig,
 } from '../core/work-threads.ts'
 import { ownerLine, verifierName, verifyBrief } from '../core/work-verify.ts'
+import { dropHeld } from './archive.ts'
 import type { LaunchState, StartOptions, StartResult } from './launch/launches.ts'
 import type { ParentFacts } from './launch/request.ts'
 import { filePath, postEntry, type ThreadsCtx, type Written } from './work-threads.ts'
@@ -306,6 +307,8 @@ export function createVerifier(host: VerifyHost): Verifier {
       r = 'busy'
     }
     if (r === 'ok') {
+      // The archive took the session's entries into its record: this one must not come back with it.
+      dropHeld(item.key, entry.id)
       removeEntry(entry.id)
       return
     }
