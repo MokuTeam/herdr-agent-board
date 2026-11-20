@@ -46,6 +46,11 @@
 //                            its Fork does (services/launch/fork.ts); the note is its first message
 //   board tunnel [on|off|test]   the board through the owner's own domain (core/tunnel.ts): where
 //                            the tunnel stands; on and off in config.json; test runs Test connection
+//   board node [token [--name <master>] | forget <id>]   this board as a node (#498): its master door
+//                            (server/node-listener.ts), on or off, its port and its masters by name
+//                            and when last seen; token adds a master and prints its token once;
+//                            forget takes one's token back. Until the install exists, for a node
+//                            set up by hand; a board without `node` in config.json says it is none
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
 //   board presence [here|away|call]   whether the user is at the computer, away or on a call
 //                            (core/presence.ts), the line every session's context has; with a
@@ -174,7 +179,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | doctor | presence [here | away | call] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id>] | doctor | presence [here | away | call] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal'])
@@ -937,6 +942,7 @@ async function main(): Promise<void> {
   if (cmd === 'call-report') return callReport()
   if (cmd === 'remote') return remote()
   if (cmd === 'tunnel') return tunnel()
+  if (cmd === 'node') return nodeCmd()
   if (cmd === 'backup') return backupCmd()
   if (cmd === 'time') return timeCommand()
   if (cmd === 'cal') return calCommand()
@@ -1594,6 +1600,62 @@ async function remote(): Promise<void> {
   for (const d of view.devices ?? [])
     console.log(
       `paired: ${d.id} "${d.name}"${d.kind === 'browser' ? ' (browser)' : ''} on ${d.device} (${d.login})${d.seenAt ? `, seen ${stamp(d.seenAt)}` : ''}${d.desk ? ' · desk' : ''}`,
+    )
+}
+
+/**
+ * `board node [token [--name <master>] | forget <id>]` (#498): this board as a node, set up by hand
+ * until the install exists. Without an argument: the master door, on when it answers its hello on
+ * 127.0.0.1:<node.port>, and the masters by name and when each was last seen. `token` adds a master
+ * to masters.json (adapters/node-store.ts) and prints its token, the one time it is shown; `forget`
+ * takes a master's token back, and the door ends its streams. A board without a `node` that checks
+ * out says so in one line, and reads nothing else.
+ */
+async function nodeCmd(): Promise<void> {
+  const [op = 'status', id = ''] = words
+  const usage = 'usage: board node [token [--name <master>] | forget <id>]'
+  const { nodeConfig, nodeProblems } = await import('../core/nodes.ts')
+  const node = nodeConfig(cfg.node)
+  if (!node) {
+    const problems = nodeProblems(cfg.node).map(p => `${p.key}: ${p.why}`)
+    return console.log(
+      problems.length
+        ? `this board is not a node: config.json's \`node\` does not check out (${problems.join(', ')})`
+        : 'this board is not a node: config.json has no `node`',
+    )
+  }
+  const { createNodeStore, masterName } = await import('../adapters/node-store.ts')
+  const store = createNodeStore()
+  if (op === 'token') {
+    if (id) throw new Error(usage)
+    const name = masterName(forkName ?? 'master')
+    if (!name) throw new Error("a master's name: up to 64 printable characters")
+    const { master, token } = store.add(name, 'hand')
+    console.log(`ok · master ${master.id} "${master.name}" added; its token, shown this once:`)
+    return console.log(token)
+  }
+  if (op === 'forget') {
+    if (!id || words.length > 2) throw new Error(usage)
+    if (!store.forget(id)) throw new Error(`no master ${id}: \`board node\` lists them`)
+    return console.log(`ok · forgot master ${id}: its token no longer opens the door`)
+  }
+  if (op !== 'status' || words.length > 0) throw new Error(usage)
+  let on = false
+  try {
+    const res = await fetch(`http://127.0.0.1:${node.port}/api/hello`, { signal: AbortSignal.timeout(1500) })
+    const hello: unknown = await res.json()
+    on = isRecord(hello) && isRecord(hello.node) && hello.node.id === node.id
+  } catch {}
+  console.log(
+    on
+      ? `node ${node.id} · door on 127.0.0.1:${node.port}`
+      : `node ${node.id} · door off: nothing of this board answers on 127.0.0.1:${node.port} (does the board run?)`,
+  )
+  const masters = store.list()
+  if (!masters.length) return console.log('no master yet · `board node token --name <master>` adds one')
+  for (const m of masters)
+    console.log(
+      `master ${m.id} "${m.name}" · paired ${stamp(m.pairedAt)} · ${m.seenAt ? `seen ${stamp(m.seenAt)}` : 'not seen yet'}`,
     )
 }
 

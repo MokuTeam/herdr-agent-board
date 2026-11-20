@@ -117,7 +117,7 @@ const view = (l: Launch): LaunchView => ({
 })
 
 /** Whether `pi` is a command on the board's PATH (a .ps1 or .cmd on Windows too). */
-function piOnPath(): boolean {
+export function piOnPath(): boolean {
   const found = findCommand('pi')
   return !!(found.ps ?? found.sh)
 }

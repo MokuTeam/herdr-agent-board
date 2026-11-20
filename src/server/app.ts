@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { loadConfig, saveFoundProfiles } from '../adapters/config-file.ts'
 import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
+import { createNodeStore } from '../adapters/node-store.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { pace } from '../adapters/pacing.ts'
@@ -36,6 +37,7 @@ import {
 } from '../adapters/ssh.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
 import { messageGate } from '../core/message-gate.ts'
+import { nodeConfig } from '../core/nodes.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payload.ts'
 import type { Observation } from '../core/presence.ts'
@@ -62,6 +64,7 @@ import { dayWatchTick } from '../services/day-watches.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
+import { createNodeStatus } from '../services/node/status.ts'
 import { tellOwnerWatchers } from '../services/owner-watch.ts'
 import { createPresence } from '../services/presence.ts'
 import { editProfile, installProfile, installThreadsSkill, wakeHooksInPlace } from '../services/profiles.ts'
@@ -92,6 +95,7 @@ import { runWorkdeskEvents, workdeskEventHandlers } from '../services/workdesk-e
 import { createWorkdeskWatcher } from '../services/workdesk-watcher.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, peerOf, type Route } from './http.ts'
+import { createNodeListener, type NodeListener } from './node-listener.ts'
 import { createRemoteListener } from './remote.ts'
 import { accessRoutes } from './routes/access.ts'
 import { archiveRoutes } from './routes/archive.ts'
@@ -961,6 +965,36 @@ export async function startServer({
   // A login by password's ssh runs in a session of its own: ended with the board too.
   process.on('exit', endLogins)
 
+  // The master door on a node (#498, server/node-listener.ts), its masters and its status: made the
+  // first time config.json has `node`, and from then on following it. Without `node` nothing of it
+  // exists: no listener, no timer, no file read.
+  let door: NodeListener | null = null
+  function doorFollows(): void {
+    if (door) {
+      door.configChanged()
+      return
+    }
+    if (nodeConfig(cfg.node) === null) return
+    const status = createNodeStatus({
+      node: () => nodeConfig(cfg.node),
+      items: board.items,
+      launches: () => launches.list(),
+      profiles: () => shownProfiles(deps.profiles().list),
+      launch: () => cfg.launch,
+      version: PLUGIN_VERSION,
+    })
+    door = createNodeListener({
+      cfg,
+      routes,
+      guards,
+      hello: () => listener.hello(),
+      store: createNodeStore(),
+      status: () => status.answer(),
+      log,
+    })
+    void door.sync()
+  }
+
   const poll = setInterval(refresh, Math.max(1, cfg.refreshSec ?? 2) * 1000)
   const watchers = [
     watchFolder(cards, 150, refresh, log),
@@ -986,6 +1020,7 @@ export async function startServer({
   // The listener first: ssh forwards to it, so it starts only once that listens (a stray ssh a
   // board before left is ended first).
   void tunnel.sync().then(() => supervisor.sync())
+  doorFollows()
   // Wake on but not running (its startup entry did not run, or it ended): started once.
   void wake.ensure()
   presence.start()
@@ -1033,6 +1068,7 @@ export async function startServer({
       await configureWorkdeskStream()
       team.refresh()
       holdLoopback6()
+      doorFollows()
       await board.refresh()
       ownerTick()
     },
@@ -1065,6 +1101,7 @@ export async function startServer({
       endLogins()
       process.off('exit', endLogins)
       await tunnel.close()
+      await door?.close()
       await loopback6?.stop(true)
       await server.stop(true)
     },

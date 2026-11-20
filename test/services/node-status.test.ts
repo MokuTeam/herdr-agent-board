@@ -1,0 +1,186 @@
+// A node's status (services/node/status.ts, docs/design/nodes 6.3): facts from the sources it is
+// given, the machine's load from the fixtures of each system, and nothing decided.
+import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import type { NodeConfig } from '../../src/core/nodes.ts'
+import type { Profile } from '../../src/core/profiles.ts'
+import { bytesToMb, loadOf, meminfoAvailableMb, vmStatAvailableMb } from '../../src/core/sysload.ts'
+import type { Item, LaunchView } from '../../src/core/types.ts'
+import { agentsOf, createNodeStatus, expandHome, loggedIn, type StatusSources } from '../../src/services/node/status.ts'
+
+const fixture = (name: string): string => readFileSync(join(import.meta.dir, '..', 'fixtures', 'sysload', name), 'utf8')
+
+const NODE: NodeConfig = {
+  id: 'server-1',
+  port: 12430,
+  workRoot: '~/work',
+  listen: 'loopback',
+  tls: false,
+  relay: null,
+}
+const item = (key: string, over: Partial<Item> = {}): Item => ({ key, status: 'idle', ...over }) as Item
+const launch = (id: string, state: LaunchView['state']): LaunchView => ({ id, state }) as LaunchView
+const profile = (id: string, dir: string): Profile => ({ id, title: id, dir, color: 'gray', hidden: false })
+
+function sources(over: Partial<StatusSources> = {}): StatusSources {
+  return {
+    node: () => NODE,
+    items: () => [
+      item('a', { status: 'working' }),
+      item('b', { status: 'idle' }),
+      item('c', { status: 'idle', sleeping: true }),
+      item('d', { status: 'sleeping', sleeping: true }),
+    ],
+    launches: () => [launch('1', 'starting'), launch('2', 'trust'), launch('3', 'done'), launch('4', 'failed')],
+    profiles: () => [profile('default', '/home/owner/.claude'), profile('work', '/home/owner/.claude-work')],
+    version: '0.1.0',
+    commit: async () => 'ee32fc89',
+    load: async () => ({
+      cpus: 8,
+      memTotalMb: 32013,
+      memAvailableMb: meminfoAvailableMb(fixture('meminfo-linux.txt')),
+      load: loadOf('linux', [0.42, 0.61, 0.58]),
+    }),
+    freeMb: () => 148000,
+    exists: file => file.replaceAll('\\', '/') === '/home/owner/.claude/.credentials.json',
+    launch: () => undefined,
+    piFound: () => false,
+    platform: 'linux',
+    arch: 'x64',
+    home: '/home/owner',
+    now: () => 1795210000000,
+    ...over,
+  }
+}
+
+describe('the status', () => {
+  test("the answer of 6.3, field for field, from a Linux node's facts", async () => {
+    let asked = ''
+    const status = createNodeStatus(
+      sources({
+        freeMb: dir => {
+          asked = dir
+          return 148000
+        },
+      }),
+    )
+    expect(await status.answer()).toEqual({
+      api: 1,
+      id: 'server-1',
+      version: '0.1.0',
+      commit: 'ee32fc89',
+      platform: 'linux',
+      arch: 'x64',
+      cpus: 8,
+      memTotalMb: 32013,
+      memAvailableMb: 21480,
+      load: [0.42, 0.61, 0.58],
+      sessions: { awake: 2, working: 1, asleep: 2 },
+      launches: 2,
+      workRootFreeMb: 148000,
+      profiles: [
+        { id: 'default', loggedIn: true, bundle: null },
+        { id: 'work', loggedIn: false, bundle: null },
+      ],
+      agents: ['claude'],
+      at: 1795210000000,
+    })
+    expect(asked.replaceAll('\\', '/')).toMatch(/\/home\/owner\/work$/)
+  })
+
+  test('macOS: memory from vm_stat; a profile without the file may still be logged in (the Keychain)', async () => {
+    const status = createNodeStatus(
+      sources({
+        platform: 'darwin',
+        arch: 'arm64',
+        load: async () => ({
+          cpus: 10,
+          memTotalMb: 16384,
+          memAvailableMb: vmStatAvailableMb(fixture('vm_stat-arm64.txt')),
+          load: loadOf('darwin', [1.2, 1.1, 1]),
+        }),
+      }),
+    )
+    const s = await status.answer()
+    expect(s?.memAvailableMb).toBe(6250)
+    expect(s?.load).toEqual([1.2, 1.1, 1])
+    expect(s?.profiles).toEqual([
+      { id: 'default', loggedIn: true, bundle: null },
+      { id: 'work', loggedIn: null, bundle: null },
+    ])
+  })
+
+  test('Windows: the free physical memory the system gives, and no load', async () => {
+    const win = JSON.parse(fixture('windows.json')) as { freemem: number; totalmem: number; loadavg: number[] }
+    const status = createNodeStatus(
+      sources({
+        platform: 'win32',
+        load: async () => ({
+          cpus: 16,
+          memTotalMb: bytesToMb(win.totalmem) ?? 0,
+          memAvailableMb: bytesToMb(win.freemem),
+          load: loadOf('win32', win.loadavg),
+        }),
+      }),
+    )
+    const s = await status.answer()
+    expect([s?.memTotalMb, s?.memAvailableMb, s?.load]).toEqual([32651, 8704, null])
+  })
+
+  test('the commit is read once, however often the status is asked', async () => {
+    let reads = 0
+    const status = createNodeStatus(
+      sources({
+        commit: async () => {
+          reads += 1
+          return 'abc12345'
+        },
+      }),
+    )
+    await status.answer()
+    await status.answer()
+    expect((await status.answer())?.commit).toBe('abc12345')
+    expect(reads).toBe(1)
+  })
+
+  test('no node in config.json (it went meanwhile): no answer, nothing read', async () => {
+    let read = false
+    const status = createNodeStatus(
+      sources({
+        node: () => null,
+        load: async () => {
+          read = true
+          return { cpus: 1, memTotalMb: 1, memAvailableMb: 1, load: null }
+        },
+      }),
+    )
+    expect(await status.answer()).toBeNull()
+    expect(read).toBe(false)
+  })
+})
+
+describe('its helpers', () => {
+  test("the agents: what the node's new-session window offers, by the board's own rule", () => {
+    const none = (): boolean => false
+    expect(agentsOf(undefined, none)).toEqual(['claude'])
+    expect(agentsOf(undefined, () => true)).toEqual(['claude', 'pi'])
+    expect(agentsOf({ pi: 'pi --model x' } as never, none)).toEqual(['claude', 'pi'])
+    // The config's own launcher starts every session: Claude Code.
+    expect(agentsOf({ command: 'my-launcher {cwd}' } as never, () => true)).toEqual(['claude'])
+  })
+
+  test('the work root under the home folder', () => {
+    expect(expandHome('~', '/home/owner')).toBe('/home/owner')
+    expect(expandHome('~/work', '/home/owner').replaceAll('\\', '/')).toMatch(/\/home\/owner\/work$/)
+  })
+
+  test('logged in: the credentials file; without it, unknown on macOS only', () => {
+    const none = (): boolean => false
+    expect(loggedIn('/p', 'linux', () => true)).toBe(true)
+    expect(loggedIn('/p', 'linux', none)).toBe(false)
+    expect(loggedIn('/p', 'win32', none)).toBe(false)
+    expect(loggedIn('/p', 'darwin', none)).toBeNull()
+    expect(loggedIn('/p', 'darwin', () => true)).toBe(true)
+  })
+})
