@@ -20,6 +20,7 @@
 //   board thread open <key>
 //   board thread import <task board file> [--lane <id>]
 //   board thread share <key> <name|team|channel> [--history]   a request the owner confirms (#394)
+//   board thread verdict <key> pass|fail|unsure [--file <report>] "<one line>"   the verifier's alone (#492)
 // <key>: a key (atlas-12), the first 8 characters of an id, or a bare number in the session's lane.
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -35,6 +36,7 @@ import {
   listThreads,
   mineIds,
   ThreadError,
+  verifyingThreads,
   watchesOf,
 } from '../adapters/work-thread-store.ts'
 import { KEPT_SUBS } from '../core/node-uplink.ts'
@@ -78,13 +80,14 @@ import {
   type Written,
   watch,
 } from '../services/work-threads.ts'
+import { giveVerdict } from '../services/work-verify.ts'
 
-export const THREAD_USAGE = `board thread new [--lane <id>] [--parent <key>] [--to <session>] [--doing] "<title>"
+export const THREAD_USAGE = `board thread new [--lane <id>] [--parent <key>] [--to <session>] [--doing] [--verify] [--accept "<check>"]... "<title>"
 board thread post <key> [--status next|doing|waiting|owner|done|dropped] [--summary "<line>"] [--waiting "<on what>"]
-                        [--file <path>]... [--link <url>]... [--reply <entry>] [--private] ["<text>"]
+                        [--file <path>]... [--link <url>]... [--reply <entry>] [--private] [--accept "<check>"]... ["<text>"]
 board thread done <key> ["<summary>"] [--file <path>]... [--link <url>]...
 board thread ask <key> "<question for the owner>"
-board thread set <key> [--title "<t>"] [--assignee <session|none>] [--lane <id>] [--parent <key|none>]
+board thread set <key> [--title "<t>"] [--assignee <session|none>] [--lane <id>] [--parent <key|none>] [--verify on|off]
 board thread show <key> [--last <n>] [--since <n>] [--full]
 board thread list [--mine | --lane <id> | --all] [--status <s>] [--done]
 board thread changes [--peek] [--all]
@@ -95,21 +98,27 @@ board thread link <key> | --base
 board thread open <key>
 board thread import <task board file> [--lane <id>]
 board thread share <key> <name|team|channel> [--history]
+board thread verdict <key> pass|fail|unsure [--file <report>] "<one line>"
   <key>: a key (atlas-12), the first 8 characters of an id, or a bare number in your lane. Every
   command takes --json. A thread's creator hears of its status changes, its assignee of the owner's
   answers: one line, "[board reminder from threads] atlas-13 done: <summary>", never its own changes.
   watch --owner: whatever starts or stops waiting on the owner, any lane, a card's board ask too, as
   "[board reminder from asks] anna asks the owner: <question> · ben: settled"; not your own.
   share asks the owner to share the thread with a teammate's board; on a shared thread every entry
-  that is not --private goes to them (or waits for the owner, as a team post of yours would).`
+  that is not --private goes to them (or waits for the owner, as a team post of yours would).
+  --verify (threads.verify on): a session's done is held until a verifier the board starts checks it
+  against the --accept lines; only that verifier gives the verdict, a pass with its report as --file.`
 
 /** The flags each command takes: with a value, and bare. `--json` and `--help` go with every one. */
 const FLAGS: Record<string, { values: readonly string[]; bare: readonly string[] }> = {
-  new: { values: ['--lane', '--parent', '--to'], bare: ['--doing'] },
-  post: { values: ['--status', '--summary', '--waiting', '--file', '--link', '--reply'], bare: ['--private'] },
+  new: { values: ['--lane', '--parent', '--to', '--accept'], bare: ['--doing', '--verify'] },
+  post: {
+    values: ['--status', '--summary', '--waiting', '--file', '--link', '--reply', '--accept'],
+    bare: ['--private'],
+  },
   done: { values: ['--summary', '--file', '--link', '--reply'], bare: ['--private'] },
   ask: { values: [], bare: [] },
-  set: { values: ['--title', '--assignee', '--lane', '--parent'], bare: [] },
+  set: { values: ['--title', '--assignee', '--lane', '--parent', '--verify'], bare: [] },
   show: { values: ['--last', '--since'], bare: ['--full'] },
   list: { values: ['--lane', '--status'], bare: ['--mine', '--all', '--done'] },
   changes: { values: [], bare: ['--peek', '--all'] },
@@ -119,6 +128,7 @@ const FLAGS: Record<string, { values: readonly string[]; bare: readonly string[]
   open: { values: [], bare: [] },
   import: { values: ['--lane'], bare: ['--todos'] },
   share: { values: [], bare: ['--history'] },
+  verdict: { values: ['--file'], bare: [] },
 }
 const EVERY = ['--json', '--help']
 
@@ -174,6 +184,11 @@ export interface ThreadCmdContext {
   findSession: (word: string) => Promise<Party | null>
   /** A session on the board by its key alone (an imported item's owner_id); null when none has it. */
   sessionByKey?: (key: string) => Promise<Party | null>
+  /**
+   * The session that runs the command itself (its own Claude session or pane), never the one
+   * --session names: a verdict is the verifier's own (#492). Null outside a session.
+   */
+  self?: () => Promise<string | null>
   /** Puts the question on the session's card, as `board ask` does. */
   setAsk?: (question: string) => void
   /** Raises the board's window on the thread `key` (#392: its page opens it); its address, or why not. */
@@ -494,7 +509,16 @@ class Run {
         const parent = parentWord ? this.thread(parentWord) : null
         const toWord = a.one('--to')
         const to = toWord ? await this.party(toWord, '--to') : null
-        const w = newThread(this.write, { lane, title, parent, to, doing: a.has('--doing') })
+        const accept = a.all('--accept')
+        const w = newThread(this.write, {
+          lane,
+          title,
+          parent,
+          to,
+          doing: a.has('--doing'),
+          ...(a.has('--verify') && { verify: true }),
+          ...(accept.length && { accept }),
+        })
         return this.wrote(w, w.head.assignee ? [partyName(w.head.assignee)] : [])
       }
       case 'post':
@@ -520,6 +544,7 @@ class Run {
           links: a.all('--link'),
           ...(reply && { replyTo: findEntry(this.db, head.id, reply).id }),
           ...(a.has('--private') && { private: true }),
+          ...(a.all('--accept').length && { accept: a.all('--accept') }),
         })
         const n = w.entry.files?.length ?? 0
         return this.wrote(w, n ? [`${n} ${n === 1 ? 'file' : 'files'}`] : [])
@@ -538,7 +563,11 @@ class Run {
         const parent = a.one('--parent')
         const title = a.one('--title')
         const lane = a.one('--lane')
+        const verify = a.one('--verify')
+        if (verify !== undefined && verify !== 'on' && verify !== 'off')
+          throw new Usage(`--verify is on or off, not "${verify}"`)
         const w = setFields(this.write, head, {
+          ...(verify !== undefined && { verify: verify === 'on' }),
           ...(title !== undefined && { title }),
           ...(assignee !== undefined && { assignee: await this.party(assignee, '--assignee') }),
           ...(lane !== undefined && { lane }),
@@ -586,6 +615,19 @@ class Run {
         if (this.json) this.out(JSON.stringify({ ok: true, thread: w.head, asked: to }))
         else this.out(`ok · ${w.head.key} · share with ${to} asked: the owner confirms on the board`)
         return
+      }
+      case 'verdict': {
+        const [key, outcome, ...words] = a.words
+        const head = this.thread(key)
+        if (outcome !== 'pass' && outcome !== 'fail' && outcome !== 'unsure')
+          throw new Usage(`usage: board thread verdict <key> pass|fail|unsure [--file <report>] "<one line>"`)
+        const w = giveVerdict(this.write, head, {
+          outcome,
+          line: words.join(' '),
+          files: a.all('--file'),
+          self: (await this.ctx.self?.().catch(() => null)) ?? null,
+        })
+        return this.wrote(w, [`verdict ${outcome}`])
       }
       default:
         throw new Usage(`no command "board thread ${sub}"`)
@@ -635,6 +677,7 @@ class Run {
         fileAt: f => filePath(f.ref, this.ctx.state),
         full,
         ...(sharingOf(head) && { shared: true }),
+        ...(head.proposed?.verify && !head.verify?.run && { verifiers: verifyingThreads(this.db).length }),
       }),
     )
   }

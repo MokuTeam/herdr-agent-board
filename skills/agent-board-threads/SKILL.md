@@ -66,6 +66,24 @@ The owner can share a thread with a teammate's board, the team or a channel. It 
 - When two boards made the same key, the other board's thread shows with its name after the key (`atlas-13@ben`): use it as shown.
 - A harness whose sessions cannot run a command gets the same two tools from `board mcp`, a stdio MCP server started as the session it writes for: `threads` reads (list, show, changes), `thread` writes (new, post, ask, set, watch), each answering the line the command prints.
 
+## Verified done
+
+On a thread that asks for verification (`verify on` in `show`), your `done` is held: the board
+starts a fresh verifier that checks the work against the acceptance lines (`accept:` in `show`) and
+the checklist, knowing nothing of your conversation. Write the done so a stranger can check it: what
+you changed, where (paths, record ids, the pull request), how you tested it, and what you could not
+do. A fail comes back to you as one line ("verification failed: ..."): read the reasons with
+`board thread show <key>`, fix, and say done again. The second fail in a row goes to the owner.
+You cannot turn verification off on a thread you hold or whose done is held.
+
+Handing work out: `board thread new --verify --accept "<what must be true>" ... "<title>"`, one
+`--accept` per check, each one checkable by someone who only sees the result. You hear "done
+(verified)" when it passes, nothing while it is held.
+
+If you are the verifier (your first message starts with `[board verify]`): change nothing, look at
+everything yourself, and end with exactly one `board thread verdict <key> pass --file <report> |
+fail | unsure "<line>"`.
+
 ## What the board does on its own
 
 - Who wrote an entry is set from where the write came from: a `board` command run in your session writes as you, never as the owner or another session.

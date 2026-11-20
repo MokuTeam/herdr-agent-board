@@ -107,6 +107,11 @@ export interface LaunchContext {
   /** The id of the session whose conversation it starts with (a fork), null for none. */
   readonly fork: string | null
   readonly pane: string | null
+  /**
+   * The board knows the session only by `sessionGiven` (a verifier, #492): the launcher starts Claude
+   * under that id or refuses before it opens anything. A node's start (#504) keeps today's way.
+   */
+  readonly exactSession?: boolean
 }
 
 /** What a launcher tells the board while it works, so the card can show it and go to it. */
@@ -248,6 +253,7 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
     async start(l, on) {
       const { args } = herdrAgent(spec, l.profileArgs)
       const chooses = picksSession(args)
+      if (l.exactSession && (kind !== 'claude' || chooses)) throw new LaunchError(t('verify.err.launcher'), 'launcher')
       // A session is resumed (or forked) by its id: not by another agent, nor by arguments that
       // pick one (launches.ts refuses it before the launch; said here too before a tab is opened).
       if ((l.resume || l.fork) && herdrCannotResume(spec, l.profileArgs))
@@ -325,6 +331,8 @@ export function commandLauncher(spec: LaunchSpec): Launcher {
     takesModel: usesPlaceholder(template, 'model'),
     describe: () => ({ kind: 'command', name: launcherLabel(template) }),
     async start(l, on) {
+      if (l.exactSession && !usesPlaceholder(template, 'sessionId'))
+        throw new LaunchError(t('verify.err.launcher'), 'launcher')
       const vars = {
         name: l.name,
         label: l.label,
@@ -389,6 +397,7 @@ export function spawnAgentLauncher(spec: LaunchSpec, mark = false): Launcher {
       const line = pi
         ? piCommand(spec.pi)
         : [...(l.profileCommand ?? claudeCommand(spec.claude, spec.args)), ...l.profileArgs]
+      if (l.exactSession && (pi || choosesSession(line))) throw new LaunchError(t('verify.err.launcher'), 'launcher')
       let sessionId: string | null = l.resume
       if (!l.resume && (l.fork || !choosesSession(line))) {
         sessionId = l.sessionGiven ?? randomUUID()

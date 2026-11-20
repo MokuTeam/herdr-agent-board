@@ -2077,6 +2077,8 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
     actor: key ? { kind: 'session', key, name } : { kind: 'owner' },
     lane,
     idle,
+    // The session that runs it, for a verdict (#492): its own, never the one --session names; asked only then.
+    self: async () => (target ? ((await ownSession())?.key ?? null) : (s?.key ?? null)),
     findSession: async word => {
       const w = word.toLowerCase()
       const items = (await sessions()).filter(i =>

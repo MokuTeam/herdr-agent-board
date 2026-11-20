@@ -99,7 +99,7 @@ export function sharedOrder(entries: readonly ThreadEntry[], me: string): Thread
 }
 
 /** A thread before its first entry: what folding its feed starts from (its id, key, lane, scope and creator kept). */
-export const blankHead = (h: ThreadHead): ThreadHead => ({
+export const blankHead = ({ verify: _verify, ...h }: ThreadHead): ThreadHead => ({
   ...h,
   title: '',
   summary: '',

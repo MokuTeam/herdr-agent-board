@@ -30,6 +30,7 @@ import { THREAD_STRINGS } from './thread-strings.ts'
 import { TIME_STRINGS } from './time-strings.ts'
 import { TODO_STRINGS } from './todo-strings.ts'
 import { TURN_STRINGS } from './turn-strings.ts'
+import { VERIFY_STRINGS } from './verify-strings.ts'
 import { WAKE_STRINGS } from './wake-strings.ts'
 
 export type Entry = string | string[]
@@ -1428,6 +1429,7 @@ for (const code of Object.keys(CALL_STRINGS) as Lang[]) Object.assign(STRINGS[co
 // And tasks (#202).
 for (const code of Object.keys(TODO_STRINGS) as Lang[]) Object.assign(STRINGS[code], TODO_STRINGS[code])
 for (const code of Object.keys(THREAD_STRINGS) as Lang[]) Object.assign(STRINGS[code], THREAD_STRINGS[code])
+for (const code of Object.keys(VERIFY_STRINGS) as Lang[]) Object.assign(STRINGS[code], VERIFY_STRINGS[code])
 for (const code of Object.keys(SECRET_STRINGS) as Lang[]) Object.assign(STRINGS[code], SECRET_STRINGS[code])
 // And the peer network (#231).
 for (const code of Object.keys(TEAM_STRINGS) as Lang[]) Object.assign(STRINGS[code], TEAM_STRINGS[code])

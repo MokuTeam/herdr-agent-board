@@ -373,11 +373,13 @@ export function outgoing(
   const upTo = all.slice(0, all.findIndex(e => e.id === entry.id) + 1)
   const after = foldShared(head, upTo.length ? upTo : [entry], me)
   const before = foldShared(head, upTo.slice(0, -1), me)
+  // A done held for a verifier (#492) goes as a proposal does: its note, not its status or summary.
   const proposed =
-    entry.author.kind === 'session' &&
-    entry.set?.status === 'done' &&
-    before.status === 'owner' &&
-    after.status === 'owner'
+    entry.set?.hold === true ||
+    (entry.author.kind === 'session' &&
+      entry.set?.status === 'done' &&
+      before.status === 'owner' &&
+      after.status === 'owner')
   const set = wireSet(entry.set, me, proposed)
   // The head the peers hold right after it (#549): the entries before it but this board's own
   // private ones and those that did not go out (held, discarded, refused: #556), whose fields stay

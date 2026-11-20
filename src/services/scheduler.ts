@@ -70,6 +70,7 @@ import { collect } from './board.ts'
 import type { Deps } from './deps.ts'
 import { moveAsleep, moveTarget } from './move.ts'
 import { currentWakeMode } from './wake/mode.ts'
+import type { Verifier } from './work-verify.ts'
 
 // A run on its way (waking a session takes up to three minutes) holds its claim this long.
 const CLAIM_MS = 5 * 60_000
@@ -129,10 +130,13 @@ export function startScheduler({
   deps,
   onChange = () => {},
   remote,
+  verify,
 }: {
   deps: Deps
   onChange?: () => void
   remote?: () => RemoteDelivery | null
+  /** Verified done (#492, services/work-verify.ts): its sweep on every tick, its `verify` entries. */
+  verify?: Verifier
 }): {
   stop(): void
 } {
@@ -165,6 +169,9 @@ export function startScheduler({
         return null
       })
       if (archived?.closed || archived?.kept) onChange()
+      // Held dones get their verifiers, failed launches go to the owner (#492): only while threads.verify is set.
+      if (verify && threadsConfig(cfg.threads)?.verify)
+        await verify.sweep(() => collect(deps)).catch((err: unknown) => log(`verify: ${messageOf(err)}`))
       const now = Date.now()
       // A run that waits for its session is tried again once a tick, not on every file change; a
       // restart herdr-wake refused, not before its retry time.
@@ -185,6 +192,19 @@ export function startScheduler({
         if (!workdeskDue(entry)) continue
         if (delivered.get(entry.id) === entry.next) {
           finish(entry)
+          continue
+        }
+        // A verifier's time limit, then its archive (#492): the board's own, nothing is typed.
+        if (entry.kind === 'verify') {
+          if (!verify || flying.has(entry.key)) continue
+          flying.add(entry.key)
+          verify
+            .due(entry, items)
+            .catch(err => log(`verify ${entry.id}: ${messageOf(err)}`))
+            .finally(() => {
+              flying.delete(entry.key)
+              onChange()
+            })
           continue
         }
         // Another device's session (#501): through its node, never this computer's herdr.

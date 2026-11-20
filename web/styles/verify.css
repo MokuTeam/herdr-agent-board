@@ -1,0 +1,9 @@
+/* Verified done in the threads panel (#492, components/threads/ThreadVerify.tsx): a sheet of its own. */
+.wt-verify { display: flex; flex-direction: column; gap: 4px; padding: 9px 12px; border-radius: 12px; background: var(--fill-2); box-shadow: inset 3px 0 0 var(--blue); font-size: 12.5px; }
+.wt-verify[data-on='false'] { box-shadow: inset 3px 0 0 var(--gray); }
+.wt-verify p { margin: 0; }
+.wt-verify b { font-weight: 600; }
+.wt-verify-meta { color: var(--label-2); }
+.wt-verify-accept { margin: 0; padding-left: 18px; }
+.wt-verify-accept li { overflow-wrap: anywhere; }
+.wt-verify-run { color: var(--label-2); font-style: italic; }

@@ -213,6 +213,78 @@ ok · atlas-13 · done · 1 file
 The report file is 2,000 tokens long. It went from the worker to the board. The master's context
 grew by the last line.
 
+### 3.8 Verified done (#492)
+
+A session that hands work out cannot trust "done" on the worker's word, and has no context of its own
+to doubt it (#308: a master accepted work that duplicated an open pull request). Behind
+`threads.verify`, a thread can ask for a fresh verifier before anyone hears it is done.
+
+**Data.** The head gains `verify` (column `threads.verify`, JSON, left out of the head while NULL):
+`on`, `lane` (turned on by `verify.lanes`), `accept` (the acceptance lines), `run` (the verifier now
+running: its Claude session id, name, start and time limit), `fails` (in a row) and `last` (the last
+verdict). `Proposed` gains `verify: true`: a done held for verification, not a proposal to the owner.
+Every change is an entry, folded by `applyEntry`: `set.verify`, `set.accept`, `set.hold` (with a
+`done`: the service decided to hold it, the fold follows, so a board whose config changed later folds
+the same feed the same way), `set.verifier` (started, or null) and `set.verdict` (`pass`, `fail`,
+`unsure`, `timeout`, `error`, with the status it leads to). A restart of the board loses nothing.
+
+**Holding.** A session's done is held while `threads.verify` is set, the thread asks for it, is open
+and is not waiting on the owner (there the owner is the gate: the proposal of 3.5). The owner's done is
+never held, and the owner may confirm a held done or keep it open (it goes back to `doing`). The gate
+is not lifted by the session it gates: `set --verify off` is refused for the assignee and for the
+session whose done is held, and on a thread its lane put verification on, for every session.
+
+**Starting.** The web board's scheduler runs a sweep each tick while `threads.verify` is set: a held
+done with no verifier gets one while fewer than `max` (2) run. The board mints a Claude session id,
+writes the `verifier` entry with it and the deadline, adds a schedule entry of kind `verify` under
+that id, then starts the session as a fork is started (`launches.start` with `sessionId`): the
+worker's folder, lane and workspace, the configured model, the brief as its first message. A launcher
+that cannot start Claude under that id refuses before it opens anything. The verifier is always Claude
+Code: a Claude worker's verifier runs in the worker's profile (its card, or its archive record), a pi
+or Codex worker's in `verify.profile`, else the one profile the board shows. A start that is refused
+or a launch that fails later sends the thread to the owner (`error`). The board's own entries about a
+verifier carry its name and id as their author.
+
+**The brief** (core/work-verify.ts, at most 12,000 characters): who it is and the rule (it changes
+nothing: no edits, commits, pushes or thread posts; single test files, never a whole suite on a shared
+machine unless the checklist says so), the thread (title, acceptance lines, the held done's words, its
+files by path, links, the last entries), the time limit, the three verdict commands, then the
+checklist: `docs/agents/verify-checklist.md` (general: evidence the verifier looked at itself for each
+acceptance line, each claim checked against the thing it names, the whole task, nothing changed
+outside it, what could not be checked said plainly), or the file `verify.brief` names, per lane if an
+object (`docs/agents/verify-checklist-code.md` holds #308's list for code). When #488's case brief
+lands, its block replaces the thread part.
+
+**The verdict.** `board thread verdict <key> pass|fail|unsure [--file report.md] "<one line>"` is
+accepted only from the session the thread names in `verify.run`, as the command's own session
+(`CLAUDE_CODE_SESSION_ID` or its pane, never `--session`). This keeps a confused agent from closing
+its own work; it is no wall against a hostile process on the same computer. A pass needs its report and
+closes the thread done with the held done's words as its summary. A fail sends it back to `doing`; the
+second in a row goes to the owner. `unsure` goes to the owner and is no fail. Anything else the
+verifier writes is refused. The verdict moves the `verify` entry to now.
+
+**The time limit and the archive** are that one schedule entry, which the scheduler hands to the
+verifier side before anything is typed: due while the thread still waits on that verifier (30 minutes
+by default), the thread goes to the owner (`timeout`); after the verdict the verifier is archived once
+it is free (tried each minute, half an hour at most). The sweep puts back the entry of a running
+verifier whose entry went, and moves to now the entry of one whose thread no longer waits on it.
+
+**Who hears what.** A held done is no news (level `all`): a `status` watcher hears nothing until the
+verdict; its writer gets an `answers` watch. A fail is the writer's, as an answer is: "atlas-13
+verification failed: <line>. Reasons: board thread show atlas-13", and nobody else's. A pass is a
+status change: "atlas-13 done (verified): <summary>". A fail that reaches the owner, `unsure`, a
+timeout and an error are status changes to the owner, with what it waits on.
+
+**A shared thread.** The held done goes to the peers as a proposal to the owner does (its note, not its
+status or summary), so a teammate's board shows the thread still `doing`. The verifier's start, a
+fail, `unsure`, a timeout and an error are private; a pass goes out as a plain `done` with the
+summary, the entry main would have sent at once, later. A verdict as such does not cross the hub.
+
+**With the key absent** `--verify`, `--accept`, `set --verify` and `verdict` are refused
+(`verify_off`), no done is held, the scheduler reads nothing for it, and every head, line and payload
+is what it was. A thread that asks for verification when the key is removed keeps a done held then:
+the owner confirms it on the panel.
+
 ## 4. Storage and sync
 
 ### 4.1 On this board

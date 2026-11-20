@@ -2286,6 +2286,31 @@ runs on every prompt, the tables in `board.db` stay empty, and no task board is 
 sharing a thread with a teammate (phase 4 of the design) and MokuPilot's own side of phase 3 (in its
 repository).
 
+**Verified done** (#492). With `"threads": { "verify": { "model": "opus" } }` a thread can ask for
+verification: `board thread new --verify`, `board thread set <key> --verify on|off`, or
+`"lanes": ["<id>"]` for every new thread of a lane. `board thread post <key> --accept "<check>"` adds an
+acceptance line (what must be true for done; ten at most). A session's `done` on such a thread is
+held: the thread stays open, its head says "done proposed, verification running", and nobody who
+watches it hears "done" yet. Within a tick the web board starts a fresh verifier, as `board fork`
+starts a session: a Claude session in the worker's folder, lane and workspace, on the configured
+model, under a session id the board chose and wrote into the thread first. Its first message is a
+fixed brief: the thread (title, acceptance lines, the held done's words, files, links, the last
+entries), a checklist (`docs/agents/verify-checklist.md`, general; `"brief"` names another file,
+or one per lane, such as `docs/agents/verify-checklist-code.md` for code), and the rule that it
+changes nothing and ends with one verdict. Only that session, from itself, runs
+`board thread verdict <key> pass --file <report> "<line>"` (a pass needs its report),
+`fail "<line>"` (back to the worker, who hears one line; the second fail in a row goes to you) or
+`unsure "<what it could not check>"` (to you, no fail). A pass closes the thread and its watchers
+hear "done (verified)". No verdict within `"limitMin"` (30), or a verifier that could not start, and
+the thread comes to you with the reason. Two verifiers run at once at most (`"max"`); the others wait
+their turn. After its verdict the verifier is archived once it is free. You can confirm a held done
+or keep it open (back to its worker) on the panel at any time. The verifier is always Claude Code:
+for a Claude worker in the worker's profile, for a pi or Codex worker in `"profile"`, else the one
+profile the board shows. A launcher that cannot start Claude under a given session id (`launch.agent`
+that is not Claude, or whose arguments pick the session; a `launch.command` without `{sessionId}`)
+cannot start verifiers: the thread comes to you saying so. With the key absent, a done is a done as
+before and nothing is read for it.
+
 On the page, while threads are on, a **Threads** pill beside Tasks counts what needs you and opens
 the threads panel: the list by status on the left, one thread on the right (one screen at a time
 in a narrow panel and on the phone). There you change a thread's status and who holds it, add a

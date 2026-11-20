@@ -32,6 +32,7 @@ import { TeamComposer } from '../team/TeamComposer.tsx'
 import { TeamMessage } from '../team/TeamMessage.tsx'
 import { KeyText, MiniRow, StatusDot, statusWord, WhoChip } from './bits.tsx'
 import { ShareButton, ThreadShare, useShareable } from './ThreadShare.tsx'
+import { ThreadVerify } from './ThreadVerify.tsx'
 
 /** The ops that share, unshare, take or send (#394): the owner's, through the passkey when it is on. */
 const SHARE_OPS = new Set(['share', 'unshare', 'decline-share', 'take', 'decline', 'history', 'send'])
@@ -310,6 +311,7 @@ export function ThreadPane({ view, onOpen, onBack }: ThreadPaneProps) {
           <ShareButton head={head} busy={busy} onPicking={setPicking} />
         </div>
         <ThreadShare head={head} busy={busy} act={write} picking={picking} onPicking={setPicking} team={team} />
+        <ThreadVerify head={head} />
         {head.waitingOn && (head.status === 'waiting' || head.status === 'owner') && !head.proposed && (
           <p className="wt-summary wt-waiting">
             <KeyText text={head.waitingOn} onOpen={onOpen} />
@@ -323,7 +325,8 @@ export function ThreadPane({ view, onOpen, onBack }: ThreadPaneProps) {
         {head.proposed && (
           <div className="wt-proposed">
             <p>
-              <b>{partyLabel(head.proposed.by, t('wt.you'))}</b> {t('wt.proposed', { why: head.proposed.why })}
+              <b>{partyLabel(head.proposed.by, t('wt.you'))}</b>{' '}
+              {t(head.proposed.verify ? 'wt.verify.held' : 'wt.proposed', { why: head.proposed.why })}
             </p>
             <button
               type="button"
@@ -379,7 +382,10 @@ export function ThreadPane({ view, onOpen, onBack }: ThreadPaneProps) {
                   ) : (
                     <>
                       <b>{partyLabel(e.author, t('wt.you'))}</b>{' '}
-                      {t(`wt.did.${item.did}`, { status: statusWord(item.to, t) })}
+                      {t(`wt.did.${item.did}`, {
+                        status: statusWord(item.to, t),
+                        verdict: e.set?.verdict ? t(`wt.verdict.${e.set.verdict}`) : '',
+                      })}
                       {e.set?.summary && item.did !== 'shared' ? ': ' : ''}
                       {e.set?.summary && item.did !== 'shared' && <KeyText text={e.set.summary} onOpen={onOpen} />}
                     </>

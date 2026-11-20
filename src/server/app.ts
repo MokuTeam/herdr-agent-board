@@ -56,6 +56,7 @@ import { workdeskConfig } from '../core/workdesk.ts'
 import { workdeskEventsConfig } from '../core/workdesk-events.ts'
 import { teamDesktop } from '../integrations/team-toast.ts'
 import { createAccess } from '../services/access.ts'
+import { askArchive } from '../services/archive.ts'
 import { backupView, startBackups } from '../services/backup.ts'
 import { createBackupServer } from '../services/backup-server.ts'
 import { createBoardEvents } from '../services/board-events.ts'
@@ -103,6 +104,7 @@ import {
 import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
 import { createWorkHub, type WorkHub } from '../services/work-hub.ts'
 import { keepThreadsDb, threadsPayload, withThreadsDb } from '../services/work-threads.ts'
+import { createVerifier } from '../services/work-verify.ts'
 import { createWorkdeskDialog } from '../services/workdesk-dialog.ts'
 import { runWorkdeskEvents, workdeskEventHandlers } from '../services/workdesk-events.ts'
 import { createWorkdeskWatcher } from '../services/workdesk-watcher.ts'
@@ -1229,9 +1231,19 @@ export async function startServer({
   ]
   refresh()
   // The port makes it one board per machine, so one scheduler; claims cover an overlap.
+  // Verified done (#492): the scheduler starts verifiers as a fork is started, and archives them after.
+  const verifier = createVerifier({
+    cfg,
+    log,
+    start: (body, items, options) => launches.start(body, items, options),
+    launchState: id => launches.state(id),
+    workspaces: async () => (await workspaceList(8000)).map(w => ({ id: w.id, label: w.label ?? '' })),
+    archive: async item => ((await askArchive(deps, item, { by: 'agent' })).ok ? 'ok' : 'busy'),
+    withDb: fn => withThreadsDb(false, fn),
+  })
   // A reminder for a node's card goes through its node (#501): asked only for a key with a device's
   // prefix, which exists only with `nodes`.
-  const scheduler = startScheduler({ deps, onChange: refresh, remote: () => nodeProxy })
+  const scheduler = startScheduler({ deps, onChange: refresh, remote: () => nodeProxy, verify: verifier })
   workdesk.configChanged()
   workdeskDialog.configChanged()
   void configureWorkdeskStream()

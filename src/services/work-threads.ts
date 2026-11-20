@@ -54,6 +54,8 @@ import { agentBoardOf, isMirrored } from '../core/thread-import.ts'
 import type { Config } from '../core/types.ts'
 import { safeName } from '../core/upload-name.ts'
 import {
+  ACCEPT_LINE_MAX,
+  ACCEPT_MAX,
   applyEntry,
   CHILDREN_MAX,
   cleanText,
@@ -206,7 +208,16 @@ const sessionWatch = (p: Party, target: string, what: WatchWhat): Omit<Watch, 's
 /** `board thread new`: a thread in `lane`, `next` unless it is given to someone or started. */
 export function newThread(
   ctx: ThreadsCtx,
-  input: { lane: string; title: string; parent?: ThreadHead | null; to?: Party | null; doing?: boolean },
+  input: {
+    lane: string
+    title: string
+    parent?: ThreadHead | null
+    to?: Party | null
+    doing?: boolean
+    /** Verified done (#492): the thread asks for it, and its acceptance lines. */
+    verify?: boolean
+    accept?: readonly string[]
+  },
 ): Written {
   mayWrite(ctx)
   const lane = String(input.lane ?? '').toLowerCase()
@@ -214,6 +225,10 @@ export function newThread(
   const title = titleOf(input.title)
   if (input.parent) parentFor(ctx, input.parent)
   const status: ThreadStatus = input.doing || input.to ? 'doing' : 'next'
+  // A lane in verify.lanes: its new threads ask for verification, which only the owner turns off.
+  const byLane = !!ctx.cfg.verify?.lanes.includes(lane)
+  if ((input.verify || input.accept?.length) && !ctx.cfg.verify) verifyOff()
+  const accept = acceptLines(input.accept ?? [], 0)
   const done = ctx.db.write(byOf(ctx.actor), tx => {
     const made = createThread(tx, {
       lane,
@@ -223,7 +238,16 @@ export function newThread(
       at: ctx.now,
       assignee: input.to ?? null,
       parent: input.parent?.id ?? null,
+      ...((input.verify || byLane) && { verify: { on: true, lane: byLane && !input.verify } }),
     })
+    // Acceptance lines given with it: an entry each, by its creator (#492).
+    for (const line of accept)
+      made.head = appendEntry(tx, made.head.id, {
+        at: ctx.now,
+        author: ctx.actor,
+        type: 'note',
+        set: { accept: line },
+      }).head
     // The creator hears how it goes; the assignee hears the owner's answers to its questions.
     const own = sessionWatch(ctx.actor, made.head.id, 'status')
     if (own) putWatch(tx, own, ctx.now, true)
@@ -249,6 +273,41 @@ export interface PostInput {
   set?: EntrySet
   /** How the entry starts on the hub's way (#394): `queued` on a shared thread unless private. */
   out?: EntryOut
+  /** Acceptance lines to add (#492): one entry carries one; more than one: an entry each after it. */
+  accept?: readonly string[]
+}
+
+/** Verified done is off on this board (#492). */
+function verifyOff(): never {
+  throw new ThreadError('verify_off', 'verification is off on this board (threads.verify in config.json)')
+}
+
+/** Acceptance lines as a thread keeps them: one line each, refused when too long or too many. */
+function acceptLines(raw: readonly string[], had: number): string[] {
+  const lines = raw.map(l => oneLine(l, 10_000)).filter(Boolean)
+  for (const l of lines)
+    if (l.length > ACCEPT_LINE_MAX)
+      throw new ThreadError('accept_long', `an acceptance line has ${l.length} characters; ${ACCEPT_LINE_MAX} at most`)
+  if (had + lines.length > ACCEPT_MAX)
+    throw new ThreadError('accept', `${had + lines.length} acceptance lines; ${ACCEPT_MAX} at most`)
+  return lines
+}
+
+/**
+ * Whether a done is held for a verifier (#492): a session's, on a thread that asks for verification,
+ * while the board verifies (threads.verify) and the thread is open and not waiting on the owner
+ * (there the owner is the gate: today's proposal). The owner's own done is never held.
+ */
+export function holdsDone(ctx: Pick<ThreadsCtx, 'cfg' | 'actor'>, head: ThreadHead, set: EntrySet): boolean {
+  return (
+    set.status === 'done' &&
+    set.verdict === undefined &&
+    ctx.actor.kind === 'session' &&
+    !!ctx.cfg.verify &&
+    !!head.verify?.on &&
+    isOpen(head.status) &&
+    head.status !== 'owner'
+  )
 }
 
 const URL_LIKE = /^https?:\/\/\S+$/i
@@ -325,6 +384,16 @@ export function postEntry(ctx: ThreadsCtx, head: ThreadHead, input: PostInput): 
   const set: EntrySet = { ...input.set }
   if (input.status !== undefined) set.status = input.status
   if (input.summary !== undefined) set.summary = lineOf(input.summary, SUMMARY_MAX, 'summary')
+  if (input.accept?.length && !ctx.cfg.verify) verifyOff()
+  // The verifier changes nothing (#492): its verdict is all it writes (the board's entries about it carry its name too).
+  if (isSession(ctx.actor, head.verify?.run?.key ?? '') && set.verdict === undefined && set.verifier === undefined)
+    throw new ThreadError(
+      'verifier',
+      `the verifier of ${head.key} writes nothing but its verdict: board thread verdict`,
+    )
+  const [accept, ...moreAccept] = acceptLines(input.accept ?? [], head.verify?.accept.length ?? 0)
+  if (accept) set.accept = accept
+  if (holdsDone(ctx, head, set)) set.hold = true
   notMirrored(ctx, head, input.waitingOn !== undefined ? { ...set, waitingOn: input.waitingOn } : set)
   if (input.waitingOn !== undefined) {
     set.waitingOn = lineOf(input.waitingOn, WAITING_MAX, 'waiting')
@@ -367,8 +436,20 @@ export function postEntry(ctx: ThreadsCtx, head: ThreadHead, input: PostInput): 
         ...(input.private && { private: true }),
         ...(out && { out }),
       }
-      const r = appendEntry(tx, head.id, entryInput, me)
+      let r = appendEntry(tx, head.id, entryInput, me)
+      for (const line of moreAccept) {
+        const more = appendEntry(
+          tx,
+          head.id,
+          { at: ctx.now, author: ctx.actor, type: 'note', set: { accept: line } },
+          me,
+        )
+        r = { ...r, head: more.head }
+      }
       const heads = [r.head]
+      // A held done (#492): its writer hears the verdict that sends it back.
+      const held = set.hold && sessionWatch(ctx.actor, head.id, 'answers')
+      if (held) putWatch(tx, held, ctx.now, true)
       // A new assignee hears the owner's answers to its questions.
       const theirs = set.assignee && sessionWatch(set.assignee, head.id, 'answers')
       if (theirs) putWatch(tx, theirs, ctx.now, true)
@@ -409,9 +490,16 @@ export function askOwner(ctx: ThreadsCtx, head: ThreadHead, question: string): W
 export function setFields(
   ctx: ThreadsCtx,
   head: ThreadHead,
-  input: { title?: string; assignee?: Party | null; lane?: string; parent?: ThreadHead | null },
+  input: { title?: string; assignee?: Party | null; lane?: string; parent?: ThreadHead | null; verify?: boolean },
 ): Written {
   const set: EntrySet = {}
+  if (input.verify !== undefined) {
+    if (!ctx.cfg.verify) verifyOff()
+    if (!input.verify) mayLiftGate(ctx.actor, head)
+    if (!!head.verify?.on !== input.verify) set.verify = input.verify
+    else if (!Object.keys(input).some(k => k !== 'verify'))
+      throw new ThreadError('same', `${head.key} has verify ${input.verify ? 'on' : 'off'} already`)
+  }
   if (input.title !== undefined) set.title = titleOf(input.title)
   if (input.assignee !== undefined) set.assignee = input.assignee
   if (input.lane !== undefined) {
@@ -424,8 +512,21 @@ export function setFields(
     set.parent = input.parent?.id ?? null
   }
   if (!Object.keys(set).length)
-    throw new ThreadError('empty', 'nothing to set: --title, --assignee, --lane or --parent')
+    throw new ThreadError('empty', 'nothing to set: --title, --assignee, --lane, --parent or --verify')
   return postEntry(ctx, head, { set })
+}
+
+/**
+ * The gate is not lifted by the session it gates (#492): verify off is refused for the thread's
+ * assignee and for the session whose done is held, and on a thread its lane put verification on,
+ * for every session: there only the owner turns it off.
+ */
+function mayLiftGate(actor: Party, head: ThreadHead): void {
+  if (actor.kind !== 'session') return
+  if (head.verify?.lane)
+    throw new ThreadError('owner_only', `${head.key} is verified because of its lane: only the owner turns that off`)
+  if (isSession(head.assignee, actor.key) || isSession(head.proposed?.by, actor.key))
+    throw new ThreadError('owner_only', `${head.key}: the session it verifies does not turn verification off`)
 }
 
 // ------------------------------------------------------------------ watches
@@ -503,7 +604,7 @@ export function carryWatches(
 // ------------------------------------------------------------------ what a session hears
 
 /** A thread before its first entry: what folding its feed starts from. */
-const blankOf = (h: ThreadHead): ThreadHead => ({
+const blankOf = ({ verify: _verify, ...h }: ThreadHead): ThreadHead => ({
   ...h,
   title: '',
   summary: '',
@@ -519,6 +620,8 @@ const blankOf = (h: ThreadHead): ThreadHead => ({
 /** The least a watch must hear for this entry to reach it. */
 function entryLevel(e: ThreadEntry, before: ThreadHead | null, after: ThreadHead): number {
   if (e.type === 'answer') return LEVEL.answers
+  // A done held for a verifier (#492) is no news yet: nobody hears "done" before the verdict.
+  if (e.set?.hold) return LEVEL.all
   const proposed = after.proposed !== null && after.proposed !== (before?.proposed ?? null)
   if (e.closed || statusChanged(before, after) || proposed) return LEVEL.status
   if (e.type === 'ask') return LEVEL.asks
@@ -575,17 +678,21 @@ export function heardSince(db: BoardDb, session: string, since: number, until: n
     const heard: ThreadEntry[] = []
     let status = false
     let ask: string | undefined
+    let failed: string | undefined
     let closed: number | undefined
     let local = saidBy === null || isLocal(saidBy)
     for (const e of list) {
       const st = states.get(e.id)
-      const level = st ? entryLevel(e, st.before, st.after) : LEVEL.all
+      // A failed verification (#492) is the held done's writer's to hear, as an answer is.
+      const fails = e.set?.verdict === 'fail' && isSession(st?.before?.proposed?.by, session)
+      const level = fails ? LEVEL.answers : st ? entryLevel(e, st.before, st.after) : LEVEL.all
       const by = ws.filter(w => e.seq > w.since && (all || LEVEL[w.what] >= level))
       if (!by.length) continue
       for (const w of by) matched.add(w)
       heard.push(e)
-      if (level <= LEVEL.status) status = true
+      if (level <= LEVEL.status && !fails) status = true
       if (e.type === 'ask') ask = e.text
+      if (fails) failed = e.text
       if (e.closed) closed = e.closed
       if (!isLocal(e.author)) local = false
     }
@@ -595,6 +702,7 @@ export function heardSince(db: BoardDb, session: string, since: number, until: n
       head,
       status,
       ...(ask !== undefined && { ask: oneLine(ask, SUMMARY_MAX) }),
+      ...(failed !== undefined && { failed: oneLine(failed, SUMMARY_MAX) }),
       ...(closed && { closed }),
       entries: heard.length,
       local,
@@ -902,8 +1010,11 @@ export function confirmClose(ctx: ThreadsCtx, head: ThreadHead): Written {
   return postEntry(ctx, head, { status: 'done', ...(summary && { summary }) })
 }
 
-/** The owner keeps a proposed close open: the thread stays with the owner, the proposal goes. */
+/**
+ * The owner keeps a proposed close open: the thread stays with the owner, the proposal goes. A done
+ * held for a verifier (#492) goes back to its worker instead: `doing`, its verifier's word no longer counts.
+ */
 export function keepOpen(ctx: ThreadsCtx, head: ThreadHead): Written {
   if (!head.proposed) throw new ThreadError('no_proposal', `nobody proposed ${head.key} done`)
-  return postEntry(ctx, head, { status: 'owner' })
+  return postEntry(ctx, head, { status: head.proposed.verify ? 'doing' : 'owner' })
 }
