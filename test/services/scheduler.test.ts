@@ -175,6 +175,88 @@ describe('startScheduler', () => {
     assert.equal(cron.pendingSince, undefined)
   })
 
+  test('reminders due for one session in one minute go as one prompt, a line each (#306)', async () => {
+    const box = await sandbox()
+    herdrWith(box, 'idle')
+    // A minute that is over, so none of them is late; one in the minute before goes on its own.
+    const minute = Math.floor((Date.now() - 60_000) / 60_000) * 60_000
+    const at = (ms: number) => ({ at: minute + ms, next: minute + ms, created: minute + ms })
+    put(box, { id: 'abab01', text: 'check the CI run', ...at(0) })
+    put(box, { id: 'abab02', text: 'ping anna about 50% of the sheet', ...at(10_000) })
+    put(box, { id: 'abab03', text: 'проверить отчёт', from: { key: 's9', name: 'ben atlas' }, ...at(20_000) })
+    put(box, { id: 'abab04', text: 'the minute before', ...at(-60_000) })
+    await scheduler(box)
+    await until(() => runs(box).length === 4, 12_000)
+    await sleep(400)
+    const [before, joined] = prompts(box)
+    expect(before).toMatch(/^\[board reminder(; .+)?\] the minute before$/)
+    assert.equal(
+      joined,
+      [
+        '[board reminder] check the CI run',
+        '[board reminder] ping anna about 50% of the sheet',
+        '[board reminder from ben atlas] проверить отчёт',
+      ].join('\n'),
+    )
+    assert.equal(prompts(box).length, 2)
+    assert.ok(runs(box).every(r => r.result === 'sent'))
+    assert.deepEqual(
+      runs(box)
+        .map(r => r.id)
+        .sort(),
+      ['abab01', 'abab02', 'abab03', 'abab04'],
+    )
+    for (const id of ['abab01', 'abab02', 'abab03', 'abab04']) assert.equal(read(box, id), null)
+
+    // Two in one minute: one prompt.
+    const two = await sandbox()
+    herdrWith(two, 'idle')
+    put(two, { id: 'acac01', text: 'first', ...at(0) })
+    put(two, { id: 'acac02', text: 'second', ...at(0) })
+    await scheduler(two)
+    await until(() => runs(two).length === 2, 12_000)
+    await sleep(400)
+    assert.deepEqual(prompts(two), ['[board reminder] first\n[board reminder] second'])
+  })
+
+  test('cron entries, --idle ones beside plain ones and another session go on their own (#306)', async () => {
+    const box = await sandbox()
+    twoSessions(box, 's2')
+    const minute = Math.floor((Date.now() - 60_000) / 60_000) * 60_000
+    const at = { next: minute, created: minute }
+    put(box, { id: 'adad01', text: 'plain', at: minute, ...at })
+    put(box, { id: 'adad02', text: 'hourly', cron: '* * * * *', ...at })
+    put(box, { id: 'adad03', text: 'when free', idle: true, at: minute, ...at })
+    put(box, { id: 'adad04', key: 's2', name: 'Other', text: 'for the other one', at: minute, ...at })
+    await scheduler(box)
+    await until(() => prompts(box).length === 4 && runs(box).length === 4, 12_000)
+    await sleep(400)
+    const got = prompts(box)
+    assert.equal(got.length, 4)
+    assert.ok(got.every(p => !p.includes('\n')))
+    assert.ok(got.includes('[board reminder] plain'))
+    assert.ok(got.includes('[board reminder] when free'))
+    assert.ok(got.includes('[board reminder] for the other one'))
+    assert.ok(got.some(p => /^\[board schedule adad02: \* \* \* \* \*.*\] hourly$/.test(p)))
+  })
+
+  test('reminders held by a dialog stay together and go as one prompt once it is gone (#306)', async () => {
+    const box = await sandbox()
+    herdrWith(box, 'blocked')
+    const now = Date.now() - 1000
+    put(box, { id: 'aeae01', text: 'one', at: now, next: now, created: now })
+    await scheduler(box)
+    await until(() => read(box, 'aeae01')?.why === 'dialog')
+    // One more comes due while the first waits.
+    put(box, { id: 'aeae02', text: 'two', at: now, next: now, created: now + 1 })
+    await until(() => read(box, 'aeae02')?.why === 'dialog')
+    await sleep(400)
+    herdrWith(box, 'idle')
+    await until(() => runs(box).length === 2, 12_000)
+    await sleep(400)
+    assert.deepEqual(prompts(box), ['[board reminder] one\n[board reminder] two'])
+  })
+
   test('text the user left in the input box holds the reminder back until it is gone', async () => {
     const box = await sandbox()
     herdrWith(box, 'idle', { 'agent read': { text: screen('half a thought') } })

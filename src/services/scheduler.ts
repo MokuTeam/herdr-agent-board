@@ -6,6 +6,11 @@
 // `scheduleWaitMin` minutes of trying; then the run is logged as missed. A one-off entry goes
 // after its run; a cron one moves to its next time.
 //
+// Plain one-off reminders due for one session in the same minute, with the same `idle`, go as one
+// prompt, a line each with its own tag (#306): one turn of the session for all of them. Each is
+// claimed, held, sent and logged as it would be alone; a cron entry, a restart, a sleep, a call's
+// results and a retry-safe report always go on their own.
+//
 // Runs that came due while the board was off: a one-off is sent once, saying how late it is; the
 // missed runs of a cron entry go as one, saying how many. Time the board was off does not count
 // against the wait. An entry is claimed in its file before it is sent, so a second board (a
@@ -90,6 +95,9 @@ const waitsForWake = (item: Item, r: ActionResult): boolean =>
 /** A number an entry keeps (the scheduler's own fields), else undefined. */
 const numberOf = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
 
+/** A plain one-off reminder, which goes in one prompt with others due beside it (#306). */
+const joins = (e: ScheduleEntry): boolean => !e.kind && !e.cron && !e.receipt
+
 /**
  * Start sending due entries. `deps.cfg` is the live config: scheduleTickSec (15), scheduleWaitMin
  * (240), restartSettleSec (8). `onChange` is called after each run, so the board redraws.
@@ -131,9 +139,9 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
       // restart herdr-wake refused, not before its retry time.
       const tried = (e: ScheduleEntry): boolean => typeof e.tried === 'number' && e.tried > now - tickMs() * 0.9
       const later = (e: ScheduleEntry): boolean => typeof e.retryAt === 'number' && e.retryAt > now
-      const due = listEntries().filter(
-        e => e.next <= now && !flying.has(e.key) && !tried(e) && !later(e) && workdeskDue(e),
-      )
+      // Due: what may go now. One tried a moment ago still goes along with another due beside it.
+      const ready = listEntries().filter(e => e.next <= now && !later(e) && workdeskDue(e))
+      const due = ready.filter(e => !flying.has(e.key) && !tried(e))
       if (!due.length) return
       // Fresh: whether a session sleeps or works decides what happens now.
       const items = await collect(deps)
@@ -159,7 +167,10 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
         }
         if (flying.has(entry.key) || (item && flying.has(item.key)) || (item?.sleeping && waking >= MAX_WAKING))
           continue
-        const keys = [entry.key, item?.key].filter((k): k is string => !!k)
+        // Other plain reminders due for this session in the same minute go with it, one prompt
+        // for all of them (#306): one turn of the session, not one each.
+        const more = item ? alongside(entry, item, ready, items, profileIdOf) : []
+        const keys = [entry.key, item?.key, ...more.map(e => e.key)].filter((k): k is string => !!k)
         for (const k of keys) flying.add(k)
         // The session now in its pane runs in another profile: the entry waits, saying so.
         const held = other
@@ -168,7 +179,7 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
               was: profileLabel(profileOf(entry.key), set),
             })
           : ''
-        run(entry, item, held)
+        run(entry, item, held, more)
           .catch(err => log(`schedule ${entry.id}: ${messageOf(err)}`))
           .finally(() => {
             for (const k of keys) flying.delete(k)
@@ -182,8 +193,46 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
     }
   }
 
-  /** `other`: why it does not go to the session now in its pane (another profile's), '' for none. */
-  async function run(entry: ScheduleEntry, item: Item | undefined, other: string): Promise<void> {
+  /**
+   * The plain reminders due for `item` in the same minute as `entry`, with the same `idle`, that go
+   * with it as one prompt (#306). Only one-off reminders join: a cron entry, a restart, a sleep, a
+   * call's results and a retry-safe report go on their own, as do one that waits for the session to
+   * wake (`noWake`) and one that would go to another session (another profile's in its pane).
+   */
+  function alongside(
+    entry: ScheduleEntry,
+    item: Item,
+    due: ScheduleEntry[],
+    items: Item[],
+    profileIdOf: (key: string) => string | undefined,
+  ): ScheduleEntry[] {
+    if (!joins(entry)) return []
+    const minute = Math.floor(entry.next / 60_000)
+    return due.filter(
+      e =>
+        e !== entry &&
+        joins(e) &&
+        Math.floor(e.next / 60_000) === minute &&
+        !!e.idle === !!entry.idle &&
+        !(e.noWake === true && item.sleeping) &&
+        !flying.has(e.key) &&
+        delivered.get(e.id) !== e.next &&
+        workdeskDue(e) &&
+        targetOf(e, items, profileIdOf).item?.key === item.key,
+    )
+  }
+
+  /**
+   * `other`: why it does not go to the session now in its pane (another profile's), '' for none.
+   * `more`: reminders that go with it as one prompt, a line each (alongside); claimed, sent, held
+   * and logged each on its own, as `entry` is.
+   */
+  async function run(
+    entry: ScheduleEntry,
+    item: Item | undefined,
+    other: string,
+    more: ScheduleEntry[] = [],
+  ): Promise<void> {
     if (entry.kind === 'restart') return restart(entry, item)
     if (entry.kind === 'sleep') return sleep(entry, item)
     const receipt = entry.receipt ? verifyReport(entry) : null // Before even waking a session.
@@ -198,15 +247,21 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
     // typing would answer it.
     const held = item && !item.sleeping && (item.status === 'blocked' || (entry.idle && item.status === 'working'))
     let why = !item ? other || 'gone' : held ? (item.status === 'blocked' ? 'dialog' : 'busy') : ''
+    // All of them wait together, so they are tried together again.
+    let batch = [entry, ...more]
     if (item && !why) {
-      if (!claim(entry.id, now)) return
-      if (item.key !== entry.key) {
-        // Followed into the session that took its pane: the card and the log say the new one, the
-        // prompt the one it was set for.
-        const movedFrom = entry.movedFrom ?? { key: entry.key, name: entry.name ?? '' }
-        entry = { ...entry, key: item.key, name: item.name, movedFrom }
-        updateEntry(entry.id, e => ({ ...e, key: item.key, name: item.name, movedFrom: e.movedFrom ?? movedFrom }))
-      }
+      batch = batch.filter(e => claim(e.id, now))
+      // Followed into the session that took its pane: the card and the log say the new one, the
+      // prompt the one it was set for.
+      batch = batch.map(e => {
+        if (e.key === item.key) return e
+        const movedFrom = e.movedFrom ?? { key: e.key, name: e.name ?? '' }
+        updateEntry(e.id, s => ({ ...s, key: item.key, name: item.name, movedFrom: s.movedFrom ?? movedFrom }))
+        return { ...e, key: item.key, name: item.name, movedFrom }
+      })
+      const first = batch[0]
+      if (!first) return
+      entry = first
       let r: Awaited<ReturnType<typeof send>> = { ok: true }
       if (item.sleeping) {
         waking++
@@ -215,8 +270,14 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
           deps.wake.forget()
         })
         // Cancelled while the session woke up: nothing to send.
-        if (r.ok && !getEntry(entry.id)) return
-        if (waitsForWake(item, r)) return hold(entry, now)
+        if (r.ok) batch = batch.filter(e => getEntry(e.id))
+        const left = batch[0]
+        if (!left) return
+        entry = left
+        if (waitsForWake(item, r)) {
+          for (const e of batch) hold(e, now)
+          return
+        }
       }
       if (r.ok && entry.receipt) {
         const state = beginReport(entry)
@@ -230,7 +291,9 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
         try {
           // Woken in another pane (a pi session whose own was gone, #178): the message goes there.
           const pane = r.ok && r.pane ? r.pane : item.pane
-          r = await send(deps, { ...item, sleeping: false, pane }, promptOf(entry, Date.now()), {
+          const at = Date.now()
+          const text = batch.map(e => promptOf(e, at)).join('\n')
+          r = await send(deps, { ...item, sleeping: false, pane }, text, {
             free: !!entry.idle,
             draft: true,
             // Woken just now: herdr may name it in its pane a few seconds later (#267).
@@ -251,10 +314,13 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
           return
         }
       }
-      if (r.ok) return sent(entry)
+      if (r.ok) {
+        for (const e of batch) sent(e)
+        return
+      }
       why = whyNot(r)
     }
-    wait(entry, now, why, !item)
+    for (const e of batch) wait(e, now, why, !item)
   }
 
   const whyNot = (r: { draft?: boolean; dialog?: boolean; busy?: boolean; error: string }): string =>
