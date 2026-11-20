@@ -706,14 +706,16 @@ async function team(): Promise<void> {
   const T = await import('../core/team.ts')
   const store = await import('../adapters/team-store.ts')
   if (op === 'join') {
-    const hi = more.indexOf('--hub')
-    const given = hi >= 0 ? more[hi + 1] : undefined
-    if (hi >= 0) more.splice(hi, 2)
-    const invite = more[0]
+    // --hub is read before a lone -- only; a word after it is a plain word (#476).
+    const { flags, after } = (await import('./team-agents-cli.ts')).cutAtDashes(more)
+    const hi = flags.indexOf('--hub')
+    const given = hi >= 0 ? flags[hi + 1] : undefined
+    const words = [...flags.filter((_, i) => hi < 0 || (i !== hi && i !== hi + 1)), ...after]
+    const invite = words[0]
     const have = isRecord(cfg.team) ? cfg.team : {}
     const hub = T.normalizeHub(given ?? have.hub) ?? ''
     const name = forkName ?? (typeof have.name === 'string' ? have.name : '')
-    if (!invite || more.length !== 1 || !hub || !T.validName(name)) throw new Error(TEAM_USAGE)
+    if (!invite || words.length !== 1 || !hub || !T.validName(name)) throw new Error(TEAM_USAGE)
     const saved = store.readKey()
     const key = saved ?? (await T.generateKey())
     const { joinHub, TRIES, TRY_MS } = await import('../services/team-join.ts')
@@ -783,9 +785,9 @@ async function team(): Promise<void> {
     const I = await import('./team-inbox-cli.ts')
     const ctx = { webPort, roster: view.roster }
     if (op === 'inbox') return console.log(await I.teamInbox(more, ctx))
-    const words = more.filter((a, i) => a !== '--json' && a !== '--every' && more[i - 1] !== '--every')
-    if (words.length) throw new Error(TEAM_USAGE)
-    return await I.teamWatch(ctx, { json: more.includes('--json'), everyMs: I.everyMs(more), out: l => console.log(l) })
+    const flags = I.watchFlags(more)
+    if (!flags) throw new Error(TEAM_USAGE)
+    return await I.teamWatch(ctx, { ...flags, out: l => console.log(l) })
   }
   if (agentOp) {
     const A = await import('./team-agents-cli.ts')

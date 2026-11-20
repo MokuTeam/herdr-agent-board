@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { generateKey, type KeyPair } from '../../src/core/team.ts'
 import type { ThreadRef } from '../../src/core/team-wire.ts'
 import { teamAgents } from '../../src/entrypoints/team-agents-cli.ts'
-import { teamInbox, teamWatch } from '../../src/entrypoints/team-inbox-cli.ts'
+import { teamInbox, teamWatch, watchFlags } from '../../src/entrypoints/team-inbox-cli.ts'
 import { type Harness, question, startHarness } from '../hub/harness.ts'
 import { serveBoard } from '../support/board-server.ts'
 import { sandbox } from '../support/sandbox.ts'
@@ -147,4 +147,36 @@ test('inbox, thread --json and --read, mutes and watch, on a running board', asy
   expect(out.join('\n')).not.toContain('one more thing')
   expect(out.join('\n')).not.toContain('Secret plan')
   annaClient.close()
+})
+
+test('#476: inbox and watch read their flags before a lone -- only; a word after it is refused', async () => {
+  const key = `team/${TOPIC}`
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch(req) {
+      if (new URL(req.url).pathname === '/api/team/unread') return Response.json({ threads: { [key]: 0 } })
+      return Response.json({ threads: [{ key, scope: 'team', id: TOPIC, title: 'Plan' }] })
+    },
+  })
+  try {
+    const ctx = { webPort: server.port as number, roster: [] }
+    expect(JSON.parse(await teamInbox(['--json', '--'], ctx))).toMatchObject({ threads: [{ key }] })
+    expect(await teamInbox(['--unread', '--'], ctx)).toBe('nothing unread')
+    expect(await teamInbox(['--'], ctx)).toContain('Plan')
+    for (const words of [
+      ['--', '--json'],
+      ['--', '--unread'],
+      ['--json', '--', 'x'],
+    ])
+      await expect(teamInbox(words, ctx)).rejects.toThrow('usage: ')
+  } finally {
+    server.stop(true)
+  }
+  expect(watchFlags(['--json', '--every', '5', '--'])).toEqual({ json: true, everyMs: 5000 })
+  expect(watchFlags(['--json'])).toEqual({ json: true, everyMs: 3000 })
+  expect(watchFlags([])).toEqual({ json: false, everyMs: 3000 })
+  // a word after the --, --every's number too, is a word left over
+  for (const words of [['--', '--json'], ['--every', '5', '--', '--every', '9'], ['--every', '--', '5'], ['x']])
+    expect(watchFlags(words)).toBeNull()
 })

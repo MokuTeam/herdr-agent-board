@@ -147,6 +147,19 @@ describe('board team against a hub', () => {
     await hub.login(key)
   })
 
+  test('#476 join reads --hub before a lone -- only: the invite may come after it, a --hub after it is a word', async () => {
+    const box = await sandbox()
+    writeConfig(box, {})
+    const late = await board(box, ['team', 'join', hub.invite(), '--name', 'ben', '--', '--hub', base])
+    expect(late.code).toBe(1)
+    expect(late.stderr).toContain('usage: board team join')
+    expect(configOf(box)).not.toHaveProperty('team')
+    const r = await board(box, ['team', 'join', '--hub', base, '--name', 'cleo', '--', hub.invite()])
+    expect(r.stderr).toBe('')
+    expect(r.code).toBe(0)
+    expect(configOf(box)).toMatchObject({ team: { hub: base, name: 'cleo' } })
+  })
+
   test('join with --hub ending in /v1 reaches the hub and saves the address without it', async () => {
     const box = await sandbox()
     writeConfig(box, {})

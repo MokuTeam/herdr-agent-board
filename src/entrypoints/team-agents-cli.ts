@@ -169,10 +169,10 @@ function wordsOf(rest: string[], want: number, file: unknown): string[] {
 }
 
 /**
- * Post's or reply's words split at the first lone `--` (#459): the flags are read before it only,
- * and every word after it is text, a flag's name included.
+ * A team command's words split at the first lone `--` (#459, #476): the flags are read before it
+ * only, and every word after it is a plain word (post's and reply's text), a flag's name included.
  */
-function cutAtDashes(args: string[]): { flags: string[]; after: string[] } {
+export function cutAtDashes(args: string[]): { flags: string[]; after: string[] } {
   const i = args.indexOf('--')
   return i < 0 ? { flags: args, after: [] } : { flags: args.slice(0, i), after: args.slice(i + 1) }
 }
@@ -305,9 +305,10 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
     return said(reply, status, await whoOfThread(ctx, key))
   }
   if (op === 'thread') {
-    const json = rest.includes('--json')
-    const read = rest.includes('--read')
-    const words = rest.filter(a => a !== '--json' && a !== '--read')
+    const { flags, after } = cutAtDashes(rest)
+    const json = flags.includes('--json')
+    const read = flags.includes('--read')
+    const words = [...flags.filter(a => a !== '--json' && a !== '--read'), ...after]
     if (words.length !== 1) throw new Error(`usage: ${AGENT_USAGE}`)
     const key = await threadKeyOf(ctx, words[0] ?? '')
     // Read up to when the lines were asked for: what lands after is not marked unseen.

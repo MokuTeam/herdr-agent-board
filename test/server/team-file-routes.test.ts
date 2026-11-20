@@ -4,7 +4,7 @@
 // with the switches off it is held, and the thread list names the draft with its file; a name
 // outside the uploads is refused. The board runs in a sandbox.
 import { afterAll, beforeAll, expect, setDefaultTimeout, test } from 'bun:test'
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { memoryBlobs } from '../../hub/src/blobs.ts'
 import { boxBytes, type FileRef, generateKey, type KeyPair, sign, unb64u } from '../../src/core/team.ts'
@@ -13,6 +13,7 @@ import { fileContext, openFile } from '../../src/core/team-file.ts'
 import { type Client, type Harness, msgOf, startHarness } from '../hub/harness.ts'
 import { serveBoard, sharedSandbox } from '../support/board-server.ts'
 import type { Sandbox } from '../support/sandbox.ts'
+import { softAuthenticator } from '../support/soft-authenticator.ts'
 
 setDefaultTimeout(30_000)
 
@@ -174,4 +175,66 @@ test("a session's post with a file, agents off: held as a draft with the board's
   expect(await post(url, '/api/team/post', { to: anna.pub, text: 'x', session, file: { path: 'report.csv' } })).toEqual(
     [400, { ok: false, error: 'file' }],
   )
+})
+
+// Last in this file: it turns the passkey on, and every send after it would wait for one.
+test('#475 a send held for the passkey reads its upload when it goes: a junction swapped in meanwhile is refused, a plain upload goes', async () => {
+  const key = await softAuthenticator(-7)
+  const local = `http://localhost:${new URL(url).port}`
+  const window = async (id: string): Promise<[number, Record<string, unknown>]> => {
+    const v = (await (await fetch(`${url}/api/team/confirm/${id}`)).json()) as {
+      step: string
+      options: { challenge: string }
+    }
+    const at = { challenge: v.options.challenge, origin: local, rpId: 'localhost' }
+    const cred = v.step === 'create' ? key.register(at) : key.assert(at)
+    const r = await fetch(`${url}/api/team/confirm/${id}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1', origin: local },
+      body: JSON.stringify({ ...cred, type: 'public-key' }),
+    })
+    return [r.status, (await r.json()) as Record<string, unknown>]
+  }
+  const held = async (body: unknown): Promise<string> => {
+    const [status, reply] = await post(url, '/api/team/send', body)
+    expect([status, reply.error]).toEqual([428, 'confirm'])
+    return reply.id as string
+  }
+  // A passkey, and the switch on: from here a send waits for it.
+  for (const op of ['add', 'on']) {
+    const [status, reply] = await post(url, '/api/team/passkeys', { op })
+    expect(status).toBe(428)
+    expect(await window(reply.id as string)).toEqual([200, { ok: true, done: true }])
+  }
+  const uploads = join(stateOf(box), 'uploads')
+  const outside = join(box.dir, 'outside-475')
+  mkdirSync(outside, { recursive: true })
+  writeFileSync(join(outside, '120000-ben.png'), 'atlas')
+  mkdirSync(join(uploads, '2026-01-05'), { recursive: true })
+  writeFileSync(join(uploads, '2026-01-05', '120000-ben.png'), 'ben')
+  const upload = '2026-01-05/120000-ben.png'
+  // Checked when asked, then the day folder is swapped for a junction out before the passkey.
+  const id = await held({ to: anna.pub, text: 'swapped', file: { upload } })
+  renameSync(join(uploads, '2026-01-05'), join(uploads, 'moved-475'))
+  symlinkSync(outside, join(uploads, '2026-01-05'), 'junction')
+  expect(await window(id)).toEqual([400, { ok: false, done: true, error: 'file' }])
+  // Nothing went: the next thing anna gets is the plain upload below.
+  writeFileSync(join(uploads, 'moved-475', '120000-cleo.png'), 'cleo')
+  renameSync(join(uploads, 'moved-475'), join(uploads, '2026-01-06'))
+  const plain = await held({ to: anna.pub, text: 'plain', file: { upload: '2026-01-06/120000-cleo.png' } })
+  expect(await window(plain)).toMatchObject([200, { ok: true, done: true }])
+  const d = await annaClient.take('deliver', 8000)
+  expect(msgOf(d.env).body.text).toBe('plain')
+  const ref = msgOf(d.env).body.file as FileRef
+  annaClient.send({ t: 'blob_get', id: ref.blob, at: 0 })
+  const data = await annaClient.take('blob_data', 8000)
+  const secret = (await unwrapSecret(
+    ref.key,
+    ref.eph,
+    { peer: anna.pub, box: annaBox },
+    fileContext(ref.blob),
+  )) as Uint8Array
+  const opened = await openFile(ref, unb64u(data.data) as Uint8Array, secret)
+  expect(opened.ok && opened.meta.name).toBe('cleo.png')
+  expect(opened.ok && Buffer.from(opened.bytes).toString()).toBe('cleo')
 })

@@ -342,6 +342,50 @@ test('#459: post and reply read no flag after a lone --: the words after it are 
   }
 })
 
+test('#476: board team thread reads --json and --read before a lone -- only; a word after it is a plain word', async () => {
+  const key = `${P}/general`
+  const marks: unknown[] = []
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    async fetch(req) {
+      const path = new URL(req.url).pathname
+      if (path === '/api/team/threads') return Response.json({ threads: [{ key, scope: P, id: 'general' }] })
+      if (path === '/api/team/agents') return Response.json({})
+      if (path === '/api/team/read') {
+        marks.push(await req.json())
+        return Response.json({ ok: true })
+      }
+      return Response.json({ thread: {}, lines: [{ id: M, dir: 'in', ts: '2026-11-11T08:00:00.000Z', text: 'hi' }] })
+    },
+  })
+  try {
+    const ctx = {
+      webPort: server.port as number,
+      roster: [{ peer: P, name: 'anna' }],
+      self: async () => ({ key: 'k1' }),
+      find: async () => ({ key: 'k1' }),
+    }
+    // the thread after the --, the flags before it
+    expect(await teamAgents('thread', ['--', key], ctx)).toContain('| hi')
+    expect(JSON.parse(await teamAgents('thread', [key, '--json', '--'], ctx))).toMatchObject({ read: false })
+    expect(await teamAgents('thread', ['--read', '--', key], ctx)).toEndWith('(marked read)')
+    expect(marks).toEqual([{ thread: key, upTo: expect.any(Number) }])
+    // a flag's name after it is a word: two words, the usage
+    for (const words of [
+      [key, '--', '--json'],
+      [key, '--', '--read'],
+      [key, '--', '--'],
+    ])
+      await expect(teamAgents('thread', words, ctx)).rejects.toThrow('usage: ')
+    expect(marks).toHaveLength(1)
+    // with no --, as before
+    expect(JSON.parse(await teamAgents('thread', ['--json', key], ctx))).toMatchObject({ read: false })
+  } finally {
+    server.stop(true)
+  }
+})
+
 test('#371: a thread lists a file as data: its name, size and where it was saved, or why it did not arrive', () => {
   const out = framedThread(
     `${P}/general`,

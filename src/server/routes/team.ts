@@ -38,6 +38,7 @@
 // on, lanes, allLanes, channels } settles one, its body checked whole before anything changes.
 // Adding a channel's members, and a welcome that widens (Agents on, a lane, every lane: #386, a
 // channel), wait for the passkey as the switches do.
+import { readFileSync, realpathSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { isRecord } from '../../adapters/json-store.ts'
 import { uploadsCheck } from '../../adapters/own-files.ts'
@@ -61,7 +62,7 @@ import { MAX_MEMBERS } from '../../core/team-wire.ts'
 import type { Config } from '../../core/types.ts'
 import { safeName } from '../../core/upload-name.ts'
 import type { TeamConfirm } from '../../services/team-confirm.ts'
-import type { PostTarget, TeamService } from '../../services/team-hub.ts'
+import type { PostFile, PostTarget, TeamService } from '../../services/team-hub.ts'
 import type { TeamRouter } from '../../services/team-router.ts'
 import type { WorkHub } from '../../services/work-hub.ts'
 import { json, type Route } from '../http.ts'
@@ -211,6 +212,22 @@ export function uploadFrom(v: unknown): { path: string; name: string } | null | 
   return checkMeta({ name, type: 'application/octet-stream', size: 0 }) ? { path, name } : null
 }
 
+/**
+ * A send's upload as it is when the send goes (#475): a send held for the passkey goes minutes after
+ * uploadFrom() checked it, so it is checked again here by its real path and read at once from that
+ * path. These bytes go (PostFile.bytes, #415) and the path is not read again, so a link or junction
+ * put in its place while the send waited is refused, not followed. Null when it is no such file now.
+ */
+function uploadNow(file: { path: string; name: string }): PostFile | null {
+  try {
+    const real = realpathSync.native(file.path)
+    if (!uploadsCheck()(real)) return null
+    return { ...file, bytes: new Uint8Array(readFileSync(real)) }
+  } catch {
+    return null
+  }
+}
+
 /** A file a session names for its post (#371): an absolute path on this computer; the router checks the rest. */
 function agentFileFrom(v: unknown): { path: string } | null | undefined {
   if (v === undefined) return undefined
@@ -265,7 +282,9 @@ export function teamRoutes(
     if (a.kind.startsWith('thread-'))
       return work ? performThreadAction(work, a) : { status: 409, body: { ok: false, error: 'off' } }
     if (a.kind === 'send') {
-      const r = await team.send(a.to, a.text, a.thread, a.replyTo, a.file)
+      const file = a.file ? uploadNow(a.file) : undefined
+      if (file === null) return { status: 400, body: { ok: false, error: 'file' } }
+      const r = await team.send(a.to, a.text, a.thread, a.replyTo, file)
       return { status: r.ok ? 200 : 400, body: { ...r } }
     }
     if (a.kind === 'draft') {
