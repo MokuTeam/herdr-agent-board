@@ -152,8 +152,10 @@ export function ThreadPane({ view, onOpen, onBack }: ThreadPaneProps) {
       if (said) toast(said.text, said.error)
       return true
     } catch (err) {
-      // A confirmation window the owner closed is no error.
-      if (!(err instanceof ApiError && err.reply.error === 'cancelled'))
+      // A confirmation window the owner closed is no error. From the owner's phone (#377) it waits
+      // for the passkey on the computer: said as waiting, not as refused.
+      if (err instanceof ApiError && err.reply.error === 'confirm') toast(t('team.err.confirmAway'), false)
+      else if (!(err instanceof ApiError && err.reply.error === 'cancelled'))
         toast(confirmError(err, t) ?? errorText(err, t), true)
       return false
     } finally {

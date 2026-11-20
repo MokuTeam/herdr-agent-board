@@ -19,6 +19,7 @@ import type {
   TeamView,
   ThreadLine,
   ThreadView,
+  Waiting,
   Welcome,
 } from '../../models/team.ts'
 import { firstUnread } from '../../models/team-chat.ts'
@@ -127,6 +128,8 @@ export function TeamPanel({ open, onClose, focus, onFocused }: TeamPanelProps) {
         thread={team.thread}
         lines={team.lines}
         drafts={team.drafts}
+        waiting={team.waiting}
+        onConfirmWaiting={id => void team.confirmWaiting(id)}
         unread={team.unread}
         agents={team.agents}
         draft={drafts.text(key)}
@@ -195,6 +198,9 @@ export interface TeamBodyProps {
   lines: ThreadLine[]
   /** The agents' drafts that wait, every thread's (#415); none given: none listed. */
   drafts?: readonly DraftLine[]
+  /** What the owner's phone asked and waits for the passkey here (#377); none given: none listed. */
+  waiting?: readonly Waiting[]
+  onConfirmWaiting?(id: string): void
   /** Each thread's unread messages (#355); none given: none shown. */
   unread?: Record<string, number>
   /** The owner's switches; null (a remote page): not shown, and the team chat's mute neither. */
@@ -255,6 +261,8 @@ export function TeamBody(props: TeamBodyProps) {
         onSelect={props.onSelect}
         onPeople={() => props.onPeople?.(true)}
         {...(props.drafts && { drafts: props.drafts })}
+        {...(props.waiting && { waiting: props.waiting })}
+        {...(props.onConfirmWaiting && { onConfirmWaiting: props.onConfirmWaiting })}
         onSendDraft={props.onSendDraft}
         onDiscardDraft={props.onDiscardDraft}
         {...(props.onWelcome && { onWelcome: props.onWelcome })}

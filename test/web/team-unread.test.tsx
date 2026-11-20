@@ -7,7 +7,14 @@ import { translator } from '../../src/core/i18n/translator.ts'
 import type { TeamView, ThreadView } from '../../src/services/team-hub.ts'
 import { TeamBody, type TeamBodyProps } from '../../web/src/components/team/TeamPanel.tsx'
 import { teamSource } from '../../web/src/hooks/useTeam.ts'
-import { listenForTeamOpens, offersTeam, pairThread, peerOfThread, type TeamOpen } from '../../web/src/models/team.ts'
+import {
+  listenForTeamOpens,
+  offersTeam,
+  pairThread,
+  peerOfThread,
+  type TeamOpen,
+  teamBadge,
+} from '../../web/src/models/team.ts'
 import { TOOLBAR_PRIORITY } from '../../web/src/models/toolbar-fit.ts'
 import { toolbarEntries } from '../../web/src/models/toolbar-menu.ts'
 import { board, renderInBoard } from './support/board.tsx'
@@ -69,6 +76,16 @@ describe('the head', () => {
     expect(entry(0)).toEqual({ id: 'team-open', label: 'Team' })
     expect(entry(null)).toEqual({ id: 'team-open', label: 'Team' })
     expect(TOOLBAR_PRIORITY.indexOf('team-open')).toBe(TOOLBAR_PRIORITY.indexOf('todos-open') + 1)
+  })
+})
+
+describe('the head’s count with what the phone asked (#377)', () => {
+  test('on the computer it counts the unread and what waits for the passkey; the phone counts only the unread', () => {
+    expect(teamBadge({ teamUnread: 2, teamWaiting: 1 }, false)).toEqual({ count: 3, unread: 2, waiting: 1 })
+    expect(teamBadge({ teamUnread: 2, teamWaiting: 1 }, true)).toEqual({ count: 2, unread: 2, waiting: 0 })
+    // A board without it, or nothing waiting: as before.
+    expect(teamBadge({ teamUnread: 4 }, false)).toEqual({ count: 4, unread: 4, waiting: 0 })
+    expect(teamBadge(null, false)).toEqual({ count: 0, unread: 0, waiting: 0 })
   })
 })
 

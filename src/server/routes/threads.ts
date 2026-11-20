@@ -121,7 +121,7 @@ export interface ThreadsApp {
   /** Settings turned threads on (#410): their skill into the shown profiles, as the install action puts it. */
   skill?(): void
   /** The owner's passkey (#224): what sends as the owner waits for it while it is on. */
-  confirm?: Pick<TeamConfirm, 'required' | 'unlocked' | 'safe' | 'pend' | 'urlOf'>
+  confirm?: Pick<TeamConfirm, 'required' | 'unlocked' | 'safe' | 'pend' | 'urlOf' | 'away'>
 }
 
 /** The revision's own stream: made on its first client, so a board with threads off keeps no timer for it. */
@@ -322,8 +322,10 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
     if (!c?.required()) return null
     if (unlocks(action) && c.unlocked(req.headers.get('x-board-unlock'))) return null
     if (!c.safe()) return json(503, { ok: false, error: 'loopback' })
-    const id = c.pend(action)
-    return json(428, { ok: false, error: 'confirm', id, confirm: c.urlOf(id) })
+    // From away (#377), as routes/team.ts held(): it waits for the owner at the computer.
+    const away = c.away(req.url)
+    const id = c.pend(action, away)
+    return json(428, { ok: false, error: 'confirm', id, confirm: c.urlOf(id), ...(away && { where: 'computer' }) })
   }
 
   const unlockedBy = (req: Request): boolean =>

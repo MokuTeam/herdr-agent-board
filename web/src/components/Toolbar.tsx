@@ -31,6 +31,7 @@ import { useT } from '../i18n/I18nProvider.tsx'
 import { litLanes } from '../models/lane-picks.ts'
 import { presenceSwitch } from '../models/presence.ts'
 import { pickedProfile, profileOptions } from '../models/profiles.ts'
+import { teamBadge } from '../models/team.ts'
 import { openMine, proposedCount } from '../models/todos.ts'
 import {
   attentionCount,
@@ -175,6 +176,9 @@ export function Toolbar({
   })
 
   const openTasks = data?.todos ? openMine(data.items) : 0
+  // The Team button's count: unread messages, and on the computer what the owner's phone asked and waits for the passkey there (#377).
+  const teamHead = teamBadge(data)
+  const teamCount = teamHead.count
   /** What More lists for the actions in it (the pill's own words, read when More is pressed). */
   const entriesFor = (usage: string) =>
     moreEntries(
@@ -184,7 +188,7 @@ export function Toolbar({
           schedule: badge,
           tasks: data?.todos ? { open: openTasks, proposed: proposedCount(data.items) } : null,
           next: data ? attentionCount(visible, ui.filter, categoryOf, ui.viewed) : 0,
-          team: onTeam ? { unread: data?.teamUnread ?? 0 } : null,
+          team: onTeam ? { unread: teamCount } : null,
           threads: onThreads && data?.threads ? { needsOwner: data.threads.needsOwner } : null,
           usage,
           presence: presenceSwitch(data?.presence, t),
@@ -357,16 +361,20 @@ export function Toolbar({
               {onTeam && (
                 <button
                   type="button"
-                  className={(data?.teamUnread ?? 0) > 0 ? 'pill-toggle icon-only unread' : 'pill-toggle icon-only'}
+                  className={teamCount > 0 ? 'pill-toggle icon-only unread' : 'pill-toggle icon-only'}
                   id="team-open"
                   title={
-                    (data?.teamUnread ?? 0) > 0 ? t('team.unread', { n: data?.teamUnread ?? 0 }) : t('team.openHint')
+                    teamHead.waiting > 0
+                      ? t('team.waitingHint', { n: teamHead.waiting })
+                      : teamHead.unread > 0
+                        ? t('team.unread', { n: teamHead.unread })
+                        : t('team.openHint')
                   }
                   onClick={() => onTeam()}
                 >
                   <TeamIcon />
                   <span>{t('team.title')}</span>
-                  <span className="n">{data?.teamUnread || ''}</span>
+                  <span className="n">{teamCount || ''}</span>
                 </button>
               )}
               {data?.calendar && <CalendarButton onOpen={() => onCalendar?.()} />}

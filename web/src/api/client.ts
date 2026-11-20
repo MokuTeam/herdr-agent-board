@@ -83,7 +83,9 @@ export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayloa
   // The peer network's revision (only a board with `team` in config.json sends one).
   (value.teamRev === undefined || typeof value.teamRev === 'number') &&
   // The team's unread messages (#355), likewise.
-  (value.teamUnread === undefined || typeof value.teamUnread === 'number')
+  (value.teamUnread === undefined || typeof value.teamUnread === 'number') &&
+  // What the owner's phone asked and waits for the passkey here (#377), only while some does.
+  (value.teamWaiting === undefined || typeof value.teamWaiting === 'number')
 
 /** One session as GET /api/session/<key> answers it (src/server/routes/session.ts). */
 export interface SessionDetail {

@@ -323,25 +323,68 @@ const WHY = ['off', 'lane', 'secret', 'lane_name', 'loop', 'file']
 export const draftWhy = (reason: string, t: Translator): string =>
   WHY.includes(reason) ? t(`team.why.${reason}`) : reason
 
-/** What a refused send says (the route's error code). */
+/**
+ * The head's Team button (#377): its count is the unread messages and, on the computer, what the
+ * owner's phone asked and waits for the passkey there; a remote page (the phone itself) cannot
+ * confirm, so it counts only the unread. `waiting` names the button's reason.
+ */
+export function teamBadge(
+  payload: { teamUnread?: number | undefined; teamWaiting?: number | undefined } | null | undefined,
+  remote: boolean = remotePage(),
+): { count: number; unread: number; waiting: number } {
+  const unread = payload?.teamUnread ?? 0
+  const waiting = remote ? 0 : (payload?.teamWaiting ?? 0)
+  return { count: unread + waiting, unread, waiting }
+}
+
+/**
+ * What the owner's phone asked and waits for the passkey on the computer (#377, GET
+ * /api/team/confirm): its id, when it was asked, its window's address, and what it does in the
+ * board's words (as the window shows it: ConfirmScreen.tsx confirmLines).
+ */
+export interface Waiting {
+  id: string
+  at: number
+  confirm: string
+  action: Record<string, unknown>
+}
+
+export const isWaitingList = (v: unknown): v is { waiting: Waiting[] } =>
+  isObj(v) &&
+  Array.isArray(v.waiting) &&
+  v.waiting.every(
+    w =>
+      isObj(w) &&
+      typeof w.id === 'string' &&
+      typeof w.at === 'number' &&
+      typeof w.confirm === 'string' &&
+      isObj(w.action),
+  )
+
+/**
+ * What a refused send says (the route's error code). `confirm` (#377): a send from the owner's
+ * phone waits for the passkey on the computer, which is no refusal yet.
+ */
 export const sendError = (code: unknown, t: Translator): string =>
-  t('team.sendFailed', {
-    why:
-      code === 'peer' ||
-      code === 'text' ||
-      code === 'too_big' ||
-      code === 'changed' ||
-      code === 'draft' ||
-      code === 'passkey' ||
-      code === 'blocked' ||
-      code === 'cancelled' ||
-      code === 'loopback' ||
-      code === 'reply' ||
-      code === 'file' ||
-      code === 'file_big' ||
-      code === 'file_name' ||
-      code === 'files_hub' ||
-      code === 'files_nobody'
-        ? t(`team.err.${code}`)
-        : String(code ?? ''),
-  })
+  code === 'confirm'
+    ? t('team.err.confirmAway')
+    : t('team.sendFailed', {
+        why:
+          code === 'peer' ||
+          code === 'text' ||
+          code === 'too_big' ||
+          code === 'changed' ||
+          code === 'draft' ||
+          code === 'passkey' ||
+          code === 'blocked' ||
+          code === 'cancelled' ||
+          code === 'loopback' ||
+          code === 'reply' ||
+          code === 'file' ||
+          code === 'file_big' ||
+          code === 'file_name' ||
+          code === 'files_hub' ||
+          code === 'files_nobody'
+            ? t(`team.err.${code}`)
+            : String(code ?? ''),
+      })

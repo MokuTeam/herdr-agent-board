@@ -86,6 +86,8 @@ interface Options {
   teamRev?: () => number | null
   /** The team's unread messages (services/team-notify.ts, #355); null while `team` is not on. */
   teamUnread?: () => number | null
+  /** What the owner's phone asked and waits for the passkey on this computer (#377); null while none. */
+  teamWaiting?: () => number | null
   /** The Omarchy theme's stamp (adapters/omarchy.ts), on a computer with Omarchy only. */
   omarchy?: () => string | null
   /** The user's presence (services/presence.ts); null while it is not on. */
@@ -181,6 +183,11 @@ function teamUnreadOf(teamUnread: Options['teamUnread']): { teamUnread?: number 
   return n !== null ? { teamUnread: n } : {}
 }
 
+function teamWaitingOf(teamWaiting: Options['teamWaiting']): { teamWaiting?: number } {
+  const n = teamWaiting?.() ?? null
+  return n !== null ? { teamWaiting: n } : {}
+}
+
 function timeOf(time: Options['time']): { time?: TimePayload } {
   const line = time?.() ?? null
   return line ? { time: line } : {}
@@ -220,6 +227,7 @@ export function createBoardState({
   accessRev,
   teamRev,
   teamUnread,
+  teamWaiting,
   omarchy,
   presence,
   backup,
@@ -328,6 +336,8 @@ export function createBoardState({
       ...teamRevOf(teamRev),
       // teamUnread: likewise, the head's count of unread team messages (#355).
       ...teamUnreadOf(teamUnread),
+      // teamWaiting: only while something asked from away waits for the passkey here (#377).
+      ...teamWaitingOf(teamWaiting),
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.
       ...omarchyOf(omarchy),
     }

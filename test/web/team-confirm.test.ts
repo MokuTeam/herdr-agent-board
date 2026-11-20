@@ -12,6 +12,7 @@ import {
   type ConfirmDeps,
   confirmed,
   confirmPage,
+  confirmWaiting,
   forgetUnlock,
   ownerPost,
 } from '../../web/src/models/team-confirm.ts'
@@ -223,4 +224,43 @@ test('the window words a channel, a welcome and a channel’s new members (#355)
     title: 'team.confirm.members {"channel":"Deals"}',
     items: ['ben'],
   })
+})
+
+test('#377 Confirm in the panel opens the window of what the phone asked, and gives back what the action answered', async () => {
+  const f = fake([])
+  const done = confirmWaiting(`${LOCAL}/?confirm=${ID}`, ID, f.deps)
+  await settle()
+  expect(f.opened).toEqual([`${LOCAL}/?confirm=${ID}`])
+  expect(f.calls).toEqual([])
+  f.message(LOCAL, { type: CONFIRMED, id: ID, status: 200, reply: { ok: true, done: true } })
+  expect(await done).toEqual({ ok: true, done: true })
+})
+
+test('#377 a window closed first is cancelled, a blocked one blocked, and an address off this board’s localhost is never opened', async () => {
+  const closed = fake([])
+  const asked = confirmWaiting(`${LOCAL}/?confirm=${ID}`, ID, closed.deps)
+  await settle()
+  closed.win.closed = true
+  closed.poll()
+  await expect(asked).rejects.toMatchObject({ reply: { error: 'cancelled' } })
+
+  const blocked = fake([], { blocked: true })
+  await expect(confirmWaiting(`${LOCAL}/?confirm=${ID}`, ID, blocked.deps)).rejects.toMatchObject({
+    reply: { error: 'blocked' },
+  })
+
+  const elsewhere = fake([])
+  await expect(confirmWaiting(`http://evil.example/?confirm=${ID}`, ID, elsewhere.deps)).rejects.toMatchObject({
+    reply: { error: 'blocked' },
+  })
+  expect(elsewhere.opened).toEqual([])
+})
+
+test('#377 a 428 held from away opens no window, whatever its address, and is thrown as confirm', async () => {
+  const f = fake([[428, { ...held, where: 'computer' }]])
+  await expect(ownerPost('/api/team/send', { to: 'x', text: 'hi' }, f.deps)).rejects.toMatchObject({
+    status: 428,
+    reply: { error: 'confirm', where: 'computer' },
+  })
+  expect(f.opened).toEqual([])
 })

@@ -106,8 +106,10 @@ export async function ownerPost(path: string, body: unknown, deps: ConfirmDeps =
   let r = { status: res.status, reply: isReply(value) ? value : {} }
   const url = r.reply.confirm
   const id = r.reply.id
+  // Held from away (#377: the owner's phone), it waits for the owner at the computer: no window here.
   if (
     r.status === 428 &&
+    r.reply.where !== 'computer' &&
     typeof url === 'string' &&
     typeof id === 'string' &&
     url.startsWith(`${deps.windowOrigin()}/`)
@@ -115,6 +117,21 @@ export async function ownerPost(path: string, body: unknown, deps: ConfirmDeps =
     const win = deps.open(url)
     r = win ? await answerOf(deps, id, win) : { status: 0, reply: { ok: false, error: 'blocked' } }
   }
+  if (r.status < 200 || r.status > 299 || r.reply.ok === false) throw new ApiError(r.status, r.reply)
+  return r.reply
+}
+
+/**
+ * Confirms an action the owner's phone asked (#377, GET /api/team/confirm): opens its window (on a
+ * click in the Team panel, so the browser lets it), and gives back what the action answered once
+ * the window confirmed it. A window closed first is { error: 'cancelled' }, one the browser would
+ * not open { error: 'blocked' }, an address not on this board's localhost refused: each throws
+ * ApiError, as ownerPost does.
+ */
+export async function confirmWaiting(url: string, id: string, deps: ConfirmDeps = browser()): Promise<Reply> {
+  if (!url.startsWith(`${deps.windowOrigin()}/`)) throw new ApiError(0, { ok: false, error: 'blocked' })
+  const win = deps.open(url)
+  const r = win ? await answerOf(deps, id, win) : { status: 0, reply: { ok: false, error: 'blocked' } }
   if (r.status < 200 || r.status > 299 || r.reply.ok === false) throw new ApiError(r.status, r.reply)
   return r.reply
 }

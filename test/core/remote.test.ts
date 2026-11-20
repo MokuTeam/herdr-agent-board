@@ -77,6 +77,9 @@ test("the remote mode's, Remote access's, wake's, the backup's and Settings → 
     '/api/backup',
     '/api/backup/x',
     '/api/time-settings',
+    // what the owner's phone asked and waits for the passkey (#377), and its window's routes
+    '/api/team/confirm',
+    '/api/team/confirm/AAAAAAAAAAAAAAAAAAAAAA',
     // the edge log (#280): who worked with whom, for an audit on this computer
     '/api/links/log',
     // which process the board is and its install folder (#356)
@@ -178,6 +181,9 @@ test("the owner's own logins may read and write the team away from the computer,
     '/api/team/listen',
     '/api/team/draft',
     '/api/team/focus',
+    // what the owner's phone asked and waits for the passkey: listed on the computer only (#377)
+    '/api/team/confirm',
+    '/api/team/confirm/AAAAAAAAAAAAAAAAAAAAAA',
     '/api/team/threads/team/general/assign',
     '/api/team/threads/team/general/release',
     '/api/team/thread/x/y',

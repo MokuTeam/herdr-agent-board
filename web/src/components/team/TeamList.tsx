@@ -2,7 +2,8 @@
 // of a narrow one. On top: where the connection stands, People and agents (the roster, the keys,
 // the passkeys and the switches have a view of their own: TeamPeople.tsx), New channel, and a new
 // member's welcome while it waits, and the agents' drafts that wait for the owner (TeamDrafts.tsx,
-// #415). Then the team chat first with the team's topics under it, the
+// #415), and above them what the owner's phone asked and waits for the passkey here (TeamWaiting.tsx,
+// #377). Then the team chat first with the team's topics under it, the
 // channels, each person's general with their topics under them, and who left. Every row: its
 // mark, title, the latest message's line, its time and the unread count; a muted one is dimmed.
 import { useState } from 'react'
@@ -16,6 +17,7 @@ import {
   type TeamRosterPeer,
   type TeamView,
   type ThreadView,
+  type Waiting,
   type Welcome,
 } from '../../models/team.ts'
 import { initialOf, lastLine, listWhen, toneOf } from '../../models/team-chat.ts'
@@ -26,6 +28,7 @@ import { classNames } from '../class-names.ts'
 import { StatusDot, statusWord } from '../threads/bits.tsx'
 import { TeamDrafts } from './TeamDrafts.tsx'
 import { WelcomeCard } from './TeamPeople.tsx'
+import { TeamWaiting } from './TeamWaiting.tsx'
 
 export interface TeamListProps {
   view: TeamView
@@ -43,6 +46,9 @@ export interface TeamListProps {
   drafts?: readonly DraftLine[]
   onSendDraft?(id: string): void
   onDiscardDraft?(id: string): void
+  /** What the owner's phone asked and waits for the passkey here (#377), with Confirm. */
+  waiting?: readonly Waiting[]
+  onConfirmWaiting?(id: string): void
 }
 
 export function TeamList({
@@ -60,6 +66,8 @@ export function TeamList({
   drafts = [],
   onSendDraft,
   onDiscardDraft,
+  waiting = [],
+  onConfirmWaiting,
 }: TeamListProps) {
   const t = useT()
   // A welcome put off for now (Later): the person keeps their mark until it is done.
@@ -116,6 +124,7 @@ export function TeamList({
           onLater={() => setLater(l => [...l, welcoming.peer])}
         />
       )}
+      <TeamWaiting waiting={waiting} disabled={disabled} onConfirm={id => onConfirmWaiting?.(id)} />
       <TeamDrafts
         drafts={drafts}
         threads={threads}

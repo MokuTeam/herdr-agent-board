@@ -159,6 +159,8 @@ export interface BoardPayload {
   teamRev?: number
   /** The team's unread messages (#355), only while `team` is on. */
   teamUnread?: number
+  /** What the owner's phone asked and waits for the passkey on this computer (#377), only while some does. */
+  teamWaiting?: number
   /**
    * The Omarchy theme the Terminal style takes its colors from (src/adapters/omarchy.ts): a stamp
    * that changes with it, only on a computer with Omarchy. The page loads omarchy-theme.css again.

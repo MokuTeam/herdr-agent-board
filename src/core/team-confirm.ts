@@ -83,6 +83,24 @@ export const confirmOrigin = (port: number): string => `http://localhost:${port}
 /** Where the panel opens the confirmation of `id`: the board's own page, on localhost. */
 export const confirmUrl = (port: number, id: string): string => `${confirmOrigin(port)}/?confirm=${id}`
 
+/**
+ * Whether a request came to the board on this computer (#377): its URL, which Bun builds from the
+ * Host, is the board's own on 127.0.0.1 or localhost. Every listener checks its Host first: the
+ * board's own takes only those two, the remote one the Tailscale address or name, the tunnel's the
+ * domain. A request from away (the owner's phone, the domain) cannot open the confirmation window,
+ * so what it asked waits for the owner at the computer instead.
+ */
+export function fromComputer(url: string, port: number): boolean {
+  try {
+    const u = new URL(url)
+    return (
+      u.protocol === 'http:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost') && u.port === String(port)
+    )
+  } catch {
+    return false
+  }
+}
+
 /** What the agents' switches are now, as far as widening goes. */
 export interface AgentsNow {
   off: boolean

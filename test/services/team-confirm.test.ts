@@ -324,3 +324,62 @@ test('#367 the WebAuthn options ask for the computer’s own authenticator first
   expect(get.step).toBe('get')
   expect(get.options.hints).toEqual(['client-device'])
 })
+
+test('#377 a request from away: the board on 127.0.0.1 or localhost at its port is the computer, every other Host is away', () => {
+  const w = world(12460)
+  const c = w.make()
+  expect(c.away('http://127.0.0.1:12460/api/team/send')).toBe(false)
+  expect(c.away('http://localhost:12460/api/team/send')).toBe(false)
+  // The remote listener's Tailscale address and name, the domain, another port, https.
+  expect(c.away('http://100.64.0.7:12460/api/team/send')).toBe(true)
+  expect(c.away('http://atlas.tail1234.ts.net:12460/api/team/send')).toBe(true)
+  expect(c.away('https://board.example.com/api/team/send')).toBe(true)
+  expect(c.away('http://127.0.0.1:12461/api/team/send')).toBe(true)
+  expect(c.away('https://localhost:12460/api/team/send')).toBe(true)
+  expect(c.away('/api/team/send')).toBe(true)
+  // The port follows the board's.
+  w.at.port = 12461
+  expect(c.away('http://127.0.0.1:12461/api/team/send')).toBe(false)
+})
+
+test('#377 what is asked from away is listed until it is confirmed or gone, and the board is told each time', async () => {
+  isolatedHome()
+  let clock = Date.UTC(2026, 10, 10, 12, 0, 0)
+  let told = 0
+  const timers: (() => void)[] = []
+  const c = createTeamConfirm({
+    port: () => 12460,
+    now: () => clock,
+    changed: () => {
+      told++
+    },
+    later: fn => {
+      timers.push(fn)
+    },
+  })
+  const key = await softAuthenticator(-7)
+  addFirst(c, key)
+  expect(confirmWith(c, c.pend({ kind: 'passkey-on' }), key, { counter: 1 }).ok).toBe(true)
+  // Asked on the computer: the window there takes it, nothing is listed, nothing told.
+  c.pend(SEND)
+  expect(c.waiting()).toEqual([])
+  expect(told).toBe(0)
+
+  const away = c.pend(SEND, true)
+  expect(c.waiting()).toEqual([{ id: away, action: SEND, at: clock }])
+  expect(told).toBe(1)
+  // Confirmed in the window the panel opened: gone from the list, the board told.
+  expect(confirmWith(c, away, key, { counter: 2 })).toMatchObject({ ok: true, done: true, action: SEND })
+  expect(c.waiting()).toEqual([])
+  expect(told).toBe(2)
+
+  // Nobody confirms: after CONFIRM_MS the timer finds it gone and tells the board.
+  const late = c.pend(SEND, true)
+  expect(told).toBe(3)
+  expect(c.waiting().map(x => x.id)).toEqual([late])
+  clock += CONFIRM_MS + 1
+  for (const fn of timers) fn()
+  expect(c.waiting()).toEqual([])
+  expect(told).toBe(4)
+  expect(c.view(late)).toBeNull()
+})

@@ -732,3 +732,82 @@ describe('without teamRev, or on a remote page', () => {
     expect(ids(draw(payload({ teamRev: 1 })))).toHaveLength(1)
   })
 })
+
+describe('a send from the owner’s phone that waits for the passkey on the computer (#377)', () => {
+  const WAITING = {
+    id: 'AAAAAAAAAAAAAAAAAAAAAA',
+    at: Date.parse('2026-11-12T10:00:00Z'),
+    confirm: 'http://localhost:12422/?confirm=AAAAAAAAAAAAAAAAAAAAAA',
+    action: { kind: 'send', who: 'Ana', text: 'are we shipping today?\nsecond line' },
+  }
+
+  test('the phone page says it waits on the computer, not that it was refused', () => {
+    expect(sendError('confirm', t)).toBe(
+      'Waiting for your passkey on the computer: confirm it in the Team panel there within 2 minutes, or it is not sent',
+    )
+    expect(sendError('confirm', translator('ru'))).toContain('на компьютере')
+  })
+
+  test('on the phone a 428 from the board is toasted as waiting, not as an error, and the draft stays', async () => {
+    const was = (globalThis as { location?: unknown }).location
+    ;(globalThis as { location?: unknown }).location = { port: '', hostname: 'atlas.tail1234.ts.net' }
+    try {
+      const toasts: [string, boolean | undefined][] = []
+      answers([428, { ok: false, error: 'confirm', id: WAITING.id, confirm: WAITING.confirm, where: 'computer' }])
+      const source = teamSource({ t: () => t, toast: (x, error) => void toasts.push([x, error]), remote: () => true })
+      source.select(`${ANA}/general`)
+      expect(await source.send('hello')).toBe(false)
+      expect(toasts).toEqual([[sendError('confirm', t), false]])
+    } finally {
+      ;(globalThis as { location?: unknown }).location = was
+    }
+  })
+
+  test('the list on the computer shows it above the drafts, in the window’s words, with Confirm', () => {
+    const p = props({ waiting: [WAITING] })
+    const all = text(render(p))
+    expect(all).toContain('From your phone, waiting for your passkey')
+    expect(all).toContain('Send to Ana')
+    expect(all).toContain('are we shipping today?')
+    expect(all).not.toContain('second line')
+    const confirmed: string[] = []
+    press(hostsOf({ ...p, onConfirmWaiting: id => void confirmed.push(id) }), h => h.props.children === 'Confirm…')
+    expect(confirmed).toEqual([WAITING.id])
+    // None waiting: no such section.
+    expect(text(render(props()))).not.toContain('From your phone')
+  })
+
+  test('the computer asks GET /api/team/confirm only while the payload says something waits, and never on a remote page', async () => {
+    const list = (waiting: number, remote: boolean) => {
+      const calls = answers(
+        [200, VIEW],
+        [200, { threads: THREADS }],
+        ...(remote
+          ? []
+          : ([
+              [200, AGENTS],
+              [200, { pending: [] }],
+            ] as [number, unknown][])),
+        [200, { waiting: [WAITING] }],
+      )
+      const source = teamSource({ t: () => t, toast: () => {}, remote: () => remote })
+      source.sync(true, 1, 0, waiting)
+      return { calls, source }
+    }
+    const none = list(0, false)
+    await Bun.sleep(5)
+    expect(none.calls.map(c => c.url)).not.toContain('/api/team/confirm')
+    expect(none.source.now.get().waiting).toEqual([])
+    restoreFetch()
+
+    const one = list(1, false)
+    await Bun.sleep(5)
+    expect(one.calls.map(c => c.url)).toContain('/api/team/confirm')
+    expect(one.source.now.get().waiting).toEqual([WAITING])
+    restoreFetch()
+
+    const phone = list(1, true)
+    await Bun.sleep(5)
+    expect(phone.calls.map(c => c.url)).not.toContain('/api/team/confirm')
+  })
+})

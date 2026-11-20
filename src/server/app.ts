@@ -546,7 +546,26 @@ export async function startServer({
   }
   // The owner's passkey for Send, trust and widening agents (#224): confirmed in a window on
   // http://localhost:<port>, the port this board listens on.
-  const teamConfirm = createTeamConfirm({ port: () => Number(server?.port ?? port), safe: () => !loopbackTaken })
+  // What the owner's phone asks waits here (#377): the head's count follows it, out of the payload's
+  // build (which reads the list) so a publish never runs inside another.
+  const teamConfirm = createTeamConfirm({
+    port: () => Number(server?.port ?? port),
+    safe: () => !loopbackTaken,
+    changed: () =>
+      queueMicrotask(() => {
+        try {
+          board.publish()
+        } catch (err) {
+          log(`team: publishing what waits for the passkey failed: ${messageOf(err)}`)
+        }
+      }),
+  })
+  /** The actions asked from away that wait for the passkey here (#377); null while there are none, or no team. */
+  const teamWaiting = (): number | null => {
+    if (team.rev() === null) return null
+    const n = teamConfirm.waiting().length
+    return n > 0 ? n : null
+  }
   // The confirmation window is on http://localhost:<port>, and a browser may try [::1] for
   // `localhost` before 127.0.0.1. While team is on the board holds [::1]:<port> as well, so no other
   // program can stand there and show a window of its own; if one already does, confirmations are
@@ -698,6 +717,7 @@ export async function startServer({
     presence: presence.view,
     teamRev: team.rev,
     teamUnread,
+    teamWaiting,
     backup: backupLine,
     time: timeLine,
     calendar: calendarLine,

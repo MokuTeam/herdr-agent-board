@@ -28,7 +28,8 @@
 // sending in the page that asked for 30 minutes: it sends the token back in X-Board-Unlock. GET and
 // POST /api/team/passkeys list, add and remove the passkeys (adding a later one and removing any
 // confirm with one there is), and turn the switch on and off (each confirmed with one, so on needs
-// a passkey there first).
+// a passkey there first). What the owner's phone or the domain asks waits for the owner at the
+// computer instead (#377): the Team panel lists it (GET /api/team/confirm) and opens its window.
 //
 // Channels and welcomes (#355): POST /api/team/send's new thread may carry `members` (the panel's
 // send only, never an agent's post), a channel takes more with POST
@@ -240,13 +241,25 @@ export function teamRoutes(
 ): Route[] {
   const lanes = (): Pick<Config, 'categories' | 'team'> => cfg ?? { categories: [] }
 
-  /** Why a gated action may not go now (428 with its confirmation), or null: always null while the switch is off (#367). */
+  /**
+   * Why a gated action may not go now (428 with its confirmation), or null: always null while the
+   * switch is off (#367). Asked from away (#377: the owner's phone, the domain), it waits for the
+   * owner at the computer (GET /api/team/confirm lists it there), and the 428 says so: `where:
+   * 'computer'`.
+   */
   function held(req: Request, action: OwnerAction): Response | null {
     if (!confirm?.required()) return null
     if (unlocks(action) && confirm.unlocked(req.headers.get('x-board-unlock'))) return null
     if (!confirm.safe()) return json(503, { ok: false, error: 'loopback' })
-    const id = confirm.pend(action)
-    return json(428, { ok: false, error: 'confirm', id, confirm: confirm.urlOf(id) })
+    const away = confirm.away(req.url)
+    const id = confirm.pend(action, away)
+    return json(428, {
+      ok: false,
+      error: 'confirm',
+      id,
+      confirm: confirm.urlOf(id),
+      ...(away && { where: 'computer' }),
+    })
   }
 
   /** Does an owner action: at once when it needs no confirmation, or once the window confirmed it. */
@@ -761,7 +774,8 @@ function welcomeFrom(
  * (403 { error: 'passkey' } with none to confirm with) and { op: 'off' }; either answers 200 at once
  * when the switch already stands that way. GET /api/team/confirm/<id> is what the window shows and the WebAuthn options;
  * POST /api/team/confirm/<id> is its answer, taken only from the window's origin
- * (http://localhost:<port>): a page on 127.0.0.1 is told the localhost address instead.
+ * (http://localhost:<port>): a page on 127.0.0.1 is told the localhost address instead. GET
+ * /api/team/confirm lists what was asked from away and waits for the owner here (#377).
  */
 function confirmRoutes(
   team: TeamService,
@@ -803,6 +817,22 @@ function confirmRoutes(
         } else return json(400, { ok: false, error: 'body' })
         const id = confirm.pend(action)
         return json(428, { ok: false, error: 'confirm', id, confirm: confirm.urlOf(id) })
+      },
+    },
+    {
+      // What was asked from away and waits for the owner here (#377), for the Team panel: each with
+      // the address of its window and what it does, in the board's words. The computer's only
+      // (localOnly; not one of the owner's routes away, core/remote.ts ownerTeam). A program on this
+      // computer can read it, as it can read the threads; doing any of it still takes the passkey.
+      method: 'GET',
+      path: '/api/team/confirm',
+      handle() {
+        if (!team.view()) return undefined
+        return json(200, {
+          waiting: confirm
+            .waiting()
+            .map(w => ({ id: w.id, at: w.at, confirm: confirm.urlOf(w.id), action: describe(w.action) })),
+        })
       },
     },
     {

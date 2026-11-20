@@ -25,6 +25,7 @@ function setUp({ gate = false, hub = true } = {}) {
   const sends: { entry: string; unlocked: boolean }[] = []
   const shares: { thread: string; to: string; history: boolean }[] = []
   const pended: OwnerAction[] = []
+  const awayPended: OwnerAction[] = []
   const work = {
     on: () => true,
     async send(entry: string, unlocked: boolean): Promise<SendOut> {
@@ -56,16 +57,24 @@ function setUp({ gate = false, hub = true } = {}) {
       required: () => gate,
       unlocked: token => token === 'open-sesame',
       safe: () => true,
-      pend: a => {
+      // As the board decides it (#377): the board's own address at its port is the computer.
+      away: url => !url.startsWith('http://127.0.0.1:12422/'),
+      pend: (a, away) => {
         pended.push(a)
+        if (away) awayPended.push(a)
         return 'c0nf1rm'
       },
       urlOf: id => `http://localhost:12422/?confirm=${id}`,
     },
   }
   const routes: Route[] = threadsRoutes(app, revStream())
-  const call = async (path: string, body: unknown, headers: Record<string, string> = {}) => {
-    const url = new URL(`http://127.0.0.1:12422${path}`)
+  const call = async (
+    path: string,
+    body: unknown,
+    headers: Record<string, string> = {},
+    base = 'http://127.0.0.1:12422',
+  ) => {
+    const url = new URL(`${base}${path}`)
     const req = new Request(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-board': '1', ...headers },
@@ -80,8 +89,22 @@ function setUp({ gate = false, hub = true } = {}) {
       return newThread({ db, cfg: CFG, actor: { kind: 'owner' }, now: NOW }, { lane: 'atlas', title: 'Import mapping' })
         .head
     })
-  return { call, thread, sends, shares, pended }
+  return { call, thread, sends, shares, pended, awayPended }
 }
+
+test('#377 a share asked from the phone waits for the owner at the computer, and the 428 says so', async () => {
+  const on = setUp({ gate: true })
+  const h = on.thread()
+  const held = await on.call(`/api/threads/${h.key}`, { op: 'share', to: 'ben' }, {}, 'http://100.64.0.7:12422')
+  assert.equal(held.status, 428)
+  assert.equal(held.body.where, 'computer')
+  assert.deepEqual(on.awayPended, [{ kind: 'thread-share', thread: h.key, to: 'ben', history: false }])
+  // On the computer, as before: no where, nothing kept for the panel.
+  const here = await on.call(`/api/threads/${h.key}`, { op: 'share', to: 'ben' })
+  assert.equal(here.status, 428)
+  assert.equal(here.body.where, undefined)
+  assert.equal(on.awayPended.length, 1)
+})
 
 test('sharing waits for the passkey while the gate is on, and goes at once while it is off', async () => {
   const on = setUp({ gate: true })

@@ -16,6 +16,12 @@
 // passkey is there, so a board cannot lock its owner out; removing the last passkey turns it off.
 // Turning it on and turning it off are pending actions, confirmed like the rest: off so that an
 // agent cannot, on so that a passkey that cannot sign here (a key left elsewhere) locks nobody out.
+//
+// From away (#377): a gated request that came through the remote or the tunnel listener (the
+// owner's phone, the domain) cannot open the window on localhost. It is pended all the same, marked
+// away: waiting() lists those for the Team panel on the computer, where the owner opens the window
+// with a click, and `changed` tells the board when that list moves (one added, done, or gone after
+// CONFIRM_MS), so the head's Team button follows.
 import { createHash, randomBytes } from 'node:crypto'
 import { audit, changeOwnerKeys, type OwnerPasskey, readOwnerKeys } from '../adapters/team-store.ts'
 import { deviceLabel } from '../core/access.ts'
@@ -23,6 +29,7 @@ import {
   CONFIRM_MS,
   confirmOrigin,
   confirmUrl,
+  fromComputer,
   HINTS,
   MAX_PENDING,
   type OwnerAction,
@@ -54,6 +61,15 @@ interface Pending {
   verified: boolean
   /** A window read it: when the cap is reached, the ones nobody opened go first. */
   viewed: boolean
+  /** Asked from away (#377): it waits for the owner at the computer, listed in the Team panel. */
+  away: boolean
+}
+
+/** A gated action asked from away that waits for the owner at the computer (#377). */
+export interface Waiting {
+  id: string
+  action: OwnerAction
+  at: number
 }
 
 /** What the window does next: sign with a passkey there is, or make a new one. */
@@ -84,8 +100,12 @@ export interface TeamConfirm {
   /** Whether the gated actions wait for a confirmation (#367): the switch on, and a passkey there. */
   required(): boolean
   passkeys(): PublicPasskey[]
-  /** Keeps a gated action for its confirmation; its id. */
-  pend(action: OwnerAction): string
+  /** Keeps a gated action for its confirmation; its id. `away`: asked from away (#377), listed by waiting(). */
+  pend(action: OwnerAction, away?: boolean): string
+  /** Whether a request (its URL) came from away, not to the board on this computer (#377). */
+  away(url: string): boolean
+  /** The actions asked from away that wait for a confirmation, oldest first (#377). */
+  waiting(): Waiting[]
   /** The pending action and the window's next step, with a fresh challenge; null when it is gone. */
   view(id: string): ConfirmView | null | 'passkey'
   /** The window's answer to `view` (an assertion or a registration). */
@@ -110,17 +130,32 @@ export function createTeamConfirm({
   port,
   now = Date.now,
   safe = () => true,
+  changed,
+  later = (fn, ms) => {
+    setTimeout(fn, ms).unref?.()
+  },
 }: {
   port: () => number
   now?: () => number
   safe?: () => boolean
+  /** The actions asked from away changed (#377): one added, done, dropped or gone. */
+  changed?: () => void
+  /** Calls `fn` after `ms` (the tests run it by hand). */
+  later?: (fn: () => void, ms: number) => void
 }): TeamConfirm {
   const pending = new Map<string, Pending>()
   const unlockedUntil = new Map<string, number>()
 
+  /** Takes a pending action off; tells the board when it was one asked from away. */
+  function drop(id: string): void {
+    const away = pending.get(id)?.away
+    pending.delete(id)
+    if (away) changed?.()
+  }
+
   function sweep(): void {
     const t = now()
-    for (const [id, p] of pending) if (t - p.at > CONFIRM_MS) pending.delete(id)
+    for (const [id, p] of pending) if (t - p.at > CONFIRM_MS) drop(id)
     for (const [h, until] of unlockedUntil) if (until <= t) unlockedUntil.delete(h)
   }
 
@@ -210,7 +245,7 @@ export function createTeamConfirm({
     passkeys: () =>
       readOwnerKeys().passkeys.map(p => ({ id: p.id, label: p.label, addedAt: p.addedAt, usedAt: p.usedAt })),
 
-    pend(action) {
+    pend(action, away = false) {
       sweep()
       // Full: the oldest that no window has read goes first (a flood of requests nobody opens
       // does not push out the one the owner is confirming), else the oldest.
@@ -218,11 +253,25 @@ export function createTeamConfirm({
         const unread = [...pending].find(([, p]) => !p.viewed)?.[0]
         const oldest = unread ?? pending.keys().next().value
         if (oldest === undefined) break
-        pending.delete(oldest)
+        drop(oldest)
       }
       const id = random(ID_BYTES)
-      pending.set(id, { action, at: now(), challenge: null, verified: false, viewed: false })
+      pending.set(id, { action, at: now(), challenge: null, verified: false, viewed: false, away })
+      if (away) {
+        changed?.()
+        // Gone after CONFIRM_MS: the list is read again then, and the head's count drops.
+        later(() => {
+          if (pending.has(id)) sweep()
+        }, CONFIRM_MS + 1)
+      }
       return id
+    },
+
+    away: url => !fromComputer(url, port()),
+
+    waiting() {
+      sweep()
+      return [...pending].filter(([, p]) => p.away).map(([id, p]) => ({ id, action: p.action, at: p.at }))
     },
 
     view(id) {
@@ -258,7 +307,7 @@ export function createTeamConfirm({
         p.verified = true
         return { ok: true, done: false }
       }
-      pending.delete(id)
+      drop(id)
       if (p.action.kind === 'passkey-remove') {
         const gone = p.action.id
         changeOwnerKeys(k => {

@@ -2633,7 +2633,15 @@ The board is opened on `127.0.0.1`, and a passkey cannot belong to an IP, so the
 opens in a small window of the board's own on `http://localhost:<port>`, which says what is about
 to happen in the board's words (the person by their roster name, the text as it will go) before you
 touch the passkey. Allow the board's pop-ups for it. One confirmed send lets that board page send
-without asking for 30 minutes; a reload or a restart of the board ends that. Trusting a key and
+without asking for 30 minutes; a reload or a restart of the board ends that.
+
+A send from your phone (the app, the board in the phone's browser, or your domain), sending an
+agent's draft there, or a shared thread's entry cannot open that window: it lives on `localhost`
+of the computer. With the switch on it waits on the computer instead (#377): the head's Team button
+counts it, the Team panel lists it at the top under **From your phone, waiting for your passkey**,
+and **Confirm…** opens the window. Each waits 2 minutes and is then not sent; the phone says it
+waits, not that it failed. The phone gets no 30 minutes of sending from it: each send waits for
+the computer. Trusting a key and
 widening agents ask every time. These passkeys are not the ones of your domain's sign-in (Remote
 access through your own domain): those are for the domain, these for `localhost`, and neither works
 for the other. A change of the board's port keeps them. While team is on, the board also holds its port on `[::1]`,
