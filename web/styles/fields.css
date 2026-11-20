@@ -1,0 +1,11 @@
+/* The text fields of Settings (#283, #287): .path-add and .draft-id (app.css: no fill, no outline,
+   a fill only while focused) lay on the panel's own color and showed no place to type, in the dark
+   theme above all. Every one of them takes the fill the Login fields' .access-input has (--fill-2,
+   access.css) and a ring in the accent on focus, as the board's other fields have, and keeps its
+   monospace face: Remote access (tunnel, server admin), Backup, Profiles, Sleep and wake,
+   Categories. The Login fields (.path-add.access-input) keep what access.css gives them. The
+   Terminal style outlines the same fields instead (look-terminal.css). Every rule here selects by
+   class: app.css stays upstream's, rule for rule. */
+
+.path-add:not(.access-input), .draft-id { background: var(--fill-2); }
+.path-add:not(.access-input):focus, .draft-id:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }

@@ -10,6 +10,26 @@ const px = (css: string, rule: RegExp, prop: string): number => {
   return Number(new RegExp(String.raw`(?:^|[;\s])${prop}:\s*([\d.]+)px`).exec(body)?.[1])
 }
 
+test('Classic: the question under "Needs me" ends at its third line, nothing of a fourth in its padding (#185)', () => {
+  const ask = /^\.ask \{([^}]*)\}/m.exec(sheet('app.css'))?.[1] ?? ''
+  // the cause: a padded box that clamps at three lines and clips at its padding edge
+  expect(ask).toContain('padding: 7px 9px;')
+  expect(ask).toContain('-webkit-line-clamp: 3;')
+  expect(ask).toContain('overflow: hidden;')
+  const css = sheet('cards.css')
+  const rule = /^\.card \.ask \{([^}]*)\}/m.exec(css)?.[1] ?? ''
+  // the top and bottom padding become a transparent border of the same width: the box keeps its
+  // size and tint, and the text is clipped where the third line ends
+  expect(rule).toContain('padding-block: 0;')
+  expect(px(css, /^\.card \.ask \{([^}]*)\}/m, 'border-block')).toBe(7)
+  expect(rule).toContain('solid transparent')
+  expect(/^\.ask \{[^}]*background-clip/m.test(sheet('app.css'))).toBe(false)
+  // in forced colors the border takes the page's color instead of being drawn
+  expect(css).toMatch(/@media \(forced-colors: active\) \{\s*\.card \.ask \{ border-block-color: Canvas; \}/)
+  // the Terminal style, which has no padding or tint there, takes the border off again (it outranks .card .ask)
+  expect(sheet('look-terminal.css')).toMatch(/^:root\[data-look="terminal"\] \.ask \{[^}]*padding: 0; border: 0;/m)
+})
+
 test('the dot of an awake card takes the moon’s width, so names line up across the column', () => {
   const app = sheet('app.css')
   const moon = px(app, /^\.moon \{([^}]*)\}/m, 'width')

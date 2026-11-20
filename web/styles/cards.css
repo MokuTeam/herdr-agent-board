@@ -98,3 +98,15 @@
 @media (prefers-reduced-motion: reduce) {
   .card-actions .stop-word { animation: none; }
 }
+
+/* The question under "Needs me" in the Classic style (#185): app.css's .ask clamps its text at three
+   lines but clips at its padding edge, so the top of a fourth line painted in the 7px bottom
+   padding. Its top and bottom padding become a transparent border of the same width: the tint
+   still fills it (the background reaches the border's outer edge) and the text is clipped inside
+   it, so the box keeps its size and ends at the third line. The Terminal style has no padding and
+   no tint there, and takes the border off again (look-terminal.css). In forced colors a
+   transparent border is drawn, so there it takes the page's color. */
+.card .ask { padding-block: 0; border-block: 7px solid transparent; }
+@media (forced-colors: active) {
+  .card .ask { border-block-color: Canvas; }
+}

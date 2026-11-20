@@ -205,6 +205,42 @@ test('two drafts of one earlier day say their times (#465), the full date on hov
   ])
 })
 
+test('in the list two drafts of one earlier day say their times too (#470), the full date on hover; in UTC and in Dubai', () => {
+  const two: DraftLine[] = [
+    { ...(DRAFTS[0] as DraftLine), id: 'd1', ts: '2026-11-12T13:17:00.000Z' },
+    { ...(DRAFTS[0] as DraftLine), id: 'd2', ts: '2026-11-12T18:08:00.000Z' },
+  ]
+  const whens = (zone: string) =>
+    inZone(zone, () => {
+      // The next day in UTC, so both are yesterday's; a minute past midnight in Dubai, so both are Thursday's.
+      const out = renderInBoard(
+        <TeamBody {...body({ drafts: two })} />,
+        board({ now: Date.parse('2026-11-13T20:01:00.000Z') }),
+      )
+      return findAll(out, n => n.kind === 'element' && n.attrs.get('class') === 'team-row-when').map(n => ({
+        label: text([n]).replace(/\s/g, ' '),
+        title: (n.kind === 'element' && n.attrs.get('title')?.replace(/\s/g, ' ')) || '',
+      }))
+    })
+  expect(whens('UTC')).toEqual([
+    { label: 'Yesterday 1:17 PM', title: 'Thursday, November 12, 2026, 1:17 PM' },
+    { label: 'Yesterday 6:08 PM', title: 'Thursday, November 12, 2026, 6:08 PM' },
+  ])
+  expect(whens('Asia/Dubai')).toEqual([
+    { label: 'Thu 5:17 PM', title: 'Thursday, November 12, 2026, 5:17 PM' },
+    { label: 'Thu 10:08 PM', title: 'Thursday, November 12, 2026, 10:08 PM' },
+  ])
+  // Today's draft keeps the bare time, as the thread's does.
+  const today = renderInBoard(
+    <TeamBody {...body({ drafts: two })} />,
+    board({ now: Date.parse('2026-11-12T18:09:00.000Z') }),
+  )
+  const labels = findAll(today, n => n.kind === 'element' && n.attrs.get('class') === 'team-row-when').map(n =>
+    text([n]).replace(/\s/g, ' '),
+  )
+  expect(labels).toEqual(['1:17 PM', '6:08 PM'])
+})
+
 test('draftWhere: a new topic by the title it would start; a former member; a channel by its title', () => {
   const t = translator('en')
   const v = VIEW as never

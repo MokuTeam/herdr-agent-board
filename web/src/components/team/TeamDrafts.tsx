@@ -5,7 +5,7 @@
 // thread it waits in.
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { type DraftLine, draftWhere, draftWhy, type TeamView, type ThreadView } from '../../models/team.ts'
-import { listWhen } from '../../models/team-chat.ts'
+import { draftWhen, fullWhen } from '../../models/team-chat.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { fileSize } from './TeamFile.tsx'
 
@@ -42,7 +42,9 @@ export function TeamDrafts({ drafts, threads, view, disabled, onSelect, onSend, 
               onClick={() => onSelect(d.key)}
             >
               <span className="team-row-title">{draftWhere(d, threads, view, t)}</span>
-              <span className="team-row-when">{listWhen(d.ts, t, now)}</span>
+              <span className="team-row-when" title={fullWhen(d.ts, t)}>
+                {draftWhen(d.ts, t, now)}
+              </span>
             </button>
             {first && <p className="team-draft-line">{first}</p>}
             {d.file && (
