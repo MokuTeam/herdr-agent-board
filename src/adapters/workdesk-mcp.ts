@@ -67,18 +67,20 @@ export async function withWorkdeskMcp<T>(
   signal.addEventListener('abort', kill, { once: true })
   if (signal.aborted) kill()
   const input = messages(child.stdout)
-  const write = (message: Record<string, unknown>) => {
+  // Pipe writes can settle later (a Promise on Windows): await them, so a write to an adapter
+  // that has gone (EPIPE) rejects its own request instead of escaping as an unhandled rejection.
+  const write = async (message: Record<string, unknown>) => {
     signal.throwIfAborted()
-    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`)
-    child.stdin.flush()
+    await child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`)
+    await child.stdin.flush()
   }
   let nextId = 0
   async function rpc(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
     const id = ++nextId
-    write({ id, method, params })
-    // Closing the subprocess also ends the read when the adapter stays silent.
+    // Closing the subprocess also ends the read (or a stuck write) when the adapter stays silent.
     const timeout = setTimeout(kill, RPC_TIMEOUT_MS)
     try {
+      await write({ id, method, params })
       for (;;) {
         const next = await input.next()
         if (next.done) throw new Error('Workdesk MCP disconnected')
@@ -100,7 +102,7 @@ export async function withWorkdeskMcp<T>(
       clientInfo: { name: 'agent-board-workdesk', version: '1' },
     })
     if (typeof init.protocolVersion !== 'string') throw new Error('Invalid Workdesk MCP initialization')
-    write({ method: 'notifications/initialized' })
+    await write({ method: 'notifications/initialized' })
     return await run({
       async tools() {
         const catalog = new Map<string, unknown>()
