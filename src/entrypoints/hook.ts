@@ -141,6 +141,17 @@ async function main(): Promise<void> {
   // goes to, whichever of the bridge's providers it took.
   const boardKey = event === 'UserPromptSubmit' ? await boardKeyOf(pane, sid) : null
   const boardCard = boardKey ? readCard(boardKey) : card
+  // Decisions (#487): the decision the ask carries is closed first, the owner's answer or withdrawn,
+  // from the cards as read: the board, seeing a card without it, would take it for one left behind.
+  if (event === 'UserPromptSubmit' && !fromBoard) {
+    for (const c of [card, boardKey ? boardCard : null]) {
+      if (!c?.ask || c.decision === undefined) continue
+      const { closeOnPrompt } = await import('../services/decisions.ts')
+      try {
+        closeOnPrompt(c, input.prompt, Date.now())
+      } catch {}
+    }
+  }
   if (event === 'UserPromptSubmit') {
     const done = answered(card)
     if (done) Object.assign(patch, done)
@@ -198,16 +209,6 @@ async function main(): Promise<void> {
     }
   }
   if (Object.keys(patch).length) writeCard(sid, patch)
-  // Decisions (#487): the decision the ask carried is closed, the owner's answer or withdrawn.
-  if (event === 'UserPromptSubmit' && !fromBoard) {
-    for (const c of [card, boardKey ? boardCard : null]) {
-      if (!c?.ask || c.decision === undefined) continue
-      const { closeOnPrompt } = await import('../services/decisions.ts')
-      try {
-        closeOnPrompt(c, input.prompt, Date.now())
-      } catch {}
-    }
-  }
   if (event === 'SessionStart') await reportResume(input, sid, pane, dir, profiles, cfg)
   if (context) console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }))
 }

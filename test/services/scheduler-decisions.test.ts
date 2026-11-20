@@ -72,12 +72,12 @@ const askedLong = (box: Sandbox) =>
   )
 const rowOf = (box: Sandbox, id: string) => inBox(box, () => withDecisionsDb(db => getDecision(db, id)))
 
-async function scheduler(box: Sandbox) {
+async function scheduler(box: Sandbox, decisions: unknown = true) {
   const proc = box.run('scheduler', {
     categories: [{ id: 'other', title: 'Other', color: 'gray' }],
     wakeUrl: null,
     scheduleTickSec: 0.2,
-    decisions: true,
+    decisions,
   })
   await until(() => proc.messages.some(m => (m as { ready?: boolean }).ready))
   return proc
@@ -158,5 +158,18 @@ test('held: nothing goes, the question stays open', async () => {
   await Bun.sleep(600)
   assert.deepEqual(prompts(box), [])
   assert.equal(rowOf(box, r.id)?.answeredAt, null)
+  assert.equal(cardOf(box).ask, 'Merge now?')
+})
+
+test('defaults turned off after the ask: the default already scheduled is dropped, nothing typed', async () => {
+  const box = await sandbox()
+  herdrIdle(box)
+  const r = askedLong(box)
+  const entry = rowOf(box, r.id)?.entry as string
+  await scheduler(box, { defaults: false })
+  await until(() => runs(box).some(x => x.id === entry))
+  await Bun.sleep(600)
+  assert.deepEqual(prompts(box), [])
+  assert.equal(runs(box).find(x => x.id === entry)?.result, 'cancelled')
   assert.equal(cardOf(box).ask, 'Merge now?')
 })

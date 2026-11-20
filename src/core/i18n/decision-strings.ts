@@ -39,6 +39,7 @@ export const DECISION_STRINGS: Record<Lang, Record<string, string | string[]>> =
     'dec.err.off': 'Decisions are off (config.json "decisions")',
     'dec.err.bad': 'Decisions: what to do with which question?',
     'dec.err.empty': 'An answer needs words',
+    'dec.err.busy': 'An answer to this question is on its way already',
   },
   ru: {
     'dec.open': 'Решения',
@@ -76,5 +77,6 @@ export const DECISION_STRINGS: Record<Lang, Record<string, string | string[]>> =
     'dec.err.off': 'Решения выключены (config.json "decisions")',
     'dec.err.bad': 'Решения: что сделать и с каким вопросом?',
     'dec.err.empty': 'В ответе нет слов',
+    'dec.err.busy': 'Ответ на этот вопрос уже отправляется',
   },
 }

@@ -41,8 +41,6 @@ const numberOf = (value: unknown): number | undefined => (typeof value === 'numb
 const callAgentsHere = callAgentsGate()
 const daySessionHere = dayGate()
 
-/** The panes its card says wake closed as it went to sleep (#204, services/wake/follow.ts), when it has any. */
-/** A card's tasks (#202) for its item, when it has any. */
 /** A card's open decision (#487), only while config.json turns decisions on and the card still asks. */
 const decisionField = (cfg: Config, card: Card): { decision?: CardDecision } => {
   if (card.decision === undefined || !card.ask || !decisionsConfig(cfg.decisions)) return {}
@@ -50,6 +48,8 @@ const decisionField = (cfg: Config, card: Card): { decision?: CardDecision } => 
   return decision ? { decision } : {}
 }
 
+/** The panes its card says wake closed as it went to sleep (#204, services/wake/follow.ts), when it has any. */
+/** A card's tasks (#202) for its item, when it has any. */
 /** A secret request's line on the card (#273), the newest one's, when no `board ask` says more. */
 function secretAsk(card: Card): string {
   const last = pendingOf(requestsOf(card.secrets), Date.now()).at(-1)

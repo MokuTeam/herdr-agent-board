@@ -2333,9 +2333,10 @@ carries a mark. The phone gets the same queue. `board decisions [--json]` prints
 
 Every decision is kept in the board's database (question, options, the answer, whether you or the
 default gave it, or the question was withdrawn, and when): the session's sheet lists its own, and
-`board decisions --done` the recent ones. Only your own words count as your answer: a board reminder,
-a Team notice, a background result or a task notification leaves the question open, and another
-session's message, which clears the card's question as before, records it as withdrawn.
+`board decisions --done` the recent ones. Only what you type counts as your answer: a board
+reminder, a Team notice, a task notification or Code Mode's background result leaves the question
+open, and a prompt that clears the card's question as before without being yours (another session's
+message, a teammate's) records it as withdrawn.
 
 ```json
 "decisions": true

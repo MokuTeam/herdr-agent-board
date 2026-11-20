@@ -187,6 +187,24 @@ test('Hold takes the default back and keeps the question; an own answer goes as 
   assert.equal(rowOf(box, r.id)?.via, 'text')
 })
 
+test('two answers at once (a button on the card, another in the panel or on the phone): one goes, the other is refused', async () => {
+  const box = await sandbox()
+  const { list } = awake(box)
+  const r = ask(box)
+  const { post } = await serve(box, { decisions: true, wake: false, profiles: list }, i => i.decision?.id === r.id)
+  const [a, b] = await Promise.all([
+    post({ op: 'answer', key: SID, id: r.id, option: 1 }),
+    post({ op: 'answer', key: SID, id: r.id, option: 2 }),
+  ])
+  assert.deepEqual([a.status, b.status].sort(), [200, 409], JSON.stringify([a.body, b.body]))
+  assert.equal(prompts(box).length, 1)
+  const refusedWith = String((a.status === 409 ? a : b).body.error)
+  assert.ok(
+    ['An answer to this question is on its way already', 'This question is no longer open'].includes(refusedWith),
+    refusedWith,
+  )
+})
+
 test('decisions off: no queue in the payload, no decision on the item, the route refused', async () => {
   const box = await sandbox()
   const { list } = awake(box)

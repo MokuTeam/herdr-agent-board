@@ -50,8 +50,9 @@ test('board ask reads its flags before a --, the rest is the question', () => {
     recommend: null,
     defaultMs: null,
   })
-  // A plain question is one with no options.
+  // A plain question is one with no options, kept whole as a plain board ask keeps it.
   expect(parseAsk(['ok', 'to', 'go?'], [], ON).options).toEqual([])
+  expect(parseAsk(['x'.repeat(900)], [], ON).question).toHaveLength(900)
 })
 
 test('board ask refuses with one line: options, labels, --recommend, --default-after', () => {
@@ -88,6 +89,8 @@ test('board ask refuses with one line: options, labels, --recommend, --default-a
     'defaults are off on this board: ask without --default-after',
   )
   expect(refused(['q', '--option'])).toBe('--option needs a value')
+  expect(refused(['q', '--option', '/clear', '--option', 'b'])).toBe("an option's label may not start with / or !")
+  expect(refused(['q', '--option', '!rm -rf x', '--option', 'b'])).toBe("an option's label may not start with / or !")
   expect(refused(['--option', 'a', '--option', 'b'])).toStartWith('usage: board ask <question>')
 })
 

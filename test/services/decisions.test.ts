@@ -258,3 +258,48 @@ test('a default taken out of the schedule by hand is held: the card stops counti
   expect(cd?.held).toBe(NOW + 60_000)
   expect(cd?.defaultAt).toBeUndefined()
 })
+
+test("the hook's close wins over the board's tidy-up: a card written a moment ago is never taken for one left behind", () => {
+  isolatedHome()
+  const r = ask()
+  const snapshot = readCard(ANNA)
+  // The board refreshes while the card has just lost its ask (the hook on its way).
+  writeCard(ANNA, { ask: '', askSince: '', decision: '' })
+  decisionsPayload([], new Map([[ANNA, readCard(ANNA) as Card]]), { now: Date.now(), defaults: true, seen: 0 })
+  expect(row(r.id)?.answeredAt).toBeNull()
+  closeOnPrompt(snapshot, 'wait for the review', NOW + 60_001)
+  expect(row(r.id)).toMatchObject({ answeredBy: 'owner', answer: 'wait for the review' })
+})
+
+test('a card missed by one read leaves its question open and its default in place', () => {
+  isolatedHome()
+  const r = ask()
+  const entry = row(r.id)?.entry as string
+  decisionsPayload([], new Map(), { now: NOW + 60_000, defaults: true, seen: 0 })
+  expect(row(r.id)?.answeredAt).toBeNull()
+  expect(getEntry(entry)).not.toBeNull()
+})
+
+test('one answer at a time: a second while the first goes is refused; one left by a board that stopped expires', () => {
+  isolatedHome()
+  const r = ask()
+  expect(markAnswering(ANNA, r.id, 'button', NOW)).toBe(true)
+  expect(markAnswering(ANNA, r.id, 'text', NOW + 1000)).toBe(false)
+  const entry = getEntry(row(r.id)?.entry)
+  if (!entry) throw new Error('no entry')
+  expect(defaultDue(entry)).toBe('wait')
+  // A minute on, the mark no longer holds anything.
+  expect(markAnswering(ANNA, r.id, 'text', NOW + 61_000)).toBe(true)
+  markAnswering(ANNA, r.id, null)
+  expect(defaultDue(entry)).toBe('go')
+})
+
+test('defaults turned off (or decisions altogether) after the ask: the default is dropped', () => {
+  isolatedHome()
+  const r = ask()
+  const entry = getEntry(row(r.id)?.entry)
+  if (!entry) throw new Error('no entry')
+  expect(defaultDue(entry, { decisions: true })).toBe('go')
+  expect(defaultDue(entry, { decisions: { defaults: false } })).toBe('drop')
+  expect(defaultDue(entry, {})).toBe('drop')
+})

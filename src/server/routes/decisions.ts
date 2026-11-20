@@ -65,14 +65,15 @@ export function decisionsRoutes(app: DecisionsApp): Route[] {
     const text = label ?? cleanText(body.text, ANSWER_MAX)
     if (!text) return json(400, { ok: false, error: t('dec.err.empty') })
     const via = label !== undefined ? 'button' : 'text'
-    // The hook that sees it typed in records it as given here; the default waits meanwhile.
-    markAnswering(key, id, via)
+    // The hook that sees it typed in records it as given here; the default waits meanwhile. One
+    // answer at a time: a second click (another button, the phone) while the first goes is refused.
+    if (!markAnswering(key, id, via, now())) return json(409, { ok: false, error: t('dec.err.busy'), code: 'busy' })
     const thread = decision.thread
     const told = await app
       .tell(key, thread ? `[board thread ${thread.key}] ${text}` : text)
       .catch(err => ({ ok: false as const, error: err instanceof Error ? err.message : String(err) }))
     if (!told.ok) {
-      markAnswering(key, id, null)
+      markAnswering(key, id, null, now())
       return json(409, { ok: false, error: told.error })
     }
     // A thread's question gets the answer in the thread too, as the Threads panel's answer does.
@@ -98,7 +99,8 @@ export function decisionsRoutes(app: DecisionsApp): Route[] {
     {
       method: 'POST',
       path: '/api/decisions',
-      guard: ['board-header'],
+      // An answer types into a session, as a message does: only through a herdr the board reaches.
+      guard: ['board-header', 'fresh-data'],
       async handle(_req, ctx) {
         if (!on()) return json(409, { ok: false, error: t('dec.err.off') })
         const raw = await ctx.rawBody()

@@ -766,17 +766,17 @@ export async function startServer({
     nodes: () => nodeAggregate,
     // Threads (#379): while config.json turns them on, the revision and the count that waits on
     // the owner (two queries a refresh); off, nothing is read.
-    // Decisions (#487): while config.json turns them on, the queue from the items and the cards; off, nothing is read.
-    decisions: items => {
-      const on = decisionsConfig(cfg.decisions)
-      return on ? decisionsPayload(items, allCards(), { now: Date.now(), defaults: on.defaults }) : null
-    },
     threads: () => {
       const line = threadsPayload(cfg)
       if (line) threadRevs.moved(line.rev)
       // An entry's way to the hub moved (#394): the page reads its thread again.
       const out = work.rev()
       return line && out ? { ...line, out } : line
+    },
+    // Decisions (#487): while config.json turns them on, the queue from the items and the cards; off, nothing is read.
+    decisions: items => {
+      const on = decisionsConfig(cfg.decisions)
+      return on ? decisionsPayload(items, allCards(), { now: Date.now(), defaults: on.defaults }) : null
     },
   })
   board.publish()

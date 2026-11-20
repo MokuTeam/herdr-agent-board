@@ -1038,7 +1038,8 @@ async function main(): Promise<void> {
       }
       // Needs the user: the card goes to "Needs me" until the user's next prompt (entrypoints/hook.ts clears it).
       if (!text) throw new Error('usage: board ask <question>')
-      writeCard(s.key, { ask: text, askSince: now, by: 'agent' })
+      // `decision: ''` takes off one left from when decisions were on (#487); on any other card it writes nothing.
+      writeCard(s.key, { ask: text, askSince: now, by: 'agent', decision: '' })
       break
     case 'done':
       if (decisionsOn) (await import('./decisions-cli.ts')).withdrawDecision(s.key, now)
@@ -2123,7 +2124,7 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
       if (!key) return undefined
       // Decisions (#487): the question's options and default with it, while config.json turns them on.
       if (!decision || !decisionsConfig(c.decisions)) {
-        writeCard(key, { ask: question, askSince: Date.now(), by: 'agent' })
+        writeCard(key, { ask: question, askSince: Date.now(), by: 'agent', decision: '' })
         return undefined
       }
       const { askThreadDecision } = await import('./decisions-cli.ts')

@@ -4,7 +4,8 @@
 // "needs the user" goes on reading); the database keeps the record (adapters/decision-store.ts).
 // Only reached while config.json's `decisions` is on, or for a card that has a decision.
 import { randomBytes } from 'node:crypto'
-import { join } from 'node:path'
+import { mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { readCard, updateCard, writeCard } from '../adapters/cards.ts'
 import type { BoardDb } from '../adapters/db.ts'
 import {
@@ -32,6 +33,7 @@ import {
   type DecisionsPayload,
   type DecisionView,
   type DefaultedView,
+  decisionsConfig,
   defaultLine,
   durationWords,
   orderQueue,
@@ -236,35 +238,48 @@ export function holdOpen(db: BoardDb, key: string, id: string, now: number, sche
   })
 }
 
+// An answer on its way holds the question this long at most: a board that stopped halfway never
+// keeps its default waiting for good.
+const ANSWERING_MS = 60_000
+
+/** How the card says its answer is being typed in, while it does. */
+export function answeringOf(card: Card | null | undefined, now = Date.now()): 'button' | 'text' | null {
+  const v = isRecord(card?.decision) ? card.decision.answering : undefined
+  if (!isRecord(v) || typeof v.at !== 'number' || now - v.at >= ANSWERING_MS) return null
+  return v.via === 'button' || v.via === 'text' ? v.via : null
+}
+
 /**
  * The owner's answer is on its way into the session (the page's click or text): the card says so,
  * so the hook records it as given by the button (or the text), and the default waits meanwhile.
- * Undone when it could not be typed in.
+ * One at a time: false when another answer is on its way already. `null` undoes it (it could not
+ * be typed in).
  */
-export function markAnswering(key: string, id: string, via: 'button' | 'text' | null): void {
+export function markAnswering(key: string, id: string, via: 'button' | 'text' | null, now = Date.now()): boolean {
+  let taken = false
   updateCard(key, c => {
     const cd = cardDecisionOf(c?.decision)
     if (!c || cd?.id !== id) return undefined
+    if (via && answeringOf(c, now)) return undefined
     const raw = { ...(c.decision as Record<string, unknown>) }
-    if (via) raw.answering = via
+    if (via) raw.answering = { via, at: now }
     else delete raw.answering
+    taken = true
     return { ...c, decision: raw }
   })
-}
-
-/** How the card says its answer is being typed in, when it does. */
-export function answeringOf(card: Card | null | undefined): 'button' | 'text' | null {
-  const v = isRecord(card?.decision) ? card.decision.answering : undefined
-  return v === 'button' || v === 'text' ? v : null
+  return taken
 }
 
 /**
- * The scheduler, before a default goes: 'go'; 'wait' while the owner's answer is being typed in;
- * 'drop' once the question is answered, withdrawn, replaced or held (the owner's prompt cleared
- * the card's ask: no prompt from the owner since, or it does not go).
+ * The scheduler, before a default goes (and again right before it is typed): 'go'; 'wait' while
+ * the owner's answer is being typed in; 'drop' once the question is answered, withdrawn, replaced
+ * or held (the owner's prompt cleared the card's ask: no prompt from the owner since, or it does
+ * not go), or defaults are off in the live config.
  */
-export function defaultDue(entry: ScheduleEntry): 'go' | 'wait' | 'drop' {
+export function defaultDue(entry: ScheduleEntry, cfg?: { decisions?: unknown }): 'go' | 'wait' | 'drop' {
   const id = typeof entry.decision === 'string' ? entry.decision : ''
+  // Defaults turned off (or decisions altogether) since it was asked: nothing decides by itself.
+  if (cfg && !decisionsConfig(cfg.decisions)?.defaults) return 'drop'
   const card = readCard(entry.key)
   const cd = cardDecisionOf(card?.decision)
   if (!id || !card?.ask || cd?.id !== id || cd.held !== undefined || cd.defaultAt === undefined) return 'drop'
@@ -328,12 +343,14 @@ export const seenAt = (file = SEEN()): number => readJson(file, isSeen)?.seenAt 
 
 /** The owner opened the panel: what went by default before now is seen. */
 export function markSeen(now: number, file = SEEN()): void {
+  mkdirSync(dirname(file), { recursive: true })
   replaceFile(file, JSON.stringify({ seenAt: now }), undefined, 0o600)
 }
 
 // A row a card does not point at is withdrawn once it is this old: a `board ask` writes the card
 // before the row, and one being written is never taken for one left behind.
 const SETTLE_MS = 10_000
+const LEFT_MS = 86_400_000
 
 /**
  * Open rows no card points at any more (an ask cleared by `board doing`, by a Codex session's
@@ -344,6 +361,9 @@ function settleLeftOvers(db: BoardDb, cards: ReadonlyMap<string, Card>, now: num
   for (const row of openDecisions(db)) {
     if (now - row.askedAt < SETTLE_MS) continue
     const card = cards.get(row.session)
+    // A card written a moment ago may be the hook's on its way to closing the row itself; one not
+    // read at all (a read that failed, a session gone) is left for a day.
+    if (card ? now - (Number(card.updatedAt) || 0) < SETTLE_MS : now - row.askedAt < LEFT_MS) continue
     if (card?.ask && cardDecisionOf(card.decision)?.id === row.id) {
       // Its default taken out of the schedule by hand (the Schedule row's delete, `board unschedule`):
       // held, so the card no longer counts down to a default that will not come.

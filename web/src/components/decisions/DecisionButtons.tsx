@@ -54,6 +54,8 @@ export function DecisionButtons({
     await decisions.hold(sessionKey, id)
   }
 
+  // A plain question (no options, no default) shows nothing here.
+  if (!options.length && !line) return null
   return (
     <div className={classNames('dec-choice', inCard && 'in-card')}>
       {options.length > 0 && (

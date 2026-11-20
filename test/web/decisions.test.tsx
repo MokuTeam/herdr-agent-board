@@ -1,7 +1,8 @@
 // Decisions on the board's page (#487): the toolbar's pill only while the payload carries them (its
 // count, and a dot for what went by default unseen), More's entry, a card's options with the
 // recommended one marked and its default with Hold (a card without a decision drawn exactly as
-// before), the panel's lines, and the words for a span and for who closed a question.
+// before), and the words for a span and for who closed a question. The panel itself was checked on
+// a sandbox board (#487's pull request).
 import { expect, test } from 'bun:test'
 import type { ReactNode } from 'react'
 import { createRef } from 'react'

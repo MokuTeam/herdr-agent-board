@@ -190,7 +190,7 @@ export function startScheduler({
         }
         // A decision's default (#487, services/decisions.ts): only while its question is still open.
         if (entry.decision !== undefined) {
-          const open = defaultDue(entry)
+          const open = defaultDue(entry, cfg)
           if (open === 'wait') continue
           if (open === 'drop') {
             removeEntry(entry.id, 'cancelled')
@@ -349,6 +349,17 @@ export function startScheduler({
           logRun(record(entry, Date.now(), state))
           return
         }
+      }
+      // A decision's default (#487), checked again right before it is typed (a wake takes a while):
+      // an answer meanwhile drops it, one on its way holds it. Such an entry goes on its own.
+      if (r.ok && entry.decision !== undefined) {
+        const open = defaultDue(entry, cfg)
+        if (open === 'drop') {
+          removeEntry(entry.id, 'cancelled')
+          logRun(record(entry, Date.now(), 'cancelled', 'answered'))
+          return
+        }
+        if (open === 'wait') return hold(entry, now)
       }
       if (r.ok) {
         try {

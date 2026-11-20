@@ -20,7 +20,6 @@ export function decisionsConfig(raw: unknown): DecisionsConfig | null {
 export const OPTIONS_MIN = 2
 export const OPTIONS_MAX = 4
 export const LABEL_MAX = 60
-export const QUESTION_MAX = 500
 export const DEFAULT_MIN_MS = 5 * 60_000
 export const DEFAULT_MAX_MS = 72 * 3_600_000
 
@@ -112,7 +111,8 @@ export function askSpec(
   cfg: DecisionsConfig,
 ): AskSpec {
   const options = labels.map(l => oneLine(l, LABEL_MAX + 1))
-  const question = oneLine(words, QUESTION_MAX)
+  // The question as a plain `board ask` keeps it: whole, its spaces folded.
+  const question = words.replace(/\s+/g, ' ').trim()
   if (!question)
     throw new DecisionError(
       'usage',
@@ -124,6 +124,8 @@ export function askSpec(
     if (!o) throw new DecisionError('label', 'an option needs a label')
     if (o.length > LABEL_MAX)
       throw new DecisionError('label', `an option's label has more than ${LABEL_MAX} characters`)
+    // A click types the label in as the owner's line: never a slash command or a shell line.
+    if (/^[/!]/.test(o)) throw new DecisionError('label', "an option's label may not start with / or !")
   }
   if (new Set(options.map(o => o.toLowerCase())).size !== options.length)
     throw new DecisionError('label', 'two options have the same label')
