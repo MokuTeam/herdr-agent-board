@@ -416,10 +416,13 @@ export function createBoardState({
 
   let refreshing = false
   let again = false
+  // Who awaits a refresh asked for while one runs: it resolves once the run after it is done, so
+  // `await refresh()` always means a collect that started after the call.
+  let waiting: (() => void)[] = []
   async function refresh(): Promise<void> {
     if (refreshing) {
       again = true
-      return
+      return new Promise(resolve => waiting.push(resolve))
     }
     refreshing = true
     try {
@@ -451,7 +454,11 @@ export function createBoardState({
     }
     if (again) {
       again = false
-      void refresh()
+      const done = waiting
+      waiting = []
+      void refresh().then(() => {
+        for (const resolve of done) resolve()
+      })
     }
   }
 

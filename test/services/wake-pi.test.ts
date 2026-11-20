@@ -3,7 +3,7 @@
 // goes to sleep, all its processes are stopped, what wakes it is kept on disk and survives a
 // restart of wake and of herdr, it wakes on the same session file and account in its pane or in a
 // new tab, and Claude's answers stay as they were.
-import { test as bunTest, expect } from 'bun:test'
+import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ProcRow, ProcSys } from '../../src/adapters/pi-processes.ts'
@@ -28,7 +28,9 @@ const piScreen = (box = '\x1b[7m \x1b[0m') => ['● done', '', RULE, box, RULE, 
 
 /** A pi session file: its header, a prompt, and an answer that ends the turn unless `lines` say otherwise. */
 function sessionFile(dir: string, id: string, cwd: string, lines?: Record<string, unknown>[]): string {
-  const folder = join(dir, 'sessions', `--${cwd.replace(/[\\/]/g, '-')}--`)
+  // As pi names it (session-manager.ts getDefaultSessionDir): the colon of C: goes too, or a
+  // Windows folder name is not valid (#184).
+  const folder = join(dir, 'sessions', `--${cwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`)
   mkdirSync(folder, { recursive: true })
   const file = join(folder, `2026-10-21T07-47-07-681Z_${id}.jsonl`)
   const entries = lines ?? [
@@ -163,7 +165,8 @@ function world(
       return newPane('w9', cwd)
     },
     home,
-    platform: 'linux',
+    // The host's: home and the account folders are joined with its paths (#184).
+    platform: process.platform,
   }
   // pi comes back idle on its session file in whichever pane the wake line runs.
   io.on(
@@ -201,11 +204,6 @@ function world(
   }
   return { dir, home, project, file, piFile, io, pane, ops, live, signals, tabs, log, clock, deps }
 }
-
-// #184: the fixture names pi's session folder after the cwd with only its slashes replaced, so on
-// Windows it keeps the drive's colon (C:), which a file name cannot have: every test here fails
-// there before it checks anything. Skipped on Windows until #184 is fixed.
-const test = bunTest.skipIf(process.platform === 'win32')
 
 const readPis = (w: World): PiSleepers => JSON.parse(readFileSync(w.piFile, 'utf8'))
 const typed = (io: FakeWakeHerdr): string[][] =>

@@ -1,6 +1,7 @@
 import { expect, setDefaultTimeout, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stateDir } from '../../src/adapters/paths.ts'
 import {
@@ -56,14 +57,6 @@ function linesOf(child: SshChild): string[] {
 
 const ICACLS = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe')
 const WHOAMI = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'whoami.exe')
-// #226: icacls names a group in the system's language, and the rights test reads the English names
-// (in another language its "nobody else" checks would pass without looking). It runs where Windows
-// calls the Users group (S-1-5-32-545) BUILTIN\Users.
-const englishGroups =
-  process.platform === 'win32' &&
-  /^"BUILTIN\\Users","[^"]*","S-1-5-32-545"/m.test(
-    Bun.spawnSync([WHOAMI, '/groups', '/fo', 'csv', '/nh']).stdout.toString(),
-  )
 const icacls = (...args: string[]): string => {
   const r = Bun.spawnSync([ICACLS, ...args])
   if (r.exitCode !== 0) throw new Error(`icacls ${args.join(' ')}: ${r.stdout.toString()}${r.stderr.toString()}`)
@@ -75,12 +68,35 @@ const sharedFolder = (path: string): string => {
   icacls(path, '/grant', '*S-1-5-32-545:(OI)(CI)R')
   return path
 }
-const OTHERS = ['BUILTIN\\Users', 'Everyone', 'Authenticated Users']
+// #226: icacls prints a group under its name in the system's language (and in the console's code
+// page), so the rights are read by SID: `icacls /save` writes a file's ACL as SDDL, UTF-16, where
+// a well-known group is a two-letter alias and anyone else is a SID.
+const USERS = 'S-1-5-32-545'
+const OTHERS = [USERS, 'S-1-1-0', 'S-1-5-11'] // BUILTIN\Users, Everyone, Authenticated Users
+const ALIASES: Record<string, string> = { BU: USERS, WD: 'S-1-1-0', AU: 'S-1-5-11', SY: 'S-1-5-18', BA: 'S-1-5-32-544' }
+/** The SIDs `path`'s ACL allows anything. */
+function allowed(path: string): string[] {
+  const dir = mkdtempSync(join(tmpdir(), 'board-acl-'))
+  try {
+    icacls(path, '/save', join(dir, 'acl'), '/q')
+    const sddl =
+      readFileSync(join(dir, 'acl'))
+        .toString('utf16le')
+        .replace(/^\uFEFF/, '')
+        .split(/\r?\n/)[1] ?? ''
+    expect(sddl).toMatch(/^(O:\S+)?D:/)
+    return [...sddl.matchAll(/\(A;[^;]*;[^;]*;[^;]*;[^;]*;([^;)]+)/g)].map(m => ALIASES[m[1] ?? ''] ?? m[1] ?? '')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
 function expectOwnerOnly(file: string): void {
-  const me = Bun.spawnSync([WHOAMI]).stdout.toString().trim().toLowerCase()
-  const acl = icacls(file)
-  expect(acl.toLowerCase()).toContain(me)
-  for (const other of OTHERS) expect(acl).not.toContain(other)
+  // "<domain>\<user>","S-1-5-21-…": the SID is ASCII in any language.
+  const me = /"(S-1-[\d-]+)"/.exec(Bun.spawnSync([WHOAMI, '/user', '/fo', 'csv', '/nh']).stdout.toString())?.[1]
+  expect(me).toBeTruthy()
+  const sids = allowed(file)
+  expect(sids).toContain(me as string)
+  for (const other of OTHERS) expect(sids).not.toContain(other)
 }
 
 for (const [find, name, variable] of [
@@ -235,7 +251,7 @@ test("the server's key: none before the first connection, the pinned one's finge
   forgetHostKey()
 })
 
-test.skipIf(!englishGroups)(
+test.skipIf(process.platform !== 'win32')(
   "Windows: the generated key and a protected one are the user's alone; a key the owner points to keeps its rights",
   async () => {
     const fake = await useFakeSsh()
@@ -247,7 +263,7 @@ test.skipIf(!englishGroups)(
     const shared = sharedFolder(join(fake.dir, 'shared'))
     const key = join(shared, 'id_ed25519')
     writeFileSync(key, '-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n')
-    expect(icacls(key)).toContain('BUILTIN\\Users')
+    expect(allowed(key)).toContain(USERS)
     expect(await protectKey(key)).toEqual({ ok: true })
     expectOwnerOnly(key)
 
@@ -256,7 +272,7 @@ test.skipIf(!englishGroups)(
     writeFileSync(owners, '-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n')
     writeFileSync(`${owners}.pub`, 'ssh-ed25519 AAAAOWNER me@laptop\n')
     expect(await publicKeyOf(owners)).toEqual({ ok: true, publicKey: 'ssh-ed25519 AAAAOWNER me@laptop' })
-    expect(icacls(owners)).toContain('BUILTIN\\Users')
+    expect(allowed(owners)).toContain(USERS)
   },
 )
 

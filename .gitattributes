@@ -1,0 +1,5 @@
+# LF in every checkout, whatever core.autocrlf says (#67): biome checks LF, and tests compare
+# files byte for byte with the text in git. Windows PowerShell reads toast.ps1 with LF too.
+* text=auto eol=lf
+*.png binary
+*.icns binary

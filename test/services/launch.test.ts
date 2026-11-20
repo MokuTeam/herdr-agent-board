@@ -555,8 +555,11 @@ test('a new session through the configured launcher: a new workspace, the values
 test('renaming: the board’s name on the card, back to the automatic one, and Claude only when asked', async () => {
   const { box, post, board, proc } = await boardServer()
   const named = async () => {
+    // Once the server says this refresh is done (#131: a fixed 150 ms was shorter than a refresh
+    // on Windows, and the name read was the one before).
+    const n = proc.messages.length
     proc.send('refresh')
-    await new Promise(r => setTimeout(r, 150))
+    await until(() => proc.messages.slice(n).some(m => (m as { refreshed?: boolean }).refreshed))
     const item = (await board()).items[0]
     assert.ok(item)
     return item

@@ -462,7 +462,9 @@ test('herdr-wake refusing three times gives up: the session hears why; one the u
   const wake = await fakeWake(box, { sleep: () => ({ ok: false, error: 'Test is not idle' }) })
   put(box, { id: 'dddd01' })
   await scheduler(box, { wakeUrl: wake.url })
-  await until(() => prompts(box).length === 1)
+  // Three tries and the prompt are 14 herdr calls one after another, each a start of the fake
+  // herdr: about 5 s on a busy Windows, the default wait's whole budget (#131).
+  await until(() => prompts(box).length === 1, 20_000)
   assert.deepEqual(wake.calls(), ['/sleep', '/sleep', '/sleep'])
   assert.match(
     prompts(box)[0] ?? '',
@@ -478,7 +480,7 @@ test('herdr-wake refusing three times gives up: the session hears why; one the u
   })
   put(user, { id: 'dddd02', by: 'user' })
   await scheduler(user, { wakeUrl: wake2.url })
-  await until(() => runs(user).length === 1)
+  await until(() => runs(user).length === 1, 20_000)
   assert.deepEqual([runs(user)[0]?.result, runs(user)[0]?.by], ['failed', 'user'])
   assert.match(String(runs(user)[0]?.why), /stayed up/)
   assert.equal(read(user, 'dddd02'), null)

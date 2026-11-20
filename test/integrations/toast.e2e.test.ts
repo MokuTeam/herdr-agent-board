@@ -313,31 +313,30 @@ test.skipIf(!windows)(
   'toast.ps1: Test-OnCall reads the board’s presence.json, no file or another state is no call',
   async () => {
     const box: Sandbox = await sandbox()
-    const local = join(box.dir, 'local')
-    const roaming = join(box.dir, 'roaming')
-    const dir = join(local, 'herdr', 'plugins', 'agent-board')
-    const configDir = join(roaming, 'herdr', 'plugins', 'config', 'agent-board')
-    const ask = (env: Record<string, string> = {}) =>
-      Bun.spawnSync([powershell, '-NoProfile', '-Command', `${onCallPart()}\nTest-OnCall`], {
-        env: { ...process.env, LOCALAPPDATA: local, APPDATA: roaming, ...env },
-      })
-        .stdout.toString()
-        .trim()
-    assert.equal(ask(), 'False')
-    mkdirSync(dir, { recursive: true })
-    mkdirSync(configDir, { recursive: true })
-    writeFileSync(join(configDir, 'config.json'), JSON.stringify({ language: 'en', presence: { mode: 'auto' } }))
+    // Every case in its own two folders, all asked by one PowerShell: a start of powershell.exe
+    // takes seconds on a busy Windows, and one per case went past the timeout (#131).
+    const cases: { local: string; roaming: string; want: string; what: string }[] = []
+    const add = (what: string, want: string, presence: string | null, config: string | null, local = true) => {
+      const base = join(box.dir, String(cases.length))
+      const dir = join(base, 'local', 'herdr', 'plugins', 'agent-board')
+      const configDir = join(base, 'roaming', 'herdr', 'plugins', 'config', 'agent-board')
+      mkdirSync(dir, { recursive: true })
+      mkdirSync(configDir, { recursive: true })
+      if (presence !== null) writeFileSync(join(dir, 'presence.json'), presence)
+      if (config !== null) writeFileSync(join(configDir, 'config.json'), config)
+      cases.push({ local: local ? join(base, 'local') : '', roaming: join(base, 'roaming'), want, what })
+    }
+    const auto = JSON.stringify({ language: 'en', presence: { mode: 'auto' } })
+    add('no file', 'False', null, null)
     for (const [content, want] of [
       ['{"state":"call","since":1,"by":"auto","before":"here"}', 'True'],
       ['{"state":"here","since":1,"by":"auto"}', 'False'],
       ['{"state":"away","since":1,"by":"user"}', 'False'],
       ['not json', 'False'],
-    ] as const) {
-      writeFileSync(join(dir, 'presence.json'), content)
-      assert.equal(ask(), want, content)
-    }
-    writeFileSync(join(dir, 'presence.json'), '{"state":"call","since":1,"by":"auto"}')
-    assert.equal(ask({ LOCALAPPDATA: '' }), 'False')
+    ] as const)
+      add(content, want, content, auto)
+    const call = '{"state":"call","since":1,"by":"auto"}'
+    add('no LOCALAPPDATA', 'False', call, auto, false)
     // Presence as config.json has it: `true` or a section is on; anything else, or none, is off.
     for (const [presence, want] of [
       [true, 'True'],
@@ -347,12 +346,21 @@ test.skipIf(!windows)(
       ['yes', 'False'],
       [[], 'False'],
       [null, 'False'],
-    ] as const) {
-      writeFileSync(join(configDir, 'config.json'), JSON.stringify({ presence }))
-      assert.equal(ask(), want, JSON.stringify(presence))
-    }
-    writeFileSync(join(configDir, 'config.json'), '{"language":"en"}')
-    assert.equal(ask(), 'False')
+    ] as const)
+      add(JSON.stringify(presence), want, call, JSON.stringify({ presence }))
+    add('no presence in config.json', 'False', call, '{"language":"en"}')
+    const quote = (s: string) => `'${s.replace(/'/g, "''")}'`
+    const asks = cases
+      .map(c => `$env:LOCALAPPDATA = ${quote(c.local)}; $env:APPDATA = ${quote(c.roaming)}; [string](Test-OnCall)`)
+      .join('\n')
+    const out = Bun.spawnSync([powershell, '-NoProfile', '-Command', `${onCallPart()}\n${asks}`], {
+      env: { ...process.env },
+    })
+      .stdout.toString()
+      .trim()
+      .split(/\r?\n/)
+    assert.equal(out.length, cases.length, out.join('\n'))
+    for (const [i, c] of cases.entries()) assert.equal(out[i], c.want, c.what)
   },
   30_000,
 )

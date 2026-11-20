@@ -112,6 +112,8 @@ export interface FakeRoot {
   R: string
   /** A root script rewritten into this root, run as sshd's admin would run it; its output lines and code. */
   run(script: string, env?: Record<string, string>): { lines: string[]; code: number | null; err: string }
+  /** The same without blocking, so runs in separate roots go on side by side (sh is slow to start processes on Windows). */
+  runAsync(script: string, env?: Record<string, string>): Promise<{ lines: string[]; code: number | null; err: string }>
   /** The same, its output read by a connection that goes after `after` lines (an admin's ssh that dropped). */
   runCut(script: string, after: number, env?: Record<string, string>): Promise<number | null>
   /** Every file under the root's etc/, with its contents: what a run left there. */
@@ -173,6 +175,20 @@ export function fakeRoot(mode: 'include' | 'plain'): FakeRoot {
     run(script, extra = {}) {
       const r = spawnSync(sh as string, [file(script)], { env: env(extra), encoding: 'utf8' })
       return { lines: r.stdout.split(/\r?\n/), code: r.status, err: r.stderr }
+    },
+    runAsync(script, extra = {}) {
+      return new Promise(resolve => {
+        const child = spawn(sh as string, [file(script)], { env: env(extra), stdio: ['ignore', 'pipe', 'pipe'] })
+        let out = ''
+        let err = ''
+        child.stdout.on('data', (chunk: Buffer) => {
+          out += chunk.toString()
+        })
+        child.stderr.on('data', (chunk: Buffer) => {
+          err += chunk.toString()
+        })
+        child.on('close', code => resolve({ lines: out.split(/\r?\n/), code, err }))
+      })
     },
     runCut(script, after, extra = {}) {
       return new Promise(resolve => {
