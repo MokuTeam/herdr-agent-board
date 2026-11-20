@@ -8,7 +8,7 @@ import { t } from '../core/lang.ts'
 import { safeName } from '../core/upload-name.ts'
 import { json, type Route } from './http.ts'
 
-const MAX_UPLOAD = 30 << 20
+export const MAX_UPLOAD = 30 << 20
 const IMAGE_TYPES: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',

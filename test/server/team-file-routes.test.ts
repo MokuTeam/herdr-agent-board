@@ -237,4 +237,8 @@ test('#475 a send held for the passkey reads its upload when it goes: a junction
   const opened = await openFile(ref, unb64u(data.data) as Uint8Array, secret)
   expect(opened.ok && opened.meta.name).toBe('cleo.png')
   expect(opened.ok && Buffer.from(opened.bytes).toString()).toBe('cleo')
+  // One over what /api/upload takes, put there by hand: too big, told before it is read.
+  writeFileSync(join(uploads, '2026-01-06', '120000-big.bin'), Buffer.alloc((30 << 20) + 1))
+  const big = await held({ to: anna.pub, text: 'big', file: { upload: '2026-01-06/120000-big.bin' } })
+  expect(await window(big)).toEqual([400, { ok: false, done: true, error: 'file_big' }])
 })

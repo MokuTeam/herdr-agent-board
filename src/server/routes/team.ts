@@ -38,7 +38,7 @@
 // on, lanes, allLanes, channels } settles one, its body checked whole before anything changes.
 // Adding a channel's members, and a welcome that widens (Agents on, a lane, every lane: #386, a
 // channel), wait for the passkey as the switches do.
-import { readFileSync, realpathSync } from 'node:fs'
+import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { isRecord } from '../../adapters/json-store.ts'
 import { uploadsCheck } from '../../adapters/own-files.ts'
@@ -66,6 +66,7 @@ import type { PostFile, PostTarget, TeamService } from '../../services/team-hub.
 import type { TeamRouter } from '../../services/team-router.ts'
 import type { WorkHub } from '../../services/work-hub.ts'
 import { json, type Route } from '../http.ts'
+import { MAX_UPLOAD } from '../uploads.ts'
 import { describeThreadAction, performThreadAction } from './threads.ts'
 
 const isTarget = (v: unknown): v is string => v === TEAM || isPeerId(v)
@@ -216,15 +217,19 @@ export function uploadFrom(v: unknown): { path: string; name: string } | null | 
  * A send's upload as it is when the send goes (#475): a send held for the passkey goes minutes after
  * uploadFrom() checked it, so it is checked again here by its real path and read at once from that
  * path. These bytes go (PostFile.bytes, #415) and the path is not read again, so a link or junction
- * put in its place while the send waited is refused, not followed. Null when it is no such file now.
+ * put in its place while the send waited is refused, not followed; one swapped in during the read
+ * itself is caught by the real path asked again after it. A file over what /api/upload takes is
+ * `file_big` before it is read; `file` when it is no such file now.
  */
-function uploadNow(file: { path: string; name: string }): PostFile | null {
+function uploadNow(file: { path: string; name: string }): PostFile | 'file' | 'file_big' {
   try {
     const real = realpathSync.native(file.path)
-    if (!uploadsCheck()(real)) return null
-    return { ...file, bytes: new Uint8Array(readFileSync(real)) }
+    if (!uploadsCheck()(real)) return 'file'
+    if (statSync(real).size > MAX_UPLOAD) return 'file_big'
+    const bytes = new Uint8Array(readFileSync(real))
+    return realpathSync.native(file.path) === real ? { ...file, bytes } : 'file'
   } catch {
-    return null
+    return 'file'
   }
 }
 
@@ -283,7 +288,7 @@ export function teamRoutes(
       return work ? performThreadAction(work, a) : { status: 409, body: { ok: false, error: 'off' } }
     if (a.kind === 'send') {
       const file = a.file ? uploadNow(a.file) : undefined
-      if (file === null) return { status: 400, body: { ok: false, error: 'file' } }
+      if (typeof file === 'string') return { status: 400, body: { ok: false, error: file } }
       const r = await team.send(a.to, a.text, a.thread, a.replyTo, file)
       return { status: r.ok ? 200 : 400, body: { ...r } }
     }
