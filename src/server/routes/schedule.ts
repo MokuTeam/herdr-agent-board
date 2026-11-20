@@ -1,5 +1,6 @@
-// The schedule panel's changes: cancel an entry, or switch it between on time and when free.
-import { getEntry, removeEntry, updateEntry } from '../../adapters/schedule-store.ts'
+// The schedule panel's changes: cancel an entry, or switch it between on time and when free. A
+// watch (#486) can be cancelled only: `mode` finds no entry under its id, as no route edits one.
+import { getEntry, removeEntry, removeWatch, updateEntry } from '../../adapters/schedule-store.ts'
 import { t } from '../../core/lang.ts'
 import type { ScheduleEntry } from '../../core/schedule-rules.ts'
 import { json, type Route } from '../http.ts'
@@ -19,7 +20,8 @@ export function scheduleRoute(refresh: () => void): Route {
       // cancel: remove the entry; mode: on time (idle false) or when the session is free.
       const done =
         body.op === 'cancel'
-          ? removeEntry(id)
+          ? // A watch (#486) is cancelled here too; nothing here makes or changes one.
+            (removeEntry(id) ?? removeWatch(id))
           : body.op === 'mode'
             ? updateEntry(id, entry => {
                 // In place of main's `idle: undefined`: the key keeps its place, or goes.

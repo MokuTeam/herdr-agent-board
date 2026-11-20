@@ -21,6 +21,7 @@ import { knobMs, pace } from '../adapters/pacing.ts'
 import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
+import { watchesDir } from '../adapters/schedule-store.ts'
 import {
   endLogins,
   endStraySsh,
@@ -51,6 +52,7 @@ import { toastBody } from '../core/team-unread.ts'
 import { MAX_NAME } from '../core/team-wire.ts'
 import { boardPorts, forwardSpec, publicHosts, sshArgs, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
+import { watchesConfig } from '../core/watches.ts'
 import { threadsConfig } from '../core/work-threads.ts'
 import { workdeskConfig } from '../core/workdesk.ts'
 import { workdeskEventsConfig } from '../core/workdesk-events.ts'
@@ -1222,6 +1224,8 @@ export async function startServer({
     watchFolder(cards, 150, refresh, log),
     // Entries added or cancelled by agents (`board remind`), and runs the scheduler made.
     watchFolder(scheduleDir(), 150, refresh, log),
+    // Watches (#486) set, checked or removed, only while config.json turns them on.
+    ...(watchesConfig(cfg.watches) ? [watchFolder(watchesDir(), 150, refresh, log)] : []),
     // Sessions an agent put in the archive (`board archive`), whose cards go at once.
     watchFolder(archiveDir(), 150, refresh, log),
     // A change to the page: build it again; the new version makes open pages reload.

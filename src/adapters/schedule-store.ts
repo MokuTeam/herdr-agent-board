@@ -17,7 +17,7 @@
 // left to type). A retry-safe call report carries its receipt's identity (receipt:
 // call-receipts.ts); its file is written 0600, and the receipt is settled when the entry goes.
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   cleanName,
@@ -28,6 +28,7 @@ import {
   type ScheduleEntry,
   type SessionRef,
 } from '../core/schedule-rules.ts'
+import { isWatch, WATCH_FROM, type WatchEntry } from '../core/watches.ts'
 import { type ReceiptState, settleReport } from './call-receipts.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
 import { boardFile, scheduleDir } from './paths.ts'
@@ -106,6 +107,8 @@ export async function schedulerRuns(
 
 /** Save a new entry under a fresh id and return it. */
 export function addEntry(fields: NewEntry): ScheduleEntry {
+  // A watch is made only by addWatch (`board wait --probe` on this computer): never as a reminder.
+  if (fields.kind === 'watch' || 'probe' in fields) throw new Error('a watch is set with board wait --probe only')
   mkdirSync(scheduleDir(), { recursive: true })
   if (listEntries().filter(e => e.key === fields.key).length >= MAX_PER_SESSION) {
     throw new Error(`this session has ${MAX_PER_SESSION} entries already; remove some first (board unschedule <id>)`)
@@ -280,4 +283,143 @@ export function readLog(limit = 30): unknown[] {
   } catch {
     return []
   }
+}
+
+// ------------------------------------------------------------------ watches (#486)
+//
+// A watch (core/watches.ts) is a schedule entry of kind 'watch' in a folder of its own beside the
+// entries, `schedule/watches/`, so a board from before watches (a downgrade) does not see one at all
+// rather than typing its wait text in as a plain reminder. Only `board wait --probe` makes one
+// (addWatch): no route of the web board, the phone, the tunnel or Team imports it. When its probe
+// fires it becomes a plain one-off reminder under the same id (fireWatch), which the scheduler
+// sends as it sends any.
+
+export const watchesDir = (): string => join(scheduleDir(), 'watches')
+const watchFile = (id: string): string => join(watchesDir(), `${id}.json`)
+const isWatchEntry = (v: unknown): v is WatchEntry => isEntry(v) && isWatch(v)
+
+/** Every watch, soonest check first. */
+export function listWatches(): WatchEntry[] {
+  let names: string[]
+  try {
+    names = readdirSync(watchesDir())
+  } catch {
+    return []
+  }
+  const list: WatchEntry[] = []
+  for (const name of names) {
+    if (!/^[0-9a-f]{6}\.json$/.test(name)) continue
+    const w = readJson(join(watchesDir(), name), isWatchEntry)
+    if (w) list.push(w)
+  }
+  return list.sort((a, b) => a.next - b.next || (a.created ?? 0) - (b.created ?? 0))
+}
+
+export function getWatch(id: unknown): WatchEntry | null {
+  return ID.test(String(id)) ? readJson(watchFile(String(id)), isWatchEntry) : null
+}
+
+/** What a new watch is made of; the id and creation time are added here. */
+export type NewWatch = {
+  key: string
+  text: string
+  next: number
+  probe: WatchEntry['probe']
+  name?: string
+  pane?: string
+  cwd?: string
+  by?: string
+  from?: SessionRef
+}
+
+/**
+ * A new watch for `fields.key`, under an id no entry or watch has; the session's earlier watch ends
+ * (one watch per session: a new `board wait` replaces it). Returns it and the ones it ended.
+ */
+export function addWatch(fields: NewWatch): { watch: WatchEntry; ended: WatchEntry[] } {
+  const ended = endWatches(fields.key)
+  mkdirSync(watchesDir(), { recursive: true })
+  const clean = {
+    ...fields,
+    kind: 'watch' as const,
+    text: cleanText(fields.text),
+    name: cleanName(fields.name),
+    ...(fields.from ? { from: { key: String(fields.from.key), name: cleanName(fields.from.name) } } : {}),
+  }
+  for (;;) {
+    const id = randomBytes(3).toString('hex')
+    if (getEntry(id)) continue
+    const watch = updateJson(
+      watchFile(id),
+      (taken: WatchEntry | null) => (taken ? undefined : { id, ...clean, created: Date.now() }),
+      isWatchEntry,
+    )
+    if (watch) return { watch, ended }
+  }
+}
+
+/** Change a watch that still exists: the replacement, null to delete it, undefined to leave it. */
+export function updateWatch(
+  id: unknown,
+  change: (watch: WatchEntry) => WatchEntry | null | undefined,
+): WatchEntry | null | undefined {
+  // No such watch: nothing to change, and no folder made for it (`board unschedule <typo>`).
+  if (!ID.test(String(id)) || !existsSync(watchFile(String(id)))) return undefined
+  return updateJson(watchFile(String(id)), (w: WatchEntry | null) => (w ? change(w) : undefined), isWatchEntry)
+}
+
+/** Delete a watch; returns it, or null when there was none. */
+export function removeWatch(id: unknown): WatchEntry | null {
+  let removed: WatchEntry | null = null
+  updateWatch(id, w => {
+    removed = w
+    return null
+  })
+  return removed
+}
+
+/** End every watch of a session (`board doing`, `done`, `clear`, a new `wait`); returns them. */
+export function endWatches(key: string): WatchEntry[] {
+  return listWatches()
+    .filter(w => w.key === key)
+    .map(w => removeWatch(w.id))
+    .filter((w): w is WatchEntry => w !== null)
+}
+
+/**
+ * A watch whose probe fired becomes a plain one-off reminder due now, "[board reminder from watch]
+ * <text>", under the watch's id: written while the watch's lock is held, then the watch goes. A
+ * board stopped between the two finds the reminder there with the same text on its next run and
+ * only removes the watch; an entry of something else under that id gets the reminder a new id.
+ * Returns the reminder, null when the watch was gone (cancelled, replaced) meanwhile.
+ */
+export function fireWatch(id: string, text: string, now = Date.now()): ScheduleEntry | null {
+  let fired: ScheduleEntry | null = null
+  updateWatch(id, w => {
+    const reminder = {
+      key: w.key,
+      text: cleanText(text),
+      at: now,
+      next: now,
+      ...(w.name !== undefined && { name: cleanName(w.name) }),
+      ...(w.pane !== undefined && { pane: w.pane }),
+      ...(w.cwd !== undefined && { cwd: w.cwd }),
+      ...(w.movedFrom !== undefined && { movedFrom: w.movedFrom }),
+      by: w.by ?? 'agent',
+      from: WATCH_FROM,
+    }
+    const there = getEntry(id)
+    if (there) fired = there.key === reminder.key && there.text === reminder.text ? there : addEntry(reminder)
+    else {
+      mkdirSync(scheduleDir(), { recursive: true })
+      fired =
+        updateJson(
+          fileOf(id),
+          (taken: ScheduleEntry | null) => (taken ? undefined : { id, ...reminder, created: now }),
+          isEntry,
+        ) ?? addEntry(reminder)
+    }
+    return null
+  })
+  return fired
 }

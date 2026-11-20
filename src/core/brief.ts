@@ -4,6 +4,7 @@ import { languageName } from './lang.ts'
 import { type Presence, presenceBrief } from './presence.ts'
 import { type TodosConfig, todosBrief } from './todos.ts'
 import type { Card, Config } from './types.ts'
+import { watchesBrief } from './watches.ts'
 import { type ThreadsConfig, threadsBrief } from './work-threads.ts'
 
 // Bump when the brief says something new: every running session gets it again on its next prompt.
@@ -46,6 +47,8 @@ export function brief(
   calendar = false,
   /** Threads (#379, core/work-threads.ts), only where config.json turned them on; agents hear of them only with agents on. */
   threads: ThreadsConfig | null = null,
+  /** Watches (#486, core/watches.ts), only where config.json turned them on: agents hear of `board wait --probe`. */
+  watches = false,
 ): string {
   const cat = card?.category
   const guess = categoryFor(cfg, cwd)
@@ -65,6 +68,7 @@ export function brief(
     '- board doing "<3-8 words>": when you start a distinct task, and again when you move to its next step.',
     '- board ask "<the question, short>": before ending a turn that needs the user\'s answer or decision (approve a draft, pick an option, give data). Puts the card under "needs the user"; cleared by itself when the user replies.',
     '- board wait "<who/what>": before ending a turn blocked on something outside this chat (client reply, CI, another session, a date). The card stays in "waiting" until you run doing or done.',
+    agent === 'Claude' && watches && watchesBrief(),
     '- board done ["<result>"]: task finished; clears doing, wait and ask.',
     '- board remind <when> "<text>": at that time the board types "[board reminder] <text>" into this session as a prompt, waking it if it sleeps; on time, so a working session gets it queued into its turn (add --idle to wait until it is free, for work that needs a fresh turn rather than a time). when: in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time). board every "<cron, 5 fields>" "<text>" repeats it (runs at least 5 minutes apart); board schedule lists this session\'s entries, board unschedule <id> removes one. Write the text as an instruction to yourself.',
     agent === 'Claude' &&
