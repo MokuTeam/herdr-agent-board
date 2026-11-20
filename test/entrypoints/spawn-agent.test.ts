@@ -191,6 +191,80 @@ test('spawn-agent: a dialog before Claude is ready, a brief herdr calls stalled,
   assert.match(noWorkspace.stderr, /No herdr workspace/)
 }, 30_000)
 
+// Claude's box with a line in it, as `agent read --ansi` shows it (core/dialogs/input-box.ts).
+const boxWith = (typed: string) => `● ok\n${'─'.repeat(40)}\n❯ ${typed}\n${'─'.repeat(40)}\n  ⏵⏵ auto mode on\n`
+
+test('spawn-agent: a /rename Claude left in its box gets one more Enter, and the brief comes as a submit of its own (#479)', async () => {
+  // The second Enter takes it: "Session renamed" shows on the third look.
+  const box = await sandbox()
+  box.state({
+    ...STATE,
+    'pane read': {
+      seq: [{ text: '❯ /rename Calm' }, { text: '❯ /rename Calm' }, { text: 'Session renamed to: Calm' }],
+    },
+    'agent read': { text: boxWith('/rename Calm') },
+  })
+  const r = await runSpawn(box, ['--name', 'Calm', '--cwd', box.dir, '--workspace', 'wA', '--brief', '# Brief: go on.'])
+  assert.equal(r.code, 0, r.stderr)
+  const after = callList(box).slice(callList(box).indexOf('agent prompt wA:p9 /rename Calm'))
+  assert.deepEqual(after, [
+    'agent prompt wA:p9 /rename Calm',
+    'pane read wA:p9 --source visible',
+    'pane read wA:p9 --source visible',
+    'agent read wA:p9 --source visible --ansi',
+    'pane send-keys wA:p9 enter',
+    'pane read wA:p9 --source visible',
+    'agent prompt wA:p9 # Brief: go on.',
+  ])
+
+  // Claude never takes it: two more Enters, then the brief is not typed after the line (the name
+  // would eat it); the session runs, so it fails as "did not reach", which the board does not retry.
+  const box2 = await sandbox()
+  box2.state({ ...STATE, 'pane read': { text: '❯ /rename Calm' }, 'agent read': { text: boxWith('/rename Calm') } })
+  const stuck = await runSpawn(box2, [
+    '--name',
+    'Calm',
+    '--cwd',
+    box2.dir,
+    '--workspace',
+    'wA',
+    '--brief',
+    '# Brief: go on.',
+  ])
+  assert.equal(stuck.code, 1)
+  const last = stuck.stderr.trim().split('\n').at(-1) ?? ''
+  assert.match(last, /^spawn-agent: The brief did not reach Claude in wA:p9: its input box still holds "\/rename Calm"/)
+  assert.equal(failureKind(last), 'message')
+  const calls = box2.calls().map(a => a.join(' '))
+  assert.deepEqual(
+    calls.filter(c => c.startsWith('agent prompt')),
+    ['agent prompt wA:p9 /rename Calm'],
+  )
+  assert.equal(calls.filter(c => c === 'pane send-keys wA:p9 enter').length, 2)
+
+  // A /rename that vanished without "Session renamed" (an empty box): the brief goes as before.
+  const box3 = await sandbox()
+  box3.state({ ...STATE, 'pane read': { text: '' }, 'agent read': { text: boxWith('') } })
+  const gone = await runSpawn(box3, ['--name', 'Calm', '--cwd', box3.dir, '--workspace', 'wA', '--brief', 'Go on.'])
+  assert.equal(gone.code, 0, gone.stderr)
+  assert.ok(box3.calls().some(a => a.join(' ') === 'agent prompt wA:p9 Go on.'))
+  assert.equal(
+    box3.calls().some(a => a.join(' ') === 'pane send-keys wA:p9 enter'),
+    false,
+  )
+
+  // A box herdr cannot show (agent read fails): no Enter, and the brief goes as before.
+  const box4 = await sandbox()
+  box4.state({
+    ...STATE,
+    'pane read': { text: '❯ /rename Calm' },
+    'agent read': { code: 'agent_not_found', error: 'agent_not_found' },
+  })
+  const unread = await runSpawn(box4, ['--name', 'Calm', '--cwd', box4.dir, '--workspace', 'wA', '--brief', 'Go on.'])
+  assert.equal(unread.code, 0, unread.stderr)
+  assert.ok(box4.calls().some(a => a.join(' ') === 'agent prompt wA:p9 Go on.'))
+}, 30_000)
+
 test('spawn-agent --pane starts Claude in a pane that is there, its tab named after the session', async () => {
   const box = await sandbox()
   box.state({

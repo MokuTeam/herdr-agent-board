@@ -891,7 +891,9 @@ two such dialogs with Yes instead: the folder-trust one when it names `--cwd` it
 external CLAUDE.md file imports?" when every file it lists is in the user's own Claude folders.
 Any other dialog still stops the start. A brief that does not get through fails it too, saying
 so: the session runs, send the brief by hand rather than start another. A `/rename` that does
-not take is only a warning. `--pane` starts Claude in that
+not take is only a warning, unless its line stays in Claude's input box: then the brief is not
+typed after it (the two would go as one, the name taking the brief) and the start fails as a brief
+that did not get through. `--pane` starts Claude in that
 pane instead of a new tab; it must be at a shell prompt, not running an agent. `--resume` brings
 back a session that ended (`launch.claude` with `--resume <uuid>`, run in the folder the session
 ran in): it keeps its name, so no `/rename` is typed; the board's [archive](#archive) uses it.
@@ -933,7 +935,9 @@ other folder is refused) or `--keep-env` (the env as herdr makes it) instead of 
 one of the three goes at a time.
 
 Details it takes care of: `/rename` runs without a turn, so herdr calls it stalled, and the
-screen is read for "Session renamed" instead. Right after it Claude can drop typed text, and a
+screen is read for "Session renamed" instead. When that does not show and the `/rename` line is
+still in the input box (Claude can drop its Enter at a slow start), it gets one more Enter, twice
+at most. Right after it Claude can drop typed text, and a
 short turn can end before herdr sees it working: a brief herdr calls stalled gets an Enter when
 it is still on screen (or shows as a pasted-text chip), else it is typed again, three times at
 most. A brief that starts with a dash goes with a space before it, or herdr would take it for an

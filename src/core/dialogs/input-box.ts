@@ -6,6 +6,19 @@
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching terminal escape sequences
 const ESCAPES = /\x1b\[([0-9;?]*)([A-Za-z])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b./g
 const RULE = /^\s*─{8,}/
+// The rule over the box carries the session's name at its right end ("──── anna ─"). A name
+// longer than the rule takes its whole start, cut with "…" and no run of dashes left (#484).
+const NAMED_RULE = /^\s*─*\s+\S.*\s─\s*$/
+const width = (s: string): number => [...s.trimEnd()].length
+
+/**
+ * Whether a plain line is the rule Claude Code draws over its input box: a run of dashes, or a
+ * rule that carries the session's name, which Claude draws as wide as the rule under the box
+ * (`bottom`, the next rule down; undefined when there is none), so a heading that ends in a dash
+ * over a picker is not taken for it.
+ */
+export const boxTop = (top: string, bottom: string | undefined): boolean =>
+  RULE.test(top) || (NAMED_RULE.test(top) && bottom !== undefined && RULE.test(bottom) && width(top) === width(bottom))
 
 export const stripAnsi = (s: string): string => s.replace(ESCAPES, '')
 
@@ -41,11 +54,12 @@ export function inputDraft(ansiScreen: unknown): string | null {
   const plain = (i: number): string => stripAnsi(lines[i] ?? '')
   for (let i = lines.length - 1; i > 0; i--) {
     if (!plain(i).trimStart().startsWith('❯')) continue
-    if (!RULE.test(plain(i - 1))) continue
+    if (!RULE.test(plain(i - 1)) && !NAMED_RULE.test(plain(i - 1))) continue
     const parts: string[] = []
     let end = i
     for (; end < lines.length && !(end > i && RULE.test(plain(end))); end++) parts.push(nonDimText(lines[end] ?? ''))
     if (end === lines.length) return null
+    if (!boxTop(plain(i - 1), plain(end))) continue
     // A dialog can leave the previous input box above it, with or without a new ❯ cursor.
     // Its instructions are not the normal prompt's "esc to interrupt" or "tab to accept".
     const footer = lines

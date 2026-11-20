@@ -147,6 +147,14 @@ test('where the caret goes: after a shell prompt, in Claude Code’s input box',
   assert.equal(caretSpot(['  Do you want to proceed?', ' ❯ 1. Yes', '   2. No'], 'claude'), null)
   assert.equal(caretSpot(['x', rule, `❯ hi${ESC}[7m ${ESC}[0m`, rule], 'claude'), null)
   assert.equal(caretSpot(box('x'), 'codex'), null)
+  // The rule carries the session's name; a long one takes its whole start (#484).
+  assert.deepEqual(caretSpot(['● ok', `${'─'.repeat(30)} anna ─`, '❯ hi\u00a0', rule], 'claude'), { line: 2, col: 4 })
+  // Claude draws it as wide as the rule under the box.
+  const cut = ` ${'anna-1# Brief: board issue(s) #1, #2 Board agent.'.slice(0, 36)}… ─`
+  assert.deepEqual(caretSpot(['● ok', cut, '❯ hi\u00a0', rule], 'claude'), { line: 2, col: 4 })
+  // A heading that ends in a dash over a picker is no such rule.
+  assert.equal(caretSpot(['  Pick one ─', '❯ 1. Yes', '  2. No'], 'claude'), null)
+  assert.equal(caretSpot(['  Pick one ─', '❯ 1. Yes', '  2. No', rule], 'claude'), null)
 })
 
 const ev = (key: string, extra: Partial<TermKeyEvent> = {}): TermKeyEvent => ({

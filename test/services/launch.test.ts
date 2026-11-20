@@ -492,6 +492,34 @@ test('a new session through herdr (launch.agent): a tab in the chosen workspace,
   noEnv(box)
 }, 30_000)
 
+test('a /rename Claude left in its box gets one more Enter; still there, the first message is not typed after it (#479)', async () => {
+  const { box, post, launched } = await boardServer(VIA_HERDR)
+  const dir = join(box.dir, 'Alpha project')
+  mkdirSync(dir)
+  // Claude never takes the line: "Session renamed" never shows, the box keeps it.
+  box.state({
+    ...HERDR,
+    'pane read': { text: '❯ /rename Alpha job' },
+    'agent read': { text: SCREEN('/rename Alpha job') },
+  })
+  const body = {
+    name: 'Alpha job',
+    cwd: dir,
+    category: 'acme',
+    workspace: { id: 'wA', label: 'Alpha' },
+    message: 'Go on.',
+  }
+  const l = await launched(((await (await post('/api/launch', body)).json()) as { id: string }).id)
+  assert.equal(l.state, 'failed')
+  assert.match(l.error ?? '', /Something is typed in its input box/)
+  const calls = box.calls().map(a => a.join(' '))
+  assert.deepEqual(
+    calls.filter(c => c.startsWith('agent prompt')),
+    ['agent prompt wA:p9 /rename Alpha job'],
+  )
+  assert.equal(calls.filter(c => c === 'pane send-keys wA:p9 enter').length, 2)
+}, 30_000)
+
 test('a new session through the configured launcher: a new workspace, the values as arguments, its pane, and a failure with its reason', async () => {
   const box0 = await sandbox()
   const record = join(box0.dir, 'launcher.json')

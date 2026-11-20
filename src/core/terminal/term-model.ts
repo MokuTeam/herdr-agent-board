@@ -1,6 +1,7 @@
 // The board's terminal without a page: a herdr pane read (ANSI) into styled runs, the frames the
 // server sends as line diffs, web links in the output, and how big the text can be to fit the
 // pane's width. Shared by the server (services/terminals.ts) and the page (hooks/useTerminal.ts).
+import { boxTop } from '../dialogs/input-box.ts'
 
 // The 16 colors on the terminal's dark screen. Programs pick these by number; 256-color and
 // true-color values pass through as they are, which is why the screen stays dark in both themes:
@@ -316,10 +317,12 @@ export function caretSpot(lines: readonly string[], kind: string | null): { line
   if (kind !== 'claude') return null
   for (let i = lines.length - 1; i > 0; i--) {
     const text = plainText(lines[i])
-    if (!text.trimStart().startsWith('❯') || !RULE.test(plainText(lines[i - 1]))) continue
+    if (!text.trimStart().startsWith('❯')) continue
     let last = i
-    for (let j = i + 1; j < lines.length && !RULE.test(plainText(lines[j])); j++)
-      if (plainText(lines[j]).trim()) last = j
+    let j = i + 1
+    for (; j < lines.length && !RULE.test(plainText(lines[j])); j++) if (plainText(lines[j]).trim()) last = j
+    // The rule over the box, which may carry the session's name (#484).
+    if (!boxTop(plainText(lines[i - 1]), j < lines.length ? plainText(lines[j]) : undefined)) continue
     if ([...Array(last - i + 1).keys()].some(k => parseLine(lines[i + k]).some(r => r.style.inverse))) return null
     const own = plainText(lines[last])
     const min = last === i ? text.indexOf('❯') + 2 : 0

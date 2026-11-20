@@ -47,7 +47,7 @@ import { PI_AGENT } from '../../core/pi.ts'
 import type { Item, LaunchFailure, LaunchState, LaunchStep } from '../../core/types.ts'
 import type { Deps } from '../deps.ts'
 import { LaunchError, type LaunchEvents, launcherFor, notePane, openInProfile } from './launcher.ts'
-import { claudeRename, inputEmpty, piName, takenNames, typeLine } from './prompt.ts'
+import { boxDraft, claudeRename, inputEmpty, piName, takenNames, typeLine } from './prompt.ts'
 import type { LaunchRequest } from './request.ts'
 
 /** A launch as the board keeps it while it runs. */
@@ -358,17 +358,26 @@ export function launchRunner({
   async function nameAndBrief(l: Launch, kind: string): Promise<void> {
     const pane = paneOf(l)
     // A resumed session keeps the name it had.
+    let left = false
     if (kind === 'claude' && !l.resume) {
       step(l, 'rename')
       // The name is cosmetic and Claude runs by now: a herdr error here must not mark the launch
       // failed, or a retry would start a second session.
-      await claudeRename(pane, l.name).catch(err => deps.log(`launch ${l.name}: /rename: ${messageOf(err)}`))
+      const renamed = await claudeRename(pane, l.name).catch(err => {
+        deps.log(`launch ${l.name}: /rename: ${messageOf(err)}`)
+        return false
+      })
+      // A /rename Claude did not take may still be in its box: the message would go with it as
+      // one, the name eating it (#479). Asked only when no rename showed; a box herdr cannot show
+      // (null) is taken for empty, as before.
+      left = !renamed && !!l.message && !!(await boxDraft(pane))
     } else if (kind === PI_AGENT && !l.resume) {
       step(l, 'rename')
       await piName(pane, l.name).catch(err => deps.log(`launch ${l.name}: /name: ${messageOf(err)}`))
     }
     if (l.message) {
       step(l, 'message')
+      if (left) throw new LaunchError(t('launch.err.message.draft'), 'message')
       if (!(await typeLine(pane, l.message))) throw new LaunchError(t('launch.err.message.lost'), 'message')
     }
   }

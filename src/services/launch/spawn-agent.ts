@@ -55,6 +55,7 @@ import {
 import { forkCard } from '../../core/links.ts'
 import { CLAUDE_NAMING, isPiSessionFile, type Naming, namingOf, PI_AGENT } from '../../core/pi.ts'
 import { defaultProfileDir, envRejected, type Profile, type SpawnEnv, spawnEnv } from '../../core/profiles.ts'
+import { boxDraft, renameLeft } from './prompt.ts'
 
 /** A folder as given, absolute: ~ is the home folder, a relative one is from here. */
 export function absoluteDir(p: string): string {
@@ -407,6 +408,7 @@ export async function spawnAgent(
   // /rename runs locally, no turn: herdr never sees it working and calls the prompt stalled. The
   // name is cosmetic and Claude runs by now: no failure for it, or a retry would start a second one.
   // A resumed session keeps the name it had.
+  let renamed = false
   if (!o.resume) {
     const line = naming.command(o.name)
     try {
@@ -417,12 +419,30 @@ export async function spawnAgent(
     for (let i = 0; i < 10; i++) {
       await pause(500)
       const shown = await screen(pane)
-      if (naming.done.test(shown)) break
+      if (naming.done.test(shown)) {
+        renamed = true
+        break
+      }
       // pi's first Enter on a slash command with an argument can take its completion instead:
       // the line still in the editor gets one more.
       if (kind === PI_AGENT && i === 1 && stillTyped(shown, line))
         await herdr(['pane', 'send-keys', pane, 'enter']).catch(() => {})
+      // Claude can drop it at a slow start (#479): its line still in the box gets one more too.
+      if (kind !== PI_AGENT && (i === 1 || i === 5) && stillTyped(shown, line) && (await renameLeft(pane, line)))
+        await herdr(['pane', 'send-keys', pane, 'enter']).catch(() => {})
     }
+  }
+
+  // A brief typed into a box that still holds text goes with it as one: after a /rename Claude did
+  // not take, the name would eat the brief (#479). It is not typed then; the session runs, so this
+  // fails as "did not reach", which the board does not retry. Asked only when no rename showed; a
+  // box herdr cannot show (null) holds nothing as far as this goes: the brief goes as before.
+  if (text && !o.resume && !renamed && kind !== PI_AGENT) {
+    const left = await boxDraft(pane)
+    if (left)
+      throw new Error(
+        `The brief did not reach Claude in ${pane}: its input box still holds "${left.length > 60 ? `${left.slice(0, 59)}…` : left}". Clear it there, then: herdr agent prompt ${pane} "<brief>"`,
+      )
   }
 
   // Right after a slash command Claude can drop typed text, and a short turn can end before herdr
