@@ -18,6 +18,7 @@ import { BackupPanel, type BackupPanelProps } from './backup/BackupPanel.tsx'
 import { CalendarPanel, type CalendarPanelProps } from './calendar/CalendarPanel.tsx'
 import { CalendarSettingsPanel, type CalendarSettingsPanelProps } from './calendar/CalendarSettingsPanel.tsx'
 import { CategoriesPanel, type CategoriesPanelProps } from './categories/CategoriesPanel.tsx'
+import { DecisionsPanel, type DecisionsPanelProps } from './decisions/DecisionsPanel.tsx'
 import { DevicesPanel, type DevicesPanelProps } from './devices/DevicesPanel.tsx'
 import { ErrorBoundary } from './ErrorBoundary.tsx'
 import { MokupilotPanel, type MokupilotPanelProps } from './mokupilot/MokupilotPanel.tsx'
@@ -56,6 +57,8 @@ export interface SidePanelsProps {
   todos?: TodosPanelProps
   /** Threads (#392): given by the page while the payload carries `threads`. */
   threads?: ThreadsPanelProps
+  /** Decisions (#487): drawn while the payload carries `decisions`. */
+  decisions?: DecisionsPanelProps
   /** Settings → Backup… (#233); drawn when given (the page gives it once opened, on the local board only). */
   backup?: BackupPanelProps
   /** Time (#233): drawn while the board has time tracking on. */
@@ -85,6 +88,7 @@ export function SidePanels({
   archive,
   todos,
   threads,
+  decisions,
   backup,
   time,
   timeSettings,
@@ -109,6 +113,7 @@ export function SidePanels({
       {access && <AccessPanel {...access} />}
       {todos && data?.todos && <TodosPanel {...todos} />}
       {threads && data?.threads && <ThreadsPanel {...threads} />}
+      {decisions && data?.decisions && <DecisionsPanel {...decisions} />}
       {backup && <BackupPanel {...backup} />}
       {time && data?.time && <TimePanel {...time} />}
       {timeSettings && <TimeSettingsPanel {...timeSettings} />}

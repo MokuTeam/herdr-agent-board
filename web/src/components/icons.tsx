@@ -67,6 +67,14 @@ export const ThreadsIcon = () => (
   </Icon>
 )
 
+/** Decisions (#487): a fork in the path, one way marked. */
+export const DecisionsIcon = () => (
+  <Icon>
+    <path d="M10 17v-6.5M10 10.5 5.5 6M10 10.5 14.5 6" />
+    <path d="M4 7.6V4.5h3.1M16 7.6V4.5h-3.1" />
+  </Icon>
+)
+
 export const TimeIcon = () => (
   <Icon>
     <circle cx="10" cy="10" r="6.5" />

@@ -154,9 +154,7 @@ test("whose prompt answers: the owner's own words, never another session's, a te
   // A board reminder (a Team notice comes as one too), a task notification.
   expect(ownerPrompt('[board reminder] check CI')).toBe(false)
   expect(ownerPrompt('[board reminder from team] anna wrote')).toBe(false)
-  expect(
-    ownerPrompt(notification({ status: 'completed', summary: 'Background command "x" completed (exit code 0)' })),
-  ).toBe(false)
+  expect(ownerPrompt(notification('Background command "x" completed (exit code 0)'))).toBe(false)
 })
 
 test('the brief: the block only while decisions are on, for Claude, and without defaults when they are off', () => {

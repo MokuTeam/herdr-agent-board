@@ -83,11 +83,7 @@ test("the owner's own prompt: the ask and the decision go, recorded as the owner
 for (const [what, text, extra] of [
   ['a board reminder', '[board reminder] check CI', {}],
   ['a Team notice', '[board reminder from team] cleo posted in atlas-2', {}],
-  [
-    'a task notification',
-    notification({ status: 'completed', summary: 'Background command "x" completed (exit code 0)' }),
-    {},
-  ],
+  ['a task notification', notification('Background command "x" completed (exit code 0)'), {}],
   [
     "Code Mode's background result (#424)",
     '<event kind="repl-eval" at="2026-11-21T10:00:00Z">ok</event>',

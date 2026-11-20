@@ -28,6 +28,7 @@ import { Terminal } from './components/terminal/Terminal.tsx'
 import { useArchive } from './hooks/useArchive.ts'
 import { useBoardKeys } from './hooks/useBoardKeys.ts'
 import { useContextMenus } from './hooks/useContextMenus.ts'
+import { useDecisions } from './hooks/useDecisions.ts'
 import { useDialogHistory } from './hooks/useDialogHistory.ts'
 import { useFileChips } from './hooks/useFileChips.ts'
 import { useFileLinks } from './hooks/useFileLinks.ts'
@@ -53,6 +54,7 @@ import { useThreadLinks } from './hooks/useThreadLinks.ts'
 import { linkThreadsSheet, useThreadsContext } from './hooks/useThreads.tsx'
 import { useTodos } from './hooks/useTodos.ts'
 import { useToolbarMenu } from './hooks/useToolbarMore.ts'
+import { linkDecisionsSheet } from './models/decisions.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { remotePage } from './models/remote-page.ts'
 import { offersTeam } from './models/team.ts'
@@ -166,6 +168,13 @@ export function App() {
   useEffect(() => {
     if (threadsOn) linkThreadsSheet()
   }, [threadsOn])
+  // Decisions (#487), while the payload carries them: the panel out of the toolbar's pill, and their sheet.
+  const [decisionsOpen, setDecisionsOpen] = useState(false)
+  const decisionsOn = !!data?.decisions
+  const decisions = useDecisions()
+  useEffect(() => {
+    if (decisionsOn) linkDecisionsSheet()
+  }, [decisionsOn])
   // Settings → Paths on this computer…, on the board seen from another device only: mounted at its
   // first opening, as Remote access.
   const [localPaths, setLocalPaths] = useState(false)
@@ -289,6 +298,7 @@ export function App() {
           more={more}
           onTodos={() => setTodosOpen(!todosOpen)}
           {...(threads && { onThreads: () => threads.setShown(!threads.shown) })}
+          {...(decisionsOn && { onDecisions: () => setDecisionsOpen(!decisionsOpen) })}
           onBackup={remotePage() ? undefined : openBackup}
           onTime={() => {
             setTimeClient(null)
@@ -353,6 +363,7 @@ export function App() {
           : {})}
         archive={archive}
         todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
+        decisions={{ open: decisionsOpen, onClose: () => setDecisionsOpen(false), decisions }}
         {...(threads && {
           threads: { open: threads.shown, onClose: () => threads.setShown(false), menu: menus.menu },
         })}
