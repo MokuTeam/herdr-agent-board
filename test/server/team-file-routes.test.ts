@@ -4,7 +4,7 @@
 // with the switches off it is held, and the thread list names the draft with its file; a name
 // outside the uploads is refused. The board runs in a sandbox.
 import { afterAll, beforeAll, expect, setDefaultTimeout, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { memoryBlobs } from '../../hub/src/blobs.ts'
 import { boxBytes, type FileRef, generateKey, type KeyPair, sign, unb64u } from '../../src/core/team.ts'
@@ -91,6 +91,43 @@ test('a name outside the uploads, or a file that is not there, is refused before
       { ok: false, error: 'file' },
     ])
   expect(await post(url, '/api/team/send', { to: anna.pub, text: '' })).toEqual([400, { ok: false, error: 'text' }])
+})
+
+test('an upload is taken by its real path (#467): a link or junction out of the uploads is refused, an upload goes', async () => {
+  const uploads = join(stateOf(box), 'uploads')
+  const outside = join(box.dir, 'outside')
+  mkdirSync(outside, { recursive: true })
+  writeFileSync(join(outside, 'atlas.png'), 'atlas')
+  // a folder beside the uploads whose name only starts the same
+  mkdirSync(join(stateOf(box), 'uploads2', '2026-01-03'), { recursive: true })
+  writeFileSync(join(stateOf(box), 'uploads2', '2026-01-03', 'ben.png'), 'ben')
+  // a day folder that is a junction out (a plain link off win32)
+  mkdirSync(uploads, { recursive: true })
+  symlinkSync(outside, join(uploads, '2026-01-02'), 'junction')
+  const refused = [
+    '2026-01-02/atlas.png',
+    '../uploads2/2026-01-03/ben.png',
+    '2026-01-03/../../uploads2/2026-01-03/ben.png',
+  ]
+  // a file named like an upload that links out; a file link needs a right Windows may not give
+  mkdirSync(join(uploads, '2026-01-04'), { recursive: true })
+  try {
+    symlinkSync(join(outside, 'atlas.png'), join(uploads, '2026-01-04', 'atlas.png'), 'file')
+    refused.push('2026-01-04/atlas.png')
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EPERM') throw e
+  }
+  for (const upload of refused)
+    expect([upload, await post(url, '/api/team/send', { to: anna.pub, text: 'x', file: { upload } })]).toEqual([
+      upload,
+      [400, { ok: false, error: 'file' }],
+    ])
+  // a plain upload in the same folder still goes
+  writeFileSync(join(uploads, '2026-01-04', '120000-cleo.png'), 'cleo')
+  expect(
+    await post(url, '/api/team/send', { to: anna.pub, text: '', file: { upload: '2026-01-04/120000-cleo.png' } }),
+  ).toMatchObject([200, { ok: true }])
+  expect(msgOf((await annaClient.take('deliver', 8000)).env).body.file).toBeTruthy()
 })
 
 test("a session's post with a file, agents off: held as a draft with the board's copy, listed with the threads; a relative path is refused", async () => {

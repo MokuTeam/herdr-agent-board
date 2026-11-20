@@ -37,9 +37,9 @@
 // on, lanes, allLanes, channels } settles one, its body checked whole before anything changes.
 // Adding a channel's members, and a welcome that widens (Agents on, a lane, every lane: #386, a
 // channel), wait for the passkey as the switches do.
-import { statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { isRecord } from '../../adapters/json-store.ts'
+import { uploadsCheck } from '../../adapters/own-files.ts'
 import { uploadsDir } from '../../adapters/paths.ts'
 import {
   audit,
@@ -194,7 +194,9 @@ function agentsChange(
 /**
  * A file in the board's uploads, as the panel names it for a send (#371): `upload` its place there
  * (`<day>/<saved name>`, as /api/upload answered it) and `name` the name it goes under, by default
- * the saved name without its time. Undefined when the body has none, null when it is no such file.
+ * the saved name without its time. Undefined when the body has none, null when it is no such file:
+ * the file is taken by its real path (#467), so a link or junction in the uploads that points out
+ * of them is refused.
  */
 export function uploadFrom(v: unknown): { path: string; name: string } | null | undefined {
   if (v === undefined) return undefined
@@ -203,11 +205,7 @@ export function uploadFrom(v: unknown): { path: string; name: string } | null | 
   const saved = m?.[2] ?? ''
   if (!m || safeName(saved) !== saved) return null
   const path = join(uploadsDir(), m[1] as string, saved)
-  try {
-    if (!statSync(path).isFile()) return null
-  } catch {
-    return null
-  }
+  if (!uploadsCheck()(path)) return null
   const name = typeof v.name === 'string' ? v.name : saved.replace(/^\d{6}-/, '')
   return checkMeta({ name, type: 'application/octet-stream', size: 0 }) ? { path, name } : null
 }
