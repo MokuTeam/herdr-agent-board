@@ -315,9 +315,9 @@ export function outgoing(
 ): Outgoing | null {
   const target = targetOf(head)
   if (!target || entry.private || entry.author.kind === 'peer') return null
-  // The head the peers hold right after the entry: every entry up to it, in the shared order, but
-  // none of this board's own private ones, whose fields stay here as their text does (#549).
-  const all = sharedOrder(entriesOf(db, head.id), me).filter(e => !ownPrivate(e))
+  // Whether a session's done only proposed a close is read on this board's own head, private
+  // entries and all, as the entry was folded when it was written.
+  const all = sharedOrder(entriesOf(db, head.id), me)
   const upTo = all.slice(0, all.findIndex(e => e.id === entry.id) + 1)
   const after = foldShared(head, upTo.length ? upTo : [entry], me)
   const before = foldShared(head, upTo.slice(0, -1), me)
@@ -327,6 +327,9 @@ export function outgoing(
     before.status === 'owner' &&
     after.status === 'owner'
   const set = wireSet(entry.set, me, proposed)
+  // The head the peers hold right after it (#549): the entries before it but this board's own
+  // private ones, whose fields stay here as their text does, then the entry as the peers take it.
+  const theirs = foldShared(head, [...upTo.slice(0, -1).filter(e => !ownPrivate(e)), asSent(entry, proposed)], me)
   const s = sharingOf(head)
   const flags = {
     ...(entry.type === 'system' && s && entry.at === s.at && s.by === 'me' && isShareEntry(entry) && { share: true }),
@@ -335,7 +338,7 @@ export function outgoing(
   // The share and the unshare say what happened in the board's words: a board without `work` reads
   // them as a topic's lines, one with it shows its own.
   const own = flags.share || flags.unshare ? '' : entry.text
-  const text = own || fallbackLine(entry, after, flags)
+  const text = own || fallbackLine(entry, theirs, flags)
   const file = entry.files?.[0]
   return {
     target,
@@ -344,12 +347,23 @@ export function outgoing(
       n: entry.n,
       type: entry.type,
       ...(set && { set }),
-      head: wireHead(after),
+      head: wireHead(theirs),
       ...(!own && { auto: true as const }),
       ...flags,
     },
     ...(file && { file: { path: filePathOf(file.ref), name: file.name } }),
   }
+}
+
+/**
+ * An entry as the peers fold it: without the status and summary of a done that only proposed a
+ * close (wireSet), and by this board's owner, so that no fold reads a proposal in it again.
+ */
+function asSent(e: ThreadEntry, proposed: boolean): ThreadEntry {
+  const owner = { kind: 'owner' } as const
+  if (!proposed || !e.set) return { ...e, author: owner }
+  const { status: _status, summary: _summary, ...rest } = e.set
+  return { ...e, author: owner, set: rest }
 }
 
 /** The system entry that shared a thread: it sets every head field the peers hold (shareThread). */

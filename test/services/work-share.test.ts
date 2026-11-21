@@ -380,6 +380,63 @@ test("a private entry's summary and status stay home: the head that goes out is 
   expect(getThread(a.db, id)).toMatchObject({ status: 'waiting', summary: 'held back for cleo' })
 })
 
+test('the line the board writes for a peer takes no private summary either (#549)', () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const mine = postEntry(a.ctx(owner, T0 + 20_000), getThread(a.db, id) as ThreadHead, {
+    summary: 'held back for cleo',
+    private: true,
+  })
+  const bare = postEntry(a.ctx(owner, T0 + 21_000), mine.head, { status: 'next' })
+  const out = outgoing(a.db, getThread(a.db, id) as ThreadHead, bare.entry, a.me, r => r)
+  expect(out?.work.auto).toBe(true)
+  expect(JSON.stringify(out)).not.toContain('cleo')
+  take(b, handOver(a, b, bare.head, bare.entry))
+  expect(JSON.stringify(entriesOf(b.db, id))).not.toContain('cleo')
+  expect(shared(getThread(b.db, id))).toMatchObject({ status: 'next' })
+})
+
+test("a session's done after a private wait on the owner stays a proposal for the peers (#549)", () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const wait = postEntry(a.ctx(mapper, T0 + 20_000), getThread(a.db, id) as ThreadHead, {
+    status: 'owner',
+    waitingOn: 'the owner checks the rows',
+    private: true,
+  })
+  const done = postEntry(a.ctx(mapper, T0 + 21_000), wait.head, { status: 'done', summary: 'all mapped' })
+  expect(getThread(a.db, id)).toMatchObject({ status: 'owner' })
+  expect(getThread(a.db, id)?.proposed).not.toBeNull()
+  const out = outgoing(a.db, getThread(a.db, id) as ThreadHead, done.entry, a.me, r => r)
+  expect(out?.work.set?.status).toBeUndefined()
+  expect(out?.work.head.status).toBe('doing')
+  take(b, handOver(a, b, done.head, done.entry))
+  expect(getThread(b.db, id)?.status).toBe('doing')
+  // The owner closes it: that goes out.
+  const close = postEntry(a.ctx(owner, T0 + 22_000), getThread(a.db, id) as ThreadHead, { status: 'done' })
+  take(b, handOver(a, b, close.head, close.entry))
+  expect(shared(getThread(b.db, id))).toEqual(shared(getThread(a.db, id)))
+})
+
+test("a session's done after a private step back from the owner closes it for the peers too (#549)", () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const ask = postEntry(a.ctx(owner, T0 + 20_000), getThread(a.db, id) as ThreadHead, {
+    status: 'owner',
+    waitingOn: 'pick the sheet',
+  })
+  take(b, handOver(a, b, ask.head, ask.entry))
+  expect(getThread(b.db, id)?.status).toBe('owner')
+  const back = postEntry(a.ctx(owner, T0 + 21_000), ask.head, { status: 'doing', private: true })
+  const done = postEntry(a.ctx(mapper, T0 + 22_000), back.head, { status: 'done', summary: 'all mapped' })
+  expect(getThread(a.db, id)?.status).toBe('done')
+  const out = outgoing(a.db, getThread(a.db, id) as ThreadHead, done.entry, a.me, r => r)
+  expect(out?.work.set).toMatchObject({ status: 'done', summary: 'all mapped' })
+  expect(out?.work.head).toMatchObject({ status: 'done', summary: 'all mapped' })
+  take(b, handOver(a, b, done.head, done.entry))
+  expect(shared(getThread(b.db, id))).toEqual(shared(getThread(a.db, id)))
+})
+
 test('a peer that missed entries adopts a head without the private entries between them (#549)', () => {
   const { a, b, id } = sharedPair()
   const owner: Party = { kind: 'owner' }

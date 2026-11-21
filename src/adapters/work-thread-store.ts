@@ -673,7 +673,8 @@ export function appendEntry(
   // or one written with nothing to send it (no `out`: the parent's "all N sub-threads closed",
   // #548). It is private, and takes the number of the entry it follows (as an adoption takes its
   // sender's), since a number of its own would leave a hole the peers read as entries missing
-  // (4.3, rule 3). A peer's entry is numbered by its board, or is next in this one's feed.
+  // (4.3, rule 3). A peer's entry is numbered by its board, or is next in this one's feed. A
+  // caller whose entry is meant to go out sets `out` (postEntry does).
   const home =
     sharedOf(before) !== null &&
     input.n === undefined &&

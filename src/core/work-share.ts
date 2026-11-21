@@ -12,7 +12,8 @@
 //      entries arrived in.
 //   3. Every entry carries its sender's head after it, folded without the sender's private
 //      entries (#549). A board whose own counter is more than one behind the entry's knows it
-//      missed entries: it writes an entry of its own that takes the sender's head fields (`entries missing here`), placed right after the sender's.
+//      missed entries: it writes an entry of its own that takes the sender's head fields
+//      (`entries missing here`), placed right after the sender's.
 //
 // What a peer may set (11.4): status, summary, what it waits on, the title, and an assignee that
 // is the peer itself (or one of its sessions), a third member of the team, nobody, or this board
