@@ -144,9 +144,10 @@ describe('the pill in the segments’ place', () => {
     expect(byId(profiles('work', true), 'profiles-pick').attrs.get('class')).toBe('pill-toggle segment-pick profiles')
   })
 
-  test('on a phone the lanes’ "All" says it is the categories’; its name, a lane on show and a wider toolbar stay as they were', () => {
+  test('on a phone the lanes’ "All" says it is the categories’, in its name too; a lane on show and a wider toolbar stay as they were', () => {
     const all = byId(lanes([], true, NO_PICKS, 'en', true), 'lanes-pick')
-    expect([all.attrs.get('aria-label'), textOf(all)]).toEqual(['Category: All', 'All categories4'])
+    expect([all.attrs.get('aria-label'), textOf(all)]).toEqual(['Category: All categories', 'All categories4'])
+    expect(byId(lanes([], true), 'lanes-pick').attrs.get('aria-label')).toBe('Category: All')
     expect(textOf(byId(lanes([], true, NO_PICKS, 'ru', true), 'lanes-pick'))).toBe('Все категории4')
     expect(textOf(byId(lanes(['blu'], true, NO_PICKS, 'en', true), 'lanes-pick'))).toBe('bluBanyan3')
     expect(textOf(byId(lanes([], true, NO_PICKS, 'en', false), 'lanes-pick'))).toBe('All4')

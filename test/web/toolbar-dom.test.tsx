@@ -387,6 +387,8 @@ const over = () =>
 const present = () => TOOLBAR_PRIORITY.filter(id => !!q(`.toolbar-actions > #${id}`))
 const rows = () => need('.toolbar-fit').hasAttribute('data-rows')
 const moreShown = () => !need('#toolbar-more').hasAttribute('data-over')
+/** A phone's two rows (#599): the stylesheet's `data-narrow`. */
+const narrow = () => need('.toolbar-fit').hasAttribute('data-narrow')
 
 test('the toolbar is one row where everything fits, and nothing is in More', async () => {
   world.total = 2560
@@ -459,6 +461,22 @@ test('a phone keeps Next, and the presence pill beside it where the row holds bo
   expect(rows()).toBe(false)
   expect(over()).toEqual([])
   expect(moreShown()).toBe(false)
+})
+
+test('a phone’s two rows are marked for the stylesheet; a wider toolbar and one row are not, and lose the mark again (#599)', async () => {
+  await mount()
+  for (const total of [320, 390, 430, 480]) {
+    await resizeTo(total)
+    expect([total, rows(), narrow()]).toEqual([total, true, true])
+  }
+  for (const total of [481, 600, 768, 1100]) {
+    await resizeTo(total)
+    expect([total, rows(), narrow()]).toEqual([total, true, false])
+  }
+  await resizeTo(390)
+  expect(narrow()).toBe(true)
+  await resizeTo(2000)
+  expect([rows(), narrow()]).toEqual([false, false])
 })
 
 test('More lists what left the row in its order with the counts, and its dot says something needs a look', async () => {

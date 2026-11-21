@@ -122,8 +122,9 @@ const ui = (fields: Partial<BoardUi>) => fields
 
 /**
  * The controls as this board groups them since #347: the lanes control, the profile switch and search
- * in the filters, which say how many pickers they hold (#599); in the actions the filters' button (the folded toolbar's), then the old page's
- * buttons with Next after the archive and Settings after More, and the live dot last. The
+ * in the filters, which say how many pickers they hold (#599); in the actions the filters' button
+ * (the folded toolbar's), then the old page's buttons with Next after the archive and Settings after
+ * More, and the live dot last. The
  * filters' button and More are new: they are taken from what this board draws (their own tests
  * are toolbar-dom.test.tsx and toolbar-menu.test.ts), the rest is the old page's markup moved, not changed.
  */

@@ -181,10 +181,10 @@ describe('what More lists', () => {
 })
 
 describe('a phone’s width (#599)', () => {
-  test('two rows up to upstream’s phone width are a phone’s; one row, a wider toolbar or no width yet are not', () => {
-    expect(NARROW_MAX).toBe(560)
-    for (const width of [320, 360, 390, 430, 560]) expect(narrowToolbar(width, true)).toBe(true)
-    for (const width of [561, 768, 1100]) expect(narrowToolbar(width, true)).toBe(false)
+  test('two rows up to a phone’s width are a phone’s; one row, a wider toolbar or no width yet are not', () => {
+    expect(NARROW_MAX).toBe(480)
+    for (const width of [320, 358, 398, 430, 480]) expect(narrowToolbar(width, true)).toBe(true)
+    for (const width of [481, 560, 768, 1100]) expect(narrowToolbar(width, true)).toBe(false)
     expect(narrowToolbar(390, false)).toBe(false)
     expect(narrowToolbar(0, true)).toBe(false)
   })

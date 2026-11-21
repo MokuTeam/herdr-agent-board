@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRef } from 'react'
 import { translator } from '../../src/core/i18n/translator.ts'
-import type { BoardDevice, BoardPayload } from '../../src/core/payload.ts'
+import type { BoardDevice, BoardPayload, BoardProfile } from '../../src/core/payload.ts'
 import type { Item, LaunchView } from '../../src/core/types.ts'
 import { ApiError, errorText } from '../../web/src/api/client.ts'
 import { Card } from '../../web/src/components/Card.tsx'
@@ -386,6 +386,27 @@ describe('the device switch (#502)', () => {
       'id="devices"',
     )
     expect(html(drawToolbar(payload({ items: [local] })))).not.toContain('id="devices"')
+  })
+
+  test('the filters say how many pickers they hold, the device switch counted (#599: a phone lays them two to a line)', () => {
+    const picks = (data: BoardPayload) => /data-picks="(\d)"/.exec(html(drawToolbar(data)))?.[1]
+    const profile = (id: string, title: string): BoardProfile => ({
+      id,
+      title,
+      color: '#888888',
+      colorName: 'gray',
+      dir: id,
+      hidden: false,
+      inherited: false,
+      exists: true,
+      hooks: true,
+      sessions: 0,
+      limits: null,
+    })
+    const both = [profile('default', 'Private'), profile('work', 'Work')]
+    expect(picks(payload({ items: [local] }))).toBe('1')
+    expect(picks(payload({ items: [local, remote], devices: DEVICES }))).toBe('2')
+    expect(picks(payload({ items: [local, remote], devices: DEVICES, profiles: both }))).toBe('3')
   })
 
   test('a device picked shows its cards alone; one gone from the payload shows every card', () => {

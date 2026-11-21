@@ -29,8 +29,9 @@ export function SegmentPick({ of, name, nameMany = name, choices, picks, allTitl
   if (!option) return null
   const all = option.id === 'all'
   const title = all && allTitle ? allTitle : lit.map(o => o.title).join(', ')
+  // Its name holds the words it shows, so a voice command for them finds it.
   const n = lit.reduce((sum, o) => sum + o.n, 0)
-  const label = t(lit.length > 1 ? nameMany : name, { title: lit.map(o => o.title).join(', ') })
+  const label = t(lit.length > 1 ? nameMany : name, { title })
   // A click with no pointer (detail 0) came from the keys, as the gear's.
   const open = (button: HTMLElement, keyboard: boolean) => picks?.open(of, button, keyboard, choices)
   return (

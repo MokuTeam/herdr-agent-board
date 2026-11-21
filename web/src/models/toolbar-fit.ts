@@ -13,11 +13,12 @@ export const FILTERS_MIN = 420
 
 /**
  * The widest toolbar that is a phone's (#599): there, in two rows, the actions start at the row's
- * start with More and Settings at its end, and the filters' pills share their line in equal parts
- * with search on a line of its own (styles/toolbar.css, `data-narrow`). Upstream's phone width
- * (app.css, 560 px of the toolbar).
+ * start with More and Settings at its end, and the filters go two to a line in equal halves,
+ * search beside the last or on a line of its own (styles/toolbar.css, `data-narrow`). A phone held
+ * upright leaves the toolbar 400 px at most; a wider one keeps the two rows it had, its pills on
+ * one line with search.
  */
-export const NARROW_MAX = 560
+export const NARROW_MAX = 480
 
 /** Whether a toolbar `width` px wide in two rows is a phone's. */
 export const narrowToolbar = (width: number, rows: boolean): boolean => rows && width > 0 && width <= NARROW_MAX

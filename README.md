@@ -218,7 +218,10 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   folded a funnel button stands for them, saying how many are on and which; with reduced motion
   they cross-fade instead of sliding. Where the row has no room for all of the lanes, they fold
   into one pill naming the lane on show with its count; it opens every lane, with its count, in a
-  menu. The profile switch folds the same way, on its own.
+  menu. The profile switch folds the same way, on its own. On a phone the actions start at the
+  row's start with More and Settings at its end, and the filters go two to a line, search beside
+  the last or on a line of its own; a pill showing "All" names what it filters and leaves out
+  the count every pill would share.
 - Settings (the gear): appearance (as the system has it, light or dark; kept in this browser),
   style (Classic, the board's own, or Terminal: a terminal-style look with a One Dark palette,
   One Light in the light theme, monospace and 1px outlines, and the terminal board's keys, see
