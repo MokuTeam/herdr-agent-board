@@ -12,6 +12,7 @@ export type PortableWhy =
   | { kind: 'unpushed' } // HEAD is not its upstream: commits not pushed, or no upstream at all
   | { kind: 'base-unpushed'; branch: string } // the new worktree's branch is not its remote branch
   | { kind: 'local-path'; path: string } // the brief names a path that exists on this computer
+  | { kind: 'name'; name: string } // a branch or folder name a node does not take (#504)
 
 export type Portable = { ok: true } | { ok: false; why: PortableWhy }
 
@@ -69,6 +70,41 @@ export function portable(facts: PortableFacts): Portable {
 
 const no = (why: PortableWhy): Portable => ({ ok: false, why })
 
+// Folders every machine of their kind has: a brief that names `/usr/bin/env` or
+// `C:\Windows\System32` names nothing only this computer has, so it may still leave. Not `/tmp`:
+// every machine has it, but a file in it (an agent's scratchpad) is this computer's alone.
+const EVERYWHERE_POSIX = ['/usr', '/bin', '/etc', '/dev', '/proc']
+const EVERYWHERE_WINDOWS = ['c:\\windows', 'c:\\program files']
+
+/**
+ * Whether a path is in a system folder every machine of its kind has (`/usr`, `/bin`, `/etc`,
+ * `/dev`, `/proc`; `C:\Windows`, `C:\Program Files`), so its existing here says nothing
+ * about the task: the placer's `exists` leaves these out. By shape, either slash, any case on Windows.
+ */
+export function everyMachineHas(path: string): boolean {
+  const posix = path.replace(/\\/g, '/')
+  if (posix.startsWith('/') && !posix.startsWith('//'))
+    return EVERYWHERE_POSIX.some(dir => posix === dir || posix.startsWith(`${dir}/`))
+  const win = path.replace(/\//g, '\\').toLowerCase()
+  return EVERYWHERE_WINDOWS.some(dir => win === dir || win.startsWith(`${dir}\\`))
+}
+
+/**
+ * Whether a folder below a checkout, as a node names it ('/' between), travels: plain names, no way
+ * up, nothing a shell or Windows reads otherwise. The node checks it again (services/node/launch.ts).
+ */
+export function subdirTravels(subdir: string): boolean {
+  return (
+    subdir === '' ||
+    subdir
+      .split('/')
+      .every(
+        s =>
+          s.length > 0 && s.length <= 255 && s !== '.' && s !== '..' && !s.startsWith('-') && !/[\\:\p{Cc}]/u.test(s),
+      )
+  )
+}
+
 /** At most this many paths are taken from a brief. */
 export const MAX_PATHS = 20
 
@@ -111,9 +147,11 @@ export function pathsIn(text: string): string[] {
   return out
 }
 
-// What a node may make a folder of: a host of letters, digits, dots and dashes; path segments of
-// letters, digits, dots, dashes and underscores that do not start with a dot or a dash.
-const HOST = /^[A-Za-z0-9.-]+$/
+// What a node may make a folder of: a host of dot-separated labels of letters, digits and dashes
+// (no empty label, so never `..`, which would climb out of the node's work folder); path
+// segments of letters, digits, dots, dashes and underscores that do not start with a dot or a dash.
+const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?'
+const HOST = new RegExp(`^${LABEL}(?:\\.${LABEL})*$`)
 const SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/
 
 /**

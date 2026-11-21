@@ -106,21 +106,23 @@ export function deviceOptions(devices: Devices, visible: readonly Item[], t: Tra
 /**
  * What a start the master places says while it decides or waits (design 8.3): choosing a device,
  * syncing the profile to it, cloning there, waiting for room. The state `queued` and the steps
- * `choosing`, `syncing` and `cloning` come with the placer (T8); until a launch carries one,
- * this is null and its card says what it said before.
+ * `placing`, `syncing` and `cloning` come with the placer (#504), the device in its `place`;
+ * null for any other launch, whose card says what it said before. Here with the device's title;
+ * models/launch.ts stepText words the same steps with the id when the payload lists no devices.
  */
 export function placingText(l: LaunchView, devices: Devices, t: Translator): string | null {
   // Read as strings: the placer adds these values to LaunchState and LaunchStep.
   const state: string = l.state
   const step: string = l.step
-  const d = l.device ? deviceOf(devices, l.device) : null
-  const name = d?.title || l.device || ''
+  const device = l.place?.device ?? l.device
+  const d = device ? deviceOf(devices, device) : null
+  const name = d?.title || device || ''
   if (state === 'queued') {
     const n = d?.status ? d.status.sessions.awake : null
     if (!name || n === null || d?.maxSessions == null) return t('node.queuedNoRoom')
     return t('node.queued', { name, n, max: d.maxSessions })
   }
-  if (step === 'choosing') return t('node.place.choosing')
+  if (step === 'placing' && !name) return t('node.place.choosing')
   if (!name) return null
   if (step === 'syncing') return t('node.place.syncing', { name })
   if (step === 'cloning') return t('node.place.cloning', { name })

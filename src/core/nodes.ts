@@ -163,6 +163,37 @@ export function defaultThresholds(hw: { memTotalMb: number; cpus: number }): {
 }
 
 /**
+ * The thresholds config.json does not set for a device, written into its `nodes` section (the raw
+ * object, changed in place) from `given` (defaultThresholds of its first status): only keys that are
+ * absent, so a value the owner typed, `null` (no limit) included, stays. `local` gets an entry when
+ * it has none; another device only when it is there. Whether anything changed.
+ */
+export function fillThresholds(
+  nodes: Record<string, unknown>,
+  device: string,
+  given: { maxSessions: number; minFreeMemMb: number; maxLoad: number },
+): boolean {
+  if (!isObject(nodes.devices)) {
+    if (nodes.devices !== undefined || device !== LOCAL) return false
+    nodes.devices = {}
+  }
+  const devices = nodes.devices as Record<string, unknown>
+  if (!Object.hasOwn(devices, device)) {
+    if (device !== LOCAL) return false
+    devices[device] = {}
+  }
+  const entry = devices[device]
+  if (!isObject(entry)) return false
+  let changed = false
+  for (const key of ['maxSessions', 'minFreeMemMb', 'maxLoad'] as const)
+    if (!Object.hasOwn(entry, key)) {
+      entry[key] = given[key]
+      changed = true
+    }
+  return changed
+}
+
+/**
  * A `direct` link's URL: http(s), no login in it. Plain http only to this computer, as `direct`
  * is for tests and for a loopback forward the owner keeps up himself.
  */

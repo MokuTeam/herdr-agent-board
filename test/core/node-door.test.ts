@@ -75,9 +75,15 @@ describe('the door takes what 6.2 lists', () => {
     }
   })
 
-  test("the API version is 1, and only the status is the door's own", () => {
+  test("the API version is 1, and only the status and a start from the master (#504) are the door's own", () => {
     expect(NODE_API).toBe(1)
-    expect(DOOR_ROUTES.filter(r => r.door).map(r => [r.method, r.path])).toEqual([['GET', '/api/node/status']])
+    expect(DOOR_ROUTES.filter(r => r.door).map(r => [r.method, r.path])).toEqual([
+      ['GET', '/api/node/status'],
+      ['POST', '/api/node/launch'],
+    ])
+    // Not as a GET, nor spelled otherwise.
+    expect(refusal('GET', '/api/node/launch')).toEqual(NOT_FOUND)
+    expect(refusal('POST', '/api/node/%6Caunch')).toEqual(NOT_FOUND)
   })
 })
 
@@ -124,7 +130,6 @@ describe('everything else is 404, whatever the spelling', () => {
       ['GET', '/api/archive'],
       ['GET', '/api/session/s1/helper/h1'],
       ['POST', '/api/session/s1/mokupilot'],
-      ['POST', '/api/node/launch'],
       ['POST', '/api/node/claim'],
       ['POST', '/api/node/leave'],
       ['GET', '/api/node/uplink'],

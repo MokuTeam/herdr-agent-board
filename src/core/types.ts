@@ -6,6 +6,7 @@ import type { FormQuestion } from './dialogs/question-form.ts'
 import type { HelperSummary } from './helpers.ts'
 import type { FailureKind } from './launch/launcher-command.ts'
 import type { ItemLinks } from './links.ts'
+import type { LaunchPlace } from './placement.ts'
 import type { Todo } from './todos.ts'
 
 export type Lang = 'en' | 'ru'
@@ -121,8 +122,11 @@ export interface LaunchSpec {
   linkedWorkspaces?: boolean
 }
 
-/** Where a launch from the board is: waiting for a dialog answered in herdr, or at the folder-trust one. */
-export type LaunchState = 'starting' | 'waiting' | 'trust' | 'done' | 'failed'
+/**
+ * Where a launch from the board is: waiting for a dialog answered in herdr, or at the folder-trust
+ * one. `queued`: a master's start that waits for room on its devices (#504, services/nodes/placer.ts).
+ */
+export type LaunchState = 'starting' | 'waiting' | 'trust' | 'done' | 'failed' | 'queued'
 /** The step a launch is at, shown on its card (`launch.step.<step>`). */
 export type LaunchStep =
   | 'prepare'
@@ -136,6 +140,10 @@ export type LaunchStep =
   | 'command'
   | 'trust'
   | 'trusting'
+  // A master's start (#504): choosing a device, the profile synced to it (T10), the repository cloned there.
+  | 'placing'
+  | 'syncing'
+  | 'cloning'
 
 /** What kind of failure a launch had, for the hint on its card; 'message': only its first message did not go. */
 export type LaunchFailure = FailureKind | 'message'
@@ -174,6 +182,8 @@ export interface LaunchView {
   model?: string | null
   /** The device it starts on, when that is not this computer (#500): its ids carry the device's prefix. */
   device?: string
+  /** A master's start (#504): where it goes, why it waits or was refused, as data the page words. Absent without `nodes`. */
+  place?: LaunchPlace
 }
 
 export interface Config {

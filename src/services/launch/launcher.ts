@@ -91,6 +91,11 @@ export interface LaunchContext {
   readonly rootTab: string | null
   /** As far as the board knows: it may match a pane to a launch whose launcher has not said one yet. */
   readonly sessionId: string | null
+  /**
+   * The id a new session must get, given before it starts: a node's start from its master (#504,
+   * services/node/launch.ts), whose id the master picked. Null for every other start: a fresh one.
+   */
+  readonly sessionGiven?: string | null
   /** The id of the session it resumes (Return, from the archive), null for a new one. */
   readonly resume: string | null
   /** The id of the session whose conversation it starts with (a fork), null for none. */
@@ -248,7 +253,7 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
         on.session(sessionId)
         args.push('--resume', l.fork, '--fork-session', '--session-id', sessionId)
       } else if (kind === 'claude' && !chooses) {
-        sessionId = randomUUID()
+        sessionId = l.sessionGiven ?? randomUUID()
         on.session(sessionId)
         args.push('--session-id', sessionId)
       }
@@ -316,7 +321,7 @@ export function commandLauncher(spec: LaunchSpec): Launcher {
       // A resumed session has its own id.
       let sessionId: string | null = l.resume
       if (!l.resume && usesPlaceholder(template, 'sessionId')) {
-        sessionId = randomUUID()
+        sessionId = l.sessionGiven ?? randomUUID()
         on.session(sessionId)
         vars.sessionId = sessionId
       }
@@ -361,7 +366,7 @@ export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
         : [...(l.profileCommand ?? claudeCommand(spec.claude, spec.args)), ...l.profileArgs]
       let sessionId: string | null = l.resume
       if (!l.resume && (l.fork || !choosesSession(line))) {
-        sessionId = randomUUID()
+        sessionId = l.sessionGiven ?? randomUUID()
         on.session(sessionId)
       }
       const where = l.rootPane ? ['--pane', l.rootPane] : ['--workspace', l.workspaceId]

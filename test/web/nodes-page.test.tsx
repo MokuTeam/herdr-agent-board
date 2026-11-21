@@ -332,11 +332,13 @@ describe('a start placed on a device (#502, design 8.3)', () => {
       'Waiting for room: server-1 has 3 of 3 sessions',
     )
     expect(placingText(as('queued', 'prepare'), d, t)).toBe('Waiting for room')
-    expect(placingText(as('starting', 'choosing'), d, t)).toBe('Choosing a device…')
-    expect(placingText(as('starting', 'syncing', { device: 'server-1' }), d, t)).toBe(
+    expect(placingText(as('starting', 'placing'), d, t)).toBe('Choosing a device…')
+    expect(placingText(as('starting', 'syncing', { place: { device: 'server-1' } }), d, t)).toBe(
       'Syncing the profile to server-1…',
     )
-    expect(placingText(as('starting', 'cloning', { device: 'server-1' }), d, t)).toBe('Cloning on server-1…')
+    expect(placingText(as('starting', 'cloning', { place: { device: 'server-1' } }), d, t)).toBe('Cloning on server-1…')
+    // Starting on a device it chose: the step's own words (models/launch.ts stepText).
+    expect(placingText(as('starting', 'placing', { place: { device: 'server-1' } }), d, t)).toBeNull()
     // Today's steps say what they said.
     expect(placingText(launch({ device: 'server-1' }), d, t)).toBeNull()
     expect(

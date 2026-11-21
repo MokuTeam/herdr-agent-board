@@ -44,6 +44,7 @@ import {
 } from '../../core/launch/names.ts'
 import { forkCard } from '../../core/links.ts'
 import { PI_AGENT } from '../../core/pi.ts'
+import type { LaunchPlace } from '../../core/placement.ts'
 import type { Item, LaunchFailure, LaunchState, LaunchStep } from '../../core/types.ts'
 import type { Deps } from '../deps.ts'
 import { LaunchError, type LaunchEvents, launcherFor, notePane, openInProfile } from './launcher.ts'
@@ -73,6 +74,10 @@ export interface Launch extends LaunchRequest {
   error: string
   kind: LaunchFailure | ''
   sessionId: string | null
+  /** The id its new session must get (a node's start from its master, #504); null: a fresh one. */
+  sessionGiven: string | null
+  /** A master's start (#504, services/nodes/placer.ts): where it goes, as its card shows it; absent without `nodes`. */
+  place?: LaunchPlace
   /** The key whose card has its lane. */
   carded: string | null
   rootPane: string | null
@@ -117,6 +122,7 @@ export function newLaunch(
     error: '',
     kind: '',
     sessionId: null,
+    sessionGiven: null,
     carded: null,
     rootPane: null,
     rootTerminal: null,

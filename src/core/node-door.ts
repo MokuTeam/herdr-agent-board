@@ -18,7 +18,7 @@ export interface DoorRoute {
    * with `/` in it (a pi session's file) is one segment there.
    */
   path: string | RegExp
-  /** Served on the door only (GET /api/node/status), not by the board's route list. */
+  /** Served on the door only (server/routes/node.ts), not by the board's route list. */
   door?: true
 }
 
@@ -63,8 +63,9 @@ export const DOOR_ROUTES: readonly DoorRoute[] = [
   // A launch's card: trust, dismiss.
   { method: 'GET', path: '/api/launch/options' },
   { method: 'POST', path: /^\/api\/launch\/[\w-]+\/(trust|dismiss)$/ },
-  // The node's facts (6.3), on this door only.
+  // The node's facts (6.3) and a start from the master (6.4), on this door only.
   { method: 'GET', path: '/api/node/status', door: true },
+  { method: 'POST', path: '/api/node/launch', door: true },
 ]
 
 const allows = (r: DoorRoute, method: string, rawPath: string, path: string): boolean =>

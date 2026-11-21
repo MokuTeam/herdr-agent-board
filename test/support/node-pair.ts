@@ -43,6 +43,12 @@ export interface DoorProxy {
   cut(how: 'silent' | 'drop'): Promise<void>
   restore(): void
   close(): Promise<void>
+  /**
+   * A request answered here instead of by the door, for a test of what the master does with an
+   * answer (#504): given the method, the path and `forward` (the door's own answer), it returns the
+   * answer to give, or null to pass the request on as usual.
+   */
+  intercept: ((method: string, path: string, forward: () => Promise<Response>) => Promise<Response | null>) | null
 }
 
 /**
@@ -57,6 +63,7 @@ export async function doorProxy(doorPort: number): Promise<DoorProxy> {
   const requests: string[] = []
   const received: DoorProxy['received'] = []
   let peak = 0
+  const proxy = { intercept: null as DoorProxy['intercept'] }
 
   async function pass(req: Request): Promise<Response> {
     const url = new URL(req.url)
@@ -73,14 +80,18 @@ export async function doorProxy(doorPort: number): Promise<DoorProxy> {
       headers: Object.fromEntries(req.headers),
       body: sent ? new TextDecoder().decode(sent) : '',
     })
-    let res: Response
-    try {
-      res = await fetch(`http://127.0.0.1:${doorPort}${url.pathname}${url.search}`, {
+    const forward = (): Promise<Response> =>
+      fetch(`http://127.0.0.1:${doorPort}${url.pathname}${url.search}`, {
         method: req.method,
         headers,
         ...(sent && { body: sent }),
         signal: req.signal,
       })
+    const instead = proxy.intercept ? await proxy.intercept(req.method, url.pathname, forward) : null
+    if (instead) return instead
+    let res: Response
+    try {
+      res = await forward()
     } catch {
       return new Response('', { status: 502 })
     }
@@ -122,7 +133,7 @@ export async function doorProxy(doorPort: number): Promise<DoorProxy> {
   const serve = () => Bun.serve({ hostname: '127.0.0.1', port, idleTimeout: 0, reusePort: false, fetch: pass })
   let server: ReturnType<typeof Bun.serve> | null = serve()
 
-  return {
+  const rest: Omit<DoorProxy, 'intercept'> = {
     port,
     streams: () => open.size,
     peak: () => peak,
@@ -148,6 +159,7 @@ export async function doorProxy(doorPort: number): Promise<DoorProxy> {
       server = null
     },
   }
+  return Object.assign(proxy, rest)
 }
 
 export interface PairNode {
@@ -163,6 +175,9 @@ export interface PairNode {
 
 export interface Pair {
   master: { box: Sandbox; url: string; proc: Child }
+  /** The master's config and env as it was started with: a test that restarts it starts it so again. */
+  masterConfig: Record<string, unknown>
+  env: Record<string, string>
   nodes: PairNode[]
   /** The master's GET /api/nodes devices. */
   devices(): Promise<DeviceView[]>
@@ -227,6 +242,10 @@ export async function nodePair(
     nodeCfg?: (id: string, box: Sandbox) => Record<string, unknown>
     masterSetup?: (box: Sandbox) => void | Promise<void>
     deviceCfg?: (id: string) => Record<string, unknown>
+    /** More of the master's `nodes` section (order, lanes, whenFull, devices beside the nodes' own). */
+    nodesCfg?: Record<string, unknown>
+    /** More of the master's env than the nodes'. */
+    masterEnv?: Record<string, string>
   } = {},
 ): Promise<Pair> {
   const env = { ...PAIR_ENV, ...o.env }
@@ -247,7 +266,14 @@ export async function nodePair(
       { link: { kind: 'direct', url: `http://127.0.0.1:${n.proxy.port}` }, ...o.deviceCfg?.(n.id) },
     ]),
   )
-  const { url, proc } = await serveBoard(box, { language: 'en', nodes: { id: 'laptop', devices }, ...o.masterCfg }, env)
+  const { devices: moreDevices, ...moreNodes } = o.nodesCfg ?? {}
+  const masterConfig = {
+    language: 'en',
+    nodes: { id: 'laptop', ...moreNodes, devices: { ...devices, ...(moreDevices as Record<string, unknown>) } },
+    ...o.masterCfg,
+  }
+  const masterEnv = { ...env, ...o.masterEnv }
+  const { url, proc } = await serveBoard(box, masterConfig, masterEnv)
   const { onTestFinished } = await import('bun:test')
   onTestFinished(async () => {
     for (const n of nodes) await n.proxy.close()
@@ -259,6 +285,8 @@ export async function nodePair(
   }
   return {
     master: { box, url, proc },
+    masterConfig,
+    env: masterEnv,
     nodes,
     devices: read,
     async waitDevice(id, ok, ms = 5000) {

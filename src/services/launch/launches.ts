@@ -50,6 +50,29 @@ export interface StartOptions {
   resume?: string | null
   fork?: string | null
   parent?: ParentFacts | null
+  /**
+   * A node's start from its master (#504, services/node/launch.ts): the session id the master picked,
+   * which is the launch's id too, and a lane the master checked (this board may not have it yet).
+   */
+  node?: { session: string } | null
+  /** A person asked for it (the New session window); false for an agent's start (T9). The placer reads it. */
+  byHand?: boolean
+}
+
+/**
+ * The placer (#504, services/nodes/placer.ts), there only while config.json has `nodes`: a new
+ * start goes to it between the request's check and the run, and it starts it here (runLocal), on
+ * a node, or keeps it in its queue.
+ */
+export interface LaunchPlacer {
+  /** A checked new start, already among the launches: placed now, sent to a node, or queued. */
+  take(l: Launch, byHand: boolean): void
+  /** A queued start is cancelled: out of the queue and its file. */
+  cancel(id: string): void
+  /** Whether the node a start went to shows it now (its launch or its session): its card is the node's then. */
+  shown(l: Launch): boolean
+  /** The board was refreshed: a session of this computer may have gone to sleep. */
+  observe(items: Item[]): void
 }
 
 export interface Launches {
@@ -65,6 +88,12 @@ export interface Launches {
   closeTab(id: string): Promise<LaunchActionResult>
   options(): Promise<LaunchOptions>
   list(): LaunchView[]
+  /** The placer's (#504): a start it took or read back from its queue, run here as any other. */
+  runLocal(l: Launch): void
+  /** The placer's (#504): a queued start read back from the queue's file after a restart, shown again. */
+  adopt(l: Launch): void
+  /** The placer's (#504): its launch changed; the board publishes again. */
+  changed(): void
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -114,6 +143,7 @@ const view = (l: Launch): LaunchView => ({
   parent: l.parent,
   agent: l.agent,
   model: l.model,
+  ...(l.place && { place: l.place }),
 })
 
 /** Whether `pi` is a command on the board's PATH (a .ps1 or .cmd on Windows too). */
@@ -123,7 +153,16 @@ export function piOnPath(): boolean {
 }
 
 /** The launches of this board process; `onChange` publishes the board again. */
-export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onChange?: () => void }): Launches {
+export function createLaunches({
+  deps,
+  onChange = () => {},
+  placer = () => null,
+}: {
+  deps: Deps
+  onChange?: () => void
+  /** The placer while config.json has `nodes` (#504), else null. */
+  placer?: () => LaunchPlacer | null
+}): Launches {
   const launches = new Map<string, Launch>()
   removeLeftoverMessages()
   const changed = (): void => onChange()
@@ -138,13 +177,16 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
   async function start(
     body: unknown,
     items: Item[] = [],
-    { resume = null, fork = null, parent = null }: StartOptions = {},
+    { resume = null, fork = null, parent = null, node = null, byHand = true }: StartOptions = {},
   ): Promise<StartResult> {
     const categories = new Set([...deps.cfg.categories.map(c => c.id), ...items.map(i => i.category)])
+    // Resume, fork and a node's own start from its master are never placed: they run where they are.
+    const placing = resume || fork || node ? null : placer()
     // Only the board's own spawn-agent types a profile's start command: the others never read it.
     const launcher = launcherFor(deps.cfg.launch, { resume: !!resume, fork: !!fork })
     const r = await checkRequest(body, {
-      categories,
+      // A node's start runs in its master's lane, which the bundle (T10) may not have brought yet.
+      categories: node ? null : categories,
       profiles: deps.profiles(),
       items,
       typesCommand: launcher.kind === 'builtin',
@@ -153,6 +195,8 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       agents: () => (resume || fork ? [] : launchAgents(deps.cfg.launch, piOnPath)),
       standard: offered => defaultAgent(deps.cfg.launch, offered),
       pi: deps.cfg.launch?.pi,
+      // "Where" and a node's folder are read only while the board places (#504).
+      ...(placing && { pins: true }),
     })
     if (!r.ok) return r
     // launch.agent whose arguments pick the session cannot resume one: refused before anything runs.
@@ -167,7 +211,19 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
     // a copy of its source's in the source's folder: no worktree.
     const request = resume ? { ...r.launch, message: '' } : fork ? { ...r.launch, worktree: null } : r.launch
     const l = newLaunch(request, items, resume, fork)
+    if (node) {
+      l.id = node.session
+      l.sessionGiven = node.session
+    }
     launches.set(l.id, l)
+    if (placing) placing.take(l, byHand)
+    else runLocal(l)
+    changed()
+    return { ok: true, id: l.id }
+  }
+
+  /** Runs a launch here: its state and failure for its card. */
+  function runLocal(l: Launch): void {
     runner
       .run(l)
       .then(() => {
@@ -186,8 +242,6 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
         deps.log(`launch ${l.name}: ${l.error}`)
       })
       .finally(changed)
-    changed()
-    return { ok: true, id: l.id }
   }
 
   /** "Trust and continue" on a launch's card (run.ts moves the cursor). */
@@ -259,17 +313,22 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       }
     }
     // Started ones go once their card is on the board; failed ones stay until dismissed (or 30 min).
+    // One a master sent to a node goes once the node shows it (#504).
     const now = Date.now()
     let gone = false
+    const placing = placer()
     for (const [id, l] of launches) {
       const age = now - (l.doneAt ?? now)
-      const done = l.state === 'done' && ((!!l.key && !!l.carded && age > 8000) || age > 120_000 || l.dismissed)
+      const there = !!l.place?.device && !!placing?.shown(l)
+      const done =
+        l.state === 'done' && ((!!l.key && !!l.carded && age > 8000) || age > 120_000 || l.dismissed || there)
       if (done || (l.state === 'failed' && now - l.startedAt > 30 * 60_000)) {
         launches.delete(id)
         gone = true
       }
     }
     if (gone) changed()
+    placing?.observe(items)
   }
 
   function decorate(item: Item): Item {
@@ -289,7 +348,9 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
     const l = launches.get(id)
     if (!l) return { ok: false, error: t('launch.err.gone') }
     l.dismissed = true
-    if (l.state === 'failed' || l.state === 'done') launches.delete(id)
+    // A queued start of the placer's (#504) is cancelled: out of its queue, and off the board.
+    if (l.state === 'queued') placer()?.cancel(id)
+    if (l.state === 'failed' || l.state === 'done' || l.state === 'queued') launches.delete(id)
     changed()
     return { ok: true }
   }
@@ -348,6 +409,13 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
     trust,
     closeTab,
     options,
-    list: () => [...launches.values()].filter(l => !l.dismissed).map(view),
+    // A start a master sent to a node shows as the node's own launch once the node has it: one card, not two.
+    list: () => [...launches.values()].filter(l => !l.dismissed && !(l.place?.device && placer()?.shown(l))).map(view),
+    runLocal,
+    adopt(l) {
+      launches.set(l.id, l)
+      changed()
+    },
+    changed,
   }
 }

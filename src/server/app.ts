@@ -9,9 +9,10 @@
 import { randomBytes } from 'node:crypto'
 import { existsSync, type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
 import { join } from 'node:path'
-import { loadConfig, saveFoundProfiles } from '../adapters/config-file.ts'
+import { editNodes, loadConfig, saveFoundProfiles } from '../adapters/config-file.ts'
 import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
+import { workspaceList } from '../adapters/herdr.ts'
 import { createNodeStore } from '../adapters/node-store.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
@@ -37,7 +38,7 @@ import {
 } from '../adapters/ssh.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
 import { messageGate } from '../core/message-gate.ts'
-import { nodeConfig, nodesConfig } from '../core/nodes.ts'
+import { fillThresholds, nodeConfig, nodesConfig } from '../core/nodes.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payload.ts'
 import type { Observation } from '../core/presence.ts'
@@ -64,9 +65,11 @@ import { dayWatchTick } from '../services/day-watches.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
+import { createNodeLaunch } from '../services/node/launch.ts'
 import { createNodeStatus } from '../services/node/status.ts'
 import { createNodeAggregate, type NodeAggregate } from '../services/nodes/aggregate.ts'
 import { createNodeLinks, type NodeLinks } from '../services/nodes/links.ts'
+import { createPlacer, type Placer } from '../services/nodes/placer.ts'
 import { tellOwnerWatchers } from '../services/owner-watch.ts'
 import { createPresence } from '../services/presence.ts'
 import { editProfile, installProfile, installThreadsSkill, wakeHooksInPlace } from '../services/profiles.ts'
@@ -110,6 +113,7 @@ import { launchRoutes } from './routes/launch.ts'
 import { linksRoutes } from './routes/links.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { moveRoute } from './routes/move.ts'
+import { nodeDoorRoutes } from './routes/node.ts'
 import { createNodeProxy, type NodeProxy } from './routes/node-proxy.ts'
 import { nodesRoutes } from './routes/nodes.ts'
 import { pageLogRoute } from './routes/page-log.ts'
@@ -269,8 +273,15 @@ export async function startServer({
     log,
   })
   const viewerExtras = { dirs: viewerDirs(ROOT), policies: WORKER_POLICIES }
+  // The placer (#504): made with the links below, the first time config.json has `nodes`; until then,
+  // and whenever `nodes` is off, a start runs here as it always has.
+  let nodePlacer: Placer | null = null
   // Sessions started from the board (services/launch): their progress goes out with the board.
-  const launches = createLaunches({ deps, onChange: () => board.publish() })
+  const launches = createLaunches({
+    deps,
+    onChange: () => board.publish(),
+    placer: () => (nodePlacer && nodesConfig(cfg.nodes) ? nodePlacer : null),
+  })
   // The terminal (services/terminals.ts): shells the board opened in sessions' folders, and live panes.
   const terminals = createTerminals({ onChange: () => board.publish() })
   // What of the board is not set up on this computer, for the page's quiet note.
@@ -1002,6 +1013,13 @@ export async function startServer({
       launch: () => cfg.launch,
       version: PLUGIN_VERSION,
     })
+    const nodeLaunch = createNodeLaunch({
+      node: () => nodeConfig(cfg.node),
+      start: (body, session) => launches.start(body, board.items(), { node: { session } }),
+      launch: id => launches.list().find(l => l.id === id),
+      profiles: () => deps.profiles(),
+      workspaces: () => workspaceList(8000),
+    })
     door = createNodeListener({
       cfg,
       routes: ownRoutes,
@@ -1011,7 +1029,11 @@ export async function startServer({
       guards: { ...guards, ownFiles: ownFileCheck(cfg) },
       hello: () => listener.hello(),
       store: createNodeStore(),
-      status: () => status.answer(),
+      // Its status, and a start from the master (#504) through this board's own launch pipeline.
+      doorRoutes: nodeDoorRoutes({
+        status: () => status.answer(),
+        launch: body => nodeLaunch.answer(body),
+      }),
       log,
     })
     void door.sync()
@@ -1046,6 +1068,32 @@ export async function startServer({
       local: ownRoutes,
     })
     routes.unshift(nodeProxy.route)
+    // Where a new session runs (#504): this computer's own status by the code a node answers with.
+    const ownStatus = createNodeStatus({
+      node: () => {
+        const n = nodesConfig(cfg.nodes)
+        return n && { id: n.id, port: 0, workRoot: '~', listen: 'loopback', tls: false, relay: null }
+      },
+      items: board.items,
+      launches: () => launches.list(),
+      // Every profile this computer has: a start may name a hidden one, as without nodes.
+      profiles: () => deps.profiles().list,
+      launch: () => cfg.launch,
+      version: PLUGIN_VERSION,
+    })
+    nodePlacer = createPlacer({
+      cfg,
+      links: nodeLinks,
+      remote: () => aggregate.part(),
+      launches,
+      items: board.items,
+      ownStatus: () => ownStatus.answer(),
+      fillThresholds: (id, given) => {
+        const r = editNodes(raw => fillThresholds(raw, id, given))
+        if (!r.ok) log(`placer: the thresholds of ${id} were not written: ${r.error}`)
+      },
+      log,
+    })
     // Their ssh dies with the board, also on an exit that skips close().
     process.on('exit', nodeLinks.killNow)
   }
@@ -1165,6 +1213,7 @@ export async function startServer({
         nodeAggregate.close()
         process.off('exit', nodeAggregate.close)
       }
+      nodePlacer?.close()
       if (nodeLinks) {
         await nodeLinks.close()
         process.off('exit', nodeLinks.killNow)

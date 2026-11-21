@@ -11,6 +11,7 @@ import { CLAUDE_AGENT, type LaunchAgent, type LaunchAgentId, piCommand } from '.
 import { MODEL_MAX, readModel } from '../../core/launch/model.ts'
 import { checkBranch, checkName, NAME_MAX, UNSAFE_CHARS } from '../../core/launch/names.ts'
 import { profileCommand } from '../../core/launch/spawn-args.ts'
+import { DEVICE_ID, LOCAL } from '../../core/nodes.ts'
 import { type LaunchTarget, launchTarget, type ProfileSet } from '../../core/profiles.ts'
 import type { Item, Vars } from '../../core/types.ts'
 
@@ -51,6 +52,28 @@ export interface LaunchRequest {
   agent: LaunchAgentId
   /** The model it starts on (`--model`), null for the profile's default. */
   model: string | null
+  /** "Where" (#504): a device or a tag it must run on. Read only while config.json has `nodes`; absent when not given. */
+  pin?: LaunchPin
+  /**
+   * The device whose folder `cwd` is (#504): a start pinned to a node with a folder of that node,
+   * which this computer does not have. Absent for a folder of this computer.
+   */
+  remote?: string
+}
+
+/** "Where" in a launch request (#504): a device of `nodes` (`local` for this computer), or a tag. */
+export type LaunchPin = { device: string } | { tag: string }
+
+const TAG = /^[A-Za-z0-9][\w.-]{0,63}$/
+
+/** A request's `pin`, or undefined when it is not one. */
+function pinOf(v: unknown): LaunchPin | undefined {
+  if (!isRecord(v)) return undefined
+  const keys = Object.keys(v)
+  if (keys.length !== 1) return undefined
+  if (typeof v.device === 'string' && (v.device === LOCAL || DEVICE_ID.test(v.device))) return { device: v.device }
+  if (typeof v.tag === 'string' && TAG.test(v.tag)) return { tag: v.tag }
+  return undefined
 }
 
 export type CheckResult = { ok: true; launch: LaunchRequest } | { ok: false; field: string; error: string }
@@ -67,7 +90,9 @@ export type ParentFacts = { key: string } & Pick<Item, 'name' | 'profile' | 'pro
  * back from the archive, which is not among the board's items). `agents`: the agents a start may
  * pick (core/launch/agents.ts launchAgents), asked only when the request names one or `standard`
  * asks; `standard`: the agent of a request that names none (agents.ts defaultAgent), Claude Code
- * when not given; `pi`: config's `launch.pi`, checked when pi is the one.
+ * when not given; `pi`: config's `launch.pi`, checked when pi is the one. `pins`: config.json has
+ * `nodes` (#504), so the request's `pin` is read, and a folder this computer lacks is taken as the
+ * pinned node's; without it neither is looked at.
  */
 export async function checkRequest(
   body: unknown,
@@ -80,6 +105,7 @@ export async function checkRequest(
     agents = () => [],
     standard = () => CLAUDE_AGENT,
     pi,
+    pins = false,
   }: {
     categories?: Set<string> | null
     profiles: ProfileSet
@@ -89,6 +115,7 @@ export async function checkRequest(
     agents?: () => readonly LaunchAgent[]
     standard?: (offered: () => readonly LaunchAgent[]) => LaunchAgentId
     pi?: unknown
+    pins?: boolean
   },
 ): Promise<CheckResult> {
   const fail = (field: string, key: string, vars?: Vars): CheckResult => ({ ok: false, field, error: t(key, vars) })
@@ -96,12 +123,22 @@ export async function checkRequest(
   const name = String(b.name ?? '').trim()
   const bad = checkName(name)
   if (bad) return fail('name', bad, { max: NAME_MAX })
-  const { path: cwd } = resolvePath(b.cwd)
+  let pin: LaunchPin | undefined
+  if (pins && b.pin !== undefined && b.pin !== null) {
+    pin = pinOf(b.pin)
+    if (!pin) return fail('pin', 'launch.err.pin')
+  }
+  let { path: cwd } = resolvePath(b.cwd)
+  let remote: string | undefined
   if (!cwd) return fail('cwd', 'launch.err.cwdEmpty')
   const st = await statOf(cwd, 3000)
   if (st === SLOW) return fail('cwd', 'launch.err.cwdSlow', { path: cwd })
-  if (!st) return fail('cwd', 'launch.err.cwdMissing', { path: cwd })
-  if (!st.isDirectory()) return fail('cwd', 'launch.err.cwdFile', { path: cwd })
+  if (!st && pin && 'device' in pin && pin.device !== LOCAL) {
+    // A folder of the pinned node, as that node names it: taken as written, never resolved here.
+    remote = pin.device
+    cwd = String(b.cwd).trim()
+  } else if (!st) return fail('cwd', 'launch.err.cwdMissing', { path: cwd })
+  else if (!st.isDirectory()) return fail('cwd', 'launch.err.cwdFile', { path: cwd })
   // A lane the board has (configured, or one an agent made), or "other" when none was given.
   const category = String(b.category ?? '') || 'other'
   if (!CATEGORY_ID.test(category) || (categories && category !== 'other' && !categories.has(category)))
@@ -196,6 +233,8 @@ export async function checkRequest(
       profileCommand: profileCommandWords,
       agent,
       model,
+      ...(pin && { pin }),
+      ...(remote && { remote }),
     },
   }
 }

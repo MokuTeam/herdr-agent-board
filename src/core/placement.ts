@@ -122,6 +122,25 @@ export type Verdict =
   | { wait: Blocker } // queue it; the first candidate's blocker goes on the launch's card
   | { refuse: Refusal } // no device could ever take it
 
+/** What a node answers a start it does not take (6.4): the placer sends the start to the next device. */
+export type NodeTurn = 'full' | 'profile' | 'repo' | 'bundle'
+
+/**
+ * A master's start on its launch card (#504), as data the page words (core/i18n/node-strings.ts):
+ * the device it goes to, why it stays at its origin, the blocker it waits on, the refusal, and the
+ * devices that turned it away on the way.
+ */
+export interface LaunchPlace {
+  /** Where it goes or went; absent while the board chooses. */
+  device?: DeviceId
+  home?: PortableWhy
+  wait?: Blocker
+  refuse?: Refusal
+  turned?: { device: DeviceId; error: NodeTurn }[]
+  /** Refused because 50 starts wait already (8.3). */
+  queueFull?: true
+}
+
 /** What one start is counted as on its device until the device shows it (8.2). */
 export const RESERVED_MB = 800
 /** A reservation lets go by itself after this long, in case the device never shows the session. */

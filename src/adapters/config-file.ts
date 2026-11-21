@@ -789,6 +789,21 @@ export function saveFoundProfiles(inheritedDir: string, home: string = homedir()
   }
 }
 
+/**
+ * Change config.json's `nodes` (#496): `change` gets the section as it is on disk and says whether
+ * it changed it; nothing is written when it did not. A file that does not parse is refused and
+ * left as it is (#167), as every edit here; so is a file without `nodes`, which this never adds.
+ */
+export function editNodes(change: (nodes: Record<string, unknown>) => boolean): EditResult {
+  let changed = false
+  const r = editConfig(raw => {
+    if (!isRecord(raw.nodes)) return { ok: false, error: 'nodes' }
+    changed = change(raw.nodes)
+    return changed ? { ok: true } : { ok: false, error: 'unchanged' }
+  })
+  return r.ok || (!r.ok && r.error === 'unchanged') ? { ok: true } : r
+}
+
 /** A config edit that must go through, for a caller with no answer of its own to give: a refusal thrown, its words the message. */
 export function mustEdit(r: EditResult): void {
   if (!r.ok) throw new Error(r.error)

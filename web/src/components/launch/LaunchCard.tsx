@@ -5,7 +5,17 @@
 import type { BoardDevice } from '../../../../src/core/payload.ts'
 import type { LaunchView, Translator } from '../../../../src/core/types.ts'
 import { nodeLook, placingText } from '../../models/devices.ts'
-import { failureHint, launchWhere, needsYou, retries, stepText } from '../../models/launch.ts'
+import {
+  failureHint,
+  homeText,
+  launchWhere,
+  needsYou,
+  placeRefusal,
+  queuedText,
+  retries,
+  stepText,
+  turnedText,
+} from '../../models/launch.ts'
 import { DeviceFacts } from '../devices/DeviceChip.tsx'
 import { WaitIcon, WarnIcon } from '../icons.tsx'
 
@@ -64,7 +74,7 @@ export function LaunchNote({ launch: l, look }: { launch: LaunchView; look: Laun
   if (l.state === 'failed')
     return (
       <div className="launch-note failed">
-        <Why text={l.error || t('launch.failed')} />
+        <Why text={l.error || placeRefusal(l, t) || t('launch.failed')} />
         <div className="ln-hint">{t(failureHint(l))}</div>
         <div className="ln-actions">
           {retries(l) && (
@@ -113,6 +123,21 @@ export function LaunchNote({ launch: l, look }: { launch: LaunchView; look: Laun
       </div>
     )
   }
+  // A master's start that waits for room on its devices (#504): what it waits on, and Cancel.
+  if (l.state === 'queued') {
+    const turned = turnedText(l, t)
+    return (
+      <div className="launch-note waiting">
+        <Why text={queuedText(l, t)} />
+        {turned && <div className="ln-hint">{turned}</div>}
+        <div className="ln-actions">
+          <button type="button" className="button plain" data-launch="dismiss" data-id={l.id}>
+            {t('place.cancel')}
+          </button>
+        </div>
+      </div>
+    )
+  }
   if (l.state === 'waiting')
     return (
       <div className="launch-note waiting">
@@ -127,6 +152,7 @@ export function LaunchNote({ launch: l, look }: { launch: LaunchView; look: Laun
         <WaitIcon />
       </span>
       <span>{(look.devices && placingText(l, look.devices, t)) || stepText(l, t, look.launcher)}</span>
+      {l.place?.home && <div className="ln-hint">{t('place.home', { why: homeText(l.place.home, t) })}</div>}
     </div>
   )
 }

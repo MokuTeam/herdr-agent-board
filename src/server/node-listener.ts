@@ -12,9 +12,9 @@
 // - it carries `Authorization: Bearer <token>` of a master in masters.json (adapters/node-store.ts),
 //   else 401 token; wrong or missing tokens past 5 a minute are 429;
 // - it is on the door's allowlist (core/node-door.ts) in both spellings of its path, else 404.
-// `GET /api/hello` answers before the token: the board's own hello and `node`. `GET
-// /api/node/status` is this door's own; everything else goes to the board's route table with the
-// web board's guards. A master's open event streams end, with the event a phone's do, the moment
+// `GET /api/hello` answers before the token: the board's own hello and `node`. `/api/node/...`
+// (server/routes/node.ts) are this door's own; everything else goes to the board's route table
+// with the web board's guards. A master's open event streams end, with the event a phone's do, the moment
 // it is forgotten.
 
 import type { MasterRecord, NodeStore } from '../adapters/node-store.ts'
@@ -36,8 +36,8 @@ export interface NodeListenerOptions {
   /** The board's own hello (server/remote.ts), which the door's adds `node` to. */
   hello: () => Hello
   store: NodeStore
-  /** `GET /api/node/status`'s answer (services/node/status.ts). */
-  status: () => Promise<unknown>
+  /** The door's own routes (server/routes/node.ts): its status and a start from the master. */
+  doorRoutes: Route[]
   log: (text: string) => void
 }
 
@@ -101,12 +101,7 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
       if (path === null) return json(400, { error: 'path' })
       const route = doorRoute(req.method, raw, path)
       if (!route) return json(404, { error: 'not found' })
-      if (route.door) {
-        const status = await o.status()
-        // `node` went from config.json meanwhile: this door is closing.
-        return status === null ? json(503, { error: 'node' }) : json(200, status)
-      }
-      const res = await dispatch(o.routes, req, url, path, o.guards, () => peerOf(srv, req))
+      const res = await dispatch(route.door ? o.doorRoutes : o.routes, req, url, path, o.guards, () => peerOf(srv, req))
       const id = master.id
       return endsWhenGone(res, gone => o.store.watch(id, gone), { 'x-accel-buffering': 'no' })
     } catch (err) {
