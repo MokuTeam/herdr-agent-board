@@ -1099,6 +1099,131 @@ test('Claude asks to trust a new folder: the launch waits on its card, and on re
   noEnv(box)
 }, 40_000)
 
+// A dialog Claude draws after herdr called it ready (#602): on the owner's first node the Code Mode
+// notice came up once the folder was trusted, and its chosen answer, "❯ No, start without it", was
+// taken for text typed into the prompt: the launch failed its first message.
+const CODE_MODE = readFileSync(new URL('../support/screens/startup-code-mode.txt', import.meta.url), 'utf8')
+const agentReads = (box: Box) =>
+  box
+    .calls()
+    .filter(a => a[0] === 'agent' && a[1] === 'read')
+    .map(a => a.slice(2).join(' '))
+/** A start held at the trust dialog and trusted in herdr at once, then the screen `after` shows. */
+const trustedThen = (dir: string, after: string) => ({
+  ...HERDR,
+  'agent start': { code: 'agent_not_ready', error: 'agent_not_ready: blocked during startup' },
+  'agent get': idle,
+  'pane read': { text: trustScreen(dir) },
+  'agent read': { text: after },
+})
+
+test('a dialog on the screen once Claude is ready holds the start, the card saying so; answered, the name and the first message go (#602)', async () => {
+  const { box, board, launched, started } = await boardServer(VIA_HERDR)
+  const dir = join(box.dir, 'node project')
+  mkdirSync(dir)
+  const state = trustedThen(dir, CODE_MODE)
+  box.state(state)
+  const id = await started({
+    name: 'Fresh one',
+    cwd: dir,
+    category: 'acme',
+    workspace: { id: 'wA' },
+    message: 'Say hello.',
+  })
+  const held = await launchState(board, id, l => l?.state === 'waiting', 'the dialog did not hold the start')
+  assert.equal(held.step, 'dialog')
+  // Nothing typed into it and no key for it: the owner answers it in the terminal.
+  assert.deepEqual(promptsSent(box), [])
+  assert.deepEqual(keysSent(box), [])
+  box.state({ ...state, 'agent read': { text: SCREEN('') }, 'pane read': { text: 'Session renamed to: Fresh one' } })
+  const l = await launched(id)
+  assert.equal(l.state, 'done', l.error)
+  assert.deepEqual(promptsSent(box), ['wA:p9 /rename Fresh one', 'wA:p9 Say hello.'])
+}, 30_000)
+
+test('a dialog nobody answers ends the start when the wait runs out, saying it waited for the dialog (#602)', async () => {
+  const { box, launched, started } = await boardServer(VIA_HERDR, { BOARD_DIALOG_WAIT_MS: '400' })
+  const dir = join(box.dir, 'node project')
+  mkdirSync(dir)
+  box.state(trustedThen(dir, CODE_MODE))
+  const id = await started({
+    name: 'Fresh one',
+    cwd: dir,
+    category: 'acme',
+    workspace: { id: 'wA' },
+    message: 'Say hello.',
+  })
+  const l = await launched(id)
+  assert.equal(l.state, 'failed')
+  assert.equal(l.error, 'Gave up waiting for the dialog to be answered')
+  assert.equal(l.kind, 'dialog')
+  assert.deepEqual(promptsSent(box), [])
+}, 30_000)
+
+test("herdr's own start, the name not taken: a dialog in its place holds the first message until it is answered (#602)", async () => {
+  const { box, board, launched, started } = await boardServer(VIA_HERDR)
+  const dir = join(box.dir, 'node project')
+  mkdirSync(dir)
+  const state = { ...HERDR, 'pane read': { text: CODE_MODE }, 'agent read': { text: CODE_MODE } }
+  box.state(state)
+  const id = await started({
+    name: 'Fresh one',
+    cwd: dir,
+    category: 'acme',
+    workspace: { id: 'wA' },
+    message: 'Say hello.',
+  })
+  const held = await launchState(board, id, l => l?.state === 'waiting', 'the dialog did not hold the start')
+  assert.equal(held.step, 'dialog')
+  assert.deepEqual(promptsSent(box), ['wA:p9 /rename Fresh one'])
+  box.state({ ...state, 'agent read': { text: SCREEN('') } })
+  const l = await launched(id)
+  assert.equal(l.state, 'done', l.error)
+  assert.deepEqual(promptsSent(box), ['wA:p9 /rename Fresh one', 'wA:p9 Say hello.'])
+}, 30_000)
+
+test('text the owner typed is never written over: the first message is refused as before, and an empty box costs no read more (#602)', async () => {
+  const typed = await boardServer(VIA_HERDR)
+  const dir = join(typed.box.dir, 'node project')
+  mkdirSync(dir)
+  typed.box.state(trustedThen(dir, SCREEN('half a thought')))
+  const id = await typed.started({
+    name: 'Fresh one',
+    cwd: dir,
+    category: 'acme',
+    workspace: { id: 'wA' },
+    message: 'Say hello.',
+  })
+  const l = await typed.launched(id)
+  assert.equal(l.state, 'failed')
+  assert.match(l.error ?? '', /Something is typed in its input box/)
+  assert.deepEqual(promptsSent(typed.box), [])
+  // The box empty, as on every start: the reads every board made before this change, and no other.
+  const empty = await boardServer(VIA_HERDR)
+  const dir2 = join(empty.box.dir, 'node project')
+  mkdirSync(dir2)
+  empty.box.state({
+    ...trustedThen(dir2, SCREEN('')),
+    'pane read': {
+      seq: [{ text: trustScreen(dir2) }, { text: trustScreen(dir2) }, { text: 'Session renamed to: Fresh one' }],
+    },
+  })
+  const ok = await empty.launched(
+    await empty.started({
+      name: 'Fresh one',
+      cwd: dir2,
+      category: 'acme',
+      workspace: { id: 'wA' },
+      message: 'Say hello.',
+    }),
+  )
+  assert.equal(ok.state, 'done', ok.error)
+  assert.deepEqual(agentReads(empty.box), [
+    'wA:p9 --source recent --lines 40 --ansi',
+    'wA:p9 --source recent --lines 40 --ansi',
+  ])
+}, 40_000)
+
 test('"Close the tab" closes it and drops the launch; "Trust" refuses a screen without the dialog for that folder', async () => {
   const { box, post, board, started } = await boardServer(VIA_HERDR)
   const dir = join(box.dir, 'unsure')

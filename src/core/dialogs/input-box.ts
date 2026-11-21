@@ -76,3 +76,32 @@ export function inputDraft(ansiScreen: unknown): string | null {
   }
   return null
 }
+
+// The line under a dialog that says how to answer it: "Enter to confirm · Esc to cancel", "Esc to
+// start without it", "Enter to select · ↑/↓ to navigate". Not a working Claude's "esc to interrupt".
+const HOW_TO_ANSWER = /\b(?:enter|esc(?:ape)?) to (?!interrupt\b)\p{L}/iu
+const CHOICE = /^\s*❯\s*\S/
+
+/**
+ * Whether the screen ends in a dialog: what Claude Code draws when it wants an answer before its
+ * input box takes text (the folder trust, a project's MCP servers, a permission, a first-run notice
+ * or an upsell). Told by its shape, not its words: a choice marked ❯, and under it, as the screen's
+ * last line, how to answer it. A complete current input box is never one (inputDraft).
+ */
+export function choiceDialog(ansiScreen: unknown): boolean {
+  if (inputDraft(ansiScreen) !== null) return false
+  const lines = stripAnsi(String(ansiScreen ?? '')).split(/\r?\n/)
+  let end = lines.length - 1
+  while (end >= 0 && !lines[end]?.trim()) end--
+  if (end < 1 || !HOW_TO_ANSWER.test(lines[end] ?? '')) return false
+  return lines.slice(0, end).some(l => CHOICE.test(l))
+}
+
+/** What a screen shows where a line would be typed: the input box and its text, a dialog, or neither (null). */
+export type PromptScreen = { kind: 'box'; draft: string } | { kind: 'dialog' } | null
+
+export function promptScreen(ansiScreen: unknown): PromptScreen {
+  const draft = inputDraft(ansiScreen)
+  if (draft !== null) return { kind: 'box', draft }
+  return choiceDialog(ansiScreen) ? { kind: 'dialog' } : null
+}

@@ -1,0 +1,20 @@
+PS C:\work\probe
+> [0m[38;5;11mclaude[0m
+
+[0m[38;2;255;193;7m───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+  [0m[1m[38;2;255;193;7mCode Mode (experimental)[0m
+
+  In Code Mode, Claude works by writing and running JavaScript that calls its tools, instead of calling them one at a
+  time.
+
+  This is an early experiment. It can behave differently from normal Claude Code, and it may change or be removed in
+  any release. Remote Control, Claude in Chrome and computer use are off in Code Mode.
+
+  Sessions start in the same permission mode as without Code Mode, which can be auto mode where it's available.
+
+  [0m[38;2;177;185;249m❯ No, start without it[0m
+    Yes, turn on Code Mode
+
+  [0m[2mTell us how it goes with /feedback[0m
+
+  [0m[3m[38;2;153;153;153mEnter to confirm · Esc to start without it[0m

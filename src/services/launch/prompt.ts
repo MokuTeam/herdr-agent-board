@@ -3,7 +3,7 @@
 import { agentNames, herdr, herdrText } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { pause } from '../../adapters/pacing.ts'
-import { inputDraft } from '../../core/dialogs/input-box.ts'
+import { inputDraft, type PromptScreen, promptScreen } from '../../core/dialogs/input-box.ts'
 import { stillTyped } from '../../core/launch/spawn-args.ts'
 import { PI_NAMING } from '../../core/pi.ts'
 
@@ -40,6 +40,15 @@ export async function typeLine(pane: string, text: string, tries = 3): Promise<b
 export async function boxDraft(pane: string): Promise<string | null> {
   const screen = await herdrText(['agent', 'read', pane, '--source', 'visible', '--ansi'], 10_000).catch(() => null)
   return screen === null ? null : inputDraft(screen)
+}
+
+/**
+ * What Claude's screen shows where a line would go: its input box and what it holds, a dialog that
+ * wants an answer first, or neither (null, also for a screen herdr cannot show). The read boxDraft makes.
+ */
+export async function screenNow(pane: string): Promise<PromptScreen> {
+  const screen = await herdrText(['agent', 'read', pane, '--source', 'visible', '--ansi'], 10_000).catch(() => null)
+  return screen === null ? null : promptScreen(screen)
 }
 
 /**

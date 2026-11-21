@@ -1,0 +1,14 @@
+PS C:\work\probe
+> [0m[38;5;11mclaude[0m
+
+[0m[38;2;255;193;7m───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+  [0m[1m[38;2;255;193;7mDetected a custom API key in your environment[0m
+
+  [0m[1mANTHROPIC_API_KEY[0m: sk-ant-...not-a-real-key-0000
+
+  Do you want to use this API key?
+
+    Yes
+  [0m[38;2;177;185;249m❯ No ([0m[1m[38;2;177;185;249mrecommended[0m[38;2;177;185;249m)[0m
+
+  [0m[3m[38;2;153;153;153mEnter to confirm · Esc to cancel[0m
