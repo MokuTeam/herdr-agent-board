@@ -2079,6 +2079,17 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
     actor: key ? { kind: 'session', key, name } : { kind: 'owner' },
     lane,
     idle,
+    // The session that runs it, for a verdict (#492): its own, never the one --session names; asked only then.
+    // The pane herdr says it runs in must hold that session too: a session id put in the env does not pass.
+    // It fails closed: no pane, no answer from herdr, or another session there is a refusal that says why.
+    self: async () => {
+      const { paneSelf } = await import('../services/work-verify.ts')
+      const key = (target ? (await ownSession())?.key : s?.key) ?? null
+      return paneSelf(key, process.env.HERDR_PANE_ID || undefined, async pane => {
+        const p = await paneOf(pane)
+        return p?.agent_session?.value ?? null
+      })
+    },
     findSession: async word => {
       const w = word.toLowerCase()
       const items = (await sessions()).filter(i =>

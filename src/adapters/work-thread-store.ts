@@ -17,6 +17,7 @@ import {
   isEntryOut,
   isParty,
   isThreadStatus,
+  isVerdict,
   keyNumber,
   keyOf,
   MINE,
@@ -32,6 +33,7 @@ import {
   type ThreadLink,
   type ThreadScope,
   type ThreadStatus,
+  type VerifyHead,
   type Watch,
   type WatchTarget,
   type WatchWhat,
@@ -68,6 +70,7 @@ interface HeadRow {
   done_at: number | null
   rev: number
   origin: string | null
+  verify: string | null
 }
 
 interface EntryRow {
@@ -89,7 +92,7 @@ interface EntryRow {
 }
 
 const HEAD_COLUMNS =
-  'id, key, lane, title, summary, status, waiting_on, proposed, assignee, parent, scope, created_by, created_at, updated_at, done_at, rev, origin'
+  'id, key, lane, title, summary, status, waiting_on, proposed, assignee, parent, scope, created_by, created_at, updated_at, done_at, rev, origin, verify'
 const ENTRY_COLUMNS = 'id, thread, n, seq, at, author, type, text, fields, links, files, reply_to, private, closed, out'
 
 const parse = (s: string | null): unknown => {
@@ -159,6 +162,24 @@ function headOf(r: HeadRow): ThreadHead {
     doneAt: r.done_at,
     rev: r.rev,
     ...(r.origin !== null && { origin: parse(r.origin) }),
+    ...(verifyOf(r.verify) && { verify: verifyOf(r.verify) as VerifyHead }),
+  }
+}
+
+/** A thread's verification as stored (#492); null for none, or a value that does not read as one. */
+function verifyOf(s: string | null): VerifyHead | null {
+  const v = parse(s)
+  if (!isObj(v) || typeof v.on !== 'boolean') return null
+  const run = isObj(v.run) && typeof v.run.key === 'string' && typeof v.run.until === 'number' ? v.run : null
+  return {
+    on: v.on,
+    ...(v.lane === true && { lane: true as const }),
+    accept: strs(v.accept) ?? [],
+    run: run
+      ? { key: run.key as string, name: String(run.name ?? ''), at: Number(run.at) || 0, until: run.until as number }
+      : null,
+    fails: Number(v.fails) || 0,
+    last: isVerdict(v.last) ? v.last : null,
   }
 }
 
@@ -272,6 +293,28 @@ export function listThreads(db: BoardDb, f: ListFilter = {}): ThreadHead[] {
   }
   const sql = `SELECT ${HEAD_COLUMNS} FROM threads${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY updated_at DESC, key`
   return (db.db.query(sql).all(...params) as HeadRow[]).map(headOf)
+}
+
+/** Held dones (#492): open threads whose done waits for a verifier, the oldest proposal first. */
+export function heldThreads(db: Pick<BoardDb, 'db'>): ThreadHead[] {
+  return (
+    db.db
+      .query(
+        `SELECT ${HEAD_COLUMNS} FROM threads WHERE proposed IS NOT NULL AND json_valid(proposed) AND json_extract(proposed, '$.verify') = 1 AND status NOT IN ('done', 'dropped') ORDER BY json_extract(proposed, '$.at'), key`,
+      )
+      .all() as HeadRow[]
+  ).map(headOf)
+}
+
+/** Threads with a verifier running (#492), whatever else they hold. */
+export function verifyingThreads(db: Pick<BoardDb, 'db'>): ThreadHead[] {
+  return (
+    db.db
+      .query(
+        `SELECT ${HEAD_COLUMNS} FROM threads WHERE verify IS NOT NULL AND json_valid(verify) AND json_type(verify, '$.run') = 'object'`,
+      )
+      .all() as HeadRow[]
+  ).map(headOf)
 }
 
 /** The threads imported from one session's task board (#393), whatever their status. */
@@ -543,15 +586,16 @@ const saveHead = (tx: Tx, h: ThreadHead, fresh: boolean): void => {
     h.doneAt,
     h.rev,
     json(h.origin),
+    json(h.verify),
   ]
   if (fresh)
     tx.db
-      .query(`INSERT INTO threads (${HEAD_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .query(`INSERT INTO threads (${HEAD_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(...values)
   else
     tx.db
       .query(
-        `UPDATE threads SET key = ?2, lane = ?3, title = ?4, summary = ?5, status = ?6, waiting_on = ?7, proposed = ?8, assignee = ?9, parent = ?10, scope = ?11, created_by = ?12, created_at = ?13, updated_at = ?14, done_at = ?15, rev = ?16, origin = ?17 WHERE id = ?1`,
+        `UPDATE threads SET key = ?2, lane = ?3, title = ?4, summary = ?5, status = ?6, waiting_on = ?7, proposed = ?8, assignee = ?9, parent = ?10, scope = ?11, created_by = ?12, created_at = ?13, updated_at = ?14, done_at = ?15, rev = ?16, origin = ?17, verify = ?18 WHERE id = ?1`,
       )
       .run(...values)
 }
@@ -600,6 +644,8 @@ export function createThread(
     text?: string
     /** Where an imported thread came from (3.2). */
     origin?: unknown
+    /** It asks for verification from the start (#492); `lane`: because its lane is in verify.lanes. */
+    verify?: { on: true; lane: boolean }
   },
 ): { head: ThreadHead; entry: ThreadEntry } {
   const id = input.id ?? randomUUID()
@@ -630,6 +676,7 @@ export function createThread(
     ...(input.assignee && { assignee: input.assignee }),
     ...(input.parent && { parent: input.parent }),
     ...(input.summary && { summary: input.summary }),
+    ...(input.verify && { verify: true, ...(input.verify.lane && { verifyLane: true as const }) }),
   }
   const head = applyEntry(empty, {
     id: '',

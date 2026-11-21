@@ -37,6 +37,17 @@ export interface EntrySet {
   assignee?: Party | null
   parent?: string | null
   lane?: string
+  /** Verification on or off (#492); `verifyLane`: turned on by `verify.lanes`. */
+  verify?: boolean
+  verifyLane?: true
+  /** One acceptance line added. */
+  accept?: string
+  /** With `status: 'done'`: the done is held for a verifier (the service decides, the fold follows). */
+  hold?: true
+  /** The verifier the board started, or null: none runs any more. */
+  verifier?: VerifyRun | null
+  /** A verification ended, with the status it leads to in `status`. */
+  verdict?: Verdict
 }
 
 export interface ThreadLink {
@@ -132,11 +143,46 @@ export const afterN = (e: Pick<ThreadEntry, 'n' | 'private' | 'author'>, since: 
 export const requestOf = (h: Pick<ThreadHead, 'scope'>): ShareRequest | null =>
   typeof h.scope === 'object' && h.scope.kind === 'local' ? h.scope.request : null
 
-/** A proposed close: an agent said done on a thread that waits on the owner (3.5). */
+/**
+ * A proposed close: an agent said done on a thread that waits on the owner (3.5), or (`verify`) on
+ * a thread that asks for verification, where a verifier checks it first (#492).
+ */
 export interface Proposed {
   by: Party
   at: number
   why: string
+  verify?: true
+}
+
+/** A verifier the board started for a held done (#492): its Claude session id, its name, when, and its time limit. */
+export interface VerifyRun {
+  key: string
+  name: string
+  at: number
+  until: number
+}
+
+/**
+ * How a verification ended (#492): `pass` (done), `fail` (back to the worker; the second in a row
+ * goes to the owner), `unsure` (the verifier could not check something: the owner), `timeout` (no
+ * verdict in time) and `error` (no verifier could be started): the owner.
+ */
+export const VERDICTS = ['pass', 'fail', 'unsure', 'timeout', 'error'] as const
+export type Verdict = (typeof VERDICTS)[number]
+export const isVerdict = (v: unknown): v is Verdict => VERDICTS.includes(v as Verdict)
+
+/**
+ * A thread's verification (#492), folded from its entries: whether it asks for it (`lane`: turned
+ * on by `verify.lanes` when it was made, which only the owner turns off), its acceptance lines, the
+ * verifier running now, the fails in a row, and how the last one ended.
+ */
+export interface VerifyHead {
+  on: boolean
+  lane?: true
+  accept: string[]
+  run: VerifyRun | null
+  fails: number
+  last: Verdict | null
 }
 
 /** A thread's head: what applying every entry's `set` in order gives, kept in its row. */
@@ -159,6 +205,8 @@ export interface ThreadHead {
   /** The highest entry counter applied. */
   rev: number
   origin?: unknown
+  /** Verification (#492): absent on a thread that never had it, so such a head is as it always was. */
+  verify?: VerifyHead
 }
 
 /** What a watch hears of: answers only (the assignee's own watch), status changes and answers, questions too, every entry. */
@@ -197,6 +245,63 @@ export interface ThreadsConfig {
   gapSec: number
   /** Threads may be shared over the hub (phase 4); false keeps them local. */
   share: boolean
+  /** Verified done (#492): null while `threads.verify` is absent. */
+  verify?: VerifyConfig | null
+}
+
+/**
+ * `threads.verify` (#492): the verifier's model (null: the profile's default), the lanes whose new
+ * threads ask for verification, the checklist file (one, or per lane with `*` for the rest), the
+ * Claude profile a verifier of a pi or Codex worker runs in, the time limit, and how many run at once.
+ */
+export interface VerifyConfig {
+  model: string | null
+  lanes: string[]
+  brief: string | Record<string, string> | null
+  profile: string | null
+  limitMin: number
+  max: number
+}
+
+export const VERIFY_LIMIT_MIN = 30
+export const VERIFY_MAX = 2
+
+/** `threads.verify`: `true` or an object is on, with its settings; absent or anything else is off. */
+export function verifyConfig(raw: unknown): VerifyConfig | null {
+  if (raw === true) raw = {}
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const r = raw as Record<string, unknown>
+  const text = (v: unknown, max: number): string | null =>
+    typeof v === 'string' && v.trim() && v.trim().length <= max ? v.trim() : null
+  const lanes = Array.isArray(r.lanes)
+    ? [...new Set(r.lanes.map(l => String(l ?? '').toLowerCase()).filter(l => LANE.test(l)))]
+    : []
+  let brief: VerifyConfig['brief'] = text(r.brief, 1000)
+  if (!brief && typeof r.brief === 'object' && r.brief !== null && !Array.isArray(r.brief)) {
+    const per = Object.entries(r.brief as Record<string, unknown>).flatMap(([lane, path]) => {
+      const p = text(path, 1000)
+      const l = lane.toLowerCase()
+      return p && (l === '*' || LANE.test(l)) ? [[l, p] as const] : []
+    })
+    if (per.length) brief = Object.fromEntries(per)
+  }
+  const limit = Number(r.limitMin)
+  const max = Number(r.max)
+  return {
+    model: text(r.model, 200),
+    lanes,
+    brief,
+    profile: text(r.profile, 100),
+    limitMin: Number.isFinite(limit) && limit >= 1 ? Math.min(Math.round(limit), 24 * 60) : VERIFY_LIMIT_MIN,
+    max: Number.isFinite(max) && max >= 1 ? Math.min(Math.floor(max), 10) : VERIFY_MAX,
+  }
+}
+
+/** The checklist file for a lane: its own, else `*`, else the one file; null for the default. */
+export function briefFor(c: Pick<VerifyConfig, 'brief'>, lane: string): string | null {
+  if (!c.brief) return null
+  if (typeof c.brief === 'string') return c.brief
+  return c.brief[lane] ?? c.brief['*'] ?? null
 }
 
 export const GAP_SEC = 60
@@ -212,6 +317,7 @@ export function threadsConfig(raw: unknown): ThreadsConfig | null {
     agents: r.agents !== false,
     gapSec: Number.isFinite(gap) && gap >= 0 ? Math.min(gap, 3600) : GAP_SEC,
     share: r.share !== false,
+    ...('verify' in r && { verify: verifyConfig(r.verify) }),
   }
 }
 
@@ -265,6 +371,9 @@ export const EVENT_MAX = 400
 export const EVENT_SPELLED = 3
 /** The brief's block. */
 export const BRIEF_MAX = 600
+/** Acceptance lines (#492): this many on a thread, each one line of this many characters. */
+export const ACCEPT_MAX = 10
+export const ACCEPT_LINE_MAX = 200
 
 // The text goes into a terminal: no control characters (an escape could drive the pane).
 // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes
@@ -350,9 +459,11 @@ export function isParty(v: unknown): v is Party {
 export function applyEntry(head: ThreadHead, entry: ThreadEntry): ThreadHead {
   const s = entry.set ?? {}
   const next: ThreadHead = { ...head, updatedAt: Math.max(head.updatedAt, entry.at), rev: Math.max(head.rev, entry.n) }
+  // A done held for a verifier (#492): the entry says so (the service decided it), the fold follows.
+  const holds = s.status === 'done' && s.hold === true
   // A session of this board proposes; the owner closes; a peer's entry (#394) is what its board
   // already decided, sent without the status when it only proposed (work-share.ts wireSet).
-  const proposes = s.status === 'done' && head.status === 'owner' && entry.author.kind === 'session'
+  const proposes = holds || (s.status === 'done' && head.status === 'owner' && entry.author.kind === 'session')
   if (s.title !== undefined) next.title = s.title
   if (s.summary !== undefined && !proposes) next.summary = s.summary
   if (s.lane !== undefined) next.lane = s.lane
@@ -360,7 +471,12 @@ export function applyEntry(head: ThreadHead, entry: ThreadEntry): ThreadHead {
   if (s.parent !== undefined) next.parent = s.parent
   if (s.status !== undefined) {
     if (proposes) {
-      next.proposed = { by: entry.author, at: entry.at, why: s.summary ?? oneLine(entry.text, SUMMARY_MAX) }
+      next.proposed = {
+        by: entry.author,
+        at: entry.at,
+        why: s.summary ?? oneLine(entry.text, SUMMARY_MAX),
+        ...(holds && { verify: true as const }),
+      }
     } else {
       next.status = s.status
       next.proposed = null
@@ -370,9 +486,40 @@ export function applyEntry(head: ThreadHead, entry: ThreadEntry): ThreadHead {
     }
   }
   if (s.waitingOn !== undefined && (next.status === 'waiting' || next.status === 'owner')) next.waitingOn = s.waitingOn
+  const verify = foldVerify(head, next, s)
+  if (verify) next.verify = verify
   return next
 }
 
+/**
+ * The verification after an entry (#492), or undefined for a thread that never had one: on or off,
+ * an acceptance line, a verifier started, a verdict (the run ends; a fail that leaves the thread
+ * with its worker counts, anything that reaches the owner or passes starts the count again). A held
+ * done that went without a verdict (the owner confirmed it or kept it open, the worker went on)
+ * ends the run too: its verifier's word no longer counts.
+ */
+function foldVerify(head: ThreadHead, next: ThreadHead, s: EntrySet): VerifyHead | undefined {
+  const touched =
+    s.verify !== undefined || s.accept !== undefined || s.verifier !== undefined || s.verdict !== undefined
+  if (!head.verify && !touched) return undefined
+  const v: VerifyHead = head.verify
+    ? { ...head.verify, accept: [...head.verify.accept] }
+    : { on: false, accept: [], run: null, fails: 0, last: null }
+  if (s.verify !== undefined) {
+    v.on = s.verify
+    if (!s.verify) delete v.lane
+    else if (s.verifyLane) v.lane = true
+  }
+  if (s.accept !== undefined && s.accept && v.accept.length < ACCEPT_MAX) v.accept.push(s.accept)
+  // A verifier counts only for a done that is held: one started as the done went (confirmed, taken back) runs for nothing.
+  if (s.verifier !== undefined) v.run = s.verifier && next.proposed?.verify ? s.verifier : null
+  if (s.verdict !== undefined) {
+    v.run = null
+    v.last = s.verdict
+    v.fails = s.verdict === 'fail' && next.status !== 'owner' ? v.fails + 1 : 0
+  } else if (head.proposed?.verify && !next.proposed?.verify && s.verifier === undefined) v.run = null
+  return v
+}
 /** What a parent's system entry says when its last open sub-thread closed. */
 export const closedText = (n: number): string => (n === 1 ? 'its sub-thread closed' : `all ${n} sub-threads closed`)
 
@@ -396,7 +543,9 @@ const STATUS_WORD: Record<ThreadStatus, string> = {
 
 /** One line per thread, as `list` prints it: key, status, assignee, title, summary. */
 export function listLine(h: ThreadHead): string {
-  const status = h.proposed ? `${h.status}, proposed done` : h.status
+  const status = h.proposed
+    ? `${h.status}, ${h.proposed.verify ? 'done proposed (verifying)' : 'proposed done'}`
+    : h.status
   return [h.key, status, h.assignee && partyName(h.assignee), h.title, h.waitingOn || h.summary]
     .filter(Boolean)
     .join(' · ')
@@ -404,9 +553,10 @@ export function listLine(h: ThreadHead): string {
 
 /** What a write prints: `ok · atlas-13 · done · 1 file`. */
 export function writeLine(h: ThreadHead, extra: string[] = []): string {
-  return ['ok', h.key, h.status, ...(h.proposed ? ['proposed done, the owner confirms'] : []), ...extra]
-    .filter(Boolean)
-    .join(' · ')
+  const proposed = h.proposed
+    ? [h.proposed.verify ? 'done held: a verifier checks it' : 'proposed done, the owner confirms']
+    : []
+  return ['ok', h.key, h.status, ...proposed, ...extra].filter(Boolean).join(' · ')
 }
 
 const two = (n: number): string => String(n).padStart(2, '0')
@@ -451,7 +601,12 @@ export function entryWords(
   const parts: string[] = []
   if (e.type === 'system' && e.closed) parts.push(closedText(e.closed))
   else if (e.type === 'system' && s.title !== undefined && e.n === 1) parts.push(`created: ${s.status ?? 'next'}`)
+  else if (s.verdict) parts.push(`verdict ${s.verdict}${s.status ? ` → ${s.status}` : ''}`)
+  else if (s.status && s.hold) parts.push(`→ ${s.status} (held for verification)`)
   else if (s.status) parts.push(`→ ${s.status}`)
+  if (s.verify !== undefined) parts.push(`verify ${s.verify ? 'on' : 'off'}`)
+  if (s.accept) parts.push(`accept: ${s.accept}`)
+  if (s.verifier) parts.push(`verifier ${s.verifier.name} started`)
   const peer = e.author.kind === 'peer'
   const said = (t: string): string => (peer ? quotedPeer(t) : t)
   if (e.type === 'ask') parts.push(`asks the owner: ${said(e.text)}`)
@@ -491,6 +646,35 @@ export interface ShowOptions {
   full?: boolean
   /** The thread is shared (#394): a line says a peer's entries are quoted data. */
   shared?: boolean
+  /** Held dones waiting for a verifier ahead of this one, and the verifiers running (#492). */
+  verifiers?: number
+}
+
+/** What the head says of a held done (#492): who, why, and whether its verifier runs or waits. */
+function heldWords(h: ThreadHead, o: Pick<ShowOptions, 'now' | 'verifiers'>): string {
+  const p = h.proposed
+  if (!p) return ''
+  const run = h.verify?.run
+  const state = run
+    ? `verification running (${run.name} until ${whenText(run.until, o.now)})`
+    : `waiting for a verifier${o.verifiers ? ` (${o.verifiers} running)` : ''}`
+  return `done proposed by ${partyName(p.by)}, ${state}: ${p.why}`
+}
+
+/** The head's lines of verification (#492): on or off and the acceptance lines; none for a thread that never had it. */
+export function verifyLines(h: ThreadHead): string[] {
+  const v = h.verify
+  if (!v || (!v.on && !v.accept.length && !v.last)) return []
+  const n = v.accept.length
+  const head = [
+    `verify ${v.on ? 'on' : 'off'}`,
+    n && `${n} acceptance ${n === 1 ? 'line' : 'lines'}`,
+    v.last && `last verdict ${v.last}`,
+    v.fails && `${v.fails} failed in a row`,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  return [head, ...v.accept.map(a => `accept: ${a}`)]
 }
 
 /**
@@ -505,12 +689,14 @@ export function showText(h: ThreadHead, entries: readonly ThreadEntry[], o: Show
       `lane ${h.lane}`,
       o.parentKey && `in ${o.parentKey}`,
       o.children && o.children.all > 0 && `${o.children.done} of ${o.children.all} sub-threads done`,
-      h.proposed && `proposed done by ${partyName(h.proposed.by)}: ${h.proposed.why}`,
+      h.proposed &&
+        (h.proposed.verify ? heldWords(h, o) : `proposed done by ${partyName(h.proposed.by)}: ${h.proposed.why}`),
       `by ${partyName(h.createdBy)} ${whenText(h.createdAt, o.now)}`,
       o.link,
     ]
       .filter(Boolean)
       .join(' · '),
+    ...verifyLines(h),
     ...(o.shared ? [PEER_NOTE] : []),
   ]
   const words = { ...(o.keyOfId && { keyOfId: o.keyOfId }), ...(o.fileAt && { fileAt: o.fileAt }) }
@@ -546,6 +732,12 @@ export interface DigestItem {
   entries: number
   /** Everything in it was written on this board: its words may be typed in. */
   local: boolean
+  /** A verification failed and the worker hears it (#492): the verifier's line. */
+  failed?: string
+  /** A verifier passed it among the entries heard (#492): its done is a verified one. */
+  verified?: boolean
+  /** The owner kept the held done of the session that hears it open (#492): it is back with it. */
+  kept?: boolean
 }
 
 function clause(d: DigestItem, detailMax: number): { text: string; detail: string } {
@@ -553,12 +745,16 @@ function clause(d: DigestItem, detailMax: number): { text: string; detail: strin
   const detail = (s: string): string => (d.local && s ? clip(s, Math.max(8, detailMax)) : '')
   if (d.status) {
     if (h.proposed && h.status === 'owner') return { text: `${h.key} proposed done`, detail: detail(h.proposed.why) }
+    if (h.status === 'done' && d.verified) return { text: `${h.key} done (verified)`, detail: detail(h.summary) }
     if (d.closed && h.status !== 'done' && h.status !== 'dropped')
       return { text: `${h.key}: ${closedText(d.closed)}`, detail: '' }
     const word = STATUS_WORD[h.status]
     const said = h.status === 'waiting' || h.status === 'owner' ? h.waitingOn : h.summary
     return { text: `${h.key} ${word}`, detail: detail(said) }
   }
+  if (d.failed !== undefined)
+    return { text: `${h.key} verification failed`, detail: detail(`${d.failed}. Reasons: board thread show ${h.key}`) }
+  if (d.kept) return { text: `${h.key} kept open by the owner: your done is back with you`, detail: '' }
   if (d.ask !== undefined) return { text: `${h.key} asks the owner`, detail: detail(d.ask) }
   return { text: `${h.key} +${d.entries}`, detail: '' }
 }
@@ -569,8 +765,9 @@ function clause(d: DigestItem, detailMax: number): { text: string; detail: strin
  * details cut evenly to fit. A peer's words never go in: only a local entry's summary does.
  */
 export function digestLine(items: readonly DigestItem[]): string {
-  const ordered = [...items.filter(d => d.status), ...items.filter(d => !d.status && d.ask !== undefined)].concat(
-    items.filter(d => !d.status && d.ask === undefined),
+  const told = (d: DigestItem): boolean => d.ask !== undefined || d.failed !== undefined || !!d.kept
+  const ordered = [...items.filter(d => d.status), ...items.filter(d => !d.status && told(d))].concat(
+    items.filter(d => !d.status && !told(d)),
   )
   const shown = ordered.slice(0, EVENT_SPELLED)
   const more = ordered.length - shown.length

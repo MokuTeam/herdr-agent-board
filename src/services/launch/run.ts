@@ -78,8 +78,10 @@ export interface Launch extends LaunchRequest {
   error: string
   kind: LaunchFailure | ''
   sessionId: string | null
-  /** The id its new session must get (a node's start from its master, #504); null: a fresh one. */
+  /** The id its new session must get (a node's start from its master, #504; a verifier, #492); null: a fresh one. */
   sessionGiven: string | null
+  /** A verifier's start (#492): under `sessionGiven` or not at all (launcher.ts refuses otherwise). */
+  exactSession?: boolean
   /** A master's start (#504, services/nodes/placer.ts): where it goes, as its card shows it; absent without `nodes`. */
   place?: LaunchPlace
   /** The key whose card has its lane. */

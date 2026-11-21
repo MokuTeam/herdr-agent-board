@@ -58,6 +58,15 @@ export interface StartOptions {
   node?: { session: string } | null
   /** A person asked for it (the New session window); false for an agent's start (T9). The placer reads it. */
   byHand?: boolean
+  /** The Claude session id the board chose (a verifier, #492): Claude Code under that id here, or no start. */
+  sessionId?: string | null
+}
+
+/** How a launch went, for a start of the server's own that waits on it (a verifier, #492); null once it is gone. */
+export interface LaunchState {
+  state: Launch['state']
+  error: string
+  sessionId: string | null
 }
 
 /**
@@ -95,6 +104,8 @@ export interface Launches {
   adopt(l: Launch): void
   /** The placer's (#504): its launch changed; the board publishes again. */
   changed(): void
+  /** A launch's state by its id, dismissed or not. */
+  state(id: string): LaunchState | null
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -178,11 +189,12 @@ export function createLaunches({
   async function start(
     body: unknown,
     items: Item[] = [],
-    { resume = null, fork = null, parent = null, node = null, byHand = true }: StartOptions = {},
+    { resume = null, fork = null, parent = null, node = null, byHand = true, sessionId = null }: StartOptions = {},
   ): Promise<StartResult> {
     const categories = new Set([...deps.cfg.categories.map(c => c.id), ...items.map(i => i.category)])
-    // Resume, fork and a node's own start from its master are never placed: they run where they are.
-    const placing = resume || fork || node ? null : placer()
+    // Resume, fork, a node's own start from its master and a verifier (#492) are never placed: they run
+    // where they are, a verifier in the worker's folder on this computer.
+    const placing = resume || fork || node || sessionId ? null : placer()
     // Only the board's own spawn-agent types a profile's start command: the others never read it.
     const launcher = launcherFor(deps.cfg.launch, { resume: !!resume, fork: !!fork })
     const r = await checkRequest(body, {
@@ -193,7 +205,7 @@ export function createLaunches({
       typesCommand: launcher.kind === 'builtin',
       ...(parent && { parent }),
       // A start of the server's own (a return, a fork) picks no agent: Claude Code's, whatever the default.
-      agents: () => (resume || fork ? [] : launchAgents(deps.cfg.launch, piOnPath)),
+      agents: () => (resume || fork || sessionId ? [] : launchAgents(deps.cfg.launch, piOnPath)),
       standard: offered => defaultAgent(deps.cfg.launch, offered),
       pi: deps.cfg.launch?.pi,
       // "Where" and a node's folder are read only while the board places (#504).
@@ -215,6 +227,10 @@ export function createLaunches({
     if (node) {
       l.id = node.session
       l.sessionGiven = node.session
+    }
+    if (sessionId) {
+      l.sessionGiven = sessionId
+      l.exactSession = true
     }
     launches.set(l.id, l)
     if (placing) placing.take(l, byHand)
@@ -418,5 +434,9 @@ export function createLaunches({
       changed()
     },
     changed,
+    state: id => {
+      const l = launches.get(id)
+      return l ? { state: l.state, error: l.error, sessionId: l.sessionId } : null
+    },
   }
 }
