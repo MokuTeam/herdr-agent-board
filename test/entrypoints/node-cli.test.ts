@@ -104,7 +104,7 @@ describe('board node on a node', () => {
     const wrong = await board(box, ['node', 'forget'])
     expect([wrong.code, wrong.stderr]).toEqual([
       1,
-      'board: usage: board node [token [--name <master>] | forget <id>]\n',
+      'board: usage: board node [token [--name <master>] | forget <id> | leave [<master id>]]\n',
     ])
     const bad = await board(box, ['node', 'token', '--name', ' '])
     expect([bad.code, bad.stderr]).toEqual([1, "board: a master's name: up to 64 printable characters\n"])

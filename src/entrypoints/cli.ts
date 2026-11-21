@@ -46,18 +46,23 @@
 //                            its Fork does (services/launch/fork.ts); the note is its first message
 //   board tunnel [on|off|test]   the board through the owner's own domain (core/tunnel.ts): where
 //                            the tunnel stands; on and off in config.json; test runs Test connection
-//   board node [token [--name <master>] | forget <id>]   this board as a node (#498): its master door
-//                            (server/node-listener.ts), on or off, its port and its masters by name
-//                            and when last seen; token adds a master and prints its token once;
-//                            forget takes one's token back. Until the install exists, for a node
-//                            set up by hand; a board without `node` in config.json says it is none
-//   board nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink>]   this board as a
+//   board node [token [--name <master>] | forget <id> | leave [<master id>]]   this board as a node
+//                            (#498): its master door (server/node-listener.ts), on or off, its port
+//                            and its masters by name and when last seen; token adds a master and
+//                            prints its token once; forget takes one's token back; leave is the
+//                            node's half of a revoke (#510): one master forgotten, or the only one.
+//                            Until the install exists, for a node set up by hand; a board without
+//                            `node` in config.json says it is none
+//   board nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink> | revoke <id> [--keep-running] [--forget]]   this board as a
 //                            master (#499): its devices in order with their link's state, read from
 //                            the running board; token stores a device's token read from stdin (never
 //                            an argument, never echoed); key makes the device's ssh link key when
 //                            missing and prints its public half; sync makes the device's profile
 //                            bundle current now (#506); secret gives one of the device's sinks its
-//                            values, each read from the terminal without echo (#507)
+//                            values, each read from the terminal without echo (#507); revoke marks
+//                            the device revoked and tells the node to sleep its sessions and forget
+//                            this board, now or when it is back; --forget drops its token and key
+//                            now without telling it (#510)
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
 //   board presence [here|away|call]   whether the user is at the computer, away or on a call
 //                            (core/presence.ts), the line every session's context has; with a
@@ -188,7 +193,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id>] | nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink>] | doctor | presence [here | away | call] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | presence [here | away | call] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal'])
@@ -1626,7 +1631,7 @@ async function remote(): Promise<void> {
  */
 async function nodeCmd(): Promise<void> {
   const [op = 'status', id = ''] = words
-  const usage = 'usage: board node [token [--name <master>] | forget <id>]'
+  const usage = 'usage: board node [token [--name <master>] | forget <id> | leave [<master id>]]'
   const { nodeConfig, nodeProblems } = await import('../core/nodes.ts')
   const node = nodeConfig(cfg.node)
   if (!node) {
@@ -1651,6 +1656,19 @@ async function nodeCmd(): Promise<void> {
     if (!id || words.length > 2) throw new Error(usage)
     if (!store.forget(id)) throw new Error(`no master ${id}: \`board node\` lists them`)
     return console.log(`ok · forgot master ${id}: its token no longer opens the door`)
+  }
+  if (op === 'leave') {
+    // The node's own half of a revoke (#510, design 11.4), with no master reachable: one master,
+    // or the only one when none is named.
+    if (words.length > 2) throw new Error(usage)
+    const masters = store.list()
+    const which = id || (masters.length === 1 ? (masters[0]?.id ?? '') : '')
+    if (!which)
+      throw new Error(
+        masters.length ? 'several masters: name the one to leave (`board node` lists them)' : 'no master to leave',
+      )
+    if (!store.forget(which)) throw new Error(`no master ${which}: \`board node\` lists them`)
+    return console.log(`ok · left master ${which}: its token no longer opens the door and its streams end`)
   }
   if (op !== 'status' || words.length > 0) throw new Error(usage)
   let on = false
@@ -1685,7 +1703,8 @@ const NO_BOARD = 'the board does not run: open it first (herdr plugin action inv
  */
 async function nodesCmd(): Promise<void> {
   const [op = 'status', id = ''] = words
-  const usage = 'usage: board nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink>]'
+  const usage =
+    'usage: board nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink> | revoke <id> [--keep-running] [--forget]]'
   const { nodesConfig } = await import('../core/nodes.ts')
   const nodes = nodesConfig(cfg.nodes, (await import('node:os')).hostname())
   if (!nodes) return console.log('this board is not a master: config.json has no `nodes`')
@@ -1731,6 +1750,13 @@ async function nodesCmd(): Promise<void> {
       throw new Error(`no device ${id} with a link: \`board nodes\` lists them`)
     return nodesSecret(webPort, id, sink, nodes.devices[id]?.sinks)
   }
+  if (op === 'revoke') {
+    const flags = words.slice(2)
+    if (!id || flags.some(f => f !== '--keep-running' && f !== '--forget')) throw new Error(usage)
+    if (id === 'local' || !nodes.devices[id]?.link)
+      throw new Error(`no device ${id} with a link: \`board nodes\` lists them`)
+    return nodesRevoke(webPort, id, !flags.includes('--keep-running'), flags.includes('--forget'))
+  }
   if (op === 'key') {
     const dev = device()
     if (nodes.devices[dev]?.link?.kind !== 'ssh')
@@ -1760,6 +1786,38 @@ async function nodesCmd(): Promise<void> {
   }
   for (const p of nodes.problems) lines.push(`problem: ${p.device ? `${p.device} ` : ''}${p.key}: ${p.why}`)
   console.log(lines.join('\n'))
+}
+
+/**
+ * `board nodes revoke <id> [--keep-running] [--forget]` (#510, design 11.4): the running board marks
+ * the device revoked, so nothing more is placed there, and tells the node to put its sessions to
+ * sleep (not with --keep-running) and forget this board; a node not reachable is told when its link
+ * comes back. --forget drops the token and link key now without telling it.
+ */
+async function nodesRevoke(webPort: number, id: string, sleep: boolean, forget: boolean): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(`http://127.0.0.1:${webPort}/api/nodes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({ op: 'revoke', id, sleep, forget }),
+      signal: AbortSignal.timeout(75_000),
+    })
+  } catch {
+    throw new Error(NO_BOARD)
+  }
+  const body: unknown = await res.json().catch(() => null)
+  const a = isRecord(body) ? body : {}
+  if (!res.ok) throw new Error(`${id} was not revoked: ${typeof a.error === 'string' ? a.error : res.status}`)
+  const s = isRecord(a.sessions) ? a.sessions : null
+  const sessions = s ? `, ${String(s.slept)} of its sessions put to sleep (${String(s.kept)} kept awake),` : ''
+  console.log(
+    a.told === true
+      ? `ok · ${id} revoked: the node was told${sleep ? sessions : ''} and forgot this board`
+      : forget
+        ? `ok · ${id} revoked: its token and key dropped, the node was not told`
+        : `ok · ${id} revoked: nothing more goes there; the node is told when it is reachable again`,
+  )
 }
 
 /**
@@ -1875,7 +1933,12 @@ async function nodesSync(webPort: number, id: string, profile: string | undefine
 function deviceLine(d: Record<string, unknown>): string {
   const head = `${String(d.id)}${d.title !== d.id ? ` "${String(d.title)}"` : ''}`
   const link = isRecord(d.link) ? d.link : null
+  // A revoked device (#510): its link is gone once the node was told, or its credentials dropped.
+  const revoked = isRecord(d.revoked) ? d.revoked : null
+  if (revoked && !link)
+    return `${head} · revoked · ${revoked.told === true ? 'the node was told' : 'not told, its token and key dropped'}`
   if (!link) return `${head} · this computer`
+  if (revoked) return `${head} · revoked, not told yet · ${String(link.state)}`
   const parts = [`${head} · ${String(d.kind)} · ${String(link.state)}`]
   if (link.reason) parts.push(`(${String(link.reason)})`)
   const said = typeof link.detail === 'string' && link.detail ? `: ${link.detail}` : ''

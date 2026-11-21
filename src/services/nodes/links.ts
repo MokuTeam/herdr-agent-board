@@ -42,6 +42,11 @@ export interface NodeLinks {
   onChange(fn: (id: string) => void): () => void
   /** The device's link tries again at once (a token was stored). False: no such link. */
   retry(id: string): boolean
+  /**
+   * The links follow config.json and the store again now: a revoked device whose token is gone
+   * (services/nodes/revoke.ts) loses its link.
+   */
+  follow(): Promise<void>
   /** For an exit handler: every link's ssh ended synchronously. */
   killNow(): void
   close(): Promise<void>
@@ -175,7 +180,8 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
     const wanted = new Map<string, DeviceConfig>()
     for (const id of cfg?.order ?? []) {
       const device = cfg?.devices[id]
-      if (id !== LOCAL && device?.link) wanted.set(id, device)
+      // A revoked device keeps its link only while its token is kept for the call that tells it (#510).
+      if (id !== LOCAL && device?.link && !(device.revoked && store.token(id) === null)) wanted.set(id, device)
     }
     for (const [id, held] of [...links]) {
       const device = wanted.get(id)
@@ -218,12 +224,28 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
     view() {
       const cfg = nodes()
       if (!cfg) return { devices: [], problems: [] }
+      // A revoked device (#510): whether the node was told, and whether its credentials are kept.
+      const revoked = (id: string, device: DeviceConfig | undefined): Pick<DeviceView, 'revoked'> =>
+        device?.revoked
+          ? { revoked: { told: store.revocation(id)?.told === true, kept: store.token(id) !== null } }
+          : {}
       const devices = cfg.order.flatMap((id): DeviceView[] => {
         const held = links.get(id)
-        if (held) return [{ ...held.link.view(), title: held.device.title }]
+        if (held) return [{ ...held.link.view(), title: held.device.title, ...revoked(id, cfg.devices[id]) }]
         const device = cfg.devices[id]
         if (!device) return []
-        return [{ id, title: device.title, kind: null, link: null, status: null, sameCommit: null, payloadAt: null }]
+        return [
+          {
+            id,
+            title: device.title,
+            kind: null,
+            link: null,
+            status: null,
+            sameCommit: null,
+            payloadAt: null,
+            ...revoked(id, device),
+          },
+        ]
       })
       return { devices, problems: cfg.problems }
     },
@@ -238,6 +260,7 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
       held.link.reconnect('a token stored', true)
       return true
     },
+    follow: () => sync(),
     killNow() {
       for (const { link } of links.values()) link.killNow()
     },

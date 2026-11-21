@@ -13,6 +13,7 @@ import { editNodes, loadConfig, saveFoundProfiles } from '../adapters/config-fil
 import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { workspaceList } from '../adapters/herdr.ts'
+import { isRecord } from '../adapters/json-store.ts'
 import { createDeviceStore, createNodeStore, nodeDir, readLanesSeen, writeLanesSeen } from '../adapters/node-store.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
@@ -38,7 +39,7 @@ import {
 } from '../adapters/ssh.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
 import { messageGate } from '../core/message-gate.ts'
-import { fillThresholds, nodeConfig, nodesConfig } from '../core/nodes.ts'
+import { fillThresholds, markRevoked, nodeConfig, nodesConfig } from '../core/nodes.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payload.ts'
 import type { Observation } from '../core/presence.ts'
@@ -73,6 +74,7 @@ import { createNodeAggregate, type NodeAggregate } from '../services/nodes/aggre
 import { type BundleSync, createBundleSync } from '../services/nodes/bundle-sync.ts'
 import { createNodeLinks, type NodeLinks } from '../services/nodes/links.ts'
 import { createPlacer, type Placer } from '../services/nodes/placer.ts'
+import { createRevoker, type Revoker } from '../services/nodes/revoke.ts'
 import { createUplinkRunner, type UplinkRunner } from '../services/nodes/uplink.ts'
 import { tellOwnerWatchers } from '../services/owner-watch.ts'
 import { createPresence } from '../services/presence.ts'
@@ -83,6 +85,7 @@ import { startScheduler } from '../services/scheduler.ts'
 import { giveSecret } from '../services/secrets.ts'
 import { createServerSetup } from '../services/server-setup.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
+import { sleepMany } from '../services/sleep.ts'
 import { createTeamConfirm } from '../services/team-confirm.ts'
 import { createTeam } from '../services/team-hub.ts'
 import { createTeamNotify, type TeamNotify } from '../services/team-notify.ts'
@@ -1039,6 +1042,7 @@ export async function startServer({
       profiles: () => deps.profiles(),
       workspaces: () => workspaceList(8000),
     })
+    const nodeStore = createNodeStore()
     door = createNodeListener({
       cfg,
       routes: ownRoutes,
@@ -1047,7 +1051,7 @@ export async function startServer({
       // tunnel, reads no token or env file of this node's board.
       guards: { ...guards, ownFiles: ownFileCheck(cfg) },
       hello: () => listener.hello(),
-      store: createNodeStore(),
+      store: nodeStore,
       // Its status, a start from the master (#504) through this board's own launch pipeline, the
       // profile bundle its master sends (#506) and a secret given to one of its sinks (#507).
       doorRoutes: nodeDoorRoutes({
@@ -1058,6 +1062,25 @@ export async function startServer({
         // A secret the owner gives one of this node's sinks (#507): config.json as it is now, as a
         // form's answer reads it, so the sink checked is the one the bundle last wrote.
         sink: (id, body) => giveSecret(loadConfig(), id, { values: body.values, fingerprint: body.fingerprint }),
+        // The master revokes this node (#510): its awake sessions to sleep by the board's own bulk
+        // sleep (sleepMany, which asks herdr for each first), then that master forgotten, which ends
+        // its streams. A session it keeps (at work, in a dialog, wake down) is counted and the
+        // master is forgotten all the same: a revoke is not refused for a session.
+        leave: async (master, sleep) => {
+          let slept = 0
+          let kept = 0
+          if (sleep) {
+            const items = board.items()
+            const awake = items.filter(i => i.pane && !i.sleeping).map(i => i.key)
+            const results = awake.length ? await sleepMany(deps, items, awake) : []
+            slept = results.filter(r => r.result === 'asleep').length
+            kept = results.length - slept
+            log(`node: the master ${master} leaves; ${slept} of ${results.length} sessions put to sleep`)
+            refresh()
+          }
+          nodeStore.forget(master)
+          return { slept, kept }
+        },
       }),
       log,
     })
@@ -1072,6 +1095,7 @@ export async function startServer({
   let nodeProxy: NodeProxy | null = null
   let bundleSync: BundleSync | null = null
   let uplinkRunner: UplinkRunner | null = null
+  let nodeRevoker: Revoker | null = null
   function linksFollow(): void {
     if (nodeLinks) {
       nodeLinks.configChanged()
@@ -1137,20 +1161,46 @@ export async function startServer({
       log,
     })
     nodePlacer = placer
-    localNodeRoutes = nodesRoutes(nodeLinks, bundleSync, {
+    // A device revoked (#510): marked in config.json and seen by the live config at once, so the
+    // placer refuses it from that instant; then told and forgotten (services/nodes/revoke.ts).
+    const links = nodeLinks
+    nodeRevoker = createRevoker({
+      links,
+      store: createDeviceStore(),
       config: () => nodesConfig(cfg.nodes),
-      edit: editNodes,
-      seen: () => readLanesSeen(),
-      keepSeen: ids => writeLanesSeen(ids),
-      ownStatus: () => ownStatus.answer(),
-      next: n => {
-        // A plain start: the board's default profile, a lane that may leave when one does.
-        const lane = n?.lanes === 'all' ? (cfg.categories[0]?.id ?? '') : (n?.lanes[0] ?? '')
-        const list = deps.profiles().list
-        const profile = list.find(p => p.inherited)?.id ?? list[0]?.id ?? ''
-        return placer.next(lane, profile, n)
+      mark: id => {
+        let found = false
+        const r = editNodes(nodes => {
+          found = isRecord(nodes.devices) && isRecord(nodes.devices[id])
+          return markRevoked(nodes, id)
+        })
+        // A device the file does not hold: the live config is not marked behind its back.
+        if (r.ok && !found) return { ok: false, error: 'device' }
+        // The live config at once, not ~120 ms later when its watcher follows the file.
+        if (r.ok && isRecord(cfg.nodes)) markRevoked(cfg.nodes, id)
+        return r
       },
+      log,
     })
+    localNodeRoutes = nodesRoutes(
+      nodeLinks,
+      bundleSync,
+      {
+        config: () => nodesConfig(cfg.nodes),
+        edit: editNodes,
+        seen: () => readLanesSeen(),
+        keepSeen: ids => writeLanesSeen(ids),
+        ownStatus: () => ownStatus.answer(),
+        next: n => {
+          // A plain start: the board's default profile, a lane that may leave when one does.
+          const lane = n?.lanes === 'all' ? (cfg.categories[0]?.id ?? '') : (n?.lanes[0] ?? '')
+          const list = deps.profiles().list
+          const profile = list.find(p => p.inherited)?.id ?? list[0]?.id ?? ''
+          return placer.next(lane, profile, n)
+        },
+      },
+      nodeRevoker,
+    )
     // Their ssh dies with the board, also on an exit that skips close().
     process.on('exit', nodeLinks.killNow)
   }
@@ -1273,6 +1323,7 @@ export async function startServer({
         process.off('exit', nodeAggregate.close)
       }
       nodePlacer?.close()
+      nodeRevoker?.close()
       bundleSync?.close()
       if (nodeLinks) {
         await nodeLinks.close()

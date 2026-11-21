@@ -1,10 +1,11 @@
 // The master's devices for `board nodes` and Settings, Devices (#499, #510, docs/design/nodes 12,
 // 13): the devices in order with their links (services/nodes/links.ts), a link tried again at once,
 // a profile's bundle synced to a device now (#506, services/nodes/bundle-sync.ts), a secret the
-// owner gives one of a device's sinks (#507, design 10 item 3), and the panel's edits of
-// config.json's `nodes`. On the local board only, and only while config.json's `nodes` is on:
-// app.ts picks these routes for /api/nodes itself, so the board's route table, which every remote
-// listener and a node's door serve, is the same as without `nodes`.
+// owner gives one of a device's sinks (#507, design 10 item 3), the panel's edits of
+// config.json's `nodes`, and a device revoked (#510, design 11.4, services/nodes/revoke.ts). On
+// the local board only, and only while config.json's `nodes` is on: app.ts picks these routes for
+// /api/nodes itself, so the board's route table, which every remote listener and a node's door
+// serve, is the same as without `nodes`.
 import type { EditResult } from '../../adapters/config-file.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import {
@@ -19,6 +20,7 @@ import {
 import { FIELD_NAME, MAX_FIELDS, SINK_ID } from '../../core/secrets.ts'
 import type { BundleSync } from '../../services/nodes/bundle-sync.ts'
 import type { NodeLinks } from '../../services/nodes/links.ts'
+import type { Revoker } from '../../services/nodes/revoke.ts'
 import { auditForwarded } from '../../services/secrets.ts'
 import { json, type Route } from '../http.ts'
 
@@ -96,7 +98,7 @@ export interface NodesPanel {
   next(cfg: NodesConfig | null): Promise<string | null>
 }
 
-export function nodesRoutes(links: NodeLinks, bundles?: BundleSync, panel?: NodesPanel): Route[] {
+export function nodesRoutes(links: NodeLinks, bundles?: BundleSync, panel?: NodesPanel, revoker?: Revoker): Route[] {
   const off = () => json(404, { error: 'nodes' })
 
   /** What the panel shows beside the devices: the section's own keys and the board's figures. */
@@ -157,6 +159,13 @@ export function nodesRoutes(links: NodeLinks, bundles?: BundleSync, panel?: Node
           return json(200, await bundles.syncIfBehind(body.id, body.profile))
         }
         if (body.op === 'secret') return secretToDevice(links, body, body.id)
+        // `{ op: 'revoke', id, sleep?, forget? }`: sleep unless false, forget only when true.
+        if (body.op === 'revoke' && revoker) {
+          if (body.sleep !== undefined && typeof body.sleep !== 'boolean') return json(400, { error: 'sleep' })
+          if (body.forget !== undefined && typeof body.forget !== 'boolean') return json(400, { error: 'forget' })
+          const r = await revoker.revoke(body.id, { sleep: body.sleep !== false, forget: body.forget === true })
+          return json(r.status, r.body)
+        }
         if (body.op !== 'retry') return json(400, { error: 'op' })
         return links.retry(body.id) ? json(200, { ok: true }) : json(404, { error: 'device' })
       },

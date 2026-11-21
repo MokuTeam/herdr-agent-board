@@ -3,9 +3,10 @@
 // has them. The status, a start from the master, the profile bundle's three (services/node/bundle.ts):
 // what the node has, a blob, the commit; the uplink's three (services/node/uplink.ts): the calls'
 // stream, a file a call names, the master's result; and a secret the owner gives one of the node's
-// sinks (services/secrets.ts giveSecret). The door has checked the Host, the Origin, the master's
-// token and X-Board before they run. `POST /api/node/call`, the other end of the uplink, is this
-// computer's own: nodeCallRoutes, which only the web board's own listener serves (server/app.ts).
+// sinks (services/secrets.ts giveSecret); and the master's leave when it revokes this node (#510).
+// The door has checked the Host, the Origin, the master's token and X-Board before they run.
+// `POST /api/node/call`, the other end of the uplink, is this computer's own: nodeCallRoutes,
+// which only the web board's own listener serves (server/app.ts).
 import { MAX_BLOB_BYTES } from '../../adapters/bundle-files.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
@@ -13,6 +14,7 @@ import type { Answer, NodeBundle } from '../../services/node/bundle.ts'
 import type { NodeLaunchAnswer } from '../../services/node/launch.ts'
 import type { NodeUplink } from '../../services/node/uplink.ts'
 import { json, type Route } from '../http.ts'
+import { doorMaster } from '../node-listener.ts'
 
 export interface NodeDoorSources {
   /** `GET /api/node/status` (services/node/status.ts); null once `node` left config.json. */
@@ -25,6 +27,11 @@ export interface NodeDoorSources {
   uplink: Pick<NodeUplink, 'stream' | 'file' | 'answer'>
   /** `POST /api/node/sink/<id>`: `{ values, fingerprint }` written to that sink (services/secrets.ts giveSecret). */
   sink(id: string, body: Record<string, unknown>): Promise<Answer>
+  /**
+   * `POST /api/node/leave` (#510, design 11.4): the node's awake sessions put to sleep when `sleep`,
+   * then the master `master` forgotten (adapters/node-store.ts forget), which ends its streams.
+   */
+  leave?(master: string, sleep: boolean): Promise<{ slept: number; kept: number }>
 }
 
 /** A commit's manifest, at most this many bytes of JSON. */
@@ -58,6 +65,7 @@ const MAX_RESULT_BYTES = 8 * 1024 * 1024
 
 export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
   const bundle = o.bundle
+  const leave = o.leave
   return [
     {
       method: 'GET',
@@ -149,7 +157,23 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
         return json(r.status, r.body)
       },
     },
+    ...(leave ? [leaveRoute(leave)] : []),
   ]
+}
+
+/** `POST /api/node/leave` (#510): `{ sleep?: true }`, answered once the calling master is forgotten. */
+function leaveRoute(leave: NonNullable<NodeDoorSources['leave']>): Route {
+  return {
+    method: 'POST',
+    path: '/api/node/leave',
+    async handle(req, ctx) {
+      const master = doorMaster(req)
+      if (!master) return json(401, { error: 'token' })
+      const body = await ctx.body()
+      const r = await leave(master.id, body.sleep === true)
+      return json(200, { ok: true, ...r })
+    },
+  }
 }
 
 /**

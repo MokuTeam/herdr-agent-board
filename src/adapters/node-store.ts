@@ -15,7 +15,7 @@
 // from a shell ends its open streams too: while a stream watches, the file is read again every
 // second (paced in tests), and only then.
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { UPLINK_SEEN_MAX, type UplinkResult, uplinkResultOf } from '../core/node-uplink.ts'
 import { DEVICE_ID } from '../core/nodes.ts'
@@ -259,7 +259,29 @@ export interface DeviceStore {
   seenCall(id: string, call: string): UplinkResult | null
   /** Remembers a call's result, the last UPLINK_SEEN_MAX calls of the device; mode 0600. */
   rememberCall(id: string, call: string, result: UplinkResult): void
+  /**
+   * The device's revocation (#510, `revoke.json`): when, whether the node's sessions are to sleep,
+   * and `told`: null while the node is still to be told, true once it answered `leave`, false when
+   * the owner dropped the credentials without telling it. null: never revoked, or unreadable.
+   */
+  revocation(id: string): Revocation | null
+  setRevocation(id: string, value: Revocation): void
+  /** Deletes the device's token and its link key with the public half: nothing of it opens the node any more. */
+  dropCredentials(id: string): void
 }
+
+/** A device's revocation as `revoke.json` keeps it. */
+export interface Revocation {
+  at: number
+  sleep: boolean
+  told: boolean | null
+}
+
+const isRevocation = (v: unknown): v is Revocation =>
+  isRecord(v) &&
+  typeof v.at === 'number' &&
+  typeof v.sleep === 'boolean' &&
+  (v.told === null || typeof v.told === 'boolean')
 
 /** The offline copy of a device: `part` is read again through core/node-items.ts nodePart, never trusted. */
 export interface DeviceSnapshot {
@@ -328,6 +350,16 @@ export function createDeviceStore({ dir = nodesDir() }: { dir?: string } = {}): 
       const kept = [...seenCalls(file).filter(s => s.id !== call), { id: call, result }].slice(-UPLINK_SEEN_MAX)
       mkdirSync(at, { recursive: true })
       replaceFile(file, JSON.stringify({ calls: kept }), undefined, 0o600)
+    },
+    revocation: id => readJson(join(folder(id), 'revoke.json'), isRevocation),
+    setRevocation(id, value) {
+      const at = folder(id)
+      mkdirSync(at, { recursive: true })
+      replaceFile(join(at, 'revoke.json'), JSON.stringify(value), undefined, 0o600)
+    },
+    dropCredentials(id) {
+      const at = folder(id)
+      for (const name of ['token', 'link-key', 'link-key.pub']) rmSync(join(at, name), { force: true })
     },
   }
 }

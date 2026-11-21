@@ -59,6 +59,13 @@ const RETRY_MS = 30_000
 /** Wrong or missing tokens: 5 a minute (6.1), then 429. */
 const WRONG_TOKENS = { perAddress: 5, overall: 5, windowMs: 60_000 }
 
+/**
+ * The master a request to one of the door's own routes came with, as the door verified its token
+ * (#510): `POST /api/node/leave` forgets that one and no other.
+ */
+const callers = new WeakMap<Request, MasterRecord>()
+export const doorMaster = (req: Request): MasterRecord | null => callers.get(req) ?? null
+
 export function createNodeListener(o: NodeListenerOptions): NodeListener {
   let server: Server | null = null
   let bound: number | null = null
@@ -101,6 +108,7 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
       if (path === null) return json(400, { error: 'path' })
       const route = doorRoute(req.method, raw, path)
       if (!route) return json(404, { error: 'not found' })
+      if (route.door) callers.set(req, master)
       const res = await dispatch(route.door ? o.doorRoutes : o.routes, req, url, path, o.guards, () => peerOf(srv, req))
       const id = master.id
       return endsWhenGone(res, gone => o.store.watch(id, gone), { 'x-accel-buffering': 'no' })

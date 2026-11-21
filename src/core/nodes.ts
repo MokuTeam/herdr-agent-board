@@ -37,6 +37,11 @@ export interface DeviceConfig {
   profiles: Record<string, string>
   paused: boolean
   drain: boolean
+  /**
+   * Revoked by the owner (#510, design 11.4): no placement from the moment it is written, and the
+   * link stays only for the one call that tells the node.
+   */
+  revoked?: true
   /** The node's `secrets.sinks`, sent with the bundle and read there by secretsConfig. */
   sinks: unknown
   /** Per MCP server: false, or { command, args, env }. No prototype. */
@@ -110,6 +115,7 @@ const DEVICE_KEYS = [
   'profiles',
   'paused',
   'drain',
+  'revoked',
   'sinks',
   'mcp',
   'accept',
@@ -329,6 +335,7 @@ function deviceOf(
     profiles,
     paused: yes('paused'),
     drain: yes('drain'),
+    ...(yes('revoked') && { revoked: true as const }),
     sinks: o.sinks ?? {},
     mcp,
     accept: words('accept'),
@@ -626,6 +633,11 @@ export interface DeviceView {
   sameCommit: boolean | null
   /** When its last payload came; null before one did. */
   payloadAt: number | null
+  /**
+   * Only on a revoked device (#510): whether the node was told (it answered `leave`), and whether
+   * its token and link key are still kept for that one call.
+   */
+  revoked?: { told: boolean; kept: boolean }
 }
 
 // ---------------------------------------------------------------- the panel's edits (#510)
@@ -760,4 +772,17 @@ export function applyNodesEdit(
     Object.assign(nodes, next)
   }
   return { changed }
+}
+
+/**
+ * Marks a device revoked in config.json's `nodes` as written (#510, design 11.4):
+ * `devices.<id>.revoked: true`. False when there is no such device or it was marked already; the
+ * section is changed in place only when it is true.
+ */
+export function markRevoked(nodes: Record<string, unknown>, id: string): boolean {
+  if (id === LOCAL || !isObject(nodes.devices) || !Object.hasOwn(nodes.devices, id)) return false
+  const entry = nodes.devices[id]
+  if (!isObject(entry) || entry.revoked === true) return false
+  entry.revoked = true
+  return true
 }

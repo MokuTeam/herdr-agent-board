@@ -191,6 +191,8 @@ async function placing(o: {
   branch?: string
   /** This computer's profile folder shows a login (.credentials.json); true when not given. */
   masterLogin?: boolean
+  /** config.json on the master's disk names the devices, for what the board writes there (a revoke). */
+  disk?: boolean
 }): Promise<Pair & { checkout: string }> {
   const { checkout, nodeEnv } = repos(o.branch)
   const pair = await nodePair({
@@ -203,6 +205,17 @@ async function placing(o: {
     },
     masterSetup: box => {
       if (o.masterLogin !== false) login(box)
+      if (o.disk) {
+        const file = join(box.env.APPDATA ?? '', 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
+        const devices = Object.fromEntries(
+          Array.from({ length: o.count ?? 2 }, (_, i) => [
+            `server-${i + 1}`,
+            { link: { kind: 'direct', url: 'http://127.0.0.1:1' } },
+          ]),
+        )
+        mkdirSync(dirname(file), { recursive: true })
+        writeFileSync(file, JSON.stringify({ language: 'en', nodes: { id: 'laptop', devices } }))
+      }
     },
     masterCfg: { categories: LANES },
     nodesCfg: { lanes: ['atlas'], ...o.nodes },
@@ -254,6 +267,33 @@ const nodeStart = (id: string, cwd: string) => ({
   workspace: 'atlas',
   source: { kind: 'path', cwd, worktree: null },
 })
+
+test('a device revoked takes no start from that instant: one asked while the node is still being told goes to the next (#510)', async () => {
+  const pair = await placing({ nodes: { order: ['server-1', 'server-2', 'local'], whenFull: 'wait' }, disk: true })
+  const [one, two] = pair.nodes as [Pair['nodes'][0], Pair['nodes'][0]]
+  // The node's answer to leave is held: the start below is asked before the node was told.
+  let release = (): void => {}
+  const held = new Promise<void>(resolve => {
+    release = resolve
+  })
+  one.proxy.intercept = async (method, path, forward) => {
+    if (method !== 'POST' || path !== '/api/node/leave') return null
+    await held
+    return forward()
+  }
+  const revoking = post(pair.master.url, '/api/nodes', { op: 'revoke', id: 'server-1', sleep: false })
+  await until(() => one.proxy.requests.includes('POST /api/node/leave'), 10_000)
+  await startAt(pair.master.url, pair.checkout, 'atlas 1')
+  await until(() => started(two.box).length === 1, 20_000)
+  assert.deepEqual(started(one.box), [])
+  assert.ok(!one.proxy.requests.includes('POST /api/node/launch'))
+  release()
+  const res = await revoking
+  assert.equal(res.status, 200)
+  assert.deepEqual(await res.json(), { ok: true, told: true, kept: false, sessions: { slept: 0, kept: 0 } })
+  await settled(pair.master.url)
+  assert.deepEqual(started(one.box), [])
+}, 60_000)
 
 test('the same id posted twice to a node’s door is one session there', async () => {
   const pair = await placing({ count: 1 })

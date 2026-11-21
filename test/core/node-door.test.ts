@@ -75,7 +75,7 @@ describe('the door takes what 6.2 lists', () => {
     }
   })
 
-  test("the API version is 1, and the status, a start from the master (#504), the bundle's routes (#506), the uplink (#508) and a given secret (#507) are the door's own", () => {
+  test("the API version is 1, and the status, a start from the master (#504), the bundle's routes (#506), the uplink (#508), a given secret (#507) and leave (#510) are the door's own", () => {
     expect(NODE_API).toBe(1)
     expect(DOOR_ROUTES.filter(r => r.door).map(r => [r.method, String(r.path)])).toEqual([
       ['GET', '/api/node/status'],
@@ -87,7 +87,12 @@ describe('the door takes what 6.2 lists', () => {
       ['GET', String(/^\/api\/node\/uplink\/[A-Za-z0-9_-]{1,64}\/file\/\d{1,2}$/)],
       ['POST', String(/^\/api\/node\/uplink\/[A-Za-z0-9_-]{1,64}$/)],
       ['POST', String(/^\/api\/node\/sink\/[a-z0-9][a-z0-9_-]{0,39}$/)],
+      ['POST', '/api/node/leave'],
     ])
+    // Leave is a POST of that path alone (#510).
+    expect(refusal('POST', '/api/node/leave')).toBeNull()
+    expect(refusal('GET', '/api/node/leave')).toEqual(NOT_FOUND)
+    expect(refusal('POST', '/api/node/leave/x')).toEqual(NOT_FOUND)
     // The uplink's routes take a call id and a file's number, nothing else (#508).
     expect(refusal('GET', '/api/node/uplink/5d0c6a1e-77/file/0')).toBeNull()
     expect(refusal('POST', '/api/node/uplink/5d0c6a1e-77')).toBeNull()
@@ -175,7 +180,6 @@ describe('everything else is 404, whatever the spelling', () => {
       ['GET', '/api/session/s1/helper/h1'],
       ['POST', '/api/session/s1/mokupilot'],
       ['POST', '/api/node/claim'],
-      ['POST', '/api/node/leave'],
       // A node's own `board thread` hands its call here: this computer's, never the master's (#508).
       ['POST', '/api/node/call'],
       ['GET', '/'],

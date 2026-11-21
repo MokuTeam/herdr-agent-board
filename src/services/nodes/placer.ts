@@ -261,6 +261,8 @@ export function createPlacer(o: PlacerOptions): Placer {
         placed.at = got.got
       }
       devices[id] = { status: placed, online, reserved: 0, gateClosed: gate.closed }
+      // Revoked (#510): refused from the moment config.json says so, queued starts go on to others.
+      if (settings?.revoked) devices[id].revoked = true
     }
     const live = heldReservations(now)
     for (const [id, d] of Object.entries(devices)) d.reserved = reservedOn(live, id)

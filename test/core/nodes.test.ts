@@ -11,6 +11,7 @@ import {
   deviceIdFromHost,
   LOCAL,
   laneMayLeave,
+  markRevoked,
   NODE_PORT,
   type NodesConfig,
   nodeConfig,
@@ -588,5 +589,29 @@ describe('the key prefix', () => {
     for (const device of ['', 'local', 'Server', 'a:b', '@a', 'a b', 'сервер', '-a', 'a'.repeat(33)])
       assert.throws(() => nodeKey(device, 'pane-1'), /not a device id/, device)
     assert.throws(() => nodeKey('server-1', ''), /empty key/)
+  })
+})
+
+describe('a revoked device (#510)', () => {
+  const link = { kind: 'direct', url: 'http://127.0.0.1:12430' }
+  test('revoked: true is read and kept with the device; absent or false it is not there; another type is named', () => {
+    const c = conf({ devices: { a: { link, revoked: true }, b: { link, revoked: false }, c: { link } } })
+    assert.equal(c.devices.a?.revoked, true)
+    assert.equal('revoked' in (c.devices.b ?? {}), false)
+    assert.equal('revoked' in (c.devices.c ?? {}), false)
+    assert.deepEqual(conf({ devices: { a: { link, revoked: 'yes' } } }).problems, [
+      { device: 'a', key: 'revoked', why: 'type' },
+    ])
+  })
+
+  test('markRevoked writes it once, on a device the section holds, never on this computer', () => {
+    const nodes: Record<string, unknown> = { devices: { a: { link }, local: {} } }
+    assert.equal(markRevoked(nodes, 'a'), true)
+    assert.deepEqual(nodes, { devices: { a: { link, revoked: true }, local: {} } })
+    assert.equal(markRevoked(nodes, 'a'), false)
+    assert.equal(markRevoked(nodes, 'b'), false)
+    assert.equal(markRevoked(nodes, 'local'), false)
+    assert.equal(markRevoked({}, 'a'), false)
+    assert.deepEqual(nodes, { devices: { a: { link, revoked: true }, local: {} } })
   })
 })
