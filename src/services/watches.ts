@@ -14,7 +14,15 @@
 // removed and logged as missed, as a reminder is.
 import { readCard } from '../adapters/cards.ts'
 import { isAlive } from '../adapters/process.ts'
-import { addEntry, fireWatch, listWatches, logRun, removeWatch, updateWatch } from '../adapters/schedule-store.ts'
+import {
+  addEntry,
+  fireWatch,
+  listEntries,
+  listWatches,
+  logRun,
+  removeWatch,
+  updateWatch,
+} from '../adapters/schedule-store.ts'
 import { runProbe as realProbe } from '../adapters/watch-probe.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { sessionProfile } from '../core/profiles.ts'
@@ -58,6 +66,35 @@ function heldElsewhere(w: WatchEntry, now: number): boolean {
   return c.pid !== process.pid && now - c.at < CLAIM_MS && isAlive(c.pid)
 }
 
+/**
+ * The session a watch is for on the board now, as the scheduler follows it: its own, else the one
+ * that took its pane after /clear (core/schedule-rules.ts targetOf, the profiles read as for a reminder).
+ */
+export function followerOf(deps: Pick<Deps, 'profiles'>, items: Item[]): (w: WatchEntry) => Item | undefined {
+  const set = deps.profiles()
+  const profileOf = (key: string): Pick<Item, 'profile' | 'profileFolder'> =>
+    items.find(i => i.key === key) ?? sessionProfile(readCard(key), set.list)
+  const profileIdOf = (key: string): string | undefined => itemProfile(profileOf(key), set.list)?.id
+  return w => targetOf(w, items, profileIdOf).item
+}
+
+/**
+ * The watches of other keys that `session` has taken over: set in its pane by a session that is not
+ * on the board at all (sleepers count as on it), which the scheduler would follow into this one,
+ * same folder and profile. `board doing` and the rest end these with the session's own.
+ */
+export function takenOver(
+  session: { key: string; pane?: string | null | undefined },
+  watches: readonly WatchEntry[],
+  items: Item[],
+  deps: Pick<Deps, 'profiles'>,
+): string[] {
+  const there = watches.filter(w => w.key !== session.key && !!session.pane && w.pane === session.pane)
+  if (!there.length) return []
+  const follow = followerOf(deps, items)
+  return there.filter(w => follow(w)?.key === session.key).map(w => w.id)
+}
+
 export function watchPass(o: WatchPassOpts): { pass(): Promise<void>; running(): number; stop(): void } {
   const { deps, patience, onChange = () => {} } = o
   const probe = o.runProbe ?? realProbe
@@ -73,14 +110,11 @@ export function watchPass(o: WatchPassOpts): { pass(): Promise<void>; running():
       const due = listWatches().filter(w => w.next <= now && !running.has(w.id) && !heldElsewhere(w, now))
       if (!due.length) return
       const items = await (o.items ?? (() => collect(deps)))()
-      const set = deps.profiles()
-      const profileOf = (key: string): Pick<Item, 'profile' | 'profileFolder'> =>
-        items.find(i => i.key === key) ?? sessionProfile(readCard(key), set.list)
-      const profileIdOf = (key: string): string | undefined => itemProfile(profileOf(key), set.list)?.id
+      const follow = followerOf(deps, items)
       let changed = false
       for (const w of due) {
         if (running.size >= MAX_RUNNING) break
-        const { item } = targetOf(w, items, profileIdOf)
+        const item = follow(w)
         if (!item) {
           gone(w, now)
           changed = true
@@ -161,28 +195,42 @@ export function watchPass(o: WatchPassOpts): { pass(): Promise<void>; running():
     })
     if (!after) return
     if (outcome.kind === 'error') deps.log(`watch ${w.id}: ${outcome.why}`)
-    // Each line goes in first and is marked told after (core/watches.ts Note): one that could not be
-    // written is tried again at the next run. The session's cap of entries does not refuse them.
+    // Each line goes in first and is marked told after (core/watches.ts Note), tagged with the
+    // watch and its kind: one still waiting in the schedule (not delivered yet, or written by a run
+    // whose mark then failed) is not written again, so a sleeping session gets one of each kind at
+    // most. The session's cap of entries does not refuse them.
+    const waiting = listEntries().filter(e => e.watchId === w.id)
     for (const n of notes) {
+      if (!waiting.some(e => e.watchNote === n.mark)) {
+        try {
+          addEntry(
+            {
+              key: after.key,
+              text: n.text,
+              at: now,
+              next: now,
+              ...(after.name !== undefined && { name: after.name }),
+              ...(after.pane !== undefined && { pane: after.pane }),
+              ...(after.cwd !== undefined && { cwd: after.cwd }),
+              by: after.by ?? 'agent',
+              from: WATCH_FROM,
+              ...(!n.wake && { noWake: true }),
+              watchId: w.id,
+              watchNote: n.mark,
+            },
+            { overCap: true },
+          )
+        } catch (err) {
+          deps.log(`watch ${w.id}: its ${n.mark} line was not scheduled (${messageOf(err)}); the next run tries again`)
+          continue
+        }
+      }
       try {
-        addEntry(
-          {
-            key: after.key,
-            text: n.text,
-            at: now,
-            next: now,
-            ...(after.name !== undefined && { name: after.name }),
-            ...(after.pane !== undefined && { pane: after.pane }),
-            ...(after.cwd !== undefined && { cwd: after.cwd }),
-            by: after.by ?? 'agent',
-            from: WATCH_FROM,
-            ...(!n.wake && { noWake: true }),
-          },
-          { overCap: true },
-        )
         updateWatch(w.id, cur => (same(cur) ? { ...cur, [n.mark]: true } : undefined))
       } catch (err) {
-        deps.log(`watch ${w.id}: a note was not scheduled: ${messageOf(err)}`)
+        deps.log(
+          `watch ${w.id}: its ${n.mark} line is in the schedule, but the watch was not marked (${messageOf(err)}); the next run finds the line there and does not send it again`,
+        )
       }
     }
   }

@@ -337,14 +337,14 @@ export type NewWatch = {
 
 /**
  * A new watch for `fields.key`, under an id no entry or watch has; the session's earlier watch ends
- * (one watch per session: a new `board wait` replaces it), and with `live` the one a session
- * before a /clear left in its pane (endWatches). Returns it and the ones it ended.
+ * (one watch per session: a new `board wait` replaces it), and those of `alsoIds` (endWatches).
+ * Returns it and the ones it ended.
  */
 export function addWatch(
   fields: NewWatch,
-  live?: (key: string) => boolean,
+  alsoIds: readonly string[] = [],
 ): { watch: WatchEntry; ended: WatchEntry[] } {
-  const ended = endWatches(fields.key, fields.pane && live ? { pane: fields.pane, live } : undefined)
+  const ended = endWatches(fields.key, alsoIds)
   mkdirSync(watchesDir(), { recursive: true })
   const clean = {
     ...fields,
@@ -387,13 +387,12 @@ export function removeWatch(id: unknown): WatchEntry | null {
 
 /**
  * End every watch of a session (`board doing`, `done`, `clear`, a new `wait`); returns them.
- * `byPane`: the session's own pane, and whether a key is a live session. A watch set in that pane
- * by a session that is not live any more (the one before a /clear, which the scheduler would follow
- * here at its next check) ends too.
+ * `alsoIds`: watches of the session before a /clear that this one took over (services/watches.ts
+ * takenOver), which the scheduler would only follow here at their next check.
  */
-export function endWatches(key: string, byPane?: { pane: string; live: (key: string) => boolean }): WatchEntry[] {
+export function endWatches(key: string, alsoIds: readonly string[] = []): WatchEntry[] {
   return listWatches()
-    .filter(w => w.key === key || (!!byPane && w.pane === byPane.pane && !byPane.live(w.key)))
+    .filter(w => w.key === key || alsoIds.includes(w.id))
     .map(w => removeWatch(w.id))
     .filter((w): w is WatchEntry => w !== null)
 }

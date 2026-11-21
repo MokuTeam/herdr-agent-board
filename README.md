@@ -1557,8 +1557,12 @@ board wait "CI run 123456789" --every 5m --silence 1d --probe 's=$(gh run view 1
 - One watch per session, and only for the session's own wait: `--probe` with `--session` naming
   another session is refused, so a command one session sets never runs in another's folder. The
   wait text is 500 characters at most with `--probe`.
-- `board doing`, `board done`, `board clear` and a new `board wait` end it, and also the watch
-  that the session before a /clear left in the same pane.
+- `board doing`, `board done`, `board clear` and a new `board wait` end it, and also a watch
+  the session before a /clear left in the same pane, by the rule the scheduler follows it with: its
+  session is nowhere on the board (a sleeping one counts as there), and the pane's new session has
+  the same folder and profile.
+- A sleeping session gets at most one line of each kind from a watch while the last one waits to
+  be delivered, however many error streaks pass.
   `board schedule` lists it with its whole command line, and `board unschedule <id>` removes it;
   the sheet and the schedule panel show the command too, with a cancel button and nothing else.
 - Safety: a probe runs unattended with your rights, outside the session's permission mode. A watch
@@ -1583,7 +1587,9 @@ board wait "CI run 123456789" --every 5m --silence 1d --probe 's=$(gh run view 1
 - Turned off again, watches stay in their folder unrun (`board schedule` says so); the page shows
   none, and `board wait --probe` takes the flags as words, as before.
 - With nodes (#500): a watch runs on the board of the computer its session is on, while that
-  board's `watches` is on, and stays there. A node does not pass its watches to the master's page.
+  board's `watches` is on. The node's payload still carries its watch entries; the master drops
+  them on receipt, so its page does not show them. A master on an older build shows them as plain
+  reminders due at their next check.
 - On Windows a probe ended from outside (Task Manager, `taskkill`) exits 1, which reads as
   nothing yet; the board's own timeout is an error.
 - Not here yet: a probe that calls an MCP server, and starting a new session when one fires.
