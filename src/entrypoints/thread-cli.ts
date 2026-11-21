@@ -21,6 +21,7 @@
 //   board thread import <task board file> [--lane <id>]
 //   board thread share <key> <name|team|channel> [--history]   a request the owner confirms (#394)
 // <key>: a key (atlas-12), the first 8 characters of an id, or a bare number in the session's lane.
+import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 import { type BoardDb, DbError, openDb } from '../adapters/db.ts'
@@ -36,6 +37,8 @@ import {
   ThreadError,
   watchesOf,
 } from '../adapters/work-thread-store.ts'
+import { KEPT_SUBS } from '../core/node-uplink.ts'
+import { nodeConfig } from '../core/nodes.ts'
 import { OWNER } from '../core/owner-watch.ts'
 import { parseTaskFile, TaskFileError } from '../core/thread-import.ts'
 import type { Config } from '../core/types.ts'
@@ -161,7 +164,8 @@ export function parseArgs(sub: string, rest: readonly string[]): Args {
 }
 
 export interface ThreadCmdContext {
-  cfg: Pick<Config, 'threads' | 'port'>
+  /** `node`: this board is a node, and every command goes to its master (#508). */
+  cfg: Pick<Config, 'threads' | 'port' | 'node'>
   /** Who runs it: the session (its card key and name), or the owner outside one. */
   actor: Party
   /** The session's lane (its card's category, else the folder's), null outside one. */
@@ -189,6 +193,50 @@ export interface ThreadCmdContext {
    * it went; null while no board answers (it goes when the board runs).
    */
   sendOut?: (thread: string, entry: string) => Promise<SentLine | null>
+  /** On a node (#508): hands the call to this node's board, `POST /api/node/call`; the tests' stand-in. */
+  call?: (body: NodeCall) => Promise<NodeCallAnswer>
+}
+
+/** A command on a node as it goes to the node's board (services/node/uplink.ts call). */
+export interface NodeCall {
+  /** A write that can wait carries an id of its own: the same call tried again is one call. */
+  id?: string
+  cmd: 'thread'
+  argv: string[]
+  session: string
+  lane: string | null
+  /** The files' paths, in the order their `--file` comes in `argv`. */
+  files: string[]
+}
+
+/** What the node's board answered (services/node/uplink.ts CallAnswer); null when it did not. */
+export type NodeCallAnswer =
+  | { state: 'answered'; code: number; out: string[]; err: string[] }
+  | { state: 'kept'; id: string }
+  | { state: 'unreachable' }
+  | null
+
+/** How long the command waits for its board: the board's own wait (20 s, 10 s for a read) and room. */
+const CALL_WAIT_MS = 40_000
+
+/**
+ * Where the files of `board thread <sub> <rest>` are among `rest`: the value of each `--file`
+ * of a post or a done, as parseArgs reads them (a value of another flag and text after a lone `--`
+ * are none). The master rewrites these to its copies of the node's files (services/nodes/uplink.ts).
+ */
+export function fileArgs(sub: string, rest: readonly string[]): number[] {
+  const known = FLAGS[sub]
+  if (!known?.values.includes('--file')) return []
+  const at: number[] = []
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] as string
+    if (a === '--') break
+    if (!known.values.includes(a)) continue
+    if (i + 1 >= rest.length) break
+    if (a === '--file') at.push(i + 1)
+    i++
+  }
+  return at
 }
 
 /** What the board answered a send of a shared entry (routes/threads.ts sendReply). */
@@ -232,6 +280,9 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
       else out(THREAD_USAGE)
       return 0
     }
+    // On a node every command goes to the master, which holds the threads (#508): this computer's
+    // database is not opened. Without `node` the command runs here, as it always has.
+    if (nodeConfig(ctx.cfg.node)) return await forward(sub, args, ctx, out, json)
     const a = parseArgs(sub, args)
     const base = `http://127.0.0.1:${typeof ctx.cfg.port === 'number' ? ctx.cfg.port : 12422}/`
     const cfg = threadsConfig(ctx.cfg.threads)
@@ -262,6 +313,96 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
     if (db && !ctx.db) db.close()
   }
 }
+
+/**
+ * `board thread <sub> …` on a node (#508): handed to this node's board, which keeps it for the master
+ * and waits for its answer (services/node/uplink.ts); what the master printed is printed here. A write
+ * that can wait and got no answer in time is kept, and the command says so and succeeds; anything
+ * else that got none fails, saying the board's computer is not reachable.
+ */
+async function forward(
+  sub: string,
+  args: readonly string[],
+  ctx: ThreadCmdContext,
+  out: (line: string) => void,
+  json: boolean,
+): Promise<number> {
+  const err = ctx.err ?? ((line: string) => console.error(line))
+  const fail = (code: string, message: string): number => {
+    if (json) out(JSON.stringify({ ok: false, error: code, message }))
+    else err(message)
+    return 1
+  }
+  const actor = ctx.actor
+  if (actor.kind !== 'session')
+    return fail(
+      'no_session',
+      "run it from a session: on a node, board thread goes to the board's computer as a session's",
+    )
+  const argv = [sub, ...args]
+  // The board command takes --idle out of every command's words: watch gets it back.
+  if (ctx.idle && sub === 'watch' && !args.includes('--idle')) {
+    const dash = argv.indexOf('--')
+    argv.splice(dash < 0 ? argv.length : dash, 0, '--idle')
+  }
+  // Paths as this session meant them: the board that reads them runs in another folder.
+  const files = fileArgs(sub, args).map(i => resolve(args[i] as string))
+  const body: NodeCall = {
+    ...(KEPT_SUBS.has(sub) && { id: randomUUID() }),
+    cmd: 'thread',
+    argv,
+    session: actor.key,
+    lane: ctx.lane,
+    files,
+  }
+  const answer = await (ctx.call ?? callBoard(ctx.cfg.port))(body)
+  if (!answer) return fail('board', 'the board does not run on this computer: nothing was sent')
+  // The question on this session's card, as a local ask puts it there; the card rides to the master.
+  const asked = (): void => {
+    if (sub !== 'ask') return
+    const question = args
+      .filter(a => a !== '--json' && a !== '--')
+      .slice(1)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (question) ctx.setAsk?.(question)
+  }
+  if (answer.state === 'answered') {
+    for (const line of answer.out) out(line)
+    for (const line of answer.err) err(line)
+    if (answer.code === 0) asked()
+    return answer.code
+  }
+  if (answer.state === 'kept') {
+    asked()
+    if (json) out(JSON.stringify({ ok: true, kept: true, id: answer.id }))
+    else out("kept, goes to the board's computer when it is reachable")
+    return 0
+  }
+  return fail('unreachable', "the board's computer is not reachable")
+}
+
+/** `POST /api/node/call` on this computer's board; null when no board answers there. */
+const callBoard =
+  (port: unknown) =>
+  async (body: NodeCall): Promise<NodeCallAnswer> => {
+    try {
+      const res = await fetch(`http://127.0.0.1:${typeof port === 'number' ? port : 12422}/api/node/call`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-board': '1' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(CALL_WAIT_MS),
+      })
+      if (!res.ok) {
+        await res.body?.cancel()
+        return { state: 'answered', code: 1, out: [], err: [`the board on this computer answered HTTP ${res.status}`] }
+      }
+      return (await res.json()) as NodeCallAnswer
+    } catch {
+      return null
+    }
+  }
 
 class Run {
   constructor(

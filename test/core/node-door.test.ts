@@ -75,7 +75,7 @@ describe('the door takes what 6.2 lists', () => {
     }
   })
 
-  test("the API version is 1, and the status, a start from the master (#504) and the bundle's routes (#506) are the door's own", () => {
+  test("the API version is 1, and the status, a start from the master (#504), the bundle's routes (#506) and the uplink (#508) are the door's own", () => {
     expect(NODE_API).toBe(1)
     expect(DOOR_ROUTES.filter(r => r.door).map(r => [r.method, String(r.path)])).toEqual([
       ['GET', '/api/node/status'],
@@ -83,7 +83,23 @@ describe('the door takes what 6.2 lists', () => {
       ['GET', String(/^\/api\/node\/bundle\/[^/]+$/)],
       ['PUT', String(/^\/api\/node\/bundle\/[^/]+\/blob\/[0-9a-f]{64}$/)],
       ['POST', String(/^\/api\/node\/bundle\/[^/]+\/commit$/)],
+      ['GET', '/api/node/uplink'],
+      ['GET', String(/^\/api\/node\/uplink\/[A-Za-z0-9_-]{1,64}\/file\/\d{1,2}$/)],
+      ['POST', String(/^\/api\/node\/uplink\/[A-Za-z0-9_-]{1,64}$/)],
     ])
+    // The uplink's routes take a call id and a file's number, nothing else (#508).
+    expect(refusal('GET', '/api/node/uplink/5d0c6a1e-77/file/0')).toBeNull()
+    expect(refusal('POST', '/api/node/uplink/5d0c6a1e-77')).toBeNull()
+    for (const [method, raw] of [
+      ['POST', '/api/node/uplink'],
+      ['GET', '/api/node/uplink/5d0c6a1e-77'],
+      ['POST', '/api/node/uplink/5d0c6a1e-77/file/0'],
+      ['GET', '/api/node/uplink/5d0c6a1e-77/file/..%2F..%2Fconfig.json'],
+      ['GET', '/api/node/uplink/5d0c6a1e-77/file/%2Fetc%2Fpasswd'],
+      ['GET', '/api/node/uplink/a.b/file/0'],
+      ['GET', '/api/node/%75plink'],
+    ] as const)
+      expect([method, raw, refusal(method, raw)]).toEqual([method, raw, NOT_FOUND])
     // Not as a GET, nor spelled otherwise.
     expect(refusal('GET', '/api/node/launch')).toEqual(NOT_FOUND)
     expect(refusal('POST', '/api/node/%6Caunch')).toEqual(NOT_FOUND)
@@ -154,7 +170,8 @@ describe('everything else is 404, whatever the spelling', () => {
       ['POST', '/api/session/s1/mokupilot'],
       ['POST', '/api/node/claim'],
       ['POST', '/api/node/leave'],
-      ['GET', '/api/node/uplink'],
+      // A node's own `board thread` hands its call here: this computer's, never the master's (#508).
+      ['POST', '/api/node/call'],
       ['GET', '/'],
       ['GET', '/app.js'],
     ] as const)

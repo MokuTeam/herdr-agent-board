@@ -41,6 +41,7 @@ import {
   writesToProvider,
 } from '../core/calendar.ts'
 import { googleWriteArgs, type WriteAsk, writtenId } from '../core/calendar-google.ts'
+import { nodeConfig } from '../core/nodes.ts'
 import { addDays, dateIn, isDate, localZone, parseWhen } from '../core/time.ts'
 import type { Config } from '../core/types.ts'
 import { calendarOf, pushEvents, readEvents, sourceViews, syncSource, withCalendarDb } from '../services/calendar.ts'
@@ -106,7 +107,8 @@ function parseArgs(rest: readonly string[]): Args {
 }
 
 export interface CalCmdContext {
-  cfg: Pick<Config, 'calendar'>
+  /** `node`: this board is a node, where the calendar is not (#508). */
+  cfg: Pick<Config, 'calendar' | 'node'>
   actor: CalActor
   out?: (line: string) => void
   err?: (line: string) => void
@@ -263,6 +265,13 @@ export async function calCmd(rest: readonly string[], ctx: CalCmdContext): Promi
   if (cmd === 'help' || flags.includes('--help') || flags.includes('-h')) {
     out(CAL_USAGE)
     return 0
+  }
+  // On a node (#508, docs/design/nodes 10 item 6): the calendar is the master's.
+  if (nodeConfig(ctx.cfg.node)) {
+    const message = "board cal is not available on a node yet: it runs on the board's computer"
+    if (json) out(JSON.stringify({ ok: false, error: 'node', message }))
+    else errOut(message)
+    return 1
   }
   try {
     const c = calendarOf(ctx.cfg)

@@ -335,6 +335,11 @@ describe('what the review found', () => {
           status: async () => null,
           launch: async () => ({ status: 404, body: {} }) as never,
           bundle: r.bundle,
+          uplink: {
+            stream: () => new Response(''),
+            file: () => new Response('', { status: 404 }),
+            answer: () => ({ status: 404, body: {} }),
+          },
         }),
         req,
         url,

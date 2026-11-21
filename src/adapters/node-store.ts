@@ -16,6 +16,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { UPLINK_SEEN_MAX, type UplinkResult, uplinkResultOf } from '../core/node-uplink.ts'
 import { DEVICE_ID } from '../core/nodes.ts'
 import { hasUnprintable } from '../core/team.ts'
 import { isRecord, replaceFile, updateJson } from './json-store.ts'
@@ -250,6 +251,13 @@ export interface DeviceStore {
   bundle(id: string): Record<string, unknown> | null
   /** Writes the bundle record, mode 0600, whole or not at all. */
   setBundle(id: string, value: Record<string, unknown>): void
+  /**
+   * The result the master gave a call of the device's sessions before (#508, `uplink-seen.json`),
+   * or null: a call seen again is answered with it and not run again.
+   */
+  seenCall(id: string, call: string): UplinkResult | null
+  /** Remembers a call's result, the last UPLINK_SEEN_MAX calls of the device; mode 0600. */
+  rememberCall(id: string, call: string, result: UplinkResult): void
 }
 
 /** The offline copy of a device: `part` is read again through core/node-items.ts nodePart, never trusted. */
@@ -310,5 +318,29 @@ export function createDeviceStore({ dir = nodesDir() }: { dir?: string } = {}): 
       mkdirSync(at, { recursive: true })
       replaceFile(join(at, 'bundle.json'), JSON.stringify(value, null, 2), undefined, 0o600)
     },
+    seenCall(id, call) {
+      return seenCalls(join(folder(id), 'uplink-seen.json')).find(s => s.id === call)?.result ?? null
+    },
+    rememberCall(id, call, result) {
+      const at = folder(id)
+      const file = join(at, 'uplink-seen.json')
+      const kept = [...seenCalls(file).filter(s => s.id !== call), { id: call, result }].slice(-UPLINK_SEEN_MAX)
+      mkdirSync(at, { recursive: true })
+      replaceFile(file, JSON.stringify({ calls: kept }), undefined, 0o600)
+    },
+  }
+}
+
+/** The calls a device's ledger holds, oldest first; none when it is missing or not one. */
+function seenCalls(file: string): { id: string; result: UplinkResult }[] {
+  try {
+    const value: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    if (!isRecord(value) || !Array.isArray(value.calls)) return []
+    return value.calls.flatMap(c => {
+      const result = isRecord(c) && typeof c.id === 'string' ? uplinkResultOf(c.result) : null
+      return result ? [{ id: c.id as string, result }] : []
+    })
+  } catch {
+    return []
   }
 }

@@ -68,10 +68,12 @@ import { mokupilotCheck } from '../services/mokupilot.ts'
 import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
 import { createNodeLaunch } from '../services/node/launch.ts'
 import { createNodeStatus } from '../services/node/status.ts'
+import { createNodeUplink, type NodeUplink } from '../services/node/uplink.ts'
 import { createNodeAggregate, type NodeAggregate } from '../services/nodes/aggregate.ts'
 import { type BundleSync, createBundleSync } from '../services/nodes/bundle-sync.ts'
 import { createNodeLinks, type NodeLinks } from '../services/nodes/links.ts'
 import { createPlacer, type Placer } from '../services/nodes/placer.ts'
+import { createUplinkRunner, type UplinkRunner } from '../services/nodes/uplink.ts'
 import { tellOwnerWatchers } from '../services/owner-watch.ts'
 import { createPresence } from '../services/presence.ts'
 import { editProfile, installProfile, installThreadsSkill, wakeHooksInPlace } from '../services/profiles.ts'
@@ -115,7 +117,7 @@ import { launchRoutes } from './routes/launch.ts'
 import { linksRoutes } from './routes/links.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { moveRoute } from './routes/move.ts'
-import { nodeDoorRoutes } from './routes/node.ts'
+import { nodeCallRoutes, nodeDoorRoutes } from './routes/node.ts'
 import { createNodeProxy, type NodeProxy } from './routes/node-proxy.ts'
 import { nodesRoutes } from './routes/nodes.ts'
 import { pageLogRoute } from './routes/page-log.ts'
@@ -957,7 +959,9 @@ export async function startServer({
           ? localEventRoutes
           : path === '/api/nodes' && localNodeRoutes
             ? localNodeRoutes
-            : routes
+            : path === '/api/node/call' && localCallRoutes
+              ? localCallRoutes
+              : routes
       return await dispatch(selected, req, url, path, guards, () => peerOf(srv, req))
     } catch (err) {
       // The path only: a query can carry the page's token.
@@ -1001,6 +1005,10 @@ export async function startServer({
   // first time config.json has `node`, and from then on following it. Without `node` nothing of it
   // exists: no listener, no timer, no file read.
   let door: NodeListener | null = null
+  // A node's calls to its master (#508, services/node/uplink.ts): the outbox and its stream on the
+  // door, and `POST /api/node/call` for this computer's own `board thread`, on this listener alone.
+  let nodeUplink: NodeUplink | null = null
+  let localCallRoutes: Route[] | null = null
   function doorFollows(): void {
     if (door) {
       door.configChanged()
@@ -1020,6 +1028,9 @@ export async function startServer({
       version: PLUGIN_VERSION,
       bundle: nodeBundle.version,
     })
+    const uplink = createNodeUplink({ log })
+    nodeUplink = uplink
+    localCallRoutes = nodeCallRoutes(uplink)
     const nodeLaunch = createNodeLaunch({
       node: () => nodeConfig(cfg.node),
       start: (body, session) => launches.start(body, board.items(), { node: { session } }),
@@ -1042,6 +1053,7 @@ export async function startServer({
         status: () => status.answer(),
         launch: body => nodeLaunch.answer(body),
         bundle: nodeBundle,
+        uplink,
       }),
       log,
     })
@@ -1055,6 +1067,7 @@ export async function startServer({
   let localNodeRoutes: Route[] | null = null
   let nodeProxy: NodeProxy | null = null
   let bundleSync: BundleSync | null = null
+  let uplinkRunner: UplinkRunner | null = null
   function linksFollow(): void {
     if (nodeLinks) {
       nodeLinks.configChanged()
@@ -1086,6 +1099,14 @@ export async function startServer({
       local: ownRoutes,
     })
     routes.unshift(nodeProxy.route)
+    // Calls from the nodes' sessions (#508): `board thread` there, run here as that session.
+    uplinkRunner = createUplinkRunner({
+      links: nodeLinks,
+      find: board.findAny,
+      items: () => [...board.items(), ...(aggregate.part()?.items ?? [])],
+      cfg,
+      log,
+    })
     // Where a new session runs (#504): this computer's own status by the code a node answers with.
     const ownStatus = createNodeStatus({
       node: () => {
@@ -1227,6 +1248,8 @@ export async function startServer({
       process.off('exit', endLogins)
       await tunnel.close()
       await door?.close()
+      nodeUplink?.close()
+      await uplinkRunner?.close()
       if (nodeAggregate) {
         nodeAggregate.close()
         process.off('exit', nodeAggregate.close)

@@ -70,6 +70,11 @@ export const DOOR_ROUTES: readonly DoorRoute[] = [
   { method: 'GET', path: new RegExp(`^/api/node/bundle/${KEY}$`), door: true },
   { method: 'PUT', path: new RegExp(`^/api/node/bundle/${KEY}/blob/[0-9a-f]{64}$`), door: true },
   { method: 'POST', path: new RegExp(`^/api/node/bundle/${KEY}/commit$`), door: true },
+  // Calls from this node's sessions to the master (#508): their stream, a file a call names by its
+  // number, and the master's result.
+  { method: 'GET', path: '/api/node/uplink', door: true },
+  { method: 'GET', path: /^\/api\/node\/uplink\/[A-Za-z0-9_-]{1,64}\/file\/\d{1,2}$/, door: true },
+  { method: 'POST', path: /^\/api\/node\/uplink\/[A-Za-z0-9_-]{1,64}$/, door: true },
 ]
 
 const allows = (r: DoorRoute, method: string, rawPath: string, path: string): boolean =>

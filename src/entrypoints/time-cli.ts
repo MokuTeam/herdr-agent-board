@@ -49,6 +49,7 @@ import {
   unpostEntries,
 } from '../adapters/time-store.ts'
 import { t } from '../core/lang.ts'
+import { nodeConfig } from '../core/nodes.ts'
 import {
   type Actor,
   addDays,
@@ -262,6 +263,13 @@ export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Pro
     if (json) out(JSON.stringify({ usage: lines.join('\n') }, null, 2))
     else for (const line of lines) out(line)
     return 0
+  }
+  // On a node (#508, docs/design/nodes 10 item 6): time is the master's, and a database here nobody reads.
+  if (nodeConfig(ctx.cfg.node)) {
+    const message = "board time is not available on a node yet: it runs on the board's computer"
+    if (!json) throw new Error(message)
+    out(JSON.stringify({ ok: false, error: 'node', message }))
+    return 1
   }
   try {
     await run(rest, ctx, out)
