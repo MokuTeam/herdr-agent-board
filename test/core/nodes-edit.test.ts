@@ -2,7 +2,7 @@
 // from a body (nodesEditOf), then held to the rules nodesConfig reads with (applyNodesEdit). A bad
 // value is refused with its field and leaves the section as it was.
 import { describe, expect, test } from 'bun:test'
-import { applyNodesEdit, type NodesEdit, nodesEditOf } from '../../src/core/nodes.ts'
+import { applyNodesEdit, type NodesEdit, nodesConfig, nodesEditOf } from '../../src/core/nodes.ts'
 
 const section = (): Record<string, unknown> => ({
   id: 'laptop',
@@ -136,5 +136,36 @@ describe('applyNodesEdit', () => {
     }
     expect(applied({ op: 'set', id: 'server-2', maxSessions: -3 }, zero).r).toEqual({ error: 'maxSessions' })
     expect(applied({ op: 'set', id: 'server-2', maxSessions: 2 }, zero).r).toEqual({ changed: true })
+  })
+})
+
+describe('giveSecrets (#604)', () => {
+  const devices = (nodes: Record<string, unknown>) => nodes.devices as Record<string, Record<string, unknown>>
+
+  test('absent is on; false is off; anything else is a problem of that device', () => {
+    const on = nodesConfig(section(), 'laptop')
+    expect(on?.devices['server-1'] && 'giveSecrets' in on.devices['server-1']).toBe(false)
+    const off = section()
+    devices(off)['server-1'] = { ...devices(off)['server-1'], giveSecrets: false }
+    expect(nodesConfig(off, 'laptop')?.devices['server-1']?.giveSecrets).toBe(false)
+    const bad = section()
+    devices(bad)['server-1'] = { ...devices(bad)['server-1'], giveSecrets: 'yes' }
+    const cfg = nodesConfig(bad, 'laptop')
+    expect(cfg?.devices['server-1']).toBeUndefined()
+    expect(cfg?.problems).toContainEqual({ device: 'server-1', key: 'giveSecrets', why: 'type' })
+  })
+
+  test('the switch: off writes false, on takes the key out, as an owner who never touched it has it', () => {
+    const { r, nodes } = applied({ op: 'set', id: 'server-1', giveSecrets: false })
+    expect(r).toEqual({ changed: true })
+    expect(devices(nodes)['server-1']?.giveSecrets).toBe(false)
+    const back = applyNodesEdit(nodes, read({ op: 'set', id: 'server-1', giveSecrets: true }))
+    expect(back).toEqual({ changed: true })
+    expect('giveSecrets' in (devices(nodes)['server-1'] ?? {})).toBe(false)
+  })
+
+  test('refused: not a boolean, and on this computer', () => {
+    expect(nodesEditOf({ op: 'set', id: 'server-1', giveSecrets: 'off' })).toEqual({ error: 'giveSecrets' })
+    expect(nodesEditOf({ op: 'set', id: 'local', giveSecrets: false })).toEqual({ error: 'giveSecrets' })
   })
 })

@@ -2111,9 +2111,31 @@ async function nodesSync(webPort: number, id: string, profile: string | undefine
       ? `ok · ${name} is current: bundle ${String(r.seq)}, ${String(r.sent)} file(s) sent${Array.isArray(r.applied) ? `, ${r.applied.length} changed` : ''}`
       : `not synced · ${name}: ${String(r.why)}${r.detail ? ` (${String(r.detail)})` : ''}`,
   )
+  // The secrets (#604): which went, with the device's switch on; which are to be given by hand, off.
+  const secrets = isRecord(r.secrets) ? r.secrets : null
+  const names = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : [])
+  const toGive = (Array.isArray(r.lines) ? r.lines.filter(isRecord) : [])
+    .filter(e => e.verdict === 'needs-secret' && e.why !== 'reference')
+    .map(e => String(e.name))
+  if (secrets) {
+    const given = [...names(secrets.given), ...names(secrets.files)]
+    if (given.length) lines.push(`secrets given: ${given.join(', ')}`)
+    if (secrets.error) lines.push(`secrets not given: the node said ${String(secrets.error)}`)
+    const refused = names(secrets.refused)
+    if (refused.length) lines.push(`secrets the node did not take: ${refused.join(', ')}`)
+    for (const k of Array.isArray(secrets.kept) ? secrets.kept.filter(isRecord) : [])
+      lines.push(
+        k.why === 'not-owned' || k.why === 'changed'
+          ? `secret file left as it is on the node: ${String(k.path)} (${String(k.why)})`
+          : `secret file not written on the node: ${String(k.path)} (${String(k.why)})`,
+      )
+  } else if (toGive.length) lines.push(`secrets to give by hand (this device is not given them): ${toGive.join(', ')}`)
+  const went = new Set(secrets && !secrets.error ? [...names(secrets.given), ...names(secrets.files)] : [])
   for (const e of Array.isArray(r.lines) ? r.lines.filter(isRecord) : []) {
     // Of what went as it is, only what the owner should know: a program the node may lack, an answer given.
     if (e.verdict === 'sent' && e.why !== 'program-unchecked' && e.why !== 'acknowledged') continue
+    // A secret the node was given is said above, not as one to give.
+    if (e.verdict === 'needs-secret' && went.has(String(e.name))) continue
     // A reference is not always a secret: it may be the session's own environment.
     if (e.why === 'reference') {
       lines.push(

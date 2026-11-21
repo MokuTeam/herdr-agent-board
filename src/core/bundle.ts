@@ -609,7 +609,7 @@ export interface McpPart {
  * computer; any other is bound to this computer. The device's own entry
  * (`nodes.devices.<id>.mcp`: false, or `{ command, args, env }`) wins. The input is not changed.
  */
-export function classifyMcp(servers: unknown, ctx: BundleContext): McpPart {
+export function classifyMcp(servers: unknown, ctx: BundleContext, values?: Map<string, string>): McpPart {
   const mcp: Record<string, unknown> = {}
   const report: ReportEntry[] = []
   for (const [name, raw] of entriesOf(servers)) {
@@ -627,9 +627,9 @@ export function classifyMcp(servers: unknown, ctx: BundleContext): McpPart {
       const server: Record<string, unknown> = {
         type: 'stdio',
         command: own.command,
-        args: secretArgs(name, Array.isArray(own.args) ? own.args.map(String) : [], secrets),
+        args: secretArgs(name, Array.isArray(own.args) ? own.args.map(String) : [], secrets, values),
       }
-      if (isRecord(own.env)) server.env = secretEnv(name, own.env, secrets)
+      if (isRecord(own.env)) server.env = secretEnv(name, own.env, secrets, values)
       done(name, server, { verdict: 'translated', why: 'override' }, secrets, mcp, report)
       continue
     }
@@ -638,8 +638,8 @@ export function classifyMcp(servers: unknown, ctx: BundleContext): McpPart {
       continue
     }
     const type = typeof raw.type === 'string' ? raw.type.toLowerCase() : typeof raw.url === 'string' ? 'http' : 'stdio'
-    if (type === 'http' || type === 'sse') remoteServer(name, raw, mcp, report)
-    else if (type === 'stdio') stdioServer(name, raw, ctx, mcp, report)
+    if (type === 'http' || type === 'sse') remoteServer(name, raw, mcp, report, values)
+    else if (type === 'stdio') stdioServer(name, raw, ctx, mcp, report, values)
     else report.push({ kind: 'mcp', name, verdict: 'not-sent', why: 'invalid', detail: type })
   }
   return { mcp, report: accepted(report, ctx.accept) }
@@ -654,12 +654,18 @@ const decoded = (s: string): string => {
 }
 
 /** An env with each value whose name looks like a secret's as a reference to \${MCP_<SERVER>_<NAME>}. */
-function secretEnv(server: string, env: Record<string, unknown>, secrets: string[]): Record<string, unknown> {
+function secretEnv(
+  server: string,
+  env: Record<string, unknown>,
+  secrets: string[],
+  values?: Map<string, string>,
+): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(env)) {
     if (SECRET_NAME.test(key) && holdsValue(value)) {
       const v = secretVar(server, key)
       secrets.push(v)
+      values?.set(v, value)
       put(out, key, `\${${v}}`)
     } else put(out, key, clone(value))
   }
@@ -667,11 +673,17 @@ function secretEnv(server: string, env: Record<string, unknown>, secrets: string
 }
 
 /** Arguments with each value that looks like a secret (secretsIn) as a reference. */
-function secretArgs(server: string, args: readonly string[], secrets: string[]): string[] {
+function secretArgs(
+  server: string,
+  args: readonly string[],
+  secrets: string[],
+  values?: Map<string, string>,
+): string[] {
   const out = [...args]
   for (const s of secretsIn(args)) {
     const v = secretVar(server, s.name)
     secrets.push(v)
+    values?.set(v, s.value)
     const at = s.next ? s.at + 1 : s.at
     out[at] = (out[at] ?? '').split(s.value).join(`\${${v}}`)
   }
@@ -682,14 +694,14 @@ function secretArgs(server: string, args: readonly string[], secrets: string[]):
 const HERDR_VAR = /^HERDR_/
 
 /**
- * The names a server refers to as \${NAME} or \${NAME:-default}, anywhere in it, but herdr's own
- * (HERDR_PANE_ID and the rest), which every pane on the node has.
+ * The names a server refers to as \${NAME}, anywhere in it, but herdr's own (HERDR_PANE_ID and the
+ * rest), which every pane on the node has. One referred to only with a default (\${NAME:-x}) is
+ * the session's own environment, which may as well not have it: nothing to give, so not one of these.
  */
 function refsIn(server: unknown): string[] {
-  const names = [...JSON.stringify(server ?? null).matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}/g)].map(
-    m => m[1] ?? '',
-  )
-  return [...new Set(names)].filter(n => !HERDR_VAR.test(n))
+  const text = JSON.stringify(server ?? null)
+  const bare = [...text.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map(m => m[1] ?? '')
+  return [...new Set(bare)].filter(n => !HERDR_VAR.test(n))
 }
 
 /**
@@ -718,6 +730,7 @@ function remoteServer(
   raw: Record<string, unknown>,
   mcp: Record<string, unknown>,
   report: ReportEntry[],
+  values?: Map<string, string>,
 ): void {
   const url = typeof raw.url === 'string' ? raw.url : ''
   if (!url) {
@@ -739,6 +752,7 @@ function remoteServer(
         if (part === undefined || !holdsValue(part)) return part
         const v = secretVar(name, i ? 'password' : 'user')
         secrets.push(v)
+        values?.set(v, part)
         return `\${${v}}`
       })
       return parts[1] === undefined ? `${scheme}${parts[0]}@` : `${scheme}${parts[0]}:${parts[1]}@`
@@ -747,6 +761,7 @@ function remoteServer(
       if (!SECRET_NAME.test(decoded(key)) || !holdsValue(value)) return whole
       const v = secretVar(name, key)
       secrets.push(v)
+      values?.set(v, value)
       return `${sep}${key}=\${${v}}`
     })
   if (isRecord(raw.headers)) {
@@ -755,6 +770,7 @@ function remoteServer(
       if (holdsValue(value)) {
         const v = secretVar(name, header)
         secrets.push(v)
+        values?.set(v, value)
         put(headers, header, `\${${v}}`)
       } else put(headers, header, clone(value))
     }
@@ -776,6 +792,7 @@ function stdioServer(
   ctx: BundleContext,
   mcp: Record<string, unknown>,
   report: ReportEntry[],
+  values?: Map<string, string>,
 ): void {
   let command = typeof raw.command === 'string' ? raw.command.trim() : ''
   let args = Array.isArray(raw.args) ? raw.args.map(String) : []
@@ -810,8 +827,8 @@ function stdioServer(
     return
   }
   const secrets: string[] = []
-  const server: Record<string, unknown> = { ...clone(raw), command, args: secretArgs(name, args, secrets) }
-  if (isRecord(raw.env)) server.env = secretEnv(name, raw.env, secrets)
+  const server: Record<string, unknown> = { ...clone(raw), command, args: secretArgs(name, args, secrets, values) }
+  if (isRecord(raw.env)) server.env = secretEnv(name, raw.env, secrets, values)
   const why: ReportWhy = unwrapped ? 'unwrapped' : secrets.length ? 'secret-value' : 'launcher'
   done(name, server, { verdict: unwrapped || secrets.length ? 'translated' : 'sent', why }, secrets, mcp, report)
 }
@@ -915,10 +932,7 @@ export function buildManifest(
   // A file a script names beside it stays here, said: one with a secret always, one without only
   // when nothing else sends it (it may be the script's own state). One in a folder that travels
   // whole (a skill's) goes with it as before, and one a hook's command names is that hook's file.
-  const walkedPaths = new Set(files.map(f => f.path))
-  const held = (parts.beside ?? [])
-    .filter(b => !settings.scripts.includes(b.path) && (b.secret || !walkedPaths.has(b.path)))
-    .sort(byPath)
+  const held = heldBeside(parts.beside, settings.scripts, files)
   const heldPaths = new Set(held.map(b => b.path))
   const sentFiles = files.filter(f => !heldPaths.has(f.path))
   for (const b of held)
@@ -944,6 +958,57 @@ export function buildManifest(
     ...(acks.length > 0 && { acks }),
     report: [...accepted(report, ctx.accept), ...settings.report, ...mcp.report, ...slice.report],
   }
+}
+
+/**
+ * The files beside a script the bundle holds back (#603): one with a secret always, one without
+ * only when nothing else sends it. One a hook's command names (`scripts`) is that hook's file.
+ */
+function heldBeside(
+  beside: ProfileParts['beside'],
+  scripts: readonly string[],
+  files: readonly { path: string }[],
+): { path: string; script: string; secret: boolean }[] {
+  const walked = new Set(files.map(f => f.path))
+  return (beside ?? []).filter(b => !scripts.includes(b.path) && (b.secret || !walked.has(b.path))).sort(byPath)
+}
+
+/** What the bundle held back as secrets, to give a node whose owner lets it have them (#604). Values: in memory only. */
+export interface BundleSecrets {
+  /**
+   * By the name the bundle refers to them as: each value an MCP server's ${MCP_<SERVER>_<NAME>}
+   * stands for, and each settings.json `env` value held back for its name.
+   */
+  env: Record<string, string>
+  /** The secret files beside a sent script, by path in the profile folder: the caller reads their text when it sends them. */
+  files: string[]
+}
+
+/**
+ * The secrets of one profile's bundle for one node (#604): the same translation as buildManifest,
+ * the values it took out instead of the references it left. Nothing here is logged or kept: the
+ * caller sends it and lets it go.
+ */
+export function bundleSecrets(parts: ProfileParts, ctx: BundleContext): BundleSecrets {
+  const env: Record<string, string> = Object.create(null)
+  // The files buildManifest keeps, so both see the same scripts.
+  const files = parts.files.filter(f => bundlePath(f.path) !== null)
+  const settings = classifySettings(parts.settings, ctx, new Set(files.map(f => f.path)))
+  const raw = isRecord(parts.settings) ? parts.settings.env : undefined
+  for (const [name, v] of entriesOf(raw))
+    if (
+      SECRET_NAME.test(name) &&
+      (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') &&
+      v !== ''
+    )
+      env[name] = String(v)
+  const values = new Map<string, string>()
+  classifyMcp(parts.mcpServers, ctx, values)
+  for (const [name, v] of values) env[name] = v
+  const secretFiles = heldBeside(parts.beside, settings.scripts, files)
+    .filter(b => b.secret)
+    .map(b => b.path)
+  return { env: { ...env }, files: secretFiles }
 }
 
 const byPath = (a: { path: string }, b: { path: string }): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)

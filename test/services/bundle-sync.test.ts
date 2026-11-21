@@ -15,7 +15,7 @@ import type { Link } from '../../src/services/nodes/link.ts'
 function setup(
   state: 'online' | 'offline',
   answer?: (path: string, init?: RequestInit) => Response | Promise<Response>,
-  more: { skills?: number; requestMs?: number; programs?: string[] } = {},
+  more: { skills?: number; requestMs?: number; programs?: string[]; device?: Record<string, unknown> } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), 'bundle-sync-'))
   const home = join(root, 'home')
@@ -62,9 +62,14 @@ function setup(
     },
   } as unknown as Link
   const saved: Record<string, unknown>[] = []
+  const logs: string[] = []
+  const audits: Record<string, unknown>[] = []
   let record: Record<string, unknown> | null = null
   const cfg = {
-    nodes: { id: 'laptop', devices: { 'server-1': { link: { kind: 'direct', url: 'http://127.0.0.1:9' } } } },
+    nodes: {
+      id: 'laptop',
+      devices: { 'server-1': { link: { kind: 'direct', url: 'http://127.0.0.1:9' }, ...more.device } },
+    },
   } as unknown as Config
   const profiles: Profile[] = [{ id: 'default', title: 'Default', dir, color: 'gray', hidden: false }]
   const sync = createBundleSync({
@@ -78,7 +83,8 @@ function setup(
         saved.push(v)
       },
     },
-    log: () => {},
+    log: text => logs.push(text),
+    audit: line => audits.push(line),
     home,
     platform: 'linux',
     boardDir: join(root, 'board'),
@@ -86,7 +92,18 @@ function setup(
     clock,
     ...(more.requestMs !== undefined && { requestMs: more.requestMs }),
   })
-  return { sync, timers, asked, saved, dir, home, advance: (ms: number) => (now += ms) }
+  return {
+    sync,
+    timers,
+    asked,
+    saved,
+    dir,
+    home,
+    advance: (ms: number) => (now += ms),
+    record: () => record,
+    logs,
+    audits,
+  }
 }
 
 describe('bundle sync', () => {
@@ -320,5 +337,163 @@ describe('bundle sync', () => {
       'codeModeCaveatsAcceptedV1',
       'save',
     ])
+  })
+
+  describe('the secrets with the sync (#604)', () => {
+    const CANARY = 'canary-sync-secrets-77c4'
+    /** A profile with an MCP header, a secret-named env and a hook whose script reads a secret config beside it. */
+    const withSecrets = (s: ReturnType<typeof setup>): void => {
+      mkdirSync(join(s.dir, 'mem'), { recursive: true })
+      writeFileSync(join(s.dir, 'mem', 'save.mjs'), "const c = new URL('./config.json', import.meta.url)\n")
+      writeFileSync(join(s.dir, 'mem', 'config.json'), JSON.stringify({ token: CANARY }))
+      writeFileSync(
+        join(s.dir, 'settings.json'),
+        JSON.stringify({
+          env: { API_TOKEN: `${CANARY}-env` },
+          hooks: {
+            Stop: [{ hooks: [{ type: 'command', command: `bun ${s.dir.replaceAll('\\', '/')}/mem/save.mjs` }] }],
+          },
+        }),
+      )
+      writeFileSync(
+        join(s.home, '.claude.json'),
+        JSON.stringify({
+          mcpServers: {
+            mem: { type: 'http', url: 'https://m.example/mcp', headers: { Authorization: `Bearer ${CANARY}` } },
+          },
+        }),
+      )
+    }
+    /** A node that takes the secrets and says their names. */
+    const node = (bodies: string[]) => (path: string, init?: RequestInit) => {
+      if (!path.endsWith('/secrets')) return taking(path)
+      bodies.push(String(init?.body ?? ''))
+      return Response.json({
+        ok: true,
+        env: ['API_TOKEN', 'MCP_MEM_AUTHORIZATION'],
+        written: ['API_TOKEN', 'MCP_MEM_AUTHORIZATION'],
+        removed: [],
+        files: ['mem/config.json'],
+        filesWritten: ['mem/config.json'],
+        filesRemoved: [],
+        kept: [],
+        refused: [],
+      })
+    }
+
+    test('on (absent): the values in a request of their own, first; the report and the audit with names only', async () => {
+      const bodies: string[] = []
+      const s = setup('online', node(bodies))
+      withSecrets(s)
+      const r = await s.sync.syncIfBehind('server-1')
+      expect(r.ok).toBe(true)
+      expect(s.asked[0]).toBe('/api/node/bundle/default/secrets')
+      expect(JSON.parse(bodies[0] ?? '{}')).toEqual({
+        env: { API_TOKEN: `${CANARY}-env`, MCP_MEM_AUTHORIZATION: `Bearer ${CANARY}` },
+        files: [{ path: 'mem/config.json', text: JSON.stringify({ token: CANARY }) }],
+        keep: [],
+      })
+      expect(r.secrets).toEqual({
+        given: ['API_TOKEN', 'MCP_MEM_AUTHORIZATION'],
+        files: ['mem/config.json'],
+        kept: [],
+        refused: [],
+      })
+      expect(s.audits).toEqual([
+        {
+          op: 'bundle-sent',
+          device: 'server-1',
+          profile: 'default',
+          names: ['API_TOKEN', 'MCP_MEM_AUTHORIZATION'],
+          removed: [],
+          files: ['mem/config.json'],
+          filesRemoved: [],
+        },
+      ])
+      expect(s.sync.secrets('server-1')).toEqual({
+        given: ['API_TOKEN', 'MCP_MEM_AUTHORIZATION', 'mem/config.json'],
+        toGive: [],
+      })
+      // Not in the manifest, a blob, the record, the report, a log line.
+      const others = s.asked.filter(p => !p.endsWith('/secrets'))
+      expect(others.some(p => p.includes(CANARY))).toBe(false)
+      for (const said of [JSON.stringify(s.record()), JSON.stringify(r), s.logs.join('\n'), JSON.stringify(s.audits)])
+        expect(said).not.toContain(CANARY)
+    })
+
+    test('a value that changed with no file changing still goes: each sync sends them', async () => {
+      const bodies: string[] = []
+      const s = setup('online', node(bodies))
+      withSecrets(s)
+      await s.sync.syncIfBehind('server-1')
+      await s.sync.syncIfBehind('server-1')
+      expect(bodies.length).toBe(2)
+    })
+
+    test('off: no request, no secrets in the report, the names to give by hand, as main', async () => {
+      const bodies: string[] = []
+      const s = setup('online', node(bodies), { device: { giveSecrets: false } })
+      withSecrets(s)
+      const r = await s.sync.syncIfBehind('server-1')
+      expect(r.ok).toBe(true)
+      expect(bodies).toEqual([])
+      expect(s.asked.some(p => p.endsWith('/secrets'))).toBe(false)
+      expect('secrets' in r).toBe(false)
+      expect(s.sync.secrets('server-1')).toEqual({
+        given: [],
+        toGive: ['API_TOKEN', 'MCP_MEM_AUTHORIZATION', 'mem/config.json'],
+      })
+      expect(s.audits).toEqual([])
+    })
+
+    test('nothing to give and nothing given before: no request', async () => {
+      const s = setup('online', taking)
+      const r = await s.sync.syncIfBehind('server-1')
+      expect(r.ok).toBe(true)
+      expect(s.asked.some(p => p.endsWith('/secrets'))).toBe(false)
+    })
+
+    test('a node of an older board (no such route): the sync goes on, the report says so', async () => {
+      const s = setup('online', path =>
+        path.endsWith('/secrets') ? Response.json({ error: 'not found' }, { status: 404 }) : taking(path),
+      )
+      withSecrets(s)
+      const r = await s.sync.syncIfBehind('server-1')
+      expect([r.ok, r.secrets?.error]).toEqual([true, 'not found'])
+      expect(s.sync.secrets('server-1').toGive).toEqual(['API_TOKEN', 'MCP_MEM_AUTHORIZATION', 'mem/config.json'])
+    })
+
+    test('a failed sync does not forget what the node holds; off afterwards, the row says given, not to give', async () => {
+      const bodies: string[] = []
+      let fail = false
+      const answer = node(bodies)
+      const s = setup('online', (path, init) =>
+        fail && path.endsWith('/secrets') ? Promise.reject(new Error('cut')) : answer(path, init),
+      )
+      withSecrets(s)
+      await s.sync.syncIfBehind('server-1')
+      fail = true
+      const broken = await s.sync.syncIfBehind('server-1')
+      expect(broken.ok).toBe(false)
+      expect(s.sync.secrets('server-1').given).toEqual(['API_TOKEN', 'MCP_MEM_AUTHORIZATION', 'mem/config.json'])
+      // Nothing to give any more: the node still holds them, so it is told to take them out.
+      fail = false
+      writeFileSync(join(s.dir, 'settings.json'), '{}')
+      writeFileSync(join(s.home, '.claude.json'), '{}')
+      writeFileSync(join(s.dir, 'mem', 'config.json'), '{}')
+      await s.sync.syncIfBehind('server-1')
+      expect(JSON.parse(bodies.at(-1) ?? '{}')).toEqual({ env: {}, files: [], keep: [] })
+    })
+
+    test('a secret file this board cannot read is named in keep, so the node does not take its copy out', async () => {
+      const bodies: string[] = []
+      const s = setup('online', node(bodies))
+      withSecrets(s)
+      writeFileSync(join(s.dir, 'mem', 'config.json'), JSON.stringify({ token: 'x'.repeat(1024 * 1024 + 1) }))
+      const r = await s.sync.syncIfBehind('server-1')
+      expect(JSON.parse(bodies[0] ?? '{}').keep).toEqual(['mem/config.json'])
+      expect(JSON.parse(bodies[0] ?? '{}').files).toEqual([])
+      expect(r.secrets?.refused).toContain('mem/config.json')
+    })
   })
 })

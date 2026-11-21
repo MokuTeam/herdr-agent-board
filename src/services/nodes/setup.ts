@@ -903,9 +903,22 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
         { key: 'node.setup.said.bundleFailed', params: { why: report.why ?? '', detail: report.detail ?? '' } },
         { key: 'node.setup.next.bundle' },
       )
+    // Which secrets went with it (#604), or which are to be given by hand: names only.
+    const secretsGiven =
+      report.secrets && !report.secrets.error ? [...report.secrets.given, ...report.secrets.files] : []
+    const toGive = report.lines
+      .filter(l => l.verdict === 'needs-secret' && l.why !== 'reference' && !secretsGiven.includes(l.name))
+      .map(l => l.name)
+    const files = { applied: String(report.applied.length), kept: String(report.kept.length) }
     step('bundle', 'ok', {
-      key: 'node.setup.said.bundle',
-      params: { applied: String(report.applied.length), kept: String(report.kept.length) },
+      key: secretsGiven.length
+        ? toGive.length
+          ? 'node.setup.said.bundleBoth'
+          : 'node.setup.said.bundleGiven'
+        : toGive.length
+          ? 'node.setup.said.bundleToGive'
+          : 'node.setup.said.bundle',
+      params: { ...files, given: secretsGiven.join(', '), toGive: toGive.join(', ') },
     })
     // Claude's login there: the status says which profile is logged in
     const login = loginOf(p.id, status)

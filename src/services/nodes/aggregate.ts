@@ -95,6 +95,7 @@ function boardDevice(
     payloadAt: at ?? view.payloadAt,
     paused: device?.paused ?? false,
     drain: device?.drain ?? false,
+    ...(device?.giveSecrets === false && { giveSecrets: false as const }),
     maxSessions: device?.maxSessions ?? null,
     minFreeMemMb: device?.minFreeMemMb ?? null,
     maxLoad: device?.maxLoad ?? null,

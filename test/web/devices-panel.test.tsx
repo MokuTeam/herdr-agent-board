@@ -121,6 +121,20 @@ const rowsOf = (nodes: Node[]) => findAll(nodes, el => hasClass(el, 'devices-row
 const full = () => payload({ devices: DEVICES, categories: CATEGORIES })
 
 describe('Settings, Devices (#510)', () => {
+  test("a device's secrets (#604): those its syncs gave and those to give by hand, under its version", () => {
+    const nodes = draw(full(), 1600, {
+      ...SETTINGS,
+      secrets: {
+        'server-1': { given: ['MCP_MEMPALACE_AUTHORIZATION', 'mempalace-memory/config.json'], toGive: [] },
+        'server-2': { given: [], toGive: ['API_TOKEN'] },
+      },
+    })
+    const [one, two, three] = rowsOf(nodes).map(r => text([r]))
+    expect(one).toContain('Secrets given: MCP_MEMPALACE_AUTHORIZATION, mempalace-memory/config.json')
+    expect(two).toContain('Secrets to give by hand: API_TOKEN')
+    expect(three).not.toContain('Secrets')
+  })
+
   for (const [name, w] of [
     ['desktop', 1600],
     ['phone', 390],
@@ -146,7 +160,7 @@ describe('Settings, Devices (#510)', () => {
       expect(one).toContain('Next start')
       expect(here).toContain('This computer')
       expect(here).toContain('3 of 20 sessions')
-      // Pause on every device but this computer; Drain on all four.
+      // Pause and Give it the secrets on every device but this computer; Drain on all four.
       const switches = (row: (typeof rows)[number]) =>
         findAll([row], el => el.attrs.has('data-switch')).map(el => [
           el.attrs.get('data-switch'),
@@ -156,14 +170,17 @@ describe('Settings, Devices (#510)', () => {
         [
           ['paused', 'false'],
           ['drain', 'false'],
+          ['giveSecrets', 'true'],
         ],
         [
           ['paused', 'true'],
           ['drain', 'false'],
+          ['giveSecrets', 'true'],
         ],
         [
           ['paused', 'false'],
           ['drain', 'false'],
+          ['giveSecrets', 'true'],
         ],
         [['drain', 'false']],
       ])

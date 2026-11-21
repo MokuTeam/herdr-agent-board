@@ -439,6 +439,40 @@ describe('Look', () => {
 })
 
 describe('Apply and the master’s half', () => {
+  for (const [name, secrets, key, params] of [
+    [
+      'given',
+      { given: ['MCP_MEM_AUTHORIZATION'], files: ['mem/config.json'], kept: [], refused: [] },
+      'node.setup.said.bundleGiven',
+      { given: 'MCP_MEM_AUTHORIZATION, mem/config.json', toGive: '' },
+    ],
+    ['off', undefined, 'node.setup.said.bundleToGive', { given: '', toGive: 'MCP_MEM_AUTHORIZATION, mem/config.json' }],
+  ] as const)
+    test(`the first sync says which secrets went or are to be given by hand (#604): ${name}`, async () => {
+      const lines: SyncReport['lines'] = [
+        { kind: 'mcp', name: 'MCP_MEM_AUTHORIZATION', verdict: 'needs-secret', why: 'secret-value', detail: 'mem' },
+        { kind: 'file', name: 'mem/config.json', verdict: 'needs-secret', why: 'secret-file', detail: 'mem/save.mjs' },
+        { kind: 'mcp', name: 'TEAM_ID', verdict: 'needs-secret', why: 'reference', detail: 'docs' },
+      ]
+      const b = useSetup({
+        admin: { run: ['@@result applied'] },
+        bundle: () => ({
+          ...report(true),
+          lines,
+          ...(secrets && {
+            secrets: { given: [...secrets.given], files: [...secrets.files], kept: [], refused: [] },
+          }),
+        }),
+      })
+      await b.look()
+      await b.setup.apply({ plan: b.setup.view().plan?.id })
+      const v = await b.until(['done', 'failed'])
+      expect(v.master.find(s => s.id === 'bundle')?.said).toEqual({
+        key,
+        params: { applied: '2', kept: '0', ...params },
+      })
+    })
+
   test(
     'a fresh server on a board without nodes: the server is made a node, nodes is made here, the link, the thresholds, the profile, and the login is what is left; a second Apply changes nothing; Undo takes it all away',
     async () => {

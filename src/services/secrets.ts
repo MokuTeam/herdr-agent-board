@@ -130,6 +130,14 @@ export function auditForwarded(
   })
 }
 
+/**
+ * The line for secrets a profile's bundle carried (#604, docs/design/nodes 10): on a master which
+ * names it sent to which device, on a node which it wrote and took out. Names and paths only.
+ */
+export function auditBundle(line: Record<string, unknown>, now = Date.now()): void {
+  auditLine({ at: new Date(now).toISOString(), ...line, who: 'board' })
+}
+
 function auditLine(line: Record<string, unknown>): void {
   try {
     const file = auditFile()

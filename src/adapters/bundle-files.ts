@@ -281,7 +281,8 @@ function besideScripts(
       if (out.some(b => b.path === path)) continue
       const full = join(dir, ...path.split('/'))
       try {
-        const st = statSync(full)
+        // A link is not followed: its target may be anything (credentials), and a secret file goes to a node.
+        const st = lstatSync(full)
         if (!st.isFile() || st.size > MAX_FILE_BYTES) continue
         out.push({ path, script, secret: secretKeysIn(readFileSync(full, 'utf8')).length > 0 })
       } catch {}
@@ -499,6 +500,11 @@ export function editJson(
     }
   }
   return 'busy'
+}
+
+/** A folder made with the folders above it, when it is not there. */
+export function ensureFolder(dir: string): void {
+  mkdirSync(dir, { recursive: true })
 }
 
 /** Removes `file` and then each folder above it that it left empty, up to `dir` (kept). */

@@ -3,8 +3,8 @@
 // node's door; the node applies it: what it owns replaced or removed, a file of its own kept and
 // said, a backup folder per commit, the board's hooks with the node's Bun and folder, only changed
 // blobs on a second sync, a path that leaves the folder refused, nothing written when settings.json
-// does not parse. A secret of the master's never leaves it. Without `nodes` and `node`: no route,
-// no file.
+// does not parse. With the device's secrets off (#604) a secret of the master's never leaves it.
+// Without `nodes` and `node`: no route, no file.
 import { describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -97,6 +97,8 @@ describe('the bundle from a master to its node', () => {
           }),
         )
       },
+      // Secrets off (#604): the bundle as it was before the switch.
+      deviceCfg: () => ({ giveSecrets: false }),
       nodeSetup(_id, box) {
         const dir = profileDir(box)
         put(dir, 'settings.json', JSON.stringify({ theme: 'dark' }))
@@ -169,7 +171,9 @@ describe('the bundle from a master to its node', () => {
         port: Number(new URL(pair.master.url).port),
         nodes: {
           id: 'laptop',
-          devices: { 'server-1': { link: { kind: 'direct', url: `http://127.0.0.1:${node.proxy.port}` } } },
+          devices: {
+            'server-1': { link: { kind: 'direct', url: `http://127.0.0.1:${node.proxy.port}` }, giveSecrets: false },
+          },
         },
       }),
     )
@@ -177,6 +181,10 @@ describe('the bundle from a master to its node', () => {
     const out = cli.stdout.trim().split('\n')
     expect(out[0]).toBe('ok · server-1 default is current: bundle 2, 0 file(s) sent, 0 changed')
     expect(out).toContain('env MY_API_TOKEN: needs-secret (secret-name)')
+    expect(out).toContain(
+      'secrets to give by hand (this device is not given them): MY_API_TOKEN, MCP_DOCS_AUTHORIZATION',
+    )
+    expect(node.proxy.requests.some(r => r.endsWith('/secrets'))).toBe(false)
     expect(out).toContain('kept on the node: skills/mine/SKILL.md (not-owned)')
     expect(out.some(l => l.includes(': sent ('))).toBe(false)
 
@@ -239,6 +247,13 @@ describe('without nodes and node', () => {
     const bundle = await fetch(`${url}/api/node/bundle/default`)
     const unknownGet = await fetch(`${url}/api/no-such-route`)
     expect(bundle.status).toBe(unknownGet.status)
+    // Nor the secrets' route (#604).
+    const secrets = await fetch(`${url}/api/node/bundle/default/secrets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: '{}',
+    })
+    expect(secrets.status).toBe(unknown.status)
     const state = readdirSync(stateFolder(box))
     expect(state.filter(n => n === 'node' || n === 'nodes')).toEqual([])
   })

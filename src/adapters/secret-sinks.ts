@@ -47,6 +47,8 @@ export interface WriteInput {
   values: Record<string, string>
   /** Bitwarden's session, from the owner's submit. */
   bwSession?: string
+  /** A file sink in `env` format: these variables taken out of the file (a node's bundle, #604). */
+  remove?: readonly string[]
 }
 
 export type WriteResult =
@@ -97,7 +99,7 @@ export function envValue(v: string): string | null {
 const ENV_LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/
 
 /** The file's text with the template's variables set: each in place of its first line, its other lines gone, new ones at the end. */
-function envContent(existing: string | null, set: Record<string, string>): string {
+function envContent(existing: string | null, set: Record<string, string>, remove?: readonly string[]): string {
   const eol = existing?.includes('\r\n') ? '\r\n' : '\n'
   const lines = existing === null ? [] : existing.split(/\r?\n/)
   if (lines.at(-1) === '') lines.pop()
@@ -105,6 +107,7 @@ function envContent(existing: string | null, set: Record<string, string>): strin
   const out: string[] = []
   for (const line of lines) {
     const key = ENV_LINE.exec(line)?.[1]
+    if (key !== undefined && remove?.includes(key) && !Object.hasOwn(set, key)) continue
     if (key === undefined || !Object.hasOwn(set, key)) out.push(line)
     else if (!done.has(key)) {
       out.push(`${key}=${set[key]}`)
@@ -165,7 +168,7 @@ function contentOf(sink: FileSink, input: WriteInput, path: string, existing: st
         if (quoted === null) return refuse('secret.err.valueQuotes', { name: key })
         set[key] = quoted
       }
-      return envContent(existing, set)
+      return envContent(existing, set, input.remove)
     }
     default:
       if (once.length && existing !== null) return refuse('secret.err.onceThere', { what: path })

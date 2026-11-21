@@ -216,6 +216,10 @@ export interface DeviceRow {
   bundles: string[]
   paused: boolean
   drain: boolean
+  /** A sync gives it the secrets its profile needs (#604); this computer's row has no such switch. */
+  giveSecrets: boolean
+  /** The secrets its last syncs gave, and those to give by hand, in words (#604). */
+  secrets: string[]
   values: Record<Threshold, number | null>
   /**
    * Claude's login there (#509): the node's profiles that are not logged in, and the command that
@@ -319,7 +323,7 @@ export function deviceRows(
   devices: readonly BoardDevice[],
   now: number,
   t: Translator,
-  settings?: Pick<PanelSettings, 'defaults' | 'noToken' | 'hosts'> | null,
+  settings?: Pick<PanelSettings, 'defaults' | 'noToken' | 'hosts' | 'secrets'> | null,
 ): DeviceRow[] {
   return devices.map(d => {
     const s = d.status
@@ -362,10 +366,21 @@ export function deviceRows(
       ),
       paused: d.paused,
       drain: d.drain,
+      giveSecrets: d.giveSecrets !== false,
+      secrets: secretLines(settings?.secrets?.[d.id], t),
       values: { maxSessions: d.maxSessions, minFreeMemMb: d.minFreeMemMb, maxLoad: d.maxLoad },
       login: loginOf(d, settings?.hosts),
     }
   })
+}
+
+/** The secrets of a device's last syncs (#604): those given, and those to give by hand. */
+function secretLines(s: { given: string[]; toGive: string[] } | undefined, t: Translator): string[] {
+  if (!s) return []
+  return [
+    ...(s.given.length ? [t('node.dev.secretsGiven', { names: s.given.join(', ') })] : []),
+    ...(s.toGive.length ? [t('node.dev.secretsToGive', { names: s.toGive.join(', ') })] : []),
+  ]
 }
 
 /** A node's profiles not logged in to Claude, and the command for it; this computer's are its own business. */

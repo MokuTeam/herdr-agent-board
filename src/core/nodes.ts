@@ -46,6 +46,12 @@ export interface DeviceConfig {
   mcp: Record<string, unknown>
   /** Differences the owner has seen and accepts. */
   accept: string[]
+  /**
+   * Whether a sync also gives the node the secrets its profile needs (#604): the values the bundle
+   * replaced by references and the secret files a hook's script reads. `giveSecrets: false` turns
+   * it off; absent, it is on: a node is a machine of the owner's (design 10, Trust). Only here when off.
+   */
+  giveSecrets?: false
 }
 
 /**
@@ -116,6 +122,7 @@ const DEVICE_KEYS = [
   'sinks',
   'mcp',
   'accept',
+  'giveSecrets',
 ]
 const LINK_KEYS: Record<LinkConfig['kind'], string[]> = {
   ssh: ['kind', 'host', 'sshPort', 'user', 'port'],
@@ -321,6 +328,7 @@ function deviceOf(
         else flag(`mcp.${name}`, 'type')
   }
   if (o.sinks !== undefined && !isObject(o.sinks)) flag('sinks', 'type')
+  if (o.giveSecrets !== undefined && typeof o.giveSecrets !== 'boolean') flag('giveSecrets', 'type')
   const device: DeviceConfig = {
     id,
     title,
@@ -336,6 +344,7 @@ function deviceOf(
     sinks: o.sinks ?? {},
     mcp,
     accept: words('accept'),
+    ...(o.giveSecrets === false && { giveSecrets: false as const }),
   }
   return ok ? device : null
 }
@@ -670,7 +679,7 @@ export interface DeviceUpdate {
 // ---------------------------------------------------------------- the panel's edits (#510)
 
 /** The thresholds and switches the Devices panel sets per device (`nodes.devices.<id>`). */
-const DEVICE_SETTINGS = ['paused', 'drain', 'maxSessions', 'minFreeMemMb', 'maxLoad'] as const
+const DEVICE_SETTINGS = ['paused', 'drain', 'giveSecrets', 'maxSessions', 'minFreeMemMb', 'maxLoad'] as const
 type DeviceSetting = (typeof DEVICE_SETTINGS)[number]
 
 /**
@@ -701,6 +710,8 @@ export interface NodesPanelSettings {
   noToken: string[]
   /** Per device linked by ssh: its server, for the command that logs Claude in there (#509). */
   hosts?: Record<string, { host: string; sshPort: number }>
+  /** Per device with any, the secrets its last syncs gave and those still to be given by hand (#604): names only. */
+  secrets?: Record<string, { given: string[]; toGive: string[] }>
 }
 
 /**
@@ -736,13 +747,18 @@ export function nodesEditOf(body: Record<string, unknown>): NodesEdit | { error:
   for (const key of DEVICE_SETTINGS) {
     if (!Object.hasOwn(body, key)) continue
     const v = body[key]
-    const fits = key === 'paused' || key === 'drain' ? typeof v === 'boolean' : v === null || typeof v === 'number'
+    const fits =
+      key === 'paused' || key === 'drain' || key === 'giveSecrets'
+        ? typeof v === 'boolean'
+        : v === null || typeof v === 'number'
     if (!fits) return { error: key }
     values[key] = v as boolean | number | null
   }
   if (Object.keys(values).length === 0) return { error: 'values' }
   // This computer is never paused: a start by hand runs here when every device is full (8.1 step 5).
   if (body.id === LOCAL && 'paused' in values) return { error: 'paused' }
+  // Nor given secrets: they are this computer's own.
+  if (body.id === LOCAL && 'giveSecrets' in values) return { error: 'giveSecrets' }
   return { op: 'set', id: body.id, values }
 }
 
@@ -777,7 +793,10 @@ export function applyNodesEdit(
     }
     const entry = devices[edit.id]
     if (!isObject(entry)) return { error: 'id' }
-    for (const [key, v] of Object.entries(edit.values)) entry[key] = v
+    // Secrets on is the default: written as the key gone, as an owner who never touched it has it.
+    for (const [key, v] of Object.entries(edit.values))
+      if (key === 'giveSecrets' && v === true) delete entry[key]
+      else entry[key] = v
   }
   const was = nodesConfig(nodes, hostName)
   // The panel lists the usable devices (nodesConfig's order) and sends each of them once: anything

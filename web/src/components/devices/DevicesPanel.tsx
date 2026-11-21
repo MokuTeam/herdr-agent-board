@@ -2,7 +2,8 @@
 // `nodes`: the devices in the order new sessions fill them, this computer among them, dragged to
 // reorder (hooks/useRowReorder.ts, as the lanes are) or moved with the up and down arrows on the
 // handle. Per device its link in words, bars of the sessions awake and the memory free against its
-// thresholds, its version (and on another version than this board's, Update, #590), Pause and Drain, and the three thresholds as fields with the board's own
+// thresholds, its version (and on another version than this board's, Update, #590), the secrets its
+// syncs gave (#604), Pause, Drain and Give it the secrets, and the three thresholds as fields with the board's own
 // figures as placeholders. Then the lanes that may leave this computer and what a start does when
 // every device is full. The devices' live state comes with the payload (`devices`); the section's
 // own keys and the board's figures from GET /api/nodes, asked at each opening and answered again
@@ -267,7 +268,7 @@ function DeviceRowView({ row, defaults, next, disabled, send, onMove, onUpdate }
       ) : (
         <p className="sheet-meta devices-facts">{t('node.dev.noStatus')}</p>
       )}
-      {(row.version || row.bundles.length > 0) && (
+      {(row.version || row.bundles.length > 0 || row.secrets.length > 0) && (
         <p className="sheet-meta devices-facts">
           {row.version && (
             <span>
@@ -282,6 +283,9 @@ function DeviceRowView({ row, defaults, next, disabled, send, onMove, onUpdate }
           )}
           {row.bundles.map(b => (
             <span key={b}>{b}</span>
+          ))}
+          {row.secrets.map(s => (
+            <span key={s}>{s}</span>
           ))}
         </p>
       )}
@@ -329,6 +333,18 @@ function DeviceRowView({ row, defaults, next, disabled, send, onMove, onUpdate }
             onFlip={on => void send({ op: 'set', id: row.id, drain: on })}
           />
         </div>
+        {!row.here && (
+          <div className="devices-switch-row" title={t('node.dev.secretsWhy')}>
+            <span>{t('node.dev.secrets')}</span>
+            <Switch
+              name="giveSecrets"
+              label={t('node.dev.secrets')}
+              on={row.giveSecrets}
+              disabled={disabled}
+              onFlip={on => void send({ op: 'set', id: row.id, giveSecrets: on })}
+            />
+          </div>
+        )}
       </div>
       <div className="devices-limits" title={t('node.dev.thresholdsWhy')}>
         {THRESHOLDS.map(key => (

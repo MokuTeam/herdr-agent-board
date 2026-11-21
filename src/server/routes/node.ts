@@ -13,6 +13,7 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
 import type { Answer, NodeBundle } from '../../services/node/bundle.ts'
 import type { NodeLaunchAnswer } from '../../services/node/launch.ts'
+import type { NodeSecrets } from '../../services/node/secrets.ts'
 import type { NodeUpdate } from '../../services/node/update.ts'
 import type { NodeUplink } from '../../services/node/uplink.ts'
 import { json, type Route } from '../http.ts'
@@ -25,6 +26,8 @@ export interface NodeDoorSources {
   launch(body: unknown): Promise<NodeLaunchAnswer>
   /** `/api/node/bundle/...` (services/node/bundle.ts). */
   bundle: NodeBundle
+  /** `POST /api/node/bundle/<profile>/secrets` (#604, services/node/secrets.ts). */
+  secrets?: NodeSecrets
   /** The uplink's stream, files and results (services/node/uplink.ts). */
   uplink: Pick<NodeUplink, 'stream' | 'file' | 'answer'>
   /** `POST /api/node/sink/<id>`: `{ values, fingerprint }` written to that sink (services/secrets.ts giveSecret). */
@@ -37,6 +40,9 @@ export interface NodeDoorSources {
   /** `PUT /api/node/update/blob` and `POST /api/node/update` (#590, services/node/update.ts). */
   update?: Pick<NodeUpdate, 'blob' | 'update'>
 }
+
+/** The secrets of one profile's bundle, at most this many bytes of JSON. */
+export const MAX_SECRETS_BYTES = 4 * 1024 * 1024
 
 /** A commit's manifest, at most this many bytes of JSON. */
 export const MAX_MANIFEST_BYTES = 8 * 1024 * 1024
@@ -69,6 +75,7 @@ const MAX_RESULT_BYTES = 8 * 1024 * 1024
 
 export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
   const bundle = o.bundle
+  const secrets = o.secrets
   const leave = o.leave
   const update = o.update
   return [
@@ -162,6 +169,7 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
         return json(r.status, r.body)
       },
     },
+    ...(secrets ? [secretsRoute(secrets)] : []),
     ...(leave ? [leaveRoute(leave)] : []),
     ...(update ? updateRoutes(update) : []),
   ]
@@ -190,6 +198,33 @@ function updateRoutes(update: NonNullable<NodeDoorSources['update']>): Route[] {
       },
     },
   ]
+}
+
+/**
+ * `POST /api/node/bundle/<profile>/secrets` (#604): the values come here and go straight to the
+ * node's env file and files. No answer holds one, nothing logs the body, and a parse error's text,
+ * which may quote it, is not passed on.
+ */
+function secretsRoute(secrets: NodeSecrets): Route {
+  return {
+    method: 'POST',
+    path: /^\/api\/node\/bundle\/([^/]+)\/secrets$/,
+    async handle(req, ctx) {
+      const bytes = await bytesUpTo(req, MAX_SECRETS_BYTES)
+      if (!bytes) return json(413, { error: 'too-big' })
+      let body: unknown
+      try {
+        body = JSON.parse(new TextDecoder().decode(bytes))
+      } catch {
+        return json(400, { error: 'secrets' })
+      }
+      try {
+        return answer(await secrets.give(ctx.params[0] ?? '', body))
+      } catch {
+        return json(500, { error: 'server' })
+      }
+    },
+  }
 }
 
 /** `POST /api/node/leave` (#510): `{ sleep?: true }`, answered once the calling master is forgotten. */

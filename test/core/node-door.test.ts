@@ -75,7 +75,7 @@ describe('the door takes what 6.2 lists', () => {
     }
   })
 
-  test("the API version is 1, and the status, a start from the master (#504), the bundle's routes (#506), the uplink (#508), a given secret (#507), leave (#510) and the update (#590) are the door's own", () => {
+  test("the API version is 1, and the status, a start from the master (#504), the bundle's routes (#506) and its secrets (#604), the uplink (#508), a given secret (#507), leave (#510) and the update (#590) are the door's own", () => {
     expect(NODE_API).toBe(1)
     expect(DOOR_ROUTES.filter(r => r.door).map(r => [r.method, String(r.path)])).toEqual([
       ['GET', '/api/node/status'],
@@ -83,6 +83,7 @@ describe('the door takes what 6.2 lists', () => {
       ['GET', String(/^\/api\/node\/bundle\/[^/]+$/)],
       ['PUT', String(/^\/api\/node\/bundle\/[^/]+\/blob\/[0-9a-f]{64}$/)],
       ['POST', String(/^\/api\/node\/bundle\/[^/]+\/commit$/)],
+      ['POST', String(/^\/api\/node\/bundle\/[^/]+\/secrets$/)],
       ['GET', '/api/node/uplink'],
       ['GET', String(/^\/api\/node\/uplink\/[A-Za-z0-9_-]{1,64}\/file\/\d{1,2}$/)],
       ['POST', String(/^\/api\/node\/uplink\/[A-Za-z0-9_-]{1,64}$/)],

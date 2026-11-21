@@ -227,6 +227,11 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.dev.pauseWhy': 'No new session starts here',
     'node.dev.drain': 'Drain',
     'node.dev.drainWhy': 'No new session; the ones here finish',
+    'node.dev.secrets': 'Give it the secrets',
+    'node.dev.secretsWhy':
+      "Each sync also puts the keys of this computer's MCP servers, the secret variables of its settings and the secret files its hooks read on this device. Off: you give each one by hand, and those given before stay there.",
+    'node.dev.secretsGiven': 'Secrets given: {names}',
+    'node.dev.secretsToGive': 'Secrets to give by hand: {names}',
     'node.dev.maxSessions': 'Sessions at most',
     'node.dev.minFreeMemMb': 'Free memory, MB',
     'node.dev.maxLoad': 'Load per core',
@@ -278,6 +283,12 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.setup.said.bundleError': 'The profile was not sent: {error}',
     'node.setup.said.bundleFailed': 'The profile was not sent ({why}) {detail}',
     'node.setup.said.bundle': '{applied} files written there, {kept} of its own left alone.',
+    'node.setup.said.bundleGiven':
+      '{applied} files written there, {kept} of its own left alone. Secrets given: {given}.',
+    'node.setup.said.bundleToGive':
+      '{applied} files written there, {kept} of its own left alone. Secrets to give it by hand: {toGive}.',
+    'node.setup.said.bundleBoth':
+      '{applied} files written there, {kept} of its own left alone. Secrets given: {given}. To give it by hand: {toGive}.',
     'node.setup.said.login': 'Log in to Claude on {device}.',
     'node.setup.said.loggedIn': 'Logged in on {device}.',
     'node.setup.why.token': "The node does not take this board's token yet.",
@@ -575,6 +586,11 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.dev.pauseWhy': 'Новые сессии сюда не идут',
     'node.dev.drain': 'Разгрузить',
     'node.dev.drainWhy': 'Новых сессий нет, текущие доработают',
+    'node.dev.secrets': 'Передавать секреты',
+    'node.dev.secretsWhy':
+      'Каждая синхронизация кладёт на это устройство ключи MCP-серверов этого компьютера, секретные переменные его настроек и секретные файлы, которые читают его хуки. Если выключить, каждый секрет вы даёте вручную, а уже переданные остаются там.',
+    'node.dev.secretsGiven': 'Переданы секреты: {names}',
+    'node.dev.secretsToGive': 'Секреты, которые нужно дать вручную: {names}',
     'node.dev.maxSessions': 'Сессий не больше',
     'node.dev.minFreeMemMb': 'Свободной памяти, МБ',
     'node.dev.maxLoad': 'Нагрузка на ядро',
@@ -629,6 +645,12 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.setup.said.bundleError': 'Профиль не отправлен: {error}',
     'node.setup.said.bundleFailed': 'Профиль не отправлен ({why}) {detail}',
     'node.setup.said.bundle': 'Там записано файлов: {applied}, своих оставлено как есть: {kept}.',
+    'node.setup.said.bundleGiven':
+      'Там записано файлов: {applied}, своих оставлено как есть: {kept}. Переданы секреты: {given}.',
+    'node.setup.said.bundleToGive':
+      'Там записано файлов: {applied}, своих оставлено как есть: {kept}. Секреты, которые нужно дать вручную: {toGive}.',
+    'node.setup.said.bundleBoth':
+      'Там записано файлов: {applied}, своих оставлено как есть: {kept}. Переданы секреты: {given}. Дать вручную: {toGive}.',
     'node.setup.said.login': 'Войдите в Claude на {device}.',
     'node.setup.said.loggedIn': 'Вход на {device} выполнен.',
     'node.setup.why.token': 'Узел пока не принимает токен этой доски.',

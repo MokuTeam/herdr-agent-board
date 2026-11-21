@@ -12,9 +12,10 @@
 // never a value.
 
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
-import { readProfile, type WalkedFile } from '../../adapters/bundle-files.ts'
+import { join } from 'node:path'
+import { type ProfileRead, readProfile, type WalkedFile } from '../../adapters/bundle-files.ts'
 import type { DeviceStore } from '../../adapters/node-store.ts'
 import { ROOT } from '../../adapters/paths.ts'
 import {
@@ -23,6 +24,7 @@ import {
   type BundleVersion,
   buildManifest,
   bundleHash,
+  bundleSecrets,
   nextVersion,
   type ReportEntry,
 } from '../../core/bundle.ts'
@@ -60,7 +62,26 @@ export interface SyncReport {
   backup: string | null
   /** The bundle's report (9.1): what travels, what stays and why. */
   lines: ReportEntry[]
+  /**
+   * The secrets given with it (#604), names and paths only; absent when the device's owner gives
+   * it none (`giveSecrets: false`), and then `lines` says what is to be given by hand.
+   */
+  secrets?: SecretsGiven
   at: number
+}
+
+/** What the node has of the secrets its profile needs after a sync (#604): names and paths, never a value. */
+export interface SecretsGiven {
+  /** The variables in the node's env file for the profile, by name. */
+  given: string[]
+  /** The secret files in the node's profile folder, by path. */
+  files: string[]
+  /** Files there the node keeps as its own, with its reason. */
+  kept: { path: string; why: string }[]
+  /** What the node would not take, or this board could not read, by name or path. */
+  refused: string[]
+  /** The node's refusal of the whole request (an older node: `not found`). */
+  error?: string
 }
 
 export interface BundleSync {
@@ -68,6 +89,11 @@ export interface BundleSync {
   syncIfBehind(device: string, profile?: string): Promise<SyncReport>
   /** The last report of a device's profile, for doctor; null before the first sync. */
   report(device: string, profile: string): SyncReport | null
+  /**
+   * The secrets of a device over every profile's last report (#604), names only: those the node was
+   * given, and those still to be given by hand (the switch off, or the node did not take them).
+   */
+  secrets(device: string): { given: string[]; toGive: string[] }
   close(): void
 }
 
@@ -81,6 +107,8 @@ export interface BundleSyncOptions {
   log(text: string): void
   home?: string
   platform?: string
+  /** One line of the secrets' audit, names only (services/secrets.ts auditBundle). */
+  audit?(line: Record<string, unknown>): void
   /** The board's own folder: a hook running a file in it is the board's (core/bundle.ts isBoardHook). */
   boardDir?: string
   hostName?: string
@@ -93,6 +121,10 @@ export interface BundleSyncOptions {
 export const SYNC_MS = 20_000
 /** A whole sync is done within this long: a first bundle over a slow link is minutes, not hours. */
 export const SYNC_TOTAL_MS = 15 * 60_000
+/** A secret file a hook's script reads, at most this big: it is a config, not a blob. */
+export const MAX_SECRET_FILE_BYTES = 1024 * 1024
+/** The secret files of one request, at most this many bytes in all: the node's door takes 4 MB of JSON. */
+export const MAX_SECRET_FILES_BYTES = 3 * 1024 * 1024
 /** Blobs on their way to the node at once: one at a time is a round trip each, for hundreds of files. */
 export const SEND_AT_ONCE = 6
 /** The hash is computed this often while a device is online (9.2). */
@@ -106,15 +138,33 @@ const said = (v: unknown): string =>
     .replace(/\p{Cc}/gu, ' ')
     .slice(0, 80)
 
-/** One profile's part of bundle.json, read again: the version, and the last report as it was kept. */
-function entryOf(v: unknown): { version: BundleVersion | null; report: SyncReport | null } {
-  if (!isRecord(v)) return { version: null, report: null }
+/** A name or a path the node answered with, kept whole enough to compare with the report's. */
+const named = (v: unknown): string =>
+  String(v)
+    .replace(/\p{Cc}/gu, ' ')
+    .slice(0, 256)
+
+/** The names and paths the node last said it holds from the bundle's secrets (#604). */
+interface Held {
+  env: string[]
+  files: string[]
+}
+
+/**
+ * One profile's part of bundle.json, read again: the version, the last report as it was kept, and
+ * what the node holds of the secrets, kept apart from the report so that a failed sync, whose report
+ * has none, does not forget it.
+ */
+function entryOf(v: unknown): { version: BundleVersion | null; report: SyncReport | null; held: Held | null } {
+  if (!isRecord(v)) return { version: null, report: null, held: null }
+  const words = (x: unknown): string[] => (Array.isArray(x) ? x.filter((w): w is string => typeof w === 'string') : [])
+  const held = isRecord(v.held) ? { env: words(v.held.env), files: words(v.held.files) } : null
   const version =
     Number.isInteger(v.seq) && (v.seq as number) > 0 && typeof v.hash === 'string'
       ? { seq: v.seq as number, hash: v.hash }
       : null
   const report = isRecord(v.report) && typeof v.report.ok === 'boolean' ? (v.report as unknown as SyncReport) : null
-  return { version, report }
+  return { version, report, held }
 }
 
 class Late extends Error {}
@@ -133,10 +183,11 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
     const rec = o.store.bundle(id)
     return isRecord(rec?.profiles) ? rec.profiles : {}
   }
-  function save(id: string, profile: string, part: { version: BundleVersion; report?: SyncReport }): void {
+  function save(id: string, profile: string, part: { version: BundleVersion; report?: SyncReport; held?: Held }): void {
     const all = { ...profiles(id) }
     const was = entryOf(all[profile])
-    all[profile] = { ...part.version, report: part.report ?? was.report }
+    const held = part.held ?? was.held
+    all[profile] = { ...part.version, report: part.report ?? was.report, ...(held && { held }) }
     o.store.setBundle(id, { profiles: all })
   }
 
@@ -147,7 +198,14 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
     to: string,
     programs?: readonly string[],
   ):
-    | { ok: true; manifest: BundleManifest; files: WalkedFile[]; version: BundleVersion }
+    | {
+        ok: true
+        manifest: BundleManifest
+        files: WalkedFile[]
+        version: BundleVersion
+        parts: ProfileRead
+        ctx: BundleContext
+      }
     | { ok: false; detail: string } {
     const read = readProfile(profile.dir, {
       to,
@@ -172,7 +230,7 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
     const was = entryOf(profiles(device.id)[profile.id]).version
     const version = nextVersion(was, bundleHash(manifest))
     if (!was || was.seq !== version.seq || was.hash !== version.hash) save(device.id, profile.id, { version })
-    return { ok: true, manifest, files: read.parts.files, version }
+    return { ok: true, manifest, files: read.parts.files, version, parts: read.parts, ctx }
   }
 
   async function run(deviceId: string, profileId: string): Promise<SyncReport> {
@@ -221,6 +279,67 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
       })
       return { status: res.status, body: isRecord(body) ? body : {} }
     }
+    /**
+     * The values the bundle took out and the secret files its scripts read, from this board's
+     * memory to the node in one request of their own: never in the manifest, a blob, the record, a
+     * log line or the report. What the node answers is names.
+     */
+    const give = async (parts: ProfileRead, ctx: BundleContext, dir: string): Promise<SecretsGiven> => {
+      const s = bundleSecrets(parts, ctx)
+      // Nothing to give and nothing given before: no request (a node of an older board has no such route).
+      const held = entryOf(profiles(deviceId)[profileId]).held
+      if (!Object.keys(s.env).length && !s.files.length && (!held || (!held.env.length && !held.files.length)))
+        return { given: [], files: [], kept: [], refused: [] }
+      const texts: { path: string; text: string }[] = []
+      // Named and not sent this time (unreadable, too big, over the request's room): the node keeps its copy.
+      const unread: string[] = []
+      let room = MAX_SECRET_FILES_BYTES
+      for (const path of s.files) {
+        const full = join(dir, ...path.split('/'))
+        try {
+          const size = statSync(full).size
+          if (size > MAX_SECRET_FILE_BYTES || size > room) throw new Error('too big')
+          texts.push({ path, text: readFileSync(full, 'utf8') })
+          room -= size
+        } catch {
+          unread.push(path)
+        }
+      }
+      const res = await ask(`${at}/secrets`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ env: s.env, files: texts, keep: unread }),
+      })
+      const b = res.body
+      const words = (v: unknown): string[] => (Array.isArray(v) ? v.map(named) : [])
+      if (res.status !== 200 || b.ok !== true)
+        return { given: [], files: [], kept: [], refused: unread, error: said(b.error ?? res.status) }
+      const written = words(b.written)
+      const removed = words(b.removed)
+      const filesWritten = words(b.filesWritten)
+      const filesRemoved = words(b.filesRemoved)
+      if (written.length || removed.length || filesWritten.length || filesRemoved.length)
+        o.audit?.({
+          op: 'bundle-sent',
+          device: deviceId,
+          profile: profileId,
+          names: written,
+          removed,
+          files: filesWritten,
+          filesRemoved,
+        })
+      const given = {
+        given: words(b.env),
+        files: words(b.files),
+        kept: Array.isArray(b.kept)
+          ? b.kept.filter(isRecord).map(k => ({ path: named(k.path), why: said(k.why) }))
+          : [],
+        refused: [...words(b.refused), ...unread],
+      }
+      const version = entryOf(profiles(deviceId)[profileId]).version
+      if (version) save(deviceId, profileId, { version, held: { env: given.given, files: given.files } })
+      return given
+    }
     try {
       const status = link.view().status ?? (await link.status())
       const to = status?.platform
@@ -228,7 +347,16 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
       const built = build(device, profile, to, status?.programs)
       if (!built.ok) return not('build', built.detail)
       const { manifest, files, version } = built
-      const done = { ...base, seq: version.seq, hash: version.hash, lines: manifest.report }
+      // The secrets first (#604), each sync, whether the bundle changed or not: a value may change
+      // with no file of the profile changing, and the node writes only what did.
+      const secrets = device.giveSecrets === false ? undefined : await give(built.parts, built.ctx, profile.dir)
+      const done = {
+        ...base,
+        seq: version.seq,
+        hash: version.hash,
+        lines: manifest.report,
+        ...(secrets && { secrets }),
+      }
       const have = await ask(at)
       if (have.status !== 200) return { ...done, why: 'node', detail: said(have.body.error ?? have.status) }
       if (have.body.hash === version.hash && have.body.seq === version.seq) {
@@ -387,6 +515,23 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
       } catch {
         return null
       }
+    },
+    secrets(device) {
+      const given = new Set<string>()
+      const wanted = new Set<string>()
+      let all: Record<string, unknown> = {}
+      try {
+        all = profiles(device)
+      } catch {}
+      for (const v of Object.values(all)) {
+        const e = entryOf(v)
+        // What the node holds, also after the switch went off: turning it off takes nothing back.
+        const held = new Set([...(e.held?.env ?? []), ...(e.held?.files ?? [])])
+        for (const n of held) given.add(n)
+        for (const l of e.report?.lines ?? [])
+          if (l.verdict === 'needs-secret' && l.why !== 'reference' && !held.has(l.name)) wanted.add(l.name)
+      }
+      return { given: [...given].sort(), toGive: [...wanted].sort() }
     },
     close: () => clock.clearInterval(timer),
   }

@@ -27,6 +27,7 @@ import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../ada
 import { programsOnPath } from '../adapters/process.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import { watchesDir } from '../adapters/schedule-store.ts'
+import { writeSink } from '../adapters/secret-sinks.ts'
 import {
   endLogins,
   endStraySsh,
@@ -83,6 +84,7 @@ import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
 import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
 import { createNodeLaunch } from '../services/node/launch.ts'
+import { createNodeSecrets } from '../services/node/secrets.ts'
 import { createNodeStatus } from '../services/node/status.ts'
 import { createNodeUpdate } from '../services/node/update.ts'
 import { createNodeUplink, type NodeUplink } from '../services/node/uplink.ts'
@@ -100,7 +102,7 @@ import { editProfile, installProfile, installThreadsSkill, wakeHooksInPlace } fr
 import { createRemote } from '../services/remote.ts'
 import { createRemoteAccess } from '../services/remote-access.ts'
 import { startScheduler } from '../services/scheduler.ts'
-import { giveSecret } from '../services/secrets.ts'
+import { auditBundle, giveSecret } from '../services/secrets.ts'
 import { createServerSetup } from '../services/server-setup.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
 import { sleepMany } from '../services/sleep.ts'
@@ -1116,6 +1118,15 @@ export async function startServer({
     const nodeBundle = createNodeBundle(
       nodeBundleDeps({ dir: nodeDir(), profiles: () => shownProfiles(deps.profiles().list), log }),
     )
+    // The secrets a profile needs, when its master's owner lets this node have them (#604): through
+    // the file sink's own writer into the env file and the profile folder.
+    const nodeSecrets = createNodeSecrets({
+      dir: nodeDir(),
+      profiles: () => shownProfiles(deps.profiles().list),
+      write: writeSink,
+      audit: auditBundle,
+      log,
+    })
     const status = createNodeStatus({
       node: () => nodeConfig(cfg.node),
       items: board.items,
@@ -1178,6 +1189,7 @@ export async function startServer({
         status: () => status.answer(),
         launch: body => nodeLaunch.answer(body),
         bundle: nodeBundle,
+        secrets: nodeSecrets,
         uplink,
         // A secret the owner gives one of this node's sinks (#507): config.json as it is now, as a
         // form's answer reads it, so the sink checked is the one the bundle last wrote.
@@ -1309,6 +1321,8 @@ export async function startServer({
       profiles: () => deps.profiles().list,
       store: createDeviceStore(),
       log,
+      // Which secrets went to which device (#604), names only, in the audit a given secret has.
+      audit: auditBundle,
     })
     // Requests for a node's card (#501): first in the route table, which the phones' listener and the
     // tunnel share, so they reach it after their own refusals. Without `nodes` the table is main's.

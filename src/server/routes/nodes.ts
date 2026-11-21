@@ -178,7 +178,19 @@ export function nodesRoutes(
       defaults,
       noToken: panel ? devices.filter(d => d.kind !== null && !panel.hasToken(d.id)).map(d => d.id) : [],
       next: (await panel?.next(cfg).catch(() => null)) ?? null,
+      ...secretsOf(devices),
     }
+  }
+  /** Per linked device with any, the secrets given and to give (#604), from the last syncs: names only. */
+  function secretsOf(devices: readonly { id: string; kind: unknown }[]): Pick<NodesPanelSettings, 'secrets'> {
+    if (!bundles) return {}
+    const out: NonNullable<NodesPanelSettings['secrets']> = {}
+    for (const d of devices) {
+      if (d.kind === null) continue
+      const s = bundles.secrets(d.id)
+      if (s.given.length || s.toGive.length) out[d.id] = s
+    }
+    return Object.keys(out).length ? { secrets: out } : {}
   }
 
   return [

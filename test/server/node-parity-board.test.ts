@@ -8,8 +8,10 @@
 import { describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { parseEnvFile } from '../../src/core/node-env.ts'
 import { nodePair } from '../support/node-pair.ts'
 import type { ChildResult, Sandbox } from '../support/sandbox.ts'
+import { stateFolder } from '../support/tunnel-board.ts'
 
 const CANARY = 'canary-parity-board-3e7d'
 const profileDir = (box: Sandbox): string => join(box.env.HOME as string, '.claude')
@@ -80,6 +82,8 @@ describe("a node gets the owner's answers, and the files a hook reads are said (
   test('one sync: .claude.json on the node, the script without its files, board nodes sync says both', async () => {
     const pair = await nodePair({
       masterSetup: ownerProfile,
+      // Secrets off (#604): what is held back stays here and is said.
+      deviceCfg: () => ({ giveSecrets: false }),
       nodeSetup(_id, box) {
         writeFileSync(join(box.env.HOME as string, '.claude.json'), JSON.stringify({ numStartups: 5, projects: {} }))
       },
@@ -128,7 +132,9 @@ describe("a node gets the owner's answers, and the files a hook reads are said (
         port: Number(new URL(pair.master.url).port),
         nodes: {
           id: 'laptop',
-          devices: { 'server-1': { link: { kind: 'direct', url: `http://127.0.0.1:${node.proxy.port}` } } },
+          devices: {
+            'server-1': { link: { kind: 'direct', url: `http://127.0.0.1:${node.proxy.port}` }, giveSecrets: false },
+          },
         },
       }),
     )
@@ -142,6 +148,96 @@ describe("a node gets the owner's answers, and the files a hook reads are said (
     for (const [file, text] of Object.entries(files(node.box.dir)))
       expect([file, text.includes(CANARY)]).toEqual([file, false])
     for (const proc of [pair.master.proc, node.proc]) expect(JSON.stringify(proc.messages)).not.toContain(CANARY)
+    expect(cli.stdout).not.toContain(CANARY)
+  }, 90_000)
+
+  test('secrets on (the default, #604): after one sync the env file has the variables and the hook its config', async () => {
+    const pair = await nodePair({
+      masterSetup(box) {
+        ownerProfile(box)
+        const dir = profileDir(box)
+        const settings = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'))
+        settings.env.MY_API_TOKEN = `${CANARY}-env`
+        writeFileSync(join(dir, 'settings.json'), JSON.stringify(settings))
+        const state = JSON.parse(readFileSync(join(box.env.HOME as string, '.claude.json'), 'utf8'))
+        state.mcpServers = {
+          mempalace: { type: 'http', url: 'https://m.example/mcp', headers: { Authorization: `Bearer ${CANARY}` } },
+          // The session's own environment, with a default: nothing to give.
+          telegram: { command: 'npx', args: ['-y', 'tg'], env: { TG_KEY: ['$', '{TG_KEY:-}'].join('') } },
+        }
+        writeFileSync(join(box.env.HOME as string, '.claude.json'), JSON.stringify(state))
+      },
+      nodeSetup(_id, box) {
+        // What the owner's own sink (`mcp-env`) wrote by hand before: another name, and one of the bundle's.
+        const env = join(stateFolder(box), 'node', 'env')
+        mkdirSync(env, { recursive: true })
+        writeFileSync(join(env, 'default.env'), "HAND_GIVEN=keep-me\nMCP_MEMPALACE_AUTHORIZATION='Bearer old'\n")
+      },
+    })
+    const [node] = pair.nodes
+    if (!node) throw new Error('no node')
+    await pair.waitDevice('server-1', d => d.link?.state === 'online' && d.status !== null, 15_000)
+    const res = await fetch(`${pair.master.url}/api/nodes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({ op: 'sync', id: 'server-1' }),
+    })
+    const r = (await res.json()) as { ok: boolean; secrets?: Record<string, unknown>; lines: { name: string }[] }
+    expect(r.ok).toBe(true)
+    expect(r.secrets).toEqual({
+      given: ['MCP_MEMPALACE_AUTHORIZATION', 'MY_API_TOKEN'],
+      files: ['mempalace-memory/config.json'],
+      kept: [],
+      refused: [],
+    })
+    expect(r.lines.some(l => l.name === 'TG_KEY')).toBe(false)
+    // What a launch on the node reads (services/launch, test/services/node-env-launch.test.ts): its env file.
+    const envText = readFileSync(join(stateFolder(node.box), 'node', 'env', 'default.env'), 'utf8')
+    expect(parseEnvFile(envText).vars).toEqual({
+      HAND_GIVEN: 'keep-me',
+      MCP_MEMPALACE_AUTHORIZATION: `Bearer ${CANARY}`,
+      MY_API_TOKEN: `${CANARY}-env`,
+    })
+    // The hook's config in its place beside the script, as the master has it.
+    const nodeDir = profileDir(node.box)
+    expect(JSON.parse(readFileSync(join(nodeDir, 'mempalace-memory', 'config.json'), 'utf8')).token).toBe(CANARY)
+    expect(existsSync(join(nodeDir, 'mempalace-memory', 'offsets.json'))).toBe(false)
+
+    // The values crossed only the secrets' request: no other request, no log, no record of either board.
+    for (const req of node.proxy.received)
+      if (!req.request.endsWith('/secrets')) expect(`${req.request} ${req.body}`).not.toContain(CANARY)
+    for (const proc of [pair.master.proc, node.proc]) expect(JSON.stringify(proc.messages)).not.toContain(CANARY)
+    expect(readFileSync(join(stateFolder(pair.master.box), 'nodes', 'server-1', 'bundle.json'), 'utf8')).not.toContain(
+      CANARY,
+    )
+    expect(readFileSync(join(stateFolder(node.box), 'node', 'bundle-secrets', 'default.json'), 'utf8')).not.toContain(
+      CANARY,
+    )
+    for (const box of [pair.master.box, node.box]) {
+      const audit = join(stateFolder(box), 'secrets', 'audit.jsonl')
+      const text = readFileSync(audit, 'utf8')
+      expect(text).toContain('MCP_MEMPALACE_AUTHORIZATION')
+      expect(text).not.toContain(CANARY)
+    }
+
+    // board nodes sync: which names went.
+    mkdirSync(dirname(configPath(pair.master.box)), { recursive: true })
+    writeFileSync(
+      configPath(pair.master.box),
+      JSON.stringify({
+        language: 'en',
+        wakeUrl: '',
+        port: Number(new URL(pair.master.url).port),
+        nodes: {
+          id: 'laptop',
+          devices: { 'server-1': { link: { kind: 'direct', url: `http://127.0.0.1:${node.proxy.port}` } } },
+        },
+      }),
+    )
+    const cli: ChildResult = await pair.master.box.run('cli', { args: ['nodes', 'sync', 'server-1'], env: {} }).exited
+    const out = cli.stdout.trim().split('\n')
+    expect(out).toContain('secrets given: MCP_MEMPALACE_AUTHORIZATION, MY_API_TOKEN, mempalace-memory/config.json')
+    expect(out.some(l => l.includes('needs-secret'))).toBe(false)
     expect(cli.stdout).not.toContain(CANARY)
   }, 90_000)
 })
