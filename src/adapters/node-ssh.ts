@@ -79,11 +79,16 @@ export function freeLocalPort(): Promise<number> {
 /** Each device's local port, picked once and kept while the board runs. */
 const ports = new Map<string, number>()
 
-/** The device's local port: the one it had, or a new free one when it has none or `fresh` (the old one taken). */
+/**
+ * The device's local port: the one it had, or a new free one when it has none or `fresh` (the old
+ * one taken). Never one another device holds, should the system hand the same port out twice.
+ */
 export async function localPortFor(id: string, fresh = false): Promise<number> {
   const kept = ports.get(id)
   if (kept !== undefined && !fresh) return kept
-  const port = await freeLocalPort()
+  const others = new Set([...ports].filter(([dev]) => dev !== id).map(([, port]) => port))
+  let port = await freeLocalPort()
+  for (let tries = 1; others.has(port) && tries < 20; tries++) port = await freeLocalPort()
   ports.set(id, port)
   return port
 }

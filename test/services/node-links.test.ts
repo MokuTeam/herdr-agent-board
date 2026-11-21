@@ -71,7 +71,7 @@ function recorder() {
       }),
       onPayload: () => () => {},
       onState: () => () => {},
-      reconnect: why => void m.again.push(why),
+      reconnect: (why, force) => void m.again.push(force ? `${why} (forced)` : why),
       killNow: () => {},
       close: async () => {
         m.closed = true
@@ -208,9 +208,9 @@ test('after a sleep, or when the addresses change, every link tries again at onc
     "this computer's addresses changed",
     "this computer's addresses changed",
   ])
-  // a token stored: that one link
+  // a token stored: that one link, past a refusal's minute
   expect(links.retry('server-2')).toBe(true)
-  expect(r.made.map(m => m.again.at(-1))).toEqual(["this computer's addresses changed", 'asked'])
+  expect(r.made.map(m => m.again.at(-1))).toEqual(["this computer's addresses changed", 'a token stored (forced)'])
   await links.close()
   expect(c.live()).toBe(0)
 })

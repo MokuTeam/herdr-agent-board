@@ -216,7 +216,7 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
     retry(id) {
       const held = links.get(id)
       if (!held) return false
-      held.link.reconnect('asked')
+      held.link.reconnect('a token stored', true)
       return true
     },
     killNow() {

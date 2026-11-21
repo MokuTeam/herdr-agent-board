@@ -85,19 +85,20 @@ describe('a direct link to a node board', () => {
     const node = await nodeBoard('server-1')
     const link = linkTo(device('server-1', direct(node)), { token: () => node.token })
     await until(
-      () => link.state().state,
-      s => s === 'online',
+      () => keys(link),
+      k => k.includes('s-server-1'),
       10_000,
     )
     const seen = link.payload()
     await node.proxy.cut('silent')
-    const cutAt = Date.now()
+    // Half the limit in, a node that only went quiet is still online.
+    await Bun.sleep(DEAD_MS / 2)
+    expect(link.state().state).toBe('online')
     await until(
       () => link.state().state,
       s => s === 'offline',
       DEAD_MS * 4,
     )
-    expect(Date.now() - cutAt).toBeGreaterThanOrEqual(DEAD_MS - 300)
     expect(link.payload()).toBe(seen)
     expect(keys(link)).toContain('s-server-1')
     node.proxy.restore()
@@ -464,4 +465,176 @@ test("a door whose node.api is not this board's: refused (api)", async () => {
     'api',
     "the door's node.api is 2, this board's 1",
   ])
+})
+
+describe('the link on a node board, more', () => {
+  test('refused: fetch answers node-offline and asks nothing; status is null; a path must start at the root', async () => {
+    const node = await nodeBoard('server-1')
+    const link = linkTo(device('server-2', direct(node)), { token: () => node.token })
+    await until(
+      () => link.state().state,
+      s => s === 'refused',
+      10_000,
+    )
+    const res = await link.fetch('/api/board')
+    expect([res.status, await res.json()]).toEqual([503, { error: 'node-offline' }])
+    expect(await link.status()).toBeNull()
+    expect(node.proxy.requests).toEqual(['GET /api/hello'])
+    await expect(link.fetch('@evil.example/api/board')).rejects.toThrow("a path from the door's root")
+  }, 30_000)
+
+  test('reconnect: a new stream after the old one ended, never two; the token in no log line or detail', async () => {
+    const node = await nodeBoard('server-1')
+    const logs: string[] = []
+    const link = linkTo(device('server-1', direct(node)), { token: () => node.token, log: t => void logs.push(t) })
+    await until(
+      () => keys(link),
+      k => k.includes('s-server-1'),
+      10_000,
+    )
+    link.reconnect('the computer slept')
+    const streams = (): number => node.proxy.requests.filter(r => r === 'GET /api/events').length
+    await until(streams, n => n === 2, 5000)
+    await until(
+      () => link.state(),
+      s => s.state === 'online' && s.detail === undefined,
+      5000,
+    )
+    await Bun.sleep(300)
+    expect([node.proxy.streams(), node.proxy.peak()]).toEqual([1, 1])
+    expect(logs.some(l => l.includes('the computer slept: trying again now'))).toBe(true)
+    expect(logs.filter(l => l.includes(node.token))).toEqual([])
+    expect(JSON.stringify(link.view())).not.toContain(node.token)
+  }, 30_000)
+
+  test('a token refused: a wake does not try it again before its minute; a stored token does', async () => {
+    const node = await nodeBoard('server-1')
+    let token = 'W'.repeat(43)
+    const link = linkTo(device('server-1', direct(node)), { token: () => token }, { ...TIMES, pace: 1 })
+    await until(
+      () => link.state().state,
+      s => s === 'refused',
+      10_000,
+    )
+    const events = (): number => node.proxy.requests.filter(r => r === 'GET /api/events').length
+    for (let i = 0; i < 6; i++) link.reconnect('the computer slept')
+    await Bun.sleep(500)
+    expect(events()).toBe(1)
+    token = node.token
+    link.reconnect('a token stored', true)
+    await until(
+      () => link.state().state,
+      s => s === 'online',
+      5000,
+    )
+    expect(events()).toBe(2)
+  }, 30_000)
+
+  test('ssh that drops after it was up: a new ssh, and the node online again through it', async () => {
+    const node = await nodeBoard('server-1')
+    const ssh = await useFakeSsh()
+    ssh.state({ ssh: { exitAfterMs: 1500 } })
+    const store = createDeviceStore({ dir: join(ssh.dir, 'nodes') })
+    mkdirSync(store.dir('server-1'), { recursive: true })
+    writeFileSync(store.keyPath('server-1'), 'fake key\n')
+    const link = {
+      kind: 'ssh',
+      host: 'ssh.example.com',
+      sshPort: 22,
+      user: 'agent-board-link',
+      port: node.doorPort,
+    } as const
+    const l = linkTo(device('server-1', link), { token: () => node.token, ssh: sshPipeDeps('server-1', link, store) })
+    await until(
+      () => keys(l),
+      k => k.includes('s-server-1'),
+      10_000,
+    )
+    const first = l.view().payloadAt ?? 0
+    await until(
+      () => ssh.calls().filter(c => c.includes('-L')).length,
+      n => n >= 2,
+      10_000,
+    )
+    await until(
+      () => l.view(),
+      v => v.link?.state === 'online' && (v.payloadAt ?? 0) > first,
+      10_000,
+    )
+    await l.close()
+    expect(readPidRecord(store.pidFile('server-1'))).toBeNull()
+  }, 30_000)
+})
+
+test('writes carry X-Board, every request the bearer and the Host of the door over ssh, never an Origin', async () => {
+  const t = fakeClock()
+  const seen: { url: string; headers: Headers }[] = []
+  const enc = new TextEncoder()
+  const fetch = async (url: string, init: RequestInit): Promise<Response> => {
+    seen.push({ url, headers: new Headers(init.headers) })
+    if (url.endsWith('/api/hello')) return Response.json({ node: { api: 1, id: 'server-1' } })
+    if (url.endsWith('/api/events'))
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(enc.encode(`data: ${JSON.stringify(PAYLOAD)}\n\n`))
+          },
+        }),
+      )
+    return Response.json({ ok: true })
+  }
+  const l = linkTo(device('server-1', { kind: 'direct', url: 'http://127.0.0.1:9/' }), {
+    token: () => 'T'.repeat(43),
+    clock: t.clock,
+    fetch,
+  })
+  await t.advance(0)
+  expect(l.state().state).toBe('online')
+  await l.fetch('/api/session/s1/stop', {
+    method: 'POST',
+    headers: { origin: 'http://evil.example', authorization: 'Bearer other', 'content-type': 'application/json' },
+    body: '{}',
+  })
+  const write = seen.at(-1)
+  expect(write?.url).toBe('http://127.0.0.1:9/api/session/s1/stop')
+  expect([write?.headers.get('x-board'), write?.headers.get('origin'), write?.headers.get('authorization')]).toEqual([
+    '1',
+    null,
+    `Bearer ${'T'.repeat(43)}`,
+  ])
+  // hello goes before the token, without it
+  expect(seen[0]?.headers.get('authorization')).toBeNull()
+  expect(seen[1]?.headers.get('x-board')).toBeNull()
+})
+
+test('close while the ssh pipe waits for its port: no ssh starts after it', async () => {
+  let release: (port: number) => void = () => {}
+  let spawned = 0
+  const ssh = {
+    bin: () => 'ssh',
+    args: () => [],
+    forward: (p: number) => `127.0.0.1:${p}:127.0.0.1:12430`,
+    localPort: () =>
+      new Promise<number>(resolve => {
+        release = resolve
+      }),
+    keyExists: () => true,
+    spawn: () => {
+      spawned++
+      throw new Error('no ssh may start')
+    },
+    stray: { read: () => null, write: () => {}, end: async () => true },
+    up: () => false,
+    portTaken: () => false,
+  }
+  const l = createLink({
+    device: device('server-1', { kind: 'ssh', host: 'h', sshPort: 22, user: 'u', port: 12430 }),
+    cfg: TIMES,
+    deps: { token: () => 'T'.repeat(43), clock: realClock, log: () => {}, ssh },
+  })
+  await Bun.sleep(20)
+  await l.close()
+  release(50123)
+  await Bun.sleep(50)
+  expect(spawned).toBe(0)
 })

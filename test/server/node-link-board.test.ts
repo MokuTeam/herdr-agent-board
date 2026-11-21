@@ -88,9 +88,9 @@ describe('a master and its node', () => {
       },
     })
     // A token that is none: refused, the file not written, the value not in what is said.
-    const bad = await piped(pair.master.box, ['nodes', 'token', 'server-1'], 'not a token\n')
+    const bad = await piped(pair.master.box, ['nodes', 'token', 'server-1'], 'zq!bad%value\n')
     expect(bad.code).not.toBe(0)
-    expect(bad.stdout + bad.stderr).not.toContain('not a token\n')
+    expect(bad.stdout + bad.stderr).not.toContain('zq!bad%value')
     const file = join(stateFolder(pair.master.box), 'nodes', 'server-1', 'token')
     expect(existsSync(file)).toBe(false)
     // No such device.

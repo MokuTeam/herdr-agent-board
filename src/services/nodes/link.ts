@@ -5,7 +5,8 @@
 // are refused so. The link only receives: the node's payload stream and its status.
 //
 // - fetch(): a request to the node with its bearer token, X-Board: 1 on writes and no Origin; over
-//   ssh with the door's own Host, which it checks.
+//   ssh with the door's own Host, which it checks. Only while the door was found to be this
+//   device's: 503 node-offline before that and while refused.
 // - The payload stream: `GET /api/events`, its unnamed data lines read as the page reads them
 //   (core/payload-check.ts). Every byte, pings too, says the node is there.
 // - Offline: no byte for 90 s (BOARD_NODE_DEAD_MS in tests). A silent stream is then dropped; the
@@ -14,8 +15,8 @@
 //   a stream lasted a minute; at once when the computer woke or its addresses changed (links.ts
 //   calls reconnect()). Never two streams: a new one is asked for only after the last one ended.
 // - Refused: a cause waiting does not heal (core/nodes.ts LinkReason), tried again once a minute.
-//   A token the node does not take is tried once a minute, never faster: the door locks out a
-//   caller after five wrong tokens a minute.
+//   A token the node does not take is tried once a minute, never faster, a wake or a new address
+//   included: the door locks out a caller after five wrong tokens a minute.
 // - status(): `GET /api/node/status` every 30 s while the stream is open, and when asked, each
 //   within 1.5 s.
 import type { PidRecord, SshChild } from '../../adapters/ssh.ts'
@@ -81,7 +82,7 @@ export interface LinkTimes {
 
 export interface Link {
   readonly id: string
-  /** A request to the node's door; 503 node-offline while there is no pipe to it. */
+  /** A request to the node's door, `path` from its root; 503 node-offline while there is no door found to be this device's. */
   fetch(path: string, init?: RequestInit): Promise<Response>
   /** The node's status now, within 1.5 s; null when it could not be had. */
   status(): Promise<NodeStatus | null>
@@ -91,8 +92,12 @@ export interface Link {
   view(): DeviceView
   onPayload(fn: (payload: BoardPayload) => void): () => void
   onState(fn: (state: LinkStatus) => void): () => void
-  /** Tries again at once from the first attempt (the computer woke, its addresses changed, a token stored). */
-  reconnect(why: string): void
+  /**
+   * Tries again at once from the first attempt: the computer woke or its addresses changed. A link
+   * the node refused for its token waits out its minute all the same, unless `force`: a token was
+   * stored.
+   */
+  reconnect(why: string, force?: boolean): void
   /** For an exit handler: its ssh ended synchronously. */
   killNow(): void
   close(): Promise<void>
@@ -100,8 +105,10 @@ export interface Link {
 
 export const DEAD_MS = 90_000
 export const STATUS_MS = 30_000
-/** Hello, status: each within this long. A deadline, never paced. */
+/** The status within this long (6.3). A deadline, never paced. */
 export const ASK_MS = 1500
+/** Hello within this long: the first request through a fresh ssh channel may take a while. */
+const HELLO_MS = 5000
 /** A stream that lasted this long (paced): the backoff starts over when it ends. */
 const UP_RESETS_MS = 60_000
 /** A refused link is tried again this often (paced). */
@@ -115,33 +122,46 @@ const LINES_KEPT = 20
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+/** What a node says, as it goes into a state's detail and the log: printable, and short. */
+const said = (v: unknown): string =>
+  String(v)
+    .replace(/\p{Cc}/gu, ' ')
+    .slice(0, 64)
+const offline = (): Response =>
+  new Response(JSON.stringify({ error: 'node-offline' }), {
+    status: 503,
+    headers: { 'content-type': 'application/json' },
+  })
 
 /** What a pipe's open() gives: the door's base URL (and the Host it checks), or why not. */
 type Opened =
   | { ok: true; base: string; host?: string }
   | { ok: false; refused?: { reason: LinkReason; detail: string }; error: string }
+type Door = Extract<Opened, { ok: true }>
 
 interface Pipe {
   open(): Promise<Opened>
   /** Ends what it holds; the next open() starts over. */
   reset(): Promise<void>
+  /** Ends what it holds, and an open() under way starts nothing more. */
+  close(): Promise<void>
   killNow(): void
 }
 
+const NOTHING = { reset: async () => {}, close: async () => {}, killNow: () => {} }
+
 const directPipe = (url: string): Pipe => ({
+  ...NOTHING,
   open: async () => ({ ok: true, base: url.replace(/\/+$/, '') }),
-  reset: async () => {},
-  killNow: () => {},
 })
 
 const notBuilt = (kind: string): Pipe => ({
+  ...NOTHING,
   open: async () => ({
     ok: false,
     refused: { reason: 'not-built', detail: `a ${kind} link is not built yet` },
     error: '',
   }),
-  reset: async () => {},
-  killNow: () => {},
 })
 
 /** A line of ssh's that may say what went wrong: not -v's own. */
@@ -149,8 +169,8 @@ const worthKeeping = (line: string): boolean => !line.startsWith('debug')
 
 /**
  * The ssh local forward, kept while the link wants it: started on open() unless it is up; ended on
- * reset(). Never two: a recorded ssh a board before left is ended first, and none starts while it
- * may still run. Its record is cleared when it ends.
+ * reset(). Never two: a recorded ssh a board before left is ended first, none starts while it may
+ * still run, and none after close(). Its record is cleared when it ends.
  */
 function sshPipe(
   link: Extract<LinkConfig, { kind: 'ssh' }>,
@@ -160,6 +180,9 @@ function sshPipe(
 ): Pipe {
   let held: { child: SshChild; port: number; up: boolean; asked: boolean } | null = null
   let fresh = false
+  let closed = false
+  /** The reset under way: a second one, and open(), wait for it, so no record is cleared under a new ssh. */
+  let resetting: Promise<void> | null = null
   const record = (r: PidRecord | null): void => {
     try {
       d.stray.write(r)
@@ -167,28 +190,42 @@ function sshPipe(
       log(`the pid record: ${messageOf(err)}`)
     }
   }
-  async function reset(): Promise<void> {
-    const h = held
-    if (!h) return
-    held = null
-    h.asked = true
-    h.child.kill()
-    await h.child.exited
-    record(null)
+  const door = (port: number): Door => ({ ok: true, base: `http://127.0.0.1:${port}`, host: `127.0.0.1:${link.port}` })
+  const stopped: Opened = { ok: false, error: 'the link is closing' }
+
+  function reset(): Promise<void> {
+    resetting ??= (async () => {
+      const h = held
+      if (!h) return
+      held = null
+      h.asked = true
+      h.child.kill()
+      await h.child.exited
+      record(null)
+    })().finally(() => {
+      resetting = null
+    })
+    return resetting
   }
+
   async function open(): Promise<Opened> {
-    if (held?.up) return { ok: true, base: `http://127.0.0.1:${held.port}`, host: `127.0.0.1:${link.port}` }
+    if (closed) return stopped
+    if (held?.up) return door(held.port)
     await reset()
     if (!d.keyExists())
       return { ok: false, refused: { reason: 'key', detail: 'no link key yet: board nodes key <id>' }, error: '' }
     const stray = d.stray.read()
     if (stray) {
       const gone = await d.stray.end(stray).catch(() => false)
+      if (closed) return stopped
       if (!gone) return { ok: false, error: `an ssh a board before left (pid ${stray.pid}) may still run` }
       record(null)
     }
     const bin = d.bin() ?? 'ssh'
     const port = await d.localPort(fresh)
+    // close() came while this waited, or another open() started one meanwhile: none started here.
+    if (closed) return stopped
+    if (held) return { ok: false, error: 'an ssh of this link is starting' }
     fresh = false
     const child = d.spawn(bin, d.args(port))
     const h = { child, port, up: false, asked: false }
@@ -213,7 +250,7 @@ function sshPipe(
         if (d.up(line, port)) {
           h.up = true
           log('ssh forward up')
-          finish({ ok: true, base: `http://127.0.0.1:${port}`, host: `127.0.0.1:${link.port}` })
+          finish(door(port))
           return
         }
         if (d.portTaken(line)) fresh = true
@@ -233,15 +270,24 @@ function sshPipe(
           return
         }
         const hint = sshHint(lines)
-        const said = lines.at(-1) ?? `ssh exited with code ${String(r.code)}`
-        if (hint === 'hostKey') finish({ ok: false, refused: { reason: 'host-key', detail: said }, error: '' })
+        const last = lines.at(-1) ?? `ssh exited with code ${String(r.code)}`
+        if (hint === 'hostKey') finish({ ok: false, refused: { reason: 'host-key', detail: last }, error: '' })
         else if (isLasting(hint))
-          finish({ ok: false, refused: { reason: 'ssh', detail: `${hint}: ${said}` }, error: '' })
-        else finish({ ok: false, error: said })
+          finish({ ok: false, refused: { reason: 'ssh', detail: `${hint}: ${last}` }, error: '' })
+        else finish({ ok: false, error: last })
       })
     })
   }
-  return { open, reset, killNow: () => held?.child.killNow() }
+
+  return {
+    open,
+    reset,
+    async close() {
+      closed = true
+      await reset()
+    },
+    killNow: () => held?.child.killNow(),
+  }
 }
 
 function pipeFor(device: DeviceConfig, deps: LinkDeps): Pipe {
@@ -267,7 +313,8 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
   let payload: BoardPayload | null = null
   let payloadAt: number | null = null
   let nodeStatus: NodeStatus | null = null
-  let opened: Extract<Opened, { ok: true }> | null = null
+  /** The door, once its hello said it is this device's; null before, while refused, and when the pipe fails. */
+  let door: Door | null = null
   let attempt = 1
   let retry: unknown = null
   let statusTimer: unknown = null
@@ -285,7 +332,8 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
       was.state === status.state &&
       was.reason === status.reason &&
       was.detail === status.detail &&
-      was.attempt === status.attempt
+      was.attempt === status.attempt &&
+      was.nextAt === status.nextAt
     )
       return
     if (was.state !== status.state)
@@ -320,6 +368,7 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
 
   /** A cause waiting does not heal: tried again in a minute (`afterMs` when the node says longer); never for a link not built. */
   function refuse(reason: LinkReason, detail: string, afterMs = 0): void {
+    door = null
     if (closed) return
     const now = clock.now()
     const wait = Math.max(Math.round(REFUSED_RETRY_MS * cfg.pace), afterMs)
@@ -334,28 +383,24 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
     if (nextAt) retryIn(wait)
   }
 
-  function headers(init: RequestInit | undefined, token: string | null, o: Extract<Opened, { ok: true }>): Headers {
+  function headers(init: RequestInit | undefined, token: string | null, o: Door): Headers {
     const h = new Headers(init?.headers)
     h.delete('origin')
+    h.delete('authorization')
     if (token) h.set('authorization', `Bearer ${token}`)
     if ((init?.method ?? 'GET').toUpperCase() !== 'GET') h.set('x-board', '1')
     if (o.host) h.set('host', o.host)
     return h
   }
 
-  async function call(
-    o: Extract<Opened, { ok: true }>,
-    path: string,
-    init: RequestInit,
-    token: string | null,
-  ): Promise<Response> {
+  function call(o: Door, path: string, init: RequestInit, token: string | null): Promise<Response> {
     return ask(`${o.base}${path}`, { ...init, headers: headers(init, token, o) })
   }
 
   async function askStatus(): Promise<NodeStatus | null> {
-    const o = opened
+    const o = door
     const token = deps.token()
-    if (!o || !token) return null
+    if (!o || !token || status.state === 'refused') return null
     try {
       const res = await call(o, '/api/node/status', { signal: AbortSignal.timeout(ASK_MS) }, token)
       const got = res.ok ? nodeStatusOf(await res.json()) : null
@@ -387,7 +432,9 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
   function took(p: BoardPayload): void {
     payload = p
     payloadAt = clock.now()
-    if (status.state !== 'online') set({ state: 'online', since: clock.now() })
+    // Online, and what a retry before said is cleared.
+    if (status.state !== 'online' || status.detail !== undefined || status.nextAt !== undefined)
+      set({ state: 'online', since: status.state === 'online' ? status.since : clock.now() })
     for (const fn of payloadFns) fn(p)
   }
 
@@ -396,17 +443,22 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
     const reader = body.getReader()
     const decoder = new TextDecoder()
     let rest = ''
+    let refusedOne = false
     try {
       for (;;) {
         const next = await reader.read()
         if (next.done || held.drop) return
         heard()
-        const { events, rest: left } = takeEvents(rest + decoder.decode(next.value, { stream: true }))
-        rest = left
-        if (rest.length > MOST_EVENT_CHARS) {
-          log('an event larger than the board takes: the stream dropped')
-          return
+        const text = decoder.decode(next.value, { stream: true })
+        // No line break in it: no event ends here, so nothing is scanned again.
+        if (!text.includes('\n')) {
+          rest += text
+          if (rest.length > MOST_EVENT_CHARS) return log('an event larger than the board takes: the stream dropped')
+          continue
         }
+        const { events, rest: left } = takeEvents(rest + text)
+        rest = left
+        if (rest.length > MOST_EVENT_CHARS) return log('an event larger than the board takes: the stream dropped')
         for (const e of events) {
           if (e.name === 'unpaired') {
             held.drop = 'refused'
@@ -418,9 +470,13 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
           try {
             value = JSON.parse(e.data)
           } catch {
-            continue
+            value = null
           }
           if (isBoardPayload(value)) took(value)
+          else if (!refusedOne) {
+            refusedOne = true
+            log('a payload that is not one: left out')
+          }
         }
       }
     } catch (err) {
@@ -439,13 +495,12 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
     const o = await pipe.open()
     if (closed) return
     if (!o.ok) {
-      opened = null
+      door = null
       return o.refused ? refuse(o.refused.reason, o.refused.detail) : later(o.error)
     }
-    opened = o
     let hello: unknown
     try {
-      const res = await call(o, '/api/hello', { signal: AbortSignal.timeout(ASK_MS) }, null)
+      const res = await call(o, '/api/hello', { signal: AbortSignal.timeout(HELLO_MS) }, null)
       hello = res.ok ? await res.json() : null
       if (!res.ok) return later(`hello: HTTP ${res.status}`)
     } catch (err) {
@@ -455,10 +510,11 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
     if (!isObject(node) || node.api !== NODE_API)
       return refuse(
         'api',
-        `the door's node.api is ${isObject(node) ? String(node.api) : 'none'}, this board's ${NODE_API}`,
+        `the door's node.api is ${isObject(node) ? said(node.api) : 'none'}, this board's ${NODE_API}`,
       )
-    if (node.id !== device.id) return refuse('device', `the door is ${String(node.id)}'s`)
+    if (node.id !== device.id) return refuse('device', `the door is ${said(node.id)}'s`)
     if (closed) return
+    door = o
     const held = { ac: new AbortController(), drop: null as Drop | null }
     stream = held
     let res: Response
@@ -535,7 +591,7 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
         stream.ac.abort()
       }
     },
-    Math.max(20, Math.round(cfg.deadMs / 6)),
+    Math.max(20, Math.round(cfg.deadMs / 30)),
   )
 
   kick()
@@ -543,12 +599,9 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
   return {
     id: device.id,
     async fetch(path, init) {
-      const o = opened
-      if (!o || closed)
-        return new Response(JSON.stringify({ error: 'node-offline' }), {
-          status: 503,
-          headers: { 'content-type': 'application/json' },
-        })
+      if (!path.startsWith('/')) throw new Error(`a path from the door's root: ${JSON.stringify(path)}`)
+      const o = door
+      if (!o || closed || status.state === 'refused') return offline()
       return call(o, path, init ?? {}, deps.token())
     },
     status: askStatus,
@@ -574,8 +627,9 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
       stateFns.add(fn)
       return () => stateFns.delete(fn)
     },
-    reconnect(why) {
+    reconnect(why, force = false) {
       if (closed) return
+      if (!force && status.state === 'refused' && (status.reason === 'token' || status.reason === 'not-built')) return
       log(`${why}: trying again now`)
       attempt = 1
       cancelRetry()
@@ -589,6 +643,7 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
     async close() {
       if (closed) return
       closed = true
+      door = null
       cancelRetry()
       statusOff()
       clock.clearInterval(watch)
@@ -596,7 +651,7 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
         stream.drop = 'close'
         stream.ac.abort()
       }
-      await pipe.reset()
+      await pipe.close()
     },
   }
 }
