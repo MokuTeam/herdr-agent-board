@@ -1,8 +1,9 @@
 // What the board's remote listeners share (server/remote.ts: Tailscale and serve; server/tunnel.ts:
-// the owner's domain): a path decoded, what they refuse whoever calls, and event streams that end
-// the moment the caller's pairing or login does.
-import { deskFocus, desktopOnly, localOnly, ownerTeam, ownerThreads } from '../core/remote.ts'
-import { json } from './http.ts'
+// the owner's domain): a path decoded, what they refuse whoever calls, what a desk may ask of
+// /api/remote, and event streams that end the moment the caller's pairing or login does.
+import { isRecord } from '../adapters/json-store.ts'
+import { DESK_REMOTE_OPS, deskFocus, desktopOnly, localOnly, ownerTeam, ownerThreads } from '../core/remote.ts'
+import { json, readBody } from './http.ts'
 import { namedEvent } from './sse.ts'
 
 /** The path decoded; null when it does not decode (a 400). */
@@ -19,7 +20,9 @@ export function decoded(raw: string): string | null {
  * (403 desktop) and what is for the board on this computer only (403 local). The routes match a
  * string path decoded and a RegExp one as it came, so both spellings are checked, or an encoded
  * letter (/api/fs/%6Fpen, /api/%61ccess) would get by. A desk (RemoteDevice.desk) may focus herdr
- * and reach /api/remote, whose ops the listener narrows for it (DESK_REMOTE_OPS).
+ * and reach /api/remote, whose ops deskOpRefusal narrows for it (DESK_REMOTE_OPS): a listener that
+ * passes `desk` must call deskOpRefusal right after this, or a desk gets every op of /api/remote.
+ * The tunnel never passes it (test/server/tunnel.test.ts says so).
  */
 export function remoteRefusal(
   raw: string,
@@ -37,6 +40,17 @@ export function remoteRefusal(
   const threads = owner && ownerThreads(raw) && ownerThreads(path)
   if (!pairing && !team && !threads && (localOnly(raw) || localOnly(path))) return json(403, { error: 'local' })
   return null
+}
+
+/**
+ * What a desk is refused of POST /api/remote once remoteRefusal let it through: every op but
+ * answering the phones that ask and unpairing (DESK_REMOTE_OPS). A body that is not a JSON object
+ * (null, a string, a broken or oversized one) is no such op: refused like any other, never a 500.
+ */
+export async function deskOpRefusal(req: Request, raw: string): Promise<Response | null> {
+  if (req.method !== 'POST' || raw !== '/api/remote') return null
+  const body = await readBody(req.clone()).catch(() => null)
+  return DESK_REMOTE_OPS.has(isRecord(body) ? body.op : undefined) ? null : json(403, { error: 'local' })
 }
 
 /**

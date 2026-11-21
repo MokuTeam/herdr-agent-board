@@ -4,12 +4,14 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { translator } from '../../src/core/i18n/translator.ts'
 import { serveBoard, sharedSandbox, unusedPort } from '../support/board-server.ts'
 import type { Sandbox } from '../support/sandbox.ts'
 
 const NAME = 'box.tail0.ts.net'
 const ORIGIN = `https://${NAME}`
 const PHONE_IP = '100.78.86.80'
+const TABLET_IP = '100.78.86.81'
 
 function tailscaleState(box: Sandbox, { certs = true, serving = '' }: { certs?: boolean; serving?: string } = {}) {
   const status = {
@@ -33,14 +35,21 @@ function tailscaleState(box: Sandbox, { certs = true, serving = '' }: { certs?: 
     tabs: [],
     workspaces: [],
   }
+  // A second device of the owner's, to pair from the desk.
+  const tablet = { ...whois, Node: { StableID: 'nTablet', ComputedName: 'ipad-11', Hostinfo: { OS: 'iOS' } } }
   box.state({
     'api snapshot': { result: { snapshot } },
     'status --json': { text: JSON.stringify(status) },
     [`whois --json ${PHONE_IP}`]: { text: JSON.stringify(whois) },
+    [`whois --json ${TABLET_IP}`]: { text: JSON.stringify(tablet) },
+    // The same browser straight on the Tailscale address (the listener binds 127.0.0.1 here).
+    'whois --json 127.0.0.1': { text: JSON.stringify(whois) },
     // What serve forwards: `serving`, or nothing.
     'serve status --json': { text: serving ? ours(serving) : '{}' },
     'serve --bg': { text: '' },
     'serve --https=443': { text: '' },
+    // A desk's Go to herdr (#296).
+    'agent focus': { text: '' },
   })
 }
 
@@ -51,7 +60,8 @@ async function startPwaBoard(box: Sandbox) {
   tailscaleState(box, { serving: `http://127.0.0.1:${pwaPort}` })
   const { url } = await serveBoard(
     box,
-    { language: 'en', remote: { on: true, port: remotePort, pwa: { on: true, port: pwaPort } } },
+    // A desk's focus reaches herdr here: no window of this computer's is raised for it.
+    { language: 'en', raiseTerminal: false, remote: { on: true, port: remotePort, pwa: { on: true, port: pwaPort } } },
     { TAILSCALE_BIN_PATH: box.env.HERDR_BIN_PATH as string },
   )
   const deadline = Date.now() + 8000
@@ -62,14 +72,16 @@ async function startPwaBoard(box: Sandbox) {
     if (Date.now() > deadline) throw new Error(`pwa did not start: ${JSON.stringify(view)}`)
     await Bun.sleep(25)
   }
-  return { url, web: `http://127.0.0.1:${pwaPort}` }
+  return { url, web: `http://127.0.0.1:${pwaPort}`, tailnet: `http://127.0.0.1:${remotePort}` }
 }
 
 describe("the board in a phone's browser, through tailscale serve", () => {
   const sandbox = sharedSandbox()
   let url = ''
   let web = ''
+  let tailnet = ''
   let cookie = ''
+  let box: Sandbox
   const local = (op: string, id = '') =>
     fetch(`${url}/api/remote`, {
       method: 'POST',
@@ -97,7 +109,8 @@ describe("the board in a phone's browser, through tailscale serve", () => {
     )
 
   beforeAll(async () => {
-    ;({ url, web } = await startPwaBoard(await sandbox()))
+    box = await sandbox()
+    ;({ url, web, tailnet } = await startPwaBoard(box))
   }, 30_000)
 
   test('only what serve forwards: its Host, HTTPS, and an address Tailscale vouches for', async () => {
@@ -241,6 +254,138 @@ describe("the board in a phone's browser, through tailscale serve", () => {
     expect((await local('undesk', id)).status).toBe(200)
     expect(await (await post('/api/session/s1/focus', {})).json()).toEqual({ error: 'desktop' })
     expect(await (await post('/api/remote', { op: 'deny', id: 'nope' })).json()).toEqual({ error: 'local' })
+  })
+
+  test('a desk: encoded spellings refused with no 500, opening stays here, every herdr focus goes through', async () => {
+    const view = (await (await fetch(`${url}/api/remote`)).json()) as { devices: { id: string }[] }
+    const id = view.devices[0]?.id ?? ''
+    expect((await local('desk', id)).status).toBe(200)
+    try {
+      for (const [path, error] of [
+        ['/api/fs/%6Fpen', 'desktop'],
+        ['/api/reveal', 'desktop'],
+        ['/api/%72eveal', 'desktop'],
+        ['/api/session/a%2Fb/focus', 'desktop'],
+        ['/api/%72emote', 'local'],
+        ['/api/remote/', 'local'],
+        ['/api/remote/x', 'local'],
+      ] as const) {
+        for (const got of [await post(path, { op: 'approve', id: 'nope', path: '/tmp', key: 's1' }), await phone(path)])
+          expect([path, got.status, await got.json()]).toEqual([path, 403, { error }])
+      }
+      // herdr's focus in all three of its routes: past the refusal, to the route. A session's goes to
+      // herdr; no such launch and no shell open for s1 are the routes' own answers, word for word.
+      const focus = async (path: string) => {
+        const got = await post(path, {})
+        return [path, got.status, await got.json()]
+      }
+      const focusCalls = () => box.calls().filter(c => c[0] === 'agent' && c[1] === 'focus')
+      const before = focusCalls().length
+      expect(await focus('/api/session/s1/focus')).toEqual(['/api/session/s1/focus', 200, { ok: true }])
+      expect([focusCalls().length, focusCalls().at(-1)]).toEqual([before + 1, ['agent', 'focus', 'p1']])
+      const t = translator('en')
+      const { items } = (await (await fetch(`${url}/api/board`)).json()) as { items: { key: string; name: string }[] }
+      const name = items.find(i => i.key === 's1')?.name ?? ''
+      expect(await focus('/api/launch/l1/focus')).toEqual([
+        '/api/launch/l1/focus',
+        409,
+        { ok: false, error: t('launch.err.gone') },
+      ])
+      expect(await focus('/api/term/s1/shell/focus')).toEqual([
+        '/api/term/s1/shell/focus',
+        409,
+        { ok: false, error: t('term.err.noShell', { name }) },
+      ])
+      expect((await local('undesk', id)).status).toBe(200)
+      for (const path of ['/api/session/s1/focus', '/api/launch/l1/focus', '/api/term/s1/shell/focus'])
+        expect(await focus(path)).toEqual([path, 403, { error: 'desktop' }])
+      expect(focusCalls().length).toBe(before + 1)
+    } finally {
+      // A failure above leaves no desk behind for the tests after it.
+      await local('undesk', id)
+    }
+  })
+
+  test("a desk's approve pairs the device that asks, its deny turns one away, its revoke unpairs it", async () => {
+    const view = (await (await fetch(`${url}/api/remote`)).json()) as { devices: { id: string }[] }
+    const id = view.devices[0]?.id ?? ''
+    expect((await local('desk', id)).status).toBe(200)
+    try {
+      const tablet = { 'x-forwarded-for': TABLET_IP, cookie: '' }
+      const ask = async () => {
+        const asked = await post('/api/remote/pair', { name: 'Board on a tablet' }, tablet)
+        expect(asked.status).toBe(202)
+        return ((await asked.json()) as { id: string }).id
+      }
+      const first = await ask()
+      expect(await (await post('/api/remote', { op: 'approve', id: first })).json()).toEqual({ ok: true })
+      const answer = await phone(`/api/remote/pair/${first}`, {}, tablet)
+      expect(await answer.json()).toEqual({ status: 'approved', device: 'ipad-11' })
+      const tabletCookie = (answer.headers.get('set-cookie') ?? '').split(';')[0] ?? ''
+      expect(tabletCookie).toStartWith('__Host-board=')
+      const signed = { ...tablet, cookie: tabletCookie }
+      expect((await phone('/api/board', {}, signed)).status).toBe(200)
+      const listed = (await (await fetch(`${url}/api/remote`)).json()) as { devices: { id: string; device: string }[] }
+      const paired = listed.devices.find(d => d.device === 'ipad-11')?.id ?? ''
+      expect(paired).not.toBe('')
+
+      expect(await (await post('/api/remote', { op: 'revoke', id: paired })).json()).toEqual({ ok: true })
+      expect((await phone('/api/board', {}, signed)).status).toBe(401)
+      const second = await ask()
+      expect(await (await post('/api/remote', { op: 'deny', id: second })).json()).toEqual({ ok: true })
+      expect(await (await phone(`/api/remote/pair/${second}`, {}, tablet)).json()).toMatchObject({ status: 'denied' })
+    } finally {
+      await local('undesk', id)
+    }
+  })
+
+  test('a desk straight on the Tailscale address, with its token as a bearer: the same as through serve', async () => {
+    const view = (await (await fetch(`${url}/api/remote`)).json()) as { devices: { id: string }[] }
+    const id = view.devices[0]?.id ?? ''
+    const bearer = (path: string, body?: unknown) =>
+      fetch(tailnet + path, {
+        method: body === undefined ? 'GET' : 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-board': '1',
+          authorization: `Bearer ${cookie.split('=')[1] ?? ''}`,
+        },
+        ...(body !== undefined && { body: JSON.stringify(body) }),
+      })
+    const said = async (path: string, body?: unknown) => {
+      const got = await bearer(path, body)
+      return [path, got.status, await got.json()]
+    }
+    expect((await bearer('/api/board')).status).toBe(200)
+    expect(await said('/api/session/s1/focus', {})).toEqual(['/api/session/s1/focus', 403, { error: 'desktop' }])
+    expect(await said('/api/remote', { op: 'deny', id: 'nope' })).toEqual(['/api/remote', 403, { error: 'local' }])
+
+    expect((await local('desk', id)).status).toBe(200)
+    try {
+      expect(await said('/api/session/s1/focus', {})).toEqual(['/api/session/s1/focus', 200, { ok: true }])
+      expect(await said('/api/remote', { op: 'deny', id: 'nope' })).toEqual([
+        '/api/remote',
+        404,
+        { ok: false, error: 'gone' },
+      ])
+      for (const op of ['off', 'pwa-off', 'desk', 'undesk'])
+        expect(await said('/api/remote', { op, id })).toEqual(['/api/remote', 403, { error: 'local' }])
+      for (const [path, error] of [
+        ['/api/fs/open', 'desktop'],
+        ['/api/fs/%6Fpen', 'desktop'],
+        ['/api/open-url', 'desktop'],
+        ['/api/reveal', 'desktop'],
+        ['/api/session/a%2Fb/focus', 'desktop'],
+        ['/api/%72emote', 'local'],
+        ['/api/remote/', 'local'],
+        ['/api/access', 'local'],
+      ] as const)
+        expect(await said(path, { op: 'approve', id: 'nope' })).toEqual([path, 403, { error }])
+      expect((await local('undesk', id)).status).toBe(200)
+      expect(await said('/api/session/s1/focus', {})).toEqual(['/api/session/s1/focus', 403, { error: 'desktop' }])
+    } finally {
+      await local('undesk', id)
+    }
   })
 
   test('unpairing ends its open stream with a word for the page, and the cookie stops working', async () => {

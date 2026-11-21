@@ -20,7 +20,6 @@
 // address from serve, the token in a cookie, and the board's page for a phone's browser.
 // A device's open streams end when it is unpaired, on both.
 import { hostname } from 'node:os'
-import { isRecord } from '../adapters/json-store.ts'
 import { type Caller, serveStatus, tailscaleStatus, whois } from '../adapters/tailscale.ts'
 import {
   clearCookie,
@@ -36,7 +35,6 @@ import {
 import {
   allowedLogin,
   bearerOf,
-  DESK_REMOTE_OPS,
   isOwnerLogin,
   type PwaView,
   REMOTE_API,
@@ -52,7 +50,7 @@ import type { Config } from '../core/types.ts'
 import { threadsConfig } from '../core/work-threads.ts'
 import type { Remote } from '../services/remote.ts'
 import { dispatch, type GuardState, json, peerOf, type Route, readBody } from './http.ts'
-import { decoded, endsWhenGone, remoteRefusal } from './streams.ts'
+import { decoded, deskOpRefusal, endsWhenGone, remoteRefusal } from './streams.ts'
 
 export interface Hello {
   board: 'agent-board'
@@ -269,13 +267,9 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
         !device.desk && isOwnerLogin(who.login, owner),
       )
       if (refused) return refused
-      if (req.method === 'POST' && raw === '/api/remote') {
-        // A body that is not a JSON object (null, a string, a broken or oversized one) is no op
-        // this desk may run: refused like any other, never answered with a 500 and its message.
-        const body = await readBody(req.clone()).catch(() => null)
-        const op = isRecord(body) ? body.op : undefined
-        if (!DESK_REMOTE_OPS.has(op)) return json(403, { error: 'local' })
-      }
+      // Only a desk gets this far with /api/remote: the ops it may run.
+      const op = await deskOpRefusal(req, raw)
+      if (op) return op
       if (req.method === 'GET' && raw === '/api/peers') return json(200, { peers: await peers() })
       // The board's page is for the computer's own browser; a phone has its app.
       if (!raw.startsWith('/api/') && !raw.startsWith('/uploads/')) return json(404, { error: 'not found' })

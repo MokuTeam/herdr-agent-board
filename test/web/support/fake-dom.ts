@@ -342,6 +342,13 @@ export class FakeElement extends FakeTarget {
   hasAttribute(name: string): boolean {
     return this.node.attrs.has(name)
   }
+  /** As the DOM's: `force` says on or off; without it, the other way. Returns whether it is on. */
+  toggleAttribute(name: string, force?: boolean): boolean {
+    const on = force ?? !this.node.attrs.has(name)
+    if (on) this.node.attrs.set(name, '')
+    else this.node.attrs.delete(name)
+    return on
+  }
   get innerHTML(): string {
     return serializeNodes(this.node.children)
   }

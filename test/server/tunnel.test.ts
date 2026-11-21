@@ -345,6 +345,12 @@ describe('the tunnel listener', () => {
       expect([path, ...(await answer(me.get(path)))]).toEqual([path, 403, { error: 'local' }])
       expect([path, ...(await answer(me.post(path, { op: 'off' })))]).toEqual([path, 403, { error: 'local' }])
     }
+    // The tunnel's login is never a desk (#296): none of what a desk may do, the pairing answers
+    // and herdr's focus in all its routes included.
+    for (const op of ['approve', 'deny', 'revoke'])
+      expect([op, ...(await answer(me.post('/api/remote', { op, id: 'nope' })))]).toEqual([op, 403, { error: 'local' }])
+    for (const path of ['/api/launch/l1/focus', '/api/term/s1/shell/focus', '/api/reveal', '/api/%72eveal'])
+      expect([path, ...(await answer(me.post(path, { key: 's1' })))]).toEqual([path, 403, { error: 'desktop' }])
     // fetch resolves `.` itself: as written too.
     for (const path of [
       '/api/./access',

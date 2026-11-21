@@ -226,6 +226,27 @@ test('the login screen: a passkey first, then a password and a code in a form a 
   }
 })
 
+test('hello marks the page before the board draws: data-desk and data-device as it says, and gone once it no longer does', async () => {
+  // Through tailscale serve (server/remote.ts): the desk's hello, then the same browser unmarked
+  // on the computer, then a hello with no device at all (the tunnel's).
+  const desk = { board: 'agent-board', host: 'BOX', paired: true, desk: true, device: '2d240475327c', language: 'en' }
+  answers([200, desk], [200, { ...desk, desk: false }], [200, hello(true)])
+  const world = browser(false)
+  try {
+    const html = world.document.documentElement
+    const marks = () => [html.hasAttribute('data-desk'), html.getAttribute('data-device')]
+    const gate = gateFlow({ follow() {} })
+    await gate.check()
+    expect([gate.view.get().gate, ...marks()]).toEqual(['board', true, '2d240475327c'])
+    await gate.check()
+    expect([gate.view.get().gate, ...marks()]).toEqual(['board', false, '2d240475327c'])
+    await gate.check()
+    expect([gate.view.get().gate, ...marks()]).toEqual(['board', false, null])
+  } finally {
+    world.uninstall()
+  }
+})
+
 test("a sign-in's failure as the board answers it, and what the screen says of it", () => {
   expect(loginNote(401, { ok: false, error: 'wrong' }, null)).toEqual({ kind: 'wrong' })
   expect(loginNote(423, { ok: false, error: 'locked', until: 5 }, null)).toEqual({ kind: 'locked', until: 5 })
