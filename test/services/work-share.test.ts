@@ -35,6 +35,7 @@ import {
   requestShare,
   shareThread,
   takeOffer,
+  unshareThread,
 } from '../../src/services/work-share.ts'
 import { type EventSchedule, newThread, postEntry, type ThreadsCtx } from '../../src/services/work-threads.ts'
 import { isolatedHome } from '../support/env.ts'
@@ -1018,4 +1019,148 @@ test("an import's entry the owner holds stays out of the next entry's head; a se
     author: mapper,
     set: { summary: 'one sheet left' },
   })
+})
+
+test('a refused share of a mirrored thread leaves it local, and nothing waits to go out (#562)', () => {
+  const a = board(ANNA)
+  const made = newThread(a.ctx(), { lane: 'atlas', title: 'Map the 2019 price columns' })
+  a.db.db
+    .query('UPDATE threads SET origin = ? WHERE id = ?')
+    .run(JSON.stringify({ mirrored: true, agentBoard: { harness: 'pi', session: 'day-1', id: 'b1' } }), made.head.id)
+  const head = getThread(a.db, made.head.id) as ThreadHead
+  const before = entriesOf(a.db, head.id).length
+  expect(() =>
+    shareThread(a.ctx({ kind: 'owner' }, T0 + 2000), head, { kind: 'peer', peer: BEN, topic: `${BEN}/${head.id}` }),
+  ).toThrow(expect.objectContaining({ code: 'mirrored' }))
+  const after = getThread(a.db, head.id) as ThreadHead
+  expect(after.scope).toBe('local')
+  expect(sharedOf(after)).toBeNull()
+  expect(entriesOf(a.db, head.id)).toHaveLength(before)
+})
+
+test('a share that postEntry refuses for another reason puts the scope back as it was (#562)', () => {
+  const a = board(ANNA)
+  const made = newThread(a.ctx(), { lane: 'atlas', title: 'Map the 2019 price columns' })
+  // A database that refuses the share entry: the scope written just before it goes back.
+  const ctx = a.ctx({ kind: 'owner' }, T0 + 2000)
+  let writes = 0
+  const db = new Proxy(a.db, {
+    get(t, k, r) {
+      if (k !== 'write') return Reflect.get(t, k, r)
+      return (by: string, fn: (tx: unknown) => unknown) => {
+        writes++
+        if (writes === 2) throw new Error('disk full')
+        return t.write(by, fn as never)
+      }
+    },
+  })
+  expect(() =>
+    shareThread({ ...ctx, db }, made.head, { kind: 'peer', peer: BEN, topic: `${BEN}/${made.head.id}` }),
+  ).toThrow('disk full')
+  expect(getThread(a.db, made.head.id)?.scope).toBe('local')
+  expect(entriesOf(a.db, made.head.id)).toHaveLength(1)
+})
+
+test('sharing again sends no field of a private entry or of one that never went out (#563)', () => {
+  const { a, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const was = shared(getThread(a.db, id))
+  // A private step and a held one while shared with ben; neither reaches him.
+  postEntry(a.ctx(owner, T0 + 10_000), getThread(a.db, id) as ThreadHead, {
+    summary: 'private: the old rates',
+    private: true,
+  })
+  const held = postEntry(a.ctx(mapper, T0 + 11_000), getThread(a.db, id) as ThreadHead, {
+    status: 'waiting',
+    waitingOn: 'cleo signs it off',
+    summary: 'held for the owner',
+  })
+  setOut(a.db, held.entry.id, 'held')
+  unshareThread(a.ctx(owner, T0 + 12_000), getThread(a.db, id) as ThreadHead)
+  setOut(a.db, held.entry.id, 'discarded')
+  // Shared again, with cleo: the share carries the head ben holds, not the one anna's board shows.
+  const c = board(CLEO)
+  const again = shareThread(a.ctx(owner, T0 + 13_000), getThread(a.db, id) as ThreadHead, {
+    kind: 'peer',
+    peer: CLEO,
+    topic: `${CLEO}/${id}`,
+  })
+  const out = outgoing(a.db, again.head, again.entry, a.me, r => r)
+  expect(out?.work.share).toBe(true)
+  expect(out?.work.set).toMatchObject({ status: was?.status, summary: was?.summary })
+  expect(out?.work.set?.waitingOn).toBeUndefined()
+  expect(out?.work.head).toMatchObject({ status: was?.status, summary: was?.summary })
+  for (const word of ['private: the old rates', 'held for the owner', 'cleo signs it off'])
+    expect(JSON.stringify(out)).not.toContain(word)
+  // anna's own copy holds what the peers hold from the share on.
+  expect(getThread(a.db, id)).toMatchObject({ status: was?.status, summary: was?.summary, waitingOn: '' })
+  expect(take(c, handOver(a, c, again.head, again.entry)).taken).toBe(true)
+  expect(getThread(c.db, id)).toMatchObject({ status: was?.status, summary: was?.summary, waitingOn: '' })
+  expect(shared(getThread(c.db, id))).toEqual(shared(getThread(a.db, id)))
+  // Send history after it holds none of them either.
+  for (const word of ['private: the old rates', 'held for the owner'])
+    expect(historyText(a.db, again.head, a.me)).not.toContain(word)
+})
+
+test('a first share takes no field of a private entry on the local thread; a thread without one shares its head as before (#563)', () => {
+  const a = board(ANNA)
+  const owner: Party = { kind: 'owner' }
+  const made = newThread(a.ctx(), { lane: 'atlas', title: 'Map the 2019 price columns' })
+  postEntry(a.ctx(mapper, T0 + 1000), made.head, { status: 'doing', summary: 'first sheet mapped' })
+  const plain = getThread(a.db, made.head.id) as ThreadHead
+  postEntry(a.ctx(owner, T0 + 1500), plain, { summary: 'private: the old rates', private: true })
+  const share = shareThread(a.ctx(owner, T0 + 2000), getThread(a.db, made.head.id) as ThreadHead, {
+    kind: 'peer',
+    peer: BEN,
+    topic: `${BEN}/${made.head.id}`,
+  })
+  expect(share.entry.set).toMatchObject({ title: plain.title, status: 'doing', summary: 'first sheet mapped' })
+  expect(getThread(a.db, made.head.id)).toMatchObject({ status: 'doing', summary: 'first sheet mapped' })
+  expect(JSON.stringify(outgoing(a.db, share.head, share.entry, a.me, r => r))).not.toContain('private: the old rates')
+  // Without a private entry, the share's fields are the head's, as they were.
+  const d = board(ANNA)
+  const t = newThread(d.ctx(), { lane: 'atlas', title: 'Map the 2020 price columns' })
+  const w = postEntry(d.ctx(mapper, T0 + 1000), t.head, { status: 'waiting', waitingOn: 'ben sends the sheet' })
+  const s2 = shareThread(d.ctx(owner, T0 + 2000), w.head, { kind: 'peer', peer: BEN, topic: `${BEN}/${t.head.id}` })
+  expect(s2.entry.set).toEqual({
+    title: w.head.title,
+    status: w.head.status,
+    summary: w.head.summary,
+    waitingOn: 'ben sends the sheet',
+  })
+})
+
+test('a held entry is ordered by the time it was written on every board, not by when it went out (#564)', () => {
+  const { a, b, id } = sharedPair()
+  // anna's session writes at 20 s; the owner holds it. ben, who has not seen it, writes the same
+  // number at 25 s. The owner sends anna's at 30 s.
+  const held = postEntry(a.ctx(mapper, T0 + 20_000), getThread(a.db, id) as ThreadHead, {
+    status: 'waiting',
+    waitingOn: 'cleo signs it off',
+    summary: 'mapped, cleo signs it off',
+  })
+  setOut(a.db, held.entry.id, 'held')
+  const bens = postEntry(b.ctx({ kind: 'owner' }, T0 + 25_000), getThread(b.db, id) as ThreadHead, {
+    status: 'doing',
+    summary: 'ben maps the 2020 columns',
+  })
+  expect(bens.entry.n).toBe(held.entry.n)
+  take(a, handOver(b, a, bens.head, bens.entry))
+  const sent = { ...handOver(a, b, held.head, held.entry), at: T0 + 30_000 }
+  expect(sent.work?.at).toBe(T0 + 20_000)
+  setOut(a.db, held.entry.id, 'sent')
+  take(b, sent)
+  // The tie on n falls by the time each entry was written, on both boards: ben's is the later.
+  expect(getThread(a.db, id)).toMatchObject({ status: 'doing', summary: 'ben maps the 2020 columns' })
+  expect(shared(getThread(b.db, id))).toEqual(shared(getThread(a.db, id)))
+  expect(entriesOf(b.db, id).find(e => e.id === held.entry.id)?.at).toBe(T0 + 20_000)
+})
+
+test("an entry from a board that sends no time of its own is ordered by the message's, as before (#564)", () => {
+  const { a, b, id } = sharedPair()
+  const e = postEntry(a.ctx({ kind: 'owner' }, T0 + 20_000), getThread(a.db, id) as ThreadHead, { text: 'next sheet' })
+  const m = handOver(a, b, e.head, e.entry)
+  const { at: _at, ...older } = m.work as WorkBody
+  take(b, { ...m, at: T0 + 30_000, work: older })
+  expect(entriesOf(b.db, id).find(x => x.id === e.entry.id)?.at).toBe(T0 + 30_000)
 })

@@ -11,6 +11,7 @@ import {
   checkMessage,
   type Envelope,
   generateKey,
+  hasWorkAt,
   type KeyPair,
   type Message,
   OUR_CAPS,
@@ -51,9 +52,16 @@ describe('the field', () => {
       { ...WORK, head: { ...WORK.head, rev: 2 } },
       { ...WORK, head: { ...WORK.head, key: 'Atlas 13' } },
       { ...WORK, head: { ...WORK.head, extra: 1 } },
+      { ...WORK, at: -1 },
+      { ...WORK, at: 1.5 },
+      { ...WORK, at: '1763000000000' },
+      { ...WORK, at: null },
+      { ...WORK, at: Number.MAX_SAFE_INTEGER + 2 },
     ]
     for (const b of bad) expect(readWork(b)).toBeNull()
     expect(readWork({ ...WORK, set: { assignee: null } })?.set).toEqual({ assignee: null })
+    // The entry's own time (#564).
+    expect(readWork({ ...WORK, at: 1763000000000 })).toEqual({ ...WORK, at: 1763000000000 })
   })
 
   test('a board reads work only in a topic; the hub relays it as signed', async () => {
@@ -78,7 +86,11 @@ describe('the field', () => {
   test('the caps: off, what this board said before; on, `work` after them', () => {
     expect(ourCaps({ files: true, work: false })).toEqual(OUR_CAPS)
     expect(ourCaps({ files: false, work: false })).toEqual(OUR_CAPS.filter(c => c !== 'files'))
-    expect(ourCaps({ files: true, work: true })).toEqual([...OUR_CAPS, 'work'])
+    expect(ourCaps({ files: true, work: true })).toEqual([...OUR_CAPS, 'work', 'work-at'])
+    // `work-at` counts only with `work` (#564).
+    expect(hasWorkAt({ caps: [...OUR_CAPS, 'work', 'work-at'] })).toBe(true)
+    expect(hasWorkAt({ caps: [...OUR_CAPS, 'work-at'] })).toBe(false)
+    expect(hasWorkAt({ caps: [...OUR_CAPS, 'work'] })).toBe(false)
   })
 })
 
@@ -93,7 +105,7 @@ interface World {
   taken: { from: string; topic: string }[]
 }
 
-async function world(on: boolean | null, take = true): Promise<World> {
+async function world(on: boolean | null, take = true, benCaps = [...RICH, 'work']): Promise<World> {
   const taken: World['taken'] = []
   const s = setup(
     { hub: 'ws://127.0.0.1:7443', name: 'me' },
@@ -113,7 +125,7 @@ async function world(on: boolean | null, take = true): Promise<World> {
   s.svc.start()
   const { ws, me } = await handshake(s, [
     { peer: A.pub, name: 'anna', caps: [...RICH, 'work'] },
-    { peer: B.pub, name: 'ben', caps: [...RICH, 'work'] },
+    { peer: B.pub, name: 'ben', caps: benCaps },
     { peer: C.pub, name: 'cleo', caps: RICH },
   ])
   return { s, ws, me, A, B, C, taken }
@@ -140,7 +152,7 @@ describe('the hello', () => {
       const w = await world(on)
       const caps = w.ws.of('hello')[0]?.caps ?? []
       expect(caps.includes('work')).toBe(has)
-      expect(caps).toEqual(has ? [...OUR_CAPS, 'work'] : OUR_CAPS)
+      expect(caps).toEqual(has ? [...OUR_CAPS, 'work', 'work-at'] : OUR_CAPS)
       stopAll()
     }
   })
@@ -173,6 +185,24 @@ describe('out', () => {
     })
     // A pair's topic is not the team's: without `open` it must exist in that pair.
     expect(r2).toEqual({ ok: false, error: 'thread' })
+  })
+
+  test("the entry's own time goes only to a board that says `work-at`; one that says `work` alone gets the rest (#564)", async () => {
+    const w = await world(true, true, [...RICH, 'work', 'work-at'])
+    const id = '00000000-0000-4000-8000-0000000000e3'
+    const body = { ...WORK, at: 1763000000000 }
+    const r = await w.s.svc.post(
+      { to: 'team', thread: { id: TID, title: 'Map the 2019 price columns' } },
+      'done: 217 rows mapped',
+      { by: 'ui' },
+      undefined,
+      { id, body, open: true },
+    )
+    expect(r).toMatchObject({ ok: true, id })
+    const of = (k: KeyPair) => sent(w.ws).find(m => m.to === k.pub)?.body
+    expect(of(w.B)?.work).toEqual(body)
+    expect(of(w.A)?.work).toEqual(WORK)
+    expect(of(w.C)?.work).toBeUndefined()
   })
 
   test('a post without an entry is what it was', async () => {

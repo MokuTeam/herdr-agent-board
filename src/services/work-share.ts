@@ -35,10 +35,11 @@ import {
   localKey,
   missingText,
   type NameOf,
-  notSent,
-  ownPrivate,
   peerSet,
   sharedOrder,
+  shareSet,
+  theirHead,
+  wentOut,
   wireHead,
   wireKey,
   wireSet,
@@ -46,7 +47,6 @@ import {
 } from '../core/work-share.ts'
 import {
   cleanText,
-  type EntrySet,
   LANE,
   OWNER,
   type Party,
@@ -60,7 +60,7 @@ import {
   type ThreadScope,
   TITLE_MAX,
 } from '../core/work-threads.ts'
-import { postEntry, type ThreadsCtx, tellWatchers, type Written } from './work-threads.ts'
+import { notMirrored, postEntry, type ThreadsCtx, tellWatchers, type Written } from './work-threads.ts'
 
 /** This board's peer id: what its own entries order by on a shared thread; '' before it has a key. */
 export const myPeer = (): string => readKey()?.pub ?? ''
@@ -77,7 +77,7 @@ export interface InboundWork {
   /** The session name the sender's board signed, when an agent wrote it. */
   agent?: string
   text: string
-  /** The sender's time (it orders entries, 4.3). */
+  /** The message's time, when it was sent: it orders the entry (4.3) unless `work.at` names the entry's own (#564). */
   at: number
   ref: ThreadRef
   /** The topic's key on this board's Team. */
@@ -173,8 +173,10 @@ export function ingest(
     if (w && w.n > head.rev + MAX_N_JUMP) return { taken: false, why: 'counter' }
   } else if (w && w.n > MAX_N_JUMP) return { taken: false, why: 'counter' }
   if (entryById(ctx.db, m.id)) return { taken: false, why: 'dup' }
-  // The sender's time orders entries (4.3); one far in the future is held to a day ahead.
-  const at = Math.min(Number.isFinite(m.at) ? m.at : ctx.now, ctx.now + DAY)
+  // The entry's own time orders entries (4.3): the one `work` carries (#564), else the message's,
+  // which is when it was sent. One far in the future is held to a day ahead.
+  const sent = w?.at ?? m.at
+  const at = Math.min(Number.isFinite(sent) ? sent : ctx.now, ctx.now + DAY)
   const done = ctx.db.write(byOf(author), tx => {
     let fresh = false
     if (!head) {
@@ -331,11 +333,7 @@ export function outgoing(
   // The head the peers hold right after it (#549): the entries before it but this board's own
   // private ones and those that did not go out (held, discarded, refused: #556), whose fields stay
   // here as their text does, then the entry as the peers take it.
-  const theirs = foldShared(
-    head,
-    [...upTo.slice(0, -1).filter(e => !ownPrivate(e) && !notSent(e)), asSent(entry, proposed)],
-    me,
-  )
+  const theirs = foldShared(head, [...upTo.slice(0, -1).filter(wentOut), asSent(entry, proposed)], me)
   const s = sharingOf(head)
   const flags = {
     ...(entry.type === 'system' && s && entry.at === s.at && s.by === 'me' && isShareEntry(entry) && { share: true }),
@@ -351,6 +349,9 @@ export function outgoing(
     text,
     work: {
       n: entry.n,
+      // Its own time (#564): a held entry goes out later than it was written, and every board
+      // orders it by when it was written, as this one does.
+      at: entry.at,
       type: entry.type,
       ...(set && { set }),
       head: wireHead(theirs),
@@ -419,8 +420,9 @@ export function declineShare(ctx: ThreadsCtx, head: ThreadHead): Written {
 
 /**
  * The owner shares a thread (11.2): its scope becomes the topic with the thread's id, and one
- * system entry carries the head as it is now; the entries before it stay on this board. Sending it
- * is the caller's (work-hub.ts). Refused for an agent, a mirrored thread, one shared already.
+ * system entry carries the head as the peers would fold it now (#563); the entries before it stay
+ * on this board. Sending it is the caller's (work-hub.ts). Refused for an agent, a mirrored thread,
+ * one shared already; a refusal leaves the scope as it was (#562).
  */
 export function shareThread(ctx: ThreadsCtx & { me: string }, head: ThreadHead, target: ShareTarget): Written {
   if (ctx.actor.kind !== 'owner') throw new ThreadError('owner_only', 'only the owner shares a thread')
@@ -437,16 +439,23 @@ export function shareThread(ctx: ThreadsCtx & { me: string }, head: ThreadHead, 
     by: 'me',
     at: ctx.now,
   }
+  // Without this board's private entries and those that never went out of an earlier sharing:
+  // their fields are no more the peers' than their text is (#563).
+  const set = shareSet(theirHead(head, entriesOf(ctx.db, head.id), ctx.me))
+  // What postEntry would refuse is refused before the scope changes (#562).
+  notMirrored(ctx, head, set)
+  const was = getThread(ctx.db, head.id)?.scope ?? head.scope
   ctx.db.write(byOf(ctx.actor), tx => setScope(tx, head.id, scope))
-  const shared = { ...head, scope }
-  const set: EntrySet = {
-    title: head.title,
-    status: head.status,
-    summary: head.summary,
-    ...(head.waitingOn && { waitingOn: head.waitingOn }),
-    ...(head.assignee && { assignee: head.assignee }),
+  try {
+    return postEntry({ ...ctx, me: ctx.me }, { ...head, scope }, { type: 'system', text: SHARE_TEXT, set })
+  } catch (err) {
+    try {
+      ctx.db.write(byOf(ctx.actor), tx => setScope(tx, head.id, was))
+    } catch {
+      // The refusal is what the caller hears, not a failed restore after it.
+    }
+    throw err
   }
-  return postEntry({ ...ctx, me: ctx.me }, shared, { type: 'system', text: SHARE_TEXT, set })
 }
 
 /**

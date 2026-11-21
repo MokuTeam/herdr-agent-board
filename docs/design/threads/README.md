@@ -283,7 +283,11 @@ thread, and the copies have to come out the same. Three rules do that:
    refuses for good, leaves a hole the peers read as an entry missing, which it is.
 2. A head field takes the value from the entry that is last in the order `(n, at, author's peer
    id)`. Two boards that hold the same entries compute the same head, whatever order the entries
-   arrived in.
+   arrived in. `at` is the time the entry was written, on its board and on the peers alike: it
+   rides in `work.at` to a board whose caps say `work-at`, so an entry held for the owner and
+   sent later is not ordered by when it went out (#564). A board that gets no `work.at` (an older
+   sender, or one that does not send it to an older receiver) orders by the message's time, which
+   is when it was sent.
 3. Every shared entry also carries its sender's head as it was after the entry (key, title,
    status, summary, `rev`), folded without its sender's private entries (#549) and without those
    that did not go out: held for the owner, discarded, refused (#556). A board that
@@ -786,7 +790,9 @@ whose title is the thread's title. Sharing with the team or a channel starts a t
 
 - The hub forwards body fields it does not know, as signed, so the hub needs no change and no new
   message kind. Boards reject unknown body fields, so `work` goes only to peers that advertise a
-  new capability, `work`, in their `hello`.
+  new capability, `work`, in their `hello`. A board also rejects a `work` with a key it does not
+  know, so the entry's own time, `work.at` (4.3, #564), goes only to peers that advertise
+  `work-at` as well; the others get the same `work` without it.
 - A peer without the capability gets the same message without the field. A message must have
   text, so an entry that only changes fields is sent with a line the board writes, `done: 217 rows
   mapped, 3 flagged in the report`, and `work.auto` tells a board that understands the field not to show
@@ -887,7 +893,13 @@ agreed to this design.
   waits as `held` for the owner's Send on the page, since any program can run the command as the
   owner; an agent's entry is checked by `agentPost` with its `work` fields (summary, what it waits
   on, title) as well as its text. Sharing writes one system entry that carries the head; its text
-  for a board without `work` is `shared as a thread: atlas-13 · doing: <summary>`. "Send history"
+  for a board without `work` is `shared as a thread: atlas-13 · doing: <summary>`. The head it
+  carries is the one the peers would fold: without this board's private entries and those that did
+  not go out, also from an earlier sharing when a thread is shared again (#563). A share the board
+  refuses (a mirrored thread, among others) leaves the thread's scope as it was (#562). The entry
+  sets those fields on the sharer's own copy too, so a field a private or unsent entry set there
+  (a private wait on the owner among them) gives way to the peers' value at the share, as it would
+  to any later entry that sets it. "Send history"
   (`thread-history`) sends the shared entries as a JSON file through the end-to-end encrypted files;
   the receiving board reads it in once the file is there, each entry it lacks marked as a copy, never
   one the file says it wrote itself. Unsharing sends `stopped sharing` and keeps the feed.

@@ -70,6 +70,9 @@ export const ownPrivate = (e: Pick<ThreadEntry, 'private' | 'author'>): boolean 
 export const notSent = (e: Pick<ThreadEntry, 'out'>): boolean =>
   e.out === 'held' || e.out === 'discarded' || e.out === 'refused'
 
+/** Whether the peers hold an entry: any but this board's own private ones and those that did not go out. */
+export const wentOut = (e: Pick<ThreadEntry, 'private' | 'author' | 'out'>): boolean => !ownPrivate(e) && !notSent(e)
+
 /** Where an entry stands in this board's journal; the one being written (no row yet) is the last. */
 const writtenAt = (e: Pick<ThreadEntry, 'seq'>): number => e.seq || Number.MAX_SAFE_INTEGER
 
@@ -113,6 +116,28 @@ export function foldShared(base: ThreadHead, entries: readonly ThreadEntry[], me
   for (const e of sharedOrder(entries, me)) h = applyEntry(h, e)
   // A copy that never got the entry with the title keeps the one it was made with.
   return h.title ? h : { ...h, title: base.title }
+}
+
+/**
+ * The head as the peers fold it (#549, #556): every entry but this board's own private ones and
+ * those that did not go out (held, discarded, refused), whose fields stay here as their text does.
+ */
+export const theirHead = (base: ThreadHead, entries: readonly ThreadEntry[], me: string): ThreadHead =>
+  foldShared(base, entries.filter(wentOut), me)
+
+/**
+ * What the entry that shares a thread sets (11.2): every head field the peers hold, from the head
+ * as they would fold it (theirHead), so a thread shared again sends nothing of an entry that stayed
+ * home the first time (#563).
+ */
+export function shareSet(h: ThreadHead): EntrySet {
+  return {
+    title: h.title,
+    status: h.status,
+    summary: h.summary,
+    ...(h.waitingOn && { waitingOn: h.waitingOn }),
+    ...(h.assignee && { assignee: h.assignee }),
+  }
 }
 
 // ------------------------------------------------------------------ out (11.1)

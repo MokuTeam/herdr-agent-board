@@ -37,6 +37,12 @@ export type Cap = (typeof CAPS)[number]
  * field, and reads a shared thread as a topic with status replies.
  */
 export const WORK_CAP = 'work'
+/**
+ * A shared thread's entry with its own time (#564): `work.at`, the time the entry was written,
+ * which the peers order it by (4.3) instead of the time the message was sent. Said with `work`; a
+ * board that says `work` alone gets the field without it, as before.
+ */
+export const WORK_AT_CAP = 'work-at'
 export const MAX_CAPS = 8
 export const MAX_CAP = 32
 /** The thread with no topic, in a pair or the team; today's flat thread with a peer is its pair's. */
@@ -123,10 +129,12 @@ export interface WorkHead {
  * message's id (a team post's id) is the entry's. `n` the per-thread counter, `auto` the text is
  * the line the board wrote for a peer without `work` (not shown twice), `share` the thread was
  * shared with this message, `unshare` it no longer is, `hist` the message's file is the thread's
- * history (a JSON export, "Send history").
+ * history (a JSON export, "Send history"), `at` the time the entry was written (only to a board
+ * whose caps say WORK_AT_CAP, #564).
  */
 export interface WorkBody {
   n: number
+  at?: number
   type: (typeof WORK_TYPES)[number]
   set?: WorkSet
   head: WorkHead

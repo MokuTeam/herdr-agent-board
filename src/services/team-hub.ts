@@ -73,6 +73,7 @@ import {
   hasReplies,
   hasThreads,
   hasWork,
+  hasWorkAt,
   isMessageId,
   isPeerId,
   isThreadId,
@@ -1100,7 +1101,12 @@ export function createTeam({
       if (fileRef) msgBody.file = fileRef
       // A shared thread's entry (#394): its fields to a board that keeps shared threads; any other
       // reads the text, the board's line when the entry had none.
-      if (work && rich && ref && hasWork(p)) msgBody.work = work.body
+      // The entry's own time (#564) only to a board that orders by it: an older one drops a body
+      // field it does not know with the whole message.
+      if (work && rich && ref && hasWork(p)) {
+        const { at: _at, ...plain } = work.body
+        msgBody.work = hasWorkAt(p) ? work.body : plain
+      }
       const msg: Message = {
         v: TEAM_PROTOCOL,
         id: copies.length ? crypto.randomUUID() : postId,
