@@ -557,13 +557,18 @@ describe('without a node, nothing of this', () => {
     expect(importers).toEqual([])
   })
 
-  test('its words are under node. only, in both languages, and no other dictionary has a node. key', () => {
+  test('its words are under node. and place. only (and the one launch error the pin has), in both languages, and no other dictionary has such a key', () => {
     expect(Object.keys(NODE_STRINGS.ru).sort()).toEqual(Object.keys(NODE_STRINGS.en).sort())
-    expect(Object.keys(NODE_STRINGS.en).every(k => k.startsWith('node.'))).toBe(true)
+    // node.: the devices, the install, the door; place.: where a start goes and why (#504); the pin's
+    // refusal beside the launch window's other errors.
+    const strays = Object.keys(NODE_STRINGS.en).filter(
+      k => !k.startsWith('node.') && !k.startsWith('place.') && k !== 'launch.err.pin',
+    )
+    expect(strays).toEqual([])
     const dir = join(import.meta.dir, '..', '..', 'src', 'core', 'i18n')
     const others = readdirSync(dir)
       .filter(n => n !== 'node-strings.ts')
-      .filter(n => /['"]node\.[a-zA-Z]/.test(readFileSync(join(dir, n), 'utf8')))
+      .filter(n => /['"](node|place)\.[a-zA-Z]/.test(readFileSync(join(dir, n), 'utf8')))
     expect(others).toEqual([])
   })
 })
