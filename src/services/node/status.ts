@@ -10,33 +10,12 @@ import { ROOT } from '../../adapters/paths.ts'
 import { type SysLoad, sysLoad } from '../../adapters/sysload.ts'
 import { CLAUDE_AGENT, launchAgents } from '../../core/launch/agents.ts'
 import { NODE_API } from '../../core/node-door.ts'
-import type { NodeConfig } from '../../core/nodes.ts'
+import type { NodeConfig, NodeStatus } from '../../core/nodes.ts'
 import type { Profile } from '../../core/profiles.ts'
 import type { Item, LaunchSpec, LaunchView } from '../../core/types.ts'
 import { piOnPath } from '../launch/launches.ts'
 
-export interface NodeStatus {
-  api: number
-  id: string
-  version: string
-  commit: string
-  platform: string
-  arch: string
-  cpus: number
-  memTotalMb: number
-  memAvailableMb: number | null
-  load: [number, number, number] | null
-  sessions: { awake: number; working: number; asleep: number }
-  /** Launches still on their way (starting, waiting, a trust dialog). */
-  launches: number
-  /** null when the folder, or every folder above it, cannot be read. */
-  workRootFreeMb: number | null
-  /** loggedIn: null where a folder cannot tell (macOS keeps Claude's login in the Keychain). bundle: null until profile sync (T10). */
-  profiles: { id: string; loggedIn: boolean | null; bundle: null }[]
-  /** The agents a start may name here, by the board's own rule (core/launch/agents.ts). */
-  agents: string[]
-  at: number
-}
+export type { NodeStatus }
 
 export interface StatusSources {
   node: () => NodeConfig | null

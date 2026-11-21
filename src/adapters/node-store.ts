@@ -1,4 +1,8 @@
-// The masters a node answers to (#498, docs/design/nodes 7.2): `<state>/node/masters.json`, mode
+// Both sides' records of the node link. On a master (#499, docs/design/nodes 7.1), per device in
+// `<state>/nodes/<id>/`: `token` (0600; the master is the client, so it holds the token the node
+// gave it), the ssh link's `link-key`, and the link's ssh pid record. Never logged, never printed.
+//
+// On a node, the masters it answers to (#498, docs/design/nodes 7.2): `<state>/node/masters.json`, mode
 // 0600, a list of { id, name, tokenHash, pairedAt, seenAt, via }. A list from its first version,
 // with one entry in stage 1, so a second master is no migration (21.3).
 //
@@ -11,8 +15,9 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { DEVICE_ID } from '../core/nodes.ts'
 import { hasUnprintable } from '../core/team.ts'
-import { isRecord, updateJson } from './json-store.ts'
+import { isRecord, replaceFile, updateJson } from './json-store.ts'
 import { pace } from './pacing.ts'
 import { stateDir } from './paths.ts'
 
@@ -209,5 +214,52 @@ export function createNodeStore({ dir = nodeDir(), now = Date.now, pollMs = 1000
         }
       }
     },
+  }
+}
+
+/** The master's folder for its devices in the board's state folder. */
+export const nodesDir = (): string => join(stateDir(), 'nodes')
+
+/** A token as a node hands it out (32 random bytes, base64url; add() above), with room for a longer one. */
+const TOKEN = /^[A-Za-z0-9_-]{32,256}$/
+export const isNodeToken = (v: string): boolean => TOKEN.test(v)
+
+export interface DeviceStore {
+  /** The device's own folder, `<nodes>/<id>`. Throws on an id that is not one, so no path leaves the folder. */
+  dir(id: string): string
+  /** The token the node gave this master, or null: none stored, unreadable, or not a token. */
+  token(id: string): string | null
+  /** Stores the device's token, mode 0600, whole or not at all. Throws on one that is not a token, without it in the message. */
+  setToken(id: string, token: string): void
+  /** The ssh link's private key, made by `board nodes key`; its public half beside it with `.pub`. */
+  keyPath(id: string): string
+  /** The pid record of the device's link ssh (adapters/ssh.ts PidRecord). */
+  pidFile(id: string): string
+}
+
+export function createDeviceStore({ dir = nodesDir() }: { dir?: string } = {}): DeviceStore {
+  const folder = (id: string): string => {
+    if (!DEVICE_ID.test(id)) throw new Error(`not a device id: ${JSON.stringify(id)}`)
+    return join(dir, id)
+  }
+  return {
+    dir: folder,
+    token(id) {
+      try {
+        const token = readFileSync(join(folder(id), 'token'), 'utf8').trim()
+        return isNodeToken(token) ? token : null
+      } catch {
+        return null
+      }
+    },
+    setToken(id, token) {
+      if (!isNodeToken(token))
+        throw new Error('not a token: a node prints one line of 32 or more letters, digits, - and _')
+      const at = folder(id)
+      mkdirSync(at, { recursive: true })
+      replaceFile(join(at, 'token'), `${token}\n`, undefined, 0o600)
+    },
+    keyPath: id => join(folder(id), 'link-key'),
+    pidFile: id => join(folder(id), 'ssh-pid.json'),
   }
 }

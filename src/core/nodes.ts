@@ -460,3 +460,133 @@ export function parseNodeKey(key: string): { device: string; key: string } | nul
 export function laneMayLeave(cfg: NodesConfig, lane: string): boolean {
   return cfg.lanes === 'all' || cfg.lanes.includes(lane.trim().toLowerCase())
 }
+
+/** `GET /api/node/status` on a node's door (6.3; services/node/status.ts makes it, the master's link reads it). */
+export interface NodeStatus {
+  api: number
+  id: string
+  version: string
+  commit: string
+  platform: string
+  arch: string
+  cpus: number
+  memTotalMb: number
+  /** null where the platform's answer could not be read: never read as 0. */
+  memAvailableMb: number | null
+  load: [number, number, number] | null
+  sessions: { awake: number; working: number; asleep: number }
+  /** Launches still on their way (starting, waiting, a trust dialog). */
+  launches: number
+  /** null when the folder, or every folder above it, cannot be read. */
+  workRootFreeMb: number | null
+  /** loggedIn: null where a folder cannot tell (macOS keeps Claude's login in the Keychain). bundle: null until profile sync (T10). */
+  profiles: { id: string; loggedIn: boolean | null; bundle: null }[]
+  /** The agents a start may name here, by the board's own rule (core/launch/agents.ts). */
+  agents: string[]
+  at: number
+}
+
+const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+const isCount = (v: unknown): boolean => Number.isInteger(v) && (v as number) >= 0
+
+/**
+ * A node's status as its door answered it, or null when it is not one. The node's word, checked
+ * field by field before the master keeps it: a null where the type has one stays null.
+ */
+export function nodeStatusOf(raw: unknown): NodeStatus | null {
+  if (!isObject(raw)) return null
+  const s = raw
+  const sessions = s.sessions
+  const ok =
+    isCount(s.api) &&
+    typeof s.id === 'string' &&
+    typeof s.version === 'string' &&
+    typeof s.commit === 'string' &&
+    typeof s.platform === 'string' &&
+    typeof s.arch === 'string' &&
+    isCount(s.cpus) &&
+    isNumber(s.memTotalMb) &&
+    (s.memAvailableMb === null || isNumber(s.memAvailableMb)) &&
+    (s.load === null || (Array.isArray(s.load) && s.load.length === 3 && s.load.every(isNumber))) &&
+    isObject(sessions) &&
+    isCount(sessions.awake) &&
+    isCount(sessions.working) &&
+    isCount(sessions.asleep) &&
+    isCount(s.launches) &&
+    (s.workRootFreeMb === null || isNumber(s.workRootFreeMb)) &&
+    Array.isArray(s.profiles) &&
+    s.profiles.every(
+      p => isObject(p) && typeof p.id === 'string' && (p.loggedIn === null || typeof p.loggedIn === 'boolean'),
+    ) &&
+    Array.isArray(s.agents) &&
+    s.agents.every(a => typeof a === 'string') &&
+    isNumber(s.at)
+  if (!ok) return null
+  const counts = sessions as Record<string, number>
+  return {
+    api: s.api as number,
+    id: s.id as string,
+    version: s.version as string,
+    commit: s.commit as string,
+    platform: s.platform as string,
+    arch: s.arch as string,
+    cpus: s.cpus as number,
+    memTotalMb: s.memTotalMb as number,
+    memAvailableMb: s.memAvailableMb as number | null,
+    load: s.load === null ? null : ([...(s.load as number[])] as [number, number, number]),
+    sessions: { awake: counts.awake as number, working: counts.working as number, asleep: counts.asleep as number },
+    launches: s.launches as number,
+    workRootFreeMb: s.workRootFreeMb as number | null,
+    profiles: (s.profiles as Record<string, unknown>[]).map(p => ({
+      id: p.id as string,
+      loggedIn: p.loggedIn as boolean | null,
+      bundle: null,
+    })),
+    agents: [...(s.agents as string[])],
+    at: s.at as number,
+  }
+}
+
+/**
+ * Where the master's link to a device stands (services/nodes/link.ts). Offline is 90 s without a
+ * byte on the payload stream (6.5); refused is a cause that does not heal by waiting.
+ */
+export type LinkState = 'connecting' | 'online' | 'offline' | 'refused'
+
+/**
+ * Why a link is refused: `token` (none stored, or the node does not take it), `api` (the door's
+ * `node.api` is not this board's), `device` (the door is another device's), `host-key` (the
+ * node's ssh host key is not the pinned one), `ssh` (another lasting ssh error: the key refused,
+ * its rights, a passphrase), `key` (no link key yet), `not-built` (a link kind not built yet).
+ */
+export type LinkReason = 'token' | 'api' | 'device' | 'host-key' | 'ssh' | 'key' | 'not-built'
+
+export interface LinkStatus {
+  state: LinkState
+  since: number
+  /** refused: why. */
+  reason?: LinkReason
+  /** What was said last: an ssh line, an HTTP status, the ssh hint. Never a token. */
+  detail?: string
+  /** Waiting to try again: the attempt's number and when it starts. */
+  attempt?: number
+  nextAt?: number
+  /** When the payload stream last carried a byte; null before it ever did. */
+  heardAt: number | null
+}
+
+/** One device as `GET /api/nodes` and `board nodes` show it. */
+export interface DeviceView {
+  id: string
+  title: string
+  /** null: this computer. */
+  kind: LinkConfig['kind'] | null
+  /** null: this computer, which has no link. */
+  link: LinkStatus | null
+  /** The node's last status; null before one came. */
+  status: NodeStatus | null
+  /** Whether the node runs this board's commit (6.5); null while either is not known. */
+  sameCommit: boolean | null
+  /** When its last payload came; null before one did. */
+  payloadAt: number | null
+}

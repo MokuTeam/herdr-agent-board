@@ -179,8 +179,11 @@ export interface SshLine {
   platform?: string
 }
 
-/** ssh's options, each one argument: no prompt, a forward the server refuses ends ssh, a dead link is noticed. */
-const OPTIONS = [
+/**
+ * ssh's options, each one argument: no prompt, a forward the server refuses ends ssh, a dead link
+ * is noticed. A node link's ssh (adapters/node-ssh.ts) takes the same.
+ */
+export const SSH_OPTIONS = [
   'IdentitiesOnly=yes',
   'BatchMode=yes',
   'ExitOnForwardFailure=yes',
@@ -206,7 +209,7 @@ export function sshArgs(l: SshLine): string[] {
     '-v',
     '-i',
     sshPathArg(l.key, l.platform),
-    ...[...OPTIONS, knownHosts].flatMap(o => ['-o', o]),
+    ...[...SSH_OPTIONS, knownHosts].flatMap(o => ['-o', o]),
     '-p',
     String(conf.sshPort),
     '-R',

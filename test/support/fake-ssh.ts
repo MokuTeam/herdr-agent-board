@@ -1,5 +1,6 @@
 // Compiled to an executable (see fake-ssh-bin.ts) and used as both BOARD_SSH_BIN_PATH and
-// BOARD_SSH_KEYGEN_BIN_PATH: an argument list with `-R` is ssh, any other ssh-keygen. It contacts
+// BOARD_SSH_KEYGEN_BIN_PATH: an argument list with `-R` is ssh, one with `-L` a node link's ssh,
+// any other ssh-keygen. It contacts
 // no server and never runs the real ones. Every call is appended to FAKE_SSH_LOG as a JSON line
 // (its argv), and each ssh's pid to `<FAKE_SSH_LOG>.pids`, one a line; FAKE_SSH_STATE (a JSON
 // file, missing = {}) picks the answers:
@@ -19,6 +20,15 @@
 // `X-Forwarded-Proto: https` and the caller's address in X-Forwarded-For; 502 while nothing answers
 // there. It listens before it says the forward is taken. A port still taken (a stray fake about to
 // be ended) is tried again for 2 s; after that the forward goes on without it.
+//
+// A node link's line (`-L 127.0.0.1:<local>:127.0.0.1:<port>`, adapters/node-ssh.ts) is a real
+// local forward: it listens on 127.0.0.1:<local> and passes each connection on to 127.0.0.1:<port>
+// on this computer, which stands for the node. The same modes: forward does that; hostkey exits 255
+// as ssh does for a changed server key, and so does a quoted UserKnownHostsFile that pins another
+// key for the host (accept-new pins one on the first connection); publickey exits 255 for a refused
+// key; refuse takes each connection and closes it, as a server whose permitopen does not allow the
+// port; hang stays up silent. exitAfterMs drops it after that long. A local port another program
+// holds: ssh's bind error, 255. Its pid goes to `<FAKE_SSH_LOG>.pids` too.
 //
 // The admin's line (-T and no -R; core/server-admin.ts) is a server of its own, `admin` in the state:
 //   { uid?: number,                                 0: root (default 1000)
@@ -50,6 +60,7 @@
 // `hang` stays up silent.
 import { createHmac } from 'node:crypto'
 import { appendFileSync, existsSync, readFileSync, writeFileSync, writeSync } from 'node:fs'
+import { connect, createServer } from 'node:net'
 import { dirname, join } from 'node:path'
 
 type Mode = 'forward' | 'refuse' | 'publickey' | 'hostkey' | 'hang'
@@ -84,7 +95,7 @@ const args = process.argv.slice(2)
 const logPath = process.env.FAKE_SSH_LOG
 const statePath = process.env.FAKE_SSH_STATE
 if (logPath) appendFileSync(logPath, `${JSON.stringify(args)}\n`)
-if (logPath && args.includes('-R')) appendFileSync(`${logPath}.pids`, `${process.pid}\n`)
+if (logPath && (args.includes('-R') || args.includes('-L'))) appendFileSync(`${logPath}.pids`, `${process.pid}\n`)
 const state: State = statePath && existsSync(statePath) ? (JSON.parse(readFileSync(statePath, 'utf8')) as State) : {}
 
 const say = (...lines: string[]): void => {
@@ -274,6 +285,72 @@ async function ssh(): Promise<void> {
       'debug1: forwarding_success: all expected forwarding replies received',
     )
   stayUp()
+}
+
+/** A line in the quoted known_hosts names the host with a key that is not its own. */
+function otherHostKey(): boolean {
+  const file = knownHosts()
+  if (!file || !existsSync(file)) return false
+  return readFileSync(file, 'utf8')
+    .split(/\r?\n/)
+    .some(l => l.startsWith(`${HOST} `) && l !== HOST_LINE)
+}
+
+/** A node link's ssh: a local forward, its connections passed on to the port on this computer. */
+async function localForward(): Promise<void> {
+  const verbose = args.includes('-v')
+  // -L 127.0.0.1:<local>:127.0.0.1:<port>
+  const [, lhost = '', lport = '', rhost = '', rport = ''] = /^(.*):(\d+):(.*):(\d+)$/.exec(argAfter('-L') ?? '') ?? []
+  const now = mode()
+  if (now === 'hang') {
+    setInterval(() => {}, 1 << 30)
+    return
+  }
+  if (verbose) say('OpenSSH_for_Windows_9.5p2, LibreSSL 3.8.2')
+  if (now === 'hostkey' || otherHostKey()) {
+    say('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@')
+    say('@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @')
+    say('Host key verification failed.')
+    end(255)
+  }
+  pinHostKey(verbose)
+  if (now === 'publickey') {
+    say(`agent-board-link@${HOST}: Permission denied (publickey).`)
+    end(255)
+  }
+  if (verbose) {
+    say(`Authenticated to ${HOST} ([203.0.113.5]:22) using "publickey".`)
+    say(`debug1: Local connections to ${lhost}:${lport} forwarded to remote address ${rhost}:${rport}`)
+  }
+  const server = createServer(socket => {
+    if (now === 'refuse') {
+      say('channel 2: open failed: administratively prohibited: open failed')
+      socket.destroy()
+      return
+    }
+    const peer = connect(Number(rport), rhost)
+    socket.pipe(peer)
+    peer.pipe(socket)
+    socket.on('error', () => peer.destroy())
+    peer.on('error', () => socket.destroy())
+  })
+  const listening = await new Promise<boolean>(resolve => {
+    server.once('error', () => resolve(false))
+    server.listen(Number(lport), lhost, () => resolve(true))
+  })
+  if (!listening) {
+    say(`bind [${lhost}]:${lport}: Address already in use`)
+    say(`channel_setup_fwd_listener_tcpip: cannot listen to port: ${lport}`)
+    say('Could not request local forwarding.')
+    end(255)
+  }
+  if (verbose) say(`debug1: Local forwarding listening on ${lhost} port ${lport}.`)
+  const after = state.ssh?.exitAfterMs
+  if (after !== undefined)
+    setTimeout(() => {
+      say(`Connection to ${HOST} closed by remote host.`)
+      end(255)
+    }, after)
 }
 
 /** What sudo (Debian 13, 1.9.16p2) and sudo-rs (Ubuntu 26.04, 0.2.13) print, as the spike recorded it. */
@@ -479,6 +556,7 @@ async function admin(): Promise<void> {
 }
 
 if (args.includes('-R')) await ssh()
+else if (args.includes('-L')) await localForward()
 else if (args.includes('-V')) {
   say(state.sshVersion ?? 'OpenSSH_for_Windows_9.5p2, LibreSSL 3.8.2')
   end(0)

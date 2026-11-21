@@ -15,7 +15,7 @@ import { FILE_TOKEN } from '../adapters/files.ts'
 import { createNodeStore } from '../adapters/node-store.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
-import { pace } from '../adapters/pacing.ts'
+import { knobMs, pace } from '../adapters/pacing.ts'
 import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
@@ -37,7 +37,7 @@ import {
 } from '../adapters/ssh.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
 import { messageGate } from '../core/message-gate.ts'
-import { nodeConfig } from '../core/nodes.ts'
+import { nodeConfig, nodesConfig } from '../core/nodes.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payload.ts'
 import type { Observation } from '../core/presence.ts'
@@ -65,6 +65,7 @@ import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
 import { createNodeStatus } from '../services/node/status.ts'
+import { createNodeLinks, type NodeLinks } from '../services/nodes/links.ts'
 import { tellOwnerWatchers } from '../services/owner-watch.ts'
 import { createPresence } from '../services/presence.ts'
 import { editProfile, installProfile, installThreadsSkill, wakeHooksInPlace } from '../services/profiles.ts'
@@ -108,6 +109,7 @@ import { launchRoutes } from './routes/launch.ts'
 import { linksRoutes } from './routes/links.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { moveRoute } from './routes/move.ts'
+import { nodesRoutes } from './routes/nodes.ts'
 import { pageLogRoute } from './routes/page-log.ts'
 import { presenceRoutes } from './routes/presence.ts'
 import { remoteRoutes } from './routes/remote.ts'
@@ -284,7 +286,10 @@ export async function startServer({
   const teamShown = teamReveal()
   // `board thread open` asks for a thread the same way (#392).
   const threadShown = threadOpenState()
+  // The ping keeps a quiet stream open, and tells a master's link a node is there (#499): every
+  // 20 s, sooner only in a test that sets BOARD_EVENTS_PING_MS (adapters/pacing.ts).
   const events = createBroadcaster(() => board.payload(), {
+    pingMs: knobMs('BOARD_EVENTS_PING_MS', 20_000),
     greet: () => reveals.greet() + eventsShown.greet() + teamShown.greet() + threadShown.greet(),
   })
   // GET /api/threads/events (#392): its own stream, made on its first client. The routes use the
@@ -925,7 +930,12 @@ export async function startServer({
       // the CLI and agents send no Origin, and the presence switch itself says what it says.
       if (req.method !== 'GET' && path.startsWith('/api/') && path !== '/api/presence' && ownOrigin(req))
         presence.touch()
-      const selected = path === '/api/board-events' || path === '/api/board-events/ack' ? localEventRoutes : routes
+      const selected =
+        path === '/api/board-events' || path === '/api/board-events/ack'
+          ? localEventRoutes
+          : path === '/api/nodes' && localNodeRoutes
+            ? localNodeRoutes
+            : routes
       return await dispatch(selected, req, url, path, guards, () => peerOf(srv, req))
     } catch (err) {
       // The path only: a query can carry the page's token.
@@ -995,6 +1005,23 @@ export async function startServer({
     void door.sync()
   }
 
+  // The master's links to its nodes (#499, services/nodes/links.ts) and `/api/nodes` on this board
+  // alone: made the first time config.json has `nodes`, and from then on following it. Without
+  // `nodes` nothing of it exists: no ssh, no timer, no file, no route.
+  let nodeLinks: NodeLinks | null = null
+  let localNodeRoutes: Route[] | null = null
+  function linksFollow(): void {
+    if (nodeLinks) {
+      nodeLinks.configChanged()
+      return
+    }
+    if (nodesConfig(cfg.nodes) === null) return
+    nodeLinks = createNodeLinks({ cfg, log })
+    localNodeRoutes = nodesRoutes(nodeLinks)
+    // Their ssh dies with the board, also on an exit that skips close().
+    process.on('exit', nodeLinks.killNow)
+  }
+
   const poll = setInterval(refresh, Math.max(1, cfg.refreshSec ?? 2) * 1000)
   const watchers = [
     watchFolder(cards, 150, refresh, log),
@@ -1021,6 +1048,7 @@ export async function startServer({
   // board before left is ended first).
   void tunnel.sync().then(() => supervisor.sync())
   doorFollows()
+  linksFollow()
   // Wake on but not running (its startup entry did not run, or it ended): started once.
   void wake.ensure()
   presence.start()
@@ -1069,6 +1097,7 @@ export async function startServer({
       team.refresh()
       holdLoopback6()
       doorFollows()
+      linksFollow()
       await board.refresh()
       ownerTick()
     },
@@ -1102,6 +1131,10 @@ export async function startServer({
       process.off('exit', endLogins)
       await tunnel.close()
       await door?.close()
+      if (nodeLinks) {
+        await nodeLinks.close()
+        process.off('exit', nodeLinks.killNow)
+      }
       await loopback6?.stop(true)
       await server.stop(true)
     },
