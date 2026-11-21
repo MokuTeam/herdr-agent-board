@@ -25,6 +25,7 @@ import { parseTaskFile } from '../../src/core/thread-import.ts'
 import { afterN, type Party, sharedOf, type ThreadEntry, type ThreadHead } from '../../src/core/work-threads.ts'
 import { importTaskFile } from '../../src/services/thread-import.ts'
 import {
+  freshWork,
   historyText,
   type InboundWork,
   importHistory,
@@ -909,6 +910,107 @@ test('a held entry the owner sends after a later one went out comes out the same
   take(b, sent)
   expect(getThread(b.db, id)).toMatchObject({ status: 'waiting', summary: 'mapped, cleo signs it off' })
   expect(shared(getThread(b.db, id))).toEqual(shared(getThread(a.db, id)))
+})
+
+test('a held entry sent late lands the same on a peer that missed an earlier entry setting the same fields (#561)', () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const first = postEntry(a.ctx(owner, T0 + 20_000), getThread(a.db, id) as ThreadHead, {
+    status: 'doing',
+    summary: 'anna maps the columns',
+  })
+  // The first one goes, but reaches ben only at the end.
+  const firstOut = handOver(a, b, first.head, first.entry)
+  setOut(a.db, first.entry.id, 'sent')
+  const held = postEntry(a.ctx(mapper, T0 + 21_000), first.head, {
+    status: 'waiting',
+    waitingOn: 'cleo signs it off',
+    summary: 'mapped, cleo signs it off',
+  })
+  setOut(a.db, held.entry.id, 'held')
+  const next = postEntry(a.ctx(owner, T0 + 22_000), held.head, { text: 'the rows are in' })
+  // ben gets only the last one: he takes anna's head, which holds the first entry's fields.
+  take(b, handOver(a, b, next.head, next.entry))
+  setOut(a.db, next.entry.id, 'sent')
+  expect(getThread(b.db, id)).toMatchObject({ status: 'doing', summary: 'anna maps the columns' })
+  // The owner sends the held one, then the first one arrives too.
+  const sent = handOver(a, b, held.head, held.entry)
+  expect(sent.work?.head.rev).toBe(next.entry.n)
+  setOut(a.db, held.entry.id, 'sent')
+  take(b, sent)
+  take(b, firstOut)
+  expect(entriesOf(b.db, id).filter(e => e.text.includes('arrived late'))).toHaveLength(1)
+  expect(getThread(a.db, id)).toMatchObject({ status: 'waiting', summary: 'mapped, cleo signs it off' })
+  expect(shared(getThread(b.db, id))).toEqual(shared(getThread(a.db, id)))
+  // A later entry on either board still sets what it sets.
+  const later = postEntry(a.ctx(owner, T0 + 40_000), getThread(a.db, id) as ThreadHead, {
+    status: 'done',
+    summary: 'all in',
+  })
+  take(b, handOver(a, b, later.head, later.entry))
+  expect(shared(getThread(b.db, id))).toEqual(shared(getThread(a.db, id)))
+})
+
+test("an agent's draft held before a later entry went out takes the head of now when the owner sends it (#561)", () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const first = postEntry(a.ctx(owner, T0 + 20_000), getThread(a.db, id) as ThreadHead, {
+    status: 'doing',
+    summary: 'one',
+  })
+  const firstOut = handOver(a, b, first.head, first.entry)
+  setOut(a.db, first.entry.id, 'sent')
+  const held = postEntry(a.ctx(mapper, T0 + 21_000), first.head, { status: 'waiting', summary: 'held one' })
+  // The draft keeps the body written when it was held: the head right after it.
+  const draft = handOver(a, b, held.head, held.entry)
+  setOut(a.db, held.entry.id, 'held')
+  const stored = { id: held.entry.id, body: draft.work as WorkBody }
+  expect(stored.body.head.rev).toBe(held.entry.n)
+  // Before a later entry was sent it goes as it was stored.
+  expect(freshWork(a.db, stored, ANNA)).toBe(stored)
+  const next = postEntry(a.ctx(owner, T0 + 22_000), held.head, { text: 'the rows are in' })
+  take(b, handOver(a, b, next.head, next.entry))
+  setOut(a.db, next.entry.id, 'sent')
+  const fresh = freshWork(a.db, stored, ANNA)
+  expect(fresh.body).toEqual({ ...stored.body, head: { ...stored.body.head, rev: next.entry.n } })
+  setOut(a.db, held.entry.id, 'sent')
+  take(b, { ...draft, work: fresh.body })
+  take(b, firstOut)
+  expect(getThread(a.db, id)).toMatchObject({ status: 'waiting', summary: 'held one' })
+  expect(shared(getThread(b.db, id))).toEqual(shared(getThread(a.db, id)))
+})
+
+test('a held entry sent late to a peer that missed only its number adds no second adoption (#561)', () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const first = postEntry(a.ctx(owner, T0 + 20_000), getThread(a.db, id) as ThreadHead, {
+    status: 'doing',
+    summary: 'one',
+  })
+  take(b, handOver(a, b, first.head, first.entry))
+  const held = postEntry(a.ctx(mapper, T0 + 21_000), first.head, { status: 'waiting', summary: 'held one' })
+  setOut(a.db, held.entry.id, 'held')
+  const next = postEntry(a.ctx(owner, T0 + 22_000), held.head, { text: 'the rows are in' })
+  take(b, handOver(a, b, next.head, next.entry))
+  setOut(a.db, next.entry.id, 'sent')
+  take(b, handOver(a, b, held.head, held.entry))
+  setOut(a.db, held.entry.id, 'sent')
+  expect(entriesOf(b.db, id).filter(e => e.text.includes('arrived late'))).toEqual([])
+  expect(shared(getThread(b.db, id))).toEqual(shared(getThread(a.db, id)))
+})
+
+test('an entry sent in its turn carries the head right after it, its own number as rev (#561)', () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const one = postEntry(a.ctx(owner, T0 + 20_000), getThread(a.db, id) as ThreadHead, {
+    status: 'doing',
+    summary: 'one',
+  })
+  const two = postEntry(a.ctx(owner, T0 + 21_000), one.head, { summary: 'two' })
+  // Sent while the later one waits its turn: its head stays the one right after it.
+  const again = handOver(a, b, one.head, one.entry)
+  expect(again.work?.head).toMatchObject({ rev: one.entry.n, summary: 'one' })
+  expect(handOver(a, b, two.head, two.entry).work?.head).toMatchObject({ rev: two.entry.n, summary: 'two' })
 })
 
 /** anna's thread made by an import of a task board, then shared with ben, and the file the import read. */

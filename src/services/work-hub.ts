@@ -21,7 +21,7 @@ import {
   ThreadError,
 } from '../adapters/work-thread-store.ts'
 import { categoryInfo } from '../core/categories.ts'
-import { channelMembers, isPeerId, type ThreadRef, teamConfig } from '../core/team.ts'
+import { channelMembers, isPeerId, type ThreadRef, teamConfig, type WorkPost } from '../core/team.ts'
 import { sharesLane, TEAM, threadKey } from '../core/team-agents.ts'
 import type { Config } from '../core/types.ts'
 import { scopeWho } from '../core/work-share.ts'
@@ -40,6 +40,7 @@ import {
 import type { InboundEvent, TeamService } from './team-hub.ts'
 import type { TeamRouter } from './team-router.ts'
 import {
+  freshWork,
   historyText,
   importHistory,
   ingest,
@@ -68,6 +69,8 @@ export interface WorkHub {
   on(): boolean
   /** The hub client's check on a message that carries `work` (11.4). */
   mayTake(m: { from: string; topic: string; ref: ThreadRef; share?: boolean }): boolean
+  /** A held draft's `work` as it goes when the owner sends it (#561): the head of now for one sent late. */
+  fresh(w: WorkPost): WorkPost
   /** A message the hub client kept: an entry of a shared thread, when it is one (true then). */
   inbound(e: InboundEvent): boolean
   /**
@@ -312,6 +315,15 @@ export function createWorkHub({ cfg, team, router, gated, log, changed, schedule
       } catch (err) {
         log(`threads: a shared entry was not checked: ${err instanceof Error ? err.message : String(err)}`)
         return false
+      }
+    },
+    fresh(w) {
+      if (!on()) return w
+      try {
+        return withThreadsDb(false, db => (db ? freshWork(db, w, me()) : w))
+      } catch (err) {
+        log(`threads: a draft's head was not renewed: ${err instanceof Error ? err.message : String(err)}`)
+        return w
       }
     },
 

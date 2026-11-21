@@ -289,14 +289,24 @@ thread, and the copies have to come out the same. Three rules do that:
    sender, or one that does not send it to an older receiver) orders by the message's time, which
    is when it was sent.
 3. Every shared entry also carries its sender's head as it was after the entry (key, title,
-   status, summary, `rev`), folded without its sender's private entries (#549) and without those
+   status, summary, `rev`; an entry sent late carries the head of now, below), folded without its sender's private entries (#549) and without those
    that did not go out: held for the owner, discarded, refused (#556). A board that
    sees a `rev` more than one ahead of its own knows it missed entries: it adopts the newer head
    fields, and shows a line in the feed, "entries missing here". It adopts only the fields that
    differ from its own, so a held entry the owner sends later, after a later entry went out, lands
-   on a peer that missed only its number as it does on its sender. A peer that also missed an
-   earlier entry setting the same fields keeps the adopted ones until a later entry sets them
-   (#561).
+   on a peer that missed only its number as it does on its sender.
+
+   A peer that also missed an earlier entry setting the same fields took that earlier entry's
+   values in its adoption, and the held entry, folded before the adoption, would not change them
+   (#561). So an entry that goes out after a later one was sent (an agent's draft or the owner's
+   entry held for the passkey, sent by the owner) carries its sender's head as it is now: every
+   entry that went out, and this one, with `rev` the highest `n` among them. An agent's draft
+   takes that head when the owner sends it, not when it was held. A board that holds an adoption
+   numbered above the entry and no higher than that `rev` takes the fields that still differ, in a
+   second private entry, "#n arrived late". It is numbered with that `rev`, or with the board's
+   own highest `n` when the sender is ahead, and ordered after every entry of that number. A board
+   that took no head over that number adds nothing. An older board adopts only on a counter jump
+   and reads the larger `rev` as before.
 
 Rule 3 is what a late joiner and a board that was offline past the hub's 7 days rely on. They have
 the right head after the first message they receive and lack only the older feed. For the feed

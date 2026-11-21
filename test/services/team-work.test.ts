@@ -6,7 +6,7 @@
 // it shares with the sender, and goes to the threads with the event; without the hooks the event is
 // as it was. The hub passes the field on as signed.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { readAllInbox } from '../../src/adapters/team-store.ts'
+import { addDraft, readAllInbox } from '../../src/adapters/team-store.ts'
 import {
   checkMessage,
   cleanCaps,
@@ -20,6 +20,7 @@ import {
   ourCaps,
   readWork,
   type WorkBody,
+  type WorkPost,
 } from '../../src/core/team.ts'
 import { msgOf, question } from '../hub/harness.ts'
 import { type FakeWs, handshake, type Setup, setup, stopAll, until } from '../support/team-service.ts'
@@ -112,7 +113,12 @@ interface World {
   taken: { from: string; topic: string; share?: boolean }[]
 }
 
-async function world(on: boolean | null, take = true, benCaps = [...RICH, 'work']): Promise<World> {
+async function world(
+  on: boolean | null,
+  take = true,
+  benCaps = [...RICH, 'work'],
+  fresh?: (w: WorkPost) => WorkPost,
+): Promise<World> {
   const taken: World['taken'] = []
   const s = setup(
     { hub: 'ws://127.0.0.1:7443', name: 'me' },
@@ -125,6 +131,7 @@ async function world(on: boolean | null, take = true, benCaps = [...RICH, 'work'
               taken.push({ from: m.from, topic: m.topic, ...(m.share && { share: m.share }) })
               return take
             },
+            ...(fresh && { fresh }),
           },
         },
   )
@@ -166,6 +173,35 @@ describe('the hello', () => {
 })
 
 describe('out', () => {
+  test('a held draft goes with the work the hook gives at send time; without the hook, as it was stored (#561)', async () => {
+    for (const renew of [false, true]) {
+      const w = await world(
+        true,
+        true,
+        [...RICH, 'work'],
+        renew ? p => ({ ...p, body: { ...p.body, head: { ...p.body.head, rev: 5 } } }) : undefined,
+      )
+      const id = '00000000-0000-4000-8000-0000000000d1'
+      const thread = { id: TID, title: 'Map the 2019 price columns' }
+      addDraft(
+        {
+          id,
+          to: 'team',
+          text: 'done: 217 rows mapped',
+          createdAt: w.s.clock.now(),
+          thread,
+          work: { id, body: WORK, open: true },
+        },
+        50,
+      )
+      expect(await w.s.svc.sendDraft(id)).toMatchObject({ ok: true })
+      const of = (k: KeyPair) => sent(w.ws).find(m => m.to === k.pub)?.body
+      expect(of(w.B)?.work).toEqual(renew ? { ...WORK, head: { ...WORK.head, rev: 5 } } : WORK)
+      expect(of(w.C)?.work).toBeUndefined()
+      stopAll()
+    }
+  })
+
   test('a team post with an entry: `work` to the boards that keep shared threads, the text to every one, one id', async () => {
     const w = await world(true)
     const id = '00000000-0000-4000-8000-0000000000e1'

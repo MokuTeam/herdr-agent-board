@@ -121,7 +121,10 @@ export interface WorkSet {
   assignee?: WorkParty | null
 }
 
-/** The sender's head after the entry (4.3, rule 3): a board that missed entries takes it. */
+/**
+ * The sender's head after the entry (4.3, rule 3): a board that missed entries takes it. An entry
+ * sent after a later one was sent carries the head of now, its `rev` above the entry's `n` (#561).
+ */
 export interface WorkHead {
   key: string
   title: string

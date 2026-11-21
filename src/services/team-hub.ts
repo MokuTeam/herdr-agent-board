@@ -285,6 +285,8 @@ export interface InboundWorkPart {
 export interface WorkHooks {
   on(): boolean
   mayTake(m: { from: string; topic: string; ref: ThreadRef; share?: boolean }): boolean
+  /** A held draft's `work` as it goes when the owner sends it (#561); without it, the one stored. */
+  fresh?(w: WorkPost): WorkPost
 }
 
 /** A line of a thread (#216): a message either way, or a draft. */
@@ -1605,8 +1607,9 @@ export function createTeam({
       const file = d.file && { path: d.file.path, name: d.file.name }
       let r: PostResult = { ok: false, error: 'draft' }
       try {
-        r = await post({ ...target, ...(d.replyTo && { replyTo: d.replyTo }) }, d.text, source, file, d.work)
-        if (!r.ok && r.error === 'reply' && d.replyTo) r = await post(target, d.text, source, file, d.work)
+        const sent = d.work && work?.fresh ? work.fresh(d.work) : d.work
+        r = await post({ ...target, ...(d.replyTo && { replyTo: d.replyTo }) }, d.text, source, file, sent)
+        if (!r.ok && r.error === 'reply' && d.replyTo) r = await post(target, d.text, source, file, sent)
       } finally {
         // Put back when the send is refused, or throws: a draft is never lost on the way.
         if (!r.ok) addDraft(d, Number.MAX_SAFE_INTEGER)

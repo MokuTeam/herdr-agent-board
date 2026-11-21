@@ -23,7 +23,16 @@ import {
   setScope,
   ThreadError,
 } from '../adapters/work-thread-store.ts'
-import { GENERAL, isPeerId, MAX_TEXT, readWork, type ThreadRef, validName, type WorkBody } from '../core/team.ts'
+import {
+  GENERAL,
+  isPeerId,
+  MAX_TEXT,
+  readWork,
+  type ThreadRef,
+  validName,
+  type WorkBody,
+  type WorkPost,
+} from '../core/team.ts'
 import {
   adoptedSet,
   fallbackLine,
@@ -32,6 +41,7 @@ import {
   type HistoryFile,
   historyOf,
   isAdoption,
+  lateText,
   localKey,
   missingText,
   type NameOf,
@@ -273,6 +283,22 @@ export function ingest(
           ctx.me,
         )
         after = a.head
+      } else if (!w.hist && w.head.rev > w.n) {
+        // Rule 3 again (#561): an entry sent after a later one went out carries its sender's head as
+        // it is now. Where this board took an older head over that entry's number, the fields that
+        // still differ are taken, right after the adoptions of their number.
+        const top = Math.min(w.head.rev, after.rev)
+        const entries = entriesOf(tx, before.id)
+        const set = entries.some(e => isAdoption(e) && e.n > w.n && e.n <= top) ? adoptedSet(w.head, after) : {}
+        if (Object.keys(set).length) {
+          const last = Math.max(at, ...entries.filter(e => e.n === top).map(e => e.at + 1))
+          after = appendEntry(
+            tx,
+            before.id,
+            { n: top, at: last, author, type: 'system', text: lateText(w.n, author.name), set, private: true },
+            ctx.me,
+          ).head
+        }
       }
       if (w.unshare && s.by === m.from) setScope(tx, before.id, { ...s, ended: at })
     }
@@ -356,7 +382,12 @@ export function outgoing(
   // The head the peers hold right after it (#549): the entries before it but this board's own
   // private ones and those that did not go out (held, discarded, refused: #556), whose fields stay
   // here as their text does, then the entry as the peers take it.
-  const theirs = foldShared(head, [...upTo.slice(0, -1).filter(wentOut), asSent(entry, proposed)], me)
+  // One that goes out after a later entry was sent (held, then sent by the owner: #561) carries the
+  // head the peers hold now, every entry that went out and it, so a peer that took an older head for
+  // its number takes this one (rule 3).
+  const late = all.slice(upTo.length).some(e => e.n > entry.n && (e.out === 'sent' || e.author.kind === 'peer'))
+  const shown = late ? all.filter(e => e.id !== entry.id && wentOut(e)) : upTo.slice(0, -1).filter(wentOut)
+  const theirs = foldShared(head, [...shown, asSent(entry, proposed)], me)
   const s = sharingOf(head)
   const flags = {
     ...(entry.type === 'system' && s && entry.at === s.at && s.by === 'me' && isShareEntry(entry) && { share: true }),
@@ -383,6 +414,20 @@ export function outgoing(
     },
     ...(file && { file: { path: filePathOf(file.ref), name: file.name } }),
   }
+}
+
+/**
+ * A held entry's `work` as it goes when the owner sends it (#561): an agent's draft keeps the body
+ * written when it was held, so one sent after a later entry was sent takes the head the peers hold
+ * now (outgoing). Any other is returned as it is.
+ */
+export function freshWork(db: BoardDb, work: WorkPost, me: string): WorkPost {
+  const entry = entryById(db, work.id)
+  const head = entry && getThread(db, entry.thread)
+  if (!entry || !head || entry.n !== work.body.n) return work
+  const out = outgoing(db, head, entry, me, ref => ref)
+  if (!out || out.work.head.rev <= out.work.n) return work
+  return { ...work, body: { ...work.body, head: out.work.head } }
 }
 
 /**

@@ -13,7 +13,9 @@
 //   3. Every entry carries its sender's head after it, folded without the sender's private
 //      entries (#549) and those that did not go out (#556). A board whose own counter is more than one behind the entry's knows it
 //      missed entries: it writes an entry of its own that takes the sender's head fields
-//      (`entries missing here`), placed right after the sender's.
+//      (`entries missing here`), placed right after the sender's. An entry sent after a later one
+//      was sent carries the head of now instead, and a board that adopted over its number takes
+//      the fields that still differ (`arrived late`, #561).
 //
 // What a peer may set (11.4): status, summary, what it waits on, the title, and an assignee that
 // is the peer itself (or one of its sessions), a third member of the team, nobody, or this board
@@ -292,6 +294,11 @@ export function adoptedSet(theirs: WorkHead, mine: ThreadHead | null): EntrySet 
 export function missingText(from: number, to: number, who: string): string {
   const span = from >= to ? `#${from}` : `#${from} to #${to}`
   return `entries missing here (${span}); the head is taken from ${who}'s copy`
+}
+
+/** The words of the entry that takes a sender's head again when an entry it missed arrives late (#561). */
+export function lateText(n: number, who: string): string {
+  return `#${n} arrived late; the head is taken again from ${who}'s copy`
 }
 
 /**

@@ -513,6 +513,7 @@ export async function startServer({
     work: {
       on: () => workHub?.on() ?? false,
       mayTake: m => workHub?.mayTake(m) ?? false,
+      fresh: w => workHub?.fresh(w) ?? w,
     },
     // Each hearer on its own: one that throws keeps neither the other nor the message's ack back.
     onInbound: e => {
