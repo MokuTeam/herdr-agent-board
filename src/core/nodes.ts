@@ -695,6 +695,8 @@ export interface NodesPanelSettings {
   next: string | null
   /** The devices with no token stored yet: a refusal for `token` there means none was given. */
   noToken: string[]
+  /** Per device linked by ssh: its server, for the command that logs Claude in there (#509). */
+  hosts?: Record<string, { host: string; sshPort: number }>
 }
 
 /**

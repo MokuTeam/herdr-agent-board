@@ -143,7 +143,7 @@ export function App() {
     setTeam(true)
     setTeamMounted(true)
   }
-  // Settings → Devices… (#510), local page of a board with `nodes`: mounted at its first opening.
+  // Settings → Devices… (#510), the local page (Add a server alone without `nodes`, #509): mounted at its first opening.
   const [devices, setDevices] = useState(false)
   const [devicesMounted, setDevicesMounted] = useState(false)
   const openDevices = () => {
@@ -346,9 +346,7 @@ export function App() {
         {...(localPathsMounted && remotePage()
           ? { localPaths: { open: localPaths, onClose: () => setLocalPaths(false) } }
           : {})}
-        {...(devicesMounted && !remotePage() && data?.devices
-          ? { devices: { open: devices, onClose: () => setDevices(false) } }
-          : {})}
+        {...(devicesMounted && !remotePage() ? { devices: { open: devices, onClose: () => setDevices(false) } } : {})}
         {...(teamMounted && offersTeam(data)
           ? {
               team: {

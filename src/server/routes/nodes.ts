@@ -167,7 +167,11 @@ export function nodesRoutes(
     for (const d of devices) if (d.status) defaults[d.id] = defaultThresholds(d.status)
     const own = await panel?.ownStatus().catch(() => null)
     if (own) defaults.local = defaultThresholds(own)
+    const hosts: NonNullable<NodesPanelSettings['hosts']> = {}
+    for (const [id, d] of Object.entries(cfg?.devices ?? {}))
+      if (d.link?.kind === 'ssh') hosts[id] = { host: d.link.host, sshPort: d.link.sshPort }
     return {
+      hosts,
       whenFull: cfg?.whenFull ?? 'local',
       lanes: cfg?.lanes ?? [],
       seen: panel?.seen() ?? null,

@@ -7,6 +7,7 @@ import type { NodesPanelSettings } from '../../../src/core/nodes.ts'
 import type { BoardCategory, BoardDevice } from '../../../src/core/payload.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import { ago } from './card.ts'
+import { loggedOut, loginCommand } from './node-setup.ts'
 import type { ProfileOption } from './profiles.ts'
 
 type Devices = readonly BoardDevice[] | undefined
@@ -216,6 +217,11 @@ export interface DeviceRow {
   paused: boolean
   drain: boolean
   values: Record<Threshold, number | null>
+  /**
+   * Claude's login there (#509): the node's profiles that are not logged in, and the command that
+   * logs it in when the device is linked by ssh; null while every profile is (or the status cannot tell).
+   */
+  login: { out: string[]; command: string | null } | null
 }
 
 /** A node's version against this board's (#590): what its row says, and whether it offers Update. */
@@ -313,7 +319,7 @@ export function deviceRows(
   devices: readonly BoardDevice[],
   now: number,
   t: Translator,
-  settings?: Pick<PanelSettings, 'defaults' | 'noToken'> | null,
+  settings?: Pick<PanelSettings, 'defaults' | 'noToken' | 'hosts'> | null,
 ): DeviceRow[] {
   return devices.map(d => {
     const s = d.status
@@ -357,8 +363,18 @@ export function deviceRows(
       paused: d.paused,
       drain: d.drain,
       values: { maxSessions: d.maxSessions, minFreeMemMb: d.minFreeMemMb, maxLoad: d.maxLoad },
+      login: loginOf(d, settings?.hosts),
     }
   })
+}
+
+/** A node's profiles not logged in to Claude, and the command for it; this computer's are its own business. */
+function loginOf(d: BoardDevice, hosts: PanelSettings['hosts']): DeviceRow['login'] {
+  if (d.kind === null || !d.status) return null
+  const out = loggedOut(d.status.profiles)
+  if (!out.length) return null
+  const host = hosts?.[d.id]
+  return { out, command: host ? loginCommand(host) : null }
 }
 
 /** The order with `id` moved `by` places (−1 up, +1 down), held inside the list; the same list at an end. */

@@ -27,17 +27,21 @@ import {
   type Threshold,
   thresholdTyped,
 } from '../../models/devices.ts'
+import type { NodeSetupView } from '../../models/node-setup.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { GripGlyph } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { Switch } from '../team/Switch.tsx'
+import { AddServer, LoginLines } from './AddServer.tsx'
 
 export interface DevicesPanelProps {
   open: boolean
   onClose(): void
   /** What GET /api/nodes said, for a test that draws the panel without a server. */
   initial?: PanelSettings
+  /** The Add a server form's view, for a test (components/devices/AddServer.tsx). */
+  setup?: NodeSetupView
 }
 
 /** How long the panel waits after the devices change before it asks for the next device again. */
@@ -46,7 +50,7 @@ const NEXT_MS = 1000
 /** POST /api/nodes; the settings it answered with, or null when it was refused (a toast says why). */
 type Send = (body: Record<string, unknown>) => Promise<PanelSettings | null>
 
-export function DevicesPanel({ open, onClose, initial }: DevicesPanelProps) {
+export function DevicesPanel({ open, onClose, initial, setup }: DevicesPanelProps) {
   const t = useT()
   const { data, canEdit, toast, now } = useBoardContext()
   const [settings, setSettings] = useState<PanelSettings | null>(initial ?? null)
@@ -61,9 +65,11 @@ export function DevicesPanel({ open, onClose, initial }: DevicesPanelProps) {
       .then(r => r.settings && setSettings(r.settings))
       .catch(() => {})
   }, [])
+  // a board without `nodes` has no section to read: it is asked nothing until Add a server opens
+  const master = !!data?.devices
   useEffect(() => {
-    if (open) refresh()
-  }, [open, refresh])
+    if (open && master) refresh()
+  }, [open, master, refresh])
 
   const send: Send = useCallback(
     async body => {
@@ -125,8 +131,9 @@ export function DevicesPanel({ open, onClose, initial }: DevicesPanelProps) {
     },
     [latest],
   )
-  const shown = useHeld(devices, reorder.dragging)
-  if (!shown) return null
+  const held = useHeld(devices, reorder.dragging)
+  // without `nodes` the panel holds Add a server alone: a board adds its first server here (#509)
+  const shown = held ?? []
   const rows = deviceRows(shown, now, t, settings)
   if (order) rows.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
   const ids = rows.map(r => r.id)
@@ -146,11 +153,12 @@ export function DevicesPanel({ open, onClose, initial }: DevicesPanelProps) {
       title={
         <>
           <h2>{t('node.dev.title')}</h2>
-          <p className="sheet-meta">{t('node.dev.about')}</p>
+          {master && <p className="sheet-meta">{t('node.dev.about')}</p>}
         </>
       }
     >
       <div className="sheet-body cats-body devices-body">
+        {!master && <p className="sheet-meta devices-none">{t('node.add.none')}</p>}
         <div className="cats-list devices-list" ref={list}>
           {rows.map(row => (
             <DeviceRowView
@@ -165,21 +173,24 @@ export function DevicesPanel({ open, onClose, initial }: DevicesPanelProps) {
             />
           ))}
         </div>
-        <LanesSection settings={settings} disabled={!canEdit} send={send} />
-        <section className="devices-section">
-          <h3 className="devices-head">{t('node.dev.full')}</h3>
-          <div className="devices-switch-row">
-            <span>{t('node.dev.fullLocal')}</span>
-            <Switch
-              name="whenFull"
-              label={t('node.dev.fullLocal')}
-              on={(settings?.whenFull ?? 'local') === 'local'}
-              disabled={!canEdit || !settings}
-              onFlip={on => void send({ op: 'whenFull', whenFull: on ? 'local' : 'wait' })}
-            />
-          </div>
-          <p className="sheet-meta">{t('node.dev.fullAbout')}</p>
-        </section>
+        <AddServer {...(setup && { initial: setup })} />
+        {master && <LanesSection settings={settings} disabled={!canEdit} send={send} />}
+        {master && (
+          <section className="devices-section">
+            <h3 className="devices-head">{t('node.dev.full')}</h3>
+            <div className="devices-switch-row">
+              <span>{t('node.dev.fullLocal')}</span>
+              <Switch
+                name="whenFull"
+                label={t('node.dev.fullLocal')}
+                on={(settings?.whenFull ?? 'local') === 'local'}
+                disabled={!canEdit || !settings}
+                onFlip={on => void send({ op: 'whenFull', whenFull: on ? 'local' : 'wait' })}
+              />
+            </div>
+            <p className="sheet-meta">{t('node.dev.fullAbout')}</p>
+          </section>
+        )}
       </div>
     </Panel>
   )
@@ -288,6 +299,11 @@ function DeviceRowView({ row, defaults, next, disabled, send, onMove, onUpdate }
               {t('node.dev.update')}
             </button>
           )}
+        </div>
+      )}
+      {row.login && (
+        <div className="devices-login">
+          <LoginLines device={row.title} out={row.login.out} command={row.login.command} />
         </div>
       )}
       <div className="devices-controls">

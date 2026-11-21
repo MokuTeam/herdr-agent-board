@@ -68,7 +68,10 @@ export interface SidePanelsProps {
   calendarSettings?: CalendarSettingsPanelProps
   /** Settings → Team… (#231): given by the page while it offers it (the local page, the payload's teamRev). */
   team?: TeamPanelProps
-  /** Settings → Devices… (#510): given by the page once opened, on the local page of a board with `nodes`. */
+  /**
+   * Settings → Devices… (#510): given by the page once opened, on the local page; a board without
+   * `nodes` gets Add a server alone there (#509).
+   */
   devices?: DevicesPanelProps
 }
 
@@ -116,7 +119,7 @@ export function SidePanels({
       {calendarSettings && <CalendarSettingsPanel {...calendarSettings} />}
       {localPaths && remotePage() && <LocalPathsPanel {...localPaths} />}
       {team && offersTeam(data) && <TeamPanel {...team} />}
-      {devices && data?.devices && <DevicesPanel {...devices} />}
+      {devices && <DevicesPanel {...devices} />}
     </>
   )
 }

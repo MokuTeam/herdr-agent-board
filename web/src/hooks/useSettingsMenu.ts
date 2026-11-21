@@ -84,7 +84,10 @@ export interface SettingsDeps {
   /** The local board's page with the payload's teamRev (#231): Team… is offered. */
   team?(): boolean
   openTeam?(): void
-  /** The local page of a board whose config.json has `nodes` (the payload's `devices`, #510): Devices… is offered. */
+  /**
+   * The local page (#510): Devices… is offered, on a board without `nodes` too, where it holds Add a
+   * server alone (#509).
+   */
   devices?(): boolean
   openDevices?(): void
   /** This page signed in through the owner's domain: Sign out is offered. */
@@ -115,6 +118,12 @@ export type ThreadsSetting = { mode: ThreadMode } | { share: boolean }
 
 /** What Settings → Presence asks the board for (POST /api/presence { op: 'settings', … }). */
 export type PresenceSetting = { on: false } | { on: true; mode?: PresenceMode; idleMinutes?: number }
+
+/**
+ * Whether Settings offers Devices…: on this computer's own page, with or without `nodes` (a board
+ * adds its first server there, #509); never on a remote page.
+ */
+export const offersDevices = (remote: boolean): boolean => !remote
 
 /** The menu out of the gear (`keyboard`: opened from the keyboard, the first item lit). */
 export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyboard: boolean) => void {
@@ -451,7 +460,7 @@ export function useSettingsMenu(
       openCalendarSettings: () => latest.current.openCalendarSettings(),
       team: () => offersTeam(latest.current.board.data),
       openTeam: () => latest.current.openTeam(),
-      devices: () => !remotePage() && !!latest.current.board.data?.devices,
+      devices: () => offersDevices(remotePage()),
       openDevices: () => latest.current.openDevices(),
       signOut: () => remotePage() && keptAuth() === 'login',
       endLogin: () => {

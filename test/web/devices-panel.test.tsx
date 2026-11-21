@@ -2,13 +2,14 @@
 // in order with their link in words, bars, version and bundles, Pause, Drain and the thresholds;
 // the lanes that may leave this computer and When everything is full. Rendered from fixtures (one
 // device online, one not reachable, one refused for its version, this computer) at a desktop's and a
-// phone's width. Without `devices` in the payload (a board without `nodes`), nothing draws and the
-// Settings menu is main's.
+// phone's width. Without `devices` in the payload (a board without `nodes`) the panel holds Add a
+// server alone (#509, test/web/add-server.test.tsx).
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { ReactElement } from 'react'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardDevice, BoardPayload } from '../../src/core/payload.ts'
 import { DevicesPanel } from '../../web/src/components/devices/DevicesPanel.tsx'
+import { offersDevices } from '../../web/src/hooks/useSettingsMenu.ts'
 import {
   deviceOptions,
   deviceRows,
@@ -217,8 +218,14 @@ describe('Settings, Devices (#510)', () => {
     expect(all).toContain('новый')
   })
 
-  test('a board without nodes: nothing draws', () => {
-    expect(draw(payload({ categories: CATEGORIES }))).toEqual([])
+  test('a board without nodes: Add a server alone, no device, no lanes, no switch (#509)', () => {
+    const nodes = draw(payload({ categories: CATEGORIES }), 1600, undefined)
+    const all = text([byId(nodes, 'devices-sheet')])
+    expect(rowsOf(nodes)).toEqual([])
+    expect(all).toContain('No device yet')
+    expect(all).toContain('Add a server…')
+    expect(all).not.toContain('Lanes that may leave this computer')
+    expect(all).not.toContain('Start on this computer')
   })
 })
 
@@ -234,7 +241,12 @@ describe('the Settings menu (#510)', () => {
   }
   const ids = (items: ReturnType<typeof settingsMenu>) => items.map(i => ('separator' in i ? '-' : i.id))
 
-  test('Devices… only on a board with nodes; without, the menu is as before', () => {
+  test('Devices… on the local page, a board without nodes too (it adds its first server there, #509); never on a remote page', () => {
+    expect(offersDevices(false)).toBe(true)
+    expect(offersDevices(true)).toBe(false)
+  })
+
+  test('Devices… only when the page offers it; without, the menu is as before', () => {
     expect(ids(settingsMenu(now))).not.toContain('devices')
     expect(ids(settingsMenu({ ...now, devices: false }))).toEqual(ids(settingsMenu(now)))
     const items = ids(settingsMenu({ ...now, team: true, devices: true }))

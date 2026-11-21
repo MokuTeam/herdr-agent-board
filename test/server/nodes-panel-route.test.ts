@@ -166,7 +166,17 @@ describe('POST /api/nodes, the panel’s ops (#510)', () => {
       next: null,
       // A device with no token stored is named; this computer never is.
       noToken: ['server-1'],
+      // a direct link has no server to log Claude in on
+      hosts: {},
     })
+  })
+
+  test('GET: a device linked by ssh names its server, for the command that logs Claude in there (#509)', async () => {
+    isolatedHome()
+    const ssh = { kind: 'ssh', host: '203.0.113.10', sshPort: 2222, user: 'agent-board-link', port: 12430 }
+    seed({ language: 'en', nodes: { ...NODES, devices: { 'server-1': { link: ssh } } } })
+    const { body } = await call(routes().get)
+    expect((body.settings as { hosts: unknown }).hosts).toEqual({ 'server-1': { host: '203.0.113.10', sshPort: 2222 } })
   })
 
   test('with nodes off: 404 for every op, as before; retry and sync answer as they did', async () => {
