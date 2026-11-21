@@ -50,7 +50,8 @@ function clockOf(word: string, bare: boolean): Clock | null {
 /** today = 0, tomorrow = 1, a weekday = { dow }, else null. */
 type Day = number | { dow: number }
 
-function dayOf(word: string): Day | null {
+/** A day word of parseWhen's: today, tonight, tomorrow, a weekday; null for any other word. */
+export function dayOf(word: string): Day | null {
   if (word === 'today' || word === 'tonight') return 0
   if (word === 'tomorrow' || word === 'tmrw') return 1
   const dow = DAY_NAMES.indexOf(word.slice(0, 3))

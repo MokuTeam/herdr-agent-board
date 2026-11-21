@@ -24,6 +24,7 @@ describe('the entries of More', () => {
       {
         ...base,
         tasks: { open: 1, proposed: 0 },
+        journal: 'Since 23:56',
         presence: presenceSwitch(
           {
             state: 'here',
@@ -41,6 +42,12 @@ describe('the entries of More', () => {
       t,
     )
     expect(full.map(e => e.id).sort()).toEqual([...TOOLBAR_PRIORITY].sort())
+  })
+
+  test('the away journal (#489): its "Since" while there is a return, none without', () => {
+    expect(entry({ journal: 'Since 23:56' }, 'journal-open')).toEqual({ id: 'journal-open', label: 'Since 23:56' })
+    expect(entry({ journal: null }, 'journal-open')).toBeUndefined()
+    expect(entry({}, 'journal-open')).toBeUndefined()
   })
 
   test('Tasks: its open count, and a dot of a look for what waits for a confirmation', () => {

@@ -332,6 +332,7 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
       } else if (!info.lastText && saidIn(o, b)) {
         info.lastText = clip(saidIn(o, b), 700)
         info.question = trailingQuestion(saidIn(o, b))
+        if (o.isApiErrorMessage === true) info.apiError = true
       }
     }
   }

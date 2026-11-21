@@ -102,7 +102,7 @@ function byBoard(item: Item, conv: ConversationTurn[]): ConversationTurn[] {
 
 async function detail(app: SessionApp, item: Item) {
   const { deps } = app
-  const { transcript, claudeRoot, alive, since, pipe, ...shown } = item
+  const { transcript, claudeRoot, alive, since, pipe, apiError, ...shown } = item
   // queued: the user's messages Claude has not taken in yet (queueWindow).
   // A pi session's turns are in its session file, its key.
   const thread = isCodexItem(item)

@@ -627,3 +627,26 @@ test('transcript tail: no recap from a fork’s copied line, from content that i
   assert.equal(untimed.recap, 'No time.')
   assert.equal('recapAt' in untimed, false)
 })
+
+test("apiError: the last words are Claude Code's API error message, by its flag, not by its text (#489)", () => {
+  const said = (text: string, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-11-21T08:00:00.000Z',
+      ...extra,
+      message: {
+        role: 'assistant',
+        model: extra.isApiErrorMessage ? '<synthetic>' : 'claude-x',
+        content: [{ type: 'text', text }],
+      },
+    })
+  const error = parseTranscriptTail([said('Fixed it.'), said('API Error: 529 overloaded', { isApiErrorMessage: true })])
+  assert.equal(error.lastText, 'API Error: 529 overloaded')
+  assert.equal(error.apiError, true)
+  const words = parseTranscriptTail([said('API Error: fixed, the retry now waits')])
+  assert.equal(words.lastText, 'API Error: fixed, the retry now waits')
+  assert.equal(words.apiError, undefined)
+  // an error earlier, then the agent's own words: no error now
+  const after = parseTranscriptTail([said('API Error: 500', { isApiErrorMessage: true }), said('Done after all.')])
+  assert.equal(after.apiError, undefined)
+})

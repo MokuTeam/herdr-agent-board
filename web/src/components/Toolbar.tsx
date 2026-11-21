@@ -56,6 +56,7 @@ import {
   ArchiveIcon,
   FilterIcon,
   GearIcon,
+  JournalIcon,
   MoreIcon,
   PlusIcon,
   SearchIcon,
@@ -105,6 +106,8 @@ export interface ToolbarProps {
   onThreads?: () => void
   /** The calendar (#328): its panel, while the board has the calendar on. */
   onCalendar?: () => void
+  /** The away journal (#489): "Since 23:56" opens the last return's list again, while there is one. */
+  journal?: { label: string; open: boolean; onToggle: () => void }
 }
 
 /** The first filter that can take the focus: the lanes' pill, else a lane, else search (the lanes control folded hides the rest). */
@@ -140,6 +143,7 @@ export function Toolbar({
   onTeam,
   onThreads,
   onCalendar,
+  journal,
 }: ToolbarProps) {
   const t = useT()
   const { data, ui, dispatch, canMutate, canEdit, now } = useBoardContext()
@@ -202,6 +206,7 @@ export function Toolbar({
           threads: onThreads && data?.threads ? { needsOwner: data.threads.needsOwner } : null,
           usage,
           presence: presenceSwitch(data?.presence, t),
+          journal: journal?.label ?? null,
         },
         t,
       ),
@@ -220,6 +225,7 @@ export function Toolbar({
     else if (id === 'team-open') onTeam?.()
     else if (id === 'threads-open') onThreads?.()
     else if (id === 'archive-open') onArchive?.()
+    else if (id === 'journal-open') journal?.onToggle()
     else if (id === 'next-attention') openNext()
     else if (id === 'limits') dispatch({ type: 'limits', open: !ui.limitsOpen })
     // Presence's buttons and the quiet notes act on state of their own: the button is pressed.
@@ -421,6 +427,20 @@ export function Toolbar({
                 <ArchiveIcon />
                 <span data-i18n="archive.open">{t('archive.open')}</span>
               </button>
+              {journal && (
+                <button
+                  type="button"
+                  className={journal.open ? 'pill-toggle journal-open on' : 'pill-toggle journal-open'}
+                  id="journal-open"
+                  aria-expanded={journal.open}
+                  aria-controls={journal.open ? 'away-strip' : undefined}
+                  title={t('journal.buttonHint')}
+                  onClick={() => journal.onToggle()}
+                >
+                  <JournalIcon />
+                  <span>{journal.label}</span>
+                </button>
+              )}
               <NextAttention />
               <PresenceSwitch />
               {setup && <SetupNote setup={setup} />}

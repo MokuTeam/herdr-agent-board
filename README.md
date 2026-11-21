@@ -2167,6 +2167,90 @@ read and the view has no `calls`, so the board is as it was. A call the board se
 are no longer read. On a call the state
 keeps `before`, the state the call returns to (`src/adapters/mokupilot-call.ts`).
 
+## Away journal
+
+Off unless you turn it on. The board is a snapshot: back after hours away you see every card, and
+nothing says which of them moved. With the journal on, the board notes each card's change of state
+(the column it went to, when, and the line it carried) and tells you what changed while you were
+gone. No model runs for it, and nothing is typed into a session.
+
+`journal` in config.json turns it on:
+
+```json
+"journal": { "returnMinutes": 15 }
+```
+
+`true` is the same with the default of 15 minutes: how long an absence lasts before your return
+shows the list on the page.
+
+What the list says, one line per session that changed, in this order:
+
+1. waits on you (its question), and then how many cards were already waiting on you before you
+   left and still are, as a count ("and 2 more were waiting on you before");
+2. stopped on an error (its last words are Claude Code's own API error message);
+3. finished (what it finished). A session that finished and then started on the next task, or went
+   to sleep, is still listed as finished, with that line; a later finish wins over an earlier error;
+4. waits on someone else (what it waits for);
+5. the rest only counted: "and 7 more moved: 5 working, 2 idle".
+
+Twenty session lines at most, then "and N more". A card no longer on the board waits on no one,
+so it is not listed as waiting. Asked for a time before the journal began recording (it was just
+turned on), the list says so instead of reporting that nothing changed. A time the board was down
+later on is not reported that way: what changed meanwhile is recorded at its first refresh after
+the restart, with that refresh's time.
+
+The list covers this computer's sessions only: the cards of other devices (`nodes`) that the
+board shows beside them are not recorded.
+
+When the list is shown:
+
+- on the page, after a return: a "While you were away, 23:56 to 08:10" strip under the toolbar,
+  each row opening its card. Dismiss it and it stays dismissed (on every page and the phone) until
+  the next return; the toolbar's "Since 23:56" closes it on that page or opens the list of that
+  absence again, up to now. A return where no card moved shows no strip, even when some were
+  already waiting on you before you left.
+- `board journal [--since <when> | --away] [--json]` prints it. `--away` (the default) lists since
+  you last went away; `--since` takes a time of day (`23:56`, the last one, so yesterday's when it
+  is not that late yet), a time back (`3h`, `90m`), a date (`2026-11-20`, from its midnight) or a
+  date and time (`2026-11-20 23:00`); any other time ahead of now is refused. `--json` gives
+  `{ ok: true, since, rows: [{ key, name, lane, kind, line, at }], more, rest: { work, idle }, before }`,
+  with `recordedFrom` (when the journal began recording) when that is after `since`, and
+  `{ ok: false, error, message }` when it cannot answer (`off`, `usage`, `since`, `no_absence`).
+- `GET /api/journal?since=<ms>` or `?away=1` gives `{ journal }` in the same shape, and the board's
+  payload carries the strip as `journal: { strip, last }` for the page and the phone.
+  `POST /api/journal` with `x-board: 1` and `{ "op": "dismiss" }` dismisses the strip. Like
+  presence, both answer the remote page and a paired phone: the lines are the cards' own texts,
+  which the board's payload carries to them anyway.
+
+What counts as away and back:
+
+- With [presence](#presence) on, presence decides: away is its switch to away, back its switch
+  from away to here. A call taken while away is still away, and one taken while here is no
+  absence. Whether the page is on show says nothing then (a full-screen terminal hides the browser
+  all day long).
+- Without presence, the board's live streams decide: the page drops its stream while it is hidden,
+  so no stream at all for `returnMinutes` and then one opening is a return. A client that keeps a
+  stream open all day (a page left on show, say, on another screen or a phone) means no return is
+  ever seen. The other way round, a board window covered by others for `returnMinutes` while you
+  sit at the terminal counts as an absence too, and showing it again as a return. Presence is the
+  way to get the strip reliably.
+
+The records live in `journal.db` in the board's state folder, a file of its own beside `board.db`:
+it is the history of the live board, so a restore of `board.db` does not roll it back and a card's
+move does not trigger the backup. A refresh where nothing moved writes nothing. Each card's last
+state is kept too, so a restart of the board records only what really changed while it was down,
+and the first refresh after you turn the journal on notes the cards as they are without calling
+that a change. Moves older than 30 days are pruned, and so are the states of cards gone from the
+board for that long. With `journal` absent nothing is opened, read or shown: no file, nothing in
+the payload, no toolbar button, and `board journal` says it is off (`src/core/journal.ts`,
+`src/adapters/journal-store.ts`, `src/services/journal.ts`, `src/server/routes/journal.ts`,
+`src/entrypoints/journal-cli.ts`).
+
+The event store of the Workdesk coordinator (`board-events.db`, #447) is not reused for it: that one
+is on only with `boardEvents`, sees only panes with one unique Claude id and no sleepers, has no
+split between finished and waiting on someone else, keeps no line, and is pruned by its reader's
+acknowledgements. The journal follows its pattern (a file of its own) instead.
+
 ## Tasks
 
 An experiment (#202), off unless you turn it on. An agent answers with five points: two are
@@ -4119,6 +4203,9 @@ board presence [here|away|call]
                           whether the user is at the computer, away or on a call (where news
                           goes: also Telegram while away); a state sets it; see Presence
 board away [on|off]       the same switch: away (on), back at the computer (off)
+board journal [--since <when> | --away] [--json]
+                          what changed on the board since you left (with "journal" in
+                          config.json); see Away journal
 board todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | done <key> [--why "<w>"] | list
                           tasks (with "todos": true): what you hand the user to do, or (--mine) a
                           promise of yours you defer, printed with its key; done closes your own,

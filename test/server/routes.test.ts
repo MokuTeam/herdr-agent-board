@@ -139,6 +139,7 @@ describe('routes', () => {
       'styles/categories.css',
       'styles/segments.css',
       'styles/toolbar.css',
+      'styles/journal.css',
       'styles/access.css',
       'styles/archive.css',
       'styles/motion.css',

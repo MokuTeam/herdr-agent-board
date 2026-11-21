@@ -236,6 +236,8 @@ export interface Config {
   workdesk?: unknown
   workdeskDialog?: unknown
   boardEvents?: unknown
+  /** The away journal (#489, `true` or an object), as config.json has it: read through core/journal.ts journalConfig. */
+  journal?: unknown
   /** The model rule (#429, an object), as config.json has it: read through core/model-check.ts modelsConfig. */
   models?: unknown
   /** Nodes, this board as a master (#496, an object), as config.json has it: read through core/nodes.ts nodesConfig. */
@@ -265,6 +267,8 @@ export interface TranscriptInfo {
   tool?: ToolCall | null
   question?: string
   replied?: boolean
+  /** lastText is Claude Code's own API error message (isApiErrorMessage on its line, #489). */
+  apiError?: boolean
   /** The time of its newest user or assistant line. */
   lastAt?: number
   /** Claude Code's newest recap of the session (away_summary, #321) and its time; absent with none. */
@@ -312,6 +316,8 @@ export interface Item {
   title?: string
   prompt?: string
   lastText?: string
+  /** Its last words are Claude Code's own API error message (isApiErrorMessage, #489); absent otherwise. Kept off the payload. */
+  apiError?: true
   /** The time of its transcript's newest user or assistant line (#321), else null. */
   lastAt?: number | null
   /** Claude Code's newest recap of the session and its time (#321): '' and null with none. */

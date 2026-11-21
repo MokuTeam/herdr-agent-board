@@ -26,6 +26,7 @@ import type {
   BoardPayload,
   BoardProfile,
   CalendarPayload,
+  JournalPayload,
   ThreadsPayload,
   TimePayload,
 } from '../core/payload.ts'
@@ -110,6 +111,8 @@ interface Options {
   workdesk?: () => WorkdeskPayload | null
   workdeskDialog?: () => DialogStatus | null
   observeSessions?: NonNullable<Parameters<typeof collect>[1]>['observed']
+  /** The away journal (#489, services/journal.ts): fed each refresh's items; its part of the payload, null while off. */
+  journal?: { observe(items: readonly Item[]): void; view(): JournalPayload | null }
   observeFailure?: () => void
   /**
    * The master's devices (#500, services/nodes/aggregate.ts): their items, launches and schedule
@@ -216,6 +219,11 @@ function threadsOf(threads: Options['threads']): { threads?: ThreadsPayload } {
   return line ? { threads: line } : {}
 }
 
+function journalOf(journal: Options['journal']): { journal?: JournalPayload } {
+  const view = journal?.view() ?? null
+  return view ? { journal: view } : {}
+}
+
 function backupOf(backup: Options['backup']): { backup?: BackupPayload } {
   const line = backup?.() ?? null
   return line ? { backup: line } : {}
@@ -252,6 +260,7 @@ export function createBoardState({
   observeSessions,
   observeFailure,
   nodes,
+  journal,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -289,7 +298,7 @@ export function createBoardState({
     // process and its pipe.
     // Tasks (#202) only while config.json turns them on: off, the page sees none.
     const todos = todosConfig(cfg.todos)
-    const list = items.map(({ transcript, claudeRoot, alive, since, pipe, todos: own, ...rest }) =>
+    const list = items.map(({ transcript, claudeRoot, alive, since, pipe, apiError, todos: own, ...rest }) =>
       launches.decorate(todos && own ? { ...rest, todos: own } : rest),
     )
     // Another device's cards carry their tasks only while this board's config turns them on, as its own.
@@ -348,6 +357,8 @@ export function createBoardState({
       ...calendarOf(calendar),
       // threads: only while config.json turns them on (#379)
       ...threadsOf(threads),
+      // journal: only while config.json turns it on (#489)
+      ...journalOf(journal),
       ...(workdeskLine && { workdesk: workdeskLine }),
       ...(dialogLine && { workdeskDialog: dialogLine }),
       // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
@@ -471,6 +482,7 @@ export function createBoardState({
       items = await collect(deps, { helpers: true, links, seen, ...(observeSessions && { observed: observeSessions }) })
       logEdges()
       launches.observe(items)
+      journal?.observe(items)
       stale = false
       lastSuccessfulRefreshAt = Date.now()
       publish()

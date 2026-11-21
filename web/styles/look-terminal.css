@@ -652,3 +652,22 @@
 /* The slash command list of the message box (#191): square, no glass. */
 :root[data-look="terminal"] .slash-menu { border-radius: var(--radius); background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
 :root[data-look="terminal"] .slash-option { border-radius: 0; }
+
+/* ---------------------------------------------------------------- the away journal (#489) */
+/* Its strip (journal.css): outlines on the bare background, monospace, no fills. */
+:root[data-look="terminal"] .away-strip {
+  border: 1px solid var(--t-edge);
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  font-family: var(--mono);
+}
+:root[data-look="terminal"] .away-title,
+:root[data-look="terminal"] .away-open,
+:root[data-look="terminal"] .away-note { font-family: var(--mono); color: var(--t-text); }
+:root[data-look="terminal"] .away-line,
+:root[data-look="terminal"] .away-lane,
+:root[data-look="terminal"] .away-time { color: var(--t-dim); }
+:root[data-look="terminal"] .away-kind { background: none; padding: 0; border-radius: 0; }
+:root[data-look="terminal"] .away-error .away-kind { --kind: var(--t-red); }
+:root[data-look="terminal"] .away-open:hover { background: none; text-decoration: underline; }

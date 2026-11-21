@@ -6,6 +6,8 @@
 // - With other devices' cards, the payload has them and `devices`, a lane of theirs shows by the
 //   board's unknown-lane rule, and items(), find() and observation() still hold this computer's
 //   sessions only; findAny() also finds a prefixed key.
+// - The away journal (#489) beside them is fed this computer's sessions only: no other device's
+//   card enters journal.db, and the payload carries both its part and the devices' cards.
 import { expect, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -34,6 +36,8 @@ import { normalizeConfig } from '${src}/core/categories.ts'
 import { defaultDeps } from '${src}/services/deps.ts'
 import { createBoardState as now } from '${src}/server/board-state.ts'
 import { createBoardState as main } from '${old}'
+import { createJournal } from '${src}/services/journal.ts'
+import { journalStore, openJournalDb } from '${src}/adapters/journal-store.ts'
 
 const cfg = normalizeConfig({ language: 'en', wakeUrl: null, categories: [{ id: 'other', title: 'Other', color: 'gray' }] })
 const launches = { decorate: i => i, list: () => [], observe: () => {} }
@@ -51,8 +55,17 @@ const part = {
 }
 const aggregate = { part: () => part, find: key => part.items.find(i => i.key === key) }
 
-const boards = { main: make(main), now: make(now), off: make(now, { nodes: () => null }), master: make(now, { nodes: () => aggregate }) }
+const journal = createJournal({ cfg: { journal: true }, log: () => {}, presence: () => null, viewers: () => 1 })
+const fed = new Set()
+const journaled = { observe: items => { for (const i of items) fed.add(i.key); journal.observe(items) }, view: () => journal.view() }
+const boards = { main: make(main), now: make(now), off: make(now, { nodes: () => null }), master: make(now, { nodes: () => aggregate }),
+  journaled: make(now, { nodes: () => aggregate, journal: journaled }) }
 for (const b of Object.values(boards)) await b.refresh()
+await boards.journaled.refresh()
+journal.stop()
+const jdb = openJournalDb(false)
+const recorded = jdb ? [...journalStore(jdb).states().keys()] : null
+jdb?.close()
 const payload = b => {
   const p = JSON.parse(b.payload())
   delete p.lastSuccessfulRefreshAt
@@ -68,6 +81,7 @@ console.log(JSON.stringify({
   find: [m.find('pane-1')?.key ?? null, m.find('@server-1:pane-1')?.key ?? null],
   findAny: [m.findAny('pane-1')?.key ?? null, m.findAny('@server-1:pane-1')?.key ?? null, m.findAny('@server-2:pane-1')?.key ?? null],
   observed: m.observation()?.items.map(i => i.key) ?? null,
+  journaled: { payload: payload(boards.journaled), fed: [...fed], recorded },
 }))
 process.exit(0)
 `
@@ -147,4 +161,11 @@ test('without nodes the payload is main’s; with devices the payload has their 
   expect(got.observed).toEqual(got.items)
   expect(got.find).toEqual(['pane-1', null])
   expect(got.findAny).toEqual(['pane-1', '@server-1:pane-1', null])
+
+  // The away journal beside devices: fed and recording this computer's sessions only; the payload
+  // has its part and the devices' cards.
+  expect(got.journaled.fed.sort()).toEqual([...got.items].sort())
+  expect(got.journaled.recorded.sort()).toEqual([...got.items].sort())
+  expect(got.journaled.payload.journal).toEqual({ strip: null, last: null })
+  expect(got.journaled.payload.items.map((i: { key: string }) => i.key)).toEqual(keys)
 }, 30_000)

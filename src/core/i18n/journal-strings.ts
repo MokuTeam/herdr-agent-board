@@ -1,0 +1,68 @@
+// The texts of the away journal (#489): `board journal`, the page's "While you were away" strip
+// and its toolbar button, in English and Russian; strings.ts merges them into the dictionaries.
+import type { Lang } from '../types.ts'
+
+export const JOURNAL_STRINGS: Record<Lang, Record<string, string | string[]>> = {
+  en: {
+    'journal.since': 'Since {when}:',
+    'journal.nothing': 'Nothing on the board changed.',
+    'journal.recordedFrom': 'The journal has no record before {when}: it was not recording then.',
+    'journal.kind.owner': 'waits on you',
+    'journal.kind.error': 'stopped on an error',
+    'journal.kind.done': 'finished',
+    'journal.kind.ext': 'waits on someone else',
+    'journal.before': ['and {n} more was waiting on you before', 'and {n} more were waiting on you before'],
+    'journal.more': ['and {n} more session', 'and {n} more sessions'],
+    'journal.rest': [
+      'and {n} more moved: {work} working, {idle} idle',
+      'and {n} more moved: {work} working, {idle} idle',
+    ],
+    'journal.off': 'The journal is off (no "journal" in config.json)',
+    'journal.noAway': 'No absence on record yet: give --since <when>',
+    'journal.badSince': '--since takes a time (23:00), a time back (3h, 90m) or a date and time (2026-11-20 23:00)',
+    'journal.usage': 'usage: board journal [--since <when> | --away] [--json]',
+    'journal.strip': 'While you were away, {from} to {to}',
+    'journal.stripSince': 'Since {from}',
+    'journal.dismiss': 'Dismiss',
+    'journal.button': 'Since {from}',
+    'journal.buttonHint': 'What changed on the board while you were away',
+    'journal.open': 'Open the card',
+    'journal.gone': 'No longer on the board',
+    'journal.loading': 'Reading the journal…',
+    'journal.failed': 'Could not read the journal',
+  },
+  ru: {
+    'journal.since': 'С {when}:',
+    'journal.nothing': 'На доске ничего не менялось.',
+    'journal.recordedFrom': 'До {when} журнал ничего не записывал: о более раннем он не знает.',
+    'journal.kind.owner': 'ждёт вас',
+    'journal.kind.error': 'встала на ошибке',
+    'journal.kind.done': 'закончила',
+    'journal.kind.ext': 'ждёт кого-то ещё',
+    'journal.before': [
+      'и ещё {n} ждала вас уже до этого',
+      'и ещё {n} ждали вас уже до этого',
+      'и ещё {n} ждали вас уже до этого',
+    ],
+    'journal.more': ['и ещё {n} сессия', 'и ещё {n} сессии', 'и ещё {n} сессий'],
+    'journal.rest': [
+      'и ещё {n} сдвинулась: в работе {work}, простаивают {idle}',
+      'и ещё {n} сдвинулись: в работе {work}, простаивают {idle}',
+      'и ещё {n} сдвинулись: в работе {work}, простаивают {idle}',
+    ],
+    'journal.off': 'Журнал выключен (в config.json нет "journal")',
+    'journal.noAway': 'Отлучек ещё не было: укажите --since <когда>',
+    'journal.badSince':
+      '--since принимает время (23:00), сколько назад (3h, 90m) или дату со временем (2026-11-20 23:00)',
+    'journal.usage': 'usage: board journal [--since <когда> | --away] [--json]',
+    'journal.strip': 'Пока вас не было, с {from} до {to}',
+    'journal.stripSince': 'С {from}',
+    'journal.dismiss': 'Скрыть',
+    'journal.button': 'С {from}',
+    'journal.buttonHint': 'Что изменилось на доске, пока вас не было',
+    'journal.open': 'Открыть карточку',
+    'journal.gone': 'Уже не на доске',
+    'journal.loading': 'Читаю журнал…',
+    'journal.failed': 'Не удалось прочитать журнал',
+  },
+}

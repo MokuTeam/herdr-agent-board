@@ -88,6 +88,7 @@ const COMMANDS: string[][] = [
   ['doctor'],
   ['presence', 'away'],
   ['away', 'on'],
+  ['journal', '--since', '3h'],
   ['team', 'roster'],
   ['todo', 'add', 'send the invoice'],
   ['compact', '--at', '60%'],

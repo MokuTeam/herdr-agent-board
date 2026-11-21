@@ -409,6 +409,8 @@ export async function collect(
             recap: info.recap ?? '',
             recapAt: info.recapAt ?? null,
           }),
+      // its last words are an API error (#489, the away journal's "stopped on an error"); off the payload
+      ...(info.apiError && { apiError: true as const }),
       ...context,
       tool,
       attention,

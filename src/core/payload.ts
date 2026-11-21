@@ -2,6 +2,7 @@
 // builds it; the web board reads it). One type for both sides, so they cannot drift apart.
 import type { BoardArchive } from './archive.ts'
 import type { FoldMode } from './fold-mode.ts'
+import type { JournalList } from './journal.ts'
 import type { LimitWindow } from './limits.ts'
 import type { DeviceView, LinkStatus } from './nodes.ts'
 import type { PresenceView } from './presence.ts'
@@ -144,6 +145,8 @@ export interface BoardPayload {
    * many wait on the owner. The threads themselves never ride in the payload.
    */
   threads?: ThreadsPayload
+  /** The away journal's strip and the last return (#489), only while config.json has `journal`. */
+  journal?: JournalPayload
   /** Workdesk queue and last poll, only while the watcher is configured. */
   workdesk?: WorkdeskPayload
   workdeskDialog?: DialogStatus
@@ -210,6 +213,15 @@ export interface TimePayload {
   today: Record<string, number>
   /** config.json's `time` does not check out (the panel says what): no entry is written. */
   problems?: boolean
+}
+
+/**
+ * The away journal in the payload (#489): the "While you were away" strip of the last return until
+ * the owner dismisses it, and that return's absence, which the toolbar's "Since 23:56" reopens.
+ */
+export interface JournalPayload {
+  strip: (JournalList & { from: number; to: number }) | null
+  last: { from: number; to: number } | null
 }
 
 /** What the board's payload says of threads (#379). */

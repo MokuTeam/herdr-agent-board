@@ -57,6 +57,15 @@ export const TeamIcon = () => (
   </Icon>
 )
 
+/** A clock with its hand turned back: what changed since the owner left (#489). */
+export const JournalIcon = () => (
+  <Icon>
+    <path d="M3.6 10a6.4 6.4 0 1 0 1.9-4.5" />
+    <path d="M3.5 3.5v3h3" />
+    <path d="M10 6.5V10l2.5 1.5" />
+  </Icon>
+)
+
 /** Threads (#392): a list whose lines carry a status dot. */
 export const ThreadsIcon = () => (
   <Icon>

@@ -21,11 +21,13 @@ export interface EntryInput {
   /** The usage pill's own text. */
   usage: string
   presence: PresenceSwitchView | null
+  /** The away journal's "Since 23:56" (#489); null: no return to open again. */
+  journal?: string | null
 }
 
 /** Every action's entry; More lists those that left the row (moreEntries). */
 export function toolbarEntries(input: EntryInput, t: Translator): ToolbarEntry[] {
-  const { canMutate, schedule, tasks, next, usage, presence, team, threads } = input
+  const { canMutate, schedule, tasks, next, usage, presence, team, threads, journal } = input
   const proposed = tasks?.proposed ?? 0
   return [
     ...(presence
@@ -68,6 +70,7 @@ export function toolbarEntries(input: EntryInput, t: Translator): ToolbarEntry[]
       count: next,
       ...(next === 0 && { disabled: true, reason: t('attention.none') }),
     },
+    ...(journal ? [{ id: 'journal-open', label: journal }] : []),
     { id: 'cal-tb', label: t('cal.open') },
     { id: 'time-open', label: t('time.open') },
     { id: 'limits', label: usage || t('limits.title') },

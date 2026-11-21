@@ -41,6 +41,7 @@ export const TOOLBAR_PRIORITY: readonly string[] = [
   'todos-open',
   'team-open',
   'threads-open',
+  'journal-open',
   'new-session',
   'presence-call',
   'sched-open',

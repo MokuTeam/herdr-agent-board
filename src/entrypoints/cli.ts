@@ -69,6 +69,8 @@
 //                            state, the user's switch
 //   board away [on|off]      the same switch: away (on, the default) or back at the computer (off).
 //                            Both only while config.json turns presence on; never sent to a session
+//   board journal [--since <when> | --away] [--json]   what changed on the board since the owner
+//                            left (#489, entrypoints/journal-cli.ts), while config.json has `journal`
 //   board secret request --title <what for> --sink <id> [--field <name>[:shown][:once]]...
 //                            [--param <name>=<value>]... [--expires 30m] [--no-wait]
 //                            asks the owner for values the agent must never see (#273,
@@ -193,7 +195,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | presence [here | away | call] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | presence [here | away | call] | journal [--since <when> | --away] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal'])
@@ -980,6 +982,7 @@ async function main(): Promise<void> {
   if (cmd === 'resume') return flagWords.includes('--pi') ? resumePi() : resume()
   if (cmd === 'tg-key') return tgKey()
   if (cmd === 'presence' || cmd === 'away') return presence()
+  if (cmd === 'journal') return journalCommand()
   if (cmd === 'team') return team()
 
   // schedule --move <id>: a parked entry to this session (or --session's, which must be on the board).
@@ -1995,6 +1998,12 @@ async function timeCommand(): Promise<void> {
   const { timeCmd } = await import('./time-cli.ts')
   // under --json an error is printed as JSON, and the exit code says it failed
   process.exitCode = await timeCmd(rest, { cfg, actor: own ? { key: own.key, name: own.name ?? '' } : 'user', lane })
+}
+
+/** `board journal …` (#489, entrypoints/journal-cli.ts): what changed on the board since the owner left. */
+async function journalCommand(): Promise<void> {
+  const { journalCmd } = await import('./journal-cli.ts')
+  process.exitCode = journalCmd(rest, { cfg })
 }
 
 /** `board cal …` (#328, entrypoints/cal-cli.ts): the owner's calendar, changed as the session that runs it. */

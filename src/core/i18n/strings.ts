@@ -14,6 +14,7 @@ import { CALL_STRINGS } from './call-strings.ts'
 import { COMPACT_STRINGS } from './compact-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
+import { JOURNAL_STRINGS } from './journal-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
 import { NODE_STRINGS } from './node-strings.ts'
 import { ONESHOT_STRINGS } from './oneshot-strings.ts'
@@ -1424,6 +1425,7 @@ for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[c
 for (const code of Object.keys(SLASH_STRINGS) as Lang[]) Object.assign(STRINGS[code], SLASH_STRINGS[code])
 // And the user's presence (#172).
 for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PRESENCE_STRINGS[code])
+for (const code of Object.keys(JOURNAL_STRINGS) as Lang[]) Object.assign(STRINGS[code], JOURNAL_STRINGS[code])
 for (const code of Object.keys(CALL_STRINGS) as Lang[]) Object.assign(STRINGS[code], CALL_STRINGS[code])
 // And tasks (#202).
 for (const code of Object.keys(TODO_STRINGS) as Lang[]) Object.assign(STRINGS[code], TODO_STRINGS[code])

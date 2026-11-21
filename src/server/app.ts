@@ -38,6 +38,7 @@ import {
   writePidRecord,
 } from '../adapters/ssh.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
+import { journalConfig } from '../core/journal.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { fillThresholds, markRevoked, nodeConfig, nodesConfig } from '../core/nodes.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
@@ -64,6 +65,7 @@ import { createCalendarReminders } from '../services/calendar-reminders.ts'
 import { startCompactor } from '../services/compactor.ts'
 import { dayWatchTick } from '../services/day-watches.ts'
 import type { Deps } from '../services/deps.ts'
+import { createJournal } from '../services/journal.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
 import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
@@ -117,6 +119,7 @@ import { boardRoutes } from './routes/board.ts'
 import { boardEventRoutes } from './routes/board-events.ts'
 import { calendarRoutes, eventReveal } from './routes/calendar.ts'
 import { fsRoutes } from './routes/fs.ts'
+import { journalRoutes } from './routes/journal.ts'
 import { launchRoutes } from './routes/launch.ts'
 import { linksRoutes } from './routes/links.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
@@ -489,6 +492,14 @@ export async function startServer({
     onChange: () => board.publish(),
     sessions: () => board.items().map(i => i.key),
   })
+  // The away journal (#489): nothing is opened, read or shown while config.json has no `journal`.
+  const journal = createJournal({
+    cfg,
+    log,
+    presence: () => presence.view(),
+    viewers: () => events.size(),
+    onChange: () => board.publish(),
+  })
   // The peer network (#231): no socket, timer or file while config.json has no valid `team`.
   // What comes in goes to the router (#216), which tells a session only when the owner turned
   // Agents on for that peer, and only through the schedule, with a notice of its own words.
@@ -760,6 +771,7 @@ export async function startServer({
     observeSessions: (snapshot, items) => boardEvents.observe(snapshot, items, Date.now()),
     observeFailure: () => boardEvents.health('herdr', false),
     nodes: () => nodeAggregate,
+    journal,
     // Threads (#379): while config.json turns them on, the revision and the count that waits on
     // the owner (two queries a refresh); off, nothing is read.
     threads: () => {
@@ -835,6 +847,8 @@ export async function startServer({
     ...mokupilotRoutes(cfg),
     // The user's presence: read, switched and set (the page, the phone, the Android app).
     ...presenceRoutes(presence),
+    // The away journal (#489): its list and the strip's dismiss (404 while off).
+    ...journalRoutes(journal, () => journalConfig(cfg.journal) !== null),
     // The peer network: roster, threads, sends (local only; nothing answers while `team` is off).
     ...teamRoutes(
       team,
@@ -1310,6 +1324,7 @@ export async function startServer({
       workdeskStream?.controller.abort()
       await Promise.all([workdesk.stop(), workdeskDialog.stop(), workdeskStream?.task])
       await boardEvents.stop()
+      journal.stop()
       compactor.stop()
       backups.stop()
       wake.stop()

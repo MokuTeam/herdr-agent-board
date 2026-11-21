@@ -13,6 +13,7 @@ import { FileChips } from './components/files/FileChip.tsx'
 import { QuickLook } from './components/files/QuickLook.tsx'
 import { ForkPop } from './components/fork/ForkPop.tsx'
 import { HelpersWindow } from './components/helpers/HelpersWindow.tsx'
+import { AwayStrip } from './components/journal/AwayStrip.tsx'
 import { closeLimits, LimitsPop } from './components/LimitsPop.tsx'
 import { LaunchDialog } from './components/launch/LaunchDialog.tsx'
 import { ContextMenu } from './components/menu/ContextMenu.tsx'
@@ -33,6 +34,7 @@ import { useFileChips } from './hooks/useFileChips.ts'
 import { useFileLinks } from './hooks/useFileLinks.ts'
 import { useFork } from './hooks/useFork.ts'
 import { useHelpers } from './hooks/useHelpers.ts'
+import { useJournal } from './hooks/useJournal.ts'
 import { useLaunch } from './hooks/useLaunch.ts'
 import { laneContext, useNewSession } from './hooks/useNewSession.ts'
 import { useNextAttention } from './hooks/useNextAttention.ts'
@@ -188,6 +190,8 @@ export function App() {
   })
   const newSession = useNewSession(launch.open)
   const openNextAttention = useNextAttention()
+  // The away journal's strip (#489), while the payload has `journal`.
+  const journal = useJournal()
   // Paths in the chat become chips; a chip, the sheet's Changes and History open the quick look.
   const chips = useFileChips()
   const quickLook = useQuickLook(chips.upgrade)
@@ -296,7 +300,11 @@ export function App() {
           }}
           onCalendar={() => setCalendarOpen(!calendarOpen)}
           {...(offersTeam(data) && { onTeam: () => (team ? setTeam(false) : openTeam()) })}
+          {...(journal.button && {
+            journal: { label: journal.button, open: !!journal.shown, onToggle: journal.toggle },
+          })}
         />
+        <AwayStrip journal={journal} />
         <Board
           onNewSession={newSession}
           onLaneHead={openCategories}

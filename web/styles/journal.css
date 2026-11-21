@@ -1,0 +1,102 @@
+/* The away journal's strip (#489, web/src/components/journal/AwayStrip.tsx): "While you were away"
+   under the toolbar, a row per session that moved, each a button that opens its card. The kinds
+   wear their columns' colors (orange, purple and the accent, as the column heads in both styles),
+   and stopped on an error red. One line per row on a wide board; on a phone the line goes under the name.
+   The toolbar's "Since 23:56" is a pill like the others (toolbar.css), lit while the strip is open. */
+
+.away-strip {
+  margin: 4px var(--gutter) 10px;
+  padding: 10px 12px 8px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.away-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.away-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font: 600 13px/18px var(--font);
+  color: var(--label);
+}
+.away-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--label-3);
+  cursor: pointer;
+}
+.away-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.away-close:hover { background: var(--fill-2); color: var(--label-2); }
+
+/* Twenty rows and their notes at most; past half the screen the list scrolls, the board stays in sight. */
+.away-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 50vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.away-open {
+  display: grid;
+  grid-template-columns: max-content minmax(0, max-content) max-content minmax(0, 1fr) max-content;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--label);
+  font: 13px/18px var(--font);
+  text-align: left;
+  cursor: pointer;
+}
+.away-open:hover { background: var(--fill-2); }
+.away-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.away-open[aria-disabled="true"] { cursor: default; color: var(--label-2); }
+.away-open[aria-disabled="true"]:hover { background: none; }
+.away-kind {
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+  --kind: var(--gray);
+  color: var(--kind);
+  background: color-mix(in srgb, var(--kind) 14%, transparent);
+}
+.away-owner .away-kind { --kind: var(--orange); }
+.away-error .away-kind { --kind: var(--red); }
+.away-done .away-kind { --kind: var(--accent); }
+.away-ext .away-kind { --kind: var(--purple); }
+.away-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.away-lane { color: var(--label-3); font-size: 12px; white-space: nowrap; }
+.away-line { overflow: hidden; color: var(--label-2); text-overflow: ellipsis; white-space: nowrap; }
+.away-time { grid-column: 5; color: var(--label-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.away-note { padding: 3px 6px; color: var(--label-2); font: 12px/18px var(--font); list-style: none; }
+p.away-note { margin: 0; }
+
+.toolbar .journal-open { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px 0 6px; white-space: nowrap; }
+.toolbar .journal-open svg { width: 16px; height: 16px; flex: none; }
+.toolbar .journal-open.on { background: var(--fill); color: var(--label); }
+
+@media (max-width: 760px) {
+  .away-strip { margin: 4px 10px 8px; }
+  .away-open {
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    row-gap: 0;
+  }
+  .away-lane { display: none; }
+  .away-time { grid-column: 3; grid-row: 1; }
+  .away-line { grid-column: 1 / -1; grid-row: 2; white-space: normal; overflow-wrap: anywhere; }
+}

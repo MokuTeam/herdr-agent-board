@@ -261,6 +261,9 @@ const CLASSIFIED: Record<string, [method: string, raw: string, door: 'door' | 'r
   'POST /api/mokupilot': [['POST', '/api/mokupilot', 'refused']],
   'GET /api/presence': [['GET', '/api/presence', 'refused']],
   'POST /api/presence': [['POST', '/api/presence', 'refused']],
+  // the away journal (#489) is this computer's owner's, as presence is: phase 1 stays local
+  'GET /api/journal': [['GET', '/api/journal', 'refused']],
+  'POST /api/journal': [['POST', '/api/journal', 'refused']],
   'GET /api/team': [['GET', '/api/team', 'refused']],
   'GET ^\\/api\\/team\\/thread\\/([^/]+)$': [['GET', '/api/team/thread/p1', 'refused']],
   'POST /api/team/send': [['POST', '/api/team/send', 'refused']],
