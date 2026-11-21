@@ -32,9 +32,9 @@ export const PAIR_ENV = {
 
 export interface DoorProxy {
   port: number
-  /** Event streams open through it now. */
+  /** Payload streams (`GET /api/events`) open through it now: a terminal's and the uplink's (#508) are others. */
   streams(): number
-  /** The most streams that were open through it at once. */
+  /** The most payload streams that were open through it at once. */
   peak(): number
   /** Every request it took, `<method> <path>`, in order. */
   requests: string[]
@@ -59,6 +59,7 @@ export async function doorProxy(doorPort: number): Promise<DoorProxy> {
   const port = await unusedPort()
   let mode: 'open' | 'silent' | 'drop' = 'open'
   const open = new Set<{ end(): void }>()
+  const streaming = new Set<{ end(): void }>()
   const hung: (() => void)[] = []
   const requests: string[] = []
   const received: DoorProxy['received'] = []
@@ -98,15 +99,19 @@ export async function doorProxy(doorPort: number): Promise<DoorProxy> {
     if (!res.body || !(res.headers.get('content-type') ?? '').startsWith('text/event-stream')) return res
     const reader = res.body.getReader()
     let ended = false
+    const payload = url.pathname === '/api/events'
     const entry = {
       end() {
         if (ended) return
         ended = true
         open.delete(entry)
+        streaming.delete(entry)
         void reader.cancel().catch(() => {})
       },
     }
-    open.add(entry)
+    // Every stream is ended by cut('drop'); only the payload's are counted.
+    streaming.add(entry)
+    if (payload) open.add(entry)
     peak = Math.max(peak, open.size)
     req.signal.addEventListener('abort', () => entry.end(), { once: true })
     const body = new ReadableStream<Uint8Array>({
@@ -142,7 +147,7 @@ export async function doorProxy(doorPort: number): Promise<DoorProxy> {
     async cut(how) {
       mode = how
       if (how === 'drop') {
-        for (const entry of [...open]) entry.end()
+        for (const entry of [...streaming]) entry.end()
         await server?.stop(true)
         server = null
       }
@@ -153,7 +158,7 @@ export async function doorProxy(doorPort: number): Promise<DoorProxy> {
       server ??= serve()
     },
     async close() {
-      for (const entry of [...open]) entry.end()
+      for (const entry of [...streaming]) entry.end()
       for (const resolve of hung.splice(0)) resolve()
       await server?.stop(true)
       server = null

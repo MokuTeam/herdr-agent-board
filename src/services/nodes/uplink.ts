@@ -124,7 +124,8 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     if (closed) return
     const held = following.get(id)
     if (online(id)) {
-      if (!held) follow(id)
+      // One that is still ending (the link was away a moment) gives way to a new one.
+      if (!held || held.ac.signal.aborted) follow(id)
     } else held?.ac.abort()
   }
 

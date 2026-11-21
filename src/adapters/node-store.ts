@@ -1,7 +1,8 @@
 // Both sides' records of the node link. On a master (#499, docs/design/nodes 7.1), per device in
 // `<state>/nodes/<id>/`: `token` (0600; the master is the client, so it holds the token the node
-// gave it), the ssh link's `link-key`, the link's ssh pid record, the offline copy and what was
-// sent of each profile's bundle. Never logged, never printed.
+// gave it), the ssh link's `link-key`, the link's ssh pid record, the offline copy, what was sent of
+// each profile's bundle, and `uplink-seen.json` (0600, #508), the results of the last calls the
+// device's sessions made. Never logged, never printed.
 //
 // On a node, the masters it answers to (#498, docs/design/nodes 7.2): `<state>/node/masters.json`, mode
 // 0600, a list of { id, name, tokenHash, pairedAt, seenAt, via }. A list from its first version,
