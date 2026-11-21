@@ -75,7 +75,7 @@ describe('the door takes what 6.2 lists', () => {
     }
   })
 
-  test("the API version is 1, and the status, a start from the master (#504), the bundle's routes (#506) and the uplink (#508) are the door's own", () => {
+  test("the API version is 1, and the status, a start from the master (#504), the bundle's routes (#506), the uplink (#508) and a given secret (#507) are the door's own", () => {
     expect(NODE_API).toBe(1)
     expect(DOOR_ROUTES.filter(r => r.door).map(r => [r.method, String(r.path)])).toEqual([
       ['GET', '/api/node/status'],
@@ -86,6 +86,7 @@ describe('the door takes what 6.2 lists', () => {
       ['GET', '/api/node/uplink'],
       ['GET', String(/^\/api\/node\/uplink\/[A-Za-z0-9_-]{1,64}\/file\/\d{1,2}$/)],
       ['POST', String(/^\/api\/node\/uplink\/[A-Za-z0-9_-]{1,64}$/)],
+      ['POST', String(/^\/api\/node\/sink\/[a-z0-9][a-z0-9_-]{0,39}$/)],
     ])
     // The uplink's routes take a call id and a file's number, nothing else (#508).
     expect(refusal('GET', '/api/node/uplink/5d0c6a1e-77/file/0')).toBeNull()
@@ -100,6 +101,11 @@ describe('the door takes what 6.2 lists', () => {
       ['GET', '/api/node/%75plink'],
     ] as const)
       expect([method, raw, refusal(method, raw)]).toEqual([method, raw, NOT_FOUND])
+    // A sink's id only, by POST only.
+    expect(refusal('POST', '/api/node/sink/git')).toBeNull()
+    expect(refusal('GET', '/api/node/sink/git')).toEqual(NOT_FOUND)
+    expect(refusal('POST', '/api/node/sink/Git')).toEqual(NOT_FOUND)
+    expect(refusal('POST', '/api/node/sink/git/x')).toEqual(NOT_FOUND)
     // Not as a GET, nor spelled otherwise.
     expect(refusal('GET', '/api/node/launch')).toEqual(NOT_FOUND)
     expect(refusal('POST', '/api/node/%6Caunch')).toEqual(NOT_FOUND)

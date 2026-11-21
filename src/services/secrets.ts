@@ -21,6 +21,7 @@ import {
   ASK_WINDOW_MS,
   checkRequest,
   fingerprintOf,
+  givenFields,
   MAX_ASKS,
   MAX_PENDING,
   pendingOf,
@@ -30,6 +31,7 @@ import {
   type SecretField,
   type SecretRequest,
   type SecretsConfig,
+  type Sink,
   scrub,
   secretsConfig,
   statusOf,
@@ -93,7 +95,7 @@ export function audit(
   extra: Record<string, unknown> = {},
   now = Date.now(),
 ): void {
-  const line = {
+  auditLine({
     at: new Date(now).toISOString(),
     op,
     id: r.id,
@@ -103,7 +105,32 @@ export function audit(
     asked: r.by,
     who,
     ...extra,
-  }
+  })
+}
+
+/**
+ * The line on a master for values it passed to a device (docs/design/nodes 10, items 2 and 3): the
+ * answer to a node card's request (`id`) or a secret given to a node's sink (`given`), where it went
+ * and what the node answered. Names only: the values crossed this board's memory and nothing else.
+ */
+export function auditForwarded(
+  to: { device: string; sink: string; fields: readonly string[]; id?: string; key?: string; status: number },
+  now = Date.now(),
+): void {
+  const { device, sink, fields, id, key, status } = to
+  auditLine({
+    at: new Date(now).toISOString(),
+    op: 'forwarded',
+    ...(id ? { id, key } : { given: true }),
+    sink,
+    fields,
+    device,
+    who: 'owner',
+    status,
+  })
+}
+
+function auditLine(line: Record<string, unknown>): void {
   try {
     const file = auditFile()
     mkdirSync(join(stateDir(), 'secrets'), { recursive: true })
@@ -313,21 +340,9 @@ export async function submitSecret(
   // or a card entry that left it out
   const fields = check.fields
   if (input.fingerprint !== fingerprintOf(sink, r.params, fields)) return no(409, t('secret.err.changed'))
-  if (!isRecord(input.values)) return no(400, t('secret.err.values'))
-  const given = input.values
-  const values: Record<string, string> = {}
-  for (const name of Object.keys(given)) if (!fields.some(f => f.name === name)) return no(400, t('secret.err.values'))
-  for (const f of fields) {
-    const raw = given[f.name]
-    if (typeof raw !== 'string') return no(400, t('secret.err.values'))
-    // a line break a paste brings at either end is no part of a key; spaces are kept (the form says so)
-    const value = raw.replace(/^[\r\n]+|[\r\n]+$/g, '')
-    // spaces alone are no value, in any sink (an empty Bitwarden part is left as it is)
-    if (value && !value.trim()) return no(400, t('secret.err.valueEmpty', { name: f.name }))
-    const problem = valueProblem(sink, f.name, value)
-    if (problem) return no(400, t(problem, { name: f.name }))
-    values[f.name] = value
-  }
+  const typed = valuesOf(sink, fields, input.values)
+  if ('status' in typed) return typed
+  const { values } = typed
   const session = typeof input.session === 'string' ? input.session : ''
   if (sink.kind === 'bitwarden' && !session.trim()) return no(400, t('secret.err.bwSession'))
   // Bitwarden leaves a part left empty as it is, but an item with nothing new is no write
@@ -375,6 +390,70 @@ export async function submitSecret(
         Date.now(),
       )
   }
+}
+
+/** Every field's typed value fit for the sink, and no other, or the answer that says which is not. */
+function valuesOf(
+  sink: Sink,
+  fields: readonly SecretField[],
+  given: unknown,
+): { values: Record<string, string> } | Answer {
+  if (!isRecord(given)) return no(400, t('secret.err.values'))
+  const values: Record<string, string> = {}
+  for (const name of Object.keys(given)) if (!fields.some(f => f.name === name)) return no(400, t('secret.err.values'))
+  for (const f of fields) {
+    const raw = given[f.name]
+    if (typeof raw !== 'string') return no(400, t('secret.err.values'))
+    // a line break a paste brings at either end is no part of a key; spaces are kept (the form says so)
+    const value = raw.replace(/^[\r\n]+|[\r\n]+$/g, '')
+    // spaces alone are no value, in any sink (an empty Bitwarden part is left as it is)
+    if (value && !value.trim()) return no(400, t('secret.err.valueEmpty', { name: f.name }))
+    const problem = valueProblem(sink, f.name, value)
+    if (problem) return no(400, t(problem, { name: f.name }))
+    values[f.name] = value
+  }
+  return { values }
+}
+
+/**
+ * A secret the owner gives one of config.json's own `secrets.sinks` with no request (docs/design/nodes
+ * 10, item 3): on a node, what its master sends to `POST /api/node/sink/<id>`. The same checks as a
+ * form's answer (the sink as the form showed it, every value fit for it) and the same write; an
+ * audit line says the sink and the field names. Not the calendar's own sink: that one is filled by
+ * the calendar's form.
+ */
+export async function giveSecret(
+  cfg: Pick<Config, 'secrets'>,
+  sinkId: string,
+  input: { values: unknown; fingerprint: unknown },
+  now = Date.now(),
+): Promise<Answer> {
+  const sink = secretsConfig(cfg.secrets, { home: homedir() }).sinks.get(sinkId)
+  if (!sink) return no(404, t('secret.err.sinkGone', { sink: sinkId }))
+  const check = givenFields(sink)
+  if (!check.ok) return no(409, t(check.error, check.vars))
+  const fields = check.fields
+  if (input.fingerprint !== fingerprintOf(sink, {}, fields)) return no(409, t('secret.err.changed'))
+  const typed = valuesOf(sink, fields, input.values)
+  if ('status' in typed) return typed
+  const { values } = typed
+  const result = await writeSink({ sink, params: {}, fields, values })
+  const line = {
+    at: new Date(now).toISOString(),
+    op: 'given',
+    sink: sink.id,
+    fields: fields.map(f => f.name),
+    who: 'owner',
+  }
+  if (result.ok) {
+    auditLine({ ...line, target: result.target, ...(result.status && { httpStatus: result.status }) })
+    return {
+      status: 200,
+      body: { ok: true, target: result.target, ...(result.status && { httpStatus: result.status }) },
+    }
+  }
+  auditLine({ ...line, op: 'failed', error: result.error, ...(result.status && { httpStatus: result.status }) })
+  return failedAnswer(result, values, '')
 }
 
 /** A failed write's answer: the reason in words, the values scrubbed from it once more. */

@@ -1,11 +1,14 @@
-// The master door's own routes on a node (#498, #504, #506, #508, docs/design/nodes 6.2): served by
-// the door (server/node-listener.ts) only, never by the board's route table, so no other listener has
-// them. The status, a start from the master, the profile bundle's three (services/node/bundle.ts):
-// what the node has, a blob, the commit; and the uplink's three (services/node/uplink.ts): the calls'
-// stream, a file a call names, the master's result. The door has checked the Host, the Origin, the
-// master's token and X-Board before they run. `POST /api/node/call`, the other end of the uplink, is
-// this computer's own: nodeCallRoutes, which only the web board's own listener serves (server/app.ts).
+// The master door's own routes on a node (#498, #504, #506, #507, #508, docs/design/nodes 6.2): served
+// by the door (server/node-listener.ts) only, never by the board's route table, so no other listener
+// has them. The status, a start from the master, the profile bundle's three (services/node/bundle.ts):
+// what the node has, a blob, the commit; the uplink's three (services/node/uplink.ts): the calls'
+// stream, a file a call names, the master's result; and a secret the owner gives one of the node's
+// sinks (services/secrets.ts giveSecret). The door has checked the Host, the Origin, the master's
+// token and X-Board before they run. `POST /api/node/call`, the other end of the uplink, is this
+// computer's own: nodeCallRoutes, which only the web board's own listener serves (server/app.ts).
 import { MAX_BLOB_BYTES } from '../../adapters/bundle-files.ts'
+import { isRecord } from '../../adapters/json-store.ts'
+import { t } from '../../core/lang.ts'
 import type { Answer, NodeBundle } from '../../services/node/bundle.ts'
 import type { NodeLaunchAnswer } from '../../services/node/launch.ts'
 import type { NodeUplink } from '../../services/node/uplink.ts'
@@ -20,6 +23,8 @@ export interface NodeDoorSources {
   bundle: NodeBundle
   /** The uplink's stream, files and results (services/node/uplink.ts). */
   uplink: Pick<NodeUplink, 'stream' | 'file' | 'answer'>
+  /** `POST /api/node/sink/<id>`: `{ values, fingerprint }` written to that sink (services/secrets.ts giveSecret). */
+  sink(id: string, body: Record<string, unknown>): Promise<Answer>
 }
 
 /** A commit's manifest, at most this many bytes of JSON. */
@@ -99,6 +104,25 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
           return json(400, { error: 'bundle' })
         }
         return answer(await bundle.commit(ctx.params[0] ?? '', body))
+      },
+    },
+    {
+      method: 'POST',
+      path: /^\/api\/node\/sink\/([a-z0-9][a-z0-9_-]{0,39})$/,
+      async handle(_req, ctx) {
+        // The values come here and go straight to the sink: no answer holds one, nothing logs the body.
+        let body: unknown
+        try {
+          body = await ctx.rawBody()
+        } catch {
+          return json(400, { ok: false, error: t('secret.err.values') })
+        }
+        try {
+          return answer(await o.sink(ctx.params[0] ?? '', isRecord(body) ? body : {}))
+        } catch {
+          // whatever threw may have held a value in its message: none of it goes out or into the log
+          return json(500, { ok: false, error: t('secret.err.internal') })
+        }
       },
     },
     {

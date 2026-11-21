@@ -15,7 +15,8 @@
 // - `/api/sleep`, `/api/move`, `/api/archive`: split by device, this computer's part answered by the
 //   board's own route, each device's part by its node, the outcomes put back in the asked order.
 // - `/api/todos`, `/api/schedule` by the key or entry id in the body; `/api/secret/<id>` when a node's
-//   card holds that request, its values crossing this process's memory only.
+//   card holds that request, its values crossing this process's memory only, and a line in this
+//   board's secrets audit with the names of what went to the device (#507).
 // - Files: `/api/fs/(stat|preview|dirs)` with the session's `key` in the body, `/api/fs/(raw|download)`
 //   and `/uploads/...` with `?key=`, `/api/upload?key=` into the node's uploads. `/api/fs/open`,
 //   `/api/open-url` and `/api/reveal` for a node key are 403 desktop.
@@ -45,6 +46,7 @@ import type { Config, Item } from '../../core/types.ts'
 import type { Link } from '../../services/nodes/link.ts'
 import type { NodeLinks } from '../../services/nodes/links.ts'
 import type { RemoteDelivery, RemoteSent } from '../../services/scheduler.ts'
+import { auditForwarded } from '../../services/secrets.ts'
 import { terminalOn } from '../../services/terminals.ts'
 import { type Body, type Guard, json, type Route, type RouteContext } from '../http.ts'
 import { MAX_UPLOAD } from '../uploads.ts'
@@ -85,6 +87,8 @@ const MAX_TARGETS = 200
 const desktop = (): Response => json(403, { error: 'desktop' })
 const gone = (): Response => json(404, { error: t('err.gone') })
 const offline = (device: string): Response => json(503, { error: 'node-offline', device })
+/** What forward() answers when the link did not carry a request: a node's own routes never answer 503. */
+const isOffline = (res: Response): boolean => res.status === 503
 const jsonInit = (body: unknown): RequestInit => ({
   method: 'POST',
   headers: { 'content-type': 'application/json' },
@@ -392,7 +396,23 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
     }
     const r = reach(item.device)
     if ('refused' in r) return r.refused
-    return forward(item.device, r.link, `/api/secret/${id}`, jsonInit(body), req)
+    const res = await forward(item.device, r.link, `/api/secret/${id}`, jsonInit(body), req)
+    // The master's own audit says values went to the device: the request's names, never a value. A
+    // decline sends none, and an answer the link could not carry left nothing here.
+    if (!isRecord(body) || body.op !== 'submit' || isOffline(res)) return res
+    const view = (item.secrets as unknown[]).find(s => isRecord(s) && s.id === id)
+    const v = isRecord(view) ? view : {}
+    auditForwarded({
+      device: item.device,
+      sink: typeof v.sink === 'string' ? v.sink : '',
+      fields: Array.isArray(v.fields)
+        ? v.fields.flatMap(f => (isRecord(f) && typeof f.name === 'string' ? [f.name] : []))
+        : [],
+      id,
+      key: item.key,
+      status: res.status,
+    })
+    return res
   }
 
   /** A file sent to a node's session: into the node's uploads, its answer's path the node's own. */

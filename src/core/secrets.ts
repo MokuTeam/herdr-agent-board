@@ -572,6 +572,18 @@ export function checkRequest(sink: Sink, params: Record<string, string>, asked: 
   return { ok: true, params, fields }
 }
 
+/**
+ * The fields of a secret the owner gives `sink` with no request (docs/design/nodes 10, item 3: a
+ * node's git credentials, a key an MCP server reads): those its template names, masked, `once` as
+ * the sink says. A sink without a template (Bitwarden, a user variable) and one that takes
+ * parameters need a request to name them.
+ */
+export function givenFields(sink: Sink): RequestCheck {
+  if (!sink.fields || Object.keys(sink.params).length)
+    return { ok: false, error: 'secret.err.given', vars: { sink: sink.id } }
+  return checkRequest(sink, {}, [])
+}
+
 /** What a typed value may not be for this sink and field: a key of the reason, or null. */
 export function valueProblem(sink: Sink, field: string, value: string): string | null {
   if (sink.kind === 'bitwarden') return null

@@ -4,7 +4,7 @@
 //
 // An allowlist, not a list of refusals: a route the board gains later is not reachable through the
 // door until someone adds it here. What is not on the list answers 404, so the door does not say
-// what the board has. The routes of later tasks (launch, sink, uplink, update, leave, claim)
+// what the board has. The routes of later tasks (update, leave, claim)
 // are added by those tasks.
 
 /** The version of the node link (6.5): the master places work only on a node whose own equals its. */
@@ -75,6 +75,8 @@ export const DOOR_ROUTES: readonly DoorRoute[] = [
   { method: 'GET', path: '/api/node/uplink', door: true },
   { method: 'GET', path: /^\/api\/node\/uplink\/[A-Za-z0-9_-]{1,64}\/file\/\d{1,2}$/, door: true },
   { method: 'POST', path: /^\/api\/node\/uplink\/[A-Za-z0-9_-]{1,64}$/, door: true },
+  // A secret the owner gives one of the node's sinks with no request (10, item 3).
+  { method: 'POST', path: /^\/api\/node\/sink\/[a-z0-9][a-z0-9_-]{0,39}$/, door: true },
 ]
 
 const allows = (r: DoorRoute, method: string, rawPath: string, path: string): boolean =>

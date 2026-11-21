@@ -81,6 +81,8 @@ export const SECRET_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'secret.err.was.pending': 'This request is still open',
     'secret.err.sinkGone': 'The sink “{sink}” is no longer in config.json',
     'secret.err.changed': 'Where the values go changed since the form was shown: look again',
+    'secret.err.given':
+      'The sink “{sink}” is filled by a request, not given a secret: it has no template, or takes parameters',
     'secret.err.values': 'The form did not send the fields this request asks for',
     'secret.err.busy': 'Another submit is writing this request now',
     'secret.err.pendingMany': 'This session has {n} requests waiting already: let the owner answer those first',
@@ -185,6 +187,8 @@ export const SECRET_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'secret.err.was.pending': 'Запрос ещё открыт',
     'secret.err.sinkGone': 'Стока «{sink}» в config.json больше нет',
     'secret.err.changed': 'С тех пор как форма открылась, место назначения изменилось: посмотрите ещё раз',
+    'secret.err.given':
+      'Сток «{sink}» заполняется по запросу, а не выдачей секрета: у него нет шаблона или есть параметры',
     'secret.err.values': 'Форма прислала не те поля, что просит запрос',
     'secret.err.busy': 'Этот запрос сейчас записывает другая отправка',
     'secret.err.pendingMany': 'У этой сессии уже ждут {n} запросов: пусть владелец сначала ответит на них',

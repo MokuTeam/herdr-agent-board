@@ -80,6 +80,7 @@ import { editProfile, installProfile, installThreadsSkill, wakeHooksInPlace } fr
 import { createRemote } from '../services/remote.ts'
 import { createRemoteAccess } from '../services/remote-access.ts'
 import { startScheduler } from '../services/scheduler.ts'
+import { giveSecret } from '../services/secrets.ts'
 import { createServerSetup } from '../services/server-setup.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
 import { createTeamConfirm } from '../services/team-confirm.ts'
@@ -1047,13 +1048,16 @@ export async function startServer({
       guards: { ...guards, ownFiles: ownFileCheck(cfg) },
       hello: () => listener.hello(),
       store: createNodeStore(),
-      // Its status, a start from the master (#504) through this board's own launch pipeline, and the
-      // profile bundle its master sends (#506).
+      // Its status, a start from the master (#504) through this board's own launch pipeline, the
+      // profile bundle its master sends (#506) and a secret given to one of its sinks (#507).
       doorRoutes: nodeDoorRoutes({
         status: () => status.answer(),
         launch: body => nodeLaunch.answer(body),
         bundle: nodeBundle,
         uplink,
+        // A secret the owner gives one of this node's sinks (#507): config.json as it is now, as a
+        // form's answer reads it, so the sink checked is the one the bundle last wrote.
+        sink: (id, body) => giveSecret(loadConfig(), id, { values: body.values, fingerprint: body.fingerprint }),
       }),
       log,
     })

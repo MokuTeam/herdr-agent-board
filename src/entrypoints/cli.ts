@@ -51,11 +51,13 @@
 //                            and when last seen; token adds a master and prints its token once;
 //                            forget takes one's token back. Until the install exists, for a node
 //                            set up by hand; a board without `node` in config.json says it is none
-//   board nodes [token <id> | key <id> | sync <id> [<profile>]]   this board as a master (#499): its
-//                            devices in order with their link's state, read from the running board;
-//                            token stores a device's token read from stdin (never an argument, never
-//                            echoed); key makes the device's ssh link key when missing and prints its
-//                            public half; sync makes the device's profile bundle current now (#506)
+//   board nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink>]   this board as a
+//                            master (#499): its devices in order with their link's state, read from
+//                            the running board; token stores a device's token read from stdin (never
+//                            an argument, never echoed); key makes the device's ssh link key when
+//                            missing and prints its public half; sync makes the device's profile
+//                            bundle current now (#506); secret gives one of the device's sinks its
+//                            values, each read from the terminal without echo (#507)
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
 //   board presence [here|away|call]   whether the user is at the computer, away or on a call
 //                            (core/presence.ts), the line every session's context has; with a
@@ -186,7 +188,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id>] | nodes [token <id> | key <id> | sync <id> [<profile>]] | doctor | presence [here | away | call] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id>] | nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink>] | doctor | presence [here | away | call] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal'])
@@ -1678,12 +1680,12 @@ const NO_BOARD = 'the board does not run: open it first (herdr plugin action inv
  * config.json's `nodes` does not check out. `token` stores the token a node printed (`board node
  * token` there), read from stdin, and has the running board try that link again at once. `key`
  * makes a device's ssh link key when it has none (adapters/ssh.ts generateKey, its rights set on
- * Windows) and prints the public half, for the node's fenced user. `sync`: nodesSync. A board without `nodes` says it
- * is no master in one line, and reads nothing else.
+ * Windows) and prints the public half, for the node's fenced user. `sync`: nodesSync. `secret`: nodesSecret. A
+ * board without `nodes` says it is no master in one line, and reads nothing else.
  */
 async function nodesCmd(): Promise<void> {
   const [op = 'status', id = ''] = words
-  const usage = 'usage: board nodes [token <id> | key <id> | sync <id> [<profile>]]'
+  const usage = 'usage: board nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink>]'
   const { nodesConfig } = await import('../core/nodes.ts')
   const nodes = nodesConfig(cfg.nodes, (await import('node:os')).hostname())
   if (!nodes) return console.log('this board is not a master: config.json has no `nodes`')
@@ -1722,6 +1724,13 @@ async function nodesCmd(): Promise<void> {
       throw new Error(`no device ${id} with a link: \`board nodes\` lists them`)
     return nodesSync(webPort, id, profile)
   }
+  if (op === 'secret') {
+    const sink = words[2]
+    if (!id || !sink || words.length > 3) throw new Error(usage)
+    if (id === 'local' || !nodes.devices[id]?.link)
+      throw new Error(`no device ${id} with a link: \`board nodes\` lists them`)
+    return nodesSecret(webPort, id, sink, nodes.devices[id]?.sinks)
+  }
   if (op === 'key') {
     const dev = device()
     if (nodes.devices[dev]?.link?.kind !== 'ssh')
@@ -1751,6 +1760,67 @@ async function nodesCmd(): Promise<void> {
   }
   for (const p of nodes.problems) lines.push(`problem: ${p.device ? `${p.device} ` : ''}${p.key}: ${p.why}`)
   console.log(lines.join('\n'))
+}
+
+/**
+ * `board nodes secret <id> <sink>` (#507, docs/design/nodes 10 item 3): a secret the owner gives one
+ * of the device's sinks before anyone asks (git credentials, a key an MCP server reads). The fields
+ * are the sink's own, from config.json's `nodes.devices.<id>.sinks`, which the bundle sends there;
+ * each value is read from the terminal without echo, or a line each from stdin when it is a pipe,
+ * never from an argument, never printed. The running board sends them to the node, which checks the
+ * sink against its own copy and writes it; the line printed says where, never what.
+ */
+async function nodesSecret(webPort: number, id: string, sinkId: string, sinks: unknown): Promise<void> {
+  const { fingerprintOf, givenFields, secretsConfig } = await import('../core/secrets.ts')
+  const sink = secretsConfig({ sinks }, { home: homedir() }).sinks.get(sinkId)
+  if (!sink) {
+    const known = Object.keys(isRecord(sinks) ? sinks : {}).join(', ') || 'none'
+    throw new Error(`${id} has no sink ${sinkId} in config.json (nodes.devices.${id}.sinks): ${known}`)
+  }
+  // The node checks the sink as it parses it there: a path this computer's platform would refuse
+  // is the node's to judge, so only what the fields and the fingerprint are made of counts here.
+  const check = givenFields({ ...sink, problems: [] })
+  if (!check.ok) throw new Error(t(check.error, check.vars))
+  const { readHidden, readStdin } = await import('../adapters/stdin.ts')
+  const values: Record<string, string> = {}
+  if (process.stdin.isTTY) {
+    const typed = await readHidden(check.fields.map(f => `${f.name}: `))
+    check.fields.forEach((f, i) => {
+      values[f.name] = typed[i] ?? ''
+    })
+  } else {
+    const lines = (await readStdin()).split(/\r?\n/)
+    check.fields.forEach((f, i) => {
+      values[f.name] = lines[i] ?? ''
+    })
+  }
+  let res: Response
+  try {
+    res = await fetch(`http://127.0.0.1:${webPort}/api/nodes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({
+        op: 'secret',
+        id,
+        sink: sinkId,
+        values,
+        fingerprint: fingerprintOf(sink, {}, check.fields),
+      }),
+      signal: AbortSignal.timeout(90_000),
+    })
+  } catch (err) {
+    // No answer in time is not a board that does not run: the node may still have written it.
+    if ((err as Error)?.name === 'TimeoutError')
+      throw new Error(`no answer from the board in 90 s: \`board nodes\` says whether ${id} is reachable`)
+    throw new Error(NO_BOARD)
+  }
+  const r: unknown = await res.json().catch(() => null)
+  const a = isRecord(r) ? r : {}
+  if (!res.ok || a.ok !== true)
+    throw new Error(
+      `not written · ${id} ${sinkId}: ${typeof a.error === 'string' ? a.error : `the board said ${res.status}`}`,
+    )
+  console.log(`ok · ${id} ${sinkId} written${typeof a.target === 'string' ? `: ${a.target}` : ''}`)
 }
 
 /**

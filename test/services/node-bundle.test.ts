@@ -340,6 +340,7 @@ describe('what the review found', () => {
             file: () => new Response('', { status: 404 }),
             answer: () => ({ status: 404, body: {} }),
           },
+          sink: async () => ({ status: 404, body: { ok: false } }),
         }),
         req,
         url,
