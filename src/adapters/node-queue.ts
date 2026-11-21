@@ -5,6 +5,7 @@
 // through the locked JSON writer, 0600: a start's first message is in it.
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import type { GitIdentity } from '../core/git-access.ts'
 import type { Blocker, Task } from '../core/placement.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
 import { nodesDir } from './node-store.ts'
@@ -12,9 +13,20 @@ import { nodesDir } from './node-store.ts'
 /** At most this many starts wait (8.3). */
 export const QUEUE_MAX = 50
 
-/** Where a start's folder comes from on a node (6.4), as the placer worked it out on the master. */
+/**
+ * Where a start's folder comes from on a node (6.4), as the placer worked it out on the master. A
+ * repository's `identity` is the author git gives in the master's checkout (#611); absent when it
+ * gives none.
+ */
 export type NodeSource =
-  | { kind: 'repo'; url: string; ref: string; subdir: string; worktree: { branch: string } | null }
+  | {
+      kind: 'repo'
+      url: string
+      ref: string
+      subdir: string
+      worktree: { branch: string } | null
+      identity?: GitIdentity
+    }
   | { kind: 'path'; cwd: string; worktree: { branch: string } | null }
 
 export interface QueueEntry {

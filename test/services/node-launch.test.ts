@@ -5,13 +5,29 @@
 import { afterEach, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { cloneRepo, fetchRepo, moveTo, repoIdentity, repoState, setRepoIdentity } from '../../src/adapters/node-repo.ts'
 import type { NodeConfig } from '../../src/core/nodes.ts'
 import { profileSet } from '../../src/core/profiles.ts'
 import type { StartResult } from '../../src/services/launch/launches.ts'
-import { cloneUrl, createNodeLaunch, launchRequestOf, type NodeLaunchDeps } from '../../src/services/node/launch.ts'
+import {
+  cloneUrl,
+  createNodeLaunch,
+  launchRequestOf,
+  type NodeLaunchDeps,
+  type RepoOps,
+} from '../../src/services/node/launch.ts'
 
 const ID = '5d0c6a1e-1111-4222-8333-444455556666'
 const OTHER = '5d0c6a1e-1111-4222-8333-777788889999'
@@ -289,4 +305,127 @@ test('an address the board’s rule refuses, a remote that cannot be cloned, a b
   assert.deepEqual(branch, { status: 409, body: { error: 'repo', detail: 'no branch gone' } })
   assert.equal(starts.length, 0)
   assert.deepEqual(readdirSync(join(node.workRoot, 'example.test', 'acme')), ['atlas'])
+}, 30_000)
+
+// ---------------------------------------------------------------- the author of the master's checkout (#611)
+
+const AUTHOR = { name: 'Atlas Author', email: 'atlas@example.test' }
+const NODE_OWNER = { name: 'Node Owner', email: 'node@example.test' }
+
+/** The node's global config a file of the test's own, holding the node owner's identity; git's system one off. */
+function nodeGlobal(root: string): string {
+  const file = join(root, 'global.gitconfig')
+  writeFileSync(file, `[user]\n\tname = ${NODE_OWNER.name}\n\temail = ${NODE_OWNER.email}\n`)
+  setEnv({ GIT_CONFIG_GLOBAL: file, GIT_CONFIG_NOSYSTEM: '1' })
+  return file
+}
+
+/** The real git a start needs, with the identity's calls counted. */
+function countedRepo(over: Partial<RepoOps> = {}) {
+  const calls = { identity: 0, setIdentity: 0 }
+  const repo: RepoOps = {
+    clone: cloneRepo,
+    fetch: fetchRepo,
+    state: repoState,
+    move: moveTo,
+    identity: dir => {
+      calls.identity++
+      return repoIdentity(dir)
+    },
+    setIdentity: (dir, id) => {
+      calls.setIdentity++
+      return (over.setIdentity ?? setRepoIdentity)(dir, id)
+    },
+  }
+  return { repo, calls }
+}
+
+/** A key of the checkout's own config, or null when it has none. */
+function local(checkout: string, key: string): string | null {
+  try {
+    return git(checkout, 'config', '--local', '--get', key)
+  } catch {
+    return null
+  }
+}
+
+const withAuthor = (id: string, identity: unknown = AUTHOR) =>
+  repoBody({ id, source: { ...repoBody().source, identity } })
+
+test('the author the master’s checkout gives goes into the clone’s own config, worktrees too; none sent asks nothing; the same writes nothing (#611)', async () => {
+  const root = tmp()
+  remote(root)
+  const global = nodeGlobal(root)
+  const before = readFileSync(global, 'utf8')
+  const { repo, calls } = countedRepo()
+  const { deps, starts, node } = nodeWith(root, { repo })
+  const launch = createNodeLaunch(deps)
+  const checkout = join(node.workRoot, 'example.test', 'acme', 'atlas')
+
+  // No identity sent (none on the master, or an older one): nothing asked, nothing written.
+  assert.equal((await launch.answer(repoBody())).status, 202)
+  assert.deepEqual(calls, { identity: 0, setIdentity: 0 })
+  assert.equal(local(checkout, 'user.email'), null)
+
+  // Another author than git gives here: set in the clone's own config, the global one untouched.
+  const two = await launch.answer(withAuthor(OTHER))
+  assert.equal(two.status, 202, JSON.stringify(two))
+  assert.deepEqual([local(checkout, 'user.name'), local(checkout, 'user.email')], [AUTHOR.name, AUTHOR.email])
+  assert.equal(git(checkout, 'config', 'user.email'), AUTHOR.email)
+  assert.equal(readFileSync(global, 'utf8'), before)
+  // A worktree of the clone, as the node's launch pipeline makes one, commits as the same author.
+  const wt = join(root, 'wt')
+  git(checkout, 'worktree', 'add', '--quiet', '-b', 'atlas-12', wt)
+  assert.equal(git(wt, 'config', 'user.email'), AUTHOR.email)
+
+  // The same author again: asked, nothing written.
+  const third = '5d0c6a1e-1111-4222-8333-000000000003'
+  assert.equal((await launch.answer(withAuthor(third))).status, 202)
+  assert.deepEqual(calls, { identity: 2, setIdentity: 1 })
+  assert.equal(starts.length, 3)
+
+  // A fresh clone whose node gives the same author already: nothing written there either.
+  const fresh = countedRepo()
+  const other = nodeWith(tmp(), { repo: fresh.repo })
+  const r = await createNodeLaunch(other.deps).answer(withAuthor(ID, NODE_OWNER))
+  assert.equal(r.status, 202, JSON.stringify(r))
+  const freshCheckout = join(other.node.workRoot, 'example.test', 'acme', 'atlas')
+  assert.deepEqual(fresh.calls, { identity: 1, setIdentity: 0 })
+  assert.equal(local(freshCheckout, 'user.email'), null)
+  assert.equal(git(freshCheckout, 'config', 'user.email'), NODE_OWNER.email)
+}, 30_000)
+
+test('an author that does not fit is refused as the body; one that cannot be set turns the start away as repo, saying identity (#611)', async () => {
+  assert.deepEqual((launchRequestOf(withAuthor(ID)) as { source: unknown }).source, {
+    ...repoBody().source,
+    identity: AUTHOR,
+  })
+  const field = (identity: unknown) => (launchRequestOf(withAuthor(ID, identity)) as { field?: string }).field
+  for (const identity of [
+    'Atlas Author <atlas@example.test>',
+    { name: AUTHOR.name },
+    { email: AUTHOR.email },
+    { name: '', email: AUTHOR.email },
+    { name: 'Atlas\nAuthor', email: AUTHOR.email },
+    { name: AUTHOR.name, email: 'atlas@example.test\r' },
+    { name: 'a'.repeat(257), email: AUTHOR.email },
+    { name: AUTHOR.name, email: 5 },
+  ])
+    assert.equal(field(identity), 'source.identity', JSON.stringify(identity))
+
+  const root = tmp()
+  remote(root)
+  nodeGlobal(root)
+  const { repo, calls } = countedRepo({ setIdentity: async () => ({ ok: false, why: 'could not lock config file' }) })
+  const { deps, starts, node } = nodeWith(root, { repo })
+  const launch = createNodeLaunch(deps)
+  assert.deepEqual(await launch.answer(withAuthor(ID)), {
+    status: 409,
+    body: { error: 'repo', detail: 'identity not set: could not lock config file' },
+  })
+  assert.equal(calls.setIdentity, 1)
+  assert.equal(starts.length, 0)
+  // Nothing accepted: the master may send it again, to this node or the next.
+  assert.equal(existsSync(join(root, 'launches', `${ID}.json`)), false)
+  assert.equal(local(join(node.workRoot, 'example.test', 'acme', 'atlas'), 'user.email'), null)
 }, 30_000)

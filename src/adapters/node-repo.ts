@@ -1,9 +1,11 @@
 // A node's checkouts (#504, docs/design/nodes 6.4, 8.4): a start its master sends by a repository's
 // address becomes a folder under `node.workRoot`. Cloned when missing, fetched, and moved to the
 // branch the start asks for only when nothing of the node's own would be lost. Git's prompts are
-// off: a node has nobody at its keyboard, and a remote that asks for a login is a refusal.
+// off: a node has nobody at its keyboard, and a remote that asks for a login is a refusal. The
+// author the master's checkout gives goes into the checkout's own config, never the global one (#611).
 import { realpathSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { type GitIdentity, identityOf } from '../core/git-access.ts'
 import { run } from './process.ts'
 
 /** A clone may take minutes; a fetch, a checkout and the questions far less. */
@@ -105,6 +107,27 @@ export async function repoState(
       target: target.ok ? target.out : '',
     },
   }
+}
+
+/** `user.name` and `user.email` as git gives them in the checkout (its own config, then the global one), or null. */
+export async function repoIdentity(dir: string): Promise<GitIdentity | null> {
+  const [name, email] = await Promise.all([
+    git(dir, ['config', '--get', 'user.name']),
+    git(dir, ['config', '--get', 'user.email']),
+  ])
+  return identityOf(name.ok ? name.out : null, email.ok ? email.out : null)
+}
+
+/** The identity into the checkout's own config (`--local`, which its worktrees share). */
+export async function setRepoIdentity(dir: string, id: GitIdentity): Promise<RepoDone> {
+  for (const [key, value] of [
+    ['user.name', id.name],
+    ['user.email', id.email],
+  ] as const) {
+    const r = await git(dir, ['config', '--local', '--', key, value])
+    if (!r.ok) return { ok: false, why: r.why }
+  }
+  return { ok: true }
 }
 
 /** A clean checkout moved to `ref` (a local branch tracking `origin/<ref>` when it has none) and fast-forwarded to it. */

@@ -2,6 +2,7 @@
 import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { type GitIdentity, identityOf } from '../core/git-access.ts'
 import { ARCHIVE_COMMIT_FILE } from '../core/node-texts.ts'
 import { repoAddress } from '../core/portable.ts'
 import { run } from './process.ts'
@@ -276,6 +277,19 @@ export async function checkoutFacts(dir: string): Promise<CheckoutFacts | null> 
     clean: !status.truncated && status.text.trim() === '',
     headPushed: !!pushed && pushed.commit === head,
   }
+}
+
+/**
+ * The author a commit made in this folder carries: `user.name` and `user.email` as git gives them
+ * there, so its includes (`includeIf "gitdir:..."`) and the checkout's own config count (#611). null
+ * when either is not set or does not fit (core/git-access.ts identityOf).
+ */
+export async function checkoutIdentity(dir: string): Promise<GitIdentity | null> {
+  const [name, email] = await Promise.all([
+    gitLine(dir, ['config', '--get', 'user.name']),
+    gitLine(dir, ['config', '--get', 'user.email']),
+  ])
+  return identityOf(name, email)
 }
 
 /**

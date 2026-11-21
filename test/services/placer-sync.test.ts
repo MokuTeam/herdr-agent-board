@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { QueueEntry } from '../../src/adapters/node-queue.ts'
+import type { GitIdentity } from '../../src/core/git-access.ts'
 import type { NodeStatus } from '../../src/core/nodes.ts'
 import type { Profile } from '../../src/core/profiles.ts'
 import type { Config } from '../../src/core/types.ts'
@@ -163,6 +164,8 @@ function master(o: {
   /** Each node's profiles as its status lists them, and the master's ids mapped to them (`profiles`). */
   nodeProfiles?: string[]
   profileMap?: Record<string, string>
+  /** git's author in a folder (adapters/git.ts checkoutIdentity); not asked when not given. */
+  identity?: (dir: string) => Promise<GitIdentity | null>
 }) {
   isolatedHome()
   const dir = mkdtempSync(join(tmpdir(), 'placer-sync-'))
@@ -267,6 +270,7 @@ function master(o: {
       }),
       info: async () => ({ root: checkout, branch: 'main' }),
       pushed: async () => true,
+      ...(o.identity && { identity: o.identity }),
     } as never,
     exists: () => false,
   })
@@ -297,6 +301,7 @@ function master(o: {
   return {
     placer,
     start,
+    checkout,
     ran,
     queued,
     logs,
@@ -550,6 +555,54 @@ describe('a start on a node syncs the profile first (#584)', () => {
     expect(m.syncs).toEqual([])
     expect(one.requests).toEqual([])
     m.close()
+  }, 15_000)
+})
+
+describe("the checkout's git identity goes with a start (#611)", () => {
+  const AUTHOR = { name: 'Atlas Author', email: 'atlas@example.test' }
+
+  test('a start sent to a node carries the author git gives in its checkout, none when it gives none; one that stays asks git nothing for it', async () => {
+    const asked: string[] = []
+    const identity = async (dir: string): Promise<GitIdentity | null> => {
+      asked.push(dir)
+      return AUTHOR
+    }
+    // Its lane may not leave: it starts here and git is not asked for an author.
+    const stays = master({ nodes: [door('server-1')], lanes: [], identity })
+    const here = stays.start('atlas 1')
+    await until(() => stays.ran.length === 1)
+    expect(here.place?.home).toEqual({ kind: 'lane' })
+    expect(asked).toEqual([])
+    stays.close()
+
+    const one = door('server-1')
+    const goes = master({ nodes: [one], identity })
+    const l = goes.start('atlas 2')
+    await until(settledOf(l))
+    expect(l.state).toBe('done')
+    expect(asked).toEqual([goes.checkout])
+    expect(one.starts.map(s => s.source)).toEqual([
+      {
+        kind: 'repo',
+        url: ADDRESS,
+        ref: 'main',
+        subdir: '',
+        worktree: null,
+        identity: AUTHOR,
+      },
+    ])
+    goes.close()
+
+    // git gives no author there: the source has no identity, the node's own applies.
+    const two = door('server-1')
+    const none = master({ nodes: [two], identity: async () => null })
+    const n = none.start('atlas 3')
+    await until(settledOf(n))
+    expect(n.state).toBe('done')
+    expect(two.starts.map(s => s.source)).toEqual([
+      { kind: 'repo', url: ADDRESS, ref: 'main', subdir: '', worktree: null },
+    ])
+    none.close()
   }, 15_000)
 })
 

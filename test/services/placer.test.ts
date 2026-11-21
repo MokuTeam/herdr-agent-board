@@ -193,12 +193,14 @@ async function placing(o: {
   masterLogin?: boolean
   /** config.json on the master's disk names the devices, for what the board writes there (a revoke). */
   disk?: boolean
+  /** More of the master board's environment. */
+  masterEnv?: Record<string, string>
 }): Promise<Pair & { checkout: string }> {
   const { checkout, nodeEnv } = repos(o.branch)
   const pair = await nodePair({
     count: o.count ?? 2,
     env: { ...PAIR_ENV, PATH, ...nodeEnv },
-    masterEnv: { GIT_CONFIG_COUNT: '0', BOARD_NODE_QUEUE_MS: '400' },
+    masterEnv: { GIT_CONFIG_COUNT: '0', BOARD_NODE_QUEUE_MS: '400', ...o.masterEnv },
     panes: (id, box) => {
       login(box)
       return (o.nodePanes?.(id, box) ?? []) as Record<string, unknown>[]
@@ -295,12 +297,15 @@ test('a node that is behind gets the profile before the start, the card saying s
   await settled(pair.master.url)
 }, 60_000)
 
-test('Without nodes a start runs here as before: no placing or syncing step, no nodes folder (#584)', async () => {
+test('Without nodes a start runs here as before: no placing or syncing step, no nodes folder, no identity asked of git (#584, #611)', async () => {
   const { checkout } = repos()
+  git(checkout, 'config', 'user.email', 'atlas@example.test')
+  const trace = join(mkdtempSync(join(tmpdir(), 'placer-trace-')), 'git.trace')
+  scratch.push(dirname(trace))
   const box = await sandbox()
   login(box)
   box.state(startable())
-  const board = await serveBoard(box, { language: 'en', categories: LANES }, { ...PAIR_ENV, PATH })
+  const board = await serveBoard(box, { language: 'en', categories: LANES }, { ...PAIR_ENV, PATH, GIT_TRACE: trace })
   board.proc.send('refresh')
   await fresh(board.url)
   const id = await startAt(board.url, checkout, 'atlas 1')
@@ -315,6 +320,8 @@ test('Without nodes a start runs here as before: no placing or syncing step, no 
   assert.equal(steps.has('syncing') || steps.has('placing'), false, [...steps].join(','))
   assert.equal(l?.place, undefined)
   assert.equal(existsSync(join(stateFolder(box), 'nodes')), false)
+  // The test of #611 below shows the trace sees the board's git; here nothing asked it for an identity.
+  assert.deepEqual(identityAsked(trace), [])
   board.proc.kill()
   await board.proc.exited
 }, 60_000)
@@ -619,6 +626,42 @@ test('a start stays here when its lane may not leave or its branch has a name a 
     await settled(pair.master.url)
   }
 }, 90_000)
+
+/** The identity git was asked for, by a board's GIT_TRACE file: `git config --get user.name` and `user.email`. */
+const identityAsked = (trace: string): string[] =>
+  (existsSync(trace) ? readFileSync(trace, 'utf8') : '').match(/config --get user\.(name|email)/g) ?? []
+
+test('a start placed on a node commits there as in the master’s checkout: the clone answers the same user.email (#611)', async () => {
+  const trace = join(mkdtempSync(join(tmpdir(), 'placer-trace-')), 'git.trace')
+  scratch.push(dirname(trace))
+  const pair = await placing({ count: 1, nodes: { order: ['server-1', 'local'] }, masterEnv: { GIT_TRACE: trace } })
+  const node = pair.nodes[0] as Pair['nodes'][0]
+  // The checkout's own author, as an owner with one identity per repository keeps it.
+  git(pair.checkout, 'config', 'user.name', 'Atlas Author')
+  git(pair.checkout, 'config', 'user.email', 'atlas@example.test')
+  await startAt(pair.master.url, pair.checkout, 'atlas 1')
+  await until(() => started(node.box).length === 1, 20_000)
+  // git in the node's clone as a session there runs it: the node's home, its global config.
+  const home = node.box.env.HOME ?? ''
+  const there = (...args: string[]): string =>
+    execFileSync(GIT, ['-C', join(node.box.dir, 'example.test', 'acme', 'atlas'), ...args], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: home,
+        USERPROFILE: home,
+        GIT_CONFIG_GLOBAL: join(home, '.gitconfig'),
+        GIT_CONFIG_NOSYSTEM: '1',
+      },
+    }).trim()
+  assert.equal(there('config', 'user.email'), 'atlas@example.test')
+  assert.equal(there('config', 'user.name'), 'Atlas Author')
+  // Never the node's global config.
+  assert.equal(existsSync(join(home, '.gitconfig')), false)
+  // The master asked its checkout once for each.
+  assert.deepEqual(identityAsked(trace).sort(), ['config --get user.email', 'config --get user.name'])
+  await settled(pair.master.url)
+}, 60_000)
 
 // ---------------------------------------------------------------- spawn-agent through the placer (#505, T9)
 

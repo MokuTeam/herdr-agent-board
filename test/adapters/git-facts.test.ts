@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { branchPushed, checkoutFacts } from '../../src/adapters/git.ts'
+import { branchPushed, checkoutFacts, checkoutIdentity } from '../../src/adapters/git.ts'
 
 // Each test runs a dozen git commands; on a busy Windows machine one takes a few hundred ms.
 const GIT_MS = 30_000
@@ -274,6 +274,56 @@ describe('branchPushed', () => {
       expect(await branchPushed(dir, 'nowhere')).toBe(false)
       expect(await branchPushed(dir, '')).toBe(false)
       expect(await branchPushed(temp('board-no-git-'), 'main')).toBe(false)
+    },
+    GIT_MS,
+  )
+})
+
+describe('the author git gives in a checkout (#611)', () => {
+  const saved: Record<string, string | undefined> = {}
+  const setEnv = (vars: Record<string, string>): void => {
+    for (const [k, v] of Object.entries(vars)) {
+      if (!(k in saved)) saved[k] = process.env[k]
+      process.env[k] = v
+    }
+  }
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+      delete saved[k]
+    }
+  })
+
+  test(
+    "the global one, an includeIf for the checkout's folder over it, the checkout's own over both; none when either is missing",
+    async () => {
+      const top = temp('board-git-identity-')
+      const work = join(top, 'work')
+      const checkout = join(work, 'atlas')
+      cpSync(fixture.clone, checkout, { recursive: true })
+      const global = join(top, 'global.gitconfig')
+      const included = join(top, 'work.gitconfig')
+      setEnv({ GIT_CONFIG_GLOBAL: global, GIT_CONFIG_NOSYSTEM: '1' })
+      const slash = (p: string): string => p.replace(/\\/g, '/')
+
+      writeFileSync(global, '[user]\n\tname = Owner\n')
+      expect(await checkoutIdentity(checkout)).toBeNull()
+
+      writeFileSync(global, '[user]\n\tname = Owner\n\temail = owner@example.test\n')
+      expect(await checkoutIdentity(checkout)).toEqual({ name: 'Owner', email: 'owner@example.test' })
+
+      writeFileSync(included, '[user]\n\temail = work@example.test\n')
+      writeFileSync(
+        global,
+        `[user]\n\tname = Owner\n\temail = owner@example.test\n[includeIf "gitdir/i:${slash(work)}/"]\n\tpath = ${slash(included)}\n`,
+      )
+      expect(await checkoutIdentity(checkout)).toEqual({ name: 'Owner', email: 'work@example.test' })
+      // Another folder, the same global config: the include does not apply there.
+      expect(await checkoutIdentity(fixture.clone)).toEqual({ name: 'Owner', email: 'owner@example.test' })
+
+      git(checkout, ['config', '--local', 'user.email', 'atlas@example.test'])
+      expect(await checkoutIdentity(checkout)).toEqual({ name: 'Owner', email: 'atlas@example.test' })
     },
     GIT_MS,
   )

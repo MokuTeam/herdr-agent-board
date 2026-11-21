@@ -8,6 +8,8 @@
 // - The task: its lane, profile, agent, "Where", whether a person asked, the device that has its
 //   folder, and whether it may leave (core/portable.ts over git's facts, adapters/git.ts; asked only
 //   for a lane that may leave). Its brief's paths in system folders every machine has count as none.
+//   A start that goes as a repository carries the author git gives in its checkout (#611), asked
+//   only once it may leave.
 // - The decision, one at a time: each counts against its device at once (a reservation), so seven
 //   starts in a second do not all see the same room. A reservation lets go when the device's status
 //   counts the session, when the start fails, or after 180 s.
@@ -30,7 +32,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { relative, sep } from 'node:path'
-import { branchPushed, checkoutFacts, gitInfo, headCommit } from '../../adapters/git.ts'
+import { branchPushed, checkoutFacts, checkoutIdentity, gitInfo, headCommit } from '../../adapters/git.ts'
 import { createNodeQueue, type NodeQueue, type NodeSource, type QueueEntry } from '../../adapters/node-queue.ts'
 import { knobMs, pace } from '../../adapters/pacing.ts'
 import { ROOT } from '../../adapters/paths.ts'
@@ -109,8 +111,16 @@ export interface PlacerOptions {
    * observes.
    */
   awaitsBoard?: boolean
-  /** git's facts of a folder (adapters/git.ts), handed in so tests can stand in. */
-  git?: { checkout: typeof checkoutFacts; info: typeof gitInfo; pushed: typeof branchPushed }
+  /**
+   * git's facts of a folder (adapters/git.ts), handed in so tests can stand in. `identity` absent
+   * from what a test hands in: no identity is asked.
+   */
+  git?: {
+    checkout: typeof checkoutFacts
+    info: typeof gitInfo
+    pushed: typeof branchPushed
+    identity?: typeof checkoutIdentity
+  }
   exists?: (path: string) => boolean
 }
 
@@ -152,7 +162,7 @@ export function createPlacer(o: PlacerOptions): Placer {
   const clock = o.clock ?? realClock
   const host = o.hostName ?? hostname()
   const queue = o.queue ?? createNodeQueue()
-  const git = o.git ?? { checkout: checkoutFacts, info: gitInfo, pushed: branchPushed }
+  const git = o.git ?? { checkout: checkoutFacts, info: gitInfo, pushed: branchPushed, identity: checkoutIdentity }
   const exists = o.exists ?? existsSync
   const held = new Map<string, Held>()
   let reservations: Reservation[] = []
@@ -711,9 +721,18 @@ export function createPlacer(o: PlacerOptions): Placer {
     // A branch or folder name a node does not take stays here rather than failing there.
     if (branch && checkBranch(branch)) return home({ ok: false, why: { kind: 'name', name: branch } })
     if (!subdirTravels(subdir)) return home({ ok: false, why: { kind: 'name', name: subdir } })
+    // The author a commit in this folder carries here, so the node's clone commits as this one (#611).
+    const identity = (await git.identity?.(l.cwd)) ?? null
     return {
       task: { ...base, origin: LOCAL, portable: verdict },
-      source: { kind: 'repo', url: facts.remote.url, ref: branch, subdir, worktree: l.worktree },
+      source: {
+        kind: 'repo',
+        url: facts.remote.url,
+        ref: branch,
+        subdir,
+        worktree: l.worktree,
+        ...(identity && { identity }),
+      },
     }
   }
 

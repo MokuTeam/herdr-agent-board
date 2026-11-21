@@ -12,7 +12,10 @@
 //   (core/portable.ts repoAddress), never taken from the master's word as a folder name. The
 //   checkout is `<workRoot>/<host>/<path>`, cloned when missing (`https://<address>.git`, or the
 //   URL the master sent when it is https or ssh for the same address), fetched, and moved to the
-//   branch asked for only when nothing of the node's own would be lost: else 409 `repo`.
+//   branch asked for only when nothing of the node's own would be lost: else 409 `repo`. The
+//   author the master's checkout gives (`source.identity`, #611) is set in the checkout's own config
+//   when git there gives another, so a session here commits as it would there; one that cannot be
+//   set is 409 `repo` too. None sent (none there, an older master): the node's own applies.
 // - `source.kind: "path"`: a start pinned to this node by hand, with a folder of this node.
 // - Below the hard floor (512 MB available) 409 `full`; a profile this node does not have, or one
 //   not logged in, 409 `profile`. The master then tries its next device.
@@ -20,9 +23,19 @@ import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:f
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, relative } from 'node:path'
 import { replaceFile } from '../../adapters/json-store.ts'
-import { cloneRepo, fetchRepo, moveTo, type RepoDone, type RepoState, repoState } from '../../adapters/node-repo.ts'
+import {
+  cloneRepo,
+  fetchRepo,
+  moveTo,
+  type RepoDone,
+  type RepoState,
+  repoIdentity,
+  repoState,
+  setRepoIdentity,
+} from '../../adapters/node-repo.ts'
 import { nodeDir } from '../../adapters/node-store.ts'
 import { memAvailableMb } from '../../adapters/sysload.ts'
+import { type GitIdentity, identityOf, sameIdentity } from '../../core/git-access.ts'
 import { checkBranch } from '../../core/launch/names.ts'
 import type { NodeConfig } from '../../core/nodes.ts'
 import type { NodeTurn } from '../../core/placement.ts'
@@ -49,7 +62,15 @@ export interface NodeLaunchRequest {
   /** The master's workspace label, so its sessions of one workspace stay together here too; '' for none. */
   workspace: string
   source:
-    | { kind: 'repo'; url: string; ref: string; subdir: string; worktree: { branch: string } | null }
+    | {
+        kind: 'repo'
+        url: string
+        ref: string
+        subdir: string
+        worktree: { branch: string } | null
+        /** The author git gives in the master's checkout; absent when it gives none. */
+        identity?: GitIdentity
+      }
     | { kind: 'path'; cwd: string; worktree: { branch: string } | null }
 }
 
@@ -65,6 +86,8 @@ export interface RepoOps {
   fetch(dir: string): Promise<RepoDone>
   state(dir: string, ref: string): ReturnType<typeof repoState>
   move(dir: string, state: RepoState): Promise<RepoDone>
+  identity(dir: string): Promise<GitIdentity | null>
+  setIdentity(dir: string, id: GitIdentity): Promise<RepoDone>
 }
 
 export interface NodeLaunchDeps {
@@ -121,7 +144,13 @@ export function launchRequestOf(raw: unknown): NodeLaunchRequest | { field: stri
     if (typeof ref !== 'string' || (ref && checkBranch(ref))) return { field: 'source.ref' }
     const subdir = s.subdir === undefined || s.subdir === null ? '' : s.subdir
     if (typeof subdir !== 'string' || !subdirTravels(subdir)) return { field: 'source.subdir' }
-    source = { kind: 'repo', url: s.url, ref, subdir, worktree }
+    // Both or neither, each one line of sane length (core/git-access.ts identityOf).
+    let identity: GitIdentity | null = null
+    if (s.identity !== undefined && s.identity !== null) {
+      identity = isObject(s.identity) ? identityOf(s.identity.name, s.identity.email) : null
+      if (!identity) return { field: 'source.identity' }
+    }
+    source = { kind: 'repo', url: s.url, ref, subdir, worktree, ...(identity && { identity }) }
   } else if (s.kind === 'path') {
     if (!text(s.cwd, 4096) || !s.cwd) return { field: 'source.cwd' }
     source = { kind: 'path', cwd: s.cwd, worktree }
@@ -157,7 +186,14 @@ export interface NodeLaunch {
 export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
   const now = d.now ?? Date.now
   const dir = d.dir ?? join(nodeDir(), 'launches')
-  const repo: RepoOps = d.repo ?? { clone: cloneRepo, fetch: fetchRepo, state: repoState, move: moveTo }
+  const repo: RepoOps = d.repo ?? {
+    clone: cloneRepo,
+    fetch: fetchRepo,
+    state: repoState,
+    move: moveTo,
+    identity: repoIdentity,
+    setIdentity: setRepoIdentity,
+  }
   const platform = d.platform ?? process.platform
   /** Starts being made, by id: a second request for one waits for the first's answer. */
   const making = new Map<string, Promise<NodeLaunchAnswer>>()
@@ -244,6 +280,13 @@ export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
       }
       const cwd = source.subdir ? join(checkout, ...source.subdir.split('/')) : checkout
       if (!existsDir(cwd)) return { ok: false, why: 'no such folder' }
+      // Last, so a start turned away for anything else writes nothing. Two starts of one repository
+      // with different authors on the master: the later one's stays.
+      const given = source.identity
+      if (given && !sameIdentity(await repo.identity(checkout), given)) {
+        const set = await repo.setIdentity(checkout, given)
+        if (!set.ok) return { ok: false, why: `identity not set: ${set.why}` }
+      }
       return { ok: true, cwd, label: segments.at(-1) ?? '' }
     })
   }
