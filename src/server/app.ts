@@ -13,7 +13,7 @@ import { editNodes, loadConfig, saveFoundProfiles } from '../adapters/config-fil
 import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { workspaceList } from '../adapters/herdr.ts'
-import { createNodeStore } from '../adapters/node-store.ts'
+import { createDeviceStore, createNodeStore, nodeDir } from '../adapters/node-store.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { knobMs, pace } from '../adapters/pacing.ts'
@@ -65,9 +65,11 @@ import { dayWatchTick } from '../services/day-watches.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
+import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
 import { createNodeLaunch } from '../services/node/launch.ts'
 import { createNodeStatus } from '../services/node/status.ts'
 import { createNodeAggregate, type NodeAggregate } from '../services/nodes/aggregate.ts'
+import { type BundleSync, createBundleSync } from '../services/nodes/bundle-sync.ts'
 import { createNodeLinks, type NodeLinks } from '../services/nodes/links.ts'
 import { createPlacer, type Placer } from '../services/nodes/placer.ts'
 import { tellOwnerWatchers } from '../services/owner-watch.ts'
@@ -1005,6 +1007,10 @@ export async function startServer({
       return
     }
     if (nodeConfig(cfg.node) === null) return
+    // The bundle its master sends (#506): files under the profile folders and `<state>/node/` only.
+    const nodeBundle = createNodeBundle(
+      nodeBundleDeps({ dir: nodeDir(), profiles: () => shownProfiles(deps.profiles().list), log }),
+    )
     const status = createNodeStatus({
       node: () => nodeConfig(cfg.node),
       items: board.items,
@@ -1012,6 +1018,7 @@ export async function startServer({
       profiles: () => shownProfiles(deps.profiles().list),
       launch: () => cfg.launch,
       version: PLUGIN_VERSION,
+      bundle: nodeBundle.version,
     })
     const nodeLaunch = createNodeLaunch({
       node: () => nodeConfig(cfg.node),
@@ -1029,10 +1036,12 @@ export async function startServer({
       guards: { ...guards, ownFiles: ownFileCheck(cfg) },
       hello: () => listener.hello(),
       store: createNodeStore(),
-      // Its status, and a start from the master (#504) through this board's own launch pipeline.
+      // Its status, a start from the master (#504) through this board's own launch pipeline, and the
+      // profile bundle its master sends (#506).
       doorRoutes: nodeDoorRoutes({
         status: () => status.answer(),
         launch: body => nodeLaunch.answer(body),
+        bundle: nodeBundle,
       }),
       log,
     })
@@ -1045,6 +1054,7 @@ export async function startServer({
   let nodeLinks: NodeLinks | null = null
   let localNodeRoutes: Route[] | null = null
   let nodeProxy: NodeProxy | null = null
+  let bundleSync: BundleSync | null = null
   function linksFollow(): void {
     if (nodeLinks) {
       nodeLinks.configChanged()
@@ -1055,7 +1065,15 @@ export async function startServer({
     nodeAggregate = createNodeAggregate({ links: nodeLinks, cfg, log, onChange: () => board.publish() })
     // An offline copy still due is written also on an exit that skips close().
     process.on('exit', nodeAggregate.close)
-    localNodeRoutes = nodesRoutes(nodeLinks)
+    // The profile bundle per device (#506): built and hashed when asked and every 5 minutes.
+    bundleSync = createBundleSync({
+      cfg,
+      links: nodeLinks,
+      profiles: () => shownProfiles(deps.profiles().list),
+      store: createDeviceStore(),
+      log,
+    })
+    localNodeRoutes = nodesRoutes(nodeLinks, bundleSync)
     // Requests for a node's card (#501): first in the route table, which the phones' listener and the
     // tunnel share, so they reach it after their own refusals. Without `nodes` the table is main's.
     const aggregate = nodeAggregate
@@ -1214,6 +1232,7 @@ export async function startServer({
         process.off('exit', nodeAggregate.close)
       }
       nodePlacer?.close()
+      bundleSync?.close()
       if (nodeLinks) {
         await nodeLinks.close()
         process.off('exit', nodeLinks.killNow)

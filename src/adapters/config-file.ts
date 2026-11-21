@@ -90,6 +90,20 @@ function editConfig(change: (raw: Raw) => EditResult): EditResult {
   }
 }
 
+/**
+ * The board's slice a master's bundle carries (#506, docs/design/nodes 7.2): `change` gets the file
+ * as it is (the defaults when there is none) and returns it with the master's keys; written whole
+ * under the lock. A file that does not parse is left as it is, as every edit leaves it.
+ */
+export function editNodeSlice(change: (raw: Raw) => Raw): EditResult {
+  return editConfig(raw => {
+    const next = change(raw)
+    for (const key of Object.keys(raw)) delete raw[key]
+    Object.assign(raw, next)
+    return { ok: true }
+  })
+}
+
 export function loadConfig(): Config {
   const raw = readConfigFile()
   if (!raw && !existsSync(configFile())) {

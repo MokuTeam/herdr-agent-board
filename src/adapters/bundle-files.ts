@@ -2,11 +2,27 @@
 // `agents/`, `commands/` and `CLAUDE.md` as files hashed by content, the files of the folder a hook
 // that travels names (its script), `settings.json`, and only `mcpServers` out of `.claude.json`.
 // Nothing else of the folder is opened: no credentials, no transcripts, no per-project memory.
-// core/bundle.ts classifies what this finds.
+// core/bundle.ts classifies what this finds. On a node: the blobs it was sent, its backups, and
+// writing a file by a temporary name (services/node/bundle.ts applies).
 
-import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, type Stats, statSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { createHash, randomBytes } from 'node:crypto'
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmdirSync,
+  rmSync,
+  type Stats,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
 import {
   type BundleContext,
   type BundleFile,
@@ -205,4 +221,170 @@ export function readProfile(dir: string, opts: ReadOptions): ReadResult {
     else guarded(full, path, [])
   }
   return { ok: true, parts: { files, skipped, followed, settings: settings.value, mcpServers } }
+}
+
+// ------------------------------------------------------------------ the node's side (9.3)
+
+/** A blob over this many bytes is refused at the door (6.2). */
+export const MAX_BLOB_BYTES = 8 * 1024 * 1024
+/** Backup folders kept per profile, the newest by seq (9.3, item 3). */
+export const BACKUPS_KEPT = 10
+
+/**
+ * `bytes` written to `file` by a temporary name beside it and a rename, so a reader never sees half
+ * of it; its folder made first. `mode` on POSIX (the umask may have taken bits off).
+ */
+export function writeWhole(file: string, bytes: Uint8Array | string, mode?: number): void {
+  mkdirSync(dirname(file), { recursive: true })
+  const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+  try {
+    writeFileSync(tmp, bytes, mode === undefined ? undefined : { mode })
+    if (mode !== undefined) chmodSync(tmp, mode)
+    renameSync(tmp, file)
+  } catch (err) {
+    rmSync(tmp, { force: true })
+    throw err
+  }
+}
+
+/** The blobs a node was sent, by their SHA-256, in `<state>/node/blobs/`. */
+export interface BlobStore {
+  has(sha: string): boolean
+  read(sha: string): Buffer
+  /** Stores `bytes` as `sha`; false when they are not that hash. One already there is not written again. */
+  put(sha: string, bytes: Uint8Array): boolean
+  /** Removes every blob not in `keep`. */
+  prune(keep: ReadonlySet<string>): void
+}
+
+const SHA256 = /^[0-9a-f]{64}$/
+
+export function createBlobStore(dir: string): BlobStore {
+  const path = (sha: string): string => {
+    if (!SHA256.test(sha)) throw new Error(`not a SHA-256: ${sha.slice(0, 80)}`)
+    return join(dir, sha)
+  }
+  return {
+    has: sha => SHA256.test(sha) && existsSync(path(sha)),
+    read: sha => readFileSync(path(sha)),
+    put(sha, bytes) {
+      if (sha256(bytes) !== sha) return false
+      if (!existsSync(path(sha))) writeWhole(path(sha), bytes, 0o600)
+      return true
+    },
+    prune(keep) {
+      let names: string[] = []
+      try {
+        names = readdirSync(dir)
+      } catch {
+        return
+      }
+      // A temporary name is a write that stopped half way: puts are synchronous, so none is under way.
+      for (const name of names)
+        if ((SHA256.test(name) && !keep.has(name)) || name.endsWith('.tmp')) rmSync(join(dir, name), { force: true })
+    },
+  }
+}
+
+/** A file's SHA-256 (hex), or null when there is no file there (a folder, nothing). */
+export function fileSha(file: string): string | null {
+  try {
+    if (!lstatSync(file).isFile()) return null
+    return sha256(readFileSync(file))
+  } catch {
+    return null
+  }
+}
+
+/** Whether there is anything at all at `file`, a broken link too. */
+export function anythingAt(file: string): boolean {
+  try {
+    lstatSync(file)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether a link is on the way from the profile folder `dir` to `path` (forward slashes, in the
+ * folder), the file itself included: a write through it would land outside the folder. The folder
+ * itself may be a link (a profile kept elsewhere); what is below it may not.
+ */
+export function linkOnTheWay(dir: string, path: string): boolean {
+  let at = dir
+  for (const part of path.split('/')) {
+    at = join(at, part)
+    try {
+      if (lstatSync(at).isSymbolicLink()) return true
+    } catch {
+      return false
+    }
+  }
+  return false
+}
+
+/** Copies `from` to `<folder>/<name>` (forward slashes in `name`), its folders made. */
+export function backUp(folder: string, name: string, from: string): void {
+  const to = join(folder, ...name.split('/'))
+  mkdirSync(dirname(to), { recursive: true })
+  copyFileSync(from, to)
+}
+
+/**
+ * A new backup folder for the commit of `seq` in `dir`: `<seq>`, or `<seq>-1`, `-2`... when one of
+ * that name is there already (the master's record was lost and its seq started over). Not made yet.
+ */
+export function backupFolder(dir: string, seq: number): string {
+  for (let n = 0; ; n++) {
+    const at = join(dir, n ? `${seq}-${n}` : String(seq))
+    if (!existsSync(at)) return at
+  }
+}
+
+/**
+ * Keeps the `kept` newest backup folders of a profile by when they were made, removes the older
+ * ones: the one a commit just wrote is always kept, whatever its seq.
+ */
+export function pruneBackups(dir: string, kept = BACKUPS_KEPT): void {
+  let folders: { name: string; at: number }[] = []
+  try {
+    folders = readdirSync(dir)
+      .filter(n => /^\d+(-\d+)?$/.test(n))
+      .map(name => ({ name, at: statSync(join(dir, name)).mtimeMs }))
+  } catch {
+    return
+  }
+  const old = folders.sort((a, b) => b.at - a.at).slice(kept)
+  for (const { name } of old) rmSync(join(dir, name), { recursive: true, force: true })
+}
+
+/**
+ * A file of the profile rewritten whole, as it was in all else: through a link to where it really
+ * is (a settings.json kept in dotfiles), with the mode it had (`~/.claude.json` is 0600).
+ */
+export function rewriteKeeping(file: string, text: string): void {
+  let target = file
+  let mode: number | undefined
+  try {
+    target = realpathSync(file)
+    mode = statSync(target).mode & 0o777
+  } catch {}
+  writeWhole(target, text, mode)
+}
+
+/** Removes `file` and then each folder above it that it left empty, up to `dir` (kept). */
+export function removeFile(dir: string, file: string): void {
+  rmSync(file, { force: true })
+  const stop = resolve(dir)
+  let at = dirname(resolve(file))
+  while (at !== stop && at.startsWith(stop)) {
+    try {
+      if (readdirSync(at).length) return
+      rmdirSync(at)
+    } catch {
+      return
+    }
+    at = dirname(at)
+  }
 }

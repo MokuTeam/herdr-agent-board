@@ -200,15 +200,17 @@ const oneSession = (box: Sandbox, id: string): FakePane[] => [
 
 /**
  * A node board with its door up, a master's token made there, and its proxy; `panes`: its fake
- * herdr's, else `s-<id>`; `cfg`: more of its config.
+ * herdr's, else `s-<id>`; `cfg`: more of its config; `setup`: done to its sandbox before it starts.
  */
 export async function nodeBoard(
   id: string,
   env: Record<string, string> = PAIR_ENV,
   panes?: (box: Sandbox) => FakePane[],
   cfg?: (box: Sandbox) => Record<string, unknown>,
+  setup?: (box: Sandbox) => void | Promise<void>,
 ): Promise<PairNode> {
   const box = await sandbox()
+  await setup?.(box)
   showPanes(box, panes?.(box) ?? oneSession(box, id))
   const dir = join(stateFolder(box), 'node')
   mkdirSync(dir, { recursive: true })
@@ -228,7 +230,7 @@ export async function nodeBoard(
  * proxy. `masterCfg`: more of the master's config; `tokens: false` stores none on the master;
  * `panes`: a node's fake herdr's panes by its id, `masterPanes` the master's (none unless given);
  * `nodeCfg`: more of a node's config by its id; `masterSetup`: done to the master's sandbox before
- * its board starts (a login written to its state folder, say); `deviceCfg`: more of a device's entry in
+ * its board starts (a login written to its state folder, say), `nodeSetup` to a node's; `deviceCfg`: more of a device's entry in
  * the master's `nodes.devices` by its id.
  */
 export async function nodePair(
@@ -246,14 +248,24 @@ export async function nodePair(
     nodesCfg?: Record<string, unknown>
     /** More of the master's env than the nodes'. */
     masterEnv?: Record<string, string>
+    nodeSetup?: (id: string, box: Sandbox) => void | Promise<void>
   } = {},
 ): Promise<Pair> {
   const env = { ...PAIR_ENV, ...o.env }
   const ids = Array.from({ length: o.count ?? 1 }, (_, i) => `server-${i + 1}`)
   const panes = o.panes
   const nodeCfg = o.nodeCfg
+  const nodeSetup = o.nodeSetup
   const nodes = await Promise.all(
-    ids.map(id => nodeBoard(id, env, panes && (box => panes(id, box)), nodeCfg && (box => nodeCfg(id, box)))),
+    ids.map(id =>
+      nodeBoard(
+        id,
+        env,
+        panes && (box => panes(id, box)),
+        nodeCfg && (box => nodeCfg(id, box)),
+        nodeSetup && (box => nodeSetup(id, box)),
+      ),
+    ),
   )
   const box = await sandbox()
   if (o.masterPanes) showPanes(box, o.masterPanes(box))

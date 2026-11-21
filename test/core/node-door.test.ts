@@ -75,15 +75,37 @@ describe('the door takes what 6.2 lists', () => {
     }
   })
 
-  test("the API version is 1, and only the status and a start from the master (#504) are the door's own", () => {
+  test("the API version is 1, and the status, a start from the master (#504) and the bundle's routes (#506) are the door's own", () => {
     expect(NODE_API).toBe(1)
     expect(DOOR_ROUTES.filter(r => r.door).map(r => [r.method, r.path])).toEqual([
       ['GET', '/api/node/status'],
       ['POST', '/api/node/launch'],
+      ['GET', /^\/api\/node\/bundle\/[^/]+$/],
+      ['PUT', /^\/api\/node\/bundle\/[^/]+\/blob\/[0-9a-f]{64}$/],
+      ['POST', /^\/api\/node\/bundle\/[^/]+\/commit$/],
     ])
     // Not as a GET, nor spelled otherwise.
     expect(refusal('GET', '/api/node/launch')).toEqual(NOT_FOUND)
     expect(refusal('POST', '/api/node/%6Caunch')).toEqual(NOT_FOUND)
+  })
+
+  test("the bundle's routes (#506): each by its method only, a blob by a SHA-256 only", () => {
+    const sha = 'a'.repeat(64)
+    expect(doorRefusal('GET', '/api/node/bundle/default', '/api/node/bundle/default')).toBeNull()
+    expect(
+      doorRefusal('PUT', `/api/node/bundle/default/blob/${sha}`, `/api/node/bundle/default/blob/${sha}`),
+    ).toBeNull()
+    expect(doorRefusal('POST', '/api/node/bundle/default/commit', '/api/node/bundle/default/commit')).toBeNull()
+    for (const [method, raw] of [
+      ['POST', '/api/node/bundle/default'],
+      ['GET', '/api/node/bundle/default/commit'],
+      ['POST', `/api/node/bundle/default/blob/${sha}`],
+      ['PUT', '/api/node/bundle/default/blob/nope'],
+      ['PUT', `/api/node/bundle/default/blob/${sha.toUpperCase()}`],
+      ['GET', '/api/node/bundle/a/b'],
+      ['GET', '/api/node/bundle/'],
+    ] as const)
+      expect([method, raw, doorRefusal(method, raw, raw)]).toEqual([method, raw, { status: 404, error: 'not found' }])
   })
 })
 

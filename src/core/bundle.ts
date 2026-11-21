@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto'
 import { isBoardCommand, normPath } from './install-plan.ts'
 import { claudeCommand } from './launch/spawn-args.ts'
 import { pathsIn } from './portable.ts'
-import { isHerdrHook } from './setup.ts'
+import { isHerdrHook, SKILL, TEAM_SKILL, THREADS_SKILL } from './setup.ts'
 
 /** The manifest's shape; a node refuses one it does not know. */
 export const BUNDLE_FORMAT = 1
@@ -44,7 +44,7 @@ export type ReportWhy =
   | 'credentials' // a setting that fetches credentials: the node logs in on its own
   | 'secret-name' // an env name that looks like a secret: give the node the value
   | 'secret-value' // a header or a value that looks like a secret became a ${VAR}
-  | 'reference' // the server already refers to a ${VAR}: give the node its value
+  | 'reference' // the server refers to a ${VAR}: the node's sessions must have it, as a secret or in the env file (not always a secret: it may be the session's own environment)
   | 'launcher' // a stdio server run by a launcher the node has
   | 'unwrapped' // the launcher's path, `.cmd` or `cmd /c` taken off
   | 'local-command' // a stdio server whose program is not a launcher
@@ -53,6 +53,8 @@ export type ReportWhy =
   | 'off' // nodes.devices.<id>.mcp switches it off for this node
   | 'invalid' // an entry Claude Code could not run either
   | 'own-launcher' // launch.claude runs a program of the owner's own
+  | 'board-own' // a skill the board's install puts into every profile: the node's install writes its own
+  | 'unsafe-name' // a name a node does not write (a control character, a backslash, a Windows device name)
   | SkipWhy
   | 'link-followed' // a link in the profile folder: its target's content travels
 
@@ -520,12 +522,18 @@ function secretArgs(server: string, args: readonly string[], secrets: string[]):
   return out
 }
 
-/** The names a server refers to as \${NAME} or \${NAME:-default}, anywhere in it. */
+/** Variables herdr sets in every pane it starts: a node's sessions have them, nothing to give. */
+const HERDR_VAR = /^HERDR_/
+
+/**
+ * The names a server refers to as \${NAME} or \${NAME:-default}, anywhere in it, but herdr's own
+ * (HERDR_PANE_ID and the rest), which every pane on the node has.
+ */
 function refsIn(server: unknown): string[] {
   const names = [...JSON.stringify(server ?? null).matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}/g)].map(
     m => m[1] ?? '',
   )
-  return [...new Set(names)]
+  return [...new Set(names)].filter(n => !HERDR_VAR.test(n))
 }
 
 /**
@@ -713,8 +721,21 @@ export function buildManifest(
   board: { config: unknown; sinks: unknown },
   ctx: BundleContext,
 ): BundleManifest {
-  const files = [...parts.files].map(f => ({ path: f.path, sha256: f.sha256, mode: f.mode })).sort(byPath)
   const report: ReportEntry[] = []
+  // What a node would refuse whole stays here, said: the board's own skills, a name it does not write.
+  const files = [...parts.files]
+    .filter(f => {
+      if (bundlePath(f.path) !== null) return true
+      report.push({
+        ...partOf(f.path),
+        name: f.path,
+        verdict: 'not-sent',
+        why: boardSkill(f.path) ? 'board-own' : 'unsafe-name',
+      })
+      return false
+    })
+    .map(f => ({ path: f.path, sha256: f.sha256, mode: f.mode }))
+    .sort(byPath)
   const seen = new Set<string>()
   for (const f of files) {
     const { kind, name } = partOf(f.path)
@@ -864,4 +885,209 @@ export function toRemove(previous: BundleManifest | null, next: BundleManifest):
     hooks: was.hooks.filter(h => !nowHooks.has(`${h.event}\\n${h.key}`)),
     mcp: keep(was.mcp, now.mcp),
   }
+}
+
+// ------------------------------------------------------------------ applying on the node (9.3)
+
+/** A bundle file never goes where the node's own state is, whatever the manifest says: written apart or never. */
+const NEVER_WRITTEN: ReadonlySet<string> = new Set([
+  '.credentials.json',
+  '.claude.json',
+  '.ssh',
+  'node_modules',
+  '.git',
+  '.venv',
+  '__pycache__',
+])
+/** The skills the board's install puts into every profile folder: the node's own install writes them. */
+const BOARD_SKILLS: ReadonlySet<string> = new Set([SKILL, TEAM_SKILL, THREADS_SKILL])
+/** Names Windows gives to devices, with any extension: no file of a bundle is one. */
+const DEVICE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i
+
+/** Whether a path is one of the board's own skills, which never travel. */
+export const boardSkill = (path: string): boolean =>
+  path.startsWith('skills/') && BOARD_SKILLS.has(path.split('/')[1] ?? '')
+
+/** Written by the node from the manifest's keys, never as a file of it. */
+const ROOT_FILES: ReadonlySet<string> = new Set(['settings.json', 'settings.local.json'])
+
+/**
+ * A manifest's file path as the node takes it, or null: relative, forward slashes, no `.` or
+ * `..` part, no drive, nothing unprintable, nothing under the node's own state (credentials,
+ * `.claude.json`, `.ssh`), not settings.json, which the node writes from the keys, not a name
+ * Windows writes as another (`x.`, `nul`), and not the board's own skills, which the node's install
+ * writes. The master's
+ * word is never trusted for where a file goes; a link on the way is the adapter's to find.
+ */
+export function bundlePath(raw: unknown): string | null {
+  if (typeof raw !== 'string' || !raw || raw.length > 1024) return null
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: a control character is refused
+  if (/[\\\u0000-\u001f\u007f]/.test(raw) || raw.startsWith('/') || /^[A-Za-z]:/.test(raw)) return null
+  const parts = raw.split('/')
+  if (parts.some(p => p === '' || p === '.' || p === '..' || NEVER_WRITTEN.has(p.toLowerCase()))) return null
+  // A part Windows would write under another name: a trailing dot or space, a device's name.
+  if (parts.some(p => /[. ]$/.test(p) || DEVICE_NAME.test(p))) return null
+  if (boardSkill(raw)) return null
+  if (parts.length === 1 && ROOT_FILES.has(raw.toLowerCase())) return null
+  return raw
+}
+
+const SHA256 = /^[0-9a-f]{64}$/
+
+/**
+ * The manifest a commit carries, checked field by field, or null when it is not one this node
+ * knows (another `format`, a file without a path or hash). Its report is left out: it is the
+ * master's, for doctor.
+ */
+export function manifestOf(raw: unknown): BundleManifest | null {
+  if (!isRecord(raw) || raw.format !== BUNDLE_FORMAT || !Array.isArray(raw.files)) return null
+  const files: BundleFile[] = []
+  for (const f of raw.files) {
+    if (!isRecord(f) || typeof f.path !== 'string' || typeof f.sha256 !== 'string' || !SHA256.test(f.sha256))
+      return null
+    files.push({ path: f.path, sha256: f.sha256, mode: typeof f.mode === 'number' ? f.mode : 0o644 })
+  }
+  if (!isRecord(raw.settings) || !isRecord(raw.hooks) || !isRecord(raw.mcp) || !isRecord(raw.board)) return null
+  if (!Object.values(raw.hooks).every(Array.isArray)) return null
+  return {
+    format: BUNDLE_FORMAT,
+    files,
+    settings: clone(raw.settings),
+    hooks: clone(raw.hooks) as Record<string, unknown[]>,
+    mcp: clone(raw.mcp),
+    board: clone(raw.board) as unknown as BoardSlice,
+    report: [],
+  }
+}
+
+/**
+ * The manifest with PROFILE_DIR filled in with the node's own profile folder, forward slashes, in
+ * its settings, hooks and MCP servers. Matching a hook the node owns goes through this too: the
+ * node's settings.json holds its own path (hookKey is over what the hook says there).
+ */
+export function withProfileDirFilled(m: BundleManifest, dir: string): BundleManifest {
+  const at = JSON.stringify(dir.replace(/\\/g, '/')).slice(1, -1)
+  const fill = <T>(v: T): T => JSON.parse(JSON.stringify(v).split(PROFILE_DIR).join(at)) as T
+  return { ...m, settings: fill(m.settings), hooks: fill(m.hooks), mcp: fill(m.mcp) }
+}
+
+/**
+ * The node's settings.json after a bundle (9.3, item 4): the keys and `env` variables `previous`
+ * owned and `next` does not are removed, `next`'s are put in, its hooks added where the same hook
+ * is not there yet and the hooks `previous` owned and `next` does not taken out. A key, variable
+ * or hook the node's owner added by hand stays. Both manifests with the node's folder filled in
+ * (withProfileDirFilled). The input is not changed.
+ */
+export function appliedSettings(
+  current: unknown,
+  previous: BundleManifest | null,
+  next: BundleManifest,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = isRecord(current) ? clone(current) : {}
+  const gone = toRemove(previous, next)
+  for (const key of gone.settings) {
+    if (key.startsWith('env.')) {
+      const env = out.env
+      if (!isRecord(env)) continue
+      delete env[key.slice(4)]
+      if (!Object.keys(env).length) delete out.env
+    } else if (key !== 'hooks') delete out[key]
+  }
+  for (const [key, value] of Object.entries(next.settings)) {
+    if (key === 'hooks') continue
+    if (key === 'env' && isRecord(value)) {
+      const env = isRecord(out.env) ? out.env : {}
+      for (const [name, v] of Object.entries(value)) put(env, name, clone(v))
+      put(out, 'env', env)
+    } else put(out, key, clone(value))
+  }
+  const owned = Object.entries(next.hooks).some(([, list]) => list.length)
+  if (!gone.hooks.length && !owned) return out
+  const hooks: Record<string, unknown> = isRecord(out.hooks) ? out.hooks : {}
+  const had = canonical(hooks)
+  for (const { event, key } of gone.hooks) {
+    const list = hooks[event]
+    if (!Array.isArray(list)) continue
+    const left = list.flatMap(entry => {
+      if (!isRecord(entry) || !Array.isArray(entry.hooks)) return [entry]
+      const kept = entry.hooks.filter(h => hookKey(entry.matcher, h) !== key)
+      if (kept.length === entry.hooks.length) return [entry]
+      return kept.length ? [{ ...entry, hooks: kept }] : []
+    })
+    if (left.length) hooks[event] = left
+    else delete hooks[event]
+  }
+  for (const [event, list] of Object.entries(next.hooks)) {
+    for (const entry of list) {
+      if (!isRecord(entry) || !Array.isArray(entry.hooks)) continue
+      for (const hook of entry.hooks) {
+        const there = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : []
+        const key = hookKey(entry.matcher, hook)
+        if (there.some(e => isRecord(e) && Array.isArray(e.hooks) && e.hooks.some(h => hookKey(e.matcher, h) === key)))
+          continue
+        const same = there.find(
+          e =>
+            isRecord(e) && Array.isArray(e.hooks) && canonical(e.matcher ?? null) === canonical(entry.matcher ?? null),
+        ) as Record<string, unknown> | undefined
+        if (same) same.hooks = [...(same.hooks as unknown[]), clone(hook)]
+        else put(hooks, event, [...there, { ...clone(entry), hooks: [clone(hook)] }])
+      }
+    }
+  }
+  if (canonical(hooks) === had) return out
+  if (Object.keys(hooks).length) put(out, 'hooks', hooks)
+  else delete out.hooks
+  return out
+}
+
+/**
+ * The profile's `mcpServers` after a bundle: the names `previous` owned and `next` does not
+ * removed, `next`'s put in; a server the node's owner added by hand stays.
+ */
+export function appliedMcp(
+  current: unknown,
+  previous: BundleManifest | null,
+  next: BundleManifest,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = isRecord(current) ? clone(current) : {}
+  for (const name of toRemove(previous, next).mcp) delete out[name]
+  for (const [name, server] of Object.entries(next.mcp)) put(out, name, clone(server))
+  return out
+}
+
+/**
+ * The node's config.json after a bundle (7.2): the four keys the master owns (`categories`,
+ * `language`, `models`, `secrets.sinks`) and `launch.claude` when it is sent. A key the master
+ * sent before and sends no more is removed; one it never sent stays the node's. Everything else
+ * in the file is the node's and is not touched. The input is not changed.
+ */
+export function appliedSlice(config: unknown, previous: BoardSlice | null, next: BoardSlice): Record<string, unknown> {
+  const out: Record<string, unknown> = isRecord(config) ? clone(config) : {}
+  for (const key of ['categories', 'language', 'models'] as const) {
+    if (next[key] !== undefined) put(out, key, clone(next[key]))
+    else if (previous?.[key] !== undefined) delete out[key]
+  }
+  const sinks = isRecord(next.sinks) ? next.sinks : {}
+  const secrets = isRecord(out.secrets) ? out.secrets : null
+  // No sinks sent and none there: the file gets no `secrets` it did not have.
+  if (Object.keys(sinks).length || (secrets && secrets.sinks !== undefined)) {
+    const s = secrets ?? {}
+    put(s, 'sinks', clone(sinks))
+    put(out, 'secrets', s)
+  }
+  if (next.launch) {
+    const launch = isRecord(out.launch) ? out.launch : {}
+    put(launch, 'claude', clone(next.launch.claude))
+    put(out, 'launch', launch)
+  } else if (previous?.launch && isRecord(out.launch)) delete out.launch.claude
+  return out
+}
+
+/**
+ * A file's mode on the node. A Windows master's walk keeps no executable bit, so the node decides
+ * from the file itself: a script the bundle sends (`.sh`, or one that starts with `#!`) is 0755,
+ * anything else 0644, whatever the manifest says.
+ */
+export function nodeMode(path: string, head: Uint8Array): number {
+  return /\.sh$/i.test(path) || (head[0] === 0x23 && head[1] === 0x21) ? 0o755 : 0o644
 }

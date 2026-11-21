@@ -23,6 +23,8 @@ export interface StatusSources {
   launches: () => LaunchView[]
   /** The profiles shown on this board. */
   profiles: () => Profile[]
+  /** A profile's applied bundle (services/node/bundle.ts); null before its first. */
+  bundle?: (profile: string) => { seq: number; hash: string } | null
   /** config.json's `launch`, for the agents. */
   launch: () => LaunchSpec | undefined
   version: string
@@ -114,7 +116,9 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
         },
         launches: src.launches().filter(l => LIVE.has(l.state)).length,
         workRootFreeMb: (src.freeMb ?? freeMbUnder)(expandHome(node.workRoot, src.home ?? homedir())),
-        profiles: src.profiles().map(p => ({ id: p.id, loggedIn: loggedIn(p.dir, platform, exists), bundle: null })),
+        profiles: src
+          .profiles()
+          .map(p => ({ id: p.id, loggedIn: loggedIn(p.dir, platform, exists), bundle: src.bundle?.(p.id) ?? null })),
         agents: agentsOf(src.launch(), src.piFound ?? piOnPath),
         at: (src.now ?? Date.now)(),
       }

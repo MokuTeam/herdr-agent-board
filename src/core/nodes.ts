@@ -510,8 +510,8 @@ export interface NodeStatus {
   launches: number
   /** null when the folder, or every folder above it, cannot be read. */
   workRootFreeMb: number | null
-  /** loggedIn: null where a folder cannot tell (macOS keeps Claude's login in the Keychain). bundle: null until profile sync (T10). */
-  profiles: { id: string; loggedIn: boolean | null; bundle: null }[]
+  /** loggedIn: null where a folder cannot tell (macOS keeps Claude's login in the Keychain). bundle: the applied one, null before the first. */
+  profiles: { id: string; loggedIn: boolean | null; bundle: { seq: number; hash: string } | null }[]
   /** The agents a start may name here, by the board's own rule (core/launch/agents.ts). */
   agents: string[]
   at: number
@@ -519,6 +519,12 @@ export interface NodeStatus {
 
 const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 const isCount = (v: unknown): boolean => Number.isInteger(v) && (v as number) >= 0
+
+/** A profile's bundle version in a status: `{ seq, hash }` checked, anything else null. */
+const bundleOf = (v: unknown): { seq: number; hash: string } | null =>
+  isObject(v) && isCount(v.seq) && typeof v.hash === 'string' && /^[0-9a-f]{64}$/.test(v.hash)
+    ? { seq: v.seq as number, hash: v.hash }
+    : null
 
 /**
  * A node's status as its door answered it, or null when it is not one. The node's word, checked
@@ -571,7 +577,7 @@ export function nodeStatusOf(raw: unknown): NodeStatus | null {
     profiles: (s.profiles as Record<string, unknown>[]).map(p => ({
       id: p.id as string,
       loggedIn: p.loggedIn as boolean | null,
-      bundle: null,
+      bundle: bundleOf(p.bundle),
     })),
     agents: [...(s.agents as string[])],
     at: s.at as number,

@@ -1,6 +1,7 @@
 // Both sides' records of the node link. On a master (#499, docs/design/nodes 7.1), per device in
 // `<state>/nodes/<id>/`: `token` (0600; the master is the client, so it holds the token the node
-// gave it), the ssh link's `link-key`, and the link's ssh pid record. Never logged, never printed.
+// gave it), the ssh link's `link-key`, the link's ssh pid record, the offline copy and what was
+// sent of each profile's bundle. Never logged, never printed.
 //
 // On a node, the masters it answers to (#498, docs/design/nodes 7.2): `<state>/node/masters.json`, mode
 // 0600, a list of { id, name, tokenHash, pairedAt, seenAt, via }. A list from its first version,
@@ -242,6 +243,13 @@ export interface DeviceStore {
   snapshot(id: string): DeviceSnapshot | null
   /** Writes the offline copy, mode 0600, whole or not at all. */
   setSnapshot(id: string, snapshot: DeviceSnapshot): void
+  /**
+   * What was sent of each profile's bundle (`bundle.json`, #506): read again through
+   * services/nodes/bundle-sync.ts, never trusted. null: none, unreadable, or no JSON object.
+   */
+  bundle(id: string): Record<string, unknown> | null
+  /** Writes the bundle record, mode 0600, whole or not at all. */
+  setBundle(id: string, value: Record<string, unknown>): void
 }
 
 /** The offline copy of a device: `part` is read again through core/node-items.ts nodePart, never trusted. */
@@ -288,6 +296,19 @@ export function createDeviceStore({ dir = nodesDir() }: { dir?: string } = {}): 
       const at = folder(id)
       mkdirSync(at, { recursive: true })
       replaceFile(join(at, 'snapshot.json'), JSON.stringify(snapshot), undefined, 0o600)
+    },
+    bundle(id) {
+      try {
+        const value: unknown = JSON.parse(readFileSync(join(folder(id), 'bundle.json'), 'utf8'))
+        return isRecord(value) ? value : null
+      } catch {
+        return null
+      }
+    },
+    setBundle(id, value) {
+      const at = folder(id)
+      mkdirSync(at, { recursive: true })
+      replaceFile(join(at, 'bundle.json'), JSON.stringify(value, null, 2), undefined, 0o600)
     },
   }
 }

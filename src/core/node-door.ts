@@ -4,14 +4,14 @@
 //
 // An allowlist, not a list of refusals: a route the board gains later is not reachable through the
 // door until someone adds it here. What is not on the list answers 404, so the door does not say
-// what the board has. The routes of later tasks (launch, bundle, sink, uplink, update, leave, claim)
+// what the board has. The routes of later tasks (launch, sink, uplink, update, leave, claim)
 // are added by those tasks.
 
 /** The version of the node link (6.5): the master places work only on a node whose own equals its. */
 export const NODE_API = 1
 
 export interface DoorRoute {
-  method: 'GET' | 'POST'
+  method: 'GET' | 'POST' | 'PUT'
   /**
    * A string matches the path as it came and decoded, both; a RegExp is tested on the path as it
    * came, still percent-encoded, as the board's own RegExp routes are (server/http.ts), so a key
@@ -66,6 +66,10 @@ export const DOOR_ROUTES: readonly DoorRoute[] = [
   // The node's facts (6.3) and a start from the master (6.4), on this door only.
   { method: 'GET', path: '/api/node/status', door: true },
   { method: 'POST', path: '/api/node/launch', door: true },
+  // The profile bundle (9.3): what the node has, a blob by its hash, the commit.
+  { method: 'GET', path: new RegExp(`^/api/node/bundle/${KEY}$`), door: true },
+  { method: 'PUT', path: new RegExp(`^/api/node/bundle/${KEY}/blob/[0-9a-f]{64}$`), door: true },
+  { method: 'POST', path: new RegExp(`^/api/node/bundle/${KEY}/commit$`), door: true },
 ]
 
 const allows = (r: DoorRoute, method: string, rawPath: string, path: string): boolean =>
