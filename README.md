@@ -2297,6 +2297,47 @@ thread from anywhere (`board thread link` prints it), and `board thread open <ke
 board's window up on it. The routes are `/api/threads` (docs/design/threads, 5.3); away from the
 computer only your own logins reach them.
 
+### Case files
+
+Off unless you turn them on inside threads (#488): `"threads": { "cases": true }`. A case (a ticket, a
+migration, anything that lives for weeks) keeps its state in a thread instead of in whichever
+conversation touched it last, so a short check starts a fresh, small session from the thread
+instead of waking a large sleeper.
+
+```
+board thread new --ref ABC-12 "Import mapping for the order feed"
+board thread post atlas-12 --state "Mapped 217 rows. Next: the 2019 prices. Waits on: the price list."
+board thread brief atlas-12          # the case for a fresh session, without a model
+spawn-agent --thread atlas-12        # a new session from that brief, made the assignee
+```
+
+- **A reference**: `--ref` on `new` and `set` (`none` clears it); `list --ref` finds every thread
+  with it, closed ones too. A link and the id it ends in count as the same reference. A second open
+  thread with the same reference is named in the reply line, and made all the same.
+- **A state**: `post --state` (and `done --state`), several lines, 2,000 characters and 30 lines at
+  most, with its date and author. `show` puts the newest under the head; earlier ones stay in the feed.
+- **Its sessions**: every session that created, held or wrote into the thread, read from the feed,
+  with its id and whether it is up, asleep, archived or gone, in `show`, `brief` and the panel.
+- **The brief**: `board thread brief <key>` (up to 6,000 characters): title, reference, state,
+  sessions with ids and folders, their open reminders, files by path, links, the last entries.
+- **A fresh start**: `spawn-agent --thread <key>` starts a Claude session with the brief (and
+  `--brief` as the task after it), in `--cwd` or else the folder of a session that held the case
+  (the assignee, then the earlier ones), and makes it the assignee. It is named after the key
+  (`atlas-12-2` while a session has that name). It always starts on this computer: with `nodes` it
+  is not placed on a node, and from a node's session it is refused.
+- **A nudge**: `board wait`, `board done` and `board sleep --self` add a line when a case the session
+  holds has no state or one older than its work. They refuse nothing.
+
+On a shared thread nothing of a case crosses to a teammate's board: the reference and the state are
+not on the wire, an entry with only case fields is private, and the session list names sessions on
+this computer only. A teammate's entries are quoted in the brief, as in `show`. A node's session
+reaches a case as any `board thread` command, through the board's computer. The master shows it on
+its device: up or asleep while it hears the node, "last seen up" with the time of its copy while the
+node is off line, and "state not known here" where it has none of the node's cards. The nudge does
+not reach a node's session in this phase: `board wait`, `done` and `sleep --self` there read the
+node's own config and database, which hold no threads. With `cases` absent the commands, `show`,
+`list`, the routes and the brief are what they were; the database gets two empty columns.
+
 ## Workdesk assignments
 
 To let the web board hand assignments from Workdesk to project masters, turn on Board threads

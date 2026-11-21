@@ -219,3 +219,24 @@ test('board time and board cal on a node say they are not here yet, in one line,
   expect(calOff).toBe(1)
   expect(offErr.join('\n')).not.toContain('node')
 })
+
+// Case files (#488): the master runs a node session's command with its own config, so a node needs
+// no cases of its own to pass --ref, --state and brief on; the master refuses them when it has them off.
+test('case files on a node: --ref, --state and brief go to the master as typed; a state that reads like --file is a value', async () => {
+  isolatedHome()
+  expect(fileArgs('post', ['k', '--state', '--file', '--file', 'r.md'])).toEqual([4])
+  expect(fileArgs('done', ['k', '--state', 'Mapped.', '--file', 'r.md'])).toEqual([4])
+  expect(fileArgs('new', ['--ref', '--file', 'T'])).toEqual([])
+  for (const args of [
+    ['brief', 'atlas-1'],
+    ['new', '--ref', 'ABC-12', 'Import'],
+    ['post', 'atlas-1', '--state', 'Mapped 217 rows.'],
+    ['list', '--ref', 'ABC-12'],
+  ]) {
+    const r = await run(args)
+    expect([args, r.code, r.calls.map(c => c.argv)]).toEqual([args, 0, [args]])
+  }
+  const r = await run(['post', 'atlas-1', '--state', '--file', '--file', 'r.md'])
+  expect(r.calls[0]?.files).toEqual([resolve('r.md')])
+  expect(nothingWritten()).toBe(true)
+})

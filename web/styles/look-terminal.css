@@ -639,6 +639,10 @@
 :root[data-look="terminal"] .wt-body[data-wide] .wt-filter { background: none; }
 :root[data-look="terminal"] .wt-body .mini { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
 :root[data-look="terminal"] .wt-body .mini.primary { background: none; box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
+/* Case files (#488, cases.css): a case's head framed by a line instead of a fill, its holder's mark square. */
+:root[data-look="terminal"] .wt-case { border-radius: 0; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .wt-case-holds { border-radius: 0; }
+
 /* Shared threads (#394, threads.css): the Share pill and a topic's thread pill outlined, the
    offer and an agent's request as rules on the left, the picker framed. */
 :root[data-look="terminal"] .wt-share-pill, :root[data-look="terminal"] .wt-topic-pill { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }

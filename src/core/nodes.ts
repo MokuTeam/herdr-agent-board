@@ -6,16 +6,14 @@
 // Roles are keys. A board without either key sees nothing of this anywhere; one board may hold both:
 //   "nodes": { "id": "laptop", "order": ["server-1", "local"], "devices": { "server-1": { ... } } }
 //   "node": { "id": "server-1", "port": 12430, "workRoot": "~/work" }
+import { DEVICE_ID, isDevice, LOCAL, parseNodeKey } from './node-key.ts'
 import { hasUnprintable } from './team.ts'
 
-/** This computer in the master's own `order` and `devices`. Only a word there: what crosses a link names the id. */
-export const LOCAL = 'local'
+// The device id and the prefixed keys live in a leaf module the page can import (core/node-key.ts).
+export { DEVICE_ID, LOCAL, parseNodeKey }
 
 /** The node's door, on 127.0.0.1, when `node.port` and a link's `port` do not say. */
 export const NODE_PORT = 12430
-
-/** A device id. `local` fits it but is reserved. No ":" and no "@", so a prefixed key splits one way only. */
-export const DEVICE_ID = /^[a-z0-9][a-z0-9-]{0,31}$/
 
 export type LinkConfig =
   | { kind: 'ssh'; host: string; sshPort: number; user: string; port: number }
@@ -97,7 +95,6 @@ const isWord = (v: unknown): v is string =>
 /** A title or a folder: trimmed, not empty, at most `max` long, nothing unprintable. */
 const isText = (v: unknown, max: number): v is string =>
   typeof v === 'string' && v.trim() === v && v.length > 0 && v.length <= max && !hasUnprintable(v)
-const isDevice = (v: unknown): v is string => typeof v === 'string' && DEVICE_ID.test(v) && v !== LOCAL
 /** null where config.json has a key, read as the key not being there. */
 const given = (v: unknown): boolean => v !== undefined && v !== null
 /** A map built from what the owner typed: no prototype, so `__proto__` is a key like any other. */
@@ -478,20 +475,6 @@ export function nodeKey(device: string, key: string): string {
   if (!isDevice(device)) throw new Error(`not a device id: ${JSON.stringify(device)}`)
   if (!key) throw new Error('an empty key')
   return `@${device}:${key}`
-}
-
-/**
- * A prefixed key split into its device and the key the node knows, or null for every key this
- * board makes itself: a Claude session id, `pane-<n>`, a pi file path, a Codex thread id never
- * start with "@".
- */
-export function parseNodeKey(key: string): { device: string; key: string } | null {
-  if (!key.startsWith('@')) return null
-  const at = key.indexOf(':')
-  if (at < 0) return null
-  const device = key.slice(1, at)
-  const rest = key.slice(at + 1)
-  return isDevice(device) && rest ? { device, key: rest } : null
 }
 
 /** Whether a session of this lane may run on another device: `nodes.lanes` is "all" or names it. */

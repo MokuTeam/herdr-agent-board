@@ -30,6 +30,11 @@ export const LAUNCHER_CHILD = 'BOARD_SPAWN_CHILD'
 export const spawnLine = (r: { pane: string; name: string; agent: string; kind: string }): string =>
   `pane=${r.pane} name=${r.name} agent=${r.agent}${r.kind === 'claude' ? '' : ` kind=${r.kind}`}`
 
+/** What `spawn-agent --help` says of --thread (#488), after the help; the option needs case files on. */
+export const CASES_HELP = `--thread <key> (case files, with "threads": { "cases": true }) starts a fresh Claude session on
+this computer from the case's brief (board thread brief) and gives it the thread. --name defaults to
+the key (key-2 while a session has that name); --cwd to the folder of a session that held the case.
+--brief or --brief-file, when given, follow the case's brief as the task.`
 /** What spawn-agent was asked to start. */
 export interface SpawnOptions {
   name: string
@@ -68,6 +73,11 @@ export interface SpawnOptions {
    */
   trust?: boolean
   workdeskWorker?: boolean
+  /**
+   * Case files (#488): a fresh session from the thread's brief, made its assignee (services/launch/case-start.ts).
+   * With it --name and --cwd may be left out: the key, and the folder of a session that held the case.
+   */
+  thread?: string
   help?: never
 }
 
@@ -95,6 +105,7 @@ const OPTIONS: Record<string, Key> = {
   agent: 'agent',
   trust: 'trust',
   workdeskworker: 'workdeskWorker',
+  thread: 'thread',
   help: 'help',
   h: 'help',
 }
@@ -173,11 +184,14 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     out[key] = value
   }
   if (help) return { help: true }
-  if (out.name === undefined) throw new Error(`--name is missing. ${USAGE}`)
-  const name = out.name.trim()
+  // Case files (#488): the thread names the session and finds its folder when they are not given.
+  const thread = out.thread?.trim()
+  if (out.thread !== undefined && !thread) throw new Error('--thread needs a thread key')
+  if (out.name === undefined && !thread) throw new Error(`--name is missing. ${USAGE}`)
+  const name = (out.name ?? thread ?? '').trim()
   const bad = checkName(name)
   if (bad) throw new Error(NAME_ERRORS[bad] ?? bad)
-  if (!out.cwd?.trim()) throw new Error(`--cwd is missing. ${USAGE}`)
+  if (!out.cwd?.trim() && !thread) throw new Error(`--cwd is missing. ${USAGE}`)
   if (out.briefFile !== undefined && out.brief !== undefined) throw new Error('give --brief-file or --brief, not both')
   const timeoutSec = out.timeoutSec === undefined ? 120 : Number(out.timeoutSec)
   if (!Number.isFinite(timeoutSec) || timeoutSec <= 0)
@@ -210,9 +224,13 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     throw new Error('--workdesk-worker requires a new work session')
   if (pi && (resume !== undefined || fork !== undefined))
     throw new Error('--agent pi starts a new session: give it no --resume or --fork')
+  if (thread && (resume !== undefined || fork !== undefined || pi || workdeskWorker))
+    throw new Error(
+      '--thread starts a fresh Claude session: give it no --resume, --fork, --agent pi or --workdesk-worker',
+    )
   return {
     name,
-    cwd: out.cwd,
+    cwd: out.cwd ?? '',
     timeoutSec,
     ...(label !== undefined && { label }),
     ...(briefFile !== undefined && { briefFile }),
@@ -229,6 +247,7 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     ...(pi && { agent: 'pi' as const }),
     ...(trust && { trust: true }),
     ...(workdeskWorker && { workdeskWorker: true }),
+    ...(thread && { thread }),
   }
 }
 

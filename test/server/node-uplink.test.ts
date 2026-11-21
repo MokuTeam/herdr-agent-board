@@ -125,17 +125,17 @@ async function call(node: PairNode, body: Record<string, unknown>): Promise<Reco
 }
 
 /** A pair whose master has threads on and runs its scheduler; both config.json files written. */
-async function threadPair() {
+async function threadPair(threads: unknown = true) {
   const pair = await nodePair({
     env: ENV,
-    masterCfg: { threads: true, scheduleTickSec: 0.2 },
+    masterCfg: { threads, scheduleTickSec: 0.2 },
     panes: (_id, box) => pane(box),
     masterPanes: () => [],
   })
   const node = pair.nodes[0] as PairNode
   herdrOf(node.box, pane(node.box))
   nodeConfigFile(node)
-  writeConfig(pair.master.box, { language: 'en', port: portOf(pair.master.url), threads: true })
+  writeConfig(pair.master.box, { language: 'en', port: portOf(pair.master.url), threads })
   await pair.waitDevice(node.id, d => d.link?.state === 'online', 10_000)
   // The node's session in lane atlas, on its card there and so in the master's aggregate.
   expect((await cli(node.box, ['cat', 'atlas', '--session', S])).code).toBe(0)
@@ -412,4 +412,27 @@ test("without node: no /api/node/call, and board thread writes this board's own 
   expect(made).toEqual({ code: 0, stdout: 'ok · atlas-1 · next\n', stderr: '' })
   expect((await thread(url, 'atlas-1'))?.head.createdBy).toEqual({ kind: 'owner' })
   expect(existsSync(join(stateFolder(box), 'node'))).toBe(false)
+}, 60_000)
+
+// Case files (#488) through the master's own wiring (server/app.ts caseLive): a node's session in a
+// case reads from the nodes' cards, up on its device while the master hears it, and from the offline
+// copy, "last seen" with the copy's time, once the node is cut off. Never gone.
+test("a case's node session on the master's page: up on its device, then last seen from the offline copy", async () => {
+  const { pair, node } = await threadPair({ cases: true })
+  expect((await cli(node.box, ['thread', 'new', '--session', S, '--ref', 'ABC-12', 'Case on the node'])).code).toBe(0)
+  expect((await cli(node.box, ['thread', 'post', '--session', S, 'atlas-1', '--state', 'Mapped.'])).code).toBe(0)
+  type View = { case?: { sessions: { key: string; state: string; device?: string; seenAt?: number }[] } }
+  const sessionOf = async () => {
+    const res = await fetch(`${pair.master.url}/api/threads/atlas-1`)
+    return ((await res.json()) as View).case?.sessions.find(s => s.key === K)
+  }
+  const up = await sessionOf()
+  expect(up).toMatchObject({ key: K, state: 'up', device: node.id })
+  expect(up?.seenAt).toBeUndefined()
+
+  await node.proxy.cut('drop')
+  await pair.waitDevice(node.id, d => d.link?.state === 'offline', 10_000)
+  const seen = await sessionOf()
+  expect(seen).toMatchObject({ key: K, state: 'up', device: node.id })
+  expect(typeof seen?.seenAt).toBe('number')
 }, 60_000)

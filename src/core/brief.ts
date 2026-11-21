@@ -72,7 +72,7 @@ export function brief(
     agent === 'Claude' && todos?.agents && todosBrief(),
     agent === 'Claude' && sinks.length > 0 && secretsBrief(sinks),
     agent === 'Claude' && calendar && calendarBrief(),
-    agent === 'Claude' && threads?.agents && threadsBrief(),
+    agent === 'Claude' && threads?.agents && threadsBrief(threads),
     `Card texts in ${languageName()}, short. Call it only when the state changes, not every turn.${state ? ` Card now: ${state}.` : ''}`,
     presence && presenceBrief(presence),
     herdrLine(env, agent),

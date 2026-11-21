@@ -44,6 +44,7 @@ import {
   setCursor,
   ThreadError,
   threadsRev,
+  threadsWithRef,
   watchesFor,
   watchesOf,
 } from '../adapters/work-thread-store.ts'
@@ -53,6 +54,7 @@ import type { ScheduleEntry } from '../core/schedule-rules.ts'
 import { agentBoardOf, isMirrored } from '../core/thread-import.ts'
 import type { Config } from '../core/types.ts'
 import { safeName } from '../core/upload-name.ts'
+import { caseOnly, cleanRef, cleanState, REF_MAX, STATE_LINES, STATE_MAX, sameRef } from '../core/work-cases.ts'
 import {
   applyEntry,
   CHILDREN_MAX,
@@ -145,6 +147,8 @@ export interface Written {
   /** Sessions told of it, by key; watchers that could not be told. */
   told: string[]
   untold: number
+  /** Open threads with the same outside reference (#488), the lane's own first; only when there are any. The write was done anyway. */
+  sameRef?: { key: string; title: string; lane: string }[]
 }
 
 const byOf = (p: Party): string => JSON.stringify(p)
@@ -181,6 +185,43 @@ function titleOf(v: unknown): string {
     throw new ThreadError('title_long', `the title has ${t.length} characters; ${TITLE_MAX} at most`)
   return t
 }
+// ------------------------------------------------------------------ case files (#488, core/work-cases.ts)
+
+/** Case fields are written only where config.json turned cases on. */
+function casesOn(ctx: ThreadsCtx): void {
+  if (!ctx.cfg.cases)
+    throw new ThreadError('cases_off', 'case files are off: "threads": { "cases": true } in config.json')
+}
+
+function refOf(v: unknown): string {
+  const r = cleanRef(v)
+  if (r.ok) return r.ref
+  if (r.why === 'empty') throw new ThreadError('ref', 'an empty reference: a ticket id or a link (none clears it)')
+  throw new ThreadError('ref_long', `the reference has ${r.length} characters; ${REF_MAX} at most`)
+}
+
+function caseStateOf(v: unknown): string {
+  const r = cleanState(v)
+  if (r.ok) return r.text
+  if (r.why === 'empty')
+    throw new ThreadError('state', 'an empty state: where it stands, what is next, what it waits on')
+  if (r.why === 'lines') throw new ThreadError('state_lines', `the state has ${r.length} lines; ${STATE_LINES} at most`)
+  throw new ThreadError(
+    'state_long',
+    `the state has ${r.length} characters; ${STATE_MAX} at most: put the rest in a --file`,
+  )
+}
+
+/** The open threads whose reference names the same thing (#488), the lane's own first, three at most. */
+function sameRefOpen(ctx: ThreadsCtx, ref: string, lane: string, except?: string): Written['sameRef'] {
+  const hits = threadsWithRef(ctx.db)
+    .filter(h => h.id !== except && isOpen(h.status) && !!h.ref && sameRef(ref, h.ref))
+    .sort((a, b) => Number(b.lane === lane) - Number(a.lane === lane))
+    .slice(0, 3)
+    .map(h => ({ key: h.key, title: h.title, lane: h.lane }))
+  return hits.length ? hits : undefined
+}
+
 function lineOf(v: unknown, max: number, what: string): string {
   const t = oneLine(v, 10_000)
   if (t.length > max) throw new ThreadError(`${what}_long`, `the ${what} has ${t.length} characters; ${max} at most`)
@@ -206,13 +247,24 @@ const sessionWatch = (p: Party, target: string, what: WatchWhat): Omit<Watch, 's
 /** `board thread new`: a thread in `lane`, `next` unless it is given to someone or started. */
 export function newThread(
   ctx: ThreadsCtx,
-  input: { lane: string; title: string; parent?: ThreadHead | null; to?: Party | null; doing?: boolean },
+  input: {
+    lane: string
+    title: string
+    parent?: ThreadHead | null
+    to?: Party | null
+    doing?: boolean
+    /** A case's outside reference (#488): cases on only. */
+    ref?: string
+  },
 ): Written {
   mayWrite(ctx)
   const lane = String(input.lane ?? '').toLowerCase()
   if (!LANE.test(lane)) throw new ThreadError('lane', `"${input.lane}" is not a lane id (letters, digits, - and _)`)
   const title = titleOf(input.title)
   if (input.parent) parentFor(ctx, input.parent)
+  if (input.ref !== undefined) casesOn(ctx)
+  const ref = input.ref !== undefined ? refOf(input.ref) : undefined
+  const same = ref ? sameRefOpen(ctx, ref, lane) : undefined
   const status: ThreadStatus = input.doing || input.to ? 'doing' : 'next'
   const done = ctx.db.write(byOf(ctx.actor), tx => {
     const made = createThread(tx, {
@@ -223,6 +275,7 @@ export function newThread(
       at: ctx.now,
       assignee: input.to ?? null,
       parent: input.parent?.id ?? null,
+      ...(ref && { ref }),
     })
     // The creator hears how it goes; the assignee hears the owner's answers to its questions.
     const own = sessionWatch(ctx.actor, made.head.id, 'status')
@@ -231,7 +284,7 @@ export function newThread(
     if (theirs) putWatch(tx, theirs, ctx.now, true)
     return made
   })
-  return { ...done, ...tellWatchers(ctx, [done.head]) }
+  return { ...done, ...tellWatchers(ctx, [done.head]), ...(same && { sameRef: same }) }
 }
 
 export interface PostInput {
@@ -249,6 +302,8 @@ export interface PostInput {
   set?: EntrySet
   /** How the entry starts on the hub's way (#394): `queued` on a shared thread unless private. */
   out?: EntryOut
+  /** Where the case stands (#488): cases on only. */
+  state?: string
 }
 
 const URL_LIKE = /^https?:\/\/\S+$/i
@@ -325,6 +380,10 @@ export function postEntry(ctx: ThreadsCtx, head: ThreadHead, input: PostInput): 
   const set: EntrySet = { ...input.set }
   if (input.status !== undefined) set.status = input.status
   if (input.summary !== undefined) set.summary = lineOf(input.summary, SUMMARY_MAX, 'summary')
+  if (input.state !== undefined) {
+    casesOn(ctx)
+    set.state = caseStateOf(input.state)
+  }
   notMirrored(ctx, head, input.waitingOn !== undefined ? { ...set, waitingOn: input.waitingOn } : set)
   if (input.waitingOn !== undefined) {
     set.waitingOn = lineOf(input.waitingOn, WAITING_MAX, 'waiting')
@@ -347,7 +406,10 @@ export function postEntry(ctx: ThreadsCtx, head: ThreadHead, input: PostInput): 
       throw new ThreadError('owner_only', `${head.key} is shared: only the owner drops it`)
     if ((input.files?.length ?? 0) > 1) throw new ThreadError('files', `${head.key} is shared: one file per entry`)
   }
-  const out = input.out ?? outOf(ctx, head, input.private)
+  // An entry with nothing but case fields (#488: a state, a reference) stays on this board: the
+  // case is this board's working memory, and a peer's board would get an empty line.
+  const priv = !!input.private || caseOnly({ text, set, links, files: input.files ?? [] })
+  const out = input.out ?? outOf(ctx, head, priv)
   const me = shared || input.out ? meOf(ctx) : undefined
   const entryId = randomUUID()
   const files = input.files?.length ? copyFiles(ctx, head.id, entryId, input.files) : []
@@ -364,7 +426,7 @@ export function postEntry(ctx: ThreadsCtx, head: ThreadHead, input: PostInput): 
         links,
         files,
         ...(input.replyTo && { replyTo: input.replyTo }),
-        ...(input.private && { private: true }),
+        ...(priv && { private: true }),
         ...(out && { out }),
       }
       const r = appendEntry(tx, head.id, entryInput, me)
@@ -409,9 +471,20 @@ export function askOwner(ctx: ThreadsCtx, head: ThreadHead, question: string): W
 export function setFields(
   ctx: ThreadsCtx,
   head: ThreadHead,
-  input: { title?: string; assignee?: Party | null; lane?: string; parent?: ThreadHead | null },
+  input: {
+    title?: string
+    assignee?: Party | null
+    lane?: string
+    parent?: ThreadHead | null
+    /** A case's outside reference (#488), null to clear it: cases on only. */
+    ref?: string | null
+  },
 ): Written {
   const set: EntrySet = {}
+  if (input.ref !== undefined) {
+    casesOn(ctx)
+    set.ref = input.ref === null ? null : refOf(input.ref)
+  }
   if (input.title !== undefined) set.title = titleOf(input.title)
   if (input.assignee !== undefined) set.assignee = input.assignee
   if (input.lane !== undefined) {
@@ -424,8 +497,13 @@ export function setFields(
     set.parent = input.parent?.id ?? null
   }
   if (!Object.keys(set).length)
-    throw new ThreadError('empty', 'nothing to set: --title, --assignee, --lane or --parent')
-  return postEntry(ctx, head, { set })
+    throw new ThreadError(
+      'empty',
+      `nothing to set: --title, --assignee, --lane${ctx.cfg.cases ? ', --parent or --ref' : ' or --parent'}`,
+    )
+  const same = set.ref && isOpen(head.status) ? sameRefOpen(ctx, set.ref, set.lane ?? head.lane, head.id) : undefined
+  const w = postEntry(ctx, head, { set })
+  return same ? { ...w, sameRef: same } : w
 }
 
 // ------------------------------------------------------------------ watches
