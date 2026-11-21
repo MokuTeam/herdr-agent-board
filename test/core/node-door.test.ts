@@ -77,12 +77,12 @@ describe('the door takes what 6.2 lists', () => {
 
   test("the API version is 1, and the status, a start from the master (#504) and the bundle's routes (#506) are the door's own", () => {
     expect(NODE_API).toBe(1)
-    expect(DOOR_ROUTES.filter(r => r.door).map(r => [r.method, r.path])).toEqual([
+    expect(DOOR_ROUTES.filter(r => r.door).map(r => [r.method, String(r.path)])).toEqual([
       ['GET', '/api/node/status'],
       ['POST', '/api/node/launch'],
-      ['GET', /^\/api\/node\/bundle\/[^/]+$/],
-      ['PUT', /^\/api\/node\/bundle\/[^/]+\/blob\/[0-9a-f]{64}$/],
-      ['POST', /^\/api\/node\/bundle\/[^/]+\/commit$/],
+      ['GET', String(/^\/api\/node\/bundle\/[^/]+$/)],
+      ['PUT', String(/^\/api\/node\/bundle\/[^/]+\/blob\/[0-9a-f]{64}$/)],
+      ['POST', String(/^\/api\/node\/bundle\/[^/]+\/commit$/)],
     ])
     // Not as a GET, nor spelled otherwise.
     expect(refusal('GET', '/api/node/launch')).toEqual(NOT_FOUND)

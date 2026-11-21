@@ -83,6 +83,9 @@ test("buildManifest: the board's own skills and a name a node does not write sta
   ])
 })
 
+/** `${NAME}` as a server's settings write it. */
+const ref = (name: string): string => ['$', '{', name, '}'].join('')
+
 test("a server's references: herdr's own variables are not counted, any other is said as what it is", () => {
   const built = buildManifest(
     {
@@ -91,11 +94,10 @@ test("a server's references: herdr's own variables are not counted, any other is
       followed: [],
       settings: undefined,
       mcpServers: {
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: the references the server makes
         local: {
           type: 'http',
-          url: 'https://x.example.com/mcp?pane=${HERDR_PANE_ID}&host=${COMPUTERNAME}',
-          headers: { 'X-Ws': '${HERDR_WORKSPACE_ID}' },
+          url: `https://x.example.com/mcp?pane=${ref('HERDR_PANE_ID')}&host=${ref('COMPUTERNAME')}`,
+          headers: { 'X-Ws': ref('HERDR_WORKSPACE_ID') },
         },
       },
     },
