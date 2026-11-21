@@ -1337,6 +1337,8 @@ export async function startServer({
       bundle: bundleSync,
       commit: runningCommit,
       updating: id => nodeUpdater?.updating(id) ?? false,
+      // board-state.ts tells the placer this computer's sessions after each read of herdr.
+      awaitsBoard: true,
       fillThresholds: (id, given) => {
         const r = editNodes(raw => fillThresholds(raw, id, given))
         if (!r.ok) log(`placer: the thresholds of ${id} were not written: ${r.error}`)

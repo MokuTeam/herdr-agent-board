@@ -183,7 +183,7 @@ test('opened on a board without nodes, the form asks its view and nothing else; 
   })
   expect(doc().querySelector('.devices-add')?.getAttribute('data-phase')).toBe('plan')
   expect(b.log.filter(l => l === 'look')).toHaveLength(1)
-  root.unmount()
+  await act(async () => root.unmount())
 })
 
 test("a plan's ceiling and ticks stay with it: the next plan starts from its own figures", async () => {
@@ -202,7 +202,7 @@ test("a plan's ceiling and ticks stay with it: the next plan starts from its own
   expect(q('input[name="node-memoryMaxMb"]').value).toBe('4000')
   await click(button('Apply'))
   expect(b.posts.at(-1)).toEqual({ op: 'apply', plan: 'p2', packages: false })
-  root.unmount()
+  await act(async () => root.unmount())
 })
 
 test('Cancel forgets the password: the next Look logs in with the keys alone', async () => {
@@ -222,7 +222,7 @@ test('Cancel forgets the password: the next Look logs in with the keys alone', a
   await click(button('Look'))
   expect(b.posts.at(-1)).toEqual({ op: 'look', host: 'h.example.com', user: 'root' })
   expect(doc().body.innerHTML).not.toContain(SECRET)
-  root.unmount()
+  await act(async () => root.unmount())
 })
 
 test('a password the board asks for at Apply gets a field in the plan; Apply sends it', async () => {
@@ -245,7 +245,7 @@ test('a password the board asks for at Apply gets a field in the plan; Apply sen
   await setValue(field, SECRET)
   await click(button('Apply'))
   expect(b.posts.at(-1)).toMatchObject({ op: 'apply', plan: 'p1', password: SECRET })
-  root.unmount()
+  await act(async () => root.unmount())
 })
 
 test('the panel closed: nothing more is asked, and the form opens anew', async () => {
@@ -259,5 +259,5 @@ test('the panel closed: nothing more is asked, and the form opens anew', async (
   await act(() => sleep(1300))
   expect(b.log.length).toBe(asked)
   expect(button('Add a server…')).toBeTruthy()
-  root.unmount()
+  await act(async () => root.unmount())
 })

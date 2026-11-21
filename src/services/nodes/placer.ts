@@ -100,6 +100,13 @@ export interface PlacerOptions {
   commit?: () => Promise<string>
   /** Whether this board's commit is on its way to a device (#590, services/nodes/update.ts). */
   updating?: (id: string) => boolean
+  /**
+   * The board tells observe() this computer's sessions after each read of herdr: until the first one
+   * the queue is left alone (#593). A board that just started counts no session awake, so this
+   * computer would look empty and a start waiting for room would be started here at once. Absent: a
+   * test that drives the placer alone, where nothing observes.
+   */
+  awaitsBoard?: boolean
   /** git's facts of a folder (adapters/git.ts), handed in so tests can stand in. */
   git?: { checkout: typeof checkoutFacts; info: typeof gitInfo; pushed: typeof branchPushed }
   exists?: (path: string) => boolean
@@ -164,6 +171,8 @@ export function createPlacer(o: PlacerOptions): Placer {
   let closed = false
   /** This computer's sessions awake at the last refresh: the queue is tried when that number drops. */
   let lastAwake = Number.POSITIVE_INFINITY
+  /** Whether the board told this computer's sessions at least once since it started (observe). */
+  let observed = false
   /** Per device, its last status's own time and when this board first had it (its clock, not the node's). */
   const seen = new Map<string, { at: number; got: number }>()
   const asking = new Set<string>()
@@ -598,7 +607,7 @@ export function createPlacer(o: PlacerOptions): Placer {
    * none waits for another's start on a node: one that cannot go, or goes slowly, holds back none.
    */
   function kick(): void {
-    if (closed) return
+    if (closed || (o.awaitsBoard && !observed)) return
     for (const h of waiting().sort((a, b) => a.l.startedAt - b.l.startedAt)) void go(h)
   }
 
@@ -793,7 +802,10 @@ export function createPlacer(o: PlacerOptions): Placer {
       const awake = items.filter(i => !i.sleeping).length
       const dropped = awake < lastAwake
       lastAwake = awake
-      if (dropped && waiting().length) kick()
+      // The first read of herdr since the board started: what waited is tried now, not before.
+      const first = !observed
+      observed = true
+      if ((dropped || first) && waiting().length) kick()
     },
     async next(lane, profile, given) {
       // A section just written is given: the live config follows the file a moment later.

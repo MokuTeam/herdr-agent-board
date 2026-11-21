@@ -588,8 +588,13 @@ describe('without a node, nothing of this', () => {
       .filter(p => /from '[^']*node-(plan|texts)(\.ts)?'/.test(readFileSync(p, 'utf8')))
       .map(rel)
       .sort()
-    // git.ts takes the stamp's file name only (archiveStamp), which runs nothing
-    expect(importers).toEqual(['adapters/git.ts', 'core/node-setup.ts', 'services/nodes/setup.ts'])
+    // git.ts and a node's update (#590) take the stamp's file name only, which runs nothing
+    expect(importers).toEqual([
+      'adapters/git.ts',
+      'core/node-setup.ts',
+      'services/node/update.ts',
+      'services/nodes/setup.ts',
+    ])
     const service = files
       .filter(p => /from '[^']*nodes\/setup(\.ts)?'/.test(readFileSync(p, 'utf8')))
       .map(rel)
