@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import { root, sandbox } from '../support/sandbox.ts'
 
 /** main before #500: server/board-state.ts as every board without `nodes` runs it. */
-const BASE = '03d4b5c9'
+const BASE = 'f596a6f4'
 const SID = '5a6b7c8d-1e2f-4a3b-9c4d-5e6f7a8b9c0d'
 const REMOTE = '6a6b7c8d-1e2f-4a3b-9c4d-5e6f7a8b9c0e'
 

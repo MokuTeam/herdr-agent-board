@@ -241,3 +241,62 @@ test('the waits are the knobs in a test and as written otherwise', async () => {
       else process.env[k] = v
   }
 })
+
+test('onChange: a payload or a state change of any link, and a link that goes, name its device (#500)', async () => {
+  const c = countingClock()
+  const fired = new Map<string, { payload: Set<() => void>; state: Set<() => void> }>()
+  const makeLink = (device: DeviceConfig): Link => {
+    const fns = { payload: new Set<() => void>(), state: new Set<() => void>() }
+    fired.set(device.id, fns)
+    const state: LinkStatus = { state: 'connecting', since: 0, heardAt: null }
+    return {
+      id: device.id,
+      fetch: async () => new Response(''),
+      status: async () => null,
+      state: () => state,
+      payload: () => null,
+      view: () => ({
+        id: device.id,
+        title: device.title,
+        kind: 'direct',
+        link: state,
+        status: null,
+        sameCommit: null,
+        payloadAt: null,
+      }),
+      onPayload: fn => {
+        const f = () => fn({} as never)
+        fns.payload.add(f)
+        return () => fns.payload.delete(f)
+      },
+      onState: fn => {
+        const f = () => fn(state)
+        fns.state.add(f)
+        return () => fns.state.delete(f)
+      },
+      reconnect: () => {},
+      killNow: () => {},
+      close: async () => {},
+    }
+  }
+  const cfg = {
+    nodes: { id: 'laptop', devices: { 'server-1': direct(1001), 'server-2': direct(1002) } },
+  } as unknown as Config
+  const links = createNodeLinks({ cfg, log: () => {}, makeLink, clock: c.clock, network: () => 'net' })
+  await settle()
+  const heard: string[] = []
+  const off = links.onChange(id => heard.push(id))
+  for (const f of fired.get('server-2')?.payload ?? []) f()
+  for (const f of fired.get('server-1')?.state ?? []) f()
+  expect(heard).toEqual(['server-2', 'server-1'])
+  // server-2 leaves config.json: its link goes, said once, and what it held is let go.
+  cfg.nodes = { id: 'laptop', devices: { 'server-1': direct(1001) } }
+  links.configChanged()
+  await settle()
+  expect(heard).toEqual(['server-2', 'server-1', 'server-2'])
+  expect([fired.get('server-2')?.payload.size, fired.get('server-2')?.state.size]).toEqual([0, 0])
+  off()
+  for (const f of fired.get('server-1')?.payload ?? []) f()
+  expect(heard.length).toBe(3)
+  await links.close()
+})
