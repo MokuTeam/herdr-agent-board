@@ -295,11 +295,26 @@ const cmdShim = (bun: string, script: string): string =>
     '',
   ].join('\r\n')
 
-const shShim = (bun: string, script: string): string => `#!/bin/sh\n# ${MARK}\nexec ${bunCommand(bun, script)} "$@"\n`
+const shShim = (bun: string, script: string, before = ''): string =>
+  `#!/bin/sh\n# ${MARK}\n${before}exec ${bunCommand(bun, script)} "$@"\n`
+
+/**
+ * Git Bash turns every argument that starts with / into a Windows path when it starts the native
+ * Bun, so a brief "/review this" arrived as "C:/Program Files/Git/review this" (#490). Under Git
+ * Bash only, and only while the user has set neither of Git Bash's own switches, spawn-agent's sh
+ * shim turns that off for the arguments alone (MSYS2_ARG_CONV_EXCL='*': the environment is still
+ * converted, as before) and says so in AGENT_BOARD_PATHCONV: spawn-agent then converts its folder
+ * and file options itself, as Git Bash did, and passes neither variable on.
+ */
+const GIT_BASH_PATHS =
+  '# Git Bash: arguments as typed; spawn-agent converts its folder and file options (#490).\n' +
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: the shell's own ${…}
+  'if [ -n "$MSYSTEM" ] && [ -z "${MSYS_NO_PATHCONV+x}${MSYS2_ARG_CONV_EXCL+x}" ]; then export MSYS2_ARG_CONV_EXCL=\'*\' AGENT_BOARD_PATHCONV=1; fi\n'
 
 /**
  * The `board` and `spawn-agent` commands for ~/.local/bin: a sh script for Git Bash, macOS and
- * Linux, a .cmd for PowerShell and cmd.
+ * Linux, a .cmd for PowerShell and cmd. On Windows spawn-agent's sh script also keeps Git Bash from
+ * rewriting its arguments (GIT_BASH_PATHS).
  */
 export function planShims(paths: InstallPaths): {
   board: string
@@ -310,7 +325,11 @@ export function planShims(paths: InstallPaths): {
   return {
     board: shShim(paths.bun, paths.cli),
     'board.cmd': cmdShim(paths.bun, paths.cli),
-    'spawn-agent': shShim(paths.bun, paths.spawn),
+    'spawn-agent': shShim(
+      paths.bun,
+      paths.spawn,
+      (paths.platform ?? process.platform) === 'win32' ? GIT_BASH_PATHS : '',
+    ),
     'spawn-agent.cmd': cmdShim(paths.bun, paths.spawn),
   }
 }

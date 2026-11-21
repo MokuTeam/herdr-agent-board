@@ -21,11 +21,9 @@ interface Set {
 }
 
 // The project folder has spaces, Cyrillic and %. On Windows the fake pi is pi.cmd, as npm installs
-// the real one, and Bun passes no % to a .cmd (#491): there the tests run on a folder without it,
-// and the % case is a known failure until #491 is fixed.
+// the real one, and Bun passes no % to a .cmd: there the board runs it through cmd.exe (#491).
 const WINDOWS = process.platform === 'win32'
-const PERCENT = 'Проект x 50%'
-const PROJECT = WINDOWS ? 'Проект x 50' : PERCENT
+const PROJECT = 'Проект x 50%'
 
 /** The board's config, a fake `pi` on PATH, a pi session file in a folder named `name`. */
 function setUp(box: Sandbox, name = PROJECT): Set {
@@ -92,18 +90,9 @@ async function wakesOnItsAccount(name = PROJECT): Promise<void> {
 test('board resume --pi: the session’s file, its options but not its model, name or message, its account and folder', () =>
   wakesOnItsAccount())
 
-// #491 as it is today: Bun's refusal, and pi not run. Fixed, this test fails: run
-// wakesOnItsAccount(PERCENT) on Windows too instead.
-test.skipIf(!WINDOWS)(
-  'board resume --pi on Windows: a % in the session’s folder does not start pi.cmd (#491)',
-  async () => {
-    const box = await sandbox()
-    const s = setUp(box, PERCENT)
-    sleeper(box, s, { account: join(s.home, '.claude-work') })
-    const r = await resumePi(box, ['--pi', ID], s)
-    expect([r.code, r.pi]).toEqual([1, null])
-    expect(r.out).toMatch(/pi did not start: .*cmd\.exe special character/)
-  },
+// A folder with no character cmd.exe treats as special: pi.cmd starts as it did before #491.
+test.skipIf(!WINDOWS)('board resume --pi on Windows: a folder without % starts pi.cmd as before', () =>
+  wakesOnItsAccount('Проект x 50'),
 )
 
 test('board resume --pi: slept on the personal account, a shell on Work’s: back on the personal one', async () => {

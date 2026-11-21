@@ -134,7 +134,7 @@ export function killTreePid(pid: number): void {
  * `cwd` when given, else in this process's folder; one it does not start in (the folder gone since
  * it was looked at, or not to be entered) is tried once more in this process's folder, as without
  * `cwd`. What the program exited with (1 when a signal ended it), or the error that kept it from
- * starting.
+ * starting. A .cmd Bun would refuse an argument to runs through cmd.exe (throughCmd, Windows).
  */
 export function runHere(
   file: string,
@@ -158,7 +158,15 @@ export function runHere(
         res({ code, error })
       }
       try {
-        const child = spawn(file, args, { stdio: 'inherit', ...(env ? { env } : {}), ...(dir ? { cwd: dir } : {}) })
+        const cmd = throughCmd(file, args, env)
+        const child = cmd
+          ? spawn(cmd.file, cmd.args, {
+              stdio: 'inherit',
+              windowsVerbatimArguments: true,
+              ...(env ? { env } : {}),
+              ...(dir ? { cwd: dir } : {}),
+            })
+          : spawn(file, args, { stdio: 'inherit', ...(env ? { env } : {}), ...(dir ? { cwd: dir } : {}) })
         child.on('error', err => done(127, err, child.pid === undefined))
         child.on('exit', code => done(code ?? 1))
       } catch (err) {
@@ -167,6 +175,53 @@ export function runHere(
     }
     start(cwd)
   })
+}
+
+// What Bun will not pass to a .bat or .cmd file on Windows (Bun 1.4: these, no other printable
+// ASCII), so `board resume --pi` did not start npm's pi.cmd on a session file under a folder with a
+// % in its name (#491).
+const CMD_REFUSED = /[%"&|<>^]/
+// cmd.exe's special characters, each escaped with ^ where it stands.
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g
+
+/**
+ * One argument on the line cmd.exe runs a .cmd with: quoted as a program reads its command line,
+ * then every cmd.exe special character (the quotes too, so cmd never counts one) escaped twice,
+ * once for cmd /c and once for the line in the .cmd that hands %* on, as npm's shims and pi.cmd
+ * do. A .bat that reads %1 itself would keep one level of carets.
+ */
+export function cmdArg(arg: string): string {
+  const quoted = `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1')}"`
+  return quoted.replace(CMD_META, '^$1').replace(CMD_META, '^$1')
+}
+
+/** What `cmd.exe /d /s /c` is given to run the .cmd or .bat `file` with `args`, as they are. */
+export function cmdLine(file: string, args: readonly string[]): string {
+  return `"${[file.replace(CMD_META, '^$1'), ...args.map(cmdArg)].join(' ')}"`
+}
+
+const envValue = (env: Record<string, string | undefined>, name: string): string | undefined =>
+  Object.entries(env).find(([k]) => k.toUpperCase() === name)?.[1]
+
+/**
+ * How runHere starts `file` when Bun would refuse it an argument: on Windows, a program that is a
+ * .cmd or .bat on the PATH, given an argument with a character Bun does not pass to one, runs
+ * through cmd.exe with the arguments escaped for it (#491). Null, the program started as given,
+ * everywhere else.
+ */
+function throughCmd(
+  file: string,
+  args: string[],
+  env: Record<string, string | undefined> | undefined,
+): { file: string; args: string[] } | null {
+  if (process.platform !== 'win32' || !args.some(a => CMD_REFUSED.test(a))) return null
+  // cmd.exe would end the line at a line break and drop the rest: Bun refuses it, as before.
+  if (args.some(a => /[\r\n\0]/.test(a))) return null
+  const e = env ?? process.env
+  const found = Bun.which(file, { PATH: envValue(e, 'PATH') ?? '' })
+  if (!found || !/\.(cmd|bat)$/i.test(found)) return null
+  const cmd = envValue(e, 'COMSPEC') || join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe')
+  return { file: cmd, args: ['/d', '/s', '/c', cmdLine(found, args)] }
 }
 
 /** Whether a process with this id runs; one this process may not signal (EPERM) runs too. */

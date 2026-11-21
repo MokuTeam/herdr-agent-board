@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { run, runHere, runTree } from '../../src/adapters/process.ts'
+import { cmdArg, cmdLine, run, runHere, runTree } from '../../src/adapters/process.ts'
+import { fakePiOn } from '../support/fake-pi-program.ts'
 import { root, until } from '../support/sandbox.ts'
 
 setDefaultTimeout(20_000)
@@ -103,3 +104,58 @@ test('runHere starts the program in this folder when the one it is given is gone
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
+
+test('cmdArg and cmdLine: quoted as a program reads them, cmd.exe characters escaped twice, the program once (#491)', () => {
+  expect(cmdArg('50% a')).toBe('^^^"50^^^%^^^ a^^^"')
+  // Backslashes before a quote and at the end double, as a program's command line reads them.
+  expect(cmdArg('q"\\')).toBe('^^^"q\\^^^"\\\\^^^"')
+  expect(cmdArg('')).toBe('^^^"^^^"')
+  expect(cmdLine('C:\\a b\\pi.cmd', ['x'])).toBe('"C:\\a^ b\\pi.cmd ^^^"x^^^""')
+})
+
+// npm installs pi as pi.cmd, and Bun passes a .cmd no argument with % " & | < > or ^ in it (#491).
+test.skipIf(process.platform !== 'win32')(
+  'runHere on Windows: a .cmd gets arguments Bun would refuse it as they are, from a folder with % and & in its name',
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'board-here-'))
+    try {
+      const bin = join(dir, 'Проект 50% & x')
+      fakePiOn(bin)
+      const log = join(dir, 'pi.json')
+      const env = {
+        ...process.env,
+        PATH: `${bin};${process.env.PATH}`,
+        FAKE_PI_LOG: log,
+        FAKE_PI_EXIT: '5',
+        BOARD_X: 'set',
+      }
+      const args = [
+        '--session',
+        join(bin, '--C--Users-anna-Проект 50%--', 'f.jsonl'),
+        '%BOARD_X%',
+        '!BOARD_X!',
+        'a"b & c|d<e>f^g',
+        'x\\',
+        '',
+        '50% %OS% 100%',
+      ]
+      expect(await runHere('pi', args, env, dir)).toEqual({ code: 5, error: null })
+      const ran = JSON.parse(readFileSync(log, 'utf8'))
+      expect(ran.args).toEqual(args)
+      expect(realpathSync(ran.cwd)).toBe(realpathSync(dir))
+      // A line break: cmd.exe would drop what follows it, so Bun refuses it as before.
+      rmSync(log)
+      const broken = await runHere('pi', ['a\nb&c'], env, dir)
+      expect([broken.code, String(broken.error?.message)]).toEqual([
+        127,
+        expect.stringMatching(/cmd\.exe special character/),
+      ])
+      // A program that is no .cmd gets a % as it did before.
+      const fake = join(root, 'test/support/fake-pi-program.ts')
+      expect(await runHere(process.execPath, [fake, '50% & x'], env, dir)).toEqual({ code: 5, error: null })
+      expect(JSON.parse(readFileSync(log, 'utf8')).args).toEqual(['50% & x'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
+  },
+)

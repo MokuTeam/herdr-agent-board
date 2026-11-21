@@ -7,6 +7,7 @@ import {
   planSettings,
   planShims,
   quote,
+  shimTarget,
   toastCommand,
   wakeHooksState,
 } from '../../src/core/install-plan.ts'
@@ -231,30 +232,45 @@ describe('planShims', () => {
         '@exit /b %AB_RC%',
         '',
       ].join('\r\n')
-    const sh = (script: string) =>
-      `#!/bin/sh\n# agent-board\nexec "C:/Program Files/Bun/bun.exe" "C:/Users/Имя/AppData/Roaming/herdr/plugins/agent-board/src/entrypoints/${script}" "$@"\n`
-    assert.deepEqual(planShims(paths), {
+    const sh = (script: string, before = '') =>
+      `#!/bin/sh\n# agent-board\n${before}exec "C:/Program Files/Bun/bun.exe" "C:/Users/Имя/AppData/Roaming/herdr/plugins/agent-board/src/entrypoints/${script}" "$@"\n`
+    // Under Git Bash spawn-agent gets its arguments as typed (#490); board as before.
+    const gitBash =
+      '# Git Bash: arguments as typed; spawn-agent converts its folder and file options (#490).\n' +
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the shell's own ${…}
+      'if [ -n "$MSYSTEM" ] && [ -z "${MSYS_NO_PATHCONV+x}${MSYS2_ARG_CONV_EXCL+x}" ]; then export MSYS2_ARG_CONV_EXCL=\'*\' AGENT_BOARD_PATHCONV=1; fi\n'
+    const shims = planShims(paths)
+    assert.deepEqual(shims, {
       board: sh('cli.ts'),
       'board.cmd': cmd('cli.ts'),
-      'spawn-agent': sh('spawn-agent.ts'),
+      'spawn-agent': sh('spawn-agent.ts', gitBash),
       'spawn-agent.cmd': cmd('spawn-agent.ts'),
     })
+    // install and doctor still read which script it runs.
+    assert.equal(shimTarget(shims['spawn-agent']), `${plugin.replace(/\\/g, '/')}/src/entrypoints/spawn-agent.ts`)
   })
 
-  test('on macOS and Linux: POSIX paths as they are', () => {
-    const shims = planShims({
-      bun: '/Users/me/.bun/bin/bun',
-      cli: '/Users/me/My Plugins/agent-board/src/entrypoints/cli.ts',
-      hook: '',
-      statusline: '',
-      spawn: '',
-      toast: '',
-      binDir: '/Users/me/.local/bin',
-    })
-    assert.equal(
-      shims.board,
-      '#!/bin/sh\n# agent-board\nexec "/Users/me/.bun/bin/bun" "/Users/me/My Plugins/agent-board/src/entrypoints/cli.ts" "$@"\n',
-    )
+  test('on macOS and Linux: POSIX paths as they are, spawn-agent with no Git Bash lines', () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const shims = planShims({
+        bun: '/Users/me/.bun/bin/bun',
+        cli: '/Users/me/My Plugins/agent-board/src/entrypoints/cli.ts',
+        hook: '',
+        statusline: '',
+        spawn: '/Users/me/My Plugins/agent-board/src/entrypoints/spawn-agent.ts',
+        toast: '',
+        binDir: '/Users/me/.local/bin',
+        platform,
+      })
+      assert.equal(
+        shims.board,
+        '#!/bin/sh\n# agent-board\nexec "/Users/me/.bun/bin/bun" "/Users/me/My Plugins/agent-board/src/entrypoints/cli.ts" "$@"\n',
+      )
+      assert.equal(
+        shims['spawn-agent'],
+        '#!/bin/sh\n# agent-board\nexec "/Users/me/.bun/bin/bun" "/Users/me/My Plugins/agent-board/src/entrypoints/spawn-agent.ts" "$@"\n',
+      )
+    }
   })
 })
 

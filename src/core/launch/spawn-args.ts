@@ -93,6 +93,31 @@ const NAME_ERRORS: Record<string, string> = {
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+// The options whose values are a folder or a file (#490).
+const PATH_OPTIONS = ['cwd', 'briefFile', 'configDir'] as const
+
+/**
+ * The options with the folder and file values that start with / converted by `convert` (one call,
+ * the values in order; it returns them in the same order), as Git Bash converts the arguments of a
+ * program it starts when spawn-agent's shim has not turned that off (#490). Other values, and
+ * every value when none starts with /, are left as typed.
+ */
+export function withConvertedPaths(o: SpawnOptions, convert: (paths: string[]) => string[]): SpawnOptions {
+  const keys = PATH_OPTIONS.filter(k => o[k]?.startsWith('/'))
+  if (keys.length === 0) return o
+  const converted = convert(keys.map(k => o[k] as string))
+  const out = { ...o }
+  keys.forEach((k, i) => {
+    const v = converted[i]
+    if (v) out[k] = v
+  })
+  return out
+}
+
+/** A Git Bash drive path in Windows form (/c/work → C:/work), as cygpath -m gives it; others as they are. */
+export const drivePath = (p: string): string =>
+  p.replace(/^\/([A-Za-z])(?=\/|$)/, (_, d: string) => `${d.toUpperCase()}:`).replace(/^([A-Z]:)$/, '$1/')
+
 /** The command line as options; throws with what is wrong and the usage. */
 export function parseArgs(argv: readonly string[]): SpawnArgs {
   const out: Partial<Record<Key, string>> = {}

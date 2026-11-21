@@ -6,7 +6,7 @@ import { openDb } from '../../src/adapters/db.ts'
 import { workdeskStore } from '../../src/adapters/workdesk-store.ts'
 import { workerRoster } from '../../src/adapters/workdesk-worker-store.ts'
 import { failureKind } from '../../src/core/launch/launcher-command.ts'
-import { parseArgs } from '../../src/core/launch/spawn-args.ts'
+import { drivePath, parseArgs, withConvertedPaths } from '../../src/core/launch/spawn-args.ts'
 import { profileReport, profileTag, sessionProfile } from '../../src/core/profiles.ts'
 import { absoluteDir } from '../../src/services/launch/spawn-agent.ts'
 import { isolatedHome } from '../support/env.ts'
@@ -1469,3 +1469,48 @@ test.each(['claude', 'codex'])(
     }
   },
 )
+
+test('withConvertedPaths: only the folder and file values that start with / are converted, in one call (#490)', () => {
+  const o = parseArgs([
+    '--name',
+    'Anna',
+    '--cwd',
+    '/c/work/anna',
+    '--brief',
+    '/review this',
+    '--config-dir',
+    '/c/u/.claude',
+  ])
+  assert.ok(!('help' in o))
+  const seen: string[][] = []
+  const out = withConvertedPaths(o, paths => {
+    seen.push(paths)
+    return paths.map(p => `C:${p.slice(2)}`)
+  })
+  assert.deepEqual(seen, [['/c/work/anna', '/c/u/.claude']])
+  assert.deepEqual(
+    [out.cwd, out.configDir, out.brief, out.name],
+    ['C:/work/anna', 'C:/u/.claude', '/review this', 'Anna'],
+  )
+  // Windows paths already: nothing to convert, no call.
+  const win = parseArgs(['--name', 'Ben', '--cwd', 'C:\\work', '--brief-file', 'D:\\b.md'])
+  assert.ok(!('help' in win))
+  assert.equal(
+    withConvertedPaths(win, () => assert.fail('called')),
+    win,
+  )
+  // A converter that gives nothing back for one leaves it as typed.
+  const file = parseArgs(['--name', 'Cleo', '--cwd', '/x', '--brief-file', '/tmp/b.md'])
+  assert.ok(!('help' in file))
+  const half = withConvertedPaths(file, () => ['X:/', ''])
+  assert.deepEqual([half.cwd, half.briefFile], ['X:/', '/tmp/b.md'])
+  // Without cygpath: the drive paths, as cygpath -m writes them; the rest as typed.
+  assert.deepEqual(['/c/work/anna', '/d', '/D/x', '/tmp/b.md', '/cd/x', '//srv/share'].map(drivePath), [
+    'C:/work/anna',
+    'D:/',
+    'D:/x',
+    '/tmp/b.md',
+    '/cd/x',
+    '//srv/share',
+  ])
+})
