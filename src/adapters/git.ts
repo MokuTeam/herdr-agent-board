@@ -118,6 +118,43 @@ export async function headCommit(dir: string): Promise<string | null> {
  * herdr links a worktree to the repository, not to the worktree it was made from, so this is
  * the folder a new worktree is created from and named after.
  */
+/** The most a plugin archive may be: the board's checkout is about 20 MB as a tar. */
+const ARCHIVE_MOST = 256 * 1024 * 1024
+
+/**
+ * The checkout at `commit` as one tar archive (`git archive`): the plugin "Add a server" sends
+ * a node (#509, design 11.1 step 6), so the node's code is the master's code at its commit. null
+ * when git fails or the archive is past 256 MB.
+ */
+export async function archiveCommit(dir: string, commit: string): Promise<Uint8Array | null> {
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) return null
+  try {
+    const p = Bun.spawn(
+      ['git', '--no-pager', '-c', 'core.hooksPath=/dev/null', '-C', dir, 'archive', '--format=tar', commit],
+      {
+        stdin: 'ignore',
+        stdout: 'pipe',
+        stderr: 'ignore',
+        windowsHide: true,
+      },
+    )
+    const chunks: Uint8Array[] = []
+    let size = 0
+    for await (const chunk of p.stdout) {
+      size += chunk.length
+      if (size > ARCHIVE_MOST) {
+        p.kill()
+        return null
+      }
+      chunks.push(chunk)
+    }
+    if ((await p.exited) !== 0) return null
+    return Buffer.concat(chunks)
+  } catch {
+    return null
+  }
+}
+
 export async function repoRoot(dir: string): Promise<string | null> {
   const r = await run('git', ['-C', dir, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
     timeout: 5000,

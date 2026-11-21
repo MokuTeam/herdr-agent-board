@@ -347,7 +347,8 @@ export function endLogins(): void {
 
 /**
  * ssh with this argument list, no shell: stdout and stderr read by line; `stdin` written, then
- * closed (null: closed at once), so the sudo password is on ssh's stdin and nowhere else; ended
+ * closed (null: closed at once), so the sudo password is on ssh's stdin and nowhere else (bytes:
+ * the node's plugin archive, which "Add a server" sends up as the admin, #509); ended
  * after `timeoutMs`. With `login`, its password goes to ssh through the board's askpass
  * (openAskpass), and ssh runs in the board's tunnel folder (no .env or bunfig of another folder
  * for the helper's Bun) and, on POSIX, in a session of its own: no terminal to prompt on, and its
@@ -356,7 +357,7 @@ export function endLogins(): void {
 export function spawnRemote(
   bin: string,
   args: string[],
-  stdin: string | null,
+  stdin: string | Uint8Array | null,
   timeoutMs: number,
   login: { password: string } | null = null,
 ): RemoteRun {

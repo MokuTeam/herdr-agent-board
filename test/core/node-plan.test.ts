@@ -64,6 +64,8 @@ const facts = (over: Partial<NodeFacts> = {}): NodeFacts => ({
   herdr: null,
   claude: null,
   serverBun: null,
+  hostname: 'server-1',
+  nodeConfig: null,
   ...over,
 })
 
@@ -544,17 +546,30 @@ test("Look's lines read, and a run's", () => {
 })
 
 describe('without a node, nothing of this', () => {
-  test('no module of the board imports the plan or its texts yet: every other setup runs the code it ran', () => {
+  test('only "Add a server" imports the plan, and only app.ts the service, which it makes when the form first asks (#509)', () => {
     const root = join(import.meta.dir, '..', '..', 'src')
     const walk = (d: string): string[] =>
       readdirSync(d).flatMap(n => {
         const p = join(d, n)
         return statSync(p).isDirectory() ? walk(p) : [p]
       })
-    const importers = walk(root)
+    const rel = (p: string): string => p.slice(root.length + 1).replaceAll('\\', '/')
+    const files = walk(root)
+    const importers = files
       .filter(p => !/node-(plan|texts)\.ts$/.test(p))
       .filter(p => /from '[^']*node-(plan|texts)(\.ts)?'/.test(readFileSync(p, 'utf8')))
-    expect(importers).toEqual([])
+      .map(rel)
+      .sort()
+    expect(importers).toEqual(['core/node-setup.ts', 'services/nodes/setup.ts'])
+    const service = files
+      .filter(p => /from '[^']*nodes\/setup(\.ts)?'/.test(readFileSync(p, 'utf8')))
+      .map(rel)
+      .sort()
+    expect(service).toEqual(['server/app.ts', 'server/routes/nodes.ts'])
+    // made inside the form's own routes' factory, not when the board starts
+    const app = readFileSync(join(root, 'server', 'app.ts'), 'utf8')
+    expect(app).toMatch(/nodeSetupRoutes\(\s*\(\) =>\s*\(nodeSetup \?\?= createNodeSetup\(/)
+    expect(app.match(/createNodeSetup\(/g)).toHaveLength(1)
   })
 
   test('its words are under node. and place. only (and the one launch error the pin has), in both languages, and no other dictionary has such a key', () => {

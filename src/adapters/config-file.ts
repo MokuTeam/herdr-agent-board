@@ -818,6 +818,23 @@ export function editNodes(change: (nodes: Record<string, unknown>) => boolean): 
   return r.ok || (!r.ok && r.error === 'unchanged') ? { ok: true } : r
 }
 
+/**
+ * Change config.json's `nodes`, making the section when there is none (#509): "Add a server" on a
+ * board without devices makes it a master. `change` gets the section (an empty one when there was
+ * none, `had` false) and says whether it changed it; nothing is written when it did not. A file
+ * that does not parse is refused and left as it is, as every edit here.
+ */
+export function editNodesAdding(change: (nodes: Record<string, unknown>, had: boolean) => boolean): EditResult {
+  const r = editConfig(raw => {
+    const had = isRecord(raw.nodes)
+    const nodes: Record<string, unknown> = had ? (raw.nodes as Record<string, unknown>) : {}
+    if (!change(nodes, had)) return { ok: false, error: 'unchanged' }
+    raw.nodes = nodes
+    return { ok: true }
+  })
+  return r.ok || (!r.ok && r.error === 'unchanged') ? { ok: true } : r
+}
+
 /** A config edit that must go through, for a caller with no answer of its own to give: a refusal thrown, its words the message. */
 export function mustEdit(r: EditResult): void {
   if (!r.ok) throw new Error(r.error)

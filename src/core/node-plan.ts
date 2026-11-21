@@ -53,7 +53,7 @@ import {
   UNIT_PATH,
   WORK_DIR,
 } from './node-texts.ts'
-import { DEVICE_ID, LOCAL } from './nodes.ts'
+import { DEVICE_ID, LOCAL, NODE_PORT } from './nodes.ts'
 import { SUPPORTED } from './server-look.ts'
 import type { Text } from './server-plan.ts'
 import { isPlainPath, shQuote } from './server-shell.ts'
@@ -130,6 +130,13 @@ export interface NodeFacts {
   claude: string | null
   /** A Bun on the server's own PATH, owned by root: copied for the node user when it is new enough. */
   serverBun: { path: string; version: string } | null
+  /** The server's host name: the device's id is made from it when nothing else names one. */
+  hostname: string
+  /**
+   * config.json's `node` in the node user's home (a node set up by hand, or by an earlier run): its
+   * id and door port, read by the node user's Bun; null: none, or no Bun there to read it.
+   */
+  nodeConfig: { id: string; port: number } | null
 }
 
 export interface NodeLookInput {
@@ -143,6 +150,8 @@ const LOOK_TOOLS = ['curl', 'git', 'unzip', 'tar', 'runuser', 'loginctl', 'usera
 const INCLUDES_AWK = `tolower($1) == "match" { exit } tolower($1) == "include" { for (i = 2; i <= NF; i++) if ($i == "${SSHD_DIR}/*.conf" || $i == "sshd_config.d/*.conf") f = 1 } END { exit !f }`
 /** A program's version from its --version line. */
 const VER_AWK = 'match($0, /[0-9]+\\.[0-9]+\\.[0-9]+/) { print substr($0, RSTART, RLENGTH); exit }'
+/** config.json's `node`, read by the node user's Bun from stdin: `@@node-config <id> <port>`, nothing when there is none. */
+const NODE_CONFIG_JS = `let c;try{c=JSON.parse(require("fs").readFileSync(0,"utf8"))}catch{process.exit(0)}const n=c&&typeof c==="object"?c.node:null;if(n&&typeof n==="object"&&typeof n.id==="string"&&/^[a-z0-9][a-z0-9-]{0,31}$/.test(n.id))console.log("@@node-config "+n.id+" "+(Number.isInteger(n.port)?n.port:${NODE_PORT}))`
 /** `ss -Htlnp`: one `@@listen <port> <program>` a line. */
 const LISTEN_AWK =
   '{ a = $4; sub(/.*:/, "", a); n = "?"; if (match($0, /users:[(][(]"[^"]*"/)) n = substr($0, RSTART + 9, RLENGTH - 10); print "@@listen " a " " n }'
@@ -180,6 +189,7 @@ export function nodeLookScript(i: NodeLookInput): string {
     // biome-ignore lint/suspicious/noTemplateCurlyInString: the shell's own ${…}
     'if [ -r /etc/os-release ]; then ( . /etc/os-release; echo "@@os ${ID:-} ${VERSION_ID:-}"; echo "@@pretty ${PRETTY_NAME:-}" ); fi',
     'echo "@@arch $(uname -m)"',
+    'echo "@@hostname $(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null)"',
     'echo "@@cpus $(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)"',
     `awk '/^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2 } /^SwapTotal:/ { s = $2 } END { printf "@@mem %d %d %d\\n", t / 1024, a / 1024, s / 1024 }' /proc/meminfo`,
     `echo "@@home-free $(df -Pk ${q(NODE_HOME.slice(0, NODE_HOME.lastIndexOf('/')))} 2>/dev/null | awk 'NR == 2 { print int($4 / 1024) }')"`,
@@ -208,6 +218,8 @@ export function nodeLookScript(i: NodeLookInput): string {
     tool(BUN_BIN, 'bun'),
     tool(HERDR_BIN, 'herdr'),
     tool(CLAUDE_BIN, 'claude'),
+    // a node already there, set up by hand or by an earlier run: its id and port, read as its user
+    `if [ "$(id -u)" = 0 ] && [ -n "$uid" ] && [ -x ${q(BUN_BIN)} ] && runuser -u ${q(NODE_USER)} -- test -f ${q(CONFIG_PATH)}; then runuser -u ${q(NODE_USER)} -- cat ${q(CONFIG_PATH)} 2>/dev/null | runuser -u ${q(NODE_USER)} -- ${q(BUN_BIN)} -e ${q(NODE_CONFIG_JS)} 2>/dev/null | head -n 1; fi`,
     `if b=$(command -v bun) && [ "$(stat -c %u "$b" 2>/dev/null)" = 0 ]; then echo "@@server-bun $("$b" --version 2>/dev/null | awk ${q(VER_AWK)}) $b"; fi`,
     'echo "@@end"',
     '',
@@ -264,6 +276,9 @@ export function readNodeLook(lines: readonly string[]): NodeFacts | null {
           return { port: Number(port), name }
         })
         .filter(x => Number.isInteger(x.port) && x.port > 0)
+  const [nodeId = '', nodePort = ''] = (said('node-config') ?? '').trim().split(/\s+/)
+  const nodeConfig =
+    DEVICE_ID.test(nodeId) && /^\d{1,5}$/.test(nodePort) ? { id: nodeId, port: Number(nodePort) } : null
   const sb = said('server-bun')?.trim().split(' ')
   const serverBun =
     sb && sb.length === 2 && VERSION.test(sb[0] as string) && isPlainPath(sb[1] as string)
@@ -300,6 +315,8 @@ export function readNodeLook(lines: readonly string[]): NodeFacts | null {
     herdr: version('herdr'),
     claude: version('claude'),
     serverBun,
+    hostname: (said('hostname') ?? '').trim().slice(0, 253),
+    nodeConfig,
   }
 }
 
@@ -856,8 +873,9 @@ function applySteps(f: NodeFacts, w: NodeWanted, waitS: number): NodeStep[] {
         `putAs ${q(UNIT_PATH)} 644 < "$W/unit.want"`,
         'asNode systemctl --user daemon-reload',
         'asNode systemctl --user enable herdr.service',
-        // a unit that changed under a running herdr restarts it; else it starts, or stays as it runs
-        'if [ -f "$W/unit.old" ] && ! cmp -s "$W/unit.old" "$W/unit.want"; then asNode systemctl --user restart herdr.service; else asNode systemctl --user start herdr.service; fi',
+        // herdr that runs is never restarted: that would end every session on the node. A unit that
+        // changed under it is taken at herdr's next start; one that does not run is started.
+        'if asNode systemctl --user is-active --quiet herdr.service; then if [ -f "$W/unit.old" ] && ! cmp -s "$W/unit.old" "$W/unit.want"; then echo "@@warn herdr runs on as it was started: the new unit takes effect at its next start"; fi; else asNode systemctl --user start herdr.service; fi',
       ],
       check: ['asNode systemctl --user is-active --quiet herdr.service'],
       undo: [

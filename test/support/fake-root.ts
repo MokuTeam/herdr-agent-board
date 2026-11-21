@@ -25,6 +25,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { prepScript, rootSpelling } from './fake-root-prep.ts'
 
 /** The scripts run on the server's /bin/sh (dash on Debian and Ubuntu): dash where it is, else a POSIX sh. */
 export const sh = Bun.which('dash') ?? Bun.which('sh')
@@ -85,8 +86,19 @@ for a in "$@"; do
 done
 eval exec /usr/bin/install $args
 `,
+  // the node user's herdr runs once started (start, restart, enable --now) until stopped (stop, disable --now)
   systemctl: `#!/bin/sh
-echo "systemctl $*" >> "$FAKE/state/log"; exit \${SYSTEMCTL_RC:-0}
+echo "systemctl $*" >> "$FAKE/state/log"
+rc=\${SYSTEMCTL_RC:-0}
+case " $* " in
+  *" --user "*)
+    case " $* " in
+      *" is-active "*) if [ -f "$FAKE/state/user-active" ]; then exit 0; else exit 3; fi ;;
+      *" disable --now "*|*" stop "*) rm -f "$FAKE/state/user-active" ;;
+      *" start "*|*" restart "*|*" enable --now "*) if [ "$rc" = 0 ]; then : > "$FAKE/state/user-active"; fi ;;
+    esac ;;
+esac
+exit $rc
 `,
   // the node's install (core/node-plan.ts): lingering by a file and the user's runtime folder
   loginctl: `#!/bin/sh
@@ -123,6 +135,10 @@ case $url in
   http://127.0.0.1:*/api/hello) if [ -f "$FAKE/state/hello" ]; then cat "$FAKE/state/hello"; else echo "curl: (7) Failed to connect" >&2; exit 7; fi ;;
   *) echo "curl: (6) Could not resolve host" >&2; exit 6 ;;
 esac
+`,
+  // the server's own name, for the node's id (core/node-plan.ts Look)
+  hostname: `#!/bin/sh
+echo "\${FAKE_HOSTNAME:-server-1}"
 `,
   ss: `#!/bin/sh
 if [ -f "$FAKE/state/listen" ]; then cat "$FAKE/state/listen"; fi
@@ -194,8 +210,15 @@ export interface FakeRoot {
   R: string
   /** A root script rewritten into this root, run as sshd's admin would run it; its output lines and code. */
   run(script: string, env?: Record<string, string>): { lines: string[]; code: number | null; err: string }
-  /** The same without blocking, so runs in separate roots go on side by side (sh is slow to start processes on Windows). */
-  runAsync(script: string, env?: Record<string, string>): Promise<{ lines: string[]; code: number | null; err: string }>
+  /**
+   * The same without blocking, so runs in separate roots go on side by side (sh is slow to start
+   * processes on Windows); `input` on its stdin (none: nothing to read).
+   */
+  runAsync(
+    script: string,
+    env?: Record<string, string>,
+    input?: Uint8Array,
+  ): Promise<{ lines: string[]; code: number | null; err: string }>
   /** The same, its output read by a connection that goes after `after` lines (an admin's ssh that dropped). */
   runCut(script: string, after: number, env?: Record<string, string>): Promise<number | null>
   /** Every file under the root's etc/, with its contents: what a run left there. */
@@ -223,7 +246,7 @@ export function fakeRoot(mode: 'include' | 'plain', opts: { node?: boolean } = {
   const dir = mkdtempSync(join(tmpdir(), 'board-fake-root-'))
   onTestFinished(() => rmSync(dir, { recursive: true, force: true }))
   // the scripts' own spelling of the root: /c/Users/… on Windows (sh's PATH splits at the colon of C:/)
-  const R = dir.replaceAll('\\', '/').replace(/^([A-Za-z]):\//, (_, d: string) => `/${d.toLowerCase()}/`)
+  const R = rootSpelling(dir)
   for (const d of ['bin', 'state', 'etc/ssh', 'var/lib', 'run']) mkdirSync(join(dir, d), { recursive: true })
   writeFileSync(join(dir, 'state', 'log'), '')
   writeFileSync(join(dir, 'state', 'passwd'), 'admin:x:1000:1000:Admin:/home/admin:/bin/bash\n')
@@ -255,19 +278,7 @@ export function fakeRoot(mode: 'include' | 'plain', opts: { node?: boolean } = {
     writeFileSync(join(dir, 'etc', 'ssh', 'sshd_config'), STOCK_INCLUDE(R))
     writeFileSync(join(dir, 'etc', 'ssh', 'sshd_config.d', '50-cloud-init.conf'), 'PasswordAuthentication yes\n')
   } else writeFileSync(join(dir, 'etc', 'ssh', 'sshd_config'), STOCK_PLAIN)
-  const prep = (script: string): string =>
-    script
-      .replaceAll('/etc/', `${R}/etc/`)
-      .replaceAll('/var/lib/agent-board-backup', `${R}/var/lib/agent-board-backup`)
-      .replaceAll('/run/sshd', `${R}/run/sshd`)
-      .replaceAll('/home/agent-board', `${R}/home/agent-board`)
-      .replaceAll('/var/lib/systemd/', `${R}/var/lib/systemd/`)
-      .replaceAll('/run/systemd/', `${R}/run/systemd/`)
-      .replaceAll('/run/user/', `${R}/run/user/`)
-      .replaceAll('/proc/meminfo', `${R}/proc/meminfo`)
-      .replaceAll('/var/tmp/', `${R}/var/tmp/`)
-      .replaceAll('/run/agent-board-node.lock', `${R}/run/agent-board-node.lock`)
-      .replace(/^PATH=\/usr\/local\/sbin.*export PATH$/gm, `PATH=${R}/bin:/usr/bin:/bin; export PATH`)
+  const prep = (script: string): string => prepScript(R, script)
   let n = 0
   const file = (script: string): string => {
     const f = join(dir, `script-${++n}.sh`)
@@ -296,13 +307,20 @@ export function fakeRoot(mode: 'include' | 'plain', opts: { node?: boolean } = {
       const r = spawnSync(sh as string, [file(script)], { env: env(extra), encoding: 'utf8' })
       return { lines: r.stdout.split(/\r?\n/), code: r.status, err: r.stderr }
     },
-    runAsync(script, extra = {}) {
+    runAsync(script, extra = {}, input) {
       return new Promise(resolve => {
-        const child = spawn(sh as string, [file(script)], { env: env(extra), stdio: ['ignore', 'pipe', 'pipe'] })
+        const child = spawn(sh as string, [file(script)], {
+          env: env(extra),
+          stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+        })
+        if (input) {
+          child.stdin?.on('error', () => {})
+          child.stdin?.end(Buffer.from(input))
+        }
         const out: Buffer[] = []
         const err: Buffer[] = []
-        child.stdout.on('data', (chunk: Buffer) => void out.push(chunk))
-        child.stderr.on('data', (chunk: Buffer) => void err.push(chunk))
+        child.stdout?.on('data', (chunk: Buffer) => void out.push(chunk))
+        child.stderr?.on('data', (chunk: Buffer) => void err.push(chunk))
         child.on('error', e => resolve({ lines: [], code: null, err: String(e) }))
         child.on('close', code =>
           resolve({ lines: Buffer.concat(out).toString().split(/\r?\n/), code, err: Buffer.concat(err).toString() }),

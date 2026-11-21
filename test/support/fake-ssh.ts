@@ -42,7 +42,12 @@
 //               alsoPassword?: boolean },           after keyboard-interactive failed, the password method too
 //     fixture?: string,                             a folder: look-1 prints its round1.txt, look-2 its round2.txt
 //     run?: { lines: string[], dropAfter?: number } a launch prints these, cut after dropAfter (exit 255)
-//     wrong?: string[] }                            a wrong password's lines instead of the flavour's (a sudo in another language)
+//     wrong?: string[],                             a wrong password's lines instead of the flavour's (a sudo in another language)
+//     root?: { R: string, dir: string } }           "Add a server" (#509): the node's scripts (upload, look, apply, undo,
+//                                                   clean) run with sh on this fake root (fake-root.ts), their paths
+//                                                   rewritten into it (fake-root-prep.ts), a packed run unpacked, the
+//                                                   archive on stdin; their lines with the root's folder taken out
+//                                                   (FAKE_SH: the sh to run them with, else the PATH's)
 // No line for its server key in the quoted UserKnownHostsFile: `Host key verification failed.`, 255;
 // with StrictHostKeyChecking=accept-new the key is pinned then (another key for the host there:
 // refused). The login's password is asked as ssh 8.4+ asks it with SSH_ASKPASS_REQUIRE=force: the
@@ -62,6 +67,7 @@ import { createHmac } from 'node:crypto'
 import { appendFileSync, existsSync, readFileSync, writeFileSync, writeSync } from 'node:fs'
 import { connect, createServer } from 'node:net'
 import { dirname, join } from 'node:path'
+import { nodeKind, prepScript, unpackNodeRun } from './fake-root-prep.ts'
 
 type Mode = 'forward' | 'refuse' | 'publickey' | 'hostkey' | 'hang'
 type Admin = {
@@ -74,6 +80,7 @@ type Admin = {
   fixture?: string
   run?: { lines: string[]; dropAfter?: number }
   wrong?: string[]
+  root?: { R: string; dir: string }
 }
 type State = {
   keygen?: 'unprotected' | 'passphrase'
@@ -472,7 +479,9 @@ async function admin(): Promise<void> {
   const user = target.slice(0, target.indexOf('@'))
   if (a.publickey) await passwordLogin(a, target)
   // a stdin the board left open keeps this waiting, as it would keep sudo -S
-  const input = await Bun.stdin.text()
+  // as bytes: the node's plugin archive comes this way (#509)
+  const bytes = Buffer.from(await Bun.stdin.arrayBuffer())
+  const input = bytes.toString('utf8')
   const m =
     /^(env LC_ALL=C sudo -n -- |env LC_ALL=C sudo -S -p '' -- )?sh -c 'eval "\$\(echo ([A-Za-z0-9+/=]+) \| base64 -d\)"'$/.exec(
       args.at(-1) ?? '',
@@ -504,8 +513,15 @@ async function admin(): Promise<void> {
     out(...sudoSays.filter(Boolean).map(l => `@@sudo ${l}`), `@@flavor ${words.version}`)
     return end(0)
   }
+  const node = a.root ? nodeKind(script) : null
+  // the archive goes up, and its folder goes, as the admin: no sudo
+  const asAdmin = node === 'upload' || node === 'clean'
   const wanted =
-    mode === 'root' ? '' : mode === 'nopasswd' ? 'env LC_ALL=C sudo -n -- ' : "env LC_ALL=C sudo -S -p '' -- "
+    mode === 'root' || asAdmin
+      ? ''
+      : mode === 'nopasswd'
+        ? 'env LC_ALL=C sudo -n -- '
+        : "env LC_ALL=C sudo -S -p '' -- "
   if (prefix !== wanted) return unexpected()
   if (prefix.includes('sudo -S')) {
     if (logPath) appendFileSync(`${logPath}.stdin`, `${JSON.stringify(input)}\n`)
@@ -523,6 +539,7 @@ async function admin(): Promise<void> {
     }
     say(...words.right)
   }
+  if (node && a.root) return onRoot(a.root, node, script, bytes)
   const print = (name: string): void => {
     const path = join(a.fixture ?? '', name)
     if (existsSync(path)) writeAll(readFileSync(path, 'utf8'))
@@ -553,6 +570,28 @@ async function admin(): Promise<void> {
     default:
       return unexpected()
   }
+}
+
+/** A node script run on the fake root as its server would run it; its lines with the root's folder taken out. */
+function onRoot(root: { R: string; dir: string }, kind: string, script: string, input: Buffer): never {
+  const body = kind === 'apply' || kind === 'undo' ? unpackNodeRun(script) : script
+  if (body === null) {
+    say('fake: a node run that is not packed')
+    return end(2)
+  }
+  const file = join(root.dir, `ssh-${process.pid}-${Date.now()}.sh`)
+  writeFileSync(file, prepScript(root.R, body))
+  // FAKE_SH: the test's own sh (a sandbox's PATH reaches only Bun)
+  const r = Bun.spawnSync([process.env.FAKE_SH ?? Bun.which('dash') ?? Bun.which('sh') ?? 'sh', file], {
+    env: { ...process.env, FAKE: root.R, SUDO_USER: 'admin', REAL_BUN: process.env.REAL_BUN ?? 'bun' },
+    stdin: kind === 'upload' ? input : 'ignore',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  writeAll(r.stdout.toString().replaceAll(root.R, ''))
+  const err = r.stderr.toString()
+  if (err) writeSync(2, err.replaceAll(root.R, ''))
+  return end(r.exitCode ?? 255)
 }
 
 if (args.includes('-R')) await ssh()

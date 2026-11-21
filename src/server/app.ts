@@ -8,22 +8,25 @@
 
 import { randomBytes } from 'node:crypto'
 import { existsSync, type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
-import { editNodes, loadConfig, saveFoundProfiles } from '../adapters/config-file.ts'
+import { editNodes, editNodesAdding, loadConfig, saveFoundProfiles } from '../adapters/config-file.ts'
 import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
+import { archiveCommit, headCommit } from '../adapters/git.ts'
 import { workspaceList } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { createDeviceStore, createNodeStore, nodeDir, readLanesSeen, writeLanesSeen } from '../adapters/node-store.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
-import { knobMs, pace } from '../adapters/pacing.ts'
+import { knobMs, pace, pause } from '../adapters/pacing.ts'
 import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import {
   endLogins,
   endStraySsh,
+  generateKey,
   hostKeyFingerprint,
   hostKeyPinned,
   keyPath,
@@ -39,7 +42,7 @@ import {
 } from '../adapters/ssh.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
 import { messageGate } from '../core/message-gate.ts'
-import { fillThresholds, markRevoked, nodeConfig, nodesConfig } from '../core/nodes.ts'
+import { deviceIdFromHost, fillThresholds, markRevoked, nodeConfig, nodesConfig } from '../core/nodes.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payload.ts'
 import type { Observation } from '../core/presence.ts'
@@ -75,6 +78,7 @@ import { type BundleSync, createBundleSync } from '../services/nodes/bundle-sync
 import { createNodeLinks, linkTimes, type NodeLinks } from '../services/nodes/links.ts'
 import { createPlacer, type Placer } from '../services/nodes/placer.ts'
 import { createRevoker, type Revoker } from '../services/nodes/revoke.ts'
+import { createNodeSetup, type NodeSetup } from '../services/nodes/setup.ts'
 import { createUplinkRunner, type UplinkRunner } from '../services/nodes/uplink.ts'
 import { tellOwnerWatchers } from '../services/owner-watch.ts'
 import { createPresence } from '../services/presence.ts'
@@ -123,7 +127,7 @@ import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { moveRoute } from './routes/move.ts'
 import { nodeCallRoutes, nodeDoorRoutes } from './routes/node.ts'
 import { createNodeProxy, type NodeProxy } from './routes/node-proxy.ts'
-import { nodesRoutes } from './routes/nodes.ts'
+import { nodeSetupRoutes, nodesRoutes } from './routes/nodes.ts'
 import { pageLogRoute } from './routes/page-log.ts'
 import { presenceRoutes } from './routes/presence.ts'
 import { remoteRoutes } from './routes/remote.ts'
@@ -966,7 +970,9 @@ export async function startServer({
             ? localNodeRoutes
             : path === '/api/node/call' && localCallRoutes
               ? localCallRoutes
-              : routes
+              : path === '/api/nodes/setup'
+                ? localSetupRoutes
+                : routes
       return await dispatch(selected, req, url, path, guards, () => peerOf(srv, req))
     } catch (err) {
       // The path only: a query can carry the page's token.
@@ -1097,6 +1103,43 @@ export async function startServer({
   let bundleSync: BundleSync | null = null
   let uplinkRunner: UplinkRunner | null = null
   let nodeRevoker: Revoker | null = null
+  // "Add a server" (#509, services/nodes/setup.ts): the form's two routes on this listener alone,
+  // with or without `nodes`, as a board's first device makes it a master. The service is made the
+  // first time the form asks: a board that never opens it runs none of it.
+  let nodeSetup: NodeSetup | null = null
+  const setupSelfId = (): string => nodesConfig(cfg.nodes, hostname())?.id ?? deviceIdFromHost(hostname())
+  const localSetupRoutes = nodeSetupRoutes(
+    () =>
+      (nodeSetup ??= createNodeSetup({
+        cfg,
+        ssh: () => sshBin(),
+        sshVersion,
+        knownHosts: knownHostsReady,
+        hostKeyPinned,
+        hostKeyFingerprint,
+        spawn: spawnRemote,
+        store: createDeviceStore(),
+        // as `board nodes key` makes it: kept when it is there
+        linkKey: async (id, make) => {
+          const key = createDeviceStore().keyPath(id)
+          if (existsSync(key)) return publicKeyOf(key)
+          return make ? generateKey(`agent-board ${setupSelfId()} to ${id}`, key) : null
+        },
+        commit: () => headCommit(ROOT),
+        archive: commit => archiveCommit(ROOT, commit),
+        editNodes: editNodesAdding,
+        follow: linksFollow,
+        links: () => nodeLinks,
+        bundles: () => bundleSync,
+        hostName: () => hostname(),
+        onChange: () => {},
+        log,
+        now: () => Date.now(),
+        newId: setupId,
+        linkWaitMs: knobMs('BOARD_NODE_SETUP_LINK_MS', 120_000),
+        pause,
+      })),
+  )
   function linksFollow(): void {
     if (nodeLinks) {
       nodeLinks.configChanged()

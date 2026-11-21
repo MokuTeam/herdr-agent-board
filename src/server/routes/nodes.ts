@@ -21,6 +21,7 @@ import { FIELD_NAME, MAX_FIELDS, SINK_ID } from '../../core/secrets.ts'
 import type { BundleSync } from '../../services/nodes/bundle-sync.ts'
 import type { NodeLinks } from '../../services/nodes/links.ts'
 import type { Revoker } from '../../services/nodes/revoke.ts'
+import type { NodeSetup } from '../../services/nodes/setup.ts'
 import { auditForwarded } from '../../services/secrets.ts'
 import { json, type Route } from '../http.ts'
 
@@ -75,6 +76,43 @@ async function secretToDevice(links: NodeLinks, body: Record<string, unknown>, i
     ...(typeof a.target === 'string' && { target: a.target }),
     ...(typeof a.httpStatus === 'number' && { httpStatus: a.httpStatus }),
   })
+}
+
+/**
+ * "Add a server" (#509, services/nodes/setup.ts): the form's view, and Look, Apply, Continue, Undo
+ * and Cancel. app.ts picks these for /api/nodes/setup itself, on the local board only and with or
+ * without `nodes` (a board's first device makes it a master), so the route table every remote
+ * listener and a node's door serve is the same as before; `setup` is made the first time one of
+ * them is asked. Writes as the panel's own: X-Board and no other site's Origin.
+ */
+export function nodeSetupRoutes(setup: () => NodeSetup): Route[] {
+  return [
+    { method: 'GET', path: '/api/nodes/setup', handle: () => json(200, setup().view()) },
+    {
+      method: 'POST',
+      path: '/api/nodes/setup',
+      guard: ['board-header', 'origin'],
+      async handle(_req, ctx) {
+        const body = await ctx.body()
+        const s = setup()
+        const a =
+          body.op === 'look'
+            ? await s.look(body)
+            : body.op === 'apply'
+              ? await s.apply(body)
+              : body.op === 'finish'
+                ? await s.finish()
+                : body.op === 'undo-look'
+                  ? await s.undoLook(body)
+                  : body.op === 'undo'
+                    ? await s.undo(body)
+                    : body.op === 'cancel'
+                      ? s.cancel()
+                      : { status: 400, body: { ok: false, error: 'op' } }
+        return json(a.status, a.body)
+      },
+    },
+  ]
 }
 
 /** How long a given secret waits for the node's answer. */
