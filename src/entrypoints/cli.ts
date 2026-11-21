@@ -128,6 +128,7 @@ import {
 import { changeTodos, readCard, writeCard } from '../adapters/cards.ts'
 import { createClaudeHome, cwdOf } from '../adapters/claude-home.ts'
 import { configFile, editCategories, loadConfig, setRemoteOn, setTunnelOn } from '../adapters/config-file.ts'
+import { cygpath, takeGitBashArgs } from '../adapters/git-bash.ts'
 import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { findPiSession } from '../adapters/pi-home.ts'
@@ -144,6 +145,7 @@ import {
 } from '../adapters/schedule-store.ts'
 import { peekPiSleepers } from '../adapters/wake-files.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
+import { withBoardPaths } from '../core/board-paths.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { CODEX_AGENT } from '../core/codex.ts'
 import { translator } from '../core/i18n/translator.ts'
@@ -212,8 +214,11 @@ function usageOf(command: string): string {
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
 // Everything after the first `--` is the command's own words, as they are (#404): neither the
-// board's flags below nor --help are read there.
-const argv = process.argv.slice(2)
+// board's flags below nor --help are read there. Started by the sh shim under Git Bash
+// (core/install-plan.ts GIT_BASH_PATHS, #532), the arguments came as typed, so a text that starts
+// with / stays itself; the file and folder words are converted here (core/board-paths.ts), as Git
+// Bash did, and neither of the shim's variables goes on to what the board starts.
+const argv = takeGitBashArgs() ? withBoardPaths(process.argv.slice(2), cygpath) : process.argv.slice(2)
 const dashes = argv.indexOf('--')
 const args = dashes < 0 ? argv : argv.slice(0, dashes)
 let target: string | undefined

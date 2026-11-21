@@ -234,23 +234,24 @@ describe('planShims', () => {
       ].join('\r\n')
     const sh = (script: string, before = '') =>
       `#!/bin/sh\n# agent-board\n${before}exec "C:/Program Files/Bun/bun.exe" "C:/Users/Имя/AppData/Roaming/herdr/plugins/agent-board/src/entrypoints/${script}" "$@"\n`
-    // Under Git Bash spawn-agent gets its arguments as typed (#490); board as before.
+    // Under Git Bash spawn-agent and board get their arguments as typed (#490, #532).
     const gitBash =
-      '# Git Bash: arguments as typed; spawn-agent converts its folder and file options (#490).\n' +
+      '# Git Bash: arguments as typed; the command converts its folder and file options (#490, #532).\n' +
       // biome-ignore lint/suspicious/noTemplateCurlyInString: the shell's own ${…}
       'if [ -n "$MSYSTEM" ] && [ -z "${MSYS_NO_PATHCONV+x}${MSYS2_ARG_CONV_EXCL+x}" ]; then export MSYS2_ARG_CONV_EXCL=\'*\' AGENT_BOARD_PATHCONV=1; fi\n'
     const shims = planShims(paths)
     assert.deepEqual(shims, {
-      board: sh('cli.ts'),
+      board: sh('cli.ts', gitBash),
       'board.cmd': cmd('cli.ts'),
       'spawn-agent': sh('spawn-agent.ts', gitBash),
       'spawn-agent.cmd': cmd('spawn-agent.ts'),
     })
     // install and doctor still read which script it runs.
     assert.equal(shimTarget(shims['spawn-agent']), `${plugin.replace(/\\/g, '/')}/src/entrypoints/spawn-agent.ts`)
+    assert.equal(shimTarget(shims.board), `${plugin.replace(/\\/g, '/')}/src/entrypoints/cli.ts`)
   })
 
-  test('on macOS and Linux: POSIX paths as they are, spawn-agent with no Git Bash lines', () => {
+  test('on macOS and Linux: POSIX paths as they are, board and spawn-agent with no Git Bash lines', () => {
     for (const platform of ['darwin', 'linux'] as const) {
       const shims = planShims({
         bun: '/Users/me/.bun/bin/bun',

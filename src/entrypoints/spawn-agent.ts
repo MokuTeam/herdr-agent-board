@@ -36,30 +36,17 @@
 // (services/launch/launcher.ts).
 import { homedir } from 'node:os'
 import { loadConfig } from '../adapters/config-file.ts'
+import { cygpath, takeGitBashArgs } from '../adapters/git-bash.ts'
 import { loadProfiles } from '../adapters/profiles.ts'
 import { piCommand } from '../core/launch/agents.ts'
-import { claudeCommand, drivePath, HELP, parseArgs, withConvertedPaths } from '../core/launch/spawn-args.ts'
+import { claudeCommand, HELP, parseArgs, withConvertedPaths } from '../core/launch/spawn-args.ts'
 import { spawnAgent } from '../services/launch/spawn-agent.ts'
 
 // Started by the sh shim under Git Bash (core/install-plan.ts GIT_BASH_PATHS, #490): the arguments
 // came as typed, so a brief or a name that starts with / stays itself, and the folder and file
 // options are converted here with Git's cygpath, as Git Bash would have. Neither variable goes on
-// to herdr or what it starts.
-const gitBash = process.env.AGENT_BOARD_PATHCONV === '1'
-if (gitBash) {
-  delete process.env.AGENT_BOARD_PATHCONV
-  delete process.env.MSYS2_ARG_CONV_EXCL
-}
-
-/** Git Bash's Windows form of these paths (cygpath -m); without cygpath, at least its drive paths. */
-function cygpath(paths: string[]): string[] {
-  try {
-    const r = Bun.spawnSync(['cygpath', '-m', '--', ...paths], { stderr: 'ignore' })
-    const out = r.stdout.toString().split(/\r?\n/).slice(0, paths.length)
-    if (r.exitCode === 0 && out.length === paths.length) return out
-  } catch {}
-  return paths.map(drivePath)
-}
+// to herdr or what it starts (adapters/git-bash.ts).
+const gitBash = takeGitBashArgs()
 
 try {
   const parsed = parseArgs(process.argv.slice(2))
