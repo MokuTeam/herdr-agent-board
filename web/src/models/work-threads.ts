@@ -212,6 +212,7 @@ export type FeedItem =
         | 'kept'
         | 'closed'
         | 'fields'
+        | 'state'
         | 'shared'
         | 'unshared'
         | 'said'
@@ -292,13 +293,29 @@ export function feedOf(head: ThreadHead, entries: readonly ThreadEntryView[], op
                 ? 'kept'
                 : set.status !== undefined && changed
                   ? 'status'
-                  : !words && !e.files?.length && !e.links?.length && Object.keys(set).length
-                    ? 'fields'
-                    : null
+                  : !words &&
+                      !e.files?.length &&
+                      !e.links?.length &&
+                      set.state !== undefined &&
+                      Object.keys(set).length === 1
+                    ? 'state'
+                    : !words && !e.files?.length && !e.links?.length && Object.keys(set).length
+                      ? 'fields'
+                      : null
     if (did) out.push({ kind: 'status', entry: e, did, to: after.status })
     if (words || e.files?.length || e.links?.length) out.push({ kind: 'message', entry: e })
   }
   return out
+}
+
+/** A case's state in the feed (#488): its first three lines on one, cut at 200 characters. */
+export function stateLines(text: string): string {
+  const lines = text
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean)
+  const shown = lines.slice(0, 3).join(' / ') + (lines.length > 3 ? ' / …' : '')
+  return shown.length > 200 ? `${shown.slice(0, 199)}…` : shown
 }
 
 /** Who wrote an entry, for its mark: the owner's own words are "out", everyone else's "in". */

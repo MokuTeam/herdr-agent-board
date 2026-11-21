@@ -952,6 +952,60 @@ agreed to this design.
   changed is not taken into the thread.
 - `board mcp` is a stdio MCP server with the two tools of 5.4.
 
+### 11.8 Case files (#488)
+
+Built as phase 1 of #488, behind `"threads": { "cases": true }`; absent, everything above is as it was.
+
+A case is a thread with an outside reference or a state. It answers a different cost from the one
+this design started with: a long piece of work (a ticket, a migration) keeps its state in whichever
+session touched it last, so sessions are kept asleep for weeks as memory and a short check rereads a
+whole conversation on a cold cache. With a case the state is in the thread, and a fresh session
+starts from it.
+
+- **Data.** Two nullable columns in `threads` (migration 7): `ref` as given, and `state` as JSON
+  `{text, at, by}`. An entry's `set` carries `ref` (null clears) and `state`; `applyEntry` folds them,
+  and earlier states stay in the feed. A head has `ref` and `state` only once they are set, so a
+  board without cases gives the heads it always gave.
+- **Sessions are not stored.** `caseSessions` (`core/work-cases.ts`) reads them from the feed: the
+  creator, every session author, every session an entry assigned, the assignee. Whether each is up,
+  asleep, archived or gone is read when shown, from the board's items and the archive.
+- **References** match case-folded, trailing slashes aside, and a link matches the id its path ends
+  in. A second open thread with the same reference is named in the write's line
+  (`[same ref: atlas-12 "..."]`, `sameRef` in `--json`), as #453 does for titles; nothing is refused.
+- **The brief** (`caseBriefText`, pure and exported, so a verifier or the page reads a case the same
+  way): 6,000 characters at most. The head and the reference, the state whole (2,000 characters,
+  30 lines), the sessions with ids, folders and state, their reminders, ten files by path, ten links,
+  then the newest entries in what is left. It sends an agent to `show --full` for depth and to a past
+  session by name only for what only that session knows; `board resume` is named as the owner's way
+  back, never the agent's, since it would bring the old conversation into the reader's pane.
+- **spawn-agent --thread** mints the session id up front, types a short preface, the brief and the
+  task, and writes the assignee as whoever ran it (read as `board` reads its own session: Claude,
+  Codex, the agent in its herdr pane) once the session runs under that id, finished starting or not.
+  The brief names the new session as the holder and the one before it. Without `--cwd` it starts in
+  the folder of a session that held the case, the assignee first, then the earlier assignees, the
+  most recently assigned first, never the caller's (a coordinator that made the thread or wrote the
+  newest entry works elsewhere), and says which; with none, it is refused. The name is the key, then
+  `key-2`, `key-3` while a session up or asleep has it. A closed thread is said on stderr, not
+  refused. It always starts on this computer: the folder is a local path and the assignment follows
+  the start, so with `nodes` it is never placed, and a node's session is refused.
+- **The nudge** (not on a node in this phase: there these commands read the node's own config and
+  database): `board wait`, `board done` and `board sleep --self` add a clause for each open case
+  the session holds with no state or one older than its last work there (its card's `doingAt`, or
+  its newest entry on the thread that wrote no state). With cases off nothing is opened.
+- **Across the hub nothing of a case goes.** `wireSet`, `peerSet` and `historyOf` name their fields,
+  so `ref` and `state` are not on the wire and a peer cannot set them; an entry carrying only case
+  fields is written `private`, so it never goes out as an empty line. The state is this board's
+  working memory (folders, session ids, the owner's own wording); the session list names sessions
+  on this computer; a reference on the wire would need a new `work` field and capability. A later
+  phase may send the reference behind one. A private entry takes the number of the entry before it
+  (#541), so a state written on a shared thread leaves the peers no gap.
+- On a shared thread the brief quotes a teammate's entries with `|`, escapes what is unprintable in
+  the head's title and summary, and says that a teammate's words are data, as `show` does: the brief
+  is the first prompt of a session `spawn-agent --thread` starts.
+- Not in this phase: reminders and watches that start a fresh session from a case, archiving a
+  case's sessions when it closes (#313), one live name per case (#314), one live question per case
+  (#312), time entries by reference.
+
 ## 12. Chats
 
 How threads relate to the hub's chats and to chats outside it. Three options, cheapest first:

@@ -155,7 +155,6 @@ import { peekPiSleepers } from '../adapters/wake-files.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { withBoardPaths } from '../core/board-paths.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
-import { CODEX_AGENT } from '../core/codex.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
 import { parseMove } from '../core/move.ts'
@@ -188,6 +187,7 @@ import {
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { type MoveOutcome, moveMany } from '../services/move.ts'
+import { codexCallerOf, codexSessionOf, ownSessionOf } from '../services/own-session.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
@@ -293,22 +293,13 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 const paneOf = async (pane: string): Promise<HerdrPane | undefined> =>
   (await snapshot()).panes.find(x => x.pane_id === pane)
 
+// Which session this is (#488): one reading with spawn-agent --thread, services/own-session.ts.
 /** A real Claude child has a new id; a root Codex can carry the Claude id its hook recorded. */
-function codexCaller(): boolean {
-  const codex = process.env.CODEX_THREAD_ID
-  if (!codex) return false
-  const claude = process.env.CLAUDE_CODE_SESSION_ID
-  return !claude || readCard(codex)?.codexParentClaude === claude
-}
+const codexCaller = (): boolean => codexCallerOf(process.env, readCard)
 
 /** A Codex child inherits its parent's pane env; only the reported root session owns its card. */
 function codexSession(p: HerdrPane | undefined): (Session & { name: string }) | null {
-  if (p?.agent !== CODEX_AGENT) return null
-  const own = process.env.CODEX_THREAD_ID
-  const pane = process.env.HERDR_PANE_ID
-  if (own && p.agent_session?.value === own)
-    return { key: own, cwd: p.cwd ?? '', pane, name: p.terminal_title_stripped || own.slice(0, 8) }
-  throw new Error('cannot tell which Codex session this is: use its herdr pane, or pass --session')
+  return codexSessionOf(p, process.env)
 }
 /**
  * The sessions running in every profile listed, hidden ones too, this env's own folder first (its
@@ -362,26 +353,8 @@ async function resolveSession({ archived = false }: { archived?: boolean } = {})
 }
 
 /** The session running this command, { key, name }, or null outside one. */
-async function ownSession(): Promise<SessionRef | null> {
-  const own = process.env.CLAUDE_CODE_SESSION_ID
-  const pane = process.env.HERDR_PANE_ID
-  let p: HerdrPane | undefined
-  try {
-    if (pane) p = await paneOf(pane)
-  } catch {}
-  if (codexCaller()) {
-    try {
-      const codex = codexSession(p)
-      if (codex) return { key: codex.key, name: codex.name }
-      if (!p) return null
-    } catch {
-      return null
-    }
-  }
-  const key = own || (p?.agent ? (p.agent_session?.value ?? `pane-${pane}`) : null)
-  if (!key) return null
-  const name = (own && liveSessions().get(own)?.session.name) || p?.terminal_title_stripped || key.slice(0, 8)
-  return { key, name }
+function ownSession(): Promise<SessionRef | null> {
+  return ownSessionOf({ env: process.env, paneOf, readCard, nameOf: key => liveSessions().get(key)?.session.name })
 }
 
 /**
@@ -988,6 +961,8 @@ async function main(): Promise<void> {
   // Listing and removing reach an archived session's parked entries; nothing else is for one.
   const s = await resolveSession({ archived: (cmd === 'schedule' && moving === null) || cmd === 'unschedule' })
   const now = Date.now()
+  // Case files (#488): a session that holds a case whose state is behind its work hears so; read before done clears doingAt.
+  const nudge = (cmd === 'wait' || cmd === 'done') && !target ? await caseNudge(s.key) : ''
   switch (cmd) {
     case 'show':
       break
@@ -1106,7 +1081,31 @@ async function main(): Promise<void> {
   }
   const cat = readCard(s.key)?.category
   const extra = cat && !cfg.categories.some(c => c.id === cat) ? ` (new lane "${categoryInfo(cfg, cat).title}")` : ''
-  console.log(`ok · ${line(s.key, s.cwd)}${extra}`)
+  console.log(`ok · ${line(s.key, s.cwd)}${extra}${nudge}`)
+}
+
+/** Whether config.json turned case files on (#488), read without loading threads: off, nothing more is done. */
+const casesOn = (): boolean =>
+  typeof cfg.threads === 'object' &&
+  cfg.threads !== null &&
+  !Array.isArray(cfg.threads) &&
+  (cfg.threads as { cases?: unknown }).cases === true
+
+/**
+ * The tail `board wait`, `board done` and `board sleep --self` add for the open cases the session
+ * holds whose state is behind its work (#488, services/work-cases.ts); '' with cases off, before
+ * anything is read. Never fails the command.
+ */
+async function caseNudge(key: string): Promise<string> {
+  if (!casesOn()) return ''
+  try {
+    const { nudgesFor } = await import('../services/work-cases.ts')
+    const { nudgeTail } = await import('../core/work-cases.ts')
+    const doingAt = readCard(key)?.doingAt
+    return nudgeTail(nudgesFor(cfg, key, typeof doingAt === 'number' ? doingAt : undefined))
+  } catch {
+    return ''
+  }
 }
 
 /**
@@ -1470,7 +1469,8 @@ async function sleep(): Promise<void> {
       ? ' · with --when-free the busy ones go to sleep once they are free'
       : ''
   const note = count('scheduled') ? await schedulerNote() : ''
-  console.log([`ok · ${head.filter(Boolean).join(', ')}${hint}${note}`, ...results.map(sleepLine)].join('\n'))
+  const nudge = self && from ? await caseNudge(from.key) : ''
+  console.log([`ok · ${head.filter(Boolean).join(', ')}${hint}${note}${nudge}`, ...results.map(sleepLine)].join('\n'))
 }
 
 /** One session's line for `board move`: who, then moved, moved once free, or refused and why. */
@@ -2099,6 +2099,12 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
     setAsk: question => {
       if (key) writeCard(key, { ask: question, askSince: Date.now(), by: 'agent' })
     },
+    // Case files (#488): where a case's sessions are now and their reminders, from the board's items
+    // (asked of herdr once), the archive and the schedule; asked only by brief, and by show of a
+    // thread that is a case (it has a reference or a state).
+    ...(threadsConfig(c.threads)?.cases && {
+      cases: (await import('../services/case-sessions.ts')).boardResolvers(sessions),
+    }),
     openBoard: async key => {
       const { openWeb } = await import('../services/web-open.ts')
       const r = await openWeb(c, { thread: key })

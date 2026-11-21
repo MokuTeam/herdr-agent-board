@@ -74,3 +74,16 @@ test('the page bundle carries no node:crypto shim and nothing of src/core/team.t
   expect(shim).toEqual([])
   expect(bundle.js()).not.toContain('crypto-browserify')
 })
+
+// Case files (#488): the thread pane cuts a node's session key (core/work-cases.ts shortKey) with
+// core/node-key.ts, a leaf: core/nodes.ts would bring core/team.ts and a crypto shim into every page.
+test('the page carries no crypto shim: no node:crypto, core/team.ts or core/nodes.ts among its sources', async () => {
+  const bundle = await createWebBundle({
+    root: ROOT,
+    entry: join(ROOT, 'web', 'src', 'main.tsx'),
+    log: () => {},
+  })
+  const { sources } = JSON.parse(bundle.map()) as { sources: string[] }
+  expect(sources.filter(s => /^node:crypto$|src\/core\/team\.ts$|src\/core\/nodes\.ts$/.test(s))).toEqual([])
+  expect(sources.some(s => s.endsWith('src/core/node-key.ts'))).toBe(true)
+})

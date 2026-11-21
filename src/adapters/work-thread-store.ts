@@ -10,6 +10,7 @@ import { foldShared } from '../core/work-share.ts'
 import {
   afterN,
   applyEntry,
+  type CaseState,
   type EntryOut,
   type EntrySet,
   type EntryType,
@@ -68,6 +69,8 @@ interface HeadRow {
   done_at: number | null
   rev: number
   origin: string | null
+  ref: string | null
+  state: string | null
 }
 
 interface EntryRow {
@@ -89,7 +92,7 @@ interface EntryRow {
 }
 
 const HEAD_COLUMNS =
-  'id, key, lane, title, summary, status, waiting_on, proposed, assignee, parent, scope, created_by, created_at, updated_at, done_at, rev, origin'
+  'id, key, lane, title, summary, status, waiting_on, proposed, assignee, parent, scope, created_by, created_at, updated_at, done_at, rev, origin, ref, state'
 const ENTRY_COLUMNS = 'id, thread, n, seq, at, author, type, text, fields, links, files, reply_to, private, closed, out'
 
 const parse = (s: string | null): unknown => {
@@ -159,7 +162,17 @@ function headOf(r: HeadRow): ThreadHead {
     doneAt: r.done_at,
     rev: r.rev,
     ...(r.origin !== null && { origin: parse(r.origin) }),
+    // Case files (#488): only once set, so the heads of a board without them are as they were.
+    ...(r.ref !== null && r.ref !== '' && { ref: r.ref }),
+    ...(stateOf(r.state) && { state: stateOf(r.state) as CaseState }),
   }
+}
+
+/** A case's state as stored (#488): JSON {text, at, by}; anything else is none. */
+function stateOf(s: string | null): CaseState | null {
+  const v = parse(s)
+  if (!isObj(v) || typeof v.text !== 'string' || typeof v.at !== 'number' || !isParty(v.by)) return null
+  return { text: v.text, at: v.at, by: v.by }
 }
 
 function entryOf(r: EntryRow): ThreadEntry {
@@ -272,6 +285,15 @@ export function listThreads(db: BoardDb, f: ListFilter = {}): ThreadHead[] {
   }
   const sql = `SELECT ${HEAD_COLUMNS} FROM threads${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY updated_at DESC, key`
   return (db.db.query(sql).all(...params) as HeadRow[]).map(headOf)
+}
+
+/** The threads that carry an outside reference (#488), whatever their status; the caller matches them (core/work-cases.ts sameRef). */
+export function threadsWithRef(db: BoardDb): ThreadHead[] {
+  return (
+    db.db
+      .query(`SELECT ${HEAD_COLUMNS} FROM threads WHERE ref IS NOT NULL AND ref <> '' ORDER BY updated_at DESC, key`)
+      .all() as HeadRow[]
+  ).map(headOf)
 }
 
 /** The threads imported from one session's task board (#393), whatever their status. */
@@ -543,15 +565,17 @@ const saveHead = (tx: Tx, h: ThreadHead, fresh: boolean): void => {
     h.doneAt,
     h.rev,
     json(h.origin),
+    h.ref ?? null,
+    json(h.state),
   ]
   if (fresh)
     tx.db
-      .query(`INSERT INTO threads (${HEAD_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .query(`INSERT INTO threads (${HEAD_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(...values)
   else
     tx.db
       .query(
-        `UPDATE threads SET key = ?2, lane = ?3, title = ?4, summary = ?5, status = ?6, waiting_on = ?7, proposed = ?8, assignee = ?9, parent = ?10, scope = ?11, created_by = ?12, created_at = ?13, updated_at = ?14, done_at = ?15, rev = ?16, origin = ?17 WHERE id = ?1`,
+        `UPDATE threads SET key = ?2, lane = ?3, title = ?4, summary = ?5, status = ?6, waiting_on = ?7, proposed = ?8, assignee = ?9, parent = ?10, scope = ?11, created_by = ?12, created_at = ?13, updated_at = ?14, done_at = ?15, rev = ?16, origin = ?17, ref = ?18, state = ?19 WHERE id = ?1`,
       )
       .run(...values)
 }
@@ -600,6 +624,8 @@ export function createThread(
     text?: string
     /** Where an imported thread came from (3.2). */
     origin?: unknown
+    /** A case's outside reference (#488). */
+    ref?: string
   },
 ): { head: ThreadHead; entry: ThreadEntry } {
   const id = input.id ?? randomUUID()
@@ -630,6 +656,7 @@ export function createThread(
     ...(input.assignee && { assignee: input.assignee }),
     ...(input.parent && { parent: input.parent }),
     ...(input.summary && { summary: input.summary }),
+    ...(input.ref && { ref: input.ref }),
   }
   const head = applyEntry(empty, {
     id: '',

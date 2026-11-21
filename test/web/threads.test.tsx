@@ -22,6 +22,7 @@ import {
   keyParts,
   listenForThreadOpens,
   sectionsOf,
+  stateLines,
   threadInHash,
 } from '../../web/src/models/work-threads.ts'
 import { type Board, BoardContext } from '../../web/src/state/BoardProvider.tsx'
@@ -399,4 +400,31 @@ test('a thread opens from its link: the page opened for it, the address followed
     await Bun.sleep(20)
     win.uninstall()
   }
+})
+
+// Case files (#488): a state written with nothing else is a line in the feed with its first lines,
+// not "changed the head" with no words.
+test('a state-only entry in the feed: "wrote the state" and its first lines; a summary beside it stays', () => {
+  const view: ThreadView = {
+    head: row({ key: 'atlas-3', status: 'doing', assignee: mapper }),
+    children: [],
+    entries: [
+      entry(1, { author: master, type: 'system', set: { title: 'Map', status: 'doing', lane: 'atlas' } }),
+      entry(2, { author: mapper, set: { state: 'Mapped 217 rows.\nNext: prices.\nWaits on: anna\nMore.' } }),
+      entry(3, { author: mapper, set: { summary: 'mapped', state: 'Done mapping.' } }),
+    ],
+    earlier: 0,
+    ask: null,
+  }
+  const feed = feedOf(view.head, view.entries, null)
+  expect(feed.filter(f => f.kind === 'status').map(f => (f.kind === 'status' ? f.did : ''))).toEqual([
+    'created',
+    'state',
+    'fields',
+  ])
+  expect(stateLines('a\n\n b \nc\nd')).toBe('a / b / c / …')
+  expect(stateLines('x'.repeat(300))).toHaveLength(200)
+  const html = render(<ThreadPane view={view} onOpen={() => {}} onBack={() => {}} />, board(), threads())
+  expect(html).toContain('<b>atlas-mapper</b> wrote the state: Mapped 217 rows. / Next: prices. / Waits on: anna / …')
+  expect(html).toMatch(/<b>atlas-mapper<\/b> changed the head: (<[^>]+>)*mapped(<[^>]+>)* · Done mapping\./)
 })

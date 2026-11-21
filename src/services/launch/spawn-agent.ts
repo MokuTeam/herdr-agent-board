@@ -113,7 +113,7 @@ async function answerStartup(pane: string, cwd: string, home: string, claudeDirs
 }
 
 /** A pane as `herdr pane get` says: its agent, its status, its tab, the terminal it holds and its agent's session. */
-async function paneInfo(pane: string, timeoutMs?: number) {
+export async function paneInfo(pane: string, timeoutMs?: number) {
   const answer = await herdr(['pane', 'get', pane], timeoutMs)
   const p = isRecord(answer) ? answer.pane : null
   return {
@@ -268,6 +268,7 @@ export async function spawnAgent(
     home = homedir(),
     ticketNames = false,
     nodeEnv,
+    onAgent,
   }: {
     claude?: string[]
     pi?: string[]
@@ -279,6 +280,11 @@ export async function spawnAgent(
     ticketNames?: boolean
     /** On a node (#507): the variables of a profile's env file, for a new tab beside CLAUDE_CONFIG_DIR. */
     nodeEnv?: (profile: string) => Readonly<Record<string, string>> | null
+    /**
+     * Told once herdr reports an agent in `pane` (case files, #488): a session runs there from then
+     * on, whether or not it gets ready. A start command that never came up as one is never told.
+     */
+    onAgent?: (pane: string) => void
   } = {},
 ): Promise<SpawnResult> {
   const cwd = absoluteDir(o.cwd)
@@ -309,6 +315,11 @@ export async function spawnAgent(
     throw new Error(`launch.claude picks its own session (${program.join(' ')}), so it cannot resume ${o.resume}`)
   if (o.fork && choosesSession(program))
     throw new Error(`launch.claude picks its own session (${program.join(' ')}), so it cannot fork ${o.fork}`)
+  // Case files (#488): --thread makes the session the thread's assignee by the id it is given.
+  if (o.thread && choosesSession(program))
+    throw new Error(
+      `launch.claude picks its own session (${program.join(' ')}), so --thread cannot tell which session to give ${o.thread}`,
+    )
   // A fork is a new session: its id is the one given, else one of its own, so its card is known.
   // So is a start on a model of its own, whose card says so; not one whose line picks its session.
   const ownId = !!o.fork || (!!o.model && !o.resume && !choosesSession(program))
@@ -385,6 +396,7 @@ export async function spawnAgent(
   let naming: Naming = CLAUDE_NAMING
   let kind = 'claude'
   let session: string | null = null
+  let seen = false
   while (Date.now() < deadline) {
     await pause(1500)
     let p: Awaited<ReturnType<typeof paneInfo>>
@@ -397,6 +409,10 @@ export async function spawnAgent(
     }
     const own = namingOf(p.agent)
     if (!own || !p.agent) continue
+    if (!seen) {
+      seen = true
+      onAgent?.(pane)
+    }
     naming = own
     kind = p.agent
     session = p.session

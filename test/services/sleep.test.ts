@@ -496,3 +496,27 @@ test('a sleep is for its own session only, does not wait in the archive with it,
   )
   assert.equal(entryText(entry, t), 'Put to sleep once free')
 })
+
+// Case files (#488): board sleep --self adds the nudge board wait and board done add, for a case
+// the session holds with no state yet; with case files off its line is what it was.
+test('board sleep --self: the nudge for a case it holds with no state; with case files off, the line as it was', async () => {
+  const box = await sandbox()
+  const panes = [pane('p3', 'Lead', 'working')]
+  herdrWith(box, panes)
+  const wake = await fakeWake(box, panes)
+  config(box, { wakeUrl: wake.url, threads: { cases: true } })
+  const made = await agentCli(box, ['thread', 'new', '--lane', 'atlas', '--ref', 'ABC-12', '--to', 's-p3', 'Import'])
+  assert.match(made.out, /^ok · atlas-1 · doing/)
+  const lead = { CLAUDE_CODE_SESSION_ID: 's-p3', HERDR_PANE_ID: 'p3' }
+  const r = await agentCli(box, ['sleep', '--self'], lead)
+  assert.equal(r.code, 0, r.out)
+  const [first] = r.out.split('\n')
+  assert.match(
+    first ?? '',
+    / · atlas-1: no state yet: board thread post atlas-1 --state "<where it stands, what next, what it waits on>"$/,
+  )
+  config(box, { wakeUrl: wake.url, threads: true })
+  const plain = await agentCli(box, ['sleep', '--self'], lead)
+  assert.equal(plain.code, 0, plain.out)
+  assert.equal(plain.out.split('\n')[0], (first ?? '').replace(/ · atlas-1: no state yet: .*$/, ''))
+})
