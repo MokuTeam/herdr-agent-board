@@ -26,7 +26,8 @@ import { type Host, hostElements, listenLikeReact } from './support/react-events
 
 const VP = { w: 1600, h: 1000 }
 const NOW = Date.now()
-const SINCE = NOW - 3_600_000
+// An hour before NOW, on NOW's day: a run since an earlier day says the day too (tested below).
+const SINCE = Math.max(NOW - 3_600_000, new Date(NOW).setHours(0, 0, 0, 0))
 
 const RUNNING: WakeView = { on: true, state: 'running', since: SINCE, asleep: 4, port: 12421, downSince: null }
 const CRASHED: WakeView = {
@@ -56,12 +57,12 @@ const textOf = (n: Node): string => (n.kind === 'text' ? n.text : n.children.map
 const texts = (els: Element[]): string[] => els.map(textOf)
 
 /** The panel as drawn for a payload's wake (none: not in the payload). */
-function panelNodes(wake: WakeView | undefined, lang = 'en'): Node[] {
+function panelNodes(wake: WakeView | undefined, lang = 'en', now = NOW): Node[] {
   return renderInBoard(
     <PanelProvider viewport={() => VP}>
       <WakePanel open={false} onClose={() => {}} />
     </PanelProvider>,
-    board({ data: payload({ lang: lang === 'ru' ? 'ru' : 'en', ...(wake && { wake }) }) }),
+    board({ data: payload({ lang: lang === 'ru' ? 'ru' : 'en', ...(wake && { wake }) }), now }),
     lang,
   )
 }
@@ -148,6 +149,15 @@ describe('the panel as drawn', () => {
     expect(textOf(find([ru], el => hasClass(el, 'wake-state')))).toBe(
       `Работает с ${timeOf(SINCE, translator('ru'))}, 4 спят`,
     )
+  })
+
+  test('running since an earlier day: the state line says the day', () => {
+    const now = new Date(2025, 0, 10, 0, 30).getTime() // Friday 00:30, local time, weeks from the real clock
+    const since = new Date(2025, 0, 9, 23, 39).getTime() // Thursday 23:39
+    const line = (lang: string) =>
+      textOf(find([byId(panelNodes({ ...RUNNING, since }, lang, now), 'wake-sheet')], el => hasClass(el, 'wake-state')))
+    expect(line('en')).toBe(`Running since Thu ${timeOf(since, translator('en'))}, 4 asleep`)
+    expect(line('ru')).toBe(`Работает с чт ${timeOf(since, translator('ru'))}, 4 спят`)
   })
 
   test('off: the switch off and the sessions still asleep; not running: Start', () => {
