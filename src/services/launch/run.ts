@@ -43,6 +43,7 @@ import {
   worktreePath,
 } from '../../core/launch/names.ts'
 import { forkCard } from '../../core/links.ts'
+import { nodesConfig } from '../../core/nodes.ts'
 import { PI_AGENT } from '../../core/pi.ts'
 import type { LaunchPlace } from '../../core/placement.ts'
 import type { Item, LaunchFailure, LaunchState, LaunchStep } from '../../core/types.ts'
@@ -244,7 +245,12 @@ export function launchRunner({
         if (ws.pane) notePane(l, ws.pane, ws.terminal)
       }
     }
-    const launcher = launcherFor(deps.cfg.launch, { resume: !!l.resume, fork: !!l.fork })
+    // With `nodes` the board's own spawn-agent is marked as its child, so it never asks the board back (#505).
+    const launcher = launcherFor(deps.cfg.launch, {
+      resume: !!l.resume,
+      fork: !!l.fork,
+      ...(nodesConfig(deps.cfg.nodes) !== null && { mark: true }),
+    })
     const r = await launcher.start(l, events(l))
     // The agent herdr says came up once a dialog was answered: the board's spawn-agent stops at
     // one before it can say whether its start command started Claude or pi.

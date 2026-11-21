@@ -44,7 +44,7 @@ import {
 } from '../../core/launch/launcher-command.ts'
 import { modelArgs } from '../../core/launch/model.ts'
 import { slugName, ticketSlugName, uniqueSlug } from '../../core/launch/names.ts'
-import { choosesSession, claudeCommand } from '../../core/launch/spawn-args.ts'
+import { choosesSession, claudeCommand, LAUNCHER_CHILD } from '../../core/launch/spawn-args.ts'
 import { envRejected } from '../../core/profiles.ts'
 import type { LaunchFailure, LaunchSpec, LaunchStep } from '../../core/types.ts'
 import { takenNames } from './prompt.ts'
@@ -186,12 +186,12 @@ export function notePane(l: Pick<LaunchContext, 'configDir' | 'profile'>, pane: 
  */
 export function launcherFor(
   spec: LaunchSpec | undefined,
-  { resume = false, fork = false }: { resume?: boolean; fork?: boolean } = {},
+  { resume = false, fork = false, mark = false }: { resume?: boolean; fork?: boolean; mark?: boolean } = {},
 ): Launcher {
   const takes = (key: 'resume' | 'fork') => usesPlaceholder(spec?.command, key)
   if (spec?.command && (!resume || takes('resume')) && (!fork || takes('fork'))) return commandLauncher(spec)
   if (spec?.agent) return herdrLauncher(spec)
-  return spawnAgentLauncher(spec ?? {})
+  return spawnAgentLauncher(spec ?? {}, mark)
 }
 
 /** The agent herdr's launcher starts, with its arguments (the profile's own for Claude). */
@@ -348,8 +348,10 @@ const SPAWN_AGENT = join(ROOT, 'src', 'entrypoints', 'spawn-agent.ts')
  * the names, the first message.
  * A new workspace's first pane is used as it is (--pane), as herdr's path does, rather than a
  * second tab beside it. The new-session window words it as before the board had its own launcher.
+ * `mark` (config.json has `nodes`, #505): the child's env says it is the board's, so it never asks
+ * the board to start what it was given.
  */
-export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
+export function spawnAgentLauncher(spec: LaunchSpec, mark = false): Launcher {
   // How long spawn-agent waits for Claude to be ready.
   const readySec = Math.max(10, Number(spec.timeoutSec) || 120)
   return {
@@ -391,7 +393,8 @@ export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
         timeout: (readySec + 60) * 1000,
         sessionId,
         builtin: true,
-        env: undefined,
+        // With `nodes` (`mark`) spawn-agent run by the board never asks the board back (#505), whatever its arguments.
+        env: mark ? { [LAUNCHER_CHILD]: '1' } : undefined,
       })
     },
   }

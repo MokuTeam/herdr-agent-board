@@ -38,7 +38,8 @@ export interface LaunchOptions {
 }
 
 export type LaunchActionResult = { ok: true } | { ok: false; error: string }
-export type StartResult = { ok: true; id: string } | { ok: false; field: string; error: string }
+/** `session`: the session id a start the placer took will have (#505), so spawn-agent can find it on a node. */
+export type StartResult = { ok: true; id: string; session?: string } | { ok: false; field: string; error: string }
 
 /**
  * A start the server makes, never the page: `resume`, the id of a session to bring back from the
@@ -219,7 +220,7 @@ export function createLaunches({
     if (placing) placing.take(l, byHand)
     else runLocal(l)
     changed()
-    return { ok: true, id: l.id }
+    return { ok: true, id: l.id, ...(placing && l.sessionGiven && { session: l.sessionGiven }) }
   }
 
   /** Runs a launch here: its state and failure for its card. */

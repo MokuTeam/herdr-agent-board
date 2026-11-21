@@ -36,6 +36,8 @@ PowerShell-style names work too (`-Name -Cwd -Label -BriefFile -Brief -Workspace
 - An agent on another model than the profile's default: `--model <id or alias>` (`opus`, `sonnet`, `haiku`, or a full name; pi's `provider/id` for pi). It goes on that session's command line only. Never type `/model` into the new session for this: Claude saves it as the default of every later session in the profile, and someone has to put it back by hand.
 - Do not start Claude with `herdr agent start --kind claude` or a bare `claude` in a pane: it gets no name, no brief, and the permission mode and launcher this computer uses are skipped.
 - A new folder may show Claude's "trust this folder" dialog: spawn-agent stops and says so; the user answers it in that tab.
+- Where the board has other devices, a worker may run on one of them when its folder is a pushed git checkout and its brief names no file of this computer: paths inside the repository, the branch pushed.
+- A line ending in `device=<device> session=<id>` means it runs on that device (`agent=@<device>:<session>` is the board's name for it); `queued=<id> name=<Name> waiting=<device>:<why>` (exit 0) means every device is full and the board starts it once one has room.
 - A one-off session that has finished can be taken off the board with `board archive --session <name>` (its tab closes; the user can bring it back from the board's archive), but only one you started, or when the user asks. Its board reminders wait with it, parked: `board schedule --session <name>` lists them, `board schedule --move <id>` moves one to you, `board unschedule <id>` removes one.
 
 ## Talk to another session

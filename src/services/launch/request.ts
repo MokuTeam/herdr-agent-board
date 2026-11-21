@@ -23,6 +23,12 @@ const CATEGORY_ID = /^[a-z0-9][a-z0-9_-]{0,31}$/
 const workspaceName = (s: string, max: number): boolean =>
   !!s && s.length <= max && !UNSAFE_CHARS.test(s) && !s.startsWith('-')
 
+/** A tab label herdr takes: no control characters, no leading dash, 60 characters at most; '' when not one. */
+const labelOf = (v: unknown): string => {
+  const s = typeof v === 'string' ? v.trim() : ''
+  return workspaceName(s, 60) ? s : ''
+}
+
 /** A value the request gives: undefined when it is left out or empty. */
 const given = (v: unknown): string | undefined => (v === undefined || v === null || v === '' ? undefined : String(v))
 
@@ -217,7 +223,8 @@ export async function checkRequest(
     ok: true,
     launch: {
       name,
-      label: name,
+      // A spawn-agent start's tab label (#505), read only while the board places; else the name, as before.
+      label: (pins && labelOf(b.label)) || name,
       cwd,
       category,
       workspaceId,

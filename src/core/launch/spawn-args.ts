@@ -17,6 +17,19 @@ passed on the agent's command line, so the profile's default stays as it is; pi 
 form (provider/id). Do not type /model into the new session for that: Claude saves it as the
 default of every later session in the profile.`
 
+/**
+ * Set by the board's own launcher on the spawn-agent it runs (services/launch/launcher.ts): that one
+ * starts the session itself and never asks the board back (#505), whatever its arguments.
+ */
+export const LAUNCHER_CHILD = 'BOARD_SPAWN_CHILD'
+
+/**
+ * What spawn-agent prints when the session runs on this computer, which the board and agents read:
+ * `pane=<id> name=<Name> agent=<herdr name>`, with ` kind=<agent>` when it is not Claude.
+ */
+export const spawnLine = (r: { pane: string; name: string; agent: string; kind: string }): string =>
+  `pane=${r.pane} name=${r.name} agent=${r.agent}${r.kind === 'claude' ? '' : ` kind=${r.kind}`}`
+
 /** What spawn-agent was asked to start. */
 export interface SpawnOptions {
   name: string

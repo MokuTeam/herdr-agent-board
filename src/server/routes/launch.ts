@@ -2,6 +2,7 @@
 // They start programs: a browser must also say the request comes from this page (origin). main
 // read the body before it looked at the data's age, so those routes check fresh-data after it.
 // Only the request reads it (with ?.); the others read it for its errors alone.
+import { isRecord } from '../../adapters/json-store.ts'
 import type { Item } from '../../core/types.ts'
 import type { Launches } from '../../services/launch/launches.ts'
 import { json, type Route } from '../http.ts'
@@ -18,7 +19,10 @@ export function launchRoutes(launches: Launches, items: () => Item[]): Route[] {
         const body = await ctx.rawBody()
         const refused = ctx.refuse('fresh-data')
         if (refused) return refused
-        const r = await launches.start(body, items())
+        // An agent's start (spawn-agent, #505) says `byHand: false`: with every device full it waits
+        // in the placer's queue. Anything else is a person's, as before.
+        const agents = isRecord(body) && body.byHand === false
+        const r = await (agents ? launches.start(body, items(), { byHand: false }) : launches.start(body, items()))
         return json(r.ok ? 200 : 400, r)
       },
     },

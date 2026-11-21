@@ -888,7 +888,15 @@ when taken), types `/rename <Name>`, then the brief. It prints
 pane=<pane id> name=<Name> agent=<herdr name>
 ```
 
-which is how the board knows who started whom. It fails (exit code 1, the reason on stderr) when
+which is how the board knows who started whom. With `nodes` in config.json (a board with other
+devices to place sessions on) and the board answering on its port, a new session (no
+`--resume`, `--fork`, `--pane`, `--session-id` or `--trust`) is the board's to place: it posts the
+start to `POST /api/launch` as an agent's (`byHand: false`) and prints the same line when the
+session runs here, `pane=@<device>:<pane> name=<Name> agent=@<device>:<session> device=<device>
+session=<id>` when it runs on a node, or `queued=<launch id> name=<Name> waiting=<device>:<kind>`
+(exit 0) when every device is full. With the board down, without `nodes`, or with a launcher of
+the owner's own (`launch.command`, `launch.agent`), it starts the session itself as above. The
+spawn-agent the board runs as its launcher never asks the board back. It fails (exit code 1, the reason on stderr) when
 the folder is not there, Claude is not ready in time, or Claude waits for a dialog first (the
 folder trust): answer it in that tab, then name and brief the session there. `--trust` answers
 two such dialogs with Yes instead: the folder-trust one when it names `--cwd` itself, and "Allow

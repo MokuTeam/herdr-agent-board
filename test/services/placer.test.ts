@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { serveBoard } from '../support/board-server.ts'
 import { nodePair, PAIR_ENV, type Pair } from '../support/node-pair.ts'
-import { type Sandbox, until } from '../support/sandbox.ts'
+import { root, type Sandbox, until } from '../support/sandbox.ts'
 import { stateFolder } from '../support/tunnel-board.ts'
 
 const scratch: string[] = []
@@ -515,3 +515,97 @@ test('a start stays here when its lane may not leave or its branch has a name a 
     await settled(pair.master.url)
   }
 }, 90_000)
+
+// ---------------------------------------------------------------- spawn-agent through the placer (#505, T9)
+
+const SPAWN = join(root, 'src', 'entrypoints', 'spawn-agent.ts')
+
+/**
+ * spawn-agent as an agent runs it beside the master: the master's herdr and home, a config.json of
+ * its own with the master's port and `nodes` (the master's on-disk one names no port), no caller.
+ */
+async function agentSpawn(pair: Pair, args: string[]) {
+  const appData = mkdtempSync(join(tmpdir(), 'placer-agent-'))
+  scratch.push(appData)
+  const dir = join(appData, 'herdr', 'plugins', 'config', 'agent-board')
+  mkdirSync(dir, { recursive: true })
+  const port = Number(new URL(pair.master.url).port)
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({ language: 'en', port, nodes: { lanes: 'all' } }))
+  const proc = Bun.spawn([process.execPath, SPAWN, ...args], {
+    cwd: root,
+    env: {
+      ...pair.master.box.env,
+      APPDATA: appData,
+      BOARD_TEST_PACE: '0.02',
+      HERDR_WORKSPACE_ID: 'wA',
+      CLAUDE_CODE_SESSION_ID: '',
+      HERDR_PANE_ID: '',
+    },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+  return { code: await proc.exited, stdout: stdout.trim(), stderr }
+}
+
+test('spawn-agent with nodes and the board up: the start is the board’s, it runs on the node, and the line names the device', async () => {
+  const pair = await placing({ count: 1, nodes: { order: ['server-1', 'local'], lanes: 'all' } })
+  const node = pair.nodes[0] as Pair['nodes'][0]
+  const run = agentSpawn(pair, ['--name', 'atlas 1', '--cwd', pair.checkout, '--brief', 'Go.', '--timeout-sec', '30'])
+  // The node's herdr starts it; once it shows the session the master's payload carries it.
+  await until(() => started(node.box).length === 1, 20_000)
+  const sid = started(node.box)[0] ?? ''
+  node.box.state(
+    startable([
+      {
+        pane_id: 'wA:p9',
+        agent: 'claude',
+        agent_session: { value: sid },
+        agent_status: 'idle',
+        cwd: node.box.dir,
+        workspace_id: 'wA',
+      },
+    ]),
+  )
+  node.proc.send('refresh')
+  const r = await run
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(r.stdout, `pane=@server-1:wA:p9 name=atlas 1 agent=@server-1:${sid} device=server-1 session=${sid}`)
+  // This computer's herdr started nothing.
+  assert.deepEqual(started(pair.master.box), [])
+  await settled(pair.master.url)
+}, 60_000)
+
+test('an agent’s start waits when every device is full, where a person’s comes here (whenFull local)', async () => {
+  const pair = await placing({
+    count: 1,
+    nodes: {
+      order: ['server-1', 'local'],
+      lanes: 'all',
+      whenFull: 'local',
+      devices: { local: { maxSessions: 1, ...ROOM } },
+    },
+    device: () => ({ maxSessions: 1 }),
+    nodePanes: (_id, box) => [awake('s-node', box.dir)],
+    masterPanes: box => [awake('s-here', box.dir)],
+  })
+  const node = pair.nodes[0] as Pair['nodes'][0]
+  const agent = await agentSpawn(pair, ['--name', 'atlas 1', '--cwd', pair.checkout, '--timeout-sec', '20'])
+  assert.equal(agent.code, 0, agent.stderr)
+  assert.match(agent.stdout, /^queued=[\w-]+ name=atlas 1 waiting=server-1:sessions$/)
+  const id = agent.stdout.slice('queued='.length).split(' ')[0] ?? ''
+  const queued = await launchWhere(pair.master.url, id, l => l?.state === 'queued')
+  assert.deepEqual(queued?.place?.wait, { device: 'server-1', kind: 'sessions', busy: 1, max: 1 })
+  assert.deepEqual(started(pair.master.box), [])
+  // A person's start from the New session window, same folder, same board: here, full or not.
+  const person = await startAt(pair.master.url, pair.checkout, 'atlas 2', { category: 'other' })
+  await launchWhere(pair.master.url, person, l => l?.state === 'done' || l === undefined, 20_000)
+  assert.equal(started(pair.master.box).length, 1)
+  assert.deepEqual(started(node.box), [])
+  // A body's byHand other than false is a person's start too.
+  const truthy = await startAt(pair.master.url, pair.checkout, 'atlas 3', { category: 'other', byHand: 'no' })
+  await launchWhere(pair.master.url, truthy, l => l?.state === 'done' || l === undefined, 20_000)
+  assert.equal(started(pair.master.box).length, 2)
+  assert.equal((await post(pair.master.url, `/api/launch/${id}/dismiss`, {})).status, 200)
+  await settled(pair.master.url)
+}, 60_000)

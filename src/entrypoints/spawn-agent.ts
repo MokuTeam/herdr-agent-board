@@ -34,12 +34,27 @@
 // Prints "pane=<id> name=<Name> agent=<herdr name>", with " kind=pi" after it when the start
 // command started pi; exits 1 with the reason when it fails. The board reads that line
 // (services/launch/launcher.ts).
+//
+// With `nodes` in config.json (#505) a new session is the board's to place, when the board answers
+// (services/launch/spawn-board.ts): it may start here (the same line), on a node ("pane=@<device>:…
+// agent=@<device>:<session> device=<device> session=<id>"), or wait for room ("queued=<launch id>
+// name=<Name> waiting=<device>:<kind>", exit 0). The spawn-agent the board's own launcher runs never
+// asks it back.
 import { homedir } from 'node:os'
 import { loadConfig } from '../adapters/config-file.ts'
 import { cygpath, takeGitBashArgs } from '../adapters/git-bash.ts'
 import { loadProfiles } from '../adapters/profiles.ts'
 import { piCommand } from '../core/launch/agents.ts'
-import { claudeCommand, HELP, parseArgs, withConvertedPaths } from '../core/launch/spawn-args.ts'
+import {
+  claudeCommand,
+  HELP,
+  LAUNCHER_CHILD,
+  parseArgs,
+  type SpawnOptions,
+  spawnLine,
+  withConvertedPaths,
+} from '../core/launch/spawn-args.ts'
+import type { Config } from '../core/types.ts'
 import { spawnAgent } from '../services/launch/spawn-agent.ts'
 
 // Started by the sh shim under Git Bash (core/install-plan.ts GIT_BASH_PATHS, #490): the arguments
@@ -47,6 +62,38 @@ import { spawnAgent } from '../services/launch/spawn-agent.ts'
 // options are converted here with Git's cygpath, as Git Bash would have. Neither variable goes on
 // to herdr or what it starts (adapters/git-bash.ts).
 const gitBash = takeGitBashArgs()
+// The board's own launcher marks the spawn-agent it runs: that one starts here, whatever it was
+// given, and nothing it starts inherits the mark.
+const launcherChild = process.env[LAUNCHER_CHILD] !== undefined
+delete process.env[LAUNCHER_CHILD]
+
+/** Start the session here, in this computer's herdr. */
+async function startHere(o: SpawnOptions, cfg: Config): Promise<void> {
+  const launch = cfg.launch ?? {}
+  const register = o.workdeskWorker
+    ? await (await import('../services/workdesk-workers.ts')).prepareWorkerLaunch(cfg.workdesk)
+    : null
+  const home = homedir()
+  const r = await spawnAgent(o, {
+    ...(o.agent === 'pi' ? { pi: piCommand(launch.pi) } : { claude: claudeCommand(launch.claude, launch.args) }),
+    log: msg => console.error(`spawn-agent: ${msg}`),
+    profiles: loadProfiles({ home }),
+    env: process.env,
+    home,
+    ticketNames: launch.linkedWorkspaces === true,
+  })
+  if (register) {
+    try {
+      register(r.kind, r.session)
+    } catch (err) {
+      // The worker is already running. Keep the normal success line and avoid a duplicate launch.
+      console.error(
+        `spawn-agent: Workdesk worker in ${r.pane} started, registration failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+  console.log(spawnLine(r))
+}
 
 try {
   const parsed = parseArgs(process.argv.slice(2))
@@ -55,30 +102,17 @@ try {
     console.log(HELP)
   } else {
     const cfg = loadConfig()
-    const launch = cfg.launch ?? {}
-    const register = o.workdeskWorker
-      ? await (await import('../services/workdesk-workers.ts')).prepareWorkerLaunch(cfg.workdesk)
-      : null
-    const home = homedir()
-    const r = await spawnAgent(o, {
-      ...(o.agent === 'pi' ? { pi: piCommand(launch.pi) } : { claude: claudeCommand(launch.claude, launch.args) }),
-      log: msg => console.error(`spawn-agent: ${msg}`),
-      profiles: loadProfiles({ home }),
-      env: process.env,
-      home,
-      ticketNames: launch.linkedWorkspaces === true,
-    })
-    if (register) {
-      try {
-        register(r.kind, r.session)
-      } catch (err) {
-        // The worker is already running. Keep the normal success line and avoid a duplicate launch.
-        console.error(
-          `spawn-agent: Workdesk worker in ${r.pane} started, registration failed: ${err instanceof Error ? err.message : String(err)}`,
-        )
-      }
-    }
-    console.log(`pane=${r.pane} name=${r.name} agent=${r.agent}${r.kind === 'claude' ? '' : ` kind=${r.kind}`}`)
+    // With `nodes` the board places a new session (#505); without it, nothing of that is loaded.
+    const placed =
+      cfg.nodes !== undefined && cfg.nodes !== null && cfg.nodes !== false && !launcherChild
+        ? await (await import('../services/launch/spawn-board.ts')).askBoard(o, cfg, {
+            profiles: loadProfiles({ home: homedir() }),
+            env: process.env,
+            home: homedir(),
+          })
+        : null
+    if (placed !== null) console.log(placed)
+    else await startHere(o, cfg)
   }
 } catch (err) {
   console.error(`spawn-agent: ${err instanceof Error ? err.message : String(err)}`)

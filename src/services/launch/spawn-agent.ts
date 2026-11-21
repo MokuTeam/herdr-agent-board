@@ -136,7 +136,7 @@ async function nameInHerdr(pane: string, name: string, ticketNames: boolean): Pr
 }
 
 /** Why spawn-agent does not start in the profile spawnEnv refused. */
-function refusal(target: Extract<SpawnEnv, { ok: false }>): string {
+export function profileRefusal(target: Extract<SpawnEnv, { ok: false }>): string {
   if (target.error === 'missing') return `no profile "${target.detail}": see the board's Settings → Profiles`
   if (target.error === 'hidden') return `the profile "${target.detail}" is hidden: show it on the board first`
   if (target.error === 'unlisted')
@@ -188,7 +188,7 @@ function startProfile(o: SpawnOptions, facts: StartFacts): Start {
   const from = o.resume ?? o.fork
   const target =
     from && !boards ? resumeProfile(o, from, facts) : spawnEnv(o, inheritedProfileDir(env, home), profiles, home)
-  if (!target.ok) throw new Error(refusal(target))
+  if (!target.ok) throw new Error(profileRefusal(target))
   const start: Start = { configDir: target.configDir, profile: target.profile }
   const { configDir } = start
   if (configDir !== null && (!isAbsolute(configDir) || !isFolder(configDir)))
