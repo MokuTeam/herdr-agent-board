@@ -28,6 +28,7 @@ import {
   worktreeCreate,
   worktreeOpen,
 } from '../../adapters/herdr.ts'
+import { readNodeEnv } from '../../adapters/node-env.ts'
 import { pause } from '../../adapters/pacing.ts'
 import { run } from '../../adapters/process.ts'
 import { keyTowardYes, sameFolder, type TrustDialog, trustDialog } from '../../core/dialogs/trust.ts'
@@ -43,7 +44,7 @@ import {
   worktreePath,
 } from '../../core/launch/names.ts'
 import { forkCard } from '../../core/links.ts'
-import { nodesConfig } from '../../core/nodes.ts'
+import { nodeConfig, nodesConfig } from '../../core/nodes.ts'
 import { PI_AGENT } from '../../core/pi.ts'
 import type { LaunchPlace } from '../../core/placement.ts'
 import type { Item, LaunchFailure, LaunchState, LaunchStep } from '../../core/types.ts'
@@ -55,6 +56,8 @@ import type { LaunchRequest } from './request.ts'
 /** A launch as the board keeps it while it runs. */
 export interface Launch extends LaunchRequest {
   id: string
+  /** On a node, its profile's env file (#507, launcher.ts LaunchContext). */
+  nodeEnv?: Readonly<Record<string, string>> | null
   /** The id of the session it resumes (Return, from the archive), null for a new one. */
   resume: string | null
   /** The id of the session whose conversation it starts with (a fork), null for none. */
@@ -209,6 +212,9 @@ export function launchRunner({
   const agentSlug = (l: Launch): string => (l.ticketNames ? ticketSlugName(l.name) : slugName(l.name))
 
   async function runLaunch(l: Launch): Promise<void> {
+    // On a node, its profile's env file (#507): each tab, workspace and launcher opened for it gets
+    // those variables. Read on a board with `node` only.
+    if (nodeConfig(deps.cfg.node) !== null) l.nodeEnv = readNodeEnv(l.profile, deps.log)
     // A resumed one has its id and its card already; the card is told the profile it is meant to
     // run in, as for any start.
     if (l.resume) {
@@ -287,12 +293,14 @@ export function launchRunner({
 
   /**
    * The launch's own tab in a workspace herdr opened: the first one when it leaves the env alone,
-   * else a tab of its own with the profile's env (worktree open/create take no --env). A workspace
-   * that was already open keeps its first tab: its pane may hold a session already.
+   * else a tab of its own with the profile's env (worktree open/create take no --env), a node's env
+   * file's variables too (#507). A workspace that was already open keeps its first tab: its pane may
+   * hold a session already.
    */
   async function openLaunchTab(l: Launch, ws: HerdrWorktree, spareRootTab: boolean): Promise<void> {
     l.rootTab = ws.alreadyOpen ? null : ws.tab
-    if (l.configDir === null && !ws.alreadyOpen) {
+    const vars = !!l.nodeEnv && Object.keys(l.nodeEnv).length > 0
+    if (l.configDir === null && !vars && !ws.alreadyOpen) {
       l.rootPane = ws.pane
       l.rootTerminal = ws.terminal
       if (ws.pane) notePane(l, ws.pane, ws.terminal)

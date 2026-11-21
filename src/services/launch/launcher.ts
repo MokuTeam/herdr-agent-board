@@ -46,6 +46,7 @@ import { modelArgs } from '../../core/launch/model.ts'
 import { slugName, ticketSlugName, uniqueSlug } from '../../core/launch/names.ts'
 import { choosesSession, claudeCommand, LAUNCHER_CHILD } from '../../core/launch/spawn-args.ts'
 import { envRejected } from '../../core/profiles.ts'
+import { scrub } from '../../core/secrets.ts'
 import type { LaunchFailure, LaunchSpec, LaunchStep } from '../../core/types.ts'
 import { takenNames } from './prompt.ts'
 
@@ -75,6 +76,11 @@ export interface LaunchContext {
   readonly profileDir: string
   /** CLAUDE_CONFIG_DIR for the start; null: the env as the board inherited it. */
   readonly configDir: string | null
+  /**
+   * On a node, the variables of the profile's env file (#507, adapters/node-env.ts), set beside
+   * CLAUDE_CONFIG_DIR; absent on every other board, and when the node has no such file.
+   */
+  readonly nodeEnv?: Readonly<Record<string, string>> | null
   /** The profile's own Claude arguments. */
   readonly profileArgs: readonly string[]
   /**
@@ -148,16 +154,33 @@ const codeOf = (err: unknown): string | undefined =>
 
 type Env = Readonly<Record<string, string>>
 
-/** CLAUDE_CONFIG_DIR for what the board opens or runs for a launch: none when it keeps the env it inherited. */
-const profileEnv = (l: Pick<LaunchContext, 'configDir'>): Env | undefined =>
-  l.configDir === null ? undefined : { CLAUDE_CONFIG_DIR: l.configDir }
+/**
+ * CLAUDE_CONFIG_DIR for what the board opens or runs for a launch: none when it keeps the env it
+ * inherited. On a node, the env file's variables beside it (they never name CLAUDE_CONFIG_DIR).
+ */
+function profileEnv(l: Pick<LaunchContext, 'configDir' | 'nodeEnv'>): Env | undefined {
+  const own = l.configDir === null ? undefined : { CLAUDE_CONFIG_DIR: l.configDir }
+  return l.nodeEnv && Object.keys(l.nodeEnv).length ? { ...l.nodeEnv, ...own } : own
+}
+
+/**
+ * An error of a call that was given a node's env file's variables, with none of their values in its
+ * message: herdr's own words may quote an argument (`--env NAME=value`), and the message goes to the
+ * card and the log. As it is without them.
+ */
+export function withoutValues(err: unknown, vars: Readonly<Record<string, string>> | null | undefined): unknown {
+  const values = Object.values(vars ?? {}).filter(Boolean)
+  if (!values.length || !(err instanceof Error)) return err
+  err.message = scrub(err.message, values)
+  return err
+}
 
 /**
  * Open a tab or a workspace for a launch, with its profile's env when it sets one. herdr that does
  * not take --env (older than 0.9.5) fails the launch saying so, before any Claude runs.
  */
 export async function openInProfile<T>(
-  l: Pick<LaunchContext, 'configDir'>,
+  l: Pick<LaunchContext, 'configDir' | 'nodeEnv'>,
   open: (env: Env | undefined) => Promise<T>,
 ): Promise<T> {
   try {
@@ -165,7 +188,7 @@ export async function openInProfile<T>(
   } catch (err) {
     if (l.configDir !== null && envRejected(err))
       throw new LaunchError(t('launch.err.env', { dir: l.configDir }), 'launcher')
-    throw err
+    throw withoutValues(err, l.nodeEnv)
   }
 }
 
@@ -332,8 +355,8 @@ export function commandLauncher(spec: LaunchSpec): Launcher {
         timeout: Math.max(1, Number(spec.timeoutSec) || 180) * 1000,
         sessionId,
         builtin: false,
-        // The launcher starts the session in the profile through its own env; the board never
-        // records the panes it opens.
+        // The launcher starts the session in the profile through its own env (on a node with the
+        // env file's variables, #507); the board never records the panes it opens.
         env: profileEnv(l),
       })
     },

@@ -54,7 +54,15 @@ import {
 } from '../../core/launch/spawn-args.ts'
 import { forkCard } from '../../core/links.ts'
 import { CLAUDE_NAMING, isPiSessionFile, type Naming, namingOf, PI_AGENT } from '../../core/pi.ts'
-import { defaultProfileDir, envRejected, type Profile, type SpawnEnv, spawnEnv } from '../../core/profiles.ts'
+import {
+  DEFAULT_PROFILE,
+  defaultProfileDir,
+  envRejected,
+  type Profile,
+  type SpawnEnv,
+  spawnEnv,
+} from '../../core/profiles.ts'
+import { scrub } from '../../core/secrets.ts'
 import { boxDraft, renameLeft } from './prompt.ts'
 
 /** A folder as given, absolute: ~ is the home folder, a relative one is from here. */
@@ -259,6 +267,7 @@ export async function spawnAgent(
     env = process.env,
     home = homedir(),
     ticketNames = false,
+    nodeEnv,
   }: {
     claude?: string[]
     pi?: string[]
@@ -268,6 +277,8 @@ export async function spawnAgent(
     home?: string
     /** The setup's ticket convention: 14404 -> case-14404. */
     ticketNames?: boolean
+    /** On a node (#507): the variables of a profile's env file, for a new tab beside CLAUDE_CONFIG_DIR. */
+    nodeEnv?: (profile: string) => Readonly<Record<string, string>> | null
   } = {},
 ): Promise<SpawnResult> {
   const cwd = absoluteDir(o.cwd)
@@ -328,18 +339,24 @@ export async function spawnAgent(
     if (p.tab) await herdr(['tab', 'rename', p.tab, label]).catch(() => {})
   } else {
     let opened: Awaited<ReturnType<typeof tabCreateRoot>>
+    const own = configDir === null ? undefined : { CLAUDE_CONFIG_DIR: configDir }
+    // On a node, the env file's variables beside it; a pane given with --pane keeps the env it has.
+    const vars = nodeEnv?.(profile?.id ?? DEFAULT_PROFILE)
     try {
       opened = await tabCreateRoot(
         workspace ?? '',
         cwd,
         label,
-        configDir === null ? undefined : { CLAUDE_CONFIG_DIR: configDir },
+        vars && Object.keys(vars).length ? { ...vars, ...own } : own,
       )
     } catch (err) {
       if (configDir !== null && envRejected(err))
         throw new Error(
           'herdr cannot set CLAUDE_CONFIG_DIR for the new tab (--env needs herdr 0.9.5 or newer): nothing was started',
         )
+      // herdr's words may quote an --env argument: none of the env file's values goes on.
+      const values = Object.values(vars ?? {}).filter(Boolean)
+      if (values.length && err instanceof Error) err.message = scrub(err.message, values)
       throw err
     }
     pane = opened.pane

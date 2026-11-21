@@ -18,7 +18,14 @@
 import { commandsOf } from './install-plan.ts'
 import { sameDir } from './launch/names.ts'
 import { choosesSession, claudeCommand } from './launch/spawn-args.ts'
-import { absoluteProfileDir, defaultProfileDir, type Profile, profileForDir, resolveProfileDir } from './profiles.ts'
+import {
+  absoluteProfileDir,
+  DEFAULT_PROFILE,
+  defaultProfileDir,
+  type Profile,
+  profileForDir,
+  resolveProfileDir,
+} from './profiles.ts'
 import type { Card, LaunchSpec } from './types.ts'
 
 type Env = Record<string, string | undefined>
@@ -171,9 +178,7 @@ export interface ResumeInput {
  */
 export function resumePlan(o: ResumeInput): { argv: string[]; env: Env; dir: string | null } {
   const platform = o.platform ?? process.platform
-  const carded = absoluteProfileDir(o.card?.profileDir, o.home, platform)
-  const named = o.profile === undefined ? null : (o.profiles.find(p => p.id === o.profile) ?? null)
-  const profile = carded ? profileForDir(o.profiles, carded) : named
+  const { profile, carded } = resumeProfileOf(o, platform)
   const dir = profile?.dir ?? carded
   const program = [...claudeCommand(o.launch?.claude, o.launch?.args), ...(profile?.args ?? [])]
   if (choosesSession(program))
@@ -186,6 +191,33 @@ export function resumePlan(o: ResumeInput): { argv: string[]; env: Env; dir: str
   else env.CLAUDE_CONFIG_DIR = dir
   return { argv, env, dir }
 }
+
+/** The profile a resume runs in, and the folder the card names: the card decides, else the profile named. */
+function resumeProfileOf(o: ResumeInput, platform: string): { profile: Profile | null; carded: string | null } {
+  const carded = absoluteProfileDir(o.card?.profileDir, o.home, platform)
+  const named = o.profile === undefined ? null : (o.profiles.find(p => p.id === o.profile) ?? null)
+  return { profile: carded ? profileForDir(o.profiles, carded) : named, carded }
+}
+
+/**
+ * The id of the profile `board resume` runs the session in, for a node's env file (#507): the one
+ * resumePlan picks, else the one the env points to, else the default. A card folder no profile has
+ * reads the env file of that fallback: on a node every folder the board sets is a profile's.
+ */
+export function resumeProfileId(o: ResumeInput): string {
+  const platform = o.platform ?? process.platform
+  const { profile } = resumeProfileOf(o, platform)
+  if (profile) return profile.id
+  const inherited = profileForDir(o.profiles, resolveProfileDir(o.env.CLAUDE_CONFIG_DIR, o.home, platform))
+  return inherited?.id ?? DEFAULT_PROFILE
+}
+
+/**
+ * The env of a resume on a node (#507): the plan's, with the env file's variables added. None of
+ * them names CLAUDE_CONFIG_DIR, which the plan has set (core/node-env.ts boardOwnsName).
+ */
+export const withNodeEnv = (env: Env, vars: Readonly<Record<string, string>> | null): Env =>
+  vars && Object.keys(vars).length ? { ...env, ...vars } : env
 
 /**
  * The folder Claude keeps a project's transcripts in under projects/: the cwd without trailing

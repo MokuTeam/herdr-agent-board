@@ -67,6 +67,18 @@ const gitBash = takeGitBashArgs()
 const launcherChild = process.env[LAUNCHER_CHILD] !== undefined
 delete process.env[LAUNCHER_CHILD]
 
+/**
+ * On a node (#507), the profile's env file for the new tab. Without `node` in config.json nothing
+ * of it is loaded or read.
+ */
+async function nodeEnvOf(cfg: Config): Promise<Pick<Parameters<typeof spawnAgent>[1] & object, 'nodeEnv'>> {
+  if (cfg.node === undefined || cfg.node === null || cfg.node === false) return {}
+  const { nodeConfig } = await import('../core/nodes.ts')
+  if (nodeConfig(cfg.node) === null) return {}
+  const { readNodeEnv } = await import('../adapters/node-env.ts')
+  return { nodeEnv: profile => readNodeEnv(profile, msg => console.error(`spawn-agent: ${msg}`)) }
+}
+
 /** Start the session here, in this computer's herdr. */
 async function startHere(o: SpawnOptions, cfg: Config): Promise<void> {
   const launch = cfg.launch ?? {}
@@ -81,6 +93,7 @@ async function startHere(o: SpawnOptions, cfg: Config): Promise<void> {
     env: process.env,
     home,
     ticketNames: launch.linkedWorkspaces === true,
+    ...(await nodeEnvOf(cfg)),
   })
   if (register) {
     try {

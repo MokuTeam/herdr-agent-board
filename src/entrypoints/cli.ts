@@ -158,7 +158,7 @@ import { isPiSessionFile, piSessionId } from '../core/pi.ts'
 import { isPresenceState, type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
 import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
 import { deskSteps, type RemoteView, remoteConfig } from '../core/remote.ts'
-import { parseResume, projectFolderName, resumeDir, resumePlan } from '../core/resume.ts'
+import { parseResume, projectFolderName, resumeDir, resumePlan, resumeProfileId, withNodeEnv } from '../core/resume.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import { findTodo, numberTodos, sortTodos, type Todo, todoKey, todosConfig, todosOf } from '../core/todos.ts'
 import { boardPorts, publicOrigin, type TestStep, tunnelChecks, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
@@ -1226,7 +1226,7 @@ async function fork(): Promise<void> {
  */
 async function resume(): Promise<void> {
   const o = parseResume(rest)
-  const plan = resumePlan({
+  const input = {
     ...o,
     card: readCard(o.session),
     // The list the wake process reads too (services/deps.ts profiles): the listed and found
@@ -1235,10 +1235,23 @@ async function resume(): Promise<void> {
     launch: cfg.launch,
     env: process.env,
     home: homedir(),
-  })
+  }
+  const plan = resumePlan(input)
   const [file = 'claude', ...argv] = plan.argv
   const dir = plan.dir ?? resolveProfileDir(process.env.CLAUDE_CONFIG_DIR, homedir())
-  const ran = await runHere(file, argv, plan.env, (await resumeFolder(o.session, dir)) ?? undefined)
+  let env = plan.env
+  // On a node (#507), the profile's env file; without `node` nothing of it is loaded or read.
+  if (cfg.node !== undefined && cfg.node !== null && cfg.node !== false) {
+    const { nodeConfig } = await import('../core/nodes.ts')
+    if (nodeConfig(cfg.node) !== null) {
+      const { readNodeEnv } = await import('../adapters/node-env.ts')
+      env = withNodeEnv(
+        env,
+        readNodeEnv(resumeProfileId(input), msg => console.error(`board resume: ${msg}`)),
+      )
+    }
+  }
+  const ran = await runHere(file, argv, env, (await resumeFolder(o.session, dir)) ?? undefined)
   if (ran.error) throw new Error(`${file} did not start: ${messageOf(ran.error)}`)
   process.exit(ran.code)
 }
