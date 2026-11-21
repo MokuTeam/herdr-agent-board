@@ -207,17 +207,19 @@ export function findThread(db: BoardDb, word: string, lane: string | null, exact
     const h = sameKey(db, w, exact)
     if (h) return h
   }
-  if (/^\d{1,9}$/.test(w)) {
-    if (!lane) throw new ThreadError('no_lane', `"${word}" is a number: give the whole key (<lane>-${w})`)
+  const number = /^\d{1,9}$/.test(w)
+  if (number && lane) {
     const h = sameKey(db, keyOf(lane, Number(w)))
     if (h) return h
   }
+  // An id's first 8 characters can all be digits (#572): a number that names no thread is tried as one.
   if (ID_REF.test(w)) {
     const rows = db.db.query(`SELECT ${HEAD_COLUMNS} FROM threads WHERE id LIKE ? LIMIT 3`).all(`${w}%`) as HeadRow[]
     if (rows.length === 1) return headOf(rows[0] as HeadRow)
     if (rows.length > 1)
       throw new ThreadError('ambiguous', `"${word}" names several threads: ${rows.map(r => r.key).join(', ')}`)
   }
+  if (number && !lane) throw new ThreadError('no_lane', `"${word}" is a number: give the whole key (<lane>-${w})`)
   throw new ThreadError('not_found', `no thread "${word}" on this board`)
 }
 
@@ -720,26 +722,36 @@ export function appendEntry(
   return { before, head, entry }
 }
 
-/** An entry of a thread by its id, its first 8 characters, or its number (`4`, `#4`). */
+/**
+ * An entry of a thread by its id, its first 8 characters, or its number (`4`, `#4`). An id's first
+ * characters can all be digits (#572): a number that names no entry is tried as the start of an id.
+ */
 export function findEntry(db: BoardDb, thread: string, word: string): ThreadEntry {
   const w = word.trim().toLowerCase().replace(/^#/, '')
-  if (!/^\d{1,9}$/.test(w) && !/^[0-9a-f][0-9a-f-]{3,35}$/.test(w))
+  const idLike = /^[0-9a-f][0-9a-f-]{3,35}$/.test(w)
+  if (!/^\d{1,9}$/.test(w) && !idLike)
     throw new ThreadError('no_entry', `"${word}" is not an entry: its number (4, #4) or its id`)
-  const rows = /^\d{1,9}$/.test(w)
+  const byNumber = /^\d{1,9}$/.test(w)
     ? (db.db
         .query(`SELECT ${ENTRY_COLUMNS} FROM thread_entries WHERE thread = ? AND n = ?`)
         .all(thread, Number(w)) as EntryRow[])
-    : (db.db
-        .query(`SELECT ${ENTRY_COLUMNS} FROM thread_entries WHERE thread = ? AND id LIKE ? LIMIT 2`)
-        .all(thread, `${w}%`) as EntryRow[])
+    : []
+  const number = byNumber.length > 0
+  const rows = number
+    ? byNumber
+    : idLike
+      ? (db.db
+          .query(`SELECT ${ENTRY_COLUMNS} FROM thread_entries WHERE thread = ? AND id LIKE ? LIMIT 2`)
+          .all(thread, `${w}%`) as EntryRow[])
+      : []
   if (rows.length === 1) return entryOf(rows[0] as EntryRow)
   // One number, several entries: on a shared thread a private entry takes the number of the entry
   // it follows (#541), and two boards may write the same number at once. The number is the one
   // entry the peers hold by it, when there is one; else the entry goes by its id.
   const found = rows.map(entryOf)
   const open = found.filter(e => !e.private)
-  if (/^\d{1,9}$/.test(w) && open.length === 1) return open[0] as ThreadEntry
-  if (/^\d{1,9}$/.test(w) && found.length > 1)
+  if (number && open.length === 1) return open[0] as ThreadEntry
+  if (number && found.length > 1)
     throw new ThreadError(
       'no_entry',
       `#${w} is ${found.length} entries: give its id (${found.map(e => e.id.slice(0, 8)).join(', ')})`,

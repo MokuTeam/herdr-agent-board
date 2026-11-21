@@ -326,6 +326,21 @@ test('a number on a shared thread names the entry the peers hold by it, and --si
   expect(() => findEntry(a.db, id, String(x.entry.n))).toThrow(`#${x.entry.n} is 2 entries: give its id`)
 })
 
+test('an entry whose id starts with 8 digits goes by that prefix, and its number still names it (#572)', () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const his = postEntry(b.ctx(owner, T0 + 20_000), getThread(b.db, id) as ThreadHead, { text: 'from ben' })
+  const digits = '93525772-0c4e-4b1a-9d2f-6a7b8c9d0e1f'
+  take(a, { ...handOver(b, a, his.head, his.entry), id: digits })
+  const n = findEntry(a.db, id, digits).n
+  expect(findEntry(a.db, id, '93525772').id).toBe(digits)
+  expect(findEntry(a.db, id, '#93525772').id).toBe(digits)
+  expect(findEntry(a.db, id, String(n)).id).toBe(digits)
+  // A number that names neither an entry nor the start of an id is still no entry.
+  expect(() => findEntry(a.db, id, '93525773')).toThrow('no entry "93525773"')
+  expect(() => findEntry(a.db, id, '77')).toThrow('no entry "77"')
+})
+
 test('show --since on a thread that was never shared is what it was', () => {
   const a = board(ANNA)
   const made = newThread(a.ctx(), { lane: 'atlas', title: 'Local only' })
