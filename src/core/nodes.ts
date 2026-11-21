@@ -693,6 +693,8 @@ export interface NodesPanelSettings {
   defaults: Record<string, ReturnType<typeof defaultThresholds>>
   /** The device the next plain start would go to (the placer's `next`); null while it would wait. */
   next: string | null
+  /** The devices with no token stored yet: a refusal for `token` there means none was given. */
+  noToken: string[]
 }
 
 /**

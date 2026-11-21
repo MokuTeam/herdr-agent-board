@@ -10,7 +10,9 @@ import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardDevice, BoardPayload } from '../../src/core/payload.ts'
 import { DevicesPanel } from '../../web/src/components/devices/DevicesPanel.tsx'
 import {
+  deviceOptions,
   deviceRows,
+  deviceTitle,
   lanesAfter,
   laneTicks,
   linkWords,
@@ -85,7 +87,7 @@ const DEVICES: BoardDevice[] = [
     sameCommit: false,
     status: status('server-3', 0, { version: '1.1.0' }),
   }),
-  device('local', { title: 'laptop', status: status('laptop', 3, { profiles: [] }), maxSessions: 20 }),
+  device('local', { status: status('laptop', 3, { profiles: [] }), maxSessions: 20 }),
 ]
 
 const SETTINGS: PanelSettings = {
@@ -94,6 +96,7 @@ const SETTINGS: PanelSettings = {
   seen: ['atlas', 'tools'],
   defaults: { 'server-1': { maxSessions: 4, minFreeMemMb: 1229, maxLoad: 0.9 } },
   next: 'server-1',
+  noToken: [],
 }
 
 const CATEGORIES = [
@@ -174,7 +177,7 @@ describe('Settings, Devices (#510)', () => {
         'Move Server 1',
         'Move server-2',
         'Move server-3',
-        'Move laptop',
+        'Move This computer',
       ])
       // The lanes, in their colours, a new one marked; All; When everything is full.
       const lanes = findAll([sheet], el => hasClass(el, 'devices-lane'))
@@ -289,10 +292,12 @@ describe('the panel’s pure parts (#510)', () => {
     ])
     expect(rows[3]?.link).toBeNull()
     // How long it has been offline, also when it was never heard; under a minute, no figure.
-    expect(linkWords({ link: { state: 'offline', since: NOW - 6 * MIN, heardAt: null } }, NOW, t)).toBe(
+    expect(linkWords({ id: 'server-2', link: { state: 'offline', since: NOW - 6 * MIN, heardAt: null } }, NOW, t)).toBe(
       'Not reachable for 6 min',
     )
-    expect(linkWords({ link: { state: 'offline', since: NOW - 10_000, heardAt: null } }, NOW, t)).toBe('Not reachable')
+    expect(linkWords({ id: 'server-2', link: { state: 'offline', since: NOW - 10_000, heardAt: null } }, NOW, t)).toBe(
+      'Not reachable',
+    )
     expect(refusedText(400, 'maxSessions', t)).toBe('Not saved: Sessions at most does not check out')
     expect(refusedText(409, 'x', t)).toBeNull()
   })
@@ -428,5 +433,80 @@ describe('Settings, Devices live (#510)', () => {
     await settled()
     await settled()
     expect(toasts).toEqual([['Not saved: Sessions at most does not check out', true]])
+  })
+})
+
+describe('what the owner reads (#510, polish)', () => {
+  const ru = translator('ru')
+  const one = (fields: Partial<BoardDevice>) => deviceRows([device('server-5', fields)], NOW, t, SETTINGS)[0]
+
+  test('a count of one is singular, in English and Russian', () => {
+    const at = (n: number, tr = t) =>
+      deviceRows([device('server-5', { maxSessions: null, status: status('server-5', n) })], NOW, tr)[0]?.sessions?.text
+    expect([at(1), at(2), at(5)]).toEqual(['1 session awake', '2 sessions awake', '5 sessions awake'])
+    expect([at(0, ru), at(1, ru), at(2, ru), at(5, ru), at(11, ru), at(12, ru), at(21, ru)]).toEqual([
+      '0 активных сессий',
+      '1 активная сессия',
+      '2 активные сессии',
+      '5 активных сессий',
+      '11 активных сессий',
+      '12 активных сессий',
+      '21 активная сессия',
+    ])
+  })
+
+  test('this computer is "This computer" in the switch and the panel, never its id; a title of its own stays', () => {
+    const devices = [device('local'), device('server-1', { title: 'Server 1' })]
+    expect(deviceOptions(devices, [], t)?.map(o => o.title)).toEqual(['All devices', 'This computer', 'Server 1'])
+    expect(deviceOptions(devices, [], ru)?.map(o => o.title)).toEqual(['Все устройства', 'Этот компьютер', 'Server 1'])
+    const nodes = draw(payload({ devices, categories: CATEGORIES }))
+    const here = rowsOf(nodes).find(r => r.attrs.get('data-id') === 'local')
+    const name = findAll([here as Node], el => hasClass(el, 'devices-name'))[0]
+    expect(text([name as Node])).toBe('This computer')
+    expect(findAll([here as Node], el => hasClass(el, 'devices-link'))).toEqual([])
+    const ruNodes = renderInBoard(
+      <PanelProvider viewport={() => ({ w: 1600, h: 900 })}>
+        <DevicesPanel open onClose={() => {}} initial={SETTINGS} />
+      </PanelProvider>,
+      board({ data: payload({ devices, categories: CATEGORIES }), now: NOW }),
+      'ru',
+    )
+    const ruHere = rowsOf(ruNodes).find(r => r.attrs.get('data-id') === 'local')
+    expect(text(findAll([ruHere as Node], el => hasClass(el, 'devices-name')))).toBe('Этот компьютер')
+    // An owner who named it keeps the name.
+    expect(deviceTitle({ id: 'local', title: 'Workstation', kind: null }, t)).toBe('Workstation')
+    expect(deviceTitle({ id: 'server-1', title: 'server-1', kind: 'ssh' }, t)).toBe('server-1')
+    // A revoked device with no link has no kind either: still its own title.
+    expect(deviceTitle({ id: 'server-1', title: 'server-1', kind: null }, t)).toBe('server-1')
+  })
+
+  test('the sessions bar fills against maxSessions, else the board’s figure for the device', () => {
+    const own = one({ maxSessions: 2, status: status('server-5', 1) })
+    expect(own?.sessions).toEqual({ share: 0.5, text: '1 of 2 sessions' })
+    const byDefault = deviceRows([device('server-5', { maxSessions: null, status: status('server-5', 1) })], NOW, t, {
+      ...SETTINGS,
+      defaults: { 'server-5': { maxSessions: 4, minFreeMemMb: 1229, maxLoad: 0.9 } },
+    })[0]
+    expect(byDefault?.sessions).toEqual({ share: 0.25, text: '1 of 4 sessions' })
+    // Neither: the count alone, no bar.
+    expect(one({ maxSessions: null, status: status('server-5', 1) })?.sessions).toEqual({
+      share: null,
+      text: '1 session awake',
+    })
+  })
+
+  test('a refusal for the token with none stored says so, with the command', () => {
+    const refused = { state: 'refused' as const, since: NOW - MIN, heardAt: null, reason: 'token' as const }
+    const words = (noToken: string[], tr = t) =>
+      deviceRows([device('server-5', { link: refused })], NOW, tr, { ...SETTINGS, noToken })[0]?.link
+    expect(words(['server-5'])).toBe('No token yet: board nodes token server-5')
+    expect(words(['server-5'], ru)).toBe('Токена ещё нет: board nodes token server-5')
+    expect(words([])).toBe("Refused: it does not take this board's token")
+    // Another reason with no token stored keeps its own words.
+    const api = deviceRows([device('server-5', { link: { ...refused, reason: 'api' } })], NOW, t, {
+      ...SETTINGS,
+      noToken: ['server-5'],
+    })[0]?.link
+    expect(api).toBe('Refused: it speaks another version of the link')
   })
 })

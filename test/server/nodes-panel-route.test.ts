@@ -62,6 +62,8 @@ function panel(): NodesPanel {
     seen: () => readLanesSeen(),
     keepSeen: ids => writeLanesSeen(ids),
     ownStatus: async () => status(16000) as never,
+    // None stored anywhere: only the filter on kind keeps this computer out of noToken.
+    hasToken: () => false,
     next: async cfg => (cfg?.whenFull === 'wait' ? null : 'server-1'),
   }
 }
@@ -162,6 +164,8 @@ describe('POST /api/nodes, the panel’s ops (#510)', () => {
         local: { maxSessions: 9, minFreeMemMb: 2400, maxLoad: 0.9 },
       },
       next: null,
+      // A device with no token stored is named; this computer never is.
+      noToken: ['server-1'],
     })
   })
 

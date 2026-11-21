@@ -113,7 +113,7 @@ export function DevicesPanel({ open, onClose, initial }: DevicesPanelProps) {
   })
   const shown = useHeld(devices, reorder.dragging)
   if (!shown) return null
-  const rows = deviceRows(shown, now, t)
+  const rows = deviceRows(shown, now, t, settings)
   if (order) rows.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
   const ids = rows.map(r => r.id)
   const move = (id: string, by: number) => {
@@ -208,7 +208,7 @@ function DeviceRowView({ row, defaults, next, disabled, send, onMove }: RowProps
         </button>
         <div className="devices-name">
           <strong>{row.title}</strong>
-          <span className="devices-link">{row.here ? t('node.dev.here') : row.link}</span>
+          {row.link && <span className="devices-link">{row.link}</span>}
           {next && <span className="devices-next">{t('node.dev.next')}</span>}
         </div>
       </div>

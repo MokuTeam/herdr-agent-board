@@ -11,6 +11,15 @@ import type { ProfileOption } from './profiles.ts'
 
 type Devices = readonly BoardDevice[] | undefined
 
+/**
+ * What the owner reads for a device: this computer is "This computer" while config.json gives it
+ * no title of its own (its title is then its id, `local`); any other device its title.
+ */
+export function deviceTitle(d: Pick<BoardDevice, 'id' | 'title' | 'kind'>, t: Translator): string {
+  // By id: a revoked device with no link has no kind either.
+  return d.id === 'local' && (!d.title || d.title === d.id) ? t('node.dev.here') : d.title
+}
+
 /** A device by its id; null when the payload does not list it. */
 export const deviceOf = (devices: Devices, id: string): BoardDevice | null => devices?.find(d => d.id === id) ?? null
 
@@ -46,7 +55,7 @@ export function nodeLook(item: Pick<Item, 'device'>, devices: Devices, now: numb
   const id = item.device
   if (!id) return null
   const d = deviceOf(devices, id)
-  const title = d?.title || id
+  const title = d ? deviceTitle(d, t) : id
   if (d && reachable(d)) return { id, title, offline: false, asOf: '', why: '' }
   return { id, title, offline: true, asOf: asOf(d, now, t), why: t('node.offline', { name: title }) }
 }
@@ -95,7 +104,7 @@ export function deviceOptions(devices: Devices, visible: readonly Item[], t: Tra
     { id: 'all', title: t('node.all'), color: '', n: visible.length },
     ...devices.map(d => ({
       id: d.id,
-      title: d.title,
+      title: deviceTitle(d, t),
       color: '',
       n: visible.filter(i => deviceShown(d.id, i, devices)).length,
     })),
@@ -117,7 +126,7 @@ export function placingText(l: LaunchView, devices: Devices, t: Translator): str
   const step: string = l.step
   const device = l.place?.device ?? l.device
   const d = device ? deviceOf(devices, device) : null
-  const name = d?.title || device || ''
+  const name = (d && deviceTitle(d, t)) || device || ''
   if (state === 'queued') {
     const n = d?.status ? d.status.sessions.awake : null
     if (!name || n === null || d?.maxSessions == null) return t('node.queuedNoRoom')
@@ -210,12 +219,22 @@ export interface DeviceRow {
 const share = (n: number, of: number): number => (of > 0 ? Math.min(1, Math.max(0, n / of)) : 0)
 const gb = (mb: number): string => (Math.round(mb / 102.4) / 10).toString()
 
-/** A device's link in words: online, connecting, not reachable and for how long, refused and why. */
-export function linkWords(d: Pick<BoardDevice, 'link'>, now: number, t: Translator): string | null {
+/**
+ * A device's link in words: online, connecting, not reachable and for how long, refused and why.
+ * `noToken`: the device store holds no token for it, so a refusal for `token` means none was
+ * given yet, and the line says the command that gives one.
+ */
+export function linkWords(
+  d: Pick<BoardDevice, 'id' | 'link'>,
+  now: number,
+  t: Translator,
+  noToken = false,
+): string | null {
   const link = d.link
   if (!link) return null
   if (link.state === 'online') return t('node.dev.link.online')
   if (link.state === 'connecting') return t('node.dev.link.connecting')
+  if (link.state === 'refused' && link.reason === 'token' && noToken) return t('node.dev.noToken', { id: d.id })
   if (link.state === 'refused') return t('node.dev.link.refused', { why: t(`node.dev.why.${link.reason ?? 'ssh'}`) })
   // Offline since `since`: how long, once that is a minute or more.
   return now - link.since >= 60_000
@@ -223,16 +242,28 @@ export function linkWords(d: Pick<BoardDevice, 'link'>, now: number, t: Translat
     : t('node.dev.link.offlineNever')
 }
 
-/** The rows of the panel, in the payload's order (config.json's `nodes.order`). */
-export function deviceRows(devices: readonly BoardDevice[], now: number, t: Translator): DeviceRow[] {
+/**
+ * The rows of the panel, in the payload's order (config.json's `nodes.order`). `settings`: what
+ * GET /api/nodes added; a device without a `maxSessions` of its own fills its bar against the
+ * board's figure for it, the one its field shows as the placeholder. The payload does not tell an
+ * absent key from an explicit null (no limit), so such a device shows that figure too; the placer
+ * writes the figures on a device's first status, so this lasts until then.
+ */
+export function deviceRows(
+  devices: readonly BoardDevice[],
+  now: number,
+  t: Translator,
+  settings?: Pick<PanelSettings, 'defaults' | 'noToken'> | null,
+): DeviceRow[] {
   return devices.map(d => {
     const s = d.status
     const here = d.kind === null
+    const max = d.maxSessions ?? settings?.defaults[d.id]?.maxSessions ?? null
     const sessions = s
       ? {
-          share: d.maxSessions ? share(s.sessions.awake, d.maxSessions) : null,
-          text: d.maxSessions
-            ? t('node.dev.sessions', { n: s.sessions.awake, max: d.maxSessions })
+          share: max ? share(s.sessions.awake, max) : null,
+          text: max
+            ? t('node.dev.sessions', { n: s.sessions.awake, max })
             : t('node.dev.sessionsAny', { n: s.sessions.awake }),
         }
       : null
@@ -251,9 +282,9 @@ export function deviceRows(devices: readonly BoardDevice[], now: number, t: Tran
         : null
     return {
       id: d.id,
-      title: d.title,
+      title: deviceTitle(d, t),
       here,
-      link: here ? null : linkWords(d, now, t),
+      link: here ? null : linkWords(d, now, t, settings?.noToken?.includes(d.id) ?? false),
       linkState: d.link?.state ?? null,
       sessions,
       memory,

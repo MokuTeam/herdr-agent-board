@@ -91,6 +91,8 @@ export interface NodesPanel {
   keepSeen(ids: string[]): void
   /** This computer's own status, for its thresholds' placeholders; null while unknown. */
   ownStatus(): Promise<NodeStatus | null>
+  /** Whether the device store holds a token for the device (node-store.ts), never the token. */
+  hasToken(id: string): boolean
   /**
    * The device the next plain start would go to (services/nodes/placer.ts next) by `cfg`, the
    * section as written; null while it would wait.
@@ -112,6 +114,7 @@ export function nodesRoutes(links: NodeLinks, bundles?: BundleSync, panel?: Node
       lanes: cfg?.lanes ?? [],
       seen: panel?.seen() ?? null,
       defaults,
+      noToken: panel ? devices.filter(d => d.kind !== null && !panel.hasToken(d.id)).map(d => d.id) : [],
       next: (await panel?.next(cfg).catch(() => null)) ?? null,
     }
   }

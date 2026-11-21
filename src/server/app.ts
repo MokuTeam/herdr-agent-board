@@ -1191,6 +1191,8 @@ export async function startServer({
       },
       log,
     })
+    // Whether a device has a token stored, for the panel's words (never the token itself).
+    const panelStore = createDeviceStore()
     localNodeRoutes = nodesRoutes(
       nodeLinks,
       bundleSync,
@@ -1200,6 +1202,7 @@ export async function startServer({
         seen: () => readLanesSeen(),
         keepSeen: ids => writeLanesSeen(ids),
         ownStatus: () => ownStatus.answer(),
+        hasToken: id => panelStore.token(id) !== null,
         next: n => {
           // A plain start: the board's default profile, a lane that may leave when one does.
           const lane = n?.lanes === 'all' ? (cfg.categories[0]?.id ?? '') : (n?.lanes[0] ?? '')
