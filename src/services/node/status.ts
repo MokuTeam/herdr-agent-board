@@ -5,7 +5,7 @@
 import { existsSync, statfsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { headCommit } from '../../adapters/git.ts'
+import { archiveStamp, headCommit } from '../../adapters/git.ts'
 import { ROOT } from '../../adapters/paths.ts'
 import { type SysLoad, sysLoad } from '../../adapters/sysload.ts'
 import { CLAUDE_AGENT, launchAgents } from '../../core/launch/agents.ts'
@@ -28,7 +28,7 @@ export interface StatusSources {
   /** config.json's `launch`, for the agents. */
   launch: () => LaunchSpec | undefined
   version: string
-  /** The plugin's commit, asked once (git in the plugin's folder); '' outside a checkout. */
+  /** The plugin's commit, asked once (git in the plugin's folder, else the archive's stamp); '' for neither. */
   commit?: () => Promise<string>
   load?: () => Promise<SysLoad>
   freeMb?: (dir: string) => number | null
@@ -88,7 +88,8 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
   const exists = src.exists ?? existsSync
   let commit: Promise<string> | null = null
   const commitOnce = (): Promise<string> => {
-    commit ??= (src.commit ?? (async () => (await headCommit(ROOT).catch(() => null)) ?? ''))()
+    // a plugin "Add a server" unpacked from an archive has no .git: its stamp says the commit (#509)
+    commit ??= (src.commit ?? (async () => (await headCommit(ROOT).catch(() => null)) ?? archiveStamp(ROOT) ?? ''))()
     return commit
   }
   return {

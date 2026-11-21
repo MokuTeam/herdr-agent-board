@@ -1,6 +1,8 @@
 // Git, read-only: the checkout a folder is in, and a bounded view of its changes.
 import { execFile } from 'node:child_process'
-import { dirname, resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { ARCHIVE_COMMIT_FILE } from '../core/node-texts.ts'
 import { repoAddress } from '../core/portable.ts'
 import { run } from './process.ts'
 
@@ -113,13 +115,9 @@ export async function headCommit(dir: string): Promise<string | null> {
   return r.code === 0 && r.stdout.trim() ? r.stdout.trim() : null
 }
 
-/**
- * The main checkout of the repository `dir` belongs to (a linked worktree included), or null.
- * herdr links a worktree to the repository, not to the worktree it was made from, so this is
- * the folder a new worktree is created from and named after.
- */
 /** The most a plugin archive may be: the board's checkout is about 20 MB as a tar. */
 const ARCHIVE_MOST = 256 * 1024 * 1024
+const ARCHIVE_MS = 120_000
 
 /**
  * The checkout at `commit` as one tar archive (`git archive`): the plugin "Add a server" sends
@@ -138,6 +136,8 @@ export async function archiveCommit(dir: string, commit: string): Promise<Uint8A
         windowsHide: true,
       },
     )
+    // a git that hangs (a lock, a network filesystem) does not hold the form for good
+    const timer = setTimeout(() => p.kill(), ARCHIVE_MS)
     const chunks: Uint8Array[] = []
     let size = 0
     for await (const chunk of p.stdout) {
@@ -148,13 +148,32 @@ export async function archiveCommit(dir: string, commit: string): Promise<Uint8A
       }
       chunks.push(chunk)
     }
-    if ((await p.exited) !== 0) return null
-    return Buffer.concat(chunks)
+    const code = await p.exited
+    clearTimeout(timer)
+    return code === 0 ? Buffer.concat(chunks) : null
   } catch {
     return null
   }
 }
 
+/**
+ * The commit a plugin unpacked from such an archive was made at (core/node-texts.ts
+ * ARCHIVE_COMMIT_FILE, written by the node's install): read only where git finds no checkout.
+ */
+export function archiveStamp(dir: string): string | null {
+  try {
+    const sha = readFileSync(join(dir, ARCHIVE_COMMIT_FILE), 'utf8').trim()
+    return /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha) ? sha : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The main checkout of the repository `dir` belongs to (a linked worktree included), or null.
+ * herdr links a worktree to the repository, not to the worktree it was made from, so this is
+ * the folder a new worktree is created from and named after.
+ */
 export async function repoRoot(dir: string): Promise<string | null> {
   const r = await run('git', ['-C', dir, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
     timeout: 5000,

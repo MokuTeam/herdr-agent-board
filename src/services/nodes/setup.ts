@@ -32,6 +32,7 @@ import { t } from '../../core/lang.ts'
 import {
   type Ceiling,
   ceilingFor,
+  ceilingProblem,
   type NodeFacts,
   type NodePlan,
   type NodeRecord,
@@ -212,10 +213,15 @@ function serverOf(o: Fields): SetupServer | { field: string; error: string } {
   return { host, sshPort: sshPort as number, user, key }
 }
 
-/** The door's port the form asked for (the default otherwise), or null when it is not one. */
-function portOf(v: unknown): number | null {
-  if (v === undefined || v === null || v === '') return NODE_PORT
-  return Number.isInteger(v) && (v as number) >= 1024 && (v as number) <= 65535 ? (v as number) : null
+/** The board's own ports on a node (wake, the web board): the door cannot take either. */
+const BOARD_PORTS = [12421, 12422]
+
+/** The door's port the form asked for: undefined for none (the node's own, else the default), null when it is not one. */
+function portOf(v: unknown): number | null | undefined {
+  if (v === undefined || v === null || v === '') return undefined
+  return Number.isInteger(v) && (v as number) >= 1024 && (v as number) <= 65535 && !BOARD_PORTS.includes(v as number)
+    ? (v as number)
+    : null
 }
 
 /** The owner's ceiling, each figure a whole number; null when one is not (nodeRefusals checks the ranges). */
@@ -276,12 +282,11 @@ interface Looked {
   record?: NodeRecord
 }
 
-/** What the master's half needs after a run: the device, its link, and whether it ran before. */
-interface Pending {
-  id: string
-  server: SetupServer
-  port: number
-}
+/**
+ * What Continue picks up after a failure here: the master's half of an Apply (the device and its
+ * link), or the end of an Undo whose server is undone and whose entry here is not gone yet.
+ */
+type Pending = { kind: 'apply'; id: string; server: SetupServer; port: number } | { kind: 'undo'; id: string }
 
 export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
   let view: NodeSetupView = { ...IDLE_VIEW }
@@ -289,6 +294,8 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
   let pending: Pending | null = null
   let busy = false
   let current: RemoteRun | null = null
+  /** The server runs a plan now: it goes on there whatever the board does, so Cancel waits for it. */
+  let serverRuns = false
   /** Counts Cancel: what it cut short leaves the view alone. */
   let generation = 0
 
@@ -335,7 +342,7 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
     return refused(h, detail)
   }
 
-  async function loginOf2(bin: string, password: string | null): Promise<Login> {
+  async function loginFor(bin: string, password: string | null): Promise<Login> {
     if (password === null) return { password: null, typed: false, oldSsh: false }
     const takes = takesAskpass(await d.sshVersion(bin))
     return takes ? { password, typed: true, oldSsh: false } : { password: null, typed: true, oldSsh: true }
@@ -412,7 +419,7 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
     o: {
       linkKey?: string
       tokenHash?: string
-      plugin: { path: string; sha256: string }
+      plugin: { path: string; sha256: string; commit: string }
       ceiling: Ceiling
       packages: boolean
     },
@@ -468,8 +475,8 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
     const server = serverOf(o)
     if ('field' in server)
       return { status: 409, body: { ok: false, hint: null, field: server.field, error: server.error } }
-    const port = portOf(o.port)
-    if (port === null)
+    const askedPort = portOf(o.port)
+    if (askedPort === null)
       return { status: 409, body: { ok: false, hint: null, field: 'port', error: t('node.setup.err.port') } }
     const asked = o.id === undefined || o.id === null || o.id === '' ? undefined : o.id
     if (asked !== undefined && (typeof asked !== 'string' || !DEVICE_ID.test(asked) || asked === LOCAL))
@@ -490,14 +497,14 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
     try {
       const pinnedBefore = await d.hostKeyPinned(server.host, server.sshPort)
       if (gone()) return cancelled()
-      const login = await loginOf2(bin, password)
+      const login = await loginFor(bin, password)
       if (gone()) return cancelled()
       const probe = await hear(bin, server, remoteCommand(PROBE_SCRIPT, 'root'), null, PROBE_MS, login, !pinnedBefore)
       if (gone()) return cancelled()
       const pinnedNow = !pinnedBefore && (await d.hostKeyPinned(server.host, server.sshPort))
       if (pinnedBefore || pinnedNow) {
         const fingerprint = await d.hostKeyFingerprint(server.host, server.sshPort)
-        if (fingerprint) set({ hostKey: { fingerprint, pinnedNow } })
+        if (fingerprint && !gone()) set({ hostKey: { fingerprint, pinnedNow } })
       }
       if (gone()) return cancelled()
       const read = probe.code === 0 ? readProbe(probe.out) : null
@@ -512,7 +519,7 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
       const sudoFrom = sudoFromOf(read.mode, password, sudoPassword)
       if (read.mode === 'password' && sudoFrom === null) return stopLook('needPassword', null)
       const stdin = sudoFrom === null ? null : `${sudoFrom === 'own' ? sudoPassword : password}\n`
-      const lookOnce = async (linkKey: string | undefined): Promise<NodeFacts | Answer> => {
+      const lookOnce = async (port: number, linkKey: string | undefined): Promise<NodeFacts | Answer> => {
         const h = await hear(
           bin,
           server,
@@ -527,13 +534,18 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
         const why = stopped(h, login, sudoFrom, secrets, server.user)
         return stopLook(why.hint ?? (h.code === 0 ? 'unreadable' : null), why.detail)
       }
-      // Look with the link key of the device this master already has for the host, so a node of
-      // its own reads as its own; again with another device's key when the server names that one.
+      // Look with the link key and the door's port of the device this master already has for the
+      // host, so a node of its own reads as its own; again when the server names another device
+      // (its key) or its node another port (a node set up by hand on a port of the owner's).
       const firstId = deviceIdFor({ asked, host: server.host, sshPort: server.sshPort, devices: devices() })
       const firstKey = firstId ? await knownKey(firstId) : undefined
-      let f = await lookOnce(firstKey)
+      const firstLink = firstId ? devices()[firstId]?.link : undefined
+      const firstPort =
+        askedPort ?? (isObject(firstLink) && Number.isInteger(firstLink.port) ? (firstLink.port as number) : NODE_PORT)
+      let f = await lookOnce(firstPort, firstKey)
       if (!('os' in f)) return f
       const rec = f.record === null ? null : nodeRecord(f.record)
+      const port = askedPort ?? f.nodeConfig?.port ?? rec?.node.port ?? firstPort
       const id =
         deviceIdFor({
           asked,
@@ -542,13 +554,11 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
           devices: devices(),
           server: { nodeId: f.nodeConfig?.id ?? null, recordId: rec?.node.id ?? null, hostname: f.hostname },
         }) ?? deviceIdFromHost(server.host)
-      if (id !== firstId) {
-        const key = await knownKey(id)
-        if (key !== firstKey) {
-          const again = await lookOnce(key)
-          if (!('os' in again)) return again
-          f = again
-        }
+      const key = id === firstId ? firstKey : await knownKey(id)
+      if (key !== firstKey || port !== firstPort) {
+        const again = await lookOnce(port, key)
+        if (!('os' in again)) return again
+        f = again
       }
       const planId = d.newId()
       const base = {
@@ -589,7 +599,7 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
       cpuWeight: 50,
       tasksMax: 3000,
     }
-    const plugin = { path: NO_PATH_YET, sha256: sha256(archive) }
+    const plugin = { path: NO_PATH_YET, sha256: sha256(archive), commit }
     const token = d.store.token(l.id)
     const key = await knownKey(l.id)
     const made = (packages: boolean) =>
@@ -663,7 +673,7 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
     const bin = d.ssh()
     if (!bin) return refused('noSsh', null)
     if (!(await d.hostKeyPinned(l.server.host, l.server.sshPort))) return refused('noHostKey', null)
-    const login = await loginOf2(bin, password)
+    const login = await loginFor(bin, password)
     return {
       bin,
       login,
@@ -709,7 +719,9 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
         heard.err.push(line)
         return
       }
-      const shown = mask(line, secrets)
+      // the run's own protocol lines as it printed them (a password may be a word they hold); its
+      // words, a step's output and a warning, masked
+      const shown = /^@@(step|undo|result|kept) /.test(line) ? line : mask(line, secrets)
       if (!shown.startsWith('@@')) {
         others++
         if (others > OUT_KEPT) {
@@ -765,9 +777,11 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
   }
 
   /** The master's half after the server's run, from config.json on; each step said; a failure stops where Continue picks up. */
-  async function finishMaster(p: Pending, gen: number): Promise<void> {
+  async function finishMaster(p: Extract<Pending, { kind: 'apply' }>, gen: number): Promise<void> {
     const gone = (): boolean => gen !== generation
     const fail = (id: MasterStepId, said: Text, next: Text): void => {
+      // a Cancel meanwhile left the form idle: it stays so
+      if (gone()) return
       step(id, 'fail', said)
       set({ phase: 'failed', next, error: null })
     }
@@ -796,6 +810,8 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
     d.cfg.nodes = live
     step('config', wrote ? 'ok' : 'skip', { key: 'node.setup.said.device', params: { id: p.id } })
     d.follow()
+    // no links after the board followed config.json: the section does not check out (nodesConfig)
+    if (!d.links()) return fail('link', { key: 'node.setup.said.noLinks' }, { key: 'node.setup.next.config' })
     // the link up, through the link user: the door's hello, then the first status
     step('link', 'run')
     const deadline = d.now() + d.linkWaitMs
@@ -921,6 +937,10 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
       return refused('lookAgain', null)
     const ceiling = ceilingOf(o.ceiling, l.ceiling)
     if (!ceiling) return malformed('ceiling')
+    // the owner's figures checked before anything is made or sent
+    const tooMuch = ceilingProblem(ceiling, l.facts)
+    if (tooMuch)
+      return { status: 409, body: { ok: false, hint: null, field: 'ceiling', error: t(tooMuch.key, tooMuch.params) } }
     if (o.packages !== undefined && typeof o.packages !== 'boolean') return malformed('packages')
     const packages = o.packages === true
     if (l.packagesNeeded && !packages) return refused(null, t('node.setup.err.packages'))
@@ -935,7 +955,9 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
       if ('status' in to) return to
       if (gone()) return cancelled()
       // the commit Look made the plan with: a new one since needs its own Look (its archive differs)
-      if ((await d.commit()) !== l.commit) return refused('lookAgain', null)
+      const commitNow = await d.commit()
+      if (gone()) return cancelled()
+      if (commitNow !== l.commit) return refused('lookAgain', null)
       last = null
       pending = null
       set({
@@ -982,14 +1004,17 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
         return fail('upload', { key: 'node.setup.said.uploadFailed' })
       }
       const sha = sha256(l.archive)
-      if (where.sha256 !== sha) return fail('upload', { key: 'node.setup.said.uploadChanged' })
+      if (where.sha256 !== sha) {
+        await clean(to, l, where.path)
+        return fail('upload', { key: 'node.setup.said.uploadChanged' })
+      }
       step('upload', 'ok')
       const r = nodePlan(
         l.facts,
         wantedOf(l, {
           linkKey: key.publicKey,
           tokenHash: sha256(token),
-          plugin: { path: where.path, sha256: sha },
+          plugin: { path: where.path, sha256: sha, commit: l.commit },
           ceiling,
           packages,
         }),
@@ -1010,21 +1035,29 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
       })
       detached = true
       void (async () => {
-        const { heard, lines } = await runOnServer(l, to, r.plan, secrets)
-        await clean(to, l, where.path)
-        const run = readNodeRun(lines)
-        if (gone()) return
-        if (run.result !== 'applied') {
-          runFailed(run, heard, to.login, to.sudoFrom, secrets, l)
-          busy = false
-          changed()
-          return
-        }
-        pending = { id: l.id, server: l.server, port: l.port }
+        let applied = false
         try {
-          await finishMaster(pending, gen)
+          serverRuns = true
+          const { heard, lines } = await runOnServer(l, to, r.plan, secrets)
+          serverRuns = false
+          await clean(to, l, where.path)
+          const run = readNodeRun(lines)
+          if (run.result !== 'applied') {
+            runFailed(run, heard, to.login, to.sudoFrom, secrets, l)
+            return
+          }
+          applied = true
+          const p = { kind: 'apply' as const, id: l.id, server: l.server, port: l.port }
+          pending = p
+          await finishMaster(p, gen)
         } catch (err) {
-          set({ phase: 'failed', error: messageOf(err), next: { key: 'node.setup.next.finish' } })
+          serverRuns = false
+          if (!gone())
+            set({
+              phase: 'failed',
+              error: messageOf(err),
+              next: { key: applied ? 'node.setup.next.finish' : 'node.setup.next.lost' },
+            })
         } finally {
           if (!gone()) busy = false
           changed()
@@ -1050,6 +1083,43 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
     }
   }
 
+  /** Whether this master's device of that id is the one for this server (its link goes to that host). */
+  const oursFor = (id: string, s: SetupServer): boolean => {
+    const link = devices()[id]?.link
+    return (
+      isObject(link) &&
+      link.kind === 'ssh' &&
+      link.host === s.host &&
+      ((link.sshPort as number | undefined) ?? 22) === s.sshPort
+    )
+  }
+
+  /** A device's entry changed here and in the live config at once; whether the file took it. */
+  function editDevice(change: (nodes: Fields) => boolean): { ok: true } | { ok: false; error: string } {
+    const r = d.editNodes((nodes, had) => had && change(nodes))
+    if (!r.ok) return r
+    if (isObject(d.cfg.nodes)) {
+      const live = structuredClone(d.cfg.nodes as Fields)
+      change(live)
+      d.cfg.nodes = live
+    }
+    d.follow()
+    return { ok: true }
+  }
+
+  /** After the server's Undo: the device's entry goes from config.json, then its token and link key. */
+  function dropHere(id: string): boolean {
+    const r = editDevice(nodes => dropDevice(nodes, id))
+    if (!r.ok) {
+      pending = { kind: 'undo', id }
+      set({ phase: 'failed', error: r.error, next: { key: 'node.setup.next.undoConfig' } })
+      return false
+    }
+    d.store.dropCredentials(id)
+    pending = null
+    return true
+  }
+
   async function runUndo(o: Fields): Promise<Answer> {
     const password = passwordOf(o.password)
     if (password === false) return malformed('password')
@@ -1069,7 +1139,24 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
       busy = false
       return to
     }
+    if (gen !== generation) return cancelled()
     last = null
+    const id = l.record.node.id
+    const ours = oursFor(id, l.server)
+    // nothing new is placed on a node being taken down: paused here first (the placer refuses a
+    // paused device at once); it stays paused if the Undo fails, for the owner to see
+    if (ours) {
+      const paused = editDevice(nodes => {
+        const entry = isObject(nodes.devices) ? (nodes.devices as Fields)[id] : null
+        if (!isObject(entry) || entry.paused === true) return false
+        entry.paused = true
+        return true
+      })
+      if (!paused.ok) {
+        busy = false
+        return refused(null, paused.error)
+      }
+    }
     set({
       phase: 'undoing',
       hint: null,
@@ -1079,35 +1166,22 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
     })
     void (async () => {
       try {
+        serverRuns = true
         const { heard, lines } = await runOnServer(l, to, plan, secrets)
+        serverRuns = false
         const run = readNodeRun(lines)
         if (gen !== generation) return
         if (run.result !== 'undone' && run.result !== 'none') {
           runFailed(run, heard, to.login, to.sudoFrom, secrets, l)
           return
         }
-        // this master's device for that server goes too: its token, its link key, its entry
-        const id = l.record?.node.id ?? l.id
-        const link = devices()[id]?.link
-        const ours = isObject(link) && link.kind === 'ssh' && link.host === l.server.host
-        if (ours) {
-          d.store.dropCredentials(id)
-          const r = d.editNodes((nodes, had) => had && dropDevice(nodes, id))
-          if (!r.ok) {
-            set({ phase: 'failed', error: r.error, next: { key: 'node.setup.next.config' } })
-            return
-          }
-          if (isObject(d.cfg.nodes)) {
-            const live = structuredClone(d.cfg.nodes as Fields)
-            dropDevice(live, id)
-            d.cfg.nodes = live
-          }
-          d.follow()
-        }
+        // this master's device for that server goes too: its entry, then its token and link key
+        if (ours && !dropHere(id)) return
         d.log(`node setup: ${id} undone on ${l.server.host}`)
         set({ phase: 'undone' })
       } catch (err) {
-        set({ phase: 'failed', error: messageOf(err), next: { key: 'node.setup.next.again' } })
+        serverRuns = false
+        set({ phase: 'failed', error: messageOf(err), next: { key: 'node.setup.next.lost' } })
       } finally {
         if (gen === generation) busy = false
         changed()
@@ -1126,12 +1200,16 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
       if (busy) return refused('busy', null)
       const p = pending
       if (!p || view.phase !== 'failed') return refused('lookAgain', null)
+      if (p.kind === 'undo') {
+        if (dropHere(p.id)) set({ phase: 'undone', error: null, next: null })
+        return ok()
+      }
       busy = true
       const gen = generation
       try {
         await finishMaster(p, gen)
       } catch (err) {
-        set({ phase: 'failed', error: messageOf(err), next: { key: 'node.setup.next.finish' } })
+        if (gen === generation) set({ phase: 'failed', error: messageOf(err), next: { key: 'node.setup.next.finish' } })
       } finally {
         if (gen === generation) busy = false
         changed()
@@ -1139,8 +1217,9 @@ export function createNodeSetup(d: NodeSetupDeps): NodeSetup {
       return ok()
     },
     cancel() {
-      // a run goes on on the server whatever the board does: it is followed to its end
-      if (view.phase === 'applying' || view.phase === 'undoing') return refused('busy', null)
+      // a run goes on on the server whatever the board does: it is followed to its end. Before it
+      // (the archive on its way up), and in the master's half, Cancel stops what goes on here.
+      if (serverRuns || view.phase === 'undoing') return refused('busy', null)
       generation += 1
       current?.kill()
       current = null

@@ -45,6 +45,30 @@ test.skipIf(!sh)(
 )
 
 test.skipIf(!sh)(
+  'herdr that runs is never stopped by a rollback: its unit file goes back, herdr runs on (#509)',
+  () => {
+    const s = nodeServer({ hello: false })
+    expect(s.apply({ only: ['user', 'linger', 'unit'] }).result).toBe('applied')
+    expect(exists(s.root.path('/state/user-active'))).toBe(true)
+    // the owner's own unit, herdr running; the door does not answer, so the run rolls back
+    const unit = s.root.path('/home/agent-board/.config/systemd/user/herdr.service')
+    const mine = `${readFileSync(unit, 'utf8')}# mine\n`
+    writeFileSync(unit, mine)
+    const before = s.root.log().length
+    const run = s.apply({ only: ['user', 'linger', 'unit', 'hello'], waitS: 2 })
+    expect(run.result).toBe('rolled-back')
+    expect(stepsOf(run)).toEqual(['check ok', 'user skip', 'linger skip', 'unit ok', 'hello fail'])
+    expect(run.undone).toEqual([{ id: 'unit', ok: true }])
+    expect(readFileSync(unit, 'utf8')).toBe(mine)
+    expect(exists(s.root.path('/state/user-active'))).toBe(true)
+    const after = s.root.log().slice(before)
+    for (const word of ['disable --now', 'enable --now', 'restart', '--user stop', '--user start'])
+      expect([word, after.includes(word)]).toEqual([word, false])
+  },
+  240_000,
+)
+
+test.skipIf(!sh)(
   'a failure on a server set up before leaves that setup and its record byte for byte',
   () => {
     const s = nodeServer()

@@ -6,7 +6,8 @@
 // need the internet), then the master's half with the real link and bundle sync: the hello and
 // the first status through the link user. After it: the link user opens the door's port and
 // nothing else (another port, a shell, a TTY are refused), and the admin's password is in no file
-// of the server's file system nor under this board's folders (both searched for it). Undo then
+// of the server's file system nor under this board's folders, its log or the view (all searched
+// for it). Undo then
 // takes the server back.
 //
 //   BOARD_SERVER_IT=1 bun test test/integration/node-setup.test.ts --timeout 3600000
@@ -171,6 +172,9 @@ async function scenario(l: Lane): Promise<void> {
   writeFileSync(join(profileDir, 'CLAUDE.md'), 'rules')
   const cfg = loadConfig()
   const store = createDeviceStore()
+  // what the board would put in web.log: searched for the password too
+  const logs: string[] = []
+  const log = (line: string): void => void logs.push(line)
   // made the first time the service follows config.json, as app.ts makes them
   const made: { links: NodeLinks | null; bundles: ReturnType<typeof createBundleSync> | null } = {
     links: null,
@@ -195,21 +199,21 @@ async function scenario(l: Lane): Promise<void> {
     editNodes: editNodesAdding,
     follow: () => {
       if (made.links) return made.links.configChanged()
-      const links = createNodeLinks({ cfg, log: () => {} })
+      const links = createNodeLinks({ cfg, log })
       made.links = links
       made.bundles = createBundleSync({
         cfg,
         links,
         profiles: () => [{ id: 'default', title: 'Default', dir: profileDir, color: 'indigo', hidden: false }],
         store: createDeviceStore(),
-        log: () => {},
+        log,
       })
     },
     links: () => made.links,
     bundles: () => made.bundles,
     hostName: () => hostname(),
     onChange: () => {},
-    log: () => {},
+    log,
     now: () => Date.now(),
     newId: () => Math.random().toString(36).slice(2, 10),
     linkWaitMs: 3 * MIN,
@@ -254,6 +258,8 @@ async function scenario(l: Lane): Promise<void> {
             .filter(e => e.isFile())
             .map(e => join(e.parentPath, e.name))
         : []
+    expect(logs.join('\n')).not.toContain(PASSWORD)
+    expect(JSON.stringify(setup.view())).not.toContain(PASSWORD)
     for (const f of [...files(configDir()), ...files(stateDir())])
       expect([f, readFileSync(f, 'latin1').includes(PASSWORD)]).toEqual([f, false])
 

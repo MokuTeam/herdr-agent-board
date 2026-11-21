@@ -42,6 +42,7 @@ import {
   NODE_PACKAGES,
   NODE_RECORD,
   NODE_USER,
+  PLUGIN_COMMIT,
   PLUGIN_DIR,
   PLUGIN_STAMP,
   PROFILE_BEGIN,
@@ -359,8 +360,8 @@ export interface NodeWanted {
   linkKey: string
   /** masters.json's entry: only the token's SHA-256 crosses, never the token. */
   master: { id: string; name: string; tokenHash: string }
-  /** Where the master put the plugin's tar archive on the server, and its sha256. */
-  plugin: { path: string; sha256: string }
+  /** Where the master put the plugin's tar archive on the server, its sha256, and the master's commit it was made at. */
+  plugin: { path: string; sha256: string; commit: string }
   /** As ceilingFor proposed it, or as the owner changed it. */
   ceiling: Ceiling
   /** The packages tick: git, curl, unzip and ca-certificates with apt. */
@@ -384,6 +385,7 @@ export function nodeWantedProblem(w: NodeWanted): string | null {
   if (!HEX64.test(w.master.tokenHash)) return 'master.tokenHash'
   if (!ARCHIVE_PATH.test(w.plugin.path) || !isPlainPath(w.plugin.path)) return 'plugin.path'
   if (!HEX64.test(w.plugin.sha256)) return 'plugin.sha256'
+  if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(w.plugin.commit)) return 'plugin.commit'
   return null
 }
 
@@ -514,9 +516,11 @@ export function nodeRefusals(f: NodeFacts, w: NodeWanted): Text[] {
   if (f.keys === 'other' && !has('keys')) say('node.refuse.keysOther', { path: LINK_KEYS })
   if (f.fence === 'other' && !has('fence')) say('node.refuse.fenceOther', { path: LINK_FENCE })
   const holder = f.listening?.find(l => l.port === w.port)
-  // the node's own board holds the door's port once a run of the board's set it up
-  if (holder && !(rec && rec.node.port === w.port && has('unit')))
-    say('node.refuse.port', { port: String(w.port), name: holder.name })
+  // the node's own board holds the door's port once a run of the board's set it up, or once the
+  // owner set this node up by hand (config.json's `node` there names this id and this port)
+  const ownDoor =
+    (rec && rec.node.port === w.port && has('unit')) || (f.nodeConfig?.id === w.id && f.nodeConfig.port === w.port)
+  if (holder && !ownDoor) say('node.refuse.port', { port: String(w.port), name: holder.name })
   return out
 }
 
@@ -650,6 +654,11 @@ function applySteps(f: NodeFacts, w: NodeWanted, waitS: number): NodeStep[] {
   const id = q(w.id)
   const port = String(w.port)
   const sha = q(w.plugin.sha256)
+  // this archive, and the master's commit it was made at, are the plugin there (#509)
+  const pluginHolds = [
+    `[ "$(asNode cat ${q(PLUGIN_STAMP)} 2>/dev/null)" = ${sha} ]`,
+    `[ "$(asNode cat ${q(PLUGIN_COMMIT)} 2>/dev/null)" = ${q(w.plugin.commit)} ]`,
+  ]
   const arch = q(w.plugin.path)
   const copyBun = !atLeast(f.bun, BUN_VERSION) && f.serverBun && atLeast(f.serverBun.version, BUN_VERSION)
   const bunOk = `v=$(asNode ${q(BUN_BIN)} --version 2>/dev/null | ver) && atLeast "$v" ${BUN_VERSION}`
@@ -813,7 +822,7 @@ function applySteps(f: NodeFacts, w: NodeWanted, waitS: number): NodeStep[] {
       timeoutS: 600,
     }),
     step('plugin', 'step', {
-      skipIf: [`[ "$(asNode cat ${q(PLUGIN_STAMP)} 2>/dev/null)" = ${sha} ]`],
+      skipIf: pluginHolds,
       commands: [
         `[ -f ${arch} ] || { echo "the plugin's archive is not at "${arch}; exit 1; }`,
         // one copy, out of every other user's reach, checked and unpacked: the file cannot change between
@@ -825,9 +834,10 @@ function applySteps(f: NodeFacts, w: NodeWanted, waitS: number): NodeStep[] {
         `asNode sh -c 'if [ -d "$HOME/agent-board" ]; then mv "$HOME/agent-board" "$HOME/agent-board.old"; fi; mv "$HOME/agent-board.new" "$HOME/agent-board"'`,
         'touch "$W/moved-plugin"',
         `printf '%s\\n' ${sha} | putAs ${q(PLUGIN_STAMP)} 644`,
+        `printf '%s\\n' ${q(w.plugin.commit)} | putAs ${q(PLUGIN_COMMIT)} 644`,
         `asNode herdr plugin link ${q(PLUGIN_DIR)}`,
       ],
-      check: [`[ "$(asNode cat ${q(PLUGIN_STAMP)} 2>/dev/null)" = ${sha} ]`],
+      check: pluginHolds,
       undo: [
         'asNode rm -rf "$H/agent-board.new"',
         `if [ -f "$W/moved-plugin" ]; then asNode sh -c 'rm -rf "$HOME/agent-board"; if [ -d "$HOME/agent-board.old" ]; then mv "$HOME/agent-board.old" "$HOME/agent-board"; fi'; fi`,
@@ -875,15 +885,16 @@ function applySteps(f: NodeFacts, w: NodeWanted, waitS: number): NodeStep[] {
         'asNode systemctl --user enable herdr.service',
         // herdr that runs is never restarted: that would end every session on the node. A unit that
         // changed under it is taken at herdr's next start; one that does not run is started.
-        'if asNode systemctl --user is-active --quiet herdr.service; then if [ -f "$W/unit.old" ] && ! cmp -s "$W/unit.old" "$W/unit.want"; then echo "@@warn herdr runs on as it was started: the new unit takes effect at its next start"; fi; else asNode systemctl --user start herdr.service; fi',
+        'if asNode systemctl --user is-active --quiet herdr.service; then if [ -f "$W/unit.old" ] && ! cmp -s "$W/unit.old" "$W/unit.want"; then echo "@@warn herdr runs on as it was started: the new unit takes effect at its next start"; fi; else touch "$W/started-herdr"; asNode systemctl --user start herdr.service; fi',
       ],
       check: ['asNode systemctl --user is-active --quiet herdr.service'],
+      // a herdr this run did not start runs on: its unit file goes back, herdr is not touched
       undo: [
         'if [ -f "$W/put-unit" ]; then',
-        '  asNode systemctl --user disable --now herdr.service 2>/dev/null || :',
+        '  if [ -f "$W/started-herdr" ]; then asNode systemctl --user disable --now herdr.service 2>/dev/null || :; fi',
         `  putBack ${q(UNIT_PATH)} "$W/unit.old" 644`,
         '  asNode systemctl --user daemon-reload 2>/dev/null || :',
-        '  if [ -f "$W/unit.old" ]; then asNode systemctl --user enable --now herdr.service; fi',
+        '  if [ -f "$W/started-herdr" ] && [ -f "$W/unit.old" ]; then asNode systemctl --user enable --now herdr.service; fi',
         'fi',
       ],
       record: [{ kind: 'unit' }],

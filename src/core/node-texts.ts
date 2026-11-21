@@ -29,6 +29,12 @@ export const UNIT_PATH = `${NODE_HOME}/.config/systemd/user/herdr.service`
 export const PLUGIN_DIR = `${NODE_HOME}/agent-board`
 /** The archive's sha256 the plugin folder was unpacked from: a second Apply with the same archive skips. */
 export const PLUGIN_STAMP = `${PLUGIN_DIR}/.archive-sha256`
+/**
+ * The master's commit the archive was made at (#509): a plugin unpacked from `git archive` has no
+ * .git, so the node's status reads its commit from here (adapters/git.ts archiveStamp).
+ */
+export const ARCHIVE_COMMIT_FILE = '.archive-commit'
+export const PLUGIN_COMMIT = `${PLUGIN_DIR}/${ARCHIVE_COMMIT_FILE}`
 export const CONFIG_PATH = `${NODE_HOME}/.config/herdr/plugins/config/agent-board/config.json`
 export const MASTERS_PATH = `${NODE_HOME}/.local/state/herdr/plugins/agent-board/node/masters.json`
 export const PROFILE_PATH = `${NODE_HOME}/.profile`

@@ -216,7 +216,7 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.setup.refuse.idTaken': '{id} is a device of another server already: give this one another id.',
     'node.setup.err.port': "The door's port is a number from 1024 to 65535.",
     'node.setup.err.archive':
-      "This board's own folder is not a git checkout at a commit: the node gets the board from it, so there is nothing to send.",
+      "This board's code could not be packed at its commit (its folder is not a git checkout, or git did not answer): there is nothing to send.",
     'node.setup.err.packages': 'The server lacks a tool the steps use: tick "Install the packages" to go on.',
     'node.setup.err.noRecord': 'Nothing of a run of this board is on that server: there is nothing to undo.',
     'node.setup.err.byHand':
@@ -263,6 +263,8 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.setup.next.link': 'The server is set up: check what the link says, then Continue.',
     'node.setup.next.bundle': 'The server is set up and linked: Continue sends the profile again.',
     'node.setup.next.finish': 'The server is set up: Continue finishes the rest here.',
+    'node.setup.next.undoConfig':
+      'The server is undone; config.json was not written: make it readable, then Continue to take the device out here.',
   },
   ru: {
     'node.step.check': 'Проверить сервер',
@@ -473,7 +475,7 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.setup.refuse.idTaken': '{id} уже занят устройством другого сервера: дайте этому другой id.',
     'node.setup.err.port': 'Порт двери это число от 1024 до 65535.',
     'node.setup.err.archive':
-      'Папка этой доски не git-чекаут на коммите: узел получает доску из неё, отправлять нечего.',
+      'Код этой доски не получилось упаковать на её коммите (папка не git-чекаут или git не ответил): отправлять нечего.',
     'node.setup.err.packages':
       'На сервере нет программы, которая нужна шагам: отметьте «Установить пакеты», чтобы продолжить.',
     'node.setup.err.noRecord': 'На этом сервере нет следов прогона этой доски: отменять нечего.',
@@ -524,5 +526,7 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.setup.next.link': 'Сервер настроен: проверьте, что говорит связь, потом «Продолжить».',
     'node.setup.next.bundle': 'Сервер настроен и связан: «Продолжить» отправит профиль ещё раз.',
     'node.setup.next.finish': 'Сервер настроен: «Продолжить» доделает остальное здесь.',
+    'node.setup.next.undoConfig':
+      'На сервере всё отменено, а config.json не записан: сделайте его читаемым и нажмите «Продолжить», чтобы убрать устройство и здесь.',
   },
 }

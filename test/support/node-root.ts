@@ -27,6 +27,8 @@ export const LINK_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINodeLinkTestKeyOnl
 export const ARCHIVE = '/var/tmp/agent-board-plugin.tar'
 /** The master's token: only its hash goes to the server. */
 export const TOKEN = 'node-test-token-not-a-secret'
+/** The master's commit the archive was made at, as the plan stamps it on the node. */
+export const COMMIT = 'c0ffee'.padEnd(40, '0')
 export const TOKEN_HASH = createHash('sha256').update(TOKEN).digest('hex')
 /** As the door answers (server/node-listener.ts). */
 const HELLO = JSON.stringify({ api: 1, version: '0.0.0', node: { api: NODE_API, id: 'server-1', claimed: true } })
@@ -71,7 +73,7 @@ export function nodeServer(o: { hello?: boolean } = {}): NodeServer {
     port: 12430,
     linkKey: LINK_KEY,
     master: { id: 'laptop', name: "Ноутбук 'дом' 100%", tokenHash: TOKEN_HASH },
-    plugin: { path: ARCHIVE, sha256: sha },
+    plugin: { path: ARCHIVE, sha256: sha, commit: COMMIT },
     ceiling: ceilingFor({ memTotalMb: 7957, memAvailableMb: 7128 }) as NonNullable<ReturnType<typeof ceilingFor>>,
     packages: false,
     ...over,

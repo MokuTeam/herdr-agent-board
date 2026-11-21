@@ -17,6 +17,7 @@ import type { RemoteEnd, RemoteRun, spawnRemote } from '../../src/adapters/ssh.t
 import { NODE_API } from '../../src/core/node-door.ts'
 import { ceilingFor } from '../../src/core/node-plan.ts'
 import type { NodeSetupView } from '../../src/core/node-setup.ts'
+import { LINK_FENCE, LINK_KEYS, linkFence, linkKeysLine } from '../../src/core/node-texts.ts'
 import type { LinkStatus, NodeStatus } from '../../src/core/nodes.ts'
 import type { SyncReport } from '../../src/services/nodes/bundle-sync.ts'
 import { createNodeSetup } from '../../src/services/nodes/setup.ts'
@@ -74,6 +75,13 @@ interface Admin {
   env?: Record<string, string>
   /** Tools Look says the server lacks (the fake root's PATH reaches this computer's own). */
   lacks?: string[]
+  /** The upload says another sha256 than the archive's. */
+  shaLie?: boolean
+  /** A canned run waits this long before its lines; its end (default 0, nothing on stderr). */
+  slowRun?: number
+  runEnd?: { code: number; err: string }
+  /** Called as a node run starts, before its lines (a test changes something here meanwhile). */
+  onRun?: () => void
 }
 
 interface Call {
@@ -150,9 +158,12 @@ function fakeAdmin(root: FakeRoot, a: Admin) {
         say('out', '@@fail could not make a folder under /var/tmp')
         return end(1)
       }
+      if (kind === 'apply' || kind === 'undo') a.onRun?.()
       if ((kind === 'apply' || kind === 'undo') && a.run) {
+        if (a.slowRun) await Bun.sleep(a.slowRun)
         say('out', ...a.run)
-        return end(0)
+        if (a.runEnd) say('err', a.runEnd.err)
+        return end(a.runEnd?.code ?? 0)
       }
       const body = kind === 'apply' || kind === 'undo' ? unpackNodeRun(script) : script
       if (body === null) {
@@ -161,6 +172,8 @@ function fakeAdmin(root: FakeRoot, a: Admin) {
       }
       const r = await root.runAsync(body, { ...a.env }, kind === 'upload' ? (bytes ?? undefined) : undefined)
       const lacked = new Set((a.lacks ?? []).map(t => `@@has ${t}`))
+      if (kind === 'upload' && a.shaLie)
+        r.lines = r.lines.map(l => (l.startsWith('@@sha ') ? `@@sha ${'0'.repeat(64)}` : l))
       say(
         'out',
         ...r.lines.filter((l, i, all) => (l !== '' || i < all.length - 1) && !(kind === 'look' && lacked.has(l))),
@@ -307,6 +320,7 @@ const statesOf = (v: NodeSetupView): string[] => v.master.map(s => `${s.id} ${s.
 const runOf = (v: NodeSetupView): string[] => (v.run?.steps ?? []).map(s => `${s.id} ${s.state}`)
 const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
 const MASTERS = '/home/agent-board/.local/state/herdr/plugins/agent-board/node/masters.json'
+const NODE_CONFIG = '/home/agent-board/.config/herdr/plugins/config/agent-board/config.json'
 
 describe('Look', () => {
   test('a fresh server: its key pinned at first sight and shown, the plan in words with the ceiling proposed, nothing changed there', async () => {
@@ -479,6 +493,8 @@ describe('Apply and the master’s half', () => {
       ])
       expect(JSON.stringify(b.root.home())).not.toContain(token)
       expect(readFileSync(b.root.path('/etc/ssh/authorized_keys/agent-board-link'), 'utf8')).toContain(KEY)
+      // the plugin there is stamped with this board's commit: the node's status reports it
+      expect(readFileSync(b.root.path('/home/agent-board/agent-board/.archive-commit'), 'utf8')).toBe(`${COMMIT}\n`)
       // the archive's folder is gone from /var/tmp
       expect(readdirSync(b.root.path('/var/tmp')).filter(n => n.startsWith('agent-board-node.'))).toEqual([])
       // the password is in no file here or there, no argument, no view
@@ -540,20 +556,40 @@ describe('Apply and the master’s half', () => {
       await b.look()
       await b.setup.apply({ plan: b.setup.view().plan?.id })
       expect((await b.until(['done', 'failed'])).phase).toBe('done')
-      // by hand: no record, a unit of the owner's own, herdr running
+      // by hand: no record, a unit of the owner's own, the door on a port of the owner's, herdr
+      // running and its board holding that port
       rmSync(b.root.path('/etc/agent-board-node/setup.json'))
       const unit = b.root.path('/home/agent-board/.config/systemd/user/herdr.service')
       writeFileSync(unit, `${readFileSync(unit, 'utf8')}# mine\n`)
+      const nodeCfg = b.root.path(NODE_CONFIG)
+      writeFileSync(nodeCfg, `${JSON.stringify({ language: 'en', node: { id: 'server-1', port: 12440 } }, null, 2)}\n`)
+      writeFileSync(
+        b.root.path('/state/listen'),
+        'LISTEN 0 4096 127.0.0.1:12440 0.0.0.0:* users:(("bun",pid=77,fd=12))\n',
+      )
+      // the link user's key and fence for that port, as the owner set them up (the fence's paths as
+      // the fake root spells them, as a run there writes them)
+      writeFileSync(b.root.path(LINK_KEYS), `${linkKeysLine(KEY, 12440)}\n`)
+      writeFileSync(b.root.path(LINK_FENCE), linkFence(12440).replaceAll('/etc/', `${b.root.R}/etc/`))
       expect(existsSync(b.root.path('/state/user-active'))).toBe(true)
       const logBefore = b.root.log().length
       await b.look()
       const v = b.setup.view()
       expect(v.found).toMatchObject({ node: 'server-1', record: false })
+      // the node's own port, which its board holds: no refusal
+      expect(v.device).toEqual({ id: 'server-1', port: 12440 })
+      expect(v.refusals).toEqual([])
       expect(v.plan?.words[0]).toEqual({ key: 'node.setup.already', params: { id: 'server-1' } })
       await b.setup.apply({ plan: v.plan?.id })
       const v2 = await b.until(['done', 'failed'])
       expect(v2.phase).toBe('done')
+      // the unit file only; config.json, the key and the fence there as the owner left them
       expect(runOf(v2).filter(s => !s.endsWith(' skip'))).toEqual(['check ok', 'unit ok', 'hello ok'])
+      expect(readFileSync(b.root.path(LINK_KEYS), 'utf8')).toBe(`${linkKeysLine(KEY, 12440)}\n`)
+      expect(JSON.parse(readFileSync(nodeCfg, 'utf8')).node).toEqual({ id: 'server-1', port: 12440 })
+      expect(
+        (b.config().nodes as { devices: Record<string, { link: { port: number } }> }).devices['server-1']?.link.port,
+      ).toBe(12440)
       expect(v2.run?.warnings).toEqual(['herdr runs on as it was started: the new unit takes effect at its next start'])
       const after = b.root.log().slice(logBefore)
       expect(after).not.toContain('restart')
@@ -734,7 +770,123 @@ describe('Apply and the master’s half', () => {
   })
 })
 
+describe('the form while it works', () => {
+  test('the archive changed on its way: removed from the server, nothing run there', async () => {
+    const b = useSetup({ admin: { shaLie: true } })
+    await b.look()
+    await b.setup.apply({ plan: b.setup.view().plan?.id })
+    const v = await b.until(['done', 'failed'])
+    expect(v.master.find(s => s.id === 'upload')).toEqual({
+      id: 'upload',
+      state: 'fail',
+      said: { key: 'node.setup.said.uploadChanged' },
+    })
+    expect(b.admin.calls.map(c => c.kind)).toEqual(['probe', 'look', 'upload', 'clean'])
+    expect(readdirSync(b.root.path('/var/tmp')).filter(n => n.startsWith('agent-board-node.'))).toEqual([])
+  })
+
+  test('the connection went while the server ran: the form says the run goes on there and to Look again', async () => {
+    const b = useSetup({
+      admin: {
+        run: ['@@step check start', '@@step check ok'],
+        runEnd: { code: 255, err: 'Connection to ssh.example.com closed by remote host.' },
+      },
+    })
+    await b.look()
+    await b.setup.apply({ plan: b.setup.view().plan?.id })
+    const v = await b.until(['done', 'failed'])
+    expect([v.phase, v.hint, v.next]).toEqual(['failed', 'lost', { key: 'node.setup.next.lost' }])
+    expect(b.config().nodes).toBeUndefined()
+  })
+
+  test("a password that is one of the run's own words leaves its step lines whole; what the steps say is masked", async () => {
+    const b = useSetup({
+      admin: {
+        loginPassword: 'check',
+        run: ['@@step check start', 'checking the server', '@@step check ok', '@@result applied'],
+      },
+    })
+    await b.look({ password: 'check' })
+    await b.setup.apply({ plan: b.setup.view().plan?.id, password: 'check' })
+    const v = await b.until(['done', 'failed'])
+    expect(v.phase).toBe('done')
+    expect(v.run?.steps[0]).toEqual({ id: 'check', state: 'ok' })
+    expect(v.run?.said).toEqual(['••••ing the server'])
+  })
+
+  test('busy while a run goes on, and Cancel waits for the server; Cancel while the master waits for the link stops it there', async () => {
+    const b = useSetup({ linkUp: false, admin: { run: ['@@result applied'], slowRun: 600 } })
+    await b.look()
+    await b.setup.apply({ plan: b.setup.view().plan?.id })
+    expect(await b.look()).toMatchObject({ status: 409, body: { hint: 'busy' } })
+    while (b.admin.calls.at(-1)?.kind !== 'apply') await Bun.sleep(10)
+    expect(b.setup.cancel()).toMatchObject({ status: 409, body: { hint: 'busy' } })
+    await b.until(['finishing'])
+    expect(b.setup.cancel()).toEqual({ status: 200, body: { ok: true } })
+    // the link's wait ends on its own after the cancel: the form stays idle
+    await Bun.sleep(1800)
+    expect(b.setup.view().phase).toBe('idle')
+  })
+
+  test("the owner's ceiling out of range and a door on the board's own port are refused before anything is made", async () => {
+    const b = useSetup()
+    expect(await b.look({ port: 12422 })).toMatchObject({ status: 409, body: { field: 'port' } })
+    await b.look()
+    const r = await b.setup.apply({ plan: b.setup.view().plan?.id, ceiling: { memoryMaxMb: 100 } })
+    expect(r).toMatchObject({ status: 409, body: { field: 'ceiling' } })
+    expect(b.store.token('server-1')).toBeNull()
+    expect(b.admin.calls.map(c => c.kind)).toEqual(['probe', 'look'])
+  })
+})
+
 describe('Undo', () => {
+  const OURS = {
+    id: 'laptop',
+    order: ['server-1', 'local'],
+    devices: { 'server-1': { link: { kind: 'ssh', host: 'ssh.example.com', user: 'agent-board-link', port: 12430 } } },
+  }
+  const recorded = (root: FakeRoot): void => {
+    mkdirSync(root.path('/etc/agent-board-node'), { recursive: true })
+    writeFileSync(
+      root.path('/etc/agent-board-node/setup.json'),
+      '{"v":1,"run":"r1","at":"2026-11-21T10:00:00Z","state":"applied","node":{"id":"server-1","port":12430},"items":[{"kind":"keys"}]}\n',
+    )
+  }
+
+  test('the device is paused here before the server is undone; a config.json that will not take its removal is said, and Continue finishes it', async () => {
+    const root = fakeRoot('include', { node: true })
+    recorded(root)
+    let pausedSeen: unknown = null
+    const b = useSetup({
+      root,
+      nodes: OURS,
+      admin: {
+        run: ['@@result undone'],
+        onRun: () => {
+          pausedSeen = (
+            JSON.parse(readFileSync(configFile(), 'utf8')) as {
+              nodes: { devices: Record<string, { paused?: boolean }> }
+            }
+          ).nodes.devices['server-1']?.paused
+          writeFileSync(configFile(), '{ "nodes": ')
+        },
+      },
+    })
+    b.store.setToken('server-1', 'x'.repeat(43))
+    await b.undoLook()
+    await b.setup.undo({ plan: b.setup.view().plan?.id })
+    const v = await b.until(['undone', 'failed'])
+    expect(pausedSeen).toBe(true)
+    expect([v.phase, v.next]).toEqual(['failed', { key: 'node.setup.next.undoConfig' }])
+    // the credentials stay while the entry is still there
+    expect(b.store.token('server-1')).toBe('x'.repeat(43))
+    writeFileSync(configFile(), JSON.stringify({ language: 'en', nodes: OURS }))
+    expect(await b.setup.finish()).toEqual({ status: 200, body: { ok: true } })
+    expect(b.setup.view().phase).toBe('undone')
+    expect(b.config().nodes).toEqual({ id: 'laptop', order: ['local'], devices: {} })
+    expect(b.store.token('server-1')).toBeNull()
+  })
+
   test('a server with no record of a run: nothing to undo, said so', async () => {
     const b = useSetup()
     expect(await b.undoLook()).toMatchObject({
