@@ -6,6 +6,10 @@
 // -t and -T -C from it. SWALLOW: another block takes the user's ForceCommand; LEAK: the fence leaks
 // into root's settings; ALLOWUSERS: an AllowUsers that leaves the backup user out; BROKEN in the
 // config: sshd -t refuses it. Brought over from the review of #234 (its sim/setup.sh and prep.sh).
+// For the node's install (core/node-plan.ts) also loginctl, runuser, curl (the installers and the
+// door's hello from the root, nothing fetched), ss, apt-get and flock, sshd -T for the link user
+// (LINK_LEAK, LINK_ALLOWUSERS as LEAK and ALLOWUSERS are for the backup's), and with
+// `node` the files that install reads; the backup's scripts call none of these.
 import { onTestFinished } from 'bun:test'
 import { spawn, spawnSync } from 'node:child_process'
 import {
@@ -84,6 +88,58 @@ eval exec /usr/bin/install $args
   systemctl: `#!/bin/sh
 echo "systemctl $*" >> "$FAKE/state/log"; exit \${SYSTEMCTL_RC:-0}
 `,
+  // the node's install (core/node-plan.ts): lingering by a file and the user's runtime folder
+  loginctl: `#!/bin/sh
+echo "loginctl $*" >> "$FAKE/state/log"
+case $1 in
+  enable-linger)
+    uid=$(grep "^$2:" "$FAKE/state/passwd" | cut -d: -f3)
+    [ -n "$uid" ] || { echo "Failed to look up user $2" >&2; exit 1; }
+    mkdir -p "$FAKE/var/lib/systemd/linger" "$FAKE/run/user/$uid/systemd"; : > "$FAKE/var/lib/systemd/linger/$2" ;;
+  disable-linger)
+    grep -q "^$2:" "$FAKE/state/passwd" || { echo "Failed to look up user $2" >&2; exit 1; }
+    rm -f "$FAKE/var/lib/systemd/linger/$2" ;;
+esac
+exit 0
+`,
+  // the command runs as the caller; the user must exist
+  runuser: `#!/bin/sh
+u=
+while [ $# -gt 0 ]; do case $1 in -u) u=$2; shift;; --) shift; break;; esac; shift; done
+known=
+while IFS=: read -r name rest; do [ "$name" = "$u" ] && known=1; done < "$FAKE/state/passwd"
+[ -n "$known" ] || { echo "runuser: user $u does not exist" >&2; exit 1; }
+exec "$@"
+`,
+  // the installers from $FAKE/installers, the door's hello from $FAKE/state/hello; nothing leaves the machine
+  curl: `#!/bin/sh
+url=
+for a in "$@"; do case $a in http://*|https://*) url=$a;; esac; done
+echo "curl $url" >> "$FAKE/state/log"
+case $url in
+  https://bun.sh/install) cat "$FAKE/installers/bun" ;;
+  https://herdr.dev/install.sh) cat "$FAKE/installers/herdr" ;;
+  https://claude.ai/install.sh) cat "$FAKE/installers/claude" ;;
+  http://127.0.0.1:*/api/hello) if [ -f "$FAKE/state/hello" ]; then cat "$FAKE/state/hello"; else echo "curl: (7) Failed to connect" >&2; exit 7; fi ;;
+  *) echo "curl: (6) Could not resolve host" >&2; exit 6 ;;
+esac
+`,
+  ss: `#!/bin/sh
+if [ -f "$FAKE/state/listen" ]; then cat "$FAKE/state/listen"; fi
+exit 0
+`,
+  // the node's run lock: always free, held with FLOCK_BUSY
+  flock: `#!/bin/sh
+[ -z "\${FLOCK_BUSY:-}" ] || exit 1
+exit 0
+`,
+  // only looked for: the node's Bun installer needs it
+  unzip: `#!/bin/sh
+exit 0
+`,
+  'apt-get': `#!/bin/sh
+echo "apt-get $*" >> "$FAKE/state/log"; exit \${APT_RC:-0}
+`,
   sshd: `#!/bin/sh
 echo "sshd $*" >> "$FAKE/state/log"
 mode=; file=$FAKE/etc/ssh/sshd_config; conn=
@@ -97,13 +153,39 @@ T) user=\${conn#user=}; user=\${user%%,*}
    if [ "$user" = agent-board-backup ] && eff | grep -q '^Match User agent-board-backup'; then
      if [ -n "\${SWALLOW:-}" ]; then echo "forcecommand internal-sftp"; else fence; fi
      if [ -n "\${ALLOWUSERS:-}" ]; then echo "allowusers $ALLOWUSERS"; fi
+   elif [ "$user" = agent-board-link ] && eff | grep -q '^Match User agent-board-link'; then
+     eff | awk '/^Match User agent-board-link/{on=1;next} /^Match all/{on=0} on{ $1=tolower($1); print }'
+     if [ -n "\${LINK_ALLOWUSERS:-}" ]; then echo "allowusers $LINK_ALLOWUSERS"; fi
    else
      echo "authorizedkeysfile .ssh/authorized_keys"
      if [ -n "\${LEAK:-}" ] && eff | grep -q '^Match User agent-board-backup'; then echo "forcecommand leaked"; fi
+     if [ -n "\${LINK_LEAK:-}" ] && eff | grep -q '^Match User agent-board-link'; then echo "forcecommand leaked $(eff | awk '$1 == "PermitOpen" { print $2; exit }')"; fi
    fi
    exit 0;;
 esac
 exit 0
+`,
+}
+
+/** The installers the node's plan fetches (the fake curl serves them): each puts a stand-in for its program in the user's home. */
+const INSTALLERS: Record<string, string> = {
+  bun: `v=\${1#bun-v}
+mkdir -p "$HOME/.bun/bin"
+printf '%s\\n' '#!/bin/sh' 'case "$1" in' "  --version) echo \${FAKE_BUN_VERSION:-$v} ;;" '  -e) exec "$REAL_BUN" "$@" ;;' '  *) echo "bun $*" >> "$FAKE/state/log" ;;' 'esac' > "$HOME/.bun/bin/bun"
+chmod 755 "$HOME/.bun/bin/bun"
+echo "installer bun $v" >> "$FAKE/state/log"
+`,
+  herdr: `mkdir -p "$HOME/.local/bin"
+printf '%s\\n' '#!/bin/sh' 'case "$1" in' '  --version) echo "herdr \${FAKE_HERDR_VERSION:-0.9.5}" ;;' '  *) echo "herdr $*" >> "$FAKE/state/log" ;;' 'esac' > "$HOME/.local/bin/herdr"
+chmod 755 "$HOME/.local/bin/herdr"
+echo "installer herdr" >> "$FAKE/state/log"
+`,
+  claude: `[ -z "\${FAKE_CLAUDE_FAIL:-}" ] || { echo "claude: the install failed" >&2; exit 1; }
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share/claude"
+printf '%s\\n' '#!/bin/sh' 'echo "2.1.0 (Claude Code)"' > "$HOME/.local/share/claude/claude"
+chmod 755 "$HOME/.local/share/claude/claude"
+cp "$HOME/.local/share/claude/claude" "$HOME/.local/bin/claude"
+echo "installer claude" >> "$FAKE/state/log"
 `,
 }
 
@@ -118,6 +200,8 @@ export interface FakeRoot {
   runCut(script: string, after: number, env?: Record<string, string>): Promise<number | null>
   /** Every file under the root's etc/, with its contents: what a run left there. */
   etc(): Record<string, string>
+  /** The same under home/ (the node's install). */
+  home(): Record<string, string>
   passwd(): string
   log(): string
   /** How many times a run wrote Apply's record. */
@@ -131,7 +215,11 @@ const STOCK_INCLUDE = (R: string) =>
 const STOCK_PLAIN =
   '# stock\nPort 22\nPasswordAuthentication no\nUsePAM yes\n\nMatch Group sftponly\n    ForceCommand internal-sftp\n'
 
-export function fakeRoot(mode: 'include' | 'plain'): FakeRoot {
+/**
+ * `node`: also what the node's install reads and fetches (core/node-plan.ts): /etc/os-release of an
+ * Ubuntu 24.04, /proc/meminfo of 8 GB, /home, a running systemd, and the installers.
+ */
+export function fakeRoot(mode: 'include' | 'plain', opts: { node?: boolean } = {}): FakeRoot {
   const dir = mkdtempSync(join(tmpdir(), 'board-fake-root-'))
   onTestFinished(() => rmSync(dir, { recursive: true, force: true }))
   // the scripts' own spelling of the root: /c/Users/… on Windows (sh's PATH splits at the colon of C:/)
@@ -144,6 +232,24 @@ export function fakeRoot(mode: 'include' | 'plain'): FakeRoot {
     writeFileSync(join(dir, 'bin', name), text)
     chmodSync(join(dir, 'bin', name), 0o755)
   }
+  if (opts.node) {
+    for (const d of [
+      'home',
+      'proc',
+      'var/tmp',
+      'installers',
+      'run/systemd/system',
+      'run/user',
+      'var/lib/systemd/linger',
+    ])
+      mkdirSync(join(dir, d), { recursive: true })
+    writeFileSync(join(dir, 'etc', 'os-release'), 'ID=ubuntu\nVERSION_ID="24.04"\nPRETTY_NAME="Ubuntu 24.04.1 LTS"\n')
+    writeFileSync(
+      join(dir, 'proc', 'meminfo'),
+      'MemTotal:        8148000 kB\nMemAvailable:    7300000 kB\nSwapTotal:       0 kB\n',
+    )
+    for (const [name, text] of Object.entries(INSTALLERS)) writeFileSync(join(dir, 'installers', name), text)
+  }
   if (mode === 'include') {
     mkdirSync(join(dir, 'etc', 'ssh', 'sshd_config.d'))
     writeFileSync(join(dir, 'etc', 'ssh', 'sshd_config'), STOCK_INCLUDE(R))
@@ -154,6 +260,13 @@ export function fakeRoot(mode: 'include' | 'plain'): FakeRoot {
       .replaceAll('/etc/', `${R}/etc/`)
       .replaceAll('/var/lib/agent-board-backup', `${R}/var/lib/agent-board-backup`)
       .replaceAll('/run/sshd', `${R}/run/sshd`)
+      .replaceAll('/home/agent-board', `${R}/home/agent-board`)
+      .replaceAll('/var/lib/systemd/', `${R}/var/lib/systemd/`)
+      .replaceAll('/run/systemd/', `${R}/run/systemd/`)
+      .replaceAll('/run/user/', `${R}/run/user/`)
+      .replaceAll('/proc/meminfo', `${R}/proc/meminfo`)
+      .replaceAll('/var/tmp/', `${R}/var/tmp/`)
+      .replaceAll('/run/agent-board-node.lock', `${R}/run/agent-board-node.lock`)
       .replace(/^PATH=\/usr\/local\/sbin.*export PATH$/gm, `PATH=${R}/bin:/usr/bin:/bin; export PATH`)
   let n = 0
   const file = (script: string): string => {
@@ -161,7 +274,14 @@ export function fakeRoot(mode: 'include' | 'plain'): FakeRoot {
     writeFileSync(f, prep(script))
     return f
   }
-  const env = (extra: Record<string, string>) => ({ ...process.env, FAKE: R, SUDO_USER: 'admin', ...extra })
+  // REAL_BUN: the node's stand-in Bun runs `bun -e` with this one
+  const env = (extra: Record<string, string>) => ({
+    ...process.env,
+    FAKE: R,
+    SUDO_USER: 'admin',
+    REAL_BUN: process.execPath.replaceAll('\\', '/'),
+    ...extra,
+  })
   const walk = (d: string, out: Record<string, string>): Record<string, string> => {
     for (const name of readdirSync(d)) {
       const p = join(d, name)
@@ -208,6 +328,7 @@ export function fakeRoot(mode: 'include' | 'plain'): FakeRoot {
       }
     },
     etc: () => walk(join(dir, 'etc'), {}),
+    home: () => (existsSync(join(dir, 'home')) ? walk(join(dir, 'home'), {}) : {}),
     passwd: () => readFileSync(join(dir, 'state', 'passwd'), 'utf8'),
     log: () => readFileSync(join(dir, 'state', 'log'), 'utf8'),
     path: serverPath => join(dir, serverPath),

@@ -15,6 +15,7 @@ import { COMPACT_STRINGS } from './compact-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
+import { NODE_STRINGS } from './node-strings.ts'
 import { ONESHOT_STRINGS } from './oneshot-strings.ts'
 import { PRESENCE_STRINGS } from './presence-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
@@ -1439,6 +1440,8 @@ for (const code of Object.keys(CAL_STRINGS) as Lang[]) Object.assign(STRINGS[cod
 for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[code], ACCESS_STRINGS[code])
 // And setting up the server's web server from the board.
 for (const code of Object.keys(SERVER_STRINGS) as Lang[]) Object.assign(STRINGS[code], SERVER_STRINGS[code])
+// And making a server a node (#509).
+for (const code of Object.keys(NODE_STRINGS) as Lang[]) Object.assign(STRINGS[code], NODE_STRINGS[code])
 // And what the one command says on the server ("Do it myself").
 for (const code of Object.keys(ONESHOT_STRINGS) as Lang[]) Object.assign(STRINGS[code], ONESHOT_STRINGS[code])
 // And auto-compact (#378).
