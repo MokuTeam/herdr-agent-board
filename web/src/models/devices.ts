@@ -3,7 +3,8 @@
 // of a start placed on a device (8.3), and the words of a node-offline answer. A board without
 // `nodes` sends no `devices` and no item with a `device`: nothing here draws, the switch is not
 // there, and every filter passes what it passed before.
-import type { BoardDevice } from '../../../src/core/payload.ts'
+import type { NodesPanelSettings } from '../../../src/core/nodes.ts'
+import type { BoardCategory, BoardDevice } from '../../../src/core/payload.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import { ago } from './card.ts'
 import type { ProfileOption } from './profiles.ts'
@@ -147,4 +148,183 @@ export function offlineAnswer(reply: { error?: unknown; device?: unknown }, t: T
   if (reply.error !== 'node-offline') return null
   const id = typeof reply.device === 'string' ? reply.device : ''
   return id ? t('node.offline', { name: titles.get(id) || id }) : t('node.offlineAny')
+}
+
+// ---------------------------------------------------------------- Settings, Devices (#510)
+
+/** What the panel shows beside the devices, from `GET /api/nodes` (core/nodes.ts NodesPanelSettings). */
+export type PanelSettings = NodesPanelSettings
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/** GET and POST /api/nodes as the panel reads them: an object, its `settings` when it has them. */
+export function isPanelReply(v: unknown): v is { settings?: PanelSettings } {
+  if (!isObj(v)) return false
+  const s = v.settings
+  if (s === undefined) return true
+  return (
+    isObj(s) &&
+    (s.whenFull === 'local' || s.whenFull === 'wait') &&
+    (s.lanes === 'all' || Array.isArray(s.lanes)) &&
+    (s.seen === null || Array.isArray(s.seen)) &&
+    isObj(s.defaults)
+  )
+}
+
+/** The words of a change the server refused for a field (400, `{ error: <field> }`); null for any other answer. */
+export function refusedText(status: number, error: unknown, t: Translator): string | null {
+  if (status !== 400 || typeof error !== 'string') return null
+  if (['maxSessions', 'minFreeMemMb', 'maxLoad'].includes(error))
+    return t('node.dev.refused', { field: t(`node.dev.${error}`) })
+  // The list the panel showed is not the board's any more (a device added or left out meanwhile).
+  return t('node.dev.refusedStale')
+}
+
+/** The thresholds the panel edits, in the order its fields show. */
+export const THRESHOLDS = ['maxSessions', 'minFreeMemMb', 'maxLoad'] as const
+export type Threshold = (typeof THRESHOLDS)[number]
+
+/** One device's row in Settings, Devices. */
+export interface DeviceRow {
+  id: string
+  title: string
+  /** This computer: no link line, no Pause. */
+  here: boolean
+  /** The link in words; null for this computer. */
+  link: string | null
+  linkState: string | null
+  /** Sessions awake against `maxSessions`: the bar's share (null: no limit, no bar) and its words. */
+  sessions: { share: number | null; text: string } | null
+  /** Memory available: its share of the whole, where `minFreeMemMb` sits on that bar, and the words. */
+  memory: { share: number; floor: number | null; low: boolean; text: string } | null
+  /** Its version, and whether it runs this board's commit (null: not known). */
+  version: string | null
+  same: boolean | null
+  /** Each profile's bundle as the status has it. */
+  bundles: string[]
+  paused: boolean
+  drain: boolean
+  values: Record<Threshold, number | null>
+}
+
+const share = (n: number, of: number): number => (of > 0 ? Math.min(1, Math.max(0, n / of)) : 0)
+const gb = (mb: number): string => (Math.round(mb / 102.4) / 10).toString()
+
+/** A device's link in words: online, connecting, not reachable and for how long, refused and why. */
+export function linkWords(d: Pick<BoardDevice, 'link'>, now: number, t: Translator): string | null {
+  const link = d.link
+  if (!link) return null
+  if (link.state === 'online') return t('node.dev.link.online')
+  if (link.state === 'connecting') return t('node.dev.link.connecting')
+  if (link.state === 'refused') return t('node.dev.link.refused', { why: t(`node.dev.why.${link.reason ?? 'ssh'}`) })
+  // Offline since `since`: how long, once that is a minute or more.
+  return now - link.since >= 60_000
+    ? t('node.dev.link.offline', { age: ago(link.since, now, t) })
+    : t('node.dev.link.offlineNever')
+}
+
+/** The rows of the panel, in the payload's order (config.json's `nodes.order`). */
+export function deviceRows(devices: readonly BoardDevice[], now: number, t: Translator): DeviceRow[] {
+  return devices.map(d => {
+    const s = d.status
+    const here = d.kind === null
+    const sessions = s
+      ? {
+          share: d.maxSessions ? share(s.sessions.awake, d.maxSessions) : null,
+          text: d.maxSessions
+            ? t('node.dev.sessions', { n: s.sessions.awake, max: d.maxSessions })
+            : t('node.dev.sessionsAny', { n: s.sessions.awake }),
+        }
+      : null
+    const free = s?.memAvailableMb
+    const memory =
+      s && free != null
+        ? {
+            share: share(free, s.memTotalMb),
+            floor: d.minFreeMemMb != null ? share(d.minFreeMemMb, s.memTotalMb) : null,
+            low: d.minFreeMemMb != null && free < d.minFreeMemMb,
+            text:
+              d.minFreeMemMb != null
+                ? t('node.dev.memory', { free: gb(free), min: gb(d.minFreeMemMb) })
+                : t('node.dev.memoryAny', { free: gb(free) }),
+          }
+        : null
+    return {
+      id: d.id,
+      title: d.title,
+      here,
+      link: here ? null : linkWords(d, now, t),
+      linkState: d.link?.state ?? null,
+      sessions,
+      memory,
+      version: s?.version || null,
+      same: here ? null : d.sameCommit,
+      bundles: (s?.profiles ?? []).flatMap(p =>
+        p.bundle ? [t('node.dev.bundle', { profile: p.id, seq: p.bundle.seq })] : [],
+      ),
+      paused: d.paused,
+      drain: d.drain,
+      values: { maxSessions: d.maxSessions, minFreeMemMb: d.minFreeMemMb, maxLoad: d.maxLoad },
+    }
+  })
+}
+
+/** The order with `id` moved `by` places (−1 up, +1 down), held inside the list; the same list at an end. */
+export function movedOrder(order: readonly string[], id: string, by: number): string[] {
+  const from = order.indexOf(id)
+  const to = Math.min(order.length - 1, Math.max(0, from + by))
+  if (from < 0 || to === from) return [...order]
+  const next = order.filter(o => o !== id)
+  next.splice(to, 0, id)
+  return next
+}
+
+/** A tick in "Lanes that may leave this computer". */
+export interface LaneTick {
+  id: string
+  title: string
+  color: string
+  ticked: boolean
+  /** Added since the list was last saved: unticked, and marked. */
+  fresh: boolean
+}
+
+/** The board's lanes as ticks, by `nodes.lanes` and the lanes seen when it was last saved. */
+export function laneTicks(
+  categories: readonly Pick<BoardCategory, 'id' | 'title' | 'color'>[],
+  lanes: PanelSettings['lanes'],
+  seen: PanelSettings['seen'],
+): LaneTick[] {
+  return categories.map(c => {
+    const ticked = lanes === 'all' || lanes.includes(c.id.toLowerCase())
+    return { id: c.id, title: c.title, color: c.color, ticked, fresh: !ticked && seen !== null && !seen.includes(c.id) }
+  })
+}
+
+/**
+ * The lanes after one tick: every lane ticked by name (so a lane added later still starts unticked,
+ * as with nothing ticked); 'all' only from the All tick.
+ */
+export function lanesAfter(lanes: PanelSettings['lanes'], ids: readonly string[], id: string, on: boolean): string[] {
+  const now = lanes === 'all' ? ids.map(i => i.toLowerCase()) : [...lanes]
+  const key = id.toLowerCase()
+  const without = now.filter(l => l !== key)
+  return on ? [...without, key] : without
+}
+
+/**
+ * A threshold field as left: the number to save, or null to put the field back as it was. An
+ * empty field takes the board's own figure (`dflt`, the placeholder); none known, nothing changes.
+ */
+export function thresholdTyped(
+  key: Threshold,
+  text: string,
+  dflt: number | undefined,
+  was: number | null,
+): number | null {
+  const typed = text.trim().replace(',', '.')
+  const n = typed === '' ? (dflt ?? Number.NaN) : Number(typed)
+  if (!Number.isFinite(n)) return null
+  const fits = key === 'maxLoad' ? n > 0 : Number.isInteger(n) && (key === 'maxSessions' ? n >= 1 : n >= 0)
+  return fits && n !== was ? n : null
 }

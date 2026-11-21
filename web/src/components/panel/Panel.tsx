@@ -30,6 +30,7 @@ export type PanelKind =
   | 'calendarSettings'
   | 'paths'
   | 'team'
+  | 'devices'
 
 /** Each panel's name for screen readers, and the session sheet's close button id. */
 const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
@@ -51,6 +52,7 @@ const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
   calendarSettings: { label: 'cal.set.title' },
   paths: { label: 'paths.title' },
   team: { label: 'team.title' },
+  devices: { label: 'node.dev.title' },
 }
 
 interface ShellProps {

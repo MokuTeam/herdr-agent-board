@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import { UPLINK_SEEN_MAX, type UplinkResult, uplinkResultOf } from '../core/node-uplink.ts'
 import { DEVICE_ID } from '../core/nodes.ts'
 import { hasUnprintable } from '../core/team.ts'
-import { isRecord, replaceFile, updateJson } from './json-store.ts'
+import { isRecord, readJson, replaceFile, updateJson } from './json-store.ts'
 import { pace } from './pacing.ts'
 import { stateDir } from './paths.ts'
 
@@ -344,4 +344,23 @@ function seenCalls(file: string): { id: string; result: UplinkResult }[] {
   } catch {
     return []
   }
+}
+
+// ---------------------------------------------------------------- the lanes the panel last saw (#510)
+
+const isWords = (v: unknown): v is string[] => Array.isArray(v) && v.every(s => typeof s === 'string')
+
+/**
+ * The board's lanes when Settings, Devices last saved which of them may leave this computer
+ * (`<nodes>/lanes-seen.json`, design 12): a lane not among them came since, and the panel shows
+ * it unticked and new. null: never saved, or unreadable.
+ */
+export function readLanesSeen(dir = nodesDir()): string[] | null {
+  return readJson(join(dir, 'lanes-seen.json'), isWords)
+}
+
+/** Keeps the board's lanes as they were when the panel saved its list. */
+export function writeLanesSeen(ids: readonly string[], dir = nodesDir()): void {
+  mkdirSync(dir, { recursive: true })
+  replaceFile(join(dir, 'lanes-seen.json'), `${JSON.stringify(ids)}\n`)
 }

@@ -84,6 +84,9 @@ export interface SettingsDeps {
   /** The local board's page with the payload's teamRev (#231): Team… is offered. */
   team?(): boolean
   openTeam?(): void
+  /** The local page of a board whose config.json has `nodes` (the payload's `devices`, #510): Devices… is offered. */
+  devices?(): boolean
+  openDevices?(): void
   /** This page signed in through the owner's domain: Sign out is offered. */
   signOut?(): boolean
   endLogin?(): void
@@ -137,6 +140,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       timeSettings: deps.timeSettings?.() ?? false,
       calendarSettings: deps.calendarSettings?.() ?? false,
       team: deps.team?.() ?? false,
+      devices: deps.devices?.() ?? false,
       signOut: deps.signOut?.() ?? false,
       presence: deps.presence?.(),
       idleMinutes: deps.idleMinutes?.(),
@@ -172,6 +176,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'timeSettings') deps.openTimeSettings?.()
         else if (pick?.kind === 'calendarSettings') deps.openCalendarSettings?.()
         else if (pick?.kind === 'team') deps.openTeam?.()
+        else if (pick?.kind === 'devices') deps.openDevices?.()
         else if (pick?.kind === 'signout') deps.endLogin?.()
         else if (pick?.kind === 'presence')
           deps.choosePresence?.(pick.value === 'none' ? { on: false } : { on: true, mode: pick.value })
@@ -335,7 +340,7 @@ const crossFade = (): ((apply: () => void) => unknown) | undefined =>
  * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake,
  * `openAccess` the Remote access panel, `openMokupilot` the MokuPilot panel, `openBackup` the Backup panel,
  * `openTimeSettings` Time tracking's, `openLocalPaths` Paths on this computer, `openCalendarSettings`
- * the calendar's (#328), `openTeam` the Team panel (#231).
+ * the calendar's (#328), `openTeam` the Team panel (#231), `openDevices` Settings, Devices (#510).
  */
 export function useSettingsMenu(
   menu: MenuEngine,
@@ -349,6 +354,7 @@ export function useSettingsMenu(
   openLocalPaths: () => void = () => {},
   openCalendarSettings: () => void = () => {},
   openTeam: () => void = () => {},
+  openDevices: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
@@ -367,6 +373,7 @@ export function useSettingsMenu(
     openLocalPaths,
     openCalendarSettings,
     openTeam,
+    openDevices,
   })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
@@ -444,6 +451,8 @@ export function useSettingsMenu(
       openCalendarSettings: () => latest.current.openCalendarSettings(),
       team: () => offersTeam(latest.current.board.data),
       openTeam: () => latest.current.openTeam(),
+      devices: () => !remotePage() && !!latest.current.board.data?.devices,
+      openDevices: () => latest.current.openDevices(),
       signOut: () => remotePage() && keptAuth() === 'login',
       endLogin: () => {
         const { t, board } = latest.current

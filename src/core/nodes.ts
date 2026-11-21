@@ -627,3 +627,137 @@ export interface DeviceView {
   /** When its last payload came; null before one did. */
   payloadAt: number | null
 }
+
+// ---------------------------------------------------------------- the panel's edits (#510)
+
+/** The thresholds and switches the Devices panel sets per device (`nodes.devices.<id>`). */
+const DEVICE_SETTINGS = ['paused', 'drain', 'maxSessions', 'minFreeMemMb', 'maxLoad'] as const
+type DeviceSetting = (typeof DEVICE_SETTINGS)[number]
+
+/**
+ * One change of Settings, Devices (design 12), as `POST /api/nodes` carries it: the order, a
+ * device's switches and thresholds (a threshold set to null is written as null: no limit, which
+ * the board's own figures never replace), the lanes that may leave this computer, and what a start does when every device is
+ * full.
+ */
+export type NodesEdit =
+  | { op: 'order'; ids: string[] }
+  | { op: 'set'; id: string; values: Partial<Record<DeviceSetting, boolean | number | null>> }
+  | { op: 'lanes'; lanes: 'all' | string[]; shown?: string[] }
+  | { op: 'whenFull'; whenFull: 'local' | 'wait' }
+
+const EDIT_OPS = ['order', 'set', 'lanes', 'whenFull']
+
+/** What `GET /api/nodes` adds for the panel beside the devices (#510). */
+export interface NodesPanelSettings {
+  whenFull: NodesConfig['whenFull']
+  lanes: NodesConfig['lanes']
+  /** The board's lanes when the lanes were last saved; null: never. A lane not among them is new. */
+  seen: string[] | null
+  /** Per device with a status: the thresholds the board would give it (defaultThresholds), the fields' placeholders. */
+  defaults: Record<string, ReturnType<typeof defaultThresholds>>
+  /** The device the next plain start would go to (the placer's `next`); null while it would wait. */
+  next: string | null
+}
+
+/**
+ * A body of `POST /api/nodes` read as a panel edit: the edit, `{ error }` naming the field that
+ * is not one, or null for a body of another op (retry, sync), which the route reads as before.
+ * Only the shape here; applyNodesEdit holds each value to the rules nodesConfig reads with.
+ */
+export function nodesEditOf(body: Record<string, unknown>): NodesEdit | { error: string } | null {
+  if (typeof body.op !== 'string' || !EDIT_OPS.includes(body.op)) return null
+  if (body.op === 'order') {
+    const ids = body.ids
+    return Array.isArray(ids) && ids.every(i => typeof i === 'string') ? { op: 'order', ids } : { error: 'ids' }
+  }
+  if (body.op === 'lanes') {
+    // `shown`: the lanes the panel listed, kept so that one added later shows as new.
+    const words = (v: unknown): v is string[] => Array.isArray(v) && v.every(l => typeof l === 'string')
+    if (
+      body.shown !== undefined &&
+      (!words(body.shown) || body.shown.length > 500 || body.shown.some(l => l.length > 200))
+    )
+      return { error: 'shown' }
+    const shown = body.shown === undefined ? {} : { shown: body.shown as string[] }
+    const lanes = body.lanes
+    if (lanes === 'all') return { op: 'lanes', lanes, ...shown }
+    return words(lanes) ? { op: 'lanes', lanes, ...shown } : { error: 'lanes' }
+  }
+  if (body.op === 'whenFull')
+    return body.whenFull === 'local' || body.whenFull === 'wait'
+      ? { op: 'whenFull', whenFull: body.whenFull }
+      : { error: 'whenFull' }
+  if (typeof body.id !== 'string' || !DEVICE_ID.test(body.id)) return { error: 'id' }
+  const values: Partial<Record<DeviceSetting, boolean | number | null>> = {}
+  for (const key of DEVICE_SETTINGS) {
+    if (!Object.hasOwn(body, key)) continue
+    const v = body[key]
+    const fits = key === 'paused' || key === 'drain' ? typeof v === 'boolean' : v === null || typeof v === 'number'
+    if (!fits) return { error: key }
+    values[key] = v as boolean | number | null
+  }
+  if (Object.keys(values).length === 0) return { error: 'values' }
+  // This computer is never paused: a start by hand runs here when every device is full (8.1 step 5).
+  if (body.id === LOCAL && 'paused' in values) return { error: 'paused' }
+  return { op: 'set', id: body.id, values }
+}
+
+const problemKey = (p: NodesProblem): string => `${p.device ?? ''}\u0000${p.key}\u0000${p.why}`
+
+/** The field a new problem of an edit is answered with: the key, without the link's or a profile's part. */
+const fieldOf = (p: NodesProblem): string => p.key.split('.')[0] as string
+
+/**
+ * A panel edit applied to config.json's `nodes` section (the raw object, changed in place), held to
+ * the rules nodesConfig reads with: the edit is made on a copy, and a problem the copy has that the
+ * section had not refuses it with the field, the section left as it was. A device the section does
+ * not hold is refused, except this computer, which gets an entry. `changed`: whether anything moved.
+ */
+export function applyNodesEdit(
+  nodes: Record<string, unknown>,
+  edit: NodesEdit,
+  hostName = '',
+): { changed: boolean } | { error: string } {
+  const next = structuredClone(nodes)
+  if (edit.op === 'order') next.order = [...edit.ids]
+  else if (edit.op === 'whenFull') next.whenFull = edit.whenFull
+  else if (edit.op === 'lanes')
+    next.lanes = edit.lanes === 'all' ? 'all' : [...new Set(edit.lanes.map(l => l.trim().toLowerCase()))]
+  else {
+    if (next.devices === undefined && edit.id === LOCAL) next.devices = {}
+    if (!isObject(next.devices)) return { error: 'id' }
+    const devices = next.devices
+    if (!Object.hasOwn(devices, edit.id)) {
+      if (edit.id !== LOCAL) return { error: 'id' }
+      devices[edit.id] = {}
+    }
+    const entry = devices[edit.id]
+    if (!isObject(entry)) return { error: 'id' }
+    for (const [key, v] of Object.entries(edit.values)) entry[key] = v
+  }
+  const was = nodesConfig(nodes, hostName)
+  // The panel lists the usable devices (nodesConfig's order) and sends each of them once: anything
+  // else is a list gone stale. A device left out for a problem of its own keeps a place after them.
+  if (edit.op === 'order') {
+    const usable = was?.order ?? [LOCAL]
+    const ids = edit.ids
+    if (new Set(ids).size !== ids.length || ids.length !== usable.length || !ids.every(id => usable.includes(id)))
+      return { error: 'ids' }
+    const raw = isObject(next.devices) ? Object.keys(next.devices) : []
+    next.order = [...ids, ...raw.filter(id => !ids.includes(id))]
+  }
+  const before = new Set((was?.problems ?? []).map(problemKey))
+  const after = nodesConfig(next, hostName)?.problems ?? []
+  // A problem the edit brings, or one on the very field it sets (a bad value over a bad value).
+  const edited = (p: NodesProblem): boolean =>
+    edit.op === 'set' ? p.device === edit.id && fieldOf(p) in edit.values : !p.device && p.key === edit.op
+  const fresh = after.find(p => !before.has(problemKey(p)) || edited(p))
+  if (fresh) return { error: edit.op === 'set' ? fieldOf(fresh) : edit.op === 'order' ? 'ids' : edit.op }
+  const changed = JSON.stringify(next) !== JSON.stringify(nodes)
+  if (changed) {
+    for (const key of Object.keys(nodes)) delete nodes[key]
+    Object.assign(nodes, next)
+  }
+  return { changed }
+}

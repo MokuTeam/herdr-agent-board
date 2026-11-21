@@ -141,6 +141,13 @@ export function App() {
     setTeam(true)
     setTeamMounted(true)
   }
+  // Settings → Devices… (#510), local page of a board with `nodes`: mounted at its first opening.
+  const [devices, setDevices] = useState(false)
+  const [devicesMounted, setDevicesMounted] = useState(false)
+  const openDevices = () => {
+    setDevices(true)
+    setDevicesMounted(true)
+  }
   // A team notification's click (#355): the panel opens on that thread.
   const [teamFocus, setTeamFocus] = useState<string | null>(null)
   const teamAsked = teamOpen?.n ?? 0
@@ -223,6 +230,7 @@ export function App() {
     openLocalPaths,
     openCalendarSettings,
     openTeam,
+    openDevices,
   )
   // Tasks' 📌 menu under an agent's message, and the panel's buttons.
   const todos = useTodos(menus.menu)
@@ -329,6 +337,9 @@ export function App() {
         }}
         {...(localPathsMounted && remotePage()
           ? { localPaths: { open: localPaths, onClose: () => setLocalPaths(false) } }
+          : {})}
+        {...(devicesMounted && !remotePage() && data?.devices
+          ? { devices: { open: devices, onClose: () => setDevices(false) } }
           : {})}
         {...(teamMounted && offersTeam(data)
           ? {

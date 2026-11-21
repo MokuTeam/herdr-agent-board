@@ -96,6 +96,12 @@ export interface PlacerOptions {
 
 export interface Placer extends LaunchPlacer {
   close(): void
+  /**
+   * The device a plain start would go to now (Settings, Devices, #510): a start by hand of `lane`
+   * and `profile` with Claude, from a folder that may leave, held to the same rules as every
+   * start; null while it would wait, or `nodes` is off. Nothing is reserved and nothing is queued.
+   */
+  next(lane: string, profile: string, cfg?: NodesConfig | null): Promise<string | null>
 }
 
 /** One start the placer holds: deciding, on its way to a node, or waiting. */
@@ -722,6 +728,15 @@ export function createPlacer(o: PlacerOptions): Placer {
       const dropped = awake < lastAwake
       lastAwake = awake
       if (dropped && waiting().length) kick()
+    },
+    async next(lane, profile, given) {
+      // A section just written is given: the live config follows the file a moment later.
+      const cfg = closed ? null : given === undefined ? nodes() : given
+      if (!cfg) return null
+      const view = await viewOf(cfg, new Map())
+      const task: Task = { lane, profile, agent: 'claude', byHand: true, origin: LOCAL, portable: { ok: true } }
+      const verdict = place(task, view, clock.now())
+      return 'on' in verdict ? verdict.on : null
     },
     close() {
       closed = true

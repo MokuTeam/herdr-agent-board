@@ -18,6 +18,7 @@ import { BackupPanel, type BackupPanelProps } from './backup/BackupPanel.tsx'
 import { CalendarPanel, type CalendarPanelProps } from './calendar/CalendarPanel.tsx'
 import { CalendarSettingsPanel, type CalendarSettingsPanelProps } from './calendar/CalendarSettingsPanel.tsx'
 import { CategoriesPanel, type CategoriesPanelProps } from './categories/CategoriesPanel.tsx'
+import { DevicesPanel, type DevicesPanelProps } from './devices/DevicesPanel.tsx'
 import { ErrorBoundary } from './ErrorBoundary.tsx'
 import { MokupilotPanel, type MokupilotPanelProps } from './mokupilot/MokupilotPanel.tsx'
 import { LocalPathsPanel, type LocalPathsPanelProps } from './phones/LocalPathsPanel.tsx'
@@ -67,6 +68,8 @@ export interface SidePanelsProps {
   calendarSettings?: CalendarSettingsPanelProps
   /** Settings → Team… (#231): given by the page while it offers it (the local page, the payload's teamRev). */
   team?: TeamPanelProps
+  /** Settings → Devices… (#510): given by the page once opened, on the local page of a board with `nodes`. */
+  devices?: DevicesPanelProps
 }
 
 export function SidePanels({
@@ -88,6 +91,7 @@ export function SidePanels({
   calendar,
   calendarSettings,
   team,
+  devices,
 }: SidePanelsProps) {
   const { data, ui, dispatch } = useBoardContext()
   return (
@@ -112,6 +116,7 @@ export function SidePanels({
       {calendarSettings && <CalendarSettingsPanel {...calendarSettings} />}
       {localPaths && remotePage() && <LocalPathsPanel {...localPaths} />}
       {team && offersTeam(data) && <TeamPanel {...team} />}
+      {devices && data?.devices && <DevicesPanel {...devices} />}
     </>
   )
 }

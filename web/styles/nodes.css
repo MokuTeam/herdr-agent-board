@@ -71,3 +71,110 @@
   .device-chip { border: 1px solid CanvasText; }
   .device-dot { forced-color-adjust: none; }
 }
+
+/* Settings, Devices (#510, components/devices/DevicesPanel.tsx): the devices in the order new
+   sessions fill them, each a row as the lanes' rows are (app.css .cat-row), dragged by its handle
+   with the same springs. Its bars, its switches, its threshold fields; then the lanes that may
+   leave this computer and what a start does when everything is full. Every rule selects by a
+   class of the panel's own; no rule of a narrow screen: the rows wrap inside themselves. */
+.devices-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 160ms ease;
+}
+.devices-row.lifted { z-index: 2; box-shadow: var(--shadow-lift); }
+.devices-row.held .devices-name { opacity: 0.6; transition: opacity 200ms ease; }
+.devices-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.devices-row .handle { flex: none; }
+.devices-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+.devices-name strong { min-width: 0; overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.devices-link { color: var(--label-2); font-size: 12px; }
+.devices-row[data-link="online"] .devices-link { color: var(--green); }
+.devices-row[data-link="refused"] .devices-link { color: var(--red); }
+/* The device the next start would go to: quiet, after the link. */
+.devices-next {
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--fill-2);
+  color: var(--label-2);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+/* The bars: sessions awake against maxSessions, memory free with a tick where minFreeMemMb sits. */
+.devices-bars { display: flex; flex-wrap: wrap; gap: 6px 16px; min-width: 0; }
+.devices-bar { display: flex; flex: 1 1 180px; align-items: center; gap: 8px; min-width: 0; }
+.devices-meter {
+  position: relative;
+  flex: 1 1 60px;
+  min-width: 48px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--fill);
+}
+.devices-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--share) * 100%);
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.devices-bar.low .devices-fill { background: var(--orange); }
+.devices-floor { position: absolute; top: 0; bottom: 0; left: calc(var(--share) * 100%); width: 2px; background: var(--label-2); }
+.devices-figure { flex: none; color: var(--label-2); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.devices-facts { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 0; }
+.devices-same.other { color: var(--orange); }
+
+/* Pause and Drain, then the thresholds: they wrap under each other on a phone. */
+.devices-controls { display: flex; flex-wrap: wrap; gap: 6px 20px; }
+.devices-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
+.devices-limits { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.devices-limit { display: flex; flex: 1 1 120px; flex-direction: column; gap: 3px; min-width: 0; color: var(--label-2); font-size: 11.5px; }
+.devices-limit input {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--separator);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--label);
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.devices-limit input:focus-visible { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+
+/* The lanes and When everything is full. */
+.devices-section { display: flex; flex-direction: column; gap: 6px; margin-top: 18px; }
+.devices-head { margin: 0; font-size: 13px; font-weight: 600; }
+.devices-lanes { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.devices-lane { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; }
+.devices-swatch { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--lane); }
+.devices-new {
+  padding: 0 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .devices-row, .devices-fill, .devices-row.held .devices-name { transition: none; }
+}
+@media (forced-colors: active) {
+  .devices-row { border: 1px solid CanvasText; }
+  .devices-fill, .devices-floor, .devices-swatch { forced-color-adjust: none; }
+}

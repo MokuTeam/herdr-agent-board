@@ -481,6 +481,8 @@ describe('nodes.css (#502)', () => {
     '.device-as-of',
     '.node-offline',
     '.sheet-device',
+    // Settings, Devices (#510).
+    '.devices-',
   ]
   const body = (selector: string) => {
     const at = css.indexOf(`\n${selector} {`)

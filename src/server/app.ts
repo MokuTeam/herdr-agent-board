@@ -13,7 +13,7 @@ import { editNodes, loadConfig, saveFoundProfiles } from '../adapters/config-fil
 import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { workspaceList } from '../adapters/herdr.ts'
-import { createDeviceStore, createNodeStore, nodeDir } from '../adapters/node-store.ts'
+import { createDeviceStore, createNodeStore, nodeDir, readLanesSeen, writeLanesSeen } from '../adapters/node-store.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { knobMs, pace } from '../adapters/pacing.ts'
@@ -1090,7 +1090,6 @@ export async function startServer({
       store: createDeviceStore(),
       log,
     })
-    localNodeRoutes = nodesRoutes(nodeLinks, bundleSync)
     // Requests for a node's card (#501): first in the route table, which the phones' listener and the
     // tunnel share, so they reach it after their own refusals. Without `nodes` the table is main's.
     const aggregate = nodeAggregate
@@ -1124,7 +1123,7 @@ export async function startServer({
       launch: () => cfg.launch,
       version: PLUGIN_VERSION,
     })
-    nodePlacer = createPlacer({
+    const placer = createPlacer({
       cfg,
       links: nodeLinks,
       remote: () => aggregate.part(),
@@ -1136,6 +1135,21 @@ export async function startServer({
         if (!r.ok) log(`placer: the thresholds of ${id} were not written: ${r.error}`)
       },
       log,
+    })
+    nodePlacer = placer
+    localNodeRoutes = nodesRoutes(nodeLinks, bundleSync, {
+      config: () => nodesConfig(cfg.nodes),
+      edit: editNodes,
+      seen: () => readLanesSeen(),
+      keepSeen: ids => writeLanesSeen(ids),
+      ownStatus: () => ownStatus.answer(),
+      next: n => {
+        // A plain start: the board's default profile, a lane that may leave when one does.
+        const lane = n?.lanes === 'all' ? (cfg.categories[0]?.id ?? '') : (n?.lanes[0] ?? '')
+        const list = deps.profiles().list
+        const profile = list.find(p => p.inherited)?.id ?? list[0]?.id ?? ''
+        return placer.next(lane, profile, n)
+      },
     })
     // Their ssh dies with the board, also on an exit that skips close().
     process.on('exit', nodeLinks.killNow)
