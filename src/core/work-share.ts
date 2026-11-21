@@ -11,7 +11,7 @@
 //      id): foldShared below. Two boards with the same entries get the same head, whatever order the
 //      entries arrived in.
 //   3. Every entry carries its sender's head after it, folded without the sender's private
-//      entries (#549). A board whose own counter is more than one behind the entry's knows it
+//      entries (#549) and those that did not go out (#556). A board whose own counter is more than one behind the entry's knows it
 //      missed entries: it writes an entry of its own that takes the sender's head fields
 //      (`entries missing here`), placed right after the sender's.
 //
@@ -61,6 +61,14 @@ export const isAdoption = (e: Pick<ThreadEntry, 'type' | 'private' | 'author'>):
  */
 export const ownPrivate = (e: Pick<ThreadEntry, 'private' | 'author'>): boolean =>
   e.private === true && e.author.kind !== 'peer'
+
+/**
+ * An entry of this board that did not go out (#556): held for the owner, discarded by the owner,
+ * or refused by the hub. Until it goes, no peer holds it nor the head fields it set: it stays out
+ * of the head the next entry carries and out of the history file, as a private one does.
+ */
+export const notSent = (e: Pick<ThreadEntry, 'out'>): boolean =>
+  e.out === 'held' || e.out === 'discarded' || e.out === 'refused'
 
 /** Where an entry stands in this board's journal; the one being written (no row yet) is the last. */
 const writtenAt = (e: Pick<ThreadEntry, 'seq'>): number => e.seq || Number.MAX_SAFE_INTEGER
@@ -318,14 +326,17 @@ export interface HistoryFile {
 /** At most this many entries in one history file. */
 export const HISTORY_MAX = 2000
 
-/** The shared entries of a thread as `Send history` exports them: never a private one, nor one that came from a copy. */
+/**
+ * The shared entries of a thread as `Send history` exports them: never a private one, one that did
+ * not go out (held, discarded, refused, #556), nor one that came from a copy.
+ */
 export function historyOf(h: ThreadHead, entries: readonly ThreadEntry[], me: string): HistoryFile {
   return {
     v: 1,
     thread: h.id,
     key: wireKey(h),
     entries: entries
-      .filter(e => !e.private && e.out !== 'copy' && e.out !== 'import')
+      .filter(e => !e.private && !notSent(e) && e.out !== 'copy' && e.out !== 'import')
       .slice(-HISTORY_MAX)
       .map(e => {
         const set = wireSet(e.set, me)

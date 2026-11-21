@@ -58,7 +58,7 @@ import {
   type ThreadStatus,
   threadsConfig,
 } from '../core/work-threads.ts'
-import { type ThreadsCtx, tellWatchers } from './work-threads.ts'
+import { meOf, outOf, type ThreadsCtx, tellWatchers } from './work-threads.ts'
 
 /** A task board larger than this is not read: MokuPilot's own are a few kilobytes. */
 export const TASK_FILE_MAX_BYTES = 1024 * 1024
@@ -180,13 +180,20 @@ export function importTaskFile(ctx: ThreadsCtx, file: TaskFile, o: ImportOptions
       const present = new Set(file.items.map(i => i.id))
       for (const [id, h] of byItem) {
         if (present.has(id) || !isOpen(h.status) || !agentBoardOf(h.origin)?.mirrored) continue
-        const r = appendEntry(tx, h.id, {
-          at: ctx.now,
-          author: ctx.actor,
-          type: 'system',
-          text: 'gone from the task board',
-          set: { status: 'dropped' },
-        })
+        const out = outOf(ctx, h)
+        const r = appendEntry(
+          tx,
+          h.id,
+          {
+            at: ctx.now,
+            author: ctx.actor,
+            type: 'system',
+            text: 'gone from the task board',
+            set: { status: 'dropped' },
+            ...(out && { out }),
+          },
+          out && meOf(ctx),
+        )
         result.dropped.push(r.head.key)
         heads.set(r.head.id, r.head)
       }
@@ -297,13 +304,22 @@ function write(
   }
   setOrigin(tx, head.id, { ...(from ?? {}), ...originOf(file, item, !!from?.mirrored) })
   if (!Object.keys(set).length) return null
-  const r = appendEntry(tx, head.id, {
-    at: updateAt(item, set, head, ctx.now),
-    author: ctx.actor,
-    type: 'system',
-    text: set.title !== undefined ? whole : '',
-    set,
-  })
+  // On a shared thread it goes to the peers like any other entry (#557): queued, numbered and
+  // folded as postEntry's are; on any other thread it is written as before.
+  const out = outOf(ctx, head)
+  const r = appendEntry(
+    tx,
+    head.id,
+    {
+      at: updateAt(item, set, head, ctx.now),
+      author: ctx.actor,
+      type: 'system',
+      text: set.title !== undefined ? whole : '',
+      set,
+      ...(out && { out }),
+    },
+    out && meOf(ctx),
+  )
   if (!ctx.mirror && set.assignee && owner.onBoard && owner.party?.kind === 'session')
     putWatch(
       tx,

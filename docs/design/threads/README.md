@@ -277,21 +277,26 @@ thread, and the copies have to come out the same. Three rules do that:
    on its board takes the `n` of the entry it follows instead, so the numbers the peers see have
    no holes that rule 3 would read as missed entries: a private one (#541), and one the board
    writes with nothing to send it, such as a shared parent's "all N sub-threads closed", which is
-   private for that reason (#548). An entry held for the owner takes its number when it is
+   private for that reason (#548). An import's entry on a shared thread (a re-import's change,
+   the mirror's "gone from the task board", 13.1) is not one of them: it goes out like any other
+   entry (#557). An entry held for the owner takes its number when it is
    written, before anyone knows whether it goes out: one the owner discards, or one the hub
    refuses for good, leaves a hole the peers read as an entry missing, which it is.
 2. A head field takes the value from the entry that is last in the order `(n, at, author's peer
    id)`. Two boards that hold the same entries compute the same head, whatever order the entries
    arrived in.
 3. Every shared entry also carries its sender's head as it was after the entry (key, title,
-   status, summary, `rev`), folded without its sender's private entries (#549). A board that
+   status, summary, `rev`), folded without its sender's private entries (#549) and without those
+   that did not go out: held for the owner, discarded, refused (#556). A board that
    sees a `rev` more than one ahead of its own knows it missed entries: it adopts the newer head
-   fields, and shows a line in the feed, "entries missing here".
+   fields, and shows a line in the feed, "entries missing here". It adopts only the fields that
+   differ from its own, so a held entry the owner sends later, after a later entry went out, lands
+   on the peers as it does on its sender: its own fields apply where no later entry set them.
 
 Rule 3 is what a late joiner and a board that was offline past the hub's 7 days rely on. They have
 the right head after the first message they receive and lack only the older feed. For the feed
 itself there is one more step, started by a person: "Send history" exports the thread's shared
-entries to a JSON file and sends it through the hub's end-to-end encrypted files (#371). The
+entries, those that went out or wait to (none held, discarded or refused, #556), to a JSON file and sends it through the hub's end-to-end encrypted files (#371). The
 receiving board imports them, marked "from ben's copy", since the hub cannot prove who wrote an
 entry that was relayed. There is no automatic backfill protocol in this design.
 

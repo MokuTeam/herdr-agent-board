@@ -300,6 +300,22 @@ function copyFiles(ctx: ThreadsCtx, thread: string, entry: string, paths: readon
 export const filePath = (ref: string, state = stateDir()): string => join(state, ...ref.split('/'))
 
 /**
+ * The `out` of an entry this board writes on `head` (11.1): on a shared thread one that is not
+ * private goes to the peers, held first when the owner holds the owner's entries; none elsewhere.
+ */
+export function outOf(
+  ctx: Pick<ThreadsCtx, 'ownerHolds' | 'actor'>,
+  head: ThreadHead,
+  priv = false,
+): EntryOut | undefined {
+  if (!sharedOf(head) || priv) return undefined
+  return ctx.ownerHolds && ctx.actor.kind === 'owner' ? 'held' : 'queued'
+}
+
+/** This board's peer id, which a shared thread's entries are folded and numbered with (#394). */
+export const meOf = (ctx: Pick<ThreadsCtx, 'me'>): string => ctx.me ?? readKey()?.pub ?? ''
+
+/**
  * One entry on `head` (`post`, `done`, `ask`, `set`). The last open sub-thread of a parent closing
  * writes a system entry on the parent, by the same author, so its watchers hear of it and the one
  * who closed it does not.
@@ -331,9 +347,8 @@ export function postEntry(ctx: ThreadsCtx, head: ThreadHead, input: PostInput): 
       throw new ThreadError('owner_only', `${head.key} is shared: only the owner drops it`)
     if ((input.files?.length ?? 0) > 1) throw new ThreadError('files', `${head.key} is shared: one file per entry`)
   }
-  const held = ctx.ownerHolds && ctx.actor.kind === 'owner'
-  const out: EntryOut | undefined = input.out ?? (shared && !input.private ? (held ? 'held' : 'queued') : undefined)
-  const me = shared || input.out ? (ctx.me ?? readKey()?.pub ?? '') : undefined
+  const out = input.out ?? outOf(ctx, head, input.private)
+  const me = shared || input.out ? meOf(ctx) : undefined
   const entryId = randomUUID()
   const files = input.files?.length ? copyFiles(ctx, head.id, entryId, input.files) : []
   let done: { written: Written; heads: ThreadHead[] }

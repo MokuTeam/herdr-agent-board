@@ -35,6 +35,7 @@ import {
   localKey,
   missingText,
   type NameOf,
+  notSent,
   ownPrivate,
   peerSet,
   sharedOrder,
@@ -328,8 +329,13 @@ export function outgoing(
     after.status === 'owner'
   const set = wireSet(entry.set, me, proposed)
   // The head the peers hold right after it (#549): the entries before it but this board's own
-  // private ones, whose fields stay here as their text does, then the entry as the peers take it.
-  const theirs = foldShared(head, [...upTo.slice(0, -1).filter(e => !ownPrivate(e)), asSent(entry, proposed)], me)
+  // private ones and those that did not go out (held, discarded, refused: #556), whose fields stay
+  // here as their text does, then the entry as the peers take it.
+  const theirs = foldShared(
+    head,
+    [...upTo.slice(0, -1).filter(e => !ownPrivate(e) && !notSent(e)), asSent(entry, proposed)],
+    me,
+  )
   const s = sharingOf(head)
   const flags = {
     ...(entry.type === 'system' && s && entry.at === s.at && s.by === 'me' && isShareEntry(entry) && { share: true }),

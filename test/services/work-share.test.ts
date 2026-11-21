@@ -11,10 +11,19 @@ import os from 'node:os'
 import { join } from 'node:path'
 import { type BoardDb, openDb } from '../../src/adapters/db.ts'
 import type { NewEntry } from '../../src/adapters/schedule-store.ts'
-import { entriesOf, findEntry, findThread, getThread, needsOwner } from '../../src/adapters/work-thread-store.ts'
+import {
+  entriesOf,
+  findEntry,
+  findThread,
+  getThread,
+  needsOwner,
+  setOut,
+} from '../../src/adapters/work-thread-store.ts'
 import type { ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import { GENERAL, type ThreadRef, type WorkBody } from '../../src/core/team.ts'
+import { parseTaskFile } from '../../src/core/thread-import.ts'
 import { afterN, type Party, sharedOf, type ThreadEntry, type ThreadHead } from '../../src/core/work-threads.ts'
+import { importTaskFile } from '../../src/services/thread-import.ts'
 import {
   historyText,
   type InboundWork,
@@ -807,4 +816,170 @@ test('a hostile history file: unprintable fields, counters far ahead, a forged a
   expect(got.get('00000000-0000-4000-8000-0000000000e5')?.set?.assignee).toBeUndefined()
   expect(getThread(b.db, id)?.assignee).toBeNull()
   expect(sharedOf(getThread(b.db, id) as ThreadHead)?.offer).toBeUndefined()
+})
+
+// ------------------------------------------------------------------ what did not go out (#556), an import (#557)
+
+test('Send history leaves out what did not go out: held, discarded, refused (#556)', () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  let head = getThread(a.db, id) as ThreadHead
+  const went = postEntry(a.ctx(mapper, T0 + 20_000), head, { text: 'columns found' })
+  setOut(a.db, went.entry.id, 'sent')
+  head = went.head
+  for (const [i, out, text] of [
+    [1, 'held', 'held for the owner'],
+    [2, 'discarded', 'thrown away by the owner'],
+    [3, 'refused', 'refused by the hub'],
+  ] as const) {
+    const w = postEntry(a.ctx(i === 3 ? owner : mapper, T0 + 20_000 + i * 1000), head, { text, summary: text })
+    setOut(a.db, w.entry.id, out)
+    head = w.head
+  }
+  const waits = postEntry(a.ctx(owner, T0 + 25_000), head, { text: 'goes next' })
+  expect(waits.entry.out).toBe('queued')
+  const raw = historyText(a.db, getThread(a.db, id) as ThreadHead, a.me)
+  const texts = (JSON.parse(raw) as { entries: { text: string }[] }).entries.map(e => e.text)
+  expect(texts).toContain('columns found')
+  expect(texts).toContain('goes next')
+  for (const word of ['held for', 'thrown away', 'refused by']) expect(raw).not.toContain(word)
+  importHistory(b.ctx(), getThread(b.db, id) as ThreadHead, raw, ANNA)
+  const theirs = JSON.stringify(entriesOf(b.db, id))
+  expect(theirs).toContain('columns found')
+  for (const word of ['held for', 'thrown away', 'refused by']) expect(theirs).not.toContain(word)
+})
+
+test("a held entry's fields stay out of the head that goes out, and stay home once it is discarded (#556)", () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const was = shared(getThread(b.db, id))
+  const held = postEntry(a.ctx(mapper, T0 + 20_000), getThread(a.db, id) as ThreadHead, {
+    status: 'waiting',
+    waitingOn: 'cleo signs it off',
+    summary: 'held for the owner',
+  })
+  setOut(a.db, held.entry.id, 'held')
+  const next = postEntry(a.ctx(owner, T0 + 21_000), held.head, { text: 'the rows are in' })
+  const out = outgoing(a.db, getThread(a.db, id) as ThreadHead, next.entry, a.me, r => r)
+  expect(out?.work.head).toMatchObject({ status: was?.status, summary: was?.summary })
+  expect(JSON.stringify(out)).not.toContain('held for the owner')
+  setOut(a.db, held.entry.id, 'discarded')
+  take(b, handOver(a, b, next.head, next.entry))
+  // ben reads the discarded one's number as missing, which it is, and holds none of its fields.
+  expect(entriesOf(b.db, id).filter(e => e.text.includes('entries missing here'))).toHaveLength(1)
+  expect(getThread(b.db, id)).toMatchObject({ status: was?.status, summary: was?.summary, waitingOn: '' })
+  expect(JSON.stringify(entriesOf(b.db, id))).not.toContain('held for the owner')
+  const after = postEntry(a.ctx(owner, T0 + 22_000), getThread(a.db, id) as ThreadHead, { text: 'next sheet' })
+  const later = outgoing(a.db, getThread(a.db, id) as ThreadHead, after.entry, a.me, r => r)
+  expect(JSON.stringify(later)).not.toContain('held for the owner')
+})
+
+test('a held entry the owner sends after a later one went out comes out the same on both boards (#556)', () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const held = postEntry(a.ctx(mapper, T0 + 20_000), getThread(a.db, id) as ThreadHead, {
+    status: 'waiting',
+    waitingOn: 'cleo signs it off',
+    summary: 'mapped, cleo signs it off',
+  })
+  setOut(a.db, held.entry.id, 'held')
+  const next = postEntry(a.ctx(owner, T0 + 21_000), held.head, { text: 'the rows are in' })
+  take(b, handOver(a, b, next.head, next.entry))
+  // The owner sends the held one: it carries its own fields, and ben folds it where anna does.
+  const sent = handOver(a, b, held.head, held.entry)
+  expect(sent.work?.set).toMatchObject({ status: 'waiting', summary: 'mapped, cleo signs it off' })
+  setOut(a.db, held.entry.id, 'sent')
+  take(b, sent)
+  expect(getThread(b.db, id)).toMatchObject({ status: 'waiting', summary: 'mapped, cleo signs it off' })
+  expect(shared(getThread(b.db, id))).toEqual(shared(getThread(a.db, id)))
+})
+
+/** anna's thread made by an import of a task board, then shared with ben, and the file the import read. */
+function importedPair() {
+  const a = board(ANNA)
+  const b = board(BEN)
+  const owner: Party = { kind: 'owner' }
+  const item = {
+    id: 't1',
+    text: 'Map the 2019 price columns',
+    status: 'doing',
+    owner: '',
+    owner_id: '',
+    note: 'started on the first sheet',
+    created_at: '2026-11-12T09:00:00.000Z',
+    started_at: '2026-11-12T09:05:00.000Z',
+    done_at: null,
+    updated_at: '2026-11-12T09:05:00.000Z',
+  }
+  const file = (over: Record<string, unknown>) =>
+    parseTaskFile(
+      { format: 'agent-board', version: 1, harness: 'claude', session_id: 'day-1', items: [{ ...item, ...over }] },
+      { harness: 'claude', session: 'day-1' },
+    )
+  const first = importTaskFile(a.ctx(owner, T0), file({}), { lane: 'atlas', sessionOf: () => null })
+  const head = findThread(a.db, first.created[0] as string, null, true)
+  const share = shareThread(a.ctx(owner, T0 + 2000), head, { kind: 'peer', peer: BEN, topic: `${BEN}/${head.id}` })
+  take(b, handOver(a, b, share.head, share.entry))
+  return { a, b, id: head.id, file }
+}
+
+test("a re-import's change on a shared thread goes out to the peers like any other entry (#557)", () => {
+  const { a, b, id, file } = importedPair()
+  const owner: Party = { kind: 'owner' }
+  const rev = (getThread(a.db, id) as ThreadHead).rev
+  importTaskFile(
+    a.ctx(owner, T0 + 10_000),
+    file({
+      status: 'done',
+      note: 'all sheets mapped',
+      done_at: '2026-11-12T09:30:00.000Z',
+      updated_at: '2026-11-12T09:30:00.000Z',
+    }),
+    {
+      lane: 'atlas',
+      sessionOf: () => null,
+    },
+  )
+  const entry = entriesOf(a.db, id).at(-1) as ThreadEntry
+  expect(entry).toMatchObject({ n: rev + 1, out: 'queued', set: { status: 'done', summary: 'all sheets mapped' } })
+  expect(entry.private).toBeUndefined()
+  take(b, handOver(a, b, getThread(a.db, id) as ThreadHead, entry))
+  expect(getThread(b.db, id)).toMatchObject({ status: 'done', summary: 'all sheets mapped' })
+  expect(shared(getThread(b.db, id))).toEqual(shared(getThread(a.db, id)))
+  expect(entriesOf(b.db, id).filter(e => e.text.includes('entries missing here'))).toEqual([])
+})
+
+test('an import on a thread that is not shared writes as before: no out, its own number (#557)', () => {
+  const a = board(ANNA)
+  const owner: Party = { kind: 'owner' }
+  const item = {
+    id: 't2',
+    text: 'Check the 2020 columns',
+    status: 'doing',
+    owner: '',
+    owner_id: '',
+    created_at: '2026-11-12T09:00:00.000Z',
+    started_at: '2026-11-12T09:05:00.000Z',
+    done_at: null,
+    updated_at: '2026-11-12T09:05:00.000Z',
+  }
+  const file = (over: Record<string, unknown>) =>
+    parseTaskFile(
+      { format: 'agent-board', version: 1, harness: 'claude', session_id: 'day-2', items: [{ ...item, ...over }] },
+      { harness: 'claude', session: 'day-2' },
+    )
+  const first = importTaskFile(a.ctx(owner, T0), file({}), { lane: 'atlas', sessionOf: () => null })
+  const head = findThread(a.db, first.created[0] as string, null, true)
+  importTaskFile(
+    a.ctx(owner, T0 + 10_000),
+    file({ status: 'done', done_at: '2026-11-12T09:30:00.000Z', updated_at: '2026-11-12T09:30:00.000Z' }),
+    {
+      lane: 'atlas',
+      sessionOf: () => null,
+    },
+  )
+  const entry = entriesOf(a.db, head.id).at(-1) as ThreadEntry
+  expect(entry).toMatchObject({ n: head.rev + 1, set: { status: 'done' } })
+  expect(entry.out).toBeUndefined()
+  expect(entry.private).toBeUndefined()
 })
