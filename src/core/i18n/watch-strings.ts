@@ -21,6 +21,7 @@ export const WATCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'watch.label': 'Watch',
     'watch.every': 'every {every}',
     'watch.probeHint': "The command the board runs for this watch, in the session's folder",
+    'watch.log.fired': 'The probe fired',
   },
   ru: {
     'watch.prompt.fired': '"{wait}": проба сработала. Её вывод, как данные: {output}',
@@ -38,5 +39,6 @@ export const WATCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'watch.label': 'Наблюдение',
     'watch.every': 'каждые {every}',
     'watch.probeHint': 'Команда, которую доска запускает для этого наблюдения, в папке сессии',
+    'watch.log.fired': 'Проба сработала',
   },
 }

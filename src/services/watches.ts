@@ -161,20 +161,26 @@ export function watchPass(o: WatchPassOpts): { pass(): Promise<void>; running():
     })
     if (!after) return
     if (outcome.kind === 'error') deps.log(`watch ${w.id}: ${outcome.why}`)
+    // Each line goes in first and is marked told after (core/watches.ts Note): one that could not be
+    // written is tried again at the next run. The session's cap of entries does not refuse them.
     for (const n of notes) {
       try {
-        addEntry({
-          key: after.key,
-          text: n.text,
-          at: now,
-          next: now,
-          ...(after.name !== undefined && { name: after.name }),
-          ...(after.pane !== undefined && { pane: after.pane }),
-          ...(after.cwd !== undefined && { cwd: after.cwd }),
-          by: after.by ?? 'agent',
-          from: WATCH_FROM,
-          ...(!n.wake && { noWake: true }),
-        })
+        addEntry(
+          {
+            key: after.key,
+            text: n.text,
+            at: now,
+            next: now,
+            ...(after.name !== undefined && { name: after.name }),
+            ...(after.pane !== undefined && { pane: after.pane }),
+            ...(after.cwd !== undefined && { cwd: after.cwd }),
+            by: after.by ?? 'agent',
+            from: WATCH_FROM,
+            ...(!n.wake && { noWake: true }),
+          },
+          { overCap: true },
+        )
+        updateWatch(w.id, cur => (same(cur) ? { ...cur, [n.mark]: true } : undefined))
       } catch (err) {
         deps.log(`watch ${w.id}: a note was not scheduled: ${messageOf(err)}`)
       }

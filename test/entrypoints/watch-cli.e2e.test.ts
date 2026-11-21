@@ -148,3 +148,34 @@ test('watches off: --probe is words of the wait text, as before, with a note; th
     /usage: board wait <text> \[--probe "<command>" \[--every 10m\] \[--timeout 20s\] \[--silence 3d\]\]/,
   )
 })
+
+test("--probe only for the caller's own wait; after a /clear the new session's doing ends the old one's watch", async () => {
+  const box = await sandbox()
+  config(box, { watches: true })
+  const cwd = onBoard(box)
+  // Another session's wait: refused, nothing set, that card untouched.
+  const other = '99999999-8888-7777-6666-555555555555'
+  const r = await cli(box, ['wait', '--session', other, 'CI', '--probe', 'exit 1'])
+  assert.notEqual(r.code, 0)
+  assert.match(r.out, /--probe sets a watch for this session's own wait only/)
+  assert.deepEqual(watches(box), [])
+  assert.equal(existsSync(join(box.cards, `${other}.json`)), false)
+  // Its own by --session (its pane here): allowed.
+  const own = await cli(box, ['wait', '--session', 'p1', 'CI', '--probe', 'exit 1'])
+  assert.equal(own.code, 0, own.out)
+  const id = /watch ([0-9a-f]{6})/.exec(own.out)?.[1]
+  assert.ok(id, own.out)
+
+  // /clear: pane p1 now runs a new session; the old one is not live. Its doing ends the watch.
+  const after = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+  const pane = { pane_id: 'p1', agent: 'claude', agent_session: { value: after }, agent_status: 'idle', cwd }
+  box.state({
+    'api snapshot': { result: { snapshot: { panes: [pane], tabs: [], workspaces: [] } } },
+    'pane get': { result: { pane } },
+    'agent get': { result: { agent: { agent: 'claude', agent_status: 'idle', agent_session: { value: after } } } },
+  })
+  const doing = await cli(box, ['doing', 'back at it'])
+  assert.equal(doing.code, 0, doing.out)
+  assert.match(doing.out, new RegExp(`watch ${id} ended$`))
+  assert.deepEqual(watches(box), [])
+})

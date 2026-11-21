@@ -189,15 +189,22 @@ export function logView(r: LogRecord, itemOf: (key: string) => Item | undefined,
       ? t('sched.why.dropped', { n: r.n ?? 3 })
       : r.result === 'missed' || r.result === 'failed'
         ? logWhy(r, t)
-        : r.kind === 'restart' || r.kind === 'sleep'
+        : r.kind === 'restart' || r.kind === 'sleep' || r.result === 'fired'
           ? ''
           : late > 120_000
             ? t('sched.lateBy', { late: span(late, t) })
             : ''
-  const TITLES: Record<string, string> = { sent: 'sched.sent', dropped: 'sched.dropped', failed: 'sched.failedRun' }
+  // A watch's probe that fired (#486) is a run that did what it is for.
+  const TITLES: Record<string, string> = {
+    sent: 'sched.sent',
+    dropped: 'sched.dropped',
+    failed: 'sched.failedRun',
+    fired: 'watch.log.fired',
+  }
   return {
-    result: r.result,
-    icon: r.result === 'sent' ? 'check' : r.result === 'dropped' ? '×' : '!',
+    // Its row looks as a sent run's (app.css .log-row.sent); its title says what it was.
+    result: r.result === 'fired' ? 'sent' : r.result,
+    icon: r.result === 'sent' || r.result === 'fired' ? 'check' : r.result === 'dropped' ? '×' : '!',
     iconTitle: t(TITLES[r.result] ?? 'sched.missed'),
     when: capital(longWhen(r.at, t, now), t),
     name: itemOf(r.key)?.name || r.name || t('session'),

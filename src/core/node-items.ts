@@ -446,7 +446,9 @@ export function nodePart(raw: unknown, device: string | null): NodePart | null {
   for (const x of Array.isArray(raw.schedules) ? raw.schedules : []) {
     if (schedules.length >= MOST.schedules) break
     const e = isObject(x) && !Object.hasOwn(x, 'device') ? shape(ENTRY, ['id', 'key', 'text', 'next'])(x, k) : undefined
-    if (e) schedules.push(tag(e as ScheduleEntry))
+    // A node's watch (#486) runs on the node's own board and stays there: the master would show it
+    // as a plain reminder due at its next check.
+    if (e && (e as ScheduleEntry).kind !== 'watch') schedules.push(tag(e as ScheduleEntry))
   }
   return { items, launches, schedules }
 }

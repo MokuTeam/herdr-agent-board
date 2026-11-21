@@ -105,12 +105,15 @@ export async function schedulerRuns(
   }
 }
 
-/** Save a new entry under a fresh id and return it. */
-export function addEntry(fields: NewEntry): ScheduleEntry {
+/**
+ * Save a new entry under a fresh id and return it. `overCap`: a watch's own line (#486), which the
+ * session's cap of entries does not refuse.
+ */
+export function addEntry(fields: NewEntry, { overCap = false }: { overCap?: boolean } = {}): ScheduleEntry {
   // A watch is made only by addWatch (`board wait --probe` on this computer): never as a reminder.
   if (fields.kind === 'watch' || 'probe' in fields) throw new Error('a watch is set with board wait --probe only')
   mkdirSync(scheduleDir(), { recursive: true })
-  if (listEntries().filter(e => e.key === fields.key).length >= MAX_PER_SESSION) {
+  if (!overCap && listEntries().filter(e => e.key === fields.key).length >= MAX_PER_SESSION) {
     throw new Error(`this session has ${MAX_PER_SESSION} entries already; remove some first (board unschedule <id>)`)
   }
   const clean = {
@@ -334,10 +337,14 @@ export type NewWatch = {
 
 /**
  * A new watch for `fields.key`, under an id no entry or watch has; the session's earlier watch ends
- * (one watch per session: a new `board wait` replaces it). Returns it and the ones it ended.
+ * (one watch per session: a new `board wait` replaces it), and with `live` the one a session
+ * before a /clear left in its pane (endWatches). Returns it and the ones it ended.
  */
-export function addWatch(fields: NewWatch): { watch: WatchEntry; ended: WatchEntry[] } {
-  const ended = endWatches(fields.key)
+export function addWatch(
+  fields: NewWatch,
+  live?: (key: string) => boolean,
+): { watch: WatchEntry; ended: WatchEntry[] } {
+  const ended = endWatches(fields.key, fields.pane && live ? { pane: fields.pane, live } : undefined)
   mkdirSync(watchesDir(), { recursive: true })
   const clean = {
     ...fields,
@@ -378,10 +385,15 @@ export function removeWatch(id: unknown): WatchEntry | null {
   return removed
 }
 
-/** End every watch of a session (`board doing`, `done`, `clear`, a new `wait`); returns them. */
-export function endWatches(key: string): WatchEntry[] {
+/**
+ * End every watch of a session (`board doing`, `done`, `clear`, a new `wait`); returns them.
+ * `byPane`: the session's own pane, and whether a key is a live session. A watch set in that pane
+ * by a session that is not live any more (the one before a /clear, which the scheduler would follow
+ * here at its next check) ends too.
+ */
+export function endWatches(key: string, byPane?: { pane: string; live: (key: string) => boolean }): WatchEntry[] {
   return listWatches()
-    .filter(w => w.key === key)
+    .filter(w => w.key === key || (!!byPane && w.pane === byPane.pane && !byPane.live(w.key)))
     .map(w => removeWatch(w.id))
     .filter((w): w is WatchEntry => w !== null)
 }
@@ -409,7 +421,9 @@ export function fireWatch(id: string, text: string, now = Date.now()): ScheduleE
       from: WATCH_FROM,
     }
     const there = getEntry(id)
-    if (there) fired = there.key === reminder.key && there.text === reminder.text ? there : addEntry(reminder)
+    // The reminder is the watch's own: the session's cap does not refuse it.
+    if (there)
+      fired = there.key === reminder.key && there.text === reminder.text ? there : addEntry(reminder, { overCap: true })
     else {
       mkdirSync(scheduleDir(), { recursive: true })
       fired =
@@ -417,7 +431,7 @@ export function fireWatch(id: string, text: string, now = Date.now()): ScheduleE
           fileOf(id),
           (taken: ScheduleEntry | null) => (taken ? undefined : { id, ...reminder, created: now }),
           isEntry,
-        ) ?? addEntry(reminder)
+        ) ?? addEntry(reminder, { overCap: true })
     }
     return null
   })
