@@ -172,6 +172,8 @@ export interface LaunchView {
   agent?: string
   /** The model it starts on (#380), null for the profile's default. */
   model?: string | null
+  /** The device it starts on, when that is not this computer (#500): its ids carry the device's prefix. */
+  device?: string
 }
 
 export interface Config {
@@ -362,5 +364,10 @@ export interface Item {
   todos?: Todo[]
   /** Its auto-compact (#378, core/compact.ts compactView): absent when neither it nor Settings has a limit. */
   compact?: CompactView
+  /**
+   * The device it runs on, when that is not this computer (#500, core/node-items.ts): its key then
+   * carries the device's prefix. Absent for this computer's own, and always without `nodes`.
+   */
+  device?: string
   [extra: string]: unknown
 }

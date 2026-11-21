@@ -61,6 +61,8 @@ export type ScheduleEntry = {
    * services/work-threads.ts; services/scheduler.ts).
    */
   noWake?: boolean
+  /** In the master's payload, an entry of another device's session (#500): its id and key carry the device's prefix. */
+  device?: string
   [extra: string]: unknown
 }
 

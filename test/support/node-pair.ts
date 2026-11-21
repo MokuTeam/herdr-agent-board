@@ -160,22 +160,27 @@ export interface Pair {
   waitDevice(id: string, ok: (d: DeviceView) => boolean, ms?: number): Promise<DeviceView>
 }
 
-/** The pane `s-<id>` in a node's fake herdr. */
-function oneSession(box: Sandbox, id: string): void {
-  const snapshot = {
-    panes: [
-      { pane_id: 'p1', agent: 'claude', agent_session: { value: `s-${id}` }, agent_status: 'idle', cwd: box.dir },
-    ],
-    tabs: [],
-    workspaces: [],
-  }
-  box.state({ 'api snapshot': { result: { snapshot } } })
+/** A herdr pane as `api snapshot` lists it. */
+export type FakePane = Record<string, unknown>
+
+/** These panes in a board's fake herdr. */
+export function showPanes(box: Sandbox, panes: FakePane[]): void {
+  box.state({ 'api snapshot': { result: { snapshot: { panes, tabs: [], workspaces: [] } } } })
 }
 
-/** A node board with its door up, a master's token made there, and its proxy. */
-export async function nodeBoard(id: string, env: Record<string, string> = PAIR_ENV): Promise<PairNode> {
+/** The pane `s-<id>`: what a node's fake herdr has unless the test says. */
+const oneSession = (box: Sandbox, id: string): FakePane[] => [
+  { pane_id: 'p1', agent: 'claude', agent_session: { value: `s-${id}` }, agent_status: 'idle', cwd: box.dir },
+]
+
+/** A node board with its door up, a master's token made there, and its proxy; `panes`: its fake herdr's, else `s-<id>`. */
+export async function nodeBoard(
+  id: string,
+  env: Record<string, string> = PAIR_ENV,
+  panes?: (box: Sandbox) => FakePane[],
+): Promise<PairNode> {
   const box = await sandbox()
-  oneSession(box, id)
+  showPanes(box, panes?.(box) ?? oneSession(box, id))
   const dir = join(stateFolder(box), 'node')
   mkdirSync(dir, { recursive: true })
   const { token } = createNodeStore({ dir }).add('master', 'hand')
@@ -187,15 +192,25 @@ export async function nodeBoard(id: string, env: Record<string, string> = PAIR_E
 
 /**
  * A master and `count` nodes (`server-1`, `server-2`), linked by `direct` through each node's
- * proxy. `masterCfg`: more of the master's config; `tokens: false` stores none on the master.
+ * proxy. `masterCfg`: more of the master's config; `tokens: false` stores none on the master;
+ * `panes`: a node's fake herdr's panes by its id, `masterPanes` the master's (none unless given).
  */
 export async function nodePair(
-  o: { count?: number; masterCfg?: Record<string, unknown>; env?: Record<string, string>; tokens?: boolean } = {},
+  o: {
+    count?: number
+    masterCfg?: Record<string, unknown>
+    env?: Record<string, string>
+    tokens?: boolean
+    panes?: (id: string, box: Sandbox) => FakePane[]
+    masterPanes?: (box: Sandbox) => FakePane[]
+  } = {},
 ): Promise<Pair> {
   const env = { ...PAIR_ENV, ...o.env }
   const ids = Array.from({ length: o.count ?? 1 }, (_, i) => `server-${i + 1}`)
-  const nodes = await Promise.all(ids.map(id => nodeBoard(id, env)))
+  const panes = o.panes
+  const nodes = await Promise.all(ids.map(id => nodeBoard(id, env, panes && (box => panes(id, box)))))
   const box = await sandbox()
+  if (o.masterPanes) showPanes(box, o.masterPanes(box))
   const store = createDeviceStore({ dir: join(stateFolder(box), 'nodes') })
   if (o.tokens !== false) for (const n of nodes) store.setToken(n.id, n.token)
   const devices = Object.fromEntries(

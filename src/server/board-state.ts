@@ -19,6 +19,7 @@ import { lang, t } from '../core/lang.ts'
 import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
 import type { Limits } from '../core/limits.ts'
 import { familyTitle } from '../core/model-check.ts'
+import { parseNodeKey } from '../core/nodes.ts'
 import type {
   BackupPayload,
   BoardLimits,
@@ -42,6 +43,7 @@ import { collect } from '../services/board.ts'
 import type { Deps } from '../services/deps.ts'
 import { canFork } from '../services/launch/fork.ts'
 import type { Launches } from '../services/launch/launches.ts'
+import type { NodeAggregate } from '../services/nodes/aggregate.ts'
 import { hooksInPlace } from '../services/profiles.ts'
 import { type Terminals, terminalOn } from '../services/terminals.ts'
 
@@ -51,6 +53,11 @@ export interface BoardState {
   items(): Item[]
   observation(): BoardObservation | null
   find(key: string): Item | undefined
+  /**
+   * find(), and for a key with another device's prefix (core/nodes.ts nodeKey) that device's item
+   * (#500): for what reaches a node through its link, never through this computer's herdr.
+   */
+  findAny(key: string): Item | undefined
   /** True when the data is too old for actions that go through herdr. */
   stale(): boolean
   /** Builds the payload again and pushes it to live clients when the board changed. */
@@ -104,6 +111,12 @@ interface Options {
   workdeskDialog?: () => DialogStatus | null
   observeSessions?: NonNullable<Parameters<typeof collect>[1]>['observed']
   observeFailure?: () => void
+  /**
+   * The master's devices (#500, services/nodes/aggregate.ts): their items, launches and schedule
+   * entries go into the payload beside this computer's, with the devices' row. null while `nodes`
+   * is off: the payload is what it was without them. items(), find() and observation() never see them.
+   */
+  nodes?: () => Pick<NodeAggregate, 'part' | 'find'> | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -238,6 +251,7 @@ export function createBoardState({
   workdeskDialog,
   observeSessions,
   observeFailure,
+  nodes,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -247,7 +261,11 @@ export function createBoardState({
 
   /** The board as clients see it, without the time of the last successful refresh. */
   function board(): Omit<BoardPayload, 'lastSuccessfulRefreshAt'> {
-    const ids = [...new Set([...cfg.categories.map(c => c.id), ...items.map(i => i.category)])]
+    // Other devices' cards (#500), only while this board is a master: a lane of theirs this board
+    // does not have shows as any lane a session made up does.
+    const others = nodes?.()?.part() ?? null
+    const shown = others ? [...items, ...others.items] : items
+    const ids = [...new Set([...cfg.categories.map(c => c.id), ...shown.map(i => i.category)])]
     const workdeskLine = workdesk?.()
     const dialogLine = workdeskDialog?.()
     const categories = ids
@@ -290,12 +308,12 @@ export function createBoardState({
       fsToken: FILE_TOKEN,
       stale,
       limits: own?.limits ?? null,
-      items: list,
-      launches: launches.list(),
+      items: others ? [...list, ...others.items] : list,
+      launches: others ? [...launches.list(), ...others.launches] : launches.list(),
       categories,
       swatches: SWATCHES,
       columns: COLUMNS.map(({ id, title }) => ({ id, title })),
-      schedules,
+      schedules: others ? [...schedules, ...others.schedules] : schedules,
       scheduleLog: readLog(20),
       // terminal: whether the board offers one (config `terminal`); shells: sessions it opened one for.
       terminal: terminalOn(cfg),
@@ -340,6 +358,8 @@ export function createBoardState({
       ...teamWaitingOf(teamWaiting),
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.
       ...omarchyOf(omarchy),
+      // devices: only while config.json makes this board a master (#500).
+      ...(others && { devices: others.devices }),
     }
   }
 
@@ -482,6 +502,7 @@ export function createBoardState({
     items: () => items,
     observation: () => (lastSuccessfulRefreshAt && !isStale() ? { items, observedAt: lastSuccessfulRefreshAt } : null),
     find: key => items.find(i => i.key === key),
+    findAny: key => items.find(i => i.key === key) ?? (parseNodeKey(key) ? nodes?.()?.find(key) : undefined),
     stale: isStale,
     publish,
     refresh,

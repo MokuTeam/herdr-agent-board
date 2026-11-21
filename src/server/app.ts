@@ -65,6 +65,7 @@ import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
 import { createNodeStatus } from '../services/node/status.ts'
+import { createNodeAggregate, type NodeAggregate } from '../services/nodes/aggregate.ts'
 import { createNodeLinks, type NodeLinks } from '../services/nodes/links.ts'
 import { tellOwnerWatchers } from '../services/owner-watch.ts'
 import { createPresence } from '../services/presence.ts'
@@ -710,6 +711,9 @@ export async function startServer({
     streamDriven,
     onChange: () => board.publish(),
   })
+  // The master's devices in the payload (#500): made with the links below, the first time
+  // config.json has `nodes`; until then the board's payload is what it was without them.
+  let nodeAggregate: NodeAggregate | null = null
   const board = createBoardState({
     deps,
     launches,
@@ -734,6 +738,7 @@ export async function startServer({
     workdeskDialog: workdeskDialog.view,
     observeSessions: (snapshot, items) => boardEvents.observe(snapshot, items, Date.now()),
     observeFailure: () => boardEvents.health('herdr', false),
+    nodes: () => nodeAggregate,
     // Threads (#379): while config.json turns them on, the revision and the count that waits on
     // the owner (two queries a refresh); off, nothing is read.
     threads: () => {
@@ -1017,6 +1022,7 @@ export async function startServer({
     }
     if (nodesConfig(cfg.nodes) === null) return
     nodeLinks = createNodeLinks({ cfg, log })
+    nodeAggregate = createNodeAggregate({ links: nodeLinks, cfg, log, onChange: () => board.publish() })
     localNodeRoutes = nodesRoutes(nodeLinks)
     // Their ssh dies with the board, also on an exit that skips close().
     process.on('exit', nodeLinks.killNow)
@@ -1131,6 +1137,7 @@ export async function startServer({
       process.off('exit', endLogins)
       await tunnel.close()
       await door?.close()
+      nodeAggregate?.close()
       if (nodeLinks) {
         await nodeLinks.close()
         process.off('exit', nodeLinks.killNow)

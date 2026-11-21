@@ -235,6 +235,19 @@ export interface DeviceStore {
   keyPath(id: string): string
   /** The pid record of the device's link ssh (adapters/ssh.ts PidRecord). */
   pidFile(id: string): string
+  /**
+   * The device's offline copy (`snapshot.json`, #500): when its last payload came and its part of
+   * the master's payload as checked then (core/node-items.ts). null: none, unreadable, or not one.
+   */
+  snapshot(id: string): DeviceSnapshot | null
+  /** Writes the offline copy, mode 0600, whole or not at all. */
+  setSnapshot(id: string, snapshot: DeviceSnapshot): void
+}
+
+/** The offline copy of a device: `part` is read again through core/node-items.ts nodePart, never trusted. */
+export interface DeviceSnapshot {
+  at: number
+  part: unknown
 }
 
 export function createDeviceStore({ dir = nodesDir() }: { dir?: string } = {}): DeviceStore {
@@ -261,5 +274,20 @@ export function createDeviceStore({ dir = nodesDir() }: { dir?: string } = {}): 
     },
     keyPath: id => join(folder(id), 'link-key'),
     pidFile: id => join(folder(id), 'ssh-pid.json'),
+    snapshot(id) {
+      try {
+        const value: unknown = JSON.parse(readFileSync(join(folder(id), 'snapshot.json'), 'utf8'))
+        return isRecord(value) && typeof value.at === 'number' && Number.isFinite(value.at)
+          ? { at: value.at, part: value.part }
+          : null
+      } catch {
+        return null
+      }
+    },
+    setSnapshot(id, snapshot) {
+      const at = folder(id)
+      mkdirSync(at, { recursive: true })
+      replaceFile(join(at, 'snapshot.json'), JSON.stringify(snapshot), undefined, 0o600)
+    },
   }
 }

@@ -35,6 +35,11 @@ export interface NodeLinks {
   view(): { devices: DeviceView[]; problems: NodesProblem[] }
   /** A device's link, or null. */
   link(id: string): Link | null
+  /**
+   * Calls `fn` with the device's id when its link brings a payload or changes its state, and when
+   * the link goes (the device left config.json); returns the unsubscribe.
+   */
+  onChange(fn: (id: string) => void): () => void
   /** The device's link tries again at once (a token was stored). False: no such link. */
   retry(id: string): boolean
   /** For an exit handler: every link's ssh ended synchronously. */
@@ -120,7 +125,11 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
   }
   const make =
     o.makeLink ?? ((device: DeviceConfig, times: LinkTimes) => realLink(device, times, store, o.log, ownCommit))
-  const links = new Map<string, { link: Link; key: string; device: DeviceConfig }>()
+  const links = new Map<string, { link: Link; key: string; device: DeviceConfig; off: (() => void)[] }>()
+  const changeFns = new Set<(id: string) => void>()
+  const changed = (id: string): void => {
+    for (const fn of changeFns) fn(id)
+  }
   let watch: { tick: unknown; poll: unknown } | null = null
   let lastTick = 0
   let lastNetwork = ''
@@ -175,10 +184,16 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
         continue
       }
       links.delete(id)
+      for (const off of held.off) off()
       await held.link.close()
+      changed(id)
     }
-    for (const [id, device] of wanted)
-      if (!links.has(id)) links.set(id, { link: make(device, linkTimes()), key: JSON.stringify(device.link), device })
+    for (const [id, device] of wanted) {
+      if (links.has(id)) continue
+      const link = make(device, linkTimes())
+      const off = [link.onPayload(() => changed(id)), link.onState(() => changed(id))]
+      links.set(id, { link, key: JSON.stringify(device.link), device, off })
+    }
     if (links.size) watchOn()
     else watchOff()
   }
@@ -213,6 +228,10 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
       return { devices, problems: cfg.problems }
     },
     link: id => links.get(id)?.link ?? null,
+    onChange(fn) {
+      changeFns.add(fn)
+      return () => changeFns.delete(fn)
+    },
     retry(id) {
       const held = links.get(id)
       if (!held) return false
