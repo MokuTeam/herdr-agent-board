@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { inputDraft } from '../../src/core/dialogs/input-box.ts'
+import { trustScreen } from '../support/trust-screen.ts'
 
 const rule = '─'.repeat(40)
 const ESC = '\x1b'
@@ -53,4 +55,16 @@ test('the rule over the box may carry the session name, however long', () => {
   expect(inputDraft(named(long, '', '─'.repeat(80)))).toBeNull()
   expect(inputDraft('Pick one:\n❯ 1. Yes\n  2. No')).toBeNull()
   expect(inputDraft(`${grey(long)}\n❯ Continue\n  Cancel`)).toBeNull()
+})
+
+// Claude Code 2.1.330's prompt once a start is over, read through herdr (test/core/prompt-screen.test.ts
+// says how), and the screens every launch meets at its message step: the verdicts every setup had
+// before #602, which runs on main as on the change.
+test('the screens a launch meets read as before: the prompt empty, with its suggestion, with text typed, the trust dialog', () => {
+  const prompt = readFileSync(new URL('../support/screens/startup-prompt.txt', import.meta.url), 'utf8')
+  const typedInto = (text: string): string => prompt.replace(/^❯.*$/m, `❯\u00a0${text}${ESC}[7m ${ESC}[0m`)
+  expect(inputDraft(prompt)).toBe('')
+  expect(inputDraft(typedInto(`${ESC}[0m${ESC}[2mTry "fix the failing test"${ESC}[0m`))).toBe('')
+  expect(inputDraft(typedInto('half a thought the owner typed'))).toBe('half a thought the owner typed')
+  expect(inputDraft(trustScreen('C:\\work\\probe'))).toBeNull()
 })

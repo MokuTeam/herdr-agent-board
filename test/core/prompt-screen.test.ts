@@ -19,13 +19,7 @@ const typedInto = (text: string): string => PROMPT.replace(/^❯.*$/m, `❯\u00a
 const SUGGESTION = typedInto(`${ESC}[0m${ESC}[2mTry "fix the failing test"${ESC}[0m`)
 const TYPED = typedInto('half a thought the owner typed')
 
-test('the screens every setup meets read as before: the prompt empty, with its suggestion, with text typed', () => {
-  // inputDraft, which every launch asks first, gives what it gave before this change.
-  expect(inputDraft(PROMPT)).toBe('')
-  expect(inputDraft(SUGGESTION)).toBe('')
-  expect(inputDraft(TYPED)).toBe('half a thought the owner typed')
-  expect(inputDraft(trustScreen('C:\\work\\probe'))).toBeNull()
-  // The prompt is a box, never a dialog, whatever it holds.
+test('the prompt is a box, never a dialog, whatever it holds: empty, with its suggestion, with text typed', () => {
   expect(promptScreen(PROMPT)).toEqual({ kind: 'box', draft: '' })
   expect(promptScreen(SUGGESTION)).toEqual({ kind: 'box', draft: '' })
   expect(promptScreen(TYPED)).toEqual({ kind: 'box', draft: 'half a thought the owner typed' })
@@ -51,6 +45,12 @@ test('a dialog is told by its shape, a choice under ❯ and how to answer it, no
   }
   // The Code Mode notice: its chosen answer is an option, never text typed into a prompt.
   expect(inputDraft(screen('startup-code-mode'))).toBeNull()
+  // In a narrow pane its answer line wraps, and a line may follow it.
+  const notice = screen('startup-code-mode').trimEnd()
+  expect(promptScreen(notice.replace('Esc to start without it', 'Esc to start\n  without it'))).toEqual({
+    kind: 'dialog',
+  })
+  expect(promptScreen(`${notice}\n  ctrl+c to exit`)).toEqual({ kind: 'dialog' })
 })
 
 test('neither a box nor a dialog: a shell, a screen cut short, a list with no line on how to answer it', () => {
@@ -62,8 +62,8 @@ test('neither a box nor a dialog: a shell, a screen cut short, a list with no li
   // A list, its answer line missing; an answer line with nothing marked to answer.
   expect(choiceDialog('Pick one\n❯ 1. Yes\n  2. No\n')).toBe(false)
   expect(choiceDialog('Something happened\n\n  Enter to continue\n')).toBe(false)
-  // How to answer must be the last line: a ❯ and words about Enter far above it are something else.
-  expect(choiceDialog('❯ run it\nPress Enter to confirm\nthen the output\n')).toBe(false)
+  // How to answer is at the bottom: a ❯ and words about Enter far above it are something else.
+  expect(choiceDialog('❯ run it\nPress Enter to confirm\nthen the output\nof it\nall here\n')).toBe(false)
   // A working Claude's "esc to interrupt" is not how to answer a dialog.
   expect(choiceDialog('❯ do the thing\n✻ Working… (esc to interrupt)\n')).toBe(false)
 })

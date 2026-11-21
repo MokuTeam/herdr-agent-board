@@ -1175,12 +1175,51 @@ test("herdr's own start, the name not taken: a dialog in its place holds the fir
   })
   const held = await launchState(board, id, l => l?.state === 'waiting', 'the dialog did not hold the start')
   assert.equal(held.step, 'dialog')
+  // herdr's start called it ready, so its name went before the board read the screen, as before.
   assert.deepEqual(promptsSent(box), ['wA:p9 /rename Fresh one'])
-  box.state({ ...state, 'agent read': { text: SCREEN('') } })
+  box.state({ ...state, 'agent read': { text: SCREEN('') }, 'pane read': { text: 'Session renamed to: Fresh one' } })
   const l = await launched(id)
   assert.equal(l.state, 'done', l.error)
-  assert.deepEqual(promptsSent(box), ['wA:p9 /rename Fresh one', 'wA:p9 Say hello.'])
+  // The name typed while the dialog was up went to the dialog: it is typed once more, then the message.
+  assert.deepEqual(promptsSent(box), ['wA:p9 /rename Fresh one', 'wA:p9 /rename Fresh one', 'wA:p9 Say hello.'])
 }, 30_000)
+
+test('a dialog held at the start is dropped with its tab; a start with no first message is not held for its name (#602)', async () => {
+  const { box, board, post, started } = await boardServer(VIA_HERDR)
+  const dir = join(box.dir, 'node project')
+  mkdirSync(dir)
+  box.state({
+    ...trustedThen(dir, CODE_MODE),
+    'pane get': { result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'claude' } } },
+  })
+  const id = await started({
+    name: 'Fresh one',
+    cwd: dir,
+    category: 'acme',
+    workspace: { id: 'wA' },
+    message: 'Say hello.',
+  })
+  await launchState(board, id, l => l?.state === 'waiting', 'the dialog did not hold the start')
+  assert.equal((await post(`/api/launch/${id}/close`, {})).status, 200)
+  assert.ok(box.calls().some(a => a.join(' ') === 'tab close wA:t9'))
+  assert.equal(
+    (await board()).launches.some(l => l.id === id),
+    false,
+  )
+  assert.deepEqual(promptsSent(box), [])
+
+  // No first message: the name is cosmetic, so the dialog holds nothing; the rename is skipped and
+  // the start is done, as before.
+  const quiet = await boardServer(VIA_HERDR, { BOARD_DIALOG_WAIT_MS: '400' })
+  const dir2 = join(quiet.box.dir, 'node project')
+  mkdirSync(dir2)
+  quiet.box.state(trustedThen(dir2, CODE_MODE))
+  const l = await quiet.launched(
+    await quiet.started({ name: 'Fresh one', cwd: dir2, category: 'acme', workspace: { id: 'wA' } }),
+  )
+  assert.equal(l.state, 'done', l.error)
+  assert.deepEqual(promptsSent(quiet.box), [])
+}, 40_000)
 
 test('text the owner typed is never written over: the first message is refused as before, and an empty box costs no read more (#602)', async () => {
   const typed = await boardServer(VIA_HERDR)

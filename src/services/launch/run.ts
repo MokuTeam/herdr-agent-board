@@ -393,8 +393,14 @@ export function launchRunner({
       })
       // A /rename Claude did not take may still be in its box: the message would go with it as
       // one, the name eating it (#479). Asked only when no rename showed; a box herdr cannot show
-      // (null) is taken for empty, as before. A dialog there is waited out first (pastDialog).
-      left = !renamed && !!l.message && !!(await pastDialog(l, pane, 'rename'))
+      // (null) is taken for empty, as before. A dialog there is waited out first (pastDialog), and
+      // the name tried once more: the one typed while it was up went to the dialog.
+      if (!renamed && l.message) {
+        let box = await pastDialog(l, pane, 'rename')
+        if (box.waited && (await claudeRename(pane, l.name).catch(() => false))) box = { draft: '', waited: true }
+        else if (box.waited) box = await pastDialog(l, pane, 'rename')
+        left = !!box.draft
+      }
     } else if (kind === PI_AGENT && !l.resume) {
       step(l, 'rename')
       await piName(pane, l.name).catch(err => deps.log(`launch ${l.name}: /name: ${messageOf(err)}`))
@@ -432,12 +438,17 @@ export function launchRunner({
    * Asked once the box was found not empty before a name or the first message. A dialog there (one
    * Claude drew after herdr called it ready: a first-run notice, an upsell, core/dialogs/input-box.ts)
    * holds the launch as any other dialog does, the card saying so, until it is answered in the
-   * terminal and the box is back; then the launch goes on at `at`. What the box holds then: '' empty,
-   * the text typed in it, null when the screen shows neither a box nor a dialog.
+   * terminal and the box is back; then the launch goes on at `at`. What the box holds then (draft):
+   * '' empty, the text typed in it, null when the screen shows neither a box nor a dialog; waited:
+   * whether a dialog held it.
    */
-  async function pastDialog(l: Launch, pane: string, at: LaunchStep): Promise<string | null> {
+  async function pastDialog(
+    l: Launch,
+    pane: string,
+    at: LaunchStep,
+  ): Promise<{ draft: string | null; waited: boolean }> {
     let shown = await screenNow(pane)
-    if (shown?.kind !== 'dialog') return shown ? shown.draft : null
+    if (shown?.kind !== 'dialog') return { draft: shown ? shown.draft : null, waited: false }
     l.state = 'waiting'
     step(l, 'dialog')
     const deadline = Date.now() + knobMs('BOARD_DIALOG_WAIT_MS', DIALOG_WAIT_MS)
@@ -451,7 +462,7 @@ export function launchRunner({
     }
     l.state = 'starting'
     step(l, at)
-    return shown.draft
+    return { draft: shown.draft, waited: true }
   }
 
   /**
@@ -532,8 +543,10 @@ export function launchRunner({
           .catch(err => deps.log(`launch ${l.name}: naming: ${messageOf(err)}`))
     } else if (kind === 'claude') {
       step(l, 'rename')
-      // A box that is not empty may be a dialog Claude drew once herdr called it ready: waited out.
-      const empty = (await inputEmpty(pane)) || (await pastDialog(l, pane, 'rename')) === ''
+      // A box that is not empty may be a dialog Claude drew once herdr called it ready: waited out
+      // when a first message comes after the name. Without one the name alone, which is cosmetic,
+      // holds nothing: it is skipped as before.
+      const empty = (await inputEmpty(pane)) || (!!l.message && (await pastDialog(l, pane, 'rename')).draft === '')
       try {
         if (empty && (await claudeRename(pane, l.name)) && nameAgent) {
           const taken = await takenNames()
@@ -557,7 +570,9 @@ export function launchRunner({
     }
     if (l.message) {
       step(l, 'message')
-      if (kind !== PI_AGENT && !(await inputEmpty(pane)) && (await pastDialog(l, pane, 'message')) !== '')
+      // The second read is of the visible screen (the first one's recent lines are refused while herdr
+      // calls the agent blocked): a box it shows empty there takes the message.
+      if (kind !== PI_AGENT && !(await inputEmpty(pane)) && (await pastDialog(l, pane, 'message')).draft !== '')
         throw new LaunchError(t('launch.err.message.draft'), 'message')
       if (!(await typeLine(pane, l.message))) throw new LaunchError(t('launch.err.message.lost'), 'message')
     }

@@ -63,7 +63,7 @@ import {
   spawnEnv,
 } from '../../core/profiles.ts'
 import { scrub } from '../../core/secrets.ts'
-import { boxDraft, renameLeft } from './prompt.ts'
+import { renameLeft, screenNow } from './prompt.ts'
 
 /** A folder as given, absolute: ~ is the home folder, a relative one is from here. */
 export function absoluteDir(p: string): string {
@@ -470,8 +470,15 @@ export async function spawnAgent(
   // not take, the name would eat the brief (#479). It is not typed then; the session runs, so this
   // fails as "did not reach", which the board does not retry. Asked only when no rename showed; a
   // box herdr cannot show (null) holds nothing as far as this goes: the brief goes as before.
+  // A dialog in its place (one Claude drew after herdr called it ready, #602) stops the start as a
+  // dialog does before it: the board waits for it to be answered and sends the brief then.
   if (text && !o.resume && !renamed && kind !== PI_AGENT) {
-    const left = await boxDraft(pane)
+    const shown = await screenNow(pane)
+    if (shown?.kind === 'dialog')
+      throw new Error(
+        `Claude in ${pane} waits for a dialog. Answer it in that tab, then: herdr agent prompt ${pane} "<brief>"`,
+      )
+    const left = shown?.draft
     if (left)
       throw new Error(
         `The brief did not reach Claude in ${pane}: its input box still holds "${left.length > 60 ? `${left.slice(0, 59)}…` : left}". Clear it there, then: herdr agent prompt ${pane} "<brief>"`,

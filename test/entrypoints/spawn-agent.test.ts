@@ -194,6 +194,23 @@ test('spawn-agent: a dialog before Claude is ready, a brief herdr calls stalled,
 // Claude's box with a line in it, as `agent read --ansi` shows it (core/dialogs/input-box.ts).
 const boxWith = (typed: string) => `● ok\n${'─'.repeat(40)}\n❯ ${typed}\n${'─'.repeat(40)}\n  ⏵⏵ auto mode on\n`
 
+test('spawn-agent: a dialog where the box should be once Claude is ready stops the start before the brief, as a dialog (#602)', async () => {
+  // herdr called it ready with the Code Mode notice up: the /rename went to it and never showed.
+  const notice = readFileSync(new URL('../support/screens/startup-code-mode.txt', import.meta.url), 'utf8')
+  const box = await sandbox()
+  box.state({ ...STATE, 'pane read': { text: notice }, 'agent read': { text: notice } })
+  const r = await runSpawn(box, ['--name', 'Calm', '--cwd', box.dir, '--workspace', 'wA', '--brief', 'Go on.'])
+  assert.equal(r.code, 1)
+  const last = r.stderr.trim().split('\n').at(-1) ?? ''
+  assert.match(last, /^spawn-agent: Claude in wA:p9 waits for a dialog/)
+  // The board takes it for a dialog: it waits for the answer and sends the brief then (services/launch/run.ts).
+  assert.equal(failureKind(last), 'dialog')
+  assert.deepEqual(
+    callList(box).filter(c => c.startsWith('agent prompt')),
+    ['agent prompt wA:p9 /rename Calm'],
+  )
+}, 30_000)
+
 test('spawn-agent: a /rename Claude left in its box gets one more Enter, and the brief comes as a submit of its own (#479)', async () => {
   // The second Enter takes it: "Session renamed" shows on the third look.
   const box = await sandbox()
