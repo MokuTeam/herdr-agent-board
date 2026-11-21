@@ -36,8 +36,9 @@ export interface NodeLinks {
   /** A device's link, or null. */
   link(id: string): Link | null
   /**
-   * Calls `fn` with the device's id when its link brings a payload or changes its state, and when
-   * the link goes (the device left config.json); returns the unsubscribe.
+   * Calls `fn` with the device's id when its link brings a payload, changes its state or brings a
+   * status whose shown figures moved, and when the link goes (the device left config.json);
+   * returns the unsubscribe.
    */
   onChange(fn: (id: string) => void): () => void
   /** The device's link tries again at once (a token was stored). False: no such link. */
@@ -191,7 +192,7 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
     for (const [id, device] of wanted) {
       if (links.has(id)) continue
       const link = make(device, linkTimes())
-      const off = [link.onPayload(() => changed(id)), link.onState(() => changed(id))]
+      const off = [link.onPayload(() => changed(id)), link.onState(() => changed(id)), link.onStatus(() => changed(id))]
       links.set(id, { link, key: JSON.stringify(device.link), device, off })
     }
     if (links.size) watchOn()

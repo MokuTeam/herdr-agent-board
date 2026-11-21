@@ -71,7 +71,7 @@ import { createNodeStatus } from '../services/node/status.ts'
 import { createNodeUplink, type NodeUplink } from '../services/node/uplink.ts'
 import { createNodeAggregate, type NodeAggregate } from '../services/nodes/aggregate.ts'
 import { type BundleSync, createBundleSync } from '../services/nodes/bundle-sync.ts'
-import { createNodeLinks, type NodeLinks } from '../services/nodes/links.ts'
+import { createNodeLinks, linkTimes, type NodeLinks } from '../services/nodes/links.ts'
 import { createPlacer, type Placer } from '../services/nodes/placer.ts'
 import { createUplinkRunner, type UplinkRunner } from '../services/nodes/uplink.ts'
 import { tellOwnerWatchers } from '../services/owner-watch.ts'
@@ -1079,7 +1079,28 @@ export async function startServer({
     }
     if (nodesConfig(cfg.nodes) === null) return
     nodeLinks = createNodeLinks({ cfg, log })
-    nodeAggregate = createNodeAggregate({ links: nodeLinks, cfg, log, onChange: () => board.publish() })
+    // Where a new session runs (#504), and the Devices row of this computer (#500): this computer's
+    // own status by the code a node answers with.
+    const ownStatus = createNodeStatus({
+      node: () => {
+        const n = nodesConfig(cfg.nodes)
+        return n && { id: n.id, port: 0, workRoot: '~', listen: 'loopback', tls: false, relay: null }
+      },
+      items: board.items,
+      launches: () => launches.list(),
+      // Every profile this computer has: a start may name a hidden one, as without nodes.
+      profiles: () => deps.profiles().list,
+      launch: () => cfg.launch,
+      version: PLUGIN_VERSION,
+    })
+    nodeAggregate = createNodeAggregate({
+      links: nodeLinks,
+      cfg,
+      log,
+      onChange: () => board.publish(),
+      ownStatus: () => ownStatus.answer(),
+      statusMs: linkTimes().statusMs,
+    })
     // An offline copy still due is written also on an exit that skips close().
     process.on('exit', nodeAggregate.close)
     // The profile bundle per device (#506): built and hashed when asked and every 5 minutes.
@@ -1109,19 +1130,6 @@ export async function startServer({
       items: () => [...board.items(), ...(aggregate.part()?.items ?? [])],
       cfg,
       log,
-    })
-    // Where a new session runs (#504): this computer's own status by the code a node answers with.
-    const ownStatus = createNodeStatus({
-      node: () => {
-        const n = nodesConfig(cfg.nodes)
-        return n && { id: n.id, port: 0, workRoot: '~', listen: 'loopback', tls: false, relay: null }
-      },
-      items: board.items,
-      launches: () => launches.list(),
-      // Every profile this computer has: a start may name a hidden one, as without nodes.
-      profiles: () => deps.profiles().list,
-      launch: () => cfg.launch,
-      version: PLUGIN_VERSION,
     })
     const placer = createPlacer({
       cfg,

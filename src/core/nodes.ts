@@ -493,6 +493,29 @@ export function laneMayLeave(cfg: NodesConfig, lane: string): boolean {
 }
 
 /** `GET /api/node/status` on a node's door (6.3; services/node/status.ts makes it, the master's link reads it). */
+/**
+ * The figures of a status the page shows, rounded as it shows them: the sessions, memory available
+ * to the nearest 100 MB, the 5 minute load to one decimal, each profile's login and bundle, the
+ * commit and version, the machine's size. Two statuses with the same key look the same, so one
+ * that comes every 30 s with the same key pushes the board to no page (#500). '' for none.
+ */
+export function statusShown(s: NodeStatus | null): string {
+  if (!s) return ''
+  const load = s.load?.[1]
+  return JSON.stringify([
+    s.sessions.awake,
+    s.sessions.working,
+    s.sessions.asleep,
+    s.memAvailableMb === null ? null : Math.round(s.memAvailableMb / 100),
+    load === undefined ? null : Math.round(load * 10),
+    s.profiles.map(p => [p.id, p.loggedIn, p.bundle?.seq ?? null]),
+    s.commit,
+    s.version,
+    s.memTotalMb,
+    s.cpus,
+  ])
+}
+
 export interface NodeStatus {
   api: number
   id: string

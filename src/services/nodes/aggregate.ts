@@ -11,11 +11,24 @@
 // `<state>/nodes/<id>/snapshot.json` (adapters/node-store.ts) at most every SNAPSHOT_MS after a new
 // payload, and read when a device's link has brought none since the board started: an offline node's
 // cards show after a restart, with the time they are from.
+//
+// Each device's status in its row is the one whose shown figures (core/nodes.ts statusShown) were
+// last seen to move: a status every 30 s that rounds the same leaves the payload as it was, so no
+// page gets the board again for it. This computer's own (`local`) is asked every status interval
+// by the code a node answers with (`ownStatus`), and publishes when its figures move.
 import { hostname } from 'node:os'
 import { createDeviceStore, type DeviceStore } from '../../adapters/node-store.ts'
 import { pace } from '../../adapters/pacing.ts'
 import { type NodePart, nodePart } from '../../core/node-items.ts'
-import { type DeviceConfig, type DeviceView, LOCAL, nodesConfig, parseNodeKey } from '../../core/nodes.ts'
+import {
+  type DeviceConfig,
+  type DeviceView,
+  LOCAL,
+  type NodeStatus,
+  nodesConfig,
+  parseNodeKey,
+  statusShown,
+} from '../../core/nodes.ts'
 import type { BoardDevice } from '../../core/payload.ts'
 import type { Config, Item } from '../../core/types.ts'
 import { type Clock, realClock } from '../tunnel.ts'
@@ -40,8 +53,11 @@ export interface NodeAggregateOptions {
   /** The live config. */
   cfg: Config
   log(text: string): void
-  /** A device's payload changed, or its link's state: the board publishes again. */
+  /** A device's payload changed, its link's state, or the shown figures of a status: the board publishes again. */
   onChange(): void
+  /** This computer's own status (services/node/status.ts), asked every `statusMs` while this lives. */
+  ownStatus?: () => Promise<NodeStatus | null>
+  statusMs?: number
   store?: DeviceStore
   clock?: Clock
   hostName?: string
@@ -54,7 +70,12 @@ const NONE: NodePart = { items: [], launches: [], schedules: [] }
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 /** A device's row: its view without what ssh said, with what config.json sets for it. */
-function boardDevice(view: DeviceView, device: DeviceConfig | undefined, at: number | null): BoardDevice {
+function boardDevice(
+  view: DeviceView,
+  device: DeviceConfig | undefined,
+  at: number | null,
+  status: NodeStatus | null,
+): BoardDevice {
   // When the link last heard a byte, to the minute the page shows: a ping alone does not send the
   // whole board to every page and phone again.
   let link: BoardDevice['link'] = null
@@ -65,6 +86,7 @@ function boardDevice(view: DeviceView, device: DeviceConfig | undefined, at: num
   return {
     ...view,
     link,
+    status,
     payloadAt: at ?? view.payloadAt,
     paused: device?.paused ?? false,
     drain: device?.drain ?? false,
@@ -87,6 +109,48 @@ export function createNodeAggregate(o: NodeAggregateOptions): NodeAggregate {
   const due = new Set<string>()
   let timer: unknown = null
   let closed = false
+  /** Per device, the status last shown and its figures. */
+  const shown = new Map<string, { key: string; status: NodeStatus }>()
+  let own: NodeStatus | null = null
+  let asking = false
+
+  /** The status a row shows: the one held while the figures round the same. */
+  function steady(id: string, status: NodeStatus | null): NodeStatus | null {
+    if (!status) return null
+    const key = statusShown(status)
+    const held = shown.get(id)
+    if (held?.key === key) return held.status
+    shown.set(id, { key, status })
+    return status
+  }
+
+  function publish(why: string): void {
+    // Called from inside the link's stream: a publish that throws must not end it.
+    try {
+      o.onChange()
+    } catch (err) {
+      o.log(`${why}: publish: ${messageOf(err)}`)
+    }
+  }
+
+  /** This computer's status, asked once; a publish when its figures moved. */
+  async function askOwn(): Promise<void> {
+    if (!o.ownStatus || asking || closed) return
+    asking = true
+    try {
+      const got = await o.ownStatus()
+      if (closed || !got) return
+      const moved = statusShown(got) !== statusShown(own)
+      own = got
+      if (moved) publish('this computer')
+    } catch (err) {
+      o.log(`this computer's status: ${messageOf(err)}`)
+    } finally {
+      asking = false
+    }
+  }
+  const ownTimer = o.ownStatus ? clock.setInterval(() => void askOwn(), o.statusMs ?? 30_000) : null
+  void askOwn()
 
   /** A device's part now: from its link's last payload, else from its offline copy; null with neither. */
   function current(id: string): { part: NodePart; at: number } | null {
@@ -132,12 +196,7 @@ export function createNodeAggregate(o: NodeAggregateOptions): NodeAggregate {
       due.add(id)
       timer ??= clock.setTimeout(write, Math.round(SNAPSHOT_MS * pace()))
     }
-    // Called from inside the link's stream: a publish that throws must not end it.
-    try {
-      o.onChange()
-    } catch (err) {
-      o.log(`node ${id}: publish: ${messageOf(err)}`)
-    }
+    publish(`node ${id}`)
   })
 
   const remoteOf = (id: string): boolean => {
@@ -155,7 +214,8 @@ export function createNodeAggregate(o: NodeAggregateOptions): NodeAggregate {
       for (const view of o.links.view().devices) {
         const device = cfg.devices[view.id]
         const got = view.id !== LOCAL && device?.link ? current(view.id) : null
-        out.devices.push(boardDevice(view, device, got?.at ?? null))
+        const status = view.id === LOCAL ? own : view.status
+        out.devices.push(boardDevice(view, device, got?.at ?? null, steady(view.id, status)))
         if (!got) continue
         out.items.push(...got.part.items)
         out.launches.push(...got.part.launches)
@@ -172,6 +232,7 @@ export function createNodeAggregate(o: NodeAggregateOptions): NodeAggregate {
       if (closed) return
       closed = true
       off()
+      if (ownTimer !== null) clock.clearInterval(ownTimer)
       if (timer !== null) clock.clearTimeout(timer)
       write()
     },

@@ -71,6 +71,7 @@ function recorder() {
       }),
       onPayload: () => () => {},
       onState: () => () => {},
+      onStatus: () => () => {},
       reconnect: (why, force) => void m.again.push(force ? `${why} (forced)` : why),
       killNow: () => {},
       close: async () => {
@@ -244,9 +245,9 @@ test('the waits are the knobs in a test and as written otherwise', async () => {
 
 test('onChange: a payload or a state change of any link, and a link that goes, name its device (#500)', async () => {
   const c = countingClock()
-  const fired = new Map<string, { payload: Set<() => void>; state: Set<() => void> }>()
+  const fired = new Map<string, { payload: Set<() => void>; state: Set<() => void>; status: Set<() => void> }>()
   const makeLink = (device: DeviceConfig): Link => {
-    const fns = { payload: new Set<() => void>(), state: new Set<() => void>() }
+    const fns = { payload: new Set<() => void>(), state: new Set<() => void>(), status: new Set<() => void>() }
     fired.set(device.id, fns)
     const state: LinkStatus = { state: 'connecting', since: 0, heardAt: null }
     return {
@@ -274,6 +275,11 @@ test('onChange: a payload or a state change of any link, and a link that goes, n
         fns.state.add(f)
         return () => fns.state.delete(f)
       },
+      onStatus: fn => {
+        const f = () => fn({} as never)
+        fns.status.add(f)
+        return () => fns.status.delete(f)
+      },
       reconnect: () => {},
       killNow: () => {},
       close: async () => {},
@@ -288,15 +294,20 @@ test('onChange: a payload or a state change of any link, and a link that goes, n
   const off = links.onChange(id => heard.push(id))
   for (const f of fired.get('server-2')?.payload ?? []) f()
   for (const f of fired.get('server-1')?.state ?? []) f()
-  expect(heard).toEqual(['server-2', 'server-1'])
+  for (const f of fired.get('server-1')?.status ?? []) f()
+  expect(heard).toEqual(['server-2', 'server-1', 'server-1'])
   // server-2 leaves config.json: its link goes, said once, and what it held is let go.
   cfg.nodes = { id: 'laptop', devices: { 'server-1': direct(1001) } }
   links.configChanged()
   await settle()
-  expect(heard).toEqual(['server-2', 'server-1', 'server-2'])
-  expect([fired.get('server-2')?.payload.size, fired.get('server-2')?.state.size]).toEqual([0, 0])
+  expect(heard).toEqual(['server-2', 'server-1', 'server-1', 'server-2'])
+  expect([
+    fired.get('server-2')?.payload.size,
+    fired.get('server-2')?.state.size,
+    fired.get('server-2')?.status.size,
+  ]).toEqual([0, 0, 0])
   off()
   for (const f of fired.get('server-1')?.payload ?? []) f()
-  expect(heard.length).toBe(3)
+  expect(heard.length).toBe(4)
   await links.close()
 })

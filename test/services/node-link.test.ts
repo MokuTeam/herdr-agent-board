@@ -467,6 +467,71 @@ test("a door whose node.api is not this board's: refused (api)", async () => {
   ])
 })
 
+test('a status tells the listeners only when its shown figures moved, not on every poll (#500)', async () => {
+  const t = fakeClock()
+  const enc = new TextEncoder()
+  const s = (more: Record<string, unknown>) => ({
+    ...{
+      api: 1,
+      id: 'server-1',
+      version: '0.1.0',
+      commit: 'abc',
+      platform: 'linux',
+      arch: 'x64',
+      cpus: 8,
+      memTotalMb: 32013,
+      memAvailableMb: 21480,
+      load: [0.42, 0.61, 0.58],
+      sessions: { awake: 2, working: 1, asleep: 5 },
+      launches: 0,
+      workRootFreeMb: 148000,
+      profiles: [{ id: 'default', loggedIn: true, bundle: null }],
+      agents: ['claude'],
+      at: 1,
+    },
+    ...more,
+  })
+  // What the node says at each poll: the first, the same rounded twice, memory past its rounding,
+  // memory gone, the same again, a session that woke.
+  const said = [
+    s({ at: 1 }),
+    s({ at: 2, memAvailableMb: 21_470, load: [1, 0.64, 1] }),
+    s({ at: 3, memAvailableMb: 21_520 }),
+    s({ at: 4, memAvailableMb: 21_300 }),
+    s({ at: 5, memAvailableMb: null }),
+    s({ at: 6, memAvailableMb: null }),
+    s({ at: 7, memAvailableMb: null, sessions: { awake: 3, working: 1, asleep: 4 } }),
+  ]
+  let polls = 0
+  const fetch = async (url: string): Promise<Response> => {
+    if (url.endsWith('/api/hello')) return Response.json({ node: { api: 1, id: 'server-1' } })
+    if (url.endsWith('/api/node/status')) return Response.json(said[Math.min(polls++, said.length - 1)])
+    if (url.endsWith('/api/events'))
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(enc.encode(`data: ${JSON.stringify(PAYLOAD)}\n\n`))
+          },
+        }),
+        { headers: { 'content-type': 'text/event-stream' } },
+      )
+    return new Response('', { status: 404 })
+  }
+  const l = linkTo(
+    device('server-1', { kind: 'direct', url: 'http://127.0.0.1:9' }),
+    { token: () => 'T'.repeat(43), clock: t.clock, fetch },
+    { deadMs: 900_000, statusMs: 30_000, pace: 1 },
+  )
+  const told: unknown[] = []
+  l.onStatus(st => told.push(st.at))
+  await t.advance(0)
+  for (let i = 1; i < said.length; i++) await t.advance(30_000)
+  expect(polls).toBe(said.length)
+  expect(told).toEqual([1, 4, 5, 7])
+  // The link itself keeps the latest, told or not: GET /api/nodes and the placer read it.
+  expect(l.view().status?.at).toBe(7)
+})
+
 describe('the link on a node board, more', () => {
   test('refused: fetch answers node-offline and asks nothing; status is null; a path must start at the root', async () => {
     const node = await nodeBoard('server-1')

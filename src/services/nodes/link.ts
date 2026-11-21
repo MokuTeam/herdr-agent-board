@@ -30,6 +30,7 @@ import {
   type LinkStatus,
   type NodeStatus,
   nodeStatusOf,
+  statusShown,
 } from '../../core/nodes.ts'
 import type { BoardPayload } from '../../core/payload.ts'
 import { isBoardPayload } from '../../core/payload-check.ts'
@@ -92,6 +93,8 @@ export interface Link {
   view(): DeviceView
   onPayload(fn: (payload: BoardPayload) => void): () => void
   onState(fn: (state: LinkStatus) => void): () => void
+  /** A status came whose shown figures (core/nodes.ts statusShown) differ from the last one told. */
+  onStatus(fn: (status: NodeStatus) => void): () => void
   /**
    * Tries again at once from the first attempt: the computer woke or its addresses changed. A link
    * the node refused for its token waits out its minute all the same, unless `force`: a token was
@@ -324,6 +327,9 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
   let closed = false
   const payloadFns = new Set<(p: BoardPayload) => void>()
   const stateFns = new Set<(s: LinkStatus) => void>()
+  const statusFns = new Set<(s: NodeStatus) => void>()
+  /** The shown figures of the last status told: one every 30 s that rounds the same tells nobody. */
+  let toldStatus = ''
 
   const set = (next: Omit<LinkStatus, 'heardAt'>): void => {
     const was = status
@@ -405,7 +411,14 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
       const res = await call(o, '/api/node/status', { signal: AbortSignal.timeout(ASK_MS) }, token)
       const got = res.ok ? nodeStatusOf(await res.json()) : null
       if (!res.ok) await res.body?.cancel()
-      if (got) nodeStatus = got
+      if (got) {
+        nodeStatus = got
+        const shown = statusShown(got)
+        if (shown !== toldStatus) {
+          toldStatus = shown
+          for (const fn of statusFns) fn(got)
+        }
+      }
       return got
     } catch {
       return null
@@ -626,6 +639,10 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
     onState(fn) {
       stateFns.add(fn)
       return () => stateFns.delete(fn)
+    },
+    onStatus(fn) {
+      statusFns.add(fn)
+      return () => statusFns.delete(fn)
     },
     reconnect(why, force = false) {
       if (closed) return
