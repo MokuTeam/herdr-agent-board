@@ -227,7 +227,8 @@ export interface AlarmView {
  * a restart has a line of its own on the card, not a time.
  */
 export function alarmOf(schedules: ScheduleEntry[], key: string, now: number, t: Translator): AlarmView | null {
-  const list = schedules.filter(e => e.key === key && e.kind !== 'restart')
+  // A watch's next check (#486) is no alarm: the card says how its probe stands instead.
+  const list = schedules.filter(e => e.key === key && e.kind !== 'restart' && e.kind !== 'watch')
   const first = list[0]
   if (!first) return null
   const title = t('sched.badge', {

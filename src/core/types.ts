@@ -232,6 +232,8 @@ export interface Config {
   compact?: unknown
   /** Threads (#379, `true` or an object), as config.json has it: read through core/work-threads.ts threadsConfig. */
   threads?: unknown
+  /** Watches (#486, `true` or an object), as config.json has it: read through core/watches.ts watchesConfig. */
+  watches?: unknown
   /** Trusted local Workdesk watcher settings, read only by the board server. */
   workdesk?: unknown
   workdeskDialog?: unknown

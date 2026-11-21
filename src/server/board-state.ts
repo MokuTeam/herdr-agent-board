@@ -9,7 +9,7 @@ import { notify } from '../adapters/herdr.ts'
 import { createLinks } from '../adapters/links.ts'
 import { usageFileFor } from '../adapters/paths.ts'
 import { forgetProfilePanes } from '../adapters/profile-panes.ts'
-import { listEntries, readLog } from '../adapters/schedule-store.ts'
+import { listEntries, listWatches, readLog } from '../adapters/schedule-store.ts'
 import { COLUMNS } from '../core/board.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts'
 import { compactDefaultText } from '../core/compact.ts'
@@ -36,6 +36,7 @@ import type { SetupSummary } from '../core/setup.ts'
 import { todosConfig } from '../core/todos.ts'
 import type { Item } from '../core/types.ts'
 import type { WakeView } from '../core/wake/view.ts'
+import { watchesConfig } from '../core/watches.ts'
 import type { WorkdeskPayload } from '../core/workdesk.ts'
 import type { DialogStatus } from '../core/workdesk-dialog.ts'
 import type { BoardObservation } from '../core/workdesk-topology.ts'
@@ -296,6 +297,8 @@ export function createBoardState({
     const theirs = others?.items.map(({ todos: own, ...rest }) => (todos && own ? { ...rest, todos: own } : rest))
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)
+    // Watches (#486) only while config.json turns them on: off, the page sees none.
+    if (watchesConfig(cfg.watches)) schedules.push(...listWatches().map(({ claim, ...watch }) => watch))
     // The usage the pill shows: the board's own profile's (the default one's when its env points to
     // none), as before profiles.
     const profiles = boardProfiles(deps, items)

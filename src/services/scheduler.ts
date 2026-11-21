@@ -44,6 +44,10 @@
 // sleeping session: it waits, without counting the wait, and goes once the session is awake. Only
 // such entries take that branch; every other one goes down the code above.
 //
+// Watches (#486, `board wait --probe`): while config.json's `watches` is on, each tick also runs the
+// probes that are due (services/watches.ts), without asking herdr unless one is; off, no watch is
+// looked at. A probe that fires turns its watch into a plain reminder, sent as above.
+//
 // It also closes the panes of sessions put in the archive once their time to come back from the
 // page's toast is over (archive.ts closeDue): a board that restarts meanwhile does it on start.
 import { type FSWatcher, mkdirSync, watch } from 'node:fs'
@@ -52,7 +56,7 @@ import { readCard } from '../adapters/cards.ts'
 import { herdr } from '../adapters/herdr.ts'
 import { nameForCwd, nameScript } from '../adapters/name-for-cwd.ts'
 import { archiveDir, scheduleDir } from '../adapters/paths.ts'
-import { getEntry, listEntries, logRun, removeEntry, updateEntry } from '../adapters/schedule-store.ts'
+import { getEntry, listEntries, listWatches, logRun, removeEntry, updateEntry } from '../adapters/schedule-store.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
 import { parseNodeKey } from '../core/nodes.ts'
@@ -61,6 +65,7 @@ import { profileLabel, sessionProfile } from '../core/profiles.ts'
 import { cleanText, promptOf, type ScheduleEntry, targetOf } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
 import { wakeOffByKey } from '../core/wake/mode.ts'
+import { watchesConfig } from '../core/watches.ts'
 import { nextRun } from '../core/when.ts'
 import { threadsConfig } from '../core/work-threads.ts'
 import { workdeskConfig } from '../core/workdesk.ts'
@@ -70,6 +75,7 @@ import { collect } from './board.ts'
 import type { Deps } from './deps.ts'
 import { moveAsleep, moveTarget } from './move.ts'
 import { currentWakeMode } from './wake/mode.ts'
+import { watchPass } from './watches.ts'
 
 // A run on its way (waking a session takes up to three minutes) holds its claim this long.
 const CLAIM_MS = 5 * 60_000
@@ -149,6 +155,8 @@ export function startScheduler({
   let timer: ReturnType<typeof setTimeout> | undefined
   let ticking = false
   let stopped = false
+  // Watches (#486, services/watches.ts): their probes, only while config.json's `watches` is on.
+  const watches = watchPass({ deps, patience, onChange })
 
   function workdeskDue(entry: ScheduleEntry): boolean {
     if (entry.workdeskTaskId === undefined) return true
@@ -165,6 +173,7 @@ export function startScheduler({
         return null
       })
       if (archived?.closed || archived?.kept) onChange()
+      if (watchesConfig(cfg.watches)) void watches.pass()
       const now = Date.now()
       // A run that waits for its session is tried again once a tick, not on every file change; a
       // restart herdr-wake refused, not before its retry time.
@@ -715,7 +724,9 @@ export function startScheduler({
     const closing = listArchive()
       .filter(r => r.state === 'closing')
       .map(r => r.closeAt)
-    const soonest = Math.min(...[...listEntries().map(e => e.next), ...closing].filter(at => at > now))
+    // A watch's next check counts while watches are on.
+    const checks = watchesConfig(cfg.watches) ? listWatches().map(w => w.next) : []
+    const soonest = Math.min(...[...listEntries().map(e => e.next), ...closing, ...checks].filter(at => at > now))
     plan(Math.min(tickMs(), soonest - now + 50))
   }
   // A new entry, or a session put in the archive, may be due sooner than the next tick.
@@ -739,6 +750,7 @@ export function startScheduler({
   return {
     stop() {
       stopped = true
+      watches.stop()
       clearTimeout(timer)
       clearTimeout(watchTimer)
       for (const w of watchers) w.close()
