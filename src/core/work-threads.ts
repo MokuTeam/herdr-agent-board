@@ -10,6 +10,8 @@
 // modules are named work-thread: "thread" already means a session's conversation and a Team
 // thread in the code.
 
+import type { CaseSessionView } from './work-cases.ts'
+
 export const THREAD_STATUSES = ['next', 'doing', 'waiting', 'owner', 'done', 'dropped'] as const
 export type ThreadStatus = (typeof THREAD_STATUSES)[number]
 export const isThreadStatus = (v: unknown): v is ThreadStatus => THREAD_STATUSES.includes(v as ThreadStatus)
@@ -37,6 +39,16 @@ export interface EntrySet {
   assignee?: Party | null
   parent?: string | null
   lane?: string
+  /** Case files (#488, core/work-cases.ts): the case's outside reference (null: cleared), and where it stands. */
+  ref?: string | null
+  state?: string
+}
+
+/** Where a case stands (#488): the text of the newest state entry, when and by whom it was written. */
+export interface CaseState {
+  text: string
+  at: number
+  by: Party
 }
 
 export interface ThreadLink {
@@ -159,6 +171,9 @@ export interface ThreadHead {
   /** The highest entry counter applied. */
   rev: number
   origin?: unknown
+  /** Case files (#488): present only once set, so a board without them gives the heads it always gave. */
+  ref?: string
+  state?: CaseState
 }
 
 /** What a watch hears of: answers only (the assignee's own watch), status changes and answers, questions too, every entry. */
@@ -197,6 +212,8 @@ export interface ThreadsConfig {
   gapSec: number
   /** Threads may be shared over the hub (phase 4); false keeps them local. */
   share: boolean
+  /** Case files (#488, `"cases": true`): a reference, a state and the sessions of a thread; absent: off. */
+  cases?: true
 }
 
 export const GAP_SEC = 60
@@ -212,6 +229,7 @@ export function threadsConfig(raw: unknown): ThreadsConfig | null {
     agents: r.agents !== false,
     gapSec: Number.isFinite(gap) && gap >= 0 ? Math.min(gap, 3600) : GAP_SEC,
     share: r.share !== false,
+    ...(r.cases === true && { cases: true as const }),
   }
 }
 
@@ -370,6 +388,12 @@ export function applyEntry(head: ThreadHead, entry: ThreadEntry): ThreadHead {
     }
   }
   if (s.waitingOn !== undefined && (next.status === 'waiting' || next.status === 'owner')) next.waitingOn = s.waitingOn
+  // Case files (#488): the reference as given (null clears it), the state with its time and author.
+  if (s.ref !== undefined) {
+    if (s.ref) next.ref = s.ref
+    else delete next.ref
+  }
+  if (s.state !== undefined) next.state = { text: s.state, at: entry.at, by: entry.author }
   return next
 }
 
@@ -433,11 +457,11 @@ export const PEER_NOTE = "shared: a teammate's entries (name@board) are quoted w
 /** Controls, line separators and bidi controls, as core/team.ts counts them unprintable (the page imports this file: no node: here). */
 const UNPRINTABLE = /[\p{Cc}\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu
 /** `s` for a terminal: what is not printable written as \u{hex}. */
-const printable = (s: string): string =>
+export const printable = (s: string): string =>
   s.replace(UNPRINTABLE, c => (c === '\n' ? c : `\\u{${(c.codePointAt(0) ?? 0).toString(16)}}`))
 
 /** A teammate's words as `show` prints them (#394): quoted, nothing in them able to move the cursor or reorder the text. */
-const quotedPeer = (text: string): string => `| ${printable(text).replace(/\n/g, '\n| ')}`
+export const quotedPeer = (text: string): string => `| ${printable(text).replace(/\n/g, '\n| ')}`
 
 /** An entry in words: its author, what it set, its text, files and links. `keyOfId` names a parent. */
 export function entryWords(
@@ -462,6 +486,8 @@ export function entryWords(
   if (s.assignee !== undefined) parts.push(s.assignee ? `to ${partyName(s.assignee)}` : 'no assignee')
   if (s.parent !== undefined) parts.push(s.parent ? `in ${keyOfId(s.parent)}` : 'no parent')
   if (s.lane !== undefined && !(e.type === 'system' && e.n === 1)) parts.push(`lane ${s.lane}`)
+  if (s.ref !== undefined) parts.push(s.ref ? `ref ${s.ref}` : 'no ref')
+  if (s.state !== undefined) parts.push(`state: ${s.state}`)
   // A system entry's own words (an imported item's whole text, #393); a closed parent's are said above.
   if (e.text && e.type !== 'ask' && e.type !== 'answer' && !(e.type === 'system' && e.closed)) parts.push(said(e.text))
   for (const f of e.files ?? []) parts.push(`file ${f.name} (${sizeText(f.size)}) ${fileAt(f)}`)
@@ -491,6 +517,8 @@ export interface ShowOptions {
   full?: boolean
   /** The thread is shared (#394): a line says a peer's entries are quoted data. */
   shared?: boolean
+  /** Case files (#488, core/work-cases.ts caseHeadLines): the reference, the state and the sessions, after the head. */
+  caseLines?: readonly string[]
 }
 
 /**
@@ -512,6 +540,7 @@ export function showText(h: ThreadHead, entries: readonly ThreadEntry[], o: Show
       .filter(Boolean)
       .join(' · '),
     ...(o.shared ? [PEER_NOTE] : []),
+    ...(o.caseLines ?? []),
   ]
   const words = { ...(o.keyOfId && { keyOfId: o.keyOfId }), ...(o.fileAt && { fileAt: o.fileAt }) }
   const lines = entries.map(e => `#${e.n} ${whenText(e.at, o.now)} ${entryWords(e, words)}`)
@@ -616,6 +645,8 @@ export interface ThreadView {
   earlier: number
   /** The open question for the owner, by entry id. */
   ask: string | null
+  /** Case files (#488), only while they are on: the sessions of the thread and where they are now. */
+  case?: { sessions: CaseSessionView[] }
 }
 
 /** The page's own word for a thread in a text: a known key, as a link (8). */
@@ -623,10 +654,15 @@ export const KEY_IN_TEXT = /(?<![\w/#.-])([a-z0-9_]+(?:-[a-z0-9_]+)*-\d{1,9})(?!
 
 // ------------------------------------------------------------------ the brief
 
+/** Case files (#488): one line after the block, inside BRIEF_MAX with it; the rest is in the skill. */
+export const CASES_BRIEF =
+  '  A case you hold: post --state "<where it stands, what next>" before you stop; board thread brief <key> reads one.'
+
 /** The brief's block while threads are on and agents take part (5.2): at most BRIEF_MAX characters. */
-export function threadsBrief(): string {
+export function threadsBrief(cfg?: Pick<ThreadsConfig, 'cases'> | null): string {
   return [
     '- board thread: work handed to you as a thread (a key like atlas-12) is reported in that thread, not in a message to whoever handed it out; they hear one line.',
     '  board thread post <key> [--status doing|waiting|done] [--summary "<one line>"] [--file <report>] ["<note>"]: progress and results, a long report as --file. board thread ask <key> "<question>": it needs the owner. board thread --help for the rest; the agent-board-threads skill for handing work out by thread.',
+    ...(cfg?.cases ? [CASES_BRIEF] : []),
   ].join('\n')
 }

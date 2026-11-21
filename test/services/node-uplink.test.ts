@@ -273,6 +273,61 @@ describe("the master's side", () => {
     expect(posted[1]?.body).toEqual({ code: 0, out: ['ok · atlas-1 · 1 file'], err: [] })
     expect(store.seenCall('server-1', 'c-1')).toEqual({ code: 0, out: ['ok · atlas-1 · 1 file'], err: [] })
   })
+  test("case files (#488): with the master's cases on, a node session's command gets its sessions from the master's cards; off, nothing", async () => {
+    const dir = isolatedHome()
+    const report = Buffer.from('# r\n')
+    const sent = [
+      {
+        id: 'k-1',
+        cmd: 'thread',
+        argv: ['post', 'atlas-1', '--state', '--file', '--file', '/home/n/r.md'],
+        session: 's-1',
+        lane: null,
+        files: [{ n: 0, name: 'r.md', size: report.length, sha256: sha(report) }],
+      },
+    ]
+    const ran: { argv: string[]; ctx: ThreadCmdContext }[] = []
+    const card = { key: '@server-1:s-1', category: 'atlas', name: 'worker', cwd: '/srv/work/atlas' } as Item
+    const runner = (threads: unknown, store: string) =>
+      createUplinkRunner({
+        links: link.links,
+        find: key => (key === card.key ? card : undefined),
+        items: () => [card],
+        cfg: { threads, port: 1 } as never,
+        log: () => {},
+        store: createDeviceStore({ dir: join(dir, store) }),
+        run: async (argv, ctx) => {
+          ran.push({ argv: [...argv], ctx })
+          return 0
+        },
+      })
+    let posted = 0
+    const link = standIn((path, init) => {
+      if (path === '/api/node/uplink') return streamOf(sent, init.signal)
+      if (path.includes('/file/')) return new Response(report)
+      posted++
+      return new Response('{}')
+    })
+    const on = runner({ cases: true }, 'on')
+    link.changed('online')
+    await until(() => posted >= 1, 5000)
+    await on.close()
+    const [r] = ran
+    // The file is the one after --state's value.
+    expect(r?.argv.slice(0, 5)).toEqual(['post', 'atlas-1', '--state', '--file', '--file'])
+    expect(r?.argv[5]?.startsWith(join(dir, 'on', 'server-1', 'uplink', 'k-1'))).toBe(true)
+    expect(await r?.ctx.cases?.live?.([card.key])).toEqual(
+      new Map([[card.key, { state: 'up', name: 'worker', cwd: '/srv/work/atlas', device: 'server-1' }]]),
+    )
+    expect(await r?.ctx.cases?.names?.()).toEqual(new Set(['worker']))
+    ran.length = 0
+    posted = 0
+    const off = runner(true, 'off')
+    link.changed('online')
+    await until(() => posted >= 1, 5000)
+    await off.close()
+    expect(ran[0]?.ctx.cases).toBeUndefined()
+  })
 
   test('the lane the node says counts only when the master has no card of the session', async () => {
     const dir = isolatedHome()

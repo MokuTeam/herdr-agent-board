@@ -61,6 +61,7 @@ import { createBackupServer } from '../services/backup-server.ts'
 import { createBoardEvents } from '../services/board-events.ts'
 import { createCalendarSync } from '../services/calendar.ts'
 import { createCalendarReminders } from '../services/calendar-reminders.ts'
+import { caseItems, liveOf } from '../services/case-sessions.ts'
 import { startCompactor } from '../services/compactor.ts'
 import { dayWatchTick } from '../services/day-watches.ts'
 import type { Deps } from '../services/deps.ts'
@@ -874,6 +875,9 @@ export async function startServer({
         },
         work,
         confirm: teamConfirm,
+        // Case files (#488): a case's sessions as the board sees them now (its items, the nodes' items
+        // where it is a master with them, the archive).
+        caseLive: keys => liveOf(keys, board.stale() ? null : caseItems(board.items(), nodeAggregate?.part() ?? null)),
         // Settings turned them on (#410): the skill where the install action puts it.
         skill: () => installThreadsSkill(deps.profiles().list),
       },
@@ -1153,6 +1157,8 @@ export async function startServer({
       links: nodeLinks,
       find: board.findAny,
       items: () => [...board.items(), ...(aggregate.part()?.items ?? [])],
+      // Case files (#488): the same cards, a device not heard now marked as its copy.
+      caseItems: () => caseItems(board.items(), aggregate.part()),
       cfg,
       log,
     })

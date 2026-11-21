@@ -35,6 +35,7 @@ import {
   listThreads,
   mineIds,
   ThreadError,
+  threadsWithRef,
   watchesOf,
 } from '../adapters/work-thread-store.ts'
 import { KEPT_SUBS } from '../core/node-uplink.ts'
@@ -42,6 +43,7 @@ import { nodeConfig } from '../core/nodes.ts'
 import { OWNER } from '../core/owner-watch.ts'
 import { parseTaskFile, TaskFileError } from '../core/thread-import.ts'
 import type { Config } from '../core/types.ts'
+import { caseBriefText, caseHeadLines, caseSessionViews, isCase, sameRef, sameRefNote } from '../core/work-cases.ts'
 import {
   isOpen,
   isThreadStatus,
@@ -64,6 +66,7 @@ import {
   writeLine,
 } from '../core/work-threads.ts'
 import { importTaskFile } from '../services/thread-import.ts'
+import { type CaseResolvers, readCase } from '../services/work-cases.ts'
 import { requestShare } from '../services/work-share.ts'
 import {
   askOwner,
@@ -103,6 +106,20 @@ board thread share <key> <name|team|channel> [--history]
   share asks the owner to share the thread with a teammate's board; on a shared thread every entry
   that is not --private goes to them (or waits for the owner, as a team post of yours would).`
 
+/** What the usage says more while case files are on (#488). */
+export const CASES_USAGE = `case files (#488):
+board thread new [--lane <id>] [--ref <ticket id or link>] "<title>"
+board thread set <key> --ref <r|none>
+board thread list --ref <r>                    the threads with that reference, closed ones too
+board thread post <key> --state "<where it stands, what is next, what it waits on>"
+board thread done <key> --state "<where it stands>" ["<summary>"]
+board thread brief <key>                       the case for a fresh session: state, sessions, files, last entries
+  A state keeps its lines (2,000 characters, 30 lines); it stays on this board, as the reference and
+  the sessions do. spawn-agent --thread <key> starts a new session from the brief and gives it the thread.`
+
+/** The usage, with the case files' lines while they are on. */
+const usageText = (cfg: ThreadsConfig | null): string => (cfg?.cases ? `${THREAD_USAGE}\n${CASES_USAGE}` : THREAD_USAGE)
+
 /** The flags each command takes: with a value, and bare. `--json` and `--help` go with every one. */
 const FLAGS: Record<string, { values: readonly string[]; bare: readonly string[] }> = {
   new: { values: ['--lane', '--parent', '--to'], bare: ['--doing'] },
@@ -122,6 +139,23 @@ const FLAGS: Record<string, { values: readonly string[]; bare: readonly string[]
 }
 const EVERY = ['--json', '--help']
 
+/** The flags case files add (#488), only while they are on: off, every command takes what it took. */
+const CASE_FLAGS: Record<string, { values: readonly string[]; bare: readonly string[] }> = {
+  new: { values: ['--ref'], bare: [] },
+  set: { values: ['--ref'], bare: [] },
+  list: { values: ['--ref'], bare: [] },
+  post: { values: ['--state'], bare: [] },
+  done: { values: ['--state'], bare: [] },
+  brief: { values: [], bare: [] },
+}
+
+function flagsOf(sub: string, cases: boolean): { values: readonly string[]; bare: readonly string[] } | undefined {
+  const own = FLAGS[sub]
+  const more = cases ? CASE_FLAGS[sub] : undefined
+  if (!more) return own
+  return { values: [...(own?.values ?? []), ...more.values], bare: [...(own?.bare ?? []), ...more.bare] }
+}
+
 class Usage extends ThreadError {
   constructor(message: string) {
     super('usage', message)
@@ -139,8 +173,9 @@ interface Args {
  * The words and flags of `board thread <sub> …`. A flag the command does not take is refused, so a
  * mistyped one never turns into text; text that starts with `--` goes after a lone `--`.
  */
-export function parseArgs(sub: string, rest: readonly string[]): Args {
-  const known = FLAGS[sub] ?? { values: [], bare: [] }
+export function parseArgs(sub: string, rest: readonly string[], cases = false): Args {
+  const flags = flagsOf(sub, cases)
+  const known = flags ?? { values: [], bare: [] }
   const words: string[] = []
   const values = new Map<string, string[]>()
   const bare = new Set<string>()
@@ -156,7 +191,7 @@ export function parseArgs(sub: string, rest: readonly string[]): Args {
       values.set(a, [...(values.get(a) ?? []), v])
       i++
     } else if (known.bare.includes(a) || EVERY.includes(a)) bare.add(a)
-    else if (a.startsWith('--') && FLAGS[sub])
+    else if (a.startsWith('--') && flags)
       throw new Usage(`board thread ${sub} does not take ${a} (put -- before text that starts with --)`)
     else words.push(a)
   }
@@ -195,6 +230,8 @@ export interface ThreadCmdContext {
   sendOut?: (thread: string, entry: string) => Promise<SentLine | null>
   /** On a node (#508): hands the call to this node's board, `POST /api/node/call`; the tests' stand-in. */
   call?: (body: NodeCall) => Promise<NodeCallAnswer>
+  /** Case files (#488): what the board knows of sessions now, and their reminders; asked only for a case's sessions. */
+  cases?: CaseResolvers
 }
 
 /** A command on a node as it goes to the node's board (services/node/uplink.ts call). */
@@ -223,9 +260,11 @@ const CALL_WAIT_MS = 40_000
  * Where the files of `board thread <sub> <rest>` are among `rest`: the value of each `--file`
  * of a post or a done, as parseArgs reads them (a value of another flag and text after a lone `--`
  * are none). The master rewrites these to its copies of the node's files (services/nodes/uplink.ts).
+ * The value flags of case files (#488) count too, whether the board has them on or not: a state or a
+ * reference that reads like `--file` is a value, and a board with cases off refuses the flag itself.
  */
 export function fileArgs(sub: string, rest: readonly string[]): number[] {
-  const known = FLAGS[sub]
+  const known = flagsOf(sub, true)
   if (!known?.values.includes('--file')) return []
   const at: number[] = []
   for (let i = 0; i < rest.length; i++) {
@@ -272,20 +311,21 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
   const flags = rest.includes('--') ? rest.slice(0, rest.indexOf('--')) : rest
   const json = flags.includes('--json')
   let db: BoardDb | null = null
+  const cfg = threadsConfig(ctx.cfg.threads)
   try {
     const [sub = 'help', ...args] = rest
     // --help or -h among the flags (#305); after a lone -- it is text too.
     if (sub === 'help' || flags.includes('--help') || flags.includes('-h')) {
-      if (json) out(JSON.stringify({ ok: true, usage: THREAD_USAGE }))
-      else out(THREAD_USAGE)
+      if (json) out(JSON.stringify({ ok: true, usage: usageText(cfg) }))
+      else out(usageText(cfg))
       return 0
     }
     // On a node every command goes to the master, which holds the threads (#508): this computer's
     // database is not opened. Without `node` the command runs here, as it always has.
     if (nodeConfig(ctx.cfg.node)) return await forward(sub, args, ctx, out, json)
-    const a = parseArgs(sub, args)
+    const a = parseArgs(sub, args, !!cfg?.cases)
     const base = `http://127.0.0.1:${typeof ctx.cfg.port === 'number' ? ctx.cfg.port : 12422}/`
-    const cfg = threadsConfig(ctx.cfg.threads)
+
     // How MokuPilot finds the board (9.1): its address and whether threads are on, on or off.
     if (sub === 'link' && a.has('--base')) {
       const on = !!cfg
@@ -307,7 +347,7 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
     const code = err instanceof ThreadError ? err.code : err instanceof DbError ? `db_${err.problem}` : 'failed'
     const message = err instanceof Error ? err.message : String(err)
     if (json) out(JSON.stringify({ ok: false, error: code, message }))
-    else (ctx.err ?? console.error)(code === 'usage' ? `${message}\n${THREAD_USAGE}` : message)
+    else (ctx.err ?? console.error)(code === 'usage' ? `${message}\n${usageText(cfg)}` : message)
     return 1
   } finally {
     if (db && !ctx.db) db.close()
@@ -469,6 +509,7 @@ class Run {
           told: w.told.length,
           untold: w.untold,
           ...(sent !== undefined && { out: sent?.out ?? 'queued', ...(sent && { sent }) }),
+          ...(w.sameRef && { sameRef: w.sameRef }),
         }),
       )
     else
@@ -477,6 +518,7 @@ class Run {
           ...extra,
           ...(sent !== undefined ? [sentWords(sent)] : []),
           ...(w.untold ? [`${w.untold} watching not told: they read board thread changes`] : []),
+          ...sameRefNote(w.sameRef),
         ]),
       )
   }
@@ -494,7 +536,15 @@ class Run {
         const parent = parentWord ? this.thread(parentWord) : null
         const toWord = a.one('--to')
         const to = toWord ? await this.party(toWord, '--to') : null
-        const w = newThread(this.write, { lane, title, parent, to, doing: a.has('--doing') })
+        const ref = a.one('--ref')
+        const w = newThread(this.write, {
+          lane,
+          title,
+          parent,
+          to,
+          doing: a.has('--doing'),
+          ...(ref !== undefined && { ref }),
+        })
         return this.wrote(w, w.head.assignee ? [partyName(w.head.assignee)] : [])
       }
       case 'post':
@@ -511,7 +561,9 @@ class Run {
         const summary = sub === 'done' && a.one('--summary') === undefined && text ? text : a.one('--summary')
         const note = sub === 'done' && a.one('--summary') === undefined ? '' : text
         const waiting = a.one('--waiting')
+        const state = a.one('--state')
         const w = postEntry(this.write, head, {
+          ...(state !== undefined && { state }),
           text: note,
           ...(status && { status }),
           ...(summary !== undefined && { summary }),
@@ -538,7 +590,9 @@ class Run {
         const parent = a.one('--parent')
         const title = a.one('--title')
         const lane = a.one('--lane')
+        const ref = a.one('--ref')
         const w = setFields(this.write, head, {
+          ...(ref !== undefined && { ref: ref.trim().toLowerCase() === 'none' ? null : ref }),
           ...(title !== undefined && { title }),
           ...(assignee !== undefined && { assignee: await this.party(assignee, '--assignee') }),
           ...(lane !== undefined && { lane }),
@@ -550,6 +604,10 @@ class Run {
       }
       case 'show':
         return this.show()
+      case 'brief':
+        // Case files (#488); off, no such command, as before.
+        if (!this.cfg.cases) throw new Usage(`no command "board thread ${sub}"`)
+        return this.brief()
       case 'list':
         return this.list()
       case 'changes':
@@ -592,7 +650,39 @@ class Run {
     }
   }
 
-  show(): void {
+  /** `brief <key>` (#488): the case for a fresh session, without a model (core/work-cases.ts caseBriefText). */
+  async brief(): Promise<void> {
+    const head = this.thread(this.a.words[0])
+    if (this.a.words.length > 1) throw new Usage('usage: board thread brief <key>')
+    const c = await readCase(this.db, head, this.ctx.cases ?? {})
+    const parent = head.parent ? getThread(this.db, head.parent) : null
+    const text = caseBriefText({
+      head,
+      entries: c.entries,
+      sessions: c.sessions,
+      live: c.live,
+      reminders: c.reminders,
+      link: threadLink(this.base, head.key),
+      now: this.now,
+      fileAt: f => filePath(f.ref, this.ctx.state),
+      keyOfId: id => getThread(this.db, id)?.key ?? id.slice(0, 8),
+      parentKey: parent?.key ?? null,
+    })
+    if (this.json)
+      this.out(
+        JSON.stringify({
+          ok: true,
+          key: head.key,
+          thread: head,
+          sessions: caseSessionViews(c.sessions, c.live),
+          reminders: c.reminders,
+          text,
+        }),
+      )
+    else this.out(text)
+  }
+
+  async show(): Promise<void> {
     const head = this.thread(this.a.words[0])
     const full = this.a.has('--full')
     const since = intOf(this.a.one('--since'), '--since')
@@ -607,11 +697,18 @@ class Run {
     const kids = childrenOf(this.db, head.id)
     const parent = head.parent ? getThread(this.db, head.parent) : null
     const link = threadLink(this.base, head.key)
+    // Case files (#488): a case's reference, state and sessions in the head, while they are on; a
+    // thread that is no case is shown as before, and nobody is asked where its sessions are.
+    const c =
+      this.cfg.cases && isCase(head) ? await readCase(this.db, head, this.ctx.cases ?? {}, { reminders: false }) : null
     if (this.json) {
       this.out(
         JSON.stringify({
           ok: true,
           thread: head,
+          ...(c && {
+            case: { sessions: caseSessionViews(c.sessions, c.live) },
+          }),
           link,
           parent: parent?.key ?? null,
           children: kids.map(k => ({ key: k.key, status: k.status, title: k.title })),
@@ -635,6 +732,7 @@ class Run {
         fileAt: f => filePath(f.ref, this.ctx.state),
         full,
         ...(sharingOf(head) && { shared: true }),
+        ...(c && { caseLines: caseHeadLines(head, c.sessions, c.live, this.now) }),
       }),
     )
   }
@@ -644,10 +742,22 @@ class Run {
     const status = a.one('--status')
     if (status !== undefined && !isThreadStatus(status))
       throw new Usage(`--status is next, doing, waiting, owner, done or dropped, not "${status}"`)
-    const closed = a.has('--done') || (status !== undefined && !isOpen(status))
+    const ref = a.one('--ref')
+    const closed = a.has('--done') || ref !== undefined || (status !== undefined && !isOpen(status))
     const all = a.has('--all')
     let heads: ThreadHead[]
-    if (a.has('--mine')) {
+    if (ref !== undefined) {
+      // Case files (#488): a reference names few threads, so closed ones are listed too, from every lane unless --lane says one.
+      const lane = a.one('--lane')?.toLowerCase()
+      heads = threadsWithRef(this.db).filter(
+        h =>
+          !!h.ref &&
+          sameRef(ref, h.ref) &&
+          (!lane || h.lane === lane) &&
+          (status === undefined || h.status === status) &&
+          (!a.has('--mine') || (h.assignee?.kind === 'session' && h.assignee.key === this.session().key)),
+      )
+    } else if (a.has('--mine')) {
       const me = this.session()
       const watched = watchesOf(this.db, me.key)
         .map(w => w.target)

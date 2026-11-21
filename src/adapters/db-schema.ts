@@ -220,6 +220,18 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX workdesk_dialog_pending ON workdesk_dialog_events (board_task_id, assignment_id, id);
     `,
   },
+  {
+    version: 7,
+    store: 'threads',
+    // Case files (#488, core/work-cases.ts): a thread's outside reference (a ticket id or a link,
+    // as given) and where the case stands, JSON {text, at, by}. Both NULL until a case writes them,
+    // which only a board with `"threads": { "cases": true }` does. The sessions of a case are its
+    // feed's, read when shown: nothing stored for them.
+    sql: `
+      ALTER TABLE threads ADD COLUMN ref TEXT;
+      ALTER TABLE threads ADD COLUMN state TEXT;
+    `,
+  },
 ]
 
 /** The version the code makes a file: the last step's. */

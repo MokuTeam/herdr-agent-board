@@ -36,6 +36,7 @@ import { t } from '../../core/lang.ts'
 import { OWNER as OWNER_WATCH } from '../../core/owner-watch.ts'
 import { type OwnerAction, unlocks } from '../../core/team-confirm.ts'
 import type { Config } from '../../core/types.ts'
+import { caseSessions, caseSessionViews, isCase, type SessionLive } from '../../core/work-cases.ts'
 import {
   afterN,
   isOpen,
@@ -124,6 +125,8 @@ export interface ThreadsApp {
   skill?(): void
   /** The owner's passkey (#224): what sends as the owner waits for it while it is on. */
   confirm?: Pick<TeamConfirm, 'required' | 'unlocked' | 'safe' | 'pend' | 'urlOf' | 'away'>
+  /** Case files (#488): where these sessions are now, from the board's own items and the archive. */
+  caseLive?(keys: readonly string[]): Map<string, SessionLive>
 }
 
 /** The revision's own stream: made on its first client, so a board with threads off keeps no timer for it. */
@@ -291,9 +294,21 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
         entries: entries.map(e => entryView(e, app.state)),
         earlier: all.length - entries.length,
         ask: openAsk(head, all)?.id ?? null,
+        // Case files (#488): one rule with `show`, sessions only for a thread that is a case.
+        ...(threadsConfig(app.cfg.threads)?.cases && isCase(head) && { case: caseView(head, all) }),
       }
       return json(200, { ok: true, rev: threadsRev(db), ...view })
     })
+  }
+
+  /** Case files (#488): the thread's sessions from its feed, with where the board sees them now. */
+  function caseView(head: ThreadHead, all: readonly ThreadEntry[]): NonNullable<ThreadView['case']> {
+    const sessions = caseSessions(head, all)
+    let live: Map<string, SessionLive> | undefined
+    try {
+      live = sessions.length ? app.caseLive?.(sessions.map(s => s.key)) : undefined
+    } catch {}
+    return { sessions: caseSessionViews(sessions, live) }
   }
 
   /** A thread a body names as a parent, or none. */

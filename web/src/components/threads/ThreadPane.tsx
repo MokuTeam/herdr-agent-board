@@ -18,6 +18,7 @@ import {
   isOwnerParty,
   partyLabel,
   STATUS_MENU,
+  stateLines,
   statusColor,
   type ThreadEntryView,
   type ThreadStatus,
@@ -31,6 +32,7 @@ import { AttachButton } from '../team/AttachButton.tsx'
 import { TeamComposer } from '../team/TeamComposer.tsx'
 import { TeamMessage } from '../team/TeamMessage.tsx'
 import { KeyText, MiniRow, StatusDot, statusWord, WhoChip } from './bits.tsx'
+import { CaseHead } from './CaseHead.tsx'
 import { ShareButton, ThreadShare, useShareable } from './ThreadShare.tsx'
 
 /** The ops that share, unshare, take or send (#394): the owner's, through the passkey when it is on. */
@@ -320,6 +322,7 @@ export function ThreadPane({ view, onOpen, onBack }: ThreadPaneProps) {
             <KeyText text={head.summary} onOpen={onOpen} />
           </p>
         )}
+        <CaseHead head={head} sessions={view.case?.sessions} />
         {head.proposed && (
           <div className="wt-proposed">
             <p>
@@ -382,6 +385,10 @@ export function ThreadPane({ view, onOpen, onBack }: ThreadPaneProps) {
                       {t(`wt.did.${item.did}`, { status: statusWord(item.to, t) })}
                       {e.set?.summary && item.did !== 'shared' ? ': ' : ''}
                       {e.set?.summary && item.did !== 'shared' && <KeyText text={e.set.summary} onOpen={onOpen} />}
+                      {/* Case files (#488): a state's first lines; the whole of it is in the head. */}
+                      {e.set?.state && item.did !== 'shared'
+                        ? `${e.set.summary ? ' · ' : ': '}${stateLines(e.set.state)}`
+                        : ''}
                     </>
                   )}{' '}
                   <OutMark entry={e} busy={busy} onSend={sendOut} />

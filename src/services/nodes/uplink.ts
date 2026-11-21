@@ -43,8 +43,9 @@ import {
 import { nodeKey } from '../../core/nodes.ts'
 import type { Config, Item } from '../../core/types.ts'
 import { safeName } from '../../core/upload-name.ts'
-import { FILE_MAX_BYTES, FILES_MAX, type Party } from '../../core/work-threads.ts'
+import { FILE_MAX_BYTES, FILES_MAX, type Party, threadsConfig } from '../../core/work-threads.ts'
 import type { ThreadCmdContext } from '../../entrypoints/thread-cli.ts'
+import type { Known } from '../case-sessions.ts'
 import type { NodeLinks } from './links.ts'
 
 export interface UplinkRunner {
@@ -57,6 +58,12 @@ export interface UplinkRunnerOptions {
   find(key: string): Item | undefined
   /** The board's cards, this computer's and the nodes', for `--to` and `--assignee`. */
   items(): Item[]
+  /**
+   * Case files (#488): the cards a case's sessions are read from, a device not heard now marked as
+   * its offline copy (services/case-sessions.ts caseItems); `items` when not given.
+   */
+  caseItems?: () => readonly Known[]
+
   /** The live config: `threads` and `port` are read at each call. */
   cfg: Config
   log(text: string): void
@@ -340,6 +347,17 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       const out: string[] = []
       const err: string[] = []
       const actor: Party = { kind: 'session', key, name }
+      // Case files (#488): a case's sessions as this board's cards have them, when it has cases on.
+      const cases = threadsConfig(o.cfg.threads)?.cases
+        ? await (async () => {
+            const { liveOf, namesOf, remindersOf } = await import('../case-sessions.ts')
+            return {
+              live: async (keys: readonly string[]) => liveOf(keys, o.caseItems?.() ?? o.items()),
+              reminders: remindersOf,
+              names: async () => namesOf(o.items()),
+            }
+          })()
+        : undefined
       const code = await (o.run ?? threadCmd)(argv, {
         cfg: { threads: o.cfg.threads, port: o.cfg.port },
         actor,
@@ -349,6 +367,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
         out: l => out.push(l),
         err: l => err.push(l),
         sendOut: (thread, entry) => sendOut(thread, entry),
+        ...(cases && { cases }),
       })
       return { code, out, err }
     } catch (err) {
