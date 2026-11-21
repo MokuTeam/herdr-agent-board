@@ -11,10 +11,10 @@ import os from 'node:os'
 import { join } from 'node:path'
 import { type BoardDb, openDb } from '../../src/adapters/db.ts'
 import type { NewEntry } from '../../src/adapters/schedule-store.ts'
-import { entriesOf, findThread, getThread, needsOwner } from '../../src/adapters/work-thread-store.ts'
+import { entriesOf, findEntry, findThread, getThread, needsOwner } from '../../src/adapters/work-thread-store.ts'
 import type { ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import { GENERAL, type ThreadRef, type WorkBody } from '../../src/core/team.ts'
-import { type Party, sharedOf, type ThreadEntry, type ThreadHead } from '../../src/core/work-threads.ts'
+import { afterN, type Party, sharedOf, type ThreadEntry, type ThreadHead } from '../../src/core/work-threads.ts'
 import {
   historyText,
   type InboundWork,
@@ -243,11 +243,13 @@ test('a private entry on a shared thread takes no number of its own: neither pee
   const { a, b, id } = sharedPair()
   const owner: Party = { kind: 'owner' }
   // anna writes for herself, then for both: ben gets only the second.
-  const mine = postEntry(a.ctx(owner, T0 + 20_000), getThread(a.db, id) as ThreadHead, {
+  const was = getThread(a.db, id) as ThreadHead
+  const mine = postEntry(a.ctx(owner, T0 + 20_000), was, {
     text: 'only for anna',
     private: true,
   })
   expect(mine.entry.out).toBeUndefined()
+  expect(mine.entry.n).toBe(was.rev)
   const toBen = postEntry(a.ctx(owner, T0 + 21_000), mine.head, { summary: 'columns found' })
   expect(take(b, handOver(a, b, toBen.head, toBen.entry)).taken).toBe(true)
   const missingOn = (x: Board) => entriesOf(x.db, id).filter(e => e.text.includes('entries missing here'))
@@ -285,6 +287,68 @@ test('a board that really missed entries still says so when private entries came
     `entries missing here (#${last.entry.n - 1}); the head is taken from anna's copy`,
   ])
   expect(shared(getThread(b.db, id))).toEqual(shared(getThread(a.db, id)))
+})
+
+test('a number on a shared thread names the entry the peers hold by it, and --since keeps a private entry with it', () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const open = postEntry(a.ctx(owner, T0 + 20_000), getThread(a.db, id) as ThreadHead, { text: 'columns found' })
+  const mine = postEntry(a.ctx(owner, T0 + 21_000), open.head, { text: 'only for anna', private: true })
+  expect(mine.entry.n).toBe(open.entry.n)
+  const n = open.entry.n
+  expect(findEntry(a.db, id, String(n)).id).toBe(open.entry.id)
+  expect(findEntry(a.db, id, `#${n}`).id).toBe(open.entry.id)
+  expect(findEntry(a.db, id, mine.entry.id.slice(0, 8)).id).toBe(mine.entry.id)
+  // A reader that saw #n before the private entry was written still gets it.
+  expect(entriesOf(a.db, id, { since: n, shared: true }).map(e => e.text)).toEqual(['only for anna'])
+  expect(entriesOf(a.db, id, { since: n - 1, shared: true }).map(e => e.text)).toEqual([
+    'columns found',
+    'only for anna',
+  ])
+  // Two boards that wrote one number at once: the number names no entry, the ids do.
+  const at = T0 + 30_000
+  const x = postEntry(a.ctx(owner, at), getThread(a.db, id) as ThreadHead, { text: 'from anna' })
+  take(b, handOver(a, b, open.head, open.entry))
+  const y = postEntry(b.ctx(owner, at), getThread(b.db, id) as ThreadHead, { text: 'from ben' })
+  expect(y.entry.n).toBe(x.entry.n)
+  take(a, handOver(b, a, y.head, y.entry))
+  expect(() => findEntry(a.db, id, String(x.entry.n))).toThrow(`#${x.entry.n} is 2 entries: give its id`)
+})
+
+test('show --since on a thread that was never shared is what it was', () => {
+  const a = board(ANNA)
+  const made = newThread(a.ctx(), { lane: 'atlas', title: 'Local only' })
+  const p = postEntry(a.ctx({ kind: 'owner' }, T0 + 1000), made.head, { text: 'a note', private: true })
+  expect(entriesOf(a.db, made.head.id, { since: p.entry.n })).toEqual([])
+  expect(afterN(p.entry, p.entry.n, false)).toBe(false)
+  expect(afterN(p.entry, p.entry.n, true)).toBe(true)
+})
+
+test("this board's private entries fold after the others of their number, in the order they were written", () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  // ben's clock runs a minute ahead: his entry arrives stamped later than anna's private one after it.
+  const his = postEntry(b.ctx(owner, T0 + 100_000), getThread(b.db, id) as ThreadHead, {
+    status: 'doing',
+    summary: 'ben maps',
+  })
+  take(a, handOver(b, a, his.head, his.entry))
+  const mine = postEntry(a.ctx(owner, T0 + 40_000), getThread(a.db, id) as ThreadHead, {
+    status: 'waiting',
+    waitingOn: 'the client',
+    private: true,
+  })
+  expect(mine.entry.n).toBe(his.entry.n)
+  expect(getThread(a.db, id)).toMatchObject({ status: 'waiting', waitingOn: 'the client' })
+  // Private entries written in the same millisecond: the last one written holds the field.
+  let head = getThread(a.db, id) as ThreadHead
+  for (let i = 0; i < 6; i++) {
+    const at = T0 + 50_000 + i
+    head = postEntry(a.ctx(owner, at), head, { summary: `first ${i}`, private: true }).head
+    head = postEntry(a.ctx(owner, at), head, { summary: `second ${i}`, private: true }).head
+    expect(head.summary).toBe(`second ${i}`)
+    expect(getThread(a.db, id)?.summary).toBe(`second ${i}`)
+  }
 })
 
 test('a private entry on a thread that is not shared keeps a number of its own', () => {

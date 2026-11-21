@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { MAX_WORK_N } from '../core/team-wire.ts'
 import { foldShared } from '../core/work-share.ts'
 import {
+  afterN,
   applyEntry,
   type EntryOut,
   type EntrySet,
@@ -307,18 +308,27 @@ export function childrenOf(db: BoardDb, parent: string): ThreadHead[] {
   ).map(headOf)
 }
 
-/** A thread's entries, oldest first: after `since` (an n), or the last `last`, or all. */
+/**
+ * A thread's entries, oldest first: after `since` (an n; on a thread that is or was shared, a
+ * private entry with that number too: afterN), or the last `last`, or all.
+ */
 export function entriesOf(
   db: Pick<BoardDb, 'db'>,
   thread: string,
-  o: { since?: number; last?: number } = {},
+  o: { since?: number; last?: number; shared?: boolean } = {},
 ): ThreadEntry[] {
-  if (o.since !== undefined)
+  if (o.since !== undefined) {
+    const since = o.since
     return (
       db.db
-        .query(`SELECT ${ENTRY_COLUMNS} FROM thread_entries WHERE thread = ? AND n > ? ORDER BY n, at, id`)
-        .all(thread, o.since) as EntryRow[]
-    ).map(entryOf)
+        .query(
+          `SELECT ${ENTRY_COLUMNS} FROM thread_entries WHERE thread = ? AND n ${o.shared ? '>=' : '>'} ? ORDER BY n, at, id`,
+        )
+        .all(thread, since) as EntryRow[]
+    )
+      .map(entryOf)
+      .filter(e => afterN(e, since, o.shared === true))
+  }
   if (o.last !== undefined)
     return (
       db.db
@@ -660,9 +670,9 @@ export function appendEntry(
   if (!row) throw new ThreadError('not_found', 'no such thread')
   const before = headOf(row)
   // A private entry on a shared thread (#541) never reaches the peers: it takes the number of the
-  // entry it follows, as an adoption does, since a number of its own would leave a hole the peers
-  // read as entries missing (4.3, rule 3).
-  const n = input.private && sharedOf(before) !== null ? Math.max(before.rev, 1) : before.rev + 1
+  // entry it follows (as an adoption takes its sender's), since a number of its own would leave a
+  // hole the peers read as entries missing (4.3, rule 3).
+  const n = input.private && sharedOf(before) !== null ? before.rev : before.rev + 1
   const draft: ThreadEntry = {
     id: input.id ?? randomUUID(),
     thread: id,
@@ -711,6 +721,17 @@ export function findEntry(db: BoardDb, thread: string, word: string): ThreadEntr
         .query(`SELECT ${ENTRY_COLUMNS} FROM thread_entries WHERE thread = ? AND id LIKE ? LIMIT 2`)
         .all(thread, `${w}%`) as EntryRow[])
   if (rows.length === 1) return entryOf(rows[0] as EntryRow)
+  // One number, several entries: on a shared thread a private entry takes the number of the entry
+  // it follows (#541), and two boards may write the same number at once. The number is the one
+  // entry the peers hold by it, when there is one; else the entry goes by its id.
+  const found = rows.map(entryOf)
+  const open = found.filter(e => !e.private)
+  if (/^\d{1,9}$/.test(w) && open.length === 1) return open[0] as ThreadEntry
+  if (/^\d{1,9}$/.test(w) && found.length > 1)
+    throw new ThreadError(
+      'no_entry',
+      `#${w} is ${found.length} entries: give its id (${found.map(e => e.id.slice(0, 8)).join(', ')})`,
+    )
   throw new ThreadError('no_entry', `no entry "${word}" in that thread (its number, #4, or its id)`)
 }
 

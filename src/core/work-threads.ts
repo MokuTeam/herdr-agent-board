@@ -122,6 +122,13 @@ export const sharedOf = (h: Pick<ThreadHead, 'scope'>): SharedScope | null =>
 /** The thread's sharing, also when it ended: where its last entries still go. */
 export const sharingOf = (h: Pick<ThreadHead, 'scope'>): SharedScope | null =>
   typeof h.scope === 'object' && h.scope.kind !== 'local' ? h.scope : null
+/**
+ * Whether an entry comes after a reader's `#since` (`show --since`). On a thread that is or was
+ * shared, a private entry of this board takes the number of the entry it follows (#541), so one
+ * with that very number may have come after what the reader saw: it is shown rather than missed.
+ */
+export const afterN = (e: Pick<ThreadEntry, 'n' | 'private' | 'author'>, since: number, shared: boolean): boolean =>
+  e.n > since || (shared && e.n === since && e.private === true && e.author.kind !== 'peer')
 export const requestOf = (h: Pick<ThreadHead, 'scope'>): ShareRequest | null =>
   typeof h.scope === 'object' && h.scope.kind === 'local' ? h.scope.request : null
 

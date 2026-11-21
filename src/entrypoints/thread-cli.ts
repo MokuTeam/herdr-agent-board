@@ -455,7 +455,7 @@ class Run {
     const last = intOf(this.a.one('--last'), '--last')
     const entries =
       since !== undefined
-        ? entriesOf(this.db, head.id, { since })
+        ? entriesOf(this.db, head.id, { since, shared: sharingOf(head) !== null })
         : full && last === undefined
           ? entriesOf(this.db, head.id)
           : entriesOf(this.db, head.id, { last: last ?? SHOW_LAST })
@@ -475,19 +475,18 @@ class Run {
             ...e,
             ...(e.files && { files: e.files.map(f => ({ ...f, path: filePath(f.ref, this.ctx.state) })) }),
           })),
-          earlier: Math.max(0, (entries[0]?.n ?? total + 1) - 1),
+          earlier: Math.max(0, total - entries.length),
         }),
       )
       return
     }
-    const first = entries[0]?.n ?? total + 1
     this.out(
       showText(head, entries, {
         now: this.now,
         link,
         parentKey: parent?.key ?? null,
         children: { done: kids.filter(k => k.status === 'done').length, all: kids.length },
-        earlier: Math.max(0, first - 1),
+        earlier: Math.max(0, total - entries.length),
         keyOfId: id => getThread(this.db, id)?.key ?? id.slice(0, 8),
         fileAt: f => filePath(f.ref, this.ctx.state),
         full,

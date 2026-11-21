@@ -37,12 +37,14 @@ import { OWNER as OWNER_WATCH } from '../../core/owner-watch.ts'
 import { type OwnerAction, unlocks } from '../../core/team-confirm.ts'
 import type { Config } from '../../core/types.ts'
 import {
+  afterN,
   isOpen,
   isThreadStatus,
   MINE,
   OWNER,
   type Party,
   sharedOf,
+  sharingOf,
   THREAD_KEY,
   type ThreadEntry,
   type ThreadEntryView,
@@ -278,7 +280,7 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
       const all = entriesOf(db, head.id)
       const entries =
         since !== undefined
-          ? all.filter(e => e.n > since)
+          ? all.filter(e => afterN(e, since, sharingOf(head) !== null))
           : full
             ? all
             : all.slice(-Math.min(last ?? ENTRIES_DEFAULT, ENTRIES_DEFAULT))
