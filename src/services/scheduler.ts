@@ -67,7 +67,7 @@ import { workdeskConfig } from '../core/workdesk.ts'
 import { type ActionResult, checkWake, readyToSleep, send, sleepSession, wake } from './actions.ts'
 import { closeDue, listArchive } from './archive.ts'
 import { collect } from './board.ts'
-import { defaultDue, defaulted } from './decisions.ts'
+import { defaultDue, recordDefault } from './decisions.ts'
 import type { Deps } from './deps.ts'
 import { moveAsleep, moveTarget } from './move.ts'
 import { currentWakeMode } from './wake/mode.ts'
@@ -616,18 +616,8 @@ export function startScheduler({
   function sent(entry: ScheduleEntry, result = 'sent', why?: string): void {
     const now = Date.now()
     if (entry.receipt) settleReport(entry, 'sent')
-    // A default typed in is recorded as the default's: tried twice here; past that the board's
-    // tidy-up finds it typed by this log (services/decisions.ts settleLeftOvers).
-    if (entry.decision !== undefined) {
-      for (let tries = 0; tries < 2; tries++) {
-        try {
-          defaulted(entry, now)
-          break
-        } catch (err) {
-          log(`decision ${String(entry.decision)}: ${messageOf(err)}`)
-        }
-      }
-    }
+    // A default typed in is recorded as the default's (services/decisions.ts recordDefault).
+    if (entry.decision !== undefined) recordDefault(entry, now, log)
     delivered.set(entry.id, entry.next)
     finish(entry, now)
     logRun(record(entry, now, result, why))

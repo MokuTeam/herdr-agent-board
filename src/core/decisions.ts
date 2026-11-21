@@ -50,6 +50,13 @@ export interface CardDecision {
 }
 
 /** What `board ask` asks. */
+/** A question's id and its default's schedule entry, taken before the question is written (services/decisions.ts). */
+export interface ReservedDecision {
+  id: string
+  entry: string | null
+  defaultAt: number | null
+}
+
 export interface AskSpec {
   question: string
   options: string[]

@@ -39,6 +39,7 @@ import {
   durationWords,
   orderQueue,
   ownerPrompt,
+  type ReservedDecision,
 } from '../core/decisions.ts'
 import { parseNodeKey } from '../core/nodes.ts'
 import { cardsWaiting } from '../core/owner-watch.ts'
@@ -91,19 +92,19 @@ export interface AskInput {
   now: number
   by?: string
   schedule?: DecisionSchedule
+  /** Its id and default, reserved before (reserveDecision). */
+  reserved?: ReservedDecision
 }
 
 /**
- * A question with its options: the default goes into the schedule first (refused at the session's
- * cap, which leaves everything as it was); then an open one of the same card is withdrawn (replaced)
- * and its default taken back; then the card, then the row (a queue built between the two finds the
- * card's id with no row yet, which it leaves alone). A device's session (#501) asks on its own
- * board: decisions are this computer's.
+ * A question's id and its default in the schedule, before anything else is written: at the
+ * session's cap this refuses with nothing changed. `board thread ask` takes it before it writes the
+ * thread's question (releaseDecision gives it back when that write fails); `board ask` through
+ * askDecision. A device's session (#501) asks on its own board: decisions are this computer's.
  */
-export function askDecision(db: BoardDb, a: AskInput): { id: string; defaultAt: number | null } {
+export function reserveDecision(a: Pick<AskInput, 'key' | 'name' | 'spec' | 'now' | 'schedule'>): ReservedDecision {
   if (parseNodeKey(a.key)) throw new DecisionError('device', "a device's session asks on its own board")
   const schedule = a.schedule ?? fileSchedule
-  const by = a.by ?? 'agent'
   const id = randomBytes(4).toString('hex')
   const { spec } = a
   const label = spec.recommend ? spec.options[spec.recommend - 1] : undefined
@@ -121,6 +122,25 @@ export function askDecision(db: BoardDb, a: AskInput): { id: string; defaultAt: 
           decision: id,
         }).id
       : null
+  return { id, entry, defaultAt }
+}
+
+/** A reserved default given back: the question it was for was not written. */
+export const releaseDecision = (r: ReservedDecision, schedule: DecisionSchedule = fileSchedule): void =>
+  removeQuietly(schedule, r.entry)
+
+/**
+ * A question with its options: the default goes into the schedule first (refused at the session's
+ * cap, which leaves everything as it was); then an open one of the same card is withdrawn (replaced)
+ * and its default taken back; then the card, then the row (a queue built between the two finds the
+ * card's id with no row yet, which it leaves alone). A device's session (#501) asks on its own
+ * board: decisions are this computer's.
+ */
+export function askDecision(db: BoardDb, a: AskInput): { id: string; defaultAt: number | null } {
+  const schedule = a.schedule ?? fileSchedule
+  const by = a.by ?? 'agent'
+  const { id, entry, defaultAt } = a.reserved ?? reserveDecision(a)
+  const { spec } = a
   const prev = cardDecisionOf(readCard(a.key)?.decision)
   if (prev) {
     try {
@@ -328,6 +348,27 @@ export function defaulted(entry: ScheduleEntry, now: number): void {
   })
 }
 
+/**
+ * The scheduler's record of a default it typed in: tried twice; past that the board's tidy-up finds
+ * it typed by the scheduler's log (settleLeftOvers). Whether it was written.
+ */
+export function recordDefault(
+  entry: ScheduleEntry,
+  now: number,
+  log: (line: string) => void,
+  write: (entry: ScheduleEntry, now: number) => void = defaulted,
+): boolean {
+  for (let tries = 0; tries < 2; tries++) {
+    try {
+      write(entry, now)
+      return true
+    } catch (err) {
+      log(`decision ${String(entry.decision)}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  return false
+}
+
 function defaultedRow(db: BoardDb, row: DecisionRow, at: number): void {
   const label = row.recommend ? (row.options[row.recommend - 1] ?? '') : ''
   const closed = closeCardDecision(
@@ -339,12 +380,8 @@ function defaultedRow(db: BoardDb, row: DecisionRow, at: number): void {
   if (closed && row.thread) threadDefault(db, row, label, at)
 }
 
-/** When the scheduler's log says the default `entry` was typed in; null when it does not. */
-function typedAt(entry: string): number | null {
-  for (const r of readLog(300))
-    if (isRecord(r) && r.id === entry && r.result === 'sent') return typeof r.at === 'number' ? r.at : null
-  return null
-}
+/** Whether the scheduler's log says the default `entry` was typed in. */
+const typed = (entry: string): boolean => readLog(300).some(r => isRecord(r) && r.id === entry && r.result === 'sent')
 
 function threadDefault(db: BoardDb, row: DecisionRow, label: string, now: number): void {
   try {
@@ -404,12 +441,12 @@ function settleLeftOvers(db: BoardDb, cards: ReadonlyMap<string, Card>, now: num
     // read at all (a read that failed, a session gone) is left for a day.
     if (card ? now - (Number(card.updatedAt) || 0) < SETTLE_MS : now - row.askedAt < LEFT_MS) continue
     // Its default left the schedule. Typed in, by the log, with its record not written (the
-    // scheduler's write failed): the default's, never held or withdrawn, so it shows where a default does.
+    // scheduler's write failed): the default's, never held or withdrawn. Stamped now, when it is
+    // recorded, so it counts as unseen whatever the panel marked meanwhile.
     const gone = row.entry !== null && row.defaultAt !== null && row.held === null && !getEntry(row.entry)
-    const typed = gone && row.entry ? typedAt(row.entry) : null
-    if (typed !== null) {
+    if (gone && row.entry && typed(row.entry)) {
       try {
-        defaultedRow(db, row, typed)
+        defaultedRow(db, row, now)
       } catch {}
       continue
     }

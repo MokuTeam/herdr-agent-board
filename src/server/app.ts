@@ -912,6 +912,13 @@ export async function startServer({
       find: board.find,
       log,
       refresh,
+      changed: () => board.publish(),
+      // A shared thread's answer (#394): sent now, or held for the passkey as the Threads panel's is.
+      async share(entry, req) {
+        if (!work?.on()) return 'local'
+        const unlocked = !teamConfirm?.required() || teamConfirm.unlocked(req.headers.get('x-board-unlock'))
+        return (await work.send(entry, unlocked)).state
+      },
       async tell(key, text) {
         const { t } = await import('../core/lang.ts')
         const { collect } = await import('../services/board.ts')

@@ -37,7 +37,7 @@ import {
   ThreadError,
   watchesOf,
 } from '../adapters/work-thread-store.ts'
-import { type AskSpec, askSpec, type DecisionsConfig } from '../core/decisions.ts'
+import { type AskSpec, askSpec, type DecisionsConfig, type ReservedDecision } from '../core/decisions.ts'
 import { KEPT_SUBS } from '../core/node-uplink.ts'
 import { nodeConfig } from '../core/nodes.ts'
 import { OWNER } from '../core/owner-watch.ts'
@@ -123,6 +123,11 @@ const FLAGS: Record<string, { values: readonly string[]; bare: readonly string[]
   share: { values: [], bare: ['--history'] },
 }
 const EVERY = ['--json', '--help']
+// Decisions' flags on `ask` (#487).
+const DECISION_FLAGS = ['--option', '--recommend', '--default-after']
+/** The words before a lone `--`: after it everything is text. */
+const flagsOf = (args: readonly string[]): readonly string[] =>
+  args.includes('--') ? args.slice(0, args.indexOf('--')) : args
 
 class Usage extends ThreadError {
   constructor(message: string) {
@@ -178,7 +183,18 @@ export interface ThreadCmdContext {
   /** A session on the board by its key alone (an imported item's owner_id); null when none has it. */
   sessionByKey?: (key: string) => Promise<Party | null>
   /** Puts the question on the session's card, as `board ask` does; with decisions on (#487), its decision too, whose line it returns. */
-  setAsk?: (question: string, decision?: { spec: AskSpec; thread: { id: string; key: string } }) => unknown
+  setAsk?: (
+    question: string,
+    decision?: { spec: AskSpec; thread: { id: string; key: string }; reserved?: ReservedDecision | undefined },
+  ) => unknown
+  /**
+   * Decisions (#487): the question's id and default taken before the thread's question is written
+   * (refused at the session's schedule cap with nothing written); `releaseAsk` gives it back.
+   */
+  reserveAsk?: (spec: AskSpec) => Promise<ReservedDecision | undefined>
+  releaseAsk?: (reserved: ReservedDecision) => void | Promise<void>
+  /** Whether the session it writes as is the one running the command (`--session` names another). */
+  own?: () => Promise<boolean>
   /** config.json's `decisions` (#487), read: null while off. */
   decisions?: DecisionsConfig | null
   /** Raises the board's window on the thread `key` (#392: its page opens it); its address, or why not. */
@@ -287,7 +303,14 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
     }
     // On a node every command goes to the master, which holds the threads (#508): this computer's
     // database is not opened. Without `node` the command runs here, as it always has.
-    if (nodeConfig(ctx.cfg.node)) return await forward(sub, args, ctx, out, json)
+    if (nodeConfig(ctx.cfg.node)) {
+      // Decisions (#487) are this computer's in phase 1: the master holds no question of a node's session.
+      if (sub === 'ask' && DECISION_FLAGS.some(f => flagsOf(args).includes(f)))
+        throw new Usage(
+          "decisions are for this computer's sessions in phase 1: ask without --option, --recommend and --default-after",
+        )
+      return await forward(sub, args, ctx, out, json)
+    }
     const a = parseArgs(sub, args, { decisions: !!ctx.decisions })
     const base = `http://127.0.0.1:${typeof ctx.cfg.port === 'number' ? ctx.cfg.port : 12422}/`
     const cfg = threadsConfig(ctx.cfg.threads)
@@ -538,15 +561,30 @@ class Run {
           ? askSpec(question, a.all('--option'), a.one('--recommend'), a.one('--default-after'), decisions)
           : null
         const head = this.thread(key)
-        const w = askOwner(this.write, head, question)
+        const session = this.ctx.actor.kind === 'session'
+        // Options and a default only on the session's own question: its default would be typed in as
+        // if that session had asked (another one's, through --session, asks without them).
+        if (spec && (spec.options.length || spec.defaultMs) && this.ctx.own && !(await this.ctx.own()))
+          throw new Usage(
+            "--option and --default-after are for the session's own question: ask for another session without them",
+          )
+        // The default goes into the schedule before the thread's question is written, as `board ask`
+        // does: at the session's cap nothing is written, and the open question keeps its buttons.
+        const reserved = spec && session ? await this.ctx.reserveAsk?.(spec) : undefined
+        let w: ReturnType<typeof askOwner>
+        try {
+          w = askOwner(this.write, head, question)
+        } catch (err) {
+          if (reserved) await this.ctx.releaseAsk?.(reserved)
+          throw err
+        }
         // What the decision adds to the line ("decision <id> · default in 2 h"), when there is one.
-        const extra =
-          this.ctx.actor.kind === 'session'
-            ? await this.ctx.setAsk?.(
-                w.head.waitingOn,
-                spec ? { spec, thread: { id: w.head.id, key: w.head.key } } : undefined,
-              )
-            : undefined
+        const extra = session
+          ? await this.ctx.setAsk?.(
+              w.head.waitingOn,
+              spec ? { spec, thread: { id: w.head.id, key: w.head.key }, reserved } : undefined,
+            )
+          : undefined
         return this.wrote(w, typeof extra === 'string' && extra ? [extra] : [])
       }
       case 'set': {

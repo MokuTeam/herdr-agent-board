@@ -205,3 +205,17 @@ test("--session for another session's card: options and a default refused in one
   const own = await cli(box, ['ask', 'Merge now?', '--option', 'yes', '--option', 'no', ...S])
   assert.equal(own.code, 0, own.out)
 })
+
+test('board thread ask --session for another session: options and a default refused, nothing written in the thread', async () => {
+  const box = await sandbox()
+  config(box, { threads: true, decisions: true })
+  const BEN = '99999999-8888-7777-6666-555555555555'
+  const made = await cli(box, ['thread', 'new', '--lane', 'atlas', 'Release', ...S])
+  const key = /atlas-\d+/.exec(made.out)?.[0] as string
+  const r = await cli(box, ['thread', 'ask', key, 'Ship it?', '--option', 'yes', '--option', 'no', ...S], BEN)
+  assert.equal(r.code, 1)
+  assert.match(r.out, /--option and --default-after are for the session's own question/)
+  assert.equal(cardOf(box).ask, undefined)
+  const shown = await cli(box, ['thread', 'show', key, ...S])
+  assert.doesNotMatch(shown.out, /Ship it\?/)
+})

@@ -2133,6 +2133,14 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
       const { askThreadDecision } = await import('./decisions-cli.ts')
       return askThreadDecision({ key, name, lane }, question, decision, Date.now())
     },
+    reserveAsk: async spec => {
+      if (!key || !decisionsConfig(c.decisions)) return undefined
+      const { reserveThreadDecision } = await import('./decisions-cli.ts')
+      return reserveThreadDecision({ key, name }, spec, Date.now())
+    },
+    releaseAsk: async reserved => (await import('./decisions-cli.ts')).releaseDecision(reserved),
+    // --session names a session: whether it is the one running the command, asked only by what needs it.
+    own: async () => !target || (await ownSession())?.key === key,
     decisions: decisionsConfig(c.decisions),
     openBoard: async key => {
       const { openWeb } = await import('../services/web-open.ts')

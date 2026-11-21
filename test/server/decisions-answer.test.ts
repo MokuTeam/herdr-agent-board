@@ -41,13 +41,17 @@ afterEach(() => {
   delete process.env.BOARD_DECISION_ANSWERING_MS
 })
 
-/** The POST handler with `tell` standing in for the board's send. */
-function route(tell: (key: string, text: string) => Promise<{ ok: true } | { ok: false; error: string }>) {
+/** The POST handler with `tell` standing in for the board's send (and `over` for the rest of the board). */
+function route(
+  tell: (key: string, text: string) => Promise<{ ok: true } | { ok: false; error: string }>,
+  over: Partial<Parameters<typeof decisionsRoutes>[0]> = {},
+) {
   const routes = decisionsRoutes({
     cfg: { decisions: true, threads: true },
     find: key => ({ key, session: key, name: key.slice(0, 4) }) as Item,
     tell,
     refresh: () => {},
+    ...over,
   })
   const found = routes.find(r => r.method === 'POST')
   if (!found) throw new Error('no POST route')
@@ -70,8 +74,8 @@ const ask = (key = ANNA, s = spec(), now = Date.now()) =>
   withDecisionsDb(db => askDecision(db, { key, name: 'anna', lane: 'atlas', spec: s, ask: s.question, now }))
 const row = (id: string) => withDecisionsDb(db => getDecision(db, id))
 
-/** A thread of anna's that asks the owner, with its question's decision. */
-function threadAsk(now = Date.now()) {
+/** A thread of anna's that asks the owner, with its question's decision (`shared`: with a peer, #394). */
+function threadAsk(now = Date.now(), o: { defaultMs?: number | null; shared?: boolean } = {}) {
   const actor: Party = { kind: 'session', key: ANNA, name: 'anna' }
   const ctx = (db: Parameters<Parameters<typeof withDecisionsDb>[0]>[0], who: Party): ThreadsCtx => ({
     db,
@@ -81,8 +85,26 @@ function threadAsk(now = Date.now()) {
   })
   return withDecisionsDb(db => {
     const made = newThread(ctx(db, actor), { lane: 'atlas', title: 'Release' })
-    const asked = askOwner(ctx(db, actor), made.head, 'Ship it?')
-    const s = spec({ question: 'Ship it?', options: ['yes', 'no'], defaultMs: null, recommend: null })
+    if (o.shared)
+      db.db.query('UPDATE threads SET scope = ? WHERE id = ?').run(
+        JSON.stringify({
+          kind: 'peer',
+          peer: 'ben-peer',
+          topic: `ben-peer/${made.head.id}`,
+          key: made.head.key,
+          by: 'me',
+          at: now,
+        }),
+        made.head.id,
+      )
+    const head = getThread(db, made.head.id) ?? made.head
+    const asked = askOwner(ctx(db, actor), head, 'Ship it?')
+    const s = spec({
+      question: 'Ship it?',
+      options: ['yes', 'no'],
+      defaultMs: o.defaultMs ?? null,
+      recommend: o.defaultMs ? 1 : null,
+    })
     const d = askDecision(db, {
       key: ANNA,
       name: 'anna',
@@ -191,4 +213,61 @@ test('seen marks up to the newest default the page showed: one that went after i
   await post({ op: 'seen', upTo: now + 3_600_000 })
   expect(seenAt()).toBeLessThanOrEqual(Date.now())
   expect(decisionsPayload([], new Map(), { now: Date.now(), defaults: true }).defaulted).toEqual([])
+})
+
+test("a thread's answer whose send failed: nothing written in the thread, the question and its default as they were", async () => {
+  isolatedHome()
+  const t = threadAsk(Date.now(), { defaultMs: 2 * 3_600_000 })
+  const entry = getEntry(row(t.id)?.entry)
+  if (!entry) throw new Error('no entry')
+  let fail = true
+  const told: string[] = []
+  const post = route(async (_k, text) => {
+    told.push(text)
+    return fail ? { ok: false, error: 'the wake failed' } : { ok: true }
+  })
+  const res = await post({ op: 'answer', key: ANNA, id: t.id, option: 2 })
+  expect(res.status).toBe(409)
+  expect(res.body.error).toBe('the wake failed')
+  const head = withDecisionsDb(db => getThread(db, t.head.id))
+  expect(head?.status).toBe('owner')
+  expect(withDecisionsDb(db => entriesOf(db, t.head.id)).some(e => e.type === 'answer')).toBe(false)
+  expect((readCard(ANNA)?.decision as { id?: string } | undefined)?.id).toBe(t.id)
+  expect(row(t.id)?.answeredAt).toBeNull()
+  expect(defaultDue(entry, undefined, Date.now())).toBe('go')
+  // The next click goes: the thread and the record get "no", the default goes away.
+  fail = false
+  const ok = await post({ op: 'answer', key: ANNA, id: t.id, option: 2 })
+  expect(ok.status).toBe(200)
+  expect(told).toEqual([`[board thread ${t.head.key}] no`, `[board thread ${t.head.key}] no`])
+  expect(
+    withDecisionsDb(db => entriesOf(db, t.head.id))
+      .filter(e => e.type === 'answer')
+      .map(e => e.text),
+  ).toEqual(['no'])
+  expect(row(t.id)).toMatchObject({ answer: 'no', answeredBy: 'owner' })
+  expect(defaultDue(entry, undefined, Date.now())).toBe('drop')
+})
+
+test("a shared thread's answer written here goes to its peers, and the board's payload goes out again (#394)", async () => {
+  isolatedHome()
+  const t = threadAsk(Date.now(), { shared: true })
+  const shared: string[] = []
+  let changed = 0
+  const post = route(async () => ({ ok: true }), {
+    changed: () => {
+      changed++
+    },
+    share: async entry => {
+      shared.push(entry)
+      return 'sent'
+    },
+  })
+  const res = await post({ op: 'answer', key: ANNA, id: t.id, option: 1 })
+  expect(res.status).toBe(200)
+  expect(res.body.shared).toBe('sent')
+  const answer = withDecisionsDb(db => entriesOf(db, t.head.id)).find(e => e.type === 'answer')
+  expect(answer?.out).toBe('queued')
+  expect(shared).toEqual([answer?.id ?? 'none'])
+  expect(changed).toBe(1)
 })

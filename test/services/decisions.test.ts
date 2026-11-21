@@ -25,6 +25,7 @@ import {
   markAnswering,
   markSeen,
   openOf,
+  recordDefault,
   withDecisionsDb,
 } from '../../src/services/decisions.ts'
 import { askOwner, newThread, type ThreadsCtx } from '../../src/services/work-threads.ts'
@@ -358,16 +359,19 @@ test("a default typed in whose record was not written is the default's, never he
   // The scheduler typed it and logged it; its write to the record failed, and the entry went.
   logRun({ id: entry, key: ANNA, result: 'sent', at: NOW + 7_200_000 })
   removeEntry(entry)
+  // The panel was opened 5 s later for another default: seen up to then.
+  markSeen(NOW + 7_205_000)
   const cards = new Map<string, Card>([[ANNA, { ...(readCard(ANNA) as Card), updatedAt: NOW }]])
-  const p = decisionsPayload([itemOf(ANNA, 'anna')], cards, { now: NOW + 7_260_000, defaults: true, seen: 0 })
+  const p = decisionsPayload([itemOf(ANNA, 'anna')], cards, { now: NOW + 7_260_000, defaults: true })
+  // Recorded now, so it counts as unseen whatever the panel marked meanwhile.
   expect(row(r.id)).toMatchObject({
     answer: 'Merge now',
     answeredBy: 'default',
     via: 'default',
-    answeredAt: NOW + 7_200_000,
+    answeredAt: NOW + 7_260_000,
     held: null,
   })
-  expect(p.defaulted.map(d => [d.who, d.answer, d.at])).toEqual([['anna', 'Merge now', NOW + 7_200_000]])
+  expect(p.defaulted.map(d => [d.who, d.answer, d.at])).toEqual([['anna', 'Merge now', NOW + 7_260_000]])
   expect(readCard(ANNA)?.decision).toBeUndefined()
   expect(readCard(ANNA)?.ask).toBeUndefined()
 })
@@ -438,4 +442,29 @@ test('a default on a shared thread: its system line stays on this board, the pee
   })
   expect(line?.out).toBeUndefined()
   expect(withDecisionsDb(db => getThread(db, r.head.id))?.status).not.toBe('owner')
+})
+
+test("the scheduler's record of a default it typed: tried again once; two failures logged, never thrown", () => {
+  isolatedHome()
+  const r = ask()
+  const entry = getEntry(row(r.id)?.entry)
+  if (!entry) throw new Error('no entry')
+  const lines: string[] = []
+  let tries = 0
+  const flaky = (e: ScheduleEntry, now: number) => {
+    tries++
+    if (tries === 1) throw new Error('database is locked')
+    defaulted(e, now)
+  }
+  expect(recordDefault(entry, NOW + 7_200_000, l => lines.push(l), flaky)).toBe(true)
+  expect(tries).toBe(2)
+  expect(lines).toEqual([`decision ${r.id}: database is locked`])
+  expect(row(r.id)).toMatchObject({ answeredBy: 'default', answeredAt: NOW + 7_200_000 })
+
+  const broken = () => {
+    throw new Error('disk full')
+  }
+  lines.length = 0
+  expect(recordDefault(entry, NOW, l => lines.push(l), broken)).toBe(false)
+  expect(lines).toHaveLength(2)
 })

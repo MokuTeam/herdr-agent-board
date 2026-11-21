@@ -1,14 +1,25 @@
 // `board ask` with options and `board decisions` (#487, services/decisions.ts), loaded by the board
 // command only while config.json's `decisions` is on.
 import { allCards, readCard } from '../adapters/cards.ts'
-import { type AskSpec, DecisionError, type DecisionsConfig, durationWords, parseAsk } from '../core/decisions.ts'
+import {
+  type AskSpec,
+  DecisionError,
+  type DecisionsConfig,
+  durationWords,
+  parseAsk,
+  type ReservedDecision,
+} from '../core/decisions.ts'
 import {
   askDecision,
   closeCardDecision,
   decisionsDone,
   decisionsFromCards,
+  releaseDecision,
+  reserveDecision,
   withDecisionsDb,
 } from '../services/decisions.ts'
+
+export { releaseDecision }
 
 /**
  * `board ask "<q>" [--option "<label>"]... [--recommend <n>] [--default-after <duration>]`: the card's
@@ -34,15 +45,28 @@ export function askCommand(
   return ` · decision ${r.id}${r.defaultAt !== null && spec.defaultMs ? ` · default in ${durationWords(spec.defaultMs)}` : ''}`
 }
 
+/** `board thread ask` with decisions on: the question's id and default, taken before the thread's question is written. */
+export const reserveThreadDecision = (s: { key: string; name: string }, spec: AskSpec, now: number): ReservedDecision =>
+  reserveDecision({ key: s.key, name: s.name, spec, now })
+
 /** `board thread ask` with decisions on: the card's ask is the thread's waitingOn, with its decision. */
 export function askThreadDecision(
   s: { key: string; name: string; lane: string | null },
   ask: string,
-  d: { spec: AskSpec; thread: { id: string; key: string } },
+  d: { spec: AskSpec; thread: { id: string; key: string }; reserved?: ReservedDecision | undefined },
   now: number,
 ): string {
   const r = withDecisionsDb(db =>
-    askDecision(db, { key: s.key, name: s.name, lane: s.lane, spec: d.spec, ask, thread: d.thread, now }),
+    askDecision(db, {
+      key: s.key,
+      name: s.name,
+      lane: s.lane,
+      spec: d.spec,
+      ask,
+      thread: d.thread,
+      now,
+      ...(d.reserved && { reserved: d.reserved }),
+    }),
   )
   return `decision ${r.id}${r.defaultAt !== null && d.spec.defaultMs ? ` · default in ${durationWords(d.spec.defaultMs)}` : ''}`
 }

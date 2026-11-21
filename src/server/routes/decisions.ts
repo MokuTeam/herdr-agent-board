@@ -23,7 +23,7 @@ import {
   seenAt,
   withDecisionsDb,
 } from '../../services/decisions.ts'
-import { answerAsk, withThreadsDb } from '../../services/work-threads.ts'
+import { answerAsk, answerCheck, withThreadsDb } from '../../services/work-threads.ts'
 import { json, type Route } from '../http.ts'
 
 export interface DecisionsApp {
@@ -32,6 +32,13 @@ export interface DecisionsApp {
   /** Types `text` into the session (the board's send, waking it). */
   tell(key: string, text: string): Promise<{ ok: true } | { ok: false; error: string }>
   refresh(): void
+  /** The board's payload goes out again (a thread's answer moved its revision), as the Threads routes' changed(). */
+  changed?(): void
+  /**
+   * A shared thread's entry (#394) written here goes to its peers, as the Threads panel's answer
+   * does (or waits for the owner's passkey); its state.
+   */
+  share?(entry: string, req: Request): Promise<string>
   now?: () => number
   log?: (line: string) => void
 }
@@ -51,7 +58,7 @@ export function decisionsRoutes(app: DecisionsApp): Route[] {
   const now = () => app.now?.() ?? Date.now()
   const on = () => decisionsConfig(app.cfg.decisions)
 
-  async function answer(key: string, id: string, body: Record<string, unknown>): Promise<Response> {
+  async function answer(key: string, id: string, body: Record<string, unknown>, req: Request): Promise<Response> {
     const item = app.find(key)
     if (!item) return json(404, { ok: false, error: t('err.gone') })
     let open: ReturnType<typeof openOf>
@@ -71,15 +78,15 @@ export function decisionsRoutes(app: DecisionsApp): Route[] {
     // answer at a time: a second click (another button, the phone) while the first goes is refused.
     if (!markAnswering(key, id, via, now())) return json(409, { ok: false, error: t('dec.err.busy'), code: 'busy' })
     const thread = decision.thread
-    // A thread's question is answered in the thread first, as the Threads panel's answer is: what
-    // the thread refuses (a close the agent proposed, words too long) is refused before anything is
-    // typed in.
+    // A thread's question: what the thread refuses (a close the agent proposed, words too long,
+    // nothing asked) is refused before anything is typed in; the answer is written in the thread
+    // only once the session has it, so a send that failed leaves the thread as it was.
     const threads = thread ? threadsConfig(app.cfg.threads) : null
     if (thread && threads) {
       try {
         withThreadsDb(false, db => {
           const head = db && threadByKey(db, thread.key)
-          if (db && head) answerAsk({ db, cfg: threads, actor: { kind: 'owner' }, now: now() }, head, text)
+          if (db && head) answerCheck(db, head, text)
         })
       } catch (err) {
         markAnswering(key, id, null, now())
@@ -101,11 +108,28 @@ export function decisionsRoutes(app: DecisionsApp): Route[] {
       markAnswering(key, id, null, now())
       return json(409, { ok: false, error: told.error })
     }
+    let shared: string | undefined
+    if (thread && threads) {
+      try {
+        const written = withThreadsDb(false, db => {
+          const head = db && threadByKey(db, thread.key)
+          return db && head ? answerAsk({ db, cfg: threads, actor: { kind: 'owner' }, now: now() }, head, text) : null
+        })
+        if (written) {
+          app.changed?.()
+          // A shared thread's answer goes to its peers, as the Threads panel's does.
+          if (written.entry.out === 'queued' && app.share) shared = await app.share(written.entry.id, req)
+        }
+      } catch (err) {
+        // The session has the answer; the thread changed in between (answered elsewhere): the log says so.
+        app.log?.(`decision ${id}: thread ${thread.key}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     withDecisionsDb(db =>
       closeCardDecision(db, key, { answer: text, answeredBy: 'owner', via, at: now() }, { id, ask: true, by: 'owner' }),
     )
     app.refresh()
-    return json(200, { ok: true })
+    return json(200, { ok: true, ...(shared && { shared }) })
   }
 
   return [
@@ -114,7 +138,7 @@ export function decisionsRoutes(app: DecisionsApp): Route[] {
       path: '/api/decisions',
       // An answer types into a session, as a message does: only through a herdr the board reaches.
       guard: ['board-header', 'fresh-data'],
-      async handle(_req, ctx) {
+      async handle(req, ctx) {
         if (!on()) return json(409, { ok: false, error: t('dec.err.off') })
         const raw = await ctx.rawBody()
         const body = isRecord(raw) ? raw : {}
@@ -129,7 +153,7 @@ export function decisionsRoutes(app: DecisionsApp): Route[] {
         const key = typeof body.key === 'string' ? body.key : ''
         const id = typeof body.id === 'string' ? body.id : ''
         if (!key || !id) return json(400, { ok: false, error: t('dec.err.bad') })
-        if (body.op === 'answer') return answer(key, id, body)
+        if (body.op === 'answer') return answer(key, id, body, req)
         if (body.op === 'hold') {
           try {
             withDecisionsDb(db => holdOpen(db, key, id, now()))
