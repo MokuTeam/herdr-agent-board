@@ -946,8 +946,13 @@ short turn can end before herdr sees it working: a brief herdr calls stalled get
 it is still on screen (or shows as a pasted-text chip), else it is typed again, three times at
 most. A brief that starts with a dash goes with a space before it, or herdr would take it for an
 option. From PowerShell prefer `--brief-file` for a brief with quotes or `&` in it: the `.cmd`
-goes through cmd.exe. From Git Bash, a brief that starts with `/` (a slash command) reaches it
-as a path (MSYS rewrites such arguments for Windows programs): use `--brief-file` there too.
+goes through cmd.exe. From Git Bash, a brief that starts with `/` (a slash command) arrives as
+typed: the sh shim turns Git Bash's argument conversion off, and spawn-agent converts only its
+folder and file options (`--cwd`, `--brief-file`, `--config-dir`) itself, as Git Bash would
+have. `board` does the same for its own file and folder words since #532. Set `MSYS_NO_PATHCONV`
+or `MSYS2_ARG_CONV_EXCL` yourself and the shim leaves the arguments to Git Bash and that setting,
+as before. A spawn-agent shim written before #490, or a board shim written before #532, still lets
+Git Bash convert them: run the install again.
 
 `launch.claude` is typed at the tab's shell prompt (PowerShell, bash, zsh, fish): plain words as
 they are, other arguments in single quotes, which those shells take literally (in fish, keep a
