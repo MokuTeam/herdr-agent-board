@@ -5,9 +5,11 @@
 // has, send only the blobs it lacks, and commit. Made by server/app.ts only once `nodes` is on.
 //
 // The hash is computed when a sync is asked and every 5 minutes while a device is online, never on
-// a prompt (9.2). A sync answers within 20 s whatever the node does. Nothing of a profile's
-// settings goes out but what the classifiers let through: a value that looks like a secret stays
-// here, and the log and the record name files and verdicts, never a value.
+// a prompt (9.2). Each request of a sync is answered within 20 s and the whole sync within 15
+// minutes, whatever the node does: a profile's first bundle is hundreds of files, sent a few at a
+// time (#583). Nothing of a profile's settings goes out but what the classifiers let through: a
+// value that looks like a secret stays here, and the log and the record name files and verdicts,
+// never a value.
 
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -43,7 +45,8 @@ export interface SyncReport {
   /**
    * Why not: `device` (no such device with a link), `profile` (no such profile here), `offline`,
    * `build` (the profile folder could not be read), `changed` (a file changed while it was sent),
-   * `node` (the node refused; `detail` is its code), `timeout` (no answer within 20 s).
+   * `node` (the node refused; `detail` is its code), `timeout` (a request not answered within 20 s,
+   * or the whole sync not done within 15 minutes).
    */
   why?: 'device' | 'profile' | 'offline' | 'build' | 'changed' | 'node' | 'timeout'
   detail?: string
@@ -61,7 +64,7 @@ export interface SyncReport {
 }
 
 export interface BundleSync {
-  /** The node made current for this profile, or why not, within 20 s. */
+  /** The node made current for this profile, or why not, within SYNC_TOTAL_MS. */
   syncIfBehind(device: string, profile?: string): Promise<SyncReport>
   /** The last report of a device's profile, for doctor; null before the first sync. */
   report(device: string, profile: string): SyncReport | null
@@ -82,10 +85,16 @@ export interface BundleSyncOptions {
   boardDir?: string
   hostName?: string
   clock?: Clock
+  /** How long one request to the node may take (SYNC_MS). */
+  requestMs?: number
 }
 
-/** A sync answers within this long (9.2). A deadline, never paced. */
+/** Each request of a sync is answered within this long (9.2). A deadline, never paced. */
 export const SYNC_MS = 20_000
+/** A whole sync is done within this long: a first bundle over a slow link is minutes, not hours. */
+export const SYNC_TOTAL_MS = 15 * 60_000
+/** Blobs on their way at once: one after another, a round trip each, a first bundle took a minute. */
+export const SEND_AT_ONCE = 6
 /** The hash is computed this often while a device is online (9.2). */
 export const HASH_MS = 5 * 60_000
 
@@ -116,6 +125,7 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
   const boardDir = o.boardDir ?? ROOT
   const host = o.hostName ?? hostname()
   const clock = o.clock ?? realClock
+  const requestMs = o.requestMs ?? SYNC_MS
   const running = new Map<string, Promise<SyncReport>>()
 
   const devices = (): Record<string, DeviceConfig> => nodesConfig(o.cfg.nodes, host)?.devices ?? {}
@@ -163,7 +173,7 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
   }
 
   async function run(deviceId: string, profileId: string): Promise<SyncReport> {
-    const deadline = clock.now() + SYNC_MS
+    const deadline = clock.now() + SYNC_TOTAL_MS
     const device = devices()[deviceId]
     const nodeProfile = device?.profiles[profileId] ?? profileId
     const base: SyncReport = {
@@ -193,7 +203,7 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
     const left = (): AbortSignal => {
       const ms = deadline - clock.now()
       if (ms <= 0) throw new Late()
-      return AbortSignal.timeout(ms)
+      return AbortSignal.timeout(Math.min(ms, requestMs))
     }
     const at = `/api/node/bundle/${encodeURIComponent(nodeProfile)}`
     const ask = async (
@@ -225,21 +235,37 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
       const there = new Set(isRecord(have.body.files) ? Object.values(have.body.files) : [])
       const bySha = new Map(files.map(f => [f.sha256, f]))
       let sent = 0
-      const send = async (shas: Iterable<string>): Promise<SyncReport | null> => {
-        for (const sha of shas) {
-          const f = bySha.get(sha)
-          if (!f) return { ...done, why: 'node', detail: 'missing-blob' }
-          const bytes = readFileSync(f.source)
-          if (sha256(bytes) !== sha) return { ...done, why: 'changed', detail: f.path }
-          const put = await ask(`${at}/blob/${sha}`, {
-            method: 'PUT',
-            headers: { 'content-type': 'application/octet-stream' },
-            body: bytes,
-          })
-          if (put.status !== 200) return { ...done, why: 'node', detail: said(put.body.error ?? put.status) }
-          sent++
-        }
+      const sendOne = async (sha: string): Promise<SyncReport | null> => {
+        const f = bySha.get(sha)
+        if (!f) return { ...done, why: 'node', detail: 'missing-blob' }
+        const bytes = readFileSync(f.source)
+        if (sha256(bytes) !== sha) return { ...done, why: 'changed', detail: f.path }
+        const put = await ask(`${at}/blob/${sha}`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/octet-stream' },
+          body: bytes,
+        })
+        if (put.status !== 200) return { ...done, why: 'node', detail: said(put.body.error ?? put.status) }
+        sent++
         return null
+      }
+      /** SEND_AT_ONCE at a time; the first that fails ends it, and no other is started after it. */
+      const send = async (shas: Iterable<string>): Promise<SyncReport | null> => {
+        const queue = [...shas]
+        let failed: SyncReport | null = null
+        let threw: { err: unknown } | null = null
+        const worker = async (): Promise<void> => {
+          for (let sha = queue.shift(); sha !== undefined && !failed && !threw; sha = queue.shift()) {
+            try {
+              failed = (await sendOne(sha)) ?? failed
+            } catch (err) {
+              threw ??= { err }
+            }
+          }
+        }
+        await Promise.all(Array.from({ length: Math.min(SEND_AT_ONCE, queue.length) }, worker))
+        if (threw) throw (threw as { err: unknown }).err
+        return failed
       }
       const failed = await send(new Set(manifest.files.map(f => f.sha256).filter(sha => !there.has(sha))))
       if (failed) return finish({ ...failed, sent })
@@ -337,7 +363,7 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
       // A request that ignored its signal does not hold this device and profile for good.
       let guard: unknown
       const late = new Promise<SyncReport>(resolve => {
-        guard = clock.setTimeout(() => resolve({ ...lateReport(device, profile) }), SYNC_MS + 1000)
+        guard = clock.setTimeout(() => resolve({ ...lateReport(device, profile) }), SYNC_TOTAL_MS + 1000)
       })
       const next = Promise.race([run(device, profile), late]).finally(() => {
         clock.clearTimeout(guard)

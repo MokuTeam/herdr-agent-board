@@ -1,22 +1,34 @@
 // The master's side of the bundle (services/nodes/bundle-sync.ts, #506, docs/design/nodes 9.2): with
 // a fake link and clock. The hash is computed when a sync is asked and on the 5 minute tick while a
-// device is online, which sends nothing; a sync answers within 20 s whatever the node does; a device
-// that is not there or offline is said, with no request.
+// device is online, which sends nothing; each request of a sync has 20 s and the whole sync its own
+// limit, whatever the node does (#583); the blobs go a few at a time; a device that is not there or
+// offline is said, with no request.
 import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Profile } from '../../src/core/profiles.ts'
 import type { Config } from '../../src/core/types.ts'
-import { createBundleSync, HASH_MS } from '../../src/services/nodes/bundle-sync.ts'
+import { createBundleSync, HASH_MS, SEND_AT_ONCE, SYNC_TOTAL_MS } from '../../src/services/nodes/bundle-sync.ts'
 import type { Link } from '../../src/services/nodes/link.ts'
 
-function setup(state: 'online' | 'offline', answer?: (path: string) => Response) {
+function setup(
+  state: 'online' | 'offline',
+  answer?: (path: string, init?: RequestInit) => Response | Promise<Response>,
+  more: { skills?: number; requestMs?: number } = {},
+) {
   const root = mkdtempSync(join(tmpdir(), 'bundle-sync-'))
   const home = join(root, 'home')
   const dir = join(home, '.claude')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'CLAUDE.md'), 'rules')
+  for (let i = 0; i < (more.skills ?? 0); i++) {
+    mkdirSync(join(dir, 'skills', `skill-${i}`), { recursive: true })
+    writeFileSync(
+      join(dir, 'skills', `skill-${i}`, 'SKILL.md'),
+      `---\nname: skill-${i}\ndescription: d\n---\nbody ${i}\n`,
+    )
+  }
   let now = 1_000_000
   const timers: { fn: () => void; ms: number; cleared: boolean }[] = []
   const clock = {
@@ -38,9 +50,9 @@ function setup(state: 'online' | 'offline', answer?: (path: string) => Response)
     state: () => ({ state, since: 0, heardAt: null }),
     view: () => ({ status: { platform: 'linux', profiles: [{ id: 'default', loggedIn: true, bundle: null }] } }),
     status: async () => null,
-    async fetch(path: string) {
+    async fetch(path: string, init?: RequestInit) {
       asked.push(path)
-      return answer ? answer(path) : new Response('{}', { status: 500 })
+      return answer ? answer(path, init) : new Response('{}', { status: 500 })
     },
   } as unknown as Link
   const saved: Record<string, unknown>[] = []
@@ -66,6 +78,7 @@ function setup(state: 'online' | 'offline', answer?: (path: string) => Response)
     boardDir: join(root, 'board'),
     hostName: 'laptop',
     clock,
+    ...(more.requestMs !== undefined && { requestMs: more.requestMs }),
   })
   return { sync, timers, asked, saved, dir, advance: (ms: number) => (now += ms) }
 }
@@ -98,15 +111,95 @@ describe('bundle sync', () => {
     expect(s.asked).toEqual([])
   })
 
-  test('a node that takes too long: timeout within 20 s, kept as the last report', async () => {
+  test('a sync that takes longer than its whole limit: timeout, kept as the last report', async () => {
     let s: ReturnType<typeof setup> | null = null
     s = setup('online', () => {
-      s?.advance(21_000)
+      s?.advance(SYNC_TOTAL_MS + 1000)
       return Response.json({ seq: 0, hash: '', files: {} })
     })
     const r = await s.sync.syncIfBehind('server-1')
     expect([r.ok, r.why, r.seq]).toEqual([false, 'timeout', 0])
     expect(s.asked).toEqual(['/api/node/bundle/default'])
     expect(s.sync.report('server-1', 'default')?.why).toBe('timeout')
+  })
+
+  /** A node that takes every blob and the commit. */
+  const taking = (path: string): Response =>
+    path.endsWith('/commit')
+      ? Response.json({ ok: true, applied: [], kept: [], backup: null })
+      : path.includes('/blob/')
+        ? Response.json({ ok: true })
+        : Response.json({ seq: 0, hash: '', files: {} })
+
+  test('a profile of many files over a slow link: over 20 s in all, each request in time, synced (#583)', async () => {
+    let s: ReturnType<typeof setup> | null = null
+    s = setup(
+      'online',
+      path => {
+        s?.advance(1000)
+        return taking(path)
+      },
+      { skills: 40 },
+    )
+    const r = await s.sync.syncIfBehind('server-1')
+    expect([r.ok, r.why]).toEqual([true, undefined])
+    // CLAUDE.md and the 40 skills, the commit after the last of them.
+    expect(r.sent).toBe(41)
+    expect(s.asked.filter(p => p.includes('/blob/')).length).toBe(41)
+    expect(s.asked.at(-1)).toBe('/api/node/bundle/default/commit')
+  })
+
+  test('the blobs go several at a time, never more than SEND_AT_ONCE (#583)', async () => {
+    let flying = 0
+    let most = 0
+    const s = setup(
+      'online',
+      async path => {
+        if (!path.includes('/blob/')) return taking(path)
+        most = Math.max(most, ++flying)
+        await new Promise(r => setTimeout(r, 2))
+        flying--
+        return taking(path)
+      },
+      { skills: 40 },
+    )
+    const r = await s.sync.syncIfBehind('server-1')
+    expect([r.ok, r.sent]).toEqual([true, 41])
+    expect(most).toBe(SEND_AT_ONCE)
+  })
+
+  test('a request the node never answers ends at its own deadline, with no commit (#583)', async () => {
+    const s = setup(
+      'online',
+      (path, init) =>
+        path.includes('/blob/')
+          ? new Promise<Response>((_, reject) => {
+              init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+            })
+          : taking(path),
+      { skills: 3, requestMs: 40 },
+    )
+    const r = await s.sync.syncIfBehind('server-1')
+    expect([r.ok, r.why]).toEqual([false, 'timeout'])
+    expect(s.asked.some(p => p.endsWith('/commit'))).toBe(false)
+  })
+
+  test('a blob the node refuses ends the sync: no commit, and no blob is started after it', async () => {
+    let puts = 0
+    const s = setup(
+      'online',
+      async path => {
+        if (!path.includes('/blob/')) return taking(path)
+        const n = ++puts
+        await new Promise(r => setTimeout(r, 2))
+        return n === 3 ? Response.json({ error: 'disk' }, { status: 507 }) : taking(path)
+      },
+      { skills: 40 },
+    )
+    const r = await s.sync.syncIfBehind('server-1')
+    expect([r.ok, r.why, r.detail]).toEqual([false, 'node', 'disk'])
+    expect(s.asked.some(p => p.endsWith('/commit'))).toBe(false)
+    // Those on their way when it was refused finish; none of the other 30 odd is started.
+    expect(puts).toBeLessThanOrEqual(2 * SEND_AT_ONCE)
   })
 })

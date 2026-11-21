@@ -1907,7 +1907,8 @@ async function nodesSync(webPort: number, id: string, profile: string | undefine
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-board': '1' },
       body: JSON.stringify({ op: 'sync', id, ...(profile !== undefined && { profile }) }),
-      signal: AbortSignal.timeout(25_000),
+      // The board answers within its own limit for a whole sync (bundle-sync.ts SYNC_TOTAL_MS).
+      signal: AbortSignal.timeout(16 * 60_000),
     })
   } catch {
     throw new Error(NO_BOARD)
