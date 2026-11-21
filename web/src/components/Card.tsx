@@ -15,6 +15,7 @@ import {
 import { foldModeOf } from '../../../src/core/fold-mode.ts'
 import { canStop } from '../../../src/core/turn-keys.ts'
 import type { Item, LaunchView, ToolCall } from '../../../src/core/types.ts'
+import { useDecisions } from '../hooks/useDecisions.ts'
 import { useFold } from '../hooks/useFold.ts'
 import { useHeadFit } from '../hooks/useHeadFit.ts'
 import { useWordClip } from '../hooks/useWordClip.ts'
@@ -43,6 +44,7 @@ import { COLUMN_COLORS } from '../models/toolbar.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { AlarmBadge } from './AlarmBadge.tsx'
 import { classNames } from './class-names.ts'
+import { DecisionButtons } from './decisions/DecisionButtons.tsx'
 import { CardIdentity } from './devices/DeviceChip.tsx'
 import { HelpersChip, Relations } from './helpers/CardHelpers.tsx'
 import {
@@ -440,9 +442,34 @@ function CardAsk({ item }: { item: Item }) {
   }
   const ask = askLine(item, t)
   return (
-    <div className="ask">
-      <b>{ask.label}:</b> {ask.text}
-    </div>
+    <>
+      <div className="ask">
+        <b>{ask.label}:</b> {ask.text}
+      </div>
+      {/* Decisions (#487): its options, the default and Hold; nothing for an ask without them. */}
+      {item.decision && <CardDecision item={item} />}
+    </>
+  )
+}
+
+/** A question's options on its card (#487). */
+function CardDecision({ item }: { item: Item }) {
+  const decisions = useDecisions()
+  const d = item.decision
+  if (!d) return null
+  return (
+    <DecisionButtons
+      inCard
+      decisions={decisions}
+      choice={{
+        sessionKey: item.key,
+        id: d.id,
+        options: d.options,
+        recommend: d.recommend,
+        defaultAt: d.defaultAt,
+        held: d.held !== undefined,
+      }}
+    />
   )
 }
 

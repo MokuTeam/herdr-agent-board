@@ -166,6 +166,9 @@ const CLASSIFIED: Record<string, [method: string, raw: string, door: 'door' | 'r
   'GET /api/setup': [['GET', '/api/setup', 'refused']],
   'GET /api/process': [['GET', '/api/process', 'refused']],
   'GET /api/hello': [['GET', '/api/hello', 'door']],
+  // Decisions (#487) are this computer's in phase 1: the master's door does not take them.
+  'POST /api/decisions': [['POST', '/api/decisions', 'refused']],
+  'GET /api/decisions': [['GET', '/api/decisions', 'refused']],
   'GET /api/remote': [['GET', '/api/remote', 'refused']],
   'POST /api/remote': [['POST', '/api/remote', 'refused']],
   'GET /api/board': [['GET', '/api/board', 'door']],

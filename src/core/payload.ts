@@ -1,6 +1,7 @@
 // The board as GET /api/board answers and the event stream pushes it (src/server/board-state.ts
 // builds it; the web board reads it). One type for both sides, so they cannot drift apart.
 import type { BoardArchive } from './archive.ts'
+import type { DecisionsPayload } from './decisions.ts'
 import type { FoldMode } from './fold-mode.ts'
 import type { LimitWindow } from './limits.ts'
 import type { DeviceView, LinkStatus } from './nodes.ts'
@@ -144,6 +145,12 @@ export interface BoardPayload {
    * many wait on the owner. The threads themselves never ride in the payload.
    */
   threads?: ThreadsPayload
+  /**
+   * Decisions (#487), only while config.json turns them on: what waits on the owner across lanes,
+   * in the queue's order, with each question's options, and what went by default since the owner
+   * last opened the panel.
+   */
+  decisions?: DecisionsPayload
   /** Workdesk queue and last poll, only while the watcher is configured. */
   workdesk?: WorkdeskPayload
   workdeskDialog?: DialogStatus

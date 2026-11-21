@@ -18,6 +18,8 @@ export interface EntryInput {
   team?: { unread: number } | null
   /** Threads that wait on the owner (#392); null: threads are off. */
   threads?: { needsOwner: number } | null
+  /** What waits on the owner and what went by default unseen (#487); null: decisions are off. */
+  decisions?: { waiting: number; defaulted: number } | null
   /** The usage pill's own text. */
   usage: string
   presence: PresenceSwitchView | null
@@ -25,7 +27,7 @@ export interface EntryInput {
 
 /** Every action's entry; More lists those that left the row (moreEntries). */
 export function toolbarEntries(input: EntryInput, t: Translator): ToolbarEntry[] {
-  const { canMutate, schedule, tasks, next, usage, presence, team, threads } = input
+  const { canMutate, schedule, tasks, next, usage, presence, team, threads, decisions } = input
   const proposed = tasks?.proposed ?? 0
   return [
     ...(presence
@@ -50,6 +52,13 @@ export function toolbarEntries(input: EntryInput, t: Translator): ToolbarEntry[]
       id: 'threads-open',
       label: t('wt.title'),
       ...(threads && threads.needsOwner > 0 && { count: threads.needsOwner, alert: true }),
+    },
+    {
+      id: 'decisions-open',
+      label: t('dec.open'),
+      ...(decisions && decisions.waiting > 0 && { count: decisions.waiting }),
+      ...(decisions && decisions.defaulted > 0 && { hint: t('dec.defaultedHint') }),
+      ...(decisions && decisions.waiting + decisions.defaulted > 0 && { alert: true }),
     },
     {
       id: 'new-session',

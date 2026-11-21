@@ -867,19 +867,32 @@ export interface Answered extends Written {
 }
 
 /**
+ * What answerAsk refuses, without writing: no words, too many, nothing asked, a close the agent
+ * proposed. Decisions (#487) check it before the answer is typed in, and write it after.
+ */
+export function answerCheck(
+  db: BoardDb,
+  head: ThreadHead,
+  words: string,
+): { text: string; entries: ThreadEntry[]; ask: ThreadEntry } {
+  const text = cleanText(words, TEXT_MAX + 1)
+  if (!text) throw new ThreadError('empty', 'an answer needs words')
+  if (text.length > TEXT_MAX) throw new ThreadError('text_long', `the answer has more than ${TEXT_MAX} characters`)
+  const entries = entriesOf(db, head.id)
+  const ask = openAsk(head, entries)
+  if (!ask) throw new ThreadError('no_ask', `${head.key} asks the owner nothing`)
+  // A close the agent proposed meanwhile is the owner's to confirm or keep: an answer leaves it.
+  if (head.proposed) throw new ThreadError('proposed', `${head.key} waits for Confirm or Keep open first`)
+  return { text, entries, ask }
+}
+
+/**
  * The owner answers the thread's open question (6.6): an `answer` entry in reply to it, which puts
  * the status back to what it was before the question. Telling the session is the caller's (the
  * board's send(), and its card's ask cleared). Refused when nothing is asked.
  */
 export function answerAsk(ctx: ThreadsCtx, head: ThreadHead, words: string): Answered {
-  const text = cleanText(words, TEXT_MAX + 1)
-  if (!text) throw new ThreadError('empty', 'an answer needs words')
-  if (text.length > TEXT_MAX) throw new ThreadError('text_long', `the answer has more than ${TEXT_MAX} characters`)
-  const entries = entriesOf(ctx.db, head.id)
-  const ask = openAsk(head, entries)
-  if (!ask) throw new ThreadError('no_ask', `${head.key} asks the owner nothing`)
-  // A close the agent proposed meanwhile is the owner's to confirm or keep: an answer leaves it.
-  if (head.proposed) throw new ThreadError('proposed', `${head.key} waits for Confirm or Keep open first`)
+  const { text, entries, ask } = answerCheck(ctx.db, head, words)
   const before = beforeAsk(head, entries, ask)
   const written = postEntry(ctx, head, {
     text,

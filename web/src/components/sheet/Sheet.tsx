@@ -15,6 +15,7 @@ import type { Item } from '../../../../src/core/types.ts'
 import type { SessionDetail } from '../../api/client.ts'
 import { type ComposerControls, useComposer } from '../../hooks/useComposer.ts'
 import type { SheetPick } from '../../hooks/useContextMenus.ts'
+import { useDecisions } from '../../hooks/useDecisions.ts'
 import { useFileDrop } from '../../hooks/useFileDrop.ts'
 import { useGoToSession } from '../../hooks/useGoToSession.ts'
 import type { HelpersUi } from '../../hooks/useHelpers.ts'
@@ -43,6 +44,8 @@ import { reducedMotion } from '../../models/spring.ts'
 import { termButton } from '../../models/terminal.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
+import { DecisionButtons } from '../decisions/DecisionButtons.tsx'
+import { DecisionRecord } from '../decisions/DecisionRecord.tsx'
 import { HelpersStrip } from '../helpers/HelpersStrip.tsx'
 import { CheckGlyph } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
@@ -347,6 +350,8 @@ export function SheetView(props: SheetViewProps) {
             ) : (
               <Asked item={item} disabled={availability.dismiss} onDismiss={props.onDismiss} />
             ))}
+        {/* Decisions (#487): the question's options, the default and Hold, under what it asks. */}
+        {!hasForm && asking && item?.decision && <SheetDecision item={item} />}
       </div>
       <HelpersStrip
         helpers={(item && detail.data?.helpers) || []}
@@ -380,6 +385,8 @@ export function SheetView(props: SheetViewProps) {
               </button>
             </div>
             <Screen screen={detail.data?.screen ?? ''} form={hasForm} asking={asking} />
+            {/* Decisions (#487): the session's closed questions, while the board has them on. */}
+            {data?.decisions && <DecisionRecord item={item} />}
             <div className="section-title">{t('thread.title')}</div>
             <div className="thread">
               <Conversation
@@ -477,6 +484,26 @@ function Conversation({ detail, item, links, composer, onResize }: ConversationP
       <Thread conversation={conversation} item={item} links={thread} />
       {foot}
     </>
+  )
+}
+
+/** A question's options in the sheet (#487). */
+function SheetDecision({ item }: { item: Item }) {
+  const decisions = useDecisions()
+  const d = item.decision
+  if (!d) return null
+  return (
+    <DecisionButtons
+      decisions={decisions}
+      choice={{
+        sessionKey: item.key,
+        id: d.id,
+        options: d.options,
+        recommend: d.recommend,
+        defaultAt: d.defaultAt,
+        held: d.held !== undefined,
+      }}
+    />
   )
 }
 

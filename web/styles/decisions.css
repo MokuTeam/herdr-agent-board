@@ -1,0 +1,119 @@
+/* Decisions (#487): the toolbar's pill, the Decisions panel (components/decisions/DecisionsPanel.tsx),
+   a question's options on its card and in its sheet (DecisionButtons.tsx) and the sheet's record
+   (DecisionRecord.tsx). Linked by the page only while decisions are on (models/decisions.ts), before
+   look-terminal.css, which holds the Terminal look's rules for these (the one sheet that reads the
+   look's attribute). Every rule selects by the feature's own classes: the other sheets are upstream's,
+   rule for rule. */
+
+/* ---------------------------------------------------------------- the pill */
+#decisions-open .n.went { width: 8px; min-width: 0; height: 8px; padding: 0; border-radius: 50%; background: var(--orange, var(--accent)); font-size: 0; }
+
+/* ---------------------------------------------------------------- options, default, Hold */
+.dec-choice { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.dec-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.dec-choice .mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 26px;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--fill);
+  color: var(--label);
+  font-size: 12.5px;
+  line-height: 1.3;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition: transform 100ms ease-out, background-color 120ms ease, color 120ms ease;
+}
+.dec-choice .mini:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, var(--fill)); color: var(--accent); }
+.dec-choice .mini:active:not(:disabled) { transform: scale(0.97); }
+.dec-choice .mini:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.dec-choice .mini:disabled { opacity: 0.5; cursor: default; }
+.dec-option.recommended { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.dec-rec { color: var(--accent); font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; }
+.dec-default { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--label-2); font-size: 12px; }
+.dec-when { font-variant-numeric: tabular-nums; }
+.dec-when:not(.held)::before { content: "⏱ "; }
+.dec-when.held { color: var(--label-3); }
+.dec-choice .mini.dec-hold { min-height: 22px; padding: 2px 8px; font-size: 11.5px; }
+
+/* On a card: smaller, and within the card's width. */
+.dec-choice.in-card { gap: 5px; margin-top: 4px; }
+.dec-choice.in-card .mini { min-height: 22px; padding: 2px 8px; font-size: 11.5px; }
+.dec-choice.in-card .dec-rec { display: none; }
+.dec-choice.in-card .dec-default { font-size: 11px; }
+
+/* In the sheet: under what it asks. */
+.sheet-question > .dec-choice { margin: 0; padding: 0 2px 4px; }
+
+/* ---------------------------------------------------------------- the panel */
+.decisions-body { display: flex; flex-direction: column; gap: 10px; }
+.dec-section { margin: 0 0 2px; color: var(--label); font: 600 13px var(--font, inherit); }
+.dec-went { display: flex; flex-direction: column; gap: 8px; padding-bottom: 6px; }
+.dec-row { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 8px; background: var(--fill-2); }
+.dec-row.timed { box-shadow: inset 3px 0 0 var(--orange, var(--accent)); }
+.dec-row.went { box-shadow: inset 3px 0 0 var(--label-3); }
+.dec-who { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.dec-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--label-2);
+  font: 600 12px var(--font, inherit);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dec-session:hover { color: var(--accent); }
+.dec-session svg { width: 13px; height: 13px; flex: none; }
+.dec-lane, .dec-thread { padding: 0 6px; border-radius: 5px; background: var(--fill); color: var(--label-2); font-size: 11px; line-height: 1.6; }
+.dec-thread { font-family: var(--mono, ui-monospace, monospace); }
+.dec-age { margin-left: auto; color: var(--label-3); font-size: 11.5px; }
+.dec-q { margin: 0; line-height: 1.4; overflow-wrap: anywhere; }
+.dec-answer { margin: 0; color: var(--label-2); font-size: 12.5px; overflow-wrap: anywhere; }
+.dec-board { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12.5px; color: var(--label-2); }
+.dec-board .mini, .dec-own .mini {
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--fill);
+  color: var(--label);
+  font-size: 12px;
+  cursor: pointer;
+}
+.dec-board .mini:hover, .dec-own .mini:hover:not(:disabled) { color: var(--accent); }
+.dec-own .mini:disabled { opacity: 0.5; cursor: default; }
+.dec-own { display: flex; gap: 6px; }
+.dec-own input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--fill);
+  color: var(--label);
+  font: 12.5px var(--font, inherit);
+}
+.dec-own input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.dec-empty { display: flex; flex-direction: column; align-items: center; padding: 48px 24px; text-align: center; color: var(--label-2); }
+.dec-empty p { margin: 0; }
+
+/* ---------------------------------------------------------------- the sheet's record */
+.dec-record { margin: 4px 0 10px; font-size: 12.5px; }
+.dec-record summary { color: var(--label-2); cursor: pointer; }
+.dec-record summary .n { color: var(--label-3); }
+.dec-record[open] summary { margin-bottom: 6px; }
+.dec-record-row { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-top: 1px solid var(--separator, var(--fill)); }
+.dec-meta { margin: 0; color: var(--label-3); font-size: 11.5px; }
+

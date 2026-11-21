@@ -23,6 +23,7 @@ export type PanelKind =
   | 'access'
   | 'todos'
   | 'threads'
+  | 'decisions'
   | 'backup'
   | 'time'
   | 'timeSettings'
@@ -45,6 +46,7 @@ const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
   access: { label: 'access.title' },
   todos: { label: 'todo.title' },
   threads: { label: 'wt.title' },
+  decisions: { label: 'dec.title' },
   backup: { label: 'backup.title' },
   time: { label: 'time.title' },
   timeSettings: { label: 'time.set.title' },

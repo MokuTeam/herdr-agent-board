@@ -12,6 +12,7 @@ import { BACKUP_STRINGS } from './backup-strings.ts'
 import { CAL_STRINGS } from './cal-strings.ts'
 import { CALL_STRINGS } from './call-strings.ts'
 import { COMPACT_STRINGS } from './compact-strings.ts'
+import { DECISION_STRINGS } from './decision-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
@@ -1427,6 +1428,7 @@ for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRING
 for (const code of Object.keys(CALL_STRINGS) as Lang[]) Object.assign(STRINGS[code], CALL_STRINGS[code])
 // And tasks (#202).
 for (const code of Object.keys(TODO_STRINGS) as Lang[]) Object.assign(STRINGS[code], TODO_STRINGS[code])
+for (const code of Object.keys(DECISION_STRINGS) as Lang[]) Object.assign(STRINGS[code], DECISION_STRINGS[code])
 for (const code of Object.keys(THREAD_STRINGS) as Lang[]) Object.assign(STRINGS[code], THREAD_STRINGS[code])
 for (const code of Object.keys(SECRET_STRINGS) as Lang[]) Object.assign(STRINGS[code], SECRET_STRINGS[code])
 // And the peer network (#231).

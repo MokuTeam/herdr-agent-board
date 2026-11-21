@@ -19,6 +19,7 @@ import { besideParents, type CallAgent, type CallView } from '../core/call-agent
 import { categoryFor } from '../core/categories.ts'
 import { isCodexItem } from '../core/codex.ts'
 import { compactView } from '../core/compact.ts'
+import { type CardDecision, cardDecisionOf, decisionsConfig } from '../core/decisions.ts'
 import { waitingTool } from '../core/held-question.ts'
 import { type HelperSummary, summarize } from '../core/helpers.ts'
 import { t } from '../core/lang.ts'
@@ -39,6 +40,13 @@ const numberOf = (value: unknown): number | undefined => (typeof value === 'numb
 /** MokuPilot's call agents (#326), read only where it is not turned off and has run here (looked up once a minute). */
 const callAgentsHere = callAgentsGate()
 const daySessionHere = dayGate()
+
+/** A card's open decision (#487), only while config.json turns decisions on and the card still asks. */
+const decisionField = (cfg: Config, card: Card): { decision?: CardDecision } => {
+  if (card.decision === undefined || !card.ask || !decisionsConfig(cfg.decisions)) return {}
+  const decision = cardDecisionOf(card.decision)
+  return decision ? { decision } : {}
+}
 
 /** The panes its card says wake closed as it went to sleep (#204, services/wake/follow.ts), when it has any. */
 /** A card's tasks (#202) for its item, when it has any. */
@@ -422,6 +430,7 @@ export async function collect(
       ...todosField(card), // its tasks (#202), when it has any
       ...(compact && { compact }), // its auto-compact (#378), when there is any
       ...secretsField(cfg, card), // what it asks the user to fill in (#273), when it does
+      ...decisionField(cfg, card), // its open question's options and default (#487), while decisions are on
       helpers: own, // its subagents, forks, workflow agents and teammates in short, or null
       // a fork's card says whose fork it is, and when it started; a call agent's file says it
       ...(typeof card.forkOf === 'string'

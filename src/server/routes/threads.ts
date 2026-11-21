@@ -113,7 +113,7 @@ export interface ThreadsApp {
    */
   tell(session: string, text: string): Promise<{ ok: true } | { ok: false; error: string }>
   /** Clears the question on the session's card, as its next prompt would, while it is still `question`. */
-  clearAsk(session: string, question: string): void | Promise<void>
+  clearAsk(session: string, question: string, answer?: string): void | Promise<void>
   /** The tests' schedule, state folder and clock. */
   schedule?: EventSchedule
   state?: string
@@ -482,7 +482,7 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
         error: err instanceof Error ? err.message : String(err),
       }))
       // Its card's question goes once it has the answer; one it did not get stays on show.
-      if (told.ok) await app.clearAsk(asker, answered.question)
+      if (told.ok) await app.clearAsk(asker, answered.question, answered.text)
       out.told = told.ok
       if (!told.ok) out.why = told.error
     }

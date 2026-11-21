@@ -2297,6 +2297,67 @@ thread from anywhere (`board thread link` prints it), and `board thread open <ke
 board's window up on it. The routes are `/api/threads` (docs/design/threads, 5.3); away from the
 computer only your own logins reach them.
 
+## Decisions
+
+Off unless you turn it on (#487). A question blocks its session until you read it, also when the
+agent has a sound recommendation and the choice is easy to undo. With decisions on, an agent can ask
+with two to four options, mark the one it recommends, and give a time after which it goes with that
+one if you have not answered:
+
+```
+board ask "Merge now or after the review?" --option "Merge now" --option "After review" --recommend 1 --default-after 2h
+```
+
+The card and the session's sheet show the options as buttons, the recommended one marked, and
+"default in 1 h 12 min" with **Hold**. A click types the label into the session (waking it if it
+sleeps) the way a message from the board goes, and clears the question as your reply does; your own
+words in the session, or in the text field beside the buttons, answer it too. Hold cancels the default
+and keeps the question.
+
+When the time passes with no answer and nothing typed by you since, the board types one line into the
+session and records it:
+
+```
+[board reminder from decisions] no answer in 2 h: go with your recommendation "Merge now"
+```
+
+`--default-after` needs `--recommend` and takes 5 min to 72 h (`30m`, `2h`, `1h30m`). The brief tells
+agents a default is only for a choice that is easy to undo, never for something that cannot be undone
+or that goes out to another person: those ask without it. `board thread ask` takes the same flags.
+Options and a default are for a session's own question: `board ask --session <another>` with them is
+refused, since the default would be typed in with nobody asking.
+
+A **Decisions** pill in the toolbar counts what waits on you across lanes and opens the queue: each
+question with its options, the recommendation, how long ago it was asked and the time to its default,
+answered right there. A default that ran is never silent: until you open the panel again, its top says
+what went by default since you last looked (the question and what the session went with), and the pill
+carries a mark. The phone gets the same queue. `board decisions [--json]` prints it for a day assistant.
+
+Every decision is kept in the board's database (question, options, the answer, whether you or the
+default gave it, or the question was withdrawn, and when): the session's sheet lists its own, and
+`board decisions --done` the recent ones. Only what you type counts as your answer: a board
+reminder, a restart's note, a Team notice, a task notification or Code Mode's background result
+leaves the question open, and a prompt that clears the card's question as before without being yours
+(another session's message, a teammate's, a slash command such as the board's own `/compact`)
+records it as withdrawn. The page's Dismiss, the terminal board and a Codex session's hook clear the
+question as before; the record calls it withdrawn once the web board next tidies up, so only while
+the web board runs.
+
+Decisions are this computer's. A device's sessions (#501) ask on their own board: the master shows
+their question on the card and in the queue with no buttons (Open goes to the session), and a
+default never runs on the master for a device's session. A thread's default writes the board's line
+in the thread as a private entry, so on a shared thread the peers get none of it.
+
+```json
+"decisions": true
+```
+
+or `"decisions": { "defaults": false }` for the options, the queue and the record without anything
+deciding by itself: `--default-after` is refused with one line. With the key absent nothing changes:
+`board ask` takes every word as the question, the brief, the payload and the hook are as before, and
+the table in `board.db` stays empty. Not yet: the queue in a messenger with buttons, and approvals an
+agent can check.
+
 ## Workdesk assignments
 
 To let the web board hand assignments from Workdesk to project masters, turn on Board threads
@@ -4081,6 +4142,10 @@ board cat <id> "<Title>"  a new client: adds the category to the config too
 board doing "<text>"      what it works on now
 board wait "<text>"       what it waits for outside the chat (card goes to "Waiting on others")
 board ask "<question>"    needs your answer: "Needs me" until you reply
+  --option "<label>" (2 to 4), --recommend <n>, --default-after <30m|2h>
+                          (decisions on) buttons for you, one marked, a default after a time;
+                          see Decisions
+board decisions [--done]  (decisions on) what waits on you across lanes, or the last answered
 board done ["<text>"]     finished: clears doing, wait and ask
 board favorite [off]      keep this session in sight: first in its column, whole, left out of
                           "Archive the sleeping ones" (off: back among the others)
