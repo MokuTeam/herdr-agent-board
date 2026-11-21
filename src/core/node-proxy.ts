@@ -152,6 +152,27 @@ export const FORWARDED_ANSWER_HEADERS: readonly string[] = [
   'retry-after',
 ]
 
+/** What a node's answer may be shown as on this board's page; any other type goes as a download. */
+const SHOWN =
+  /^(?:application\/json|text\/event-stream|text\/plain|image\/(?:png|jpeg|gif|webp|avif|bmp|svg\+xml)|video\/|audio\/|application\/pdf|application\/octet-stream)/
+
+/**
+ * A node's answer headers as this board passes them on: only FORWARDED_ANSWER_HEADERS, never
+ * sniffed, and anything but JSON or an event stream held to `default-src 'none'` (the node's own
+ * policy when it is that strict, else a sandbox), a type the page does not show as a download. The
+ * node's word is data (design 10, Trust): an answer of its must not run as a page of this board's.
+ */
+export function answerHeaders(from: Headers): Headers {
+  const out = pickHeaders(from, FORWARDED_ANSWER_HEADERS)
+  out.set('x-content-type-options', 'nosniff')
+  const type = (out.get('content-type') ?? '').trim().toLowerCase()
+  if (/^(?:application\/json|text\/event-stream)/.test(type)) return out
+  if (!/^default-src 'none'/.test(out.get('content-security-policy') ?? ''))
+    out.set('content-security-policy', "default-src 'none'; sandbox")
+  if (!SHOWN.test(type)) out.set('content-disposition', 'attachment')
+  return out
+}
+
 /** Only `names` of `from`. */
 export function pickHeaders(from: Headers, names: readonly string[]): Headers {
   const out = new Headers()

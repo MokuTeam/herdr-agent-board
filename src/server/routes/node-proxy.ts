@@ -27,9 +27,9 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
 import {
   type Asked,
+  answerHeaders,
   desktopRest,
   deviceKey,
-  FORWARDED_ANSWER_HEADERS,
   FORWARDED_REQUEST_HEADERS,
   inAskedOrder,
   type KeyedPath,
@@ -40,7 +40,7 @@ import {
   rekeyOutcome,
   splitTargets,
 } from '../../core/node-proxy.ts'
-import { nodesConfig, parseNodeKey } from '../../core/nodes.ts'
+import { type NodesConfig, nodesConfig, parseNodeKey } from '../../core/nodes.ts'
 import type { Config, Item } from '../../core/types.ts'
 import type { Link } from '../../services/nodes/link.ts'
 import type { NodeLinks } from '../../services/nodes/links.ts'
@@ -55,6 +55,8 @@ export interface NodeProxyApp {
   links: Pick<NodeLinks, 'link' | 'onChange'>
   /** Another device's item by its prefixed key (server/board-state.ts findAny). */
   find(key: string): Item | undefined
+  /** This board's own items: a secret request of its own is answered here, whatever a node holds. */
+  own(): Item[]
   /** Every other device's item in the payload now, for a secret form's answer. */
   remote(): Item[]
   /** The board's own routes, without this one: this computer's part of a bulk request. */
@@ -100,7 +102,7 @@ function refusal(ctx: RouteContext, guards: readonly Guard[]): Response | null {
 
 /** `res` with only the headers the page reads; `done` once its body ended or was dropped. */
 function passed(res: Response, done: () => void): Response {
-  const headers = pickHeaders(res.headers, FORWARDED_ANSWER_HEADERS)
+  const headers = answerHeaders(res.headers)
   if (!res.body) {
     done()
     return new Response(null, { status: res.status, headers })
@@ -127,9 +129,20 @@ function passed(res: Response, done: () => void): Response {
 }
 
 export function createNodeProxy(app: NodeProxyApp): NodeProxy {
+  // `nodes` as config.json has it now, read again only when the live config holds another value.
+  let seen: unknown
+  let parsed: NodesConfig | null = null
+  const conf = (): NodesConfig | null => {
+    if (app.cfg.nodes !== seen) {
+      seen = app.cfg.nodes
+      parsed = nodesConfig(seen)
+    }
+    return parsed
+  }
+
   /** The device's link while it can be asked; else the answer that says why not. */
   function reach(device: string): { link: Link } | { refused: Response; code: string } {
-    const link = nodesConfig(app.cfg.nodes)?.devices[device]?.link ? app.links.link(device) : null
+    const link = conf()?.devices[device]?.link ? app.links.link(device) : null
     if (!link) return { refused: gone(), code: 'gone' }
     const s = link.state()
     if (s.state === 'refused' && s.reason === 'api')
@@ -167,7 +180,21 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
       req?.signal.removeEventListener('abort', end)
     }
     try {
-      return passed(await link.fetch(path, { ...init, signal: ac.signal }), done)
+      const res = await link.fetch(path, { ...init, signal: ac.signal })
+      // The link's own word that it has no door now (a pipe that failed while the stream had not
+      // gone quiet yet) names the device, as every other offline answer here does.
+      if (res.status === 503) {
+        const said = await res
+          .clone()
+          .json()
+          .catch(() => null)
+        if (isRecord(said) && said.error === 'node-offline' && !('device' in said)) {
+          await res.body?.cancel()
+          done()
+          return offline(device)
+        }
+      }
+      return passed(res, done)
     } catch {
       done()
       return offline(device)
@@ -183,7 +210,9 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
     if (p.area === 'term' && !terminalOn(app.cfg)) return json(404, { error: t('term.off') })
     if (desktopRest(p.area, p.rest)) return desktop()
     if (req.method !== 'GET' && req.method !== 'POST') return json(405, { error: 'method' })
-    const stream = p.area === 'term' && req.method === 'GET'
+    const stream = p.area === 'term' && req.method === 'GET' && /^\/(agent|shell)\/stream$/.test(p.rest)
+    // A terminal's other requests are POSTs, as on this board (routes/terminal.ts).
+    if (p.area === 'term' && req.method === 'GET' && !stream) return json(405, { error: 'method' })
     // The stream: this board's token on the way in, EventSource sending no header (routes/terminal.ts).
     const refused = stream ? ctx.refuse('fs-token') : req.method === 'POST' ? refusal(ctx, WRITE) : null
     if (refused) return refused
@@ -204,7 +233,8 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
       req.method === 'GET'
         ? { method: 'GET', headers: pickHeaders(req.headers, FORWARDED_REQUEST_HEADERS) }
         : jsonInit(await ctx.rawBody())
-    return forward(p.device, r.link, `${nodePath(p)}${ctx.url.search}`, init, req)
+    // This board's file token is never sent on: the node has a token of its own.
+    return forward(p.device, r.link, `${nodePath(p)}${nodeQuery(ctx.url.searchParams, ['t'])}`, init, req)
   }
 
   /** The node's outcomes of a bulk request, or, when it gave none, one failure for each target it was sent. */
@@ -218,7 +248,7 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
     const sent: Body = { ...body, [field]: asked.map(a => a.key) }
     // A profile of the master's by the node's own id (nodes.devices.<id>.profiles); one not named keeps its id.
     if (path === '/api/move' && typeof body.profile === 'string')
-      sent.profile = nodesConfig(app.cfg.nodes)?.devices[device]?.profiles[body.profile] ?? body.profile
+      sent.profile = conf()?.devices[device]?.profiles[body.profile] ?? body.profile
     const r = reach(device)
     let answer: unknown = null
     let code = ''
@@ -283,7 +313,13 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
     const localAsked: Asked[] = split.local.map(k => ({ asked: String(k), key: String(k) }))
     const localPart = async (): Promise<Record<string, unknown>[][]> => {
       const mine: Body = { ...body, [field]: split.local }
-      const res = await own.handle(req, { ...ctx, rawBody: async () => mine, body: async () => mine })
+      // What the board's own route throws fails this computer's targets, not the nodes' answers.
+      let res: Response | undefined
+      try {
+        res = await own.handle(req, { ...ctx, rawBody: async () => mine, body: async () => mine })
+      } catch {
+        return outcomesOf(path, null, localAsked, 'error', o => (isRecord(o) ? o : null))
+      }
       const answer = res ? await answerOf(res) : null
       const code = isRecord(answer) && typeof answer.error === 'string' ? answer.error : ''
       return outcomesOf(path, answer, localAsked, code, o => (isRecord(o) ? o : null))
@@ -341,7 +377,10 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
 
   /** The owner's answer to a secret form a node's card holds (design 10, item 2). Never logged, never kept. */
   async function secret(req: Request, ctx: RouteContext, id: string): Promise<Response | undefined> {
-    const item = app.remote().find(i => Array.isArray(i.secrets) && i.secrets.some(s => isRecord(s) && s.id === id))
+    const holds = (i: Item): boolean => Array.isArray(i.secrets) && i.secrets.some(s => isRecord(s) && s.id === id)
+    // A request of this board's own is answered here, as before.
+    if (app.own().some(holds)) return undefined
+    const item = app.remote().find(holds)
     if (!item?.device) return undefined
     const refused = refusal(ctx, WRITE)
     if (refused) return refused
@@ -398,7 +437,7 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
     if (refused) return refused
     const r = reach(at.device)
     if ('refused' in r) return r.refused
-    let query = nodeQuery(ctx.url.searchParams, ['key'])
+    let query = nodeQuery(ctx.url.searchParams, ['key', 't'])
     if (tokened) {
       const token = r.link.payload()?.fsToken
       if (!token) return offline(at.device)
@@ -413,7 +452,7 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
     // Every path: what is not for a node goes on to the board's own routes, which answer it as before.
     path: /^\//,
     async handle(req, ctx) {
-      if (!nodesConfig(app.cfg.nodes)) return undefined
+      if (!conf()) return undefined
       const p = keyedPath(ctx.rawPath)
       if (p) return keyed(req, ctx, p)
       const { path } = ctx

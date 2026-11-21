@@ -1005,7 +1005,10 @@ export async function startServer({
     door = createNodeListener({
       cfg,
       routes: ownRoutes,
-      guards,
+      // The board's own files are none of a master's (#501): as through the tunnel, the routes that
+      // read by a path refuse them, so a master's page, or the owner's login through the master's
+      // tunnel, reads no token or env file of this node's board.
+      guards: { ...guards, ownFiles: ownFileCheck(cfg) },
       hello: () => listener.hello(),
       store: createNodeStore(),
       status: () => status.answer(),
@@ -1038,6 +1041,7 @@ export async function startServer({
       cfg,
       links: nodeLinks,
       find: board.findAny,
+      own: board.items,
       remote: () => aggregate.part()?.items ?? [],
       local: ownRoutes,
     })

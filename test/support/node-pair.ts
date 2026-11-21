@@ -38,6 +38,8 @@ export interface DoorProxy {
   peak(): number
   /** Every request it took, `<method> <path>`, in order. */
   requests: string[]
+  /** The same requests with the headers and the body (as text) the door was sent. */
+  received: { request: string; headers: Record<string, string>; body: string }[]
   cut(how: 'silent' | 'drop'): Promise<void>
   restore(): void
   close(): Promise<void>
@@ -53,6 +55,7 @@ export async function doorProxy(doorPort: number): Promise<DoorProxy> {
   const open = new Set<{ end(): void }>()
   const hung: (() => void)[] = []
   const requests: string[] = []
+  const received: DoorProxy['received'] = []
   let peak = 0
 
   async function pass(req: Request): Promise<Response> {
@@ -64,12 +67,18 @@ export async function doorProxy(doorPort: number): Promise<DoorProxy> {
     }
     const headers = new Headers(req.headers)
     headers.set('host', `127.0.0.1:${doorPort}`)
+    const sent = req.body ? await req.arrayBuffer() : null
+    received.push({
+      request: `${req.method} ${url.pathname}`,
+      headers: Object.fromEntries(req.headers),
+      body: sent ? new TextDecoder().decode(sent) : '',
+    })
     let res: Response
     try {
       res = await fetch(`http://127.0.0.1:${doorPort}${url.pathname}${url.search}`, {
         method: req.method,
         headers,
-        ...(req.body && { body: await req.arrayBuffer() }),
+        ...(sent && { body: sent }),
         signal: req.signal,
       })
     } catch {
@@ -118,6 +127,7 @@ export async function doorProxy(doorPort: number): Promise<DoorProxy> {
     streams: () => open.size,
     peak: () => peak,
     requests,
+    received,
     async cut(how) {
       mode = how
       if (how === 'drop') {
@@ -203,7 +213,8 @@ export async function nodeBoard(
  * proxy. `masterCfg`: more of the master's config; `tokens: false` stores none on the master;
  * `panes`: a node's fake herdr's panes by its id, `masterPanes` the master's (none unless given);
  * `nodeCfg`: more of a node's config by its id; `masterSetup`: done to the master's sandbox before
- * its board starts (a login written to its state folder, say).
+ * its board starts (a login written to its state folder, say); `deviceCfg`: more of a device's entry in
+ * the master's `nodes.devices` by its id.
  */
 export async function nodePair(
   o: {
@@ -215,6 +226,7 @@ export async function nodePair(
     masterPanes?: (box: Sandbox) => FakePane[]
     nodeCfg?: (id: string, box: Sandbox) => Record<string, unknown>
     masterSetup?: (box: Sandbox) => void | Promise<void>
+    deviceCfg?: (id: string) => Record<string, unknown>
   } = {},
 ): Promise<Pair> {
   const env = { ...PAIR_ENV, ...o.env }
@@ -230,7 +242,10 @@ export async function nodePair(
   const store = createDeviceStore({ dir: join(stateFolder(box), 'nodes') })
   if (o.tokens !== false) for (const n of nodes) store.setToken(n.id, n.token)
   const devices = Object.fromEntries(
-    nodes.map(n => [n.id, { link: { kind: 'direct', url: `http://127.0.0.1:${n.proxy.port}` } }]),
+    nodes.map(n => [
+      n.id,
+      { link: { kind: 'direct', url: `http://127.0.0.1:${n.proxy.port}` }, ...o.deviceCfg?.(n.id) },
+    ]),
   )
   const { url, proc } = await serveBoard(box, { language: 'en', nodes: { id: 'laptop', devices }, ...o.masterCfg }, env)
   const { onTestFinished } = await import('bun:test')

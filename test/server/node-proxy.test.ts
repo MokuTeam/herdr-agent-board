@@ -11,14 +11,15 @@
 // - The terminal's stream carries the node's screen and ends when the node forgets the master; a
 //   secret form's answer writes the node's sink and nothing of it is on the master.
 // - Without `nodes`: the route table is the board's own, and a prefixed key is what it was there.
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, onTestFinished, test } from 'bun:test'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createNodeStore } from '../../src/adapters/node-store.ts'
+import { createDeviceStore, createNodeStore } from '../../src/adapters/node-store.ts'
 import { LOGIN_COOKIE } from '../../src/core/access.ts'
 import type { BoardPayload } from '../../src/core/payload.ts'
 import type { Item } from '../../src/core/types.ts'
 import { serveBoard, unusedPort } from '../support/board-server.ts'
+import { fakeWake } from '../support/fake-wake.ts'
 import { type FakePane, nodePair, PAIR_ENV } from '../support/node-pair.ts'
 import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
 import { routeTable, seedAccess, stateFolder, viaCaddy } from '../support/tunnel-board.ts'
@@ -107,10 +108,15 @@ function holding(dir: string, text: string): string[] {
 describe('a node card through the master', () => {
   test('actions, the sheet, files, uploads, schedule edits and reminders reach the node; desktop routes do not', async () => {
     const tunnelPort = await unusedPort()
+    const masterWake = await fakeWake()
+    const nodeWake = await fakeWake()
     const pair = await nodePair({
       panes: (_id, box) => [codexPane(box, 'p')],
       masterPanes: box => [codexPane(box, 'm')],
+      nodeCfg: () => ({ wakeUrl: nodeWake.url }),
+      deviceCfg: () => ({ profiles: { work: 'nodework' } }),
       masterCfg: {
+        wakeUrl: masterWake.url,
         scheduleTickSec: 0.2,
         tunnel: {
           on: true,
@@ -169,6 +175,24 @@ describe('a node card through the master', () => {
       expect([path, r.status, r.body.error]).toEqual([path, 403, 'desktop'])
     }
     expect(askedSince(node.proxy.requests, before)).toEqual([])
+
+    // The caller's cookie, Authorization and Origin stay here: the node hears the link's own token.
+    const leaked = await post(
+      at(`/api/session/${encodeURIComponent(K)}/card`),
+      { doing: 'headers' },
+      { cookie: 'session=callers-cookie', authorization: 'Bearer callers-own-token-0123456789', origin: master.url },
+    )
+    expect(leaked.status).toBe(200)
+    const sentCard = node.proxy.received.filter(r => r.request === 'POST /api/session/pane-p/card').at(-1)
+    expect(sentCard?.headers.cookie).toBeUndefined()
+    expect(sentCard?.headers.origin).toBeUndefined()
+    expect(sentCard?.headers.authorization).toBe(`Bearer ${node.token}`)
+    // A terminal's GET other than its stream is no request of the terminal's, as on this board.
+    expect((await fetch(at(`/api/term/${encodeURIComponent(K)}/shell/open`))).status).toBe(405)
+    // The node board's own files are none of the master's, as the master's are none of the tunnel's.
+    const ownFile = join(stateFolder(node.box), 'node', 'masters.json')
+    expect(existsSync(ownFile)).toBe(true)
+    expect((await post(at('/api/fs/preview'), { key: K, path: ownFile })).status).toBe(403)
 
     // A file chip: its stat and preview are the node's.
     const preview = await answer(await post(at('/api/fs/preview'), { key: K, path: file }))
@@ -267,6 +291,27 @@ describe('a node card through the master', () => {
     plainBoard.proc.kill()
 
     // The bulk routes: this computer's sessions here, the node's there, in the order asked.
+    // Sleep: each side answers for its own targets, in the order asked, the node's under the keys asked.
+    const slept = await answer(await post(at('/api/sleep'), { targets: [K, 'pane-m', '@server-1:nobody'] }))
+    expect(slept.status, JSON.stringify(slept.body)).toBe(200)
+    const outcomes = slept.body.results as { target: string; key?: string; result: string; why?: string }[]
+    expect(outcomes.map(o => [o.target, o.key ?? null, o.result, o.why ?? null])).toEqual([
+      [K, K, 'kept', 'notClaude'],
+      ['pane-m', 'pane-m', 'kept', 'notClaude'],
+      ['@server-1:nobody', null, 'kept', 'unknown'],
+    ])
+    const sentSleep = node.proxy.received.filter(r => r.request === 'POST /api/sleep')
+    expect(sentSleep.map(r => JSON.parse(r.body).targets)).toEqual([['pane-p', 'nobody']])
+    // Move: the node is sent its own keys and the profile by its own id (nodes.devices.<id>.profiles).
+    const moved = await answer(await post(at('/api/move'), { targets: [K, 'pane-m'], profile: 'work' }))
+    expect(moved.status, JSON.stringify(moved.body)).toBe(200)
+    expect((moved.body.results as { target: string; result: string }[]).map(o => [o.target, o.result])).toEqual([
+      [K, 'refused'],
+      ['pane-m', 'refused'],
+    ])
+    const sentMove = node.proxy.received.filter(r => r.request === 'POST /api/move')
+    expect(sentMove.map(r => JSON.parse(r.body))).toEqual([{ targets: ['pane-p'], profile: 'nodework' }])
+
     // Each side answers for its own (both refuse a session that is not Claude's, and say so), the
     // node's outcome under the key the master asked for.
     const bulkSeen = node.proxy.requests.length
@@ -390,6 +435,41 @@ describe('a node card through the master', () => {
     )
     expect([refused.status, refused.body]).toEqual([503, { error: 'node-offline', device: 'server-1' }])
   }, 90_000)
+
+  test('a node whose link is refused for its version answers 503 node-api', async () => {
+    // A door that says it is server-1 but speaks another version of the link.
+    const asked: string[] = []
+    const door = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(req) {
+        const path = new URL(req.url).pathname
+        asked.push(`${req.method} ${path}`)
+        return path === '/api/hello'
+          ? Response.json({ board: 'agent-board', node: { api: 99, id: 'server-1' } })
+          : Response.json({ error: 'not found' }, { status: 404 })
+      },
+    })
+    onTestFinished(() => void door.stop(true))
+    const box = await sandbox()
+    createDeviceStore({ dir: join(stateFolder(box), 'nodes') }).setToken('server-1', LOGIN)
+    const link = { kind: 'direct', url: `http://127.0.0.1:${door.port}` }
+    const { url } = await serveBoard(
+      box,
+      { language: 'en', nodes: { id: 'laptop', devices: { 'server-1': { link } } } },
+      PAIR_ENV,
+    )
+    await until(async () => {
+      const res = await fetch(`${url}/api/nodes`)
+      const devices = ((await res.json()) as { devices: { id: string; link: { reason?: string } | null }[] }).devices
+      return devices.find(d => d.id === 'server-1')?.link?.reason === 'api'
+    }, 10_000)
+    const r = await answer(
+      await post(`${url}/api/session/${encodeURIComponent('@server-1:s1')}/message`, { text: 'x', session: null }),
+    )
+    expect([r.status, r.body]).toEqual([503, { error: 'node-api', device: 'server-1' }])
+    expect(asked.filter(a => !a.endsWith('/api/hello'))).toEqual([])
+  }, 30_000)
 })
 
 describe('without nodes', () => {

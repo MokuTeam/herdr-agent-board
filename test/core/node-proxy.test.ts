@@ -5,6 +5,7 @@
 // outcomes put back under the keys the master asked for, in the order asked.
 import { describe, expect, test } from 'bun:test'
 import {
+  answerHeaders,
   desktopRest,
   deviceKey,
   inAskedOrder,
@@ -186,4 +187,38 @@ test('nodeQuery and pickHeaders: what the node reads, nothing else', () => {
     ['content-type', 'text/plain'],
     ['range', 'bytes=0-1'],
   ])
+})
+
+describe('answerHeaders: a node answer never runs as a page of the master', () => {
+  const of = (h: Record<string, string>) => Object.fromEntries(answerHeaders(new Headers(h)))
+  test('JSON and an event stream as they are, never sniffed; no cookie or hop header', () => {
+    expect(of({ 'content-type': 'application/json; charset=utf-8', 'set-cookie': 'a=b', connection: 'close' })).toEqual(
+      {
+        'content-type': 'application/json; charset=utf-8',
+        'x-content-type-options': 'nosniff',
+      },
+    )
+    expect(of({ 'content-type': 'text/event-stream', 'cache-control': 'no-store' })).toEqual({
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    })
+  })
+  test("media keeps the node's strict policy; a lax one or none is a sandbox", () => {
+    const pdf = "default-src 'none'; frame-ancestors 'self'"
+    expect(of({ 'content-type': 'application/pdf', 'content-security-policy': pdf })['content-security-policy']).toBe(
+      pdf,
+    )
+    expect(of({ 'content-type': 'image/png' })['content-security-policy']).toBe("default-src 'none'; sandbox")
+    expect(of({ 'content-type': 'image/svg+xml', 'content-security-policy': "script-src 'unsafe-inline'" })).toEqual({
+      'content-type': 'image/svg+xml',
+      'content-security-policy': "default-src 'none'; sandbox",
+      'x-content-type-options': 'nosniff',
+    })
+  })
+  test('a page or anything the board does not show goes as a download', () => {
+    for (const type of ['text/html', 'text/html; charset=utf-8', 'application/xhtml+xml', 'application/javascript', ''])
+      expect([type, of(type ? { 'content-type': type } : {})['content-disposition']]).toEqual([type, 'attachment'])
+    expect(of({ 'content-type': 'image/png', 'content-disposition': 'inline' })['content-disposition']).toBe('inline')
+  })
 })
