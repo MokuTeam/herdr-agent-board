@@ -2,7 +2,7 @@
 // and the refusal of the rest, checked on the path as it came and decoded. Every route of the
 // board's real table is classified in test/server/node-door.test.ts.
 import { describe, expect, test } from 'bun:test'
-import { DOOR_ROUTES, doorRefusal, doorRoute, NODE_API } from '../../src/core/node-door.ts'
+import { DOOR_ROUTES, doorRefusal, doorRoute, loopbackHost, NODE_API } from '../../src/core/node-door.ts'
 
 /** The door's answer to a request as it came: null, or its refusal. */
 const refusal = (method: string, raw: string) => doorRefusal(method, raw, decodeURIComponent(raw))
@@ -151,4 +151,32 @@ describe('everything else is 404, whatever the spelling', () => {
     expect(refusal('GET', '/api/board/')).toEqual(NOT_FOUND)
     expect(refusal('GET', '/api/session/a/b/changes')).toEqual(NOT_FOUND)
   })
+})
+
+test("the door's Host: a loopback name with any port or none; nothing else", () => {
+  for (const host of [
+    '127.0.0.1:12430',
+    '127.0.0.1:50123',
+    '127.0.0.1',
+    'localhost:1',
+    'localhost',
+    '[::1]:12430',
+    '[::1]',
+  ])
+    expect([host, loopbackHost(host)]).toEqual([host, true])
+  for (const host of [
+    '',
+    ':12430',
+    'evil.example:12430',
+    '127.0.0.1.evil.example:12430',
+    'localhost.evil.example',
+    '127.0.0.2:12430',
+    '[::2]:12430',
+    '::1:12430',
+    '127.0.0.1:12430:1',
+    '127.0.0.1:abc',
+    '127.0.0.1:123456',
+    'user@127.0.0.1:12430',
+  ])
+    expect([host, loopbackHost(host)]).toEqual([host, false])
 })

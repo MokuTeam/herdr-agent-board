@@ -4,7 +4,8 @@
 // nothing listens, no timer runs and no file is read.
 //
 // A request gets to a board route only when:
-// - its Host is this door's own address and port (403 host);
+// - its Host names this computer's loopback (127.0.0.1, localhost, [::1]) with any port, since a
+//   forward lands on whatever local port is free; any other name is 403 host;
 // - it carries no Origin: a page in a browser always sends one, and this door is for a program
 //   (403 origin, as wake's API refuses a page);
 // - anything but GET carries X-Board: 1 (403 header), as everywhere;
@@ -18,7 +19,7 @@
 
 import type { MasterRecord, NodeStore } from '../adapters/node-store.ts'
 import { RateLimiter } from '../core/access.ts'
-import { doorRoute, NODE_API } from '../core/node-door.ts'
+import { doorRoute, loopbackHost, NODE_API } from '../core/node-door.ts'
 import { type NodeConfig, nodeConfig } from '../core/nodes.ts'
 import { bearerOf } from '../core/remote.ts'
 import type { Config } from '../core/types.ts'
@@ -75,8 +76,7 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
     const here = node
     const port = bound
     if (!here || port === null) return json(503, { error: 'node' })
-    const host = (req.headers.get('host') ?? '').toLowerCase()
-    if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return json(403, { error: 'host' })
+    if (!loopbackHost((req.headers.get('host') ?? '').toLowerCase())) return json(403, { error: 'host' })
     if (req.headers.has('origin')) return json(403, { error: 'origin' })
     let url: URL | undefined
     let master: MasterRecord | null = null

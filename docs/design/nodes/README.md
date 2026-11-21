@@ -202,7 +202,7 @@ The plugin declares `windows, linux, macos` (`herdr-plugin.toml`). Whether herdr
 |---|---|
 | Listens | `127.0.0.1:<node.port>`, default 12430, and nowhere else. (With the optional `node.listen: "tailnet"` of T14 also the machine's Tailscale address.) |
 | Encryption | Over direct ssh the forward is the encryption. For the relay pipe the door itself speaks HTTPS (`node.tls`) with a certificate made at install, which the master pins at claim, so the server in the middle forwards bytes it cannot read (20.1). |
-| Host | Must be its own address and port, else 403 `host`. |
+| Host | Must be a loopback name (`127.0.0.1`, `localhost`, `[::1]`); the port may differ, since a forward lands on any. Else 403 `host`. |
 | Caller | `Authorization: Bearer <token>`; only hello and claim answer without it. The node keeps the SHA-256 of each master's token in `<state>/node/masters.json` (0600): a list, with one entry in stage 1 (21.3). On the tailnet door also `tailscale whois`: the caller must be the Tailscale node recorded at claim. |
 | Browsers | A request with an `Origin` header is refused (403 `origin`), as wake's API does (`src/entrypoints/wake.ts:299-313`). This door is for a program. |
 | Writes | `X-Board: 1` on anything but GET, as everywhere. |

@@ -7,6 +7,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { connect } from 'node:net'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { createNodeStore } from '../../src/adapters/node-store.ts'
@@ -85,6 +86,23 @@ async function said(res: Response | Promise<Response>): Promise<[number, string]
   if (!type.startsWith('text/event-stream')) return [r.status, await r.text()]
   await r.body?.cancel()
   return [r.status, type]
+}
+
+/** The status line's code of a GET /api/board sent as written, with `Host: <host>` (an empty one too). */
+function rawStatus(port: number, host: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, '127.0.0.1', () =>
+      socket.write(
+        `GET /api/board HTTP/1.1\r\nHost: ${host}\r\nAuthorization: Bearer ${TOKEN_A}\r\nConnection: close\r\n\r\n`,
+      ),
+    )
+    let said = ''
+    socket.on('data', chunk => {
+      said += chunk.toString('latin1')
+    })
+    socket.on('error', reject)
+    socket.on('close', () => resolve(Number(/^HTTP\/1\.1 (\d{3})/.exec(said)?.[1] ?? 0)))
+  })
 }
 
 /** Whether anything accepts a connection on 127.0.0.1:`port`. */
@@ -423,10 +441,27 @@ describe('the master door', () => {
     expect(await answer(fetch(`${url}/api/node/status`))).toEqual(none)
   })
 
-  test('the Host must be its own; a request with an Origin is refused, before the token', async () => {
-    for (const host of [`127.0.0.1:${doorPort + 1}`, `board.example.com:${doorPort}`, '127.0.0.1', `[::1]:${doorPort}`])
+  test('the Host must name loopback, any port; a request with an Origin is refused, before the token', async () => {
+    // A forward lands on whatever local port is free: a loopback name passes with any port, or none.
+    for (const host of [
+      `localhost:${doorPort}`,
+      `127.0.0.1:${doorPort + 1}`,
+      'localhost:50123',
+      '127.0.0.1',
+      `[::1]:${doorPort}`,
+      'LOCALHOST:7',
+    ])
+      expect([host, (await master.get('/api/board', { host })).status]).toEqual([host, 200])
+    // Another name, one that only starts like loopback, or none: a page of another site.
+    for (const host of [
+      `board.example.com:${doorPort}`,
+      `evil.example:${doorPort}`,
+      `127.0.0.1.evil.example:${doorPort}`,
+      `localhost.evil.example:${doorPort}`,
+      `[::2]:${doorPort}`,
+    ])
       expect([host, ...(await answer(master.get('/api/board', { host })))]).toEqual([host, 403, { error: 'host' }])
-    expect((await master.get('/api/board', { host: `localhost:${doorPort}` })).status).toBe(200)
+    expect(await rawStatus(doorPort, '')).toBe(403)
     for (const origin of [`http://127.0.0.1:${doorPort}`, 'https://evil.example', 'null']) {
       expect([origin, ...(await answer(master.get('/api/hello', { origin })))]).toEqual([
         origin,

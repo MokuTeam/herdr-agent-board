@@ -84,3 +84,16 @@ export function doorRoute(method: string, rawPath: string, path: string): DoorRo
 export function doorRefusal(method: string, rawPath: string, path: string): { status: 404; error: 'not found' } | null {
   return doorRoute(method, rawPath, path) ? null : { status: 404, error: 'not found' }
 }
+
+/** The names a request to the door may carry in its Host: this computer's loopback. */
+const LOOPBACK_NAMES: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '[::1]'])
+
+/**
+ * Whether a Host (lower-cased) names this computer's loopback: 127.0.0.1, localhost or [::1], with
+ * any port or none. The port is not checked: a forward the master keeps up lands on whatever local
+ * port is free. A page of another site that resolves to loopback carries its own name and fails.
+ */
+export function loopbackHost(host: string): boolean {
+  const m = /^(\[[^\]]*\]|[^:[\]]*)(?::(\d{1,5}))?$/.exec(host)
+  return m !== null && LOOPBACK_NAMES.has(m[1] ?? '')
+}
