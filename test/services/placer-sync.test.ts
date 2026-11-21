@@ -150,8 +150,11 @@ type Door = ReturnType<typeof door>
  */
 function master(o: {
   nodes: Door[]
-  /** This computer's sessions awake, against its maxSessions of 1. */
-  localAwake?: number
+  /** This computer's sessions awake, against its maxSessions of 1; a function for a count that moves. */
+  localAwake?: number | (() => number)
+  /** What the queue's file held when the board started, and whether the board tells the placer its sessions. */
+  restored?: QueueEntry[]
+  awaitsBoard?: boolean
   whenFull?: 'local' | 'wait'
   lanes?: string[] | 'all'
   sync?: boolean
@@ -240,11 +243,12 @@ function master(o: {
       changed: () => {},
     } as never,
     items: () => [],
-    ownStatus: async () => status('laptop', o.localAwake ?? 0),
+    ownStatus: async () => status('laptop', typeof o.localAwake === 'function' ? o.localAwake() : (o.localAwake ?? 0)),
     log: text => void logs.push(text),
     ...(o.sync !== false && { bundle }),
+    ...(o.awaitsBoard && { awaitsBoard: true }),
     queue: {
-      read: () => [],
+      read: () => o.restored ?? [],
       put: (e: QueueEntry) => {
         queued.set(e.id, e)
         return true
@@ -545,6 +549,82 @@ describe('a start on a node syncs the profile first (#584)', () => {
     expect(l.place?.home).toEqual({ kind: 'lane' })
     expect(m.syncs).toEqual([])
     expect(one.requests).toEqual([])
+    m.close()
+  }, 15_000)
+})
+
+describe('the queue after the board starts again (#593)', () => {
+  /** A start that waited for room on this computer when the board stopped, as queue.json keeps it. */
+  const waited = (dir: string): QueueEntry =>
+    ({
+      id: 'a1b2c3d4',
+      session: '11111111-2222-4333-8444-555555555555',
+      master: 'laptop',
+      at: NOW - 60_000,
+      request: {
+        name: 'atlas 1',
+        label: '',
+        cwd: dir,
+        category: 'atlas',
+        workspaceId: 'wA',
+        workspaceLabel: 'atlas',
+        newWorkspace: false,
+        message: '',
+        worktree: null,
+        profile: 'default',
+        profileDir: dir,
+        configDir: null,
+        parent: null,
+        profileArgs: [],
+        profileCommand: null,
+        agent: 'claude',
+        model: null,
+      },
+      task: {
+        lane: 'atlas',
+        profile: 'default',
+        agent: 'claude',
+        byHand: true,
+        origin: 'local',
+        portable: { ok: false, why: { kind: 'lane' } },
+      },
+      source: null,
+      wait: { device: 'local', kind: 'sessions', busy: 1, max: 1 },
+    }) as unknown as QueueEntry
+  const awakeItem = [{ sleeping: false }] as never
+
+  test('what waited is not tried before the board read herdr: this computer is not taken for empty', async () => {
+    // Until the board has read herdr its own status counts no session awake.
+    let awake = 0
+    const m = master({
+      nodes: [door('server-1')],
+      lanes: [],
+      whenFull: 'wait',
+      localAwake: () => awake,
+      restored: [waited(tmpdir())],
+      awaitsBoard: true,
+    })
+    // Not at once, not on the queue's own tries: nothing is started here.
+    await Bun.sleep(50)
+    m.clock.advance(60_000)
+    await Bun.sleep(50)
+    expect(m.ran).toEqual([])
+    // The board read herdr: one session is awake here, against a most of 1. It still waits.
+    awake = 1
+    m.placer.observe(awakeItem)
+    await Bun.sleep(50)
+    expect(m.ran).toEqual([])
+    // That session went to sleep: now there is room, and the start goes.
+    awake = 0
+    m.placer.observe([])
+    await until(() => m.ran.length === 1)
+    expect(m.ran[0]?.id).toBe('a1b2c3d4')
+    m.close()
+  }, 15_000)
+
+  test('a placer nothing observes tries its queue as it is made', async () => {
+    const m = master({ nodes: [door('server-1')], lanes: [], whenFull: 'wait', restored: [waited(tmpdir())] })
+    await until(() => m.ran.length === 1)
     m.close()
   }, 15_000)
 })

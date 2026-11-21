@@ -103,8 +103,10 @@ export interface PlacerOptions {
   /**
    * The board tells observe() this computer's sessions after each read of herdr: until the first one
    * the queue is left alone (#593). A board that just started counts no session awake, so this
-   * computer would look empty and a start waiting for room would be started here at once. Absent: a
-   * test that drives the placer alone, where nothing observes.
+   * computer would look empty and a start waiting for room would be started here at once. A new
+   * start needs no such gate: the launch route refuses one while the board's data is stale
+   * (routes/launch.ts, `fresh-data`). Absent: a test that drives the placer alone, where nothing
+   * observes.
    */
   awaitsBoard?: boolean
   /** git's facts of a folder (adapters/git.ts), handed in so tests can stand in. */
@@ -802,10 +804,10 @@ export function createPlacer(o: PlacerOptions): Placer {
       const awake = items.filter(i => !i.sleeping).length
       const dropped = awake < lastAwake
       lastAwake = awake
-      // The first read of herdr since the board started: what waited is tried now, not before.
-      const first = !observed
+      // The first read of herdr since the board started counts as a drop (lastAwake starts at
+      // infinity): what waited is tried now, and not before (awaitsBoard).
       observed = true
-      if ((dropped || first) && waiting().length) kick()
+      if (dropped && waiting().length) kick()
     },
     async next(lane, profile, given) {
       // A section just written is given: the live config follows the file a moment later.
