@@ -273,16 +273,20 @@ and has no order across senders. So each board that takes part holds its own cop
 thread, and the copies have to come out the same. Three rules do that:
 
 1. Entries are immutable and carry `n`, a counter per thread. A board writes its entry with one
-   more than the highest `n` it has seen on that thread (a Lamport counter). A private entry,
-   which stays on its board, takes the `n` of the entry it follows instead (#541), so the numbers
-   the peers see have no holes that rule 3 would read as missed entries.
+   more than the highest `n` it has seen on that thread (a Lamport counter). An entry that stays
+   on its board takes the `n` of the entry it follows instead, so the numbers the peers see have
+   no holes that rule 3 would read as missed entries: a private one (#541), and one the board
+   writes with nothing to send it, such as a shared parent's "all N sub-threads closed", which is
+   private for that reason (#548). An entry held for the owner takes its number when it is
+   written, before anyone knows whether it goes out: one the owner discards, or one the hub
+   refuses for good, leaves a hole the peers read as an entry missing, which it is.
 2. A head field takes the value from the entry that is last in the order `(n, at, author's peer
    id)`. Two boards that hold the same entries compute the same head, whatever order the entries
    arrived in.
 3. Every shared entry also carries its sender's head as it was after the entry (key, title,
-   status, summary, `rev`). A board that sees a `rev` more than one ahead of its own knows it
-   missed entries: it adopts the newer head fields, and shows a line in the feed, "entries
-   missing here".
+   status, summary, `rev`), folded without its sender's private entries (#549). A board that
+   sees a `rev` more than one ahead of its own knows it missed entries: it adopts the newer head
+   fields, and shows a line in the feed, "entries missing here".
 
 Rule 3 is what a late joiner and a board that was offline past the hub's 7 days rely on. They have
 the right head after the first message they receive and lack only the older feed. For the feed
@@ -798,7 +802,10 @@ has any thread view of its own.
 - At the moment of sharing the peers get the head. The entries written before stay local unless
   the owner ticks "with history", which sends them as a file (4.3). This is the safe default: a
   feed that was private when written does not become shared by one click.
-- After that, entries go out as they are written, except `private` ones.
+- After that, entries go out as they are written, except `private` ones. What a private entry
+  sets stays home too: the head an entry carries (rule 3) is the one the peers fold, without this
+  board's private entries, so a private summary or status never rides out with the next shared
+  entry (#549).
 
 ### 11.3 What holds an agent's entry back
 

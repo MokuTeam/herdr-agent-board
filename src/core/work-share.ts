@@ -5,13 +5,14 @@
 // copy, and the copies come out the same:
 //
 //   1. Entries are immutable and carry `n`, one more than the highest the writer had seen; a
-//      private entry, which no peer gets, the `n` of the entry it follows (#541).
+//      private entry, which no peer gets, the `n` of the entry it follows (#541); so does every
+//      entry of this board with nothing to send it, which is private for that (#548).
 //   2. A head field takes the value of the entry that is last in the order (n, at, author's peer
 //      id): foldShared below. Two boards with the same entries get the same head, whatever order the
 //      entries arrived in.
-//   3. Every entry carries its sender's head after it. A board whose own counter is more than one
-//      behind the entry's knows it missed entries: it writes an entry of its own that takes the
-//      sender's head fields (`entries missing here`), placed right after the sender's.
+//   3. Every entry carries its sender's head after it, folded without the sender's private
+//      entries (#549). A board whose own counter is more than one behind the entry's knows it
+//      missed entries: it writes an entry of its own that takes the sender's head fields (`entries missing here`), placed right after the sender's.
 //
 // What a peer may set (11.4): status, summary, what it waits on, the title, and an assignee that
 // is the peer itself (or one of its sessions), a third member of the team, nobody, or this board
@@ -53,8 +54,11 @@ export const authorPeer = (p: Party, me: string): string => (p.kind === 'peer' ?
 export const isAdoption = (e: Pick<ThreadEntry, 'type' | 'private' | 'author'>): boolean =>
   e.type === 'system' && e.private === true && e.author.kind === 'peer'
 
-/** A private entry this board wrote itself (#541): it shares its number with the entry it follows, and folds after it. */
-const ownPrivate = (e: Pick<ThreadEntry, 'private' | 'author'>): boolean =>
+/**
+ * A private entry this board wrote itself (#541): it shares its number with the entry it follows,
+ * folds after it, and no peer holds it, nor the head fields it set (#549).
+ */
+export const ownPrivate = (e: Pick<ThreadEntry, 'private' | 'author'>): boolean =>
   e.private === true && e.author.kind !== 'peer'
 
 /** Where an entry stands in this board's journal; the one being written (no row yet) is the last. */

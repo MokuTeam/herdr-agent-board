@@ -359,6 +359,83 @@ test('a private entry on a thread that is not shared keeps a number of its own',
   expect([made.entry.n, p.entry.n, next.entry.n]).toEqual([1, 2, 3])
 })
 
+test("a private entry's summary and status stay home: the head that goes out is the one the peers fold (#549)", () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const was = shared(getThread(b.db, id))
+  const mine = postEntry(a.ctx(owner, T0 + 20_000), getThread(a.db, id) as ThreadHead, {
+    status: 'waiting',
+    waitingOn: 'cleo in billing',
+    summary: 'held back for cleo',
+    private: true,
+  })
+  expect(getThread(a.db, id)).toMatchObject({ status: 'waiting', summary: 'held back for cleo' })
+  const toBen = postEntry(a.ctx(owner, T0 + 21_000), mine.head, { text: 'columns found' })
+  const out = outgoing(a.db, getThread(a.db, id) as ThreadHead, toBen.entry, a.me, r => r)
+  expect(out?.work.head).toMatchObject({ status: was?.status, summary: was?.summary })
+  expect(JSON.stringify(out)).not.toContain('cleo')
+  take(b, handOver(a, b, toBen.head, toBen.entry))
+  expect(getThread(b.db, id)).toMatchObject({ status: was?.status, summary: was?.summary, waitingOn: '' })
+  // anna still sees her own.
+  expect(getThread(a.db, id)).toMatchObject({ status: 'waiting', summary: 'held back for cleo' })
+})
+
+test('a peer that missed entries adopts a head without the private entries between them (#549)', () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  let head = getThread(a.db, id) as ThreadHead
+  // One entry ben never gets, then a private summary, then one he does: he adopts anna's head.
+  head = postEntry(a.ctx(owner, T0 + 20_000), head, { summary: 'mapping the columns' }).head
+  head = postEntry(a.ctx(owner, T0 + 21_000), head, { summary: 'only for anna', status: 'owner', private: true }).head
+  const last = postEntry(a.ctx(owner, T0 + 22_000), head, { text: 'the rows are in' })
+  take(b, handOver(a, b, last.head, last.entry))
+  expect(entriesOf(b.db, id).filter(e => e.text.includes('entries missing here'))).toHaveLength(1)
+  expect(getThread(b.db, id)).toMatchObject({ summary: 'mapping the columns', status: 'doing' })
+  expect(JSON.stringify(entriesOf(b.db, id))).not.toContain('only for anna')
+})
+
+test("a shared parent's line for its closed sub-threads stays home and leaves no gap (#548)", () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const parent = getThread(a.db, id) as ThreadHead
+  const kid = newThread(a.ctx(owner, T0 + 20_000), { lane: 'atlas', title: 'The 2019 sheet', parent })
+  postEntry(a.ctx(owner, T0 + 21_000), kid.head, { status: 'done' })
+  const line = entriesOf(a.db, id).find(e => e.closed !== undefined) as ThreadEntry
+  expect(line).toMatchObject({ type: 'system', private: true, n: parent.rev })
+  expect(line.out).toBeUndefined()
+  const toBen = postEntry(a.ctx(owner, T0 + 22_000), getThread(a.db, id) as ThreadHead, { text: 'next sheet' })
+  expect(toBen.entry.n).toBe(parent.rev + 1)
+  take(b, handOver(a, b, toBen.head, toBen.entry))
+  expect(entriesOf(b.db, id).filter(e => e.text.includes('entries missing here'))).toEqual([])
+  expect(entriesOf(b.db, id).some(e => e.closed !== undefined)).toBe(false)
+  expect(shared(getThread(b.db, id))).toEqual(shared(getThread(a.db, id)))
+})
+
+test("a parent that is not shared numbers its sub-threads' line as before, and a peer's plain reply is no private entry", () => {
+  const a = board(ANNA)
+  const owner: Party = { kind: 'owner' }
+  const parent = newThread(a.ctx(owner, T0), { lane: 'atlas', title: 'Local parent' }).head
+  const kid = newThread(a.ctx(owner, T0 + 1000), { lane: 'atlas', title: 'Local kid', parent })
+  postEntry(a.ctx(owner, T0 + 2000), kid.head, { status: 'done' })
+  const line = entriesOf(a.db, parent.id).find(e => e.closed !== undefined) as ThreadEntry
+  expect(line.n).toBe(parent.rev + 1)
+  expect(line.private).toBeUndefined()
+  // On a shared thread, a reply from a board without work is the peer's, next in the feed.
+  const { a: x, id } = sharedPair()
+  const rev = (getThread(x.db, id) as ThreadHead).rev
+  take(x, {
+    id: '00000000-0000-4000-8000-0000000000f9',
+    from: BEN,
+    text: 'ok',
+    at: T0 + 30_000,
+    ref: { id, title: 'Map the 2019 price columns' },
+    topic: `${BEN}/${id}`,
+  })
+  const reply = entriesOf(x.db, id).find(e => e.text === 'ok') as ThreadEntry
+  expect(reply).toMatchObject({ n: rev + 1, author: { kind: 'peer' } })
+  expect(reply.private).toBeUndefined()
+})
+
 test('a plain reply from a board without work is a note in the shared thread, and a topic that is no thread is not one', () => {
   const { a, id } = sharedPair()
   const r = take(a, {

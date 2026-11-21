@@ -35,6 +35,7 @@ import {
   localKey,
   missingText,
   type NameOf,
+  ownPrivate,
   peerSet,
   sharedOrder,
   wireHead,
@@ -314,8 +315,9 @@ export function outgoing(
 ): Outgoing | null {
   const target = targetOf(head)
   if (!target || entry.private || entry.author.kind === 'peer') return null
-  // The head as it was right after the entry: every entry up to it, in the shared order.
-  const all = sharedOrder(entriesOf(db, head.id), me)
+  // The head the peers hold right after the entry: every entry up to it, in the shared order, but
+  // none of this board's own private ones, whose fields stay here as their text does (#549).
+  const all = sharedOrder(entriesOf(db, head.id), me).filter(e => !ownPrivate(e))
   const upTo = all.slice(0, all.findIndex(e => e.id === entry.id) + 1)
   const after = foldShared(head, upTo.length ? upTo : [entry], me)
   const before = foldShared(head, upTo.slice(0, -1), me)

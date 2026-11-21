@@ -669,10 +669,17 @@ export function appendEntry(
   const row = tx.db.query(`SELECT ${HEAD_COLUMNS} FROM threads WHERE id = ?`).get(id) as HeadRow | null
   if (!row) throw new ThreadError('not_found', 'no such thread')
   const before = headOf(row)
-  // A private entry on a shared thread (#541) never reaches the peers: it takes the number of the
-  // entry it follows (as an adoption takes its sender's), since a number of its own would leave a
-  // hole the peers read as entries missing (4.3, rule 3).
-  const n = input.private && sharedOf(before) !== null ? before.rev : before.rev + 1
+  // An entry of this board that never reaches the peers of a shared thread: a private one (#541),
+  // or one written with nothing to send it (no `out`: the parent's "all N sub-threads closed",
+  // #548). It is private, and takes the number of the entry it follows (as an adoption takes its
+  // sender's), since a number of its own would leave a hole the peers read as entries missing
+  // (4.3, rule 3). A peer's entry is numbered by its board, or is next in this one's feed.
+  const home =
+    sharedOf(before) !== null &&
+    input.n === undefined &&
+    input.author.kind !== 'peer' &&
+    (input.private === true || input.out === undefined)
+  const n = home ? before.rev : before.rev + 1
   const draft: ThreadEntry = {
     id: input.id ?? randomUUID(),
     thread: id,
@@ -686,7 +693,7 @@ export function appendEntry(
     ...(input.links?.length && { links: input.links }),
     ...(input.files?.length && { files: input.files }),
     ...(input.replyTo && { replyTo: input.replyTo }),
-    ...(input.private && { private: true }),
+    ...((input.private || home) && { private: true }),
     ...(input.closed !== undefined && { closed: input.closed }),
     ...(input.out && { out: input.out }),
   }
