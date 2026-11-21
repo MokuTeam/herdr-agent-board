@@ -277,7 +277,7 @@ Facts only. The node holds no thresholds and takes no placement decision; it ref
 
 - `id` is the session id. The board already picks it before Claude exists and passes `--session-id` (`src/services/launch/launcher.ts:362-366`). The node treats `id` as the launch's identity: the same `id` again returns the launch it already has. A retry after a lost answer therefore cannot start a second session.
 - `source.kind: "repo"`: the node resolves the checkout under `node.workRoot` by the repository's address, clones it when missing, fetches, and hands its local launch pipeline a folder and the worktree request. `source.kind: "path"` with `cwd` is for a start pinned to a node by hand with a folder of that node.
-- Answers: 202 `{ launch }`; 409 `full`, `profile` (no such profile or not logged in), `repo` (cannot clone, or a checkout with changes where a clean one is needed), `bundle` (older than the request says it needs).
+- Answers: 202 `{ launch }`; 409 `full`, `profile` (no such profile or not logged in), `repo` (cannot clone, or a checkout with changes where a clean one is needed), `bundle` (older than the request says it needs). The master also turns a start away as `bundle` when the sync it runs right before the start (9.2) does not end well.
 - After that the launch is the node's own: its card rides in the node's payload, with trust dialogs and failures as today.
 
 ### 6.5 Streams, liveness, versions

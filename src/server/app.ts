@@ -1132,7 +1132,9 @@ export async function startServer({
     bundleSync = createBundleSync({
       cfg,
       links: nodeLinks,
-      profiles: () => shownProfiles(deps.profiles().list),
+      // Every profile: a start may run in a hidden one (a parent's), and its node is made current
+      // for it like any other (#584); the 5 minute hash leaves hidden ones out by itself.
+      profiles: () => deps.profiles().list,
       store: createDeviceStore(),
       log,
     })
@@ -1163,6 +1165,7 @@ export async function startServer({
       launches,
       items: board.items,
       ownStatus: () => ownStatus.answer(),
+      bundle: bundleSync,
       fillThresholds: (id, given) => {
         const r = editNodes(raw => fillThresholds(raw, id, given))
         if (!r.ok) log(`placer: the thresholds of ${id} were not written: ${r.error}`)

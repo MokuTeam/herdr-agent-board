@@ -11,11 +11,14 @@
 // - The decision, one at a time: each counts against its device at once (a reservation), so seven
 //   starts in a second do not all see the same room. A reservation lets go when the device's status
 //   counts the session, when the start fails, or after 180 s.
-// - The start. Here: the launch pipeline as without nodes. On a node: `POST /api/node/launch` through
-//   its link. `full`, `profile`, `repo` and `bundle` send it to the next device (that one left out,
-//   place() asked again); a lost answer is sent again with the same id, which the node answers with
-//   the launch it has; a node that drops before it acknowledged puts the start back in the queue. One
-//   it acknowledged is the node's and never starts elsewhere; its card here goes once the node shows it.
+// - The start. Here: the launch pipeline as without nodes. On a node: the node made current for the
+//   start's profile first (bundle-sync.ts syncIfBehind, 9.2; the card says "syncing the profile to"
+//   it meanwhile, and a node already current costs one small request), then `POST /api/node/launch`
+//   through its link. A sync that does not end well is the turn `bundle`. `full`, `profile`, `repo`
+//   and `bundle` send it to the next device (that one left out, place() asked again); a lost answer
+//   is sent again with the same id, which the node answers with the launch it has; a node that drops
+//   before it acknowledged puts the start back in the queue. One it acknowledged is the node's and
+//   never starts elsewhere; its card here goes once the node shows it.
 // - The queue (adapters/node-queue.ts): a start that waits is a launch in state `queued` with its
 //   blocker, kept on disk. Tried again when a device's payload moves (its status asked then), when this
 //   computer's awake sessions drop, and every 15 s while anything waits; an entry that cannot go does
@@ -59,6 +62,7 @@ import type { LaunchRequest } from '../launch/request.ts'
 import { type Launch, newLaunch } from '../launch/run.ts'
 import { type Clock, realClock } from '../tunnel.ts'
 import type { RemotePart } from './aggregate.ts'
+import type { BundleSync, SyncReport } from './bundle-sync.ts'
 import type { NodeLinks } from './links.ts'
 
 /** The queue is tried again this often while anything waits (8.3; BOARD_NODE_QUEUE_MS in tests). */
@@ -84,6 +88,11 @@ export interface PlacerOptions {
   /** Thresholds config.json does not set, written from a device's first status (config-file.ts editNodes). */
   fillThresholds?: (device: string, given: ReturnType<typeof defaultThresholds>) => void
   log(text: string): void
+  /**
+   * The profile bundle (bundle-sync.ts): a node is made current for a start's profile before the
+   * start goes to it (9.2). Absent: no sync, for tests of the decision alone.
+   */
+  bundle?: Pick<BundleSync, 'syncIfBehind'>
   queue?: NodeQueue
   clock?: Clock
   hostName?: string
@@ -143,6 +152,8 @@ export function createPlacer(o: PlacerOptions): Placer {
   const counting = new Map<string, 'asking' | 'counted'>()
   /** Per device, whether its memory gate is closed, and the status it was last worked out from. */
   const gates = new Map<string, { closed: boolean; at: number }>()
+  /** Sessions whose start waits on a profile sync: each counts against its device however long that takes. */
+  const syncing = new Set<string>()
   /** Devices whose missing thresholds were written in this process. */
   const filled = new Set<string>()
   let commit: Promise<string> | null = null
@@ -192,6 +203,7 @@ export function createPlacer(o: PlacerOptions): Placer {
   function heldReservations(now: number): Reservation[] {
     const local = new Set(o.items().map(i => i.session))
     const counted = new Set<string>()
+    for (const r of reservations) if (syncing.has(r.id)) r.at = now
     for (const r of reservations)
       if (r.device === LOCAL ? local.has(r.id) : counting.get(r.id) === 'counted') counted.add(r.id)
     const live = liveReservations(reservations, now, counted)
@@ -230,7 +242,6 @@ export function createPlacer(o: PlacerOptions): Placer {
     const devices: Record<string, DeviceState> = {}
     const own = await o.ownStatus().catch(() => null)
     for (const id of cfg.order) {
-      if (left.has(id)) continue
       const settings = cfg.devices[id]
       let status: NodeStatus | null
       let online: boolean
@@ -260,6 +271,9 @@ export function createPlacer(o: PlacerOptions): Placer {
         }
         placed.at = got.got
       }
+      // A device that turned this start away is left out, its status still noted above: go() asks it
+      // again once a status of it came after the turn.
+      if (left.has(id)) continue
       devices[id] = { status: placed, online, reserved: 0, gateClosed: gate.closed }
       // Revoked (#510): refused from the moment config.json says so, queued starts go on to others.
       if (settings?.revoked) devices[id].revoked = true
@@ -407,6 +421,30 @@ export function createPlacer(o: PlacerOptions): Placer {
     }
   }
 
+  /** Turned away by a device: the next one is tried, this one again only once its status moved. */
+  function turn(h: Held, device: string, error: NodeTurn): 'turned' {
+    const p = placeOf(h)
+    release(h.l.sessionGiven ?? '')
+    p.turned = [...(p.turned ?? []).filter(x => x.device !== device), { device, error }]
+    h.left.set(device, clock.now())
+    return 'turned'
+  }
+
+  /**
+   * What a sync that did not end well turns the start away as: a profile the node does not have is
+   * the turn `profile` (its door answers 404 `profile`), anything else `bundle`.
+   */
+  const turnOf = (r: SyncReport): NodeTurn => (r.why === 'node' && r.detail === 'profile' ? 'profile' : 'bundle')
+
+  /**
+   * A sync the link cut off (it is down now, the request reached no node, or found the node offline)
+   * is a lost answer, as in send() below, not the node's refusal: the start goes back to the queue.
+   */
+  const syncLost = (r: SyncReport, device: string): boolean =>
+    o.links.link(device)?.state().state !== 'online' ||
+    r.why === 'offline' ||
+    (r.why === 'node' && (r.detail === 'error' || r.detail === 'node-offline'))
+
   /** The start on a node: acknowledged, turned away (try the next device), or lost (back to the queue). */
   async function send(h: Held, device: string): Promise<'acked' | 'turned' | 'done'> {
     const session = h.l.sessionGiven ?? ''
@@ -414,6 +452,34 @@ export function createPlacer(o: PlacerOptions): Placer {
     p.device = device
     delete p.wait
     h.l.state = 'starting'
+    if (o.bundle) {
+      // The node made current for this profile first (9.2); the start waits as long as the sync
+      // takes, and two starts for one device and profile share one sync (syncIfBehind joins it).
+      h.l.step = 'syncing'
+      o.launches.changed()
+      syncing.add(session)
+      let r: SyncReport
+      try {
+        r = await o.bundle.syncIfBehind(device, h.l.profile)
+      } finally {
+        syncing.delete(session)
+      }
+      if (h.gone) return 'done'
+      if (!r.ok) {
+        // Not on its way to that device any more: the card says the board chooses again.
+        delete p.device
+        h.l.step = 'placing'
+        o.log(
+          `placer: ${h.l.name}: the profile ${h.l.profile} not synced to ${device}: ${r.why}${r.detail ? ` (${r.detail})` : ''}`,
+        )
+        if (!syncLost(r, device)) return turn(h, device, turnOf(r))
+        release(session)
+        toQueue(h, { device, kind: 'offline' })
+        return 'done'
+      }
+      // Counted from now on as a start just decided, until the node shows it.
+      for (const x of reservations) if (x.id === session) x.at = clock.now()
+    }
     h.l.step = h.source?.kind === 'repo' ? 'cloning' : 'placing'
     o.launches.changed()
     const body = JSON.stringify(bodyOf(h, device))
@@ -441,12 +507,7 @@ export function createPlacer(o: PlacerOptions): Placer {
         return 'acked'
       }
       const error = typeof answer?.error === 'string' ? answer.error : ''
-      if (res.status === 409 && (TURNS as readonly string[]).includes(error)) {
-        release(session)
-        p.turned = [...(p.turned ?? []).filter(x => x.device !== device), { device, error: error as NodeTurn }]
-        h.left.set(device, clock.now())
-        return 'turned'
-      }
+      if (res.status === 409 && (TURNS as readonly string[]).includes(error)) return turn(h, device, error as NodeTurn)
       // The node's own launch pipeline refused the start: that is its answer, not a lost one. A
       // token the node no longer takes, or its lockout, is a link that is down, not an answer.
       if (res.status >= 400 && res.status < 500 && res.status !== 401 && res.status !== 403 && res.status !== 429) {

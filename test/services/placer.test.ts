@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { serveBoard } from '../support/board-server.ts'
 import { nodePair, PAIR_ENV, type Pair } from '../support/node-pair.ts'
-import { root, type Sandbox, until } from '../support/sandbox.ts'
+import { root, type Sandbox, sandbox, until } from '../support/sandbox.ts'
 import { stateFolder } from '../support/tunnel-board.ts'
 
 const scratch: string[] = []
@@ -254,6 +254,70 @@ test('seven starts in a pushed repository end 3, 3 and 1 on server-1, server-2 a
   await settled(pair.master.url)
   assert.deepEqual([started(one.box).length, started(two.box).length, started(pair.master.box).length], [3, 3, 1])
 }, 90_000)
+
+test('a node that is behind gets the profile before the start, the card saying so; the next start sends no file (#584)', async () => {
+  const pair = await placing({ count: 1, nodes: { order: ['server-1', 'local'] } })
+  const node = pair.nodes[0] as Pair['nodes'][0]
+  // A skill the owner just added on this computer.
+  const skill = ['skills', 'atlas', 'SKILL.md']
+  const mine = join(pair.master.box.env.HOME ?? '', '.claude', ...skill)
+  mkdirSync(dirname(mine), { recursive: true })
+  writeFileSync(mine, 'the atlas skill')
+  // The node's answer to the bundle's first question is held: the start waits on the sync.
+  let release = (): void => {}
+  const held = new Promise<void>(resolve => {
+    release = resolve
+  })
+  node.proxy.intercept = async (method, path, forward) => {
+    if (method !== 'GET' || path !== '/api/node/bundle/default') return null
+    node.proxy.intercept = null
+    await held
+    return forward()
+  }
+  const id = await startAt(pair.master.url, pair.checkout, 'atlas 1')
+  const syncing = await launchWhere(pair.master.url, id, l => l?.step === 'syncing')
+  assert.deepEqual([syncing?.state, syncing?.place?.device], ['starting', 'server-1'])
+  assert.deepEqual(started(node.box), [])
+  release()
+  await until(() => started(node.box).length === 1, 20_000)
+  assert.equal(readFileSync(join(node.box.env.HOME ?? '', '.claude', ...skill), 'utf8'), 'the atlas skill')
+  const asked = node.proxy.requests
+  const commit = asked.indexOf('POST /api/node/bundle/default/commit')
+  assert.ok(commit >= 0 && commit < asked.indexOf('POST /api/node/launch'), JSON.stringify(asked))
+  // Current now: the next start asks once and sends nothing.
+  const before = asked.length
+  await startAt(pair.master.url, pair.checkout, 'atlas 2')
+  await until(() => started(node.box).length === 2, 20_000)
+  assert.deepEqual(
+    asked.slice(before).filter(r => r.includes('/api/node/bundle/')),
+    ['GET /api/node/bundle/default'],
+  )
+  await settled(pair.master.url)
+}, 60_000)
+
+test('Without nodes a start runs here as before: no placing or syncing step, no nodes folder (#584)', async () => {
+  const { checkout } = repos()
+  const box = await sandbox()
+  login(box)
+  box.state(startable())
+  const board = await serveBoard(box, { language: 'en', categories: LANES }, { ...PAIR_ENV, PATH })
+  board.proc.send('refresh')
+  await fresh(board.url)
+  const id = await startAt(board.url, checkout, 'atlas 1')
+  const steps = new Set<string>()
+  let l: Launch | undefined
+  for (const end = Date.now() + 15_000; Date.now() < end; await Bun.sleep(20)) {
+    l = (await launchesOf(board.url)).find(x => x.id === id)
+    if (l) steps.add(l.step)
+    if (!l || l.state === 'done' || l.state === 'failed') break
+  }
+  assert.equal(started(box).length, 1)
+  assert.equal(steps.has('syncing') || steps.has('placing'), false, [...steps].join(','))
+  assert.equal(l?.place, undefined)
+  assert.equal(existsSync(join(stateFolder(box), 'nodes')), false)
+  board.proc.kill()
+  await board.proc.exited
+}, 60_000)
 
 /** A start body as the master sends it to a node's door (6.4), with a folder of that node. */
 const nodeStart = (id: string, cwd: string) => ({
