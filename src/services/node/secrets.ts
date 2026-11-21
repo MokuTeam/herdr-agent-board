@@ -13,7 +13,7 @@
 // file that did not change is not written again. A value is never in an answer, a log line, the audit
 // or a record: names and paths only.
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { ensureFolder, fileSha, linkOnTheWay, removeFile, writeWhole } from '../../adapters/bundle-files.ts'
 import { isRecord } from '../../adapters/json-store.ts'
@@ -23,6 +23,7 @@ import { boardOwnsName, parseEnvFile } from '../../core/node-env.ts'
 import type { Profile } from '../../core/profiles.ts'
 import type { FileSink } from '../../core/secrets.ts'
 import type { Answer } from './bundle.ts'
+import type { NodeGit } from './git-access.ts'
 
 /** A secret value of the bundle, at most this long. */
 export const MAX_SECRET_CHARS = 64 * 1024
@@ -40,15 +41,23 @@ export interface NodeSecretsDeps {
   write(input: WriteInput): Promise<WriteResult>
   /** One line of the secrets' audit, names only (services/secrets.ts auditBundle). */
   audit(line: Record<string, unknown>): void
+  /** The GitHub logins a request carries (#609, services/node/git-access.ts); without it a node takes none. */
+  git?: Pick<NodeGit, 'logins'>
   log(text: string): void
 }
 
 export interface NodeSecrets {
   /**
-   * POST /api/node/bundle/<profile>/secrets: `{ env: { <name>: <value> }, files: [{ path, text }], keep: [<path>] }`;
-   * `keep`: files the master has and could not send this time, which are not taken out.
+   * POST /api/node/bundle/<profile>/secrets: `{ env: { <name>: <value> }, files: [{ path, text }], keep: [<path>],
+   * logins: [{ host, user, token }] }`; `keep`: files the master has and could not send this time, which
+   * are not taken out; `logins`: its GitHub logins (#609). `master`: the caller's id in masters.json.
    */
-  give(profile: string, body: unknown): Promise<Answer>
+  give(profile: string, body: unknown, master?: string): Promise<Answer>
+  /**
+   * A master leaves (#609): the variables and files its bundles gave, still as they gave them, taken
+   * out of every profile; names and paths in the answer.
+   */
+  leave(master: string): Promise<{ env: string[]; files: string[] }>
 }
 
 const PROFILE_ID = /^[A-Za-z0-9_][\w.-]{0,63}$/
@@ -66,6 +75,8 @@ const ONE_LINE = /^[^\r\n\u0000]*$/
 interface Given {
   env: string[]
   files: Record<string, string>
+  /** The master whose syncs gave them (masters.json's id, #609); absent in a record of before. */
+  master?: string
 }
 
 const SHA = /^[0-9a-f]{64}$/
@@ -76,7 +87,7 @@ function givenOf(raw: unknown): Given {
   const files: Record<string, string> = {}
   if (isRecord(raw.files))
     for (const [p, s] of Object.entries(raw.files)) if (typeof s === 'string' && SHA.test(s)) files[p] = s
-  return { env: words(raw.env), files }
+  return { env: words(raw.env), files, ...(typeof raw.master === 'string' && { master: raw.master }) }
 }
 
 /** A file sink the writer takes, made here for one write: never in config.json, never asked for. */
@@ -110,7 +121,7 @@ export function createNodeSecrets(deps: NodeSecretsDeps): NodeSecrets {
     }
   }
 
-  async function give(profile: Profile, body: unknown): Promise<Answer> {
+  async function give(profile: Profile, body: unknown, master: string | undefined): Promise<Answer> {
     const b = isRecord(body) ? body : {}
     const env = isRecord(b.env) ? b.env : {}
     const files = Array.isArray(b.files) ? b.files : []
@@ -227,10 +238,12 @@ export function createNodeSecrets(deps: NodeSecretsDeps): NodeSecrets {
         ...new Set([...Object.keys(values), ...had.env.filter(n => keep.has(n) && Object.hasOwn(there, n))]),
       ].sort(),
       files: Object.fromEntries(Object.entries(shas).sort(([a], [b]) => (a < b ? -1 : 1))),
+      ...((master ?? had.master) !== undefined && { master: master ?? had.master }),
     }
     const before = {
       env: [...had.env].sort(),
       files: Object.fromEntries(Object.entries(had.files).sort(([a], [b]) => (a < b ? -1 : 1))),
+      ...(had.master !== undefined && { master: had.master }),
     }
     if (JSON.stringify(now) !== JSON.stringify(before))
       writeWhole(recordFile(profile.id), `${JSON.stringify(now, null, 2)}\n`, 0o600)
@@ -259,20 +272,105 @@ export function createNodeSecrets(deps: NodeSecretsDeps): NodeSecrets {
         filesRemoved: gone.sort(),
         kept,
         refused,
+        ...(await loginsOf(b.logins, master)),
       },
     }
   }
 
+  /**
+   * The GitHub logins of the request (#609), when it carries any: hosts and accounts in the answer,
+   * never a token. A request of before, with none, is answered as it was.
+   */
+  async function loginsOf(raw: unknown, master: string | undefined): Promise<Record<string, unknown>> {
+    if (!Array.isArray(raw)) return {}
+    if (!deps.git)
+      return {
+        logins: [],
+        loginsTaken: [],
+        loginsKept: [],
+        loginsRefused: raw.map(l => (isRecord(l) ? String(l.host).slice(0, 256) : '?')),
+        gh: false,
+      }
+    const r = await deps.git.logins(raw, master)
+    return { logins: r.logins, loginsTaken: r.taken, loginsKept: r.kept, loginsRefused: r.refused, gh: r.gh }
+  }
+
+  /** A master leaves (#609): what its syncs gave each profile, still as they gave it, taken out. */
+  async function leave(master: string): Promise<{ env: string[]; files: string[] }> {
+    const folder = join(deps.dir, 'bundle-secrets')
+    let names: string[] = []
+    try {
+      names = readdirSync(folder).filter(n => n.endsWith('.json'))
+    } catch {}
+    const env: string[] = []
+    const files: string[] = []
+    for (const name of names) {
+      const id = name.slice(0, -'.json'.length)
+      if (!PROFILE_ID.test(id)) continue
+      const had = record(id)
+      // Another master's, by its id; one of before #609 knew a single master: this one.
+      if (had.master !== undefined && had.master !== master) continue
+      const envFolder = join(deps.dir, 'env')
+      let there: Record<string, string> = {}
+      try {
+        there = parseEnvFile(readFileSync(join(envFolder, `${id}.env`), 'utf8')).vars
+      } catch {}
+      const out = had.env.filter(n => Object.hasOwn(there, n))
+      if (out.length) {
+        const r = await deps.write({
+          sink: sinkFor(envFolder, `${id}.env`, 'env', {}),
+          params: {},
+          fields: [],
+          values: {},
+          remove: out,
+        })
+        if (r.ok) env.push(...out)
+        else {
+          // Still there: the record stays, and the next leave tries again.
+          deps.log(`node secrets ${id}: the variables could not be taken out`)
+          continue
+        }
+      }
+      const profile = deps.profiles().find(p => p.id === id)
+      for (const [path, wrote] of Object.entries(had.files)) {
+        if (!profile || bundlePath(path) === null || linkOnTheWay(profile.dir, path)) continue
+        const target = join(profile.dir, ...path.split('/'))
+        // Changed here since the bundle wrote it: the node's own now, left as it is.
+        if (fileSha(target) !== wrote) continue
+        removeFile(profile.dir, target)
+        files.push(path)
+      }
+      rmSync(recordFile(id), { force: true })
+    }
+    if (env.length || files.length) {
+      deps.audit({ op: 'bundle-left', master, removed: env, filesRemoved: files })
+      deps.log(
+        `node secrets: the master ${master} leaves; ${env.length} variable(s) and ${files.length} file(s) taken out`,
+      )
+    }
+    return { env: env.sort(), files: files.sort() }
+  }
+
   return {
-    give(id, body) {
+    give(id, body, master) {
       const profile = PROFILE_ID.test(id) ? deps.profiles().find(p => p.id === id && !p.hidden) : undefined
       if (!profile) return Promise.resolve({ status: 404, body: { error: 'profile' } })
       // One at a time: two syncs of one profile never write its env file over each other.
       const run = queue.then(() =>
-        give(profile, body).catch((): Answer => {
+        give(profile, body, master).catch((): Answer => {
           // Whatever threw may have held a value in its message: none of it goes out or into the log.
           deps.log(`node secrets ${profile.id}: failed`)
           return { status: 500, body: { error: 'server' } }
+        }),
+      )
+      queue = run
+      return run
+    },
+    leave(master) {
+      const run = queue.then(() =>
+        leave(master).catch(() => {
+          deps.log('node secrets: taking out what the master gave failed')
+          return { env: [], files: [] }
         }),
       )
       queue = run

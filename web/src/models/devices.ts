@@ -3,6 +3,7 @@
 // of a start placed on a device (8.3), and the words of a node-offline answer. A board without
 // `nodes` sends no `devices` and no item with a `device`: nothing here draws, the switch is not
 // there, and every filter passes what it passed before.
+import { type GitLack, gitLacks } from '../../../src/core/git-access.ts'
 import type { NodesPanelSettings } from '../../../src/core/nodes.ts'
 import type { BoardCategory, BoardDevice } from '../../../src/core/payload.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
@@ -220,6 +221,8 @@ export interface DeviceRow {
   giveSecrets: boolean
   /** The secrets its last syncs gave, and those to give by hand, in words (#604). */
   secrets: string[]
+  /** What an agent there cannot do for want of git, an identity, a GitHub login or gh, in words (#609). */
+  git: string[]
   values: Record<Threshold, number | null>
   /**
    * Claude's login there (#509): the node's profiles that are not logged in, and the command that
@@ -368,10 +371,19 @@ export function deviceRows(
       drain: d.drain,
       giveSecrets: d.giveSecrets !== false,
       secrets: secretLines(settings?.secrets?.[d.id], t),
+      git: d.kind === null ? [] : gitLacks(d.status).map(k => t(GIT_LACK[k], { device: d.title })),
       values: { maxSessions: d.maxSessions, minFreeMemMb: d.minFreeMemMb, maxLoad: d.maxLoad },
       login: loginOf(d, settings?.hosts),
     }
   })
+}
+
+/** What the row says a node lacks for git (#609): its status says, a node of an older board says nothing. */
+const GIT_LACK: Record<GitLack, string> = {
+  git: 'node.dev.noGit',
+  identity: 'node.dev.noIdentity',
+  login: 'node.dev.noLogin',
+  gh: 'node.dev.noGh',
 }
 
 /** The secrets of a device's last syncs (#604): those given, and those to give by hand. */

@@ -16,6 +16,7 @@ import { readFileSync, statSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 import { type ProfileRead, readProfile, type WalkedFile } from '../../adapters/bundle-files.ts'
+import type { MasterGit } from '../../adapters/git-access.ts'
 import type { DeviceStore } from '../../adapters/node-store.ts'
 import { ROOT } from '../../adapters/paths.ts'
 import {
@@ -28,6 +29,7 @@ import {
   nextVersion,
   type ReportEntry,
 } from '../../core/bundle.ts'
+import { type GitIdentity, isAccount, isHost, type NoLogin } from '../../core/git-access.ts'
 import { claudeStateFile } from '../../core/move.ts'
 import { type DeviceConfig, LOCAL, nodesConfig } from '../../core/nodes.ts'
 import { DEFAULT_PROFILE, type Profile } from '../../core/profiles.ts'
@@ -63,6 +65,12 @@ export interface SyncReport {
   /** The bundle's report (9.1): what travels, what stays and why. */
   lines: ReportEntry[]
   /**
+   * What the node did with the owner's git identity the manifest carries (#609): `set`, `same`,
+   * `kept` (its owner set another), `no-git`, `failed`. Absent from a node of an older board, and when
+   * no identity went.
+   */
+  identity?: string
+  /**
    * The secrets given with it (#604), names and paths only; absent when the device's owner gives
    * it none (`giveSecrets: false`), and then `lines` says what is to be given by hand.
    */
@@ -82,6 +90,14 @@ export interface SecretsGiven {
   refused: string[]
   /** The node's refusal of the whole request (an older node: `not found`). */
   error?: string
+  /** The GitHub logins the node holds from this board after it, and how (#609): hosts and accounts, never a token. */
+  logins?: { host: string; user: string; via: string }[]
+  /** Logins the node did not take: one of its own there, or gh or git failed. */
+  loginsKept?: { host: string; why: string }[]
+  /** Whether the node has gh: a login without it pushes, and opens no pull request. */
+  gh?: boolean
+  /** This board had no login to give: no gh here, or gh logged in to no host. */
+  noLogin?: NoLogin
 }
 
 export interface BundleSync {
@@ -109,6 +125,11 @@ export interface BundleSyncOptions {
   platform?: string
   /** One line of the secrets' audit, names only (services/secrets.ts auditBundle). */
   audit?(line: Record<string, unknown>): void
+  /**
+   * The owner's git identity, asked before each build, and his GitHub logins, asked for each secrets
+   * request (#609, adapters/git-access.ts masterGit). Without it a bundle carries neither, as before.
+   */
+  git?: MasterGit
   /** The board's own folder: a hook running a file in it is the board's (core/bundle.ts isBoardHook). */
   boardDir?: string
   hostName?: string
@@ -167,6 +188,9 @@ function entryOf(v: unknown): { version: BundleVersion | null; report: SyncRepor
   return { version, report, held }
 }
 
+/** What a node may say it did with the identity (services/node/git-access.ts IdentityTaken). */
+const IDENTITY_SAID: ReadonlySet<string> = new Set(['set', 'same', 'kept', 'no-git', 'failed'])
+
 class Late extends Error {}
 
 export function createBundleSync(o: BundleSyncOptions): BundleSync {
@@ -177,6 +201,12 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
   const clock = o.clock ?? realClock
   const requestMs = o.requestMs ?? SYNC_MS
   const running = new Map<string, Promise<SyncReport>>()
+  // The owner's global git identity as last asked (#609): undefined until then, and always without `git`.
+  let identity: GitIdentity | null | undefined
+  const askIdentity = async (): Promise<void> => {
+    if (!o.git) return
+    identity = await o.git.identity().catch(() => null)
+  }
 
   const devices = (): Record<string, DeviceConfig> => nodesConfig(o.cfg.nodes, host)?.devices ?? {}
   const profiles = (id: string): Record<string, unknown> => {
@@ -225,6 +255,7 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
       mcp: device.mcp,
       accept: device.accept,
       ...(programs && { programs }),
+      ...(identity !== undefined && { identity }),
     }
     const manifest = buildManifest(read.parts, { config: o.cfg, sinks: device.sinks }, ctx)
     const was = entryOf(profiles(device.id)[profile.id]).version
@@ -286,10 +317,19 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
      */
     const give = async (parts: ProfileRead, ctx: BundleContext, dir: string): Promise<SecretsGiven> => {
       const s = bundleSecrets(parts, ctx)
+      // The owner's GitHub logins (#609): the token of each host gh here is logged in to, or why none.
+      const git = o.git ? await o.git.logins().catch(() => ({ logins: [], none: 'no-login' as const })) : null
+      const logins = git?.logins ?? []
+      const noLogin = git?.none ? { noLogin: git.none } : {}
       // Nothing to give and nothing given before: no request (a node of an older board has no such route).
       const held = entryOf(profiles(deviceId)[profileId]).held
-      if (!Object.keys(s.env).length && !s.files.length && (!held || (!held.env.length && !held.files.length)))
-        return { given: [], files: [], kept: [], refused: [] }
+      if (
+        !Object.keys(s.env).length &&
+        !s.files.length &&
+        !logins.length &&
+        (!held || (!held.env.length && !held.files.length))
+      )
+        return { given: [], files: [], kept: [], refused: [], ...noLogin }
       const texts: { path: string; text: string }[] = []
       // Named and not sent this time (unreadable, too big, over the request's room): the node keeps its copy.
       const unread: string[] = []
@@ -308,17 +348,38 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
       const res = await ask(`${at}/secrets`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ env: s.env, files: texts, keep: unread }),
+        body: JSON.stringify({ env: s.env, files: texts, keep: unread, ...(logins.length && { logins }) }),
       })
       const b = res.body
       const words = (v: unknown): string[] => (Array.isArray(v) ? v.map(named) : [])
       if (res.status !== 200 || b.ok !== true)
-        return { given: [], files: [], kept: [], refused: unread, error: said(b.error ?? res.status) }
+        return { given: [], files: [], kept: [], refused: unread, error: said(b.error ?? res.status), ...noLogin }
       const written = words(b.written)
       const removed = words(b.removed)
       const filesWritten = words(b.filesWritten)
       const filesRemoved = words(b.filesRemoved)
-      if (written.length || removed.length || filesWritten.length || filesRemoved.length)
+      // What the node says of the logins: hosts and accounts, each checked, never a token.
+      const loginsTaken = words(b.loginsTaken).filter(isHost)
+      const loginsSaid = !logins.length
+        ? {}
+        : !Array.isArray(b.logins)
+          ? // A node of an older board took the request and none of the logins.
+            { logins: [], loginsKept: logins.map(l => ({ host: l.host, why: 'older' })), gh: false }
+          : {
+              logins: (Array.isArray(b.logins) ? b.logins.filter(isRecord) : [])
+                .filter(l => isHost(l.host) && isAccount(l.user))
+                .map(l => ({
+                  host: l.host as string,
+                  user: l.user as string,
+                  via: l.via === 'store' ? 'store' : 'gh',
+                })),
+              loginsKept: (Array.isArray(b.loginsKept) ? b.loginsKept.filter(isRecord) : []).map(k => ({
+                host: named(k.host),
+                why: said(k.why),
+              })),
+              gh: b.gh === true,
+            }
+      if (written.length || removed.length || filesWritten.length || filesRemoved.length || loginsTaken.length)
         o.audit?.({
           op: 'bundle-sent',
           device: deviceId,
@@ -327,6 +388,7 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
           removed,
           files: filesWritten,
           filesRemoved,
+          ...(loginsTaken.length && { logins: loginsTaken }),
         })
       const given = {
         given: words(b.env),
@@ -335,6 +397,8 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
           ? b.kept.filter(isRecord).map(k => ({ path: named(k.path), why: said(k.why) }))
           : [],
         refused: [...words(b.refused), ...unread],
+        ...loginsSaid,
+        ...noLogin,
       }
       const version = entryOf(profiles(deviceId)[profileId]).version
       if (version) save(deviceId, profileId, { version, held: { env: given.given, files: given.files } })
@@ -344,6 +408,10 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
       const status = link.view().status ?? (await link.status())
       const to = status?.platform
       if (!to) return not('offline')
+      // Asked once before the first build; after that each sync asks again for the next one and the
+      // 5 minute tick does too, so a start does not wait on git each time.
+      if (identity === undefined) await askIdentity()
+      else void askIdentity()
       const built = build(device, profile, to, status?.programs)
       if (!built.ok) return not('build', built.detail)
       const { manifest, files, version } = built
@@ -359,10 +427,19 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
       }
       const have = await ask(at)
       if (have.status !== 200) return { ...done, why: 'node', detail: said(have.body.error ?? have.status) }
-      if (have.body.hash === version.hash && have.body.seq === version.seq) {
+      const last = entryOf(profiles(deviceId)[profileId]).report
+      const lastOfThis = last?.ok && last.hash === version.hash ? last : null
+      // The identity of the last commit did not take (no git there yet, git failed): commit again, which
+      // sends no blob and writes nothing but tries the identity once more (#609).
+      const retry = lastOfThis?.identity === 'failed' || lastOfThis?.identity === 'no-git'
+      if (have.body.hash === version.hash && have.body.seq === version.seq && !retry) {
         // Current: what the node kept of this version, as its commit said.
-        const last = entryOf(profiles(deviceId)[profileId]).report
-        return finish({ ...done, ok: true, kept: last?.ok && last.hash === version.hash ? last.kept : [] })
+        return finish({
+          ...done,
+          ok: true,
+          kept: lastOfThis ? lastOfThis.kept : [],
+          ...(lastOfThis?.identity && { identity: lastOfThis.identity }),
+        })
       }
       const there = new Set(isRecord(have.body.files) ? Object.values(have.body.files) : [])
       const bySha = new Map(files.map(f => [f.sha256, f]))
@@ -431,10 +508,12 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
         ? res.body.kept.filter(isRecord).map(k => ({ path: said(k.path), why: said(k.why) }))
         : []
       const backup = typeof res.body.backup === 'string' ? res.body.backup : null
+      // What the node did with the identity (#609), a word of its own.
+      const identityDone = IDENTITY_SAID.has(String(res.body.git)) ? { identity: String(res.body.git) } : {}
       o.log(
         `node bundle ${deviceId}/${profileId}: bundle ${version.seq} applied, ${sent} file(s) sent, ${applied.length} changed, ${kept.length} kept`,
       )
-      return finish({ ...done, ok: true, sent, applied, kept, backup })
+      return finish({ ...done, ok: true, sent, applied, kept, backup, ...identityDone })
     } catch (err) {
       if (err instanceof Late || (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')))
         return finish(not('timeout'))
@@ -471,8 +550,15 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
     }
   }
 
-  /** Every 5 minutes, for each device online: each profile it has that this board has too, its hash. */
+  /**
+   * Every 5 minutes, for each device online: each profile it has that this board has too, its hash;
+   * the owner's identity asked first, when this board gives it (#609), so a change of it moves the hash.
+   */
   function tick(): void {
+    if (o.git) void askIdentity().finally(hashAll)
+    else hashAll()
+  }
+  function hashAll(): void {
     for (const device of Object.values(devices())) {
       if (!device.link) continue
       const link = o.links.link(device.id)

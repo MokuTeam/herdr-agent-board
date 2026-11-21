@@ -189,6 +189,8 @@ describe("a node gets the owner's answers, and the files a hook reads are said (
       files: ['mempalace-memory/config.json'],
       kept: [],
       refused: [],
+      // The pair's master has no gh (#609): said, and no login goes.
+      noLogin: 'no-gh',
     })
     expect(r.lines.some(l => l.name === 'TG_KEY')).toBe(false)
     // What a launch on the node reads (services/launch, test/services/node-env-launch.test.ts): its env file.

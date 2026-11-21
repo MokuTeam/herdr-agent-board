@@ -20,11 +20,18 @@ import { type BoardMessage, logged, serveBoard, unusedPort } from './board-serve
 import { type Child, type Sandbox, sandbox, until } from './sandbox.ts'
 import { stateFolder } from './tunnel-board.ts'
 
+/** A path no program is at: the pair's boards find no gh or git for #609 unless a test gives the fakes. */
+const NO_GIT_TOOL = join(process.cwd(), 'no-such-git-tool-here.exe')
+
 export const DEAD_MS = 1500
 export const STATUS_MS = 300
 export const PING_MS = 250
 export const PAIR_ENV = {
   BOARD_TEST_PACE: '0.02',
+  // No gh or git of this machine for the owner's identity and login (#609): a test that wants them
+  // gives the fakes (test/support/fake-git-bin.ts).
+  BOARD_GH_BIN_PATH: NO_GIT_TOOL,
+  BOARD_GIT_BIN_PATH: NO_GIT_TOOL,
   BOARD_NODE_DEAD_MS: String(DEAD_MS),
   BOARD_NODE_STATUS_MS: String(STATUS_MS),
   BOARD_EVENTS_PING_MS: String(PING_MS),
@@ -236,7 +243,7 @@ export async function nodeBoard(
  * `panes`: a node's fake herdr's panes by its id, `masterPanes` the master's (none unless given);
  * `nodeCfg`: more of a node's config by its id; `masterSetup`: done to the master's sandbox before
  * its board starts (a login written to its state folder, say), `nodeSetup` to a node's; `deviceCfg`: more of a device's entry in
- * the master's `nodes.devices` by its id.
+ * the master's `nodes.devices` by its id; `nodeEnv`: more of a node's env by its id.
  */
 export async function nodePair(
   o: {
@@ -253,6 +260,8 @@ export async function nodePair(
     nodesCfg?: Record<string, unknown>
     /** More of the master's env than the nodes'. */
     masterEnv?: Record<string, string>
+    /** More of a node's env than the master's, by its id. */
+    nodeEnv?: (id: string) => Record<string, string>
     nodeSetup?: (id: string, box: Sandbox) => void | Promise<void>
   } = {},
 ): Promise<Pair> {
@@ -265,7 +274,7 @@ export async function nodePair(
     ids.map(id =>
       nodeBoard(
         id,
-        env,
+        { ...env, ...o.nodeEnv?.(id) },
         panes && (box => panes(id, box)),
         nodeCfg && (box => nodeCfg(id, box)),
         nodeSetup && (box => nodeSetup(id, box)),

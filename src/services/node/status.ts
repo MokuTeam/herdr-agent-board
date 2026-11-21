@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path'
 import { archiveStamp, headCommit } from '../../adapters/git.ts'
 import { ROOT } from '../../adapters/paths.ts'
 import { type SysLoad, sysLoad } from '../../adapters/sysload.ts'
+import type { GitFacts } from '../../core/git-access.ts'
 import { CLAUDE_AGENT, launchAgents } from '../../core/launch/agents.ts'
 import { NODE_API } from '../../core/node-door.ts'
 import type { NodeConfig, NodeStatus } from '../../core/nodes.ts'
@@ -40,6 +41,11 @@ export interface StatusSources {
    * master's bundle runs a hook's program only where it is. No `programs` in the status without it.
    */
   programs?: () => readonly string[]
+  /**
+   * What the node has for git (#609, services/node/git-access.ts facts): an identity, the hosts with a
+   * login. Looked once per run and again after a secrets request. No `git` in the status without it.
+   */
+  git?: () => Promise<GitFacts>
   platform?: string
   arch?: string
   home?: string
@@ -108,7 +114,7 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
       if (!node) return null
       const items = src.items()
       const awake = items.filter(i => !i.sleeping)
-      const [load, sha] = await Promise.all([(src.load ?? sysLoad)(), commitOnce()])
+      const [load, sha, git] = await Promise.all([(src.load ?? sysLoad)(), commitOnce(), src.git?.()])
       return {
         api: NODE_API,
         id: node.id,
@@ -132,6 +138,7 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
           .map(p => ({ id: p.id, loggedIn: loggedIn(p.dir, platform, exists), bundle: src.bundle?.(p.id) ?? null })),
         agents: agentsOf(src.launch(), src.piFound ?? piOnPath),
         ...(src.programs && { programs: programsOnce(src.programs) }),
+        ...(git && { git }),
         at: (src.now ?? Date.now)(),
       }
     },

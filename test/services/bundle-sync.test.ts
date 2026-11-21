@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { MasterGit } from '../../src/adapters/git-access.ts'
 import type { Profile } from '../../src/core/profiles.ts'
 import type { Config } from '../../src/core/types.ts'
 import { createBundleSync, HASH_MS, SEND_AT_ONCE, SYNC_TOTAL_MS } from '../../src/services/nodes/bundle-sync.ts'
@@ -15,7 +16,13 @@ import type { Link } from '../../src/services/nodes/link.ts'
 function setup(
   state: 'online' | 'offline',
   answer?: (path: string, init?: RequestInit) => Response | Promise<Response>,
-  more: { skills?: number; requestMs?: number; programs?: string[]; device?: Record<string, unknown> } = {},
+  more: {
+    skills?: number
+    requestMs?: number
+    programs?: string[]
+    device?: Record<string, unknown>
+    git?: MasterGit
+  } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), 'bundle-sync-'))
   const home = join(root, 'home')
@@ -91,6 +98,7 @@ function setup(
     hostName: 'laptop',
     clock,
     ...(more.requestMs !== undefined && { requestMs: more.requestMs }),
+    ...(more.git && { git: more.git }),
   })
   return {
     sync,
@@ -494,6 +502,200 @@ describe('bundle sync', () => {
       expect(JSON.parse(bodies[0] ?? '{}').keep).toEqual(['mem/config.json'])
       expect(JSON.parse(bodies[0] ?? '{}').files).toEqual([])
       expect(r.secrets?.refused).toContain('mem/config.json')
+    })
+  })
+
+  describe("the owner's git identity and GitHub login (#609)", () => {
+    const CANARY = 'gho_canarySyncGitLogin0123456789'
+    const OWNER = { name: 'Owner Name', email: 'owner@example.com' }
+    /** The master's git: its identity, its logins, and how often each was asked. */
+    const git = (o: { identity?: typeof OWNER | null; none?: 'no-gh' | 'no-login'; hosts?: string[] } = {}) => {
+      const asked = { identity: 0, logins: 0 }
+      let identity = o.identity === undefined ? OWNER : o.identity
+      const master: MasterGit = {
+        identity: async () => {
+          asked.identity++
+          return identity
+        },
+        logins: async () => {
+          asked.logins++
+          if (o.none) return { logins: [], none: o.none }
+          return {
+            logins: (o.hosts ?? ['github.com']).map(host => ({ host, user: 'owner', token: `${CANARY}${host}` })),
+          }
+        },
+      }
+      return { master, asked, set: (v: typeof OWNER | null) => (identity = v) }
+    }
+    /** A node that takes what it is sent and says the logins it took. */
+    const node = (sent: Record<string, string[]>) => (path: string, init?: RequestInit) => {
+      const kind = path.endsWith('/secrets') ? 'secrets' : path.endsWith('/commit') ? 'commit' : null
+      if (kind) sent[kind] = [...(sent[kind] ?? []), String(init?.body ?? '')]
+      if (kind !== 'secrets') return taking(path)
+      const logins = (JSON.parse(String(init?.body)).logins ?? []) as { host: string; user: string }[]
+      return Response.json({
+        ok: true,
+        env: [],
+        written: [],
+        removed: [],
+        files: [],
+        filesWritten: [],
+        filesRemoved: [],
+        kept: [],
+        refused: [],
+        logins: logins.map(l => ({ host: l.host, user: l.user, via: 'gh' })),
+        loginsTaken: logins.map(l => l.host),
+        loginsKept: [],
+        loginsRefused: [],
+        gh: true,
+      })
+    }
+
+    test('the identity in the manifest committed and a report line, the login in the secrets request alone', async () => {
+      const sent: Record<string, string[]> = {}
+      const g = git()
+      const s = setup('online', node(sent), { git: g.master })
+      const r = await s.sync.syncIfBehind('server-1')
+      expect(r.ok).toBe(true)
+      expect(JSON.parse(sent.commit?.[0] ?? '{}').manifest.git).toEqual(OWNER)
+      expect(r.lines).toContainEqual({ kind: 'git', name: 'identity', verdict: 'sent', why: 'identity' })
+      expect(JSON.parse(sent.secrets?.[0] ?? '{}').logins).toEqual([
+        { host: 'github.com', user: 'owner', token: `${CANARY}github.com` },
+      ])
+      expect(s.asked[0]).toBe('/api/node/bundle/default/secrets')
+      expect(r.secrets).toEqual({
+        given: [],
+        files: [],
+        kept: [],
+        refused: [],
+        logins: [{ host: 'github.com', user: 'owner', via: 'gh' }],
+        loginsKept: [],
+        gh: true,
+      })
+      expect(s.audits).toEqual([
+        {
+          op: 'bundle-sent',
+          device: 'server-1',
+          profile: 'default',
+          names: [],
+          removed: [],
+          files: [],
+          filesRemoved: [],
+          logins: ['github.com'],
+        },
+      ])
+      // The token: in the secrets request and nowhere else.
+      expect(sent.commit?.join('')).not.toContain(CANARY)
+      for (const said of [JSON.stringify(s.record()), JSON.stringify(r), s.logs.join('\n'), JSON.stringify(s.audits)])
+        expect(said).not.toContain(CANARY)
+    })
+
+    test('two hosts go, each with its token', async () => {
+      const sent: Record<string, string[]> = {}
+      const s = setup('online', node(sent), { git: git({ hosts: ['github.com', 'ghe.example.com'] }).master })
+      const r = await s.sync.syncIfBehind('server-1')
+      expect(JSON.parse(sent.secrets?.[0] ?? '{}').logins.map((l: { host: string }) => l.host)).toEqual([
+        'github.com',
+        'ghe.example.com',
+      ])
+      expect(r.secrets?.logins?.map(l => l.host)).toEqual(['github.com', 'ghe.example.com'])
+    })
+
+    test('the switch off: no login asked or sent, the identity still goes', async () => {
+      const sent: Record<string, string[]> = {}
+      const g = git()
+      const s = setup('online', node(sent), { git: g.master, device: { giveSecrets: false } })
+      const r = await s.sync.syncIfBehind('server-1')
+      expect(r.ok).toBe(true)
+      expect(sent.secrets).toBeUndefined()
+      expect(g.asked.logins).toBe(0)
+      expect('secrets' in r).toBe(false)
+      expect(JSON.parse(sent.commit?.[0] ?? '{}').manifest.git).toEqual(OWNER)
+    })
+
+    test('no gh here, or no login: no request when nothing else goes, and the report says there was none', async () => {
+      for (const none of ['no-gh', 'no-login'] as const) {
+        const sent: Record<string, string[]> = {}
+        const s = setup('online', node(sent), { git: git({ none }).master })
+        const r = await s.sync.syncIfBehind('server-1')
+        expect(sent.secrets).toBeUndefined()
+        expect(r.secrets).toEqual({ given: [], files: [], kept: [], refused: [], noLogin: none })
+      }
+    })
+
+    test('no identity here: none in the manifest, a report line', async () => {
+      const sent: Record<string, string[]> = {}
+      const s = setup('online', node(sent), { git: git({ identity: null }).master })
+      const r = await s.sync.syncIfBehind('server-1')
+      expect('git' in JSON.parse(sent.commit?.[0] ?? '{}').manifest).toBe(false)
+      expect(r.lines).toContainEqual({ kind: 'git', name: 'identity', verdict: 'not-sent', why: 'no-identity' })
+    })
+
+    test('what the node did with the identity is the report; one that did not take is tried again by a commit with no blob', async () => {
+      const outcomes = ['failed', 'set']
+      let have: { seq: number; hash: string; files: Record<string, string> } = { seq: 0, hash: '', files: {} }
+      let commits = 0
+      const s = setup(
+        'online',
+        (path, init) => {
+          if (path.endsWith('/commit')) {
+            commits++
+            const body = JSON.parse(String(init?.body))
+            const files = Object.fromEntries(
+              (body.manifest.files as { path: string; sha256: string }[]).map(f => [f.path, f.sha256]),
+            )
+            have = { seq: body.seq, hash: body.hash, files }
+            return Response.json({ ok: true, applied: [], kept: [], backup: null, git: outcomes.shift() ?? 'same' })
+          }
+          if (path.includes('/blob/')) return Response.json({ ok: true })
+          if (path.endsWith('/secrets')) return Response.json({ error: 'not found' }, { status: 404 })
+          return Response.json(have)
+        },
+        { git: git({ none: 'no-login' }).master },
+      )
+      expect((await s.sync.syncIfBehind('server-1')).identity).toBe('failed')
+      const blobs = s.asked.filter(p => p.includes('/blob/')).length
+      expect((await s.sync.syncIfBehind('server-1')).identity).toBe('set')
+      expect(s.asked.filter(p => p.includes('/blob/')).length).toBe(blobs)
+      expect((await s.sync.syncIfBehind('server-1')).identity).toBe('set')
+      expect(commits).toBe(2)
+    })
+
+    test('a node of an older board takes the request and none of the logins: said', async () => {
+      const s = setup(
+        'online',
+        path =>
+          path.endsWith('/secrets')
+            ? Response.json({
+                ok: true,
+                env: [],
+                written: [],
+                removed: [],
+                files: [],
+                filesWritten: [],
+                filesRemoved: [],
+                kept: [],
+                refused: [],
+              })
+            : taking(path),
+        { git: git().master },
+      )
+      const r = await s.sync.syncIfBehind('server-1')
+      expect(r.secrets?.logins).toEqual([])
+      expect(r.secrets?.loginsKept).toEqual([{ host: 'github.com', why: 'older' }])
+    })
+
+    test("a change of the owner's identity moves the hash on the 5 minute tick, with no request", async () => {
+      const g = git()
+      const s = setup('online', taking, { git: g.master })
+      await s.sync.syncIfBehind('server-1')
+      const seq = (s.record() as { profiles: { default: { seq: number } } }).profiles.default.seq
+      const asked = s.asked.length
+      g.set({ name: 'Owner Renamed', email: OWNER.email })
+      s.timers[0]?.fn()
+      await Bun.sleep(20)
+      expect((s.record() as { profiles: { default: { seq: number } } }).profiles.default.seq).toBe(seq + 1)
+      expect(s.asked.length).toBe(asked)
     })
   })
 })

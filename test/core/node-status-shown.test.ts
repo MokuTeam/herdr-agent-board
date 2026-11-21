@@ -55,3 +55,18 @@ test('a figure past its rounding, null against a value, a login, a bundle, the c
     expect([more, statusShown(status(more)) === one]).toEqual([more, false])
   expect(statusShown(null)).toBe('')
 })
+
+test('its git facts (#609): a login or an identity coming moves the key; a status without them keys as before', () => {
+  const before = status({ programs: ['git', 'gh'], git: { identity: false, logins: [] } })
+  const key = statusShown(before)
+  for (const more of [
+    { git: { identity: true, logins: [] } },
+    { git: { identity: false, logins: [{ host: 'github.com', user: 'owner' }] } },
+    { programs: ['git'] },
+  ])
+    expect([
+      more,
+      statusShown(status({ programs: ['git', 'gh'], git: { identity: false, logins: [] }, ...more })) === key,
+    ]).toEqual([more, false])
+  expect(statusShown(status({ programs: ['git'] }))).toBe(statusShown(status()))
+})

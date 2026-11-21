@@ -70,6 +70,8 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.plan.tools':
       'herdr {herdr} or newer and Claude Code by their installers; Claude Code does not update itself on the node.',
     'node.plan.packages': 'Packages: {list}.',
+    'node.plan.noGh':
+      "gh is not installed: {os}'s own repositories have no gh this board can use (2.17 or later). Agents there can push but cannot open pull requests until it is installed.",
     'node.plan.untouched': 'Nothing of what runs here is changed: {list}.',
     'node.warn.listenUnknown': 'The board could not see what listens on this server (no ss).',
     'node.warn.packagesStay': 'Undo leaves the packages installed.',
@@ -232,6 +234,10 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       "Each sync also puts the keys of this computer's MCP servers, the secret variables of its settings and the secret files its hooks read on this device. Off: you give each one by hand, and those given before stay there.",
     'node.dev.secretsGiven': 'Secrets given: {names}',
     'node.dev.secretsToGive': 'Secrets to give by hand: {names}',
+    'node.dev.noGit': 'No git on {device}: agents there cannot commit or push',
+    'node.dev.noIdentity': 'No git identity on {device}: commits there are made as the machine',
+    'node.dev.noLogin': 'No GitHub login on {device}: agents there cannot push',
+    'node.dev.noGh': 'No gh on {device}: agents there can push but cannot open pull requests',
     'node.dev.maxSessions': 'Sessions at most',
     'node.dev.minFreeMemMb': 'Free memory, MB',
     'node.dev.maxLoad': 'Load per core',
@@ -432,6 +438,8 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.plan.tools':
       'herdr {herdr} или новее и Claude Code их установщиками; на узле Claude Code сам не обновляется.',
     'node.plan.packages': 'Пакеты: {list}.',
+    'node.plan.noGh':
+      'gh не ставится: в собственных репозиториях {os} нет подходящего gh (2.17 или новее). Агенты там пушат, но не могут открыть pull request, пока его не поставят.',
     'node.plan.untouched': 'Ничего из того, что здесь работает, не меняется: {list}.',
     'node.warn.listenUnknown': 'Доска не увидела, что слушает порты на этом сервере (нет ss).',
     'node.warn.packagesStay': 'Undo оставляет пакеты установленными.',
@@ -591,6 +599,10 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'Каждая синхронизация кладёт на это устройство ключи MCP-серверов этого компьютера, секретные переменные его настроек и секретные файлы, которые читают его хуки. Если выключить, каждый секрет вы даёте вручную, а уже переданные остаются там.',
     'node.dev.secretsGiven': 'Переданы секреты: {names}',
     'node.dev.secretsToGive': 'Секреты, которые нужно дать вручную: {names}',
+    'node.dev.noGit': 'На {device} нет git: агенты там не могут ни коммитить, ни пушить',
+    'node.dev.noIdentity': 'На {device} не задано имя для git: коммиты там идут от имени машины',
+    'node.dev.noLogin': 'На {device} нет входа в GitHub: агенты там не могут пушить',
+    'node.dev.noGh': 'На {device} нет gh: агенты там пушат, но не могут открыть pull request',
     'node.dev.maxSessions': 'Сессий не больше',
     'node.dev.minFreeMemMb': 'Свободной памяти, МБ',
     'node.dev.maxLoad': 'Нагрузка на ядро',

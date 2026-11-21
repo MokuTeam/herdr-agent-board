@@ -15,6 +15,7 @@ import { editNodes, editNodesAdding, loadConfig, saveFoundProfiles } from '../ad
 import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { archiveCommit, headCommit } from '../adapters/git.ts'
+import { gitTools, masterGit } from '../adapters/git-access.ts'
 import { workspaceList } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { createDeviceStore, createNodeStore, nodeDir, readLanesSeen, writeLanesSeen } from '../adapters/node-store.ts'
@@ -83,6 +84,7 @@ import { createJournal } from '../services/journal.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
 import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
+import { createNodeGit } from '../services/node/git-access.ts'
 import { createNodeLaunch } from '../services/node/launch.ts'
 import { createNodeSecrets } from '../services/node/secrets.ts'
 import { createNodeStatus } from '../services/node/status.ts'
@@ -1115,9 +1117,12 @@ export async function startServer({
     }
     if (nodeConfig(cfg.node) === null) return
     // The bundle its master sends (#506): files under the profile folders and `<state>/node/` only.
-    const nodeBundle = createNodeBundle(
-      nodeBundleDeps({ dir: nodeDir(), profiles: () => shownProfiles(deps.profiles().list), log }),
-    )
+    // The owner's git identity and GitHub login from its master (#609): git and gh found once here.
+    const nodeGit = createNodeGit({ dir: nodeDir(), tools: gitTools(), audit: auditBundle, log })
+    const nodeBundle = createNodeBundle({
+      ...nodeBundleDeps({ dir: nodeDir(), profiles: () => shownProfiles(deps.profiles().list), log }),
+      identity: (given, master) => nodeGit.identity(given, master),
+    })
     // The secrets a profile needs, when its master's owner lets this node have them (#604): through
     // the file sink's own writer into the env file and the profile folder.
     const nodeSecrets = createNodeSecrets({
@@ -1125,6 +1130,7 @@ export async function startServer({
       profiles: () => shownProfiles(deps.profiles().list),
       write: writeSink,
       audit: auditBundle,
+      git: nodeGit,
       log,
     })
     const status = createNodeStatus({
@@ -1136,7 +1142,8 @@ export async function startServer({
       version: PLUGIN_VERSION,
       bundle: nodeBundle.version,
       commit: runningCommit,
-      programs: () => programsOnPath(NODE_PROGRAMS),
+      programs: () => [...programsOnPath(NODE_PROGRAMS), ...nodeGit.programs()],
+      git: () => nodeGit.facts(),
     })
     // The plugin at the master's commit (#590): unpacked beside this one, installed, swapped in.
     // Then the board ends with 75 and run.ts, the pane's process, starts it again from the plugin's
@@ -1210,8 +1217,17 @@ export async function startServer({
             log(`node: the master ${master} leaves; ${slept} of ${results.length} sessions put to sleep`)
             refresh()
           }
-          nodeStore.forget(master)
-          return { slept, kept }
+          // What this master's bundles gave (#609): the secrets of #604, the GitHub login, the identity.
+          // Whatever comes of it, the master is forgotten: a revoke is not refused for it either.
+          try {
+            const [secretsOut, gitOut] = await Promise.all([
+              nodeSecrets.leave(master),
+              nodeGit.leave(master).catch(() => ({ identity: false, logins: [], failed: ['git'] })),
+            ])
+            return { slept, kept, takenOut: { ...secretsOut, ...gitOut } }
+          } finally {
+            nodeStore.forget(master)
+          }
         },
         update: nodeUpdate,
       }),
@@ -1323,6 +1339,8 @@ export async function startServer({
       log,
       // Which secrets went to which device (#604), names only, in the audit a given secret has.
       audit: auditBundle,
+      // The owner's git identity with every bundle, and his GitHub login with the secrets (#609).
+      git: masterGit(gitTools()),
     })
     // Requests for a node's card (#501): first in the route table, which the phones' listener and the
     // tunnel share, so they reach it after their own refusals. Without `nodes` the table is main's.

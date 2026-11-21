@@ -36,7 +36,14 @@ export interface NodeDoorSources {
    * `POST /api/node/leave` (#510, design 11.4): the node's awake sessions put to sleep when `sleep`,
    * then the master `master` forgotten (adapters/node-store.ts forget), which ends its streams.
    */
-  leave?(master: string, sleep: boolean): Promise<{ slept: number; kept: number }>
+  leave?(
+    master: string,
+    sleep: boolean,
+  ): Promise<{
+    slept: number
+    kept: number
+    takenOut?: { env: string[]; files: string[]; identity: boolean; logins: string[]; failed?: string[] }
+  }>
   /** `PUT /api/node/update/blob` and `POST /api/node/update` (#590, services/node/update.ts). */
   update?: Pick<NodeUpdate, 'blob' | 'update'>
 }
@@ -123,7 +130,7 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
         } catch {
           return json(400, { error: 'bundle' })
         }
-        return answer(await bundle.commit(ctx.params[0] ?? '', body))
+        return answer(await bundle.commit(ctx.params[0] ?? '', body, doorMaster(req)?.id))
       },
     },
     {
@@ -219,7 +226,7 @@ function secretsRoute(secrets: NodeSecrets): Route {
         return json(400, { error: 'secrets' })
       }
       try {
-        return answer(await secrets.give(ctx.params[0] ?? '', body))
+        return answer(await secrets.give(ctx.params[0] ?? '', body, doorMaster(req)?.id))
       } catch {
         return json(500, { error: 'server' })
       }

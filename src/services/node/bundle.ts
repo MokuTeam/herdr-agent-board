@@ -49,6 +49,7 @@ import {
   toRemove,
   withProfileDirFilled,
 } from '../../core/bundle.ts'
+import { type GitIdentity, identityOf } from '../../core/git-access.ts'
 import { claudeStateFile } from '../../core/move.ts'
 import type { Profile } from '../../core/profiles.ts'
 import { boardFiles } from '../../core/setup.ts'
@@ -90,6 +91,11 @@ export interface NodeBundleDeps {
   install(dir: string): { ok: boolean; error: string }
   /** The board's hooks of this copy are in the folder's settings.json already. */
   installed(dir: string): boolean
+  /**
+   * The owner's git identity a commit carries (#609, services/node/git-access.ts): set as this node's
+   * global one unless its owner set another. `master`: the caller's id in masters.json.
+   */
+  identity?(given: GitIdentity, master: string | undefined): Promise<string>
   now?: () => number
   log(text: string): void
 }
@@ -101,8 +107,8 @@ export interface NodeBundle {
   have(profile: string): Answer
   /** PUT /api/node/bundle/<profile>/blob/<sha256>. */
   putBlob(profile: string, sha: string, bytes: Uint8Array): Answer
-  /** POST /api/node/bundle/<profile>/commit, one at a time. */
-  commit(profile: string, body: unknown): Promise<Answer>
+  /** POST /api/node/bundle/<profile>/commit, one at a time; `master`: the caller's id in masters.json. */
+  commit(profile: string, body: unknown, master?: string): Promise<Answer>
 }
 
 /** A profile id that may name a file: letters, digits, `.`, `_` and `-`, not starting with a dot. */
@@ -323,6 +329,17 @@ export function createNodeBundle(deps: NodeBundleDeps): NodeBundle {
     return { status: 200, body: { ok: true, applied, removed: removes, kept, backup: backedUp ? folder : null } }
   }
 
+  /**
+   * After a commit that went through, the owner's git identity it carries (#609): the same manifest
+   * twice finds it the same and runs nothing more than a read. What came of it joins the answer.
+   */
+  async function withIdentity(a: Answer, body: unknown, master: string | undefined): Promise<Answer> {
+    if (a.status !== 200 || !deps.identity || !isRecord(body) || !isRecord(body.manifest)) return a
+    const git = isRecord(body.manifest.git) ? identityOf(body.manifest.git.name, body.manifest.git.email) : null
+    if (!git) return a
+    return { ...a, body: { ...a.body, git: await deps.identity(git, master) } }
+  }
+
   return {
     version(profile) {
       if (!PROFILE_ID.test(profile)) return null
@@ -342,14 +359,16 @@ export function createNodeBundle(deps: NodeBundleDeps): NodeBundle {
       blobs.put(sha, bytes)
       return { status: 200, body: { ok: true } }
     },
-    commit(id, body) {
+    commit(id, body, master) {
       const profile = profileOf(id)
       if (!profile) return Promise.resolve({ status: 404, body: { error: 'profile' } })
       const run = queue.then(() =>
-        apply(profile, body).catch((err): Answer => {
-          deps.log(`node bundle ${profile.id}: ${messageOf(err)}`)
-          return { status: 500, body: { error: 'server' } }
-        }),
+        apply(profile, body)
+          .then(a => withIdentity(a, body, master))
+          .catch((err): Answer => {
+            deps.log(`node bundle ${profile.id}: ${messageOf(err)}`)
+            return { status: 500, body: { error: 'server' } }
+          }),
       )
       queue = run
       return run

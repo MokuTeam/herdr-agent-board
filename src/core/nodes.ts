@@ -6,6 +6,7 @@
 // Roles are keys. A board without either key sees nothing of this anywhere; one board may hold both:
 //   "nodes": { "id": "laptop", "order": ["server-1", "local"], "devices": { "server-1": { ... } } }
 //   "node": { "id": "server-1", "port": 12430, "workRoot": "~/work" }
+import { type GitFacts, gitFactsOf } from './git-access.ts'
 import { DEVICE_ID, isDevice, LOCAL, parseNodeKey } from './node-key.ts'
 import { hasUnprintable } from './team.ts'
 
@@ -494,7 +495,8 @@ export function laneMayLeave(cfg: NodesConfig, lane: string): boolean {
 /**
  * The figures of a status the page shows, rounded as it shows them: the sessions, memory available
  * to the nearest 100 MB, the 5 minute load to one decimal, each profile's login and bundle, the
- * commit and version, the machine's size. Two statuses with the same key look the same, so one
+ * commit and version, the machine's size, and from a node that says them its git facts and programs
+ * (#609, the device's row words them). Two statuses with the same key look the same, so one
  * that comes every 30 s with the same key pushes the board to no page (#500). '' for none.
  */
 export function statusShown(s: NodeStatus | null): string {
@@ -511,6 +513,8 @@ export function statusShown(s: NodeStatus | null): string {
     s.version,
     s.memTotalMb,
     s.cpus,
+    // Only from a node that says them: a status without them keys as before.
+    ...(s.git ? [s.git.identity, s.git.logins.map(l => [l.host, l.user]), s.programs ?? null] : []),
   ])
 }
 
@@ -538,6 +542,8 @@ export interface NodeStatus {
   agents: string[]
   /** Which of core/bundle.ts NODE_PROGRAMS the node has (#603); absent from a node of an older board. */
   programs?: string[]
+  /** Its git identity and GitHub logins (#609, core/git-access.ts); absent from a node of an older board. */
+  git?: GitFacts
   at: number
 }
 
@@ -549,6 +555,12 @@ const bundleOf = (v: unknown): { seq: number; hash: string } | null =>
   isObject(v) && isCount(v.seq) && typeof v.hash === 'string' && /^[0-9a-f]{64}$/.test(v.hash)
     ? { seq: v.seq as number, hash: v.hash }
     : null
+
+/** A status's `git` (#609), checked; nothing for a node of an older board. */
+const gitOf = (v: unknown): { git?: GitFacts } => {
+  const git = gitFactsOf(v)
+  return git ? { git } : {}
+}
 
 /**
  * A node's status as its door answered it, or null when it is not one. The node's word, checked
@@ -606,6 +618,7 @@ export function nodeStatusOf(raw: unknown): NodeStatus | null {
     agents: [...(s.agents as string[])],
     ...(Array.isArray(s.programs) &&
       s.programs.every(p => typeof p === 'string') && { programs: [...(s.programs as string[])] }),
+    ...gitOf(s.git),
     at: s.at as number,
   }
 }

@@ -52,6 +52,26 @@ export const CLAUDE_INSTALLER = 'https://claude.ai/install.sh'
 /** What the packages tick installs with apt. */
 export const NODE_PACKAGES = ['git', 'curl', 'unzip', 'ca-certificates'] as const
 
+/**
+ * The systems whose own repositories have a gh this board can use (#609): 2.17 or later, for
+ * `gh auth token`. Checked in their package lists on 2026-11-21: Debian 12 (2.23) and 13 (2.46),
+ * Ubuntu 24.04 (2.45), 25.10 and 26.04 (2.46), universe. Ubuntu 22.04 has 2.4. No third-party repository.
+ */
+export const GH_PACKAGED: Readonly<Record<string, readonly string[]>> = {
+  debian: ['12', '13'],
+  ubuntu: ['24.04', '25.10', '26.04'],
+}
+
+/** Whether the system's own repositories have a gh this board can use. */
+export const ghPackaged = (os: { id: string; version: string }): boolean =>
+  GH_PACKAGED[os.id]?.includes(os.version) === true
+
+/** The packages the plan installs behind its tick: gh with them where the system has it (#609). */
+export const nodePackages = (os: { id: string; version: string }): string[] => [
+  ...NODE_PACKAGES,
+  ...(ghPackaged(os) ? ['gh'] : []),
+]
+
 const NOTE = 'Added by "Add a server"; its Undo removes it.'
 
 /** The ceiling's figures, in MB, and the scheduler's share. */

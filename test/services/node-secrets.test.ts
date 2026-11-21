@@ -212,3 +212,92 @@ describe('a node takes the secrets of a sync (#604)', () => {
     expect([later.body.removed, later.body.filesRemoved]).toEqual([['A_TOKEN'], ['mem/config.json']])
   })
 })
+
+describe('the GitHub login and leaving (#609)', () => {
+  test('the logins go to the node git service with the master; hosts and accounts in the answer, never the token', async () => {
+    const r = rig()
+    const given: { raw: unknown; master: string | undefined }[] = []
+    const secrets = createNodeSecrets({
+      dir: r.state,
+      profiles: () => [{ id: 'default', title: 'Default', dir: r.profile, color: 'gray', hidden: false }],
+      write: writeSink,
+      audit: () => {},
+      git: {
+        logins: async (raw, master) => {
+          given.push({ raw, master })
+          return {
+            logins: [{ host: 'github.com', user: 'owner', via: 'gh' }],
+            taken: ['github.com'],
+            kept: [],
+            refused: [],
+            gh: true,
+          }
+        },
+      },
+      log: () => {},
+    })
+    const res = await secrets.give(
+      'default',
+      { env: {}, files: [], logins: [{ host: 'github.com', user: 'owner', token: CANARY }] },
+      'm1',
+    )
+    expect(given).toEqual([{ raw: [{ host: 'github.com', user: 'owner', token: CANARY }], master: 'm1' }])
+    expect(res.body).toMatchObject({
+      logins: [{ host: 'github.com', user: 'owner', via: 'gh' }],
+      loginsTaken: ['github.com'],
+      loginsKept: [],
+      loginsRefused: [],
+      gh: true,
+    })
+    expect(JSON.stringify(res.body)).not.toContain(CANARY)
+  })
+
+  test('a node with no git service refuses the logins by host', async () => {
+    const r = rig()
+    const res = await r.give({ env: {}, files: [], logins: [{ host: 'github.com', user: 'owner', token: CANARY }] })
+    expect(res.body).toMatchObject({ logins: [], loginsRefused: ['github.com'], gh: false })
+  })
+
+  test("leaving: the master's variables and unchanged files taken out, a hand-given line and a changed file stay", async () => {
+    const r = rig()
+    await r.secrets.give(
+      'default',
+      {
+        env: { A_TOKEN: CANARY, B_TOKEN: 'b' },
+        files: [
+          { path: 'mem/config.json', text: '{"token":"x"}' },
+          { path: 'mem/other.json', text: '{"token":"y"}' },
+        ],
+      },
+      'm1',
+    )
+    writeFileSync(r.envFile, `${readFileSync(r.envFile, 'utf8')}HAND_GIVEN=keep-me\n`)
+    writeFileSync(join(r.profile, 'mem', 'other.json'), '{"token":"changed on the node"}')
+    expect(JSON.parse(readFileSync(join(r.state, 'bundle-secrets', 'default.json'), 'utf8')).master).toBe('m1')
+    const out = await r.secrets.leave('m1')
+    expect(out).toEqual({ env: ['A_TOKEN', 'B_TOKEN'], files: ['mem/config.json'] })
+    expect(r.env()).toEqual({ HAND_GIVEN: 'keep-me' })
+    expect(() => statSync(join(r.profile, 'mem', 'config.json'))).toThrow()
+    expect(readFileSync(join(r.profile, 'mem', 'other.json'), 'utf8')).toBe('{"token":"changed on the node"}')
+    expect(() => statSync(join(r.state, 'bundle-secrets', 'default.json'))).toThrow()
+    expect(r.audit.at(-1)).toEqual({
+      op: 'bundle-left',
+      master: 'm1',
+      removed: ['A_TOKEN', 'B_TOKEN'],
+      filesRemoved: ['mem/config.json'],
+    })
+    expect(JSON.stringify(r.audit) + r.logs.join('\n')).not.toContain(CANARY)
+  })
+
+  test("another master's leave takes out nothing; a record of before #609 (no master) is the one master's", async () => {
+    const r = rig()
+    await r.secrets.give('default', { env: { A_TOKEN: 'a' }, files: [] }, 'm1')
+    expect(await r.secrets.leave('m2')).toEqual({ env: [], files: [] })
+    expect(r.env()).toEqual({ A_TOKEN: 'a' })
+    // As #608 wrote it: no master.
+    const old = rig()
+    await old.give({ env: { A_TOKEN: 'a' }, files: [] })
+    expect(await old.secrets.leave('m2')).toEqual({ env: ['A_TOKEN'], files: [] })
+    expect(old.env()).toEqual({})
+  })
+})

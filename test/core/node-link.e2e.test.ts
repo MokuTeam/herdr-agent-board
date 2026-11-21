@@ -69,7 +69,8 @@ test.skipIf(!sh)(
     expect(run.result).toBe('rolled-back')
     expect(stepsOf(run)).toEqual(['check ok', 'user ok', 'packages ok', 'herdr fail'])
     const log = s.root.log().split('\n')
-    expect(log).toContain('apt-get install -y -q --no-install-recommends git curl unzip ca-certificates')
+    // Ubuntu 24.04, the fake root's system, has gh in its own repositories (#609).
+    expect(log).toContain('apt-get install -y -q --no-install-recommends git curl unzip ca-certificates gh')
     expect(s.root.etc()).toEqual(etc)
     expect(exists(s.root.path('/home/agent-board'))).toBe(false)
   },

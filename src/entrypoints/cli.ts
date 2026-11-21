@@ -1807,7 +1807,19 @@ async function nodeCmd(): Promise<void> {
         masters.length ? 'several masters: name the one to leave (`board node` lists them)' : 'no master to leave',
       )
     if (!store.forget(which)) throw new Error(`no master ${which}: \`board node\` lists them`)
-    return console.log(`ok · left master ${which}: its token no longer opens the door and its streams end`)
+    console.log(`ok · left master ${which}: its token no longer opens the door and its streams end`)
+    // What that master's bundles gave (#609): the secrets of #604, the GitHub login, the identity.
+    const out = await takeOutMaster(which)
+    const said = [
+      ...(out.env.length ? [`variables ${out.env.join(', ')}`] : []),
+      ...(out.files.length ? [`files ${out.files.join(', ')}`] : []),
+      ...(out.logins.length ? [`the GitHub login for ${out.logins.join(', ')}`] : []),
+      ...(out.identity ? ['the git identity'] : []),
+    ]
+    if (said.length) console.log(`taken out what it gave: ${said.join('; ')}`)
+    if (out.failed?.length)
+      console.log(`could not take out: ${out.failed.join(', ')} (\`board node leave\` again tries once more)`)
+    return
   }
   if (op !== 'status' || words.length > 0) throw new Error(usage)
   let on = false
@@ -1827,6 +1839,36 @@ async function nodeCmd(): Promise<void> {
     console.log(
       `master ${m.id} "${m.name}" · paired ${stamp(m.pairedAt)} · ${m.seenAt ? `seen ${stamp(m.seenAt)}` : 'not seen yet'}`,
     )
+}
+
+/**
+ * `board node leave` (#609, design 11.4): what the master's bundles gave this node, still as they gave
+ * it, taken out here as the running board's leave route does: the variables and secret files of #604,
+ * the GitHub login, the git identity.
+ */
+async function takeOutMaster(
+  master: string,
+): Promise<{ env: string[]; files: string[]; logins: string[]; identity: boolean; failed?: string[] }> {
+  const [{ nodeDir }, { writeSink }, { auditBundle }, { gitTools }, { createNodeGit }, { createNodeSecrets }] =
+    await Promise.all([
+      import('../adapters/node-store.ts'),
+      import('../adapters/secret-sinks.ts'),
+      import('../services/secrets.ts'),
+      import('../adapters/git-access.ts'),
+      import('../services/node/git-access.ts'),
+      import('../services/node/secrets.ts'),
+    ])
+  const log = (): void => {}
+  const git = createNodeGit({ dir: nodeDir(), tools: gitTools(), audit: auditBundle, log })
+  const secrets = createNodeSecrets({
+    dir: nodeDir(),
+    profiles: () => deps.profiles().list,
+    write: writeSink,
+    audit: auditBundle,
+    log,
+  })
+  const [s, g] = await Promise.all([secrets.leave(master), git.leave(master)])
+  return { ...s, ...g }
 }
 
 const NO_BOARD = 'the board does not run: open it first (herdr plugin action invoke agent-board.open)'
@@ -2123,6 +2165,27 @@ async function nodesSync(webPort: number, id: string, profile: string | undefine
     if (secrets.error) lines.push(`secrets not given: the node said ${String(secrets.error)}`)
     const refused = names(secrets.refused)
     if (refused.length) lines.push(`secrets the node did not take: ${refused.join(', ')}`)
+    // The GitHub login (#609): which host went, how the node took it, or why there was none to give.
+    for (const l of Array.isArray(secrets.logins) ? secrets.logins.filter(isRecord) : [])
+      lines.push(
+        `GitHub login given: ${String(l.host)} (${String(l.user)})${l.via === 'store' ? ", in git's own store: pushes work, pull requests need gh there" : ''}`,
+      )
+    for (const k of Array.isArray(secrets.loginsKept) ? secrets.loginsKept.filter(isRecord) : [])
+      lines.push(
+        k.why === 'not-owned' || k.why === 'changed' || k.why === 'unreadable'
+          ? `GitHub login not given: ${String(k.host)} has a login of the node's own`
+          : k.why === 'older'
+            ? `GitHub login not given: ${String(k.host)}, the node's board is older and takes none`
+            : k.why === 'timeout' || k.why === 'failed-recently'
+              ? `GitHub login not given: ${String(k.host)}, not tried this time (${String(k.why)})`
+              : `GitHub login not given: ${String(k.host)} (${String(k.why)} failed on the node)`,
+      )
+    if (secrets.noLogin)
+      lines.push(
+        secrets.noLogin === 'no-gh'
+          ? 'no GitHub login to give: gh is not on this computer'
+          : 'no GitHub login to give: gh here is logged in to no host',
+      )
     for (const k of Array.isArray(secrets.kept) ? secrets.kept.filter(isRecord) : [])
       lines.push(
         k.why === 'not-owned' || k.why === 'changed'
@@ -2132,6 +2195,15 @@ async function nodesSync(webPort: number, id: string, profile: string | undefine
   } else if (toGive.length) lines.push(`secrets to give by hand (this device is not given them): ${toGive.join(', ')}`)
   const went = new Set(secrets && !secrets.error ? [...names(secrets.given), ...names(secrets.files)] : [])
   for (const e of Array.isArray(r.lines) ? r.lines.filter(isRecord) : []) {
+    // The owner's git identity (#609): it goes with every bundle, or this computer has none.
+    if (e.kind === 'git') {
+      lines.push(
+        e.why === 'no-identity'
+          ? "no git identity to give: this computer has no global user.name and user.email, and the node's commits carry its own"
+          : identityLine(r.identity),
+      )
+      continue
+    }
     // Of what went as it is, only what the owner should know: a program the node may lack, an answer given.
     if (e.verdict === 'sent' && e.why !== 'program-unchecked' && e.why !== 'acknowledged') continue
     // A secret the node was given is said above, not as one to give.
@@ -2152,6 +2224,15 @@ async function nodesSync(webPort: number, id: string, profile: string | undefine
     lines.push(`kept on the node: ${String(k.path)} (${String(k.why)})`)
   console.log(lines.join('\n'))
   if (r.ok !== true) process.exitCode = 1
+}
+
+/** What `board nodes sync` says of the identity that went (#609), by what the node did with it. */
+function identityLine(done: unknown): string {
+  if (done === 'set' || done === 'same') return 'git identity given'
+  if (done === 'kept') return 'git identity not set on the node: its owner set another there, which stays'
+  if (done === 'no-git') return 'git identity not set: the node has no git'
+  if (done === 'failed') return 'git identity could not be set on the node: the next sync tries again'
+  return 'git identity sent'
 }
 
 /** One device of GET /api/nodes as `board nodes` prints it. */

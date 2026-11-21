@@ -23,6 +23,7 @@ import {
   CLAUDE_BIN,
   CLAUDE_INSTALLER,
   CONFIG_PATH,
+  ghPackaged,
   HERDR_BIN,
   HERDR_INSTALLER,
   HERDR_MIN,
@@ -39,9 +40,9 @@ import {
   NODE_COMMENT,
   NODE_ETC,
   NODE_HOME,
-  NODE_PACKAGES,
   NODE_RECORD,
   NODE_USER,
+  nodePackages,
   PLUGIN_COMMIT,
   PLUGIN_DIR,
   PLUGIN_STAMP,
@@ -757,15 +758,16 @@ function applySteps(f: NodeFacts, w: NodeWanted, waitS: number): NodeStep[] {
       record: [{ kind: 'linger' }],
     }),
   ]
+  const packages = nodePackages(f.os)
   if (w.packages)
     steps.push(
       step('packages', 'step', {
         skipIf: [
-          `[ "$(dpkg-query -W -f '\${Status}\\n' ${NODE_PACKAGES.join(' ')} 2>/dev/null | grep -c 'install ok installed')" = ${NODE_PACKAGES.length} ]`,
+          `[ "$(dpkg-query -W -f '\${Status}\\n' ${packages.join(' ')} 2>/dev/null | grep -c 'install ok installed')" = ${packages.length} ]`,
         ],
         commands: [
           'DEBIAN_FRONTEND=noninteractive apt-get update -q',
-          `DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends ${NODE_PACKAGES.join(' ')}`,
+          `DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends ${packages.join(' ')}`,
         ],
         timeoutS: 900,
       }),
@@ -983,7 +985,9 @@ export function nodePlan(
       ? { key: 'node.plan.bunCopy', params: { path: f.serverBun.path, version: f.serverBun.version } }
       : { key: 'node.plan.bunInstall', params: { version: BUN_VERSION } },
     { key: 'node.plan.tools', params: { herdr: HERDR_MIN } },
-    ...(w.packages ? [{ key: 'node.plan.packages', params: { list: NODE_PACKAGES.join(', ') } }] : []),
+    ...(w.packages ? [{ key: 'node.plan.packages', params: { list: nodePackages(f.os).join(', ') } }] : []),
+    // gh where the system's own repositories do not have it: not installed, and said (#609).
+    ...(w.packages && !ghPackaged(f.os) ? [{ key: 'node.plan.noGh', params: { os: f.os.pretty || f.os.id } }] : []),
   ]
   const warnings: Text[] = []
   if (f.listening === null) warnings.push({ key: 'node.warn.listenUnknown' })

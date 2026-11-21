@@ -3,7 +3,8 @@
 // reorder (hooks/useRowReorder.ts, as the lanes are) or moved with the up and down arrows on the
 // handle. Per device its link in words, bars of the sessions awake and the memory free against its
 // thresholds, its version (and on another version than this board's, Update, #590), the secrets its
-// syncs gave (#604), Pause, Drain and Give it the secrets, and the three thresholds as fields with the board's own
+// syncs gave (#604), what an agent there cannot do for want of git, an identity, a GitHub login or gh
+// (#609), Pause, Drain and Give it the secrets, and the three thresholds as fields with the board's own
 // figures as placeholders. Then the lanes that may leave this computer and what a start does when
 // every device is full. The devices' live state comes with the payload (`devices`); the section's
 // own keys and the board's figures from GET /api/nodes, asked at each opening and answered again
@@ -304,6 +305,13 @@ function DeviceRowView({ row, defaults, next, disabled, send, onMove, onUpdate }
             </button>
           )}
         </div>
+      )}
+      {row.git.length > 0 && (
+        <p className="sheet-meta devices-facts">
+          {row.git.map(s => (
+            <span key={s}>{s}</span>
+          ))}
+        </p>
       )}
       {row.login && (
         <div className="devices-login">

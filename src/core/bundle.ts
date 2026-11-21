@@ -8,6 +8,7 @@
 // services/nodes/bundle-sync.ts sends the bundle and services/node/bundle.ts applies it.
 
 import { createHash } from 'node:crypto'
+import { type GitIdentity, identityOf } from './git-access.ts'
 import { isBoardCommand, normPath } from './install-plan.ts'
 import { claudeCommand } from './launch/spawn-args.ts'
 import { pathsIn } from './portable.ts'
@@ -30,7 +31,7 @@ export interface BundleFile {
   mode: number
 }
 
-export type ReportKind = 'skill' | 'hook' | 'mcp' | 'env' | 'file' | 'launcher' | 'ack'
+export type ReportKind = 'skill' | 'hook' | 'mcp' | 'env' | 'file' | 'launcher' | 'ack' | 'git'
 export type Verdict = 'sent' | 'translated' | 'not-sent' | 'needs-secret' | 'bound'
 /** Why an entry got its verdict; doctor turns it into words. */
 export type ReportWhy =
@@ -43,6 +44,8 @@ export type ReportWhy =
   | 'secret-file' // a file beside a sent script that the script names and that holds a secret (detail: the script)
   | 'script-state' // a file beside a sent script that the script names and that holds none: maybe its own state (detail: the script)
   | 'acknowledged' // the owner's answer to a notice, from the profile's .claude.json (detail: what turns the notice on)
+  | 'identity' // the master's global git identity, which the node sets as its own unless its owner set another (#609)
+  | 'no-identity' // the master has no global git identity to give (#609)
   | 'script-missing' // it names a file of the profile folder the walk did not read (detail: the path)
   | 'local-path' // it names a path of this computer
   | 'windows-only' // PowerShell, cmd, a Windows script or program, for a node that is not Windows
@@ -112,6 +115,11 @@ export interface BundleManifest {
    * profile's .claude.json. Absent when there are none, so a bundle without them hashes as before.
    */
   acks?: string[]
+  /**
+   * The master's global git identity (#609): the node sets its own global one from it. Absent when
+   * the master has none, so a bundle without it hashes as before.
+   */
+  git?: GitIdentity
   /** Not part of the hash: accepting a difference changes nothing on the node. */
   report: ReportEntry[]
 }
@@ -140,6 +148,11 @@ export interface BundleContext {
    * (a node of an older board, or no status yet).
    */
   programs?: readonly string[]
+  /**
+   * The master's global git identity (#609), null when it has none; undefined when it was not looked
+   * up, and the bundle is then as before (no identity, no line).
+   */
+  identity?: GitIdentity | null
 }
 
 /** The launchers a node is expected to have (9.1). */
@@ -948,6 +961,14 @@ export function buildManifest(
     report.push({ kind: 'ack', name: k, verdict: 'sent', why: 'acknowledged', detail: ACKNOWLEDGMENTS[k] ?? '' })
   const mcp = classifyMcp(parts.mcpServers, ctx)
   const slice = boardSlice(board.config, board.sinks, ctx.accept)
+  // The owner's git identity, plain values, whatever the device's secrets switch says (#609).
+  const git = ctx.identity ?? undefined
+  if (ctx.identity !== undefined)
+    report.push(
+      git
+        ? { kind: 'git', name: 'identity', verdict: 'sent', why: 'identity' }
+        : { kind: 'git', name: 'identity', verdict: 'not-sent', why: 'no-identity' },
+    )
   return {
     format: BUNDLE_FORMAT,
     files: sentFiles,
@@ -956,6 +977,7 @@ export function buildManifest(
     mcp: mcp.mcp,
     board: slice.board,
     ...(acks.length > 0 && { acks }),
+    ...(git && { git: { name: git.name, email: git.email } }),
     report: [...accepted(report, ctx.accept), ...settings.report, ...mcp.report, ...slice.report],
   }
 }
@@ -1037,7 +1059,7 @@ export function canonical(value: unknown): string {
  * whatever order the files were walked in.
  */
 export function bundleHash(
-  m: Pick<BundleManifest, 'files' | 'settings' | 'hooks' | 'mcp' | 'board' | 'acks'> & { format?: number },
+  m: Pick<BundleManifest, 'files' | 'settings' | 'hooks' | 'mcp' | 'board' | 'acks' | 'git'> & { format?: number },
 ): string {
   const files = m.files.map(f => ({ path: f.path, sha256: f.sha256, mode: f.mode })).sort(byPath)
   const body = {
@@ -1049,6 +1071,7 @@ export function bundleHash(
     board: m.board,
     // Only when there are any: a bundle without them keeps the hash it had.
     ...(m.acks?.length ? { acks: [...m.acks].sort() } : {}),
+    ...(m.git ? { git: { name: m.git.name, email: m.git.email } } : {}),
   }
   return createHash('sha256').update(canonical(body)).digest('hex')
 }
@@ -1207,6 +1230,8 @@ export function manifestOf(raw: unknown): BundleManifest | null {
         ...new Set(raw.acks.filter((k): k is string => typeof k === 'string' && Object.hasOwn(ACKNOWLEDGMENTS, k))),
       ].sort()
     : []
+  // The owner's identity (#609): two plain values, checked; anything else of it is not taken.
+  const git = isRecord(raw.git) ? identityOf(raw.git.name, raw.git.email) : null
   return {
     format: BUNDLE_FORMAT,
     files,
@@ -1215,6 +1240,7 @@ export function manifestOf(raw: unknown): BundleManifest | null {
     mcp: clone(raw.mcp),
     board: clone(raw.board) as unknown as BoardSlice,
     ...(acks.length > 0 && { acks }),
+    ...(git && { git }),
     report: [],
   }
 }

@@ -654,3 +654,27 @@ describe('Update, on a node on another version (#590)', () => {
     expect(toasts).toEqual([])
   })
 })
+
+describe('what an agent on the device cannot do for git (#609)', () => {
+  const gitStatus = (programs: string[], identity: boolean, logins: { host: string; user: string }[]) =>
+    status('server-1', 1, { programs, git: { identity, logins } })
+  test('in plain words, English and Russian, by what its status says', () => {
+    const row = (s: ReturnType<typeof gitStatus>, tr = t) =>
+      deviceRows([device('server-1', { title: 'server-1', status: s })], NOW, tr)[0]?.git
+    expect(row(gitStatus(['git', 'gh'], false, []))).toEqual([
+      'No git identity on server-1: commits there are made as the machine',
+      'No GitHub login on server-1: agents there cannot push',
+    ])
+    expect(row(gitStatus(['git'], true, [{ host: 'github.com', user: 'owner' }]))).toEqual([
+      'No gh on server-1: agents there can push but cannot open pull requests',
+    ])
+    expect(row(gitStatus(['bash'], false, []), translator('ru'))).toEqual([
+      'На server-1 нет git: агенты там не могут ни коммитить, ни пушить',
+    ])
+    expect(row(gitStatus(['git', 'gh'], true, [{ host: 'github.com', user: 'owner' }]))).toEqual([])
+  })
+  test('a node of an older board, this computer: nothing said', () => {
+    expect(deviceRows([device('server-1', { status: status('server-1', 1) })], NOW, t)[0]?.git).toEqual([])
+    expect(deviceRows([device('local', { status: gitStatus(['bash'], false, []) })], NOW, t)[0]?.git).toEqual([])
+  })
+})
