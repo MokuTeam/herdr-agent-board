@@ -277,7 +277,7 @@ thread, and the copies have to come out the same. Three rules do that:
    on its board takes the `n` of the entry it follows instead, so the numbers the peers see have
    no holes that rule 3 would read as missed entries: a private one (#541), and one the board
    writes with nothing to send it, such as a shared parent's "all N sub-threads closed", which is
-   private for that reason (#548). A re-import's change on a shared thread (13.1) is not one of
+   private for that reason (#548), or one written on a peer's thread whose sharing ended (#569). A re-import's change on a shared thread (13.1) is not one of
    them: it goes out like any other entry (#557). An entry held for the owner takes its number when it is
    written, before anyone knows whether it goes out: one the owner discards, or one the hub
    refuses for good, leaves a hole the peers read as an entry missing, which it is.
@@ -823,11 +823,16 @@ has any thread view of its own.
   scope the share comes with (a pair, the team, a channel) replaces the ended one, the share's
   fields set its head, and the entries written while the thread was not shared stay on the
   sharer's board, as the ones before a first share do, with no "entries missing" line for them.
-  Only the board that shared the thread shares it again; a share from anyone else on a copy it
-  holds is dropped (#569). A board that keeps shared threads but predates this says `work`
-  without `work-reshare` and would drop such a share, so the sharer refuses to share again with a
-  peer of that kind who held the thread, and names them; a board without `work` reads the share
-  as a topic's line, as before.
+  What the peer wrote on its copy while the sharing was over stays on the peer's board the same
+  way: such an entry is private and takes the number of the entry it follows (rule 1), so it
+  never outranks the share or what the sharer writes after it. A share from the sharer renews the
+  scope also when the peer never got the unshare (one that could not go out before the share
+  did), whatever the new scope is. Only the board that shared the thread shares it again; a share
+  from anyone else on a copy it holds is dropped (#569). A board that keeps shared threads but
+  predates this says `work` without `work-reshare` and would drop such a share, so the sharer
+  refuses to share again with a peer of that kind who held the thread in the sharing before, and
+  names them (after a team sharing, every member on the roster now counts as one who held it); a
+  board without `work` reads the share as a topic's line, as before.
 
 ### 11.3 What holds an agent's entry back
 
@@ -846,7 +851,8 @@ change to make, and it is the owner's to decide (16).
 ### 11.4 What a board does with a peer's entry
 
 - It accepts `work` only on a thread it knows as shared with that peer, from a member of the
-  thread's scope. Anything else is dropped as a bad frame, like any unknown field today.
+  thread's scope. Anything else is dropped as a bad frame, like any unknown field today. The one
+  exception is a share from the board that shared the thread: it renews the scope (11.2, #569).
 - It validates every field against the limits of 3.2 and 3.3 and stores the entry with the peer
   as its author.
 - A peer may write entries and change the status and the summary. A peer may not assign one of

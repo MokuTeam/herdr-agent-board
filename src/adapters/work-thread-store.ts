@@ -24,6 +24,7 @@ import {
   type Proposed,
   type SharedScope,
   sharedOf,
+  sharingOf,
   THREAD_KEY,
   type ThreadEntry,
   type ThreadFile,
@@ -675,8 +676,11 @@ export function appendEntry(
   // sender's), since a number of its own would leave a hole the peers read as entries missing
   // (4.3, rule 3). A peer's entry is numbered by its board, or is next in this one's feed. A
   // caller whose entry is meant to go out sets `out` (postEntry does).
+  // A peer's thread whose sharing ended counts too (#569): what this board writes there stays home
+  // if its sharer shares it again, so a number of its own would outrank the share.
+  const was = sharingOf(before)
   const home =
-    sharedOf(before) !== null &&
+    (sharedOf(before) !== null || (was?.ended !== undefined && was.by !== 'me')) &&
     input.n === undefined &&
     input.author.kind !== 'peer' &&
     (input.private === true || input.out === undefined)
