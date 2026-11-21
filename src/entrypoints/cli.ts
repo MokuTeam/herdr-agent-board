@@ -1034,7 +1034,7 @@ async function main(): Promise<void> {
       if (!text) throw new Error('usage: board doing <text>')
       // Back at work: whatever it waited for has arrived, whatever it asked is settled.
       writeCard(s.key, { doing: text, wait: '', waitSince: '', ask: '', askSince: '', result: '', by: 'agent' })
-      ended = endWatch(s)
+      ended = await endWatch(s)
       break
     case 'wait': {
       // With watches on (#486), --probe before a `--` makes a watch (entrypoints/watch-cli.ts).
@@ -1054,13 +1054,13 @@ async function main(): Promise<void> {
             now,
             setWait: wait => writeCard(s.key, { wait, waitSince: now, by: 'agent' }),
             note: schedulerNote,
-            live: liveKey,
+            alsoEnd: await takenOver(s),
           }),
         )
       }
       if (!text) throw new Error('usage: board wait <text>')
       writeCard(s.key, { wait: text, waitSince: now, by: 'agent' })
-      ended = endWatch(s)
+      ended = await endWatch(s)
       // Watches off (#486): --probe is words of the text, as before; said only where it was given.
       if (!watchesConfig(cfg.watches) && flagWords.includes('--probe'))
         ended = ' · note: watches are off in config.json, so --probe is part of the wait text and nothing will check it'
@@ -1073,11 +1073,11 @@ async function main(): Promise<void> {
       break
     case 'done':
       writeCard(s.key, { doing: '', wait: '', waitSince: '', ask: '', askSince: '', result: text, by: 'agent' })
-      ended = endWatch(s)
+      ended = await endWatch(s)
       break
     case 'clear':
       writeCard(s.key, { doing: '', wait: '', waitSince: '', ask: '', askSince: '', result: '' })
-      ended = endWatch(s)
+      ended = await endWatch(s)
       break
     case 'favorite': {
       const off = words[0]?.toLowerCase()
@@ -1154,7 +1154,7 @@ async function main(): Promise<void> {
       if (words[0]?.toLowerCase() !== 'all') throw new Error('usage: board unschedule <id|all>')
       const mine = listEntries().filter(e => e.key === s.key)
       for (const e of mine) removeEntry(e.id)
-      const n = mine.length + dropHeld(s.key).length + endWatches(s.key, byPane(s)).length
+      const n = mine.length + dropHeld(s.key).length + endWatches(s.key, await takenOver(s)).length
       return console.log(`ok · removed ${n} ${n === 1 ? 'entry' : 'entries'}`)
     }
     default:
@@ -1165,22 +1165,27 @@ async function main(): Promise<void> {
   console.log(`ok · ${line(s.key, s.cwd)}${extra}${ended}`)
 }
 
-/** A key that is a live Claude session on this computer (#486: a watch's session before a /clear is not). */
-const liveKey = (key: string): boolean => {
+/**
+ * Watches the session before a /clear left in this session's pane, which the scheduler would follow
+ * into this one (#486, services/watches.ts takenOver). herdr is asked only when a watch of another
+ * key names this pane; not known, none.
+ */
+async function takenOver(s: Session): Promise<string[]> {
+  if (!watchesConfig(cfg.watches) || !s.pane) return []
+  const there = listWatches().filter(w => w.key !== s.key && w.pane === s.pane)
+  if (!there.length) return []
   try {
-    return liveSessions().has(key)
+    const watches = await import('../services/watches.ts')
+    return watches.takenOver(s, there, await collect(deps), deps)
   } catch {
-    // Not known: kept, as a live session's would be.
-    return true
+    return []
   }
 }
-/** The session's pane, for ending what a session before a /clear left in it (schedule-store.ts endWatches). */
-const byPane = (s: Session) => (s.pane ? { pane: s.pane, live: liveKey } : undefined)
 
 /** Ends the session's watch while watches are on (#486); the words its line gets for that. */
-function endWatch(s: Session): string {
+async function endWatch(s: Session): Promise<string> {
   if (!watchesConfig(cfg.watches)) return ''
-  const gone = endWatches(s.key, byPane(s))
+  const gone = endWatches(s.key, await takenOver(s))
   return gone.length ? ` · watch ${gone.map(w => w.id).join(', ')} ended` : ''
 }
 

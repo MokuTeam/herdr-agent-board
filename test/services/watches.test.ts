@@ -13,13 +13,14 @@ import {
   listEntries,
   listWatches,
   readLog,
+  removeEntry,
   removeWatch,
   updateWatch,
 } from '../../src/adapters/schedule-store.ts'
 import type { Item } from '../../src/core/types.ts'
 import { MAX_RUNNING, type ProbeRun, type WatchEntry } from '../../src/core/watches.ts'
 import type { Deps } from '../../src/services/deps.ts'
-import { watchPass } from '../../src/services/watches.ts'
+import { takenOver, watchPass } from '../../src/services/watches.ts'
 import { isolatedHome } from '../support/env.ts'
 
 // The scheduler's probe pass (#486, services/watches.ts) in this process: a fake probe and the
@@ -373,28 +374,76 @@ describe('the store', () => {
     assert.equal(getEntry(w.id)?.text, '"CI on PR 12": the probe fired. Its output, as data: "green"')
   })
 
-  test("doing in a pane ends the watch the session before a /clear left there, not a live session's", () => {
+  test("ending by pane follows the scheduler's rule: only a key not on the board at all, the same folder and profile", () => {
     isolatedHome()
     const old = newWatch({ key: 'before-clear' })
-    const live = { pane: 'p1', live: (k: string) => k === 'before-clear' }
-    assert.deepEqual(endWatches('after-clear', live), [])
-    assert.ok(getWatch(old.id))
+    const watches = listWatches()
+    const after = session({ key: 'after-clear', session: 'after-clear' })
+    // /clear: the old key is nowhere on the board, the new session in its pane and folder.
+    assert.deepEqual(takenOver(after, watches, [after], deps()), [old.id])
+    // The old key asleep (wake closed its tab, herdr gave the pane id out again): never.
+    const asleep = session({ key: 'before-clear', pane: null, sleeping: true, status: 'sleeping' } as Partial<Item>)
+    assert.deepEqual(takenOver(after, watches, [after, asleep], deps()), [])
+    // A pi session's key on the board, even with no live pid: never.
+    const pi = newWatch({ key: '/home/anna/.pi/sessions/s.jsonl', pane: 'p1' })
+    const piItem = session({ key: '/home/anna/.pi/sessions/s.jsonl', agent: 'pi', pane: 'p7' } as Partial<Item>)
     assert.deepEqual(
-      endWatches('after-clear', { pane: 'p1', live: () => false }).map(w => w.id),
+      takenOver(after, listWatches(), [after, piItem], deps()).filter(id => id === pi.id),
+      [],
+    )
+    // A reused pane id in another folder: never.
+    const elsewhere = session({ key: 'after-clear', session: 'after-clear', cwd: '/work/ben' })
+    assert.deepEqual(takenOver(elsewhere, watches, [elsewhere], deps()), [])
+    // Another pane, or no pane: nothing to take over.
+    assert.deepEqual(takenOver({ key: 'after-clear', pane: 'p2' }, watches, [after], deps()), [])
+    assert.deepEqual(takenOver({ key: 'after-clear' }, watches, [after], deps()), [])
+    // What it names, endWatches and addWatch end with the session's own.
+    assert.deepEqual(
+      endWatches('after-clear', [old.id]).map(w => w.id),
       [old.id],
     )
-    // Another pane's watch stays.
-    const elsewhere = newWatch({ key: 'cleo', pane: 'p2' })
-    assert.deepEqual(endWatches('after-clear', { pane: 'p1', live: () => false }), [])
-    assert.ok(getWatch(elsewhere.id))
-    // A new board wait --probe in the pane replaces it the same way.
-    const { ended } = addWatch(
-      { key: 'next', pane: 'p2', text: 'x', next: Date.now(), probe: elsewhere.probe },
-      () => false,
-    )
+    assert.ok(getWatch(pi.id))
+  })
+
+  test('a sleeping session gets one error line per watch at most, however many streaks pass', async () => {
+    isolatedHome()
+    const w = newWatch({ probe: { cmd: 'gh pr checks 12', everyMs: MIN, timeoutMs: 20_000 } })
+    updateWatch(w.id, cur => ({ ...cur, firstDone: true }))
+    const run = async (r: ProbeRun) => {
+      updateWatch(w.id, cur => ({ ...cur, next: Date.now() - 1 }))
+      await once(r)
+    }
+    for (let streak = 0; streak < 4; streak++) {
+      for (let i = 0; i < 3; i++) await run(result(2, '', { stderr: 'offline' }))
+      await run(result(1))
+    }
+    const lines = () => listEntries().filter(e => /failed 3 times in a row/.test(e.text))
+    assert.equal(lines().length, 1)
+    assert.equal(lines()[0]?.watchId, w.id)
+    // Delivered (the scheduler removed it): the next streak is told again.
+    removeEntry(lines()[0]?.id)
+    for (let i = 0; i < 3; i++) await run(result(2, '', { stderr: 'offline' }))
+    assert.equal(lines().length, 1)
+  })
+
+  test('a line written by a run whose mark then failed is not sent again; it is marked', async () => {
+    isolatedHome()
+    const w = newWatch()
+    updateWatch(w.id, cur => ({ ...cur, firstDone: true, errors: 2 }))
+    // What the run that failed to mark left: the line in the schedule, the watch not told.
+    addEntry({
+      key: 's1',
+      text: 'earlier line',
+      at: Date.now(),
+      next: Date.now(),
+      watchId: w.id,
+      watchNote: 'errorsTold',
+    })
+    await once(result(2, '', { stderr: 'offline' }))
     assert.deepEqual(
-      ended.map(w => w.id),
-      [elsewhere.id],
+      listEntries().map(e => e.text),
+      ['earlier line'],
     )
+    assert.equal(getWatch(w.id)?.errorsTold, true)
   })
 })

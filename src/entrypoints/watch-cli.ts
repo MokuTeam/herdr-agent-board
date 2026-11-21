@@ -22,8 +22,8 @@ export interface WaitProbeCtx {
   setWait: (text: string) => void
   /** The scheduler note when no board runs it (cli.ts schedulerNote). */
   note: () => Promise<string>
-  /** Whether a key is a live session: a watch a session before a /clear left in this pane ends too. */
-  live?: (key: string) => boolean
+  /** Watches of the session before a /clear that this one took over (services/watches.ts takenOver): they end too. */
+  alsoEnd?: readonly string[]
   /** The tests' probe. */
   probe?: typeof runProbe
 }
@@ -55,7 +55,7 @@ export async function waitProbe(ctx: WaitProbeCtx): Promise<string> {
       next: ctx.now + Math.min(FIRST_CHECK_MS, probe.everyMs),
       by: 'agent',
     },
-    ctx.live,
+    ctx.alsoEnd,
   )
   ctx.setWait(text)
   const silence = probe.silenceMs ? `, or after ${span(probe.silenceMs, en)} with nothing` : ''
