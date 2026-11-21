@@ -4,7 +4,8 @@
 // WorkBody), sent only to a board whose caps say `work`. Every board that takes part keeps its own
 // copy, and the copies come out the same:
 //
-//   1. Entries are immutable and carry `n`, one more than the highest the writer had seen.
+//   1. Entries are immutable and carry `n`, one more than the highest the writer had seen; a
+//      private entry, which no peer gets, the `n` of the entry it follows (#541).
 //   2. A head field takes the value of the entry that is last in the order (n, at, author's peer
 //      id): foldShared below. Two boards with the same entries get the same head, whatever order the
 //      entries arrived in.

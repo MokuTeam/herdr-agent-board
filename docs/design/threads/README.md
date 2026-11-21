@@ -273,7 +273,9 @@ and has no order across senders. So each board that takes part holds its own cop
 thread, and the copies have to come out the same. Three rules do that:
 
 1. Entries are immutable and carry `n`, a counter per thread. A board writes its entry with one
-   more than the highest `n` it has seen on that thread (a Lamport counter).
+   more than the highest `n` it has seen on that thread (a Lamport counter). A private entry,
+   which stays on its board, takes the `n` of the entry it follows instead (#541), so the numbers
+   the peers see have no holes that rule 3 would read as missed entries.
 2. A head field takes the value from the entry that is last in the order `(n, at, author's peer
    id)`. Two boards that hold the same entries compute the same head, whatever order the entries
    arrived in.

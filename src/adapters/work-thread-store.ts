@@ -659,10 +659,14 @@ export function appendEntry(
   const row = tx.db.query(`SELECT ${HEAD_COLUMNS} FROM threads WHERE id = ?`).get(id) as HeadRow | null
   if (!row) throw new ThreadError('not_found', 'no such thread')
   const before = headOf(row)
+  // A private entry on a shared thread (#541) never reaches the peers: it takes the number of the
+  // entry it follows, as an adoption does, since a number of its own would leave a hole the peers
+  // read as entries missing (4.3, rule 3).
+  const n = input.private && sharedOf(before) !== null ? Math.max(before.rev, 1) : before.rev + 1
   const draft: ThreadEntry = {
     id: input.id ?? randomUUID(),
     thread: id,
-    n: input.n ?? before.rev + 1,
+    n: input.n ?? n,
     seq: 0,
     at: input.at,
     author: input.author,
