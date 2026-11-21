@@ -110,6 +110,7 @@ import { launchRoutes } from './routes/launch.ts'
 import { linksRoutes } from './routes/links.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { moveRoute } from './routes/move.ts'
+import { createNodeProxy, type NodeProxy } from './routes/node-proxy.ts'
 import { nodesRoutes } from './routes/nodes.ts'
 import { pageLogRoute } from './routes/page-log.ts'
 import { presenceRoutes } from './routes/presence.ts'
@@ -918,6 +919,9 @@ export async function startServer({
     },
     staticRoute(WEB, bundle, page, viewerExtras),
   )
+  // The board's own routes, as they are without `nodes`: the master door serves these (a node
+  // passes nothing on to nodes of its own), and the node proxy hands them a bulk request's local part.
+  const ownRoutes: Route[] = [...routes]
   const host = new RegExp(`^(127\\.0\\.0\\.1|localhost):${port}$`)
   const ownOrigin = (req: Request): boolean => {
     const origin = req.headers.get('origin')
@@ -1000,7 +1004,7 @@ export async function startServer({
     })
     door = createNodeListener({
       cfg,
-      routes,
+      routes: ownRoutes,
       guards,
       hello: () => listener.hello(),
       store: createNodeStore(),
@@ -1015,6 +1019,7 @@ export async function startServer({
   // `nodes` nothing of it exists: no ssh, no timer, no file, no route.
   let nodeLinks: NodeLinks | null = null
   let localNodeRoutes: Route[] | null = null
+  let nodeProxy: NodeProxy | null = null
   function linksFollow(): void {
     if (nodeLinks) {
       nodeLinks.configChanged()
@@ -1026,6 +1031,17 @@ export async function startServer({
     // An offline copy still due is written also on an exit that skips close().
     process.on('exit', nodeAggregate.close)
     localNodeRoutes = nodesRoutes(nodeLinks)
+    // Requests for a node's card (#501): first in the route table, which the phones' listener and the
+    // tunnel share, so they reach it after their own refusals. Without `nodes` the table is main's.
+    const aggregate = nodeAggregate
+    nodeProxy = createNodeProxy({
+      cfg,
+      links: nodeLinks,
+      find: board.findAny,
+      remote: () => aggregate.part()?.items ?? [],
+      local: ownRoutes,
+    })
+    routes.unshift(nodeProxy.route)
     // Their ssh dies with the board, also on an exit that skips close().
     process.on('exit', nodeLinks.killNow)
   }
@@ -1042,7 +1058,9 @@ export async function startServer({
   ]
   refresh()
   // The port makes it one board per machine, so one scheduler; claims cover an overlap.
-  const scheduler = startScheduler({ deps, onChange: refresh })
+  // A reminder for a node's card goes through its node (#501): asked only for a key with a device's
+  // prefix, which exists only with `nodes`.
+  const scheduler = startScheduler({ deps, onChange: refresh, remote: () => nodeProxy })
   workdesk.configChanged()
   workdeskDialog.configChanged()
   void configureWorkdeskStream()

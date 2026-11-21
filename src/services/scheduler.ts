@@ -55,6 +55,7 @@ import { archiveDir, scheduleDir } from '../adapters/paths.ts'
 import { getEntry, listEntries, logRun, removeEntry, updateEntry } from '../adapters/schedule-store.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
+import { parseNodeKey } from '../core/nodes.ts'
 import { callTitle } from '../core/notices.ts'
 import { profileLabel, sessionProfile } from '../core/profiles.ts'
 import { cleanText, promptOf, type ScheduleEntry, targetOf } from '../core/schedule-rules.ts'
@@ -103,11 +104,36 @@ const joins = (e: ScheduleEntry): boolean => !e.kind && !e.cron && !e.receipt
 // a long one. What is left over goes on the next tick, as the next prompt.
 const JOINED_MAX = 8000
 
+/** How a delivery to another device's session went (RemoteDelivery). */
+export type RemoteSent =
+  | { ok: true }
+  | { ok: false; error: string; gone?: boolean; asleep?: boolean; busy?: boolean; dialog?: boolean; draft?: boolean }
+
+/**
+ * Delivery to a session of another device (#501, docs/design/nodes 10 item 5): a reminder the
+ * master holds for a node's card goes to that node as the page's message does
+ * (server/routes/node-proxy.ts), and the node's board types it into its own herdr.
+ */
+export interface RemoteDelivery {
+  send(key: string, text: string, o: { requestId: string; idle: boolean; noWake: boolean }): Promise<RemoteSent>
+}
+
 /**
  * Start sending due entries. `deps.cfg` is the live config: scheduleTickSec (15), scheduleWaitMin
  * (240), restartSettleSec (8). `onChange` is called after each run, so the board redraws.
+ * `remote`: the delivery to another device's session while config.json has `nodes`, else null;
+ * asked only for an entry whose key has a device's prefix (core/nodes.ts parseNodeKey), which
+ * exists only with `nodes`. Every other entry goes as it went before.
  */
-export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onChange?: () => void }): {
+export function startScheduler({
+  deps,
+  onChange = () => {},
+  remote,
+}: {
+  deps: Deps
+  onChange?: () => void
+  remote?: () => RemoteDelivery | null
+}): {
   stop(): void
 } {
   const { cfg, log } = deps
@@ -159,6 +185,19 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
         if (!workdeskDue(entry)) continue
         if (delivered.get(entry.id) === entry.next) {
           finish(entry)
+          continue
+        }
+        // Another device's session (#501): through its node, never this computer's herdr.
+        const via = parseNodeKey(entry.key) ? (remote?.() ?? null) : null
+        if (via) {
+          if (flying.has(entry.key)) continue
+          flying.add(entry.key)
+          viaNode(entry, via)
+            .catch(err => log(`schedule ${entry.id}: ${messageOf(err)}`))
+            .finally(() => {
+              flying.delete(entry.key)
+              onChange()
+            })
           continue
         }
         const { item, other } = targetOf(entry, items, profileIdOf)
@@ -355,6 +394,26 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
 
   const whyNot = (r: { draft?: boolean; dialog?: boolean; busy?: boolean; error: string }): string =>
     r.draft ? 'draft' : r.dialog ? 'dialog' : r.busy ? 'busy' : r.error
+
+  /**
+   * A plain reminder for another device's session, sent through its node, which types it into its
+   * own herdr (waking it unless `noWake`). A restart, a sleep or a call's results is the node's own
+   * scheduler's to run: held here as for a session not on this board. The request's id is the run's,
+   * so a run sent twice is typed once (core/message-gate.ts on the node).
+   */
+  async function viaNode(entry: ScheduleEntry, via: RemoteDelivery): Promise<void> {
+    const now = Date.now()
+    if (entry.kind || entry.receipt) return wait(entry, now, 'gone', true)
+    if (!claim(entry.id, now)) return
+    const r = await via.send(entry.key, promptOf(entry, Date.now()), {
+      requestId: `${entry.id}-${entry.next}`,
+      idle: !!entry.idle,
+      noWake: entry.noWake === true,
+    })
+    if (r.ok) return sent(entry)
+    if (r.asleep) return untilAwake(entry, now)
+    wait(entry, now, r.gone ? 'gone' : whyNot(r), !!r.gone)
+  }
 
   /**
    * A restart, as far as it can go now (see the top of the file). Each step is written to the

@@ -179,7 +179,8 @@ test('without nodes: the same route table, /api/nodes as any unknown path, no ss
     },
     env,
   )
-  expect(routeTable(a.proc)).toEqual(routeTable(b.proc))
+  // The master's table is the board's own with the node proxy first (#501), nothing else.
+  expect(routeTable(b.proc)).toEqual([{ method: 'ANY', path: '^\\/' }, ...routeTable(a.proc)])
   const answer = async (url: string): Promise<[number, string]> => {
     const res = await fetch(url)
     return [res.status, await res.text()]

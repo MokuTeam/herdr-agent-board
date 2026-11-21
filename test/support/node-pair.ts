@@ -173,11 +173,15 @@ const oneSession = (box: Sandbox, id: string): FakePane[] => [
   { pane_id: 'p1', agent: 'claude', agent_session: { value: `s-${id}` }, agent_status: 'idle', cwd: box.dir },
 ]
 
-/** A node board with its door up, a master's token made there, and its proxy; `panes`: its fake herdr's, else `s-<id>`. */
+/**
+ * A node board with its door up, a master's token made there, and its proxy; `panes`: its fake
+ * herdr's, else `s-<id>`; `cfg`: more of its config.
+ */
 export async function nodeBoard(
   id: string,
   env: Record<string, string> = PAIR_ENV,
   panes?: (box: Sandbox) => FakePane[],
+  cfg?: (box: Sandbox) => Record<string, unknown>,
 ): Promise<PairNode> {
   const box = await sandbox()
   showPanes(box, panes?.(box) ?? oneSession(box, id))
@@ -185,7 +189,11 @@ export async function nodeBoard(
   mkdirSync(dir, { recursive: true })
   const { token } = createNodeStore({ dir }).add('master', 'hand')
   const doorPort = await unusedPort()
-  const { url, proc } = await serveBoard(box, { language: 'en', node: { id, port: doorPort, workRoot: box.dir } }, env)
+  const { url, proc } = await serveBoard(
+    box,
+    { language: 'en', node: { id, port: doorPort, workRoot: box.dir }, ...cfg?.(box) },
+    env,
+  )
   await until(() => logged(proc, `node door: listening on 127.0.0.1:${doorPort} as ${id}`), 10_000)
   return { id, box, url, proc, doorPort, token, proxy: await doorProxy(doorPort) }
 }
@@ -193,7 +201,9 @@ export async function nodeBoard(
 /**
  * A master and `count` nodes (`server-1`, `server-2`), linked by `direct` through each node's
  * proxy. `masterCfg`: more of the master's config; `tokens: false` stores none on the master;
- * `panes`: a node's fake herdr's panes by its id, `masterPanes` the master's (none unless given).
+ * `panes`: a node's fake herdr's panes by its id, `masterPanes` the master's (none unless given);
+ * `nodeCfg`: more of a node's config by its id; `masterSetup`: done to the master's sandbox before
+ * its board starts (a login written to its state folder, say).
  */
 export async function nodePair(
   o: {
@@ -203,14 +213,20 @@ export async function nodePair(
     tokens?: boolean
     panes?: (id: string, box: Sandbox) => FakePane[]
     masterPanes?: (box: Sandbox) => FakePane[]
+    nodeCfg?: (id: string, box: Sandbox) => Record<string, unknown>
+    masterSetup?: (box: Sandbox) => void | Promise<void>
   } = {},
 ): Promise<Pair> {
   const env = { ...PAIR_ENV, ...o.env }
   const ids = Array.from({ length: o.count ?? 1 }, (_, i) => `server-${i + 1}`)
   const panes = o.panes
-  const nodes = await Promise.all(ids.map(id => nodeBoard(id, env, panes && (box => panes(id, box)))))
+  const nodeCfg = o.nodeCfg
+  const nodes = await Promise.all(
+    ids.map(id => nodeBoard(id, env, panes && (box => panes(id, box)), nodeCfg && (box => nodeCfg(id, box)))),
+  )
   const box = await sandbox()
   if (o.masterPanes) showPanes(box, o.masterPanes(box))
+  await o.masterSetup?.(box)
   const store = createDeviceStore({ dir: join(stateFolder(box), 'nodes') })
   if (o.tokens !== false) for (const n of nodes) store.setToken(n.id, n.token)
   const devices = Object.fromEntries(

@@ -3,7 +3,7 @@
 // - pane-1 on three devices stays three cards; a node's schedule entries ride along; `devices`.
 // - The item list stays local: the master's scheduler, auto-compact and Workdesk watcher run with a
 //   node's card in the payload, and the master's fake herdr sees no call for it, no thread names
-//   it, and no topology does.
+//   it, and no topology does. A reminder for it goes to the node's door (#501), never to herdr here.
 // - The offline copy: after a restart of the master with the node gone, its cards show with the
 //   time they are from. The node's fsToken is in none of the payload, the log, snapshot.json.
 import { describe, expect, test } from 'bun:test'
@@ -131,13 +131,12 @@ describe('a node in the master payload', () => {
     const remoteKey = `@server-1:${REMOTE}`
     const shown = await boardWhen(pair.master.url, b => keys(b).includes(remoteKey))
     expect(shown.items.find(i => i.key === remoteKey)?.context).toBe(150_000)
-    // Due now, for the node's card: the master's scheduler must not take it for one of its own.
-    const due = entry(pair.master.box, { id: 'b1b2b3', key: remoteKey, text: 'ping', next: Date.now() - 1000 })
-    const written = readFileSync(due, 'utf8')
-    await until(() => !existsSync(due) || readFileSync(due, 'utf8') !== written, 10_000)
-    // Waiting for a session it does not have, not sent.
-    expect(existsSync(due)).toBe(true)
-    expect(JSON.parse(readFileSync(due, 'utf8')).why).toBe('gone')
+    // Due now, for the node's card: the master's scheduler must not take it for one of its own. It
+    // goes to the node as the page's message does (#501), and the node's board types it there.
+    const [node] = pair.nodes
+    if (!node) throw new Error('no node')
+    entry(pair.master.box, { id: 'b1b2b3', key: remoteKey, text: 'ping', next: Date.now() - 1000 })
+    await until(() => node.proxy.requests.includes(`POST /api/session/${REMOTE}/message`), 10_000)
     const heartbeats = () => fake.calls('board_heartbeat').length
     const seen = heartbeats()
     await until(() => heartbeats() >= seen + 2, 10_000)
