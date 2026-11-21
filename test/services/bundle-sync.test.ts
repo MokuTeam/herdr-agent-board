@@ -202,4 +202,85 @@ describe('bundle sync', () => {
     // Those on their way when it was refused finish; none of the other 30 odd is started.
     expect(puts).toBeLessThanOrEqual(2 * SEND_AT_ONCE)
   })
+
+  test('the first refusal is the answer, whatever came of the blobs on their way with it (#583)', async () => {
+    let puts = 0
+    const s = setup(
+      'online',
+      async path => {
+        if (!path.includes('/blob/')) return taking(path)
+        const n = ++puts
+        // The first is refused at once; one beside it is refused later for another reason, one fails.
+        if (n === 1) return Response.json({ error: 'disk' }, { status: 507 })
+        await new Promise(r => setTimeout(r, 5))
+        if (n === 2) return Response.json({ error: 'hash' }, { status: 400 })
+        if (n === 3) throw new Error('socket closed')
+        return taking(path)
+      },
+      { skills: 40 },
+    )
+    const r = await s.sync.syncIfBehind('server-1')
+    expect([r.ok, r.why, r.detail]).toEqual([false, 'node', 'disk'])
+    expect(s.asked.some(p => p.endsWith('/commit'))).toBe(false)
+  })
+
+  test('a request that fails while others are on their way: said as the node, no commit (#583)', async () => {
+    let puts = 0
+    const s = setup(
+      'online',
+      async path => {
+        if (!path.includes('/blob/')) return taking(path)
+        const n = ++puts
+        await new Promise(r => setTimeout(r, 2))
+        if (n === 2) throw new Error('socket closed')
+        return taking(path)
+      },
+      { skills: 40 },
+    )
+    const r = await s.sync.syncIfBehind('server-1')
+    expect([r.ok, r.why, r.detail]).toEqual([false, 'node', 'error'])
+    expect(s.asked.some(p => p.endsWith('/commit'))).toBe(false)
+    expect(puts).toBeLessThanOrEqual(2 * SEND_AT_ONCE)
+  })
+
+  test('the whole limit passes while the blobs go: timeout, no commit (#583)', async () => {
+    let s: ReturnType<typeof setup> | null = null
+    let puts = 0
+    s = setup(
+      'online',
+      path => {
+        if (path.includes('/blob/') && ++puts === 10) s?.advance(SYNC_TOTAL_MS)
+        return taking(path)
+      },
+      { skills: 40 },
+    )
+    const r = await s.sync.syncIfBehind('server-1')
+    expect([r.ok, r.why]).toEqual([false, 'timeout'])
+    expect(s.asked.some(p => p.endsWith('/commit'))).toBe(false)
+    expect(puts).toBeLessThan(41)
+  })
+
+  test('a commit that names blobs the node no longer has: those go once more, then it commits', async () => {
+    const blobs: string[] = []
+    let commits = 0
+    const s = setup(
+      'online',
+      path => {
+        if (path.includes('/blob/')) {
+          blobs.push(path.slice(path.lastIndexOf('/') + 1))
+          return taking(path)
+        }
+        if (!path.endsWith('/commit')) return taking(path)
+        return ++commits === 1
+          ? Response.json({ error: 'missing-blob', missing: blobs.slice(0, 2) }, { status: 409 })
+          : taking(path)
+      },
+      { skills: 8 },
+    )
+    const r = await s.sync.syncIfBehind('server-1')
+    expect([r.ok, r.sent, commits]).toEqual([true, 11, 2])
+    // The two named are the last two sent, between the commits.
+    expect(blobs.slice(9).sort()).toEqual(blobs.slice(0, 2).sort())
+    expect(s.asked.at(-1)).toBe('/api/node/bundle/default/commit')
+  })
 })

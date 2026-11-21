@@ -1896,7 +1896,8 @@ async function nodesSecret(webPort: number, id: string, sinkId: string, sinks: u
 
 /**
  * `board nodes sync <id> [<profile>]` (#506): the running board makes the device current for the
- * profile (the default one unless given) and answers within 20 s. Prints whether it is, then the
+ * profile (the default one unless given) and answers when the sync is over, 15 minutes at most
+ * (bundle-sync.ts SYNC_TOTAL_MS; a first bundle is hundreds of files). Prints whether it is, then the
  * bundle's report lines that are not "sent": what was translated, what stays here and why, what the
  * node needs to be given; then the files the node kept as its own.
  */
@@ -1907,7 +1908,7 @@ async function nodesSync(webPort: number, id: string, profile: string | undefine
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-board': '1' },
       body: JSON.stringify({ op: 'sync', id, ...(profile !== undefined && { profile }) }),
-      // The board answers within its own limit for a whole sync (bundle-sync.ts SYNC_TOTAL_MS).
+      // The board's own limit for a whole sync (15 minutes, SYNC_TOTAL_MS) and a minute over.
       signal: AbortSignal.timeout(16 * 60_000),
     })
   } catch {

@@ -93,7 +93,7 @@ export interface BundleSyncOptions {
 export const SYNC_MS = 20_000
 /** A whole sync is done within this long: a first bundle over a slow link is minutes, not hours. */
 export const SYNC_TOTAL_MS = 15 * 60_000
-/** Blobs on their way at once: one after another, a round trip each, a first bundle took a minute. */
+/** Blobs on their way to the node at once: one at a time is a round trip each, for hundreds of files. */
 export const SEND_AT_ONCE = 6
 /** The hash is computed this often while a device is online (9.2). */
 export const HASH_MS = 5 * 60_000
@@ -249,7 +249,10 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
         sent++
         return null
       }
-      /** SEND_AT_ONCE at a time; the first that fails ends it, and no other is started after it. */
+      /**
+       * SEND_AT_ONCE at a time. The first the node refuses ends it: no other is started, those on
+       * their way finish, and that refusal is the answer, whatever came of the others.
+       */
       const send = async (shas: Iterable<string>): Promise<SyncReport | null> => {
         const queue = [...shas]
         let failed: SyncReport | null = null
@@ -257,15 +260,17 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
         const worker = async (): Promise<void> => {
           for (let sha = queue.shift(); sha !== undefined && !failed && !threw; sha = queue.shift()) {
             try {
-              failed = (await sendOne(sha)) ?? failed
+              const refused = await sendOne(sha)
+              if (refused) failed ??= refused
             } catch (err) {
               threw ??= { err }
             }
           }
         }
         await Promise.all(Array.from({ length: Math.min(SEND_AT_ONCE, queue.length) }, worker))
+        if (failed) return failed
         if (threw) throw (threw as { err: unknown }).err
-        return failed
+        return null
       }
       const failed = await send(new Set(manifest.files.map(f => f.sha256).filter(sha => !there.has(sha))))
       if (failed) return finish({ ...failed, sent })

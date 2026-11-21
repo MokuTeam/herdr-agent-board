@@ -442,7 +442,7 @@ Per profile, the master builds a bundle from the profile's folder and classifies
 
 ### 9.2 Version and when it moves
 
-The bundle's `hash` is the SHA-256 of its sorted manifest; `seq` counts hashes the master has seen for that profile, so a node "behind by 2" means two changes. The master computes the hash right before a placement on a node and every 5 minutes while a node is online, never on a prompt. A node that is behind is synced first and the start waits for it (each request answered within 20 s, the whole sync within 15 minutes; only changed files travel, a few at a time, and a profile's first bundle is hundreds of them). That replaces the spec's filter "nodes with a current bundle": a node is made current instead of being skipped.
+The bundle's `hash` is the SHA-256 of its sorted manifest; `seq` counts hashes the master has seen for that profile, so a node "behind by 2" means two changes. The master computes the hash right before a placement on a node and every 5 minutes while a node is online, never on a prompt. A node that is behind is synced first and the start waits for it. A sync has 20 s for each request and 15 minutes in all: only changed files travel, a few at a time, but a profile's first bundle is hundreds of them. How long a start itself waits for a sync is the placer's decision (#584). That replaces the spec's filter "nodes with a current bundle": a node is made current instead of being skipped.
 
 ### 9.3 Applying on the node
 
