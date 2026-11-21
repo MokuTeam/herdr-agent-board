@@ -818,6 +818,16 @@ has any thread view of its own.
   sets stays home too: the head an entry carries (rule 3) is the one the peers fold, without this
   board's private entries, so a private summary or status never rides out with the next shared
   entry (#549).
+- A thread that was unshared can be shared again, with the same peers or others. A peer that held
+  the earlier sharing takes the new share as the start of a new sharing of the copy it has: the
+  scope the share comes with (a pair, the team, a channel) replaces the ended one, the share's
+  fields set its head, and the entries written while the thread was not shared stay on the
+  sharer's board, as the ones before a first share do, with no "entries missing" line for them.
+  Only the board that shared the thread shares it again; a share from anyone else on a copy it
+  holds is dropped (#569). A board that keeps shared threads but predates this says `work`
+  without `work-reshare` and would drop such a share, so the sharer refuses to share again with a
+  peer of that kind who held the thread, and names them; a board without `work` reads the share
+  as a topic's line, as before.
 
 ### 11.3 What holds an agent's entry back
 
@@ -899,7 +909,9 @@ agreed to this design.
   refuses (a mirrored thread, among others) leaves the thread's scope as it was (#562). The entry
   sets those fields on the sharer's own copy too, so a field a private or unsent entry set there
   (a private wait on the owner among them) gives way to the peers' value at the share, as it would
-  to any later entry that sets it. "Send history"
+  to any later entry that sets it. A share again with a peer that held the earlier sharing renews
+  the scope on the peer's copy (#569, 11.2); the caps say `work-reshare` for it, and the Team
+  roster shows it as `reshare`. "Send history"
   (`thread-history`) sends the shared entries as a JSON file through the end-to-end encrypted files;
   the receiving board reads it in once the file is there, each entry it lacks marked as a copy, never
   one the file says it wrote itself. Unsharing sends `stopped sharing` and keeps the feed.

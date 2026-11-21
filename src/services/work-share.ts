@@ -107,15 +107,29 @@ export function fromScope(s: SharedScope, m: Pick<InboundWork, 'from' | 'topic' 
 }
 
 /**
+ * Whether a peer's message is its share of a thread this board holds from that peer's earlier
+ * sharing (#569): only the board that shared a thread shares it again.
+ */
+const reshares = (s: SharedScope, from: string, share: boolean): boolean => share && s.by === from
+
+/**
  * Whether a message that carries `work` may be kept at all (11.4): on a thread this board knows as
  * shared with that scope, from one of its members; or on a thread it does not know yet (a share, or
  * a member who joined late). Anything else is dropped as a bad frame.
  */
-export function mayTake(db: BoardDb | null, m: Pick<InboundWork, 'from' | 'topic' | 'ref'>): boolean {
+export function mayTake(
+  db: BoardDb | null,
+  m: Pick<InboundWork, 'from' | 'topic' | 'ref'> & {
+    /** The message is a share (`work.share`): from the thread's sharer it renews the scope (#569). */
+    share?: boolean
+  },
+): boolean {
   if (m.ref.id === GENERAL) return false
   const head = db ? getThread(db, m.ref.id) : null
   if (!head) return !db || !fullFrom(db, m.from)
   const s = sharingOf(head)
+  if (s && reshares(s, m.from, m.share === true))
+    return fromScope(scopeFrom(m, s.key, 0), m) && !(db && fullThread(db, head.id))
   return !!s && fromScope(s, m) && !(db && fullThread(db, head.id))
 }
 
@@ -164,10 +178,15 @@ export function ingest(
   if (!head && !w) return { taken: false, why: 'not_shared' }
   if (!head && w?.unshare) return { taken: false, why: 'not_shared' }
   if (!head && fullFrom(ctx.db, m.from)) return { taken: false, why: 'full' }
+  // The thread shared again by the peer that shared it (#569): the share renews its scope here,
+  // ended or not, with the topic it comes in, so a peer that held the earlier sharing takes it.
+  let renewed = false
   if (head) {
     const s = sharingOf(head)
-    if (!s || s.ended !== undefined) return { taken: false, why: s ? 'unshared' : 'not_shared' }
-    if (!fromScope(s, m)) return { taken: false, why: 'scope' }
+    renewed = !!s && !!w && reshares(s, m.from, w.share === true)
+    if (!renewed && (!s || s.ended !== undefined)) return { taken: false, why: s ? 'unshared' : 'not_shared' }
+    const scope = renewed && w ? scopeFrom(m, w.head.key, 0) : (s as SharedScope)
+    if (!fromScope(scope, m)) return { taken: false, why: 'scope' }
     if (fullThread(ctx.db, head.id)) return { taken: false, why: 'full' }
     // One entry moves the counter by so much at most: no peer uses up a thread's numbers.
     if (w && w.n > head.rev + MAX_N_JUMP) return { taken: false, why: 'counter' }
@@ -179,6 +198,10 @@ export function ingest(
   const at = Math.min(Number.isFinite(sent) ? sent : ctx.now, ctx.now + DAY)
   const done = ctx.db.write(byOf(author), tx => {
     let fresh = false
+    if (renewed && head && w) {
+      setScope(tx, head.id, scopeFrom(m, w.head.key, at))
+      head = getThread(tx, head.id) ?? head
+    }
     if (!head) {
       const work = w as WorkBody
       const key = localKey(work.head.key, k => keyTaken(ctx.db, k), author.name, m.from)
@@ -231,10 +254,10 @@ export function ingest(
       )
       entry = r.entry
       after = r.head
-      // Rule 3: entries this board never got. Not for the share itself, whose earlier entries stay
-      // on its sharer's board (11.2).
+      // Rule 3: entries this board never got. Not for a share, the first or one again: the entries
+      // before it stay on its sharer's board (11.2).
       const missedFrom = fresh ? 1 : before.rev + 1
-      if (!(fresh && w.share) && w.n > missedFrom) {
+      if (!((fresh || renewed) && w.share) && w.n > missedFrom) {
         const a = appendEntry(
           tx,
           before.id,
@@ -456,6 +479,33 @@ export function shareThread(ctx: ThreadsCtx & { me: string }, head: ThreadHead, 
     }
     throw err
   }
+}
+
+/**
+ * Sharing again (#569): a peer that held the earlier sharing takes the new share only on a board
+ * that says `work-reshare`; one that keeps shared threads without it would drop it, so the owner
+ * hears who and why instead. A board without `work` reads the share as a topic's line, as before.
+ * `peers`: whom the share goes to; `roster`: the Team roster as the board shows it.
+ */
+export function reshareFits(
+  head: ThreadHead,
+  peers: string[],
+  roster: { peer: string; work?: boolean; reshare?: boolean }[],
+  nameOf: NameOf,
+): void {
+  const was = sharingOf(head)
+  if (!was || was.ended === undefined || was.by !== 'me') return
+  const held =
+    was.kind === 'peer' ? [was.peer ?? ''] : was.kind === 'channel' ? (was.members ?? []) : roster.map(p => p.peer)
+  const old = peers.filter(id => {
+    const p = roster.find(r => r.peer === id)
+    return held.includes(id) && p?.work === true && !p.reshare
+  })
+  if (old.length)
+    throw new ThreadError(
+      'reshare',
+      `${old.map(p => nameOf(p)).join(', ')} held ${head.key} when it was shared before, and their board drops a share again until it is updated`,
+    )
 }
 
 /**

@@ -74,6 +74,7 @@ import {
   hasThreads,
   hasWork,
   hasWorkAt,
+  hasWorkReshare,
   isMessageId,
   isPeerId,
   isThreadId,
@@ -138,6 +139,8 @@ export interface TeamRosterPeer {
   assistant?: boolean
   /** The peer's board keeps shared threads (#394): its caps say `work`, shown while this board keeps them too. */
   work?: boolean
+  /** The peer's board takes a thread shared again (#569): its caps say `work-reshare`, shown with `work`. */
+  reshare?: boolean
 }
 
 export interface TeamView {
@@ -281,7 +284,7 @@ export interface InboundWorkPart {
  */
 export interface WorkHooks {
   on(): boolean
-  mayTake(m: { from: string; topic: string; ref: ThreadRef }): boolean
+  mayTake(m: { from: string; topic: string; ref: ThreadRef; share?: boolean }): boolean
 }
 
 /** A line of a thread (#216): a message either way, or a draft. */
@@ -806,7 +809,10 @@ export function createTeam({
     const thread = inboundKey(msg.from, msg.body.thread)
     const ref = msg.body.thread
     // A shared thread's entry (#394) only while this board keeps them, and only where it fits (11.4).
-    const workMisfit = !!msg.body.work && (!workOn() || !ref || !work?.mayTake({ from: msg.from, topic: thread, ref }))
+    const share = msg.body.work?.share === true
+    const workMisfit =
+      !!msg.body.work &&
+      (!workOn() || !ref || !work?.mayTake({ from: msg.from, topic: thread, ref, ...(share && { share }) }))
     if (workMisfit) {
       audit('drop', msg.from, { why: 'work', id: msg.id })
       log('team: dropped a message (a shared thread this board does not keep, or one it does not fit)')
@@ -1425,6 +1431,7 @@ export function createTeam({
           ...(canFile(p) && { files: true }),
           ...(hasAssistant(p) && { assistant: true }),
           ...(workOn() && hasWork(p) && { work: true }),
+          ...(workOn() && hasWorkReshare(p) && { reshare: true }),
         })),
         ...(hubFiles && { files: { max: hubFiles.max - NONCE_BYTES - TAG_BYTES } }),
       }

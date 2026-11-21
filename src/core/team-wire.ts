@@ -43,6 +43,12 @@ export const WORK_CAP = 'work'
  * board that says `work` alone gets the field without it, as before.
  */
 export const WORK_AT_CAP = 'work-at'
+/**
+ * A thread shared again (#569): a board that says it takes the sharer's new share on a thread it
+ * holds from an earlier sharing, instead of dropping it as an entry of an ended one. Said with
+ * `work`; the sharer does not share again with a peer that held the thread and does not say it.
+ */
+export const WORK_RESHARE_CAP = 'work-reshare'
 export const MAX_CAPS = 8
 export const MAX_CAP = 32
 /** The thread with no topic, in a pair or the team; today's flat thread with a peer is its pair's. */

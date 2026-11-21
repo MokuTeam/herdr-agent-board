@@ -40,6 +40,7 @@ import {
   type Via,
   WORK_AT_CAP,
   WORK_CAP,
+  WORK_RESHARE_CAP,
   WORK_STATUSES,
   WORK_TYPES,
   type WorkBody,
@@ -122,13 +123,13 @@ export function cleanCaps(v: unknown): string[] | undefined {
 export const OUR_CAPS: string[] = [...CAPS]
 
 /**
- * The caps of this board's `hello`: `files` only with a box key (#371), `work` and `work-at`
- * (#564) only while shared threads are on (#394), after the others; off, exactly what a board
- * without #394 says.
+ * The caps of this board's `hello`: `files` only with a box key (#371), `work`, `work-at`
+ * (#564) and `work-reshare` (#569) only while shared threads are on (#394), after the others;
+ * off, exactly what a board without #394 says.
  */
 export function ourCaps({ files, work }: { files: boolean; work: boolean }): string[] {
   const caps = files ? [...OUR_CAPS] : OUR_CAPS.filter(c => c !== 'files')
-  return work ? [...caps, WORK_CAP, WORK_AT_CAP] : caps
+  return work ? [...caps, WORK_CAP, WORK_AT_CAP, WORK_RESHARE_CAP] : caps
 }
 
 /** Whether a roster peer's board keeps shared threads (#394): its caps say `work`. */
@@ -137,6 +138,10 @@ export const hasWork = (p: { caps?: string[] | undefined } | undefined): boolean
 /** Whether a roster peer's board orders a shared entry by its own time (#564): its caps say `work-at`. */
 export const hasWorkAt = (p: { caps?: string[] | undefined } | undefined): boolean =>
   hasWork(p) && !!p?.caps?.includes(WORK_AT_CAP)
+
+/** Whether a roster peer's board takes a thread shared again (#569): its caps say `work-reshare`. */
+export const hasWorkReshare = (p: { caps?: string[] | undefined } | undefined): boolean =>
+  hasWork(p) && !!p?.caps?.includes(WORK_RESHARE_CAP)
 
 /** Whether a roster peer's board understands threads (#216). */
 export const hasThreads = (p: { caps?: string[] | undefined } | undefined): boolean => !!p?.caps?.includes('threads')

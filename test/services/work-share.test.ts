@@ -33,6 +33,7 @@ import {
   mayTake,
   outgoing,
   requestShare,
+  reshareFits,
   shareThread,
   takeOffer,
   unshareThread,
@@ -1163,4 +1164,159 @@ test("an entry from a board that sends no time of its own is ordered by the mess
   const { at: _at, ...older } = m.work as WorkBody
   take(b, { ...m, at: T0 + 30_000, work: older })
   expect(entriesOf(b.db, id).find(x => x.id === e.entry.id)?.at).toBe(T0 + 30_000)
+})
+
+// ------------------------------------------------------------------ shared again (#569)
+
+/** anna's thread shared with ben, then unshared, ben having taken the unshare; anna writes on alone. */
+function unsharedPair() {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  const step = postEntry(a.ctx(mapper, T0 + 5000), getThread(a.db, id) as ThreadHead, { summary: 'first sheet mapped' })
+  expect(take(b, handOver(a, b, step.head, step.entry)).taken).toBe(true)
+  const off = unshareThread(a.ctx(owner, T0 + 6000), getThread(a.db, id) as ThreadHead)
+  expect(take(b, handOver(a, b, off.head, off.entry)).taken).toBe(true)
+  expect(sharedOf(getThread(b.db, id) as ThreadHead)).toBeNull()
+  // While it is not shared: an entry that stays on anna's board.
+  postEntry(a.ctx(mapper, T0 + 7000), getThread(a.db, id) as ThreadHead, {
+    status: 'waiting',
+    waitingOn: 'cleo sends the sheet',
+    summary: 'second sheet asked for',
+  })
+  return { a, b, id, owner }
+}
+
+test('sharing again with the peer that held the earlier sharing: the peer takes it, with the new scope and the share`s head (#569)', () => {
+  const { a, b, id, owner } = unsharedPair()
+  const again = shareThread(a.ctx(owner, T0 + 8000), getThread(a.db, id) as ThreadHead, {
+    kind: 'peer',
+    peer: BEN,
+    topic: `${BEN}/${id}`,
+  })
+  const before = entriesOf(b.db, id).length
+  const m = handOver(a, b, again.head, again.entry)
+  expect(m.work?.share).toBe(true)
+  expect(mayTake(b.db, { ...m, share: true })).toBe(true)
+  const r = take(b, m)
+  expect(r.taken).toBe(true)
+  const theirs = getThread(b.db, id) as ThreadHead
+  expect(sharedOf(theirs)).toMatchObject({ kind: 'peer', peer: ANNA, by: ANNA, key: 'atlas-1', at: T0 + 8000 })
+  expect(sharedOf(theirs)?.ended).toBeUndefined()
+  expect(shared(theirs)).toEqual(shared(getThread(a.db, id)))
+  expect(theirs).toMatchObject({
+    status: 'waiting',
+    summary: 'second sheet asked for',
+    waitingOn: 'cleo sends the sheet',
+  })
+  // The share entry alone: no "entries missing" line for what anna wrote while it was not shared.
+  const feed = entriesOf(b.db, id)
+  expect(feed).toHaveLength(before + 1)
+  expect(feed.some(e => e.text.includes('missing'))).toBe(false)
+  // From then on entries go both ways again.
+  const next = postEntry(a.ctx(mapper, T0 + 9000), getThread(a.db, id) as ThreadHead, { summary: 'third sheet mapped' })
+  expect(take(b, handOver(a, b, next.head, next.entry)).taken).toBe(true)
+  const reply = postEntry(b.ctx(owner, T0 + 10_000), getThread(b.db, id) as ThreadHead, {
+    status: 'done',
+    summary: 'checked',
+  })
+  expect(take(a, handOver(b, a, reply.head, reply.entry)).taken).toBe(true)
+  expect(shared(getThread(b.db, id))).toEqual(shared(getThread(a.db, id)))
+  expect(getThread(a.db, id)?.status).toBe('done')
+})
+
+test('shared again with the team after a pair: the peer that held it takes the team`s share (#569)', () => {
+  const { a, b, id, owner } = unsharedPair()
+  const again = shareThread(a.ctx(owner, T0 + 8000), getThread(a.db, id) as ThreadHead, {
+    kind: 'team',
+    topic: `team/${id}`,
+  })
+  const ref: ThreadRef = { id, title: 'Map the 2019 price columns', group: true }
+  const m = handOver(a, b, again.head, again.entry, ref)
+  expect(mayTake(b.db, { ...m, share: true })).toBe(true)
+  // Without the share flag the old pair scope does not fit a team message.
+  expect(mayTake(b.db, m)).toBe(false)
+  expect(take(b, m).taken).toBe(true)
+  expect(sharedOf(getThread(b.db, id) as ThreadHead)).toMatchObject({ kind: 'team', by: ANNA, topic: `team/${id}` })
+  const next = postEntry(a.ctx(mapper, T0 + 9000), getThread(a.db, id) as ThreadHead, { summary: 'third sheet mapped' })
+  expect(take(b, handOver(a, b, next.head, next.entry, ref)).taken).toBe(true)
+  expect(shared(getThread(b.db, id))).toEqual(shared(getThread(a.db, id)))
+})
+
+test('only the board that shared a thread shares it again: another peer`s share, or one back to its sharer, is not taken (#569)', () => {
+  const { a, b, id, owner } = unsharedPair()
+  const again = shareThread(a.ctx(owner, T0 + 8000), getThread(a.db, id) as ThreadHead, {
+    kind: 'peer',
+    peer: BEN,
+    topic: `${BEN}/${id}`,
+  })
+  const real = handOver(a, b, again.head, again.entry)
+  // cleo sends a share with the same thread id: ben's copy stays as it was.
+  const forged: InboundWork = { ...real, id: crypto.randomUUID(), from: CLEO, topic: `${CLEO}/${id}` }
+  expect(mayTake(b.db, { ...forged, share: true })).toBe(false)
+  expect(take(b, forged)).toEqual({ taken: false, why: 'unshared' })
+  expect(sharedOf(getThread(b.db, id) as ThreadHead)).toBeNull()
+  // ben shares his copy back to anna: the thread was anna's to share, so nothing changes there.
+  unshareThread(a.ctx(owner, T0 + 8500), getThread(a.db, id) as ThreadHead)
+  const back = shareThread(b.ctx(owner, T0 + 9000), getThread(b.db, id) as ThreadHead, {
+    kind: 'peer',
+    peer: ANNA,
+    topic: `${ANNA}/${id}`,
+  })
+  const m = handOver(b, a, back.head, back.entry)
+  expect(take(a, m)).toEqual({ taken: false, why: 'unshared' })
+  expect(sharedOf(getThread(a.db, id) as ThreadHead)).toBeNull()
+})
+
+test('an unshare that goes out after the thread was shared again ends nothing on the peer (#569)', () => {
+  const { a, b, id } = sharedPair()
+  const owner: Party = { kind: 'owner' }
+  // anna unshares while the unshare cannot go out yet, and shares again.
+  const off = unshareThread(a.ctx(owner, T0 + 6000), getThread(a.db, id) as ThreadHead)
+  const again = shareThread(a.ctx(owner, T0 + 8000), getThread(a.db, id) as ThreadHead, {
+    kind: 'peer',
+    peer: BEN,
+    topic: `${BEN}/${id}`,
+  })
+  expect(take(b, handOver(a, b, again.head, again.entry)).taken).toBe(true)
+  expect(sharedOf(getThread(b.db, id) as ThreadHead)).toMatchObject({ at: T0 + 8000 })
+  // The unshare goes out last: an entry of the sharing that is on now, which it does not stop.
+  const late = handOver(a, b, off.head, off.entry)
+  expect(late.work?.unshare).toBeUndefined()
+  expect(take(b, late).taken).toBe(true)
+  expect(sharedOf(getThread(b.db, id) as ThreadHead)?.ended).toBeUndefined()
+  // An unshare after the share still ends it.
+  const off2 = unshareThread(a.ctx(owner, T0 + 9000), getThread(a.db, id) as ThreadHead)
+  expect(take(b, handOver(a, b, off2.head, off2.entry)).taken).toBe(true)
+  expect(sharedOf(getThread(b.db, id) as ThreadHead)).toBeNull()
+})
+
+test('the sharer does not share again with a peer that held the thread on a board without work-reshare, and says who (#569)', () => {
+  const a = board(ANNA)
+  const owner: Party = { kind: 'owner' }
+  const made = newThread(a.ctx(), { lane: 'atlas', title: 'Map the 2019 price columns' })
+  const roster = [
+    { peer: BEN, work: true },
+    { peer: CLEO, work: true, reshare: true },
+  ]
+  const target = (peer: string) => ({ kind: 'peer' as const, peer, topic: `${peer}/${made.head.id}` })
+  // Never shared, or shared now: nothing to refuse.
+  expect(() => reshareFits(made.head, [BEN], roster, nameOf)).not.toThrow()
+  const first = shareThread(a.ctx(owner, T0 + 1000), made.head, target(BEN))
+  expect(() => reshareFits(first.head, [BEN], roster, nameOf)).not.toThrow()
+  const off = unshareThread(a.ctx(owner, T0 + 2000), getThread(a.db, made.head.id) as ThreadHead)
+  // ben held it and his board says work alone: refused, by name.
+  expect(() => reshareFits(off.head, [BEN], roster, nameOf)).toThrow('ben held atlas-1 when it was shared before')
+  // A board that says work-reshare, one that keeps no shared threads, or a peer who never held it: shared.
+  expect(() => reshareFits(off.head, [BEN], [{ peer: BEN, work: true, reshare: true }], nameOf)).not.toThrow()
+  expect(() => reshareFits(off.head, [BEN], [{ peer: BEN }], nameOf)).not.toThrow()
+  expect(() => reshareFits(off.head, [CLEO], [{ peer: CLEO, work: true }], nameOf)).not.toThrow()
+  // With the team after a pair: only ben, who held it, stands in the way.
+  expect(() => reshareFits(off.head, [BEN, CLEO], roster, nameOf)).toThrow(/^ben held/)
+  // After a team sharing every member may hold it.
+  const team = shareThread(a.ctx(owner, T0 + 3000), off.head, { kind: 'team', topic: `team/${made.head.id}` })
+  const off2 = unshareThread(a.ctx(owner, T0 + 4000), team.head)
+  expect(() => reshareFits(off2.head, [CLEO], [{ peer: CLEO, work: true }], nameOf)).toThrow(/^cleo held/)
+  // A thread a peer shared with this board is not this board's to vouch for.
+  const { b, id } = sharedPair()
+  expect(sharedOf(getThread(b.db, id) as ThreadHead)?.by).toBe(ANNA)
 })
