@@ -596,6 +596,15 @@ class Run {
       if (p) owners.set(id, p)
     }
     const r = importTaskFile(this.write, file, { lane, sessionOf: key => owners.get(key) ?? null })
+    // An entry on a shared thread is sent now, as a post's is (#557); the board sends what is left.
+    const sent: { thread: string; entry: string; out: string }[] = []
+    for (const s of r.shared) {
+      const line =
+        s.out === 'queued'
+          ? await (this.ctx.sendOut?.(s.thread, s.entry) ?? Promise.resolve(null)).catch(() => null)
+          : null
+      sent.push({ thread: s.thread, entry: s.entry, out: line?.out ?? s.out })
+    }
     const from = `${file.harness}/${file.session.slice(0, 8)}`
     if (this.json) {
       this.out(
@@ -611,15 +620,22 @@ class Run {
           keys: r.keys,
           told: r.told.length,
           untold: r.untold,
+          ...(sent.length && { shared: sent }),
         }),
       )
       return
     }
+    const count = (out: string): number => sent.filter(s => s.out === out).length
     const parts = [
       ...(r.created.length ? [`${r.created.length} new`] : []),
       ...(r.updated.length ? [`${r.updated.length} updated`] : []),
       ...(r.unchanged ? [`${r.unchanged} unchanged`] : []),
       ...(r.skipped ? [`${r.skipped} skipped`] : []),
+      ...(count('sent') ? [`${count('sent')} sent to the peers`] : []),
+      ...(count('held') ? [`${count('held')} held for the owner`] : []),
+      ...(sent.length - count('sent') - count('held')
+        ? [`${sent.length - count('sent') - count('held')} go out when the board sends`]
+        : []),
       ...(r.untold ? [`${r.untold} watching not told: they read board thread changes`] : []),
     ]
     this.out(['ok', from, ...(parts.length ? parts : ['no items'])].join(' · '))

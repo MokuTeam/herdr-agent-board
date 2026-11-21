@@ -8,9 +8,11 @@ import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { openDb } from '../../src/adapters/db.ts'
 import { stateDir } from '../../src/adapters/paths.ts'
+import { findThread } from '../../src/adapters/work-thread-store.ts'
 import type { Party } from '../../src/core/work-threads.ts'
 import { type ThreadCmdContext, threadCmd } from '../../src/entrypoints/thread-cli.ts'
 import { piDayMirror } from '../../src/services/thread-import.ts'
+import { shareThread } from '../../src/services/work-share.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const NOW = Date.parse('2026-11-12T14:00:00Z')
@@ -485,4 +487,55 @@ test('the mirror reads nothing while threads are off, with "mokupilot": false, o
     expect([cfg, calls]).toEqual([cfg, []])
     expect([cfg, existsSync(join(stateDir(), 'board.db'))]).toEqual([cfg, false])
   }
+})
+
+test('import: a change on a shared thread is sent as a post is, and the line says so (#557)', async () => {
+  const { run, json, put } = setUp()
+  const file = put(`claude/${DAY}.json`, taskFile([ITEMS[0] as Record<string, unknown>]))
+  await run(master, ['import', file])
+  const db = openDb({ create: false })
+  assert.ok(db)
+  try {
+    const head = findThread(db, 'atlas-1', null, true)
+    shareThread(
+      {
+        db,
+        cfg: { agents: true, gapSec: 60, share: true },
+        actor: { kind: 'owner' },
+        now: NOW,
+        me: `A${'a'.repeat(42)}`,
+      },
+      head,
+      { kind: 'peer', peer: `B${'b'.repeat(42)}`, topic: `B${'b'.repeat(42)}/${head.id}` },
+    )
+  } finally {
+    db.close()
+  }
+  const done = { ...ITEMS[0], status: 'done', done_at: iso('12:00'), updated_at: iso('12:00') }
+  put(`claude/${DAY}.json`, taskFile([done]))
+  const calls: [string, string][] = []
+  const sendOut = async (thread: string, entry: string) => {
+    calls.push([thread, entry])
+    return { out: 'sent' }
+  }
+  const r = await run(master, ['import', file], { sendOut })
+  expect(r.out).toBe('ok · claude/3dbb2396 · 1 updated · 1 sent to the peers')
+  const shown = await json(master, ['show', 'atlas-1', '--full'])
+  const last = shown.entries.at(-1)
+  expect(last).toMatchObject({ out: 'queued', set: { status: 'done' } })
+  expect(calls).toEqual([[shown.thread.id, last.id]])
+})
+
+test('import: a thread that is not shared sends nothing (#557)', async () => {
+  const { run, put } = setUp()
+  const file = put(`claude/${DAY}.json`, taskFile([ITEMS[0] as Record<string, unknown>]))
+  await run(master, ['import', file])
+  put(
+    `claude/${DAY}.json`,
+    taskFile([{ ...ITEMS[0], status: 'done', done_at: iso('12:00'), updated_at: iso('12:00') }]),
+  )
+  const calls: string[] = []
+  const r = await run(master, ['import', file], { sendOut: async (_t, e) => (calls.push(e), { out: 'sent' }) })
+  expect(r.out).toBe('ok · claude/3dbb2396 · 1 updated')
+  expect(calls).toEqual([])
 })

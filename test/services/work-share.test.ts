@@ -983,3 +983,39 @@ test('an import on a thread that is not shared writes as before: no out, its own
   expect(entry.out).toBeUndefined()
   expect(entry.private).toBeUndefined()
 })
+
+test("an import's entry the owner holds stays out of the next entry's head; a session's goes out queued (#557)", () => {
+  const { a, id, file } = importedPair()
+  const owner: Party = { kind: 'owner' }
+  const was = getThread(a.db, id) as ThreadHead
+  const r = importTaskFile(
+    { ...a.ctx(owner, T0 + 10_000), ownerHolds: true },
+    file({
+      status: 'done',
+      note: 'all sheets mapped',
+      done_at: '2026-11-12T09:30:00.000Z',
+      updated_at: '2026-11-12T09:30:00.000Z',
+    }),
+    { lane: 'atlas', sessionOf: () => null },
+  )
+  const held = entriesOf(a.db, id).at(-1) as ThreadEntry
+  expect(held).toMatchObject({ n: was.rev + 1, out: 'held' })
+  expect(held.private).toBeUndefined()
+  expect(r.shared).toEqual([{ thread: id, entry: held.id, out: 'held' }])
+  const next = postEntry(a.ctx(owner, T0 + 11_000), getThread(a.db, id) as ThreadHead, { text: 'the rows are in' })
+  const out = outgoing(a.db, getThread(a.db, id) as ThreadHead, next.entry, a.me, r => r)
+  expect(out?.work.head).toMatchObject({ status: was.status, summary: was.summary })
+  expect(JSON.stringify(out)).not.toContain('all sheets mapped')
+  // A session's import: queued, by the session, numbered after it.
+  importTaskFile(a.ctx(mapper, T0 + 12_000), file({ note: 'one sheet left', updated_at: '2026-11-12T09:40:00.000Z' }), {
+    lane: 'atlas',
+    sessionOf: () => null,
+  })
+  const queued = entriesOf(a.db, id).at(-1) as ThreadEntry
+  expect(queued).toMatchObject({
+    n: next.entry.n + 1,
+    out: 'queued',
+    author: mapper,
+    set: { summary: 'one sheet left' },
+  })
+})

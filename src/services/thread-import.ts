@@ -49,6 +49,7 @@ import {
 import type { Config } from '../core/types.ts'
 import {
   CHILDREN_MAX,
+  type EntryOut,
   type EntrySet,
   isOpen,
   LANE,
@@ -73,6 +74,8 @@ export interface ImportResult {
   skipped: number
   /** Each item's thread, by the item's id. */
   keys: Record<string, string>
+  /** The entries written on shared threads (#557), each to be sent as a post's is: queued, or held for the owner. */
+  shared: { thread: string; entry: string; out: EntryOut }[]
   told: string[]
   untold: number
 }
@@ -147,6 +150,7 @@ export function importTaskFile(ctx: ThreadsCtx, file: TaskFile, o: ImportOptions
       unchanged: 0,
       skipped: file.skipped,
       keys: {},
+      shared: [],
     }
     const heads = new Map<string, ThreadHead>()
     const byItem = new Map<string, ThreadHead>()
@@ -165,7 +169,7 @@ export function importTaskFile(ctx: ThreadsCtx, file: TaskFile, o: ImportOptions
         result.keys[item.id] = was.key
         continue
       }
-      const head = was ? write(tx, ctx, file, item, was, byItem, o) : null
+      const head = was ? write(tx, ctx, file, item, was, byItem, o, result.shared) : null
       const made = was ? null : create(tx, ctx, file, item, lane, parentFor(ctx.db, item, byItem), o, mirror)
       const now = made ?? head ?? was
       if (!now) continue
@@ -180,20 +184,13 @@ export function importTaskFile(ctx: ThreadsCtx, file: TaskFile, o: ImportOptions
       const present = new Set(file.items.map(i => i.id))
       for (const [id, h] of byItem) {
         if (present.has(id) || !isOpen(h.status) || !agentBoardOf(h.origin)?.mirrored) continue
-        const out = outOf(ctx, h)
-        const r = appendEntry(
-          tx,
-          h.id,
-          {
-            at: ctx.now,
-            author: ctx.actor,
-            type: 'system',
-            text: 'gone from the task board',
-            set: { status: 'dropped' },
-            ...(out && { out }),
-          },
-          out && meOf(ctx),
-        )
+        const r = appendEntry(tx, h.id, {
+          at: ctx.now,
+          author: ctx.actor,
+          type: 'system',
+          text: 'gone from the task board',
+          set: { status: 'dropped' },
+        })
         result.dropped.push(r.head.key)
         heads.set(r.head.id, r.head)
       }
@@ -278,6 +275,7 @@ function write(
   head: ThreadHead,
   byItem: Map<string, ThreadHead>,
   o: ImportOptions,
+  shared: ImportResult['shared'],
 ): ThreadHead | null {
   const from = agentBoardOf(head.origin)
   const seen: Seen | undefined = from?.agentBoard.seen
@@ -320,6 +318,7 @@ function write(
     },
     out && meOf(ctx),
   )
+  if (out) shared.push({ thread: head.id, entry: r.entry.id, out })
   if (!ctx.mirror && set.assignee && owner.onBoard && owner.party?.kind === 'session')
     putWatch(
       tx,
