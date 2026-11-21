@@ -92,6 +92,8 @@ export function createVerifier(host: VerifyHost): Verifier {
   const now = (): number => host.now?.() ?? Date.now()
   // The launches this process started, by thread id: a failed one sends the thread to the owner.
   const started = new Map<string, { launch: string; key: string }>()
+  // The same launches by the verifier's key, while due() may still need to know one is on its way.
+  const launchOf = new Map<string, string>()
 
   const ctxOf = (db: BoardDb, cfg: ThreadsConfig, actor: Party): ThreadsCtx => ({
     db,
@@ -219,7 +221,7 @@ export function createVerifier(host: VerifyHost): Verifier {
       host.log(`verify ${head.key}: ${messageOf(err)}`)
       return
     }
-    const limit = addLimit(key, name, head, until)
+    const limit = addLimit(key, name, head, until, at)
     const body = {
       name,
       cwd: worker.cwd,
@@ -238,11 +240,14 @@ export function createVerifier(host: VerifyHost): Verifier {
     if (!r.ok) {
       if (limit) removeEntry(limit.id)
       const fresh = getThread(db, head.id)
-      if (fresh && fresh.verify?.run?.key === key) toOwner(db, cfg, fresh, key, 'error', r.error)
+      // The thread already names the verifier: its feed says the start was refused, not that none was named.
+      if (fresh && fresh.verify?.run?.key === key)
+        toOwner(db, cfg, fresh, key, 'error', `the start was refused: ${r.error}`)
       host.log(`verify ${head.key}: ${r.error}`)
       return
     }
     started.set(head.id, { launch: r.id, key })
+    launchOf.set(key, r.id)
     host.log(`verify ${head.key}: ${name} starts in ${worker.cwd}`)
   }
 
@@ -294,7 +299,7 @@ export function createVerifier(host: VerifyHost): Verifier {
       const limits = listEntries().filter(e => e.kind === VERIFY_KIND)
       for (const h of running) {
         const run = h.verify?.run
-        if (run && !limits.some(e => e.key === run.key)) addLimit(run.key, run.name, h, run.until)
+        if (run && !limits.some(e => e.key === run.key)) addLimit(run.key, run.name, h, run.until, run.at)
       }
       for (const e of limits) {
         const h = typeof e.thread === 'string' ? getThread(db, e.thread) : null
@@ -332,9 +337,27 @@ export function createVerifier(host: VerifyHost): Verifier {
     })
     const still = listEntries().find(e => e.id === entry.id)
     if (!still || still.next > now()) return
-    // Then the archive: once the verifier is free; gone from the board, nothing is left to do.
+    // Then the archive: once the verifier is free. Not on the board: while its launch is still starting,
+    // or within the grace of its start, its card may yet come (a run that ended before the session was
+    // up), so it is tried again; after that nothing is left to do.
     const item = items.find(i => i.key === entry.key)
     if (!item) {
+      const launch = launchOf.get(entry.key)
+      const starting = !!launch && host.launchState(launch)?.state === 'starting'
+      const begun = Number(entry.begun) || 0
+      const young = now() - begun < LOST_GRACE_MS
+      const tries = (Number(entry.tries) || 0) + 1
+      if ((starting || young) && tries < ARCHIVE_TRIES) {
+        updateEntry(entry.id, x => ({
+          ...x,
+          next: now() + ARCHIVE_RETRY_MS,
+          at: now() + ARCHIVE_RETRY_MS,
+          tries,
+          archive: true,
+        }))
+        return
+      }
+      launchOf.delete(entry.key)
       removeEntry(entry.id)
       return
     }
@@ -349,6 +372,7 @@ export function createVerifier(host: VerifyHost): Verifier {
       // The archive took the session's entries into its record: this one must not come back with it.
       dropHeld(item.key, entry.id)
       removeEntry(entry.id)
+      launchOf.delete(entry.key)
       return
     }
     const tries = (Number(entry.tries) || 0) + 1
@@ -394,7 +418,7 @@ function hostCategory(cfg: Pick<Config, 'categories'>, lane: string, worker: Ite
 }
 
 /** A verifier's time limit in the schedule (kind `verify`); null when the schedule takes no more. */
-function addLimit(key: string, name: string, head: ThreadHead, until: number): ScheduleEntry | null {
+function addLimit(key: string, name: string, head: ThreadHead, until: number, begun: number): ScheduleEntry | null {
   try {
     return addEntry({
       key,
@@ -405,6 +429,7 @@ function addLimit(key: string, name: string, head: ThreadHead, until: number): S
       kind: VERIFY_KIND,
       by: 'threads',
       thread: head.id,
+      begun,
     })
   } catch {
     return null

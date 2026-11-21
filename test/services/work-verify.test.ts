@@ -475,7 +475,7 @@ test('a launch refused or failed sends the thread to the owner with the reason',
   await v.sweep(async () => s.items)
   expect(s.head('atlas-1')).toMatchObject({
     status: 'owner',
-    waitingOn: 'no verifier: cannot start a verifier',
+    waitingOn: 'no verifier: the start was refused: cannot start a verifier',
     verify: { last: 'error', run: null },
   })
   assert.deepEqual(limits(), [])
@@ -890,4 +890,55 @@ test('plan change 5: a pi or Codex worker’s verifier is Claude in verify.profi
       "no verifier: no worker's profile to keep and no threads.verify.profile, while the board shows 2 profiles",
     verify: { last: 'error', run: null },
   })
+})
+
+test('second pass 1: a run that ends before the verifier’s card exists keeps its limit until the card comes, then archives it', async () => {
+  const s = setUp()
+  await verifyThread(s)
+  await s.run(ben, ['done', 'atlas-1', 'all rows mapped'])
+  const v = s.verifier()
+  await v.sweep(async () => s.items)
+  const key = (verifierOf(s.head('atlas-1')) as { key: string }).key
+  // Its tab is still opening when the owner keeps the done open.
+  const { keepOpen } = await import('../../src/services/work-threads.ts')
+  const db = openDb() as BoardDb
+  try {
+    const ctx = { db, cfg: { agents: true, gapSec: 60, share: true, verify: null }, actor: owner, now: NOW }
+    keepOpen(ctx, getThread(db, s.head('atlas-1').id) as ThreadHead)
+  } finally {
+    db.close()
+  }
+  expect(limits()[0]).toMatchObject({ key, next: NOW, archive: true })
+  // No card yet, the launch still starting: the entry stays.
+  await v.due(limits()[0] as ScheduleEntry, s.items)
+  expect(limits()[0]).toMatchObject({ key, next: NOW + 60_000 })
+  // The launch is done but no card yet, still within the grace of its start: it stays.
+  for (const [id, l] of s.launches) s.launches.set(id, { ...l, state: 'done' })
+  s.at(NOW + 60_000)
+  await v.due(limits()[0] as ScheduleEntry, s.items)
+  expect(limits()[0]).toMatchObject({ key, next: NOW + 120_000 })
+  // The card came: archived.
+  s.at(NOW + 120_000)
+  const verifierItem = { key, name: 'verify-atlas-1', session: key, agent: 'claude', pane: 'wP:p9' } as Item
+  await v.due(limits()[0] as ScheduleEntry, [...s.items, verifierItem])
+  assert.deepEqual(s.archived, [key])
+  assert.deepEqual(limits(), [])
+})
+
+test('second pass 1: past the grace with no card and no launch on its way, the limit goes', async () => {
+  const s = setUp()
+  await verifyThread(s)
+  await s.run(ben, ['done', 'atlas-1', 'all rows mapped'])
+  const v = s.verifier()
+  await v.sweep(async () => s.items)
+  const key = (verifierOf(s.head('atlas-1')) as { key: string }).key
+  const report = join(s.dir, 'report.md')
+  writeFileSync(report, 'ok')
+  await s.run(verifierOf(s.head('atlas-1')), ['verdict', 'atlas-1', 'pass', '--file', report, 'checked'])
+  for (const [id, l] of s.launches) s.launches.set(id, { ...l, state: 'done' })
+  s.at(NOW + 3 * 60_000 + 1)
+  await v.due(limits()[0] as ScheduleEntry, s.items)
+  assert.deepEqual(limits(), [])
+  assert.deepEqual(s.archived, [])
+  assert.equal(key.length, 36)
 })
