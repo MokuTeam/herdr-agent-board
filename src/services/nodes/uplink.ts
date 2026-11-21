@@ -12,9 +12,13 @@
 // - A file the call names is asked of the node by its number, checked against the size and the
 //   SHA-256 the call gave, within a thread post's limits, and put under the device's folder; the
 //   argument names that copy, from which the post copies it into the thread's files as any post's.
-// - A call id seen before is answered with the result stored then and not run again: the device's
-//   ledger (adapters/node-store.ts seenCall), the last 500 ids. So a call kept on the node while
-//   the master was away, and sent again on every stream until its result got through, runs once.
+// - A write's call id seen before is answered with the result stored then and not run again: the
+//   device's ledger (adapters/node-store.ts seenCall), the last 500 ids. So a call kept on the node
+//   while the master was away, and sent again on every stream until its result got through, runs
+//   once. A file the node could not give for the link's sake (it went away meanwhile) leaves the
+//   call unanswered: the node sends it again on the next stream.
+// - One session's calls run one after another, in the order they came; another session's do not
+//   wait for them.
 // Made by server/app.ts only once config.json has `nodes`.
 import { createHash } from 'node:crypto'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -25,7 +29,10 @@ import { takeEvents } from '../../core/event-stream.ts'
 import {
   fileTooBig,
   isCallId,
+  KEPT_SUBS,
   NOT_FROM_NODE,
+  RESULT_LINE_MAX,
+  RESULT_LINES_MAX,
   refused,
   UPLINK_COMMANDS,
   type UplinkCall,
@@ -35,6 +42,7 @@ import {
 } from '../../core/node-uplink.ts'
 import { nodeKey } from '../../core/nodes.ts'
 import type { Config, Item } from '../../core/types.ts'
+import { safeName } from '../../core/upload-name.ts'
 import { FILE_MAX_BYTES, FILES_MAX, type Party } from '../../core/work-threads.ts'
 import type { ThreadCmdContext } from '../../entrypoints/thread-cli.ts'
 import type { NodeLinks } from './links.ts'
@@ -75,21 +83,28 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 const said = (v: string): string => v.replace(/\p{Cc}/gu, ' ').slice(0, 64)
 const failed = (line: string): UplinkResult => ({ code: 1, out: [], err: [line] })
 
-/** The result cut to RESULT_CHARS, with a line saying how much was left out. */
+/**
+ * The result as the node takes it (core/node-uplink.ts uplinkResultOf): each line at most
+ * RESULT_LINE_MAX characters, RESULT_CHARS in all and RESULT_LINES_MAX lines with a last one saying
+ * how many were left out.
+ */
 function fit(r: UplinkResult): UplinkResult {
   let left = RESULT_CHARS
+  let room = RESULT_LINES_MAX - 1
   const cut = (lines: string[]): { kept: string[]; dropped: number } => {
     const kept: string[] = []
-    for (const line of lines) {
-      if (line.length > left) break
+    for (const whole of lines) {
+      const line = whole.length > RESULT_LINE_MAX ? whole.slice(0, RESULT_LINE_MAX) : whole
+      if (line.length > left || room <= 0) break
       left -= line.length + 1
+      room--
       kept.push(line)
     }
     return { kept, dropped: lines.length - kept.length }
   }
   const out = cut(r.out)
   const err = cut(r.err)
-  if (!out.dropped && !err.dropped) return r
+  if (!out.dropped && !err.dropped) return { code: r.code, out: out.kept, err: err.kept }
   const more = out.dropped + err.dropped
   return {
     code: r.code,
@@ -112,9 +127,7 @@ const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
 export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
   const store = o.store ?? createDeviceStore()
   const following = new Map<string, { ac: AbortController; done: Promise<void> }>()
-  /** Calls being run now, per device: a call sent again meanwhile waits for none and runs none. */
-  const running = new Set<string>()
-  /** Per device, its calls one after another. */
+  /** Per device and session, its calls one after another. */
   const chains = new Map<string, Promise<void>>()
   let closed = false
 
@@ -190,34 +203,34 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       o.log(`node ${id}: a call that is not one: left out`)
       return
     }
-    const next = (chains.get(id) ?? Promise.resolve()).then(() =>
+    const chain = `${id}\u0000${call?.session ?? ''}`
+    const next = (chains.get(chain) ?? Promise.resolve()).then(() =>
       call ? handle(id, call) : answer(id, callId as string, refused('a call the board does not take')),
     )
     const tail = next.catch(err => o.log(`node ${id}: a call: ${messageOf(err)}`))
-    chains.set(id, tail)
+    chains.set(chain, tail)
     void tail.then(() => {
-      if (chains.get(id) === tail) chains.delete(id)
+      if (chains.get(chain) === tail) chains.delete(chain)
     })
   }
 
   async function handle(id: string, call: UplinkCall): Promise<void> {
-    const at = `${id}\u0000${call.id}`
-    if (running.has(at)) return
-    running.add(at)
-    try {
-      let result = store.seenCall(id, call.id)
-      if (!result) {
-        result = fit(await runCall(id, call))
+    // Only a write is kept on the node and so sent again: only a write's result is remembered.
+    const kept = UPLINK_COMMANDS.has(call.cmd) && KEPT_SUBS.has(call.argv[0] ?? '')
+    let result = kept ? store.seenCall(id, call.id) : null
+    if (!result) {
+      const ran = await runCall(id, call)
+      // A file the link could not bring: the node sends the call again on its next stream.
+      if (!ran) return
+      result = fit(ran)
+      if (kept)
         try {
           store.rememberCall(id, call.id, result)
         } catch (err) {
           o.log(`node ${id}: the uplink's ledger: ${messageOf(err)}`)
         }
-      }
-      await answer(id, call.id, result)
-    } finally {
-      running.delete(at)
     }
+    await answer(id, call.id, result)
   }
 
   /** The result to the node; one that does not get through is sent again when the node sends the call again. */
@@ -231,38 +244,66 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
         body: JSON.stringify(result),
         signal: AbortSignal.timeout(POST_MS),
       })
+      if (!res.ok) o.log(`node ${id}: a result not taken: HTTP ${res.status}`)
       await res.body?.cancel()
     } catch (err) {
       o.log(`node ${id}: a result not sent: ${messageOf(err)}`)
     }
   }
 
-  /** The file `f` of the call, from the node, checked, under `folder`; its path there, or why not. */
-  async function pull(id: string, callId: string, f: UplinkFile, folder: string): Promise<string | { error: string }> {
+  /**
+   * The file `f` of the call, from the node, checked, under `folder`: its path there, why not, or null
+   * when the link could not bring it (the node away, an answer of its that is not the file's), to
+   * be tried again with the call.
+   */
+  async function pull(
+    id: string,
+    callId: string,
+    f: UplinkFile,
+    folder: string,
+  ): Promise<string | { error: string } | null> {
     const link = o.links.link(id)
-    if (!link) return { error: `${f.name}: the node went away` }
-    const res = await link.fetch(`/api/node/uplink/${callId}/file/${f.n}`, { signal: AbortSignal.timeout(FILE_MS) })
+    if (!link) return null
+    let res: Response
+    try {
+      res = await link.fetch(`/api/node/uplink/${callId}/file/${f.n}`, { signal: AbortSignal.timeout(FILE_MS) })
+    } catch (err) {
+      o.log(`node ${id}: a file of call ${callId}: ${messageOf(err)}`)
+      return null
+    }
+    if (res.status === 404) {
+      await res.body?.cancel()
+      return { error: `${f.name}: the node did not give it` }
+    }
     if (!res.ok || !res.body) {
       await res.body?.cancel()
-      return { error: `${f.name}: the node did not give it (HTTP ${res.status})` }
+      o.log(`node ${id}: a file of call ${callId}: HTTP ${res.status}`)
+      return null
     }
     const chunks: Uint8Array[] = []
     let size = 0
-    for await (const chunk of res.body) {
-      size += chunk.length
-      if (size > f.size || size > FILE_MAX_BYTES) return { error: `${f.name}: larger than the node said` }
-      chunks.push(chunk)
+    try {
+      for await (const chunk of res.body) {
+        size += chunk.length
+        if (size > f.size || size > FILE_MAX_BYTES) return { error: `${f.name}: larger than the node said` }
+        chunks.push(chunk)
+      }
+    } catch (err) {
+      // The link went while the file came: tried again with the call.
+      o.log(`node ${id}: a file of call ${callId}: ${messageOf(err)}`)
+      return null
     }
     const bytes = Buffer.concat(chunks)
     if (bytes.length !== f.size || createHash('sha256').update(bytes).digest('hex') !== f.sha256)
       return { error: `${f.name}: not the file the node named` }
     mkdirSync(folder, { recursive: true })
-    const path = join(folder, f.name)
+    const path = join(folder, safeName(f.name))
     writeFileSync(path, bytes)
     return path
   }
 
-  async function runCall(id: string, call: UplinkCall): Promise<UplinkResult> {
+  /** The call run, or null when a file it names could not be had for now. */
+  async function runCall(id: string, call: UplinkCall): Promise<UplinkResult | null> {
     if (!UPLINK_COMMANDS.has(call.cmd))
       return refused(`board ${said(call.cmd)} is not taken from a node: only board thread`)
     if (!call.session) return refused("only a session's board thread is taken from a node")
@@ -292,6 +333,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
           const big = fileTooBig(f.name, f.size)
           if (big) return failed(big)
           const path = await pull(id, call.id, f, join(folder, String(i)))
+          if (path === null) return null
           if (typeof path !== 'string') return failed(path.error)
           argv[pos] = path
         }
@@ -332,7 +374,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
   }
 
   /** An entry of a shared thread, sent by this board as `board thread` on this computer has it sent (#394). */
-  async function sendOut(thread: string, entry: string): Promise<{ out: string } | null> {
+  async function sendOut(thread: string, entry: string): Promise<{ out: string; why?: string } | null> {
     const port = Number(o.cfg.port) || 12422
     try {
       const res = await fetch(`http://127.0.0.1:${port}/api/threads/${encodeURIComponent(thread)}`, {
@@ -344,7 +386,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       if (res.status === 428) return { out: 'confirm' }
       const body = (await res.json().catch(() => null)) as Record<string, unknown> | null
       if (body && typeof body.out === 'string') return body as unknown as { out: string }
-      return res.status === 409 ? { out: 'queued' } : null
+      return res.status === 409 ? { out: 'queued', why: 'sharing is off on the board' } : null
     } catch {
       return null
     }

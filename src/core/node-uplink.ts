@@ -7,6 +7,7 @@
 // and its result comes back as `{ code, out, err }`. Both are read here field by field: neither
 // side trusts what the other sends.
 
+import { hasUnprintable } from './team.ts'
 import { FILE_MAX_BYTES, FILES_MAX } from './work-threads.ts'
 
 /** The commands a master takes from a node: `board thread` only (stage 1, 10 item 6). */
@@ -41,9 +42,9 @@ const SHA256 = /^[0-9a-f]{64}$/
 /** The most arguments, and characters in one, a call may carry. */
 const ARGV_MAX = 200
 const ARG_MAX = 64 * 1024
-/** The most lines of a result, and characters in one. */
-const LINES_MAX = 2000
-const LINE_MAX = 64 * 1024
+/** The most lines of a result, and characters in one: the master cuts a longer one to these. */
+export const RESULT_LINES_MAX = 2000
+export const RESULT_LINE_MAX = 64 * 1024
 
 export const isCallId = (v: unknown): v is string => typeof v === 'string' && CALL_ID.test(v)
 
@@ -80,7 +81,8 @@ function fileOf(v: unknown): UplinkFile | null {
   if (!isObject(v)) return null
   const { n, name, size, sha256 } = v
   if (!Number.isInteger(n) || (n as number) < 0 || (n as number) >= FILES_MAX) return null
-  if (!isText(name, 255) || !name || /[/\\\0]/.test(name) || name === '.' || name === '..') return null
+  if (!isText(name, 255) || !name || /[/\\:]/.test(name) || hasUnprintable(name) || name === '.' || name === '..')
+    return null
   if (!Number.isSafeInteger(size) || (size as number) < 0) return null
   if (typeof sha256 !== 'string' || !SHA256.test(sha256)) return null
   return { n: n as number, name, size: size as number, sha256 }
@@ -92,7 +94,7 @@ export function uplinkCallOf(raw: unknown): UplinkCall | null {
   const { id, cmd, argv, session, lane, files } = raw
   if (!isCallId(id) || !isText(cmd, 64)) return null
   if (!Array.isArray(argv) || argv.length > ARGV_MAX || !argv.every(a => isText(a, ARG_MAX))) return null
-  if (!isText(session, 1024)) return null
+  if (!isText(session, 1024) || hasUnprintable(session)) return null
   if (lane !== null && lane !== undefined && !isText(lane, 64)) return null
   const list = files === undefined ? [] : Array.isArray(files) && files.length <= FILES_MAX ? files.map(fileOf) : null
   if (!list || list.some(f => f === null)) return null
@@ -107,7 +109,7 @@ export function uplinkResultOf(raw: unknown): UplinkResult | null {
   const { code, out, err } = raw
   if (!Number.isInteger(code) || (code as number) < 0 || (code as number) > 255) return null
   const lines = (v: unknown): v is string[] =>
-    Array.isArray(v) && v.length <= LINES_MAX && v.every(l => isText(l, LINE_MAX))
+    Array.isArray(v) && v.length <= RESULT_LINES_MAX && v.every(l => isText(l, RESULT_LINE_MAX))
   if (!lines(out) || !lines(err)) return null
   return { code: code as number, out, err }
 }

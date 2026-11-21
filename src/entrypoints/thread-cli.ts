@@ -399,7 +399,10 @@ const callBoard =
         return { state: 'answered', code: 1, out: [], err: [`the board on this computer answered HTTP ${res.status}`] }
       }
       return (await res.json()) as NodeCallAnswer
-    } catch {
+    } catch (err) {
+      // The board took the call and never answered: it may be kept there, so this is no "not sent".
+      if (err instanceof Error && err.name === 'TimeoutError')
+        return { state: 'answered', code: 1, out: [], err: ['the board on this computer did not answer in time'] }
       return null
     }
   }

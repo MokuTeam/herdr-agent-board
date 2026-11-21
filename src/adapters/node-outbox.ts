@@ -1,9 +1,11 @@
 // The outbox on a node (#508, docs/design/nodes 5, 10 item 5, 21.3 item 7): the calls its sessions
 // make to the master, one file per call in `<state>/node/outbox/<id>.json`, mode 0600 (a call
-// carries the text of a post and the paths of its files). Written before the command waits, removed
-// once the master has answered (or, for a call that is not kept, once the command gave up). A call
-// waits here for "the master", not for a connection: whichever master's stream opens next takes it.
-import { mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+// carries the text of a post), and the files it names copied beside it, `<id>/<n>`, as they were
+// when the command ran: a file the agent changes or removes while the master is away still goes as
+// it was posted. Written before the command waits, removed with its copies once the master has
+// answered (or, for a call that is not kept, once the command gave up). A call waits here for "the
+// master", not for a connection: whichever master's stream opens next takes it.
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isCallId, type UplinkFile } from '../core/node-uplink.ts'
 import { isRecord, replaceFile } from './json-store.ts'
@@ -16,7 +18,7 @@ export interface OutboxCall {
   argv: string[]
   session: string
   lane: string | null
-  /** The files the call registered, each with its path here, which never leaves this node. */
+  /** The files the call registered, each with its copy's path here, which never leaves this node. */
   files: (UplinkFile & { path: string })[]
   /** A write that waits for the master (core/node-uplink.ts KEPT_SUBS). */
   keep: boolean
@@ -24,6 +26,8 @@ export interface OutboxCall {
 }
 
 export interface Outbox {
+  /** A file of the call `id`, kept as its number `n` (mode 0600); the copy's path. */
+  copy(id: string, n: number, bytes: Uint8Array): string
   write(call: OutboxCall): void
   read(id: string): OutboxCall | null
   /** Every call waiting, oldest first. */
@@ -60,10 +64,12 @@ function callOf(v: unknown): OutboxCall | null {
 }
 
 export function createOutbox({ dir = join(nodeDir(), 'outbox') }: { dir?: string } = {}): Outbox {
-  const fileOf = (id: string): string => {
+  /** Where the call `id` keeps its files; throws on an id that is not one, so no path leaves the folder. */
+  const folderOf = (id: string): string => {
     if (!isCallId(id)) throw new Error(`not a call id: ${JSON.stringify(id)}`)
-    return join(dir, `${id}.json`)
+    return join(dir, id)
   }
+  const fileOf = (id: string): string => `${folderOf(id)}.json`
   const read = (id: string): OutboxCall | null => {
     try {
       return callOf(JSON.parse(readFileSync(fileOf(id), 'utf8')))
@@ -72,6 +78,13 @@ export function createOutbox({ dir = join(nodeDir(), 'outbox') }: { dir?: string
     }
   }
   return {
+    copy(id, n, bytes) {
+      const at = folderOf(id)
+      mkdirSync(at, { recursive: true })
+      const path = join(at, String(n))
+      writeFileSync(path, bytes, { mode: 0o600 })
+      return path
+    },
     write(call) {
       mkdirSync(dir, { recursive: true })
       replaceFile(fileOf(call.id), JSON.stringify(call), undefined, 0o600)
@@ -92,6 +105,7 @@ export function createOutbox({ dir = join(nodeDir(), 'outbox') }: { dir?: string
     },
     remove(id) {
       rmSync(fileOf(id), { force: true })
+      rmSync(folderOf(id), { recursive: true, force: true })
     },
   }
 }

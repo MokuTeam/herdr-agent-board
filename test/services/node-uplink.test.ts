@@ -142,6 +142,47 @@ describe("the node's side", () => {
   })
 })
 
+test('a kept call keeps its files as they were posted; a read a stopped board left is dropped; a failed kept call is logged', async () => {
+  const dir = isolatedHome()
+  const outbox = createOutbox({ dir: join(dir, 'outbox') })
+  const logs: string[] = []
+  const up = createNodeUplink({ outbox, log: l => logs.push(l) })
+  const file = join(dir, 'r.md')
+  writeFileSync(file, 'as posted')
+  const kept = await up.call({
+    id: 'k-1',
+    cmd: 'thread',
+    argv: ['post', 'k', '--file', file],
+    session: 's-1',
+    lane: null,
+    files: [file],
+  })
+  expect(kept.body).toEqual({ state: 'kept', id: 'k-1' })
+  writeFileSync(file, 'changed afterwards')
+  expect(await up.file('k-1', 0).text()).toBe('as posted')
+  // A read, as a board that stopped while its command waited leaves it.
+  outbox.write({ id: 'r-1', cmd: 'thread', argv: ['list'], session: 's-1', lane: null, files: [], keep: false, at: 0 })
+  const ac = new AbortController()
+  const sent = await calls(up.stream(new Request('http://x/', { signal: ac.signal })), 1)
+  expect(sent.map(c => c.id)).toEqual(['k-1'])
+  expect(outbox.read('r-1')).toBeNull()
+  // Its result, with nobody waiting: it goes to the log, and the call with its copy goes.
+  up.answer('k-1', { code: 1, out: [], err: ['no thread "k"'] })
+  expect(logs).toEqual(['node uplink: call k-1 came back with exit 1: no thread "k"'])
+  expect(existsSync(join(dir, 'outbox', 'k-1'))).toBe(false)
+  // What the master would refuse is refused here, not kept.
+  const long = await up.call({ cmd: 'thread', argv: ['post', 'k', 'x'.repeat(70_000)], session: 's-1', lane: null })
+  expect(long.body).toEqual({
+    state: 'answered',
+    code: 1,
+    out: [],
+    err: ["the board's computer does not take this call: its words are too many or too long"],
+  })
+  expect(outbox.list()).toEqual([])
+  ac.abort()
+  up.close()
+})
+
 /** A link that is online and serves what the test gives it. */
 function standIn(serve: (path: string, init: RequestInit) => Promise<Response> | Response) {
   let state: LinkStatus = { state: 'online', since: 0, heardAt: null }
@@ -166,12 +207,13 @@ function standIn(serve: (path: string, init: RequestInit) => Promise<Response> |
   }
 }
 
-/** A stream of these calls, held open until the link aborts it. */
-function streamOf(calls: unknown[], signal?: AbortSignal | null): Response {
+/** A stream of these calls, held open until the link aborts it, or ended after them when `end`. */
+function streamOf(calls: unknown[], signal?: AbortSignal | null, end = false): Response {
   const enc = new TextEncoder()
   const body = new ReadableStream<Uint8Array>({
     start(c) {
       for (const call of calls) c.enqueue(enc.encode(`event: call\ndata: ${JSON.stringify(call)}\n\n`))
+      if (end) return c.close()
       signal?.addEventListener('abort', () => c.error(new Error('aborted')), { once: true })
     },
   })
@@ -356,5 +398,92 @@ describe("the master's side", () => {
     expect(asked).toBe(2)
     await runner.close()
     expect(open).toBe(0)
+  })
+  test('a file the link could not bring leaves the call for the next stream, run once then', async () => {
+    const dir = isolatedHome()
+    const store = createDeviceStore({ dir: join(dir, 'nodes') })
+    const bytes = Buffer.from('report')
+    const call = {
+      id: 't-1',
+      cmd: 'thread',
+      argv: ['post', 'k', '--file', '/n/r.md'],
+      session: 's-1',
+      lane: null,
+      files: [{ n: 0, name: 'r.md', size: bytes.length, sha256: sha(bytes) }],
+    }
+    let streams = 0
+    let pulls = 0
+    const posted: UplinkResult[] = []
+    const link = standIn((path, init) => {
+      if (path === '/api/node/uplink')
+        return streams++ ? streamOf([call], init.signal) : streamOf([call], init.signal, true)
+      if (path.includes('/file/')) {
+        if (!pulls++) throw new Error('the link went')
+        return new Response(bytes)
+      }
+      posted.push(JSON.parse(String(init.body)))
+      return new Response('{}')
+    })
+    let ran = 0
+    const runner = createUplinkRunner({
+      links: link.links,
+      find: () => undefined,
+      items: () => [],
+      cfg: { threads: true } as never,
+      log: () => {},
+      store,
+      run: async () => {
+        ran++
+        return 0
+      },
+    })
+    link.changed('online')
+    await until(() => posted.length === 1, 5000)
+    await runner.close()
+    expect([ran, pulls, streams >= 2]).toEqual([1, 2, true])
+    expect(posted).toEqual([{ code: 0, out: [], err: [] }])
+    expect(store.seenCall('server-1', 't-1')).toEqual({ code: 0, out: [], err: [] })
+  })
+
+  test("one session's slow call does not hold another's; a read's result is not remembered", async () => {
+    const dir = isolatedHome()
+    const store = createDeviceStore({ dir: join(dir, 'nodes') })
+    const posted: string[] = []
+    const link = standIn((path, init) => {
+      if (path === '/api/node/uplink')
+        return streamOf(
+          [
+            { id: 'a-1', cmd: 'thread', argv: ['new', 'slow'], session: 's-a', lane: 'atlas' },
+            { id: 'b-1', cmd: 'thread', argv: ['list'], session: 's-b', lane: 'atlas' },
+          ],
+          init.signal,
+        )
+      posted.push(path.split('/').pop() as string)
+      return new Response('{}')
+    })
+    let release = (): void => {}
+    const gate = new Promise<void>(resolve => {
+      release = resolve
+    })
+    const runner = createUplinkRunner({
+      links: link.links,
+      find: () => undefined,
+      items: () => [],
+      cfg: { threads: true } as never,
+      log: () => {},
+      store,
+      run: async argv => {
+        if (argv[0] === 'new') await gate
+        return 0
+      },
+    })
+    link.changed('online')
+    await until(() => posted.includes('b-1'), 5000)
+    expect(posted).toEqual(['b-1'])
+    release()
+    await until(() => posted.includes('a-1'), 5000)
+    await runner.close()
+    expect(store.seenCall('server-1', 'b-1')).toBeNull()
+    expect(store.seenCall('server-1', 'a-1')).toEqual({ code: 0, out: [], err: [] })
   })
 })

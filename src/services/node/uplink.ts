@@ -11,8 +11,11 @@
 //   kept, so nobody waits for a master that is not there.
 // - A stream that opens gets every call waiting first, oldest first, then each new one; a ping
 //   every PING_MS keeps it open through the forward.
-// - A file a call names is registered by its number, with its size and SHA-256; the master asks
-//   for it by that number (`GET /api/node/uplink/<id>/file/<n>`) and never names a path.
+// - A file a call names is copied into the outbox as it is now and registered by its number, with
+//   its size and SHA-256; the master asks for it by that number (`GET /api/node/uplink/<id>/file/<n>`)
+//   and never names a path.
+// - A call that is not kept and was left in the outbox by a board that stopped is dropped when a
+//   stream opens: its command is long gone, and a read is not run for nobody.
 // Made by server/app.ts only once config.json has `node`.
 import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
@@ -25,6 +28,7 @@ import {
   KEPT_SUBS,
   type UplinkCall,
   type UplinkResult,
+  uplinkCallOf,
   uplinkResultOf,
 } from '../../core/node-uplink.ts'
 import { FILES_MAX } from '../../core/work-threads.ts'
@@ -118,8 +122,8 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
     })
   }
 
-  /** The files a call names, registered by their number; or why not, in the words a local post uses. */
-  function register(paths: string[]): { files: OutboxCall['files'] } | { error: string } {
+  /** The files a call names, copied and registered by their number; or why not, in the words a local post uses. */
+  function register(id: string, paths: string[]): { files: OutboxCall['files'] } | { error: string } {
     if (paths.length > FILES_MAX) return { error: `${paths.length} files; ${FILES_MAX} at most` }
     const files: OutboxCall['files'] = []
     for (const [n, path] of paths.entries()) {
@@ -135,7 +139,7 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
       if (big) return { error: big }
       const bytes = readFileSync(path)
       const sha256 = createHash('sha256').update(bytes).digest('hex')
-      files.push({ n, name: basename(path) || 'file', size: bytes.length, sha256, path })
+      files.push({ n, name: basename(path) || 'file', size: bytes.length, sha256, path: outbox.copy(id, n, bytes) })
     }
     return { files }
   }
@@ -154,8 +158,11 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
     const id = given ?? randomUUID()
     // The same call again (a command that tried twice): it waits for the one already kept.
     if (!outbox.read(id)) {
-      const got = register((files as string[] | undefined) ?? [])
-      if ('error' in got) return { status: 200, body: failed(got.error) }
+      const got = register(id, (files as string[] | undefined) ?? [])
+      if ('error' in got) {
+        outbox.remove(id)
+        return { status: 200, body: failed(got.error) }
+      }
       const kept: OutboxCall = {
         id,
         cmd,
@@ -165,6 +172,15 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
         files: got.files,
         keep,
         at: Date.now(),
+      }
+      // What the master would not take (too many or too long arguments, a session's key it cannot
+      // read) is refused now, not kept to be refused later where nobody reads it.
+      if (!uplinkCallOf(publicOf(kept))) {
+        outbox.remove(id)
+        return {
+          status: 200,
+          body: failed("the board's computer does not take this call: its words are too many or too long"),
+        }
       }
       // Written before the command waits: a board that stops now still has it.
       outbox.write(kept)
@@ -188,8 +204,11 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
           client = controller
           if (closed) return controller.close()
           write(controller, ': calls\n\n')
-          // What waits goes first, oldest first.
-          for (const c of outbox.list()) write(controller, callEvent(publicOf(c)))
+          // What waits goes first, oldest first; a read whose command is gone is not sent.
+          for (const c of outbox.list()) {
+            if (!c.keep && !waiters.has(c.id)) outbox.remove(c.id)
+            else write(controller, callEvent(publicOf(c)))
+          }
           clients.add(controller)
           ping ??= setInterval(
             () => {
@@ -230,7 +249,11 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
       if (!result) return bad('result')
       if (!isCallId(id) || !outbox.read(id)) return { status: 404, body: { error: 'call' } }
       outbox.remove(id)
-      for (const take of [...(waiters.get(id) ?? [])]) take(result)
+      const takers = [...(waiters.get(id) ?? [])]
+      for (const take of takers) take(result)
+      // A kept call that failed, its command long gone: the log is where it is read.
+      if (!takers.length && result.code !== 0)
+        o.log(`node uplink: call ${id} came back with exit ${result.code}: ${result.err[0] ?? ''}`)
       return { status: 200, body: { ok: true } }
     },
     close() {

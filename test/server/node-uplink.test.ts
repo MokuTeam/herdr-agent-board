@@ -15,7 +15,7 @@
 // - Without `node`: no `/api/node/call`, and `board thread` writes this board's own database.
 import { expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { serveBoard } from '../support/board-server.ts'
 import { type FakePane, nodeBoard, nodePair, PAIR_ENV, type PairNode } from '../support/node-pair.ts'
@@ -198,10 +198,17 @@ test('with the link cut a post is kept, and delivered once over two reconnects',
 
   await node.proxy.cut('drop')
   await pair.waitDevice(node.id, d => d.link?.state === 'offline', 10_000)
-  const kept = await cli(node.box, ['thread', 'post', '--session', S, 'atlas-1', 'while away'])
+  const away = join(node.box.dir, 'away.md')
+  writeFileSync(away, 'written while the master was away\n')
+  const kept = await cli(node.box, ['thread', 'post', '--session', S, 'atlas-1', '--file', away, 'while away'])
   expect(kept).toEqual({ code: 0, stdout: "kept, goes to the board's computer when it is reachable\n", stderr: '' })
   expect(outboxCount(node)).toBe(1)
-  const id = readdirSync(outboxOf(node))[0]?.replace(/\.json$/, '') ?? ''
+  const id =
+    readdirSync(outboxOf(node))
+      .find(n => n.endsWith('.json'))
+      ?.replace(/\.json$/, '') ?? ''
+  // The agent removes its file meanwhile: the post goes with the file as it was posted.
+  rmSync(away)
 
   // The first reconnect: the master runs it, but its result is lost on the way back.
   let lost = 0
@@ -226,15 +233,19 @@ test('with the link cut a post is kept, and delivered once over two reconnects',
   await pair.waitDevice(node.id, d => d.link?.state === 'online', 10_000)
   await until(() => outboxCount(node) === 0, 10_000)
   const t = await thread(pair.master.url, 'atlas-1')
-  expect(t?.entries.filter(e => e.text === 'while away').length).toBe(1)
+  const delivered = t?.entries.filter(e => e.text === 'while away') ?? []
+  expect(delivered.length).toBe(1)
+  expect(readFileSync(delivered[0]?.files?.[0]?.path as string, 'utf8')).toBe('written while the master was away\n')
+  // Nothing of it is left in the outbox, its copy of the file neither.
+  expect(readdirSync(outboxOf(node))).toEqual([])
   // Its result posted twice: the master ran it once.
   // Its result went to the node twice, the first one lost: the same result, from one run.
   const results = node.proxy.received
     .filter(r => r.request === `POST /api/node/uplink/${id}`)
     .map(r => JSON.parse(r.body))
   expect(results).toEqual([
-    { code: 0, out: ['ok · atlas-1 · next'], err: [] },
-    { code: 0, out: ['ok · atlas-1 · next'], err: [] },
+    { code: 0, out: ['ok · atlas-1 · next · 1 file'], err: [] },
+    { code: 0, out: ['ok · atlas-1 · next · 1 file'], err: [] },
   ])
 }, 90_000)
 
