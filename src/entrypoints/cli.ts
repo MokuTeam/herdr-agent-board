@@ -2079,17 +2079,14 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
     idle,
     // The session that runs it, for a verdict (#492): its own, never the one --session names; asked only then.
     // The pane herdr says it runs in must hold that session too: a session id put in the env does not pass.
+    // It fails closed: no pane, no answer from herdr, or another session there is a refusal that says why.
     self: async () => {
+      const { paneSelf } = await import('../services/work-verify.ts')
       const key = (target ? (await ownSession())?.key : s?.key) ?? null
-      const pane = process.env.HERDR_PANE_ID
-      if (key && pane) {
-        const held = await paneOf(pane).then(
-          p => p?.agent_session?.value,
-          () => undefined,
-        )
-        if (held && held !== key) return null
-      }
-      return key
+      return paneSelf(key, process.env.HERDR_PANE_ID || undefined, async pane => {
+        const p = await paneOf(pane)
+        return p?.agent_session?.value ?? null
+      })
     },
     findSession: async word => {
       const w = word.toLowerCase()

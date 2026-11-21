@@ -2291,7 +2291,8 @@ verification: `board thread new --verify`, `board thread set <key> --verify on|o
 `"lanes": ["<id>"]` for every new thread of a lane. `board thread post <key> --accept "<check>"` adds an
 acceptance line (what must be true for done; ten at most). A session's `done` on such a thread is
 held: the thread stays open, its head says "done proposed, verification running", and nobody who
-watches it hears "done" yet. Within a tick the web board starts a fresh verifier, as `board fork`
+watches it hears "done" yet. Within a tick the web board starts a fresh verifier (only the web board
+sweeps: with the terminal board alone a held done waits until the web board runs), as `board fork`
 starts a session: a Claude session in the worker's folder, lane and workspace, on the configured
 model, under a session id the board chose and wrote into the thread first. Its first message is a
 fixed brief: the thread (title, acceptance lines, the held done's words, files, links, the last
@@ -2304,13 +2305,14 @@ changes nothing and ends with one verdict. Only that session, from itself, runs
 hear "done (verified)". No verdict within `"limitMin"` (30), or a verifier that could not start, and
 the thread comes to you with the reason. Two verifiers run at once at most (`"max"`); the others wait
 their turn. After its verdict the verifier is archived once it is free. You can confirm a held done
-or keep it open (back to its worker) on the panel at any time. The verifier is always Claude Code:
+or keep it open on the panel at any time: kept open, it goes back to its worker, who hears one line,
+and its verifier ends as after a verdict. The verifier is always Claude Code:
 for a Claude worker in the worker's profile, for a pi or Codex worker in `"profile"`, else the one
-profile the board shows. A launcher that cannot start Claude under a given session id (`launch.agent`
+profile the board shows; with several shown and no `"profile"`, the thread comes to you saying so. A launcher that cannot start Claude under a given session id (`launch.agent`
 that is not Claude, or whose arguments pick the session; a `launch.command` without `{sessionId}`)
 cannot start verifiers: the thread comes to you saying so. The verdict's identity check (the
-command's own session, in the pane herdr says it runs in) keeps a confused agent from passing its own
-work; it is no wall against a hostile process on your computer. With the key absent, a done is a done
+command's own session, in the pane herdr says it runs in; no pane, or no answer from herdr, is a
+refusal that says why) keeps a confused agent from passing its own work; it is no wall against a hostile process on your computer. With the key absent, a done is a done
 as before and nothing is read for it.
 
 On the page, while threads are on, a **Threads** pill beside Tasks counts what needs you and opens

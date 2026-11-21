@@ -73,7 +73,8 @@ starts a fresh verifier that checks the work against the acceptance lines (`acce
 the checklist, knowing nothing of your conversation. Write the done so a stranger can check it: what
 you changed, where (paths, record ids, the pull request), how you tested it, and what you could not
 do. A fail comes back to you as one line ("verification failed: ..."): read the reasons with
-`board thread show <key>`, fix, and say done again. The second fail in a row goes to the owner.
+`board thread show <key>`, fix, and say done again. The second fail in a row goes to the owner. If the owner keeps your held
+done open, you hear that in one line too: the work is back with you.
 While your done is held, another done is refused: `post --status doing` takes it back first.
 You cannot turn verification off on a thread you hold or whose done is held.
 
@@ -83,7 +84,7 @@ Handing work out: `board thread new --verify --accept "<what must be true>" ... 
 
 If you are the verifier (your first message starts with `[board verify]`): change nothing, look at
 everything yourself, and end with exactly one `board thread verdict <key> pass --file <report> |
-fail | unsure "<line>"`.
+fail | unsure "<line>"`, run in your own pane: herdr must confirm the session it runs in.
 
 ## What the board does on its own
 

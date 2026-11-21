@@ -701,6 +701,7 @@ export function heardSince(db: BoardDb, session: string, since: number, until: n
     let status = false
     let ask: string | undefined
     let failed: string | undefined
+    let kept = false
     let verified = false
     let closed: number | undefined
     let local = saidBy === null || isLocal(saidBy)
@@ -708,14 +709,22 @@ export function heardSince(db: BoardDb, session: string, since: number, until: n
       const st = states.get(e.id)
       // A failed verification (#492) is the held done's writer's to hear, as an answer is.
       const fails = e.set?.verdict === 'fail' && isSession(st?.before?.proposed?.by, session)
-      const level = fails ? LEVEL.answers : st ? entryLevel(e, st.before, st.after) : LEVEL.all
+      // So is the owner keeping a held done open: it is back with its writer.
+      const reopened =
+        e.author.kind === 'owner' &&
+        !!st?.before?.proposed?.verify &&
+        !st.after.proposed &&
+        st.after.status === 'doing' &&
+        isSession(st.before.proposed.by, session)
+      const level = fails || reopened ? LEVEL.answers : st ? entryLevel(e, st.before, st.after) : LEVEL.all
       const by = ws.filter(w => e.seq > w.since && (all || LEVEL[w.what] >= level))
       if (!by.length) continue
       for (const w of by) matched.add(w)
       heard.push(e)
-      if (level <= LEVEL.status && !fails) status = true
+      if (level <= LEVEL.status && !fails && !reopened) status = true
       if (e.type === 'ask') ask = e.text
       if (fails) failed = e.text
+      if (reopened) kept = true
       if (e.set?.verdict === 'pass') verified = true
       if (e.closed) closed = e.closed
       if (!isLocal(e.author)) local = false
@@ -727,6 +736,7 @@ export function heardSince(db: BoardDb, session: string, since: number, until: n
       status,
       ...(ask !== undefined && { ask: oneLine(ask, SUMMARY_MAX) }),
       ...(failed !== undefined && { failed: oneLine(failed, SUMMARY_MAX) }),
+      ...(kept && { kept }),
       ...(verified && { verified }),
       ...(closed && { closed }),
       entries: heard.length,
@@ -1041,5 +1051,20 @@ export function confirmClose(ctx: ThreadsCtx, head: ThreadHead): Written {
  */
 export function keepOpen(ctx: ThreadsCtx, head: ThreadHead): Written {
   if (!head.proposed) throw new ThreadError('no_proposal', `nobody proposed ${head.key} done`)
-  return postEntry(ctx, head, { status: head.proposed.verify ? 'doing' : 'owner' })
+  if (!head.proposed.verify) return postEntry(ctx, head, { status: 'owner' })
+  // Its worker hears it in one line (heardSince), and the verifier ends as a verdict ends it: its
+  // word no longer counts, and it is archived once it is free.
+  const run = head.verify?.run
+  const w = postEntry(ctx, head, { status: 'doing' })
+  if (run) endVerifierRun(run.key, ctx.now)
+  return w
+}
+
+/**
+ * A verifier's run is over (#492: a verdict, the time limit, Keep open): its time-limit entry is due
+ * now and in its archive phase, where the sweep leaves its retries alone (services/work-verify.ts).
+ */
+export function endVerifierRun(key: string, at: number): void {
+  for (const e of listEntries())
+    if (e.kind === 'verify' && e.key === key) updateEntry(e.id, x => ({ ...x, next: at, at, archive: true }))
 }

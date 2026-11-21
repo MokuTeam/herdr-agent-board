@@ -1240,6 +1240,7 @@ export async function startServer({
     workspaces: async () => (await workspaceList(8000)).map(w => ({ id: w.id, label: w.label ?? '' })),
     archive: async item => ((await askArchive(deps, item, { by: 'agent' })).ok ? 'ok' : 'busy'),
     withDb: fn => withThreadsDb(false, fn),
+    profiles: () => shownProfiles(deps.profiles().list).length,
   })
   // A reminder for a node's card goes through its node (#501): asked only for a key with a device's
   // prefix, which exists only with `nodes`.

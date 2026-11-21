@@ -69,8 +69,11 @@ const headOf = (box: Sandbox, key: string): ThreadHead =>
     }
   })
 
-/** herdr with the worker idle in wP:p1 (workspace Atlas), and a new tab wP:t9 whose Claude comes up idle. */
-function herdrWith(box: Sandbox, dir: string): void {
+/**
+ * herdr with the worker idle in wP:p1 (workspace Atlas), and a new tab wP:t9 whose Claude comes up
+ * idle; `verifier`: the session herdr reports in wP:p9 once it runs.
+ */
+function herdrWith(box: Sandbox, dir: string, verifier?: string): void {
   const pane = {
     pane_id: 'wP:p1',
     tab_id: 'wP:t1',
@@ -90,8 +93,9 @@ function herdrWith(box: Sandbox, dir: string): void {
     cwd: dir,
   }
   const workspaces = [{ workspace_id: 'wP', label: 'Atlas' }]
+  const panes = verifier ? [pane, { ...fresh, agent_session: { value: verifier } }] : [pane]
   box.state({
-    'api snapshot': { result: { snapshot: { panes: [pane], tabs: [], workspaces } } },
+    'api snapshot': { result: { snapshot: { panes, tabs: [], workspaces } } },
     'pane list': { result: { panes: [pane] } },
     'pane get wP:p1': { result: { pane } },
     'pane get wP:p9': { seq: [{ result: { pane: { ...fresh, agent: null } } }, { result: { pane: fresh } }] },
@@ -155,21 +159,28 @@ test('a held done gets one verifier, started by the board with the brief, model,
   assert.match(brief, /You are the verifier of thread atlas-1/)
   assert.match(brief, /- every row mapped/)
   assert.match(brief, /all rows mapped/)
-  // A session id put in the env does not make a verifier: the pane herdr says it runs in holds another one.
+  // herdr now reports the verifier's session in its pane.
+  herdrWith(box, dir, id)
+  // A session id put in the env does not make a verifier: the pane herdr says it runs in holds another
+  // one; and it fails closed: no pane, or a pane herdr names no session in, is refused, saying why.
   const cli = async (env: Record<string, string>, args: string[]) => {
     const r = await box.run('cli', { args, env }).exited
     return `${r.code} ${r.stdout}${r.stderr}`.trim()
   }
+  const forged = ['thread', 'verdict', 'atlas-1', 'fail', 'forged']
   assert.match(
-    await cli({ CLAUDE_CODE_SESSION_ID: id, HERDR_PANE_ID: 'wP:p1' }, [
-      'thread',
-      'verdict',
-      'atlas-1',
-      'fail',
-      'forged',
-    ]),
-    /^1 only the verifier the board started for atlas-1 gives its verdict/,
+    await cli({ CLAUDE_CODE_SESSION_ID: id, HERDR_PANE_ID: 'wP:p1' }, forged),
+    /^1 only the verifier the board started for atlas-1 gives its verdict, from its own session: pane wP:p1 holds another session/,
   )
+  assert.match(
+    await cli({ CLAUDE_CODE_SESSION_ID: id, HERDR_PANE_ID: '' }, forged),
+    /^1 only the verifier .*: HERDR_PANE_ID is not set, so herdr cannot confirm the session it runs in/,
+  )
+  assert.match(
+    await cli({ CLAUDE_CODE_SESSION_ID: id, HERDR_PANE_ID: 'wP:p7' }, forged),
+    /^1 only the verifier .*: herdr names no session in pane wP:p7/,
+  )
+  assert.equal(headOf(box, 'atlas-1').verify?.run?.key, id)
   const report = join(box.dir, 'report.md')
   writeFileSync(report, '- every row mapped: rows 1-217 read\n')
   assert.equal(

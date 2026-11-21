@@ -233,28 +233,36 @@ grace; one that had a card and is gone from the board sends the thread to the ow
 
 **Holding.** A session's done is held while `threads.verify` is set, the thread asks for it, is open
 and is not waiting on the owner (there the owner is the gate: the proposal of 3.5). The owner's done is
-never held, and the owner may confirm a held done or keep it open (it goes back to `doing`). A second
+never held, and the owner may confirm a held done or keep it open: it goes back to `doing`, its writer
+hears "atlas-13 kept open by the owner: your done is back with you" (level `answers`), and its
+verifier ends as after a verdict (its word no longer counts; archived once free). A second
 done while one is held is refused: the verifier checks the words it was given (`post --status doing`
 takes the first back). The gate is not lifted by the session it gates: `set --verify off` is refused
 for the assignee, for the session whose done is held and for any session but the one that made the
 thread, and on a thread its lane put verification on (also when it was asked for with `--verify`), for
 every session: there only the owner turns it off.
 
-**Starting.** The web board's scheduler runs a sweep each tick while `threads.verify` is set: a held
+**Starting.** The web board's scheduler runs a sweep each tick while `threads.verify` is set (the
+terminal board does not: with it alone a held done waits until the web board runs): a held
 done with no verifier gets one while fewer than `max` (2) run. The board mints a Claude session id,
 writes the `verifier` entry with it and the deadline, adds a schedule entry of kind `verify` under
 that id, then starts the session as a fork is started (`launches.start` with `sessionId`): the
-worker's folder, lane and workspace, the configured model, the brief as its first message. A launcher
+worker's folder, lane and workspace, the configured model, the brief as its first message. The folder
+is checked by the start itself, with its time limit, not in the tick. With `nodes` (#504) a verifier
+is never placed: it starts on this computer, under `sessionGiven`, never queued or sent to a node. A launcher
 that cannot start Claude under that id refuses before it opens anything. The verifier is always Claude
 Code: a Claude worker's verifier runs in the worker's profile (its card, or its archive record), a pi
-or Codex worker's in `verify.profile`, else the one profile the board shows. A start that is refused
+or Codex worker's in `verify.profile`, else the one profile the board shows; with several shown and
+no `verify.profile`, nothing starts and the thread goes to the owner (`error`) saying so. A start that is refused
 or a launch that fails later sends the thread to the owner (`error`). The board's own entries about a
 verifier carry its name and id as their author.
 
 **The brief** (core/work-verify.ts, at most 12,000 characters): who it is and the rule (it changes
 nothing: no edits, commits, pushes or thread posts; single test files, never a whole suite on a shared
 machine unless the checklist says so), the thread (title, acceptance lines, the held done's words, its
-files by path, links, the last entries), the time limit, the three verdict commands, then the
+files by path, links, the last entries; on a shared thread no peer's words: the title only when it
+was set on this board, else the key, and a peer's entry named by number and author with the command
+that reads it, as the digest's `local` keeps them out of a session), the time limit, the three verdict commands, then the
 checklist: `docs/agents/verify-checklist.md` (general: evidence the verifier looked at itself for each
 acceptance line, each claim checked against the thing it names, the whole task, nothing changed
 outside it, what could not be checked said plainly), or the file `verify.brief` names, per lane if an
@@ -264,14 +272,18 @@ lands, its block replaces the thread part.
 **The verdict.** `board thread verdict <key> pass|fail|unsure [--file report.md] "<one line>"` is
 accepted only from the session the thread names in `verify.run`, as the command's own session
 (`CLAUDE_CODE_SESSION_ID` or its pane, never `--session`), and the pane herdr says it runs in must
-hold that session too, so a session id put in the environment of another pane does not pass. No
+hold that session too, so a session id put in the environment of another pane does not pass. It fails
+closed: `HERDR_PANE_ID` unset, herdr not answering, no session in that pane or another one is a
+refusal that says why. Verification off, none running, or a command that does not claim the
+verifier's id is refused before herdr is asked. A node's `board thread`, forwarded to the master,
+carries no session of its own there: a verdict from a node is refused. No
 session but the verifier reads a running verifier's id from `board thread` (it is replaced in what
 the command prints); the owner's command and the page show it. This keeps a confused agent from closing
 its own work; it is no wall against a hostile process on the same computer, which can read the board's
 files. A pass needs its report and
 closes the thread done with the held done's words as its summary. A fail sends it back to `doing`; the
 second in a row goes to the owner. `unsure` goes to the owner and is no fail. Anything else the
-verifier writes is refused. The verdict moves the `verify` entry to now.
+verifier writes is refused. The verdict moves the `verify` entry to now and into its archive phase.
 
 **The time limit and the archive** are that one schedule entry, which the scheduler hands to the
 verifier side before anything is typed: due while the thread still waits on that verifier (30 minutes
@@ -279,7 +291,8 @@ by default), the thread goes to the owner (`timeout`); after the verdict the ver
 it is free (tried each minute, half an hour at most; a verifier that never gets free stays on the
 board, it is not killed). Only a held done times out: a verifier started as the done went (confirmed,
 taken back) runs for nothing and is archived. The sweep puts back the entry of a running verifier whose
-entry went, and moves to now the entry of one whose thread no longer waits on it.
+entry went, and moves to now, into its archive phase, the entry of one whose thread no longer waits on
+it; an entry in that phase is left to its retries.
 
 **Who hears what.** A held done is no news (level `all`): a `status` watcher hears nothing until the
 verdict; its writer gets an `answers` watch. A fail is the writer's, as an answer is: "atlas-13

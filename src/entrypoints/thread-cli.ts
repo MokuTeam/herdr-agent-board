@@ -80,7 +80,7 @@ import {
   type Written,
   watch,
 } from '../services/work-threads.ts'
-import { giveVerdict } from '../services/work-verify.ts'
+import { giveVerdict, type SelfAnswer, verdictGate } from '../services/work-verify.ts'
 
 export const THREAD_USAGE = `board thread new [--lane <id>] [--parent <key>] [--to <session>] [--doing] [--verify] [--accept "<check>"]... "<title>"
 board thread post <key> [--status next|doing|waiting|owner|done|dropped] [--summary "<line>"] [--waiting "<on what>"]
@@ -185,10 +185,11 @@ export interface ThreadCmdContext {
   /** A session on the board by its key alone (an imported item's owner_id); null when none has it. */
   sessionByKey?: (key: string) => Promise<Party | null>
   /**
-   * The session that runs the command itself (its own Claude session or pane), never the one
-   * --session names: a verdict is the verifier's own (#492). Null outside a session.
+   * The session that runs the command itself, never the one --session names, as herdr confirms it
+   * for the pane it runs in, or why it could not (services/work-verify.ts paneSelf): a verdict is
+   * the verifier's own (#492). Absent (a node's forwarded call): no verdict.
    */
-  self?: () => Promise<string | null>
+  self?: () => Promise<SelfAnswer>
   /** Puts the question on the session's card, as `board ask` does. */
   setAsk?: (question: string) => void
   /** Raises the board's window on the thread `key` (#392: its page opens it); its address, or why not. */
@@ -634,11 +635,16 @@ class Run {
         const head = this.thread(key)
         if (outcome !== 'pass' && outcome !== 'fail' && outcome !== 'unsure')
           throw new Usage(`usage: board thread verdict <key> pass|fail|unsure [--file <report>] "<one line>"`)
+        // Refused for what needs no herdr first: verification off, none running, another session.
+        verdictGate(this.write, head)
+        const self = await this.ctx.self?.().catch((err: unknown) => ({
+          why: err instanceof Error ? err.message : String(err),
+        }))
         const w = giveVerdict(this.write, head, {
           outcome,
           line: words.join(' '),
           files: a.all('--file'),
-          self: (await this.ctx.self?.().catch(() => null)) ?? null,
+          self: self ?? null,
         })
         return this.wrote(w, [`verdict ${outcome}`])
       }

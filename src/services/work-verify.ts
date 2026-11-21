@@ -9,7 +9,7 @@
 // the middle finds it all again: a running verifier keeps its entry (the sweep puts back one that
 // went), a held done with none is started on the next tick.
 import { randomUUID } from 'node:crypto'
-import { readFileSync, statSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { listArchive } from '../adapters/archive-store.ts'
 import { readCard } from '../adapters/cards.ts'
@@ -40,7 +40,7 @@ import { ownerLine, verifierName, verifyBrief } from '../core/work-verify.ts'
 import { dropHeld } from './archive.ts'
 import type { LaunchState, StartOptions, StartResult } from './launch/launches.ts'
 import type { ParentFacts } from './launch/request.ts'
-import { filePath, postEntry, type ThreadsCtx, type Written } from './work-threads.ts'
+import { endVerifierRun, filePath, postEntry, type ThreadsCtx, type Written } from './work-threads.ts'
 
 /** The default checklist in the repository (docs/agents/verify-checklist-code.md is the one for code a lane may name). */
 export const CHECKLIST = join(ROOT, 'docs', 'agents', 'verify-checklist.md')
@@ -73,6 +73,8 @@ export interface VerifyHost {
   archive(item: Item): Promise<'ok' | 'busy'>
   /** The database for one call; null when there is none. */
   withDb<T>(fn: (db: BoardDb | null) => T): T
+  /** How many profiles the board shows: a verifier with no worker's profile to keep needs exactly one, or verify.profile. */
+  profiles(): number
   now?(): number
   /** The state folder, where entries' files are kept (tests). */
   state?: string
@@ -152,12 +154,9 @@ export function createVerifier(host: VerifyHost): Verifier {
     }
     const by = head.proposed?.by
     const worker = by ? workerOf(by, items) : null
+    // The folder itself is checked by the start (launch/request.ts, with a time limit): a mapped drive
+    // that is offline does not hold up the scheduler's tick here.
     if (!worker?.cwd) return fail("the worker's folder is not known")
-    try {
-      if (!statSync(worker.cwd).isDirectory()) return fail(`${worker.cwd} is not a folder`)
-    } catch {
-      return fail(`${worker.cwd} is not there any more`)
-    }
     let checklist: string
     try {
       checklist = checklistFor(v, head.lane)
@@ -181,6 +180,15 @@ export function createVerifier(host: VerifyHost): Verifier {
     // A Claude worker's verifier runs in its profile; a pi or Codex worker's (or one gone from the
     // board with no profile it is known by) in verify.profile, else the one profile the board shows.
     const claude = worker.item ? (worker.item.agent ?? 'claude') === 'claude' : !!worker.record
+    const from = worker.item ?? worker.record
+    const parent = claude && from ? factsOf(from) : null
+    if (!parent && !v.profile) {
+      const shown = host.profiles()
+      if (shown !== 1)
+        return fail(
+          `no worker's profile to keep and no threads.verify.profile, while the board shows ${shown} profiles`,
+        )
+    }
     const category = hostCategory(host.cfg, head.lane, worker.item, items)
     let workspaces: { id: string; label: string }[] = []
     try {
@@ -212,8 +220,6 @@ export function createVerifier(host: VerifyHost): Verifier {
       return
     }
     const limit = addLimit(key, name, head, until)
-    const from = worker.item ?? worker.record
-    const parent = claude && from ? factsOf(from) : null
     const body = {
       name,
       cwd: worker.cwd,
@@ -282,7 +288,8 @@ export function createVerifier(host: VerifyHost): Verifier {
           else toOwner(db, cfg, h, run.key, 'error', `the verifier ${run.name} is gone from the board`)
         }
       }
-      // Each running verifier keeps its time limit; a limit whose thread no longer waits on it goes now (to the archive).
+      // Each running verifier keeps its time limit; a limit whose thread no longer waits on it goes now
+      // to its archive phase. One in that phase already is due()'s: its retries are left as they are.
       const running = verifyingThreads(db)
       const limits = listEntries().filter(e => e.kind === VERIFY_KIND)
       for (const h of running) {
@@ -291,7 +298,7 @@ export function createVerifier(host: VerifyHost): Verifier {
       }
       for (const e of limits) {
         const h = typeof e.thread === 'string' ? getThread(db, e.thread) : null
-        if (h?.verify?.run?.key !== e.key && e.next > now()) updateEntry(e.id, x => ({ ...x, next: now(), at: now() }))
+        if (e.archive !== true && h?.verify?.run?.key !== e.key) endVerifierRun(e.key, now())
       }
       // Held dones with no verifier, the oldest first, while fewer than verify.max run.
       let count = running.length
@@ -321,6 +328,7 @@ export function createVerifier(host: VerifyHost): Verifier {
         return 'later'
       }
       toOwner(db, cfg, head, entry.key, 'timeout', '')
+      endVerifierRun(entry.key, now())
     })
     const still = listEntries().find(e => e.id === entry.id)
     if (!still || still.next > now()) return
@@ -349,7 +357,13 @@ export function createVerifier(host: VerifyHost): Verifier {
       host.log(`verify: ${item.name} stays on the board: never free to archive`)
       return
     }
-    updateEntry(entry.id, x => ({ ...x, next: now() + ARCHIVE_RETRY_MS, at: now() + ARCHIVE_RETRY_MS, tries }))
+    updateEntry(entry.id, x => ({
+      ...x,
+      next: now() + ARCHIVE_RETRY_MS,
+      at: now() + ARCHIVE_RETRY_MS,
+      tries,
+      archive: true,
+    }))
   }
 
   return { sweep, due }
@@ -403,13 +417,60 @@ function removeLimit(key: string): void {
 
 // ------------------------------------------------------------------ the verdict (the verifier's command)
 
+/** The session a command runs in, as herdr confirms it, or why it could not be confirmed. */
+export type SelfAnswer = { key: string } | { why: string }
+
+/**
+ * The session a verdict runs in (#492), failing closed: `key` is the command's own session (never
+ * --session's), and herdr must say the pane HERDR_PANE_ID names holds that very session. No pane,
+ * no answer from herdr, no session there or another one: a refusal that says why. This keeps a
+ * confused agent from passing its own work with the verifier's id (which its card shows); it is no
+ * wall against a process on the same computer that sets up a pane of its own.
+ */
+export async function paneSelf(
+  key: string | null,
+  pane: string | undefined,
+  heldIn: (pane: string) => Promise<string | null>,
+): Promise<SelfAnswer> {
+  if (!key) return { why: 'it runs in no Claude session' }
+  if (!pane) return { why: 'HERDR_PANE_ID is not set, so herdr cannot confirm the session it runs in' }
+  let held: string | null
+  try {
+    held = await heldIn(pane)
+  } catch (err) {
+    return { why: `herdr did not say which session pane ${pane} holds: ${messageOf(err)}` }
+  }
+  if (!held) return { why: `herdr names no session in pane ${pane}` }
+  if (held !== key) return { why: `pane ${pane} holds another session` }
+  return { key }
+}
+
 export interface VerdictInput {
   outcome: 'pass' | 'fail' | 'unsure'
   line: string
   files?: readonly string[]
-  /** The session that runs the command itself (never --session's): it must be the verifier. */
-  self: string | null
+  /** The session that runs the command itself, as herdr confirmed it (paneSelf): it must be the verifier. */
+  self: SelfAnswer | null
 }
+
+/**
+ * What a verdict is refused for before herdr is asked anything: verification off, none running,
+ * or a command that does not even claim the verifier's session.
+ */
+export function verdictGate(ctx: ThreadsCtx, head: ThreadHead): VerifyRun {
+  if (!ctx.cfg.verify)
+    throw new ThreadError('verify_off', 'verification is off on this board (threads.verify in config.json)')
+  const run = head.verify?.run
+  if (!run || !head.proposed?.verify) throw new ThreadError('no_verify', `no verification of ${head.key} is running`)
+  if (!isSession(ctx.actor, run.key)) throw notVerifier(head)
+  return run
+}
+
+const notVerifier = (head: ThreadHead, why = ''): ThreadError =>
+  new ThreadError(
+    'not_verifier',
+    `only the verifier the board started for ${head.key} gives its verdict, from its own session${why ? `: ${why}` : ''}`,
+  )
 
 /**
  * `board thread verdict`: only from the verifier the board started for the thread, itself. Pass
@@ -419,15 +480,10 @@ export interface VerdictInput {
  * Its time-limit entry moves to now: the scheduler archives the verifier once it is free.
  */
 export function giveVerdict(ctx: ThreadsCtx, head: ThreadHead, input: VerdictInput): Written {
-  if (!ctx.cfg.verify)
-    throw new ThreadError('verify_off', 'verification is off on this board (threads.verify in config.json)')
-  const run = head.verify?.run
-  if (!run || !head.proposed?.verify) throw new ThreadError('no_verify', `no verification of ${head.key} is running`)
-  if (!isSession(ctx.actor, run.key) || input.self !== run.key)
-    throw new ThreadError(
-      'not_verifier',
-      `only the verifier the board started for ${head.key} gives its verdict, from its own session`,
-    )
+  const run = verdictGate(ctx, head)
+  if (!input.self) throw notVerifier(head)
+  if ('why' in input.self) throw notVerifier(head, input.self.why)
+  if (input.self.key !== run.key) throw notVerifier(head)
   const line = oneLine(input.line, 10_000)
   if (!line)
     throw new ThreadError(
@@ -451,13 +507,12 @@ export function giveVerdict(ctx: ThreadsCtx, head: ThreadHead, input: VerdictInp
     files,
     set: { verdict },
     ...(input.outcome === 'pass'
-      ? { status: 'done' as const, summary: oneLine(head.proposed.why || line, SUMMARY_MAX) }
+      ? { status: 'done' as const, summary: oneLine(head.proposed?.why || line, SUMMARY_MAX) }
       : input.outcome === 'unsure' || twice
         ? { status: 'owner' as const, waitingOn: ownerLine(input.outcome === 'unsure' ? 'unsure' : 'fail', line) }
         : { status: 'doing' as const }),
     ...(shared && input.outcome !== 'pass' && { private: true }),
   })
-  for (const e of listEntries())
-    if (e.kind === VERIFY_KIND && e.key === run.key) updateEntry(e.id, x => ({ ...x, next: ctx.now, at: ctx.now }))
+  endVerifierRun(run.key, ctx.now)
   return w
 }

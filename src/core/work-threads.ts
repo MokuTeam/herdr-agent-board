@@ -736,6 +736,8 @@ export interface DigestItem {
   failed?: string
   /** A verifier passed it among the entries heard (#492): its done is a verified one. */
   verified?: boolean
+  /** The owner kept the held done of the session that hears it open (#492): it is back with it. */
+  kept?: boolean
 }
 
 function clause(d: DigestItem, detailMax: number): { text: string; detail: string } {
@@ -752,6 +754,7 @@ function clause(d: DigestItem, detailMax: number): { text: string; detail: strin
   }
   if (d.failed !== undefined)
     return { text: `${h.key} verification failed`, detail: detail(`${d.failed}. Reasons: board thread show ${h.key}`) }
+  if (d.kept) return { text: `${h.key} kept open by the owner: your done is back with you`, detail: '' }
   if (d.ask !== undefined) return { text: `${h.key} asks the owner`, detail: detail(d.ask) }
   return { text: `${h.key} +${d.entries}`, detail: '' }
 }
@@ -762,7 +765,7 @@ function clause(d: DigestItem, detailMax: number): { text: string; detail: strin
  * details cut evenly to fit. A peer's words never go in: only a local entry's summary does.
  */
 export function digestLine(items: readonly DigestItem[]): string {
-  const told = (d: DigestItem): boolean => d.ask !== undefined || d.failed !== undefined
+  const told = (d: DigestItem): boolean => d.ask !== undefined || d.failed !== undefined || !!d.kept
   const ordered = [...items.filter(d => d.status), ...items.filter(d => !d.status && told(d))].concat(
     items.filter(d => !d.status && !told(d)),
   )

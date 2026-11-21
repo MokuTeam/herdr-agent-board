@@ -45,7 +45,7 @@ function setUp(threads: unknown = VERIFY) {
       actor,
       lane: 'atlas',
       findSession: async w => sessions[w] ?? null,
-      self: async () => (actor.kind === 'session' ? actor.key : null),
+      self: async () => (actor.kind === 'session' ? { key: actor.key } : { why: 'it runs in no Claude session' }),
       out: l => out.push(l),
       err: l => err.push(l),
       now,
@@ -82,6 +82,7 @@ function setUp(threads: unknown = VERIFY) {
   const launches = new Map<string, LaunchState>()
   let startResult: { ok: true; id: string } | { ok: false; field: string; error: string } | null = null
   let busy = false
+  let shown = 1
   const host: VerifyHost = {
     cfg: { threads, categories: [{ id: 'atlas', title: 'Atlas', color: 'blue' }] } as unknown as VerifyHost['cfg'],
     log: () => {},
@@ -113,6 +114,7 @@ function setUp(threads: unknown = VERIFY) {
       return out
     },
     now: () => now,
+    profiles: () => shown,
   }
   const verifier = () => createVerifier(host)
   return {
@@ -132,6 +134,9 @@ function setUp(threads: unknown = VERIFY) {
     },
     setBusy: (b: boolean) => {
       busy = b
+    },
+    setProfiles: (n: number) => {
+      shown = n
     },
     at: (t: number) => {
       now = t
@@ -324,7 +329,11 @@ test('only the verifier gives the verdict, from its own session; a pass needs it
   }
   // As --session names it, from another session: refused.
   assert.equal(
-    (await s.json(vf, ['verdict', 'atlas-1', 'fail', 'no'], { self: async () => (ben as { key: string }).key })).error,
+    (
+      await s.json(vf, ['verdict', 'atlas-1', 'fail', 'no'], {
+        self: async () => ({ key: (ben as { key: string }).key }),
+      })
+    ).error,
     'not_verifier',
   )
   assert.equal((await s.json(vf, ['verdict', 'atlas-1', 'pass', 'looks fine'])).error, 'report')
@@ -537,8 +546,17 @@ test('the owner may confirm a held done or keep it open, which sends it back to 
   const db = openDb() as BoardDb
   try {
     const ctx = { db, cfg: { agents: true, gapSec: 60, share: true, verify: null }, actor: owner, now: NOW }
+    const vf = verifierOf(s.head('atlas-1'))
+    deliver(ben)
     const kept = keepOpen(ctx, getThread(db, s.head('atlas-1').id) as ThreadHead)
     expect(kept.head).toMatchObject({ status: 'doing', proposed: null, verify: { run: null } })
+    // Its worker hears it in one line; the verifier ends as a verdict ends it: archived once free, its word void.
+    assert.equal(
+      events(ben)[0]?.text,
+      'atlas-1 kept open by the owner: your done is back with you. More: board thread changes',
+    )
+    expect(limits()[0]).toMatchObject({ key: (vf as { key: string }).key, next: NOW, archive: true })
+    assert.equal((await s.json(vf, ['verdict', 'atlas-1', 'fail', 'late'])).error, 'no_verify')
     await s.run(ben, ['done', 'atlas-1', 'again'])
     const done = confirmClose(ctx, getThread(db, s.head('atlas-1').id) as ThreadHead)
     expect(done.head).toMatchObject({ status: 'done', summary: 'again' })
@@ -726,4 +744,150 @@ test('review: "done (verified)" only for a done a verifier passed', async () => 
   deliver(master)
   await s.run(ben, ['done', 'atlas-1', 'second done, never verified'])
   assert.equal(events(master)[0]?.text, 'atlas-1 done: second done, never verified. More: board thread changes')
+})
+
+test('review 2: the sweep leaves a limit in its archive phase alone, so a busy verifier is tried every minute, not every tick', async () => {
+  const s = setUp()
+  await verifyThread(s)
+  await s.run(ben, ['done', 'atlas-1', 'all rows mapped'])
+  const v = s.verifier()
+  await v.sweep(async () => s.items)
+  const vf = verifierOf(s.head('atlas-1'))
+  const key = (vf as { key: string }).key
+  const report = join(s.dir, 'report.md')
+  writeFileSync(report, 'ok')
+  await s.run(vf, ['verdict', 'atlas-1', 'pass', '--file', report, 'checked'])
+  const verifierItem = { key, name: 'verify-atlas-1', session: key, agent: 'claude', pane: 'wP:p9' } as Item
+  s.setBusy(true)
+  // Due, busy: the next try in a minute. Ticks in between leave it there, and use up no try.
+  await v.due(limits()[0] as ScheduleEntry, [verifierItem])
+  expect(limits()[0]).toMatchObject({ next: NOW + 60_000, tries: 1, archive: true })
+  for (const t of [NOW + 1000, NOW + 20_000, NOW + 59_000]) {
+    s.at(t)
+    await v.sweep(async () => [...s.items, verifierItem])
+    expect(limits()[0]).toMatchObject({ next: NOW + 60_000, tries: 1 })
+  }
+  s.at(NOW + 60_000)
+  await v.due(limits()[0] as ScheduleEntry, [verifierItem])
+  await v.sweep(async () => [...s.items, verifierItem])
+  expect(limits()[0]).toMatchObject({ next: NOW + 120_000, tries: 2 })
+  s.setBusy(false)
+  s.at(NOW + 120_000)
+  await v.due(limits()[0] as ScheduleEntry, [verifierItem])
+  assert.deepEqual(s.archived, [key])
+  assert.deepEqual(limits(), [])
+})
+
+test('review 2: the time limit and a run that ended elsewhere also leave the limit to its archive retries', async () => {
+  const s = setUp()
+  await verifyThread(s)
+  await s.run(ben, ['done', 'atlas-1', 'all rows mapped'])
+  const v = s.verifier()
+  await v.sweep(async () => s.items)
+  const key = (verifierOf(s.head('atlas-1')) as { key: string }).key
+  const verifierItem = { key, name: 'verify-atlas-1', session: key, agent: 'claude', pane: 'wP:p9' } as Item
+  s.setBusy(true)
+  s.at(NOW + 31 * 60_000)
+  await v.due(limits()[0] as ScheduleEntry, [verifierItem])
+  assert.equal(s.head('atlas-1').verify?.last, 'timeout')
+  const retry = NOW + 31 * 60_000 + 60_000
+  expect(limits()[0]).toMatchObject({ next: retry, archive: true })
+  s.at(NOW + 31 * 60_000 + 5000)
+  await v.sweep(async () => [...s.items, verifierItem])
+  expect(limits()[0]).toMatchObject({ next: retry })
+})
+
+test('review 2: a verdict is refused, saying why, when herdr cannot confirm the pane it runs in; herdr is asked only for the verifier', async () => {
+  const { paneSelf } = await import('../../src/services/work-verify.ts')
+  const vkey = '44444444-4444-4444-8444-444444444444'
+  const held = (v: string | null) => async () => v
+  assert.deepEqual(await paneSelf(null, 'wP:p9', held(vkey)), { why: 'it runs in no Claude session' })
+  assert.deepEqual(await paneSelf(vkey, undefined, held(vkey)), {
+    why: 'HERDR_PANE_ID is not set, so herdr cannot confirm the session it runs in',
+  })
+  assert.deepEqual(
+    await paneSelf(vkey, 'wP:p9', async () => {
+      throw new Error('herdr is not running')
+    }),
+    { why: 'herdr did not say which session pane wP:p9 holds: herdr is not running' },
+  )
+  assert.deepEqual(await paneSelf(vkey, 'wP:p9', held(null)), { why: 'herdr names no session in pane wP:p9' })
+  assert.deepEqual(await paneSelf(vkey, 'wP:p9', held('other')), { why: 'pane wP:p9 holds another session' })
+  assert.deepEqual(await paneSelf(vkey, 'wP:p9', held(vkey)), { key: vkey })
+
+  const s = setUp()
+  await verifyThread(s)
+  await s.run(ben, ['done', 'atlas-1', 'all rows mapped'])
+  await s.verifier().sweep(async () => s.items)
+  const vf = verifierOf(s.head('atlas-1'))
+  let asked = 0
+  const ask = (answer: { key: string } | { why: string }) => ({
+    self: async () => {
+      asked++
+      return answer
+    },
+  })
+  const r = await s.run(
+    vf,
+    ['verdict', 'atlas-1', 'fail', 'rows missing'],
+    ask({ why: 'herdr names no session in pane wP:p9' }),
+  )
+  assert.equal(r.code, 1)
+  assert.match(
+    r.err,
+    /only the verifier the board started for atlas-1 gives its verdict, from its own session: herdr names no session in pane wP:p9/,
+  )
+  assert.equal(asked, 1)
+  // No self at all (a node's forwarded call): refused.
+  assert.equal(
+    (await s.json(vf, ['verdict', 'atlas-1', 'fail', 'x'], { self: undefined } as unknown as Partial<ThreadCmdContext>))
+      .error,
+    'not_verifier',
+  )
+  // Another session, or verification off: refused before herdr is asked.
+  assert.equal((await s.json(ben, ['verdict', 'atlas-1', 'fail', 'x'], ask({ key: 'x' }))).error, 'not_verifier')
+  assert.equal(s.head('atlas-1').proposed?.verify, true)
+  const off = setUp(true)
+  await off.run(master, ['new', '--to', 'ben', 'Plain'])
+  assert.equal((await off.json(ben, ['verdict', 'atlas-1', 'pass', 'x'], ask({ key: 'x' }))).error, 'verify_off')
+  assert.equal(asked, 1)
+})
+
+test('plan change 5: a pi or Codex worker’s verifier is Claude in verify.profile; with no profile to keep and two shown, the owner hears why', async () => {
+  const s = setUp({ agents: true, verify: { model: 'opus', profile: 'work' } })
+  ;(s.items[0] as { agent?: string }).agent = 'pi'
+  await verifyThread(s)
+  await s.run(ben, ['done', 'atlas-1', 'all rows mapped'])
+  await s.verifier().sweep(async () => s.items)
+  assert.equal(s.started.length, 1)
+  assert.equal(s.started[0]?.body.profile, 'work')
+  assert.equal(s.started[0]?.options.parent, undefined)
+  // A Claude worker's keeps its own profile: verify.profile is not read.
+  const c = setUp({ agents: true, verify: { model: 'opus', profile: 'work' } })
+  await verifyThread(c)
+  await c.run(ben, ['done', 'atlas-1', 'all rows mapped'])
+  await c.verifier().sweep(async () => c.items)
+  assert.equal(c.started[0]?.body.profile, undefined)
+  assert.equal(c.started[0]?.options.parent?.key, (ben as { key: string }).key)
+  // No verify.profile: the one profile the board shows; with two, no start and the owner hears why.
+  const one = setUp()
+  ;(one.items[0] as { agent?: string }).agent = 'codex'
+  await verifyThread(one)
+  await one.run(ben, ['done', 'atlas-1', 'all rows mapped'])
+  await one.verifier().sweep(async () => one.items)
+  assert.equal(one.started.length, 1)
+  assert.equal(one.started[0]?.body.profile, undefined)
+  const two = setUp()
+  ;(two.items[0] as { agent?: string }).agent = 'codex'
+  two.setProfiles(2)
+  await verifyThread(two)
+  await two.run(ben, ['done', 'atlas-1', 'all rows mapped'])
+  await two.verifier().sweep(async () => two.items)
+  assert.equal(two.started.length, 0)
+  expect(two.head('atlas-1')).toMatchObject({
+    status: 'owner',
+    waitingOn:
+      "no verifier: no worker's profile to keep and no threads.verify.profile, while the board shows 2 profiles",
+    verify: { last: 'error', run: null },
+  })
 })
