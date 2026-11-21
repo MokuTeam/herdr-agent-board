@@ -38,7 +38,27 @@ const payload = (id: string, keys: string[]): Record<string, unknown> => ({
     column: 'idle',
     attention: '',
   })),
-  launches: [],
+  launches: [
+    {
+      id: `l-${id}`,
+      name: 'next',
+      cwd: '/w',
+      category: 'atlas',
+      workspace: 'atlas',
+      workspaceId: null,
+      state: 'starting',
+      step: 'tab',
+      error: '',
+      kind: '',
+      pane: null,
+      key: null,
+      startedAt: 1,
+      doneAt: null,
+      message: '',
+      worktree: null,
+      newWorkspace: false,
+    },
+  ],
   categories: [],
   swatches: [],
   columns: [],
@@ -71,7 +91,6 @@ function manualClock(): Clock & { run(): void; pending(): number } {
   }
 }
 
-/** A link stand-in: its payload set by the test, which says when it changed. */
 /** A server's status before its owner logged in: no memory figure, no load, the profile not logged in. */
 const freshServer = (id: string): NodeStatus => ({
   api: 1,
@@ -92,6 +111,7 @@ const freshServer = (id: string): NodeStatus => ({
   at: 1,
 })
 
+/** A link stand-in: its payload set by the test, which says when it changed. */
 function fakeLink(id: string, state: LinkStatus['state'] = 'online', status: NodeStatus | null = null) {
   let raw: unknown = null
   let at: number | null = null
@@ -102,7 +122,7 @@ function fakeLink(id: string, state: LinkStatus['state'] = 'online', status: Nod
     link: {
       state,
       since: 1,
-      heardAt: at,
+      heardAt: at === null ? null : at + 61_234,
       detail: 'ssh: Permission denied (publickey) for agent-board-link@203.0.113.10',
     },
     status,
@@ -190,6 +210,12 @@ describe('the aggregate', () => {
       ['@server-1:abc', 'server-1'],
       ['@server-2:pane-1', 'server-2'],
     ])
+    expect(part?.launches.map(l => [l.id, l.device])).toEqual([
+      ['@server-1:l-server-1', 'server-1'],
+      ['@server-2:l-server-2', 'server-2'],
+    ])
+    // When the link last heard a byte, to the minute: a ping does not push the board again.
+    expect(part?.devices[0]?.link?.heardAt).toBe(60_000)
     expect(part?.schedules.map(e => [e.id, e.key, e.device])).toEqual([
       ['@server-1:a1b2c3', '@server-1:pane-1', 'server-1'],
       ['@server-2:a1b2c3', '@server-2:pane-1', 'server-2'],
@@ -278,6 +304,42 @@ describe('the aggregate', () => {
     again.changed('server-1')
     expect(after.part()?.items.map(i => i.key)).toEqual(['@server-1:pane-3'])
     after.close()
+  })
+
+  test('close writes an offline copy still due; a failed write is tried again with the next payload', () => {
+    const cfg = config()
+    const dir = mkdtempSync(join(tmpdir(), 'agg-'))
+    const real = createDeviceStore({ dir })
+    let fail = true
+    const logged: string[] = []
+    const store = {
+      ...real,
+      setSnapshot: (id: string, s: { at: number; part: unknown }) => {
+        if (fail) throw new Error('disk full')
+        real.setSnapshot(id, s)
+      },
+    }
+    const clock = manualClock()
+    const one = fakeLink('server-1')
+    const { api, changed } = fakeLinks(cfg, [one])
+    const agg = createNodeAggregate({
+      links: api,
+      cfg,
+      log: t => logged.push(t),
+      onChange: () => {},
+      store,
+      clock,
+      hostName: 'laptop',
+    })
+    one.set(payload('server-1', ['pane-1']), 100)
+    changed('server-1')
+    clock.run()
+    expect(logged).toEqual(['node server-1: the offline copy: disk full'])
+    fail = false
+    // The same payload again (a state change): due once more, as it was never written.
+    changed('server-1')
+    agg.close()
+    expect(real.snapshot('server-1')?.at).toBe(100)
   })
 
   test('an offline copy that is not one shows nothing; a device not in config.json shows nothing', () => {

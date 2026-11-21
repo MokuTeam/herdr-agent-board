@@ -57,11 +57,11 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 function boardDevice(view: DeviceView, device: DeviceConfig | undefined, at: number | null): BoardDevice {
   // When the link last heard a byte, to the minute the page shows: a ping alone does not send the
   // whole board to every page and phone again.
-  const link = view.link
-    ? (({ detail, ...rest }) => ({ ...rest, heardAt: rest.heardAt === null ? null : rest.heardAt - (rest.heardAt % 60_000) }))(
-        view.link,
-      )
-    : null
+  let link: BoardDevice['link'] = null
+  if (view.link) {
+    const { detail, heardAt, ...rest } = view.link
+    link = { ...rest, heardAt: heardAt === null ? null : heardAt - (heardAt % 60_000) }
+  }
   return {
     ...view,
     link,

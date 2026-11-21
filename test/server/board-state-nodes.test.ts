@@ -11,7 +11,10 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { root, sandbox } from '../support/sandbox.ts'
 
-/** main before #500: server/board-state.ts as every board without `nodes` runs it. */
+/**
+ * main before #500: server/board-state.ts as every board without `nodes` runs it. A later change
+ * that means to change the payload of a board without `nodes` moves this to its own commit on main.
+ */
 const BASE = 'f596a6f4'
 const SID = '5a6b7c8d-1e2f-4a3b-9c4d-5e6f7a8b9c0d'
 const REMOTE = '6a6b7c8d-1e2f-4a3b-9c4d-5e6f7a8b9c0e'
@@ -40,8 +43,8 @@ const remoteItem = key => ({
   autoName: '', category: 'atlas', categorySet: true, column: 'work', attention: '', device: 'server-1',
 })
 const part = {
-  items: [remoteItem('@server-1:pane-1'), remoteItem('@server-1:${REMOTE}')],
-  launches: [],
+  items: [remoteItem('@server-1:pane-1'), { ...remoteItem('@server-1:${REMOTE}'), todos: [{ id: 't', text: 'x', owner: 'user', by: 'user', at: 1 }] }],
+  launches: [{ id: '@server-1:l-1', name: 'next', device: 'server-1' }],
   schedules: [{ id: '@server-1:a1b2c3', key: '@server-1:pane-1', text: 'later', next: 1, device: 'server-1' }],
   devices: [{ id: 'server-1', title: 'Server 1', kind: 'direct', link: null, status: null, sameCommit: null, payloadAt: 7,
     paused: false, drain: false, maxSessions: null, minFreeMemMb: null, maxLoad: null }],
@@ -123,6 +126,9 @@ test('without nodes the payload is main’s; with devices the payload has their 
     `@server-1:${REMOTE}`,
   ])
   expect(got.master.schedules.map((e: { id: string }) => e.id)).toEqual(['@server-1:a1b2c3'])
+  expect(got.master.launches.map((l: { id: string }) => l.id)).toEqual(['@server-1:l-1'])
+  // Tasks are off on this board: another device's card carries none either.
+  expect(got.master.items.some((i: Record<string, unknown>) => 'todos' in i)).toBe(false)
   expect(got.master.devices.map((d: { id: string }) => d.id)).toEqual(['server-1'])
   // A lane this board does not have: as a lane a session made up, just before 'other' (core/categories.ts laneRank).
   expect(got.master.categories.map((c: { id: string; configured: boolean }) => [c.id, c.configured])).toEqual([
@@ -131,7 +137,7 @@ test('without nodes the payload is main’s; with devices the payload has their 
   ])
   // Everything else as without them.
   const rest = (p: Record<string, unknown>) => {
-    const { items, schedules, categories, devices, ...others } = p
+    const { items, launches, schedules, categories, devices, ...others } = p
     return others
   }
   expect(rest(got.master)).toEqual(rest(got.main))

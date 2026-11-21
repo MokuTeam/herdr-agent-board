@@ -84,7 +84,10 @@ describe('nodePart', () => {
           }),
         ],
         launches: [launch()],
-        schedules: [{ id: 'a1b2c3', key: SID, text: 'check', next: 5, from: { key: OTHER, name: 'boss' } }],
+        schedules: [
+          { id: 'a1b2c3', key: SID, text: 'check', next: 5, idle: true, from: { key: OTHER, name: 'boss' } },
+          { id: 'd4e5f6', key: SID, kind: 'call', text: 'r'.repeat(20_000), next: 6 },
+        ],
       },
       'server-1',
     )
@@ -105,7 +108,17 @@ describe('nodePart', () => {
         key: `@server-1:${SID}`,
         text: 'check',
         next: 5,
+        idle: true,
         from: { key: `@server-1:${OTHER}`, name: 'boss' },
+        device: 'server-1',
+      },
+      // A call report is as long as the store lets it be (core/schedule-rules.ts MAX_REPORT).
+      {
+        id: '@server-1:d4e5f6',
+        key: `@server-1:${SID}`,
+        kind: 'call',
+        text: 'r'.repeat(16_000),
+        next: 6,
         device: 'server-1',
       },
     ])
