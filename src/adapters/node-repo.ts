@@ -118,16 +118,20 @@ export async function repoIdentity(dir: string): Promise<GitIdentity | null> {
   return identityOf(name.ok ? name.out : null, email.ok ? email.out : null)
 }
 
-/** The identity into the checkout's own config (`--local`, which its worktrees share). */
+/**
+ * The identity into the checkout's own config (`--local`, which its worktrees share). A key set
+ * there more than once is replaced whole. The name is put back when the email cannot be written, so
+ * the clone is never left with half of each.
+ */
 export async function setRepoIdentity(dir: string, id: GitIdentity): Promise<RepoDone> {
-  for (const [key, value] of [
-    ['user.name', id.name],
-    ['user.email', id.email],
-  ] as const) {
-    const r = await git(dir, ['config', '--local', '--', key, value])
-    if (!r.ok) return { ok: false, why: r.why }
-  }
-  return { ok: true }
+  const set = (key: string, value: string) => git(dir, ['config', '--local', '--replace-all', '--', key, value])
+  const before = await git(dir, ['config', '--local', '--get', 'user.name'])
+  const name = await set('user.name', id.name)
+  if (!name.ok) return { ok: false, why: name.why }
+  const email = await set('user.email', id.email)
+  if (email.ok) return { ok: true }
+  await (before.ok ? set('user.name', before.out) : git(dir, ['config', '--local', '--unset-all', 'user.name']))
+  return { ok: false, why: email.why }
 }
 
 /** A clean checkout moved to `ref` (a local branch tracking `origin/<ref>` when it has none) and fast-forwarded to it. */

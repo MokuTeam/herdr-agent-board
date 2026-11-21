@@ -637,7 +637,7 @@ test('a start placed on a node commits there as in the master’s checkout: the 
   const pair = await placing({ count: 1, nodes: { order: ['server-1', 'local'] }, masterEnv: { GIT_TRACE: trace } })
   const node = pair.nodes[0] as Pair['nodes'][0]
   // The checkout's own author, as an owner with one identity per repository keeps it.
-  git(pair.checkout, 'config', 'user.name', 'Atlas Author')
+  git(pair.checkout, 'config', 'user.name', 'Атлас Author %s')
   git(pair.checkout, 'config', 'user.email', 'atlas@example.test')
   await startAt(pair.master.url, pair.checkout, 'atlas 1')
   await until(() => started(node.box).length === 1, 20_000)
@@ -655,7 +655,7 @@ test('a start placed on a node commits there as in the master’s checkout: the 
       },
     }).trim()
   assert.equal(there('config', 'user.email'), 'atlas@example.test')
-  assert.equal(there('config', 'user.name'), 'Atlas Author')
+  assert.equal(there('config', 'user.name'), 'Атлас Author %s')
   // Never the node's global config.
   assert.equal(existsSync(join(home, '.gitconfig')), false)
   // The master asked its checkout once for each.

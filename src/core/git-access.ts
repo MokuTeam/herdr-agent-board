@@ -7,7 +7,7 @@
 // request of a device given its secrets (#604), and lives in memory and on the link: a record keeps
 // hosts, accounts and the token's SHA-256, never the token.
 
-/** A git identity: global `user.name` and `user.email`. */
+/** A git identity: `user.name` and `user.email`, the global ones (#609) or a checkout's (#611). */
 export interface GitIdentity {
   name: string
   email: string

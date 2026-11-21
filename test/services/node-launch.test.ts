@@ -309,7 +309,7 @@ test('an address the board’s rule refuses, a remote that cannot be cloned, a b
 
 // ---------------------------------------------------------------- the author of the master's checkout (#611)
 
-const AUTHOR = { name: 'Atlas Author', email: 'atlas@example.test' }
+const AUTHOR = { name: 'Атлас Author %s', email: 'atlas@example.test' }
 const NODE_OWNER = { name: 'Node Owner', email: 'node@example.test' }
 
 /** The node's global config a file of the test's own, holding the node owner's identity; git's system one off. */
@@ -400,6 +400,8 @@ test('an author that does not fit is refused as the body; one that cannot be set
     ...repoBody().source,
     identity: AUTHOR,
   })
+  // null is none, as from a master that has no identity there.
+  assert.deepEqual((launchRequestOf(withAuthor(ID, null)) as { source: unknown }).source, repoBody().source)
   const field = (identity: unknown) => (launchRequestOf(withAuthor(ID, identity)) as { field?: string }).field
   for (const identity of [
     'Atlas Author <atlas@example.test>',
@@ -427,5 +429,29 @@ test('an author that does not fit is refused as the body; one that cannot be set
   assert.equal(starts.length, 0)
   // Nothing accepted: the master may send it again, to this node or the next.
   assert.equal(existsSync(join(root, 'launches', `${ID}.json`)), false)
-  assert.equal(local(join(node.workRoot, 'example.test', 'acme', 'atlas'), 'user.email'), null)
+  const checkout = join(node.workRoot, 'example.test', 'acme', 'atlas')
+  assert.equal(local(checkout, 'user.email'), null)
+
+  // A start turned away for anything else (changes of the node's own) asks and writes nothing.
+  const counted = countedRepo()
+  writeFileSync(join(checkout, 'notes.txt'), 'mine\n')
+  assert.deepEqual(await createNodeLaunch({ ...deps, repo: counted.repo }).answer(withAuthor(OTHER)), {
+    status: 409,
+    body: { error: 'repo', detail: 'changes' },
+  })
+  assert.deepEqual(counted.calls, { identity: 0, setIdentity: 0 })
+  assert.equal(local(checkout, 'user.email'), null)
 }, 30_000)
+
+test('a key the clone has twice is replaced whole (#611)', async () => {
+  const root = tmp()
+  nodeGlobal(root)
+  const dir = join(root, 'clone')
+  mkdirSync(dir)
+  git(dir, 'init', '--quiet')
+  git(dir, 'config', '--local', '--add', 'user.email', 'one@example.test')
+  git(dir, 'config', '--local', '--add', 'user.email', 'two@example.test')
+  assert.deepEqual(await setRepoIdentity(dir, AUTHOR), { ok: true })
+  assert.equal(git(dir, 'config', '--local', '--get-all', 'user.email'), AUTHOR.email)
+  assert.deepEqual(await repoIdentity(dir), AUTHOR)
+})
