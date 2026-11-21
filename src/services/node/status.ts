@@ -35,6 +35,11 @@ export interface StatusSources {
   exists?: (file: string) => boolean
   /** Whether `pi` is on this board's PATH (services/launch/launches.ts). */
   piFound?: () => boolean
+  /**
+   * The programs of core/bundle.ts NODE_PROGRAMS on this node's PATH (#603), asked once: the
+   * master's bundle runs a hook's program only where it is. No `programs` in the status without it.
+   */
+  programs?: () => readonly string[]
   platform?: string
   arch?: string
   home?: string
@@ -87,6 +92,11 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
   const platform = src.platform ?? process.platform
   const exists = src.exists ?? existsSync
   let commit: Promise<string> | null = null
+  let programs: string[] | null = null
+  const programsOnce = (ask: () => readonly string[]): string[] => {
+    programs ??= [...ask()]
+    return programs
+  }
   const commitOnce = (): Promise<string> => {
     // a plugin "Add a server" unpacked from an archive has no .git: its stamp says the commit (#509)
     commit ??= (src.commit ?? (async () => (await headCommit(ROOT).catch(() => null)) ?? archiveStamp(ROOT) ?? ''))()
@@ -121,6 +131,7 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
           .profiles()
           .map(p => ({ id: p.id, loggedIn: loggedIn(p.dir, platform, exists), bundle: src.bundle?.(p.id) ?? null })),
         agents: agentsOf(src.launch(), src.piFound ?? piOnPath),
+        ...(src.programs && { programs: programsOnce(src.programs) }),
         at: (src.now ?? Date.now)(),
       }
     },

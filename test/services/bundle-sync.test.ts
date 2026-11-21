@@ -15,7 +15,7 @@ import type { Link } from '../../src/services/nodes/link.ts'
 function setup(
   state: 'online' | 'offline',
   answer?: (path: string, init?: RequestInit) => Response | Promise<Response>,
-  more: { skills?: number; requestMs?: number } = {},
+  more: { skills?: number; requestMs?: number; programs?: string[] } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), 'bundle-sync-'))
   const home = join(root, 'home')
@@ -48,7 +48,13 @@ function setup(
   const link = {
     id: 'server-1',
     state: () => ({ state, since: 0, heardAt: null }),
-    view: () => ({ status: { platform: 'linux', profiles: [{ id: 'default', loggedIn: true, bundle: null }] } }),
+    view: () => ({
+      status: {
+        platform: 'linux',
+        profiles: [{ id: 'default', loggedIn: true, bundle: null }],
+        ...(more.programs && { programs: more.programs }),
+      },
+    }),
     status: async () => null,
     async fetch(path: string, init?: RequestInit) {
       asked.push(path)
@@ -80,7 +86,7 @@ function setup(
     clock,
     ...(more.requestMs !== undefined && { requestMs: more.requestMs }),
   })
-  return { sync, timers, asked, saved, dir, advance: (ms: number) => (now += ms) }
+  return { sync, timers, asked, saved, dir, home, advance: (ms: number) => (now += ms) }
 }
 
 describe('bundle sync', () => {
@@ -282,5 +288,37 @@ describe('bundle sync', () => {
     // The two named are the last two sent, between the commits.
     expect(blobs.slice(9).sort()).toEqual(blobs.slice(0, 2).sort())
     expect(s.asked.at(-1)).toBe('/api/node/bundle/default/commit')
+  })
+
+  test("the node's programs and the profile's acknowledgments reach what is committed (#602, #603)", async () => {
+    let body = ''
+    const s = setup(
+      'online',
+      (path, init) => {
+        if (path.endsWith('/commit')) body = String(init?.body ?? '')
+        return taking(path)
+      },
+      { programs: ['python3'] },
+    )
+    mkdirSync(join(s.dir, 'hooks'), { recursive: true })
+    writeFileSync(join(s.dir, 'hooks', 'save.py'), 'print(1)\n')
+    writeFileSync(
+      join(s.dir, 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          Stop: [{ hooks: [{ type: 'command', command: `python ${s.dir.replaceAll('\\', '/')}/hooks/save.py` }] }],
+        },
+      }),
+    )
+    writeFileSync(join(s.home, '.claude.json'), JSON.stringify({ codeModeCaveatsAcceptedV1: true, numStartups: 3 }))
+    const r = await s.sync.syncIfBehind('server-1')
+    expect(r.ok).toBe(true)
+    const manifest = JSON.parse(body).manifest
+    expect(JSON.stringify(manifest.hooks)).toContain('python3 {{profile-dir}}/hooks/save.py')
+    expect(manifest.acks).toEqual(['codeModeCaveatsAcceptedV1'])
+    expect(r.lines.filter(l => l.why === 'program-renamed' || l.why === 'acknowledged').map(l => l.name)).toEqual([
+      'codeModeCaveatsAcceptedV1',
+      'save',
+    ])
   })
 })

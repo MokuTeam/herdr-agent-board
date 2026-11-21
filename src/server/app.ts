@@ -24,6 +24,7 @@ import { knobMs, pace, pause } from '../adapters/pacing.ts'
 import { archiveDir, cardsDir, pluginRoot, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { pluginCommit, touchCode } from '../adapters/plugin-update.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
+import { programsOnPath } from '../adapters/process.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import { watchesDir } from '../adapters/schedule-store.ts'
 import {
@@ -44,6 +45,7 @@ import {
   writePidRecord,
 } from '../adapters/ssh.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
+import { NODE_PROGRAMS } from '../core/bundle.ts'
 import { answerText, decisionsConfig } from '../core/decisions.ts'
 import { journalConfig } from '../core/journal.ts'
 import { messageGate } from '../core/message-gate.ts'
@@ -1123,6 +1125,7 @@ export async function startServer({
       version: PLUGIN_VERSION,
       bundle: nodeBundle.version,
       commit: runningCommit,
+      programs: () => programsOnPath(NODE_PROGRAMS),
     })
     // The plugin at the master's commit (#590): unpacked beside this one, installed, swapped in.
     // Then the board ends with 75 and run.ts, the pane's process, starts it again from the plugin's

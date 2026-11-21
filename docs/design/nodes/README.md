@@ -257,11 +257,11 @@ Errors are `{ error: <code> }` as elsewhere. Codes of this door: `host`, `origin
   "sessions": { "awake": 2, "working": 1, "asleep": 5 }, "launches": 0,
   "workRootFreeMb": 148000,
   "profiles": [{ "id": "default", "loggedIn": true, "bundle": { "seq": 14, "hash": "9c1e..." } }],
-  "agents": ["claude"], "at": 1795210000000
+  "agents": ["claude"], "programs": ["python3", "bash"], "at": 1795210000000
 }
 ```
 
-Facts only. The node holds no thresholds and takes no placement decision; it refuses a launch only below a hard floor of its own (`full` under 512 MB available), which makes the master try the next device. `memAvailableMb` is `MemAvailable` from `/proc/meminfo` on Linux, free plus inactive plus purgeable pages from `vm_stat` on macOS, `FreePhysicalMemory` on Windows. `load` is null on Windows.
+Facts only. The node holds no thresholds and takes no placement decision; it refuses a launch only below a hard floor of its own (`full` under 512 MB available), which makes the master try the next device. `memAvailableMb` is `MemAvailable` from `/proc/meminfo` on Linux, free plus inactive plus purgeable pages from `vm_stat` on macOS, `FreePhysicalMemory` on Windows. `load` is null on Windows. `programs`: which of a few names a hook may run (`python`, `python3`, `py`, `pwsh`, `powershell`, `node`, `bash`) are on the node's PATH, looked up once per run of its board (#603); a node of an older board leaves it out, and the bundle then says which hooks may lack their program.
 
 ### 6.4 Launch
 
@@ -434,10 +434,11 @@ Per profile, the master builds a bundle from the profile's folder and classifies
 | `skills/`, `agents/`, `commands/`, `CLAUDE.md` | Copied as files. Left out, with a line in the report: a file over 5 MB, and folders named `node_modules`, `.git`, `.venv`, `__pycache__`. |
 | `settings.json`: `permissions`, `model`, effort and the other plain settings, `enabledPlugins`, `extraKnownMarketplaces` | Copied as keys. |
 | `settings.json`: `env` | Copied, except names that look like a secret (token, key, secret, password): those are listed as "give this node a secret" (section 10, item 3). |
-| `settings.json`: hooks | The board's own hooks are never sent; the node's install writes them with the node's paths (they hold absolute paths, `src/core/install-plan.ts:206`). herdr's own hook neither: the node's herdr installs its own. Another hook is portable when its command lives inside the profile folder (the folder's path is rewritten, and the files it names there travel with it; what those files read or run in turn is not followed) or is a bare command the node finds on its PATH. Any other hook, such as one that names `C:\` or PowerShell on the way to a Linux node, is not sent and is reported with its command. |
-| MCP servers of the user scope (`mcpServers` in the profile's `.claude.json`; nothing else is read from that file) | `http` and `sse` servers: copied; a header that holds a value becomes a `${VAR}` reference and the value is asked for as a secret. `stdio` servers: portable when the command is a launcher found on the node (`npx`, `uvx`, `bunx`, `node`, `python`, `docker`) and no argument is an absolute local path. Any other is "bound to this computer": reported, and either overridden for that node in `nodes.devices.<id>.mcp`, switched off there, or forwarded in stage 2. |
+| `settings.json`: hooks | The board's own hooks are never sent; the node's install writes them with the node's paths (they hold absolute paths, `src/core/install-plan.ts:206`). herdr's own hook neither: the node's herdr installs its own. Another hook is portable when its command lives inside the profile folder (the folder's path is rewritten, and the files it names there travel with it; what those files read or run in turn is not followed) or is a bare command the node finds on its PATH. Any other hook, such as one that names `C:\` or PowerShell on the way to a Linux node, is not sent and is reported with its command. A hook's program goes by what the node's status says it has (`programs`, a few names asked once, #603): `python` it lacks while it has `python3` is written as `python3`, any other it lacks is not sent, and one a node of that platform may lack is said when the node did not say. A data file (JSON, env, ini, toml, yaml) beside a sent script that the script names by its base name is never sent as a file: one with a key named like a secret is reported as needs-secret with its path, one without as not sent (it may be the script's own state). |
+| MCP servers of the user scope (`mcpServers` in the profile's `.claude.json`; of the rest of that file only the next row's keys) | `http` and `sse` servers: copied; a header that holds a value becomes a `${VAR}` reference and the value is asked for as a secret. `stdio` servers: portable when the command is a launcher found on the node (`npx`, `uvx`, `bunx`, `node`, `python`, `docker`) and no argument is an absolute local path. Any other is "bound to this computer": reported, and either overridden for that node in `nodes.devices.<id>.mcp`, switched off there, or forwarded in stage 2. |
+| `.claude.json`: the owner's answers to notices a setting the bundle sends turns on (`ACKNOWLEDGMENTS` in `src/core/bundle.ts`: Code Mode's two keys, bypass permissions' one) | Carried when true, a report line each. The node writes the keys its file lacks and no other key, read and written beside and renamed, again when a running session rewrote it meanwhile (#602). |
 | A project's own `.claude/` and `.mcp.json` | Not in the bundle. They come with the repository. |
-| Credentials, `.claude.json` beyond `mcpServers`, transcripts, per-project memory | Never sent. Memory is keyed by the folder's path, which differs per machine; syncing it both ways is a design of its own and not in stage 1. |
+| Credentials, `.claude.json` beyond `mcpServers` and those answers, transcripts, per-project memory | Never sent. Memory is keyed by the folder's path, which differs per machine; syncing it both ways is a design of its own and not in stage 1. |
 | The board's slice | `categories`, `language`, `models`, and this node's sinks from `nodes.devices.<id>.sinks`. `launch.claude` is sent only when its program is plain `claude` (its flags then travel); a launcher of the owner's own stays on the master and the report says so. |
 
 ### 9.2 Version and when it moves
@@ -454,7 +455,8 @@ The bundle's `hash` is the SHA-256 of its sorted manifest; `seq` counts hashes t
 4. Touches only what it owns. Owned means: listed in the manifest it applied last time. A file that is in the new manifest, exists on the node, is not owned and differs is left alone and returned in `kept` with the reason. Files owned before and absent now are removed. In `settings.json` and in `mcpServers` it replaces only the keys and server names the bundle owns; a key the node's owner added by hand stays.
 5. Writes files to a temporary name and renames them.
 6. Runs the board's install for that profile (`installInto`, `src/adapters/hook-settings.ts:78-104`), which puts the board's hooks back with this node's paths.
-7. Records the new manifest.
+7. Puts the owner's answers to notices the manifest carries (`acks`) into the profile's `.claude.json`, the keys it lacks only, never another key (#602); a file that does not parse, or one a running session rewrote each of three times, is left as it is and the log says so.
+8. Records the new manifest.
 
 Applying the same manifest twice changes nothing.
 

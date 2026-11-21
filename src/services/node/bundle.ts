@@ -22,6 +22,7 @@ import {
   backUp,
   backupFolder,
   createBlobStore,
+  editJson,
   fileSha,
   linkOnTheWay,
   MAX_BLOB_BYTES,
@@ -196,6 +197,15 @@ export function createNodeBundle(deps: NodeBundleDeps): NodeBundle {
     const touchMcp = Object.keys(next.mcp).length > 0 || gone.mcp.length > 0
     const claude = touchMcp ? readObject(claudeFile) : null
     if (claude && !claude.ok) return { status: 409, body: { error: 'settings-parse', file: claudeFile } }
+    // The owner's answers to notices the bundle's settings turn on (#602): the keys that file does
+    // not have yet. One it has stays as it is, and no other key of it is touched.
+    const acks = next.acks ?? []
+    // A file that does not parse leaves them out, said in the log: they are no reason to refuse the rest.
+    const ackState = acks.length ? (claude ?? readObject(claudeFile)) : null
+    if (ackState && !ackState.ok)
+      deps.log(`node bundle ${profile.id}: .claude.json does not parse: the acknowledgments are left out`)
+    const lacking = (v: Record<string, unknown> | undefined): string[] => acks.filter(k => !v || !Object.hasOwn(v, k))
+    const acksMissing = ackState?.ok ? lacking(ackState.value) : []
 
     // 4. What is the bundle's to change: a file that is there, not owned and different is the node's.
     const ownedBefore = new Set(owned(previous).files)
@@ -232,7 +242,16 @@ export function createNodeBundle(deps: NodeBundleDeps): NodeBundle {
       canonical(had.manifest) === canonical(mine) &&
       canonical(had.sent) === canonical(sent)
     const hooksIn = deps.installed(dir)
-    if (!writes.length && !removes.length && !settingsChanged && !mcpChanged && !sliceChanged && sameRecord && hooksIn)
+    if (
+      !writes.length &&
+      !removes.length &&
+      !settingsChanged &&
+      !mcpChanged &&
+      !acksMissing.length &&
+      !sliceChanged &&
+      sameRecord &&
+      hooksIn
+    )
       return { status: 200, body: { ok: true, applied: [], removed: [], kept, backup: null } }
 
     // 3. A copy of every file about to be replaced or removed, one folder per commit.
@@ -246,7 +265,7 @@ export function createNodeBundle(deps: NodeBundleDeps): NodeBundle {
     for (const w of writes) if (w.there) copy(w.path, join(dir, ...w.path.split('/')))
     for (const p of removes) copy(p, join(dir, ...p.split('/')))
     if (settingsChanged && settings.text !== null) copy('settings.json', settings.file)
-    if (mcpChanged && claudeValue) copy('.claude.json', claudeFile)
+    if ((mcpChanged || acksMissing.length) && existsSync(claudeFile)) copy('.claude.json', claudeFile)
     if (backedUp) pruneBackups(backups)
 
     // 5. Each file by a temporary name and a rename.
@@ -278,6 +297,22 @@ export function createNodeBundle(deps: NodeBundleDeps): NodeBundle {
     if (sliceChanged) {
       const r = deps.writeSlice(raw => appliedSlice(raw, previous?.board ?? null, next.board))
       if (!r.ok) return partial(500, 'config', r.error)
+    }
+    if (acksMissing.length) {
+      const done = editJson(claudeFile, value => {
+        const missing = lacking(value)
+        if (!missing.length) return null
+        const out: Record<string, unknown> = { ...(value ?? {}) }
+        for (const k of missing) out[k] = true
+        return out
+      })
+      // Left as it is and said; the next bundle tries again.
+      if (done === 'parse')
+        deps.log(`node bundle ${profile.id}: .claude.json does not parse: the acknowledgments are left out`)
+      if (done === 'busy')
+        deps.log(
+          `node bundle ${profile.id}: .claude.json was rewritten each time it was read: the acknowledgments are left out`,
+        )
     }
     // 7. The manifest, as the master's version was sent: what the bundle owns here from now on.
     const rec: BundleRecord = { seq: seq as number, hash, manifest: mine, sent, at: now() }

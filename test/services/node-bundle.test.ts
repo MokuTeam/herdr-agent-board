@@ -48,6 +48,8 @@ interface Rig {
   bundle: NodeBundle
   config: { raw: Record<string, unknown> | null; broken: boolean; writes: number }
   installs: string[]
+  /** What the node logged. */
+  logs: string[]
   /** Sends these contents as blobs and commits a manifest of them. */
   commit(
     seq: number,
@@ -68,6 +70,7 @@ function rig(o: { install?: (dir: string) => { ok: boolean; error: string } } = 
     writes: 0,
   }
   const installs: string[] = []
+  const logs: string[] = []
   const profiles: Profile[] = [{ id: 'default', title: 'Default', dir: profile, color: 'gray', hidden: false }]
   const deps: NodeBundleDeps = {
     dir: state,
@@ -94,7 +97,7 @@ function rig(o: { install?: (dir: string) => { ok: boolean; error: string } } = 
       }
     },
     now: () => 1795210000000,
-    log: () => {},
+    log: text => logs.push(text),
   }
   const bundle = createNodeBundle(deps)
   return {
@@ -105,6 +108,7 @@ function rig(o: { install?: (dir: string) => { ok: boolean; error: string } } = 
     bundle,
     config,
     installs,
+    logs,
     async commit(seq, files, more = {}) {
       const list = Object.entries(files).map(([path, text]) => {
         bundle.putBlob('default', sha(text), new TextEncoder().encode(text))
@@ -486,5 +490,66 @@ describe('refused, with nothing written', () => {
     expect(r.bundle.putBlob('work', sha('a'), new TextEncoder().encode('a')).status).toBe(404)
     expect((await r.bundle.commit('work', {})).status).toBe(404)
     rmSync(r.root, { recursive: true, force: true })
+  })
+})
+
+describe("acknowledgments into the profile's .claude.json (#602)", () => {
+  const ACKS = ['codeModeAutoModeCaveatAcceptedV1', 'codeModeCaveatsAcceptedV1']
+  const state = (r: Rig): Record<string, unknown> => JSON.parse(readFileSync(join(r.home, '.claude.json'), 'utf8'))
+
+  test('the keys it lacks put in as true, every other key of the file as it was, one it has left alone', async () => {
+    const r = rig()
+    const before = {
+      numStartups: 4,
+      codeModeCaveatsAcceptedV1: false,
+      oauthAccount: { a: 1 },
+      mcpServers: { mine: {} },
+    }
+    writeFileSync(join(r.home, '.claude.json'), JSON.stringify(before))
+    const res = await r.commit(1, {}, { acks: ACKS })
+    expect(res.status).toBe(200)
+    expect(state(r)).toEqual({ ...before, codeModeAutoModeCaveatAcceptedV1: true })
+    // Said in the commit's backup like any change to that file.
+    expect(res.body.backup).toBe(join(r.state, 'bundle-backups', 'default', '1'))
+  })
+
+  test('a node with no .claude.json yet gets one with those keys only', async () => {
+    const r = rig()
+    await r.commit(1, {}, { acks: ACKS })
+    expect(state(r)).toEqual({ codeModeAutoModeCaveatAcceptedV1: true, codeModeCaveatsAcceptedV1: true })
+  })
+
+  test('the same manifest twice: nothing written the second time', async () => {
+    const r = rig()
+    writeFileSync(join(r.home, '.claude.json'), JSON.stringify({ numStartups: 1 }))
+    await r.commit(1, {}, { acks: ACKS })
+    const was = snapshot(r.root)
+    const again = await r.commit(1, {}, { acks: ACKS })
+    expect(again.body).toEqual({ ok: true, applied: [], removed: [], kept: [], backup: null })
+    expect(snapshot(r.root)).toEqual(was)
+  })
+
+  test('a key the node does not list, sent by the master, is never written', async () => {
+    const r = rig()
+    writeFileSync(join(r.home, '.claude.json'), JSON.stringify({ numStartups: 1 }))
+    await r.commit(1, {}, { acks: ['hasCompletedOnboarding', 'codeModeCaveatsAcceptedV1'] })
+    expect(state(r)).toEqual({ numStartups: 1, codeModeCaveatsAcceptedV1: true })
+  })
+
+  test('a .claude.json that does not parse: the rest applied, the file untouched, the acknowledgments left out and said', async () => {
+    const r = rig()
+    writeFileSync(join(r.home, '.claude.json'), '{ broken')
+    const res = await r.commit(1, { 'CLAUDE.md': 'c' }, { acks: ACKS })
+    expect(res.status).toBe(200)
+    expect(read(r, 'CLAUDE.md')).toBe('c')
+    expect(readFileSync(join(r.home, '.claude.json'), 'utf8')).toBe('{ broken')
+    expect(r.logs).toContain('node bundle default: .claude.json does not parse: the acknowledgments are left out')
+  })
+
+  test('a manifest without acks does not open .claude.json', async () => {
+    const r = rig()
+    writeFileSync(join(r.home, '.claude.json'), '{ broken')
+    const res = await r.commit(1, { 'CLAUDE.md': 'c' })
+    expect(res.status).toBe(200)
   })
 })

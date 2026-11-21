@@ -2112,7 +2112,8 @@ async function nodesSync(webPort: number, id: string, profile: string | undefine
       : `not synced · ${name}: ${String(r.why)}${r.detail ? ` (${String(r.detail)})` : ''}`,
   )
   for (const e of Array.isArray(r.lines) ? r.lines.filter(isRecord) : []) {
-    if (e.verdict === 'sent') continue
+    // Of what went as it is, only what the owner should know: a program the node may lack, an answer given.
+    if (e.verdict === 'sent' && e.why !== 'program-unchecked' && e.why !== 'acknowledged') continue
     // A reference is not always a secret: it may be the session's own environment.
     if (e.why === 'reference') {
       lines.push(

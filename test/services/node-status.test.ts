@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { NodeConfig } from '../../src/core/nodes.ts'
+import { type NodeConfig, nodeStatusOf } from '../../src/core/nodes.ts'
 import type { Profile } from '../../src/core/profiles.ts'
 import { bytesToMb, loadOf, meminfoAvailableMb, vmStatAvailableMb } from '../../src/core/sysload.ts'
 import type { Item, LaunchView } from '../../src/core/types.ts'
@@ -182,5 +182,35 @@ describe('its helpers', () => {
     expect(loggedIn('/p', 'win32', none)).toBe(false)
     expect(loggedIn('/p', 'darwin', none)).toBeNull()
     expect(loggedIn('/p', 'darwin', () => true)).toBe(true)
+  })
+})
+
+describe('the programs a hook may run (#603)', () => {
+  test('which of them the node has, asked once however often the status is', async () => {
+    let asked = 0
+    const status = createNodeStatus(
+      sources({
+        programs: () => {
+          asked++
+          return ['python3', 'bash']
+        },
+      }),
+    )
+    expect((await status.answer())?.programs).toEqual(['python3', 'bash'])
+    expect((await status.answer())?.programs).toEqual(['python3', 'bash'])
+    expect(asked).toBe(1)
+  })
+
+  test('without the source, as the master asks its own: no programs in the status', async () => {
+    const s = await createNodeStatus(sources()).answer()
+    expect(s && 'programs' in s).toBe(false)
+  })
+
+  test("the master keeps a node's list of names, and reads a node of an older board as having said nothing", async () => {
+    const s = await createNodeStatus(sources({ programs: () => ['python3'] })).answer()
+    expect(nodeStatusOf(JSON.parse(JSON.stringify(s)))?.programs).toEqual(['python3'])
+    const older = JSON.parse(JSON.stringify({ ...s, programs: undefined }))
+    expect(nodeStatusOf(older) && 'programs' in (nodeStatusOf(older) ?? {})).toBe(false)
+    expect('programs' in (nodeStatusOf({ ...s, programs: [1, 'x'] }) ?? {})).toBe(false)
   })
 })

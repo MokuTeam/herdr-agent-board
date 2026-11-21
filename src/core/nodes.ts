@@ -527,6 +527,8 @@ export interface NodeStatus {
   profiles: { id: string; loggedIn: boolean | null; bundle: { seq: number; hash: string } | null }[]
   /** The agents a start may name here, by the board's own rule (core/launch/agents.ts). */
   agents: string[]
+  /** Which of core/bundle.ts NODE_PROGRAMS the node has (#603); absent from a node of an older board. */
+  programs?: string[]
   at: number
 }
 
@@ -593,6 +595,8 @@ export function nodeStatusOf(raw: unknown): NodeStatus | null {
       bundle: bundleOf(p.bundle),
     })),
     agents: [...(s.agents as string[])],
+    ...(Array.isArray(s.programs) &&
+      s.programs.every(p => typeof p === 'string') && { programs: [...(s.programs as string[])] }),
     at: s.at as number,
   }
 }

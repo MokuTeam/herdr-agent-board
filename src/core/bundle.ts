@@ -30,13 +30,19 @@ export interface BundleFile {
   mode: number
 }
 
-export type ReportKind = 'skill' | 'hook' | 'mcp' | 'env' | 'file' | 'launcher'
+export type ReportKind = 'skill' | 'hook' | 'mcp' | 'env' | 'file' | 'launcher' | 'ack'
 export type Verdict = 'sent' | 'translated' | 'not-sent' | 'needs-secret' | 'bound'
 /** Why an entry got its verdict; doctor turns it into words. */
 export type ReportWhy =
   | 'copied' // sent as it is
   | 'profile-path' // the profile folder's path in it became PROFILE_DIR
   | 'script-sent' // as profile-path, and the files it names there travel; what they need is not checked
+  | 'program-renamed' // the hook's program has another name on the node (detail: `python → python3`)
+  | 'program-missing' // the node said it has no such program (detail: the program)
+  | 'program-unchecked' // a program a node of that platform may lack; the node did not say (detail: the program)
+  | 'secret-file' // a file beside a sent script that the script names and that holds a secret (detail: the script)
+  | 'script-state' // a file beside a sent script that the script names and that holds none: maybe its own state (detail: the script)
+  | 'acknowledged' // the owner's answer to a notice, from the profile's .claude.json (detail: what turns the notice on)
   | 'script-missing' // it names a file of the profile folder the walk did not read (detail: the path)
   | 'local-path' // it names a path of this computer
   | 'windows-only' // PowerShell, cmd, a Windows script or program, for a node that is not Windows
@@ -101,6 +107,11 @@ export interface BundleManifest {
   /** The portable MCP servers of the user scope, by name. */
   mcp: Record<string, unknown>
   board: BoardSlice
+  /**
+   * The keys of ACKNOWLEDGMENTS the master's profile has as true: the node puts them into its
+   * profile's .claude.json. Absent when there are none, so a bundle without them hashes as before.
+   */
+  acks?: string[]
   /** Not part of the hash: accepting a difference changes nothing on the node. */
   report: ReportEntry[]
 }
@@ -124,6 +135,11 @@ export interface BundleContext {
   mcp?: Readonly<Record<string, unknown>>
   /** `nodes.devices.<id>.accept`. */
   accept?: readonly string[]
+  /**
+   * The programs of NODE_PROGRAMS the node said it has (its status); undefined when it did not say
+   * (a node of an older board, or no status yet).
+   */
+  programs?: readonly string[]
 }
 
 /** The launchers a node is expected to have (9.1). */
@@ -133,6 +149,35 @@ export const LAUNCHERS: ReadonlySet<string> = new Set(['npx', 'uvx', 'bunx', 'no
  * (`MAX_THINKING_TOKENS`) is a number, not a secret.
  */
 export const SECRET_NAME = /token(?!s)|key|secret|password/i
+/**
+ * Keys of a profile's .claude.json that hold the owner's answer to a notice which a setting turns
+ * on, by that setting (#602). Without the answer Claude Code asks again at every start on the node,
+ * and the start stops there. Read from Claude Code itself: it shows the Code Mode notice until both
+ * of its keys are true, and runs `permissions.defaultMode: "bypassPermissions"` as default mode
+ * until the third is. Each travels whenever the master has it as true, whether or not the bundle
+ * sends its setting this time: it is the owner's answer, wherever the setting comes from. Only
+ * these keys travel, only as true, and the node writes no other key of that file.
+ */
+export const ACKNOWLEDGMENTS: Readonly<Record<string, string>> = {
+  codeModeCaveatsAcceptedV1: 'env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE',
+  codeModeAutoModeCaveatAcceptedV1: 'env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE',
+  bypassPermissionsModeAccepted: 'permissions.defaultMode',
+}
+
+/** The keys of ACKNOWLEDGMENTS a profile's .claude.json has as true, sorted. */
+export function acknowledgmentsOf(state: unknown): string[] {
+  if (!isRecord(state)) return []
+  return Object.keys(ACKNOWLEDGMENTS)
+    .filter(k => Object.hasOwn(state, k) && state[k] === true)
+    .sort()
+}
+
+/**
+ * The programs a hook may run that a node may lack or name otherwise (#603): a node's status says
+ * which of them it has, asked once (services/node/status.ts).
+ */
+export const NODE_PROGRAMS = ['python', 'python3', 'py', 'pwsh', 'powershell', 'node', 'bash'] as const
+
 /** Settings whose command fetches credentials: never sent, a node logs in with its own profile. */
 const CREDENTIAL_KEYS = new Set(['apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport', 'otelHeadersHelper'])
 const WINDOWS_SHELLS = new Set(['powershell', 'pwsh', 'cmd'])
@@ -270,6 +315,46 @@ type CommandVerdict =
   | { ok: true; command: string; translated: boolean; files: string[] }
   | { ok: false; why: 'local-path' | 'windows-only' | 'secret-inline' }
 
+/** Whether a node of platform `to` may lack `program` or have it under another name, when it did not say which it has. */
+const mayLack = (program: string, to: string): boolean =>
+  ((program === 'python' || program === 'py') && to !== 'win32') || program === 'pwsh'
+
+/** The name a program has on a node that lacks it, when that is no guess: Python 3's own on a POSIX node. */
+const OTHER_NAME: Readonly<Record<string, string>> = { python: 'python3' }
+
+export type ProgramVerdict =
+  | { ok: true; command: string; renamed?: { from: string; to: string }; unchecked?: string }
+  | { ok: false; why: 'program-missing'; program: string }
+
+/**
+ * A command that runs on the node (classifyCommand) against the programs the node has (#603), when
+ * its program is a bare name of NODE_PROGRAMS. With the node's list: one it has goes as it is;
+ * `python` it lacks while it has `python3` goes as `python3`; any other it lacks is not sent.
+ * Without the list: one a node of that platform may lack goes as it is, and `unchecked` says so.
+ * Any other program, or one named with a folder (a profile's own venv), is not this rule's.
+ */
+export function programRule(command: string, ctx: Pick<BundleContext, 'to' | 'programs'>): ProgramVerdict {
+  const word = programOf(wordsOf(command))
+  const program = programName(word)
+  if (/[\\/]/.test(word) || !(NODE_PROGRAMS as readonly string[]).includes(program)) return { ok: true, command }
+  if (!ctx.programs) return mayLack(program, ctx.to) ? { ok: true, command, unchecked: program } : { ok: true, command }
+  if (ctx.programs.includes(program)) return { ok: true, command }
+  const other = OTHER_NAME[program]
+  if (other && ctx.programs.includes(other)) {
+    const renamed = renameProgram(command, other)
+    if (renamed !== null) return { ok: true, command: renamed, renamed: { from: program, to: other } }
+  }
+  return { ok: false, why: 'program-missing', program }
+}
+
+/** The command with its program (its first word after any `NAME=value`) as `to`; null when the word is not plain there. */
+function renameProgram(command: string, to: string): string | null {
+  const m = /^(\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)+\s+)*)(["']?)([^\s"']+)\2(?=\s|$)/.exec(
+    command,
+  )
+  return m ? `${m[1] ?? ''}${to}${command.slice(m[0].length)}` : null
+}
+
 /**
  * Whether a hook's command is never sent: the board's own (any copy's, or one running a file of
  * `boardDir`), or herdr's own SessionStart hook, which the node's herdr installs with its paths.
@@ -314,6 +399,56 @@ export function filesIn(command: string): string[] {
   return [...new Set(paths.filter(p => p && !p.endsWith('/')))]
 }
 
+/** A file a script may read as data: JSON, env, ini, toml or yaml (#603). */
+export const dataFile = (name: string): boolean => /\.(json|env|ini|toml|ya?ml)$/i.test(name)
+
+/**
+ * Whether a script's text names a file by its base name as a string: in quotes, or at the end of a
+ * path in quotes (`"config.json"`, `'./config.json'`). A word in a comment or a longer name is not it.
+ */
+export function namedIn(script: string, name: string): boolean {
+  return new RegExp(`["'\`/\\\\]${escapeRe(name)}["'\`]`).test(script)
+}
+
+const KEY_LINE = /^\s*(?:-\s+)?(?:export\s+)?["']?([A-Za-z_][\w.-]*)["']?\s*[:=]\s*(.*?)\s*,?\s*$/
+
+/**
+ * The keys of a data file (dataFile) named like a secret's (SECRET_NAME) that hold a value: JSON at
+ * any depth, else each `name = value` or `name: value` line (env, ini, toml, yaml). Names only,
+ * never a value.
+ */
+export function secretKeysIn(text: string): string[] {
+  const found = new Set<string>()
+  const filled = (v: unknown): boolean =>
+    (typeof v === 'string' && holdsValue(v.trim())) || (typeof v === 'number' && Number.isFinite(v))
+  let json: unknown
+  try {
+    json = JSON.parse(text.replace(/^\uFEFF/, ''))
+  } catch {
+    json = undefined
+  }
+  if (json !== undefined && typeof json === 'object') {
+    const walk = (v: unknown): void => {
+      if (Array.isArray(v)) v.forEach(walk)
+      else if (isRecord(v))
+        for (const [k, x] of Object.entries(v)) {
+          if (SECRET_NAME.test(k) && filled(x)) found.add(k)
+          walk(x)
+        }
+    }
+    walk(json)
+    return [...found].sort()
+  }
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*[#;[]/.test(line)) continue
+    const m = KEY_LINE.exec(line)
+    if (!m) continue
+    const value = (m[2] ?? '').replace(/^(["'])(.*)\1$/, '$2')
+    if (SECRET_NAME.test(m[1] ?? '') && holdsValue(value) && value !== 'null' && value !== '~') found.add(m[1] ?? '')
+  }
+  return [...found].sort()
+}
+
 /** A hook's name in the report: the script it runs without its extension, or its program. */
 export function hookName(command: string): string {
   const words = wordsOf(command)
@@ -343,23 +478,44 @@ export function classifySettings(settings: unknown, ctx: BundleContext, walked?:
   const hooks: Record<string, unknown[]> = {}
   const report: ReportEntry[] = []
   const scripts: string[] = []
-  // A command's verdict with its files: sent when the walk read every one of them.
-  const judge = (command: string): CommandVerdict | { ok: false; why: 'script-missing'; path: string } => {
+  // A command's verdict with its files: sent when its program is on the node (programRule) and the
+  // walk read every one of its files.
+  type Judged =
+    | { ok: true; command: string; translated: boolean; files: string[]; program: ProgramVerdict & { ok: true } }
+    | { ok: false; why: ReportWhy; detail?: string }
+  const judge = (command: string): Judged => {
     const v = classifyCommand(command, ctx)
     if (!v.ok) return v
+    const program = programRule(v.command, ctx)
+    if (!program.ok) return { ok: false, why: program.why, detail: program.program }
     const missing = walked && v.files.find(f => !walked.has(f))
-    if (missing) return { ok: false, why: 'script-missing', path: missing }
+    if (missing) return { ok: false, why: 'script-missing', detail: missing }
     scripts.push(...v.files)
-    return v
+    return { ...v, command: program.command, program }
   }
   const sentLine = (kind: ReportKind, name: string, v: { translated: boolean; files: string[] }): ReportEntry =>
     v.files.length ? { kind, name, verdict: 'translated', why: 'script-sent' } : sentEntry(kind, name, v.translated)
-  const notSent = (name: string, v: { why: ReportWhy; path?: string }, command: string): ReportEntry => ({
+  // What the program rule did to a sent command, as a line of its own; none when nothing.
+  const programLine = (name: string, p: ProgramVerdict & { ok: true }): ReportEntry[] =>
+    p.renamed
+      ? [
+          {
+            kind: 'hook',
+            name,
+            verdict: 'translated',
+            why: 'program-renamed',
+            detail: `${p.renamed.from} → ${p.renamed.to}`,
+          },
+        ]
+      : p.unchecked
+        ? [{ kind: 'hook', name, verdict: 'sent', why: 'program-unchecked', detail: p.unchecked }]
+        : []
+  const notSent = (name: string, v: { why: ReportWhy; detail?: string }, command: string): ReportEntry => ({
     kind: 'hook',
     name,
     verdict: 'not-sent',
     why: v.why,
-    detail: v.path ?? redacted(command),
+    detail: v.detail ?? redacted(command),
   })
   for (const [key, value] of entriesOf(settings)) {
     if (key === 'hooks') continue
@@ -381,7 +537,7 @@ export function classifySettings(settings: unknown, ctx: BundleContext, walked?:
       const v = judge(value.command)
       if (v.ok) {
         put(out, key, { ...clone(value), command: v.command })
-        report.push(sentLine('hook', key, v))
+        report.push(sentLine('hook', key, v), ...programLine(key, v.program))
       } else report.push(notSent(key, v, value.command))
     } else put(out, key, clone(value))
   }
@@ -404,7 +560,7 @@ export function classifySettings(settings: unknown, ctx: BundleContext, walked?:
         const v = judge(hook.command)
         if (v.ok) {
           sent.push({ ...clone(hook), command: v.command })
-          report.push({ ...sentLine('hook', name, v), detail: event })
+          report.push({ ...sentLine('hook', name, v), detail: event }, ...programLine(name, v.program))
         } else report.push(notSent(name, v, hook.command))
       }
       if (sent.length) kept.push({ ...clone(entry), hooks: sent })
@@ -705,8 +861,16 @@ export interface ProfileParts {
   followed: readonly string[]
   /** settings.json as parsed; undefined when there is none. */
   settings: unknown
-  /** `mcpServers` of the profile's .claude.json, nothing else of that file. */
+  /** `mcpServers` of the profile's .claude.json, and of the rest of it only acks. */
   mcpServers: unknown
+  /** The keys of ACKNOWLEDGMENTS the profile's .claude.json has as true (acknowledgmentsOf). */
+  acks?: readonly string[]
+  /**
+   * The data files beside a script a hook runs that the script names (#603), by path in the
+   * profile folder, with that script; `secret` when one holds a key named like a secret's with a
+   * value (secretKeysIn). Never sent as files of the bundle.
+   */
+  beside?: readonly { path: string; script: string; secret: boolean }[]
 }
 
 /** A file's part of the report: a skill by its folder, anything else by its path. */
@@ -748,15 +912,36 @@ export function buildManifest(
   for (const s of [...parts.skipped].sort(byPath))
     report.push({ ...partOf(s.path), name: s.path, verdict: 'not-sent', why: s.why })
   const settings = classifySettings(parts.settings, ctx, new Set(files.map(f => f.path)))
+  // A file a script names beside it stays here, said: one with a secret always, one without only
+  // when nothing else sends it (it may be the script's own state). One in a folder that travels
+  // whole (a skill's) goes with it as before, and one a hook's command names is that hook's file.
+  const walkedPaths = new Set(files.map(f => f.path))
+  const held = (parts.beside ?? [])
+    .filter(b => !settings.scripts.includes(b.path) && (b.secret || !walkedPaths.has(b.path)))
+    .sort(byPath)
+  const heldPaths = new Set(held.map(b => b.path))
+  const sentFiles = files.filter(f => !heldPaths.has(f.path))
+  for (const b of held)
+    report.push({
+      kind: 'file',
+      name: b.path,
+      verdict: b.secret ? 'needs-secret' : 'not-sent',
+      why: b.secret ? 'secret-file' : 'script-state',
+      detail: b.script,
+    })
+  const acks = [...new Set(parts.acks ?? [])].filter(k => Object.hasOwn(ACKNOWLEDGMENTS, k)).sort()
+  for (const k of acks)
+    report.push({ kind: 'ack', name: k, verdict: 'sent', why: 'acknowledged', detail: ACKNOWLEDGMENTS[k] ?? '' })
   const mcp = classifyMcp(parts.mcpServers, ctx)
   const slice = boardSlice(board.config, board.sinks, ctx.accept)
   return {
     format: BUNDLE_FORMAT,
-    files,
+    files: sentFiles,
     settings: settings.settings,
     hooks: settings.hooks,
     mcp: mcp.mcp,
     board: slice.board,
+    ...(acks.length > 0 && { acks }),
     report: [...accepted(report, ctx.accept), ...settings.report, ...mcp.report, ...slice.report],
   }
 }
@@ -787,7 +972,7 @@ export function canonical(value: unknown): string {
  * whatever order the files were walked in.
  */
 export function bundleHash(
-  m: Pick<BundleManifest, 'files' | 'settings' | 'hooks' | 'mcp' | 'board'> & { format?: number },
+  m: Pick<BundleManifest, 'files' | 'settings' | 'hooks' | 'mcp' | 'board' | 'acks'> & { format?: number },
 ): string {
   const files = m.files.map(f => ({ path: f.path, sha256: f.sha256, mode: f.mode })).sort(byPath)
   const body = {
@@ -797,6 +982,8 @@ export function bundleHash(
     hooks: m.hooks,
     mcp: m.mcp,
     board: m.board,
+    // Only when there are any: a bundle without them keeps the hash it had.
+    ...(m.acks?.length ? { acks: [...m.acks].sort() } : {}),
   }
   return createHash('sha256').update(canonical(body)).digest('hex')
 }
@@ -949,6 +1136,12 @@ export function manifestOf(raw: unknown): BundleManifest | null {
   }
   if (!isRecord(raw.settings) || !isRecord(raw.hooks) || !isRecord(raw.mcp) || !isRecord(raw.board)) return null
   if (!Object.values(raw.hooks).every(Array.isArray)) return null
+  // Only keys of this node's own ACKNOWLEDGMENTS: the master's word never names another key of .claude.json.
+  const acks = Array.isArray(raw.acks)
+    ? [
+        ...new Set(raw.acks.filter((k): k is string => typeof k === 'string' && Object.hasOwn(ACKNOWLEDGMENTS, k))),
+      ].sort()
+    : []
   return {
     format: BUNDLE_FORMAT,
     files,
@@ -956,6 +1149,7 @@ export function manifestOf(raw: unknown): BundleManifest | null {
     hooks: clone(raw.hooks) as Record<string, unknown[]>,
     mcp: clone(raw.mcp),
     board: clone(raw.board) as unknown as BoardSlice,
+    ...(acks.length > 0 && { acks }),
     report: [],
   }
 }

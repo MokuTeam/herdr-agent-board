@@ -145,6 +145,7 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
     device: DeviceConfig,
     profile: Profile,
     to: string,
+    programs?: readonly string[],
   ):
     | { ok: true; manifest: BundleManifest; files: WalkedFile[]; version: BundleVersion }
     | { ok: false; detail: string } {
@@ -154,6 +155,7 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
       boardDir,
       claudeJson: claudeStateFile(profile.dir, home, platform),
       platform,
+      ...(programs && { programs }),
     })
     if (!read.ok) return { ok: false, detail: read.why }
     const ctx: BundleContext = {
@@ -164,6 +166,7 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
       boardDir,
       mcp: device.mcp,
       accept: device.accept,
+      ...(programs && { programs }),
     }
     const manifest = buildManifest(read.parts, { config: o.cfg, sinks: device.sinks }, ctx)
     const was = entryOf(profiles(device.id)[profile.id]).version
@@ -219,9 +222,10 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
       return { status: res.status, body: isRecord(body) ? body : {} }
     }
     try {
-      const to = link.view().status?.platform ?? (await link.status())?.platform
+      const status = link.view().status ?? (await link.status())
+      const to = status?.platform
       if (!to) return not('offline')
-      const built = build(device, profile, to)
+      const built = build(device, profile, to, status?.programs)
       if (!built.ok) return not('build', built.detail)
       const { manifest, files, version } = built
       const done = { ...base, seq: version.seq, hash: version.hash, lines: manifest.report }
@@ -351,7 +355,7 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
         const key = `${device.id}\n${profile.id}`
         if (profile.hidden || running.has(key) || !theirs.has(device.profiles[profile.id] ?? profile.id)) continue
         try {
-          build(device, profile, status.platform)
+          build(device, profile, status.platform, status.programs)
         } catch (err) {
           o.log(`node bundle ${device.id}/${profile.id}: ${messageOf(err)}`)
         }

@@ -228,6 +228,11 @@ function throughCmd(
   return { file: cmd, args: ['/d', '/s', '/c', cmdLine(found, args)] }
 }
 
+/** Which of `names` are programs on this process's PATH. */
+export function programsOnPath(names: readonly string[]): string[] {
+  return names.filter(name => Bun.which(name) !== null)
+}
+
 /** Whether a process with this id runs; one this process may not signal (EPERM) runs too. */
 export function isAlive(pid: number): boolean {
   try {

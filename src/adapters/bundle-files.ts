@@ -1,7 +1,9 @@
 // Walking a Claude profile folder for its bundle (design: docs/design/nodes, 9.1): `skills/`,
 // `agents/`, `commands/` and `CLAUDE.md` as files hashed by content, the files of the folder a hook
-// that travels names (its script), `settings.json`, and only `mcpServers` out of `.claude.json`.
-// Nothing else of the folder is opened: no credentials, no transcripts, no per-project memory.
+// that travels names (its script), `settings.json`, and only `mcpServers` and the owner's answers to
+// notices (core/bundle.ts ACKNOWLEDGMENTS) out of `.claude.json`. A data file beside a script that
+// the script names is read only to say whether it holds a secret (#603). Nothing else of the folder
+// is opened: no credentials, no transcripts, no per-project memory.
 // core/bundle.ts classifies what this finds. On a node: the blobs it was sent, its backups, and
 // writing a file by a temporary name (services/node/bundle.ts applies).
 
@@ -24,11 +26,15 @@ import {
 } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import {
+  acknowledgmentsOf,
   type BundleContext,
   type BundleFile,
   classifySettings,
+  dataFile,
+  namedIn,
   type ProfileParts,
   type SkipWhy,
+  secretKeysIn,
 } from '../core/bundle.ts'
 
 /** A file over this many bytes stays on the master, with a line in the report. */
@@ -60,7 +66,7 @@ export type ReadResult =
   | { ok: true; parts: ProfileRead }
   | { ok: false; why: 'no-folder' | 'settings' | 'claude-json'; file: string }
 
-export interface ReadOptions extends Pick<BundleContext, 'to' | 'home' | 'boardDir'> {
+export interface ReadOptions extends Pick<BundleContext, 'to' | 'home' | 'boardDir' | 'programs'> {
   /**
    * The profile's .claude.json: `<dir>/.claude.json` for a profile CLAUDE_CONFIG_DIR names, but
    * `~/.claude.json`, beside the folder, for the default one. Asked for, as a wrong guess would
@@ -116,6 +122,7 @@ export function readProfile(dir: string, opts: ReadOptions): ReadResult {
   const ctx: BundleContext = { from: platform, to: opts.to, profileDir: dir }
   if (opts.home) ctx.home = opts.home
   if (opts.boardDir) ctx.boardDir = opts.boardDir
+  if (opts.programs) ctx.programs = opts.programs
   const scripts = classifySettings(settings.value, ctx).scripts
 
   const files: WalkedFile[] = []
@@ -220,7 +227,67 @@ export function readProfile(dir: string, opts: ReadOptions): ReadResult {
     if (kindOf(full) !== 'file') skipped.push({ path, why: 'missing' })
     else guarded(full, path, [])
   }
-  return { ok: true, parts: { files, skipped, followed, settings: settings.value, mcpServers } }
+  const beside = besideScripts(dir, scripts, files)
+  const acks = acknowledgmentsOf(state.value)
+  return {
+    ok: true,
+    parts: {
+      files,
+      skipped,
+      followed,
+      settings: settings.value,
+      mcpServers,
+      ...(acks.length > 0 && { acks }),
+      ...(beside.length > 0 && { beside }),
+    },
+  }
+}
+
+/** Names beside a script that are never a script's data file: the profile's own settings and state. */
+const NOT_BESIDE: ReadonlySet<string> = new Set(['settings.json', 'settings.local.json', ...DENIED])
+
+/**
+ * The data files (core/bundle.ts dataFile) beside each script a hook runs that the script's text
+ * names (namedIn), by path in the profile folder (#603), each with whether it holds a secret
+ * (secretKeysIn). Read to be classified, never kept: no value leaves this function.
+ */
+function besideScripts(
+  dir: string,
+  scripts: readonly string[],
+  files: readonly WalkedFile[],
+): { path: string; script: string; secret: boolean }[] {
+  const out: { path: string; script: string; secret: boolean }[] = []
+  const walked = new Map(files.map(f => [f.path, f]))
+  for (const script of scripts) {
+    const f = walked.get(script)
+    if (!f) continue
+    let text: string
+    try {
+      text = readFileSync(f.source, 'utf8')
+    } catch {
+      continue
+    }
+    const at = script.lastIndexOf('/')
+    const folder = at < 0 ? '' : script.slice(0, at)
+    let names: string[] = []
+    try {
+      names = readdirSync(join(dir, ...folder.split('/').filter(Boolean))).sort()
+    } catch {
+      continue
+    }
+    for (const name of names) {
+      const path = folder ? `${folder}/${name}` : name
+      if (path === script || NOT_BESIDE.has(name) || !dataFile(name) || !namedIn(text, name)) continue
+      if (out.some(b => b.path === path)) continue
+      const full = join(dir, ...path.split('/'))
+      try {
+        const st = statSync(full)
+        if (!st.isFile() || st.size > MAX_FILE_BYTES) continue
+        out.push({ path, script, secret: secretKeysIn(readFileSync(full, 'utf8')).length > 0 })
+      } catch {}
+    }
+  }
+  return out
 }
 
 // ------------------------------------------------------------------ the node's side (9.3)
@@ -371,6 +438,67 @@ export function rewriteKeeping(file: string, text: string): void {
     mode = statSync(target).mode & 0o777
   } catch {}
   writeWhole(target, text, mode)
+}
+
+/** What came of editJson: written, nothing to change, the file not JSON, or rewritten by another each time. */
+export type JsonEdit = 'written' | 'same' | 'parse' | 'busy'
+
+/**
+ * A JSON object file changed by `change` (given its value, undefined when there is none; null back:
+ * nothing to change), written beside it and renamed, through a link to where it really is, with the
+ * mode it had (0600 for a new one). Claude's running sessions rewrite their state file whenever
+ * they like: when the file is no longer what was read by the time the new text is ready, it is
+ * read and changed again, up to `tries` times, and then left as it is ('busy').
+ */
+export function editJson(
+  file: string,
+  change: (value: Record<string, unknown> | undefined) => Record<string, unknown> | null,
+  tries = 3,
+): JsonEdit {
+  let target = file
+  try {
+    target = realpathSync(file)
+  } catch {}
+  const readText = (): string | null => {
+    try {
+      return readFileSync(target, 'utf8')
+    } catch {
+      return null
+    }
+  }
+  for (let n = 0; n < tries; n++) {
+    const before = readText()
+    let value: unknown
+    try {
+      value = before === null ? undefined : JSON.parse(before.replace(/^\uFEFF/, ''))
+    } catch {
+      return 'parse'
+    }
+    if (value !== undefined && (!value || typeof value !== 'object' || Array.isArray(value))) return 'parse'
+    const next = change(value as Record<string, unknown> | undefined)
+    if (next === null) return 'same'
+    let mode = 0o600
+    try {
+      mode = statSync(target).mode & 0o777
+    } catch {}
+    mkdirSync(dirname(target), { recursive: true })
+    const tmp = `${target}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+    try {
+      writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode })
+      chmodSync(tmp, mode)
+      // Rewritten meanwhile: this text would lose what was written, so again from the new one.
+      if (readText() !== before) {
+        rmSync(tmp, { force: true })
+        continue
+      }
+      renameSync(tmp, target)
+      return 'written'
+    } catch (err) {
+      rmSync(tmp, { force: true })
+      throw err
+    }
+  }
+  return 'busy'
 }
 
 /** Removes `file` and then each folder above it that it left empty, up to `dir` (kept). */
