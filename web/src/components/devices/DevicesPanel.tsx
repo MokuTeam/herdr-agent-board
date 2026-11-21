@@ -173,7 +173,7 @@ export function DevicesPanel({ open, onClose, initial, setup }: DevicesPanelProp
             />
           ))}
         </div>
-        <AddServer {...(setup && { initial: setup })} />
+        <AddServer open={open} {...(setup && { initial: setup })} />
         {master && <LanesSection settings={settings} disabled={!canEdit} send={send} />}
         {master && (
           <section className="devices-section">

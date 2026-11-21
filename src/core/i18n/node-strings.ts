@@ -348,6 +348,10 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.add.loggedIn': 'Claude is logged in on {device}.',
     'node.add.loginNot': 'Claude is not logged in on {device}: {profiles}',
     'node.add.loginHow': 'Run this in a terminal: Claude starts and asks you to log in (or type /login there).',
+    'node.add.loginAdmin':
+      "Put the server's admin login in place of <admin> and run it in a terminal: Claude starts and asks you to log in (or type /login there).",
+    'node.add.loginNoCommand':
+      "Open a terminal there as the node's user and start claude: it asks you to log in (or type /login).",
     'node.add.loginOther':
       'This logs in the default profile; another profile logs in the same way with its CLAUDE_CONFIG_DIR set.',
   },
@@ -697,6 +701,10 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.add.loggedIn': 'Claude на {device} вошёл в аккаунт.',
     'node.add.loginNot': 'Claude на {device} не вошёл в аккаунт: {profiles}',
     'node.add.loginHow': 'Выполните это в терминале: Claude запустится и попросит войти (или наберите там /login).',
+    'node.add.loginAdmin':
+      'Подставьте логин администратора сервера вместо <admin> и выполните в терминале: Claude запустится и попросит войти (или наберите там /login).',
+    'node.add.loginNoCommand':
+      'Откройте там терминал от пользователя узла и запустите claude: он попросит войти (или наберите /login).',
     'node.add.loginOther': 'Так входит профиль по умолчанию; другой профиль входит так же, с его CLAUDE_CONFIG_DIR.',
   },
 }

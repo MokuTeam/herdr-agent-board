@@ -40,15 +40,37 @@ export const continues = (v: NodeSetupView): boolean => v.phase === 'failed' && 
  * Claude's own first start asks for the login (its link and code, design 10 item 1). `user`: the
  * admin's login when the form knows it; else ssh's own (~/.ssh/config, the agent).
  */
-export function loginCommand(s: { host: string; sshPort: number; user?: string | undefined }): string {
+/** A host and a login that may go into a shell line as they are; anything else gets no command. */
+const PLAIN_HOST = /^[A-Za-z0-9][A-Za-z0-9.:-]*$/
+const PLAIN_USER = /^[A-Za-z0-9._-]+$/
+const PLAIN_KEY = /^[A-Za-z0-9 ._:/\\~-]+$/
+
+/**
+ * The command that logs Claude in on a node: a terminal on the server as the node user, where
+ * Claude's own first start asks for the login (its link and code, design 10 item 1). `user`: the
+ * admin's login when the form knows it, else `<admin>` for the owner to put in; `key`: the
+ * admin's key file the form was given. null for a host or a login that is not plain (config.json
+ * is the owner's, but a shell line is no place for `;` or `$(`).
+ */
+export function loginCommand(s: {
+  host: string
+  sshPort: number
+  user?: string | undefined
+  key?: string | undefined
+}): string | null {
+  if (!PLAIN_HOST.test(s.host) || (s.user && !PLAIN_USER.test(s.user)) || (s.key && !PLAIN_KEY.test(s.key))) return null
+  const key = s.key ? `-i "${s.key}" ` : ''
   const port = s.sshPort !== 22 ? `-p ${s.sshPort} ` : ''
-  const who = s.user ? `${s.user}@` : ''
-  return `ssh -t ${port}${who}${s.host} sudo -iu ${NODE_USER} claude`
+  return `ssh -t ${key}${port}${s.user || '<admin>'}@${s.host} sudo -iu ${NODE_USER} claude`
 }
 
-/** The node's profiles that are not logged in to Claude (a folder that cannot tell is not counted). */
-export const loggedOut = (profiles: readonly { id: string; loggedIn: boolean | null }[]): string[] =>
-  profiles.filter(p => p.loggedIn === false).map(p => p.id)
+/**
+ * The node's profiles that are not logged in to Claude. A device row counts only a folder that
+ * says so; the form's last step, as the service's (services/nodes/setup.ts), every profile not yet
+ * known to be logged in (`known: false`), so the two never disagree there.
+ */
+export const loggedOut = (profiles: readonly { id: string; loggedIn: boolean | null }[], known = true): string[] =>
+  profiles.filter(p => (known ? p.loggedIn === false : p.loggedIn !== true)).map(p => p.id)
 
 /** What Look found, in one line. */
 export function foundLine(f: NonNullable<NodeSetupView['found']>, t: Translator): string {

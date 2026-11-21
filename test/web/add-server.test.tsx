@@ -334,7 +334,7 @@ describe("a device's row: Claude's login there (#509)", () => {
   test('a profile that is not logged in is said, with the command for its server; one that cannot tell is not', () => {
     expect(deviceRows([device], NOW, t, settings)[0]?.login).toEqual({
       out: ['default'],
-      command: 'ssh -t -p 2222 203.0.113.10 sudo -iu agent-board claude',
+      command: 'ssh -t -p 2222 <admin>@203.0.113.10 sudo -iu agent-board claude',
     })
     expect(deviceRows([device], NOW, t, { defaults: {}, noToken: [] })[0]?.login).toEqual({
       out: ['default'],
@@ -348,7 +348,13 @@ describe("a device's row: Claude's login there (#509)", () => {
       },
     }
     expect(deviceRows([logged], NOW, t, settings)[0]?.login).toBeNull()
-    expect(loginCommand({ host: 'h', sshPort: 22 })).toBe('ssh -t h sudo -iu agent-board claude')
+    expect(loginCommand({ host: 'h', sshPort: 22 })).toBe('ssh -t <admin>@h sudo -iu agent-board claude')
+    expect(loginCommand({ host: 'h', sshPort: 22, user: 'admin', key: 'C:/keys/id_ed25519' })).toBe(
+      'ssh -t -i "C:/keys/id_ed25519" admin@h sudo -iu agent-board claude',
+    )
+    // not plain: no command at all
+    expect(loginCommand({ host: 'h;rm -rf /', sshPort: 22 })).toBeNull()
+    expect(loginCommand({ host: 'h', sshPort: 22, user: '$(id)' })).toBeNull()
   })
 
   test('the row draws it', () => {
