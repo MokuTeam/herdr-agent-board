@@ -1023,6 +1023,8 @@ export async function startServer({
     if (nodesConfig(cfg.nodes) === null) return
     nodeLinks = createNodeLinks({ cfg, log })
     nodeAggregate = createNodeAggregate({ links: nodeLinks, cfg, log, onChange: () => board.publish() })
+    // An offline copy still due is written also on an exit that skips close().
+    process.on('exit', nodeAggregate.close)
     localNodeRoutes = nodesRoutes(nodeLinks)
     // Their ssh dies with the board, also on an exit that skips close().
     process.on('exit', nodeLinks.killNow)
@@ -1137,7 +1139,10 @@ export async function startServer({
       process.off('exit', endLogins)
       await tunnel.close()
       await door?.close()
-      nodeAggregate?.close()
+      if (nodeAggregate) {
+        nodeAggregate.close()
+        process.off('exit', nodeAggregate.close)
+      }
       if (nodeLinks) {
         await nodeLinks.close()
         process.off('exit', nodeLinks.killNow)

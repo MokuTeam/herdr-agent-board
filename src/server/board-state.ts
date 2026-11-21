@@ -292,6 +292,8 @@ export function createBoardState({
     const list = items.map(({ transcript, claudeRoot, alive, since, pipe, todos: own, ...rest }) =>
       launches.decorate(todos && own ? { ...rest, todos: own } : rest),
     )
+    // Another device's cards carry their tasks only while this board's config turns them on, as its own.
+    const theirs = others?.items.map(({ todos: own, ...rest }) => (todos && own ? { ...rest, todos: own } : rest))
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)
     // The usage the pill shows: the board's own profile's (the default one's when its env points to
@@ -308,7 +310,7 @@ export function createBoardState({
       fsToken: FILE_TOKEN,
       stale,
       limits: own?.limits ?? null,
-      items: others ? [...list, ...others.items] : list,
+      items: theirs ? [...list, ...theirs] : list,
       launches: others ? [...launches.list(), ...others.launches] : launches.list(),
       categories,
       swatches: SWATCHES,

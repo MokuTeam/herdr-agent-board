@@ -3,7 +3,7 @@
 import type { BoardArchive } from './archive.ts'
 import type { FoldMode } from './fold-mode.ts'
 import type { LimitWindow } from './limits.ts'
-import type { DeviceView } from './nodes.ts'
+import type { DeviceView, LinkStatus } from './nodes.ts'
 import type { PresenceView } from './presence.ts'
 import type { RemoteView } from './remote.ts'
 import type { ScheduleEntry } from './schedule-rules.ts'
@@ -179,10 +179,13 @@ export interface BoardPayload {
  * A device as the master's payload shows it (#500): its link and its last status as `GET
  * /api/nodes` has them (core/nodes.ts DeviceView), with what config.json sets for it. The link's
  * detail stays on this computer (`GET /api/nodes`, `board nodes`): it is what ssh said, and
- * the payload goes to phones too. `payloadAt`: when its cards were last heard, from the offline
+ * the payload goes to phones too. `link.heardAt` is cut to the minute, so a ping does not push
+ * the board to every page. `payloadAt`: when its cards were last heard, from the offline
  * copy while the link has heard none since the board started.
  */
 export interface BoardDevice extends DeviceView {
+  /** The link's state, without its detail; `heardAt` to the minute. */
+  link: Omit<LinkStatus, 'detail'> | null
   paused: boolean
   drain: boolean
   /** The thresholds placement holds it to; null until the board writes them from its first status. */

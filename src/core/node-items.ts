@@ -13,7 +13,7 @@
 //   node's own `device` field is never read, so a node cannot make an item claim another device.
 // - Without one: the same check, keys as the node has them. That is what the offline copy keeps.
 import { nodeKey, parseNodeKey } from './nodes.ts'
-import type { ScheduleEntry } from './schedule-rules.ts'
+import { MAX_REPORT, type ScheduleEntry } from './schedule-rules.ts'
 import type { Item, LaunchView } from './types.ts'
 
 /** What a node's payload gives the master's: never its fsToken, profiles, setup or limits. */
@@ -386,7 +386,8 @@ function itemOf(raw: unknown, k: Rekey, device: string | null): Item | null {
 const ENTRY: Record<string, Check> = {
   id: ref,
   key: ref,
-  text: str(LEN.text),
+  // A MokuPilot call's results are longer than a reminder's text.
+  text: str(MAX_REPORT),
   next: num,
   name: str(60),
   pane: str(LEN.id),
@@ -401,6 +402,7 @@ const ENTRY: Record<string, Check> = {
   fromProfile: str(LEN.name),
   replyTo: str(LEN.name),
   noWake: bool,
+  idle: bool,
   runs: num,
   missed: num,
   lastRun: num,

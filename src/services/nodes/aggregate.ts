@@ -31,7 +31,7 @@ export interface NodeAggregate {
   part(): RemotePart | null
   /** A remote item by its prefixed key (core/nodes.ts nodeKey), from the last payload or the offline copy. */
   find(key: string): Item | undefined
-  /** The offline copies still due are written, and nothing more is. */
+  /** The offline copies still due are written, and nothing more is. Synchronous, so an exit handler may call it. */
   close(): void
 }
 
@@ -55,7 +55,13 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 
 /** A device's row: its view without what ssh said, with what config.json sets for it. */
 function boardDevice(view: DeviceView, device: DeviceConfig | undefined, at: number | null): BoardDevice {
-  const link = view.link ? (({ detail, ...rest }) => rest)(view.link) : null
+  // When the link last heard a byte, to the minute the page shows: a ping alone does not send the
+  // whole board to every page and phone again.
+  const link = view.link
+    ? (({ detail, ...rest }) => ({ ...rest, heardAt: rest.heardAt === null ? null : rest.heardAt - (rest.heardAt % 60_000) }))(
+        view.link,
+      )
+    : null
   return {
     ...view,
     link,
@@ -91,6 +97,8 @@ export function createNodeAggregate(o: NodeAggregateOptions): NodeAggregate {
       if (held?.raw !== raw) {
         held = { raw, part: nodePart(raw, id) ?? NONE, at: link.view().payloadAt ?? clock.now() }
         live.set(id, held)
+        // A link made again (its config changed) shows this, not the copy read at the start.
+        disk.set(id, { part: held.part, at: held.at })
       }
       return held
     }
@@ -107,9 +115,9 @@ export function createNodeAggregate(o: NodeAggregateOptions): NodeAggregate {
       const link = o.links.link(id)
       const raw = link?.payload() ?? null
       if (!link || !raw || written.get(id) === raw) continue
-      written.set(id, raw)
       try {
         store.setSnapshot(id, { at: link.view().payloadAt ?? clock.now(), part: nodePart(raw, null) ?? NONE })
+        written.set(id, raw)
       } catch (err) {
         o.log(`node ${id}: the offline copy: ${messageOf(err)}`)
       }
@@ -124,7 +132,12 @@ export function createNodeAggregate(o: NodeAggregateOptions): NodeAggregate {
       due.add(id)
       timer ??= clock.setTimeout(write, Math.round(SNAPSHOT_MS * pace()))
     }
-    o.onChange()
+    // Called from inside the link's stream: a publish that throws must not end it.
+    try {
+      o.onChange()
+    } catch (err) {
+      o.log(`node ${id}: publish: ${messageOf(err)}`)
+    }
   })
 
   const remoteOf = (id: string): boolean => {

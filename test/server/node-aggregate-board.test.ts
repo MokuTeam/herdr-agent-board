@@ -19,6 +19,8 @@ import { mcp, rows, task } from '../support/workdesk-fixture.ts'
 
 const REMOTE = '7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f'
 const LOCAL = '8c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e40'
+/** The node's pane, an id no pane of the master's has. */
+const NODE_PANE = 'w9:p77'
 
 const shellPane = (box: Sandbox, name: string): FakePane => ({
   pane_id: '1',
@@ -27,7 +29,7 @@ const shellPane = (box: Sandbox, name: string): FakePane => ({
   cwd: box.dir,
   terminal_title_stripped: name,
 })
-const claudePane = (box: Sandbox, sid: string, id = '2'): FakePane => ({
+const claudePane = (box: Sandbox, sid: string, id: string): FakePane => ({
   pane_id: id,
   agent: 'claude',
   agent_session: { value: sid },
@@ -101,8 +103,18 @@ describe('a node in the master payload', () => {
     // in the board's own list, the watcher would hand the task to it.
     fake.write({ tasks: [{ ...task(31), executor_model: 'claude-opus' }], topology: true })
     const pair = await nodePair({
-      panes: (_id, box) => [{ ...claudePane(box, REMOTE), terminal_title_stripped: 'Remote-master' }],
-      masterPanes: box => [claudePane(box, LOCAL)],
+      panes: (_id, box) => {
+        // The node's session is far past the master's auto-compact limit: were its card in the
+        // master's own list, the master would type /compact into it.
+        const dir = join(stateFolder(box), 'context')
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(
+          join(dir, `${REMOTE}.json`),
+          JSON.stringify({ at: Date.now() + 60_000, tokens: 150_000, size: 200_000 }),
+        )
+        return [{ ...claudePane(box, REMOTE, NODE_PANE), terminal_title_stripped: 'Remote-master' }]
+      },
+      masterPanes: box => [claudePane(box, LOCAL, '2')],
       masterCfg: {
         compact: { at: '1k' },
         compactTickSec: 0.2,
@@ -117,18 +129,22 @@ describe('a node in the master payload', () => {
       },
     })
     const remoteKey = `@server-1:${REMOTE}`
-    await boardWhen(pair.master.url, b => keys(b).includes(remoteKey))
+    const shown = await boardWhen(pair.master.url, b => keys(b).includes(remoteKey))
+    expect(shown.items.find(i => i.key === remoteKey)?.context).toBe(150_000)
     // Due now, for the node's card: the master's scheduler must not take it for one of its own.
     const due = entry(pair.master.box, { id: 'b1b2b3', key: remoteKey, text: 'ping', next: Date.now() - 1000 })
     const written = readFileSync(due, 'utf8')
     await until(() => !existsSync(due) || readFileSync(due, 'utf8') !== written, 10_000)
+    // Waiting for a session it does not have, not sent.
+    expect(existsSync(due)).toBe(true)
+    expect(JSON.parse(readFileSync(due, 'utf8')).why).toBe('gone')
     const heartbeats = () => fake.calls('board_heartbeat').length
     const seen = heartbeats()
     await until(() => heartbeats() >= seen + 2, 10_000)
 
     const calls = pair.master.box.calls().flat().join('\n')
-    expect(calls).not.toContain(REMOTE)
-    expect(calls).not.toContain('@server-1')
+    for (const word of [REMOTE, '@server-1', NODE_PANE, 'ping', '/compact'])
+      expect([word, calls.includes(word)]).toEqual([word, false])
     const topology = JSON.stringify(fake.calls('board_heartbeat').map(c => c.params.arguments))
     expect(topology).not.toContain(REMOTE)
     expect(topology).not.toContain('@server-1')

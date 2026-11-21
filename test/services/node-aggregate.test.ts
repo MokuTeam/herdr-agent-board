@@ -7,7 +7,7 @@ import { mkdtempSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createDeviceStore } from '../../src/adapters/node-store.ts'
-import type { DeviceView, LinkStatus } from '../../src/core/nodes.ts'
+import type { DeviceView, LinkStatus, NodeStatus } from '../../src/core/nodes.ts'
 import type { Config } from '../../src/core/types.ts'
 import { createNodeAggregate, SNAPSHOT_MS } from '../../src/services/nodes/aggregate.ts'
 import type { Link } from '../../src/services/nodes/link.ts'
@@ -72,7 +72,27 @@ function manualClock(): Clock & { run(): void; pending(): number } {
 }
 
 /** A link stand-in: its payload set by the test, which says when it changed. */
-function fakeLink(id: string, state: LinkStatus['state'] = 'online') {
+/** A server's status before its owner logged in: no memory figure, no load, the profile not logged in. */
+const freshServer = (id: string): NodeStatus => ({
+  api: 1,
+  id,
+  version: '0.1.0',
+  commit: 'abc',
+  platform: 'linux',
+  arch: 'x64',
+  cpus: 4,
+  memTotalMb: 8000,
+  memAvailableMb: null,
+  load: null,
+  sessions: { awake: 0, working: 0, asleep: 0 },
+  launches: 0,
+  workRootFreeMb: null,
+  profiles: [{ id: 'default', loggedIn: false, bundle: null }],
+  agents: ['claude'],
+  at: 1,
+})
+
+function fakeLink(id: string, state: LinkStatus['state'] = 'online', status: NodeStatus | null = null) {
   let raw: unknown = null
   let at: number | null = null
   const view = (): DeviceView => ({
@@ -85,7 +105,7 @@ function fakeLink(id: string, state: LinkStatus['state'] = 'online') {
       heardAt: at,
       detail: 'ssh: Permission denied (publickey) for agent-board-link@203.0.113.10',
     },
-    status: null,
+    status,
     sameCommit: null,
     payloadAt: at,
   })
@@ -146,7 +166,7 @@ describe('the aggregate', () => {
   test('items of two nodes, each prefixed with its device; their launches and schedules; the devices row', () => {
     const cfg = config()
     const one = fakeLink('server-1')
-    const two = fakeLink('server-2', 'refused')
+    const two = fakeLink('server-2', 'refused', freshServer('server-2'))
     const { api, changed } = fakeLinks(cfg, [one, two])
     const store = createDeviceStore({ dir: mkdtempSync(join(tmpdir(), 'agg-')) })
     let published = 0
@@ -190,6 +210,8 @@ describe('the aggregate', () => {
       ['server-2', 'refused', 200, true, true, null, null, null],
       ['local', null, null, false, false, 20, 4800, null],
     ])
+    // A server whose owner has not logged in yet shows as it is.
+    expect(part?.devices[1]?.status).toEqual(freshServer('server-2'))
     // What ssh said stays on this computer; nothing of the node's payload but its cards.
     const text = JSON.stringify(part)
     for (const secret of [CANARY, 'Permission denied', '/home/server-1/.claude']) expect(text).not.toContain(secret)
