@@ -20,7 +20,8 @@ import { createDeviceStore, createNodeStore, nodeDir, readLanesSeen, writeLanesS
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { knobMs, pace, pause } from '../adapters/pacing.ts'
-import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
+import { archiveDir, cardsDir, pluginRoot, ROOT, scheduleDir } from '../adapters/paths.ts'
+import { pluginCommit, touchCode } from '../adapters/plugin-update.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import { watchesDir } from '../adapters/schedule-store.ts'
@@ -76,6 +77,7 @@ import { mokupilotCheck } from '../services/mokupilot.ts'
 import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
 import { createNodeLaunch } from '../services/node/launch.ts'
 import { createNodeStatus } from '../services/node/status.ts'
+import { createNodeUpdate } from '../services/node/update.ts'
 import { createNodeUplink, type NodeUplink } from '../services/node/uplink.ts'
 import { createNodeAggregate, type NodeAggregate } from '../services/nodes/aggregate.ts'
 import { type BundleSync, createBundleSync } from '../services/nodes/bundle-sync.ts'
@@ -83,6 +85,7 @@ import { createNodeLinks, linkTimes, type NodeLinks } from '../services/nodes/li
 import { createPlacer, type Placer } from '../services/nodes/placer.ts'
 import { createRevoker, type Revoker } from '../services/nodes/revoke.ts'
 import { createNodeSetup, type NodeSetup } from '../services/nodes/setup.ts'
+import { createNodeUpdater, type NodeUpdater } from '../services/nodes/update.ts'
 import { createUplinkRunner, type UplinkRunner } from '../services/nodes/uplink.ts'
 import { tellOwnerWatchers } from '../services/owner-watch.ts'
 import { createPresence } from '../services/presence.ts'
@@ -167,6 +170,18 @@ const PLUGIN_VERSION = (() => {
     return ''
   }
 })()
+
+/**
+ * The commit this board runs (#590), asked once: what a node's status says, what its update
+ * compares with, and what a master ships and places by. Asked only with `node` or `nodes`.
+ */
+let running: Promise<string> | null = null
+const runningCommit = (): Promise<string> => {
+  running ??= pluginCommit(pluginRoot())
+  return running
+}
+/** After a node's update the board ends this long after its answer, so the answer reaches the master first. */
+const RESTART_AFTER_MS = 1000
 
 export interface BoardServer {
   port: number
@@ -1054,6 +1069,32 @@ export async function startServer({
       launch: () => cfg.launch,
       version: PLUGIN_VERSION,
       bundle: nodeBundle.version,
+      commit: runningCommit,
+    })
+    // The plugin at the master's commit (#590): unpacked beside this one, installed, swapped in.
+    // Then the board ends with 75 and run.ts, the pane's process, starts it again from the plugin's
+    // folder: herdr and the agents' panes are not touched. The code touched first wakes the watchers
+    // of run.ts and wake-run.ts, so wake comes back on the new code too.
+    const root = pluginRoot()
+    const nodeUpdate = createNodeUpdate({
+      root,
+      dir: join(nodeDir(), 'update'),
+      commit: runningCommit,
+      // BOARD_TEST_PLATFORM: a test on Windows updates a scratch plugin as a Linux node does (unset in production).
+      platform: process.env.BOARD_TEST_PLATFORM || process.platform,
+      // run.ts starts the board over IPC: with no such parent nothing would start it again.
+      canRestart: typeof process.send === 'function',
+      restart: old => {
+        touchCode(old)
+        touchCode(root)
+        // The terminal board's own restart (tui/app.ts: quit(75), which puts the terminal back
+        // first), as run.ts asks for it on a code change; a board that has none ends with 75.
+        setTimeout(() => {
+          process.emit('message', 'restart', undefined)
+          setTimeout(() => process.exit(75), RESTART_AFTER_MS)
+        }, RESTART_AFTER_MS)
+      },
+      log,
     })
     const uplink = createNodeUplink({ log })
     nodeUplink = uplink
@@ -1104,6 +1145,7 @@ export async function startServer({
           nodeStore.forget(master)
           return { slept, kept }
         },
+        update: nodeUpdate,
       }),
       log,
     })
@@ -1156,13 +1198,14 @@ export async function startServer({
         pause,
       })),
   )
+  let nodeUpdater: NodeUpdater | null = null
   function linksFollow(): void {
     if (nodeLinks) {
       nodeLinks.configChanged()
       return
     }
     if (nodesConfig(cfg.nodes) === null) return
-    nodeLinks = createNodeLinks({ cfg, log })
+    nodeLinks = createNodeLinks({ cfg, log, commit: runningCommit })
     // Where a new session runs (#504), and the Devices row of this computer (#500): this computer's
     // own status by the code a node answers with.
     const ownStatus = createNodeStatus({
@@ -1176,6 +1219,7 @@ export async function startServer({
       profiles: () => deps.profiles().list,
       launch: () => cfg.launch,
       version: PLUGIN_VERSION,
+      commit: runningCommit,
     })
     nodeAggregate = createNodeAggregate({
       links: nodeLinks,
@@ -1184,6 +1228,19 @@ export async function startServer({
       onChange: () => board.publish(),
       ownStatus: () => ownStatus.answer(),
       statusMs: linkTimes().statusMs,
+      update: id => nodeUpdater?.view(id) ?? null,
+    })
+    // This board's commit shipped to a node on another one (#590): by itself when none of its
+    // sessions is in a turn, at once when asked. A board with no git checkout has nothing to send.
+    const root = pluginRoot()
+    nodeUpdater = createNodeUpdater({
+      links: nodeLinks,
+      commit: runningCommit,
+      canShip: async () => (await headCommit(root).catch(() => null)) !== null,
+      archive: commit => archiveCommit(root, commit),
+      onChange: () => board.publish(),
+      revoked: id => nodesConfig(cfg.nodes)?.devices[id]?.revoked === true,
+      log,
     })
     // An offline copy still due is written also on an exit that skips close().
     process.on('exit', nodeAggregate.close)
@@ -1225,6 +1282,8 @@ export async function startServer({
       items: board.items,
       ownStatus: () => ownStatus.answer(),
       bundle: bundleSync,
+      commit: runningCommit,
+      updating: id => nodeUpdater?.updating(id) ?? false,
       fillThresholds: (id, given) => {
         const r = editNodes(raw => fillThresholds(raw, id, given))
         if (!r.ok) log(`placer: the thresholds of ${id} were not written: ${r.error}`)
@@ -1274,6 +1333,7 @@ export async function startServer({
         },
       },
       nodeRevoker,
+      nodeUpdater,
     )
     // Their ssh dies with the board, also on an exit that skips close().
     process.on('exit', nodeLinks.killNow)
@@ -1400,6 +1460,7 @@ export async function startServer({
         process.off('exit', nodeAggregate.close)
       }
       nodePlacer?.close()
+      nodeUpdater?.close()
       nodeRevoker?.close()
       bundleSync?.close()
       if (nodeLinks) {

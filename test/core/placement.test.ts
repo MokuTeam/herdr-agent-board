@@ -321,6 +321,20 @@ describe('devices that cannot take a start', () => {
     })
   })
 
+  test("another commit with this board's on its way there (#590): the refusal says the device is updating", () => {
+    const v = view({
+      config: { whenFull: 'wait' },
+      settings: { local: { maxSessions: 0 } },
+      devices: { 'server-1': { status: status({ commit: '4d7154cb' }), updating: true } },
+    })
+    assert.deepEqual(place(task({ pin: { device: 'server-1' } }), v, NOW), {
+      refuse: {
+        kind: 'unfit',
+        devices: [{ device: 'server-1', kind: 'commit', theirs: '4d7154cb', ours: 'ee32fc89', updating: true }],
+      },
+    })
+  })
+
   test('the profile there, logged in, the agent kind and every needed tag', () => {
     const v = view({
       settings: { 'server-1': { profiles: { work: 'bsd' } }, 'server-2': { tags: ['linux', 'tests'] } },

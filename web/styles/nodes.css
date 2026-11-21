@@ -135,6 +135,23 @@
 .devices-figure { flex: none; color: var(--label-2); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .devices-facts { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 0; }
 .devices-same.other { color: var(--orange); }
+/* Another version, an update on its way or one that failed (#590), with Update beside the words. */
+.devices-update { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.devices-update .sheet-meta { margin: 0; }
+.devices-update.failed .sheet-meta { color: var(--orange); }
+.devices-update-go {
+  flex: none;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--fill-2);
+  color: var(--label);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.devices-update-go:disabled { opacity: 0.5; cursor: default; }
 
 /* Pause and Drain, then the thresholds: they wrap under each other on a phone. */
 .devices-controls { display: flex; flex-wrap: wrap; gap: 6px 20px; }

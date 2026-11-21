@@ -2,7 +2,8 @@
 // 13): the devices in order with their links (services/nodes/links.ts), a link tried again at once,
 // a profile's bundle synced to a device now (#506, services/nodes/bundle-sync.ts), a secret the
 // owner gives one of a device's sinks (#507, design 10 item 3), the panel's edits of
-// config.json's `nodes`, and a device revoked (#510, design 11.4, services/nodes/revoke.ts). On
+// config.json's `nodes`, a device revoked (#510, design 11.4, services/nodes/revoke.ts), and this
+// board's commit shipped to a device (#590, services/nodes/update.ts). On
 // the local board only, and only while config.json's `nodes` is on: app.ts picks these routes for
 // /api/nodes itself, so the board's route table, which every remote listener and a node's door
 // serve, is the same as without `nodes`.
@@ -22,6 +23,7 @@ import type { BundleSync } from '../../services/nodes/bundle-sync.ts'
 import type { NodeLinks } from '../../services/nodes/links.ts'
 import type { Revoker } from '../../services/nodes/revoke.ts'
 import type { NodeSetup } from '../../services/nodes/setup.ts'
+import type { NodeUpdater } from '../../services/nodes/update.ts'
 import { auditForwarded } from '../../services/secrets.ts'
 import { json, type Route } from '../http.ts'
 
@@ -138,8 +140,26 @@ export interface NodesPanel {
   next(cfg: NodesConfig | null): Promise<string | null>
 }
 
-export function nodesRoutes(links: NodeLinks, bundles?: BundleSync, panel?: NodesPanel, revoker?: Revoker): Route[] {
+export function nodesRoutes(
+  links: NodeLinks,
+  bundles?: BundleSync,
+  panel?: NodesPanel,
+  revoker?: Revoker,
+  updater?: Pick<NodeUpdater, 'view' | 'ship'>,
+): Route[] {
   const off = () => json(404, { error: 'nodes' })
+  /** The devices with each one's update (#590) beside its link. */
+  const viewWithUpdates = (): ReturnType<NodeLinks['view']> => {
+    const view = links.view()
+    if (!updater) return view
+    return {
+      ...view,
+      devices: view.devices.map(d => {
+        const update = d.kind === null ? null : updater.view(d.id)
+        return update ? { ...d, update } : d
+      }),
+    }
+  }
 
   /** What the panel shows beside the devices: the section's own keys and the board's figures. */
   async function settingsOf(cfg: NodesConfig | null, devices = links.view().devices): Promise<NodesPanelSettings> {
@@ -163,7 +183,7 @@ export function nodesRoutes(links: NodeLinks, bundles?: BundleSync, panel?: Node
       path: '/api/nodes',
       async handle() {
         if (!links.on()) return off()
-        const view = links.view()
+        const view = viewWithUpdates()
         return json(200, panel ? { ...view, settings: await settingsOf(panel.config(), view.devices) } : view)
       },
     },
@@ -200,6 +220,14 @@ export function nodesRoutes(links: NodeLinks, bundles?: BundleSync, panel?: Node
           return json(200, await bundles.syncIfBehind(body.id, body.profile))
         }
         if (body.op === 'secret') return secretToDevice(links, body, body.id)
+        // `{ op: 'update', id }` (#590): this board's commit shipped to the device now.
+        if (body.op === 'update' && updater) {
+          if (!links.link(body.id)) return json(404, { error: 'device' })
+          const r = await updater.ship(body.id)
+          // Refused here (one under way, nothing to send, the device away or revoked): 409; the node's own failures: 502.
+          const here = ['busy', 'no-checkout', 'offline', 'revoked'].includes(r.error ?? '')
+          return json(r.ok ? 200 : here ? 409 : 502, r)
+        }
         // `{ op: 'revoke', id, sleep?, forget? }`: sleep unless false, forget only when true.
         if (body.op === 'revoke' && revoker) {
           if (body.sleep !== undefined && typeof body.sleep !== 'boolean') return json(400, { error: 'sleep' })

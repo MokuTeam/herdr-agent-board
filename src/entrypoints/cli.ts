@@ -57,7 +57,7 @@
 //                            node's half of a revoke (#510): one master forgotten, or the only one.
 //                            Until the install exists, for a node set up by hand; a board without
 //                            `node` in config.json says it is none
-//   board nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink> | revoke <id> [--keep-running] [--forget]]   this board as a
+//   board nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]]   this board as a
 //                            master (#499): its devices in order with their link's state, read from
 //                            the running board; token stores a device's token read from stdin (never
 //                            an argument, never echoed); key makes the device's ssh link key when
@@ -203,7 +203,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | presence [here | away | call] | journal [--since <when> | --away] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | presence [here | away | call] | journal [--since <when> | --away] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal'])
@@ -1807,7 +1807,7 @@ const NO_BOARD = 'the board does not run: open it first (herdr plugin action inv
 async function nodesCmd(): Promise<void> {
   const [op = 'status', id = ''] = words
   const usage =
-    'usage: board nodes [token <id> | key <id> | sync <id> [<profile>] | secret <id> <sink> | revoke <id> [--keep-running] [--forget]]'
+    'usage: board nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]]'
   const { nodesConfig } = await import('../core/nodes.ts')
   const nodes = nodesConfig(cfg.nodes, (await import('node:os')).hostname())
   if (!nodes) return console.log('this board is not a master: config.json has no `nodes`')
@@ -1853,6 +1853,12 @@ async function nodesCmd(): Promise<void> {
       throw new Error(`no device ${id} with a link: \`board nodes\` lists them`)
     return nodesSecret(webPort, id, sink, nodes.devices[id]?.sinks)
   }
+  if (op === 'update') {
+    if (!id || words.length > 2) throw new Error(usage)
+    if (id === 'local' || !nodes.devices[id]?.link)
+      throw new Error(`no device ${id} with a link: \`board nodes\` lists them`)
+    return nodesUpdate(webPort, id)
+  }
   if (op === 'revoke') {
     const flags = words.slice(2)
     if (!id || flags.some(f => f !== '--keep-running' && f !== '--forget')) throw new Error(usage)
@@ -1897,6 +1903,61 @@ async function nodesCmd(): Promise<void> {
  * sleep (not with --keep-running) and forget this board; a node not reachable is told when its link
  * comes back. --forget drops the token and link key now without telling it.
  */
+/** Why an update of a node did not happen (#590), by the code services/nodes/update.ts or the node gave. */
+const UPDATE_WHY: Record<string, string> = {
+  offline: 'the node is not reachable',
+  busy: 'an update of it is under way already',
+  revoked: 'the device is revoked',
+  'too-big': 'the archive is larger than the node takes',
+  token: "the node did not take this board's token",
+  update: 'the node could not read the request',
+  loads: 'the new copy does not load on the node; the old one stays',
+  node: 'the node gave no reason',
+  'no-checkout':
+    'this board has no git checkout to send its code from (installed from an archive, or git is missing): update the node by hand',
+  'git-archive': "git could not make the archive of this board's commit",
+  platform: 'the node runs Windows, where a node does not update itself: update it by hand',
+  restart: 'its board does not run in its herdr pane (run.ts), so nothing would start it again: update it by hand',
+  'not-built': 'its board is older than updates over the link: update it by hand once',
+  sha256: 'the archive arrived changed: try again',
+  blob: 'the node lost the archive before the update: try again',
+  archive: 'the node refused the archive',
+  unpack: 'the node could not unpack the new copy; the old one stays',
+  install: 'bun install --production failed on the node (it needs the network); the old copy stays',
+  swap: 'the node could not swap the new copy in; the old one stays',
+  'not-back': 'the node did not come back on the new commit within 3 minutes',
+  timeout: 'the node did not answer in time',
+}
+
+/**
+ * `board nodes update <id>` (#590, docs/design/nodes 6.5): the running board ships its commit to
+ * the device now, a session there in a turn or not, and says how it went.
+ */
+async function nodesUpdate(webPort: number, id: string): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(`http://127.0.0.1:${webPort}/api/nodes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({ op: 'update', id }),
+      // The board's own limits for the upload and the node's install, and a minute over.
+      signal: AbortSignal.timeout(18 * 60_000),
+    })
+  } catch {
+    throw new Error(NO_BOARD)
+  }
+  const body: unknown = await res.json().catch(() => null)
+  const a = isRecord(body) ? body : {}
+  const commit = typeof a.commit === 'string' ? a.commit.slice(0, 12) : ''
+  if (a.ok === true && a.current === true) return console.log(`ok · ${id} runs this board's commit ${commit} already`)
+  if (a.ok === true)
+    return console.log(`ok · ${id} took ${commit}: its board restarts on it, its sessions keep running`)
+  const error = typeof a.error === 'string' ? a.error : String(res.status)
+  const detail = typeof a.detail === 'string' ? ` (${a.detail.split('\n').slice(-3).join(' ').slice(0, 300)})` : ''
+  console.log(`not updated · ${id}: ${UPDATE_WHY[error] ?? error}${detail}`)
+  process.exitCode = 1
+}
+
 async function nodesRevoke(webPort: number, id: string, sleep: boolean, forget: boolean): Promise<void> {
   let res: Response
   try {

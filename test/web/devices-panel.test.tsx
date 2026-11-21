@@ -20,6 +20,7 @@ import {
   type PanelSettings,
   refusedText,
   thresholdTyped,
+  updateLine,
 } from '../../web/src/models/devices.ts'
 import { settingPicked, settingsMenu } from '../../web/src/models/settings-menu.ts'
 import type { Board } from '../../web/src/state/BoardProvider.tsx'
@@ -508,5 +509,119 @@ describe('what the owner reads (#510, polish)', () => {
       noToken: ['server-5'],
     })[0]?.link
     expect(api).toBe('Refused: it speaks another version of the link')
+  })
+})
+
+describe('Update, on a node on another version (#590)', () => {
+  afterEach(() => {
+    restoreFetch()
+    toasts.length = 0
+  })
+  const en = translator('en')
+
+  test('the row says it in words, not as a hash, and offers Update; updating, restarting and a failure each say theirs', () => {
+    const behind = device('server-3', { sameCommit: false })
+    expect(updateLine(behind, en)).toEqual({
+      state: 'behind',
+      text: 'Runs another version of the board than this computer. It updates by itself while it is online and none of its sessions is working.',
+      offer: true,
+    })
+    const at = NOW
+    expect(updateLine(device('s', { sameCommit: false, update: { state: 'updating', commit: 'b', at } }), en)).toEqual({
+      state: 'updating',
+      text: "Updating to this computer's version",
+      offer: false,
+    })
+    expect(
+      updateLine(device('s', { sameCommit: false, update: { state: 'restarting', commit: 'b', at } }), en)?.text,
+    ).toBe('Updated: its board is restarting on the new version')
+    const failed = (error: string) =>
+      updateLine(device('s', { sameCommit: false, update: { state: 'failed', commit: 'b', error, at } }), en)
+    expect(failed('install')).toEqual({
+      state: 'failed',
+      text: 'The update failed: bun install failed on the device (it needs the network); the old copy stays',
+      offer: true,
+    })
+    // what the button cannot mend says to update by hand, with no button
+    expect(failed('platform')).toEqual({
+      state: 'failed',
+      text: 'The update failed: it runs Windows, where the board does not update itself: update it by hand',
+      offer: false,
+    })
+    expect(failed('no-checkout')?.offer).toBe(false)
+    expect(failed('teapot')?.text).toBe('The update failed: the device said teapot')
+    // offline: said, with no button; revoked: nothing; a node that knows no commit is behind
+    const away = { state: 'offline' as const, since: NOW, heardAt: null }
+    expect(updateLine(device('s', { sameCommit: false, link: away }), en)).toMatchObject({
+      state: 'behind',
+      offer: false,
+    })
+    expect(
+      updateLine(
+        device('s', { sameCommit: false, link: away, update: { state: 'failed', commit: 'b', error: 'install', at } }),
+        en,
+      )?.offer,
+    ).toBe(false)
+    expect(updateLine(device('s', { sameCommit: false, revoked: { told: false, kept: true } }), en)).toBeNull()
+    expect(updateLine(device('s', { sameCommit: null, status: status('s', 0, { commit: '' }) }), en)?.state).toBe(
+      'behind',
+    )
+    // the same version, an unknown one and this computer: nothing
+    expect(updateLine(device('server-1'), en)).toBeNull()
+    expect(updateLine(device('server-1', { sameCommit: null }), en)).toBeNull()
+    expect(updateLine(device('local'), en)).toBeNull()
+  })
+
+  test('drawn: the line under the version, the button only where it can help, in Russian too', () => {
+    const data = payload({
+      categories: CATEGORIES,
+      devices: [
+        device('server-1', { status: status('server-1', 1) }),
+        device('server-2', { sameCommit: false, update: { state: 'updating', commit: 'b', at: NOW } }),
+        device('server-3', { sameCommit: false, status: status('server-3', 0, { version: '1.1.0' }) }),
+        device('server-4', {
+          sameCommit: false,
+          update: { state: 'failed', commit: 'b', error: 'platform', at: NOW },
+        }),
+        device('local', { status: status('laptop', 3, { profiles: [] }) }),
+      ],
+    })
+    const rows = rowsOf(draw(data))
+    const lines = rows.map(r => findAll([r], el => hasClass(el, 'devices-update')).map(el => text([el])))
+    expect(lines).toEqual([
+      [],
+      ["Updating to this computer's version"],
+      [
+        'Runs another version of the board than this computer. It updates by itself while it is online and none of its sessions is working.Update',
+      ],
+      ['The update failed: it runs Windows, where the board does not update itself: update it by hand'],
+      [],
+    ])
+    const ru = renderInBoard(
+      <PanelProvider viewport={() => ({ w: 1600, h: 900 })}>
+        <DevicesPanel open onClose={() => {}} initial={SETTINGS} />
+      </PanelProvider>,
+      board({ data, now: NOW }),
+      'ru',
+    )
+    const all = text([byId(ru, 'devices-sheet')])
+    expect(all).toContain('Обновляется до версии этого компьютера')
+    expect(all).toContain('Обновить')
+  })
+
+  test('Update sends its op; the row, not a toast, says how it went', async () => {
+    const calls = answers([502, { ok: false, error: 'install' }])
+    const p = live(
+      <DevicesPanel open onClose={() => {}} initial={SETTINGS} />,
+      board({
+        data: payload({ devices: [device('server-3', { sameCommit: false })], categories: CATEGORIES }),
+        now: NOW,
+        toast: (text: string, bad?: boolean) => void toasts.push([text, bad]),
+      }),
+    )
+    await p.world.fire(p.pick('[data-id="server-3"] .devices-update-go'), 'click')
+    await settled()
+    expect(posted(calls)).toEqual([{ op: 'update', id: 'server-3' }])
+    expect(toasts).toEqual([])
   })
 })

@@ -209,11 +209,71 @@ export interface DeviceRow {
   /** Its version, and whether it runs this board's commit (null: not known). */
   version: string | null
   same: boolean | null
+  /** Another version, an update on its way or one that failed (#590), in words; `offer`: the Update button. */
+  update: UpdateLine | null
   /** Each profile's bundle as the status has it. */
   bundles: string[]
   paused: boolean
   drain: boolean
   values: Record<Threshold, number | null>
+}
+
+/** A node's version against this board's (#590): what its row says, and whether it offers Update. */
+export interface UpdateLine {
+  state: 'behind' | 'updating' | 'restarting' | 'failed'
+  text: string
+  offer: boolean
+}
+
+/** Failures the button cannot mend: the row says to update by hand instead. */
+const BY_HAND: ReadonlySet<string> = new Set(['platform', 'no-checkout', 'restart', 'not-built', 'revoked'])
+/** The codes the panel has words for; any other is quoted. */
+const UPDATE_CODES: ReadonlySet<string> = new Set([
+  'offline',
+  'busy',
+  'no-checkout',
+  'git-archive',
+  'platform',
+  'restart',
+  'not-built',
+  'sha256',
+  'blob',
+  'archive',
+  'unpack',
+  'install',
+  'swap',
+  'not-back',
+  'timeout',
+  'revoked',
+  'too-big',
+  'token',
+  'update',
+  'loads',
+  'node',
+])
+
+/**
+ * The row's update line: null for this computer, a revoked device, and a node on this board's
+ * version with nothing under way. Update is offered only while the device is online.
+ */
+export function updateLine(
+  d: Pick<BoardDevice, 'kind' | 'sameCommit' | 'update' | 'link' | 'status' | 'revoked'>,
+  t: Translator,
+): UpdateLine | null {
+  if (d.kind === null || d.revoked) return null
+  const online = d.link?.state === 'online'
+  const u = d.update
+  if (u?.state === 'updating') return { state: 'updating', text: t('node.dev.updating'), offer: false }
+  if (u?.state === 'restarting') return { state: 'restarting', text: t('node.dev.restarting'), offer: false }
+  if (u?.state === 'failed') {
+    const error = u.error ?? ''
+    const why = UPDATE_CODES.has(error) ? t(`node.dev.upd.${error}`) : t('node.dev.upd.other', { error })
+    return { state: 'failed', text: t('node.dev.updateFailed', { why }), offer: online && !BY_HAND.has(error) }
+  }
+  // A node that knows no commit of its own (no checkout, no stamp) is behind too: an update gives it one.
+  if (d.sameCommit === false || (d.status && !d.status.commit))
+    return { state: 'behind', text: t('node.dev.behind'), offer: online }
+  return null
 }
 
 const share = (n: number, of: number): number => (of > 0 ? Math.min(1, Math.max(0, n / of)) : 0)
@@ -290,6 +350,7 @@ export function deviceRows(
       memory,
       version: s?.version || null,
       same: here ? null : d.sameCommit,
+      update: updateLine(d, t),
       bundles: (s?.profiles ?? []).flatMap(p =>
         p.bundle ? [t('node.dev.bundle', { profile: p.id, seq: p.bundle.seq })] : [],
       ),

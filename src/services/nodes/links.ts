@@ -63,6 +63,8 @@ export interface NodeLinksOptions {
   clock?: Clock
   network?: () => string
   hostName?: string
+  /** This board's commit (server/app.ts runningCommit); git's HEAD in the plugin's folder when not given. */
+  commit?: () => Promise<string>
 }
 
 /** The sleep watch: a tick this often; a gap longer than SLEPT_MS means the computer slept. */
@@ -121,9 +123,9 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
   const ownCommit = (): string => {
     if (!commitAsked) {
       commitAsked = true
-      void headCommit(ROOT)
+      void (o.commit ?? (async () => (await headCommit(ROOT)) ?? ''))()
         .then(sha => {
-          commit = sha ?? ''
+          commit = sha
         })
         .catch(() => {})
     }

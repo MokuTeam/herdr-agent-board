@@ -3,7 +3,8 @@
 // has them. The status, a start from the master, the profile bundle's three (services/node/bundle.ts):
 // what the node has, a blob, the commit; the uplink's three (services/node/uplink.ts): the calls'
 // stream, a file a call names, the master's result; and a secret the owner gives one of the node's
-// sinks (services/secrets.ts giveSecret); and the master's leave when it revokes this node (#510).
+// sinks (services/secrets.ts giveSecret); the master's leave when it revokes this node (#510); and
+// the plugin's update to the master's commit, its archive and then the update (#590).
 // The door has checked the Host, the Origin, the master's token and X-Board before they run.
 // `POST /api/node/call`, the other end of the uplink, is this computer's own: nodeCallRoutes,
 // which only the web board's own listener serves (server/app.ts).
@@ -12,6 +13,7 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
 import type { Answer, NodeBundle } from '../../services/node/bundle.ts'
 import type { NodeLaunchAnswer } from '../../services/node/launch.ts'
+import type { NodeUpdate } from '../../services/node/update.ts'
 import type { NodeUplink } from '../../services/node/uplink.ts'
 import { json, type Route } from '../http.ts'
 import { doorMaster } from '../node-listener.ts'
@@ -32,6 +34,8 @@ export interface NodeDoorSources {
    * then the master `master` forgotten (adapters/node-store.ts forget), which ends its streams.
    */
   leave?(master: string, sleep: boolean): Promise<{ slept: number; kept: number }>
+  /** `PUT /api/node/update/blob` and `POST /api/node/update` (#590, services/node/update.ts). */
+  update?: Pick<NodeUpdate, 'blob' | 'update'>
 }
 
 /** A commit's manifest, at most this many bytes of JSON. */
@@ -66,6 +70,7 @@ const MAX_RESULT_BYTES = 8 * 1024 * 1024
 export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
   const bundle = o.bundle
   const leave = o.leave
+  const update = o.update
   return [
     {
       method: 'GET',
@@ -158,6 +163,32 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
       },
     },
     ...(leave ? [leaveRoute(leave)] : []),
+    ...(update ? updateRoutes(update) : []),
+  ]
+}
+
+/** The plugin's archive as it comes, never read whole first, then the update itself (#590). */
+function updateRoutes(update: NonNullable<NodeDoorSources['update']>): Route[] {
+  return [
+    {
+      method: 'PUT',
+      path: '/api/node/update/blob',
+      async handle(req) {
+        const told = Number(req.headers.get('content-length'))
+        return answer(await update.blob(req.body, Number.isFinite(told) && told > 0 ? told : null))
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/node/update',
+      async handle(_req, ctx) {
+        let body: unknown = null
+        try {
+          body = await ctx.rawBody()
+        } catch {}
+        return answer(await update.update(body))
+      },
+    },
   ]
 }
 

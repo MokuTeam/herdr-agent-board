@@ -661,6 +661,23 @@ export interface DeviceView {
    * its token and link key are still kept for that one call.
    */
   revoked?: { told: boolean; kept: boolean }
+  /** Only while this board's commit is on its way to the node, or the last try failed (#590). */
+  update?: DeviceUpdate
+}
+
+/**
+ * This board's commit on its way to a node (#590, design 6.5, services/nodes/update.ts):
+ * `updating` while the archive goes and the node prepares the new copy, `restarting` once it
+ * answered and until its status names the new commit, `failed` with the node's or this board's
+ * reason (`error`, a word the page translates, and `detail` as said) until the next try.
+ */
+export interface DeviceUpdate {
+  state: 'updating' | 'restarting' | 'failed'
+  /** The commit sent, or to be sent. */
+  commit: string
+  error?: string
+  detail?: string
+  at: number
 }
 
 // ---------------------------------------------------------------- the panel's edits (#510)

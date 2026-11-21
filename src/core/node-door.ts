@@ -4,7 +4,7 @@
 //
 // An allowlist, not a list of refusals: a route the board gains later is not reachable through the
 // door until someone adds it here. What is not on the list answers 404, so the door does not say
-// what the board has. The routes of later tasks (update, claim) are added by those tasks.
+// what the board has. The routes of later tasks (claim) are added by those tasks.
 
 /** The version of the node link (6.5): the master places work only on a node whose own equals its. */
 export const NODE_API = 1
@@ -78,6 +78,9 @@ export const DOOR_ROUTES: readonly DoorRoute[] = [
   { method: 'POST', path: /^\/api\/node\/sink\/[a-z0-9][a-z0-9_-]{0,39}$/, door: true },
   // The master revokes this node (#510, 11.4): its sessions to sleep when asked, then it is forgotten.
   { method: 'POST', path: '/api/node/leave', door: true },
+  // The plugin at the master's commit (#590, 6.2): its archive, then `{ commit, sha256 }`.
+  { method: 'PUT', path: '/api/node/update/blob', door: true },
+  { method: 'POST', path: '/api/node/update', door: true },
 ]
 
 const allows = (r: DoorRoute, method: string, rawPath: string, path: string): boolean =>

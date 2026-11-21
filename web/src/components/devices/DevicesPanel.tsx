@@ -2,7 +2,7 @@
 // `nodes`: the devices in the order new sessions fill them, this computer among them, dragged to
 // reorder (hooks/useRowReorder.ts, as the lanes are) or moved with the up and down arrows on the
 // handle. Per device its link in words, bars of the sessions awake and the memory free against its
-// thresholds, its version, Pause and Drain, and the three thresholds as fields with the board's own
+// thresholds, its version (and on another version than this board's, Update, #590), Pause and Drain, and the three thresholds as fields with the board's own
 // figures as placeholders. Then the lanes that may leave this computer and what a start does when
 // every device is full. The devices' live state comes with the payload (`devices`); the section's
 // own keys and the board's figures from GET /api/nodes, asked at each opening and answered again
@@ -111,6 +111,20 @@ export function DevicesPanel({ open, onClose, initial }: DevicesPanelProps) {
       void send({ op: 'order', ids }).then(r => r || setOrder(null))
     },
   })
+  // Update (#590): the row says how it goes from the payload; only a request the board would not
+  // take at all (no such device, an old board) is a toast.
+  const update = useCallback(
+    (id: string) => {
+      const { canEdit, t, toast } = latest.current
+      if (!canEdit) return
+      api.post('/api/nodes', { op: 'update', id }).catch(err => {
+        if (err instanceof ApiError && (err.status === 502 || err.status === 409)) return
+        const refused = err instanceof ApiError ? refusedText(err.status, err.reply.error, t) : null
+        toast(refused ?? errorText(err, t), true)
+      })
+    },
+    [latest],
+  )
   const shown = useHeld(devices, reorder.dragging)
   if (!shown) return null
   const rows = deviceRows(shown, now, t, settings)
@@ -147,6 +161,7 @@ export function DevicesPanel({ open, onClose, initial }: DevicesPanelProps) {
               disabled={!canEdit}
               send={send}
               onMove={by => move(row.id, by)}
+              onUpdate={() => update(row.id)}
             />
           ))}
         </div>
@@ -179,10 +194,12 @@ interface RowProps {
   disabled: boolean
   send: Send
   onMove(by: number): void
+  /** Ships this board's version to the device now (#590). */
+  onUpdate(): void
 }
 
 /** One device: handle, title and link, the bars, the version, Pause and Drain, the thresholds. */
-function DeviceRowView({ row, defaults, next, disabled, send, onMove }: RowProps) {
+function DeviceRowView({ row, defaults, next, disabled, send, onMove, onUpdate }: RowProps) {
   const t = useT()
   const onKey = (e: KeyboardEvent<HTMLButtonElement>) => {
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
@@ -256,6 +273,22 @@ function DeviceRowView({ row, defaults, next, disabled, send, onMove }: RowProps
             <span key={b}>{b}</span>
           ))}
         </p>
+      )}
+      {row.update && (
+        <div className={classNames('devices-update', row.update.state)}>
+          <span className="sheet-meta">{row.update.text}</span>
+          {row.update.offer && (
+            <button
+              type="button"
+              className="devices-update-go"
+              title={t('node.dev.updateWhy')}
+              disabled={disabled}
+              onClick={onUpdate}
+            >
+              {t('node.dev.update')}
+            </button>
+          )}
+        </div>
       )}
       <div className="devices-controls">
         {!row.here && (

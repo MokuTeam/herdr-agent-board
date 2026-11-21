@@ -22,6 +22,7 @@ import { pace } from '../../adapters/pacing.ts'
 import { type NodePart, nodePart } from '../../core/node-items.ts'
 import {
   type DeviceConfig,
+  type DeviceUpdate,
   type DeviceView,
   LOCAL,
   type NodeStatus,
@@ -63,6 +64,8 @@ export interface NodeAggregateOptions {
   store?: DeviceStore
   clock?: Clock
   hostName?: string
+  /** A device's update to this board's commit (#590, services/nodes/update.ts), for its row. */
+  update?: (id: string) => DeviceUpdate | null
 }
 
 /** The offline copy is written at most this often (paced in tests). */
@@ -218,7 +221,11 @@ export function createNodeAggregate(o: NodeAggregateOptions): NodeAggregate {
         const device = cfg.devices[view.id]
         const got = view.id !== LOCAL && device?.link ? current(view.id) : null
         const status = view.id === LOCAL ? own : view.status
-        out.devices.push(boardDevice(view, device, got?.at ?? null, steady(view.id, status)))
+        const update = view.id === LOCAL ? null : (o.update?.(view.id) ?? null)
+        out.devices.push({
+          ...boardDevice(view, device, got?.at ?? null, steady(view.id, status)),
+          ...(update && { update }),
+        })
         if (!got) continue
         out.items.push(...got.part.items)
         out.launches.push(...got.part.launches)

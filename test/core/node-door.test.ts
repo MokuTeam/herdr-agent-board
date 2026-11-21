@@ -75,7 +75,7 @@ describe('the door takes what 6.2 lists', () => {
     }
   })
 
-  test("the API version is 1, and the status, a start from the master (#504), the bundle's routes (#506), the uplink (#508), a given secret (#507) and leave (#510) are the door's own", () => {
+  test("the API version is 1, and the status, a start from the master (#504), the bundle's routes (#506), the uplink (#508), a given secret (#507), leave (#510) and the update (#590) are the door's own", () => {
     expect(NODE_API).toBe(1)
     expect(DOOR_ROUTES.filter(r => r.door).map(r => [r.method, String(r.path)])).toEqual([
       ['GET', '/api/node/status'],
@@ -88,7 +88,20 @@ describe('the door takes what 6.2 lists', () => {
       ['POST', String(/^\/api\/node\/uplink\/[A-Za-z0-9_-]{1,64}$/)],
       ['POST', String(/^\/api\/node\/sink\/[a-z0-9][a-z0-9_-]{0,39}$/)],
       ['POST', '/api/node/leave'],
+      ['PUT', '/api/node/update/blob'],
+      ['POST', '/api/node/update'],
     ])
+    // The update (#590): its archive by PUT, then the update by POST, those paths alone.
+    expect(refusal('PUT', '/api/node/update/blob')).toBeNull()
+    expect(refusal('POST', '/api/node/update')).toBeNull()
+    for (const [method, raw] of [
+      ['POST', '/api/node/update/blob'],
+      ['GET', '/api/node/update'],
+      ['PUT', '/api/node/update'],
+      ['PUT', '/api/node/update/blob/x'],
+      ['POST', '/api/node/update/x'],
+    ] as const)
+      expect(refusal(method, raw)).toEqual(NOT_FOUND)
     // Leave is a POST of that path alone (#510).
     expect(refusal('POST', '/api/node/leave')).toBeNull()
     expect(refusal('GET', '/api/node/leave')).toEqual(NOT_FOUND)

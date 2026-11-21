@@ -96,6 +96,16 @@ test('what a start waits on, why it stays here, why it was refused', () => {
       en,
     ),
   ).toBe('No device can take it: server-1 is not logged in to work; this computer lacks the tags gpu, linux')
+  // Another version: said as an update on its way while one is (#590).
+  expect(
+    refusalText({ kind: 'unfit', devices: [{ device: 'server-1', kind: 'commit', theirs: 'a', ours: 'b' }] }, en),
+  ).toBe('No device can take it: server-1 runs another version of the board')
+  expect(
+    refusalText(
+      { kind: 'unfit', devices: [{ device: 'server-1', kind: 'commit', theirs: 'a', ours: 'b', updating: true }] },
+      en,
+    ),
+  ).toBe("No device can take it: server-1 is updating to this board's version")
   expect(
     refusalText({ kind: 'pinned-away', pin: { device: 'server-1' }, origin: 'local', home: { kind: 'changes' } }, en),
   ).toBe('It runs only on this computer (the folder has changes that are not committed), and “Where” says server-1')

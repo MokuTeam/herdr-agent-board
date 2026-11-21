@@ -57,6 +57,8 @@ export interface DeviceState {
   /** The memory gate is closed: see gateNext. */
   gateClosed: boolean
   revoked?: boolean
+  /** This board's commit is on its way to the device (#590): a `commit` refusal says so. */
+  updating?: boolean
 }
 
 export interface PlacementView {
@@ -99,7 +101,8 @@ export type Unfit =
   | { device: DeviceId; kind: 'not-set-up' | 'revoked' | 'paused' | 'draining' }
   | { device: DeviceId; kind: 'tags'; missing: string[] }
   | { device: DeviceId; kind: 'api'; theirs: number; ours: number }
-  | { device: DeviceId; kind: 'commit'; theirs: string; ours: string }
+  /** `updating`: this board's commit is on its way there (#590). */
+  | { device: DeviceId; kind: 'commit'; theirs: string; ours: string; updating?: true }
   | { device: DeviceId; kind: 'no-profile' | 'not-logged-in'; profile: string }
   | { device: DeviceId; kind: 'no-agent'; agent: string }
 
@@ -311,7 +314,13 @@ function unfitWhy(device: DeviceId, task: Task, view: PlacementView): Unfit | nu
   if (device !== LOCAL) {
     if (status.api !== view.master.api) return { device, kind: 'api', theirs: status.api, ours: view.master.api }
     if (status.commit !== view.master.commit)
-      return { device, kind: 'commit', theirs: status.commit, ours: view.master.commit }
+      return {
+        device,
+        kind: 'commit',
+        theirs: status.commit,
+        ours: view.master.commit,
+        ...(state?.updating && { updating: true as const }),
+      }
   }
   // The profile map is the master's to a node's: this computer's profiles are its own ids.
   const profile = (device !== LOCAL && settings?.profiles?.[task.profile]) || task.profile

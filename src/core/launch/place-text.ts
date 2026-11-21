@@ -41,6 +41,9 @@ function unfitText(u: Unfit, t: Translator): string {
       return t(`place.unfit.${u.kind}`, { device, profile: u.profile })
     case 'no-agent':
       return t('place.unfit.no-agent', { device, agent: u.agent })
+    case 'commit':
+      // An update on its way (#590): the device takes work once it runs this board's commit.
+      return t(u.updating ? 'place.unfit.updating' : 'place.unfit.commit', { device })
     default:
       return t(`place.unfit.${u.kind}`, { device })
   }

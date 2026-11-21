@@ -98,6 +98,8 @@ export interface PlacerOptions {
   hostName?: string
   /** This board's commit, asked once; a node takes work only on the same one (6.5). */
   commit?: () => Promise<string>
+  /** Whether this board's commit is on its way to a device (#590, services/nodes/update.ts). */
+  updating?: (id: string) => boolean
   /** git's facts of a folder (adapters/git.ts), handed in so tests can stand in. */
   git?: { checkout: typeof checkoutFacts; info: typeof gitInfo; pushed: typeof branchPushed }
   exists?: (path: string) => boolean
@@ -277,6 +279,7 @@ export function createPlacer(o: PlacerOptions): Placer {
       devices[id] = { status: placed, online, reserved: 0, gateClosed: gate.closed }
       // Revoked (#510): refused from the moment config.json says so, queued starts go on to others.
       if (settings?.revoked) devices[id].revoked = true
+      if (id !== LOCAL && o.updating?.(id)) devices[id].updating = true
     }
     const live = heldReservations(now)
     for (const [id, d] of Object.entries(devices)) d.reserved = reservedOn(live, id)

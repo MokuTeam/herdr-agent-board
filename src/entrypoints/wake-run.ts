@@ -5,7 +5,7 @@
 // process's errors show on the pane's screen; the last one is kept for the status file.
 // config.json's kill switch is read first: wake off, it ends with 0 and starts nothing.
 import { type ChildProcess, spawn } from 'node:child_process'
-import { existsSync, readdirSync, statSync, watch } from 'node:fs'
+import { existsSync, type FSWatcher, readdirSync, statSync, watch } from 'node:fs'
 import { join } from 'node:path'
 import { configFile, readConfigFile } from '../adapters/config-file.ts'
 import { ROOT } from '../adapters/paths.ts'
@@ -115,15 +115,29 @@ function changed(): void {
   if (now === code) return
   code = now
   supervisor.codeChanged()
+  // A node's update (#590) moves the plugin's files aside and puts the new copy's in their place.
+  // The watcher follows the folder it was given (inotify on Linux), now the copy before: it is made
+  // again on the new one, so the next update reaches wake too. A plain edit keeps the folder.
+  if (folderOf(SRC) !== watched) {
+    current?.close()
+    watchSrc()
+  }
 }
+
+/** The folder a path names now, by its file id: another one once an update put a new copy there. */
+const folderOf = (path: string): number | undefined => statSync(path, { throwIfNoEntry: false })?.ino
+let current: FSWatcher | null = null
+let watched: number | undefined
 
 function watchSrc(): void {
   try {
+    watched = folderOf(SRC)
     const watcher = watch(SRC, { recursive: true }, (_, name) => {
       if (name && !isCode(name)) return
       clearTimeout(timer)
       timer = setTimeout(changed, 400)
     })
+    current = watcher
     watcher.on('error', err => {
       wakeLog(`wake-run.ts: watching src: ${messageOf(err)}`)
       watcher.close()

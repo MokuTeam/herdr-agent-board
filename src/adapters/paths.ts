@@ -9,6 +9,12 @@ import { cardStore } from '../core/card-store.ts'
 
 export const PLUGIN_ID = 'agent-board'
 export const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
+/**
+ * The plugin's folder as a node updates it and a master ships it (#590): ROOT, or in a test a
+ * scratch plugin of its own (BOARD_TEST_PLUGIN_ROOT; unset in production), so no test swaps the
+ * checkout it runs from.
+ */
+export const pluginRoot = (): string => process.env.BOARD_TEST_PLUGIN_ROOT || ROOT
 
 export const configDir = (): string =>
   join(process.env.APPDATA || join(homedir(), '.config'), 'herdr', 'plugins', 'config', PLUGIN_ID)
