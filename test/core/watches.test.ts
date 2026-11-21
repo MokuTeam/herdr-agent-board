@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { probeRunOf, probeShell } from '../../src/adapters/watch-probe.ts'
 import { brief } from '../../src/core/brief.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
+import { nodePart } from '../../src/core/node-items.ts'
 import { promptOf, type ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import {
   afterRun,
@@ -10,6 +11,7 @@ import {
   DEFAULT_EVERY_MS,
   DEFAULT_TIMEOUT_MS,
   firedText,
+  type Note,
   OUTPUT_CHARS,
   outcomeOf,
   parseWaitProbe,
@@ -37,6 +39,12 @@ const watch = (over: Partial<WatchEntry> = {}): WatchEntry => ({
   probe: { cmd: 'gh pr checks 12', everyMs: 10 * MIN, timeoutMs: 20_000 },
   firstDone: true,
   ...over,
+})
+
+/** The watch once every line of a run was written: each line's mark set. */
+const told = (r: { watch: WatchEntry; notes: Note[] }): WatchEntry => ({
+  ...r.watch,
+  ...Object.fromEntries(r.notes.map(n => [n.mark, true])),
 })
 
 describe('watchesConfig', () => {
@@ -76,7 +84,7 @@ describe('parseWaitProbe', () => {
     assert.equal((parseWaitProbe(['x', '--probe', 'true'], ['--every', '1m']) as { text: string }).text, 'x --every 1m')
   })
 
-  test('the limits: an interval floor of a minute, a timeout cap of two minutes, silence no shorter than the interval', () => {
+  test('the limits: an interval floor of a minute, a timeout cap of 90 s, silence no shorter than the interval, a wait text of 500 characters', () => {
     const err = (words: string[]) => (parseWaitProbe(words) as { error?: string }).error ?? ''
     expect(err(['x', '--probe', 'true', '--every', '30s'])).toMatch(/--every is below 1 min/)
     expect(err(['x', '--probe', 'true', '--every', '8d'])).toMatch(/--every is above/)
@@ -88,6 +96,9 @@ describe('parseWaitProbe', () => {
     expect(err(['x', '--probe', ' '])).toMatch(/--probe needs the command/)
     expect(err(['x', '--probe', 'a'.repeat(1001)])).toMatch(/longer than 1000/)
     expect(err(['x', '--probe', 'echo \u001b[2J'])).toMatch(/control characters/)
+    // The fired line keeps its frame inside a schedule entry's 2000 characters.
+    expect(err(['a'.repeat(501), '--probe', 'true'])).toMatch(/wait text is longer than 500/)
+    assert.equal('error' in parseWaitProbe(['a'.repeat(500), '--probe', 'true']), false)
   })
 })
 
@@ -103,6 +114,13 @@ describe('outcomeOf', () => {
     assert.deepEqual(outcomeOf(run(0, 'a\u0007b\u001b[31m')), { kind: 'fired', output: 'ab[31m' })
     // C1 controls and format characters (zero width, bidi, tags) go too.
     assert.deepEqual(outcomeOf(run(0, 'a\u009bb\u200bc\u202ed\u{E0041}e')), { kind: 'fired', output: 'abcde' })
+    // Line and paragraph separators, which JSON would leave in the quoted output, go too.
+    assert.deepEqual(outcomeOf(run(0, 'a\u2028b\u2029c')), { kind: 'fired', output: 'abc' })
+    // A run that could not start: its words cleaned as well.
+    assert.deepEqual(outcomeOf({ ...run('ENOENT'), error: 'the folder /w/\u001b[2Jx is not there' }), {
+      kind: 'error',
+      why: 'the folder /w/[2Jx is not there',
+    })
     assert.deepEqual(outcomeOf(run(1, 'pending')), { kind: 'nothing' })
   })
 
@@ -150,21 +168,41 @@ describe('afterRun', () => {
 
   test('three errors in a row tell the session once per streak, without waking it', () => {
     let w = watch()
-    const notes: { text: string; wake: boolean }[] = []
+    const notes: Note[] = []
     const step = (o: { kind: 'nothing' } | { kind: 'error'; why: string }) => {
       const r = afterRun(w, o, T0, en)
-      w = r.watch
+      w = told(r)
       notes.push(...r.notes)
     }
     for (let i = 0; i < 5; i++) step({ kind: 'error', why: 'exit 2: offline' })
     assert.equal(notes.length, 1)
     assert.equal(notes[0]?.wake, false)
+    assert.equal(notes[0]?.mark, 'errorsTold')
     expect(notes[0]?.text).toMatch(
       /^"CI on PR 12": the probe failed 3 times in a row \(the last error, as data: "exit 2: offline"\)/,
     )
     step({ kind: 'nothing' })
     for (let i = 0; i < 3; i++) step({ kind: 'error', why: 'exit 2' })
     assert.equal(notes.length, 2)
+  })
+
+  test('a line is marked told only by whoever wrote it: one not written comes again at the next run', () => {
+    // The watch afterRun returns does not say told; the caller sets the note's mark once it is in.
+    const w = watch({ errors: 2, probe: { ...watch().probe, silenceMs: MIN * 10 }, created: T0 - 20 * MIN })
+    const r = afterRun(w, { kind: 'error', why: 'exit 2' }, T0, en)
+    assert.deepEqual(
+      r.notes.map(n => n.mark),
+      ['errorsTold', 'silenceTold'],
+    )
+    assert.equal(r.watch.errorsTold, undefined)
+    assert.equal(r.watch.silenceTold, undefined)
+    // Not written: the next run says both again.
+    assert.deepEqual(
+      afterRun(r.watch, { kind: 'error', why: 'exit 2' }, T0 + MIN, en).notes.map(n => n.mark),
+      ['errorsTold', 'silenceTold'],
+    )
+    // Written: neither again.
+    assert.deepEqual(afterRun(told(r), { kind: 'error', why: 'exit 2' }, T0 + MIN, en).notes, [])
   })
 
   test("the scheduler's first check failing is told at once, saying it runs in the board's environment", () => {
@@ -175,7 +213,8 @@ describe('afterRun', () => {
       /first check of the probe failed \(its error, as data: "exit 127: gh: command not found"\)/,
     )
     expect(r.notes[0]?.text).toMatch(/board's environment/)
-    assert.equal(r.watch.firstDone, true)
+    assert.equal(r.notes[0]?.mark, 'firstDone')
+    assert.equal(told(r).firstDone, true)
   })
 
   test('silence: once its time has passed with nothing, the session is woken once and the watch goes on', () => {
@@ -186,11 +225,12 @@ describe('afterRun', () => {
       {
         text: '"CI on PR 12": nothing from the probe for 3 d. It still runs; board unschedule abc123 stops it.',
         wake: true,
+        mark: 'silenceTold',
       },
     ])
-    assert.equal(r.watch.silenceTold, true)
+    assert.equal(told(r).silenceTold, true)
     assert.equal(r.watch.next, T0 + 3 * 86_400_000 + 10 * MIN)
-    assert.deepEqual(afterRun(r.watch, { kind: 'error', why: 'x' }, T0 + 4 * 86_400_000, en).notes, [])
+    assert.deepEqual(afterRun(told(r), { kind: 'error', why: 'x' }, T0 + 4 * 86_400_000, en).notes, [])
   })
 })
 
@@ -224,7 +264,12 @@ describe('the words', () => {
     )
     assert.equal(
       watchState(watch({ errors: 1, lastError: 'exit 2', lastCheck: T0, next: T0 + 20 * MIN }), T0, en),
-      'probe error: exit 2, next try in 20 min',
+      'probe error: "exit 2", next try in 20 min',
+    )
+    // An error's words from the file, cleaned and quoted wherever they are shown.
+    assert.equal(
+      watchState(watch({ errors: 1, lastError: 'exit 2: bad\u001b[2J" \u2028x', next: T0 + 20 * MIN }), T0, en),
+      'probe error: "exit 2: bad[2J\\" x", next try in 20 min',
     )
     assert.equal(watchState(watch({ goneSince: T0 }), T0, en), 'not checked: the session is not on the board')
   })
@@ -301,5 +346,16 @@ describe('probeShell', () => {
       which: n => (n === 'git' ? 'C:\\Windows\\System32\\git.exe' : null),
     })
     expect((none as { error: string }).error).toMatch(/no Git Bash found/)
+  })
+})
+
+describe('nodes', () => {
+  test("a node's watch stays on the node: its payload's watch never reaches the master's schedule", () => {
+    const reminder = { id: 'def456', key: 's1', text: 'look again', next: T0, at: T0 }
+    const part = nodePart({ items: [], launches: [], schedules: [watch(), reminder] }, 'laptop2')
+    assert.equal(part?.schedules.length, 1)
+    assert.equal(part?.schedules[0]?.text, 'look again')
+    // The offline copy keeps none either.
+    assert.deepEqual(nodePart({ schedules: [watch()] }, null)?.schedules, [])
   })
 })

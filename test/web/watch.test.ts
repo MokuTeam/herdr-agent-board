@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import { alarmOf } from '../../web/src/models/card.ts'
+import { type LogRecord, logView } from '../../web/src/models/schedule.ts'
 import { watchOf, watchView } from '../../web/src/models/watch.ts'
 
 // A watch on the page (#486): the card's line and the sheet's row read it from the payload's
@@ -38,4 +39,28 @@ test("the session's watch and how it stands, with the whole command", () => {
 test("a watch's next check is no alarm: the clock shows the reminders only", () => {
   assert.equal(alarmOf([watch], 's1', T0, en), null)
   assert.match(alarmOf([watch, reminder], 's1', T0, en)?.title ?? '', /look again/)
+})
+
+test("the log: a watch's probe that fired is a run that did its job, not a missed one", () => {
+  const r: LogRecord = {
+    key: 's1',
+    name: 'anna',
+    text: 'CI on PR 12',
+    kind: 'watch',
+    by: '',
+    due: T0 - 1000,
+    at: T0,
+    result: 'fired',
+    why: '',
+    n: undefined,
+  }
+  const v = logView(r, () => undefined, T0, en)
+  assert.equal(v.icon, 'check')
+  assert.equal(v.iconTitle, 'The probe fired')
+  assert.equal(v.result, 'sent')
+  assert.equal(v.note, '')
+  // A watch removed with its session gone is still a missed one.
+  const missed = logView({ ...r, result: 'missed', why: 'gone' }, () => undefined, T0, en)
+  assert.equal(missed.icon, '!')
+  assert.equal(missed.iconTitle, en('sched.missed'))
 })

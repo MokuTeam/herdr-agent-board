@@ -1554,7 +1554,11 @@ board wait "CI run 123456789" --every 5m --silence 1d --probe 's=$(gh run view 1
   PATH; never `System32\bash.exe`, which is WSL's). Without Git Bash `--probe` is refused. No
   console window shows for a run. Its input is closed, its timeout ends what it started, and the
   board's runs get `BOARD_WATCH_ID` in their environment.
-- One watch per session: `board doing`, `board done`, `board clear` and a new `board wait` end it.
+- One watch per session, and only for the session's own wait: `--probe` with `--session` naming
+  another session is refused, so a command one session sets never runs in another's folder. The
+  wait text is 500 characters at most with `--probe`.
+- `board doing`, `board done`, `board clear` and a new `board wait` end it, and also the watch
+  that the session before a /clear left in the same pane.
   `board schedule` lists it with its whole command line, and `board unschedule <id>` removes it;
   the sheet and the schedule panel show the command too, with a cancel button and nothing else.
 - Safety: a probe runs unattended with your rights, outside the session's permission mode. A watch
@@ -1578,6 +1582,10 @@ board wait "CI run 123456789" --every 5m --silence 1d --probe 's=$(gh run view 1
   them. When a probe fires, its watch becomes a plain reminder under the same id.
 - Turned off again, watches stay in their folder unrun (`board schedule` says so); the page shows
   none, and `board wait --probe` takes the flags as words, as before.
+- With nodes (#500): a watch runs on the board of the computer its session is on, while that
+  board's `watches` is on, and stays there. A node does not pass its watches to the master's page.
+- On Windows a probe ended from outside (Task Manager, `taskkill`) exits 1, which reads as
+  nothing yet; the board's own timeout is an error.
 - Not here yet: a probe that calls an MCP server, and starting a new session when one fires.
 
 ## Restart

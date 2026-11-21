@@ -38,6 +38,11 @@ export const MAX_TIMEOUT_MS = 90_000
 export const MAX_SILENCE_MS = 366 * 24 * HOUR
 /** A probe's command line at most. */
 export const MAX_COMMAND = 1000
+/**
+ * A watch's wait text at most: the fired line (its frame, the text and the output quoted as JSON,
+ * escapes and all) then stays inside a schedule entry's 2000 characters, so its end is never cut.
+ */
+export const MAX_WAIT_TEXT = 500
 /** What of a fired probe's output the session gets: its first lines, this many characters at most. */
 export const OUTPUT_LINES = 5
 export const OUTPUT_CHARS = 600
@@ -126,6 +131,7 @@ export function parseWaitProbe(
   }
   const text = [...rest, ...after].join(' ').replace(/\s+/g, ' ').trim()
   if (!text) return { error: 'say what the session waits for: board wait "<who/what>" --probe "<command>"' }
+  if (text.length > MAX_WAIT_TEXT) return { error: `the wait text is longer than ${MAX_WAIT_TEXT} characters` }
   const cmd = (values['--probe'] ?? '').trim()
   if (!cmd) return { error: '--probe needs the command to run' }
   if (cmd.length > MAX_COMMAND) return { error: `the command is longer than ${MAX_COMMAND} characters` }
@@ -171,10 +177,11 @@ export interface ProbeRun {
 
 export type Outcome = { kind: 'fired'; output: string } | { kind: 'nothing' } | { kind: 'error'; why: string }
 
-// What a terminal or a reader could take for something else: control characters (C0, DEL, C1) and
-// Unicode's format characters (zero widths, bidi marks, tags).
+// What a terminal or a reader could take for something else: control characters (C0, DEL, C1),
+// Unicode's format characters (zero widths, bidi marks, tags) and its line and paragraph
+// separators, which JSON leaves as they are.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes
-const CONTROL = /[\x00-\x08\x0b-\x1f\x7f-\x9f]|\p{Cf}/gu
+const CONTROL = /[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029]|\p{Cf}/gu
 
 /** The first lines of an output, one line, control characters out, capped. */
 export function outputLine(out: string, lines = OUTPUT_LINES, chars = OUTPUT_CHARS): string {
@@ -190,7 +197,7 @@ export function outputLine(out: string, lines = OUTPUT_LINES, chars = OUTPUT_CHA
 
 /** Exit 0 fired, exit 1 nothing yet; anything else (another code, the timeout, no start) an error. */
 export function outcomeOf(r: ProbeRun): Outcome {
-  if (r.error) return { kind: 'error', why: r.error }
+  if (r.error) return { kind: 'error', why: outputLine(r.error, 1, 300) || 'could not run' }
   if (r.killed) return { kind: 'error', why: 'no answer in time (timed out)' }
   if (r.code === 0) return { kind: 'fired', output: outputLine(r.stdout) }
   if (r.code === 1) return { kind: 'nothing' }
@@ -205,11 +212,19 @@ export function backoffMs(everyMs: number, errors: number): number {
   return Math.min(everyMs * 2 ** Math.min(errors, 20), Math.max(everyMs, MAX_BACKOFF_MS))
 }
 
-/** A line for the session: `wake` false waits until it is awake (an error note). */
+/**
+ * A line for the session: `wake` false waits until it is awake (an error note). `mark`: the
+ * watch's field set once the line is in the schedule, never before, so a line that could not be
+ * written is tried again at the next run instead of being lost.
+ */
 export interface Note {
   text: string
   wake: boolean
+  mark: 'firstDone' | 'errorsTold' | 'silenceTold'
 }
+
+/** A run's result as a short line, cleaned of what a terminal would act on, quoted as JSON. */
+export const quotedWhy = (why: string): string => JSON.stringify(outputLine(why, 1, 300))
 
 const spanOf = (ms: number, t: Translator = current): string => span(ms, t)
 /** A limit in a refusal: seconds where minutes would round it (90 s, not 2 min). */
@@ -227,7 +242,8 @@ export function firedText(w: Pick<WatchEntry, 'text'>, output: string, t: Transl
  * The watch after a run that did not fire (`outcome` nothing or an error) at `now`, and the lines
  * the session gets for it: three errors in a row (once per streak, not waking it), the scheduler's
  * first check failing (at once, not waking it: it has just ended its turn), the silence time
- * passed (once, waking it). A run that fired is not for this: firedText.
+ * passed (once, waking it). The field that says a line was told is each line's `mark`, set by
+ * the caller once the line is written. A run that fired is not for this: firedText.
  */
 export function afterRun(
   w: WatchEntry,
@@ -255,33 +271,34 @@ export function afterRun(
       errors,
       lastError: outcome.why,
       lastCheck: now,
-      firstDone: true,
       next: now + backoffMs(w.probe.everyMs, errors),
     }
     if (!w.firstDone)
       notes.push({
-        text: t('watch.prompt.first', { wait: w.text, why: JSON.stringify(outcome.why), cwd: w.cwd ?? '', id: w.id }),
+        text: t('watch.prompt.first', { wait: w.text, why: quotedWhy(outcome.why), cwd: w.cwd ?? '', id: w.id }),
         wake: false,
+        mark: 'firstDone',
       })
-    else if (errors >= ERRORS_TOLD_AT && !w.errorsTold) {
+    else if (errors >= ERRORS_TOLD_AT && !w.errorsTold)
       notes.push({
         text: t('watch.prompt.errors', {
           wait: w.text,
           n: errors,
-          why: JSON.stringify(outcome.why),
+          why: quotedWhy(outcome.why),
           max: spanOf(Math.max(w.probe.everyMs, MAX_BACKOFF_MS), t),
           id: w.id,
         }),
         wake: false,
+        mark: 'errorsTold',
       })
-      watch.errorsTold = true
-    }
   }
   const silence = w.probe.silenceMs
-  if (silence && !w.silenceTold && now - (w.created ?? now) >= silence) {
-    notes.push({ text: t('watch.prompt.silence', { wait: w.text, span: spanOf(silence, t), id: w.id }), wake: true })
-    watch.silenceTold = true
-  }
+  if (silence && !w.silenceTold && now - (w.created ?? now) >= silence)
+    notes.push({
+      text: t('watch.prompt.silence', { wait: w.text, span: spanOf(silence, t), id: w.id }),
+      wake: true,
+      mark: 'silenceTold',
+    })
   return { watch, notes }
 }
 
@@ -289,7 +306,7 @@ export function afterRun(
 export function watchState(w: WatchEntry, now: number, t: Translator = current): string {
   if (w.goneSince) return t('watch.state.gone')
   const until = Math.max(0, w.next - now)
-  if (w.errors && w.lastError) return t('watch.state.error', { why: w.lastError, in: spanOf(until, t) })
+  if (w.errors && w.lastError) return t('watch.state.error', { why: quotedWhy(w.lastError), in: spanOf(until, t) })
   if (w.lastCheck) return t('watch.state.nothing', { ago: spanOf(now - w.lastCheck, t) })
   return t('watch.state.first', { in: spanOf(until, t) })
 }

@@ -22,6 +22,8 @@ export interface WaitProbeCtx {
   setWait: (text: string) => void
   /** The scheduler note when no board runs it (cli.ts schedulerNote). */
   note: () => Promise<string>
+  /** Whether a key is a live session: a watch a session before a /clear left in this pane ends too. */
+  live?: (key: string) => boolean
   /** The tests' probe. */
   probe?: typeof runProbe
 }
@@ -45,13 +47,16 @@ export async function waitProbe(ctx: WaitProbeCtx): Promise<string> {
     throw new Error(`the probe failed when tried once (${outcome.why}); no watch set, the card unchanged`)
   if (outcome.kind === 'fired')
     return `ok · already true: the probe exited 0${outcome.output ? ` and printed "${outcome.output}"` : ''}; no watch set, the card unchanged`
-  const { watch, ended } = addWatch({
-    ...ctx.entry,
-    text,
-    probe,
-    next: ctx.now + Math.min(FIRST_CHECK_MS, probe.everyMs),
-    by: 'agent',
-  })
+  const { watch, ended } = addWatch(
+    {
+      ...ctx.entry,
+      text,
+      probe,
+      next: ctx.now + Math.min(FIRST_CHECK_MS, probe.everyMs),
+      by: 'agent',
+    },
+    ctx.live,
+  )
   ctx.setWait(text)
   const silence = probe.silenceMs ? `, or after ${span(probe.silenceMs, en)} with nothing` : ''
   const replaced = ended.length ? ` (watch ${ended.map(w => w.id).join(', ')} ended)` : ''

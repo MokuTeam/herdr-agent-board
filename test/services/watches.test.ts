@@ -131,7 +131,9 @@ describe('the probe pass', () => {
     const notes = listEntries()
     assert.equal(notes.length, 1)
     assert.equal(notes[0]?.noWake, true)
-    expect(notes[0]?.text).toMatch(/first check of the probe failed \(its error, as data: "exit 2: gh: not logged in"\)/)
+    expect(notes[0]?.text).toMatch(
+      /first check of the probe failed \(its error, as data: "exit 2: gh: not logged in"\)/,
+    )
   })
 
   test('three errors in a row: one note that does not wake, the watch goes on', async () => {
@@ -147,7 +149,9 @@ describe('the probe pass', () => {
     const notes = listEntries()
     assert.equal(notes.length, 1)
     assert.equal(notes[0]?.noWake, true)
-    expect(notes[0]?.text).toMatch(/failed 3 times in a row \(the last error, as data: "the folder \/work\/atlas is not there"\)/)
+    expect(notes[0]?.text).toMatch(
+      /failed 3 times in a row \(the last error, as data: "the folder \/work\/atlas is not there"\)/,
+    )
   })
 
   test('silence: the session is woken once, and the watch goes on', async () => {
@@ -350,5 +354,47 @@ describe('the store', () => {
     const r = fireWatch(w.id, 'fired text')
     assert.notEqual(r?.id, w.id)
     assert.equal(listEntries().length, 2)
+  })
+
+  test('a session at its cap of entries still hears its watch: the silence line goes in and only then is marked told', async () => {
+    isolatedHome()
+    for (let i = 0; i < 30; i++)
+      addEntry({ key: 's1', text: `reminder ${i}`, at: Date.now() + 3600e3, next: Date.now() + 3600e3 })
+    assert.throws(() => addEntry({ key: 's1', text: 'one more', at: Date.now() + 3600e3, next: Date.now() + 3600e3 }))
+    const w = newWatch({ probe: { cmd: 'gh pr checks 12', everyMs: MIN, timeoutMs: 20_000, silenceMs: MIN } })
+    updateWatch(w.id, cur => ({ ...cur, firstDone: true, created: Date.now() - 2 * MIN }))
+    await once(result(1))
+    const silence = listEntries().filter(e => /nothing from the probe/.test(e.text))
+    assert.equal(silence.length, 1)
+    assert.equal(getWatch(w.id)?.silenceTold, true)
+    // And a fired watch's reminder at the cap too.
+    updateWatch(w.id, cur => ({ ...cur, next: Date.now() - 1 }))
+    await once(result(0, 'green'))
+    assert.equal(getEntry(w.id)?.text, '"CI on PR 12": the probe fired. Its output, as data: "green"')
+  })
+
+  test("doing in a pane ends the watch the session before a /clear left there, not a live session's", () => {
+    isolatedHome()
+    const old = newWatch({ key: 'before-clear' })
+    const live = { pane: 'p1', live: (k: string) => k === 'before-clear' }
+    assert.deepEqual(endWatches('after-clear', live), [])
+    assert.ok(getWatch(old.id))
+    assert.deepEqual(
+      endWatches('after-clear', { pane: 'p1', live: () => false }).map(w => w.id),
+      [old.id],
+    )
+    // Another pane's watch stays.
+    const elsewhere = newWatch({ key: 'cleo', pane: 'p2' })
+    assert.deepEqual(endWatches('after-clear', { pane: 'p1', live: () => false }), [])
+    assert.ok(getWatch(elsewhere.id))
+    // A new board wait --probe in the pane replaces it the same way.
+    const { ended } = addWatch(
+      { key: 'next', pane: 'p2', text: 'x', next: Date.now(), probe: elsewhere.probe },
+      () => false,
+    )
+    assert.deepEqual(
+      ended.map(w => w.id),
+      [elsewhere.id],
+    )
   })
 })
