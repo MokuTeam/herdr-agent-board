@@ -32,6 +32,7 @@ import {
 import type { BoardDevice } from '../../core/payload.ts'
 import type { Config, Item } from '../../core/types.ts'
 import { type Clock, realClock } from '../tunnel.ts'
+import { STATUS_MS } from './link.ts'
 import type { NodeLinks } from './links.ts'
 
 /** What the master's payload adds while `nodes` is on. */
@@ -57,6 +58,7 @@ export interface NodeAggregateOptions {
   onChange(): void
   /** This computer's own status (services/node/status.ts), asked every `statusMs` while this lives. */
   ownStatus?: () => Promise<NodeStatus | null>
+  /** How often `ownStatus` is asked (links.ts linkTimes: 30 s, paced in tests). */
   statusMs?: number
   store?: DeviceStore
   clock?: Clock
@@ -135,7 +137,8 @@ export function createNodeAggregate(o: NodeAggregateOptions): NodeAggregate {
 
   /** This computer's status, asked once; a publish when its figures moved. */
   async function askOwn(): Promise<void> {
-    if (!o.ownStatus || asking || closed) return
+    // `nodes` taken out of config.json while the board runs: nothing is asked.
+    if (!o.ownStatus || asking || closed || !o.links.on()) return
     asking = true
     try {
       const got = await o.ownStatus()
@@ -149,7 +152,7 @@ export function createNodeAggregate(o: NodeAggregateOptions): NodeAggregate {
       asking = false
     }
   }
-  const ownTimer = o.ownStatus ? clock.setInterval(() => void askOwn(), o.statusMs ?? 30_000) : null
+  const ownTimer = o.ownStatus ? clock.setInterval(() => void askOwn(), o.statusMs ?? STATUS_MS) : null
   void askOwn()
 
   /** A device's part now: from its link's last payload, else from its offline copy; null with neither. */

@@ -134,11 +134,31 @@ test("a node's status in its row is held while its figures round the same", asyn
   expect(JSON.stringify(s.agg.part())).toBe(first)
   s.setNode(status('server-1', { at: 3, sessions: { awake: 3, working: 1, asleep: 4 } }))
   expect(s.agg.part()?.devices[0]?.status?.at).toBe(3)
-  // No status of its own to ask: no timer.
   s.agg.close()
 })
 
-test('without ownStatus: no timer, the local row has no status', async () => {
+test('an ask that answers after close publishes nothing', async () => {
+  let answer: (s: NodeStatus) => void = () => {}
+  const c = stepClock()
+  let published = 0
+  const agg = createNodeAggregate({
+    links: { on: () => true, view: () => ({ devices: [], problems: [] }), link: () => null, onChange: () => () => {} },
+    cfg,
+    log: () => {},
+    onChange: () => published++,
+    store: createDeviceStore({ dir: mkdtempSync(join(tmpdir(), 'agg-status-')) }),
+    clock: c.clock,
+    hostName: 'laptop',
+    ownStatus: () => new Promise(resolve => (answer = resolve)),
+    statusMs: 300,
+  })
+  agg.close()
+  answer(status('laptop'))
+  await settle()
+  expect([published, c.live()]).toEqual([0, 0])
+})
+
+test('without ownStatus: no timer', async () => {
   const c = stepClock()
   const agg = createNodeAggregate({
     links: { on: () => true, view: () => ({ devices: [], problems: [] }), link: () => null, onChange: () => () => {} },

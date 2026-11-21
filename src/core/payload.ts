@@ -181,7 +181,9 @@ export interface BoardPayload {
  * detail stays on this computer (`GET /api/nodes`, `board nodes`): it is what ssh said, and
  * the payload goes to phones too. `link.heardAt` is cut to the minute, so a ping does not push
  * the board to every page. `payloadAt`: when its cards were last heard, from the offline
- * copy while the link has heard none since the board started.
+ * copy while the link has heard none since the board started. `status` (this computer's own for
+ * `local`) is the last one whose shown figures moved (core/nodes.ts statusShown): its other
+ * fields (`at`, free disk, launches) may be older than `GET /api/nodes`'s.
  */
 export interface BoardDevice extends DeviceView {
   /** The link's state, without its detail; `heardAt` to the minute. */

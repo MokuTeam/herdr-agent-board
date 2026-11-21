@@ -411,18 +411,26 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
       const res = await call(o, '/api/node/status', { signal: AbortSignal.timeout(ASK_MS) }, token)
       const got = res.ok ? nodeStatusOf(await res.json()) : null
       if (!res.ok) await res.body?.cancel()
-      if (got) {
-        nodeStatus = got
-        const shown = statusShown(got)
-        if (shown !== toldStatus) {
-          toldStatus = shown
-          for (const fn of statusFns) fn(got)
-        }
-      }
+      if (got) nodeStatus = got
+      tellStatus(got)
       return got
     } catch {
       return null
     }
+  }
+
+  /** The listeners hear a status only when its shown figures moved; one that throws stops nothing. */
+  function tellStatus(got: NodeStatus | null): void {
+    if (!got) return
+    const shown = statusShown(got)
+    if (shown === toldStatus) return
+    toldStatus = shown
+    for (const fn of statusFns)
+      try {
+        fn(got)
+      } catch (err) {
+        log(`a status listener: ${messageOf(err)}`)
+      }
   }
 
   function statusOff(): void {

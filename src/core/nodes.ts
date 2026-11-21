@@ -492,7 +492,6 @@ export function laneMayLeave(cfg: NodesConfig, lane: string): boolean {
   return cfg.lanes === 'all' || cfg.lanes.includes(lane.trim().toLowerCase())
 }
 
-/** `GET /api/node/status` on a node's door (6.3; services/node/status.ts makes it, the master's link reads it). */
 /**
  * The figures of a status the page shows, rounded as it shows them: the sessions, memory available
  * to the nearest 100 MB, the 5 minute load to one decimal, each profile's login and bundle, the
@@ -516,6 +515,7 @@ export function statusShown(s: NodeStatus | null): string {
   ])
 }
 
+/** `GET /api/node/status` on a node's door (6.3; services/node/status.ts makes it, the master's link reads it). */
 export interface NodeStatus {
   api: number
   id: string
