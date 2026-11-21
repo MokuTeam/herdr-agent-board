@@ -31,9 +31,9 @@ const NO_PICKS: SegmentPicks = { open() {}, expanded: null }
 const textOf = (n: Node): string => (n.kind === 'text' ? n.text : n.children.map(textOf).join(''))
 const elementsIn = (nodes: Node[]): Element[] => nodes.filter((n): n is Element => n.kind === 'element')
 
-const lanes = (picked: string[], folded: boolean, picks = NO_PICKS, lang = 'en') =>
+const lanes = (picked: string[], folded: boolean, picks = NO_PICKS, lang = 'en', narrow = false) =>
   renderInBoard(
-    <Lanes options={LANES} picked={picked} onPick={() => {}} folded={folded} picks={picks} />,
+    <Lanes options={LANES} picked={picked} onPick={() => {}} folded={folded} picks={picks} narrow={narrow} />,
     board(),
     lang,
   )
@@ -133,6 +133,23 @@ describe('the pill in the segments’ place', () => {
       'All profiles4',
     ])
     expect(byId(profiles('work', true), 'profiles').attrs.get('hidden')).toBe('')
+  })
+
+  test('"All" on show marks the pill (a phone hides its count, #599); a choice of its own does not', () => {
+    expect(byId(lanes([], true), 'lanes-pick').attrs.get('class')).toBe('pill-toggle segment-pick all')
+    expect(byId(profiles('all', true), 'profiles-pick').attrs.get('class')).toBe(
+      'pill-toggle segment-pick profiles all',
+    )
+    expect(byId(lanes(['blu'], true), 'lanes-pick').attrs.get('class')).toBe('pill-toggle segment-pick')
+    expect(byId(profiles('work', true), 'profiles-pick').attrs.get('class')).toBe('pill-toggle segment-pick profiles')
+  })
+
+  test('on a phone the lanes’ "All" says it is the categories’; its name, a lane on show and a wider toolbar stay as they were', () => {
+    const all = byId(lanes([], true, NO_PICKS, 'en', true), 'lanes-pick')
+    expect([all.attrs.get('aria-label'), textOf(all)]).toEqual(['Category: All', 'All categories4'])
+    expect(textOf(byId(lanes([], true, NO_PICKS, 'ru', true), 'lanes-pick'))).toBe('Все категории4')
+    expect(textOf(byId(lanes(['blu'], true, NO_PICKS, 'en', true), 'lanes-pick'))).toBe('bluBanyan3')
+    expect(textOf(byId(lanes([], true, NO_PICKS, 'en', false), 'lanes-pick'))).toBe('All4')
   })
 
   test('in Russian', () => {

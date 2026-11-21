@@ -11,6 +11,17 @@ export const ROW_GAP = 16
  */
 export const FILTERS_MIN = 420
 
+/**
+ * The widest toolbar that is a phone's (#599): there, in two rows, the actions start at the row's
+ * start with More and Settings at its end, and the filters' pills share their line in equal parts
+ * with search on a line of its own (styles/toolbar.css, `data-narrow`). Upstream's phone width
+ * (app.css, 560 px of the toolbar).
+ */
+export const NARROW_MAX = 560
+
+/** Whether a toolbar `width` px wide in two rows is a phone's. */
+export const narrowToolbar = (width: number, rows: boolean): boolean => rows && width > 0 && width <= NARROW_MAX
+
 /** What the one row is made of, in px. */
 export interface RowSizes {
   /** The summary at the start of the row: 0 while it is not shown (it is only on a wide board). */

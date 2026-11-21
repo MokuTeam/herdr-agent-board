@@ -23,12 +23,14 @@ interface Props {
   folded?: boolean
   /** The pill's menu (hooks/useSegmentPicks.ts). */
   picks?: SegmentPicks | undefined
+  /** A phone-wide toolbar (#599): the folded pill's "All" says it is the categories'. */
+  narrow?: boolean
 }
 
 /** The lanes lit after a pick in the pill's menu, as a click on that segment leaves them. */
 const toggled = (lit: readonly string[], id: string) => litLanes(toggledLane(lit, id))
 
-export function Lanes({ options, picked, onPick, folded = false, picks }: Props) {
+export function Lanes({ options, picked, onPick, folded = false, picks, narrow = false }: Props) {
   const t = useT()
   const control = useRef<HTMLDivElement>(null)
   useLaneFades(control)
@@ -64,6 +66,7 @@ export function Lanes({ options, picked, onPick, folded = false, picks }: Props)
           nameMany="tb.lanesPicked"
           choices={{ label: t('tb.lanes'), options, picked: lit, tint: false, toggled, onPick }}
           picks={picks}
+          allTitle={narrow ? t('tb.lanesAll') : undefined}
         />
       )}
     </>

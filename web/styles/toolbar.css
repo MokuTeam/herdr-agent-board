@@ -99,6 +99,32 @@
 }
 .toolbar-fit[data-rows] .toolbar-filters[data-moving] { overflow: hidden; }
 
+/* ---------------------------------------------------------------- a phone's width (#599) */
+/* Two rows on a phone (`data-narrow`, hooks/useToolbarFit.ts): the actions start where the row does,
+   More, Settings and the live dot keep its end, so the row is not an empty half before them. The
+   filters go two to a line in equal halves, in their order, so each picker keeps its words whole:
+   search takes the half beside the last picker, or a line of its own after two (`data-picks`, how
+   many pickers there are). The fold and the actions' widths are as in two rows. */
+.toolbar-fit[data-narrow] .toolbar-actions { justify-content: flex-start; }
+.toolbar-fit[data-narrow] #toolbar-more,
+.toolbar-fit[data-narrow] #toolbar-more[data-over] + #settings { margin-left: auto; }
+.toolbar-fit[data-narrow] .toolbar-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 6px;
+}
+.toolbar-fit[data-narrow] .toolbar-filters > .search { max-width: none; }
+.toolbar-fit[data-narrow] .toolbar-filters[data-picks="2"] > .search { grid-column: 1 / -1; }
+/* A pill fills its half. The segments keep their max-width (the half): it is what folds them (hooks/useSegmentFolds.ts). */
+.toolbar-fit[data-narrow] .toolbar-filters > .segment-pick { width: 100%; max-width: none; min-width: 0; }
+/* A pill names its choice from the start, its chevron at the end. "All" on show counts every session,
+   as the pill beside it does: the figure says nothing there and goes. */
+.toolbar-fit[data-narrow] .segment-pick { justify-content: flex-start; }
+.toolbar-fit[data-narrow] .segment-pick .n { flex: none; margin-right: auto; }
+.toolbar-fit[data-narrow] .segment-pick.all .n { display: none; }
+.toolbar-fit[data-narrow] .segment-pick.all .segment-pick-title { margin-right: auto; }
+.toolbar-fit[data-narrow] .segment-pick svg { flex: none; }
+
 /* ---------------------------------------------------------------- touch, pointers and motion */
 .toolbar-more:active, #toolbar-peek:active { transform: scale(0.94); }
 @media (hover: none) {

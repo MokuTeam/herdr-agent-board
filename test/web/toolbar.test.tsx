@@ -122,7 +122,7 @@ const ui = (fields: Partial<BoardUi>) => fields
 
 /**
  * The controls as this board groups them since #347: the lanes control, the profile switch and search
- * in the filters; in the actions the filters' button (the folded toolbar's), then the old page's
+ * in the filters, which say how many pickers they hold (#599); in the actions the filters' button (the folded toolbar's), then the old page's
  * buttons with Next after the archive and Settings after More, and the live dot last. The
  * filters' button and More are new: they are taken from what this board draws (their own tests
  * are toolbar-dom.test.tsx and toolbar-menu.test.ts), the rest is the old page's markup moved, not changed.
@@ -172,8 +172,11 @@ function asToolbarRows(toolbar: Node[], actual: Node[]): void {
   const notes = rest('setup-note', 'backup-note', 'wake-note', 'limits')
   const settings = take('settings')
   const live = take('live')
+  const filters = group('toolbar-filters', 'toolbar-filters', [lanes, profiles, search])
+  // #599: how many pickers the filters hold (the lanes control, the profile switch where there is one).
+  setAttr(filters, 'data-picks', profiles ? '2' : '1')
   controls.children = [
-    group('toolbar-filters', 'toolbar-filters', [lanes, profiles, search]),
+    filters,
     group('toolbar-actions', null, [
       byId(actual, 'toolbar-peek'),
       ...first,

@@ -18,22 +18,30 @@ interface Props {
   nameMany?: string
   choices: SegmentChoices
   picks?: SegmentPicks | undefined
+  /** Its words for "All" ('all') where that alone does not say what it filters (the lanes on a phone, #599). */
+  allTitle?: string | undefined
 }
 
-export function SegmentPick({ of, name, nameMany = name, choices, picks }: Props) {
+export function SegmentPick({ of, name, nameMany = name, choices, picks, allTitle }: Props) {
   const t = useT()
   const lit = pickedOptions(choices.options, choices.picked)
   const option = lit[0]
   if (!option) return null
-  const title = lit.map(o => o.title).join(', ')
+  const all = option.id === 'all'
+  const title = all && allTitle ? allTitle : lit.map(o => o.title).join(', ')
   const n = lit.reduce((sum, o) => sum + o.n, 0)
-  const label = t(lit.length > 1 ? nameMany : name, { title })
+  const label = t(lit.length > 1 ? nameMany : name, { title: lit.map(o => o.title).join(', ') })
   // A click with no pointer (detail 0) came from the keys, as the gear's.
   const open = (button: HTMLElement, keyboard: boolean) => picks?.open(of, button, keyboard, choices)
   return (
     <button
       type="button"
-      className={classNames('pill-toggle segment-pick', choices.tint && 'profiles', lit.length > 1 && 'many')}
+      className={classNames(
+        'pill-toggle segment-pick',
+        choices.tint && 'profiles',
+        lit.length > 1 && 'many',
+        all && 'all',
+      )}
       id={`${of}-pick`}
       style={choices.tint ? { '--c': option.color } : undefined}
       title={label}

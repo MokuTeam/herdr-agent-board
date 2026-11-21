@@ -9,11 +9,19 @@
 // widths are taken once per set of actions and words, all shown within one task so nothing flickers;
 // the toolbar fits again when its width changes, an action shows or hides (no calendar, no presence, a
 // note appears) or a word changes (the language, a count). Both answers are attributes of ours that a
-// component's own render leaves alone: `data-rows` on the toolbar's container, `data-over` on what left
-// the row (and on More while nothing is left over); the stylesheet draws them (styles/toolbar.css).
+// component's own render leaves alone: `data-rows` on the toolbar's container (and `data-narrow` with it
+// on a phone's width, #599), `data-over` on what left the row (and on More while nothing is left
+// over); the stylesheet draws them (styles/toolbar.css).
 import { type RefObject, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { byPriority, fitToolbar, oneRowFits, TOOLBAR_PRIORITY, type ToolbarItem } from '../models/toolbar-fit.ts'
+import {
+  byPriority,
+  fitToolbar,
+  narrowToolbar,
+  oneRowFits,
+  TOOLBAR_PRIORITY,
+  type ToolbarItem,
+} from '../models/toolbar-fit.ts'
 import { withoutSpill } from './no-spill.ts'
 
 const NONE: ReadonlySet<string> = new Set()
@@ -84,6 +92,8 @@ export interface ToolbarShape {
   rows: boolean
   /** The ids that left the row for More (two rows only). */
   over: ReadonlySet<string>
+  /** Two rows on a phone's width (#599, models/toolbar-fit.ts narrowToolbar): `data-narrow`. */
+  narrow: boolean
 }
 
 interface Elements {
@@ -108,16 +118,17 @@ export function fitToolbarIn(el: Elements, widths: Measured): { shape: ToolbarSh
   const title = el.title ? width(el.title) : 0
   const natural = one.items.reduce((sum, it, i) => sum + (i ? gap : 0) + it.width, 0) + one.pinned
   const rows = !oneRowFits(total, { title, actions: natural })
-  if (!rows) return { shape: { rows, over: NONE }, widths: measured }
+  if (!rows) return { shape: { rows, over: NONE, narrow: false }, widths: measured }
   // The row's own width is the two-row layout's: drawn first, then read.
   el.fit.toggleAttribute('data-rows', true)
   const fit = fitToolbar(two.items, width(el.actions), { gap, more: two.more, pinned: two.pinned })
-  return { shape: { rows, over: new Set(fit.over) }, widths: measured }
+  return { shape: { rows, over: new Set(fit.over), narrow: narrowToolbar(total, rows) }, widths: measured }
 }
 
-/** `data-rows` on the container; `data-over` on what left the row, and on More while nothing is left over. */
-function draw(el: Elements, { rows, over }: ToolbarShape): void {
+/** `data-rows` and `data-narrow` on the container; `data-over` on what left the row, and on More while nothing is left over. */
+function draw(el: Elements, { rows, over, narrow }: ToolbarShape): void {
   el.fit.toggleAttribute('data-rows', rows)
+  el.fit.toggleAttribute('data-narrow', narrow)
   for (const child of Array.from(el.actions.children)) {
     if (!(child instanceof HTMLElement)) continue
     if (child.id === MORE) child.toggleAttribute('data-over', over.size === 0)
@@ -126,9 +137,9 @@ function draw(el: Elements, { rows, over }: ToolbarShape): void {
 }
 
 const same = (a: ToolbarShape, b: ToolbarShape): boolean =>
-  a.rows === b.rows && a.over.size === b.over.size && [...a.over].every(id => b.over.has(id))
+  a.rows === b.rows && a.narrow === b.narrow && a.over.size === b.over.size && [...a.over].every(id => b.over.has(id))
 
-const ONE_ROW: ToolbarShape = { rows: false, over: NONE }
+const ONE_ROW: ToolbarShape = { rows: false, over: NONE, narrow: false }
 
 /**
  * How the toolbar shows now, fitted again as it changes. `fit`: `.toolbar-fit`; `actions`:

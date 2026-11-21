@@ -142,6 +142,63 @@ describe('what leaves the row and what is folded', () => {
   })
 })
 
+describe('a phone’s width (#599)', () => {
+  test('every rule of it is under `data-narrow`, which the page sets in two rows only', () => {
+    const lines = plain(css)
+      .split('\n')
+      .filter(l => l.includes('[data-narrow]'))
+    expect(lines.length).toBeGreaterThan(0)
+    for (const line of lines.filter(l => l.includes('{') || l.trim().endsWith(',')))
+      expect(line.trim().startsWith('.toolbar-fit[data-narrow]')).toBe(true)
+    // Nothing else in the sheet looks for a phone: the wider toolbars go down the rules they had.
+    expect(plain(css)).not.toMatch(/@media[^{]*width/)
+  })
+
+  test('the actions start where the row does; More, or Settings while More is hidden, keeps its end', () => {
+    expect(rule(css, '.toolbar-fit[data-narrow] .toolbar-actions')).toEqual({ 'justify-content': 'flex-start' })
+    expect(
+      rule(
+        css,
+        '.toolbar-fit[data-narrow] #toolbar-more,\n.toolbar-fit[data-narrow] #toolbar-more[data-over] + #settings',
+      ),
+    ).toEqual({ 'margin-left': 'auto' })
+    // Measuring is as in two rows: it starts at the row's start already, every action whole.
+    expect(rule(css, '.toolbar-actions.measuring')).toMatchObject({ 'justify-content': 'flex-start' })
+  })
+
+  test('the filters go two to a line in halves; search has a line of its own after two pickers, else the half beside the last', () => {
+    expect(rule(css, '.toolbar-fit[data-narrow] .toolbar-filters')).toEqual({
+      display: 'grid',
+      'grid-template-columns': 'repeat(2, minmax(0, 1fr))',
+      gap: '8px 6px',
+    })
+    expect(rule(css, '.toolbar-fit[data-narrow] .toolbar-filters[data-picks="2"] > .search')).toEqual({
+      'grid-column': '1 / -1',
+    })
+    expect(rule(css, '.toolbar-fit[data-narrow] .toolbar-filters > .search')).toEqual({ 'max-width': 'none' })
+    expect(rule(css, '.toolbar-fit[data-narrow] .toolbar-filters > .segment-pick')).toMatchObject({ width: '100%' })
+  })
+
+  test('the segments keep their max-width there: it is the room that folds them into a pill', () => {
+    for (const line of plain(css)
+      .split('\n')
+      .filter(l => l.includes('[data-narrow]')))
+      expect(line).not.toMatch(/\.segmented/)
+  })
+
+  test('"All" on show has no count on a phone; a choice of its own keeps it', () => {
+    expect(rule(css, '.toolbar-fit[data-narrow] .segment-pick.all .n')).toEqual({ display: 'none' })
+    expect(rule(css, '.toolbar-fit[data-narrow] .segment-pick .n')).toMatchObject({ flex: 'none' })
+  })
+
+  test('the folded filters fold on a phone as in two rows: no rule of it touches the fold', () => {
+    for (const line of plain(css)
+      .split('\n')
+      .filter(l => l.includes('[data-narrow]')))
+      expect(line).not.toMatch(/data-folded|data-moving/)
+  })
+})
+
 describe('one size and one shape', () => {
   test('every control of the toolbar is 28 px high with the same radius', () => {
     expect(

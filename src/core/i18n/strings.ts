@@ -370,6 +370,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'tb.lanesPick': 'Category: {title}',
     // the same with several lanes on show, {title} their names
     'tb.lanesPicked': 'Categories: {title}',
+    // the folded lanes control's "All" on a phone-wide toolbar, where it says what it filters (#599)
+    'tb.lanesAll': 'All categories',
     'tb.search': 'Search',
     'tb.sleepersTitle': 'Show sleeping sessions',
     'tb.cats': 'Categories',
@@ -1049,6 +1051,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     // the lanes control folded into one pill (web/src/components/SegmentPick.tsx)
     'tb.lanesPick': 'Категория: {title}',
     'tb.lanesPicked': 'Категории: {title}',
+    'tb.lanesAll': 'Все категории',
     'tb.search': 'Поиск',
     'tb.sleepersTitle': 'Показывать спящие сессии',
     'tb.cats': 'Категории',

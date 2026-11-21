@@ -170,7 +170,7 @@ export function Toolbar({
     ),
   )
   const scrolled = useScrolled()
-  const { rows, over } = useToolbarFit(fit, actions)
+  const { rows, over, narrow } = useToolbarFit(fit, actions)
   const collapse = useToolbarCollapse(filters, rows)
   useCollapse(filters, collapse.collapsed)
   const openNext = useNextAttention()
@@ -267,6 +267,8 @@ export function Toolbar({
               id="toolbar-filters"
               ref={filters}
               data-folded={collapse.collapsed ? '' : undefined}
+              // How many pickers there are: on a phone they go two to a line, search beside the last (styles/toolbar.css, #599).
+              data-picks={1 + (profiles ? 1 : 0) + (devices ? 1 : 0)}
             >
               <Lanes
                 options={lanes}
@@ -274,6 +276,7 @@ export function Toolbar({
                 onPick={id => dispatch({ type: 'toggleLane', id })}
                 folded={folded.has('lanes')}
                 picks={picks}
+                narrow={narrow}
               />
               {profiles && (
                 <ProfileSwitch
