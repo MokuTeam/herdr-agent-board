@@ -165,7 +165,8 @@ export function headButtons(
     sleepTitle: t(inTurn(it) ? 'sheet.sleepBusy' : 'sheet.sleepHint'),
     restartHidden: !!it.sleeping || !it.session || it.agent !== 'claude' || away,
     restartTitle: pending ? `${t('sheet.restartPending')}. ${restartText(pending, t)}` : t('sheet.restartHint'),
-    mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude') || away,
+    // A session of another device (#502) has no call from this computer's MokuPilot.
+    mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude') || away || !!it.device,
     forkHidden: !(fork && it.session && it.agent === 'claude') || away,
     archiveHidden: !it.session || it.agent !== 'claude' || away,
     archiveTitle: why ? t(why) : t('archive.sheetHint'),
@@ -235,6 +236,8 @@ export interface AvailabilityScene {
   restarting?: boolean
   /** The open session cannot go to the archive now (src/core/archive.ts archiveBlock). */
   archiveBlocked?: boolean
+  /** The open session is on a device the master does not hear (#502): why ("server-1 is not reachable"). */
+  unreachable?: string
 }
 
 /**
@@ -243,23 +246,33 @@ export interface AvailabilityScene {
  * syncAvailability).
  */
 export function sheetAvailability(
-  { canMutate, canEdit, missing, turn, restarting = false, archiveBlocked = false }: AvailabilityScene,
+  {
+    canMutate,
+    canEdit,
+    missing,
+    turn,
+    restarting = false,
+    archiveBlocked = false,
+    unreachable = '',
+  }: AvailabilityScene,
   t: Translator,
 ): SheetAvailability {
-  const blocked = !canMutate
+  // An offline device's session (#502) is blocked as stale data blocks it, and says why.
+  const blocked = !canMutate || !!unreachable
   const herdr = blocked || missing
+  const noEdit = !canEdit || missing || !!unreachable
   return {
     blocked,
-    banner: t(canEdit ? 'mobile.readOnly' : 'live.off'),
+    banner: canMutate && unreachable ? unreachable : t(canEdit ? 'mobile.readOnly' : 'live.off'),
     focus: herdr,
     wake: herdr,
     sleep: herdr || turn,
     restart: herdr || restarting,
     archive: herdr || archiveBlocked,
-    edit: !canEdit || missing,
-    dismiss: !canEdit || missing,
+    edit: noEdit,
+    dismiss: noEdit,
     newHere: herdr,
-    newHereTitle: t(blocked ? 'mobile.readOnly' : 'launch.hereHint'),
+    newHereTitle: canMutate && unreachable ? unreachable : t(blocked ? 'mobile.readOnly' : 'launch.hereHint'),
     files: missing,
   }
 }

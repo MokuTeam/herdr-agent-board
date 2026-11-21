@@ -36,12 +36,14 @@ import {
   questionLine,
 } from '../models/card.ts'
 import { nameParts } from '../models/card-head.ts'
+import { nodeLook, nodeOffline } from '../models/devices.ts'
 import { pendingQuestions } from '../models/question-model.ts'
 import { restartOf, restartView } from '../models/restart.ts'
 import { COLUMN_COLORS } from '../models/toolbar.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { AlarmBadge } from './AlarmBadge.tsx'
 import { classNames } from './class-names.ts'
+import { CardIdentity } from './devices/DeviceChip.tsx'
 import { HelpersChip, Relations } from './helpers/CardHelpers.tsx'
 import {
   CheckGlyph,
@@ -106,6 +108,8 @@ export function Card(props: CardProps) {
     busy && 'busy',
     placeholder && 'placeholder',
     props.related && 'related',
+    // An offline device's card (#502): its last one, greyed (nodes.css).
+    nodeOffline(item, data?.devices) && 'node-offline',
   )
   return (
     <article
@@ -153,6 +157,8 @@ function CardContent({ item, launch, folding }: { item: Item; launch: LaunchSlot
   return (
     <>
       <CardTop item={item} />
+      {/* A card of another device (#502): its identity row with the device; none for this computer's. */}
+      <CardIdentity item={item} />
       {!oneLine && <CardBody item={item} launch={launch} folding={folding} />}
       <CardActions item={item} />
     </>
@@ -485,11 +491,15 @@ function RestartLine({ item }: { item: Item }) {
 
 function CardActions({ item }: { item: Item }) {
   const t = useT()
-  const { canMutate, canEdit } = useBoardContext()
+  const { canMutate, canEdit, data, now } = useBoardContext()
   const q = (s: string) => t('q', { s })
   // A MokuPilot call agent (#326) runs in MokuPilot, not in a pane: nothing to focus, put to sleep
   // or type into from the board.
   const away = inMokupilot(item)
+  // A card of another device (#502): its herdr pane is not on this computer, so no Go to herdr;
+  // while the master does not hear the device, what goes there answers that it is not reachable.
+  const node = nodeLook(item, data?.devices, now, t)
+  const why = node?.why || undefined
   return (
     <div className="card-actions">
       {/* Its turn interrupted with its program's own key, where the board knows it (#330). */}
@@ -498,14 +508,14 @@ function CardActions({ item }: { item: Item }) {
         <button
           type="button"
           data-act="dismiss"
-          title={item.attention === 'later' ? t('card.seen', { col: q(t('col.me')) }) : t('card.noReply')}
-          disabled={!canEdit}
+          title={why ?? (item.attention === 'later' ? t('card.seen', { col: q(t('col.me')) }) : t('card.noReply'))}
+          disabled={!canEdit || !!why}
         >
           <CheckGlyph />
         </button>
       )}
       {!item.sleeping && !!item.session && !inTurn(item) && !away && (
-        <button type="button" data-act="sleep" title={t('card.sleep')} disabled={!canMutate}>
+        <button type="button" data-act="sleep" title={why ?? t('card.sleep')} disabled={!canMutate || !!why}>
           <MoonGlyph />
         </button>
       )}
@@ -515,7 +525,7 @@ function CardActions({ item }: { item: Item }) {
           <WriteGlyph />
         </button>
       )}
-      {!away && (
+      {!away && !node && (
         <button type="button" data-act="focus" title={t('card.focus')} disabled={!canMutate}>
           <FocusGlyph />
         </button>

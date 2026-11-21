@@ -2,8 +2,11 @@
 // board's <article class="card launch-card">), and the lines a launch adds to a card — how it
 // goes, or why it failed and what to do. Their buttons are the board's card clicks
 // (hooks/useLaunch.ts launchCards reads their data-launch).
+import type { BoardDevice } from '../../../../src/core/payload.ts'
 import type { LaunchView, Translator } from '../../../../src/core/types.ts'
+import { nodeLook, placingText } from '../../models/devices.ts'
 import { failureHint, launchWhere, needsYou, retries, stepText } from '../../models/launch.ts'
+import { DeviceFacts } from '../devices/DeviceChip.tsx'
 import { WaitIcon, WarnIcon } from '../icons.tsx'
 
 /** What a card's launch lines need besides the launch: the texts, the command's name, the buttons pressed. */
@@ -13,11 +16,17 @@ export interface LaunchLook {
   launcher: string
   /** A trust or close button was pressed for this launch as it is now: it stays off. */
   pressed(what: 'trust' | 'closeTab', l: LaunchView): boolean
+  /** A master's devices (#502), for a start placed on one; absent on every other board. */
+  devices?: readonly BoardDevice[] | undefined
+  /** The board's clock, for how old an offline device's cards are (#502). */
+  now?: number | undefined
 }
 
 /** The card of a launch that is not a session on the board yet ("back": one back from the archive). */
 export function LaunchCard({ launch: l, look }: { launch: LaunchView; look: LaunchLook }) {
   const { t } = look
+  // Placed on another device (#502): its identity row, as a session's card has it.
+  const node = nodeLook(l, look.devices, look.now ?? Date.now(), t)
   return (
     <>
       <div className="card-top">
@@ -29,6 +38,11 @@ export function LaunchCard({ launch: l, look }: { launch: LaunchView; look: Laun
         <span className="name">{l.name}</span>
         <span className="age">{t(l.resume ? 'archive.returnLabel' : l.fork ? 'fork.label' : 'launch.new')}</span>
       </div>
+      {node && (
+        <div className="card-ident">
+          <DeviceFacts node={node} />
+        </div>
+      )}
       <div className="said" title={l.cwd}>
         {launchWhere(l, t)}
       </div>
@@ -40,11 +54,13 @@ export function LaunchCard({ launch: l, look }: { launch: LaunchView; look: Laun
 /** How a launch goes, or why it failed and what to do. */
 export function LaunchNote({ launch: l, look }: { launch: LaunchView; look: LaunchLook }) {
   const { t } = look
-  const go = l.pane ? (
-    <button type="button" className="button" data-launch="focus" data-id={l.id}>
-      {t('card.focus')}
-    </button>
-  ) : null
+  // Its pane is on another device (#502): nothing here to go to.
+  const go =
+    l.pane && !l.device ? (
+      <button type="button" className="button" data-launch="focus" data-id={l.id}>
+        {t('card.focus')}
+      </button>
+    ) : null
   if (l.state === 'failed')
     return (
       <div className="launch-note failed">
@@ -110,7 +126,7 @@ export function LaunchNote({ launch: l, look }: { launch: LaunchView; look: Laun
       <span className="ln-spin">
         <WaitIcon />
       </span>
-      <span>{stepText(l, t, look.launcher)}</span>
+      <span>{(look.devices && placingText(l, look.devices, t)) || stepText(l, t, look.launcher)}</span>
     </div>
   )
 }

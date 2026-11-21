@@ -26,6 +26,7 @@ import { useSheetDensity } from '../../hooks/useSheetDensity.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { inTurn } from '../../models/card.ts'
 import { ConversationScroll } from '../../models/conversation-scroll.ts'
+import { nodeLook } from '../../models/devices.ts'
 import { helpersChip } from '../../models/helper-model.ts'
 import { restartPending } from '../../models/restart.ts'
 import { noteQueue } from '../../models/settle.ts'
@@ -305,7 +306,7 @@ export interface SheetViewProps {
 export function SheetView(props: SheetViewProps) {
   const { open, item, detail, form, composer, buttons, compact = false } = props
   const t = useT()
-  const { data, connected, canMutate, canEdit } = useBoardContext()
+  const { data, connected, canMutate, canEdit, now } = useBoardContext()
   // A redraw of the conversation keeps the focus on what opens the same thing (a helper's line).
   const keepFocus = useKeepFocus()
   const onBoard = (key: string | null) => !!key && !!data?.items.some(i => i.key === key)
@@ -322,6 +323,8 @@ export function SheetView(props: SheetViewProps) {
       turn: !!openItem && inTurn(openItem),
       restarting: !!open && restartPending(schedules, open),
       archiveBlocked: !!archiveBlock(openItem, schedules),
+      // A session of an offline device (#502); nothing for this computer's.
+      ...(openItem?.device && { unreachable: nodeLook(openItem, data?.devices, now, t)?.why ?? '' }),
     },
     t,
   )

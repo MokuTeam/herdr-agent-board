@@ -13,6 +13,7 @@ import { type LaunchWindow, launchWindow } from '../components/launch/launch-win
 import { useT } from '../i18n/I18nProvider.tsx'
 import type { LaunchMenus, MenuOrigin } from '../models/board-menus.ts'
 import { launchOf } from '../models/card.ts'
+import { deviceShowing } from '../models/devices.ts'
 import { launcherName } from '../models/launch.ts'
 import { pickShowing } from '../models/profiles.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
@@ -232,9 +233,12 @@ export function useLaunch({ onResume, onFork }: LaunchOptions = {}): Launch {
         // shown, then drawn at once (the window folds into it).
         const { data, ui, dispatch } = latest.current.board
         const pick = pickShowing(ui.profile, data?.profiles, l.profile)
+        // A device picked (#502, only on a master's board): all of them, when it is not the start's.
+        const device = ui.device ? deviceShowing(ui.device, data?.devices, l) : null
         flushSync(() => {
           dispatch({ type: 'showLane', id: l.category })
           if (pick !== null) dispatch({ type: 'profile', id: pick })
+          if (device !== null) dispatch({ type: 'device', id: device })
           dispatch({ type: 'launched', launch: l })
         })
       },
@@ -287,12 +291,21 @@ export function useLaunch({ onResume, onFork }: LaunchOptions = {}): Launch {
   const pending = useMemo(() => launchesOnTheirWay(data, ui.launched, now), [data, ui.launched, now])
   const latestPending = useLatest(pending)
 
+  // A master's devices (#502), for starts placed on one: absent, the slots are made as before.
+  const devices = data?.devices
+  const devicesNow = devices ? now : 0
   const slots = useMemo(
     () =>
-      launchSlots({ t, launcher: launcherName(launcher), pressed: (what, l) => isPressed(pressed, what, l) }, target =>
-        cards.onAction(target),
+      launchSlots(
+        {
+          t,
+          launcher: launcherName(launcher),
+          pressed: (what, l) => isPressed(pressed, what, l),
+          ...(devices && { devices, now: devicesNow }),
+        },
+        target => cards.onAction(target),
       ),
-    [t, launcher, pressed, cards],
+    [t, launcher, pressed, cards, devices, devicesNow],
   )
   // biome-ignore lint/correctness/useExhaustiveDependencies: retryWith reads only what never changes (the window) and the latest values
   const menus = useMemo(

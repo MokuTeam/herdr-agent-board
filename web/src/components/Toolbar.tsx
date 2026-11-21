@@ -28,6 +28,7 @@ import { useToolbarCollapse } from '../hooks/useToolbarCollapse.ts'
 import { useToolbarFit } from '../hooks/useToolbarFit.ts'
 import type { ToolbarMenu } from '../hooks/useToolbarMore.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
+import { deviceOptions, pickedDevice } from '../models/devices.ts'
 import { litLanes } from '../models/lane-picks.ts'
 import { presenceSwitch } from '../models/presence.ts'
 import { pickedProfile, profileOptions } from '../models/profiles.ts'
@@ -49,6 +50,7 @@ import { BackupNote } from './BackupNote.tsx'
 import { ColumnsHead } from './ColumnsHead.tsx'
 import { CalendarButton } from './calendar/CalendarButton.tsx'
 import { classNames } from './class-names.ts'
+import { DeviceSwitch } from './devices/DeviceSwitch.tsx'
 import {
   AlarmIcon,
   ArchiveIcon,
@@ -141,16 +143,24 @@ export function Toolbar({
 }: ToolbarProps) {
   const t = useT()
   const { data, ui, dispatch, canMutate, canEdit, now } = useBoardContext()
-  const { visible, categoryOf, anyProfile } = useBoardView()
+  const { visible, categoryOf, anyProfile, anyDevice } = useBoardView()
   const lanes = data && laneOptions(data.categories, visible, ui.filter, categoryOf, t)
   const profiles = data && profileOptions(data.profiles, anyProfile, t)
   const profile = pickedProfile(ui.profile, data?.profiles)
+  // The device switch (#502): only on a master's board with more than one device.
+  const devices = data && deviceOptions(data.devices, anyDevice, t)
+  const device = pickedDevice(ui.device ?? 'all', data?.devices)
   const fit = useRef<HTMLDivElement>(null)
   const row = useRef<HTMLDivElement>(null)
   const filters = useRef<HTMLDivElement>(null)
   const actions = useRef<HTMLDivElement>(null)
   const moreButton = useRef<HTMLButtonElement>(null)
-  const folded = useSegmentFolds(row, JSON.stringify([lanes, ui.filter, profiles, profile]))
+  const folded = useSegmentFolds(
+    row,
+    JSON.stringify(
+      devices ? [lanes, ui.filter, profiles, profile, devices, device] : [lanes, ui.filter, profiles, profile],
+    ),
+  )
   const scrolled = useScrolled()
   const { rows, over } = useToolbarFit(fit, actions)
   const collapse = useToolbarCollapse(filters, rows)
@@ -220,6 +230,8 @@ export function Toolbar({
     lanes: ui.filter.length ? (lanes ?? []).filter(l => litLanes(ui.filter).includes(l.id)).map(l => l.title) : [],
     profile: profile === 'all' ? null : (profiles?.find(p => p.id === profile)?.title ?? null),
     query: ui.query.trim(),
+    // Only with a device picked (#502): the other boards' filters are as they were.
+    ...(device !== 'all' && { device: devices?.find(d => d.id === device)?.title ?? null }),
   }
   const filterLabel = filterText(filtersOn)
   const peek = filterLabel ? t('tb.filtersOn', { text: filterLabel }) : t('tb.filters')
@@ -254,6 +266,15 @@ export function Toolbar({
                   picked={profile}
                   onPick={id => dispatch({ type: 'profile', id })}
                   folded={folded.has('profiles')}
+                  picks={picks}
+                />
+              )}
+              {devices && (
+                <DeviceSwitch
+                  options={devices}
+                  picked={device}
+                  onPick={id => dispatch({ type: 'device', id })}
+                  folded={folded.has('devices')}
                   picks={picks}
                 />
               )}

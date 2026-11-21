@@ -1,6 +1,9 @@
 // The texts of making a server a node (core/node-plan.ts: the steps of Apply and Undo, why the board
 // does not set a server up, the plan in plain words), in English and Russian; strings.ts merges
-// them into the dictionaries. The commands and the server's files stay English.
+// them into the dictionaries. The commands and the server's files stay English. Then the devices on
+// a master's page (#502, docs/design/nodes 12): the device chip on a card of another device, an
+// offline device's cards and what their actions answer, the device switch, and the steps of a start
+// placed on a device (8.3).
 import type { Lang } from '../types.ts'
 
 export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
@@ -98,6 +101,26 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.refuse.busy': "A run of the board's is going on here: wait for it to end.",
     'node.warn.pluginLater':
       "The board's code on the node is replaced; its running board keeps the old code until herdr restarts, which ends the node's sessions.",
+    // the devices on a master's page (#502)
+    // the chip's tooltip, and the sheet's
+    'node.on': 'Runs on {name}',
+    // an offline device: its cards are its last ones, this old
+    'node.asOf': 'as of {age} ago',
+    'node.asOfNow': 'as of just now',
+    'node.asOfNever': 'nothing heard yet',
+    // what an action on an offline device's card answers (and a node-offline answer of the server)
+    'node.offline': '{name} is not reachable',
+    'node.offlineAny': 'The device is not reachable',
+    // the device switch
+    'node.all': 'All devices',
+    'node.devices': 'Devices',
+    'node.pick': 'Device: {title}',
+    // a start placed on a device, on its launch card
+    'node.place.choosing': 'Choosing a device…',
+    'node.place.syncing': 'Syncing the profile to {name}…',
+    'node.place.cloning': 'Cloning on {name}…',
+    'node.queued': 'Waiting for room: {name} has {n} of {max} sessions',
+    'node.queuedNoRoom': 'Waiting for room',
   },
   ru: {
     'node.step.check': 'Проверить сервер',
@@ -198,5 +221,20 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.refuse.busy': 'Здесь идёт прогон доски: дождитесь его конца.',
     'node.warn.pluginLater':
       'Код доски на узле заменяется; запущенная доска работает со старым кодом, пока herdr не перезапустится, а это завершит сессии узла.',
+    // the devices on a master's page (#502)
+    'node.on': 'Работает на {name}',
+    'node.asOf': 'данные {age} назад',
+    'node.asOfNow': 'данные только что',
+    'node.asOfNever': 'данных пока нет',
+    'node.offline': '{name} не на связи',
+    'node.offlineAny': 'Устройство не на связи',
+    'node.all': 'Все устройства',
+    'node.devices': 'Устройства',
+    'node.pick': 'Устройство: {title}',
+    'node.place.choosing': 'Выбираю устройство…',
+    'node.place.syncing': 'Переношу профиль на {name}…',
+    'node.place.cloning': 'Клонирую репозиторий на {name}…',
+    'node.queued': 'Ждёт места: на {name} занято {n} из {max}',
+    'node.queuedNoRoom': 'Ждёт места',
   },
 }

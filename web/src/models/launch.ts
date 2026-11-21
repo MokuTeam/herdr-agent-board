@@ -207,6 +207,8 @@ export function placeholderOf(l: LaunchView): Item {
     categorySet: false,
     attention: '',
     ...(l.profile ? { profile: l.profile } : {}),
+    // A start placed on another device (#502): its card shows that device and its switch finds it.
+    ...(l.device ? { device: l.device } : {}),
   }
 }
 

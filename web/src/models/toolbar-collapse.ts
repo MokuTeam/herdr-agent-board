@@ -57,15 +57,19 @@ export interface FilterState {
   lanes: readonly string[]
   /** The profile on show, by name; null for all profiles (or no profile switch). */
   profile: string | null
+  /** The device on show, by name (#502); null or absent for all devices (or no device switch). */
+  device?: string | null | undefined
   /** The search text, trimmed. */
   query: string
 }
 
-/** How many filters are on: lanes, profile, search, each one. */
+/** How many filters are on: lanes, profile, device, search, each one. */
 export const filterCount = (f: FilterState): number =>
-  (f.lanes.length ? 1 : 0) + (f.profile ? 1 : 0) + (f.query ? 1 : 0)
+  (f.lanes.length ? 1 : 0) + (f.profile ? 1 : 0) + (f.device ? 1 : 0) + (f.query ? 1 : 0)
 
 /** The filters in words for a button's name: "Alpha, Beta · Work · “text”"; none: the empty string. */
 export function filterText(f: FilterState): string {
-  return [f.lanes.join(', '), f.profile ?? '', f.query ? `“${f.query}”` : ''].filter(Boolean).join(' · ')
+  return [f.lanes.join(', '), f.profile ?? '', f.device ?? '', f.query ? `“${f.query}”` : '']
+    .filter(Boolean)
+    .join(' · ')
 }

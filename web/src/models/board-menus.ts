@@ -8,8 +8,10 @@
 // page's (hooks/useContextMenus.ts).
 import { archiveBlock } from '../../../src/core/archive.ts'
 import { itemProfile, shownProfiles } from '../../../src/core/item-profile.ts'
+import type { BoardDevice } from '../../../src/core/payload.ts'
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
+import { nodeLook } from './devices.ts'
 import type { LanePicks } from './lane-picks.ts'
 import {
   boardMenu,
@@ -145,6 +147,8 @@ export interface BoardMenuDeps {
       schedules?: readonly ScheduleEntry[] | undefined
       /** The Claude profiles (a board before them sent none). */
       profiles?: readonly (MenuProfile & { hidden: boolean })[] | undefined
+      /** A master's devices (#502); absent on every other board. */
+      devices?: readonly BoardDevice[] | undefined
     }
   }
   /** The board's sessions, for a lane's: those its menu moves to another profile. */
@@ -267,6 +271,8 @@ function forCard(board: BoardMenuDeps, key: string, it: Item, el: Element, at: P
   const state = board.state()
   const nameEl = el.matches?.('.card') ? el.querySelector('.name') : el
   const profiles = movable(board)
+  // A card of another device (#502); none for this computer's.
+  const node = nodeLook(it, state.data.devices, Date.now(), t)
   return {
     label: it.name,
     items: cardMenu(it, {
@@ -280,6 +286,7 @@ function forCard(board: BoardMenuDeps, key: string, it: Item, el: Element, at: P
       restarting: (state.data.schedules ?? []).some(e => e.kind === 'restart' && e.key === key && !e.failed),
       archiveWhy: archiveBlock(it, state.data.schedules ?? []),
       ...(profiles && { profiles, profile: itemProfile(it, state.data.profiles ?? [])?.id ?? '' }),
+      ...(node && { device: { title: node.title, why: node.why } }),
     }),
     pick: id => {
       const [what, arg = ''] = id.split(/:(.*)/s)

@@ -164,8 +164,8 @@ export function Composer({
         data-folded={fold?.folded ? '' : undefined}
       >
         {/* Not in a phone's browser: herdr's window is on the computer (the row then fits without it); on a desk, herdr follows. */}
-        {/* A MokuPilot call agent with no pane (#326) has nothing in herdr to go to. */}
-        {focusHere() && !(item && inMokupilot(item)) && (
+        {/* A MokuPilot call agent with no pane (#326) has nothing in herdr to go to; nor, here, a session of another device (#502). */}
+        {focusHere() && !(item && inMokupilot(item)) && !item?.device && (
           <button
             type="button"
             className={classNames('button', over('sheet-focus'))}

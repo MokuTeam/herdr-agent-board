@@ -1,0 +1,73 @@
+/* The devices of a master's board (#502, docs/design/nodes 12; web/src/components/devices,
+   Card.tsx, launch/LaunchCard.tsx, sheet/SheetHead.tsx): the device chip in a card's identity row
+   under its name row, an offline device's cards greyed with how old they are, the device in the
+   session sheet's line, and the device switch beside the profile switch. A board without `nodes`
+   draws none of these classes. Every rule here selects by class: app.css and the other sheets
+   pinned by styles.test.ts are upstream's, rule for rule. */
+
+/* The identity row: its own line under the name row, so the name keeps its room on a compact
+   card and on a phone. #141's pane and profile join this row; the chip stays its first part. */
+.card-ident {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 18px;
+  margin-top: 4px;
+}
+.card.compact .card-ident { height: 16px; margin-top: 2px; }
+
+/* The chip: the device's title on a quiet fill, a dot in front that is green while the master
+   hears the device and gray while it does not. It gives way before the age beside it. */
+.device-chip {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 7px 0 6px;
+  border-radius: 6px;
+  background: var(--fill-2);
+  color: var(--label-2);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.device-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+.device-chip.offline .device-dot { background: var(--gray); }
+.device-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.card.compact .device-chip { font-size: 10.5px; line-height: 15px; }
+
+/* How old an offline device's cards are: quiet, beside the chip. */
+.device-as-of {
+  flex: none;
+  color: var(--label-3);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* An offline device's card: its last one, greyed. The identity row stays clear, as it says why;
+   the card itself keeps its outline, so its focus and selection still show. Its buttons keep their
+   own showing on hover and their own motion (app.css): they only lose their color. */
+.card.node-offline > :not(.card-ident):not(.card-actions) {
+  filter: grayscale(1);
+  opacity: 0.55;
+  transition: opacity 200ms ease, filter 200ms ease;
+}
+.card.node-offline > .card-actions { filter: grayscale(1); }
+@media (prefers-reduced-motion: reduce) {
+  .card.node-offline > :not(.card-ident):not(.card-actions) { transition: none; }
+}
+
+/* The session sheet's line: the device first, its chip and age as on the card. */
+.sheet-device { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; vertical-align: middle; }
+
+@media (forced-colors: active) {
+  .device-chip { border: 1px solid CanvasText; }
+  .device-dot { forced-color-adjust: none; }
+}

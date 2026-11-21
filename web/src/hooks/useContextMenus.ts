@@ -496,6 +496,8 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
             fork: data?.fork,
             schedules: data?.schedules,
             profiles: data?.profiles,
+            // A master's devices (#502): absent on every other board.
+            ...(data?.devices && { devices: data.devices }),
           },
         }
       },

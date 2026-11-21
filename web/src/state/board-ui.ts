@@ -53,6 +53,12 @@ export interface BoardUi {
    * One hidden or gone since reads as 'all' (models/profiles.ts pickedProfile).
    */
   profile: string
+  /**
+   * The device switch's pick (#502): 'all' or a device's id, on a master's board with more than
+   * one device; absent or anything else reads as 'all' (models/devices.ts pickedDevice). Absent
+   * until the switch is used, and not kept: a board without `nodes` starts and stays as before.
+   */
+  device?: string
   query: string
   /** The one column shown, by the Terminal style's keys (W M O D I: models/terminal-keys.ts), or null for all. */
   column: ColumnId | null
@@ -91,6 +97,7 @@ export type BoardAction =
   /** The lane joins those on show unless it is on show already (a session started there). */
   | { type: 'showLane'; id: string }
   | { type: 'profile'; id: string }
+  | { type: 'device'; id: string }
   | { type: 'query'; text: string }
   | { type: 'column'; id: ColumnId | null }
   | { type: 'toggleSleepers' }
@@ -165,6 +172,8 @@ export function boardUi(state: BoardUi, action: BoardAction): BoardUi {
     }
     case 'profile':
       return { ...state, profile: action.id }
+    case 'device':
+      return { ...state, device: action.id }
     case 'query':
       return { ...state, query: action.text }
     case 'column':

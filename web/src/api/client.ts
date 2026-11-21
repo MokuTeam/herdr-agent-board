@@ -16,6 +16,7 @@ import type { QueuedPrompt } from '../../../src/core/queue.ts'
 import type { SlashCommand } from '../../../src/core/slash-commands.ts'
 import type { ConversationTurn } from '../../../src/core/transcript.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
+import { offlineAnswer } from '../models/devices.ts'
 
 export type { BoardCategory, BoardLimits, BoardPayload, BoardProfile, Swatch } from '../../../src/core/payload.ts'
 
@@ -90,7 +91,9 @@ export class ApiError extends Error {
 
 /** The text a toast shows for a failed call, as the board words it. */
 export function errorText(err: unknown, t: Translator): string {
-  if (err instanceof ApiError) return err.message || t('err.status', { code: err.status })
+  // An action on an offline device's card (#502): "server-1 is not reachable".
+  if (err instanceof ApiError)
+    return offlineAnswer(err.reply, t) ?? (err.message || t('err.status', { code: err.status }))
   return t('err.offline', { why: err instanceof Error ? err.message : String(err) })
 }
 

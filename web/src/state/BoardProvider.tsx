@@ -15,6 +15,7 @@ import {
 import { type LiveBoard, useBoard } from '../api/useBoard.ts'
 import { useLanguage } from '../i18n/I18nProvider.tsx'
 import { withEdits } from '../models/board-edits.ts'
+import { knowDevices } from '../models/devices.ts'
 import { lanesText } from '../models/lane-picks.ts'
 import { type BoardAction, type BoardUi, boardUi, initialUi, type ToastOptions } from './board-ui.ts'
 import { storage } from './storage.ts'
@@ -57,6 +58,8 @@ export function BoardProvider({ children }: { children: ReactNode }) {
   if (settled !== live.data) {
     setSettled(live.data)
     if (live.data) dispatch({ type: 'settle', items: live.data.items, launches: live.data.launches, now: Date.now() })
+    // A master's devices (#502): their titles, for the words of a node-offline answer.
+    if (live.data?.devices) knowDevices(live.data.devices)
   }
 
   // Before the paint, so a board in another language does not flash in the old one.

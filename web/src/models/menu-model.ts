@@ -277,6 +277,12 @@ export interface CardMenuContext extends MenuContext {
   profiles?: readonly MenuProfile[] | undefined
   /** The profile it runs in now, '' when the board does not know it. */
   profile?: string | undefined
+  /**
+   * A card of another device (#502): what the menu leaves out for it (open in the file manager, Go
+   * to herdr, a MokuPilot call), and while the master does not hear that device, `why`: the reason
+   * its items gray out with ("server-1 is not reachable"). Absent for this computer's cards.
+   */
+  device?: { title: string; why: string } | undefined
 }
 
 /** What a card's menu reads of the board item. */
@@ -344,10 +350,14 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
   const { t } = ctx
   const herdrWhy = ctx.canEdit ? t('mobile.readOnly') : t('live.off')
   const editWhy = t('live.off')
+  // An offline device's card (#502) grays what goes to that device, as stale data does here.
+  const away = ctx.device?.why ? { disabled: true, reason: ctx.device.why } : null
   const herdr = (extra?: Partial<MenuItem>): Partial<MenuItem> =>
-    ctx.canMutate ? (extra ?? {}) : { disabled: true, reason: herdrWhy }
-  const edit = (): Partial<MenuItem> => (ctx.canEdit ? {} : { disabled: true, reason: editWhy })
+    ctx.canMutate ? (away ?? extra ?? {}) : { disabled: true, reason: herdrWhy }
+  const edit = (): Partial<MenuItem> => (ctx.canEdit ? (away ?? {}) : { disabled: true, reason: editWhy })
   const turn = it.status === 'working' || it.status === 'blocked'
+  // Not on this computer (#502): no folder to open here, no herdr pane to go to, no MokuPilot call.
+  const here = !ctx.device
   // A MokuPilot call agent with no pane (#326) runs in MokuPilot: nothing of herdr's or a terminal's
   // to do with it, no call or fork of it, no profile to move it to, no tab to archive.
   const own = !inMokupilot(it)
@@ -362,6 +372,7 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
   return tidy<MenuEntry>([
     { id: 'open', label: t('menu.open'), hint: 'Enter' },
     own &&
+      here &&
       (!ctx.remote || ctx.desk) && {
         id: 'focus',
         label: t(it.sleeping ? 'menu.wakeFocus' : 'menu.focus'),
@@ -371,6 +382,7 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     own && ctx.terminal && (it.cwd || it.pane) && { id: 'terminal', label: t('term.open'), hint: 'Ctrl+`' },
     // A MokuPilot call with a fork of the session: needs the board, not fresh herdr data.
     own &&
+      here &&
       ctx.mokupilot &&
       claude &&
       it.agent === 'claude' && { id: 'mokupilot', label: t('mokupilot.call'), ...edit() },
@@ -428,7 +440,7 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
       },
     dismissable && { id: 'dismiss', label: t(it.attention === 'later' ? 'asked.seen' : 'card.noReply'), ...edit() },
     SEP,
-    it.cwd && !ctx.remote && { id: 'reveal', label: t('menu.openFolder'), ...edit() },
+    it.cwd && !ctx.remote && here && { id: 'reveal', label: t('menu.openFolder'), ...edit() },
     it.cwd && { id: 'changes', label: t('changes.open') },
     claude && { id: 'history', label: t('history.open') },
     SEP,
@@ -590,6 +602,8 @@ export interface MenuLaunch {
   state: string
   pane?: string | null | undefined
   kind?: string | undefined
+  /** Placed on another device (#502): its pane is not this computer's to go to. */
+  device?: string | undefined
 }
 
 /** A starting or failed new session's menu. */
@@ -600,7 +614,7 @@ export function launchMenu(l: MenuLaunch, ctx: MenuContext): MenuEntry[] {
     l.state === 'trust' && { id: 'trust', label: t('launch.trust.go'), ...herdr },
     l.state === 'trust' && { id: 'closeTab', label: t('launch.trust.close'), ...herdr },
     l.state === 'trust' && SEP,
-    l.pane && (!ctx.remote || ctx.desk) && { id: 'focus', label: t('menu.focus'), ...herdr },
+    l.pane && !l.device && (!ctx.remote || ctx.desk) && { id: 'focus', label: t('menu.focus'), ...herdr },
     // A launch that failed only at its first message has a running session: a retry would start a second one.
     l.state === 'failed' && l.kind !== 'message' && { id: 'retry', label: t('launch.retry') },
     l.state === 'failed' && { id: 'copyError', label: t('launch.copyError') },

@@ -12,10 +12,12 @@ import { useCollapse } from '../../hooks/useCollapse.ts'
 import type { SheetPick } from '../../hooks/useContextMenus.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { categoryInfo, catOf, colOf } from '../../models/board-view.ts'
+import { nodeLook } from '../../models/devices.ts'
 import { linkedSessions } from '../../models/helper-model.ts'
 import { foldLine, sheetHead, type WorkspaceFact } from '../../models/sheet.ts'
 import { COLUMN_COLORS } from '../../models/toolbar.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
+import { DeviceFacts } from '../devices/DeviceChip.tsx'
 import { ChevronGlyph, MoonGlyph, StarGlyph, UpDownGlyph, WriteGlyph } from '../icons.tsx'
 import { SheetThreads } from '../threads/bits.tsx'
 import type { ScheduleActions } from './ScheduleRow.tsx'
@@ -133,6 +135,8 @@ export function SheetHead({
   // Where it shows on screen now: a move the board has not confirmed yet shows at once.
   const column = colOf(ui.moves, item)
   const head = sheetHead(item, { missing, now, t })
+  // A session of another device (#502): the device first on the line; none for this computer's.
+  const node = nodeLook(item, data?.devices, now, t)
   const color = COLUMN_COLORS[column]
   const locked = card.disabled || missing
   // Nothing of the card's to show: its place folds away (the reminders as their row shows them, a
@@ -262,6 +266,12 @@ export function SheetHead({
       <div className="sheet-details" id="sheet-details" ref={details} data-folded={shape.compact ? '' : undefined}>
         <div className="sheet-details-inner">
           <p className="sheet-meta" id="sheet-meta" title={head.metaTitle}>
+            {node && (
+              <span className="sheet-device">
+                <DeviceFacts node={node} />
+              </span>
+            )}
+            {node && head.meta.length > 0 && <span className="sep"> · </span>}
             {/* Each fact whole on its line: the line breaks between them, after a separator, never inside
                 one. A narrow column stacks them, without the separators (session-head.css). */}
             {head.meta.map((part, i) => (
