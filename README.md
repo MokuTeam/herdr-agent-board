@@ -2324,6 +2324,8 @@ session and records it:
 `--default-after` needs `--recommend` and takes 5 min to 72 h (`30m`, `2h`, `1h30m`). The brief tells
 agents a default is only for a choice that is easy to undo, never for something that cannot be undone
 or that goes out to another person: those ask without it. `board thread ask` takes the same flags.
+Options and a default are for a session's own question: `board ask --session <another>` with them is
+refused, since the default would be typed in with nobody asking.
 
 A **Decisions** pill in the toolbar counts what waits on you across lanes and opens the queue: each
 question with its options, the recommendation, how long ago it was asked and the time to its default,
@@ -2334,9 +2336,17 @@ carries a mark. The phone gets the same queue. `board decisions [--json]` prints
 Every decision is kept in the board's database (question, options, the answer, whether you or the
 default gave it, or the question was withdrawn, and when): the session's sheet lists its own, and
 `board decisions --done` the recent ones. Only what you type counts as your answer: a board
-reminder, a Team notice, a task notification or Code Mode's background result leaves the question
-open, and a prompt that clears the card's question as before without being yours (another session's
-message, a teammate's) records it as withdrawn.
+reminder, a restart's note, a Team notice, a task notification or Code Mode's background result
+leaves the question open, and a prompt that clears the card's question as before without being yours
+(another session's message, a teammate's, a slash command such as the board's own `/compact`)
+records it as withdrawn. The page's Dismiss, the terminal board and a Codex session's hook clear the
+question as before; the record calls it withdrawn once the web board next tidies up, so only while
+the web board runs.
+
+Decisions are this computer's. A device's sessions (#501) ask on their own board: the master shows
+their question on the card and in the queue with no buttons (Open goes to the session), and a
+default never runs on the master for a device's session. A thread's default writes the board's line
+in the thread as a private entry, so on a shared thread the peers get none of it.
 
 ```json
 "decisions": true

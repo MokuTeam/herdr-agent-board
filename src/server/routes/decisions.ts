@@ -1,8 +1,8 @@
 // Decisions (#487, services/decisions.ts): POST { op: 'answer', key, id, option?: n | text } types the
 // option's label (or the owner's own words) into the session through the board's send, waking it
 // when it sleeps, and closes the question as the owner's; { op: 'hold', key, id } takes its default
-// back and keeps the question; { op: 'seen' } marks what went by default as seen (the panel was
-// opened). A question no longer open (answered, replaced by another ask, withdrawn) is refused, so a
+// back and keeps the question; { op: 'seen', upTo } marks what went by default up to the newest the
+// page showed as seen (the panel was opened). A question no longer open (answered, replaced by another ask, withdrawn) is refused, so a
 // click on a page that read it before never answers the next one (#139). GET ?session=<key>: that
 // session's closed ones, for its sheet. The phone takes the same routes. While decisions are off
 // every call is refused and nothing is read.
@@ -13,12 +13,14 @@ import { t } from '../../core/lang.ts'
 import type { Config, Item } from '../../core/types.ts'
 import { cleanText, threadsConfig } from '../../core/work-threads.ts'
 import {
+  answeringMs,
   closeCardDecision,
   decisionsDone,
   holdOpen,
   markAnswering,
   markSeen,
   openOf,
+  seenAt,
   withDecisionsDb,
 } from '../../services/decisions.ts'
 import { answerAsk, withThreadsDb } from '../../services/work-threads.ts'
@@ -69,14 +71,9 @@ export function decisionsRoutes(app: DecisionsApp): Route[] {
     // answer at a time: a second click (another button, the phone) while the first goes is refused.
     if (!markAnswering(key, id, via, now())) return json(409, { ok: false, error: t('dec.err.busy'), code: 'busy' })
     const thread = decision.thread
-    const told = await app
-      .tell(key, thread ? `[board thread ${thread.key}] ${text}` : text)
-      .catch(err => ({ ok: false as const, error: err instanceof Error ? err.message : String(err) }))
-    if (!told.ok) {
-      markAnswering(key, id, null, now())
-      return json(409, { ok: false, error: told.error })
-    }
-    // A thread's question gets the answer in the thread too, as the Threads panel's answer does.
+    // A thread's question is answered in the thread first, as the Threads panel's answer is: what
+    // the thread refuses (a close the agent proposed, words too long) is refused before anything is
+    // typed in.
     const threads = thread ? threadsConfig(app.cfg.threads) : null
     if (thread && threads) {
       try {
@@ -85,8 +82,24 @@ export function decisionsRoutes(app: DecisionsApp): Route[] {
           if (db && head) answerAsk({ db, cfg: threads, actor: { kind: 'owner' }, now: now() }, head, text)
         })
       } catch (err) {
-        app.log?.(`decision ${id}: thread ${thread.key}: ${err instanceof Error ? err.message : String(err)}`)
+        markAnswering(key, id, null, now())
+        return json(409, { ok: false, error: err instanceof Error ? err.message : String(err), code: 'thread' })
       }
+    }
+    // The mark is renewed while the send runs (a sleeping session's wake takes a while), so the
+    // default never goes beside an answer still on its way.
+    const renew = setInterval(() => {
+      try {
+        markAnswering(key, id, via, now(), { renew: true })
+      } catch {}
+    }, answeringMs() / 3)
+    const told = await app
+      .tell(key, thread ? `[board thread ${thread.key}] ${text}` : text)
+      .catch(err => ({ ok: false as const, error: err instanceof Error ? err.message : String(err) }))
+      .finally(() => clearInterval(renew))
+    if (!told.ok) {
+      markAnswering(key, id, null, now())
+      return json(409, { ok: false, error: told.error })
     }
     withDecisionsDb(db =>
       closeCardDecision(db, key, { answer: text, answeredBy: 'owner', via, at: now() }, { id, ask: true, by: 'owner' }),
@@ -106,7 +119,10 @@ export function decisionsRoutes(app: DecisionsApp): Route[] {
         const raw = await ctx.rawBody()
         const body = isRecord(raw) ? raw : {}
         if (body.op === 'seen') {
-          markSeen(now())
+          // Up to what the page showed (the newest default's time on it): one that went after the
+          // page's last board stays unseen. A page that sends none marks up to now.
+          const upTo = typeof body.upTo === 'number' && Number.isFinite(body.upTo) ? Math.min(body.upTo, now()) : now()
+          if (upTo > seenAt()) markSeen(upTo)
           app.refresh()
           return json(200, { ok: true })
         }

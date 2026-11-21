@@ -20,8 +20,9 @@ import {
   type Via,
 } from '../adapters/decision-store.ts'
 import { isRecord, readJson, replaceFile } from '../adapters/json-store.ts'
+import { knobMs } from '../adapters/pacing.ts'
 import { stateDir } from '../adapters/paths.ts'
-import { addEntry, getEntry, removeEntry } from '../adapters/schedule-store.ts'
+import { addEntry, getEntry, readLog, removeEntry } from '../adapters/schedule-store.ts'
 import { entriesOf, getThread } from '../adapters/work-thread-store.ts'
 import {
   type AskSpec,
@@ -39,6 +40,7 @@ import {
   orderQueue,
   ownerPrompt,
 } from '../core/decisions.ts'
+import { parseNodeKey } from '../core/nodes.ts'
 import { cardsWaiting } from '../core/owner-watch.ts'
 import type { ScheduleEntry } from '../core/schedule-rules.ts'
 import type { Card, Item } from '../core/types.ts'
@@ -92,15 +94,16 @@ export interface AskInput {
 }
 
 /**
- * A question with its options: an open one of the same card before it is withdrawn (replaced) and
- * its default taken back; the default goes into the schedule; then the card, then the row (a queue
- * built between the two finds the card's id with no row yet, which it leaves alone).
+ * A question with its options: the default goes into the schedule first (refused at the session's
+ * cap, which leaves everything as it was); then an open one of the same card is withdrawn (replaced)
+ * and its default taken back; then the card, then the row (a queue built between the two finds the
+ * card's id with no row yet, which it leaves alone). A device's session (#501) asks on its own
+ * board: decisions are this computer's.
  */
 export function askDecision(db: BoardDb, a: AskInput): { id: string; defaultAt: number | null } {
+  if (parseNodeKey(a.key)) throw new DecisionError('device', "a device's session asks on its own board")
   const schedule = a.schedule ?? fileSchedule
   const by = a.by ?? 'agent'
-  const prev = cardDecisionOf(readCard(a.key)?.decision)
-  if (prev) closeRow(db, prev.id, { answer: null, answeredBy: 'withdrawn', via: 'replaced', at: a.now }, by, schedule)
   const id = randomBytes(4).toString('hex')
   const { spec } = a
   const label = spec.recommend ? spec.options[spec.recommend - 1] : undefined
@@ -118,6 +121,15 @@ export function askDecision(db: BoardDb, a: AskInput): { id: string; defaultAt: 
           decision: id,
         }).id
       : null
+  const prev = cardDecisionOf(readCard(a.key)?.decision)
+  if (prev) {
+    try {
+      closeRow(db, prev.id, { answer: null, answeredBy: 'withdrawn', via: 'replaced', at: a.now }, by, schedule)
+    } catch (err) {
+      removeQuietly(schedule, entry)
+      throw err
+    }
+  }
   const decision: CardDecision = {
     id,
     options: spec.options,
@@ -208,7 +220,7 @@ export function closeOnPrompt(card: Card | null, prompt: unknown, now: number): 
       db,
       id,
       owner
-        ? { answer: answerText(prompt), answeredBy: 'owner', via: answeringOf(card) ?? 'prompt', at: now }
+        ? { answer: answerText(prompt), answeredBy: 'owner', via: answeringOf(card, now) ?? 'prompt', at: now }
         : { answer: null, answeredBy: 'withdrawn', via: 'cleared', at: now },
       owner ? 'owner' : 'board',
       fileSchedule,
@@ -238,14 +250,15 @@ export function holdOpen(db: BoardDb, key: string, id: string, now: number, sche
   })
 }
 
-// An answer on its way holds the question this long at most: a board that stopped halfway never
-// keeps its default waiting for good.
-const ANSWERING_MS = 60_000
+// An answer on its way holds the question this long after its mark was last renewed (the route
+// renews it while the board's send still runs, a wake included): a board that stopped halfway never
+// keeps its default waiting for good. BOARD_DECISION_ANSWERING_MS: tests only.
+export const answeringMs = (): number => knobMs('BOARD_DECISION_ANSWERING_MS', 60_000)
 
 /** How the card says its answer is being typed in, while it does. */
-export function answeringOf(card: Card | null | undefined, now = Date.now()): 'button' | 'text' | null {
+export function answeringOf(card: Card | null | undefined, now: number): 'button' | 'text' | null {
   const v = isRecord(card?.decision) ? card.decision.answering : undefined
-  if (!isRecord(v) || typeof v.at !== 'number' || now - v.at >= ANSWERING_MS) return null
+  if (!isRecord(v) || typeof v.at !== 'number' || now - v.at >= answeringMs()) return null
   return v.via === 'button' || v.via === 'text' ? v.via : null
 }
 
@@ -253,14 +266,22 @@ export function answeringOf(card: Card | null | undefined, now = Date.now()): 'b
  * The owner's answer is on its way into the session (the page's click or text): the card says so,
  * so the hook records it as given by the button (or the text), and the default waits meanwhile.
  * One at a time: false when another answer is on its way already. `null` undoes it (it could not
- * be typed in).
+ * be typed in); `renew` stamps the mark this call holds again, while the send still runs.
  */
-export function markAnswering(key: string, id: string, via: 'button' | 'text' | null, now = Date.now()): boolean {
+export function markAnswering(
+  key: string,
+  id: string,
+  via: 'button' | 'text' | null,
+  now: number,
+  o: { renew?: boolean } = {},
+): boolean {
   let taken = false
   updateCard(key, c => {
     const cd = cardDecisionOf(c?.decision)
     if (!c || cd?.id !== id) return undefined
-    if (via && answeringOf(c, now)) return undefined
+    if (via && !o.renew && answeringOf(c, now)) return undefined
+    if (o.renew && isRecord(c.decision) && (!isRecord(c.decision.answering) || c.decision.answering.via !== via))
+      return undefined
     const raw = { ...(c.decision as Record<string, unknown>) }
     if (via) raw.answering = { via, at: now }
     else delete raw.answering
@@ -274,16 +295,22 @@ export function markAnswering(key: string, id: string, via: 'button' | 'text' | 
  * The scheduler, before a default goes (and again right before it is typed): 'go'; 'wait' while
  * the owner's answer is being typed in; 'drop' once the question is answered, withdrawn, replaced
  * or held (the owner's prompt cleared the card's ask: no prompt from the owner since, or it does
- * not go), or defaults are off in the live config.
+ * not go), or defaults are off in the live config. An entry for a device's session (#501) is not
+ * this board's to decide: decisions are this computer's, and `board ask` never puts one there.
  */
-export function defaultDue(entry: ScheduleEntry, cfg?: { decisions?: unknown }): 'go' | 'wait' | 'drop' {
+export function defaultDue(
+  entry: ScheduleEntry,
+  cfg: { decisions?: unknown } | undefined,
+  now: number,
+): 'go' | 'wait' | 'drop' {
   const id = typeof entry.decision === 'string' ? entry.decision : ''
+  if (parseNodeKey(entry.key)) return 'drop'
   // Defaults turned off (or decisions altogether) since it was asked: nothing decides by itself.
   if (cfg && !decisionsConfig(cfg.decisions)?.defaults) return 'drop'
   const card = readCard(entry.key)
   const cd = cardDecisionOf(card?.decision)
   if (!id || !card?.ask || cd?.id !== id || cd.held !== undefined || cd.defaultAt === undefined) return 'drop'
-  if (answeringOf(card)) return 'wait'
+  if (answeringOf(card, now)) return 'wait'
   const row = readDecisionsDb(db => getDecision(db, id), null)
   return row && row.answeredAt !== null ? 'drop' : 'go'
 }
@@ -297,16 +324,26 @@ export function defaulted(entry: ScheduleEntry, now: number): void {
   if (!id) return
   withDecisionsDb(db => {
     const row = getDecision(db, id)
-    if (!row) return
-    const label = row.recommend ? (row.options[row.recommend - 1] ?? '') : ''
-    closeCardDecision(
-      db,
-      entry.key,
-      { answer: label, answeredBy: 'default', via: 'default', at: now },
-      { id, ask: true },
-    )
-    if (row.thread) threadDefault(db, row, label, now)
+    if (row) defaultedRow(db, row, now)
   })
+}
+
+function defaultedRow(db: BoardDb, row: DecisionRow, at: number): void {
+  const label = row.recommend ? (row.options[row.recommend - 1] ?? '') : ''
+  const closed = closeCardDecision(
+    db,
+    row.session,
+    { answer: label, answeredBy: 'default', via: 'default', at },
+    { id: row.id, ask: true },
+  )
+  if (closed && row.thread) threadDefault(db, row, label, at)
+}
+
+/** When the scheduler's log says the default `entry` was typed in; null when it does not. */
+function typedAt(entry: string): number | null {
+  for (const r of readLog(300))
+    if (isRecord(r) && r.id === entry && r.result === 'sent') return typeof r.at === 'number' ? r.at : null
+  return null
 }
 
 function threadDefault(db: BoardDb, row: DecisionRow, label: string, now: number): void {
@@ -323,6 +360,8 @@ function threadDefault(db: BoardDb, row: DecisionRow, label: string, now: number
     if (!cfg) return
     postEntry({ db, cfg, actor, now }, head, {
       type: 'system',
+      // This board's own line: a shared thread's peers get none of it (#394).
+      private: true,
       text: `no answer in ${durationWords(row.defaultMs ?? 0)}: went with the recommendation "${label}"`,
       replyTo: ask.id,
       set: {
@@ -364,10 +403,20 @@ function settleLeftOvers(db: BoardDb, cards: ReadonlyMap<string, Card>, now: num
     // A card written a moment ago may be the hook's on its way to closing the row itself; one not
     // read at all (a read that failed, a session gone) is left for a day.
     if (card ? now - (Number(card.updatedAt) || 0) < SETTLE_MS : now - row.askedAt < LEFT_MS) continue
+    // Its default left the schedule. Typed in, by the log, with its record not written (the
+    // scheduler's write failed): the default's, never held or withdrawn, so it shows where a default does.
+    const gone = row.entry !== null && row.defaultAt !== null && row.held === null && !getEntry(row.entry)
+    const typed = gone && row.entry ? typedAt(row.entry) : null
+    if (typed !== null) {
+      try {
+        defaultedRow(db, row, typed)
+      } catch {}
+      continue
+    }
     if (card?.ask && cardDecisionOf(card.decision)?.id === row.id) {
       // Its default taken out of the schedule by hand (the Schedule row's delete, `board unschedule`):
       // held, so the card no longer counts down to a default that will not come.
-      if (row.entry && row.defaultAt !== null && row.held === null && !getEntry(row.entry)) {
+      if (gone) {
         try {
           if (holdDecision(db, row.id, now, 'board'))
             updateCard(row.session, c => {

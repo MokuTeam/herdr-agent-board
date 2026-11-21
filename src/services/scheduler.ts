@@ -190,7 +190,7 @@ export function startScheduler({
         }
         // A decision's default (#487, services/decisions.ts): only while its question is still open.
         if (entry.decision !== undefined) {
-          const open = defaultDue(entry, cfg)
+          const open = defaultDue(entry, cfg, Date.now())
           if (open === 'wait') continue
           if (open === 'drop') {
             removeEntry(entry.id, 'cancelled')
@@ -353,7 +353,7 @@ export function startScheduler({
       // A decision's default (#487), checked again right before it is typed (a wake takes a while):
       // an answer meanwhile drops it, one on its way holds it. Such an entry goes on its own.
       if (r.ok && entry.decision !== undefined) {
-        const open = defaultDue(entry, cfg)
+        const open = defaultDue(entry, cfg, Date.now())
         if (open === 'drop') {
           removeEntry(entry.id, 'cancelled')
           logRun(record(entry, Date.now(), 'cancelled', 'answered'))
@@ -616,11 +616,16 @@ export function startScheduler({
   function sent(entry: ScheduleEntry, result = 'sent', why?: string): void {
     const now = Date.now()
     if (entry.receipt) settleReport(entry, 'sent')
+    // A default typed in is recorded as the default's: tried twice here; past that the board's
+    // tidy-up finds it typed by this log (services/decisions.ts settleLeftOvers).
     if (entry.decision !== undefined) {
-      try {
-        defaulted(entry, now)
-      } catch (err) {
-        log(`decision ${String(entry.decision)}: ${messageOf(err)}`)
+      for (let tries = 0; tries < 2; tries++) {
+        try {
+          defaulted(entry, now)
+          break
+        } catch (err) {
+          log(`decision ${String(entry.decision)}: ${messageOf(err)}`)
+        }
       }
     }
     delivered.set(entry.id, entry.next)

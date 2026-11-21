@@ -6,9 +6,13 @@ import { expect, test } from 'bun:test'
 import { readCard, writeCard } from '../../src/adapters/cards.ts'
 import { openDb } from '../../src/adapters/db.ts'
 import { closedDecisions, getDecision } from '../../src/adapters/decision-store.ts'
-import { getEntry, listEntries, removeEntry } from '../../src/adapters/schedule-store.ts'
+import { addEntry, getEntry, listEntries, logRun, removeEntry } from '../../src/adapters/schedule-store.ts'
+import { entriesOf, getThread } from '../../src/adapters/work-thread-store.ts'
 import { type AskSpec, cardDecisionOf } from '../../src/core/decisions.ts'
+import { nodeKey } from '../../src/core/nodes.ts'
+import { MAX_PER_SESSION, type ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import type { Card, Item } from '../../src/core/types.ts'
+import { type Party, threadsConfig } from '../../src/core/work-threads.ts'
 import {
   askDecision,
   closeCardDecision,
@@ -23,6 +27,7 @@ import {
   openOf,
   withDecisionsDb,
 } from '../../src/services/decisions.ts'
+import { askOwner, newThread, type ThreadsCtx } from '../../src/services/work-threads.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const NOW = Date.parse('2026-11-21T10:00:00Z')
@@ -115,12 +120,12 @@ test('the default goes only while its question is open, once, and is recorded as
   const r = ask()
   const entry = getEntry(row(r.id)?.entry)
   if (!entry) throw new Error('no entry')
-  expect(defaultDue(entry)).toBe('go')
+  expect(defaultDue(entry, undefined, NOW)).toBe('go')
   // The owner's answer being typed in: it waits.
-  markAnswering(ANNA, r.id, 'button')
-  expect(defaultDue(entry)).toBe('wait')
-  markAnswering(ANNA, r.id, null)
-  expect(defaultDue(entry)).toBe('go')
+  markAnswering(ANNA, r.id, 'button', NOW)
+  expect(defaultDue(entry, undefined, NOW + 1000)).toBe('wait')
+  markAnswering(ANNA, r.id, null, NOW + 2000)
+  expect(defaultDue(entry, undefined, NOW + 2000)).toBe('go')
   defaulted(entry, NOW + 7_200_000)
   expect(row(r.id)).toMatchObject({
     answer: 'Merge now',
@@ -131,7 +136,7 @@ test('the default goes only while its question is open, once, and is recorded as
   expect(readCard(ANNA)?.ask).toBeUndefined()
   expect(readCard(ANNA)?.decision).toBeUndefined()
   // Twice: nothing more.
-  expect(defaultDue(entry)).toBe('drop')
+  expect(defaultDue(entry, undefined, NOW + 7_200_000)).toBe('drop')
   defaulted(entry, NOW + 7_300_000)
   expect(row(r.id)?.answeredAt).toBe(NOW + 7_200_000)
 })
@@ -142,15 +147,15 @@ test('the default is dropped once the owner wrote (the ask cleared), once held, 
   const entryA = getEntry(row(a.id)?.entry)
   // The hook cleared the ask on the owner's prompt.
   writeCard(ANNA, { ask: '', askSince: '' })
-  expect(entryA && defaultDue(entryA)).toBe('drop')
+  expect(entryA && defaultDue(entryA, undefined, NOW)).toBe('drop')
   const b = ask(BEN)
   const entryB = getEntry(row(b.id)?.entry)
   withDecisionsDb(db => holdOpen(db, BEN, b.id, NOW))
-  expect(entryB && defaultDue(entryB)).toBe('drop')
+  expect(entryB && defaultDue(entryB, undefined, NOW)).toBe('drop')
   const c = ask(ANNA)
   const entryC = getEntry(row(c.id)?.entry)
   ask(ANNA, spec({ question: 'Other?' }))
-  expect(entryC && defaultDue(entryC)).toBe('drop')
+  expect(entryC && defaultDue(entryC, undefined, NOW)).toBe('drop')
 })
 
 test("the hook's close: the owner's words, by the button when the page typed it, else withdrawn", () => {
@@ -161,7 +166,7 @@ test("the hook's close: the owner's words, by the button when the page typed it,
   expect(getEntry(row(typed.id)?.entry)).toBeNull()
 
   const clicked = ask()
-  markAnswering(ANNA, clicked.id, 'button')
+  markAnswering(ANNA, clicked.id, 'button', NOW + 5)
   closeOnPrompt(readCard(ANNA), 'Merge now', NOW + 6)
   expect(row(clicked.id)).toMatchObject({ answer: 'Merge now', answeredBy: 'owner', via: 'button' })
 
@@ -237,7 +242,8 @@ test('an open row no card points at any more is withdrawn by the queue, not befo
   isolatedHome()
   const r = ask()
   writeCard(ANNA, { ask: '', askSince: '', decision: '' })
-  const cards = new Map<string, Card>([[ANNA, readCard(ANNA) as Card]])
+  // The card as the board read it: written a second after the ask.
+  const cards = new Map<string, Card>([[ANNA, { ...(readCard(ANNA) as Card), updatedAt: NOW + 1000 }]])
   decisionsPayload([], cards, { now: NOW + 5000, defaults: true, seen: 0 })
   expect(row(r.id)?.answeredAt).toBeNull()
   decisionsPayload([], cards, { now: NOW + 60_000, defaults: true, seen: 0 })
@@ -251,7 +257,7 @@ test('a default taken out of the schedule by hand is held: the card stops counti
   const r = ask()
   const entry = row(r.id)?.entry as string
   removeEntry(entry)
-  const cards = new Map<string, Card>([[ANNA, readCard(ANNA) as Card]])
+  const cards = new Map<string, Card>([[ANNA, { ...(readCard(ANNA) as Card), updatedAt: NOW }]])
   decisionsPayload([], cards, { now: NOW + 60_000, defaults: true, seen: 0 })
   expect(row(r.id)).toMatchObject({ held: NOW + 60_000, defaultAt: null, answeredAt: null })
   const cd = cardDecisionOf(readCard(ANNA)?.decision)
@@ -265,7 +271,11 @@ test("the hook's close wins over the board's tidy-up: a card written a moment ag
   const snapshot = readCard(ANNA)
   // The board refreshes while the card has just lost its ask (the hook on its way).
   writeCard(ANNA, { ask: '', askSince: '', decision: '' })
-  decisionsPayload([], new Map([[ANNA, readCard(ANNA) as Card]]), { now: Date.now(), defaults: true, seen: 0 })
+  decisionsPayload([], new Map([[ANNA, { ...(readCard(ANNA) as Card), updatedAt: NOW + 60_000 }]]), {
+    now: NOW + 60_001,
+    defaults: true,
+    seen: 0,
+  })
   expect(row(r.id)?.answeredAt).toBeNull()
   closeOnPrompt(snapshot, 'wait for the review', NOW + 60_001)
   expect(row(r.id)).toMatchObject({ answeredBy: 'owner', answer: 'wait for the review' })
@@ -287,11 +297,16 @@ test('one answer at a time: a second while the first goes is refused; one left b
   expect(markAnswering(ANNA, r.id, 'text', NOW + 1000)).toBe(false)
   const entry = getEntry(row(r.id)?.entry)
   if (!entry) throw new Error('no entry')
-  expect(defaultDue(entry)).toBe('wait')
-  // A minute on, the mark no longer holds anything.
-  expect(markAnswering(ANNA, r.id, 'text', NOW + 61_000)).toBe(true)
-  markAnswering(ANNA, r.id, null)
-  expect(defaultDue(entry)).toBe('go')
+  expect(defaultDue(entry, undefined, NOW + 1000)).toBe('wait')
+  // Renewed while the send runs: it holds a minute from the last renewal, and only the mark it holds.
+  expect(markAnswering(ANNA, r.id, 'text', NOW + 50_000, { renew: true })).toBe(false)
+  expect(markAnswering(ANNA, r.id, 'button', NOW + 50_000, { renew: true })).toBe(true)
+  expect(defaultDue(entry, undefined, NOW + 100_000)).toBe('wait')
+  // A minute past the last renewal, the mark no longer holds anything.
+  expect(defaultDue(entry, undefined, NOW + 111_000)).toBe('go')
+  expect(markAnswering(ANNA, r.id, 'text', NOW + 111_000)).toBe(true)
+  markAnswering(ANNA, r.id, null, NOW + 112_000)
+  expect(defaultDue(entry, undefined, NOW + 112_000)).toBe('go')
 })
 
 test('defaults turned off (or decisions altogether) after the ask: the default is dropped', () => {
@@ -299,7 +314,128 @@ test('defaults turned off (or decisions altogether) after the ask: the default i
   const r = ask()
   const entry = getEntry(row(r.id)?.entry)
   if (!entry) throw new Error('no entry')
-  expect(defaultDue(entry, { decisions: true })).toBe('go')
-  expect(defaultDue(entry, { decisions: { defaults: false } })).toBe('drop')
-  expect(defaultDue(entry, {})).toBe('drop')
+  expect(defaultDue(entry, { decisions: true }, NOW)).toBe('go')
+  expect(defaultDue(entry, { decisions: { defaults: false } }, NOW)).toBe('drop')
+  expect(defaultDue(entry, {}, NOW)).toBe('drop')
+})
+
+test("at the schedule's cap the ask is refused and the open question stays as it was, buttons and default", () => {
+  isolatedHome()
+  const first = ask()
+  const firstEntry = row(first.id)?.entry
+  for (let i = 1; i < MAX_PER_SESSION; i++)
+    addEntry({ key: ANNA, text: `reminder ${i}`, at: NOW + i, next: NOW + 3_600_000 })
+  expect(gone(() => ask(ANNA, spec({ question: 'Other?' }), NOW + 1000))).toContain(
+    `${MAX_PER_SESSION} entries already`,
+  )
+  expect(row(first.id)).toMatchObject({ answeredAt: null, held: null })
+  expect(getEntry(firstEntry)).not.toBeNull()
+  expect(cardDecisionOf(readCard(ANNA)?.decision)?.id).toBe(first.id)
+  expect(readCard(ANNA)?.ask).toBe('Merge now or after the review?')
+  expect(withDecisionsDb(db => openOf(db, ANNA, first.id)).row.id).toBe(first.id)
+})
+
+test("a device's session (#501): no decision is asked for it here, and a default with its key never goes", () => {
+  isolatedHome()
+  const dev = nodeKey('studio', ANNA)
+  expect(gone(() => ask(dev))).toBe("a device's session asks on its own board")
+  expect(readCard(dev)).toBeNull()
+  // Even with a card under that key that would let it go (an open question, its id, a default due):
+  // dropped for being a device's, not by accident.
+  writeCard(dev, {
+    ask: 'q',
+    askSince: NOW,
+    decision: { id: 'deadbeef', options: ['a', 'b'], recommend: 1, defaultAt: NOW, defaultMs: 300_000 },
+  } as Parameters<typeof writeCard>[1])
+  const entry = { id: 'abc123', key: dev, text: 'x', at: NOW, next: NOW, decision: 'deadbeef' } as ScheduleEntry
+  expect(defaultDue(entry, { decisions: true }, NOW)).toBe('drop')
+})
+
+test("a default typed in whose record was not written is the default's, never held: the tidy-up finds it in the log", () => {
+  isolatedHome()
+  const r = ask()
+  const entry = row(r.id)?.entry as string
+  // The scheduler typed it and logged it; its write to the record failed, and the entry went.
+  logRun({ id: entry, key: ANNA, result: 'sent', at: NOW + 7_200_000 })
+  removeEntry(entry)
+  const cards = new Map<string, Card>([[ANNA, { ...(readCard(ANNA) as Card), updatedAt: NOW }]])
+  const p = decisionsPayload([itemOf(ANNA, 'anna')], cards, { now: NOW + 7_260_000, defaults: true, seen: 0 })
+  expect(row(r.id)).toMatchObject({
+    answer: 'Merge now',
+    answeredBy: 'default',
+    via: 'default',
+    answeredAt: NOW + 7_200_000,
+    held: null,
+  })
+  expect(p.defaulted.map(d => [d.who, d.answer, d.at])).toEqual([['anna', 'Merge now', NOW + 7_200_000]])
+  expect(readCard(ANNA)?.decision).toBeUndefined()
+  expect(readCard(ANNA)?.ask).toBeUndefined()
+})
+
+test('what went by default stays unseen past the time the page marked: one that went after it shows on', () => {
+  isolatedHome()
+  const a = ask(ANNA, spec(), NOW)
+  const b = ask(BEN, spec({ question: 'Soon?' }), NOW)
+  const ea = getEntry(row(a.id)?.entry)
+  const eb = getEntry(row(b.id)?.entry)
+  if (!ea || !eb) throw new Error('no entry')
+  defaulted(ea, NOW + 7_200_000)
+  defaulted(eb, NOW + 7_230_000)
+  markSeen(NOW + 7_200_000)
+  const p = decisionsPayload([], new Map(), { now: NOW + 7_300_000, defaults: true })
+  expect(p.defaulted.map(d => d.who)).toEqual(['ben'])
+})
+
+test('a default on a shared thread: its system line stays on this board, the peers get none of it (#394)', () => {
+  isolatedHome()
+  const actor: Party = { kind: 'session', key: ANNA, name: 'anna' }
+  const r = withDecisionsDb(db => {
+    const ctx: ThreadsCtx = {
+      db,
+      cfg: threadsConfig(true) as NonNullable<ReturnType<typeof threadsConfig>>,
+      actor,
+      now: NOW,
+    }
+    const made = newThread(ctx, { lane: 'atlas', title: 'Release' })
+    db.db.query('UPDATE threads SET scope = ? WHERE id = ?').run(
+      JSON.stringify({
+        kind: 'peer',
+        peer: 'ben-peer',
+        topic: `ben-peer/${made.head.id}`,
+        key: made.head.key,
+        by: 'me',
+        at: NOW,
+      }),
+      made.head.id,
+    )
+    const head = getThread(db, made.head.id)
+    if (!head) throw new Error('no thread')
+    const asked = askOwner(ctx, head, 'Ship it?')
+    const s = spec({ question: 'Ship it?' })
+    const d = askDecision(db, {
+      key: ANNA,
+      name: 'anna',
+      lane: 'atlas',
+      spec: s,
+      ask: asked.head.waitingOn,
+      thread: { id: head.id, key: head.key },
+      now: NOW,
+    })
+    return { ...d, head: asked.head }
+  })
+  const entry = getEntry(row(r.id)?.entry)
+  if (!entry) throw new Error('no entry')
+  defaulted(entry, NOW + 7_200_000)
+  const entries = withDecisionsDb(db => entriesOf(db, r.head.id))
+  const ask = entries.find(e => e.type === 'ask')
+  const line = entries.at(-1)
+  // The question went to the peer as any entry of a shared thread does; the default's line does not.
+  expect(ask?.out).toBe('queued')
+  expect(line).toMatchObject({
+    type: 'system',
+    private: true,
+    text: 'no answer in 2 h: went with the recommendation "Merge now"',
+  })
+  expect(line?.out).toBeUndefined()
+  expect(withDecisionsDb(db => getThread(db, r.head.id))?.status).not.toBe('owner')
 })

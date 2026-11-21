@@ -1,8 +1,9 @@
 // Decisions on the board's page (#487): the toolbar's pill only while the payload carries them (its
 // count, and a dot for what went by default unseen), More's entry, a card's options with the
 // recommended one marked and its default with Hold (a card without a decision drawn exactly as
-// before), and the words for a span and for who closed a question. The panel itself was checked on
-// a sandbox board (#487's pull request).
+// before), the panel's block of what went by default above the queue and how far it marks it seen,
+// and the words for a span and for who closed a question. The panel's look was checked on a sandbox
+// board (#487's pull request).
 import { expect, test } from 'bun:test'
 import type { ReactNode } from 'react'
 import { createRef } from 'react'
@@ -11,12 +12,15 @@ import type { DecisionsPayload } from '../../src/core/decisions.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardPayload } from '../../src/core/payload.ts'
 import { Card } from '../../web/src/components/Card.tsx'
+import { DecisionsPanel } from '../../web/src/components/decisions/DecisionsPanel.tsx'
 import { Toolbar } from '../../web/src/components/Toolbar.tsx'
+import type { DecisionsUi } from '../../web/src/hooks/useDecisions.ts'
 import { I18nProvider } from '../../web/src/i18n/I18nProvider.tsx'
-import { askedText, closedBy, defaultText, spanText } from '../../web/src/models/decisions.ts'
+import { askedText, closedBy, defaultText, seenUpTo, spanText } from '../../web/src/models/decisions.ts'
 import { TOOLBAR_PRIORITY } from '../../web/src/models/toolbar-fit.ts'
 import { toolbarEntries } from '../../web/src/models/toolbar-menu.ts'
 import { type Board, BoardContext } from '../../web/src/state/BoardProvider.tsx'
+import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
 import { board, item, payload } from './support/board.tsx'
 
 const NOW = Date.parse('2026-11-21T10:00:00Z')
@@ -144,4 +148,38 @@ test('a card: the options under its ask, the recommended one marked, the default
   const held = render(card({ ...asks, decision: { id: 'd1', options: ['a', 'b'], held: NOW } }), value)
   expect(held).toContain('held, no default')
   expect(held).not.toContain('>Hold</button>')
+})
+
+test('the panel: what went by default first, its question and what the session went with; marked seen up to the newest shown', () => {
+  const ui: DecisionsUi = {
+    answer: async () => true,
+    message: async () => true,
+    hold: async () => true,
+    seen: () => {},
+  }
+  const defaulted = [
+    { id: 'd8', key: 'ben', who: 'ben', question: 'Rebase first?', answer: 'Rebase', at: NOW - 60_000 },
+    { id: 'd7', key: 'cleo', who: 'cleo', question: 'Which branch?', answer: 'main', at: NOW - 3_600_000 },
+  ]
+  const panel = (data: BoardPayload) =>
+    render(
+      <PanelProvider viewport={() => ({ w: 1600, h: 1000 })}>
+        <DecisionsPanel open onClose={() => {}} decisions={ui} />
+      </PanelProvider>,
+      board({ data, now: NOW }),
+    )
+  const html = panel(payload({ decisions: queue({ defaulted }) }))
+  const went = /<section class="dec-went">(.*?)<\/section>/.exec(html)?.[1] ?? ''
+  expect(went).toContain('<h3 class="dec-section">Went by default since you last looked</h3>')
+  expect(
+    [...went.matchAll(/<p class="dec-q">([^<]+)<\/p><p class="dec-answer">([^<]+)<\/p>/g)].map(m => [m[1], m[2]]),
+  ).toEqual([
+    ['Rebase first?', 'went with &quot;Rebase&quot;'],
+    ['Which branch?', 'went with &quot;main&quot;'],
+  ])
+  // Above the queue.
+  expect(html.indexOf('dec-went')).toBeLessThan(html.indexOf('Merge now?'))
+  expect(panel(payload({ decisions: queue() }))).not.toContain('dec-went')
+  expect(seenUpTo(defaulted)).toBe(NOW - 60_000)
+  expect(seenUpTo([])).toBe(0)
 })

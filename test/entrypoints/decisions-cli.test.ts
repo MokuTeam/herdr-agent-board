@@ -18,9 +18,11 @@ function config(box: Sandbox, extra: Record<string, unknown> = {}): void {
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'config.json'), JSON.stringify({ language: 'en', port: 9, ...extra }))
 }
-function cli(box: Sandbox, args: string[]): Promise<{ code: number | null; out: string }> {
+/** The board command as session `self` runs it (SID's own, unless another is named). */
+function cli(box: Sandbox, args: string[], self = SID): Promise<{ code: number | null; out: string }> {
   return new Promise(resolve => {
-    const proc = spawn(process.execPath, [join(root, 'src/entrypoints/cli.ts'), ...args], { cwd: root, env: box.env })
+    const env = { ...box.env, CLAUDE_CODE_SESSION_ID: self }
+    const proc = spawn(process.execPath, [join(root, 'src/entrypoints/cli.ts'), ...args], { cwd: root, env })
     let out = ''
     proc.stdout.on('data', c => {
       out += c
@@ -144,6 +146,11 @@ test('board thread ask: the flags with decisions on; with them absent refused as
   const off = await cli(box, ['thread', 'ask', key, 'Ship it?', '--option', 'yes', '--option', 'no', ...S])
   assert.equal(off.code, 1)
   assert.match(off.out, /board thread ask does not take --option/)
+  // A flag with no value: main's line, not decisions' "needs a value".
+  const bare = await cli(box, ['thread', 'ask', key, 'Ship it?', '--option', ...S])
+  assert.equal(bare.code, 1)
+  assert.match(bare.out, /board thread ask does not take --option \(put -- before text that starts with --\)/)
+  assert.doesNotMatch(bare.out, /needs a value/)
 
   config(box, { threads: true, decisions: true })
   const on = await cli(box, [
@@ -177,4 +184,24 @@ test('board ask --help names the flags', async () => {
     r.out,
     /usage: board ask <question> \[--option "<label>"\]\.\.\. \[--recommend <n>\] \[--default-after <30m\|2h>\]/,
   )
+})
+
+test("--session for another session's card: options and a default refused in one line, nothing written; a plain ask goes", async () => {
+  const box = await sandbox()
+  config(box, { decisions: true })
+  const BEN = '99999999-8888-7777-6666-555555555555'
+  const withOptions = await cli(box, ['ask', 'Merge now?', '--option', 'yes', '--option', 'no', ...S], BEN)
+  assert.equal(withOptions.code, 1)
+  assert.match(withOptions.out, /--option and --default-after are for the session's own question/)
+  assert.equal(withOptions.out.split('\n').length, 1)
+  assert.deepEqual(cardOf(box), {})
+  assert.deepEqual(scheduled(box), [])
+  const plain = await cli(box, ['ask', 'which branch?', ...S], BEN)
+  assert.equal(plain.code, 0, plain.out)
+  assert.equal(cardOf(box).ask, 'which branch?')
+  assert.deepEqual((cardOf(box).decision as { options: string[] }).options, [])
+  assert.deepEqual(scheduled(box), [])
+  // Its own card through --session: as without it.
+  const own = await cli(box, ['ask', 'Merge now?', '--option', 'yes', '--option', 'no', ...S])
+  assert.equal(own.code, 0, own.out)
 })

@@ -161,15 +161,18 @@ export const DECISIONS_FROM = { key: 'decisions', name: 'decisions' } as const
 // Prompts no person typed that the hook still counts as the user's on main (it clears the ask):
 // another session's message, a teammate's, an agent's. A Telegram message (<channel>) is the owner's.
 const PEER_TAG = /^\s*<(?:task-notification|cross-session-message|agent-message|teammate-message)\b/
+// A slash command: the board's own /compact (services/compactor.ts) or one the owner typed; neither
+// answers a question (an option never starts with /, core/decisions.ts askSpec).
+const SLASH = /^\s*\//
 
 /**
- * Whether a prompt that cleared the card's ask (the hook: not a board reminder, a call's results or
- * a task notification) is the owner's own answer: not another session's or teammate's message and
- * not Code Mode's background result. Those clear the ask as on main, and the decision is recorded
- * as withdrawn, never as the owner's.
+ * Whether a prompt that cleared the card's ask (the hook: not a board reminder, a restart's note, a
+ * call's results or a task notification) is the owner's own answer: not another session's or
+ * teammate's message, not Code Mode's background result, not a slash command. Those clear the ask as
+ * on main, and the decision is recorded as withdrawn, never as the owner's.
  */
 export const ownerPrompt = (text: unknown): boolean =>
-  !isNotice(text) && !codeModeEvent(text) && !PEER_TAG.test(String(text ?? ''))
+  !isNotice(text) && !codeModeEvent(text) && !PEER_TAG.test(String(text ?? '')) && !SLASH.test(String(text ?? ''))
 
 /** An answer as the record keeps it: the prompt's first line, clipped. */
 export const answerText = (text: unknown): string =>

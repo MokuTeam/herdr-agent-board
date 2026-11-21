@@ -1,8 +1,9 @@
 /* Decisions (#487): the toolbar's pill, the Decisions panel (components/decisions/DecisionsPanel.tsx),
    a question's options on its card and in its sheet (DecisionButtons.tsx) and the sheet's record
    (DecisionRecord.tsx). Linked by the page only while decisions are on (models/decisions.ts), before
-   look-terminal.css; the Terminal look's rules for these are at the foot of this sheet. Every rule
-   selects by the feature's own classes: the other sheets are upstream's, rule for rule. */
+   look-terminal.css, which holds the Terminal look's rules for these (the one sheet that reads the
+   look's attribute). Every rule selects by the feature's own classes: the other sheets are upstream's,
+   rule for rule. */
 
 /* ---------------------------------------------------------------- the pill */
 #decisions-open .n.went { width: 8px; min-width: 0; height: 8px; padding: 0; border-radius: 50%; background: var(--orange, var(--accent)); font-size: 0; }

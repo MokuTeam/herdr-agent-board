@@ -16,12 +16,18 @@ import {
  */
 export function askCommand(
   cfg: DecisionsConfig,
-  s: { key: string; name?: string | undefined; lane: string | null },
+  s: { key: string; name?: string | undefined; lane: string | null; own?: boolean },
   before: readonly string[],
   after: readonly string[],
   now: number,
 ): string {
   const spec = parseAsk(before, after, cfg)
+  // Another session's card (`--session`): its default would be typed in with nobody named as asking.
+  if (s.own === false && (spec.options.length || spec.defaultMs))
+    throw new DecisionError(
+      'other',
+      "--option and --default-after are for the session's own question: ask another session's card without them",
+    )
   const r = withDecisionsDb(db =>
     askDecision(db, { key: s.key, name: s.name ?? '', lane: s.lane, spec, ask: spec.question, now }),
   )

@@ -1,8 +1,9 @@
 // The hook's side of decisions (#487): a prompt that clears a card's ask closes its open decision,
 // as the owner's answer only for the owner's own words. A board reminder, a Team notice, a task
 // notification and Code Mode's background result (source poll_event) leave the ask and the decision
-// as on main; another session's message and a Code Mode envelope without that source clear the ask
-// as on main, and the decision is recorded as withdrawn, never as the owner's.
+// as on main, and so does a restart's note the board types; another session's message, a Code Mode
+// envelope without that source and a slash command (the board's own /compact) clear the ask as on
+// main, and the decision is recorded as withdrawn, never as the owner's.
 import { expect, setDefaultTimeout, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -83,6 +84,7 @@ test("the owner's own prompt: the ask and the decision go, recorded as the owner
 for (const [what, text, extra] of [
   ['a board reminder', '[board reminder] check CI', {}],
   ['a Team notice', '[board reminder from team] cleo posted in atlas-2', {}],
+  ["a restart's note the board types", '[board reminder; restarted at 10:00] go on with the review', {}],
   ['a task notification', notification('Background command "x" completed (exit code 0)'), {}],
   [
     "Code Mode's background result (#424)",
@@ -104,6 +106,7 @@ for (const [what, text] of [
   ["a teammate's message", '<teammate-message teammate_id="t1">merge it</teammate-message>'],
   ["an agent's message", '<agent-message from="cleo">merge it</agent-message>'],
   ['a Code Mode envelope without poll_event (#445)', '<event kind="repl-eval" at="2026-11-21T10:00:00.5Z">yes</event>'],
+  ["the board's own /compact", '/compact keep the plan for #487'],
 ] as const) {
   test(`${what}: the ask goes as on main, the decision is withdrawn, never the owner's`, async () => {
     const { box, id } = await setUp()

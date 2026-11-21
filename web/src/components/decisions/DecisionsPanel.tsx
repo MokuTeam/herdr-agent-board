@@ -4,13 +4,13 @@
 // queue's order (a running default first, soonest first; then the oldest first), each with its
 // session, lane and thread, its options (the recommended one marked), how long it has waited, when
 // its default goes and Hold, and a field for the owner's own words. The board's own asks (a secret
-// request) are answered in their own form: Open goes to the session. Opening the panel marks what
-// went by default as seen.
+// request) are answered in their own form: Open goes to the session. What went by default is seen
+// up to the newest one the panel showed (one that went after the page's last board stays unseen).
 import { useEffect, useState } from 'react'
 import type { DefaultedView } from '../../../../src/core/decisions.ts'
 import type { DecisionsUi } from '../../hooks/useDecisions.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { askedText } from '../../models/decisions.ts'
+import { askedText, seenUpTo } from '../../models/decisions.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { MoonGlyph } from '../icons.tsx'
@@ -39,11 +39,14 @@ export function DecisionsPanel({ open, onClose, decisions }: DecisionsPanelProps
   const defaulted = queue?.defaulted ?? []
   // biome-ignore lint/correctness/useExhaustiveDependencies: once per opening, with what the board had then
   useEffect(() => {
-    if (!open) return
-    setWent(defaulted)
-    decisions.seen()
+    if (open) setWent(defaulted)
   }, [open])
   const shown = open ? merged(went, defaulted) : defaulted
+  const newest = seenUpTo(shown)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on show, up to what the panel shows
+  useEffect(() => {
+    if (open && newest > 0) decisions.seen(newest)
+  }, [open, newest])
   const goTo = (key: string) => dispatch({ type: 'open', key })
   const laneTitle = (id: string | undefined) => (id ? (data?.categories.find(c => c.id === id)?.title ?? id) : '')
   const itemOf = (key: string) => data?.items.find(i => i.key === key)

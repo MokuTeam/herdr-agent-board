@@ -10,7 +10,9 @@ import { join } from 'node:path'
 import { getDecision } from '../../src/adapters/decision-store.ts'
 import type { AskSpec } from '../../src/core/decisions.ts'
 import { useLanguage } from '../../src/core/lang.ts'
+import { threadsConfig } from '../../src/core/work-threads.ts'
 import { askDecision, withDecisionsDb } from '../../src/services/decisions.ts'
+import { askOwner, newThread, type ThreadsCtx } from '../../src/services/work-threads.ts'
 import { serveBoard } from '../support/board-server.ts'
 import { type FakeWake, fakeWake } from '../support/fake-wake.ts'
 import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
@@ -274,4 +276,52 @@ test('a sleeping session is woken by the answer, which goes in once', async () =
   assert.deepEqual(prompts(box), [['agent', 'prompt', 'p1', 'After review']])
   assert.deepEqual(wake.requests().filter(q => q.method === 'POST' && q.path === '/wake').length, 1)
   assert.equal(rowOf(box, r.id)?.answeredBy, 'owner')
+})
+
+test("the Threads panel's answer to a thread's question with a decision: recorded with its words, as the owner's", async () => {
+  const box = await sandbox()
+  const { list } = awake(box)
+  const t = inBox(box, () =>
+    withDecisionsDb(db => {
+      const ctx: ThreadsCtx = {
+        db,
+        cfg: threadsConfig(true) as NonNullable<ReturnType<typeof threadsConfig>>,
+        actor: { kind: 'session', key: SID, name: 'Report' },
+        now: Date.now(),
+      }
+      const made = newThread(ctx, { lane: 'atlas', title: 'Release' })
+      const asked = askOwner(ctx, made.head, 'Ship it?')
+      const s = spec({ question: 'Ship it?', options: ['yes', 'no'], recommend: null, defaultMs: null })
+      const d = askDecision(db, {
+        key: SID,
+        name: 'Report',
+        spec: s,
+        ask: asked.head.waitingOn,
+        thread: { id: made.head.id, key: made.head.key },
+        now: Date.now(),
+      })
+      return { id: d.id, key: made.head.key }
+    }),
+  )
+  const { url } = await serve(
+    box,
+    { decisions: true, threads: true, wake: false, profiles: list },
+    i => i.decision?.id === t.id,
+  )
+  const res = await fetch(`${url}/api/threads/${t.key}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-board': '1' },
+    body: JSON.stringify({ op: 'answer', text: 'Ship on Monday' }),
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  // The thread's own events may be typed in too (a board reminder from threads); the answer goes once.
+  assert.deepEqual(
+    prompts(box).filter(p => !String(p[3]).startsWith('[board reminder')),
+    [['agent', 'prompt', 'p1', `[board thread ${t.key}] Ship on Monday`]],
+  )
+  await until(() => rowOf(box, t.id)?.answeredAt !== null)
+  assert.deepEqual(
+    (({ answer, answeredBy, via }) => ({ answer, answeredBy, via }))(rowOf(box, t.id) ?? ({} as never)),
+    { answer: 'Ship on Monday', answeredBy: 'owner', via: 'text' },
+  )
 })

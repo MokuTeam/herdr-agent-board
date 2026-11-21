@@ -13,6 +13,7 @@ import {
   parseAsk,
   parseDuration,
 } from '../../src/core/decisions.ts'
+import { nodePart } from '../../src/core/node-items.ts'
 import { promptOf } from '../../src/core/schedule-rules.ts'
 import { notification } from '../support/task-notification.ts'
 
@@ -158,6 +159,10 @@ test("whose prompt answers: the owner's own words, never another session's, a te
   expect(ownerPrompt('[board reminder] check CI')).toBe(false)
   expect(ownerPrompt('[board reminder from team] anna wrote')).toBe(false)
   expect(ownerPrompt(notification('Background command "x" completed (exit code 0)'))).toBe(false)
+  // Lines the board types itself: a restart's note (a reminder), its /compact; any slash command.
+  expect(ownerPrompt('[board reminder; restarted at 10:00] go on with the review')).toBe(false)
+  expect(ownerPrompt('/compact keep the plan')).toBe(false)
+  expect(ownerPrompt('  /clear')).toBe(false)
 })
 
 test('the brief: the block only while decisions are on, for Claude, and without defaults when they are off', () => {
@@ -181,4 +186,32 @@ test('the brief: the block only while decisions are on, for Claude, and without 
   expect(brief(cfg, null, '/x', env, 'Codex', null, null, [], false, null, { defaults: true })).toBe(
     brief(cfg, null, '/x', env, 'Codex'),
   )
+})
+
+test("a device's card on the master (#501): its decision is not carried, so the master draws no buttons for it", () => {
+  const sid = '1f0e3c1a-5b7d-4c2e-9a10-3c4b5d6e7f80'
+  const part = nodePart(
+    {
+      items: [
+        {
+          key: sid,
+          session: sid,
+          pane: 'w1:p1',
+          workspace: 'w1',
+          cwd: '/home/owner/work/atlas',
+          status: 'idle',
+          name: 'atlas 12',
+          column: 'me',
+          attention: 'ask',
+          question: 'Merge now?',
+          decision: { id: 'd1', options: ['yes', 'no'], recommend: 1, defaultAt: 1 },
+        },
+      ],
+    },
+    'studio',
+  )
+  const item = part?.items[0]
+  expect(item?.key).toBe(`@studio:${sid}`)
+  expect(item?.question).toBe('Merge now?')
+  expect(item && 'decision' in item).toBe(false)
 })

@@ -26,6 +26,12 @@ export function askedText(at: number | null, now: number, t: Translator): string
   return ms < 60_000 ? t('dec.askedNow') : t('dec.asked', { t: spanText(ms, t) })
 }
 
+/**
+ * What the panel marks seen (POST /api/decisions { op: 'seen', upTo }): up to the newest default it
+ * shows, so one that went after the page's last board stays unseen; 0 when it shows none.
+ */
+export const seenUpTo = (shown: readonly { at: number }[]): number => shown.reduce((n, d) => Math.max(n, d.at), 0)
+
 /** A closed question as the record keeps it (GET /api/decisions). */
 export interface DecisionRecord {
   id: string

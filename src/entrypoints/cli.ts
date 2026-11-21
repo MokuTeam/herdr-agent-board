@@ -1033,7 +1033,10 @@ async function main(): Promise<void> {
         const { askCommand } = await import('./decisions-cli.ts')
         const card = readCard(s.key)
         const lane = (typeof card?.category === 'string' && card.category) || categoryFor(cfg, s.cwd) || null
-        tail = askCommand(decisionsOn, { ...s, lane }, flagWords, dashes < 0 ? [] : argv.slice(dashes + 1), now)
+        // Options and a default only on a session's own question: the board types the default in as if
+        // the session had asked, so --session for another one takes a plain ask.
+        const own = !target || (await ownSession())?.key === s.key
+        tail = askCommand(decisionsOn, { ...s, lane, own }, flagWords, dashes < 0 ? [] : argv.slice(dashes + 1), now)
         break
       }
       // Needs the user: the card goes to "Needs me" until the user's next prompt (entrypoints/hook.ts clears it).

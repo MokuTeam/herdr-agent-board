@@ -14,8 +14,8 @@ export interface DecisionsUi {
   /** A question with no options of the board's (an ask from before): the words as a message. */
   message(item: Item, text: string): Promise<boolean>
   hold(key: string, id: string): Promise<boolean>
-  /** The panel was opened: what went by default is seen. */
-  seen(): void
+  /** The panel showed what went by default up to `upTo` (the newest one's time): seen. */
+  seen(upTo: number): void
 }
 
 export function useDecisions(): DecisionsUi {
@@ -38,6 +38,6 @@ export function useDecisions(): DecisionsUi {
     message: (item, text) =>
       post(`/api/session/${encodeURIComponent(item.key)}/message`, { text, session: item.session ?? null }),
     hold: (key, id) => post('/api/decisions', { op: 'hold', key, id }),
-    seen: () => void api.post('/api/decisions', { op: 'seen' }).catch(() => {}),
+    seen: upTo => void api.post('/api/decisions', { op: 'seen', upTo }).catch(() => {}),
   }
 }

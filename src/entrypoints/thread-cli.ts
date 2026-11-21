@@ -37,9 +37,9 @@ import {
   ThreadError,
   watchesOf,
 } from '../adapters/work-thread-store.ts'
+import { type AskSpec, askSpec, type DecisionsConfig } from '../core/decisions.ts'
 import { KEPT_SUBS } from '../core/node-uplink.ts'
 import { nodeConfig } from '../core/nodes.ts'
-import { type AskSpec, askSpec, type DecisionsConfig } from '../core/decisions.ts'
 import { OWNER } from '../core/owner-watch.ts'
 import { parseTaskFile, TaskFileError } from '../core/thread-import.ts'
 import type { Config } from '../core/types.ts'
@@ -109,7 +109,7 @@ const FLAGS: Record<string, { values: readonly string[]; bare: readonly string[]
   new: { values: ['--lane', '--parent', '--to'], bare: ['--doing'] },
   post: { values: ['--status', '--summary', '--waiting', '--file', '--link', '--reply'], bare: ['--private'] },
   done: { values: ['--summary', '--file', '--link', '--reply'], bare: ['--private'] },
-  // --option, --recommend, --default-after: decisions (#487), refused as before while they are off.
+  // --option, --recommend, --default-after: decisions (#487), only while they are on (parseArgs).
   ask: { values: ['--option', '--recommend', '--default-after'], bare: [] },
   set: { values: ['--title', '--assignee', '--lane', '--parent'], bare: [] },
   show: { values: ['--last', '--since'], bare: ['--full'] },
@@ -141,8 +141,9 @@ interface Args {
  * The words and flags of `board thread <sub> …`. A flag the command does not take is refused, so a
  * mistyped one never turns into text; text that starts with `--` goes after a lone `--`.
  */
-export function parseArgs(sub: string, rest: readonly string[]): Args {
-  const known = FLAGS[sub] ?? { values: [], bare: [] }
+export function parseArgs(sub: string, rest: readonly string[], o: { decisions?: boolean } = {}): Args {
+  // Decisions off (#487): `ask` takes no flag, as on main, so what it prints is main's.
+  const known = (sub === 'ask' && !o.decisions ? undefined : FLAGS[sub]) ?? { values: [], bare: [] }
   const words: string[] = []
   const values = new Map<string, string[]>()
   const bare = new Set<string>()
@@ -287,7 +288,7 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
     // On a node every command goes to the master, which holds the threads (#508): this computer's
     // database is not opened. Without `node` the command runs here, as it always has.
     if (nodeConfig(ctx.cfg.node)) return await forward(sub, args, ctx, out, json)
-    const a = parseArgs(sub, args)
+    const a = parseArgs(sub, args, { decisions: !!ctx.decisions })
     const base = `http://127.0.0.1:${typeof ctx.cfg.port === 'number' ? ctx.cfg.port : 12422}/`
     const cfg = threadsConfig(ctx.cfg.threads)
     // How MokuPilot finds the board (9.1): its address and whether threads are on, on or off.
@@ -531,11 +532,8 @@ class Run {
       case 'ask': {
         const [key, ...words] = a.words
         const question = words.join(' ')
-        // Decisions (#487): the flags only while they are on; off, refused as a flag ask never took.
+        // Decisions (#487): the flags only while they are on (parseArgs refuses them as main does while off).
         const decisions = this.ctx.decisions ?? null
-        const given = ['--option', '--recommend', '--default-after'].find(f => a.all(f).length)
-        if (given && !decisions)
-          throw new Usage(`board thread ask does not take ${given} (put -- before text that starts with --)`)
         const spec = decisions
           ? askSpec(question, a.all('--option'), a.one('--recommend'), a.one('--default-after'), decisions)
           : null

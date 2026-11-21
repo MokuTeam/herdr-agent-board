@@ -39,7 +39,7 @@ import {
   writePidRecord,
 } from '../adapters/ssh.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
-import { decisionsConfig } from '../core/decisions.ts'
+import { answerText, decisionsConfig } from '../core/decisions.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { fillThresholds, markRevoked, nodeConfig, nodesConfig } from '../core/nodes.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
@@ -877,7 +877,7 @@ export async function startServer({
           const r = await send(deps, item, text)
           return r.ok ? { ok: true } : { ok: false, error: String(r.error ?? '') }
         },
-        async clearAsk(key, question) {
+        async clearAsk(key, question, answer) {
           const { readCard, writeCard } = await import('../adapters/cards.ts')
           const card = readCard(key)
           if (card?.ask !== question) return
@@ -889,7 +889,7 @@ export async function startServer({
                 closeCardDecision(
                   db,
                   key,
-                  { answer: null, answeredBy: 'owner', via: 'text', at: Date.now() },
+                  { answer: answer ? answerText(answer) : null, answeredBy: 'owner', via: 'text', at: Date.now() },
                   { by: 'owner' },
                 ),
               )
