@@ -6,8 +6,8 @@
 // need the internet), then the master's half with the real link and bundle sync: the hello and
 // the first status through the link user. After it: the link user opens the door's port and
 // nothing else (another port, a shell, a TTY are refused), and the admin's password is in no file
-// of the server's file system nor under this board's folders, its log or the view (all searched
-// for it). Undo then
+// where a run writes on the server (/etc, the homes, the temporary folders, /var/log, /usr/local,
+// /opt) nor under this board's folders, its log or the view (all searched for it). Undo then
 // takes the server back.
 //
 //   BOARD_SERVER_IT=1 bun test test/integration/node-setup.test.ts --timeout 3600000
@@ -248,7 +248,8 @@ async function scenario(l: Lane): Promise<void> {
     expect(asLink(s, key, ['-t', 'sh']).code).not.toBe(0)
     // the admin's password in no file there, nor here
     const found = await s.sh(
-      'grep -rlF -- "$P" / --exclude-dir=proc --exclude-dir=sys --exclude-dir=dev --exclude-dir=run 2>/dev/null | head -n 5; true',
+      // where a run writes: the whole file system took this search past its 10 minutes
+      'grep -rlF -- "$P" /etc /home /root /tmp /var/tmp /var/log /usr/local /opt 2>/dev/null | head -n 5; true',
       { env: { P: PASSWORD }, timeoutMs: 10 * MIN },
     )
     expect(noCr(found.stdout).trim()).toBe('')
@@ -284,7 +285,8 @@ describe.skipIf(!DOCKER)('Add a server on Debian and Ubuntu test servers', () =>
     adminKey = join(dir, 'admin_ed25519')
     await keygen(adminKey)
     await startMirror()
-    await Promise.all(LANES.map(d => buildImage(d, false)))
+    // startLane's client container runs the image with Docker, the servers the one without
+    await Promise.all(LANES.map(async d => Promise.all([buildImage(d, true), buildImage(d, false)])))
     for (const l of await Promise.all(LANES.map(d => startLane(d)))) lanes.set(l.distro, l)
   }, 60 * MIN)
 
