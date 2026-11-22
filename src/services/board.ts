@@ -280,6 +280,7 @@ type Base = Pick<
   Item,
   | 'key'
   | 'session'
+  | 'terminalAgent'
   | 'pane'
   | 'workspace'
   | 'agent'
@@ -472,6 +473,10 @@ export async function collect(
     add({
       key,
       session,
+      ...((p.agent === 'claude' || isCodexItem(p)) &&
+        p.terminal_id && {
+          terminalAgent: { id: p.terminal_id, session },
+        }),
       pane: p.pane_id,
       workspace: labels.get(p.workspace_id ?? '') ?? '',
       agent: p.agent,

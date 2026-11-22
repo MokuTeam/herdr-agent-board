@@ -311,6 +311,8 @@ export interface Item {
   /** A sleeper read from the new wake's session file, not answered by a wake (integrations/wake.ts); absent for the others. */
   fromFile?: true
   agent?: string
+  /** The interactive terminal's physical identity and the session Herdr actually sees there. */
+  terminalAgent?: { id: string; session: string | null }
   focused?: boolean
   doing?: string
   /** When `doing` was written (#321), else null. */

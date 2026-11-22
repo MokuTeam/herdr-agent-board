@@ -12,11 +12,11 @@
 // message. Nothing it reads or types is logged.
 import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { herdr as realHerdr, herdrText as realHerdrText } from '../adapters/herdr.ts'
+import { asPaneProcesses, herdr as realHerdr, herdrText as realHerdrText } from '../adapters/herdr.ts'
 import { isRecord, replaceFile } from '../adapters/json-store.ts'
 import { terminalsFile } from '../adapters/paths.ts'
 import { herdrCalls } from '../core/terminal/term-keys.ts'
-import { applyDiff, diffLines, type LineDiff } from '../core/terminal/term-model.ts'
+import { diffLines, type LineDiff } from '../core/terminal/term-model.ts'
 import type { Config, Item } from '../core/types.ts'
 
 // How much of a pane goes to the page: the visible screen and the scrollback above it, each
@@ -95,7 +95,8 @@ interface ShellRecord {
 
 /** What goes to a page watching a pane. */
 export type TermMessage =
-  | ({ t: 'frame'; cols: number | null } & LineDiff)
+  | ({ t: 'frame'; cols: number | null; binding?: string } & LineDiff)
+  | { t: 'changed' }
   | { t: 'gone' }
   | { t: 'error'; why: string }
   | { t: 'ping' }
@@ -103,7 +104,17 @@ export type TermMessage =
 export type TermResult = { ok: true; [extra: string]: unknown } | { ok: false; error: string; why?: string }
 
 /** The session as the terminal reads it. */
-export type TermItem = Pick<Item, 'key' | 'session' | 'pane' | 'cwd'> & { sleeping?: boolean | undefined }
+export type TermItem = Pick<Item, 'key' | 'session' | 'pane' | 'cwd' | 'agent' | 'terminalAgent'> & {
+  sleeping?: boolean | undefined
+}
+
+type ReadBinding = { kind: string; id: string; session: string | null }
+type WatchOptions = { shell?: boolean; key?: string | null; agent?: ReadBinding }
+type VerifyInput = () => Promise<boolean>
+
+export function terminalBinding(item: TermItem): ReadBinding | undefined {
+  return item.agent && item.terminalAgent ? { kind: item.agent, ...item.terminalAgent } : undefined
+}
 
 export type Herdr = (args: string[], timeoutMs?: number) => Promise<unknown>
 export type HerdrText = (args: string[], timeoutMs?: number) => Promise<string>
@@ -127,9 +138,14 @@ export interface Terminals {
   ): Promise<{ ok: true; pane: string; cwd: unknown; created: boolean } | { ok: false; error: string; why?: string }>
   closeShell(key: string): Promise<{ ok: true }>
   shellOf(key: string): { pane: string; tab: string; cwd: unknown } | null
-  inputPane(item: TermItem, target: string, session: unknown): Promise<{ pane: string } | { error: string }>
-  input(pane: string, steps: unknown): Promise<TermResult>
-  watch(pane: string, opts: { shell?: boolean; key?: string | null }, send: (msg: TermMessage) => void): () => void
+  inputPane(
+    item: TermItem,
+    target: string,
+    session: unknown,
+    binding?: unknown,
+  ): Promise<{ pane: string; verify?: VerifyInput } | { error: string }>
+  input(pane: string, steps: unknown, verify?: VerifyInput): Promise<TermResult>
+  watch(pane: string, opts: WatchOptions, send: (msg: TermMessage) => void): () => void
   keys(): string[]
   prune(): Promise<void>
   stopAll(): void
@@ -163,6 +179,7 @@ function loadShells(file: string): Record<string, ShellRecord> {
 }
 
 interface Reader {
+  pane: string
   add(send: (msg: TermMessage) => void): () => void
   poke(): void
   end(last?: TermMessage): void
@@ -182,7 +199,7 @@ export function createTerminals({
   sleep = ms => new Promise(r => setTimeout(r, ms)),
 }: TerminalsOptions = {}): Terminals {
   const shells = loadShells(file)
-  const readers = new Map<string, Reader>() // pane -> reader
+  const readers = new Map<string, Reader>() // pane and expected agent identity -> reader
   const queues = new Map<string, Promise<TermResult>>() // pane -> the promise of the input typed last
   const opening = new Map<string, ReturnType<Terminals['openShell']>>() // session key -> the shell being opened
   const age = (rec: ShellRecord | undefined) => now() - Number(rec?.at ?? 0)
@@ -349,6 +366,44 @@ export function createTerminals({
     return rec ? { pane: rec.pane, tab: rec.tab, cwd: rec.cwd } : null
   }
 
+  function processName(path: string | undefined): string | undefined {
+    return path
+      ?.split(/[\\/]/)
+      .pop()
+      ?.replace(/\.exe$/i, '')
+      .toLowerCase()
+  }
+
+  async function bindingFor(pane: string, expected: ReadBinding): Promise<string | null> {
+    try {
+      const [answer, processes] = await Promise.all([
+        herdr(['agent', 'get', pane], CALL_MS),
+        herdr(['pane', 'process-info', '--pane', pane], CALL_MS),
+      ])
+      const agent = isRecord(answer) ? answer.agent : null
+      const info = isRecord(processes) ? processes.process_info : null
+      if (!isRecord(agent) || !isRecord(info) || info.pane_id !== pane) return null
+      const session = isRecord(agent.agent_session) ? (agent.agent_session.value ?? null) : null
+      if (agent.terminal_id !== expected.id || agent.agent !== expected.kind || session !== expected.session)
+        return null
+      const foreground = asPaneProcesses(processes)?.foreground ?? []
+      const native = foreground.filter(p => processName(p.args[0]) === expected.kind)
+      // npm's Claude launcher remains a Node process. Codex's launcher starts the native binary.
+      const occupants =
+        native.length || expected.kind !== 'claude'
+          ? native
+          : foreground.filter(
+              p =>
+                processName(p.args[0]) === 'node' &&
+                /(?:^|[\\/])@anthropic-ai[\\/]claude-code[\\/]cli\.js$/i.test(p.args[1] ?? ''),
+            )
+      const pid = occupants.length === 1 ? occupants[0]?.pid : undefined
+      return pid ? JSON.stringify([pane, expected.id, expected.kind, expected.session, pid]) : null
+    } catch {
+      return null
+    }
+  }
+
   /**
    * The pane input for `target` may go to: the board's own shell for the session, or the
    * session's pane while the same session runs there. { pane } or { error: <text key> }.
@@ -357,7 +412,8 @@ export function createTerminals({
     item: TermItem,
     target: string,
     session: unknown,
-  ): Promise<{ pane: string } | { error: string }> {
+    binding?: unknown,
+  ): Promise<{ pane: string; verify?: VerifyInput } | { error: string }> {
     if (target === 'shell') {
       const rec = shells[item.key]
       if (!rec) return { error: 'term.err.noShell' }
@@ -378,7 +434,15 @@ export function createTerminals({
     if (!item.pane) return { error: 'err.noPane' }
     if (item.sleeping) return { error: 'term.err.asleep' }
     if ((session ?? null) !== (item.session ?? null)) return { error: 'err.sessionChanged' }
-    const answer = await herdr(['agent', 'get', item.pane], 5000)
+    const expected = terminalBinding(item)
+    const pane = item.pane
+    if (expected) {
+      if (typeof binding !== 'string' || !binding) return { error: 'err.sessionChanged' }
+      // Run inside the per-pane queue, immediately before each herdr send. A queued Enter
+      // can outlive the process that accepted the text before it.
+      return { pane, verify: async () => (await bindingFor(pane, expected)) === binding }
+    }
+    const answer = await herdr(['agent', 'get', pane], 5000)
     const agent = isRecord(answer) ? answer.agent : null
     const running = isRecord(agent) && isRecord(agent.agent_session) ? (agent.agent_session.value ?? null) : null
     if (!isRecord(agent) || running !== (item.session ?? null)) return { error: 'err.sessionChanged' }
@@ -389,7 +453,7 @@ export function createTerminals({
    * Type steps into a pane: checked first (core/terminal/term-keys.ts), then sent in order, one
    * request after the other for the same pane. { ok } or { ok: false, error: <text key>, why }.
    */
-  function input(pane: string, steps: unknown): Promise<TermResult> {
+  function input(pane: string, steps: unknown, verify?: VerifyInput): Promise<TermResult> {
     const checked = herdrCalls(steps)
     if (checked.error !== undefined) return Promise.resolve({ ok: false, error: 'term.err.input', why: checked.error })
     const { calls } = checked
@@ -399,13 +463,15 @@ export function createTerminals({
     const run = async () => {
       for (const c of calls) {
         if (now() - received > LATE_MS) throw Object.assign(new Error('late'), { code: 'late' })
+        if (verify && !(await verify())) return { ok: false, error: 'err.sessionChanged' } as const
+        if (now() - received > LATE_MS) throw Object.assign(new Error('late'), { code: 'late' })
         if (c.keys) await herdr(['pane', 'send-keys', pane, ...c.keys], CALL_MS)
         else await herdr(['pane', 'send-text', pane, c.text], CALL_MS)
       }
     }
     const next = (queues.get(pane) ?? Promise.resolve()).then(run, run)
     const done: Promise<TermResult> = next.then(
-      () => ({ ok: true }),
+      result => result ?? { ok: true },
       // herdr's error code only: a failed call's message can carry the text it was typing.
       err => ({
         ok: false,
@@ -416,7 +482,7 @@ export function createTerminals({
     queues.set(pane, done)
     void done.then(() => {
       if (queues.get(pane) === done) queues.delete(pane)
-      readers.get(pane)?.poke()
+      for (const r of readers.values()) if (r.pane === pane) r.poke()
     })
     return done
   }
@@ -430,24 +496,34 @@ export function createTerminals({
    */
   function watch(
     pane: string,
-    { shell = false, key = null }: { shell?: boolean; key?: string | null },
+    { shell = false, key = null, agent }: WatchOptions,
     send: (msg: TermMessage) => void,
   ): () => void {
-    let r = readers.get(pane)
+    const id = agent ? JSON.stringify([pane, agent]) : pane
+    let r = readers.get(id)
     if (!r) {
-      r = reader(pane, { shell, key })
-      readers.set(pane, r)
+      r = reader(id, pane, shell, key, agent)
+      readers.set(id, r)
     }
     return r.add(send)
   }
 
   function stopReader(pane: string, last: TermMessage): void {
-    readers.get(pane)?.end(last)
+    for (const r of readers.values()) if (r.pane === pane) r.end(last)
   }
 
-  function reader(pane: string, { shell, key }: { shell: boolean; key: string | null }): Reader {
+  function reader(
+    id: string,
+    pane: string,
+    shell: boolean,
+    key: string | null,
+    agent: ReadBinding | undefined,
+  ): Reader {
     const subs = new Set<(msg: TermMessage) => void>()
     let lines: string[] | null = null
+    let binding: string | null = null
+    let awaiting = false
+    let wholeNext = false
     let cols: number | null = null
     let colsAt = 0
     let changedAt = 0
@@ -467,13 +543,28 @@ export function createTerminals({
         } catch {}
       }
     }
-    const frame = (d: LineDiff = { drop: 0, keep: 0, lines: lines ?? [] }): TermMessage => ({ t: 'frame', ...d, cols })
+    const frame = (d: LineDiff = { drop: 0, keep: 0, lines: lines ?? [] }): TermMessage => ({
+      t: 'frame',
+      ...d,
+      cols,
+      ...(binding && { binding }),
+    })
+
+    function changedAgent(): void {
+      lines = null
+      binding = null
+      if (!awaiting) broadcast({ t: 'changed' })
+      awaiting = true
+    }
 
     async function tick(): Promise<void> {
       timer = null
       if (ended || reading) return
       reading = true
       try {
+        const before = agent ? await bindingFor(pane, agent) : null
+        if (ended) return
+        if (agent && !before) return changedAgent()
         const at = now()
         // The screen, and beside it now and then the pane's width (at once: each is a herdr
         // call of its own).
@@ -481,17 +572,25 @@ export function createTerminals({
         if (wantCols) colsAt = at
         const [text, layout] = await Promise.all([
           herdrText(
-            ['pane', 'read', pane, '--source', 'recent-unwrapped', '--lines', String(READ_LINES), '--ansi'],
+            agent
+              ? ['pane', 'read', pane, '--source', 'visible', '--ansi']
+              : ['pane', 'read', pane, '--source', 'recent-unwrapped', '--lines', String(READ_LINES), '--ansi'],
             5000,
           ),
           wantCols ? herdr(['pane', 'layout', '--pane', pane], 5000).catch(() => null) : null,
         ])
+        if (agent && before !== (await bindingFor(pane, agent))) return changedAgent()
+        if (ended) return
+        if (binding !== before) lines = null
+        binding = before
+        awaiting = false
         if (wantCols) cols = paneCols(isRecord(layout) ? layout.layout : null, pane) ?? cols
         // After a failed read the page is told it works again, even when nothing changed.
         const recovered = failing
         const next = text.replace(/\r/g, '').replace(/\n$/, '').split('\n').map(clipLine)
         failing = ''
-        if (!lines) {
+        if (!lines || wholeNext) {
+          wholeNext = false
           lines = next
           changedAt = now()
           broadcast(frame())
@@ -499,7 +598,7 @@ export function createTerminals({
           const d = diffLines(lines, next)
           const same = d.drop === 0 && d.keep === lines.length && !d.lines.length
           if (!same || recovered) {
-            lines = applyDiff(lines, d)
+            lines = next
             if (!same) changedAt = now()
             broadcast(frame(d))
           }
@@ -522,12 +621,14 @@ export function createTerminals({
           }
           return end({ t: 'gone' })
         }
+        if (agent) changedAgent()
         if (!failing) broadcast({ t: 'error', why: messageOf(err) })
         failing = messageOf(err)
+      } finally {
+        reading = false
+        schedule(again ? 0 : undefined)
+        again = false
       }
-      reading = false
-      schedule(again ? 0 : undefined)
-      again = false
     }
 
     function schedule(delay?: number): void {
@@ -543,13 +644,18 @@ export function createTerminals({
       if (heartbeat) clearInterval(heartbeat)
       if (last) broadcast(last)
       subs.clear()
-      if (readers.get(pane) === api) readers.delete(pane)
+      if (readers.get(id) === api) readers.delete(id)
     }
 
     const api: Reader = {
+      pane,
       add(send) {
         subs.add(send)
-        if (lines) send(frame())
+        // A newly opened/reloaded agent window waits for a frame verified on its own stream.
+        if (agent) {
+          wholeNext = true
+          api.poke()
+        } else if (lines) send(frame())
         // A page that comes while the reads fail hears so at once, not only at the next change.
         if (failing) send({ t: 'error', why: failing })
         if (!heartbeat) {
