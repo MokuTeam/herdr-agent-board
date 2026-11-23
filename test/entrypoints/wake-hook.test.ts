@@ -1020,7 +1020,7 @@ const masterCard = (name: string, sid: string, more: Record<string, unknown> = {
 const MASTER_CARDS = [
   // MokuPilot's day master: awake with no pane, a card like any other.
   masterCard('work-00', SID_WORK00, { pane: null, day: true, status: 'working' }),
-  masterCard('Centium-master', SID_D, { status: 'done' }),
+  masterCard('Centium-master', SID_D, { status: 'done', autoName: 'centium-2a' }),
   masterCard('Gemini Worker', SID_W, { agent: 'agy' }),
   masterCard('Блюбениан монитор 100%', SID_O),
   // This session and another of this node's: Claude Code and the parts above list them.
@@ -1162,6 +1162,10 @@ test('#639 SendMessage on a node to the day master’s name is the master’s bo
   // A name with a space, Cyrillic and %, by its ref too.
   expect(denied(await runHook(w, 'pre-send', sendFrom('Блюбениан монитор 100% [2d3e4f5a]', 'x', SID_ME)))).toContain(
     'queued for Блюбениан монитор 100% [2d3e4f5a] on laptop',
+  )
+  // By its automatic name too.
+  expect(denied(await runHook(w, 'pre-send', sendFrom('centium-2a', 'x', SID_ME)))).toContain(
+    'queued for Centium-master',
   )
   // The master queues it: nothing in this computer's schedule.
   expect(scheduled(w)).toEqual([])

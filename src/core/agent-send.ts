@@ -131,6 +131,8 @@ export const isOtherAgent = (t: Pick<Target, 'device' | 'agent'>): boolean =>
 export interface AgentView {
   key: string
   name: string
+  /** Every name it answers to: the card's and the automatic one (#639: a node matches by them). */
+  names: string[]
   label: string
   agent: string | null
   device: string | null
@@ -150,6 +152,7 @@ export function agentViewsOf(
   return [...live, ...asleep].map(t => ({
     key: t.key,
     name: t.name,
+    names: t.names,
     label: labelOf(t),
     agent: t.agent,
     device: t.device,

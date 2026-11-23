@@ -278,7 +278,18 @@ async function sendToMaster(named: string, message: string, sid: string, raw: Re
   if (!views) return
   const { matching, targetsOf } = await import('../core/agent-send.ts')
   const known = targetsOf(
-    views.map(v => ({ key: v.key, name: v.name, device: v.device, sleeping: v.sleeping, day: true })),
+    views.map(v => {
+      // The automatic name too, from a master that sends it (core/agent-send.ts agentViewsOf).
+      const names = Array.isArray(v.names) ? v.names.filter(n => typeof n === 'string') : []
+      return {
+        key: v.key,
+        name: v.name,
+        autoName: names.find(n => n !== v.name),
+        device: v.device,
+        sleeping: v.sleeping,
+        day: true,
+      }
+    }),
   )
   if (!matching(known, named).length) return
   const answer = await nodeCall(raw, { cmd: 'send', argv: [named, message], session: sid }, MASTER_SEND_MS)
