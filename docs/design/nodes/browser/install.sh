@@ -32,6 +32,7 @@ MOKUBOT_ALLOW_PROD_WRITES=${MOKUBOT_ALLOW_PROD_WRITES:-1}
 SUDO_NOPASSWD=${SUDO_NOPASSWD:-1}
 
 [ "$(id -u)" = 0 ] || { echo "run as root (sudo)"; exit 1; }
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 say() { printf '== %s\n' "$*"; }
 
 id "$NODE_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$NODE_USER"
@@ -67,7 +68,8 @@ command -v npm >/dev/null || { echo "npm is needed"; exit 1; }
 say "packages"
 need=()
 for p in xvfb x11vnc novnc websockify unzip; do dpkg -s "$p" >/dev/null 2>&1 || need+=("$p"); done
-if [ ${#need[@]} -gt 0 ]; then apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${need[@]}"; fi
+APT="apt-get -o Acquire::http::Timeout=30 -o Acquire::Retries=3"
+if [ ${#need[@]} -gt 0 ]; then $APT update -qq && DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l $APT install -y -qq "${need[@]}"; fi
 
 say "linger"
 loginctl enable-linger "$NODE_USER"
@@ -101,7 +103,7 @@ chown -R "$NODE_USER:" "$B"
 missing=$(ldd "$CHROME_DIR/chrome" | awk '/not found/{print $1}' || true)
 if [ -n "$missing" ]; then
   echo "chrome lacks: $missing; installing its usual libraries"
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libnss3 libatk-bridge2.0-0t64 libcups2t64 libxkbcommon0 \
+  DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l $APT install -y -qq libnss3 libatk-bridge2.0-0t64 libcups2t64 libxkbcommon0 \
     libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64 fonts-liberation
 fi
 # Ubuntu 23.10+ forbids unprivileged user namespaces, which Chrome's sandbox needs: allow them for this binary.
@@ -416,9 +418,9 @@ EOF
 
 # The bundle does not send the master's loopback MCP servers ("bound (local-url)"), so these names are the node's own.
 say "mokutab, mokutab-<profile> and mokubot-netsuite in the node's .claude.json"
-CJ="$NODE_HOME/.claude.json"
+for CJ in "$NODE_HOME/.claude.json" "$NODE_HOME/.claude-work/.claude.json"; do
 if [ -f "$CJ" ]; then
-  mkdir -p "$BACKUP"; cp -a "$CJ" "$BACKUP/claude.json"
+  mkdir -p "$BACKUP"; cp -a "$CJ" "$BACKUP/$(echo "$CJ" | tr / _)"
   as_user node -e '
     const fs = require("fs"), [file, bin, mokubot, ...names] = process.argv.slice(1)
     const d = JSON.parse(fs.readFileSync(file, "utf8")); d.mcpServers ||= {}
@@ -428,6 +430,7 @@ if [ -f "$CJ" ]; then
     fs.writeFileSync(file + ".tmp", JSON.stringify(d, null, 2)); fs.renameSync(file + ".tmp", file)
   ' "$CJ" "$B/bin/mokutab-mcp" "$MOKUBOT_HTTP_PORT" $(for s in $PROFILES; do echo "${s%%:*}"; done)
 fi
+done
 
 say "start"
 mkdir -p "$B/state"; chown -R "$NODE_USER:" "$B"
