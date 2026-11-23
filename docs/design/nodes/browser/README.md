@@ -16,6 +16,8 @@ S=/tmp/abstage; rm -rf $S; mkdir -p $S/mokutab $S/mokubot $S/mokubot-mcp
 cp -r <MokuTab>/app/chrome-extension/dist/chrome-mv3/. $S/mokutab/
 cp -r <MokuAssist>/dist/. $S/mokubot/
 cp -r <MokuAssist>/mcp-server/dist <MokuAssist>/mcp-server/package.json $S/mokubot-mcp/
+cp -r ~/.mokutab/functions $S/mokutab-functions                        # optional
+cp "$LOCALAPPDATA/mcp-chrome-bridge/fn-runs/fn-state.json" $S/mokutab-fn-state.json  # optional
 cp docs/design/nodes/browser/install.sh $S/
 tar -C $S -czf - . | ssh <server> 'mkdir -p /tmp/agent-board-browser && tar -C /tmp/agent-board-browser -xzf -'
 
@@ -49,6 +51,10 @@ that lets Chrome's sandbox use user namespaces (Ubuntu 23.10 and later forbid th
 - mokubot: one MCP server (`agent-board-mokubot-mcp`, HTTP 127.0.0.1:12440, WebSocket bridge from
   8765); the extensions of both profiles connect to it, and the tools pick the NetSuite account by
   `account_id` (`netsuite_list_accounts`).
+
+- The owner's mokutab browser functions (`chrome_fn_list`): both bridges run as the node user and read
+  `~/.mokutab/functions`, so one copy serves every profile. A function that never ran OK on a machine is
+  a hidden draft there; the laptop's `fn-state.json`, put into each profile's state once, carries that over.
 
 Units: `agent-board-xvfb@<name>`, `agent-board-chrome@<name>`, `agent-board-mokubot-mcp`, enabled;
 `agent-board-vnc@<name>` and `agent-board-novnc@<name>`, on demand.

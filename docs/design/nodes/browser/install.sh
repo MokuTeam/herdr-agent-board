@@ -9,6 +9,8 @@
 #   mokutab/                    the unpacked mokutab extension (app/chrome-extension/dist/chrome-mv3)
 #   mokubot/                    the unpacked mokubot extension (netsuite-assistant-extension/dist)
 #   mokubot-mcp/                the mokubot MCP server: mcp-server/dist and mcp-server/package.json
+#   mokutab-functions/          optional: the owner's mokutab browser functions (~/.mokutab/functions)
+#   mokutab-fn-state.json       optional: their run state (fn-runs/fn-state.json), without which they list as drafts
 # See README.md beside this file.
 set -euo pipefail
 
@@ -132,6 +134,15 @@ cp -a "$STAGE/mokubot-mcp/." "$B/mokubot-mcp/"
 chown -R "$NODE_USER:" "$B"
 as_user npm install --prefix "$B/mokubot-mcp" --omit=dev --ignore-scripts --no-fund --no-audit >/dev/null
 
+if [ -d "$STAGE/mokutab-functions" ]; then
+  say "mokutab functions"
+  # Every profile's bridge runs as the node user and reads ~/.mokutab/functions. Same names are
+  # replaced from the stage; functions saved on the node stay.
+  install -d -o "$NODE_USER" -g "$NODE_USER" "$NODE_HOME/.mokutab" "$NODE_HOME/.mokutab/functions"
+  cp -a "$STAGE/mokutab-functions/." "$NODE_HOME/.mokutab/functions/"
+  chown -R "$NODE_USER:" "$NODE_HOME/.mokutab"
+fi
+
 say "bitwarden cli"
 [ -x "$NODE_HOME/.local/bin/bw" ] || as_user npm install -g --prefix "$NODE_HOME/.local" --no-fund --no-audit @bitwarden/cli >/dev/null
 
@@ -147,6 +158,11 @@ for spec in $PROFILES; do
     as_user npm install --prefix "$MT" --ignore-scripts --no-fund --no-audit "@mokuhub/mokutab-bridge@$MOKUTAB_BRIDGE_VERSION" >/dev/null
   fi
   chmod +x "$PKG/dist/run_host.sh"
+  # The functions' run state: a function that never ran OK here is a hidden draft. Taken once, kept after.
+  FNS="$B/state/$P/state/mcp-chrome-bridge/fn-runs"
+  if [ -f "$STAGE/mokutab-fn-state.json" ] && [ ! -f "$FNS/fn-state.json" ]; then
+    install -D -o "$NODE_USER" -g "$NODE_USER" -m 0644 "$STAGE/mokutab-fn-state.json" "$FNS/fn-state.json"
+  fi
   printf '%s\n' "$NODE_BIN" | put "$PKG/dist/node_path.txt" 0644
   printf '{\n  "url": "http://127.0.0.1:%s/mcp"\n}\n' "$MTAB" | put "$PKG/dist/mcp/stdio-config.json" 0644
   # Chrome starts the native host through this wrapper, with a state folder per profile.
@@ -258,6 +274,25 @@ S=\$(bw unlock --passwordfile "\$F" --raw)
 printf 'BW_SESSION=%s\n' "\$S" > "$BWDIR/session.env.tmp"
 mv "$BWDIR/session.env.tmp" "$BWDIR/session.env"
 echo "unlocked"
+EOF
+
+put "$B/bin/bw-provision" 0755 <<EOF
+#!/bin/sh
+# bw-provision: reads {"client_id","client_secret","master_password"} JSON on stdin (the owner's
+# secret form), logs bw in with the API key, writes the 0600 password file and unlocks. Prints no value.
+set -e
+umask 077
+J=\$(cat)
+get() { printf '%s' "\$J" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s)[process.argv[1]]||""))' "\$1"; }
+if ! bw login --check >/dev/null 2>&1; then
+  BW_CLIENTID=\$(get client_id) BW_CLIENTSECRET=\$(get client_secret) bw login --apikey >/dev/null
+fi
+get master_password > "$BWDIR/master-password.tmp"
+[ -s "$BWDIR/master-password.tmp" ] || { rm -f "$BWDIR/master-password.tmp"; echo "no master password given"; exit 1; }
+mv "$BWDIR/master-password.tmp" "$BWDIR/master-password"
+systemctl --user restart agent-board-bw-unlock.service
+systemctl --user start agent-board-bw-sync.service
+bw login --check >/dev/null && echo "bw logged in"
 EOF
 
 say "systemd user units"
