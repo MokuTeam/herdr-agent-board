@@ -115,6 +115,13 @@ export function App() {
     setUpdates(true)
     setUpdatesMounted(true)
   }
+  // Settings → Housekeeping… (#652), on the local board only: mounted at its first opening.
+  const [housekeeping, setHousekeeping] = useState(false)
+  const [housekeepingMounted, setHousekeepingMounted] = useState(false)
+  const openHousekeeping = () => {
+    setHousekeeping(true)
+    setHousekeepingMounted(true)
+  }
   // Settings → Time tracking… (#237), on the local board only: mounted at its first opening, as Backup.
   const [timeSettings, setTimeSettings] = useState(false)
   const [timeSettingsMounted, setTimeSettingsMounted] = useState(false)
@@ -252,6 +259,7 @@ export function App() {
     openTeam,
     openDevices,
     openUpdates,
+    openHousekeeping,
   )
   // Tasks' 📌 menu under an agent's message, and the panel's buttons.
   const todos = useTodos(menus.menu)
@@ -346,6 +354,9 @@ export function App() {
         {...(accessMounted && !remotePage() ? { access: { open: access, onClose: () => setAccess(false) } } : {})}
         {...(backupMounted && !remotePage() ? { backup: { open: backup, onClose: () => setBackup(false) } } : {})}
         {...(updatesMounted && !remotePage() ? { updates: { open: updates, onClose: () => setUpdates(false) } } : {})}
+        {...(housekeepingMounted && !remotePage()
+          ? { housekeeping: { open: housekeeping, onClose: () => setHousekeeping(false) } }
+          : {})}
         {...(timeSettingsMounted && !remotePage()
           ? { timeSettings: { open: timeSettings, onClose: () => setTimeSettings(false) } }
           : {})}

@@ -88,6 +88,9 @@ export interface SettingsDeps {
   /** The local board's page: Updates… is offered (#617). */
   updates?(): boolean
   openUpdates?(): void
+  /** The local board's page: Housekeeping… is offered (#652). */
+  housekeeping?(): boolean
+  openHousekeeping?(): void
   /** The local board's page: Time tracking… is offered (#237). */
   timeSettings?(): boolean
   openTimeSettings?(): void
@@ -177,6 +180,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       access: deps.access?.() ?? false,
       backup: deps.backup?.() ?? false,
       updates: deps.updates?.() ?? false,
+      housekeeping: deps.housekeeping?.() ?? false,
       timeSettings: deps.timeSettings?.() ?? false,
       calendarSettings: deps.calendarSettings?.() ?? false,
       team: deps.team?.() ?? false,
@@ -221,6 +225,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'access') deps.openAccess?.()
         else if (pick?.kind === 'backup') deps.openBackup?.()
         else if (pick?.kind === 'updates') deps.openUpdates?.()
+        else if (pick?.kind === 'housekeeping') deps.openHousekeeping?.()
         else if (pick?.kind === 'timeSettings') deps.openTimeSettings?.()
         else if (pick?.kind === 'calendarSettings') deps.openCalendarSettings?.()
         else if (pick?.kind === 'team') deps.openTeam?.()
@@ -410,6 +415,7 @@ export function useSettingsMenu(
   openTeam: () => void = () => {},
   openDevices: () => void = () => {},
   openUpdates: () => void = () => {},
+  openHousekeeping: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
@@ -430,6 +436,7 @@ export function useSettingsMenu(
     openTeam,
     openDevices,
     openUpdates,
+    openHousekeeping,
   })
   const [expanded, setExpanded] = useState(false)
   const localFeatures = () => {
@@ -507,6 +514,8 @@ export function useSettingsMenu(
       openBackup: () => latest.current.openBackup(),
       updates: () => !remotePage(),
       openUpdates: () => latest.current.openUpdates(),
+      housekeeping: () => !remotePage(),
+      openHousekeeping: () => latest.current.openHousekeeping(),
       timeSettings: () => !remotePage(),
       openTimeSettings: () => latest.current.openTimeSettings(),
       calendarSettings: () => !remotePage(),

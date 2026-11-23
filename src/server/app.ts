@@ -93,6 +93,7 @@ import { startCompactor } from '../services/compactor.ts'
 import { dayWatchTick } from '../services/day-watches.ts'
 import { decisionsPayload } from '../services/decisions.ts'
 import type { Deps } from '../services/deps.ts'
+import { createHousekeeping } from '../services/housekeeping.ts'
 import { createJournal } from '../services/journal.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
@@ -160,6 +161,7 @@ import { boardEventRoutes } from './routes/board-events.ts'
 import { calendarRoutes, eventReveal } from './routes/calendar.ts'
 import { decisionsRoutes } from './routes/decisions.ts'
 import { fsRoutes } from './routes/fs.ts'
+import { housekeepingRoutes } from './routes/housekeeping.ts'
 import { journalRoutes } from './routes/journal.ts'
 import { launchRoutes } from './routes/launch.ts'
 import { linksRoutes } from './routes/links.ts'
@@ -934,6 +936,25 @@ export async function startServer({
     setup.again().catch(err => log(`setup check: ${messageOf(err)}`))
   }
 
+  // Node housekeeping (#652): off by default (zero timers until enabled in config.json).
+  const housekeeping = createHousekeeping({
+    deps,
+    items: board.items,
+    log,
+    async notifyRemote(target, text) {
+      if (!nodeUplink) return
+      const sender = board.items().find(i => !i.sleeping && i.session) ?? board.items()[0]
+      if (!sender) return
+      await nodeUplink.call({
+        cmd: 'send',
+        argv: [target, text],
+        session: sender.key,
+        lane: sender.category ?? null,
+        files: [],
+      })
+    },
+  })
+
   // The order of main's `if` chain: the first route that answers wins.
   routes.push(
     setupRoute(setup),
@@ -1070,6 +1091,8 @@ export async function startServer({
       canRestart: typeof process.send === 'function',
       changed: () => board.publish(),
     }),
+    // Settings → Housekeeping… (#652): memory guard and leftover browser tab sweep; this computer only.
+    ...housekeepingRoutes({ housekeeping, changed: () => board.publish() }),
     // A line from the page for this log (a phone's browser says what it could not do there).
     pageLogRoute(log),
     scheduleRoute(refresh),
@@ -1702,6 +1725,7 @@ export async function startServer({
       linksFollow()
       watchesFollow()
       verifyFollow()
+      housekeeping.sync()
       await board.refresh()
       ownerTick()
     },
@@ -1709,6 +1733,7 @@ export async function startServer({
       clearInterval(poll)
       clearTimeout(selfUpdateResume)
       clearInterval(selfUpdateTick)
+      housekeeping.close()
       for (const watcher of watchers) watcher.close()
       watchesWatcher?.close()
       omarchy?.close()

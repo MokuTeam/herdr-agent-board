@@ -219,7 +219,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | agents [--json] | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | update | presence [here | away | call] | journal [--since <when> | --away] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | resume --agy <conversation id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp [--agents] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | agents [--json] | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | update | housekeeping [--dry-run | status] [--json] | presence [here | away | call] | journal [--since <when> | --away] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | resume --agy <conversation id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp [--agents] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal'])
@@ -1042,6 +1042,68 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'update') return selfUpdateNow()
+
+  if (cmd === 'housekeeping') {
+    const usageErr = 'usage: board housekeeping --dry-run [--json] | board housekeeping status [--json]'
+    const allowed = new Set(['--dry-run', 'dry-run', 'status', '--json'])
+    if (rest.some(a => !allowed.has(a))) throw new Error(usageErr)
+    const asJson = rest.includes('--json')
+    const wantStatus = rest.includes('status')
+    const wantDryRun = rest.includes('--dry-run') || rest.includes('dry-run')
+    if (wantStatus && wantDryRun) throw new Error(usageErr)
+    const { formatDryRun, formatMb } = await import('../core/housekeeping.ts')
+    const port = Number(cfg.port) || 12422
+    const url = `http://127.0.0.1:${port}/api/housekeeping`
+    if (wantStatus) {
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) }).catch(() => null)
+      if (!res?.ok) throw new Error('the board is not running on this computer')
+      const view = (await res.json()) as import('../services/housekeeping.ts').HousekeepingView
+      if (asJson) {
+        console.log(JSON.stringify(view, null, 2))
+      } else {
+        const mem = view.config.memory
+        const tabs = view.config.tabs
+        const avail = view.lastMemAvailableMb !== null ? formatMb(view.lastMemAvailableMb) : 'unknown'
+        console.log(
+          `memory guard: ${mem.on ? 'on' : 'off'} (warn: ${mem.warnMb ? formatMb(mem.warnMb) : 'auto'}, action: ${mem.actionMb ? formatMb(mem.actionMb) : 'auto'}, last available: ${avail})`,
+        )
+        console.log(
+          `browser tabs: ${tabs.on ? 'on' : 'off'} (idle >= ${tabs.idleMinutes} min, every ${tabs.intervalMin} min)`,
+        )
+        if (view.log.length) {
+          console.log('recent:')
+          for (const entry of view.log.slice(0, 5)) {
+            console.log(`  ${new Date(entry.at).toISOString()} · ${entry.text}`)
+          }
+        }
+      }
+      return
+    }
+    // Try live board first, fall back to a read-only local dry run (with timers disabled) if offline.
+    const live = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({ op: 'dry-run' }),
+      signal: AbortSignal.timeout(15_000),
+    }).catch(() => null)
+    let report: import('../core/housekeeping.ts').HousekeepingDryRun
+    if (live?.ok) {
+      const body = (await live.json()) as { report: import('../core/housekeeping.ts').HousekeepingDryRun }
+      report = body.report
+    } else {
+      const { createHousekeeping } = await import('../services/housekeeping.ts')
+      const items = await collect(deps).catch(() => [])
+      const hk = createHousekeeping({ deps, items: () => items, log: () => {}, timers: false })
+      try {
+        report = await hk.dryRun()
+      } finally {
+        hk.close()
+      }
+    }
+    if (asJson) console.log(JSON.stringify(report, null, 2))
+    else for (const line of formatDryRun(report)) console.log(line)
+    return
+  }
 
   if (cmd === 'doctor') {
     const { gatherFacts } = await import('../adapters/setup-facts.ts')

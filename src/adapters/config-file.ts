@@ -393,6 +393,88 @@ export function editAutoUpdate(body: unknown): EditResult {
 }
 
 /**
+ * Node housekeeping (#652, core/housekeeping.ts), from Settings → Housekeeping…:
+ * `{ memory?: { on?, warnMb?, actionMb?, exclude? }, tabs?: { on?, idleMinutes?, intervalMin?, mokutabPort? } }`.
+ * Off by default; a value of the wrong type refuses the whole edit and writes nothing.
+ */
+export function editHousekeeping(body: unknown): EditResult {
+  const b: Raw = isRecord(body) ? body : {}
+  const memIn = b.memory === undefined ? null : isRecord(b.memory) ? b.memory : false
+  const tabsIn = b.tabs === undefined ? null : isRecord(b.tabs) ? b.tabs : false
+  if (memIn === false || tabsIn === false || (!memIn && !tabsIn))
+    return { ok: false, error: 'housekeeping: invalid settings' }
+  const optInt = (v: unknown, min: number, max: number): boolean =>
+    v === undefined || v === null || (typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max)
+  if (memIn) {
+    if (
+      (memIn.on !== undefined && typeof memIn.on !== 'boolean') ||
+      !optInt(memIn.warnMb, 256, 1_048_576) ||
+      !optInt(memIn.actionMb, 256, 1_048_576) ||
+      (memIn.notifyTo !== undefined && memIn.notifyTo !== null && typeof memIn.notifyTo !== 'string') ||
+      (memIn.exclude !== undefined &&
+        (!Array.isArray(memIn.exclude) || !memIn.exclude.every(x => typeof x === 'string')))
+    )
+      return { ok: false, error: 'housekeeping: invalid memory guard settings' }
+    if (typeof memIn.warnMb === 'number' && typeof memIn.actionMb === 'number' && memIn.warnMb < memIn.actionMb)
+      return { ok: false, error: 'housekeeping: warning threshold must be at least the action threshold' }
+  }
+  if (tabsIn) {
+    if (
+      (tabsIn.on !== undefined && typeof tabsIn.on !== 'boolean') ||
+      !optInt(tabsIn.idleMinutes, 5, 10_080) ||
+      !optInt(tabsIn.intervalMin, 5, 1440) ||
+      !optInt(tabsIn.mokutabPort, 1, 65535)
+    )
+      return { ok: false, error: 'housekeeping: invalid tab sweep settings' }
+  }
+  return editConfig(raw => {
+    const prev: Raw = isRecord(raw.housekeeping) ? structuredClone(raw.housekeeping) : {}
+    if (memIn) {
+      const m: Raw = isRecord(prev.memory) ? { ...prev.memory } : {}
+      if (typeof memIn.on === 'boolean') {
+        if (memIn.on) m.on = true
+        else delete m.on
+      }
+      if (memIn.warnMb === null) delete m.warnMb
+      else if (typeof memIn.warnMb === 'number') m.warnMb = memIn.warnMb
+      if (memIn.actionMb === null) delete m.actionMb
+      else if (typeof memIn.actionMb === 'number') m.actionMb = memIn.actionMb
+      if (memIn.notifyTo === null) delete m.notifyTo
+      else if (typeof memIn.notifyTo === 'string') {
+        const clean = memIn.notifyTo.trim().slice(0, 120)
+        if (clean) m.notifyTo = clean
+        else delete m.notifyTo
+      }
+      if (Array.isArray(memIn.exclude)) {
+        const clean = memIn.exclude.map(x => String(x).trim()).filter(Boolean)
+        if (clean.length) m.exclude = clean
+        else delete m.exclude
+      }
+      if (Object.keys(m).length) prev.memory = m
+      else delete prev.memory
+    }
+    if (tabsIn) {
+      const tb: Raw = isRecord(prev.tabs) ? { ...prev.tabs } : {}
+      if (typeof tabsIn.on === 'boolean') {
+        if (tabsIn.on) tb.on = true
+        else delete tb.on
+      }
+      if (tabsIn.idleMinutes === null) delete tb.idleMinutes
+      else if (typeof tabsIn.idleMinutes === 'number') tb.idleMinutes = tabsIn.idleMinutes
+      if (tabsIn.intervalMin === null) delete tb.intervalMin
+      else if (typeof tabsIn.intervalMin === 'number') tb.intervalMin = tabsIn.intervalMin
+      if (tabsIn.mokutabPort === null) delete tb.mokutabPort
+      else if (typeof tabsIn.mokutabPort === 'number') tb.mokutabPort = tabsIn.mokutabPort
+      if (Object.keys(tb).length) prev.tabs = tb
+      else delete prev.tabs
+    }
+    if (Object.keys(prev).length) raw.housekeeping = prev
+    else delete raw.housekeeping
+    return { ok: true }
+  })
+}
+
+/**
  * Join the peer network (#231): config.json's `team` becomes { hub, name }, its other fields kept.
  * `board team join` calls it once the hub has said welcome. The running board picks it up as any
  * edit (liveConfig).

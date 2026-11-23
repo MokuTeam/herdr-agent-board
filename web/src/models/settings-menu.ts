@@ -69,6 +69,8 @@ export interface SettingsNow {
   backup?: boolean
   /** The local board's page: Updates… is offered (#617). */
   updates?: boolean
+  /** The local board's page: Housekeeping… is offered (#652). */
+  housekeeping?: boolean
   /** The local board's page: Time tracking… is offered (#237). */
   timeSettings?: boolean
   /** The local board's page: Calendar… is offered (#328). */
@@ -400,6 +402,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
     ...(now.access ? [{ id: 'access', label: t('set.access') }] : []),
     ...(now.backup ? [{ id: 'backup', label: t('set.backup') }] : []),
     ...(now.updates ? [{ id: 'updates', label: t('set.updates') }] : []),
+    ...(now.housekeeping ? [{ id: 'housekeeping', label: t('set.housekeeping') }] : []),
     ...(now.timeSettings ? [{ id: 'timeSettings', label: t('set.time') }] : []),
     ...(now.calendarSettings ? [{ id: 'calendarSettings', label: t('set.calendar') }] : []),
     ...(now.localPaths ? [{ id: 'localPaths', label: t('set.localPaths') }] : []),
@@ -438,6 +441,7 @@ export type SettingPick =
   | { kind: 'access' }
   | { kind: 'backup' }
   | { kind: 'updates' }
+  | { kind: 'housekeeping' }
   | { kind: 'timeSettings' }
   | { kind: 'calendarSettings' }
   | { kind: 'team' }
@@ -478,6 +482,7 @@ export function settingPicked(id: string): SettingPick {
   if (id === 'access') return { kind: 'access' }
   if (id === 'backup') return { kind: 'backup' }
   if (id === 'updates') return { kind: 'updates' }
+  if (id === 'housekeeping') return { kind: 'housekeeping' }
   if (id === 'timeSettings') return { kind: 'timeSettings' }
   if (id === 'calendarSettings') return { kind: 'calendarSettings' }
   if (id === 'team') return { kind: 'team' }

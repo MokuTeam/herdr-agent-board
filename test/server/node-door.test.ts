@@ -315,6 +315,8 @@ const CLASSIFIED: Record<string, [method: string, raw: string, door: 'door' | 'r
   'POST /api/backup': [['POST', '/api/backup', 'refused']],
   'GET /api/self-update': [['GET', '/api/self-update', 'refused']],
   'POST /api/self-update': [['POST', '/api/self-update', 'refused']],
+  'GET /api/housekeeping': [['GET', '/api/housekeeping', 'refused']],
+  'POST /api/housekeeping': [['POST', '/api/housekeeping', 'refused']],
   'POST /api/log': [['POST', '/api/log', 'refused']],
   'GET /api/wake': [['GET', '/api/wake', 'refused']],
   'POST /api/wake': [['POST', '/api/wake', 'refused']],
