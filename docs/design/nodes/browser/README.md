@@ -90,6 +90,19 @@ only person on it.
 on the node has no one to type a password, so a password-protected rule would stop every install it
 tries. `SUDO_NOPASSWD=0` leaves the drop-in out.
 
+## After the first sign-in, three things to set in each profile
+
+Found on server-1, not yet in the script:
+
+- mokubot's MCP bridge is opt-in per profile (`mcpSettings.enabled`, or the legacy `mcpBridgeEnabled`, in the
+  extension's storage; the "MCP bridge" switch in the MokuBot panel). Until it is on, `netsuite_list_accounts`
+  lists nothing. It connects while a NetSuite tab is open.
+- Chrome Sync brings the account's extensions, each with processes of its own. On an 8 GB host with
+  another browser on it the two profiles pushed the machine into swap. Turn off "Extensions" in
+  Sync's settings and disable the extensions that came with it; keep mokutab and mokubot.
+- A Google Workspace account makes the profile managed: choose to merge into the existing profile, so
+  the account stays in the profile the units start.
+
 ## What the owner does by hand, once
 
 Commands on the server run as the node user: `sudo -iu agent-board`, then
