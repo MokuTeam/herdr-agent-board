@@ -202,8 +202,8 @@ async function nodeCall(
   }
 }
 
-/** What a master sends, as it goes into a line for an agent: no control or format characters. */
-const printable = (s: string): string => s.replace(/[\p{Cc}\p{Cf}]+/gu, ' ')
+/** What a master sends, as it goes into a line for an agent: no control characters (names as #619 shows them). */
+const printable = (s: string): string => s.replace(/\p{Cc}+/gu, ' ')
 
 /** A result's lines as the master sent them, printable. */
 const linesOf = (v: unknown): string[] =>
@@ -219,6 +219,21 @@ const TAKEN_MS = 1_500
 /** The most characters of the master's line a deny repeats. */
 const MASTER_LINE_MAX = 400
 
+/** The sessions the master lets this node session reach (its `board agents --json`, one view a line or all in one), or null. */
+async function masterViews(
+  raw: Record<string, unknown> | null,
+  sid: string,
+): Promise<Record<string, unknown>[] | null> {
+  const answer = await nodeCall(raw, { cmd: 'agents', argv: ['--json'], session: sid }, MASTER_LIST_MS)
+  if (!isRecord(answer) || answer.state !== 'answered' || answer.code !== 0) return null
+  try {
+    const views: unknown = JSON.parse(linesOf(answer.out).join('\n'))
+    return Array.isArray(views) ? views.filter(isRecord) : null
+  } catch {
+    return null
+  }
+}
+
 /** ListAgents on a node (#639): the master's sessions, as its `board agents` lists them for this session; null for none. */
 async function masterContext(
   raw: Record<string, unknown> | null,
@@ -226,15 +241,8 @@ async function masterContext(
 ): Promise<string | null> {
   const sid = String(input.session_id ?? '') || process.env.CLAUDE_CODE_SESSION_ID || ''
   if (!sid) return null
-  const answer = await nodeCall(raw, { cmd: 'agents', argv: ['--json'], session: sid }, MASTER_LIST_MS)
-  if (!isRecord(answer) || answer.state !== 'answered' || answer.code !== 0) return null
-  let views: unknown
-  try {
-    views = JSON.parse(linesOf(answer.out).join('\n'))
-  } catch {
-    return null
-  }
-  if (!Array.isArray(views)) return null
+  const views = await masterViews(raw, sid)
+  if (!views) return null
   // The master's own computer's (no device): this node's are listed above, another node's never come.
   const theirs = views.filter(v => isRecord(v) && v.device === null && typeof v.label === 'string' && v.self !== true)
   const plain = (v: unknown): string => printable(String(v)).slice(0, 120)
@@ -260,9 +268,19 @@ async function masterContext(
  * SendMessage on a node (#639) to a name nothing on this computer has: the master's `board send` from
  * this session, which queues it for the master's session of that name (signed with this one's key,
  * so the answer comes back here). No such session there, or the master away: Claude Code's own
- * answer, as before.
+ * answer, as before. Asked in two steps, `agents` then `send`, so only a send for a session the master
+ * has can be left unanswered and so denied as maybe queued.
  */
 async function sendToMaster(named: string, message: string, sid: string, raw: Record<string, unknown> | null) {
+  // First the read, which has no side effects: a master away or slow, or a name it has no session
+  // for (a teammate of this process), is Claude Code's at once. Only a name it has is sent.
+  const views = await masterViews(raw, sid)
+  if (!views) return
+  const { matching, targetsOf } = await import('../core/agent-send.ts')
+  const known = targetsOf(
+    views.map(v => ({ key: v.key, name: v.name, device: v.device, sleeping: v.sleeping, day: true })),
+  )
+  if (!matching(known, named).length) return
   const answer = await nodeCall(raw, { cmd: 'send', argv: [named, message], session: sid }, MASTER_SEND_MS)
   if (answer === 'late')
     return deny(

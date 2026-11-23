@@ -118,9 +118,9 @@ export function targetsOf(items: unknown): Target[] {
       activity: Math.max(num(i.activity), num(i.lastAt)),
     })
   }
-  return all.filter(
-    t => !all.some(o => movedAway(t, o)) && (t.sleeping || ((t.pane || t.day) && !all.some(o => replaced(t, o)))),
-  )
+  const kept = all.filter(t => t.sleeping || ((t.pane || t.day) && !all.some(o => replaced(t, o))))
+  // Against the cards kept only: one that is no target itself does not push out the one that is.
+  return kept.filter(t => !kept.some(o => movedAway(t, o)))
 }
 
 /** A local session on this computer running an agent other than Claude Code (`agy`, `pi`, `codex`, ...). */

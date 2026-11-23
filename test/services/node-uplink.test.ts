@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { createOutbox } from '../../src/adapters/node-outbox.ts'
 import { createDeviceStore } from '../../src/adapters/node-store.ts'
 import { listEntries } from '../../src/adapters/schedule-store.ts'
-import type { UplinkResult } from '../../src/core/node-uplink.ts'
+import { RESULT_LINE_MAX, type UplinkResult } from '../../src/core/node-uplink.ts'
 import type { LinkStatus } from '../../src/core/nodes.ts'
 import type { Item } from '../../src/core/types.ts'
 import type { ThreadCmdContext } from '../../src/entrypoints/thread-cli.ts'
@@ -601,6 +601,49 @@ describe("the master's side", () => {
       { key: `@server-1:${N1}`, agent: 'agy', device: 'server-1', self: true },
     ])
     expect(store.seenCall('server-1', 'ag-1')).toBeNull()
+  })
+
+  test('#639 board agents --json from a node: one view a line, so 400 cards come whole', async () => {
+    const dir = isolatedHome()
+    const store = createDeviceStore({ dir: join(dir, 'nodes') })
+    const N1 = '7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e'
+    const many = Array.from({ length: 400 }, (_, i) => {
+      const sid = `${String(i).padStart(8, '0')}-1111-4000-8000-000000000000`
+      return {
+        key: sid,
+        session: sid,
+        agent: 'claude',
+        name: `Session ${i} ${'x'.repeat(150)}`,
+        pane: `w1:p${i}`,
+        status: 'idle',
+      }
+    }) as Item[]
+    const posted = new Map<string, UplinkResult>()
+    const link = standIn((path, init) => {
+      if (path === '/api/node/uplink')
+        return streamOf(
+          [{ id: 'many', cmd: 'agents', argv: ['--json'], session: N1, lane: null, files: [] }],
+          init.signal,
+        )
+      posted.set(path.split('/').pop() as string, JSON.parse(String(init.body)) as UplinkResult)
+      return new Response('{}')
+    })
+    const runner = createUplinkRunner({
+      links: link.links,
+      find: () => undefined,
+      items: () => many,
+      cfg: { nodes: { id: 'laptop' } } as never,
+      log: () => {},
+      store,
+    })
+    link.changed('online')
+    await until(() => posted.size >= 1, 5000)
+    await runner.close()
+    const r = posted.get('many')
+    expect(r?.err).toEqual([])
+    expect(r?.out.every(l => l.length < RESULT_LINE_MAX)).toBe(true)
+    expect(JSON.stringify(r?.out).length).toBeGreaterThan(RESULT_LINE_MAX)
+    expect(JSON.parse(r?.out.join('\n') ?? '')).toHaveLength(400)
   })
 
   test('the stream is held only while the link is online', async () => {

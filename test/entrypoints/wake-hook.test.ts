@@ -1138,7 +1138,7 @@ test('#639 with wake not running a node still lists and reaches the master; a pl
   expect(denied(await runHook(w, 'pre-send', sendFrom('work-00', 'hi', SID_ME)))).toStartWith(
     'Queued through the board on its main computer',
   )
-  expect(calls.map(c => c.cmd)).toEqual(['agents', 'send'])
+  expect(calls.map(c => c.cmd)).toEqual(['agents', 'agents', 'send'])
 
   const plain = await nodeWorld(c => asMaster(c), { role: 'plain', wakeDown: true })
   expect(contextOf(await listOn(plain.w))).toBeNull()
@@ -1154,7 +1154,9 @@ test('#639 SendMessage on a node to the day master’s name is the master’s bo
       'not send it): queued for work-00 [4db8b7f6] on laptop: the board types it in once it is free, waking it ' +
       'first if it sleeps; the answer comes back as a board reminder. Do not send it again.',
   )
+  // The read first, then the send for a session it has.
   expect(calls).toEqual([
+    { cmd: 'agents', argv: ['--json'], session: SID_ME, lane: null, files: [] },
     { cmd: 'send', argv: ['work-00', 'Legacy-master moved, working'], session: SID_ME, lane: null, files: [] },
   ])
   // A name with a space, Cyrillic and %, by its ref too.
@@ -1170,7 +1172,8 @@ test('#639 on a node: no such session there, a master that does not take send, o
   passed(await runHook(w, 'pre-send', sendFrom('teammate-1', 'x', SID_ME)))
   passed(await runHook(w, 'pre-send', sendFrom('uds:/tmp/cc-msg-1', 'x', SID_ME)))
   passed(await runHook(w, 'pre-send', sendFrom('bridge:abc', 'x', SID_ME)))
-  expect(calls.map(c => (c.argv as string[])[0])).toEqual(['teammate-1'])
+  // A name the master has no session for is never sent: only read.
+  expect(calls.map(c => c.cmd)).toEqual(['agents'])
   expect(denied(await runHook(w, 'pre-send', sendFrom('work-00', 'я'.repeat(2001), SID_ME)))).toBe(
     'Not sent: 2001 characters, the board carries 2000; send it in parts, or write it to a file and send the path',
   )
@@ -1194,8 +1197,9 @@ test('#639 on a node: no such session there, a master that does not take send, o
   )
 })
 
-test('#639 a master that took the send and did not answer: denied as maybe queued, so it is not sent twice', async () => {
-  const { w } = await nodeWorld(async () => {
+test('#639 a master that took the send and did not answer: denied as maybe queued; one slow to list stays Claude Code’s', async () => {
+  const { w } = await nodeWorld(async c => {
+    if (c.cmd !== 'send') return asMaster(c)
     await Bun.sleep(1_700)
     return { state: 'unreachable' }
   })
@@ -1203,6 +1207,14 @@ test('#639 a master that took the send and did not answer: denied as maybe queue
     'The board\'s main computer did not answer in time: it may have queued the message for "work-00" all the same. ' +
       'Check before sending it again (board agents lists who is there).',
   )
+  // A stale link: the read comes back unreachable after the node board's wait. Nothing was sent, so a
+  // teammate's message is not held up as maybe queued.
+  const stale = await nodeWorld(async () => {
+    await Bun.sleep(1_700)
+    return { state: 'unreachable' }
+  })
+  passed(await runHook(stale.w, 'pre-send', sendFrom('teammate-1', 'x', SID_ME)))
+  expect(stale.calls.map(c => c.cmd)).toEqual(['agents'])
 })
 
 test('#639 on a node this profile’s session and a local agy session of the name stay local: nothing goes up', async () => {

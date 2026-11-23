@@ -165,10 +165,11 @@ test('#639 a session moved to a node keeps the way to answer, and to be answered
   // Before the move both ran on the laptop: Legacy-master (A) got a message from work-00 (B).
   const before = targetsOf([card(A, 'Legacy-master'), card(B, 'work-00', { pane: null, day: true })])
   const [legacy] = matching(before, 'Legacy-master')
-  if (!legacy) throw new Error('no target')
+  const [work00] = matching(before, 'work-00')
+  if (!legacy || !work00) throw new Error('no target')
   const asked = messageEntry(legacy, 'how is it going', { key: B, name: 'work-00' }, 1000)
   expect(asked.replyTo).toBe('work-00 [bbbbbbbb]')
-  const toLegacy = messageEntry(before[1] as never, 'x', { key: A, name: 'Legacy-master' }, 1000).replyTo
+  const toLegacy = messageEntry(work00, 'x', { key: A, name: 'Legacy-master' }, 1000).replyTo
 
   // After `board move --device server-2` its card is the node's, under the prefixed key; the laptop's
   // card of it may linger, older, and is no target any more.
@@ -210,4 +211,30 @@ test('#639 one session on two devices: the card with the newer activity is its t
   expect(
     matching(targetsOf([laptop({ activity: 100 }), node({ activity: 200 })]), 'Legacy-master [aaaaaaaa]'),
   ).toHaveLength(1)
+})
+
+test('#639 the moved card is weighed against targets only; one device’s cards and cards with no session are as before', () => {
+  const keys = (items: unknown[]) => targetsOf(items).map(t => t.key)
+  // Right after a move the node's card may have no pane yet: no target, so it does not push out the laptop's.
+  expect(
+    keys([
+      card(A, 'L', { activity: 100 }),
+      card(`@server-2:${A}`, 'L', { device: 'server-2', pane: null, activity: 200 }),
+    ]),
+  ).toEqual([A])
+  // Two cards of one session on one device: the pane rule, as before.
+  expect(keys([card(A, 'L', { activity: 100 }), card(`pane-w1:p1`, 'L', { session: null, activity: 200 })])).toEqual([
+    A,
+  ])
+  // No session id: never weighed across devices.
+  expect(
+    keys([
+      card('pane-w1:p1', 'L', { session: null }),
+      card('@server-2:pane-w1:p1', 'L', { session: null, device: 'server-2' }),
+    ]),
+  ).toHaveLength(2)
+  // One session, equal activity and state on two devices: both stay, listed with their computers.
+  expect(
+    keys([card(A, 'L', { activity: 5 }), card(`@server-2:${A}`, 'L', { device: 'server-2', activity: 5 })]),
+  ).toHaveLength(2)
 })
