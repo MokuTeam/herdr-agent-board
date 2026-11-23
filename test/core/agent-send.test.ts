@@ -8,6 +8,7 @@ import {
   messageEntry,
   offlineDevices,
   ownDeviceOf,
+  planSend,
   targetsOf,
 } from '../../src/core/agent-send.ts'
 import { promptOf, type ScheduleEntry } from '../../src/core/schedule-rules.ts'
@@ -158,4 +159,32 @@ test('#628 other local agents and formatted agent lines (live first, self marked
     { key: B, agent: 'agy', self: true, offline: false },
     { key: `@server-1:${C}`, agent: 'agy', device: 'server-1', sleeping: true, offline: true },
   ])
+})
+
+test('#639 a session moved to a node keeps the way to answer, and to be answered, by the name and ref signed before the move', () => {
+  // Before the move both ran on the laptop: Legacy-master (A) got a message from work-00 (B).
+  const before = targetsOf([card(A, 'Legacy-master'), card(B, 'work-00', { pane: null, day: true })])
+  const [legacy] = matching(before, 'Legacy-master')
+  if (!legacy) throw new Error('no target')
+  const asked = messageEntry(legacy, 'how is it going', { key: B, name: 'work-00' }, 1000)
+  expect(asked.replyTo).toBe('work-00 [bbbbbbbb]')
+  const toLegacy = messageEntry(before[1] as never, 'x', { key: A, name: 'Legacy-master' }, 1000).replyTo
+
+  // After `board move --device server-2` its card is the node's, under the prefixed key.
+  const after = [
+    card(`@server-2:${A}`, 'Legacy-master', { device: 'server-2' }),
+    card(B, 'work-00', { pane: null, day: true }),
+  ]
+  const answer = planSend({
+    targets: targetsOf(after),
+    to: asked.replyTo,
+    message: 'done',
+    from: { key: `@server-2:${A}`, name: 'Legacy-master', device: 'server-2' },
+    own: 'laptop',
+    now: 2000,
+  })
+  if ('error' in answer) throw new Error(answer.error)
+  expect(answer.entry).toMatchObject({ key: B, replyTo: 'Legacy-master [aaaaaaaa]', fromDevice: 'server-2' })
+  // And whoever kept its reply address from before the move still finds it on the node.
+  expect(matching(targetsOf(after), toLegacy).map(t => t.key)).toEqual([`@server-2:${A}`])
 })

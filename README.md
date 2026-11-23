@@ -2020,6 +2020,11 @@ from <this computer>, answer with board send "<name> [<ref>]" "<your answer>"] <
 whose pane an awake card of another session holds now is not offered. A name nothing on this
 computer has makes SendMessage read the board's payload once, and a name a node's session shares
 with something Claude Code alone knows (a teammate in the same process) goes to the node's.
+On a node (config.json `node`, #639) it is the other way round: ListAgents also lists the master's
+sessions, as its `board agents` gives them (MokuPilot's day among them), and `SendMessage` to a
+name nothing on the node has is the master's `board send` from that session, so the answer comes
+back to it. A name the master has no session for, or a master that is away, leaves the call to
+Claude Code as before.
 Without `nodes` or local non-Claude agent setups (`launch.agy`/`pi`/`codex`, `codexHome`, or
 Antigravity's `~/.gemini` files, #628) neither hook asks the board anything. Where local non-Claude
 sessions (`agy`, `pi`, `codex`) are present on this machine, `ListAgents` lists them with their

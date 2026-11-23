@@ -428,8 +428,12 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     }
     const { agentViewsOf, formatAgentLines, targetsOf } = await import('../../core/agent-send.ts')
     const targets = targetsOf(o.items()).filter(t => t.device === null || t.device === id)
-    if (call.argv.includes('--json'))
-      return { code: 0, out: [JSON.stringify(agentViewsOf(targets, { selfKey: key }))], err: [] }
+    // One view a line (#639): a result's line is cut at RESULT_LINE_MAX, which one array of a
+    // few hundred cards would pass; the lines joined are the same JSON array.
+    if (call.argv.includes('--json')) {
+      const views = agentViewsOf(targets, { selfKey: key }).map(v => JSON.stringify(v))
+      return { code: 0, out: ['[', ...views.map((v, i) => (i < views.length - 1 ? `${v},` : v)), ']'], err: [] }
+    }
     const own = nodesConfig(o.cfg.nodes)?.id ?? ''
     const lines = formatAgentLines(targets, { selfKey: key, own })
     return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: [] }

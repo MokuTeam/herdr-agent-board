@@ -31,7 +31,7 @@ export interface FakeWakeOptions {
   /** GET /api/board's answer (#619): the web board's payload, for a config.json whose `port` is this one's. */
   board?: unknown
   /** POST /api/node/call's answer for the body (#639): a node's board passing a call to its master. */
-  nodeCall?: (body: unknown) => unknown
+  nodeCall?: (body: unknown) => unknown | Promise<unknown>
 }
 
 export interface FakeWake {
@@ -93,7 +93,7 @@ export async function fakeWake(o: FakeWakeOptions = {}): Promise<FakeWake> {
     if (req.method === 'POST' && path === '/wake') return json(o.wake ? o.wake(target) : { ok: true })
     if (req.method === 'POST' && path === '/sleep') return json(o.sleep ? o.sleep(target) : { ok: true })
     if (req.method === 'GET' && path === '/api/board' && o.board !== undefined) return json(o.board)
-    if (req.method === 'POST' && path === '/api/node/call' && o.nodeCall) return json(o.nodeCall(body))
+    if (req.method === 'POST' && path === '/api/node/call' && o.nodeCall) return json(await o.nodeCall(body))
     return new Response(null, { status: 404 })
   }
   function listen(port: number): ReturnType<typeof Bun.serve> {

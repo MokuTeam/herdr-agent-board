@@ -596,7 +596,7 @@ describe("the master's side", () => {
       err: [],
     })
     expect(posted.get('ag-1')?.out.join('\n')).not.toContain('Other Node Secret')
-    expect(JSON.parse(posted.get('ag-2')?.out[0] ?? '[]')).toMatchObject([
+    expect(JSON.parse(posted.get('ag-2')?.out.join('\n') ?? '[]')).toMatchObject([
       { key: ME_M, agent: 'claude', self: false },
       { key: `@server-1:${N1}`, agent: 'agy', device: 'server-1', self: true },
     ])

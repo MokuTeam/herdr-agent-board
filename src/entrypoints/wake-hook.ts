@@ -16,12 +16,12 @@
 // shown, both go as before. With `nodes` in config.json (#619), the sessions on the board's nodes
 // come last: ListAgents lists them from the board's payload, and SendMessage to a name only a node's
 // session has (nothing on this computer has it) is queued by the board for its key, which the
-// scheduler sends through the node. Without `nodes` the board is asked nothing. On a node (config.json
-// `node`, #639) both go the other way, up the node's link to the master (services/node/uplink.ts):
-// ListAgents lists the master's sessions as its `board agents` gives them, and SendMessage to a name
-// nothing on this computer has is the master's `board send` from this session. Without `node` no
-// call goes up. config.json's kill
-// switch is read first: wake off, or a config.json that does not parse, and wake is asked nothing.
+// scheduler sends through the node. Without `nodes` the board is asked nothing. On a node
+// (config.json `node`, #639) both go the other way, up the node's link to the master
+// (services/node/uplink.ts): ListAgents lists the master's sessions as its `board agents` gives them,
+// and SendMessage to a name nothing on this computer has is the master's `board send` from this
+// session. Without `node` no call goes up. config.json's kill switch is read first: wake off, or a
+// config.json that does not parse, and wake is asked nothing.
 // Wake not running or not answering, or anything else amiss: silent, and the tool runs as it would.
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -183,6 +183,7 @@ async function nodeCall(
   body: { cmd: string; argv: string[]; session: string },
   timeoutMs: number,
 ): Promise<Record<string, unknown> | 'late' | null> {
+  const started = Date.now()
   try {
     const res = await fetch(`http://127.0.0.1:${Number(raw?.port) || 12422}/api/node/call`, {
       method: 'POST',
@@ -191,6 +192,9 @@ async function nodeCall(
       signal: AbortSignal.timeout(timeoutMs),
     })
     const answer: unknown = res.ok ? await res.json() : null
+    // The node's board says "unreachable" at once when no master listens, and after its wait
+    // (services/node/uplink.ts READ_MS) when one took the call and did not answer: that one may have run it.
+    if (isRecord(answer) && answer.state === 'unreachable' && Date.now() - started > TAKEN_MS) return 'late'
     return isRecord(answer) ? answer : null
   } catch (err) {
     // Taken and not answered in time: the master may have run it all the same.
@@ -198,13 +202,22 @@ async function nodeCall(
   }
 }
 
+/** What a master sends, as it goes into a line for an agent: no control or format characters. */
+const printable = (s: string): string => s.replace(/[\p{Cc}\p{Cf}]+/gu, ' ')
+
 /** A result's lines as the master sent them, printable. */
 const linesOf = (v: unknown): string[] =>
-  Array.isArray(v) ? v.filter((l): l is string => typeof l === 'string').map(l => l.replace(/\p{Cc}+/gu, ' ')) : []
+  Array.isArray(v) ? v.filter((l): l is string => typeof l === 'string').map(printable) : []
 
-/** How long ListAgents waits for the master's list (its hook has 10 s in all); SendMessage for its `send`. */
+/**
+ * How long ListAgents waits for the master's list (its hook has 10 s in all); SendMessage for its
+ * `send`, past the node board's own wait; an "unreachable" that came later than TAKEN_MS was taken.
+ */
 const MASTER_LIST_MS = 5_000
 const MASTER_SEND_MS = 15_000
+const TAKEN_MS = 1_500
+/** The most characters of the master's line a deny repeats. */
+const MASTER_LINE_MAX = 400
 
 /** ListAgents on a node (#639): the master's sessions, as its `board agents` lists them for this session; null for none. */
 async function masterContext(
@@ -224,10 +237,7 @@ async function masterContext(
   if (!Array.isArray(views)) return null
   // The master's own computer's (no device): this node's are listed above, another node's never come.
   const theirs = views.filter(v => isRecord(v) && v.device === null && typeof v.label === 'string' && v.self !== true)
-  const plain = (v: unknown): string =>
-    String(v)
-      .replace(/\p{Cc}+/gu, ' ')
-      .slice(0, 120)
+  const plain = (v: unknown): string => printable(String(v)).slice(0, 120)
   const row = (v: Record<string, unknown>): string =>
     `  ${plain(v.label)}${typeof v.agent === 'string' && v.agent !== 'claude' ? `  ·  ${plain(v.agent)}` : ''}  ·  ${plain(v.status)}`
   const live = theirs.filter(v => v.sleeping !== true)
@@ -253,8 +263,6 @@ async function masterContext(
  * answer, as before.
  */
 async function sendToMaster(named: string, message: string, sid: string, raw: Record<string, unknown> | null) {
-  // Claude Code's own addresses (a bridge's or a socket's) are never a name on the board.
-  if (/^(uds|bridge):/i.test(named.trim())) return
   const answer = await nodeCall(raw, { cmd: 'send', argv: [named, message], session: sid }, MASTER_SEND_MS)
   if (answer === 'late')
     return deny(
@@ -262,15 +270,19 @@ async function sendToMaster(named: string, message: string, sid: string, raw: Re
         `the same. Check before sending it again (board agents lists who is there).`,
     )
   if (!isRecord(answer) || answer.state !== 'answered') return
-  const out = linesOf(answer.out).join(' ')
-  const why = linesOf(answer.err).join(' ')
+  const out = linesOf(answer.out).join(' ').slice(0, MASTER_LINE_MAX)
+  const why = linesOf(answer.err).join(' ').slice(0, MASTER_LINE_MAX)
   if (answer.code === 0)
     return deny(
       `Queued through the board on its main computer (Claude Code reaches only this computer's sessions, so it ` +
         `did not send it): ${out.replace(/^ok · /, '')}. Do not send it again.`,
     )
-  if (/^no session "/.test(why) || why.startsWith('that is this session')) return
-  deny(`Not sent: ${why || "the board's main computer refused it"}`)
+  // Said only when the master has a session of that name and did not send to it (core/agent-send.ts
+  // planSend): several fit, the text does not, the schedule did not take it. Anything else (no such
+  // session there, a master that does not take `send` from a node, a call the node's board refused)
+  // is Claude Code's, as before: the name may be a teammate of this process.
+  if (/fits more than one session \(|^not sent: |^the board could not take the message/.test(why))
+    deny(`Not sent: ${why.replace(/^not sent: /, '')}`)
 }
 
 const deny = (reason: string): void =>
@@ -516,6 +528,8 @@ async function sendToBoardTarget(named: string, input: Record<string, unknown>, 
   const hasNodes = isRecord(raw?.nodes)
   const onNode = isRecord(raw?.node)
   if (!hasNodes && !onNode && !hasLocalOtherAgents(raw)) return
+  // Claude Code's own addresses (a bridge's or a socket's) are never a name on the board.
+  if (onNode && /^(uds|bridge):/i.test(named.trim())) return
   const message = isRecord(input.tool_input) ? input.tool_input.message : undefined
   if (typeof message !== 'string') return
   const sid = String(input.session_id ?? '') || process.env.CLAUDE_CODE_SESSION_ID || ''
@@ -650,10 +664,10 @@ async function main(): Promise<void> {
     api(settings.port, '/awake', null, 3000).catch(() => null),
   ])
   const sleeping = entries(list)
-  const onMaster = await master
   const say = (context: string): void =>
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }))
   if (!sleeping) {
+    const onMaster = await master
     if (onMaster) say(onMaster)
     return
   }
@@ -669,6 +683,7 @@ async function main(): Promise<void> {
   const payload = await boardPayload(raw).catch(() => null)
   const localOthers = await localOtherAgentsContext(payload).catch(() => null)
   const onNodes = await nodesContext(payload, raw).catch(() => null)
+  const onMaster = await master
   const context = [ownPart, others, localOthers, onNodes, onMaster].filter(Boolean).join('\n\n')
   if (context) say(context)
 }
