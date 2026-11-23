@@ -18,6 +18,7 @@ import { secretsConfig, usableSinks } from '../core/secrets.ts'
 import { todosConfig, todosNews } from '../core/todos.ts'
 import { watchesConfig } from '../core/watches.ts'
 import { threadsConfig } from '../core/work-threads.ts'
+import { reportAgySession } from '../services/wake/agy.ts'
 
 function emit(context: string | null): void {
   if (context) {
@@ -53,6 +54,11 @@ async function main(): Promise<void> {
     if (agent.session !== sid) return emit(null)
   } else if (event === 'PreInvocation' && invNum > 1) {
     return emit(null)
+  } else if (event === 'SessionStart') {
+    // herdr's own agy hook runs only on PreInvocation; report on SessionStart so woken/started
+    // panes expose their conversation UUID immediately before the first prompt (#631).
+    const transcript = typeof input.transcriptPath === 'string' && input.transcriptPath ? input.transcriptPath : null
+    await reportAgySession(pane, sid, transcript).catch(() => {})
   }
 
   const card = readCard(sid)

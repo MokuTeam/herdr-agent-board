@@ -438,7 +438,7 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     own &&
       !it.sleeping &&
       claude &&
-      it.agent === 'claude' && {
+      (it.agent === 'claude' || it.agent === 'agy') && {
         id: 'restart',
         label: t('sheet.restart'),
         ...herdr(ctx.restarting ? { disabled: true, reason: t('sheet.restartPending') } : {}),

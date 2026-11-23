@@ -5,7 +5,7 @@
 // separate plugin's router should it still hold the port.
 import { dirname, join } from 'node:path'
 import { knobMs } from '../adapters/pacing.ts'
-import { peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
+import { peekAgySleepers, peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
 import { t } from '../core/lang.ts'
 import { createHerdrWake, type SleepingSession, type SleepProvider } from './herdr-wake.ts'
 
@@ -77,6 +77,18 @@ function fileSleepers(sessionsFile: string): SleepingSession[] {
       slept_at: new Date(s.slept_at).toISOString(),
       exited: false,
       agent: 'pi',
+      cwd: s.cwd,
+      fromFile: true,
+    })
+  for (const s of Object.values(peekAgySleepers(join(dirname(sessionsFile), 'wake-agy.json'))))
+    list.push({
+      name: s.name,
+      pane: s.pane,
+      session: s.session,
+      workspace: s.workspaceLabel ?? '',
+      slept_at: new Date(s.slept_at).toISOString(),
+      exited: false,
+      agent: 'agy',
       cwd: s.cwd,
       fromFile: true,
     })

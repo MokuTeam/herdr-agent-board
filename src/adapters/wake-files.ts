@@ -26,6 +26,7 @@ import {
 } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { asSavedBoard } from '../core/board-pane.ts'
+import { type AgySleepers, asAgySleepers } from '../core/wake/agy.ts'
 import { asPiSleepers, type PiSleepers } from '../core/wake/pi.ts'
 import { asWakeSessions, type WakeSessions } from '../core/wake/sessions.ts'
 import { asWakeStatus, type WakeStatusFile } from '../core/wake/status.ts'
@@ -36,6 +37,8 @@ import { boardFile, stateDir } from './paths.ts'
 export const wakeSessionsFile = (): string => join(stateDir(), 'wake-sessions.json')
 /** The pi sessions asleep (#178), beside the session file; one writer, the wake process, as it. */
 export const wakePiFile = (): string => join(stateDir(), 'wake-pi.json')
+/** The Antigravity (`agy`) sessions asleep (#631), beside the session file; one writer, the wake process. */
+export const wakeAgyFile = (): string => join(stateDir(), 'wake-agy.json')
 export const wakeLogFile = (): string => join(stateDir(), 'wake.log')
 export const wakeStatusFile = (): string => join(stateDir(), 'wake-status.json')
 export const wakeStartLockFile = (): string => join(stateDir(), 'wake-start.lock')
@@ -166,6 +169,59 @@ export function peekPiSleepers(file = wakePiFile()): PiSleepers {
 
 /** Atomic, as saveWakeSessions. */
 export function savePiSleepers(sleepers: PiSleepers, file = wakePiFile()): void {
+  mkdirSync(dirname(file), { recursive: true })
+  replaceFile(file, `${JSON.stringify(sleepers, null, 1)}\n`)
+}
+
+/**
+ * The wake process's read of its Antigravity (`agy`) sleepers (#631), as readPiSleepers reads pi's:
+ * {} when there is none; a broken file is set aside, partial drops are copied aside first.
+ */
+export function readAgySleepers(file = wakeAgyFile(), log: (text: string) => void = () => {}): AgySleepers {
+  const text = readText(file)
+  if (text === null) return {}
+  const raw = parsed(text)
+  const sleepers = asAgySleepers(raw)
+  if (!sleepers) {
+    const aside = brokenName(file)
+    try {
+      renameWithRetry(file, aside)
+    } catch (err) {
+      log(`${file} does not read as agy sleepers and could not be set aside: ${messageOf(err)}`)
+      throw err
+    }
+    log(`${file} did not read as agy sleepers: set aside as ${aside}, wake starts with none`)
+    return {}
+  }
+  const keys = raw && typeof raw === 'object' ? Object.keys(raw) : []
+  const dropped = keys.filter(key => !Object.hasOwn(sleepers, key))
+  if (dropped.length === 0) return sleepers
+  const copy = brokenName(file)
+  try {
+    copyFileSync(file, copy, constants.COPYFILE_EXCL)
+  } catch (err) {
+    log(
+      `${file}: ${dropped.join(', ')} do not read as agy sleepers, and the file could not be copied aside: ${messageOf(err)}`,
+    )
+    throw err
+  }
+  log(
+    `${file}: ${dropped.join(', ')} did not read as agy sleepers and are left out; the file as it was is kept as ${copy}`,
+  )
+  return sleepers
+}
+
+/** The board's and `board resume --agy`'s read of the agy sleepers: {} for a missing or broken file; never writes. */
+export function peekAgySleepers(file = wakeAgyFile()): AgySleepers {
+  try {
+    return asAgySleepers(parsed(readText(file) ?? '{}')) ?? {}
+  } catch {
+    return {}
+  }
+}
+
+/** Atomic, as saveWakeSessions. */
+export function saveAgySleepers(sleepers: AgySleepers, file = wakeAgyFile()): void {
   mkdirSync(dirname(file), { recursive: true })
   replaceFile(file, `${JSON.stringify(sleepers, null, 1)}\n`)
 }

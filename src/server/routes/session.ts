@@ -35,6 +35,7 @@ import {
   sleepSession,
   wake,
   wakeAnswers,
+  wakeSleepsAgy,
 } from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
 import { askArchive, undoMs } from '../../services/archive.ts'
@@ -279,7 +280,8 @@ function card(item: Item, body: Body): Result {
  * anything is scheduled.
  */
 async function restart(deps: SessionApp['deps'], item: Item): Promise<Result> {
-  if (!item.session || !item.pane || item.agent !== 'claude')
+  const agentOk = item.agent === 'claude' || (isAgyItem(item) && wakeSleepsAgy(deps))
+  if (!item.session || !item.pane || !agentOk)
     return { ok: false, error: t('err.restart.notClaude', { name: item.name }) }
   if (item.sleeping) return { ok: false, error: t('err.restart.asleep', { name: item.name }) }
   const up = await wakeAnswers(deps)

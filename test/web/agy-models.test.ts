@@ -64,20 +64,26 @@ describe('Antigravity UI models and brief', () => {
     expect(headButtons(agyBare, t).archiveHidden).toBe(true)
     expect(headButtons(codex, t).archiveHidden).toBe(true)
     expect(headButtons(claude, t).archiveHidden).toBe(false)
-    // Claude-only actions remain hidden for agy.
+    // Restart is enabled for agy (#631); Claude-only actions (MokuPilot, Fork) remain hidden.
     expect(headButtons(agy, t, true, [], true)).toMatchObject({
-      restartHidden: true,
+      sleepHidden: false,
+      restartHidden: false,
       mokupilotHidden: true,
       forkHidden: true,
     })
+    expect(headButtons(agyBare, t).restartHidden).toBe(true)
+    expect(headButtons(codex, t).restartHidden).toBe(true)
 
     const idsOf = (it: Item) =>
       cardMenu(it, { t, canMutate: true, canEdit: true, column: 'idle', category: 'other' })
         .filter(e => !isSeparator(e))
         .map(e => e.id)
     expect(idsOf(agy)).toContain('archive')
+    expect(idsOf(agy)).toContain('restart')
     expect(idsOf(agyBare)).not.toContain('archive')
+    expect(idsOf(agyBare)).not.toContain('restart')
     expect(idsOf(codex)).not.toContain('archive')
+    expect(idsOf(codex)).not.toContain('restart')
 
     expect(claudeRename(agy, true, t)).toEqual({ why: '' })
     expect(claudeRename(agyBare, true, t)).toBeNull()

@@ -17,8 +17,10 @@ import { reportToDay, runningDay } from '../adapters/mokupilot-day.ts'
 import { pause } from '../adapters/pacing.ts'
 import { possibleProfilePanes, provenProfilePanes } from '../adapters/profile-panes.ts'
 import { boardOnPath } from '../adapters/resume-report.ts'
-import { peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
+import { peekAgySleepers, peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
 import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
+import { AGY_AGENT, isAgyItem } from '../core/agy.ts'
+import { agyDraft } from '../core/dialogs/agy-dialogs.ts'
 import { inputDraft } from '../core/dialogs/input-box.ts'
 import { piDraft } from '../core/dialogs/pi-dialogs.ts'
 import { parseDialog } from '../core/dialogs/questions.ts'
@@ -44,6 +46,7 @@ import { herdrWakeAnswers, type SleepProvider } from '../integrations/herdr-wake
 import { raiseTerminal } from '../integrations/terminal-window.ts'
 import type { BoardWake } from '../integrations/wake.ts'
 import type { Deps } from './deps.ts'
+import { defaultAgyOps, wakeAgy } from './wake/agy.ts'
 import { followFiles } from './wake/follow.ts'
 import { PROFILE_NOT_PLAIN, type WakeOutcome, wakeInPane } from './wake/pane-ops.ts'
 import { defaultPiOps, readPiTail, wakePi } from './wake/pi.ts'
@@ -86,6 +89,41 @@ function newWake(deps: Pick<Deps, 'cfg' | 'wake'>): BoardWake | null {
 
 /** Whether the wake the board talks to puts pi sessions to sleep (#178): the board's own; the separate plugin does not. */
 export const wakeSleepsPi = (deps: Pick<Deps, 'cfg' | 'wake'>): boolean => newWake(deps) !== null
+
+/** Whether the wake the board talks to puts Antigravity (`agy`) sessions to sleep (#631): the board's own; the separate plugin does not. */
+export const wakeSleepsAgy = (deps: Pick<Deps, 'cfg' | 'wake'>): boolean => newWake(deps) !== null
+
+/**
+ * An Antigravity (`agy`) session can be woken (#631): `board` on PATH, which `board resume --agy`
+ * runs, and its conversation still on disk.
+ */
+function canWakeAgy(deps: Deps, item: Pick<Item, 'name'> & Partial<Pick<Item, 'session'>>): WakeGuard {
+  if (!boardOnPath()) return { ok: false, refused: true, error: t('err.canWake.board', { name: item.name }) }
+  if (!item.session || !deps.agy.hasConversation(item.session))
+    return { ok: false, refused: true, error: t('err.agyConversationGone', { name: item.name }) }
+  return { ok: true }
+}
+
+/**
+ * The board wakes a sleeping `agy` session itself, as wake does (`services/wake/agy.ts`), while
+ * wake does not answer: from `wake-agy.json` (read only), in its own pane or a new tab.
+ */
+async function wakeAgyHere(deps: Deps, item: Item): Promise<ActionResult> {
+  const sleeper = item.session ? peekAgySleepers()[item.session] : undefined
+  if (!sleeper) return { ok: false, error: t('err.wake', { name: item.name, why: t('err.sleep.unknownToWake') }) }
+  const timeoutMs = wakeConfig(deps.cfg.wake).wakeTimeoutSec * 1000
+  try {
+    const outcome = await wakeAgy(defaultAgyOps(cliWakeHerdr, deps.agy), sleeper, await snapshot(), {
+      timeoutMs,
+      log: text => deps.log(`wake: ${text}`),
+    })
+    if (!outcome.ok) return { ok: false, error: t('err.wake', { name: item.name, why: outcome.error }) }
+    deps.log(`wake: woke ${item.name} (agy) in ${outcome.pane} from the board`)
+    return { ok: true, pane: outcome.pane }
+  } catch (err) {
+    return { ok: false, herdrDown: true, error: t('err.wake', { name: item.name, why: messageOf(err) }) }
+  }
+}
 
 /**
  * A sleeping pi session can be woken (#178): `board` on PATH, which the wake line runs, and its
@@ -280,6 +318,8 @@ export async function checkWake(
 ): Promise<WakeGuard> {
   // A sleeping pi session wakes in the account it slept with, which wake kept (#178).
   if (item.sleeping && isPiItem(item)) return canWakePi(item)
+  // An Antigravity (`agy`) session needs no Claude profile, only `board` on PATH and its conversation (#631).
+  if (isAgyItem(item)) return canWakeAgy(deps, item)
   if (offFileSleeper(deps.cfg, item) || newWake(deps)) return canWakeAgain(deps, item, set)
   // The board's records first, without asking herdr: the board's own profile in a pane no record
   // puts in another one wakes with the same herdr calls as before profiles.
@@ -315,6 +355,7 @@ export async function wake(deps: Deps, item: Item): Promise<ActionResult> {
   const check = await checkWake(deps, item)
   if (!check.ok) return { ok: false, error: check.error }
   if (isPiItem(item)) return wakePiItem(deps, item)
+  if (isAgyItem(item)) return wakeAgyItem(deps, item)
   if (offFileSleeper(deps.cfg, item)) return wakeHere(deps, item)
   const fresh = newWake(deps)
   if (!fresh) return deps.wake.wake(item)
@@ -336,6 +377,20 @@ async function wakePiItem(deps: Deps, item: Item): Promise<ActionResult> {
     if (reach === 'up') return fresh.wake(item)
   }
   return wakePiHere(deps, item)
+}
+
+/**
+ * A sleeping Antigravity (`agy`) session woken (#631): by the board's wake while it answers, else
+ * by the board itself (`wakeAgyHere`); never while wake took the question but is slow to answer.
+ */
+async function wakeAgyItem(deps: Deps, item: Item): Promise<ActionResult> {
+  const fresh = newWake(deps)
+  if (fresh) {
+    const reach = await fresh.reach()
+    if (reach === 'slow') return { ok: false, wakeBusy: true, error: t('err.wakeBusy', { name: item.name }) }
+    if (reach === 'up') return fresh.wake(item)
+  }
+  return wakeAgyHere(deps, item)
 }
 
 /**
@@ -374,9 +429,10 @@ export async function wakeAnswers(
  */
 export async function readyToSleep(
   deps: Deps,
-  item: Pick<Item, 'pane' | 'session' | 'profile' | 'profileFolder'>,
+  item: Pick<Item, 'pane' | 'session' | 'profile' | 'profileFolder'> & Partial<Pick<Item, 'agent'>>,
 ): Promise<{ ok: true; status: AgentStatus } | { ok: false; why: string; profile?: true }> {
   if (isPiItem(item)) return readyPiToSleep(item)
+  if (isAgyItem(item)) return readyAgyToSleep(deps, item)
   const set = deps.profiles()
   const dir = itemProfile(item, set.list)?.dir ?? item.profileFolder
   if (!dir) return { ok: false, why: t('err.wakeProfile', { profile: profileLabel(item, set) }), profile: true }
@@ -414,6 +470,33 @@ async function readyPiToSleep(
     const lines = item.session ? readPiTail(item.session) : null
     if (!lines || !piTurnOver(lines)) return { ok: false, why: 'busy' }
     const draft = piDraft(await herdrText(['pane', 'read', item.pane ?? '', '--source', 'visible'], 10_000))
+    if (draft === null) return { ok: false, why: 'dialog' }
+    return draft === '' ? { ok: true, status: agent.status } : { ok: false, why: 'draft' }
+  } catch (err) {
+    return { ok: false, why: t('err.restart.herdr', { why: messageOf(err) }) }
+  }
+}
+
+/**
+ * readyToSleep for an Antigravity (`agy`) session (#631): herdr shows it in its pane on its
+ * conversation UUID and not at work nor in a dialog, no subagent helpers are running, and nothing
+ * is typed in its input box. No Claude profile is needed.
+ */
+async function readyAgyToSleep(
+  deps: Deps,
+  item: Pick<Item, 'pane' | 'session'>,
+): Promise<{ ok: true; status: AgentStatus } | { ok: false; why: string }> {
+  try {
+    const agent = item.pane ? await agentGet(item.pane) : null
+    if (!agent || agent.kind !== AGY_AGENT || agent.session !== (item.session ?? null))
+      return { ok: false, why: 'gone' }
+    if (agent.status === 'blocked') return { ok: false, why: 'dialog' }
+    if (agent.status === 'working') return { ok: false, why: 'busy' }
+    if (item.session && deps.agy.sessionHelpers(item.session).helpers.some(h => h.status === 'running'))
+      return { ok: false, why: 'tasks' }
+    const draft = agyDraft(
+      await herdrText(['agent', 'read', item.pane ?? '', '--source', 'recent', '--lines', '40', '--ansi'], 10_000),
+    )
     if (draft === null) return { ok: false, why: 'dialog' }
     return draft === '' ? { ok: true, status: agent.status } : { ok: false, why: 'draft' }
   } catch (err) {
@@ -501,7 +584,7 @@ export async function focus(
 async function shownDraft(pane: string, kind: string): Promise<string | null> {
   const screen = await herdrText(['agent', 'read', pane, '--source', 'visible', '--ansi'], 10_000).catch(() => null)
   if (screen === null || parseDialog(screen, kind)) return null
-  return kind === PI_AGENT ? piDraft(screen) : inputDraft(screen)
+  return kind === PI_AGENT ? piDraft(screen) : kind === AGY_AGENT ? agyDraft(screen) : inputDraft(screen)
 }
 
 /** How long sendAnyway waits for its text to show in the input box before it gives up on Enter. */
@@ -612,7 +695,7 @@ export async function send(
     const agent = named ? await namedAgent(pane, expectedSession) : await agentGet(pane)
     // Recheck after wake too: the pane may now host a different session.
     const before = refused(agent)
-    const kind = agent?.kind === 'claude' || agent?.kind === PI_AGENT ? agent.kind : null
+    const kind = agent?.kind === 'claude' || agent?.kind === PI_AGENT || agent?.kind === AGY_AGENT ? agent.kind : null
     if (before?.dialog && look && kind && boundTerminal === undefined && !probe) {
       // Only an empty input box with no dialog over it: text in the box may be a frame the board
       // does not know, or the user's own.
@@ -646,6 +729,22 @@ export async function send(
       }
       // The screen read can take time. Do not send to a replacement session, or one herdr now
       // knows is blocked (or working, for an idle-only reminder).
+      const fresh = await agentGet(pane)
+      const after = refused(fresh)
+      if (after) return after
+      if (fresh?.kind !== agent?.kind) return { ok: false, error: t('err.sessionChanged', { name: item.name }) }
+    } else if ((agent?.kind === AGY_AGENT || item.agent === AGY_AGENT) && guardDraft) {
+      // Scheduled reminders and restart notes must not collide with unsent text or a dialog in agy.
+      const draft = agyDraft(await herdrText(['agent', 'read', pane, '--source', 'visible', '--ansi'], 10_000))
+      if (draft === null || draft !== '') {
+        return {
+          ok: false,
+          busy: true,
+          draft: draft !== null,
+          dialog: draft === null,
+          error: t(draft === null ? 'err.blocked' : 'err.draft', { name: item.name }),
+        }
+      }
       const fresh = await agentGet(pane)
       const after = refused(fresh)
       if (after) return after

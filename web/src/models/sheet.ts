@@ -163,7 +163,7 @@ export function headButtons(
     wakeHidden: !it.sleeping,
     sleepHidden: !!it.sleeping || !it.session || away,
     sleepTitle: t(inTurn(it) ? 'sheet.sleepBusy' : 'sheet.sleepHint'),
-    restartHidden: !!it.sleeping || !it.session || it.agent !== 'claude' || away,
+    restartHidden: !!it.sleeping || !it.session || (it.agent !== 'claude' && it.agent !== 'agy') || away,
     restartTitle: pending ? `${t('sheet.restartPending')}. ${restartText(pending, t)}` : t('sheet.restartHint'),
     // A session of another device (#502) has no call from this computer's MokuPilot.
     mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude') || away || !!it.device,

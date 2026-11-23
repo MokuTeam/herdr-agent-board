@@ -43,6 +43,7 @@ import { type TelegramTarget, telegramTarget, type WakeConfig, wakeConfig, wakeS
 import type { RouteItem } from '../core/wake/route.ts'
 import type { TelegramStatus } from '../core/wake/status.ts'
 import { defaultDeps } from '../services/deps.ts'
+import { defaultAgyOps } from '../services/wake/agy.ts'
 import { createWakeEngine, type WakeEngine } from '../services/wake/engine.ts'
 import { PORT_TAKEN_EXIT, RESTART_EXIT } from '../services/wake/supervisor.ts'
 import { createTelegram, type Telegram } from '../services/wake/telegram.ts'
@@ -149,6 +150,7 @@ try {
     // On its way out, wake counts as off for the engine: its reaper starts no other sleep.
     settings: () => (leaving ? { ...settings(), enabled: false } : settings()),
     sessionsFile: wakeSessionsFile(),
+    agy: defaultAgyOps(cliWakeHerdr, deps.agy),
     boardOnPath: () => boardOnPath(),
     scheduled: path => scheduledJobs(path),
     log,

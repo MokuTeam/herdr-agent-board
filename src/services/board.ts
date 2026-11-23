@@ -14,7 +14,7 @@ import { callAgentsGate, taskBoard } from '../adapters/mokupilot-call.ts'
 import { dayGate } from '../adapters/mokupilot-day.ts'
 import { contextDir } from '../adapters/paths.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
-import { isAgyItem } from '../core/agy.ts'
+import { AGY_AGENT, isAgyItem, isAgySession } from '../core/agy.ts'
 import { attentionOf, busy, columnOf, isAgentStatus, PINS } from '../core/board.ts'
 import { besideParents, type CallAgent, type CallView } from '../core/call-agent.ts'
 import { categoryFor } from '../core/categories.ts'
@@ -31,6 +31,7 @@ import { sessionProfile } from '../core/profiles.ts'
 import { pendingOf, requestsOf, type SecretView, secretViews } from '../core/secrets.ts'
 import { numberTodos, type Todo, todosOf } from '../core/todos.ts'
 import type { AgentStatus, Attention, Card, Config, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
+import { agySleeperPane } from '../core/wake/agy.ts'
 import { piSleeperPane } from '../core/wake/pi.ts'
 import { archivedFiles, getArchived, hides, isArchived, settleReturned } from './archive.ts'
 import type { Deps } from './deps.ts'
@@ -549,6 +550,31 @@ export async function collect(
         workspace: (ws === undefined ? undefined : labels.get(ws)) ?? s.workspace ?? '',
         agent: PI_AGENT,
         name: name || piSessionId(s.session).slice(0, 8),
+        cwd,
+        status: 'sleeping',
+        sleeping: true,
+        focused: false,
+        activity: Date.parse(s.slept_at ?? '') || 0,
+        ...(s.fromFile && { fromFile: true }),
+      })
+      continue
+    }
+    if (s.agent === AGY_AGENT) {
+      // An Antigravity (`agy`) session asleep (#631), from wake's answer or its file: shown whether
+      // its pane is still its own (then with it) or not (it wakes in a new tab).
+      if (!isAgySession(s.session)) continue
+      seen.add(s.session)
+      const name = s.name ?? ''
+      const cwd = s.cwd ?? ''
+      const own = s.fromFile ? agySleeperPane(snap, { pane: s.pane ?? '', name, cwd })?.pane_id : s.pane
+      const ws = own ? panes.get(own)?.workspace_id : undefined
+      add({
+        key: s.session,
+        session: s.session,
+        pane: own || null,
+        workspace: (ws === undefined ? undefined : labels.get(ws)) ?? s.workspace ?? '',
+        agent: AGY_AGENT,
+        name: name || s.session.slice(0, 8),
         cwd,
         status: 'sleeping',
         sleeping: true,
