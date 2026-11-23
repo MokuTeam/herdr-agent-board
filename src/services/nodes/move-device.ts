@@ -23,9 +23,24 @@ import { sessionsFor } from '../sleep.ts'
 import type { Link } from './link.ts'
 
 /** How it went for one target, as `board move` and the card's menu read it. */
+/** What a move would take, shown before it (`--dry-run`, the card's Device): nothing put to sleep or copied. */
+export interface MovePlan {
+  /** The folder it would run in there. */
+  cwd: string
+  address: string
+  branch: string
+  /** The uncommitted files that would go with it, by their path in the checkout. */
+  changes: { path: string; size: number }[]
+  deleted: string[]
+  /** The session's own files (transcript, side folder, history) and their bytes. */
+  files: number
+  bytes: number
+}
+
 export interface DeviceMoveOutcome {
   target: string
-  result: 'moved' | 'refused'
+  result: 'moved' | 'refused' | 'plan'
+  plan?: MovePlan
   why?: string
   /** The session's key before and after, as this board names it. */
   key?: string
@@ -40,7 +55,7 @@ export interface DeviceMoveOutcome {
 /** One board's half of a move, the same whether it is this one or a node. */
 export interface MoveSide {
   readonly id: string
-  pack(key: string, from: string): Promise<PackResult>
+  pack(key: string, from: string, dryRun?: boolean): Promise<PackResult>
   file(session: string, n: number): Promise<{ ok: true; body: ReadableStream<Uint8Array> } | { ok: false; why: string }>
   abort(session: string): Promise<void>
   finish(session: string, to: string): Promise<{ ok: true; notes: string[] } | { ok: false; why: string }>
@@ -75,7 +90,7 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 export function localSide(o: Pick<DeviceMoveOptions, 'out' | 'in'>): MoveSide {
   return {
     id: LOCAL,
-    pack: (key, from) => o.out.pack(key, from),
+    pack: (key, from, dryRun) => o.out.pack(key, from, dryRun),
     async file(session, n) {
       const abs = o.out.file(session, n)
       if (!abs) return { ok: false, why: 'the file is no longer offered' }
@@ -125,8 +140,8 @@ export function nodeSide(id: string, link: Pick<Link, 'fetch'>): MoveSide {
   const enc = encodeURIComponent
   return {
     id,
-    async pack(key, from) {
-      const r = await call('/api/node/move/out', { key, from })
+    async pack(key, from, dryRun) {
+      const r = await call('/api/node/move/out', { key, from, ...(dryRun && { dryRun: true }) })
       return r.ok === true && isRecord(r.pack) && typeof r.key === 'string'
         ? { ok: true, pack: r.pack as unknown as MovePack, key: r.key, wasAwake: r.wasAwake === true }
         : { ok: false, why: why(r), ...(typeof r.kind === 'string' && { kind: r.kind as never }) }
@@ -212,6 +227,7 @@ export async function moveToDevice(
   o: DeviceMoveOptions,
   targets: readonly string[],
   device: string,
+  { dryRun = false }: { dryRun?: boolean } = {},
 ): Promise<DeviceMoveOutcome[]> {
   const cfg = o.nodes()
   const asked = [...new Set(targets.map(s => s.trim()).filter(Boolean))]
@@ -265,12 +281,41 @@ export async function moveToDevice(
       out.push({ target: t, result: 'refused', why: source, ...who })
       continue
     }
-    const r = await moveOne(o, cfg, source, target, at?.key ?? item.key).catch(
+    const r = await (dryRun ? planOne : moveOne)(o, cfg, source, target, at?.key ?? item.key).catch(
       (err: unknown): DeviceMoveOutcome => ({ target: t, result: 'refused', why: messageOf(err) }),
     )
     out.push({ ...r, target: t, ...who, ...(r.newKey && { newKey: r.newKey }) })
   }
   return out
+}
+
+/** What moving it would take, asked of both sides without sleeping or copying anything. */
+async function planOne(
+  _o: DeviceMoveOptions,
+  cfg: NodesConfig,
+  source: MoveSide,
+  target: MoveSide,
+  key: string,
+): Promise<DeviceMoveOutcome> {
+  const packed = await source.pack(key, source.id === LOCAL ? cfg.id : source.id, true)
+  if (!packed.ok) return { target: key, result: 'refused', why: packed.why }
+  const pack = { ...packed.pack, profile: profileOn(cfg.devices, source.id, target.id, packed.pack.profile) }
+  const checked = await target.check(pack)
+  if (!checked.ok) return { target: key, result: 'refused', why: checked.why }
+  const own = pack.files.filter(f => f.kind !== 'change')
+  return {
+    target: key,
+    result: 'plan',
+    plan: {
+      cwd: checked.cwd,
+      address: pack.folder.address,
+      branch: pack.folder.branch,
+      changes: pack.files.filter(f => f.kind === 'change').map(f => ({ path: f.path, size: f.size })),
+      deleted: pack.folder.deleted,
+      files: own.length,
+      bytes: own.reduce((s, f) => s + f.size, 0),
+    },
+  }
 }
 
 async function moveOne(

@@ -4,6 +4,7 @@
 // wakes them, so a browser must also say the request comes from this page (origin), on fresh data.
 // With `device` instead of `profile` (#616): to another device, on a master only
 // (services/nodes/move-device.ts); its targets may be any device's keys, so no node takes it.
+// `dryRun: true` answers what each move would take (`result: 'plan'`) without doing any of it.
 import type { Item } from '../../core/types.ts'
 import type { Deps } from '../../services/deps.ts'
 import { moveMany } from '../../services/move.ts'
@@ -15,7 +16,7 @@ export interface MoveApp {
   items(): Item[]
   refresh(): void
   /** A move to another device (#616), while this board is a master; absent: refused. */
-  toDevice?: (targets: string[], device: string) => Promise<DeviceMoveOutcome[]> | null
+  toDevice?: (targets: string[], device: string, dryRun: boolean) => Promise<DeviceMoveOutcome[]> | null
 }
 
 // More than a lane shows; a request cannot keep herdr busy for long.
@@ -34,13 +35,15 @@ export function moveRoute(app: MoveApp): Route {
       const profile = typeof body.profile === 'string' ? body.profile : ''
       const device = typeof body.device === 'string' ? body.device : ''
       if (device && !profile && targets.some(v => v.trim())) {
-        const moving = app.toDevice?.(targets, device) ?? null
+        const dryRun = body.dryRun === true
+        const moving = app.toDevice?.(targets, device, dryRun) ?? null
         if (!moving)
           return json(409, {
             ok: false,
             error: 'a move to another device is made from the master: this board has no devices',
           })
         const results = await moving
+        if (dryRun) return json(200, { ok: true, results })
         const moved = results.filter(o => o.result === 'moved').length
         app.deps.log(`move: ${moved} of ${results.length} moved to ${device}`)
         app.refresh()

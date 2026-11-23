@@ -3,8 +3,11 @@
 // and the profile it runs in there.
 import { expect, test } from 'bun:test'
 import {
+  changePathOk,
   entriesToCarry,
   type FolderFacts,
+  MAX_CHANGE_BYTES,
+  MAX_CHANGES,
   type MovePack,
   movePackOf,
   moveWhyText,
@@ -15,10 +18,22 @@ import {
 
 const S = '0f8fad5b-d9cb-469f-a165-70867728950e'
 const SHA = 'a'.repeat(64)
+const HEAD = 'c'.repeat(40)
 
 test('board move takes --device or --profile, never both, and checks the device id', () => {
-  expect(parseMoveAny(['atlas', '--device', 'server-1'])).toEqual({ targets: ['atlas'], device: 'server-1' })
-  expect(parseMoveAny(['atlas', 'ben', '--device', 'local'])).toEqual({ targets: ['atlas', 'ben'], device: 'local' })
+  expect(parseMoveAny(['atlas', '--device', 'server-1'])).toEqual({
+    targets: ['atlas'],
+    device: 'server-1',
+    dryRun: false,
+  })
+  expect(parseMoveAny(['atlas', 'ben', '--device', 'local', '--dry-run'])).toEqual({
+    targets: ['atlas', 'ben'],
+    device: 'local',
+    dryRun: true,
+  })
+  expect(() => parseMoveAny(['atlas', '--profile', 'work', '--dry-run'])).toThrow(
+    '--dry-run is for a move to another device',
+  )
   expect(parseMoveAny(['atlas', '--profile', 'work'])).toEqual({ targets: ['atlas'], profile: 'work' })
   expect(() => parseMoveAny(['atlas', '--device', 'server-1', '--profile', 'work'])).toThrow('not both')
   expect(() => parseMoveAny(['atlas', '--device', 'Server 1'])).toThrow('not a device id')
@@ -28,7 +43,14 @@ test('board move takes --device or --profile, never both, and checks the device 
 })
 
 const clean: FolderFacts = {
-  checkout: { root: '/w/atlas', url: 'git@github.com:anna/atlas.git', clean: true, branch: 'feature-x', pushed: true },
+  checkout: {
+    root: '/w/atlas',
+    url: 'git@github.com:anna/atlas.git',
+    clean: true,
+    branch: 'feature-x',
+    pushed: true,
+    head: HEAD,
+  },
   subdir: 'web',
   identity: { name: 'Anna', email: 'anna@example.com' },
 }
@@ -42,6 +64,8 @@ test('a clean pushed checkout on a branch travels, with its address, branch, fol
       branch: 'feature-x',
       subdir: 'web',
       identity: { name: 'Anna', email: 'anna@example.com' },
+      head: HEAD,
+      deleted: [],
     },
   })
 })
@@ -59,12 +83,45 @@ test('a folder that cannot travel is refused with its reason, cheapest first', (
   expect(why({ ...clean, subdir: null })).toBe('no-remote')
   expect(why({ ...clean, checkout: { ...c, branch: '' } })).toBe('detached')
   expect(why({ ...clean, checkout: { ...c, branch: 'a..b' } })).toBe('name')
+  // Changes not read are refused as changes; read ones travel within the caps (the next test).
   expect(why({ ...clean, checkout: { ...c, clean: false } })).toBe('changes')
   expect(why({ ...clean, checkout: { ...c, pushed: false } })).toBe('unpushed')
   expect(moveWhyText({ kind: 'unpushed', branch: 'feature-x' })).toBe(
     'its branch feature-x is not pushed: push it first',
   )
   expect(moveWhyText({ kind: 'changes' })).toContain('untracked files count')
+})
+
+test('what is not committed travels within the caps; a link, a conflict or a name a device does not take is refused', () => {
+  const c = { ...(clean.checkout as NonNullable<FolderFacts['checkout']>), clean: false }
+  const changes = (over: Partial<NonNullable<FolderFacts['changes']>>) => ({
+    ...clean,
+    checkout: c,
+    changes: { files: [{ path: 'web/a.ts', size: 10 }], deleted: ['old.ts'], odd: [], ...over },
+  })
+  const ok = packFolder(changes({}))
+  expect(ok.ok && ok.folder.deleted).toEqual(['old.ts'])
+  const why = (f: FolderFacts) => {
+    const r = packFolder(f)
+    return r.ok ? null : r.why
+  }
+  expect(why(changes({ odd: [{ path: 'link', why: 'link' }] }))).toEqual({
+    kind: 'change-odd',
+    path: 'link',
+    why: 'link',
+  })
+  expect(why(changes({ files: [{ path: 'a/.git/config', size: 1 }] }))?.kind).toBe('change-odd')
+  expect(why(changes({ deleted: ['..\\x'] }))?.kind).toBe('change-odd')
+  expect(why(changes({ files: [{ path: 'big.bin', size: MAX_CHANGE_BYTES + 1 }] }))?.kind).toBe('change-too-large')
+  const many = Array.from({ length: MAX_CHANGES }, (_, i) => ({ path: `f${i}`, size: 1 }))
+  expect(why(changes({ files: many }))).toEqual({ kind: 'too-many-changes', n: MAX_CHANGES + 1 })
+  const heavy = Array.from({ length: 5 }, (_, i) => ({ path: `h${i}`, size: MAX_CHANGE_BYTES }))
+  expect(why(changes({ files: heavy }))?.kind).toBe('changes-too-large')
+  // An unpushed branch is refused whatever is uncommitted.
+  expect(why({ ...changes({}), checkout: { ...c, pushed: false } })?.kind).toBe('unpushed')
+  expect(changePathOk('web/-x.ts')).toBe(true)
+  expect(changePathOk('web/../x')).toBe(false)
+  expect(changePathOk('C:x')).toBe(false)
 })
 
 const pack = (over: Partial<MovePack> = {}): Record<string, unknown> => ({
@@ -80,6 +137,8 @@ const pack = (over: Partial<MovePack> = {}): Record<string, unknown> => ({
     address: 'github.com/anna/atlas',
     branch: 'feature-x',
     subdir: 'web',
+    head: HEAD,
+    deleted: ['old.ts'],
   },
   files: [
     { kind: 'transcript', path: '', size: 10, sha256: SHA, mode: 0o644 },
@@ -94,7 +153,7 @@ const pack = (over: Partial<MovePack> = {}): Record<string, unknown> => ({
 
 test('a pack that came over a link is checked field by field, never trusted as a path', () => {
   const ok = movePackOf(pack())
-  expect('field' in ok).toBe(false)
+  expect('field' in ok ? ok.field : null).toBeNull()
   expect((ok as MovePack).files.map(f => f.mode)).toEqual([0o644, 0o644, 0o755])
   const fieldOf = (over: Record<string, unknown>) => {
     const r = movePackOf({ ...pack(), ...over })
@@ -115,6 +174,13 @@ test('a pack that came over a link is checked field by field, never trusted as a
   expect(withFile({ kind: 'side', path: 'x', size: 1, sha256: 'nothex' })).toBe('files')
   expect(fieldOf({ files: [files[1]] })).toBe('files') // no transcript
   expect(fieldOf({ entries: [{ id: 'x', text: 'y' }] })).toBe('entries')
+  expect(fieldOf({ folder: { ...(pack().folder as object), head: 'main' } })).toBe('folder.head')
+  expect(fieldOf({ folder: { ...(pack().folder as object), deleted: ['.git/hooks/pre-commit'] } })).toBe(
+    'folder.deleted',
+  )
+  expect(withFile({ kind: 'change', path: 'web/a.ts', size: 1, sha256: SHA })).toBeNull()
+  expect(withFile({ kind: 'change', path: '.git/config', size: 1, sha256: SHA })).toBe('files')
+  expect(withFile({ kind: 'change', path: 'big', size: MAX_CHANGE_BYTES + 1, sha256: SHA })).toBe('files')
 })
 
 test("only a session's reminders travel: a restart, a sleep or a call report is this board's own", () => {

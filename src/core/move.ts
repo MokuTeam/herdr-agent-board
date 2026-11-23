@@ -13,7 +13,7 @@ import { normDir, sameDir } from './launch/names.ts'
 import { defaultProfileDir, type Profile } from './profiles.ts'
 import type { Item } from './types.ts'
 
-export const MOVE_USAGE = 'board move <id|name|pane>... --profile <id> [--when-free] | --device <id|local>'
+export const MOVE_USAGE = 'board move <id|name|pane>... --profile <id> [--when-free] | --device <id|local> [--dry-run]'
 
 /** `board move`'s arguments: the sessions and the profile id; throws with the usage. */
 export function parseMove(args: readonly string[]): { targets: string[]; profile: string } {

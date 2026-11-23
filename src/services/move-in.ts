@@ -10,13 +10,22 @@
 // same repository. Then fetched, and the branch found: the checkout itself when it is on it, else
 // the worktree that has it, else a new worktree beside the checkout. Only fast-forwarded: a checkout
 // there with changes, or with commits of its own on the branch, is refused, nothing of it lost.
-import { existsSync, mkdirSync, statSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { isAbsolute, join, relative } from 'node:path'
+import { dirname, isAbsolute, join, relative } from 'node:path'
 import { readCard, writeCard } from '../adapters/cards.ts'
 import { checkoutFacts } from '../adapters/git.ts'
 import { grantTrust } from '../adapters/move-files.ts'
-import { type BlobStore, blobStore, installBlock, installSessionFiles } from '../adapters/move-pack.ts'
+import {
+  type BlobStore,
+  blobStore,
+  checkoutChangeList,
+  fileHash,
+  inHead,
+  installBlock,
+  installSessionFiles,
+  restoreFromHead,
+} from '../adapters/move-pack.ts'
 import {
   addWorktree,
   cloneRepo,
@@ -51,6 +60,10 @@ export interface MoveRepoOps {
   fastForward(dir: string, branch: string): Promise<RepoDone>
   identity: typeof repoIdentity
   setIdentity: typeof setRepoIdentity
+  /** HEAD and what is not committed in a checkout (adapters/move-pack.ts). */
+  changes: typeof checkoutChangeList
+  inHead(dir: string, path: string): Promise<boolean>
+  restore(dir: string, path: string): Promise<boolean>
   /** The checkout a folder of this computer is in: its root and its remote's address. */
   checkout(dir: string): Promise<{ root: string; address: string | null } | null>
 }
@@ -107,6 +120,9 @@ export function createMoveIn(d: MoveInDeps): MoveIn {
     fastForward,
     identity: repoIdentity,
     setIdentity: setRepoIdentity,
+    changes: checkoutChangeList,
+    inHead,
+    restore: restoreFromHead,
     checkout: async dir => {
       const f = await checkoutFacts(dir)
       return f && { root: f.root, address: f.remote?.address ?? null }
@@ -172,7 +188,9 @@ export function createMoveIn(d: MoveInDeps): MoveIn {
   }
 
   /** The session's folder here at its branch, as the source left it; or why not. */
-  function folderFor(p: MovePack): Promise<{ ok: true; cwd: string } | MoveInRefusal> {
+  function folderFor(
+    p: MovePack,
+  ): Promise<{ ok: true; cwd: string; at: string; own: Record<string, string | null> } | MoveInRefusal> {
     return oneAtATime(p.folder.address, async () => {
       const got = await checkoutRoot(p)
       if (!got.ok) return got
@@ -193,7 +211,13 @@ export function createMoveIn(d: MoveInDeps): MoveIn {
       }
       const there = await repo.state(at, branch)
       if (!there.ok) return refuse('repo', `${at}: ${there.why}`)
-      if (!there.state.clean) return refuse('repo', `${at} has changes of its own`)
+      // Changes there only when they are the ones that went with the session from here (a move back).
+      let own: Record<string, string | null> = {}
+      if (!there.state.clean) {
+        const left = await leftHere(p.session, at)
+        if (!left.ok) return left
+        own = left.changes
+      }
       if (there.state.head !== there.state.target) {
         const ff = await repo.fastForward(at, branch)
         if (!ff.ok) return refuse('repo', `${at} has commits of its own on ${branch}: ${ff.why}`)
@@ -201,6 +225,15 @@ export function createMoveIn(d: MoveInDeps): MoveIn {
         const now = await repo.state(at, branch)
         if (!now.ok || now.state.head !== now.state.target)
           return refuse('repo', `${at} has commits of its own on ${branch}`)
+      }
+      // Changes apply on the commit they were made on, nothing else.
+      if (p.files.some(f => f.kind === 'change') || p.folder.deleted.length) {
+        const now = await repo.state(at, branch)
+        if (!now.ok || now.state.head !== p.folder.head)
+          return refuse(
+            'repo',
+            `${at} is at ${(now.ok ? now.state.head : '?').slice(0, 8)}, and the changes were made on ${p.folder.head.slice(0, 8)}: push or pull so both are at one commit`,
+          )
       }
       const cwd = p.folder.subdir ? join(at, ...p.folder.subdir.split('/')) : at
       if (!statSync(cwd, { throwIfNoEntry: false })?.isDirectory())
@@ -211,8 +244,70 @@ export function createMoveIn(d: MoveInDeps): MoveIn {
         const set = await repo.setIdentity(at, given)
         if (!set.ok) return refuse('repo', `the git identity could not be set: ${set.why}`)
       }
-      return { ok: true, cwd }
+      return { ok: true, cwd, at, own }
     })
+  }
+
+  /**
+   * The changes of the checkout at `at`, when each is one that went from here with `session` and is
+   * as it was then (its card's `moved.changes`, services/move-out.ts finish): a move back takes them
+   * as its own and replaces them. Anything else there is the checkout's own, and refused.
+   */
+  async function leftHere(
+    session: string,
+    at: string,
+  ): Promise<{ ok: true; changes: Record<string, string | null> } | MoveInRefusal> {
+    const moved = (readCard(session) as (Card & { moved?: { changes?: unknown } }) | null)?.moved
+    const went = moved && typeof moved.changes === 'object' && moved.changes !== null ? moved.changes : {}
+    const sent = went as Record<string, unknown>
+    const list = await repo.changes(at)
+    if (!list) return refuse('repo', `${at} has changes of its own`)
+    const odd = list.changes.odd[0]
+    if (odd) return refuse('repo', `${at} has changes of its own (${odd.path})`)
+    const own: Record<string, string | null> = {}
+    for (const f of list.changes.files) {
+      const was = Object.hasOwn(sent, f.path) ? sent[f.path] : undefined
+      if (typeof was !== 'string' || (await fileHash(join(at, ...f.path.split('/')))) !== was)
+        return refuse('repo', `${at} has changes of its own (${f.path})`)
+      own[f.path] = was
+    }
+    for (const path of list.changes.deleted) {
+      if (!Object.hasOwn(sent, path) || sent[path] !== null)
+        return refuse('repo', `${at} has changes of its own (${path})`)
+      own[path] = null
+    }
+    return { ok: true, changes: own }
+  }
+
+  /**
+   * The session's uncommitted changes written into the checkout at `at`: what it left here before and
+   * no longer has put back as HEAD has it, each changed file through a temp file renamed into place,
+   * each deleted one removed. '' when done, else why not.
+   */
+  async function applyChanges(p: MovePack, at: string, own: Record<string, string | null>): Promise<string> {
+    const incoming = p.files.filter(f => f.kind === 'change')
+    const comes = new Set([...incoming.map(f => f.path), ...p.folder.deleted])
+    const place = (path: string): string => join(at, ...path.split('/'))
+    try {
+      for (const path of Object.keys(own)) {
+        if (comes.has(path)) continue
+        if (await repo.inHead(at, path)) {
+          if (!(await repo.restore(at, path))) return `${path} could not be put back as HEAD has it`
+        } else rmSync(place(path), { force: true })
+      }
+      for (const f of incoming) {
+        const to = place(f.path)
+        mkdirSync(dirname(to), { recursive: true })
+        const tmp = `${to}.${process.pid}.move.tmp`
+        copyFileSync(blobs.path(f.sha256), tmp)
+        if (process.platform !== 'win32') chmodSync(tmp, f.mode)
+        renameSync(tmp, to)
+      }
+      for (const path of p.folder.deleted) rmSync(place(path), { force: true })
+      return ''
+    } catch (err) {
+      return messageOf(err)
+    }
   }
 
   async function workspaceFor(label: string): Promise<{ id: string; label: string } | { create: string }> {
@@ -248,6 +343,8 @@ export function createMoveIn(d: MoveInDeps): MoveIn {
       const folder = await folderFor(p)
       if (!folder.ok) return folder
       const cwd = folder.cwd
+      const changed = await applyChanges(p, folder.at, folder.own)
+      if (changed) return refuse('repo', `its uncommitted changes could not be written in ${folder.at}: ${changed}`)
       const t = p.files.find(f => f.kind === 'transcript')
       const block = t ? installBlock(profile.dir, cwd, p.session, blobs.path(t.sha256)) : 'no transcript'
       if (block) return refuse('files', block)

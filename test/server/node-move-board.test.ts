@@ -293,18 +293,18 @@ test('board move --device takes a sleeping session in a clean pushed checkout to
   }
 }, 90_000)
 
-test('a checkout with changes is refused with the reason: nothing put to sleep, copied or started', async () => {
+test('a branch not pushed is refused with the reason: nothing put to sleep, copied or started', async () => {
   const { pair, cwd, close } = await pairWithSession()
   try {
     const node = pair.nodes[0]
     if (!node) throw new Error('no node')
     await pair.waitDevice('server-1', d => d.link?.state === 'online', 10_000)
-    writeFileSync(join(cwd, 'notes.txt'), 'not committed\n')
+    git(cwd, 'commit', '--quiet', '--allow-empty', '-m', 'local only')
     const r = await post(pair.master.url, { targets: [S], device: 'server-1' })
     expect(r.status).toBe(200)
     expect((r.body.results as Record<string, unknown>[])[0]).toMatchObject({
       result: 'refused',
-      why: 'its checkout has changes that are not committed (untracked files count): commit or stash them first',
+      why: 'its branch feature-x is not pushed: push it first',
     })
     expect(node.proxy.requests.some(p => p.includes('/api/node/move/'))).toBe(false)
     expect(existsSync(join(node.box.dir, 'example.com'))).toBe(false)
@@ -325,3 +325,81 @@ test('a checkout with changes is refused with the reason: nothing put to sleep, 
     close()
   }
 }, 60_000)
+
+test('uncommitted changes are listed first, go with the session, and come back; ignored files never travel', async () => {
+  const { pair, cwd, nodeAsleep, close } = await pairWithSession()
+  try {
+    const node = pair.nodes[0]
+    if (!node) throw new Error('no node')
+    await pair.waitDevice('server-1', d => d.link?.state === 'online', 10_000)
+    const sub = join(cwd, 'web')
+    // Changed, untracked, deleted; and an ignored folder that must stay here.
+    writeFileSync(join(cwd, 'README.md'), 'atlas, changed\n')
+    mkdirSync(join(cwd, 'notes'), { recursive: true })
+    writeFileSync(join(cwd, 'notes', 'todo.md'), 'draw the map\n')
+    rmSync(join(cwd, '.gitignore'))
+    writeFileSync(join(cwd, '.gitignore'), 'node_modules/\n')
+    git(cwd, 'rm', '--quiet', '--cached', 'web/index.ts')
+    rmSync(join(cwd, 'web', 'index.ts'))
+    mkdirSync(join(cwd, 'node_modules', 'left'), { recursive: true })
+    writeFileSync(join(cwd, 'node_modules', 'left', 'index.js'), 'big\n')
+    mkdirSync(dirname(configPath(pair.master.box)), { recursive: true })
+    writeFileSync(
+      configPath(pair.master.box),
+      JSON.stringify({ ...pair.masterConfig, port: Number(new URL(pair.master.url).port) }),
+    )
+
+    const dry = await pair.master.box.run('cli', { args: ['move', S, '--device', 'server-1', '--dry-run'], env: {} })
+      .exited
+    expect(dry.stdout).toContain('with 3 uncommitted change(s):')
+    expect(dry.stdout).toContain('README.md (1 KB)')
+    expect(dry.stdout).toContain('notes/todo.md (1 KB)')
+    expect(dry.stdout).toContain('web/index.ts (deleted)')
+    expect(dry.stdout).not.toContain('node_modules')
+    // Nothing moved: the card and the reminder are where they were.
+    expect(cardOf(pair.master.box).moved).toBeUndefined()
+    expect(existsSync(entryFile(pair.master.box, 'abc123'))).toBe(true)
+
+    const nodeWorktree = join(node.box.dir, 'example.com', 'anna', 'atlas-feature-x')
+    resumable(node.box, join(nodeWorktree, 'web'))
+    const go = await post(pair.master.url, { targets: [S], device: 'server-1' })
+    expect((go.body.results as Record<string, unknown>[])[0]).toMatchObject({ result: 'moved' })
+    expect(readFileSync(join(nodeWorktree, 'README.md'), 'utf8')).toBe('atlas, changed\n')
+    expect(readFileSync(join(nodeWorktree, 'notes', 'todo.md'), 'utf8')).toBe('draw the map\n')
+    expect(existsSync(join(nodeWorktree, 'web', 'index.ts'))).toBe(false)
+    expect(existsSync(join(nodeWorktree, 'node_modules'))).toBe(false)
+    // The changes stay here too, and the card remembers them.
+    expect(readFileSync(join(cwd, 'README.md'), 'utf8')).toBe('atlas, changed\n')
+    expect(Object.keys((cardOf(pair.master.box).moved as { changes: object }).changes).sort()).toEqual([
+      'README.md',
+      'notes/todo.md',
+      'web/index.ts',
+    ])
+
+    // The session works on there: it writes the note further.
+    writeFileSync(join(nodeWorktree, 'notes', 'todo.md'), 'draw the map\nname the hills\n')
+    nodeAsleep(true)
+    await waitFor(
+      async () => (await items(pair.master.url)).some(i => i.key === `@server-1:${S}` && i.sleeping),
+      () => node.proc.send('refresh'),
+    )
+    resumable(pair.master.box, sub)
+    // Changed here meanwhile: that edit is this checkout's own, so the move back is refused.
+    writeFileSync(join(cwd, 'README.md'), 'atlas, edited here\n')
+    const refused = await post(pair.master.url, { targets: [`@server-1:${S}`], device: 'local' })
+    expect((refused.body.results as Record<string, unknown>[])[0]?.why).toBe(
+      `${cwd} has changes of its own (README.md)`,
+    )
+    expect(readFileSync(join(cwd, 'README.md'), 'utf8')).toBe('atlas, edited here\n')
+    // As it was when the session left: the move back takes those changes as its own.
+    writeFileSync(join(cwd, 'README.md'), 'atlas, changed\n')
+    const back = await post(pair.master.url, { targets: [`@server-1:${S}`], device: 'local' })
+    expect((back.body.results as Record<string, unknown>[])[0]).toMatchObject({ result: 'moved', newKey: S })
+    expect(readFileSync(join(cwd, 'notes', 'todo.md'), 'utf8')).toBe('draw the map\nname the hills\n')
+    expect(readFileSync(join(cwd, 'README.md'), 'utf8')).toBe('atlas, changed\n')
+    expect(existsSync(join(cwd, 'web', 'index.ts'))).toBe(false)
+    expect(existsSync(join(cwd, 'node_modules', 'left', 'index.js'))).toBe(true)
+  } finally {
+    close()
+  }
+}, 90_000)

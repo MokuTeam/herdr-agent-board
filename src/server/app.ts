@@ -1076,7 +1076,7 @@ export async function startServer({
       deps,
       items: board.items,
       refresh,
-      toDevice: (targets, device) =>
+      toDevice: (targets, device, dryRun) =>
         nodeLinks && nodesConfig(cfg.nodes)
           ? moveToDevice(
               {
@@ -1092,6 +1092,7 @@ export async function startServer({
               },
               targets,
               device,
+              { dryRun },
             )
           : null,
     }),

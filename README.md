@@ -657,19 +657,26 @@ the device's link up; docs/design/nodes), with its session id and conversation:
 ```sh
 board move Atlas --device server-1   # to a node, by its device id
 board move Atlas --device local      # back to this computer
+board move Atlas --device server-1 --dry-run   # what would go, uncommitted changes listed
 ```
 
-The folder travels by git only: the session's folder must be in a checkout with a remote the device
-can clone, on a branch, with nothing uncommitted (untracked files count) and the branch pushed.
-Anything else is refused with the reason (commit, push, a detached HEAD, no remote) before anything
-happens, so ignored files such as `node_modules`, a venv, build output, caches and `.env` never
-travel. A session at work is refused too ("try again when it is free"): its conversation must be
+The folder travels by git: the session's folder must be in a checkout with a remote the device can
+clone, on a branch that is pushed. What is not committed (changed, new and deleted files, untracked
+ones too) goes with it as a small bundle of those files: at most 2000 of them, 5 MB a file and 20 MB
+together. `--dry-run` lists them first, and moves nothing. A link, a merge conflict or a submodule
+with changes is refused with the reason, and so is anything over the caps, a branch not pushed, a
+detached HEAD or a checkout with no remote. Ignored files (`node_modules`, a venv, build output,
+caches, `.env`) never travel; the target rebuilds what it needs, and a secret goes the way a node
+gets secrets. A session at work is refused too ("try again when it is free"): its conversation must be
 whole before it is copied, and `--when-free` stays a profile move's. A free one is put to sleep
 first, as `board sleep` does. On a node the repository is the clone under `node.workRoot` by its
 address, as a placed start has it, cloned when missing; back on this computer it is the checkout the
 session left. Either is fetched, and the branch found: the checkout itself when it is on it, else
 the worktree that has it, else a new worktree beside it. It is only fast-forwarded: a checkout
-there with changes, or with commits of its own on the branch, is refused. The transcript, the
+there with commits of its own on the branch is refused, and so is one with changes, unless they are
+exactly the ones that went from it with this session (a move back, its card remembers each file's
+hash); those are replaced. The changes that come are written on the commit they were made on, which
+the checkout there must be at. They stay at the source too: copied, not moved. The transcript, the
 session's own folder and its file history go into the device's profile (a device's `profiles` map
 names it) under the project folder of the new path, the source profile's trust in the folder with
 them, and the session is resumed there with its name and lane, as Return from the archive resumes
@@ -681,9 +688,10 @@ not carried: it is keyed by the folder's path. The master carries the files betw
 
 On a master, a Claude card's menu has **Device ▸** with each device, the one it runs on checked and
 one not reachable grayed; another one moves it there, the card says "Moving to …" meanwhile and a
-toast says how it went. The page sends it as `POST /api/move` with `{ "targets": ["<key>"],
-"device": "<id>" }` (`local` for this computer), which answers `{ ok, results }` as `board move`
-has them; a board without devices answers 409.
+toast says how it went. It asks first what the move would take: uncommitted changes that would go
+are listed in a toast whose **Move with them** moves it. The page sends it as `POST /api/move` with
+`{ "targets": ["<key>"], "device": "<id>" }` (`local` for this computer, `"dryRun": true` for the
+list), which answers `{ ok, results }` as `board move` has them; a board without devices answers 409.
 
 While the separate herdr-wake plugin does the waking (installed, and not switched over yet), it
 resumes a session with the env of its pane's shell, as before, and the board keeps its old rule:
