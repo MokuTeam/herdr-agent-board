@@ -11,6 +11,7 @@ import { usageFileFor } from '../adapters/paths.ts'
 import { forgetProfilePanes } from '../adapters/profile-panes.ts'
 import { listEntries, listWatches, readLog, watchesDir } from '../adapters/schedule-store.ts'
 import { COLUMNS } from '../core/board.ts'
+import { besideParents } from '../core/call-agent.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts'
 import { compactDefaultText } from '../core/compact.ts'
 import type { DecisionsPayload } from '../core/decisions.ts'
@@ -329,6 +330,27 @@ export function createBoardState({
     )
     // Another device's cards carry their tasks only while this board's config turns them on, as its own.
     const theirs = others?.items.map(({ todos: own, ...rest }) => (todos && own ? { ...rest, todos: own } : rest))
+    // A call agent started for a node's session (#618) has call.parent naming that node card: inherit
+    // its parent's lane/workspace/title when unset and sit right beside the parent card.
+    const combined = (() => {
+      if (!theirs) return list
+      const remoteByKey = new Map(theirs.map(i => [i.key, i]))
+      let hasNodeCallParent = false
+      const adjusted = list.map(it => {
+        const parentKey = it.call?.parent
+        const parent = parentKey ? remoteByKey.get(parentKey) : undefined
+        if (!parent) return it
+        hasNodeCallParent = true
+        return {
+          ...it,
+          name: it.name === t('call.alone') ? t('call.of', { name: parent.name }) : it.name,
+          category: !it.categorySet ? parent.category : it.category,
+          workspace: it.workspace || parent.workspace,
+        }
+      })
+      const merged = [...adjusted, ...theirs]
+      return hasNodeCallParent ? besideParents(merged) : merged
+    })()
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)
     // Watches (#486): while config.json turns them on; off, the ones still set, marked as not checked (#596).
@@ -347,7 +369,7 @@ export function createBoardState({
       fsToken: FILE_TOKEN,
       stale,
       limits: own?.limits ?? null,
-      items: theirs ? [...list, ...theirs] : list,
+      items: combined,
       launches: others ? [...launches.list(), ...others.launches] : launches.list(),
       categories,
       swatches: SWATCHES,

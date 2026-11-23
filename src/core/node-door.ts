@@ -95,6 +95,13 @@ export const DOOR_ROUTES: readonly DoorRoute[] = [
   // The plugin at the master's commit (#590, 6.2): its archive, then `{ commit, sha256 }`.
   { method: 'PUT', path: '/api/node/update/blob', door: true },
   { method: 'POST', path: '/api/node/update', door: true },
+  // MokuPilot call agent running on this node (#618): check, start, SSE stream, stdin, MCP reply, close, files, report.
+  { method: 'POST', path: '/api/node/pilot-call/check', door: true },
+  { method: 'POST', path: '/api/node/pilot-call/start', door: true },
+  { method: 'GET', path: /^\/api\/node\/pilot-call\/[A-Za-z0-9_-]{8,64}\/events$/, door: true },
+  { method: 'POST', path: /^\/api\/node\/pilot-call\/[A-Za-z0-9_-]{8,64}\/(stdin|mcp-reply|close)$/, door: true },
+  { method: 'POST', path: '/api/node/pilot-call/files', door: true },
+  { method: 'POST', path: '/api/node/pilot-call/report', door: true },
 ]
 
 const allows = (r: DoorRoute, method: string, rawPath: string, path: string): boolean =>

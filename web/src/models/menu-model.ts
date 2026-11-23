@@ -413,7 +413,6 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     own && ctx.terminal && (it.cwd || it.pane) && { id: 'terminal', label: t('term.open'), hint: 'Ctrl+`' },
     // A MokuPilot call with a fork of the session: needs the board, not fresh herdr data.
     own &&
-      here &&
       ctx.mokupilot &&
       claude &&
       it.agent === 'claude' && { id: 'mokupilot', label: t('mokupilot.call'), ...edit() },

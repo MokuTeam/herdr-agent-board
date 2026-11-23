@@ -61,6 +61,7 @@ import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
 import { NODE_PROGRAMS } from '../core/bundle.ts'
 import { answerText, decisionsConfig } from '../core/decisions.ts'
 import { journalConfig } from '../core/journal.ts'
+import { t } from '../core/lang.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { deviceIdFromHost, fillThresholds, markRevoked, nodeConfig, nodesConfig } from '../core/nodes.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
@@ -99,6 +100,7 @@ import { createMoveOut, type MoveOut } from '../services/move-out.ts'
 import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
 import { createNodeGit } from '../services/node/git-access.ts'
 import { createNodeLaunch } from '../services/node/launch.ts'
+import { createNodePilotCall, type NodePilotCall } from '../services/node/pilot-call.ts'
 import { createNodeSecrets } from '../services/node/secrets.ts'
 import { createNodeStatus } from '../services/node/status.ts'
 import { createNodeUpdate } from '../services/node/update.ts'
@@ -107,6 +109,7 @@ import { createNodeAggregate, type NodeAggregate } from '../services/nodes/aggre
 import { type BundleSync, createBundleSync } from '../services/nodes/bundle-sync.ts'
 import { createNodeLinks, linkTimes, type NodeLinks } from '../services/nodes/links.ts'
 import { moveToDevice } from '../services/nodes/move-device.ts'
+import { createNodePilotCalls, type NodePilotCalls } from '../services/nodes/pilot-call.ts'
 import { createPlacer, type Placer } from '../services/nodes/placer.ts'
 import { createRevoker, type Revoker } from '../services/nodes/revoke.ts'
 import { createNodeSetup, type NodeSetup } from '../services/nodes/setup.ts'
@@ -165,6 +168,7 @@ import { nodeCallRoutes, nodeDoorRoutes } from './routes/node.ts'
 import { createNodeProxy, type NodeProxy } from './routes/node-proxy.ts'
 import { nodeSetupRoutes, nodesRoutes } from './routes/nodes.ts'
 import { pageLogRoute } from './routes/page-log.ts'
+import { pilotCallRoutes } from './routes/pilot-call.ts'
 import { presenceRoutes } from './routes/presence.ts'
 import { remoteRoutes } from './routes/remote.ts'
 import { revealRoute, revealState } from './routes/reveal.ts'
@@ -1166,9 +1170,11 @@ export async function startServer({
             ? localNodeRoutes
             : path === '/api/node/call' && localCallRoutes
               ? localCallRoutes
-              : path === '/api/nodes/setup'
-                ? localSetupRoutes
-                : routes
+              : path.startsWith('/api/mokupilot/node-call/') && localPilotCallRoutes
+                ? localPilotCallRoutes
+                : path === '/api/nodes/setup'
+                  ? localSetupRoutes
+                  : routes
       return await dispatch(selected, req, url, path, guards, () => peerOf(srv, req))
     } catch (err) {
       // The path only: a query can carry the page's token.
@@ -1215,6 +1221,7 @@ export async function startServer({
   // A node's calls to its master (#508, services/node/uplink.ts): the outbox and its stream on the
   // door, and `POST /api/node/call` for this computer's own `board thread`, on this listener alone.
   let nodeUplink: NodeUplink | null = null
+  let nodePilotCall: NodePilotCall | null = null
   let localCallRoutes: Route[] | null = null
   function doorFollows(): void {
     if (door) {
@@ -1279,6 +1286,14 @@ export async function startServer({
     const uplink = createNodeUplink({ log })
     nodeUplink = uplink
     localCallRoutes = nodeCallRoutes(uplink)
+    nodePilotCall = createNodePilotCall({
+      profiles: () => deps.profiles(),
+      homes: deps.homes,
+      items: board.items,
+      refresh,
+      log,
+    })
+    process.on('exit', nodePilotCall.closeAll)
     const nodeLaunch = createNodeLaunch({
       node: () => nodeConfig(cfg.node),
       start: (body, session) => launches.start(body, board.items(), { node: { session } }),
@@ -1332,11 +1347,13 @@ export async function startServer({
             ])
             return { slept, kept, takenOut: { ...secretsOut, ...gitOut } }
           } finally {
+            nodePilotCall?.closeAll()
             nodeStore.forget(master)
           }
         },
         update: nodeUpdate,
         move: movers(),
+        pilotCall: nodePilotCall,
       }),
       log,
     })
@@ -1348,6 +1365,8 @@ export async function startServer({
   // `nodes` nothing of it exists: no ssh, no timer, no file, no route.
   let nodeLinks: NodeLinks | null = null
   let localNodeRoutes: Route[] | null = null
+  let localPilotCallRoutes: Route[] | null = null
+  let nodePilotCalls: NodePilotCalls | null = null
   let nodeProxy: NodeProxy | null = null
   let bundleSync: BundleSync | null = null
   let uplinkRunner: UplinkRunner | null = null
@@ -1452,6 +1471,14 @@ export async function startServer({
     // Requests for a node's card (#501): first in the route table, which the phones' listener and the
     // tunnel share, so they reach it after their own refusals. Without `nodes` the table is main's.
     const aggregate = nodeAggregate
+    const pilotCalls = createNodePilotCalls({
+      cfg,
+      links: nodeLinks,
+      port: () => server.port ?? port,
+      log,
+    })
+    nodePilotCalls = pilotCalls
+    localPilotCallRoutes = pilotCallRoutes(pilotCalls)
     nodeProxy = createNodeProxy({
       cfg,
       links: nodeLinks,
@@ -1459,6 +1486,14 @@ export async function startServer({
       own: board.items,
       remote: () => aggregate.part()?.items ?? [],
       local: ownRoutes,
+      async pilotCall(req, ctx, p) {
+        const prefixed = `@${p.device}:${p.key}`
+        const item = board.findAny(prefixed)
+        if (!item) return json(404, { ok: false, error: t('err.gone') })
+        const viewer = { peer: ctx.peer(), forwardedFor: req.headers.get('x-forwarded-for') }
+        const r = await pilotCalls.startForItem(item, viewer)
+        return json(r.ok ? 200 : 409, r)
+      },
     })
     routes.unshift(nodeProxy.route)
     // Calls from the nodes' sessions (#508): `board thread` there, run here as that session.
@@ -1701,6 +1736,11 @@ export async function startServer({
       process.off('exit', endLogins)
       await tunnel.close()
       await door?.close()
+      if (nodePilotCall) {
+        nodePilotCall.closeAll()
+        process.off('exit', nodePilotCall.closeAll)
+      }
+      nodePilotCalls?.close()
       nodeUplink?.close()
       await uplinkRunner?.close()
       if (nodeAggregate) {

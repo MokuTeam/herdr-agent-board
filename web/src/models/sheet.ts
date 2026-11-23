@@ -165,8 +165,7 @@ export function headButtons(
     sleepTitle: t(inTurn(it) ? 'sheet.sleepBusy' : 'sheet.sleepHint'),
     restartHidden: !!it.sleeping || !it.session || (it.agent !== 'claude' && it.agent !== 'agy') || away,
     restartTitle: pending ? `${t('sheet.restartPending')}. ${restartText(pending, t)}` : t('sheet.restartHint'),
-    // A session of another device (#502) has no call from this computer's MokuPilot.
-    mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude') || away || !!it.device,
+    mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude') || away,
     forkHidden: !(fork && it.session && it.agent === 'claude') || away,
     archiveHidden: !it.session || (it.agent !== 'claude' && it.agent !== 'agy') || away,
     archiveTitle: why ? t(why) : t('archive.sheetHint'),

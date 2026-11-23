@@ -32,6 +32,19 @@ export interface CallChild {
   unref(): void
 }
 
+export interface NodeCallLaunch {
+  /** Loopback master bridge URL for this call grant. */
+  url: string
+  /** Per-call Bearer token passed only via environment, never argv. */
+  token: string
+  /** Node device id for display/logging in MokuPilot. */
+  device: string
+  /** Master-side parent card key (`@<device>:<key>`) for the call-agent card. */
+  parent: string
+  /** Verified working directory on the node (not checked against local disk). */
+  cwd: string
+}
+
 export interface CallOptions {
   platform?: string
   env?: Record<string, string | undefined>
@@ -45,6 +58,8 @@ export interface CallOptions {
   own?: () => readonly string[]
   /** The home folder, where the default profile's `.claude` is. */
   home?: string
+  /** When set (#618), MokuPilot runs the agent side on the session's node through this master bridge. */
+  nodeCall?: NodeCallLaunch
 }
 
 /** Where the call went and why (core/mokupilot-mode.ts resolveMode), on every answer past the checks. */
@@ -118,17 +133,18 @@ export async function startCall(
     viewer,
     own = () => [],
     home = homedir(),
+    nodeCall,
   }: CallOptions = {},
 ): Promise<CallResult> {
   if (!item || !callable(item)) return { ok: false, error: t('mokupilot.err.notClaude') }
-  const profileEnv = profiles ? callProfileEnv(item, profiles, { env, home, platform }) : undefined
-  if (profiles && profileEnv === null)
+  const profileEnv = !nodeCall && profiles ? callProfileEnv(item, profiles, { env, home, platform }) : undefined
+  if (!nodeCall && profiles && profileEnv === null)
     return { ok: false, error: t('mokupilot.err.profileUnknown', { profile: profileLabel(item, profiles) }) }
   if (cfg.mokupilot === false) return { ok: false, error: t('mokupilot.err.off') }
   // Here or on the viewer's computer: by the mode, and under `auto` by who asks.
   const mode = mokupilotMode(cfg.mokupilot)
   const decided = resolveMode(mode, viewer, mode === 'auto' && viewer ? own() : [])
-  if (profiles && profileEnv && decided.resolved === 'link') {
+  if (!nodeCall && profiles && profileEnv && decided.resolved === 'link') {
     const board = profiles.inherited?.title || profiles.inheritedDir
     return { ok: false, error: t('mokupilot.err.profile', { board, profile: profileLabel(item, profiles) }) }
   }
@@ -149,12 +165,18 @@ export async function startCall(
       ...where,
     }
   // --resume finds a session only from its own folder: the transcript says which that is.
-  const recorded = (item.transcript && (await cwdOf(item.transcript))) || item.cwd || ''
-  const cwd = recorded && isDir(recorded) ? recorded : ''
+  // For a node call (#618), the folder lives on the node and was verified there.
+  const effectiveCwd = nodeCall
+    ? nodeCall.cwd
+    : await (async () => {
+        const recorded = (item.transcript && (await cwdOf(item.transcript))) || item.cwd || ''
+        return recorded && isDir(recorded) ? recorded : ''
+      })()
   // The viewer's MokuPilot runs the fork here over ssh, from this folder: nothing starts here.
   if (!launcher || launcher.state === 'link') {
+    if (nodeCall) return { ok: false, error: t('mokupilot.err.nodeLink'), ...where }
     try {
-      const url = callLink(item, cwd)
+      const url = callLink(item, effectiveCwd)
       return url
         ? { ok: true, state: 'link', url, ...where }
         : { ok: false, error: t('mokupilot.err.notClaude'), ...where }
@@ -164,7 +186,7 @@ export async function startCall(
   }
   let cmd: { file: string; args: string[] }
   try {
-    cmd = callCommand(launcher, { session: String(item.session), cwd })
+    cmd = callCommand(launcher, { session: String(item.session), cwd: effectiveCwd })
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err), ...where }
   }
@@ -172,14 +194,26 @@ export async function startCall(
   const childEnv = { ...env }
   delete childEnv.HERDR_PANE_ID
   delete childEnv.HERDR_TAB_ID
-  // The session's profile: MokuPilot hands it to a copy already running in another.
-  if (profileEnv?.dir === null) delete childEnv.CLAUDE_CONFIG_DIR
-  else if (profileEnv) childEnv.CLAUDE_CONFIG_DIR = profileEnv.dir
+  // Node call bridge info (#618): passed only via env so the per-call token never enters argv.
+  if (nodeCall) {
+    childEnv.MOKUPILOT_NODE_CALL_URL = nodeCall.url
+    childEnv.MOKUPILOT_NODE_CALL_TOKEN = nodeCall.token
+    childEnv.MOKUPILOT_NODE_CALL_DEVICE = nodeCall.device
+    childEnv.MOKUPILOT_NODE_CALL_PARENT = nodeCall.parent
+  } else {
+    delete childEnv.MOKUPILOT_NODE_CALL_URL
+    delete childEnv.MOKUPILOT_NODE_CALL_TOKEN
+    delete childEnv.MOKUPILOT_NODE_CALL_DEVICE
+    delete childEnv.MOKUPILOT_NODE_CALL_PARENT
+    // The session's profile: MokuPilot hands it to a copy already running in another.
+    if (profileEnv?.dir === null) delete childEnv.CLAUDE_CONFIG_DIR
+    else if (profileEnv) childEnv.CLAUDE_CONFIG_DIR = profileEnv.dir
+  }
   return new Promise(res => {
     let child: CallChild
     try {
       child = run(cmd.file, cmd.args, {
-        cwd: cwd || undefined,
+        cwd: nodeCall ? undefined : effectiveCwd || undefined,
         env: childEnv,
         detached: true,
         stdio: 'ignore',

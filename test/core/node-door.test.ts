@@ -101,6 +101,12 @@ describe('the door takes what 6.2 lists', () => {
       ['GET', String(/^\/api\/node\/move\/in\/launch\/[\w-]{1,64}$/)],
       ['PUT', '/api/node/update/blob'],
       ['POST', '/api/node/update'],
+      ['POST', '/api/node/pilot-call/check'],
+      ['POST', '/api/node/pilot-call/start'],
+      ['GET', String(/^\/api\/node\/pilot-call\/[A-Za-z0-9_-]{8,64}\/events$/)],
+      ['POST', String(/^\/api\/node\/pilot-call\/[A-Za-z0-9_-]{8,64}\/(stdin|mcp-reply|close)$/)],
+      ['POST', '/api/node/pilot-call/files'],
+      ['POST', '/api/node/pilot-call/report'],
     ])
     // A move to or from another device (#616): a session id, a file's number, a hash; nothing else.
     const sid = '0f8fad5b-d9cb-469f-a165-70867728950e'

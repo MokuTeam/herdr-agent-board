@@ -11,10 +11,12 @@
 import { MAX_BLOB_BYTES } from '../../adapters/bundle-files.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
+import { MAX_CALL_FILES_REQUEST_BYTES, MAX_MCP_BODY_BYTES, MAX_STDIN_LINE_BYTES } from '../../core/pilot-call.ts'
 import type { MoveIn } from '../../services/move-in.ts'
 import type { MoveOut } from '../../services/move-out.ts'
 import type { Answer, NodeBundle } from '../../services/node/bundle.ts'
 import type { NodeLaunchAnswer } from '../../services/node/launch.ts'
+import type { NodePilotCall } from '../../services/node/pilot-call.ts'
 import type { NodeSecrets } from '../../services/node/secrets.ts'
 import type { NodeUpdate } from '../../services/node/update.ts'
 import type { NodeUplink } from '../../services/node/uplink.ts'
@@ -50,6 +52,8 @@ export interface NodeDoorSources {
   update?: Pick<NodeUpdate, 'blob' | 'update'>
   /** `/api/node/move/...` (#616): this board's halves of a session moved to or from another device. */
   move?: { out: MoveOut; in: MoveIn }
+  /** `/api/node/pilot-call/...` (#618): MokuPilot call agent running on this node. */
+  pilotCall?: NodePilotCall
 }
 
 /** The secrets of one profile's bundle, at most this many bytes of JSON. */
@@ -184,6 +188,82 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
     ...(secrets ? [secretsRoute(secrets)] : []),
     ...(leave ? [leaveRoute(leave)] : []),
     ...(update ? updateRoutes(update) : []),
+    ...(o.pilotCall ? pilotCallDoorRoutes(o.pilotCall) : []),
+  ]
+}
+
+const PILOT_RUN = /^\/api\/node\/pilot-call\/([A-Za-z0-9_-]{8,64})\/(stdin|mcp-reply|close)$/
+const PILOT_EVENTS = /^\/api\/node\/pilot-call\/([A-Za-z0-9_-]{8,64})\/events$/
+
+async function jsonUpTo(req: Request, max: number): Promise<unknown> {
+  const bytes = await bytesUpTo(req, max)
+  if (!bytes) return undefined
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes))
+  } catch {
+    return null
+  }
+}
+
+/** Node door routes for running a MokuPilot call agent on this node (#618). */
+function pilotCallDoorRoutes(pc: NodePilotCall): Route[] {
+  return [
+    {
+      method: 'POST',
+      path: '/api/node/pilot-call/check',
+      async handle(req) {
+        const body = await jsonUpTo(req, 1024 * 1024)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(await pc.check(body))
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/node/pilot-call/start',
+      async handle(req) {
+        const body = await jsonUpTo(req, 1024 * 1024)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(await pc.start(body))
+      },
+    },
+    {
+      method: 'GET',
+      path: PILOT_EVENTS,
+      handle: (req, ctx) => pc.events(ctx.params[0] ?? '', req),
+    },
+    {
+      method: 'POST',
+      path: PILOT_RUN,
+      async handle(req, ctx) {
+        const runId = ctx.params[0] ?? ''
+        const op = ctx.params[1] ?? ''
+        const max =
+          op === 'stdin' ? MAX_STDIN_LINE_BYTES + 4096 : op === 'mcp-reply' ? MAX_MCP_BODY_BYTES + 4096 : 1024 * 1024
+        const body = await jsonUpTo(req, max)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        if (op === 'stdin') return answer(pc.stdin(runId, body))
+        if (op === 'mcp-reply') return answer(pc.mcpReply(runId, body))
+        return answer(pc.close(runId, body))
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/node/pilot-call/files',
+      async handle(req) {
+        const body = await jsonUpTo(req, MAX_CALL_FILES_REQUEST_BYTES)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(pc.uploadFiles(body))
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/node/pilot-call/report',
+      async handle(req) {
+        const body = await jsonUpTo(req, 1024 * 1024)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(await pc.deliverReport(body))
+      },
+    },
   ]
 }
 

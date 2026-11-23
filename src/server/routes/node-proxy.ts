@@ -63,6 +63,8 @@ export interface NodeProxyApp {
   remote(): Item[]
   /** The board's own routes, without this one: this computer's part of a bulk request. */
   local: readonly Route[]
+  /** Starting a MokuPilot call for a node card runs MokuPilot on the master (#618). */
+  pilotCall?(req: Request, ctx: RouteContext, p: KeyedPath): Promise<Response>
 }
 
 export interface NodeProxy extends RemoteDelivery {
@@ -214,6 +216,12 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
     if (p.area === 'term' && !terminalOn(app.cfg)) return json(404, { error: t('term.off') })
     if (desktopRest(p.area, p.rest)) return desktop()
     if (req.method !== 'GET' && req.method !== 'POST') return json(405, { error: 'method' })
+    // MokuPilot runs on the master computer, with the call agent running on the node (#618).
+    if (p.area === 'session' && p.rest === '/mokupilot' && req.method === 'POST' && app.pilotCall) {
+      const refused = refusal(ctx, WRITE)
+      if (refused) return refused
+      return app.pilotCall(req, ctx, p)
+    }
     const stream = p.area === 'term' && req.method === 'GET' && /^\/(agent|shell)\/stream$/.test(p.rest)
     // A terminal's other requests are POSTs, as on this board (routes/terminal.ts).
     if (p.area === 'term' && req.method === 'GET' && !stream) return json(405, { error: 'method' })

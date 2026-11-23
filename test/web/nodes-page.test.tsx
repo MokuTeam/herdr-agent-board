@@ -231,15 +231,15 @@ describe('a node card’s actions (#502)', () => {
   }
   const claude = { ...remote, agent: 'claude' }
 
-  test('not offered: open in the file manager, Go to herdr, a MokuPilot call; the terminal, fork, archive and the rest stay', () => {
+  test('not offered: open in the file manager, Go to herdr; a MokuPilot call, terminal, fork, archive and the rest stay', () => {
     const node = ids(cardMenu(claude, { ...ctx, device: { title: 'server-1', why: '' } }))
     const here = ids(cardMenu(item({ ...ctxless(claude) }), ctx))
     expect(here).toEqual(expect.arrayContaining(['focus', 'reveal', 'mokupilot']))
     expect(node).not.toContain('focus')
     expect(node).not.toContain('reveal')
-    expect(node).not.toContain('mokupilot')
+    expect(node).toContain('mokupilot')
     expect(node).toEqual(expect.arrayContaining(['open', 'terminal', 'fork', 'archive', 'rename', 'write', 'sleep']))
-    expect(here.filter(id => !['focus', 'reveal', 'mokupilot'].includes(id))).toEqual(node)
+    expect(here.filter(id => !['focus', 'reveal'].includes(id))).toEqual(node)
   })
 
   test('the card has no Go to herdr button; a card of this computer keeps it', () => {
@@ -248,8 +248,8 @@ describe('a node card’s actions (#502)', () => {
     expect(html(drawCard(local, data))).toContain('data-act="focus"')
   })
 
-  test('the sheet: no MokuPilot call and no Go to herdr for a node’s session', () => {
-    expect(headButtons(claude, t, true).mokupilotHidden).toBe(true)
+  test('the sheet: MokuPilot call stays offered, no Go to herdr for a node’s session', () => {
+    expect(headButtons(claude, t, true).mokupilotHidden).toBe(false)
     expect(headButtons(item({ key: 'b', agent: 'claude' }), t, true).mokupilotHidden).toBe(false)
     const sheet = drawSheet({ items: [claude], open: claude.key })
     const body = html(sheet.reactBody)
