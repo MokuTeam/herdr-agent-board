@@ -15,8 +15,10 @@
 // - Without `node`: no `/api/node/call`, and `board thread` writes this board's own database.
 import { expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { makeKey } from '../../src/core/backup-file.ts'
 import { serveBoard } from '../support/board-server.ts'
 import { type FakePane, nodeBoard, nodePair, PAIR_ENV, type PairNode } from '../support/node-pair.ts'
 import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
@@ -273,16 +275,12 @@ test("the master refuses what is not a session's board thread, whatever the node
   expect((await cli(node.box, ['thread', 'new', '--session', S, 'Fenced'])).code).toBe(0)
   for (const [body, line] of [
     [
-      { cmd: 'time', argv: ['add', '1h'], session: S, lane: 'atlas' },
-      'board time is not taken from a node: only board thread, board send and board agents',
-    ],
-    [
       { cmd: 'cal', argv: ['list'], session: S, lane: 'atlas' },
-      'board cal is not taken from a node: only board thread, board send and board agents',
+      'board cal is not taken from a node: only board thread, board send, board agents and board time',
     ],
     [
       { cmd: 'thread', argv: ['post', 'atlas-1', 'as the owner'], session: '', lane: null },
-      "only a session's board thread, board send or board agents is taken from a node",
+      "only a session's board thread, board send, board agents or board time is taken from a node",
     ],
     [
       { cmd: 'thread', argv: ['share', 'atlas-1', 'team'], session: S, lane: 'atlas' },
@@ -435,4 +433,162 @@ test("a case's node session on the master's page: up on its device, then last se
   const seen = await sessionOf()
   expect(seen).toMatchObject({ key: K, state: 'up', device: node.id })
   expect(typeof seen?.seenAt).toBe('number')
+}, 60_000)
+
+test('#644 board time from a node session logs, edits, posts, lists, exports, and imports on the master only', async () => {
+  const syncFolder = mkdtempSync(join(tmpdir(), 'board-time-sync-'))
+  try {
+    const timeCfg = {
+      zone: 'UTC',
+      clients: {
+        atlas: {
+          projects: ['Support'],
+          systems: [{ id: 'erp', title: 'ERP' }],
+        },
+      },
+    }
+    const pair = await nodePair({
+      env: ENV,
+      masterCfg: { time: timeCfg, backup: { folder: syncFolder } },
+      panes: (_id, box) => pane(box),
+      masterPanes: () => [],
+    })
+    const node = pair.nodes[0] as PairNode
+    herdrOf(node.box, pane(node.box))
+    nodeConfigFile(node)
+
+    // Set up a verified backup key & status on the master so time writes are allowed there (none on the node).
+    const masterState = stateFolder(pair.master.box)
+    mkdirSync(join(masterState, 'backup'), { recursive: true })
+    writeFileSync(
+      join(masterState, 'backup', 'backup-key.json'),
+      JSON.stringify(makeKey('test passphrase', 1, { logN: 10, r: 8, p: 1 })),
+    )
+    writeFileSync(
+      join(masterState, 'backup', 'status.json'),
+      JSON.stringify({ targets: { folder: { seq: 0, failures: 0, tested: Date.now(), where: syncFolder } } }),
+    )
+    await pair.waitDevice(node.id, d => d.link?.state === 'online', 10_000)
+    expect((await cli(node.box, ['cat', 'atlas', '--session', S])).code).toBe(0)
+    await cardLane(pair.master.url, 'atlas')
+
+    const added = await cli(node.box, [
+      'time',
+      'add',
+      '--session',
+      S,
+      '--project',
+      'Support',
+      '--minutes',
+      '45',
+      '--json',
+      'Logged from server-1',
+    ])
+    expect(added.code, `${added.stdout}\n${added.stderr}`).toBe(0)
+
+    // List from node: the entry lives on the master, authored by @server-1:s-server-1.
+    const listed = await cli(node.box, ['time', 'list', '--session', S, '--json'])
+    expect(listed.code, listed.stderr).toBe(0)
+    const entries = JSON.parse(listed.stdout) as {
+      id: string
+      client: string
+      project: string
+      description: string
+      by: { key: string; name: string }
+    }[]
+    expect(entries).toHaveLength(1)
+    const entry = entries[0] as (typeof entries)[number]
+    expect(entry).toMatchObject({
+      client: 'atlas',
+      project: 'Support',
+      description: 'Logged from server-1',
+      by: { key: K, name: 'p1' },
+    })
+    // No local DB was created on the node.
+    expect(existsSync(join(stateFolder(node.box), 'board.sqlite'))).toBe(false)
+
+    // Edit own entry from the node without --force, mark posted in erp, inspect via show/day/projects/export.
+    const edited = await cli(node.box, [
+      'time',
+      'edit',
+      entry.id,
+      '--session',
+      S,
+      '--minutes',
+      '60',
+      '--description',
+      'Updated from server-1',
+      '--json',
+    ])
+    expect(edited.code, edited.stderr).toBe(0)
+    expect(JSON.parse(edited.stdout)).toMatchObject({ id: entry.id, description: 'Updated from server-1', rev: 2 })
+
+    const posted = await cli(node.box, [
+      'time',
+      'post',
+      entry.id,
+      '--session',
+      S,
+      '--system',
+      'erp',
+      '--record',
+      'ERP-42',
+      '--json',
+    ])
+    expect(posted.code, posted.stderr).toBe(0)
+    expect(JSON.parse(posted.stdout)).toMatchObject({ system: 'erp', count: 1 })
+
+    const shown = await cli(node.box, ['time', 'show', entry.id, '--session', S])
+    expect(shown.code).toBe(0)
+    expect(shown.stdout).toContain('Updated from server-1')
+    expect(shown.stdout).toContain('erp ERP-42')
+
+    const projects = await cli(node.box, ['time', 'projects', '--session', S, '--json'])
+    expect(projects.code).toBe(0)
+    expect(JSON.parse(projects.stdout)).toEqual({ atlas: ['Support'] })
+
+    const exported = await cli(node.box, ['time', 'export', '--session', S])
+    expect(exported.code).toBe(0)
+    expect(exported.stdout).toContain('Updated from server-1')
+
+    // Import dry-run carries the node's CSV file to the master cleanly.
+    const csvPath = join(node.box.dir, 'toggl export 100%.csv')
+    writeFileSync(
+      csvPath,
+      [
+        'User,Client,Project,Description,Start date,Start time,End date,End time,Duration,Tags',
+        'Me,Atlas,Support,From CSV,2026-11-23,09:00:00,2026-11-23,09:30:00,00:30:00,',
+      ].join('\n'),
+    )
+    const imported = await cli(node.box, [
+      'time',
+      'import',
+      csvPath,
+      '--session',
+      S,
+      '--tz',
+      'UTC',
+      '--map',
+      'Atlas=atlas',
+      '--dry-run',
+      '--json',
+    ])
+    expect(imported.code, imported.stderr).toBe(0)
+    expect(JSON.parse(imported.stdout)).toMatchObject({ dryRun: true, new: 1, entries: 1 })
+    expect(outboxCount(node)).toBe(0)
+
+    // With the link cut, board time fails immediately and leaves nothing in the outbox.
+    await node.proxy.cut('drop')
+    await pair.waitDevice(node.id, d => d.link?.state === 'offline', 10_000)
+    const offline = await cli(node.box, ['time', 'list', '--session', S, '--json'])
+    expect(offline.code).toBe(1)
+    expect(JSON.parse(offline.stdout)).toEqual({
+      ok: false,
+      error: 'unreachable',
+      message: "the board's computer is not reachable",
+    })
+    expect(outboxCount(node)).toBe(0)
+  } finally {
+    rmSync(syncFolder, { recursive: true, force: true })
+  }
 }, 60_000)

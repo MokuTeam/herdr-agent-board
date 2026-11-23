@@ -2545,12 +2545,16 @@ const isStep = (v: unknown): v is TestStep =>
  * when none is named; outside a session, as the owner.
  */
 async function timeCommand(): Promise<void> {
-  const own = await ownSession()
+  const own: { key: string; name?: string | undefined; cwd?: string } | null = target
+    ? await resolveSession()
+    : await ownSession()
   const card = own ? readCard(own.key) : null
-  const lane = (typeof card?.category === 'string' && card.category) || categoryFor(cfg, process.cwd())
+  const cwd = own && typeof own.cwd === 'string' && own.cwd ? own.cwd : process.cwd()
+  const lane = (typeof card?.category === 'string' && card.category) || categoryFor(cfg, cwd)
+  const name = own ? own.name || (target ? liveSessions().get(own.key)?.session.name : '') || '' : ''
   const { timeCmd } = await import('./time-cli.ts')
   // under --json an error is printed as JSON, and the exit code says it failed
-  process.exitCode = await timeCmd(rest, { cfg, actor: own ? { key: own.key, name: own.name ?? '' } : 'user', lane })
+  process.exitCode = await timeCmd(rest, { cfg, actor: own ? { key: own.key, name } : 'user', lane })
 }
 
 /** `board journal …` (#489, entrypoints/journal-cli.ts): what changed on the board since the owner left. */

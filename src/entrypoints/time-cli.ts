@@ -25,6 +25,7 @@
 //   board time [<command>] --help   a command's usage with all its flags (time.usage.<command>), or every one's;
 //                  a usage error says the command's usage too
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { addTimeProjects } from '../adapters/config-file.ts'
 import { type BoardDb, openDb } from '../adapters/db.ts'
 import {
@@ -49,6 +50,7 @@ import {
   unpostEntries,
 } from '../adapters/time-store.ts'
 import { t } from '../core/lang.ts'
+import { UPLINK_REFUSED } from '../core/node-uplink.ts'
 import { nodeConfig } from '../core/nodes.ts'
 import {
   type Actor,
@@ -82,6 +84,7 @@ import {
 import { type DateFormat, dayTotals, parseMap, rowsFromCsv, rowsFromJson, type TogglRow } from '../core/time-import.ts'
 import type { Config } from '../core/types.ts'
 import { withNewProject, writeRefusal } from '../services/time.ts'
+import type { NodeCall, NodeCallAnswer } from './thread-cli.ts'
 
 const FLAGS_WITH_VALUE = new Set([
   '--client',
@@ -137,6 +140,24 @@ export function parseArgs(rest: readonly string[]): Args {
   }
 }
 
+/**
+ * Where `board time import`'s file path sits among `rest` (the arguments after `import`), as
+ * `parseArgs` reads them: the first positional word, or the token right after `--`. `-1` if none.
+ */
+export function timeImportFileArg(rest: readonly string[]): number {
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] as string
+    if (a === '--') return i + 1 < rest.length ? i + 1 : -1
+    if (FLAGS_WITH_VALUE.has(a)) {
+      i++
+      continue
+    }
+    if (a.startsWith('--')) continue
+    return i
+  }
+  return -1
+}
+
 export interface TimeCmdContext {
   cfg: Config
   /** Who runs it: the session, or the owner outside one. */
@@ -144,6 +165,9 @@ export interface TimeCmdContext {
   /** The session's lane (its card's category), the client when none is named. */
   lane: string | null
   out?: (line: string) => void
+  err?: (line: string) => void
+  /** On a node (#644): hands the call to this node's board, `POST /api/node/call`; the tests' stand-in. */
+  call?: (body: NodeCall) => Promise<NodeCallAnswer>
   now?: number
 }
 
@@ -264,13 +288,8 @@ export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Pro
     else for (const line of lines) out(line)
     return 0
   }
-  // On a node (#508, docs/design/nodes 10 item 6): time is the master's, and a database here nobody reads.
-  if (nodeConfig(ctx.cfg.node)) {
-    const message = "board time is not available on a node yet: it runs on the board's computer"
-    if (!json) throw new Error(message)
-    out(JSON.stringify({ ok: false, error: 'node', message }))
-    return 1
-  }
+  // On a node (#644): time entries live only on the master; route over the uplink, never opening a local DB.
+  if (nodeConfig(ctx.cfg.node)) return await forward(rest, ctx, out, json)
   try {
     await run(rest, ctx, out)
     return 0
@@ -296,6 +315,64 @@ export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Pro
     )
     return 1
   }
+}
+
+/**
+ * `board time …` on a node (#644): handed to this node's board, which forwards it to the master
+ * over the uplink (services/node/uplink.ts); what the master printed is printed here. An older
+ * master that refuses `cmd: 'time'` with 126 is reported with a clear "update the master" message.
+ */
+async function forward(
+  rest: readonly string[],
+  ctx: TimeCmdContext,
+  out: (line: string) => void,
+  json: boolean,
+): Promise<number> {
+  const err = ctx.err ?? ((line: string) => console.error(line))
+  const fail = (code: string, message: string): number => {
+    if (json) out(JSON.stringify({ ok: false, error: code, message }))
+    else err(message)
+    return 1
+  }
+  if (typeof ctx.actor === 'string')
+    return fail(
+      'no_session',
+      "run it from a session: on a node, board time goes to the board's computer as a session's",
+    )
+  const [sub = 'list', ...args] = rest
+  let files: string[] = []
+  if (sub === 'import') {
+    const pos = timeImportFileArg(args)
+    if (pos >= 0) files = [resolve(args[pos] as string)]
+  }
+  const body: NodeCall = {
+    cmd: 'time',
+    argv: [...rest],
+    session: ctx.actor.key,
+    lane: ctx.lane,
+    files,
+  }
+  const send = ctx.call ?? (await import('./thread-cli.ts')).callBoard(ctx.cfg.port)
+  const answer = await send(body)
+  if (!answer) return fail('board', 'the board does not run on this computer: nothing was sent')
+  if (answer.state === 'answered') {
+    if (answer.code === UPLINK_REFUSED && answer.err.some(l => /is not taken from a node/i.test(l)))
+      return fail(
+        'master_outdated',
+        "board time is not supported by the board's computer yet: update the master board to a newer version",
+      )
+    if (json && answer.code !== 0 && !answer.out.length && answer.err.length)
+      return fail('failed', answer.err.join('\n'))
+    for (const line of answer.out) out(line)
+    for (const line of answer.err) err(line)
+    return answer.code
+  }
+  if (answer.state === 'kept') {
+    if (json) out(JSON.stringify({ ok: true, kept: true, id: answer.id }))
+    else out("kept, goes to the board's computer when it is reachable")
+    return 0
+  }
+  return fail('unreachable', "the board's computer is not reachable")
 }
 
 async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: string) => void): Promise<void> {

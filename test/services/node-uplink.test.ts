@@ -12,6 +12,7 @@ import type { UplinkResult } from '../../src/core/node-uplink.ts'
 import type { LinkStatus } from '../../src/core/nodes.ts'
 import type { Item } from '../../src/core/types.ts'
 import type { ThreadCmdContext } from '../../src/entrypoints/thread-cli.ts'
+import type { TimeCmdContext } from '../../src/entrypoints/time-cli.ts'
 import { createNodeUplink } from '../../src/services/node/uplink.ts'
 import type { Link } from '../../src/services/nodes/link.ts'
 import { createUplinkRunner } from '../../src/services/nodes/uplink.ts'
@@ -367,7 +368,7 @@ describe("the master's side", () => {
     const dir = isolatedHome()
     const bytes = Buffer.from('real')
     const sent = [
-      { id: 'r-1', cmd: 'time', argv: ['add'], session: 's-1', lane: null },
+      { id: 'r-1', cmd: 'cal', argv: ['list'], session: 's-1', lane: null },
       { id: 'r-2', cmd: 'thread', argv: ['post', 'k', 'x'], session: '', lane: null },
       { id: 'r-3', cmd: 'thread', argv: ['share', 'k', 'team'], session: 's-1', lane: null },
       { id: 'r-4', cmd: 'thread', argv: ['open', 'k'], session: 's-1', lane: null },
@@ -422,12 +423,12 @@ describe("the master's side", () => {
       'r-1': {
         code: 126,
         out: [],
-        err: ['board time is not taken from a node: only board thread, board send and board agents'],
+        err: ['board cal is not taken from a node: only board thread, board send, board agents and board time'],
       },
       'r-2': {
         code: 126,
         out: [],
-        err: ["only a session's board thread, board send or board agents is taken from a node"],
+        err: ["only a session's board thread, board send, board agents or board time is taken from a node"],
       },
       'r-3': { code: 126, out: [], err: ['board thread share is for the owner to confirm: not from a node'] },
       'r-4': { code: 126, out: [], err: ['board thread open opens the board on its own computer: not from a node'] },
@@ -601,6 +602,109 @@ describe("the master's side", () => {
       { key: `@server-1:${N1}`, agent: 'agy', device: 'server-1', self: true },
     ])
     expect(store.seenCall('server-1', 'ag-1')).toBeNull()
+  })
+
+  test('#644 board time from a node runs as its prefixed key in its card lane, deduplicates writes, strips node cfg, and pulls import files safely', async () => {
+    const dir = isolatedHome()
+    const store = createDeviceStore({ dir: join(dir, 'nodes') })
+    const csv = Buffer.from('User,Client,Project,Description,Start date,Start time,End date,End time,Duration,Tags\n')
+    const sent = [
+      {
+        id: 'tm-1',
+        cmd: 'time',
+        argv: ['add', '--project', 'Support', '--minutes', '45', 'work'],
+        session: 's-1',
+        lane: 'spoofed',
+        files: [],
+      },
+      // Sent again on a reconnect: write is deduplicated via ledger and not run twice.
+      {
+        id: 'tm-1',
+        cmd: 'time',
+        argv: ['add', '--project', 'Support', '--minutes', '45', 'work'],
+        session: 's-1',
+        lane: 'spoofed',
+        files: [],
+      },
+      // Read: not remembered in ledger.
+      { id: 'tm-2', cmd: 'time', argv: ['list', '--json'], session: 's-1', lane: null, files: [] },
+      // No card on master: falls back to the node's lane.
+      { id: 'tm-3', cmd: 'time', argv: ['list'], session: 's-new', lane: 'fallback-lane', files: [] },
+      // Import with a file carried over uplink: rewritten to pulled copy.
+      {
+        id: 'tm-4',
+        cmd: 'time',
+        argv: ['import', '/home/node/toggl.csv', '--tz', 'UTC', '--dry-run'],
+        session: 's-1',
+        lane: null,
+        files: [{ n: 0, name: 'toggl.csv', size: csv.length, sha256: sha(csv) }],
+      },
+      // Import claiming a path without sending the file: refused, never reads master's disk.
+      {
+        id: 'tm-5',
+        cmd: 'time',
+        argv: ['import', '/etc/passwd', '--tz', 'UTC'],
+        session: 's-1',
+        lane: null,
+        files: [],
+      },
+      // Multi-line output exceeding 64 KB total (e.g. export / --json): split per line so fit() keeps all lines.
+      { id: 'tm-6', cmd: 'time', argv: ['export'], session: 's-1', lane: null, files: [] },
+    ]
+    const posted: [string, UplinkResult][] = []
+    const link = standIn((path, init) => {
+      if (path === '/api/node/uplink') return streamOf(sent, init.signal)
+      if (path === '/api/node/uplink/tm-4/file/0') return new Response(csv)
+      posted.push([path.split('/').pop() as string, JSON.parse(String(init.body)) as UplinkResult])
+      return new Response('{}')
+    })
+    const card = { key: '@server-1:s-1', category: 'atlas', name: 'worker' } as Item
+    const ran: { argv: string[]; ctx: TimeCmdContext; csvText?: string }[] = []
+    const runner = createUplinkRunner({
+      links: link.links,
+      find: key => (key === card.key ? card : undefined),
+      items: () => [card],
+      // Dual master+node config: `node` must be stripped before running timeCmd on the master.
+      cfg: { time: { zone: 'UTC' }, node: { id: 'laptop', port: 12430 } } as never,
+      log: () => {},
+      store,
+      runTime: async (argv, ctx) => {
+        const csvText = argv[0] === 'import' ? readFileSync(argv[1] as string, 'utf8') : undefined
+        ran.push({ argv: [...argv], ctx, ...(csvText !== undefined && { csvText }) })
+        if (argv[0] === 'export')
+          ctx.out?.(Array.from({ length: 800 }, (_, i) => `row-${i},${'x'.repeat(100)}`).join('\n'))
+        else ctx.out?.(`ran ${argv[0]}`)
+        return 0
+      },
+    })
+    link.changed('online')
+    await until(() => posted.length === sent.length, 5000)
+    await runner.close()
+
+    // tm-1 ran once (deduplicated), tm-2, tm-3, tm-4 ran; tm-5 was refused before runTime.
+    // s-1's calls ran in order (add, list, import); s-new's call ran concurrently.
+    const s1Calls = ran.filter(r => typeof r.ctx.actor !== 'string' && r.ctx.actor.key === '@server-1:s-1')
+    const sNewCalls = ran.filter(r => typeof r.ctx.actor !== 'string' && r.ctx.actor.key === '@server-1:s-new')
+    expect(s1Calls.map(r => r.argv[0])).toEqual(['add', 'list', 'import', 'export'])
+    expect(sNewCalls.map(r => r.argv[0])).toEqual(['list'])
+    expect(s1Calls[0]?.ctx.actor).toEqual({ key: '@server-1:s-1', name: 'worker' })
+    expect(s1Calls[0]?.ctx.lane).toBe('atlas')
+    expect(s1Calls[0]?.ctx.cfg.node).toBeUndefined()
+    expect(sNewCalls[0]?.ctx.lane).toBe('fallback-lane')
+    expect(s1Calls[2]?.csvText).toBe(csv.toString('utf8'))
+    expect(s1Calls[2]?.argv[1]?.startsWith(join(dir, 'nodes', 'server-1', 'uplink', 'tm-4'))).toBe(true)
+    expect(readdirSync(join(dir, 'nodes', 'server-1', 'uplink'))).toEqual([])
+
+    const answers = (id: string) => posted.filter(([p]) => p === id).map(([, r]) => r)
+    expect(answers('tm-1')).toEqual([
+      { code: 0, out: ['ran add'], err: [] },
+      { code: 0, out: ['ran add'], err: [] },
+    ])
+    expect(answers('tm-5')).toEqual([{ code: 1, out: [], err: ['/etc/passwd: the node did not send it'] }])
+    expect(answers('tm-6')[0]?.out).toHaveLength(800)
+    expect(answers('tm-6')[0]?.out.join('\n').length).toBeGreaterThan(80_000)
+    expect(store.seenCall('server-1', 'tm-1')).toEqual({ code: 0, out: ['ran add'], err: [] })
+    expect(store.seenCall('server-1', 'tm-2')).toBeNull()
   })
 
   test('the stream is held only while the link is online', async () => {
