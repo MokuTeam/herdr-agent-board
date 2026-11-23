@@ -1,13 +1,14 @@
 // The board's own files through the tunnel (server/tunnel.ts, adapters/own-files.ts): with a login,
 // the routes that read by a path the request names refuse the state folder, the config folder and
-// the tunnel key's folder, but for the state folder's uploads; the web board on 127.0.0.1 reads them
-// as before. Files planted there hold a marker, and no route in the table gives it away.
+// the tunnel key's folder, but for the state folder's uploads and thread-files; the web board on
+// 127.0.0.1 reads them as before. Files planted there hold a marker, and no route in the table gives it away.
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { desktopOnly } from '../../src/core/remote.ts'
 import { sharedSandbox } from '../support/board-server.ts'
+import { canSymlink } from '../support/fs.ts'
 import type { Sandbox } from '../support/sandbox.ts'
 import {
   CALLER,
@@ -60,6 +61,7 @@ describe('the board’s own files through the tunnel', () => {
   let url = ''
   let tunnel = ''
   let state = ''
+  let config = ''
   let proc: Awaited<ReturnType<typeof startTunnelBoard>>['proc']
   let me: ReturnType<typeof viaCaddy>
   let fsToken = ''
@@ -122,7 +124,7 @@ describe('the board’s own files through the tunnel', () => {
   beforeAll(async () => {
     box = await shared()
     state = stateFolder(box)
-    const config = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board')
+    config = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board')
     const keys = join(box.env.HOME as string, 'keys')
     for (const dir of [state, config, keys]) mkdirSync(dir, { recursive: true })
     marked.push(
@@ -239,6 +241,140 @@ describe('the board’s own files through the tunnel', () => {
     const preview = await remote('POST', '/api/fs/preview', { path: sent.path })
     expect(preview.status).toBe(200)
     expect(await preview.json()).toMatchObject({ path: sent.path, exists: true, kind: 'image' })
+  })
+
+  test('thread files open through the domain with a login; the rest of state and unauthenticated callers stay refused', async () => {
+    const threadDir = join(state, 'thread-files', 't1')
+    mkdirSync(threadDir, { recursive: true })
+    const report = join(threadDir, 'e1-report.md')
+    const shot = join(threadDir, 'e1-shot.png')
+    const odd = join(threadDir, 'e2-отчет 100%.txt')
+    writeFileSync(report, 'thread report body\n')
+    writeFileSync(shot, PNG)
+    writeFileSync(odd, 'percent and cyrillic\n')
+
+    for (const dir of [
+      join(state, 'secrets'),
+      join(state, 'backup'),
+      join(state, 'team-files'),
+      join(state, 'tunnel'),
+      join(state, 'node'),
+      join(state, 'thread-files-old'),
+    ])
+      mkdirSync(dir, { recursive: true })
+
+    const sensitive = [
+      join(config, 'config.json'),
+      join(state, 'access.json'),
+      join(state, 'access-logins.json'),
+      join(state, 'access-passkeys.json'),
+      join(state, 'board.db'),
+      join(state, 'secrets', 'audit.jsonl'),
+      join(state, 'backup', 'snap.db'),
+      join(state, 'team-key.json'),
+      join(state, 'team-files', 'blob.bin'),
+      join(state, 'tunnel', 'id_ed25519'),
+      join(state, 'node', 'masters.json'),
+      join(state, 'thread-files-old', 'leak.txt'),
+    ]
+    if (!existsSync(sensitive[0] as string)) writeFileSync(sensitive[0] as string, '{"secret":"cfg"}\n')
+    for (const file of sensitive.slice(3)) writeFileSync(file, 'secret-payload\n')
+
+    // With a login: thread files preview, stat, raw, and download work.
+    const reportPreview = await remote('POST', '/api/fs/preview', { path: report })
+    expect(reportPreview.status).toBe(200)
+    expect(await reportPreview.json()).toMatchObject({
+      path: report,
+      exists: true,
+      text: expect.stringContaining('thread report body'),
+    })
+
+    const oddPreview = await remote('POST', '/api/fs/preview', { path: odd })
+    expect(oddPreview.status).toBe(200)
+    expect(await oddPreview.json()).toMatchObject({
+      path: odd,
+      exists: true,
+      text: expect.stringContaining('percent and cyrillic'),
+    })
+
+    const statRes = await remote('POST', '/api/fs/stat', {
+      paths: [report, shot, join(state, 'board.db'), join(config, 'config.json')],
+    })
+    expect(statRes.status).toBe(200)
+    expect(await statRes.json()).toEqual({
+      items: [
+        expect.objectContaining({ path: report, exists: true }),
+        expect.objectContaining({ path: shot, exists: true }),
+        expect.objectContaining({ path: join(state, 'board.db'), exists: false }),
+        expect.objectContaining({ path: join(config, 'config.json'), exists: false }),
+      ],
+    })
+
+    const shotRaw = await raw(remote, shot)
+    expect(shotRaw.status).toBe(200)
+    expect(Buffer.from(await shotRaw.arrayBuffer())).toEqual(PNG)
+
+    const shotPreview = await remote('POST', '/api/fs/preview', { path: shot })
+    expect(shotPreview.status).toBe(200)
+    expect(await shotPreview.json()).toMatchObject({ path: shot, exists: true, kind: 'image' })
+
+    const reportDl = await remote('GET', `/api/fs/download?path=${encodeURIComponent(report)}&t=${fsToken}`)
+    expect(reportDl.status).toBe(200)
+    expect(await reportDl.text()).toBe('thread report body\n')
+
+    const oddDl = await remote('GET', `/api/fs/download?path=${encodeURIComponent(odd)}&t=${fsToken}`)
+    expect(oddDl.status).toBe(200)
+    expect(await oddDl.text()).toBe('percent and cyrillic\n')
+
+    // Without a login cookie: thread files are still refused (401).
+    const anon = viaCaddy(tunnel)
+    expect((await anon.post('/api/fs/preview', { path: report })).status).toBe(401)
+    expect((await anon.get(`/api/fs/raw?path=${encodeURIComponent(shot)}&t=${fsToken}`)).status).toBe(401)
+    expect((await anon.get(`/api/fs/download?path=${encodeURIComponent(report)}&t=${fsToken}`)).status).toBe(401)
+
+    // With a login: every other part of stateDir and configDir stays refused (403 err.fs.own).
+    const traversal = `${state}/thread-files/../access.json`
+    for (const bad of [...sensitive, traversal]) {
+      expect([bad, ...(await answer(remote('POST', '/api/fs/preview', { path: bad })))]).toEqual([
+        bad,
+        403,
+        { error: OWN },
+      ])
+      expect([
+        bad,
+        ...(await answer(remote('GET', `/api/fs/download?path=${encodeURIComponent(bad)}&t=${fsToken}`))),
+      ]).toEqual([bad, 403, { error: OWN }])
+    }
+    for (const badRaw of [join(state, 'access.json'), join(config, 'config.json'), join(state, 'board.db')]) {
+      expect([
+        badRaw,
+        ...(await answer(remote('GET', `/api/fs/raw?path=${encodeURIComponent(badRaw)}&t=${fsToken}`))),
+      ]).toEqual([badRaw, 403, { error: OWN }])
+    }
+
+    // A symlink inside thread-files pointing to a refused folder/file stays refused.
+    if (canSymlink || process.platform === 'win32') {
+      const linkDir = join(threadDir, 'escape-dir')
+      symlinkSync(join(state, 'secrets'), linkDir, 'junction')
+      expect(await answer(remote('POST', '/api/fs/preview', { path: join(linkDir, 'audit.jsonl') }))).toEqual([
+        403,
+        { error: OWN },
+      ])
+      expect(
+        await answer(
+          remote('GET', `/api/fs/download?path=${encodeURIComponent(join(linkDir, 'audit.jsonl'))}&t=${fsToken}`),
+        ),
+      ).toEqual([403, { error: OWN }])
+      const linkStat = await remote('POST', '/api/fs/stat', { paths: [join(linkDir, 'audit.jsonl')] })
+      expect(await linkStat.json()).toEqual({
+        items: [expect.objectContaining({ exists: false })],
+      })
+    }
+
+    // Local web board (127.0.0.1) is unchanged: opens both thread files and state/config files.
+    expect((await local('POST', '/api/fs/preview', { path: report })).status).toBe(200)
+    expect((await local('POST', '/api/fs/preview', { path: join(config, 'config.json') })).status).toBe(200)
+    expect((await local('POST', '/api/fs/preview', { path: join(state, 'board.db') })).status).toBe(200)
   })
 
   test('the web board on 127.0.0.1 shows them as before: the check is the tunnel’s only', async () => {

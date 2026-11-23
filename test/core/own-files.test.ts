@@ -36,29 +36,56 @@ describe('underFolder', () => {
 })
 
 describe('isOwnFile', () => {
-  const win = { refused: ['C:\\s\\agent-board', 'C:\\c\\agent-board'], allowed: ['C:\\s\\agent-board\\uploads'] }
-  const linux = { refused: ['/s/agent-board', '/c/agent-board'], allowed: ['/s/agent-board/uploads'] }
+  const win = {
+    refused: ['C:\\s\\agent-board', 'C:\\c\\agent-board'],
+    allowed: ['C:\\s\\agent-board\\uploads', 'C:\\s\\agent-board\\thread-files'],
+  }
+  const linux = {
+    refused: ['/s/agent-board', '/c/agent-board'],
+    allowed: ['/s/agent-board/uploads', '/s/agent-board/thread-files'],
+  }
 
   test('refuses under the state and config folders, the folders themselves too', () => {
     expect(isOwnFile('C:\\s\\agent-board\\access.json', win, 'win32')).toBe(true)
+    expect(isOwnFile('C:\\s\\agent-board\\access-logins.json', win, 'win32')).toBe(true)
+    expect(isOwnFile('C:\\s\\agent-board\\access-passkeys.json', win, 'win32')).toBe(true)
+    expect(isOwnFile('C:\\s\\agent-board\\board.db', win, 'win32')).toBe(true)
+    expect(isOwnFile('C:\\s\\agent-board\\secrets\\audit.jsonl', win, 'win32')).toBe(true)
+    expect(isOwnFile('C:\\s\\agent-board\\backup\\snap.db', win, 'win32')).toBe(true)
+    expect(isOwnFile('C:\\s\\agent-board\\team-files\\blob', win, 'win32')).toBe(true)
     expect(isOwnFile('C:\\S\\Agent-Board\\tunnel\\id_ed25519', win, 'win32')).toBe(true)
     expect(isOwnFile('C:\\s\\agent-board', win, 'win32')).toBe(true)
     expect(isOwnFile('C:\\c\\agent-board\\config.json', win, 'win32')).toBe(true)
     expect(isOwnFile('/s/agent-board/access.json', linux, 'linux')).toBe(true)
+    expect(isOwnFile('/s/agent-board/access-logins.json', linux, 'linux')).toBe(true)
+    expect(isOwnFile('/s/agent-board/access-passkeys.json', linux, 'linux')).toBe(true)
+    expect(isOwnFile('/s/agent-board/board.db', linux, 'linux')).toBe(true)
+    expect(isOwnFile('/s/agent-board/secrets/audit.jsonl', linux, 'linux')).toBe(true)
+    expect(isOwnFile('/s/agent-board/backup/snap.db', linux, 'linux')).toBe(true)
+    expect(isOwnFile('/s/agent-board/team-files/blob', linux, 'linux')).toBe(true)
     expect(isOwnFile('/c/agent-board/config.json', linux, 'linux')).toBe(true)
   })
 
-  test('lets through what is under uploads inside the state folder, and what is under neither', () => {
+  test('lets through what is under uploads and thread-files inside the state folder, and what is under neither', () => {
     expect(isOwnFile('C:\\s\\agent-board\\uploads\\2026-10-20\\a.png', win, 'win32')).toBe(false)
     expect(isOwnFile('C:\\s\\agent-board\\uploads', win, 'win32')).toBe(false)
+    expect(isOwnFile('C:\\s\\agent-board\\thread-files\\t1\\report.md', win, 'win32')).toBe(false)
+    expect(isOwnFile('C:\\S\\Agent-Board\\Thread-Files\\t1\\report.md', win, 'win32')).toBe(false)
+    expect(isOwnFile('C:\\s\\agent-board\\thread-files', win, 'win32')).toBe(false)
     expect(isOwnFile('/s/agent-board/uploads/2026-10-20/a.png', linux, 'linux')).toBe(false)
+    expect(isOwnFile('/s/agent-board/thread-files/t1/report.md', linux, 'linux')).toBe(false)
+    expect(isOwnFile('/s/agent-board/thread-files', linux, 'linux')).toBe(false)
+    expect(isOwnFile('/s/agent-board/Thread-Files/t1/report.md', linux, 'linux')).toBe(true)
+    expect(isOwnFile('/S/Agent-Board/Thread-Files/t1/report.md', linux, 'darwin')).toBe(false)
     expect(isOwnFile('C:\\work\\x.txt', win, 'win32')).toBe(false)
     expect(isOwnFile('/work/x.txt', linux, 'linux')).toBe(false)
   })
 
-  test('a name that only starts like uploads is still refused', () => {
+  test('a name that only starts like uploads or thread-files is still refused', () => {
     expect(isOwnFile('C:\\s\\agent-board\\uploads-old\\a.png', win, 'win32')).toBe(true)
     expect(isOwnFile('/s/agent-board/uploads2/a.png', linux, 'linux')).toBe(true)
+    expect(isOwnFile('C:\\s\\agent-board\\thread-files-old\\a.md', win, 'win32')).toBe(true)
+    expect(isOwnFile('/s/agent-board/thread-files2/a.md', linux, 'linux')).toBe(true)
   })
 })
 

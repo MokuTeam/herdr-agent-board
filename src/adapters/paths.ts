@@ -27,6 +27,7 @@ export const scheduleDir = (): string => join(stateDir(), 'schedule')
 export const archiveDir = (): string => join(stateDir(), 'archive')
 export const boardFile = (): string => join(stateDir(), 'board.json')
 export const uploadsDir = (): string => join(stateDir(), 'uploads')
+export const threadFilesDir = (): string => join(stateDir(), 'thread-files')
 // First messages for a launcher's {messageFile}, there only while the launcher runs.
 export const launchDir = (): string => join(stateDir(), 'launch')
 // From Claude Code's status line (entrypoints/statusline.ts): the account's usage windows, each session's context.

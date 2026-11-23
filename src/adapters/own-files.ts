@@ -7,7 +7,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { isOwnFile, type OwnFolders, oddWindowsPath, underFolder } from '../core/own-files.ts'
 import { tunnelConfig } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
-import { configDir, stateDir, uploadsDir } from './paths.ts'
+import { configDir, stateDir, threadFilesDir, uploadsDir } from './paths.ts'
 
 /** realpathSync.native of the path, or of its nearest existing parent with the rest joined back. */
 export function realOrNearest(path: string): string {
@@ -73,8 +73,8 @@ const same = (a: string, b: string): boolean =>
 
 /**
  * refused: real stateDir(), configDir(), and the key's folder when tunnel.key is set and outside
- * stateDir(); allowed: real uploadsDir(), while it is the state folder's own `uploads` and no link
- * elsewhere. A folder not made yet counts by its resolved path.
+ * stateDir(); allowed: real uploadsDir() and threadFilesDir(), each only while it is the state
+ * folder's own child and no link elsewhere. A folder not made yet counts by its resolved path.
  */
 export function ownFolders(cfg: Config): OwnFolders {
   const state = realOrNearest(stateDir())
@@ -84,8 +84,11 @@ export function ownFolders(cfg: Config): OwnFolders {
     const folder = keyFolder(key)
     if (!underFolder(folder, state, process.platform)) refused.push(folder)
   }
-  const uploads = realOrNearest(uploadsDir())
-  const allowed = same(uploads, join(state, relative(stateDir(), uploadsDir()))) ? [uploads] : []
+  const allowed: string[] = []
+  for (const dir of [uploadsDir(), threadFilesDir()]) {
+    const real = realOrNearest(dir)
+    if (same(real, join(state, relative(stateDir(), dir)))) allowed.push(real)
+  }
   return { refused, allowed }
 }
 

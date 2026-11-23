@@ -13,6 +13,7 @@ import { canSymlink, SYMLINK_SKIP_REASON } from '../support/fs.ts'
 const onWindows = process.platform === 'win32'
 // A link into a folder: a junction on Windows (no admin needed), a symlink elsewhere.
 const canLink = onWindows || canSymlink
+const threadFilesDir = () => join(stateDir(), 'thread-files')
 
 /** A board under isolatedHome(): its state and config folders made, with access.json and config.json. */
 function board(tunnel?: unknown) {
@@ -50,26 +51,44 @@ function probeShortNames(): boolean {
 const shortNames = onWindows && probeShortNames()
 
 describe('the board’s own files', () => {
-  test('the state and config folders and what is in them, made or not; not the uploads', () => {
+  test('the state and config folders and what is in them, made or not; not uploads or thread-files', () => {
     const { home, state, config, own } = board()
     mkdirSync(join(state, 'uploads', '2026-10-20'), { recursive: true })
     writeFileSync(join(state, 'uploads', '2026-10-20', 'a.png'), '')
+    mkdirSync(join(state, 'thread-files', 't1'), { recursive: true })
+    writeFileSync(join(state, 'thread-files', 't1', 'report.md'), '')
+    writeFileSync(join(state, 'thread-files', 't1', 'отчет 100% anna.md'), '')
     mkdirSync(join(home, 'x'))
     expect(own(join(state, 'access.json'))).toBe(true)
+    expect(own(join(state, 'access-logins.json'))).toBe(true)
+    expect(own(join(state, 'access-passkeys.json'))).toBe(true)
+    expect(own(join(state, 'board.db'))).toBe(true)
+    expect(own(join(state, 'secrets', 'audit.jsonl'))).toBe(true)
+    expect(own(join(state, 'backup', 'snap.db'))).toBe(true)
+    expect(own(join(state, 'team-key.json'))).toBe(true)
+    expect(own(join(state, 'team-files', 'blob'))).toBe(true)
+    expect(own(join(state, 'node', 'masters.json'))).toBe(true)
+    expect(own(join(state, 'thread-files-old', 'x.txt'))).toBe(true)
     expect(own(state)).toBe(true)
     expect(own(join(config, 'config.json'))).toBe(true)
     expect(own(join(state, 'nope', 'x.txt'))).toBe(true)
     expect(own(join(state, 'uploads', '2026-10-20', 'a.png'))).toBe(false)
     expect(own(join(state, 'uploads'))).toBe(false)
+    expect(own(join(state, 'thread-files', 't1', 'report.md'))).toBe(false)
+    expect(own(join(state, 'thread-files', 't1', 'отчет 100% anna.md'))).toBe(false)
+    expect(own(join(state, 'thread-files'))).toBe(false)
     expect(own(join(home, 'x'))).toBe(false)
     expect(own(join(home, 'x', 'missing.txt'))).toBe(false)
   })
 
-  test('a path through `..` counts where it leads, the uploads folder not made yet', () => {
+  test('a path through `..` counts where it leads, the uploads and thread-files folders not made yet', () => {
     const { state, own } = board()
     expect(own(`${state}/uploads/../access.json`)).toBe(true)
     expect(own(`${uploadsDir()}/../../${basename(state)}/access.json`)).toBe(true)
     expect(own(`${state}/uploads/2026-10-20/a.png`)).toBe(false)
+    expect(own(`${state}/thread-files/../access.json`)).toBe(true)
+    expect(own(`${threadFilesDir()}/../../${basename(state)}/access.json`)).toBe(true)
+    expect(own(`${state}/thread-files/t1/report.md`)).toBe(false)
   })
 
   test('folders not made yet count by their resolved paths', () => {
@@ -79,6 +98,7 @@ describe('the board’s own files', () => {
     expect(own(join(configDir(), 'config.json'))).toBe(true)
     expect(own(join(home, 'keys', 'other'))).toBe(true)
     expect(own(join(uploadsDir(), '2026-10-20', 'a.png'))).toBe(false)
+    expect(own(join(threadFilesDir(), 't1', 'report.md'))).toBe(false)
     expect(own(join(home, 'x'))).toBe(false)
   })
 
@@ -125,6 +145,7 @@ describe('the board’s own files', () => {
     expect(own(link)).toBe(true)
     expect(own(join(link, 'nope', 'x.txt'))).toBe(true)
     expect(own(join(link, 'uploads', 'a.png'))).toBe(false)
+    expect(own(join(link, 'thread-files', 't1', 'report.md'))).toBe(false)
   })
 
   test.skipIf(!canLink)(`an uploads folder that is a link lets nothing through (${SYMLINK_SKIP_REASON})`, () => {
@@ -132,15 +153,44 @@ describe('the board’s own files', () => {
     mkdirSync(join(state, 'tunnel'))
     writeFileSync(join(state, 'tunnel', 'id_ed25519'), '')
     symlinkSync(join(state, 'tunnel'), uploadsDir(), 'junction')
-    expect(ownFolders(cfg).allowed).toEqual([])
+    expect(ownFolders(cfg).allowed).toEqual([realOrNearest(threadFilesDir())])
     expect(own(join(uploadsDir(), 'id_ed25519'))).toBe(true)
     expect(own(join(state, 'tunnel', 'id_ed25519'))).toBe(true)
   })
 
-  test('the uploads folder made as a plain folder stays readable', () => {
+  test.skipIf(!canLink)(`a thread-files folder that is a link lets nothing through (${SYMLINK_SKIP_REASON})`, () => {
+    const { state, cfg, own } = board()
+    mkdirSync(join(state, 'tunnel'))
+    writeFileSync(join(state, 'tunnel', 'id_ed25519'), '')
+    symlinkSync(join(state, 'tunnel'), threadFilesDir(), 'junction')
+    expect(ownFolders(cfg).allowed).toEqual([realOrNearest(uploadsDir())])
+    expect(own(join(threadFilesDir(), 'id_ed25519'))).toBe(true)
+    expect(own(join(state, 'tunnel', 'id_ed25519'))).toBe(true)
+  })
+
+  test.skipIf(!canLink)(`a link inside thread-files to a refused folder is refused (${SYMLINK_SKIP_REASON})`, () => {
+    const { state, config, own } = board()
+    mkdirSync(join(state, 'tunnel'))
+    writeFileSync(join(state, 'tunnel', 'id_ed25519'), '')
+    mkdirSync(join(threadFilesDir(), 't1'), { recursive: true })
+    symlinkSync(join(state, 'tunnel'), join(threadFilesDir(), 't1', 'tunnel-link'), 'junction')
+    if (canSymlink) {
+      symlinkSync(join(state, 'access.json'), join(threadFilesDir(), 't1', 'access-link.json'))
+      symlinkSync(join(config, 'config.json'), join(threadFilesDir(), 't1', 'config-link.json'))
+      expect(own(join(threadFilesDir(), 't1', 'access-link.json'))).toBe(true)
+      expect(own(join(threadFilesDir(), 't1', 'config-link.json'))).toBe(true)
+    }
+    expect(own(join(threadFilesDir(), 't1', 'tunnel-link', 'id_ed25519'))).toBe(true)
+  })
+
+  test('uploads and thread-files made as plain folders stay readable', () => {
     const { state, cfg } = board()
     mkdirSync(uploadsDir())
-    expect(ownFolders(cfg).allowed).toEqual([realOrNearest(join(state, 'uploads'))])
+    mkdirSync(threadFilesDir())
+    expect(ownFolders(cfg).allowed).toEqual([
+      realOrNearest(join(state, 'uploads')),
+      realOrNearest(join(state, 'thread-files')),
+    ])
   })
 
   describe.skipIf(!onWindows)('on Windows', () => {
@@ -177,6 +227,8 @@ describe('the board’s own files', () => {
       ])
         expect([path, own(path)]).toEqual([path, true])
       expect(own(`${state}.\\uploads\\2026-10-20\\a.png`)).toBe(false)
+      expect(own(`${state}.\\thread-files\\t1\\report.md`)).toBe(false)
+      expect(own(`${state}.\\thread-files\\..\\access.json`)).toBe(true)
       expect(own(`${home}.\\x`)).toBe(false)
     })
 

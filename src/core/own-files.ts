@@ -1,6 +1,6 @@
 // The board's own files: its state folder, its config folder and the folder of a tunnel key the
 // owner points to outside the state folder. Through the tunnel, the routes that read a file by a
-// path the request names refuse these, but for the state folder's `uploads`. Pure: the paths come
+// path the request names refuse these, but for the state folder's `uploads` and `thread-files`. Pure: the paths come
 // already made real (adapters/own-files.ts).
 import { posix, win32 } from 'node:path'
 
