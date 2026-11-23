@@ -25,6 +25,7 @@ export type PanelKind =
   | 'threads'
   | 'decisions'
   | 'backup'
+  | 'updates'
   | 'time'
   | 'timeSettings'
   | 'calendar'
@@ -48,6 +49,7 @@ const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
   threads: { label: 'wt.title' },
   decisions: { label: 'dec.title' },
   backup: { label: 'backup.title' },
+  updates: { label: 'selfUpdate.title' },
   time: { label: 'time.title' },
   timeSettings: { label: 'time.set.title' },
   calendar: { label: 'cal.title' },

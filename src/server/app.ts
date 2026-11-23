@@ -30,6 +30,16 @@ import { inheritedProfileDir } from '../adapters/profiles.ts'
 import { watchesDir } from '../adapters/schedule-store.ts'
 import { writeSink } from '../adapters/secret-sinks.ts'
 import {
+  backupSettings,
+  bunInstall,
+  gitIn,
+  readSelfUpdate,
+  runInstaller,
+  saveSelfUpdate,
+  wakeBack,
+  wakeUp,
+} from '../adapters/self-update.ts'
+import {
   endLogins,
   endStraySsh,
   generateKey,
@@ -105,6 +115,7 @@ import { createRemote } from '../services/remote.ts'
 import { createRemoteAccess } from '../services/remote-access.ts'
 import { startScheduler } from '../services/scheduler.ts'
 import { auditBundle, giveSecret } from '../services/secrets.ts'
+import { createSelfUpdate } from '../services/self-update.ts'
 import { createServerSetup } from '../services/server-setup.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
 import { sleepMany } from '../services/sleep.ts'
@@ -155,6 +166,7 @@ import { remoteRoutes } from './routes/remote.ts'
 import { revealRoute, revealState } from './routes/reveal.ts'
 import { scheduleRoute } from './routes/schedule.ts'
 import { secretsRoutes } from './routes/secrets.ts'
+import { selfUpdateRoutes } from './routes/self-update.ts'
 import { sessionRoutes } from './routes/session.ts'
 import { categoriesRoute, featureSettingsRoute, profilesRoute, settingsRoute } from './routes/settings.ts'
 import { setupRoute } from './routes/setup.ts'
@@ -326,6 +338,40 @@ export async function startServer({
     deps,
     onChange: () => board.publish(),
     placer: () => (nodePlacer && nodesConfig(cfg.nodes) ? nodePlacer : null),
+  })
+  // The board's update of itself from git (#617, services/self-update.ts): checked by the schedule
+  // below while config.json's `autoUpdate` is on, or asked (Settings, `board update`). A restart
+  // would cut a session's start short: a launch in flight holds it.
+  const selfUpdate = createSelfUpdate({
+    git: (args, ms) => gitIn(pluginRoot(), args, ms),
+    isCheckout: () => existsSync(join(pluginRoot(), '.git')),
+    node: () => nodeConfig(cfg.node) !== null,
+    config: () => cfg.autoUpdate,
+    canRestart: typeof process.send === 'function',
+    busy: () => {
+      const n = launches.list().filter(l => l.state !== 'done' && l.state !== 'failed').length
+      return n ? `${n} session start${n === 1 ? '' : 's'} in flight` : null
+    },
+    install: () => bunInstall(pluginRoot()),
+    installer: () => runInstaller(pluginRoot()),
+    backupSettings: () => backupSettings(),
+    // The merge rewrote code files and one more is touched: run.ts restarts the board and
+    // wake-run.ts wake, as on any code change. A board whose run.ts did not answer in 10 s restarts
+    // itself as a node's update does (quit(75)).
+    restart: () => {
+      touchCode(pluginRoot())
+      setTimeout(() => {
+        process.emit('message', 'restart', undefined)
+        setTimeout(() => process.exit(75), RESTART_AFTER_MS)
+      }, 10_000).unref?.()
+    },
+    wakeUp,
+    wakeBack: since => wakeBack(since),
+    load: () => readSelfUpdate(),
+    save: s => saveSelfUpdate(s),
+    log,
+    now: Date.now,
+    changed: () => board.publish(),
   })
   // The terminal (services/terminals.ts): shells the board opened in sessions' folders, and live panes.
   const terminals = createTerminals({ onChange: () => board.publish() })
@@ -983,6 +1029,22 @@ export async function startServer({
     ...calendarRoutes(cfg, calendar, { reminders, events, shown: eventsShown }),
     // Settings → Backup… (#233): the passphrase, the targets, the server's setup; this computer only.
     ...backupRoutes({ cfg, server: backupServer, now: () => backups.now(true), changed: () => board.publish() }),
+    // Settings → Updates… (#617): the board's update of itself from git; this computer only.
+    ...selfUpdateRoutes({
+      updater: selfUpdate,
+      load: readSelfUpdate,
+      checkout: async () => {
+        if (!existsSync(join(pluginRoot(), '.git'))) return null
+        const [branch, commit] = await Promise.all([
+          gitIn(pluginRoot(), ['symbolic-ref', '--quiet', '--short', 'HEAD']),
+          gitIn(pluginRoot(), ['rev-parse', 'HEAD']),
+        ])
+        return { branch: branch.ok ? branch.out.trim() : null, commit: commit.out.trim() }
+      },
+      node: () => nodeConfig(cfg.node) !== null,
+      canRestart: typeof process.send === 'function',
+      changed: () => board.publish(),
+    }),
     // A line from the page for this log (a phone's browser says what it could not do there).
     pageLogRoute(log),
     scheduleRoute(refresh),
@@ -1432,6 +1494,12 @@ export async function startServer({
   }
 
   const poll = setInterval(refresh, Math.max(1, cfg.refreshSec ?? 2) * 1000)
+  // The update of itself (#617): an update the board before this one merged is finished here, a
+  // moment after the start (a second restart from the same pull would cut it short); then a look
+  // each minute at whether one is due, which reads the config and nothing else while it is off.
+  const selfUpdateSays = (err: unknown): void => log(`self-update: ${err instanceof Error ? err.message : String(err)}`)
+  const selfUpdateResume = setTimeout(() => void selfUpdate.resume().catch(selfUpdateSays), 10_000)
+  const selfUpdateTick = setInterval(() => void selfUpdate.tick().catch(selfUpdateSays), 60_000)
   const watchers = [
     watchFolder(cards, 150, refresh, log),
     // Entries added or cancelled by agents (`board remind`), and runs the scheduler made.
@@ -1556,6 +1624,8 @@ export async function startServer({
     },
     async close() {
       clearInterval(poll)
+      clearTimeout(selfUpdateResume)
+      clearInterval(selfUpdateTick)
       for (const watcher of watchers) watcher.close()
       watchesWatcher?.close()
       omarchy?.close()

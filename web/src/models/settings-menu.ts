@@ -11,7 +11,8 @@
 // MokuPilot… opens where a call starts (components/mokupilot), on every board's page (offersMokupilot).
 // On the local board, Remote access… opens the board-through-your-domain panel
 // (components/access/AccessPanel.tsx), Backup… the backup of the board's database (#233,
-// components/backup/BackupPanel.tsx), and Time tracking… its clients and projects (#237,
+// components/backup/BackupPanel.tsx), Updates… the board's update of itself from git (#617,
+// components/updates/UpdatesPanel.tsx), and Time tracking… its clients and projects (#237,
 // components/time/TimeSettingsPanel.tsx).
 // How sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
 // On a page signed in through the owner's domain, Sign out ends this browser's own login (Call 15).
@@ -66,6 +67,8 @@ export interface SettingsNow {
   access?: boolean
   /** The local board's page: Backup… is offered (#233). */
   backup?: boolean
+  /** The local board's page: Updates… is offered (#617). */
+  updates?: boolean
   /** The local board's page: Time tracking… is offered (#237). */
   timeSettings?: boolean
   /** The local board's page: Calendar… is offered (#328). */
@@ -396,6 +399,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
     ...(now.mokupilot ? [{ id: 'mokupilot', label: t('set.mokupilot') }] : []),
     ...(now.access ? [{ id: 'access', label: t('set.access') }] : []),
     ...(now.backup ? [{ id: 'backup', label: t('set.backup') }] : []),
+    ...(now.updates ? [{ id: 'updates', label: t('set.updates') }] : []),
     ...(now.timeSettings ? [{ id: 'timeSettings', label: t('set.time') }] : []),
     ...(now.calendarSettings ? [{ id: 'calendarSettings', label: t('set.calendar') }] : []),
     ...(now.localPaths ? [{ id: 'localPaths', label: t('set.localPaths') }] : []),
@@ -433,6 +437,7 @@ export type SettingPick =
   | { kind: 'mokupilot' }
   | { kind: 'access' }
   | { kind: 'backup' }
+  | { kind: 'updates' }
   | { kind: 'timeSettings' }
   | { kind: 'calendarSettings' }
   | { kind: 'team' }
@@ -472,6 +477,7 @@ export function settingPicked(id: string): SettingPick {
   if (id === 'mokupilot') return { kind: 'mokupilot' }
   if (id === 'access') return { kind: 'access' }
   if (id === 'backup') return { kind: 'backup' }
+  if (id === 'updates') return { kind: 'updates' }
   if (id === 'timeSettings') return { kind: 'timeSettings' }
   if (id === 'calendarSettings') return { kind: 'calendarSettings' }
   if (id === 'team') return { kind: 'team' }

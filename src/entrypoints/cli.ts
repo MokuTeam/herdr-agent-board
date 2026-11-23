@@ -72,6 +72,10 @@
 //                            this board, now or when it is back; --forget drops its token and key
 //                            now without telling it (#510)
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
+//   board update             the board's update of itself from git (#617) now, through the running
+//                            web board, whether or not Settings → Updates… turns it on: says what it
+//                            did or why it skipped, and after an update waits for the board to come
+//                            back on the new commit
 //   board presence [here|away|call]   whether the user is at the computer, away or on a call
 //                            (core/presence.ts), the line every session's context has; with a
 //                            state, the user's switch
@@ -209,7 +213,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | presence [here | away | call] | journal [--since <when> | --away] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | update | presence [here | away | call] | journal [--since <when> | --away] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal'])
@@ -889,6 +893,8 @@ async function main(): Promise<void> {
     return
   }
 
+  if (cmd === 'update') return selfUpdateNow()
+
   if (cmd === 'doctor') {
     const { gatherFacts } = await import('../adapters/setup-facts.ts')
     const { checkSetup, report } = await import('../core/setup.ts')
@@ -920,6 +926,11 @@ async function main(): Promise<void> {
     // The secret sinks' config (#273), once config.json has `secrets`.
     const { secretsChecks } = await import('../services/secrets.ts')
     checks.push(...secretsChecks(cfg, t))
+    // The update of itself from git (#617): its state file, once it is on or did something.
+    const { selfUpdateCheck } = await import('../core/self-update.ts')
+    const { readSelfUpdate } = await import('../adapters/self-update.ts')
+    const updates = selfUpdateCheck(cfg.autoUpdate, readSelfUpdate(), Date.now(), t)
+    if (updates) checks.push(updates)
     // Who holds the board's port (#356): the system is asked only when something listens there.
     const port = await import('../adapters/port-owner.ts')
     if (await port.listening(webPort)) {
@@ -2770,6 +2781,57 @@ async function callReport(): Promise<void> {
   console.log(
     `ok · call report ${e.id} for ${name || session.slice(0, 8)}, typed in once the session is free · cancel: board unschedule ${e.id}${await schedulerNote()}`,
   )
+}
+
+/**
+ * board update (#617): the board's update of itself now, through the running web board (POST
+ * /api/self-update), whether or not the schedule is on. After an update that restarts the board it
+ * waits for the new board to finish it (the record that names the new commit), 3.5 minutes at most.
+ */
+async function selfUpdateNow(): Promise<void> {
+  if (cfg.web === false) throw new Error('board update goes through the web board, and config.json turns it off')
+  const url = `http://127.0.0.1:${cfg.port ?? 12422}/api/self-update`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'X-Board': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ op: 'check' }),
+    signal: AbortSignal.timeout(15 * 60_000),
+  }).catch(() => null)
+  if (!res) throw new Error('the web board does not answer, and board update goes through it (board doctor)')
+  const body: unknown = await res.json().catch(() => null)
+  if (!isRecord(body) || body.ok !== true || !isRecord(body.result))
+    throw new Error(String((isRecord(body) && body.error) || `the web board answered ${res.status}`))
+  const r = body.result
+  const says = (view: unknown): string =>
+    isRecord(view) && isRecord(view.standing) ? String(view.standing.text) : String(r.outcome)
+  const came = (rec: Record<string, unknown>): void => {
+    for (const title of Array.isArray(rec.came) ? rec.came : []) console.log(`  ${String(title)}`)
+  }
+  if (r.restarting !== true) {
+    const bad = r.outcome === 'failed' || (r.outcome === 'skipped' && r.reason !== 'node')
+    console.log(`${r.outcome === 'failed' ? 'failed' : 'ok'} · ${says(body.view)}`)
+    if (r.outcome === 'updated') came(r)
+    if (bad) process.exitCode = 1
+    return
+  }
+  const short = (v: unknown): string => String(v ?? '').slice(0, 8)
+  console.log(`ok · ${String(r.branch)} ${short(r.from)} -> ${short(r.to)}; the board and wake restart on it`)
+  came(r)
+  const end = Date.now() + 210_000
+  while (Date.now() < end) {
+    await new Promise(done => setTimeout(done, 3000))
+    const view: unknown = await fetch(url, { signal: AbortSignal.timeout(5000) })
+      .then(x => x.json())
+      .catch(() => null)
+    if (!isRecord(view) || !isRecord(view.state) || view.state.pending) continue
+    const last = view.state.last
+    if (!isRecord(last) || last.to !== r.to) continue
+    console.log(`${last.outcome === 'updated' ? 'ok' : 'failed'} · ${says(view)}`)
+    if (last.outcome !== 'updated') process.exitCode = 1
+    return
+  }
+  console.log('failed · the board did not finish the update within 3.5 minutes (board doctor)')
+  process.exitCode = 1
 }
 
 /** A retry-safe report's receipt, as JSON; delivery under way or not known exits with 2: do not replay. */

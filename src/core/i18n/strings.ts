@@ -33,6 +33,7 @@ import { THREAD_STRINGS } from './thread-strings.ts'
 import { TIME_STRINGS } from './time-strings.ts'
 import { TODO_STRINGS } from './todo-strings.ts'
 import { TURN_STRINGS } from './turn-strings.ts'
+import { UPDATE_STRINGS } from './update-strings.ts'
 import { VERIFY_STRINGS } from './verify-strings.ts'
 import { WAKE_STRINGS } from './wake-strings.ts'
 import { WATCH_STRINGS } from './watch-strings.ts'
@@ -1438,6 +1439,7 @@ for (const code of Object.keys(CALL_STRINGS) as Lang[]) Object.assign(STRINGS[co
 for (const code of Object.keys(TODO_STRINGS) as Lang[]) Object.assign(STRINGS[code], TODO_STRINGS[code])
 // And watches (#486).
 for (const code of Object.keys(WATCH_STRINGS) as Lang[]) Object.assign(STRINGS[code], WATCH_STRINGS[code])
+for (const code of Object.keys(UPDATE_STRINGS) as Lang[]) Object.assign(STRINGS[code], UPDATE_STRINGS[code])
 // And decisions (#487).
 for (const code of Object.keys(DECISION_STRINGS) as Lang[]) Object.assign(STRINGS[code], DECISION_STRINGS[code])
 for (const code of Object.keys(THREAD_STRINGS) as Lang[]) Object.assign(STRINGS[code], THREAD_STRINGS[code])

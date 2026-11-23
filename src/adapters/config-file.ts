@@ -28,6 +28,7 @@ import {
   resolveProfileDir,
   shownProfiles,
 } from '../core/profiles.ts'
+import { autoUpdateConfig, isEvery, isTimeOfDay } from '../core/self-update.ts'
 import type { Admin } from '../core/server-admin.ts'
 import type { SetupCase } from '../core/server-plan.ts'
 import { projectKey } from '../core/time.ts'
@@ -360,6 +361,33 @@ export function editFeatures(body: unknown): EditResult {
       if (!decisionsConfig(raw.decisions)) return { ok: false, error: t('feature.err.decisionsOff') }
       raw.decisions = withField(raw.decisions, 'defaults', b.decisionsDefaults ? undefined : false)
     }
+    return { ok: true }
+  })
+}
+
+/**
+ * The board's update of itself from git (#617, core/self-update.ts), from Settings → Updates…: { on?,
+ * every?, at? } into config.json's `autoUpdate`. On and off as the feature switches go (#596): on is
+ * `true` or the section, off keeps `every` and `at` under `"on": false` and takes the key out
+ * when there are none. A value of the wrong kind refuses the whole edit.
+ */
+export function editAutoUpdate(body: unknown): EditResult {
+  const b: Raw = isRecord(body) ? body : {}
+  const bad =
+    (b.on !== undefined && typeof b.on !== 'boolean') ||
+    (b.every !== undefined && !isEvery(b.every)) ||
+    (b.at !== undefined && !isTimeOfDay(b.at)) ||
+    (b.on === undefined && b.every === undefined && b.at === undefined)
+  if (bad) return { ok: false, error: t('selfUpdate.err.setting') }
+  return editConfig(raw => {
+    const on = typeof b.on === 'boolean' ? b.on : autoUpdateConfig(raw.autoUpdate).on
+    const { on: _was, ...own }: Raw = isRecord(raw.autoUpdate) ? raw.autoUpdate : {}
+    if (b.every !== undefined) own.every = b.every
+    if (b.at !== undefined) own.at = b.at
+    const fields = Object.keys(own).length > 0
+    if (on) raw.autoUpdate = fields ? own : true
+    else if (fields) raw.autoUpdate = { ...own, on: false }
+    else delete raw.autoUpdate
     return { ok: true }
   })
 }

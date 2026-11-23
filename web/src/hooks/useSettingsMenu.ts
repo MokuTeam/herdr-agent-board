@@ -85,6 +85,9 @@ export interface SettingsDeps {
   /** The local board's page: Backup… is offered (#233). */
   backup?(): boolean
   openBackup?(): void
+  /** The local board's page: Updates… is offered (#617). */
+  updates?(): boolean
+  openUpdates?(): void
   /** The local board's page: Time tracking… is offered (#237). */
   timeSettings?(): boolean
   openTimeSettings?(): void
@@ -173,6 +176,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       mokupilot: deps.mokupilot?.() ?? false,
       access: deps.access?.() ?? false,
       backup: deps.backup?.() ?? false,
+      updates: deps.updates?.() ?? false,
       timeSettings: deps.timeSettings?.() ?? false,
       calendarSettings: deps.calendarSettings?.() ?? false,
       team: deps.team?.() ?? false,
@@ -216,6 +220,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'mokupilot') deps.openMokupilot?.()
         else if (pick?.kind === 'access') deps.openAccess?.()
         else if (pick?.kind === 'backup') deps.openBackup?.()
+        else if (pick?.kind === 'updates') deps.openUpdates?.()
         else if (pick?.kind === 'timeSettings') deps.openTimeSettings?.()
         else if (pick?.kind === 'calendarSettings') deps.openCalendarSettings?.()
         else if (pick?.kind === 'team') deps.openTeam?.()
@@ -388,7 +393,8 @@ const crossFade = (): ((apply: () => void) => unknown) | undefined =>
  * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake,
  * `openAccess` the Remote access panel, `openMokupilot` the MokuPilot panel, `openBackup` the Backup panel,
  * `openTimeSettings` Time tracking's, `openLocalPaths` Paths on this computer, `openCalendarSettings`
- * the calendar's (#328), `openTeam` the Team panel (#231), `openDevices` Settings, Devices (#510).
+ * the calendar's (#328), `openTeam` the Team panel (#231), `openDevices` Settings, Devices (#510),
+ * `openUpdates` Updates… (#617).
  */
 export function useSettingsMenu(
   menu: MenuEngine,
@@ -403,6 +409,7 @@ export function useSettingsMenu(
   openCalendarSettings: () => void = () => {},
   openTeam: () => void = () => {},
   openDevices: () => void = () => {},
+  openUpdates: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
@@ -422,6 +429,7 @@ export function useSettingsMenu(
     openCalendarSettings,
     openTeam,
     openDevices,
+    openUpdates,
   })
   const [expanded, setExpanded] = useState(false)
   const localFeatures = () => {
@@ -497,6 +505,8 @@ export function useSettingsMenu(
       openAccess: () => latest.current.openAccess(),
       backup: () => !remotePage(),
       openBackup: () => latest.current.openBackup(),
+      updates: () => !remotePage(),
+      openUpdates: () => latest.current.openUpdates(),
       timeSettings: () => !remotePage(),
       openTimeSettings: () => latest.current.openTimeSettings(),
       calendarSettings: () => !remotePage(),

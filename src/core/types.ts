@@ -223,6 +223,8 @@ export interface Config {
   team?: unknown
   /** The backup of the board's database (#233), as config.json has it: read through core/backup.ts backupConfig. */
   backup?: unknown
+  /** The board's update of itself from git (#617), as config.json has it: read through core/self-update.ts autoUpdateConfig. */
+  autoUpdate?: unknown
   /** Time tracking (#233), as config.json has it: read through core/time.ts timeConfig. */
   time?: unknown
   /** Secrets through the board (#273), as config.json has it: read through core/secrets.ts secretsConfig. */

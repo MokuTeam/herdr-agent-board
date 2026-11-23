@@ -32,6 +32,7 @@ import { ThreadsPanel, type ThreadsPanelProps } from './threads/ThreadsPanel.tsx
 import { TimePanel, type TimePanelProps } from './time/TimePanel.tsx'
 import { TimeSettingsPanel, type TimeSettingsPanelProps } from './time/TimeSettingsPanel.tsx'
 import { TodosPanel, type TodosPanelProps } from './todos/TodosPanel.tsx'
+import { UpdatesPanel, type UpdatesPanelProps } from './updates/UpdatesPanel.tsx'
 import { WakePanel, type WakePanelProps } from './wake/WakePanel.tsx'
 
 export interface SidePanelsProps {
@@ -61,6 +62,8 @@ export interface SidePanelsProps {
   decisions?: DecisionsPanelProps
   /** Settings → Backup… (#233); drawn when given (the page gives it once opened, on the local board only). */
   backup?: BackupPanelProps
+  /** Settings → Updates… (#617); drawn when given (once opened, on the local board only). */
+  updates?: UpdatesPanelProps
   /** Time (#233): drawn while the board has time tracking on. */
   time?: TimePanelProps
   /** Settings → Time tracking… (#237); drawn when given (the page gives it once opened, on the local board only). */
@@ -93,6 +96,7 @@ export function SidePanels({
   threads,
   decisions,
   backup,
+  updates,
   time,
   timeSettings,
   calendar,
@@ -118,6 +122,7 @@ export function SidePanels({
       {threads && data?.threads && <ThreadsPanel {...threads} />}
       {decisions && data?.decisions && <DecisionsPanel {...decisions} />}
       {backup && <BackupPanel {...backup} />}
+      {updates && <UpdatesPanel {...updates} />}
       {time && data?.time && <TimePanel {...time} />}
       {timeSettings && <TimeSettingsPanel {...timeSettings} />}
       {calendar && data?.calendar && <CalendarPanel {...calendar} />}
