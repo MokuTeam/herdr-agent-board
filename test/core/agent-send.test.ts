@@ -170,9 +170,11 @@ test('#639 a session moved to a node keeps the way to answer, and to be answered
   expect(asked.replyTo).toBe('work-00 [bbbbbbbb]')
   const toLegacy = messageEntry(before[1] as never, 'x', { key: A, name: 'Legacy-master' }, 1000).replyTo
 
-  // After `board move --device server-2` its card is the node's, under the prefixed key.
+  // After `board move --device server-2` its card is the node's, under the prefixed key; the laptop's
+  // card of it may linger, older, and is no target any more.
   const after = [
-    card(`@server-2:${A}`, 'Legacy-master', { device: 'server-2' }),
+    card(A, 'Legacy-master', { status: 'done', activity: 100 }),
+    card(`@server-2:${A}`, 'Legacy-master', { device: 'server-2', activity: 200 }),
     card(B, 'work-00', { pane: null, day: true }),
   ]
   const answer = planSend({
@@ -187,4 +189,25 @@ test('#639 a session moved to a node keeps the way to answer, and to be answered
   expect(answer.entry).toMatchObject({ key: B, replyTo: 'Legacy-master [aaaaaaaa]', fromDevice: 'server-2' })
   // And whoever kept its reply address from before the move still finds it on the node.
   expect(matching(targetsOf(after), toLegacy).map(t => t.key)).toEqual([`@server-2:${A}`])
+})
+
+test('#639 one session on two devices: the card with the newer activity is its target, awake before asleep at a tie', () => {
+  const keys = (items: unknown[]) => targetsOf(items).map(t => t.key)
+  const laptop = (more: Record<string, unknown>) => card(A, 'Legacy-master', more)
+  const node = (more: Record<string, unknown>) =>
+    card(`@server-2:${A}`, 'Legacy-master', { device: 'server-2', ...more })
+  expect(keys([laptop({ activity: 100 }), node({ activity: 200 })])).toEqual([`@server-2:${A}`])
+  // Moved back: the laptop's is the newer.
+  expect(keys([laptop({ activity: 300 }), node({ activity: 200, sleeping: true })])).toEqual([A])
+  // Asleep on the node since, still newer than the laptop's stale awake card.
+  expect(keys([laptop({ activity: 100 }), node({ activity: 200, sleeping: true })])).toEqual([`@server-2:${A}`])
+  expect(keys([laptop({ activity: 200, sleeping: true }), node({ activity: 200 })])).toEqual([`@server-2:${A}`])
+  // Two sessions of one name on two devices stay two.
+  expect(
+    keys([laptop({ activity: 100 }), card(`@server-2:${B}`, 'Legacy-master', { device: 'server-2' })]),
+  ).toHaveLength(2)
+  // So a reply by name and ref finds one.
+  expect(
+    matching(targetsOf([laptop({ activity: 100 }), node({ activity: 200 })]), 'Legacy-master [aaaaaaaa]'),
+  ).toHaveLength(1)
 })

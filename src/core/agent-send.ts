@@ -6,8 +6,9 @@
 //
 // - A target is a card of the board's payload with a name. A card that is not its session's any more
 //   is left out: an awake card whose pane an awake card of another session on the same device holds
-//   (one with a session id wins over one without, else the more recent activity), and an awake card
-//   with no pane that is no MokuPilot day (nothing to type into).
+//   (one with a session id wins over one without, else the more recent activity), an awake card
+//   with no pane that is no MokuPilot day (nothing to type into), and a card a session left on one
+//   device when it moved to another (#639: the one with the older activity).
 // - A name picks the cards named so, case aside; a ref in brackets after it ("Name [1a2b3c4d]", 8 or
 //   more hex) the one whose session id starts so. The whole key or session id picks its card.
 // - What goes into the schedule: an entry due now, typed in once the session is free (`idle`),
@@ -81,6 +82,17 @@ function replaced(t: Target, by: Target): boolean {
   return by.activity > t.activity
 }
 
+/**
+ * One whose session runs on another device now (#639): a move (`board move --device`, #616) can leave
+ * the card it had where it was, under the session's id, beside the new one under the other device's.
+ * The more recent activity is where it runs; an awake card beats a sleeping one of the same moment.
+ */
+function movedAway(t: Target, by: Target): boolean {
+  if (by === t || by.device === t.device || !t.session || by.session !== t.session) return false
+  if (by.activity !== t.activity) return by.activity > t.activity
+  return t.sleeping && !by.sleeping
+}
+
 /** The cards of a payload's `items` a message can go to; anything else in the list is left out. */
 export function targetsOf(items: unknown): Target[] {
   if (!Array.isArray(items)) return []
@@ -106,7 +118,9 @@ export function targetsOf(items: unknown): Target[] {
       activity: Math.max(num(i.activity), num(i.lastAt)),
     })
   }
-  return all.filter(t => t.sleeping || ((t.pane || t.day) && !all.some(o => replaced(t, o))))
+  return all.filter(
+    t => !all.some(o => movedAway(t, o)) && (t.sleeping || ((t.pane || t.day) && !all.some(o => replaced(t, o)))),
+  )
 }
 
 /** A local session on this computer running an agent other than Claude Code (`agy`, `pi`, `codex`, ...). */
