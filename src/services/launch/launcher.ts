@@ -391,8 +391,9 @@ export function spawnAgentLauncher(spec: LaunchSpec, mark = false): Launcher {
     describe: () => ({ kind: 'herdr', agent: 'claude' }),
     async start(l, on) {
       // A line that picks its own session (--resume, in the profile's start command, launch.claude
-      // or the profile's arguments; in launch.pi for pi) gets no id from the board; a resumed
-      // session has its own. A fork gets one (spawn-agent refuses a line that picks its own session for it).
+      // or the profile's arguments; in launch.pi for pi; in launch.agy for agy) gets no id from
+      // the board; a resumed session has its own. A fork gets one (spawn-agent refuses a line that
+      // picks its own session for it).
       const other = l.agent !== CLAUDE_AGENT
       const isAgy = l.agent === AGY_AGENT
       const line = isAgy
@@ -402,7 +403,7 @@ export function spawnAgentLauncher(spec: LaunchSpec, mark = false): Launcher {
           : [...(l.profileCommand ?? claudeCommand(spec.claude, spec.args)), ...l.profileArgs]
       if (l.exactSession && (other || choosesSession(line))) throw new LaunchError(t('verify.err.launcher'), 'launcher')
       let sessionId: string | null = l.resume
-      if (!l.resume && !isAgy && (l.fork || !choosesSession(line))) {
+      if (!l.resume && (l.fork || !choosesSession(line))) {
         sessionId = l.sessionGiven ?? randomUUID()
         on.session(sessionId)
       }

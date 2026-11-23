@@ -88,6 +88,84 @@ describe('spawn-agent --agent agy and board CLI Antigravity identity', () => {
     expect(cardOf(box, AGY_ID)?.name).toBeUndefined()
   })
 
+  test('spawn-agent --agent agy moves start card category, profileWant and modelWant to the conversation card and drops the start card (#663)', async () => {
+    const START_ID = '22222222-3333-4444-8555-666666666666'
+    const box = await sandbox()
+    box.state(BASE_STATE)
+    const dir = join(box.dir, 'Agy lane project')
+    mkdirSync(dir)
+    mkdirSync(box.cards, { recursive: true })
+    writeFileSync(
+      join(box.cards, `${START_ID}.json`),
+      JSON.stringify({ key: START_ID, category: 'atlas', profileWant: 'default' }),
+    )
+    writeFileSync(
+      join(box.cards, `${AGY_ID}.json`),
+      JSON.stringify({ key: AGY_ID, agyParentClaude: false, briefV: 11 }),
+    )
+
+    const r = await runScript(box, SPAWN, [
+      '--agent',
+      'agy',
+      '--name',
+      'Agy Lane',
+      '--cwd',
+      dir,
+      '--workspace',
+      'wA',
+      '--session-id',
+      START_ID,
+      '--model',
+      'gemini-4-neon-high',
+      '--brief',
+      'Go',
+    ])
+    expect(r.code, r.stderr).toBe(0)
+    const paneRun = box
+      .calls()
+      .map(c => c.join(' '))
+      .find(c => c.startsWith('pane run wA:p9 '))
+    expect(paneRun).toBe('pane run wA:p9 agy --model gemini-4-neon-high')
+    expect(cardOf(box, AGY_ID)).toMatchObject({
+      key: AGY_ID,
+      category: 'atlas',
+      profileWant: 'default',
+      modelWant: 'gemini-4-neon-high',
+      agyParentClaude: false,
+      briefV: 11,
+    })
+    expect(cardOf(box, AGY_ID)?.name).toBeUndefined()
+    expect(cardOf(box, START_ID)).toBeNull()
+
+    // Non-start fields keep the start card; an existing target category is not overwritten.
+    const box2 = await sandbox()
+    box2.state(BASE_STATE)
+    const dir2 = join(box2.dir, 'Agy kept project')
+    mkdirSync(dir2)
+    mkdirSync(box2.cards, { recursive: true })
+    writeFileSync(
+      join(box2.cards, `${START_ID}.json`),
+      JSON.stringify({ key: START_ID, category: 'atlas', doing: 'keep' }),
+    )
+    writeFileSync(join(box2.cards, `${AGY_ID}.json`), JSON.stringify({ key: AGY_ID, category: 'custom' }))
+
+    const r2 = await runScript(box2, SPAWN, [
+      '--agent',
+      'agy',
+      '--name',
+      'Agy Kept',
+      '--cwd',
+      dir2,
+      '--workspace',
+      'wA',
+      '--session-id',
+      START_ID,
+    ])
+    expect(r2.code, r2.stderr).toBe(0)
+    expect(cardOf(box2, AGY_ID)).toMatchObject({ key: AGY_ID, category: 'custom', profileWant: 'default' })
+    expect(cardOf(box2, START_ID)).toMatchObject({ key: START_ID, category: 'atlas', doing: 'keep' })
+  })
+
   test('spawn-agent --agent agy --resume uses --conversation and refuses --fork and --thread', async () => {
     const box = await sandbox()
     box.state(BASE_STATE)

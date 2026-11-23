@@ -2014,6 +2014,47 @@ test('pi on PATH and no launch.pi: a start in the board’s own profile that ask
   noEnv(box)
 }, 40_000)
 
+test('a start that asks for agy writes the start card with the lane and spawn-agent moves it to the conversation card without passing --session-id to agy (#663)', async () => {
+  const AGY_ID = '18fb0773-7c19-4e3d-8e9b-ceadaef29211'
+  const { box, started, launched } = await boardServer({ launch: { agy: 'agy' } })
+  const agyReady = {
+    result: {
+      pane: {
+        pane_id: 'wA:p9',
+        tab_id: 'wA:t9',
+        agent: 'agy',
+        agent_status: 'idle',
+        agent_session: { value: AGY_ID },
+      },
+    },
+  }
+  box.state({
+    ...HERDR,
+    'pane get': agyReady,
+    'pane run': { result: null },
+    'pane read': { text: 'Conversation renamed to: Agy job\n' },
+  })
+  const l = await launched(
+    await started({
+      name: 'Agy job',
+      cwd: box.dir,
+      category: 'acme',
+      workspace: { id: 'wA' },
+      agent: 'agy',
+      message: 'Go.',
+    }),
+  )
+  assert.equal(l.state, 'done', l.error)
+  assert.equal(l.agent, 'agy')
+  assert.equal(callOf(box, 'pane', 'run')[3], 'agy')
+  const card = cardOf(box.cards, AGY_ID) as Record<string, unknown>
+  assert.equal(card.key, AGY_ID)
+  assert.equal(card.category, 'acme')
+  assert.equal(card.profileWant, 'default')
+  assert.equal(card.name, undefined)
+  assert.deepEqual(readdirSync(box.cards), [`${AGY_ID}.json`])
+}, 40_000)
+
 test('launch.default pi: a start that names no agent types pi in its profile’s env; one that asks for Claude Code is as before', async () => {
   const cfg = (box: Sandbox) => ({
     ...profilesWith(box, { work: { command: 'cld-work' } }),

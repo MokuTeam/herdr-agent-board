@@ -261,13 +261,24 @@ export interface SpawnResult {
 const START_ONLY = ['key', 'category', 'updatedAt', 'profileWant', 'modelWant', 'forkOf', 'forkAt']
 
 /**
- * pi's session is keyed by its file, not by the id the start gave it: the profile it is meant for
- * goes on that card, and the card written under the id before pi was up goes when it holds
- * nothing else.
+ * pi's session is keyed by its file and Antigravity's by its own conversation id, not by the id
+ * the start gave it: the lane, profile and model from the start go on that card, and the card
+ * written under the start id goes when it holds nothing else.
  */
-function movePiCard(carded: string, file: string, profile: string | undefined, model: string | undefined): void {
-  writeCard(file, { ...(profile && { profileWant: profile }), ...(model && { modelWant: model }) })
-  if (Object.keys(readCard(carded) ?? {}).every(k => START_ONLY.includes(k))) removeCard(carded)
+function moveStartCard(carded: string, target: string, profile: string | undefined, model: string | undefined): void {
+  const prior = readCard(carded)
+  const category = typeof prior?.category === 'string' && prior.category ? prior.category : undefined
+  const profileWant =
+    profile ?? (typeof prior?.profileWant === 'string' && prior.profileWant ? prior.profileWant : undefined)
+  const modelWant = model ?? (typeof prior?.modelWant === 'string' && prior.modelWant ? prior.modelWant : undefined)
+  const existing = readCard(target)
+  const patch = {
+    ...(category && !existing?.category && { category }),
+    ...(profileWant && { profileWant }),
+    ...(modelWant && { modelWant }),
+  }
+  if (Object.keys(patch).length) writeCard(target, patch)
+  if (prior && carded !== target && Object.keys(prior).every(k => START_ONLY.includes(k))) removeCard(carded)
 }
 
 /**
@@ -410,7 +421,7 @@ export async function spawnAgent(
   }
   // The profile it is meant to be in, for the board to check against the one its hooks report: a
   // start that leaves the env as herdr makes it too, as herdr's env may point elsewhere; a resume too.
-  const carded = sessionId ?? o.resume
+  const carded = sessionId ?? o.sessionId ?? o.resume
   // A fork's card says whose fork it is, and since when: its copied lines are older (core/links.ts).
   // The model it starts on, when one was asked for.
   if (carded && (profile || o.model))
@@ -466,11 +477,14 @@ export async function spawnAgent(
   }
   if (!ready)
     throw new Error(`${isAgy ? 'Antigravity' : 'Claude'} did not get ready in ${pane} within ${o.timeoutSec} s`)
-  if (kind === PI_AGENT && (profile || o.model) && carded && isPiSessionFile(session))
-    movePiCard(carded, session, profile?.id, o.model)
-  // agy has no pre-assigned --session-id: save --model on its card once ready without pinning card.name,
-  // so herdr agent rename and /rename keep working (#650).
-  if (kind === AGY_AGENT && !o.resume && session && o.model) writeCard(session, { modelWant: o.model })
+  if (kind === PI_AGENT && carded && isPiSessionFile(session)) moveStartCard(carded, session, profile?.id, o.model)
+  // agy has no pre-assigned --session-id: move the start card's lane, profile and model (or save
+  // --model alone) onto its conversation card once ready without pinning card.name, so herdr agent
+  // rename and /rename keep working (#650, #663).
+  if (kind === AGY_AGENT && !o.resume && session) {
+    if (carded && carded !== session) moveStartCard(carded, session, profile?.id, o.model)
+    else if (o.model) writeCard(session, { modelWant: o.model })
+  }
 
   const agent = await nameInHerdr(pane, o.name, ticketNames)
 

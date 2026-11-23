@@ -1088,6 +1088,49 @@ test('a start command that starts pi: pi is named with /name, briefed, and its f
   expect(cardOf(box, SID)).toBeNull()
 }, 30_000)
 
+test('pi moves start card category onto its file card and drops the start card; Claude keeps its start card unchanged (#663)', async () => {
+  const piBox = await profileBox({}, () => [], { default: { command: 'pi' } })
+  piBox.box.state({
+    ...STATE,
+    'pane get': { seq: [{ result: { pane: { pane_id: 'wA:p9', agent: null } } }, PI_READY] },
+    'pane read': { text: 'Session name set: Acme invoices' },
+  })
+  mkdirSync(piBox.box.cards, { recursive: true })
+  writeFileSync(join(piBox.box.cards, `${SID}.json`), JSON.stringify({ key: SID, category: 'acme' }))
+  const piRes = await runSpawn(piBox.box, [
+    '--agent',
+    'pi',
+    '--name',
+    'Acme invoices',
+    '--cwd',
+    piBox.dir,
+    '--workspace',
+    'wA',
+    '--session-id',
+    SID,
+  ])
+  assert.equal(piRes.code, 0, piRes.stderr)
+  expect(cardOf(piBox.box, PI_CARD)).toMatchObject({ key: PI_FILE, category: 'acme', profileWant: 'default' })
+  expect(cardOf(piBox.box, SID)).toBeNull()
+
+  const claudeBox = await profileBox()
+  mkdirSync(claudeBox.box.cards, { recursive: true })
+  writeFileSync(join(claudeBox.box.cards, `${SID}.json`), JSON.stringify({ key: SID, category: 'acme' }))
+  const claudeRes = await runSpawn(claudeBox.box, [
+    '--name',
+    'Acme invoices',
+    '--cwd',
+    claudeBox.dir,
+    '--workspace',
+    'wA',
+    '--session-id',
+    SID,
+  ])
+  assert.equal(claudeRes.code, 0, claudeRes.stderr)
+  assert.equal(callList(claudeBox.box)[1], `pane run wA:p9 claude --session-id ${SID}`)
+  expect(cardOf(claudeBox.box, SID)).toMatchObject({ key: SID, category: 'acme', profileWant: 'default' })
+}, 30_000)
+
 test('pi’s first Enter takes the completion of /name: the line still in its editor gets one more', async () => {
   const { box, dir } = await profileBox({}, () => [], { default: { command: 'pi' } })
   box.state({
