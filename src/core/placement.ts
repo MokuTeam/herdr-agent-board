@@ -110,8 +110,8 @@ export type Unfit =
 export type Refusal =
   /** The pin names no device in the order (or the order is empty). */
   | { kind: 'no-device'; pin?: Pin }
-  /** Every candidate failed step 3, each with its reason, in order. */
-  | { kind: 'unfit'; devices: Unfit[] }
+  /** Every candidate failed step 3, each with its reason, in order; `home` when portability kept it there (#600). */
+  | { kind: 'unfit'; devices: Unfit[]; home?: PortableWhy }
   /** The task must stay at its origin and the pin points elsewhere: both are kept for the card. */
   | { kind: 'pinned-away'; pin: Pin; origin: DeviceId; home: PortableWhy }
 
@@ -234,7 +234,10 @@ export function place(task: Task, view: PlacementView, now: number): Verdict {
     if (why) unfit.push(why)
     else fits.push(id)
   }
-  if (!fits.length) return { refuse: { kind: 'unfit', devices: unfit } }
+  if (!fits.length)
+    return {
+      refuse: home && route.narrowed ? { kind: 'unfit', devices: unfit, home } : { kind: 'unfit', devices: unfit },
+    }
   const blockers: Blocker[] = []
   for (const id of fits) {
     const blocker = roomBlocker(id, view, now)
@@ -254,14 +257,14 @@ export function place(task: Task, view: PlacementView, now: number): Verdict {
 function routeOf(
   task: Task,
   view: PlacementView,
-): { list: DeviceId[]; home: PortableWhy | null } | { refuse: Refusal } {
+): { list: DeviceId[]; home: PortableWhy | null; narrowed?: true } | { refuse: Refusal } {
   const pinned = candidates(task, view)
   if (!pinned.length) return { refuse: task.pin ? { kind: 'no-device', pin: task.pin } : { kind: 'no-device' } }
   const home = homeWhy(task, view.config)
   if (!home) return { list: pinned, home: null }
   if (task.pin && !pinned.includes(task.origin))
     return { refuse: { kind: 'pinned-away', pin: task.pin, origin: task.origin, home } }
-  return { list: [task.origin], home }
+  return { list: [task.origin], home, ...(pinned.some(id => id !== task.origin) && { narrowed: true as const }) }
 }
 
 /** The order with what 7.1 says of it: devices it does not name after it, `local` last when missing. */

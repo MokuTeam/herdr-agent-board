@@ -205,6 +205,35 @@ test('a start that waits in the queue prints queued= and the blocker, exit 0; on
   assert.equal(refused.posted()?.parent, undefined)
   assert.equal(refused.posted()?.category, undefined)
 
+  const homeRefused = fakeBoard({
+    payload: (_polls, posted) =>
+      posted
+        ? {
+            items: [],
+            launches: [
+              own({
+                state: 'failed',
+                place: {
+                  refuse: {
+                    kind: 'unfit',
+                    devices: [{ device: 'local', kind: 'draining' }],
+                    home: { kind: 'unpushed' },
+                  },
+                },
+              }),
+            ],
+          }
+        : { items: [], launches: [] },
+  })
+  const hr = await startBox({ port: homeRefused.port, nodes: {} })
+  const h = await runSpawn(hr.box, ['--name', 'Acme invoices', '--cwd', hr.dir, '--workspace', 'wA'])
+  assert.equal(h.code, 1)
+  assert.equal(h.stdout, '')
+  assert.equal(
+    h.stderr.trim(),
+    'spawn-agent: Cannot leave this computer (the branch is not at its remote branch), and this computer is draining. Push the branch.',
+  )
+
   const bad = fakeBoard({
     payload: () => ({ items: [], launches: [] }),
     launch: () => ({

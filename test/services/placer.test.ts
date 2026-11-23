@@ -41,7 +41,7 @@ const git = (cwd: string, ...args: string[]): string =>
  * The remote (a bare repository) and the master's checkout of it, every commit pushed, its remote
  * named by the https address; and the env that points a node's git from that address at the bare one.
  */
-function repos(branch = ''): { checkout: string; nodeEnv: Record<string, string> } {
+function repos(branch = ''): { checkout: string; bare: string; nodeEnv: Record<string, string> } {
   const root = mkdtempSync(join(tmpdir(), 'placer-'))
   scratch.push(root)
   const seed = join(root, 'seed')
@@ -58,6 +58,7 @@ function repos(branch = ''): { checkout: string; nodeEnv: Record<string, string>
   git(checkout, 'remote', 'set-url', 'origin', ADDRESS)
   return {
     checkout,
+    bare,
     nodeEnv: {
       GIT_CONFIG_COUNT: '1',
       GIT_CONFIG_KEY_0: `url.${bare.replace(/\\/g, '/')}.insteadOf`,
@@ -195,8 +196,8 @@ async function placing(o: {
   disk?: boolean
   /** More of the master board's environment. */
   masterEnv?: Record<string, string>
-}): Promise<Pair & { checkout: string }> {
-  const { checkout, nodeEnv } = repos(o.branch)
+}): Promise<Pair & { checkout: string; bare: string }> {
+  const { checkout, bare, nodeEnv } = repos(o.branch)
   const pair = await nodePair({
     count: o.count ?? 2,
     env: { ...PAIR_ENV, PATH, ...nodeEnv },
@@ -228,7 +229,7 @@ async function placing(o: {
   for (const box of [pair.master, ...pair.nodes]) box.proc.send('refresh')
   await fresh(pair.master.url)
   for (const n of pair.nodes) await pair.waitDevice(n.id, d => d.link?.state === 'online' && !!d.status, 15_000)
-  return Object.assign(pair, { checkout })
+  return Object.assign(pair, { checkout, bare })
 }
 
 test('seven starts in a pushed repository end 3, 3 and 1 on server-1, server-2 and this computer', async () => {
@@ -754,5 +755,107 @@ test('an agent’s start waits when every device is full, where a person’s com
   await launchWhere(pair.master.url, truthy, l => l?.state === 'done' || l === undefined, 20_000)
   assert.equal(started(pair.master.box).length, 2)
   assert.equal((await post(pair.master.url, `/api/launch/${id}/dismiss`, {})).status, 200)
+  await settled(pair.master.url)
+}, 60_000)
+
+test('a refused start with this computer draining explains why the task could not leave first, then succeeds once fixed (#600)', async () => {
+  const pair = await placing({
+    count: 1,
+    nodes: {
+      order: ['server-1', 'local'],
+      lanes: 'all',
+      devices: { local: { drain: true, maxSessions: 3, ...ROOM } },
+    },
+  })
+  const node = pair.nodes[0] as Pair['nodes'][0]
+  const briefDir = mkdtempSync(join(tmpdir(), 'placer-brief-'))
+  scratch.push(briefDir)
+  const localFile = join(briefDir, 'notes.md')
+  writeFileSync(localFile, 'local notes\n')
+
+  // Unpushed commit and a local file in the brief: refused naming unpushed first, then draining.
+  writeFileSync(join(pair.checkout, 'README.md'), 'atlas v2\n')
+  git(pair.checkout, 'add', 'README.md')
+  git(pair.checkout, 'commit', '--quiet', '-m', 'two')
+
+  const first = await agentSpawn(pair, [
+    '--name',
+    'atlas 1',
+    '--cwd',
+    pair.checkout,
+    '--brief',
+    `Read ${localFile} first.`,
+    '--timeout-sec',
+    '20',
+  ])
+  assert.equal(first.code, 1)
+  assert.equal(
+    first.stderr.trim(),
+    'spawn-agent: Cannot leave this computer (the branch is not at its remote branch), and this computer is draining. Push the branch.',
+  )
+  const cards = await launchesOf(pair.master.url)
+  const failedCard = cards.find(l => l.state === 'failed')
+  assert.deepEqual(failedCard?.place, {
+    refuse: { kind: 'unfit', devices: [{ device: 'local', kind: 'draining' }], home: { kind: 'unpushed' } },
+  })
+  assert.deepEqual(started(node.box), [])
+  assert.deepEqual(started(pair.master.box), [])
+
+  // Push the branch, keep the local path in the brief: refused naming the local path.
+  git(
+    pair.checkout,
+    '-c',
+    `url.${pair.bare.replace(/\\/g, '/')}.insteadOf=${ADDRESS}`,
+    'push',
+    '--quiet',
+    'origin',
+    'HEAD',
+  )
+  const second = await agentSpawn(pair, [
+    '--name',
+    'atlas 2',
+    '--cwd',
+    pair.checkout,
+    '--brief',
+    `Read ${localFile} first.`,
+    '--timeout-sec',
+    '20',
+  ])
+  assert.equal(second.code, 1)
+  assert.equal(
+    second.stderr.trim(),
+    `spawn-agent: Cannot leave this computer (the first message names ${localFile}, which is on this computer), and this computer is draining. Drop the path from the first message.`,
+  )
+
+  // Drop the local path from the brief: the start goes to server-1 at once.
+  const thirdRun = agentSpawn(pair, [
+    '--name',
+    'atlas 3',
+    '--cwd',
+    pair.checkout,
+    '--brief',
+    'Go.',
+    '--timeout-sec',
+    '30',
+  ])
+  await until(() => started(node.box).length === 1, 20_000)
+  const sid = started(node.box)[0] ?? ''
+  node.box.state(
+    startable([
+      {
+        pane_id: 'wA:p9',
+        agent: 'claude',
+        agent_session: { value: sid },
+        agent_status: 'idle',
+        cwd: node.box.dir,
+        workspace_id: 'wA',
+      },
+    ]),
+  )
+  node.proc.send('refresh')
+  const third = await thirdRun
+  assert.equal(third.code, 0, third.stderr)
+  assert.equal(third.stdout, `pane=@server-1:wA:p9 name=atlas 3 agent=@server-1:${sid} device=server-1 session=${sid}`)
+  assert.deepEqual(started(pair.master.box), [])
   await settled(pair.master.url)
 }, 60_000)

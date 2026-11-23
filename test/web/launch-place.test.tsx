@@ -109,6 +109,70 @@ test('what a start waits on, why it stays here, why it was refused', () => {
   expect(
     refusalText({ kind: 'pinned-away', pin: { device: 'server-1' }, origin: 'local', home: { kind: 'changes' } }, en),
   ).toBe('It runs only on this computer (the folder has changes that are not committed), and “Where” says server-1')
+  // Refused at origin because it could not leave: portable reason first, device reason, and what to do (#600).
+  const pathSpecial = String.raw`C:\Users\anna\My Docs\бриф 100%.md`
+  const cases = [
+    [
+      { kind: 'lane' as const },
+      'Cannot leave this computer (its lane does not leave this computer), and this computer is draining. Allow this lane in Settings, Devices.',
+      'Не может покинуть этот компьютер (её дорожка не уходит с этого компьютера), а этот компьютер освобождается. Отметьте дорожку в настройках устройств.',
+    ],
+    [
+      { kind: 'no-remote' as const },
+      'Cannot leave this computer (the folder is not in a checkout with a remote), and this computer is draining. Add a git remote, or start from a checkout with one.',
+      'Не может покинуть этот компьютер (папка не в checkout с remote), а этот компьютер освобождается. Добавьте git remote или запустите из репозитория с remote.',
+    ],
+    [
+      { kind: 'changes' as const },
+      'Cannot leave this computer (the folder has changes that are not committed), and this computer is draining. Commit and push the changes.',
+      'Не может покинуть этот компьютер (в папке есть незакоммиченные изменения), а этот компьютер освобождается. Закоммитьте и запушьте изменения.',
+    ],
+    [
+      { kind: 'unpushed' as const },
+      'Cannot leave this computer (the branch is not at its remote branch), and this computer is draining. Push the branch.',
+      'Не может покинуть этот компьютер (ветка не совпадает со своей remote-веткой), а этот компьютер освобождается. Запушьте ветку.',
+    ],
+    [
+      { kind: 'base-unpushed' as const, branch: 'feature/atlas' },
+      'Cannot leave this computer (the branch feature/atlas is not at its remote branch), and this computer is draining. Push the branch feature/atlas.',
+      'Не может покинуть этот компьютер (ветка feature/atlas не совпадает со своей remote-веткой), а этот компьютер освобождается. Запушьте ветку feature/atlas.',
+    ],
+    [
+      { kind: 'local-path' as const, path: pathSpecial },
+      `Cannot leave this computer (the first message names ${pathSpecial}, which is on this computer), and this computer is draining. Drop the path from the first message.`,
+      `Не может покинуть этот компьютер (первое сообщение называет ${pathSpecial}, а это файл этого компьютера), а этот компьютер освобождается. Уберите путь из первого сообщения.`,
+    ],
+    [
+      { kind: 'name' as const, name: 'fix+one' },
+      'Cannot leave this computer (a node does not take the name fix+one), and this computer is draining. Use a plain branch or folder name.',
+      'Не может покинуть этот компьютер (узел не принимает имя fix+one), а этот компьютер освобождается. Используйте простое имя ветки или папки.',
+    ],
+  ] as const
+  for (const [home, expectedEn, expectedRu] of cases) {
+    const refuse = { kind: 'unfit' as const, devices: [{ device: 'local', kind: 'draining' as const }], home }
+    expect(refusalText(refuse, en)).toBe(expectedEn)
+    expect(refusalText(refuse, ru)).toBe(expectedRu)
+  }
+  expect(
+    refusalText(
+      {
+        kind: 'unfit',
+        devices: [{ device: 'server-2', kind: 'paused' }],
+        home: { kind: 'unpushed' },
+      },
+      en,
+    ),
+  ).toBe('Cannot leave server-2 (the branch is not at its remote branch), and server-2 is paused. Push the branch.')
+  expect(
+    refusalText(
+      {
+        kind: 'unfit',
+        devices: [{ device: 'server-2', kind: 'paused' }],
+        home: { kind: 'unpushed' },
+      },
+      ru,
+    ),
+  ).toBe('Не может покинуть server-2 (ветка не совпадает со своей remote-веткой), а server-2 на паузе. Запушьте ветку.')
   expect(placeRefusal({ place: { queueFull: true } }, en)).toBe('50 starts are waiting already: this one was not added')
   expect(placeRefusal({ place: {} }, en)).toBeNull()
   expect(
@@ -142,6 +206,16 @@ test('a queued start waits under "waiting on someone else" with what it waits on
   expect(
     markup(launch({ state: 'failed', place: { refuse: { kind: 'no-device', pin: { device: 'server-9' } } } })),
   ).toContain('No device fits “Where”: server-9')
+  const homeRefused = launch({
+    state: 'failed',
+    place: { refuse: { kind: 'unfit', devices: [{ device: 'local', kind: 'draining' }], home: { kind: 'unpushed' } } },
+  })
+  expect(markup(homeRefused)).toContain(
+    'Cannot leave this computer (the branch is not at its remote branch), and this computer is draining. Push the branch.',
+  )
+  expect(markup(homeRefused, ru)).toContain(
+    'Не может покинуть этот компьютер (ветка не совпадает со своей remote-веткой), а этот компьютер освобождается. Запушьте ветку.',
+  )
   expect(markup(launch({ step: 'prepare', place: { home: { kind: 'lane' } } }))).toContain(
     'On this computer: its lane does not leave this computer',
   )

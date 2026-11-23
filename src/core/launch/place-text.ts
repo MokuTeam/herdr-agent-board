@@ -31,6 +31,11 @@ export function homeText(why: PortableWhy, t: Translator): string {
   return t(`place.home.${why.kind}`)
 }
 
+function homeFix(why: PortableWhy, t: Translator): string {
+  if (why.kind === 'base-unpushed') return t('place.homeFix.base-unpushed', { branch: why.branch })
+  return t(`place.homeFix.${why.kind}`)
+}
+
 function unfitText(u: Unfit, t: Translator): string {
   const device = deviceName(u.device, t)
   switch (u.kind) {
@@ -55,7 +60,17 @@ const pinText = (pin: { device: string } | { tag: string }, t: Translator): stri
 /** Why no device could ever take a start (core/placement.ts Refusal), in words. */
 export function refusalText(r: Refusal, t: Translator): string {
   if (r.kind === 'no-device') return t('place.refuse.no-device', { pin: r.pin ? pinText(r.pin, t) : '' })
-  if (r.kind === 'unfit') return t('place.refuse.unfit', { list: r.devices.map(u => unfitText(u, t)).join('; ') })
+  if (r.kind === 'unfit') {
+    const list = r.devices.map(u => unfitText(u, t)).join('; ')
+    if (r.home)
+      return t('place.refuse.home', {
+        origin: deviceName(r.devices[0]?.device ?? 'local', t),
+        why: homeText(r.home, t),
+        list,
+        fix: homeFix(r.home, t),
+      })
+    return t('place.refuse.unfit', { list })
+  }
   return t('place.refuse.pinned-away', {
     origin: deviceName(r.origin, t),
     why: homeText(r.home, t),

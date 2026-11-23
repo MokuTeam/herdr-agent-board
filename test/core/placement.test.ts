@@ -477,6 +477,99 @@ describe('refuse', () => {
     })
   })
 
+  test('when portability kept a task at its origin and that device is unfit, the refusal keeps why it could not leave (#600)', () => {
+    const drainLocal = view({ settings: { local: { drain: true } } })
+    for (const why of [
+      { kind: 'lane' as const },
+      { kind: 'no-remote' as const },
+      { kind: 'changes' as const },
+      { kind: 'unpushed' as const },
+      { kind: 'base-unpushed' as const, branch: 'feature/atlas' },
+      { kind: 'local-path' as const, path: String.raw`C:\Users\anna\My Docs\brief.md` },
+      { kind: 'name' as const, name: 'fix+one' },
+    ]) {
+      const t = why.kind === 'lane' ? task({ lane: 'other' }) : task({ portable: { ok: false, why } })
+      const cfg = why.kind === 'lane' ? { ...drainLocal.config, lanes: ['atlas'] } : drainLocal.config
+      assert.deepEqual(place(t, { ...drainLocal, config: cfg }, NOW), {
+        refuse: {
+          kind: 'unfit',
+          devices: [{ device: 'local', kind: 'draining' }],
+          home: why,
+        },
+      })
+    }
+
+    // Also when a node is the origin and a tag pin includes other devices.
+    const tagged = view({
+      settings: {
+        'server-1': { tags: ['linux'] },
+        'server-2': { drain: true, tags: ['linux'] },
+      },
+    })
+    assert.deepEqual(
+      place(
+        task({ origin: 'server-2', pin: { tag: 'linux' }, portable: { ok: false, why: { kind: 'unpushed' } } }),
+        tagged,
+        NOW,
+      ),
+      {
+        refuse: {
+          kind: 'unfit',
+          devices: [{ device: 'server-2', kind: 'draining' }],
+          home: { kind: 'unpushed' },
+        },
+      },
+    )
+
+    // Unchanged setups: no `home` when portable, when pinned to origin, or when only origin is in the order.
+    assert.deepEqual(
+      place(
+        task(),
+        view({ settings: { 'server-1': { paused: true }, 'server-2': { paused: true }, local: { drain: true } } }),
+        NOW,
+      ),
+      {
+        refuse: {
+          kind: 'unfit',
+          devices: [
+            { device: 'server-1', kind: 'paused' },
+            { device: 'server-2', kind: 'paused' },
+            { device: 'local', kind: 'draining' },
+          ],
+        },
+      },
+    )
+    assert.deepEqual(
+      place(task({ pin: { device: 'local' }, portable: { ok: false, why: { kind: 'unpushed' } } }), drainLocal, NOW),
+      { refuse: { kind: 'unfit', devices: [{ device: 'local', kind: 'draining' }] } },
+    )
+    assert.deepEqual(
+      place(
+        task({ pin: { tag: 'win' }, portable: { ok: false, why: { kind: 'changes' } } }),
+        view({ settings: { local: { tags: ['win'], drain: true } } }),
+        NOW,
+      ),
+      { refuse: { kind: 'unfit', devices: [{ device: 'local', kind: 'draining' }] } },
+    )
+    assert.deepEqual(
+      place(
+        task({ portable: { ok: false, why: { kind: 'unpushed' } } }),
+        {
+          config: {
+            order: ['local'],
+            whenFull: 'local',
+            lanes: 'all',
+            devices: { local: device('local', { drain: true }) },
+          },
+          master: { api: 1, commit: 'ee32fc89' },
+          devices: { local: state() },
+        },
+        NOW,
+      ),
+      { refuse: { kind: 'unfit', devices: [{ device: 'local', kind: 'draining' }] } },
+    )
+  })
+
   test('a device never heard from is not refused: it waits for its first status', () => {
     const v = view({
       config: { order: ['server-1'] },
