@@ -274,15 +274,15 @@ test("the master refuses what is not a session's board thread, whatever the node
   for (const [body, line] of [
     [
       { cmd: 'time', argv: ['add', '1h'], session: S, lane: 'atlas' },
-      'board time is not taken from a node: only board thread',
+      'board time is not taken from a node: only board thread and board send',
     ],
     [
       { cmd: 'cal', argv: ['list'], session: S, lane: 'atlas' },
-      'board cal is not taken from a node: only board thread',
+      'board cal is not taken from a node: only board thread and board send',
     ],
     [
       { cmd: 'thread', argv: ['post', 'atlas-1', 'as the owner'], session: '', lane: null },
-      "only a session's board thread is taken from a node",
+      "only a session's board thread or board send is taken from a node",
     ],
     [
       { cmd: 'thread', argv: ['share', 'atlas-1', 'team'], session: S, lane: 'atlas' },

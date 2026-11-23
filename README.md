@@ -1929,8 +1929,10 @@ live or asleep, and `SendMessage` to a name that only a node's session has (noth
 computer, in any profile) goes through the board the same way: a reminder due now for its key,
 which the scheduler sends through the node, "[board reminder from <caller's name on the board>;
 from <this computer>, answer with board send "<name> [<ref>]" "<your answer>"] <text>". A card
-whose pane an awake card of another session holds now is not offered. Without `nodes` neither
-hook asks the board anything. Neither runs on any other tool, nor on every
+whose pane an awake card of another session holds now is not offered. A name nothing on this
+computer has makes SendMessage read the board's payload once, and a name a node's session shares
+with something Claude Code alone knows (a teammate in the same process) goes to the node's.
+Without `nodes` neither hook asks the board anything. Neither runs on any other tool, nor on every
 prompt, and neither asks anything while wake is off. The install does not write them
 beside the separate herdr-wake plugin's: it says so, and "Switch over…" moves them.
 

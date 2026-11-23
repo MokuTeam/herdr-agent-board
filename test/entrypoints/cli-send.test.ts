@@ -153,7 +153,7 @@ test('#619 board send on a node goes to its board as a call, not kept; what the 
     answer = { state: 'unreachable' }
     expect(await send(box, ['Monitor', 'x'])).toEqual({
       code: 1,
-      out: "board: the board's computer is not reachable: nothing was sent",
+      out: "board: the board's computer did not answer: it may not have been sent; check before sending it again",
     })
     // Nothing is queued on the node itself: the master holds the board.
     expect(scheduled(box)).toEqual([])

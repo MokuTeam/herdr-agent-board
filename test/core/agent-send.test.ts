@@ -85,3 +85,17 @@ test('the payload’s own computer and the devices that are not online', () => {
   expect(ownDeviceOf({})).toBe('')
   expect([...offlineDevices(null)]).toEqual([])
 })
+
+test('a ref after /clear gives way to a name only one card has; a key for a card with no hex id; a name stays one line', () => {
+  const targets = targetsOf([
+    card(A, 'Solo'),
+    card('pane-w9:p1', 'Paned', { session: null, pane: 'w9:p1' }),
+    card(C, 'Two\nlines\u0007', { pane: 'w3:p1' }),
+  ])
+  expect(matching(targets, 'Solo [deadbeef]').map(t => t.name)).toEqual(['Solo'])
+  const paned = targets.find(t => t.name === 'Paned')
+  if (!paned) throw new Error('no card')
+  expect(labelOf(paned)).toBe('Paned (key pane-w9:p1)')
+  expect(matching(targets, 'pane-w9:p1').map(t => t.name)).toEqual(['Paned'])
+  expect(targets.map(t => t.name)).toContain('Two lines')
+})

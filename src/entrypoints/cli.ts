@@ -460,7 +460,9 @@ async function sendCmd(): Promise<void> {
       files: [],
     })
     if (!answer) throw new Error('the board does not run on this computer: nothing was sent')
-    if (answer.state !== 'answered') throw new Error("the board's computer is not reachable: nothing was sent")
+    // Not reachable, or no answer in time: the master may have queued it all the same.
+    if (answer.state !== 'answered')
+      throw new Error("the board's computer did not answer: it may not have been sent; check before sending it again")
     for (const l of answer.out) console.log(l)
     for (const l of answer.err) console.error(l)
     process.exitCode = answer.code

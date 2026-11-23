@@ -17,9 +17,8 @@
 // come last: ListAgents lists them from the board's payload, and SendMessage to a name only a node's
 // session has (nothing on this computer has it) is queued by the board for its key, which the
 // scheduler sends through the node. Without `nodes` the board is asked nothing. config.json's kill
-// switch is read first: wake off, or a config.json
-// that does not parse, and wake is asked nothing. Wake not running or not answering, or anything
-// else amiss: silent, and the tool runs as it would.
+// switch is read first: wake off, or a config.json that does not parse, and wake is asked nothing.
+// Wake not running or not answering, or anything else amiss: silent, and the tool runs as it would.
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -189,6 +188,9 @@ interface Fit {
 }
 
 /**
+ * Whether it settled the call (true: queued, refused, or left to Claude Code as this profile's);
+ * false when no session of another profile has the name, so a node's may (#619).
+ *
  * SendMessage to `to` (lower case; `ref`, the hex after it, picks a session by the start of its id
  * when it has 8 or more), not a session of the caller's profile: when exactly one session of another
  * shown profile has the name, the board takes it (a reminder due now, typed in once the session is
@@ -344,13 +346,18 @@ async function nodesContext(raw: Record<string, unknown> | null): Promise<string
   const payload = await nodesPayload(raw)
   if (!payload) return null
   const { offlineDevices, labelOf, targetsOf } = await import('../core/agent-send.ts')
+  type Target = import('../core/agent-send.ts').Target
   const offline = offlineDevices(payload)
-  const rows = targetsOf(payload.items)
-    .filter(t => t.device)
-    .map(
-      t =>
-        `  ${labelOf(t)}  ·  node ${t.device}  ·  ${t.sleeping ? 'asleep' : t.status || 'live'}` +
-        (offline.has(t.device ?? '') ? '  ·  node offline now: goes out once it is back' : ''),
+  const row = (t: Target): string =>
+    `  ${labelOf(t)}  ·  node ${t.device}  ·  ${t.sleeping ? 'asleep' : t.status || 'live'}` +
+    (offline.has(t.device ?? '') ? '  ·  node offline now: goes out once it is back' : '')
+  const onNodes = targetsOf(payload.items).filter(t => t.device)
+  // Every live one, and the sleepers as this computer's are shown: at most LIST_MAX, the rest counted.
+  const asleep = onNodes.filter(t => t.sleeping).sort((a, b) => b.activity - a.activity)
+  const rows = [...onNodes.filter(t => !t.sleeping), ...asleep.slice(0, LIST_MAX)].map(row)
+  if (asleep.length > LIST_MAX)
+    rows.push(
+      `  ... and ${asleep.length - LIST_MAX} more asleep on the nodes, not shown; SendMessage by name reaches them too`,
     )
   if (!rows.length) return null
   return (
@@ -395,7 +402,7 @@ async function sendToNode(named: string, input: Record<string, unknown>, raw: Re
   if (fits.length > 1)
     return deny(
       `Not sent: "${to}" fits more than one session on the board's nodes (${fits.map(t => `${A.labelOf(t)} on node ${t.device}`).join(', ')}). ` +
-        `Send it to one of them by its name with its ref, as listed.`,
+        `Send it to one of them as listed: its name with its ref, or its key.`,
     )
   const m = A.messageText(message)
   if ('error' in m) return deny(`Not sent: ${m.error}.`)

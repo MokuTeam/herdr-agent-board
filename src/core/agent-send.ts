@@ -51,8 +51,23 @@ const idOf = (key: string, session: string | null): string => session ?? parseNo
 /** The first 8 characters of a session's id, as a name's ref shows it. */
 export const refOf = (t: Pick<Target, 'key' | 'session'>): string => idOf(t.key, t.session).slice(0, 8)
 
-/** "Name [ref]", as a list shows a target and SendMessage or `board send` takes it. */
-export const labelOf = (t: Target): string => `${t.name} [${refOf(t)}]`
+/** A ref SendMessage and `board send` take: 8 hex characters. */
+const HEX_REF = /^[0-9a-f]{8}/i
+
+/**
+ * "Name [ref]", as a list shows a target and SendMessage or `board send` takes it; a card whose id is
+ * no hex (a pane's, a pi file's) shows its whole key, which picks it as well.
+ */
+export const labelOf = (t: Target): string =>
+  HEX_REF.test(idOf(t.key, t.session)) ? `${t.name} [${refOf(t)}]` : `${t.name} (key ${t.key})`
+
+/** A name as it goes into a line for an agent: no line breaks or other control characters, at most 60. */
+const plainName = (s: string): string =>
+  s
+    .replace(/\p{Cc}+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60)
 
 /** One that a newer card of another session in the same pane replaced. */
 function replaced(t: Target, by: Target): boolean {
@@ -68,7 +83,8 @@ export function targetsOf(items: unknown): Target[] {
   const all: Target[] = []
   for (const i of items) {
     if (!isRecord(i) || !str(i.key)) continue
-    const names = [str(i.name).trim(), str(i.autoName).trim()].filter((n, k, l) => n && l.indexOf(n) === k)
+    // A node's names come from its payload: plain text only, so a name cannot add a line of its own.
+    const names = [plainName(str(i.name)), plainName(str(i.autoName))].filter((n, k, l) => n && l.indexOf(n) === k)
     const [name] = names
     if (!name) continue
     all.push({
@@ -98,17 +114,20 @@ export function parseTo(named: string): { to: string; ref: string } {
   return { to, ref }
 }
 
-/** The targets `named` picks: by its whole key or session id, else by name and ref. */
+/**
+ * The targets `named` picks: by its whole key or session id, else by name and ref. A ref that fits
+ * none of the name's cards (the sender ran /clear since, and has a new id) gives way to the name
+ * when only one card has it.
+ */
 export function matching(targets: readonly Target[], named: string): Target[] {
   const { to, ref } = parseTo(named)
   if (!to) return []
   const exact = targets.filter(t => t.key.toLowerCase() === to || t.session?.toLowerCase() === to)
   if (exact.length) return exact
-  return targets.filter(
-    t =>
-      t.names.some(n => n.toLowerCase() === to) &&
-      (ref.length < 8 || idOf(t.key, t.session).toLowerCase().startsWith(ref)),
-  )
+  const byName = targets.filter(t => t.names.some(n => n.toLowerCase() === to))
+  if (ref.length < 8) return byName
+  const byRef = byName.filter(t => idOf(t.key, t.session).toLowerCase().startsWith(ref))
+  return byRef.length || byName.length !== 1 ? byRef : byName
 }
 
 /** The message as the board carries it, or why it does not. */
@@ -139,7 +158,7 @@ export function messageEntry(target: Target, text: string, from: Sender, now: nu
     by: 'agent' as const,
     from: { key: from.key, name },
     // A name with its ref, or the whole key for a sender with no name or no hex id: either finds it again.
-    replyTo: name && /^[0-9a-f]{8}/i.test(id) ? `${name} [${id.slice(0, 8)}]` : from.key,
+    replyTo: name && HEX_REF.test(id) ? `${name} [${id.slice(0, 8)}]` : from.key,
     replyBy: 'board' as const,
     ...(from.device && { fromDevice: cleanName(from.device) }),
   }
@@ -173,7 +192,7 @@ export function planSend(a: SendAsk): { error: string } | { entry: ReturnType<ty
     return {
       error:
         `"${a.to.trim()}" fits more than one session (${others.map(t => `${labelOf(t)} ${whereOf(t, a.own)}`).join(', ')}): ` +
-        'send it to one of them by its name with its ref, as listed',
+        'send it to one of them as listed: its name with its ref, or its key',
     }
   const m = messageText(a.message)
   if ('error' in m) return { error: `not sent: ${m.error}` }

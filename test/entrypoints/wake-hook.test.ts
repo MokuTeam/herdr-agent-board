@@ -819,7 +819,7 @@ test('#619 a name sessions on two nodes share is refused with their refs; the re
   const both = denied(await runHook(w, 'pre-send', sendFrom('worker', 'x', SID_ME)))
   expect(both).toBe(
     'Not sent: "worker" fits more than one session on the board\'s nodes (Worker [7b8c9d0e] on node server-2, ' +
-      'Worker [9d0e1f2a] on node server-1). Send it to one of them by its name with its ref, as listed.',
+      'Worker [9d0e1f2a] on node server-1). Send it to one of them as listed: its name with its ref, or its key.',
   )
   expect(scheduled(w)).toEqual([])
   expect(denied(await runHook(w, 'pre-send', sendFrom('Worker [9d0e1f2a]', 'x', SID_ME)))).toStartWith(
@@ -845,4 +845,33 @@ test('#619 without nodes in config.json the board is asked nothing; with them, a
   liveIn(w.dflt, SID_OPS, 'board-self-update')
   passed(await runHook(w, 'pre-send', sendFrom('board-self-update', 'x', SID_ME)))
   expect(scheduled(w)).toEqual([])
+})
+
+test('#619 several profiles and nodes: another profile’s name is still the board’s profile path; a name only a node has goes to the node', async () => {
+  const w = await world()
+  const fake = await fakeWake({
+    ...runningIn(w, [[w.work, 'work', SID_O, 'Centium Ops']]),
+    board: nodesBoard(NODE_CARDS),
+  })
+  writeBoardConfig(
+    w.box,
+    wakeOnConfig(fake.port, { config: { ...profilesConfig(w), port: fake.port, nodes: { id: 'laptop' } } }),
+  )
+  liveIn(w.dflt, SID_ME, 'Monitor')
+  expect(denied(await runHook(w, 'pre-send', sendFrom('Centium Ops', 'x', SID_ME)))).toStartWith(
+    'Queued for Centium Ops in profile Work through the board',
+  )
+  expect(denied(await runHook(w, 'pre-send', sendFrom('board-self-update', 'y', SID_ME)))).toStartWith(
+    'Queued for board-self-update on node server-2 through the board',
+  )
+  expect(scheduled(w)).toMatchObject([
+    { key: SID_O, fromProfile: 'Default' },
+    { key: `@server-2:${SID_N3}`, replyBy: 'board', fromDevice: 'laptop' },
+  ])
+  // ListAgents: the other profile's part, then the nodes'.
+  const text = contextOf(await runHook(w, 'post-list', LIST)) ?? ''
+  expect(text.indexOf('Sessions of the other Claude profiles')).toBeGreaterThan(-1)
+  expect(text.indexOf("Sessions on the board's nodes")).toBeGreaterThan(
+    text.indexOf('Sessions of the other Claude profiles'),
+  )
 })

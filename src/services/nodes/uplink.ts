@@ -223,15 +223,17 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
 
   async function handle(id: string, call: UplinkCall): Promise<void> {
     // Only a write is kept on the node and so sent again: only a write's result is remembered.
-    // `board send` (#619) is not kept: the node says at once when the master is not there.
+    // `board send` (#619) is not kept on the node, but its result is remembered here: the node sends a
+    // call again on every stream while its command waits, and a message must not be queued twice.
     const kept = (call.cmd === 'thread' || call.cmd === 'threads') && KEPT_SUBS.has(call.argv[0] ?? '')
-    let result = kept ? store.seenCall(id, call.id) : null
+    const remembered = kept || call.cmd === 'send'
+    let result = remembered ? store.seenCall(id, call.id) : null
     if (!result) {
       const ran = await runCall(id, call)
       // A file the link could not bring: the node sends the call again on its next stream.
       if (!ran) return
       result = fit(ran)
-      if (kept)
+      if (remembered)
         try {
           store.rememberCall(id, call.id, result)
         } catch (err) {
@@ -314,7 +316,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
   async function runCall(id: string, call: UplinkCall): Promise<UplinkResult | null> {
     if (!UPLINK_COMMANDS.has(call.cmd))
       return refused(`board ${said(call.cmd)} is not taken from a node: only board thread and board send`)
-    if (!call.session) return refused("only a session's board thread is taken from a node")
+    if (!call.session) return refused("only a session's board thread or board send is taken from a node")
     if (call.cmd === 'send') return sendFrom(id, call)
     const sub = call.argv[0] ?? 'help'
     const not = Object.hasOwn(NOT_FROM_NODE, sub) ? NOT_FROM_NODE[sub] : undefined
@@ -381,7 +383,8 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
 
   /**
    * `board send <name|key> "<text>"` in a session of the node (#619, core/agent-send.ts): queued here
-   * for the card it names, this computer's or any node's, signed with the node's session.
+   * for the card it names, signed with the node's session. A node reaches this computer's sessions
+   * and its own, never another node's (design 10, "Trust"): those are not even named to it.
    */
   async function sendFrom(id: string, call: UplinkCall): Promise<UplinkResult> {
     let key: string
@@ -394,7 +397,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     const [to = '', ...words] = call.argv
     const { planSend, targetsOf } = await import('../../core/agent-send.ts')
     const plan = planSend({
-      targets: targetsOf(o.items()),
+      targets: targetsOf(o.items()).filter(t => t.device === null || t.device === id),
       to,
       message: words.join(' '),
       from: { key, name: item?.name || item?.autoName || '', device: id },
