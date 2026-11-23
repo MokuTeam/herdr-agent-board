@@ -2,9 +2,9 @@
 // event's colour and label, times on this browser's clock, the grid's rows. The days are this
 // browser's (its zone), as a calendar on the owner's screen shows them. What the board answers
 // (GET /api/calendar) is checked here before the panel draws it.
-import type { CalEvent } from '../../../src/core/calendar.ts'
+import type { CalEvent, CalZone } from '../../../src/core/calendar.ts'
 import { daysFrom, monthWeeks, weekOf } from '../../../src/core/calendar-layout.ts'
-import { addDays } from '../../../src/core/time.ts'
+import { addDays, clockIn, dateIn, instantIn } from '../../../src/core/time.ts'
 
 export type CalView = 'day' | 'week' | 'month' | 'agenda'
 export const CAL_VIEWS: readonly CalView[] = ['day', 'week', 'month', 'agenda']
@@ -41,6 +41,8 @@ export interface CalAnswer {
   from: number
   to: number
   zone: string
+  /** Extra time zones configured in Settings (#646); absent or empty when off. */
+  zones?: CalZone[]
   events: CalEvent[]
   sources: CalSourceView[]
   busy: string[]
@@ -63,16 +65,28 @@ export function isCalAnswer(v: unknown): v is CalAnswer {
 
 const pad2 = (n: number): string => String(n).padStart(2, '0')
 
-/** The date of an instant on this browser's clock. */
-export const localDate = (at: number): string => {
+/** The date of an instant on this browser's clock (or in `zone` when given). */
+export const localDate = (at: number, zone?: string): string => {
+  if (zone) return dateIn(at, zone)
   const d = new Date(at)
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 }
 
-/** Midnight that starts a date on this browser's clock. */
-export const midnight = (date: string): number => {
+/** Midnight that starts a date on this browser's clock (or in `zone` when given). */
+export const midnight = (date: string, zone?: string): number => {
+  if (zone) return instantIn(date, [0, 0, 0], zone)
   const [y, m, d] = date.split('-').map(Number) as [number, number, number]
   return new Date(y, m - 1, d).getTime()
+}
+
+/** Minutes since midnight on this browser's clock (or in `zone` when given). */
+export const minuteIn = (at: number, zone?: string): number => {
+  if (zone) {
+    const [h, m] = clockIn(at, zone)
+    return h * 60 + m
+  }
+  const d = new Date(at)
+  return d.getHours() * 60 + d.getMinutes()
 }
 
 /** The week's first day for a language: from the browser's locale where it says, else Monday. */
@@ -97,9 +111,14 @@ export function viewDays(view: CalView, date: string, weekStart: number): string
 }
 
 /** The window a view asks the board for: from the first day's midnight to the one after its last. */
-export function viewWindow(view: CalView, date: string, weekStart: number): { from: number; to: number } {
+export function viewWindow(
+  view: CalView,
+  date: string,
+  weekStart: number,
+  zone?: string,
+): { from: number; to: number } {
   const days = viewDays(view, date, weekStart)
-  return { from: midnight(days[0] as string), to: midnight(addDays(days.at(-1) as string, 1)) }
+  return { from: midnight(days[0] as string, zone), to: midnight(addDays(days.at(-1) as string, 1), zone) }
 }
 
 /** The date the arrows go to: a day, a week, a month (the same day of it, or its last), two weeks of agenda. */
@@ -125,8 +144,10 @@ function formatter(locale: string, o: Intl.DateTimeFormatOptions): Intl.DateTime
 }
 const at12 = (date: string): Date => new Date(`${date}T12:00:00Z`)
 
+export type HourCycle = 'h12' | 'h23'
+
 /** The browser's own clock style (12 or 24 hours), whatever the board's language. */
-export function hourCycle(): 'h12' | 'h23' {
+export function hourCycle(): HourCycle {
   try {
     const c = new Intl.DateTimeFormat(navigator.language, { hour: 'numeric' }).resolvedOptions().hourCycle
     return c === 'h11' || c === 'h12' ? 'h12' : 'h23'
@@ -135,11 +156,14 @@ export function hourCycle(): 'h12' | 'h23' {
   }
 }
 
-/** A clock: 09:30, or 9:30 AM where the browser counts twelve hours. */
-export function clockText(at: number, lang: string, cycle = hourCycle()): string {
-  return formatter(lang, { hour: cycle === 'h12' ? 'numeric' : '2-digit', minute: '2-digit', hourCycle: cycle }).format(
-    new Date(at),
-  )
+/** A clock: 09:30, or 9:30 AM where the browser counts twelve hours; in `zone` when given. */
+export function clockText(at: number, lang: string, cycle = hourCycle(), zone?: string): string {
+  return formatter(lang, {
+    hour: cycle === 'h12' ? 'numeric' : '2-digit',
+    minute: '2-digit',
+    hourCycle: cycle,
+    ...(zone ? { timeZone: zone } : {}),
+  }).format(new Date(at))
 }
 
 /** An hour on the grid's edge: 09, or 9 AM. */
@@ -195,9 +219,9 @@ export const weekdayHeads = (weekStart: number, lang: string): string[] =>
 
 // ------------------------------------------------------------------ events on the grid
 
-/** An event's span on this browser's clock: an all-day one from midnight to midnight. */
-export function spanOf(e: Pick<CalEvent, 'start' | 'end' | 'allDay'>): { start: number; end: number } {
-  if (e.allDay) return { start: midnight(e.start), end: midnight(e.end) }
+/** An event's span on this browser's clock (or in `zone` when given): an all-day one from midnight to midnight. */
+export function spanOf(e: Pick<CalEvent, 'start' | 'end' | 'allDay'>, zone?: string): { start: number; end: number } {
+  if (e.allDay) return { start: midnight(e.start, zone), end: midnight(e.end, zone) }
   return { start: Date.parse(e.start), end: Date.parse(e.end) }
 }
 
@@ -208,11 +232,11 @@ export function isBar(e: CalEvent): boolean {
   return s.end - s.start >= 24 * 3_600_000
 }
 
-/** An event's first and last date on this browser's clock (its end exclusive). */
-export function datesOf(e: CalEvent): { first: string; last: string } {
+/** An event's first and last date on this browser's clock (or in `zone` when given; its end exclusive). */
+export function datesOf(e: CalEvent, zone?: string): { first: string; last: string } {
   if (e.allDay) return { first: e.start, last: addDays(e.end, -1) }
-  const s = spanOf(e)
-  return { first: localDate(s.start), last: localDate(Math.max(s.start, s.end - 1)) }
+  const s = spanOf(e, zone)
+  return { first: localDate(s.start, zone), last: localDate(Math.max(s.start, s.end - 1), zone) }
 }
 
 /** The colours the panel gives a source without one of its own or its lane's, in order. */
@@ -316,10 +340,11 @@ export function hourSize(room: number): number {
 }
 
 /** Where the hours scroll to when a day or week opens: an hour before now on today, else the first event or 8:00. */
-export function firstHour(days: readonly string[], events: readonly CalEvent[], now: number): number {
-  const today = localDate(now)
-  if (days.includes(today)) return Math.max(0, new Date(now).getHours() - 1)
-  const starts = events.filter(e => !isBar(e)).map(e => new Date(spanOf(e).start).getHours())
+export function firstHour(days: readonly string[], events: readonly CalEvent[], now: number, zone?: string): number {
+  const today = localDate(now, zone)
+  const hourOfInstant = (at: number): number => (zone ? clockIn(at, zone)[0] : new Date(at).getHours())
+  if (days.includes(today)) return Math.max(0, hourOfInstant(now) - 1)
+  const starts = events.filter(e => !isBar(e)).map(e => hourOfInstant(spanOf(e, zone).start))
   return starts.length ? Math.max(0, Math.min(...starts) - 1) : 8
 }
 

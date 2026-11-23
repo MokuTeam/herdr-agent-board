@@ -399,6 +399,10 @@ export function createCalendarSync({
   let timer: ReturnType<typeof setInterval> | undefined
   const running = new Map<string, Promise<SyncResult>>()
   let lineCache: { stamp: string; at: number; line: CalendarPayload } | null = null
+  let lastZonesSig = ''
+
+  const zonesSignature = (c: CalendarConfig | null): string =>
+    c?.zones.length ? c.zones.map(z => `${z.zone}=${z.label}`).join(',') : ''
 
   const run = (s: CalSource, c: CalendarConfig): Promise<SyncResult> => {
     const had = running.get(s.id)
@@ -441,6 +445,9 @@ export function createCalendarSync({
         log(`calendar: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
+    const nextZones = zonesSignature(c)
+    const zonesChanged = nextZones !== lastZonesSig
+    lastZonesSig = nextZones
     if (on && !timer) {
       timer = setInterval(tick, tickMs)
       tick()
@@ -448,6 +455,9 @@ export function createCalendarSync({
       clearInterval(timer)
       timer = undefined
       lineCache = null
+    } else if (on && zonesChanged) {
+      lineCache = null
+      onChange()
     }
   }
 
@@ -469,7 +479,10 @@ export function createCalendarSync({
       } catch {
         seq = -1
       }
-      const stamp = `${copiesStamp()}.${seq}.${running.size}`
+      const zonesSig = zonesSignature(c)
+      const stamp = zonesSig
+        ? `${copiesStamp()}.${seq}.${running.size}.${zonesSig}`
+        : `${copiesStamp()}.${seq}.${running.size}`
       const at = now()
       if (lineCache && lineCache.stamp === stamp && at - lineCache.at < NEXT_EVERY_MS) return lineCache.line
       const line: CalendarPayload = {

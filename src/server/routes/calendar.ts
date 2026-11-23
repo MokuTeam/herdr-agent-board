@@ -132,6 +132,7 @@ export function calendarRoutes(cfg: Config, sync: CalendarSync, rem?: ReminderRo
             from,
             to,
             zone,
+            zones: c.zones,
             events,
             // a phone sees each source's look and state, never where it is fetched from
             sources: views.map(v => ({ ...v, url: null, account: null })),

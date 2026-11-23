@@ -11,6 +11,7 @@ import { isRecord } from '../adapters/json-store.ts'
 import {
   BOARD_SOURCE,
   type CalSource,
+  type CalZone,
   calendarConfig,
   MCP_PRESETS,
   problemsText,
@@ -30,6 +31,10 @@ export interface CalendarSettingsView {
   everyMin: number
   /** Reminders before events (#335): on, minutes before, the snooze. */
   reminders: ReminderSettings
+  /** Extra time zones shown beside the calendar grid (#646); empty by default. */
+  zones: CalZone[]
+  /** This computer's own time zone. */
+  localZone: string
   sources: SourceView[]
   /** config.json's `calendar` does not check out outside the sources. */
   problems: string | null
@@ -51,7 +56,17 @@ export function calendarSettingsView(
 ): CalendarSettingsView {
   const on = calendarConfig(raw) !== null
   const c = calendarConfig(asOn(raw) ?? true)
-  if (!c) return { on, everyMin: 5, reminders: { on: false, beforeMin: 10, snoozeMin: 5 }, sources: [], problems: null }
+  const ownZone = localZone()
+  if (!c)
+    return {
+      on,
+      everyMin: 5,
+      reminders: { on: false, beforeMin: 10, snoozeMin: 5 },
+      zones: [],
+      localZone: ownZone,
+      sources: [],
+      problems: null,
+    }
   let views: SourceView[]
   try {
     views = withDb(false, db => sourceViews(c, db))
@@ -62,6 +77,8 @@ export function calendarSettingsView(
     on,
     everyMin: c.everyMin,
     reminders: c.reminders,
+    zones: c.zones,
+    localZone: ownZone,
     sources: views,
     problems: c.problems.length ? problemsText(c.problems, t) : null,
   }
@@ -145,11 +162,44 @@ function reminderProblems(cal: Raw): string | null {
   return ps.length ? problemsText(ps, t) : null
 }
 
+/** config.json's zones' problems with this `calendar`, or none. */
+function zoneProblems(cal: Raw): string | null {
+  const c = calendarConfig({ ...cal, on: true })
+  const ps = (c?.problems ?? []).filter(p => p.at === 'calendar.zones' || p.at.startsWith('calendar.zones.'))
+  return ps.length ? problemsText(ps, t) : null
+}
+
 const REMINDER_FIELDS = ['on', 'beforeMin', 'snoozeMin'] as const
 
-/** One change from the panel: { op: on | reminders | add | edit | remove, … }. */
+/** One change from the panel: { op: on | reminders | zones | add | edit | remove, ... }. */
 export function editCalendarSettings(body: unknown): SettingsResult {
   const b = isRecord(body) ? body : {}
+  if (b.op === 'zones') {
+    if (!Array.isArray(b.zones)) return fail('usage')
+    return edit(cal => {
+      if (!b.zones || (b.zones as unknown[]).length === 0) {
+        delete cal.zones
+        return { ok: true }
+      }
+      const rawZones = (b.zones as unknown[]).map(entry => {
+        if (!isRecord(entry)) return entry
+        const out: Raw = {}
+        if (entry.zone !== undefined) out.zone = typeof entry.zone === 'string' ? entry.zone.trim() : entry.zone
+        if (entry.label !== undefined) {
+          if (typeof entry.label === 'string') {
+            const label = entry.label.trim()
+            if (label) out.label = label
+          } else out.label = entry.label
+        }
+        return out
+      })
+      const problems = zoneProblems({ ...cal, zones: rawZones })
+      if (problems) return fail('zones', { problems })
+      const parsed = calendarConfig({ ...cal, on: true, zones: rawZones })
+      cal.zones = (parsed?.zones ?? []).map(z => ({ zone: z.zone, label: z.label }))
+      return { ok: true }
+    })
+  }
   if (b.op === 'reminders') {
     if (!REMINDER_FIELDS.some(k => b[k] !== undefined)) return fail('usage')
     return edit(cal => {

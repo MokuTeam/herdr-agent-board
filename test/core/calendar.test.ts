@@ -118,6 +118,43 @@ test('calendarConfig: the preset needs the account; a generic mcp source needs i
   assert.ok(z && writesToProvider(z))
 })
 
+test('calendarConfig: extra time zones are off by default, capped at two, and validated strictly', () => {
+  assert.deepEqual(calendarConfig(true)?.zones, [])
+  assert.deepEqual(calendarConfig({ on: true })?.zones, [])
+  const ok = calendarConfig({
+    on: true,
+    zones: [
+      { zone: 'America/New_York', label: 'NY' },
+      { zone: 'Asia/Kolkata', label: '' },
+    ],
+  })
+  assert.ok(ok)
+  assert.deepEqual(ok.problems, [])
+  assert.deepEqual(ok.zones, [
+    { zone: 'America/New_York', label: 'NY' },
+    { zone: 'Asia/Kolkata', label: 'Kolkata' },
+  ])
+
+  const bad = calendarConfig({
+    on: true,
+    zones: [
+      { zone: 'America/New_York', label: 'NY' },
+      { zone: 'America/New_York', label: 'Dup' },
+      { zone: 'Mars/Olympus', label: 'M' },
+    ],
+  })
+  assert.ok(bad)
+  assert.deepEqual(
+    bad.problems.map(p => [p.at, p.why]),
+    [
+      ['calendar.zones', 'range'],
+      ['calendar.zones.1.zone', 'duplicateZone'],
+      ['calendar.zones.2.zone', 'zone'],
+    ],
+  )
+  assert.deepEqual(bad.zones, [{ zone: 'America/New_York', label: 'NY' }])
+})
+
 // ------------------------------------------------------------------ the model
 
 test('eventOf: checks each field; an all-day event has dates; a bad time is no event', () => {

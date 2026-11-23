@@ -8,7 +8,15 @@
 // is now. Month: six weeks at most, each day with its first events and how many more (a tap opens
 // that day). Agenda: two weeks from the day on show, day by day, each event a row. A call with a
 // join link has it one tap away on its block or row; a tap anywhere else on an event opens its card.
-import { type CSSProperties, type KeyboardEvent, type MouseEvent, useEffect, useLayoutEffect, useRef } from 'react'
+import {
+  type CSSProperties,
+  type KeyboardEvent,
+  type MouseEvent,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from 'react'
 import type { CalEvent } from '../../../../src/core/calendar.ts'
 import { bars, clip, columns } from '../../../../src/core/calendar-layout.ts'
 import { addDays } from '../../../../src/core/time.ts'
@@ -21,16 +29,25 @@ import {
   dayHead,
   eventTone,
   firstHour,
+  hourCycle,
   hourSize,
   hourText,
   isBar,
   joinProvider,
   localDate,
   midnight,
+  minuteIn,
   spanOf,
   untilText,
   weekdayHeads,
 } from '../../models/calendar.ts'
+import {
+  type DayShiftNote,
+  dayDstShifts,
+  type GutterZone,
+  gutterRowsFor,
+  popoverZoneLines,
+} from '../../models/calendar-zones.ts'
 import { classNames } from '../class-names.ts'
 import { CloseIcon, VideoIcon } from '../icons.tsx'
 
@@ -44,12 +61,6 @@ export interface Marks {
 export type Pick = (e: CalEvent, from: HTMLElement) => void
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
-
-/** Minutes since the day's midnight on this browser's clock (a day of a clock change too). */
-const minuteOf = (at: number): number => {
-  const d = new Date(at)
-  return d.getHours() * 60 + d.getMinutes()
-}
 
 /** The join link as a button of its own: it opens the call, and the event's card stays shut. */
 function JoinButton({ url, compact = false, label }: { url: string; compact?: boolean; label?: string }) {
@@ -89,6 +100,10 @@ export function TimeGrid({
   marks,
   now,
   lang,
+  zones,
+  primaryZone,
+  phone = false,
+  onSwapZone,
   onPick,
   onDay,
 }: {
@@ -97,16 +112,42 @@ export function TimeGrid({
   marks: Marks
   now: number
   lang: string
+  /** Shown time zones in left-to-right gutter order (primary last); empty or length <= 1 leaves the gutter unchanged. */
+  zones?: readonly GutterZone[] | undefined
+  /** Primary IANA time zone when multi-zone is active; undefined uses the browser's own clock. */
+  primaryZone?: string | undefined
+  /** Narrow/phone layout: extra gutter columns fold away while remaining in the event popover. */
+  phone?: boolean | undefined
+  /** Click a secondary zone header to make it primary without touching any event. */
+  onSwapZone?: ((zone: string) => void) | undefined
   onPick: Pick
   /** A day's head tapped: that day on its own. */
   onDay?: (date: string) => void
 }) {
   const t = useT()
   const scroller = useRef<HTMLDivElement>(null)
-  const today = localDate(now)
+  const cycle = hourCycle()
+  const multiZone = (zones?.length ?? 0) > 1
+  const shownZones = useMemo(() => {
+    if (!multiZone || !zones) return []
+    return phone ? zones.filter(z => z.primary) : zones
+  }, [multiZone, zones, phone])
+  const activePrimary = primaryZone ?? shownZones.find(z => z.primary)?.zone
+  const today = localDate(now, activePrimary)
   const timed = events.filter(e => !isBar(e))
-  const strip = bars(events.filter(isBar), days, e => datesOf(e))
+  const strip = bars(events.filter(isBar), days, e => datesOf(e, activePrimary))
   const stripRows = strip.reduce((n, b) => Math.max(n, b.row + 1), 0)
+  const dstShifts = useMemo(
+    () =>
+      multiZone && days.length > 1 && activePrimary && zones
+        ? dayDstShifts(days, activePrimary, zones)
+        : new Map<string, DayShiftNote[]>(),
+    [multiZone, days, activePrimary, zones],
+  )
+  const zoneRows = useMemo(() => {
+    if (!multiZone || !activePrimary) return null
+    return new Map(shownZones.map(z => [z.zone, gutterRowsFor(days, activePrimary, z.zone, lang, cycle)]))
+  }, [multiZone, shownZones, days, activePrimary, lang, cycle])
   // Twelve hours fill the grid's room under its head (#339): an hour grows with the panel, so a tall
   // one still has the day to scroll through. Set on the element before the scroll below reads an
   // hour's height; a resize keeps the hour at the top where it was. The room above and below the
@@ -137,26 +178,81 @@ export function TimeGrid({
     return () => watch.disconnect()
   }, [])
   // the hours open at what matters: an hour before now on today, else the first event
-  const key = `${days[0]}:${days.length}`
-  // biome-ignore lint/correctness/useExhaustiveDependencies: when the days on show change, not on every answer
+  const key = `${days[0]}:${days.length}:${activePrimary ?? ''}`
+  // biome-ignore lint/correctness/useExhaustiveDependencies: when the days or primary zone change, not on every answer
   useLayoutEffect(() => {
     const el = scroller.current
     if (!el) return
     const hour = el.querySelector<HTMLElement>('.cal-hour-row')?.offsetHeight ?? 44
-    el.scrollTop = firstHour(days, timed, Date.now()) * hour
+    el.scrollTop = firstHour(days, timed, Date.now(), activePrimary) * hour
   }, [key])
-  const cols = { '--days': days.length } as CSSProperties
+  const cols = (
+    multiZone ? { '--days': days.length, '--gutters': shownZones.length } : { '--days': days.length }
+  ) as CSSProperties
   return (
-    <div className="cal-grid" ref={scroller}>
+    <div
+      className={classNames('cal-grid', multiZone && 'has-zones', multiZone && phone && 'zones-folded')}
+      ref={scroller}
+    >
       <div className="cal-top">
         <div className="cal-grid-head" style={cols}>
-          <span className="cal-gutter" />
+          {multiZone ? (
+            <div className="cal-gutter cal-gutter-heads" data-gutters={shownZones.length}>
+              {shownZones.map(z => {
+                const zoneName = z.zone.replaceAll('_', ' ')
+                const tip = z.primary
+                  ? t('cal.zone.primary', { label: z.label, zone: zoneName, offset: z.offsetText })
+                  : t('cal.zone.swap', { label: z.label, zone: zoneName, offset: z.offsetText })
+                const inner = (
+                  <>
+                    <span className="cal-zone-label">{z.label}</span>
+                    <span className="cal-zone-offset">{z.offsetText}</span>
+                  </>
+                )
+                return !z.primary && onSwapZone ? (
+                  <button
+                    type="button"
+                    key={z.zone}
+                    className="cal-zone-head cal-zone-swap cal-zone-extra"
+                    data-zone={z.zone}
+                    title={tip}
+                    aria-label={tip}
+                    onClick={() => onSwapZone(z.zone)}
+                  >
+                    {inner}
+                  </button>
+                ) : (
+                  <span
+                    key={z.zone}
+                    className={classNames('cal-zone-head', z.primary ? 'primary' : 'cal-zone-extra')}
+                    data-zone={z.zone}
+                    title={tip}
+                  >
+                    {inner}
+                  </span>
+                )
+              })}
+            </div>
+          ) : (
+            <span className="cal-gutter" />
+          )}
           {days.map(d => {
             const h = dayHead(d, lang)
+            const shifts = dstShifts.get(d)
             const body = (
               <>
                 <span className="cal-wd">{h.weekday}</span>
                 <span className="cal-dn">{h.day}</span>
+                {shifts && (
+                  <span
+                    className="cal-dst-note"
+                    title={shifts
+                      .map(s => t('cal.zone.dstShift', { label: s.label, offset: s.offsetText }))
+                      .join(' · ')}
+                  >
+                    {shifts.map(s => `${s.label} ${s.offsetText.replace(/^UTC/, '') || 'UTC'}`).join(' ')}
+                  </span>
+                )}
               </>
             )
             return onDay && days.length > 1 ? (
@@ -196,19 +292,41 @@ export function TimeGrid({
         )}
       </div>
       <div className="cal-hours" style={cols}>
-        <div className="cal-gutter cal-hour-labels" aria-hidden="true">
-          {HOURS.map(h => (
-            <div key={h} className="cal-hour-row">
-              {h > 0 && <span>{hourText(h, lang)}</span>}
-            </div>
-          ))}
-        </div>
+        {multiZone && zoneRows ? (
+          <div className="cal-gutter cal-gutter-cols" aria-hidden="true">
+            {shownZones.map(z => (
+              <div
+                key={z.zone}
+                className={classNames(
+                  'cal-hour-labels',
+                  z.primary ? 'primary' : 'cal-zone-extra',
+                  z.relativeShift && days.length > 1 && 'shifted',
+                )}
+                data-zone={z.zone}
+              >
+                {(zoneRows.get(z.zone) ?? []).map(r => (
+                  <div key={r.hour} className={classNames('cal-hour-row', r.midnight && 'midnight')}>
+                    {r.text && <span title={r.title || undefined}>{r.text}</span>}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="cal-gutter cal-hour-labels" aria-hidden="true">
+            {HOURS.map(h => (
+              <div key={h} className="cal-hour-row">
+                {h > 0 && <span>{hourText(h, lang)}</span>}
+              </div>
+            ))}
+          </div>
+        )}
         {days.map(d => {
-          const from = midnight(d)
-          const to = midnight(addDays(d, 1))
+          const from = midnight(d, activePrimary)
+          const to = midnight(addDays(d, 1), activePrimary)
           const placed = columns(
-            timed.filter(e => clip(spanOf(e), from, to)),
-            e => clip(spanOf(e), from, to) as { start: number; end: number },
+            timed.filter(e => clip(spanOf(e, activePrimary), from, to)),
+            e => clip(spanOf(e, activePrimary), from, to) as { start: number; end: number },
           )
           return (
             <div key={d} className={classNames('cal-col', d === today && 'today')}>
@@ -216,9 +334,9 @@ export function TimeGrid({
                 <div key={h} className="cal-hour-row" />
               ))}
               {placed.map(p => {
-                const s = spanOf(p.item)
-                const top = p.start <= from ? 0 : minuteOf(p.start)
-                const bottom = p.end >= to ? 24 * 60 : Math.max(top + 1, minuteOf(p.end) || 24 * 60)
+                const s = spanOf(p.item, activePrimary)
+                const top = p.start <= from ? 0 : minuteIn(p.start, activePrimary)
+                const bottom = p.end >= to ? 24 * 60 : Math.max(top + 1, minuteIn(p.end, activePrimary) || 24 * 60)
                 return (
                   <EventBlock
                     key={`${p.item.source}/${p.item.id}`}
@@ -226,6 +344,7 @@ export function TimeGrid({
                     marks={marks}
                     now={now}
                     lang={lang}
+                    primaryZone={activePrimary}
                     onPick={onPick}
                     clippedTop={s.start < from}
                     style={
@@ -241,7 +360,11 @@ export function TimeGrid({
                 )
               })}
               {d === today && (
-                <div className="cal-now" style={{ '--top': minuteOf(now) } as CSSProperties} aria-hidden="true" />
+                <div
+                  className="cal-now"
+                  style={{ '--top': minuteIn(now, activePrimary) } as CSSProperties}
+                  aria-hidden="true"
+                />
               )}
             </div>
           )
@@ -256,6 +379,7 @@ function EventBlock({
   marks,
   now,
   lang,
+  primaryZone,
   onPick,
   style,
   clippedTop,
@@ -264,13 +388,15 @@ function EventBlock({
   marks: Marks
   now: number
   lang: string
+  primaryZone?: string | undefined
   onPick: Pick
   style: CSSProperties
   clippedTop: boolean
 }) {
-  const s = spanOf(e)
+  const s = spanOf(e, primaryZone)
   const label = marks.label(e)
-  const time = `${clockText(s.start, lang)} - ${clockText(s.end, lang)}`
+  const cycle = hourCycle()
+  const time = `${clockText(s.start, lang, cycle, primaryZone)} - ${clockText(s.end, lang, cycle, primaryZone)}`
   const minutes = (s.end - s.start) / 60_000
   const open = (el: HTMLElement) => onPick(e, el)
   return (
@@ -296,7 +422,7 @@ function EventBlock({
     >
       <span className="cal-ev-title">{e.title || '…'}</span>
       <span className="cal-ev-meta">
-        <span className="cal-ev-time">{minutes <= 30 ? clockText(s.start, lang) : time}</span>
+        <span className="cal-ev-time">{minutes <= 30 ? clockText(s.start, lang, cycle, primaryZone) : time}</span>
         <span className="cal-mark-label">{label}</span>
       </span>
       {e.join && s.end > now && <JoinButton url={e.join} compact label={e.title} />}
@@ -344,6 +470,7 @@ export function MonthGrid({
   now,
   lang,
   weekStart,
+  primaryZone,
   onPick,
   onDay,
 }: {
@@ -355,14 +482,16 @@ export function MonthGrid({
   now: number
   lang: string
   weekStart: number
+  primaryZone?: string | undefined
   onPick: Pick
   onDay: (date: string) => void
 }) {
   const t = useT()
-  const today = localDate(now)
+  const cycle = hourCycle()
+  const today = localDate(now, primaryZone)
   const byDay = new Map<string, CalEvent[]>()
   for (const e of events) {
-    const { first, last } = datesOf(e)
+    const { first, last } = datesOf(e, primaryZone)
     for (let d = first; d <= last; d = addDays(d, 1)) {
       if (d < (days[0] as string) || d > (days.at(-1) as string)) continue
       byDay.set(d, [...(byDay.get(d) ?? []), e])
@@ -379,7 +508,10 @@ export function MonthGrid({
         {days.map(d => {
           const list = (byDay.get(d) ?? [])
             .slice()
-            .sort((a, b) => Number(isBar(b)) - Number(isBar(a)) || spanOf(a).start - spanOf(b).start)
+            .sort(
+              (a, b) =>
+                Number(isBar(b)) - Number(isBar(a)) || spanOf(a, primaryZone).start - spanOf(b, primaryZone).start,
+            )
           const more = list.length - MONTH_SHOWN
           return (
             <div
@@ -408,7 +540,11 @@ export function MonthGrid({
                   title={`${e.title} · ${marks.label(e)}`}
                   onClick={ev => onPick(e, ev.currentTarget)}
                 >
-                  {!isBar(e) && <span className="cal-ev-time">{clockText(spanOf(e).start, lang)}</span>}
+                  {!isBar(e) && (
+                    <span className="cal-ev-time">
+                      {clockText(spanOf(e, primaryZone).start, lang, cycle, primaryZone)}
+                    </span>
+                  )}
                   <span className="cal-ev-title">{e.title || '…'}</span>
                 </button>
               ))}
@@ -433,6 +569,7 @@ export function Agenda({
   marks,
   now,
   lang,
+  primaryZone,
   onPick,
 }: {
   days: string[]
@@ -440,15 +577,17 @@ export function Agenda({
   marks: Marks
   now: number
   lang: string
+  primaryZone?: string | undefined
   onPick: Pick
 }) {
   const t = useT()
-  const today = localDate(now)
+  const cycle = hourCycle()
+  const today = localDate(now, primaryZone)
   const groups = days
     .map(d => ({
       d,
       list: events.filter(e => {
-        const { first, last } = datesOf(e)
+        const { first, last } = datesOf(e, primaryZone)
         return first <= d && last >= d
       }),
     }))
@@ -463,7 +602,7 @@ export function Agenda({
           {g.list.length > 0 && (
             <ul>
               {g.list.map(e => {
-                const s = spanOf(e)
+                const s = spanOf(e, primaryZone)
                 const label = marks.label(e)
                 const soon = callSoon(e, now)
                 const open = (el: HTMLElement) => onPick(e, el)
@@ -492,8 +631,8 @@ export function Agenda({
                           t('cal.allDay')
                         ) : (
                           <>
-                            <span>{clockText(s.start, lang)}</span>
-                            <span className="to">{clockText(s.end, lang)}</span>
+                            <span>{clockText(s.start, lang, cycle, primaryZone)}</span>
+                            <span className="to">{clockText(s.end, lang, cycle, primaryZone)}</span>
                           </>
                         )}
                       </span>
@@ -546,6 +685,8 @@ export function EventCard({
   now,
   lang,
   sourceLine,
+  zones,
+  primaryZone,
   onClose,
 }: {
   e: CalEvent
@@ -555,11 +696,17 @@ export function EventCard({
   lang: string
   /** How its source's sync stands, in words. */
   sourceLine: string
+  /** Shown time zones (#646): when more than one, start and end are shown in every zone. */
+  zones?: readonly GutterZone[] | undefined
+  primaryZone?: string | undefined
   onClose(): void
 }) {
   const t = useT()
   const card = useRef<HTMLDivElement>(null)
-  const s = spanOf(e)
+  const cycle = hourCycle()
+  const multiZone = !e.allDay && (zones?.length ?? 0) > 1
+  const activePrimary = primaryZone ?? zones?.find(z => z.primary)?.zone
+  const s = spanOf(e, activePrimary)
   useLayoutEffect(() => {
     const el = card.current
     if (!el) return
@@ -591,15 +738,23 @@ export function EventCard({
       document.removeEventListener('keydown', key, true)
     }
   }, [from, onClose])
-  const dateText = new Intl.DateTimeFormat(lang, { weekday: 'short', day: 'numeric', month: 'long' }).format(
-    new Date(s.start),
-  )
+  const dateText = new Intl.DateTimeFormat(lang, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'long',
+    ...(activePrimary ? { timeZone: activePrimary } : {}),
+  }).format(new Date(s.start))
   const when = e.allDay
     ? e.end === addDays(e.start, 1)
       ? `${dateText} · ${t('cal.allDay')}`
-      : `${dateText} - ${new Intl.DateTimeFormat(lang, { day: 'numeric', month: 'long' }).format(new Date(midnight(addDays(e.end, -1))))}`
-    : `${dateText} · ${clockText(s.start, lang)} - ${clockText(s.end, lang)}`
-  const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+      : `${dateText} - ${new Intl.DateTimeFormat(lang, { day: 'numeric', month: 'long', ...(activePrimary ? { timeZone: activePrimary } : {}) }).format(new Date(midnight(addDays(e.end, -1), activePrimary)))}`
+    : multiZone
+      ? dateText
+      : `${dateText} · ${clockText(s.start, lang, cycle, activePrimary)} - ${clockText(s.end, lang, cycle, activePrimary)}`
+  const zoneLines = multiZone && zones ? popoverZoneLines(s.start, s.end, zones, lang, cycle) : []
+  const currentZone = activePrimary ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+  const showSourceZone =
+    !e.allDay && e.zone && (multiZone ? !zones?.some(z => z.zone === e.zone) : e.zone !== currentZone)
   const answer =
     e.status === 'cancelled'
       ? t('cal.cancelled')
@@ -632,8 +787,35 @@ export function EventCard({
       <h3 className={classNames('cal-card-title', eventTone(e) === 'declined' && 'struck')}>{e.title || '…'}</h3>
       <p className="cal-card-when">
         {when}
-        {!e.allDay && e.zone && e.zone !== browserZone && <span className="cal-card-zone"> · {e.zone}</span>}
+        {showSourceZone && <span className="cal-card-zone"> · {e.zone}</span>}
       </p>
+      {zoneLines.length > 0 && (
+        <ul className="cal-card-zones" aria-label={t('cal.set.zones')}>
+          {zoneLines.map(line => (
+            <li
+              key={line.zone}
+              className={classNames('cal-card-zone-row', line.primary && 'primary')}
+              data-zone={line.zone}
+            >
+              <span className="cal-card-zone-who">
+                <span className="cal-card-zone-label">{line.label}</span>
+                <span className="cal-card-zone-off">{line.offsetText}</span>
+              </span>
+              <span className="cal-card-zone-time">
+                {line.timeText}
+                {line.dateNote && line.endDateNote && (
+                  <span className="cal-card-zone-day">
+                    {' '}
+                    · {line.dateNote} - {line.endDateNote}
+                  </span>
+                )}
+                {line.dateNote && !line.endDateNote && <span className="cal-card-zone-day"> · {line.dateNote}</span>}
+                {!line.dateNote && line.endDateNote && <span className="cal-card-zone-day"> ({line.endDateNote})</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
       {(answer || (live && callSoon(e, now, 60 * 60_000))) && (
         <p className="cal-card-state">
           {[answer, live && callSoon(e, now, 60 * 60_000) ? untilText(s.start, s.end, now, t) : '']

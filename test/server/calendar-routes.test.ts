@@ -157,9 +157,63 @@ test('calendar on: the line in the payload, a window from every source, Sync, th
     assert.equal((await fetch(`${url}/api/calendar?from=${from}&to=${from + 90 * 86_400_000}`)).status, 400)
     const settings = await json(await fetch(`${url}/api/calendar-settings`))
     assert.equal(settings.on, true)
+    assert.deepEqual(settings.zones, [])
+    assert.deepEqual(day.zones, [])
     assert.ok(readdirSync(join(box.dir, 'state', 'herdr', 'plugins', 'agent-board', 'calendar')).includes('work.json'))
   } finally {
     fake.stop()
+    wake.down()
+  }
+})
+
+test('extra time zones: saved via /api/calendar-settings, returned by /api/calendar, and bump calendar rev', async () => {
+  const box = await sandbox()
+  const wake = await fakeWake()
+  try {
+    const cfg = { language: 'en', wakeUrl: wake.url, calendar: { on: true } }
+    const confDir = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board')
+    mkdirSync(confDir, { recursive: true })
+    writeFileSync(join(confDir, 'config.json'), JSON.stringify({ ...cfg, port: 9, wake: false }))
+    const { url } = await serveBoard(box, cfg)
+    const now = Date.now()
+    const from = now - 3_600_000
+    const to = now + 86_400_000
+
+    const beforeBoard = await json(await fetch(`${url}/api/board`))
+    const revBefore = (beforeBoard.calendar as { rev: string }).rev
+    const dayBefore = await json(await fetch(`${url}/api/calendar?from=${from}&to=${to}`))
+    assert.deepEqual(dayBefore.zones, [])
+
+    const setZones = await json(
+      await post(`${url}/api/calendar-settings`, {
+        op: 'zones',
+        zones: [
+          { zone: 'America/New_York', label: 'NY' },
+          { zone: 'Asia/Kolkata', label: 'IST' },
+        ],
+      }),
+    )
+    assert.equal(setZones.ok, true)
+    assert.deepEqual((setZones.view as { zones: unknown }).zones, [
+      { zone: 'America/New_York', label: 'NY' },
+      { zone: 'Asia/Kolkata', label: 'IST' },
+    ])
+
+    const dayAfter = await json(await fetch(`${url}/api/calendar?from=${from}&to=${to}`))
+    assert.deepEqual(dayAfter.zones, [
+      { zone: 'America/New_York', label: 'NY' },
+      { zone: 'Asia/Kolkata', label: 'IST' },
+    ])
+    const afterBoard = await json(await fetch(`${url}/api/board`))
+    assert.notEqual((afterBoard.calendar as { rev: string }).rev, revBefore)
+
+    // Invalid zone rejected with 400
+    const bad = await post(`${url}/api/calendar-settings`, {
+      op: 'zones',
+      zones: [{ zone: 'Nowhere/Void', label: 'X' }],
+    })
+    assert.equal(bad.status, 400)
+  } finally {
     wake.down()
   }
 })

@@ -34,6 +34,7 @@ import {
   viewWindow,
   weekStartFor,
 } from '../../models/calendar.ts'
+import { activeExtraZones, browserZone, buildGutterZones, resolvePrimaryZone } from '../../models/calendar-zones.ts'
 import { PHONE_QUERY } from '../../models/panel-motion.ts'
 import { askedInTurn } from '../../models/time.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
@@ -45,6 +46,7 @@ import { Agenda, EventCard, type Marks, MonthGrid, TimeGrid } from './CalendarVi
 
 const VIEW_KEY = 'board.calendar.view'
 const HIDDEN_KEY = 'board.calendar.hidden'
+const PRIMARY_ZONE_KEY = 'board.calendar.primaryZone'
 
 /** An event to show (#335, a reminder's Open): its day on show and its card open; `n` tells asks apart. */
 export interface CalendarFocus {
@@ -97,8 +99,13 @@ export function CalendarPanel({ open, focus = null, onFocused, onClose, onSettin
   })
   const [card, setCard] = useState<{ e: CalEvent; from: HTMLElement } | null>(null)
   const [syncing, setSyncing] = useState(false)
+  const [swappedZone, setSwappedZone] = useState<string | null>(() => storage.read(PRIMARY_ZONE_KEY) || null)
+  const homeZone = useMemo(() => browserZone(), [])
+  const extraZones = useMemo(() => activeExtraZones(homeZone, answer?.zones ?? []), [homeZone, answer?.zones])
+  const hasExtraZones = extraZones.length > 0
+  const primaryZone = hasExtraZones ? resolvePrimaryZone(homeZone, extraZones, swappedZone) : undefined
   const turns = useRef(askedInTurn())
-  const win = viewWindow(view, date, weekStart)
+  const win = viewWindow(view, date, weekStart, primaryZone)
 
   const ask = useCallback(
     async (from: number, to: number) => {
@@ -117,19 +124,35 @@ export function CalendarPanel({ open, focus = null, onFocused, onClose, onSettin
     },
     [latest],
   )
+  const primaryZoneRef = useLatest(primaryZone)
+  const initialZoneSynced = useRef(false)
   // Every opening starts on today, unless it opens for an event (below).
   useEffect(() => {
-    if (open) setDate(localDate(Date.now()))
-    else setCard(null)
-  }, [open])
+    if (open) {
+      initialZoneSynced.current = !!primaryZoneRef.current
+      setDate(localDate(Date.now(), primaryZoneRef.current))
+    } else {
+      initialZoneSynced.current = false
+      setCard(null)
+    }
+  }, [open, primaryZoneRef])
   // An event asked for: its day on show, and its card once the answer has it on screen.
   const wanted = useRef<CalendarFocus | null>(null)
   useEffect(() => {
     if (!open || !focus) return
     wanted.current = focus
     setCard(null)
-    setDate(localDate(Date.parse(focus.start)))
-  }, [open, focus])
+    setDate(localDate(Date.parse(focus.start), primaryZoneRef.current))
+  }, [open, focus, primaryZoneRef])
+  // If a persisted swapped primary zone activates on the first answer after opening, align the
+  // initial date (today or pending focus) to that zone before the user navigates.
+  useEffect(() => {
+    if (!open || !primaryZone || initialZoneSynced.current) return
+    initialZoneSynced.current = true
+    const f = wanted.current
+    if (f) setDate(localDate(Date.parse(f.start), primaryZone))
+    else setDate(prev => (prev === localDate(Date.now()) ? localDate(Date.now(), primaryZone) : prev))
+  }, [open, primaryZone])
   const focused = useLatest(onFocused)
   // biome-ignore lint/correctness/useExhaustiveDependencies: looked at again with each answer and each ask
   useEffect(() => {
@@ -177,6 +200,18 @@ export function CalendarPanel({ open, focus = null, onFocused, onClose, onSettin
     storage.set(VIEW_KEY, v)
     setCard(null)
   }
+  const today = localDate(now, primaryZone)
+  const swapZone = useCallback(
+    (zone: string) => {
+      const next = zone === homeZone ? null : zone
+      const nextPrimary = next ?? homeZone
+      setSwappedZone(next)
+      storage.set(PRIMARY_ZONE_KEY, next ?? '')
+      setDate(prev => (prev === today ? localDate(now, nextPrimary) : prev))
+      setCard(null)
+    },
+    [homeZone, now, today],
+  )
   const toggle = (id: string) => {
     const next = new Set(hidden)
     if (next.has(id)) next.delete(id)
@@ -213,8 +248,11 @@ export function CalendarPanel({ open, focus = null, onFocused, onClose, onSettin
   }
   // while a new window is asked, the last answer stays on show (each view draws only its own days)
   const events = (answer?.events ?? []).filter(e => !hidden.has(e.source))
-  const days = viewDays(view, date, weekStart)
-  const today = localDate(now)
+  const days = useMemo(() => viewDays(view, date, weekStart), [view, date, weekStart])
+  const gutterZones = useMemo(
+    () => (hasExtraZones ? buildGutterZones(homeZone, extraZones, swappedZone, days) : []),
+    [hasExtraZones, homeZone, extraZones, swappedZone, days],
+  )
   const busy = syncing || !!data?.calendar?.busy
   const failing = sources.filter(s => s.error || s.problems)
   const cardSource = card ? sources.find(s => s.id === card.e.source) : undefined
@@ -353,6 +391,7 @@ export function CalendarPanel({ open, focus = null, onFocused, onClose, onSettin
               marks={marks}
               now={now}
               lang={lang}
+              primaryZone={primaryZone}
               onPick={(e, from) => setCard({ e, from })}
             />
           ) : view === 'month' ? (
@@ -364,6 +403,7 @@ export function CalendarPanel({ open, focus = null, onFocused, onClose, onSettin
               now={now}
               lang={lang}
               weekStart={weekStart}
+              primaryZone={primaryZone}
               onPick={(e, from) => setCard({ e, from })}
               onDay={d => {
                 setDate(d)
@@ -377,6 +417,10 @@ export function CalendarPanel({ open, focus = null, onFocused, onClose, onSettin
               marks={marks}
               now={now}
               lang={lang}
+              zones={gutterZones}
+              primaryZone={primaryZone}
+              phone={phone}
+              onSwapZone={swapZone}
               onPick={(e, from) => setCard({ e, from })}
               onDay={d => {
                 setDate(d)
@@ -394,6 +438,8 @@ export function CalendarPanel({ open, focus = null, onFocused, onClose, onSettin
             now={now}
             lang={lang}
             sourceLine={sourceLine}
+            zones={gutterZones}
+            primaryZone={primaryZone}
             onClose={() => setCard(null)}
           />,
           document.body,

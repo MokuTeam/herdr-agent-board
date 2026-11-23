@@ -515,6 +515,61 @@ test('Settings → Calendar: a source added with its address kept apart from con
   assert.ok(!existsSync(join(dir, 'state', 'herdr', 'plugins', 'agent-board', 'calendar', 'home.json')))
 })
 
+test('Settings -> Calendar: extra time zones saved, validated (max two, valid IANA, unique), and cleared cleanly', () => {
+  const dir = isolatedHome()
+  assert.equal(editCalendarSettings({ op: 'on', on: true }).ok, true)
+  const initial = calendarSettingsView((_c, fn) => fn(null))
+  assert.deepEqual(initial.zones, [])
+
+  assert.equal(
+    editCalendarSettings({
+      op: 'zones',
+      zones: [
+        { zone: 'America/New_York', label: 'NY' },
+        { zone: 'America/Los_Angeles', label: 'PT' },
+      ],
+    }).ok,
+    true,
+  )
+  const saved = calendarSettingsView((_c, fn) => fn(null))
+  assert.deepEqual(saved.zones, [
+    { zone: 'America/New_York', label: 'NY' },
+    { zone: 'America/Los_Angeles', label: 'PT' },
+  ])
+
+  // Rejects more than two, unknown IANA zone, and duplicates
+  assert.equal(
+    editCalendarSettings({
+      op: 'zones',
+      zones: [
+        { zone: 'America/New_York', label: 'NY' },
+        { zone: 'America/Los_Angeles', label: 'PT' },
+        { zone: 'Asia/Tokyo', label: 'TYO' },
+      ],
+    }).ok,
+    false,
+  )
+  assert.equal(editCalendarSettings({ op: 'zones', zones: [{ zone: 'Not/A_Zone', label: 'X' }] }).ok, false)
+  assert.equal(
+    editCalendarSettings({
+      op: 'zones',
+      zones: [
+        { zone: 'America/New_York', label: 'NY' },
+        { zone: 'America/New_York', label: 'NY2' },
+      ],
+    }).ok,
+    false,
+  )
+
+  // Clearing removes `zones` from config.json completely
+  assert.equal(editCalendarSettings({ op: 'zones', zones: [] }).ok, true)
+  const raw = JSON.parse(
+    readFileSync(join(dir, 'config', 'herdr', 'plugins', 'config', 'agent-board', 'config.json'), 'utf8'),
+  )
+  assert.equal('zones' in raw.calendar, false)
+  assert.deepEqual(calendarSettingsView((_c, fn) => fn(null)).zones, [])
+})
+
 test('the calendar sink: only while the calendar is on with an ICS source; the owner’s own sinks as they are', () => {
   isolatedHome()
   const owner = { sinks: { demo: { kind: 'env', vars: ['X'] } } }

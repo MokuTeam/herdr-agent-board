@@ -177,7 +177,18 @@ export function joinLinkIn(...texts: readonly (string | null | undefined)[]): st
 
 // ------------------------------------------------------------------ config
 
-export type CalProblemWhy = 'type' | 'unknown' | 'required' | 'id' | 'kind' | 'duplicate' | 'url' | 'color' | 'range'
+export type CalProblemWhy =
+  | 'type'
+  | 'unknown'
+  | 'required'
+  | 'id'
+  | 'kind'
+  | 'duplicate'
+  | 'duplicateZone'
+  | 'url'
+  | 'color'
+  | 'range'
+  | 'zone'
 
 /** A value of `calendar` that does not check out: where (calendar.sources.0.url), and why. */
 export interface CalProblem {
@@ -233,6 +244,14 @@ export interface ReminderSettings {
   snoozeMin: number
 }
 
+/** An extra time zone shown beside the calendar grid (#646). */
+export interface CalZone {
+  /** IANA time zone name (for example "America/New_York"). */
+  zone: string
+  /** Short label shown in the gutter header and event popover (for example "NY"). */
+  label: string
+}
+
 export interface CalendarConfig {
   /** How often a source is fetched unless it says otherwise, in minutes. */
   everyMin: number
@@ -240,6 +259,8 @@ export interface CalendarConfig {
   pastDays: number
   futureDays: number
   reminders: ReminderSettings
+  /** Up to two extra time zones shown side by side in the calendar (#646); empty by default. */
+  zones: CalZone[]
   /** The board's own calendar is always among them, first. */
   sources: CalSource[]
   /** What does not check out outside any one source. */
@@ -249,6 +270,8 @@ export interface CalendarConfig {
 export const SOURCE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
 /** The board's own calendar's id. */
 export const BOARD_SOURCE = 'board'
+export const MAX_EXTRA_ZONES = 2
+export const MAX_ZONE_LABEL = 12
 export const DEFAULT_EVERY_MIN = 5
 const MIN_EVERY_MIN = 1
 const MAX_EVERY_MIN = 24 * 60
@@ -262,8 +285,9 @@ export const DEFAULT_SNOOZE_MIN = 5
 const MAX_BEFORE_MIN = 24 * 60
 const MAX_SNOOZE_MIN = 4 * 60
 
-const CALENDAR_KEYS = ['on', 'everyMin', 'pastDays', 'futureDays', 'reminders', 'sources']
+const CALENDAR_KEYS = ['on', 'everyMin', 'pastDays', 'futureDays', 'reminders', 'zones', 'sources']
 const REMINDER_KEYS = ['on', 'beforeMin', 'snoozeMin']
+const ZONE_KEYS = ['zone', 'label']
 const SOURCE_KEYS: Record<SourceKind, readonly string[]> = {
   board: ['id', 'kind', 'label', 'color', 'lane', 'remindMin'],
   push: ['id', 'kind', 'label', 'color', 'lane', 'account', 'remindMin'],
@@ -326,6 +350,51 @@ function remindersOf(v: unknown, problems: CalProblem[]): ReminderSettings {
   r.beforeMin = minutesIn(v.beforeMin, 'calendar.reminders.beforeMin', 1, MAX_BEFORE_MIN, DEFAULT_BEFORE_MIN, problems)
   r.snoozeMin = minutesIn(v.snoozeMin, 'calendar.reminders.snoozeMin', 1, MAX_SNOOZE_MIN, DEFAULT_SNOOZE_MIN, problems)
   return r
+}
+
+/** A fallback short label from an IANA zone id (for example "America/New_York" -> "New York"). */
+export function defaultZoneLabel(zone: string): string {
+  const tail = zone.split('/').at(-1) ?? zone
+  return cleanText(tail.replaceAll('_', ' '), MAX_ZONE_LABEL) || zone.slice(0, MAX_ZONE_LABEL)
+}
+
+/** config.json's `calendar.zones`: up to two extra IANA time zones with short labels; absent, none. */
+function zonesOf(v: unknown, problems: CalProblem[]): CalZone[] {
+  if (v === undefined) return []
+  if (!Array.isArray(v)) {
+    problems.push({ at: 'calendar.zones', why: 'type', value: shown(v) })
+    return []
+  }
+  if (v.length > MAX_EXTRA_ZONES) problems.push({ at: 'calendar.zones', why: 'range', value: String(v.length) })
+  const out: CalZone[] = []
+  const seen = new Set<string>()
+  v.forEach((raw, i) => {
+    const at = `calendar.zones.${i}`
+    if (!isObject(raw)) {
+      problems.push({ at, why: 'type', value: shown(raw) })
+      return
+    }
+    unknownKeys(raw, ZONE_KEYS, at, problems)
+    const zone = str(raw.zone)
+    if (!zone) {
+      problems.push({ at: `${at}.zone`, why: 'required' })
+      return
+    }
+    if (!knownZone(zone)) {
+      problems.push({ at: `${at}.zone`, why: 'zone', value: zone })
+      return
+    }
+    if (seen.has(zone)) {
+      problems.push({ at: `${at}.zone`, why: 'duplicateZone', value: zone })
+      return
+    }
+    if (raw.label !== undefined && typeof raw.label !== 'string')
+      problems.push({ at: `${at}.label`, why: 'type', value: shown(raw.label) })
+    const label = cleanText(str(raw.label), MAX_ZONE_LABEL) || defaultZoneLabel(zone)
+    seen.add(zone)
+    if (out.length < MAX_EXTRA_ZONES) out.push({ zone, label })
+  })
+  return out
 }
 
 /** A source's `remindMin`: minutes, 0 or `false` for none; absent, the calendar's own (null). */
@@ -452,6 +521,7 @@ export function calendarConfig(raw: unknown): CalendarConfig | null {
     pastDays: DEFAULT_PAST_DAYS,
     futureDays: DEFAULT_FUTURE_DAYS,
     reminders: remindersOf(undefined, problems),
+    zones: [],
     sources: [boardSource()],
     problems,
   }
@@ -466,6 +536,7 @@ export function calendarConfig(raw: unknown): CalendarConfig | null {
     numberIn(c.futureDays, 'calendar.futureDays', 1, MAX_DAYS, DEFAULT_FUTURE_DAYS, problems),
   )
   base.reminders = remindersOf(c.reminders, problems)
+  base.zones = zonesOf(c.zones, problems)
   if (c.sources === undefined) return base
   if (!Array.isArray(c.sources)) {
     problems.push({ at: 'calendar.sources', why: 'type', value: shown(c.sources) })

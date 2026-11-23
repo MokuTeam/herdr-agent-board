@@ -5,14 +5,23 @@
 // a push source an agent fills), tried with Test before it is added. Every change goes to POST
 // /api/calendar-settings and the view comes back with its answer. The iCal address goes into a
 // file of its own, never config.json; the panel never shows it again, only whether it is set.
-import { type CSSProperties, type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
+import { type CSSProperties, type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import { type CalZone, defaultZoneLabel, MAX_EXTRA_ZONES, MAX_ZONE_LABEL } from '../../../../src/core/calendar.ts'
 import { errorText, postJson, replyOf } from '../../api/client.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { agoText, type CalSourceView, sourceColors, sourceLabel } from '../../models/calendar.ts'
+import {
+  allIanaZones,
+  browserZone,
+  buildZoneIndex,
+  formatUtcOffset,
+  offsetMinutesAt,
+  searchZones,
+} from '../../models/calendar-zones.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
-import { ChevIcon, PlusIcon, WarnIcon } from '../icons.tsx'
+import { ChevIcon, CloseIcon, PlusIcon, WarnIcon } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
 
 export interface CalendarSettingsPanelProps {
@@ -31,6 +40,9 @@ interface SettingsView {
   everyMin: number
   /** A board before reminders (#335) sends none. */
   reminders?: Reminders
+  /** Extra time zones shown beside the calendar grid (#646); absent on older boards. */
+  zones?: CalZone[]
+  localZone?: string
   sources: CalSourceView[]
   problems: string | null
 }
@@ -217,6 +229,16 @@ export function CalendarSettingsPanel({ open, onClose }: CalendarSettingsPanelPr
 
             {view.on && view.reminders && (
               <ReminderFields r={view.reminders} disabled={off} send={send} note={note('reminders')} />
+            )}
+
+            {view.zones !== undefined && (
+              <TimeZonesFields
+                zones={view.zones}
+                localZone={view.localZone || browserZone()}
+                disabled={off}
+                send={send}
+                note={note('zones')}
+              />
             )}
 
             <h3 className="access-head">{t('cal.set.sources')}</h3>
@@ -421,6 +443,212 @@ function ReminderFields(props: {
         {props.note}
       </section>
     </>
+  )
+}
+
+/** Extra time zones shown beside the Day and Week grid (#646): up to two, searchable IANA list. */
+export function TimeZonesFields(props: {
+  zones: readonly CalZone[]
+  localZone: string
+  disabled: boolean
+  send(part: string, body: Record<string, unknown>): Promise<boolean>
+  note: ReactNode
+}) {
+  const { zones, localZone, disabled, send } = props
+  const t = useT()
+  const [adding, setAdding] = useState(false)
+  const [query, setQuery] = useState('')
+  const [picked, setPicked] = useState('')
+  const [label, setLabel] = useState('')
+  const [labelTouched, setLabelTouched] = useState(false)
+  const [now] = useState(() => Date.now())
+  const indexed = useMemo(() => buildZoneIndex(allIanaZones([localZone]), now), [localZone, now])
+  const excluded = useMemo(() => new Set([localZone, ...zones.map(z => z.zone)]), [localZone, zones])
+  const matches = useMemo(
+    () => (adding ? searchZones(query, indexed, now, excluded) : []),
+    [adding, query, indexed, now, excluded],
+  )
+  const save = (next: readonly CalZone[]) => send('zones', { op: 'zones', zones: next })
+  const pick = (zone: string) => {
+    setPicked(zone)
+    if (!labelTouched) setLabel(defaultZoneLabel(zone))
+  }
+  const reset = () => {
+    setAdding(false)
+    setQuery('')
+    setPicked('')
+    setLabel('')
+    setLabelTouched(false)
+  }
+  const add = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!picked) return
+    const nextLabel = label.trim() || defaultZoneLabel(picked)
+    const ok = await save([...zones, { zone: picked, label: nextLabel }])
+    if (ok) reset()
+  }
+  const rename = (index: number, nextLabel: string) => {
+    const cur = zones[index]
+    if (!cur) return
+    const cleaned = nextLabel.trim() || defaultZoneLabel(cur.zone)
+    if (cleaned === cur.label) return
+    void save(zones.map((z, i) => (i === index ? { ...z, label: cleaned } : z)))
+  }
+  const remove = (index: number) => {
+    void save(zones.filter((_, i) => i !== index))
+  }
+  return (
+    <>
+      <h3 className="access-head">{t('cal.set.zones')}</h3>
+      <section className="time-set-group cal-set-zones">
+        <p className="access-hint cal-set-zones-local">
+          {t('cal.set.zonesLocal', {
+            zone: `${localZone.replaceAll('_', ' ')} (${formatUtcOffset(offsetMinutesAt(now, localZone))})`,
+          })}
+        </p>
+        {zones.length > 0 && (
+          <ul className="cal-set-zone-list">
+            {zones.map((z, i) => (
+              <ZoneSettingRow
+                key={z.zone}
+                z={z}
+                offset={formatUtcOffset(offsetMinutesAt(now, z.zone))}
+                disabled={disabled}
+                onRename={v => rename(i, v)}
+                onRemove={() => remove(i)}
+              />
+            ))}
+          </ul>
+        )}
+        {zones.length < MAX_EXTRA_ZONES &&
+          (!adding ? (
+            <button
+              type="button"
+              className="time-add-open cal-set-zone-add"
+              disabled={disabled}
+              onClick={() => setAdding(true)}
+            >
+              <PlusIcon />
+              {t('cal.set.zoneAdd')}
+            </button>
+          ) : (
+            <form className="cal-set-zone-draft" onSubmit={e => void add(e)}>
+              <label className="time-field">
+                <span>{t('cal.set.zoneSearch')}</span>
+                <input
+                  type="search"
+                  value={query}
+                  placeholder={t('cal.set.zoneSearchHint')}
+                  disabled={disabled}
+                  onChange={e => {
+                    const nextQuery = e.target.value
+                    setQuery(nextQuery)
+                    if (picked && !searchZones(nextQuery, indexed, now, excluded).some(o => o.zone === picked)) {
+                      setPicked('')
+                    }
+                  }}
+                />
+              </label>
+              <div className="cal-set-zone-options" role="listbox" aria-label={t('cal.set.zoneSearch')}>
+                {matches.length === 0 ? (
+                  <p className="access-hint cal-set-zone-empty">{t('cal.set.zoneNoMatch')}</p>
+                ) : (
+                  matches.map(opt => (
+                    <button
+                      type="button"
+                      key={opt.zone}
+                      role="option"
+                      aria-selected={picked === opt.zone}
+                      className={classNames('cal-set-zone-opt', picked === opt.zone && 'picked')}
+                      disabled={disabled}
+                      onClick={() => pick(opt.zone)}
+                    >
+                      <span className="cal-set-zone-opt-name">{opt.display}</span>
+                      <span className="cal-set-zone-opt-off">{opt.offsetText}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+              <label className="time-field">
+                <span>{t('cal.set.zoneLabel')}</span>
+                <input
+                  value={label}
+                  maxLength={MAX_ZONE_LABEL}
+                  placeholder={t('cal.set.zoneLabelHint')}
+                  disabled={disabled}
+                  onChange={e => {
+                    setLabel(e.target.value)
+                    setLabelTouched(true)
+                  }}
+                />
+              </label>
+              <div className="access-actions">
+                <button type="submit" className="button primary" disabled={disabled || !picked}>
+                  {t('cal.set.addIt')}
+                </button>
+                <button type="button" className="button" disabled={disabled} onClick={reset}>
+                  {t('cal.set.cancel')}
+                </button>
+              </div>
+            </form>
+          ))}
+        <p className="access-hint">{t('cal.set.zonesHint')}</p>
+        {props.note}
+      </section>
+    </>
+  )
+}
+
+function ZoneSettingRow(props: {
+  z: CalZone
+  offset: string
+  disabled: boolean
+  onRename(label: string): void
+  onRemove(): void
+}) {
+  const { z, offset, disabled, onRename, onRemove } = props
+  const t = useT()
+  const [val, setVal] = useState(z.label)
+  useEffect(() => {
+    setVal(z.label)
+  }, [z.label])
+  const commit = () => {
+    const cleaned = val.trim() || defaultZoneLabel(z.zone)
+    setVal(cleaned)
+    onRename(cleaned)
+  }
+  return (
+    <li className="cal-set-zone-row" data-zone={z.zone}>
+      <input
+        className="cal-set-zone-label-in"
+        value={val}
+        maxLength={MAX_ZONE_LABEL}
+        aria-label={t('cal.set.zoneLabel')}
+        disabled={disabled}
+        onChange={e => setVal(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            commit()
+          }
+        }}
+      />
+      <span className="cal-set-zone-info">
+        <span className="cal-set-zone-name">{z.zone.replaceAll('_', ' ')}</span>
+        <small className="cal-set-zone-off">{offset}</small>
+      </span>
+      <button
+        type="button"
+        className="icon-button cal-set-zone-rm"
+        aria-label={t('cal.set.zoneRemove', { label: z.label })}
+        disabled={disabled}
+        onMouseDown={e => e.preventDefault()}
+        onClick={onRemove}
+      >
+        <CloseIcon />
+      </button>
+    </li>
   )
 }
 
