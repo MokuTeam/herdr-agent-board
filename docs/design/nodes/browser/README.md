@@ -39,6 +39,8 @@ that lets Chrome's sandbox use user namespaces (Ubuntu 23.10 and later forbid th
 |---|---|---|---|---|
 | `bsd` (Boston SD, Centium too) | :50 | 127.0.0.1:9223 | 5950 | 127.0.0.1:6080 |
 | `bb` (Blu Banyan) | :51 | 127.0.0.1:9224 | 5951 | 127.0.0.1:6081 |
+| `pf` (Blu Banyan, Power Factors in Workato), server-2 | :52 | 127.0.0.1:9225 | 5952 | 127.0.0.1:6082 |
+| `legacy` (Blu Banyan, Legacy in Workato), server-2 | :53 | 127.0.0.1:9226 | 5953 | 127.0.0.1:6083 |
 
 - Chrome for Testing 155 is copied from `/opt/nanoclaw-host/browsers/` when it is there, else the same
   version is downloaded; it lives in `~/browser/chrome/`. Profiles are in `~/browser/profiles/<name>/`
@@ -57,6 +59,21 @@ that lets Chrome's sandbox use user namespaces (Ubuntu 23.10 and later forbid th
   `~/.mokutab/functions`, so one copy serves every profile. A function that never ran OK on a machine is
   a hidden draft there; the laptop's `fn-state.json`, put into each profile's state once, carries that over.
 
+## A client profile per Workato workspace
+
+Workato keeps the chosen client workspace in the session cookie, so every Workato tab of one profile is
+in the same workspace, and an agent that switches it moves every other agent of that profile too. Each
+client that agents work on in parallel gets a profile of its own, copied from `bb` with its logins: a
+fourth field in `PROFILES` (`pf:52:9225:bb`) copies `~/browser/profiles/bb` once, while bb's Chrome is
+stopped, and the run starts the new one with its own display, CDP port, units and mokutab name. Google
+SSO and Workato then work in the copy as they do in bb; Workato may still ask to sign in once
+(its "Google" button). Then the profile is put in its workspace once:
+`workato_switch_environment {"profile":"pf","workspace":7633674}`.
+
+A session working on that client calls `chrome_switch_profile {"profile":"pf"}` at its start (or passes
+`profile` on each call) and checks with `workato_session_context`. Another client is one more entry,
+such as `sunpower:54:9227:bb`, and one script run.
+
 Units: `agent-board-xvfb@<name>`, `agent-board-chrome@<name>`, `agent-board-mokubot-mcp`, enabled;
 `agent-board-vnc@<name>` and `agent-board-novnc@<name>`, on demand.
 
@@ -66,7 +83,7 @@ The board's bundle does not send the master's loopback MCP servers (its report s
 `bound (local-url)`), so the script writes these into the node user's `~/.claude.json` and the bundle
 leaves them alone:
 
-- `mokutab`: `http://127.0.0.1:12306/mcp`; a call names the profile (`bsd`, `bb`) or goes to the first.
+- `mokutab`: `http://127.0.0.1:12306/mcp`; a call names the profile (`bsd`, `bb`, `pf`) or goes to the first.
 - `mokubot-netsuite`: `http://127.0.0.1:12440/mcp`.
 
 Both Claude profiles of the node (`~/.claude.json`, `~/.claude-work/.claude.json`) get them, and their

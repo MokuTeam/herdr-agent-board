@@ -19,8 +19,10 @@ STAGE=${STAGE:-/tmp/agent-board-browser}
 CFT_VERSION=${CFT_VERSION:-155.0.8059.39}
 # A Chrome for Testing already on the machine is copied; without one the same version is downloaded.
 CFT_FROM=${CFT_FROM:-/opt/nanoclaw-host/browsers/cft-$CFT_VERSION/chrome-linux64}
-# name:display:cdp port. VNC is 5900+display, noVNC 6030+display. The first profile is the one a
-# CLI's browser login opens in (BROWSER).
+# name:display:cdp port[:copy of]. VNC is 5900+display, noVNC 6030+display. The first profile is the one a
+# CLI's browser login opens in (BROWSER). A fourth field makes a new profile as a copy of that one, logins
+# included: a profile per client for Workato, which keeps the client workspace in the profile's cookie.
+# server-2: "bsd:50:9223 bb:51:9224 pf:52:9225:bb legacy:53:9226:bb".
 PROFILES=${PROFILES:-"bsd:50:9223 bb:51:9224"}
 # One mokutab bridge for every profile: each extension joins it under its profile name, as on a laptop.
 # 12306 is mokutab's default; give another one where something else holds it (server-1: 12307).
@@ -162,8 +164,17 @@ chmod +x "$PKG/dist/run_host.sh"
 printf '%s\n' "$NODE_BIN" | put "$PKG/dist/node_path.txt" 0644
 FIRST=""
 for spec in $PROFILES; do
-  IFS=: read -r P DISP CDP _ <<<"$spec"
+  IFS=: read -r P DISP CDP FROM _ <<<"$spec"
   [ -n "$FIRST" ] || FIRST=$CDP
+  # Copied once, while the source Chrome is stopped (the restart below brings it back). The cookies stay
+  # readable in the copy because every profile keeps them under --password-store=basic.
+  if [ -n "$FROM" ] && [ ! -d "$B/profiles/$P" ]; then
+    [ -d "$B/profiles/$FROM" ] || { echo "profile $P: no profile $FROM to copy"; exit 1; }
+    ucontrol stop "agent-board-chrome@$FROM.service" 2>/dev/null || true
+    cp -a "$B/profiles/$FROM" "$B/profiles/$P"
+    rm -f "$B/profiles/$P"/Singleton*
+    say "profile $P: copied from $FROM"
+  fi
   # The functions' run state: a function that never ran OK here is a hidden draft. Taken once, kept after.
   FNS="$B/state/$P/state/mcp-chrome-bridge/fn-runs"
   if [ -f "$STAGE/mokutab-fn-state.json" ] && [ ! -f "$FNS/fn-state.json" ]; then
