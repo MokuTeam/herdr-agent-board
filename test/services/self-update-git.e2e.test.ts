@@ -16,21 +16,25 @@ const sh = async (cwd: string, ...args: string[]): Promise<string> => {
   return r.out.trim()
 }
 
+async function identity(repo: string, name: string): Promise<void> {
+  await sh(repo, 'config', 'user.email', `${name}@example.com`)
+  await sh(repo, 'config', 'user.name', name)
+  await sh(repo, 'config', 'commit.gpgsign', 'false')
+}
+
 async function repos() {
   const dir = mkdtempSync(join(tmpdir(), 'board-self-update-'))
   const up = join(dir, 'up')
   const down = join(dir, 'down')
   await gitIn(dir, ['init', '-q', '-b', 'main', up])
-  for (const [k, v] of [['user.email', 'anna@example.com'], ['user.name', 'anna'], ['commit.gpgsign', 'false']])
-    await sh(up, 'config', k, v)
+  await identity(up, 'anna')
   writeFileSync(join(up, 'package.json'), '{"v":1}\n')
   writeFileSync(join(up, 'bun.lock'), 'lock 1\n')
   writeFileSync(join(up, 'README.md'), 'one\n')
   await sh(up, 'add', '-A')
   await sh(up, 'commit', '-qm', 'First')
   await gitIn(dir, ['clone', '-q', up, down])
-  for (const [k, v] of [['user.email', 'ben@example.com'], ['user.name', 'ben'], ['commit.gpgsign', 'false']])
-    await sh(down, 'config', k, v)
+  await identity(down, 'ben')
   const commitUp = async (file: string, text: string, msg: string) => {
     writeFileSync(join(up, file), text)
     await sh(up, 'add', '-A')

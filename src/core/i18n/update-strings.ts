@@ -52,6 +52,8 @@ export const UPDATE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'selfUpdate.doctor': 'Updates itself from git',
     'selfUpdate.doctor.off': 'Off: Settings → Updates… turns it on.',
     'selfUpdate.doctor.fix': 'Settings → Updates…, or board update to try now',
+    'selfUpdate.doctor.fixBack':
+      "The board's pane shows the error. Once a fix is upstream, git pull in the board's folder brings it: run.ts restarts the board on any code change.",
   },
   ru: {
     'set.updates': 'Обновления…',
@@ -102,5 +104,7 @@ export const UPDATE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'selfUpdate.doctor': 'Обновляется сама из git',
     'selfUpdate.doctor.off': 'Выключено: включается в Настройки → Обновления….',
     'selfUpdate.doctor.fix': 'Настройки → Обновления…, или board update, чтобы попробовать сейчас',
+    'selfUpdate.doctor.fixBack':
+      'Ошибка на экране панели доски. Когда исправление будет в upstream, git pull в папке доски его принесёт: run.ts перезапускает доску на любое изменение кода.',
   },
 }

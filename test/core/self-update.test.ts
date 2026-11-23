@@ -140,7 +140,16 @@ test('how it stands: a board that did not come back first, then failures, skips,
   const off = autoUpdateConfig(undefined)
   expect(standing(off, {}, now)).toBeNull()
   expect(standing(on, {}, now)?.key).toBe('notYet')
-  const pending = { at: now - MIN, from: 'a'.repeat(40), to: 'b'.repeat(40), branch: 'main', installer: false, came: [], byHand: false, wake: false }
+  const pending = {
+    at: now - MIN,
+    from: 'a'.repeat(40),
+    to: 'b'.repeat(40),
+    branch: 'main',
+    installer: false,
+    came: [],
+    byHand: false,
+    wake: false,
+  }
   expect(standing(on, { pending }, now)?.key).toBe('restarting')
   const stale = standing(off, { pending: { ...pending, at: now - 4 * MIN } }, now)
   expect(stale).toMatchObject({ level: 'error', key: 'notBack', values: { to: 'bbbbbbbb', from: 'aaaaaaaa' } })
@@ -161,13 +170,30 @@ test('how it stands: a board that did not come back first, then failures, skips,
 test("board doctor's line: none while off with nothing done; an error with its fix for a board that did not come back", () => {
   const now = 10 * HOUR
   expect(selfUpdateCheck(undefined, {}, now, english)).toBeNull()
-  const ok = selfUpdateCheck({ every: 'day', at: '05:00' }, { last: { at: now, outcome: 'current', commit: 'c'.repeat(40) } }, now, english)
+  const ok = selfUpdateCheck(
+    { every: 'day', at: '05:00' },
+    { last: { at: now, outcome: 'current', commit: 'c'.repeat(40) } },
+    now,
+    english,
+  )
   expect(ok).toMatchObject({ id: 'self-update', level: 'ok', fix: '' })
   expect(ok?.detail).toContain('Up to date at cccccccc')
   expect(ok?.detail).toContain('Once a day at 05:00')
-  const pending = { at: now - 5 * MIN, from: 'a'.repeat(40), to: 'b'.repeat(40), branch: 'main', installer: false, came: [], byHand: true, wake: false }
+  const pending = {
+    at: now - 5 * MIN,
+    from: 'a'.repeat(40),
+    to: 'b'.repeat(40),
+    branch: 'main',
+    installer: false,
+    came: [],
+    byHand: true,
+    wake: false,
+  }
   const bad = selfUpdateCheck(undefined, { pending }, now, english)
   expect(bad?.level).toBe('error')
   expect(bad?.detail).toContain('did not come back after updating to bbbbbbbb')
-  expect(bad?.fix).toContain('board update')
+  // the board is down: board update cannot reach it, a pull by hand can
+  expect(bad?.fix).toContain('git pull')
+  const failed = selfUpdateCheck(true, { last: { at: now, outcome: 'failed', reason: 'install' } }, now, english)
+  expect(failed?.fix).toContain('board update')
 })

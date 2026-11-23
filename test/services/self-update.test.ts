@@ -4,7 +4,7 @@
 // the copies of settings.json before the installer); what a failure leaves behind; a node that asks
 // git for nothing; and the new board finishing what the old one merged.
 import { expect, test } from 'bun:test'
-import type { UpdateState } from '../../src/core/self-update.ts'
+import type { SkipReason, UpdateState } from '../../src/core/self-update.ts'
 import { createSelfUpdate, type GitResult, type SelfUpdateDeps } from '../../src/services/self-update.ts'
 
 const A = 'a'.repeat(40)
@@ -125,7 +125,13 @@ function world(repo: Partial<Repo> = {}, over: Partial<SelfUpdateDeps> = {}) {
 test('behind on code: fetch, the pending record, the merge, then a restart; the new board finishes it', async () => {
   const w = world()
   const r = await createSelfUpdate(w.deps).check({ byHand: true })
-  expect(r).toMatchObject({ outcome: 'updated', restarting: true, from: A, to: B, came: ['Cards keep their lane (#12)'] })
+  expect(r).toMatchObject({
+    outcome: 'updated',
+    restarting: true,
+    from: A,
+    to: B,
+    came: ['Cards keep their lane (#12)'],
+  })
   expect(w.events).toEqual(['fetch', 'pending', 'merge', 'restart'])
   expect(w.state().pending).toMatchObject({ from: A, to: B, branch: 'main', installer: false, byHand: true })
   // the board restarts on the new code: a new process with the same state file
@@ -163,10 +169,22 @@ test('bun install fails: the lock files go back, the dependencies with them, and
 })
 
 test('the merge fails: the lock files go back, no pending record stays, no restart', async () => {
-  const w = world({ changed: ['package.json'], locks: 'M\tpackage.json', mergeFails: 'fatal: Not possible to fast-forward' })
+  const w = world({
+    changed: ['package.json'],
+    locks: 'M\tpackage.json',
+    mergeFails: 'fatal: Not possible to fast-forward',
+  })
   const r = await createSelfUpdate(w.deps).check()
   expect(r).toMatchObject({ outcome: 'failed', reason: 'merge', detail: 'fatal: Not possible to fast-forward' })
-  expect(w.events).toEqual(['fetch', 'checkout up package.json', 'install', 'pending', 'merge', 'checkout HEAD package.json', 'install'])
+  expect(w.events).toEqual([
+    'fetch',
+    'checkout up package.json',
+    'install',
+    'pending',
+    'merge',
+    'checkout HEAD package.json',
+    'install',
+  ])
   expect(w.state().pending).toBeUndefined()
   expect(w.events).not.toContain('restart')
 })
@@ -202,7 +220,12 @@ test('the installer fails on the new board: said with its words, the checkout st
   )
   await createSelfUpdate(w.deps).check()
   const r = await createSelfUpdate(w.deps).resume()
-  expect(r).toMatchObject({ outcome: 'failed', reason: 'installer', commit: B, detail: 'settings.json is not valid JSON' })
+  expect(r).toMatchObject({
+    outcome: 'failed',
+    reason: 'installer',
+    commit: B,
+    detail: 'settings.json is not valid JSON',
+  })
   expect(w.state().pending).toBeUndefined()
 })
 
@@ -233,12 +256,14 @@ test('the board came back on another commit than the merge left: said, not taken
   expect(await createSelfUpdate(w.deps).resume()).toMatchObject({ outcome: 'failed', reason: 'not-back' })
   // a board that ended between the record and the merge: still on the commit before
   const w2 = world()
-  w2.setState({ pending: { at: 0, from: A, to: B, branch: 'main', installer: false, came: [], byHand: false, wake: false } })
+  w2.setState({
+    pending: { at: 0, from: A, to: B, branch: 'main', installer: false, came: [], byHand: false, wake: false },
+  })
   expect(await createSelfUpdate(w2.deps).resume()).toMatchObject({ outcome: 'failed', reason: 'merge' })
 })
 
 test('skips before the fetch, each with its reason, and nothing written to the checkout', async () => {
-  const cases: [Partial<Repo>, Partial<SelfUpdateDeps>, string][] = [
+  const cases: [Partial<Repo>, Partial<SelfUpdateDeps>, SkipReason][] = [
     [{ checkout: false }, {}, 'no-checkout'],
     [{ branch: null }, {}, 'detached'],
     [{ upstream: null }, {}, 'no-upstream'],
@@ -264,11 +289,19 @@ test('a node asks git for nothing: it follows its master', async () => {
 
 test('a failed fetch, a current branch and a diverged one: skipped, current, skipped; never merged', async () => {
   const f = world({ fetchFails: 'fatal: could not read from remote' })
-  expect(await createSelfUpdate(f.deps).check()).toMatchObject({ outcome: 'skipped', reason: 'fetch', detail: 'fatal: could not read from remote' })
+  expect(await createSelfUpdate(f.deps).check()).toMatchObject({
+    outcome: 'skipped',
+    reason: 'fetch',
+    detail: 'fatal: could not read from remote',
+  })
   const c = world({ behind: 0, ahead: 1 })
   expect(await createSelfUpdate(c.deps).check()).toMatchObject({ outcome: 'current', commit: A })
   const d = world({ ahead: 1, behind: 3 })
-  expect(await createSelfUpdate(d.deps).check()).toMatchObject({ outcome: 'skipped', reason: 'diverged', detail: '1 ahead, 3 behind' })
+  expect(await createSelfUpdate(d.deps).check()).toMatchObject({
+    outcome: 'skipped',
+    reason: 'diverged',
+    detail: '1 ahead, 3 behind',
+  })
   for (const w of [f, c, d]) expect(w.events).not.toContain('merge')
 })
 
@@ -298,17 +331,22 @@ test('the schedule: off reads nothing; a recent pending record waits; one check 
   expect(off.git).toEqual([])
 
   const pend = world()
-  pend.setState({ pending: { at: 1_000_000, from: A, to: B, branch: 'main', installer: false, came: [], byHand: false, wake: false } })
+  pend.setState({
+    pending: { at: 1_000_000, from: A, to: B, branch: 'main', installer: false, came: [], byHand: false, wake: false },
+  })
   expect(await createSelfUpdate(pend.deps).tick()).toBeNull()
   expect(await createSelfUpdate(pend.deps).check()).toMatchObject({ outcome: 'skipped', reason: 'running' })
 
   let release = () => {}
-  const slow = world({}, {
-    install: () =>
-      new Promise(done => {
-        release = () => done({ ok: true, detail: '' })
-      }),
-  })
+  const slow = world(
+    {},
+    {
+      install: () =>
+        new Promise(done => {
+          release = () => done({ ok: true, detail: '' })
+        }),
+    },
+  )
   slow.repo.changed = ['bun.lock']
   slow.repo.locks = 'M\tbun.lock'
   const u = createSelfUpdate(slow.deps)

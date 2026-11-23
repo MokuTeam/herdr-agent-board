@@ -317,7 +317,8 @@ export function selfUpdateCheck(raw: unknown, s: UpdateState, now: number, t: Tr
     level,
     title: t('selfUpdate.doctor'),
     detail: `${standingText(st, t)}${cfg.on ? ` (${when})` : ` ${t('selfUpdate.doctor.off')}`}`,
-    fix: st.level === 'ok' ? '' : t('selfUpdate.doctor.fix'),
+    // a board that is down cannot take board update: the pane says why, a pull by hand brings the fix
+    fix: st.level === 'ok' ? '' : t(st.key === 'notBack' ? 'selfUpdate.doctor.fixBack' : 'selfUpdate.doctor.fix'),
     code: '',
   }
 }

@@ -15,7 +15,7 @@ const VIEW: UpdatesView = {
   config: { on: false, every: 'hour', at: '04:00' },
   state: {},
   standing: null,
-  checkout: { branch: 'main', commit: '0123456789abcdef'.repeat(2) + '01234567' },
+  checkout: { branch: 'main', commit: '0123456789abcdef0123456789abcdef01234567' },
   node: false,
   canRestart: true,
   running: false,
@@ -44,7 +44,7 @@ function render(props: Partial<UpdatesBodyProps>) {
   return { all, buttons, switches, selects, times, alerts }
 }
 
-test('the view guard takes the route\'s view and nothing else', () => {
+test("the view guard takes the route's view and nothing else", () => {
   expect(isUpdatesView(VIEW)).toBe(true)
   expect(isUpdatesView({ ...VIEW, config: null })).toBe(false)
   expect(isUpdatesView(null)).toBe(false)
@@ -52,7 +52,15 @@ test('the view guard takes the route\'s view and nothing else', () => {
 
 test('Updates… is offered on the local page and picked as itself', () => {
   const t = translator('en')
-  const base = { t, theme: 'auto', languages: { en: 'English' }, canEdit: true, dock: 'right', sleepers: false, profiles: false } as const
+  const base = {
+    t,
+    theme: 'auto',
+    languages: { en: 'English' },
+    canEdit: true,
+    dock: 'right',
+    sleepers: false,
+    profiles: false,
+  } as const
   const ids = (now: Record<string, unknown>) =>
     settingsMenu({ ...base, ...now } as Parameters<typeof settingsMenu>[0]).map(e => ('id' in e ? e.id : ''))
   expect(ids({ updates: true })).toContain('updates')
@@ -88,7 +96,13 @@ test('a problem first, in red; what came in last time as a list', () => {
     view: {
       ...VIEW,
       standing: { level: 'error', text: 'The board did not come back after updating to bbbbbbbb.' },
-      state: { lastUpdate: { at: Date.now() - 60_000, outcome: 'updated', came: ['Cards keep their lane (#12)', 'A fix (#13)'] } },
+      state: {
+        lastUpdate: {
+          at: Date.now() - 60_000,
+          outcome: 'updated',
+          came: ['Cards keep their lane (#12)', 'A fix (#13)'],
+        },
+      },
     },
   })
   expect(r.alerts).toEqual(['The board did not come back after updating to bbbbbbbb.'])
