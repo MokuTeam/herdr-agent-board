@@ -1,5 +1,15 @@
 import { expect, test } from 'bun:test'
-import { labelOf, matching, messageEntry, offlineDevices, ownDeviceOf, targetsOf } from '../../src/core/agent-send.ts'
+import {
+  agentViewsOf,
+  formatAgentLines,
+  isOtherAgent,
+  labelOf,
+  matching,
+  messageEntry,
+  offlineDevices,
+  ownDeviceOf,
+  targetsOf,
+} from '../../src/core/agent-send.ts'
 import { promptOf, type ScheduleEntry } from '../../src/core/schedule-rules.ts'
 
 // Who a message through the board (#619) can go to, and what the receiver is told.
@@ -109,4 +119,43 @@ test('a reply finds a sender whose name has brackets or runs past 60 characters,
   }
   expect(matching(targets, 'fix [wip] thing').map(x => x.key)).toEqual([A])
   expect(matching(targets, long).map(x => x.key)).toEqual([B])
+})
+
+test('#628 other local agents and formatted agent lines (live first, self marked, offline node, sleep cap)', () => {
+  const targets = targetsOf([
+    card(A, 'Agent-board Master', { agent: 'claude', status: 'done', pane: 'w5:p2' }),
+    card(B, 'Гемини dev 100%', { agent: 'agy', status: 'working', pane: 'w5:p7' }),
+    card(`@server-1:${C}`, 'Remote Agy', {
+      agent: 'agy',
+      device: 'server-1',
+      pane: null,
+      sleeping: true,
+      status: 'sleeping',
+      activity: 50,
+    }),
+  ])
+  expect(targets.filter(isOtherAgent).map(t => t.name)).toEqual(['Гемини dev 100%'])
+  expect(
+    formatAgentLines(targets, {
+      selfKey: B,
+      own: 'laptop',
+      offline: new Set(['server-1']),
+    }),
+  ).toEqual([
+    'Agent-board Master [aaaaaaaa]  ·  claude  ·  laptop  ·  done',
+    'Гемини dev 100% [bbbbbbbb]  ·  agy  ·  laptop  ·  working  ·  (this session)',
+    'Remote Agy [cccccccc]  ·  agy  ·  node server-1  ·  asleep  ·  node offline now: goes out once it is back',
+  ])
+  expect(
+    formatAgentLines(targets, {
+      selfKey: B,
+      own: 'laptop',
+      maxSleeping: 0,
+    }).at(-1),
+  ).toBe('... and 1 more asleep; board send / SendMessage reaches them too')
+  expect(agentViewsOf(targets, { selfKey: B, offline: new Set(['server-1']) })).toMatchObject([
+    { key: A, agent: 'claude', self: false, offline: false },
+    { key: B, agent: 'agy', self: true, offline: false },
+    { key: `@server-1:${C}`, agent: 'agy', device: 'server-1', sleeping: true, offline: true },
+  ])
 })

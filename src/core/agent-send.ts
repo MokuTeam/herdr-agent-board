@@ -23,6 +23,8 @@ export interface Target {
   /** The names it answers to: the card's and the automatic one. */
   names: string[]
   session: string | null
+  /** The agent kind on the board (`claude`, `agy`, `pi`, `codex`, ...); null when absent. */
+  agent: string | null
   /** The device it runs on; null for this computer. */
   device: string | null
   pane: string | null
@@ -94,6 +96,7 @@ export function targetsOf(items: unknown): Target[] {
       name,
       names,
       session: str(i.session) || null,
+      agent: str(i.agent) || null,
       device: str(i.device) || null,
       pane: str(i.pane) || null,
       cwd: str(i.cwd),
@@ -104,6 +107,72 @@ export function targetsOf(items: unknown): Target[] {
     })
   }
   return all.filter(t => t.sleeping || ((t.pane || t.day) && !all.some(o => replaced(t, o))))
+}
+
+/** A local session on this computer running an agent other than Claude Code (`agy`, `pi`, `codex`, ...). */
+export const isOtherAgent = (t: Pick<Target, 'device' | 'agent'>): boolean =>
+  t.device === null && t.agent !== null && t.agent !== 'claude'
+
+/** JSON-friendly view of a reachable target for `board agents --json`. */
+export interface AgentView {
+  key: string
+  name: string
+  label: string
+  agent: string | null
+  device: string | null
+  status: string
+  sleeping: boolean
+  self: boolean
+  offline: boolean
+}
+
+/** Structured views of `targets` (live first, then sleepers newest-active first). */
+export function agentViewsOf(
+  targets: readonly Target[],
+  o: { selfKey?: string; offline?: ReadonlySet<string> } = {},
+): AgentView[] {
+  const live = targets.filter(t => !t.sleeping)
+  const asleep = targets.filter(t => t.sleeping).sort((a, b) => b.activity - a.activity)
+  return [...live, ...asleep].map(t => ({
+    key: t.key,
+    name: t.name,
+    label: labelOf(t),
+    agent: t.agent,
+    device: t.device,
+    status: t.sleeping ? 'asleep' : t.status || 'live',
+    sleeping: t.sleeping,
+    self: !!o.selfKey && t.key === o.selfKey,
+    offline: !!t.device && !!o.offline?.has(t.device),
+  }))
+}
+
+/**
+ * Human- and agent-readable lines for `board agents` and MCP `ListAgents`: live sessions first,
+ * then sleepers (capped at `maxSleeping` when set).
+ */
+export function formatAgentLines(
+  targets: readonly Target[],
+  o: { selfKey?: string; offline?: ReadonlySet<string>; own?: string; maxSleeping?: number } = {},
+): string[] {
+  const live = targets.filter(t => !t.sleeping)
+  const asleep = targets.filter(t => t.sleeping).sort((a, b) => b.activity - a.activity)
+  const shownAsleep = o.maxSleeping !== undefined ? asleep.slice(0, o.maxSleeping) : asleep
+  const hasRemote = targets.some(t => t.device !== null)
+  const row = (t: Target): string =>
+    [
+      labelOf(t),
+      t.agent ?? '',
+      t.device ? `node ${t.device}` : hasRemote && o.own ? o.own : '',
+      t.sleeping ? 'asleep' : t.status || 'live',
+      o.selfKey && t.key === o.selfKey ? '(this session)' : '',
+      t.device && o.offline?.has(t.device) ? 'node offline now: goes out once it is back' : '',
+    ]
+      .filter(Boolean)
+      .join('  ·  ')
+  const rows = [...live, ...shownAsleep].map(row)
+  if (asleep.length > shownAsleep.length)
+    rows.push(`... and ${asleep.length - shownAsleep.length} more asleep; board send / SendMessage reaches them too`)
+  return rows
 }
 
 /** "Name [1a2b3c4d]" split into the name (lower case) and the ref (lower case, '' for none). */

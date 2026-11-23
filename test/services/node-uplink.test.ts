@@ -419,8 +419,16 @@ describe("the master's side", () => {
     await runner.close()
     expect(ran).toBe(0)
     expect(Object.fromEntries(posted)).toEqual({
-      'r-1': { code: 126, out: [], err: ['board time is not taken from a node: only board thread and board send'] },
-      'r-2': { code: 126, out: [], err: ["only a session's board thread or board send is taken from a node"] },
+      'r-1': {
+        code: 126,
+        out: [],
+        err: ['board time is not taken from a node: only board thread, board send and board agents'],
+      },
+      'r-2': {
+        code: 126,
+        out: [],
+        err: ["only a session's board thread, board send or board agents is taken from a node"],
+      },
       'r-3': { code: 126, out: [], err: ['board thread share is for the owner to confirm: not from a node'] },
       'r-4': { code: 126, out: [], err: ['board thread open opens the board on its own computer: not from a node'] },
       'r-5': { code: 126, out: [], err: ['a call the board does not take'] },
@@ -526,6 +534,73 @@ describe("the master's side", () => {
       { key: post.key, text: 'to post' },
     ])
     expect(store.seenCall('server-1', 's-1')).toEqual(queued)
+  })
+
+  test('#628 board agents from a node lists only the master and this node (never another node) and is not remembered', async () => {
+    const dir = isolatedHome()
+    const store = createDeviceStore({ dir: join(dir, 'nodes') })
+    const N1 = '7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e'
+    const ME_M = '3e4f5a6b-7c8d-4e9f-8a0b-1c2d3e4f5a6b'
+    const OTHER = '8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f'
+    const items = [
+      { key: ME_M, session: ME_M, agent: 'claude', name: 'Laptop Master', pane: 'w1:p1', status: 'idle' },
+      {
+        key: `@server-1:${N1}`,
+        session: N1,
+        agent: 'agy',
+        name: 'Gemini-dev',
+        device: 'server-1',
+        pane: 'w5:p7',
+        status: 'working',
+      },
+      {
+        key: `@server-2:${OTHER}`,
+        session: OTHER,
+        agent: 'claude',
+        name: 'Other Node Secret',
+        device: 'server-2',
+        pane: 'w1:p1',
+        status: 'idle',
+      },
+    ] as Item[]
+    const posted = new Map<string, UplinkResult>()
+    const link = standIn((path, init) => {
+      if (path === '/api/node/uplink')
+        return streamOf(
+          [
+            { id: 'ag-1', cmd: 'agents', argv: [], session: N1, lane: null, files: [] },
+            { id: 'ag-2', cmd: 'agents', argv: ['--json'], session: N1, lane: null, files: [] },
+          ],
+          init.signal,
+        )
+      posted.set(path.split('/').pop() as string, JSON.parse(String(init.body)) as UplinkResult)
+      return new Response('{}')
+    })
+    const runner = createUplinkRunner({
+      links: link.links,
+      find: key => items.find(i => i.key === key),
+      items: () => items,
+      cfg: { nodes: { id: 'laptop' } } as never,
+      log: () => {},
+      store,
+    })
+    link.changed('online')
+    await until(() => posted.size >= 2, 5000)
+    await runner.close()
+    expect(posted.get('ag-1')).toEqual({
+      code: 0,
+      out: [
+        'Laptop Master [3e4f5a6b]  ·  claude  ·  laptop  ·  idle',
+        'Gemini-dev [7b8c9d0e]  ·  agy  ·  node server-1  ·  working  ·  (this session)',
+      ],
+      err: [],
+    })
+    expect(posted.get('ag-1')?.out.join('\n')).not.toContain('Other Node Secret')
+    expect(JSON.parse(posted.get('ag-2')?.out[0] ?? '[]')).toMatchObject([
+      { key: ME_M, agent: 'claude', self: false },
+      { key: `@server-1:${N1}`, agent: 'agy', device: 'server-1', self: true },
+    ])
+    expect(store.seenCall('server-1', 'ag-1')).toBeNull()
   })
 
   test('the stream is held only while the link is online', async () => {

@@ -5,7 +5,16 @@
 // written.
 import { describe, expect, test } from 'bun:test'
 import type { Party } from '../../src/core/work-threads.ts'
-import { createMcpServer, readArgv, serve, type ThreadRun, TOOLS, writeArgv } from '../../src/entrypoints/mcp.ts'
+import {
+  AGENT_TOOLS,
+  createAgentsMcpServer,
+  createMcpServer,
+  readArgv,
+  serve,
+  type ThreadRun,
+  TOOLS,
+  writeArgv,
+} from '../../src/entrypoints/mcp.ts'
 import { threadCmd } from '../../src/entrypoints/thread-cli.ts'
 import { isolatedHome } from '../support/env.ts'
 
@@ -194,5 +203,54 @@ describe('board mcp', () => {
     expect(writeArgv({ op: 'watch' })).toEqual(['watch', '--mine'])
     expect(() => writeArgv({ op: 'post', key: 'atlas 2' })).toThrow()
     expect(() => readArgv({ op: 'show' })).toThrow('show needs key')
+  })
+})
+
+describe('board mcp --agents (#628)', () => {
+  test('exposes ListAgents and SendMessage, forwards calls, and validates arguments', async () => {
+    const sent: [string, string][] = []
+    const mcp = createAgentsMcpServer({
+      version: '9.9.9',
+      listAgents: async () => ({
+        code: 0,
+        out: [
+          'Agent-board Master [2fbcc149]  ·  claude  ·  done',
+          'Gemini-dev [509dfc37]  ·  agy  ·  working  ·  (this session)',
+        ],
+        err: [],
+      }),
+      sendMessage: async (to, message) => {
+        sent.push([to, message])
+        return { code: 0, out: [`ok · queued for ${to}`], err: [] }
+      },
+    })
+    const answers = (await exchange(
+      mcp,
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+      call(2, 'ListAgents', {}),
+      call(3, 'SendMessage', { to: 'Agent-board Master', message: 'hello from agy' }),
+      call(4, 'SendMessage', { to: '', message: 'x' }),
+      call(5, 'SendMessage', { to: 'Master', message: '   ' }),
+      call(6, 'threads', { op: 'list' }),
+    )) as Answer[]
+
+    expect(answers[0]?.result?.tools?.map(t => t.name)).toEqual(['ListAgents', 'SendMessage'])
+    expect(AGENT_TOOLS.map(t => t.name)).toEqual(['ListAgents', 'SendMessage'])
+    expect(answers[1]?.result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'Agent-board Master [2fbcc149]  ·  claude  ·  done\nGemini-dev [509dfc37]  ·  agy  ·  working  ·  (this session)',
+        },
+      ],
+    })
+    expect(answers[2]?.result).toEqual({
+      content: [{ type: 'text', text: 'ok · queued for Agent-board Master' }],
+    })
+    expect(sent).toEqual([['Agent-board Master', 'hello from agy']])
+    expect(answers[3]?.result?.isError).toBe(true)
+    expect(answers[4]?.result?.isError).toBe(true)
+    expect(answers[5]?.result?.isError).toBe(true)
+    expect(answers[5]?.result?.content?.[0]?.text).toContain('ListAgents or SendMessage')
   })
 })

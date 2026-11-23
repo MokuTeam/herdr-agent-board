@@ -205,11 +205,14 @@ bun src/entrypoints/install.ts --agy
 This adds `SessionStart` and `PreInvocation` handlers under the `"agent-board"` key in
 `~/.gemini/config/hooks.json` (`ANTIGRAVITY_CONFIG_DIR` changes the config folder), preserving
 herdr's `"herdr"` hook group and any other hooks, with the first `hooks.json.bak-agent-board` kept
-beside it. It installs the `herdr-agents` and `agent-board-team` skills (and `agent-board-threads`
-when threads are on) into `~/.gemini/config/skills`, puts `board` and `spawn-agent` into
-`~/.local/bin`, and asks herdr to install its `antigravity-cli` identity hook
-(`herdr integration install antigravity-cli`). The ordinary install without `--agy` keeps managing
-Claude only.
+beside it. It also registers the `"agent-board"` stdio MCP server (`board mcp --agents`, exposing
+`ListAgents` and `SendMessage` across Claude, Antigravity, pi, Codex and connected nodes, #628) in
+`~/.gemini/config/mcp_config.json`, preserving every other MCP server with a
+`mcp_config.json.bak-agent-board` backup. It installs the `herdr-agents` and `agent-board-team`
+skills (and `agent-board-threads` when threads are on) into `~/.gemini/config/skills`, puts
+`board` and `spawn-agent` into `~/.local/bin`, and asks herdr to install its `antigravity-cli`
+identity hook (`herdr integration install antigravity-cli`). The ordinary install without `--agy`
+keeps managing Claude only.
 
 With `agy` on PATH or `launch.agy` set in `config.json`, the "New session" window and
 `spawn-agent --agent agy` offer Antigravity alongside Claude Code (and `"default": "agy"` in
@@ -1537,6 +1540,11 @@ an hour to sleep, when it is on). The board's entries are files, and the board k
 - An entry belongs to the session it is for. After `/clear`, which gives the session a new id,
   it goes to the Claude session now in the same pane and folder (the folder herdr gives the
   pane, not the shell's after a `cd`), and the prompt says it was set before `/clear`.
+- `board agents [--json]` (#628) lists every reachable session on the board with its `[ref]`,
+  agent kind (`claude`, `agy`, `pi`, `codex`), device/node and state, marking `(this session)`. On
+  a node it asks the master over the uplink (master's and this node's sessions only) and falls back
+  to the node's local board when the master is offline or older. `board mcp --agents` exposes
+  `ListAgents` and `SendMessage` over stdio JSON-RPC using the same path.
 - `board send <name|key> "<text>"` (#619) sends a message to any session on the board, this
   computer's or a node's, due now and typed in once it is free, waking it first if it sleeps.
   A name two sessions share takes the ref the error lists (`"Name [1a2b3c4d]"`). The receiver's
@@ -2011,9 +2019,13 @@ from <this computer>, answer with board send "<name> [<ref>]" "<your answer>"] <
 whose pane an awake card of another session holds now is not offered. A name nothing on this
 computer has makes SendMessage read the board's payload once, and a name a node's session shares
 with something Claude Code alone knows (a teammate in the same process) goes to the node's.
-Without `nodes` neither hook asks the board anything. Neither runs on any other tool, nor on every
-prompt, and neither asks anything while wake is off. The install does not write them
-beside the separate herdr-wake plugin's: it says so, and "Switch over…" moves them.
+Without `nodes` or local non-Claude agent setups (`launch.agy`/`pi`/`codex`, `codexHome`, or
+Antigravity's `~/.gemini` files, #628) neither hook asks the board anything. Where local non-Claude
+sessions (`agy`, `pi`, `codex`) are present on this machine, `ListAgents` lists them with their
+agent kind and `[ref]`, and `SendMessage` to one queues through the board the same way (own-profile
+Claude sessions still take precedence). Neither runs on any other tool, nor on every prompt, and
+neither asks anything while wake is off. The install does not write them beside the separate
+herdr-wake plugin's: it says so, and "Switch over…" moves them.
 
 **pi sessions** sleep and wake too, when asked: "Put to sleep" on a pi card, `board sleep` (several
 at once, `--when-free`), and Wake, a message or a reminder for a sleeping one, or a Telegram

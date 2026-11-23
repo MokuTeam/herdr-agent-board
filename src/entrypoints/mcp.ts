@@ -22,7 +22,43 @@ export interface McpOptions {
   run: (argv: string[]) => Promise<ThreadRun>
 }
 
+export interface AgentsMcpOptions {
+  version: string
+  /** Lists all reachable sessions on the board (`board agents`). */
+  listAgents: () => Promise<ThreadRun>
+  /** Queues a message to a session on the board (`board send <to> <message>`). */
+  sendMessage: (to: string, message: string) => Promise<ThreadRun>
+}
+
 const STATUSES = ['next', 'doing', 'waiting', 'owner', 'done', 'dropped']
+
+/** The two agent-communication tools (`board mcp --agents`, #628). */
+export const AGENT_TOOLS = [
+  {
+    name: 'ListAgents',
+    description:
+      'List all agent sessions on the board (Claude, Antigravity, pi, Codex; running and sleeping; across profiles and connected nodes). Use SendMessage to reach any session by name (or "Name [ref]" when two share a name).',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'SendMessage',
+    description:
+      'Send a message to another session on the board (Claude, Antigravity, pi, Codex, or on a connected device). The board types it in once the target session is free, waking it first if it sleeps; the reply comes back as a board reminder.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: 'Target session name, "Name [ref]", or key from ListAgents' },
+        message: { type: 'string', description: 'Message text to send (at most 2000 characters)' },
+      },
+      required: ['to', 'message'],
+      additionalProperties: false,
+    },
+  },
+] as const
 
 /** The two tools (5.4). Small on purpose: every session that has the server carries this text. */
 export const TOOLS = [
@@ -171,28 +207,21 @@ interface Request {
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const PROTOCOL = '2025-06-18'
 
-/** The server: one line in, the line to write back (null for a notification or nothing to say). */
-export function createMcpServer(o: McpOptions): { handle(line: string): Promise<string | null> } {
+type ToolAnswer = { content: { type: 'text'; text: string }[]; isError?: true }
+
+function toToolAnswer(r: ThreadRun): ToolAnswer {
+  const text = [...r.out, ...r.err].join('\n').trim() || (r.code === 0 ? 'ok' : 'failed')
+  return { content: [{ type: 'text', text }], ...(r.code !== 0 && { isError: true as const }) }
+}
+
+function jsonRpcServer(o: {
+  version: string
+  tools: readonly unknown[]
+  call: (name: unknown, args: Record<string, unknown>) => Promise<ToolAnswer>
+}): { handle(line: string): Promise<string | null> } {
   const reply = (id: unknown, result: unknown): string => JSON.stringify({ jsonrpc: '2.0', id, result })
   const error = (id: unknown, code: number, message: string): string =>
     JSON.stringify({ jsonrpc: '2.0', id: id ?? null, error: { code, message } })
-
-  async function call(params: unknown): Promise<{ content: { type: 'text'; text: string }[]; isError?: true }> {
-    const p = isObj(params) ? params : {}
-    const args = isObj(p.arguments) ? p.arguments : {}
-    let argv: string[]
-    try {
-      if (p.name === 'threads') argv = readArgv(args)
-      else if (p.name === 'thread') argv = writeArgv(args)
-      else throw new Bad(`no tool "${String(p.name)}": threads or thread`)
-    } catch (err) {
-      if (err instanceof Bad) return { content: [{ type: 'text', text: err.message }], isError: true }
-      throw err
-    }
-    const r = await o.run(argv)
-    const text = [...r.out, ...r.err].join('\n').trim() || (r.code === 0 ? 'ok' : 'failed')
-    return { content: [{ type: 'text', text }], ...(r.code !== 0 && { isError: true as const }) }
-  }
 
   return {
     async handle(line) {
@@ -223,9 +252,12 @@ export function createMcpServer(o: McpOptions): { handle(line: string): Promise<
           case 'ping':
             return notification ? null : reply(id, {})
           case 'tools/list':
-            return reply(id, { tools: TOOLS })
-          case 'tools/call':
-            return reply(id, await call(req.params))
+            return reply(id, { tools: o.tools })
+          case 'tools/call': {
+            const p = isObj(req.params) ? req.params : {}
+            const args = isObj(p.arguments) ? p.arguments : {}
+            return reply(id, await o.call(p.name, args))
+          }
           default:
             return notification ? null : error(id, -32601, `no method ${req.method}`)
         }
@@ -234,6 +266,50 @@ export function createMcpServer(o: McpOptions): { handle(line: string): Promise<
       }
     },
   }
+}
+
+/** The server: one line in, the line to write back (null for a notification or nothing to say). */
+export function createMcpServer(o: McpOptions): { handle(line: string): Promise<string | null> } {
+  return jsonRpcServer({
+    version: o.version,
+    tools: TOOLS,
+    async call(name, args) {
+      let argv: string[]
+      try {
+        if (name === 'threads') argv = readArgv(args)
+        else if (name === 'thread') argv = writeArgv(args)
+        else throw new Bad(`no tool "${String(name)}": threads or thread`)
+      } catch (err) {
+        if (err instanceof Bad) return { content: [{ type: 'text', text: err.message }], isError: true }
+        throw err
+      }
+      return toToolAnswer(await o.run(argv))
+    },
+  })
+}
+
+/** The agent-communication server (`board mcp --agents`, #628): `ListAgents` and `SendMessage`. */
+export function createAgentsMcpServer(o: AgentsMcpOptions): { handle(line: string): Promise<string | null> } {
+  return jsonRpcServer({
+    version: o.version,
+    tools: AGENT_TOOLS,
+    async call(name, args) {
+      try {
+        if (name === 'ListAgents') return toToolAnswer(await o.listAgents())
+        if (name === 'SendMessage') {
+          const to = str(args.to, 'to')?.trim()
+          const message = str(args.message, 'message')
+          if (!to) throw new Bad('SendMessage needs to: the target session name or key')
+          if (!message?.trim()) throw new Bad('SendMessage needs message: the text to send')
+          return toToolAnswer(await o.sendMessage(to, message))
+        }
+        throw new Bad(`no tool "${String(name)}": ListAgents or SendMessage`)
+      } catch (err) {
+        if (err instanceof Bad) return { content: [{ type: 'text', text: err.message }], isError: true }
+        throw err
+      }
+    },
+  })
 }
 
 /**

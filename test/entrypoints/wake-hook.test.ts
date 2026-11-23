@@ -875,3 +875,122 @@ test('#619 several profiles and nodes: another profile’s name is still the boa
     text.indexOf('Sessions of the other Claude profiles'),
   )
 })
+
+// #628: local non-Claude agent sessions (`agy`, `pi`, `codex`) on this computer appear in Claude's
+// ListAgents and accept SendMessage through the board, gated so plain Claude setups ask nothing.
+const SID_AGY1 = '509dfc37-b58e-4851-9988-a8c7befe9f0d'
+const SID_AGY2 = '619dfc37-b58e-4851-9988-a8c7befe9f0e'
+
+test('#628 ListAgents lists local agy sessions and SendMessage queues to them through the board', async () => {
+  const w = await world()
+  const board = {
+    items: [
+      { key: SID_ME, session: SID_ME, agent: 'claude', name: 'Agent-board Master', pane: 'w5:p2', status: 'working' },
+      {
+        key: SID_AGY1,
+        session: SID_AGY1,
+        agent: 'agy',
+        name: 'Гемини dev 100%',
+        pane: 'w5:p7',
+        cwd: '/home/agent-board/work/Проект 100%',
+        status: 'idle',
+      },
+      {
+        key: 'pane-w5:p9',
+        session: null,
+        agent: 'pi',
+        name: 'Pi Helper',
+        pane: 'w5:p9',
+        cwd: '/home/agent-board/work',
+        status: 'done',
+      },
+    ],
+  }
+  const fake = await fakeWake({ ...twoProfiles(w), board })
+  writeBoardConfig(w.box, wakeOnConfig(fake.port, { config: { port: fake.port, launch: { agy: ['agy'] } } }))
+  liveIn(w.dflt, SID_ME, 'Agent-board Master')
+
+  const listed = contextOf(await runHook(w, 'post-list', LIST)) ?? ''
+  const part = listed.slice(listed.indexOf('Other agent sessions on this machine'))
+  expect(part.split('\n').slice(1)).toEqual([
+    '  Гемини dev 100% [509dfc37]  ·  agy  ·  idle',
+    '  Pi Helper (key pane-w5:p9)  ·  pi  ·  done',
+  ])
+  // Local Claude session is NOT duplicated in the other-agents section.
+  expect(part).not.toContain('Agent-board Master')
+
+  // SendMessage to the local agy session queues a local schedule entry with pane + cwd.
+  const sent = await runHook(w, 'pre-send', sendFrom('гемини dev 100%', 'please check PR #627', SID_ME))
+  expect(denied(sent)).toBe(
+    'Queued for Гемини dev 100% (agy) through the board (Claude Code reaches only Claude sessions, so it did not ' +
+      'send it): the board types it in as a board reminder from Agent-board Master once Гемини dev 100% is free, ' +
+      `waking it first if it sleeps.${NO_SCHEDULER} Do not send it again. The reply comes back the same way, as a ` +
+      'board reminder from Гемини dev 100%.',
+  )
+  const [entry, ...more] = scheduled(w)
+  expect(more).toEqual([])
+  expect(entry).toMatchObject({
+    key: SID_AGY1,
+    name: 'Гемини dev 100%',
+    pane: 'w5:p7',
+    cwd: '/home/agent-board/work/Проект 100%',
+    text: 'please check PR #627',
+    idle: true,
+    by: 'agent',
+    from: { key: SID_ME, name: 'Agent-board Master' },
+    replyTo: 'Agent-board Master [3e4f5a6b]',
+    replyBy: 'board',
+  })
+  expect(entry?.fromDevice).toBeUndefined()
+  expect(promptOf(entry as ScheduleEntry, entry?.next ?? 0)).toBe(
+    '[board reminder from Agent-board Master; answer with board send "Agent-board Master [3e4f5a6b]" "<your answer>"] ' +
+      'please check PR #627',
+  )
+})
+
+test('#628 ambiguous local agy names are refused with refs; own-profile Claude wins; ~/.gemini/config/hooks.json gates it without launch.agy', async () => {
+  const w = await world()
+  const board = {
+    items: [
+      { key: SID_AGY1, session: SID_AGY1, agent: 'agy', name: 'Worker', pane: 'w5:p7', status: 'idle' },
+      { key: SID_AGY2, session: SID_AGY2, agent: 'agy', name: 'Worker', pane: 'w5:p8', status: 'working' },
+      { key: SID_O, session: SID_O, agent: 'agy', name: 'Docs', pane: 'w5:p9', status: 'idle' },
+    ],
+  }
+  const fake = await fakeWake({ ...twoProfiles(w), board })
+  // No `launch.agy`, no `nodes`, only ~/.gemini/config/hooks.json present.
+  mkdirSync(join(w.home, '.gemini', 'config'), { recursive: true })
+  writeFileSync(join(w.home, '.gemini', 'config', 'hooks.json'), '{}')
+  writeBoardConfig(w.box, wakeOnConfig(fake.port, { config: { port: fake.port } }))
+  liveIn(w.dflt, SID_ME, 'Docs')
+
+  // Own profile has a live Claude session named "Docs": left to Claude Code.
+  passed(await runHook(w, 'pre-send', sendFrom('Docs', 'hi', SID_D)))
+  expect(scheduled(w)).toEqual([])
+
+  // Two local agy sessions named "Worker": refused with refs; ref picks one.
+  const ambig = denied(await runHook(w, 'pre-send', sendFrom('worker', 'hi', SID_ME)))
+  expect(ambig).toBe(
+    'Not sent: "worker" fits more than one other agent session on this machine ' +
+      '(Worker [509dfc37] (agy), Worker [619dfc37] (agy)). ' +
+      'Send it to one of them as listed: its name with its ref, or its key.',
+  )
+  expect(scheduled(w)).toEqual([])
+
+  const picked = denied(await runHook(w, 'pre-send', sendFrom('Worker [619dfc37]', 'hi', SID_ME)))
+  expect(picked).toStartWith('Queued for Worker (agy) through the board')
+  expect(scheduled(w)).toMatchObject([{ key: SID_AGY2, pane: 'w5:p8' }])
+})
+
+test('#628 a node session running agy shows its agent kind in ListAgents while Claude node rows stay unchanged', async () => {
+  const { w } = await nodesWorld([
+    nodeCard('server-2', SID_N1, 'Agent-board Master', { agent: 'claude' }),
+    nodeCard('server-2', SID_AGY1, 'Gemini-dev', { agent: 'agy', pane: 'w5:p7', status: 'working' }),
+  ])
+  const text = contextOf(await runHook(w, 'post-list', LIST)) ?? ''
+  const part = text.slice(text.indexOf("Sessions on the board's nodes"))
+  expect(part.split('\n').slice(1)).toEqual([
+    '  Agent-board Master [7b8c9d0e]  ·  node server-2  ·  idle',
+    '  Gemini-dev [509dfc37]  ·  agy  ·  node server-2  ·  working',
+  ])
+})

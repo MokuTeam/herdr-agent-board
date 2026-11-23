@@ -216,7 +216,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | update | presence [here | away | call] | journal [--since <when> | --away] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | agents [--json] | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | update | presence [here | away | call] | journal [--since <when> | --away] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp [--agents] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal'])
@@ -419,23 +419,31 @@ async function entryFor(s: Session) {
   }
 }
 
+/** One fresh fetch of the web board's payload, else null. */
+async function fetchBoard(port: unknown): Promise<Record<string, unknown> | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${Number(port) || 12422}/api/board`, {
+      signal: AbortSignal.timeout(1500),
+    })
+    const body: unknown = await res.json()
+    return isRecord(body) ? body : null
+  } catch {
+    return null
+  }
+}
+
 /** The web board's payload when it answers now (asked once), else null. */
 let webBoard: Promise<Record<string, unknown> | null> | undefined
 function boardAnswer(): Promise<Record<string, unknown> | null> {
-  webBoard ??= (async () => {
-    try {
-      const res = await fetch(`http://127.0.0.1:${cfg.port ?? 12422}/api/board`, { signal: AbortSignal.timeout(1500) })
-      const body: unknown = await res.json()
-      return isRecord(body) ? body : null
-    } catch {
-      return null
-    }
-  })()
+  webBoard ??= fetchBoard(cfg.port)
   return webBoard
 }
 
 /** Whether a board that runs the schedule answers now. */
-const schedulerRuns = (): Promise<boolean> => schedulerRunsNow(cfg.web !== false, boardAnswer)
+const schedulerRuns = (
+  c: typeof cfg = cfg,
+  board: () => Promise<Record<string, unknown> | null> = boardAnswer,
+): Promise<boolean> => schedulerRunsNow(c.web !== false, board)
 
 /**
  * The profiles with the board's own: the folder the running web board says its env points to
@@ -450,6 +458,56 @@ async function boardProfiles(): Promise<ProfileSet> {
   return isRecord(own) && typeof own.dir === 'string' ? profileSet(set.list, own.dir) : set
 }
 
+/** Shared implementation of `board send` (#619) and MCP `SendMessage` (#628). */
+async function runSend(
+  to: string,
+  message: string,
+  { fresh = false, config = cfg }: { fresh?: boolean; config?: typeof cfg } = {},
+): Promise<{ code: number; out: string[]; err: string[] }> {
+  if (!to.trim() || !message.trim()) return { code: 1, out: [], err: ['usage: board send <name|key> "<text>"'] }
+  const s = await resolveSession()
+  const { nodeConfig } = await import('../core/nodes.ts')
+  if (nodeConfig(config.node)) {
+    const { callBoard } = await import('./thread-cli.ts')
+    const answer = await callBoard(config.port)({
+      cmd: 'send',
+      argv: [to, message],
+      session: s.key,
+      lane: null,
+      files: [],
+    })
+    if (!answer) return { code: 1, out: [], err: ['the board does not run on this computer: nothing was sent'] }
+    // Not reachable, or no answer in time: the master may have queued it all the same.
+    if (answer.state !== 'answered')
+      return {
+        code: 1,
+        out: [],
+        err: ["the board's computer did not answer: it may not have been sent; check before sending it again"],
+      }
+    return { code: answer.code, out: answer.out, err: answer.err }
+  }
+  const board = async (): Promise<Record<string, unknown> | null> =>
+    config.web === false ? null : fresh ? fetchBoard(config.port) : boardAnswer()
+  const body = await board()
+  if (!body) return { code: 1, out: [], err: ['the board does not run: nothing was sent (open it first)'] }
+  const A = await import('../core/agent-send.ts')
+  const targets = A.targetsOf(body.items)
+  const plan = A.planSend({
+    targets,
+    to,
+    message,
+    from: { key: s.key, name: targets.find(t => t.key === s.key)?.name ?? s.name ?? '', device: null },
+    own: A.ownDeviceOf(body),
+    now: Date.now(),
+  })
+  if ('error' in plan) return { code: 1, out: [], err: [plan.error] }
+  addEntry(plan.entry)
+  const note = (await schedulerRuns(config, async () => body))
+    ? ''
+    : ' · note: no board with the scheduler is running now; this goes out once one runs (late, with a note)'
+  return { code: 0, out: [`${plan.line}${note}`], err: [] }
+}
+
 /**
  * `board send <name|key> "<text>"` (#619, core/agent-send.ts): a message to a session on the board,
  * this computer's or a node's, typed in once it is free and waking it first if it sleeps; the answer
@@ -461,41 +519,67 @@ async function sendCmd(): Promise<void> {
   const [to = '', ...more] = words
   const message = more.join(' ').trim()
   if (!to.trim() || !message) throw new Error('usage: board send <name|key> "<text>"')
-  const s = await resolveSession()
+  const r = await runSend(to, message)
+  for (const l of r.out) console.log(l)
+  if (r.code !== 0) {
+    // Preserve direct CLI error format (`board: ...`) for local errors, while keeping master lines verbatim.
+    const { nodeConfig } = await import('../core/nodes.ts')
+    if (!nodeConfig(cfg.node) && r.err.length === 1) throw new Error(r.err[0])
+    if (
+      r.err.length === 1 &&
+      (r.err[0]?.startsWith('the board does not run') || r.err[0]?.startsWith("the board's computer"))
+    )
+      throw new Error(r.err[0])
+    for (const l of r.err) console.error(l)
+    process.exitCode = r.code
+  }
+}
+
+/** Shared implementation of `board agents [--json]` and MCP `ListAgents` (#628). */
+async function runAgents({
+  json = false,
+  fresh = false,
+  config = cfg,
+}: {
+  json?: boolean
+  fresh?: boolean
+  config?: typeof cfg
+} = {}): Promise<{ code: number; out: string[]; err: string[] }> {
+  let selfKey = ''
+  try {
+    const s = target ? await resolveSession() : await ownSession()
+    selfKey = s?.key ?? ''
+  } catch {}
   const { nodeConfig } = await import('../core/nodes.ts')
-  if (nodeConfig(cfg.node)) {
+  if (nodeConfig(config.node) && selfKey) {
     const { callBoard } = await import('./thread-cli.ts')
-    const answer = await callBoard(cfg.port)({
-      cmd: 'send',
-      argv: [to, message],
-      session: s.key,
+    const answer = await callBoard(config.port)({
+      cmd: 'agents',
+      argv: json ? ['--json'] : [],
+      session: selfKey,
       lane: null,
       files: [],
     })
-    if (!answer) throw new Error('the board does not run on this computer: nothing was sent')
-    // Not reachable, or no answer in time: the master may have queued it all the same.
-    if (answer.state !== 'answered')
-      throw new Error("the board's computer did not answer: it may not have been sent; check before sending it again")
-    for (const l of answer.out) console.log(l)
-    for (const l of answer.err) console.error(l)
-    process.exitCode = answer.code
-    return
+    if (answer?.state === 'answered' && answer.code === 0) return { code: 0, out: answer.out, err: answer.err }
   }
-  const body = cfg.web === false ? null : await boardAnswer()
-  if (!body) throw new Error('the board does not run: nothing was sent (open it first)')
+  const body = config.web === false ? null : fresh ? await fetchBoard(config.port) : await boardAnswer()
+  const items = body ? body.items : await collect(fresh ? defaultDeps(config) : deps)
   const A = await import('../core/agent-send.ts')
-  const targets = A.targetsOf(body.items)
-  const plan = A.planSend({
-    targets,
-    to,
-    message,
-    from: { key: s.key, name: targets.find(t => t.key === s.key)?.name ?? s.name ?? '', device: null },
-    own: A.ownDeviceOf(body),
-    now: Date.now(),
-  })
-  if ('error' in plan) throw new Error(plan.error)
-  addEntry(plan.entry)
-  console.log(`${plan.line}${await schedulerNote()}`)
+  const targets = A.targetsOf(items)
+  const offline = body ? A.offlineDevices(body) : new Set<string>()
+  const own = body ? A.ownDeviceOf(body) : ''
+  if (json) return { code: 0, out: [JSON.stringify(A.agentViewsOf(targets, { selfKey, offline }))], err: [] }
+  const lines = A.formatAgentLines(targets, { selfKey, offline, own })
+  return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: [] }
+}
+
+/** `board agents [--json]` (#628): every reachable session on the board, with its ref and agent kind. */
+async function agentsCmd(): Promise<void> {
+  const json = flagWords.includes('--json')
+  const r = await runAgents({ json })
+  for (const l of r.out) console.log(l)
+  for (const l of r.err) console.error(l)
+  process.exitCode = r.code
 }
 
 /** A note for the agent when no board with the scheduler runs to send it. */
@@ -1042,6 +1126,7 @@ async function main(): Promise<void> {
   if (cmd === 'cal') return calCommand()
   if (cmd === 'thread') return threadCommand()
   if (cmd === 'send') return sendCmd()
+  if (cmd === 'agents') return agentsCmd()
   if (cmd === 'workdesk') {
     if (target !== undefined) throw new Error('Workdesk workers uses the calling master session')
     const { workdeskWorkerCommand } = await import('../services/workdesk-workers.ts')
@@ -2447,16 +2532,39 @@ async function threadCommand(): Promise<void> {
 /**
  * `board mcp` (#394, entrypoints/mcp.ts): the threads' two tools on stdio, each call `board thread`
  * as the session that started the server (or the one --session names), with config.json read again
- * for each call. Stdout carries the protocol only.
+ * for each call. With `--agents` (#628): exposes `ListAgents` and `SendMessage` instead, for
+ * harnesses such as Antigravity CLI (`agy`) that have no built-in cross-session tools. Stdout
+ * carries the protocol only.
  */
 async function mcpCommand(): Promise<void> {
-  const { createMcpServer, serve } = await import('./mcp.ts')
-  const { threadCmd } = await import('./thread-cli.ts')
+  const { createAgentsMcpServer, createMcpServer, serve } = await import('./mcp.ts')
   const { ROOT } = await import('../adapters/paths.ts')
   let version = ''
   try {
     version = String(JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version ?? '')
   } catch {}
+  if (flagWords.includes('--agents')) {
+    const server = createAgentsMcpServer({
+      version,
+      listAgents: async () => {
+        try {
+          return await runAgents({ fresh: true, config: loadConfig() })
+        } catch (e) {
+          return { code: 1, out: [], err: [messageOf(e)] }
+        }
+      },
+      sendMessage: async (to, message) => {
+        try {
+          return await runSend(to, message, { fresh: true, config: loadConfig() })
+        } catch (e) {
+          return { code: 1, out: [], err: [messageOf(e)] }
+        }
+      },
+    })
+    await serve(server, process.stdin, line => process.stdout.write(line))
+    return
+  }
+  const { threadCmd } = await import('./thread-cli.ts')
   const server = createMcpServer({
     version,
     run: async argv => {

@@ -22,6 +22,8 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { defaultAgyRoot } from '../adapters/agy-home.ts'
+import { agyConfigDir } from '../adapters/agy-hooks.ts'
 import { configFile, readConfigFile } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { loadProfiles } from '../adapters/profiles.ts'
@@ -334,22 +336,57 @@ async function queueElsewhere(
   )
 }
 
-/** The board's payload when config.json has `nodes` (#619) and the board answers; null otherwise, with no call. */
-async function nodesPayload(raw: Record<string, unknown> | null): Promise<Record<string, unknown> | null> {
-  if (!isRecord(raw?.nodes)) return null
-  const body = await api(Number(raw.port) || 12422, '/api/board', null, 3000).catch(() => null)
+/** Whether this computer may host non-Claude agent sessions (`agy`, `pi`, `codex`, #628). */
+function hasLocalOtherAgents(raw: Record<string, unknown> | null): boolean {
+  if (
+    isRecord(raw?.launch) &&
+    (raw.launch.agy !== undefined || raw.launch.pi !== undefined || raw.launch.codex !== undefined)
+  )
+    return true
+  if (typeof raw?.codexHome === 'string' && raw.codexHome.trim() !== '') return true
+  return existsSync(join(agyConfigDir(), 'hooks.json')) || existsSync(defaultAgyRoot())
+}
+
+/** The board's payload when `nodes` (#619) or local non-Claude agents (#628) are present; null otherwise, with no call. */
+async function boardPayload(raw: Record<string, unknown> | null): Promise<Record<string, unknown> | null> {
+  if (!isRecord(raw?.nodes) && !hasLocalOtherAgents(raw)) return null
+  const body = await api(Number(raw?.port) || 12422, '/api/board', null, 3000).catch(() => null)
   return isRecord(body) ? body : null
 }
 
-/** ListAgents (#619): the sessions on the board's nodes, each with its node and state; null for none. */
-async function nodesContext(raw: Record<string, unknown> | null): Promise<string | null> {
-  const payload = await nodesPayload(raw)
+/** ListAgents (#628): non-Claude sessions on this computer (`agy`, `pi`, `codex`, ...); null for none. */
+async function localOtherAgentsContext(payload: Record<string, unknown> | null): Promise<string | null> {
   if (!payload) return null
+  const { isOtherAgent, labelOf, targetsOf } = await import('../core/agent-send.ts')
+  type Target = import('../core/agent-send.ts').Target
+  const others = targetsOf(payload.items).filter(isOtherAgent)
+  if (!others.length) return null
+  const row = (t: Target): string => `  ${labelOf(t)}  ·  ${t.agent}  ·  ${t.sleeping ? 'asleep' : t.status || 'live'}`
+  const asleep = others.filter(t => t.sleeping).sort((a, b) => b.activity - a.activity)
+  const rows = [...others.filter(t => !t.sleeping), ...asleep.slice(0, LIST_MAX)].map(row)
+  if (asleep.length > LIST_MAX)
+    rows.push(
+      `  ... and ${asleep.length - LIST_MAX} more asleep on this machine, not shown; SendMessage by name reaches them too`,
+    )
+  return (
+    `Other agent sessions on this machine (not listed above: Claude Code knows only Claude sessions). ` +
+    `SendMessage to one by name goes through the board: it types the message in once the session is free, waking ` +
+    `it first if it sleeps, and the reply comes back as a board reminder. Two with one name: add the ref in ` +
+    `brackets, as listed. \`board send "<name>" "<text>"\` does the same from a shell.\n${rows.join('\n')}`
+  )
+}
+
+/** ListAgents (#619): the sessions on the board's nodes, each with its node and state; null for none. */
+async function nodesContext(
+  payload: Record<string, unknown> | null,
+  raw: Record<string, unknown> | null,
+): Promise<string | null> {
+  if (!isRecord(raw?.nodes) || !payload) return null
   const { offlineDevices, labelOf, targetsOf } = await import('../core/agent-send.ts')
   type Target = import('../core/agent-send.ts').Target
   const offline = offlineDevices(payload)
   const row = (t: Target): string =>
-    `  ${labelOf(t)}  ·  node ${t.device}  ·  ${t.sleeping ? 'asleep' : t.status || 'live'}` +
+    `  ${labelOf(t)}${t.agent && t.agent !== 'claude' ? `  ·  ${t.agent}` : ''}  ·  node ${t.device}  ·  ${t.sleeping ? 'asleep' : t.status || 'live'}` +
     (offline.has(t.device ?? '') ? '  ·  node offline now: goes out once it is back' : '')
   const onNodes = targetsOf(payload.items).filter(t => t.device)
   // Every live one, and the sleepers as this computer's are shown: at most LIST_MAX, the rest counted.
@@ -369,14 +406,13 @@ async function nodesContext(raw: Record<string, unknown> | null): Promise<string
 }
 
 /**
- * SendMessage to `named` that neither this profile nor another one on this computer has (#619): when
- * config.json has `nodes` and exactly one session on a node has the name, the board takes it (an
- * entry due now that the scheduler sends through the node, typed in once the session is free) and the
- * native call is denied saying so; two or more are refused, listed with their refs; none, or a name a
- * session of this profile has: left to Claude Code. Without `nodes`, nothing is asked.
+ * SendMessage to `named` that neither this profile nor another Claude profile on this computer has:
+ * first checks local non-Claude sessions (`agy`, `pi`, `codex`, #628) when present, then node
+ * sessions (#619) when config.json has `nodes`. When neither applies, the board is asked nothing.
  */
-async function sendToNode(named: string, input: Record<string, unknown>, raw: Record<string, unknown> | null) {
-  if (!isRecord(raw?.nodes)) return
+async function sendToBoardTarget(named: string, input: Record<string, unknown>, raw: Record<string, unknown> | null) {
+  const hasNodes = isRecord(raw?.nodes)
+  if (!hasNodes && !hasLocalOtherAgents(raw)) return
   const message = isRecord(input.tool_input) ? input.tool_input.message : undefined
   if (typeof message !== 'string') return
   const sid = String(input.session_id ?? '') || process.env.CLAUDE_CODE_SESSION_ID || ''
@@ -390,9 +426,45 @@ async function sendToNode(named: string, input: Record<string, unknown>, raw: Re
   // This profile's own session of that name is Claude Code's, as before.
   if (live.some(s => s.name?.toLowerCase() === to && (ref.length < 8 || s.sessionId.toLowerCase().startsWith(ref))))
     return
-  const payload = await nodesPayload(raw)
+  const payload = await boardPayload(raw)
   if (!payload) return
   const all = A.targetsOf(payload.items)
+  const mine = all.find(t => t.key === sid)
+  const name = mine?.name ?? live.find(s => s.sessionId === sid)?.name?.trim() ?? ''
+
+  // Local non-Claude agent sessions (`agy`, `pi`, `codex`, #628) first.
+  const localFits = A.matching(all.filter(A.isOtherAgent), named)
+  if (localFits.length > 1)
+    return deny(
+      `Not sent: "${to}" fits more than one other agent session on this machine (${localFits.map(t => `${A.labelOf(t)} (${t.agent})`).join(', ')}). ` +
+        `Send it to one of them as listed: its name with its ref, or its key.`,
+    )
+  const [localTarget] = localFits
+  if (localTarget) {
+    const m = A.messageText(message)
+    if ('error' in m) return deny(`Not sent: ${m.error}.`)
+    const { addEntry, schedulerRuns } = await import('../adapters/schedule-store.ts')
+    try {
+      addEntry(A.messageEntry(localTarget, m.text, { key: sid, name }, Date.now()))
+    } catch (err) {
+      return deny(
+        `Not sent: ${localTarget.name} (${localTarget.agent}) is on this machine, and the board could not take the message: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+    const down = (await schedulerRuns(raw?.web !== false, async () => payload))
+      ? ''
+      : ' Note: no board with the scheduler is running now; it goes out once one runs.'
+    return deny(
+      `Queued for ${localTarget.name} (${localTarget.agent}) through the board (Claude Code reaches only Claude ` +
+        `sessions, so it did not send it): the board types it in as a board reminder from ` +
+        `${name || sid.slice(0, 8)} once ${localTarget.name} is free, waking it first if it sleeps.${down} Do not send it ` +
+        `again. The reply comes back the same way, as a board reminder from ${localTarget.name}.`,
+    )
+  }
+
+  // Node sessions (#619): only with `nodes` in config.json.
+  if (!hasNodes) return
   const fits = A.matching(
     all.filter(t => t.device),
     named,
@@ -407,8 +479,6 @@ async function sendToNode(named: string, input: Record<string, unknown>, raw: Re
   const m = A.messageText(message)
   if ('error' in m) return deny(`Not sent: ${m.error}.`)
   // Signed with this session's name on the board: `board send` on the node finds it by that name.
-  const mine = all.find(t => t.key === sid)
-  const name = mine?.name ?? live.find(s => s.sessionId === sid)?.name?.trim() ?? ''
   const device = A.ownDeviceOf(payload) || 'the board'
   const { addEntry, schedulerRuns } = await import('../adapters/schedule-store.ts')
   try {
@@ -454,8 +524,8 @@ async function main(): Promise<void> {
     const target = sleeping && own(sleeping).find(s => s.name.toLowerCase() === to)
     if (sleeping && !target) {
       if (await sendElsewhere(to, ref, input, sleeping, settings.port, raw)) return
-      // Nothing on this computer has the name: a node's session may (#619).
-      return sendToNode(named, input, raw)
+      // Nothing in Claude profiles on this computer has the name: a local non-Claude (#628) or node (#619) session may.
+      return sendToBoardTarget(named, input, raw)
     }
     // By its session id: its name may be another profile's sleeper's too.
     const id = target && [target.session, target.pane].find(v => typeof v === 'string' && v !== '')
@@ -481,9 +551,11 @@ async function main(): Promise<void> {
     const set = otherProfiles()
     others = set && othersContext(sleeping, awake, set.others, settings.listSleepingDays)
   } catch {}
-  // The nodes' sessions (#619) on their own too: only with `nodes` in config.json.
-  const onNodes = await nodesContext(raw).catch(() => null)
-  const context = [ownPart, others, onNodes].filter(Boolean).join('\n\n')
+  // One board fetch shared by local non-Claude agents (#628) and node sessions (#619); none for plain Claude setups.
+  const payload = await boardPayload(raw).catch(() => null)
+  const localOthers = await localOtherAgentsContext(payload).catch(() => null)
+  const onNodes = await nodesContext(payload, raw).catch(() => null)
+  const context = [ownPart, others, localOthers, onNodes].filter(Boolean).join('\n\n')
   if (context)
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }))
 }

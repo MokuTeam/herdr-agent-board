@@ -19,10 +19,13 @@ test('--agy installs hooks, skills, shims and herdr integration, preserving herd
   const dir = join(box.dir, 'Agy дом 100%')
   mkdirSync(dir)
   const file = join(dir, 'hooks.json')
+  const mcpFile = join(dir, 'mcp_config.json')
   const before = JSON.stringify({
     herdr: { PreInvocation: [{ type: 'command', command: 'herdr-state' }] },
   })
+  const mcpBefore = JSON.stringify({ mcpServers: { external: { url: 'https://example.com/mcp' } } })
   writeFileSync(file, before)
+  writeFileSync(mcpFile, mcpBefore)
   for (let n = 0; n < 2; n++) {
     const result = await install(box, ['--agy'], { ANTIGRAVITY_CONFIG_DIR: dir })
     expect(result.code).toBe(0)
@@ -34,6 +37,16 @@ test('--agy installs hooks, skills, shims and herdr integration, preserving herd
     expect(parsed['agent-board']?.PreInvocation).toHaveLength(1)
     expect(text.match(/agy-hook\.ts/g)).toHaveLength(2)
     expect(readFileSync(`${file}.bak-agent-board`, 'utf8')).toBe(before)
+
+    const mcp = JSON.parse(readFileSync(mcpFile, 'utf8')) as {
+      mcpServers: Record<string, { command?: string; args?: string[]; url?: string }>
+    }
+    expect(mcp.mcpServers.external).toEqual({ url: 'https://example.com/mcp' })
+    expect(mcp.mcpServers['agent-board']).toEqual({
+      command: process.execPath,
+      args: [join(root, 'src', 'entrypoints', 'cli.ts'), 'mcp', '--agents'],
+    })
+    expect(readFileSync(`${mcpFile}.bak-agent-board`, 'utf8')).toBe(mcpBefore)
   }
   expect(existsSync(join(dir, 'skills', 'herdr-agents', 'SKILL.md'))).toBe(true)
   expect(existsSync(join(dir, 'skills', 'agent-board-team', 'SKILL.md'))).toBe(true)
@@ -44,6 +57,29 @@ test('--agy installs hooks, skills, shims and herdr integration, preserving herd
     ['integration', 'install', 'antigravity-cli'],
     ['integration', 'install', 'antigravity-cli'],
   ])
+})
+
+test('--agy handles an empty mcp_config.json and fails closed on invalid mcp_config.json without writing hooks', async () => {
+  const box = await sandbox()
+  const dir = join(box.dir, 'agy-empty-mcp')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'mcp_config.json'), '')
+  const ok = await install(box, ['--agy'], { ANTIGRAVITY_CONFIG_DIR: dir })
+  expect(ok.code).toBe(0)
+  const mcp = JSON.parse(readFileSync(join(dir, 'mcp_config.json'), 'utf8')) as {
+    mcpServers: Record<string, { command: string; args: string[] }>
+  }
+  expect(mcp.mcpServers['agent-board']?.args.slice(-2)).toEqual(['mcp', '--agents'])
+
+  const brokenBox = await sandbox()
+  const brokenDir = join(brokenBox.dir, 'agy-bad-mcp')
+  mkdirSync(brokenDir, { recursive: true })
+  writeFileSync(join(brokenDir, 'mcp_config.json'), '{broken')
+  const bad = await install(brokenBox, ['--agy'], { ANTIGRAVITY_CONFIG_DIR: brokenDir })
+  expect(bad.code).toBe(1)
+  expect(existsSync(join(brokenDir, 'hooks.json'))).toBe(false)
+  expect(readFileSync(join(brokenDir, 'mcp_config.json'), 'utf8')).toBe('{broken')
+  expect(existsSync(join(brokenBox.env.USERPROFILE as string, '.local/bin/board'))).toBe(false)
 })
 
 test('--agy warns when bun is not on PATH and rejects incompatible flags before writing anything', async () => {

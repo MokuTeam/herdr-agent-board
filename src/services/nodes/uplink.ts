@@ -315,9 +315,10 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
   /** The call run, or null when a file it names could not be had for now. */
   async function runCall(id: string, call: UplinkCall): Promise<UplinkResult | null> {
     if (!UPLINK_COMMANDS.has(call.cmd))
-      return refused(`board ${said(call.cmd)} is not taken from a node: only board thread and board send`)
-    if (!call.session) return refused("only a session's board thread or board send is taken from a node")
+      return refused(`board ${said(call.cmd)} is not taken from a node: only board thread, board send and board agents`)
+    if (!call.session) return refused("only a session's board thread, board send or board agents is taken from a node")
     if (call.cmd === 'send') return sendFrom(id, call)
+    if (call.cmd === 'agents') return agentsFrom(id, call)
     const sub = call.argv[0] ?? 'help'
     const not = Object.hasOwn(NOT_FROM_NODE, sub) ? NOT_FROM_NODE[sub] : undefined
     if (not) return refused(not)
@@ -412,6 +413,26 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       return failed(`the board could not take the message: ${messageOf(err)}`)
     }
     return { code: 0, out: [plan.line], err: [] }
+  }
+
+  /**
+   * `board agents [--json]` in a session of the node (#628, core/agent-send.ts): lists the cards
+   * this node is allowed to reach — the master's sessions and this node's own, never another node's.
+   */
+  async function agentsFrom(id: string, call: UplinkCall): Promise<UplinkResult> {
+    let key: string
+    try {
+      key = nodeKey(id, call.session)
+    } catch {
+      return refused('not a session of the node')
+    }
+    const { agentViewsOf, formatAgentLines, targetsOf } = await import('../../core/agent-send.ts')
+    const targets = targetsOf(o.items()).filter(t => t.device === null || t.device === id)
+    if (call.argv.includes('--json'))
+      return { code: 0, out: [JSON.stringify(agentViewsOf(targets, { selfKey: key }))], err: [] }
+    const own = nodesConfig(o.cfg.nodes)?.id ?? ''
+    const lines = formatAgentLines(targets, { selfKey: key, own })
+    return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: [] }
   }
 
   /** A session on the board by its name, pane or key, as `board thread` finds one on this computer. */

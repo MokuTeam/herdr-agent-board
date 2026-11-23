@@ -343,12 +343,14 @@ test('the skill install copies is upstream’s, word for word, but for what `boa
   // the same section and words. #279: what becomes of an archived session's reminders, after `board archive`.
   // #380: --model, in the command line, the PowerShell names and a line of its own.
   // #505: where a worker may run on another device, and what spawn-agent's device= and queued= lines mean.
+  // #628: cross-agent ListAgents/SendMessage (agy MCP + board agents/board send).
   const ours = read(root, 'skills', 'herdr-agents', 'SKILL.md')
     .replace(' [--model <id or alias>]\n```', '\n```')
     .replace(' -Workspace -Model`)', ' -Workspace`)')
     .replace(/- An agent on another model than the profile's default: [^\n]*\n/, '')
     .replace(/- Where the board has other devices, a worker may run on one of them [^\n]*\n/, '')
     .replace(/- A line ending in `device=<device> session=<id>` means [^\n]*\n/, '')
+    .replace(/- Other agents \(`agy`, `pi`, Codex\) and other devices: [^\n]*\n/, '')
     .replace(
       ' Its board reminders wait with it, parked: `board schedule --session <name>` lists them, `board schedule --move <id>` moves one to you, `board unschedule <id>` removes one.',
       '',

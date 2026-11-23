@@ -65,7 +65,7 @@ test('a result: an exit code and lines', () => {
 })
 
 test('what the master takes, what a node keeps, and what is never run for a node', () => {
-  expect([...UPLINK_COMMANDS]).toEqual(['thread', 'threads', 'send'])
+  expect([...UPLINK_COMMANDS]).toEqual(['thread', 'threads', 'send', 'agents'])
   expect([...KEPT_SUBS].sort()).toEqual(['ask', 'done', 'new', 'post', 'set', 'unwatch', 'watch'])
   expect(Object.keys(NOT_FROM_NODE).sort()).toEqual(['import', 'open', 'share'])
   expect(fileTooBig('r.md', 5 * 1024 * 1024)).toBeNull()

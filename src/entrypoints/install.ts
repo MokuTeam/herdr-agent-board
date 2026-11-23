@@ -26,7 +26,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { installSkill } from '../adapters/agents-skill.ts'
-import { agyConfigDir, agyHooksPlan, installAgyHooks } from '../adapters/agy-hooks.ts'
+import { agyConfigDir, agyHooksPlan, agyMcpPlan, installAgyHooks, installAgyMcp } from '../adapters/agy-hooks.ts'
 import { codexHooksPlan, installCodexHooks } from '../adapters/codex-hooks.ts'
 import { configFile, loadConfig, readConfigFile } from '../adapters/config-file.ts'
 import { agyIntegrationInstall, claudeIntegrationInstall, codexIntegrationInstall } from '../adapters/herdr.ts'
@@ -81,7 +81,9 @@ if (args.includes('--agy')) {
     const dir = agyConfigDir()
     const script = join(ROOT, 'src', 'entrypoints', 'agy-hook.ts')
     const plan = agyHooksPlan(dir, script)
+    const mcpPlan = agyMcpPlan(dir, paths.bun, paths.cli)
     installAgyHooks(plan)
+    installAgyMcp(mcpPlan)
     installShims()
     const agySkills = [
       { name: SKILL, from: files.skill },
@@ -98,6 +100,7 @@ if (args.includes('--agy')) {
       )
     }
     console.log(`Antigravity CLI hooks: SessionStart, PreInvocation -> ${script} in ${plan.file}`)
+    console.log(`Antigravity CLI MCP: ListAgents, SendMessage -> ${paths.cli} mcp --agents in ${mcpPlan.file}`)
     if (Bun.which('bun') === null)
       console.log('Antigravity CLI hooks: warning: bun is not on PATH; add Bun to PATH before starting agy.')
     try {

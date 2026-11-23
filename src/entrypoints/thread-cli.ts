@@ -304,8 +304,8 @@ export interface ThreadCmdContext {
 export interface NodeCall {
   /** A write that can wait carries an id of its own: the same call tried again is one call. */
   id?: string
-  /** `send`: `board send` (#619, entrypoints/cli.ts), never kept. */
-  cmd: 'thread' | 'send'
+  /** `send`: `board send` (#619); `agents`: `board agents` (#628); neither is kept. */
+  cmd: 'thread' | 'send' | 'agents'
   argv: string[]
   session: string
   lane: string | null

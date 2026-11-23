@@ -7,6 +7,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v =
 
 export const AGY_HOOK_KEY = 'agent-board'
 export const AGY_HOOK_EVENTS = ['SessionStart', 'PreInvocation'] as const
+export const AGY_MCP_KEY = 'agent-board'
 
 // An argv marker survives a moved checkout without adding non-schema fields to hooks.json.
 const MARKER = '--herdr-agent-board-hook'
@@ -51,6 +52,25 @@ export function planAgyHooks(settings: unknown, script: string): Record<string, 
     if (owned.length === 1 && isRecord(owned[0]) && owned[0].command === command) continue
     const kept = entries.filter(e => !isOurHandler(e, ours))
     group[event] = [...kept, handler]
+  }
+  return next
+}
+
+/**
+ * Plan the next `~/.gemini/config/mcp_config.json` with agent-board's stdio MCP server
+ * (`ListAgents` and `SendMessage` via `board mcp --agents`, #628), preserving every other
+ * MCP server and top-level key untouched.
+ */
+export function planAgyMcp(config: unknown, bun: string, cli: string): Record<string, unknown> {
+  if (config !== undefined && !isRecord(config)) throw new Error('mcp_config.json is not a JSON object; left as it was')
+  const next: Record<string, unknown> = structuredClone(config ?? {})
+  if (next.mcpServers !== undefined && !isRecord(next.mcpServers))
+    throw new Error('mcp_config.json mcpServers is not an object; left as it was')
+  const servers: Record<string, unknown> = isRecord(next.mcpServers) ? next.mcpServers : {}
+  next.mcpServers = servers
+  servers[AGY_MCP_KEY] = {
+    command: bun,
+    args: [cli, 'mcp', '--agents'],
   }
   return next
 }

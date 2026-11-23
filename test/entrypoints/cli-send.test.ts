@@ -161,3 +161,123 @@ test('#619 board send on a node goes to its board as a call, not kept; what the 
     board.stop()
   }
 })
+
+async function runCli(
+  box: Sandbox,
+  args: string[],
+  stdin?: string,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const proc = Bun.spawn([process.execPath, join(root, 'src/entrypoints/cli.ts'), ...args], {
+    cwd: root,
+    env: { ...box.env, CLAUDE_CODE_SESSION_ID: '' },
+    ...(stdin !== undefined && { stdin: new TextEncoder().encode(stdin) }),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+  return { code: await proc.exited, stdout, stderr }
+}
+
+test('#628 board agents lists local and node sessions (including agy), marks self, and supports --json and node fallback', async () => {
+  const box = await sandbox()
+  const AGY = '509dfc37-b58e-4851-9988-a8c7befe9f0d'
+  let answer: unknown = {
+    state: 'answered',
+    code: 0,
+    out: ['Laptop Work [3e4f5a6b]  ·  claude  ·  laptop  ·  working'],
+    err: [],
+  }
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(req) {
+      const path = new URL(req.url).pathname
+      if (req.method === 'GET' && path === '/api/board')
+        return Response.json({
+          items: [
+            { key: ME, session: ME, agent: 'claude', name: 'Agent-board Master', pane: 'w5:p2', status: 'done' },
+            { key: AGY, session: AGY, agent: 'agy', name: 'Gemini-dev', pane: 'w5:p7', status: 'working' },
+          ],
+        })
+      if (req.method === 'POST' && path === '/api/node/call') return Response.json(answer)
+      return new Response(null, { status: 404 })
+    },
+  })
+  try {
+    // Standalone board: lists both claude and agy, marks caller.
+    config(box, { port: server.port })
+    const local = await runCli(box, ['agents', '--session', AGY])
+    expect(local.code).toBe(0)
+    expect(local.stdout.trim().split('\n')).toEqual([
+      'Agent-board Master [3e4f5a6b]  ·  claude  ·  done',
+      'Gemini-dev [509dfc37]  ·  agy  ·  working  ·  (this session)',
+    ])
+    const json = await runCli(box, ['agents', '--json', '--session', AGY])
+    expect(json.code).toBe(0)
+    expect(JSON.parse(json.stdout)).toMatchObject([
+      { key: ME, agent: 'claude', self: false },
+      { key: AGY, agent: 'agy', self: true },
+    ])
+
+    // On a node: uses master uplink when answered, falls back to local board when older master refuses (126) or unreachable.
+    config(box, { port: server.port, node: { id: 'server-2', port: 12430 } })
+    const viaMaster = await runCli(box, ['agents', '--session', AGY])
+    expect(viaMaster.code).toBe(0)
+    expect(viaMaster.stdout.trim()).toBe('Laptop Work [3e4f5a6b]  ·  claude  ·  laptop  ·  working')
+
+    for (const fallback of [
+      { state: 'answered', code: 126, out: [], err: ['board agents is not taken from a node'] },
+      { state: 'unreachable' },
+    ]) {
+      answer = fallback
+      const localFallback = await runCli(box, ['agents', '--session', AGY])
+      expect(localFallback.code).toBe(0)
+      expect(localFallback.stdout.trim().split('\n')).toEqual([
+        'Agent-board Master [3e4f5a6b]  ·  claude  ·  done',
+        'Gemini-dev [509dfc37]  ·  agy  ·  working  ·  (this session)',
+      ])
+    }
+  } finally {
+    server.stop(true)
+  }
+})
+
+test('#628 board mcp --agents serves ListAgents and SendMessage over stdio JSON-RPC', async () => {
+  const box = await sandbox()
+  const board = standIn()
+  config(box, { port: board.port, nodes: { id: 'laptop' } })
+  try {
+    const input = [
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'ListAgents', arguments: {} } },
+      {
+        jsonrpc: '2.0',
+        id: 4,
+        method: 'tools/call',
+        params: { name: 'SendMessage', arguments: { to: 'Monitor', message: 'hello via mcp' } },
+      },
+    ]
+      .map(m => JSON.stringify(m))
+      .join('\n')
+    const r = await runCli(box, ['mcp', '--agents', '--session', ME], `${input}\n`)
+    expect(r.code).toBe(0)
+    expect(r.stderr).toBe('')
+    const lines = r.stdout
+      .trim()
+      .split('\n')
+      .map(l => JSON.parse(l) as { id: number; result?: { tools?: { name: string }[]; content?: { text: string }[] } })
+    expect(lines.map(l => l.id)).toEqual([1, 2, 3, 4])
+    expect(lines[1]?.result?.tools?.map(t => t.name)).toEqual(['ListAgents', 'SendMessage'])
+    const listed = lines[2]?.result?.content?.[0]?.text ?? ''
+    expect(listed).toContain('Laptop Work [3e4f5a6b]')
+    expect(listed).toContain('(this session)')
+    expect(listed).toContain('Monitor [4f5a6b7c]')
+    expect(listed).toContain('Agent-board Master [7b8c9d0e]')
+    expect(lines[3]?.result?.content?.[0]?.text).toStartWith('ok · queued for Monitor [4f5a6b7c] on laptop:')
+    expect(scheduled(box)).toMatchObject([{ key: MON, text: 'hello via mcp', from: { key: ME, name: 'Laptop Work' } }])
+  } finally {
+    board.stop()
+  }
+})

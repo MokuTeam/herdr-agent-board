@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { AGY_HOOK_EVENTS, AGY_HOOK_KEY, planAgyHooks } from '../../src/core/agy-hooks.ts'
+import { AGY_HOOK_EVENTS, AGY_HOOK_KEY, AGY_MCP_KEY, planAgyHooks, planAgyMcp } from '../../src/core/agy-hooks.ts'
 
 const SCRIPT = '/home/agent-board/agent-board/src/entrypoints/agy-hook.ts'
 
@@ -57,5 +57,34 @@ describe('Antigravity CLI hooks.json planning (core/agy-hooks.ts)', () => {
     expect(() => planAgyHooks([], SCRIPT)).toThrow('not a JSON object')
     expect(() => planAgyHooks({ 'agent-board': [] }, SCRIPT)).toThrow('not an object')
     expect(() => planAgyHooks({ 'agent-board': { SessionStart: {} } }, SCRIPT)).toThrow('not a list')
+  })
+})
+
+describe('Antigravity CLI mcp_config.json planning (core/agy-hooks.ts)', () => {
+  const BUN = 'C:\\Users\\Иван 100%\\.bun\\bin\\bun.exe'
+  const CLI = 'C:\\Work\\herdr-agent-board\\src\\entrypoints\\cli.ts'
+
+  test('adds agent-board MCP server while preserving existing servers and top-level keys', () => {
+    const existing = {
+      customFlag: true,
+      mcpServers: {
+        other: { command: 'node', args: ['server.js'] },
+      },
+    }
+    const next = planAgyMcp(existing, BUN, CLI)
+    expect(next.customFlag).toBe(true)
+    const servers = next.mcpServers as Record<string, unknown>
+    expect(servers.other).toEqual({ command: 'node', args: ['server.js'] })
+    expect(servers[AGY_MCP_KEY]).toEqual({ command: BUN, args: [CLI, 'mcp', '--agents'] })
+    expect(planAgyMcp(next, BUN, CLI)).toEqual(next)
+    // Undefined config starts fresh cleanly.
+    expect(planAgyMcp(undefined, BUN, CLI)).toEqual({
+      mcpServers: { [AGY_MCP_KEY]: { command: BUN, args: [CLI, 'mcp', '--agents'] } },
+    })
+  })
+
+  test('refuses non-object root and non-object mcpServers', () => {
+    expect(() => planAgyMcp([], BUN, CLI)).toThrow('not a JSON object')
+    expect(() => planAgyMcp({ mcpServers: [] }, BUN, CLI)).toThrow('not an object')
   })
 })
