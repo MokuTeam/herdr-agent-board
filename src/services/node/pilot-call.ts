@@ -10,7 +10,7 @@ import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, writeF
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { enqueueReport, reportHash, reportIdentity } from '../../adapters/call-receipts.ts'
-import { type ClaudeHome, cwdOf } from '../../adapters/claude-home.ts'
+import { type ClaudeHome, sessionCwd } from '../../adapters/claude-home.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { knobMs, pace } from '../../adapters/pacing.ts'
 import { addEntry, listEntries, type NewEntry } from '../../adapters/schedule-store.ts'
@@ -219,7 +219,7 @@ async function resolveSessionTarget(
   let transcript: string | null = null
   let foundDir: string | null = null
   let foundId = givenProfile || item?.profile || ''
-  const cwdHint = givenCwd || item?.cwd || ''
+  const cwdHint = (givenCwd && isDir(givenCwd) ? givenCwd : '') || item?.cwd || givenCwd || ''
 
   for (const candidate of preferredDirs) {
     const t = deps.homes.forDir(candidate.dir).transcriptPath(session, cwdHint)
@@ -235,9 +235,8 @@ async function resolveSessionTarget(
     foundId = preferredDirs[0].id || foundId
   }
 
-  const fromTranscript = transcript ? await cwdOf(transcript) : null
-  const rawCwd = fromTranscript || givenCwd || item?.cwd || ''
-  const cwd = rawCwd && isDir(rawCwd) ? rawCwd : ''
+  // Take the first existing folder: given cwd, card cwd, transcript's last cwd, then its first cwd (#657).
+  const cwd = await sessionCwd(transcript, [givenCwd, item?.cwd], isDir)
 
   let profileEnvDir: string | null | undefined
   if (foundDir) {

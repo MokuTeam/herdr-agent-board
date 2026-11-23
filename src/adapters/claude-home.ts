@@ -200,6 +200,79 @@ export async function cwdOf(file: string): Promise<string | null> {
   }
 }
 
+/**
+ * The last top-level "cwd" recorded in a Claude transcript JSONL file, scanning from the tail in
+ * widening windows; null when none is found or the file cannot be read.
+ */
+export async function lastCwdOf(file: string): Promise<string | null> {
+  let fh: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    fh = await open(file, 'r')
+    const { size } = await fh.stat()
+    if (size === 0) return null
+    for (const bytes of [64 << 10, 512 << 10, 2 << 20, 8 << 20]) {
+      const len = Math.min(size, bytes)
+      const start = size - len
+      const buf = Buffer.alloc(len)
+      const { bytesRead } = await fh.read(buf, 0, len, start)
+      let text = buf.subarray(0, bytesRead).toString('utf8')
+      if (start > 0) {
+        const nl = text.indexOf('\n')
+        if (nl < 0) {
+          if (bytes >= size) break
+          continue
+        }
+        text = text.slice(nl + 1)
+      }
+      const lines = text.split('\n')
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i]?.trim()
+        if (!line?.includes('"cwd"')) continue
+        try {
+          const row: unknown = JSON.parse(line)
+          if (isRecord(row) && typeof row.cwd === 'string' && row.cwd) return row.cwd
+        } catch {}
+      }
+      if (bytes >= size) break
+    }
+    return null
+  } catch {
+    return null
+  } finally {
+    await fh?.close()
+  }
+}
+
+const defaultIsDir = (dir: string): boolean => !!statSync(dir, { throwIfNoEntry: false })?.isDirectory()
+
+/**
+ * Current existing folder of a Claude session: checks explicit candidates in order (for example
+ * given cwd, then card cwd), then falls back to the transcript's last cwd, then its first cwd.
+ */
+export async function sessionCwd(
+  transcript: string | null | undefined,
+  candidates: readonly (string | null | undefined)[],
+  isDir: (dir: string) => boolean = defaultIsDir,
+): Promise<string> {
+  const seen = new Set<string>()
+  const check = (raw: string | null | undefined): string => {
+    if (!raw?.trim() || seen.has(raw)) return ''
+    seen.add(raw)
+    return isDir(raw) ? raw : ''
+  }
+  for (const candidate of candidates) {
+    const hit = check(candidate)
+    if (hit) return hit
+  }
+  if (transcript) {
+    const last = check(await lastCwdOf(transcript))
+    if (last) return last
+    const first = check(await cwdOf(transcript))
+    if (first) return first
+  }
+  return ''
+}
+
 const normCwd = (s: string): string =>
   /^[a-z]:/i.test(s) ? s.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() : s.replace(/\/+$/, '')
 

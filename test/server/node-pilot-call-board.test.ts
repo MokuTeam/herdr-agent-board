@@ -509,4 +509,107 @@ describe('MokuPilot calls with node sessions (#618)', () => {
     expect(offBody.error.toLowerCase()).toContain('offline')
     firstNode.proxy.restore()
   })
+
+  test('starts MokuPilot call in the node folder for a moved session whose transcript starts with a foreign Windows cwd (#657)', async () => {
+    const tmp = scratchDir()
+    const fakeClaude = makeFakeClaude(tmp)
+    const fakePilot = makeFakeMokupilot(tmp)
+    let nodeCwd = ''
+
+    const pair = await nodePair({
+      panes: (_id, box) => {
+        nodeCwd = join(box.dir, 'atlas work 100%')
+        mkdirSync(nodeCwd, { recursive: true })
+        const projDir = join(box.env.HOME ?? box.dir, '.claude', 'projects', projectFolderName(nodeCwd))
+        mkdirSync(projDir, { recursive: true })
+        writeFileSync(
+          join(projDir, `${ORIGIN_SID}.jsonl`),
+          [
+            JSON.stringify({
+              type: 'user',
+              cwd: 'C:\\Work\\atlas',
+              sessionId: ORIGIN_SID,
+              message: { role: 'user', content: 'from laptop' },
+            }),
+            JSON.stringify({
+              type: 'user',
+              cwd: nodeCwd,
+              sessionId: ORIGIN_SID,
+              message: { role: 'user', content: 'resumed on node' },
+            }),
+          ].join('\n'),
+        )
+        return [
+          {
+            pane_id: 'p1',
+            agent: 'claude',
+            agent_session: { value: ORIGIN_SID },
+            agent_status: 'idle',
+            cwd: nodeCwd,
+          },
+        ]
+      },
+      nodeEnv: () => ({ CLAUDE_BIN: fakeClaude }),
+      masterCfg: {
+        mokupilot: { mode: 'local', command: [process.execPath, fakePilot.bin] },
+      },
+    })
+
+    await pair.waitDevice('server-1', d => d.link?.state === 'online')
+    await until(async () => {
+      const b = (await (await fetch(`${pair.master.url}/api/board`)).json()) as { items: { key: string }[] }
+      return b.items.some(i => i.key === `@server-1:${ORIGIN_SID}`)
+    }, 5000)
+
+    const startRes = await fetch(
+      `${pair.master.url}/api/session/${encodeURIComponent(`@server-1:${ORIGIN_SID}`)}/mokupilot`,
+      {
+        method: 'POST',
+        headers: { 'x-board': '1', 'content-type': 'application/json' },
+        body: '{}',
+      },
+    )
+    expect(startRes.status).toBe(200)
+    const startBody = (await startRes.json()) as { ok: boolean; state?: string }
+    expect(startBody.ok).toBe(true)
+    expect(startBody.state).toBe('launched')
+
+    await until(() => existsSync(fakePilot.capture), 5000)
+    const cap = JSON.parse(readFileSync(fakePilot.capture, 'utf8')) as CapturedCall
+    expect(cap.argv).toEqual(['call', '--claude-session', ORIGIN_SID, '--cwd', nodeCwd])
+
+    const auth = { authorization: `Bearer ${cap.token}`, 'content-type': 'application/json' }
+    const runRes = await fetch(`${cap.url}/start`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ fork: true }),
+    })
+    expect(runRes.status).toBe(200)
+    const runData = (await runRes.json()) as { ok: boolean; id: string; cwd: string }
+    expect(runData.ok).toBe(true)
+    expect(runData.cwd).toBe(nodeCwd)
+
+    const sseRes = await fetch(`${cap.url}/runs/${runData.id}/events`, {
+      headers: { authorization: `Bearer ${cap.token}` },
+    })
+    expect(sseRes.status).toBe(200)
+    let initCwd = ''
+    await readSseUntil(sseRes, (name, data) => {
+      if (name !== 'line') return false
+      const inner = JSON.parse((JSON.parse(data) as { line: string }).line) as Record<string, unknown>
+      if (inner.type === 'system' && inner.subtype === 'init') {
+        initCwd = String(inner.cwd ?? '')
+        return true
+      }
+      return false
+    })
+    expect(initCwd).toBe(nodeCwd)
+
+    await fetch(`${cap.url}/runs/${runData.id}/close`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ kill: true }),
+    })
+    await fetch(`${cap.url}/end`, { method: 'POST', headers: auth, body: '{}' })
+  })
 })

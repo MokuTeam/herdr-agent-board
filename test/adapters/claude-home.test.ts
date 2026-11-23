@@ -3,7 +3,14 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createClaudeHome, defaultClaudeHome, readUsageCache } from '../../src/adapters/claude-home.ts'
+import {
+  createClaudeHome,
+  cwdOf,
+  defaultClaudeHome,
+  lastCwdOf,
+  readUsageCache,
+  sessionCwd,
+} from '../../src/adapters/claude-home.ts'
 import { canSymlink, SYMLINK_SKIP_REASON } from '../support/fs.ts'
 
 const made: string[] = []
@@ -349,5 +356,88 @@ describe('recentFolders', () => {
     mk('d', newer, 30) // same folder again, older
     mk('e', parked, 1) // exists, but under the given temp boundary: never offered
     assert.deepEqual(await createClaudeHome(root, temp).recentFolders(), [newer, older])
+  })
+})
+
+describe('lastCwdOf and sessionCwd (#657)', () => {
+  test('lastCwdOf reads the last top-level cwd, ignores nested cwd strings, and widens past 64 KB', async () => {
+    const root = newRoot()
+    const moved = join(root, 'moved.jsonl')
+    writeFileSync(
+      moved,
+      [
+        JSON.stringify({ type: 'user', cwd: 'C:\\Work\\atlas', message: { role: 'user', content: 'start' } }),
+        JSON.stringify({ type: 'user', cwd: '/home/anna/atlas', message: { role: 'user', content: 'resumed' } }),
+        JSON.stringify({
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'text', text: '{"cwd":"C:\\\\Fake\\\\nested"}' }] },
+        }),
+        JSON.stringify({ type: 'tool', toolUseResult: { cwd: '/tmp/nested-tool-cwd' } }),
+        JSON.stringify({ type: 'ai-title', aiTitle: 'Atlas work' }),
+      ].join('\n'),
+    )
+    assert.equal(await cwdOf(moved), 'C:\\Work\\atlas')
+    assert.equal(await lastCwdOf(moved), '/home/anna/atlas')
+
+    // Widens past 64 KB when trailing progress rows exceed the first window.
+    const big = join(root, 'big.jsonl')
+    const filler = JSON.stringify({ type: 'progress', pad: 'x'.repeat(1000) })
+    const pad = Array.from({ length: 80 }, () => filler).join('\n')
+    writeFileSync(
+      big,
+      `${JSON.stringify({ type: 'user', cwd: 'C:\\Work\\atlas' })}\n${JSON.stringify({ type: 'user', cwd: '/home/ben/проект 100%atlas' })}\n${pad}\n`,
+    )
+    assert.equal(await lastCwdOf(big), '/home/ben/проект 100%atlas')
+
+    // Single line without trailing newline, special characters, empty, missing.
+    const single = join(root, 'single.jsonl')
+    writeFileSync(single, JSON.stringify({ type: 'user', cwd: '/home/cleo/atlas & проект 100%' }))
+    assert.equal(await lastCwdOf(single), '/home/cleo/atlas & проект 100%')
+
+    const empty = join(root, 'empty.jsonl')
+    writeFileSync(empty, '')
+    assert.equal(await lastCwdOf(empty), null)
+    assert.equal(await lastCwdOf(join(root, 'missing.jsonl')), null)
+  })
+
+  test('sessionCwd picks the first existing directory in order: candidates, lastCwd, firstCwd', async () => {
+    const root = newRoot()
+    const givenDir = join(root, 'given dir')
+    const cardDir = join(root, 'card проект 100%')
+    const lastDir = join(root, 'last atlas')
+    const firstDir = join(root, 'first dir')
+    const fileNotDir = join(root, 'not-a-dir.txt')
+    mkdirSync(givenDir)
+    mkdirSync(cardDir)
+    mkdirSync(lastDir)
+    mkdirSync(firstDir)
+    writeFileSync(fileNotDir, 'hi')
+
+    const movedTranscript = join(root, 'moved.jsonl')
+    writeFileSync(
+      movedTranscript,
+      [JSON.stringify({ type: 'user', cwd: 'C:\\Work\\atlas' }), JSON.stringify({ type: 'user', cwd: lastDir })].join(
+        '\n',
+      ),
+    )
+    const fallbackFirst = join(root, 'fallback-first.jsonl')
+    writeFileSync(
+      fallbackFirst,
+      [
+        JSON.stringify({ type: 'user', cwd: firstDir }),
+        JSON.stringify({ type: 'user', cwd: join(root, 'missing-last') }),
+      ].join('\n'),
+    )
+
+    // 1. givenCwd wins when it exists.
+    assert.equal(await sessionCwd(movedTranscript, [givenDir, cardDir]), givenDir)
+    // 2. Foreign givenCwd falls back to cardCwd.
+    assert.equal(await sessionCwd(movedTranscript, ['C:\\Work\\atlas', cardDir]), cardDir)
+    // 3. Regular file candidate and missing cardCwd fall back to transcript's last cwd.
+    assert.equal(await sessionCwd(movedTranscript, [fileNotDir, join(root, 'missing-card')]), lastDir)
+    // 4. Missing last cwd in transcript falls back to transcript's first cwd.
+    assert.equal(await sessionCwd(fallbackFirst, ['', join(root, 'missing-card')]), firstDir)
+    // 5. Nothing exists anywhere -> empty string.
+    assert.equal(await sessionCwd(null, ['C:\\Work\\atlas', fileNotDir]), '')
   })
 })
