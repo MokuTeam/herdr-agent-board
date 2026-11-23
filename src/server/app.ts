@@ -1583,7 +1583,20 @@ export async function startServer({
       bundleSync,
       {
         config: () => nodesConfig(cfg.nodes),
-        edit: editNodes,
+        edit: change => {
+          let snapshot: Record<string, unknown> | null = null
+          const r = editNodes(nodes => {
+            const changed = change(nodes)
+            if (changed) snapshot = structuredClone(nodes)
+            return changed
+          })
+          if (r.ok && snapshot) {
+            cfg.nodes = snapshot
+            linksFollow()
+            board.publish()
+          }
+          return r
+        },
         seen: () => readLanesSeen(),
         keepSeen: ids => writeLanesSeen(ids),
         ownStatus: () => ownStatus.answer(),

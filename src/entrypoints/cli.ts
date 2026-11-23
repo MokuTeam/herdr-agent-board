@@ -2292,8 +2292,11 @@ async function nodesCmd(): Promise<void> {
   const devices = isRecord(view) && Array.isArray(view.devices) ? view.devices.filter(isRecord) : null
   if (!devices) {
     lines.push(`master ${nodes.id} · ${NO_BOARD}`)
-    for (const dev of nodes.order)
-      lines.push(`${dev} · ${dev === 'local' ? 'this computer' : nodes.devices[dev]?.link?.kind}`)
+    for (const dev of nodes.order) {
+      const title = nodes.devices[dev]?.title
+      const head = `${dev}${title && title !== dev ? ` "${title}"` : ''}`
+      lines.push(`${head} · ${dev === 'local' ? 'this computer' : nodes.devices[dev]?.link?.kind}`)
+    }
   } else {
     lines.push(`master ${nodes.id}`)
     for (const d of devices) lines.push(deviceLine(d))
@@ -2564,7 +2567,7 @@ function identityLine(done: unknown): string {
 
 /** One device of GET /api/nodes as `board nodes` prints it. */
 function deviceLine(d: Record<string, unknown>): string {
-  const head = `${String(d.id)}${d.title !== d.id ? ` "${String(d.title)}"` : ''}`
+  const head = `${String(d.id)}${typeof d.title === 'string' && d.title && d.title !== d.id ? ` "${d.title}"` : ''}`
   const link = isRecord(d.link) ? d.link : null
   // A revoked device (#510): its link is gone once the node was told, or its credentials dropped.
   const revoked = isRecord(d.revoked) ? d.revoked : null

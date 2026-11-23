@@ -235,13 +235,18 @@ export async function moveToDevice(
   const asked = [...new Set(targets.map(s => s.trim()).filter(Boolean))]
   const refuseAll = (why: string): DeviceMoveOutcome[] => asked.map(target => ({ target, result: 'refused', why }))
   if (!cfg) return refuseAll('a move to another device is made from the master: this board has no devices')
+  const labelOf = (id: string): string => {
+    const title = cfg.devices[id]?.title
+    if (id === LOCAL) return title && title !== LOCAL ? title : 'this computer'
+    return title || id
+  }
   const sideOf = (id: string): MoveSide | string => {
     if (id === LOCAL) return localSide(o)
     const dev = cfg.devices[id]
     if (!isDevice(id) || !dev?.link) return `no device ${id} (\`board nodes\` lists them)`
-    if (dev.revoked) return `${id} is revoked`
+    if (dev.revoked) return `${labelOf(id)} is revoked`
     const link = o.link(id)
-    if (link?.state().state !== 'online') return `${id} is not reachable now`
+    if (link?.state().state !== 'online') return `${labelOf(id)} is not reachable now`
     return nodeSide(id, link)
   }
   const target = sideOf(device)
@@ -273,7 +278,7 @@ export async function moveToDevice(
       out.push({
         target: t,
         result: 'refused',
-        why: `it is on ${device === LOCAL ? 'this computer' : device} already`,
+        why: `it is on ${labelOf(device)} already`,
         ...who,
       })
       continue

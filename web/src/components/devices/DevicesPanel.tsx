@@ -10,7 +10,7 @@
 // own keys and the board's figures from GET /api/nodes, asked at each opening and answered again
 // by every change. Every change goes to config.json at once (POST /api/nodes) and comes back over
 // the live stream.
-import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { type FocusEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, api, errorText } from '../../api/client.ts'
 import { useHeld } from '../../hooks/useHeld.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
@@ -19,6 +19,7 @@ import { useT } from '../../i18n/I18nProvider.tsx'
 import {
   type DeviceRow,
   deviceRows,
+  deviceTitleEdited,
   isPanelReply,
   lanesAfter,
   laneTicks,
@@ -32,7 +33,7 @@ import {
 import type { NodeSetupView } from '../../models/node-setup.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
-import { GripGlyph } from '../icons.tsx'
+import { GripGlyph, PencilIcon } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { Switch } from '../team/Switch.tsx'
 import { AddServer, LoginLines } from './AddServer.tsx'
@@ -166,6 +167,7 @@ export function DevicesPanel({ open, onClose, initial, setup }: DevicesPanelProp
             <DeviceRowView
               key={row.id}
               row={row}
+              open={open}
               defaults={settings?.defaults[row.id]}
               next={settings?.next === row.id}
               disabled={!canEdit}
@@ -200,6 +202,7 @@ export function DevicesPanel({ open, onClose, initial, setup }: DevicesPanelProp
 
 interface RowProps {
   row: DeviceRow
+  open: boolean
   /** The board's own figures for its thresholds: the placeholders. */
   defaults: Record<Threshold, number> | undefined
   /** The next start would go here: a quiet mark. */
@@ -212,8 +215,90 @@ interface RowProps {
 }
 
 /** One device: handle, title and link, the bars, the version, Pause and Drain, the thresholds. */
-function DeviceRowView({ row, defaults, next, disabled, send, onMove, onUpdate }: RowProps) {
+function DeviceRowView({ row, open, defaults, next, disabled, send, onMove, onUpdate }: RowProps) {
   const t = useT()
+  const [editing, setEditing] = useState<string | null>(null)
+  const [pending, setPending] = useState<{ title: string; was: string } | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const titleBtnRef = useRef<HTMLButtonElement>(null)
+  const doneRef = useRef(false)
+  const wasEditing = useRef(false)
+  const returnFocusRef = useRef(false)
+
+  useEffect(() => {
+    if (!open) {
+      returnFocusRef.current = false
+      setEditing(null)
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (pending && row.rawTitle !== pending.was) setPending(null)
+  }, [pending, row.rawTitle])
+
+  useEffect(() => {
+    const now = editing !== null
+    if (now && !wasEditing.current) {
+      inputRef.current?.focus?.()
+      inputRef.current?.select?.()
+    } else if (!now && wasEditing.current && returnFocusRef.current) {
+      returnFocusRef.current = false
+      titleBtnRef.current?.focus?.()
+    }
+    wasEditing.current = now
+  }, [editing])
+
+  const activePending = pending && pending.was === row.rawTitle ? pending : null
+  const currentRaw = activePending ? activePending.title : row.rawTitle
+  const shownTitle = activePending ? activePending.title || row.defaultTitle : row.title
+
+  const startEdit = () => {
+    if (disabled) return
+    doneRef.current = false
+    returnFocusRef.current = false
+    const initial = activePending
+      ? activePending.title || (row.here ? '' : row.id)
+      : row.here
+        ? row.rawTitle
+        : row.rawTitle || row.id
+    setEditing(initial)
+  }
+
+  const commit = (value: string) => {
+    doneRef.current = true
+    setEditing(null)
+    const nextTitle = deviceTitleEdited(row.id, currentRaw, value)
+    if (nextTitle === null) return
+    const entry = { title: nextTitle, was: row.rawTitle }
+    setPending(entry)
+    void send({ op: 'set', id: row.id, title: nextTitle }).then(r => {
+      if (!r) setPending(p => (p === entry ? null : p))
+    })
+  }
+
+  const onTitleKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.nativeEvent?.isComposing) return
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      returnFocusRef.current = true
+      commit(e.currentTarget.value)
+    } else if (e.key === 'Escape') {
+      e.stopPropagation()
+      returnFocusRef.current = true
+      doneRef.current = true
+      setEditing(null)
+    }
+  }
+
+  const onTitleBlur = (e: FocusEvent<HTMLInputElement>) => {
+    if (doneRef.current) {
+      doneRef.current = false
+      return
+    }
+    returnFocusRef.current = false
+    commit(e.currentTarget.value)
+  }
+
   const onKey = (e: KeyboardEvent<HTMLButtonElement>) => {
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
     e.preventDefault()
@@ -230,14 +315,44 @@ function DeviceRowView({ row, defaults, next, disabled, send, onMove, onUpdate }
           type="button"
           className="handle"
           title={t('node.dev.handle')}
-          aria-label={t('node.dev.order', { name: row.title })}
+          aria-label={t('node.dev.order', { name: shownTitle })}
           disabled={disabled}
           onKeyDown={onKey}
         >
           <GripGlyph />
         </button>
         <div className="devices-name">
-          <strong>{row.title}</strong>
+          {editing !== null ? (
+            <input
+              ref={inputRef}
+              type="text"
+              className="devices-title-input"
+              maxLength={200}
+              spellCheck={false}
+              value={editing}
+              placeholder={row.defaultTitle}
+              aria-label={t('node.dev.renameLabel')}
+              disabled={disabled}
+              onChange={e => setEditing(e.currentTarget.value)}
+              onKeyDown={onTitleKey}
+              onBlur={onTitleBlur}
+            />
+          ) : (
+            <button
+              ref={titleBtnRef}
+              type="button"
+              className="devices-title"
+              title={t('node.dev.rename')}
+              aria-label={t('node.dev.renameOf', { name: shownTitle })}
+              disabled={disabled}
+              onClick={startEdit}
+            >
+              <strong>{shownTitle}</strong>
+              <span className="devices-title-edit" aria-hidden="true">
+                <PencilIcon />
+              </span>
+            </button>
+          )}
           {row.link && <span className="devices-link">{row.link}</span>}
           {next && <span className="devices-next">{t('node.dev.next')}</span>}
         </div>
@@ -315,7 +430,7 @@ function DeviceRowView({ row, defaults, next, disabled, send, onMove, onUpdate }
       )}
       {row.login && (
         <div className="devices-login">
-          <LoginLines device={row.title} out={row.login.out} command={row.login.command} />
+          <LoginLines device={shownTitle} out={row.login.out} command={row.login.command} />
         </div>
       )}
       <div className="devices-controls">

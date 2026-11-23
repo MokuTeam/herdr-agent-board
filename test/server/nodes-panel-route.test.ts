@@ -110,6 +110,36 @@ describe('POST /api/nodes, the panel’s ops (#510)', () => {
     expect(saved()).toMatchObject({ language: 'en', port: 9 })
   })
 
+  test('set title renames a node and local, clears back to default, and refuses invalid titles (#601)', async () => {
+    isolatedHome()
+    seed({ language: 'en', port: 9, nodes: NODES })
+    const { post } = routes()
+    expect((await call(post, { op: 'set', id: 'server-1', title: '  Hetzner box  ' })).status).toBe(200)
+    expect((savedNodes().devices as Record<string, Record<string, unknown>>)['server-1']).toMatchObject({
+      title: 'Hetzner box',
+      maxSessions: 3,
+    })
+    expect((await call(post, { op: 'set', id: 'local', title: 'Work Laptop' })).status).toBe(200)
+    expect((savedNodes().devices as Record<string, Record<string, unknown>>).local).toEqual({ title: 'Work Laptop' })
+    expect(savedNodes().order).toEqual(['server-1', 'local'])
+
+    const beforeInvalid = readFileSync(configFile(), 'utf8')
+    expect(await call(post, { op: 'set', id: 'server-1', title: 'x'.repeat(201) })).toEqual({
+      status: 400,
+      body: { error: 'title' },
+    })
+    expect(await call(post, { op: 'set', id: 'local', title: 'a\u0007b' })).toEqual({
+      status: 400,
+      body: { error: 'title' },
+    })
+    expect(readFileSync(configFile(), 'utf8')).toBe(beforeInvalid)
+
+    expect((await call(post, { op: 'set', id: 'server-1', title: '' })).status).toBe(200)
+    expect('title' in ((savedNodes().devices as Record<string, Record<string, unknown>>)['server-1'] ?? {})).toBe(false)
+    expect((await call(post, { op: 'set', id: 'local', title: '' })).status).toBe(200)
+    expect('local' in (savedNodes().devices as Record<string, unknown>)).toBe(false)
+  })
+
   test('a bad value is refused with its field, and nothing is written', async () => {
     isolatedHome()
     seed({ language: 'en', nodes: NODES })

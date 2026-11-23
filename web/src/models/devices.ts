@@ -185,6 +185,7 @@ export function isPanelReply(v: unknown): v is { settings?: PanelSettings } {
 /** The words of a change the server refused for a field (400, `{ error: <field> }`); null for any other answer. */
 export function refusedText(status: number, error: unknown, t: Translator): string | null {
   if (status !== 400 || typeof error !== 'string') return null
+  if (error === 'title') return t('node.dev.refused', { field: t('node.dev.name') })
   if (['maxSessions', 'minFreeMemMb', 'maxLoad'].includes(error))
     return t('node.dev.refused', { field: t(`node.dev.${error}`) })
   // The list the panel showed is not the board's any more (a device added or left out meanwhile).
@@ -199,6 +200,10 @@ export type Threshold = (typeof THRESHOLDS)[number]
 export interface DeviceRow {
   id: string
   title: string
+  /** The custom title from config.json, or '' when the device uses its default name. */
+  rawTitle: string
+  /** The default name shown when no custom title is set ("This computer" for local, else the id). */
+  defaultTitle: string
   /** This computer: no link line, no Pause. */
   here: boolean
   /** The link in words; null for this computer. */
@@ -353,9 +358,14 @@ export function deviceRows(
                 : t('node.dev.memoryAny', { free: gb(free) }),
           }
         : null
+    const title = deviceTitle(d, t)
+    const rawTitle = d.title && d.title !== d.id ? d.title : ''
+    const defaultTitle = d.id === 'local' ? t('node.dev.here') : d.id
     return {
       id: d.id,
-      title: deviceTitle(d, t),
+      title,
+      rawTitle,
+      defaultTitle,
       here,
       link: here ? null : linkWords(d, now, t, settings?.noToken?.includes(d.id) ?? false),
       linkState: d.link?.state ?? null,
@@ -371,7 +381,7 @@ export function deviceRows(
       drain: d.drain,
       giveSecrets: d.giveSecrets !== false,
       secrets: secretLines(settings?.secrets?.[d.id], t),
-      git: d.kind === null ? [] : gitLacks(d.status).map(k => t(GIT_LACK[k], { device: d.title })),
+      git: d.kind === null ? [] : gitLacks(d.status).map(k => t(GIT_LACK[k], { device: title })),
       values: { maxSessions: d.maxSessions, minFreeMemMb: d.minFreeMemMb, maxLoad: d.maxLoad },
       login: loginOf(d, settings?.hosts),
     }
@@ -462,4 +472,14 @@ export function thresholdTyped(
   if (!Number.isFinite(n)) return null
   const fits = key === 'maxLoad' ? n > 0 : Number.isInteger(n) && (key === 'maxSessions' ? n >= 1 : n >= 0)
   return fits && n !== was ? n : null
+}
+
+/**
+ * A device's title as left: the trimmed string to send ('' resets to the default), or null when
+ * nothing changed. Typing the device's own id resets to the default too.
+ */
+export function deviceTitleEdited(id: string, rawTitle: string, value: string): string | null {
+  const trimmed = value.trim()
+  const next = trimmed === id ? '' : trimmed
+  return next === rawTitle ? null : next
 }
