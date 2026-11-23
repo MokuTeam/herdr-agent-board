@@ -20,6 +20,7 @@ import { open } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
   type ChangeFacts,
+  MAX_CHANGES,
   MAX_PACK_FILE_BYTES,
   MAX_PACK_FILES,
   type PackFile,
@@ -272,6 +273,8 @@ export async function checkoutChangeList(root: string): Promise<{ head: string; 
   const changes: ChangeFacts = { files: [], deleted: [], odd: [] }
   for (const entry of status.out.split('\0')) {
     if (entry.length < 4) continue
+    // Past the cap the move is refused anyway: the rest is not looked at.
+    if (changes.files.length + changes.deleted.length + changes.odd.length > MAX_CHANGES) break
     const x = entry[0]
     const y = entry[1]
     const path = entry.slice(3)
@@ -295,5 +298,5 @@ export async function inHead(root: string, path: string): Promise<boolean> {
 
 /** `path` as HEAD has it, put back in the tree of the checkout at `root` (a change the session no longer has). */
 export async function restoreFromHead(root: string, path: string): Promise<boolean> {
-  return (await gitIn(root, ['checkout', 'HEAD', '--', path])).ok
+  return (await gitIn(root, ['--literal-pathspecs', 'checkout', 'HEAD', '--', path])).ok
 }

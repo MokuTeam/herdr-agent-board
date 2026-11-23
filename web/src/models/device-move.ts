@@ -11,7 +11,7 @@ interface DeviceResult {
   target: string
   result: 'moved' | 'refused' | 'plan'
   why?: string
-  plan?: { changes?: { path: string }[]; deleted?: string[] }
+  plan?: { changes?: { path: string }[]; deleted?: string[]; changesKey?: string }
 }
 
 const isResult = (v: unknown): v is DeviceResult =>
@@ -23,9 +23,14 @@ type Deps = Pick<MoveDeps, 't' | 'post' | 'errorText' | 'toast' | 'busy' | 'name
 const NAMED = 5
 
 /** POST /api/move for one card: its outcome, or a toast with the call's error and undefined. */
-async function ask(deps: Deps, key: string, device: string, dryRun: boolean): Promise<DeviceResult | undefined> {
+async function ask(
+  deps: Deps,
+  key: string,
+  device: string,
+  how: { dryRun?: true; expect?: string },
+): Promise<DeviceResult | undefined> {
   try {
-    const reply = await deps.post('/api/move', { targets: [key], device, ...(dryRun && { dryRun: true }) })
+    const reply = await deps.post('/api/move', { targets: [key], device, ...how })
     return (Array.isArray(reply.results) ? reply.results.filter(isResult) : [])[0]
   } catch (err) {
     deps.toast(deps.errorText(err), true)
@@ -34,13 +39,13 @@ async function ask(deps: Deps, key: string, device: string, dryRun: boolean): Pr
 }
 
 /** The move itself, the card busy meanwhile. */
-async function go(deps: Deps, key: string, device: string, title: string): Promise<void> {
+async function go(deps: Deps, key: string, device: string, title: string, expect?: string): Promise<void> {
   const t = deps.t()
   const name = deps.name(key)
   deps.busy(key, t('moveDevice.busy', { device: title }))
   let one: DeviceResult | undefined
   try {
-    one = await ask(deps, key, device, false)
+    one = await ask(deps, key, device, expect === undefined ? {} : { expect })
   } finally {
     deps.busy(key, null)
   }
@@ -53,13 +58,14 @@ async function go(deps: Deps, key: string, device: string, title: string): Promi
 export async function moveCardToDevice(deps: Deps, key: string, device: string, title: string): Promise<void> {
   const t = deps.t()
   const name = deps.name(key)
-  const plan = await ask(deps, key, device, true)
+  const plan = await ask(deps, key, device, { dryRun: true })
   if (!plan) return
   if (plan.result === 'refused') return deps.toast(t('move.refused', { name, why: plan.why ?? '' }), true)
   const paths = [...(plan.plan?.changes ?? []).map(c => c.path), ...(plan.plan?.deleted ?? [])]
   if (!paths.length) return go(deps, key, device, title)
   const list = paths.slice(0, NAMED).join(', ') + (paths.length > NAMED ? ', …' : '')
   deps.toast(t('moveDevice.changes', { name, device: title, n: paths.length, list }), false, {
-    action: { label: t('moveDevice.go'), run: () => void go(deps, key, device, title) },
+    // Only with the changes listed: one that changed meanwhile is refused, and looked at again.
+    action: { label: t('moveDevice.go'), run: () => void go(deps, key, device, title, plan.plan?.changesKey ?? '') },
   })
 }

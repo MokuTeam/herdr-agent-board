@@ -66,6 +66,7 @@ export type MoveWhy =
   | { kind: 'profile' } // the board cannot tell which profile's folder holds its conversation
   | { kind: 'no-checkout' } // the folder is in no git checkout
   | { kind: 'no-remote' } // the checkout has no remote another device can clone (a folder of this computer)
+  | { kind: 'unreadable' } // git could not say what is not committed
   | { kind: 'detached' } // HEAD is on no branch
   | { kind: 'changes' } // changes in the tree or the index, untracked files included
   | { kind: 'unpushed'; branch: string } // the branch is not its remote branch
@@ -144,6 +145,7 @@ export function packFolder(f: FolderFacts): { ok: true; folder: PackFolder } | {
   const address = c.url ? repoAddress(c.url) : null
   if (!c.url || !address || f.subdir === null) return { ok: false, why: { kind: 'no-remote' } }
   if (!c.branch) return { ok: false, why: { kind: 'detached' } }
+  if (!c.head || f.changes === null) return { ok: false, why: { kind: 'unreadable' } }
   if (checkBranch(c.branch)) return { ok: false, why: { kind: 'name', name: c.branch } }
   if (!subdirTravels(f.subdir)) return { ok: false, why: { kind: 'name', name: f.subdir } }
   if (!c.pushed) return { ok: false, why: { kind: 'unpushed', branch: c.branch } }
@@ -192,6 +194,8 @@ export function moveWhyText(why: MoveWhy): string {
       return 'its folder is not a git checkout, and a folder travels only through git'
     case 'no-remote':
       return 'its checkout has no remote another device can clone'
+    case 'unreadable':
+      return 'git could not say what is not committed in its checkout'
     case 'detached':
       return 'its checkout is on no branch (detached HEAD)'
     case 'changes':
@@ -432,4 +436,13 @@ export function profileOn(
   const master = from === LOCAL ? profile : (back ?? profile)
   if (to === LOCAL) return master
   return Object.hasOwn(own(to), master) ? (own(to)[master] ?? master) : master
+}
+
+/** The uncommitted changes a pack carries, as one key: what the owner saw listed is what moves. */
+export function changesKey(p: Pick<MovePack, 'files' | 'folder'>): string {
+  const parts = [
+    ...p.files.filter(f => f.kind === 'change').map(f => `${f.path}\u0000${f.sha256}`),
+    ...p.folder.deleted.map(d => `${d}\u0000-`),
+  ].sort()
+  return parts.join('\u0001')
 }

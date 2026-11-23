@@ -356,7 +356,8 @@ test('uncommitted changes are listed first, go with the session, and come back; 
     expect(dry.stdout).toContain('notes/todo.md (1 KB)')
     expect(dry.stdout).toContain('web/index.ts (deleted)')
     expect(dry.stdout).not.toContain('node_modules')
-    // Nothing moved: the card and the reminder are where they were.
+    // Nothing moved, and nothing was made on the node: the card and the reminder are where they were.
+    expect(existsSync(join(node.box.dir, 'example.com'))).toBe(false)
     expect(cardOf(pair.master.box).moved).toBeUndefined()
     expect(existsSync(entryFile(pair.master.box, 'abc123'))).toBe(true)
 
@@ -399,6 +400,39 @@ test('uncommitted changes are listed first, go with the session, and come back; 
     expect(readFileSync(join(cwd, 'README.md'), 'utf8')).toBe('atlas, changed\n')
     expect(existsSync(join(cwd, 'web', 'index.ts'))).toBe(false)
     expect(existsSync(join(cwd, 'node_modules', 'left', 'index.js'))).toBe(true)
+  } finally {
+    close()
+  }
+}, 90_000)
+
+test('the session commits and pushes there: the move back takes the commit, and the changes it left here go', async () => {
+  const { pair, cwd, nodeAsleep, close } = await pairWithSession()
+  try {
+    const node = pair.nodes[0]
+    if (!node) throw new Error('no node')
+    await pair.waitDevice('server-1', d => d.link?.state === 'online', 10_000)
+    const sub = join(cwd, 'web')
+    writeFileSync(join(cwd, 'README.md'), 'atlas, changed\n')
+    writeFileSync(join(cwd, 'notes.md'), 'a note\n')
+    const nodeWorktree = join(node.box.dir, 'example.com', 'anna', 'atlas-feature-x')
+    resumable(node.box, join(nodeWorktree, 'web'))
+    const go = await post(pair.master.url, { targets: [S], device: 'server-1' })
+    expect((go.body.results as Record<string, unknown>[])[0]).toMatchObject({ result: 'moved' })
+    // There, the session commits what it brought and pushes it.
+    git(nodeWorktree, 'add', '-A')
+    git(nodeWorktree, 'commit', '--quiet', '-m', 'the changes, committed')
+    git(nodeWorktree, 'push', '--quiet', 'origin', 'feature-x')
+    nodeAsleep(true)
+    await waitFor(
+      async () => (await items(pair.master.url)).some(i => i.key === `@server-1:${S}` && i.sleeping),
+      () => node.proc.send('refresh'),
+    )
+    resumable(pair.master.box, sub)
+    const back = await post(pair.master.url, { targets: [`@server-1:${S}`], device: 'local' })
+    expect((back.body.results as Record<string, unknown>[])[0]).toMatchObject({ result: 'moved', newKey: S })
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(git(nodeWorktree, 'rev-parse', 'HEAD'))
+    expect(git(cwd, 'status', '--porcelain')).toBe('')
+    expect(readFileSync(join(cwd, 'notes.md'), 'utf8')).toBe('a note\n')
   } finally {
     close()
   }

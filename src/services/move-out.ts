@@ -161,6 +161,9 @@ export function createMoveOut(o: MoveOutDeps): MoveOut {
       const cwd =
         [item.cwd, recorded].find(c => !!c && projectFolderName(c) === under && existsSync(c)) || recorded || item.cwd
       if (!cwd) return no({ kind: 'no-checkout' })
+      // A dry run says now what the move would say: one at work is not taken.
+      if (dryRun && !item.sleeping && item.status === 'working')
+        return { ok: false, why: 'it is not free: try again when it is', kind: 'busy' }
       const first = await folderOf(cwd)
       if (!first.folder.ok) return no(first.folder.why)
       // Asleep first, as a profile move: its transcript is final before it is copied.

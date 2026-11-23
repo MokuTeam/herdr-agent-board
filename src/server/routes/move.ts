@@ -16,7 +16,11 @@ export interface MoveApp {
   items(): Item[]
   refresh(): void
   /** A move to another device (#616), while this board is a master; absent: refused. */
-  toDevice?: (targets: string[], device: string, dryRun: boolean) => Promise<DeviceMoveOutcome[]> | null
+  toDevice?: (
+    targets: string[],
+    device: string,
+    o: { dryRun: boolean; expect?: string },
+  ) => Promise<DeviceMoveOutcome[]> | null
 }
 
 // More than a lane shows; a request cannot keep herdr busy for long.
@@ -36,7 +40,9 @@ export function moveRoute(app: MoveApp): Route {
       const device = typeof body.device === 'string' ? body.device : ''
       if (device && !profile && targets.some(v => v.trim())) {
         const dryRun = body.dryRun === true
-        const moving = app.toDevice?.(targets, device, dryRun) ?? null
+        // A move of what the owner saw listed: the changes' key from its dry run.
+        const expect = typeof body.expect === 'string' ? body.expect : undefined
+        const moving = app.toDevice?.(targets, device, { dryRun, ...(expect !== undefined && { expect }) }) ?? null
         if (!moving)
           return json(409, {
             ok: false,

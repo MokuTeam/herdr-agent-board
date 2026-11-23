@@ -56,6 +56,7 @@ test("a session moved here before packs the folder it runs in here, not the one 
       },
       info: async cwd => ({ root: cwd, branch: 'feature-x' }),
       identity: async () => null,
+      changes: async () => ({ head: 'c'.repeat(40), changes: { files: [], deleted: [], odd: [] } }),
     },
   })
   const r = await out.pack(S, 'server-1')
@@ -94,6 +95,7 @@ test("a session moved here before packs the folder it runs in here, not the one 
       }),
       info: async cwd => ({ root: cwd, branch: 'main' }),
       identity: async () => null,
+      changes: async () => ({ head: 'c'.repeat(40), changes: { files: [], deleted: [], odd: [] } }),
     },
   })
   const r2 = await out2.pack(S2, 'laptop')

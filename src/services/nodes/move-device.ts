@@ -13,7 +13,7 @@
 // A node on a board without these routes answers 404 for them: it is said so, update it first.
 import { isRecord } from '../../adapters/json-store.ts'
 import { pause } from '../../adapters/pacing.ts'
-import { LOCAL, type MovePack, profileOn } from '../../core/move-device.ts'
+import { changesKey, LOCAL, type MovePack, profileOn } from '../../core/move-device.ts'
 import { isDevice } from '../../core/node-key.ts'
 import { type NodesConfig, nodeKey, parseNodeKey } from '../../core/nodes.ts'
 import type { Item } from '../../core/types.ts'
@@ -35,6 +35,8 @@ export interface MovePlan {
   /** The session's own files (transcript, side folder, history) and their bytes. */
   files: number
   bytes: number
+  /** The changes as one key (core/move-device.ts changesKey): a move given it goes only with these same changes. */
+  changesKey: string
 }
 
 export interface DeviceMoveOutcome {
@@ -227,7 +229,7 @@ export async function moveToDevice(
   o: DeviceMoveOptions,
   targets: readonly string[],
   device: string,
-  { dryRun = false }: { dryRun?: boolean } = {},
+  { dryRun = false, expect }: { dryRun?: boolean; expect?: string } = {},
 ): Promise<DeviceMoveOutcome[]> {
   const cfg = o.nodes()
   const asked = [...new Set(targets.map(s => s.trim()).filter(Boolean))]
@@ -281,7 +283,7 @@ export async function moveToDevice(
       out.push({ target: t, result: 'refused', why: source, ...who })
       continue
     }
-    const r = await (dryRun ? planOne : moveOne)(o, cfg, source, target, at?.key ?? item.key).catch(
+    const r = await (dryRun ? planOne : moveOne)(o, cfg, source, target, at?.key ?? item.key, expect).catch(
       (err: unknown): DeviceMoveOutcome => ({ target: t, result: 'refused', why: messageOf(err) }),
     )
     out.push({ ...r, target: t, ...who, ...(r.newKey && { newKey: r.newKey }) })
@@ -296,6 +298,7 @@ async function planOne(
   source: MoveSide,
   target: MoveSide,
   key: string,
+  _expect?: string,
 ): Promise<DeviceMoveOutcome> {
   const packed = await source.pack(key, source.id === LOCAL ? cfg.id : source.id, true)
   if (!packed.ok) return { target: key, result: 'refused', why: packed.why }
@@ -314,6 +317,7 @@ async function planOne(
       deleted: pack.folder.deleted,
       files: own.length,
       bytes: own.reduce((s, f) => s + f.size, 0),
+      changesKey: changesKey(pack),
     },
   }
 }
@@ -324,11 +328,17 @@ async function moveOne(
   source: MoveSide,
   target: MoveSide,
   key: string,
+  expect?: string,
 ): Promise<DeviceMoveOutcome> {
   const fail = (why: string): DeviceMoveOutcome => ({ target: key, result: 'refused', why })
   const packed = await source.pack(key, source.id === LOCAL ? cfg.id : source.id)
   if (!packed.ok) return fail(packed.why)
   const session = packed.pack.session
+  // Moved with the changes the owner saw listed, or not at all.
+  if (expect !== undefined && changesKey(packed.pack) !== expect) {
+    await source.abort(session).catch(() => {})
+    return fail('its uncommitted changes are not the ones listed any more: look again')
+  }
   // Whatever throws before the target's start was asked for calls the move off at the source.
   let committed = false
   try {
