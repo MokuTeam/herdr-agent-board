@@ -1,5 +1,6 @@
 // herdr-wake: the router that puts idle Claude sessions to sleep and wakes them, spoken to over
 // HTTP. Kept behind SleepProvider so another sleep/wake backend can take its place later.
+import { isAgyItem } from '../core/agy.ts'
 import { t } from '../core/lang.ts'
 import { isPiItem } from '../core/pi.ts'
 import type { Item } from '../core/types.ts'
@@ -77,9 +78,9 @@ export function createHerdrWake(
     const res = await fetchFn(`${url}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      // A pi session by its session file (#178): its pane may be gone, or another session's now. A
+      // A pi or agy session by its session key (#178, #631): its pane may be gone, or another session's now. A
       // Claude session without one sleeps where wake closed its pane (#204): by its session id.
-      body: JSON.stringify({ target: isPiItem(item) ? item.session : item.pane || item.session }),
+      body: JSON.stringify({ target: isPiItem(item) || isAgyItem(item) ? item.session : item.pane || item.session }),
       signal: AbortSignal.timeout(timeoutMs),
     })
     const body: unknown = await res.json()
@@ -108,8 +109,11 @@ export function createHerdrWake(
         const r = await post('/wake', item, WAKE_TIMEOUT_MS)
         if (!r.ok)
           return { ok: false, error: t('err.wake', { name: item.name, why: String(r.error ?? t('err.noAnswer')) }) }
-        // Where it woke: a pi session's pane, or a new tab for one whose pane was gone (#178, #204).
-        const pane = typeof r.pane === 'string' && r.pane && (isPiItem(item) || r.pane !== item.pane) ? r.pane : null
+        // Where it woke: a pi/agy session's pane, or a new tab for one whose pane was gone (#178, #204, #631).
+        const pane =
+          typeof r.pane === 'string' && r.pane && (isPiItem(item) || isAgyItem(item) || r.pane !== item.pane)
+            ? r.pane
+            : null
         return pane ? { ok: true, pane } : { ok: true }
       } catch (err) {
         return { ok: false, error: t(NAMED[who].down, { why: messageOf(err) }) }

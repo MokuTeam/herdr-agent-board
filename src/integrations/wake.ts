@@ -3,9 +3,10 @@
 // has (call 28). The session file is only read here: the wake process is its one writer. Wake and
 // sleep go to wake's API as they go to herdr-wake's (integrations/herdr-wake.ts), never to the
 // separate plugin's router should it still hold the port.
-import { dirname, join } from 'node:path'
+import { readdirSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { knobMs } from '../adapters/pacing.ts'
-import { peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
+import { peekAgySleepers, peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
 import { t } from '../core/lang.ts'
 import { createHerdrWake, type SleepingSession, type SleepProvider } from './herdr-wake.ts'
 
@@ -53,33 +54,58 @@ const isTimeout = (err: unknown): boolean =>
  * they slept in: the board checks whether it is still theirs.
  */
 function fileSleepers(sessionsFile: string): SleepingSession[] {
-  const list: SleepingSession[] = []
-  for (const [pane, s] of Object.entries(peekWakeSessions(sessionsFile))) {
-    if (!s.slept_at) continue
-    list.push({
-      name: s.name || s.title || '',
-      pane: s.freed ? '' : pane,
-      session: s.session,
-      workspace: s.freed?.workspaceLabel ?? '',
-      ...(s.freed && { cwd: s.cwd ?? '' }),
-      slept_at: new Date(s.slept_at).toISOString(),
-      exited: !!s.exited,
-      ...(s.profileDir && { profile: { dir: s.profileDir, ...(s.profile && { id: s.profile }) } }),
-      fromFile: true,
-    })
+  const dir = dirname(sessionsFile)
+  let present: Set<string>
+  try {
+    present = new Set(readdirSync(dir))
+  } catch {
+    return []
   }
-  for (const s of Object.values(peekPiSleepers(join(dirname(sessionsFile), 'wake-pi.json'))))
-    list.push({
-      name: s.name,
-      pane: s.pane,
-      session: s.session,
-      workspace: s.workspaceLabel ?? '',
-      slept_at: new Date(s.slept_at).toISOString(),
-      exited: false,
-      agent: 'pi',
-      cwd: s.cwd,
-      fromFile: true,
-    })
+  const list: SleepingSession[] = []
+  if (present.has(basename(sessionsFile))) {
+    for (const [pane, s] of Object.entries(peekWakeSessions(sessionsFile))) {
+      if (!s.slept_at) continue
+      list.push({
+        name: s.name || s.title || '',
+        pane: s.freed ? '' : pane,
+        session: s.session,
+        workspace: s.freed?.workspaceLabel ?? '',
+        ...(s.freed && { cwd: s.cwd ?? '' }),
+        slept_at: new Date(s.slept_at).toISOString(),
+        exited: !!s.exited,
+        ...(s.profileDir && { profile: { dir: s.profileDir, ...(s.profile && { id: s.profile }) } }),
+        fromFile: true,
+      })
+    }
+  }
+  if (present.has('wake-pi.json')) {
+    for (const s of Object.values(peekPiSleepers(join(dir, 'wake-pi.json'))))
+      list.push({
+        name: s.name,
+        pane: s.pane,
+        session: s.session,
+        workspace: s.workspaceLabel ?? '',
+        slept_at: new Date(s.slept_at).toISOString(),
+        exited: false,
+        agent: 'pi',
+        cwd: s.cwd,
+        fromFile: true,
+      })
+  }
+  if (present.has('wake-agy.json')) {
+    for (const s of Object.values(peekAgySleepers(join(dir, 'wake-agy.json'))))
+      list.push({
+        name: s.name,
+        pane: s.pane,
+        session: s.session,
+        workspace: s.workspaceLabel ?? '',
+        slept_at: new Date(s.slept_at).toISOString(),
+        exited: false,
+        agent: 'agy',
+        cwd: s.cwd,
+        fromFile: true,
+      })
+  }
   return list
 }
 

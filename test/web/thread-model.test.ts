@@ -76,6 +76,24 @@ test('images sent from the board preview under the message, Windows and POSIX pa
   expect(uploadThumbs(undefined)).toEqual([])
 })
 
+test('upload thumbnails for a node session carry ?key=; local sessions stay unchanged (#640)', () => {
+  const path = '/home/agent-board/.local/state/herdr/plugins/agent-board/uploads/2026-11-23/120000-shot#1.png'
+  const nodeKey = '@server-2:509dfc37-b58e-4851-9988-a8c7befe9f0d'
+  expect(uploadThumbs(`see ${path}`, nodeKey)).toEqual([
+    {
+      path,
+      url: `/uploads/2026-11-23/120000-shot%231.png?key=${encodeURIComponent(nodeKey)}`,
+    },
+  ])
+  const special = '@server-2:/home/юзер/a b 100%.jsonl'
+  expect(uploadThumbs(`see ${path}`, special)[0]?.url).toBe(
+    `/uploads/2026-11-23/120000-shot%231.png?key=${encodeURIComponent(special)}`,
+  )
+  for (const localKey of [undefined, null, '509dfc37-b58e-4851-9988-a8c7befe9f0d', 'pane-w1:p2', '@local:a']) {
+    expect(uploadThumbs(`see ${path}`, localKey)).toEqual([{ path, url: '/uploads/2026-11-23/120000-shot%231.png' }])
+  }
+})
+
 test('a message folds once it is taller than two screens; nothing folds before the window has a height', () => {
   expect(FOLD_SCREENS).toBe(2)
   expect(folds(1600, 800)).toBe(false)

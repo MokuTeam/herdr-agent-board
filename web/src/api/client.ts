@@ -12,6 +12,7 @@ import type {
 } from '../../../src/core/archive.ts'
 import type { PublicDialog } from '../../../src/core/dialogs/questions.ts'
 import type { PublicHelper, WorkflowRun } from '../../../src/core/helpers.ts'
+import { parseNodeKey } from '../../../src/core/node-key.ts'
 import type { QueuedPrompt } from '../../../src/core/queue.ts'
 import type { SlashCommand } from '../../../src/core/slash-commands.ts'
 import type { ConversationTurn } from '../../../src/core/transcript.ts'
@@ -182,9 +183,13 @@ async function sessionCommands(key: string, signal: AbortSignal): Promise<SlashC
   return r.commands
 }
 
-/** A file into the board's uploads folder, under its own name; resolves where it was saved. */
-async function upload(name: string, file: Blob): Promise<string> {
-  const res = await fetch('/api/upload', {
+/**
+ * A file into the uploads folder (of the node for a node session's key, else this board's), under
+ * its own name; resolves where it was saved.
+ */
+async function upload(name: string, file: Blob, key?: string | null): Promise<string> {
+  const url = key && parseNodeKey(key) ? `/api/upload?key=${encodeURIComponent(key)}` : '/api/upload'
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
       ...BOARD_HEADER,

@@ -17,7 +17,7 @@ import {
   type ThreadCmdContext,
   threadCmd,
 } from '../../src/entrypoints/thread-cli.ts'
-import { timeCmd } from '../../src/entrypoints/time-cli.ts'
+import { timeCmd, timeImportFileArg } from '../../src/entrypoints/time-cli.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const NODE = { id: 'server-1', port: 12430, workRoot: '/srv/work' }
@@ -182,22 +182,8 @@ test('fileArgs: the value of each --file of a post or a done, as the command rea
   expect(fileArgs('import', ['tasks.json'])).toEqual([])
 })
 
-test('board time and board cal on a node say they are not here yet, in one line, and fail', async () => {
+test('board cal on a node says it is not here yet, in one line, and fails', async () => {
   isolatedHome()
-  const lines: string[] = []
-  const timeJson = await timeCmd(['list', '--json'], {
-    cfg: { node: NODE, time: { clients: {} } } as never,
-    actor: 'user',
-    lane: null,
-    out: l => lines.push(l),
-  })
-  expect(timeJson).toBe(1)
-  expect(lines.map(l => JSON.parse(l))).toEqual([
-    { ok: false, error: 'node', message: "board time is not available on a node yet: it runs on the board's computer" },
-  ])
-  await expect(
-    timeCmd(['list'], { cfg: { node: NODE } as never, actor: 'user', lane: null, out: () => {} }),
-  ).rejects.toThrow("board time is not available on a node yet: it runs on the board's computer")
   const out: string[] = []
   const err: string[] = []
   const cal = await calCmd(['list'], {
@@ -218,6 +204,119 @@ test('board time and board cal on a node say they are not here yet, in one line,
   const calOff = await calCmd(['list'], { cfg: {}, actor: 'user', out: l => off.push(l), err: l => offErr.push(l) })
   expect(calOff).toBe(1)
   expect(offErr.join('\n')).not.toContain('node')
+})
+
+test('board time on a node forwards all subcommands over the uplink, checks session, and explains older masters (#644)', async () => {
+  isolatedHome()
+  const actor = { key: me.key, name: me.name }
+  const runTime = async (
+    args: string[],
+    o: {
+      cfg?: Record<string, unknown>
+      actor?: { key: string; name: string } | 'user'
+      lane?: string | null
+      answer?: NodeCallAnswer
+    } = {},
+  ) => {
+    const calls: NodeCall[] = []
+    const out: string[] = []
+    const err: string[] = []
+    const code = await timeCmd(args, {
+      cfg: (o.cfg ?? { node: NODE, port: 12422 }) as never,
+      actor: o.actor ?? actor,
+      lane: o.lane === undefined ? 'atlas' : o.lane,
+      out: l => out.push(l),
+      err: l => err.push(l),
+      call: async body => {
+        calls.push(body)
+        return o.answer === undefined ? { state: 'answered', code: 0, out: ['ok'], err: [] } : o.answer
+      },
+    })
+    return { code, out, err, calls }
+  }
+
+  // Forwarding a write and a read with session and lane, even when time is off on the node.
+  const added = await runTime(['add', '--project', 'Support', '--minutes', '45', 'Client work'])
+  expect(added).toMatchObject({ code: 0, out: ['ok'], err: [] })
+  expect(added.calls).toEqual([
+    {
+      cmd: 'time',
+      argv: ['add', '--project', 'Support', '--minutes', '45', 'Client work'],
+      session: me.key,
+      lane: 'atlas',
+      files: [],
+    },
+  ])
+  expect(nothingWritten()).toBe(true)
+  expect(existsSync(dbFile())).toBe(false)
+
+  // Import attaches the resolved file path to `files` (and respects flags + `--`).
+  expect(timeImportFileArg(['toggl.csv', '--tz', 'UTC'])).toBe(0)
+  expect(timeImportFileArg(['--tz', 'UTC', '--dry-run', 'toggl.csv'])).toBe(3)
+  expect(timeImportFileArg(['--dry-run', '--', '--odd.csv'])).toBe(2)
+  expect(timeImportFileArg(['--tz', 'UTC'])).toBe(-1)
+  const imp = await runTime(['import', '--tz', 'UTC', 'toggl 100%.csv', '--dry-run'])
+  expect(imp.calls[0]?.files).toEqual([resolve('toggl 100%.csv')])
+
+  // Older master (refuses cmd 'time' with 126): clear "update the master" error in human and JSON modes.
+  const older: NodeCallAnswer = {
+    state: 'answered',
+    code: 126,
+    out: [],
+    err: ['board time is not taken from a node: only board thread, board send and board agents'],
+  }
+  const oldHuman = await runTime(['list'], { answer: older })
+  expect(oldHuman.code).toBe(1)
+  expect(oldHuman.err[0]).toContain('update the master')
+  const oldJson = await runTime(['list', '--json'], { answer: older })
+  expect(oldJson.code).toBe(1)
+  expect(JSON.parse(oldJson.out[0] ?? '{}')).toEqual({
+    ok: false,
+    error: 'master_outdated',
+    message: "board time is not supported by the board's computer yet: update the master board to a newer version",
+  })
+
+  // Unreachable master, stopped node board, and non-session caller fail cleanly.
+  const unreach = await runTime(['list', '--json'], { answer: { state: 'unreachable' } })
+  expect(unreach.code).toBe(1)
+  expect(JSON.parse(unreach.out[0] ?? '{}')).toEqual({
+    ok: false,
+    error: 'unreachable',
+    message: "the board's computer is not reachable",
+  })
+  const noBoard = await runTime(['list'], { answer: null })
+  expect(noBoard).toMatchObject({ code: 1, err: ['the board does not run on this computer: nothing was sent'] })
+  const asUser = await runTime(['list'], { actor: 'user' })
+  expect(asUser.calls).toEqual([])
+  expect(asUser).toMatchObject({
+    code: 1,
+    err: ["run it from a session: on a node, board time goes to the board's computer as a session's"],
+  })
+
+  // Help stays local even on a node.
+  const help = await runTime(['add', '--help'])
+  expect(help.code).toBe(0)
+  expect(help.calls).toEqual([])
+  expect(help.out.join('\n')).toContain('board time add')
+
+  // Without `node`, board time runs locally with zero fetch calls.
+  const fetched: string[] = []
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    fetched.push(String(url))
+    return new Response('{}')
+  }) as typeof fetch
+  for (const node of [undefined, false, null, { id: 'Not A Device', port: 1 }]) {
+    const out: string[] = []
+    const code = await timeCmd(['list', '--json'], {
+      cfg: { language: 'en', ...(node !== undefined && { node }) } as never,
+      actor,
+      lane: 'atlas',
+      out: l => out.push(l),
+    })
+    expect(code).toBe(1)
+    expect(JSON.parse(out[0] ?? '{}').error).toBe('off')
+  }
+  expect(fetched).toEqual([])
 })
 
 // Case files (#488): the master runs a node session's command with its own config, so a node needs

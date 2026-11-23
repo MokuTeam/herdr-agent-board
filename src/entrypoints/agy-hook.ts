@@ -53,6 +53,13 @@ async function main(): Promise<void> {
     if (agent.session !== sid) return emit(null)
   } else if (event === 'PreInvocation' && invNum > 1) {
     return emit(null)
+  } else if (event === 'SessionStart') {
+    // herdr's own agy hook runs only on PreInvocation; report on SessionStart so woken/started
+    // panes expose their conversation UUID immediately before the first prompt (#631).
+    // Imported lazily so PreInvocation never loads the wake module tree.
+    const transcript = typeof input.transcriptPath === 'string' && input.transcriptPath ? input.transcriptPath : null
+    const { reportAgySession } = await import('../services/wake/agy.ts')
+    await reportAgySession(pane, sid, transcript).catch(() => {})
   }
 
   const card = readCard(sid)

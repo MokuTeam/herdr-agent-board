@@ -10,8 +10,8 @@
 import { hasUnprintable } from './team.ts'
 import { FILE_MAX_BYTES, FILES_MAX } from './work-threads.ts'
 
-/** The commands a master takes from a node: `board thread` (stage 1, 10 item 6), `board send` (#619) and `board agents` (#628). */
-export const UPLINK_COMMANDS: ReadonlySet<string> = new Set(['thread', 'threads', 'send', 'agents'])
+/** The commands a master takes from a node: `board thread` (stage 1, 10 item 6), `board send` (#619), `board agents` (#628) and `board time` (#644). */
+export const UPLINK_COMMANDS: ReadonlySet<string> = new Set(['thread', 'threads', 'send', 'agents', 'time'])
 
 /** The exit code of a call the master does not take, whatever the node sent. */
 export const UPLINK_REFUSED = 126
@@ -21,6 +21,22 @@ export const UPLINK_REFUSED = 126
  * until the master is reachable, and delivered once. Every other one is not kept.
  */
 export const KEPT_SUBS: ReadonlySet<string> = new Set(['post', 'ask', 'done', 'new', 'set', 'watch', 'unwatch'])
+
+/**
+ * The mutating subcommands of `board time` (#644): not kept offline (relative timestamps and
+ * conflict checks must run live), but remembered by call id on the master so a retry after a
+ * stream hiccup never writes twice.
+ */
+export const TIME_WRITE_SUBS: ReadonlySet<string> = new Set([
+  'add',
+  'edit',
+  'move',
+  'rm',
+  'restore',
+  'post',
+  'unpost',
+  'import',
+])
 
 /**
  * What the master does not run for a node's session, and why: `open` raises the master's own

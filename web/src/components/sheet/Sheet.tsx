@@ -461,6 +461,7 @@ function Conversation({ detail, item, links, composer, onResize }: ConversationP
     <Waiting
       queued={queued}
       own={own}
+      sessionKey={item.key}
       onRetry={composer.outbox.retry}
       onEdit={composer.outbox.edit}
       onSendNow={sendNow}

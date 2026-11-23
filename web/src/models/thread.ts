@@ -3,6 +3,7 @@
 // and background tasks reporting back and board reminders as quiet lines of their own; under a
 // message, previews of the images sent from the board. A call that works with others is a line of
 // its own, another session's or a teammate's message a bubble with their name.
+import { parseNodeKey } from '../../../src/core/node-key.ts'
 import type {
   AssistantTurn,
   ConversationTurn,
@@ -93,10 +94,11 @@ export interface Thumb {
   url: string
 }
 
-export function uploadThumbs(text: unknown): Thumb[] {
+export function uploadThumbs(text: unknown, sessionKey?: string | null): Thumb[] {
+  const query = sessionKey && parseNodeKey(sessionKey) ? `?key=${encodeURIComponent(sessionKey)}` : ''
   return [...String(text ?? '').matchAll(UPLOAD_IMAGE)].map(m => ({
     path: m[1] ?? '',
-    url: `/uploads/${m[2]}/${encodeURIComponent(m[3] ?? '')}`,
+    url: `/uploads/${m[2]}/${encodeURIComponent(m[3] ?? '')}${query}`,
   }))
 }
 

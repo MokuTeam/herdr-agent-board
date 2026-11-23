@@ -5,6 +5,7 @@ import {
   fileTooBig,
   KEPT_SUBS,
   NOT_FROM_NODE,
+  TIME_WRITE_SUBS,
   UPLINK_COMMANDS,
   uplinkCallOf,
   uplinkResultOf,
@@ -65,8 +66,9 @@ test('a result: an exit code and lines', () => {
 })
 
 test('what the master takes, what a node keeps, and what is never run for a node', () => {
-  expect([...UPLINK_COMMANDS]).toEqual(['thread', 'threads', 'send', 'agents'])
+  expect([...UPLINK_COMMANDS]).toEqual(['thread', 'threads', 'send', 'agents', 'time'])
   expect([...KEPT_SUBS].sort()).toEqual(['ask', 'done', 'new', 'post', 'set', 'unwatch', 'watch'])
+  expect([...TIME_WRITE_SUBS].sort()).toEqual(['add', 'edit', 'import', 'move', 'post', 'restore', 'rm', 'unpost'])
   expect(Object.keys(NOT_FROM_NODE).sort()).toEqual(['import', 'open', 'share'])
   expect(fileTooBig('r.md', 5 * 1024 * 1024)).toBeNull()
   expect(fileTooBig('r.md', 5 * 1024 * 1024 + 1)).toBe('r.md: 6 MB; 5 MB at most on a local thread')

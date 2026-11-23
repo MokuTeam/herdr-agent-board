@@ -2,13 +2,15 @@
 // (services/nodes/links.ts) the master holds the node's `GET /api/node/uplink` open, takes each call
 // its sessions made and posts the result back (services/node/uplink.ts is the node's side).
 //
-// - Only `board thread` and `board send` (#619) (core/node-uplink.ts UPLINK_COMMANDS); anything else is answered with 126
-//   and a line, whatever the node sends. Only a session's: a call with no session would be the
-//   owner's, and nothing an owner does comes up a link (#224). Neither `open` (the master's own
-//   window) nor `share` (the owner confirms it) is run for a node.
-// - Run in this process by thread-cli's own entry (entrypoints/thread-cli.ts threadCmd), as the node's
-//   session: its prefixed key (core/nodes.ts nodeKey) and the lane its card has in the aggregate,
-//   whatever lane the node says; the node's word only when the master has no card of it.
+// - Only `board thread`, `board send` (#619), `board agents` (#628) and `board time` (#644)
+//   (core/node-uplink.ts UPLINK_COMMANDS); anything else is answered with 126 and a line, whatever
+//   the node sends. Only a session's: a call with no session would be the owner's, and nothing an
+//   owner does comes up a link (#224). Neither `open` (the master's own window) nor `share` (the
+//   owner confirms it) is run for a node.
+// - Run in this process by each command's own entry (entrypoints/thread-cli.ts threadCmd,
+//   entrypoints/time-cli.ts timeCmd, core/agent-send.ts), as the node's session: its prefixed key
+//   (core/nodes.ts nodeKey) and the lane its card has in the aggregate, whatever lane the node says;
+//   the node's word only when the master has no card of it.
 // - A file the call names is asked of the node by its number, checked against the size and the
 //   SHA-256 the call gave, within a thread post's limits, and put under the device's folder; the
 //   argument names that copy, from which the post copies it into the thread's files as any post's.
@@ -34,6 +36,7 @@ import {
   RESULT_LINE_MAX,
   RESULT_LINES_MAX,
   refused,
+  TIME_WRITE_SUBS,
   UPLINK_COMMANDS,
   type UplinkCall,
   type UplinkFile,
@@ -41,10 +44,12 @@ import {
   uplinkCallOf,
 } from '../../core/node-uplink.ts'
 import { nodeKey, nodesConfig } from '../../core/nodes.ts'
+import type { Actor } from '../../core/time.ts'
 import type { Config, Item } from '../../core/types.ts'
 import { safeName } from '../../core/upload-name.ts'
 import { FILE_MAX_BYTES, FILES_MAX, type Party, threadsConfig } from '../../core/work-threads.ts'
 import type { ThreadCmdContext } from '../../entrypoints/thread-cli.ts'
+import type { TimeCmdContext } from '../../entrypoints/time-cli.ts'
 import type { Known } from '../case-sessions.ts'
 import type { NodeLinks } from './links.ts'
 
@@ -70,6 +75,8 @@ export interface UplinkRunnerOptions {
   store?: DeviceStore
   /** Tests: the command's entry (entrypoints/thread-cli.ts threadCmd by default). */
   run?: (argv: readonly string[], ctx: ThreadCmdContext) => Promise<number>
+  /** Tests: `board time`'s entry (entrypoints/time-cli.ts timeCmd by default). */
+  runTime?: (argv: readonly string[], ctx: TimeCmdContext) => Promise<number>
 }
 
 /** A stream that ended is asked for again after this long (paced), while the link is online. */
@@ -223,10 +230,11 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
 
   async function handle(id: string, call: UplinkCall): Promise<void> {
     // Only a write is kept on the node and so sent again: only a write's result is remembered.
-    // `board send` (#619) is not kept on the node, but its result is remembered here: the node sends a
-    // call again on every stream while its command waits, and a message must not be queued twice.
+    // `board send` (#619) and `board time` writes (#644) are not kept on the node, but their result
+    // is remembered here: the node sends a call again on every stream while its command waits, and
+    // a write must not run twice.
     const kept = (call.cmd === 'thread' || call.cmd === 'threads') && KEPT_SUBS.has(call.argv[0] ?? '')
-    const remembered = kept || call.cmd === 'send'
+    const remembered = kept || call.cmd === 'send' || (call.cmd === 'time' && TIME_WRITE_SUBS.has(call.argv[0] ?? ''))
     let result = remembered ? store.seenCall(id, call.id) : null
     if (!result) {
       const ran = await runCall(id, call)
@@ -315,10 +323,14 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
   /** The call run, or null when a file it names could not be had for now. */
   async function runCall(id: string, call: UplinkCall): Promise<UplinkResult | null> {
     if (!UPLINK_COMMANDS.has(call.cmd))
-      return refused(`board ${said(call.cmd)} is not taken from a node: only board thread, board send and board agents`)
-    if (!call.session) return refused("only a session's board thread, board send or board agents is taken from a node")
+      return refused(
+        `board ${said(call.cmd)} is not taken from a node: only board thread, board send, board agents and board time`,
+      )
+    if (!call.session)
+      return refused("only a session's board thread, board send, board agents or board time is taken from a node")
     if (call.cmd === 'send') return sendFrom(id, call)
     if (call.cmd === 'agents') return agentsFrom(id, call)
+    if (call.cmd === 'time') return timeFrom(id, call)
     const sub = call.argv[0] ?? 'help'
     const not = Object.hasOwn(NOT_FROM_NODE, sub) ? NOT_FROM_NODE[sub] : undefined
     if (not) return refused(not)
@@ -437,6 +449,57 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     const own = nodesConfig(o.cfg.nodes)?.id ?? ''
     const lines = formatAgentLines(targets, { selfKey: key, own })
     return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: [] }
+  }
+
+  /**
+   * `board time …` in a session of the node (#644): runs against this board's own database and
+   * config as the node's session (its prefixed key, and its card's lane on the master when one
+   * exists). `import` pulls its file through the uplink so a node never reads a path on the master.
+   */
+  async function timeFrom(id: string, call: UplinkCall): Promise<UplinkResult | null> {
+    let key: string
+    try {
+      key = nodeKey(id, call.session)
+    } catch {
+      return refused('not a session of the node')
+    }
+    const item = o.find(key)
+    const lane = item?.category || call.lane || null
+    const name = item?.name || item?.autoName || call.session.slice(0, 8)
+    const actor: Actor = { key, name }
+    const { node: _node, ...masterCfg } = o.cfg
+    const folder = join(store.dir(id), 'uplink', call.id)
+    const out: string[] = []
+    try {
+      const { timeCmd, timeImportFileArg } = await import('../../entrypoints/time-cli.ts')
+      const argv = [...call.argv]
+      if ((argv[0] ?? 'list') === 'import') {
+        const pos = timeImportFileArg(argv.slice(1))
+        if (pos >= 0) {
+          const argIdx = pos + 1
+          const f = call.files.find(x => x.n === 0)
+          if (!f) return failed(`${argv[argIdx]}: the node did not send it`)
+          const big = fileTooBig(f.name, f.size)
+          if (big) return failed(big)
+          const path = await pull(id, call.id, f, join(folder, '0'))
+          if (path === null) return null
+          if (typeof path !== 'string') return failed(path.error)
+          argv[argIdx] = path
+        }
+      }
+      const code = await (o.runTime ?? timeCmd)(argv, {
+        cfg: masterCfg as Config,
+        actor,
+        lane,
+        // Split multi-line JSON/CSV outputs so fit() checks per line instead of slicing a 64 KB blob.
+        out: l => out.push(...l.split('\n')),
+      })
+      return { code, out, err: [] }
+    } catch (err) {
+      return { code: 1, out, err: messageOf(err).split('\n') }
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
   }
 
   /** A session on the board by its name, pane or key, as `board thread` finds one on this computer. */

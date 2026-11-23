@@ -31,18 +31,32 @@ import type { HerdrSnapshot } from '../../adapters/herdr.ts'
 import { type MemRow, memoryTable, nothingUnder } from '../../adapters/pane-facts.ts'
 import type { LiveHit, ProfileHomes } from '../../adapters/profile-homes.ts'
 import {
+  peekAgySleepers,
   peekPiSleepers,
   peekWakeSessions,
+  readAgySleepers,
   readPiSleepers,
   readWakeSessions,
+  saveAgySleepers,
   savePiSleepers,
   saveWakeSessions,
 } from '../../adapters/wake-files.ts'
 import type { WakeHerdr } from '../../adapters/wake-herdr.ts'
+import { AGY_AGENT, isAgySession } from '../../core/agy.ts'
 import { sameDir } from '../../core/launch/names.ts'
 import { isPiSessionFile, parsePiTail, piProvider, piSessionCwd, piSessionId } from '../../core/pi.ts'
 import { absoluteProfileDir, defaultProfileDir, type ProfileSet, profileForDir } from '../../core/profiles.ts'
 import { SESSION_ID } from '../../core/resume.ts'
+import {
+  type AgySleeper,
+  type AgySleepers,
+  type AgySleepingAnswer,
+  agySleeperPane,
+  agySleepingOf,
+  agySleepLabel,
+  agyWoken,
+  findAgySleeper,
+} from '../../core/wake/agy.ts'
 import type { ReaperConfig, WakeConfig } from '../../core/wake/config.ts'
 import { type FreedPlace, freePlan, tabFocused } from '../../core/wake/freed.ts'
 import {
@@ -75,6 +89,7 @@ import {
   type WakeSessions,
 } from '../../core/wake/sessions.ts'
 import type { TelegramStatus } from '../../core/wake/status.ts'
+import { type AgyOps, defaultAgyOps, putAgyToSleep, wakeAgy } from './agy.ts'
 import { type Follow, followFiles } from './follow.ts'
 import {
   atPrompt,
@@ -121,6 +136,12 @@ export interface WakeEngineDeps {
   pi?: PiOps
   /** A pi session's card: the name given on the board and the folder its bridge last reported; default: the card store. */
   piCard?(session: string): { name?: string; account?: string }
+  /** Antigravity (`agy`) sleepers (#631); default: `wake-agy.json` beside the session file. */
+  agyFile?: string
+  /** What putting `agy` to sleep and waking it need (services/wake/agy.ts); default: the real ones over `herdr`. */
+  agy?: AgyOps
+  /** An `agy` session's card name; default: the card store. */
+  agyCard?(session: string): { name?: string }
   /** New tabs for sleepers whose pane wake closed (#204); default: `pi`'s. */
   tabs?: TabOps
   /** The card and the schedule following a session to its new pane (#204); default: the board's files. */
@@ -142,8 +163,8 @@ export type TargetAnswer = { ok: true; pane: string; name: string; already?: tru
 /** POST /profile's answer: how many entries now name the new folder, or why none. */
 export type MoveAnswer = { ok: true; entries: number } | { ok: false; error: string }
 
-/** A sleeper as `GET /sleeping?agents=all` lists it: Claude's as /sleeping does, then pi's (#178). */
-export type AnySleepingAnswer = SleepingAnswer | PiSleepingAnswer
+/** A sleeper as `GET /sleeping?agents=all` lists it: Claude's as /sleeping does, then pi's (#178) and agy's (#631). */
+export type AnySleepingAnswer = SleepingAnswer | PiSleepingAnswer | AgySleepingAnswer
 
 export interface StatusAnswer {
   pid: number
@@ -310,6 +331,12 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   let pis: PiSleepers = deps.readOnly ? peekPiSleepers(piFile) : readPiSleepers(piFile, text => deps.log(text))
   /** pi sessions between their record and their pane's shell: still running, not woken. */
   const piGoing = new Set<string>()
+  // Antigravity (`agy`) sleepers (#631): the same one writer, in a file of their own.
+  const agyFile = deps.agyFile ?? join(dirname(deps.sessionsFile), 'wake-agy.json')
+  const agyOps = deps.agy ?? defaultAgyOps(deps.herdr)
+  let agys: AgySleepers = deps.readOnly ? peekAgySleepers(agyFile) : readAgySleepers(agyFile, text => deps.log(text))
+  /** agy sessions between their record and their pane's shell: still running, not woken. */
+  const agyGoing = new Set<string>()
   const tabOps: TabOps = deps.tabs ?? piOps
   const follow: Follow = deps.follow ?? followFiles
   /** Sessions asleep in a pane kept before #204 are given it back once (tidy), then this file says so. */
@@ -343,6 +370,25 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       savePiSleepers(pis, piFile)
     } catch (err) {
       deps.log(`could not save ${piFile}: ${messageOf(err)}`)
+    }
+  }
+
+  function saveAgys(): void {
+    if (deps.readOnly) return
+    try {
+      saveAgySleepers(agys, agyFile)
+    } catch (err) {
+      deps.log(`could not save ${agyFile}: ${messageOf(err)}`)
+    }
+  }
+
+  const agyCard = (session: string): { name?: string } => {
+    if (deps.agyCard) return deps.agyCard(session)
+    try {
+      const card = readCard(session)
+      return card?.name ? { name: card.name } : {}
+    } catch {
+      return {}
     }
   }
 
@@ -426,18 +472,30 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     for (const { pane, label } of r.renames) await deps.herdr.rename(pane, label).catch(() => {})
     forgetArchived()
     await rememberPi(seen.snap)
+    await rememberAgy(seen.snap)
     return seen
   }
 
-  /** Sleepers whose pane wake closed and whose session went to the archive since: forgotten (#204). */
+  /** Sleepers whose pane wake closed (Claude) or agy sleepers whose session went to the archive since: forgotten (#204, #631). */
   function forgetArchived(): void {
     const freed = Object.entries(sessions).filter(([, s]) => isFreed(s))
-    if (!freed.length) return
-    const gone = archived(freed.map(([, s]) => s.session))
+    const agyIds = Object.keys(agys).filter(id => !agyGoing.has(id))
+    if (!freed.length && !agyIds.length) return
+    const gone = archived([...freed.map(([, s]) => s.session), ...agyIds])
     if (!gone.size) return
-    sessions = Object.fromEntries(Object.entries(sessions).filter(([, s]) => !(isFreed(s) && gone.has(s.session))))
-    save()
-    for (const id of gone) deps.log(`${id} is in the archive: no longer asleep`)
+    if (freed.some(([, s]) => gone.has(s.session))) {
+      sessions = Object.fromEntries(Object.entries(sessions).filter(([, s]) => !(isFreed(s) && gone.has(s.session))))
+      save()
+      for (const [, s] of freed) if (gone.has(s.session)) deps.log(`${s.session} is in the archive: no longer asleep`)
+    }
+    const agyGone = agyIds.filter(id => gone.has(id))
+    if (agyGone.length) {
+      const next = { ...agys }
+      for (const id of agyGone) delete next[id]
+      agys = next
+      saveAgys()
+      for (const id of agyGone) deps.log(`${id} (agy) is in the archive: no longer asleep`)
+    }
   }
 
   /**
@@ -779,6 +837,107 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     return { ok: true, pane: outcome.pane, name: s.name }
   }
 
+  /**
+   * agy's sleepers after a look (#631): one whose session runs in a pane again is awake (its own
+   * pane's 💤 label cleared), one whose conversation is gone is forgotten. Nothing is asked of
+   * herdr while there are none.
+   */
+  async function rememberAgy(snap: HerdrSnapshot): Promise<void> {
+    if (!Object.keys(agys).length) return
+    const woken = agyWoken(snap, agys).filter(id => !agyGoing.has(id))
+    for (const id of woken) {
+      const s = agys[id]
+      if (s) await forgetAgy(s, snap, 'is awake again')
+    }
+    for (const s of Object.values(agys))
+      if (!agyGoing.has(s.session) && !agyOps.hasConversation(s.session))
+        await forgetAgy(s, snap, 'has no conversation any more')
+  }
+
+  /** The agy sleeper forgotten, saved, and its own pane's 💤 label cleared while it still has it. */
+  async function forgetAgy(s: AgySleeper, snap: HerdrSnapshot | null, why: string): Promise<void> {
+    if (!agys[s.session]) return
+    const { [s.session]: _gone, ...rest } = agys
+    agys = rest
+    saveAgys()
+    deps.log(`${s.name || s.session} (agy) ${why}: no longer asleep in ${s.pane}`)
+    const pane = snap?.panes.find(p => p.pane_id === s.pane)
+    if (!snap || pane?.label === agySleepLabel(s)) await deps.herdr.rename(s.pane, null).catch(() => {})
+  }
+
+  /**
+   * A pane herdr shows running `agy` on a conversation UUID, by its pane id, UUID or name; an `agy`
+   * pane whose session herdr does not name by a UUID is none.
+   */
+  function agyPane(target: unknown, snap: HerdrSnapshot): HerdrSnapshot['panes'][number] | undefined {
+    const raw = String(target ?? '').trim()
+    if (!raw) return undefined
+    const stripped = raw.replace(/\s*\[[0-9a-f]+\]\s*$/i, '').trim()
+    const lower = stripped.toLowerCase()
+    return snap.panes.find(p => {
+      const id = p.agent === AGY_AGENT ? p.agent_session?.value : undefined
+      if (!id || !isAgySession(id)) return false
+      const cardName = agyCard(id).name
+      return (
+        p.pane_id === raw ||
+        id.toLowerCase() === lower ||
+        (!!cardName && cardName.toLowerCase() === lower) ||
+        (!!p.label && p.label.toLowerCase() === lower) ||
+        (!!p.terminal_title_stripped && p.terminal_title_stripped.toLowerCase() === lower)
+      )
+    })
+  }
+
+  /** The name an `agy` session is put to sleep under: its card's, else herdr's title/label/pane. */
+  function agyName(id: string, pane: HerdrSnapshot['panes'][number]): string {
+    return agyCard(id).name || pane.terminal_title_stripped || pane.label || pane.pane_id
+  }
+
+  /** putAgyToSleep for the agy pane, its sleeper kept from `going` on (#631). */
+  async function sleepAgy(pane: HerdrSnapshot['panes'][number], snap: HerdrSnapshot): Promise<TargetAnswer> {
+    const id = pane.agent_session?.value ?? ''
+    const name = agyName(id, pane)
+    const label = workspaceLabel(snap, pane.workspace_id)
+    const marks = {
+      going(s: AgySleeper) {
+        agyGoing.add(id)
+        agys = { ...agys, [id]: s }
+        saveAgys()
+      },
+      stayed() {
+        const { [id]: _gone, ...rest } = agys
+        agys = rest
+        saveAgys()
+      },
+    }
+    try {
+      const r = await putAgyToSleep(
+        agyOps,
+        {
+          pane: pane.pane_id,
+          session: id,
+          name,
+          ...(label && { workspaceLabel: label }),
+        },
+        marks,
+        { ...timing, boardOnPath: deps.boardOnPath() },
+      )
+      return r.ok ? { ok: true, pane: pane.pane_id, name } : { ok: false, error: r.error }
+    } finally {
+      agyGoing.delete(id)
+    }
+  }
+
+  /** wakeAgy for the sleeper, forgotten once it is up (#631). */
+  async function wakeAgyNow(s: AgySleeper, snap: HerdrSnapshot): Promise<TargetAnswer> {
+    const timeoutMs = deps.settings().wakeTimeoutSec * 1000
+    const outcome = await wakeAgy(agyOps, s, snap, { ...timing, timeoutMs })
+    if (!outcome.ok) return { ok: false, error: outcome.error }
+    await forgetAgy(s, outcome.pane === s.pane ? null : await snapshotNow().catch(() => null), 'woke')
+    deps.log(`woke ${s.name} (agy) in ${outcome.pane} on request`)
+    return { ok: true, pane: outcome.pane, name: s.name }
+  }
+
   /** Wake's entries whose session is a Claude session id (never a `pane-<id>` key). */
   const claudeSessions = (): WakeSessions =>
     Object.fromEntries(Object.entries(sessions).filter(([, s]) => SESSION_ID.test(s.session)))
@@ -1049,7 +1208,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     async sleepingAll() {
       const snap = await snapshotNow()
       const claude = sleepingOf(snap, sessions).filter(s => SESSION_ID.test(s.session))
-      return [...claude, ...piSleepingOf(snap, pis)]
+      return [...claude, ...piSleepingOf(snap, pis), ...agySleepingOf(snap, agys)]
     },
 
     adoptPi: (target, session) =>
@@ -1128,9 +1287,13 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         if (!s) {
           const p = findPiSleeper(target, pis)
           if (p) return wakePiNow(p, seen.snap)
+          const a = findAgySleeper(target, agys)
+          if (a) return wakeAgyNow(a, seen.snap)
           // Its session runs already (woken by hand, or the list the caller read was older).
           const up = piPane(target, seen.snap)
           if (up) return { ok: true, pane: up.pane_id, name: up.terminal_title_stripped ?? '', already: true }
+          const agyUp = agyPane(target, seen.snap)
+          if (agyUp) return { ok: true, pane: agyUp.pane_id, name: agyUp.terminal_title_stripped ?? '', already: true }
           return { ok: false, error: `no session named ${String(target)} in herdr` }
         }
         if (s.live) return { ok: true, pane: s.pane, name: s.name, already: true }
@@ -1152,6 +1315,8 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         if (!s) {
           const pi = piPane(target, seen.snap)
           if (pi) return sleepPi(pi, seen.snap)
+          const agy = agyPane(target, seen.snap)
+          if (agy) return sleepAgy(agy, seen.snap)
         }
         if (!s?.live) return { ok: false, error: `no running session named ${String(target)}` }
         // Idle in its own profile's registry (#150).
@@ -1201,22 +1366,33 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
             )
         if (moved) return wakeFreed(moved[0], deps.profiles())
         if (!entry || !SESSION_ID.test(entry.session)) {
-          // A pi sleeper whose own pane it is (#178): the Telegram router types its message there.
+          // A pi or agy sleeper whose own pane it is (#178, #631): the Telegram router types its message there.
           const snap = await snapshotNow()
           const p = Object.values(pis).find(s => piSleeperPane(snap, s)?.pane_id === pane)
-          if (!p) return { ok: false, why: 'line', error: `no Claude session is known in ${pane}` }
-          const r = await wakePiNow(p, snap)
-          return r.ok ? { ok: true } : { ok: false, why: 'line', error: r.error }
+          if (p) {
+            const r = await wakePiNow(p, snap)
+            return r.ok ? { ok: true } : { ok: false, why: 'line', error: r.error }
+          }
+          const a = Object.values(agys).find(s => agySleeperPane(snap, s)?.pane_id === pane)
+          if (a) {
+            const r = await wakeAgyNow(a, snap)
+            return r.ok ? { ok: true } : { ok: false, why: 'line', error: r.error }
+          }
+          return { ok: false, why: 'line', error: `no Claude session is known in ${pane}` }
         }
         return wakeKept(pane, entry, deps.profiles())
       }),
 
     async seen() {
       const { snap } = await look()
-      // pi's sleepers in their own panes too (#178): the router wakes one like a Claude session.
+      // pi's and agy's sleepers in their own panes too (#178, #631): the router wakes one like a Claude session.
       const asleep: WakeSessions = {}
       for (const s of Object.values(pis)) {
         const own = piSleeperPane(snap, s)
+        if (own) asleep[own.pane_id] = { session: s.session, name: s.name, title: s.name, seen_at: s.slept_at }
+      }
+      for (const s of Object.values(agys)) {
+        const own = agySleeperPane(snap, s)
         if (own) asleep[own.pane_id] = { session: s.session, name: s.name, title: s.name, seen_at: s.slept_at }
       }
       return { snap, sessions: { ...asleep, ...claudeSessions() } }

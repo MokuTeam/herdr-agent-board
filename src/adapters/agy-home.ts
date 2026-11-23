@@ -18,6 +18,7 @@ import { type HistoryHit, type HistoryResult, readTail, type SessionThread } fro
 export interface AgyHome {
   readonly root: string
   transcriptPath(session: string | null): string | null
+  hasConversation(session: string | null): boolean
   transcriptInfo(session: string | null): TranscriptInfo | null
   sessionThread(session: string, limit?: number): SessionThread
   sessionTitle(session: string | null): string
@@ -95,7 +96,21 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
   function transcriptPath(session: string | null): string | null {
     if (!session || !isAgySession(session)) return null
     const file = transcriptFile(session)
-    return statOf(file)?.isFile() ? file : null
+    if (statOf(file)?.isFile()) return file
+    const lower = session.toLowerCase()
+    if (lower !== session) {
+      const lowFile = transcriptFile(lower)
+      if (statOf(lowFile)?.isFile()) return lowFile
+    }
+    return null
+  }
+
+  function hasConversation(session: string | null): boolean {
+    if (!session || !isAgySession(session)) return false
+    if (transcriptPath(session)) return true
+    if (statOf(join(root, 'conversations', `${session}.db`))?.isFile()) return true
+    const lower = session.toLowerCase()
+    return lower !== session && statOf(join(root, 'conversations', `${lower}.db`))?.isFile() === true
   }
 
   /** Reload `conversation_summaries.db` into memory only when the DB or its WAL file changes. */
@@ -329,6 +344,7 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
   return {
     root,
     transcriptPath,
+    hasConversation,
     transcriptInfo,
     sessionThread,
     sessionTitle,
