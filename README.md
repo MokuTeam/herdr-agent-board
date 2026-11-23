@@ -222,7 +222,8 @@ reported root `agy` conversation via `ANTIGRAVITY_CONVERSATION_ID`, keeping mixe
 environments and subagents separated.
 
 To remove these hooks, delete the `"agent-board"` key from `~/.gemini/config/hooks.json`, keeping
-`"herdr"` and any other keys.
+`"herdr"` and any other keys, and the `agent-board` entry under `mcpServers` in
+`~/.gemini/config/mcp_config.json`.
 
 ## Web board
 

@@ -22,7 +22,6 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { defaultAgyRoot } from '../adapters/agy-home.ts'
 import { agyConfigDir } from '../adapters/agy-hooks.ts'
 import { configFile, readConfigFile } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
@@ -344,7 +343,10 @@ function hasLocalOtherAgents(raw: Record<string, unknown> | null): boolean {
   )
     return true
   if (typeof raw?.codexHome === 'string' && raw.codexHome.trim() !== '') return true
-  return existsSync(join(agyConfigDir(), 'hooks.json')) || existsSync(defaultAgyRoot())
+  // The path of adapters/agy-home.ts defaultAgyRoot, inlined: that module pulls in bun:sqlite and
+  // more, a cost every ListAgents and SendMessage hook of every session would pay.
+  const agyRoot = process.env.ANTIGRAVITY_APP_DATA_DIR || join(homedir(), '.gemini', 'antigravity-cli')
+  return existsSync(join(agyConfigDir(), 'hooks.json')) || existsSync(agyRoot)
 }
 
 /** The board's payload when `nodes` (#619) or local non-Claude agents (#628) are present; null otherwise, with no call. */
