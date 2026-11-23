@@ -67,7 +67,9 @@ const plainName = (s: string): string =>
     .replace(/\p{Cc}+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 60)
+
+/** A name as a reply's `replyTo` carries it (cleanName: no brackets, at most 60), lower case: what names are compared by. */
+const nameKey = (s: string): string => cleanName(plainName(s)).toLowerCase()
 
 /** One that a newer card of another session in the same pane replaced. */
 function replaced(t: Target, by: Target): boolean {
@@ -124,7 +126,9 @@ export function matching(targets: readonly Target[], named: string): Target[] {
   if (!to) return []
   const exact = targets.filter(t => t.key.toLowerCase() === to || t.session?.toLowerCase() === to)
   if (exact.length) return exact
-  const byName = targets.filter(t => t.names.some(n => n.toLowerCase() === to))
+  // Compared as a reply carries names: "Fix [WIP] thing" signs as "Fix WIP thing [ref]".
+  const wanted = nameKey(to)
+  const byName = targets.filter(t => t.names.some(n => nameKey(n) === wanted))
   if (ref.length < 8) return byName
   const byRef = byName.filter(t => idOf(t.key, t.session).toLowerCase().startsWith(ref))
   return byRef.length || byName.length !== 1 ? byRef : byName

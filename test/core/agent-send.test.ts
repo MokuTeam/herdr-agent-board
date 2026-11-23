@@ -99,3 +99,14 @@ test('a ref after /clear gives way to a name only one card has; a key for a card
   expect(matching(targets, 'pane-w9:p1').map(t => t.name)).toEqual(['Paned'])
   expect(targets.map(t => t.name)).toContain('Two lines')
 })
+
+test('a reply finds a sender whose name has brackets or runs past 60 characters, as its replyTo signs it', () => {
+  const long = `Long ${'x'.repeat(75)}`
+  const targets = targetsOf([card(A, 'Fix [WIP] thing'), card(B, long, { pane: 'w2:p1' })])
+  for (const t of targets) {
+    const signed = messageEntry(t, 'hi', { key: t.key, name: t.name }, 0).replyTo
+    expect(matching(targets, signed).map(x => x.key)).toEqual([t.key])
+  }
+  expect(matching(targets, 'fix [wip] thing').map(x => x.key)).toEqual([A])
+  expect(matching(targets, long).map(x => x.key)).toEqual([B])
+})

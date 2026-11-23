@@ -62,6 +62,12 @@ describe("the node's side", () => {
     })
     expect(Date.now() - started).toBeLessThan(100)
     expect(outbox.list()).toEqual([])
+    // board send (#619) is never kept, whatever it is sent to: a card named like a thread write too.
+    expect(await up.call({ cmd: 'send', argv: ['post', 'x'], session: 's-1', lane: null })).toEqual({
+      status: 200,
+      body: { state: 'unreachable' },
+    })
+    expect(outbox.list()).toEqual([])
 
     const file = join(dir, 'r.md')
     writeFileSync(file, 'abc')
