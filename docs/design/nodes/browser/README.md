@@ -35,19 +35,20 @@ that lets Chrome's sandbox use user namespaces (Ubuntu 23.10 and later forbid th
 
 ## Each profile is its own Chrome on its own display
 
-| Profile | Display | CDP | mokutab bridge | VNC | noVNC |
-|---|---|---|---|---|---|
-| `bsd` (Boston SD) | :50 | 127.0.0.1:9223 | 127.0.0.1:12307 | 5950 | 127.0.0.1:6080 |
-| `bb` (Blu Banyan) | :51 | 127.0.0.1:9224 | 127.0.0.1:12308 | 5951 | 127.0.0.1:6081 |
+| Profile | Display | CDP | VNC | noVNC |
+|---|---|---|---|---|
+| `bsd` (Boston SD, Centium too) | :50 | 127.0.0.1:9223 | 5950 | 127.0.0.1:6080 |
+| `bb` (Blu Banyan) | :51 | 127.0.0.1:9224 | 5951 | 127.0.0.1:6081 |
 
 - Chrome for Testing 155 is copied from `/opt/nanoclaw-host/browsers/` when it is there, else the same
   version is downloaded; it lives in `~/browser/chrome/`. Profiles are in `~/browser/profiles/<name>/`
   and persist. Windows profiles cannot be copied (DPAPI): each profile is signed in once by hand.
 - The mokutab and mokubot extensions are loaded unpacked from `~/browser/extensions/`.
-- mokutab: Chrome starts the bridge as a native messaging host, which Chrome on Linux finds in
-  `<user-data-dir>/NativeMessagingHosts/`. Each profile has its own bridge install in
-  `~/browser/mokutab/<name>/`, and `ExecStartPost` points the profile's extension at its own port over
-  CDP, because 12306, the default, may belong to another browser on the host (it does on server-1).
+- mokutab: one bridge for every profile, as on a laptop. Chrome on Linux finds the native messaging host
+  in `<user-data-dir>/NativeMessagingHosts/`; whichever profile starts first runs the bridge
+  (`~/browser/mokutab/bridge`) on `MOKUTAB_PORT` (12306), and the others join it over its WebSocket under
+  their profile name. `ExecStartPost` sets each extension's port and profile name over CDP. Where another
+  browser on the host holds 12306 (server-1), give `MOKUTAB_PORT=12307`.
 - mokubot: one MCP server (`agent-board-mokubot-mcp`, HTTP 127.0.0.1:12440, WebSocket bridge from
   8765); the extensions of both profiles connect to it, and the tools pick the NetSuite account by
   `account_id` (`netsuite_list_accounts`).
@@ -65,10 +66,14 @@ The board's bundle does not send the master's loopback MCP servers (its report s
 `bound (local-url)`), so the script writes these into the node user's `~/.claude.json` and the bundle
 leaves them alone:
 
-- `mokutab`: `~/browser/bin/mokutab-mcp`, a stdio proxy to the bridge of the session's profile:
-  `MOKUTAB_PROFILE` if set, else by `CLAUDE_CONFIG_DIR` (`*/.claude-work` is `bsd`), else `bb`.
-- `mokutab-bsd`, `mokutab-bb`: the same proxy fixed to one profile.
+- `mokutab`: `http://127.0.0.1:12306/mcp`; a call names the profile (`bsd`, `bb`) or goes to the first.
 - `mokubot-netsuite`: `http://127.0.0.1:12440/mcp`.
+
+Both Claude profiles of the node (`~/.claude.json`, `~/.claude-work/.claude.json`) get them, and their
+`settings.json` gets `BROWSER=~/browser/bin/open-in-chrome`: a CLI's browser login (`suitecloud
+account:setup`, `gh auth login --web`) opens as a tab in the first profile, where an agent approves it
+(for SuiteCloud: the mokutab function `netsuite.sdf_consent`). SuiteCloud's saved logins do not travel
+from a Windows laptop (its `credentials` file is bound to that machine), so each account is set up again there.
 
 Avid stays on the laptop (it needs the VPN): no profile for it here.
 

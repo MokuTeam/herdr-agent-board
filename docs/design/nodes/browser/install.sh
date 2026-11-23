@@ -19,11 +19,12 @@ STAGE=${STAGE:-/tmp/agent-board-browser}
 CFT_VERSION=${CFT_VERSION:-155.0.8059.39}
 # A Chrome for Testing already on the machine is copied; without one the same version is downloaded.
 CFT_FROM=${CFT_FROM:-/opt/nanoclaw-host/browsers/cft-$CFT_VERSION/chrome-linux64}
-# name:display:cdp port:mokutab bridge port. VNC is 5900+display, noVNC 6030+display.
-PROFILES=${PROFILES:-"bsd:50:9223:12307 bb:51:9224:12308"}
-# Which profile the plain "mokutab" MCP server reaches: by the session's CLAUDE_CONFIG_DIR, else the default.
-MOKUTAB_DEFAULT_PROFILE=${MOKUTAB_DEFAULT_PROFILE:-bb}
-MOKUTAB_PROFILE_DIRS=${MOKUTAB_PROFILE_DIRS:-".claude-work=bsd"}
+# name:display:cdp port. VNC is 5900+display, noVNC 6030+display. The first profile is the one a
+# CLI's browser login opens in (BROWSER).
+PROFILES=${PROFILES:-"bsd:50:9223 bb:51:9224"}
+# One mokutab bridge for every profile: each extension joins it under its profile name, as on a laptop.
+# 12306 is mokutab's default; give another one where something else holds it (server-1: 12307).
+MOKUTAB_PORT=${MOKUTAB_PORT:-12306}
 MOKUTAB_BRIDGE_VERSION=${MOKUTAB_BRIDGE_VERSION:-2.1.0}
 MOKUTAB_EXTENSION_ID=${MOKUTAB_EXTENSION_ID:-bpjpdgkeelhkijkllcmogemkmndgeana}
 MOKUBOT_HTTP_PORT=${MOKUBOT_HTTP_PORT:-12440}
@@ -150,23 +151,24 @@ say "bitwarden cli"
 
 say "profiles"
 NODE_BIN=$(command -v node)
+# The mokutab bridge, one install: whichever profile starts first runs it, the others join it.
+MT="$B/mokutab/bridge"
+PKG="$MT/node_modules/@mokuhub/mokutab-bridge"
+if [ "$(as_user node -p "require('$PKG/package.json').version" 2>/dev/null || true)" != "$MOKUTAB_BRIDGE_VERSION" ]; then
+  as_user mkdir -p "$MT"
+  as_user npm install --prefix "$MT" --ignore-scripts --no-fund --no-audit "@mokuhub/mokutab-bridge@$MOKUTAB_BRIDGE_VERSION" >/dev/null
+fi
+chmod +x "$PKG/dist/run_host.sh"
+printf '%s\n' "$NODE_BIN" | put "$PKG/dist/node_path.txt" 0644
+FIRST=""
 for spec in $PROFILES; do
-  IFS=: read -r P DISP CDP MTAB <<<"$spec"
-  # The mokutab bridge, one install per profile: its stdio proxy reads its URL from a file beside it.
-  MT="$B/mokutab/$P"
-  PKG="$MT/node_modules/@mokuhub/mokutab-bridge"
-  if [ "$(as_user node -p "require('$PKG/package.json').version" 2>/dev/null || true)" != "$MOKUTAB_BRIDGE_VERSION" ]; then
-    as_user mkdir -p "$MT"
-    as_user npm install --prefix "$MT" --ignore-scripts --no-fund --no-audit "@mokuhub/mokutab-bridge@$MOKUTAB_BRIDGE_VERSION" >/dev/null
-  fi
-  chmod +x "$PKG/dist/run_host.sh"
+  IFS=: read -r P DISP CDP _ <<<"$spec"
+  [ -n "$FIRST" ] || FIRST=$CDP
   # The functions' run state: a function that never ran OK here is a hidden draft. Taken once, kept after.
   FNS="$B/state/$P/state/mcp-chrome-bridge/fn-runs"
   if [ -f "$STAGE/mokutab-fn-state.json" ] && [ ! -f "$FNS/fn-state.json" ]; then
     install -D -o "$NODE_USER" -g "$NODE_USER" -m 0644 "$STAGE/mokutab-fn-state.json" "$FNS/fn-state.json"
   fi
-  printf '%s\n' "$NODE_BIN" | put "$PKG/dist/node_path.txt" 0644
-  printf '{\n  "url": "http://127.0.0.1:%s/mcp"\n}\n' "$MTAB" | put "$PKG/dist/mcp/stdio-config.json" 0644
   # Chrome starts the native host through this wrapper, with a state folder per profile.
   put "$B/bin/mokutab-host-$P" 0755 <<EOF
 #!/bin/sh
@@ -188,7 +190,7 @@ EOF
 PROFILE=$P
 DISPLAY_NUM=$DISP
 CDP_PORT=$CDP
-MOKUTAB_PORT=$MTAB
+MOKUTAB_PORT=$MOKUTAB_PORT
 VNC_PORT=$((5900 + DISP))
 NOVNC_PORT=$((6030 + DISP))
 EOF
@@ -211,9 +213,9 @@ exec "$CHROME_DIR/chrome" \\
 EOF
 
 put "$B/bin/mokutab-seed-port.mjs" 0644 <<'EOF'
-// mokutab-seed-port.mjs <cdp port> <bridge port> <extension id>: points the profile's mokutab
-// extension at its own bridge port (the default 12306 may belong to another browser on this host).
-const [cdp, port, id] = process.argv.slice(2)
+// mokutab-seed-port.mjs <cdp port> <bridge port> <extension id> <profile name>: points the profile's
+// mokutab extension at the shared bridge port under its own profile name; reloads it when that changed.
+const [cdp, port, id, name] = process.argv.slice(2)
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 let version
 for (let i = 0; i < 60 && !version; i++) {
@@ -228,37 +230,39 @@ ws.onmessage = m => { const d = JSON.parse(m.data); if (d.id && waiting.has(d.id
 const call = (method, params = {}, sessionId) => new Promise(r => {
   const n = ++seq; waiting.set(n, r); ws.send(JSON.stringify({ id: n, method, params, sessionId }))
 })
-const page = 'chrome-extension://' + id + '/popup.html'
-const { result: t } = await call('Target.createTarget', { url: page, background: true })
+const { result: t } = await call('Target.createTarget', { url: 'chrome-extension://' + id + '/popup.html', background: true })
 const { result: s } = await call('Target.attachToTarget', { targetId: t.targetId, flatten: true })
-const expr = 'new Promise(async r => { const k = "nativeServerPort"; const was = (await chrome.storage.local.get(k))[k];' +
-  ' await chrome.runtime.sendMessage({ type: "connectNative", port: ' + Number(port) + ' });' +
-  ' r(String(was) + " -> ' + Number(port) + '") })'
+const want = JSON.stringify({ nativeServerPort: Number(port), profileName: name })
+const expr = 'new Promise(async r => { const want = ' + want + '; const was = await chrome.storage.local.get(Object.keys(want));' +
+  ' const same = was.nativeServerPort === want.nativeServerPort && was.profileName === want.profileName;' +
+  ' if (!same) { await chrome.storage.local.set(want); setTimeout(() => chrome.runtime.reload(), 300) }' +
+  ' r((same ? "kept " : "set ") + JSON.stringify(want)) })'
 let out
 for (let i = 0; i < 20; i++) {
   out = await call('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true }, s.sessionId)
   if (!out.result?.exceptionDetails && out.result?.result) break
   await sleep(500)
 }
-await call('Target.closeTarget', { targetId: t.targetId })
-console.log('mokutab port', out.result?.result?.value ?? JSON.stringify(out.result?.exceptionDetails ?? out.error))
+await call('Target.closeTarget', { targetId: t.targetId }).catch(() => {})
+console.log('mokutab', out.result?.result?.value ?? JSON.stringify(out.result?.exceptionDetails ?? out.error))
 ws.close()
 EOF
 
-dirs_case=""
-for pair in $MOKUTAB_PROFILE_DIRS; do dirs_case="$dirs_case  */${pair%%=*}) P=${pair#*=} ;;
-"; done
-put "$B/bin/mokutab-mcp" 0755 <<EOF
+put "$B/bin/open-in-chrome.mjs" 0644 <<'EOF'
+// open-in-chrome.mjs <url>: opens the URL as a new tab in the browser profile named by
+// AGENT_BROWSER_CDP (default 9223, profile bsd). Used as BROWSER, so a CLI's browser login lands there.
+const url = process.argv[2]
+const port = process.env.AGENT_BROWSER_CDP || '9223'
+const v = await (await fetch('http://127.0.0.1:' + port + '/json/version')).json()
+const ws = new WebSocket(v.webSocketDebuggerUrl)
+await new Promise((ok, no) => { ws.onopen = ok; ws.onerror = no })
+await new Promise(r => { ws.onmessage = r; ws.send(JSON.stringify({ id: 1, method: 'Target.createTarget', params: { url } })) })
+ws.close()
+EOF
+put "$B/bin/open-in-chrome" 0755 <<EOF
 #!/bin/sh
-# mokutab-mcp [profile]: the mokutab MCP server (stdio) of one browser profile. Without an argument
-# the profile follows MOKUTAB_PROFILE, else the session's CLAUDE_CONFIG_DIR, else $MOKUTAB_DEFAULT_PROFILE.
-P="\${1:-\$MOKUTAB_PROFILE}"
-if [ -z "\$P" ]; then
-  case "\${CLAUDE_CONFIG_DIR:-}" in
-$dirs_case    *) P=$MOKUTAB_DEFAULT_PROFILE ;;
-  esac
-fi
-exec "$NODE_BIN" "$B/mokutab/\$P/node_modules/@mokuhub/mokutab-bridge/dist/mcp/mcp-server-stdio.js"
+# BROWSER for the node's sessions: a CLI's browser login opens as a tab in the first profile.
+AGENT_BROWSER_CDP="\${AGENT_BROWSER_CDP:-$FIRST}" exec "$NODE_BIN" "$B/bin/open-in-chrome.mjs" "\$@"
 EOF
 
 BWDIR="$NODE_HOME/.config/agent-board-bw"
@@ -322,7 +326,7 @@ EnvironmentFile=%h/browser/profiles/%i.env
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStartPre=/bin/sh -c 'for i in \$(seq 50); do [ -e /tmp/.X11-unix/X\$DISPLAY_NUM ] && exit 0; sleep 0.2; done; exit 1'
 ExecStart=%h/browser/bin/chrome-profile %i
-ExecStartPost=-$NODE_BIN %h/browser/bin/mokutab-seed-port.mjs \${CDP_PORT} \${MOKUTAB_PORT} $MOKUTAB_EXTENSION_ID
+ExecStartPost=-$NODE_BIN %h/browser/bin/mokutab-seed-port.mjs \${CDP_PORT} \${MOKUTAB_PORT} $MOKUTAB_EXTENSION_ID \${PROFILE}
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=120
@@ -417,18 +421,24 @@ EnvironmentFile=-$BWDIR/session.env
 EOF
 
 # The bundle does not send the master's loopback MCP servers ("bound (local-url)"), so these names are the node's own.
-say "mokutab, mokutab-<profile> and mokubot-netsuite in the node's .claude.json"
+say "mokutab and mokubot-netsuite in the node's .claude.json, BROWSER in its settings"
 for CJ in "$NODE_HOME/.claude.json" "$NODE_HOME/.claude-work/.claude.json"; do
 if [ -f "$CJ" ]; then
   mkdir -p "$BACKUP"; cp -a "$CJ" "$BACKUP/$(echo "$CJ" | tr / _)"
   as_user node -e '
-    const fs = require("fs"), [file, bin, mokubot, ...names] = process.argv.slice(1)
+    const fs = require("fs"), [file, mokutab, mokubot, ...names] = process.argv.slice(1)
     const d = JSON.parse(fs.readFileSync(file, "utf8")); d.mcpServers ||= {}
-    d.mcpServers.mokutab = { type: "stdio", command: bin, args: [], env: {} }
-    for (const n of names) d.mcpServers["mokutab-" + n] = { type: "stdio", command: bin, args: [n], env: {} }
+    d.mcpServers.mokutab = { type: "http", url: "http://127.0.0.1:" + mokutab + "/mcp" }
+    for (const n of names) delete d.mcpServers["mokutab-" + n]
     d.mcpServers["mokubot-netsuite"] = { type: "http", url: "http://127.0.0.1:" + mokubot + "/mcp" }
     fs.writeFileSync(file + ".tmp", JSON.stringify(d, null, 2)); fs.renameSync(file + ".tmp", file)
-  ' "$CJ" "$B/bin/mokutab-mcp" "$MOKUBOT_HTTP_PORT" $(for s in $PROFILES; do echo "${s%%:*}"; done)
+  ' "$CJ" "$MOKUTAB_PORT" "$MOKUBOT_HTTP_PORT" $(for s in $PROFILES; do echo "${s%%:*}"; done)
+  if [ "$CJ" = "$NODE_HOME/.claude.json" ]; then SJ="$NODE_HOME/.claude/settings.json"; else SJ="$(dirname "$CJ")/settings.json"; fi
+  [ -f "$SJ" ] && as_user node -e '
+    const fs = require("fs"), [file, browser] = process.argv.slice(1)
+    const s = JSON.parse(fs.readFileSync(file, "utf8")); s.env ||= {}; s.env.BROWSER = browser
+    fs.writeFileSync(file + ".tmp", JSON.stringify(s, null, 2) + "\n"); fs.renameSync(file + ".tmp", file)
+  ' "$SJ" "$B/bin/open-in-chrome"
 fi
 done
 
