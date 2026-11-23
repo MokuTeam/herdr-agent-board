@@ -16,7 +16,11 @@
 // shown, both go as before. With `nodes` in config.json (#619), the sessions on the board's nodes
 // come last: ListAgents lists them from the board's payload, and SendMessage to a name only a node's
 // session has (nothing on this computer has it) is queued by the board for its key, which the
-// scheduler sends through the node. Without `nodes` the board is asked nothing. config.json's kill
+// scheduler sends through the node. Without `nodes` the board is asked nothing. On a node (config.json
+// `node`, #639) both go the other way, up the node's link to the master (services/node/uplink.ts):
+// ListAgents lists the master's sessions as its `board agents` gives them, and SendMessage to a name
+// nothing on this computer has is the master's `board send` from this session. Without `node` no
+// call goes up. config.json's kill
 // switch is read first: wake off, or a config.json that does not parse, and wake is asked nothing.
 // Wake not running or not answering, or anything else amiss: silent, and the tool runs as it would.
 import { existsSync } from 'node:fs'
@@ -171,6 +175,102 @@ async function daySession(): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+/** A node's call to its master (#639): `POST /api/node/call` on this computer's board, as `board send` and `board agents` make it. */
+async function nodeCall(
+  raw: Record<string, unknown> | null,
+  body: { cmd: string; argv: string[]; session: string },
+  timeoutMs: number,
+): Promise<Record<string, unknown> | 'late' | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${Number(raw?.port) || 12422}/api/node/call`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({ ...body, lane: null, files: [] }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    const answer: unknown = res.ok ? await res.json() : null
+    return isRecord(answer) ? answer : null
+  } catch (err) {
+    // Taken and not answered in time: the master may have run it all the same.
+    return err instanceof Error && err.name === 'TimeoutError' ? 'late' : null
+  }
+}
+
+/** A result's lines as the master sent them, printable. */
+const linesOf = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((l): l is string => typeof l === 'string').map(l => l.replace(/\p{Cc}+/gu, ' ')) : []
+
+/** How long ListAgents waits for the master's list (its hook has 10 s in all); SendMessage for its `send`. */
+const MASTER_LIST_MS = 5_000
+const MASTER_SEND_MS = 15_000
+
+/** ListAgents on a node (#639): the master's sessions, as its `board agents` lists them for this session; null for none. */
+async function masterContext(
+  raw: Record<string, unknown> | null,
+  input: Record<string, unknown>,
+): Promise<string | null> {
+  const sid = String(input.session_id ?? '') || process.env.CLAUDE_CODE_SESSION_ID || ''
+  if (!sid) return null
+  const answer = await nodeCall(raw, { cmd: 'agents', argv: ['--json'], session: sid }, MASTER_LIST_MS)
+  if (!isRecord(answer) || answer.state !== 'answered' || answer.code !== 0) return null
+  let views: unknown
+  try {
+    views = JSON.parse(linesOf(answer.out).join('\n'))
+  } catch {
+    return null
+  }
+  if (!Array.isArray(views)) return null
+  // The master's own computer's (no device): this node's are listed above, another node's never come.
+  const theirs = views.filter(v => isRecord(v) && v.device === null && typeof v.label === 'string' && v.self !== true)
+  const plain = (v: unknown): string =>
+    String(v)
+      .replace(/\p{Cc}+/gu, ' ')
+      .slice(0, 120)
+  const row = (v: Record<string, unknown>): string =>
+    `  ${plain(v.label)}${typeof v.agent === 'string' && v.agent !== 'claude' ? `  ·  ${plain(v.agent)}` : ''}  ·  ${plain(v.status)}`
+  const live = theirs.filter(v => v.sleeping !== true)
+  const asleep = theirs.filter(v => v.sleeping === true)
+  const rows = [...live, ...asleep.slice(0, LIST_MAX)].map(row)
+  if (asleep.length > LIST_MAX)
+    rows.push(
+      `  ... and ${asleep.length - LIST_MAX} more asleep there, not shown (board agents lists all); SendMessage by name reaches them too`,
+    )
+  if (!rows.length) return null
+  return (
+    `Sessions on the board's main computer (this one is its node; not listed above: Claude Code knows only this ` +
+    `computer's). SendMessage to one by name goes through the board: it types the message in once the session is ` +
+    `free, waking it first if it sleeps, and the reply comes back as a board reminder. Two with one name: add the ` +
+    `ref in brackets, as listed. \`board send "<name>" "<text>"\` does the same from a shell.\n${rows.join('\n')}`
+  )
+}
+
+/**
+ * SendMessage on a node (#639) to a name nothing on this computer has: the master's `board send` from
+ * this session, which queues it for the master's session of that name (signed with this one's key,
+ * so the answer comes back here). No such session there, or the master away: Claude Code's own
+ * answer, as before.
+ */
+async function sendToMaster(named: string, message: string, sid: string, raw: Record<string, unknown> | null) {
+  // Claude Code's own addresses (a bridge's or a socket's) are never a name on the board.
+  if (/^(uds|bridge):/i.test(named.trim())) return
+  const answer = await nodeCall(raw, { cmd: 'send', argv: [named, message], session: sid }, MASTER_SEND_MS)
+  if (answer === 'late')
+    return deny(
+      `The board's main computer did not answer in time: it may have queued the message for "${named.trim()}" all ` +
+        `the same. Check before sending it again (board agents lists who is there).`,
+    )
+  if (!isRecord(answer) || answer.state !== 'answered') return
+  const out = linesOf(answer.out).join(' ')
+  const why = linesOf(answer.err).join(' ')
+  if (answer.code === 0)
+    return deny(
+      `Queued through the board on its main computer (Claude Code reaches only this computer's sessions, so it ` +
+        `did not send it): ${out.replace(/^ok · /, '')}. Do not send it again.`,
+    )
+  if (/^no session "/.test(why) || why.startsWith('that is this session')) return
+  deny(`Not sent: ${why || "the board's main computer refused it"}`)
 }
 
 const deny = (reason: string): void =>
@@ -414,7 +514,8 @@ async function nodesContext(
  */
 async function sendToBoardTarget(named: string, input: Record<string, unknown>, raw: Record<string, unknown> | null) {
   const hasNodes = isRecord(raw?.nodes)
-  if (!hasNodes && !hasLocalOtherAgents(raw)) return
+  const onNode = isRecord(raw?.node)
+  if (!hasNodes && !onNode && !hasLocalOtherAgents(raw)) return
   const message = isRecord(input.tool_input) ? input.tool_input.message : undefined
   if (typeof message !== 'string') return
   const sid = String(input.session_id ?? '') || process.env.CLAUDE_CODE_SESSION_ID || ''
@@ -429,8 +530,8 @@ async function sendToBoardTarget(named: string, input: Record<string, unknown>, 
   if (live.some(s => s.name?.toLowerCase() === to && (ref.length < 8 || s.sessionId.toLowerCase().startsWith(ref))))
     return
   const payload = await boardPayload(raw)
-  if (!payload) return
-  const all = A.targetsOf(payload.items)
+  if (!payload && !onNode) return
+  const all = A.targetsOf(payload?.items)
   const mine = all.find(t => t.key === sid)
   const name = mine?.name ?? live.find(s => s.sessionId === sid)?.name?.trim() ?? ''
 
@@ -465,8 +566,9 @@ async function sendToBoardTarget(named: string, input: Record<string, unknown>, 
     )
   }
 
+  // On a node (#639): the master's sessions, through its `board send`.
+  if (!hasNodes) return onNode ? sendToMaster(named, message, sid, raw) : undefined
   // Node sessions (#619): only with `nodes` in config.json.
-  if (!hasNodes) return
   const fits = A.matching(
     all.filter(t => t.device),
     named,
@@ -522,7 +624,9 @@ async function main(): Promise<void> {
       .trim()
       .toLowerCase()
     if (!to) return
-    const sleeping = entries(await api(settings.port, '/sleeping', null, 3000))
+    // Wake not answering: nothing of its to go by, as before; a node still asks its master (#639).
+    const sleeping = entries(await api(settings.port, '/sleeping', null, 3000).catch(() => null))
+    if (!sleeping && isRecord(raw?.node)) return sendToBoardTarget(named, input, raw)
     const target = sleeping && own(sleeping).find(s => s.name.toLowerCase() === to)
     if (sleeping && !target) {
       if (await sendElsewhere(to, ref, input, sleeping, settings.port, raw)) return
@@ -539,12 +643,20 @@ async function main(): Promise<void> {
   }
 
   // /awake is newer than /sleeping: an older router answers 404, then only the sleepers show.
+  // On a node (#639) the master's list is asked beside wake's; nowhere else.
+  const master = isRecord(raw?.node) ? masterContext(raw, input).catch(() => null) : null
   const [list, running] = await Promise.all([
-    api(settings.port, '/sleeping', null, 3000),
+    api(settings.port, '/sleeping', null, 3000).catch(() => null),
     api(settings.port, '/awake', null, 3000).catch(() => null),
   ])
   const sleeping = entries(list)
-  if (!sleeping) return
+  const onMaster = await master
+  const say = (context: string): void =>
+    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }))
+  if (!sleeping) {
+    if (onMaster) say(onMaster)
+    return
+  }
   const awake = entries(running)
   const ownPart = listContext(own(sleeping), awake && own(awake), settings.port, settings.listSleepingDays)
   // The other profiles' part on its own: whatever goes wrong there, this profile's still shows.
@@ -557,9 +669,8 @@ async function main(): Promise<void> {
   const payload = await boardPayload(raw).catch(() => null)
   const localOthers = await localOtherAgentsContext(payload).catch(() => null)
   const onNodes = await nodesContext(payload, raw).catch(() => null)
-  const context = [ownPart, others, localOthers, onNodes].filter(Boolean).join('\n\n')
-  if (context)
-    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }))
+  const context = [ownPart, others, localOthers, onNodes, onMaster].filter(Boolean).join('\n\n')
+  if (context) say(context)
 }
 
 // Wake not running or not answering, or input that does not parse: leave the tool call alone.
