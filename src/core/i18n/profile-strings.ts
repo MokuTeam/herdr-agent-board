@@ -103,6 +103,11 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'moveDevice.busy': 'Moving to {device}…',
     'moveDevice.done': '{name} moved to {device}',
     'moveDevice.working': 'It is working: move it once it is free',
+    'moveDevice.changes': [
+      '{name} takes {n} uncommitted change to {device}: {list}',
+      '{name} takes {n} uncommitted changes to {device}: {list}',
+    ],
+    'moveDevice.go': 'Move with them',
     // the Profiles panel, from Settings with more than one profile folder (web/src/components/profiles)
     'set.profiles': 'Profiles…',
     'prof.title': 'Profiles',
@@ -237,6 +242,12 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'moveDevice.busy': 'Переношу на {device}…',
     'moveDevice.done': '{name}: теперь на {device}',
     'moveDevice.working': 'Сессия работает: перенести можно, когда освободится',
+    'moveDevice.changes': [
+      '{name} возьмёт на {device} {n} незакоммиченное изменение: {list}',
+      '{name} возьмёт на {device} {n} незакоммиченных изменения: {list}',
+      '{name} возьмёт на {device} {n} незакоммиченных изменений: {list}',
+    ],
+    'moveDevice.go': 'Перенести с ними',
     // the Profiles panel, from Settings with more than one profile folder (web/src/components/profiles)
     'set.profiles': 'Профили…',
     'prof.title': 'Профили',

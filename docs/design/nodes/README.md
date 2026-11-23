@@ -400,7 +400,7 @@ A task that waits is a launch in a new state, `queued`, kept in `<state>/nodes/q
 
 There is no pull. A node never asks for work: the master pushes when it sees room. This is the spec's pull queue with the same result and no second protocol.
 
-Live sessions never move. A session on the laptop stays there when a server frees up; only new work follows the order. Wake, fork and resume run where the conversation's file is. The owner moves one by hand (#616, `board move <session> --device <id>` and the card's Device): its folder by git (a clean pushed checkout, the clone under `workRoot` there, a worktree for its branch), its conversation into the device's profile under the new path, resumed there; the master carries the files between the two boards' `/api/node/move/...` routes.
+Live sessions never move. A session on the laptop stays there when a server frees up; only new work follows the order. Wake, fork and resume run where the conversation's file is. The owner moves one by hand (#616, `board move <session> --device <id>` and the card's Device): its folder by git (a pushed checkout, the clone under `workRoot` there, a worktree for its branch; what is not committed as a small bundle of those files, listed first, applied on the same commit), its conversation into the device's profile under the new path, resumed there; the master carries the files between the two boards' `/api/node/move/...` routes.
 
 ### 8.4 What may leave the machine: the portability rule
 

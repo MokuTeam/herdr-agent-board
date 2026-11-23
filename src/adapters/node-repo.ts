@@ -158,6 +158,11 @@ export async function addWorktree(dir: string, path: string, branch: string): Pr
   return r.ok ? { ok: true } : { ok: false, why: r.why }
 }
 
+/** Whether commit `a` is `b` or one of its ancestors (`git merge-base --is-ancestor`, #616): a fast-forward from a to b loses nothing. */
+export async function isAncestor(dir: string, a: string, b: string): Promise<boolean> {
+  return (await git(dir, ['merge-base', '--is-ancestor', a, b])).ok
+}
+
 /** The checkout's branch fast-forwarded to `origin/<branch>`; refused when it has commits of its own (#616). */
 export async function fastForward(dir: string, branch: string): Promise<RepoDone> {
   const r = await git(dir, ['merge', '--ff-only', '--quiet', `refs/remotes/origin/${branch}`])

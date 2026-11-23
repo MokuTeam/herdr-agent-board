@@ -18,10 +18,18 @@ import {
 } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { MAX_PACK_FILE_BYTES, MAX_PACK_FILES, type PackFile, type PackFileKind } from '../core/move-device.ts'
+import {
+  type ChangeFacts,
+  MAX_CHANGES,
+  MAX_PACK_FILE_BYTES,
+  MAX_PACK_FILES,
+  type PackFile,
+  type PackFileKind,
+} from '../core/move-device.ts'
 import { projectFolderName } from '../core/resume.ts'
 import { renameWithRetry } from './json-store.ts'
 import { findTranscript, isPrefixFile } from './move-files.ts'
+import { run } from './process.ts'
 
 /** A file of the pack with where it is on this computer. */
 export interface ListedFile extends PackFile {
@@ -208,7 +216,8 @@ export function installSessionFiles(
         : join(dir, 'file-history', session, ...f.path.split('/'))
   try {
     for (const f of files) {
-      if (f.kind === 'transcript') continue
+      // The transcript last; a change of the checkout is not the profile's (services/move-in.ts).
+      if (f.kind === 'transcript' || f.kind === 'change') continue
       const to = where(f)
       mkdirSync(dirname(to), { recursive: true })
       copyFileSync(blob(f.sha256), to)
@@ -231,4 +240,63 @@ export function installSessionFiles(
   } catch (err) {
     return { ok: false, error: `writing into ${dir} failed: ${messageOf(err)}` }
   }
+}
+
+/** git in a checkout, quiet: no pager, no optional locks, paths as they are. */
+async function gitIn(root: string, args: string[]): Promise<{ ok: boolean; out: string }> {
+  const r = await run('git', ['--no-pager', '--no-optional-locks', '-c', 'core.quotepath=false', '-C', root, ...args], {
+    timeout: 30_000,
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
+  })
+  return { ok: r.code === 0, out: r.stdout }
+}
+
+/**
+ * HEAD's commit of the checkout at `root`, and what is not committed there (#616 part 2): changed,
+ * added and untracked files that are in the tree, by path and size; tracked files that are gone; and
+ * what cannot travel as a file (a link, a conflict, a submodule). Ignored files are not listed: they
+ * never travel. null when git cannot say.
+ */
+export async function checkoutChangeList(root: string): Promise<{ head: string; changes: ChangeFacts } | null> {
+  const [head, status] = await Promise.all([
+    gitIn(root, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']),
+    gitIn(root, [
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--untracked-files=all',
+      '--no-renames',
+      '--ignore-submodules=none',
+    ]),
+  ])
+  if (!head.ok || !status.ok) return null
+  const changes: ChangeFacts = { files: [], deleted: [], odd: [] }
+  for (const entry of status.out.split('\0')) {
+    if (entry.length < 4) continue
+    // Past the cap the move is refused anyway: the rest is not looked at.
+    if (changes.files.length + changes.deleted.length + changes.odd.length > MAX_CHANGES) break
+    const x = entry[0]
+    const y = entry[1]
+    const path = entry.slice(3)
+    if (x === 'U' || y === 'U' || (x === 'A' && y === 'A') || (x === 'D' && y === 'D')) {
+      changes.odd.push({ path, why: 'conflict' })
+      continue
+    }
+    const st = lstatSync(join(root, ...path.split('/')), { throwIfNoEntry: false })
+    if (!st) changes.deleted.push(path)
+    else if (st.isSymbolicLink()) changes.odd.push({ path, why: 'link' })
+    else if (st.isDirectory()) changes.odd.push({ path, why: 'submodule' })
+    else if (st.isFile()) changes.files.push({ path, size: st.size })
+  }
+  return { head: head.out.trim(), changes }
+}
+
+/** Whether HEAD of the checkout at `root` has `path`. */
+export async function inHead(root: string, path: string): Promise<boolean> {
+  return (await gitIn(root, ['cat-file', '-e', `HEAD:${path}`])).ok
+}
+
+/** `path` as HEAD has it, put back in the tree of the checkout at `root` (a change the session no longer has). */
+export async function restoreFromHead(root: string, path: string): Promise<boolean> {
+  return (await gitIn(root, ['--literal-pathspecs', 'checkout', 'HEAD', '--', path])).ok
 }

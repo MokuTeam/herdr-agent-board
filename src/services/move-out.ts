@@ -6,15 +6,15 @@
 // moved, which hides it while it sleeps (services/board.ts), the entries that went are removed and
 // its pane closes. A move that fails after the sleep is called off: one that was awake is woken again.
 // The same code on a node (through its door, server/routes/node.ts) and on the master (in process).
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, relative, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { writeCard } from '../adapters/cards.ts'
 import { cwdOf } from '../adapters/claude-home.ts'
 import { checkoutFacts, checkoutIdentity, gitInfo } from '../adapters/git.ts'
 import { agentGet, herdr } from '../adapters/herdr.ts'
 import { findTranscript, trustsFolder } from '../adapters/move-files.ts'
-import { type ListedFile, listSessionFiles } from '../adapters/move-pack.ts'
+import { checkoutChangeList, fileHash, type ListedFile, listSessionFiles } from '../adapters/move-pack.ts'
 import { listEntries, removeEntry } from '../adapters/schedule-store.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { claudeStateFile } from '../core/move.ts'
@@ -30,8 +30,11 @@ export type PackResult =
   | { ok: false; why: string; kind?: MoveWhy['kind'] | 'gone' | 'busy'; sleep?: SleepOutcome }
 
 export interface MoveOut {
-  /** The session `key` checked, put to sleep and packed for `to` (the device, for the notes); `from`: this board's id as the master names it. */
-  pack(key: string, from: string): Promise<PackResult>
+  /**
+   * The session `key` checked, put to sleep and packed; `from`: this board's id as the master names
+   * it. `dryRun`: only checked and listed, nothing put to sleep or kept (the list shown before a move).
+   */
+  pack(key: string, from: string, dryRun?: boolean): Promise<PackResult>
   /** The file `n` of the pack of `session` on this computer, while its move is on its way; null when none. */
   file(session: string, n: number): string | null
   /** The move called off: the session woken again when it was awake before. */
@@ -50,6 +53,7 @@ export interface MoveOutDeps {
     checkout: typeof checkoutFacts
     info: typeof gitInfo
     identity: typeof checkoutIdentity
+    changes?: typeof checkoutChangeList
   }
 }
 
@@ -60,6 +64,8 @@ interface Packed {
   wasAwake: boolean
   cwd: string
   at: number
+  /** What was not committed and went with it: a changed file's hash, null for one deleted. */
+  changes: Record<string, string | null>
 }
 
 /** herdr's `pane process-info` answer, as far as a close reads it. */
@@ -77,6 +83,7 @@ export function createMoveOut(o: MoveOutDeps): MoveOut {
   const { deps } = o
   const home = o.home ?? homedir()
   const git = o.git ?? { checkout: checkoutFacts, info: gitInfo, identity: checkoutIdentity }
+  const changes = git.changes ?? checkoutChangeList
   const packs = new Map<string, Packed>()
   const drop = (): void => {
     const now = Date.now()
@@ -85,26 +92,51 @@ export function createMoveOut(o: MoveOutDeps): MoveOut {
 
   const no = (why: MoveWhy): PackResult => ({ ok: false, why: moveWhyText(why), kind: why.kind })
 
-  /** The folder's facts as core/move-device.ts packFolder reads them. */
+  /**
+   * The folder's facts as core/move-device.ts packFolder reads them, and what is not committed there
+   * with each file's place on this computer (#616 part 2).
+   */
   async function folderOf(cwd: string) {
     const [facts, info, identity] = await Promise.all([git.checkout(cwd), git.info(cwd), git.identity(cwd)])
     const branch = info && info.branch !== 'HEAD' ? info.branch : ''
     const rel = facts ? relativeSub(facts.root, cwd) : null
-    return packFolder({
+    const list = facts ? await changes(facts.root) : null
+    const folder = packFolder({
       checkout: facts && {
         root: facts.root,
         url: facts.remote?.address ? facts.remote.url : null,
         clean: facts.clean,
         branch,
         pushed: facts.headPushed && !!branch,
+        head: list?.head ?? '',
       },
       subdir: rel,
       identity,
+      changes: list?.changes ?? null,
     })
+    return { folder, root: facts?.root ?? '', changed: list?.changes.files ?? [] }
+  }
+
+  /** The changes of the folder's checkout, each changed file with its hash and its place here. */
+  async function changedFiles(root: string, files: readonly { path: string }[]): Promise<ListedFile[]> {
+    const out: ListedFile[] = []
+    for (const f of files) {
+      const abs = join(root, ...f.path.split('/'))
+      const st = statSync(abs)
+      out.push({
+        kind: 'change',
+        path: f.path,
+        size: st.size,
+        sha256: await fileHash(abs),
+        mode: process.platform !== 'win32' && st.mode & 0o111 ? 0o755 : 0o644,
+        abs,
+      })
+    }
+    return out
   }
 
   return {
-    async pack(key, from) {
+    async pack(key, from, dryRun = false) {
       drop()
       const items = o.items()
       const item = items.find(i => i.key === key)
@@ -129,11 +161,14 @@ export function createMoveOut(o: MoveOutDeps): MoveOut {
       const cwd =
         [item.cwd, recorded].find(c => !!c && projectFolderName(c) === under && existsSync(c)) || recorded || item.cwd
       if (!cwd) return no({ kind: 'no-checkout' })
-      const folder = await folderOf(cwd)
-      if (!folder.ok) return no(folder.why)
+      // A dry run says now what the move would say: one at work is not taken.
+      if (dryRun && !item.sleeping && item.status === 'working')
+        return { ok: false, why: 'it is not free: try again when it is', kind: 'busy' }
+      const first = await folderOf(cwd)
+      if (!first.folder.ok) return no(first.folder.why)
       // Asleep first, as a profile move: its transcript is final before it is copied.
       let wasAwake = false
-      if (!item.sleeping) {
+      if (!item.sleeping && !dryRun) {
         const [s] = await sleepMany(deps, items, [key], { by: 'user' })
         if (!s || (s.result !== 'asleep' && s.result !== 'already'))
           return { ok: false, why: 'it is not free: try again when it is', kind: 'busy', ...(s && { sleep: s }) }
@@ -143,7 +178,8 @@ export function createMoveOut(o: MoveOutDeps): MoveOut {
         if (wasAwake) await wake(deps, { ...item, pane: null, sleeping: true }).catch(() => {})
       }
       // Its last turn may have written in the folder: what travels is checked again once it is asleep.
-      const after = wasAwake ? await folderOf(cwd) : folder
+      const again = wasAwake ? await folderOf(cwd) : first
+      const after = again.folder
       if (!after.ok) {
         await wakeBack()
         return no(after.why)
@@ -153,19 +189,32 @@ export function createMoveOut(o: MoveOutDeps): MoveOut {
         await wakeBack()
         return listed.error === 'no-transcript' ? no({ kind: 'no-transcript' }) : { ok: false, why: listed.error }
       }
+      let changed: ListedFile[]
+      try {
+        changed = await changedFiles(again.root, again.changed)
+      } catch (err) {
+        await wakeBack()
+        return { ok: false, why: `its changes could not be read: ${messageOf(err)}` }
+      }
+      const all = [...listed.files, ...changed]
       const carried = entriesToCarry(listEntries(), key)
       let trusted = false
       try {
         trusted = trustsFolder(claudeStateFile(dir, home), cwd)
       } catch {}
-      packs.set(session, {
-        item,
-        files: listed.files,
-        entries: carried.map(e => e.id),
-        wasAwake,
-        cwd,
-        at: Date.now(),
-      })
+      if (!dryRun)
+        packs.set(session, {
+          item,
+          files: all,
+          entries: carried.map(e => e.id),
+          wasAwake,
+          cwd,
+          at: Date.now(),
+          changes: Object.fromEntries([
+            ...changed.map(f => [f.path, f.sha256] as const),
+            ...after.folder.deleted.map(p => [p, null] as const),
+          ]),
+        })
       const pack: MovePack = {
         v: 1,
         session,
@@ -175,12 +224,12 @@ export function createMoveOut(o: MoveOutDeps): MoveOut {
         workspace: item.workspace ?? '',
         cwd,
         folder: after.folder,
-        files: listed.files.map(({ abs: _abs, ...f }) => f),
+        files: all.map(({ abs: _abs, ...f }) => f),
         entries: carried,
         trusted,
         from,
       }
-      o.log(`move: ${item.name} packed, ${pack.files.length} file(s)`)
+      if (!dryRun) o.log(`move: ${item.name} packed, ${pack.files.length} file(s)`)
       return { ok: true, pack, key, wasAwake }
     },
 
@@ -202,7 +251,10 @@ export function createMoveOut(o: MoveOutDeps): MoveOut {
       if (!p) return { ok: false, why: 'no move of it is on its way here' }
       packs.delete(session)
       const notes: string[] = []
-      writeCard(p.item.key, { moved: { to, cwd: p.cwd, at: Date.now() } })
+      // What of the checkout went with it, so a move back here takes these same changes as its own.
+      const changed = Object.keys(p.changes).length
+      writeCard(p.item.key, { moved: { to, cwd: p.cwd, at: Date.now(), ...(changed && { changes: p.changes }) } })
+      if (changed) notes.push(`its ${changed} uncommitted change(s) went with it and stay here too`)
       for (const id of p.entries) removeEntry(id, 'cancelled')
       // Its pane, when wake left it as a shell: nobody is in it now.
       const pane = p.item.pane

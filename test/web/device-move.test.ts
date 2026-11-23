@@ -48,32 +48,45 @@ describe("the card's Device", () => {
 })
 
 describe('the move and its toast', () => {
-  function deps(answer: () => Promise<Reply>) {
+  function deps(answer: (body: { dryRun?: boolean }) => Promise<Reply>) {
     const calls: unknown[] = []
     const toasts: [string, boolean][] = []
+    const actions: { label: string; run: () => void }[] = []
     const busy: [string, string | null][] = []
     return {
       calls,
       toasts,
       busy,
+      actions,
       d: {
         t: () => t,
         post: async (path: string, body: unknown) => {
           calls.push([path, body])
-          return answer()
+          return answer(body as { dryRun?: boolean })
         },
         errorText: (err: unknown) => String(err instanceof Error ? err.message : err),
-        toast: (text: string, error = false) => void toasts.push([text, error]),
+        toast: (text: string, error = false, options?: { action?: { label: string; run: () => void } }) => {
+          toasts.push([text, error])
+          if (options?.action) actions.push(options.action)
+        },
         busy: (key: string, label: string | null) => void busy.push([key, label]),
         name: () => 'Atlas',
       },
     }
   }
 
-  test('moved: the card says where it goes while it moves, the toast where it runs now', async () => {
-    const x = deps(async () => ({ ok: true, results: [{ target: 'k', result: 'moved' }] }) as Reply)
+  const planned = (plan: Record<string, unknown> = {}) =>
+    ({ ok: true, results: [{ target: 'k', result: 'plan', plan: { changes: [], deleted: [], ...plan } }] }) as Reply
+
+  test('moved: asked first, then the card says where it goes while it moves, the toast where it runs now', async () => {
+    const x = deps(async b =>
+      b.dryRun ? planned() : ({ ok: true, results: [{ target: 'k', result: 'moved' }] } as Reply),
+    )
     await moveCardToDevice(x.d, 'k', 'server-1', 'Server 1')
-    expect(x.calls).toEqual([['/api/move', { targets: ['k'], device: 'server-1' }]])
+    expect(x.calls).toEqual([
+      ['/api/move', { targets: ['k'], device: 'server-1', dryRun: true }],
+      ['/api/move', { targets: ['k'], device: 'server-1' }],
+    ])
     expect(x.busy).toEqual([
       ['k', 'Moving to Server 1…'],
       ['k', null],
@@ -81,16 +94,36 @@ describe('the move and its toast', () => {
     expect(x.toasts).toEqual([['Atlas moved to Server 1', false]])
   })
 
-  test("refused: the board's reason, in red; a failed call says why", async () => {
+  test('uncommitted changes are listed first; only "Move with them" moves it', async () => {
+    const changes = ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts'].map(path => ({ path, size: 1 }))
+    const x = deps(async b =>
+      b.dryRun
+        ? planned({ changes, deleted: ['old.ts'] })
+        : ({ ok: true, results: [{ target: 'k', result: 'moved' }] } as Reply),
+    )
+    await moveCardToDevice(x.d, 'k', 'server-1', 'Server 1')
+    expect(x.toasts).toEqual([
+      ['Atlas takes 6 uncommitted changes to Server 1: a.ts, b.ts, c.ts, d.ts, e.ts, …', false],
+    ])
+    expect(x.calls).toHaveLength(1)
+    expect(x.actions.map(a => a.label)).toEqual(['Move with them'])
+    x.actions[0]?.run()
+    await Bun.sleep(0)
+    expect(x.calls).toHaveLength(2)
+    expect(x.toasts.at(-1)).toEqual(['Atlas moved to Server 1', false])
+  })
+
+  test("refused: the board's reason, in red, before anything moves; a failed call says why", async () => {
     const why = 'its branch feature-x is not pushed: push it first'
     const x = deps(async () => ({ ok: true, results: [{ target: 'k', result: 'refused', why }] }) as Reply)
     await moveCardToDevice(x.d, 'k', 'server-1', 'Server 1')
     expect(x.toasts).toEqual([[`Atlas stays where it is: ${why}`, true]])
+    expect(x.calls).toHaveLength(1)
+    expect(x.busy).toEqual([])
     const y = deps(async () => {
       throw new Error('the board does not answer')
     })
     await moveCardToDevice(y.d, 'k', 'server-1', 'Server 1')
     expect(y.toasts).toEqual([['the board does not answer', true]])
-    expect(y.busy.at(-1)).toEqual(['k', null])
   })
 })

@@ -300,7 +300,7 @@ function moveRoutes(m: { out: MoveOut; in: MoveIn }): Route[] {
       async handle(_req, ctx) {
         const body = await ctx.rawBody().catch(() => null)
         if (!isRecord(body)) return json(400, { ok: false, why: 'body' })
-        return json(200, await m.out.pack(text(body.key), text(body.from)))
+        return json(200, await m.out.pack(text(body.key), text(body.from), body.dryRun === true))
       },
     },
     {
