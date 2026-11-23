@@ -51,6 +51,7 @@ import { forkSession } from '../../services/launch/fork.ts'
 import type { Launches } from '../../services/launch/launches.ts'
 import { renameSession, renameWorkspace } from '../../services/launch/rename.ts'
 import { startCall } from '../../services/mokupilot.ts'
+import { sessionSpend } from '../../services/spend.ts'
 import { ownAddresses } from '../../services/tunnel.ts'
 import { sendNow, stopTurn, turnIO } from '../../services/turn.ts'
 import { type Body, type Handler, json, type Route } from '../http.ts'
@@ -156,7 +157,19 @@ async function detail(app: SessionApp, item: Item) {
   }
   const helpers = own.helpers.map(publicHelper)
   const queued = alive ? thread.queued : []
-  return { item: shown, conversation, queued, helpers, workflows: own.workflows, screen, dialog, checkout }
+  // Token spend from this session's transcript (#636); omitted when absent or unreadable.
+  const spend = await sessionSpend(deps, item).catch(() => null)
+  return {
+    item: shown,
+    conversation,
+    queued,
+    helpers,
+    workflows: own.workflows,
+    screen,
+    dialog,
+    checkout,
+    ...(spend ? { spend } : {}),
+  }
 }
 
 function message(app: SessionApp, item: Item, body: Body): Promise<Result> {

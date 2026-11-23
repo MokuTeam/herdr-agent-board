@@ -7,6 +7,7 @@
 // is open or folded as the sheet's density says (#345, models/sheet-density.ts). Before a session was
 // ever open, the empty places of the page.
 import { Fragment, type KeyboardEvent, type MouseEvent, useRef } from 'react'
+import type { SessionSpend } from '../../../../src/core/spend.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { useCollapse } from '../../hooks/useCollapse.ts'
 import type { SheetPick } from '../../hooks/useContextMenus.ts'
@@ -15,6 +16,7 @@ import { categoryInfo, catOf, colOf } from '../../models/board-view.ts'
 import { nodeLook } from '../../models/devices.ts'
 import { linkedSessions } from '../../models/helper-model.ts'
 import { foldLine, sheetHead, type WorkspaceFact } from '../../models/sheet.ts'
+import { spendSheetLine, spendSheetTooltip } from '../../models/spend.ts'
 import { COLUMN_COLORS } from '../../models/toolbar.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { DeviceFacts } from '../devices/DeviceChip.tsx'
@@ -62,6 +64,8 @@ export interface HeadFold {
 export interface SheetHeadProps {
   item: Item | null
   missing: boolean
+  /** Token spend across this session's transcript (#636); absent or null when not read or 0. */
+  spend?: SessionSpend | null | undefined
   /** Rename where the name is (hooks/useRenameInPlace.ts). */
   onRename?: ((name: HTMLElement) => void) | undefined
   /** Rename the session's herdr workspace where its name is; without it, the name is the line's text. */
@@ -102,9 +106,16 @@ function Fact({
 const NO_CARD: HeadCard = { disabled: true, open: false }
 const WHOLE: HeadFold = { compact: false }
 
+function localToday(boardDate?: string): string {
+  if (boardDate) return boardDate
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 export function SheetHead({
   item,
   missing,
+  spend,
   onRename,
   onRenameWorkspace,
   card = NO_CARD,
@@ -282,6 +293,15 @@ export function SheetHead({
               </Fragment>
             ))}
           </p>
+          {spend && spend.total.total > 0 && (
+            <p
+              className="sheet-spend"
+              id="sheet-spend"
+              title={spendSheetTooltip(spend, localToday(data?.time?.date), t)}
+            >
+              {spendSheetLine(spend, localToday(data?.time?.date), t)}
+            </p>
+          )}
           <button
             type="button"
             className="sheet-fold"

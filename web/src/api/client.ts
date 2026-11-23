@@ -15,6 +15,7 @@ import type { PublicHelper, WorkflowRun } from '../../../src/core/helpers.ts'
 import { parseNodeKey } from '../../../src/core/node-key.ts'
 import type { QueuedPrompt } from '../../../src/core/queue.ts'
 import type { SlashCommand } from '../../../src/core/slash-commands.ts'
+import type { SessionSpend, SpendCounts } from '../../../src/core/spend.ts'
 import type { ConversationTurn } from '../../../src/core/transcript.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 import { offlineAnswer } from '../models/devices.ts'
@@ -46,6 +47,8 @@ export interface SessionDetail {
   /** Its subagents, forks, workflow agents and teammates, newest first, and its workflow runs. */
   helpers?: PublicHelper[]
   workflows?: WorkflowRun[]
+  /** Token spend across this session's transcript (#636); omitted when absent or 0. */
+  spend?: SessionSpend | null
 }
 
 // A notice: a background task reporting back, a board reminder, or a MokuPilot call's results
@@ -65,6 +68,23 @@ export const isHelper: Guard<PublicHelper> = (value): value is PublicHelper =>
 export const isWorkflowRun: Guard<WorkflowRun> = (value): value is WorkflowRun =>
   isReply(value) && typeof value.id === 'string' && typeof value.status === 'string'
 
+const numField = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v) && v >= 0
+
+export const isSpendCounts: Guard<SpendCounts> = (value): value is SpendCounts =>
+  isReply(value) &&
+  numField(value.input) &&
+  numField(value.output) &&
+  numField(value.cacheRead) &&
+  numField(value.cacheWrite) &&
+  numField(value.total) &&
+  numField(value.responses)
+
+export const isSessionSpend: Guard<SessionSpend> = (value): value is SessionSpend =>
+  isReply(value) &&
+  isSpendCounts(value.total) &&
+  isReply(value.byDay) &&
+  Object.values(value.byDay).every(isSpendCounts)
+
 export const isSessionDetail: Guard<SessionDetail> = (value): value is SessionDetail =>
   isReply(value) &&
   isReply(value.item) &&
@@ -77,7 +97,8 @@ export const isSessionDetail: Guard<SessionDetail> = (value): value is SessionDe
   (value.dialog === null || isReply(value.dialog)) &&
   typeof value.checkout === 'boolean' &&
   isListOf(value.helpers, isHelper) &&
-  isListOf(value.workflows, isWorkflowRun)
+  isListOf(value.workflows, isWorkflowRun) &&
+  (value.spend === undefined || value.spend === null || isSessionSpend(value.spend))
 
 /** The server said no (status, or `ok: false`); `message` is its `error` when it gave one. */
 export class ApiError extends Error {

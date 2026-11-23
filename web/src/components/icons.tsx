@@ -91,6 +91,12 @@ export const TimeIcon = () => (
   </Icon>
 )
 
+export const SpendIcon = () => (
+  <Icon>
+    <path d="M4.5 15.5v-4M10 15.5v-10M15.5 15.5v-7" />
+  </Icon>
+)
+
 export const CalendarIcon = () => (
   <Icon>
     <rect x="3.5" y="4.5" width="13" height="12" rx="2.5" />

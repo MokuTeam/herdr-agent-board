@@ -231,6 +231,7 @@ export function Sheet(slots: SheetSlots) {
         <SheetHead
           item={shown.item}
           missing={sessionMissing(shown.key, !!itemOf(shown.key), detail.value.status)}
+          spend={shown.key !== null && detail.value.key === shown.key ? detail.value.data?.spend : null}
           onRename={name => open && onRename?.(open, name)}
           onRenameWorkspace={onRenameWorkspace && (name => open && onRenameWorkspace(open, name))}
           card={{
