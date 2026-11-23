@@ -105,6 +105,11 @@ async function exitAgy(io: WakeHerdr, pane: string, c: Required<Timing>): Promis
       sentCtrlD = true
       await io.sendKeys(pane, 'ctrl+d').catch(() => {})
       await c.sleep(CTRL_D_GAP_MS)
+      // Re-check before the second Ctrl+D so a shell that already got the pane back never receives it.
+      const mid = await io.pane(pane)
+      if (!mid) return false
+      if (!mid.agent) return true
+      if (mid.agent !== AGY_AGENT) return false
       await io.sendKeys(pane, 'ctrl+d').catch(() => {})
     }
   }

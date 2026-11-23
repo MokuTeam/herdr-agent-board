@@ -46,6 +46,8 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'err.canWake.transcript': "{name} could not be woken again: its conversation is not in its profile's folder",
     'err.piFileGone': '{name} cannot be woken: its pi session file is gone',
     'err.agyConversationGone': '{name} cannot be woken: its Antigravity conversation is gone',
+    'err.restart.agyNeedsBoardWake':
+      'Restarting {name} needs the board’s own Sleep and wake (Settings → Sleep and wake…)',
     'err.wakeNoAnswer': 'Sleep and wake is on but does not answer on port {port}',
     'err.wakeSetting': '{field}: {why}',
     // Task 4.6: the panel and the toolbar note
@@ -197,6 +199,8 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'err.canWake.transcript': '{name} не разбудить: её разговора нет в папке её профиля',
     'err.piFileGone': '{name} не разбудить: файла её сессии pi больше нет',
     'err.agyConversationGone': '{name} не разбудить: разговора Antigravity больше нет',
+    'err.restart.agyNeedsBoardWake':
+      'Для перезапуска {name} нужно собственное пробуждение доски (Настройки → Сон и пробуждение…)',
     'err.wakeNoAnswer': 'Сон и пробуждение включены, но не отвечают на порту {port}',
     'err.wakeSetting': '{field}: {why}',
     // Task 4.6: the panel and the toolbar note

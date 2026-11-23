@@ -315,10 +315,25 @@ test('legacy herdr-wake plugin leaves agy alone for sleep and restart', async ()
   const rst = await post('restart')
   expect(rst.status).toBe(409)
   expect(rst.body.ok).toBe(false)
+  expect(String(rst.body.error)).toContain('board’s own Sleep and wake')
 
   const slp = await cli(box, ['sleep', 'Gemini Dev'], { ANTIGRAVITY_APP_DATA_DIR: agyRoot })
   expect(slp.code).toBe(0)
   expect(slp.out).toContain('1 kept up')
+})
+
+test('plain Claude board restart with wake off refuses before collecting herdr snapshot', async () => {
+  const box = await sandbox()
+  writeConfig(box, { wake: false, wakeUrl: '' })
+  const r = await cli(box, ['restart'], {
+    HERDR_ENV: '1',
+    HERDR_PANE_ID: 'w1:p1',
+    CLAUDE_CODE_SESSION_ID: '2fbcc149-2101-4190-892f-f3dbf6beca67',
+    ANTIGRAVITY_CONVERSATION_ID: '',
+  })
+  expect(r.code).toBe(1)
+  expect(r.out).toContain('claude --resume 2fbcc149-2101-4190-892f-f3dbf6beca67')
+  expect(box.calls().filter(c => c[0] === 'api' && c[1] === 'snapshot')).toEqual([])
 })
 
 test('agy-hook SessionStart reports conversation UUID to herdr when agent.session is null', async () => {

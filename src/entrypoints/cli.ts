@@ -1449,21 +1449,26 @@ async function restart(s: Session): Promise<void> {
     throw new Error(
       `board restart works for a session in a herdr pane, and ${target ? `herdr has none for "${target}"` : 'this one runs outside herdr'}; nothing was scheduled`,
     )
-  const shown = await find(s.key)
-  const isAgy = shown ? isAgyItem(shown) : !target && agyCaller()
+  // Keep find(s.key) after wakeAnswers for plain Claude sessions so a refused restart does no
+  // extra herdr snapshot / collect work (#638 review).
+  const agyHint = known
+    ? isAgyItem(known.find(i => i.key === s.key || i.session === s.key) ?? {})
+    : !target && agyCaller()
   const up = await wakeAnswers(deps)
   if (!up.ok)
     throw new Error(
-      `a restart needs ${wakeMissing(up)}; nothing was scheduled. Ask the user to restart this session by hand: /exit in it, then ${isAgy ? `agy --conversation ${s.key}` : `claude --resume ${s.key}`} in the same pane`,
-    )
-  if (isAgy && !wakeSleepsAgy(deps))
-    throw new Error(
-      `a restart of an Antigravity session needs the board’s own wake (Settings → Sleep and wake…); nothing was scheduled. Ask the user to restart this session by hand: /exit in it, then agy --conversation ${s.key} in the same pane`,
+      `a restart needs ${wakeMissing(up)}; nothing was scheduled. Ask the user to restart this session by hand: /exit in it, then ${agyHint ? `agy --conversation ${s.key}` : `claude --resume ${s.key}`} in the same pane`,
     )
   // The restart ends in a wake: one the board would refuse (another profile than herdr-wake would
   // resume it in, or one not known) is refused now, before anything is scheduled. The session as
   // the board shows it, else as its card says.
   const set = await boardProfiles()
+  const shown = await find(s.key)
+  const isAgy = shown ? isAgyItem(shown) : !target && agyCaller()
+  if (isAgy && !wakeSleepsAgy(deps))
+    throw new Error(
+      `a restart of an Antigravity session needs the board’s own wake (Settings → Sleep and wake…); nothing was scheduled. Ask the user to restart this session by hand: /exit in it, then agy --conversation ${s.key} in the same pane`,
+    )
   const guard = await checkWake(
     deps,
     shown ?? {

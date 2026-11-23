@@ -5,7 +5,7 @@
 // agy, it wakes in its pane or a new tab and reports its conversation UUID when herdr has not yet
 // seen a PreInvocation, and Claude's behavior stays untouched.
 import { expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createProfileHomes } from '../../src/adapters/profile-homes.ts'
 import { profileSet } from '../../src/core/profiles.ts'
@@ -15,6 +15,7 @@ import type { AgyOps } from '../../src/services/wake/agy.ts'
 import { createWakeEngine, type WakeEngineDeps } from '../../src/services/wake/engine.ts'
 import { isolatedHome } from '../support/env.ts'
 import { type FakePane, type FakeWakeHerdr, fakeWakeHerdr } from '../support/fake-wake-herdr.ts'
+import { runningSession } from '../support/wake-fixtures.ts'
 
 const ID = '509dfc37-b58e-4851-9988-a8c7befe9f0d'
 const LINE = `board resume --agy ${ID}`
@@ -47,7 +48,7 @@ function world(
     runningHelpers?: boolean
     hasConv?: boolean
     boardOnPath?: boolean
-    exitOn?: 'prompt' | 'enter' | 'ctrl-d' | 'never'
+    exitOn?: 'prompt' | 'enter' | 'ctrl-d' | 'ctrl-d-first' | 'never'
     reportOnWake?: boolean
   } = {},
 ): World {
@@ -96,7 +97,7 @@ function world(
         const err = Object.assign(new Error('agent_prompt_stalled'), { code: 'agent_prompt_stalled' })
         throw err
       }
-      if (exitOn === 'ctrl-d' || exitOn === 'never') {
+      if (exitOn === 'ctrl-d' || exitOn === 'ctrl-d-first' || exitOn === 'never') {
         const err = Object.assign(new Error('agent_prompt_stalled'), { code: 'agent_prompt_stalled' })
         throw err
       }
@@ -107,9 +108,9 @@ function world(
   io.sendKeys = async (paneId, key) => {
     await baseSendKeys(paneId, key)
     if (paneId === 'w5:p9' && key === 'enter' && exitOn === 'enter') clearPane(pane)
-    if (paneId === 'w5:p9' && key === 'ctrl+d' && exitOn === 'ctrl-d') {
+    if (paneId === 'w5:p9' && key === 'ctrl+d' && (exitOn === 'ctrl-d' || exitOn === 'ctrl-d-first')) {
       ctrlDCount++
-      if (ctrlDCount >= 2) clearPane(pane)
+      if (exitOn === 'ctrl-d-first' || ctrlDCount >= 2) clearPane(pane)
     }
   }
 
@@ -274,6 +275,12 @@ test('handles /exit completion Enter retry and Ctrl+D Ctrl+D fallback', async ()
   expect(await eCtrlD.sleep('w5:p9')).toEqual({ ok: true, pane: 'w5:p9', name: 'Gemini Dev' })
   expect(wCtrlD.io.calls.filter(c => c[0] === 'pane' && c[1] === 'send-keys' && c[3] === 'ctrl+d')).toHaveLength(2)
 
+  // If agy already exits on the first Ctrl+D, do not send a second Ctrl+D to the shell.
+  const wCtrlDFirst = world({ exitOn: 'ctrl-d-first' })
+  const eCtrlDFirst = createWakeEngine(wCtrlDFirst.deps)
+  expect(await eCtrlDFirst.sleep('w5:p9')).toEqual({ ok: true, pane: 'w5:p9', name: 'Gemini Dev' })
+  expect(wCtrlDFirst.io.calls.filter(c => c[0] === 'pane' && c[1] === 'send-keys' && c[3] === 'ctrl+d')).toHaveLength(1)
+
   // If agy refuses to exit at all, marks.stayed() removes the sleeper record.
   const wStuck = world({ exitOn: 'never' })
   const eStuck = createWakeEngine(wStuck.deps)
@@ -329,4 +336,150 @@ test('wakes in a new tab when the original pane is gone or repurposed, and suppo
   w3.archivedIds.add(ID)
   await engine3.remember()
   expect(await engine3.sleepingAll()).toEqual([])
+})
+
+const CLAUDE_ID = '2fbcc149-2101-4190-892f-f3dbf6beca67'
+const CLAUDE_BOX = [RULE, '❯ ', RULE, '? for shortcuts'].join('\n')
+
+test('plain Claude setup never calls AgyOps, and same-shape Claude + agy UUIDs stay isolated', async () => {
+  const dir = isolatedHome()
+  const home = join(dir, 'home')
+  const project = join(home, 'repo')
+  mkdirSync(project, { recursive: true })
+  const clock = { at: Date.UTC(2026, 10, 23, 15, 0, 0) }
+  const claudeDir = join(home, '.claude')
+  runningSession(claudeDir, {
+    id: CLAUDE_ID,
+    name: 'Claude Master',
+    cwd: project,
+    status: 'idle',
+    statusUpdatedAt: clock.at - 120_000,
+  })
+
+  const claudePane: FakePane = {
+    pane_id: 'w1:p1',
+    tab_id: 't1',
+    workspace_id: 'w1',
+    cwd: project,
+    agent: 'claude',
+    agent_status: 'idle',
+    agent_session: { value: CLAUDE_ID },
+    terminal_title_stripped: 'Claude Master',
+  }
+  const io = fakeWakeHerdr({
+    panes: [claudePane],
+    workspaces: [{ workspace_id: 'w1', label: 'Main' }],
+    shells: { 'w1:p1': 'bash' },
+    screens: { 'w1:p1': CLAUDE_BOX },
+    inputBoxes: { 'w1:p1': CLAUDE_BOX },
+  })
+  io.busy.add('w1:p1')
+  const basePrompt = io.prompt.bind(io)
+  io.prompt = async (paneId, text) => {
+    await basePrompt(paneId, text)
+    if (paneId === 'w1:p1' && text === '/exit') {
+      claudePane.agent = null
+      claudePane.agent_session = null
+      delete claudePane.agent_status
+      io.busy.delete('w1:p1')
+    }
+  }
+  const baseRun = io.run.bind(io)
+  io.run = async (paneId, line) => {
+    await baseRun(paneId, line)
+    if (paneId === 'w1:p1' && line.startsWith(`board resume ${CLAUDE_ID}`)) {
+      claudePane.agent = 'claude'
+      claudePane.agent_status = 'idle'
+      claudePane.agent_session = { value: CLAUDE_ID }
+      io.busy.add('w1:p1')
+    }
+  }
+
+  const bomb = (name: string): never => {
+    throw new Error(`AgyOps.${name} must not be called for a plain Claude setup`)
+  }
+  const throwingAgy: AgyOps = {
+    herdr: io,
+    agyProcess: async () => bomb('agyProcess'),
+    hasConversation: () => bomb('hasConversation'),
+    hasRunningHelpers: () => bomb('hasRunningHelpers'),
+    reportSession: async () => bomb('reportSession'),
+    exists: () => bomb('exists'),
+    home,
+    newTab: async () => bomb('newTab'),
+    newWorkspace: async () => bomb('newWorkspace'),
+  }
+  const sessionsFile = join(dir, 'wake-sessions.json')
+  const agyFile = join(dir, 'wake-agy.json')
+  const engine = createWakeEngine({
+    herdr: io,
+    homes: createProfileHomes(),
+    profiles: () => profileSet([], claudeDir),
+    settings: () => wakeConfig({ enabled: true, closePanes: false, wakeTimeoutSec: 10 }),
+    sessionsFile,
+    agyFile,
+    agy: throwingAgy,
+    boardOnPath: () => true,
+    scheduled: async () => false,
+    log: () => {},
+    now: () => clock.at,
+    sleep: async ms => {
+      clock.at += ms
+    },
+  })
+
+  await engine.remember()
+  expect(await engine.awake()).toHaveLength(1)
+  expect(await engine.plan()).toHaveLength(1)
+  expect(await engine.sleeping()).toEqual([])
+  expect(await engine.sleepingAll()).toEqual([])
+
+  expect(await engine.sleep(CLAUDE_ID)).toEqual({ ok: true, pane: 'w1:p1', name: 'Claude Master' })
+  expect(existsSync(agyFile)).toBe(false)
+  expect((await engine.sleeping()).map(s => s.session)).toEqual([CLAUDE_ID])
+  expect((await engine.sleepingAll()).map(s => s.session)).toEqual([CLAUDE_ID])
+
+  expect(await engine.wake(CLAUDE_ID)).toEqual({ ok: true, pane: 'w1:p1', name: 'Claude Master' })
+  expect(existsSync(agyFile)).toBe(false)
+
+  // Now add a sleeping agy session with a same-shape UUID beside the sleeping Claude session:
+  // /sleeping returns only Claude, /sleeping?agents=all returns both, and waking Claude leaves agy asleep.
+  const agySleeper = {
+    session: ID,
+    name: 'Gemini Dev',
+    pane: 'w5:p9',
+    workspace: 'w5',
+    workspaceLabel: 'Server',
+    cwd: project,
+    argv: ['agy'],
+    slept_at: clock.at,
+  }
+  writeFileSync(agyFile, JSON.stringify({ [ID]: agySleeper }))
+  expect((await engine.sleep(CLAUDE_ID)).ok).toBe(true)
+
+  const mixed = createWakeEngine({
+    herdr: io,
+    homes: createProfileHomes(),
+    profiles: () => profileSet([], claudeDir),
+    settings: () => wakeConfig({ enabled: true, closePanes: false, wakeTimeoutSec: 10 }),
+    sessionsFile,
+    agyFile,
+    agy: { ...throwingAgy, hasConversation: id => id === ID },
+    boardOnPath: () => true,
+    scheduled: async () => false,
+    log: () => {},
+    now: () => clock.at,
+    sleep: async ms => {
+      clock.at += ms
+    },
+  })
+  expect((await mixed.sleeping()).map(s => s.session)).toEqual([CLAUDE_ID])
+  const all = await mixed.sleepingAll()
+  expect(all.map(s => [s.session, 'agent' in s ? s.agent : 'claude'])).toEqual([
+    [CLAUDE_ID, 'claude'],
+    [ID, 'agy'],
+  ])
+  expect(await mixed.wake(CLAUDE_ID)).toEqual({ ok: true, pane: 'w1:p1', name: 'Claude Master' })
+  expect(await mixed.sleeping()).toEqual([])
+  expect((await mixed.sleepingAll()).map(s => s.session)).toEqual([ID])
 })
