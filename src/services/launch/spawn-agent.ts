@@ -468,6 +468,9 @@ export async function spawnAgent(
     throw new Error(`${isAgy ? 'Antigravity' : 'Claude'} did not get ready in ${pane} within ${o.timeoutSec} s`)
   if (kind === PI_AGENT && (profile || o.model) && carded && isPiSessionFile(session))
     movePiCard(carded, session, profile?.id, o.model)
+  // agy has no pre-assigned --session-id: save --model on its card once ready without pinning card.name,
+  // so herdr agent rename and /rename keep working (#650).
+  if (kind === AGY_AGENT && !o.resume && session && o.model) writeCard(session, { modelWant: o.model })
 
   const agent = await nameInHerdr(pane, o.name, ticketNames)
 

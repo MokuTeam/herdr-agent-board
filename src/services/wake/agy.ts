@@ -289,7 +289,7 @@ export function defaultAgyOps(herdr: WakeHerdr = cliWakeHerdr, agy: AgyHome = cr
     herdr,
     agyProcess: pane => agyProcessIn(pane),
     hasConversation: session => agy.hasConversation(session),
-    hasRunningHelpers: session => agy.sessionHelpers(session).helpers.some(h => h.status === 'running'),
+    hasRunningHelpers: session => agy.hasRunningSubagent(session),
     reportSession: (pane, session) => reportAgySession(pane, session, agy.transcriptPath(session)),
   }
 }

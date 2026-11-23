@@ -2,6 +2,7 @@ import { Database } from 'bun:sqlite'
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { agyAutoName } from '../../src/services/board.ts'
 import { serveBoard, sharedSandbox } from '../support/board-server.ts'
 
 type Item = Record<string, unknown>
@@ -333,4 +334,279 @@ describe('Antigravity CLI sessions on the board, beside Claude and pi', () => {
     }
     expect(ranResume).toBe(true)
   })
+})
+
+describe('agy card naming and subagent working status (#650)', () => {
+  test('agyAutoName prefers herdr agent name, non-numeric tab label, pane label, and title over terminal title', () => {
+    const shell = 'agent-board@ubuntu: ~/work/Personal/herdr/agent-board-calendar-tz'
+    // Matching slug preserves spawn-agent's original capitalization from tab.label.
+    expect(
+      agyAutoName({
+        agentName: 'gemini-calendar-zones',
+        tabLabel: 'Gemini-calendar-zones',
+        terminalTitle: shell,
+        paneId: 'w5:pB',
+      }),
+    ).toBe('Gemini-calendar-zones')
+    // Explicit herdr agent rename overrides an unrelated tab label.
+    expect(
+      agyAutoName({
+        agentName: 'renamed-in-herdr',
+        tabLabel: 'Old Tab',
+        terminalTitle: shell,
+        paneId: 'w5:pB',
+      }),
+    ).toBe('renamed-in-herdr')
+    // Non-ASCII / spaces / % tab label matching slug keeps original spelling; uniqueSlug (-2) uses herdr name.
+    expect(
+      agyAutoName({
+        agentName: 'zadachi-100',
+        tabLabel: 'Задачи 100%',
+        terminalTitle: shell,
+        paneId: 'w5:pB',
+      }),
+    ).toBe('Задачи 100%')
+    expect(
+      agyAutoName({
+        agentName: 'gemini-task-2',
+        tabLabel: 'Gemini-task',
+        terminalTitle: shell,
+        paneId: 'w5:pB',
+      }),
+    ).toBe('gemini-task-2')
+    // Non-numeric tab label wins when herdr has no agent name; paneLabel beats title when tab is numeric.
+    expect(agyAutoName({ tabLabel: 'Gemini-calendar-zones', terminalTitle: shell, paneId: 'w5:pB' })).toBe(
+      'Gemini-calendar-zones',
+    )
+    expect(
+      agyAutoName({
+        tabLabel: '1',
+        paneLabel: 'Custom Pane',
+        title: 'Conv Title',
+        terminalTitle: shell,
+        paneId: 'w5:pB',
+      }),
+    ).toBe('Custom Pane')
+    // Numeric default tab label ("1") is ignored so conversation title wins over shell title.
+    expect(agyAutoName({ tabLabel: '1', title: 'My Renamed Session', terminalTitle: shell, paneId: 'w5:pB' })).toBe(
+      'My Renamed Session',
+    )
+    // Terminal title is only the last resort; whitespace-only falls back to paneId.
+    expect(agyAutoName({ tabLabel: '1', terminalTitle: shell, paneId: 'w5:pB' })).toBe(shell)
+    expect(agyAutoName({ tabLabel: '1', terminalTitle: '   ', paneId: 'w5:pB' })).toBe('w5:pB')
+    expect(agyAutoName({ tabLabel: '1', paneId: 'w5:pB' })).toBe('w5:pB')
+  })
+
+  test('live board resolves agy names (leaving Claude, pi and Codex untouched) and marks agy working while a subagent runs', async () => {
+    const sb = sharedSandbox()
+    const box = await sb()
+    const agyRoot = join(box.dir, 'agy-650')
+    const cwd = join(box.dir, 'work')
+    mkdirSync(cwd, { recursive: true })
+
+    const ROOT_A = '28fb0773-7c19-4e3d-8e9b-ceadaef29211'
+    const SUB_A = '28fb0773-7c19-4e3d-8e9b-ceadaef29299'
+    const ROOT_B = '28fb0773-7c19-4e3d-8e9b-ceadaef29212'
+    const KILLED_B = '28fb0773-7c19-4e3d-8e9b-ceadaef29298'
+    const ROOT_C = '28fb0773-7c19-4e3d-8e9b-ceadaef29213'
+    const SUB_C = '28fb0773-7c19-4e3d-8e9b-ceadaef29297'
+    const CLAUDE_ID = '28fb0773-7c19-4e3d-8e9b-ceadaef29214'
+    const CODEX_ID = '28fb0773-7c19-4e3d-8e9b-ceadaef29215'
+    const PI_SESSION = join(box.dir, 'pi-650.jsonl')
+
+    mkdirSync(agyRoot, { recursive: true })
+    const db = new Database(join(agyRoot, 'conversation_summaries.db'))
+    db.exec(`
+      CREATE TABLE conversation_summaries (
+        conversation_id text PRIMARY KEY,
+        title text NOT NULL DEFAULT "",
+        preview text NOT NULL DEFAULT "",
+        step_count integer NOT NULL DEFAULT 0,
+        last_modified_time datetime NOT NULL,
+        workspace_uris text NOT NULL,
+        status text NOT NULL DEFAULT "",
+        agent_name text NOT NULL DEFAULT "",
+        parent_conversation_id text NOT NULL DEFAULT "",
+        killed numeric NOT NULL DEFAULT false
+      )
+    `)
+    const ins = db.query('INSERT INTO conversation_summaries VALUES (?, ?, ?, 2, ?, ?, ?, ?, ?, ?)')
+    const ts = '2026-11-23 18:30:00+00:00'
+    const uri = JSON.stringify([`file://${cwd}`])
+    ins.run(ROOT_A, 'Calendar Multi-Time Zone Support', '', ts, uri, 'CASCADE_RUN_STATUS_IDLE', '', '', 0)
+    // Running subagent whose UUID herdr's hook reported on the pane!
+    ins.run(SUB_A, '', '', ts, uri, 'CASCADE_RUN_STATUS_RUNNING', 'research', ROOT_A, 0)
+    ins.run(ROOT_B, 'Renamed In Agy', '', ts, uri, 'CASCADE_RUN_STATUS_IDLE', '', '', 0)
+    // Killed subagent must not promote ROOT_B to working.
+    ins.run(KILLED_B, '', '', ts, uri, 'CASCADE_RUN_STATUS_RUNNING', 'research', ROOT_B, 1)
+    ins.run(ROOT_C, '', '', ts, uri, 'CASCADE_RUN_STATUS_IDLE', '', '', 0)
+    // Running subagent under a blocked root: blocked must stay blocked.
+    ins.run(SUB_C, '', '', ts, uri, 'CASCADE_RUN_STATUS_RUNNING', 'research', ROOT_C, 0)
+    db.close(false)
+
+    const shell = 'agent-board@ubuntu: ~/work/Personal/herdr/agent-board-calendar-tz'
+    box.state({
+      'api snapshot': {
+        result: {
+          snapshot: {
+            panes: [
+              // Pane A: herdr reports subagent UUID + idle, tab label is spawn-agent --name, agent has matching slug.
+              {
+                pane_id: 'w5:pB',
+                tab_id: 'w5:tB',
+                workspace_id: 'w5',
+                agent: 'agy',
+                agent_status: 'idle',
+                agent_session: { value: SUB_A },
+                cwd,
+                terminal_title_stripped: shell,
+              },
+              // Pane B: numeric default tab, no herdr agent name -> conversation title wins over shell title.
+              {
+                pane_id: 'w5:pC',
+                tab_id: 'w5:tC',
+                workspace_id: 'w5',
+                agent: 'agy',
+                agent_status: 'idle',
+                agent_session: { value: ROOT_B },
+                cwd,
+                terminal_title_stripped: shell,
+              },
+              // Pane C: herdr agent rename differs from tab -> herdr agent name wins; blocked stays blocked despite running subagent.
+              {
+                pane_id: 'w5:pD',
+                tab_id: 'w5:tD',
+                workspace_id: 'w5',
+                agent: 'agy',
+                agent_status: 'blocked',
+                agent_session: { value: ROOT_C },
+                cwd,
+                terminal_title_stripped: shell,
+              },
+              // Plain Claude pane: keeps terminal_title_stripped, unaffected by tab.label / agents.name.
+              {
+                pane_id: 'w5:pE',
+                tab_id: 'w5:tE',
+                workspace_id: 'w5',
+                agent: 'claude',
+                agent_status: 'idle',
+                agent_session: { value: CLAUDE_ID },
+                cwd,
+                terminal_title_stripped: 'Claude Own Title',
+              },
+              // Plain pi pane: keeps terminal_title_stripped, unaffected by tab.label / agents.name.
+              {
+                pane_id: 'w5:pF',
+                tab_id: 'w5:tF',
+                workspace_id: 'w5',
+                agent: 'pi',
+                agent_status: 'idle',
+                agent_session: { value: PI_SESSION },
+                cwd,
+                terminal_title_stripped: 'Pi Own Title',
+              },
+              // Plain Codex pane: keeps terminal_title_stripped, unaffected by tab.label / agents.name.
+              {
+                pane_id: 'w5:pG',
+                tab_id: 'w5:tG',
+                workspace_id: 'w5',
+                agent: 'codex',
+                agent_status: 'idle',
+                agent_session: { value: CODEX_ID },
+                cwd,
+                terminal_title_stripped: 'Codex Own Title',
+              },
+            ],
+            tabs: [
+              { tab_id: 'w5:tB', workspace_id: 'w5', label: 'Gemini-calendar-zones' },
+              { tab_id: 'w5:tC', workspace_id: 'w5', label: '1' },
+              { tab_id: 'w5:tD', workspace_id: 'w5', label: 'Old Tab' },
+              { tab_id: 'w5:tE', workspace_id: 'w5', label: 'Tab Label Should Not Override Claude' },
+              { tab_id: 'w5:tF', workspace_id: 'w5', label: 'Tab Label Should Not Override Pi' },
+              { tab_id: 'w5:tG', workspace_id: 'w5', label: 'Tab Label Should Not Override Codex' },
+            ],
+            agents: [
+              { pane_id: 'w5:pB', name: 'gemini-calendar-zones' },
+              { pane_id: 'w5:pD', name: 'herdr-renamed' },
+              { pane_id: 'w5:pE', name: 'claude-slug' },
+              { pane_id: 'w5:pF', name: 'pi-slug' },
+              { pane_id: 'w5:pG', name: 'codex-slug' },
+            ],
+            workspaces: [{ workspace_id: 'w5', label: 'Work' }],
+          },
+        },
+      },
+      'agent get w5:pB': {
+        result: {
+          agent: { agent: 'agy', agent_status: 'idle', agent_session: { value: SUB_A }, name: 'gemini-calendar-zones' },
+        },
+      },
+      'agent prompt w5:pB': { result: {} },
+    })
+
+    const { url } = await serveBoard(
+      box,
+      { language: 'en', launch: { agy: 'agy' } },
+      { ANTIGRAVITY_APP_DATA_DIR: agyRoot, BOARD_TEST_PACE: '0.02' },
+    )
+    const deadline = Date.now() + 5000
+    let payload: { stale: boolean; items: Item[] } = { stale: true, items: [] }
+    while (payload.stale) {
+      payload = (await (await fetch(`${url}/api/board`)).json()) as { stale: boolean; items: Item[] }
+      if (!payload.stale) break
+      if (Date.now() > deadline) throw new Error('not fresh')
+      await Bun.sleep(10)
+    }
+
+    // Pane A resolved SUB_A -> ROOT_A, named "Gemini-calendar-zones", promoted idle -> working with 1 running helper.
+    const itemA = payload.items.find(i => i.key === ROOT_A)
+    expect(itemA).toMatchObject({
+      key: ROOT_A,
+      session: ROOT_A,
+      name: 'Gemini-calendar-zones',
+      autoName: 'Gemini-calendar-zones',
+      status: 'working',
+      column: 'work',
+      helpers: { total: 1, running: 1 },
+    })
+    expect(payload.items.find(i => i.key === SUB_A)).toBeUndefined()
+
+    // Sending to ROOT_A while herdr still reports SUB_A succeeds instead of failing with sessionChanged.
+    const sendRes = await fetch(`${url}/api/session/${encodeURIComponent(ROOT_A)}/message`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({ session: ROOT_A, text: 'ping while subagent runs' }),
+    })
+    expect(sendRes.status).toBe(200)
+    expect(await sendRes.json()).toMatchObject({ ok: true })
+
+    // Pane B: conversation title beat shell title; killed subagent did not promote status.
+    expect(payload.items.find(i => i.key === ROOT_B)).toMatchObject({
+      name: 'Renamed In Agy',
+      status: 'idle',
+    })
+
+    // Pane C: herdr agent rename beat old tab & shell title; blocked stays blocked even with a running subagent.
+    expect(payload.items.find(i => i.key === ROOT_C)).toMatchObject({
+      name: 'herdr-renamed',
+      status: 'blocked',
+    })
+
+    // Plain Claude, pi, and Codex panes: completely untouched, keep terminal_title_stripped.
+    expect(payload.items.find(i => i.key === CLAUDE_ID)).toMatchObject({
+      name: 'Claude Own Title',
+      autoName: 'Claude Own Title',
+      status: 'idle',
+    })
+    expect(payload.items.find(i => i.key === PI_SESSION)).toMatchObject({
+      name: 'Pi Own Title',
+      autoName: 'Pi Own Title',
+      status: 'idle',
+    })
+    expect(payload.items.find(i => i.key === CODEX_ID)).toMatchObject({
+      name: 'Codex Own Title',
+      autoName: 'Codex Own Title',
+      status: 'idle',
+    })
+  }, 20_000)
 })

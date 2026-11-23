@@ -23,6 +23,10 @@ export interface AgyHome {
   sessionThread(session: string, limit?: number): SessionThread
   sessionTitle(session: string | null): string
   sessionCwd(session: string | null): string
+  /** Walk `parent_conversation_id` to the root conversation (handles herdr reporting a subagent UUID, #650). */
+  rootSession(session: string | null): string | null
+  /** Whether any descendant subagent of `session` is currently running (not killed). */
+  hasRunningSubagent(session: string | null): boolean
   sessionHelpers(session: string | null): Helpers
   helperDetail(session: string | null, helperId: string): HelperDetail<ConversationTurn> | null
   searchHistory(cwd: string, query: string | null, excludeSession?: string | null): Promise<HistoryResult>
@@ -176,6 +180,43 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
     return row ? firstWorkspacePath(row.workspace_uris) : ''
   }
 
+  function rootSession(session: string | null): string | null {
+    if (!session || !isAgySession(session)) return null
+    refreshSummaries()
+    let cur = summaries.get(session.toLowerCase())
+    if (!cur) return session
+    const seen = new Set<string>([cur.conversation_id.toLowerCase()])
+    while (cur.parent_conversation_id) {
+      const rawParent = cur.parent_conversation_id.trim()
+      if (!rawParent || !isAgySession(rawParent)) break
+      const parentId = rawParent.toLowerCase()
+      if (seen.has(parentId)) break
+      seen.add(parentId)
+      const parent = summaries.get(parentId)
+      if (!parent) return rawParent
+      cur = parent
+    }
+    return cur.conversation_id
+  }
+
+  function hasRunningSubagent(session: string | null): boolean {
+    if (!session || !isAgySession(session)) return false
+    refreshSummaries()
+    const rootId = session.toLowerCase()
+    const seen = new Set<string>([rootId])
+    const queue = [...(childrenByParent.get(rootId) ?? [])]
+    while (queue.length) {
+      const row = queue.shift() as SummaryRow
+      const id = row.conversation_id.toLowerCase()
+      if (seen.has(id)) continue
+      seen.add(id)
+      if (!row.killed && row.status === 'CASCADE_RUN_STATUS_RUNNING') return true
+      const kids = childrenByParent.get(id)
+      if (kids?.length) queue.push(...kids)
+    }
+    return false
+  }
+
   function readTailInfo(file: string, st: { mtimeMs: number; size: number }): TranscriptInfo {
     const hit = tailCache.get(file)
     if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.info
@@ -243,7 +284,7 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
       const path = transcriptFile(row.conversation_id)
       const st = statOf(path)
       const tail = st?.isFile() ? readTailInfo(path, st) : null
-      const status = row.status === 'CASCADE_RUN_STATUS_RUNNING' ? 'running' : row.killed ? 'stopped' : 'done'
+      const status = row.killed ? 'stopped' : row.status === 'CASCADE_RUN_STATUS_RUNNING' ? 'running' : 'done'
       const activity = st?.mtimeMs ?? parseTimestamp(row.last_modified_time)
       return {
         id: row.conversation_id,
@@ -349,6 +390,8 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
     sessionThread,
     sessionTitle,
     sessionCwd,
+    rootSession,
+    hasRunningSubagent,
     sessionHelpers,
     helperDetail,
     searchHistory,

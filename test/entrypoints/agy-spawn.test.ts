@@ -83,6 +83,9 @@ describe('spawn-agent --agent agy and board CLI Antigravity identity', () => {
     expect(paneRun).not.toContain('--session-id')
     expect(calls).toContain('agent prompt wA:p9 /rename Agy Task')
     expect(calls).toContain('agent prompt wA:p9 Ship full support')
+    // spawn-agent saves --model on the agy card without pinning card.name, so later renames still work (#650).
+    expect(cardOf(box, AGY_ID)).toMatchObject({ modelWant: 'gemini-4-neon-high' })
+    expect(cardOf(box, AGY_ID)?.name).toBeUndefined()
   })
 
   test('spawn-agent --agent agy --resume uses --conversation and refuses --fork and --thread', async () => {
@@ -90,6 +93,8 @@ describe('spawn-agent --agent agy and board CLI Antigravity identity', () => {
     box.state(BASE_STATE)
     const dir = join(box.dir, 'Resume dir')
     mkdirSync(dir)
+    mkdirSync(box.cards, { recursive: true })
+    writeFileSync(join(box.cards, `${AGY_ID}.json`), JSON.stringify({ key: AGY_ID, name: 'Kept Name' }))
 
     const resumed = await runScript(box, SPAWN, [
       '--agent',
@@ -104,6 +109,7 @@ describe('spawn-agent --agent agy and board CLI Antigravity identity', () => {
       'wA',
     ])
     expect(resumed.code).toBe(0)
+    expect(cardOf(box, AGY_ID)).toMatchObject({ name: 'Kept Name' })
     const paneRun = box
       .calls()
       .map(c => c.join(' '))

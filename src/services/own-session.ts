@@ -43,12 +43,14 @@ export function agyCallerOf(env: Env, readCard: typeof readCardFn): boolean {
 export function agySessionOf(
   p: HerdrPane | undefined,
   env: Env,
+  rootSession?: (id: string) => string | null,
 ): { key: string; cwd: string; pane: string | undefined; name: string } | null {
   if (p?.agent !== AGY_AGENT) return null
   const own = env.ANTIGRAVITY_CONVERSATION_ID
   const pane = env.HERDR_PANE_ID
-  if (own && p.agent_session?.value === own)
-    return { key: own, cwd: p.cwd ?? '', pane, name: p.terminal_title_stripped || own.slice(0, 8) }
+  const reported = p.agent_session?.value ?? null
+  const matched = !!own && (reported === own || (!!reported && !!rootSession && rootSession(reported) === own))
+  if (matched) return { key: own, cwd: p.cwd ?? '', pane, name: p.name || p.terminal_title_stripped || own.slice(0, 8) }
   throw new Error('cannot tell which Antigravity session this is: use its herdr pane, or pass --session')
 }
 

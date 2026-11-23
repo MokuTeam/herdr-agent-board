@@ -179,6 +179,14 @@ describe('AgyHome adapter (adapters/agy-home.ts)', () => {
   })
 
   test('degrades cleanly when transcript or summaries DB is missing or unreadable', () => {
+    // Completely missing DB file.
+    const emptyRoot = makeRoot('agy-missing')
+    const emptyHome = createAgyHome(emptyRoot)
+    expect(emptyHome.transcriptInfo(ID)).toBeNull()
+    expect(emptyHome.rootSession(ID)).toBe(ID)
+    expect(emptyHome.hasRunningSubagent(ID)).toBe(false)
+
+    // Corrupt DB file.
     const root = makeRoot()
     writeFileSync(join(root, 'conversation_summaries.db'), 'not sqlite')
     const home = createAgyHome(root)
@@ -186,5 +194,70 @@ describe('AgyHome adapter (adapters/agy-home.ts)', () => {
     expect(home.sessionThread(ID)).toEqual({ conversation: [], queued: [] })
     expect(home.sessionHelpers(ID)).toEqual({ helpers: [], workflows: [] })
     expect(home.helperDetail(ID, CHILD)).toBeNull()
+    expect(home.rootSession(ID)).toBe(ID)
+    expect(home.hasRunningSubagent(ID)).toBe(false)
+  })
+
+  test('rootSession walks subagent parent chains (cycle-safe, UUID-validated) and hasRunningSubagent tracks active descendants (#650)', () => {
+    const GRANDCHILD = 'b2c3d4e5-f6a7-4890-abcd-0123456789ef'
+    const KILLED = 'c3d4e5f6-a7b8-4901-abcd-0123456789ef'
+    const CYCLE_A = 'd4e5f6a7-b8c9-4012-abcd-0123456789ef'
+    const CYCLE_B = 'e5f6a7b8-c9d0-4123-abcd-0123456789ef'
+    const ORPHAN_SUB = 'f6a7b8c9-d0e1-4234-abcd-0123456789ef'
+    const MISSING_PARENT = '01234567-89ab-4cde-8f01-23456789abcd'
+    const BAD_PARENT_SUB = '12345678-9abc-4def-8012-3456789abcde'
+    const root = makeRoot('agy-sub')
+    const cwd = join(root, 'work')
+    mkdirSync(cwd, { recursive: true })
+    writeSummariesDb(root, [
+      { id: ID, title: 'Root Session', workspace: cwd, status: 'CASCADE_RUN_STATUS_IDLE' },
+      {
+        id: CHILD,
+        title: 'Child',
+        workspace: cwd,
+        status: 'CASCADE_RUN_STATUS_IDLE',
+        parent: ID,
+        agentName: 'research',
+      },
+      {
+        id: GRANDCHILD,
+        title: 'Nested',
+        workspace: cwd,
+        status: 'CASCADE_RUN_STATUS_RUNNING',
+        parent: CHILD,
+        agentName: 'research',
+      },
+      {
+        id: KILLED,
+        title: 'Killed',
+        workspace: cwd,
+        status: 'CASCADE_RUN_STATUS_RUNNING',
+        parent: OTHER,
+        agentName: 'research',
+        killed: 1,
+      },
+      { id: OTHER, title: 'Idle Root', workspace: cwd, status: 'CASCADE_RUN_STATUS_IDLE' },
+      { id: CYCLE_A, title: 'Cycle A', workspace: cwd, parent: CYCLE_B, status: 'CASCADE_RUN_STATUS_IDLE' },
+      { id: CYCLE_B, title: 'Cycle B', workspace: cwd, parent: CYCLE_A, status: 'CASCADE_RUN_STATUS_IDLE' },
+      { id: ORPHAN_SUB, title: 'Dangling Parent', workspace: cwd, parent: ` ${MISSING_PARENT} ` },
+      { id: BAD_PARENT_SUB, title: 'Corrupt Parent', workspace: cwd, parent: '../not-a-uuid' },
+    ])
+
+    const home = createAgyHome(root)
+    expect(home.rootSession(ID)).toBe(ID)
+    expect(home.rootSession(CHILD)).toBe(ID)
+    expect(home.rootSession(GRANDCHILD.toUpperCase())).toBe(ID)
+    expect(home.rootSession(ORPHAN_SUB)).toBe(MISSING_PARENT)
+    // Corrupt non-UUID parent_conversation_id must not leak into key/session.
+    expect(home.rootSession(BAD_PARENT_SUB)).toBe(BAD_PARENT_SUB)
+    expect(home.rootSession('not-a-uuid')).toBeNull()
+    expect([CYCLE_A, CYCLE_B]).toContain(home.rootSession(CYCLE_A) ?? '')
+
+    expect(home.hasRunningSubagent(ID)).toBe(true)
+    expect(home.hasRunningSubagent(ID.toUpperCase())).toBe(true)
+    expect(home.hasRunningSubagent(OTHER)).toBe(false)
+    expect(home.hasRunningSubagent(CYCLE_A)).toBe(false)
+    // A killed subagent is stopped, not running.
+    expect(home.sessionHelpers(OTHER).helpers[0]?.status).toBe('stopped')
   })
 })

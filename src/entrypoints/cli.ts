@@ -336,7 +336,7 @@ function codexSession(p: HerdrPane | undefined): (Session & { name: string }) | 
 }
 const agyCaller = (): boolean => agyCallerOf(process.env, readCard)
 function agySession(p: HerdrPane | undefined): (Session & { name: string }) | null {
-  return agySessionOf(p, process.env)
+  return agySessionOf(p, process.env, id => deps.agy.rootSession(id))
 }
 /**
  * The sessions running in every profile listed, hidden ones too, this env's own folder first (its

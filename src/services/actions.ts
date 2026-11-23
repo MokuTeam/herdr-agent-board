@@ -488,12 +488,12 @@ async function readyAgyToSleep(
 ): Promise<{ ok: true; status: AgentStatus } | { ok: false; why: string }> {
   try {
     const agent = item.pane ? await agentGet(item.pane) : null
-    if (!agent || agent.kind !== AGY_AGENT || agent.session !== (item.session ?? null))
+    const actualSession = agent?.session ? (deps.agy.rootSession(agent.session) ?? agent.session) : null
+    if (!agent || agent.kind !== AGY_AGENT || actualSession !== (item.session ?? null))
       return { ok: false, why: 'gone' }
     if (agent.status === 'blocked') return { ok: false, why: 'dialog' }
     if (agent.status === 'working') return { ok: false, why: 'busy' }
-    if (item.session && deps.agy.sessionHelpers(item.session).helpers.some(h => h.status === 'running'))
-      return { ok: false, why: 'tasks' }
+    if (item.session && deps.agy.hasRunningSubagent(item.session)) return { ok: false, why: 'tasks' }
     const draft = agyDraft(
       await herdrText(['agent', 'read', item.pane ?? '', '--source', 'recent', '--lines', '40', '--ansi'], 10_000),
     )
@@ -674,10 +674,18 @@ export async function send(
   if (!item?.pane && !item?.sleeping) return { ok: false, error: t('err.noPane') }
   const expectedSession = item.session ?? null
   const refused = (agent: HerdrAgent | null): Extract<ActionResult, { ok: false }> | null => {
-    if (!agent || agent.session !== expectedSession) return changed()
+    const actualSession =
+      agent?.kind === AGY_AGENT && agent.session && agent.session !== expectedSession
+        ? (deps.agy.rootSession(agent.session) ?? agent.session)
+        : (agent?.session ?? null)
+    if (!agent || actualSession !== expectedSession) return changed()
     if (agent.status === 'blocked')
       return { ok: false, busy: true, dialog: true, error: t('err.blocked', { name: item.name }) }
-    if (free && agent.status === 'working')
+    if (
+      free &&
+      (agent.status === 'working' ||
+        (agent.kind === AGY_AGENT && expectedSession && deps.agy.hasRunningSubagent(expectedSession)))
+    )
       return { ok: false, busy: true, error: t('err.working', { name: item.name }) }
     return null
   }

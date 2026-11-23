@@ -24,6 +24,7 @@ import { type CardDecision, cardDecisionOf, decisionsConfig } from '../core/deci
 import { waitingTool } from '../core/held-question.ts'
 import { type HelperSummary, summarize } from '../core/helpers.ts'
 import { t } from '../core/lang.ts'
+import { slugName } from '../core/launch/names.ts'
 import { relate } from '../core/links.ts'
 import { modelCheck, modelsConfig } from '../core/model-check.ts'
 import { isPiItem, isPiSessionFile, PI_AGENT, piSessionId } from '../core/pi.ts'
@@ -38,6 +39,33 @@ import type { Deps } from './deps.ts'
 import { secretsOf } from './secrets.ts'
 
 const numberOf = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined)
+
+/**
+ * Automatic display name for an Antigravity (`agy`) pane (#650): `agy` does not update the
+ * terminal title, so prefer herdr's agent name, a non-numeric tab label (set by `spawn-agent
+ * --name`), pane label, or conversation title before falling back to the shell's terminal title.
+ */
+export function agyAutoName(opts: {
+  agentName?: string | undefined
+  tabLabel?: string | undefined
+  paneLabel?: string | undefined
+  title?: string | undefined
+  terminalTitle?: string | undefined
+  paneId: string
+}): string {
+  const herdrName = opts.agentName?.trim() || ''
+  const rawTab = opts.tabLabel?.trim() || ''
+  const tabLabel = rawTab && !/^\d+$/.test(rawTab) ? rawTab : ''
+  // Keep spawn-agent's original capitalization when herdr's lowercased slug matches the tab label.
+  if (herdrName && tabLabel && slugName(tabLabel) === herdrName) return tabLabel
+  if (herdrName) return herdrName
+  if (tabLabel) return tabLabel
+  const paneLabel = opts.paneLabel?.trim() || ''
+  if (paneLabel) return paneLabel
+  const title = opts.title?.trim() || ''
+  if (title) return title
+  return opts.terminalTitle?.trim() || opts.paneId
+}
 
 /** MokuPilot's call agents (#326), read only where it is not turned off and has run here (looked up once a minute). */
 const callAgentsHere = callAgentsGate()
@@ -329,6 +357,9 @@ export async function collect(
   const live = deps.homes.liveSessions(dirs)
   const cards = allCards()
   const labels = new Map(snap.workspaces.map(w => [w.workspace_id, w.label]))
+  const hasAgyPane = snap.panes.some(p => p.agent === AGY_AGENT)
+  const tabLabels = hasAgyPane ? new Map(snap.tabs.map(tab => [tab.tab_id, tab.label ?? ''])) : null
+  const agentNames = hasAgyPane ? new Map((snap.agents ?? []).map(a => [a.pane_id, a.name ?? ''])) : null
   const items: Item[] = []
   const seen = new Set<string>()
   const archived = archivedFiles()
@@ -471,7 +502,10 @@ export async function collect(
 
   for (const p of snap.panes) {
     if (!p.agent) continue
-    const session = p.agent_session?.value ?? null
+    const rawSession = p.agent_session?.value ?? null
+    const agyPane = p.agent === AGY_AGENT
+    // If herdr's PreInvocation hook reported an agy subagent UUID, resolve back to its root conversation (#650).
+    const session = agyPane && rawSession ? (deps.agy.rootSession(rawSession) ?? rawSession) : rawSession
     if (dayPane(p, session)) {
       dayWorkspace ||= labels.get(p.workspace_id ?? '') ?? ''
       continue
@@ -480,15 +514,27 @@ export async function collect(
     if (seen.has(key)) continue
     seen.add(key)
     const reg = session ? live.get(session)?.session : null
+    let status: AgentStatus = isAgentStatus(p.agent_status) ? p.agent_status : 'unknown'
+    if (agyPane && status !== 'blocked' && session && deps.agy.hasRunningSubagent(session)) status = 'working'
+    const name = agyPane
+      ? agyAutoName({
+          agentName: agentNames?.get(p.pane_id) || p.name,
+          tabLabel: p.tab_id ? tabLabels?.get(p.tab_id) : undefined,
+          paneLabel: p.label,
+          title: session ? deps.agy.sessionTitle(session) : undefined,
+          terminalTitle: p.terminal_title_stripped,
+          paneId: p.pane_id,
+        })
+      : reg?.name || p.terminal_title_stripped || p.label || p.pane_id
     add({
       key,
       session,
       pane: p.pane_id,
       workspace: labels.get(p.workspace_id ?? '') ?? '',
       agent: p.agent,
-      name: reg?.name || p.terminal_title_stripped || p.label || p.pane_id,
+      name,
       cwd: p.cwd ?? reg?.cwd ?? '',
-      status: isAgentStatus(p.agent_status) ? p.agent_status : 'unknown',
+      status,
       sleeping: false,
       focused: p.pane_id === snap.focused_pane_id,
       activity: numberOf(reg?.statusUpdatedAt) ?? 0,
@@ -574,7 +620,7 @@ export async function collect(
         pane: own || null,
         workspace: (ws === undefined ? undefined : labels.get(ws)) ?? s.workspace ?? '',
         agent: AGY_AGENT,
-        name: name || s.session.slice(0, 8),
+        name: name || deps.agy.sessionTitle(s.session) || s.session.slice(0, 8),
         cwd,
         status: 'sleeping',
         sleeping: true,

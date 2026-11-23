@@ -57,6 +57,29 @@ test('a snapshot keeps the workspaces, tabs and panes with an id, and the fields
 
 test('a snapshot without its lists has none; an answer without a snapshot is an error', () => {
   expect(asSnapshot({ snapshot: { focused_pane_id: 3 } })).toEqual({ workspaces: [], tabs: [], panes: [] })
+  // Malformed non-array agents is dropped instead of leaking through (#650).
+  expect(asSnapshot({ snapshot: { agents: { bad: true } } })).toEqual({ workspaces: [], tabs: [], panes: [] })
+  expect(asSnapshot({ snapshot: { agents: 'not-an-array' } })).toEqual({ workspaces: [], tabs: [], panes: [] })
+  expect(
+    asSnapshot({
+      snapshot: {
+        tabs: [
+          { tab_id: 't1', workspace_id: 'w1', label: 'Gemini-task' },
+          { tab_id: 't2', workspace_id: 'w1', label: 99 },
+        ],
+        panes: [{ pane_id: 'p1', name: 'my-pane', tab_id: 't1' }],
+        agents: [{ pane_id: 'p1', name: 'gemini-task' }, { name: 'no-id' }, 7],
+      },
+    }),
+  ).toEqual({
+    workspaces: [],
+    tabs: [
+      { tab_id: 't1', workspace_id: 'w1', label: 'Gemini-task' },
+      { tab_id: 't2', workspace_id: 'w1' },
+    ],
+    panes: [{ pane_id: 'p1', name: 'my-pane', tab_id: 't1' }],
+    agents: [{ pane_id: 'p1', name: 'gemini-task' }],
+  })
   expect(() => asSnapshot(null)).toThrow(/no snapshot/)
   expect(() => asSnapshot({ snapshot: [] })).toThrow(/no snapshot/)
 })

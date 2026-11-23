@@ -33,6 +33,7 @@ export interface HerdrWorkspace {
 export interface HerdrTab {
   tab_id: string
   workspace_id: string
+  label?: string
   [key: string]: unknown
 }
 
@@ -44,6 +45,8 @@ export interface HerdrPane {
   agent?: string
   agent_status?: string
   agent_session?: HerdrToken | null
+  /** herdr's agent name (`herdr agent rename`), present on snapshot `agents` entries. */
+  name?: string
   cwd?: string
   label?: string
   terminal_title_stripped?: string
@@ -71,6 +74,8 @@ export interface HerdrSnapshot {
   workspaces: HerdrWorkspace[]
   tabs: HerdrTab[]
   panes: HerdrPane[]
+  /** Live agent entries from `herdr api snapshot` (carries `name` from `herdr agent rename`). */
+  agents?: HerdrPane[]
   focused_pane_id?: string
   [key: string]: unknown
 }
@@ -122,6 +127,7 @@ const PANE_STRINGS = [
   'workspace_id',
   'agent',
   'agent_status',
+  'name',
   'cwd',
   'label',
   'terminal_title_stripped',
@@ -147,7 +153,7 @@ function asWorkspace(v: unknown): HerdrWorkspace | null {
 
 function asTab(v: unknown): HerdrTab | null {
   if (!isRecord(v) || typeof v.tab_id !== 'string' || typeof v.workspace_id !== 'string') return null
-  return { ...v, tab_id: v.tab_id, workspace_id: v.workspace_id }
+  return stringsOnly({ ...v, tab_id: v.tab_id, workspace_id: v.workspace_id }, ['label'])
 }
 
 const listOf = <T>(v: unknown, as: (item: unknown) => T | null): T[] =>
@@ -160,12 +166,14 @@ const listOf = <T>(v: unknown, as: (item: unknown) => T | null): T[] =>
 export function asSnapshot(result: unknown): HerdrSnapshot {
   const snap = isRecord(result) ? result.snapshot : null
   if (!isRecord(snap)) throw new Error('herdr api snapshot: no snapshot in its answer')
+  const { agents, ...rest } = snap
   return stringsOnly(
     {
-      ...snap,
+      ...rest,
       workspaces: listOf(snap.workspaces, asWorkspace),
       tabs: listOf(snap.tabs, asTab),
       panes: listOf(snap.panes, asPane),
+      ...(Array.isArray(agents) && { agents: listOf(agents, asPane) }),
     },
     ['focused_pane_id'],
   )
