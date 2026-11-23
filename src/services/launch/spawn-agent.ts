@@ -42,7 +42,15 @@ import {
 } from '../../adapters/profile-panes.ts'
 import { type Env, inheritedProfileDir, loadProfiles } from '../../adapters/profiles.ts'
 import { AGY_AGENT } from '../../core/agy.ts'
-import { importsDialog, keyTowardYes, ownImports, sameFolder, trustDialog } from '../../core/dialogs/trust.ts'
+import {
+  agyTrustDialog,
+  importsDialog,
+  keyTowardYes,
+  ownImports,
+  sameFolder,
+  type TrustDialog,
+  trustDialog,
+} from '../../core/dialogs/trust.ts'
 import { t } from '../../core/lang.ts'
 import { modelArgs } from '../../core/launch/model.ts'
 import { sameDir, slugName, ticketSlugName, uniqueSlug } from '../../core/launch/names.ts'
@@ -89,17 +97,29 @@ const stringAt = (value: unknown, key: string): string | null =>
   isRecord(value) && typeof value[key] === 'string' ? value[key] : null
 
 /**
- * --trust: Yes on the dialog Claude stops at, when it is the trust dialog for `cwd` or the external
- * imports dialog for the user's own files. The cursor moves one key at a time as the screen shows it.
- * True when Enter went on Yes; false leaves the dialog to the user.
+ * --trust: Yes on the startup dialog the agent stops at — Claude's folder-trust dialog for `cwd`
+ * or external imports dialog for the user's own files, or Antigravity's folder-trust dialog for
+ * `cwd` (#648). The cursor moves one key at a time as the screen shows it. True when Enter went on
+ * Yes; false leaves the dialog to the user.
  */
-async function answerStartup(pane: string, cwd: string, home: string, claudeDirs: readonly string[]): Promise<boolean> {
+async function answerStartup(
+  pane: string,
+  cwd: string,
+  home: string,
+  claudeDirs: readonly string[],
+  kind: string,
+): Promise<boolean> {
   for (let i = 0; i < 4; i++) {
     const shown = await screen(pane)
-    const trust = trustDialog(shown)
-    const imports = importsDialog(shown)
-    const d =
-      trust && sameFolder(trust.folder, cwd, home) ? trust : ownImports(imports, claudeDirs, home) ? imports : null
+    let d: Pick<TrustDialog, 'options' | 'selected'> | null = null
+    if (kind === AGY_AGENT) {
+      const trust = agyTrustDialog(shown)
+      d = trust && sameFolder(trust.folder, cwd, home) ? trust : null
+    } else {
+      const trust = trustDialog(shown)
+      const imports = importsDialog(shown)
+      d = trust && sameFolder(trust.folder, cwd, home) ? trust : ownImports(imports, claudeDirs, home) ? imports : null
+    }
     const key = keyTowardYes(d)
     if (key === null) return false
     if (key === '') {
@@ -433,7 +453,7 @@ export async function spawnAgent(
       break
     }
     if (p.status === 'blocked') {
-      if (o.trust && answered < 4 && (await answerStartup(pane, cwd, home, claudeDirs))) {
+      if (o.trust && answered < 4 && (await answerStartup(pane, cwd, home, claudeDirs, kind))) {
         answered++
         continue
       }

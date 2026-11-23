@@ -57,6 +57,55 @@ export function trustDialog(screen: unknown): TrustDialog | null {
   return { folder, options, selected }
 }
 
+const AGY_OPTION = /^\s*([>❯]\s*)?(?:\d+\.\s*)?(.*\S)\s*$/
+const AGY_FOOTER = /↑\/↓\s*navigate|enter\s+(?:to\s+)?confirm|esc\s+to\s+cancel/i
+const AGY_NOT_STATUS = /[─╭╮╰╯❯]|^\s*>/
+
+/**
+ * Antigravity CLI's (`agy`) folder-trust dialog at the bottom of `screen` (plain or ANSI):
+ * "Accessing workspace:", the folder path (possibly wrapped), "Do you trust the contents of this
+ * project?", "> Yes, I trust this folder" / "No, exit", and its "↑/↓ Navigate · enter Confirm"
+ * footer (optionally followed by the model status line). Returns null when the screen does not
+ * end in one. Gated to `agy` panes so Claude's parser stays unchanged.
+ */
+export function agyTrustDialog(screen: unknown): TrustDialog | null {
+  const lines = stripAnsi(String(screen ?? ''))
+    .split(/\r?\n/)
+    .map(l => l.replace(/\s+$/, ''))
+  const head = lines.findLastIndex(l => /^\s*Accessing workspace:\s*$/i.test(l))
+  if (head < 0) return null
+  const rest = lines.slice(head + 1)
+  const ask = rest.findIndex(l => /do you trust the contents of this project|do you trust|trust the files/i.test(l))
+  if (ask <= 0) return null
+  const folder = rest
+    .slice(0, ask)
+    .map(l => l.trim())
+    .join('')
+  const options: TrustAnswer[] = []
+  let selected: TrustAnswer | null = null
+  let last = -1
+  rest.slice(ask + 1).forEach((line, i) => {
+    const m = AGY_OPTION.exec(line)
+    const text = m?.[2]
+    if (!m || text === undefined) return
+    const which: TrustAnswer | null = /^yes\b.*\b(trust|proceed)\b/i.test(text)
+      ? 'yes'
+      : /^no\b.*\bexit\b/i.test(text)
+        ? 'no'
+        : null
+    if (!which) return
+    options.push(which)
+    last = ask + 1 + i
+    if (m[1]) selected = which
+  })
+  if (!options.includes('yes') || !options.includes('no')) return null
+  const below = rest.slice(last + 1).filter(l => l.trim())
+  if (below.length > 2) return null
+  if (below.length >= 1 && !AGY_FOOTER.test(below[0] ?? '')) return null
+  if (below.length === 2 && AGY_NOT_STATUS.test(below[1] ?? '')) return null
+  return { folder, options, selected }
+}
+
 /**
  * Whether the folder a dialog names is `cwd`. Claude may break a path where it had a space, and
  * shows `home` as ~ on some systems: both are compared without spaces, slashes one way, case folded.

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
+import { agyTrustScreen } from '../support/trust-screen.ts'
 
 const SPAWN = join(root, 'src', 'entrypoints', 'spawn-agent.ts')
 const CLI = join(root, 'src', 'entrypoints', 'cli.ts')
@@ -195,5 +196,135 @@ describe('spawn-agent --agent agy and board CLI Antigravity identity', () => {
     expect(claudeChild.code).toBe(0)
     expect(cardOf(box, OTHER_CLAUDE)).toMatchObject({ doing: 'from claude child' })
     expect(cardOf(box, AGY_ID)).toMatchObject({ result: 'ready from agy' })
+  })
+
+  test('spawn-agent --agent agy --trust answers Antigravity folder-trust dialog and proceeds; without --trust or on another dialog it stops (#648)', async () => {
+    const AGY_BLOCKED = {
+      result: {
+        pane: {
+          pane_id: 'wA:p9',
+          tab_id: 'wA:t9',
+          agent: 'agy',
+          agent_status: 'blocked',
+          agent_session: { value: AGY_ID },
+        },
+      },
+    }
+
+    // 1. With --trust and Yes preselected: sends Enter, then /rename and brief.
+    const box1 = await sandbox()
+    const dir1 = join(box1.dir, 'Untrusted agy 100%')
+    mkdirSync(dir1)
+    box1.state({
+      ...BASE_STATE,
+      'pane get': { seq: [AGY_BLOCKED, AGY_READY] },
+      'pane read': { seq: [{ text: agyTrustScreen(dir1) }, { text: 'Conversation renamed to: Trusted Agy\n' }] },
+    })
+    const ok1 = await runScript(box1, SPAWN, [
+      '--agent',
+      'agy',
+      '--trust',
+      '--name',
+      'Trusted Agy',
+      '--cwd',
+      dir1,
+      '--workspace',
+      'wA',
+      '--brief',
+      'Start task',
+    ])
+    expect(ok1.code, ok1.stderr).toBe(0)
+    const calls1 = box1.calls().map(c => c.join(' '))
+    expect(calls1).toContain('pane send-keys wA:p9 enter')
+    expect(calls1).toContain('agent prompt wA:p9 /rename Trusted Agy')
+    expect(calls1).toContain('agent prompt wA:p9 Start task')
+
+    // 2. With --trust and cursor on No: moves up to Yes, then sends Enter.
+    const box2 = await sandbox()
+    const dir2 = join(box2.dir, 'Cursor on no')
+    mkdirSync(dir2)
+    box2.state({
+      ...BASE_STATE,
+      'pane get': { seq: [AGY_BLOCKED, AGY_READY] },
+      'pane read': {
+        seq: [
+          { text: agyTrustScreen(dir2, { selected: 'no' }) },
+          { text: agyTrustScreen(dir2, { selected: 'yes' }) },
+          { text: 'Conversation renamed to: Move Up\n' },
+        ],
+      },
+    })
+    const ok2 = await runScript(box2, SPAWN, [
+      '--agent',
+      'agy',
+      '--trust',
+      '--name',
+      'Move Up',
+      '--cwd',
+      dir2,
+      '--workspace',
+      'wA',
+      '--brief',
+      'Go',
+    ])
+    expect(ok2.code, ok2.stderr).toBe(0)
+    const keys2 = box2
+      .calls()
+      .map(c => c.join(' '))
+      .filter(c => c.startsWith('pane send-keys'))
+    expect(keys2).toEqual(['pane send-keys wA:p9 up', 'pane send-keys wA:p9 enter'])
+
+    // 3. Without --trust: stops with "Antigravity in wA:p9 waits for a dialog", sends no keys or prompts.
+    const box3 = await sandbox()
+    const dir3 = join(box3.dir, 'No trust flag')
+    mkdirSync(dir3)
+    box3.state({
+      ...BASE_STATE,
+      'pane get': AGY_BLOCKED,
+      'pane read': { text: agyTrustScreen(dir3) },
+    })
+    const stopped = await runScript(box3, SPAWN, [
+      '--agent',
+      'agy',
+      '--name',
+      'Wait Agy',
+      '--cwd',
+      dir3,
+      '--workspace',
+      'wA',
+      '--brief',
+      'Wait',
+    ])
+    expect(stopped.code).toBe(1)
+    expect(stopped.stderr).toContain('Antigravity in wA:p9 waits for a dialog')
+    const calls3 = box3.calls().map(c => c.join(' '))
+    expect(calls3.some(c => c.startsWith('pane send-keys'))).toBe(false)
+    expect(calls3.some(c => c.startsWith('agent prompt'))).toBe(false)
+
+    // 4. With --trust, wrong folder or non-trust dialog: stops without sending keys.
+    for (const screenText of [agyTrustScreen('/some/other/folder'), 'Sign in to Antigravity?\n> Yes\n  No']) {
+      const box4 = await sandbox()
+      const dir4 = join(box4.dir, 'Other dialog')
+      mkdirSync(dir4)
+      box4.state({
+        ...BASE_STATE,
+        'pane get': AGY_BLOCKED,
+        'pane read': { text: screenText },
+      })
+      const refused = await runScript(box4, SPAWN, [
+        '--agent',
+        'agy',
+        '--trust',
+        '--name',
+        'Refused Agy',
+        '--cwd',
+        dir4,
+        '--workspace',
+        'wA',
+      ])
+      expect(refused.code).toBe(1)
+      expect(refused.stderr).toContain('Antigravity in wA:p9 waits for a dialog')
+      expect(box4.calls().some(c => c[0] === 'pane' && c[1] === 'send-keys')).toBe(false)
+    }
   })
 })

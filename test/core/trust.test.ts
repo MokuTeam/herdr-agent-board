@@ -2,8 +2,15 @@ import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { importsDialog, keyTowardYes, ownImports, sameFolder, trustDialog } from '../../src/core/dialogs/trust.ts'
-import { importsScreen, trustScreen } from '../support/trust-screen.ts'
+import {
+  agyTrustDialog,
+  importsDialog,
+  keyTowardYes,
+  ownImports,
+  sameFolder,
+  trustDialog,
+} from '../../src/core/dialogs/trust.ts'
+import { agyTrustScreen, importsScreen, trustScreen } from '../support/trust-screen.ts'
 
 const FOLDER = 'C:\\Users\\me\\AppData\\Local\\Temp\\work\\a-new-project-with-a-long-name'
 
@@ -80,4 +87,30 @@ test("only imports from the user's own Claude folders count as theirs", () => {
     false,
   )
   assert.equal(ownImports(null, ['/Users/me/.claude']), false)
+})
+
+test('Antigravity (agy) folder-trust dialog: > cursor, Yes preselected, footer + model bar, and Claude untouched (#648)', () => {
+  const path = '/home/agent-board/work/проект 100%/very-long-folder-name-that-wraps'
+  const d = agyTrustDialog(agyTrustScreen(path, { width: 32 }))
+  assert.deepEqual(d, { folder: path, options: ['yes', 'no'], selected: 'yes' })
+  assert.equal(keyTowardYes(d), '')
+  assert.equal(sameFolder(d?.folder, path, '/home/agent-board'), true)
+
+  const onNo = agyTrustDialog(agyTrustScreen(path, { selected: 'no', ansi: false }))
+  assert.deepEqual(onNo, { folder: path, options: ['yes', 'no'], selected: 'no' })
+  assert.equal(keyTowardYes(onNo), 'up')
+
+  // Without model status bar or without visible cursor.
+  assert.equal(agyTrustDialog(agyTrustScreen(path, { status: null }))?.selected, 'yes')
+  assert.equal(agyTrustDialog(agyTrustScreen(path, { selected: null }))?.selected, null)
+
+  // Already answered (agy input box below): ignored.
+  assert.equal(agyTrustDialog(`${agyTrustScreen(path)}\r\n${'─'.repeat(40)}\r\n> \r\n${'─'.repeat(40)}\r\n`), null)
+  assert.equal(agyTrustDialog(`${agyTrustScreen(path, { status: null })}\r\n> Type your message`), null)
+  assert.equal(agyTrustDialog(agyTrustScreen(path).replace('Yes, I trust this folder', 'Other')), null)
+  assert.equal(agyTrustDialog(''), null)
+
+  // Claude's parser stays unchanged: does not match agy's screen, still parses Claude's.
+  assert.equal(trustDialog(agyTrustScreen(path)), null)
+  assert.deepEqual(trustDialog(trustScreen(FOLDER)), { folder: FOLDER, options: ['no', 'yes'], selected: 'no' })
 })

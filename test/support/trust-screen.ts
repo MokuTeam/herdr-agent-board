@@ -48,3 +48,31 @@ export function importsScreen({
     '  Enter to confirm · Esc to cancel',
   ].join('\r\n')
 }
+
+// Antigravity CLI's (`agy`) folder-trust dialog as herdr reads it from a pane (#648):
+// "Yes, I trust this folder" listed first and preselected with `>`, followed by its footer and model bar.
+export type AgyTrustOptions = { selected?: 'yes' | 'no' | null; width?: number; ansi?: boolean; status?: string | null }
+
+export function agyTrustScreen(
+  folder: string,
+  { selected = 'yes', width = 60, ansi = true, status = 'Gemini 4 Neon · high' }: AgyTrustOptions = {},
+): string {
+  const b = (s: string) => (ansi ? `\x1b[1m${s}\x1b[0m` : s)
+  const pick = (which: 'yes' | 'no') => (selected === which ? (ansi ? '\x1b[36m> \x1b[0m' : '> ') : '  ')
+  const lines = (folder.match(new RegExp(`.{1,${width}}`, 'g')) ?? []).map(s => b(s))
+  return [
+    'Accessing workspace:',
+    '',
+    ...lines,
+    '',
+    'Do you trust the contents of this project?',
+    '',
+    'Antigravity CLI requires permission to read, edit, and execute files here.',
+    '',
+    `${pick('yes')}Yes, I trust this folder`,
+    `${pick('no')}No, exit`,
+    '',
+    '  ↑/↓ Navigate · enter Confirm',
+    ...(status ? [`                              ${status}`] : []),
+  ].join('\r\n')
+}
