@@ -127,9 +127,10 @@ test('two shown profiles: the switch after the lanes, All profiles first, each w
   expect([control.tag, control.attrs.get('class'), control.attrs.get('role'), control.attrs.get('aria-label')]).toEqual(
     ['div', 'segmented profiles', 'tablist', 'Profiles'],
   )
-  // Right after the lanes control (in the filters, since #347), with a thumb as it has.
-  const row = elementsIn(byClass(nodes, 'toolbar-filters'))
-  expect(row[row.findIndex(el => el.attrs.get('id') === 'lanes') + 1]).toBe(control)
+  // In the top bar as a quiet dropdown beside search (#651), keeping the hidden tablist + pick trigger.
+  const bar = byClass(nodes, 'tb-top')
+  expect(findAll([bar], el => el.attrs.get('id') === 'profiles')).toEqual([control])
+  expect(byId(nodes, 'profiles-pick').attrs.get('aria-haspopup')).toBe('menu')
   expect(elementsIn(control).filter(el => hasClass(el, 'thumb')).length).toBe(1)
   const buttons = tabs(control)
   // Each with what its pick shows: its own, and the sessions in the wrong or an unknown profile (d, e).
@@ -186,7 +187,7 @@ test('Work picked: its cards and lanes, and every session in the wrong or an unk
   const bar = toolbar(DATA, { profile: 'work' })
   expect(picked(bar)).toBe('work')
   expect(tabs(byId(bar, 'lanes')).map(b => b.attrs.get('data-id'))).toEqual(['all', 'proj', 'client', 'other'])
-  expect(tabs(byId(bar, 'lanes')).map(textOf)).toEqual(['All3', 'Project1', 'Client1', 'Other1'])
+  expect(tabs(byId(bar, 'lanes')).map(textOf)).toEqual(['All', 'Project', 'Client', 'Other'])
   // The switch still counts every profile's.
   expect(tabs(byId(bar, 'profiles')).map(textOf)).toEqual(['All profiles5', 'Private3', 'Work3'])
   // Private picked: its own, and the same two in red and gray.

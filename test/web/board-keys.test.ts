@@ -97,6 +97,15 @@ test('/ goes to the search, unless typing', () => {
   expect(boardKey(press('/'), scene({ typing: true }))).toBeNull()
 })
 
+test(', opens Settings, unless typing, modified, or over the quick look (#651)', () => {
+  expect(boardKey(press(','), scene())).toBe('settings')
+  expect(boardKey(press(','), scene({ typing: true }))).toBeNull()
+  expect(boardKey(press(','), scene({ quickLook: true }))).toBeNull()
+  for (const mod of ['metaKey', 'ctrlKey', 'altKey'] as const) {
+    expect(boardKey(press(',', { [mod]: true }), scene())).toBeNull()
+  }
+})
+
 test('other keys do nothing', () => {
   for (const key of ['a', 'Enter', 'ArrowDown', ' ']) expect(boardKey(press(key), scene())).toBeNull()
 })

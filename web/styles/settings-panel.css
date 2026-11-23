@@ -1,0 +1,356 @@
+/* Structured Settings panel (#651): 5-section sidebar navigation on wide panels,
+   horizontal scrollable tabs on narrow panels and phones, inline segmented controls,
+   and clean boolean switches matching the board's design system. */
+
+#settings-panel .set-shell {
+  display: grid;
+  grid-template-columns: 192px minmax(0, 1fr);
+  padding: 0;
+  mask-image: none;
+  overflow: hidden;
+}
+
+.set-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 10px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  overflow-y: auto;
+}
+.set-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--label-2);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
+}
+.set-tab:hover {
+  background: var(--surface-2);
+  color: var(--label);
+}
+.set-tab.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.set-tab-dot {
+  margin-left: auto;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--orange);
+  flex: none;
+}
+.set-nav-foot {
+  margin-top: auto;
+  padding: 10px 10px 2px;
+  border-top: 1px solid var(--border);
+  color: var(--label-3);
+  font-size: 11.5px;
+}
+
+.set-pane {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px 22px 24px;
+}
+.set-section {
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.set-sec-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.set-sec-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--label);
+}
+.set-scope {
+  font-size: 11.5px;
+  color: var(--label-3);
+}
+
+.set-group {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 14px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--label);
+  text-align: left;
+}
+.set-row:first-child {
+  border-top: 0;
+}
+.set-lbl {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.set-lbl b {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--label);
+}
+.set-lbl small {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--label-2);
+}
+.set-lbl small.set-err {
+  color: var(--orange);
+}
+.set-inline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  max-width: 100%;
+}
+
+/* Segmented control inside Settings */
+.set-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+  padding: 2px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  gap: 2px;
+  flex: 0 1 auto;
+}
+.set-seg-opt {
+  height: 24px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--label-2);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.set-seg-opt:hover:not(:disabled) {
+  color: var(--label);
+}
+.set-seg-opt.on {
+  background: var(--surface);
+  color: var(--label);
+  box-shadow: 0 0 0 0.5px var(--border), 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.set-seg-opt:disabled {
+  opacity: 0.45;
+}
+
+/* Boolean toggle switch (one of the strictly limited pill shapes in the system) */
+.set-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+  flex: none;
+  transition: background 140ms ease;
+}
+.set-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--r-pill);
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+  transition: transform 140ms ease;
+}
+.set-switch.on {
+  background: var(--accent);
+}
+.set-switch.on::after {
+  transform: translateX(14px);
+}
+.set-switch:disabled {
+  opacity: 0.45;
+}
+.set-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.set-select {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--label);
+  font: 12.5px var(--font);
+  max-width: 220px;
+}
+.set-select option {
+  background: var(--panel-float);
+  color: var(--label);
+}
+.set-reset {
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--label-2);
+  font-size: 12px;
+  font-weight: 500;
+}
+.set-reset:hover {
+  background: var(--surface-2);
+  color: var(--label);
+}
+
+/* Sub-row checkboxes (Threads options) */
+.set-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 9px 14px 10px 24px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.set-chk {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--label-2);
+  cursor: pointer;
+}
+.set-chk input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+/* Navigation rows to dedicated panels */
+.set-link {
+  min-height: 44px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.set-link:hover {
+  background: var(--surface-2);
+}
+.set-link.danger .set-lbl b {
+  color: var(--red);
+}
+.set-link-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--label-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.set-link-meta.warn {
+  color: var(--orange);
+  font-weight: 500;
+}
+.set-link-meta svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* Narrow docked panel or phone: horizontal scrollable section tabs over single-column controls */
+@container sheet (max-width: 619px) {
+  #settings-panel .set-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .set-nav {
+    flex-direction: row;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 0 12px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .set-nav::-webkit-scrollbar {
+    display: none;
+  }
+  .set-nav-foot {
+    display: none;
+  }
+  .set-tab {
+    height: 36px;
+    border-radius: 0;
+    padding: 0 10px;
+    position: relative;
+  }
+  .set-tab.on {
+    background: transparent;
+  }
+  .set-tab.on::after {
+    content: "";
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 0;
+    height: 2px;
+    background: var(--accent);
+  }
+  .set-tab svg {
+    display: none;
+  }
+  .set-pane {
+    padding: 14px 12px 20px;
+  }
+  .set-row {
+    flex-wrap: wrap;
+  }
+  .set-inline {
+    justify-content: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .set-tab,
+  .set-switch,
+  .set-switch::after,
+  .set-link {
+    transition: none;
+  }
+}

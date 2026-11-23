@@ -12,7 +12,7 @@ import { CalendarIcon, VideoIcon } from '../icons.tsx'
 /** How soon a call shows beside the button. */
 const SOON_MS = 15 * 60_000
 
-export function CalendarButton({ onOpen }: { onOpen(): void }) {
+export function CalendarButton({ onOpen, onlySoon = false }: { onOpen(): void; onlySoon?: boolean }) {
   const t = useT()
   const { data } = useBoardContext()
   const line = data?.calendar
@@ -22,6 +22,7 @@ export function CalendarButton({ onOpen }: { onOpen(): void }) {
   const start = next ? Date.parse(next.start) : 0
   const end = next ? Date.parse(next.end) : 0
   const soon = !!next && start - SOON_MS <= now && end > now
+  if (onlySoon && !soon) return null
   const lane = next?.lane ? data?.categories.find(c => c.id === next.lane)?.color : undefined
   const color = next?.color ?? lane ?? 'var(--accent)'
   const when = soon ? untilText(start, end, now, t) : ''

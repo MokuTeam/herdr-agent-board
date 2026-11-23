@@ -681,3 +681,27 @@
 :root[data-look="terminal"] .dec-choice .mini, :root[data-look="terminal"] .dec-board .mini, :root[data-look="terminal"] .dec-own .mini, :root[data-look="terminal"] .dec-own input { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
 :root[data-look="terminal"] .dec-option.recommended { box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
 :root[data-look="terminal"] .dec-row, :root[data-look="terminal"] .dec-lane, :root[data-look="terminal"] .dec-thread { border-radius: var(--radius); }
+
+/* Hybrid B+C header, navigation rail and Settings panel (#651): outlined, monospace, zero fills. */
+:root[data-look="terminal"] .nav-rail { background: var(--bg); border-right-color: var(--t-edge); }
+:root[data-look="terminal"] .rail-item { border-radius: var(--radius); color: var(--label-2); font-weight: 400; }
+:root[data-look="terminal"] .rail-item:hover { background: none; color: var(--label); box-shadow: inset 0 0 0 1px var(--t-dim); }
+:root[data-look="terminal"] .rail-item.on { background: none; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 700; }
+:root[data-look="terminal"] .tb-top { background: var(--bg); border-bottom-color: var(--t-edge); }
+:root[data-look="terminal"] .toolbar-filters { background: var(--bg); border-bottom-color: var(--t-edge); }
+:root[data-look="terminal"] .tb-btn, :root[data-look="terminal"] .status-control { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); color: var(--label-2); font-weight: 400; }
+:root[data-look="terminal"] .tb-btn:hover:not(:disabled), :root[data-look="terminal"] .status-control:hover:not(:disabled) { background: none; color: var(--label); box-shadow: inset 0 0 0 1px var(--t-dim); }
+:root[data-look="terminal"] .tb-btn.tb-primary { background: none; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 700; }
+:root[data-look="terminal"] .toolbar #next-attention.triage { background: none; border-color: var(--orange); color: var(--orange); }
+:root[data-look="terminal"] .lane-tab { font-weight: 400; }
+:root[data-look="terminal"] .lane-tab.on { color: var(--accent); font-weight: 700; }
+:root[data-look="terminal"] .lane-tab.on::after { background: var(--accent); }
+:root[data-look="terminal"] .set-nav { background: var(--bg); border-right-color: var(--t-edge); }
+:root[data-look="terminal"] .set-tab.on { background: none; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 700; }
+:root[data-look="terminal"] .set-group { border-color: var(--t-edge); border-radius: var(--radius); background: var(--bg); }
+:root[data-look="terminal"] .set-seg { border-color: var(--t-edge); border-radius: var(--radius); background: none; }
+:root[data-look="terminal"] .set-seg-opt.on { background: none; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 700; }
+:root[data-look="terminal"] .set-switch { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .set-switch.on { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .set-switch::after { border-radius: 2px; background: var(--label-2); box-shadow: none; }
+:root[data-look="terminal"] .set-switch.on::after { background: var(--accent); }

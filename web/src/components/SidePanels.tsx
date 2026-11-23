@@ -26,6 +26,7 @@ import { LocalPathsPanel, type LocalPathsPanelProps } from './phones/LocalPathsP
 import { PhonesPanel, type PhonesPanelProps } from './phones/PhonesPanel.tsx'
 import { ProfilesPanel, type ProfilesPanelProps } from './profiles/ProfilesPanel.tsx'
 import { SchedulePanel, type SchedulePanelProps } from './schedule/SchedulePanel.tsx'
+import { SettingsPanel, type SettingsPanelProps } from './settings/SettingsPanel.tsx'
 import { Sheet, type SheetSlots } from './sheet/Sheet.tsx'
 import { TeamPanel, type TeamPanelProps } from './team/TeamPanel.tsx'
 import { ThreadsPanel, type ThreadsPanelProps } from './threads/ThreadsPanel.tsx'
@@ -79,6 +80,8 @@ export interface SidePanelsProps {
    * `nodes` gets Add a server alone there (#509).
    */
   devices?: DevicesPanelProps
+  /** Structured Settings panel (#651). */
+  settings?: SettingsPanelProps
 }
 
 export function SidePanels({
@@ -103,6 +106,7 @@ export function SidePanels({
   calendarSettings,
   team,
   devices,
+  settings,
 }: SidePanelsProps) {
   const { data, ui, dispatch } = useBoardContext()
   return (
@@ -130,6 +134,7 @@ export function SidePanels({
       {localPaths && remotePage() && <LocalPathsPanel {...localPaths} />}
       {team && offersTeam(data) && <TeamPanel {...team} />}
       {devices && <DevicesPanel {...devices} />}
+      {settings && <SettingsPanel {...settings} />}
     </>
   )
 }

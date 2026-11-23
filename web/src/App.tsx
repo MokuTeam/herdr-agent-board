@@ -17,6 +17,7 @@ import { AwayStrip } from './components/journal/AwayStrip.tsx'
 import { closeLimits, LimitsPop } from './components/LimitsPop.tsx'
 import { LaunchDialog } from './components/launch/LaunchDialog.tsx'
 import { ContextMenu } from './components/menu/ContextMenu.tsx'
+import { NavRail, RAIL_STORAGE_KEY, type RailPlace } from './components/NavRail.tsx'
 import { usePhonesPanel } from './components/phones/PhonesPanel.tsx'
 import { SheetQuestion } from './components/questions/SheetQuestion.tsx'
 import { RenameField } from './components/RenameField.tsx'
@@ -59,13 +60,29 @@ import { useToolbarMenu } from './hooks/useToolbarMore.ts'
 import { linkDecisionsSheet } from './models/decisions.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { remotePage } from './models/remote-page.ts'
-import { offersTeam } from './models/team.ts'
+import { offersTeam, teamBadge } from './models/team.ts'
+import { proposedCount } from './models/todos.ts'
+import { scheduleBadge } from './models/toolbar.ts'
+import { isWakeView, noteShown } from './models/wake.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
+import { storage } from './state/storage.ts'
 
 export function App() {
   const limitsAnchor = useRef<HTMLButtonElement>(null)
-  const { ui, dispatch, data, calOpen, teamOpen } = useBoardContext()
+  const { ui, dispatch, data, calOpen, teamOpen, now } = useBoardContext()
   const panels = usePanelLayout()
+  // Collapsible left rail (#651): persisted expanded/collapsed on desktop, drawer state on phone.
+  const [railExpanded, setRailExpanded] = useState(() => storage.get(RAIL_STORAGE_KEY, '') === '1')
+  const toggleRailExpanded = () => {
+    setRailExpanded(was => {
+      const next = !was
+      storage.set(RAIL_STORAGE_KEY, next ? '1' : '0')
+      return next
+    })
+  }
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  // Structured Settings panel (#651).
+  const [settingsOpen, setSettingsOpen] = useState(false)
   // The categories and schedule panels, each opened at a lane or a session when asked.
   const [categories, setCategories] = useState(false)
   const [lane, setLane] = useState<{ id: string } | null>(null)
@@ -274,6 +291,7 @@ export function App() {
     pickOption: questions.pickOption,
     openTerminal: terminal.openTerminal,
     archive,
+    openSettings: () => setSettingsOpen(was => !was),
     terminal: terminalKeys,
   })
   // Layers above the board, topmost first (models/lifecycle.ts PAGE_LAYERS): Back on a phone
@@ -294,8 +312,67 @@ export function App() {
   useEffect(() => {
     panels.place.boardTop = () => document.querySelector('.toolbar')?.getBoundingClientRect().bottom ?? 0
   }, [panels.place])
+
+  const wakeDown = !remotePage() && isWakeView(data?.wake) && noteShown(data.wake, now)
+  const systemAlert = setup.shown || !!data?.backup?.problem || wakeDown
+  const sched = scheduleBadge(data?.schedules ?? [], now)
+  const railAlert =
+    systemAlert ||
+    sched.due ||
+    (data?.decisions ? data.decisions.items.length + data.decisions.defaulted.length > 0 : false) ||
+    (data?.threads ? data.threads.needsOwner > 0 : false) ||
+    (offersTeam(data) ? teamBadge(data).count > 0 : false) ||
+    (data?.todos ? proposedCount(data.items) > 0 : false) ||
+    (data?.calendar ? data.calendar.failing > 0 : false)
+
+  const activePlace: RailPlace = settingsOpen
+    ? 'settings'
+    : decisionsOpen
+      ? 'decisions'
+      : threads?.shown
+        ? 'threads'
+        : team
+          ? 'team'
+          : todosOpen
+            ? 'todos'
+            : calendarOpen
+              ? 'calendar'
+              : schedule
+                ? 'schedule'
+                : timeOpen
+                  ? 'time'
+                  : categories
+                    ? 'categories'
+                    : archive.panel.open
+                      ? 'archive'
+                      : 'board'
+
   return (
     <>
+      <NavRail
+        expanded={railExpanded}
+        onToggleExpand={toggleRailExpanded}
+        drawerOpen={drawerOpen}
+        onCloseDrawer={() => setDrawerOpen(false)}
+        activePlace={activePlace}
+        onBoard={() => panels.closeOpen()}
+        {...(decisionsOn && { onDecisions: () => setDecisionsOpen(was => !was) })}
+        {...(threads && { onThreads: () => threads.setShown(!threads.shown) })}
+        {...(offersTeam(data) && { onTeam: () => (team ? setTeam(false) : openTeam()) })}
+        {...(data?.todos && { onTodos: () => setTodosOpen(was => !was) })}
+        {...(data?.calendar && { onCalendar: () => setCalendarOpen(was => !was) })}
+        onSchedule={() => (schedule ? setSchedule(false) : openSchedule())}
+        {...(data?.time && {
+          onTime: () => {
+            setTimeClient(null)
+            setTimeOpen(was => !was)
+          },
+        })}
+        onCategories={() => (categories ? setCategories(false) : openCategories())}
+        onArchive={archive.togglePanel}
+        onSettings={() => setSettingsOpen(was => !was)}
+        systemAlert={systemAlert}
+      />
       <div className="page">
         <Toolbar
           limitsAnchor={limitsAnchor}
@@ -321,6 +398,8 @@ export function App() {
           {...(journal.button && {
             journal: { label: journal.button, open: !!journal.shown, onToggle: journal.toggle },
           })}
+          onOpenDrawer={() => setDrawerOpen(true)}
+          railAlert={railAlert}
         />
         <AwayStrip journal={journal} />
         <Board
@@ -383,6 +462,23 @@ export function App() {
           threads: { open: threads.shown, onClose: () => threads.setShown(false), menu: menus.menu },
         })}
         time={{ open: timeOpen, onClose: () => setTimeOpen(false), client: timeClient, onClient: setTimeClient }}
+        settings={{
+          open: settingsOpen,
+          onClose: () => setSettingsOpen(false),
+          setup,
+          onOpenProfiles: () => setProfiles(true),
+          onOpenWake: () => setWake(true),
+          onOpenPhones: () => setPhones(true),
+          onOpenMokupilot: openMokupilot,
+          onOpenAccess: openAccess,
+          onOpenBackup: openBackup,
+          onOpenUpdates: openUpdates,
+          onOpenTimeSettings: openTimeSettings,
+          onOpenCalendarSettings: openCalendarSettings,
+          onOpenLocalPaths: openLocalPaths,
+          onOpenTeam: openTeam,
+          onOpenDevices: openDevices,
+        }}
         sheet={{
           onNewSession: newSession,
           schedule: {
@@ -420,7 +516,13 @@ export function App() {
           onPin: todos.pin,
         }}
       />
-      <LimitsPop anchor={limitsAnchor} />
+      <LimitsPop
+        anchor={limitsAnchor}
+        unified
+        setup={setup}
+        onBackup={remotePage() ? undefined : openBackup}
+        onWake={() => setWake(true)}
+      />
       <SetupPop setup={setup} />
       <FileChips chips={chips} />
       <QuickLook engine={quickLook.engine} />

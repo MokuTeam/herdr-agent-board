@@ -11,8 +11,11 @@ const MIN = 60_000
 // Half minutes: the two sides read the clock a few ms apart and must not straddle a minute.
 const ago = (minutes: number) => Date.now() - (minutes + 0.5) * MIN
 
-/** The card's new status label is not in the old page's markup: compare the rest. */
-const withoutStatus = (html: string) => html.replace(/[ \t]*<span class="card-status"[^>]*>[^<]*<\/span>\n?/, '')
+/** The card's status label and provider mark (#651) are not in the old page's markup: compare the rest. */
+const withoutStatus = (html: string) =>
+  html
+    .replace(/[ \t]*<span class="card-status"[^>]*>[^<]*<\/span>\n?/, '')
+    .replace(/[ \t]*<span[^>]*class="provider-mark"[^>]*>[\s\S]*?<\/span>\n?/, '')
 
 function same(scene: Scene, key: string) {
   const { old, react } = bothCards(scene, key)

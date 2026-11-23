@@ -69,7 +69,7 @@ test('lanes control: All, then the categories with sessions on show and those pi
   const visible = [item({ key: 'a', category: 'other' }), item({ key: 'b', category: 'other' })]
   expect(laneOptions(CATEGORIES, visible, [], categoryOf, t)).toEqual([
     { id: 'all', title: 'All', n: 2 },
-    { id: 'other', title: 'OTHER', n: 2 },
+    { id: 'other', title: 'OTHER', n: 2, color: '#000' },
   ])
   expect(laneOptions(CATEGORIES, visible, ['unused'], categoryOf, t).map(o => [o.id, o.n])).toEqual([
     ['all', 2],

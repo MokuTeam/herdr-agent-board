@@ -139,7 +139,6 @@ describe('routes', () => {
       'styles/card-wrap.css',
       'styles/categories.css',
       'styles/segments.css',
-      'styles/toolbar.css',
       'styles/journal.css',
       'styles/access.css',
       'styles/archive.css',
@@ -150,6 +149,10 @@ describe('routes', () => {
       'styles/panels.css',
       'styles/sheet-phone.css',
       'styles/nodes.css',
+      'styles/design-system.css',
+      'styles/rail.css',
+      'styles/toolbar.css',
+      'styles/settings-panel.css',
       'styles/look-terminal.css',
       'app.js',
     ])

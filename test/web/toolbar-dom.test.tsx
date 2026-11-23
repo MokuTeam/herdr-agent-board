@@ -1,25 +1,24 @@
-// The toolbar (#347) on a real DOM (jsdom): at each width it is one row or two and the actions that
-// do not fit are in More, in the order of the priority list; More lists them with their counts and
-// what it picks does what the button does; in two rows scrolling down folds the filters away on the
-// board's spring, the filters' button says how many are on and what, scrolling up or the button
-// bring them back, a filter in use keeps them; one row has nothing to fold; reduced motion
-// cross-fades. Layout is not here (jsdom has none): what the stylesheet would make of each control
-// is stood in by a fake getComputedStyle and clientWidth, the observers and the frames are run by
-// hand. What the stylesheet does with the attributes is read from its text in toolbar-style.test.ts.
-import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from 'bun:test'
+// Hybrid B+C header DOM interactions in jsdom (#651):
+// - Scrolling down folds Row 2 (#toolbar-filters) on the board's spring and reveals #toolbar-peek
+//   with the active lane label (and color square) or filter count; clicking #toolbar-peek or
+//   scrolling up brings Row 2 back.
+// - Focused search input keeps #toolbar-filters open while scrolling.
+// - Reduced motion collapses/expands cleanly without leaving data-moving set.
+// - Desktop flat lane tabs overflow cleanly into "+N more" (#lanes-more), mark #lanes-more active
+//   when a hidden lane is picked, and expand back without oscillating when width grows.
+// - Phone drawer button (#rail-toggle) invokes onOpenDrawer and reflects railAlert.
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
-import { act, Profiler } from 'react'
+import { act } from 'react'
 import type { BoardPayload } from '../../src/core/payload.ts'
-import type { PresenceView } from '../../src/core/presence.ts'
-import type { ToolbarMenu } from '../../web/src/hooks/useToolbarMore.ts'
-import type { ToolbarEntry } from '../../web/src/models/toolbar-fit.ts'
+import type { SegmentPicks } from '../../web/src/hooks/useSegmentPicks.ts'
 
 let createRoot: typeof import('react-dom/client').createRoot
 let Toolbar: typeof import('../../web/src/components/Toolbar.tsx').Toolbar
+let Lanes: typeof import('../../web/src/components/Lanes.tsx').Lanes
 let I18nProvider: typeof import('../../web/src/i18n/I18nProvider.tsx').I18nProvider
 let BoardContext: typeof import('../../web/src/state/BoardProvider.tsx').BoardContext
 let support: typeof import('./support/board.tsx')
-let TOOLBAR_PRIORITY: typeof import('../../web/src/models/toolbar-fit.ts').TOOLBAR_PRIORITY
 let reducedMotion: typeof import('../../web/src/models/spring.ts').reducedMotion
 let stopAllSprings: typeof import('../../web/src/models/spring.ts').stopAllSprings
 let reducedBefore: PropertyDescriptor | undefined
@@ -52,74 +51,35 @@ const OWN_GLOBALS = [
 ] as const
 const saved = new Map<string, PropertyDescriptor | undefined>()
 
-// What the page's media queries and the layout say now.
-const world = { reduce: false, total: 390, scroll: 0, page: 100_000, view: 844, filtersInPage: false }
-/** The filters' height as drawn: the spring's while they move, else 28 open and 0 folded. */
-function filtersHeight(): number {
-  const f = dom.window.document.querySelector('#toolbar-filters') as HTMLElement | null
-  if (!f) return 0
-  if (f.hasAttribute('data-moving')) return Number.parseFloat(f.style.height) || 0
-  return f.hasAttribute('data-folded') ? 0 : 28
+const world = {
+  reduce: false,
+  phone: false,
+  lanesWidth: 600,
+  tabWidth: 90,
+  scroll: 0,
+  page: 100_000,
+  view: 844,
 }
-/** The page's height; with `filtersInPage` the filters are part of it, so it shrinks as they fold. */
-const pageHeight = () => world.page + (world.filtersInPage ? filtersHeight() : 0)
-/** The container's `contain` each time an action was measured with every action shown (`.measuring`). */
-let containWhileMeasuring: string[] = []
 const watching: { notify: () => void; el: Element }[] = []
 let queue: ((now: number) => void)[] = []
 let clock = 1000
-/** What a fade started on an element was asked for. */
-const fades: { el: Element; keyframes: unknown }[] = []
-
-/** The summary, which only a wide board shows (app.css hides it below 1580 px): then it is the start of the row. */
-const SUMMARY = 240
-const summaryShown = () => world.total > 1580
-/** What the stylesheet would make of each action: icons 28, the pills and the usage chip wider. */
-const WIDTHS: Record<string, number> = {
-  'presence-switch': 130,
-  'presence-offer': 96,
-  'todos-open': 52,
-  'new-session': 28,
-  'presence-call': 28,
-  'sched-open': 50,
-  'next-attention': 88,
-  limits: 190,
-  'archive-open': 28,
-  'cats-open': 28,
-  'toolbar-more': 28,
-  'toolbar-peek': 28,
-  settings: 28,
-  live: 8,
-}
-/** The actions' row (two rows): the page's width less its 16 px gutters, and the summary where it is shown. */
-const room = () => world.total - 32 - (summaryShown() ? SUMMARY + 8 : 0)
 
 function fakeStyle(el: Element): Record<string, string> {
-  const px = (n: number) => `${n}px`
-  if (el.closest('.toolbar-actions.measuring'))
-    containWhileMeasuring.push((el.closest('.toolbar-fit') as HTMLElement | null)?.style.contain ?? 'none')
-  if (el.classList.contains('toolbar-actions')) return { width: px(room()), columnGap: '6px' }
-  // Hidden, the summary has no box and so no width: the row has no gap before the filters either.
-  if (el.id === 'summary') return { width: px(summaryShown() ? SUMMARY : 0), columnGap: '0px' }
-  if (el.classList.contains('toolbar-filters')) {
+  if (el.id === 'toolbar-filters') {
     const folded = el.hasAttribute('data-folded')
     return {
-      height: px(folded ? 0 : 28),
+      height: folded ? '0px' : '36px',
       marginTop: '0px',
       paddingTop: '0px',
       paddingBottom: '0px',
       marginBottom: '0px',
-      width: '300px',
-      columnGap: '6px',
     }
   }
   return {
-    width: px(WIDTHS[el.id] ?? 28),
-    height: '28px',
-    columnGap: '6px',
+    height: '30px',
+    marginTop: '0px',
     paddingTop: '0px',
     paddingBottom: '0px',
-    marginTop: '0px',
     marginBottom: '0px',
   }
 }
@@ -134,7 +94,9 @@ beforeAll(async () => {
     matchMedia: {
       value: (query: string) => ({
         get matches() {
-          return query.includes('prefers-reduced-motion') ? world.reduce : false
+          if (query.includes('prefers-reduced-motion')) return world.reduce
+          if (query.includes('max-width: 760px')) return world.phone
+          return false
         },
         addEventListener() {},
         removeEventListener() {},
@@ -156,33 +118,30 @@ beforeAll(async () => {
     },
     addEventListener: { value: dom.window.addEventListener.bind(dom.window) },
     removeEventListener: { value: dom.window.removeEventListener.bind(dom.window) },
-    // A browser keeps the scroll inside the page: past its end it is at its end.
-    scrollY: { get: () => (world.filtersInPage ? Math.min(world.scroll, pageHeight() - world.view) : world.scroll) },
+    scrollY: { get: () => world.scroll },
     innerHeight: { get: () => world.view },
   }
   for (const k of OWN_GLOBALS) Object.defineProperty(g, k, { configurable: true, ...own[k] })
-  // The page's height, for where it ends; jsdom has no layout.
   Object.defineProperty(dom.window.document.documentElement, 'scrollHeight', {
     configurable: true,
-    get: pageHeight,
+    get: () => world.page,
   })
-  Object.defineProperty(dom.window.HTMLElement.prototype, 'offsetHeight', {
-    configurable: true,
-    get(this: HTMLElement) {
-      return world.filtersInPage && this.id === 'toolbar-filters' ? filtersHeight() : 0
-    },
-  })
-  // The container's width, which a stylesheet's container query reads; jsdom has no layout.
   Object.defineProperty(dom.window.HTMLElement.prototype, 'clientWidth', {
     configurable: true,
     get(this: HTMLElement) {
-      return this.classList.contains('toolbar-fit') ? world.total : 0
+      return this.id === 'lanes' ? world.lanesWidth : 0
+    },
+  })
+  Object.defineProperty(dom.window.HTMLElement.prototype, 'offsetWidth', {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.hidden) return 0
+      return this.hasAttribute('data-id') ? world.tabWidth : 0
     },
   })
   Object.defineProperty(dom.window.HTMLElement.prototype, 'animate', {
     configurable: true,
-    value(this: Element, keyframes: unknown) {
-      fades.push({ el: this, keyframes })
+    value() {
       return { finished: Promise.resolve(), cancel() {} }
     },
   })
@@ -191,9 +150,9 @@ beforeAll(async () => {
   Object.defineProperty(reducedMotion, 'matches', { configurable: true, get: () => world.reduce })
   ;({ createRoot } = await import('react-dom/client'))
   ;({ Toolbar } = await import('../../web/src/components/Toolbar.tsx'))
+  ;({ Lanes } = await import('../../web/src/components/Lanes.tsx'))
   ;({ I18nProvider } = await import('../../web/src/i18n/I18nProvider.tsx'))
   ;({ BoardContext } = await import('../../web/src/state/BoardProvider.tsx'))
-  ;({ TOOLBAR_PRIORITY } = await import('../../web/src/models/toolbar-fit.ts'))
   support = await import('./support/board.tsx')
 })
 
@@ -209,15 +168,14 @@ afterAll(() => {
 beforeEach(() => {
   stopAllSprings()
   world.reduce = false
-  world.total = 390
+  world.phone = false
+  world.lanesWidth = 600
+  world.tabWidth = 90
   world.scroll = 0
   world.page = 100_000
   world.view = 844
-  world.filtersInPage = false
-  containWhileMeasuring = []
   queue = []
   watching.length = 0
-  fades.length = 0
   dom.window.document.body.innerHTML = '<div id="root"></div>'
 })
 
@@ -234,11 +192,7 @@ const need = (sel: string) => {
   expect(el).toBeTruthy()
   return el as HTMLElement
 }
-const clickOn = (el: Element | null, detail = 1) => {
-  expect(el).toBeTruthy()
-  return act(async () => void el?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, detail })))
-}
-/** Frames of the springs and of the scroll reads, 16 ms apart, until none is asked for or `max` ran. */
+
 async function frames(max = 200) {
   for (let i = 0; i < max && queue.length; i++) {
     const run = queue
@@ -249,556 +203,190 @@ async function frames(max = 200) {
     })
   }
 }
-/** The toolbar's width changed: every observer says so. */
-const resizeTo = (total: number) =>
-  act(async () => {
-    world.total = total
-    for (const w of [...watching]) w.notify()
-  })
-/** The page scrolled to `y`, and the frame that reads it ran. */
+
 async function scrollTo(y: number) {
   world.scroll = y
-  await act(async () => void dom.window.dispatchEvent(new dom.window.Event('scroll')))
+  await act(async () => {
+    dom.window.dispatchEvent(new dom.window.Event('scroll'))
+  })
   await frames()
 }
 
-const NOW = Date.now()
-const PRESENCE: PresenceView = {
-  state: 'here',
-  since: NOW,
-  by: 'user',
-  mode: 'suggest',
-  idleMinutes: 5,
-  hint: null,
-  detects: true,
-  calls: true,
-}
-const category = (id: string, title: string, fallback = false): BoardPayload['categories'][number] => ({
-  id,
-  title,
-  color: '#007AFF',
-  colorName: 'blue',
-  paths: [],
-  configured: true,
-  fallback,
-})
-const profile = (id: string, title: string): NonNullable<BoardPayload['profiles']>[number] => ({
-  id,
-  title,
-  color: '#5856D6',
-  colorName: 'indigo',
-  dir: `/home/${id}`,
-  hidden: false,
-  inherited: false,
-  exists: true,
-  hooks: true,
-  sessions: 1,
-  limits: null,
-})
-const items = () => [
-  support_item('a', 'proj', 'work'),
-  support_item('b', 'proj', 'me'),
-  support_item('c', 'other', 'idle'),
-]
-function support_item(key: string, category: string, column: 'work' | 'me' | 'idle') {
-  return support.item({ key, name: key, category, column, ...(column === 'me' && { attention: 'ask' as const }) })
-}
-const DATA = (presence: Partial<PresenceView> = {}) =>
-  support.payload({
-    items: items(),
-    categories: [category('proj', 'Project'), category('other', 'Other', true)],
-    profiles: [profile('one', 'Private'), profile('two', 'Work')],
-    schedules: [{ id: 's1', key: 'a', text: 'ping', next: NOW - 60_000 }],
-    todos: { agents: true },
-    presence: { ...PRESENCE, ...presence },
+async function resizeLanes(width: number) {
+  world.lanesWidth = width
+  await act(async () => {
+    for (const w of [...watching]) if (w.el.id === 'lanes') w.notify()
   })
-
-interface Calls {
-  todos: number
-  schedule: number
-  newSession: HTMLElement[]
-  dispatched: unknown[]
+  await frames()
 }
 
-async function mount(
-  options: {
-    ui?: Partial<import('../../web/src/state/board-ui.ts').BoardUi>
-    presence?: Partial<PresenceView>
-    /** The setup note, shown. */
-    setup?: boolean
-  } = {},
+function sampleData(): BoardPayload {
+  return support.payload({
+    categories: [
+      { id: 'core', title: 'Core', color: '#2563EB', colorName: 'blue', paths: [], configured: true, fallback: false },
+      { id: 'web', title: 'Web', color: '#16A34A', colorName: 'green', paths: [], configured: true, fallback: false },
+      { id: 'ops', title: 'Ops', color: '#D97706', colorName: 'orange', paths: [], configured: true, fallback: false },
+      {
+        id: 'docs',
+        title: 'Docs',
+        color: '#7C3AED',
+        colorName: 'purple',
+        paths: [],
+        configured: true,
+        fallback: false,
+      },
+      { id: 'other', title: 'Other', color: '#71717A', colorName: 'gray', paths: [], configured: true, fallback: true },
+    ],
+    items: [
+      support.item({ key: 'a', name: 'atlas-core', column: 'work', category: 'core' }),
+      support.item({ key: 'b', name: 'atlas-web', column: 'me', category: 'web' }),
+      support.item({ key: 'c', name: 'atlas-ops', column: 'ext', category: 'ops' }),
+      support.item({ key: 'd', name: 'atlas-docs', column: 'done', category: 'docs' }),
+      support.item({ key: 'e', name: 'atlas-other', column: 'idle', category: 'other' }),
+    ],
+  })
+}
+
+async function mountToolbar(
+  opts: { filter?: string[]; query?: string; onOpenDrawer?: () => void; railAlert?: boolean } = {},
 ) {
-  const limitsAnchor: { current: HTMLButtonElement | null } = { current: null }
-  const noteRef: { current: HTMLButtonElement | null } = { current: null }
-  let commits = 0
-  const calls: Calls = { todos: 0, schedule: 0, newSession: [], dispatched: [] }
-  const opened: { entries: readonly ToolbarEntry[]; onPick: (id: string) => void; keyboard: boolean }[] = []
-  const more: ToolbarMenu = {
-    expanded: false,
-    open: (_button, keyboard, entries, onPick) => void opened.push({ entries, onPick, keyboard }),
-  }
-  const root = createRoot(need('#root'))
-  const value = support.board({
-    data: DATA(options.presence),
-    ui: options.ui ?? {},
-    dispatch: (action: unknown) => void calls.dispatched.push(action),
-  } as Parameters<typeof support.board>[0])
-  await act(async () =>
+  const host = need('#root')
+  const root = createRoot(host)
+  const val = support.board({
+    data: sampleData(),
+    ui: { filter: opts.filter ?? [], query: opts.query ?? '' },
+  })
+  await act(async () => {
     root.render(
       <I18nProvider lang="en">
-        <BoardContext.Provider value={value}>
-          <Profiler id="toolbar" onRender={() => void commits++}>
-            <Toolbar
-              limitsAnchor={limitsAnchor}
-              {...(options.setup && {
-                setup: {
-                  shown: true,
-                  open: false,
-                  noteRef,
-                  toggle() {},
-                } as unknown as import('../../web/src/hooks/useSetupNote.ts').SetupNoteState,
-              })}
-              onTodos={() => void calls.todos++}
-              onSchedule={() => void calls.schedule++}
-              onNewSession={from => void calls.newSession.push(from)}
-              more={more}
-            />
-          </Profiler>
+        <BoardContext.Provider value={val}>
+          <Toolbar
+            limitsAnchor={{ current: null }}
+            {...(opts.onOpenDrawer && { onOpenDrawer: opts.onOpenDrawer })}
+            {...(opts.railAlert !== undefined && { railAlert: opts.railAlert })}
+          />
         </BoardContext.Provider>
       </I18nProvider>,
-    ),
-  )
-  await frames()
-  let gone = false
-  mounted.push(async () => {
-    if (gone) return
-    gone = true
-    await act(async () => root.unmount())
+    )
   })
-  return { calls, opened, limitsAnchor, noteRef, commits: () => commits }
+  mounted.push(() => act(async () => root.unmount()))
+  await frames()
 }
 
-/** The ids of the actions that left the row, in the row's order of priority. */
-const over = () =>
-  TOOLBAR_PRIORITY.filter(id => {
-    const el = q(`.toolbar-actions > #${id}`)
-    return !!el && el.hasAttribute('data-over')
-  })
-const present = () => TOOLBAR_PRIORITY.filter(id => !!q(`.toolbar-actions > #${id}`))
-const rows = () => need('.toolbar-fit').hasAttribute('data-rows')
-const moreShown = () => !need('#toolbar-more').hasAttribute('data-over')
-/** A phone's two rows (#599): the stylesheet's `data-narrow`. */
-const narrow = () => need('.toolbar-fit').hasAttribute('data-narrow')
-
-test('the toolbar is one row where everything fits, and nothing is in More', async () => {
-  world.total = 2560
-  await mount()
-  expect(rows()).toBe(false)
-  expect(over()).toEqual([])
-  expect(moreShown()).toBe(false)
-  expect(present()).toContain('presence-switch')
-  expect(present()).toContain('todos-open')
-})
-
-test('two rows from 320 to 1200 px: the actions that do not fit are the end of the priority list', async () => {
-  const sizes = [320, 360, 390, 430, 600, 768, 900, 1100]
-  await mount()
-  let before = Number.POSITIVE_INFINITY
-  const all = present()
-  for (const total of sizes) {
-    await resizeTo(total)
-    expect(rows()).toBe(true)
-    const left = over()
-    // What is in More is the end of the list as it is on show now, never a pick of it.
-    expect(left).toEqual(all.slice(all.length - left.length))
-    expect(moreShown()).toBe(left.length > 0)
-    // The first stays whatever the width: Next, which shrinks with an ellipsis.
-    expect(left).not.toContain('next-attention')
-    // More leaves a wider toolbar fewer actions, never more.
-    expect(left.length).toBeLessThanOrEqual(before)
-    before = left.length
-    // What stays, the pinned buttons and More fit the actions' row (the first alone may not).
-    const shown = all.filter(id => !left.includes(id))
-    const used =
-      shown.reduce((sum, id, i) => sum + (i ? 6 : 0) + (WIDTHS[id] ?? 28), 0) +
-      6 +
-      28 +
-      6 +
-      8 +
-      (left.length ? 6 + 28 : 0)
-    if (shown.length > 1) expect(used).toBeLessThanOrEqual(room())
-  }
-  expect(before).toBe(0)
-})
-
-test('a board that started wide takes one row where everything fits: the summary it showed there takes no room now', async () => {
-  world.total = 2560
-  await mount()
-  expect(rows()).toBe(false)
-  // Everything and the filters need about 1160 px; the summary (240 px, wide boards only) is gone below 1580.
-  await resizeTo(1300)
-  expect(rows()).toBe(false)
-  expect(over()).toEqual([])
-  await resizeTo(1100)
-  expect(rows()).toBe(true)
-})
-
-test('a phone keeps Next, and the presence pill beside it where the row holds both; a wider toolbar grows back to one row', async () => {
-  await mount()
-  await resizeTo(390)
-  expect(rows()).toBe(true)
-  expect(over()).not.toContain('next-attention')
-  expect(over()).not.toContain('presence-switch')
-  expect(over()).toContain('todos-open')
-  expect(over()).toContain('limits')
-  expect(over()).toContain('cats-open')
-  // The narrowest phone: Next alone, and the pill in More with the rest.
-  await resizeTo(320)
-  expect(over()).not.toContain('next-attention')
-  expect(over()).toContain('presence-switch')
-  expect(over()).toContain('todos-open')
-  await resizeTo(2000)
-  expect(rows()).toBe(false)
-  expect(over()).toEqual([])
-  expect(moreShown()).toBe(false)
-})
-
-test('a phone’s two rows are marked for the stylesheet; a wider toolbar and one row are not, and lose the mark again (#599)', async () => {
-  await mount()
-  for (const total of [320, 390, 430, 480]) {
-    await resizeTo(total)
-    expect([total, rows(), narrow()]).toEqual([total, true, true])
-  }
-  for (const total of [481, 600, 768, 1100]) {
-    await resizeTo(total)
-    expect([total, rows(), narrow()]).toEqual([total, true, false])
-  }
-  await resizeTo(390)
-  expect(narrow()).toBe(true)
-  await resizeTo(2000)
-  expect([rows(), narrow()]).toEqual([false, false])
-})
-
-test('More lists what left the row in its order with the counts, and its dot says something needs a look', async () => {
-  const { opened, calls } = await mount()
-  await resizeTo(320)
-  const button = need('#toolbar-more')
-  expect(button.getAttribute('aria-haspopup')).toBe('menu')
-  expect(button.getAttribute('aria-label')).toBe('More (something in it needs a look)')
-  // The reminder is due and in More: the button carries a dot.
-  expect(over()).toContain('sched-open')
-  expect(need('#toolbar-more .more-dot').hasAttribute('hidden')).toBe(false)
-  await clickOn(button, 0)
-  const [menu] = opened
-  if (!menu) throw new Error('More did not open')
-  expect(menu.keyboard).toBe(true)
-  expect(menu.entries.map(e => e.id)).toEqual(over())
-  const sched = menu.entries.find(e => e.id === 'sched-open')
-  expect(sched).toMatchObject({ label: 'Schedule', count: 1, tint: 'var(--orange)', alert: true })
-  expect(menu.entries.find(e => e.id === 'todos-open')).toMatchObject({ label: 'Tasks' })
-  // A choice does what the button does: Schedule opens its panel, New session from More.
-  menu.onPick('sched-open')
-  menu.onPick('new-session')
-  expect(calls.schedule).toBe(1)
-  expect(calls.newSession).toEqual([button])
-  menu.onPick('limits')
-  expect(calls.dispatched).toEqual([{ type: 'limits', open: true }])
-})
-
-test('the offer of detection comes right after the presence pill, and is in More once the row does not hold it', async () => {
-  const { opened } = await mount({ presence: { hint: 'away' } })
-  await resizeTo(600)
-  expect(present()).toContain('presence-offer')
-  expect(over()).not.toContain('presence-offer')
-  expect(over()).not.toContain('presence-switch')
-  await resizeTo(390)
-  expect(over()).toContain('presence-offer')
-  expect(over()).toContain('todos-open')
-  expect(over()).not.toContain('presence-switch')
-  await clickOn(need('#toolbar-more'))
-  const entries = opened[0]?.entries ?? []
-  expect(entries.map(e => e.id)).toEqual(over())
-  expect(entries.find(e => e.id === 'presence-offer')?.label).toBe('Looks like you are away: switch?')
-})
-
-test('with nothing in More it carries no dot, and a quiet toolbar needs none', async () => {
-  await mount()
-  await resizeTo(2000)
-  expect(need('#toolbar-more .more-dot').hasAttribute('hidden')).toBe(true)
-})
-
-test('scrolling down folds the filters on the spring, up brings them back, the filters button says so', async () => {
-  await mount()
-  await resizeTo(390)
+test('scrolling down folds the lane strip and reveals #toolbar-peek with active lane; clicking peek or scrolling up restores it', async () => {
+  await mountToolbar({ filter: ['core', 'web'] })
   const filters = need('#toolbar-filters')
   const peek = need('#toolbar-peek')
-  expect([
-    filters.hasAttribute('data-folded'),
-    peek.hasAttribute('hidden'),
-    peek.getAttribute('aria-expanded'),
-  ]).toEqual([false, true, 'true'])
-  expect(q('.toolbar.folded')).toBeNull()
 
-  // A little scrolling does nothing; past 64 px and then a turn, the filters fold, moving as they go.
-  await scrollTo(40)
   expect(filters.hasAttribute('data-folded')).toBe(false)
-  world.scroll = 200
-  await act(async () => void dom.window.dispatchEvent(new dom.window.Event('scroll')))
-  await act(async () => void queue.shift()?.(clock))
-  expect(filters.hasAttribute('data-folded')).toBe(true)
-  expect(filters.hasAttribute('data-moving')).toBe(true)
-  expect(Number.parseFloat(filters.style.height)).toBe(28)
-  await frames(6)
-  expect(Number.parseFloat(filters.style.height)).toBeGreaterThan(0)
-  expect(Number.parseFloat(filters.style.height)).toBeLessThan(28)
-  await frames()
-  expect(filters.hasAttribute('data-moving')).toBe(false)
-  expect(filters.getAttribute('style') ?? '').toBe('')
-  expect(q('.toolbar.folded')).toBeTruthy()
-  // Its stand-in: shown, folded, named for the filters, with no count while none is on.
-  expect([peek.hasAttribute('hidden'), peek.getAttribute('aria-expanded'), peek.getAttribute('aria-controls')]).toEqual(
-    [false, 'false', 'toolbar-filters'],
-  )
-  expect(peek.getAttribute('aria-label')).toBe('Filters')
-  expect(need('#toolbar-peek .n').textContent).toBe('')
+  expect(peek.hidden).toBe(true)
 
-  // Up less than a turn: still folded. A turn: back, the button gone.
-  await scrollTo(190)
+  // Scroll down past the fold threshold
+  await scrollTo(120)
   expect(filters.hasAttribute('data-folded')).toBe(true)
-  await scrollTo(170)
-  expect(filters.hasAttribute('data-folded')).toBe(false)
-  await frames()
-  expect(peek.hasAttribute('hidden')).toBe(true)
-  expect(filters.getAttribute('style') ?? '').toBe('')
-})
-
-test('the folded toolbar says what is filtered: how many, and which', async () => {
-  await mount({ ui: { filter: ['proj'], query: 'login' } })
-  await resizeTo(390)
-  await scrollTo(300)
-  const peek = need('#toolbar-peek')
-  expect(peek.hasAttribute('hidden')).toBe(false)
-  expect(peek.getAttribute('aria-label')).toBe('Filters: Project · “login”')
-  expect(peek.getAttribute('title')).toBe('Filters: Project · “login”')
-  expect(need('#toolbar-peek .n').textContent).toBe('2')
+  expect(peek.hidden).toBe(false)
   expect(peek.classList.contains('on')).toBe(true)
-})
+  expect(peek.textContent).toContain('Core +1')
+  expect(peek.querySelector('.lane-dot')).toBeTruthy()
 
-test('the filters button brings the folded filters back, for a little scrolling down', async () => {
-  await mount()
-  await resizeTo(390)
-  await scrollTo(300)
-  const filters = need('#toolbar-filters')
-  expect(filters.hasAttribute('data-folded')).toBe(true)
-  await clickOn(need('#toolbar-peek'))
-  await frames()
-  expect(filters.hasAttribute('data-folded')).toBe(false)
-  // A little more scrolling down does not fold them again; a good deal does.
-  await scrollTo(330)
-  expect(filters.hasAttribute('data-folded')).toBe(false)
-  await scrollTo(380)
-  expect(filters.hasAttribute('data-folded')).toBe(true)
-  // There is no title to tap (#351): the summary and the page's name do nothing to the filters.
-  await clickOn(need('.titles'))
-  await clickOn(need('h1'))
-  await frames()
-  expect(filters.hasAttribute('data-folded')).toBe(true)
-  await clickOn(need('#toolbar-peek'))
-  await frames()
-  expect(filters.hasAttribute('data-folded')).toBe(false)
-})
-
-test('a filter in use keeps the filters open', async () => {
-  await mount()
-  await resizeTo(390)
-  need('#search').focus()
-  await scrollTo(400)
-  expect(need('#toolbar-filters').hasAttribute('data-folded')).toBe(false)
-  need('#search').blur()
-  await scrollTo(450)
-  expect(need('#toolbar-filters').hasAttribute('data-folded')).toBe(true)
-})
-
-test('one row has nothing to fold: scrolling leaves it whole', async () => {
-  world.total = 2560
-  await mount()
-  await scrollTo(600)
-  expect(need('#toolbar-filters').hasAttribute('data-folded')).toBe(false)
-  expect(need('#toolbar-peek').hasAttribute('hidden')).toBe(true)
-  expect(q('.toolbar.folded')).toBeNull()
-})
-
-test('a toolbar that gets wide again while folded opens its filters', async () => {
-  await mount()
-  await resizeTo(390)
-  await scrollTo(300)
-  expect(need('#toolbar-filters').hasAttribute('data-folded')).toBe(true)
-  await resizeTo(2560)
-  await frames()
-  expect(need('#toolbar-filters').hasAttribute('data-folded')).toBe(false)
-})
-
-test('reduced motion: the filters do not slide, they cross-fade out and in', async () => {
-  world.reduce = true
-  await mount()
-  await resizeTo(390)
-  const filters = need('#toolbar-filters')
-  await scrollTo(300)
-  expect(filters.hasAttribute('data-folded')).toBe(true)
-  // Nothing moved: no spring's sizes on it, only the fade out of what was there.
-  expect(filters.style.height).toBe('')
-  expect(fades.some(f => f.el === filters && JSON.stringify(f.keyframes) === JSON.stringify({ opacity: [1, 0] }))).toBe(
-    true,
-  )
-  await frames()
-  fades.length = 0
-  await scrollTo(100)
-  expect(filters.hasAttribute('data-folded')).toBe(false)
-  expect(filters.style.height).toBe('')
-  expect(fades.some(f => f.el === filters && JSON.stringify(f.keyframes) === JSON.stringify({ opacity: [0, 1] }))).toBe(
-    true,
-  )
-})
-
-test('a re-render of the page leaves what the fit drew in place', async () => {
-  const { opened } = await mount()
-  await resizeTo(320)
-  const before = over()
-  expect(before.length).toBeGreaterThan(0)
-  // The same board again, as every refresh of its data is.
-  await act(async () => void mock.restore())
-  await resizeTo(320)
-  expect(over()).toEqual(before)
-  expect(opened).toEqual([])
-})
-
-test('the usage popover and the setup list go under their pills, or under More while a pill is in it', async () => {
-  const { limitsAnchor, noteRef } = await mount({ setup: true })
-  await resizeTo(2000)
-  expect(limitsAnchor.current).toBe(need('#limits') as HTMLButtonElement)
-  expect(noteRef.current).toBe(need('#setup-note') as HTMLButtonElement)
-  await resizeTo(320)
-  expect(over()).toContain('limits')
-  expect(over()).toContain('setup-note')
-  expect(limitsAnchor.current).toBe(need('#toolbar-more') as HTMLButtonElement)
-  expect(noteRef.current).toBe(need('#toolbar-more') as HTMLButtonElement)
-  await resizeTo(1500)
-  await resizeTo(2000)
-  expect(limitsAnchor.current).toBe(need('#limits') as HTMLButtonElement)
-  expect(noteRef.current).toBe(need('#setup-note') as HTMLButtonElement)
-})
-
-test('More says in its name when something in it needs a look', async () => {
-  await mount()
-  await resizeTo(320)
-  expect(need('#toolbar-more').getAttribute('aria-label')).toBe('More (something in it needs a look)')
-  await resizeTo(2000)
-  expect(need('#toolbar-more').getAttribute('aria-label')).toBe('More')
-})
-
-test('opened from the keys, the filters button leaves the focus on the first filter that can have it', async () => {
-  await mount()
-  await resizeTo(390)
-  await scrollTo(300)
-  await clickOn(need('#toolbar-peek'), 0)
-  await frames()
-  const focused = dom.window.document.activeElement
-  expect(focused && focused !== dom.window.document.body).toBe(true)
-  expect(focused?.closest('#lanes, #lanes-pick, .search') || focused?.id === 'lanes-pick').toBeTruthy()
-})
-
-test('the container contains its paint while every action is measured in one row, and not after (#474)', async () => {
-  await mount()
-  await resizeTo(390)
-  await resizeTo(1440)
-  await resizeTo(390)
-  expect(containWhileMeasuring.length).toBeGreaterThan(0)
-  expect(containWhileMeasuring.every(c => c === 'paint')).toBe(true)
-  expect(need('.toolbar-fit').style.contain).toBe('')
-})
-
-test('at the end of the page the folded filters stay folded as the end moves up, and open for the finger going up (#474)', async () => {
-  await mount()
-  await resizeTo(390)
-  // A page that scrolls 1000 px, folded on the way down.
-  world.page = 1844
-  await scrollTo(300)
-  await scrollTo(1000)
-  const filters = need('#toolbar-filters')
-  expect(filters.hasAttribute('data-folded')).toBe(true)
-  // The browser's bar hides: the page ends 56 px higher, and the scroll goes with it.
-  world.page = 1788
-  await scrollTo(944)
-  expect(filters.hasAttribute('data-folded')).toBe(true)
-  // A rubber band past the end and back.
-  await scrollTo(1020)
-  await scrollTo(944)
-  expect(filters.hasAttribute('data-folded')).toBe(true)
-  // The finger takes the page up a turn: the filters come back.
-  await scrollTo(944 - 24)
-  expect(filters.hasAttribute('data-folded')).toBe(false)
-})
-
-test('folding at the end of the page shrinks it under the scroll: the filters stay folded, and a turn up brings them back (#474)', async () => {
-  world.filtersInPage = true
-  // 1000 px to scroll with the filters open, 972 with them folded.
-  world.page = 1816
-  await mount()
-  await resizeTo(390)
-  // Folded on the way down, opened by a turn up, then down to the end: the filters fold there.
-  await scrollTo(300)
-  await scrollTo(200)
-  const filters = need('#toolbar-filters')
-  expect(filters.hasAttribute('data-folded')).toBe(false)
-  world.scroll = 5000
-  await act(async () => void dom.window.dispatchEvent(new dom.window.Event('scroll')))
-  await act(async () => void queue.shift()?.(clock))
-  expect(filters.hasAttribute('data-folded')).toBe(true)
-  // Each frame of the fold moves the page's end and the scroll with it.
-  for (let i = 0; i < 30 && filters.hasAttribute('data-moving'); i++) {
-    await act(async () => void dom.window.dispatchEvent(new dom.window.Event('scroll')))
-    await frames(1)
-    expect(filters.hasAttribute('data-folded')).toBe(true)
-  }
-  await frames()
-  expect(scrollY).toBe(972)
-  expect(filters.hasAttribute('data-folded')).toBe(true)
-  // Up less than a turn from the end: still folded; a turn: back.
-  await scrollTo(972 - 23)
-  expect(filters.hasAttribute('data-folded')).toBe(true)
-  await scrollTo(972 - 24)
-  expect(filters.hasAttribute('data-folded')).toBe(false)
-})
-
-test('scrolling on while folded, or up a little while open, is not a render', async () => {
-  const { commits } = await mount()
-  await resizeTo(390)
-  await scrollTo(300)
-  // The fold itself, and the frame after it that settles the spring, are renders; scrolling on is not.
-  await scrollTo(305)
-  await frames()
-  const folded = commits()
-  for (const y of [310, 330, 350, 420, 600]) await scrollTo(y)
-  expect(need('#toolbar-filters').hasAttribute('data-folded')).toBe(true)
-  expect(commits()).toBe(folded)
-})
-
-test('another typeface (the Terminal look) takes the widths anew: what fitted in Classic may not fit in it', async () => {
-  await mount()
-  await resizeTo(390)
-  const before = over()
-  expect(before).not.toContain('presence-switch')
-  // Wider in the monospace look, with no word changed: the presence pill no longer fits.
-  WIDTHS['presence-switch'] = 240
+  // Clicking #toolbar-peek brings the lane strip back
   await act(async () => {
-    dom.window.document.documentElement.setAttribute('data-look', 'terminal')
-    await Promise.resolve()
+    peek.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, detail: 1 }))
   })
   await frames()
-  try {
-    expect(over()).toContain('presence-switch')
-  } finally {
-    WIDTHS['presence-switch'] = 130
-    dom.window.document.documentElement.removeAttribute('data-look')
+  expect(filters.hasAttribute('data-folded')).toBe(false)
+  expect(peek.hidden).toBe(true)
+
+  // Fold again, then scroll back up to reopen
+  await scrollTo(360)
+  expect(filters.hasAttribute('data-folded')).toBe(true)
+  await scrollTo(200)
+  expect(filters.hasAttribute('data-folded')).toBe(false)
+})
+
+test('focus inside the lane strip keeps it open while scrolling', async () => {
+  await mountToolbar()
+  const filters = need('#toolbar-filters')
+  const firstTab = need('#lanes button[data-id="all"]')
+  firstTab.focus()
+  await scrollTo(200)
+  expect(filters.hasAttribute('data-folded')).toBe(false)
+})
+
+test('reduced motion folds and unfolds cleanly without leaving data-moving set', async () => {
+  world.reduce = true
+  await mountToolbar()
+  const filters = need('#toolbar-filters')
+  await scrollTo(180)
+  expect(filters.hasAttribute('data-folded')).toBe(true)
+  expect(filters.hasAttribute('data-moving')).toBe(false)
+  await scrollTo(0)
+  expect(filters.hasAttribute('data-folded')).toBe(false)
+  expect(filters.hasAttribute('data-moving')).toBe(false)
+})
+
+test('desktop lane tabs overflow into "+N more" when narrow, highlight when hidden lane is active, and expand back cleanly on resize', async () => {
+  const options = [
+    { id: 'all', title: 'All', n: 5 },
+    { id: 'core', title: 'Core', n: 1, color: '#2563EB' },
+    { id: 'web', title: 'Web', n: 1, color: '#16A34A' },
+    { id: 'ops', title: 'Ops', n: 1, color: '#D97706' },
+    { id: 'docs', title: 'Docs', n: 1, color: '#7C3AED' },
+    { id: 'other', title: 'Other', n: 1, color: '#71717A' },
+  ]
+  const opened: string[] = []
+  const picks: SegmentPicks = {
+    expanded: null,
+    open(of) {
+      opened.push(of)
+    },
   }
+  world.lanesWidth = 340 // fits ~2 tabs + "+4 more" (90*2 + 2 + 86 = 268 <= 340; 3 tabs = 360 > 340)
+  const host = need('#root')
+  const root = createRoot(host)
+  await act(async () => {
+    root.render(
+      <I18nProvider lang="en">
+        <BoardContext.Provider value={support.board()}>
+          <Lanes options={options} picked={['docs']} onPick={() => {}} picks={picks} />
+        </BoardContext.Provider>
+      </I18nProvider>,
+    )
+  })
+  mounted.push(() => act(async () => root.unmount()))
+  await frames()
+
+  const more = need('#lanes-more')
+  expect(more.textContent).toContain('+4 more')
+  // Active hidden lane ('docs') marks "+4 more" active
+  expect(more.classList.contains('on')).toBe(true)
+
+  // Clicking "+4 more" opens the lanes picker menu
+  await act(async () => {
+    more.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, detail: 1 }))
+  })
+  expect(opened).toEqual(['lanes'])
+
+  // Resizing wider shows all 6 tabs again and removes "+N more" without oscillation
+  await resizeLanes(700)
+  expect(q('#lanes-more')).toBeNull()
+  const hidden = [...dom.window.document.querySelectorAll('#lanes button[data-id]')].filter(
+    b => (b as HTMLElement).hidden,
+  )
+  expect(hidden).toHaveLength(0)
+
+  // Shrinking back down re-applies overflow accurately (offsetWidth measured unhidden)
+  await resizeLanes(340)
+  expect(need('#lanes-more').textContent).toContain('+4 more')
+})
+
+test('phone drawer button (#rail-toggle) fires onOpenDrawer and shows alert dot when railAlert is true', async () => {
+  let opens = 0
+  await mountToolbar({ onOpenDrawer: () => opens++, railAlert: true })
+  const toggle = need('#rail-toggle')
+  expect(toggle.querySelector('.tb-menu-dot')).toBeTruthy()
+  await act(async () => {
+    toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  })
+  expect(opens).toBe(1)
 })

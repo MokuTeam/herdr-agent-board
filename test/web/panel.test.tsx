@@ -124,14 +124,15 @@ test('<App> puts the panels after the page and before the usage popover, as the 
   const top = react
     .filter((n): n is Element => n.kind === 'element')
     .map(el => el.attrs.get('id') ?? el.attrs.get('class'))
-  // The setup list follows the usage popover, as web/index.html has it since upstream's setup check (#41);
-  // the archive's panel follows the schedule's (#56).
+  // NavRail sits beside .page, followed by side panels (including SettingsPanel, #651), then popovers and toasts.
   expect(top).toEqual([
+    'nav-rail',
     'page',
     'sheet',
     'cats-sheet',
     'sched-sheet',
     'archive-sheet',
+    'settings-panel',
     'limits-pop',
     'setup-pop',
     'toasts',

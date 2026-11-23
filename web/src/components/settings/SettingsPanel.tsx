@@ -1,0 +1,739 @@
+// Structured Settings panel (#651): replaces the 24-item cascading context menu with a calm
+// 5-section panel (Display, Board & Agents, Features, Integrations, System) aligned with the
+// board's design system. Works docked or floating on desktop, and full-screen with section tabs
+// on phone widths. Every existing setting and dedicated sub-panel stays reachable.
+import { type ReactNode, useState } from 'react'
+import { FOLD_MODES, type FoldMode } from '../../../../src/core/fold-mode.ts'
+import { LANGUAGES } from '../../../../src/core/i18n/translator.ts'
+import { PRESENCE_MODES, type PresenceMode } from '../../../../src/core/presence.ts'
+import { TODO_MODES, type TodoMode, todoModeOf } from '../../../../src/core/todos.ts'
+import { THREAD_MODES } from '../../../../src/core/work-threads.ts'
+import { api, errorText } from '../../api/client.ts'
+import { usePanelPlace } from '../../hooks/usePanelLayout.ts'
+import {
+  chooseCompact,
+  chooseFold,
+  chooseLanguage,
+  choosePresence,
+  endLogin,
+  type FeatureSetting,
+  offersDevices,
+  type PresenceSetting,
+  type ThreadsSetting,
+} from '../../hooks/useSettingsMenu.ts'
+import type { SetupNoteState } from '../../hooks/useSetupNote.ts'
+import { useLanguage, useT } from '../../i18n/I18nProvider.tsx'
+import { backupNoteText } from '../../models/backup.ts'
+import { CARD_TEXT_KEY, CARD_TEXTS, type CardText, cardTextNow, setCardText } from '../../models/card-text.ts'
+import { reachable } from '../../models/devices.ts'
+import { LOOK_KEY, LOOKS, lookNow, setLook } from '../../models/look.ts'
+import { DOCKS, type Dock } from '../../models/panel-layout.ts'
+import { offersProfiles } from '../../models/profiles.ts'
+import { keptAuth, remotePage } from '../../models/remote-page.ts'
+import {
+  COMPACT_CHOICES,
+  featuresNow,
+  offersMokupilot,
+  PRESENCE_IDLE_CHOICES,
+  threadsNow,
+} from '../../models/settings-menu.ts'
+import { reducedMotion } from '../../models/spring.ts'
+import { offersTeam, teamBadge } from '../../models/team.ts'
+import { setTheme, THEME_KEY, THEMES, themeNow } from '../../models/theme.ts'
+import { isWakeView, noteShown } from '../../models/wake.ts'
+import { useBoardContext } from '../../state/BoardProvider.tsx'
+import { storage } from '../../state/storage.ts'
+import { classNames } from '../class-names.ts'
+import { ChevIcon, CpuIcon, LayersIcon, PlugIcon, ShieldIcon, SlidersIcon, WarnIcon } from '../icons.tsx'
+import { Panel } from '../panel/Panel.tsx'
+
+export type SettingsSection = 'display' | 'board' | 'features' | 'integrations' | 'system'
+
+export interface SettingsPanelProps {
+  open: boolean
+  onClose(): void
+  setup?: SetupNoteState
+  onOpenProfiles(): void
+  onOpenWake(): void
+  onOpenPhones(): void
+  onOpenMokupilot(): void
+  onOpenAccess(): void
+  onOpenBackup(): void
+  onOpenUpdates(): void
+  onOpenTimeSettings(): void
+  onOpenCalendarSettings(): void
+  onOpenLocalPaths(): void
+  onOpenTeam(): void
+  onOpenDevices(): void
+}
+
+const crossFade = (): ((apply: () => void) => unknown) | undefined =>
+  typeof document !== 'undefined' && typeof document.startViewTransition === 'function' && !reducedMotion.matches
+    ? apply => document.startViewTransition(apply)
+    : undefined
+
+function Switch({
+  checked,
+  disabled,
+  label,
+  onToggle,
+}: {
+  checked: boolean
+  disabled?: boolean
+  label: string
+  onToggle(): void
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      className={classNames('set-switch', checked && 'on')}
+      onClick={onToggle}
+    />
+  )
+}
+
+function Segmented<T extends string>({
+  value,
+  options,
+  disabled,
+  label,
+  onChange,
+}: {
+  value: T
+  options: readonly { value: T; label: string }[]
+  disabled?: boolean
+  label: string
+  onChange(value: T): void
+}) {
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: group keeps compact inline flex sizing without fieldset min-inline-size
+    <div className="set-seg" role="group" aria-label={label}>
+      {options.map(opt => (
+        <button
+          key={opt.value}
+          type="button"
+          aria-pressed={opt.value === value}
+          disabled={disabled}
+          className={classNames('set-seg-opt', opt.value === value && 'on')}
+          onClick={() => onChange(opt.value)}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function LinkRow({
+  label,
+  meta,
+  warn,
+  danger,
+  onClick,
+}: {
+  label: string
+  meta?: ReactNode
+  warn?: boolean
+  danger?: boolean
+  onClick(): void
+}) {
+  return (
+    <button type="button" className={classNames('set-row set-link', danger && 'danger')} onClick={onClick}>
+      <span className="set-lbl">
+        <b>{label}</b>
+      </span>
+      <span className={classNames('set-link-meta', warn && 'warn')}>
+        {warn && <WarnIcon />}
+        {meta}
+        {!danger && <ChevIcon />}
+      </span>
+    </button>
+  )
+}
+
+export function SettingsPanel({
+  open,
+  onClose,
+  setup,
+  onOpenProfiles,
+  onOpenWake,
+  onOpenPhones,
+  onOpenMokupilot,
+  onOpenAccess,
+  onOpenBackup,
+  onOpenUpdates,
+  onOpenTimeSettings,
+  onOpenCalendarSettings,
+  onOpenLocalPaths,
+  onOpenTeam,
+  onOpenDevices,
+}: SettingsPanelProps) {
+  const t = useT()
+  const { choose } = useLanguage()
+  const { data, ui, canEdit, dispatch, toast, now } = useBoardContext()
+  const place = usePanelPlace()
+  const [section, setSection] = useState<SettingsSection>('display')
+  // Local mirrors for document.documentElement dataset values so clicks re-render immediately.
+  const [, setTick] = useState(0)
+  const bump = () => setTick(n => n + 1)
+
+  const rootEl = typeof document !== 'undefined' ? document.documentElement : { dataset: {} as DOMStringMap }
+  const theme = themeNow(rootEl)
+  const look = lookNow(rootEl)
+  const cardText = cardTextNow(rootEl)
+  const isRemote = remotePage()
+  const languages = data?.languages ?? LANGUAGES
+  const presenceMode: PresenceMode | 'none' = data?.presence?.mode ?? 'none'
+  const idleMinutes = data?.presence?.idleMinutes ?? 15
+  const todosMode: TodoMode = todoModeOf(data?.todos ?? null)
+  const threadsInfo = data && !isRemote ? threadsNow(data) : null
+  const features = data && !isRemote ? featuresNow(data) : null
+  const compact = data?.compactDefault
+  const compactChoices =
+    compact && !COMPACT_CHOICES.includes(compact as (typeof COMPACT_CHOICES)[number])
+      ? [...COMPACT_CHOICES, compact]
+      : [...COMPACT_CHOICES]
+
+  const backupProblem = data?.backup?.problem
+  const wakeDown = !isRemote && isWakeView(data?.wake) && noteShown(data.wake, now)
+  const systemWarn = !!setup?.shown || !!backupProblem || wakeDown
+
+  const pickTheme = (next: string) => {
+    setTheme(next, { root: rootEl, keep: v => storage.set(THEME_KEY, v), transition: crossFade() })
+    bump()
+  }
+  const pickLook = (next: string) => {
+    setLook(next, { root: rootEl, keep: v => storage.set(LOOK_KEY, v), transition: crossFade() })
+    if (next !== 'terminal') dispatch({ type: 'column', id: null })
+    bump()
+  }
+  const pickCardText = (next: CardText) => {
+    setCardText(next, { root: rootEl, keep: v => storage.set(CARD_TEXT_KEY, v), transition: crossFade() })
+    bump()
+  }
+  const pickLang = (lang: string) => {
+    void chooseLanguage(lang, { t, canEdit, choose, save: body => api.post('/api/settings', body), toast })
+  }
+  const pickFold = (mode: FoldMode) => {
+    void chooseFold(mode, { t, canEdit, save: body => api.post('/api/settings', body), toast })
+  }
+  const pickCompact = (at: string) => {
+    void chooseCompact(at, { t, canEdit, save: body => api.post('/api/settings', body), toast })
+  }
+  const pickPresence = (body: PresenceSetting) => {
+    void choosePresence(body, { t, canEdit, save: b => api.post('/api/presence', b), toast })
+  }
+  const pickTodos = (mode: TodoMode) => {
+    if (!canEdit) return toast(t('live.off'), true)
+    api.post('/api/todos', { op: 'settings', mode }).catch(err => toast(errorText(err, t), true))
+  }
+  const pickThreads = (body: ThreadsSetting) => {
+    if (!canEdit) return toast(t('live.off'), true)
+    api
+      .post('/api/threads-settings', body)
+      .then(r => {
+        const note = (r as { note?: unknown } | null)?.note
+        if (typeof note === 'string' && note) toast(note, true)
+      })
+      .catch(err => toast(errorText(err, t), true))
+  }
+  const pickFeature = (body: FeatureSetting) => {
+    if (!canEdit) return toast(t('live.off'), true)
+    api.post('/api/feature-settings', body).catch(err => toast(errorText(err, t), true))
+  }
+
+  const sections: { id: SettingsSection; label: string; icon: ReactNode; warn?: boolean }[] = [
+    { id: 'display', label: t('set.sec.display'), icon: <SlidersIcon /> },
+    { id: 'board', label: t('set.sec.board'), icon: <CpuIcon /> },
+    ...(!isRemote ? [{ id: 'features' as const, label: t('set.sec.features'), icon: <LayersIcon /> }] : []),
+    { id: 'integrations', label: t('set.sec.integrations'), icon: <PlugIcon /> },
+    { id: 'system', label: t('set.sec.system'), icon: <ShieldIcon />, warn: systemWarn },
+  ]
+
+  const shownProfiles = (data?.profiles ?? []).filter(p => !p.hidden).length
+  const onlineDevices = (data?.devices ?? []).filter(reachable).length
+  const team = teamBadge(data)
+
+  return (
+    <Panel
+      id="settings-panel"
+      kind="settings"
+      open={open}
+      onClose={onClose}
+      measure="full"
+      title={<h2>{t('set.title')}</h2>}
+    >
+      <div className="sheet-body set-shell">
+        <nav className="set-nav" aria-label={t('set.title')}>
+          {sections.map(s => (
+            <button
+              key={s.id}
+              type="button"
+              className={classNames('set-tab', section === s.id && 'on')}
+              aria-current={section === s.id ? 'page' : undefined}
+              onClick={() => setSection(s.id)}
+            >
+              {s.icon}
+              <span>{s.label}</span>
+              {s.warn && <span className="set-tab-dot" aria-hidden="true" />}
+            </button>
+          ))}
+          <div className="set-nav-foot">
+            <span>
+              {t('set.shortcut')}: <span className="kbd">,</span>
+            </span>
+          </div>
+        </nav>
+
+        <div className="set-pane">
+          {section === 'display' && (
+            <section className="set-section">
+              <div className="set-sec-head">
+                <h3>{t('set.sec.display')}</h3>
+                <span className="set-scope">{t('set.scope.browser')}</span>
+              </div>
+              <div className="set-group">
+                <div className="set-row">
+                  <div className="set-lbl">
+                    <b>{t('set.theme')}</b>
+                    <small>{t('set.theme.note')}</small>
+                  </div>
+                  <Segmented
+                    label={t('set.theme')}
+                    value={theme}
+                    options={THEMES.map(id => ({ value: id, label: t(`set.theme.${id}`) }))}
+                    onChange={pickTheme}
+                  />
+                </div>
+                <div className="set-row">
+                  <div className="set-lbl">
+                    <b>{t('set.look')}</b>
+                    <small>{t('set.look.note')}</small>
+                  </div>
+                  <Segmented
+                    label={t('set.look')}
+                    value={look}
+                    options={LOOKS.map(id => ({ value: id, label: t(`set.look.${id}`) }))}
+                    onChange={pickLook}
+                  />
+                </div>
+                <div className="set-row">
+                  <div className="set-lbl">
+                    <b>{t('set.cardText')}</b>
+                    <small>{t('set.cardText.note')}</small>
+                  </div>
+                  <Segmented
+                    label={t('set.cardText')}
+                    value={cardText as CardText}
+                    options={CARD_TEXTS.map(id => ({ value: id, label: t(`set.cardText.${id}`) }))}
+                    onChange={pickCardText}
+                  />
+                </div>
+                <div className="set-row">
+                  <div className="set-lbl">
+                    <b>{t('set.panel')}</b>
+                    <small>{t('set.panel.note')}</small>
+                  </div>
+                  <div className="set-inline">
+                    <Segmented
+                      label={t('set.panel')}
+                      value={place.layout.dock}
+                      options={DOCKS.map(id => ({ value: id, label: t(`panel.${id}`) }))}
+                      onChange={dock => place.placePanels(dock as Dock)}
+                    />
+                    <button type="button" className="set-reset" onClick={() => place.resetPanelSize()}>
+                      {t('panel.reset')}
+                    </button>
+                  </div>
+                </div>
+                <div className="set-row">
+                  <div className="set-lbl">
+                    <b>{t('tb.sleepersTitle')}</b>
+                    <small>{t('set.sleepers.note')}</small>
+                  </div>
+                  <Switch
+                    checked={ui.sleepers}
+                    label={t('tb.sleepersTitle')}
+                    onToggle={() => dispatch({ type: 'toggleSleepers' })}
+                  />
+                </div>
+                {data?.foldWaiting && (
+                  <div className="set-row">
+                    <div className="set-lbl">
+                      <b>{t('set.fold')}</b>
+                      <small>{t('set.fold.note')}</small>
+                    </div>
+                    <select
+                      className="set-select"
+                      aria-label={t('set.fold')}
+                      disabled={!canEdit}
+                      value={data.foldWaiting}
+                      onChange={e => pickFold(e.currentTarget.value as FoldMode)}
+                    >
+                      {FOLD_MODES.map(id => (
+                        <option key={id} value={id}>
+                          {t(`set.fold.${id}`)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {section === 'board' && (
+            <section className="set-section">
+              <div className="set-sec-head">
+                <h3>{t('set.sec.board')}</h3>
+                <span className="set-scope">{t('set.scope.board')}</span>
+              </div>
+              <div className="set-group">
+                <div className="set-row">
+                  <div className="set-lbl">
+                    <b>{t('set.lang')}</b>
+                    <small>{t('set.lang.note')}</small>
+                  </div>
+                  <select
+                    className="set-select"
+                    aria-label={t('set.lang')}
+                    disabled={!canEdit}
+                    value={t.lang}
+                    onChange={e => pickLang(e.currentTarget.value)}
+                  >
+                    {Object.entries(languages).map(([code, name]) => (
+                      <option key={code} value={code}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {data && (
+                  <div className="set-row">
+                    <div className="set-lbl">
+                      <b>{t('set.presence')}</b>
+                      <small>{t('set.presence.note')}</small>
+                    </div>
+                    <select
+                      className="set-select"
+                      aria-label={t('set.presence')}
+                      disabled={!canEdit}
+                      value={presenceMode}
+                      onChange={e => {
+                        const v = e.currentTarget.value as PresenceMode | 'none'
+                        pickPresence(v === 'none' ? { on: false } : { on: true, mode: v })
+                      }}
+                    >
+                      {(['none', ...PRESENCE_MODES] as const).map(id => (
+                        <option key={id} value={id}>
+                          {t(`set.presence.${id}`)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {data && presenceMode !== 'none' && presenceMode !== 'off' && (
+                  <div className="set-row">
+                    <div className="set-lbl">
+                      <b>{t('set.presence.idleLabel')}</b>
+                    </div>
+                    <select
+                      className="set-select"
+                      aria-label={t('set.presence.idleLabel')}
+                      disabled={!canEdit}
+                      value={idleMinutes}
+                      onChange={e => pickPresence({ on: true, idleMinutes: Number(e.currentTarget.value) })}
+                    >
+                      {PRESENCE_IDLE_CHOICES.map(min => (
+                        <option key={min} value={min}>
+                          {t('set.presence.idle', { min })}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {compact !== undefined && (
+                  <div className="set-row">
+                    <div className="set-lbl">
+                      <b>{t('set.compact')}</b>
+                      <small>{t('set.compact.note')}</small>
+                    </div>
+                    <select
+                      className="set-select"
+                      aria-label={t('set.compact')}
+                      disabled={!canEdit}
+                      value={compact || 'off'}
+                      onChange={e => pickCompact(e.currentTarget.value === 'off' ? '' : e.currentTarget.value)}
+                    >
+                      <option value="off">{t('set.compact.off')}</option>
+                      {compactChoices.map(at => (
+                        <option key={at} value={at}>
+                          {at.endsWith('%')
+                            ? t('set.compact.share', { share: at })
+                            : t('set.compact.tokens', { tokens: at })}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {section === 'features' && !isRemote && (
+            <section className="set-section">
+              <div className="set-sec-head">
+                <h3>{t('set.sec.features')}</h3>
+                <span className="set-scope">{t('set.scope.board')}</span>
+              </div>
+              <div className="set-group">
+                {data && (
+                  <div className="set-row">
+                    <div className="set-lbl">
+                      <b>{t('set.todos')}</b>
+                      <small>{t('set.todos.note')}</small>
+                    </div>
+                    <Segmented
+                      label={t('set.todos')}
+                      disabled={!canEdit}
+                      value={todosMode}
+                      options={TODO_MODES.map(id => ({ value: id, label: t(`set.todos.${id}`) }))}
+                      onChange={pickTodos}
+                    />
+                  </div>
+                )}
+                {threadsInfo && (
+                  <>
+                    <div className="set-row">
+                      <div className="set-lbl">
+                        <b>{t('set.threads')}</b>
+                        <small>{t('set.threads.note')}</small>
+                      </div>
+                      <Segmented
+                        label={t('set.threads')}
+                        disabled={!canEdit}
+                        value={threadsInfo.mode}
+                        options={THREAD_MODES.map(id => ({ value: id, label: t(`set.threads.${id}`) }))}
+                        onChange={mode => pickThreads({ mode })}
+                      />
+                    </div>
+                    {threadsInfo.mode !== 'none' && (
+                      <div className="set-sub">
+                        {threadsInfo.share !== undefined && (
+                          <label className="set-chk">
+                            <input
+                              type="checkbox"
+                              disabled={!canEdit}
+                              checked={threadsInfo.share}
+                              onChange={e => pickThreads({ share: e.currentTarget.checked })}
+                            />
+                            <span>{t('set.threads.shareLabel')}</span>
+                          </label>
+                        )}
+                        {features?.threadsCases !== undefined && (
+                          <label className="set-chk" title={t('set.cases.note')}>
+                            <input
+                              type="checkbox"
+                              disabled={!canEdit}
+                              checked={features.threadsCases}
+                              onChange={e => pickThreads({ cases: e.currentTarget.checked })}
+                            />
+                            <span>{t('set.cases')}</span>
+                          </label>
+                        )}
+                        {features?.threadsVerify !== undefined && (
+                          <label className="set-chk" title={t('set.verify.note')}>
+                            <input
+                              type="checkbox"
+                              disabled={!canEdit}
+                              checked={features.threadsVerify}
+                              onChange={e => pickThreads({ verify: e.currentTarget.checked })}
+                            />
+                            <span>{t('set.verify')}</span>
+                          </label>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+                {features && (
+                  <>
+                    <div className="set-row">
+                      <div className="set-lbl">
+                        <b>{t('set.decisions')}</b>
+                        <small>
+                          {features.decisions && features.defaultsRunning
+                            ? t('set.decisions.offNote', { n: features.defaultsRunning })
+                            : t('set.decisions.note')}
+                        </small>
+                      </div>
+                      <div className="set-inline">
+                        {features.decisions && features.decisionsDefaults !== undefined && (
+                          <label className="set-chk">
+                            <input
+                              type="checkbox"
+                              disabled={!canEdit}
+                              checked={features.decisionsDefaults}
+                              onChange={e => pickFeature({ decisionsDefaults: e.currentTarget.checked })}
+                            />
+                            <span>{t('set.decisions.defaults')}</span>
+                          </label>
+                        )}
+                        <Switch
+                          checked={!!features.decisions}
+                          disabled={!canEdit}
+                          label={t('set.decisions')}
+                          onToggle={() => pickFeature({ decisions: !features.decisions })}
+                        />
+                      </div>
+                    </div>
+                    <div className="set-row">
+                      <div className="set-lbl">
+                        <b>{t('set.watches')}</b>
+                        <small>
+                          {features.watches && features.watchesRunning
+                            ? t('set.watches.offNote', { n: features.watchesRunning })
+                            : t('set.watches.note')}
+                        </small>
+                      </div>
+                      <Switch
+                        checked={!!features.watches}
+                        disabled={!canEdit}
+                        label={t('set.watches')}
+                        onToggle={() => pickFeature({ watches: !features.watches })}
+                      />
+                    </div>
+                    <div className="set-row">
+                      <div className="set-lbl">
+                        <b>{t('set.journal')}</b>
+                        <small className={classNames(features.journalError && 'set-err')}>
+                          {features.journal && features.journalError
+                            ? t('set.journal.error', { error: features.journalError })
+                            : t('set.journal.note')}
+                        </small>
+                      </div>
+                      <Switch
+                        checked={!!features.journal}
+                        disabled={!canEdit}
+                        label={t('set.journal')}
+                        onToggle={() => pickFeature({ journal: !features.journal })}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            </section>
+          )}
+
+          {section === 'integrations' && (
+            <section className="set-section">
+              <div className="set-sec-head">
+                <h3>{t('set.sec.integrations')}</h3>
+                <span className="set-scope">{t('set.scope.panels')}</span>
+              </div>
+              <div className="set-group">
+                {offersProfiles(data?.profiles) && (
+                  <LinkRow
+                    label={t('set.profiles')}
+                    meta={<span>{t('set.integrations.shown', { n: shownProfiles })}</span>}
+                    onClick={onOpenProfiles}
+                  />
+                )}
+                {isWakeView(data?.wake) && (
+                  <LinkRow
+                    label={t('set.wake')}
+                    meta={<span>{wakeDown ? t('wake.stopped') : t('set.integrations.on')}</span>}
+                    warn={wakeDown}
+                    onClick={onOpenWake}
+                  />
+                )}
+                {!isRemote && (
+                  <LinkRow
+                    label={t('set.calendar')}
+                    meta={
+                      <span>
+                        {data?.calendar
+                          ? data.calendar.failing > 0
+                            ? t('set.integrations.problem')
+                            : t('set.integrations.on')
+                          : t('set.integrations.off')}
+                      </span>
+                    }
+                    warn={(data?.calendar?.failing ?? 0) > 0}
+                    onClick={onOpenCalendarSettings}
+                  />
+                )}
+                {!isRemote && (
+                  <LinkRow
+                    label={t('set.time')}
+                    meta={<span>{data?.time ? t('set.integrations.on') : t('set.integrations.off')}</span>}
+                    onClick={onOpenTimeSettings}
+                  />
+                )}
+                {offersTeam(data) && (
+                  <LinkRow
+                    label={t('set.team')}
+                    meta={
+                      <span>{team.count > 0 ? t('team.unread', { n: team.count }) : t('set.integrations.on')}</span>
+                    }
+                    onClick={onOpenTeam}
+                  />
+                )}
+                {offersMokupilot(data) && <LinkRow label={t('set.mokupilot')} onClick={onOpenMokupilot} />}
+                {offersDevices(isRemote) && (
+                  <LinkRow
+                    label={t('node.set.devices')}
+                    meta={
+                      data?.devices?.length ? (
+                        <span>{t('set.integrations.online', { n: onlineDevices })}</span>
+                      ) : undefined
+                    }
+                    onClick={onOpenDevices}
+                  />
+                )}
+                {!!data?.remote && <LinkRow label={t('set.phones')} onClick={onOpenPhones} />}
+                {!isRemote && <LinkRow label={t('set.access')} onClick={onOpenAccess} />}
+                {isRemote && <LinkRow label={t('set.localPaths')} onClick={onOpenLocalPaths} />}
+              </div>
+            </section>
+          )}
+
+          {section === 'system' && (
+            <section className="set-section">
+              <div className="set-sec-head">
+                <h3>{t('set.sec.system')}</h3>
+                <span className="set-scope">{t('set.scope.panels')}</span>
+              </div>
+              <div className="set-group">
+                {!isRemote && (
+                  <LinkRow
+                    label={t('set.backup')}
+                    meta={<span>{backupProblem ? backupNoteText(backupProblem, t) : t('set.integrations.on')}</span>}
+                    warn={!!backupProblem}
+                    onClick={onOpenBackup}
+                  />
+                )}
+                {!isRemote && <LinkRow label={t('set.updates')} onClick={onOpenUpdates} />}
+                {setup && (
+                  <LinkRow
+                    label={t('set.setup')}
+                    meta={<span>{t(setup.shown ? 'set.setup.warn' : 'set.setup.ok')}</span>}
+                    warn={setup.shown}
+                    onClick={() => setup.toggle()}
+                  />
+                )}
+                {isRemote && keptAuth() === 'login' && (
+                  <LinkRow label={t('set.signOut')} danger onClick={() => void endLogin({ t, toast })} />
+                )}
+              </div>
+            </section>
+          )}
+        </div>
+      </div>
+    </Panel>
+  )
+}

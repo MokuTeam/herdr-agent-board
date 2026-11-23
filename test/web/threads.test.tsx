@@ -5,12 +5,11 @@
 // stream's `thread-open`.
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import type { ReactNode } from 'react'
-import { createRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { BoardPayload } from '../../src/core/payload.ts'
 import type { Party, ThreadEntryView, ThreadRow, ThreadView } from '../../src/core/work-threads.ts'
 import { Card } from '../../web/src/components/Card.tsx'
-import { Toolbar } from '../../web/src/components/Toolbar.tsx'
+import { NavRail } from '../../web/src/components/NavRail.tsx'
 import { CardThreadChips, SheetThreads } from '../../web/src/components/threads/bits.tsx'
 import { ThreadPane } from '../../web/src/components/threads/ThreadPane.tsx'
 import { type Threads, ThreadsContext } from '../../web/src/hooks/useThreads.tsx'
@@ -248,15 +247,34 @@ test('a card whose session has no thread is drawn exactly as with threads off; o
   expect(render(<CardThreadChips session={MAPPER} />, value, null)).toBe('')
 })
 
-test('the toolbar: a Threads pill counting what needs the owner, only while the payload carries threads', () => {
-  const toolbar = (data: BoardPayload, t: Threads | null) =>
-    render(<Toolbar limitsAnchor={createRef<HTMLButtonElement>()} {...(t && { onThreads() {} })} />, board({ data }), t)
-  const off = toolbar(payload(), null)
+test('the rail: a Threads item counting what needs the owner, only while the payload carries threads', () => {
+  const noop = () => {}
+  const rail = (data: BoardPayload, t: Threads | null) =>
+    render(
+      <NavRail
+        expanded
+        onToggleExpand={noop}
+        drawerOpen={false}
+        onCloseDrawer={noop}
+        activePlace="board"
+        onBoard={noop}
+        onSchedule={noop}
+        onCategories={noop}
+        onArchive={noop}
+        onSettings={noop}
+        {...(t && { onThreads: noop })}
+      />,
+      board({ data }),
+      t,
+    )
+  const off = rail(payload(), null)
   expect(off).not.toContain('threads-open')
-  const on = toolbar(payload({ threads: { rev: 3, needsOwner: 2 } }), threads())
+  const on = rail(payload({ threads: { rev: 3, needsOwner: 2 } }), threads())
   expect(on).toContain('id="threads-open"')
-  expect(on).toMatch(/id="threads-open"[^>]*>.*?<span>Threads<\/span><span class="n">2<\/span>/)
-  expect(on).toContain('class="pill-toggle icon-only unread" id="threads-open"')
+  expect(on).toMatch(/id="threads-open"[^>]*class="rail-item alert"/)
+  expect(on).toMatch(
+    /id="threads-open"[^>]*>.*?<span class="rail-label">Threads<\/span><span class="rail-count warn">2<\/span>/,
+  )
 })
 
 test("the sheet's fold: the session's threads, folded to a line that counts them; nothing for a session with none", () => {

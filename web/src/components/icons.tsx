@@ -504,3 +504,60 @@ export const ForkIcon = () => (
     <path d="M6 6.3v.9a3 3 0 0 0 3 3h2a3 3 0 0 0 3-3v-.9M10 10.2v3.5" />
   </Icon>
 )
+
+// Navigation rail and Settings panel icons (#651).
+
+export const BoardIcon = () => (
+  <Icon>
+    <rect x="3" y="3.5" width="14" height="13" rx="2" />
+    <path d="M7.7 3.5v13M12.3 3.5v13" />
+  </Icon>
+)
+
+export const SidebarIcon = () => (
+  <Icon>
+    <rect x="3.2" y="3.8" width="13.6" height="12.4" rx="2" />
+    <path d="M7.8 3.8v12.4" />
+  </Icon>
+)
+
+export const MenuIcon = () => (
+  <Icon>
+    <path d="M3.5 6h13M3.5 10h13M3.5 14h13" />
+  </Icon>
+)
+
+export const SlidersIcon = () => (
+  <Icon>
+    <path d="M3.5 6h13M3.5 14h13" />
+    <circle cx="7.5" cy="6" r="1.8" />
+    <circle cx="12.5" cy="14" r="1.8" />
+  </Icon>
+)
+
+export const CpuIcon = () => (
+  <Icon>
+    <rect x="5.5" y="5.5" width="9" height="9" rx="1.6" />
+    <path d="M8 3.2v2.3m4-2.3v2.3m-4 9v2.3m4-2.3v2.3M3.2 8h2.3m-2.3 4h2.3m9-4h2.3m-2.3 4h2.3" />
+  </Icon>
+)
+
+export const LayersIcon = () => (
+  <Icon>
+    <path d="M10 3.8 16.5 7.2 10 10.6 3.5 7.2Z" />
+    <path d="M3.5 10.5 10 13.9l6.5-3.4M3.5 13.5 10 16.9l6.5-3.4" />
+  </Icon>
+)
+
+export const PlugIcon = () => (
+  <Icon>
+    <path d="M7.5 3.5v3.5m5-3.5v3.5M5.5 7h9v2.8a4.5 4.5 0 0 1-9 0Z" />
+    <path d="M10 14.3v2.5" />
+  </Icon>
+)
+
+export const ShieldIcon = () => (
+  <Icon>
+    <path d="M10 3.2 16 5.6v4.6c0 3.4-2.4 5.9-6 6.8-3.6-.9-6-3.4-6-6.8V5.6Z" />
+  </Icon>
+)

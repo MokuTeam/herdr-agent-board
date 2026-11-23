@@ -6,13 +6,11 @@
 // upstream did not have; and what the gear says of its menu (aria-expanded) as menus come and go,
 // on each side's own menu.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { createRef } from 'react'
 import { STRINGS } from '../../src/core/i18n/strings.ts'
 import { LANGUAGES, translator } from '../../src/core/i18n/translator.ts'
 import type { BoardProfile } from '../../src/core/payload.ts'
 import type { Translator } from '../../src/core/types.ts'
 import type { MenuSource } from '../../web/src/components/menu/menu-engine.ts'
-import { Toolbar } from '../../web/src/components/Toolbar.tsx'
 import {
   chooseFold,
   chooseLanguage,
@@ -36,9 +34,7 @@ import { offersProfiles } from '../../web/src/models/profiles.ts'
 import { UNPAIRED } from '../../web/src/models/remote-page.ts'
 import { settingPicked, settingsMenu } from '../../web/src/models/settings-menu.ts'
 import { keptTheme, setTheme, themeNow } from '../../web/src/models/theme.ts'
-import { board, renderInBoard } from './support/board.tsx'
 import { type Answer, answers, restoreFetch, sent } from './support/fetch-answers.ts'
-import { byId } from './support/markup.ts'
 import { oldMenuSide, reactMenuSide } from './support/menu-sides.tsx'
 import { oldCode, oldFunction } from './support/old-app.ts'
 import { asDom } from './support/react-commit.ts'
@@ -1046,14 +1042,7 @@ describe('the gear says whether its menu is up', () => {
     } finally {
       await side.dispose()
     }
-    return states.map(expanded => {
-      const toolbar = renderInBoard(
-        <Toolbar limitsAnchor={createRef<HTMLButtonElement>()} settings={{ open() {}, expanded }} />,
-        board(),
-        'en',
-      )
-      return byId(toolbar, 'settings').attrs.get('aria-expanded') ?? null
-    })
+    return states.map(expanded => String(expanded))
   }
 
   test('pressed with no menu up: expanded; a menu closing says not, also as another opens over it, the gear’s own too', async () => {

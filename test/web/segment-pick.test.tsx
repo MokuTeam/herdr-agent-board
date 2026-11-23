@@ -65,9 +65,9 @@ describe('the pill in the segments’ place', () => {
       ['blu', 'true'],
       ['proj', 'true'],
     ])
-    // A group of toggles now, with no thumb: the profile switch keeps its tabs and thumb.
+    // Flat typographic lane tabs (#651): a group of toggles with no segmented thumb.
     const control = byId(lanes([], false), 'lanes')
-    expect([control.attrs.get('role'), control.attrs.get('class')]).toEqual(['group', 'segmented lane-picks'])
+    expect([control.attrs.get('role'), control.attrs.get('class')]).toEqual(['group', 'lane-tabs'])
     expect(findAll([control], el => hasClass(el, 'thumb'))).toEqual([])
   })
 

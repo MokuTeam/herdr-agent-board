@@ -4,6 +4,7 @@ import { useNextAttention } from '../hooks/useNextAttention.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { attentionCount } from '../models/toolbar.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
+import { classNames } from './class-names.ts'
 import { ArrowIcon } from './icons.tsx'
 
 export function NextAttention() {
@@ -16,7 +17,7 @@ export function NextAttention() {
     return (
       <button
         type="button"
-        className="pill-toggle"
+        className="pill-toggle next-attention"
         id="next-attention"
         title={t('attention.nextHint')}
         onClick={openNext}
@@ -29,7 +30,7 @@ export function NextAttention() {
   return (
     <button
       type="button"
-      className="pill-toggle"
+      className={classNames('pill-toggle next-attention', n > 0 && 'triage')}
       id="next-attention"
       title={t(n ? 'attention.nextHint' : 'attention.none')}
       aria-label={n ? t('attention.nextCount', { n }) : t('attention.none')}
@@ -38,6 +39,11 @@ export function NextAttention() {
     >
       <ArrowIcon />
       <span>{n ? `${t('attention.next')} · ${n}` : t('attention.noneShort')}</span>
+      {n > 0 && (
+        <span className="kbd next-kbd" aria-hidden="true">
+          N
+        </span>
+      )}
     </button>
   )
 }

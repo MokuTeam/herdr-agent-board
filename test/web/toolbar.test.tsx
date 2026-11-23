@@ -1,56 +1,23 @@
-// The React toolbar against the old page's, at upstream's b2c5afa (its Archive is #56's, its compact toolbar #43's): the toolbar
-// block of web/index.html after web/app.js filled it for the same board (applyTexts, the "new
-// session" button, renderToolbar, renderLimits, updateLive, syncAvailability,
-// renderScheduleCount). The thumb's inline position and the lanes' fading edges are set after
-// layout on both pages, so neither side has them here; the setup note is its own test's
-// (setup-note.test.tsx). Since #347 the controls are in two groups (the filters, the actions) in the
-// order of asToolbarRows below, with the folded filters' button and More in the actions; the rest is
-// the old page's, button for button.
+// Hybrid B+C header (#651): slim 46px command bar (search, quiet Profile/Device dropdowns,
+// promoted imminent call chip, Away journal, composite Status & Usage readout, Next triage,
+// primary + New), foldable flat typographic lane tabs strip + quiet summary, connection banner,
+// column heads, and the unified Status & Usage popover.
 import { describe, expect, test } from 'bun:test'
 import { createRef } from 'react'
-import { translator } from '../../src/core/i18n/translator.ts'
-import type { BoardPayload } from '../../src/core/payload.ts'
-import type { Translator } from '../../src/core/types.ts'
+import type { BoardPayload, BoardProfile } from '../../src/core/payload.ts'
+import { LimitsPop } from '../../web/src/components/LimitsPop.tsx'
 import { Toolbar } from '../../web/src/components/Toolbar.tsx'
-import { resultToken } from '../../web/src/models/attention.ts'
 import type { BoardUi } from '../../web/src/state/board-ui.ts'
 import { board, item, payload, renderInBoard } from './support/board.tsx'
-import {
-  addButtonTypes,
-  applyTexts,
-  byClass,
-  byId,
-  canonical,
-  type Element,
-  find,
-  findAll,
-  hasClass,
-  type Node,
-  OLD_PAGE_ONLY,
-  pageMarkup,
-  prepend,
-  removeAttr,
-  setAttr,
-  setHtml,
-  setText,
-  stripAttrs,
-  toggleAttr,
-  toggleClass,
-} from './support/markup.ts'
+import { byClass, byId, findAll, hasClass, type Node } from './support/markup.ts'
 
-/**
- * The newest web merge ported (b2c5afa): the compact toolbar and Settings (#43), with the Archive
- * button (#56) and the column heads named by their column (data-col).
- */
-const TOOLBAR_MERGE = 'b2c5afa'
 const NOW = Date.now()
-const done = item({ key: 'c', name: 'Gamma', column: 'done', status: 'done', result: 'Fixed', activity: 100 })
 const ITEMS = [
-  item({ key: 'a', name: 'Alpha', column: 'work', status: 'working', category: 'proj' }),
-  item({ key: 'b', name: 'Beta', column: 'me', attention: 'ask', category: 'proj', askSince: NOW - 5000 }),
-  item({ key: 'e', name: 'Eps', column: 'ext', category: 'proj', wait: 'review' }),
-  done,
-  item({ key: 'd', name: 'Delta', column: 'idle', status: 'sleeping', sleeping: true }),
+  item({ key: 'a', name: 'atlas-api', column: 'work', status: 'working', category: 'proj' }),
+  item({ key: 'b', name: 'atlas-auth', column: 'me', attention: 'ask', category: 'proj', askSince: NOW - 5000 }),
+  item({ key: 'e', name: 'atlas-review', column: 'ext', category: 'proj', wait: 'review' }),
+  item({ key: 'c', name: 'atlas-done', column: 'done', status: 'done', result: 'Fixed', activity: 100 }),
+  item({ key: 'd', name: 'atlas-idle', column: 'idle', status: 'sleeping', sleeping: true }),
 ]
 const CATEGORIES: BoardPayload['categories'] = [
   { id: 'proj', title: 'Project', color: '#007AFF', colorName: 'blue', paths: [], configured: true, fallback: false },
@@ -74,254 +41,190 @@ const LIMITS: BoardPayload['limits'] = {
     { minutes: 10080, usedPercentage: 40.4, resetsAt: null, expired: false },
   ],
 }
-const SCHEDULES: BoardPayload['schedules'] = [
-  { id: 's1', key: 'a', text: 'ping', next: NOW - 60_000 },
-  { id: 's2', key: 'b', text: 'later', next: NOW + 3_600_000 },
+const PROFILES: BoardProfile[] = [
+  {
+    id: 'default',
+    title: 'Private',
+    color: '#5856D6',
+    colorName: 'indigo',
+    dir: 'default',
+    hidden: false,
+    inherited: false,
+    exists: true,
+    hooks: true,
+    sessions: 2,
+    limits: null,
+  },
+  {
+    id: 'work',
+    title: 'Work',
+    color: '#30B0C7',
+    colorName: 'teal',
+    dir: 'work',
+    hidden: false,
+    inherited: false,
+    exists: true,
+    hooks: true,
+    sessions: 3,
+    limits: null,
+  },
 ]
 
-function renderToolbar(value: ReturnType<typeof board>, lang: string): Node[] {
-  return renderInBoard(<Toolbar limitsAnchor={createRef<HTMLButtonElement>()} />, value, lang)
-}
-
-/** The toolbar of web/index.html as web/app.js starts it: the "new session" button in, the texts filled. */
-function oldToolbar(t: Translator): Node[] {
-  const toolbar = [find(pageMarkup(TOOLBAR_MERGE), el => el.tag === 'header' && hasClass(el, 'toolbar'))]
-  // The setup note is drawn and tested on its own (setup-note.test.tsx).
-  for (const parent of findAll(toolbar, el =>
-    el.children.some(c => c.kind === 'element' && c.attrs.get('id') === 'setup-note'),
-  ))
-    parent.children = parent.children.filter(c => c.kind !== 'element' || c.attrs.get('id') !== 'setup-note')
-  // app.js "new sessions, renaming, menus": the button with ICON.plus, prepended, then applyTexts().
-  prepend(
-    byClass(toolbar, 'controls'),
-    '<button class="pill-toggle icon-only new-session" id="new-session" data-hint="launch.toolbarHint"><svg viewBox="0 0 20 20"><path d="M10 4.5v11M4.5 10h11"/></svg><span data-i18n="launch.toolbar"></span></button>',
-  )
-  applyTexts(toolbar, t)
-  return toolbar
-}
-
-/** syncAvailability() for the toolbar's part. */
-function syncAvailability(toolbar: Node[], t: Translator, canMutate: boolean, canEdit: boolean): void {
-  const banner = byId(toolbar, 'connection-state')
-  toggleAttr(banner, 'hidden', canMutate)
-  setText(banner, t(canEdit ? 'mobile.readOnly' : 'live.off'))
-  const add = byId(toolbar, 'new-session')
-  toggleAttr(add, 'disabled', !canMutate)
-  setAttr(add, 'title', t(canMutate ? 'launch.toolbarHint' : 'mobile.readOnly'))
-}
-
-/** What React renders differently on purpose: see support/markup.ts. */
-function asReactRendersIt(toolbar: Node[]): string {
-  setAttr(byId(toolbar, 'search'), 'value', '') // the controlled input reflects its value; app.js set the property
-  addButtonTypes(toolbar)
-  stripAttrs(toolbar, OLD_PAGE_ONLY)
-  return canonical(toolbar)
-}
-
+const textOf = (n: Node): string => (n.kind === 'text' ? n.text : n.children.map(textOf).join(''))
 const ui = (fields: Partial<BoardUi>) => fields
 
-/**
- * The controls as this board groups them since #347: the lanes control, the profile switch and search
- * in the filters, which say how many pickers they hold (#599); in the actions the filters' button
- * (the folded toolbar's), then the old page's buttons with Next after the archive and Settings after
- * More, and the live dot last. The
- * filters' button and More are new: they are taken from what this board draws (their own tests
- * are toolbar-dom.test.tsx and toolbar-menu.test.ts), the rest is the old page's markup moved, not changed.
- */
-function asToolbarRows(toolbar: Node[], actual: Node[]): void {
-  // #351: the page's name is for screen readers only, and the summary's words are no title's tooltip.
-  setAttr(
-    find(toolbar, el => el.tag === 'h1'),
-    'class',
-    'sr-only',
-  )
-  const controls = byClass(toolbar, 'controls')
-  const els = controls.children.filter((n): n is Element => n.kind === 'element')
-  const take = (id: string) => {
-    const el = els.find(e => e.attrs.get('id') === id)
-    if (el) els.splice(els.indexOf(el), 1)
-    return el
-  }
-  const group = (name: string, id: string | null, children: (Element | undefined)[]): Element => ({
-    kind: 'element',
-    tag: 'div',
-    attrs: new Map(
-      id
-        ? [
-            ['class', name],
-            ['id', id],
-          ]
-        : [['class', name]],
-    ),
-    children: children.filter((c): c is Element => !!c),
-  })
-  const lanes = take('lanes')
-  const profiles = take('profiles')
-  const search = els.find(e => hasClass(e, 'search'))
-  if (search) els.splice(els.indexOf(search), 1)
-  const rest = (...ids: string[]) => ids.map(take)
-  const first = rest(
-    'new-session',
-    'cats-open',
-    'sched-open',
-    'todos-open',
-    'calendar-open',
-    'time-open',
-    'archive-open',
-  )
-  const next = take('next-attention')
-  const notes = rest('setup-note', 'backup-note', 'wake-note', 'limits')
-  const settings = take('settings')
-  const live = take('live')
-  const filters = group('toolbar-filters', 'toolbar-filters', [lanes, profiles, search])
-  // #599: how many pickers the filters hold (the lanes control, the profile switch where there is one).
-  setAttr(filters, 'data-picks', profiles ? '2' : '1')
-  controls.children = [
-    filters,
-    group('toolbar-actions', null, [
-      byId(actual, 'toolbar-peek'),
-      ...first,
-      next,
-      ...notes,
-      byId(actual, 'toolbar-more'),
-      settings,
-      live,
-      ...els,
-    ]),
-  ]
+function renderToolbar(
+  value: ReturnType<typeof board>,
+  lang = 'en',
+  props: Partial<Parameters<typeof Toolbar>[0]> = {},
+): Node[] {
+  return renderInBoard(<Toolbar limitsAnchor={createRef<HTMLButtonElement>()} {...props} />, value, lang)
 }
 
-/**
- * The lanes control as this board draws it since #179, where the old page had a tab list with a
- * thumb: a group of toggles, each lane on show pressed ("All" while none is picked).
- */
-function asLanePicks(toolbar: Node[], buttons: string): void {
-  const lanes = byId(toolbar, 'lanes')
-  setAttr(lanes, 'class', 'segmented lane-picks')
-  setAttr(lanes, 'role', 'group')
-  setHtml(lanes, buttons)
-}
+describe('Hybrid B+C header markup (#651)', () => {
+  test('fresh board in English: slim top bar, flat lane tabs, composite Status & Usage, Next triage, + New, and column heads', () => {
+    const data = payload({ items: ITEMS, categories: CATEGORIES, limits: LIMITS })
+    const nodes = renderToolbar(board({ data, ui: ui({ filter: [], sleepers: true }) }), 'en')
 
-describe('toolbar markup parity', () => {
-  test('a fresh board in English: counts, lanes, attention, schedule badge, usage and the live dot', () => {
-    const t = translator('en')
-    const data = payload({ items: ITEMS, categories: CATEGORIES, limits: LIMITS, schedules: SCHEDULES })
-    const actual = renderToolbar(board({ data, ui: ui({ filter: [], sleepers: true }) }), 'en')
+    // Row 1: search with / keycap, Status & Usage composite control, Next triage, primary + New.
+    expect(byId(nodes, 'search').attrs.get('type')).toBe('search')
+    expect(findAll(nodes, el => hasClass(el, 'search-kbd')).map(textOf)).toEqual(['/'])
 
-    const old = oldToolbar(t)
-    setHtml(
-      byId(old, 'summary'),
-      '<b>5</b> sessions · <b>1</b> working · <b>1</b> needs you · <b>1</b> waits on others · 1 asleep',
-    )
-    const next = byId(old, 'next-attention')
-    setText(
-      find([next], el => el.tag === 'span'),
-      'Next · 2',
-    )
-    setAttr(next, 'title', t('attention.nextHint'))
-    setAttr(next, 'aria-label', 'Next card needing attention, 2 in this view')
-    asLanePicks(
-      old,
-      '<button data-id="all" aria-pressed="true">All<span class="n">5</span></button><button data-id="proj" aria-pressed="false">Project<span class="n">3</span></button><button data-id="other" aria-pressed="false">Other<span class="n">2</span></button>',
-    )
-    setHtml(
-      byId(old, 'columns-head'),
-      '<div class="col-head" data-col="work"><span class="dot" style="--c:var(--green)"></span><span class="t">Working</span><span class="n">1</span></div>' +
-        '<div class="col-head" data-col="me"><span class="dot" style="--c:var(--orange)"></span><span class="t">Needs me</span><span class="n">1</span></div>' +
-        '<div class="col-head" data-col="ext"><span class="dot" style="--c:var(--purple)"></span><span class="t">Waiting on others</span><span class="n">1</span></div>' +
-        '<div class="col-head" data-col="done"><span class="dot" style="--c:var(--blue)"></span><span class="t">Done</span><span class="n">1</span></div>' +
-        '<div class="col-head" data-col="idle"><span class="dot" style="--c:var(--gray)"></span><span class="t">Idle</span><span class="n">1</span></div>',
-    )
-    const limits = byId(old, 'limits')
-    removeAttr(limits, 'hidden')
-    setAttr(limits, 'aria-label', 'Claude usage')
-    setAttr(limits, 'title', 'Show usage, source and reading time')
-    setHtml(limits, '<span class="hot">5h <b>92%</b></span><span>7d <b>40%</b></span>')
-    const live = byId(old, 'live')
-    toggleClass(live, 'on', true)
-    setAttr(live, 'title', 'Live')
-    syncAvailability(old, t, true, true)
-    setText(byId(old, 'sched-count'), '2')
-    toggleClass(byId(old, 'sched-open'), 'due', true)
+    const status = byId(nodes, 'limits')
+    expect(hasClass(status, 'status-control')).toBe(true)
+    expect(hasClass(byId(nodes, 'live'), 'on')).toBe(true)
+    expect(textOf(status)).toContain('5h 92%')
 
-    asToolbarRows(old, actual)
-    expect(canonical(actual)).toBe(asReactRendersIt(old))
+    const next = byId(nodes, 'next-attention')
+    expect(hasClass(next, 'triage')).toBe(true)
+    expect(textOf(next)).toContain('Next · 2')
+    expect(findAll([next], el => hasClass(el, 'next-kbd')).map(textOf)).toEqual(['N'])
+
+    const add = byId(nodes, 'new-session')
+    expect(hasClass(add, 'tb-primary')).toBe(true)
+    expect(add.attrs.has('disabled')).toBe(false)
+    expect(textOf(add)).toBe('New')
+
+    // Row 2: flat typographic lane tabs (All + categories with sessions, no count badges) + summary.
+    const lanes = byId(nodes, 'lanes')
+    expect(lanes.attrs.get('class')).toBe('lane-tabs')
+    const tabs = findAll([lanes], el => el.tag === 'button')
+    expect(tabs.map(b => [b.attrs.get('data-id'), textOf(b), b.attrs.get('aria-pressed')])).toEqual([
+      ['all', 'All', 'true'],
+      ['proj', 'Project', 'false'],
+      ['other', 'Other', 'false'],
+    ])
+    // Category tabs have small 6px color square; "All" does not.
+    const [allTab, projTab] = tabs
+    if (!allTab || !projTab) throw new Error('expected All and Project lane tabs')
+    expect(findAll([allTab], el => hasClass(el, 'lane-dot'))).toHaveLength(0)
+    expect(findAll([projTab], el => hasClass(el, 'lane-dot'))).toHaveLength(1)
+
+    expect(textOf(byId(nodes, 'summary'))).toContain('5 sessions')
+    expect(byId(nodes, 'connection-state').attrs.has('hidden')).toBe(true)
+
+    const heads = findAll([byId(nodes, 'columns-head')], el => hasClass(el, 'col-head'))
+    expect(heads.map(h => h.attrs.get('data-col'))).toEqual(['work', 'me', 'ext', 'done', 'idle'])
   })
 
-  test('stale herdr data in Russian, one lane picked, sleepers hidden, nothing needing attention', () => {
-    const t = translator('ru')
-    const old = NOW - 3_600_000
+  test('stale data in Russian, one lane picked, nothing needing attention: read-only banner, disabled + New, active lane pressed', () => {
+    const quiet = [item({ key: 'a', name: 'atlas-api', column: 'work', status: 'working', category: 'proj' })]
+    const data = payload({ items: quiet, categories: CATEGORIES, limits: { ...LIMITS, stale: true } })
+    const nodes = renderToolbar(
+      board({ data, ui: ui({ filter: ['proj'], sleepers: false }), canMutate: false, canEdit: true, connected: false }),
+      'ru',
+    )
+
+    expect(byId(nodes, 'connection-state').attrs.has('hidden')).toBe(false)
+    expect(byId(nodes, 'new-session').attrs.has('disabled')).toBe(true)
+    expect(byId(nodes, 'next-attention').attrs.has('disabled')).toBe(true)
+    expect(hasClass(byId(nodes, 'next-attention'), 'triage')).toBe(false)
+    expect(hasClass(byId(nodes, 'live'), 'on')).toBe(false)
+    expect(hasClass(byId(nodes, 'limits'), 'stale')).toBe(true)
+
+    const tabs = findAll([byId(nodes, 'lanes')], el => el.tag === 'button')
+    expect(tabs.map(b => [b.attrs.get('data-id'), b.attrs.get('aria-pressed')])).toEqual([
+      ['all', 'false'],
+      ['proj', 'true'],
+    ])
+  })
+
+  test('before first payload: loading summary, empty lanes and heads, offline dot', () => {
+    const nodes = renderToolbar(board({ data: null, connected: false, canMutate: false, canEdit: false }), 'en')
+    expect(textOf(byId(nodes, 'summary'))).toContain('Loading')
+    expect(findAll([byId(nodes, 'lanes')], el => el.tag === 'button')).toEqual([])
+    expect(findAll([byId(nodes, 'columns-head')], el => hasClass(el, 'col-head'))).toEqual([])
+    expect(hasClass(byId(nodes, 'live'), 'on')).toBe(false)
+  })
+
+  test('quiet Profile dropdown appears in top bar when 2+ profiles exist; Away journal & alerts surface cleanly', () => {
+    const data = payload({ items: ITEMS, categories: CATEGORIES, profiles: PROFILES })
+    const nodes = renderToolbar(board({ data }), 'en', {
+      journal: { label: 'Since 09:15', open: false, onToggle() {} },
+      onOpenDrawer() {},
+      railAlert: true,
+    })
+    const top = byClass(nodes, 'tb-top')
+    expect(findAll([top], el => el.attrs.get('id') === 'profiles-pick')).toHaveLength(1)
+    expect(findAll([top], el => el.attrs.get('id') === 'journal-open')).toHaveLength(1)
+    expect(findAll([top], el => el.attrs.get('id') === 'rail-toggle')).toHaveLength(1)
+    expect(findAll([top], el => hasClass(el, 'tb-menu-dot'))).toHaveLength(1)
+  })
+
+  test('unified Status & Usage popover shows connection state, presence switcher, session summary, alerts, and usage report', () => {
     const data = payload({
-      lang: 'ru',
-      stale: true,
-      lastSuccessfulRefreshAt: NOW - 120_000,
       items: ITEMS,
       categories: CATEGORIES,
-      limits: { ...LIMITS, observedAt: old, stale: true },
+      limits: LIMITS,
+      presence: {
+        mode: 'auto',
+        state: 'here',
+        by: 'user',
+        since: NOW - 60_000,
+        idleMinutes: 15,
+        hint: null,
+        detects: true,
+        calls: true,
+      },
+      backup: { last: NOW - 3_600_000, problem: { kind: 'offline', target: 'cloud' } },
     })
-    const viewed = { c: resultToken(done) }
-    const actual = renderToolbar(board({ data, ui: ui({ filter: ['other'], sleepers: false, viewed }) }), 'ru')
-
-    const page = oldToolbar(t)
-    setHtml(
-      byId(page, 'summary'),
-      '<b>5</b> сессий · <b>1</b> работает · <b>1</b> ждёт тебя · <b>1</b> ждёт ответа извне · 1 спит',
+    const nodes = renderInBoard(
+      <LimitsPop
+        anchor={createRef<HTMLButtonElement>()}
+        unified
+        onBackup={() => {}}
+        setup={{
+          open: false,
+          opened: false,
+          shown: true,
+          hidden: true,
+          checks: null,
+          loadFailed: false,
+          loading: false,
+          busy: false,
+          summary: null,
+          copied: new Set(),
+          noteRef: createRef<HTMLButtonElement>(),
+          popRef: createRef<HTMLDivElement>(),
+          toggle() {},
+          close() {},
+          recheck() {},
+          hide() {},
+          copy() {},
+        }}
+      />,
+      board({ data, connected: true, ui: ui({ limitsOpen: true }) }),
+      'en',
     )
-    const next = byId(page, 'next-attention')
-    toggleAttr(next, 'disabled', true)
-    setText(
-      find([next], el => el.tag === 'span'),
-      t('attention.noneShort'),
-    )
-    setAttr(next, 'title', t('attention.none'))
-    setAttr(next, 'aria-label', t('attention.none'))
-    asLanePicks(
-      page,
-      '<button data-id="all" aria-pressed="false">Все<span class="n">4</span></button><button data-id="proj" aria-pressed="false">Project<span class="n">3</span></button><button data-id="other" aria-pressed="true">Other<span class="n">1</span></button>',
-    )
-    // Only Done has a card on show: the other columns narrow to their heads.
-    setHtml(
-      byId(page, 'columns-head'),
-      '<div class="col-head vacant" data-col="work"><span class="dot" style="--c:var(--green)"></span><span class="t">Работает</span><span class="n">0</span></div>' +
-        '<div class="col-head vacant" data-col="me"><span class="dot" style="--c:var(--orange)"></span><span class="t">Ждёт меня</span><span class="n">0</span></div>' +
-        '<div class="col-head vacant" data-col="ext"><span class="dot" style="--c:var(--purple)"></span><span class="t">Ждёт внешнего</span><span class="n">0</span></div>' +
-        '<div class="col-head" data-col="done"><span class="dot" style="--c:var(--blue)"></span><span class="t">Готово</span><span class="n">1</span></div>' +
-        '<div class="col-head vacant" data-col="idle"><span class="dot" style="--c:var(--gray)"></span><span class="t">Простой</span><span class="n">0</span></div>',
-    )
-    const limits = byId(page, 'limits')
-    removeAttr(limits, 'hidden')
-    setAttr(limits, 'aria-label', 'Расход Claude')
-    setAttr(limits, 'title', t('limits.open'))
-    setHtml(limits, '<span class="hot">5ч <b>92%</b></span><span>7д <b>40%</b></span>')
-    toggleClass(limits, 'stale', true)
-    const live = byId(page, 'live')
-    toggleClass(live, 'stale', true)
-    setAttr(live, 'title', t('live.stale', { time: new Date(NOW - 120_000).toLocaleTimeString('ru') }))
-    syncAvailability(page, t, false, true)
-
-    asToolbarRows(page, actual)
-    expect(canonical(actual)).toBe(asReactRendersIt(page))
-  })
-
-  test('before the first board: "Loading…", no lanes or heads, usage unknown, not connected yet', () => {
-    const t = translator('en')
-    const actual = renderToolbar(board({ data: null }), 'en')
-
-    // The page as it starts: the connection reported "not connected" once (renderLimits,
-    // updateLive, syncAvailability), the title of the dot put back by the second applyTexts().
-    const old = oldToolbar(t)
-    asLanePicks(old, '')
-    const limits = byId(old, 'limits')
-    removeAttr(limits, 'hidden')
-    setAttr(limits, 'aria-label', 'Claude usage')
-    setAttr(limits, 'title', 'Show usage, source and reading time')
-    setText(limits, 'Usage —')
-    const live = byId(old, 'live')
-    toggleClass(live, 'stale', true)
-    setAttr(live, 'title', t('live.none'))
-    syncAvailability(old, t, false, false)
-
-    asToolbarRows(old, actual)
-    expect(canonical(actual)).toBe(asReactRendersIt(old))
+    const pop = byId(nodes, 'limits-pop')
+    const [head] = findAll([pop], el => hasClass(el, 'status-pop-head'))
+    if (!head) throw new Error('expected status-pop-head')
+    const text = textOf(head)
+    expect(text).toContain('Live')
+    expect(text).toContain('5 sessions')
+    expect(findAll([pop], el => hasClass(el, 'status-seg-btn')).length).toBeGreaterThanOrEqual(2)
+    expect(findAll([pop], el => hasClass(el, 'status-pop-alert')).length).toBeGreaterThanOrEqual(2)
+    // LimitsReport is still rendered beneath the status summary.
+    expect(textOf(pop)).toContain('92%')
   })
 })

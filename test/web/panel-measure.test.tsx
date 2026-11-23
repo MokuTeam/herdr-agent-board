@@ -56,13 +56,15 @@ test('the calendar takes the full width; the session, the categories and the sch
   for (const id of ['sheet', 'cats-sheet', 'sched-sheet']) expect(byId(side, id).attrs.has('data-measure')).toBe(false)
   const cal = inPanels(<CalendarPanel open={false} onClose={() => {}} />)
   expect(byId(cal, 'cal-sheet').attrs.get('data-measure')).toBe('full')
-  // and no other panel asks but the Team panel, a messenger with its list beside the conversation (#370), and
-  // the threads panel, built like it (#392): a new one keeps the measure until it says otherwise
+  // and no other panel asks but Team (#370), Threads (#392), and Settings (#651), each a two-column
+  // navigation + content layout: a new panel keeps the reading measure until it says otherwise.
   const asking = sources(join(web, 'src'))
     .filter(f => /measure=\{?["'`]full/.test(readFileSync(f, 'utf8')))
     .map(f => relative(join(web, 'src'), f).replaceAll('\\', '/'))
+    .sort()
   expect(asking).toEqual([
     'components/calendar/CalendarPanel.tsx',
+    'components/settings/SettingsPanel.tsx',
     'components/team/TeamPanel.tsx',
     'components/threads/ThreadsPanel.tsx',
   ])

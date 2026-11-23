@@ -13,6 +13,7 @@ import { CAL_STRINGS } from './cal-strings.ts'
 import { CALL_STRINGS } from './call-strings.ts'
 import { COMPACT_STRINGS } from './compact-strings.ts'
 import { DECISION_STRINGS } from './decision-strings.ts'
+import { DESIGN_STRINGS } from './design-strings.ts'
 import { FEATURE_STRINGS } from './feature-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
@@ -1496,3 +1497,5 @@ for (const code of Object.keys(NODE_STRINGS) as Lang[]) Object.assign(STRINGS[co
 for (const code of Object.keys(ONESHOT_STRINGS) as Lang[]) Object.assign(STRINGS[code], ONESHOT_STRINGS[code])
 // And auto-compact (#378).
 for (const code of Object.keys(COMPACT_STRINGS) as Lang[]) Object.assign(STRINGS[code], COMPACT_STRINGS[code])
+// And the redesigned header, rail, settings panel and provider marks (#651).
+for (const code of Object.keys(DESIGN_STRINGS) as Lang[]) Object.assign(STRINGS[code], DESIGN_STRINGS[code])

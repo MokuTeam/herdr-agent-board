@@ -38,6 +38,7 @@ export type BoardKey =
   | 'next'
   | 'digit'
   | 'search'
+  | 'settings'
   | 'terminal'
   | 'undoArchive'
   | null
@@ -62,6 +63,8 @@ export function boardKey(e: KeyPress, s: KeyScene): BoardKey {
   if (e.key?.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !s.typing && s.undo)
     return 'undoArchive'
   if (e.key === '/' && !s.typing) return 'search'
+  // Comma opens Settings (#651).
+  if (e.key === ',' && plainKey) return 'settings'
   // Ctrl+`: the terminal of the session in the sheet (its window closes with it again).
   if (e.code === 'Backquote' && e.ctrlKey && !e.altKey && !e.metaKey && s.sessionOpen && !s.quickLook) return 'terminal'
   return null

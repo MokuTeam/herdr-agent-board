@@ -62,6 +62,7 @@ import {
 } from './icons.tsx'
 import { ModelTag } from './ModelTag.tsx'
 import { ProfileTag } from './ProfileTag.tsx'
+import { ProviderMark } from './ProviderMark.tsx'
 import { StopButton } from './StopButton.tsx'
 import { CardThreadChips, KeyText } from './threads/bits.tsx'
 import { WatchLine } from './WatchLine.tsx'
@@ -181,6 +182,7 @@ function CardTop({ item }: { item: Item }) {
       ) : (
         <span className={`dot ${item.column}`} style={{ '--c': COLUMN_COLORS[item.column] }} />
       )}
+      <ProviderMark item={item} />
       <CardName name={item.name} was={was} />
       {/* A favorite: a quiet star by the name. */}
       {item.favorite && (

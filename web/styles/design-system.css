@@ -1,0 +1,207 @@
+/* Agent board design system (#651): quiet tonal neutral surfaces, 1px hairline boundaries,
+   one cobalt accent, status colors reserved strictly for live state, consistent 15px / 1.5px
+   stroke icons, crisp 6px / 8px / 12px radii, and pills restricted to status dots and switches.
+   Linked after upstream's sheets and before look-terminal.css, which still owns Terminal mode. */
+
+:root {
+  --bg: #f6f6f4;
+  --surface: #ffffff;
+  --surface-2: #efefed;
+  --fill: rgba(24, 24, 27, 0.06);
+  --fill-2: rgba(24, 24, 27, 0.04);
+  --label: #18181b;
+  --label-2: #52525b;
+  --label-3: #8a8a93;
+  --border: rgba(24, 24, 27, 0.09);
+  --border-strong: rgba(24, 24, 27, 0.17);
+  --separator: rgba(24, 24, 27, 0.09);
+  --material: rgba(246, 246, 244, 0.94);
+  --material-thick: rgba(255, 255, 255, 0.96);
+  --panel: #f6f6f4;
+  --panel-float: #ffffff;
+  --scroll: rgba(24, 24, 27, 0.22);
+  --edge: rgba(255, 255, 255, 0.7);
+
+  --accent: #2558d9;
+  --accent-hover: #1d47b5;
+  --accent-soft: rgba(37, 88, 217, 0.1);
+
+  --green: #1f8a4c;
+  --orange: #c86a08;
+  --purple: #7c4dca;
+  --blue: #2558d9;
+  --gray: #8a8a93;
+  --red: #cc3333;
+
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-pill: 999px;
+  --radius: 8px;
+  --gutter: 20px;
+  --gap: 12px;
+
+  --shadow-card: 0 0 0 1px var(--border);
+  --shadow-lift: 0 0 0 1px var(--border-strong), 0 12px 32px rgba(24, 24, 27, 0.1), 0 2px 6px rgba(24, 24, 27, 0.05);
+  --shadow-sheet: 0 0 0 1px var(--border-strong), 0 20px 52px rgba(24, 24, 27, 0.14);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111214;
+    --surface: #18191d;
+    --surface-2: #22242a;
+    --fill: rgba(255, 255, 255, 0.07);
+    --fill-2: rgba(255, 255, 255, 0.04);
+    --label: #f2f2f4;
+    --label-2: #a1a1aa;
+    --label-3: #6e6e77;
+    --border: rgba(255, 255, 255, 0.09);
+    --border-strong: rgba(255, 255, 255, 0.17);
+    --separator: rgba(255, 255, 255, 0.09);
+    --material: rgba(17, 18, 20, 0.94);
+    --material-thick: rgba(24, 25, 29, 0.96);
+    --panel: #111214;
+    --panel-float: #18191d;
+    --scroll: rgba(255, 255, 255, 0.2);
+    --edge: rgba(255, 255, 255, 0.08);
+
+    --accent: #5c8df6;
+    --accent-hover: #7ba3f8;
+    --accent-soft: rgba(92, 141, 246, 0.16);
+
+    --green: #3fb96d;
+    --orange: #eb9434;
+    --purple: #a77eeb;
+    --blue: #5c8df6;
+    --gray: #6e6e77;
+    --red: #ec5b5b;
+
+    --shadow-card: 0 0 0 1px var(--border);
+    --shadow-lift: 0 0 0 1px var(--border-strong), 0 14px 36px rgba(0, 0, 0, 0.45);
+    --shadow-sheet: 0 0 0 1px var(--border-strong), 0 24px 60px rgba(0, 0, 0, 0.55);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #111214;
+  --surface: #18191d;
+  --surface-2: #22242a;
+  --fill: rgba(255, 255, 255, 0.07);
+  --fill-2: rgba(255, 255, 255, 0.04);
+  --label: #f2f2f4;
+  --label-2: #a1a1aa;
+  --label-3: #6e6e77;
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.17);
+  --separator: rgba(255, 255, 255, 0.09);
+  --material: rgba(17, 18, 20, 0.94);
+  --material-thick: rgba(24, 25, 29, 0.96);
+  --panel: #111214;
+  --panel-float: #18191d;
+  --scroll: rgba(255, 255, 255, 0.2);
+  --edge: rgba(255, 255, 255, 0.08);
+
+  --accent: #5c8df6;
+  --accent-hover: #7ba3f8;
+  --accent-soft: rgba(92, 141, 246, 0.16);
+
+  --green: #3fb96d;
+  --orange: #eb9434;
+  --purple: #a77eeb;
+  --blue: #5c8df6;
+  --gray: #6e6e77;
+  --red: #ec5b5b;
+
+  --shadow-card: 0 0 0 1px var(--border);
+  --shadow-lift: 0 0 0 1px var(--border-strong), 0 14px 36px rgba(0, 0, 0, 0.45);
+  --shadow-sheet: 0 0 0 1px var(--border-strong), 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+
+/* Unified 15px / 1.5px stroke icon baseline */
+svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.5;
+}
+
+/* Crisp hairline cards and restrained attention emphasis */
+.card {
+  border-radius: var(--r-md);
+  padding: 10px 11px;
+  box-shadow: var(--shadow-card);
+}
+.card[data-col="me"] {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--orange) 42%, transparent), inset 2px 0 0 var(--orange);
+}
+.card.compact {
+  padding: 6px 11px;
+  background: var(--surface-2);
+  box-shadow: none;
+}
+
+/* Card provider mark (#651): 14px monochrome official logo in a fixed slot right after the status dot/moon */
+.card-top > .provider-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--label-2);
+  transition: color 120ms ease;
+}
+.card-top > .provider-mark svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+  stroke: none;
+}
+.card:hover .card-top > .provider-mark {
+  color: var(--label);
+}
+
+/* Column heads: quiet hairline divider instead of floating pill counts */
+.columns-head {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.col-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--label-2);
+}
+.col-head .n {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--label-3);
+}
+
+/* Waiting chip on cards: subtle 6px radius instead of full pill */
+.card .chip {
+  border-radius: var(--r-sm);
+  padding: 2px 7px;
+  font-size: 11.5px;
+}
+
+/* Keyboard hint keycap */
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--label-3);
+  font: 500 10.5px/1 var(--mono);
+  flex: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-top > .provider-mark {
+    transition: none;
+  }
+}

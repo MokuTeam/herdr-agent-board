@@ -10,6 +10,7 @@ import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardPayload, BoardProfile } from '../../src/core/payload.ts'
 import type { Switched, WakeSettingsView, WakeView } from '../../src/core/wake/view.ts'
 import { timeOf } from '../../src/core/when-format.ts'
+import { LimitsPop } from '../../web/src/components/LimitsPop.tsx'
 import { ProfilesPanel } from '../../web/src/components/profiles/ProfilesPanel.tsx'
 import { Toolbar } from '../../web/src/components/Toolbar.tsx'
 import { WakeNote } from '../../web/src/components/wake/WakeNote.tsx'
@@ -515,19 +516,18 @@ describe('the toolbar’s quiet note', () => {
     )
   const notesIn = (nodes: Node[]) => findAll(nodes, el => el.attrs.get('id') === 'wake-note')
 
-  test('on and not running for more than a minute: "Wake stopped", beside the setup note', () => {
-    const nodes = toolbarOf(payload({ wake: CRASHED }), () => {})
-    const [note] = notesIn(nodes)
+  test('on and not running for more than a minute: marks Status with an alert and renders "Wake stopped" inside the Status popover', () => {
+    const bar = toolbarOf(payload({ wake: CRASHED }), () => {})
+    expect(hasClass(byId(bar, 'limits'), 'alert')).toBe(true)
+    const pop = renderInBoard(
+      <LimitsPop anchor={{ current: null }} unified onWake={() => {}} />,
+      board({ data: payload({ wake: CRASHED }), now: NOW, ui: { limitsOpen: true } }),
+    )
+    const [note] = notesIn(pop)
     if (!note) throw new Error('no note')
     expect(textOf(note)).toBe('Wake stopped')
     expect(note.attrs.get('title')).toBe('Sleep and wake is on but not running: open its settings')
-    // Drawn as "Setup incomplete" is, right after it.
-    expect(note.attrs.get('class')).toBe('setup-note wake-note')
-    const controls = find(nodes, el => hasClass(el, 'toolbar-actions')).children.filter(
-      (n): n is Element => n.kind === 'element',
-    )
-    const at = controls.findIndex(el => el.attrs.get('id') === 'wake-note')
-    expect(controls[at - 1]?.attrs.get('id')).toBe('next-attention')
+    expect(note.attrs.get('class')).toBe('status-pop-alert')
   })
 
   test('otherwise the toolbar is as it was: running, down less than a minute, off, or no wake at all', () => {

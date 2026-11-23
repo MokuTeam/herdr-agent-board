@@ -32,6 +32,8 @@ export interface BoardKeysOptions {
   openTerminal?: (key: string, from: Element | null) => void
   /** What went to the archive last, while its toast offers Return (hooks/useArchive.ts). */
   archive?: { canUndo(): boolean; undo(): void }
+  /** Comma opens or closes the Settings panel (#651). */
+  openSettings?: () => void
   /** A key the board's own keys leave: the Terminal style's (hooks/useTerminalKeys.ts); true when it took it. */
   terminal?: (e: KeyboardEvent, left: LeftKey) => boolean
 }
@@ -112,6 +114,10 @@ export function useBoardKeys(opts: BoardKeysOptions): void {
         case 'search':
           e.preventDefault()
           document.getElementById('search')?.focus()
+          return
+        case 'settings':
+          e.preventDefault()
+          o.openSettings?.()
           return
         case 'terminal':
           if (!open) return

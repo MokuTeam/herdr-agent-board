@@ -14,6 +14,7 @@ import type { BoardPayload } from '../../src/core/payload.ts'
 import { ApiError } from '../../web/src/api/client.ts'
 import { Card } from '../../web/src/components/Card.tsx'
 import { DecisionsPanel } from '../../web/src/components/decisions/DecisionsPanel.tsx'
+import { NavRail } from '../../web/src/components/NavRail.tsx'
 import { Toolbar } from '../../web/src/components/Toolbar.tsx'
 import { type DecisionsUi, decisionsActions } from '../../web/src/hooks/useDecisions.ts'
 import { I18nProvider } from '../../web/src/i18n/I18nProvider.tsx'
@@ -82,14 +83,32 @@ test('the words: a span, the default line, the wait, who closed it', () => {
   expect(closedBy({ answeredBy: 'withdrawn', via: 'cleared' }, t)).toBe('withdrawn')
 })
 
-test('the toolbar: a Decisions pill only while the payload carries them; its count, and a dot for a default unseen', () => {
-  const toolbar = (data: BoardPayload, on: boolean) =>
-    render(<Toolbar limitsAnchor={createRef<HTMLButtonElement>()} {...(on && { onDecisions() {} })} />, board({ data }))
-  expect(toolbar(payload(), false)).not.toContain('decisions-open')
-  const on = toolbar(payload({ decisions: queue() }), true)
-  expect(on).toContain('class="pill-toggle icon-only unread" id="decisions-open"')
-  expect(on).toMatch(/id="decisions-open"[^>]*>.*?<span>Decisions<\/span><span class="n">1<\/span><\/button>/)
-  const went = toolbar(
+test('the rail: a Decisions item only while the payload carries them; its count, and an alert dot for a default unseen', () => {
+  const noop = () => {}
+  const rail = (data: BoardPayload, on: boolean) =>
+    render(
+      <NavRail
+        expanded
+        onToggleExpand={noop}
+        drawerOpen={false}
+        onCloseDrawer={noop}
+        activePlace="board"
+        onBoard={noop}
+        onSchedule={noop}
+        onCategories={noop}
+        onArchive={noop}
+        onSettings={noop}
+        {...(on && { onDecisions: noop })}
+      />,
+      board({ data }),
+    )
+  expect(rail(payload(), false)).not.toContain('decisions-open')
+  const on = rail(payload({ decisions: queue() }), true)
+  expect(on).toContain('id="decisions-open" class="rail-item alert"')
+  expect(on).toMatch(
+    /id="decisions-open"[^>]*>.*?<span class="rail-label">Decisions<\/span><span class="rail-count warn">1<\/span>/,
+  )
+  const went = rail(
     payload({
       decisions: queue({
         items: [],
@@ -98,23 +117,40 @@ test('the toolbar: a Decisions pill only while the payload carries them; its cou
     }),
     true,
   )
-  expect(went).toContain('class="n went"')
+  expect(went).toContain('id="decisions-open" class="rail-item alert"')
+  expect(went).toContain('class="rail-dot inline"')
   expect(went).toContain('title="Something went by default since you last looked"')
-  const quiet = toolbar(payload({ decisions: queue({ items: [] }) }), true)
-  expect(quiet).toContain('class="pill-toggle icon-only" id="decisions-open"')
+  const quiet = rail(payload({ decisions: queue({ items: [] }) }), true)
+  expect(quiet).toContain('id="decisions-open" class="rail-item"')
 })
 
-test('with the away journal on too (#489): both pills on the row and in More, Decisions right after Threads, then Since', () => {
-  const html = render(
+test('with the away journal on too (#489): Decisions in the rail, Since in the top bar, and both in the priority model', () => {
+  const noop = () => {}
+  const railHtml = render(
+    <NavRail
+      expanded
+      onToggleExpand={noop}
+      drawerOpen={false}
+      onCloseDrawer={noop}
+      activePlace="board"
+      onBoard={noop}
+      onDecisions={noop}
+      onSchedule={noop}
+      onCategories={noop}
+      onArchive={noop}
+      onSettings={noop}
+    />,
+    board({ data: payload({ decisions: queue() }) }),
+  )
+  const barHtml = render(
     <Toolbar
       limitsAnchor={createRef<HTMLButtonElement>()}
-      onDecisions={() => {}}
       journal={{ label: 'Since 23:56', open: false, onToggle() {} }}
     />,
     board({ data: payload({ decisions: queue() }) }),
   )
-  expect(html).toContain('id="decisions-open"')
-  expect(html).toContain('id="journal-open"')
+  expect(railHtml).toContain('id="decisions-open"')
+  expect(barHtml).toContain('id="journal-open"')
   const base = { canMutate: true, schedule: { count: 0, due: false }, tasks: null, next: 0, usage: '', presence: null }
   const ids = toolbarEntries({ ...base, decisions: { waiting: 1, defaulted: 0 }, journal: 'Since 23:56' }, t).map(
     e => e.id,
