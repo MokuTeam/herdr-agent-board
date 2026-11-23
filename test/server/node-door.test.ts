@@ -313,6 +313,8 @@ const CLASSIFIED: Record<string, [method: string, raw: string, door: 'door' | 'r
   'POST /api/calendar-settings': [['POST', '/api/calendar-settings', 'refused']],
   'GET /api/backup': [['GET', '/api/backup', 'refused']],
   'POST /api/backup': [['POST', '/api/backup', 'refused']],
+  'GET /api/self-update': [['GET', '/api/self-update', 'refused']],
+  'POST /api/self-update': [['POST', '/api/self-update', 'refused']],
   'POST /api/log': [['POST', '/api/log', 'refused']],
   'GET /api/wake': [['GET', '/api/wake', 'refused']],
   'POST /api/wake': [['POST', '/api/wake', 'refused']],
