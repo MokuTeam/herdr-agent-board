@@ -7,11 +7,19 @@ import { resolvePath } from '../../adapters/files.ts'
 import { SLOW, statOf } from '../../adapters/folders.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
-import { CLAUDE_AGENT, type LaunchAgent, type LaunchAgentId, piCommand } from '../../core/launch/agents.ts'
+import {
+  AGY_AGENT,
+  agyCommand,
+  CLAUDE_AGENT,
+  type LaunchAgent,
+  type LaunchAgentId,
+  piCommand,
+} from '../../core/launch/agents.ts'
 import { MODEL_MAX, readModel } from '../../core/launch/model.ts'
 import { checkBranch, checkName, NAME_MAX, UNSAFE_CHARS } from '../../core/launch/names.ts'
 import { profileCommand } from '../../core/launch/spawn-args.ts'
 import { DEVICE_ID, LOCAL } from '../../core/nodes.ts'
+import { PI_AGENT } from '../../core/pi.ts'
 import { type LaunchTarget, launchTarget, type ProfileSet } from '../../core/profiles.ts'
 import type { Item, Vars } from '../../core/types.ts'
 
@@ -111,6 +119,7 @@ export async function checkRequest(
     agents = () => [],
     standard = () => CLAUDE_AGENT,
     pi,
+    agy,
     pins = false,
   }: {
     categories?: Set<string> | null
@@ -121,6 +130,7 @@ export async function checkRequest(
     agents?: () => readonly LaunchAgent[]
     standard?: (offered: () => readonly LaunchAgent[]) => LaunchAgentId
     pi?: unknown
+    agy?: unknown
     pins?: boolean
   },
 ): Promise<CheckResult> {
@@ -176,7 +186,9 @@ export async function checkRequest(
     worktree = { branch }
   }
   // The profile: the one chosen, or the parent's. A parent the board does not have now is one
-  // whose profile it does not know, unless the server hands it in.
+  // whose profile it does not know, unless the server hands it in. Antigravity does not use
+  // Claude profiles, so an explicit agy launch/resume without a profile is not blocked by
+  // multi-profile disambiguation.
   const parent = heldTo?.key ?? given(b.parent) ?? null
   const from = heldTo ?? (parent === null ? undefined : items.find(i => i.key === parent))
   const parentName = from?.name || parent || ''
@@ -185,8 +197,17 @@ export async function checkRequest(
     parent === null ? null : (from ?? { name: parentName, profile: null }),
     profiles,
   )
-  if (!target.ok) return fail('profile', ...refusal(target, parentName, profiles))
-  const { profile, configDir } = target
+  let profile: Extract<LaunchTarget, { ok: true }>['profile']
+  let configDir: string | null
+  if (!target.ok) {
+    if (target.error === 'choose' && given(b.agent) === AGY_AGENT && parent === null && profiles.list[0]) {
+      profile = profiles.list[0]
+      configDir = null
+    } else return fail('profile', ...refusal(target, parentName, profiles))
+  } else {
+    profile = target.profile
+    configDir = target.configDir
+  }
   // A folder to set must be there: Claude would make a new, empty profile of it.
   if (configDir !== null) {
     const st = await statOf(configDir, 3000)
@@ -213,9 +234,15 @@ export async function checkRequest(
     if (!pick) return fail('agent', offered.length ? 'launch.err.agent' : 'launch.err.agentLauncher', { id: asked })
     agent = pick.id
   } else agent = standard(agents)
-  if (agent !== CLAUDE_AGENT)
+  if (agent === PI_AGENT)
     try {
       piCommand(pi)
+    } catch (err) {
+      return { ok: false, field: 'agent', error: err instanceof Error ? err.message : String(err) }
+    }
+  if (agent === AGY_AGENT)
+    try {
+      agyCommand(agy)
     } catch (err) {
       return { ok: false, field: 'agent', error: err instanceof Error ? err.message : String(err) }
     }

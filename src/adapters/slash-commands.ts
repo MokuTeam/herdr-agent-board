@@ -8,9 +8,11 @@ import type { Dirent } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
+import { isAgyItem } from '../core/agy.ts'
 import { isCodexItem } from '../core/codex.ts'
 import { isPiItem } from '../core/pi.ts'
 import {
+  AGY_BUILTINS,
   CLAUDE_BUILTINS,
   CODEX_BUILTINS,
   commandName,
@@ -20,6 +22,7 @@ import {
   type SlashCommand,
 } from '../core/slash-commands.ts'
 import type { Item } from '../core/types.ts'
+import { agyConfigDir } from './agy-hooks.ts'
 
 /** The head of a file the frontmatter is looked for in. */
 const HEAD_BYTES = 8192
@@ -137,6 +140,15 @@ export async function sessionCommands(
   const home = roots.home ?? homedir()
   const cwd = item.cwd
   if (isCodexItem(item)) return [...CODEX_BUILTINS]
+  if (isAgyItem(item)) {
+    const configDir = agyConfigDir(env, home)
+    const found = await Promise.all([
+      cwd ? skillsIn(join(cwd, '.agents', 'skills'), 'project') : [],
+      cwd ? skillsIn(join(cwd, '.agent', 'skills'), 'project') : [],
+      skillsIn(join(configDir, 'skills'), 'user'),
+    ])
+    return mergeCommands(...found, AGY_BUILTINS)
+  }
   if (isPiItem(item)) {
     const own = env.PI_CODING_AGENT_DIR || join(home, '.pi', 'agent')
     const found = await Promise.all([

@@ -31,6 +31,7 @@ import {
 import { readNodeEnv } from '../../adapters/node-env.ts'
 import { knobMs, pause } from '../../adapters/pacing.ts'
 import { run } from '../../adapters/process.ts'
+import { AGY_AGENT } from '../../core/agy.ts'
 import { keyTowardYes, sameFolder, type TrustDialog, trustDialog } from '../../core/dialogs/trust.ts'
 import { t } from '../../core/lang.ts'
 import { launcherError } from '../../core/launch/launcher-command.ts'
@@ -50,7 +51,7 @@ import type { LaunchPlace } from '../../core/placement.ts'
 import type { Item, LaunchFailure, LaunchState, LaunchStep } from '../../core/types.ts'
 import type { Deps } from '../deps.ts'
 import { LaunchError, type LaunchEvents, launcherFor, notePane, openInProfile } from './launcher.ts'
-import { claudeRename, inputEmpty, piName, screenNow, takenNames, typeLine } from './prompt.ts'
+import { agyRename, claudeRename, inputEmpty, piName, screenNow, takenNames, typeLine } from './prompt.ts'
 import type { LaunchRequest } from './request.ts'
 
 /** A launch as the board keeps it while it runs. */
@@ -404,6 +405,9 @@ export function launchRunner({
     } else if (kind === PI_AGENT && !l.resume) {
       step(l, 'rename')
       await piName(pane, l.name).catch(err => deps.log(`launch ${l.name}: /name: ${messageOf(err)}`))
+    } else if (kind === AGY_AGENT && !l.resume) {
+      step(l, 'rename')
+      await agyRename(pane, l.name).catch(err => deps.log(`launch ${l.name}: /rename: ${messageOf(err)}`))
     }
     if (l.message) {
       step(l, 'message')
@@ -567,12 +571,22 @@ export function launchRunner({
       } catch (err) {
         deps.log(`launch ${l.name}: naming: ${messageOf(err)}`)
       }
+    } else if (kind === AGY_AGENT && !l.resume) {
+      step(l, 'rename')
+      try {
+        if ((await agyRename(pane, l.name)) && nameAgent) {
+          const taken = await takenNames()
+          await herdr(['agent', 'rename', pane, uniqueSlug(agentSlug(l), taken)])
+        }
+      } catch (err) {
+        deps.log(`launch ${l.name}: naming: ${messageOf(err)}`)
+      }
     }
     if (l.message) {
       step(l, 'message')
       // The second read is of the visible screen (the first one's recent lines are refused while herdr
       // calls the agent blocked): a box it shows empty there takes the message.
-      if (kind !== PI_AGENT && !(await inputEmpty(pane)) && (await pastDialog(l, pane, 'message')).draft !== '')
+      if (kind === 'claude' && !(await inputEmpty(pane)) && (await pastDialog(l, pane, 'message')).draft !== '')
         throw new LaunchError(t('launch.err.message.draft'), 'message')
       if (!(await typeLine(pane, l.message))) throw new LaunchError(t('launch.err.message.lost'), 'message')
     }

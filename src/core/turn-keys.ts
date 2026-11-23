@@ -8,8 +8,9 @@ import type { Item } from './types.ts'
 
 export type TurnAction = 'stop' | 'sendNow'
 
-const KEYS: Readonly<Record<string, Readonly<Record<TurnAction, readonly string[]>>>> = {
+const KEYS: Readonly<Record<string, Readonly<Record<TurnAction, readonly string[] | undefined>>>> = {
   claude: { stop: ['esc'], sendNow: ['ctrl+enter'] },
+  agy: { stop: ['esc'], sendNow: undefined },
 }
 
 type TurnItem = Pick<Item, 'agent' | 'pane' | 'session' | 'sleeping'>

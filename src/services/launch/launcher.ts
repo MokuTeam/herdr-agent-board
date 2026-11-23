@@ -33,7 +33,7 @@ import { launchDir, ROOT } from '../../adapters/paths.ts'
 import { runTree } from '../../adapters/process.ts'
 import { forgetProfilePane, recordProfilePane } from '../../adapters/profile-panes.ts'
 import { t } from '../../core/lang.ts'
-import { CLAUDE_AGENT, piCommand } from '../../core/launch/agents.ts'
+import { AGY_AGENT, agyCommand, CLAUDE_AGENT, piCommand } from '../../core/launch/agents.ts'
 import {
   commandArgs,
   failureKind,
@@ -232,16 +232,16 @@ function herdrAgent(spec: LaunchSpec, profileArgs: readonly string[]): { kind: s
 }
 
 const picksSession = (args: readonly string[]): boolean =>
-  args.some(a => /^(--session-id|-r|--resume|-c|--continue)$/.test(a))
+  args.some(a => /^(--session-id|-r|--resume|-c|--continue|--conversation)$/.test(a))
 
 /** Whether herdr's launcher (launch.agent) cannot resume a session by its id: another agent, or arguments that pick one. */
 export function herdrCannotResume(spec: LaunchSpec, profileArgs: readonly string[]): boolean {
   const { kind, args } = herdrAgent(spec, profileArgs)
-  return kind !== 'claude' || picksSession(args)
+  return (kind !== 'claude' && kind !== AGY_AGENT) || picksSession(args)
 }
 
 /** The agents herdr's launcher starts that take `--model <id>`. */
-const MODEL_AGENTS = new Set(['claude', 'pi'])
+const MODEL_AGENTS = new Set(['claude', 'pi', AGY_AGENT])
 
 /** `herdr agent start <name> --kind <agent> … -- --session-id <id>` in a tab of its own. */
 export function herdrLauncher(spec: LaunchSpec): Launcher {
@@ -276,7 +276,7 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
       let sessionId: string | null = null
       if (l.resume) {
         sessionId = l.resume
-        args.push('--resume', l.resume)
+        args.push(kind === AGY_AGENT ? '--conversation' : '--resume', l.resume)
       } else if (l.fork) {
         sessionId = randomUUID()
         on.session(sessionId)
@@ -393,13 +393,16 @@ export function spawnAgentLauncher(spec: LaunchSpec, mark = false): Launcher {
       // A line that picks its own session (--resume, in the profile's start command, launch.claude
       // or the profile's arguments; in launch.pi for pi) gets no id from the board; a resumed
       // session has its own. A fork gets one (spawn-agent refuses a line that picks its own session for it).
-      const pi = l.agent !== CLAUDE_AGENT
-      const line = pi
-        ? piCommand(spec.pi)
-        : [...(l.profileCommand ?? claudeCommand(spec.claude, spec.args)), ...l.profileArgs]
-      if (l.exactSession && (pi || choosesSession(line))) throw new LaunchError(t('verify.err.launcher'), 'launcher')
+      const other = l.agent !== CLAUDE_AGENT
+      const isAgy = l.agent === AGY_AGENT
+      const line = isAgy
+        ? agyCommand(spec.agy)
+        : other
+          ? piCommand(spec.pi)
+          : [...(l.profileCommand ?? claudeCommand(spec.claude, spec.args)), ...l.profileArgs]
+      if (l.exactSession && (other || choosesSession(line))) throw new LaunchError(t('verify.err.launcher'), 'launcher')
       let sessionId: string | null = l.resume
-      if (!l.resume && (l.fork || !choosesSession(line))) {
+      if (!l.resume && !isAgy && (l.fork || !choosesSession(line))) {
         sessionId = l.sessionGiven ?? randomUUID()
         on.session(sessionId)
       }
@@ -408,7 +411,7 @@ export function spawnAgentLauncher(spec: LaunchSpec, mark = false): Launcher {
       args.push('--timeout-sec', String(readySec), ...where)
       // The profile: the env as herdr makes it, or the folder the board checked.
       args.push(...(l.configDir === null ? ['--keep-env'] : ['--config-dir', l.configDir]))
-      if (pi) args.push('--agent', l.agent)
+      if (other) args.push('--agent', l.agent)
       args.push(...modelArgs(l.model))
       return runLauncher(l, on, {
         command: messageFile => ({

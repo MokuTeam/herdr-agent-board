@@ -48,8 +48,8 @@ export function archiveBlock(
   schedules: readonly ArchiveEntryFacts[] = [],
 ): string {
   if (!it || it.launchOnly || it.launch) return 'archive.why.starting'
-  // Only a Claude session comes back: Return resumes it by its id.
-  if (!it.session || it.agent !== 'claude') return 'archive.why.notClaude'
+  // Claude and Antigravity sessions come back: Return resumes them by their id.
+  if (!it.session || (it.agent !== 'claude' && it.agent !== 'agy')) return 'archive.why.notClaude'
   // A sleeper whose pane wake closed (#204) has none to close: it goes all the same.
   if (!it.pane && !it.sleeping) return 'archive.why.noPane'
   if (it.status === 'working') return 'archive.why.working'
@@ -188,6 +188,8 @@ interface ArchiveFacts {
   closeAt: number
   /** When its pane closed. */
   closedAt?: number
+  /** The agent kind ('claude', 'agy'); absent on older records (Claude). */
+  agent?: string
   /** The id of the Claude profile it ran in (Item.profile), at archive time. */
   profile?: string | null
   /** The folder it reported when no profile had it (Item.profileFolder). */

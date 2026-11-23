@@ -14,6 +14,7 @@ import { callAgentsGate, taskBoard } from '../adapters/mokupilot-call.ts'
 import { dayGate } from '../adapters/mokupilot-day.ts'
 import { contextDir } from '../adapters/paths.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
+import { isAgyItem } from '../core/agy.ts'
 import { attentionOf, busy, columnOf, isAgentStatus, PINS } from '../core/board.ts'
 import { besideParents, type CallAgent, type CallView } from '../core/call-agent.ts'
 import { categoryFor } from '../core/categories.ts'
@@ -362,21 +363,22 @@ export async function collect(
     // A pi session's records are its session file, its key: none of Claude's folders has them.
     const pi = isPiItem(base) ? (deps.pi.transcriptInfo(base.session) ?? {}) : null
     const codex = isCodexItem(base) ? (deps.codex.transcriptInfo(base.session) ?? {}) : null
+    const agy = isAgyItem(base) ? (deps.agy.transcriptInfo(base.session) ?? {}) : null
     const { home, path } =
-      pi || codex ? { home: null, path: null } : recordsOf(deps, card, base.session, base.cwd, hit, searched)
-    const info = codex ?? pi ?? home?.transcriptInfo(path) ?? {}
+      pi || codex || agy ? { home: null, path: null } : recordsOf(deps, card, base.session, base.cwd, hit, searched)
+    const info = agy ?? codex ?? pi ?? home?.transcriptInfo(path) ?? {}
     // The name given to a pi session (/name) is what herdr and pi know it by, as a Claude's /rename.
     const autoName = pi?.name || base.name
     const guess = categoryFor(cfg, base.cwd)
     // A Claude session's question form can be the hook's still (core/held-question.ts).
-    const tool = pi || codex ? (info.tool ?? null) : waitingTool(base.status, info, card.asking)
+    const tool = pi || codex || agy ? (info.tool ?? null) : waitingTool(base.status, info, card.asking)
     // A call agent's last words go to the call, its questions too: only its `board ask` asks the user.
     const told: TranscriptInfo = call ? { ...info, question: '' } : info
     const attention = attentionOf(base.status, card, told)
     const callOf = call ? callView(call, base.key) : null
     // Its own words on the board, else what its task board says it does.
     const doing = card.doing || callOf?.tasks.find(x => x.status === 'doing')?.text || ''
-    const { modelAt, ...context } = contextOf(codex ? null : base.session, info, home?.root ?? null) // Codex has no Claude status line file.
+    const { modelAt, ...context } = contextOf(codex || agy ? null : base.session, info, home?.root ?? null) // Codex and Antigravity have no Claude status line file.
     const name = card.name || autoName
     // A call agent goes in its parent's lane, unless its own card says another.
     const category = card.category || parent?.category || guess || 'other'
@@ -389,8 +391,13 @@ export async function collect(
     // limit, instructions or a run to show.
     const compact =
       base.agent === 'claude' && !base.day && !call ? compactView(card, cfg.compact, context.contextSize) : null
+    const transcriptPath = agy ? deps.agy.transcriptPath(base.session) : path
     let own: HelperSummary | null = null
-    if (helpers && path) {
+    if (helpers && agy && base.session) {
+      try {
+        own = summarize(deps.agy.sessionHelpers(base.session))
+      } catch {}
+    } else if (helpers && path) {
       try {
         own = summarize(helpersOf(path, { alive: !!base.alive, since: base.since ?? null }))
       } catch {} // helpers that cannot be read leave the session's card as it was
@@ -445,7 +452,7 @@ export async function collect(
       // the model its start asked for (#380), when not the profile's default
       ...(typeof card.modelWant === 'string' && card.modelWant && { modelAsked: card.modelWant }),
       ...(modelWrong && { modelWrong }), // another model than config.json's `models` expects (#429)
-      transcript: path,
+      transcript: transcriptPath,
       ...formerPanes(card), // panes wake closed as it went to sleep (#204), for the links
       ...sessionProfile(card, profiles.list), // its profile, as its hooks reported it
       claudeRoot: home?.root ?? null, // the folder its records were read from

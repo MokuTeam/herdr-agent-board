@@ -41,6 +41,7 @@ import {
   recordProfilePane,
 } from '../../adapters/profile-panes.ts'
 import { type Env, inheritedProfileDir, loadProfiles } from '../../adapters/profiles.ts'
+import { AGY_AGENT } from '../../core/agy.ts'
 import { importsDialog, keyTowardYes, ownImports, sameFolder, trustDialog } from '../../core/dialogs/trust.ts'
 import { t } from '../../core/lang.ts'
 import { modelArgs } from '../../core/launch/model.ts'
@@ -192,8 +193,9 @@ function startProfile(o: SpawnOptions, facts: StartFacts): Start {
   const { profiles, env, home } = facts
   // The board's own starts (--config-dir, --keep-env) say the profile, of a resume too.
   const boards = o.keepEnv || o.configDir !== undefined
-  // A resume and a fork go on from a conversation: in the profile that holds it.
-  const from = o.resume ?? o.fork
+  // A Claude resume and fork go on from a conversation: in the profile that holds it.
+  // Antigravity sessions do not live in Claude profile folders.
+  const from = o.agent === AGY_AGENT ? undefined : (o.resume ?? o.fork)
   const target =
     from && !boards ? resumeProfile(o, from, facts) : spawnEnv(o, inheritedProfileDir(env, home), profiles, home)
   if (!target.ok) throw new Error(profileRefusal(target))
@@ -262,6 +264,7 @@ export async function spawnAgent(
   {
     claude = ['claude'],
     pi = ['pi'],
+    agy = ['agy'],
     log = () => {},
     profiles,
     env = process.env,
@@ -272,6 +275,7 @@ export async function spawnAgent(
   }: {
     claude?: string[]
     pi?: string[]
+    agy?: string[]
     log?: (text: string) => void
     profiles?: Profile[]
     env?: Env
@@ -307,12 +311,20 @@ export async function spawnAgent(
           .replace(/^\uFEFF/, '')
           .trim()
       : (o.brief ?? '').trim()
-  // The profile's start command, else `claude`; a bad one throws here, before herdr is asked. pi's own when asked for.
+  // The profile's start command, else `claude`; a bad one throws here, before herdr is asked.
+  // pi's and agy's own commands when asked for.
+  const isAgy = o.agent === AGY_AGENT
   const program =
-    o.agent === 'pi' ? [...pi] : [...(profileCommand(profile?.command) ?? claude), ...(profile?.args ?? [])]
-  // A launch.claude that picks its own session (--resume, --continue) cannot resume another one.
+    o.agent === 'pi'
+      ? [...pi]
+      : isAgy
+        ? [...agy]
+        : [...(profileCommand(profile?.command) ?? claude), ...(profile?.args ?? [])]
+  // A launch.claude/launch.agy that picks its own session (--resume, --continue, --conversation) cannot resume another one.
   if (o.resume && choosesSession(program))
-    throw new Error(`launch.claude picks its own session (${program.join(' ')}), so it cannot resume ${o.resume}`)
+    throw new Error(
+      `${isAgy ? 'launch.agy' : 'launch.claude'} picks its own session (${program.join(' ')}), so it cannot resume ${o.resume}`,
+    )
   if (o.fork && choosesSession(program))
     throw new Error(`launch.claude picks its own session (${program.join(' ')}), so it cannot fork ${o.fork}`)
   // Case files (#488): --thread makes the session the thread's assignee by the id it is given.
@@ -321,13 +333,13 @@ export async function spawnAgent(
       `launch.claude picks its own session (${program.join(' ')}), so --thread cannot tell which session to give ${o.thread}`,
     )
   // A fork is a new session: its id is the one given, else one of its own, so its card is known.
-  // So is a start on a model of its own, whose card says so; not one whose line picks its session.
-  const ownId = !!o.fork || (!!o.model && !o.resume && !choosesSession(program))
-  const sessionId = ownId ? (o.sessionId ?? randomUUID()) : o.sessionId
-  // The model goes after the profile's arguments: of two --model, Claude and pi take the last.
+  // So is a start on a model of its own, whose card says so; not one whose line picks its session, and not agy (no --session-id flag).
+  const ownId = !isAgy && (!!o.fork || (!!o.model && !o.resume && !choosesSession(program)))
+  const sessionId = ownId ? (o.sessionId ?? randomUUID()) : isAgy ? undefined : o.sessionId
+  // The model goes after the profile's arguments: of two --model, Claude, pi and agy take the last.
   const line = [...program, ...modelArgs(o.model)]
   const argv = o.resume
-    ? [...line, '--resume', o.resume]
+    ? [...line, isAgy ? '--conversation' : '--resume', o.resume]
     : o.fork
       ? [...line, '--resume', o.fork, '--fork-session', '--session-id', String(sessionId)]
       : sessionId && !choosesSession(program)
@@ -426,13 +438,14 @@ export async function spawnAgent(
         continue
       }
       throw new Error(
-        kind === PI_AGENT
-          ? `pi in ${pane} waits for a dialog. Answer it in that tab, then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`
+        kind === PI_AGENT || kind === AGY_AGENT
+          ? `${naming.title} in ${pane} waits for a dialog. Answer it in that tab, then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`
           : `Claude in ${pane} waits for a dialog (folder trust?). Answer it in that tab, then: herdr agent prompt ${pane} "/rename ${o.name}" and send the brief.`,
       )
     }
   }
-  if (!ready) throw new Error(`Claude did not get ready in ${pane} within ${o.timeoutSec} s`)
+  if (!ready)
+    throw new Error(`${isAgy ? 'Antigravity' : 'Claude'} did not get ready in ${pane} within ${o.timeoutSec} s`)
   if (kind === PI_AGENT && (profile || o.model) && carded && isPiSessionFile(session))
     movePiCard(carded, session, profile?.id, o.model)
 
@@ -456,12 +469,12 @@ export async function spawnAgent(
         renamed = true
         break
       }
-      // pi's first Enter on a slash command with an argument can take its completion instead:
+      // pi/agy's first Enter on a slash command with an argument can take its completion instead:
       // the line still in the editor gets one more.
-      if (kind === PI_AGENT && i === 1 && stillTyped(shown, line))
+      if ((kind === PI_AGENT || kind === AGY_AGENT) && i === 1 && stillTyped(shown, line))
         await herdr(['pane', 'send-keys', pane, 'enter']).catch(() => {})
       // Claude can drop it at a slow start (#479): its line still in the box gets one more too.
-      if (kind !== PI_AGENT && (i === 1 || i === 5) && stillTyped(shown, line) && (await renameLeft(pane, line)))
+      if (kind === 'claude' && (i === 1 || i === 5) && stillTyped(shown, line) && (await renameLeft(pane, line)))
         await herdr(['pane', 'send-keys', pane, 'enter']).catch(() => {})
     }
   }
@@ -472,7 +485,7 @@ export async function spawnAgent(
   // box herdr cannot show (null) holds nothing as far as this goes: the brief goes as before.
   // A dialog in its place (one Claude drew after herdr called it ready, #602) stops the start as a
   // dialog does before it: the board waits for it to be answered and sends the brief then.
-  if (text && !o.resume && !renamed && kind !== PI_AGENT) {
+  if (text && !o.resume && !renamed && kind === 'claude') {
     const shown = await screenNow(pane)
     if (shown?.kind === 'dialog')
       throw new Error(

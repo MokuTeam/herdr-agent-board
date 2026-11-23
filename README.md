@@ -1,7 +1,7 @@
 # agent-board
 
 A [herdr](https://herdr.dev) plugin: a kanban of the Claude Code sessions running in herdr, and
-of the [pi](#pi) and [Codex](#codex) ones.
+of the [pi](#pi), [Codex](#codex) and [Antigravity CLI (`agy`)](#antigravity-cli-agy) ones.
 Lanes are categories (one per client, say, plus Personal and Other), columns are Working /
 Needs me / Waiting on others / Done / Idle. Sessions put to sleep
 ([Sleep and wake](#sleep-and-wake)) are on it too (one line, `z`). In English and Russian; see
@@ -183,6 +183,43 @@ hooks installed later. The shared `board` and `spawn-agent` commands can stay fo
 
 Codex session actions follow separately under [#126](https://github.com/MokuTeam/herdr-agent-board/issues/126).
 Claude Code and pi keep their existing hooks, brief and readers.
+
+## Antigravity CLI (`agy`)
+
+For panes herdr reports as `agy`, the board reads the session transcript in
+`~/.gemini/antigravity-cli/brain/<conversation-id>/.system_generated/logs/transcript.jsonl`
+(`ANTIGRAVITY_APP_DATA_DIR` changes the app data folder) and session titles, workspace paths,
+subagent helpers and history from `conversation_summaries.db`. The card shows the title, last
+prompt, the agent's last words, its last tool, model, effort and context tokens; the session panel
+shows the conversation (with clickable file chips), subagent helpers and slash commands
+(Antigravity built-ins plus `.agents/skills` and `~/.gemini/config/skills`). Thinking blocks,
+system metadata wrappers and tool outputs stay out of the thread. A missing or unreadable
+transcript or database leaves the card and live terminal available.
+
+To install the board's Antigravity CLI hooks, skills and commands, run from this checkout:
+
+```sh
+bun src/entrypoints/install.ts --agy
+```
+
+This adds `SessionStart` and `PreInvocation` handlers under the `"agent-board"` key in
+`~/.gemini/config/hooks.json` (`ANTIGRAVITY_CONFIG_DIR` changes the config folder), preserving
+herdr's `"herdr"` hook group and any other hooks, with the first `hooks.json.bak-agent-board` kept
+beside it. It installs the `herdr-agents` and `agent-board-team` skills (and `agent-board-threads`
+when threads are on) into `~/.gemini/config/skills`, puts `board` and `spawn-agent` into
+`~/.local/bin`, and asks herdr to install its `antigravity-cli` identity hook
+(`herdr integration install antigravity-cli`). The ordinary install without `--agy` keeps managing
+Claude only.
+
+With `agy` on PATH or `launch.agy` set in `config.json`, the "New session" window and
+`spawn-agent --agent agy` offer Antigravity alongside Claude Code (and `"default": "agy"` in
+`launch` makes it the default). Antigravity sessions also support Stop (`Esc`), `/rename`, and
+Archive & Return (`agy --conversation <id>`). Without `--session`, `board` resolves the pane's
+reported root `agy` conversation via `ANTIGRAVITY_CONVERSATION_ID`, keeping mixed Claude/Antigravity
+environments and subagents separated.
+
+To remove these hooks, delete the `"agent-board"` key from `~/.gemini/config/hooks.json`, keeping
+`"herdr"` and any other keys.
 
 ## Web board
 

@@ -104,7 +104,7 @@ test('Codex gets its own; an unknown agent, or pi with no session file, gets not
   expect(await sessionCommands({ agent: 'codex', session: null, cwd: dir }, { claudeRoot: dir })).toEqual([
     ...CODEX_BUILTINS,
   ])
-  expect(await sessionCommands({ agent: 'agy', session: null, cwd: dir }, { claudeRoot: dir })).toEqual([])
+  expect(await sessionCommands({ agent: 'unknown-agent', session: null, cwd: dir }, { claudeRoot: dir })).toEqual([])
   expect(await sessionCommands({ session: null, cwd: dir }, { claudeRoot: dir })).toEqual([])
   expect(await sessionCommands({ agent: 'pi', session: 'pane-x', cwd: dir }, { claudeRoot: dir })).toEqual([])
 })

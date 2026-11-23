@@ -1,6 +1,7 @@
 // What the services need from the outside, built once per process by the entrypoints.
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { type AgyHome, createAgyHome } from '../adapters/agy-home.ts'
 import type { ClaudeHome } from '../adapters/claude-home.ts'
 import { type CodexHome, createCodexHome } from '../adapters/codex-home.ts'
 import { createPiHome, type PiHome } from '../adapters/pi-home.ts'
@@ -24,6 +25,8 @@ export interface Deps {
   pi: PiHome
   /** Codex rollouts, looked up only for panes herdr reports as codex. */
   codex: CodexHome
+  /** Antigravity CLI transcripts and summaries, looked up only for panes herdr reports as agy. */
+  agy: AgyHome
   /** The profiles: config.json's merged with the folders found; read again when they change, or after a minute. */
   profiles(): ProfileSet
   /**
@@ -45,6 +48,7 @@ export function defaultDeps(cfg: Config, log: (text: string) => void = () => {})
     homes,
     pi: createPiHome(),
     codex: createCodexHome(),
+    agy: createAgyHome(),
     profiles() {
       // A folder made or removed in the home folder shows within a minute; an edit at once.
       const listed = JSON.stringify(cfg.profiles ?? null)

@@ -10,6 +10,7 @@ import { uploadsCheck } from '../../adapters/own-files.ts'
 import { pause } from '../../adapters/pacing.ts'
 import { askRestart } from '../../adapters/schedule-store.ts'
 import { sessionCommands } from '../../adapters/slash-commands.ts'
+import { isAgyItem } from '../../core/agy.ts'
 import { busy, PINS } from '../../core/board.ts'
 import { isCodexItem } from '../../core/codex.ts'
 import { limitText, MAX_COMPACT_NOTE, noteText, parseCompactLimit } from '../../core/compact.ts'
@@ -86,7 +87,7 @@ function queueWindow(deps: Deps, item: Item): QueueWindow {
 
 /** The user's messages still in a running Claude session's queue, as its detail shows them (Send now, #330). */
 function queueOf(deps: Deps, item: Item): QueuedPrompt[] {
-  if (!item.alive || isCodexItem(item) || isPiItem(item)) return []
+  if (!item.alive || isCodexItem(item) || isPiItem(item) || isAgyItem(item)) return []
   // As far back as the detail reads it, so both see the same queue.
   return deps.claude.sessionThread(item.transcript ?? '', 60, queueWindow(deps, item)).queued
 }
@@ -105,14 +106,18 @@ async function detail(app: SessionApp, item: Item) {
   const { transcript, claudeRoot, alive, since, pipe, apiError, ...shown } = item
   // queued: the user's messages Claude has not taken in yet (queueWindow).
   // A pi session's turns are in its session file, its key.
-  const thread = isCodexItem(item)
-    ? deps.codex.sessionThread(item.session ?? '', 60)
-    : isPiItem(item)
-      ? deps.pi.sessionThread(item.session ?? '', 60)
-      : deps.claude.sessionThread(transcript ?? '', 60, queueWindow(deps, item), { compactions: !!item.compact })
+  const thread = isAgyItem(item)
+    ? deps.agy.sessionThread(item.session ?? '', 60)
+    : isCodexItem(item)
+      ? deps.codex.sessionThread(item.session ?? '', 60)
+      : isPiItem(item)
+        ? deps.pi.sessionThread(item.session ?? '', 60)
+        : deps.claude.sessionThread(transcript ?? '', 60, queueWindow(deps, item), { compactions: !!item.compact })
   const conversation = byBoard(item, withSessions(app.items(), thread.conversation))
   // helpers: every subagent, fork, workflow agent and teammate, newest first (adapters/helpers.ts).
-  const own = helpersOf(transcript, { alive: !!alive, since: since ?? null })
+  const own = isAgyItem(item)
+    ? deps.agy.sessionHelpers(item.session)
+    : helpersOf(transcript, { alive: !!alive, since: since ?? null })
   // checkout: whether its folder is in git, for the sheet's Changes button.
   const checkout = await isCheckout(item.cwd)
   let screen = ''
@@ -413,6 +418,8 @@ export function sessionRoutes(app: SessionApp): Route[] {
       path: /^\/api\/session\/([^/]+)\/history$/,
       // In the session's own profile: the folder its records were read from.
       handle: withItem(async (item, _req, ctx) => {
+        if (isAgyItem(item))
+          return json(200, await app.deps.agy.searchHistory(item.cwd, ctx.url.searchParams.get('q'), item.session))
         const home = app.deps.homes.forDir(item.claudeRoot ?? app.deps.claude.root)
         return json(200, await home.searchHistory(item.cwd, ctx.url.searchParams.get('q'), item.session))
       }),

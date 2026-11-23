@@ -168,7 +168,7 @@ export function headButtons(
     // A session of another device (#502) has no call from this computer's MokuPilot.
     mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude') || away || !!it.device,
     forkHidden: !(fork && it.session && it.agent === 'claude') || away,
-    archiveHidden: !it.session || it.agent !== 'claude' || away,
+    archiveHidden: !it.session || (it.agent !== 'claude' && it.agent !== 'agy') || away,
     archiveTitle: why ? t(why) : t('archive.sheetHint'),
   }
 }

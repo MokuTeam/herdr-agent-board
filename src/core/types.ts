@@ -55,6 +55,10 @@ export interface Card {
   modelOk?: string
   /** The Claude id inherited by the root Codex hook, false when none. A Claude child has its own id. */
   codexParentClaude?: string | false
+  /** The Claude id inherited by the root Antigravity hook, false when none. A Claude child has its own id. */
+  agyParentClaude?: string | false
+  /** The trajectory step count at the start of the last Antigravity user turn (PreInvocation initialNumSteps). */
+  agyTurnSteps?: number
   /** A fork's: the id of the session it is a fork of, and when it started (its copied lines are older). */
   forkOf?: string
   forkAt?: number
@@ -113,7 +117,9 @@ export interface LaunchSpec {
   claude?: string | string[]
   /** What it types for a start that asks for pi (core/launch/agents.ts): as `claude`; `pi` when unset. */
   pi?: string | string[]
-  /** The agent a start that names none starts as (core/launch/agents.ts): `claude` or `pi`; Claude Code when unset. */
+  /** What it types for a start that asks for Antigravity (core/launch/agents.ts): as `claude`; `agy` when unset. */
+  agy?: string | string[]
+  /** The agent a start that names none starts as (core/launch/agents.ts): `claude`, `pi` or `agy`; Claude Code when unset. */
   default?: string
   /**
    * The setup's ticket conventions: workspaces linked through herdr worktree for any checkout,

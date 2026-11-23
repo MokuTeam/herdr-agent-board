@@ -7,7 +7,7 @@ import { MODEL_MAX, readModel } from './model.ts'
 import { checkName } from './names.ts'
 
 export const USAGE =
-  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>] [--pane <pane id>] [--profile <id>] [--model <id or alias>] [--agent claude|pi] [--trust] [--workdesk-worker]'
+  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>] [--pane <pane id>] [--profile <id>] [--model <id or alias>] [--agent claude|pi|agy] [--trust] [--workdesk-worker]'
 
 /** `spawn-agent --help`: the usage, then what is easy to get wrong. */
 export const HELP = `${USAGE}
@@ -64,8 +64,8 @@ export interface SpawnOptions {
   configDir?: string
   /** The board's start: the tab's env as herdr makes it. */
   keepEnv?: boolean
-  /** pi: `launch.pi` is typed in place of the profile's start command and arguments (core/launch/agents.ts). */
-  agent?: 'pi'
+  /** pi or agy: `launch.pi` / `launch.agy` is typed in place of the profile's start command and arguments (core/launch/agents.ts). */
+  agent?: 'pi' | 'agy'
   /**
    * Answer two startup dialogs with Yes instead of stopping there: the folder-trust dialog for
    * --cwd itself, and "Allow external CLAUDE.md file imports?" when every file it lists is in the
@@ -215,18 +215,20 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     )
   if ([profile !== undefined, configDir !== undefined, keepEnv].filter(Boolean).length > 1)
     throw new Error('give one of --profile, --config-dir and --keep-env')
-  // Claude is what it starts anyway; pi only as a new session (its --resume and --fork are not Claude's).
+  // Claude is what it starts anyway; pi starts a new session; agy starts a new session or resumes with --conversation.
   const agent = out.agent?.trim().toLowerCase()
-  if (agent !== undefined && agent !== 'claude' && agent !== 'pi')
-    throw new Error(`--agent must be claude or pi, not "${out.agent}"`)
+  if (agent !== undefined && agent !== 'claude' && agent !== 'pi' && agent !== 'agy')
+    throw new Error(`--agent must be claude, pi or agy, not "${out.agent}"`)
   const pi = agent === 'pi'
-  if (workdeskWorker && (pi || resume !== undefined || fork !== undefined))
+  const agy = agent === 'agy'
+  if (workdeskWorker && (pi || agy || resume !== undefined || fork !== undefined))
     throw new Error('--workdesk-worker requires a new work session')
   if (pi && (resume !== undefined || fork !== undefined))
     throw new Error('--agent pi starts a new session: give it no --resume or --fork')
-  if (thread && (resume !== undefined || fork !== undefined || pi || workdeskWorker))
+  if (agy && fork !== undefined) throw new Error('--agent agy does not support --fork')
+  if (thread && (resume !== undefined || fork !== undefined || pi || agy || workdeskWorker))
     throw new Error(
-      '--thread starts a fresh Claude session: give it no --resume, --fork, --agent pi or --workdesk-worker',
+      '--thread starts a fresh Claude session: give it no --resume, --fork, --agent pi/agy or --workdesk-worker',
     )
   return {
     name,
@@ -244,7 +246,7 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     ...(read.model !== null && { model: read.model }),
     ...(configDir !== undefined && { configDir }),
     ...(keepEnv && { keepEnv }),
-    ...(pi && { agent: 'pi' as const }),
+    ...(pi ? { agent: 'pi' as const } : agy ? { agent: 'agy' as const } : {}),
     ...(trust && { trust: true }),
     ...(workdeskWorker && { workdeskWorker: true }),
     ...(thread && { thread }),
@@ -274,7 +276,7 @@ export function claudeCommand(setting: unknown, args?: unknown): string[] {
 
 /** Whether the command picks its session itself, so no --session-id may go with it. */
 export const choosesSession = (command: readonly string[]): boolean =>
-  command.some(a => /^(--session-id|-r|--resume|-c|--continue)(=|$)/.test(a))
+  command.some(a => /^(--session-id|-r|--resume|-c|--continue|--conversation)(=|$)/.test(a))
 
 // A quote (the typographic ones too, which PowerShell also ends a string at) or a control character.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it refuses

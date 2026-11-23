@@ -61,5 +61,5 @@ export function claudeRename(it: Item, canMutate: boolean, t: Translator): { why
       : !canMutate
         ? t('mobile.readOnly')
         : ''
-  return it.session && it.agent === 'claude' && it.pane ? { why } : null
+  return it.session && (it.agent === 'claude' || it.agent === 'agy') && it.pane ? { why } : null
 }

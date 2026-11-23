@@ -2,11 +2,12 @@
 // herdr. The board's own name for a card is kept on the card (server); this types into the session.
 // And renaming the herdr workspace a session is in, which every session there shows.
 import { agentGet, herdr, herdrText, snapshot, workspaceRename } from '../../adapters/herdr.ts'
+import { AGY_AGENT } from '../../core/agy.ts'
 import { inputDraft } from '../../core/dialogs/input-box.ts'
 import { t } from '../../core/lang.ts'
 import { checkWorkspaceName, NAME_MAX, slugName, uniqueSlug } from '../../core/launch/names.ts'
 import type { Item } from '../../core/types.ts'
-import { claudeRename, takenNames } from './prompt.ts'
+import { agyRename, claudeRename, takenNames } from './prompt.ts'
 
 /** `confirmed`: Claude said "Session renamed" (only then does herdr's name follow). */
 export type RenameResult = { ok: true; confirmed: boolean } | { ok: false; error: string }
@@ -21,7 +22,7 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
  */
 export async function renameSession(item: Item, name: string): Promise<RenameResult> {
   if (item.sleeping) return { ok: false, error: t('rename.err.asleep', { name: item.name }) }
-  if (!item.session || !item.pane || item.agent !== 'claude')
+  if (!item.session || !item.pane || (item.agent !== 'claude' && item.agent !== AGY_AGENT))
     return { ok: false, error: t('rename.err.notClaude', { name: item.name }) }
   const pane = item.pane
   try {
@@ -31,15 +32,17 @@ export async function renameSession(item: Item, name: string): Promise<RenameRes
     // Only a session that waits for input: not mid-turn, not at a dialog, not in a state herdr cannot tell.
     if (agent.status !== 'idle' && agent.status !== 'done')
       return { ok: false, error: t('rename.err.busy', { name: item.name }) }
-    // /rename typed after what the user started in the input box would send both; no input box
-    // on screen (a picker, a dialog) is no place to type either.
-    const draft = inputDraft(
-      await herdrText(['agent', 'read', pane, '--source', 'recent', '--lines', '40', '--ansi'], 10_000),
-    )
-    if (draft !== '')
-      return { ok: false, error: t(draft === null ? 'rename.err.screen' : 'err.draft', { name: item.name }) }
-    const confirmed = await claudeRename(pane, name)
-    // herdr's name follows only a rename Claude confirmed, so the two do not drift apart.
+    if (item.agent === 'claude') {
+      // /rename typed after what the user started in the input box would send both; no input box
+      // on screen (a picker, a dialog) is no place to type either.
+      const draft = inputDraft(
+        await herdrText(['agent', 'read', pane, '--source', 'recent', '--lines', '40', '--ansi'], 10_000),
+      )
+      if (draft !== '')
+        return { ok: false, error: t(draft === null ? 'rename.err.screen' : 'err.draft', { name: item.name }) }
+    }
+    const confirmed = item.agent === AGY_AGENT ? await agyRename(pane, name) : await claudeRename(pane, name)
+    // herdr's name follows only a rename the agent confirmed, so the two do not drift apart.
     if (confirmed) {
       const taken = await takenNames()
       if (agent.name) taken.delete(agent.name)

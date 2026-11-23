@@ -23,9 +23,9 @@ export const placeable = (o: SpawnOptions): boolean =>
   !o.keepEnv &&
   !o.trust
 
-/** The session that runs spawn-agent, as the board shows it: by its Claude id, else by its herdr pane. */
+/** The session that runs spawn-agent, as the board shows it: by its Claude or Antigravity id, else by its herdr pane. */
 export function callerOf(items: readonly Item[], env: Record<string, string | undefined>): Item | undefined {
-  const own = env.CLAUDE_CODE_SESSION_ID
+  const own = env.CLAUDE_CODE_SESSION_ID || env.ANTIGRAVITY_CONVERSATION_ID
   const pane = env.HERDR_PANE_ID
   const here = items.filter(i => !i.device)
   return (

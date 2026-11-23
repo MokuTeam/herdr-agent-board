@@ -148,7 +148,9 @@ export type LauncherInfo = { kind: 'herdr'; agent: string } | { kind: 'command';
 export const launcherLine = (l: LauncherInfo, t: Translator): string =>
   l.kind === 'command'
     ? t('launch.viaCommand', { name: l.name })
-    : t('launch.viaHerdr', { agent: l.agent === 'claude' ? 'Claude' : l.agent })
+    : t('launch.viaHerdr', {
+        agent: l.agent === 'claude' ? 'Claude' : l.agent === 'agy' ? 'Antigravity' : l.agent,
+      })
 
 /** The command's name, for the step it is at ("Starting with {name}…"); none for herdr. */
 export const launcherName = (l: LauncherInfo): string => (l.kind === 'command' ? l.name : '')

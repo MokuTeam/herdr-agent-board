@@ -2420,7 +2420,7 @@ test('launch.command gets {model} when it takes it; one without {model} refuses 
   assert.deepEqual(await res.json(), {
     ok: false,
     error:
-      'The board starts sessions with a launcher that takes no model (launch.command without {model}, or launch.agent for another agent than Claude or pi)',
+      'The board starts sessions with a launcher that takes no model (launch.command without {model}, or launch.agent for another agent than Claude, pi or Antigravity)',
     field: 'model',
   })
   assert.equal(existsSync(record), false)
@@ -2431,6 +2431,7 @@ test('the new-session window is told whether the launcher takes a model: its own
     ['spawn-agent', {}, true],
     ['launch.agent claude', VIA_HERDR, true],
     ['launch.agent pi', { launch: { agent: 'pi' } }, true],
+    ['launch.agent agy', { launch: { agent: 'agy' } }, true],
     ['launch.agent codex', { launch: { agent: 'codex' } }, false],
     [
       'launch.command with {model}',

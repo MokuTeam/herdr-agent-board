@@ -8,7 +8,13 @@ import { herdr, paneTab, paneTabTerminal, workspaceList } from '../../adapters/h
 import { isRecord } from '../../adapters/json-store.ts'
 import { findCommand } from '../../adapters/setup-facts.ts'
 import { t } from '../../core/lang.ts'
-import { defaultAgent, type LaunchAgent, type LaunchAgentId, launchAgents } from '../../core/launch/agents.ts'
+import {
+  CLAUDE_AGENT,
+  defaultAgent,
+  type LaunchAgent,
+  type LaunchAgentId,
+  launchAgents,
+} from '../../core/launch/agents.ts'
 import { failureKind } from '../../core/launch/launcher-command.ts'
 import { sameDir } from '../../core/launch/names.ts'
 import { isPiItem, piSessionId } from '../../core/pi.ts'
@@ -164,6 +170,12 @@ export function piOnPath(): boolean {
   return !!(found.ps ?? found.sh)
 }
 
+/** Whether `agy` is a command on the board's PATH (a .ps1 or .cmd on Windows too). */
+export function agyOnPath(): boolean {
+  const found = findCommand('agy')
+  return !!(found.ps ?? found.sh)
+}
+
 /** The launches of this board process; `onChange` publishes the board again. */
 export function createLaunches({
   deps,
@@ -204,10 +216,17 @@ export function createLaunches({
       items,
       typesCommand: launcher.kind === 'builtin',
       ...(parent && { parent }),
-      // A start of the server's own (a return, a fork) picks no agent: Claude Code's, whatever the default.
-      agents: () => (resume || fork || sessionId ? [] : launchAgents(deps.cfg.launch, piOnPath)),
-      standard: offered => defaultAgent(deps.cfg.launch, offered),
+      // A start of the server's own (a fork, a verifier) picks no agent: Claude Code's.
+      // A resume from the archive may be Claude or Antigravity (never defaulted to agy/pi).
+      agents: () =>
+        fork || sessionId
+          ? []
+          : resume
+            ? launchAgents(deps.cfg.launch, () => false, agyOnPath)
+            : launchAgents(deps.cfg.launch, piOnPath, agyOnPath),
+      standard: offered => (resume ? CLAUDE_AGENT : defaultAgent(deps.cfg.launch, offered)),
       pi: deps.cfg.launch?.pi,
+      agy: deps.cfg.launch?.agy,
       // "Where" and a node's folder are read only while the board places (#504).
       ...(placing && { pins: true }),
     })
@@ -400,7 +419,7 @@ export function createLaunches({
       error = messageOf(err)
     }
     const cfg = deps.cfg
-    const agents = launchAgents(cfg.launch, piOnPath)
+    const agents = launchAgents(cfg.launch, piOnPath, agyOnPath)
     const launcher = launcherFor(cfg.launch)
     return {
       launcher: launcher.describe(),

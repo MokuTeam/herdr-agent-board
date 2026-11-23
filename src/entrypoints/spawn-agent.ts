@@ -47,7 +47,7 @@ import { homedir } from 'node:os'
 import { loadConfig } from '../adapters/config-file.ts'
 import { cygpath, takeGitBashArgs } from '../adapters/git-bash.ts'
 import { loadProfiles } from '../adapters/profiles.ts'
-import { piCommand } from '../core/launch/agents.ts'
+import { agyCommand, piCommand } from '../core/launch/agents.ts'
 import {
   CASES_HELP,
   claudeCommand,
@@ -98,7 +98,11 @@ async function startHere(
     : null
   const home = homedir()
   const r = await spawnAgent(o, {
-    ...(o.agent === 'pi' ? { pi: piCommand(launch.pi) } : { claude: claudeCommand(launch.claude, launch.args) }),
+    ...(o.agent === 'pi'
+      ? { pi: piCommand(launch.pi) }
+      : o.agent === 'agy'
+        ? { agy: agyCommand(launch.agy) }
+        : { claude: claudeCommand(launch.claude, launch.args) }),
     log: msg => console.error(`spawn-agent: ${msg}`),
     profiles: loadProfiles({ home }),
     env: process.env,

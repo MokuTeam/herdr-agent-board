@@ -1,9 +1,11 @@
 // A session's helpers for the page: one helper with its conversation, for its window, and the
 // messages between sessions in a thread, named by the session on the other end.
 import { helperDetail } from '../../adapters/helpers.ts'
+import { isAgyItem } from '../../core/agy.ts'
 import { t } from '../../core/lang.ts'
 import type { ConversationTurn } from '../../core/transcript.ts'
 import type { Item } from '../../core/types.ts'
+import type { Deps } from '../../services/deps.ts'
 import { json, type Route } from '../http.ts'
 
 /**
@@ -31,6 +33,7 @@ export function withSessions(items: readonly Item[], conv: readonly Conversation
 export interface HelperApp {
   find(key: string): Item | undefined
   items(): Item[]
+  deps?: Pick<Deps, 'agy'>
 }
 
 /** One helper of a session, for its window: the id only picks among the session's own. */
@@ -43,7 +46,13 @@ export function helperRoute(app: HelperApp): Route {
       if (!item) return json(404, { error: t('err.gone') })
       let d: Awaited<ReturnType<typeof helperDetail>>
       try {
-        d = await helperDetail(item.transcript, ctx.params[1] ?? '', { alive: !!item.alive, since: item.since ?? null })
+        d =
+          isAgyItem(item) && app.deps?.agy
+            ? app.deps.agy.helperDetail(item.session, ctx.params[1] ?? '')
+            : await helperDetail(item.transcript, ctx.params[1] ?? '', {
+                alive: !!item.alive,
+                since: item.since ?? null,
+              })
       } catch {
         // Its files could not be read: no paths in the answer.
         return json(500, { error: t('helpers.unreadable') })

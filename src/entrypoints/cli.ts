@@ -210,7 +210,7 @@ import {
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { type MoveOutcome, moveMany } from '../services/move.ts'
-import { codexCallerOf, codexSessionOf, ownSessionOf } from '../services/own-session.ts'
+import { agyCallerOf, agySessionOf, codexCallerOf, codexSessionOf, ownSessionOf } from '../services/own-session.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
@@ -331,6 +331,10 @@ const codexCaller = (): boolean => codexCallerOf(process.env, readCard)
 function codexSession(p: HerdrPane | undefined): (Session & { name: string }) | null {
   return codexSessionOf(p, process.env)
 }
+const agyCaller = (): boolean => agyCallerOf(process.env, readCard)
+function agySession(p: HerdrPane | undefined): (Session & { name: string }) | null {
+  return agySessionOf(p, process.env)
+}
 /**
  * The sessions running in every profile listed, hidden ones too, this env's own folder first (its
  * answer wins), as the board reads them (services/board.ts collect).
@@ -360,11 +364,17 @@ async function resolveSession({ archived = false }: { archived?: boolean } = {})
   }
   const pane = process.env.HERDR_PANE_ID
   const fromCodex = codexCaller()
+  const fromAgy = !fromCodex && agyCaller()
   let reported: HerdrPane | undefined
   if (fromCodex && pane) {
     reported = await paneOf(pane)
     const codex = codexSession(reported)
     if (codex) return codex
+  }
+  if (fromAgy && pane) {
+    reported = await paneOf(pane)
+    const agy = agySession(reported)
+    if (agy) return agy
   }
   const own = process.env.CLAUDE_CODE_SESSION_ID
   if (own) {
@@ -376,7 +386,7 @@ async function resolveSession({ archived = false }: { archived?: boolean } = {})
     }
   }
   if (pane) {
-    const p = fromCodex ? reported : await paneOf(pane)
+    const p = fromCodex || fromAgy ? reported : await paneOf(pane)
     if (p?.agent) return { key: p.agent_session?.value ?? `pane-${pane}`, cwd: p.cwd ?? '', pane }
   }
   throw new Error('cannot tell which session this is: run it from a Claude session, or pass --session')

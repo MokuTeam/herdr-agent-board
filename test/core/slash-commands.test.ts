@@ -1,6 +1,7 @@
 // What a command or skill file says of itself, for the chat box's slash list (#191).
 import { describe, expect, test } from 'bun:test'
 import {
+  AGY_BUILTINS,
   CLAUDE_BUILTINS,
   CODEX_BUILTINS,
   commandName,
@@ -59,7 +60,7 @@ test('mergeCommands keeps the first of a name: the folder before the profile bef
 })
 
 test('the built-in lists have unique, valid names and leave out what ends the session', () => {
-  for (const list of [CLAUDE_BUILTINS, PI_BUILTINS, CODEX_BUILTINS]) {
+  for (const list of [CLAUDE_BUILTINS, PI_BUILTINS, CODEX_BUILTINS, AGY_BUILTINS]) {
     const names = list.map(c => c.name)
     expect(new Set(names).size).toBe(names.length)
     for (const n of names) expect([n, commandName(n)]).toEqual([n, true])

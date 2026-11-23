@@ -21,13 +21,15 @@
 //                                               script, macOS' toast.ts)
 //   bun src/entrypoints/install.ts --no-toast   and without them
 //   bun src/entrypoints/install.ts --codex      Codex's hooks and the commands, leaving Claude alone
+//   bun src/entrypoints/install.ts --agy        Antigravity CLI's hooks, skills and commands, leaving Claude alone
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { installSkill } from '../adapters/agents-skill.ts'
+import { agyConfigDir, agyHooksPlan, installAgyHooks } from '../adapters/agy-hooks.ts'
 import { codexHooksPlan, installCodexHooks } from '../adapters/codex-hooks.ts'
 import { configFile, loadConfig, readConfigFile } from '../adapters/config-file.ts'
-import { claudeIntegrationInstall, codexIntegrationInstall } from '../adapters/herdr.ts'
+import { agyIntegrationInstall, claudeIntegrationInstall, codexIntegrationInstall } from '../adapters/herdr.ts'
 import { installInto, readSettings } from '../adapters/hook-settings.ts'
 import { installLaunchers } from '../adapters/launchers.ts'
 import { ROOT } from '../adapters/paths.ts'
@@ -42,8 +44,8 @@ import { threadsConfig } from '../core/work-threads.ts'
 import { ensureToastApp, toastAppState } from '../integrations/toast-mac.ts'
 
 const args = process.argv.slice(2)
-for (const a of args.filter(a => a !== '--toast' && a !== '--no-toast' && a !== '--codex'))
-  console.log(`ignored ${a}: the options are --toast, --no-toast and --codex`)
+for (const a of args.filter(a => a !== '--toast' && a !== '--no-toast' && a !== '--codex' && a !== '--agy'))
+  console.log(`ignored ${a}: the options are --toast, --no-toast, --codex and --agy`)
 let toast = args.includes('--toast') ? true : args.includes('--no-toast') ? false : undefined
 const toasts = process.platform === 'win32' || process.platform === 'darwin'
 if (toast && !toasts) {
@@ -69,6 +71,48 @@ const isFolder = (path: string): boolean => {
   } catch {
     return false
   }
+}
+// Opt-in: the normal Claude install never reads or changes an Antigravity CLI folder.
+if (args.includes('--agy')) {
+  try {
+    if (args.includes('--toast') || args.includes('--no-toast'))
+      throw new Error('--agy does not take --toast or --no-toast')
+    if (args.includes('--codex')) throw new Error('pass --agy or --codex, not both')
+    const dir = agyConfigDir()
+    const script = join(ROOT, 'src', 'entrypoints', 'agy-hook.ts')
+    const plan = agyHooksPlan(dir, script)
+    installAgyHooks(plan)
+    installShims()
+    const agySkills = [
+      { name: SKILL, from: files.skill },
+      { name: TEAM_SKILL, from: files.teamSkill },
+      ...(threadsConfig(loadConfig().threads) ? [{ name: THREADS_SKILL, from: files.threadsSkill }] : []),
+    ].map(s => ({ ...s, text: readText(s.from) }))
+    for (const s of agySkills) {
+      if (s.text === null) continue
+      const skill = installSkill(dir, s.text, s.name)
+      console.log(
+        skill.action === 'foreign'
+          ? `skipped ${skill.file}: a skill of that name that is not ours`
+          : `skill: ${skill.file}`,
+      )
+    }
+    console.log(`Antigravity CLI hooks: SessionStart, PreInvocation -> ${script} in ${plan.file}`)
+    if (Bun.which('bun') === null)
+      console.log('Antigravity CLI hooks: warning: bun is not on PATH; add Bun to PATH before starting agy.')
+    try {
+      await agyIntegrationInstall()
+      console.log(`herdr's hook: antigravity-cli integration in ${dir}`)
+    } catch (err) {
+      console.log(
+        `herdr's Antigravity CLI hook: not installed: ${messageOf(err).split(/\r?\n/)[0]}. Run herdr integration install antigravity-cli.`,
+      )
+    }
+  } catch (err) {
+    console.error(`agent-board install: ${messageOf(err)}`)
+    process.exit(1)
+  }
+  process.exit(0)
 }
 // Opt-in: the normal Claude install never reads or changes a Codex folder.
 if (args.includes('--codex')) {

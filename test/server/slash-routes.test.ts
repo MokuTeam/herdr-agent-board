@@ -61,7 +61,7 @@ describe('the slash commands of a session', () => {
               pane('s1', 'claude', project, CLAUDE),
               pane('s2', 'pi', project, piFile),
               pane('s3', 'codex', project, CODEX),
-              pane('s4', 'agy', project),
+              pane('s4', 'unknown-agent', project),
             ],
             tabs: [],
             workspaces: [],

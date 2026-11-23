@@ -495,10 +495,10 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
       submenu: copy.filter((c): c is MenuItem => !!c),
     },
     SEP,
-    // Off the board until Return: its tab closes, Claude keeps the conversation.
+    // Off the board until Return: its tab closes, Claude/Antigravity keeps the conversation.
     own &&
       claude &&
-      it.agent === 'claude' && {
+      (it.agent === 'claude' || it.agent === 'agy') && {
         id: 'archive',
         label: t('archive.menu'),
         ...herdr(ctx.archiveWhy ? { disabled: true, reason: t(ctx.archiveWhy) } : {}),

@@ -9,6 +9,7 @@
 // last entry written. Only the entries on the way from it back to the root are the session as it
 // is now; a branch left behind with /tree is not read.
 import { posix, win32 } from 'node:path'
+import { AGY_AGENT } from './agy.ts'
 import { boardNotice } from './notices.ts'
 import {
   type ConversationTurn,
@@ -69,10 +70,15 @@ export interface Naming {
 
 export const CLAUDE_NAMING: Naming = { title: 'Claude', command: name => `/rename ${name}`, done: /Session renamed/i }
 export const PI_NAMING: Naming = { title: 'pi', command: name => `/name ${name}`, done: /Session name set/i }
+export const AGY_NAMING: Naming = {
+  title: 'Antigravity',
+  command: name => `/rename ${name}`,
+  done: /(?:Session|Conversation|Thread)?\s*renamed|Title (?:set|updated)/i,
+}
 
-/** The agents the board starts and names: Claude, and pi (herdr's kinds); null for any other. */
+/** The agents the board starts and names: Claude, pi and Antigravity (herdr's kinds); null for any other. */
 export function namingOf(kind: string | null | undefined): Naming | null {
-  return kind === 'claude' ? CLAUDE_NAMING : kind === PI_AGENT ? PI_NAMING : null
+  return kind === 'claude' ? CLAUDE_NAMING : kind === PI_AGENT ? PI_NAMING : kind === AGY_AGENT ? AGY_NAMING : null
 }
 
 /** Whether a board item is a pi session the board can read: herdr says pi, and its key is the file. */

@@ -389,6 +389,11 @@ export function codexIntegrationInstall(dir: string, timeoutMs = 30_000): Promis
   return run(['integration', 'install', 'codex'], timeoutMs, { ...process.env, CODEX_HOME: dir })
 }
 
+/** Antigravity CLI's own identity hook (`herdr integration install antigravity-cli`). */
+export function agyIntegrationInstall(timeoutMs = 30_000): Promise<string> {
+  return run(['integration', 'install', 'antigravity-cli'], timeoutMs)
+}
+
 /** A herdr notification with its "request" sound; what herdr prints is not read. */
 export async function notify(title: string, body: string): Promise<void> {
   await run(['notification', 'show', title, '--body', body, '--sound', 'request'], 10_000)

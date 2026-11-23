@@ -6,6 +6,7 @@
 import { statSync } from 'node:fs'
 import { readTail } from '../adapters/claude-home.ts'
 import { agentGet, type HerdrAgent, herdr, herdrText } from '../adapters/herdr.ts'
+import { AGY_AGENT, agyInterruptedSince } from '../core/agy.ts'
 import { inputDraft } from '../core/dialogs/input-box.ts'
 import { t } from '../core/lang.ts'
 import type { QueuedPrompt } from '../core/queue.ts'
@@ -118,7 +119,8 @@ export async function stopTurn(
       if (before === 'ended') return { ok: true, already: true }
       if (before) return before
       // Esc over an overlay or a dialog closes that one, and the turn goes on.
-      if (inputDraft(await io.screen()) === null)
+      // Claude's input-box check is Claude-specific; other agents rely on herdr's status.
+      if (item.agent === 'claude' && inputDraft(await io.screen()) === null)
         return { ok: false, busy: true, error: t('turn.err.covered', { name }) }
       const after = state(item, await io.agent())
       if (after === 'ended') return { ok: true, already: true }
@@ -128,7 +130,11 @@ export async function stopTurn(
       await io.keys(...r.keys)
       for (const until = pressed + waitMs; ; ) {
         await sleep(pollMs)
-        if (interruptedSince(io.transcript(), pressed)) break
+        const stopped =
+          item.agent === AGY_AGENT
+            ? agyInterruptedSince(io.transcript(), pressed)
+            : interruptedSince(io.transcript(), pressed)
+        if (stopped) break
         // A message waiting in the queue starts the next turn at once: still working is not yet "did not
         // stop". Over only once herdr says so; a dialog that came up instead is not a stop.
         const agent = await io.agent()
