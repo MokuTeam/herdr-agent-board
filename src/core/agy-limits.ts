@@ -61,6 +61,11 @@ function cleanText(v: unknown, max: number): string | null {
   return s
 }
 
+/** Whether a quota bucket id is Antigravity's third-party ("3p") models bucket. */
+export function isAgyThirdParty(id: string): boolean {
+  return /(?:^|[-_])3p(?:$|[-_])/i.test(id)
+}
+
 /**
  * Derive a short display label and known window length (minutes) from an Antigravity quota bucket id:
  * e.g. "gemini-5h" -> { label: "5h", minutes: 300 }, "gemini-weekly" -> { label: "7d", minutes: 10080 },
@@ -83,13 +88,22 @@ export function agyWindowMeta(id: string): { label: string; minutes: number | nu
     if (t === '5h') return '5h'
     if (t === 'weekly' || t === 'week' || t === '7d') return '7d'
     if (t === 'gpt') return 'GPT'
+    if (t === '3p') return 'Other models'
     return `${tok[0]?.toUpperCase() ?? ''}${tok.slice(1)}`
   })
   return { label: parts.join(' ') || id, minutes }
 }
 
+const windowGroup = (id: string): number => {
+  if (isAgyThirdParty(id)) return 2
+  if (/^gemini(?:$|[-_])/i.test(id)) return 0
+  return 1
+}
+
 function sortWindows<T extends { id: string; minutes: number | null }>(windows: T[]): T[] {
   return [...windows].sort((a, b) => {
+    const g = windowGroup(a.id) - windowGroup(b.id)
+    if (g !== 0) return g
     const am = a.minutes ?? Number.POSITIVE_INFINITY
     const bm = b.minutes ?? Number.POSITIVE_INFINITY
     return am - bm || a.id.localeCompare(b.id)
@@ -141,7 +155,8 @@ function parseWindow(raw: unknown, now: number): AgyLimitWindow | null {
   const id = cleanText(w.id, 64)
   if (!id || !pct(w.usedPercentage)) return null
   const fallback = agyWindowMeta(id)
-  const label = cleanText(w.label, 64) ?? fallback.label
+  const rawLabel = cleanText(w.label, 64)
+  const label = rawLabel && !(isAgyThirdParty(id) && /\b3p\b/i.test(rawLabel)) ? rawLabel : fallback.label
   const minutes = w.minutes === null || w.minutes === undefined ? null : positive(w.minutes) ? w.minutes : null
   const resetsAt = positive(w.resetsAt) ? w.resetsAt : null
   return {
@@ -250,7 +265,7 @@ export function pickAgyLimits(
       observedAt: r.observedAt,
       stale: r.stale || now - r.observedAt > STALE_MS,
       ...(r.planTier && { planTier: r.planTier }),
-      windows,
+      windows: sortWindows(windows),
     }
     if (!best || (candidate.observedAt ?? 0) > (best.observedAt ?? 0)) best = candidate
   }

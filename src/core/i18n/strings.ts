@@ -105,6 +105,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'limits.claudeTitle': 'Claude',
     'limits.agyTitle': 'Gemini (agy)',
     'limits.agyPill': 'Gemini',
+    'limits.agyOtherModels': 'Other models',
+    'limits.agyOtherModelsHint': 'Third-party models in Antigravity, such as Claude',
     'limits.hint': 'Claude usage of this account, {time}, as Claude Code reported it to the status line.',
     'limits.hintUsagebar':
       'Claude usage, {time}. From the usagebar cache of the default profile; the board does not check it is the account of these sessions.',
@@ -825,6 +827,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'limits.claudeTitle': 'Claude',
     'limits.agyTitle': 'Gemini (agy)',
     'limits.agyPill': 'Gemini',
+    'limits.agyOtherModels': 'Другие модели',
+    'limits.agyOtherModelsHint': 'Сторонние модели в Antigravity, например Claude',
     'limits.hint': 'Расход Claude по этому аккаунту, {time}, как Claude Code сообщил в строку состояния.',
     'limits.hintUsagebar':
       'Расход Claude, {time}. Из кэша usagebar профиля по умолчанию; доска не проверяет, что это аккаунт этих сессий.',

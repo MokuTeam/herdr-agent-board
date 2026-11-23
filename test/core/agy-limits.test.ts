@@ -6,6 +6,7 @@ import {
   boardAgyLimitsFrom,
   boardAgyLimitsOf,
   digestAgyStatusLine,
+  isAgyThirdParty,
   parseAgyLimits,
   pickAgyLimits,
 } from '../../src/core/agy-limits.ts'
@@ -16,11 +17,45 @@ const NOW = 1_780_000_000_000
 
 describe('agyWindowMeta & digestAgyStatusLine', () => {
   test('maps bucket ids to clean labels and known window durations', () => {
+    expect(isAgyThirdParty('3p-5h')).toBe(true)
+    expect(isAgyThirdParty('3p-weekly')).toBe(true)
+    expect(isAgyThirdParty('3p_7d')).toBe(true)
+    expect(isAgyThirdParty('3p')).toBe(true)
+    expect(isAgyThirdParty('gemini-3p-5h')).toBe(true)
+    expect(isAgyThirdParty('gemini-5h')).toBe(false)
+    expect(isAgyThirdParty('gemini-weekly')).toBe(false)
+    expect(isAgyThirdParty('claude-5h')).toBe(false)
+    expect(isAgyThirdParty('v3p-5h')).toBe(false)
+
     expect(agyWindowMeta('gemini-5h')).toEqual({ label: '5h', minutes: 300 })
     expect(agyWindowMeta('gemini-weekly')).toEqual({ label: '7d', minutes: 10080 })
     expect(agyWindowMeta('gemini-pro-weekly')).toEqual({ label: 'Pro 7d', minutes: 10080 })
     expect(agyWindowMeta('gemini-flash')).toEqual({ label: 'Flash', minutes: null })
     expect(agyWindowMeta('claude-5h')).toEqual({ label: 'Claude 5h', minutes: 300 })
+    expect(agyWindowMeta('3p-5h')).toEqual({ label: 'Other models 5h', minutes: 300 })
+    expect(agyWindowMeta('3p-weekly')).toEqual({ label: 'Other models 7d', minutes: 10080 })
+    expect(agyWindowMeta('3p-7d')).toEqual({ label: 'Other models 7d', minutes: 10080 })
+    expect(agyWindowMeta('3p')).toEqual({ label: 'Other models', minutes: null })
+  })
+
+  test('orders Gemini windows first and third-party 3p windows after them', () => {
+    const snap = digestAgyStatusLine(
+      {
+        quota: {
+          '3p-5h': { remaining_fraction: 1 },
+          '3p-weekly': { remaining_fraction: 0.88 },
+          'gemini-weekly': { remaining_fraction: 0.91 },
+          'gemini-5h': { remaining_fraction: 0.65 },
+        },
+      },
+      NOW,
+    )
+    expect(snap?.windows.map(w => [w.id, w.label, w.usedPercentage])).toEqual([
+      ['gemini-5h', '5h', 35],
+      ['gemini-weekly', '7d', 9],
+      ['3p-5h', 'Other models 5h', 0],
+      ['3p-weekly', 'Other models 7d', 12],
+    ])
   })
 
   test('parses official Antigravity statusLine JSON payload without inventing missing fields', () => {
@@ -192,6 +227,36 @@ describe('parseAgyLimits, boardAgyLimitsFrom, boardAgyLimitsOf, pickAgyLimits', 
       NOW,
     )
     expect(pickAgyLimits([undefined, older, newer, null], NOW)?.windows[0]?.usedPercentage).toBe(55)
+  })
+
+  test('upgrades legacy cached 3p labels and puts Gemini windows first', () => {
+    const legacy = {
+      fetchedAtMs: NOW - 10_000,
+      windows: [
+        { id: '3p-5h', label: '3p 5h', minutes: 300, usedPercentage: 0, resetsAt: NOW + 60_000 },
+        { id: '3p-weekly', label: '3p 7d', minutes: 10080, usedPercentage: 15, resetsAt: NOW + 86_400_000 },
+        { id: 'gemini-weekly', label: '7d', minutes: 10080, usedPercentage: 9, resetsAt: NOW + 86_400_000 },
+        { id: 'gemini-5h', label: '5h', minutes: 300, usedPercentage: 35, resetsAt: NOW + 60_000 },
+      ],
+    }
+    const parsed = parseAgyLimits(legacy, NOW)
+    expect(parsed.windows?.map(w => [w.id, w.label])).toEqual([
+      ['gemini-5h', '5h'],
+      ['gemini-weekly', '7d'],
+      ['3p-5h', 'Other models 5h'],
+      ['3p-weekly', 'Other models 7d'],
+    ])
+
+    const wire = boardAgyLimitsOf(
+      { source: 'statusline', observedAt: NOW - 10_000, stale: false, windows: legacy.windows },
+      NOW,
+    )
+    expect(wire?.windows.map(w => [w.id, w.label])).toEqual([
+      ['gemini-5h', '5h'],
+      ['gemini-weekly', '7d'],
+      ['3p-5h', 'Other models 5h'],
+      ['3p-weekly', 'Other models 7d'],
+    ])
   })
 })
 

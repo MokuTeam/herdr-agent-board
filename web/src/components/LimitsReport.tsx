@@ -1,7 +1,15 @@
 // The usage popover's text: what is used, where the reading comes from and how old it is.
+import { Fragment } from 'react'
 import { shortWhen } from '../../../src/core/when-format.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
-import { type AgyLimitInfo, agyWindowLabel, forecast, type LimitInfo, windowLabel } from '../models/limits.ts'
+import {
+  type AgyLimitInfo,
+  agyWindowLabel,
+  forecast,
+  isAgyThirdParty,
+  type LimitInfo,
+  windowLabel,
+} from '../models/limits.ts'
 
 const SOURCE_KEYS = { usagebar: 'limits.hintUsagebar', statusline: 'limits.hint', unknown: 'limits.unknownSource' }
 
@@ -56,13 +64,13 @@ export function AgyLimitsReport({ lim }: { lim: AgyLimitInfo }) {
   const time = lim.observedAt
     ? new Date(lim.observedAt).toLocaleString(t.lang, { dateStyle: 'medium', timeStyle: 'short' })
     : t('limits.unknownTime')
-  const used = lim.windows.map(w => `${agyWindowLabel(w, t)}: ${Math.round(w.usedPercentage)}%`).join(' · ')
   const now = Date.now()
   const at = (ms: number) => shortWhen(ms, t, now)
   const ahead = lim.stale
     ? []
     : lim.windows.flatMap(w => {
         const window = agyWindowLabel(w, t)
+        const tip = isAgyThirdParty(w.id) ? t('limits.agyOtherModelsHint') : undefined
         if (typeof w.minutes === 'number') {
           const f = forecast(
             { minutes: w.minutes, usedPercentage: w.usedPercentage, resetsAt: w.resetsAt ?? null },
@@ -75,24 +83,35 @@ export function AgyLimitsReport({ lim }: { lim: AgyLimitInfo }) {
                   {
                     key: w.id,
                     out: true,
+                    tip,
                     text: t('limits.forecastOut', { window, at: at(f.at), reset: at(f.resetsAt) }),
                   },
                 ]
-              : [{ key: w.id, out: false, text: t('limits.forecastLasts', { window, reset: at(f.resetsAt) }) }]
+              : [{ key: w.id, out: false, tip, text: t('limits.forecastLasts', { window, reset: at(f.resetsAt) }) }]
           }
         }
         if (typeof w.resetsAt === 'number' && Number.isFinite(w.resetsAt) && w.resetsAt > now) {
-          return [{ key: w.id, out: false, text: t('limits.resetsAt', { window, reset: at(w.resetsAt) }) }]
+          return [{ key: w.id, out: false, tip, text: t('limits.resetsAt', { window, reset: at(w.resetsAt) }) }]
         }
         return []
       })
   return (
     <>
       <p>
-        <b>{t('limits.used')}</b> {used}
+        <b>{t('limits.used')}</b>{' '}
+        {lim.windows.map((w, i) => {
+          const text = `${agyWindowLabel(w, t)}: ${Math.round(w.usedPercentage)}%`
+          const tip = isAgyThirdParty(w.id) ? t('limits.agyOtherModelsHint') : undefined
+          return (
+            <Fragment key={w.id}>
+              {i > 0 && ' · '}
+              {tip ? <span title={tip}>{text}</span> : text}
+            </Fragment>
+          )
+        })}
       </p>
       {ahead.map(f => (
-        <p key={f.key} className={f.out ? 'limits-warning' : ''}>
+        <p key={f.key} className={f.out ? 'limits-warning' : ''} title={f.tip}>
           {f.text}
         </p>
       ))}

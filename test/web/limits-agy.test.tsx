@@ -5,10 +5,11 @@
 //   percentages, reset time / forecast, source and reading time.
 import { describe, expect, test } from 'bun:test'
 import { createRef } from 'react'
+import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardAgyLimits, BoardLimits, BoardPayload, BoardProfile } from '../../src/core/payload.ts'
 import { Limits } from '../../web/src/components/Limits.tsx'
 import { LimitsPop } from '../../web/src/components/LimitsPop.tsx'
-import { agyLimitInfo } from '../../web/src/models/limits.ts'
+import { agyLimitInfo, agyWindowLabel } from '../../web/src/models/limits.ts'
 import { board as boardContext, payload, renderInBoard } from './support/board.tsx'
 import { byId, type Element, findAll, type Node } from './support/markup.ts'
 
@@ -210,5 +211,147 @@ describe('Antigravity (Gemini) usage in the board UI (#647)', () => {
     const undefText = textOf(findAll(undefFrame, el => el.attrs.get('data-provider') === 'agy')[0] as Element)
     expect(undefText).toContain('Flash: resets')
     expect(undefText).not.toContain('at this pace')
+  })
+
+  test('names, translates, orders, and tooltips third-party 3p windows in English and Russian (#664)', () => {
+    const en = translator('en')
+    const ru = translator('ru')
+
+    const cases: Array<[string, string, number | null, string, string]> = [
+      ['gemini-5h', '5h', 300, '5h', '5ч'],
+      ['gemini-weekly', '7d', 10080, '7d', '7д'],
+      ['gemini-pro-weekly', 'Pro 7d', 10080, 'Pro 7d', 'Pro 7д'],
+      ['claude-5h', 'Claude 5h', 300, 'Claude 5h', 'Claude 5ч'],
+      ['gemini-flash', 'Flash', null, 'Flash', 'Flash'],
+      ['3p-5h', 'Other models 5h', 300, 'Other models 5h', 'Другие модели 5ч'],
+      ['3p-5h', '3p 5h', 300, 'Other models 5h', 'Другие модели 5ч'],
+      ['3p-weekly', 'Other models 7d', 10080, 'Other models 7d', 'Другие модели 7д'],
+      ['3p-weekly', '3p 7d', 10080, 'Other models 7d', 'Другие модели 7д'],
+      ['3p', 'Other models', null, 'Other models', 'Другие модели'],
+    ]
+    for (const [id, label, minutes, expectedEn, expectedRu] of cases) {
+      const reading = { id, label, minutes, usedPercentage: 10 }
+      expect(agyWindowLabel(reading, en)).toBe(expectedEn)
+      expect(agyWindowLabel(reading, ru)).toBe(expectedRu)
+    }
+
+    // 0% third-party windows are hidden while 0% Gemini windows stay visible.
+    const zero3p: BoardAgyLimits = {
+      source: 'statusline',
+      observedAt: NOW - MIN,
+      stale: false,
+      windows: [
+        {
+          id: '3p-5h',
+          label: 'Other models 5h',
+          minutes: 300,
+          usedPercentage: 0,
+          resetsAt: NOW + 2 * HOUR,
+          expired: false,
+        },
+        { id: 'gemini-5h', label: '5h', minutes: 300, usedPercentage: 0, resetsAt: NOW + 2 * HOUR, expired: false },
+        {
+          id: 'gemini-weekly',
+          label: '7d',
+          minutes: 10080,
+          usedPercentage: 9,
+          resetsAt: NOW + 96 * HOUR,
+          expired: false,
+        },
+        {
+          id: '3p-weekly',
+          label: 'Other models 7d',
+          minutes: 10080,
+          usedPercentage: 0,
+          resetsAt: NOW + 96 * HOUR,
+          expired: false,
+        },
+      ],
+    }
+    expect(parts(pill(payload({ limits: null, agyLimits: zero3p }), true, 'en')).map(x => x[1])).toEqual([
+      'Gemini',
+      '5h 0%',
+      '7d 9%',
+    ])
+    expect(parts(pill(payload({ limits: null, agyLimits: zero3p }), true, 'ru')).map(x => x[1])).toEqual([
+      'Gemini',
+      '5ч 0%',
+      '7д 9%',
+    ])
+    const zeroEnPop = findAll(
+      popFrame(payload({ limits: null, agyLimits: zero3p }), true, 'en'),
+      el => el.attrs.get('data-provider') === 'agy',
+    )[0] as Element
+    expect(textOf(zeroEnPop)).toContain('Used: 5h: 0% · 7d: 9%')
+    expect(textOf(zeroEnPop)).not.toContain('Other models')
+    const zeroRuPop = findAll(
+      popFrame(payload({ limits: null, agyLimits: zero3p }), true, 'ru'),
+      el => el.attrs.get('data-provider') === 'agy',
+    )[0] as Element
+    expect(textOf(zeroRuPop)).toContain('Израсходовано: 5ч: 0% · 7д: 9%')
+    expect(textOf(zeroRuPop)).not.toContain('Другие модели')
+
+    // Non-zero 3p window appears after Gemini windows, localized and carrying the explanatory tooltip.
+    const active3p: BoardAgyLimits = {
+      source: 'statusline',
+      observedAt: NOW - MIN,
+      stale: false,
+      windows: [
+        { id: '3p-5h', label: '3p 5h', minutes: 300, usedPercentage: 12, resetsAt: NOW + 2 * HOUR, expired: false },
+        {
+          id: '3p-weekly',
+          label: '3p 7d',
+          minutes: 10080,
+          usedPercentage: 0,
+          resetsAt: NOW + 96 * HOUR,
+          expired: false,
+        },
+        {
+          id: 'gemini-weekly',
+          label: '7d',
+          minutes: 10080,
+          usedPercentage: 9,
+          resetsAt: NOW + 96 * HOUR,
+          expired: false,
+        },
+        { id: 'gemini-5h', label: '5h', minutes: 300, usedPercentage: 35, resetsAt: NOW + 2 * HOUR, expired: false },
+      ],
+    }
+
+    const enPill = pill(payload({ limits: null, agyLimits: active3p }), true, 'en')
+    expect(parts(enPill).map(x => x[1])).toEqual(['Gemini', '5h 35%', '7d 9%', 'Other models 5h 12%'])
+    const enPillSpans = elementsIn(enPill)
+    expect(enPillSpans[1]?.attrs.get('title')).toBeUndefined()
+    expect(enPillSpans[3]?.attrs.get('title')).toBe('Third-party models in Antigravity, such as Claude')
+
+    const ruPill = pill(payload({ limits: null, agyLimits: active3p }), true, 'ru')
+    expect(parts(ruPill).map(x => x[1])).toEqual(['Gemini', '5ч 35%', '7д 9%', 'Другие модели 5ч 12%'])
+    const ruPillSpans = elementsIn(ruPill)
+    expect(ruPillSpans[1]?.attrs.get('title')).toBeUndefined()
+    expect(ruPillSpans[3]?.attrs.get('title')).toBe('Сторонние модели в Antigravity, например Claude')
+
+    const enSection = findAll(
+      popFrame(payload({ limits: null, agyLimits: active3p }), true, 'en'),
+      el => el.attrs.get('data-provider') === 'agy',
+    )[0] as Element
+    expect(textOf(enSection)).toContain('Used: 5h: 35% · 7d: 9% · Other models 5h: 12%')
+    const enTips = findAll(enSection.children, el => el.attrs.has('title'))
+    expect(enTips.length).toBeGreaterThanOrEqual(1)
+    for (const el of enTips) {
+      expect(el.attrs.get('title')).toBe('Third-party models in Antigravity, such as Claude')
+      expect(textOf(el)).toContain('Other models 5h')
+    }
+
+    const ruSection = findAll(
+      popFrame(payload({ limits: null, agyLimits: active3p }), true, 'ru'),
+      el => el.attrs.get('data-provider') === 'agy',
+    )[0] as Element
+    expect(textOf(ruSection)).toContain('Израсходовано: 5ч: 35% · 7д: 9% · Другие модели 5ч: 12%')
+    const ruTips = findAll(ruSection.children, el => el.attrs.has('title'))
+    expect(ruTips.length).toBeGreaterThanOrEqual(1)
+    for (const el of ruTips) {
+      expect(el.attrs.get('title')).toBe('Сторонние модели в Antigravity, например Claude')
+      expect(textOf(el)).toContain('Другие модели 5ч')
+    }
   })
 })

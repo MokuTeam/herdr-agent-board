@@ -12,6 +12,7 @@ import {
   agyWindowLabel,
   CLAUDE_LIMIT_COLOR,
   heat,
+  isAgyThirdParty,
   type LimitReading,
   limitInfo,
   type ProfileUsage,
@@ -111,7 +112,11 @@ const windows = (list: LimitReading[], t: Translator): ReactNode =>
 
 const agyWindows = (list: AgyLimitReading[], t: Translator): ReactNode =>
   list.map(w => (
-    <span key={w.id} className={heat(w.usedPercentage) || undefined}>
+    <span
+      key={w.id}
+      className={heat(w.usedPercentage) || undefined}
+      title={isAgyThirdParty(w.id) ? t('limits.agyOtherModelsHint') : undefined}
+    >
       {agyWindowLabel(w, t)} <b>{Math.round(w.usedPercentage)}%</b>
     </span>
   ))
