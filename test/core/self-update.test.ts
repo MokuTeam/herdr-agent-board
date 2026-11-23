@@ -163,6 +163,12 @@ test('how it stands: a board that did not come back first, then failures, skips,
     key: 'current',
     values: { commit: 'cccccccc' },
   })
+  // a failure an update left (the installer) stays said after a current check, until mended
+  const failure: UpdateRecord = { at: now - HOUR, outcome: 'failed', reason: 'installer', to: 'd'.repeat(40) }
+  expect(standing(on, { failure, last: { at: now, outcome: 'current' } }, now)).toMatchObject({
+    level: 'error',
+    key: 'failed.installer',
+  })
   // off, a plain state is nothing to say
   expect(standing(off, { last: { at: now, outcome: 'current' } }, now)).toBeNull()
 })

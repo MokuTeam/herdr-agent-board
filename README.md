@@ -4300,6 +4300,18 @@ dictionary there plus its plural rule; a test checks that every dictionary has e
   reload themselves when a file in `web/` changes. A board that crashes starts again by itself
   (after 2 s, then 10 s, then 30 s; after five crashes in ten minutes it waits for the next code
   change), and `web.log` in the state folder keeps the error.
+- New commits of the plugin itself: **Settings → Updates…** (on the board on this computer only;
+  off until you turn it on) has the board take the new commits of the branch its git checkout is
+  on, every hour or once a day at a set time, and `board update` does it now. It only
+  fast-forwards: it never switches branches, merges or resets. Changed tracked files, a detached
+  HEAD, no upstream, a failed fetch or a branch with commits of its own are skipped, with the reason
+  in the panel and in `board doctor`, and tried again at the next check; so is a session that is
+  being started (again in 5 minutes). When `package.json` or `bun.lock` changed, `bun install`
+  runs before the merge, while the old code still runs; after it the board and wake restart as on
+  any code change, and the new board runs the install again when hooks, skills or launchers changed
+  (a dated copy of each `settings.json` first, in `self-update/settings` in the state folder). A
+  board that does not come back within 3 minutes is a red line in the panel and in `board doctor`.
+  A node follows its master's version instead. Each update is a line in `web.log`.
 
 Code: `src/server/`, `web/src/` (React; no build step: the server bundles `web/src/main.tsx` in
 memory with Bun; springs in `web/src/models/spring.ts`, the sheet's place in
@@ -4600,6 +4612,10 @@ while one does not check out.
 off; on unless it says so), `sources` (each `id`, `kind`, `label`, `color`, `lane`, `everyMin`,
 `remindMin` (its own minutes before, 0 or `false` for none); an `mcp` one's `url`, `preset`,
 `account`, `calendars`, `list`, `write`). No iCal address is ever in it.
+
+`autoUpdate` (the board's update of itself from git; Settings → Updates… sets it): `true` or
+`{ "every": "hour" | "day", "at": "HH:MM" }` (local time, 04:00 by default), `"on": false` to keep
+those while it is off.
 
 `backup` (the [backup](#backup) of the board's database; Settings → Backup… sets it): `folder` (a
 folder that syncs elsewhere), `server` (`{ "host", "port", "admin": { "user", "key" }, "set" }`:

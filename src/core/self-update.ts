@@ -105,6 +105,16 @@ export interface UpdateState {
   /** The last check that updated: what came in last time. */
   lastUpdate?: UpdateRecord
   pending?: PendingUpdate
+  /**
+   * An update that merged but did not end well (the installer or wake): kept, and said, until a
+   * later check mends it (the installer runs again) or another update goes through.
+   */
+  failure?: UpdateRecord
+  /**
+   * The lock files taken from upstream for bun install, before the merge: a board that ended in
+   * between finds them here and puts them back (with the dependencies) before anything else.
+   */
+  installing?: { at: number; files: string[] }
 }
 
 /** A pending update older than this is a board that did not come back. */
@@ -274,7 +284,7 @@ export function standing(cfg: AutoUpdateConfig, s: UpdateState, now: number): Up
   if (p && stalePending(s, now))
     return { level: 'error', key: 'notBack', values: { to: shortSha(p.to), from: shortSha(p.from) } }
   if (p) return { level: 'ok', key: 'restarting', values: { to: shortSha(p.to) } }
-  const last = s.last
+  const last = s.last?.outcome === 'failed' ? s.last : (s.failure ?? s.last)
   if (!last) return cfg.on ? { level: 'ok', key: 'notYet', values: {} } : null
   if (last.outcome === 'failed')
     return {
@@ -318,7 +328,16 @@ export function selfUpdateCheck(raw: unknown, s: UpdateState, now: number, t: Tr
     title: t('selfUpdate.doctor'),
     detail: `${standingText(st, t)}${cfg.on ? ` (${when})` : ` ${t('selfUpdate.doctor.off')}`}`,
     // a board that is down cannot take board update: the pane says why, a pull by hand brings the fix
-    fix: st.level === 'ok' ? '' : t(st.key === 'notBack' ? 'selfUpdate.doctor.fixBack' : 'selfUpdate.doctor.fix'),
+    fix:
+      st.level === 'ok'
+        ? ''
+        : t(
+            st.key === 'notBack'
+              ? 'selfUpdate.doctor.fixBack'
+              : st.key === 'failed.installer'
+                ? 'selfUpdate.doctor.fixInstaller'
+                : 'selfUpdate.doctor.fix',
+          ),
     code: '',
   }
 }

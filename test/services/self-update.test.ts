@@ -25,6 +25,11 @@ interface Repo {
   log: string
   fetchFails?: string
   mergeFails?: string
+  diffFails?: string
+  /** symbolic-ref fails with this (git itself failing, not a detached HEAD). */
+  gitBroken?: string
+  /** HEAD is past the merged commit (merge-base --is-ancestor). */
+  descends?: boolean
 }
 
 function world(repo: Partial<Repo> = {}, over: Partial<SelfUpdateDeps> = {}) {
@@ -53,7 +58,7 @@ function world(repo: Partial<Repo> = {}, over: Partial<SelfUpdateDeps> = {}) {
       git.push(args)
       const [cmd, ...rest] = args
       const joined = args.join(' ')
-      if (cmd === 'symbolic-ref') return r.branch ? ok(`${r.branch}\n`) : no()
+      if (cmd === 'symbolic-ref') return r.branch ? ok(`${r.branch}\n`) : no(r.gitBroken ?? '')
       if (joined.includes('--symbolic-full-name')) return r.upstream ? ok(`${r.upstream}\n`) : no()
       if (cmd === 'status') return ok(r.dirty)
       if (cmd === 'rev-parse') return ok(`${rest.at(-1)?.startsWith('@{u}') ? r.up : r.head}\n`)
@@ -63,7 +68,8 @@ function world(repo: Partial<Repo> = {}, over: Partial<SelfUpdateDeps> = {}) {
         return r.fetchFails ? no(r.fetchFails) : ok()
       }
       if (cmd === 'rev-list') return ok(`${r.ahead}\t${r.behind}\n`)
-      if (cmd === 'diff' && rest[0] === '--name-only') return ok(r.changed.join('\n'))
+      if (cmd === 'diff' && rest[0] === '--name-only') return r.diffFails ? no(r.diffFails) : ok(r.changed.join('\n'))
+      if (cmd === 'merge-base') return r.descends ? ok() : no('')
       if (cmd === 'diff' && rest[0] === '--name-status') return ok(r.locks)
       if (cmd === 'log') return ok(r.log)
       if (cmd === 'checkout') {
@@ -356,4 +362,113 @@ test('the schedule: off reads nothing; a recent pending record waits; one check 
   expect(await u.check()).toMatchObject({ outcome: 'skipped', reason: 'running' })
   release()
   expect((await first).outcome).toBe('updated')
+})
+
+test('only docs with wake running: finished at once, wake not waited for (it did not restart)', async () => {
+  let waited = false
+  const w = world(
+    { changed: ['README.md'] },
+    {
+      wakeUp: async () => true,
+      wakeBack: async () => {
+        waited = true
+        return false
+      },
+    },
+  )
+  expect(await createSelfUpdate(w.deps).check()).toMatchObject({ outcome: 'updated' })
+  expect(waited).toBe(false)
+})
+
+test("the pending record's clock starts at the merge, not at the check: a slow install does not count", async () => {
+  const w = world({ changed: ['bun.lock'], locks: 'M\tbun.lock' })
+  w.deps.install = async () => {
+    w.tick(5 * MIN)
+    return { ok: true, detail: '' }
+  }
+  const r = await createSelfUpdate(w.deps).check()
+  expect(w.state().pending?.at).toBe(r.at + 5 * MIN)
+})
+
+test('a board that ended mid-install: the next board puts the lock files and the dependencies back first', async () => {
+  const w = world()
+  w.setState({ installing: { at: 0, files: ['package.json', 'bun.lock'] } })
+  expect(await createSelfUpdate(w.deps).resume()).toBeNull()
+  expect(w.events).toEqual(['checkout HEAD package.json bun.lock', 'install'])
+  expect(w.state().installing).toBeUndefined()
+  // and a check does the same before it looks at the checkout
+  const c = world({ behind: 0 })
+  c.setState({ installing: { at: 0, files: ['bun.lock'] } })
+  expect(await createSelfUpdate(c.deps).check()).toMatchObject({ outcome: 'current' })
+  expect(c.events).toEqual(['checkout HEAD bun.lock', 'install', 'fetch'])
+})
+
+test('a step that throws between the lock files and the merge puts them back', async () => {
+  const w = world({ changed: ['bun.lock'], locks: 'M\tbun.lock' })
+  let installs = 0
+  w.deps.install = async () => {
+    installs++
+    if (installs === 1) throw new Error('spawn failed')
+    return { ok: true, detail: '' }
+  }
+  await expect(createSelfUpdate(w.deps).check()).rejects.toThrow('spawn failed')
+  expect(w.events).toEqual(['fetch', 'checkout up bun.lock', 'checkout HEAD bun.lock'])
+  expect(w.state().installing).toBeUndefined()
+  expect(w.state().pending).toBeUndefined()
+})
+
+test('a session start that began during bun install: everything put back, tried again in five minutes', async () => {
+  let calls = 0
+  const w = world(
+    { changed: ['bun.lock'], locks: 'M\tbun.lock' },
+    { busy: () => (++calls > 1 ? '1 session start in flight' : null) },
+  )
+  expect(await createSelfUpdate(w.deps).check()).toMatchObject({ outcome: 'skipped', reason: 'busy' })
+  expect(w.events).toEqual(['fetch', 'checkout up bun.lock', 'install', 'checkout HEAD bun.lock', 'install'])
+  expect(w.events).not.toContain('merge')
+})
+
+test('a failed git diff after the fetch is skipped, never merged without its plan', async () => {
+  const w = world({ diffFails: 'fatal: bad object' })
+  expect(await createSelfUpdate(w.deps).check()).toMatchObject({
+    outcome: 'skipped',
+    reason: 'fetch',
+    detail: 'fatal: bad object',
+  })
+  expect(w.events).toEqual(['fetch'])
+})
+
+test('git failing is not taken for a detached HEAD', async () => {
+  const w = world({ branch: null, gitBroken: 'fatal: detected dubious ownership' })
+  expect(await createSelfUpdate(w.deps).check()).toMatchObject({
+    outcome: 'skipped',
+    reason: 'no-checkout',
+    detail: 'fatal: detected dubious ownership',
+  })
+})
+
+test('a failed installer stays said after the next current check, which runs it again and clears it', async () => {
+  let ok = false
+  const w = world(
+    { changed: ['src/core/install-plan.ts'] },
+    { installer: async () => ({ ok, detail: ok ? '' : 'boom' }) },
+  )
+  await createSelfUpdate(w.deps).check()
+  await createSelfUpdate(w.deps).resume()
+  expect(w.state().failure).toMatchObject({ reason: 'installer' })
+  w.repo.behind = 0
+  // still failing: the record stays
+  expect(await createSelfUpdate(w.deps).check()).toMatchObject({ outcome: 'current' })
+  expect(w.state().failure).toMatchObject({ reason: 'installer' })
+  ok = true
+  await createSelfUpdate(w.deps).check()
+  expect(w.state().failure).toBeUndefined()
+})
+
+test('HEAD past the merged commit (a pull by hand since): the board came back on it', async () => {
+  const w = world()
+  await createSelfUpdate(w.deps).check()
+  w.repo.head = 'c'.repeat(40)
+  w.repo.descends = true
+  expect(await createSelfUpdate(w.deps).resume()).toMatchObject({ outcome: 'updated', commit: 'c'.repeat(40) })
 })

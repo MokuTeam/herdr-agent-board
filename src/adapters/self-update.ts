@@ -15,6 +15,7 @@ import { wakeConfig, wakeSwitch } from '../core/wake/config.ts'
 import type { GitResult, StepResult } from '../services/self-update.ts'
 import { configFile, readConfigFile } from './config-file.ts'
 import { isRecord, readJson, replaceFile } from './json-store.ts'
+import { quiet } from './node-repo.ts'
 import { stateDir } from './paths.ts'
 import { run } from './process.ts'
 import { inheritedProfileDir, loadProfiles } from './profiles.ts'
@@ -74,7 +75,19 @@ export function readSelfUpdate(file = selfUpdateFile()): UpdateState {
   const last = asRecord(raw.last)
   const lastUpdate = asRecord(raw.lastUpdate)
   const pending = asPending(raw.pending)
-  return { ...(last && { last }), ...(lastUpdate && { lastUpdate }), ...(pending && { pending }) }
+  const failure = asRecord(raw.failure)
+  const inst = raw.installing
+  const installing =
+    isRecord(inst) && num(inst.at) && Array.isArray(inst.files)
+      ? { at: inst.at, files: strings(inst.files) }
+      : undefined
+  return {
+    ...(last && { last }),
+    ...(lastUpdate && { lastUpdate }),
+    ...(pending && { pending }),
+    ...(failure && { failure }),
+    ...(installing && { installing }),
+  }
 }
 
 export function saveSelfUpdate(state: UpdateState, file = selfUpdateFile()): void {
@@ -82,11 +95,15 @@ export function saveSelfUpdate(state: UpdateState, file = selfUpdateFile()): voi
   replaceFile(file, `${JSON.stringify(state, null, 1)}\n`)
 }
 
-/** git in `root`, never asking for a password (a fetch that needs one fails instead of waiting). */
+/**
+ * git in `root`, never asking for anything (no terminal prompt, no credential manager window, ssh in
+ * batch mode: a fetch that needs a login fails instead of waiting), without taking the index lock for
+ * a read, and with paths unquoted (a name outside ASCII is matched as it is).
+ */
 export async function gitIn(root: string, args: string[], timeout = 30_000): Promise<GitResult> {
-  const r = await run('git', ['-C', root, ...args], {
+  const r = await run('git', ['-C', root, '--no-optional-locks', '-c', 'core.quotePath=false', ...args], {
     timeout,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '' },
+    env: quiet(),
   })
   return { ok: r.code === 0, out: r.stdout, err: r.stderr || (r.error && r.code !== 1 ? r.error.message : '') }
 }

@@ -14,7 +14,7 @@ const FETCH_MS = 5 * 60_000
 const ASK_MS = 15_000
 
 /** Git's environment here: no prompt for a login, an ssh that asks nothing. */
-function quiet(): Record<string, string | undefined> {
+export function quiet(): Record<string, string | undefined> {
   return {
     ...process.env,
     GIT_TERMINAL_PROMPT: '0',

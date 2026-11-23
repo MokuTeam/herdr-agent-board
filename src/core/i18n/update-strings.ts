@@ -44,7 +44,7 @@ export const UPDATE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'selfUpdate.failed.install': 'bun install failed; the checkout stayed at {from}. {detail}',
     'selfUpdate.failed.merge': 'The fast-forward to {to} failed; the checkout stayed at {from}. {detail}',
     'selfUpdate.failed.installer':
-      'Updated to {to}, but the installer failed: run bun src/entrypoints/install.ts. {detail}',
+      'Updated to {to}, but the installer failed: hooks and skills may be the old ones. {detail}',
     'selfUpdate.failed.not-back': 'The update to {to} did not finish: {detail}.',
     'selfUpdate.failed.wake': 'Updated to {to}, but wake did not come back: Settings → Sleep and wake….',
     'selfUpdate.err.setting': 'The update setting is not one the board knows.',
@@ -52,6 +52,8 @@ export const UPDATE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'selfUpdate.doctor': 'Updates itself from git',
     'selfUpdate.doctor.off': 'Off: Settings → Updates… turns it on.',
     'selfUpdate.doctor.fix': 'Settings → Updates…, or board update to try now',
+    'selfUpdate.doctor.fixInstaller':
+      'The next check runs it again; to run it now: herdr plugin action invoke agent-board.install',
     'selfUpdate.doctor.fixBack':
       "The board's pane shows the error. Once a fix is upstream, git pull in the board's folder brings it: run.ts restarts the board on any code change.",
   },
@@ -96,7 +98,7 @@ export const UPDATE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'selfUpdate.failed.install': 'bun install не прошёл; checkout остался на {from}. {detail}',
     'selfUpdate.failed.merge': 'Перемотка до {to} не прошла; checkout остался на {from}. {detail}',
     'selfUpdate.failed.installer':
-      'Обновлена до {to}, но установщик не прошёл: запустите bun src/entrypoints/install.ts. {detail}',
+      'Обновлена до {to}, но установщик не прошёл: хуки и скиллы могут быть старыми. {detail}',
     'selfUpdate.failed.not-back': 'Обновление до {to} не закончилось: {detail}.',
     'selfUpdate.failed.wake': 'Обновлена до {to}, но wake не вернулся: Настройки → Сон и пробуждение….',
     'selfUpdate.err.setting': 'Такой настройки обновлений доска не знает.',
@@ -104,6 +106,8 @@ export const UPDATE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'selfUpdate.doctor': 'Обновляется сама из git',
     'selfUpdate.doctor.off': 'Выключено: включается в Настройки → Обновления….',
     'selfUpdate.doctor.fix': 'Настройки → Обновления…, или board update, чтобы попробовать сейчас',
+    'selfUpdate.doctor.fixInstaller':
+      'Следующая проверка запустит его снова; запустить сейчас: herdr plugin action invoke agent-board.install',
     'selfUpdate.doctor.fixBack':
       'Ошибка на экране панели доски. Когда исправление будет в upstream, git pull в папке доски его принесёт: run.ts перезапускает доску на любое изменение кода.',
   },
