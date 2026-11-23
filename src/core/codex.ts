@@ -1,5 +1,6 @@
 // Codex rollouts contain response items and event copies of those same messages. Read the
 // response items only; system instructions, reasoning and tool outputs stay out of the thread.
+import { type LostAccess, parseLostAccess } from './lost-access.ts'
 import { boardNotice } from './notices.ts'
 import type { Naming } from './pi.ts'
 import {
@@ -96,6 +97,37 @@ interface Rollout {
   /** The model and effort of the last turn (its turn_context), what the card shows. */
   model?: string
   effort?: string
+  lostAccess?: LostAccess
+}
+
+function codexErrorCode(info: unknown): string {
+  if (typeof info === 'string') return info
+  const r = rec(info)
+  if (!r) return ''
+  for (const k of Object.keys(r)) {
+    const low = k.toLowerCase()
+    if (
+      low === 'usage_limit_exceeded' ||
+      low === 'usagelimitexceeded' ||
+      low === 'rate_limit_exceeded' ||
+      low === 'ratelimitexceeded' ||
+      low === 'unauthorized' ||
+      low === 'authentication_failed'
+    ) {
+      return low
+    }
+  }
+  if (typeof r.type === 'string' && r.type) return r.type
+  if (r.http_status_code === 401 || r.http_status_code === 429) return String(r.http_status_code)
+  return ''
+}
+
+function codexErrorText(item: Rec): string {
+  const base = str(item.message) || str(item.error) || str(item.reason)
+  const info = rec(item.codex_error_info)
+  if (!info) return base
+  const extra = JSON.stringify(info)
+  return base ? `${base}\n${extra}` : extra
 }
 
 function readRollout(lines: readonly string[]): Rollout {
@@ -105,6 +137,7 @@ function readRollout(lines: readonly string[]): Rollout {
   let context: number | undefined
   let model: string | undefined
   let effort: string | undefined
+  let lostAccess: LostAccess | undefined
   for (const line of lines) {
     const entry = parse(line)
     const item = rec(entry?.payload)
@@ -112,10 +145,19 @@ function readRollout(lines: readonly string[]): Rollout {
     if (entry.type === 'turn_context') {
       model = str(item.model) || model
       effort = str(item.effort) || str(rec(rec(item.collaboration_mode)?.settings)?.reasoning_effort) || effort
+      continue
     }
-    if (entry.type === 'event_msg' && item.type === 'token_count') {
-      const usage = rec(rec(item.info)?.last_token_usage)
-      if (typeof usage?.input_tokens === 'number' && Number.isFinite(usage.input_tokens)) context = usage.input_tokens
+    if (entry.type === 'event_msg') {
+      if (item.type === 'token_count') {
+        const usage = rec(rec(item.info)?.last_token_usage)
+        if (typeof usage?.input_tokens === 'number' && Number.isFinite(usage.input_tokens)) context = usage.input_tokens
+      } else if (item.type === 'error' || item.type === 'turn_aborted') {
+        const code = codexErrorCode(item.codex_error_info) || str(item.reason)
+        const text = codexErrorText(item)
+        const hit = parseLostAccess(text, { errorCode: code, at: Date.parse(str(entry.timestamp)) || 0 })
+        if (hit) lostAccess = hit
+      }
+      continue
     }
     if (entry.type !== 'response_item') continue
     const at = Date.parse(str(entry.timestamp)) || 0
@@ -126,9 +168,11 @@ function readRollout(lines: readonly string[]): Rollout {
       if (role === 'assistant' && item.channel === 'analysis') continue
       const text = role === 'user' ? userText(item) : textOf(item.content)
       if (!text) continue
+      if (role === 'assistant') lostAccess = undefined
       const notice = role === 'user' ? boardNotice(text) : null
       conversation.push(notice ? { role: 'notice', ...notice, at } : { role, text, at })
     } else if (item.type === 'function_call' || item.type === 'custom_tool_call') {
+      lostAccess = undefined
       const id = str(item.call_id)
       const name = str(item.name)
       const detail = toolDetail(item)
@@ -149,12 +193,13 @@ function readRollout(lines: readonly string[]): Rollout {
     ...(context !== undefined && { context }),
     ...(model && { model }),
     ...(effort && { effort }),
+    ...(lostAccess && { lostAccess }),
   }
 }
 
 /** The last prompt, answer, question, tool and request size for a Codex card. */
 export function parseCodexTail(lines: readonly string[]): TranscriptInfo {
-  const { conversation, tool, context, model, effort } = readRollout(lines)
+  const { conversation, tool, context, model, effort, lostAccess } = readRollout(lines)
   let prompt = ''
   let lastText = ''
   let question = ''
@@ -180,6 +225,7 @@ export function parseCodexTail(lines: readonly string[]): TranscriptInfo {
     ...(context !== undefined && { context }),
     ...(model && { model }),
     ...(effort && { effort }),
+    ...(lostAccess && { lostAccess }),
   }
 }
 

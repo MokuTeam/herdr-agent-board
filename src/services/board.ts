@@ -26,9 +26,10 @@ import { type HelperSummary, summarize } from '../core/helpers.ts'
 import { t } from '../core/lang.ts'
 import { slugName } from '../core/launch/names.ts'
 import { relate } from '../core/links.ts'
+import { lostAccessLine } from '../core/lost-access.ts'
 import { modelCheck, modelsConfig } from '../core/model-check.ts'
 import { isPiItem, isPiSessionFile, PI_AGENT, piSessionId } from '../core/pi.ts'
-import { sessionProfile } from '../core/profiles.ts'
+import { DEFAULT_PROFILE, sessionProfile } from '../core/profiles.ts'
 import { pendingOf, requestsOf, type SecretView, secretViews } from '../core/secrets.ts'
 import { numberTodos, type Todo, todosOf } from '../core/todos.ts'
 import type { AgentStatus, Attention, Card, Config, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
@@ -164,7 +165,14 @@ function pinOf(key: string, status: AgentStatus, card: Card): Pin | '' {
 }
 
 /** What the user is asked, for the card. */
-function askedText(attention: Attention, card: Card, info: TranscriptInfo, tool: ToolCall | null): string {
+function askedText(
+  attention: Attention,
+  card: Card,
+  info: TranscriptInfo,
+  tool: ToolCall | null,
+  lostLine = '',
+): string {
+  if (attention === 'access') return lostLine
   if (attention === 'ask') return card.ask || secretAsk(card)
   if (attention === 'question') return info.question ?? ''
   if (attention !== 'decision' || !tool?.pending) return ''
@@ -352,6 +360,7 @@ export async function collect(
   // The registries of every profile, hidden ones too (their running sessions keep their names and
   // titles), and of the folder the board's own env points to.
   const profiles = deps.profiles()
+  const shownProfileCount = profiles.list.filter(p => !p.hidden).length
   const dirs = [profiles.inheritedDir, ...profiles.list.map(p => p.dir)]
   const searched = [...new Set(dirs.map(dir => deps.homes.forDir(dir)))]
   const live = deps.homes.liveSessions(dirs)
@@ -404,9 +413,24 @@ export async function collect(
     const guess = categoryFor(cfg, base.cwd)
     // A Claude session's question form can be the hook's still (core/held-question.ts).
     const tool = pi || codex || agy ? (info.tool ?? null) : waitingTool(base.status, info, card.asking)
+    // A fork or call starts from copied transcript history: ignore lost-access errors recorded before it began.
+    const rawLost = info.lostAccess
+    const floorAt = call ? call.started : typeof card.forkAt === 'number' ? card.forkAt : 0
+    const lostAccess = rawLost && (!floorAt || !rawLost.at || rawLost.at >= floorAt) ? rawLost : undefined
     // A call agent's last words go to the call, its questions too: only its `board ask` asks the user.
-    const told: TranscriptInfo = call ? { ...info, question: '' } : info
+    const { lostAccess: _ignored, ...restInfo } = info
+    const told: TranscriptInfo = {
+      ...(call ? { ...restInfo, question: '' } : restInfo),
+      ...(lostAccess && { lostAccess }),
+    }
     const attention = attentionOf(base.status, card, told)
+    const sp = sessionProfile(card, profiles.list)
+    const profileRow = !pi && !codex && !agy && sp.profile ? profiles.list.find(p => p.id === sp.profile) : undefined
+    const lostProfileTitle =
+      profileRow && (shownProfileCount >= 2 || profileRow.hidden || profileRow.id !== DEFAULT_PROFILE)
+        ? profileRow.title || profileRow.id
+        : null
+    const lostLine = lostAccess ? lostAccessLine(lostAccess, lostProfileTitle, t) : ''
     const callOf = call ? callView(call, base.key) : null
     // Its own words on the board, else what its task board says it does.
     const doing = card.doing || callOf?.tasks.find(x => x.status === 'doing')?.text || ''
@@ -461,11 +485,12 @@ export async function collect(
           }),
       // its last words are an API error (#489, the away journal's "stopped on an error"); off the payload
       ...(info.apiError && { apiError: true as const }),
+      ...(lostAccess && { lostAccess }),
       ...context,
       tool,
       attention,
-      question: askedText(attention, card, told, tool),
-      askSince: attention === 'ask' ? (card.askSince ?? null) : null,
+      question: askedText(attention, card, told, tool, lostLine),
+      askSince: attention === 'ask' ? (card.askSince ?? null) : attention === 'access' ? lostAccess?.at || null : null,
       activity: info.activity ?? base.activity ?? 0,
       column: columnOf(base.status, card, told),
       pin, // the column the user dragged it to, or ''
@@ -486,7 +511,7 @@ export async function collect(
       ...(modelWrong && { modelWrong }), // another model than config.json's `models` expects (#429)
       transcript: transcriptPath,
       ...formerPanes(card), // panes wake closed as it went to sleep (#204), for the links
-      ...sessionProfile(card, profiles.list), // its profile, as its hooks reported it
+      ...sp, // its profile, as its hooks reported it
       claudeRoot: home?.root ?? null, // the folder its records were read from
     })
   }

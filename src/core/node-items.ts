@@ -107,7 +107,7 @@ const words =
 
 const COLUMN = oneOf('work', 'me', 'ext', 'done', 'idle')
 const STATUS = oneOf('idle', 'working', 'blocked', 'done', 'unknown', 'sleeping')
-const ATTENTION = oneOf('', 'decision', 'ask', 'question', 'later')
+const ATTENTION = oneOf('', 'decision', 'ask', 'question', 'later', 'access')
 
 const option = shape({ label: str(500), description: str(LEN.text), preview: str(8000) }, ['label', 'description'])
 const question = shape(
@@ -349,6 +349,15 @@ const ITEM: Record<string, Check> = {
   compact,
   secrets: list(secret, 20),
   launch: orNull(launch),
+  lostAccess: shape(
+    {
+      kind: oneOf('limit', 'logged_out', 'expired'),
+      resetsAt: orNull(num),
+      resetText: str(100),
+      at: num,
+    },
+    ['kind', 'resetsAt', 'at'],
+  ),
 }
 
 /** One item of a node, or null when it has no usable key or name, or is not the node's own. */

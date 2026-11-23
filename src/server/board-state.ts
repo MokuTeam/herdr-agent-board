@@ -52,6 +52,7 @@ import { collect } from '../services/board.ts'
 import type { Deps } from '../services/deps.ts'
 import { canCodexFork, canFork } from '../services/launch/fork.ts'
 import type { Launches } from '../services/launch/launches.ts'
+import { createLostAccessMonitor } from '../services/lost-access.ts'
 import type { NodeAggregate } from '../services/nodes/aggregate.ts'
 import { hooksInPlace } from '../services/profiles.ts'
 import { type Terminals, terminalOn } from '../services/terminals.ts'
@@ -480,6 +481,7 @@ export function createBoardState({
   // A session whose hooks report another profile than its start asked for gets a herdr notification,
   // once in this process; its card's red tag stays. A notification that fails is logged.
   const warned = new Set<string>()
+  const lostAccess = createLostAccessMonitor({ log })
   async function warnWrongProfiles(): Promise<void> {
     const wrong = items.filter(i => i.profileWanted && !warned.has(i.key))
     if (!wrong.length) return
@@ -567,6 +569,7 @@ export function createBoardState({
       publish()
       await warnWrongProfiles()
       await warnWrongModels()
+      if (await lostAccess.observe(items)) publish()
     } catch (err) {
       stale = true
       observeFailure?.()

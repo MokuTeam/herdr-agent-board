@@ -3,6 +3,7 @@
 
 import { type FormQuestion, questionsOf } from './dialogs/question-form.ts'
 import { t } from './lang.ts'
+import { parseLostAccess } from './lost-access.ts'
 import {
   boardNotice,
   type CallNotice,
@@ -240,6 +241,7 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
   const info: TranscriptInfo = { title: '', prompt: '', lastText: '', question: '', replied: false, tool: null }
   const results = new Set<string>() // tool_use ids that already have a result (seen later in the file)
   let compacted = false // a compaction came after every request still to be read: they say nothing of the context now
+  let accessSettled = false // newest assistant outcome decides whether access is currently lost (#632)
   let i = lines.length - 1
   for (; i >= 0 && !tailComplete(info); i--) {
     const line = lines[i]
@@ -294,6 +296,20 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
       continue
     }
     if (o.type !== 'assistant' || !Array.isArray(content)) continue
+    if (!accessSettled) {
+      const errorCode = typeof o.error === 'string' ? o.error : ''
+      if (o.isApiErrorMessage === true || errorCode) {
+        const errText = content
+          .map(b => saidIn(o, b))
+          .filter(Boolean)
+          .join('\n')
+        const hit = parseLostAccess(errText, { errorCode, at: Date.parse(str(o.timestamp)) || 0 })
+        if (hit) info.lostAccess = hit
+        accessSettled = true
+      } else if (message?.model !== '<synthetic>' && content.length > 0) {
+        accessSettled = true
+      }
+    }
     // The model it runs, for the card when the status line has not said (a synthetic message's is no model).
     if (!info.model && typeof message?.model === 'string' && message.model !== '<synthetic>') {
       info.model = message.model.slice(0, 60)

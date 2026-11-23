@@ -10,6 +10,7 @@
 // is now; a branch left behind with /tree is not read.
 import { posix, win32 } from 'node:path'
 import { AGY_AGENT } from './agy.ts'
+import { parseLostAccess } from './lost-access.ts'
 import { boardNotice } from './notices.ts'
 import {
   type ConversationTurn,
@@ -200,11 +201,13 @@ const tailComplete = (info: PiInfo): boolean => !!(info.prompt && info.lastText 
 export function parsePiTail(lines: readonly string[]): PiInfo {
   const info: PiInfo = { name: '', title: '', prompt: '', lastText: '', question: '', replied: false, tool: null }
   const results = new Set<string>() // tool calls that have a result (seen later in the file)
+  let accessSettled = false
   walkBranch(
     lines,
     (head, line) => {
       if (head.type !== 'message') return
-      const message = rec(parse(line)?.message)
+      const o = parse(line)
+      const message = rec(o?.message)
       const role = str(message?.role)
       if (role === 'toolResult') {
         results.add(str(message?.toolCallId))
@@ -218,6 +221,18 @@ export function parsePiTail(lines: readonly string[]): PiInfo {
         return
       }
       if (role !== 'assistant') return
+      if (!accessSettled) {
+        const stop = str(message?.stopReason)
+        if (stop === 'error') {
+          const errText = str(message?.errorMessage).trim() || textOf(message?.content).trim()
+          const at = num(message?.timestamp) || Date.parse(str(o?.timestamp)) || 0
+          const hit = parseLostAccess(errText, { at })
+          if (hit) info.lostAccess = hit
+          accessSettled = true
+        } else if (stop !== 'aborted') {
+          accessSettled = true
+        }
+      }
       const u = rec(message?.usage)
       if (info.context == null && u) {
         const tokens = num(u.input) + num(u.cacheRead) + num(u.cacheWrite)

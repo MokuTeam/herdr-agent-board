@@ -42,6 +42,7 @@ export const busy = (status: AgentStatus | string): boolean => status === 'worki
 /**
  * Why a session needs the user, or '':
  *   decision  a dialog in the terminal holds it (permission, a question form): herdr says blocked
+ *   access    the session's transcript ended in a lost-access error (usage limit, logged out, expired login)
  *   ask       the agent said so with `board ask` (cleared when the user replies), or it waits on a
  *             secret request only the user can fill (#273), even in the middle of its turn
  *   question  it ended its turn with a question nobody answered yet (unless the user waved that
@@ -51,7 +52,9 @@ export const busy = (status: AgentStatus | string): boolean => status === 'worki
  */
 export function attentionOf(status: AgentStatus | string, card?: Card | null, info?: TranscriptInfo | null): Attention {
   const secret = secretWaits(card)
-  if (status === 'working' && !secret) return ''
+  const access = !!info?.lostAccess
+  if (status === 'working' && !secret && !access) return ''
+  if (access) return isPin(card?.pin) && card.pin !== 'me' ? '' : 'access'
   if (status === 'blocked') return 'decision'
   const own: Attention =
     card?.ask || secret
@@ -64,7 +67,7 @@ export function attentionOf(status: AgentStatus | string, card?: Card | null, in
 }
 
 export function columnOf(status: AgentStatus | string, card?: Card | null, info?: TranscriptInfo | null): ColumnId {
-  if (status === 'working' && !secretWaits(card)) return 'work'
+  if (status === 'working' && !secretWaits(card) && !info?.lostAccess) return 'work'
   if (attentionOf(status, card, info)) return 'me'
   if (status === 'working') return 'work'
   if (isPin(card?.pin)) return card.pin

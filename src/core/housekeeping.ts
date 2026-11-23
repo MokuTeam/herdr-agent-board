@@ -284,7 +284,12 @@ export function planMemoryGuard(input: {
       skipped.push({ key: item.key, name, reason: 'running-helpers' })
       continue
     }
-    if (item.attention === 'decision' || item.attention === 'ask' || item.attention === 'question') {
+    if (
+      item.attention === 'decision' ||
+      item.attention === 'ask' ||
+      item.attention === 'question' ||
+      item.attention === 'access'
+    ) {
       skipped.push({ key: item.key, name, reason: 'waiting-on-owner' })
       continue
     }

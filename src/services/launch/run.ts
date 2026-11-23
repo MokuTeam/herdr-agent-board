@@ -210,6 +210,7 @@ export function launchRunner({
         ...(l.codexFork ? { name: l.name } : { profileWant: l.profile }),
         ...(l.model && { modelWant: l.model }),
         ...(l.fork && forkCard(l.fork)),
+        ...(l.parent && !l.fork && !l.resume && { parent: l.parent }),
       })
       l.carded = id
     },

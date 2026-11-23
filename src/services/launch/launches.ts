@@ -138,6 +138,7 @@ const LANE_ONLY = [
   'profileDir',
   'forkOf',
   'forkAt',
+  'parent',
 ]
 const laneOnly = (key: string): boolean => Object.keys(readCard(key) ?? {}).every(k => LANE_ONLY.includes(k))
 
@@ -385,6 +386,7 @@ export function createLaunches({
                 ? {}
                 : { profileWant: l.profile }),
             ...(l.model && { modelWant: l.model }),
+            ...(l.parent && !l.fork && !l.resume && { parent: l.parent }),
           })
           // pi's card is under its file and agy's under its conversation id: the start card goes once moved.
           if ((isPiItem(it) || isAgyItem(it)) && l.carded && laneOnly(l.carded)) removeCard(l.carded)

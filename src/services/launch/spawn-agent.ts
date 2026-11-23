@@ -82,6 +82,7 @@ import {
   spawnEnv,
 } from '../../core/profiles.ts'
 import { scrub } from '../../core/secrets.ts'
+import { agyCallerOf, codexCallerOf } from '../own-session.ts'
 import { renameLeft, screenNow } from './prompt.ts'
 
 /** A folder as given, absolute: ~ is the home folder, a relative one is from here. */
@@ -268,7 +269,16 @@ export interface SpawnResult {
 }
 
 // A card the start wrote before it knew the agent, with nothing on it but what a start writes.
-const START_ONLY = ['key', 'category', 'updatedAt', 'profileWant', 'modelWant', 'forkOf', 'forkAt']
+const START_ONLY = ['key', 'category', 'updatedAt', 'profileWant', 'modelWant', 'forkOf', 'forkAt', 'parent']
+
+/** The session (or pane-<id>) that ran spawn-agent from its own environment, else ''. */
+function callerParent(env: Env): string {
+  if (codexCallerOf(env, readCard)) return env.CODEX_THREAD_ID ?? ''
+  if (agyCallerOf(env, readCard)) return env.ANTIGRAVITY_CONVERSATION_ID ?? ''
+  if (env.CLAUDE_CODE_SESSION_ID) return env.CLAUDE_CODE_SESSION_ID
+  if (env.HERDR_PANE_ID) return `pane-${env.HERDR_PANE_ID}`
+  return ''
+}
 
 /**
  * pi's session is keyed by its file and Antigravity's by its own conversation id, not by the id
@@ -281,11 +291,13 @@ function moveStartCard(carded: string, target: string, profile: string | undefin
   const profileWant =
     profile ?? (typeof prior?.profileWant === 'string' && prior.profileWant ? prior.profileWant : undefined)
   const modelWant = model ?? (typeof prior?.modelWant === 'string' && prior.modelWant ? prior.modelWant : undefined)
+  const parent = typeof prior?.parent === 'string' && prior.parent ? prior.parent : undefined
   const existing = readCard(target)
   const patch = {
     ...(category && !existing?.category && { category }),
     ...(profileWant && { profileWant }),
     ...(modelWant && { modelWant }),
+    ...(parent && !existing?.parent && { parent }),
   }
   if (Object.keys(patch).length) writeCard(target, patch)
   if (prior && carded !== target && Object.keys(prior).every(k => START_ONLY.includes(k))) removeCard(carded)
@@ -461,14 +473,17 @@ export async function spawnAgent(
   }
   // The profile it is meant to be in, for the board to check against the one its hooks report: a
   // start that leaves the env as herdr makes it too, as herdr's env may point elsewhere; a resume too.
+  const boards = o.keepEnv || o.configDir !== undefined
+  const parent = !boards && !o.resume && !o.fork ? callerParent(env) : ''
   const carded = sessionId ?? o.sessionId ?? o.resume
   // A fork's card says whose fork it is, and since when: its copied lines are older (core/links.ts).
-  // The model it starts on, when one was asked for.
-  if (carded && (profile || o.model))
+  // The model it starts on, when one was asked for; and the caller that started it, if any.
+  if (carded && (profile || o.model || parent))
     writeCard(carded, {
       ...(profile && { profileWant: profile.id }),
       ...(o.model && { modelWant: o.model }),
       ...(o.fork && forkCard(o.fork)),
+      ...(parent && { parent }),
     })
   await herdr(['pane', 'run', pane, command])
 
@@ -536,6 +551,10 @@ export async function spawnAgent(
   if (kind === AGY_AGENT && !o.resume && session) {
     if (carded && carded !== session) moveStartCard(carded, session, profile?.id, o.model)
     else if (o.model) writeCard(session, { modelWant: o.model })
+  }
+  if (parent) {
+    const finalKey = session || `pane-${pane}`
+    if (finalKey !== carded && !readCard(finalKey)?.parent) writeCard(finalKey, { parent })
   }
 
   const agent = await nameInHerdr(pane, o.name, ticketNames)

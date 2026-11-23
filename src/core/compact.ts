@@ -281,7 +281,7 @@ export function compactStep(
   if (item.status === 'blocked' || item.attention === 'decision') return { do: 'wait', why: 'dialog' }
   // A question waiting on the owner, also one whose card the owner dragged to another column (the
   // pin hides it from `attention`; `auto` is where the card would be without it).
-  if (item.attention === 'ask' || item.attention === 'question' || item.auto === 'me')
+  if (item.attention === 'ask' || item.attention === 'question' || item.attention === 'access' || item.auto === 'me')
     return { do: 'wait', why: 'asked' }
   if (item.status !== 'idle' && item.status !== 'done') return { do: 'wait', why: item.status }
   return { do: 'compact', limit, setting }

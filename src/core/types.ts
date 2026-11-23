@@ -7,6 +7,7 @@ import type { FormQuestion } from './dialogs/question-form.ts'
 import type { HelperSummary } from './helpers.ts'
 import type { FailureKind } from './launch/launcher-command.ts'
 import type { ItemLinks } from './links.ts'
+import type { LostAccess } from './lost-access.ts'
 import type { LaunchPlace } from './placement.ts'
 import type { Todo } from './todos.ts'
 
@@ -22,7 +23,7 @@ export type AgentStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown' | 
 export type ColumnId = 'work' | 'me' | 'ext' | 'done' | 'idle'
 /** Columns the user can drag a card to. */
 export type Pin = 'me' | 'ext' | 'done' | 'idle'
-export type Attention = '' | 'decision' | 'ask' | 'question' | 'later'
+export type Attention = '' | 'decision' | 'ask' | 'question' | 'later' | 'access'
 
 /**
  * A Claude session observed mid-turn (#633, core/turn-resume.ts): kept on its card while
@@ -75,6 +76,8 @@ export interface Card {
   /** A fork's: the id of the session it is a fork of, and when it started (its copied lines are older). */
   forkOf?: string
   forkAt?: number
+  /** The session key or pane-<id> of the parent session that started this one with spawn-agent (#632). */
+  parent?: string
   /** The user keeps it in sight: first in its column, whole, left out of a tidy-up. */
   favorite?: boolean
   /** The last question form its PreToolUse hook reported (core/held-question.ts). */
@@ -303,6 +306,8 @@ export interface TranscriptInfo {
   replied?: boolean
   /** lastText is Claude Code's own API error message (isApiErrorMessage on its line, #489). */
   apiError?: boolean
+  /** The newest turn ended in a lost-access error (usage limit, logged out, expired login) with no success after (#632). */
+  lostAccess?: LostAccess
   /** The time of its newest user or assistant line. */
   lastAt?: number
   /** Claude Code's newest recap of the session (away_summary, #321) and its time; absent with none. */
@@ -352,6 +357,8 @@ export interface Item {
   lastText?: string
   /** Its last words are Claude Code's own API error message (isApiErrorMessage, #489); absent otherwise. Kept off the payload. */
   apiError?: true
+  /** Lost-access state from the session's transcript (#632); cleared on the next successful turn. */
+  lostAccess?: LostAccess
   /** The time of its transcript's newest user or assistant line (#321), else null. */
   lastAt?: number | null
   /** Claude Code's newest recap of the session and its time (#321): '' and null with none. */

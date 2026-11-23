@@ -52,7 +52,14 @@ function marker(it: Item): { text: string; color: string } {
       ? { text: `▶ ${it.tool.label ?? it.tool.name}${it.tool.detail ? ` ${it.tool.detail}` : ''}`, color: 'green' }
       : { text: `▶ ${t('card.thinking')}`, color: 'green' }
   if (it.column === 'me') {
-    const why = it.attention === 'decision' ? 'att.decision' : it.attention === 'later' ? 'att.later' : 'att.ask'
+    const why =
+      it.attention === 'decision'
+        ? 'att.decision'
+        : it.attention === 'later'
+          ? 'att.later'
+          : it.attention === 'access'
+            ? 'att.access'
+            : 'att.ask'
     return { text: t(why), color: 'yellow' }
   }
   return { text: '', color: 'gray' }
