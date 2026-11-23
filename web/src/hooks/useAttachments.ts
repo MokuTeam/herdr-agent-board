@@ -24,10 +24,10 @@ export interface AttachmentsApi {
 const uploadError = (err: unknown, t: Translator): string =>
   err instanceof ApiError ? errorText(err, t) : err instanceof Error ? err.message : String(err)
 
-export function useAttachments(): AttachmentsApi {
+export function useAttachments(sessionKey?: string | null): AttachmentsApi {
   const t = useT()
   const { canEdit, toast } = useBoardContext()
-  const latest = useLatest({ t, canEdit, toast })
+  const latest = useLatest({ t, canEdit, toast, sessionKey })
   const [list, setList] = useState<readonly Attachment[]>([])
   // The list as of now, for uploads that finish later.
   const current = useRef(list)
@@ -43,19 +43,19 @@ export function useAttachments(): AttachmentsApi {
 
     // In a phone's browser the network may still be waking when the page comes back from the
     // picker: an upload that did not get through is tried again, three times a second apart.
-    async function send(a: Attachment, file: File, tries: number): Promise<string> {
+    async function send(a: Attachment, file: File, tries: number, key: string | null): Promise<string> {
       try {
-        return await api.upload(a.name, file)
+        return await api.upload(a.name, file, key)
       } catch (err) {
         if (tries <= 1 || err instanceof ApiError) throw err
         await new Promise(resolve => setTimeout(resolve, 1000))
-        return send(a, file, tries - 1)
+        return send(a, file, tries - 1, key)
       }
     }
 
-    async function upload(a: Attachment, file: File): Promise<void> {
+    async function upload(a: Attachment, file: File, key: string | null): Promise<void> {
       try {
-        update(a.id, { status: 'done', path: await send(a, file, remotePage() ? 4 : 1) })
+        update(a.id, { status: 'done', path: await send(a, file, remotePage() ? 4 : 1, key) })
       } catch (err) {
         if (remotePage())
           pageLog(`upload ${a.name} (${file.type || 'no type'}, ${file.size} B): ${uploadError(err, latest.current.t)}`)
@@ -67,13 +67,14 @@ export function useAttachments(): AttachmentsApi {
 
     return {
       add(files: readonly File[]): void {
-        const { t, canEdit, toast } = latest.current
+        const { t, canEdit, toast, sessionKey } = latest.current
         // A phone's browser comes back from the photo picker or the camera before the board's live
         // connection does (the page was hidden): the files are kept and uploaded, not dropped (#102).
         if (!canEdit && !remotePage()) {
           toast(t('live.off'), true)
           return
         }
+        const key = sessionKey ?? null
         const added = files.map(given => {
           const renamed = screenshotName(given.name, new Date())
           const file = renamed ? new File([given], renamed, { type: given.type }) : given
@@ -90,7 +91,7 @@ export function useAttachments(): AttachmentsApi {
           return { a, file }
         })
         commit([...current.current, ...added.map(({ a }) => a)])
-        for (const { a, file } of added) void upload(a, file)
+        for (const { a, file } of added) void upload(a, file, key)
       },
       remove(id: number): void {
         const gone = current.current.find(a => a.id === id)

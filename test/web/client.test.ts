@@ -293,3 +293,36 @@ test('an upload posts the file itself with X-Board, its name and type; it answer
   answer(200, '{"ok":false}')
   expect(errorText(await api.upload('x', new Blob(['x'])).catch((err: unknown) => err), t)).toBe('Error 200')
 })
+
+test('an upload for a node session adds ?key=; local keys and plain setups keep /api/upload (#640)', async () => {
+  const file = new File(['png'], 'скрин 100%.png', { type: 'image/png' })
+  for (const key of [
+    '@server-2:509dfc37-b58e-4851-9988-a8c7befe9f0d',
+    '@server-2:pane-w5:p9',
+    '@server-2:/home/юзер/a b 100%.jsonl',
+    '@server-2:C:\\Users\\a b\\100%.jsonl',
+  ]) {
+    const calls = answer(200, JSON.stringify({ ok: true, path: '/srv/uploads/2026-11-23/shot.png' }))
+    expect(await api.upload(file.name, file, key)).toBe('/srv/uploads/2026-11-23/shot.png')
+    expect(calls[0]?.url).toBe(`/api/upload?key=${encodeURIComponent(key)}`)
+    expect(calls[0]?.init?.headers).toEqual({
+      'x-board': '1',
+      'x-filename': encodeURIComponent(file.name),
+      'content-type': 'image/png',
+    })
+  }
+  for (const key of [
+    undefined,
+    null,
+    '',
+    '509dfc37-b58e-4851-9988-a8c7befe9f0d',
+    'pane-w1:p2',
+    'C:\\Users\\a b\\100%.jsonl',
+    '/home/юзер/a b 100%.jsonl',
+    '@local:pane-w1:p2',
+  ]) {
+    const calls = answer(200, JSON.stringify({ ok: true, path: '/local/uploads/x.png' }))
+    expect(await api.upload('x.png', file, key)).toBe('/local/uploads/x.png')
+    expect(calls[0]?.url).toBe('/api/upload')
+  }
+})

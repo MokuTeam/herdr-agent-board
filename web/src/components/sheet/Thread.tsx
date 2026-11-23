@@ -141,7 +141,7 @@ function ThreadTurn({ part, item, links, helper }: TurnProps) {
     return (
       <div ref={settle} className={`msg ${role}`}>
         <MessageText text={text} cut={cut} onResize={links.onResize} />
-        <Thumbs text={text} />
+        <Thumbs text={text} sessionKey={item.key} />
         <span className="when">{clockText(at, t)}</span>
         {turn.role === 'assistant' && links.onPin && (
           <button
@@ -179,8 +179,8 @@ function ThreadTurn({ part, item, links, helper }: TurnProps) {
 }
 
 /** Previews of the images a message names from the board's uploads. */
-function Thumbs({ text }: { text: string }) {
-  const thumbs = uploadThumbs(text)
+function Thumbs({ text, sessionKey }: { text: string; sessionKey?: string | undefined }) {
+  const thumbs = uploadThumbs(text, sessionKey)
   if (!thumbs.length) return null
   return (
     <div className="thumbs">
@@ -199,6 +199,8 @@ export interface WaitingProps {
   queued: readonly QueuedPrompt[]
   /** The board's own messages on their way, not in the transcript yet, or not sent (useComposer). */
   own: readonly OutboxEntry[]
+  /** The session's key, so a node session's upload previews route through the master proxy. */
+  sessionKey?: string | undefined
   onRetry?: ((id: string, anyway?: boolean) => void) | undefined
   onEdit?: ((id: string) => void) | undefined
   /**
@@ -216,7 +218,7 @@ const SEND_NOW_MS = 15_000
  * not taken in yet (typed in its terminal or sent from here), then the board's own on their way
  * or not sent. Quiet bubbles; once Claude has one, it is an ordinary bubble in the same place.
  */
-export function Waiting({ queued, own, onRetry, onEdit, onSendNow }: WaitingProps) {
+export function Waiting({ queued, own, sessionKey, onRetry, onEdit, onSendNow }: WaitingProps) {
   return (
     <>
       {queued.map((m, n) => (
@@ -224,11 +226,12 @@ export function Waiting({ queued, own, onRetry, onEdit, onSendNow }: WaitingProp
         <QueuedBubble
           key={`${m.at}-${queued.slice(0, n).filter(o => o.at === m.at).length}`}
           m={m}
+          sessionKey={sessionKey}
           onSendNow={onSendNow}
         />
       ))}
       {own.map(e => (
-        <OwnBubble key={e.id} entry={e} onRetry={onRetry} onEdit={onEdit} />
+        <OwnBubble key={e.id} entry={e} sessionKey={sessionKey} onRetry={onRetry} onEdit={onEdit} />
       ))}
     </>
   )
@@ -239,7 +242,15 @@ export function Waiting({ queued, own, onRetry, onEdit, onSendNow }: WaitingProp
  * on a touch screen) while the board can send it in now. Pressed, it says "Sending now…" until it
  * leaves the queue, or offers Send now again if it has not after a while.
  */
-function QueuedBubble({ m, onSendNow }: { m: QueuedPrompt; onSendNow: WaitingProps['onSendNow'] }) {
+function QueuedBubble({
+  m,
+  sessionKey,
+  onSendNow,
+}: {
+  m: QueuedPrompt
+  sessionKey?: string | undefined
+  onSendNow: WaitingProps['onSendNow']
+}) {
   const t = useT()
   const [sending, setSending] = useState(false)
   useEffect(() => {
@@ -257,7 +268,7 @@ function QueuedBubble({ m, onSendNow }: { m: QueuedPrompt; onSendNow: WaitingPro
     <div className={classNames('msg user waiting', sending && 'sending-now')} title={t('queue.hint')}>
       {/* biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags */}
       <div className="md" dangerouslySetInnerHTML={{ __html: markdown(m.text) }} />
-      <Thumbs text={m.text} />
+      <Thumbs text={m.text} sessionKey={sessionKey} />
       <span className="when">
         <ClockGlyph />
         {t(sending ? 'turn.sendingNow' : 'queue.queued')}
@@ -275,7 +286,12 @@ function QueuedBubble({ m, onSendNow }: { m: QueuedPrompt; onSendNow: WaitingPro
 const arrived = new Set<string>()
 
 /** One of the board's own messages: "Sending…", or "Not sent" with why, Retry and Edit. */
-function OwnBubble({ entry: e, onRetry, onEdit }: { entry: OutboxEntry } & Omit<WaitingProps, 'queued' | 'own'>) {
+function OwnBubble({
+  entry: e,
+  sessionKey,
+  onRetry,
+  onEdit,
+}: { entry: OutboxEntry } & Omit<WaitingProps, 'queued' | 'own'>) {
   const t = useT()
   const bubble = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
@@ -297,7 +313,7 @@ function OwnBubble({ entry: e, onRetry, onEdit }: { entry: OutboxEntry } & Omit<
     <div ref={bubble} className={classNames('msg user waiting', failed && 'failed')} data-out={e.id}>
       {/* biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags */}
       <div className="md" dangerouslySetInnerHTML={{ __html: markdown(e.full) }} />
-      <Thumbs text={e.full} />
+      <Thumbs text={e.full} sessionKey={sessionKey} />
       {failed ? (
         <>
           <span className="when">

@@ -71,7 +71,7 @@ export function useComposer(
   const t = useT()
   const board = useBoardContext()
   const actions = useSessionActions()
-  const attachments = useAttachments()
+  const attachments = useAttachments(board.ui.open)
   const [text, setText] = useState('')
   const [sending, setSending] = useState<ReadonlySet<string>>(() => new Set())
   const [version, setVersion] = useState(0)
@@ -136,7 +136,9 @@ export function useComposer(
     input: session.input,
     send: () => void session.send(),
     discard: session.discard,
-    addFiles: attachments.add,
+    addFiles: files => {
+      if (latest.current.board.ui.open) attachments.add(files)
+    },
     removeFile: attachments.remove,
     outbox: {
       waiting: key => session.waiting(key, open, openDetail),
