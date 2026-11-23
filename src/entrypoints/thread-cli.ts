@@ -304,7 +304,8 @@ export interface ThreadCmdContext {
 export interface NodeCall {
   /** A write that can wait carries an id of its own: the same call tried again is one call. */
   id?: string
-  cmd: 'thread'
+  /** `send`: `board send` (#619, entrypoints/cli.ts), never kept. */
+  cmd: 'thread' | 'send'
   argv: string[]
   session: string
   lane: string | null
@@ -501,7 +502,7 @@ async function forward(
 }
 
 /** `POST /api/node/call` on this computer's board; null when no board answers there. */
-const callBoard =
+export const callBoard =
   (port: unknown) =>
   async (body: NodeCall): Promise<NodeCallAnswer> => {
     try {

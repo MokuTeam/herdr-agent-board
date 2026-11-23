@@ -13,7 +13,11 @@
 // profile shown (#251), the other shown profiles' sessions come after: ListAgents lists them, and
 // SendMessage to a name that only they have (not the caller's profile, running or asleep) is
 // delivered by the board as a reminder from the caller, the native call denied with why. With one
-// shown, both go as before. config.json's kill switch is read first: wake off, or a config.json
+// shown, both go as before. With `nodes` in config.json (#619), the sessions on the board's nodes
+// come last: ListAgents lists them from the board's payload, and SendMessage to a name only a node's
+// session has (nothing on this computer has it) is queued by the board for its key, which the
+// scheduler sends through the node. Without `nodes` the board is asked nothing. config.json's kill
+// switch is read first: wake off, or a config.json
 // that does not parse, and wake is asked nothing. Wake not running or not answering, or anything
 // else amiss: silent, and the tool runs as it would.
 import { existsSync } from 'node:fs'
@@ -202,16 +206,16 @@ async function sendElsewhere(
   sleeping: Entry[],
   port: number,
   raw: Record<string, unknown> | null,
-): Promise<void> {
+): Promise<boolean> {
   const message = isRecord(input.tool_input) ? input.tool_input.message : undefined
-  if (typeof message !== 'string') return
+  if (typeof message !== 'string') return true
   const set = otherProfiles()
-  if (!set) return
+  if (!set) return false
   const { createClaudeHome } = await import('../adapters/claude-home.ts')
   const live = (dir: string) => [...createClaudeHome(dir).liveSessions().values()]
   const byRef = (id: string): boolean => ref.length < 8 || id.toLowerCase().startsWith(ref)
   const own = live(set.ownDir)
-  if (own.some(s => s.name?.toLowerCase() === to && byRef(s.sessionId))) return
+  if (own.some(s => s.name?.toLowerCase() === to && byRef(s.sessionId))) return true
   const fits = new Map<string, Fit>()
   let awake: Entry[] | null | undefined
   let day: string | null | undefined
@@ -241,7 +245,21 @@ async function sendElsewhere(
       })
     }
   }
-  if (!fits.size) return
+  if (!fits.size) return false
+  await queueElsewhere(fits, to, message, input, raw, set, own)
+  return true
+}
+
+/** sendElsewhere's one fit queued through the board, or the deny that says why not. */
+async function queueElsewhere(
+  fits: Map<string, Fit>,
+  to: string,
+  message: string,
+  input: Record<string, unknown>,
+  raw: Record<string, unknown> | null,
+  set: NonNullable<ReturnType<typeof otherProfiles>>,
+  own: { sessionId: string; name?: string }[],
+): Promise<void> {
   const [{ addEntry, schedulerRuns }, { cleanName, cleanText, MAX_TEXT }] = await Promise.all([
     import('../adapters/schedule-store.ts'),
     import('../core/schedule-rules.ts'),
@@ -314,6 +332,97 @@ async function sendElsewhere(
   )
 }
 
+/** The board's payload when config.json has `nodes` (#619) and the board answers; null otherwise, with no call. */
+async function nodesPayload(raw: Record<string, unknown> | null): Promise<Record<string, unknown> | null> {
+  if (!isRecord(raw?.nodes)) return null
+  const body = await api(Number(raw.port) || 12422, '/api/board', null, 3000).catch(() => null)
+  return isRecord(body) ? body : null
+}
+
+/** ListAgents (#619): the sessions on the board's nodes, each with its node and state; null for none. */
+async function nodesContext(raw: Record<string, unknown> | null): Promise<string | null> {
+  const payload = await nodesPayload(raw)
+  if (!payload) return null
+  const { offlineDevices, labelOf, targetsOf } = await import('../core/agent-send.ts')
+  const offline = offlineDevices(payload)
+  const rows = targetsOf(payload.items)
+    .filter(t => t.device)
+    .map(
+      t =>
+        `  ${labelOf(t)}  ·  node ${t.device}  ·  ${t.sleeping ? 'asleep' : t.status || 'live'}` +
+        (offline.has(t.device ?? '') ? '  ·  node offline now: goes out once it is back' : ''),
+    )
+  if (!rows.length) return null
+  return (
+    `Sessions on the board's nodes, other computers (not listed above: Claude Code knows only this computer's). ` +
+    `SendMessage to one by name goes through the board: it types the message in once the session is free, waking ` +
+    `it first if it sleeps, and the reply comes back as a board reminder. Two with one name: add the ref in ` +
+    `brackets, as listed. \`board send "<name>" "<text>"\` does the same from a shell.\n${rows.join('\n')}`
+  )
+}
+
+/**
+ * SendMessage to `named` that neither this profile nor another one on this computer has (#619): when
+ * config.json has `nodes` and exactly one session on a node has the name, the board takes it (an
+ * entry due now that the scheduler sends through the node, typed in once the session is free) and the
+ * native call is denied saying so; two or more are refused, listed with their refs; none, or a name a
+ * session of this profile has: left to Claude Code. Without `nodes`, nothing is asked.
+ */
+async function sendToNode(named: string, input: Record<string, unknown>, raw: Record<string, unknown> | null) {
+  if (!isRecord(raw?.nodes)) return
+  const message = isRecord(input.tool_input) ? input.tool_input.message : undefined
+  if (typeof message !== 'string') return
+  const sid = String(input.session_id ?? '') || process.env.CLAUDE_CODE_SESSION_ID || ''
+  if (!sid) return
+  const { createClaudeHome } = await import('../adapters/claude-home.ts')
+  const live = [
+    ...createClaudeHome(resolveProfileDir(process.env.CLAUDE_CONFIG_DIR, homedir())).liveSessions().values(),
+  ]
+  const A = await import('../core/agent-send.ts')
+  const { to, ref } = A.parseTo(named)
+  // This profile's own session of that name is Claude Code's, as before.
+  if (live.some(s => s.name?.toLowerCase() === to && (ref.length < 8 || s.sessionId.toLowerCase().startsWith(ref))))
+    return
+  const payload = await nodesPayload(raw)
+  if (!payload) return
+  const all = A.targetsOf(payload.items)
+  const fits = A.matching(
+    all.filter(t => t.device),
+    named,
+  )
+  const [target] = fits
+  if (!target) return
+  if (fits.length > 1)
+    return deny(
+      `Not sent: "${to}" fits more than one session on the board's nodes (${fits.map(t => `${A.labelOf(t)} on node ${t.device}`).join(', ')}). ` +
+        `Send it to one of them by its name with its ref, as listed.`,
+    )
+  const m = A.messageText(message)
+  if ('error' in m) return deny(`Not sent: ${m.error}.`)
+  // Signed with this session's name on the board: `board send` on the node finds it by that name.
+  const mine = all.find(t => t.key === sid)
+  const name = mine?.name ?? live.find(s => s.sessionId === sid)?.name?.trim() ?? ''
+  const device = A.ownDeviceOf(payload) || 'the board'
+  const { addEntry, schedulerRuns } = await import('../adapters/schedule-store.ts')
+  try {
+    addEntry(A.messageEntry(target, m.text, { key: sid, name, device }, Date.now()))
+  } catch (err) {
+    return deny(
+      `Not sent: ${target.name} runs on node ${target.device}, and the board could not take the message: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+  const down = (await schedulerRuns(raw?.web !== false, async () => payload))
+    ? ''
+    : ' Note: no board with the scheduler is running now; it goes out once one runs.'
+  deny(
+    `Queued for ${target.name} on node ${target.device} through the board (Claude Code reaches only this ` +
+      `computer's sessions, so it did not send it): the board types it in as a board reminder from ` +
+      `${name || sid.slice(0, 8)} once ${target.name} is free, waking it first if it sleeps.${down} Do not send it ` +
+      `again. The reply comes back the same way, as a board reminder from ${target.name}.`,
+  )
+}
+
 async function main(): Promise<void> {
   const mode = process.argv[2]
   if (mode !== 'pre-send' && mode !== 'post-list') return
@@ -336,7 +445,11 @@ async function main(): Promise<void> {
     if (!to) return
     const sleeping = entries(await api(settings.port, '/sleeping', null, 3000))
     const target = sleeping && own(sleeping).find(s => s.name.toLowerCase() === to)
-    if (sleeping && !target) return sendElsewhere(to, ref, input, sleeping, settings.port, raw)
+    if (sleeping && !target) {
+      if (await sendElsewhere(to, ref, input, sleeping, settings.port, raw)) return
+      // Nothing on this computer has the name: a node's session may (#619).
+      return sendToNode(named, input, raw)
+    }
     // By its session id: its name may be another profile's sleeper's too.
     const id = target && [target.session, target.pane].find(v => typeof v === 'string' && v !== '')
     if (!target || !id) return
@@ -361,7 +474,9 @@ async function main(): Promise<void> {
     const set = otherProfiles()
     others = set && othersContext(sleeping, awake, set.others, settings.listSleepingDays)
   } catch {}
-  const context = [ownPart, others].filter(Boolean).join('\n\n')
+  // The nodes' sessions (#619) on their own too: only with `nodes` in config.json.
+  const onNodes = await nodesContext(raw).catch(() => null)
+  const context = [ownPart, others, onNodes].filter(Boolean).join('\n\n')
   if (context)
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }))
 }

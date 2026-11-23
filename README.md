@@ -1458,6 +1458,12 @@ an hour to sleep, when it is on). The board's entries are files, and the board k
 - An entry belongs to the session it is for. After `/clear`, which gives the session a new id,
   it goes to the Claude session now in the same pane and folder (the folder herdr gives the
   pane, not the shell's after a `cd`), and the prompt says it was set before `/clear`.
+- `board send <name|key> "<text>"` (#619) sends a message to any session on the board, this
+  computer's or a node's, due now and typed in once it is free, waking it first if it sleeps.
+  A name two sessions share takes the ref the error lists (`"Name [1a2b3c4d]"`). The receiver's
+  prompt says how to answer: `board send "<sender> [<ref>]" "<answer>"`, from whichever computer
+  it runs on. On a node the command goes to the master over the uplink; with the master away it
+  fails and says so.
 - `--session` sets one for another session; the tag then names who set it,
   `[board reminder from <name>] <text>`, since the receiver takes it as a prompt. Control
   characters are taken out of the text.
@@ -1917,7 +1923,14 @@ reply comes back the same way (or why it cannot: the caller has no Claude name, 
 hidden). A running session counts only when herdr runs it (`/awake`); a ref of 8 or more hex
 characters after the name picks one session among several of that name; a name that still fits
 several is refused with each listed, with its ref. Only a text message goes this way, and one
-longer than 2000 characters is refused, not cut. Neither runs on any other tool, nor on every
+longer than 2000 characters is refused, not cut. On a board with nodes (config.json `nodes`, #619),
+ListAgents also lists the sessions on the nodes, each with its node, its ref and whether it is
+live or asleep, and `SendMessage` to a name that only a node's session has (nothing on this
+computer, in any profile) goes through the board the same way: a reminder due now for its key,
+which the scheduler sends through the node, "[board reminder from <caller's name on the board>;
+from <this computer>, answer with board send "<name> [<ref>]" "<your answer>"] <text>". A card
+whose pane an awake card of another session holds now is not offered. Without `nodes` neither
+hook asks the board anything. Neither runs on any other tool, nor on every
 prompt, and neither asks anything while wake is off. The install does not write them
 beside the separate herdr-wake plugin's: it says so, and "Switch over…" moves them.
 

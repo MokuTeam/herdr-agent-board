@@ -213,7 +213,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | update | presence [here | away | call] | journal [--since <when> | --away] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | update | presence [here | away | call] | journal [--since <when> | --away] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal'])
@@ -435,6 +435,52 @@ async function boardProfiles(): Promise<ProfileSet> {
   const listed = Array.isArray(body?.profiles) ? body.profiles : []
   const own = listed.find(p => isRecord(p) && p.inherited === true)
   return isRecord(own) && typeof own.dir === 'string' ? profileSet(set.list, own.dir) : set
+}
+
+/**
+ * `board send <name|key> "<text>"` (#619, core/agent-send.ts): a message to a session on the board,
+ * this computer's or a node's, typed in once it is free and waking it first if it sleeps; the answer
+ * comes back the same way. A name two sessions share takes the ref the list shows ("Name [1a2b3c4d]").
+ * On a node it goes to the master, which holds the board (services/nodes/uplink.ts), and is not kept
+ * when the master is not there.
+ */
+async function sendCmd(): Promise<void> {
+  const [to = '', ...more] = words
+  const message = more.join(' ').trim()
+  if (!to.trim() || !message) throw new Error('usage: board send <name|key> "<text>"')
+  const s = await resolveSession()
+  const { nodeConfig } = await import('../core/nodes.ts')
+  if (nodeConfig(cfg.node)) {
+    const { callBoard } = await import('./thread-cli.ts')
+    const answer = await callBoard(cfg.port)({
+      cmd: 'send',
+      argv: [to, message],
+      session: s.key,
+      lane: null,
+      files: [],
+    })
+    if (!answer) throw new Error('the board does not run on this computer: nothing was sent')
+    if (answer.state !== 'answered') throw new Error("the board's computer is not reachable: nothing was sent")
+    for (const l of answer.out) console.log(l)
+    for (const l of answer.err) console.error(l)
+    process.exitCode = answer.code
+    return
+  }
+  const body = cfg.web === false ? null : await boardAnswer()
+  if (!body) throw new Error('the board does not run: nothing was sent (open it first)')
+  const A = await import('../core/agent-send.ts')
+  const targets = A.targetsOf(body.items)
+  const plan = A.planSend({
+    targets,
+    to,
+    message,
+    from: { key: s.key, name: targets.find(t => t.key === s.key)?.name ?? s.name ?? '', device: null },
+    own: A.ownDeviceOf(body),
+    now: Date.now(),
+  })
+  if ('error' in plan) throw new Error(plan.error)
+  addEntry(plan.entry)
+  console.log(`${plan.line}${await schedulerNote()}`)
 }
 
 /** A note for the agent when no board with the scheduler runs to send it. */
@@ -980,6 +1026,7 @@ async function main(): Promise<void> {
   if (cmd === 'time') return timeCommand()
   if (cmd === 'cal') return calCommand()
   if (cmd === 'thread') return threadCommand()
+  if (cmd === 'send') return sendCmd()
   if (cmd === 'workdesk') {
     if (target !== undefined) throw new Error('Workdesk workers uses the calling master session')
     const { workdeskWorkerCommand } = await import('../services/workdesk-workers.ts')

@@ -10,8 +10,8 @@
 import { hasUnprintable } from './team.ts'
 import { FILE_MAX_BYTES, FILES_MAX } from './work-threads.ts'
 
-/** The commands a master takes from a node: `board thread` only (stage 1, 10 item 6). */
-export const UPLINK_COMMANDS: ReadonlySet<string> = new Set(['thread', 'threads'])
+/** The commands a master takes from a node: `board thread` (stage 1, 10 item 6) and `board send` (#619). */
+export const UPLINK_COMMANDS: ReadonlySet<string> = new Set(['thread', 'threads', 'send'])
 
 /** The exit code of a call the master does not take, whatever the node sent. */
 export const UPLINK_REFUSED = 126

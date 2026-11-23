@@ -1,4 +1,5 @@
-// A stand-in for wake's local API (GET /status, /alive, /sleeping, /awake; POST /wake, /sleep) on a port of
+// A stand-in for wake's local API (GET /status, /alive, /sleeping, /awake; POST /wake, /sleep), and the
+// web board's GET /api/board when given one, on a port of
 // the test's own: Bun.serve on port 0, so never wake's 12421 nor the web board's 12422. It records
 // every request it takes. Switches: `slow` holds every request unanswered while it is on; `down()`
 // stops listening (a connection is refused), `up()` listens on the same port again. Stopped once the
@@ -27,6 +28,8 @@ export interface FakeWakeOptions {
    * Without it, the board's wake: /alive answers its pid, /status has Telegram's state (off).
    */
   oldRouter?: boolean
+  /** GET /api/board's answer (#619): the web board's payload, for a config.json whose `port` is this one's. */
+  board?: unknown
 }
 
 export interface FakeWake {
@@ -87,6 +90,7 @@ export async function fakeWake(o: FakeWakeOptions = {}): Promise<FakeWake> {
       return fake.awake ? json(fake.awake) : new Response(null, { status: 404 })
     if (req.method === 'POST' && path === '/wake') return json(o.wake ? o.wake(target) : { ok: true })
     if (req.method === 'POST' && path === '/sleep') return json(o.sleep ? o.sleep(target) : { ok: true })
+    if (req.method === 'GET' && path === '/api/board' && o.board !== undefined) return json(o.board)
     return new Response(null, { status: 404 })
   }
   function listen(port: number): ReturnType<typeof Bun.serve> {

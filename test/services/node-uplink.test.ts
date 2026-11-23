@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createOutbox } from '../../src/adapters/node-outbox.ts'
 import { createDeviceStore } from '../../src/adapters/node-store.ts'
+import { listEntries } from '../../src/adapters/schedule-store.ts'
 import type { UplinkResult } from '../../src/core/node-uplink.ts'
 import type { LinkStatus } from '../../src/core/nodes.ts'
 import type { Item } from '../../src/core/types.ts'
@@ -32,6 +33,7 @@ afterEach(() => {
   }
 })
 
+const N1 = '7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e'
 const sha = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex')
 
 /** The events a node's stream sends, read until `n` calls came. */
@@ -411,7 +413,7 @@ describe("the master's side", () => {
     await runner.close()
     expect(ran).toBe(0)
     expect(Object.fromEntries(posted)).toEqual({
-      'r-1': { code: 126, out: [], err: ['board time is not taken from a node: only board thread'] },
+      'r-1': { code: 126, out: [], err: ['board time is not taken from a node: only board thread and board send'] },
       'r-2': { code: 126, out: [], err: ["only a session's board thread is taken from a node"] },
       'r-3': { code: 126, out: [], err: ['board thread share is for the owner to confirm: not from a node'] },
       'r-4': { code: 126, out: [], err: ['board thread open opens the board on its own computer: not from a node'] },
@@ -423,6 +425,76 @@ describe("the master's side", () => {
     // The file too large is never asked for.
     expect(fetched).toEqual(['/api/node/uplink/r-6/file/0'])
     expect(existsSync(join(dir, 'nodes', 'server-1', 'uplink'))).toBe(false)
+  })
+
+  test("#619 a node session's board send is queued here for the card it names, signed with its prefixed key; not remembered as a write", async () => {
+    const dir = isolatedHome()
+    const store = createDeviceStore({ dir: join(dir, 'nodes') })
+    const sent = [
+      { id: 's-1', cmd: 'send', argv: ['Monitor', 'done: case 42'], session: 'n-1', lane: null },
+      { id: 's-2', cmd: 'send', argv: ['nobody', 'x'], session: 'n-1', lane: null },
+      { id: 's-3', cmd: 'send', argv: ['@server-1:n-1', 'to myself'], session: 'n-1', lane: null },
+      { id: 's-4', cmd: 'send', argv: ['Monitor', 'from the twin'], session: N1, lane: null },
+    ]
+    const posted = new Map<string, UplinkResult>()
+    const link = standIn((path, init) => {
+      if (path === '/api/node/uplink') return streamOf(sent, init.signal)
+      posted.set(path.split('/').pop() as string, JSON.parse(String(init.body)))
+      return new Response('{}')
+    })
+    const mine = { key: '@server-1:n-1', session: 'n-1', name: 'worker', device: 'server-1', pane: 'w1:p1' } as Item
+    const twin = { ...mine, key: `@server-1:${N1}`, session: N1, pane: 'w1:p2' } as Item
+    const monitor = {
+      key: '3e4f5a6b-7c8d-4e9f-8a0b-1c2d3e4f5a6b',
+      session: '3e4f5a6b-7c8d-4e9f-8a0b-1c2d3e4f5a6b',
+      name: 'Monitor',
+      pane: 'w2:p3',
+      cwd: 'C:\\Work',
+    } as Item
+    const runner = createUplinkRunner({
+      links: link.links,
+      find: key => [mine, twin, monitor].find(i => i.key === key),
+      items: () => [mine, twin, monitor],
+      cfg: { threads: true, nodes: { id: 'laptop' } } as never,
+      log: () => {},
+      store,
+      run: async () => {
+        throw new Error('not a thread command')
+      },
+    })
+    link.changed('online')
+    await until(() => posted.size === sent.length, 5000)
+    await runner.close()
+    expect(Object.fromEntries(posted)).toEqual({
+      's-1': {
+        code: 0,
+        out: [
+          'ok · queued for Monitor [3e4f5a6b] on laptop: the board types it in once it is free, waking it first if it sleeps; the answer comes back as a board reminder',
+        ],
+        err: [],
+      },
+      's-2': { code: 1, out: [], err: ['no session "nobody" on the board'] },
+      's-3': { code: 1, out: [], err: ['that is this session: nothing was sent'] },
+      's-4': expect.objectContaining({ code: 0 }),
+    })
+    // Two sessions' calls run side by side: the entries in the order of their texts.
+    expect(listEntries().sort((a, b) => a.text.localeCompare(b.text))).toMatchObject([
+      {
+        key: monitor.key,
+        name: 'Monitor',
+        pane: 'w2:p3',
+        cwd: 'C:\\Work',
+        text: 'done: case 42',
+        idle: true,
+        from: { key: '@server-1:n-1', name: 'worker' },
+        // A session id that is no hex has no ref to give: the whole key finds it again.
+        replyTo: '@server-1:n-1',
+        replyBy: 'board',
+        fromDevice: 'server-1',
+      },
+      { key: monitor.key, text: 'from the twin', from: { key: `@server-1:${N1}` }, replyTo: 'worker [7b8c9d0e]' },
+    ])
+    expect(store.seenCall('server-1', 's-1')).toBeNull()
   })
 
   test('the stream is held only while the link is online', async () => {

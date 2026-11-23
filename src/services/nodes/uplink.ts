@@ -2,7 +2,7 @@
 // (services/nodes/links.ts) the master holds the node's `GET /api/node/uplink` open, takes each call
 // its sessions made and posts the result back (services/node/uplink.ts is the node's side).
 //
-// - Only `board thread` (core/node-uplink.ts UPLINK_COMMANDS); anything else is answered with 126
+// - Only `board thread` and `board send` (#619) (core/node-uplink.ts UPLINK_COMMANDS); anything else is answered with 126
 //   and a line, whatever the node sends. Only a session's: a call with no session would be the
 //   owner's, and nothing an owner does comes up a link (#224). Neither `open` (the master's own
 //   window) nor `share` (the owner confirms it) is run for a node.
@@ -40,7 +40,7 @@ import {
   type UplinkResult,
   uplinkCallOf,
 } from '../../core/node-uplink.ts'
-import { nodeKey } from '../../core/nodes.ts'
+import { nodeKey, nodesConfig } from '../../core/nodes.ts'
 import type { Config, Item } from '../../core/types.ts'
 import { safeName } from '../../core/upload-name.ts'
 import { FILE_MAX_BYTES, FILES_MAX, type Party, threadsConfig } from '../../core/work-threads.ts'
@@ -223,7 +223,8 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
 
   async function handle(id: string, call: UplinkCall): Promise<void> {
     // Only a write is kept on the node and so sent again: only a write's result is remembered.
-    const kept = UPLINK_COMMANDS.has(call.cmd) && KEPT_SUBS.has(call.argv[0] ?? '')
+    // `board send` (#619) is not kept: the node says at once when the master is not there.
+    const kept = (call.cmd === 'thread' || call.cmd === 'threads') && KEPT_SUBS.has(call.argv[0] ?? '')
     let result = kept ? store.seenCall(id, call.id) : null
     if (!result) {
       const ran = await runCall(id, call)
@@ -312,8 +313,9 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
   /** The call run, or null when a file it names could not be had for now. */
   async function runCall(id: string, call: UplinkCall): Promise<UplinkResult | null> {
     if (!UPLINK_COMMANDS.has(call.cmd))
-      return refused(`board ${said(call.cmd)} is not taken from a node: only board thread`)
+      return refused(`board ${said(call.cmd)} is not taken from a node: only board thread and board send`)
     if (!call.session) return refused("only a session's board thread is taken from a node")
+    if (call.cmd === 'send') return sendFrom(id, call)
     const sub = call.argv[0] ?? 'help'
     const not = Object.hasOwn(NOT_FROM_NODE, sub) ? NOT_FROM_NODE[sub] : undefined
     if (not) return refused(not)
@@ -375,6 +377,38 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     } finally {
       rmSync(folder, { recursive: true, force: true })
     }
+  }
+
+  /**
+   * `board send <name|key> "<text>"` in a session of the node (#619, core/agent-send.ts): queued here
+   * for the card it names, this computer's or any node's, signed with the node's session.
+   */
+  async function sendFrom(id: string, call: UplinkCall): Promise<UplinkResult> {
+    let key: string
+    try {
+      key = nodeKey(id, call.session)
+    } catch {
+      return refused('not a session of the node')
+    }
+    const item = o.find(key)
+    const [to = '', ...words] = call.argv
+    const { planSend, targetsOf } = await import('../../core/agent-send.ts')
+    const plan = planSend({
+      targets: targetsOf(o.items()),
+      to,
+      message: words.join(' '),
+      from: { key, name: item?.name || item?.autoName || '', device: id },
+      own: nodesConfig(o.cfg.nodes)?.id ?? '',
+      now: Date.now(),
+    })
+    if ('error' in plan) return failed(plan.error)
+    try {
+      const { addEntry } = await import('../../adapters/schedule-store.ts')
+      addEntry(plan.entry)
+    } catch (err) {
+      return failed(`the board could not take the message: ${messageOf(err)}`)
+    }
+    return { code: 0, out: [plan.line], err: [] }
   }
 
   /** A session on the board by its name, pane or key, as `board thread` finds one on this computer. */

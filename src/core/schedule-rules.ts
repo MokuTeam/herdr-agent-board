@@ -57,6 +57,12 @@ export type ScheduleEntry = {
   fromProfile?: string
   replyTo?: string
   /**
+   * A message sent through the board (#619, core/agent-send.ts): answered with `board send` to
+   * `replyTo`; `fromDevice` names the computer it came from when that is not the receiver's.
+   */
+  replyBy?: 'board'
+  fromDevice?: string
+  /**
    * A sleeping session is not woken for it: it waits until the session is awake (a thread's event,
    * services/work-threads.ts; services/scheduler.ts).
    */
@@ -109,6 +115,13 @@ export function promptOf(entry: ScheduleEntry, now: number): string {
       entry.replyTo
         ? t('sched.prompt.message', { profile: entry.fromProfile, name: entry.replyTo })
         : t('sched.prompt.messageNoReply', { profile: entry.fromProfile }),
+    )
+  // A message through the board (#619, core/agent-send.ts): answered the same way, from any computer.
+  else if (setter && entry.replyBy === 'board' && typeof entry.replyTo === 'string' && entry.replyTo)
+    notes.unshift(
+      typeof entry.fromDevice === 'string' && entry.fromDevice
+        ? t('sched.prompt.sendFrom', { device: entry.fromDevice, name: entry.replyTo })
+        : t('sched.prompt.send', { name: entry.replyTo }),
     )
   // The tag stays in English: the hook knows a board prompt by it (entrypoints/hook.ts).
   const from = setter ? ` from ${setter}` : ''
