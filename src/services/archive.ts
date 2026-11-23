@@ -52,6 +52,7 @@ import { t } from '../core/lang.ts'
 import { sameDir, sessionWorkspace, UNSAFE_CHARS } from '../core/launch/names.ts'
 import { launchTarget, type ProfileSet, sessionProfile } from '../core/profiles.ts'
 import { cleanName, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
+import { TURN_RESUME_KIND } from '../core/turn-resume.ts'
 import type { Config, Item, Translator } from '../core/types.ts'
 import { sleepLabels } from '../core/wake/sessions.ts'
 import { nextRun } from '../core/when.ts'
@@ -323,7 +324,7 @@ export async function askArchive(
 export function holdEntries(key: string): number {
   let dropped = 0
   for (const e of listEntries().filter(x => x.key === key && !x.receipt)) {
-    if (e.kind === 'restart' || e.kind === 'sleep') {
+    if (e.kind === 'restart' || e.kind === 'sleep' || e.kind === TURN_RESUME_KIND) {
       removeEntry(e.id)
       dropped++
       continue

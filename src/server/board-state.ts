@@ -40,6 +40,7 @@ import type { RemoteView } from '../core/remote.ts'
 import type { ScheduleEntry } from '../core/schedule-rules.ts'
 import type { SetupSummary } from '../core/setup.ts'
 import { todosConfig } from '../core/todos.ts'
+import { turnResumeConfig } from '../core/turn-resume.ts'
 import type { Item } from '../core/types.ts'
 import type { WakeView } from '../core/wake/view.ts'
 import { watchesConfig } from '../core/watches.ts'
@@ -53,6 +54,7 @@ import type { Launches } from '../services/launch/launches.ts'
 import type { NodeAggregate } from '../services/nodes/aggregate.ts'
 import { hooksInPlace } from '../services/profiles.ts'
 import { type Terminals, terminalOn } from '../services/terminals.ts'
+import type { TurnResumeService } from '../services/turn-resume.ts'
 
 export interface BoardState {
   /** The latest payload, as JSON text. */
@@ -130,6 +132,8 @@ interface Options {
   nodes?: () => Pick<NodeAggregate, 'part' | 'find'> | null
   /** Local Antigravity (Gemini) usage reading (#647), injectable for tests; defaults to localAgyLimits(cfg.launch). */
   agyLimits?: () => BoardAgyLimits | null | undefined
+  /** Continue mid-turn Claude sessions after a restart (#633, services/turn-resume.ts). */
+  turnResume?: Pick<TurnResumeService, 'observe' | 'observeFailure'>
 }
 
 // The colors the category editor offers (aliases left out).
@@ -278,6 +282,7 @@ export function createBoardState({
   nodes,
   journal,
   agyLimits: readAgyLimits,
+  turnResume,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -404,6 +409,8 @@ export function createBoardState({
       foldWaiting: foldModeOf(cfg.foldWaiting),
       // Auto-compact's default (#378), '' for off: Settings shows it checked.
       compactDefault: compactDefaultText(cfg.compact),
+      // Continue after restart (#633): absent while on (default), false while off.
+      ...(!turnResumeConfig(cfg.turnResume).on && { turnResume: false as const }),
       // remote: only while the remote mode is on; a board without it sends none.
       ...remoteOf(remote),
       // presence: only while config.json turns it on (#172).
@@ -547,6 +554,11 @@ export function createBoardState({
       logEdges()
       launches.observe(items)
       journal?.observe(items)
+      try {
+        turnResume?.observe(items)
+      } catch (err) {
+        log(`turn-resume: ${err instanceof Error ? err.message : String(err)}`)
+      }
       stale = false
       lastSuccessfulRefreshAt = Date.now()
       publish()
@@ -555,6 +567,9 @@ export function createBoardState({
     } catch (err) {
       stale = true
       observeFailure?.()
+      try {
+        turnResume?.observeFailure()
+      } catch {}
       publish()
       log(`refresh: ${err instanceof Error ? err.message : String(err)}`)
     } finally {

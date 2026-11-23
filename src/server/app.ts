@@ -142,6 +142,7 @@ import {
   realClock,
   type TunnelPlan,
 } from '../services/tunnel.ts'
+import { createTurnResume } from '../services/turn-resume.ts'
 import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
 import { createWorkHub, type WorkHub } from '../services/work-hub.ts'
 import { keepThreadsDb, threadsPayload, withThreadsDb } from '../services/work-threads.ts'
@@ -591,6 +592,8 @@ export async function startServer({
     viewers: () => events.size(),
     onChange: () => board.publish(),
   })
+  // Continue mid-turn Claude sessions after a restart (#633): on by default, off when `turnResume` is false.
+  const turnResume = createTurnResume({ cfg, log })
   // The peer network (#231): no socket, timer or file while config.json has no valid `team`.
   // What comes in goes to the router (#216), which tells a session only when the owner turned
   // Agents on for that peer, and only through the schedule, with a notice of its own words.
@@ -879,6 +882,7 @@ export async function startServer({
     observeFailure: () => boardEvents.health('herdr', false),
     nodes: () => nodeAggregate,
     journal,
+    turnResume,
     // Threads (#379): while config.json turns them on, the revision and the count that waits on
     // the owner (two queries a refresh); off, nothing is read.
     threads: () => {
@@ -1743,6 +1747,7 @@ export async function startServer({
       await Promise.all([workdesk.stop(), workdeskDialog.stop(), workdeskStream?.task])
       await boardEvents.stop()
       journal.stop()
+      turnResume.stop()
       compactor.stop()
       backups.stop()
       wake.stop()

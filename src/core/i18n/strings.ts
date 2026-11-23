@@ -33,6 +33,7 @@ import { TERMINAL_STRINGS } from './terminal-strings.ts'
 import { THREAD_STRINGS } from './thread-strings.ts'
 import { TIME_STRINGS } from './time-strings.ts'
 import { TODO_STRINGS } from './todo-strings.ts'
+import { TURN_RESUME_STRINGS } from './turn-resume-strings.ts'
 import { TURN_STRINGS } from './turn-strings.ts'
 import { UPDATE_STRINGS } from './update-strings.ts'
 import { VERIFY_STRINGS } from './verify-strings.ts'
@@ -1543,3 +1544,5 @@ for (const code of Object.keys(ONESHOT_STRINGS) as Lang[]) Object.assign(STRINGS
 for (const code of Object.keys(COMPACT_STRINGS) as Lang[]) Object.assign(STRINGS[code], COMPACT_STRINGS[code])
 // And the redesigned header, rail, settings panel and provider marks (#651).
 for (const code of Object.keys(DESIGN_STRINGS) as Lang[]) Object.assign(STRINGS[code], DESIGN_STRINGS[code])
+// And continue after restart (#633).
+for (const code of Object.keys(TURN_RESUME_STRINGS) as Lang[]) Object.assign(STRINGS[code], TURN_RESUME_STRINGS[code])

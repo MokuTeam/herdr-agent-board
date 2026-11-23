@@ -3,6 +3,7 @@
 // src/services/scheduler.ts.
 import { t } from './lang.ts'
 import { CALL_NOTE } from './notices.ts'
+import { TURN_RESUME_KIND } from './turn-resume.ts'
 import type { Item } from './types.ts'
 import { countRuns } from './when.ts'
 import { longWhen, span } from './when-format.ts'
@@ -39,10 +40,11 @@ export type ScheduleEntry = {
   /**
    * 'call': a MokuPilot call's results (`board call-report`); 'restart': the session restarted
    * once it is free (`board restart` or the web board), the text its note for after; 'sleep': the
-   * session put to sleep once it is free (`board sleep --when-free`), no text; a reminder
-   * without one. A restart also keeps step ('sleep', 'wake', 'note': how far it got), attempts and
-   * retryAt (herdr-wake refused or failed), tasksSince (background tasks hold it) and failed (it
-   * gave up, why: only that note is left to type), among the extra fields.
+   * session put to sleep once it is free (`board sleep --when-free`), no text; 'turn-resume': one
+   * continue after a crash or reboot (#633); a reminder without one. A restart also keeps step
+   * ('sleep', 'wake', 'note': how far it got), attempts and retryAt (herdr-wake refused or failed),
+   * tasksSince (background tasks hold it) and failed (it gave up, why: only that note is left to
+   * type), among the extra fields.
    */
   kind?: string
   /**
@@ -160,9 +162,9 @@ const folder = (p: unknown): string =>
  * pane and the same Claude, so the same profile; the reminder follows it there. A session there
  * in another profile, or one where either profile is not known, is never followed into (it would
  * be reminded in the wrong account): it comes back as `other`, so the entry waits saying why.
- * Neither when there is none (as before the port). A retry-safe call report (`receipt`) never
- * follows: it is for its own session only. A restart or a sleep does not either: the session
- * after /clear, or another one started in that pane, is not the one it was asked for.
+ * Neither when there is none (as before the port). A retry-safe call report (`receipt`), a
+ * turn-resume continue (`turn-resume`), a restart or a sleep never follows: the session after
+ * /clear, or another one started in that pane, is not the one it was asked for.
  */
 export function targetOf(
   entry: ScheduleEntry,
@@ -171,7 +173,15 @@ export function targetOf(
 ): { item?: Item; other?: Item } {
   const own = items.find(i => i.key === entry.key)
   if (own) return { item: own }
-  if (entry.receipt || entry.kind === 'restart' || entry.kind === 'sleep' || !entry.pane || !entry.cwd) return {}
+  if (
+    entry.receipt ||
+    entry.kind === 'restart' ||
+    entry.kind === 'sleep' ||
+    entry.kind === TURN_RESUME_KIND ||
+    !entry.pane ||
+    !entry.cwd
+  )
+    return {}
   const next = items.find(i => i.pane === entry.pane && i.session && !i.sleeping && folder(i.cwd) === folder(entry.cwd))
   if (!next) return {}
   const was = profileOf(entry.key)

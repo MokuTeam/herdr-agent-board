@@ -319,6 +319,26 @@ export async function chooseCompact(
   }
 }
 
+/** Continue mid-turn Claude sessions after a restart (#633, config.json's `turnResume`). */
+export async function chooseTurnResume(
+  on: boolean,
+  {
+    t,
+    canEdit,
+    save,
+    toast,
+  }: Pick<LanguageDeps, 't' | 'canEdit' | 'toast'> & {
+    save(body: { turnResume: boolean }): Promise<unknown>
+  },
+): Promise<void> {
+  if (!canEdit) return toast(t('live.off'), true)
+  try {
+    await save({ turnResume: on })
+  } catch (err) {
+    toast(errorText(err, t), true)
+  }
+}
+
 /** Presence on or off, its mode or idle minutes, for every board (config.json's `presence`). */
 export async function choosePresence(
   body: PresenceSetting,

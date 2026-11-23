@@ -204,7 +204,7 @@ export function setTunnelOn(on: boolean): EditResult {
   })
 }
 
-/** Change settings in config.json from the web board: { language, foldWaiting }. */
+/** Change settings in config.json from the web board: { language, foldWaiting, compactAt, turnResume }. */
 export function editSettings(body: unknown): EditResult {
   return editConfig(raw => {
     const language = isRecord(body) ? body.language : undefined
@@ -230,6 +230,18 @@ export function editSettings(body: unknown): EditResult {
       const next = limit ? { ...rest, at: limitText(limit) } : rest
       if (Object.keys(next).length) raw.compact = next
       else delete raw.compact
+    }
+    // Continue mid-turn Claude sessions after a restart (#633): on by default, false when off.
+    const turnResume = isRecord(body) ? body.turnResume : undefined
+    if (turnResume !== undefined) {
+      if (typeof turnResume !== 'boolean') return { ok: false, error: t('err.turnResume') }
+      const { on: _was, ...rest } = isRecord(raw.turnResume) ? raw.turnResume : {}
+      if (turnResume) {
+        if (Object.keys(rest).length) raw.turnResume = rest
+        else delete raw.turnResume
+      } else {
+        raw.turnResume = Object.keys(rest).length ? { ...rest, on: false } : false
+      }
     }
     return { ok: true }
   })

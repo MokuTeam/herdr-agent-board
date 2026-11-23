@@ -24,6 +24,7 @@ import { startCompactor } from '../services/compactor.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { goBack } from '../services/nav.ts'
 import { startScheduler } from '../services/scheduler.ts'
+import { createTurnResume } from '../services/turn-resume.ts'
 import { openWeb } from '../services/web-open.ts'
 import { ACTION, hitAt, parseMouse, tokens } from './input.ts'
 import { headerRows, isWide, render, type Size } from './render.ts'
@@ -54,6 +55,7 @@ const cfg = liveConfig(() => {
 })
 const deps = defaultDeps(cfg, webLog)
 const state = createState(cfg, OVERLAY || !PANE)
+const turnResume = cfg.web === false ? createTurnResume({ cfg, log: webLog }) : null
 
 const size = (): Size => ({ columns: out.columns || 80, rows: out.rows || 24 })
 
@@ -95,8 +97,16 @@ async function refresh(): Promise<void> {
     for (const e of entries) if (!state.alarms.has(e.key)) state.alarms.set(e.key, e)
     state.scheduled = entries.length
     state.loadError = null
+    try {
+      turnResume?.observe(state.items)
+    } catch (err) {
+      webLog(`turn-resume: ${messageOf(err)}`)
+    }
   } catch (err) {
     state.loadError = messageOf(err)
+    try {
+      turnResume?.observeFailure()
+    } catch {}
   } finally {
     state.loading = false
     refreshing = false

@@ -15,6 +15,7 @@ import {
   chooseFold,
   chooseLanguage,
   choosePresence,
+  chooseTurnResume,
   endLogin,
   type FeatureSetting,
   offersDevices,
@@ -193,6 +194,7 @@ export function SettingsPanel({
   const threadsInfo = data && !isRemote ? threadsNow(data) : null
   const features = data && !isRemote ? featuresNow(data) : null
   const compact = data?.compactDefault
+  const turnResumeOn = data?.turnResume !== false
   const compactChoices =
     compact && !COMPACT_CHOICES.includes(compact as (typeof COMPACT_CHOICES)[number])
       ? [...COMPACT_CHOICES, compact]
@@ -223,6 +225,9 @@ export function SettingsPanel({
   }
   const pickCompact = (at: string) => {
     void chooseCompact(at, { t, canEdit, save: body => api.post('/api/settings', body), toast })
+  }
+  const pickTurnResume = (on: boolean) => {
+    void chooseTurnResume(on, { t, canEdit, save: body => api.post('/api/settings', body), toast })
   }
   const pickPresence = (body: PresenceSetting) => {
     void choosePresence(body, { t, canEdit, save: b => api.post('/api/presence', b), toast })
@@ -478,6 +483,20 @@ export function SettingsPanel({
                         </option>
                       ))}
                     </select>
+                  </div>
+                )}
+                {data && (
+                  <div className="set-row">
+                    <div className="set-lbl">
+                      <b>{t('set.turnResume')}</b>
+                      <small>{t('set.turnResume.note')}</small>
+                    </div>
+                    <Switch
+                      checked={turnResumeOn}
+                      disabled={!canEdit}
+                      label={t('set.turnResume')}
+                      onToggle={() => pickTurnResume(!turnResumeOn)}
+                    />
                   </div>
                 )}
               </div>

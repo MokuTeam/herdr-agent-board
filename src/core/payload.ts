@@ -124,6 +124,8 @@ export interface BoardPayload {
   foldWaiting?: FoldMode
   /** Auto-compact's default limit as written (#378, core/compact.ts: `300k`, `60%`), '' for off; a board before it sent none. */
   compactDefault?: string
+  /** Continue mid-turn Claude sessions after a restart (#633): absent when on (the default), false when off. */
+  turnResume?: false
   /** The remote mode (core/remote.ts), only while it is on. */
   remote?: RemoteView
   /** The user's presence (#172, core/presence.ts), only while config.json turns it on. */

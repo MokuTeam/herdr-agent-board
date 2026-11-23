@@ -24,6 +24,19 @@ export type ColumnId = 'work' | 'me' | 'ext' | 'done' | 'idle'
 export type Pin = 'me' | 'ext' | 'done' | 'idle'
 export type Attention = '' | 'decision' | 'ask' | 'question' | 'later'
 
+/**
+ * A Claude session observed mid-turn (#633, core/turn-resume.ts): kept on its card while
+ * working and cleared when the turn ends. If still present after a restart, the board sends
+ * one continue through the schedule once the same session is back and idle, dropping the mark first.
+ */
+export interface TurnMark {
+  session: string
+  startedAt: number
+  pane?: string
+  /** Claude's process start time (item.since), when known: distinguishes a real restart from a board-only reload. */
+  processStartedAt?: number
+}
+
 /** The agent's card: what it (or the user) wrote about a session. Unknown fields survive. */
 export interface Card {
   key?: string
@@ -85,6 +98,8 @@ export interface Card {
   compactRun?: unknown
   /** When the board's compactions of it ended (#378, the newest 20), for its conversation's lines. */
   compactDone?: unknown
+  /** Active mid-turn mark (#633, core/turn-resume.ts): present while a Claude turn runs, cleared when it ends. */
+  midTurn?: TurnMark
   [extra: string]: unknown
 }
 
@@ -259,6 +274,8 @@ export interface Config {
   nodes?: unknown
   /** Nodes, this board as a node (#496, an object), as config.json has it: read through core/nodes.ts nodeConfig. */
   node?: unknown
+  /** Continue mid-turn Claude sessions after a restart (#633): boolean or `{ on?, waitSec?, waitMin? }`. */
+  turnResume?: unknown
   [extra: string]: unknown
 }
 

@@ -4,6 +4,7 @@
 // archive's shapes: a record as it is kept on disk (src/adapters/archive-store.ts), as the page
 // gets it, the log of what became of it, and the HTTP bodies and answers (src/server).
 import type { ScheduleEntry, SessionRef } from './schedule-rules.ts'
+import { TURN_RESUME_KIND } from './turn-resume.ts'
 
 const DAY = 86_400_000
 
@@ -72,7 +73,8 @@ export function archiveBlock(
 export const heldEntries = <E extends { key: string; kind?: string | undefined }>(
   schedules: readonly E[],
   key: string,
-): E[] => schedules.filter(e => e.key === key && e.kind !== 'restart' && e.kind !== 'sleep')
+): E[] =>
+  schedules.filter(e => e.key === key && e.kind !== 'restart' && e.kind !== 'sleep' && e.kind !== TURN_RESUME_KIND)
 
 /**
  * The sleeping sessions in "Idle" that a tidy-up takes: asleep and quiet for at least `days` days
