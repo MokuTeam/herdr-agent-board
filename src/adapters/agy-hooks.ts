@@ -1,12 +1,17 @@
-// Only Antigravity CLI's `~/.gemini/config/hooks.json`, `mcp_config.json` and their backups.
-// Herdr's `"herdr"` hook group and any other user/plugin hooks or MCP servers stay untouched.
+// Only Antigravity CLI's `~/.gemini/config/hooks.json`, `mcp_config.json`,
+// `~/.gemini/antigravity-cli/settings.json`, and their backups.
+// Herdr's `"herdr"` hook group and any other user/plugin hooks, MCP servers or custom statusLine stay untouched.
 import { constants, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { planAgyHooks, planAgyMcp } from '../core/agy-hooks.ts'
+import { planAgyHooks, planAgyMcp, planAgySettings } from '../core/agy-hooks.ts'
 
 export function agyConfigDir(env: Record<string, string | undefined> = process.env, home = homedir()): string {
   return env.ANTIGRAVITY_CONFIG_DIR || join(home, '.gemini', 'config')
+}
+
+export function agySettingsDir(env: Record<string, string | undefined> = process.env, home = homedir()): string {
+  return env.ANTIGRAVITY_APP_DATA_DIR || join(home, '.gemini', 'antigravity-cli')
 }
 
 function readJsonFile(file: string): { before: string | null; parsed: unknown } {
@@ -61,6 +66,27 @@ export function installAgyHooks(plan: ReturnType<typeof agyHooksPlan>): void {
   writeWithBackup(plan)
 }
 
+export function agySettingsPlan(
+  dir: string,
+  bun: string,
+  statusline: string,
+): { file: string; before: string | null; after: string; statusLineSet: boolean } {
+  const file = join(dir, 'settings.json')
+  const { before, parsed: settings } = readJsonFile(file)
+  const { settings: next, statusLineSet } = planAgySettings(settings, bun, statusline)
+  const unchanged = before !== null && JSON.stringify(settings) === JSON.stringify(next)
+  return {
+    file,
+    before,
+    after: unchanged && before !== null ? before : `${JSON.stringify(next, null, 2)}\n`,
+    statusLineSet,
+  }
+}
+
 export function installAgyMcp(plan: ReturnType<typeof agyMcpPlan>): void {
+  writeWithBackup(plan)
+}
+
+export function installAgySettings(plan: ReturnType<typeof agySettingsPlan>): void {
   writeWithBackup(plan)
 }

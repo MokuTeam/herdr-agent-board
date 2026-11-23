@@ -1,7 +1,7 @@
 // The usage popover's text: what is used, where the reading comes from and how old it is.
 import { shortWhen } from '../../../src/core/when-format.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
-import { forecast, type LimitInfo, windowLabel } from '../models/limits.ts'
+import { type AgyLimitInfo, agyWindowLabel, forecast, type LimitInfo, windowLabel } from '../models/limits.ts'
 
 const SOURCE_KEYS = { usagebar: 'limits.hintUsagebar', statusline: 'limits.hint', unknown: 'limits.unknownSource' }
 
@@ -44,6 +44,61 @@ export function LimitsReport({ lim }: { lim: LimitInfo }) {
       <p>{t(SOURCE_KEYS[lim.source], { time })}</p>
       <p className={lim.stale ? 'limits-warning' : ''}>
         {t(lim.stale ? 'limits.stale' : 'limits.localReport', { time })}
+      </p>
+    </>
+  )
+}
+
+/** Antigravity (Gemini) usage report inside the popover (#647). */
+export function AgyLimitsReport({ lim }: { lim: AgyLimitInfo }) {
+  const t = useT()
+  if (!lim.windows.length) return <p>{t('limits.agyUnavailable')}</p>
+  const time = lim.observedAt
+    ? new Date(lim.observedAt).toLocaleString(t.lang, { dateStyle: 'medium', timeStyle: 'short' })
+    : t('limits.unknownTime')
+  const used = lim.windows.map(w => `${agyWindowLabel(w, t)}: ${Math.round(w.usedPercentage)}%`).join(' · ')
+  const now = Date.now()
+  const at = (ms: number) => shortWhen(ms, t, now)
+  const ahead = lim.stale
+    ? []
+    : lim.windows.flatMap(w => {
+        const window = agyWindowLabel(w, t)
+        if (typeof w.minutes === 'number') {
+          const f = forecast(
+            { minutes: w.minutes, usedPercentage: w.usedPercentage, resetsAt: w.resetsAt ?? null },
+            lim.observedAt,
+            now,
+          )
+          if (f) {
+            return f.kind === 'out'
+              ? [
+                  {
+                    key: w.id,
+                    out: true,
+                    text: t('limits.forecastOut', { window, at: at(f.at), reset: at(f.resetsAt) }),
+                  },
+                ]
+              : [{ key: w.id, out: false, text: t('limits.forecastLasts', { window, reset: at(f.resetsAt) }) }]
+          }
+        }
+        if (typeof w.resetsAt === 'number' && Number.isFinite(w.resetsAt) && w.resetsAt > now) {
+          return [{ key: w.id, out: false, text: t('limits.resetsAt', { window, reset: at(w.resetsAt) }) }]
+        }
+        return []
+      })
+  return (
+    <>
+      <p>
+        <b>{t('limits.used')}</b> {used}
+      </p>
+      {ahead.map(f => (
+        <p key={f.key} className={f.out ? 'limits-warning' : ''}>
+          {f.text}
+        </p>
+      ))}
+      <p>{t(lim.source === 'statusline' ? 'limits.agyHint' : 'limits.unknownSource', { time })}</p>
+      <p className={lim.stale ? 'limits-warning' : ''}>
+        {t(lim.stale ? 'limits.agyStale' : 'limits.localReport', { time })}
       </p>
     </>
   )

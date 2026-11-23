@@ -1,5 +1,6 @@
 // The board as GET /api/board answers and the event stream pushes it (src/server/board-state.ts
 // builds it; the web board reads it). One type for both sides, so they cannot drift apart.
+import type { AgyLimitWindow, BoardAgyLimits } from './agy-limits.ts'
 import type { BoardArchive } from './archive.ts'
 import type { DecisionsPayload } from './decisions.ts'
 import type { FoldMode } from './fold-mode.ts'
@@ -33,6 +34,8 @@ export interface BoardCategory {
 
 /** A color the category editor offers. */
 export type Swatch = { name: string; hex: string }
+
+export type { AgyLimitWindow, BoardAgyLimits }
 
 /** Claude's usage windows from the board's status line or the usagebar cache. */
 export interface BoardLimits {
@@ -85,6 +88,11 @@ export interface BoardPayload {
   stale: boolean
   lastSuccessfulRefreshAt: number | null
   limits: BoardLimits | null
+  /**
+   * Antigravity (Gemini) usage windows (#647), from agy's statusLine cache on this computer or a
+   * node. Omitted when agy is not installed anywhere; null when installed with no reading yet.
+   */
+  agyLimits?: BoardAgyLimits | null
   items: Item[]
   launches: LaunchView[]
   categories: BoardCategory[]

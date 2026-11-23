@@ -6,6 +6,7 @@
 // Roles are keys. A board without either key sees nothing of this anywhere; one board may hold both:
 //   "nodes": { "id": "laptop", "order": ["server-1", "local"], "devices": { "server-1": { ... } } }
 //   "node": { "id": "server-1", "port": 12430, "workRoot": "~/work" }
+import { type BoardAgyLimits, boardAgyLimitsOf } from './agy-limits.ts'
 import { type GitFacts, gitFactsOf } from './git-access.ts'
 import { DEVICE_ID, isDevice, LOCAL, parseNodeKey } from './node-key.ts'
 import { hasUnprintable } from './team.ts'
@@ -515,6 +516,24 @@ export function statusShown(s: NodeStatus | null): string {
     s.cpus,
     // Only from a node that says them: a status without them keys as before.
     ...(s.git ? [s.git.identity, s.git.logins.map(l => [l.host, l.user]), s.programs ?? null] : []),
+    // Only from a node with agy installed (#647): a status without it keys as before.
+    // Bucket observedAt (5 min) and resetsAt (1 min) to avoid 30 s SSE churn while keeping steady() fresh.
+    ...(s.agyLimits !== undefined
+      ? [
+          s.agyLimits
+            ? [
+                s.agyLimits.observedAt === null ? null : Math.floor(s.agyLimits.observedAt / 300_000),
+                s.agyLimits.stale,
+                s.agyLimits.planTier ?? null,
+                s.agyLimits.windows.map(w => [
+                  w.id,
+                  Math.round(w.usedPercentage),
+                  w.resetsAt === null ? null : Math.round(w.resetsAt / 60_000),
+                ]),
+              ]
+            : null,
+        ]
+      : []),
   ])
 }
 
@@ -544,6 +563,8 @@ export interface NodeStatus {
   programs?: string[]
   /** Its git identity and GitHub logins (#609, core/git-access.ts); absent from a node of an older board. */
   git?: GitFacts
+  /** Antigravity (Gemini) usage reading (#647), only when agy is installed on this node; null when unknown. */
+  agyLimits?: BoardAgyLimits | null
   at: number
 }
 
@@ -555,6 +576,14 @@ const bundleOf = (v: unknown): { seq: number; hash: string } | null =>
   isObject(v) && isCount(v.seq) && typeof v.hash === 'string' && /^[0-9a-f]{64}$/.test(v.hash)
     ? { seq: v.seq as number, hash: v.hash }
     : null
+
+/** A status's `agyLimits` (#647), checked field by field; omitted when absent or non-object garbage. */
+const agyLimitsOf = (v: unknown): { agyLimits?: BoardAgyLimits | null } => {
+  if (v === undefined) return {}
+  if (v === null) return { agyLimits: null }
+  if (!isObject(v)) return {}
+  return { agyLimits: boardAgyLimitsOf(v) }
+}
 
 /** A status's `git` (#609), checked; nothing for a node of an older board. */
 const gitOf = (v: unknown): { git?: GitFacts } => {
@@ -619,6 +648,7 @@ export function nodeStatusOf(raw: unknown): NodeStatus | null {
     ...(Array.isArray(s.programs) &&
       s.programs.every(p => typeof p === 'string') && { programs: [...(s.programs as string[])] }),
     ...gitOf(s.git),
+    ...agyLimitsOf(s.agyLimits),
     at: s.at as number,
   }
 }

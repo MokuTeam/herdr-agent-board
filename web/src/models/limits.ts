@@ -13,6 +13,27 @@ export interface LimitInfo {
   stale: boolean
 }
 
+/** An Antigravity (Gemini) quota window (#647) that passed the checks. */
+export interface AgyLimitReading {
+  id: string
+  label: string
+  minutes: number | null
+  usedPercentage: number
+  resetsAt?: number | null
+}
+
+export interface AgyLimitInfo {
+  windows: AgyLimitReading[]
+  observedAt: number | null
+  source: 'statusline' | 'unknown'
+  planTier: string | null
+  stale: boolean
+  recent: boolean
+}
+
+export const AGY_LIMIT_COLOR = '#4285F4'
+export const CLAUDE_LIMIT_COLOR = '#D97757'
+
 type Fields = Record<string, unknown>
 const fields = (value: unknown): Fields => (typeof value === 'object' && value !== null ? { ...value } : {})
 
@@ -41,6 +62,47 @@ export function limitInfo(limits: unknown, { connected = true, now = Date.now() 
     observedAt,
     source,
     stale: !connected || !!l.stale || !observedAt || now - observedAt > 30 * 60_000,
+  }
+}
+
+const isAgyReading = (w: unknown): w is AgyLimitReading => {
+  if (typeof w !== 'object' || w === null) return false
+  const { id, label, minutes, usedPercentage } = fields(w)
+  return (
+    typeof id === 'string' &&
+    id.length > 0 &&
+    typeof label === 'string' &&
+    label.length > 0 &&
+    (minutes === null ||
+      minutes === undefined ||
+      (typeof minutes === 'number' && Number.isFinite(minutes) && minutes > 0)) &&
+    typeof usedPercentage === 'number' &&
+    Number.isFinite(usedPercentage) &&
+    usedPercentage >= 0 &&
+    usedPercentage <= 100
+  )
+}
+
+/** Antigravity (Gemini) usage reading (#647); null when `agyLimits` is omitted (agy not installed). */
+export function agyLimitInfo(agyLimits: unknown, { connected = true, now = Date.now() } = {}): AgyLimitInfo | null {
+  if (agyLimits === undefined) return null
+  const l = fields(agyLimits)
+  const windows = (Array.isArray(l.windows) ? l.windows : [])
+    .filter(isAgyReading)
+    .map(w => ({ ...w, minutes: typeof w.minutes === 'number' ? w.minutes : null }))
+    .filter(w => !(typeof w.resetsAt === 'number' && Number.isFinite(w.resetsAt) && w.resetsAt <= now))
+  const at = l.observedAt
+  const observedAt = typeof at === 'number' && Number.isFinite(at) && at > 0 && at <= now + 60_000 ? at : null
+  const source: AgyLimitInfo['source'] = l.source === 'statusline' ? 'statusline' : 'unknown'
+  const planTier = typeof l.planTier === 'string' && l.planTier.trim() ? l.planTier.trim() : null
+  const stale = !connected || !!l.stale || !observedAt || now - observedAt > 30 * 60_000
+  return {
+    windows,
+    observedAt,
+    source,
+    planTier,
+    stale,
+    recent: windows.length > 0 && !stale,
   }
 }
 
@@ -83,6 +145,7 @@ export function forecast(w: LimitReading, observedAt: number | null, now = Date.
   const { resetsAt } = w
   if (observedAt === null || typeof resetsAt !== 'number' || !Number.isFinite(resetsAt)) return null
   const length = w.minutes * 60_000
+  if (!Number.isFinite(length) || length <= 0) return null
   const start = resetsAt - length
   const elapsed = observedAt - start
   if (elapsed < length / 10 || elapsed > length || w.usedPercentage >= 100) return null
@@ -94,6 +157,13 @@ export function forecast(w: LimitReading, observedAt: number | null, now = Date.
 
 /** "5h" or "7d". */
 export const windowLabel = (w: LimitReading, t: Translator): string => t(w.minutes === 300 ? 'limits.5h' : 'limits.7d')
+
+/** Localized label for an Antigravity window ("5h"/"7d" localized when exact, else its bucket label). */
+export function agyWindowLabel(w: AgyLimitReading, t: Translator): string {
+  if (w.label === '5h' && w.minutes === 300) return t('limits.5h')
+  if (w.label === '7d' && w.minutes === 10080) return t('limits.7d')
+  return w.label
+}
 
 /** The pill's color for a window: red from 90 %, orange from 70 %. */
 export const heat = (usedPercentage: number): 'hot' | 'warm' | '' =>

@@ -43,6 +43,8 @@ const fileId = (id: string): string =>
 // in its own file, named apart from it (a profile with the id `latest` included).
 export const usageFileFor = (id: string): string =>
   id === 'default' ? usageFile() : join(stateDir(), `claude-limits-profile-${fileId(id)}.json`)
+// From Antigravity CLI's status line (entrypoints/agy-statusline.ts, #647): Gemini quota windows.
+export const agyUsageFile = (): string => join(stateDir(), 'agy-limits-latest.json')
 export const contextDir = (): string => join(stateDir(), 'context')
 // The shells the board opened (services/terminals.ts), so a board that restarts finds them again.
 export const terminalsFile = (): string => join(stateDir(), 'terminals.json')

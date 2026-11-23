@@ -10,6 +10,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
+import { localAgyLimits } from '../adapters/agy-limits.ts'
 import { allCards } from '../adapters/cards.ts'
 import { editNodes, editNodesAdding, loadConfig, saveFoundProfiles } from '../adapters/config-file.ts'
 import { dbFile } from '../adapters/db.ts'
@@ -1257,6 +1258,7 @@ export async function startServer({
       commit: runningCommit,
       programs: () => [...programsOnPath(NODE_PROGRAMS), ...nodeGit.programs()],
       git: () => nodeGit.facts(),
+      agyLimits: () => localAgyLimits(cfg.launch),
     })
     // The plugin at the master's commit (#590): unpacked beside this one, installed, swapped in.
     // Then the board ends with 75 and run.ts, the pane's process, starts it again from the plugin's
@@ -1430,6 +1432,7 @@ export async function startServer({
       launch: () => cfg.launch,
       version: PLUGIN_VERSION,
       commit: runningCommit,
+      agyLimits: () => localAgyLimits(cfg.launch),
     })
     nodeAggregate = createNodeAggregate({
       links: nodeLinks,

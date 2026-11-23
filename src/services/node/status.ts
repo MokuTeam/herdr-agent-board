@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path'
 import { archiveStamp, headCommit } from '../../adapters/git.ts'
 import { ROOT } from '../../adapters/paths.ts'
 import { type SysLoad, sysLoad } from '../../adapters/sysload.ts'
+import type { BoardAgyLimits } from '../../core/agy-limits.ts'
 import type { GitFacts } from '../../core/git-access.ts'
 import { CLAUDE_AGENT, launchAgents } from '../../core/launch/agents.ts'
 import { NODE_API } from '../../core/node-door.ts'
@@ -46,6 +47,11 @@ export interface StatusSources {
    * login. Looked once per run and again after a secrets request. No `git` in the status without it.
    */
   git?: () => Promise<GitFacts>
+  /**
+   * Antigravity (Gemini) usage reading (#647), only when agy is installed on this node: undefined
+   * omits the field (no agy), null reports installed-but-unknown, else the reading.
+   */
+  agyLimits?: () => BoardAgyLimits | null | undefined
   platform?: string
   arch?: string
   home?: string
@@ -115,6 +121,7 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
       const items = src.items()
       const awake = items.filter(i => !i.sleeping)
       const [load, sha, git] = await Promise.all([(src.load ?? sysLoad)(), commitOnce(), src.git?.()])
+      const agyLimits = src.agyLimits?.()
       return {
         api: NODE_API,
         id: node.id,
@@ -139,6 +146,7 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
         agents: agentsOf(src.launch(), src.piFound ?? piOnPath),
         ...(src.programs && { programs: programsOnce(src.programs) }),
         ...(git && { git }),
+        ...(agyLimits !== undefined && { agyLimits }),
         at: (src.now ?? Date.now)(),
       }
     },

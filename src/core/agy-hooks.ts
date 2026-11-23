@@ -1,5 +1,6 @@
-// Antigravity CLI hooks live in `~/.gemini/config/hooks.json`.
-// Each top-level key is a named hook group (e.g. `"herdr"`, `"agent-board"`), and
+// Antigravity CLI hooks live in `~/.gemini/config/hooks.json`, MCP in `~/.gemini/config/mcp_config.json`,
+// and statusLine in `~/.gemini/antigravity-cli/settings.json`.
+// Each top-level hook key is a named hook group (e.g. `"herdr"`, `"agent-board"`), and
 // `SessionStart` / `PreInvocation` are flat arrays of command handler objects.
 import { normPath, quote } from './install-plan.ts'
 
@@ -73,4 +74,36 @@ export function planAgyMcp(config: unknown, bun: string, cli: string): Record<st
     args: [cli, 'mcp', '--agents'],
   }
   return next
+}
+
+const OUR_AGY_STATUS_LINE = /agent-board.*[\\/]entrypoints[\\/]agy-statusline\.ts/
+
+function isOurAgyStatusLine(cmd: string, script: string): boolean {
+  const n = normPath(cmd)
+  return (!!script && n.includes(normPath(script))) || OUR_AGY_STATUS_LINE.test(cmd)
+}
+
+/**
+ * Plan the next `~/.gemini/antigravity-cli/settings.json` with agent-board's statusLine command
+ * (`stack_with_default: true` so agy's built-in status bar stays intact, #647). If the user already
+ * configured a non-board statusLine (including a non-command object), leave it untouched (`statusLineSet: false`).
+ */
+export function planAgySettings(
+  settings: unknown,
+  bun: string,
+  statusline: string,
+): { settings: Record<string, unknown>; statusLineSet: boolean } {
+  if (settings !== undefined && !isRecord(settings))
+    throw new Error('settings.json is not a JSON object; left as it was')
+  const next: Record<string, unknown> = structuredClone(settings ?? {})
+  const cur = next.statusLine
+  const curCmd = isRecord(cur) && typeof cur.command === 'string' ? cur.command : ''
+  const ours = !cur || (!!curCmd && isOurAgyStatusLine(curCmd, statusline))
+  if (!ours) return { settings: next, statusLineSet: false }
+  next.statusLine = {
+    type: 'command',
+    command: `${quote(bun)} ${quote(statusline)}`,
+    stack_with_default: true,
+  }
+  return { settings: next, statusLineSet: true }
 }

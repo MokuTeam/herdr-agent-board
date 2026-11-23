@@ -60,6 +60,8 @@ export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayloa
   (value.aside === undefined || typeof value.aside === 'boolean') &&
   // The Claude profiles (a board before them sent none).
   isListOf(value.profiles, isBoardProfile) &&
+  // Antigravity (Gemini) usage (#647): omitted when agy is not installed, null when unknown, else a reading with windows.
+  (value.agyLimits === undefined || isProfileLimits(value.agyLimits)) &&
   // The program launch.claude types (a board before start commands did not say).
   (value.claudeProgram === undefined || typeof value.claudeProgram === 'string') &&
   // The Remote access view's revision (a board before it did not send one).

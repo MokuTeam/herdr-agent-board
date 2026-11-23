@@ -214,3 +214,28 @@ describe('the programs a hook may run (#603)', () => {
     expect('programs' in (nodeStatusOf({ ...s, programs: [1, 'x'] }) ?? {})).toBe(false)
   })
 })
+
+describe('Antigravity (Gemini) usage on a node (#647)', () => {
+  test('omits agyLimits when agy is not installed, and propagates null or readings when installed', async () => {
+    const none = await createNodeStatus(sources({ agyLimits: () => undefined })).answer()
+    expect(none && 'agyLimits' in none).toBe(false)
+
+    const unknown = await createNodeStatus(sources({ agyLimits: () => null })).answer()
+    expect(unknown?.agyLimits).toBeNull()
+    expect(nodeStatusOf(JSON.parse(JSON.stringify(unknown)))?.agyLimits).toBeNull()
+
+    const now = Date.now()
+    const reading = {
+      source: 'statusline' as const,
+      observedAt: now - 5000,
+      stale: false,
+      planTier: 'Pro',
+      windows: [
+        { id: 'gemini-5h', label: '5h', minutes: 300, usedPercentage: 48, resetsAt: now + 3_600_000, expired: false },
+      ],
+    }
+    const withAgy = await createNodeStatus(sources({ agyLimits: () => reading })).answer()
+    expect(withAgy?.agyLimits).toEqual(reading)
+    expect(nodeStatusOf(JSON.parse(JSON.stringify(withAgy)))?.agyLimits).toEqual(reading)
+  })
+})

@@ -1,6 +1,7 @@
 // The board as the web page sees it: the latest items, whether they are fresh, and the payload
 // GET /api/board answers with and the event stream pushes.
 import { existsSync, statSync } from 'node:fs'
+import { localAgyLimits } from '../adapters/agy-limits.ts'
 import { readArchiveLog } from '../adapters/archive-store.ts'
 import { readUsageFile } from '../adapters/claude-home.ts'
 import { createEdgeLog, type EdgeLog } from '../adapters/edge-log.ts'
@@ -10,6 +11,7 @@ import { createLinks } from '../adapters/links.ts'
 import { usageFileFor } from '../adapters/paths.ts'
 import { forgetProfilePanes } from '../adapters/profile-panes.ts'
 import { listEntries, listWatches, readLog, watchesDir } from '../adapters/schedule-store.ts'
+import { type BoardAgyLimits, pickAgyLimits } from '../core/agy-limits.ts'
 import { COLUMNS } from '../core/board.ts'
 import { besideParents } from '../core/call-agent.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts'
@@ -21,7 +23,7 @@ import { lang, t } from '../core/lang.ts'
 import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
 import type { Limits } from '../core/limits.ts'
 import { familyTitle } from '../core/model-check.ts'
-import { parseNodeKey } from '../core/nodes.ts'
+import { LOCAL, parseNodeKey } from '../core/nodes.ts'
 import type {
   BackupPayload,
   BoardLimits,
@@ -126,6 +128,8 @@ interface Options {
    * is off: the payload is what it was without them. items(), find() and observation() never see them.
    */
   nodes?: () => Pick<NodeAggregate, 'part' | 'find'> | null
+  /** Local Antigravity (Gemini) usage reading (#647), injectable for tests; defaults to localAgyLimits(cfg.launch). */
+  agyLimits?: () => BoardAgyLimits | null | undefined
 }
 
 // The colors the category editor offers (aliases left out).
@@ -273,6 +277,7 @@ export function createBoardState({
   observeFailure,
   nodes,
   journal,
+  agyLimits: readAgyLimits,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -359,6 +364,10 @@ export function createBoardState({
     // none), as before profiles.
     const profiles = boardProfiles(deps, items)
     const own = profiles.find(p => p.inherited) ?? profiles.find(p => p.id === DEFAULT_PROFILE)
+    // Antigravity (Gemini) usage (#647): omitted when agy is not installed locally or on any active remote node.
+    const localAgy = readAgyLimits ? readAgyLimits() : localAgyLimits(cfg.launch)
+    const remoteAgy = others?.devices.filter(d => d.id !== LOCAL && !d.revoked).map(d => d.status?.agyLimits) ?? []
+    const agyLimits = pickAgyLimits([localAgy, ...remoteAgy])
     return {
       // archive: what became of the latest sessions put in it (the page's toasts).
       archive: { log: readArchiveLog(8) },
@@ -369,6 +378,7 @@ export function createBoardState({
       fsToken: FILE_TOKEN,
       stale,
       limits: own?.limits ?? null,
+      ...(agyLimits !== undefined && { agyLimits }),
       items: combined,
       launches: others ? [...launches.list(), ...others.launches] : launches.list(),
       categories,

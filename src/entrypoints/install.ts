@@ -21,12 +21,21 @@
 //                                               script, macOS' toast.ts)
 //   bun src/entrypoints/install.ts --no-toast   and without them
 //   bun src/entrypoints/install.ts --codex      Codex's hooks and the commands, leaving Claude alone
-//   bun src/entrypoints/install.ts --agy        Antigravity CLI's hooks, skills and commands, leaving Claude alone
+//   bun src/entrypoints/install.ts --agy        Antigravity CLI's hooks, MCP, status line, skills and commands, leaving Claude alone
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { installSkill } from '../adapters/agents-skill.ts'
-import { agyConfigDir, agyHooksPlan, agyMcpPlan, installAgyHooks, installAgyMcp } from '../adapters/agy-hooks.ts'
+import {
+  agyConfigDir,
+  agyHooksPlan,
+  agyMcpPlan,
+  agySettingsDir,
+  agySettingsPlan,
+  installAgyHooks,
+  installAgyMcp,
+  installAgySettings,
+} from '../adapters/agy-hooks.ts'
 import { codexHooksPlan, installCodexHooks } from '../adapters/codex-hooks.ts'
 import { configFile, loadConfig, readConfigFile } from '../adapters/config-file.ts'
 import { agyIntegrationInstall, claudeIntegrationInstall, codexIntegrationInstall } from '../adapters/herdr.ts'
@@ -79,11 +88,15 @@ if (args.includes('--agy')) {
       throw new Error('--agy does not take --toast or --no-toast')
     if (args.includes('--codex')) throw new Error('pass --agy or --codex, not both')
     const dir = agyConfigDir()
+    const settingsDir = agySettingsDir()
     const script = join(ROOT, 'src', 'entrypoints', 'agy-hook.ts')
+    const agyStatusline = join(ROOT, 'src', 'entrypoints', 'agy-statusline.ts')
     const plan = agyHooksPlan(dir, script)
     const mcpPlan = agyMcpPlan(dir, paths.bun, paths.cli)
+    const settingsPlan = agySettingsPlan(settingsDir, paths.bun, agyStatusline)
     installAgyHooks(plan)
     installAgyMcp(mcpPlan)
+    installAgySettings(settingsPlan)
     installShims()
     const agySkills = [
       { name: SKILL, from: files.skill },
@@ -101,6 +114,11 @@ if (args.includes('--agy')) {
     }
     console.log(`Antigravity CLI hooks: SessionStart, PreInvocation -> ${script} in ${plan.file}`)
     console.log(`Antigravity CLI MCP: ListAgents, SendMessage -> ${paths.cli} mcp --agents in ${mcpPlan.file}`)
+    console.log(
+      settingsPlan.statusLineSet
+        ? `Antigravity CLI status line: ${agyStatusline} in ${settingsPlan.file}`
+        : `Antigravity CLI status line in ${settingsPlan.file}: left as it was (not ours)`,
+    )
     if (Bun.which('bun') === null)
       console.log('Antigravity CLI hooks: warning: bun is not on PATH; add Bun to PATH before starting agy.')
     try {

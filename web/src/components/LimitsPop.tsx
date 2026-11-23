@@ -4,10 +4,17 @@
 import { type Dispatch, type RefObject, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { pressAway } from '../models/click-away.ts'
-import { limitInfo, popoverPosition, profileUsage } from '../models/limits.ts'
+import {
+  AGY_LIMIT_COLOR,
+  agyLimitInfo,
+  CLAUDE_LIMIT_COLOR,
+  limitInfo,
+  popoverPosition,
+  profileUsage,
+} from '../models/limits.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import type { BoardAction } from '../state/board-ui.ts'
-import { LimitsReport } from './LimitsReport.tsx'
+import { AgyLimitsReport, LimitsReport } from './LimitsReport.tsx'
 
 type Pill = RefObject<HTMLButtonElement | null>
 
@@ -23,6 +30,7 @@ export function LimitsPop({ anchor }: { anchor: Pill }) {
   const pop = useRef<HTMLDivElement>(null)
   const open = ui.limitsOpen
   const usage = profileUsage(data?.profiles, { connected })
+  const agy = agyLimitInfo(data?.agyLimits, { connected })
 
   const close = useCallback((refocus: boolean) => closeLimits(dispatch, anchor, refocus), [dispatch, anchor])
 
@@ -70,7 +78,7 @@ export function LimitsPop({ anchor }: { anchor: Pill }) {
       ref={pop}
     >
       <header>
-        <h3 id="limits-title">{t('limits.title')}</h3>
+        <h3 id="limits-title">{t(agy ? 'limits.titleAll' : 'limits.title')}</h3>
         <button
           type="button"
           className="icon-button"
@@ -93,8 +101,25 @@ export function LimitsPop({ anchor }: { anchor: Pill }) {
               )}
             </section>
           ))
+        ) : agy ? (
+          <section className="limits-for" data-provider="claude">
+            <h4 style={{ '--c': CLAUDE_LIMIT_COLOR }}>{t('limits.claudeTitle')}</h4>
+            <LimitsReport lim={limitInfo(data?.limits, { connected })} />
+          </section>
         ) : (
           <LimitsReport lim={limitInfo(data?.limits, { connected })} />
+        )}
+        {agy && (
+          <section className="limits-for" data-provider="agy">
+            <h4 style={{ '--c': AGY_LIMIT_COLOR }}>
+              {agy.planTier ? `${t('limits.agyTitle')} · ${agy.planTier}` : t('limits.agyTitle')}
+            </h4>
+            {agy.windows.length ? (
+              <AgyLimitsReport lim={agy} />
+            ) : (
+              <p className="limits-none">{t('limits.agyUnavailable')}</p>
+            )}
+          </section>
         )}
       </div>
     </div>
