@@ -61,6 +61,8 @@ export interface NodeLaunchRequest {
   message: string
   /** The master's workspace label, so its sessions of one workspace stay together here too; '' for none. */
   workspace: string
+  /** True when `id` must be used as the exact Claude session id (a verifier, #675). */
+  exactSession?: boolean
   source:
     | {
         kind: 'repo'
@@ -93,7 +95,7 @@ export interface RepoOps {
 export interface NodeLaunchDeps {
   node: () => NodeConfig | null
   /** The node's own launches.start, with the session id the master picked. */
-  start: (body: unknown, session: string) => Promise<StartResult>
+  start: (body: unknown, session: string, options?: { exactSession?: boolean }) => Promise<StartResult>
   /** The node's launch by its id now, for the answer to an id it has. */
   launch: (id: string) => LaunchView | undefined
   profiles: () => ProfileSet
@@ -135,6 +137,7 @@ export function launchRequestOf(raw: unknown): NodeLaunchRequest | { field: stri
     if (b[key] !== undefined && b[key] !== null && !text(b[key], max)) return { field: key }
   const s = b.source
   if (!isObject(s)) return { field: 'source' }
+  if (b.exactSession !== undefined && typeof b.exactSession !== 'boolean') return { field: 'exactSession' }
   const worktree = worktreeOf(s.worktree)
   if (worktree === undefined) return { field: 'source.worktree' }
   let source: NodeLaunchRequest['source']
@@ -165,6 +168,7 @@ export function launchRequestOf(raw: unknown): NodeLaunchRequest | { field: stri
     model: str(b.model),
     message: str(b.message),
     workspace: str(b.workspace).trim(),
+    ...(b.exactSession === true && { exactSession: true }),
     source,
   }
 }
@@ -332,10 +336,11 @@ export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
           message: r.message,
           worktree: r.source.worktree,
           profile: r.profile,
-          ...(r.agent && { agent: r.agent }),
+          ...(r.agent && !r.exactSession && { agent: r.agent }),
           model: r.model,
         },
         r.id,
+        ...(r.exactSession ? [{ exactSession: true }] : []),
       )
     } catch (err) {
       started = { ok: false, field: 'launch', error: err instanceof Error ? err.message : String(err) }

@@ -42,7 +42,7 @@ import {
 } from '../adapters/work-thread-store.ts'
 import { type AskSpec, askSpec, type DecisionsConfig, type ReservedDecision } from '../core/decisions.ts'
 import { KEPT_SUBS } from '../core/node-uplink.ts'
-import { nodeConfig } from '../core/nodes.ts'
+import { nodeConfig, parseNodeKey } from '../core/nodes.ts'
 import { OWNER } from '../core/owner-watch.ts'
 import { parseTaskFile, TaskFileError } from '../core/thread-import.ts'
 import type { Config } from '../core/types.ts'
@@ -311,6 +311,8 @@ export interface NodeCall {
   lane: string | null
   /** The files' paths, in the order their `--file` comes in `argv`. */
   files: string[]
+  /** For `board thread verdict` (#675): the pane's session as this node's herdr confirmed it. */
+  self?: SelfAnswer
 }
 
 /** What the node's board answered (services/node/uplink.ts CallAnswer); null when it did not. */
@@ -333,7 +335,7 @@ const AGENTS_WAIT_MS = 5_000
  * reference that reads like `--file` is a value, and a board with cases off refuses the flag itself.
  */
 export function fileArgs(sub: string, rest: readonly string[]): number[] {
-  const known = flagsOf(sub, true)
+  const known = flagsOf(sub, true, true)
   if (!known?.values.includes('--file')) return []
   const at: number[] = []
   for (let i = 0; i < rest.length; i++) {
@@ -467,6 +469,11 @@ async function forward(
   }
   // Paths as this session meant them: the board that reads them runs in another folder.
   const files = fileArgs(sub, args).map(i => resolve(args[i] as string))
+  // The verifier's pane identity (#675), asked of this node's herdr only for `verdict`.
+  const self =
+    sub === 'verdict' && ctx.self
+      ? await ctx.self().catch((e: unknown) => ({ why: e instanceof Error ? e.message : String(e) }))
+      : undefined
   const body: NodeCall = {
     ...(KEPT_SUBS.has(sub) && { id: randomUUID() }),
     cmd: 'thread',
@@ -474,6 +481,7 @@ async function forward(
     session: actor.key,
     lane: ctx.lane,
     files,
+    ...(self && { self }),
   }
   const answer = await (ctx.call ?? callBoard(ctx.cfg.port))(body)
   if (!answer) return fail('board', 'the board does not run on this computer: nothing was sent')
@@ -532,7 +540,11 @@ function hideVerifiers(db: BoardDb, line: string, self: string): string {
   let out = line
   for (const h of verifyingThreads(db)) {
     const key = h.verify?.run?.key
-    if (key && key !== self) out = out.replaceAll(key, 'hidden')
+    if (!key || key === self) continue
+    out = out.replaceAll(key, 'hidden')
+    // A node verifier's key is `@<device>:<uuid>`: hide its raw session id too (#675).
+    const raw = parseNodeKey(key)?.key
+    if (raw) out = out.replaceAll(raw, 'hidden')
   }
   return out
 }

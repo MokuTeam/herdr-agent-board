@@ -234,7 +234,9 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     // is remembered here: the node sends a call again on every stream while its command waits, and
     // a write must not run twice.
     const kept = (call.cmd === 'thread' || call.cmd === 'threads') && KEPT_SUBS.has(call.argv[0] ?? '')
-    const remembered = kept || call.cmd === 'send' || (call.cmd === 'time' && TIME_WRITE_SUBS.has(call.argv[0] ?? ''))
+    const verdict = (call.cmd === 'thread' || call.cmd === 'threads') && call.argv[0] === 'verdict'
+    const remembered =
+      kept || verdict || call.cmd === 'send' || (call.cmd === 'time' && TIME_WRITE_SUBS.has(call.argv[0] ?? ''))
     let result = remembered ? store.seenCall(id, call.id) : null
     if (!result) {
       const ran = await runCall(id, call)
@@ -375,6 +377,18 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
             }
           })()
         : undefined
+      const verdictSelf =
+        sub === 'verdict' && call.self
+          ? 'why' in call.self
+            ? async () => ({ why: (call.self as { why: string }).why })
+            : async () => {
+                try {
+                  return { key: nodeKey(id, (call.self as { key: string }).key) }
+                } catch {
+                  return { why: 'not a session of the node' }
+                }
+              }
+          : undefined
       const code = await (o.run ?? threadCmd)(argv, {
         cfg: { threads: o.cfg.threads, port: o.cfg.port },
         actor,
@@ -384,6 +398,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
         out: l => out.push(l),
         err: l => err.push(l),
         sendOut: (thread, entry) => sendOut(thread, entry),
+        ...(verdictSelf && { self: verdictSelf }),
         ...(cases && { cases }),
       })
       return { code, out, err }
