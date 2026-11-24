@@ -154,6 +154,6 @@ test('schedule badge and the tab title', () => {
   expect(scheduleBadge([], 1000)).toEqual({ count: 0, due: false })
   expect(scheduleBadge([entry(2000)], 1000)).toEqual({ count: 1, due: false })
   expect(scheduleBadge([entry(2000), entry(1000)], 1000)).toEqual({ count: 2, due: true })
-  expect(documentTitle([item({ key: 'a', column: 'work' })])).toBe('Agent board')
-  expect(documentTitle([item({ key: 'a', column: 'me' }), item({ key: 'b', column: 'me' })])).toBe('(2) Agent board')
+  expect(documentTitle([item({ key: 'a', column: 'work' })])).toBe('MokuBoard')
+  expect(documentTitle([item({ key: 'a', column: 'me' }), item({ key: 'b', column: 'me' })])).toBe('(2) MokuBoard')
 })
