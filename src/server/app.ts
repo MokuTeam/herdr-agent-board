@@ -28,7 +28,7 @@ import { pluginCommit, touchCode } from '../adapters/plugin-update.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { programsOnPath } from '../adapters/process.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
-import { watchesDir } from '../adapters/schedule-store.ts'
+import { listEntries, watchesDir } from '../adapters/schedule-store.ts'
 import { writeSink } from '../adapters/secret-sinks.ts'
 import {
   backupSettings,
@@ -71,6 +71,7 @@ import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payloa
 import type { Observation } from '../core/presence.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
+import { heldByDevice } from '../core/schedule-rules.ts'
 import type { SetupFacts } from '../core/setup.ts'
 import { teamConfig } from '../core/team.ts'
 import { toastBody } from '../core/team-unread.ts'
@@ -1448,13 +1449,16 @@ export async function startServer({
       })),
   )
   let nodeUpdater: NodeUpdater | null = null
+  let scheduler: ReturnType<typeof startScheduler> | null = null
   function linksFollow(): void {
     if (nodeLinks) {
       nodeLinks.configChanged()
+      scheduler?.wakeDevices()
       return
     }
     if (nodesConfig(cfg.nodes) === null) return
     nodeLinks = createNodeLinks({ cfg, log, commit: runningCommit })
+    nodeLinks.onChange(id => scheduler?.wakeDevice(id))
     // Where a new session runs (#504), and the Devices row of this computer (#500): this computer's
     // own status by the code a node answers with.
     const ownStatus = createNodeStatus({
@@ -1584,7 +1588,11 @@ export async function startServer({
         // A device the file does not hold: the live config is not marked behind its back.
         if (r.ok && !found) return { ok: false, error: 'device' }
         // The live config at once, not ~120 ms later when its watcher follows the file.
-        if (r.ok && isRecord(cfg.nodes)) markRevoked(cfg.nodes, id)
+        if (r.ok && isRecord(cfg.nodes)) {
+          const next = structuredClone(cfg.nodes)
+          if (markRevoked(next, id)) cfg.nodes = next
+          scheduler?.wakeDevice(id)
+        }
         return r
       },
       log,
@@ -1624,6 +1632,7 @@ export async function startServer({
       },
       nodeRevoker,
       nodeUpdater,
+      () => heldByDevice(listEntries()),
     )
     // Their ssh dies with the board, also on an exit that skips close().
     process.on('exit', nodeLinks.killNow)
@@ -1731,7 +1740,7 @@ export async function startServer({
     verifyWas = on
   }
   if (!verifyWas && verifyKeptOff(cfg.threads)) verifyGone()
-  const scheduler = startScheduler({
+  scheduler = startScheduler({
     deps,
     onChange: refresh,
     remote: () => nodeProxy,

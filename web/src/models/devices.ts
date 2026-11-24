@@ -4,8 +4,10 @@
 // `nodes` sends no `devices` and no item with a `device`: nothing here draws, the switch is not
 // there, and every filter passes what it passed before.
 import { type GitLack, gitLacks } from '../../../src/core/git-access.ts'
+import { parseNodeKey } from '../../../src/core/node-key.ts'
 import type { NodesPanelSettings } from '../../../src/core/nodes.ts'
 import type { BoardCategory, BoardDevice } from '../../../src/core/payload.ts'
+import { NODE_OFFLINE_WHY, type ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import { ago } from './card.ts'
 import { loggedOut, loginCommand } from './node-setup.ts'
@@ -228,6 +230,8 @@ export interface DeviceRow {
   secrets: string[]
   /** What an agent there cannot do for want of git, an identity, a GitHub login or gh, in words (#609). */
   git: string[]
+  /** Master schedule entries held while this device is offline (#695); null when none. */
+  held: { count: number; label: string; entries: { id: string; who: string; text: string }[] } | null
   values: Record<Threshold, number | null>
   /**
    * Claude's login there (#509): the node's profiles that are not logged in, and the command that
@@ -320,6 +324,31 @@ export function linkWords(
     : t('node.dev.link.offlineNever')
 }
 
+/** Held schedule entries for a remote device while it is offline (#695). */
+function heldForDevice(
+  d: Pick<BoardDevice, 'id' | 'kind' | 'held'>,
+  schedules: readonly ScheduleEntry[] | undefined,
+  items: readonly Pick<Item, 'key' | 'name'>[] | undefined,
+  t: Translator,
+): DeviceRow['held'] {
+  if (d.kind === null) return null
+  const matched = (schedules ?? []).filter(
+    e => !e.device && e.why === NODE_OFFLINE_WHY && parseNodeKey(e.key)?.device === d.id,
+  )
+  const count = Math.max(d.held ?? 0, matched.length)
+  if (count <= 0) return null
+  const itemName = (key: string): string => items?.find(i => i.key === key)?.name ?? ''
+  return {
+    count,
+    label: t('node.dev.held', { n: count }),
+    entries: matched.map(e => ({
+      id: e.id,
+      who: itemName(e.key) || e.name || parseNodeKey(e.key)?.key.slice(0, 8) || e.key,
+      text: e.text,
+    })),
+  }
+}
+
 /**
  * The rows of the panel, in the payload's order (config.json's `nodes.order`). `settings`: what
  * GET /api/nodes added; a device without a `maxSessions` of its own fills its bar against the
@@ -332,6 +361,8 @@ export function deviceRows(
   now: number,
   t: Translator,
   settings?: Pick<PanelSettings, 'defaults' | 'noToken' | 'hosts' | 'secrets'> | null,
+  schedules?: readonly ScheduleEntry[],
+  items?: readonly Pick<Item, 'key' | 'name'>[],
 ): DeviceRow[] {
   return devices.map(d => {
     const s = d.status
@@ -382,6 +413,7 @@ export function deviceRows(
       giveSecrets: d.giveSecrets !== false,
       secrets: secretLines(settings?.secrets?.[d.id], t),
       git: d.kind === null ? [] : gitLacks(d.status).map(k => t(GIT_LACK[k], { device: title })),
+      held: heldForDevice(d, schedules, items, t),
       values: { maxSessions: d.maxSessions, minFreeMemMb: d.minFreeMemMb, maxLoad: d.maxLoad },
       login: loginOf(d, settings?.hosts),
     }

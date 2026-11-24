@@ -203,6 +203,7 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.dev.version': 'Version {v}',
     'node.dev.versionSame': 'same as this board',
     'node.dev.versionOther': "not this board's",
+    'node.dev.held': ['{n} entry held until it is back', '{n} entries held until it is back'],
     'node.dev.behind':
       'Runs another version of the board than this computer. It updates by itself while it is online and none of its sessions is working.',
     'node.dev.update': 'Update',
@@ -579,6 +580,11 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.dev.version': 'Версия {v}',
     'node.dev.versionSame': 'как у этой доски',
     'node.dev.versionOther': 'не как у этой доски',
+    'node.dev.held': [
+      '{n} запись ждёт возвращения устройства',
+      '{n} записи ждут возвращения устройства',
+      '{n} записей ждут возвращения устройства',
+    ],
     'node.dev.behind':
       'Версия доски не такая, как на этом компьютере. Обновится само, когда будет на связи и ни одна его сессия не будет работать.',
     'node.dev.update': 'Обновить',

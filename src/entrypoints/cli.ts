@@ -2583,7 +2583,8 @@ function deviceLine(d: Record<string, unknown>): string {
   const since = typeof link.since === 'number' ? ` since ${clock(link.since)}` : ''
   const next = typeof link.nextAt === 'number' ? `, next try ${clock(link.nextAt, true)}` : ''
   const commit = d.sameCommit === false ? ' · another commit' : ''
-  return `${parts.join(' ')}${since}${next}${commit}${said}`
+  const held = typeof d.held === 'number' && d.held > 0 ? ` · ${d.held} held` : ''
+  return `${parts.join(' ')}${since}${next}${commit}${held}${said}`
 }
 const TUNNEL_OFF = 'tunnel off · Settings → Remote access… on the web board sets it up'
 /** A time of today for the tunnel's lines: 14:02, or 14:02:07. */

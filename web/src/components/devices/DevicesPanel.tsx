@@ -137,7 +137,7 @@ export function DevicesPanel({ open, onClose, initial, setup }: DevicesPanelProp
   const held = useHeld(devices, reorder.dragging)
   // without `nodes` the panel holds Add a server alone: a board adds its first server here (#509)
   const shown = held ?? []
-  const rows = deviceRows(shown, now, t, settings)
+  const rows = deviceRows(shown, now, t, settings, data?.schedules, data?.items)
   if (order) rows.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
   const ids = rows.map(r => r.id)
   const move = (id: string, by: number) => {
@@ -427,6 +427,21 @@ function DeviceRowView({ row, open, defaults, next, disabled, send, onMove, onUp
             <span key={s}>{s}</span>
           ))}
         </p>
+      )}
+      {row.held && (
+        <div className="devices-held">
+          <span className="sheet-meta devices-held-count">{row.held.label}</span>
+          {row.held.entries.length > 0 && (
+            <ul className="devices-held-list">
+              {row.held.entries.map(e => (
+                <li className="devices-held-item" key={e.id}>
+                  <span className="devices-held-who">{e.who}</span>
+                  {e.text && <span className="devices-held-text">{e.text}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
       {row.login && (
         <div className="devices-login">

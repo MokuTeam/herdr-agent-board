@@ -40,7 +40,7 @@ import type {
 import type { PresenceView } from '../core/presence.ts'
 import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts'
 import type { RemoteView } from '../core/remote.ts'
-import type { ScheduleEntry } from '../core/schedule-rules.ts'
+import { heldByDevice, type ScheduleEntry } from '../core/schedule-rules.ts'
 import type { SetupSummary } from '../core/setup.ts'
 import { todosConfig } from '../core/todos.ts'
 import { turnResumeConfig } from '../core/turn-resume.ts'
@@ -380,6 +380,13 @@ export function createBoardState({
     const localAgy = readAgyLimits ? readAgyLimits() : localAgyLimits(cfg.launch)
     const remoteAgy = others?.devices.filter(d => d.id !== LOCAL && !d.revoked).map(d => d.status?.agyLimits) ?? []
     const agyLimits = pickAgyLimits([localAgy, ...remoteAgy])
+    const held = others ? heldByDevice(schedules) : null
+    const devices = others
+      ? others.devices.map(d => {
+          const n = d.id !== LOCAL ? (held?.[d.id] ?? 0) : 0
+          return n > 0 ? { ...d, held: n } : d
+        })
+      : undefined
     return {
       // archive: what became of the latest sessions put in it (the page's toasts).
       archive: { log: readArchiveLog(8) },
@@ -452,7 +459,7 @@ export function createBoardState({
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.
       ...omarchyOf(omarchy),
       // devices: only while config.json makes this board a master (#500).
-      ...(others && { devices: others.devices }),
+      ...(devices && { devices }),
     }
   }
 

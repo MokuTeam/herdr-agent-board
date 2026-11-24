@@ -688,6 +688,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.draft': 'Waits: unsent text in the session’s input box',
     'sched.dialog': 'Waits: a dialog is open in the session',
     'sched.tasks': 'Waits: background tasks run in the session',
+    'sched.nodeOffline': 'Waits: the device is not reachable',
     'sched.mode.onTime': 'On time',
     'sched.mode.idle': 'When free',
     'sched.mode.onTimeHint':
@@ -707,6 +708,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.why.draft': 'the input box held unsent text',
     'sched.why.dialog': 'a dialog stayed open',
     'sched.why.tasks': 'background tasks kept running',
+    'sched.why.node-revoked': 'the device was revoked',
+    'sched.why.node-forgotten': 'the device was removed',
     'sched.runs': ['{n} run', '{n} runs'],
     'sched.missedN': ['{n} missed', '{n} missed'],
     'sched.more': ['+{n} more', '+{n} more'],
@@ -1417,6 +1420,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.draft': 'Ждёт: в поле ввода сессии недописанный текст',
     'sched.dialog': 'Ждёт: в сессии открыт диалог',
     'sched.tasks': 'Ждёт: в сессии идут фоновые задачи',
+    'sched.nodeOffline': 'Ждёт: устройство не на связи',
     'sched.mode.onTime': 'Вовремя',
     'sched.mode.idle': 'Когда свободна',
     'sched.mode.onTimeHint':
@@ -1436,6 +1440,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.why.draft': 'в поле ввода был недописанный текст',
     'sched.why.dialog': 'диалог так и был открыт',
     'sched.why.tasks': 'шли фоновые задачи',
+    'sched.why.node-revoked': 'устройство было отозвано',
+    'sched.why.node-forgotten': 'устройство было удалено',
     'sched.runs': ['{n} запуск', '{n} запуска', '{n} запусков'],
     'sched.missedN': ['{n} пропуск', '{n} пропуска', '{n} пропусков'],
     'sched.more': ['ещё {n}', 'ещё {n}', 'ещё {n}'],

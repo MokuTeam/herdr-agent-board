@@ -45,7 +45,7 @@ import { type NodesConfig, nodesConfig, parseNodeKey } from '../../core/nodes.ts
 import type { Config, Item } from '../../core/types.ts'
 import type { Link } from '../../services/nodes/link.ts'
 import type { NodeLinks } from '../../services/nodes/links.ts'
-import type { RemoteDelivery, RemoteSent } from '../../services/scheduler.ts'
+import type { RemoteDelivery, RemoteDeviceState, RemoteSent } from '../../services/scheduler.ts'
 import { auditForwarded } from '../../services/secrets.ts'
 import { terminalOn } from '../../services/terminals.ts'
 import { type Body, type Guard, json, type Route, type RouteContext } from '../http.ts'
@@ -501,25 +501,50 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
     },
   }
 
+  /** How `device` stands for scheduled deliveries (#695): online only once its fresh payload arrived. */
+  function deviceState(device: string): RemoteDeviceState {
+    const d = conf()?.devices[device]
+    if (!d?.link) return 'forgotten'
+    if (d.revoked) return 'revoked'
+    const link = app.links.link(device)
+    if (link?.state().state !== 'online') return 'offline'
+    const payload = link.payload()
+    if (!payload || payload.stale) return 'offline'
+    return 'online'
+  }
+
   return {
     route,
+    deviceState,
     async send(key, text, o): Promise<RemoteSent> {
       const at = parseNodeKey(key)
-      const item = at ? app.find(key) : undefined
-      if (!at || !item) return { ok: false, gone: true, error: 'gone' }
+      if (!at) return { ok: false, gone: true, error: 'gone' }
+      // Device and link state come before cached session data so an offline snapshot never expires entries.
+      const state = deviceState(at.device)
+      if (state === 'forgotten') return { ok: false, end: true, error: 'node-forgotten' }
+      if (state === 'revoked') return { ok: false, end: true, error: 'node-revoked' }
+      if (state === 'offline') return { ok: false, offline: true, error: 'node-offline' }
+      const item = app.find(key)
+      if (!item) return { ok: false, gone: true, error: 'gone' }
       // As the scheduler holds a session of its own: one that sleeps waits for a noWake entry, one that works for an idle one.
       if (o.noWake && item.sleeping) return { ok: false, asleep: true, error: 'asleep' }
       if (o.idle && item.status === 'working') return { ok: false, busy: true, error: 'busy' }
-      const r = reach(at.device)
-      if ('refused' in r) return { ok: false, error: r.code, ...(r.code === 'gone' && { gone: true }) }
+      const link = app.links.link(at.device)
+      if (!link) return { ok: false, offline: true, error: 'node-offline' }
       const res = await forward(
         at.device,
-        r.link,
+        link,
         nodePath({ area: 'session', key: at.key, rest: '/message' }),
         jsonInit({ text, session: item.session ?? null, requestId: o.requestId }),
       )
       const answer = await answerOf(res)
       if (res.ok && isRecord(answer) && answer.ok === true) return { ok: true }
+      if (isOffline(res)) {
+        const nowState = deviceState(at.device)
+        if (nowState === 'forgotten') return { ok: false, end: true, error: 'node-forgotten' }
+        if (nowState === 'revoked') return { ok: false, end: true, error: 'node-revoked' }
+        return { ok: false, offline: true, error: 'node-offline' }
+      }
       const a = isRecord(answer) ? answer : {}
       return {
         ok: false,

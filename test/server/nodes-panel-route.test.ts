@@ -233,4 +233,19 @@ describe('POST /api/nodes, the panel’s ops (#510)', () => {
     expect(Object.keys((await call(get)).body)).toEqual(['devices', 'problems'])
     expect(await call(post, { op: 'whenFull', whenFull: 'wait' })).toEqual({ status: 400, body: { error: 'op' } })
   })
+
+  test('GET includes held count per remote device when non-zero and omits it when 0 (#695)', async () => {
+    isolatedHome()
+    seed({ language: 'en', nodes: NODES })
+    const [get] = nodesRoutes(links(), undefined, panel(), undefined, undefined, () => ({
+      'server-1': 2,
+      local: 5,
+    }))
+    if (!get) throw new Error('no route')
+    const { body } = await call(get)
+    expect((body.devices as DeviceView[]).map(d => [d.id, d.held])).toEqual([
+      ['server-1', 2],
+      ['local', undefined],
+    ])
+  })
 })

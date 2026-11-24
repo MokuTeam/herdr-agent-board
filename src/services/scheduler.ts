@@ -62,7 +62,7 @@ import { t } from '../core/lang.ts'
 import { parseNodeKey } from '../core/nodes.ts'
 import { callTitle } from '../core/notices.ts'
 import { profileLabel, sessionProfile } from '../core/profiles.ts'
-import { cleanText, promptOf, type ScheduleEntry, targetOf } from '../core/schedule-rules.ts'
+import { cleanText, NODE_OFFLINE_WHY, promptOf, type ScheduleEntry, targetOf } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
 import { wakeOffByKey } from '../core/wake/mode.ts'
 import { watchesConfig } from '../core/watches.ts'
@@ -112,10 +112,23 @@ const joins = (e: ScheduleEntry): boolean => !e.kind && !e.cron && !e.receipt &&
 // a long one. What is left over goes on the next tick, as the next prompt.
 const JOINED_MAX = 8000
 
+/** How a device stands for remote delivery (#695). */
+export type RemoteDeviceState = 'online' | 'offline' | 'revoked' | 'forgotten'
+
 /** How a delivery to another device's session went (RemoteDelivery). */
 export type RemoteSent =
   | { ok: true }
-  | { ok: false; error: string; gone?: boolean; asleep?: boolean; busy?: boolean; dialog?: boolean; draft?: boolean }
+  | {
+      ok: false
+      error: string
+      gone?: boolean
+      asleep?: boolean
+      busy?: boolean
+      dialog?: boolean
+      draft?: boolean
+      offline?: boolean
+      end?: boolean
+    }
 
 /**
  * Delivery to a session of another device (#501, docs/design/nodes 10 item 5): a reminder the
@@ -123,6 +136,7 @@ export type RemoteSent =
  * (server/routes/node-proxy.ts), and the node's board types it into its own herdr.
  */
 export interface RemoteDelivery {
+  deviceState?(device: string): RemoteDeviceState
   send(key: string, text: string, o: { requestId: string; idle: boolean; noWake: boolean }): Promise<RemoteSent>
 }
 
@@ -149,6 +163,10 @@ export function startScheduler({
   verify?: Verifier
 }): {
   stop(): void
+  /** A device's link or revocation state changed: try its held entries at once (#695). */
+  wakeDevice(device: string): void
+  /** `nodes` config changed: try held entries for all held devices at once (#695). */
+  wakeDevices(): void
 } {
   const { cfg, log } = deps
   const withRemote = (local: Item[]): Item[] => {
@@ -163,6 +181,8 @@ export function startScheduler({
   // Runs that went out but whose entry could not be updated (its lock was taken): the next
   // tick finishes the entry instead of sending it again.
   const delivered = new Map<string, number>() // id -> next
+  const heldDevices = new Set<string>()
+  const wokenDevices = new Set<string>()
   let waking = 0
   let timer: ReturnType<typeof setTimeout> | undefined
   let ticking = false
@@ -192,14 +212,38 @@ export function startScheduler({
           .sweep(async () => withRemote(await collect(deps)))
           .catch((err: unknown) => log(`verify: ${messageOf(err)}`))
       const now = Date.now()
+      const woken = new Set(wokenDevices)
+      wokenDevices.clear()
+      const all = listEntries()
+      heldDevices.clear()
+      for (const e of all) {
+        if (e.why !== NODE_OFFLINE_WHY) continue
+        const at = parseNodeKey(e.key)
+        if (at) heldDevices.add(at.device)
+      }
       // A run that waits for its session is tried again once a tick, not on every file change; a
       // restart herdr-wake refused, not before its retry time.
       const tried = (e: ScheduleEntry): boolean => typeof e.tried === 'number' && e.tried > now - tickMs() * 0.9
       const later = (e: ScheduleEntry): boolean => typeof e.retryAt === 'number' && e.retryAt > now
+      const remoteWoke = (e: ScheduleEntry): boolean => {
+        if (e.why !== NODE_OFFLINE_WHY) return false
+        const at = parseNodeKey(e.key)
+        return !!at && woken.has(at.device)
+      }
       // Due: what may go now. One tried a moment ago still goes along with another due beside it.
-      const ready = listEntries().filter(e => e.next <= now && !later(e) && workdeskDue(e))
-      const due = ready.filter(e => !flying.has(e.key) && !tried(e))
+      const ready = all.filter(e => e.next <= now && !later(e) && workdeskDue(e))
+      const due = ready.filter(e => !flying.has(e.key) && (!tried(e) || remoteWoke(e)))
       if (!due.length) return
+      // Keep remote deliveries for the same session strictly FIFO when an earlier entry waits on dialog/draft/busy.
+      const headBlocked = (e: ScheduleEntry): boolean =>
+        ready.some(
+          earlier =>
+            earlier !== e &&
+            earlier.key === e.key &&
+            (earlier.next < e.next || (earlier.next === e.next && (earlier.created ?? 0) < (e.created ?? 0))) &&
+            earlier.why !== 'asleep' &&
+            (!earlier.idle || !!e.idle),
+        )
       // Fresh: whether a session sleeps or works decides what happens now.
       const items = await collect(deps)
       const set = deps.profiles()
@@ -207,6 +251,7 @@ export function startScheduler({
       const profileOf = (key: string): Pick<Item, 'profile' | 'profileFolder'> =>
         items.find(i => i.key === key) ?? sessionProfile(readCard(key), set.list)
       const profileIdOf = (key: string): string | undefined => itemProfile(profileOf(key), set.list)?.id
+      let changed = false
       for (const entry of due) {
         if (!workdeskDue(entry)) continue
         if (delivered.get(entry.id) === entry.next) {
@@ -237,15 +282,40 @@ export function startScheduler({
           }
         }
         // Another device's session (#501): through its node, never this computer's herdr.
-        const via = parseNodeKey(entry.key) ? (remote?.() ?? null) : null
-        if (via) {
+        const at = parseNodeKey(entry.key)
+        const via = at ? (remote?.() ?? null) : null
+        if (via && at) {
           if (flying.has(entry.key)) continue
+          if (!entry.kind && !entry.receipt) {
+            const devState = via.deviceState?.(at.device)
+            if (devState === 'revoked' || devState === 'forgotten') {
+              if (claim(entry.id, now)) {
+                endRemote(entry, now, devState === 'revoked' ? 'node-revoked' : 'node-forgotten')
+                changed = true
+              }
+              continue
+            }
+            if (devState === 'offline') {
+              if (holdNode(entry, now)) changed = true
+              heldDevices.add(at.device)
+              continue
+            }
+          }
+          if (headBlocked(entry)) continue
           flying.add(entry.key)
-          viaNode(entry, via)
+          let settled = false
+          viaNode(entry, via, at.device)
+            .then(done => {
+              settled = done
+            })
             .catch(err => log(`schedule ${entry.id}: ${messageOf(err)}`))
             .finally(() => {
               flying.delete(entry.key)
               onChange()
+              if (settled && !stopped) {
+                wokenDevices.add(at.device)
+                plan(0)
+              }
             })
           continue
         }
@@ -279,6 +349,7 @@ export function startScheduler({
             onChange()
           })
       }
+      if (changed) onChange()
     } catch (err) {
       log(`schedule: ${messageOf(err)}`)
     } finally {
@@ -459,20 +530,46 @@ export function startScheduler({
    * A plain reminder for another device's session, sent through its node, which types it into its
    * own herdr (waking it unless `noWake`). A restart, a sleep or a call's results is the node's own
    * scheduler's to run: held here as for a session not on this board. The request's id is the run's,
-   * so a run sent twice is typed once (core/message-gate.ts on the node).
+   * so a run sent twice is typed once (core/message-gate.ts on the node). Returns whether the entry
+   * finished (sent or ended), so another queued entry for the same session can go next.
    */
-  async function viaNode(entry: ScheduleEntry, via: RemoteDelivery): Promise<void> {
+  async function viaNode(entry: ScheduleEntry, via: RemoteDelivery, device: string): Promise<boolean> {
     const now = Date.now()
-    if (entry.kind || entry.receipt) return wait(entry, now, 'gone', true)
-    if (!claim(entry.id, now)) return
+    if (entry.kind || entry.receipt) {
+      wait(entry, now, 'gone', true)
+      return false
+    }
+    if (!claim(entry.id, now)) return false
     const r = await via.send(entry.key, promptOf(entry, Date.now()), {
       requestId: `${entry.id}-${entry.next}`,
       idle: !!entry.idle,
       noWake: entry.noWake === true,
     })
-    if (r.ok) return sent(entry)
-    if (r.asleep) return untilAwake(entry, now)
-    wait(entry, now, r.gone ? 'gone' : whyNot(r), !!r.gone)
+    if (r.ok) {
+      sent(entry)
+      return true
+    }
+    if (r.offline) {
+      holdNode(entry, now)
+      heldDevices.add(device)
+      return false
+    }
+    if (r.end) {
+      endRemote(entry, now, r.error)
+      return true
+    }
+    if (r.gone && entry.why === NODE_OFFLINE_WHY) {
+      endRemote(entry, now, 'gone')
+      return true
+    }
+    if (r.asleep) {
+      untilAwake(entry, now)
+      return false
+    }
+    // Offline hold time never counts against scheduleWaitMin once the node is back.
+    const base = entry.why === NODE_OFFLINE_WHY ? { ...entry, tried: undefined } : entry
+    wait(base, now, r.gone ? 'gone' : whyNot(r), !!r.gone)
+    return false
   }
 
   /**
@@ -744,6 +841,36 @@ export function startScheduler({
   }
 
   /**
+   * Waiting for an offline node (#695): tried again on the next tick or when the node comes back,
+   * the wait not counted and the session not marked gone, so it is never missed nor dropped while
+   * the device is away.
+   */
+  function holdNode(entry: ScheduleEntry, now: number): boolean {
+    let became = false
+    updateEntry(entry.id, e => {
+      const held = e.claim as { pid: number; at: number } | undefined
+      if (held && held.pid !== process.pid && now - held.at < CLAIM_MS) return undefined
+      became = e.why !== NODE_OFFLINE_WHY
+      return {
+        ...e,
+        pendingSince: e.pendingSince ?? now,
+        tried: now,
+        why: NODE_OFFLINE_WHY,
+        claim: undefined,
+      }
+    })
+    return became
+  }
+
+  /**
+   * End a remote entry immediately as missed (revoked or forgotten device, or session gone from
+   * the node's payload after it returns, #695).
+   */
+  function endRemote(entry: ScheduleEntry, now: number, why: string): void {
+    if (removeEntry(entry.id, 'missed')) logRun(record(entry, now, 'missed', why))
+  }
+
+  /**
    * A `noWake` entry for a sleeping session: tried again on the next tick, the wait not counted,
    * so it is never missed for this; it goes once the session is awake.
    */
@@ -807,6 +934,16 @@ export function startScheduler({
       clearTimeout(timer)
       clearTimeout(watchTimer)
       for (const w of watchers) w.close()
+    },
+    wakeDevice(device) {
+      if (stopped || !heldDevices.has(device)) return
+      wokenDevices.add(device)
+      plan(0)
+    },
+    wakeDevices() {
+      if (stopped || !heldDevices.size) return
+      for (const device of heldDevices) wokenDevices.add(device)
+      plan(0)
     },
   }
 }

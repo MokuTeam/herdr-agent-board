@@ -49,6 +49,7 @@ const WAITS: Record<string, string> = {
   busy: 'sched.pending',
   // A sleep waits for them too, as a restart does.
   tasks: 'sched.tasks',
+  'node-offline': 'sched.nodeOffline',
 }
 
 /** Why a due entry has not gone out yet; nothing while it is not waiting. A restart: how it stands. */
@@ -166,7 +167,7 @@ export function logRecords(log: unknown[]): LogRecord[] {
   )
 }
 
-const MISSED_WHY = ['busy', 'gone', 'draft', 'dialog', 'tasks']
+const MISSED_WHY = ['busy', 'gone', 'draft', 'dialog', 'tasks', 'node-revoked', 'node-forgotten']
 
 /** Why a run did not go out: the scheduler's word for it in a line, or the reason as it came. */
 export const logWhy = (r: Pick<LogRecord, 'why'>, t: Translator): string =>
