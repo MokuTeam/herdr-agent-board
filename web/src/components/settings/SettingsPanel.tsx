@@ -284,10 +284,26 @@ export function SettingsPanel({
   const sections: { id: SettingsSection; label: string; icon: ReactNode; warn?: boolean }[] = [
     { id: 'display', label: t('set.sec.display'), icon: <SlidersIcon /> },
     { id: 'board', label: t('set.sec.board'), icon: <CpuIcon /> },
-    ...(!isRemote || data ? [{ id: 'features' as const, label: t('set.sec.features'), icon: <LayersIcon /> }] : []),
+    ...(!isRemote ? [{ id: 'features' as const, label: t('set.sec.features'), icon: <LayersIcon /> }] : []),
     { id: 'integrations', label: t('set.sec.integrations'), icon: <PlugIcon /> },
     { id: 'system', label: t('set.sec.system'), icon: <ShieldIcon />, warn: systemWarn },
   ]
+
+  const todosRow = data ? (
+    <div className="set-row">
+      <div className="set-lbl">
+        <b>{t('set.todos')}</b>
+        <small>{t('set.todos.note')}</small>
+      </div>
+      <Segmented
+        label={t('set.todos')}
+        disabled={!canEdit}
+        value={todosMode}
+        options={TODO_MODES.map(id => ({ value: id, label: t(`set.todos.${id}`) }))}
+        onChange={pickTodos}
+      />
+    </div>
+  ) : null
 
   const shownProfiles = (data?.profiles ?? []).filter(p => !p.hidden).length
   const onlineDevices = (data?.devices ?? []).filter(reachable).length
@@ -529,32 +545,19 @@ export function SettingsPanel({
                     />
                   </div>
                 )}
+                {isRemote && todosRow}
               </div>
             </section>
           )}
 
-          {section === 'features' && (!isRemote || !!data) && (
+          {section === 'features' && !isRemote && (
             <section className="set-section">
               <div className="set-sec-head">
                 <h3>{t('set.sec.features')}</h3>
                 <span className="set-scope">{t('set.scope.board')}</span>
               </div>
               <div className="set-group">
-                {data && (
-                  <div className="set-row">
-                    <div className="set-lbl">
-                      <b>{t('set.todos')}</b>
-                      <small>{t('set.todos.note')}</small>
-                    </div>
-                    <Segmented
-                      label={t('set.todos')}
-                      disabled={!canEdit}
-                      value={todosMode}
-                      options={TODO_MODES.map(id => ({ value: id, label: t(`set.todos.${id}`) }))}
-                      onChange={pickTodos}
-                    />
-                  </div>
-                )}
+                {todosRow}
                 {threadsInfo && (
                   <>
                     <div className="set-row">

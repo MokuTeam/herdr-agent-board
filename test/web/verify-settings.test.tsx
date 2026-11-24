@@ -116,6 +116,7 @@ function baseProps(overrides: Partial<SettingsPanelProps> = {}): SettingsPanelPr
     onOpenMokupilot: noop,
     onOpenAccess: noop,
     onOpenBackup: noop,
+    onOpenHousekeeping: noop,
     onOpenUpdates: noop,
     onOpenTimeSettings: noop,
     onOpenCalendarSettings: noop,
