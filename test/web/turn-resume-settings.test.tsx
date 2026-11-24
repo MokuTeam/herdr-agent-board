@@ -28,6 +28,7 @@ function props() {
     onOpenAccess: noop,
     onOpenBackup: noop,
     onOpenUpdates: noop,
+    onOpenHousekeeping: noop,
     onOpenTimeSettings: noop,
     onOpenCalendarSettings: noop,
     onOpenLocalPaths: noop,

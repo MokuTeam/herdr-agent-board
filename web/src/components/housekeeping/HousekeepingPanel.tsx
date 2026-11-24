@@ -8,18 +8,19 @@ import { errorText, postJson, replyOf } from '../../api/client.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
-import { Panel } from '../panel/Panel.tsx'
+import { Panel, type PanelBack } from '../panel/Panel.tsx'
 
 export interface HousekeepingPanelProps {
   open: boolean
   onClose(): void
+  back?: PanelBack | undefined
 }
 
 function isHousekeepingView(v: unknown): v is HousekeepingView {
   return !!v && typeof v === 'object' && 'config' in v && 'log' in v
 }
 
-export function HousekeepingPanel({ open, onClose }: HousekeepingPanelProps) {
+export function HousekeepingPanel({ open, onClose, back }: HousekeepingPanelProps) {
   const t = useT()
   const { canEdit } = useBoardContext()
   const latest = useLatest({ t })
@@ -71,6 +72,7 @@ export function HousekeepingPanel({ open, onClose }: HousekeepingPanelProps) {
     <Panel
       id="housekeeping-sheet"
       kind="housekeeping"
+      back={back}
       open={open}
       onClose={onClose}
       title={

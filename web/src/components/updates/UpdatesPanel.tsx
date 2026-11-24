@@ -11,14 +11,15 @@ import { useT } from '../../i18n/I18nProvider.tsx'
 import { cameIn, isUpdatesView, lastCheckLine, type UpdatesView, whereLine } from '../../models/self-update.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
-import { Panel } from '../panel/Panel.tsx'
+import { Panel, type PanelBack } from '../panel/Panel.tsx'
 
 export interface UpdatesPanelProps {
   open: boolean
   onClose(): void
+  back?: PanelBack | undefined
 }
 
-export function UpdatesPanel({ open, onClose }: UpdatesPanelProps) {
+export function UpdatesPanel({ open, onClose, back }: UpdatesPanelProps) {
   const t = useT()
   const { canEdit } = useBoardContext()
   const latest = useLatest({ t })
@@ -69,6 +70,7 @@ export function UpdatesPanel({ open, onClose }: UpdatesPanelProps) {
     <Panel
       id="updates-sheet"
       kind="updates"
+      back={back}
       open={open}
       onClose={onClose}
       title={

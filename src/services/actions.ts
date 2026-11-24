@@ -495,7 +495,8 @@ async function readyAgyToSleep(
       return { ok: false, why: 'gone' }
     if (agent.status === 'blocked') return { ok: false, why: 'dialog' }
     if (agent.status === 'working') return { ok: false, why: 'busy' }
-    if (item.session && deps.agy.hasRunningSubagent(item.session)) return { ok: false, why: 'tasks' }
+    if (item.session && (deps.agy.hasRunningSubagent(item.session) || deps.agy.hasRunningBgTask(item.session)))
+      return { ok: false, why: 'tasks' }
     const draft = agyDraft(
       await herdrText(['agent', 'read', item.pane ?? '', '--source', 'recent', '--lines', '40', '--ansi'], 10_000),
     )

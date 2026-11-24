@@ -18,14 +18,15 @@ import {
   whyLine,
 } from '../../models/mokupilot.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
-import { Panel } from '../panel/Panel.tsx'
+import { Panel, type PanelBack } from '../panel/Panel.tsx'
 
 export interface MokupilotPanelProps {
   open: boolean
   onClose(): void
+  back?: PanelBack | undefined
 }
 
-export function MokupilotPanel({ open, onClose }: MokupilotPanelProps) {
+export function MokupilotPanel({ open, onClose, back }: MokupilotPanelProps) {
   const t = useT()
   const { canEdit, toast } = useBoardContext()
   const latest = useLatest({ t, toast })
@@ -63,6 +64,7 @@ export function MokupilotPanel({ open, onClose }: MokupilotPanelProps) {
     <Panel
       id="mokupilot-sheet"
       kind="mokupilot"
+      back={back}
       open={open}
       onClose={onClose}
       title={

@@ -303,3 +303,24 @@ export type Frame =
   | { t: 'blob_get'; id: string; at: number }
   | { t: 'blob_data'; id: string; at: number; data: string }
   | { t: 'blob_done'; id: string }
+
+/**
+ * Orders two messages on one UTC timeline by the time written (`ts`, parsed via Date.parse so
+ * offsets, missing milliseconds and non-ISO strings compare as instants rather than text), with
+ * a deterministic locale-independent tie-breaker on `id` and `dir`. Invalid timestamps sort last.
+ */
+export function compareMessageTime(
+  a: { ts: string; id: string; dir?: string },
+  b: { ts: string; id: string; dir?: string },
+): number {
+  const am = Date.parse(a.ts)
+  const bm = Date.parse(b.ts)
+  const aBad = Number.isNaN(am)
+  const bBad = Number.isNaN(bm)
+  if (aBad !== bBad) return aBad ? 1 : -1
+  if (!aBad && am !== bm) return am - bm
+  if (a.id !== b.id) return a.id < b.id ? -1 : 1
+  const ad = a.dir ?? ''
+  const bd = b.dir ?? ''
+  return ad < bd ? -1 : ad > bd ? 1 : 0
+}

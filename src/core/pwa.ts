@@ -63,13 +63,13 @@ export const tokenCookie = (token: string, name = COOKIE, maxAgeS = COOKIE_AGE):
 /** Set-Cookie that drops a token that no longer works. */
 export const clearCookie = (name = COOKIE): string => `${name}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict`
 
-/** What a phone's browser needs to install the board and show it full screen; colors as web/styles/app.css. */
+/** What a phone's browser needs to install the board and show it full screen; colors as web/styles/design-system.css. */
 const HEAD = [
   '<link rel="manifest" href="manifest.webmanifest">',
-  '<meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">',
-  '<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">',
+  '<meta name="theme-color" content="#f6f6f4" media="(prefers-color-scheme: light)">',
+  '<meta name="theme-color" content="#111214" media="(prefers-color-scheme: dark)">',
   '<link rel="apple-touch-icon" href="apple-touch-icon.png">',
-  '<meta name="apple-mobile-web-app-title" content="Board">',
+  '<meta name="apple-mobile-web-app-title" content="MokuBoard">',
   '<meta name="apple-mobile-web-app-capable" content="yes">',
   '<meta name="mobile-web-app-capable" content="yes">',
   '<meta name="apple-mobile-web-app-status-bar-style" content="default">',

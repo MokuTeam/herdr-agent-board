@@ -140,7 +140,8 @@ export async function putAgyToSleep(
     const cur = await ops.herdr.pane(pane)
     if (cur?.agent !== AGY_AGENT || cur.agent_session?.value !== session) return no(`no running session named ${pane}`)
     if (cur.agent_status !== 'idle' && cur.agent_status !== 'done') return no(`${name} is not idle`)
-    if (ops.hasRunningHelpers(session)) return no(`${name} is not idle (subagents are still running)`)
+    if (ops.hasRunningHelpers(session))
+      return no(`${name} is not idle (subagents or background tasks are still running)`)
     if (agyDraft(await ops.herdr.inputBox(pane)) !== '')
       return no(`${name} did not go to sleep (busy, or text in its input box)`)
     const proc = await ops.agyProcess(pane).catch(() => null)
@@ -289,7 +290,7 @@ export function defaultAgyOps(herdr: WakeHerdr = cliWakeHerdr, agy: AgyHome = cr
     herdr,
     agyProcess: pane => agyProcessIn(pane),
     hasConversation: session => agy.hasConversation(session),
-    hasRunningHelpers: session => agy.hasRunningSubagent(session),
+    hasRunningHelpers: session => agy.hasRunningSubagent(session) || agy.hasRunningBgTask(session),
     reportSession: (pane, session) => reportAgySession(pane, session, agy.transcriptPath(session)),
   }
 }

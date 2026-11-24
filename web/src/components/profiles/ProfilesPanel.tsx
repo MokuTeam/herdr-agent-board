@@ -11,15 +11,16 @@ import { useLatest } from '../../hooks/useLatest.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { type ProfileRowView, profileRows, unknownFolders } from '../../models/profiles.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
-import { Panel } from '../panel/Panel.tsx'
+import { Panel, type PanelBack } from '../panel/Panel.tsx'
 import { type ProfileEdit, ProfileRow } from './ProfileRow.tsx'
 
 export interface ProfilesPanelProps {
   open: boolean
   onClose(): void
+  back?: PanelBack | undefined
 }
 
-export function ProfilesPanel({ open, onClose }: ProfilesPanelProps) {
+export function ProfilesPanel({ open, onClose, back }: ProfilesPanelProps) {
   const t = useT()
   const { data, canEdit, toast } = useBoardContext()
   const latest = useLatest({ canEdit, t, toast, profiles: data?.profiles })
@@ -51,6 +52,7 @@ export function ProfilesPanel({ open, onClose }: ProfilesPanelProps) {
     <Panel
       id="profiles-sheet"
       kind="profiles"
+      back={back}
       open={open}
       onClose={onClose}
       title={

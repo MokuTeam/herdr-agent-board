@@ -8,6 +8,7 @@ import { stripAnsi } from './input-box.ts'
 const ESCAPES = /\x1b\[([0-9;?]*)([A-Za-z])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b./g
 const RULE = /^\s*─{8,}/
 const DIALOG_FOOTER = /\b(?:enter to (?:continue|confirm|select|submit)|esc(?:ape)? to close)\b|↑↓|↑\/↓/i
+const FOOTER_TASK_RE = /(?:^|·)\s*(\d+)\s+(?:background\s+)?task\(s\)(?:\s*(?:·|$)|\s{2,})/i
 
 /** A line without ANSI escapes and without SGR-2 dim placeholder fragments. */
 function nonDimText(line: string): string {
@@ -54,4 +55,33 @@ export function agyDraft(ansiScreen: unknown): string | null {
     return parts.join('\n').trim()
   }
   return null
+}
+
+/**
+ * Number of running background tasks shown on Antigravity CLI's unambiguous status-bar line
+ * immediately below a complete `───` -> `>` -> `───` input box (e.g. `1 task(s)`), 0 when the
+ * status line shows none, or null when no complete input box is visible or a dialog is open.
+ */
+export function agyFooterTasks(ansiScreen: unknown): number | null {
+  const plain = String(ansiScreen ?? '')
+    .split(/\r?\n/)
+    .map(stripAnsi)
+  let end = -1
+  for (let i = plain.length - 1; i > 0; i--) {
+    if (!plain[i]?.trimStart().startsWith('>')) continue
+    if (!RULE.test(plain[i - 1] ?? '')) continue
+    let k = i
+    while (k < plain.length && !(k > i && RULE.test(plain[k] ?? ''))) k++
+    if (k < plain.length) {
+      end = k
+      break
+    }
+  }
+  if (end < 0) return null
+  const footerLines = plain.slice(end + 1)
+  const footer = footerLines.join('\n')
+  if (/^\s*[❯→]/m.test(footer) || DIALOG_FOOTER.test(footer)) return null
+  const statusLine = footerLines.find(l => l.trim().length > 0) ?? ''
+  const match = FOOTER_TASK_RE.exec(statusLine)
+  return match ? Number(match[1]) : 0
 }

@@ -579,7 +579,7 @@ describe('Update, on a node on another version (#590)', () => {
     // what the button cannot mend says to update by hand, with no button
     expect(failed('platform')).toEqual({
       state: 'failed',
-      text: 'The update failed: it runs Windows, where the board does not update itself: update it by hand',
+      text: 'The update failed: it runs an older board on Windows, which does not update itself: update it by hand once',
       offer: false,
     })
     expect(failed('no-checkout')?.offer).toBe(false)
@@ -628,7 +628,7 @@ describe('Update, on a node on another version (#590)', () => {
       [
         'Runs another version of the board than this computer. It updates by itself while it is online and none of its sessions is working.Update',
       ],
-      ['The update failed: it runs Windows, where the board does not update itself: update it by hand'],
+      ['The update failed: it runs an older board on Windows, which does not update itself: update it by hand once'],
       [],
     ])
     const ru = renderInBoard(
@@ -681,6 +681,48 @@ describe('what an agent on the device cannot do for git (#609)', () => {
   test('a node of an older board, this computer: nothing said', () => {
     expect(deviceRows([device('server-1', { status: status('server-1', 1) })], NOW, t)[0]?.git).toEqual([])
     expect(deviceRows([device('local', { status: gitStatus(['bash'], false, []) })], NOW, t)[0]?.git).toEqual([])
+  })
+})
+
+describe('held entries for offline devices (#695)', () => {
+  test('deviceRows and DevicesPanel show held count and entries per device in en and ru, and omit when 0', () => {
+    const schedules = [
+      { id: 'a1', key: '@server-2:s1', name: 'anna', text: 'check PR', next: NOW - 60_000, why: 'node-offline' },
+      { id: 'a2', key: '@server-2:s2', name: 'ben', text: 'deploy', next: NOW - 30_000, why: 'node-offline' },
+      { id: 'a3', key: '@server-1:s3', name: 'cleo', text: 'not offline', next: NOW - 10_000, why: 'busy' },
+    ]
+    const items = [{ key: '@server-2:s1', name: 'Anna live' }] as BoardPayload['items']
+    const devs = [device('server-1'), device('server-2', { held: 2 }), device('local')]
+    const rowsEn = deviceRows(devs, NOW, t, SETTINGS, schedules, items)
+    expect(rowsEn[0]?.held).toBeNull()
+    expect(rowsEn[1]?.held).toEqual({
+      count: 2,
+      label: '2 entries held until it is back',
+      entries: [
+        { id: 'a1', who: 'Anna live', text: 'check PR' },
+        { id: 'a2', who: 'ben', text: 'deploy' },
+      ],
+    })
+    expect(rowsEn[2]?.held).toBeNull()
+
+    const ru = translator('ru')
+    const rowsRu = deviceRows([device('server-2', { held: 1 })], NOW, ru, SETTINGS, schedules.slice(0, 1), items)
+    expect(rowsRu[0]?.held?.label).toBe('1 запись ждёт возвращения устройства')
+
+    const rendered = renderInBoard(
+      <PanelProvider viewport={() => ({ w: 1600, h: 900 })}>
+        <DevicesPanel open onClose={() => {}} initial={SETTINGS} />
+      </PanelProvider>,
+      board({ data: payload({ devices: devs, categories: CATEGORIES, schedules, items }), now: NOW }),
+    )
+    const row2 = rowsOf(rendered)[1]
+    if (!row2) throw new Error('missing row')
+    const rowText = text([row2])
+    expect(rowText).toContain('2 entries held until it is back')
+    expect(rowText).toContain('Anna live')
+    expect(rowText).toContain('check PR')
+    expect(rowText).toContain('ben')
+    expect(rowText).toContain('deploy')
   })
 })
 

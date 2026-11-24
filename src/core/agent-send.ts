@@ -15,6 +15,7 @@
 //   signed by the sender, with the name and ref an answer goes to (`replyTo`) and, from another
 //   computer, which one (`fromDevice`). The receiver is told to answer with `board send`
 //   (core/schedule-rules.ts promptOf), which works on every computer of the board.
+import { type BgTaskSummary, bgTaskActive, isBgTaskStuck } from './bg-task.ts'
 import { parseNodeKey } from './node-key.ts'
 import { cleanName, cleanText, MAX_TEXT } from './schedule-rules.ts'
 
@@ -38,6 +39,7 @@ export interface Target {
   movedTo: string | null
   /** When that move mark was written (`card.moved.at`); null when unmarked or unrecorded. */
   movedAt: number | null
+  bgTasks?: BgTaskSummary
 }
 
 /** Who sends: the session's key (a node's session's carries the device's prefix) and its name on the board. */
@@ -155,6 +157,7 @@ export function targetsOf(items: unknown, own = ''): Target[] {
       activity: Math.max(num(i.activity), num(i.lastAt)),
       movedTo: str(i.movedTo) || null,
       movedAt: typeof i.movedAt === 'number' && Number.isFinite(i.movedAt) ? i.movedAt : null,
+      ...(bgTaskActive(i.bgTasks as BgTaskSummary | undefined) && { bgTasks: i.bgTasks as BgTaskSummary }),
     })
   }
   const hasBoardNode = all.some(t => t.device === LEGACY_MASTER)
@@ -182,6 +185,7 @@ export interface AgentView {
   sleeping: boolean
   self: boolean
   offline: boolean
+  bgTasks?: BgTaskSummary
 }
 
 /** Structured views of `targets` (live first, then sleepers newest-active first). */
@@ -202,6 +206,7 @@ export function agentViewsOf(
     sleeping: t.sleeping,
     self: !!o.selfKey && t.key === o.selfKey,
     offline: !!t.device && !!o.offline?.has(t.device),
+    ...(t.bgTasks && { bgTasks: t.bgTasks }),
   }))
 }
 
@@ -211,23 +216,26 @@ export function agentViewsOf(
  */
 export function formatAgentLines(
   targets: readonly Target[],
-  o: { selfKey?: string; offline?: ReadonlySet<string>; own?: string; maxSleeping?: number } = {},
+  o: { selfKey?: string; offline?: ReadonlySet<string>; own?: string; maxSleeping?: number; now?: number } = {},
 ): string[] {
   const live = targets.filter(t => !t.sleeping)
   const asleep = targets.filter(t => t.sleeping).sort((a, b) => b.activity - a.activity)
   const shownAsleep = o.maxSleeping !== undefined ? asleep.slice(0, o.maxSleeping) : asleep
   const hasRemote = targets.some(t => t.device !== null)
-  const row = (t: Target): string =>
-    [
+  const row = (t: Target): string => {
+    const stuck = t.bgTasks ? (o.now !== undefined ? isBgTaskStuck(t.bgTasks, o.now) : t.bgTasks.stuck === true) : false
+    return [
       labelOf(t),
       t.agent ?? '',
       t.device ? `node ${t.device}` : hasRemote && o.own ? o.own : '',
       t.sleeping ? 'asleep' : t.status || 'live',
       o.selfKey && t.key === o.selfKey ? '(this session)' : '',
+      stuck ? 'background task may be stuck' : '',
       t.device && o.offline?.has(t.device) ? 'node offline now: goes out once it is back' : '',
     ]
       .filter(Boolean)
       .join('  ·  ')
+  }
   const rows = [...live, ...shownAsleep].map(row)
   if (asleep.length > shownAsleep.length)
     rows.push(`... and ${asleep.length - shownAsleep.length} more asleep; board send / SendMessage reaches them too`)

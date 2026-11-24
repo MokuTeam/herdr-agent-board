@@ -2,6 +2,7 @@
 // when one is due, and which session an entry is for. Storage is src/adapters/schedule-store.ts, sending is
 // src/services/scheduler.ts.
 import { t } from './lang.ts'
+import { parseNodeKey } from './node-key.ts'
 import { CALL_NOTE } from './notices.ts'
 import { TURN_RESUME_KIND } from './turn-resume.ts'
 import type { Item } from './types.ts'
@@ -15,6 +16,20 @@ export const MAX_TEXT = 2000
 export const MAX_REPORT = 16_000
 // Later than this, the prompt says by how much.
 const LATE_MS = 2 * 60_000
+/** Why a master entry for a node session is held without expiring (#695). */
+export const NODE_OFFLINE_WHY = 'node-offline'
+
+/** Master schedule entries held while each device is offline (#695), keyed by device id. */
+export function heldByDevice(entries: readonly { key: string; why?: unknown }[]): Record<string, number> {
+  const counts = Object.create(null) as Record<string, number>
+  for (const e of entries) {
+    if (e.why !== NODE_OFFLINE_WHY) continue
+    const at = parseNodeKey(e.key)
+    if (!at) continue
+    counts[at.device] = (counts[at.device] ?? 0) + 1
+  }
+  return counts
+}
 
 /** The session an entry was set by, or the one it was for before /clear. */
 export type SessionRef = { key: string; name: string }

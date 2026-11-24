@@ -9,7 +9,7 @@ import { type KeyboardEvent, useState } from 'react'
 import type { Item } from '../../../../src/core/types.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { cardChecklist, plain } from '../../models/card.ts'
+import { cardBgTask, cardChecklist, plain } from '../../models/card.ts'
 import {
   compactLabel,
   compactNotePlaceholder,
@@ -91,6 +91,7 @@ export function SheetCard({ item, open, disabled, schedule, onSession }: SheetCa
         </div>
       )}
       <CompactRows item={item} open={open} disabled={disabled} />
+      <BgTaskRow item={item} />
       <ChecklistRow item={item} />
       <Reminders item={item} disabled={disabled} schedule={schedule} />
       <RelationsRow item={item} onSession={key => onSession?.(key)} />
@@ -147,6 +148,23 @@ function CompactRows({ item, open, disabled }: Pick<SheetCardProps, 'item' | 'op
         </div>
       )}
     </>
+  )
+}
+
+/** Active or potentially stuck background task row in the session sheet (#676). */
+function BgTaskRow({ item }: { item: Item }) {
+  const t = useT()
+  const { now } = useBoardContext()
+  const bgTask = cardBgTask(item, now, t)
+  if (!bgTask) return null
+  return (
+    <div className="row bgtask-row">
+      <span className="row-label">{t('sheet.bgTask')}</span>
+      <span className={`row-value bgtask-value${bgTask.stuck ? ' stuck' : ''}`} title={bgTask.tooltip}>
+        {bgTask.label}
+        {bgTask.detail ? ` · ${bgTask.detail}` : ''}
+      </span>
+    </div>
   )
 }
 

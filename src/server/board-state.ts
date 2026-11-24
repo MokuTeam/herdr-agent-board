@@ -20,6 +20,7 @@ import { isCodexItem } from '../core/codex.ts'
 import { compactDefaultText } from '../core/compact.ts'
 import type { DecisionsPayload } from '../core/decisions.ts'
 import { foldModeOf } from '../core/fold-mode.ts'
+import { housekeepingConfig } from '../core/housekeeping.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
 import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
@@ -41,7 +42,7 @@ import type {
 import type { PresenceView } from '../core/presence.ts'
 import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts'
 import type { RemoteView } from '../core/remote.ts'
-import type { ScheduleEntry } from '../core/schedule-rules.ts'
+import { heldByDevice, type ScheduleEntry } from '../core/schedule-rules.ts'
 import type { SetupSummary } from '../core/setup.ts'
 import { todosConfig } from '../core/todos.ts'
 import { turnResumeConfig } from '../core/turn-resume.ts'
@@ -385,6 +386,13 @@ export function createBoardState({
     const localAgy = readAgyLimits ? readAgyLimits() : localAgyLimits(cfg.launch)
     const remoteAgy = others?.devices.filter(d => d.id !== LOCAL && !d.revoked).map(d => d.status?.agyLimits) ?? []
     const agyLimits = pickAgyLimits([localAgy, ...remoteAgy])
+    const held = others ? heldByDevice(schedules) : null
+    const devices = others
+      ? others.devices.map(d => {
+          const n = d.id !== LOCAL ? (held?.[d.id] ?? 0) : 0
+          return n > 0 ? { ...d, held: n } : d
+        })
+      : undefined
     return {
       // archive: what became of the latest sessions put in it (the page's toasts).
       archive: { log: readArchiveLog(8) },
@@ -425,6 +433,11 @@ export function createBoardState({
       compactDefault: compactDefaultText(cfg.compact),
       // Continue after restart (#633): absent while on (default), false while off.
       ...(!turnResumeConfig(cfg.turnResume).on && { turnResume: false as const }),
+      // Node housekeeping (#652, #682): absent while both memory guard and tab sweep are off.
+      ...(() => {
+        const hk = housekeepingConfig(cfg.housekeeping)
+        return hk.memory.on || hk.tabs.on ? { housekeeping: { memory: hk.memory.on, tabs: hk.tabs.on } } : {}
+      })(),
       // remote: only while the remote mode is on; a board without it sends none.
       ...remoteOf(remote),
       // presence: only while config.json turns it on (#172).
@@ -457,7 +470,7 @@ export function createBoardState({
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.
       ...omarchyOf(omarchy),
       // devices: only while config.json makes this board a master (#500).
-      ...(others && { devices: others.devices }),
+      ...(devices && { devices }),
     }
   }
 
@@ -565,7 +578,13 @@ export function createBoardState({
           log(`profile panes: ${err instanceof Error ? err.message : String(err)}`)
         }
       }
-      items = await collect(deps, { helpers: true, links, seen, ...(observeSessions && { observed: observeSessions }) })
+      items = await collect(deps, {
+        helpers: true,
+        links,
+        seen,
+        onBgChange: () => void refresh(),
+        ...(observeSessions && { observed: observeSessions }),
+      })
       logEdges()
       launches.observe(items)
       journal?.observe(items)

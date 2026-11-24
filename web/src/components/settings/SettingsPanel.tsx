@@ -2,7 +2,7 @@
 // 5-section panel (Display, Board & Agents, Features, Integrations, System) aligned with the
 // board's design system. Works docked or floating on desktop, and full-screen with section tabs
 // on phone widths. Every existing setting and dedicated sub-panel stays reachable.
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useLayoutEffect, useRef, useState } from 'react'
 import { FOLD_MODES, type FoldMode } from '../../../../src/core/fold-mode.ts'
 import { LANGUAGES } from '../../../../src/core/i18n/translator.ts'
 import { PRESENCE_MODES, type PresenceMode } from '../../../../src/core/presence.ts'
@@ -62,6 +62,7 @@ export interface SettingsPanelProps {
   onOpenAccess(): void
   onOpenBackup(): void
   onOpenUpdates(): void
+  onOpenHousekeeping(): void
   onOpenTimeSettings(): void
   onOpenCalendarSettings(): void
   onOpenLocalPaths(): void
@@ -168,6 +169,7 @@ export function SettingsPanel({
   onOpenAccess,
   onOpenBackup,
   onOpenUpdates,
+  onOpenHousekeeping,
   onOpenTimeSettings,
   onOpenCalendarSettings,
   onOpenLocalPaths,
@@ -179,6 +181,33 @@ export function SettingsPanel({
   const { data, ui, canEdit, dispatch, toast, now } = useBoardContext()
   const place = usePanelPlace()
   const [section, setSection] = useState<SettingsSection>('display')
+  // Preserve list scroll position when opening an inner Settings page and returning (#679).
+  const paneRef = useRef<HTMLDivElement>(null)
+  const navRef = useRef<HTMLElement>(null)
+  const paneScroll = useRef(0)
+  const navScroll = useRef({ top: 0, left: 0 })
+  const rememberScroll = () => {
+    if (paneRef.current) paneScroll.current = paneRef.current.scrollTop
+    if (navRef.current) navScroll.current = { top: navRef.current.scrollTop, left: navRef.current.scrollLeft }
+  }
+  const openChild = (fn: () => void) => () => {
+    rememberScroll()
+    fn()
+  }
+  const selectSection = (next: SettingsSection) => {
+    if (next === section) return
+    paneScroll.current = 0
+    if (paneRef.current) paneRef.current.scrollTop = 0
+    setSection(next)
+  }
+  useLayoutEffect(() => {
+    if (!open) return
+    if (paneRef.current) paneRef.current.scrollTop = paneScroll.current
+    if (navRef.current) {
+      navRef.current.scrollTop = navScroll.current.top
+      navRef.current.scrollLeft = navScroll.current.left
+    }
+  }, [open])
   // Local mirrors for document.documentElement dataset values so clicks re-render immediately.
   const [, setTick] = useState(0)
   const bump = () => setTick(n => n + 1)
@@ -261,6 +290,22 @@ export function SettingsPanel({
     { id: 'system', label: t('set.sec.system'), icon: <ShieldIcon />, warn: systemWarn },
   ]
 
+  const todosRow = data ? (
+    <div className="set-row">
+      <div className="set-lbl">
+        <b>{t('set.todos')}</b>
+        <small>{t('set.todos.note')}</small>
+      </div>
+      <Segmented
+        label={t('set.todos')}
+        disabled={!canEdit}
+        value={todosMode}
+        options={TODO_MODES.map(id => ({ value: id, label: t(`set.todos.${id}`) }))}
+        onChange={pickTodos}
+      />
+    </div>
+  ) : null
+
   const shownProfiles = (data?.profiles ?? []).filter(p => !p.hidden).length
   const onlineDevices = (data?.devices ?? []).filter(reachable).length
   const team = teamBadge(data)
@@ -275,14 +320,14 @@ export function SettingsPanel({
       title={<h2>{t('set.title')}</h2>}
     >
       <div className="sheet-body set-shell">
-        <nav className="set-nav" aria-label={t('set.title')}>
+        <nav className="set-nav" ref={navRef} aria-label={t('set.title')} onScroll={rememberScroll}>
           {sections.map(s => (
             <button
               key={s.id}
               type="button"
               className={classNames('set-tab', section === s.id && 'on')}
               aria-current={section === s.id ? 'page' : undefined}
-              onClick={() => setSection(s.id)}
+              onClick={() => selectSection(s.id)}
             >
               {s.icon}
               <span>{s.label}</span>
@@ -296,7 +341,7 @@ export function SettingsPanel({
           </div>
         </nav>
 
-        <div className="set-pane">
+        <div className="set-pane" ref={paneRef} onScroll={rememberScroll}>
           {section === 'display' && (
             <section className="set-section">
               <div className="set-sec-head">
@@ -501,6 +546,7 @@ export function SettingsPanel({
                     />
                   </div>
                 )}
+                {isRemote && todosRow}
               </div>
             </section>
           )}
@@ -512,21 +558,7 @@ export function SettingsPanel({
                 <span className="set-scope">{t('set.scope.board')}</span>
               </div>
               <div className="set-group">
-                {data && (
-                  <div className="set-row">
-                    <div className="set-lbl">
-                      <b>{t('set.todos')}</b>
-                      <small>{t('set.todos.note')}</small>
-                    </div>
-                    <Segmented
-                      label={t('set.todos')}
-                      disabled={!canEdit}
-                      value={todosMode}
-                      options={TODO_MODES.map(id => ({ value: id, label: t(`set.todos.${id}`) }))}
-                      onChange={pickTodos}
-                    />
-                  </div>
-                )}
+                {todosRow}
                 {threadsInfo && (
                   <>
                     <div className="set-row">
@@ -661,7 +693,7 @@ export function SettingsPanel({
                   <LinkRow
                     label={t('set.profiles')}
                     meta={<span>{t('set.integrations.shown', { n: shownProfiles })}</span>}
-                    onClick={onOpenProfiles}
+                    onClick={openChild(onOpenProfiles)}
                   />
                 )}
                 {isWakeView(data?.wake) && (
@@ -669,7 +701,7 @@ export function SettingsPanel({
                     label={t('set.wake')}
                     meta={<span>{wakeDown ? t('wake.stopped') : t('set.integrations.on')}</span>}
                     warn={wakeDown}
-                    onClick={onOpenWake}
+                    onClick={openChild(onOpenWake)}
                   />
                 )}
                 {canAdmin && (
@@ -685,14 +717,14 @@ export function SettingsPanel({
                       </span>
                     }
                     warn={(data?.calendar?.failing ?? 0) > 0}
-                    onClick={onOpenCalendarSettings}
+                    onClick={openChild(onOpenCalendarSettings)}
                   />
                 )}
                 {canAdmin && (
                   <LinkRow
                     label={t('set.time')}
                     meta={<span>{data?.time ? t('set.integrations.on') : t('set.integrations.off')}</span>}
-                    onClick={onOpenTimeSettings}
+                    onClick={openChild(onOpenTimeSettings)}
                   />
                 )}
                 {offersTeam(data) && (
@@ -701,10 +733,10 @@ export function SettingsPanel({
                     meta={
                       <span>{team.count > 0 ? t('team.unread', { n: team.count }) : t('set.integrations.on')}</span>
                     }
-                    onClick={onOpenTeam}
+                    onClick={openChild(onOpenTeam)}
                   />
                 )}
-                {offersMokupilot(data) && <LinkRow label={t('set.mokupilot')} onClick={onOpenMokupilot} />}
+                {offersMokupilot(data) && <LinkRow label={t('set.mokupilot')} onClick={openChild(onOpenMokupilot)} />}
                 {offersDevices(isRemote, ownerAdminPage()) && (
                   <LinkRow
                     label={t('node.set.devices')}
@@ -713,12 +745,12 @@ export function SettingsPanel({
                         <span>{t('set.integrations.online', { n: onlineDevices })}</span>
                       ) : undefined
                     }
-                    onClick={onOpenDevices}
+                    onClick={openChild(onOpenDevices)}
                   />
                 )}
-                {!!data?.remote && <LinkRow label={t('set.phones')} onClick={onOpenPhones} />}
-                {canAdmin && <LinkRow label={t('set.access')} onClick={onOpenAccess} />}
-                {isRemote && <LinkRow label={t('set.localPaths')} onClick={onOpenLocalPaths} />}
+                {!!data?.remote && <LinkRow label={t('set.phones')} onClick={openChild(onOpenPhones)} />}
+                {canAdmin && <LinkRow label={t('set.access')} onClick={openChild(onOpenAccess)} />}
+                {isRemote && <LinkRow label={t('set.localPaths')} onClick={openChild(onOpenLocalPaths)} />}
               </div>
             </section>
           )}
@@ -735,10 +767,24 @@ export function SettingsPanel({
                     label={t('set.backup')}
                     meta={<span>{backupProblem ? backupNoteText(backupProblem, t) : t('set.integrations.on')}</span>}
                     warn={!!backupProblem}
-                    onClick={onOpenBackup}
+                    onClick={openChild(onOpenBackup)}
                   />
                 )}
-                {canAdmin && <LinkRow label={t('set.updates')} onClick={onOpenUpdates} />}
+                {canAdmin && <LinkRow label={t('set.updates')} onClick={openChild(onOpenUpdates)} />}
+                {canAdmin && (
+                  <LinkRow
+                    label={t('set.housekeeping')}
+                    meta={
+                      <span>
+                        {t('set.housekeeping.meta', {
+                          memory: t(data?.housekeeping?.memory ? 'set.state.on' : 'set.state.off'),
+                          tabs: t(data?.housekeeping?.tabs ? 'set.state.on' : 'set.state.off'),
+                        })}
+                      </span>
+                    }
+                    onClick={openChild(onOpenHousekeeping)}
+                  />
+                )}
                 {setup && (
                   <LinkRow
                     label={t('set.setup')}

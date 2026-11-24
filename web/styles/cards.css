@@ -149,3 +149,14 @@
 @media (prefers-reduced-motion: reduce) {
   .card-todo-fill { transition: none; }
 }
+
+/* Active or potentially stuck background task line on a card (#676). */
+.now.bg-task.stuck svg,
+.now.bg-task.stuck .tool { color: var(--orange); }
+.now.bg-task.stuck {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--orange) 12%, transparent);
+}
+.now.bg-task.stuck svg { width: 12px; height: 12px; }
+.bgtask-value.stuck { color: var(--orange); font-weight: 600; }

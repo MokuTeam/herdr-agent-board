@@ -695,6 +695,8 @@ export interface DeviceView {
   sameCommit: boolean | null
   /** When its last payload came; null before one did. */
   payloadAt: number | null
+  /** Master schedule entries held while this device is offline (#695); absent when 0. */
+  held?: number
   /**
    * Only on a revoked device (#510): whether the node was told (it answered `leave`), and whether
    * its token and link key are still kept for that one call.

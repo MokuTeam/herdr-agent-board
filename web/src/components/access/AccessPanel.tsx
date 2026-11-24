@@ -10,7 +10,7 @@ import type { TestStep } from '../../../../src/core/tunnel.ts'
 import { type AccessSend, useAccess } from '../../hooks/useAccess.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { type AccessAsk, loginAsk, tunnelAsk } from '../../models/access.ts'
-import { Panel } from '../panel/Panel.tsx'
+import { Panel, type PanelBack } from '../panel/Panel.tsx'
 import { LoginSection } from './LoginSection.tsx'
 import { LoginsSection } from './LoginsSection.tsx'
 import { TunnelSection } from './TunnelSection.tsx'
@@ -18,6 +18,7 @@ import { TunnelSection } from './TunnelSection.tsx'
 export interface AccessPanelProps {
   open: boolean
   onClose(): void
+  back?: PanelBack | undefined
 }
 
 export interface AccessBodyProps {
@@ -27,13 +28,14 @@ export interface AccessBodyProps {
   testing: boolean
 }
 
-export function AccessPanel({ open, onClose }: AccessPanelProps) {
+export function AccessPanel({ open, onClose, back }: AccessPanelProps) {
   const t = useT()
   const { view, send, steps, testing } = useAccess(open)
   return (
     <Panel
       id="access-sheet"
       kind="access"
+      back={back}
       open={open}
       onClose={onClose}
       title={

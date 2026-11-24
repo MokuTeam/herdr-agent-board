@@ -146,17 +146,20 @@ export function nodesRoutes(
   panel?: NodesPanel,
   revoker?: Revoker,
   updater?: Pick<NodeUpdater, 'view' | 'ship'>,
+  held?: () => Record<string, number>,
 ): Route[] {
   const off = () => json(404, { error: 'nodes' })
-  /** The devices with each one's update (#590) beside its link. */
+  /** The devices with each one's update (#590) and held entry count (#695) beside its link. */
   const viewWithUpdates = (): ReturnType<NodeLinks['view']> => {
     const view = links.view()
-    if (!updater) return view
+    const counts = held?.()
+    if (!updater && !counts) return view
     return {
       ...view,
       devices: view.devices.map(d => {
-        const update = d.kind === null ? null : updater.view(d.id)
-        return update ? { ...d, update } : d
+        const update = updater && d.kind !== null ? updater.view(d.id) : null
+        const n = d.kind !== null ? (counts?.[d.id] ?? 0) : 0
+        return update || n > 0 ? { ...d, ...(update && { update }), ...(n > 0 && { held: n }) } : d
       }),
     }
   }

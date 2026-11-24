@@ -25,7 +25,7 @@ import type {
 import { firstUnread } from '../../models/team-chat.ts'
 import { topicWork } from '../../models/work-share.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
-import { Panel } from '../panel/Panel.tsx'
+import { Panel, type PanelBack } from '../panel/Panel.tsx'
 import { TeamList } from './TeamList.tsx'
 import { TeamPeople } from './TeamPeople.tsx'
 import { TeamThread } from './TeamThread.tsx'
@@ -33,12 +33,13 @@ import { TeamThread } from './TeamThread.tsx'
 export interface TeamPanelProps {
   open: boolean
   onClose(): void
+  back?: PanelBack | undefined
   /** A thread a notification's click asked for (#355): it is shown once, then onFocused. */
   focus?: string | null
   onFocused?(): void
 }
 
-export function TeamPanel({ open, onClose, focus, onFocused }: TeamPanelProps) {
+export function TeamPanel({ open, onClose, back, focus, onFocused }: TeamPanelProps) {
   const t = useT()
   const { canEdit } = useBoardContext()
   const team = useTeam(open)
@@ -111,6 +112,7 @@ export function TeamPanel({ open, onClose, focus, onFocused }: TeamPanelProps) {
     <Panel
       id="team-sheet"
       kind="team"
+      back={back}
       measure="full"
       open={open}
       onClose={onClose}

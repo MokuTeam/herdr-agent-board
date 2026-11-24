@@ -15,6 +15,7 @@ import { dayGate } from '../adapters/mokupilot-day.ts'
 import { contextDir } from '../adapters/paths.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
 import { AGY_AGENT, isAgyItem, isAgySession } from '../core/agy.ts'
+import { bgTaskFromFooter, bgTaskStuckMin, summarizeBgTasks } from '../core/bg-task.ts'
 import { attentionOf, busy, columnOf, isAgentStatus, PINS } from '../core/board.ts'
 import { besideParents, type CallAgent, type CallView } from '../core/call-agent.ts'
 import { categoryFor } from '../core/categories.ts'
@@ -332,6 +333,7 @@ type Base = Pick<
   | 'pipe'
   | 'fromFile'
   | 'day'
+  | 'bgTasks'
 >
 
 export interface CollectOptions {
@@ -341,6 +343,8 @@ export interface CollectOptions {
   links?: LinksIndex | null
   /** Told every pane in herdr's snapshot with the terminal it holds (null: herdr did not say), once collected. */
   seen?: (panes: ReadonlyMap<string, string | null>) => void
+  /** Called when a background agy footer probe observes a task count change (#676). */
+  onBgChange?: () => void
   observed?: (native: Awaited<ReturnType<typeof snapshot>>, items: readonly Item[]) => void
 }
 
@@ -351,7 +355,7 @@ export interface CollectOptions {
  */
 export async function collect(
   deps: Deps,
-  { helpers = false, links = null, seen: panesSeen = () => {}, observed }: CollectOptions = {},
+  { helpers = false, links = null, seen: panesSeen = () => {}, onBgChange, observed }: CollectOptions = {},
 ): Promise<Item[]> {
   const { cfg } = deps
   // The model rule (#429): null while config.json has none, and then nothing below reads it.
@@ -369,13 +373,40 @@ export async function collect(
   const hasAgyPane = snap.panes.some(p => p.agent === AGY_AGENT)
   const tabLabels = hasAgyPane ? new Map(snap.tabs.map(tab => [tab.tab_id, tab.label ?? ''])) : null
   const agentNames = hasAgyPane ? new Map((snap.agents ?? []).map(a => [a.pane_id, a.name ?? ''])) : null
+  const now = Date.now()
+  const stuckMin = bgTaskStuckMin(cfg.bgTaskStuckMin)
+  const agyMeta = new Map<
+    string,
+    {
+      session: string | null
+      info: TranscriptInfo | null
+      runningSubagent: boolean
+      footerCount: number | null
+    }
+  >()
+  if (hasAgyPane) {
+    for (const p of snap.panes) {
+      if (p.agent !== AGY_AGENT) continue
+      const rawSession = p.agent_session?.value ?? null
+      // If herdr's PreInvocation hook reported an agy subagent UUID, resolve back to its root conversation (#650).
+      const session = rawSession ? (deps.agy.rootSession(rawSession) ?? rawSession) : null
+      const info = session ? deps.agy.transcriptInfo(session) : null
+      const runningSubagent = !!session && deps.agy.hasRunningSubagent(session)
+      const st = isAgentStatus(p.agent_status) ? p.agent_status : 'unknown'
+      const footerCount =
+        st !== 'blocked' && st !== 'working' && !runningSubagent && !info?.bgTasks?.length && deps.agyFooter
+          ? deps.agyFooter.peek(p.pane_id, p.terminal_id ?? '', now, onBgChange)
+          : null
+      agyMeta.set(p.pane_id, { session, info, runningSubagent, footerCount })
+    }
+  }
   const items: Item[] = []
   const seen = new Set<string>()
   const archived = archivedFiles()
 
   // A MokuPilot call agent (#326) runs with no pane and no hook: its card is told the Claude folder
   // MokuPilot started it in, where its records are, unless its own card says one.
-  const add = (base: Base, call?: CallAgent, parent?: Item): void => {
+  const add = (base: Base, call?: CallAgent, parent?: Item, preloadedAgy?: TranscriptInfo | null): void => {
     if (isArchived(archived, base.key)) {
       const record = getArchived(base.key)
       if (hides(record, base)) return
@@ -406,7 +437,11 @@ export async function collect(
     // A pi session's records are its session file, its key: none of Claude's folders has them.
     const pi = isPiItem(base) ? (deps.pi.transcriptInfo(base.session) ?? {}) : null
     const codex = isCodexItem(base) ? (deps.codex.transcriptInfo(base.session) ?? {}) : null
-    const agy = isAgyItem(base) ? (deps.agy.transcriptInfo(base.session) ?? {}) : null
+    const agy = isAgyItem(base)
+      ? preloadedAgy !== undefined
+        ? (preloadedAgy ?? {})
+        : (deps.agy.transcriptInfo(base.session) ?? {})
+      : null
     const { home, path } =
       pi || codex || agy ? { home: null, path: null } : recordsOf(deps, card, base.session, base.cwd, hit, searched)
     const info = agy ?? codex ?? pi ?? home?.transcriptInfo(path) ?? {}
@@ -513,6 +548,7 @@ export async function collect(
       ...(card.favorite === true && { favorite: true }), // the user keeps it in sight
       ...todosField(card), // its tasks (#202), when it has any
       ...(checklist && { checklist }), // its active TodoWrite checklist (#637), Claude only
+      ...(base.bgTasks && !base.sleeping && { bgTasks: base.bgTasks }), // running background tasks (#676), agy only
       ...(compact && { compact }), // its auto-compact (#378), when there is any
       ...secretsField(cfg, card), // what it asks the user to fill in (#273), when it does
       ...decisionField(cfg, card), // its open question's options and default (#487), while decisions are on
@@ -543,10 +579,9 @@ export async function collect(
 
   for (const p of snap.panes) {
     if (!p.agent) continue
-    const rawSession = p.agent_session?.value ?? null
     const agyPane = p.agent === AGY_AGENT
-    // If herdr's PreInvocation hook reported an agy subagent UUID, resolve back to its root conversation (#650).
-    const session = agyPane && rawSession ? (deps.agy.rootSession(rawSession) ?? rawSession) : rawSession
+    const meta = agyPane ? agyMeta.get(p.pane_id) : undefined
+    const session = agyPane ? (meta?.session ?? null) : (p.agent_session?.value ?? null)
     if (dayPane(p, session)) {
       dayWorkspace ||= labels.get(p.workspace_id ?? '') ?? ''
       continue
@@ -556,7 +591,16 @@ export async function collect(
     seen.add(key)
     const reg = session ? live.get(session)?.session : null
     let status: AgentStatus = isAgentStatus(p.agent_status) ? p.agent_status : 'unknown'
-    if (agyPane && status !== 'blocked' && session && deps.agy.hasRunningSubagent(session)) status = 'working'
+    if (agyPane && status !== 'blocked' && meta?.runningSubagent) status = 'working'
+    const footerRemaining = meta?.footerCount ? meta.footerCount - (meta.info?.daemonBgTasks?.length ?? 0) : 0
+    const bgTasks = agyPane
+      ? meta?.info?.bgTasks?.length
+        ? summarizeBgTasks(meta.info.bgTasks, stuckMin, now)
+        : footerRemaining > 0
+          ? bgTaskFromFooter(footerRemaining, null, stuckMin, now)
+          : null
+      : null
+    if (bgTasks && status !== 'blocked') status = 'working'
     const name = agyPane
       ? agyAutoName({
           agentName: agentNames?.get(p.pane_id) || p.name,
@@ -567,23 +611,29 @@ export async function collect(
           paneId: p.pane_id,
         })
       : reg?.name || p.terminal_title_stripped || p.label || p.pane_id
-    add({
-      key,
-      session,
-      pane: p.pane_id,
-      workspace: labels.get(p.workspace_id ?? '') ?? '',
-      agent: p.agent,
-      name,
-      cwd: p.cwd ?? reg?.cwd ?? '',
-      status,
-      sleeping: false,
-      focused: p.pane_id === snap.focused_pane_id,
-      activity: numberOf(reg?.statusUpdatedAt) ?? 0,
-      // Its Claude process: whether it runs, since when, and the pipe other sessions write to.
-      alive: !!reg,
-      since: numberOf(reg?.startedAt) ?? null,
-      pipe: typeof reg?.messagingSocketPath === 'string' ? reg.messagingSocketPath : '',
-    })
+    add(
+      {
+        key,
+        session,
+        pane: p.pane_id,
+        workspace: labels.get(p.workspace_id ?? '') ?? '',
+        agent: p.agent,
+        name,
+        cwd: p.cwd ?? reg?.cwd ?? '',
+        status,
+        sleeping: false,
+        focused: p.pane_id === snap.focused_pane_id,
+        activity: numberOf(reg?.statusUpdatedAt) ?? 0,
+        // Its Claude process: whether it runs, since when, and the pipe other sessions write to.
+        alive: !!reg,
+        since: numberOf(reg?.startedAt) ?? null,
+        pipe: typeof reg?.messagingSocketPath === 'string' ? reg.messagingSocketPath : '',
+        ...(bgTasks && { bgTasks }),
+      },
+      undefined,
+      undefined,
+      agyPane ? (meta?.info ?? null) : undefined,
+    )
   }
 
   if (day && dayReg && !seen.has(day.session)) {

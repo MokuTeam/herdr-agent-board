@@ -90,6 +90,7 @@
   --gray: var(--t-dim);
   --red: var(--t-red);
   --accent: var(--t-accent);
+  --brand-accent: var(--t-purple);
   --teal: var(--t-cyan);
   --pink: var(--t-red);
   --yellow: var(--t-amber);
@@ -285,6 +286,9 @@
 :root[data-look="terminal"] .card .task-label { font-size: inherit; font-weight: 400; }
 :root[data-look="terminal"] .card .task { margin-top: 2px; font-size: 12.5px; line-height: 1.45; }
 :root[data-look="terminal"] .now { gap: 1ch; margin-top: 3px; font-size: 12px; }
+:root[data-look="terminal"] .now.bg-task.stuck { padding: 0; border-radius: 0; background: none; }
+:root[data-look="terminal"] .now.bg-task.stuck svg,
+:root[data-look="terminal"] .now.bg-task.stuck .tool { color: var(--t-amber); }
 :root[data-look="terminal"] .card-meter { margin-top: 2px; font-size: 12px; line-height: 1.45; }
 :root[data-look="terminal"] .now .tool { font-weight: 700; }
 :root[data-look="terminal"] .ask { margin-top: 3px; padding: 0; border: 0; border-radius: 0; background: none; font-size: 12.5px; line-height: 1.45; }
@@ -705,6 +709,8 @@
 :root[data-look="terminal"] .set-switch.on { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
 :root[data-look="terminal"] .set-switch::after { border-radius: 2px; background: var(--label-2); box-shadow: none; }
 :root[data-look="terminal"] .set-switch.on::after { background: var(--accent); }
+:root[data-look="terminal"] .sheet-back { border-radius: var(--radius); }
+:root[data-look="terminal"] .sheet-back:hover { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
 :root[data-look="terminal"] .set-verify-row,
 :root[data-look="terminal"] .set-verify-sec { background: var(--bg); border-top-color: var(--t-edge); }
 :root[data-look="terminal"] .set-verify-kept,

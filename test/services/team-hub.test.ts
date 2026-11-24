@@ -601,3 +601,148 @@ test('a connection the hub closes with 4401 is an error `unknown_peer`, retried 
   ;(s.sockets[1] as FakeWs).hangUp(4401)
   expect(s.svc.view()?.nextAt).toBe(s.clock.now() + UNKNOWN_RETRY_MS)
 })
+
+describe('timeline ordering (#686)', () => {
+  test('shuffled deliveries, owner posts, agent posts, mixed timestamp formats and late earlier-day messages sort by UTC instant in threadLines and lasts', async () => {
+    const s = setup()
+    s.svc.start()
+    const [anna, ben, cleo] = (await names(3)) as [KeyPair, KeyPair, KeyPair]
+    const caps = ['threads', 'channels', 'replies']
+    const { ws, me } = await handshake(s, [
+      { peer: anna.pub, name: 'anna', caps },
+      { peer: ben.pub, name: 'ben', caps },
+      { peer: cleo.pub, name: 'cleo', caps },
+    ])
+    const teamRef = { id: 'general', group: true as const }
+    // Deliver 11:19Z, 11:20Z (without .000), 11:21Z (+04:00 = 15:21+04:00), then owner at 11:22Z,
+    // then agent post at 11:23Z, then deliver an older Nov 19 message AFTER all of today's messages.
+    const m1119 = await question(
+      anna,
+      me,
+      'anna 11:19',
+      { body: { text: 'anna 11:19', thread: teamRef } },
+      '2026-11-24T11:19:00.000Z',
+    )
+    const m1120 = await question(
+      ben,
+      me,
+      'ben 11:20',
+      { body: { text: 'ben 11:20', thread: teamRef } },
+      '2026-11-24T11:20:00Z',
+    )
+    const m1121 = await question(
+      cleo,
+      me,
+      'cleo 11:21',
+      { body: { text: 'cleo 11:21', thread: teamRef } },
+      '2026-11-24T15:21:00+04:00',
+    )
+    ws.recv({ t: 'deliver', env: m1121 })
+    ws.recv({ t: 'deliver', env: m1119 })
+    ws.recv({ t: 'deliver', env: m1120 })
+    await until(() => ws.of('ack').length === 3, 'three acks')
+
+    const base = Date.parse('2026-11-24T11:22:00.000Z')
+    s.clock.skew(base - s.clock.now())
+    const ownerRes = await s.svc.post({ to: 'team' }, 'owner 11:22', { by: 'ui' })
+    expect(ownerRes.ok).toBe(true)
+    // All copies of a team post receive the exact same timestamp.
+    const ownerMsgs = ws.of('send').map(f => msgOf((f as { env: Envelope }).env))
+    expect(new Set(ownerMsgs.map(m => m.ts)).size).toBe(1)
+
+    s.clock.skew(60_000)
+    const agentRes = await s.svc.post({ to: 'team' }, 'agent 11:23', {
+      by: 'agent',
+      session: { key: 's1', name: 'atlas' },
+    })
+    expect(agentRes.ok).toBe(true)
+
+    const oldNov19 = await question(
+      anna,
+      me,
+      'old nov 19',
+      { body: { text: 'old nov 19', thread: teamRef } },
+      'Thu, 19 Nov 2026 14:24:00 GMT',
+    )
+    ws.recv({ t: 'deliver', env: oldNov19 })
+    await until(() => ws.of('ack').length === 4, 'fourth ack')
+
+    const lines = s.svc.threadLines('team/general')
+    expect(lines.map(l => l.text)).toEqual([
+      'old nov 19',
+      'anna 11:19',
+      'ben 11:20',
+      'cleo 11:21',
+      'owner 11:22',
+      'agent 11:23',
+    ])
+    expect(s.svc.lasts?.()['team/general']?.text).toBe('agent 11:23')
+  })
+
+  test('same UTC instant sorts deterministically by id and keeps pair, topic and channel threads unaffected', async () => {
+    const s = setup()
+    s.svc.start()
+    const [anna, ben] = (await names(2)) as [KeyPair, KeyPair]
+    const caps = ['threads', 'channels', 'replies']
+    const { ws, me } = await handshake(s, [
+      { peer: anna.pub, name: 'anna', caps },
+      { peer: ben.pub, name: 'ben', caps },
+    ])
+    const lowId = '00000000-0000-4000-8000-000000000001'
+    const highId = '00000000-0000-4000-8000-000000000002'
+    // Deliver highId first, with an offset timestamp equal to lowId's UTC instant.
+    const eHigh = await question(anna, me, 'second by id', { id: highId }, '2026-11-24T16:00:00+04:00')
+    const eLow = await question(anna, me, 'first by id', { id: lowId }, '2026-11-24T12:00:00.000Z')
+    ws.recv({ t: 'deliver', env: eHigh })
+    ws.recv({ t: 'deliver', env: eLow })
+    await until(() => ws.of('ack').length === 2, 'two pair acks')
+    expect(s.svc.thread(anna.pub).map(m => m.id)).toEqual([lowId, highId])
+    expect(s.svc.threadLines(`${anna.pub}/general`).map(l => l.id)).toEqual([lowId, highId])
+    // Pair DM lasts uses UTC instant, not string comparison where '2026-11-24T16:00:00+04:00' > '2026-11-24T12:00:00.000Z'.
+    expect(s.svc.lasts?.()[`${anna.pub}/general`]?.text).toBe('second by id')
+
+    // Channel and topic threads sort by UTC instant too without mixing.
+    const topicId = '11111111-1111-4111-8111-111111111111'
+    const chanId = '22222222-2222-4222-8222-222222222222'
+    const members = [me, anna.pub, ben.pub].sort()
+    const tLate = await question(
+      anna,
+      me,
+      'topic 2',
+      { body: { text: 'topic 2', thread: { id: topicId, title: 'T', group: true } } },
+      '2026-11-24T12:02:00Z',
+    )
+    const tEarly = await question(
+      ben,
+      me,
+      'topic 1',
+      { body: { text: 'topic 1', thread: { id: topicId, title: 'T', group: true } } },
+      '2026-11-24T16:01:00+04:00',
+    )
+    const cLate = await question(
+      anna,
+      me,
+      'chan 2',
+      { body: { text: 'chan 2', thread: { id: chanId, title: 'C', group: true, members } } },
+      '2026-11-24T12:04:00Z',
+    )
+    const cEarly = await question(
+      ben,
+      me,
+      'chan 1',
+      { body: { text: 'chan 1', thread: { id: chanId, title: 'C', group: true, members } } },
+      '2026-11-24T16:03:00+04:00',
+    )
+    for (const env of [tLate, tEarly, cLate, cEarly]) ws.recv({ t: 'deliver', env })
+    await until(() => ws.of('ack').length === 6, 'six acks total')
+    expect(s.svc.threadLines(`team/${topicId}`).map(l => l.text)).toEqual(['topic 1', 'topic 2'])
+    expect(s.svc.threadLines(`team/${chanId}`).map(l => l.text)).toEqual(['chan 1', 'chan 2'])
+
+    // Two back-to-back posts on the same clock millisecond keep their send order via monotonic postTs.
+    const r1 = await s.svc.send('team', 'burst 1')
+    const r2 = await s.svc.send('team', 'burst 2')
+    expect(r1.ok && r2.ok).toBe(true)
+    const teamMsgs = s.svc.threadLines('team/general').map(l => l.text)
+    expect(teamMsgs).toEqual(['burst 1', 'burst 2'])
+  })
+})

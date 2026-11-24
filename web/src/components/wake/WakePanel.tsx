@@ -28,14 +28,15 @@ import {
   withPending,
 } from '../../models/wake.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
-import { Panel } from '../panel/Panel.tsx'
+import { Panel, type PanelBack } from '../panel/Panel.tsx'
 
 export interface WakePanelProps {
   open: boolean
   onClose(): void
+  back?: PanelBack | undefined
 }
 
-export function WakePanel({ open, onClose }: WakePanelProps) {
+export function WakePanel({ open, onClose, back }: WakePanelProps) {
   const t = useT()
   const { data, canEdit, now } = useBoardContext()
   const phone = !adminHere()
@@ -46,6 +47,7 @@ export function WakePanel({ open, onClose }: WakePanelProps) {
     <Panel
       id="wake-sheet"
       kind="wake"
+      back={back}
       open={open}
       onClose={onClose}
       title={

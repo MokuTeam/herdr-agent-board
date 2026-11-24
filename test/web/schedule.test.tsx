@@ -8,7 +8,14 @@ import type { BoardCategory } from '../../src/core/payload.ts'
 import type { ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import { ScheduleBody } from '../../web/src/components/schedule/SchedulePanel.tsx'
 import { NO_MOVES, withMove } from '../../web/src/models/board-view.ts'
-import { logRecords, newEntries, pendingText, restartNotes, scheduleGroups } from '../../web/src/models/schedule.ts'
+import {
+  logRecords,
+  logWhy,
+  newEntries,
+  pendingText,
+  restartNotes,
+  scheduleGroups,
+} from '../../web/src/models/schedule.ts'
 import { board, item, payload, renderInBoard } from './support/board.tsx'
 import { canonical, findAll, hasClass, type Node } from './support/markup.ts'
 import { oldCode, oldFunction } from './support/old-app.ts'
@@ -282,6 +289,14 @@ describe('schedule rules', () => {
     expect(pendingText(e({ pendingSince: 1 }), t)).toBe('Waits until the session is free')
     expect(pendingText(e({ pendingSince: 1, why: 'busy' }), t)).toBe('Waits until the session is free')
     expect(pendingText(e({ pendingSince: 1, why: 'gone' }), t)).toBe('The session is not on the board')
+    expect(pendingText(e({ pendingSince: 1, why: 'node-offline' }), t)).toBe('Waits: the device is not reachable')
+    expect(pendingText(e({ pendingSince: 1, why: 'node-offline' }), translator('ru'))).toBe(
+      'Ждёт: устройство не на связи',
+    )
+    expect(logWhy({ why: 'node-revoked' }, t)).toBe('the device was revoked')
+    expect(logWhy({ why: 'node-forgotten' }, t)).toBe('the device was removed')
+    expect(logWhy({ why: 'node-revoked' }, translator('ru'))).toBe('устройство было отозвано')
+    expect(logWhy({ why: 'node-forgotten' }, translator('ru'))).toBe('устройство было удалено')
     expect(pendingText(e({ pendingSince: 1, why: 'odd' }), t)).toBe('Not sent yet: odd')
     // Only its own words: a reason named like an Object property is still "not sent yet".
     expect(pendingText(e({ pendingSince: 1, why: 'toString' }), t)).toBe('Not sent yet: toString')

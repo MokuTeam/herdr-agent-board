@@ -253,6 +253,12 @@
 .devices-command { align-items: flex-start; }
 .devices-command .access-code { flex: 1 1 260px; }
 .devices-logged { margin: 0; }
+.devices-held { display: flex; flex-direction: column; gap: 3px; }
+.devices-held-count { margin: 0; color: var(--orange); font-size: 12px; font-weight: 600; }
+.devices-held-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.devices-held-item { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 12px; color: var(--label-2); }
+.devices-held-who { flex: none; font-weight: 600; color: var(--label); }
+.devices-held-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (prefers-reduced-motion: reduce) {
   .devices-row, .devices-fill, .devices-row.held .devices-name, .devices-title, .devices-title-edit { transition: none; }

@@ -123,6 +123,8 @@ export interface HistoryLike {
 export interface DialogHistoryOptions {
   history: HistoryLike
   mobile: () => boolean
+  /** Arm a sentinel on desktop too while true (e.g. an inner Settings page is open, #679). */
+  always?: () => boolean
   isOpen: () => boolean
   closeTop: () => void
 }
@@ -133,15 +135,16 @@ const marked = (state: unknown): boolean => !!entry(state)[MARKER]
 
 // A single sentinel protects all open layers. Back closes only the top layer;
 // manual close consumes the sentinel only when the last dialog is gone.
-export function dialogHistory({ history, mobile, isOpen, closeTop }: DialogHistoryOptions) {
+export function dialogHistory({ history, mobile, always = () => false, isOpen, closeTop }: DialogHistoryOptions) {
   let armed = false
   let pending = false
+  const active = () => isOpen() && (mobile() || always())
   function sync(): void {
     if (pending) return
-    if (isOpen() && (mobile() || armed) && !armed) {
+    if (active() && !armed) {
       history.pushState({ ...entry(history.state), [MARKER]: true }, '')
       armed = true
-    } else if (!isOpen() && armed) {
+    } else if (!active() && armed) {
       armed = false
       pending = true
       history.back()
