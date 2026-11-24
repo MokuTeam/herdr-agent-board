@@ -1700,6 +1700,10 @@ export async function startServer({
       const local = at ? launches.sessionState?.(at.key) : null
       return local && local.state !== 'done' ? local : null
     },
+    cancelQueued: (launchId, key) => {
+      const at = parseNodeKey(key)
+      return launches.cancelQueued?.(launchId ?? '', at?.key ?? key) ?? false
+    },
   })
   // A reminder for a node's card goes through its node (#501): asked only for a key with a device's
   // prefix, which exists only with `nodes`.

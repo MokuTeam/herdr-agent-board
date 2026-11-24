@@ -124,6 +124,8 @@ export interface Launches {
   state(id: string): LaunchState | null
   /** A launch's state by its chosen `sessionGiven` (#675), for queued or adopted starts. */
   sessionState?(session: string): LaunchState | null
+  /** Cancel a queued start of the placer's by id or `sessionGiven` (#675); false when none is queued. */
+  cancelQueued?(id: string, session?: string): boolean
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -518,6 +520,14 @@ export function createLaunches({
     sessionState: session => {
       const l = [...launches.values()].find(x => x.sessionGiven === session)
       return l ? stateOf(l) : null
+    },
+    cancelQueued: (id, session) => {
+      const l =
+        (id ? launches.get(id) : undefined) ??
+        (session ? [...launches.values()].find(x => x.sessionGiven === session) : undefined)
+      if (l?.state !== 'queued') return false
+      dismiss(l.id)
+      return true
     },
   }
   function stateOf(l: Launch): LaunchState {

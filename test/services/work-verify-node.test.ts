@@ -14,11 +14,11 @@ import { listEntries } from '../../src/adapters/schedule-store.ts'
 import { threadByKey } from '../../src/adapters/work-thread-store.ts'
 import { normalizeConfig } from '../../src/core/categories.ts'
 import { NODE_API } from '../../src/core/node-door.ts'
-import type { NodeStatus } from '../../src/core/nodes.ts'
+import { type NodeStatus, parseNodeKey } from '../../src/core/nodes.ts'
 import { profileSet } from '../../src/core/profiles.ts'
 import type { ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import type { Item } from '../../src/core/types.ts'
-import type { Party, ThreadHead } from '../../src/core/work-threads.ts'
+import { OWNER, type Party, type ThreadHead, type ThreadsConfig, threadsConfig } from '../../src/core/work-threads.ts'
 import { type ThreadCmdContext, threadCmd } from '../../src/entrypoints/thread-cli.ts'
 import { createLaunches, type LaunchState, type StartOptions } from '../../src/services/launch/launches.ts'
 import { createNodeLaunch } from '../../src/services/node/launch.ts'
@@ -27,6 +27,7 @@ import { createBundleSync } from '../../src/services/nodes/bundle-sync.ts'
 import type { Link } from '../../src/services/nodes/link.ts'
 import { createPlacer } from '../../src/services/nodes/placer.ts'
 import { createUplinkRunner } from '../../src/services/nodes/uplink.ts'
+import { confirmClose } from '../../src/services/work-threads.ts'
 import { createVerifier, paneSelf, type VerifyHost, type VerifyNodeInfo } from '../../src/services/work-verify.ts'
 import { isolatedHome } from '../support/env.ts'
 import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
@@ -1348,4 +1349,337 @@ test('master worker with nodes configured goes down the exact same local code as
   const run = s.head('atlas-1').verify?.run
   assert.ok(run && !run.key.startsWith('@'))
   assert.equal(options.sessionId, run.key)
+})
+
+test('Claude worker on a node without a known profile fails closed', async () => {
+  const worker: Item = {
+    key: benNode.key,
+    session: BEN_UUID,
+    pane: 'wA:p2',
+    workspace: 'Atlas',
+    cwd: '/srv/atlas',
+    status: 'idle',
+    name: 'ben',
+    autoName: 'ben',
+    category: 'atlas',
+    categorySet: true,
+    column: 'work',
+    attention: '',
+    agent: 'claude',
+    device: 'server-1',
+  }
+  const s = setupHarness({
+    threads: { agents: true, verify: true },
+    workerItem: worker,
+    nodeInfo: () => ({
+      configured: true,
+      online: true,
+      status: nodeStatus({
+        profiles: [
+          { id: 'default', loggedIn: true, bundle: null },
+          { id: 'work', loggedIn: true, bundle: null },
+        ],
+      }),
+    }),
+  })
+  await s.run(master, ['new', '--to', 'ben', '--verify', 'Missing profile'])
+  await s.run(benNode, ['done', 'atlas-1', 'done'])
+  await s.verifier().sweep(async () => s.items)
+  assert.equal(s.started.length, 0)
+  const h = s.head('atlas-1')
+  assert.equal(h.status, 'owner')
+  assert.equal(h.verify?.last, 'error')
+  assert.match(h.waitingOn, /the worker's profile on server-1 is not known/)
+})
+
+test('queued verifier is cancelled when verification ends (timeout, owner confirm, or post-restart)', async () => {
+  const dir = isolatedHome()
+  let now = NOW
+  const masterProfile = join(dir, '.claude')
+  mkdirSync(masterProfile, { recursive: true })
+  writeFileSync(join(masterProfile, '.credentials.json'), '{}')
+  const masterProfiles = profileSet(
+    [{ id: 'default', title: 'Default', dir: masterProfile, color: 'indigo', hidden: false }],
+    masterProfile,
+  )
+  const cfg = normalizeConfig({
+    categories: [{ id: 'atlas', title: 'Atlas', color: 'blue', paths: [] }],
+    wakeUrl: null,
+    threads: { agents: true, verify: { model: 'opus', limitMin: 30 } },
+    nodes: {
+      id: 'master-1',
+      order: ['local', 'server-1'],
+      lanes: ['atlas'],
+      devices: {
+        'server-1': {
+          title: 'Server 1',
+          link: { kind: 'direct', url: 'http://127.0.0.1:12430' },
+          maxSessions: 1,
+          minFreeMemMb: 512,
+          maxLoad: 4,
+        },
+      },
+    },
+  })
+
+  let awakeSessions = 1
+  const currentStatus = (): NodeStatus =>
+    nodeStatus({
+      sessions: { awake: awakeSessions, working: 0, asleep: 0 },
+      at: now,
+    })
+  const nodeLaunchCalls: unknown[] = []
+  const statusListeners: ((id: string) => void)[] = []
+  const link: Link = {
+    id: 'server-1',
+    state: () => ({ state: 'online', since: NOW, heardAt: now }),
+    view: () => ({
+      id: 'server-1',
+      title: 'Server 1',
+      kind: 'direct',
+      link: { state: 'online', since: NOW, heardAt: now },
+      status: currentStatus(),
+      sameCommit: true,
+      payloadAt: now,
+    }),
+    payload: () => null,
+    status: async () => currentStatus(),
+    fetch: async (path, init) => {
+      if (path === '/api/node/launch') {
+        nodeLaunchCalls.push(JSON.parse(String(init?.body ?? '{}')))
+        return new Response(JSON.stringify({ ok: true }), { status: 202 })
+      }
+      return new Response('{}', { status: 404 })
+    },
+    onState: () => () => {},
+    onPayload: () => () => {},
+    onStatus: () => () => {},
+    reconnect: () => {},
+    killNow: () => {},
+    close: async () => {},
+  }
+  const bundleSync = createBundleSync({
+    cfg,
+    links: { link: id => (id === 'server-1' ? link : null) },
+    profiles: () => masterProfiles.list,
+    store: createDeviceStore(),
+    log: () => {},
+  })
+  let placer!: ReturnType<typeof createPlacer>
+  const launches = createLaunches({
+    deps: { cfg, profiles: () => masterProfiles, log: () => {} } as unknown as Parameters<
+      typeof createLaunches
+    >[0]['deps'],
+    placer: () => placer,
+  })
+  placer = createPlacer({
+    cfg,
+    links: {
+      link: id => (id === 'server-1' ? link : null),
+      onChange: fn => {
+        statusListeners.push(fn)
+        return () => {}
+      },
+    },
+    remote: () => ({ items: [], launches: [], schedules: [], devices: [] }),
+    launches,
+    items: () => [],
+    ownStatus: async () => nodeStatus({ id: 'local' }),
+    commit: async () => 'abc123',
+    bundle: bundleSync,
+    log: () => {},
+  })
+
+  const worker: Item = {
+    key: benNode.key,
+    session: BEN_UUID,
+    pane: 'wA:p2',
+    workspace: 'Atlas',
+    cwd: '/srv/atlas',
+    status: 'idle',
+    name: 'ben',
+    autoName: 'ben',
+    category: 'atlas',
+    categorySet: true,
+    column: 'work',
+    attention: '',
+    agent: 'claude',
+    profile: 'default',
+    device: 'server-1',
+  }
+  const db = openDb() as BoardDb
+  const makeVerifier = () =>
+    createVerifier({
+      cfg,
+      log: () => {},
+      start: (body, items, options) => launches.start(body, items, options),
+      launchState: id => launches.state(id),
+      remoteLaunchState: key => {
+        const at = parseNodeKey(key)
+        const local = at ? launches.sessionState?.(at.key) : null
+        return local && local.state !== 'done' ? local : null
+      },
+      cancelQueued: (launchId, key) => {
+        const at = parseNodeKey(key)
+        return launches.cancelQueued?.(launchId ?? '', at?.key ?? key) ?? false
+      },
+      workspaces: async () => [],
+      archive: async () => 'ok',
+      withDb: fn => fn(db),
+      profiles: () => 1,
+      node: () => ({ configured: true, online: true, status: currentStatus() }),
+      now: () => now,
+    })
+
+  const runCmd = (actor: Party, argv: string[]) =>
+    threadCmd(argv, {
+      cfg: { threads: cfg.threads, port: 12422 },
+      actor,
+      lane: 'atlas',
+      findSession: async w => (w === 'ben' ? benNode : null),
+      db,
+      now,
+      out: () => {},
+      err: () => {},
+    })
+
+  try {
+    // Case A: time limit expires while verifier is still queued on a full node.
+    const verifier = makeVerifier()
+    await runCmd(master, ['new', '--to', 'ben', '--verify', 'Queued timeout'])
+    await runCmd(benNode, ['done', 'atlas-1', 'ready'])
+    await verifier.sweep(async () => [worker])
+    await until(() => launches.list().some(l => l.name === 'verify-atlas-1' && l.state === 'queued'), 5000)
+    assert.equal(limits().length, 1)
+
+    now = NOW + 31 * 60_000
+    await verifier.due(limits()[0] as ScheduleEntry, [worker])
+    const timedOut = threadByKey(db, 'atlas-1') as ThreadHead
+    assert.equal(timedOut.status, 'owner')
+    assert.equal(timedOut.verify?.last, 'timeout')
+    assert.equal(launches.list().length, 0)
+    assert.equal(limits().length, 0)
+
+    // Node becomes free afterwards -> cancelled launch must never be sent to node.
+    awakeSessions = 0
+    for (const fn of statusListeners) fn('server-1')
+    await Bun.sleep(50)
+    assert.equal(nodeLaunchCalls.length, 0)
+
+    // Case B: owner confirms done while verifier is queued -> sweep cancels queued launch immediately.
+    awakeSessions = 1
+    await runCmd(master, ['new', '--to', 'ben', '--verify', 'Queued confirmed'])
+    await runCmd(benNode, ['done', 'atlas-2', 'ready'])
+    await verifier.sweep(async () => [worker])
+    await until(() => launches.list().some(l => l.name === 'verify-atlas-2' && l.state === 'queued'), 5000)
+    assert.equal(limits().length, 1)
+
+    const h2 = threadByKey(db, 'atlas-2') as ThreadHead
+    confirmClose({ db, cfg: threadsConfig(cfg.threads) as ThreadsConfig, actor: OWNER, now, me: '' }, h2)
+    await verifier.sweep(async () => [worker])
+    assert.equal(launches.list().length, 0)
+    assert.equal(limits().length, 0)
+
+    awakeSessions = 0
+    for (const fn of statusListeners) fn('server-1')
+    await Bun.sleep(50)
+    assert.equal(nodeLaunchCalls.length, 0)
+
+    // Case C: after a master restart (fresh verifier without launchOf entry), due() cancels queued launch by sessionGiven.
+    awakeSessions = 1
+    await runCmd(master, ['new', '--to', 'ben', '--verify', 'Queued post-restart'])
+    await runCmd(benNode, ['done', 'atlas-3', 'ready'])
+    await verifier.sweep(async () => [worker])
+    await until(() => launches.list().some(l => l.name === 'verify-atlas-3' && l.state === 'queued'), 5000)
+
+    const restartedVerifier = makeVerifier()
+    now += 31 * 60_000
+    await restartedVerifier.due(limits()[0] as ScheduleEntry, [worker])
+    assert.equal(threadByKey(db, 'atlas-3')?.verify?.last, 'timeout')
+    assert.equal(launches.list().length, 0)
+    assert.equal(limits().length, 0)
+
+    awakeSessions = 0
+    for (const fn of statusListeners) fn('server-1')
+    await Bun.sleep(50)
+    assert.equal(nodeLaunchCalls.length, 0)
+  } finally {
+    placer.close()
+    bundleSync.close()
+    db.close()
+  }
+})
+
+test('node verifier brief lists file names without master paths and points to board thread show; local brief keeps path', async () => {
+  const workDir = mkdtempSync(join(tmpdir(), 'verify-brief-'))
+  scratch.push(workDir)
+  const specFile = join(workDir, 'spec-notes.txt')
+  const proofFile = join(workDir, 'proof-report.md')
+  writeFileSync(specFile, 'spec')
+  writeFileSync(proofFile, 'proof')
+
+  // Node worker brief must not expose master disk paths.
+  const nodeWorker: Item = {
+    key: benNode.key,
+    session: BEN_UUID,
+    pane: 'wA:p2',
+    workspace: 'Atlas',
+    cwd: '/srv/atlas',
+    status: 'idle',
+    name: 'ben',
+    autoName: 'ben',
+    category: 'atlas',
+    categorySet: true,
+    column: 'work',
+    attention: '',
+    agent: 'claude',
+    profile: 'default',
+    device: 'server-1',
+  }
+  const sNode = setupHarness({
+    workerItem: nodeWorker,
+    nodeInfo: () => ({ configured: true, online: true, status: nodeStatus() }),
+  })
+  assert.equal((await sNode.run(master, ['new', '--to', 'ben', '--verify', 'Check attached files'])).code, 0)
+  assert.equal((await sNode.run(master, ['post', 'atlas-1', '--file', specFile, 'spec attached'])).code, 0)
+  assert.equal((await sNode.run(benNode, ['done', 'atlas-1', '--file', proofFile, 'done with proof'])).code, 0)
+  await sNode.verifier().sweep(async () => sNode.items)
+  assert.equal(sNode.started.length, 1)
+  const nodeMsg = String(sNode.started[0]?.body.message ?? '')
+  assert.match(nodeMsg, /spec-notes\.txt/)
+  assert.match(nodeMsg, /proof-report\.md/)
+  assert.match(nodeMsg, /board thread show atlas-1/)
+  assert.equal(nodeMsg.includes(sNode.dir), false)
+  assert.equal(nodeMsg.includes('/threads/files/'), false)
+
+  // Local worker brief still keeps the local master path as before.
+  const localWorkDir = join(workDir, 'local-repo')
+  mkdirSync(localWorkDir, { recursive: true })
+  const localWorker: Item = {
+    key: BEN_UUID,
+    session: BEN_UUID,
+    pane: 'wP:p2',
+    workspace: 'Atlas',
+    cwd: localWorkDir,
+    status: 'idle',
+    name: 'ben',
+    autoName: 'ben',
+    category: 'atlas',
+    categorySet: true,
+    column: 'work',
+    attention: '',
+    agent: 'claude',
+    profile: 'default',
+  }
+  const sLocal = setupHarness({
+    workerItem: localWorker,
+  })
+  assert.equal((await sLocal.run(master, ['new', '--to', 'ben', '--verify', 'Local files'])).code, 0)
+  assert.equal((await sLocal.run(master, ['post', 'atlas-1', '--file', specFile, 'spec attached'])).code, 0)
+  assert.equal((await sLocal.run(benLocal, ['done', 'atlas-1', '--file', proofFile, 'done locally'])).code, 0)
+  await sLocal.verifier().sweep(async () => sLocal.items)
+  assert.equal(sLocal.started.length, 1)
+  const localMsg = String(sLocal.started[0]?.body.message ?? '')
+  assert.match(localMsg, /proof-report\.md/)
+  assert.equal(localMsg.includes(sLocal.dir), true)
 })

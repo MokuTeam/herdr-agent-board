@@ -94,6 +94,8 @@ export interface VerifyHost {
   node?(device: string): VerifyNodeInfo | null
   /** A placed launch's state on its node, from the node's payload (#675). */
   remoteLaunchState?(key: string): LaunchState | null
+  /** Cancel a launch that is still queued in the placer (#675); true when one was cancelled. */
+  cancelQueued?(launchId: string | undefined, key: string): boolean
   now?(): number
   /** The state folder, where entries' files are kept (tests). */
   state?: string
@@ -130,6 +132,17 @@ export function createVerifier(host: VerifyHost): Verifier {
     ...(host.state && { state: host.state }),
     me: readKey()?.pub ?? '',
   })
+
+  function cancelIfQueued(key: string): boolean {
+    const launch = launchOf.get(key)
+    const st = launch ? host.launchState(launch) : null
+    const rst = parseNodeKey(key) ? (host.remoteLaunchState?.(key) ?? null) : null
+    if (st?.state !== 'queued' && rst?.state !== 'queued') return false
+    if (!host.cancelQueued?.(launch, key)) return false
+    for (const [tid, s] of started) if (s.key === key) started.delete(tid)
+    launchOf.delete(key)
+    return true
+  }
 
   /** The verification ends at the owner (a launch that failed, the time limit), in the verifier's name. */
   function toOwner(
@@ -200,14 +213,9 @@ export function createVerifier(host: VerifyHost): Verifier {
       const claude = worker.item ? (worker.item.agent ?? 'claude') === 'claude' : false
       let nodeProfile: string
       if (claude) {
-        if (worker.item?.profileFolder || worker.item?.profileWanted)
+        if (worker.item?.profileFolder || worker.item?.profileWanted || !worker.item?.profile)
           return fail(`the worker's profile on ${device} is not known`)
-        if (worker.item?.profile) nodeProfile = worker.item.profile
-        else {
-          const picked = pickNodeDefaultProfile(device, info.status.profiles)
-          if (!picked.ok) return fail(picked.why)
-          nodeProfile = picked.id
-        }
+        nodeProfile = worker.item.profile
       } else {
         const configured =
           profileFor(v, device) ?? (typeof v.profile === 'string' ? (info.profiles?.[v.profile] ?? null) : null)
@@ -239,7 +247,7 @@ export function createVerifier(host: VerifyHost): Verifier {
         until,
         now: at,
         limitMin: v.limitMin,
-        fileAt: f => filePath(f.ref, host.state),
+        fileAt: () => `· see board thread show ${head.key}`,
         keyOfId: id => getThread(db, id)?.key ?? id.slice(0, 8),
         parentKey: head.parent ? (getThread(db, head.parent)?.key ?? null) : null,
       })
@@ -472,7 +480,10 @@ export function createVerifier(host: VerifyHost): Verifier {
       }
       for (const e of limits) {
         const h = typeof e.thread === 'string' ? getThread(db, e.thread) : null
-        if (e.archive !== true && h?.verify?.run?.key !== e.key) endVerifierRun(e.key, now())
+        if (e.archive !== true && h?.verify?.run?.key !== e.key) {
+          if (cancelIfQueued(e.key)) removeEntry(e.id)
+          else endVerifierRun(e.key, now())
+        }
       }
       // Held dones with no verifier, the oldest first, while fewer than verify.max run.
       let count = running.length
@@ -510,8 +521,11 @@ export function createVerifier(host: VerifyHost): Verifier {
           continue
         }
         started.delete(head.id)
-        // The verifier, if one runs, ends as after a verdict: its limit goes to the archive phase.
-        if (run) endVerifierRun(run.key, now())
+        // The verifier, if one runs, ends as after a verdict: a queued launch is cancelled, else archived once free.
+        if (run) {
+          if (cancelIfQueued(run.key)) removeLimit(run.key)
+          else endVerifierRun(run.key, now())
+        }
       }
       if (n) host.log(`verify: switched off, ${n} held done${n === 1 ? '' : 's'} sent to the owner`)
       return n
@@ -542,6 +556,10 @@ export function createVerifier(host: VerifyHost): Verifier {
     // up), so it is tried again; after that nothing is left to do.
     const item = items.find(i => i.key === entry.key)
     if (!item) {
+      if (cancelIfQueued(entry.key)) {
+        removeEntry(entry.id)
+        return
+      }
       const launch = launchOf.get(entry.key)
       const st = launch ? host.launchState(launch) : null
       const rst = parseNodeKey(entry.key) ? (host.remoteLaunchState?.(entry.key) ?? null) : null
