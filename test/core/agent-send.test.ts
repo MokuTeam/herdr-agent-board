@@ -274,4 +274,10 @@ test('#642 a marked source card is dropped deterministically regardless of clock
   ).toEqual([`@server-3:${A}`])
   // Unmarked cards (older boards): #641 activity weigh stays unchanged.
   expect(keys([laptop({ activity: 100 }), node({ activity: 200 })], 'laptop')).toEqual([`@${'server-2'}:${A}`])
+  // Locally resumed source card (activity > movedAt): stale movedTo is ignored so activity decides again.
+  expect(keys([laptop({ activity: 2000, movedTo: 'server-2', movedAt: 1000 }), node({ activity: 500 })])).toEqual([A])
+  // Legacy movedTo "board" matches master hostname id unless a remote device is named "board".
+  expect(
+    keys([laptop({ activity: 1 }), node({ activity: 9_999, movedTo: 'board', movedAt: 10_000 })], 'anna-laptop'),
+  ).toEqual([A])
 })

@@ -122,19 +122,47 @@ test('nodePart forwards valid movedTo and drops invalid or empty movedTo', () =>
     column: 'idle',
     attention: '',
   }
-  const good = nodePart({ items: [{ ...base, movedTo: 'server-3' }] }, 'server-2')
+  const good = nodePart({ items: [{ ...base, movedTo: 'server-3', movedAt: 1234 }] }, 'server-2')
   expect(good?.items[0]?.movedTo).toBe('server-3')
-  const offlineCopy = nodePart({ items: [{ ...base, movedTo: 'laptop' }] }, null)
+  expect(good?.items[0]?.movedAt).toBe(1234)
+  const offlineCopy = nodePart({ items: [{ ...base, movedTo: 'laptop', movedAt: 500 }] }, null)
   expect(offlineCopy?.items[0]?.movedTo).toBe('laptop')
+  expect(offlineCopy?.items[0]?.movedAt).toBe(500)
   const bad = nodePart(
     {
       items: [
         { ...base, key: 'k-empty', movedTo: '' },
-        { ...base, key: 'k-num', movedTo: 42 },
-        { ...base, key: 'k-long', movedTo: 'x'.repeat(300) },
+        { ...base, key: 'k-num', movedTo: 42, movedAt: '100' },
+        { ...base, key: 'k-long', movedTo: 'x'.repeat(300), movedAt: Number.NaN },
       ],
     },
     'server-2',
   )
   expect(bad?.items.map(i => i.movedTo)).toEqual([undefined, undefined, 'x'.repeat(256)])
+  expect(bad?.items.map(i => i.movedAt)).toEqual([undefined, undefined, undefined])
+})
+
+test('locally resumed card (activity > movedAt) keeps its card even with an un-cleared movedTo mark', () => {
+  expect(keys([laptop({ movedTo: 'server-2', movedAt: 1000, activity: 2000 }), atServer2({ activity: 1500 })])).toEqual(
+    [SID, `@server-2:${SID}`],
+  )
+  // Activity at or before movedAt: mark still holds and drops the stale source card.
+  expect(keys([laptop({ movedTo: 'server-2', movedAt: 1000, activity: 1000 }), atServer2({ activity: 500 })])).toEqual([
+    `@server-2:${SID}`,
+  ])
+})
+
+test('legacy movedTo board mark matches master hostname id unless a device is named board', () => {
+  expect(keys([atServer2({ movedTo: 'board', movedAt: 500, activity: 400 }), laptop()], 'anna-laptop')).toEqual([SID])
+  // If a remote device itself is literally id "board", do not treat movedTo "board" as the master.
+  expect(
+    keys(
+      [
+        atServer2({ movedTo: 'board', movedAt: 500, activity: 400 }),
+        card({ key: `@board:other`, device: 'board', session: 'other-session' }),
+        laptop(),
+      ],
+      'anna-laptop',
+    ),
+  ).toEqual([`@server-2:${SID}`, `@board:other`, SID])
 })

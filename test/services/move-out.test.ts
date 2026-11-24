@@ -165,8 +165,9 @@ process.exit(0)
 }
 
 test('finish() checks pane get and pane process-info with --pane, closing an idle shell pane (#642)', async () => {
+  const samePane = { pane_id: 'w1:p5', terminal_id: 'term-5', label: '💤 Atlas', tab_id: 'w1:t5', workspace_id: 'w1' }
   const idle = await runFinishInSandbox({
-    'pane get': { result: { pane: { pane_id: 'w1:p5', tab_id: 'w1:t5', workspace_id: 'w1' } } },
+    'pane get': { result: { pane: samePane } },
     'pane process-info --pane w1:p5': {
       result: { process_info: { shell_pid: 101, foreground_processes: [{ pid: 101 }] } },
     },
@@ -176,12 +177,13 @@ test('finish() checks pane get and pane process-info with --pane, closing an idl
   expect(idle.card.moved?.to).toBe('server-2')
   expect(idle.calls).toEqual([
     ['pane', 'get', 'w1:p5'],
+    ['pane', 'get', 'w1:p5'],
     ['pane', 'process-info', '--pane', 'w1:p5'],
     ['pane', 'close', 'w1:p5'],
   ])
 
   const busy = await runFinishInSandbox({
-    'pane get': { result: { pane: { pane_id: 'w1:p5', tab_id: 'w1:t5', workspace_id: 'w1' } } },
+    'pane get': { result: { pane: samePane } },
     'pane process-info --pane w1:p5': {
       result: { process_info: { shell_pid: 101, foreground_processes: [{ pid: 101 }, { pid: 202 }] } },
     },
@@ -189,14 +191,40 @@ test('finish() checks pane get and pane process-info with --pane, closing an idl
   expect(busy.result).toEqual({ ok: true, notes: [] })
   expect(busy.calls.some(c => c[0] === 'pane' && c[1] === 'close')).toBe(false)
 
+  const reusedTerminal = await runFinishInSandbox({
+    'pane get': {
+      seq: [{ result: { pane: samePane } }, { result: { pane: { ...samePane, terminal_id: 'term-9' } } }],
+    },
+    'pane close': { result: null },
+  })
+  expect(reusedTerminal.result).toEqual({ ok: true, notes: ['its pane was left (its pane changed)'] })
+  expect(reusedTerminal.calls.some(c => c[0] === 'pane' && c[1] === 'close')).toBe(false)
+
+  const relabeled = await runFinishInSandbox({
+    'pane get': {
+      seq: [{ result: { pane: samePane } }, { result: { pane: { ...samePane, label: 'New work' } } }],
+    },
+    'pane close': { result: null },
+  })
+  expect(relabeled.result).toEqual({ ok: true, notes: ['its pane was left (its pane changed)'] })
+  expect(relabeled.calls.some(c => c[0] === 'pane' && c[1] === 'close')).toBe(false)
+
   const gone = await runFinishInSandbox({
-    'pane get': { error: 'pane not found', code: 'pane_not_found' },
+    'pane get': { seq: [{ result: { pane: samePane } }, { error: 'pane not found', code: 'pane_not_found' }] },
   })
   expect(gone.result).toEqual({ ok: true, notes: [] })
 
+  const otherNotFound = await runFinishInSandbox({
+    'pane get': { seq: [{ result: { pane: samePane } }, { error: 'command not found', code: 'exec_failed' }] },
+  })
+  expect(otherNotFound.result).toEqual({
+    ok: true,
+    notes: ['its pane was left (herdr pane get: exec_failed: command not found)'],
+  })
+
   const runningAgent = await runFinishInSandbox({
     'pane get': {
-      result: { pane: { pane_id: 'w1:p5', tab_id: 'w1:t5', workspace_id: 'w1', agent: 'claude' } },
+      result: { pane: { ...samePane, agent: 'claude' } },
     },
   })
   expect(runningAgent.result).toEqual({ ok: true, notes: ['its pane was left (an agent runs in it)'] })

@@ -320,6 +320,7 @@ export async function startServer({
   presenceIntervalMs,
 }: ServerOptions): Promise<BoardServer> {
   const { cfg, log } = deps
+  const masterNodes = () => nodesConfig(cfg.nodes, hostname())
   // Validate before starting a scheduler or changing any state.
   const cards = cardsDir()
   const port = asked ?? Number(cfg.port ?? 12422)
@@ -351,7 +352,7 @@ export async function startServer({
   const launches = createLaunches({
     deps,
     onChange: () => board.publish(),
-    placer: () => (nodePlacer && nodesConfig(cfg.nodes) ? nodePlacer : null),
+    placer: () => (nodePlacer && masterNodes() ? nodePlacer : null),
   })
   // The board's update of itself from git (#617, services/self-update.ts): checked by the schedule
   // below while config.json's `autoUpdate` is on, or asked (Settings, `board update`). A restart
@@ -1113,11 +1114,11 @@ export async function startServer({
       items: board.items,
       refresh,
       toDevice: (targets, device, how) => {
-        const masterId = nodesConfig(cfg.nodes, hostname())?.id ?? ''
-        return nodeLinks && nodesConfig(cfg.nodes, hostname())
+        const masterId = masterNodes()?.id ?? ''
+        return nodeLinks && masterNodes()
           ? moveToDevice(
               {
-                nodes: () => nodesConfig(cfg.nodes, hostname()),
+                nodes: masterNodes,
                 link: id => nodeLinks?.link(id) ?? null,
                 ...movers(),
                 items: () => dropMovedCards([...board.items(), ...(nodeAggregate?.part()?.items ?? [])], masterId),
@@ -1413,7 +1414,7 @@ export async function startServer({
   // with or without `nodes`, as a board's first device makes it a master. The service is made the
   // first time the form asks: a board that never opens it runs none of it.
   let nodeSetup: NodeSetup | null = null
-  const setupSelfId = (): string => nodesConfig(cfg.nodes, hostname())?.id ?? deviceIdFromHost(hostname())
+  const setupSelfId = (): string => masterNodes()?.id ?? deviceIdFromHost(hostname())
   const localSetupRoutes = nodeSetupRoutes(
     () =>
       (nodeSetup ??= createNodeSetup({
@@ -1452,13 +1453,13 @@ export async function startServer({
       nodeLinks.configChanged()
       return
     }
-    if (nodesConfig(cfg.nodes) === null) return
+    if (masterNodes() === null) return
     nodeLinks = createNodeLinks({ cfg, log, commit: runningCommit })
     // Where a new session runs (#504), and the Devices row of this computer (#500): this computer's
     // own status by the code a node answers with.
     const ownStatus = createNodeStatus({
       node: () => {
-        const n = nodesConfig(cfg.nodes)
+        const n = masterNodes()
         return n && { id: n.id, port: 0, workRoot: '~', listen: 'loopback', tls: false, relay: null }
       },
       items: board.items,
@@ -1488,7 +1489,7 @@ export async function startServer({
       canShip: async () => (await headCommit(root).catch(() => null)) !== null,
       archive: commit => archiveCommit(root, commit),
       onChange: () => board.publish(),
-      revoked: id => nodesConfig(cfg.nodes)?.devices[id]?.revoked === true,
+      revoked: id => masterNodes()?.devices[id]?.revoked === true,
       log,
     })
     // An offline copy still due is written also on an exit that skips close().
@@ -1540,7 +1541,7 @@ export async function startServer({
       links: nodeLinks,
       find: board.findAny,
       items: () => {
-        const masterId = nodesConfig(cfg.nodes, hostname())?.id ?? ''
+        const masterId = masterNodes()?.id ?? ''
         return dropMovedCards([...board.items(), ...(aggregate.part()?.items ?? [])], masterId)
       },
       // Case files (#488): the same cards, a device not heard now marked as its copy.
@@ -1573,7 +1574,7 @@ export async function startServer({
     nodeRevoker = createRevoker({
       links,
       store: createDeviceStore(),
-      config: () => nodesConfig(cfg.nodes),
+      config: () => masterNodes(),
       mark: id => {
         let found = false
         const r = editNodes(nodes => {
@@ -1594,7 +1595,7 @@ export async function startServer({
       nodeLinks,
       bundleSync,
       {
-        config: () => nodesConfig(cfg.nodes),
+        config: () => masterNodes(),
         edit: change => {
           let snapshot: Record<string, unknown> | null = null
           const r = editNodes(nodes => {
@@ -1685,7 +1686,7 @@ export async function startServer({
     withDb: fn => withThreadsDb(false, fn),
     profiles: () => shownProfiles(deps.profiles().list).length,
     node: device => {
-      const n = nodesConfig(cfg.nodes)?.devices[device]
+      const n = masterNodes()?.devices[device]
       if (!n?.link) return null
       const link = nodeLinks?.link(device)
       const st = link?.view().status ?? null

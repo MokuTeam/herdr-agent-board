@@ -391,8 +391,8 @@ export async function collect(
     // Moved to another device (#616, services/move-out.ts): its card there is the one; this one,
     // asleep here, is left out until it comes back (a move back clears the mark) or runs here again.
     // One that stays awake carries the mark in `movedTo` (#642) so the master drops it by the mark.
-    const movedTo = movedToOf(saved)
-    if (base.sleeping && movedTo) return
+    let moved = movedOf(saved)
+    if (base.sleeping && moved) return
     const pin = pinOf(base.key, base.status, saved)
     const hit = base.session ? live.get(base.session) : undefined
     // A MokuPilot day session (#331) has no hook to report its profile either: the folder whose
@@ -464,9 +464,17 @@ export async function collect(
         own = summarize(helpersOf(path, { alive: !!base.alive, since: base.since ?? null }))
       } catch {} // helpers that cannot be read leave the session's card as it was
     }
+    const itemActivity = info.activity ?? base.activity ?? 0
+    // Resumed locally since the move (#642): clear the stale mark so it stays a normal local card.
+    if (!base.sleeping && moved && moved.at !== null && Math.max(base.since ?? 0, itemActivity) > moved.at) {
+      moved = null
+      try {
+        writeCard(base.key, { moved: '' })
+      } catch {} // its record is locked: the next refresh clears it
+    }
     items.push({
       ...base,
-      ...(movedTo && { movedTo }),
+      ...(moved && { movedTo: moved.to, ...(moved.at !== null && { movedAt: moved.at }) }),
       // A name given on the board beats the one herdr and Claude know it by; autoName is theirs.
       name,
       autoName,
@@ -734,10 +742,12 @@ export async function collect(
   return items
 }
 
-/** The device the card's move mark points to, or '' when unmarked (#616, #642). */
-function movedToOf(card: Card): string {
+/** The card's move mark (`to` device and optional `at` timestamp), or null when unmarked (#616, #642). */
+function movedOf(card: Card): { to: string; at: number | null } | null {
   const m = card.moved
-  if (typeof m !== 'object' || m === null) return ''
-  const to = (m as { to?: unknown }).to
-  return typeof to === 'string' && to.trim() ? to.trim() : ''
+  if (typeof m !== 'object' || m === null) return null
+  const raw = m as { to?: unknown; at?: unknown }
+  const to = typeof raw.to === 'string' && raw.to.trim() ? raw.to.trim() : ''
+  if (!to) return null
+  return { to, at: typeof raw.at === 'number' && Number.isFinite(raw.at) ? raw.at : null }
 }

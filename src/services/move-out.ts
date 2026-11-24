@@ -59,6 +59,8 @@ export interface MoveOutDeps {
 
 interface Packed {
   item: Item
+  /** The pane snapshotted at pack time so finish() only closes it if terminal_id and label still match. */
+  pane: { id: string; terminal: string | null; label: string } | null
   files: ListedFile[]
   entries: string[]
   wasAwake: boolean
@@ -72,8 +74,7 @@ interface Packed {
 const PACK_KEPT_MS = 60 * 60_000
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
-const notFound = (err: unknown): boolean =>
-  /not.?found|no such/i.test(`${err instanceof HerdrError ? (err.code ?? '') : ''} ${messageOf(err)}`)
+const paneGone = (err: unknown): boolean => err instanceof HerdrError && err.code === 'pane_not_found'
 
 export function createMoveOut(o: MoveOutDeps): MoveOut {
   const { deps } = o
@@ -198,9 +199,21 @@ export function createMoveOut(o: MoveOutDeps): MoveOut {
       try {
         trusted = trustsFolder(claudeStateFile(dir, home), cwd)
       } catch {}
+      let pane: Packed['pane'] = null
+      if (!dryRun && item.pane) {
+        try {
+          const got = await herdr<{ pane?: unknown }>(['pane', 'get', item.pane], 10_000)
+          const live = asPane(got?.pane)
+          if (live) pane = { id: item.pane, terminal: live.terminal_id || null, label: live.label ?? '' }
+        } catch (err) {
+          // Transient read failure still prevents closing by pane id alone (no terminal_id match).
+          if (!paneGone(err)) pane = { id: item.pane, terminal: null, label: '' }
+        }
+      }
       if (!dryRun)
         packs.set(session, {
           item,
+          pane,
           files: all,
           entries: carried.map(e => e.id),
           wasAwake,
@@ -252,25 +265,30 @@ export function createMoveOut(o: MoveOutDeps): MoveOut {
       writeCard(p.item.key, { moved: { to, cwd: p.cwd, at: Date.now(), ...(changed && { changes: p.changes }) } })
       if (changed) notes.push(`its ${changed} uncommitted change(s) went with it and stay here too`)
       for (const id of p.entries) removeEntry(id, 'cancelled')
-      // Its pane, when wake left it as a shell: nobody is in it now.
-      const pane = p.item.pane
+      // Its pane, when wake left it as a shell: nobody is in it now, and only when it is still the same pane.
+      const pane = p.pane
       if (pane) {
         try {
-          const got = await herdr<{ pane?: unknown }>(['pane', 'get', pane], 10_000)
+          const got = await herdr<{ pane?: unknown }>(['pane', 'get', pane.id], 10_000)
           const live = asPane(got?.pane)
           if (live && !live.agent) {
-            // Only a shell nobody uses: a program started in it since (a server, the owner's own) keeps it.
-            const procs = await paneProcesses(pane, 10_000)
-            const others = procs ? procs.foreground.filter(pr => pr.pid !== procs.shell) : null
-            if (procs && !others?.length) {
-              await herdr(['pane', 'close', pane])
-              notes.push('its pane closed')
+            const samePane = !!pane.terminal && live.terminal_id === pane.terminal && (live.label ?? '') === pane.label
+            if (!samePane) {
+              notes.push('its pane was left (its pane changed)')
+            } else {
+              // Only a shell nobody uses: a program started in it since (a server, the owner's own) keeps it.
+              const procs = await paneProcesses(pane.id, 10_000)
+              const others = procs ? procs.foreground.filter(pr => pr.pid !== procs.shell) : null
+              if (procs && !others?.length) {
+                await herdr(['pane', 'close', pane.id])
+                notes.push('its pane closed')
+              }
             }
           } else if (live?.agent) {
             notes.push('its pane was left (an agent runs in it)')
           }
         } catch (err) {
-          if (!notFound(err)) notes.push(`its pane was left (${messageOf(err)})`)
+          if (!paneGone(err)) notes.push(`its pane was left (${messageOf(err)})`)
         }
       }
       deps.wake.forget()

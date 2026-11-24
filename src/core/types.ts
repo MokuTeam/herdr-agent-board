@@ -439,5 +439,7 @@ export interface Item {
    * the session has a card on that device (#642). Absent when unmarked.
    */
   movedTo?: string
+  /** When that move mark was written (`card.moved.at`); absent when unmarked or unrecorded. */
+  movedAt?: number
   [extra: string]: unknown
 }

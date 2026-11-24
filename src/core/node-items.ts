@@ -338,6 +338,7 @@ const launch = shape(LAUNCH, LAUNCH_REQUIRED)
 const ITEM: Record<string, Check> = {
   sleeping: bool,
   movedTo: nonEmpty(LEN.id),
+  movedAt: num,
   formerPanes: list(str(LEN.id), 20),
   fromFile: yes,
   agent: str(32),
@@ -465,6 +466,14 @@ const ENTRY: Record<string, Check> = {
  * unfinished move), a stale mutual mark between two devices drops neither, and items without a
  * session id are untouched. Input order is preserved.
  */
+const LEGACY_MASTER = 'board'
+
+/**
+ * Drop a source card whose own board still reports it after a move to another device (#642):
+ * the session already has a card on the device its move mark (`movedTo`) names, and that target
+ * does not itself point back here. Cards without a move mark (older boards), solo cards without a
+ * counterpart on the target, and locally resumed cards (`activity > movedAt`) stay untouched.
+ */
 export function dropMovedCards(items: readonly Item[], masterId = ''): Item[] {
   if (!items.some(i => i.movedTo && i.session)) return [...items]
   const bySession = new Map<string, Item[]>()
@@ -475,15 +484,24 @@ export function dropMovedCards(items: readonly Item[], masterId = ''): Item[] {
     else bySession.set(i.session, [i])
   }
   const here = (x: Item): string => x.device ?? masterId
+  const hasBoardNode = items.some(i => i.device === LEGACY_MASTER)
+  const pointsTo = (src: Item, dstId: string): boolean => {
+    if (!src.movedTo || !dstId) return false
+    if (src.movedTo === dstId) return true
+    // Legacy marks saved before master hostname fallback defaulted `moved.to` to 'board'.
+    return src.movedTo === LEGACY_MASTER && dstId === masterId && !hasBoardNode
+  }
+  const staleMark = (x: Item): boolean =>
+    typeof x.movedAt === 'number' && Math.max(x.activity ?? 0, x.lastAt ?? 0) > x.movedAt
   return items.filter(i => {
-    if (!i.movedTo || !i.session) return true
+    if (!i.movedTo || !i.session || staleMark(i)) return true
     const src = here(i)
     const group = bySession.get(i.session)
     if (!group || group.length < 2) return true
     return !group.some(j => {
       if (j === i) return false
       const dst = here(j)
-      return dst !== '' && dst !== src && dst === i.movedTo && j.movedTo !== src
+      return dst !== '' && dst !== src && pointsTo(i, dst) && (staleMark(j) || !pointsTo(j, src))
     })
   })
 }
