@@ -26,6 +26,7 @@ import {
   fileTooBig,
   isCallId,
   isKeptCall,
+  isSlowCall,
   type UplinkCall,
   type UplinkResult,
   type UplinkSelf,
@@ -36,7 +37,9 @@ import { FILES_MAX } from '../../core/work-threads.ts'
 
 /** A write waits this long for the master before the command says it is kept. */
 export const KEPT_MS = 20_000
-/** Any other call waits this long while a master's stream is open. */
+/** Provider-backed calls (calendar sync/mutations, team sends, time posting) wait this long while a master is online. */
+export const SLOW_MS = 35_000
+/** Any other read waits this long while a master's stream is open. */
 export const READ_MS = 10_000
 const PING_MS = 20_000
 
@@ -81,6 +84,7 @@ const publicOf = (c: OutboxCall): UplinkCall => ({
   lane: c.lane,
   files: c.files.map(({ n, name, size, sha256 }) => ({ n, name, size, sha256 })),
   ...(c.self && { self: c.self }),
+  ...(c.claimed !== undefined && { claimed: c.claimed }),
 })
 
 export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
@@ -125,7 +129,7 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
   }
 
   /** The files a call names, copied and registered by their number; or why not, in the words a local post uses. */
-  function register(id: string, paths: string[]): { files: OutboxCall['files'] } | { error: string } {
+  function register(id: string, paths: string[], cmd: string): { files: OutboxCall['files'] } | { error: string } {
     if (paths.length > FILES_MAX) return { error: `${paths.length} files; ${FILES_MAX} at most` }
     const files: OutboxCall['files'] = []
     for (const [n, path] of paths.entries()) {
@@ -137,7 +141,7 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
       } catch {
         return { error: `${path}: no such file` }
       }
-      const big = fileTooBig(path, size)
+      const big = fileTooBig(path, size, cmd)
       if (big) return { error: big }
       const bytes = readFileSync(path)
       const sha256 = createHash('sha256').update(bytes).digest('hex')
@@ -149,11 +153,12 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
   async function call(raw: unknown): Promise<{ status: number; body: unknown }> {
     if (closed) return { status: 503, body: { error: 'node' } }
     if (!isObject(raw)) return bad('body')
-    const { id: given, cmd, argv, session, lane, files, self } = raw
+    const { id: given, cmd, argv, session, lane, files, self, claimed } = raw
     if (!isText(cmd) || !Array.isArray(argv) || !argv.every(isText) || !isText(session)) return bad('call')
     if (lane !== null && lane !== undefined && !isText(lane)) return bad('lane')
     if (files !== undefined && (!Array.isArray(files) || !files.every(isText))) return bad('files')
     if (given !== undefined && !isCallId(given)) return bad('id')
+    if (claimed !== undefined && typeof claimed !== 'boolean') return bad('claimed')
     let validatedSelf: UplinkSelf | undefined
     if (self !== undefined) {
       if ((cmd !== 'thread' && cmd !== 'threads') || argv[0] !== 'verdict') return bad('self')
@@ -175,7 +180,7 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
     const id = given ?? randomUUID()
     // The same call again (a command that tried twice): it waits for the one already kept.
     if (!outbox.read(id)) {
-      const got = register(id, (files as string[] | undefined) ?? [])
+      const got = register(id, (files as string[] | undefined) ?? [], cmd)
       if ('error' in got) {
         outbox.remove(id)
         return { status: 200, body: failed(got.error) }
@@ -188,6 +193,7 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
         lane: (lane as string | null | undefined) ?? null,
         files: got.files,
         ...(validatedSelf && { self: validatedSelf }),
+        ...(claimed !== undefined && { claimed }),
         keep,
         at: Date.now(),
       }
@@ -206,7 +212,12 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
       for (const client of [...clients]) write(client, event)
     }
     const verdict = (cmd === 'thread' || cmd === 'threads') && argv[0] === 'verdict'
-    const ms = keep || verdict ? knobMs('BOARD_NODE_KEPT_MS', KEPT_MS) : knobMs('BOARD_NODE_READ_MS', READ_MS)
+    const ms =
+      keep || verdict
+        ? knobMs('BOARD_NODE_KEPT_MS', KEPT_MS)
+        : isSlowCall(cmd, argv as string[])
+          ? knobMs('BOARD_NODE_SLOW_MS', SLOW_MS)
+          : knobMs('BOARD_NODE_READ_MS', READ_MS)
     const result = await wait(id, ms)
     if (result) return { status: 200, body: answered(result) }
     if (keep) return { status: 200, body: { state: 'kept', id } satisfies CallAnswer }

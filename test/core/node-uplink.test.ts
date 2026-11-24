@@ -6,6 +6,7 @@ import {
   fileTooBig,
   isKeptCall,
   isRememberedCall,
+  isSlowCall,
   KEPT_SUBS,
   NOT_FROM_NODE,
   TEAM_NOT_FROM_NODE,
@@ -29,6 +30,7 @@ const call = {
 describe('a call', () => {
   test('one as the node sends it is taken; no lane and no files are fine', () => {
     expect(uplinkCallOf(call)).toEqual(call)
+    expect(uplinkCallOf({ ...call, claimed: true })).toEqual({ ...call, claimed: true })
     const { lane: _l, files: _f, ...bare } = call
     expect(uplinkCallOf(bare)).toEqual({ ...bare, lane: null, files: [] })
   })
@@ -54,6 +56,7 @@ describe('a call', () => {
       { ...call, files: [{ ...call.files[0], sha256: 'xyz' }] },
       { ...call, files: [call.files[0], call.files[0]] },
       { ...call, files: Array.from({ length: 6 }, (_, n) => ({ ...call.files[0], n })) },
+      { ...call, claimed: 'yes' },
     ])
       expect(uplinkCallOf(bad)).toBeNull()
   })
@@ -83,13 +86,13 @@ test('what the master takes, what a node keeps, and what is never run for a node
     'journal',
     'presence',
     'away',
-    'spend',
     'cats',
     'list',
     'remind',
     'every',
     'unschedule',
   ])
+  expect(UPLINK_COMMANDS.has('spend')).toBe(false)
   expect([...KEPT_SUBS].sort()).toEqual(['ask', 'done', 'new', 'post', 'set', 'unwatch', 'watch'])
   expect([...TIME_WRITE_SUBS].sort()).toEqual(['add', 'edit', 'import', 'move', 'post', 'restore', 'rm', 'unpost'])
   expect([...CAL_WRITE_SUBS].sort()).toEqual(['add', 'edit', 'push', 'rm'])
@@ -106,6 +109,13 @@ test('what the master takes, what a node keeps, and what is never run for a node
   expect(isKeptCall('team', ['post', 'anna', 'hi'])).toBe(false)
   expect(isRememberedCall('cal', ['add'])).toBe(true)
   expect(isRememberedCall('cal', ['list'])).toBe(false)
+  expect(isSlowCall('cal', ['sync'])).toBe(true)
+  expect(isSlowCall('cal', ['add'])).toBe(true)
+  expect(isSlowCall('cal', ['list'])).toBe(false)
+  expect(isSlowCall('team', ['post'])).toBe(true)
+  expect(isSlowCall('team', ['draft'])).toBe(false)
+  expect(isSlowCall('time', ['post'])).toBe(true)
+  expect(isSlowCall('time', ['list'])).toBe(false)
   expect(isRememberedCall('team', ['thread', 'k', '--read'])).toBe(true)
   expect(isRememberedCall('team', ['thread', 'k'])).toBe(false)
   expect(isRememberedCall('team', ['thread', 'k', '--', '--read'])).toBe(false)
@@ -117,4 +127,6 @@ test('what the master takes, what a node keeps, and what is never run for a node
   expect(isRememberedCall('unschedule', ['abc123'])).toBe(true)
   expect(fileTooBig('r.md', 5 * 1024 * 1024)).toBeNull()
   expect(fileTooBig('r.md', 5 * 1024 * 1024 + 1)).toBe('r.md: 6 MB; 5 MB at most on a local thread')
+  expect(fileTooBig('f.txt', 5 * 1024 * 1024 + 1, 'team')).toBe('f.txt: 6 MB; 5 MB at most from a node')
+  expect(fileTooBig('e.json', 5 * 1024 * 1024 + 1, 'cal')).toBe('e.json: 6 MB; 5 MB at most from a node')
 })

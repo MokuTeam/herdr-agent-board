@@ -239,6 +239,7 @@ describe('board team against a hub', () => {
       await Bun.sleep(100)
     } while (Date.now() < end)
     expect(r.stderr).toBe('')
+    expect(r.stdout.split('\n')[0]).toBe(`${base} · online · you: draftme ${fingerprint(me.pub)}`)
     expect(r.stdout).toContain('draft for Roman is in the Team panel; nothing is sent until a person presses Send')
     const byId = await board(box, ['team', 'draft', roman.pub, 'second one'])
     expect(byId.code).toBe(0)

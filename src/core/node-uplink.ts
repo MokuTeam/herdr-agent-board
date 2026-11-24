@@ -23,7 +23,6 @@ export const UPLINK_COMMANDS: ReadonlySet<string> = new Set([
   'journal',
   'presence',
   'away',
-  'spend',
   'cats',
   'list',
   'remind',
@@ -117,6 +116,19 @@ export function isRememberedCall(cmd: string, argv: readonly string[]): boolean 
 }
 
 /**
+ * Whether a non-kept uplink call can hit external providers or hubs and needs a longer wait window
+ * than a fast local board read (#698).
+ */
+export function isSlowCall(cmd: string, argv: readonly string[]): boolean {
+  const sub = argv[0] ?? ''
+  if (cmd === 'cal') return sub === 'sync' || CAL_WRITE_SUBS.has(sub)
+  if (cmd === 'team')
+    return sub === 'post' || sub === 'reply' || sub === 'assign' || sub === 'release' || sub === 'listen'
+  if (cmd === 'time') return sub === 'post' || sub === 'unpost' || sub === 'import'
+  return false
+}
+
+/**
  * What the master does not run for a node's session, and why: `open` raises the master's own
  * window, `share` is a request the owner confirms (#224: what comes up a link is an agent's), and
  * `import` reads a task board file the call does not carry.
@@ -164,6 +176,8 @@ export interface UplinkCall {
   files: UplinkFile[]
   /** For `board thread verdict` (#675): the pane's session as the node's herdr confirmed it. */
   self?: UplinkSelf
+  /** For `board team post|reply --session <target>` (#698): session was named explicitly with --session. */
+  claimed?: boolean
 }
 
 export interface UplinkResult {
@@ -199,18 +213,28 @@ function selfOf(v: unknown): UplinkSelf | null {
 /** A call as it came on the stream, or null when it is not one. */
 export function uplinkCallOf(raw: unknown): UplinkCall | null {
   if (!isObject(raw)) return null
-  const { id, cmd, argv, session, lane, files, self: rawSelf } = raw
+  const { id, cmd, argv, session, lane, files, self: rawSelf, claimed } = raw
   if (!isCallId(id) || !isText(cmd, 64)) return null
   if (!Array.isArray(argv) || argv.length > ARGV_MAX || !argv.every(a => isText(a, ARG_MAX))) return null
   if (!isText(session, 1024) || hasUnprintable(session)) return null
   if (lane !== null && lane !== undefined && !isText(lane, 64)) return null
+  if (claimed !== undefined && typeof claimed !== 'boolean') return null
   const list = files === undefined ? [] : Array.isArray(files) && files.length <= FILES_MAX ? files.map(fileOf) : null
   if (!list || list.some(f => f === null)) return null
   const got = list as UplinkFile[]
   if (new Set(got.map(f => f.n)).size !== got.length) return null
   const self = rawSelf === undefined || rawSelf === null ? undefined : selfOf(rawSelf)
   if (rawSelf !== undefined && rawSelf !== null && !self) return null
-  return { id, cmd, argv: argv as string[], session, lane: lane ?? null, files: got, ...(self && { self }) }
+  return {
+    id,
+    cmd,
+    argv: argv as string[],
+    session,
+    lane: lane ?? null,
+    files: got,
+    ...(self && { self }),
+    ...(claimed !== undefined && { claimed }),
+  }
 }
 
 /** A result as the master posted it, or null. */
@@ -224,9 +248,12 @@ export function uplinkResultOf(raw: unknown): UplinkResult | null {
   return { code: code as number, out, err }
 }
 
-/** A file too large for a thread, in the words a local post uses (services/work-threads.ts copyFiles). */
-export function fileTooBig(name: string, size: number): string | null {
-  return size > FILE_MAX_BYTES ? `${name}: ${Math.ceil(size / 1048576)} MB; 5 MB at most on a local thread` : null
+/** A file too large for an uplink call, in the words a local command uses. */
+export function fileTooBig(name: string, size: number, cmd?: string): string | null {
+  if (size <= FILE_MAX_BYTES) return null
+  const mb = Math.ceil(size / 1048576)
+  if (!cmd || cmd === 'thread' || cmd === 'threads') return `${name}: ${mb} MB; 5 MB at most on a local thread`
+  return `${name}: ${mb} MB; 5 MB at most from a node`
 }
 
 /** A refusal as a result. */

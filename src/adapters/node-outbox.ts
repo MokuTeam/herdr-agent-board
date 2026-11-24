@@ -22,6 +22,8 @@ export interface OutboxCall {
   files: (UplinkFile & { path: string })[]
   /** For `board thread verdict` (#675): the pane's session as the node's herdr confirmed it. */
   self?: UplinkSelf
+  /** For `board team post|reply --session <target>` (#698): session was named explicitly with --session. */
+  claimed?: boolean
   /** A write that waits for the master (core/node-uplink.ts KEPT_SUBS). */
   keep: boolean
   at: number
@@ -43,6 +45,7 @@ function callOf(v: unknown): OutboxCall | null {
   if (!isRecord(v) || !isCallId(v.id) || !isText(v.cmd) || !Array.isArray(v.argv) || !v.argv.every(isText)) return null
   if (!isText(v.session) || (v.lane !== null && !isText(v.lane)) || !Array.isArray(v.files)) return null
   if (typeof v.at !== 'number' || typeof v.keep !== 'boolean') return null
+  if (v.claimed !== undefined && typeof v.claimed !== 'boolean') return null
   const files = v.files.filter(
     (f): f is OutboxCall['files'][number] =>
       isRecord(f) &&
@@ -75,6 +78,7 @@ function callOf(v: unknown): OutboxCall | null {
     lane: v.lane,
     files,
     ...(self && { self }),
+    ...(v.claimed !== undefined && { claimed: v.claimed }),
     keep: v.keep,
     at: v.at,
   }

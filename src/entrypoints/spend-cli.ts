@@ -1,6 +1,5 @@
 // `board spend [--day <d>] [--lane <id>] [--json]` (#636): token spend per session and per lane,
 // by local day, read directly from Claude, Codex, and pi transcripts on demand.
-import { nodeConfig } from '../core/nodes.ts'
 import {
   addDays,
   dateIn,
@@ -14,7 +13,6 @@ import {
 import type { Config, Item } from '../core/types.ts'
 import type { Deps } from '../services/deps.ts'
 import { collectSpend, spendZone } from '../services/spend.ts'
-import { forwardNodeCall, type NodeCall, type NodeCallAnswer } from './node-call.ts'
 
 export const SPEND_USAGE =
   'usage: board spend [--day <YYYY-MM-DD|today|yesterday> | --from <YYYY-MM-DD> [--to <YYYY-MM-DD>]] [--lane <id>] [--json]'
@@ -22,8 +20,6 @@ export const SPEND_USAGE =
 export interface SpendCmdContext {
   cfg: Config
   deps: Pick<Deps, 'profiles' | 'homes' | 'codex'>
-  actor?: { key: string; name?: string } | 'user'
-  call?: (body: NodeCall) => Promise<NodeCallAnswer>
   items?: readonly Item[]
   out?: (line: string) => void
   err?: (line: string) => void
@@ -131,20 +127,6 @@ export async function spendCmd(rest: readonly string[], ctx: SpendCmdContext): P
     if (parsed.json) out(JSON.stringify({ usage: SPEND_USAGE }, null, 2))
     else out(SPEND_USAGE)
     return 0
-  }
-
-  if (nodeConfig(ctx.cfg.node)) {
-    const session = ctx.actor && typeof ctx.actor !== 'string' ? ctx.actor.key : null
-    return await forwardNodeCall({
-      cmd: 'spend',
-      argv: [...rest],
-      session,
-      port: ctx.cfg.port,
-      json: jsonFlag,
-      call: ctx.call,
-      out,
-      err,
-    })
   }
 
   if (parsed.day !== undefined && (parsed.from !== undefined || parsed.to !== undefined)) {

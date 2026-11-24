@@ -24,6 +24,7 @@
 //   board time export [--csv] [--date <d> | --from <d> --to <d>] [--client <lane>] [--bom]   CSV of the entries
 //   board time [<command>] --help   a command's usage with all its flags (time.usage.<command>), or every one's;
 //                  a usage error says the command's usage too
+import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { addTimeProjects } from '../adapters/config-file.ts'
@@ -50,7 +51,7 @@ import {
   unpostEntries,
 } from '../adapters/time-store.ts'
 import { t } from '../core/lang.ts'
-import { UPLINK_REFUSED } from '../core/node-uplink.ts'
+import { isRememberedCall, UPLINK_REFUSED } from '../core/node-uplink.ts'
 import { nodeConfig } from '../core/nodes.ts'
 import {
   type Actor,
@@ -346,6 +347,7 @@ async function forward(
     if (pos >= 0) files = [resolve(args[pos] as string)]
   }
   const body: NodeCall = {
+    ...(isRememberedCall('time', rest) && { id: randomUUID() }),
     cmd: 'time',
     argv: [...rest],
     session: ctx.actor.key,

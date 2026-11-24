@@ -154,7 +154,7 @@ import {
   reportHash,
   reportIdentity,
 } from '../adapters/call-receipts.ts'
-import { changeTodos, readCard, writeCard } from '../adapters/cards.ts'
+import { allCards, changeTodos, readCard, writeCard } from '../adapters/cards.ts'
 import { createClaudeHome, cwdOf } from '../adapters/claude-home.ts'
 import { configFile, editCategories, loadConfig, setRemoteOn, setTunnelOn } from '../adapters/config-file.ts'
 import { cygpath, takeGitBashArgs } from '../adapters/git-bash.ts'
@@ -177,17 +177,16 @@ import {
 } from '../adapters/schedule-store.ts'
 import { peekAgySleepers, peekPiSleepers } from '../adapters/wake-files.ts'
 import { AGY_AGENT, isAgyItem } from '../core/agy.ts'
-import { bgTaskActive, bgTaskLabel, isBgTaskStuck } from '../core/bg-task.ts'
-import { COLUMNS, noteOf, statusText } from '../core/board.ts'
+import { formatListLines } from '../core/board-list.ts'
 import { withBoardPaths } from '../core/board-paths.ts'
-import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
-import { DECISION_FLAGS, decisionsConfig } from '../core/decisions.ts'
+import { categoryFor, categoryInfo } from '../core/categories.ts'
+import { DECISION_FLAGS, type DecisionView, decisionsConfig, orderQueue } from '../core/decisions.ts'
 import { switchedOff } from '../core/feature-switch.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
 import { agyCommand } from '../core/launch/agents.ts'
 import { parseMoveAny } from '../core/move-device.ts'
-import { isKeptCall } from '../core/node-uplink.ts'
+import { isKeptCall, UPLINK_REFUSED } from '../core/node-uplink.ts'
 import { nodeConfig } from '../core/nodes.ts'
 import { isPiSessionFile, piSessionId } from '../core/pi.ts'
 import { isPresenceState, type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
@@ -212,7 +211,6 @@ import { wakeConfig } from '../core/wake/config.ts'
 import { parsePiResume, piResumeArgv, piResumeEnv } from '../core/wake/pi.ts'
 import { keyFor, type TopicSnapshot } from '../core/wake/topics.ts'
 import { type WatchEntry, watchesConfig } from '../core/watches.ts'
-import { shortWhen, span } from '../core/when-format.ts'
 import { checkWake, wakeAnswers, wakeSleepsAgy } from '../services/actions.ts'
 import {
   askArchive,
@@ -416,6 +414,134 @@ async function nodeCaller(): Promise<{ key: string; lane: string | null } | null
   const cwd = 'cwd' in s && typeof s.cwd === 'string' && s.cwd ? s.cwd : process.cwd()
   const lane = (typeof card?.category === 'string' && card.category) || categoryFor(cfg, cwd) || null
   return { key: s.key, lane }
+}
+
+/** Forward a read command (`cats`, `list`) from a node when the master answers; fall back locally when unreachable. */
+async function tryNodeRead(cmd: 'cats' | 'list', fallbackNote: string): Promise<boolean> {
+  if (!nodeConfig(cfg.node)) return false
+  const caller = await nodeCaller()
+  if (!caller?.key) return false
+  const { callBoard } = await import('./node-call.ts')
+  const answer = await callBoard(cfg.port)({ cmd, argv: [], session: caller.key, lane: null, files: [] })
+  if (answer?.state === 'answered') {
+    if (answer.code === UPLINK_REFUSED && answer.err.some(l => /is not taken from a node/i.test(l))) {
+      console.error(
+        `board ${cmd} is not supported by the board's computer yet: update the master board to a newer version`,
+      )
+      process.exitCode = 1
+      return true
+    }
+    for (const l of answer.out) console.log(l)
+    for (const l of answer.err) console.error(l)
+    process.exitCode = answer.code
+    return true
+  }
+  console.error(fallbackNote)
+  return false
+}
+
+/** Merge master and local node decisions on `board decisions [--done] [--json]` (#698). */
+async function decisionsOnNode(args: readonly string[]): Promise<void> {
+  const json = args.includes('--json')
+  const wantDone = args.includes('--done')
+  const unknown = args.filter(w => w !== '--json' && w !== '--done')
+  if (unknown.length) throw new Error('usage: board decisions [--done] [--json]')
+  const fail = (code: string, message: string, exit = 1): void => {
+    if (json) console.log(JSON.stringify({ ok: false, error: code, message }))
+    else console.error(message)
+    process.exitCode = exit
+  }
+  const caller = await nodeCaller()
+  if (!caller?.key)
+    return fail(
+      'no_session',
+      "run it from a session: on a node, board decisions goes to the board's computer as a session's",
+    )
+  const { callBoard } = await import('./node-call.ts')
+  const answer = await callBoard(cfg.port)({
+    cmd: 'decisions',
+    argv: [...(wantDone ? ['--done'] : []), '--json'],
+    session: caller.key,
+    lane: null,
+    files: [],
+  })
+  const now = Date.now()
+  const localOn = decisionsConfig(cfg.decisions) !== null
+  const [cliMod, svcMod] = await Promise.all([import('./decisions-cli.ts'), import('../services/decisions.ts')])
+  type Row = import('../adapters/decision-store.ts').DecisionRow
+  const localOpen: DecisionView[] = svcMod.decisionsFromCards(allCards())
+  const localDone: Row[] = svcMod.decisionsDone({ limit: 20 })
+
+  if (answer?.state !== 'answered') {
+    if (!localOn && !localOpen.length && !localDone.length)
+      return fail(
+        answer ? 'unreachable' : 'board',
+        answer ? "the board's computer is not reachable" : 'the board does not run on this computer: nothing was sent',
+      )
+    console.error("note: the board's computer is not reachable; showing this node's decisions only")
+    const lines = wantDone
+      ? cliMod.formatDecisionsDone(localDone, now, json)
+      : cliMod.formatDecisionItems(localOpen, now, json)
+    for (const l of lines) console.log(l)
+    return
+  }
+  if (answer.code !== 0) {
+    if (answer.code === UPLINK_REFUSED && answer.err.some(l => /is not taken from a node/i.test(l)))
+      return fail(
+        'master_outdated',
+        "board decisions is not supported by the board's computer yet: update the master board to a newer version",
+      )
+    const parsed = (() => {
+      try {
+        return JSON.parse(answer.out.join('\n')) as { error?: unknown; message?: unknown }
+      } catch {
+        return null
+      }
+    })()
+    if (parsed?.error === 'off' && (localOn || localOpen.length || localDone.length)) {
+      const lines = wantDone
+        ? cliMod.formatDecisionsDone(localDone, now, json)
+        : cliMod.formatDecisionItems(localOpen, now, json)
+      for (const l of lines) console.log(l)
+      return
+    }
+    if (json && answer.out.length) {
+      for (const l of answer.out) console.log(l)
+      process.exitCode = answer.code
+      return
+    }
+    if (parsed && typeof parsed.message === 'string')
+      return fail(String(parsed.error ?? 'failed'), parsed.message, answer.code)
+    for (const l of answer.out) console.log(l)
+    for (const l of answer.err) console.error(l)
+    process.exitCode = answer.code
+    return
+  }
+
+  let remote: Record<string, unknown> | null = null
+  try {
+    remote = JSON.parse(answer.out.join('\n')) as Record<string, unknown>
+  } catch {}
+  if (wantDone) {
+    const byId = new Map<string, Row>()
+    const remoteRows = Array.isArray(remote?.done) ? (remote.done as Row[]) : []
+    for (const r of remoteRows) byId.set(r.id, r)
+    for (const r of localDone) if (!byId.has(r.id)) byId.set(r.id, r)
+    const merged = [...byId.values()]
+      .sort((a, b) => (b.answeredAt ?? b.askedAt ?? 0) - (a.answeredAt ?? a.askedAt ?? 0))
+      .slice(0, 20)
+    for (const l of cliMod.formatDecisionsDone(merged, now, json)) console.log(l)
+    return
+  }
+  const byKey = new Map<string, DecisionView>()
+  const keyOf = (d: DecisionView): string => (d.id ? `id:${d.id}` : `card:${d.key}\u0000${d.question}`)
+  const remoteItems = Array.isArray(remote?.items) ? (remote.items as DecisionView[]) : []
+  for (const d of remoteItems) byKey.set(keyOf(d), d)
+  for (const d of localOpen) {
+    const k = keyOf(d)
+    if (!byKey.has(k)) byKey.set(k, d)
+  }
+  for (const l of cliMod.formatDecisionItems(orderQueue([...byKey.values()]), now, json)) console.log(l)
 }
 
 /**
@@ -853,6 +979,7 @@ async function team(): Promise<void> {
       lane: caller?.lane ?? null,
       files,
       ...(kept && { id: randomUUID() }),
+      ...(target && { claimed: true }),
       port: cfg.port,
       json: flags.includes('--json'),
     })
@@ -969,6 +1096,7 @@ async function team(): Promise<void> {
   }
   if (op === 'draft') {
     const A = await import('./team-agents-cli.ts')
+    console.log(A.teamHeaderLine(view))
     return console.log(await A.teamDraftTo(webPort, view.roster, more[0] ?? '', more[1] ?? ''))
   }
   const A = await import('./team-agents-cli.ts')
@@ -988,63 +1116,19 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'cats') {
-    if (nodeConfig(cfg.node)) {
-      const caller = await nodeCaller()
-      const { forwardNodeCall } = await import('./node-call.ts')
-      process.exitCode = await forwardNodeCall({
-        cmd: 'cats',
-        argv: [],
-        session: caller?.key ?? null,
-        port: cfg.port,
-      })
+    if (await tryNodeRead('cats', "note: the board's computer is not reachable; showing this node's categories only"))
       return
-    }
     const known = cfg.categories.map(c => `${c.id} (${categoryInfo(cfg, c.id).title})`).join(', ')
     return console.log(`${known}. A new id makes a new lane. Config: ${configFile()}`)
   }
 
   if (cmd === 'list') {
-    if (nodeConfig(cfg.node)) {
-      const caller = await nodeCaller()
-      const { forwardNodeCall } = await import('./node-call.ts')
-      process.exitCode = await forwardNodeCall({
-        cmd: 'list',
-        argv: [],
-        session: caller?.key ?? null,
-        port: cfg.port,
-      })
+    if (await tryNodeRead('list', "note: the board's computer is not reachable; showing this node's sessions only"))
       return
-    }
     const items = await collect(deps)
-    const order = new Map(COLUMNS.map((c, i) => [c.id, i]))
-    items.sort(
-      (a, b) =>
-        laneRank(cfg, a.category) - laneRank(cfg, b.category) ||
-        a.category.localeCompare(b.category) ||
-        (order.get(a.column) ?? 0) - (order.get(b.column) ?? 0),
-    )
     const soonest = new Map<string, number>()
     for (const e of listEntries()) if (!soonest.has(e.key)) soonest.set(e.key, e.next)
-    const now = Date.now()
-    for (const i of items) {
-      const col = COLUMNS.find(c => c.id === i.column)?.title
-      const note = noteOf(i)
-      const next = soonest.get(i.key)
-      const alarm = next !== undefined ? ` ⏰ ${shortWhen(next, t)}` : ''
-      let bgNote = ''
-      if (bgTaskActive(i.bgTasks)) {
-        const stuck = isBgTaskStuck(i.bgTasks, now)
-        const ageText = i.bgTasks.since
-          ? now - i.bgTasks.since < 60_000
-            ? t('ago.now')
-            : span(now - i.bgTasks.since, t)
-          : ''
-        bgNote = ` [${bgTaskLabel(i.bgTasks, ageText, stuck, t)}]`
-      }
-      console.log(
-        `${i.name} [${i.category}] ${col}${i.sleeping ? ` (${statusText('sleeping')})` : ''}${alarm}${bgNote}${note ? `: ${note.slice(0, 80)}` : ''}`,
-      )
-    }
+    for (const l of formatListLines(items, cfg, { soonest, now: Date.now(), includeNote: true })) console.log(l)
     return
   }
 
@@ -1230,24 +1314,13 @@ async function main(): Promise<void> {
   if (cmd === 'journal') return journalCommand()
   if (cmd === 'team') return team()
   if (cmd === 'decisions') {
-    if (nodeConfig(cfg.node)) {
-      const caller = await nodeCaller()
-      const { forwardNodeCall } = await import('./node-call.ts')
-      process.exitCode = await forwardNodeCall({
-        cmd: 'decisions',
-        argv: [...words],
-        session: caller?.key ?? null,
-        port: cfg.port,
-        json: flagWords.includes('--json'),
-      })
-      return
-    }
+    if (nodeConfig(cfg.node)) return decisionsOnNode(words)
     if (!decisionsConfig(cfg.decisions)) throw new Error('decisions are off on this board (config.json "decisions")')
     return (await import('./decisions-cli.ts')).decisionsCommand(words, Date.now())
   }
 
-  // On a node, `remind`/`every` aimed at another session goes to the master over the uplink;
-  // reminders for this session itself stay local on the node.
+  // On a node, `remind`/`every` aimed at a non-local session goes to the master over the uplink;
+  // reminders for this session or another session on the same node stay local.
   if ((cmd === 'remind' || cmd === 'every') && target !== undefined && nodeConfig(cfg.node)) {
     const own = await ownSession()
     const tl = target.toLowerCase()
@@ -1256,10 +1329,9 @@ async function main(): Promise<void> {
       [i.name, i.autoName, i.pane, i.session, i.key].some(v => v && v.toLowerCase() === tl),
     )
     const ownPane = process.env.HERDR_PANE_ID
-    const isSelf = own
-      ? tl === own.key.toLowerCase() || (ownPane ? tl === ownPane.toLowerCase() : false) || hit?.key === own.key
-      : Boolean(hit)
-    if (!isSelf) {
+    const isLocal =
+      Boolean(hit) || (own ? tl === own.key.toLowerCase() || (ownPane ? tl === ownPane.toLowerCase() : false) : false)
+    if (!isLocal) {
       const argvOut = [
         '--session',
         target,
@@ -2651,8 +2723,7 @@ async function timeCommand(): Promise<void> {
 
 async function spendCommand(): Promise<void> {
   const { spendCmd } = await import('./spend-cli.ts')
-  const actor = nodeConfig(cfg.node) ? ((await nodeCaller()) ?? 'user') : undefined
-  process.exitCode = await spendCmd(rest, { cfg, deps, ...(actor && { actor }) })
+  process.exitCode = await spendCmd(rest, { cfg, deps })
 }
 
 /** `board journal …` (#489, entrypoints/journal-cli.ts): what changed on the board since the owner left. */

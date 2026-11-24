@@ -1,5 +1,6 @@
 // Shared client helper for CLI commands forwarded from a node to its master over the uplink (#508, #698).
-import { UPLINK_REFUSED } from '../core/node-uplink.ts'
+import { randomUUID } from 'node:crypto'
+import { isRememberedCall, UPLINK_REFUSED } from '../core/node-uplink.ts'
 
 /** A command on a node as it goes to the node's board (services/node/uplink.ts call). */
 export interface NodeCall {
@@ -16,7 +17,6 @@ export interface NodeCall {
     | 'journal'
     | 'presence'
     | 'away'
-    | 'spend'
     | 'cats'
     | 'list'
     | 'remind'
@@ -29,6 +29,8 @@ export interface NodeCall {
   files: string[]
   /** For `board thread verdict` (#675): the pane's session as this node's herdr confirmed it. */
   self?: { key: string } | { why: string }
+  /** For `board team post|reply --session <target>` (#698): session was named explicitly with --session. */
+  claimed?: boolean
 }
 
 /** What the node's board answered (services/node/uplink.ts CallAnswer); null when it did not. */
@@ -38,8 +40,8 @@ export type NodeCallAnswer =
   | { state: 'unreachable' }
   | null
 
-/** How long the command waits for its board: the board's own wait (20 s, 10 s for a read) and room. */
-const CALL_WAIT_MS = 40_000
+/** How long the command waits for its board: kept/slow uplink waits (20-35 s) and room. */
+const CALL_WAIT_MS = 45_000
 /** `board agents` is a read the caller waits on (ListAgents): a hanging board falls back to the local list soon. */
 const AGENTS_WAIT_MS = 5_000
 
@@ -74,6 +76,7 @@ export interface ForwardNodeCallOptions {
   lane?: string | null | undefined
   files?: string[] | undefined
   id?: string | undefined
+  claimed?: boolean | undefined
   port: unknown
   json?: boolean | undefined
   call?: ((body: NodeCall) => Promise<NodeCallAnswer>) | undefined
@@ -99,13 +102,15 @@ export async function forwardNodeCall(opts: ForwardNodeCallOptions): Promise<num
       'no_session',
       `run it from a session: on a node, board ${opts.cmd} goes to the board's computer as a session's`,
     )
+  const id = opts.id ?? (isRememberedCall(opts.cmd, opts.argv) ? randomUUID() : undefined)
   const body: NodeCall = {
-    ...(opts.id && { id: opts.id }),
+    ...(id && { id }),
     cmd: opts.cmd,
     argv: opts.argv,
     session: opts.session,
     lane: opts.lane ?? null,
     files: opts.files ?? [],
+    ...(opts.claimed !== undefined && { claimed: opts.claimed }),
   }
   const send = opts.call ?? callBoard(opts.port)
   const answer = await send(body)

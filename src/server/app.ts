@@ -1568,7 +1568,6 @@ export async function startServer({
       cfg,
       log,
       webPort: () => Number(server.port) || Number(cfg.port) || 12422,
-      deps,
       setPresence: (state, from) => presence.set(state, from),
     })
     const placer = createPlacer({

@@ -9,10 +9,12 @@ import { createOutbox } from '../../src/adapters/node-outbox.ts'
 import { createDeviceStore } from '../../src/adapters/node-store.ts'
 import { stateDir } from '../../src/adapters/paths.ts'
 import { addEntry, listEntries } from '../../src/adapters/schedule-store.ts'
+import { formatListLines } from '../../src/core/board-list.ts'
 import { RESULT_LINE_MAX, type UplinkResult } from '../../src/core/node-uplink.ts'
 import type { LinkStatus } from '../../src/core/nodes.ts'
 import type { Item } from '../../src/core/types.ts'
 import type { CalCmdContext } from '../../src/entrypoints/cal-cli.ts'
+import { threadData } from '../../src/entrypoints/team-agents-cli.ts'
 import type { ThreadCmdContext } from '../../src/entrypoints/thread-cli.ts'
 import type { TimeCmdContext } from '../../src/entrypoints/time-cli.ts'
 import { createNodeUplink } from '../../src/services/node/uplink.ts'
@@ -918,6 +920,14 @@ describe("the master's side", () => {
         files: [{ n: 0, name: 'events.json', size: eventsJson.length, sha256: sha(eventsJson) }],
       },
       { id: 'c-4', cmd: 'cal', argv: ['push', '--source', 'work'], session: 's-1', lane: null },
+      {
+        id: 'c-big',
+        cmd: 'cal',
+        argv: ['push', '--source', 'work', '--file', '/n/big.json'],
+        session: 's-1',
+        lane: null,
+        files: [{ n: 0, name: 'big.json', size: 6 * 1024 * 1024, sha256: sha('big') }],
+      },
     ]
     const posted: [string, UplinkResult][] = []
     const link = standIn((path, init) => {
@@ -960,8 +970,73 @@ describe("the master's side", () => {
     expect(answers('c-4')).toEqual([
       { code: 126, out: [], err: ['board cal push from a node needs --file <events.json>'] },
     ])
+    expect(answers('c-big')).toEqual([{ code: 1, out: [], err: ['big.json: 6 MB; 5 MB at most from a node'] }])
     expect(store.seenCall('server-1', 'c-1')).toEqual({ code: 0, out: ['cal add'], err: [] })
     expect(store.seenCall('server-1', 'c-2')).toBeNull()
+  })
+
+  test('#698 provider-backed cal add/sync use BOARD_NODE_SLOW_MS while fast reads timeout at BOARD_NODE_READ_MS', async () => {
+    const prevRead = process.env.BOARD_NODE_READ_MS
+    const prevSlow = process.env.BOARD_NODE_SLOW_MS
+    process.env.BOARD_NODE_READ_MS = '40'
+    process.env.BOARD_NODE_SLOW_MS = '600'
+    const dir = isolatedHome()
+    const up = createNodeUplink({ outbox: createOutbox({ dir: join(dir, 'outbox') }), log: () => {} })
+    const ac = new AbortController()
+    try {
+      // Connect master stream and answer each call after 120ms (longer than READ_MS=40, well within SLOW_MS=600).
+      const streamRes = up.stream(new Request('http://n/api/node/uplink', { signal: ac.signal }))
+      const streamed: Record<string, unknown>[] = []
+      void (async () => {
+        const reader = (streamRes.body as ReadableStream<Uint8Array>).getReader()
+        let buf = ''
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += new TextDecoder().decode(value)
+          const parts = buf.split('\n\n')
+          buf = parts.pop() ?? ''
+          for (const p of parts) {
+            if (!p.startsWith('event: call\n')) continue
+            const c = JSON.parse(p.split('\n')[1]?.slice('data: '.length) ?? 'null') as {
+              id: string
+              argv: string[]
+              claimed?: boolean
+            }
+            streamed.push(c)
+            setTimeout(() => {
+              up.answer(c.id, { code: 0, out: [`ok ${c.argv[0]}`], err: [] })
+            }, 120)
+          }
+        }
+      })()
+      const slowAdd = await up.call({ cmd: 'cal', argv: ['add', '--title', 'X'], session: 's-1' })
+      const slowSync = await up.call({ cmd: 'cal', argv: ['sync'], session: 's-1' })
+      const fastRead = await up.call({ cmd: 'cal', argv: ['list'], session: 's-1' })
+      expect(slowAdd.body).toMatchObject({ state: 'answered', code: 0, out: ['ok add'] })
+      expect(slowSync.body).toMatchObject({ state: 'answered', code: 0, out: ['ok sync'] })
+      expect(fastRead.body).toEqual({ state: 'unreachable' })
+
+      // claimed flag propagates through outbox and stream for `board team post --session`.
+      const outbox = createOutbox({ dir: join(dir, 'outbox') })
+      const claimedCall = await up.call({
+        cmd: 'team',
+        argv: ['post', 'anna', 'hi'],
+        session: 's-1',
+        claimed: true,
+        id: 'claimed-1',
+      })
+      expect(claimedCall.body).toMatchObject({ state: 'answered', code: 0 })
+      expect(streamed.find(c => c.id === 'claimed-1')?.claimed).toBe(true)
+      expect(outbox.read('claimed-1')).toBeNull()
+    } finally {
+      ac.abort()
+      up.close()
+      if (prevRead === undefined) delete process.env.BOARD_NODE_READ_MS
+      else process.env.BOARD_NODE_READ_MS = prevRead
+      if (prevSlow === undefined) delete process.env.BOARD_NODE_SLOW_MS
+      else process.env.BOARD_NODE_SLOW_MS = prevSlow
+    }
   })
 
   test('#698 board team refuses join/watch/listen/loop-set, pulls post --file, deduplicates writes, and allows uplink files in boardOwnFile', async () => {
@@ -998,6 +1073,7 @@ describe("the master's side", () => {
         argv: ['post', 'anna', '--file', '/n/note.txt', 'see file'],
         session: 's-1',
         lane: null,
+        claimed: true,
         files: [{ n: 0, name: 'note.txt', size: note.length, sha256: sha(note) }],
       },
       { id: 't-read', cmd: 'team', argv: ['thread', 'anna', '--read'], session: 's-1', lane: null },
@@ -1039,9 +1115,34 @@ describe("the master's side", () => {
     expect(store.seenCall('server-1', 't-draft')).toEqual({ code: 0, out: ['team draft'], err: [] })
     expect(store.seenCall('server-1', 't-read')).toEqual({ code: 0, out: ['team thread'], err: [] })
     expect(store.seenCall('server-1', 't-thread')).toBeNull()
+
+    // Plain-board threadData keeps file.path, while node hideFilePaths omits master filesystem paths.
+    const linesWithFile = [
+      {
+        dir: 'in',
+        id: 'm1',
+        ts: '2026-11-24T10:00:00Z',
+        text: 'hi',
+        file: { state: 'ready', name: 'a.txt', size: 12, path: '/srv/master/uploads/a.txt' },
+      },
+    ]
+    expect(
+      (
+        threadData('anna:t1', { title: 'T' }, linesWithFile, 'Anna', false, false) as {
+          lines: { file: Record<string, unknown> }[]
+        }
+      ).lines[0]?.file.path,
+    ).toBe('/srv/master/uploads/a.txt')
+    expect(
+      (
+        threadData('anna:t1', { title: 'T' }, linesWithFile, 'Anna', false, true) as {
+          lines: { file: Record<string, unknown> }[]
+        }
+      ).lines[0]?.file.path,
+    ).toBeUndefined()
   })
 
-  test('#698 decisions, journal, presence/away, spend, cats, list, remind/every, and unschedule enforce trust boundary and dedup writes', async () => {
+  test('#698 decisions, journal, presence/away, cats, list, remind/every, and unschedule enforce trust boundary and dedup writes (spend refused)', async () => {
     const dir = isolatedHome()
     const store = createDeviceStore({ dir: join(dir, 'nodes') })
     const mine = {
@@ -1051,6 +1152,7 @@ describe("the master's side", () => {
       category: 'atlas',
       column: 'work',
       status: 'working',
+      doing: 'node work',
     } as Item
     const masterItem = {
       key: '11111111-1111-4111-8111-111111111111',
@@ -1061,6 +1163,7 @@ describe("the master's side", () => {
       category: 'personal',
       column: 'idle',
       status: 'idle',
+      doing: 'private secret master note',
     } as Item
     const otherNode = {
       key: '@server-2:22222222-2222-4222-8222-222222222222',
@@ -1132,7 +1235,6 @@ describe("the master's side", () => {
     })
 
     let presenceSetCalls = 0
-    let spendItems: readonly Item[] = []
     const runner = createUplinkRunner({
       links: link.links,
       find: key => items.find(i => i.key === key),
@@ -1160,11 +1262,6 @@ describe("the master's side", () => {
         ctx.out(`journal ${args.join(' ')}`)
         return 0
       },
-      runSpend: async (args, ctx) => {
-        spendItems = ctx.items ?? []
-        ctx.out?.(`spend ${args.join(' ')}`)
-        return 0
-      },
     })
     link.changed('online')
     await until(() => posted.length === sent.length, 5000)
@@ -1180,17 +1277,27 @@ describe("the master's side", () => {
     ])
     expect(presenceSetCalls).toBe(1)
     expect(byId('p-bad')[0]).toEqual({ code: 1, out: [], err: ['usage: board away [on|off]'] })
-    expect(byId('sp-1')[0]).toEqual({ code: 0, out: ['spend --day today --json'], err: [] })
-    expect(spendItems.map(i => i.key)).toEqual([mine.key, masterItem.key])
+    // spend stays local on nodes and is refused on the master uplink (126).
+    expect(byId('sp-1')[0]?.code).toBe(126)
     expect(byId('ct-1')[0]).toEqual({
       code: 0,
       out: ['atlas (Atlas), personal (Personal). A new id makes a new lane.'],
       err: [],
     })
     const listText = byId('ls-1')[0]?.out.join('\n') ?? ''
-    expect(listText).toContain('NodeOne')
-    expect(listText).toContain('MasterSession')
+    expect(listText).toContain('NodeOne [atlas]')
+    expect(listText).toContain('MasterSession [personal]')
     expect(listText).not.toContain('HiddenPeer')
+    expect(listText).not.toContain('private secret master note')
+    expect(listText).not.toContain('node work')
+    // Shared formatter includes notes only when includeNote is explicitly true (local board list).
+    expect(
+      formatListLines(
+        [masterItem],
+        { categories: [{ id: 'personal', title: 'Personal', color: 'green', paths: [] }] } as never,
+        { includeNote: true },
+      ).join('\n'),
+    ).toContain('private secret master note')
 
     expect(byId('rm-no-target')[0]?.code).toBe(126)
     expect(byId('rm-other-node')[0]).toEqual({ code: 1, out: [], err: ['no session "HiddenPeer" on the board'] })

@@ -30,10 +30,9 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { createDeviceStore, type DeviceStore } from '../../adapters/node-store.ts'
 import { pace } from '../../adapters/pacing.ts'
 import { currentPresence, setPresence } from '../../adapters/presence-store.ts'
-import { addEntry, getEntry, listEntries, removeEntry } from '../../adapters/schedule-store.ts'
-import { bgTaskActive, bgTaskLabel, isBgTaskStuck } from '../../core/bg-task.ts'
-import { COLUMNS, noteOf, statusText } from '../../core/board.ts'
-import { categoryInfo, laneRank } from '../../core/categories.ts'
+import { addEntry, getEntry, removeEntry } from '../../adapters/schedule-store.ts'
+import { formatListLines } from '../../core/board-list.ts'
+import { categoryInfo } from '../../core/categories.ts'
 import { DecisionError, decisionsConfig } from '../../core/decisions.ts'
 import { takeEvents } from '../../core/event-stream.ts'
 import { t } from '../../core/lang.ts'
@@ -66,14 +65,11 @@ import { teamConfig } from '../../core/team.ts'
 import type { Actor } from '../../core/time.ts'
 import type { Config, Item } from '../../core/types.ts'
 import { safeName } from '../../core/upload-name.ts'
-import { shortWhen, span } from '../../core/when-format.ts'
 import { FILE_MAX_BYTES, FILES_MAX, type Party, threadsConfig } from '../../core/work-threads.ts'
 import type { CalCmdContext } from '../../entrypoints/cal-cli.ts'
-import type { SpendCmdContext } from '../../entrypoints/spend-cli.ts'
 import type { ThreadCmdContext } from '../../entrypoints/thread-cli.ts'
 import type { TimeCmdContext } from '../../entrypoints/time-cli.ts'
 import type { Known } from '../case-sessions.ts'
-import type { Deps } from '../deps.ts'
 import type { NodeLinks } from './links.ts'
 
 export interface UplinkRunner {
@@ -98,8 +94,6 @@ export interface UplinkRunnerOptions {
   store?: DeviceStore
   /** The running web board's port, for team and shared-thread calls. */
   webPort?: () => number
-  /** Master dependencies for `board spend`. */
-  deps?: Pick<Deps, 'profiles' | 'homes' | 'codex'>
   /** Live presence setter from the running board's PresenceService. */
   setPresence?: (state: PresenceState, from: PresenceSource) => { presence: Presence; changed: boolean }
   /** Tests: the command's entry (entrypoints/thread-cli.ts threadCmd by default). */
@@ -108,8 +102,6 @@ export interface UplinkRunnerOptions {
   runTime?: (argv: readonly string[], ctx: TimeCmdContext) => Promise<number>
   /** Tests: `board cal`'s entry (entrypoints/cal-cli.ts calCmd by default). */
   runCal?: (argv: readonly string[], ctx: CalCmdContext) => Promise<number>
-  /** Tests: `board spend`'s entry (entrypoints/spend-cli.ts spendCmd by default). */
-  runSpend?: (argv: readonly string[], ctx: SpendCmdContext) => Promise<number>
   /** Tests: `board team`'s entry. */
   runTeam?: (argv: readonly string[], ctx: { key: string; name: string; lane: string | null }) => Promise<UplinkResult>
   /** Tests: `board decisions`'s entry. */
@@ -418,7 +410,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
   ): Promise<'ok' | UplinkResult | null> {
     const f = call.files.find(x => x.n === 0)
     if (!f) return failed(`${argv[pos]}: the node did not send it`)
-    const big = fileTooBig(f.name, f.size)
+    const big = fileTooBig(f.name, f.size, call.cmd)
     if (big) return failed(big)
     const path = await pull(id, call.id, f, join(folder, '0'))
     if (path === null) return null
@@ -450,8 +442,6 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       case 'presence':
       case 'away':
         return presenceFrom(id, call)
-      case 'spend':
-        return spendFrom(id, call)
       case 'cats':
         return catsFrom(id, call)
       case 'list':
@@ -479,7 +469,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
         for (const [i, pos] of at.entries()) {
           const f = call.files.find(x => x.n === i)
           if (!f) return failed(`${argv[pos]}: the node did not send it`)
-          const big = fileTooBig(f.name, f.size)
+          const big = fileTooBig(f.name, f.size, call.cmd)
           if (big) return failed(big)
           const path = await pull(id, call.id, f, join(folder, String(i)))
           if (path === null) return null
@@ -676,7 +666,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     const inboxOp = op === 'inbox'
     const folder = join(store.dir(id), 'uplink', call.id)
     try {
-      const { AGENT_USAGE, teamAgents, teamDraftTo, teamFileArg, teamRosterLines } = await import(
+      const { AGENT_USAGE, teamAgents, teamDraftTo, teamFileArg, teamHeaderLine, teamRosterLines } = await import(
         '../../entrypoints/team-agents-cli.ts'
       )
       if (op === 'draft' ? more.length !== 2 : !agentOp && !inboxOp && (op !== 'roster' || more.length))
@@ -710,7 +700,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       if (op === 'roster') return { code: 0, out: teamRosterLines(view), err: [] }
       if (op === 'draft') {
         const line = await teamDraftTo(port, view.roster, argv[1] ?? '', argv[2] ?? '')
-        return { code: 0, out: [line], err: [] }
+        return { code: 0, out: [teamHeaderLine(view), line], err: [] }
       }
       if (inboxOp) {
         const { teamInbox } = await import('../../entrypoints/team-inbox-cli.ts')
@@ -720,7 +710,12 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       const line = await teamAgents(op, argv.slice(1), {
         webPort: port,
         roster: view.roster,
-        self: async () => ({ key: who.key, ...(who.name && { name: who.name }) }),
+        hideFilePaths: true,
+        self: async () => ({
+          key: who.key,
+          ...(who.name && { name: who.name }),
+          ...(call.claimed && { claimed: true }),
+        }),
         find: async word => {
           const item = findVisibleSession(id, word)
           return { key: item.key, ...(item.name && { name: item.name }) }
@@ -810,30 +805,6 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     return { code: 0, out: [`ok · ${changed ? '' : 'already '}${p.state}`], err: [] }
   }
 
-  /** `board spend …` in a session of the node (#698). */
-  async function spendFrom(id: string, call: UplinkCall): Promise<UplinkResult> {
-    if (!sessionOf(id, call.session)) return refused('not a session of the node')
-    const { node: _node, ...masterCfg } = o.cfg
-    const out: string[] = []
-    const err: string[] = []
-    try {
-      const [{ spendCmd }, { defaultDeps }] = await Promise.all([
-        import('../../entrypoints/spend-cli.ts'),
-        import('../deps.ts'),
-      ])
-      const code = await (o.runSpend ?? spendCmd)(call.argv, {
-        cfg: masterCfg as Config,
-        deps: o.deps ?? defaultDeps(masterCfg as Config),
-        items: visibleItems(id),
-        out: l => out.push(...l.split('\n')),
-        err: l => err.push(...l.split('\n')),
-      })
-      return { code, out, err }
-    } catch (e) {
-      return { code: 1, out, err: [...err, ...messageOf(e).split('\n')] }
-    }
-  }
-
   /** `board cats` in a session of the node (#698): master categories without leaking master filesystem paths. */
   function catsFrom(id: string, call: UplinkCall): UplinkResult {
     if (!sessionOf(id, call.session)) return refused('not a session of the node')
@@ -841,38 +812,10 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     return { code: 0, out: [`${known}. A new id makes a new lane.`], err: [] }
   }
 
-  /** `board list` in a session of the node (#698): master sessions and this node's own, never another node's. */
+  /** `board list` in a session of the node (#698): master sessions and this node's own, without free-text notes or another node's cards. */
   function listFrom(id: string, call: UplinkCall): UplinkResult {
     if (!sessionOf(id, call.session)) return refused('not a session of the node')
-    const items = visibleItems(id)
-    const order = new Map(COLUMNS.map((c, i) => [c.id, i]))
-    items.sort(
-      (a, b) =>
-        laneRank(o.cfg, a.category) - laneRank(o.cfg, b.category) ||
-        a.category.localeCompare(b.category) ||
-        (order.get(a.column) ?? 0) - (order.get(b.column) ?? 0),
-    )
-    const soonest = new Map<string, number>()
-    for (const e of listEntries()) if (!soonest.has(e.key)) soonest.set(e.key, e.next)
-    const now = Date.now()
-    const out = items.map(i => {
-      const col = COLUMNS.find(c => c.id === i.column)?.title
-      const note = noteOf(i)
-      const next = soonest.get(i.key)
-      const alarm = next !== undefined ? ` ⏰ ${shortWhen(next, t)}` : ''
-      let bgNote = ''
-      if (bgTaskActive(i.bgTasks)) {
-        const stuck = isBgTaskStuck(i.bgTasks, now)
-        const ageText = i.bgTasks.since
-          ? now - i.bgTasks.since < 60_000
-            ? t('ago.now')
-            : span(now - i.bgTasks.since, t)
-          : ''
-        bgNote = ` [${bgTaskLabel(i.bgTasks, ageText, stuck, t)}]`
-      }
-      return `${i.name} [${i.category}] ${col}${i.sleeping ? ` (${statusText('sleeping')})` : ''}${alarm}${bgNote}${note ? `: ${note.slice(0, 80)}` : ''}`
-    })
-    return { code: 0, out, err: [] }
+    return { code: 0, out: formatListLines(visibleItems(id), o.cfg, { now: Date.now(), includeNote: false }), err: [] }
   }
 
   /** `board remind` / `board every` aimed at another session from a node (#698). */

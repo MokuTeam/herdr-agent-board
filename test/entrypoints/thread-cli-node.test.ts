@@ -211,12 +211,16 @@ test('board cal on a node forwards over the uplink, checks session, carries push
     return { code, out, err, calls }
   }
 
-  // Forwarding a read and a write even when calendar is off on the node.
+  // Forwarding a read (no call id) and a write (remembered UUID call id) even when calendar is off on the node.
   const listed = await runCal(['list', '--day', 'today'])
   expect(listed).toMatchObject({ code: 0, out: ['ok'], err: [] })
   expect(listed.calls).toEqual([
     { cmd: 'cal', argv: ['list', '--day', 'today'], session: me.key, lane: 'atlas', files: [] },
   ])
+  expect(listed.calls[0]?.id).toBeUndefined()
+  const added = await runCal(['add', '--title', 'Sync', '--start', '10:00', '--minutes', '30'])
+  expect(added).toMatchObject({ code: 0, out: ['ok'], err: [] })
+  expect(added.calls[0]?.id).toMatch(UUID)
   expect(nothingWritten()).toBe(true)
 
   // Push requires --file on a node (stdin is not forwarded) and resolves the file path.
@@ -278,78 +282,36 @@ test('board cal on a node forwards over the uplink, checks session, carries push
   expect(fetched).toEqual([])
 })
 
-test('board spend on a node forwards over the uplink, keeps --help local, and leaves non-node unchanged (#698)', async () => {
+test('board spend on a node stays local and never forwards over uplink or fetch (#698)', async () => {
   isolatedHome()
-  const runSpend = async (
-    args: string[],
-    o: { cfg?: Record<string, unknown>; actor?: { key: string; name?: string } | 'user'; answer?: NodeCallAnswer } = {},
-  ) => {
-    const calls: NodeCall[] = []
-    const out: string[] = []
-    const err: string[] = []
-    const code = await spendCmd(args, {
-      cfg: (o.cfg ?? { node: NODE, port: 12422 }) as never,
-      deps: {
-        profiles: () => ({ inheritedDir: '', inherited: null, list: [] }),
-        homes: {} as never,
-        codex: {} as never,
-      },
-      actor: o.actor ?? { key: me.key, name: me.name },
-      out: l => out.push(l),
-      err: l => err.push(l),
-      call: async body => {
-        calls.push(body)
-        return o.answer === undefined ? { state: 'answered', code: 0, out: ['spend · 2026-11-24'], err: [] } : o.answer
-      },
-    })
-    return { code, out, err, calls }
-  }
-
-  const ok = await runSpend(['--day', 'today', '--lane', 'atlas', '--json'])
-  expect(ok).toMatchObject({ code: 0, out: ['spend · 2026-11-24'], err: [] })
-  expect(ok.calls).toEqual([
-    { cmd: 'spend', argv: ['--day', 'today', '--lane', 'atlas', '--json'], session: me.key, lane: null, files: [] },
-  ])
-
-  const help = await runSpend(['--help'])
-  expect(help.code).toBe(0)
-  expect(help.calls).toEqual([])
-  expect(help.out.join('\n')).toContain('usage: board spend')
-
-  const asUser = await runSpend(['--json'], { actor: 'user' })
-  expect(asUser.code).toBe(1)
-  expect(JSON.parse(asUser.out[0] ?? '{}')).toEqual({
-    ok: false,
-    error: 'no_session',
-    message: "run it from a session: on a node, board spend goes to the board's computer as a session's",
-  })
-
-  const older = await runSpend(['--day', 'today'], {
-    answer: { state: 'answered', code: 126, out: [], err: ['board spend is not taken from a node'] },
-  })
-  expect(older.code).toBe(1)
-  expect(older.err[0]).toContain('update the master')
-
-  // Without `node`, spend runs locally with zero fetch calls.
   const fetched: string[] = []
   globalThis.fetch = (async (url: string | URL | Request) => {
     fetched.push(String(url))
     return new Response('{}')
   }) as typeof fetch
-  const localOut: string[] = []
-  const localCode = await spendCmd(['--day', '2026-11-20'], {
-    cfg: { language: 'en', categories: [], placement: 'workspace', workspace: 'Board', refreshSec: 2 } as never,
-    deps: {
-      profiles: () => ({ inheritedDir: '', inherited: null, list: [] }),
-      homes: { liveSessions: () => new Map() } as never,
-      codex: { sessions: () => [] } as never,
-    },
-    codexRoots: [],
-    piRoots: [],
-    out: l => localOut.push(l),
-  })
-  expect(localCode).toBe(0)
-  expect(localOut[0]).toContain('no token spend')
+
+  for (const cfg of [
+    { node: NODE, port: 12422 },
+    { language: 'en', categories: [], placement: 'workspace', workspace: 'Board', refreshSec: 2 },
+  ]) {
+    const out: string[] = []
+    const err: string[] = []
+    const code = await spendCmd(['--day', '2026-11-20'], {
+      cfg: cfg as never,
+      deps: {
+        profiles: () => ({ inheritedDir: '', inherited: null, list: [] }),
+        homes: { liveSessions: () => new Map() } as never,
+        codex: { sessions: () => [] } as never,
+      },
+      codexRoots: [],
+      piRoots: [],
+      out: l => out.push(l),
+      err: l => err.push(l),
+    })
+    expect(code).toBe(0)
+    expect(err).toEqual([])
+    expect(out[0]).toContain('no token spend')
+  }
   expect(fetched).toEqual([])
 })
 
@@ -382,18 +344,19 @@ test('board time on a node forwards all subcommands over the uplink, checks sess
     return { code, out, err, calls }
   }
 
-  // Forwarding a write and a read with session and lane, even when time is off on the node.
+  // Forwarding a write (remembered UUID id) and a read (no id) with session and lane, even when time is off on the node.
   const added = await runTime(['add', '--project', 'Support', '--minutes', '45', 'Client work'])
   expect(added).toMatchObject({ code: 0, out: ['ok'], err: [] })
-  expect(added.calls).toEqual([
-    {
-      cmd: 'time',
-      argv: ['add', '--project', 'Support', '--minutes', '45', 'Client work'],
-      session: me.key,
-      lane: 'atlas',
-      files: [],
-    },
-  ])
+  expect(added.calls[0]?.id).toMatch(UUID)
+  expect(added.calls[0]).toMatchObject({
+    cmd: 'time',
+    argv: ['add', '--project', 'Support', '--minutes', '45', 'Client work'],
+    session: me.key,
+    lane: 'atlas',
+    files: [],
+  })
+  const listedTime = await runTime(['list'])
+  expect(listedTime.calls[0]?.id).toBeUndefined()
   expect(nothingWritten()).toBe(true)
   expect(existsSync(dbFile())).toBe(false)
 

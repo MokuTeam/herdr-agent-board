@@ -1,10 +1,12 @@
 // `board ask` with options and `board decisions` (#487, services/decisions.ts), loaded by the board
 // command only while config.json's `decisions` is on.
 import { allCards, readCard } from '../adapters/cards.ts'
+import type { DecisionRow } from '../adapters/decision-store.ts'
 import {
   type AskSpec,
   DecisionError,
   type DecisionsConfig,
+  type DecisionView,
   durationWords,
   parseAsk,
   type ReservedDecision,
@@ -83,6 +85,39 @@ export function withdrawDecision(key: string, now: number): void {
 
 const age = (ms: number): string => (ms < 60_000 ? 'just now' : `${durationWords(ms)} ago`)
 
+/** Formats open decisions for `board decisions [--json]`. */
+export function formatDecisionItems(items: readonly DecisionView[], now: number, json: boolean): string[] {
+  if (json) return [JSON.stringify({ ok: true, items })]
+  if (!items.length) return ['nothing waits on the owner']
+  return items.map(d => {
+    const opts = d.options.map((o, i) => `${i + 1}. ${o}${d.recommend === i + 1 ? ' (recommended)' : ''}`).join(' / ')
+    const when =
+      d.defaultAt !== null && !d.held
+        ? ` · default in ${durationWords(Math.max(0, d.defaultAt - now))}`
+        : d.held
+          ? ' · held'
+          : ''
+    const asked = d.askedAt !== null ? ` · asked ${age(now - d.askedAt)}` : ''
+    return `${d.who} · ${d.question}${opts ? ` · ${opts}` : ''}${asked}${when}`
+  })
+}
+
+/** Formats closed decisions for `board decisions --done [--json]`. */
+export function formatDecisionsDone(rows: readonly DecisionRow[], now: number, json: boolean): string[] {
+  if (json) return [JSON.stringify({ ok: true, done: rows })]
+  if (!rows.length) return ['no decisions closed yet']
+  return rows.map(r => {
+    const who =
+      r.answeredBy === 'default'
+        ? 'by default'
+        : r.answeredBy === 'owner'
+          ? `the owner (${r.via})`
+          : `withdrawn (${r.via})`
+    const answer = r.answer ? `"${r.answer}"` : '-'
+    return `${r.id} · ${r.name || r.session.slice(0, 8)} · ${r.question} · ${answer} · ${who} · ${age(now - (r.answeredAt ?? now))}`
+  })
+}
+
 /** `board decisions [--done] [--json]`: the queue, or the last ones closed. */
 export function decisionsCommand(
   words: readonly string[],
@@ -92,48 +127,8 @@ export function decisionsCommand(
   const json = words.includes('--json')
   const unknown = words.filter(w => w !== '--json' && w !== '--done')
   if (unknown.length) throw new DecisionError('usage', 'usage: board decisions [--done] [--json]')
-  if (words.includes('--done')) {
-    const rows = decisionsDone({ limit: 20 })
-    if (json) {
-      out(JSON.stringify({ ok: true, done: rows }))
-      return
-    }
-    if (!rows.length) {
-      out('no decisions closed yet')
-      return
-    }
-    for (const r of rows) {
-      const who =
-        r.answeredBy === 'default'
-          ? 'by default'
-          : r.answeredBy === 'owner'
-            ? `the owner (${r.via})`
-            : `withdrawn (${r.via})`
-      const answer = r.answer ? `"${r.answer}"` : '-'
-      out(
-        `${r.id} · ${r.name || r.session.slice(0, 8)} · ${r.question} · ${answer} · ${who} · ${age(now - (r.answeredAt ?? now))}`,
-      )
-    }
-    return
-  }
-  const items = decisionsFromCards(allCards())
-  if (json) {
-    out(JSON.stringify({ ok: true, items }))
-    return
-  }
-  if (!items.length) {
-    out('nothing waits on the owner')
-    return
-  }
-  for (const d of items) {
-    const opts = d.options.map((o, i) => `${i + 1}. ${o}${d.recommend === i + 1 ? ' (recommended)' : ''}`).join(' / ')
-    const when =
-      d.defaultAt !== null && !d.held
-        ? ` · default in ${durationWords(Math.max(0, d.defaultAt - now))}`
-        : d.held
-          ? ' · held'
-          : ''
-    const asked = d.askedAt !== null ? ` · asked ${age(now - d.askedAt)}` : ''
-    out(`${d.who} · ${d.question}${opts ? ` · ${opts}` : ''}${asked}${when}`)
-  }
+  const lines = words.includes('--done')
+    ? formatDecisionsDone(decisionsDone({ limit: 20 }), now, json)
+    : formatDecisionItems(decisionsFromCards(allCards()), now, json)
+  for (const l of lines) out(l)
 }

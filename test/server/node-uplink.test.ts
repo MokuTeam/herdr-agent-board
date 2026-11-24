@@ -598,6 +598,7 @@ test('#644 board time from a node session logs, edits, posts, lists, exports, an
 }, 60_000)
 
 test('#698 shared-state commands from a node reach master state, enforce trust boundary, and keep local commands local', async () => {
+  const S2 = 's-server-1-local'
   const MASTER_S = 'aaaaaaaa-1111-4111-8111-111111111111'
   const HIDDEN_S = 'bbbbbbbb-2222-4222-8222-222222222222'
   const pair = await nodePair({
@@ -614,22 +615,23 @@ test('#698 shared-state commands from a node reach master state, enforce trust b
       ],
       scheduleTickSec: 0.2,
     },
-    panes: (id, box) => [
-      {
-        pane_id: 'p1',
-        agent: 'claude',
-        agent_session: { value: id === 'server-1' ? S : HIDDEN_S },
-        agent_status: 'idle',
-        cwd: box.dir,
-      },
-    ],
+    panes: (id, box) =>
+      id === 'server-1'
+        ? [
+            { pane_id: 'p1', agent: 'claude', agent_session: { value: S }, agent_status: 'idle', cwd: box.dir },
+            { pane_id: 'p2', agent: 'claude', agent_session: { value: S2 }, agent_status: 'idle', cwd: box.dir },
+          ]
+        : [{ pane_id: 'p1', agent: 'claude', agent_session: { value: HIDDEN_S }, agent_status: 'idle', cwd: box.dir }],
     masterPanes: box => [
       { pane_id: 'w2:p1', agent: 'claude', agent_session: { value: MASTER_S }, agent_status: 'idle', cwd: box.dir },
     ],
   })
   const node = pair.nodes[0] as PairNode
   const node2 = pair.nodes[1] as PairNode
-  herdrOf(node.box, pane(node.box))
+  herdrOf(node.box, [
+    { pane_id: 'p1', agent: 'claude', agent_session: { value: S }, agent_status: 'idle', cwd: node.box.dir },
+    { pane_id: 'p2', agent: 'claude', agent_session: { value: S2 }, agent_status: 'idle', cwd: node.box.dir },
+  ])
   herdrOf(node2.box, [
     { pane_id: 'p1', agent: 'claude', agent_session: { value: HIDDEN_S }, agent_status: 'idle', cwd: node2.box.dir },
   ])
@@ -638,11 +640,12 @@ test('#698 shared-state commands from a node reach master state, enforce trust b
   await pair.waitDevice(node.id, d => d.link?.state === 'online', 10_000)
   await pair.waitDevice(node2.id, d => d.link?.state === 'online', 10_000)
 
-  // Local card commands stay local on the node; label sessions to verify board list visibility.
+  // Local card commands stay local on the node; label sessions to verify board list visibility & note privacy.
   expect((await cli(node.box, ['cat', 'atlas', '--session', S])).code).toBe(0)
   expect((await cli(node.box, ['doing', 'local work', '--session', S])).code).toBe(0)
   expect((await cli(node2.box, ['doing', 'secret node2', '--session', HIDDEN_S])).code).toBe(0)
   expect((await cli(pair.master.box, ['cat', 'personal', '--session', MASTER_S])).code).toBe(0)
+  expect((await cli(pair.master.box, ['doing', 'secret master doing', '--session', MASTER_S])).code).toBe(0)
   await cardLane(pair.master.url, 'atlas')
 
   const nodeCli = (args: string[]) => node.box.run('cli', { args, env: { CLAUDE_CODE_SESSION_ID: S } }).exited
@@ -690,11 +693,7 @@ test('#698 shared-state commands from a node reach master state, enforce trust b
   expect((await nodeCli(['away', 'off'])).stdout.trim()).toBe('ok · here')
   expect((await nodeCli(['presence'])).stdout).toContain('here')
 
-  // board decisions, journal, spend, cats, list: read master's state; list hides server-2.
-  const dec = await nodeCli(['decisions', '--json'])
-  expect(dec.code, dec.stderr).toBe(0)
-  expect(JSON.parse(dec.stdout)).toMatchObject({ ok: true, items: [] })
-
+  // board list, cats, journal, spend: list omits free-text master notes and hides server-2; spend runs locally on node.
   const jr = await nodeCli(['journal', '--since', '1h', '--json'])
   expect(jr.code, jr.stderr).toBe(0)
   expect(JSON.parse(jr.stdout)).toMatchObject({ ok: true })
@@ -713,6 +712,20 @@ test('#698 shared-state commands from a node reach master state, enforce trust b
   expect(listed.stdout).toContain('w2:p1')
   expect(listed.stdout).toContain('p1')
   expect(listed.stdout).not.toContain('secret node2')
+  expect(listed.stdout).not.toContain('secret master doing')
+  expect(listed.stdout).not.toContain('local work')
+
+  // board decisions merges master's pending decisions with this node's own local pending asks.
+  expect((await cli(pair.master.box, ['ask', '--session', MASTER_S, 'master question?'])).code).toBe(0)
+  expect((await nodeCli(['ask', 'node question?'])).code).toBe(0)
+  const dec = await nodeCli(['decisions', '--json'])
+  expect(dec.code, dec.stderr).toBe(0)
+  const decItems = (JSON.parse(dec.stdout) as { ok: boolean; items: { question: string }[] }).items
+  expect(decItems.map(i => i.question)).toEqual(['master question?', 'node question?'])
+  const decHuman = await nodeCli(['decisions'])
+  expect(decHuman.code).toBe(0)
+  expect(decHuman.stdout).toContain('master question?')
+  expect(decHuman.stdout).toContain('node question?')
 
   // board remind/every aimed at master session lands on master; own remind stays local; server-2 hidden.
   const rem = await nodeCli(['remind', '--session', MASTER_S, '--idle', 'in', '20m', 'check master'])
@@ -747,12 +760,37 @@ test('#698 shared-state commands from a node reach master state, enforce trust b
   expect(unsched.stdout).toContain(`ok · removed ${remId}`)
   expect(existsSync(join(masterSchedDir, `${remId}.json`))).toBe(false)
 
-  // When master is offline, shared-state commands fail as unreachable.
+  // When master is offline: cal fails as unreachable; same-node remind, list, cats, spend, decisions work locally.
   await node.proxy.cut('drop')
   await pair.waitDevice(node.id, d => d.link?.state === 'offline', 10_000)
   const offCal = await nodeCli(['cal', 'list'])
   expect(offCal.code).toBe(1)
   expect(offCal.stderr).toContain("the board's computer is not reachable")
+
+  const sameNodeRem = await nodeCli(['remind', '--session', S2, 'in', '20m', 'same-node offline'])
+  expect(sameNodeRem.code, sameNodeRem.stderr).toBe(0)
+  const sameNodeRemId = /reminder ([0-9a-f]{6})/.exec(sameNodeRem.stdout)?.[1] as string
+  expect(existsSync(join(nodeSchedDir, `${sameNodeRemId}.json`))).toBe(true)
+  expect(existsSync(join(masterSchedDir, `${sameNodeRemId}.json`))).toBe(false)
+
+  const offList = await nodeCli(['list'])
+  expect(offList.code, offList.stderr).toBe(0)
+  expect(offList.stdout).toContain('p1')
+  expect(offList.stderr).toContain("showing this node's sessions only")
+
+  const offCats = await nodeCli(['cats'])
+  expect(offCats.code, offCats.stderr).toBe(0)
+  expect(offCats.stderr).toContain("showing this node's categories only")
+
+  const offDec = await nodeCli(['decisions', '--json'])
+  expect(offDec.code, offDec.stderr).toBe(0)
+  expect((JSON.parse(offDec.stdout) as { items: { question: string }[] }).items.map(i => i.question)).toEqual([
+    'node question?',
+  ])
+  expect(offDec.stderr).toContain("showing this node's decisions only")
+
+  const offSpend = await nodeCli(['spend', '--day', '2026-11-24', '--json'])
+  expect(offSpend.code, offSpend.stderr).toBe(0)
 }, 90_000)
 
 test('#698 board team from a node reaches master team, keeps draft offline, pulls --file, and refuses owner ops', async () => {
@@ -767,6 +805,7 @@ test('#698 board team from a node reaches master team, keeps draft offline, pull
       box: { key: annaBox.pub, sig: annaSig },
     })
     const teamCfg = { hub: hub.url, name: 'master' }
+    const S_UNSHARED = 's-server-1-unshared'
     const pair = await nodePair({
       env: ENV,
       masterCfg: { team: teamCfg },
@@ -785,15 +824,28 @@ test('#698 board team from a node reaches master team, keeps draft offline, pull
           }),
         )
       },
-      panes: (_id, box) => pane(box),
+      panes: (_id, box) => [
+        { pane_id: 'p1', agent: 'claude', agent_session: { value: S }, agent_status: 'idle', cwd: box.dir },
+        { pane_id: 'p2', agent: 'claude', agent_session: { value: S_UNSHARED }, agent_status: 'idle', cwd: box.dir },
+      ],
       masterPanes: () => [],
     })
     const node = pair.nodes[0] as PairNode
-    herdrOf(node.box, pane(node.box))
+    herdrOf(node.box, [
+      { pane_id: 'p1', agent: 'claude', agent_session: { value: S }, agent_status: 'idle', cwd: node.box.dir },
+      { pane_id: 'p2', agent: 'claude', agent_session: { value: S_UNSHARED }, agent_status: 'idle', cwd: node.box.dir },
+    ])
     nodeConfigFile(node)
     await pair.waitDevice(node.id, d => d.link?.state === 'online', 10_000)
     expect((await cli(node.box, ['cat', 'atlas', '--session', S])).code).toBe(0)
+    expect((await cli(node.box, ['cat', 'personal', '--session', S_UNSHARED])).code).toBe(0)
     await cardLane(pair.master.url, 'atlas')
+    await waitFor('unshared node session in lane personal', async () => {
+      const payload = (await (await fetch(`${pair.master.url}/api/board`)).json()) as {
+        items: { key: string; category: string }[]
+      }
+      return payload.items.some(i => i.key === `@server-1:${S_UNSHARED}` && i.category === 'personal')
+    })
 
     const nodeCli = (args: string[]) => node.box.run('cli', { args, env: { CLAUDE_CODE_SESSION_ID: S } }).exited
 
@@ -821,13 +873,28 @@ test('#698 board team from a node reaches master team, keeps draft offline, pull
     expect(posted.code, posted.stderr).toBe(0)
     expect(posted.stdout).toContain('ok · sent to Anna')
 
-    // board team inbox and board team thread read master's threads.
+    // board team inbox and board team thread read master's threads (without leaking master filesystem paths).
     const inbox = await nodeCli(['team', 'inbox', '--json'])
     expect(inbox.code, inbox.stderr).toBe(0)
     expect(JSON.parse(inbox.stdout).threads.length).toBeGreaterThanOrEqual(1)
     const threadView = await nodeCli(['team', 'thread', 'Anna'])
     expect(threadView.code, threadView.stderr).toBe(0)
     expect(threadView.stdout).toContain('hi anna')
+    expect(threadView.stdout).not.toContain(stateFolder(pair.master.box))
+    const threadJson = await nodeCli(['team', 'thread', 'Anna', '--json'])
+    expect(threadJson.code, threadJson.stderr).toBe(0)
+    expect(threadJson.stdout).not.toContain(stateFolder(pair.master.box))
+
+    // Node session in an unshared lane (`personal`) posting to Anna is held as a draft on master and sends nothing.
+    const heldPost = await cli(node.box, ['team', 'post', '--session', S_UNSHARED, 'Anna', 'from unshared lane'])
+    expect(heldPost.code, heldPost.stderr).toBe(0)
+    expect(heldPost.stdout).toContain('held ·')
+
+    // Online board team draft prints the hub header line before the draft confirmation.
+    const onlineDraft = await nodeCli(['team', 'draft', 'Anna', 'online draft'])
+    expect(onlineDraft.code, onlineDraft.stderr).toBe(0)
+    expect(onlineDraft.stdout.split('\n')[0]).toContain(' · online · you: master ')
+    expect(onlineDraft.stdout).toContain('ok · draft for Anna')
 
     // board team draft is kept offline in node outbox and delivered once on reconnect.
     await node.proxy.cut('drop')
@@ -846,6 +913,7 @@ test('#698 board team from a node reaches master team, keeps draft offline, pull
     const drafts = await nodeCli(['team', 'drafts'])
     expect(drafts.code, drafts.stderr).toBe(0)
     expect(drafts.stdout).toContain('offline draft')
+    expect(drafts.stdout).toContain('from unshared lane')
   } finally {
     hub.stop()
   }
