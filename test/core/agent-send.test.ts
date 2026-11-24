@@ -238,3 +238,46 @@ test('#639 the moved card is weighed against targets only; one device’s cards 
     keys([card(A, 'L', { activity: 5 }), card(`@server-2:${A}`, 'L', { device: 'server-2', activity: 5 })]),
   ).toHaveLength(2)
 })
+
+test('#642 a marked source card is dropped deterministically regardless of clocks; mutual/non-matching marks fall back', () => {
+  const keys = (items: unknown[], own = '') => targetsOf(items, own).map(t => t.key)
+  const laptop = (more: Record<string, unknown>) => card(A, 'Legacy-master', more)
+  const node = (more: Record<string, unknown>, dev = 'server-2') =>
+    card(`@${dev}:${A}`, 'Legacy-master', { device: dev, ...more })
+  // Issue shape: laptop card stayed awake with a skewed-ahead clock; the movedTo mark decides.
+  expect(keys([laptop({ status: 'done', activity: 9_999, movedTo: 'server-2' }), node({ activity: 1 })])).toEqual([
+    `@${'server-2'}:${A}`,
+  ])
+  // Move back: node card marked movedTo 'laptop' yields to local card when own = 'laptop'.
+  expect(keys([laptop({ activity: 1 }), node({ activity: 9_999, movedTo: 'laptop' })], 'laptop')).toEqual([A])
+  // Non-matching mark: node on server-1 marked movedTo 'server-2' does not yield to laptop by mark.
+  expect(keys([laptop({ activity: 1 }), node({ activity: 9_999, movedTo: 'server-2' }, 'server-1')], 'laptop')).toEqual(
+    [`@${'server-1'}:${A}`],
+  )
+  // Mutual marks: neither mark decides, falls back to #641 activity weigh instead of dropping both.
+  expect(
+    keys([laptop({ activity: 1, movedTo: 'server-2' }), node({ activity: 200, movedTo: 'laptop' })], 'laptop'),
+  ).toEqual([`@${'server-2'}:${A}`])
+  // Marked card whose target device has no valid target (absent or pane-less): stays targetable.
+  expect(keys([laptop({ activity: 9_999, movedTo: 'server-2' })])).toEqual([A])
+  expect(keys([laptop({ activity: 9_999, movedTo: 'server-2' }), node({ pane: null, activity: 1 })])).toEqual([A])
+  // Chain move (laptop -> server-2 -> server-3) with skewed-ahead laptop clock: keeps only server-3.
+  expect(
+    keys(
+      [
+        laptop({ activity: 9_999, movedTo: 'server-2' }),
+        node({ activity: 50, movedTo: 'server-3' }, 'server-2'),
+        node({ activity: 10 }, 'server-3'),
+      ],
+      'laptop',
+    ),
+  ).toEqual([`@server-3:${A}`])
+  // Unmarked cards (older boards): #641 activity weigh stays unchanged.
+  expect(keys([laptop({ activity: 100 }), node({ activity: 200 })], 'laptop')).toEqual([`@${'server-2'}:${A}`])
+  // Locally resumed source card (activity > movedAt): stale movedTo is ignored so activity decides again.
+  expect(keys([laptop({ activity: 2000, movedTo: 'server-2', movedAt: 1000 }), node({ activity: 500 })])).toEqual([A])
+  // Legacy movedTo "board" matches master hostname id unless a remote device is named "board".
+  expect(
+    keys([laptop({ activity: 1 }), node({ activity: 9_999, movedTo: 'board', movedAt: 10_000 })], 'anna-laptop'),
+  ).toEqual([A])
+})

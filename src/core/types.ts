@@ -433,5 +433,13 @@ export interface Item {
    * carries the device's prefix. Absent for this computer's own, and always without `nodes`.
    */
   device?: string
+  /**
+   * The device its card says it moved to (#616, services/move-out.ts finish): carried on an awake
+   * source card so the master's payload and target resolution can drop it deterministically when
+   * the session has a card on that device (#642). Absent when unmarked.
+   */
+  movedTo?: string
+  /** When that move mark was written (`card.moved.at`); absent when unmarked or unrecorded. */
+  movedAt?: number
   [extra: string]: unknown
 }

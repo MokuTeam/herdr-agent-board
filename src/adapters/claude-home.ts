@@ -7,7 +7,7 @@
 import { closeSync, lstatSync, openSync, readdirSync, readFileSync, readSync, type Stats, statSync } from 'node:fs'
 import { lstat, open, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { isAbsolute, join, relative } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { onLanguage } from '../core/lang.ts'
 import { normDir, sameDir } from '../core/launch/names.ts'
 import { type Limits, parseLimits } from '../core/limits.ts'
@@ -333,6 +333,52 @@ export async function sessionCwd(
     if (first) return first
   }
   return ''
+}
+
+const matchesProject = (cwd: string, under: string, platform: string = process.platform): boolean => {
+  const encoded = projectFolderName(cwd)
+  return !!encoded && (platform === 'win32' ? encoded.toLowerCase() === under.toLowerCase() : encoded === under)
+}
+
+/**
+ * The folder Claude resumes or forks a session from: the one whose project folder holds
+ * `transcript`. For a session that never moved, its transcript's first "cwd" already lies under
+ * that project folder and is returned immediately with no extra reads. For a moved session (#621),
+ * the first "cwd" names the source device's folder, so `fallback` (the card's or archive record's
+ * cwd) and then the transcript's last "cwd" are checked against that project folder before falling
+ * back to an existing recorded folder.
+ */
+export async function transcriptCwd(
+  transcript: string | null | undefined,
+  fallback?: string | null,
+  { isDir = defaultIsDir, platform = process.platform }: { isDir?: (dir: string) => boolean; platform?: string } = {},
+): Promise<string> {
+  const fb = fallback?.trim() ? fallback : ''
+  if (!transcript) return fb
+  const under = basename(dirname(transcript))
+  const first = (await cwdOf(transcript)) ?? ''
+  // Fast path: unmoved session whose first recorded cwd matches the transcript's project folder
+  // and exists on disk: identical to cwdOf(transcript) with no extra I/O.
+  if (first && matchesProject(first, under, platform) && isDir(first)) return first
+  // Moved session (or first cwd missing / collided): prefer a candidate whose project folder holds
+  // this transcript and exists on disk. Card/record cwd first covers a freshly moved session before
+  // any new turn writes a local cwd; lastCwdOf covers a moved session whose shell cd'd away or
+  // whose fallback cwd is empty.
+  if (fb && matchesProject(fb, under, platform) && isDir(fb)) return fb
+  const last = (await lastCwdOf(transcript)) ?? ''
+  if (last && matchesProject(last, under, platform) && isDir(last)) return last
+  // None matches and exists: if a candidate matches the project folder (for example, deleted on
+  // this device), return it so launch validation reports the missing local path rather than a
+  // foreign source-device path.
+  if (first && matchesProject(first, under, platform)) return first
+  if (fb && matchesProject(fb, under, platform)) return fb
+  if (last && matchesProject(last, under, platform)) return last
+  // Transcript not under a matching project folder name (legacy or custom layout): prefer an
+  // existing local folder, else preserve the original (await cwdOf(transcript)) || fallback order.
+  if (first && isDir(first)) return first
+  if (last && isDir(last)) return last
+  if (fb && isDir(fb)) return fb
+  return first || fb
 }
 
 const normCwd = (s: string): string =>

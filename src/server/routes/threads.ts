@@ -18,7 +18,7 @@
 // the computer only the owner's own logins reach them (core/remote.ts ownerThreads); the setting
 // stays on the computer (localOnly), as it writes into the Claude profiles there.
 import { resolve } from 'node:path'
-import { editThreads } from '../../adapters/config-file.ts'
+import { editThreads, readThreadsSettings } from '../../adapters/config-file.ts'
 import type { BoardDb } from '../../adapters/db.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { uploadsCheck } from '../../adapters/own-files.ts'
@@ -537,6 +537,11 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
   }
 
   return [
+    {
+      method: 'GET',
+      path: '/api/threads-settings',
+      handle: () => json(200, readThreadsSettings(app.cfg.threads)),
+    },
     {
       // Taken while threads are off too, as Tasks' setting is.
       method: 'POST',

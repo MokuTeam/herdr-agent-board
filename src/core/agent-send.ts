@@ -34,6 +34,10 @@ export interface Target {
   status: string
   day: boolean
   activity: number
+  /** The device its own board marked it moved to (#642, card `moved.to`); null when no mark. */
+  movedTo: string | null
+  /** When that move mark was written (`card.moved.at`); null when unmarked or unrecorded. */
+  movedAt: number | null
 }
 
 /** Who sends: the session's key (a node's session's carries the device's prefix) and its name on the board. */
@@ -85,16 +89,49 @@ function replaced(t: Target, by: Target): boolean {
 /**
  * One whose session runs on another device now (#639): a move (`board move --device`, #616) can leave
  * the card it had where it was, under the session's id, beside the new one under the other device's.
- * The more recent activity is where it runs; an awake card beats a sleeping one of the same moment.
+ * A one-sided move mark (`movedTo`) decides the pair deterministically regardless of clock skew (#642).
+ * Without a deciding mark (older boards without `movedTo`, or stale mutual marks), fall back to
+ * weighing activity (#641); an awake card beats a sleeping one of the same moment.
  */
-function movedAway(t: Target, by: Target): boolean {
-  if (by === t || by.device === t.device || !t.session || by.session !== t.session) return false
+const LEGACY_MASTER = 'board'
+
+function pointsTo(src: Target, dstId: string, own: string, hasBoardNode: boolean): boolean {
+  if (!src.movedTo || !dstId) return false
+  if (typeof src.movedAt === 'number' && src.activity > src.movedAt) return false
+  if (src.movedTo === dstId) return true
+  return src.movedTo === LEGACY_MASTER && dstId === own && !hasBoardNode
+}
+
+function marksTarget(
+  t: Target,
+  by: Target,
+  own: string,
+  hasBoardNode: boolean,
+): { tToBy: boolean; byToT: boolean } | null {
+  if (by === t || by.device === t.device || !t.session || by.session !== t.session) return null
+  const tHere = t.device ?? own
+  const byHere = by.device ?? own
+  return {
+    tToBy: pointsTo(t, byHere, own, hasBoardNode),
+    byToT: pointsTo(by, tHere, own, hasBoardNode),
+  }
+}
+
+function movedByMark(t: Target, by: Target, own: string, hasBoardNode: boolean): boolean {
+  const m = marksTarget(t, by, own, hasBoardNode)
+  return !!m && m.tToBy && !m.byToT
+}
+
+function movedAway(t: Target, by: Target, own: string, hasBoardNode: boolean): boolean {
+  const m = marksTarget(t, by, own, hasBoardNode)
+  // Only pairs with no deciding mark (unmarked older boards, or stale mutual marks) fall back to #641 clocks.
+  if (!m || m.tToBy !== m.byToT) return false
   if (by.activity !== t.activity) return by.activity > t.activity
   return t.sleeping && !by.sleeping
 }
 
 /** The cards of a payload's `items` a message can go to; anything else in the list is left out. */
-export function targetsOf(items: unknown): Target[] {
+export function targetsOf(items: unknown, own = ''): Target[] {
   if (!Array.isArray(items)) return []
   const all: Target[] = []
   for (const i of items) {
@@ -116,11 +153,16 @@ export function targetsOf(items: unknown): Target[] {
       status: str(i.status),
       day: i.day === true,
       activity: Math.max(num(i.activity), num(i.lastAt)),
+      movedTo: str(i.movedTo) || null,
+      movedAt: typeof i.movedAt === 'number' && Number.isFinite(i.movedAt) ? i.movedAt : null,
     })
   }
+  const hasBoardNode = all.some(t => t.device === LEGACY_MASTER)
   const kept = all.filter(t => t.sleeping || ((t.pane || t.day) && !all.some(o => replaced(t, o))))
-  // Against the cards kept only: one that is no target itself does not push out the one that is.
-  return kept.filter(t => !kept.some(o => movedAway(t, o)))
+  // Drop cards superseded by an explicit move mark first so a chain move (A -> B -> C) never lets
+  // stale card A beat final card C by clock (#642), then apply #641 clock fallback on the rest.
+  const unmoved = kept.filter(t => !kept.some(o => movedByMark(t, o, own, hasBoardNode)))
+  return unmoved.filter(t => !unmoved.some(o => movedAway(t, o, own, hasBoardNode)))
 }
 
 /** A local session on this computer running an agent other than Claude Code (`agy`, `pi`, `codex`, ...). */

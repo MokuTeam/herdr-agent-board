@@ -47,6 +47,7 @@ import { storage } from '../../state/storage.ts'
 import { classNames } from '../class-names.ts'
 import { ChevIcon, CpuIcon, LayersIcon, PlugIcon, ShieldIcon, SlidersIcon, WarnIcon } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
+import { VerifySettings } from './VerifySettings.tsx'
 
 export type SettingsSection = 'display' | 'board' | 'features' | 'integrations' | 'system'
 
@@ -541,41 +542,41 @@ export function SettingsPanel({
                       />
                     </div>
                     {threadsInfo.mode !== 'none' && (
-                      <div className="set-sub">
-                        {threadsInfo.share !== undefined && (
-                          <label className="set-chk">
-                            <input
-                              type="checkbox"
-                              disabled={!canEdit}
-                              checked={threadsInfo.share}
-                              onChange={e => pickThreads({ share: e.currentTarget.checked })}
-                            />
-                            <span>{t('set.threads.shareLabel')}</span>
-                          </label>
-                        )}
-                        {features?.threadsCases !== undefined && (
-                          <label className="set-chk" title={t('set.cases.note')}>
-                            <input
-                              type="checkbox"
-                              disabled={!canEdit}
-                              checked={features.threadsCases}
-                              onChange={e => pickThreads({ cases: e.currentTarget.checked })}
-                            />
-                            <span>{t('set.cases')}</span>
-                          </label>
+                      <>
+                        {(threadsInfo.share !== undefined || features?.threadsCases !== undefined) && (
+                          <div className="set-sub">
+                            {threadsInfo.share !== undefined && (
+                              <label className="set-chk">
+                                <input
+                                  type="checkbox"
+                                  disabled={!canEdit}
+                                  checked={threadsInfo.share}
+                                  onChange={e => pickThreads({ share: e.currentTarget.checked })}
+                                />
+                                <span>{t('set.threads.shareLabel')}</span>
+                              </label>
+                            )}
+                            {features?.threadsCases !== undefined && (
+                              <label className="set-chk" title={t('set.cases.note')}>
+                                <input
+                                  type="checkbox"
+                                  disabled={!canEdit}
+                                  checked={features.threadsCases}
+                                  onChange={e => pickThreads({ cases: e.currentTarget.checked })}
+                                />
+                                <span>{t('set.cases')}</span>
+                              </label>
+                            )}
+                          </div>
                         )}
                         {features?.threadsVerify !== undefined && (
-                          <label className="set-chk" title={t('set.verify.note')}>
-                            <input
-                              type="checkbox"
-                              disabled={!canEdit}
-                              checked={features.threadsVerify}
-                              onChange={e => pickThreads({ verify: e.currentTarget.checked })}
-                            />
-                            <span>{t('set.verify')}</span>
-                          </label>
+                          <VerifySettings
+                            verifyOn={features.threadsVerify}
+                            canEdit={canEdit}
+                            onToggle={next => pickThreads({ verify: next })}
+                          />
                         )}
-                      </div>
+                      </>
                     )}
                   </>
                 )}

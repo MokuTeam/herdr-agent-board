@@ -14,7 +14,7 @@ import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
 import type { PresenceMode } from '../../../src/core/presence.ts'
 import { type TodoMode, todoModeOf } from '../../../src/core/todos.ts'
 import type { Translator } from '../../../src/core/types.ts'
-import type { ThreadMode } from '../../../src/core/work-threads.ts'
+import type { ThreadMode, VerifySettingsPatch } from '../../../src/core/work-threads.ts'
 import { ApiError, api, errorText, isReply, postJson, replyOf } from '../api/client.ts'
 import type { MenuEngine, MenuSource } from '../components/menu/menu-engine.ts'
 import { useLanguage } from '../i18n/I18nProvider.tsx'
@@ -141,8 +141,13 @@ export interface SettingsDeps {
   featureExtras?(): Pick<SettingsNow, 'watchesRunning' | 'defaultsRunning' | 'journalError'>
 }
 
-/** What Settings → Threads asks the board for (POST /api/threads-settings, #410; case files and verified done, #596). */
-export type ThreadsSetting = { mode: ThreadMode } | { share: boolean } | { cases: boolean } | { verify: boolean }
+/** What Settings → Threads asks the board for (POST /api/threads-settings, #410; case files and verified done, #596, #680). */
+export type ThreadsSetting =
+  | { mode: ThreadMode }
+  | { share: boolean }
+  | { cases: boolean }
+  | { verify: boolean }
+  | { verifySettings: VerifySettingsPatch }
 
 /** What Settings → Watches, Decisions or Away journal asks the board for (POST /api/feature-settings, #596). */
 export type FeatureSetting =

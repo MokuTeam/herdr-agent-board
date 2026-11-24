@@ -2615,14 +2615,22 @@ runs on every prompt, the tables in `board.db` stay empty, and no task board is 
 sharing a thread with a teammate (phase 4 of the design) and MokuPilot's own side of phase 3 (in its
 repository).
 
-**Verified done** (#492). Settings → Threads → Verified done (shown while threads are on) turns it
-on with the defaults (`"verify": true`) and off again; off keeps the settings you wrote (`model`,
-`lanes`, `brief`, ...) as `"on": false` in the `verify` object, so on brings them back. The board's
-next tick follows it, no restart. Off sends every held done to you ("verification was switched off")
-and ends its verifier as a verdict does: it is archived once it is free.
+**Verified done** (#492). In **Settings → Features → Threads → Verified done** (shown while
+threads are on), the switch turns verification on (`"verify": true` when using defaults) and off
+again, and **Configure** opens its section to set and clear every field under `threads.verify`:
+- **Model**: the profile's default, a Claude alias (`sonnet`, `opus`, `haiku`), or a custom model name (`model`).
+- **Profile for non-Claude workers**: auto, a shown Claude profile on this computer, or a per-device map when nodes are configured (`profile`).
+- **Lanes verified automatically**: checkboxes for the board's lanes; leave empty to verify only threads created with `--verify` (`lanes`).
+- **Checklist**: the default checklist, `docs/agents/verify-checklist-code.md`, or a custom file, with optional per-lane overrides (`brief`).
+- **Time limit (minutes)** and **Max running at once**: `limitMin` (default 30, 1 to 1440) and `max` (default 2, 1 to 10).
 
-With `"threads": { "verify": { "model": "opus" } }` a thread can ask for
-verification: `board thread new --verify`, `board thread set <key> --verify on|off`, or
+Off keeps all configured values under `"on": false` in `threads.verify`, so turning it back on
+brings them back. The board's next tick follows changes written from Settings or by hand in
+`config.json`, no restart. Off sends every held done to you ("verification was switched off") and
+ends its verifier as a verdict does: it is archived once it is free.
+
+In `config.json` by hand, `"threads": { "verify": { "model": "opus" } }` enables the same options.
+Once on, a thread can ask for verification: `board thread new --verify`, `board thread set <key> --verify on|off`, or
 `"lanes": ["<id>"]` for every new thread of a lane. `board thread post <key> --accept "<check>"` adds an
 acceptance line (what must be true for done; ten at most). A session's `done` on such a thread is
 held: the thread stays open, its head says "done proposed, verification running", and nobody who
