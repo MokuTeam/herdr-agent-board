@@ -21,6 +21,7 @@ import {
 import { FIELD_NAME, MAX_FIELDS, SINK_ID } from '../../core/secrets.ts'
 import type { BundleSync } from '../../services/nodes/bundle-sync.ts'
 import type { NodeLinks } from '../../services/nodes/links.ts'
+import type { RelaySetup } from '../../services/nodes/relay-setup.ts'
 import type { Revoker } from '../../services/nodes/revoke.ts'
 import type { NodeSetup } from '../../services/nodes/setup.ts'
 import type { NodeUpdater } from '../../services/nodes/update.ts'
@@ -93,6 +94,40 @@ export function nodeSetupRoutes(setup: () => NodeSetup): Route[] {
     {
       method: 'POST',
       path: '/api/nodes/setup',
+      guard: ['board-header', 'origin'],
+      async handle(_req, ctx) {
+        const body = await ctx.body()
+        const s = setup()
+        const a =
+          body.op === 'look'
+            ? await s.look(body)
+            : body.op === 'apply'
+              ? await s.apply(body)
+              : body.op === 'finish'
+                ? await s.finish()
+                : body.op === 'undo-look'
+                  ? await s.undoLook(body)
+                  : body.op === 'undo'
+                    ? await s.undo(body)
+                    : body.op === 'cancel'
+                      ? s.cancel()
+                      : { status: 400, body: { ok: false, error: 'op' } }
+        return json(a.status, a.body)
+      },
+    },
+  ]
+}
+
+/**
+ * "Relay on the server" (#511, services/nodes/relay-setup.ts): local board only, lazy, keeping
+ * the shared route table untouched.
+ */
+export function relaySetupRoutes(setup: () => RelaySetup): Route[] {
+  return [
+    { method: 'GET', path: '/api/nodes/relay/setup', handle: () => json(200, setup().view()) },
+    {
+      method: 'POST',
+      path: '/api/nodes/relay/setup',
       guard: ['board-header', 'origin'],
       async handle(_req, ctx) {
         const body = await ctx.body()

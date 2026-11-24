@@ -19,7 +19,15 @@ import { archiveCommit, headCommit } from '../adapters/git.ts'
 import { gitTools, masterGit } from '../adapters/git-access.ts'
 import { workspaceList } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
-import { createDeviceStore, createNodeStore, nodeDir, readLanesSeen, writeLanesSeen } from '../adapters/node-store.ts'
+import {
+  createDeviceStore,
+  createNodeStore,
+  dropRelayCredentials,
+  nodeDir,
+  readLanesSeen,
+  relayKeyPath,
+  writeLanesSeen,
+} from '../adapters/node-store.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { knobMs, pace, pause } from '../adapters/pacing.ts'
@@ -114,6 +122,7 @@ import { createNodeLinks, linkTimes, type NodeLinks } from '../services/nodes/li
 import { moveToDevice } from '../services/nodes/move-device.ts'
 import { createNodePilotCalls, type NodePilotCalls } from '../services/nodes/pilot-call.ts'
 import { createPlacer, type Placer } from '../services/nodes/placer.ts'
+import { createRelaySetup, type RelaySetup } from '../services/nodes/relay-setup.ts'
 import { createRevoker, type Revoker } from '../services/nodes/revoke.ts'
 import { createNodeSetup, type NodeSetup } from '../services/nodes/setup.ts'
 import { createNodeUpdater, type NodeUpdater } from '../services/nodes/update.ts'
@@ -171,7 +180,7 @@ import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { moveRoute } from './routes/move.ts'
 import { nodeCallRoutes, nodeDoorRoutes } from './routes/node.ts'
 import { createNodeProxy, type NodeProxy } from './routes/node-proxy.ts'
-import { nodeSetupRoutes, nodesRoutes } from './routes/nodes.ts'
+import { nodeSetupRoutes, nodesRoutes, relaySetupRoutes } from './routes/nodes.ts'
 import { pageLogRoute } from './routes/page-log.ts'
 import { pilotCallRoutes } from './routes/pilot-call.ts'
 import { presenceRoutes } from './routes/presence.ts'
@@ -1209,7 +1218,9 @@ export async function startServer({
                 ? localPilotCallRoutes
                 : path === '/api/nodes/setup'
                   ? localSetupRoutes
-                  : routes
+                  : path === '/api/nodes/relay/setup'
+                    ? localRelaySetupRoutes
+                    : routes
       return await dispatch(selected, req, url, path, guards, () => peerOf(srv, req))
     } catch (err) {
       // The path only: a query can carry the page's token.
@@ -1445,6 +1456,32 @@ export async function startServer({
         newId: setupId,
         linkWaitMs: knobMs('BOARD_NODE_SETUP_LINK_MS', 120_000),
         pause,
+      })),
+  )
+  let relaySetup: RelaySetup | null = null
+  const localRelaySetupRoutes = relaySetupRoutes(
+    () =>
+      (relaySetup ??= createRelaySetup({
+        cfg,
+        ssh: () => sshBin(),
+        sshVersion,
+        knownHosts: knownHostsReady,
+        hostKeyPinned,
+        hostKeyFingerprint,
+        spawn: spawnRemote,
+        relayKey: async (kind, make) => {
+          const key = relayKeyPath(kind)
+          if (existsSync(key)) return publicKeyOf(key)
+          return make ? generateKey(`agent-board relay ${kind} ${setupSelfId()}`, key) : null
+        },
+        dropRelayKeys: () => dropRelayCredentials(),
+        editNodes: editNodesAdding,
+        follow: linksFollow,
+        hostName: () => hostname(),
+        onChange: () => {},
+        log,
+        now: () => Date.now(),
+        newId: setupId,
       })),
   )
   let nodeUpdater: NodeUpdater | null = null

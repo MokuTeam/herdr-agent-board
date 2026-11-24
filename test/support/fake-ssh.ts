@@ -67,7 +67,7 @@ import { createHmac } from 'node:crypto'
 import { appendFileSync, existsSync, readFileSync, writeFileSync, writeSync } from 'node:fs'
 import { connect, createServer } from 'node:net'
 import { dirname, join } from 'node:path'
-import { nodeKind, prepScript, unpackNodeRun } from './fake-root-prep.ts'
+import { nodeKind, prepScript, relayKind, unpackNodeRun } from './fake-root-prep.ts'
 
 type Mode = 'forward' | 'refuse' | 'publickey' | 'hostkey' | 'hang'
 type Admin = {
@@ -136,8 +136,12 @@ function keygen(): void {
       end(1)
     }
     try {
+      const comment = argAfter('-C') ?? ''
+      const pub = comment.startsWith('agent-board relay enrol')
+        ? 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEENROLKEY0000000000000000000'
+        : PUBLIC
       writeFileSync(file, PRIVATE)
-      writeFileSync(`${file}.pub`, `${PUBLIC} ${argAfter('-C') ?? ''}\n`)
+      writeFileSync(`${file}.pub`, `${pub} ${comment}\n`)
     } catch (err) {
       say(`Saving key "${file}" failed: ${(err as Error).message}`)
       end(1)
@@ -513,7 +517,7 @@ async function admin(): Promise<void> {
     out(...sudoSays.filter(Boolean).map(l => `@@sudo ${l}`), `@@flavor ${words.version}`)
     return end(0)
   }
-  const node = a.root ? nodeKind(script) : null
+  const node = a.root ? (nodeKind(script) ?? relayKind(script)) : null
   // the archive goes up, and its folder goes, as the admin: no sudo
   const asAdmin = node === 'upload' || node === 'clean'
   const wanted =

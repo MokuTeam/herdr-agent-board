@@ -223,6 +223,20 @@ export function createNodeStore({ dir = nodeDir(), now = Date.now, pollMs = 1000
 /** The master's folder for its devices in the board's state folder. */
 export const nodesDir = (): string => join(stateDir(), 'nodes')
 
+/**
+ * The master's relay keys (#511): `master` (local unix socket forwarding) and `enrol`
+ * (forced-command script to add/remove NAT node keys), under `<nodes>/relay/`, private to the
+ * user; their `.pub` files live beside them.
+ */
+export const relayKeyPath = (kind: 'master' | 'enrol', dir = nodesDir()): string => join(dir, 'relay', `${kind}-key`)
+
+/** Deletes the master's relay keys (`master-key`, `enrol-key` and their `.pub` halves). */
+export function dropRelayCredentials(dir = nodesDir()): void {
+  const folder = join(dir, 'relay')
+  for (const name of ['master-key', 'master-key.pub', 'enrol-key', 'enrol-key.pub'])
+    rmSync(join(folder, name), { force: true })
+}
+
 /** A token as a node hands it out (32 random bytes, base64url; add() above), with room for a longer one. */
 const TOKEN = /^[A-Za-z0-9_-]{32,256}$/
 export const isNodeToken = (v: string): boolean => TOKEN.test(v)

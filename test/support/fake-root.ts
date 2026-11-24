@@ -79,12 +79,27 @@ for m in /usr/bin/mv /bin/mv; do [ -x "$m" ] && exec "$m" "$@"; done
 exit 127
 `,
   install: `#!/bin/sh
-args=; skip=
-for a in "$@"; do
-  if [ -n "$skip" ]; then skip=; continue; fi
-  case $a in -o|-g|-m) skip=1;; *) args="$args '$a'";; esac
+args=; skip=; mode=; owner=; group=; isdir=
+while [ $# -gt 0 ]; do
+  case $1 in
+    -d) isdir=1; args="$args '$1'" ;;
+    -o) owner=$2; shift ;;
+    -g) group=$2; shift ;;
+    -m) mode=$2; shift ;;
+    *) args="$args '$1'" ;;
+  esac
+  shift
 done
-eval exec /usr/bin/install $args
+eval /usr/bin/install $args || exit $?
+if [ -n "$isdir" ] && [ -f "$FAKE/state/relay-meta" ]; then
+  eval set -- $args
+  for p in "$@"; do
+    case $p in -*) continue ;; esac
+    grep -v "^$p " "$FAKE/state/meta" 2>/dev/null > "$FAKE/state/meta.n" || :
+    echo "$p \${mode:-755} \${owner:-root} \${group:-root}" >> "$FAKE/state/meta.n"
+    mv "$FAKE/state/meta.n" "$FAKE/state/meta"
+  done
+fi
 `,
   // the node user's herdr runs once started (start, restart, enable --now) until stopped (stop, disable --now)
   systemctl: `#!/bin/sh
@@ -172,10 +187,17 @@ T) user=\${conn#user=}; user=\${user%%,*}
    elif [ "$user" = agent-board-link ] && eff | grep -q '^Match User agent-board-link'; then
      eff | awk '/^Match User agent-board-link/{on=1;next} /^Match all/{on=0} on{ $1=tolower($1); print }'
      if [ -n "\${LINK_ALLOWUSERS:-}" ]; then echo "allowusers $LINK_ALLOWUSERS"; fi
+   elif [ "$user" = agent-board-relay-n ] && eff | grep -q '^Match User agent-board-relay-n'; then
+     if [ -n "\${RELAY_SWALLOW:-}" ]; then echo "forcecommand internal-sftp"; else eff | awk '/^Match User agent-board-relay-n/{on=1;next} /^Match all/{on=0} on{ $1=tolower($1); print }'; fi
+     if [ -n "\${RELAY_ALLOWUSERS:-}" ]; then echo "allowusers $RELAY_ALLOWUSERS"; fi
+   elif [ "$user" = agent-board-relay-m ] && eff | grep -q '^Match User agent-board-relay-m'; then
+     if [ -n "\${RELAY_SWALLOW:-}" ]; then echo "allowtcpforwarding yes"; else eff | awk '/^Match User agent-board-relay-m/{on=1;next} /^Match all/{on=0} on{ $1=tolower($1); print }'; fi
+     if [ -n "\${RELAY_ALLOWUSERS:-}" ]; then echo "allowusers $RELAY_ALLOWUSERS"; fi
    else
      echo "authorizedkeysfile .ssh/authorized_keys"
      if [ -n "\${LEAK:-}" ] && eff | grep -q '^Match User agent-board-backup'; then echo "forcecommand leaked"; fi
      if [ -n "\${LINK_LEAK:-}" ] && eff | grep -q '^Match User agent-board-link'; then echo "forcecommand leaked $(eff | awk '$1 == "PermitOpen" { print $2; exit }')"; fi
+     if [ -n "\${RELAY_LEAK:-}" ] && eff | grep -q '^Match User agent-board-relay-'; then echo "forcecommand leaked"; fi
    fi
    exit 0;;
 esac
@@ -242,7 +264,7 @@ const STOCK_PLAIN =
  * `node`: also what the node's install reads and fetches (core/node-plan.ts): /etc/os-release of an
  * Ubuntu 24.04, /proc/meminfo of 8 GB, /home, a running systemd, and the installers.
  */
-export function fakeRoot(mode: 'include' | 'plain', opts: { node?: boolean } = {}): FakeRoot {
+export function fakeRoot(mode: 'include' | 'plain', opts: { node?: boolean; relay?: boolean } = {}): FakeRoot {
   const dir = mkdtempSync(join(tmpdir(), 'board-fake-root-'))
   onTestFinished(() => rmSync(dir, { recursive: true, force: true }))
   // the scripts' own spelling of the root: /c/Users/… on Windows (sh's PATH splits at the colon of C:/)
@@ -272,6 +294,55 @@ export function fakeRoot(mode: 'include' | 'plain', opts: { node?: boolean } = {
       'MemTotal:        8148000 kB\nMemAvailable:    7300000 kB\nSwapTotal:       0 kB\n',
     )
     for (const [name, text] of Object.entries(INSTALLERS)) writeFileSync(join(dir, 'installers', name), text)
+  }
+  if (opts.relay) {
+    writeFileSync(join(dir, 'etc', 'os-release'), 'ID=ubuntu\nVERSION_ID="24.04"\nPRETTY_NAME="Ubuntu 24.04.1 LTS"\n')
+    writeFileSync(join(dir, 'state', 'relay-meta'), '1\n')
+    writeFileSync(join(dir, 'state', 'meta'), '')
+    const relayShims: Record<string, string> = {
+      ssh: '#!/bin/sh\necho "OpenSSH_9.6p1 Ubuntu-3ubuntu13"\n',
+      pkill: '#!/bin/sh\nexit 0\n',
+      chown: `#!/bin/sh
+echo "chown $*" >> "$FAKE/state/log"
+spec=$1; shift
+u=\${spec%%:*}; g=\${spec#*:}
+for p in "$@"; do
+  line=$(grep "^$p " "$FAKE/state/meta" 2>/dev/null | tail -n 1)
+  m=\${line#* }; m=\${m%% *}
+  grep -v "^$p " "$FAKE/state/meta" 2>/dev/null > "$FAKE/state/meta.n" || :
+  echo "$p \${m:-755} $u \${g:-$u}" >> "$FAKE/state/meta.n"
+  mv "$FAKE/state/meta.n" "$FAKE/state/meta"
+done
+exit 0
+`,
+      chmod: `#!/bin/sh
+mode=$1; shift
+for p in "$@"; do
+  /usr/bin/chmod "$mode" "$p" 2>/dev/null || :
+  if [ -d "$p" ]; then
+    line=$(grep "^$p " "$FAKE/state/meta" 2>/dev/null | tail -n 1)
+    if [ -n "$line" ]; then
+      rest=\${line#* * }
+      grep -v "^$p " "$FAKE/state/meta" 2>/dev/null > "$FAKE/state/meta.n" || :
+      echo "$p $mode $rest" >> "$FAKE/state/meta.n"
+      mv "$FAKE/state/meta.n" "$FAKE/state/meta"
+    fi
+  fi
+done
+exit 0
+`,
+      stat: `#!/bin/sh
+if [ "$1" = "-c" ] && [ "$2" = "%a %U %G" ] && [ -n "$3" ]; then
+  line=$(grep "^$3 " "$FAKE/state/meta" 2>/dev/null | tail -n 1)
+  if [ -n "$line" ]; then echo "\${line#"$3 "}"; exit 0; fi
+fi
+exec /usr/bin/stat "$@"
+`,
+    }
+    for (const [name, text] of Object.entries(relayShims)) {
+      writeFileSync(join(dir, 'bin', name), text)
+      chmodSync(join(dir, 'bin', name), 0o755)
+    }
   }
   if (mode === 'include') {
     mkdirSync(join(dir, 'etc', 'ssh', 'sshd_config.d'))

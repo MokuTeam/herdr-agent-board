@@ -13,6 +13,7 @@ export function prepScript(R: string, script: string): string {
   return script
     .replaceAll('/etc/', `${R}/etc/`)
     .replaceAll('/var/lib/agent-board-backup', `${R}/var/lib/agent-board-backup`)
+    .replaceAll('/var/lib/agent-board-relay', `${R}/var/lib/agent-board-relay`)
     .replaceAll('/run/sshd', `${R}/run/sshd`)
     .replaceAll('/home/agent-board', `${R}/home/agent-board`)
     .replaceAll('/var/lib/systemd/', `${R}/var/lib/systemd/`)
@@ -21,6 +22,7 @@ export function prepScript(R: string, script: string): string {
     .replaceAll('/proc/meminfo', `${R}/proc/meminfo`)
     .replaceAll('/var/tmp/', `${R}/var/tmp/`)
     .replaceAll('/run/agent-board-node.lock', `${R}/run/agent-board-node.lock`)
+    .replaceAll('/run/agent-board-relay.lock', `${R}/run/agent-board-relay.lock`)
     .replace(/^PATH=\/usr\/local\/sbin.*export PATH$/gm, `PATH=${R}/bin:/usr/bin:/bin; export PATH`)
 }
 
@@ -32,3 +34,6 @@ export function unpackNodeRun(script: string): string | null {
 
 /** The kind of a node script by its first comment (`# agent-board: node <kind>`), or null. */
 export const nodeKind = (script: string): string | null => /^# agent-board: node (\w+)$/m.exec(script)?.[1] ?? null
+
+/** The kind of a relay script by its first comment (`# agent-board: relay <kind>`), or null. */
+export const relayKind = (script: string): string | null => /^# agent-board: relay (\w+)$/m.exec(script)?.[1] ?? null

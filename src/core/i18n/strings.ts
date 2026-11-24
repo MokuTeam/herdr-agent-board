@@ -23,6 +23,7 @@ import { NODE_STRINGS } from './node-strings.ts'
 import { ONESHOT_STRINGS } from './oneshot-strings.ts'
 import { PRESENCE_STRINGS } from './presence-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
+import { RELAY_STRINGS } from './relay-strings.ts'
 import { REMOTE_STRINGS } from './remote-strings.ts'
 import { SECRET_STRINGS } from './secret-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
@@ -1569,6 +1570,8 @@ for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(SERVER_STRINGS) as Lang[]) Object.assign(STRINGS[code], SERVER_STRINGS[code])
 // And making a server a node (#509).
 for (const code of Object.keys(NODE_STRINGS) as Lang[]) Object.assign(STRINGS[code], NODE_STRINGS[code])
+// And setting up the relay on a server for machines behind NAT (#511).
+for (const code of Object.keys(RELAY_STRINGS) as Lang[]) Object.assign(STRINGS[code], RELAY_STRINGS[code])
 // And what the one command says on the server ("Do it myself").
 for (const code of Object.keys(ONESHOT_STRINGS) as Lang[]) Object.assign(STRINGS[code], ONESHOT_STRINGS[code])
 // And auto-compact (#378).
