@@ -3,8 +3,9 @@
 // restart; a wrong sha256, an archive with a path outside and a failed install leave the old copy
 // as it was; one update at a time; the commit it runs is answered as current; Windows and a board
 // with nothing to start it again do not update themselves. On Windows (#699) a node with a guard puts
-// the new copy in place file by file, after a copy of the plugin and a pending record, and puts the
-// copy back when the new copy does not go in.
+// a copy of the plugin and a pending record, starts a guard and says go, and writes nothing into the
+// plugin's folder itself; what the guard and the board that comes back do is tested here and in
+// node-update-guard.test.ts.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import {
   existsSync,
@@ -22,6 +23,8 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  aliveAt,
+  applyUpdate,
   backupPlugin,
   besidePlugin,
   claimPending,
@@ -30,10 +33,16 @@ import {
   mirrorTree,
   pluginCommit,
   readPending,
+  removeAlive,
+  restorePlugin,
   saidTail,
+  setPhase,
   swapIn,
+  writeAlive,
   writePending,
+  writeTree,
 } from '../../src/adapters/plugin-update.ts'
+import { readTar } from '../../src/core/tar.ts'
 import { createNodeUpdate, type NodeUpdateDeps } from '../../src/services/node/update.ts'
 import { type PluginRepo, pluginRepo, tarOf } from '../support/plugin-tar.ts'
 
@@ -389,20 +398,22 @@ const stub = {
   check: async () => ({ ok: true, detail: '' }),
 }
 
-describe('a Windows node updates its plugin in place', () => {
-  test('a copy of the plugin and the record first, the guard started, then the files in place, and the board told to restart', async () => {
+describe('a Windows node hands its update to a guard', () => {
+  test('a copy of the plugin and the record first, the guard started and heard, then go; nothing of the plugin written', async () => {
+    mkdirSync(join(root, '.git'))
+    writeFileSync(join(root, '.git', 'HEAD'), 'ref')
     const seen: string[] = []
+    const gos: string[] = []
     const guard = (file: string, old: string): void => {
-      // by now: the plugin's folder is as it was, the copy before is whole, the record is written
-      seen.push(
-        `${file}|${old}|${text(root, 'src', 'adapters', 'paths.ts')}|${text(old, 'src', 'adapters', 'paths.ts')}`,
-      )
-      expect(readPending(file)).toMatchObject({ commit: repo.b, from: repo.a, root, old })
+      // by now: the copy before is whole, the record says ready
+      seen.push(`${file}|${old}|${text(old, 'src', 'adapters', 'paths.ts')}|${readPending(file)?.phase}`)
+      writeAlive(file)
     }
     const { update, restarts, logs } = make({
       ...stub,
       platform: 'win32',
       guard,
+      go: file => void gos.push(`${file}|${readPending(file)?.phase}`),
       swap: () => {
         throw new Error('the folders are not swapped on Windows')
       },
@@ -414,44 +425,54 @@ describe('a Windows node updates its plugin in place', () => {
     const r = await update.update({ commit: repo.b, sha256: sha(archive) })
     expect(r).toEqual({ status: 200, body: { ok: true, commit: repo.b, restarting: true } })
     const { fresh, old } = besidePlugin(root)
-    expect(seen).toEqual([`${pendingFile()}|${old}|export const V = 1\n|export const V = 1\n`])
-    expect(text(root, 'src', 'adapters', 'paths.ts')).toBe('export const V = 2\n')
-    expect(text(root, 'src', 'b.ts')).toBe('export const B = true\n')
-    expect(text(root, '.archive-commit')).toBe(`${repo.b}\n`)
-    expect(text(old, '.archive-commit')).toBe(`${repo.a}\n`)
-    expect(existsSync(join(old, 'src', 'b.ts'))).toBe(false)
-    expect(existsSync(fresh)).toBe(false)
-    // in place: the plugin's folder and its src are the same folders
+    expect(seen).toEqual([`${pendingFile()}|${old}|export const V = 1\n|ready`])
+    expect(gos).toEqual([`${pendingFile()}|ready`])
+    expect(readPending(pendingFile())).toMatchObject({ commit: repo.b, from: repo.a, root, old, fresh, phase: 'ready' })
+    // the board wrote nothing into the plugin: the guard does
+    expect(text(root, 'src', 'adapters', 'paths.ts')).toBe('export const V = 1\n')
+    expect(text(root, '.archive-commit')).toBe(`${repo.a}\n`)
+    expect(existsSync(join(root, 'src', 'b.ts'))).toBe(false)
     expect(statSync(root).ino).toBe(folder)
     expect(statSync(join(root, 'src')).ino).toBe(src)
-    expect(readPending(pendingFile())).toMatchObject({ commit: repo.b, from: repo.a, root, old })
-    expect(restarts).toEqual([old])
-    expect(logs.join('\n')).toContain(`updated to ${repo.b.slice(0, 12)}`)
+    // the copy before is whole but for the checkout's .git, which the guard moves
+    expect(text(old, '.archive-commit')).toBe(`${repo.a}\n`)
+    expect(existsSync(join(old, '.git'))).toBe(false)
+    expect(text(fresh, 'src', 'b.ts')).toBe('export const B = true\n')
+    expect(restarts).toEqual([])
+    expect(logs.join('\n')).toContain('handed to the guard')
     expect(update.busy()).toBe(true)
   })
 
-  test('Linux and macOS go through the swap as before: no copy, no record, no guard', async () => {
+  test('Linux and macOS go through the swap as before: no copy, no record, no guard, no go', async () => {
     for (const platform of ['linux', 'darwin']) {
-      let guards = 0
+      let calls = 0
       const { update, restarts } = make({
         ...stub,
         platform,
-        guard: () => void guards++,
-        backup: () => {
-          throw new Error('no backup here')
+        guard: () => void calls++,
+        go: () => void calls++,
+        alive: () => {
+          calls++
+          return Date.now() + 1e9
         },
-        mirror: () => {
-          throw new Error('no mirror here')
+        backup: async () => {
+          throw new Error('no backup here')
         },
       })
       const archive = repo.archive(repo.b)
       await update.blob(stream(archive), archive.length)
       const r = await update.update({ commit: repo.b, sha256: sha(archive) })
-      expect(r.status).toBe(200)
-      expect(guards).toBe(0)
+      expect(r).toEqual({ status: 200, body: { ok: true, commit: repo.b, restarting: true } })
+      expect(calls).toBe(0)
       expect(existsSync(pendingFile())).toBe(false)
       expect(text(besidePlugin(root).old, '.archive-commit')).toBe(`${repo.a}\n`)
+      expect(text(root, '.archive-commit')).toBe(`${repo.b}\n`)
       expect(restarts).toHaveLength(1)
+      // started() reads nothing off Windows: a record stays as it is
+      writePending(pendingFile(), { commit: repo.b, from: repo.a, root, old: '', fresh: '', phase: 'applied', at: 1 })
+      await update.started()
+      expect(readPending(pendingFile())?.phase).toBe('applied')
+      rmSync(pendingFile())
       // each platform starts from commit A again
       rmSync(root, { recursive: true, force: true })
       rmSync(besidePlugin(root).old, { recursive: true, force: true })
@@ -459,54 +480,9 @@ describe('a Windows node updates its plugin in place', () => {
     }
   })
 
-  test('a mirror that fails half way is put back at once from the copy before, and no restart follows', async () => {
-    const { fresh } = besidePlugin(root)
-    const { update, restarts } = make({
-      ...stub,
-      platform: 'win32',
-      guard: () => {},
-      mirror: (from, to) => {
-        if (from !== fresh) return mirrorTree(from, to)
-        writeFileSync(join(to, 'src', 'b.ts'), 'half')
-        throw new Error('EBUSY')
-      },
-    })
+  test('a guard that does not start, one that never answers, a copy that cannot be made: the plugin is as it was', async () => {
     const archive = repo.archive(repo.b)
-    await update.blob(stream(archive), archive.length)
-    const r = await update.update({ commit: repo.b, sha256: sha(archive) })
-    expect(r).toEqual({ status: 500, body: { ok: false, error: 'swap', detail: 'EBUSY' } })
-    expect(text(root, 'src', 'adapters', 'paths.ts')).toBe('export const V = 1\n')
-    expect(text(root, '.archive-commit')).toBe(`${repo.a}\n`)
-    expect(existsSync(join(root, 'src', 'b.ts'))).toBe(false)
-    expect(existsSync(pendingFile())).toBe(false)
-    expect(existsSync(fresh)).toBe(false)
-    expect(restarts).toEqual([])
-    expect(update.busy()).toBe(false)
-  })
-
-  test('a mirror and its put-back that both fail keep the record for the guard, and the log names both', async () => {
-    const { update, restarts, logs } = make({
-      ...stub,
-      platform: 'win32',
-      guard: () => {},
-      mirror: (from, to) => {
-        throw new Error(from === besidePlugin(root).fresh ? 'EBUSY first' : `EPERM back into ${to === root}`)
-      },
-    })
-    const archive = repo.archive(repo.b)
-    await update.blob(stream(archive), archive.length)
-    const r = await update.update({ commit: repo.b, sha256: sha(archive) })
-    expect(r.body).toEqual({ ok: false, error: 'swap', detail: 'EBUSY first' })
-    expect(readPending(pendingFile())).toMatchObject({ commit: repo.b, from: repo.a })
-    expect(logs.join('\n')).toContain('EBUSY first')
-    expect(logs.join('\n')).toContain('EPERM back into true')
-    expect(restarts).toEqual([])
-    expect(update.busy()).toBe(false)
-  })
-
-  test('a copy that cannot be made and a guard that does not start leave the plugin as it was', async () => {
-    const archive = repo.archive(repo.b)
-    for (const [over, detail] of [
+    const cases = [
       [
         {
           guard: () => {
@@ -515,45 +491,113 @@ describe('a Windows node updates its plugin in place', () => {
         },
         'the guard that puts the copy before back did not start: spawn failed',
       ],
+      [{ guard: () => {}, ackMs: 600 }, 'the guard that puts the copy before back did not start: no answer within 1 s'],
       [
         {
           guard: () => {},
-          backup: () => {
+          backup: async () => {
             throw new Error('disk full')
           },
         },
         'disk full',
       ],
-    ] as const) {
-      const { update, restarts } = make({ ...stub, platform: 'win32', ...over })
+    ] as const
+    for (const [over, detail] of cases) {
+      let went = 0
+      const { update, restarts } = make({ ...stub, platform: 'win32', go: () => void went++, ...over })
       await update.blob(stream(archive), archive.length)
       const r = await update.update({ commit: repo.b, sha256: sha(archive) })
       expect(r).toEqual({ status: 500, body: { ok: false, error: 'swap', detail } })
+      expect(went).toBe(0)
       expect(text(root, 'src', 'adapters', 'paths.ts')).toBe('export const V = 1\n')
       expect(existsSync(join(root, 'src', 'b.ts'))).toBe(false)
       expect(existsSync(pendingFile())).toBe(false)
+      expect(aliveAt(pendingFile())).toBeNull()
       expect(existsSync(besidePlugin(root).fresh)).toBe(false)
       expect(restarts).toEqual([])
       expect(update.busy()).toBe(false)
     }
   })
 
-  test('started: the board that came back on the commit removes the record; another commit leaves it; Linux reads nothing', async () => {
-    const record = { commit: repo.b, from: repo.a, root, old: besidePlugin(root).old, at: 1 }
-    writePending(pendingFile(), record)
+  test('a go that cannot be said drops the record and the new copy, and the node can try again', async () => {
+    const { update } = make({
+      ...stub,
+      platform: 'win32',
+      guard: file => writeAlive(file),
+      go: () => {
+        throw new Error('EPERM')
+      },
+    })
+    const archive = repo.archive(repo.b)
+    await update.blob(stream(archive), archive.length)
+    const r = await update.update({ commit: repo.b, sha256: sha(archive) })
+    expect(r).toEqual({ status: 500, body: { ok: false, error: 'swap', detail: 'EPERM' } })
+    expect(existsSync(pendingFile())).toBe(false)
+    expect(aliveAt(pendingFile())).toBeNull()
+    expect(existsSync(besidePlugin(root).fresh)).toBe(false)
+    expect(update.busy()).toBe(false)
+  })
+
+  test('started: only a copy the guard put in place, on the commit it was given, taken once', async () => {
+    const base = {
+      commit: repo.b,
+      from: repo.a,
+      root,
+      old: besidePlugin(root).old,
+      fresh: besidePlugin(root).fresh,
+      at: 1,
+    }
+    // not yet in place, or being rolled back: the record stays
+    for (const phase of ['ready', 'go', 'restoring'] as const) {
+      writePending(pendingFile(), { ...base, phase })
+      const { update, logs } = make({ platform: 'win32', guard: () => {}, commit: async () => repo.b })
+      await update.started()
+      expect(readPending(pendingFile())?.phase).toBe(phase)
+      expect(logs).toEqual([])
+    }
+    // in place, but another commit runs
+    writePending(pendingFile(), { ...base, phase: 'applied' })
     const wrong = make({ platform: 'win32', guard: () => {} })
     await wrong.update.started()
-    expect(readPending(pendingFile())).toEqual(record)
-    expect(wrong.logs).toEqual([])
-    const linux = make({ platform: 'linux', commit: async () => repo.b })
-    await linux.update.started()
-    expect(readPending(pendingFile())).toEqual(record)
+    expect(readPending(pendingFile())?.phase).toBe('applied')
+    // in place and running: taken, once
     const back = make({ platform: 'win32', guard: () => {}, commit: async () => repo.b })
     await back.update.started()
     expect(existsSync(pendingFile())).toBe(false)
+    expect(existsSync(`${pendingFile()}.rollback`)).toBe(false)
     expect(back.logs.join('\n')).toContain(`back on ${repo.b.slice(0, 12)}`)
-    // nothing pending: nothing happens
     await back.update.started()
+    expect(back.logs).toHaveLength(1)
+  })
+
+  test('a board killed in the middle of the mirror has no commit to confirm: the record stays for the guard', async () => {
+    const { fresh, old } = besidePlugin(root)
+    await backupPlugin(root, old)
+    const read = readTar(repo.archive(repo.b))
+    if ('error' in read) throw new Error(read.error)
+    writeTree(fresh, [
+      ...read.entries,
+      { kind: 'file', path: '.archive-commit', mode: 0o644, data: new TextEncoder().encode(`${repo.b}\n`) },
+    ])
+    let writes = 0
+    expect(() =>
+      applyUpdate(fresh, root, old, (file, data, mode) => {
+        if (++writes === 2) throw new Error('killed')
+        writeFileSync(file, data, { mode })
+      }),
+    ).toThrow('killed')
+    // a half copy: files of both, and no stamp at all
+    expect(existsSync(join(root, '.archive-commit'))).toBe(false)
+    expect(await pluginCommit(root)).toBe('')
+    writePending(pendingFile(), { commit: repo.b, from: repo.a, root, old, fresh, phase: 'applied', at: 1 })
+    const { update } = make({ platform: 'win32', guard: () => {}, commit: () => pluginCommit(root) })
+    await update.started()
+    expect(readPending(pendingFile())?.phase).toBe('applied')
+    // and the copy before restores it whole, stamp last
+    restorePlugin(old, root)
+    expect(await pluginCommit(root)).toBe(repo.a)
+    expect(text(root, 'src', 'adapters', 'paths.ts')).toBe('export const V = 1\n')
+    expect(existsSync(join(root, 'src', 'b.ts'))).toBe(false)
   })
 })
 
@@ -599,37 +643,137 @@ describe('the Windows update files', () => {
     expect(writes).toEqual([])
   })
 
-  test('mirrorTree: a name that changes only in case ends with the new name alone, and a link is followed as a link', () => {
+  test('mirrorTree: a name that changes only in case ends with the new name alone, by the names the source lists', () => {
     const from = join(dir, 'from')
     const to = join(dir, 'to')
     put(from, 'src/foo.ts', 'x')
     put(to, 'src/Foo.ts', 'x')
+    mirrorTree(from, to)
+    expect(readdirSync(join(to, 'src'))).toEqual(['foo.ts'])
+  })
+
+  test.skipIf(process.platform === 'win32')('mirrorTree follows a link as a link (a privilege on Windows)', () => {
+    const from = join(dir, 'from')
+    const to = join(dir, 'to')
+    put(from, 'src/foo.ts', 'x')
+    mkdirSync(to)
     symlinkSync('foo.ts', join(from, 'src', 'link.ts'))
     mirrorTree(from, to)
     expect(readdirSync(join(to, 'src')).sort()).toEqual(['foo.ts', 'link.ts'])
     expect(readFileSync(join(to, 'src', 'link.ts'), 'utf8')).toBe('x')
   })
 
-  test('backupPlugin copies everything, a .git folder too, and replaces an older copy', () => {
+  test('mirrorTree: the last names go in after every other file, and out first when they differ; keep names stay', () => {
+    const from = join(dir, 'from')
+    const to = join(dir, 'to')
+    put(from, '.stamp', 'new')
+    put(from, 'a.ts', 'a2')
+    put(from, 'src/b.ts', 'b2')
+    put(to, '.stamp', 'old')
+    put(to, 'a.ts', 'a1')
+    put(to, 'src/b.ts', 'b1')
+    put(to, '.git/HEAD', 'ref')
+    const order: string[] = []
+    mirrorTree(
+      from,
+      to,
+      (file, data) => {
+        order.push(file.slice(to.length + 1))
+        writeFileSync(file, data)
+      },
+      { last: ['.stamp'], keep: ['.git'] },
+    )
+    expect(order.at(-1)).toBe('.stamp')
+    expect(order.sort()).toEqual(['.stamp', 'a.ts', join('src', 'b.ts')])
+    expect(text(to, '.git', 'HEAD')).toBe('ref')
+    // a stamp that differs is gone while the other files are written
+    put(from, '.stamp', 'newer')
+    put(from, 'a.ts', 'a3')
+    let seen = null as boolean | null
+    mirrorTree(
+      from,
+      to,
+      (file, data) => {
+        if (seen === null) seen = existsSync(join(to, '.stamp'))
+        writeFileSync(file, data)
+      },
+      { last: ['.stamp'] },
+    )
+    expect(seen).toBe(false)
+    expect(text(to, '.stamp')).toBe('newer')
+    // the same stamp is left alone
+    const writes: string[] = []
+    mirrorTree(from, to, f => void writes.push(f), { last: ['.stamp'] })
+    expect(writes).toEqual([])
+  })
+
+  test("applyUpdate moves a checkout's .git into the copy before; restorePlugin puts files back and keeps a .git", () => {
+    put(root, '.git/HEAD', 'ref')
+    const { fresh, old } = besidePlugin(root)
+    mkdirSync(old)
+    put(fresh, 'src/adapters/paths.ts', 'export const V = 2\n')
+    put(fresh, '.archive-commit', 'new\n')
+    applyUpdate(fresh, root, old)
+    expect(existsSync(join(root, '.git'))).toBe(false)
+    expect(text(old, '.git', 'HEAD')).toBe('ref')
+    expect(text(root, '.archive-commit')).toBe('new\n')
+    // the copy before: what backupPlugin made, with the .git applyUpdate moved
+    put(old, 'src/adapters/paths.ts', 'export const V = 1\n')
+    put(old, '.archive-commit', 'old\n')
+    restorePlugin(old, root)
+    expect(text(root, 'src', 'adapters', 'paths.ts')).toBe('export const V = 1\n')
+    expect(text(root, '.archive-commit')).toBe('old\n')
+    expect(text(root, '.git', 'HEAD')).toBe('ref')
+    // a .git that stayed in the plugin is not taken out by a restore from a copy without one
+    rmSync(join(old, '.git'), { recursive: true })
+    put(root, '.git/EXTRA', 'x')
+    restorePlugin(old, root)
+    expect(text(root, '.git', 'EXTRA')).toBe('x')
+  })
+
+  test('backupPlugin copies everything but the .git, off the event loop, and replaces an older copy', async () => {
     put(root, '.git/HEAD', 'ref')
     put(root, 'node_modules/dep/index.js', 'dep')
     const old = join(dir, 'home', 'agent-board.old')
     put(old, 'stale.ts', 'stale')
-    backupPlugin(root, old)
+    const done = backupPlugin(root, old)
+    expect(done).toBeInstanceOf(Promise)
+    await done
     expect(existsSync(join(old, 'stale.ts'))).toBe(false)
-    expect(text(old, '.git', 'HEAD')).toBe('ref')
+    expect(existsSync(join(old, '.git'))).toBe(false)
     expect(text(old, 'node_modules', 'dep', 'index.js')).toBe('dep')
     expect(text(old, 'src', 'adapters', 'paths.ts')).toBe('export const V = 1\n')
   })
 
-  test('claimPending gives the record once, and leaves nothing beside it', () => {
+  test('claimPending gives the record once and leaves nothing beside it; the phase and the heartbeat', () => {
     const file = join(dir, 'state', 'pending.json')
+    const p = {
+      commit: repo.b,
+      from: repo.a,
+      root,
+      old: `${root}.old`,
+      fresh: `${root}.new`,
+      phase: 'ready',
+      at: 5,
+    } as const
     expect(claimPending(file)).toBeNull()
-    writePending(file, { commit: repo.b, from: repo.a, root, old: `${root}.old`, at: 5 })
-    expect(claimPending(file)).toEqual({ commit: repo.b, from: repo.a, root, old: `${root}.old`, at: 5 })
+    writePending(file, p)
+    setPhase(file, 'go')
+    expect(readPending(file)).toEqual({ ...p, phase: 'go' })
+    expect(claimPending(file)).toEqual({ ...p, phase: 'go' })
     expect(claimPending(file)).toBeNull()
     expect(readdirSync(join(dir, 'state'))).toEqual([])
+    setPhase(file, 'go')
+    expect(existsSync(file)).toBe(false)
     writeFileSync(file, 'not json')
     expect(readPending(file)).toBeNull()
+    writeFileSync(file, JSON.stringify({ ...p, phase: 'nope' }))
+    expect(readPending(file)).toBeNull()
+    expect(aliveAt(file)).toBeNull()
+    const before = Date.now()
+    writeAlive(file)
+    expect(aliveAt(file)).toBeGreaterThanOrEqual(before)
+    removeAlive(file)
+    expect(aliveAt(file)).toBeNull()
   })
 })

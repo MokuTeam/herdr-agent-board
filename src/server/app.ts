@@ -24,7 +24,7 @@ import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { knobMs, pace, pause } from '../adapters/pacing.ts'
 import { archiveDir, cardsDir, pluginRoot, ROOT, scheduleDir } from '../adapters/paths.ts'
-import { pluginCommit, startGuard, touchCode } from '../adapters/plugin-update.ts'
+import { markGo, pluginCommit, startGuard, touchCode } from '../adapters/plugin-update.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { programsOnPath } from '../adapters/process.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
@@ -106,7 +106,7 @@ import { createNodeLaunch } from '../services/node/launch.ts'
 import { createNodePilotCall, type NodePilotCall } from '../services/node/pilot-call.ts'
 import { createNodeSecrets } from '../services/node/secrets.ts'
 import { createNodeStatus } from '../services/node/status.ts'
-import { createNodeUpdate } from '../services/node/update.ts'
+import { createNodeUpdate, type NodeUpdate } from '../services/node/update.ts'
 import { createNodeUplink, type NodeUplink } from '../services/node/uplink.ts'
 import { createNodeAggregate, type NodeAggregate } from '../services/nodes/aggregate.ts'
 import { type BundleSync, createBundleSync } from '../services/nodes/bundle-sync.ts'
@@ -221,6 +221,8 @@ const runningCommit = (): Promise<string> => {
 }
 /** After a node's update the board ends this long after its answer, so the answer reaches the master first. */
 const RESTART_AFTER_MS = 1000
+/** A Windows node's board that came back on the commit of its update settles it once it has stayed up this long after its start (#699). */
+const UPDATE_STABLE_MS = 10_000
 
 export interface BoardServer {
   port: number
@@ -1257,6 +1259,10 @@ export async function startServer({
   // door, and `POST /api/node/call` for this computer's own `board thread`, on this listener alone.
   let nodeUplink: NodeUplink | null = null
   let nodePilotCall: NodePilotCall | null = null
+  // A node's update of its plugin (#590), made with the door; on Windows (#699) it is told when the
+  // start is whole (the end of startServer).
+  let nodeUpdate = null as NodeUpdate | null
+  const nodePlatform = process.env.BOARD_TEST_PLATFORM || process.platform
   let localCallRoutes: Route[] | null = null
   function doorFollows(): void {
     if (door) {
@@ -1298,24 +1304,23 @@ export async function startServer({
     // Then the board ends with 75 and run.ts, the pane's process, starts it again from the plugin's
     // folder: herdr and the agents' panes are not touched. The code touched first wakes the watchers
     // of run.ts and wake-run.ts, so wake comes back on the new code too. On Windows (#699) the folder
-    // cannot be swapped under a running board: the files go in place, and a guard process puts the
-    // copy before back when this board does not come back on the new commit.
+    // cannot be swapped under a running board: a guard process puts the files in place when this
+    // board says go (it writes none of them itself), and puts the copy before back when this board
+    // does not come back on the new commit.
     const root = pluginRoot()
-    const nodeUpdate = createNodeUpdate({
+    const update = createNodeUpdate({
       root,
       dir: join(nodeDir(), 'update'),
       commit: runningCommit,
       // BOARD_TEST_PLATFORM: a test on Windows updates a scratch plugin as a Linux node does (unset in production).
-      platform: process.env.BOARD_TEST_PLATFORM || process.platform,
+      platform: nodePlatform,
       // run.ts starts the board over IPC: with no such parent nothing would start it again.
       canRestart: typeof process.send === 'function',
-      // In production the plugin's folder is this code, so its copy in `old` (which stays as it is
-      // while the files change) runs the guard; a test's scratch plugin (BOARD_TEST_PLUGIN_ROOT) is
-      // not, so the guard is this code's own file.
-      guard: (file, old) => {
-        const inOld = join(old, 'src', 'entrypoints', 'node-update-guard.ts')
-        startGuard(existsSync(inOld) ? inOld : join(ROOT, 'src', 'entrypoints', 'node-update-guard.ts'), file)
-      },
+      // The guard is the code that runs now, from its copy in `old`: that folder stays as it is
+      // while the guard changes the plugin's files.
+      guard: (file, old) => startGuard(join(old, 'src', 'entrypoints', 'node-update-guard.ts'), file),
+      // After the answer, so it reaches the master before the files change and the board restarts.
+      go: file => void setTimeout(() => markGo(file), RESTART_AFTER_MS),
       restart: old => {
         touchCode(old)
         touchCode(root)
@@ -1328,6 +1333,7 @@ export async function startServer({
       },
       log,
     })
+    nodeUpdate = update
     const uplink = createNodeUplink({ log })
     nodeUplink = uplink
     localCallRoutes = nodeCallRoutes(uplink)
@@ -1399,17 +1405,13 @@ export async function startServer({
             nodeStore.forget(master)
           }
         },
-        update: nodeUpdate,
+        update,
         move: movers(),
         pilotCall: nodePilotCall,
       }),
       log,
     })
-    // Once the door is up: an update on Windows that put this commit in place is confirmed (#699).
-    void door
-      .sync()
-      .then(() => nodeUpdate.started())
-      .catch(err => log(`node: update check at start: ${err instanceof Error ? err.message : String(err)}`))
+    void door.sync()
   }
 
   // The master's links to its nodes (#499, services/nodes/links.ts) and `/api/nodes` on this board
@@ -1779,6 +1781,16 @@ export async function startServer({
   const tunnelSettings = (): string => JSON.stringify(cfg.tunnel ?? null)
   let lastView = viewConfig()
   let lastSettings = tunnelSettings()
+
+  // On Windows (#699) a node's update is settled by the board that came back on its commit: here,
+  // when the whole start is done (a later throw in this function never gets here), and once it
+  // stayed up a while. Nowhere else is anything scheduled.
+  if (nodePlatform === 'win32' && nodeUpdate) {
+    const settled = nodeUpdate
+    void pause(UPDATE_STABLE_MS)
+      .then(() => settled.started())
+      .catch(err => log(`node: settling the update: ${err instanceof Error ? err.message : String(err)}`))
+  }
 
   return {
     port,

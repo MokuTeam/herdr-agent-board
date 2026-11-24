@@ -5,10 +5,11 @@
 // a turn and ships B; the node unpacks, installs, swaps and ends with 75, and is started again as
 // run.ts starts it; it comes back on B, and its herdr was never asked to close a pane.
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
-import { besidePlugin, writeTree } from '../../src/adapters/plugin-update.ts'
+import { ROOT } from '../../src/adapters/paths.ts'
+import { besidePlugin, readPending, writeTree } from '../../src/adapters/plugin-update.ts'
 import { readTar } from '../../src/core/tar.ts'
 import { serveBoard } from '../support/board-server.ts'
 import { nodeBoard, nodePair, PAIR_ENV } from '../support/node-pair.ts'
@@ -190,12 +191,17 @@ describe('a node updates to its master’s commit', () => {
 })
 
 describe('a node on Windows', () => {
-  /** A master and a Windows node on commit A, the master on B; the node's board ends with 75 once the new files are in place. */
+  /**
+   * A master and a Windows node on commit A, the master on B. The node's plugin folder holds this
+   * code's own src besides commit A's files, so the copy of it the board makes carries the guard it
+   * starts from there. The node's board does not end on its own here (no run.ts): the tests end it.
+   */
   async function windowsPair(guardMs: string) {
     const dir = await scratch()
     const repo = pluginRepo(join(dir, 'repo'))
     const root = join(dir, 'node', 'agent-board')
     nodePlugin(repo, root)
+    cpSync(join(ROOT, 'src'), join(root, 'src'), { recursive: true })
     const env = { BOARD_TEST_PLUGIN_ROOT: root, BOARD_TEST_PLATFORM: 'win32', BOARD_NODE_GUARD_MS: guardMs }
     const pair = await nodePair({
       env,
@@ -203,27 +209,22 @@ describe('a node on Windows', () => {
     })
     const node = pair.nodes[0]
     if (!node) throw new Error('no node')
-    const ended = await Promise.race([node.proc.exited, Bun.sleep(60_000).then(() => null)])
-    expect(ended?.code).toBe(75)
     const state = stateFolder(node.box)
-    return {
-      repo,
-      root,
-      pair,
-      node,
-      env,
-      pending: join(state, 'node', 'update', 'pending.json'),
-      weblog: join(state, 'web.log'),
-    }
+    const pending = join(state, 'node', 'update', 'pending.json')
+    const stamp = (): string => (existsSync(join(root, '.archive-commit')) ? text(root, '.archive-commit') : '')
+    return { repo, root, pair, node, env, pending, weblog: join(state, 'web.log'), stamp }
   }
 
-  test('updates in place with a record and a guard; the board that comes back on the new commit settles it', async () => {
-    const { repo, root, pair, node, env, pending } = await windowsPair('60000')
-    expect(text(root, '.archive-commit')).toBe(`${repo.b}\n`)
+  test('the guard puts the new copy in place; the board that comes back on the new commit settles it', async () => {
+    const { repo, root, pair, node, env, pending, stamp } = await windowsPair('60000')
+    await until(() => stamp() === `${repo.b}\n`, 30_000)
     expect(text(root, 'src', 'b.ts')).toBe('export const B = true\n')
     expect(text(besidePlugin(root).old, '.archive-commit')).toBe(`${repo.a}\n`)
-    expect(existsSync(pending)).toBe(true)
-    // run.ts starts it again from the plugin's folder: here the test does
+    expect(existsSync(besidePlugin(root).fresh)).toBe(false)
+    expect(readPending(pending)?.phase).toBe('applied')
+    // run.ts ends the board on the code change and starts it again from the plugin's folder: here the test does
+    node.proc.kill()
+    await node.proc.exited
     await serveBoard(
       node.box,
       { language: 'en', node: { id: node.id, port: node.doorPort, workRoot: node.box.dir } },
@@ -232,21 +233,21 @@ describe('a node on Windows', () => {
     const back = await pair.waitDevice('server-1', d => d.sameCommit === true && d.update === undefined, 20_000)
     expect(back.status?.commit).toBe(repo.b)
     await until(() => !existsSync(pending), 10_000)
-    expect(text(root, '.archive-commit')).toBe(`${repo.b}\n`)
+    expect(stamp()).toBe(`${repo.b}\n`)
     const asked = node.box.calls().map(c => c.join(' '))
     expect(asked.filter(c => /\b(close|kill|stop|restart|quit|exit)\b/.test(c))).toEqual([])
   }, 120_000)
 
-  test('a board that does not come back on the new commit is put back on the old copy by the guard', async () => {
-    const { repo, root, weblog, pending } = await windowsPair('1500')
-    await until(
-      () => existsSync(join(root, '.archive-commit')) && text(root, '.archive-commit') === `${repo.a}\n`,
-      20_000,
-    )
+  test('a board that does not come back on the new commit: the guard puts the copy before back, its own files too', async () => {
+    const { repo, root, node, weblog, pending, stamp } = await windowsPair('1500')
+    await until(() => stamp() === `${repo.b}\n`, 30_000)
+    await until(() => stamp() === `${repo.a}\n`, 30_000)
     expect(existsSync(join(root, 'src', 'b.ts'))).toBe(false)
-    expect(text(root, 'src', 'adapters', 'paths.ts')).toBe(text(besidePlugin(root).old, 'src', 'adapters', 'paths.ts'))
-    expect(existsSync(pending)).toBe(false)
+    expect(existsSync(join(root, 'src', 'entrypoints', 'node-update-guard.ts'))).toBe(true)
+    await until(() => !existsSync(pending), 10_000)
+    expect(existsSync(`${pending}.alive`)).toBe(false)
     expect(readFileSync(weblog, 'utf8')).toContain('is back in place')
+    node.proc.kill()
   }, 120_000)
 })
 

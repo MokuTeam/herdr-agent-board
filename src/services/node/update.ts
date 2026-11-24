@@ -13,24 +13,30 @@
 // hand) is updated the same way: after it the folder is the archive's content with the stamp, and
 // the checkout, its own commits too, is in `<name>.old` until the next update removes it.
 //
-// On Windows (#699) a folder whose files a running process holds open cannot be renamed, so the
-// last step is another one: a full copy of the plugin goes to `<name>.old`, a pending record is
-// written (`<dir>/pending.json`) and a guard process is started (adapters/plugin-update.ts
-// startGuard), then the new copy is written into the plugin's folder file by file (mirrorTree),
-// and the board restarts. The board that comes back on the new commit removes the record
-// (`started`); when it does not within the guard's wait, the guard puts the copy before back and
-// the board restarts on it. A mirror that fails half way is put back at once from the copy before.
-// A node whose board has no guard to give (an older one) answers `platform`.
+// On Windows (#699) a folder whose files a running process holds open cannot be renamed, and a
+// board that writes its own files can be restarted by run.ts half way (it watches src), so the
+// last step is the guard's. The board makes a full copy of the plugin in `<name>.old`, writes the
+// pending record (`<dir>/pending.json`, phase `ready`), starts the guard (adapters/plugin-update.ts
+// startGuard, services/node/update-guard.ts), waits until the guard says it runs, says `go` and
+// answers; it writes nothing into the plugin's folder. The guard puts the new copy in place file
+// by file with the commit stamp last, touches a code file (run.ts restarts the board on it), and
+// puts the copy before back when the board is not back on the new commit within its wait. The
+// board that is back (`started`, once its start is whole and it stayed up a while) takes the
+// record. A node whose board has no guard to give (an older one) answers `platform`.
 import { join } from 'node:path'
+import { pause } from '../../adapters/pacing.ts'
 import {
+  aliveAt,
   backupPlugin,
   besidePlugin,
+  claimPending,
   installProduction,
   keepStream,
   loadsIn,
-  mirrorTree,
+  markGo,
   readKept,
   readPending,
+  removeAlive,
   removeKept,
   removePending,
   removeTree,
@@ -72,15 +78,19 @@ export interface NodeUpdateDeps {
   unpack?: (dir: string, entries: readonly TarEntry[]) => void
   swap?: (root: string, fresh: string, old: string) => void
   /** Windows: a full copy of the plugin's folder in `old` (adapters/plugin-update.ts backupPlugin). */
-  backup?: (root: string, old: string) => void
-  /** Windows: `to` made to hold `from`'s tree, file by file (adapters/plugin-update.ts mirrorTree). */
-  mirror?: (from: string, to: string) => void
+  backup?: (root: string, old: string) => Promise<void>
   /**
-   * Windows: starts the guard process that puts `old` back when the board does not come back on the
-   * new commit (the pending record in `file` stays). Throws when it cannot start; without it a
-   * Windows node does not update itself.
+   * Windows: starts the guard process that puts the new copy in place on `go`, and `old` back when
+   * the board does not come back on the new commit (the pending record in `file`). Throws when it
+   * cannot start; without it a Windows node does not update itself.
    */
   guard?: (file: string, old: string) => void
+  /** Windows: the board says go (the record's phase): the guard puts the new copy in place. */
+  go?: (file: string) => void
+  /** Windows: when the guard last said it runs (adapters/plugin-update.ts aliveAt). */
+  alive?: (file: string) => number | null
+  /** Windows: how long the guard may take to say it runs (15 s). */
+  ackMs?: number
   log(text: string): void
 }
 
@@ -117,7 +127,9 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
   const unpack = d.unpack ?? writeTree
   const swap = d.swap ?? swapIn
   const backup = d.backup ?? backupPlugin
-  const mirror = d.mirror ?? mirrorTree
+  const go = d.go ?? markGo
+  const alive = d.alive ?? aliveAt
+  const ackMs = d.ackMs ?? 15_000
   const pendingFile = join(d.dir, 'pending.json')
   let busy = false
   /** An archive is coming in: an update, or a second archive, waits for it. */
@@ -130,44 +142,47 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
     return null
   }
 
-  /** Windows: the copy before, the record, the guard, then the new copy in place. A refusal when it did not go in. */
-  function putInPlace(guard: (file: string, old: string) => void, o: PutIn): Answer | null {
+  /** The new copy beside the plugin dropped; a folder that cannot be removed is said, not thrown. */
+  function dropFresh(fresh: string): void {
+    try {
+      removeTree(fresh)
+    } catch (err) {
+      d.log(`node: ${fresh} could not be removed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  /**
+   * Windows: the copy before, the record, and a guard that says it runs. A refusal when that did
+   * not come to be (the plugin's folder is untouched then), else null.
+   */
+  async function handOver(guard: (file: string, old: string) => void, o: PutIn): Promise<Answer | null> {
     const { commit, from, fresh, old } = o
     try {
-      backup(d.root, old)
+      await backup(d.root, old)
     } catch (err) {
-      removeTree(fresh)
+      dropFresh(fresh)
       return refuse(500, 'swap', err instanceof Error ? err.message : String(err))
     }
+    const t0 = Date.now()
+    let why: string
     try {
-      writePending(pendingFile, { commit, from, root: d.root, old, at: Date.now() })
+      removeAlive(pendingFile)
+      writePending(pendingFile, { commit, from, root: d.root, old, fresh, phase: 'ready', at: t0 })
       guard(pendingFile, old)
-    } catch (err) {
-      removePending(pendingFile)
-      removeTree(fresh)
-      const why = err instanceof Error ? err.message : String(err)
-      return refuse(500, 'swap', `the guard that puts the copy before back did not start: ${why}`)
-    }
-    try {
-      mirror(fresh, d.root)
-    } catch (err) {
-      const why = err instanceof Error ? err.message : String(err)
-      try {
-        mirror(old, d.root)
-        removePending(pendingFile)
-      } catch (again) {
-        // the record stays: the guard puts the copy back at its deadline
-        d.log(
-          `node: the update to ${short(commit)} stopped (${why}) and the copy before could not be put back: ${
-            again instanceof Error ? again.message : String(again)
-          }`,
-        )
+      for (;;) {
+        const at = alive(pendingFile)
+        if (at !== null && at >= t0) return null
+        if (Date.now() >= t0 + ackMs) break
+        await pause(250)
       }
-      removeTree(fresh)
-      return refuse(500, 'swap', why)
+      why = `no answer within ${Math.round(ackMs / 1000)} s`
+    } catch (err) {
+      why = err instanceof Error ? err.message : String(err)
     }
-    removeTree(fresh)
-    return null
+    removePending(pendingFile)
+    removeAlive(pendingFile)
+    dropFresh(fresh)
+    return refuse(500, 'swap', `the guard that puts the copy before back did not start: ${why}`)
   }
 
   return {
@@ -175,12 +190,19 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
     async started() {
       // Nothing is read on a platform that has no such record.
       if (platform !== 'win32') return
+      // Only a copy the guard put in place, and only the commit it was given.
       const p = readPending(pendingFile)
-      if (!p) return
+      if (p?.phase !== 'applied') return
       if (p.commit !== (await d.commit())) return
-      removePending(pendingFile)
+      // The guard may roll back at this very moment: the record goes to one of the two.
+      const mine = claimPending(pendingFile)
+      if (!mine) return
+      if (mine.phase !== 'applied' || mine.commit !== p.commit) {
+        writePending(pendingFile, mine)
+        return
+      }
       d.log(
-        `node: back on ${short(p.commit)} after the update; the copy before stays in ${p.old} until the next update`,
+        `node: back on ${short(mine.commit)} after the update; the copy before stays in ${mine.old} until the next update`,
       )
     },
     async blob(body, told) {
@@ -271,15 +293,27 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
           return refuse(500, 'loads', loads.detail)
         }
         if (platform === 'win32' && d.guard) {
-          const no = putInPlace(d.guard, { commit, from, fresh, old })
+          const no = await handOver(d.guard, { commit, from, fresh, old })
           if (no) return no
-        } else {
           try {
-            swap(d.root, fresh, old)
+            go(pendingFile)
           } catch (err) {
-            removeTree(fresh)
+            removePending(pendingFile)
+            removeAlive(pendingFile)
+            dropFresh(fresh)
             return refuse(500, 'swap', err instanceof Error ? err.message : String(err))
           }
+          done = true
+          d.log(
+            `node: the update to ${short(commit)} is handed to the guard, which puts it in place and restarts the board on it; the copy before stays in ${old} until the next update`,
+          )
+          return { status: 200, body: { ok: true, commit, restarting: true } }
+        }
+        try {
+          swap(d.root, fresh, old)
+        } catch (err) {
+          removeTree(fresh)
+          return refuse(500, 'swap', err instanceof Error ? err.message : String(err))
         }
         done = true
         d.log(
