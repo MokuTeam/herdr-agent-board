@@ -21,6 +21,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, write
 import { join } from 'node:path'
 import {
   cleanName,
+  cleanTelegramItems,
   cleanText,
   MAX_PER_SESSION,
   MAX_REPORT,
@@ -28,6 +29,7 @@ import {
   type ScheduleEntry,
   type SessionRef,
 } from '../core/schedule-rules.ts'
+import type { RouteItem } from '../core/wake/route.ts'
 import { isWatch, WATCH_FROM, type WatchEntry } from '../core/watches.ts'
 import { type ReceiptState, settleReport } from './call-receipts.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
@@ -118,7 +120,10 @@ export function addEntry(fields: NewEntry, { overCap = false }: { overCap?: bool
   }
   const clean = {
     ...fields,
-    text: cleanText(fields.text, fields.kind === 'call' ? MAX_REPORT : MAX_TEXT),
+    text: cleanText(fields.text, fields.kind === 'call' || fields.kind === 'telegram' ? MAX_REPORT : MAX_TEXT),
+    ...(Array.isArray(fields.telegramItems)
+      ? { telegramItems: cleanTelegramItems(fields.telegramItems as RouteItem[]) }
+      : {}),
     name: cleanName(fields.name),
     ...(fields.from ? { from: { key: String(fields.from.key), name: cleanName(fields.from.name) } } : {}),
   }

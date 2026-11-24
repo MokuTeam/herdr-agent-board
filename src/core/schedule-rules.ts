@@ -6,6 +6,7 @@ import { parseNodeKey } from './node-key.ts'
 import { CALL_NOTE } from './notices.ts'
 import { TURN_RESUME_KIND } from './turn-resume.ts'
 import type { Item } from './types.ts'
+import { formatPrompt, type RouteItem } from './wake/route.ts'
 import { countRuns } from './when.ts'
 import { longWhen, span } from './when-format.ts'
 
@@ -91,6 +92,8 @@ export type ScheduleEntry = {
    * scheduler records a private system notice on each named thread so it never passes silently.
    */
   ownerPosts?: { thread: string; key: string; target: SessionRef; seq?: number }[]
+  /** Telegram messages held for an offline node (#701), formatted with queued_at on delivery. */
+  telegramItems?: RouteItem[]
   [extra: string]: unknown
 }
 
@@ -109,12 +112,42 @@ export const cleanName = (s: unknown): string =>
     .trim()
     .slice(0, 60)
 
+/** Strips terminal control characters and bounds total size of held Telegram items (#701). */
+export function cleanTelegramItems(items: readonly RouteItem[], maxTotal = 48_000): RouteItem[] {
+  let remaining = maxTotal
+  const out: RouteItem[] = []
+  for (const it of items) {
+    if (remaining <= 0) break
+    const text = cleanText(it.text, remaining)
+    remaining -= text.length
+    const cleanMeta: Record<string, string | undefined> | undefined = it.meta
+      ? Object.fromEntries(
+          Object.entries(it.meta).map(([k, v]) => [k, v === undefined ? undefined : cleanText(v, 512)]),
+        )
+      : undefined
+    out.push({
+      ...it,
+      key: cleanText(it.key, 512),
+      text,
+      ...(it.topic !== undefined && { topic: cleanText(it.topic, 512) }),
+      ...(it.pane !== undefined && { pane: cleanText(it.pane, 256) }),
+      ...(it.queued_at !== undefined && { queued_at: cleanText(it.queued_at, 64) }),
+      ...(cleanMeta !== undefined && { meta: cleanMeta }),
+    })
+  }
+  return out
+}
+
 /**
  * What the session gets: "[board reminder] text", with a note when it is late or stands for
  * several runs. A MokuPilot call's results (kind 'call') come as "[mokupilot call report]", the
  * report on lines of its own, and a closing note that they are for its information.
  */
 export function promptOf(entry: ScheduleEntry, now: number): string {
+  if (entry.kind === 'telegram') {
+    if (Array.isArray(entry.telegramItems) && entry.telegramItems.length) return formatPrompt(entry.telegramItems, now)
+    return entry.text
+  }
   if (entry.kind === 'restart') return restartPrompt(entry)
   const notes: string[] = []
   if (entry.cron) {

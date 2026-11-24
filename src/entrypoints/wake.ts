@@ -39,7 +39,9 @@ import { oldRouterAt, wakeAnswers } from '../adapters/wake-api.ts'
 import { readWakeStatus, wakeLog, wakeSessionsFile, writeWakeStatus } from '../adapters/wake-files.ts'
 import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
 import { scheduledJobs } from '../adapters/wake-transcripts.ts'
+import { nodeConfig, nodesConfig } from '../core/nodes.ts'
 import { type TelegramTarget, telegramTarget, type WakeConfig, wakeConfig, wakeSwitch } from '../core/wake/config.ts'
+import { isNodeOnly, isRouteResult, parseRouteItemsBody } from '../core/wake/node-route.ts'
 import type { RouteItem } from '../core/wake/route.ts'
 import type { TelegramStatus } from '../core/wake/status.ts'
 import { defaultDeps } from '../services/deps.ts'
@@ -96,7 +98,7 @@ function roundMs(): number | null {
 const claudeJson = followedJson(join(homedir(), '.claude.json'))
 
 const telegramSaid = (s: WakeConfig): string =>
-  (s.telegram === 'auto' && telegramTarget(s, claudeJson())?.host) || 'Telegram off'
+  (!isNodeOnly(cfg) && s.telegram === 'auto' && telegramTarget(s, claudeJson())?.host) || 'Telegram off'
 const reaperSaid = (s: WakeConfig): string =>
   s.reaper.enabled ? `reaper on (${s.reaper.idleMinutes} min)` : 'reaper off'
 
@@ -168,8 +170,14 @@ const reaperLoop = (): Loop => every(roundMs() ?? REAP_EVERY_MS, 'reaper', () =>
 
 /** tg-mcp's url and token while Telegram is Auto (~/.claude.json read only then) and wake not on its way out. */
 function telegramNow(): TelegramTarget | null {
+  if (isNodeOnly(cfg)) return null
   const s = settings()
   return !leaving && s.telegram === 'auto' ? telegramTarget(s, claudeJson()) : null
+}
+
+const boardPort = (): number => {
+  const p = Number(cfg.port)
+  return Number.isInteger(p) && p > 0 && p < 65536 ? p : 12422
 }
 
 /** The Telegram router over the engine: `target` gives tg-mcp's url and token, `onState` hears its state. */
@@ -181,6 +189,21 @@ const telegramRouter = (target: () => TelegramTarget | null, onState?: (s: Teleg
     machine: MACHINE,
     pollTimeoutSec: () => settings().pollTimeoutSec,
     log,
+    hasRemote: () => nodesConfig(cfg.nodes) !== null,
+    async remote(items, opts) {
+      if (!nodesConfig(cfg.nodes)) return null
+      const res = await fetch(`http://127.0.0.1:${boardPort()}/api/nodes/telegram`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-board': '1' },
+        body: JSON.stringify({ items, ...(opts?.liveOnly && { liveOnly: true }) }),
+        signal: AbortSignal.timeout((settings().wakeTimeoutSec + 60) * 1000),
+      })
+      if (res.status === 404 || res.status === 405) return null
+      if (!res.ok) throw new Error(`master board HTTP ${res.status}`)
+      const data: unknown = await res.json().catch(() => null)
+      if (isRecord(data) && data.matched === true && isRouteResult(data.result)) return data.result
+      return null
+    },
     ...(onState && { onState }),
   })
 
@@ -290,6 +313,13 @@ async function api(req: Request, url: URL): Promise<unknown> {
     const body = await bodyOf(req)
     return engine.moveProfile(body.session, body.dir)
   }
+  // Master-to-node Telegram delivery (#701): local match only, never on a standalone board.
+  if (req.method === 'POST' && path === '/route' && nodeConfig(cfg.node) !== null) {
+    const parsed = parseRouteItemsBody(await bodyOf(req))
+    if (!parsed) return { ok: false, error: 'body' }
+    if (!telegram) return { matched: false }
+    return telegram.routeLocal(parsed.items, { liveOnly: parsed.liveOnly })
+  }
   return null
 }
 
@@ -318,7 +348,8 @@ async function answer(req: Request, port: number): Promise<Response> {
     const path = url.pathname
     if (req.method === 'GET' && path === '/alive')
       return new Response(JSON.stringify({ pid: process.pid }, null, 1), { headers: JSON_HEADERS })
-    if (leaving && req.method === 'POST' && (path === '/wake' || path === '/sleep')) return failed(503, leaving.why)
+    if (leaving && req.method === 'POST' && (path === '/wake' || path === '/sleep' || path === '/route'))
+      return failed(503, leaving.why)
     const out = await api(req, url)
     if (out === null) return new Response(null, { status: 404 })
     return new Response(JSON.stringify(out, null, 1), { headers: JSON_HEADERS })

@@ -119,6 +119,7 @@ import { createNodePilotCall, type NodePilotCall } from '../services/node/pilot-
 import { createRelayDial, type RelayDial } from '../services/node/relay-dial.ts'
 import { createNodeSecrets } from '../services/node/secrets.ts'
 import { createNodeStatus } from '../services/node/status.ts'
+import { createNodeTelegram } from '../services/node/telegram.ts'
 import { createNodeUpdate, type NodeUpdate } from '../services/node/update.ts'
 import { createNodeUplink, type NodeUplink } from '../services/node/uplink.ts'
 import { createNodeAggregate, type NodeAggregate } from '../services/nodes/aggregate.ts'
@@ -139,6 +140,7 @@ import { relayEnrolFor } from '../services/nodes/relay.ts'
 import { createRelaySetup, type RelaySetup } from '../services/nodes/relay-setup.ts'
 import { createRevoker, type Revoker } from '../services/nodes/revoke.ts'
 import { createNodeSetup, type NodeSetup } from '../services/nodes/setup.ts'
+import { createNodesTelegram } from '../services/nodes/telegram.ts'
 import { createNodeUpdater, type NodeUpdater } from '../services/nodes/update.ts'
 import { createUplinkRunner, type UplinkRunner } from '../services/nodes/uplink.ts'
 import { tellOwnerWatchers } from '../services/owner-watch.ts'
@@ -1246,13 +1248,15 @@ export async function startServer({
               ? localCallRoutes
               : path.startsWith('/api/mokupilot/node-call/') && localPilotCallRoutes
                 ? localPilotCallRoutes
-                : path === '/api/nodes/setup'
-                  ? localSetupRoutes
-                  : path === '/api/nodes/relay/setup'
-                    ? localRelaySetupRoutes
-                    : path === '/api/nodes/computer/setup'
-                      ? localComputerSetupRoutes
-                      : routes
+                : path === '/api/nodes/telegram' && localTelegramRoutes
+                  ? localTelegramRoutes
+                  : path === '/api/nodes/setup'
+                    ? localSetupRoutes
+                    : path === '/api/nodes/relay/setup'
+                      ? localRelaySetupRoutes
+                      : path === '/api/nodes/computer/setup'
+                        ? localComputerSetupRoutes
+                        : routes
       return await dispatch(selected, req, url, path, guards, () => peerOf(srv, req))
     } catch (err) {
       // The path only: a query can carry the page's token.
@@ -1402,6 +1406,7 @@ export async function startServer({
       refresh,
       log,
     })
+    const nodeTelegram = createNodeTelegram({ cfg, profiles: () => deps.profiles(), log, refresh })
     process.on('exit', nodePilotCall.closeAll)
     const nodeLaunch = createNodeLaunch({
       node: () => nodeConfig(cfg.node),
@@ -1469,6 +1474,7 @@ export async function startServer({
         update,
         move: movers(),
         pilotCall: nodePilotCall,
+        telegram: nodeTelegram,
         relayKey: async publicKey => {
           const r = activateNodeRelayKey(publicKey, nodeDir())
           if (!r.ok) return { status: r.status, body: { ok: false, error: r.error } }
@@ -1489,6 +1495,7 @@ export async function startServer({
   let nodeLinks: NodeLinks | null = null
   let localNodeRoutes: Route[] | null = null
   let localPilotCallRoutes: Route[] | null = null
+  let localTelegramRoutes: Route[] | null = null
   let nodePilotCalls: NodePilotCalls | null = null
   let nodeProxy: NodeProxy | null = null
   let bundleSync: BundleSync | null = null
@@ -1703,6 +1710,36 @@ export async function startServer({
       },
     })
     routes.unshift(nodeProxy.route)
+    const nodesTelegram = createNodesTelegram({
+      cfg,
+      links: nodeLinks,
+      aggregate: nodeAggregate,
+      deviceState: id => nodeProxy?.deviceState?.(id) ?? 'offline',
+      onHeld: () => {
+        board.publish()
+        scheduler?.wakeDevices()
+      },
+      log,
+    })
+    localTelegramRoutes = [
+      {
+        method: 'POST',
+        path: '/api/nodes/telegram',
+        guard: ['board-header', 'origin'],
+        async handle(req) {
+          const raw = await req.text().catch(() => '')
+          if (raw.length > 512 * 1024) return json(413, { ok: false, error: 'too-big' })
+          let body: unknown = null
+          try {
+            body = JSON.parse(raw || '{}')
+          } catch {
+            return json(400, { ok: false, error: 'body' })
+          }
+          const r = await nodesTelegram.route(body)
+          return json(r.status, r.body)
+        },
+      },
+    ]
     // Calls from the nodes' sessions (#508, #698): forwarded commands run here as that session.
     uplinkRunner = createUplinkRunner({
       links: nodeLinks,

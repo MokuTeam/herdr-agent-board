@@ -23,6 +23,8 @@ export interface NodePart {
   items: Item[]
   launches: LaunchView[]
   schedules: ScheduleEntry[]
+  /** The node's machine name (COMPUTERNAME / hostname) for matching Telegram pane hints (#701). */
+  machine?: string
 }
 
 /** The longest strings kept, as long as the board's own items carry. */
@@ -402,6 +404,7 @@ const ITEM: Record<string, Check> = {
     },
     ['kind', 'resetsAt', 'at'],
   ),
+  tgKey: nonEmpty(LEN.path),
 }
 
 /** One item of a node, or null when it has no usable key or name, or is not the node's own. */
@@ -551,5 +554,6 @@ export function nodePart(raw: unknown, device: string | null): NodePart | null {
     // as a plain reminder due at its next check.
     if (e && (e as ScheduleEntry).kind !== 'watch') schedules.push(tag(e as ScheduleEntry))
   }
-  return { items, launches, schedules }
+  const machine = nonEmpty(LEN.id)(raw.machine, k) as string | undefined
+  return { items, launches, schedules, ...(machine && { machine }) }
 }

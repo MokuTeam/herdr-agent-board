@@ -450,5 +450,7 @@ export interface Item {
   movedTo?: string
   /** When that move mark was written (`card.moved.at`); absent when unmarked or unrecorded. */
   movedAt?: number
+  /** The Telegram routing key (`topic:...` or cwd) for this session, populated on nodes (#701). */
+  tgKey?: string
   [extra: string]: unknown
 }

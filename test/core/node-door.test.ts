@@ -108,6 +108,7 @@ describe('the door takes what 6.2 lists', () => {
       ['POST', '/api/node/pilot-call/files'],
       ['POST', '/api/node/pilot-call/report'],
       ['POST', '/api/node/relay-key'],
+      ['POST', '/api/node/telegram'],
     ])
     // A move to or from another device (#616): a session id, a file's number, a hash; nothing else.
     const sid = '0f8fad5b-d9cb-469f-a165-70867728950e'

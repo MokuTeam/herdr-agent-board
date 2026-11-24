@@ -535,7 +535,7 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
         at.device,
         link,
         nodePath({ area: 'session', key: at.key, rest: '/message' }),
-        jsonInit({ text, session: item.session ?? null, requestId: o.requestId }),
+        jsonInit({ text, session: item.session ?? null, requestId: o.requestId, ...(o.draft && { draft: true }) }),
       )
       const answer = await answerOf(res)
       if (res.ok && isRecord(answer) && answer.ok === true) return { ok: true }

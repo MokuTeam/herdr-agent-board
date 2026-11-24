@@ -205,6 +205,11 @@ export interface BoardPayload {
    * own, each with its `device`.
    */
   devices?: BoardDevice[]
+  /**
+   * This computer's name (`COMPUTERNAME || hostname()`), populated on nodes so the master can
+   * match Telegram `X-Herdr-Pane` hints against this device (#701).
+   */
+  machine?: string
 }
 
 /**

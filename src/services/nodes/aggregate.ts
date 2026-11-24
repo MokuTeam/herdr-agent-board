@@ -44,6 +44,8 @@ export interface RemotePart extends NodePart {
 export interface NodeAggregate {
   /** The devices' part of the payload; null while `nodes` is off. */
   part(): RemotePart | null
+  /** A single device's checked part (from its live payload or offline copy); null when unknown or `nodes` is off. */
+  devicePart(id: string): NodePart | null
   /** A remote item by its prefixed key (core/nodes.ts nodeKey), from the last payload or the offline copy. */
   find(key: string): Item | undefined
   /** The offline copies still due are written, and nothing more is. Synchronous, so an exit handler may call it. */
@@ -233,6 +235,10 @@ export function createNodeAggregate(o: NodeAggregateOptions): NodeAggregate {
         out.schedules.push(...got.part.schedules)
       }
       return out
+    },
+    devicePart(id) {
+      if (closed || !o.links.on() || !remoteOf(id)) return null
+      return current(id)?.part ?? null
     },
     find(key) {
       const at = parseNodeKey(key)

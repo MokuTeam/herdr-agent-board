@@ -14,6 +14,7 @@ import { callAgentsGate, taskBoard } from '../adapters/mokupilot-call.ts'
 import { dayGate } from '../adapters/mokupilot-day.ts'
 import { contextDir } from '../adapters/paths.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
+import { peekWakeSessions } from '../adapters/wake-files.ts'
 import { AGY_AGENT, isAgyItem, isAgySession } from '../core/agy.ts'
 import { bgTaskFromFooter, bgTaskStuckMin, summarizeBgTasks } from '../core/bg-task.ts'
 import { attentionOf, busy, columnOf, isAgentStatus, PINS } from '../core/board.ts'
@@ -29,6 +30,7 @@ import { slugName } from '../core/launch/names.ts'
 import { relate } from '../core/links.ts'
 import { lostAccessLine } from '../core/lost-access.ts'
 import { modelCheck, modelsConfig } from '../core/model-check.ts'
+import { nodeConfig } from '../core/nodes.ts'
 import { isPiItem, isPiSessionFile, PI_AGENT, piSessionId } from '../core/pi.ts'
 import { DEFAULT_PROFILE, sessionProfile } from '../core/profiles.ts'
 import { pendingOf, requestsOf, type SecretView, secretViews } from '../core/secrets.ts'
@@ -36,6 +38,7 @@ import { numberTodos, type Todo, todosOf } from '../core/todos.ts'
 import type { AgentStatus, Attention, Card, Config, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
 import { agySleeperPane } from '../core/wake/agy.ts'
 import { piSleeperPane } from '../core/wake/pi.ts'
+import { asciiKey, keyFor } from '../core/wake/topics.ts'
 import { archivedFiles, getArchived, hides, isArchived, settleReturned } from './archive.ts'
 import type { Deps } from './deps.ts'
 import { secretsOf } from './secrets.ts'
@@ -334,6 +337,7 @@ type Base = Pick<
   | 'fromFile'
   | 'day'
   | 'bgTasks'
+  | 'tgKey'
 >
 
 export interface CollectOptions {
@@ -358,6 +362,7 @@ export async function collect(
   { helpers = false, links = null, seen: panesSeen = () => {}, onBgChange, observed }: CollectOptions = {},
 ): Promise<Item[]> {
   const { cfg } = deps
+  const isNode = nodeConfig(cfg.node) !== null
   // The model rule (#429): null while config.json has none, and then nothing below reads it.
   const models = modelsConfig(cfg.models)
   const [snap, asleep] = await Promise.all([snapshot(), deps.wake.sleepers()])
@@ -611,6 +616,7 @@ export async function collect(
           paneId: p.pane_id,
         })
       : reg?.name || p.terminal_title_stripped || p.label || p.pane_id
+    const tgKey = isNode && p.agent === 'claude' ? keyFor(snap, p.pane_id, p.cwd ?? reg?.cwd ?? '') : ''
     add(
       {
         key,
@@ -629,6 +635,7 @@ export async function collect(
         since: numberOf(reg?.startedAt) ?? null,
         pipe: typeof reg?.messagingSocketPath === 'string' ? reg.messagingSocketPath : '',
         ...(bgTasks && { bgTasks }),
+        ...(tgKey && { tgKey }),
       },
       undefined,
       undefined,
@@ -669,6 +676,7 @@ export async function collect(
   }
 
   const panes = new Map(snap.panes.map(p => [p.pane_id, p]))
+  let wakeEntries: ReturnType<typeof peekWakeSessions> | null = null
   for (const s of asleep) {
     if (!s.session || seen.has(s.session)) continue
     if (s.agent === PI_AGENT) {
@@ -727,6 +735,15 @@ export async function collect(
     // One whose pane wake closed (#204) has none: it wakes in a new tab, its workspace the file's.
     if (s.fromFile && s.pane && (!pane || pane.agent)) continue
     seen.add(s.session)
+    let tgKey = ''
+    if (isNode) {
+      if (s.pane && pane) tgKey = keyFor(snap, s.pane, pane.cwd ?? s.cwd ?? '')
+      else {
+        wakeEntries ??= peekWakeSessions()
+        const freedTopic = wakeEntries[s.session]?.freed?.topic
+        tgKey = freedTopic || asciiKey(s.cwd ?? '')
+      }
+    }
     add({
       key: s.session,
       session: s.session,
@@ -740,6 +757,7 @@ export async function collect(
       focused: false,
       activity: Date.parse(s.slept_at ?? '') || 0,
       ...(s.fromFile && { fromFile: true }),
+      ...(tgKey && { tgKey }),
     })
   }
 

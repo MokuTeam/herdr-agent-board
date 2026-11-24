@@ -138,7 +138,11 @@ export type RemoteSent =
  */
 export interface RemoteDelivery {
   deviceState?(device: string): RemoteDeviceState
-  send(key: string, text: string, o: { requestId: string; idle: boolean; noWake: boolean }): Promise<RemoteSent>
+  send(
+    key: string,
+    text: string,
+    o: { requestId: string; idle: boolean; noWake: boolean; draft?: boolean },
+  ): Promise<RemoteSent>
 }
 
 /**
@@ -287,7 +291,7 @@ export function startScheduler({
         const via = at ? (remote?.() ?? null) : null
         if (via && at) {
           if (flying.has(entry.key)) continue
-          if (!entry.kind && !entry.receipt) {
+          if ((!entry.kind || entry.kind === 'telegram') && !entry.receipt) {
             const devState = via.deviceState?.(at.device)
             if (devState === 'revoked' || devState === 'forgotten') {
               if (claim(entry.id, now)) {
@@ -536,7 +540,7 @@ export function startScheduler({
    */
   async function viaNode(entry: ScheduleEntry, via: RemoteDelivery, device: string): Promise<boolean> {
     const now = Date.now()
-    if (entry.kind || entry.receipt) {
+    if ((entry.kind && entry.kind !== 'telegram') || entry.receipt) {
       wait(entry, now, 'gone', true)
       return false
     }
@@ -545,6 +549,7 @@ export function startScheduler({
       requestId: `${entry.id}-${entry.next}`,
       idle: !!entry.idle,
       noWake: entry.noWake === true,
+      ...(entry.kind === 'telegram' && { draft: true }),
     })
     if (r.ok) {
       sent(entry)

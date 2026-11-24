@@ -104,6 +104,8 @@ export const DOOR_ROUTES: readonly DoorRoute[] = [
   { method: 'POST', path: '/api/node/pilot-call/report', door: true },
   // Activate a newly staged relay dial key after claim rotation (#513).
   { method: 'POST', path: '/api/node/relay-key', door: true },
+  // Telegram message routing from the master (#701).
+  { method: 'POST', path: '/api/node/telegram', door: true },
 ]
 
 const allows = (r: DoorRoute, method: string, rawPath: string, path: string): boolean =>

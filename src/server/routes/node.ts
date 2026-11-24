@@ -18,6 +18,7 @@ import type { Answer, NodeBundle } from '../../services/node/bundle.ts'
 import type { NodeLaunchAnswer } from '../../services/node/launch.ts'
 import type { NodePilotCall } from '../../services/node/pilot-call.ts'
 import type { NodeSecrets } from '../../services/node/secrets.ts'
+import type { NodeTelegram } from '../../services/node/telegram.ts'
 import type { NodeUpdate } from '../../services/node/update.ts'
 import type { NodeUplink } from '../../services/node/uplink.ts'
 import { json, type Route } from '../http.ts'
@@ -56,6 +57,8 @@ export interface NodeDoorSources {
   pilotCall?: NodePilotCall
   /** `POST /api/node/relay-key` (#513): activates a staged fresh relay dial key after claim. */
   relayKey?(publicKey: string): Promise<Answer>
+  /** `POST /api/node/telegram` (#701): routes a Telegram topic batch on this node. */
+  telegram?: Pick<NodeTelegram, 'route'>
 }
 
 /** The secrets of one profile's bundle, at most this many bytes of JSON. */
@@ -95,6 +98,7 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
   const secrets = o.secrets
   const leave = o.leave
   const update = o.update
+  const telegram = o.telegram
   const relayKey = o.relayKey
   return [
     ...(o.move ? moveRoutes(o.move) : []),
@@ -201,6 +205,19 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
               const body = await jsonUpTo(req, 4096)
               if (!isRecord(body) || typeof body.publicKey !== 'string') return json(400, { ok: false, error: 'body' })
               return answer(await relayKey(body.publicKey))
+            },
+          },
+        ]
+      : []),
+    ...(telegram
+      ? [
+          {
+            method: 'POST' as const,
+            path: '/api/node/telegram',
+            async handle(req: Request) {
+              const body = await jsonUpTo(req, 512 * 1024)
+              if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+              return answer(await telegram.route(body))
             },
           },
         ]

@@ -28,7 +28,7 @@ import type { Limits } from '../core/limits.ts'
 import type { AdminEdge } from '../core/links.ts'
 import { familyTitle } from '../core/model-check.ts'
 import { dropMovedCards } from '../core/node-items.ts'
-import { LOCAL, nodesConfig, parseNodeKey } from '../core/nodes.ts'
+import { LOCAL, nodeConfig, nodesConfig, parseNodeKey } from '../core/nodes.ts'
 import type {
   BackupPayload,
   BoardLimits,
@@ -471,6 +471,8 @@ export function createBoardState({
       ...omarchyOf(omarchy),
       // devices: only while config.json makes this board a master (#500).
       ...(devices && { devices }),
+      // machine: only on a node board, so the master can match Telegram X-Herdr-Pane hints (#701).
+      ...(nodeConfig(cfg.node) !== null && { machine: process.env.COMPUTERNAME || hostname() }),
     }
   }
 
