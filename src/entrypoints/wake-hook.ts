@@ -500,9 +500,9 @@ async function boardPayload(raw: Record<string, unknown> | null): Promise<Record
 /** ListAgents (#628): non-Claude sessions on this computer (`agy`, `pi`, `codex`, ...); null for none. */
 async function localOtherAgentsContext(payload: Record<string, unknown> | null): Promise<string | null> {
   if (!payload) return null
-  const { isOtherAgent, labelOf, targetsOf } = await import('../core/agent-send.ts')
+  const { isOtherAgent, labelOf, ownDeviceOf, targetsOf } = await import('../core/agent-send.ts')
   type Target = import('../core/agent-send.ts').Target
-  const others = targetsOf(payload.items).filter(isOtherAgent)
+  const others = targetsOf(payload.items, ownDeviceOf(payload)).filter(isOtherAgent)
   if (!others.length) return null
   const row = (t: Target): string => `  ${labelOf(t)}  ·  ${t.agent}  ·  ${t.sleeping ? 'asleep' : t.status || 'live'}`
   const asleep = others.filter(t => t.sleeping).sort((a, b) => b.activity - a.activity)
@@ -525,13 +525,13 @@ async function nodesContext(
   raw: Record<string, unknown> | null,
 ): Promise<string | null> {
   if (!isRecord(raw?.nodes) || !payload) return null
-  const { offlineDevices, labelOf, targetsOf } = await import('../core/agent-send.ts')
+  const { offlineDevices, ownDeviceOf, labelOf, targetsOf } = await import('../core/agent-send.ts')
   type Target = import('../core/agent-send.ts').Target
   const offline = offlineDevices(payload)
   const row = (t: Target): string =>
     `  ${labelOf(t)}${t.agent && t.agent !== 'claude' ? `  ·  ${t.agent}` : ''}  ·  node ${t.device}  ·  ${t.sleeping ? 'asleep' : t.status || 'live'}` +
     (offline.has(t.device ?? '') ? '  ·  node offline now: goes out once it is back' : '')
-  const onNodes = targetsOf(payload.items).filter(t => t.device)
+  const onNodes = targetsOf(payload.items, ownDeviceOf(payload)).filter(t => t.device)
   // Every live one, and the sleepers as this computer's are shown: at most LIST_MAX, the rest counted.
   const asleep = onNodes.filter(t => t.sleeping).sort((a, b) => b.activity - a.activity)
   const rows = [...onNodes.filter(t => !t.sleeping), ...asleep.slice(0, LIST_MAX)].map(row)
@@ -574,7 +574,7 @@ async function sendToBoardTarget(named: string, input: Record<string, unknown>, 
     return
   const payload = await boardPayload(raw)
   if (!payload && !onNode) return
-  const all = A.targetsOf(payload?.items)
+  const all = A.targetsOf(payload?.items, A.ownDeviceOf(payload))
   const mine = all.find(t => t.key === sid)
   const name = mine?.name ?? live.find(s => s.sessionId === sid)?.name?.trim() ?? ''
 

@@ -494,13 +494,14 @@ async function runSend(
   const body = await board()
   if (!body) return { code: 1, out: [], err: ['the board does not run: nothing was sent (open it first)'] }
   const A = await import('../core/agent-send.ts')
-  const targets = A.targetsOf(body.items)
+  const own = A.ownDeviceOf(body)
+  const targets = A.targetsOf(body.items, own)
   const plan = A.planSend({
     targets,
     to,
     message,
     from: { key: s.key, name: targets.find(t => t.key === s.key)?.name ?? s.name ?? '', device: null },
-    own: A.ownDeviceOf(body),
+    own,
     now: Date.now(),
   })
   if ('error' in plan) return { code: 1, out: [], err: [plan.error] }
@@ -568,9 +569,9 @@ async function runAgents({
   const body = config.web === false ? null : fresh ? await fetchBoard(config.port) : await boardAnswer()
   const items = body ? body.items : await collect(fresh ? defaultDeps(config) : deps)
   const A = await import('../core/agent-send.ts')
-  const targets = A.targetsOf(items)
-  const offline = body ? A.offlineDevices(body) : new Set<string>()
   const own = body ? A.ownDeviceOf(body) : ''
+  const targets = A.targetsOf(items, own)
+  const offline = body ? A.offlineDevices(body) : new Set<string>()
   if (json) return { code: 0, out: [JSON.stringify(A.agentViewsOf(targets, { selfKey, offline }))], err: [] }
   const lines = A.formatAgentLines(targets, { selfKey, offline, own })
   return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: [] }

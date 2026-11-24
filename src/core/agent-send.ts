@@ -34,6 +34,8 @@ export interface Target {
   status: string
   day: boolean
   activity: number
+  /** The device its own board marked it moved to (#642, card `moved.to`); null when no mark. */
+  movedTo: string | null
 }
 
 /** Who sends: the session's key (a node's session's carries the device's prefix) and its name on the board. */
@@ -85,16 +87,34 @@ function replaced(t: Target, by: Target): boolean {
 /**
  * One whose session runs on another device now (#639): a move (`board move --device`, #616) can leave
  * the card it had where it was, under the session's id, beside the new one under the other device's.
- * The more recent activity is where it runs; an awake card beats a sleeping one of the same moment.
+ * A one-sided move mark (`movedTo`) decides the pair deterministically regardless of clock skew (#642).
+ * Without a deciding mark (older boards without `movedTo`, or stale mutual marks), fall back to
+ * weighing activity (#641); an awake card beats a sleeping one of the same moment.
  */
-function movedAway(t: Target, by: Target): boolean {
+function movedByMark(t: Target, by: Target, own: string): boolean {
   if (by === t || by.device === t.device || !t.session || by.session !== t.session) return false
+  const tHere = t.device ?? own
+  const byHere = by.device ?? own
+  const tMovedToBy = !!t.movedTo && !!byHere && t.movedTo === byHere
+  const byMovedToT = !!by.movedTo && !!tHere && by.movedTo === tHere
+  return tMovedToBy && !byMovedToT
+}
+
+function movedAway(t: Target, by: Target, own: string): boolean {
+  if (by === t || by.device === t.device || !t.session || by.session !== t.session) return false
+  const tHere = t.device ?? own
+  const byHere = by.device ?? own
+  const tMovedToBy = !!t.movedTo && !!byHere && t.movedTo === byHere
+  const byMovedToT = !!by.movedTo && !!tHere && by.movedTo === tHere
+  // If either side has a one-sided mark, movedByMark already decided it; only pairs with no
+  // deciding mark (unmarked older boards, or stale mutual marks) fall back to #641 clocks.
+  if (tMovedToBy !== byMovedToT) return tMovedToBy
   if (by.activity !== t.activity) return by.activity > t.activity
   return t.sleeping && !by.sleeping
 }
 
 /** The cards of a payload's `items` a message can go to; anything else in the list is left out. */
-export function targetsOf(items: unknown): Target[] {
+export function targetsOf(items: unknown, own = ''): Target[] {
   if (!Array.isArray(items)) return []
   const all: Target[] = []
   for (const i of items) {
@@ -116,11 +136,14 @@ export function targetsOf(items: unknown): Target[] {
       status: str(i.status),
       day: i.day === true,
       activity: Math.max(num(i.activity), num(i.lastAt)),
+      movedTo: str(i.movedTo) || null,
     })
   }
   const kept = all.filter(t => t.sleeping || ((t.pane || t.day) && !all.some(o => replaced(t, o))))
-  // Against the cards kept only: one that is no target itself does not push out the one that is.
-  return kept.filter(t => !kept.some(o => movedAway(t, o)))
+  // Drop cards superseded by an explicit move mark first so a chain move (A -> B -> C) never lets
+  // stale card A beat final card C by clock (#642), then apply #641 clock fallback on the rest.
+  const unmoved = kept.filter(t => !kept.some(o => movedByMark(t, o, own)))
+  return unmoved.filter(t => !unmoved.some(o => movedAway(t, o, own)))
 }
 
 /** A local session on this computer running an agent other than Claude Code (`agy`, `pi`, `codex`, ...). */

@@ -9,7 +9,7 @@
 // - The away journal (#489) beside them is fed this computer's sessions only: no other device's
 //   card enters journal.db, and the payload carries both its part and the devices' cards.
 import { expect, test } from 'bun:test'
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { root, sandbox } from '../support/sandbox.ts'
 
@@ -168,4 +168,112 @@ test('without nodes the payload is main’s; with devices the payload has their 
   expect(got.journaled.recorded.sort()).toEqual([...got.items].sort())
   expect(got.journaled.payload.journal).toEqual({ strip: null, last: null })
   expect(got.journaled.payload.items.map((i: { key: string }) => i.key)).toEqual(keys)
+}, 30_000)
+
+test('#642 awake source card marked moved is dropped from master payload when moved card is present, kept when absent', async () => {
+  const box = await sandbox()
+  const repo = join(box.dir, 'atlas')
+  mkdirSync(repo, { recursive: true })
+  box.state({
+    'api snapshot': {
+      result: {
+        snapshot: {
+          panes: [
+            {
+              pane_id: 'w1:p1',
+              agent: 'claude',
+              agent_session: { value: SID },
+              agent_status: 'done',
+              cwd: repo,
+              terminal_title_stripped: 'Legacy-master',
+            },
+          ],
+          tabs: [],
+          workspaces: [],
+        },
+      },
+    },
+  })
+  mkdirSync(box.cards, { recursive: true })
+  writeFileSync(
+    join(box.cards, `${SID}.json`),
+    JSON.stringify({ key: SID, name: 'Legacy-master', moved: { to: 'server-1', cwd: repo, at: 1000 } }),
+  )
+  const script = join(box.dir, 'moved-source.ts')
+  writeFileSync(
+    script,
+    `
+import { normalizeConfig } from '${src}/core/categories.ts'
+import { defaultDeps } from '${src}/services/deps.ts'
+import { createBoardState } from '${src}/server/board-state.ts'
+
+const cfg = normalizeConfig({
+  language: 'en',
+  wakeUrl: null,
+  categories: [{ id: 'other', title: 'Other', color: 'gray' }],
+  nodes: { id: 'laptop', devices: {} },
+})
+const launches = { decorate: i => i, list: () => [], observe: () => {} }
+const remote = {
+  key: '@server-1:${SID}',
+  session: '${SID}',
+  pane: 'n1:p1',
+  workspace: null,
+  cwd: '/srv/atlas',
+  status: 'idle',
+  name: 'Legacy-master',
+  autoName: '',
+  category: 'other',
+  categorySet: false,
+  column: 'idle',
+  attention: '',
+  activity: 1,
+  device: 'server-1',
+}
+let withRemote = true
+const aggregate = {
+  part: () => ({
+    items: withRemote ? [remote] : [],
+    launches: [],
+    schedules: [],
+    devices: [{
+      id: 'server-1',
+      title: 'Server 1',
+      kind: 'direct',
+      link: null,
+      status: null,
+      sameCommit: null,
+      payloadAt: 7,
+      paused: false,
+      drain: false,
+      maxSessions: null,
+      minFreeMemMb: null,
+      maxLoad: null,
+    }],
+  }),
+  find: () => undefined,
+}
+const board = createBoardState({
+  deps: defaultDeps(cfg),
+  launches,
+  version: () => 'v1',
+  push: () => {},
+  nodes: () => aggregate,
+})
+await board.refresh()
+const present = JSON.parse(board.payload()).items.map(i => ({ key: i.key, movedTo: i.movedTo ?? null }))
+withRemote = false
+board.publish()
+const absent = JSON.parse(board.payload()).items.map(i => ({ key: i.key, movedTo: i.movedTo ?? null }))
+console.log(JSON.stringify({ localMovedTo: board.items()[0]?.movedTo ?? null, present, absent }))
+process.exit(0)
+`,
+  )
+  const proc = Bun.spawn([process.execPath, script], { cwd: root, env: box.env, stdout: 'pipe', stderr: 'pipe' })
+  const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+  expect([await proc.exited, err]).toEqual([0, ''])
+  const got = JSON.parse(out.trim().split('\n').at(-1) ?? 'null')
+  expect(got.localMovedTo).toBe('server-1')
+  expect(got.present).toEqual([{ key: `@server-1:${SID}`, movedTo: null }])
+  expect(got.absent).toEqual([{ key: SID, movedTo: 'server-1' }])
 }, 30_000)

@@ -56,6 +56,10 @@ const str =
   (max: number): Check =>
   v =>
     typeof v === 'string' ? (v.length > max ? v.slice(0, max) : v) : undefined
+const nonEmpty =
+  (max: number): Check =>
+  v =>
+    typeof v === 'string' && v ? (v.length > max ? v.slice(0, max) : v) : undefined
 /** A key or a session id of the node: kept whole or not at all, and prefixed. */
 const ref: Check = (v, k) => (typeof v === 'string' && v && v.length <= LEN.key ? k(v) : undefined)
 const num: Check = v => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
@@ -333,6 +337,7 @@ const launch = shape(LAUNCH, LAUNCH_REQUIRED)
 /** The optional fields of an item (core/types.ts Item). Server-only ones (transcript, pipe, ...) are not among them. */
 const ITEM: Record<string, Check> = {
   sleeping: bool,
+  movedTo: nonEmpty(LEN.id),
   formerPanes: list(str(LEN.id), 20),
   fromFile: yes,
   agent: str(32),
@@ -450,6 +455,37 @@ const ENTRY: Record<string, Check> = {
   retryAt: num,
   failed: str(LEN.text),
   tasksSince: num,
+}
+
+/**
+ * Drops source cards marked `movedTo` when the same session has another card on the device `movedTo`
+ * names (#642). `masterId` names this computer, whose own cards carry no `device` (a move back from
+ * a node writes `moved.to = masterId`, #616). Only the mark decides, never clocks: a chain move
+ * drops every superseded source card, a card whose target device has no card stays (offline node or
+ * unfinished move), a stale mutual mark between two devices drops neither, and items without a
+ * session id are untouched. Input order is preserved.
+ */
+export function dropMovedCards(items: readonly Item[], masterId = ''): Item[] {
+  if (!items.some(i => i.movedTo && i.session)) return [...items]
+  const bySession = new Map<string, Item[]>()
+  for (const i of items) {
+    if (!i.session) continue
+    const list = bySession.get(i.session)
+    if (list) list.push(i)
+    else bySession.set(i.session, [i])
+  }
+  const here = (x: Item): string => x.device ?? masterId
+  return items.filter(i => {
+    if (!i.movedTo || !i.session) return true
+    const src = here(i)
+    const group = bySession.get(i.session)
+    if (!group || group.length < 2) return true
+    return !group.some(j => {
+      if (j === i) return false
+      const dst = here(j)
+      return dst !== '' && dst !== src && dst === i.movedTo && j.movedTo !== src
+    })
+  })
 }
 
 /**

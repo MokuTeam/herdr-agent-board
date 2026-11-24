@@ -12,7 +12,7 @@ import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { writeCard } from '../adapters/cards.ts'
 import { cwdOf } from '../adapters/claude-home.ts'
 import { checkoutFacts, checkoutIdentity, gitInfo } from '../adapters/git.ts'
-import { agentGet, herdr } from '../adapters/herdr.ts'
+import { asPane, HerdrError, herdr, paneProcesses } from '../adapters/herdr.ts'
 import { findTranscript, trustsFolder } from '../adapters/move-files.ts'
 import { checkoutChangeList, fileHash, type ListedFile, listSessionFiles } from '../adapters/move-pack.ts'
 import { listEntries, removeEntry } from '../adapters/schedule-store.ts'
@@ -68,16 +68,12 @@ interface Packed {
   changes: Record<string, string | null>
 }
 
-/** herdr's `pane process-info` answer, as far as a close reads it. */
-interface ProcessInfo {
-  shell_pid?: number
-  foreground_processes?: { pid?: number }[]
-}
-
 /** A pack is kept this long for the master to fetch its files. */
 const PACK_KEPT_MS = 60 * 60_000
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+const notFound = (err: unknown): boolean =>
+  /not.?found|no such/i.test(`${err instanceof HerdrError ? (err.code ?? '') : ''} ${messageOf(err)}`)
 
 export function createMoveOut(o: MoveOutDeps): MoveOut {
   const { deps } = o
@@ -260,19 +256,21 @@ export function createMoveOut(o: MoveOutDeps): MoveOut {
       const pane = p.item.pane
       if (pane) {
         try {
-          const agent = await agentGet(pane, 10_000)
-          // Only a shell nobody uses: a program started in it since (a server, the owner's own) keeps it.
-          const info = agent
-            ? null
-            : await herdr<{ process_info?: ProcessInfo }>(['pane', 'process-info', pane], 10_000)
-          const shell = info?.process_info?.shell_pid
-          const others = (info?.process_info?.foreground_processes ?? []).filter(p => p.pid !== shell)
-          if (!agent && info && !others.length) {
-            await herdr(['pane', 'close', pane])
-            notes.push('its pane closed')
+          const got = await herdr<{ pane?: unknown }>(['pane', 'get', pane], 10_000)
+          const live = asPane(got?.pane)
+          if (live && !live.agent) {
+            // Only a shell nobody uses: a program started in it since (a server, the owner's own) keeps it.
+            const procs = await paneProcesses(pane, 10_000)
+            const others = procs ? procs.foreground.filter(pr => pr.pid !== procs.shell) : null
+            if (procs && !others?.length) {
+              await herdr(['pane', 'close', pane])
+              notes.push('its pane closed')
+            }
+          } else if (live?.agent) {
+            notes.push('its pane was left (an agent runs in it)')
           }
         } catch (err) {
-          notes.push(`its pane was left (${messageOf(err)})`)
+          if (!notFound(err)) notes.push(`its pane was left (${messageOf(err)})`)
         }
       }
       deps.wake.forget()

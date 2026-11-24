@@ -24,6 +24,7 @@
 // Made by server/app.ts only once config.json has `nodes`.
 import { createHash } from 'node:crypto'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { createDeviceStore, type DeviceStore } from '../../adapters/node-store.ts'
 import { pace } from '../../adapters/pacing.ts'
@@ -424,12 +425,13 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     const item = o.find(key)
     const [to = '', ...words] = call.argv
     const { planSend, targetsOf } = await import('../../core/agent-send.ts')
+    const own = nodesConfig(o.cfg.nodes, hostname())?.id ?? ''
     const plan = planSend({
-      targets: targetsOf(o.items()).filter(t => t.device === null || t.device === id),
+      targets: targetsOf(o.items(), own).filter(t => t.device === null || t.device === id),
       to,
       message: words.join(' '),
       from: { key, name: item?.name || item?.autoName || '', device: id },
-      own: nodesConfig(o.cfg.nodes)?.id ?? '',
+      own,
       now: Date.now(),
     })
     if ('error' in plan) return failed(plan.error)
@@ -454,14 +456,14 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       return refused('not a session of the node')
     }
     const { agentViewsOf, formatAgentLines, targetsOf } = await import('../../core/agent-send.ts')
-    const targets = targetsOf(o.items()).filter(t => t.device === null || t.device === id)
+    const own = nodesConfig(o.cfg.nodes, hostname())?.id ?? ''
+    const targets = targetsOf(o.items(), own).filter(t => t.device === null || t.device === id)
     // One view a line (#639): a result's line is cut at RESULT_LINE_MAX, which one array of a
     // few hundred cards would pass; the lines joined are the same JSON array.
     if (call.argv.includes('--json')) {
       const views = agentViewsOf(targets, { selfKey: key }).map(v => JSON.stringify(v))
       return { code: 0, out: ['[', ...views.map((v, i) => (i < views.length - 1 ? `${v},` : v)), ']'], err: [] }
     }
-    const own = nodesConfig(o.cfg.nodes)?.id ?? ''
     const lines = formatAgentLines(targets, { selfKey: key, own })
     return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: [] }
   }
