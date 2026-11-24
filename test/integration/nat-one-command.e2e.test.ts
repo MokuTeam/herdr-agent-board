@@ -13,7 +13,7 @@ import { createServer } from 'node:net'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { ensureDoorCert, pinnedTls, probeDoorCert } from '../../src/adapters/door-cert.ts'
-import { createNodeJoinStore } from '../../src/adapters/node-join-store.ts'
+import { activateNodeRelayKey, createNodeJoinStore, stageNodeRelayKey } from '../../src/adapters/node-join-store.ts'
 import { createNodeStore } from '../../src/adapters/node-store.ts'
 import { generateJoinCode, parseHelloJoin, verifyJoinProof } from '../../src/core/node-join.ts'
 import {
@@ -21,6 +21,7 @@ import {
   RELAY_NODE_USER,
   relayEnrolKeyLine,
   relayEnrolScript,
+  relayKeysCommand,
   relayMasterFenceSettings,
   relayMasterKeyLine,
   relayNodeFenceSettings,
@@ -118,8 +119,19 @@ describe.skipIf(!sh || !sshdBin)('NAT one-command real OpenSSH e2e (#513)', () =
             const body = (await req.json()) as { code?: string; master?: { name?: string } }
             const r = joinStore.attempt(body.code ?? '')
             if (!r.ok) return Response.json({ error: 'code' }, { status: r.status })
+            const staged = await stageNodeRelayKey(nodeState)
+            if (!staged.ok) return Response.json({ error: staged.error }, { status: 500 })
             const { token } = nodeStore.add(body.master?.name ?? 'master', 'claim')
-            return Response.json({ token, id: 'anna-mac' })
+            return Response.json({ token, id: 'anna-mac', relayPublicKey: staged.publicKey })
+          }
+          if (req.method === 'POST' && url.pathname === '/api/node/relay-key') {
+            const tok = (req.headers.get('authorization') ?? '').replace(/^Bearer /, '')
+            if (!nodeStore.verify(tok)) return Response.json({ error: 'token' }, { status: 401 })
+            const body = (await req.json()) as { publicKey?: string }
+            const act = activateNodeRelayKey(body.publicKey ?? '', nodeState)
+            return act.ok
+              ? Response.json({ ok: true, rotated: act.rotated })
+              : Response.json({ ok: false, error: act.error }, { status: act.status })
           }
           if (req.method === 'GET' && url.pathname === '/api/node/status') {
             const tok = (req.headers.get('authorization') ?? '').replace(/^Bearer /, '')
@@ -206,17 +218,22 @@ describe.skipIf(!sh || !sshdBin)('NAT one-command real OpenSSH e2e (#513)', () =
         'BatchMode=yes',
       ]
 
-      // 1. Enrol dial key via #512 createRelayEnrol -> real enrol script over sshd
+      // 1. Enrol paste dial key under `<sock>-init` via #512 createRelayEnrol -> real enrol script over sshd
       const sockName = 'anna-mac-001122'
+      const pasteKeyName = `${sockName}-init`
       const masterRelay = { host: '127.0.0.1', sshPort: masterPort, user: me }
       const enrol = createRelayEnrol({ relay: masterRelay, key: enrolKey, knownHosts: () => known })
-      expect(await enrol.add(sockName, dialPub)).toEqual({ ok: true })
-      expect(existsSync(join(keysDir, `${sockName}.pub`))).toBe(true)
+      expect(await enrol.add(pasteKeyName, dialPub)).toEqual({ ok: true })
+      expect(existsSync(join(keysDir, `${pasteKeyName}.pub`))).toBe(true)
 
-      // Simulate AuthorizedKeysCommand sync (unprivileged sshd uses AuthorizedKeysFile)
-      writeFileSync(nodeKeysPath, `restrict,port-forwarding ${dialPub.split(/\s+/).slice(0, 2).join(' ')}\n`, {
-        mode: 0o600,
-      })
+      const syncAuthorizedKeys = () => {
+        const out = spawnSync('sh', ['-s', '--', RELAY_NODE_USER], {
+          input: relayKeysCommand(keysDir, RELAY_NODE_USER),
+          encoding: 'utf8',
+        }).stdout
+        writeFileSync(nodeKeysPath, out, { mode: 0o600 })
+      }
+      syncAuthorizedKeys()
       expect(RELAY_NODE_USER).toBe('agent-board-relay-n')
 
       // 2. Node opens real ssh -R <socket>.sock:127.0.0.1:<tlsDoor.port>
@@ -265,17 +282,31 @@ describe.skipIf(!sh || !sshdBin)('NAT one-command real OpenSSH e2e (#513)', () =
         expect(parsedJoin?.fingerprint).toBe(peer.fingerprint)
         expect(verifyJoinProof(joinCode, peer.fingerprint, helloBody.node.id, parsedJoin?.proof ?? '')).toBe(true)
 
-        // Claim over pinned TLS
+        // Claim over pinned TLS returns the staged rotated keypair's public key
         const claimRes = await fetch(`https://127.0.0.1:${fwdPort}/api/node/claim`, {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-board': '1' },
-          body: JSON.stringify({ code: joinCode, master: { name: 'atlas-master' } }),
+          body: JSON.stringify({ code: joinCode, master: { name: 'atlas-master' }, nonce: 'E2ENonce_012345678' }),
           tls: pinnedTls(peer.cert),
           signal: AbortSignal.timeout(5000),
         })
         expect(claimRes.status).toBe(200)
-        const claimed = (await claimRes.json()) as { token: string; id: string }
+        const claimed = (await claimRes.json()) as { token: string; id: string; relayPublicKey: string }
         expect(claimed.id).toBe('anna-mac')
+        expect(claimed.relayPublicKey).toContain('ssh-ed25519 ')
+
+        // Enrol permanent key on relay server, activate it on the node, remove pasted init key
+        expect(await enrol.add(sockName, claimed.relayPublicKey)).toEqual({ ok: true })
+        const activateRes = await fetch(`https://127.0.0.1:${fwdPort}/api/node/relay-key`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${claimed.token}`, 'content-type': 'application/json', 'x-board': '1' },
+          body: JSON.stringify({ publicKey: claimed.relayPublicKey }),
+          tls: pinnedTls(peer.cert),
+          signal: AbortSignal.timeout(5000),
+        })
+        expect(activateRes.status).toBe(200)
+        expect(await enrol.remove(pasteKeyName)).toEqual({ ok: true, removed: true })
+        syncAuthorizedKeys()
 
         // Authenticated call over pinned TLS succeeds
         const statusRes = await fetch(`https://127.0.0.1:${fwdPort}/api/node/status`, {
@@ -288,7 +319,38 @@ describe.skipIf(!sh || !sshdBin)('NAT one-command real OpenSSH e2e (#513)', () =
         await opened.forward.close()
       }
 
-      // 4. Unclaimed key expiry removes both .pub and .sock from the relay server via real enrol remove
+      // Paste key can no longer log in to sshd; newly rotated <nodeState>/relay-key logs in and forwards cleanly
+      const oldFwd = spawnSync(
+        'ssh',
+        [...baseSsh(nodePort, dialKey), '-N', `${me}@127.0.0.1`, '-o', 'ConnectTimeout=2'],
+        {
+          encoding: 'utf8',
+          timeout: 5000,
+        },
+      )
+      expect(oldFwd.status).not.toBe(0)
+
+      nodeFwd.kill('SIGKILL')
+      rmSync(sockPath, { force: true })
+      const rotatedKey = join(nodeState, 'relay-key')
+      const rotatedFwd = spawn(
+        'ssh',
+        [
+          ...baseSsh(nodePort, rotatedKey),
+          '-N',
+          '-o',
+          'ExitOnForwardFailure=yes',
+          '-R',
+          `${sockPath}:127.0.0.1:${tlsDoor.port}`,
+          `${me}@127.0.0.1`,
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'] },
+      )
+      procs.push(rotatedFwd)
+      for (let i = 0; i < 60 && !existsSync(sockPath); i++) await Bun.sleep(50)
+      expect(existsSync(sockPath)).toBe(true)
+
+      // 4. Clean removal unlinks both .pub and .sock from the relay server via real enrol remove
       expect(await enrol.remove(sockName)).toEqual({ ok: true, removed: true })
       expect(existsSync(join(keysDir, `${sockName}.pub`))).toBe(false)
       expect(existsSync(sockPath)).toBe(false)

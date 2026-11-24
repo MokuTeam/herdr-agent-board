@@ -108,6 +108,7 @@ export interface RelayDialOptions {
 
 export interface RelayDial {
   sync(): Promise<void>
+  restart(): Promise<void>
   status(): TunnelStatus
   running(): boolean
   killNow(): void
@@ -183,6 +184,7 @@ export function createRelayDial(o: RelayDialOptions): RelayDial {
 
   return {
     sync: () => supervisor.sync(),
+    restart: () => supervisor.restart(),
     status: () => supervisor.status(),
     running: () => supervisor.running(),
     killNow: () => supervisor.killNow(),

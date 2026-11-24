@@ -37,13 +37,13 @@ function doorClient(port: number, certPem?: string) {
   }
 }
 
-async function setupDoor(cfg: Record<string, unknown> = {}) {
+async function setupDoor(cfg: Record<string, unknown> = {}, envExtra: Record<string, string> = {}) {
   const box = await sandbox()
   const doorPort = await unusedPort()
   const { url, proc } = await serveBoard(
     box,
     { language: 'en', node: { id: 'atlas-node', port: doorPort, ...cfg } },
-    PACE,
+    { ...PACE, ...envExtra },
   )
   await until(() => listening(proc, doorPort))
   const certPem = cfg.tls ? readFileSync(join(nodeFolder(box), 'door-cert.pem'), 'utf8') : undefined
@@ -129,32 +129,115 @@ describe('node door /api/node/claim (#513)', () => {
     const code = generateJoinCode()
     createNodeJoinStore({ dir: nodeFolder(box) }).write({ code, expiresAt: Date.now() + 600_000 })
 
-    // Missing X-Board or Origin present -> 403
+    // Missing X-Board, Origin present, or >4096-byte streaming body -> 403 / 400
     expect((await client.claim({ code, master: { name: 'm' } }, { 'x-board': '' })).status).toBe(403)
     expect((await client.claim({ code, master: { name: 'm' } }, { origin: 'https://evil.example' })).status).toBe(403)
+    const bigStream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new Uint8Array(2500).fill(97))
+        c.enqueue(new Uint8Array(2500).fill(98))
+        c.close()
+      },
+    })
+    const bigRes = await fetch(`http://127.0.0.1:${(await setupDoor()).doorPort}/api/node/claim`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: bigStream,
+    })
+    expect(bigRes.status).toBe(400)
 
-    // Concurrent claims: exactly one succeeds (200), the other is refused (409)
+    const claimNonce = 'Nonce_0123456789abcdef'
+    // Concurrent claims with different nonces: exactly one succeeds (200), the other is refused (409)
     const [r1, r2] = await Promise.all([
-      client.claim({ code, master: { name: 'anna-laptop' } }),
-      client.claim({ code, master: { name: 'ben-laptop' } }),
+      client.claim({ code, master: { name: 'anna-laptop' }, nonce: claimNonce }),
+      client.claim({ code, master: { name: 'ben-laptop' }, nonce: 'OtherNonce_0123456789' }),
     ])
     const statuses = [r1.status, r2.status].sort((a, b) => a - b)
     expect(statuses).toEqual([200, 409])
     const winner = r1.status === 200 ? r1 : r2
+    const winnerNonce = r1.status === 200 ? claimNonce : 'OtherNonce_0123456789'
     const claimed = (await winner.json()) as { token: string; id: string }
     expect(claimed.id).toBe('atlas-node')
     expect(claimed.token.length).toBeGreaterThanOrEqual(32)
+
+    // Repeat claim with the exact same nonce + code is idempotent (200 returning the same token)
+    const replay = await client.claim({ code, master: { name: 'anna-laptop' }, nonce: winnerNonce })
+    expect([replay.status, await replay.json()]).toEqual([200, claimed])
 
     // Token works on authenticated door routes, and join.json is gone
     expect((await client.status(claimed.token)).status).toBe(200)
     expect(existsSync(join(nodeFolder(box), 'join.json'))).toBe(false)
 
-    // Subsequent claim returns 409 even with another code
-    const second = await client.claim({ code, master: { name: 'cleo-laptop' } })
+    // Subsequent claim with a different nonce or no nonce returns 409
+    const second = await client.claim({ code, master: { name: 'cleo-laptop' }, nonce: 'FreshNonce_012345678' })
     expect([second.status, await second.json()]).toEqual([409, { error: 'claimed' }])
 
     // hello now shows claimed: true and no join field
     const h = (await (await client.hello()).json()) as { node: Record<string, unknown> }
     expect(h.node).toEqual({ api: 1, id: 'atlas-node', claimed: true })
+  }, 30_000)
+
+  test('relay node stages fresh keypair on claim and activates it on POST /api/node/relay-key', async () => {
+    const sshKeygen = Bun.which('ssh-keygen') ?? ''
+    const { box, doorPort, certPem, client } = await setupDoor(
+      {
+        tls: true,
+        relay: { host: 'relay.example.com', sshPort: 22, user: 'agent-board-relay-n', socket: 'atlas-sock-1' },
+      },
+      ...(sshKeygen ? [{ BOARD_SSH_KEYGEN_BIN_PATH: sshKeygen }] : []),
+    )
+    if (!certPem) throw new Error('expected certPem')
+    const code = generateJoinCode()
+    createNodeJoinStore({ dir: nodeFolder(box) }).write({ code, expiresAt: Date.now() + 600_000 })
+    const claimRes = await client.claim({ code, master: { name: 'atlas-master' }, nonce: 'RelayNonce_012345678' })
+    expect(claimRes.status).toBe(200)
+    const body = (await claimRes.json()) as { token: string; id: string; relayPublicKey?: string }
+    expect(typeof body.relayPublicKey).toBe('string')
+    expect(body.relayPublicKey).toContain('ssh-ed25519 ')
+    expect(existsSync(join(nodeFolder(box), 'relay-key.next'))).toBe(true)
+
+    const tlsOpt = { tls: pinnedTls(certPem) }
+    const wrong = await fetch(`https://127.0.0.1:${doorPort}/api/node/relay-key`, {
+      method: 'POST',
+      headers: {
+        host: `127.0.0.1:${doorPort}`,
+        authorization: `Bearer ${body.token}`,
+        'content-type': 'application/json',
+        'x-board': '1',
+      },
+      body: JSON.stringify({
+        publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOtherFakeKeyForTest00000000000000000000',
+      }),
+      ...tlsOpt,
+    })
+    expect(wrong.status).toBe(409)
+
+    const act = await fetch(`https://127.0.0.1:${doorPort}/api/node/relay-key`, {
+      method: 'POST',
+      headers: {
+        host: `127.0.0.1:${doorPort}`,
+        authorization: `Bearer ${body.token}`,
+        'content-type': 'application/json',
+        'x-board': '1',
+      },
+      body: JSON.stringify({ publicKey: body.relayPublicKey }),
+      ...tlsOpt,
+    })
+    expect([act.status, await act.json()]).toEqual([200, { ok: true, rotated: true }])
+    expect(readFileSync(join(nodeFolder(box), 'relay-key.pub'), 'utf8').trim()).toBe(body.relayPublicKey ?? '')
+
+    // Repeat is idempotent
+    const actAgain = await fetch(`https://127.0.0.1:${doorPort}/api/node/relay-key`, {
+      method: 'POST',
+      headers: {
+        host: `127.0.0.1:${doorPort}`,
+        authorization: `Bearer ${body.token}`,
+        'content-type': 'application/json',
+        'x-board': '1',
+      },
+      body: JSON.stringify({ publicKey: body.relayPublicKey }),
+      ...tlsOpt,
+    })
+    expect([actAgain.status, await actAgain.json()]).toEqual([200, { ok: true, rotated: false }])
   }, 30_000)
 })

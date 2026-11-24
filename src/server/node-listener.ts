@@ -23,6 +23,7 @@ import type { NodeJoinStore } from '../adapters/node-join-store.ts'
 import { type MasterRecord, masterName, type NodeStore } from '../adapters/node-store.ts'
 import { RateLimiter } from '../core/access.ts'
 import { doorRoute, loopbackHost, NODE_API } from '../core/node-door.ts'
+import { JOIN_CODE, sameJoinCode } from '../core/node-join.ts'
 import { type NodeConfig, nodeConfig } from '../core/nodes.ts'
 import { bearerOf } from '../core/remote.ts'
 import type { Config } from '../core/types.ts'
@@ -41,6 +42,8 @@ export interface NodeListenerOptions {
   store: NodeStore
   /** One-time join code store for claiming a computer behind NAT (#513); optional. */
   join?: NodeJoinStore
+  /** Stages a fresh relay dial keypair during claim so the pasted key can be retired (#513). */
+  stageRelayKey?: () => Promise<{ ok: true; publicKey: string } | { ok: false; error: string }>
   /** The door's own routes (server/routes/node.ts): its status and a start from the master. */
   doorRoutes: Route[]
   log: (text: string) => void
@@ -89,21 +92,39 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
   let lastConfig = configKey()
   const wrong = new RateLimiter(WRONG_TOKENS)
   let claiming = false
+  let lastClaim: {
+    nonce: string
+    code: string
+    token: string
+    id: string
+    relayPublicKey?: string
+    expiresAt: number
+  } | null = null
+
+  async function readTextUpTo(req: Request, maxBytes: number): Promise<string | null> {
+    const told = Number(req.headers.get('content-length'))
+    if (Number.isFinite(told) && told > maxBytes) return null
+    if (!req.body) return ''
+    const chunks: Uint8Array[] = []
+    let size = 0
+    for await (const chunk of req.body) {
+      size += chunk.length
+      if (size > maxBytes) return null
+      chunks.push(chunk)
+    }
+    const buf = new Uint8Array(size)
+    let at = 0
+    for (const c of chunks) {
+      buf.set(c, at)
+      at += c.length
+    }
+    return Buffer.from(buf).toString('utf8')
+  }
 
   async function handleClaim(req: Request, here: NodeConfig): Promise<Response> {
     if (req.headers.get('x-board') !== '1') return json(403, { error: 'header' })
-    if (o.store.list().length > 0) {
-      o.join?.clear()
-      return json(409, { error: 'claimed' })
-    }
-    if (!o.join) return json(410, { error: 'expired' })
-    let rawText = ''
-    try {
-      rawText = await req.text()
-    } catch {
-      return json(400, { error: 'claim' })
-    }
-    if (rawText.length > 4096) return json(400, { error: 'claim' })
+    const rawText = await readTextUpTo(req, 4096).catch(() => null)
+    if (rawText === null) return json(400, { error: 'claim' })
     let body: unknown = null
     try {
       body = rawText ? JSON.parse(rawText) : null
@@ -113,17 +134,59 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
     if (!isRecord(body)) return json(400, { error: 'claim' })
     const name = masterName(isRecord(body.master) ? body.master.name : undefined)
     if (!name) return json(400, { error: 'claim' })
-    if (claiming || o.store.list().length > 0) return json(409, { error: 'claimed' })
+    if (body.nonce !== undefined && (typeof body.nonce !== 'string' || !JOIN_CODE.test(body.nonce))) {
+      return json(400, { error: 'claim' })
+    }
+    const nonce = typeof body.nonce === 'string' ? body.nonce : ''
+    const submittedCode = typeof body.code === 'string' ? body.code : ''
+
+    if (o.store.list().length > 0) {
+      if (
+        lastClaim &&
+        nonce &&
+        sameJoinCode(nonce, lastClaim.nonce) &&
+        sameJoinCode(submittedCode, lastClaim.code) &&
+        Date.now() < lastClaim.expiresAt &&
+        o.store.verify(lastClaim.token) !== null
+      ) {
+        return json(200, {
+          token: lastClaim.token,
+          id: lastClaim.id,
+          ...(lastClaim.relayPublicKey && { relayPublicKey: lastClaim.relayPublicKey }),
+        })
+      }
+      o.join?.clear()
+      return json(409, { error: 'claimed' })
+    }
+    if (!o.join) return json(410, { error: 'expired' })
+    if (claiming) return json(409, { error: 'claimed' })
     claiming = true
     try {
-      const checked = o.join.attempt(typeof body.code === 'string' ? body.code : '')
+      const checked = o.join.attempt(submittedCode, { clearOnMatch: false })
       if (!checked.ok) {
         return checked.status === 410
           ? json(410, { error: 'expired' })
           : json(403, { error: 'code', remaining: checked.remaining, ...(checked.ended && { ended: true }) })
       }
+      let relayPublicKey: string | undefined
+      if (here.relay && o.stageRelayKey) {
+        const staged = await o.stageRelayKey()
+        if (!staged.ok) return json(500, { error: 'relay-key' })
+        relayPublicKey = staged.publicKey
+      }
+      o.join.clear()
       const { token } = o.store.add(name, 'claim')
-      return json(200, { token, id: here.id })
+      if (nonce) {
+        lastClaim = {
+          nonce,
+          code: submittedCode,
+          token,
+          id: here.id,
+          ...(relayPublicKey && { relayPublicKey }),
+          expiresAt: checked.expiresAt,
+        }
+      }
+      return json(200, { token, id: here.id, ...(relayPublicKey && { relayPublicKey }) })
     } finally {
       claiming = false
     }
@@ -190,6 +253,7 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
     bound = null
     boundTls = null
     boundCertFp = null
+    lastClaim = null
     if (s) {
       await s.stop(true)
       o.onChange?.()

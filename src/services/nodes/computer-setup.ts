@@ -32,8 +32,7 @@ import {
   computerSteps,
   relayLink,
 } from '../../core/node-computer-setup.ts'
-import { NODE_API } from '../../core/node-door.ts'
-import { generateJoinCode, generateSocketName, parseHelloJoin, verifyJoinProof } from '../../core/node-join.ts'
+import { generateJoinCode, generateSocketName } from '../../core/node-join.ts'
 import { nodeOneLine, nodeOneshotScript } from '../../core/node-oneshot.ts'
 import { type MasterState, putDevice } from '../../core/node-setup.ts'
 import {
@@ -48,6 +47,7 @@ import { RELAY_KEY_NAME } from '../../core/relay-texts.ts'
 import type { Text } from '../../core/server-plan.ts'
 import type { Config } from '../../core/types.ts'
 import type { BundleSync, SyncReport } from './bundle-sync.ts'
+import { verifyComputerHello } from './computer-setup-io.ts'
 import type { NodeLinks } from './links.ts'
 
 export interface RelayTarget {
@@ -64,12 +64,33 @@ export interface ComputerProbeResult {
     host: string
     platform: string
     version: string
-    node: { api: number; id: string; claimed: boolean; join?: unknown }
+    node: { api: number; id: string; claimed: boolean; cert?: string; join?: unknown }
   }
 }
 
+export interface ComputerClaimRequest {
+  certPem: string
+  code: string
+  masterName: string
+  nonce?: string
+}
+
+export type ComputerClaimResult =
+  | { ok: true; token: string; id: string; relayPublicKey?: string }
+  | { ok: false; status?: number; error: string }
+
+export interface RelayKeyActivateRequest {
+  certPem: string
+  token: string
+  publicKey: string
+}
+
+export type RelayKeyActivateResult = { ok: true } | { ok: false; status?: number; error: string }
+
 export interface PendingEnrol {
   socket: string
+  /** Permanent socket path to unlink only while the attempt is still unclaimed. */
+  unclaimedSocket?: string
   expiresAt: number
 }
 
@@ -84,11 +105,9 @@ export interface ComputerSetupDeps {
     remove(relay: RelayTarget, socket: string): Promise<{ ok: true } | { ok: false; error: string }>
   }
   probe(relay: RelayTarget, socket: string): Promise<ComputerProbeResult | null>
-  claim(
-    relay: RelayTarget,
-    socket: string,
-    req: { certPem: string; code: string; masterName: string },
-  ): Promise<{ ok: true; token: string; id: string } | { ok: false; status?: number; error: string }>
+  claim(relay: RelayTarget, socket: string, req: ComputerClaimRequest): Promise<ComputerClaimResult>
+  activateRelayKey?(relay: RelayTarget, socket: string, req: RelayKeyActivateRequest): Promise<RelayKeyActivateResult>
+  releaseProbe?(socket: string): void
   pinCert(deviceId: string, certPem: string): void
   store: Pick<DeviceStore, 'token' | 'setToken' | 'dropCredentials'>
   editNodes(change: (nodes: Record<string, unknown>, had: boolean) => boolean): EditResult
@@ -105,6 +124,8 @@ export interface ComputerSetupDeps {
   joinTtlMs: number
   pollMs: number
   linkWaitMs: number
+  retryBaseMs?: number
+  retryMaxMs?: number
   pause(ms: number): Promise<void>
   repoUrl?: string
 }
@@ -131,6 +152,8 @@ const isPendingEnrol = (v: unknown): v is PendingEnrol =>
   isRecord(v) &&
   typeof v.socket === 'string' &&
   RELAY_KEY_NAME.test(v.socket) &&
+  (v.unclaimedSocket === undefined ||
+    (typeof v.unclaimedSocket === 'string' && RELAY_KEY_NAME.test(v.unclaimedSocket))) &&
   typeof v.expiresAt === 'number' &&
   Number.isFinite(v.expiresAt)
 
@@ -157,10 +180,22 @@ interface ActiveAttempt {
   gen: number
   relay: RelayTarget
   socket: string
+  pasteKeyName: string
   code: string
+  claimNonce: string
   expiresAt: number
   explicitId: string
   found: (ComputerFound & { certPem: string }) | null
+}
+
+const DEFAULT_RETRY_BASE_MS = 5000
+const DEFAULT_RETRY_MAX_MS = 60_000
+
+const hintForReason = (reason: 'claimed' | 'burned-code' | 'old-plugin' | string): Text | null => {
+  if (reason === 'claimed') return { key: 'node.computer.hint.claimed' }
+  if (reason === 'burned-code') return { key: 'node.computer.hint.burned' }
+  if (reason === 'old-plugin') return { key: 'node.computer.hint.oldPlugin' }
+  return null
 }
 
 export function createComputerSetup(d: ComputerSetupDeps): ComputerSetup {
@@ -173,6 +208,9 @@ export function createComputerSetup(d: ComputerSetupDeps): ComputerSetup {
   let pollTimer: ReturnType<typeof setTimeout> | undefined
   let expiryTimer: ReturnType<typeof setTimeout> | undefined
   const sweepTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const retryBaseMs = d.retryBaseMs ?? DEFAULT_RETRY_BASE_MS
+  const retryMaxMs = d.retryMaxMs ?? DEFAULT_RETRY_MAX_MS
 
   const set = (patch: Partial<ComputerSetupView>): void => {
     view = { ...view, ...patch }
@@ -204,14 +242,75 @@ export function createComputerSetup(d: ComputerSetupDeps): ComputerSetup {
     writePending(file, next)
   }
 
-  async function removeEnrol(relay: RelayTarget, socket: string): Promise<void> {
+  function clearRetry(socket: string): void {
+    const tmr = retryTimers.get(socket)
+    if (tmr) {
+      clearTimeout(tmr)
+      retryTimers.delete(socket)
+    }
+  }
+
+  function scheduleRemoveRetry(
+    relay: RelayTarget,
+    socket: string,
+    unclaimedSocket: string | undefined,
+    attempt: number,
+  ): void {
+    if (closed) return
+    clearRetry(socket)
+    const delay = Math.min(retryMaxMs, retryBaseMs * 2 ** attempt)
+    const timer = setTimeout(
+      () => {
+        retryTimers.delete(socket)
+        void removePendingKey(relay, socket, unclaimedSocket, attempt + 1)
+      },
+      Math.max(0, delay),
+    )
+    retryTimers.set(socket, timer)
+  }
+
+  async function removePendingKey(
+    relay: RelayTarget,
+    socket: string,
+    unclaimedSocket?: string,
+    attempt = 0,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    let errText = ''
     try {
       const r = await d.enrol.remove(relay, socket)
-      if (!r.ok) d.log(`computer setup: failed to remove enrolled key ${socket}: ${r.error}`)
-      else dropPending(socket)
+      if (!r.ok) {
+        errText = r.error
+      } else {
+        let sockErr = ''
+        if (unclaimedSocket && unclaimedSocket !== socket) {
+          const rs = await d.enrol.remove(relay, unclaimedSocket).catch(err => ({
+            ok: false as const,
+            error: messageOf(err),
+          }))
+          if (!rs.ok) sockErr = rs.error
+        }
+        if (!sockErr) {
+          clearRetry(socket)
+          dropPending(socket)
+          if (view.phase === 'expired' && view.socket && (view.socket === socket || view.socket === unclaimedSocket)) {
+            if (view.error) set({ error: null })
+          }
+          return { ok: true }
+        }
+        // Keep only the unclaimedSocket removal pending on retry; paste key is already gone.
+        addPending({ socket: unclaimedSocket as string, expiresAt: d.now() })
+        dropPending(socket)
+        errText = sockErr
+        d.log(`computer setup: failed to unlink expired socket ${unclaimedSocket}: ${sockErr}`)
+        scheduleRemoveRetry(relay, unclaimedSocket as string, undefined, attempt)
+        return { ok: false, error: errText }
+      }
     } catch (err) {
-      d.log(`computer setup: failed to remove enrolled key ${socket}: ${messageOf(err)}`)
+      errText = messageOf(err)
     }
+    d.log(`computer setup: failed to remove enrolled key ${socket}: ${errText}`)
+    scheduleRemoveRetry(relay, socket, unclaimedSocket, attempt)
+    return { ok: false, error: errText }
   }
 
   async function expireAttempt(gen: number): Promise<void> {
@@ -223,15 +322,28 @@ export function createComputerSetup(d: ComputerSetupDeps): ComputerSetup {
     const cur = active
     active = null
     stopTimers()
-    await removeEnrol(cur.relay, cur.socket)
+    d.releaseProbe?.(cur.socket)
+    const rm = await removePendingKey(cur.relay, cur.pasteKeyName, cur.socket)
     if (closed || generation !== gen) return
-    d.log(`computer setup: join code for ${cur.socket} expired and key removed`)
+    if (rm.ok) {
+      d.log(`computer setup: join code for ${cur.socket} expired and key removed`)
+      set({
+        phase: 'expired',
+        command: null,
+        script: null,
+        found: null,
+        next: null,
+        error: null,
+      })
+      return
+    }
     set({
       phase: 'expired',
       command: null,
       script: null,
       found: null,
-      error: t('node.computer.err.expired'),
+      next: null,
+      error: t('node.computer.err.expiredRemoveFailed', { error: rm.error }),
     })
   }
 
@@ -262,38 +374,25 @@ export function createComputerSetup(d: ComputerSetupDeps): ComputerSetup {
         return
       }
       if (res) {
-        const { hello, certPem, certFingerprint } = res
-        const parsedJoin = parseHelloJoin(hello.node.join)
-        const fp = certFingerprint.trim().toLowerCase()
-        const valid =
-          hello.node.api === NODE_API &&
-          hello.node.claimed === false &&
-          parsedJoin !== null &&
-          parsedJoin.fingerprint === fp &&
-          verifyJoinProof(cur.code, fp, hello.node.id, parsedJoin.proof)
-        if (valid) {
-          const found: ComputerFound & { certPem: string } = {
-            id: hello.node.id,
-            host: hello.host,
-            platform: hello.platform,
-            version: hello.version,
-            fingerprint: fp,
-            certPem,
-          }
-          cur.found = found
+        const checked = verifyComputerHello(res, cur.code)
+        if (checked.ok) {
+          cur.found = checked.found
           set({
             phase: 'found',
+            next: null,
             found: {
-              id: found.id,
-              host: found.host,
-              platform: found.platform,
-              version: found.version,
-              fingerprint: found.fingerprint,
+              id: checked.found.id,
+              host: checked.found.host,
+              platform: checked.found.platform,
+              version: checked.found.version,
+              fingerprint: checked.found.fingerprint,
             },
           })
           return
         }
-        d.log(`computer setup: ignored unverified hello on ${cur.socket}`)
+        const hint = hintForReason(checked.reason)
+        if (hint && view.next?.key !== hint.key) set({ next: hint })
+        d.log(`computer setup: ignored unverified hello (${checked.reason}) on ${cur.socket}`)
       }
     } catch {
       // Transient probe failure while node is still installing/dialling: keep polling until expiry.
@@ -478,11 +577,16 @@ export function createComputerSetup(d: ComputerSetupDeps): ComputerSetup {
         active = null
         generation += 1
         const gen = generation
-        if (prev) await removeEnrol(prev.relay, prev.socket)
+        if (prev) {
+          d.releaseProbe?.(prev.socket)
+          await removePendingKey(prev.relay, prev.pasteKeyName, prev.socket)
+        }
         if (closed || gen !== generation) return failAnswer(409, t('node.computer.err.cancelled'))
 
         const socket = generateSocketName(explicitId || d.hostName())
+        const pasteKeyName = `${socket}-init`
         const code = generateJoinCode()
+        const claimNonce = generateJoinCode()
         const expiresAt = d.now() + d.joinTtlMs
         const dialKey = await d.generateDialKey(socket)
         if (!dialKey.ok) return failAnswer(500, dialKey.error)
@@ -505,12 +609,12 @@ export function createComputerSetup(d: ComputerSetupDeps): ComputerSetup {
         })
         const command = pack(script)
 
-        const added = await d.enrol.add(cfg.relay, socket, dialKey.publicKey)
+        const added = await d.enrol.add(cfg.relay, pasteKeyName, dialKey.publicKey)
         if (!added.ok) return failAnswer(502, added.error)
 
-        addPending({ socket, expiresAt })
+        addPending({ socket: pasteKeyName, unclaimedSocket: socket, expiresAt })
 
-        active = { gen, relay: cfg.relay, socket, code, expiresAt, explicitId, found: null }
+        active = { gen, relay: cfg.relay, socket, pasteKeyName, code, claimNonce, expiresAt, explicitId, found: null }
         set({
           ...COMPUTER_IDLE_VIEW,
           phase: 'waiting',
@@ -564,31 +668,76 @@ export function createComputerSetup(d: ComputerSetupDeps): ComputerSetup {
           certPem: cur.found.certPem,
           code: cur.code,
           masterName: selfId(),
+          nonce: cur.claimNonce,
         })
         if (closed || gen !== generation) return failAnswer(409, t('node.computer.err.cancelled'))
         if (!claimed.ok) {
-          const dead = claimed.status === 410 || claimed.status === 409 || d.now() >= cur.expiresAt
-          step('claim', 'fail', { key: 'node.computer.said.claimFailed', params: { error: claimed.error } })
-          if (dead) {
+          if (claimed.status === 409) {
+            // Another master holds this computer: keep its relay key intact and instruct how to forget it.
             stopTimers()
             active = null
-            await removeEnrol(cur.relay, cur.socket)
+            d.releaseProbe?.(cur.socket)
+            clearRetry(cur.pasteKeyName)
+            dropPending(cur.pasteKeyName)
+            const msg = t('node.computer.err.alreadyClaimed')
+            step('claim', 'fail', { key: 'node.computer.said.claimFailed', params: { error: msg } })
             set({
-              phase: claimed.status === 410 ? 'expired' : 'failed',
+              phase: 'failed',
               command: null,
               script: null,
-              error: claimed.error,
+              error: msg,
+              next: { key: 'node.computer.next.claimed' },
             })
-            return failAnswer(claimed.status ?? 409, claimed.error)
+            return failAnswer(409, msg)
           }
+          if (claimed.status === 410 || d.now() >= cur.expiresAt) {
+            step('claim', 'fail', { key: 'node.computer.said.claimFailed', params: { error: claimed.error } })
+            stopTimers()
+            active = null
+            d.releaseProbe?.(cur.socket)
+            const rm = await removePendingKey(cur.relay, cur.pasteKeyName, cur.socket)
+            set({
+              phase: 'expired',
+              command: null,
+              script: null,
+              found: null,
+              error: rm.ok ? null : t('node.computer.err.expiredRemoveFailed', { error: rm.error }),
+            })
+            return failAnswer(410, claimed.error)
+          }
+          // Transient failure (e.g. aborted claim after server processed it): keep `active` so Approve retries idempotently.
+          step('claim', 'fail', { key: 'node.computer.said.claimFailed', params: { error: claimed.error } })
           set({ phase: 'failed', error: claimed.error })
           return failAnswer(claimed.status ?? 502, claimed.error)
         }
 
-        // Claim succeeded: disarm expiry, delete pending record, clear one-time secret, pin cert and token.
+        if (claimed.relayPublicKey) {
+          const addedPerm = await d.enrol.add(cur.relay, cur.socket, claimed.relayPublicKey)
+          if (!addedPerm.ok) {
+            step('claim', 'fail', { key: 'node.computer.said.claimFailed', params: { error: addedPerm.error } })
+            set({ phase: 'failed', error: addedPerm.error })
+            return failAnswer(502, addedPerm.error)
+          }
+          if (d.activateRelayKey) {
+            const activated = await d.activateRelayKey(cur.relay, cur.socket, {
+              certPem: cur.found.certPem,
+              token: claimed.token,
+              publicKey: claimed.relayPublicKey,
+            })
+            if (!activated.ok) {
+              step('claim', 'fail', { key: 'node.computer.said.claimFailed', params: { error: activated.error } })
+              set({ phase: 'failed', error: activated.error })
+              return failAnswer(activated.status ?? 502, activated.error)
+            }
+          }
+        }
+
+        // Claim + permanent key rotation succeeded: disarm expiry, drop pasted key (leaving permanent socket alive).
         stopTimers()
         active = null
-        dropPending(cur.socket)
+        d.releaseProbe?.(cur.socket)
+        addPending({ socket: cur.pasteKeyName, expiresAt: d.now() })
+        await removePendingKey(cur.relay, cur.pasteKeyName)
         step('claim', 'ok', { key: 'node.setup.said.device', params: { id: deviceId } })
         set({ command: null, script: null })
 
@@ -608,7 +757,10 @@ export function createComputerSetup(d: ComputerSetupDeps): ComputerSetup {
       const prev = active
       active = null
       generation += 1
-      if (prev) await removeEnrol(prev.relay, prev.socket)
+      if (prev) {
+        d.releaseProbe?.(prev.socket)
+        await removePendingKey(prev.relay, prev.pasteKeyName, prev.socket)
+      }
       set({ ...COMPUTER_IDLE_VIEW })
       return ok()
     },
@@ -623,20 +775,12 @@ export function createComputerSetup(d: ComputerSetupDeps): ComputerSetup {
       for (const entry of entries) {
         if (closed) return
         if (now >= entry.expiresAt) {
-          const r = await d.enrol
-            .remove(relay, entry.socket)
-            .catch(() => ({ ok: false as const, error: 'remove failed' }))
-          if (r.ok) dropPending(entry.socket)
+          await removePendingKey(relay, entry.socket, entry.unclaimedSocket)
         } else if (!closed && !sweepTimers.has(entry.socket)) {
           const delay = Math.max(0, entry.expiresAt - now)
           const timer = setTimeout(() => {
             sweepTimers.delete(entry.socket)
-            void d.enrol
-              .remove(relay, entry.socket)
-              .then(r => {
-                if (r.ok) dropPending(entry.socket)
-              })
-              .catch(() => {})
+            void removePendingKey(relay, entry.socket, entry.unclaimedSocket)
           }, delay)
           sweepTimers.set(entry.socket, timer)
         }
@@ -648,6 +792,8 @@ export function createComputerSetup(d: ComputerSetupDeps): ComputerSetup {
       stopTimers()
       for (const timer of sweepTimers.values()) clearTimeout(timer)
       sweepTimers.clear()
+      for (const timer of retryTimers.values()) clearTimeout(timer)
+      retryTimers.clear()
     },
   }
 }

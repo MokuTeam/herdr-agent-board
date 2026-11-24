@@ -122,6 +122,8 @@ export interface TestOptions {
 
 export interface Supervisor {
   sync(): Promise<void>
+  /** Restarts any held ssh immediately using the current plan (clearing backoff). */
+  restart(): Promise<void>
   status(): TunnelStatus
   /** ssh runs (held by the supervisor). */
   running(): boolean
@@ -602,6 +604,7 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
 
   return {
     sync,
+    restart: () => serially(() => step(true)),
     status: () => ({ ...status }),
     running: () => held !== null,
     test(o) {

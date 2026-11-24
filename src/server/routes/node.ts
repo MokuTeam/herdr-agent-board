@@ -54,6 +54,8 @@ export interface NodeDoorSources {
   move?: { out: MoveOut; in: MoveIn }
   /** `/api/node/pilot-call/...` (#618): MokuPilot call agent running on this node. */
   pilotCall?: NodePilotCall
+  /** `POST /api/node/relay-key` (#513): activates a staged fresh relay dial key after claim. */
+  relayKey?(publicKey: string): Promise<Answer>
 }
 
 /** The secrets of one profile's bundle, at most this many bytes of JSON. */
@@ -93,6 +95,7 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
   const secrets = o.secrets
   const leave = o.leave
   const update = o.update
+  const relayKey = o.relayKey
   return [
     ...(o.move ? moveRoutes(o.move) : []),
     {
@@ -189,6 +192,19 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
     ...(leave ? [leaveRoute(leave)] : []),
     ...(update ? updateRoutes(update) : []),
     ...(o.pilotCall ? pilotCallDoorRoutes(o.pilotCall) : []),
+    ...(relayKey
+      ? [
+          {
+            method: 'POST' as const,
+            path: '/api/node/relay-key',
+            async handle(req: Request) {
+              const body = await jsonUpTo(req, 4096)
+              if (!isRecord(body) || typeof body.publicKey !== 'string') return json(400, { ok: false, error: 'body' })
+              return answer(await relayKey(body.publicKey))
+            },
+          },
+        ]
+      : []),
   ]
 }
 

@@ -112,6 +112,19 @@ describe('Add a computer UI (#513)', () => {
     expect(
       text([byId(draw({ ...COMPUTER_IDLE_VIEW, phase: 'done', device: { id: 'anna-mac' } }), 'devices-sheet')]),
     ).toContain('anna-mac is now a node of this board.')
+    expect(
+      text([
+        byId(
+          draw({
+            ...COMPUTER_IDLE_VIEW,
+            phase: 'waiting',
+            command: 'echo XYZ | base64 -d | gunzip | sh',
+            next: { key: 'node.computer.hint.claimed' },
+          }),
+          'devices-sheet',
+        ),
+      ]),
+    ).toContain('board node forget')
     expect(text([byId(draw(COMPUTER_IDLE_VIEW, 'ru'), 'devices-sheet')])).toContain('Добавить компьютер')
   })
 })

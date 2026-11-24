@@ -83,8 +83,8 @@ function validateInput(i: NodeOneshotInput): {
   const sshPort = i.relay.sshPort
   const user = (i.relay.user ?? RELAY_NODE_USER).trim()
   const socket = i.relay.socket.trim()
-  const hostKey = i.relay.hostKey.trim()
-  const dialKey = i.dialKey.trimEnd()
+  const hostKey = i.relay.hostKey.replaceAll('\r\n', '\n').replaceAll('\r', '').trim()
+  const dialKey = i.dialKey.replaceAll('\r\n', '\n').replaceAll('\r', '').trimEnd()
   const code = i.code.trim()
   const expiresAt = i.expiresAt
   const commit = (i.commit ?? '').trim()
@@ -214,6 +214,7 @@ export function nodeOneshotScript(input: NodeOneshotInput): string {
     '  awk -v a="$1" -v b="$2" \'BEGIN { if (a == "") exit 1; split(a, x, "."); split(b, y, "."); for (i = 1; i <= 3; i++) { if (x[i] + 0 > y[i] + 0) exit 0; if (x[i] + 0 < y[i] + 0) exit 1 } exit 0 }\'',
     '}',
     '',
+    'main() {',
     'OS=$(uname -s)',
     'case "$OS" in',
     '  Linux|Darwin) ;;',
@@ -331,31 +332,47 @@ export function nodeOneshotScript(input: NodeOneshotInput): string {
     'chmod 644 "$PROFILE_FILE.tmp.$$"',
     'mv -f "$PROFILE_FILE.tmp.$$" "$PROFILE_FILE"',
     '',
+    'STARTED=0',
     'if [ "$OS" = "Linux" ]; then',
     '  UNIT_FILE="$HOME/.config/systemd/user/herdr.service"',
-    `  write_file_mode "$UNIT_FILE" 644 <<'${UNIT_END}'`,
+    '  if [ ! -f "$UNIT_FILE" ]; then',
+    `    write_file_mode "$UNIT_FILE" 644 <<'${UNIT_END}'`,
     herdrUnit().trimEnd(),
     UNIT_END,
+    '  fi',
     '  if command -v systemctl >/dev/null 2>&1; then',
     '    systemctl --user daemon-reload >/dev/null 2>&1 || true',
     '    systemctl --user enable herdr.service >/dev/null 2>&1 || true',
-    '    if ! systemctl --user is-active --quiet herdr.service >/dev/null 2>&1; then',
-    '      systemctl --user start herdr.service >/dev/null 2>&1 || say "Note: start herdr with: herdr server"',
+    '    if systemctl --user is-active --quiet herdr.service >/dev/null 2>&1; then',
+    '      STARTED=1',
+    '    elif systemctl --user start herdr.service >/dev/null 2>&1; then',
+    '      STARTED=1',
     '    fi',
     '  fi',
     'else',
     '  mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"',
     `  PLIST="$HOME/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"`,
-    `  AB_PLIST="$PLIST" "$BUN_CMD" -e ${shQuote(WRITE_PLIST_JS)}`,
+    '  if [ ! -f "$PLIST" ]; then',
+    `    AB_PLIST="$PLIST" "$BUN_CMD" -e ${shQuote(WRITE_PLIST_JS)}`,
+    '  fi',
     '  if command -v launchctl >/dev/null 2>&1; then',
     '    _uid=$(id -u)',
-    `    if ! launchctl print "gui/$_uid/${LAUNCHD_LABEL}" >/dev/null 2>&1; then`,
-    '      launchctl bootstrap "gui/$_uid" "$PLIST" >/dev/null 2>&1 || launchctl load -w "$PLIST" >/dev/null 2>&1 || say "Note: start herdr with: herdr server"',
+    `    if launchctl print "gui/$_uid/${LAUNCHD_LABEL}" >/dev/null 2>&1; then`,
+    '      STARTED=1',
+    '    elif launchctl bootstrap "gui/$_uid" "$PLIST" >/dev/null 2>&1 || launchctl load -w "$PLIST" >/dev/null 2>&1; then',
+    '      STARTED=1',
     '    fi',
     '  fi',
     'fi',
     '',
-    'say "Done: $NODE_ID is configured and dialing the relay. Click Approve on your master board."',
+    'if [ "$STARTED" = 1 ]; then',
+    '  say "Done: $NODE_ID is configured and dialing the relay. Click Approve on your master board."',
+    'else',
+    '  say "Configured $NODE_ID, but herdr was not started automatically. Start it with: herdr server"',
+    'fi',
+    '}',
+    '',
+    'main </dev/null',
     '',
   ].join('\n')
 }

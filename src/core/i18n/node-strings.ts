@@ -413,6 +413,14 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.computer.err.idMismatch':
       'Device id must match the computer ({id}). Recreate the command to pick another id.',
     'node.computer.err.expired': 'The 10-minute join code expired.',
+    'node.computer.err.expiredRemoveFailed': 'Join code expired, still retrying removal of relay key: {error}',
+    'node.computer.err.alreadyClaimed': 'This computer is already claimed by a master.',
+    'node.computer.next.claimed': 'Run board node forget on that computer first, then create a new command.',
+    'node.computer.hint.claimed': 'That computer says it is already claimed. Run board node forget there first.',
+    'node.computer.hint.burned':
+      'That join code was ended or expired on the computer. Cancel and create a new command.',
+    'node.computer.hint.oldPlugin':
+      'The computer answered without NAT join support. Wait for install to finish or update it.',
     'node.computer.err.cancelled': 'Cancelled.',
   },
   ru: {
@@ -829,6 +837,14 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.computer.err.idMismatch':
       'Id устройства должен совпадать с компьютером ({id}). Создайте команду заново, чтобы задать другой id.',
     'node.computer.err.expired': 'Код подключения на 10 минут истёк.',
+    'node.computer.err.expiredRemoveFailed': 'Код истёк, но не удалось удалить ключ релея ({error}); повторим попытку.',
+    'node.computer.err.alreadyClaimed': 'Этот компьютер уже привязан к доске.',
+    'node.computer.next.claimed': 'Выполните на компьютере board node forget и создайте команду заново.',
+    'node.computer.hint.claimed': 'Компьютер сообщает, что уже привязан. Выполните там board node forget.',
+    'node.computer.hint.burned':
+      'Код на компьютере больше не действует или исчерпан. Нажмите Отмена и создайте новую команду.',
+    'node.computer.hint.oldPlugin':
+      'Компьютер ответил без поддержки NAT-подключения. Дождитесь завершения установки или обновите плагин.',
     'node.computer.err.cancelled': 'Отменено.',
   },
 }

@@ -107,6 +107,7 @@ export function relayPipeDeps(
 
 export interface OpenedRelayForward {
   localPort: number
+  alive(): boolean
   close(): Promise<void>
   killNow(): void
 }
@@ -143,6 +144,7 @@ export async function openRelayForward(o: {
   return new Promise(resolve => {
     let settled = false
     let asked = false
+    let exited = false
     let closing: Promise<void> | null = null
     const closeForward = (): Promise<void> => {
       if (closing) return closing
@@ -173,8 +175,12 @@ export async function openRelayForward(o: {
           ok: true,
           forward: {
             localPort: port,
+            alive: () => !asked && !exited,
             close: closeForward,
-            killNow: () => child.killNow(),
+            killNow: () => {
+              asked = true
+              child.killNow()
+            },
           },
         })
         return
@@ -185,6 +191,7 @@ export async function openRelayForward(o: {
       }
     })
     void child.exited.then(r => {
+      exited = true
       if (settled || asked) return
       if (r.error) return finish({ ok: false, error: `${bin}: ${r.error}`, hint: 'noSsh' })
       const hint = sshHint(lines)

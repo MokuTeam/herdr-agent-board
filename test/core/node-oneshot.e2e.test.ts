@@ -213,6 +213,73 @@ describe('node-oneshot script and paste (#513)', () => {
     }
   }, 60_000)
 
+  test('strips CR from Windows keys, protects stdin via main </dev/null, preserves existing unit/plist, and avoids Done when service fails to start', () => {
+    for (const osName of ['Linux', 'Darwin'] as const) {
+      const dir = mkdtempSync(join(tmpdir(), `ab-oneshot-hardening-${osName}-`))
+      try {
+        const home = join(dir, 'home')
+        mkdirSync(home, { recursive: true })
+        const { repoUrl, commit } = makeBarePluginRepo(dir)
+        const { binDir } = makeFakeBin(dir, osName)
+        // Make herdr swallow stdin (`cat >/dev/null`) and systemctl/launchctl fail to start
+        writeFileSync(
+          join(binDir, 'herdr'),
+          `#!/bin/sh
+if [ "\${1:-}" = "--version" ]; then echo "herdr ${HERDR_MIN}"; exit 0; fi
+cat >/dev/null
+exit 0
+`,
+          { mode: 0o755 },
+        )
+        chmodSync(join(binDir, 'herdr'), 0o755)
+        writeFileSync(join(binDir, 'systemctl'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+        chmodSync(join(binDir, 'systemctl'), 0o755)
+        writeFileSync(join(binDir, 'launchctl'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+        chmodSync(join(binDir, 'launchctl'), 0o755)
+
+        const unitOrPlist =
+          osName === 'Linux'
+            ? join(home, '.config', 'systemd', 'user', 'herdr.service')
+            : join(home, 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`)
+        mkdirSync(join(unitOrPlist, '..'), { recursive: true })
+        writeFileSync(unitOrPlist, '# custom existing service file\n')
+
+        const script = nodeOneshotScript({
+          relay: {
+            host: 'relay.example.com',
+            sshPort: 2222,
+            socket: 'cleo-node-112233',
+            hostKey: `${HOST_KEY}\r\n`,
+          },
+          dialKey: `${DIAL_KEY.replaceAll('\n', '\r\n')}\r\n`,
+          code: 'JoinCode_0123456789abcdef',
+          expiresAt: 1800000000000,
+          commit,
+          repoUrl,
+          id: 'cleo-node',
+        })
+        const r = spawnSync('dash', ['-s'], {
+          input: script,
+          env: { HOME: home, PATH: `${binDir}:/usr/local/bin:/usr/bin:/bin`, TERM: 'xterm-256color' },
+          encoding: 'utf8',
+          timeout: 30_000,
+        })
+        expect(r.status).toBe(0)
+        // Existing service file untouched
+        expect(readFileSync(unitOrPlist, 'utf8')).toBe('# custom existing service file\n')
+        // Stdin-eating herdr did not eat the rest of the script; failed start must NOT print Done
+        expect(r.stdout).not.toContain('Done:')
+        expect(r.stdout).toContain('Start it with: herdr server')
+        // Windows CR stripped cleanly from written keys
+        const nodeDir = join(home, '.local', 'state', 'herdr', 'plugins', 'agent-board', 'node')
+        expect(readFileSync(join(nodeDir, 'relay-key'), 'utf8')).not.toContain('\r')
+        expect(readFileSync(join(nodeDir, 'relay-known-hosts'), 'utf8')).not.toContain('\r')
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    }
+  }, 60_000)
+
   test('refuses corrupt config.json without overwriting it, and falls back gracefully on unpublished commit', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ab-oneshot-badcfg-'))
     try {

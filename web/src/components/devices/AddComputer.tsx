@@ -163,7 +163,7 @@ export function AddComputer({ open: panelOpen = true, initial }: AddComputerProp
         </div>
       )}
 
-      {phase === 'expired' && <p className="access-caution">{t('node.computer.expired')}</p>}
+      {phase === 'expired' && <p className="access-caution">{v?.error || t('node.computer.expired')}</p>}
 
       {said && (
         <p className="access-why devices-said" role="alert">
@@ -175,6 +175,7 @@ export function AddComputer({ open: panelOpen = true, initial }: AddComputerProp
           {v.error}
         </p>
       )}
+      {v?.next && phase === 'failed' && <p className="sheet-meta devices-hint">{textOf(v.next, t)}</p>}
 
       {(phase === 'waiting' || phase === 'found') && v?.command && (
         <div className="access-plain">
@@ -192,6 +193,11 @@ export function AddComputer({ open: panelOpen = true, initial }: AddComputerProp
           {phase === 'waiting' && (
             <>
               <p className="sheet-meta">{t('node.computer.waiting')}</p>
+              {v.next && (
+                <p className="sheet-meta devices-hint" role="status">
+                  {textOf(v.next, t)}
+                </p>
+              )}
               <div className="access-actions">
                 <button type="button" className="button" disabled={!canEdit || working} onClick={cancel}>
                   {t('node.add.cancel')}

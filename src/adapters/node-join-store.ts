@@ -1,7 +1,7 @@
 // The node's active one-time join code (<state>/node/join.json, mode 0600) for claiming a
 // computer behind NAT (#513, docs/design/nodes 20.2). Written by the one-command installer and
 // deleted on expiry, after 5 wrong claim codes, or on successful claim.
-import { mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   type HelloJoin,
@@ -13,11 +13,13 @@ import {
   parseJoinRecord,
   sameJoinCode,
 } from '../core/node-join.ts'
+import { relayKeyBody } from '../core/relay-texts.ts'
 import { replaceFile } from './json-store.ts'
 import { nodeDir } from './node-store.ts'
+import { generateKey } from './ssh.ts'
 
 export type ClaimAttempt =
-  | { ok: true }
+  | { ok: true; expiresAt: number }
   | { ok: false; status: 410 }
   | { ok: false; status: 403; remaining: number; ended: boolean }
 
@@ -28,8 +30,8 @@ export interface NodeJoinStore {
   write(rec: { code: string; expiresAt: number }): void
   /** The `node.join` payload for GET /api/hello when active and cert fingerprint is known; null otherwise. */
   hello(nodeId: string, fingerprint: string): HelloJoin | null
-  /** Checks a submitted claim code: deletes on match or after JOIN_MAX_WRONG failures. */
-  attempt(code: string): ClaimAttempt
+  /** Checks a submitted claim code: clears on match (unless clearOnMatch is false) or after JOIN_MAX_WRONG failures. */
+  attempt(code: string, opts?: { clearOnMatch?: boolean }): ClaimAttempt
   /** Deletes join.json if present. */
   clear(): void
 }
@@ -80,12 +82,12 @@ export function createNodeJoinStore({ dir = nodeDir(), now = Date.now }: NodeJoi
       if (!rec) return null
       return { fingerprint: fp, proof: joinProof(rec.code, fp, nodeId), expiresAt: rec.expiresAt }
     },
-    attempt(code) {
+    attempt(code, opts) {
       const rec = active()
       if (!rec) return { ok: false, status: 410 }
       if (typeof code === 'string' && sameJoinCode(code, rec.code)) {
-        clear()
-        return { ok: true }
+        if (opts?.clearOnMatch !== false) clear()
+        return { ok: true, expiresAt: rec.expiresAt }
       }
       const attempts = rec.attempts + 1
       if (attempts >= JOIN_MAX_WRONG) {
@@ -97,4 +99,47 @@ export function createNodeJoinStore({ dir = nodeDir(), now = Date.now }: NodeJoi
     },
     clear,
   }
+}
+
+/** Stages a fresh relay keypair (`relay-key.next` / `relay-key.next.pub`) in `dir` before rotation. */
+export async function stageNodeRelayKey(
+  dir = nodeDir(),
+): Promise<{ ok: true; publicKey: string } | { ok: false; error: string }> {
+  const nextPriv = join(dir, 'relay-key.next')
+  const nextPub = `${nextPriv}.pub`
+  mkdirSync(dir, { recursive: true })
+  rmSync(nextPriv, { force: true })
+  rmSync(nextPub, { force: true })
+  return await generateKey('agent-board relay node', nextPriv)
+}
+
+/**
+ * Promotes the staged `relay-key.next` matching `publicKey` into `<dir>/relay-key` (0600).
+ * Idempotent if `<dir>/relay-key.pub` already carries `publicKey`.
+ */
+export function activateNodeRelayKey(
+  publicKey: string,
+  dir = nodeDir(),
+): { ok: true; rotated: boolean } | { ok: false; status: number; error: string } {
+  const want = relayKeyBody(publicKey)
+  if (!want) return { ok: false, status: 400, error: 'invalid relay public key' }
+  const priv = join(dir, 'relay-key')
+  const pub = `${priv}.pub`
+  const nextPriv = join(dir, 'relay-key.next')
+  const nextPub = `${nextPriv}.pub`
+  if (existsSync(nextPriv) && existsSync(nextPub)) {
+    const body = relayKeyBody(readFileSync(nextPub, 'utf8'))
+    if (body === want) {
+      chmodSync(nextPriv, 0o600)
+      chmodSync(nextPub, 0o600)
+      renameSync(nextPriv, priv)
+      renameSync(nextPub, pub)
+      return { ok: true, rotated: true }
+    }
+  }
+  if (existsSync(priv) && existsSync(pub)) {
+    const activeBody = relayKeyBody(readFileSync(pub, 'utf8'))
+    if (activeBody === want) return { ok: true, rotated: false }
+  }
+  return { ok: false, status: 409, error: 'no matching staged relay key' }
 }
