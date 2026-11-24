@@ -443,7 +443,13 @@ export async function startServer({
   // Headless master admin (#694): resolved lazily once board, localNodeRoutes and localSetupRoutes
   // are set up below (never called before start() wires routes and begins listening).
   const remoteAdminRoutes = (path: string): Route[] | null =>
-    path === '/api/nodes' && localNodeRoutes ? localNodeRoutes : path === '/api/nodes/setup' ? localSetupRoutes : null
+    path === '/api/nodes' && localNodeRoutes
+      ? localNodeRoutes
+      : path === '/api/nodes/setup'
+        ? localSetupRoutes
+        : path.startsWith('/api/mokupilot/node-call/') && localPilotCallRoutes
+          ? localPilotCallRoutes
+          : null
   const listener = createRemoteListener({
     cfg,
     webPort: port,
@@ -455,6 +461,7 @@ export async function startServer({
     log,
     onChange: () => board.publish(),
     adminRoutes: remoteAdminRoutes,
+    onAdminAuditCheck: () => board.checkAdminAudit(),
     onAdminAction: entry => board.recordAdmin(entry),
   })
   // The board through the owner's domain (core/tunnel.ts): the login (services/access.ts), the
@@ -495,6 +502,7 @@ export async function startServer({
       void supervisor.sync()
     },
     adminRoutes: remoteAdminRoutes,
+    onAdminAuditCheck: () => board.checkAdminAudit(),
     onAdminAction: entry => board.recordAdmin(entry),
   })
   // The tunnel's ssh (services/tunnel.ts). It starts nothing until this board holds the web port

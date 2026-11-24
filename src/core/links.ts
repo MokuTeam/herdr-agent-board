@@ -356,6 +356,7 @@ export interface AdminEdge {
   at: number
   method: string
   path: string
+  op?: string
   status: number
   via: 'tunnel' | 'tailnet' | 'serve'
   who: string

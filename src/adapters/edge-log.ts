@@ -5,7 +5,7 @@
 // the start: marks.json keeps, per transcript, the byte offset its logged lines go up to, and the
 // newest segment's own lines complete it after a crash between the two writes, so no event is
 // written twice. One flush writes into one segment.
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { type AdminEdge, type Edge, edgeOf, ends, isOwn, type LinkItem } from '../core/links.ts'
 import { isRecord, readJson, replaceFile } from './json-store.ts'
@@ -29,6 +29,8 @@ export interface EdgeLog {
   add(path: string, found: readonly FoundEvent[]): void
   /** Write the events added since, each with its session and the one at its other end among `items`. How many. */
   flush(items: readonly EdgeItem[]): number
+  /** Verify the audit store directory and active segment can be opened for append (#694). */
+  checkWritable(): void
   /** Record a remote admin action (#694) into the edge log, numbered next after `seq`. */
   record(entry: Omit<AdminEdge, 'seq'>): AdminEdge
   /** The lines after number `since`, at most `limit`, and the number to ask after next time. */
@@ -138,6 +140,15 @@ export function createEdgeLog({
       mkdirSync(dir, { recursive: true })
       replaceFile(marksFile, JSON.stringify({ version: 1, marks } satisfies Marks))
       return out.length
+    },
+
+    checkWritable() {
+      load()
+      mkdirSync(dir, { recursive: true })
+      const last = segments().at(-1)
+      const file = last === undefined ? seq + 1 : last
+      const fd = openSync(join(dir, segmentName(file)), 'a', 0o600)
+      closeSync(fd)
     },
 
     record(entry) {

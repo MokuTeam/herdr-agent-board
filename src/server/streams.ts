@@ -56,6 +56,16 @@ export async function deskOpRefusal(req: Request, raw: string): Promise<Response
   return DESK_REMOTE_OPS.has(isRecord(body) ? body.op : undefined) ? null : json(403, { error: 'local' })
 }
 
+const SAFE_OP = /^[a-z0-9][a-z0-9._-]{0,47}$/i
+
+/** Short `op` field from a mutating JSON request for the audit log, without reading or logging any other field (#694). */
+export async function adminOpOf(req: Request): Promise<string | undefined> {
+  if (req.method === 'GET' || req.method === 'HEAD') return undefined
+  const body = await readBody(req.clone()).catch(() => null)
+  const op = isRecord(body) ? body.op : undefined
+  return typeof op === 'string' && SAFE_OP.test(op) ? op : undefined
+}
+
 /**
  * `res` as it is, unless it is an event stream (the board's events, a terminal): then one that
  * ends, after an `unpaired` event, once `watch` says so; `headers` added to it. `watch(gone)`

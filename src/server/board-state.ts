@@ -80,6 +80,8 @@ export interface BoardState {
   refresh(): Promise<void>
   /** The edge log's lines after number `since` (adapters/edge-log.ts). */
   edges: EdgeLog['read']
+  /** Verify the edge log audit store is writable before running a remote admin mutation (#694). */
+  checkAdminAudit(): boolean
   /** Record a remote admin action (#694) into the edge log. */
   recordAdmin(entry: Omit<AdminEdge, 'seq'>): void
 }
@@ -614,11 +616,24 @@ export function createBoardState({
     publish,
     refresh,
     edges: (since, limit) => edgeLog.read(since, limit),
+    checkAdminAudit() {
+      try {
+        edgeLog.checkWritable()
+        return true
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        log(`edge log: audit store not writable: ${msg}`)
+        void notify('Agent board: remote admin audit unavailable', msg).catch(() => {})
+        return false
+      }
+    },
     recordAdmin(entry) {
       try {
         edgeLog.record(entry)
       } catch (err) {
-        log(`edge log: ${err instanceof Error ? err.message : String(err)}`)
+        const msg = err instanceof Error ? err.message : String(err)
+        log(`edge log: ${msg}`)
+        void notify('Agent board: remote admin audit write failed', msg).catch(() => {})
       }
     },
   }

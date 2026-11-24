@@ -42,7 +42,7 @@ import { threadsConfig } from '../core/work-threads.ts'
 import type { Access, SignIn, Who } from '../services/access.ts'
 import type { Probes } from '../services/tunnel.ts'
 import { type Body, dispatch, type GuardState, json, peerOf, type Route, readBody } from './http.ts'
-import { decoded, endsWhenGone, remoteRefusal } from './streams.ts'
+import { adminOpOf, decoded, endsWhenGone, remoteRefusal } from './streams.ts'
 import { probeAnswer } from './tunnel-probe.ts'
 
 export interface TunnelListenerOptions {
@@ -63,6 +63,8 @@ export interface TunnelListenerOptions {
   onChange: () => void
   /** Extra admin route resolver (e.g. /api/nodes, /api/nodes/setup) used only when `ownerAdmin` is authorised (#694). */
   adminRoutes?: (path: string) => Route[] | null
+  /** Preflight check that the audit store is writable before executing a remote admin mutation (#694). */
+  onAdminAuditCheck?: () => boolean
   /** Record each admin action unlocked by `remote.ownerAdmin` in the edge log (#694). */
   onAdminAction?: (entry: Omit<AdminEdge, 'seq'>) => void
 }
@@ -295,11 +297,18 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         return r.ok ? json(200, { ok: true, id: r.id }) : json(400, { ok: false, error: r.error })
       }
       const selected = ownerAdmin ? (o.adminRoutes?.(path) ?? o.routes) : o.routes
-      const logAdmin = ownerAdmin && isOwnerAdminRoute(raw, path, teamOn)
+      const logAdmin = ownerAdmin && isOwnerAdminRoute(req.method, raw, path, teamOn)
+      if (logAdmin && o.onAdminAuditCheck && !o.onAdminAuditCheck()) return json(503, { ok: false, error: 'audit' })
+      const op = logAdmin ? await adminOpOf(req) : undefined
       let res: Response | undefined
       try {
-        res = await dispatch(selected, req, url, path, { ...o.guards, origins: [origin], ownFiles: o.ownFiles }, () =>
-          peerOf(srv, req),
+        res = await dispatch(
+          selected,
+          req,
+          url,
+          path,
+          { ...o.guards, origins: [origin], ownFiles: o.ownFiles, remote: true },
+          () => peerOf(srv, req),
         )
         return endsWhenGone(res, gone => o.access.watch(login.id, gone), { 'x-accel-buffering': 'no' })
       } finally {
@@ -309,6 +318,7 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
             at: Date.now(),
             method: req.method,
             path: path.slice(0, 200),
+            ...(op && { op }),
             status: res?.status ?? 500,
             via: 'tunnel',
             who: `${login.method}:${login.id}${login.label ? ` (${login.label})` : ''}`,

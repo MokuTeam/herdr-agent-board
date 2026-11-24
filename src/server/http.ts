@@ -36,6 +36,8 @@ export interface RouteContext {
    * listener does not read (GuardState.ownFiles): asked with the very path the route then reads.
    */
   ownFile(target: string): boolean
+  /** Whether this request arrived through a remote listener (Tailscale, serve, tunnel). */
+  remote: boolean
 }
 
 /** Answers, or returns undefined to let the next route in the table answer. */
@@ -67,6 +69,8 @@ export interface GuardState {
    * Set by the tunnel listener only: on the others every path reads as before.
    */
   ownFiles?: (target: string) => boolean
+  /** True when dispatching from a remote listener (Tailscale, serve, tunnel). */
+  remote?: boolean
 }
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
@@ -177,6 +181,7 @@ export async function dispatch(
       body: async () => fieldsOf(await rawBody()),
       refuse: guard => check(guard, req, url, state),
       ownFile: target => !!state.ownFiles?.(target),
+      remote: state.remote === true,
     }
     for (const guard of route.guard ?? []) {
       const refused = ctx.refuse(guard)

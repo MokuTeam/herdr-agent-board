@@ -179,25 +179,29 @@ test("#280: a fork's copied events are its source's, not logged as the fork's", 
   )
 })
 
-test('#694: record() appends admin edges with monotonic seq across restarts without altering marks.json', () => {
+test('#694: record() appends admin edges with op and monotonic seq; checkWritable() fails closed when blocked', () => {
   const dir = temp()
   const log = createEdgeLog({ dir })
+  log.checkWritable()
   const first = log.record({
     kind: 'admin',
     at: 1000,
-    method: 'GET',
+    method: 'POST',
     path: '/api/access',
+    op: 'password',
     status: 200,
     via: 'tunnel',
     who: 'password:abc123',
     from: '203.0.113.9',
   })
   assert.equal(first.seq, 1)
+  assert.equal(first.op, 'password')
   const second = log.record({
     kind: 'admin',
     at: 2000,
     method: 'POST',
     path: '/api/backup',
+    op: 'passphrase',
     status: 200,
     via: 'serve',
     who: 'me@example.com (ipad, d1)',
@@ -208,8 +212,9 @@ test('#694: record() appends admin edges with monotonic seq across restarts with
   const third = reopened.record({
     kind: 'admin',
     at: 3000,
-    method: 'GET',
+    method: 'POST',
     path: '/api/nodes',
+    op: 'pause',
     status: 200,
     via: 'tailnet',
     who: 'me@example.com (phone, d2)',
@@ -217,11 +222,14 @@ test('#694: record() appends admin edges with monotonic seq across restarts with
   })
   assert.equal(third.seq, 3)
   assert.deepEqual(
-    reopened.read(0).edges.map(e => [e.seq, e.kind]),
+    reopened.read(0).edges.map(e => [e.seq, e.kind, 'op' in e ? e.op : undefined]),
     [
-      [1, 'admin'],
-      [2, 'admin'],
-      [3, 'admin'],
+      [1, 'admin', 'password'],
+      [2, 'admin', 'passphrase'],
+      [3, 'admin', 'pause'],
     ],
   )
+  const blockedDir = join(dir, 'blocked-as-file')
+  writeFileSync(blockedDir, 'not a dir')
+  assert.throws(() => createEdgeLog({ dir: blockedDir }).checkWritable())
 })

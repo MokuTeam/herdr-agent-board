@@ -4,10 +4,12 @@ import {
   bearerOf,
   deskSteps,
   desktopOnly,
+  isNodesAdminPath,
   isOwnerAdminDevice,
   isOwnerAdminRoute,
   isOwnerLogin,
   isStrongTunnelLogin,
+  isTaggedLogin,
   localOnly,
   ownerTeam,
   remoteConfig,
@@ -98,9 +100,6 @@ test("the remote mode's, Remote access's, wake's, the backup's and Settings → 
     // which process the board is and its install folder (#356)
     '/api/process',
     '/api/process/',
-    // master device management and setup (#694)
-    '/api/nodes',
-    '/api/nodes/setup',
   ])
     expect(localOnly(path)).toBe(true)
   for (const path of [
@@ -114,9 +113,14 @@ test("the remote mode's, Remote access's, wake's, the backup's and Settings → 
     '/api/time',
     '/api/links/logs',
     '/api/processes',
+    '/api/nodes',
+    '/api/nodes/setup',
     '/api/nodez',
   ])
     expect(localOnly(path)).toBe(false)
+  expect(isNodesAdminPath('/api/nodes')).toBe(true)
+  expect(isNodesAdminPath('/api/nodes/setup')).toBe(true)
+  expect(isNodesAdminPath('/api/nodez')).toBe(false)
   expect(localOnly('/api/login/password')).toBe(false)
 })
 
@@ -215,12 +219,18 @@ test("the owner's own logins may read and write the team away from the computer,
   expect(isOwnerLogin('me@example.com', null)).toBe(false)
 })
 
-test('ownerAdmin helpers classify strong logins, non-desk owner devices, and audited admin routes (#694)', () => {
+test('ownerAdmin helpers classify strong logins, non-desk owner devices, tagged logins, and mutating admin routes (#694)', () => {
+  expect(isTaggedLogin('tagged-devices')).toBe(true)
+  expect(isTaggedLogin('Tagged-Server')).toBe(true)
+  expect(isTaggedLogin('me@example.com')).toBe(false)
+  expect(isTaggedLogin(null)).toBe(false)
+
   expect(isOwnerAdminDevice({}, 'Me@Example.com', 'me@example.com')).toBe(true)
   expect(isOwnerAdminDevice({ desk: false }, 'me@example.com', 'me@example.com')).toBe(true)
   expect(isOwnerAdminDevice({ desk: true }, 'me@example.com', 'me@example.com')).toBe(false)
   expect(isOwnerAdminDevice({}, 'anna@example.com', 'me@example.com')).toBe(false)
   expect(isOwnerAdminDevice({}, 'me@example.com', null)).toBe(false)
+  expect(isOwnerAdminDevice({}, 'tagged-devices', 'tagged-devices')).toBe(false)
 
   expect(isStrongTunnelLogin({ method: 'passkey' }, true)).toBe(true)
   expect(isStrongTunnelLogin({ method: 'passkey' }, false)).toBe(true)
@@ -243,15 +253,18 @@ test('ownerAdmin helpers classify strong logins, non-desk owner devices, and aud
     '/api/process',
     '/api/nodes',
     '/api/nodes/setup',
+    '/api/mokupilot/node-call/abc12345/start',
     '/api/team/agents',
     '/api/team/trust',
   ]) {
-    expect([path, isOwnerAdminRoute(path, path, true)]).toEqual([path, true])
+    expect([path, isOwnerAdminRoute('POST', path, path, true)]).toEqual([path, true])
+    expect([path, isOwnerAdminRoute('GET', path, path, true)]).toEqual([path, false])
+    expect([path, isOwnerAdminRoute('HEAD', path, path, true)]).toEqual([path, false])
   }
-  expect(isOwnerAdminRoute('/api/%61ccess', '/api/access', true)).toBe(true)
-  expect(isOwnerAdminRoute('/api/links/log', '/api/links/log', true)).toBe(false)
-  expect(isOwnerAdminRoute('/api/team/send', '/api/team/send', true)).toBe(false)
-  expect(isOwnerAdminRoute('/api/team/send', '/api/team/send', false)).toBe(true)
-  expect(isOwnerAdminRoute('/api/threads', '/api/threads', true)).toBe(false)
-  expect(isOwnerAdminRoute('/api/board', '/api/board', true)).toBe(false)
+  expect(isOwnerAdminRoute('POST', '/api/%61ccess', '/api/access', true)).toBe(true)
+  expect(isOwnerAdminRoute('POST', '/api/links/log', '/api/links/log', true)).toBe(false)
+  expect(isOwnerAdminRoute('POST', '/api/team/send', '/api/team/send', true)).toBe(false)
+  expect(isOwnerAdminRoute('POST', '/api/team/send', '/api/team/send', false)).toBe(true)
+  expect(isOwnerAdminRoute('POST', '/api/threads', '/api/threads', true)).toBe(false)
+  expect(isOwnerAdminRoute('POST', '/api/board', '/api/board', true)).toBe(false)
 })

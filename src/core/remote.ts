@@ -121,9 +121,12 @@ export const DESK_REMOTE_OPS: ReadonlySet<unknown> = new Set(['approve', 'deny',
  * Refused on every remote listener, in both spellings of a path.
  */
 export const localOnly = (path: string): boolean =>
-  /^\/api\/(remote|access|wake|backup|time-settings|calendar-settings|links\/log|team|process|threads|threads-settings|feature-settings|self-update|mokupilot\/node-call|housekeeping|nodes)(\/|$)/.test(
+  /^\/api\/(remote|access|wake|backup|time-settings|calendar-settings|links\/log|team|process|threads|threads-settings|feature-settings|self-update|mokupilot\/node-call|housekeeping)(\/|$)/.test(
     path,
   )
+
+/** Master device management and setup routes (`/api/nodes`, `/api/nodes/setup`): kept 404 for non-admin remote callers as on main (#694). */
+export const isNodesAdminPath = (path: string): boolean => /^\/api\/nodes(\/|$)/.test(path)
 
 /**
  * Threads (#392, docs/design/threads 5.3): away from the computer, the owner's own logins only (the
@@ -151,24 +154,29 @@ export const ownerTeam = (path: string): boolean => OWNER_TEAM.test(path)
 export const isOwnerLogin = (login: string | null, owner: string | null): boolean =>
   !!login && !!owner && login.toLowerCase() === owner.toLowerCase()
 
+/** Whether a Tailscale login is a synthetic tagged-node identity (e.g. `tagged-devices`), never a personal owner login. */
+export const isTaggedLogin = (login: string | null | undefined): boolean =>
+  !!login && login.toLowerCase().startsWith('tagged-')
+
 /** Whether a paired Tailscale device belongs to the owner's own login and is not marked as a desk. */
 export const isOwnerAdminDevice = (
   device: { desk?: boolean | undefined },
   login: string | null,
   owner: string | null,
-): boolean => !device.desk && isOwnerLogin(login, owner)
+): boolean => !device.desk && !isTaggedLogin(owner) && !isTaggedLogin(login) && isOwnerLogin(login, owner)
 
 /** Whether a tunnel login is one of the owner's own strong sign-ins (passkey, or password + TOTP while configured). */
 export const isStrongTunnelLogin = (login: { method?: unknown } | null | undefined, accessReady: boolean): boolean =>
   login?.method === 'passkey' || (login?.method === 'password' && accessReady)
 
 /**
- * Whether a request reaches an admin route unlocked by `remote.ownerAdmin` (#694) and should be
- * recorded in the edge log. Excludes routes already open to the owner (`ownerTeam`, `ownerThreads`)
- * and `GET/POST /api/links/log` itself (preventing a self-amplifying audit loop).
+ * Whether a request reaches a mutating admin route unlocked by `remote.ownerAdmin` (#694) and
+ * should be recorded in the edge log. Read-only GET/HEAD, routes already open to the owner
+ * (`ownerTeam`, `ownerThreads`), and `/api/links/log` are excluded.
  */
-export function isOwnerAdminRoute(raw: string, path: string, teamOn: boolean): boolean {
-  if (!(localOnly(raw) || localOnly(path))) return false
+export function isOwnerAdminRoute(method: string, raw: string, path: string, teamOn: boolean): boolean {
+  if (method === 'GET' || method === 'HEAD') return false
+  if (!(localOnly(raw) || localOnly(path) || isNodesAdminPath(raw) || isNodesAdminPath(path))) return false
   if (raw === '/api/links/log' || path === '/api/links/log') return false
   if (teamOn && ownerTeam(raw) && ownerTeam(path)) return false
   if (ownerThreads(raw) && ownerThreads(path)) return false

@@ -130,6 +130,11 @@ export interface Access {
     code: unknown,
     rp: { id: string },
   ): { ok: true; options: CreationOptions } | { ok: false; status: 403; error: 'code' }
+  /** Verify and consume a fresh TOTP code for remote step-up actions (#694). */
+  verifyStepUp(
+    code: unknown,
+    address?: string,
+  ): { ok: true } | { ok: false; status: 403 | 429; error: 'code' | 'limited'; retryAfterS?: number }
   /** The passkey made on one of `loginId`'s add challenges; `error` says why not, in a word. */
   addPasskey(
     loginId: string,
@@ -206,6 +211,8 @@ export function createAccess({
   }
   /** Room to record a `limited` attempt: password sign-in's numbers, apart from its counters. */
   const limitedRows = new RateLimiter(RATES.password)
+  /** Remote step-up TOTP verification limit, apart from sign-in counters (#694). */
+  const stepUpLimits = new RateLimiter(RATES.password)
   let pendingTotp: { bytes: Uint8Array; at: number } | null = null
   const seen = new Map<string, number>()
   const watchers = new Map<string, Set<() => void>>()
@@ -565,6 +572,22 @@ export function createAccess({
           timeout: CHALLENGE_MS,
         },
       }
+    },
+
+    verifyStepUp(code, address = 'remote') {
+      const at = now()
+      const room = stepUpLimits.take(address, at)
+      if (!room.ok) return { ok: false, status: 429, error: 'limited', retryAfterS: room.retryAfterS }
+      const refused = { ok: false, status: 403, error: 'code' } as const
+      if (freshStep(readSecrets(), code, at) === null) return refused
+      let passed = false
+      updateSecrets(s => {
+        const step = freshStep(s, code, at)
+        if (step === null || !s.totp) return s
+        passed = true
+        return { ...s, totp: { ...s.totp, lastStep: step } }
+      })
+      return passed ? { ok: true } : refused
     },
 
     addPasskey(loginId, body, expect, userAgent) {

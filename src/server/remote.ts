@@ -53,7 +53,7 @@ import type { Config } from '../core/types.ts'
 import { threadsConfig } from '../core/work-threads.ts'
 import type { Remote } from '../services/remote.ts'
 import { dispatch, type GuardState, json, peerOf, type Route, readBody } from './http.ts'
-import { decoded, deskOpRefusal, endsWhenGone, remoteRefusal } from './streams.ts'
+import { adminOpOf, decoded, deskOpRefusal, endsWhenGone, remoteRefusal } from './streams.ts'
 
 export interface Hello {
   board: 'agent-board'
@@ -105,6 +105,8 @@ export interface RemoteListenerOptions {
   onChange: () => void
   /** Extra admin route resolver (e.g. /api/nodes, /api/nodes/setup) used only when `ownerAdmin` is authorised (#694). */
   adminRoutes?: (path: string) => Route[] | null
+  /** Preflight check that the audit store is writable before executing a remote admin mutation (#694). */
+  onAdminAuditCheck?: () => boolean
   /** Record each admin action unlocked by `remote.ownerAdmin` in the edge log (#694). */
   onAdminAction?: (entry: Omit<AdminEdge, 'seq'>) => void
 }
@@ -278,9 +280,11 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
       if (req.method === 'GET' && raw === '/api/peers') return json(200, { peers: await peers() })
       // The board's page is for the computer's own browser; a phone has its app.
       if (!raw.startsWith('/api/') && !raw.startsWith('/uploads/')) return json(404, { error: 'not found' })
-      const guards = fromServe ? { ...o.guards, origins: [pwaOrigin] } : o.guards
+      const guards = fromServe ? { ...o.guards, origins: [pwaOrigin], remote: true } : { ...o.guards, remote: true }
       const selected = ownerAdmin ? (o.adminRoutes?.(path) ?? o.routes) : o.routes
-      const logAdmin = ownerAdmin && isOwnerAdminRoute(raw, path, teamConfig(o.cfg.team) !== null)
+      const logAdmin = ownerAdmin && isOwnerAdminRoute(req.method, raw, path, teamConfig(o.cfg.team) !== null)
+      if (logAdmin && o.onAdminAuditCheck && !o.onAdminAuditCheck()) return json(503, { ok: false, error: 'audit' })
+      const op = logAdmin ? await adminOpOf(req) : undefined
       let res: Response | undefined
       try {
         res = await dispatch(selected, req, url, path, guards, () => peerOf(srv, req))
@@ -292,6 +296,7 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
             at: Date.now(),
             method: req.method,
             path: path.slice(0, 200),
+            ...(op && { op }),
             status: res?.status ?? 500,
             via,
             who: `${who.login} (${device.device}, ${device.id})`,
