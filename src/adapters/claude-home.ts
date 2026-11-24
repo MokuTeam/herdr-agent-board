@@ -11,6 +11,7 @@ import { isAbsolute, join, relative } from 'node:path'
 import { onLanguage } from '../core/lang.ts'
 import { normDir, sameDir } from '../core/launch/names.ts'
 import { type Limits, parseLimits } from '../core/limits.ts'
+import { isCodeModeTranscriptLine } from '../core/pilot-call.ts'
 import { type QueuedPrompt, type QueueWindow, queuedPrompts } from '../core/queue.ts'
 import { projectFolderName } from '../core/resume.ts'
 import {
@@ -238,6 +239,67 @@ export async function lastCwdOf(file: string): Promise<string | null> {
     return null
   } catch {
     return null
+  } finally {
+    await fh?.close()
+  }
+}
+
+const CODE_MODE_CHUNK_BYTES = 256 << 10
+const CODE_MODE_MAX_LINE_BYTES = 64 << 10
+const CODE_MODE_MARKER = Buffer.from('"repl-mode"')
+
+/**
+ * Read-only bounded scan of a Claude transcript JSONL file for an active Code Mode marker
+ * (`{"type":"repl-mode","replMode":true,...}`). Streams in 256 KiB chunks and skips lines over
+ * 64 KiB so multi-MB tool/screenshot records never bloat memory.
+ */
+export async function transcriptUsesCodeMode(file: string): Promise<boolean> {
+  if (!file) return false
+  let fh: Awaited<ReturnType<typeof open>> | undefined
+  const checkLine = (buf: Buffer): boolean => {
+    if (buf.length === 0 || buf.indexOf(CODE_MODE_MARKER) < 0) return false
+    const end = buf[buf.length - 1] === 0x0d ? buf.length - 1 : buf.length
+    if (end === 0) return false
+    return isCodeModeTranscriptLine(buf.subarray(0, end).toString('utf8'))
+  }
+  try {
+    fh = await open(file, 'r')
+    const buf = Buffer.alloc(CODE_MODE_CHUNK_BYTES)
+    let carry: Buffer = Buffer.alloc(0)
+    let skippingLine = false
+    for (;;) {
+      const { bytesRead } = await fh.read(buf, 0, CODE_MODE_CHUNK_BYTES, null)
+      if (bytesRead === 0) break
+      const chunk = buf.subarray(0, bytesRead)
+      let pos = 0
+      for (;;) {
+        const nl = chunk.indexOf(0x0a, pos)
+        if (nl < 0) break
+        if (!skippingLine) {
+          const part = chunk.subarray(pos, nl)
+          if (carry.length + part.length <= CODE_MODE_MAX_LINE_BYTES) {
+            const lineBuf = carry.length ? Buffer.concat([carry, part]) : part
+            if (checkLine(lineBuf)) return true
+          }
+        }
+        carry = Buffer.alloc(0)
+        skippingLine = false
+        pos = nl + 1
+      }
+      const tail = chunk.subarray(pos)
+      if (!skippingLine && tail.length > 0) {
+        if (carry.length + tail.length > CODE_MODE_MAX_LINE_BYTES) {
+          carry = Buffer.alloc(0)
+          skippingLine = true
+        } else {
+          carry = carry.length ? Buffer.concat([carry, tail]) : Buffer.from(tail)
+        }
+      }
+    }
+    if (!skippingLine && carry.length > 0 && checkLine(carry)) return true
+    return false
+  } catch {
+    return false
   } finally {
     await fh?.close()
   }

@@ -10,6 +10,7 @@ import {
   lastCwdOf,
   readUsageCache,
   sessionCwd,
+  transcriptUsesCodeMode,
 } from '../../src/adapters/claude-home.ts'
 import { canSymlink, SYMLINK_SKIP_REASON } from '../support/fs.ts'
 
@@ -439,5 +440,41 @@ describe('lastCwdOf and sessionCwd (#657)', () => {
     assert.equal(await sessionCwd(fallbackFirst, ['', join(root, 'missing-card')]), firstDir)
     // 5. Nothing exists anywhere -> empty string.
     assert.equal(await sessionCwd(null, ['C:\\Work\\atlas', fileNotDir]), '')
+  })
+
+  test('transcriptUsesCodeMode handles CRLF, missing trailing newline, 256 KiB chunk boundary, and >64 KiB lines', async () => {
+    const root = newRoot()
+
+    // 1. CRLF and no trailing newline on the repl-mode line.
+    const crlfNoNl = join(root, 'crlf.jsonl')
+    writeFileSync(
+      crlfNoNl,
+      `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' } })}\r\n${JSON.stringify({
+        type: 'repl-mode',
+        replMode: true,
+      })}`,
+    )
+    assert.equal(await transcriptUsesCodeMode(crlfNoNl), true)
+
+    // 2. "repl-mode" key straddling the 256 KiB chunk boundary (262144 bytes).
+    const boundary = join(root, 'boundary.jsonl')
+    const cmLine = JSON.stringify({ type: 'repl-mode', replMode: true })
+    const line1Len = (256 << 10) - 12
+    const padLen = line1Len - Buffer.byteLength('{"type":"user","t":"') - Buffer.byteLength('"}\n')
+    const exactLine1 = `{"type":"user","t":"${'x'.repeat(padLen)}"}\n`
+    assert.equal(Buffer.byteLength(exactLine1), line1Len)
+    writeFileSync(boundary, `${exactLine1}${cmLine}\n`)
+    assert.equal(await transcriptUsesCodeMode(boundary), true)
+
+    // 3. >64 KiB line containing "repl-mode" is skipped without blowing memory, while a normal line later still matches.
+    const hugeSkipped = join(root, 'huge-skipped.jsonl')
+    const hugeLine = JSON.stringify({
+      type: 'repl-mode',
+      replMode: true,
+      pad: 'z'.repeat(65 * 1024),
+    })
+    writeFileSync(hugeSkipped, `${hugeLine}\n`)
+    assert.equal(await transcriptUsesCodeMode(hugeSkipped), false)
+    assert.equal(await transcriptUsesCodeMode(join(root, 'missing.jsonl')), false)
   })
 })

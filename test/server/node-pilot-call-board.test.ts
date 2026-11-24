@@ -16,6 +16,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { CODE_MODE_SETTINGS, NO_HOOKS_SETTINGS } from '../../src/core/pilot-call.ts'
 import { projectFolderName } from '../../src/core/resume.ts'
 import { nodePair } from '../support/node-pair.ts'
 import { until } from '../support/sandbox.ts'
@@ -611,5 +612,237 @@ describe('MokuPilot calls with node sessions (#618)', () => {
       body: JSON.stringify({ kill: true }),
     })
     await fetch(`${cap.url}/end`, { method: 'POST', headers: auth, body: '{}' })
+  })
+
+  test('starts and answers a Code Mode node session with env in --settings while leaving plain transcripts untouched (#683)', async () => {
+    const tmp = scratchDir()
+    const fakePilot = makeFakeMokupilot(tmp)
+    const fakeClaude = join(tmp, 'fake-claude-codemode.mjs')
+    writeFileSync(
+      fakeClaude,
+      `#!/usr/bin/env bun
+import { readFileSync } from 'node:fs'
+
+const args = process.argv.slice(2)
+const settingsIdx = args.indexOf('--settings')
+const settingsRaw = settingsIdx >= 0 ? args[settingsIdx + 1] : ''
+const settings = JSON.parse(settingsRaw || '{}')
+const resume = args[args.indexOf('--resume') + 1] || ''
+const fork = args.includes('--fork-session')
+const mcpIdx = args.indexOf('--mcp-config')
+const mcpFile = mcpIdx >= 0 ? args[mcpIdx + 1] : ''
+
+if (settings.disableAllHooks !== true) {
+  console.error('disableAllHooks missing')
+  process.exit(1)
+}
+const isCodeMode = resume === ${JSON.stringify(ORIGIN_SID)}
+if (isCodeMode && settings?.env?.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE !== '1') {
+  const msg = 'Failed to resume session: This session was started in Code Mode (experimental), which is off in this run.'
+  console.log(JSON.stringify({ type: 'result', is_error: true, errors: [msg] }))
+  console.error(msg)
+  process.exit(1)
+}
+if (!isCodeMode && settingsRaw !== ${JSON.stringify(NO_HOOKS_SETTINGS)}) {
+  console.error('expected plain NO_HOOKS_SETTINGS, got: ' + settingsRaw)
+  process.exit(1)
+}
+
+const sid = fork ? ${JSON.stringify(FORK_SID)} : resume
+console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, settingsRaw }))
+
+let buf = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', async chunk => {
+  buf += chunk
+  const lines = buf.split('\\n')
+  buf = lines.pop() ?? ''
+  for (const raw of lines) {
+    if (!raw.trim()) continue
+    const msg = JSON.parse(raw)
+    const text = msg?.message?.content ?? ''
+    if (text === 'CALL_MCP' && mcpFile) {
+      const cfg = JSON.parse(readFileSync(mcpFile, 'utf8'))
+      const srv = Object.values(cfg.mcpServers)[0]
+      const res = await fetch(srv.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...srv.headers },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'say', arguments: { text: 'codemode-ok' } } }),
+      })
+      const body = await res.json()
+      console.log(JSON.stringify({ type: 'result', is_error: false, result: 'mcp:' + JSON.stringify(body), session_id: sid }))
+    } else {
+      console.log(JSON.stringify({ type: 'result', is_error: false, result: 'answer:' + text, session_id: sid }))
+    }
+  }
+})
+process.stdin.on('end', () => process.exit(0))
+`,
+    )
+    chmodSync(fakeClaude, 0o755)
+
+    let nodeCwd = ''
+    let cmTranscript = ''
+    const pair = await nodePair({
+      panes: (_id, box) => {
+        nodeCwd = join(box.dir, 'project')
+        mkdirSync(nodeCwd, { recursive: true })
+        const projDir = join(box.env.HOME ?? box.dir, '.claude', 'projects', projectFolderName(nodeCwd))
+        mkdirSync(projDir, { recursive: true })
+        cmTranscript = join(projDir, `${ORIGIN_SID}.jsonl`)
+        writeFileSync(
+          cmTranscript,
+          `${[
+            JSON.stringify({ type: 'repl-mode', replMode: true, sessionId: ORIGIN_SID }),
+            JSON.stringify({
+              type: 'user',
+              cwd: nodeCwd,
+              sessionId: ORIGIN_SID,
+              message: { role: 'user', content: 'remember atlas' },
+            }),
+          ].join('\n')}\n`,
+        )
+        writeTranscript(box.env.HOME ?? box.dir, nodeCwd, OTHER_SID)
+        return [
+          { pane_id: 'p1', agent: 'claude', agent_session: { value: ORIGIN_SID }, agent_status: 'idle', cwd: nodeCwd },
+          { pane_id: 'p2', agent: 'claude', agent_session: { value: OTHER_SID }, agent_status: 'idle', cwd: nodeCwd },
+        ]
+      },
+      nodeEnv: () => ({ CLAUDE_BIN: fakeClaude }),
+      masterCfg: {
+        mokupilot: { mode: 'local', command: [process.execPath, fakePilot.bin] },
+      },
+    })
+
+    const beforeBytes = readFileSync(cmTranscript)
+
+    await pair.waitDevice('server-1', d => d.link?.state === 'online')
+    await until(async () => {
+      const b = (await (await fetch(`${pair.master.url}/api/board`)).json()) as { items: { key: string }[] }
+      return (
+        b.items.some(i => i.key === `@server-1:${ORIGIN_SID}`) && b.items.some(i => i.key === `@server-1:${OTHER_SID}`)
+      )
+    }, 5000)
+
+    // 1. Code Mode session: passes CODE_MODE_SETTINGS, answers turn + MCP, leaves transcript byte-for-byte unchanged.
+    const callCm = await fetch(
+      `${pair.master.url}/api/session/${encodeURIComponent(`@server-1:${ORIGIN_SID}`)}/mokupilot`,
+      {
+        method: 'POST',
+        headers: { 'x-board': '1', 'content-type': 'application/json' },
+        body: '{}',
+      },
+    )
+    expect(callCm.status).toBe(200)
+    await until(() => existsSync(fakePilot.capture), 5000)
+    const capCm = JSON.parse(readFileSync(fakePilot.capture, 'utf8')) as CapturedCall
+    const authCm = { authorization: `Bearer ${capCm.token}`, 'content-type': 'application/json' }
+
+    const runCm = await fetch(`${capCm.url}/start`, {
+      method: 'POST',
+      headers: authCm,
+      body: JSON.stringify({ fork: true, mcp: { name: 'mokupilot', tools: ['say'] } }),
+    })
+    expect(runCm.status).toBe(200)
+    const runCmData = (await runCm.json()) as { ok: boolean; id: string }
+    const sseCm = await fetch(`${capCm.url}/runs/${runCmData.id}/events`, {
+      headers: { authorization: `Bearer ${capCm.token}` },
+    })
+    expect(sseCm.status).toBe(200)
+
+    let settingsUsed = ''
+    let mcpDone = false
+    const cmResults: string[] = []
+    await readSseUntil(sseCm, async (name, data) => {
+      if (name === 'line') {
+        const inner = JSON.parse((JSON.parse(data) as { line: string }).line) as Record<string, unknown>
+        if (inner.type === 'system' && inner.subtype === 'init') {
+          settingsUsed = String(inner.settingsRaw ?? '')
+          await fetch(`${capCm.url}/runs/${runCmData.id}/stdin`, {
+            method: 'POST',
+            headers: authCm,
+            body: JSON.stringify({
+              line: JSON.stringify({ type: 'user', message: { role: 'user', content: 'CALL_MCP' } }),
+            }),
+          })
+        } else if (inner.type === 'result') {
+          cmResults.push(String(inner.result ?? ''))
+          return true
+        }
+      } else if (name === 'mcp') {
+        mcpDone = true
+        const req = JSON.parse(data) as { id: string; body: string }
+        const rpc = JSON.parse(req.body) as { id: number }
+        await fetch(`${capCm.url}/runs/${runCmData.id}/mcp-reply`, {
+          method: 'POST',
+          headers: authCm,
+          body: JSON.stringify({
+            id: req.id,
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: rpc.id,
+              result: { content: [{ type: 'text', text: 'shown' }] },
+            }),
+          }),
+        })
+      }
+      return false
+    })
+
+    expect(settingsUsed).toBe(CODE_MODE_SETTINGS)
+    expect(mcpDone).toBe(true)
+    expect(cmResults[0]).toContain('"shown"')
+    expect(readFileSync(cmTranscript)).toEqual(beforeBytes)
+
+    await fetch(`${capCm.url}/runs/${runCmData.id}/close`, {
+      method: 'POST',
+      headers: authCm,
+      body: JSON.stringify({ kill: true }),
+    })
+    await fetch(`${capCm.url}/end`, { method: 'POST', headers: authCm, body: '{}' })
+
+    // 2. Plain session on the same node still receives exact NO_HOOKS_SETTINGS.
+    rmSync(fakePilot.capture, { force: true })
+    const callPlain = await fetch(
+      `${pair.master.url}/api/session/${encodeURIComponent(`@server-1:${OTHER_SID}`)}/mokupilot`,
+      {
+        method: 'POST',
+        headers: { 'x-board': '1', 'content-type': 'application/json' },
+        body: '{}',
+      },
+    )
+    expect(callPlain.status).toBe(200)
+    await until(() => existsSync(fakePilot.capture), 5000)
+    const capPlain = JSON.parse(readFileSync(fakePilot.capture, 'utf8')) as CapturedCall
+    const authPlain = { authorization: `Bearer ${capPlain.token}`, 'content-type': 'application/json' }
+    const runPlain = await fetch(`${capPlain.url}/start`, {
+      method: 'POST',
+      headers: authPlain,
+      body: JSON.stringify({ fork: true }),
+    })
+    expect(runPlain.status).toBe(200)
+    const runPlainData = (await runPlain.json()) as { id: string }
+    const ssePlain = await fetch(`${capPlain.url}/runs/${runPlainData.id}/events`, {
+      headers: { authorization: `Bearer ${capPlain.token}` },
+    })
+    let plainSettings = ''
+    await readSseUntil(ssePlain, (name, data) => {
+      if (name !== 'line') return false
+      const inner = JSON.parse((JSON.parse(data) as { line: string }).line) as Record<string, unknown>
+      if (inner.type === 'system' && inner.subtype === 'init') {
+        plainSettings = String(inner.settingsRaw ?? '')
+        return true
+      }
+      return false
+    })
+    expect(plainSettings).toBe(NO_HOOKS_SETTINGS)
+    await fetch(`${capPlain.url}/runs/${runPlainData.id}/close`, {
+      method: 'POST',
+      headers: authPlain,
+      body: JSON.stringify({ kill: true }),
+    })
+    await fetch(`${capPlain.url}/end`, { method: 'POST', headers: authPlain, body: '{}' })
   })
 })
