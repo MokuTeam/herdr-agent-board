@@ -11,11 +11,18 @@
 import { MAX_BLOB_BYTES } from '../../adapters/bundle-files.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
-import { MAX_CALL_FILES_REQUEST_BYTES, MAX_MCP_BODY_BYTES, MAX_STDIN_LINE_BYTES } from '../../core/pilot-call.ts'
+import {
+  MAX_BRIDGE_RESPONSE_BYTES,
+  MAX_BRIDGE_STREAM_BATCH_BYTES,
+  MAX_CALL_FILES_REQUEST_BYTES,
+  MAX_MCP_BODY_BYTES,
+  MAX_STDIN_LINE_BYTES,
+} from '../../core/pilot-call.ts'
 import type { MoveIn } from '../../services/move-in.ts'
 import type { MoveOut } from '../../services/move-out.ts'
 import type { Answer, NodeBundle } from '../../services/node/bundle.ts'
 import type { NodeLaunchAnswer } from '../../services/node/launch.ts'
+import type { NodePilotBridge } from '../../services/node/pilot-bridge.ts'
 import type { NodePilotCall } from '../../services/node/pilot-call.ts'
 import type { NodeSecrets } from '../../services/node/secrets.ts'
 import type { NodeUpdate } from '../../services/node/update.ts'
@@ -54,6 +61,8 @@ export interface NodeDoorSources {
   move?: { out: MoveOut; in: MoveIn }
   /** `/api/node/pilot-call/...` (#618): MokuPilot call agent running on this node. */
   pilotCall?: NodePilotCall
+  /** `/api/node/pilot-bridge...` (#700): reverse bridge for MokuPilot running on this node. */
+  pilotBridge?: NodePilotBridge
   /** `POST /api/node/relay-key` (#513): activates a staged fresh relay dial key after claim. */
   relayKey?(publicKey: string): Promise<Answer>
 }
@@ -192,6 +201,7 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
     ...(leave ? [leaveRoute(leave)] : []),
     ...(update ? updateRoutes(update) : []),
     ...(o.pilotCall ? pilotCallDoorRoutes(o.pilotCall) : []),
+    ...(o.pilotBridge ? pilotBridgeDoorRoutes(o.pilotBridge) : []),
     ...(relayKey
       ? [
           {
@@ -278,6 +288,44 @@ function pilotCallDoorRoutes(pc: NodePilotCall): Route[] {
         const body = await jsonUpTo(req, 1024 * 1024)
         if (body === undefined) return json(413, { ok: false, error: 'too-big' })
         return answer(await pc.deliverReport(body))
+      },
+    },
+  ]
+}
+
+const PILOT_BRIDGE_BODY = /^\/api\/node\/pilot-bridge\/req\/([A-Za-z0-9_-]{8,64})\/body$/
+const PILOT_BRIDGE_RES = /^\/api\/node\/pilot-bridge\/res\/([A-Za-z0-9_-]{8,64})$/
+const PILOT_BRIDGE_STREAM = /^\/api\/node\/pilot-bridge\/stream\/([A-Za-z0-9_-]{8,64})$/
+
+/** Node door routes for MokuPilot running on this node reaching a remote master (#700). */
+function pilotBridgeDoorRoutes(pb: NodePilotBridge): Route[] {
+  return [
+    {
+      method: 'GET',
+      path: '/api/node/pilot-bridge',
+      handle: req => pb.stream(req),
+    },
+    {
+      method: 'GET',
+      path: PILOT_BRIDGE_BODY,
+      handle: (_req, ctx) => pb.reqBody(ctx.params[0] ?? ''),
+    },
+    {
+      method: 'POST',
+      path: PILOT_BRIDGE_RES,
+      async handle(req, ctx) {
+        const body = await jsonUpTo(req, MAX_BRIDGE_RESPONSE_BYTES + 4096)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(pb.respond(ctx.params[0] ?? '', body))
+      },
+    },
+    {
+      method: 'POST',
+      path: PILOT_BRIDGE_STREAM,
+      async handle(req, ctx) {
+        const body = await jsonUpTo(req, MAX_BRIDGE_STREAM_BATCH_BYTES + 4096)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(pb.streamChunk(ctx.params[0] ?? '', body))
       },
     },
   ]

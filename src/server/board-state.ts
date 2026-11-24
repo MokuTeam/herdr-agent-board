@@ -353,26 +353,40 @@ export function createBoardState({
     )
     // Another device's cards carry their tasks only while this board's config turns them on, as its own.
     const theirs = others?.items.map(({ todos: own, ...rest }) => (todos && own ? { ...rest, todos: own } : rest))
-    // A call agent started for a node's session (#618) has call.parent naming that node card: inherit
-    // its parent's lane/workspace/title when unset and sit right beside the parent card.
+    // A call agent started for a cross-device session (#618, #700) has call.parent naming that
+    // card: inherit its parent's lane/workspace/title when unset and sit right beside the parent card.
     const combined = (() => {
       if (!theirs) return list
-      const remoteByKey = new Map(theirs.map(i => [i.key, i]))
-      let hasNodeCallParent = false
-      const adjusted = list.map(it => {
+      const localByKey = new Map(list.map(i => [i.key, i]))
+      const allByKey = new Map([...list, ...theirs].map(i => [i.key, i]))
+      let hasCallParent = false
+      const adjust = (it: (typeof list)[number]) => {
         const parentKey = it.call?.parent
-        const parent = parentKey ? remoteByKey.get(parentKey) : undefined
+        if (!parentKey || !it.call) return it
+        let parent = allByKey.get(parentKey)
+        let normalizedParentKey = parentKey
+        if (!parent && it.device) {
+          const at = parseNodeKey(parentKey)
+          if (at && (at.device === it.device || (masterId && at.device === masterId))) {
+            const localParent = localByKey.get(at.key)
+            if (localParent) {
+              parent = localParent
+              normalizedParentKey = at.key
+            }
+          }
+        }
         if (!parent) return it
-        hasNodeCallParent = true
+        hasCallParent = true
         return {
           ...it,
+          ...(normalizedParentKey !== parentKey && { call: { ...it.call, parent: normalizedParentKey } }),
           name: it.name === t('call.alone') ? t('call.of', { name: parent.name }) : it.name,
           category: !it.categorySet ? parent.category : it.category,
           workspace: it.workspace || parent.workspace,
         }
-      })
-      const merged = dropMovedCards([...adjusted, ...theirs], masterId)
-      return hasNodeCallParent ? besideParents(merged) : merged
+      }
+      const merged = dropMovedCards([...list.map(adjust), ...theirs.map(adjust)], masterId)
+      return hasCallParent ? besideParents(merged) : merged
     })()
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)

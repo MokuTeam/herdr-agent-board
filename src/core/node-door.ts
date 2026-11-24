@@ -102,6 +102,11 @@ export const DOOR_ROUTES: readonly DoorRoute[] = [
   { method: 'POST', path: /^\/api\/node\/pilot-call\/[A-Za-z0-9_-]{8,64}\/(stdin|mcp-reply|close)$/, door: true },
   { method: 'POST', path: '/api/node/pilot-call/files', door: true },
   { method: 'POST', path: '/api/node/pilot-call/report', door: true },
+  // Node-to-master MokuPilot call bridge (#700): reverse RPC + SSE stream relay over the master's link.
+  { method: 'GET', path: '/api/node/pilot-bridge', door: true },
+  { method: 'GET', path: /^\/api\/node\/pilot-bridge\/req\/[A-Za-z0-9_-]{8,64}\/body$/, door: true },
+  { method: 'POST', path: /^\/api\/node\/pilot-bridge\/res\/[A-Za-z0-9_-]{8,64}$/, door: true },
+  { method: 'POST', path: /^\/api\/node\/pilot-bridge\/stream\/[A-Za-z0-9_-]{8,64}$/, door: true },
   // Activate a newly staged relay dial key after claim rotation (#513).
   { method: 'POST', path: '/api/node/relay-key', door: true },
 ]

@@ -490,3 +490,40 @@ test('under auto at this computer without MokuPilot: the error says it is not in
   }
   useLanguage('en')
 })
+
+test('link mode with non-inherited profile stays refused without nodes, and succeeds with nodes (#700)', async () => {
+  const DEFAULT = { id: 'default', title: 'Default', dir: '/home/u/.claude', color: 'indigo', hidden: false }
+  const WORK = { id: 'work', title: 'Work', dir: '/home/u/.claude-work', color: 'teal', hidden: false }
+  const SET = profileSet([DEFAULT, WORK], DEFAULT.dir)
+  const item = { agent: 'claude', session: ID, cwd: tmpdir(), transcript: null, profile: 'work' }
+  const phone = { viewer: { peer: '127.0.0.1', forwardedFor: '100.64.0.7' }, own: () => ['192.168.1.20'] }
+
+  // Without `nodes`, link mode refuses non-inherited profiles just as before.
+  const plain = await startCall({ mokupilot: { mode: 'auto' } }, item, {
+    platform: 'linux',
+    env: { PATH: '' },
+    profiles: SET,
+    home: '/home/u',
+    ...phone,
+  })
+  assert.equal(plain.ok, false)
+  assert.match(plain.ok ? '' : plain.error, /wrong account/)
+
+  // With `nodes` (master board), link mode returns the mokupilot:// link so the node's MokuPilot
+  // routes the call back to the master bridge, which runs the agent in its own profile.
+  const master = await startCall({ mokupilot: { mode: 'auto' }, nodes: { id: 'laptop', devices: {} } }, item, {
+    platform: 'linux',
+    env: { PATH: '' },
+    profiles: SET,
+    home: '/home/u',
+    ...phone,
+  })
+  assert.deepEqual(master, {
+    ok: true,
+    state: 'link',
+    url: `mokupilot://call?claude-session=${ID}&cwd=${encodeURIComponent(tmpdir())}`,
+    resolved: 'link',
+    why: 'forwarded-other',
+    viewer: '100.64.0.7',
+  })
+})

@@ -496,6 +496,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.err.nodeOld': 'Node {device} does not support MokuPilot calls yet: update the board on that node',
     'mokupilot.err.nodeLink': 'MokuPilot calls for a node session start from the master computer where MokuPilot runs',
     'mokupilot.err.nodeCheck': 'Node {device} cannot run this call: {why}',
+    'mokupilot.err.masterOffline': 'Master board is offline: cannot reach sessions on other devices',
+    'mokupilot.err.sessionNotFound': 'Session not found on this board or any online device',
     'set.mokupilot': 'MokuPilot…',
     'mokupilot.title': 'MokuPilot',
     'mokupilot.about': 'Where “Call in MokuPilot” starts the call.',
@@ -1229,6 +1231,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.err.nodeLink':
       'Звонок MokuPilot для сессии на ноде запускается с основного компьютера, где установлен MokuPilot',
     'mokupilot.err.nodeCheck': 'Нода {device} не может запустить этот звонок: {why}',
+    'mokupilot.err.masterOffline': 'Основная доска не в сети: нельзя связаться с сессиями на других устройствах',
+    'mokupilot.err.sessionNotFound': 'Сессия не найдена на этой доске и ни на одном устройстве в сети',
     'set.mokupilot': 'MokuPilot…',
     'mokupilot.title': 'MokuPilot',
     'mokupilot.about': 'Где кнопка «Звонок в MokuPilot» начинает звонок.',

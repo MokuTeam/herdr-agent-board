@@ -15,6 +15,7 @@ import { t } from '../core/lang.ts'
 import { sameDir } from '../core/launch/names.ts'
 import { callable, callCommand, callLink } from '../core/mokupilot.ts'
 import { mokupilotMode, type Resolved, resolveMode, type Viewer } from '../core/mokupilot-mode.ts'
+import { nodesConfig } from '../core/nodes.ts'
 import {
   absoluteProfileDir,
   defaultProfileDir,
@@ -95,7 +96,7 @@ const reason = (err: unknown): string => {
  * the default's `~/.claude.json`); { dir } sets it to the folder of the profile the session runs
  * in, or the one it reported that no profile has. Null when neither is known.
  */
-function callProfileEnv(
+export function callProfileEnv(
   item: Pick<Item, 'profile' | 'profileFolder'>,
   set: ProfileSet,
   { env, home, platform }: { env: Record<string, string | undefined>; home: string; platform: string },
@@ -144,7 +145,9 @@ export async function startCall(
   // Here or on the viewer's computer: by the mode, and under `auto` by who asks.
   const mode = mokupilotMode(cfg.mokupilot)
   const decided = resolveMode(mode, viewer, mode === 'auto' && viewer ? own() : [])
-  if (!nodeCall && profiles && profileEnv && decided.resolved === 'link') {
+  // Without `nodes`, a link call runs over ssh in the board's inherited profile; with `nodes`,
+  // MokuPilot on a node routes back to the master bridge, which runs the agent in its own profile (#700).
+  if (!nodeCall && profiles && profileEnv && decided.resolved === 'link' && !nodesConfig(cfg.nodes)) {
     const board = profiles.inherited?.title || profiles.inheritedDir
     return { ok: false, error: t('mokupilot.err.profile', { board, profile: profileLabel(item, profiles) }) }
   }

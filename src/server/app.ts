@@ -115,6 +115,7 @@ import { createMoveOut, type MoveOut } from '../services/move-out.ts'
 import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
 import { createNodeGit } from '../services/node/git-access.ts'
 import { createNodeLaunch } from '../services/node/launch.ts'
+import { createNodePilotBridge, type NodePilotBridge } from '../services/node/pilot-bridge.ts'
 import { createNodePilotCall, type NodePilotCall } from '../services/node/pilot-call.ts'
 import { createRelayDial, type RelayDial } from '../services/node/relay-dial.ts'
 import { createNodeSecrets } from '../services/node/secrets.ts'
@@ -133,6 +134,7 @@ import {
 } from '../services/nodes/computer-setup-io.ts'
 import { createNodeLinks, linkTimes, type NodeLinks } from '../services/nodes/links.ts'
 import { moveToDevice } from '../services/nodes/move-device.ts'
+import { createPilotBridgeRunner, type PilotBridgeRunner } from '../services/nodes/pilot-bridge.ts'
 import { createNodePilotCalls, type NodePilotCalls } from '../services/nodes/pilot-call.ts'
 import { createPlacer, type Placer } from '../services/nodes/placer.ts'
 import { relayEnrolFor } from '../services/nodes/relay.ts'
@@ -1301,11 +1303,33 @@ export async function startServer({
   // door, and `POST /api/node/call` for this computer's own `board thread`, on this listener alone.
   let nodeUplink: NodeUplink | null = null
   let nodePilotCall: NodePilotCall | null = null
+  let nodePilotBridge: NodePilotBridge | null = null
   // A node's update of its plugin (#590), made with the door; on Windows (#699) it is told when the
   // start is whole (the end of startServer).
   let nodeUpdate = null as NodeUpdate | null
   const nodePlatform = process.env.BOARD_TEST_PLATFORM || process.platform
   let localCallRoutes: Route[] | null = null
+  let localPilotCallRoutes: Route[] | null = null
+  let nodePilotCalls: NodePilotCalls | null = null
+  let pilotBridgeRunner: PilotBridgeRunner | null = null
+
+  function ensureLocalPilotCall(): NodePilotCall {
+    if (nodePilotCall) return nodePilotCall
+    nodePilotCall = createNodePilotCall({
+      profiles: () => deps.profiles(),
+      homes: deps.homes,
+      items: board.items,
+      refresh,
+      log,
+    })
+    process.on('exit', nodePilotCall.closeAll)
+    return nodePilotCall
+  }
+
+  function refreshLocalPilotCallRoutes(): void {
+    localPilotCallRoutes =
+      nodePilotCalls || nodePilotBridge ? pilotCallRoutes({ master: nodePilotCalls, node: nodePilotBridge }) : null
+  }
   function relayDialFollows(): void {
     const n = nodeConfig(cfg.node)
     if (relayDial) {
@@ -1395,14 +1419,16 @@ export async function startServer({
     const uplink = createNodeUplink({ log })
     nodeUplink = uplink
     localCallRoutes = nodeCallRoutes(uplink)
-    nodePilotCall = createNodePilotCall({
-      profiles: () => deps.profiles(),
-      homes: deps.homes,
+    const pilotCall = ensureLocalPilotCall()
+    nodePilotBridge = createNodePilotBridge({
+      cfg,
+      port: () => server.port ?? port,
+      localPilotCall: pilotCall,
       items: board.items,
-      refresh,
+      profiles: () => deps.profiles(),
       log,
     })
-    process.on('exit', nodePilotCall.closeAll)
+    refreshLocalPilotCallRoutes()
     const nodeLaunch = createNodeLaunch({
       node: () => nodeConfig(cfg.node),
       start: (body, session, o) =>
@@ -1463,12 +1489,14 @@ export async function startServer({
             return { slept, kept, takenOut: { ...secretsOut, ...gitOut } }
           } finally {
             nodePilotCall?.closeAll()
+            nodePilotBridge?.close()
             nodeStore.forget(master)
           }
         },
         update,
         move: movers(),
-        pilotCall: nodePilotCall,
+        pilotCall,
+        pilotBridge: nodePilotBridge,
         relayKey: async publicKey => {
           const r = activateNodeRelayKey(publicKey, nodeDir())
           if (!r.ok) return { status: r.status, body: { ok: false, error: r.error } }
@@ -1488,8 +1516,6 @@ export async function startServer({
   // `nodes` nothing of it exists: no ssh, no timer, no file, no route.
   let nodeLinks: NodeLinks | null = null
   let localNodeRoutes: Route[] | null = null
-  let localPilotCallRoutes: Route[] | null = null
-  let nodePilotCalls: NodePilotCalls | null = null
   let nodeProxy: NodeProxy | null = null
   let bundleSync: BundleSync | null = null
   let uplinkRunner: UplinkRunner | null = null
@@ -1683,9 +1709,19 @@ export async function startServer({
       links: nodeLinks,
       port: () => server.port ?? port,
       log,
+      localPilotCall: ensureLocalPilotCall(),
+      ownItems: board.items,
+      remoteItems: () => aggregate.part()?.items ?? [],
+      masterId: () => nodesConfig(cfg.nodes, hostname())?.id ?? '',
+      profiles: () => deps.profiles(),
     })
     nodePilotCalls = pilotCalls
-    localPilotCallRoutes = pilotCallRoutes(pilotCalls)
+    refreshLocalPilotCallRoutes()
+    pilotBridgeRunner = createPilotBridgeRunner({
+      links: nodeLinks,
+      pilotCalls,
+      log,
+    })
     nodeProxy = createNodeProxy({
       cfg,
       links: nodeLinks,
@@ -1756,6 +1792,7 @@ export async function startServer({
         if (r.ok && isRecord(cfg.nodes)) {
           const next = structuredClone(cfg.nodes)
           if (markRevoked(next, id)) cfg.nodes = next
+          pilotCalls.revokeForNode(id)
           scheduler?.wakeDevice(id)
         }
         return r
@@ -2031,6 +2068,8 @@ export async function startServer({
         process.off('exit', relayDial.killNow)
       }
       await door?.close()
+      nodePilotBridge?.close()
+      await pilotBridgeRunner?.close()
       if (nodePilotCall) {
         nodePilotCall.closeAll()
         process.off('exit', nodePilotCall.closeAll)

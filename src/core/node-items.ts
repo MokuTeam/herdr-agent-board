@@ -63,6 +63,9 @@ const nonEmpty =
     typeof v === 'string' && v ? (v.length > max ? v.slice(0, max) : v) : undefined
 /** A key or a session id of the node: kept whole or not at all, and prefixed. */
 const ref: Check = (v, k) => (typeof v === 'string' && v && v.length <= LEN.key ? k(v) : undefined)
+/** A call parent reference (#700): already device-prefixed parents stay as-is; bare node keys get prefixed. */
+const parentRef: Check = (v, k) =>
+  typeof v === 'string' && v && v.length <= LEN.key ? (parseNodeKey(v) ? v : k(v)) : undefined
 const num: Check = v => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
 const bool: Check = v => (typeof v === 'boolean' ? v : undefined)
 const yes: Check = v => (v === true ? true : undefined)
@@ -171,7 +174,7 @@ const call = shape(
   {
     phase: oneOf('on', 'after'),
     since: num,
-    parent: orNull(ref),
+    parent: orNull(parentRef),
     helpers: orNull(num),
     tasks: list(
       shape(
