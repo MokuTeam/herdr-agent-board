@@ -24,7 +24,7 @@ import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { knobMs, pace, pause } from '../adapters/pacing.ts'
 import { archiveDir, cardsDir, pluginRoot, ROOT, scheduleDir } from '../adapters/paths.ts'
-import { markGo, pluginCommit, startGuard, touchCode } from '../adapters/plugin-update.ts'
+import { goLater, pluginCommit, startGuard, touchCode } from '../adapters/plugin-update.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { programsOnPath } from '../adapters/process.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
@@ -1320,7 +1320,7 @@ export async function startServer({
       // while the guard changes the plugin's files.
       guard: (file, old) => startGuard(join(old, 'src', 'entrypoints', 'node-update-guard.ts'), file),
       // After the answer, so it reaches the master before the files change and the board restarts.
-      go: file => void setTimeout(() => markGo(file), RESTART_AFTER_MS),
+      go: file => goLater(file, RESTART_AFTER_MS, log),
       restart: old => {
         touchCode(old)
         touchCode(root)

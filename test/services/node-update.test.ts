@@ -28,6 +28,7 @@ import {
   backupPlugin,
   besidePlugin,
   claimPending,
+  goLater,
   keepStream,
   loadsIn,
   mirrorTree,
@@ -598,6 +599,86 @@ describe('a Windows node hands its update to a guard', () => {
     expect(await pluginCommit(root)).toBe(repo.a)
     expect(text(root, 'src', 'adapters', 'paths.ts')).toBe('export const V = 1\n')
     expect(existsSync(join(root, 'src', 'b.ts'))).toBe(false)
+  })
+
+  test('a pending record in any phase answers busy to an archive and an update, and nothing is touched', async () => {
+    const archive = repo.archive(repo.b)
+    const { fresh, old } = besidePlugin(root)
+    for (const phase of ['ready', 'go', 'applied', 'restoring'] as const) {
+      const record = { commit: repo.b, from: repo.a, root, old, fresh, phase, at: 1 }
+      writePending(pendingFile(), record)
+      let calls = 0
+      const { update, restarts } = make({
+        ...stub,
+        platform: 'win32',
+        guard: () => void calls++,
+        backup: async () => void calls++,
+      })
+      expect(update.busy()).toBe(true)
+      const busy = { status: 409, body: { ok: false, error: 'busy' } }
+      expect(await update.blob(stream(archive), archive.length)).toEqual(busy)
+      expect(await update.update({ commit: repo.b, sha256: sha(archive) })).toEqual(busy)
+      expect(calls).toBe(0)
+      expect(restarts).toEqual([])
+      expect(text(root, '.archive-commit')).toBe(`${repo.a}\n`)
+      expect(readPending(pendingFile())).toEqual(record)
+      // settled by a person or the guard: the node takes updates again
+      rmSync(pendingFile())
+      expect(update.busy()).toBe(false)
+      expect((await update.blob(stream(archive), archive.length)).status).toBe(200)
+    }
+  })
+
+  test('a record does not make a Linux or macOS node busy: nothing is read there', async () => {
+    const archive = repo.archive(repo.b)
+    for (const platform of ['linux', 'darwin']) {
+      writePending(pendingFile(), { commit: repo.b, from: repo.a, root, old: '', fresh: '', phase: 'ready', at: 1 })
+      const { update, restarts } = make({ ...stub, platform })
+      expect(update.busy()).toBe(false)
+      await update.blob(stream(archive), archive.length)
+      expect((await update.update({ commit: repo.b, sha256: sha(archive) })).status).toBe(200)
+      expect(restarts).toHaveLength(1)
+      rmSync(pendingFile())
+      rmSync(root, { recursive: true, force: true })
+      rmSync(besidePlugin(root).old, { recursive: true, force: true })
+      unpackedA()
+    }
+  })
+
+  test('a board restarted in the middle of the apply (no commit) is not updated again over the guard', async () => {
+    const { fresh, old } = besidePlugin(root)
+    for (const folder of [fresh, old]) {
+      mkdirSync(folder, { recursive: true })
+      writeFileSync(join(folder, 'marker.ts'), 'the guard reads this')
+    }
+    writePending(pendingFile(), { commit: repo.b, from: repo.a, root, old, fresh, phase: 'go', at: 1 })
+    const { update } = make({ ...stub, platform: 'win32', guard: () => {}, commit: async () => '' })
+    const archive = repo.archive(repo.b)
+    expect((await update.blob(stream(archive), archive.length)).body.error).toBe('busy')
+    expect((await update.update({ commit: repo.b, sha256: sha(archive) })).body.error).toBe('busy')
+    expect(text(old, 'marker.ts')).toBe('the guard reads this')
+    expect(text(fresh, 'marker.ts')).toBe('the guard reads this')
+  })
+
+  test('goLater writes the go after its time; a go that cannot be written is logged, never thrown', async () => {
+    const record = { commit: repo.b, from: repo.a, root, old: '', fresh: '', phase: 'ready', at: 1 } as const
+    writePending(pendingFile(), record)
+    const logs: string[] = []
+    goLater(pendingFile(), 1, t => void logs.push(t))
+    await Bun.sleep(30)
+    expect(readPending(pendingFile())?.phase).toBe('go')
+    expect(logs).toEqual([])
+    goLater(
+      pendingFile(),
+      1,
+      t => void logs.push(t),
+      () => {
+        throw new Error('EPERM')
+      },
+    )
+    await Bun.sleep(30)
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toContain('could not be written: EPERM')
   })
 })
 

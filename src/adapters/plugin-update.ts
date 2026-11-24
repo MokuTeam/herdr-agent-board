@@ -305,6 +305,25 @@ export function removeAlive(file: string): void {
 }
 
 /**
+ * The board's go after `ms` (the answer reaches the master first). A go that cannot be written is
+ * logged, never thrown: the guard then gives up at its own deadline.
+ */
+export function goLater(
+  file: string,
+  ms: number,
+  log: (text: string) => void,
+  mark: (file: string) => void = markGo,
+): void {
+  setTimeout(() => {
+    try {
+      mark(file)
+    } catch (err) {
+      log(`node: the go for ${file} could not be written: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }, ms)
+}
+
+/**
  * A full copy of the plugin's folder in `old` (what was there goes first): the rollback's source.
  * Made off the event loop; a checkout's `.git` is not copied here (applyUpdate moves it).
  */

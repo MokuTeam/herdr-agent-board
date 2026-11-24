@@ -22,7 +22,12 @@
 // by file with the commit stamp last, touches a code file (run.ts restarts the board on it), and
 // puts the copy before back when the board is not back on the new commit within its wait. The
 // board that is back (`started`, once its start is whole and it stayed up a while) takes the
-// record. A node whose board has no guard to give (an older one) answers `platform`.
+// record. While a record exists, in any phase (a guard at work, one that died, a go that never
+// landed, a board restarted half way that reports no commit), the node answers `busy` to an
+// archive and to an update, so a second update never removes `.old` or `.new` from under a guard;
+// a record that is never settled is left for a person. A node whose board has no guard to give (an
+// older one) answers `platform`.
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pause } from '../../adapters/pacing.ts'
 import {
@@ -134,6 +139,9 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
   let busy = false
   /** An archive is coming in: an update, or a second archive, waits for it. */
   let uploading = false
+  /** An update under way here, or (Windows) a pending record in any phase. Nothing is read off Windows. */
+  const recorded = (): boolean => platform === 'win32' && existsSync(pendingFile)
+  const taken = (): boolean => busy || uploading || recorded()
 
   /** Why this node does not update itself at all, or null. */
   function cannot(): Answer | null {
@@ -186,7 +194,7 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
   }
 
   return {
-    busy: () => busy,
+    busy: () => busy || recorded(),
     async started() {
       // Nothing is read on a platform that has no such record.
       if (platform !== 'win32') return
@@ -211,7 +219,7 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
         await body?.cancel().catch(() => {})
         return no
       }
-      if (busy || uploading) {
+      if (taken()) {
         await body?.cancel().catch(() => {})
         return refuse(409, 'busy')
       }
@@ -237,7 +245,7 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
       const commit = typeof b.commit === 'string' ? b.commit : ''
       const sha256 = typeof b.sha256 === 'string' ? b.sha256 : ''
       if (!COMMIT.test(commit) || !SHA256.test(sha256)) return refuse(400, 'update')
-      if (busy || uploading) return refuse(409, 'busy')
+      if (taken()) return refuse(409, 'busy')
       busy = true
       let done = false
       const { fresh, old } = besidePlugin(d.root)
