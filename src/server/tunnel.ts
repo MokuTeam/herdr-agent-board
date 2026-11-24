@@ -59,6 +59,7 @@ export interface TunnelListenerOptions {
   /** Whether a path is one of the board's own files (adapters/own-files.ts), which no route here reads. */
   ownFiles: (target: string) => boolean
   log: (text: string) => void
+  frozen?: () => boolean
   /** listening() changed: it started, stopped or moved. */
   onChange: () => void
   /** Extra admin route resolver (e.g. /api/nodes, /api/nodes/setup) used only when `ownerAdmin` is authorised (#694). */
@@ -295,6 +296,9 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         if (body === undefined) return badBody()
         const r = o.access.addPasskey(login.id, body, { origin, rpId: domain }, who.userAgent)
         return r.ok ? json(200, { ok: true, id: r.id }) : json(400, { ok: false, error: r.error })
+      }
+      if (o.frozen?.() && req.method !== 'GET' && req.method !== 'HEAD' && raw.startsWith('/api/')) {
+        return json(503, { error: 'handover-frozen', message: 'master handover in progress; writes are frozen' })
       }
       const selected = ownerAdmin ? (o.adminRoutes?.(path) ?? o.routes) : o.routes
       const logAdmin = ownerAdmin && isOwnerAdminRoute(req.method, raw, path, teamOn)

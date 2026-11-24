@@ -224,6 +224,7 @@ export function handoverRoutes(handover: () => MasterHandover): Route[] {
           const res = await h.rollback({
             ...(typeof body.id === 'string' && { id: body.id }),
             ...(body.localOnly === true && { localOnly: true }),
+            ...(body.discardSinceCommit === true && { discardSinceCommit: true }),
           })
           return json(res.ok ? 200 : 409, { ...res, view: h.view() })
         }

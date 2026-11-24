@@ -4886,12 +4886,17 @@ The same flow is available in Settings -> Devices -> "Move master role…".
 To restore both devices back to their pre-handover roles and state later, run on the new master:
 
 ```sh
-board master rollback
+board master rollback --discard-since-commit
 ```
 
-If the old master is unreachable or stopped, `board master rollback --local-only` restores only
-this machine from its local pre-handover backup. `board master status` shows the current handover
-state.
+Post-commit rollback requires `--discard-since-commit` because anything written on the new master
+since the commit is replaced by the pre-handover backup. Existing backup snapshots encrypted with
+the old master's backup key remain unreadable on the new master when the target already keeps a
+backup key of its own.
+
+If the old master is unreachable or stopped, `board master rollback --local-only` (with
+`--discard-since-commit` after commit) restores only this machine from its local pre-handover
+backup. `board master status` shows the current handover state.
 
 ## Development
 

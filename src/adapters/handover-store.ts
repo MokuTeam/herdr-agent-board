@@ -109,7 +109,7 @@ const isHandoverState = (v: unknown): v is HandoverStateRecord =>
   v.v === 1 &&
   typeof v.id === 'string' &&
   HANDOVER_ID_RE.test(v.id) &&
-  (v.role === 'old-master' || v.role === 'new-master') &&
+  (v.role === 'old-master' || v.role === 'new-master' || v.role === 'peer') &&
   (v.phase === 'prepared' || v.phase === 'applied' || v.phase === 'committed' || v.phase === 'rolled-back') &&
   typeof v.from === 'string' &&
   typeof v.to === 'string' &&
@@ -704,42 +704,106 @@ export function recordAppliedFiles(id: string, relPaths: readonly string[]): voi
   )
 }
 
+export type HandoverRestoreScope = 'all' | 'old-master-precommit' | 'old-master-committed'
+
+const isOldMasterRetiredRel = (rel: string): boolean =>
+  rel.startsWith('schedule/') || rel === 'calendar-reminders.json' || rel === 'owner-watch.json'
+
 /**
- * Restores `config.json` and all state files from `handover/backups/<id>/`.
- * Callers must close cached SQLite connections (`beforeDbReplace`) before calling this.
+ * Removes live shipped schedule, watch, calendar-reminder, and owner-watch files from a newly
+ * demoted old master after the new master commits, preventing duplicate scheduler runs.
+ * Backup copies remain in `handover/backups/<id>/` for rollback.
  */
-export async function restoreLocalBackup(id: string): Promise<{ restored: number; removed: number }> {
+export function retireShippedOldMasterState(id: string): number {
+  const dir = handoverBackupDir(id)
+  const manifest = readJson(join(dir, 'backup-manifest.json'), isBackupManifest)
+  if (!manifest) throw new Error(`handover backup ${id} not found or unreadable`)
+
+  let removed = 0
+  const rmFile = (p: string): void => {
+    if (!existsSync(p)) return
+    rmSync(p, { force: true })
+    removed++
+  }
+  const sDir = scheduleDir()
+  if (existsSync(sDir)) {
+    for (const name of readdirSync(sDir)) {
+      if (HEX6.test(name)) rmFile(join(sDir, name))
+    }
+    const wDir = join(sDir, 'watches')
+    if (existsSync(wDir)) {
+      for (const name of readdirSync(wDir)) {
+        if (HEX6.test(name)) rmFile(join(wDir, name))
+      }
+    }
+  }
+  rmFile(remindersFile())
+  rmFile(ownerWatchFile())
+  forgetOwnerWatch()
+  return removed
+}
+
+/**
+ * Restores `config.json` and backed-up state from `handover/backups/<id>/`.
+ * Callers must close cached SQLite connections (`beforeDbReplace`) before calling `'all'` scope.
+ * - `'all'` (default, target/new-master): full restore of all backed-up state and removal of appliedFiles.
+ * - `'old-master-precommit'`: restores only `config.json` and `node/*` (clears stale `node/*` added
+ *   during handover, preserving any live `board.db`/`journal.db`/`access*` on old master).
+ * - `'old-master-committed'`: restores `config.json`, `node/*`, and retired schedule/watch/reminder
+ *   files while still preserving live `board.db`/`journal.db`/`access*`.
+ */
+export async function restoreLocalBackup(
+  id: string,
+  opts: { scope?: HandoverRestoreScope } = {},
+): Promise<{ restored: number; removed: number }> {
+  const scope: HandoverRestoreScope = opts.scope ?? 'all'
   const dir = handoverBackupDir(id)
   const manifestFile = join(dir, 'backup-manifest.json')
   const manifest = readJson(manifestFile, isBackupManifest)
   if (!manifest) throw new Error(`handover backup ${id} not found or unreadable`)
 
-  // Verify SQLite backups before modifying live state.
-  for (const dbRel of ['board.db', 'journal.db']) {
-    const backed = join(dir, 'state', dbRel)
-    if (existsSync(backed)) {
-      const whole = integrityOf(backed)
-      if (!whole.ok) throw new Error(`backed-up ${dbRel} failed integrity check: ${whole.detail}`)
+  if (scope === 'all') {
+    for (const dbRel of ['board.db', 'journal.db']) {
+      const backed = join(dir, 'state', dbRel)
+      if (existsSync(backed)) {
+        const whole = integrityOf(backed)
+        if (!whole.ok) throw new Error(`backed-up ${dbRel} failed integrity check: ${whole.detail}`)
+      }
     }
   }
 
   const backedSet = new Set(manifest.files.filter(f => f.kind === 'state').map(f => f.rel))
   let removed = 0
-  for (const rel of manifest.appliedFiles) {
-    if (backedSet.has(rel) || !isSafeHandoverRelPath(rel)) continue
-    const target = join(stateDir(), ...rel.split('/'))
-    if (existsSync(target)) {
-      rmSync(target, { force: true })
+  if (scope === 'all') {
+    for (const rel of manifest.appliedFiles) {
+      if (backedSet.has(rel) || !isSafeHandoverRelPath(rel)) continue
+      const target = join(stateDir(), ...rel.split('/'))
+      if (existsSync(target)) {
+        rmSync(target, { force: true })
+        removed++
+      }
+    }
+    // Clear stale WAL/SHM sidecars for both SQLite databases before copying restored files.
+    for (const liveDb of [dbFile(), journalFile()]) {
+      for (const end of ['-wal', '-shm', '-journal']) rmSync(`${liveDb}${end}`, { force: true })
+      if (!backedSet.has(liveDb === dbFile() ? 'board.db' : 'journal.db') && existsSync(liveDb)) {
+        rmSync(liveDb, { force: true })
+      }
+    }
+  } else {
+    // Clear stale node/* credentials/certs created during handover (e.g. node/masters.json, door keys)
+    // that were not present in the pre-handover backup.
+    for (const f of listFilesRecursive(nodeDir(), 'node')) {
+      if (backedSet.has(f.rel)) continue
+      rmSync(f.abs, { force: true })
       removed++
     }
   }
 
-  // Clear stale WAL/SHM sidecars for both SQLite databases before copying restored files.
-  for (const liveDb of [dbFile(), journalFile()]) {
-    for (const end of ['-wal', '-shm', '-journal']) rmSync(`${liveDb}${end}`, { force: true })
-    if (!backedSet.has(liveDb === dbFile() ? 'board.db' : 'journal.db') && existsSync(liveDb)) {
-      rmSync(liveDb, { force: true })
-    }
+  const wantStateEntry = (rel: string): boolean => {
+    if (scope === 'all') return true
+    if (scope === 'old-master-precommit') return rel.startsWith('node/')
+    return rel.startsWith('node/') || isOldMasterRetiredRel(rel)
   }
 
   let restored = 0
@@ -755,6 +819,7 @@ export async function restoreLocalBackup(id: string): Promise<{ restored: number
       continue
     }
     if (entry.kind === 'cards') {
+      if (scope !== 'all') continue
       if (!isSafeHandoverRelPath(entry.rel)) continue
       const src = join(dir, 'cards', ...entry.rel.split('/'))
       if (!existsSync(src)) continue
@@ -764,6 +829,7 @@ export async function restoreLocalBackup(id: string): Promise<{ restored: number
       restored++
       continue
     }
+    if (!wantStateEntry(entry.rel)) continue
     if (!isSafeHandoverRelPath(entry.rel)) continue
     const src = join(dir, 'state', ...entry.rel.split('/'))
     if (!existsSync(src)) continue
@@ -783,7 +849,9 @@ export async function restoreLocalBackup(id: string): Promise<{ restored: number
   if (!manifest.hadConfig && existsSync(configFile())) {
     rmSync(configFile(), { force: true })
   }
-  forgetOwnerWatch()
+  if (scope !== 'old-master-precommit') {
+    forgetOwnerWatch()
+  }
   return { restored, removed }
 }
 
@@ -892,8 +960,41 @@ export async function applyHandoverFiles(
     ? rekeyJournalDb(rekeyJournal, manifest.from, manifest.to)
     : { moves: 0, states: 0 }
 
+  // Record all destination paths before writing any secret or state file so rollback
+  // cleans up partial writes even if an error interrupts apply midway.
+  const plannedFiles: string[] = []
+  if (hasStagedDb) plannedFiles.push('board.db')
+  if (hasStagedJournal) plannedFiles.push('journal.db')
+  if (hasStagedOw) plannedFiles.push('owner-watch.json')
+  if (hasStagedSched) {
+    if (existsSync(rekeySched)) {
+      for (const name of readdirSync(rekeySched)) {
+        if (HEX6.test(name)) plannedFiles.push(`schedule/${name}`)
+      }
+    }
+    if (existsSync(rekeyWatches)) {
+      for (const name of readdirSync(rekeyWatches)) {
+        if (HEX6.test(name)) plannedFiles.push(`schedule/watches/${name}`)
+      }
+    }
+  }
+  for (const idx of otherIndices) {
+    const entry = manifest.files[idx]
+    if (!entry || !bodies[idx]) continue
+    if (entry.path === 'backup/backup-key.json' && opts.keepTargetBackupKey && existsSync(keyFile())) {
+      continue
+    }
+    plannedFiles.push(entry.path)
+  }
+  for (const cred of manifest.credentials) {
+    plannedFiles.push(`nodes/${cred.id}/token`)
+    if (cred.cert) plannedFiles.push(`nodes/${cred.id}/door-cert.pem`)
+  }
+  recordAppliedFiles(id, plannedFiles)
+
   const appliedFiles: string[] = []
   const writeStateBytes = async (rel: string, bytes: Uint8Array, mode?: number): Promise<void> => {
+    recordAppliedFiles(id, [rel])
     const dest = join(stateDir(), ...rel.split('/'))
     mkdirSync(dirname(dest), { recursive: true })
     if (rel.startsWith('calendar/secret/') && process.platform !== 'win32') {

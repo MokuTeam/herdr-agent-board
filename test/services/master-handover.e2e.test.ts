@@ -5,7 +5,14 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { configFile } from '../../src/adapters/config-file.ts'
 import { openDb } from '../../src/adapters/db.ts'
+import {
+  makeEphemeralKey,
+  readHandoverState,
+  takeLocalBackup,
+  writeHandoverState,
+} from '../../src/adapters/handover-store.ts'
 import { openJournalDb } from '../../src/adapters/journal-store.ts'
 import { createThread } from '../../src/adapters/work-thread-store.ts'
 import type { HandoverPlan } from '../../src/core/master-handover.ts'
@@ -228,8 +235,20 @@ describe('services/nodes/handover e2e (#697)', () => {
     }
     expect(laptopView?.link?.state).toBe('online')
 
-    // Old master (laptop) is no longer a master (/api/nodes -> 404)
+    // Old master (laptop) is no longer a master (/api/nodes -> 404), retired schedule/watch files,
+    // and stripped master-only keys from config.json (Item 2).
     expect((await fetch(`${pair.master.url}/api/nodes`)).status).toBe(404)
+    expect(existsSync(join(stateFolder(pair.master.box), 'schedule', '112233.json'))).toBe(false)
+    const oldCfgOnDisk = JSON.parse(
+      readFileSync(
+        join(pair.master.box.env.APPDATA ?? '', 'herdr', 'plugins', 'config', 'agent-board', 'config.json'),
+        'utf8',
+      ),
+    ) as Record<string, unknown>
+    expect(oldCfgOnDisk.nodes).toBeUndefined()
+    expect(oldCfgOnDisk.threads).toBeUndefined()
+    expect(oldCfgOnDisk.time).toBeUndefined()
+    expect(oldCfgOnDisk.team).toBeUndefined()
 
     // Verify rekeyed DB, time, journal, access, team, calendar secret, tunnel key, schedule, thread-files on server-1
     const nodeState = stateFolder(node.box)
@@ -257,8 +276,13 @@ describe('services/nodes/handover e2e (#697)', () => {
     expect(readFileSync(join(nodeState, 'thread-files', 'tr1', 'spec.txt'), 'utf8')).toBe('handover spec')
     expect(JSON.parse(readFileSync(join(nodeState, 'schedule', '112233.json'), 'utf8')).key).toBe('s-server-1')
 
-    // 3. Two-device rollback from the new master (server-1) restores both boards
-    const rb = await postJson(node.url, '/api/nodes/handover', { op: 'rollback' })
+    // 3. Post-commit rollback requires explicit discardSinceCommit confirmation (Item 8)
+    const rbRefused = await postJson(node.url, '/api/nodes/handover', { op: 'rollback' })
+    expect(rbRefused.status).toBe(409)
+    expect(String(rbRefused.data.error ?? '')).toContain('--discard-since-commit')
+
+    // Confirmed two-device rollback from new master (server-1) restores both boards & retired schedule files
+    const rb = await postJson(node.url, '/api/nodes/handover', { op: 'rollback', discardSinceCommit: true })
     expect(rb.status).toBe(200)
     expect(rb.data.ok).toBe(true)
 
@@ -268,6 +292,7 @@ describe('services/nodes/handover e2e (#697)', () => {
     expect((await fetch(`${node.url}/api/nodes`)).status).toBe(404)
     expect(existsSync(join(nodeState, 'board.db'))).toBe(false)
     expect(existsSync(join(stateFolder(pair.master.box), 'board.db'))).toBe(true)
+    expect(existsSync(join(stateFolder(pair.master.box), 'schedule', '112233.json'))).toBe(true)
   })
 
   test('preflight refuses offline target, missing backup, self-backup, and missing reverse link', async () => {
@@ -478,11 +503,222 @@ describe('services/nodes/handover e2e (#697)', () => {
     expect(st.stdout).toContain('handover committed')
     expect(st.stdout).toContain('rollback available')
 
-    const rb = await runCli(nodeCliEnv, ['master', 'rollback'])
+    const rbDenied = await runCli(nodeCliEnv, ['master', 'rollback'])
+    expect(rbDenied.code).toBe(1)
+
+    const rb = await runCli(nodeCliEnv, ['master', 'rollback', '--discard-since-commit'])
     expect(rb.code).toBe(0)
     expect(rb.stdout).toContain('rolled back handover')
     await waitNodesReady(pair.master.url)
     await pair.waitDevice('server-1', d => d.link?.state === 'online')
+  })
+
+  test('lost commit reply finishes old master forward without split-brain (Item 1)', async () => {
+    const targetBackupDir = withTempDir()
+    const pluginDir = stampedPluginDir(COMMIT_A)
+    const pair = await nodePair({
+      count: 1,
+      env: { BOARD_TEST_PLUGIN_ROOT: pluginDir },
+      nodeCfg: () => ({ backup: { folder: targetBackupDir } }),
+    })
+    await pair.waitDevice('server-1', d => d.link?.state === 'online')
+
+    const [node] = pair.nodes
+    if (!node) throw new Error('expected server-1')
+    let droppedOnce = false
+    node.proxy.intercept = async (method, path, forward) => {
+      if (method === 'POST' && path === '/api/node/handover/commit' && !droppedOnce) {
+        droppedOnce = true
+        // Target receives and commits, but HTTP response is lost as 502 before master sees it.
+        const real = await forward()
+        expect(real.status).toBe(200)
+        return new Response(JSON.stringify({ error: 'simulated reply loss' }), {
+          status: 502,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      return null
+    }
+
+    const reverseDoorPort = await unusedPort()
+    const run = await postJson(pair.master.url, '/api/nodes/handover', {
+      op: 'run',
+      to: 'server-1',
+      nodePort: reverseDoorPort,
+    })
+    expect(run.status).toBe(200)
+    expect(run.data.ok).toBe(true)
+    expect((await fetch(`${pair.master.url}/api/nodes`)).status).toBe(404)
+    await waitNodesReady(node.url)
+  })
+
+  test('write freeze blocks API writes, old-master rollback keeps board.db & clears node/, and node rejects out-of-order steps (Items 3, 4)', async () => {
+    const masterBackupDir = withTempDir()
+    const targetBackupDir = withTempDir()
+    const pluginDir = stampedPluginDir(COMMIT_A)
+    const pair = await nodePair({
+      count: 1,
+      env: { BOARD_TEST_PLUGIN_ROOT: pluginDir, BOARD_HANDOVER_VERIFY_MS: '500' },
+      masterCfg: { threads: true, backup: { folder: masterBackupDir } },
+      nodeCfg: () => ({ backup: { folder: targetBackupDir } }),
+      masterSetup: box => seedMasterState(stateFolder(box), masterBackupDir),
+    })
+    await pair.waitDevice('server-1', d => d.link?.state === 'online')
+
+    const [node] = pair.nodes
+    if (!node) throw new Error('expected server-1')
+
+    // Item 4: node door rejects out-of-order apply / commit / rollback when not prepared
+    const doorAuth = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${node.token}`,
+      'x-board': '1',
+    }
+    const noApply = await fetch(`http://127.0.0.1:${node.doorPort}/api/node/handover/apply`, {
+      method: 'POST',
+      headers: doorAuth,
+      body: JSON.stringify({
+        id: 'ho-fake-1',
+        key: makeEphemeralKey(Date.now()),
+        oldConfig: {},
+        flippedNodes: {},
+      }),
+    })
+    expect(noApply.status).toBe(409)
+    const noCommit = await fetch(`http://127.0.0.1:${node.doorPort}/api/node/handover/commit`, {
+      method: 'POST',
+      headers: doorAuth,
+      body: JSON.stringify({ id: 'ho-fake-1' }),
+    })
+    expect(noCommit.status).toBe(409)
+    const noRb = await fetch(`http://127.0.0.1:${node.doorPort}/api/node/handover/rollback`, {
+      method: 'POST',
+      headers: doorAuth,
+      body: JSON.stringify({ id: 'ho-fake-1' }),
+    })
+    expect(noRb.status).toBe(409)
+
+    // Item 3: while handover is frozen, POST writes on master return 503 handover-frozen
+    let writeStatusDuringFreeze = 0
+    node.proxy.intercept = async (method, path) => {
+      if (method === 'POST' && path === '/api/node/handover/verify') {
+        if (writeStatusDuringFreeze === 0) {
+          const w = await postJson(pair.master.url, '/api/threads', { lane: 'atlas', title: 'Blocked write' })
+          writeStatusDuringFreeze = w.status
+        }
+        return new Response(
+          JSON.stringify({ ok: false, checks: [{ name: 'threads', ok: false, detail: 'simulated fail' }] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return null
+    }
+
+    const reverseDoorPort = await unusedPort()
+    const run = await postJson(pair.master.url, '/api/nodes/handover', {
+      op: 'run',
+      to: 'server-1',
+      nodePort: reverseDoorPort,
+    })
+    expect(run.data.ok).toBe(false)
+    expect(run.data.rolledBack).toBe(true)
+    expect(writeStatusDuringFreeze).toBe(503)
+
+    // Auto-rollback preserved old master board.db and cleaned stale node/masters.json
+    expect(existsSync(join(stateFolder(pair.master.box), 'node', 'masters.json'))).toBe(false)
+    const oldSql = new Database(join(stateFolder(pair.master.box), 'board.db'), { readonly: true, strict: true })
+    const row = oldSql.query('SELECT title FROM threads').get() as { title: string } | null
+    oldSql.close(false)
+    expect(row?.title).toBe('Guided master handover thread')
+  })
+
+  test('boot crash recovery reverts incomplete target to node and keeps crashed old-master frozen (Item 5)', async () => {
+    const withBoxEnv = <T>(env: Record<string, string>, fn: () => T): T => {
+      const prev = new Map<string, string | undefined>()
+      for (const k of Object.keys(env)) {
+        prev.set(k, process.env[k])
+        process.env[k] = env[k]
+      }
+      try {
+        return fn()
+      } finally {
+        for (const [k, v] of prev) {
+          if (v === undefined) delete process.env[k]
+          else process.env[k] = v
+        }
+      }
+    }
+
+    // 1. Target crashed in phase: applied -> boot recovers back to pure node
+    const targetBox = await sandbox()
+    const targetNodePort = await unusedPort()
+    const targetCfg = {
+      language: 'en',
+      node: { id: 'server-1', port: targetNodePort, workRoot: targetBox.dir },
+    }
+    withBoxEnv(targetBox.env, () => {
+      const cfgPath = configFile()
+      mkdirSync(join(cfgPath, '..'), { recursive: true })
+      writeFileSync(cfgPath, JSON.stringify(targetCfg))
+      takeLocalBackup('ho-crash-t', 1000)
+      writeFileSync(
+        cfgPath,
+        JSON.stringify({
+          language: 'en',
+          threads: true,
+          nodes: { id: 'server-1', order: ['local'], devices: { local: {} } },
+          node: { id: 'server-1', port: targetNodePort, workRoot: targetBox.dir },
+        }),
+      )
+      writeHandoverState({
+        v: 1,
+        id: 'ho-crash-t',
+        role: 'new-master',
+        phase: 'applied',
+        from: 'laptop',
+        to: 'server-1',
+        peerId: 'laptop',
+        otherNodes: [],
+        at: 1000,
+      })
+    })
+    const targetSrv = await serveBoard(targetBox, targetCfg, { TEST_LIVE_CONFIG: '1' })
+    expect((await fetch(`${targetSrv.url}/api/nodes`)).status).toBe(404)
+    expect(existsSync(join(stateFolder(targetBox), 'board.db'))).toBe(false)
+
+    // 2. Old master crashed in phase: prepared -> boot keeps writes frozen until rollback
+    const oldBox = await sandbox()
+    const oldCfg = {
+      language: 'en',
+      threads: true,
+      nodes: { id: 'laptop', order: ['local'], devices: { local: {} } },
+    }
+    withBoxEnv(oldBox.env, () => {
+      const cfgPath = configFile()
+      mkdirSync(join(cfgPath, '..'), { recursive: true })
+      writeFileSync(cfgPath, JSON.stringify(oldCfg))
+      takeLocalBackup('ho-crash-m', 1000)
+      writeHandoverState({
+        v: 1,
+        id: 'ho-crash-m',
+        role: 'old-master',
+        phase: 'prepared',
+        from: 'laptop',
+        to: 'server-1',
+        peerId: 'server-1',
+        otherNodes: [],
+        at: 1000,
+      })
+    })
+    const oldSrv = await serveBoard(oldBox, oldCfg, { TEST_LIVE_CONFIG: '1' })
+    const blocked = await postJson(oldSrv.url, '/api/categories', { title: 'Test', color: 'blue', paths: [] })
+    expect(blocked.status).toBe(503)
+    const rb = await postJson(oldSrv.url, '/api/nodes/handover', { op: 'rollback' })
+    expect(rb.status).toBe(200)
+    expect(rb.data.ok).toBe(true)
+    withBoxEnv(oldBox.env, () => {
+      expect(readHandoverState()?.phase).toBe('rolled-back')
+    })
   })
 
   test('plain standalone board without nodes or node is completely untouched by handover', async () => {

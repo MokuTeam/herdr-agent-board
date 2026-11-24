@@ -12,9 +12,9 @@ import { dbFile, integrityOf } from '../../adapters/db.ts'
 import {
   applyHandoverFiles,
   checkBackupReadiness,
+  type HandoverRestoreScope,
   handoverStageDir,
   isBackupKey,
-  latestHandoverBackupId,
   readHandoverState,
   restoreLocalBackup,
   type TargetBackupCheck,
@@ -29,6 +29,7 @@ import { keepStream } from '../../adapters/plugin-update.ts'
 import { listEntries } from '../../adapters/schedule-store.ts'
 import {
   buildTargetMasterConfig,
+  type HandoverStateRecord,
   type HandoverVerifyCheck,
   type HandoverVerifyResult,
   MAX_HANDOVER_BUNDLE_BYTES,
@@ -58,6 +59,7 @@ export interface NodeHandoverCheckPayload {
   hasNodes: boolean
   freeMb: number | null
   backup: TargetBackupCheck
+  handoverState: HandoverStateRecord | null
 }
 
 export interface NodeHandoverOptions {
@@ -143,6 +145,7 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
         hasNodes: nodesConfig(o.cfg.nodes, host) !== null,
         freeMb: freeFn(stateDir()),
         backup,
+        handoverState: readHandoverState(),
       }
       return { status: 200, body: payload as unknown as Record<string, unknown> }
     },
@@ -162,6 +165,13 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
         }
         if (nodesConfig(o.cfg.nodes, hostFn()) !== null) {
           return { status: 409, body: { ok: false, error: 'target already has nodes configured' } }
+        }
+        const cur = readHandoverState()
+        if (
+          cur?.role === 'new-master' &&
+          (cur.phase === 'applied' || cur.phase === 'committed' || (cur.phase === 'prepared' && cur.id !== body.id))
+        ) {
+          return { status: 409, body: { ok: false, error: `handover ${cur.id} already in phase ${cur.phase}` } }
         }
         takeLocalBackup(body.id, now())
         writeHandoverState({
@@ -184,6 +194,10 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
       return withBusy(async () => {
         if (!HANDOVER_ID_RE.test(id)) return { status: 400, body: { ok: false, error: 'invalid handover id' } }
         if (!SHA256_RE.test(sha256)) return { status: 400, body: { ok: false, error: 'invalid bundle sha256' } }
+        const cur = readHandoverState()
+        if (cur?.role !== 'new-master' || cur.id !== id || cur.phase !== 'prepared') {
+          return { status: 409, body: { ok: false, error: 'target is not prepared for this handover id' } }
+        }
         const stage = handoverStageDir(id)
         mkdirSync(stage, { recursive: true, mode: 0o700 })
         const bundleFile = join(stage, 'bundle.abk')
@@ -204,12 +218,20 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
           typeof body.id !== 'string' ||
           !HANDOVER_ID_RE.test(body.id) ||
           !isBackupKey(body.key) ||
-          (!isRecord(body.targetConfig) && (!isRecord(body.oldConfig) || !isRecord(body.flippedNodes)))
+          !isRecord(body.oldConfig) ||
+          !isRecord(body.flippedNodes)
         ) {
           return { status: 400, body: { ok: false, error: 'invalid handover apply payload' } }
         }
         const node = nodeConfig(o.cfg.node)
         if (!node) return { status: 503, body: { ok: false, error: 'node is not configured' } }
+        const cur = readHandoverState()
+        if (cur?.role !== 'new-master' || cur.id !== body.id || cur.phase !== 'prepared') {
+          return {
+            status: 409,
+            body: { ok: false, error: `handover ${body.id} requires phase prepared (got ${cur?.phase ?? 'none'})` },
+          }
+        }
         const bundleFile = join(handoverStageDir(body.id), 'bundle.abk')
         if (!existsSync(bundleFile)) {
           return { status: 404, body: { ok: false, error: 'staged handover bundle not found' } }
@@ -227,14 +249,12 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
         }
 
         const existingTargetCfg = readConfigFile() ?? (structuredClone(o.cfg) as unknown as Record<string, unknown>)
-        const targetConfig = isRecord(body.targetConfig)
-          ? structuredClone(body.targetConfig)
-          : buildTargetMasterConfig(body.oldConfig as Record<string, unknown>, existingTargetCfg, {
-              flippedNodes: body.flippedNodes as Record<string, unknown>,
-              keepTargetNode: true,
-              normalizeTunnelKey: body.normalizeTunnelKey === true,
-              carryBackupServer: body.carryBackupServer === true,
-            })
+        const targetConfig = buildTargetMasterConfig(body.oldConfig, existingTargetCfg, {
+          flippedNodes: body.flippedNodes,
+          keepTargetNode: true,
+          normalizeTunnelKey: body.normalizeTunnelKey === true,
+          carryBackupServer: body.carryBackupServer === true,
+        })
         await o.beforeDbReplace()
         let applied: Awaited<ReturnType<typeof applyHandoverFiles>>
         try {
@@ -274,6 +294,13 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
 
     async verify(body) {
       const b = isRecord(body) ? body : {}
+      const cur = readHandoverState()
+      if (cur?.role !== 'new-master' || cur.phase !== 'applied' || (typeof b.id === 'string' && cur.id !== b.id)) {
+        return {
+          status: 409,
+          body: { ok: false, error: `cannot verify handover in phase ${cur?.phase ?? 'none'}` },
+        }
+      }
       const expectedNodes = Array.isArray(b.expectedNodes)
         ? b.expectedNodes.filter((x): x is string => typeof x === 'string')
         : []
@@ -421,16 +448,23 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
         if (!isRecord(body) || typeof body.id !== 'string' || !HANDOVER_ID_RE.test(body.id)) {
           return { status: 400, body: { ok: false, error: 'invalid handover id' } }
         }
+        const prev = readHandoverState()
+        if (prev?.role !== 'new-master' || prev.id !== body.id) {
+          return { status: 409, body: { ok: false, error: `no matching handover ${body.id} to commit` } }
+        }
+        if (prev.phase === 'committed') {
+          return { status: 200, body: { ok: true, id: body.id, alreadyCommitted: true } }
+        }
+        if (prev.phase !== 'applied') {
+          return { status: 409, body: { ok: false, error: `cannot commit handover in phase ${prev.phase}` } }
+        }
         const raw = readConfigFile()
         if (!raw) return { status: 500, body: { ok: false, error: 'config.json unreadable' } }
         const next = { ...raw }
         delete next.node
         withConfigFile((_, save) => save(next))
 
-        const prev = readHandoverState()
-        if (prev && prev.id === body.id) {
-          writeHandoverState({ ...prev, phase: 'committed', at: now() })
-        }
+        writeHandoverState({ ...prev, phase: 'committed', at: now() })
         rmSync(handoverStageDir(body.id), { recursive: true, force: true })
         if (callingMasterId) {
           try {
@@ -447,19 +481,42 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
     async rollback(body) {
       return withBusy(async () => {
         const b = isRecord(body) ? body : {}
-        const id = typeof b.id === 'string' && HANDOVER_ID_RE.test(b.id) ? b.id : latestHandoverBackupId()
-        if (!id) return { status: 404, body: { ok: false, error: 'no handover backup found' } }
-        await o.beforeDbReplace()
-        let result: { restored: number; removed: number }
-        try {
-          result = await restoreLocalBackup(id)
-          rmSync(handoverStageDir(id), { recursive: true, force: true })
-          const prev = readHandoverState()
-          if (prev && prev.id === id) {
-            writeHandoverState({ ...prev, phase: 'rolled-back', at: now() })
+        const prev = readHandoverState()
+        if (!prev) {
+          return { status: 409, body: { ok: false, error: 'no handover state to roll back' } }
+        }
+        if (typeof b.id === 'string' && b.id !== prev.id) {
+          return { status: 409, body: { ok: false, error: `handover id mismatch: active=${prev.id}` } }
+        }
+        if (prev.phase === 'rolled-back') {
+          return { status: 409, body: { ok: false, error: `handover ${prev.id} already rolled back` } }
+        }
+
+        let scope: HandoverRestoreScope
+        if (prev.role === 'new-master') {
+          if (prev.phase !== 'prepared' && prev.phase !== 'applied') {
+            return { status: 409, body: { ok: false, error: `cannot roll back committed new-master via node door` } }
           }
+          scope = 'all'
+        } else if (prev.role === 'old-master') {
+          if (prev.phase === 'prepared') scope = 'old-master-precommit'
+          else if (prev.phase === 'committed') scope = 'old-master-committed'
+          else return { status: 409, body: { ok: false, error: `invalid phase ${prev.phase} for old-master rollback` } }
+        } else if (prev.role === 'peer' && prev.phase === 'prepared') {
+          scope = 'old-master-precommit'
+        } else {
+          return { status: 409, body: { ok: false, error: `cannot roll back ${prev.role} in phase ${prev.phase}` } }
+        }
+
+        const id = prev.id
+        let result: { restored: number; removed: number }
+        if (scope === 'all') await o.beforeDbReplace()
+        try {
+          result = await restoreLocalBackup(id, { scope })
+          rmSync(handoverStageDir(id), { recursive: true, force: true })
+          writeHandoverState({ ...prev, phase: 'rolled-back', at: now() })
         } finally {
-          await o.afterDbReplace()
+          if (scope === 'all') await o.afterDbReplace()
         }
         o.log(`handover ${id}: rolled back local state (${result.restored} restored, ${result.removed} removed)`)
         if (b.deferRefresh === true) {
@@ -478,8 +535,20 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
         }
         const name = masterName(body.masterName)
         if (!name) return { status: 400, body: { ok: false, error: 'invalid masterName' } }
-        if (!nodeConfig(o.cfg.node)) return { status: 503, body: { ok: false, error: 'node is not configured' } }
+        const node = nodeConfig(o.cfg.node)
+        if (!node) return { status: 503, body: { ok: false, error: 'node is not configured' } }
         takeLocalBackup(body.id, now())
+        writeHandoverState({
+          v: 1,
+          id: body.id,
+          role: 'peer',
+          phase: 'prepared',
+          from: '',
+          to: node.id,
+          peerId: name,
+          otherNodes: [],
+          at: now(),
+        })
         const added = o.nodeStore.add(name, 'hand')
         o.log(`handover ${body.id}: paired new master ${name} (${added.master.id})`)
         return { status: 200, body: { ok: true, masterId: added.master.id, token: added.token } }

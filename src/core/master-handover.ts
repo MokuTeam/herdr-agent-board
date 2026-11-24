@@ -110,7 +110,7 @@ export type HandoverStep = 'check' | 'freeze' | 'backup' | 'pair' | 'ship' | 'ap
 export interface HandoverStateRecord {
   v: 1
   id: string
-  role: 'old-master' | 'new-master'
+  role: 'old-master' | 'new-master' | 'peer'
   phase: 'prepared' | 'applied' | 'committed' | 'rolled-back'
   from: string
   to: string
@@ -130,6 +130,7 @@ export interface HandoverView {
   error: string | null
   rolledBack: boolean
   canRollback: boolean
+  rollbackNeedsConfirm: boolean
   rollbackReason?: string
   state: HandoverStateRecord | null
 }
@@ -312,6 +313,15 @@ const hasControlOrSpace = (s: string): boolean => {
   return false
 }
 
+const isLoopbackDirect = (link: LinkConfig | null): boolean => {
+  if (link?.kind !== 'direct') return false
+  try {
+    return LOOPBACK_HOSTS.has(normalizeHost(new URL(link.url).hostname))
+  } catch {
+    return false
+  }
+}
+
 export function parseReverseLinkSpec(o: {
   spec?: string | null
   oldMasterId: string
@@ -323,7 +333,7 @@ export function parseReverseLinkSpec(o: {
   const doorPort = o.oldMasterNodePort && PORT_OK(o.oldMasterNodePort) ? o.oldMasterNodePort : NODE_PORT
   const raw = typeof o.spec === 'string' ? o.spec.trim() : ''
   if (!raw) {
-    if (o.targetLink?.kind === 'direct') {
+    if (isLoopbackDirect(o.targetLink)) {
       return { ok: true, link: { kind: 'direct', url: `http://127.0.0.1:${doorPort}` } }
     }
     if (o.hasRelay) {
@@ -343,8 +353,16 @@ export function parseReverseLinkSpec(o: {
     try {
       const u = new URL(url)
       if (u.username || u.password) return { ok: false, error: 'direct reverse link must not contain credentials' }
-      if (u.protocol !== 'https:' && !(u.protocol === 'http:' && LOOPBACK_HOSTS.has(normalizeHost(u.hostname)))) {
+      const isLoopbackUrl = LOOPBACK_HOSTS.has(normalizeHost(u.hostname))
+      if (u.protocol !== 'https:' && !(u.protocol === 'http:' && isLoopbackUrl)) {
         return { ok: false, error: 'direct reverse link must use https or loopback http' }
+      }
+      if (isLoopbackUrl && !isLoopbackDirect(o.targetLink)) {
+        return {
+          ok: false,
+          error:
+            'loopback direct reverse link is only allowed when target is also local; pass a reachable https:// URL, ssh:..., or relay',
+        }
       }
       return { ok: true, link: { kind: 'direct', url } }
     } catch {
@@ -526,11 +544,29 @@ export function buildTargetMasterConfig(
   return next
 }
 
+const OLD_MASTER_STRIP_KEYS = [
+  'nodes',
+  'team',
+  'threads',
+  'time',
+  'calendar',
+  'watches',
+  'todos',
+  'decisions',
+  'journal',
+  'workdesk',
+  'workdeskDialog',
+  'boardEvents',
+  'remote',
+  'presence',
+] as const
+
 /**
  * Builds the old master's config.json as a node of the new master.
  * While `keepNodesFrozen` is true (before commit), `nodes` stays present so the old master keeps
  * its outbound link to verify/commit/rollback the new master. On commit (`keepNodesFrozen: false`),
- * `nodes` and `team` are removed and `tunnel.on` is turned off so only the new master serves them.
+ * master-only sections (`nodes`, `team`, `threads`, `time`, `calendar`, `watches`, etc.) are
+ * stripped and `tunnel.on` is turned off so only the new master runs them.
  */
 export function buildOldMasterNodeConfig(
   oldConfigRaw: Record<string, unknown>,
@@ -557,8 +593,7 @@ export function buildOldMasterNodeConfig(
   }
   next.node = node
   if (!opts.keepNodesFrozen) {
-    delete next.nodes
-    delete next.team
+    for (const key of OLD_MASTER_STRIP_KEYS) delete next[key]
     if (isObj(next.tunnel)) {
       next.tunnel = { ...next.tunnel, on: false }
     }
@@ -583,7 +618,7 @@ export function buildOldMasterRelayNodeConfig(
 
 export const MASTER_USAGE = [
   'usage: board master handover --to <device> [--dry-run] [--reverse-link <spec>] [--node-port <port>] [--allow-offline-nodes] [--json]',
-  '       board master rollback [--id <id>] [--local-only] [--json]',
+  '       board master rollback [--id <id>] [--local-only] [--discard-since-commit] [--json]',
   '       board master status [--json]',
 ].join('\n')
 
@@ -601,6 +636,7 @@ export type ParsedMasterCli =
       op: 'rollback'
       id?: string
       localOnly: boolean
+      discardSinceCommit: boolean
       json: boolean
     }
   | {
@@ -625,10 +661,12 @@ export function parseMasterCliArgs(
   if (sub === 'rollback') {
     let id: string | undefined
     let localOnly = false
+    let discardSinceCommit = false
     let json = false
     for (let i = 0; i < rest.length; i++) {
       const w = rest[i] ?? ''
       if (w === '--local-only') localOnly = true
+      else if (w === '--discard-since-commit') discardSinceCommit = true
       else if (w === '--json') json = true
       else if (w === '--id' || w.startsWith('--id=')) {
         const val = w === '--id' ? rest[++i] : w.slice('--id='.length)
@@ -638,7 +676,7 @@ export function parseMasterCliArgs(
         return { ok: false, error: MASTER_USAGE }
       }
     }
-    return { ok: true, cmd: { op: 'rollback', ...(id && { id }), localOnly, json } }
+    return { ok: true, cmd: { op: 'rollback', ...(id && { id }), localOnly, discardSinceCommit, json } }
   }
 
   if (sub === 'handover') {

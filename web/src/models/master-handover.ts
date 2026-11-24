@@ -52,6 +52,7 @@ export interface HandoverView {
   error: string | null
   rolledBack: boolean
   canRollback: boolean
+  rollbackNeedsConfirm?: boolean
   rollbackReason?: string
 }
 

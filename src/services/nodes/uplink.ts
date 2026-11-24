@@ -91,6 +91,7 @@ export interface UplinkRunnerOptions {
   /** The live config: `threads` and `port` are read at each call. */
   cfg: Config
   log(text: string): void
+  frozen?: () => boolean
   store?: DeviceStore
   /** The running web board's port, for team and shared-thread calls. */
   webPort?: () => number
@@ -263,6 +264,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
   }
 
   async function handle(id: string, call: UplinkCall): Promise<void> {
+    if (o.frozen?.()) return
     // Only a write is kept on the node and so sent again: only a write's result is remembered.
     // Non-kept writes (`send`, `time`/`cal`/`team`/`presence`/`remind`/`every`/`unschedule`) are
     // remembered here by call id so a retry after a stream hiccup never writes twice.

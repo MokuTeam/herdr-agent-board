@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite'
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { dbFile, openDb } from '../../src/adapters/db.ts'
@@ -11,7 +11,9 @@ import {
   makeEphemeralKey,
   rekeyJournalDb,
   restoreLocalBackup,
+  retireShippedOldMasterState,
   sealHandoverBundle,
+  sha256Hex,
   takeLocalBackup,
   unsealHandoverBundle,
 } from '../../src/adapters/handover-store.ts'
@@ -264,5 +266,96 @@ describe('adapters/handover-store (#697)', () => {
       { key: '@laptop:s-1', name: 'anna' },
       { key: 's-1', name: 'ben' },
     ])
+  })
+
+  test('partial apply failure still cleans up already-written secrets via pre-recorded appliedFiles', async () => {
+    const env = makeEnv()
+    writeFileSync(join(env.configDir, 'config.json'), JSON.stringify({ node: { id: 'server-1', port: 12430 } }))
+    takeLocalBackup('ho-partial', 1000)
+
+    const bAccess = Buffer.from(JSON.stringify({ passwordHash: '$argon2id$x', totp: null }))
+    const bTeam = Buffer.from(JSON.stringify({ v: 1, pkcs8: 'secret-pk', pub: 'pub' }))
+    const bBlock = Buffer.from('blocked body')
+    const manifest: HandoverManifest = {
+      v: HANDOVER_VERSION,
+      id: 'ho-partial',
+      from: 'laptop',
+      to: 'server-1',
+      createdAt: 1000,
+      files: [
+        { path: 'access.json', category: 'access', size: bAccess.length, sha256: sha256Hex(bAccess), mode: 0o600 },
+        { path: 'team-key.json', category: 'team', size: bTeam.length, sha256: sha256Hex(bTeam), mode: 0o600 },
+        { path: 'blocked/sub/file.txt', category: 'threadFiles', size: bBlock.length, sha256: sha256Hex(bBlock) },
+      ],
+      credentials: [],
+    }
+    // Block write of third entry cleanly without relying on root vs non-root: make blocked a regular file.
+    writeFileSync(join(env.stateDir, 'blocked'), 'not-a-dir')
+
+    await expect(applyHandoverFiles('ho-partial', manifest, [bAccess, bTeam, bBlock])).rejects.toThrow()
+    expect(existsSync(join(env.stateDir, 'access.json'))).toBe(true)
+    expect(existsSync(join(env.stateDir, 'team-key.json'))).toBe(true)
+
+    const rb = await restoreLocalBackup('ho-partial', { scope: 'all' })
+    expect(rb.removed).toBeGreaterThanOrEqual(2)
+    expect(existsSync(join(env.stateDir, 'access.json'))).toBe(false)
+    expect(existsSync(join(env.stateDir, 'team-key.json'))).toBe(false)
+  })
+
+  test('old-master scoped restore clears stale node files and preserves post-freeze board.db', async () => {
+    const env = makeEnv()
+    writeFileSync(join(env.configDir, 'config.json'), JSON.stringify({ nodes: { id: 'laptop', devices: {} } }))
+    const db = openDb({ create: true })
+    if (!db) throw new Error('openDb failed')
+    db.write('user', tx => {
+      createThread(tx, {
+        lane: 'atlas',
+        title: 'Pre-freeze thread',
+        status: 'next',
+        author: { kind: 'session', key: 's-1', name: 'anna' },
+        at: 1000,
+      })
+    })
+    mkdirSync(join(env.stateDir, 'schedule'), { recursive: true })
+    writeFileSync(join(env.stateDir, 'schedule', 'aa11bb.json'), JSON.stringify({ id: 'aa11bb', next: 1 }))
+    writeFileSync(join(env.stateDir, 'calendar-reminders.json'), JSON.stringify([]))
+
+    takeLocalBackup('ho-scope', 1000)
+
+    // Simulate post-freeze live state additions & stale node/masters.json written during handover pair
+    const nodeStore = createNodeStore({ dir: join(env.stateDir, 'node') })
+    nodeStore.add('server-1', 'hand')
+    expect(existsSync(join(env.stateDir, 'node', 'masters.json'))).toBe(true)
+    db.write('user', tx => {
+      createThread(tx, {
+        lane: 'atlas',
+        title: 'Live post-freeze thread',
+        status: 'next',
+        author: { kind: 'session', key: 's-2', name: 'ben' },
+        at: 2000,
+      })
+    })
+    db.close()
+
+    // Retire shipped scheduler/reminder files (commit path)
+    expect(retireShippedOldMasterState('ho-scope')).toBe(2)
+    expect(existsSync(join(env.stateDir, 'schedule', 'aa11bb.json'))).toBe(false)
+
+    // old-master-precommit clears stale node/masters.json and keeps live post-freeze board.db
+    const rbPre = await restoreLocalBackup('ho-scope', { scope: 'old-master-precommit' })
+    expect(rbPre.removed).toBeGreaterThanOrEqual(1)
+    expect(existsSync(join(env.stateDir, 'node', 'masters.json'))).toBe(false)
+    expect(existsSync(join(env.stateDir, 'schedule', 'aa11bb.json'))).toBe(false)
+
+    const liveSql = new Database(dbFile(), { readonly: true, strict: true })
+    const countRow = liveSql.query('SELECT count(*) AS n FROM threads').get() as { n: number }
+    liveSql.close(false)
+    expect(countRow.n).toBe(2)
+
+    // old-master-committed also restores retired schedule & reminder files without losing board.db
+    await restoreLocalBackup('ho-scope', { scope: 'old-master-committed' })
+    expect(existsSync(join(env.stateDir, 'schedule', 'aa11bb.json'))).toBe(true)
+    expect(existsSync(join(env.stateDir, 'calendar-reminders.json'))).toBe(true)
+    chmodSync(join(env.stateDir, 'schedule', 'aa11bb.json'), 0o600)
   })
 })

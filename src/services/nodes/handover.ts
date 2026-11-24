@@ -16,6 +16,7 @@ import {
   readHandoverState,
   readMasterBackupKey,
   restoreLocalBackup,
+  retireShippedOldMasterState,
   sealHandoverBundle,
   sha256Hex,
   type TargetBackupCheck,
@@ -51,9 +52,11 @@ import {
   type HandoverVerifyResult,
   type HandoverView,
   isBackupTargetSelf,
+  MAX_HANDOVER_BUNDLE_BYTES,
   MIN_HANDOVER_FREE_MB,
   parseReverseLinkSpec,
 } from '../../core/master-handover.ts'
+
 import { LOCAL } from '../../core/node-key.ts'
 import { type LinkConfig, NODE_PORT, nodeConfig, nodesConfig } from '../../core/nodes.ts'
 import type { Config } from '../../core/types.ts'
@@ -84,6 +87,7 @@ export interface MasterHandoverRunResult {
 export interface MasterHandoverRollbackOpts {
   id?: string
   localOnly?: boolean
+  discardSinceCommit?: boolean
 }
 
 export interface MasterHandoverRollbackResult {
@@ -142,6 +146,7 @@ interface TargetCheckResponse {
   hasNodes: boolean
   freeMb: number | null
   backup: TargetBackupCheck
+  handoverState?: HandoverStateRecord | null
 }
 
 const msg = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -218,6 +223,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
       error: lastError,
       rolledBack,
       canRollback: rb.can,
+      rollbackNeedsConfirm: state?.role === 'new-master' && state.phase === 'committed',
       ...(rb.reason && { rollbackReason: rb.reason }),
       state,
     }
@@ -398,6 +404,17 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
       failCheck('master', `cannot plan database rekey: ${msg(err)}`)
     }
 
+    if (collected.totalBytes > MAX_HANDOVER_BUNDLE_BYTES) {
+      failCheck(
+        'disk',
+        `bundle payload ${Math.ceil(collected.totalBytes / (1024 * 1024))} MB exceeds ${MAX_HANDOVER_BUNDLE_BYTES / (1024 * 1024)} MB transfer limit`,
+      )
+    } else if (collected.totalBytes > 50 * 1024 * 1024) {
+      warnings.push(
+        `large handover payload (${Math.ceil(collected.totalBytes / (1024 * 1024))} MB); shipping over SSH/relay may take several minutes`,
+      )
+    }
+
     const requiredFreeMb = Math.max(
       MIN_HANDOVER_FREE_MB,
       Math.ceil((collected.totalBytes * HANDOVER_DISK_MULTIPLIER) / (1024 * 1024)),
@@ -538,15 +555,10 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
     }
     try {
       if (ctx.localBackupTaken) {
-        await o.beforeDbReplace()
-        try {
-          await restoreLocalBackup(ctx.id)
-          const prev = readHandoverState()
-          if (prev && prev.id === ctx.id) {
-            writeHandoverState({ ...prev, phase: 'rolled-back', at: now() })
-          }
-        } finally {
-          await o.afterDbReplace()
+        await restoreLocalBackup(ctx.id, { scope: 'old-master-precommit' })
+        const prev = readHandoverState()
+        if (prev && prev.id === ctx.id) {
+          writeHandoverState({ ...prev, phase: 'rolled-back', at: now() })
         }
       }
     } finally {
@@ -635,6 +647,8 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
         let localBackupTaken = false
         const pairedOthers: { id: string; masterId: string; token: string }[] = []
         let enrolledSocket: string | null = null
+        let oldNodeCfg: Parameters<typeof buildOldMasterNodeConfig>[1]['nodeConfig'] | null = null
+        let verify: HandoverVerifyResult | null = null
 
         try {
           // Step 2: Freeze old master, run DB backup to configured targets, take local backup, prepare target.
@@ -684,7 +698,6 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
           const nodePort = opts.nodePort ?? existingNode?.port ?? NODE_PORT
           let reverseCert: string | undefined
 
-          let oldNodeCfg: Parameters<typeof buildOldMasterNodeConfig>[1]['nodeConfig']
           if (plan.reverseLink.kind === 'relay') {
             if (!nCfg.relay) throw new Error('nodes.relay missing for relay reverse link')
             const doorCert = ensureDoorCert(plan.from, nodeDir())
@@ -736,6 +749,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
           }
 
           // Start old master's node door while keeping nodes frozen so outbound verify link works.
+          if (!oldNodeCfg) throw new Error('missing old master node config')
           const frozenOldConfig = buildOldMasterNodeConfig(rawCfg, {
             nodeConfig: oldNodeCfg,
             keepNodesFrozen: true,
@@ -784,7 +798,9 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
             carryBackupKey,
             carryBackupServer: plan.carryBackupServer,
           })
-          const sealingKey = readMasterBackupKey() ?? makeEphemeralKey(now())
+          // Always use a one-time ephemeral key for bundle transport instead of exposing any
+          // long-term backup key in the apply HTTP request.
+          const sealingKey = makeEphemeralKey(now())
           const manifest: HandoverManifest = {
             v: HANDOVER_VERSION,
             id,
@@ -796,6 +812,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
           }
           const sealed = sealHandoverBundle(manifest, collected.bodies, sealingKey)
           const bundleSha = sha256Hex(sealed)
+          const shipTimeoutMs = Math.min(600_000, Math.max(120_000, Math.ceil(sealed.byteLength / (256 * 1024)) * 1000))
 
           // Step 3: Ship encrypted bundle
           step = 'ship'
@@ -811,7 +828,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
               },
               body: new Uint8Array(sealed),
             },
-            60_000,
+            shipTimeoutMs,
           )
           if (!shipRes.ok) throw new Error(`shipping bundle failed: ${shipRes.error}`)
 
@@ -842,7 +859,6 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
           const expectedNodes = [plan.from, ...pairedOthers.map(p => p.id)]
           const deadline = Date.now() + (o.verifyTimeoutMs ?? knobMs('BOARD_HANDOVER_VERIFY_MS', 30_000))
           const pollInterval = o.verifyPollMs ?? Math.max(50, Math.round(500 * pace()))
-          let verify: HandoverVerifyResult | null = null
           for (;;) {
             const vr = await fetchJson<HandoverVerifyResult>(
               targetLink,
@@ -871,7 +887,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
             await pause(pollInterval)
           }
 
-          // Step 5b: Commit on target and flip old master to pure node
+          // Step 5b: Commit on target (point of no return).
           step = 'commit'
           const commitRes = await fetchJson<{ ok: boolean }>(
             targetLink,
@@ -883,43 +899,22 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
             },
             15_000,
           )
-          if (!commitRes.ok) throw new Error(`commit on ${plan.to} failed: ${commitRes.error}`)
-
-          for (const p of pairedOthers) {
-            const peerLink = linkFor(p.id)
-            if (!peerLink) continue
-            await fetchJson(peerLink, '/api/node/handover/unpair', {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ self: true }),
-            }).catch(() => {})
+          if (!commitRes.ok) {
+            if (commitRes.status === 400 || commitRes.status === 409) {
+              throw new Error(`commit on ${plan.to} failed: ${commitRes.error}`)
+            }
+            // Lost commit reply or timeout: probe target phase before deciding whether to roll back.
+            const probe = await fetchJson<TargetCheckResponse>(
+              targetLink,
+              '/api/node/handover/check',
+              { method: 'GET' },
+              10_000,
+            )
+            if (probe.ok && probe.data.handoverState?.id === id && probe.data.handoverState.phase === 'applied') {
+              throw new Error(`commit on ${plan.to} did not complete: ${commitRes.error}`)
+            }
+            // Either probe reports committed, or target already closed its node door after committing.
           }
-
-          writeHandoverState({
-            v: 1,
-            id,
-            role: 'old-master',
-            phase: 'committed',
-            from: plan.from,
-            to: plan.to,
-            peerId: plan.to,
-            otherNodes: pairedOthers.map(p => p.id),
-            ...(enrolledSocket && { enrolledSocket }),
-            at: now(),
-          })
-
-          const finalOldConfig = buildOldMasterNodeConfig(rawCfg, {
-            nodeConfig: oldNodeCfg,
-            keepNodesFrozen: false,
-          })
-          withConfigFile((_, save) => save(finalOldConfig))
-          await o.reloadConfig()
-          o.setFreeze(false)
-
-          phase = 'done'
-          step = null
-          o.log(`handover ${id}: completed (${plan.from} -> ${plan.to})`)
-          return { ok: true, id, from: plan.from, to: plan.to, verify }
         } catch (err) {
           const error = msg(err)
           lastError = error
@@ -937,6 +932,54 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
           phase = 'rolled-back'
           step = null
           return { ok: false, id, from: plan.from, to: plan.to, rolledBack: true, error, plan, verify: lastVerify }
+        }
+
+        // Post-commit point of no return: finish old master forward-only, NEVER autoRollback.
+        try {
+          for (const p of pairedOthers) {
+            const peerLink = linkFor(p.id)
+            if (!peerLink) continue
+            await fetchJson(peerLink, '/api/node/handover/unpair', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ self: true }),
+            }).catch(() => {})
+          }
+
+          retireShippedOldMasterState(id)
+          writeHandoverState({
+            v: 1,
+            id,
+            role: 'old-master',
+            phase: 'committed',
+            from: plan.from,
+            to: plan.to,
+            peerId: plan.to,
+            otherNodes: pairedOthers.map(p => p.id),
+            ...(enrolledSocket && { enrolledSocket }),
+            at: now(),
+          })
+
+          if (!oldNodeCfg) throw new Error('missing old master node config')
+          const finalOldConfig = buildOldMasterNodeConfig(rawCfg, {
+            nodeConfig: oldNodeCfg,
+            keepNodesFrozen: false,
+          })
+          withConfigFile((_, save) => save(finalOldConfig))
+          await o.reloadConfig()
+          o.setFreeze(false)
+
+          phase = 'done'
+          step = null
+          o.log(`handover ${id}: completed (${plan.from} -> ${plan.to})`)
+          return { ok: true, id, from: plan.from, to: plan.to, verify }
+        } catch (finErr) {
+          const error = `target committed but old-master finalization failed (keeping freeze active): ${msg(finErr)}`
+          lastError = error
+          phase = 'failed'
+          step = null
+          o.log(`handover ${id}: ${error}`)
+          return { ok: false, id, from: plan.from, to: plan.to, rolledBack: false, error, plan, verify }
         }
       } catch (err) {
         phase = 'failed'
@@ -958,15 +1001,29 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
         if (!id) return { ok: false, error: 'no handover backup found to roll back' }
 
         if (opts.localOnly) {
-          await o.beforeDbReplace()
+          if (state?.role === 'new-master' && state.phase === 'committed' && !opts.discardSinceCommit) {
+            return {
+              ok: false,
+              id,
+              error:
+                'handover is already committed; rolling back will discard all changes written on this master since commit (pass --discard-since-commit to confirm)',
+            }
+          }
+          const scope =
+            state?.role === 'old-master'
+              ? state.phase === 'committed'
+                ? 'old-master-committed'
+                : 'old-master-precommit'
+              : 'all'
+          if (scope === 'all') await o.beforeDbReplace()
           let res: { restored: number; removed: number }
           try {
-            res = await restoreLocalBackup(id)
+            res = await restoreLocalBackup(id, { scope })
             if (state && state.id === id) {
               writeHandoverState({ ...state, phase: 'rolled-back', at: now() })
             }
           } finally {
-            await o.afterDbReplace()
+            if (scope === 'all') await o.afterDbReplace()
           }
           await o.reloadConfig()
           o.setFreeze(false)
@@ -984,6 +1041,14 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
         }
 
         if (state?.role === 'new-master' && state.phase === 'committed') {
+          if (!opts.discardSinceCommit) {
+            return {
+              ok: false,
+              id,
+              error:
+                'handover is already committed; rolling back will discard all changes written on this master since commit (pass --discard-since-commit to confirm)',
+            }
+          }
           const oldMasterLink = linkFor(state.peerId)
           if (oldMasterLink?.state().state !== 'online') {
             return {
@@ -1032,7 +1097,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
           return { ok: true, id, ...res }
         }
 
-        // Otherwise: pre-commit or incomplete state on old master (or backup-only).
+        // Otherwise: pre-commit or incomplete state on old master.
         if (state?.peerId) {
           const peerLink = linkFor(state.peerId)
           if (peerLink?.state().state === 'online') {
@@ -1043,15 +1108,16 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
             }).catch(() => {})
           }
         }
-        await o.beforeDbReplace()
+        const preScope = state?.role === 'old-master' ? 'old-master-precommit' : 'all'
+        if (preScope === 'all') await o.beforeDbReplace()
         let res: { restored: number; removed: number }
         try {
-          res = await restoreLocalBackup(id)
+          res = await restoreLocalBackup(id, { scope: preScope })
           if (state && state.id === id) {
             writeHandoverState({ ...state, phase: 'rolled-back', at: now() })
           }
         } finally {
-          await o.afterDbReplace()
+          if (preScope === 'all') await o.afterDbReplace()
         }
         await o.reloadConfig()
         o.setFreeze(false)

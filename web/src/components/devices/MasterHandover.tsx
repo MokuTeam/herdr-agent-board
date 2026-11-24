@@ -26,6 +26,7 @@ export function MasterHandover({ open: panelOpen = true, devices, initial }: Mas
   const [target, setTarget] = useState(initial?.target ?? targets[0]?.id ?? '')
   const [reverseLink, setReverseLink] = useState('')
   const [sending, setSending] = useState<string | null>(null)
+  const [confirmRollback, setConfirmRollback] = useState(false)
   const [said, setSaid] = useState('')
   const live = open && panelOpen && !initial
 
@@ -162,15 +163,37 @@ export function MasterHandover({ open: panelOpen = true, devices, initial }: Mas
             >
               {sending === 'run' ? t('node.handover.running') : t('node.handover.start')}
             </button>
-            {v?.canRollback && (
+            {v?.canRollback && !confirmRollback && (
               <button
                 type="button"
                 className="button"
                 disabled={!canEdit || working}
-                onClick={() => void send({ op: 'rollback' })}
+                onClick={() => {
+                  if (v.rollbackNeedsConfirm) setConfirmRollback(true)
+                  else void send({ op: 'rollback' })
+                }}
               >
                 {sending === 'rollback' ? t('node.handover.rollingBack') : t('node.handover.rollback')}
               </button>
+            )}
+            {v?.canRollback && confirmRollback && (
+              <>
+                <span className="access-why-step">{t('node.handover.rollbackWarn')}</span>
+                <button
+                  type="button"
+                  className="button primary"
+                  disabled={!canEdit || working}
+                  onClick={() => {
+                    setConfirmRollback(false)
+                    void send({ op: 'rollback', discardSinceCommit: true })
+                  }}
+                >
+                  {sending === 'rollback' ? t('node.handover.rollingBack') : t('node.handover.rollbackConfirm')}
+                </button>
+                <button type="button" className="button" disabled={working} onClick={() => setConfirmRollback(false)}>
+                  {t('node.handover.cancel')}
+                </button>
+              </>
             )}
             <button
               type="button"

@@ -143,6 +143,18 @@ describe('core/master-handover (#697)', () => {
         hasRelay: false,
       }).ok,
     ).toBe(false)
+
+    // Non-loopback direct target refuses loopback default and explicit loopback override (Item 7)
+    const remoteDirect = { kind: 'direct' as const, url: 'https://atlas.example.com:12430' }
+    expect(parseReverseLinkSpec({ oldMasterId: 'laptop', targetLink: remoteDirect, hasRelay: false }).ok).toBe(false)
+    expect(
+      parseReverseLinkSpec({
+        spec: 'direct:http://127.0.0.1:12430',
+        oldMasterId: 'laptop',
+        targetLink: remoteDirect,
+        hasRelay: false,
+      }).ok,
+    ).toBe(false)
   })
 
   test('flipNodesConfig, buildTargetMasterConfig, and buildOldMasterNodeConfig preserve device settings and flip roles', () => {
@@ -201,6 +213,17 @@ describe('core/master-handover (#697)', () => {
       profiles: [{ id: 'default', dir: '/Users/anna/.claude' }],
       categories: [{ id: 'atlas', title: 'Atlas', color: 'blue', paths: [] }],
       threads: true,
+      time: true,
+      calendar: { sources: [] },
+      watches: { everySec: 60 },
+      todos: true,
+      decisions: true,
+      journal: true,
+      workdesk: { workers: [] },
+      workdeskDialog: true,
+      boardEvents: true,
+      remote: { on: true },
+      presence: { on: true },
       team: { hub: 'wss://hub.example.com', name: 'anna' },
       tunnel: {
         on: true,
@@ -243,6 +266,19 @@ describe('core/master-handover (#697)', () => {
     })
     expect(committedOld.nodes).toBeUndefined()
     expect(committedOld.team).toBeUndefined()
+    expect(committedOld.threads).toBeUndefined()
+    expect(committedOld.time).toBeUndefined()
+    expect(committedOld.calendar).toBeUndefined()
+    expect(committedOld.watches).toBeUndefined()
+    expect(committedOld.todos).toBeUndefined()
+    expect(committedOld.decisions).toBeUndefined()
+    expect(committedOld.journal).toBeUndefined()
+    expect(committedOld.workdesk).toBeUndefined()
+    expect(committedOld.workdeskDialog).toBeUndefined()
+    expect(committedOld.boardEvents).toBeUndefined()
+    expect(committedOld.remote).toBeUndefined()
+    expect(committedOld.presence).toBeUndefined()
+    expect(committedOld.port).toBe(12422)
     expect((committedOld.tunnel as Record<string, unknown>).on).toBe(false)
     expect(committedOld.node).toEqual({
       id: 'laptop',
@@ -267,7 +303,11 @@ describe('core/master-handover (#697)', () => {
     expect(parseMasterCliArgs(['handover']).ok).toBe(false)
     expect(parseMasterCliArgs(['rollback', '--id', 'ho-1', '--local-only', '--json'])).toEqual({
       ok: true,
-      cmd: { op: 'rollback', id: 'ho-1', localOnly: true, json: true },
+      cmd: { op: 'rollback', id: 'ho-1', localOnly: true, discardSinceCommit: false, json: true },
+    })
+    expect(parseMasterCliArgs(['rollback', '--discard-since-commit'])).toEqual({
+      ok: true,
+      cmd: { op: 'rollback', localOnly: false, discardSinceCommit: true, json: false },
     })
     expect(parseMasterCliArgs(['status', '--json'])).toEqual({ ok: true, cmd: { op: 'status', json: true } })
 

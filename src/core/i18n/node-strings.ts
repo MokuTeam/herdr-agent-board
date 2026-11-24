@@ -438,6 +438,10 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.handover.running': 'Moving master…',
     'node.handover.rollback': 'Rollback handover',
     'node.handover.rollingBack': 'Rolling back…',
+    'node.handover.rollbackWarn':
+      'Rolling back after commit will discard all changes written on this master since the handover.',
+    'node.handover.rollbackConfirm': 'Confirm rollback and discard changes',
+    'node.handover.cancel': 'Cancel',
     'node.handover.close': 'Close',
     'node.handover.checks': 'Preflight checks',
     'node.handover.willMove': 'State to move: {files} file(s), {kb} KB',
@@ -893,6 +897,10 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.handover.running': 'Передача…',
     'node.handover.rollback': 'Откатить передачу',
     'node.handover.rollingBack': 'Откат…',
+    'node.handover.rollbackWarn':
+      'Откат после завершения удалит все изменения, сделанные на этом мастере после передачи.',
+    'node.handover.rollbackConfirm': 'Подтвердить откат и сбросить изменения',
+    'node.handover.cancel': 'Отмена',
     'node.handover.close': 'Закрыть',
     'node.handover.checks': 'Проверки перед передачей',
     'node.handover.willMove': 'К переносу: {files} файл(ов), {kb} КБ',

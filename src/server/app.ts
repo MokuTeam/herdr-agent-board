@@ -17,7 +17,12 @@ import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { archiveCommit, headCommit } from '../adapters/git.ts'
 import { gitTools, masterGit } from '../adapters/git-access.ts'
-import { readHandoverState } from '../adapters/handover-store.ts'
+import {
+  handoverStageDir,
+  readHandoverState,
+  restoreLocalBackup,
+  writeHandoverState,
+} from '../adapters/handover-store.ts'
 import { workspaceList } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { activateNodeRelayKey, createNodeJoinStore, stageNodeRelayKey } from '../adapters/node-join-store.ts'
@@ -349,6 +354,28 @@ export async function startServer({
 }: ServerOptions): Promise<BoardServer> {
   const { cfg, log } = deps
   const initialNoFileCfg = readConfigFile() === null ? structuredClone(cfg) : null
+  // Crash recovery (#697): recover any incomplete handover before opening SQLite DBs or services.
+  const bootHandover = readHandoverState()
+  let handoverFrozen = bootHandover?.role === 'old-master' && bootHandover.phase === 'prepared'
+  if (bootHandover?.role === 'new-master' && (bootHandover.phase === 'prepared' || bootHandover.phase === 'applied')) {
+    try {
+      await restoreLocalBackup(bootHandover.id, { scope: 'all' })
+      rmSync(handoverStageDir(bootHandover.id), { recursive: true, force: true })
+      writeHandoverState({ ...bootHandover, phase: 'rolled-back', at: Date.now() })
+      const recoveredCfg =
+        initialNoFileCfg && readConfigFile() === null ? structuredClone(initialNoFileCfg) : loadConfig()
+      if (asked === undefined && cfg.port !== undefined && !Object.hasOwn(readConfigFile() ?? {}, 'port')) {
+        ;(recoveredCfg as unknown as Record<string, unknown>).port = cfg.port
+      }
+      for (const k of Object.keys(cfg)) delete (cfg as unknown as Record<string, unknown>)[k]
+      Object.assign(cfg, recoveredCfg)
+      log(`handover ${bootHandover.id}: recovered crashed incomplete target handover back to node`)
+    } catch (err) {
+      log(`handover ${bootHandover.id}: boot recovery failed: ${messageOf(err)}`)
+    }
+  } else if (handoverFrozen) {
+    log(`handover ${bootHandover?.id}: old master stays frozen until rolled back`)
+  }
   // Validate before starting a scheduler or changing any state.
   const cards = cardsDir()
   const port = asked ?? Number(cfg.port ?? 12422)
@@ -376,7 +403,6 @@ export async function startServer({
   // The placer (#504): made with the links below, the first time config.json has `nodes`; until then,
   // and whenever `nodes` is off, a start runs here as it always has.
   let nodePlacer: Placer | null = null
-  let handoverFrozen = false
   // Sessions started from the board (services/launch): their progress goes out with the board.
   const launches = createLaunches({
     deps,
@@ -474,13 +500,7 @@ export async function startServer({
   // Headless master admin (#694): resolved lazily once board, localNodeRoutes and localSetupRoutes
   // are set up below (never called before start() wires routes and begins listening).
   const remoteAdminRoutes = (path: string): Route[] | null =>
-    path === '/api/nodes' && localNodeRoutes
-      ? localNodeRoutes
-      : path === '/api/nodes/setup'
-        ? localSetupRoutes
-        : path === '/api/nodes/handover' && hasHandoverRoute()
-          ? localHandoverRoutes
-          : null
+    path === '/api/nodes' && localNodeRoutes ? localNodeRoutes : path === '/api/nodes/setup' ? localSetupRoutes : null
   const listener = createRemoteListener({
     cfg,
     webPort: port,
@@ -490,6 +510,7 @@ export async function startServer({
     page: remotePage,
     remote,
     log,
+    frozen: () => handoverFrozen,
     onChange: () => board.publish(),
     adminRoutes: remoteAdminRoutes,
     onAdminAuditCheck: () => board.checkAdminAudit(),
@@ -528,6 +549,7 @@ export async function startServer({
     probes,
     ownFiles: ownFileCheck(cfg),
     log,
+    frozen: () => handoverFrozen,
     onChange: () => {
       accessChanged()
       void supervisor.sync()
@@ -798,6 +820,7 @@ export async function startServer({
   // one connection to the database for the board's life: the payload and the Time panel's reads and writes
   keepTimeDb(true)
   const backups = startBackups({ cfg: backupCfg, onChange: () => board.publish() })
+  if (handoverFrozen) backups.pause()
   const backupServer = createBackupServer({ cfg: backupCfg, spawn: spawnRemote })
   const backupLine = (): BackupPayload | null => {
     if (!existsSync(dbFile()) && !cfg.backup) return null
@@ -1248,6 +1271,15 @@ export async function startServer({
       const path = decodeURIComponent(url.pathname)
       // Something done on this board's own page is the user at the computer (presence's "back");
       // the CLI and agents send no Origin, and the presence switch itself says what it says.
+      if (
+        handoverFrozen &&
+        req.method !== 'GET' &&
+        req.method !== 'HEAD' &&
+        path.startsWith('/api/') &&
+        path !== '/api/nodes/handover'
+      ) {
+        return json(503, { error: 'handover-frozen', message: 'master handover in progress; writes are frozen' })
+      }
       if (req.method !== 'GET' && path.startsWith('/api/') && path !== '/api/presence' && ownOrigin(req))
         presence.touch()
       const selected =
@@ -1760,6 +1792,7 @@ export async function startServer({
       log,
       webPort: () => Number(server.port) || Number(cfg.port) || 12422,
       setPresence: (state, from) => presence.set(state, from),
+      frozen: () => handoverFrozen,
     })
     const placer = createPlacer({
       cfg,
@@ -1955,6 +1988,7 @@ export async function startServer({
     remoteItems: () => nodeAggregate?.part()?.items ?? [],
     verify: verifier,
   })
+  if (handoverFrozen) scheduler.pause()
   workdesk.configChanged()
   workdeskDialog.configChanged()
   void configureWorkdeskStream()
@@ -1974,7 +2008,7 @@ export async function startServer({
   presence.start()
   calendar.configChanged()
   reminders.configChanged()
-  team.start()
+  if (!handoverFrozen) team.start()
   holdLoopback6()
 
   // What the Remote access view reads of config.json, and the tunnel's own settings in it, as of
