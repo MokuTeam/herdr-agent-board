@@ -72,6 +72,8 @@ export interface PlacementView {
 export interface Task {
   lane: string
   profile: string
+  /** True when `profile` is already the target node's own profile id (never remapped through `devices[d].profiles`). */
+  nodeProfile?: true
   agent: string
   /** "Where" in the New session window: a device or a tag. Absent: the whole order. */
   pin?: { device: DeviceId } | { tag: string } | null
@@ -325,8 +327,8 @@ function unfitWhy(device: DeviceId, task: Task, view: PlacementView): Unfit | nu
         ...(state?.updating && { updating: true as const }),
       }
   }
-  // The profile map is the master's to a node's: this computer's profiles are its own ids.
-  const profile = (device !== LOCAL && settings?.profiles?.[task.profile]) || task.profile
+  // The profile map is the master's to a node's: this computer's profiles and `nodeProfile` are already target ids.
+  const profile = (device !== LOCAL && !task.nodeProfile && settings?.profiles?.[task.profile]) || task.profile
   const there = status.profiles.find(p => p.id === profile)
   if (!there) return { device, kind: 'no-profile', profile }
   // null is a device that cannot tell (an agent with no login of its own to read): not a refusal.

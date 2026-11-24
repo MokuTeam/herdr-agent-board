@@ -11,6 +11,7 @@
 // thread in the code.
 
 import { switched, switchedOff, withField } from './feature-switch.ts'
+import { DEVICE_ID, LOCAL } from './node-key.ts'
 import type { CaseSessionView } from './work-cases.ts'
 
 export const THREAD_STATUSES = ['next', 'doing', 'waiting', 'owner', 'done', 'dropped'] as const
@@ -276,7 +277,7 @@ export interface VerifyConfig {
   model: string | null
   lanes: string[]
   brief: string | Record<string, string> | null
-  profile: string | null
+  profile: string | Record<string, string> | null
   limitMin: number
   max: number
 }
@@ -306,13 +307,22 @@ export function verifyConfig(raw: unknown): VerifyConfig | null {
     })
     if (per.length) brief = Object.fromEntries(per)
   }
+  let profile: VerifyConfig['profile'] = text(r.profile, 100)
+  if (!profile && typeof r.profile === 'object' && r.profile !== null && !Array.isArray(r.profile)) {
+    const per = Object.entries(r.profile as Record<string, unknown>).flatMap(([device, id]) => {
+      const p = text(id, 100)
+      const d = device.trim().toLowerCase()
+      return p && (d === LOCAL || DEVICE_ID.test(d)) ? [[d, p] as const] : []
+    })
+    if (per.length) profile = Object.fromEntries(per)
+  }
   const limit = Number(r.limitMin)
   const max = Number(r.max)
   return {
     model: text(r.model, 200),
     lanes,
     brief,
-    profile: text(r.profile, 100),
+    profile,
     limitMin: Number.isFinite(limit) && limit >= 1 ? Math.min(Math.round(limit), 24 * 60) : VERIFY_LIMIT_MIN,
     max: Number.isFinite(max) && max >= 1 ? Math.min(Math.floor(max), 10) : VERIFY_MAX,
   }
@@ -323,6 +333,16 @@ export function briefFor(c: Pick<VerifyConfig, 'brief'>, lane: string): string |
   if (!c.brief) return null
   if (typeof c.brief === 'string') return c.brief
   return c.brief[lane] ?? c.brief['*'] ?? null
+}
+
+/**
+ * The Claude profile for a verifier of a non-Claude worker (#675): a string is the master's own,
+ * an object names each device (`local` or its id).
+ */
+export function profileFor(c: Pick<VerifyConfig, 'profile'>, device: string | null = null): string | null {
+  if (!c.profile) return null
+  if (typeof c.profile === 'string') return !device || device === LOCAL ? c.profile : null
+  return c.profile[!device || device === LOCAL ? LOCAL : device] ?? null
 }
 
 export const GAP_SEC = 60

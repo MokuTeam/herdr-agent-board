@@ -19,7 +19,9 @@ import { addEntry, listEntries, removeEntry, updateEntry } from '../adapters/sch
 import { readKey } from '../adapters/team-store.ts'
 import { entriesOf, getThread, heldThreads, ThreadError, verifyingThreads } from '../adapters/work-thread-store.ts'
 import { categoryInfo } from '../core/categories.ts'
-import { sessionWorkspace } from '../core/launch/names.ts'
+import { sessionWorkspace, UNSAFE_CHARS } from '../core/launch/names.ts'
+import { type NodeStatus, nodeKey, parseNodeKey } from '../core/nodes.ts'
+import { DEFAULT_PROFILE } from '../core/profiles.ts'
 import type { ScheduleEntry } from '../core/schedule-rules.ts'
 import type { Config, Item } from '../core/types.ts'
 import {
@@ -28,6 +30,7 @@ import {
   OWNER,
   oneLine,
   type Party,
+  profileFor,
   SUMMARY_MAX,
   sharingOf,
   type ThreadHead,
@@ -63,6 +66,17 @@ const verifierParty = (key: string, thread: string): Extract<Party, { kind: 'ses
   name: verifierName(thread),
 })
 
+/** What the master knows of a device when a worker runs on a node (#675). */
+export interface VerifyNodeInfo {
+  configured: boolean
+  online: boolean
+  status: NodeStatus | null
+  profiles?: Readonly<Record<string, string>>
+  paused?: boolean
+  drain?: boolean
+  revoked?: boolean
+}
+
 /** What the board's side needs: the live config, its launches, herdr's workspaces, the archive, the database. */
 export interface VerifyHost {
   cfg: Config
@@ -76,6 +90,10 @@ export interface VerifyHost {
   withDb<T>(fn: (db: BoardDb | null) => T): T
   /** How many profiles the board shows: a verifier with no worker's profile to keep needs exactly one, or verify.profile. */
   profiles(): number
+  /** Another device's state for a worker on a node (#675); null when unknown or `nodes` is off. */
+  node?(device: string): VerifyNodeInfo | null
+  /** A placed launch's state on its node, from the node's payload (#675). */
+  remoteLaunchState?(key: string): LaunchState | null
   now?(): number
   /** The state folder, where entries' files are kept (tests). */
   state?: string
@@ -100,7 +118,7 @@ export const SWITCHED_OFF = 'verification was switched off'
 export function createVerifier(host: VerifyHost): Verifier {
   const now = (): number => host.now?.() ?? Date.now()
   // The launches this process started, by thread id: a failed one sends the thread to the owner.
-  const started = new Map<string, { launch: string; key: string }>()
+  const started = new Map<string, { launch: string; key: string; at: number; handedAt?: number }>()
   // The same launches by the verifier's key, while due() may still need to know one is on its way.
   const launchOf = new Map<string, string>()
 
@@ -150,6 +168,7 @@ export function createVerifier(host: VerifyHost): Verifier {
     if (by.kind !== 'session') return null
     const item = items.find(i => i.key === by.key)
     if (item) return { item, cwd: item.cwd ?? '', record: null }
+    if (parseNodeKey(by.key)) return null
     const record = listArchive().find(r => r.key === by.key) ?? null
     return record ? { item: null, cwd: record.cwd, record } : null
   }
@@ -157,14 +176,118 @@ export function createVerifier(host: VerifyHost): Verifier {
   async function startOne(db: BoardDb, cfg: ThreadsConfig, held: ThreadHead, items: Item[]): Promise<void> {
     let head = held
     const v = cfg.verify as VerifyConfig
-    const key = randomUUID()
+    const rawId = randomUUID()
+    const by = head.proposed?.by
+    const byDevice = by?.kind === 'session' ? (parseNodeKey(by.key)?.device ?? null) : null
+    const worker = by ? workerOf(by, items) : null
+    const device = worker?.item?.device ?? byDevice
+    const key = device ? nodeKey(device, rawId) : rawId
     const fail = (why: string): void => {
       host.log(`verify ${head.key}: ${why}`)
       const fresh = getThread(db, head.id)
       if (fresh?.proposed?.verify) toOwner(db, cfg, fresh, key, 'error', why)
     }
-    const by = head.proposed?.by
-    const worker = by ? workerOf(by, items) : null
+    if (device !== null) {
+      const info = host.node?.(device) ?? null
+      if (!info?.configured) return fail(`device ${device} is not configured`)
+      if (info.revoked) return fail(`${device} is revoked`)
+      if (info.paused) return fail(`${device} is paused`)
+      if (info.drain) return fail(`${device} is draining`)
+      if (!info.online) return fail(`${device} is not reachable`)
+      if (!info.status) return fail(`${device} has not reported its status yet`)
+      if (!info.status.agents.includes('claude')) return fail(`${device} cannot start claude`)
+      if (!worker?.cwd) return fail("the worker's folder is not known")
+      const claude = worker.item ? (worker.item.agent ?? 'claude') === 'claude' : false
+      let nodeProfile: string
+      if (claude) {
+        if (worker.item?.profileFolder || worker.item?.profileWanted)
+          return fail(`the worker's profile on ${device} is not known`)
+        if (worker.item?.profile) nodeProfile = worker.item.profile
+        else {
+          const picked = pickNodeDefaultProfile(device, info.status.profiles)
+          if (!picked.ok) return fail(picked.why)
+          nodeProfile = picked.id
+        }
+      } else {
+        const configured =
+          profileFor(v, device) ?? (typeof v.profile === 'string' ? (info.profiles?.[v.profile] ?? null) : null)
+        if (configured) nodeProfile = configured
+        else {
+          const picked = pickNodeDefaultProfile(device, info.status.profiles)
+          if (!picked.ok) return fail(picked.why)
+          nodeProfile = picked.id
+        }
+      }
+      const profileEntry = info.status.profiles.find(p => p.id === nodeProfile)
+      if (!profileEntry) return fail(`${device} has no profile ${nodeProfile}`)
+      if (profileEntry.loggedIn === false) return fail(`${device} is not logged in to ${nodeProfile}`)
+      let checklist: string
+      try {
+        checklist = checklistFor(v, head.lane)
+      } catch (err) {
+        return fail(messageOf(err))
+      }
+      const at = now()
+      const until = at + v.limitMin * 60_000
+      const name = verifierName(head.key)
+      const entries = entriesOf(db, head.id)
+      const message = verifyBrief({
+        head,
+        entries,
+        checklist,
+        folder: worker.cwd,
+        until,
+        now: at,
+        limitMin: v.limitMin,
+        fileAt: f => filePath(f.ref, host.state),
+        keyOfId: id => getThread(db, id)?.key ?? id.slice(0, 8),
+        parentKey: head.parent ? (getThread(db, head.parent)?.key ?? null) : null,
+      })
+      const category = hostCategory(host.cfg, head.lane, worker.item, items)
+      const workspace = nodeWorkspace([worker.item?.workspace, categoryInfo(host.cfg, category).title], name)
+      const now2 = getThread(db, head.id)
+      if (!now2?.proposed?.verify || now2.verify?.run) return
+      head = now2
+      try {
+        postEntry(ctxOf(db, cfg, verifierParty(key, head.key)), head, {
+          type: 'system',
+          set: { verifier: { key, name, at, until } },
+          ...(sharingOf(head) && { private: true }),
+        })
+      } catch (err) {
+        host.log(`verify ${head.key}: ${messageOf(err)}`)
+        return
+      }
+      const limit = addLimit(key, name, head, until, at)
+      const body = {
+        name,
+        cwd: worker.cwd,
+        category,
+        workspace,
+        message,
+        profile: nodeProfile,
+        pin: { device },
+        ...(v.model && { model: v.model }),
+      }
+      let r: StartResult
+      try {
+        r = await host.start(body, items, { sessionId: rawId, remote: device, byHand: false })
+      } catch (err) {
+        r = { ok: false, field: '', error: messageOf(err) }
+      }
+      if (!r.ok) {
+        if (limit) removeEntry(limit.id)
+        const fresh = getThread(db, head.id)
+        if (fresh && fresh.verify?.run?.key === key)
+          toOwner(db, cfg, fresh, key, 'error', `the start was refused: ${r.error}`)
+        host.log(`verify ${head.key}: ${r.error}`)
+        return
+      }
+      started.set(head.id, { launch: r.id, key, at })
+      launchOf.set(key, r.id)
+      host.log(`verify ${head.key}: ${name} starts on ${device} in ${worker.cwd}`)
+      return
+    }
     // The folder itself is checked by the start (launch/request.ts, with a time limit): a mapped drive
     // that is offline does not hold up the scheduler's tick here.
     if (!worker?.cwd) return fail("the worker's folder is not known")
@@ -195,7 +318,8 @@ export function createVerifier(host: VerifyHost): Verifier {
     const claude = worker.item ? (worker.item.agent ?? 'claude') === 'claude' : !!worker.record
     const from = worker.item ?? worker.record
     const parent = claude && from ? factsOf(from) : null
-    if (!parent && !v.profile) {
+    const localProfile = profileFor(v, null)
+    if (!parent && !localProfile) {
       const shown = host.profiles()
       if (shown !== 1)
         return fail(
@@ -240,7 +364,7 @@ export function createVerifier(host: VerifyHost): Verifier {
       workspace,
       message,
       ...(v.model && { model: v.model }),
-      ...(!parent && v.profile && { profile: v.profile }),
+      ...(!parent && localProfile && { profile: localProfile }),
     }
     let r: StartResult
     try {
@@ -257,7 +381,7 @@ export function createVerifier(host: VerifyHost): Verifier {
       host.log(`verify ${head.key}: ${r.error}`)
       return
     }
-    started.set(head.id, { launch: r.id, key })
+    started.set(head.id, { launch: r.id, key, at })
     launchOf.set(key, r.id)
     host.log(`verify ${head.key}: ${name} starts in ${worker.cwd}`)
   }
@@ -271,15 +395,33 @@ export function createVerifier(host: VerifyHost): Verifier {
       // Launches that failed after they started: the thread goes to the owner.
       for (const [thread, s] of started) {
         const st = host.launchState(s.launch)
-        if (st?.state !== 'failed') {
-          if (!st || st.state === 'done') started.delete(thread)
+        if (st?.state === 'failed') {
+          started.delete(thread)
+          const head = getThread(db, thread)
+          if (head?.verify?.run?.key === s.key) {
+            removeLimit(s.key)
+            toOwner(db, cfg, head, s.key, 'error', st.error || 'the launch failed')
+          }
           continue
         }
-        started.delete(thread)
-        const head = getThread(db, thread)
-        if (head?.verify?.run?.key === s.key) {
-          removeLimit(s.key)
-          toOwner(db, cfg, head, s.key, 'error', st.error || 'the launch failed')
+        if (!st || st.state === 'done') {
+          if (parseNodeKey(s.key) && host.remoteLaunchState) {
+            s.handedAt ??= st ? now() : s.at
+            const rst = host.remoteLaunchState(s.key)
+            if (rst?.state === 'failed') {
+              started.delete(thread)
+              const head = getThread(db, thread)
+              if (head?.verify?.run?.key === s.key) {
+                removeLimit(s.key)
+                toOwner(db, cfg, head, s.key, 'error', rst.error || 'the launch failed')
+              }
+              continue
+            }
+            if (rst && rst.state !== 'done') continue
+            if (rst?.state === 'done' || now() - s.handedAt >= LOST_GRACE_MS) started.delete(thread)
+            continue
+          }
+          started.delete(thread)
         }
       }
       // A verifier the thread names that this process never started and that never got a card (the
@@ -294,6 +436,22 @@ export function createVerifier(host: VerifyHost): Verifier {
         for (const h of lost) {
           const run = h.verify?.run as VerifyRun
           if (board.some(i => i.key === run.key)) continue
+          if (parseNodeKey(run.key)) {
+            const rst = host.remoteLaunchState?.(run.key)
+            if (rst && rst.state !== 'failed' && rst.state !== 'done') continue
+            removeLimit(run.key)
+            toOwner(
+              db,
+              cfg,
+              h,
+              run.key,
+              'error',
+              rst?.state === 'failed'
+                ? rst.error || 'the launch failed'
+                : `the verifier ${run.name} is gone from the board`,
+            )
+            continue
+          }
           removeLimit(run.key)
           if (!readCard(run.key))
             postEntry(ctxOf(db, cfg, verifierParty(run.key, h.key)), h, {
@@ -385,7 +543,10 @@ export function createVerifier(host: VerifyHost): Verifier {
     const item = items.find(i => i.key === entry.key)
     if (!item) {
       const launch = launchOf.get(entry.key)
-      const starting = !!launch && host.launchState(launch)?.state === 'starting'
+      const st = launch ? host.launchState(launch) : null
+      const rst = parseNodeKey(entry.key) ? (host.remoteLaunchState?.(entry.key) ?? null) : null
+      const starting =
+        st?.state === 'starting' || st?.state === 'queued' || (!!rst && rst.state !== 'done' && rst.state !== 'failed')
       const begun = Number(entry.begun) || 0
       const young = now() - begun < LOST_GRACE_MS
       const tries = (Number(entry.tries) || 0) + 1
@@ -412,7 +573,7 @@ export function createVerifier(host: VerifyHost): Verifier {
     }
     if (r === 'ok') {
       // The archive took the session's entries into its record: this one must not come back with it.
-      dropHeld(item.key, entry.id)
+      if (!parseNodeKey(item.key)) dropHeld(item.key, entry.id)
       removeEntry(entry.id)
       launchOf.delete(entry.key)
       return
@@ -433,6 +594,29 @@ export function createVerifier(host: VerifyHost): Verifier {
   }
 
   return { sweep, due, switchedOff }
+}
+
+/** A workspace label for a verifier started on a node (#675). */
+function nodeWorkspace(candidates: (string | null | undefined)[], fallback: string): { create: string } {
+  for (const c of candidates) {
+    const s = typeof c === 'string' ? c.trim() : ''
+    if (s && !UNSAFE_CHARS.test(s) && !s.startsWith('-')) return { create: s.slice(0, 40) }
+  }
+  return { create: fallback.slice(0, 40) }
+}
+
+/** Default Claude profile on a node for a non-Claude worker when config names none (#675). */
+function pickNodeDefaultProfile(
+  device: string,
+  profiles: NodeStatus['profiles'],
+): { ok: true; id: string } | { ok: false; why: string } {
+  if (!profiles.length) return { ok: false, why: `${device} has no Claude profile` }
+  const usable = profiles.filter(p => p.loggedIn !== false)
+  if (!usable.length) return { ok: false, why: `${device} is not logged in to Claude` }
+  const def = usable.find(p => p.id === DEFAULT_PROFILE) ?? (usable.length === 1 ? usable[0] : null)
+  if (!def)
+    return { ok: false, why: `no threads.verify.profile for ${device} and ${device} has no default Claude profile` }
+  return { ok: true, id: def.id }
 }
 
 /** The profile facts a start keeps: those of the worker's card, or of its archive record. */

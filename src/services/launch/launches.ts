@@ -20,7 +20,9 @@ import {
 } from '../../core/launch/agents.ts'
 import { failureKind } from '../../core/launch/launcher-command.ts'
 import { sameDir } from '../../core/launch/names.ts'
+import { refusalText } from '../../core/launch/place-text.ts'
 import { forkCard } from '../../core/links.ts'
+import { nodesConfig } from '../../core/nodes.ts'
 import { isPiItem, piSessionId } from '../../core/pi.ts'
 import { shownProfiles } from '../../core/profiles.ts'
 import type { Item, LaunchView } from '../../core/types.ts'
@@ -67,11 +69,13 @@ export interface StartOptions {
    * A node's start from its master (#504, services/node/launch.ts): the session id the master picked,
    * which is the launch's id too, and a lane the master checked (this board may not have it yet).
    */
-  node?: { session: string } | null
+  node?: { session: string; exactSession?: boolean } | null
   /** A person asked for it (the New session window); false for an agent's start (T9). The placer reads it. */
   byHand?: boolean
   /** The Claude session id the board chose (a verifier, #492): Claude Code under that id here, or no start. */
   sessionId?: string | null
+  /** A verifier's start on a worker's node (#675): placed there with that node's own folder and profile. */
+  remote?: string | null
 }
 
 /** How a launch went, for a start of the server's own that waits on it (a verifier, #492); null once it is gone. */
@@ -118,6 +122,8 @@ export interface Launches {
   changed(): void
   /** A launch's state by its id, dismissed or not. */
   state(id: string): LaunchState | null
+  /** A launch's state by its chosen `sessionGiven` (#675), for queued or adopted starts. */
+  sessionState?(session: string): LaunchState | null
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -221,13 +227,16 @@ export function createLaunches({
       node = null,
       byHand = true,
       sessionId = null,
+      remote = null,
       codexFork,
     }: StartOptions = {},
   ): Promise<StartResult> {
     const categories = new Set([...deps.cfg.categories.map(c => c.id), ...items.map(i => i.category)])
-    // Resume, fork, a node's own start from its master and a verifier (#492) are never placed: they run
-    // where they are, a verifier in the worker's folder on this computer.
-    const placing = resume || fork || node || sessionId ? null : placer()
+    // Resume, fork, a node's own start from its master and a local verifier (#492) are never placed:
+    // they run where they are, a local verifier in the worker's folder on this computer. A node
+    // verifier (#675, `remote` set) goes through the placer, pinned to its worker's node.
+    const placing = resume || fork || node || (sessionId && !remote) ? null : placer()
+    if (remote && !placing) return { ok: false, field: 'pin', error: t('place.refuse.no-device', { pin: remote }) }
     // Only the board's own spawn-agent types a profile's start command: the others never read it.
     const launcher = launcherFor(deps.cfg.launch, { resume: !!resume, fork: !!fork, ...(codexFork && { codexFork }) })
     const r = await checkRequest(body, {
@@ -240,7 +249,7 @@ export function createLaunches({
       // A start of the server's own (a fork, a verifier) picks no agent: Claude Code's.
       // A resume from the archive may be Claude or Antigravity (never defaulted to agy/pi).
       agents: () =>
-        fork || sessionId
+        fork || sessionId || node?.exactSession
           ? []
           : resume
             ? launchAgents(deps.cfg.launch, () => false, agyOnPath)
@@ -250,6 +259,7 @@ export function createLaunches({
       agy: deps.cfg.launch?.agy,
       // "Where" and a node's folder are read only while the board places (#504).
       ...(placing && { pins: true }),
+      ...(placing && remote && { remote, nodeProfile: true }),
     })
     if (!r.ok) return r
     // launch.agent whose arguments pick the session cannot resume one: refused before anything runs.
@@ -274,6 +284,7 @@ export function createLaunches({
     if (node) {
       l.id = node.session
       l.sessionGiven = node.session
+      if (node.exactSession) l.exactSession = true
     }
     if (sessionId) {
       l.sessionGiven = sessionId
@@ -502,7 +513,24 @@ export function createLaunches({
     changed,
     state: id => {
       const l = launches.get(id)
-      return l ? { state: l.state, error: l.error, sessionId: l.sessionId } : null
+      return l ? stateOf(l) : null
     },
+    sessionState: session => {
+      const l = [...launches.values()].find(x => x.sessionGiven === session)
+      return l ? stateOf(l) : null
+    },
+  }
+  function stateOf(l: Launch): LaunchState {
+    let error = l.error
+    if (l.state === 'failed' && !error) {
+      if (l.place?.refuse) {
+        const cfg = nodesConfig(deps.cfg.nodes)
+        const titles = cfg
+          ? Object.fromEntries(Object.entries(cfg.devices).map(([dev, d]) => [dev, d.title]))
+          : undefined
+        error = refusalText(l.place.refuse, t, titles)
+      } else if (l.place?.queueFull) error = t('place.queueFull')
+    }
+    return { state: l.state, error, sessionId: l.sessionId }
   }
 }

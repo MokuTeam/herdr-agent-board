@@ -72,6 +72,9 @@ export interface UplinkFile {
   sha256: string
 }
 
+/** The session a verdict runs in on the node, as herdr confirmed it (services/work-verify.ts paneSelf). */
+export type UplinkSelf = { key: string } | { why: string }
+
 export interface UplinkCall {
   id: string
   cmd: string
@@ -81,6 +84,8 @@ export interface UplinkCall {
   /** The lane the node says the session has; the master takes its card's instead when it has one. */
   lane: string | null
   files: UplinkFile[]
+  /** For `board thread verdict` (#675): the pane's session as the node's herdr confirmed it. */
+  self?: UplinkSelf
 }
 
 export interface UplinkResult {
@@ -104,10 +109,19 @@ function fileOf(v: unknown): UplinkFile | null {
   return { n: n as number, name, size: size as number, sha256 }
 }
 
+function selfOf(v: unknown): UplinkSelf | null {
+  if (!isObject(v)) return null
+  const hasKey = Object.hasOwn(v, 'key') && v.key !== undefined
+  const hasWhy = Object.hasOwn(v, 'why') && v.why !== undefined
+  if (hasKey === hasWhy) return null
+  if (hasKey) return isText(v.key, 1024) && v.key && !hasUnprintable(v.key) ? { key: v.key } : null
+  return isText(v.why, 512) && v.why && !hasUnprintable(v.why) ? { why: v.why } : null
+}
+
 /** A call as it came on the stream, or null when it is not one. */
 export function uplinkCallOf(raw: unknown): UplinkCall | null {
   if (!isObject(raw)) return null
-  const { id, cmd, argv, session, lane, files } = raw
+  const { id, cmd, argv, session, lane, files, self: rawSelf } = raw
   if (!isCallId(id) || !isText(cmd, 64)) return null
   if (!Array.isArray(argv) || argv.length > ARGV_MAX || !argv.every(a => isText(a, ARG_MAX))) return null
   if (!isText(session, 1024) || hasUnprintable(session)) return null
@@ -116,7 +130,9 @@ export function uplinkCallOf(raw: unknown): UplinkCall | null {
   if (!list || list.some(f => f === null)) return null
   const got = list as UplinkFile[]
   if (new Set(got.map(f => f.n)).size !== got.length) return null
-  return { id, cmd, argv: argv as string[], session, lane: lane ?? null, files: got }
+  const self = rawSelf === undefined || rawSelf === null ? undefined : selfOf(rawSelf)
+  if (rawSelf !== undefined && rawSelf !== null && !self) return null
+  return { id, cmd, argv: argv as string[], session, lane: lane ?? null, files: got, ...(self && { self }) }
 }
 
 /** A result as the master posted it, or null. */

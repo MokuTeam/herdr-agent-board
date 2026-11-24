@@ -353,6 +353,7 @@ export function createPlacer(o: PlacerOptions): Placer {
       profile: l.profile,
       profileDir: l.profileDir,
       configDir: l.configDir,
+      ...(l.nodeProfile && { nodeProfile: true as const }),
       parent: l.parent,
       profileArgs: l.profileArgs,
       profileCommand: l.profileCommand,
@@ -370,6 +371,7 @@ export function createPlacer(o: PlacerOptions): Placer {
       task: h.task,
       source: h.source,
       ...(wait && { wait }),
+      ...(l.exactSession && { exactSession: true as const }),
     }
   }
 
@@ -431,7 +433,7 @@ export function createPlacer(o: PlacerOptions): Placer {
   function bodyOf(h: Held, device: string): unknown {
     const l = h.l
     const cfg = nodes()
-    const profile = cfg?.devices[device]?.profiles[l.profile] || l.profile
+    const profile = l.nodeProfile ? l.profile : cfg?.devices[device]?.profiles[l.profile] || l.profile
     return {
       id: l.sessionGiven,
       name: l.name,
@@ -442,6 +444,7 @@ export function createPlacer(o: PlacerOptions): Placer {
       message: l.message,
       workspace: l.workspaceLabel,
       source: h.source,
+      ...(l.exactSession && { exactSession: true }),
     }
   }
 
@@ -484,7 +487,7 @@ export function createPlacer(o: PlacerOptions): Placer {
       syncing.add(session)
       let r: SyncReport
       try {
-        r = await o.bundle.syncIfBehind(device, h.l.profile)
+        r = await o.bundle.syncIfBehind(device, h.l.profile, h.l.nodeProfile ? { nodeProfile: true } : undefined)
       } finally {
         syncing.delete(session)
       }
@@ -684,6 +687,7 @@ export function createPlacer(o: PlacerOptions): Placer {
     const base = {
       lane: l.category,
       profile: l.profile,
+      ...(l.nodeProfile && { nodeProfile: true as const }),
       agent: l.agent,
       byHand,
       ...(l.pin && { pin: l.pin }),
@@ -741,6 +745,7 @@ export function createPlacer(o: PlacerOptions): Placer {
     const l = newLaunch(request, o.items())
     l.id = e.id
     l.sessionGiven = e.session
+    if (e.exactSession) l.exactSession = true
     l.startedAt = e.at
     l.state = 'queued'
     l.step = 'placing'

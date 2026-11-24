@@ -60,6 +60,8 @@ export interface LaunchRequest {
   profileDir: string
   /** CLAUDE_CONFIG_DIR for the start; null leaves the env as the board inherited it (its own profile). */
   configDir: string | null
+  /** True when `profile` is already the target node's own profile id (#675), not a master profile. */
+  nodeProfile?: true
   /** The key of the card it was started from ("New here"), whose profile it keeps; null for none. */
   parent: string | null
   /** The profile's own Claude arguments. */
@@ -127,6 +129,8 @@ export async function checkRequest(
     pi,
     agy,
     pins = false,
+    remote: forcedRemote,
+    nodeProfile: isNodeProfile = false,
     codexFork,
   }: {
     categories?: Set<string> | null
@@ -138,6 +142,8 @@ export async function checkRequest(
     pi?: unknown
     agy?: unknown
     pins?: boolean
+    remote?: string
+    nodeProfile?: boolean
   } & ({ codexFork: true; profiles?: never } | { codexFork?: never; profiles: ProfileSet }),
 ): Promise<CheckResult> {
   const fail = (field: string, key: string, vars?: Vars): CheckResult => ({ ok: false, field, error: t(key, vars) })
@@ -150,17 +156,25 @@ export async function checkRequest(
     pin = pinOf(b.pin)
     if (!pin) return fail('pin', 'launch.err.pin')
   }
-  let { path: cwd } = resolvePath(b.cwd)
+  let cwd = ''
   let remote: string | undefined
-  if (!cwd) return fail('cwd', 'launch.err.cwdEmpty')
-  const st = await statOf(cwd, 3000)
-  if (st === SLOW) return fail('cwd', 'launch.err.cwdSlow', { path: cwd })
-  if (!st && pin && 'device' in pin && pin.device !== LOCAL) {
-    // A folder of the pinned node, as that node names it: taken as written, never resolved here.
-    remote = pin.device
-    cwd = String(b.cwd).trim()
-  } else if (!st) return fail('cwd', 'launch.err.cwdMissing', { path: cwd })
-  else if (!st.isDirectory()) return fail('cwd', 'launch.err.cwdFile', { path: cwd })
+  if (pins && forcedRemote && pin && 'device' in pin && pin.device === forcedRemote) {
+    // A node's own folder (#675): never resolved or stat'd on the master, even when the same path exists here.
+    cwd = String(b.cwd ?? '').trim()
+    if (!cwd) return fail('cwd', 'launch.err.cwdEmpty')
+    remote = forcedRemote
+  } else {
+    cwd = resolvePath(b.cwd).path
+    if (!cwd) return fail('cwd', 'launch.err.cwdEmpty')
+    const st = await statOf(cwd, 3000)
+    if (st === SLOW) return fail('cwd', 'launch.err.cwdSlow', { path: cwd })
+    if (!st && pin && 'device' in pin && pin.device !== LOCAL) {
+      // A folder of the pinned node, as that node names it: taken as written, never resolved here.
+      remote = pin.device
+      cwd = String(b.cwd).trim()
+    } else if (!st) return fail('cwd', 'launch.err.cwdMissing', { path: cwd })
+    else if (!st.isDirectory()) return fail('cwd', 'launch.err.cwdFile', { path: cwd })
+  }
   // A lane the board has (configured, or one an agent made), or "other" when none was given.
   const category = String(b.category ?? '') || 'other'
   if (!CATEGORY_ID.test(category) || (categories && category !== 'other' && !categories.has(category)))
@@ -236,6 +250,40 @@ export async function checkRequest(
         ...none,
         ...(pin && { pin }),
         ...(remote && { remote }),
+      },
+    }
+  }
+  if (pins && isNodeProfile && remote) {
+    const askedProfile = given(b.profile)
+    if (!askedProfile) return fail('profile', 'launch.err.profileChoose')
+    if (!agent)
+      return fail('agent', offered?.length ? 'launch.err.agent' : 'launch.err.agentLauncher', { id: asked ?? '' })
+    if (agent === PI_AGENT)
+      try {
+        piCommand(pi)
+      } catch (err) {
+        return { ok: false, field: 'agent', error: err instanceof Error ? err.message : String(err) }
+      }
+    if (agent === AGY_AGENT)
+      try {
+        agyCommand(agy)
+      } catch (err) {
+        return { ok: false, field: 'agent', error: err instanceof Error ? err.message : String(err) }
+      }
+    return {
+      ok: true,
+      launch: {
+        ...common,
+        profile: askedProfile,
+        profileDir: '',
+        configDir: null,
+        profileArgs: [],
+        profileCommand: null,
+        nodeProfile: true,
+        agent,
+        model,
+        ...(pin && { pin }),
+        remote,
       },
     }
   }

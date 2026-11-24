@@ -44,6 +44,8 @@ export interface QueueEntry {
   source: NodeSource | null
   /** What it waits on, for its card after a restart. */
   wait?: Blocker
+  /** True when the start must use `session` as an exact Claude session id (a verifier, #675). */
+  exactSession?: true
 }
 
 interface QueueFile {

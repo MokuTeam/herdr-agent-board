@@ -102,7 +102,7 @@ export interface SecretsGiven {
 
 export interface BundleSync {
   /** The node made current for this profile, or why not, within SYNC_TOTAL_MS. */
-  syncIfBehind(device: string, profile?: string): Promise<SyncReport>
+  syncIfBehind(device: string, profile?: string, options?: { nodeProfile?: boolean }): Promise<SyncReport>
   /** The last report of a device's profile, for doctor; null before the first sync. */
   report(device: string, profile: string): SyncReport | null
   /**
@@ -579,16 +579,38 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
   const timer = clock.setInterval(tick, HASH_MS)
 
   return {
-    syncIfBehind(device, profile = DEFAULT_PROFILE) {
-      const key = `${device}\n${profile}`
+    syncIfBehind(device, profile = DEFAULT_PROFILE, options) {
+      let target = profile
+      if (options?.nodeProfile) {
+        const map = devices()[device]?.profiles
+        const matched = o.profiles().find(p => (map?.[p.id] ?? p.id) === profile)
+        if (!matched) {
+          return Promise.resolve({
+            ok: true,
+            device,
+            profile,
+            nodeProfile: profile,
+            seq: 0,
+            hash: '',
+            sent: 0,
+            applied: [],
+            kept: [],
+            backup: null,
+            lines: [],
+            at: clock.now(),
+          })
+        }
+        target = matched.id
+      }
+      const key = `${device}\n${target}`
       const on = running.get(key)
       if (on) return on
       // A request that ignored its signal does not hold this device and profile for good.
       let guard: unknown
       const late = new Promise<SyncReport>(resolve => {
-        guard = clock.setTimeout(() => resolve({ ...lateReport(device, profile) }), SYNC_TOTAL_MS + 1000)
+        guard = clock.setTimeout(() => resolve({ ...lateReport(device, target) }), SYNC_TOTAL_MS + 1000)
       })
-      const next = Promise.race([run(device, profile), late]).finally(() => {
+      const next = Promise.race([run(device, target), late]).finally(() => {
         clock.clearTimeout(guard)
         running.delete(key)
       })
