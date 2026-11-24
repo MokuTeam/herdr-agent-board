@@ -12,6 +12,7 @@ import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { tidyList } from '../../src/core/archive.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
+import { projectFolderName } from '../../src/core/resume.ts'
 import type { Item } from '../../src/core/types.ts'
 import { hides } from '../../src/services/archive.ts'
 import { archiveApi, isBoardPayload } from '../../web/src/api/client.ts'
@@ -1239,3 +1240,142 @@ test('#295: the list carries the parked entries with their due time; the page un
     globalThis.fetch = realFetch
   }
 }, 60_000)
+
+test('Return of a moved Claude session resumes in its target folder before and after local turns (#621)', async () => {
+  const setupMovedArchive = (box: Sandbox, nodeDir: string, recCwd: string, lines: Record<string, unknown>[]) => {
+    const projects = join(box.env.HOME as string, '.claude', 'projects', projectFolderName(nodeDir))
+    mkdirSync(projects, { recursive: true })
+    writeFileSync(join(projects, `${S}.jsonl`), `${lines.map(l => JSON.stringify(l)).join('\n')}\n`)
+    mkdirSync(box.cards, { recursive: true })
+    writeFileSync(join(box.cards, `${S}.json`), JSON.stringify({ key: S, name: 'Probe card', category: 'personal' }))
+    const now = Date.now()
+    mkdirSync(join(stateDir(box), 'archive'), { recursive: true })
+    writeFileSync(
+      archiveFile(box),
+      JSON.stringify({
+        key: S,
+        session: S,
+        name: 'Probe card',
+        category: 'personal',
+        cwd: recCwd,
+        workspace: 'Personal',
+        workspaceId: 'wP',
+        pane: 'wP:p1',
+        state: 'archived',
+        closeAt: now,
+        closedAt: now,
+        archivedAt: now,
+        held: [],
+        profile: 'default',
+      }),
+    )
+    resumable(box, nodeDir)
+  }
+
+  // Subcase A: freshly moved session before any new turn on target (only foreign source cwd in transcript).
+  const boxA = await sandbox()
+  const nodeDirA = join(boxA.dir, 'atlas проект 100%')
+  mkdirSync(nodeDirA, { recursive: true })
+  setupMovedArchive(boxA, nodeDirA, nodeDirA, [
+    {
+      type: 'user',
+      cwd: 'C:\\Work\\atlas',
+      sessionId: S,
+      message: { role: 'user', content: 'from source' },
+      timestamp: new Date().toISOString(),
+    },
+  ])
+  const bA = await board(boxA)
+  try {
+    const rA = await bA.post('/api/archive', { op: 'return', keys: [S] })
+    assert.equal(rA.status, 200, JSON.stringify(rA.body))
+    assert.equal(rA.body.done?.[0]?.resume, true, JSON.stringify(rA.body))
+    await until(() => calls(boxA).some(c => c.startsWith('pane run wP:p9')), 15_000)
+    assert.ok(
+      calls(boxA).includes(`tab create --workspace wP --cwd ${nodeDirA} --label Probe card --no-focus`),
+      calls(boxA).join('\n'),
+    )
+  } finally {
+    bA.proc.kill()
+    await bA.proc.exited
+  }
+
+  // Subcase B: moved session after a local turn, archived while pane was in a subdirectory.
+  const boxB = await sandbox()
+  const nodeDirB = join(boxB.dir, 'atlas проект 100%')
+  const subDirB = join(nodeDirB, 'sub')
+  mkdirSync(subDirB, { recursive: true })
+  setupMovedArchive(boxB, nodeDirB, subDirB, [
+    {
+      type: 'user',
+      cwd: 'C:\\Work\\atlas',
+      sessionId: S,
+      message: { role: 'user', content: 'from source' },
+      timestamp: new Date().toISOString(),
+    },
+    {
+      type: 'user',
+      cwd: nodeDirB,
+      sessionId: S,
+      message: { role: 'user', content: 'on node' },
+      timestamp: new Date().toISOString(),
+    },
+  ])
+  const bB = await board(boxB)
+  try {
+    const rB = await bB.post('/api/archive', { op: 'return', keys: [S] })
+    assert.equal(rB.status, 200, JSON.stringify(rB.body))
+    assert.equal(rB.body.done?.[0]?.resume, true, JSON.stringify(rB.body))
+    await until(() => calls(boxB).some(c => c.startsWith('pane run wP:p9')), 15_000)
+    assert.ok(
+      calls(boxB).includes(`tab create --workspace wP --cwd ${nodeDirB} --label Probe card --no-focus`),
+      calls(boxB).join('\n'),
+    )
+  } finally {
+    bB.proc.kill()
+    await bB.proc.exited
+  }
+}, 60_000)
+
+test('Return of an unmoved Claude session archived from a subdirectory still resumes in its transcript’s first cwd', async () => {
+  const box = await sandbox()
+  const dir = project(box)
+  const sub = join(dir, 'sub')
+  mkdirSync(sub, { recursive: true })
+  const now = Date.now()
+  mkdirSync(join(stateDir(box), 'archive'), { recursive: true })
+  writeFileSync(
+    archiveFile(box),
+    JSON.stringify({
+      key: S,
+      session: S,
+      name: 'Probe card',
+      category: 'personal',
+      cwd: sub,
+      workspace: 'Personal',
+      workspaceId: 'wP',
+      pane: 'wP:p1',
+      state: 'archived',
+      closeAt: now,
+      closedAt: now,
+      archivedAt: now,
+      held: [],
+      profile: 'default',
+    }),
+  )
+  resumable(box, dir)
+  const b = await board(box)
+  try {
+    const r = await b.post('/api/archive', { op: 'return', keys: [S] })
+    assert.equal(r.status, 200, JSON.stringify(r.body))
+    assert.equal(r.body.done?.[0]?.resume, true, JSON.stringify(r.body))
+    await until(() => calls(box).some(c => c.startsWith('pane run wP:p9')), 15_000)
+    assert.ok(
+      calls(box).includes(`tab create --workspace wP --cwd ${dir} --label Probe card --no-focus`),
+      calls(box).join('\n'),
+    )
+  } finally {
+    b.proc.kill()
+    await b.proc.exited
+  }
+}, 30_000)
