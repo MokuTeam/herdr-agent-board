@@ -229,6 +229,8 @@ export interface BoardDevice extends DeviceView {
   drain: boolean
   /** A sync gives it no secret (#604, `nodes.devices.<id>.giveSecrets: false`); absent, it gives them. */
   giveSecrets?: false
+  /** Whether this device is opted in to the MokuPilot node bridge (#730); absent when off. */
+  pilotBridge?: true
   /** The thresholds placement holds it to; null until the board writes them from its first status. */
   maxSessions: number | null
   minFreeMemMb: number | null

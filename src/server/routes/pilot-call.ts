@@ -93,7 +93,7 @@ export function pilotCallRoutes(input: PilotCallRouteSources | NodePilotCalls): 
       async handle(req) {
         const originErr = refuseBrowser(req)
         if (originErr) return originErr
-        if (sources.master) return json(200, { ok: true, sessions: sources.master.listSessions(), masterOnline: true })
+        if (sources.master) return sources.master.sessionsLocal()
         if (sources.node) return sources.node.sessions()
         return json(404, { ok: false, error: 'not found' })
       },

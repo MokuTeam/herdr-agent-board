@@ -8,7 +8,7 @@
 //   "node": { "id": "server-1", "port": 12430, "workRoot": "~/work" }
 import { type BoardAgyLimits, boardAgyLimitsOf } from './agy-limits.ts'
 import { type GitFacts, gitFactsOf } from './git-access.ts'
-import { isLoopback, plainAddress } from './mokupilot-mode.ts'
+import { isRoutableNodeAddress, plainAddress } from './mokupilot-mode.ts'
 import { DEVICE_ID, isDevice, LOCAL, parseNodeKey } from './node-key.ts'
 import { hasUnprintable } from './team.ts'
 
@@ -55,6 +55,11 @@ export interface DeviceConfig {
    * it off; absent, it is on: a node is a machine of the owner's (design 10, Trust). Only here when off.
    */
   giveSecrets?: false
+  /**
+   * Whether this device is opted in to the MokuPilot node bridge (#730): `pilotBridge: true` enables
+   * `/open`, `/sessions`, the reverse bridge stream, and registered-node viewer link bypass. Off by default.
+   */
+  pilotBridge?: true
 }
 
 /**
@@ -91,6 +96,8 @@ export interface NodeConfig {
   listen: 'loopback' | 'tailnet'
   tls: boolean
   relay: { host: string; sshPort: number; user: string; socket: string } | null
+  /** Whether MokuPilot on this node may call sessions via its remote master (#730). Off by default. */
+  pilotBridge?: true
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -126,6 +133,7 @@ const DEVICE_KEYS = [
   'mcp',
   'accept',
   'giveSecrets',
+  'pilotBridge',
 ]
 const LINK_KEYS: Record<LinkConfig['kind'], string[]> = {
   ssh: ['kind', 'host', 'sshPort', 'user', 'port'],
@@ -134,7 +142,7 @@ const LINK_KEYS: Record<LinkConfig['kind'], string[]> = {
   direct: ['kind', 'url'],
 }
 const RELAY_KEYS = ['host', 'sshPort', 'user']
-const NODE_KEYS = ['id', 'port', 'workRoot', 'listen', 'tls', 'relay']
+const NODE_KEYS = ['id', 'port', 'workRoot', 'listen', 'tls', 'relay', 'pilotBridge']
 
 type Flag = (key: string, why: string) => void
 
@@ -332,6 +340,7 @@ function deviceOf(
   }
   if (o.sinks !== undefined && !isObject(o.sinks)) flag('sinks', 'type')
   if (o.giveSecrets !== undefined && typeof o.giveSecrets !== 'boolean') flag('giveSecrets', 'type')
+  if (o.pilotBridge !== undefined && typeof o.pilotBridge !== 'boolean') flag('pilotBridge', 'type')
   const device: DeviceConfig = {
     id,
     title,
@@ -348,6 +357,7 @@ function deviceOf(
     mcp,
     accept: words('accept'),
     ...(o.giveSecrets === false && { giveSecrets: false as const }),
+    ...(o.pilotBridge === true && { pilotBridge: true as const }),
   }
   return ok ? device : null
 }
@@ -448,6 +458,7 @@ function readNode(raw: unknown): { config: NodeConfig | null; problems: NodesPro
   if (given(raw.workRoot) && !isText(raw.workRoot, 1024)) flag('workRoot', 'type')
   if (given(raw.listen) && raw.listen !== 'loopback' && raw.listen !== 'tailnet') flag('listen', 'type')
   if (given(raw.tls) && typeof raw.tls !== 'boolean') flag('tls', 'type')
+  if (given(raw.pilotBridge) && typeof raw.pilotBridge !== 'boolean') flag('pilotBridge', 'type')
   const relay = given(raw.relay)
     ? (relayOf(raw.relay, [...RELAY_KEYS, 'socket'], problems) as NodeConfig['relay'])
     : null
@@ -461,6 +472,7 @@ function readNode(raw: unknown): { config: NodeConfig | null; problems: NodesPro
       listen: (raw.listen as NodeConfig['listen'] | null | undefined) ?? 'loopback',
       tls: raw.tls === true,
       relay,
+      ...(raw.pilotBridge === true && { pilotBridge: true as const }),
     },
     problems,
   }
@@ -663,8 +675,8 @@ export function nodeStatusOf(raw: unknown): NodeStatus | null {
 }
 
 /**
- * Non-loopback addresses configured for non-revoked nodes in `nodes` (`tailnet` address, `ssh`
- * host, `direct` hostname). Relay links do not carry a host here; those come from node status.
+ * Routable non-private addresses configured for non-revoked, bridge-opted-in nodes in `nodes`
+ * (`tailnet` address, `ssh` host, `direct` hostname). Relay links and non-opted-in nodes are omitted.
  */
 export function configuredNodeAddresses(nodes: NodesConfig | null): string[] {
   if (!nodes) return []
@@ -672,12 +684,12 @@ export function configuredNodeAddresses(nodes: NodesConfig | null): string[] {
   const out: string[] = []
   const push = (raw: string): void => {
     const addr = plainAddress(raw)
-    if (!addr || isLoopback(addr) || seen.has(addr)) return
+    if (!addr || !isRoutableNodeAddress(addr) || seen.has(addr)) return
     seen.add(addr)
     out.push(addr)
   }
   for (const device of Object.values(nodes.devices)) {
-    if (device.revoked || !device.link) continue
+    if (device.revoked || !device.link || device.pilotBridge !== true) continue
     if (device.link.kind === 'tailnet') push(device.link.address)
     else if (device.link.kind === 'ssh') push(device.link.host)
     else if (device.link.kind === 'direct') {
@@ -761,7 +773,16 @@ export interface DeviceUpdate {
 // ---------------------------------------------------------------- the panel's edits (#510)
 
 /** The thresholds, switches and title the Devices panel sets per device (`nodes.devices.<id>`). */
-const DEVICE_SETTINGS = ['title', 'paused', 'drain', 'giveSecrets', 'maxSessions', 'minFreeMemMb', 'maxLoad'] as const
+const DEVICE_SETTINGS = [
+  'title',
+  'paused',
+  'drain',
+  'giveSecrets',
+  'pilotBridge',
+  'maxSessions',
+  'minFreeMemMb',
+  'maxLoad',
+] as const
 type DeviceSetting = (typeof DEVICE_SETTINGS)[number]
 
 /**
@@ -832,7 +853,7 @@ export function nodesEditOf(body: Record<string, unknown>): NodesEdit | { error:
     const fits =
       key === 'title'
         ? v === null || typeof v === 'string'
-        : key === 'paused' || key === 'drain' || key === 'giveSecrets'
+        : key === 'paused' || key === 'drain' || key === 'giveSecrets' || key === 'pilotBridge'
           ? typeof v === 'boolean'
           : v === null || typeof v === 'number'
     if (!fits) return { error: key }
@@ -886,6 +907,7 @@ export function applyNodesEdit(
         if (trimmed === '' || trimmed === edit.id) delete entry.title
         else entry.title = trimmed
       } else if (key === 'giveSecrets' && v === true) delete entry[key]
+      else if (key === 'pilotBridge' && v === false) delete entry[key]
       else entry[key] = v
     if (edit.id === LOCAL && Object.keys(entry).length === 0) {
       delete devices[LOCAL]

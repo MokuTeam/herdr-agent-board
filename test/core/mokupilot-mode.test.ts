@@ -5,6 +5,8 @@
 import { expect, test } from 'bun:test'
 import {
   isLoopback,
+  isRegisteredNodeViewer,
+  isRoutableNodeAddress,
   MOKUPILOT_MODES,
   mokupilotMode,
   plainAddress,
@@ -152,4 +154,48 @@ test('auto with no request to look at, or no addresses of this computer known', 
     address: '100.101.102.103',
     why: 'forwarded-other',
   })
+})
+
+test('isRoutableNodeAddress and isRegisteredNodeViewer reject private LAN, link-local, loopback, and non-Tailscale ULA (#730)', () => {
+  for (const ok of [
+    '100.64.0.12',
+    '100.127.255.254',
+    '203.0.113.10',
+    'fd7a:115c:a1e0::12',
+    '[FD7A:115C:A1E0::12]',
+    '2001:db8::1',
+    '::ffff:100.64.0.12',
+  ]) {
+    expect([ok, isRoutableNodeAddress(ok)]).toEqual([ok, true])
+  }
+
+  for (const bad of [
+    '',
+    'not-an-ip',
+    '0.0.0.0',
+    '10.0.0.5',
+    '127.0.0.1',
+    '169.254.1.1',
+    '172.16.0.5',
+    '172.31.255.1',
+    '192.168.1.50',
+    '224.0.0.1',
+    '255.255.255.255',
+    '::',
+    '::1',
+    'fe80::1%eth0',
+    'fc00::1',
+    'fd12:3456:789a::1',
+    'ff02::1',
+    '::ffff:192.168.1.50',
+    '::ffff:c0a8:0132',
+    '::ffff:10.0.0.5',
+  ]) {
+    expect([bad, isRoutableNodeAddress(bad)]).toEqual([bad, false])
+    expect([bad, isRegisteredNodeViewer(proxied(bad), [bad])]).toEqual([bad, false])
+  }
+
+  expect(isRegisteredNodeViewer(proxied('100.64.0.12'), ['192.168.1.50', '100.64.0.12'])).toBe(true)
+  expect(isRegisteredNodeViewer(proxied('fd7a:115c:a1e0::12'), ['fd7a:115c:a1e0::12'])).toBe(true)
+  expect(isRegisteredNodeViewer(proxied('192.168.1.50'), ['192.168.1.50', '100.64.0.12'])).toBe(false)
 })

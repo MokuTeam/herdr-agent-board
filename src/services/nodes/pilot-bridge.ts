@@ -6,6 +6,7 @@
 // the calling node's door. Made by server/app.ts only once `nodes` is configured.
 import { pace } from '../../adapters/pacing.ts'
 import { takeEvents } from '../../core/event-stream.ts'
+import { t } from '../../core/lang.ts'
 import {
   MAX_BRIDGE_RESPONSE_BYTES,
   MAX_BRIDGE_STREAM_BATCH_BYTES,
@@ -19,6 +20,7 @@ import type { NodeLinks } from './links.ts'
 import type { NodePilotCalls } from './pilot-call.ts'
 
 export interface PilotBridgeRunner {
+  sync(): void
   close(): Promise<void>
 }
 
@@ -26,11 +28,18 @@ export interface PilotBridgeRunnerOptions {
   links: Pick<NodeLinks, 'link' | 'onChange'>
   pilotCalls: NodePilotCalls
   log(text: string): void
+  deviceIds?: () => readonly string[]
+  maxInflightPerDevice?: number
+  maxBodyFetchesPerDevice?: number
+  maxStreamsPerDevice?: number
 }
 
 const AGAIN_MS = 2000
 const NONE_MS = 60_000
 const MOST_EVENT_CHARS = 1 << 20
+const DEFAULT_MAX_INFLIGHT_PER_DEVICE = 32
+const DEFAULT_MAX_BODY_FETCHES_PER_DEVICE = 2
+const DEFAULT_MAX_STREAMS_PER_DEVICE = 16
 const STREAM_EVENT_NAMES: ReadonlySet<string> = new Set<PilotBridgeStreamEvent['name']>([
   'line',
   'stderr',
@@ -75,9 +84,35 @@ async function readTextBounded(res: Response, maxBytes: number): Promise<string 
 export function createPilotBridgeRunner(o: PilotBridgeRunnerOptions): PilotBridgeRunner {
   const following = new Map<string, { ac: AbortController; done: Promise<void> }>()
   const activeStreams = new Map<string, AbortController>()
+  const inflightByDevice = new Map<string, number>()
+  const bodyFetchesByDevice = new Map<string, number>()
+  const stdinChains = new Map<string, Promise<void>>()
+  const maxInflightPerDevice = Math.max(1, o.maxInflightPerDevice ?? DEFAULT_MAX_INFLIGHT_PER_DEVICE)
+  const maxBodyFetchesPerDevice = Math.max(1, o.maxBodyFetchesPerDevice ?? DEFAULT_MAX_BODY_FETCHES_PER_DEVICE)
+  const maxStreamsPerDevice = Math.max(1, o.maxStreamsPerDevice ?? DEFAULT_MAX_STREAMS_PER_DEVICE)
   let closed = false
 
   const online = (id: string): boolean => o.links.link(id)?.state().state === 'online'
+  const shouldFollow = (id: string): boolean => online(id) && o.pilotCalls.bridgeEnabled(id)
+
+  const inc = (map: Map<string, number>, id: string): void => {
+    map.set(id, (map.get(id) ?? 0) + 1)
+  }
+
+  const dec = (map: Map<string, number>, id: string): void => {
+    const next = (map.get(id) ?? 0) - 1
+    if (next <= 0) map.delete(id)
+    else map.set(id, next)
+  }
+
+  function streamsForDevice(id: string): number {
+    const prefix = `${id}:`
+    let count = 0
+    for (const k of activeStreams.keys()) {
+      if (k.startsWith(prefix)) count++
+    }
+    return count
+  }
 
   function abortDeviceStreams(id: string): void {
     const prefix = `${id}:`
@@ -92,11 +127,12 @@ export function createPilotBridgeRunner(o: PilotBridgeRunnerOptions): PilotBridg
   function changed(id: string): void {
     if (closed) return
     const held = following.get(id)
-    if (online(id)) {
+    if (shouldFollow(id)) {
       if (!held || held.ac.signal.aborted) follow(id)
     } else {
       held?.ac.abort()
       abortDeviceStreams(id)
+      if (!o.pilotCalls.bridgeEnabled(id)) o.pilotCalls.revokeForNode(id)
     }
   }
 
@@ -154,15 +190,14 @@ export function createPilotBridgeRunner(o: PilotBridgeRunnerOptions): PilotBridg
     deviceId: string,
     link: Link,
     req: PilotBridgeRequest,
+    streamAc: AbortController,
     linkSignal: AbortSignal,
   ): Promise<void> {
     const streamId = req.streamId
     if (!streamId) return
     const key = `${deviceId}:${streamId}`
-    const streamAc = new AbortController()
     const onLinkAbort = (): void => streamAc.abort()
     linkSignal.addEventListener('abort', onLinkAbort, { once: true })
-    activeStreams.set(key, streamAc)
 
     let postedDone = false
     try {
@@ -205,6 +240,7 @@ export function createPilotBridgeRunner(o: PilotBridgeRunnerOptions): PilotBridg
           let batchBytes = 0
           for (const ev of got.events) {
             if (!STREAM_EVENT_NAMES.has(ev.name)) continue
+            if (ev.data.includes('\n') || ev.data.includes('\r')) continue
             const item: PilotBridgeStreamEvent = { name: ev.name as PilotBridgeStreamEvent['name'], data: ev.data }
             const itemBytes = Buffer.byteLength(JSON.stringify(item), 'utf8') + 1
             if (
@@ -242,33 +278,17 @@ export function createPilotBridgeRunner(o: PilotBridgeRunnerOptions): PilotBridg
         await postChunk(link, streamId, { done: true, error: messageOf(err) }, linkSignal)
       }
     } finally {
-      activeStreams.delete(key)
+      if (activeStreams.get(key) === streamAc) activeStreams.delete(key)
       linkSignal.removeEventListener('abort', onLinkAbort)
     }
   }
 
-  async function dispatchReq(
+  async function dispatchRpc(
     deviceId: string,
     link: Link,
     req: PilotBridgeRequest,
     signal: AbortSignal,
   ): Promise<void> {
-    if (req.op === 'events-close') {
-      if (req.streamId) {
-        const key = `${deviceId}:${req.streamId}`
-        const ac = activeStreams.get(key)
-        if (ac) {
-          activeStreams.delete(key)
-          ac.abort()
-        }
-      }
-      return
-    }
-    if (req.op === 'events') {
-      await runStream(deviceId, link, req, signal)
-      return
-    }
-
     try {
       let bodyText = req.body ?? ''
       if (req.hasBody) {
@@ -307,6 +327,17 @@ export function createPilotBridgeRunner(o: PilotBridgeRunnerOptions): PilotBridg
       }
 
       if (req.op === 'sessions') {
+        if (!o.pilotCalls.bridgeEnabled(deviceId)) {
+          await postRes(
+            link,
+            req.id,
+            403,
+            'application/json',
+            jsonStr({ ok: false, error: t('mokupilot.err.bridgeOff') }),
+            signal,
+          )
+          return
+        }
         const sessions = o.pilotCalls.listSessions()
         await postRes(
           link,
@@ -374,10 +405,84 @@ export function createPilotBridgeRunner(o: PilotBridgeRunnerOptions): PilotBridg
     }
   }
 
+  function scheduleReq(deviceId: string, link: Link, req: PilotBridgeRequest, signal: AbortSignal): void {
+    if (req.op === 'events-close') {
+      if (req.streamId) {
+        const key = `${deviceId}:${req.streamId}`
+        const ac = activeStreams.get(key)
+        if (ac) {
+          activeStreams.delete(key)
+          ac.abort()
+        }
+      }
+      return
+    }
+    if (req.op === 'events') {
+      if (!req.streamId) return
+      const key = `${deviceId}:${req.streamId}`
+      if (activeStreams.has(key)) {
+        void postChunk(link, req.streamId, { done: true, error: 'duplicate stream id' }, signal)
+        return
+      }
+      if (streamsForDevice(deviceId) >= maxStreamsPerDevice) {
+        void postChunk(link, req.streamId, { done: true, error: 'too many active streams' }, signal)
+        return
+      }
+      const streamAc = new AbortController()
+      activeStreams.set(key, streamAc)
+      void runStream(deviceId, link, req, streamAc, signal)
+      return
+    }
+    if ((inflightByDevice.get(deviceId) ?? 0) >= maxInflightPerDevice) {
+      void postRes(
+        link,
+        req.id,
+        429,
+        'application/json',
+        jsonStr({ ok: false, error: 'too many bridge requests' }),
+        signal,
+      )
+      return
+    }
+    if (req.hasBody && (bodyFetchesByDevice.get(deviceId) ?? 0) >= maxBodyFetchesPerDevice) {
+      void postRes(
+        link,
+        req.id,
+        429,
+        'application/json',
+        jsonStr({ ok: false, error: 'too many large bridge requests' }),
+        signal,
+      )
+      return
+    }
+    inc(inflightByDevice, deviceId)
+    if (req.hasBody) inc(bodyFetchesByDevice, deviceId)
+    const run = async (): Promise<void> => {
+      try {
+        if (signal.aborted) return
+        await dispatchRpc(deviceId, link, req, signal)
+      } finally {
+        dec(inflightByDevice, deviceId)
+        if (req.hasBody) dec(bodyFetchesByDevice, deviceId)
+      }
+    }
+    if (req.op === 'stdin' && req.runId) {
+      const chainKey = `${deviceId}\u0000${req.grantId ?? ''}\u0000${req.runId}`
+      const prev = stdinChains.get(chainKey) ?? Promise.resolve()
+      const tail = prev.then(run, run)
+      stdinChains.set(chainKey, tail)
+      void tail.then(() => {
+        if (stdinChains.get(chainKey) === tail) stdinChains.delete(chainKey)
+      })
+      return
+    }
+    void run()
+  }
+
   function follow(id: string): void {
     const ac = new AbortController()
     const done = (async () => {
-      while (!closed && !ac.signal.aborted && online(id)) {
+      while (!closed && !ac.signal.aborted && shouldFollow(id)) {
         const link = o.links.link(id)
         if (!link) break
         let wait = AGAIN_MS
@@ -409,7 +514,7 @@ export function createPilotBridgeRunner(o: PilotBridgeRunnerOptions): PilotBridg
                     raw = JSON.parse(e.data)
                   } catch {}
                   const req = parseBridgeRequest(raw)
-                  if (req) void dispatchReq(id, link, req, ac.signal)
+                  if (req) scheduleReq(id, link, req, ac.signal)
                 }
               }
             } finally {
@@ -434,6 +539,11 @@ export function createPilotBridgeRunner(o: PilotBridgeRunnerOptions): PilotBridg
   const off = o.links.onChange(changed)
 
   return {
+    sync() {
+      if (closed) return
+      const ids = new Set<string>([...following.keys(), ...(o.deviceIds?.() ?? [])])
+      for (const id of ids) changed(id)
+    },
     async close() {
       closed = true
       off()

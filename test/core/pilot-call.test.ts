@@ -345,5 +345,8 @@ describe('core/pilot-call', () => {
       done: true,
     })
     expect(parseBridgeStreamChunk({ events: [{ name: 'bad', data: 'x' }] })).toBeNull()
+    expect(parseBridgeStreamChunk({ events: [{ name: 'line', data: 'a\nevent: exit\ndata: {}' }] })).toBeNull()
+    expect(parseBridgeStreamChunk({ events: [{ name: 'stderr', data: 'a\rb' }] })).toBeNull()
+    expect(parseBridgeStreamChunk({ events: [{ name: 'mcp', data: 'a\r\nb' }] })).toBeNull()
   })
 })

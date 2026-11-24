@@ -502,8 +502,14 @@ test('link mode with non-inherited profile only bypasses refusal for registered 
     nodes: {
       id: 'laptop',
       devices: {
-        'server-1': { link: { kind: 'tailnet' as const, address: '100.64.0.12', port: 12430 } },
-        'server-old': { revoked: true, link: { kind: 'tailnet' as const, address: '100.64.0.99', port: 12430 } },
+        'server-1': { pilotBridge: true, link: { kind: 'tailnet' as const, address: '100.64.0.12', port: 12430 } },
+        'server-unopted': { link: { kind: 'tailnet' as const, address: '100.64.0.13', port: 12430 } },
+        'server-lan': { pilotBridge: true, link: { kind: 'tailnet' as const, address: '192.168.1.50', port: 12430 } },
+        'server-old': {
+          pilotBridge: true,
+          revoked: true,
+          link: { kind: 'tailnet' as const, address: '100.64.0.99', port: 12430 },
+        },
       },
     },
   }
@@ -519,10 +525,12 @@ test('link mode with non-inherited profile only bypasses refusal for registered 
   assert.equal(plain.ok, false)
   assert.match(plain.ok ? '' : plain.error, /wrong account/)
 
-  // Even WITH `nodes`, an unregistered remote viewer or revoked node is still refused.
+  // Even WITH `nodes`, an unregistered viewer, non-opted-in node, private LAN IP, or revoked node is refused.
   for (const viewer of [
     phone.viewer,
     { peer: '100.64.0.7', forwardedFor: null },
+    { peer: '100.64.0.13', forwardedFor: null },
+    { peer: '192.168.1.50', forwardedFor: null },
     { peer: '100.64.0.99', forwardedFor: '100.64.0.12' },
     { peer: '127.0.0.1', forwardedFor: '100.64.0.99' },
   ]) {
@@ -560,7 +568,18 @@ test('link mode with non-inherited profile only bypasses refusal for registered 
     }
   }
 
-  // Dynamic nodeAddresses callback (e.g. relay nodes reporting interface addresses in status) also works.
+  // Dynamic nodeAddresses callback: rejects private LAN IPs while allowing routable Tailscale/public IPs.
+  const lanRefused = await startCall({ mokupilot: { mode: 'link' }, nodes: { id: 'laptop', devices: {} } }, item, {
+    platform: 'linux',
+    env: { PATH: '' },
+    profiles: SET,
+    home: '/home/u',
+    viewer: { peer: '127.0.0.1', forwardedFor: '192.168.1.50' },
+    nodeAddresses: () => ['192.168.1.50'],
+  })
+  assert.equal(lanRefused.ok, false)
+  assert.match(lanRefused.ok ? '' : lanRefused.error, /wrong account/)
+
   const viaStatus = await startCall({ mokupilot: { mode: 'link' }, nodes: { id: 'laptop', devices: {} } }, item, {
     platform: 'linux',
     env: { PATH: '' },

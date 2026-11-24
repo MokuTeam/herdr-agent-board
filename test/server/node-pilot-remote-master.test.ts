@@ -23,6 +23,8 @@ const FORK_SID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
 const OTHER_SID = '99999999-8888-7777-6666-555555555555'
 const CALL_MASTER_SID = 'bbbbbbbb-1111-2222-3333-444444444444'
 const CALL_THIRD_SID = 'cccccccc-1111-2222-3333-444444444444'
+const CALL_SPOOF_MASTER_SID = 'dddddddd-1111-2222-3333-444444444444'
+const CALL_SPOOF_UNGRANTED_SID = 'eeeeeeee-1111-2222-3333-444444444444'
 
 function scratchDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'pilot-remote-master-'))
@@ -402,6 +404,8 @@ describe('MokuPilot with a master on another device (#700)', () => {
       masterCfg: {
         mokupilot: { mode: 'auto' },
       },
+      nodeCfg: id => (id === 'server-1' ? { node: { pilotBridge: true } } : {}),
+      deviceCfg: id => (id === 'server-1' ? { pilotBridge: true } : {}),
       masterEnv: { CLAUDE_BIN: fakeClaude },
       nodeEnv: () => ({ CLAUDE_BIN: fakeClaude }),
     })
@@ -424,14 +428,15 @@ describe('MokuPilot with a master on another device (#700)', () => {
     // 1. Web UI on master in link mode:
     //    - An unregistered remote viewer (phone at 100.64.0.99) is STILL refused with nodeLink
     //      on node cards and with the wrong-account guard on secondary-profile master cards.
-    //    - A registered node viewer (server-1 reporting 100.64.0.50 in its node status) gets
+    //    - A viewer sharing a self-reported private LAN IP (192.168.1.50) is ALSO refused (#730).
+    //    - A registered opted-in node viewer (server-1 reporting 100.64.0.50 in its node status) gets
     //      mokupilot:// links for server-1, master (secondary work profile), and server-2.
     server1.proxy.intercept = async (method, path, forward) => {
       if (method !== 'GET' || path !== '/api/node/status') return null
       const res = await forward()
       if (!res.ok) return res
       const data = (await res.json()) as Record<string, unknown>
-      data.addresses = ['100.64.0.50']
+      data.addresses = ['192.168.1.50', '100.64.0.50']
       return new Response(JSON.stringify(data), {
         status: res.status,
         headers: { 'content-type': 'application/json' },
@@ -439,6 +444,15 @@ describe('MokuPilot with a master on another device (#700)', () => {
     }
     await pair.waitDevice('server-1', d => d.status?.addresses?.includes('100.64.0.50') ?? false)
     server1.proxy.intercept = null
+
+    const lanHeaders = { 'x-board': '1', 'content-type': 'application/json', 'x-forwarded-for': '192.168.1.50' }
+    const refusedLan = await fetch(`${pair.master.url}/api/session/${encodeURIComponent(MASTER_SID)}/mokupilot`, {
+      method: 'POST',
+      headers: lanHeaders,
+      body: '{}',
+    })
+    expect(refusedLan.status).toBe(409)
+    expect(((await refusedLan.json()) as { error: string }).error).toContain('wrong account')
 
     const phoneHeaders = { 'x-board': '1', 'content-type': 'application/json', 'x-forwarded-for': '100.64.0.99' }
     const refusedNode = await fetch(
@@ -479,6 +493,28 @@ describe('MokuPilot with a master on another device (#700)', () => {
       )
       expect(parsedUrl.searchParams.get('cwd')).toBe(expectedCwd)
     }
+
+    // Opt-in enforcement (#730): master local and non-opted-in server-2 refuse /open and /sessions with 403.
+    expect(
+      (
+        await fetch(`${pair.master.url}/api/mokupilot/node-call/open`, {
+          method: 'POST',
+          headers: { 'x-board': '1', 'content-type': 'application/json' },
+          body: JSON.stringify({ session: MASTER_SID }),
+        })
+      ).status,
+    ).toBe(403)
+    expect((await fetch(`${pair.master.url}/api/mokupilot/node-call/sessions`)).status).toBe(403)
+    expect(
+      (
+        await fetch(`${server2.url}/api/mokupilot/node-call/open`, {
+          method: 'POST',
+          headers: { 'x-board': '1', 'content-type': 'application/json' },
+          body: JSON.stringify({ session: THIRD_SID }),
+        })
+      ).status,
+    ).toBe(403)
+    expect((await fetch(`${server2.url}/api/mokupilot/node-call/sessions`)).status).toBe(403)
 
     // 2. Node server-1's MokuPilot lists callable sessions across all devices.
     const sessionsRes = await fetch(`${server1.url}/api/mokupilot/node-call/sessions`)
@@ -603,10 +639,13 @@ describe('MokuPilot with a master on another device (#700)', () => {
       bigBodyText: `# Third Node Protocol\n${'B'.repeat(72 * 1024)}`,
     })
 
-    // 4. Cross-device call-agent card parenting: call agents on server-1 with parents on laptop and server-2
-    //    appear right after their parent cards on the master's board with inherited metadata.
+    // 4. Cross-device call-agent card parenting: call agents on server-1 with granted parents on laptop and server-2
+    //    appear right after their parent cards on the master's board with inherited metadata, while ungranted
+    //    cross-device parent references from server-2 or server-1 are ignored (#730).
     const callAgentsDir = join(server1.box.env.HOME ?? server1.box.dir, '.meeting-copilot', 'call-agents')
     mkdirSync(callAgentsDir, { recursive: true })
+    const s2CallAgentsDir = join(server2.box.env.HOME ?? server2.box.dir, '.meeting-copilot', 'call-agents')
+    mkdirSync(s2CallAgentsDir, { recursive: true })
     const nowSec = Math.floor(Date.now() / 1000)
     writeFileSync(
       join(callAgentsDir, `${CALL_MASTER_SID}.json`),
@@ -644,16 +683,66 @@ describe('MokuPilot with a master on another device (#700)', () => {
         updated: nowSec,
       }),
     )
-    // Touch server-1 so its board refreshes immediately (callAgentsGate checks once/min or on first run).
+    writeFileSync(
+      join(callAgentsDir, `${CALL_SPOOF_UNGRANTED_SID}.json`),
+      JSON.stringify({
+        format: CALL_AGENT_FORMAT,
+        version: CALL_AGENT_VERSION,
+        pid: process.pid,
+        session_id: CALL_SPOOF_UNGRANTED_SID,
+        harness: 'claude',
+        parent_session_id: `@server-2:${OTHER_SID}`,
+        config_dir: '',
+        cwd: thirdCwd,
+        started: nowSec,
+        call: 'on',
+        busy: false,
+        helpers: 0,
+        updated: nowSec,
+      }),
+    )
+    writeFileSync(
+      join(s2CallAgentsDir, `${CALL_SPOOF_MASTER_SID}.json`),
+      JSON.stringify({
+        format: CALL_AGENT_FORMAT,
+        version: CALL_AGENT_VERSION,
+        pid: process.pid,
+        session_id: CALL_SPOOF_MASTER_SID,
+        harness: 'claude',
+        parent_session_id: MASTER_SID,
+        config_dir: '',
+        cwd: masterCwd,
+        started: nowSec,
+        call: 'on',
+        busy: false,
+        helpers: 0,
+        updated: nowSec,
+      }),
+    )
+    // Touch server-1 and server-2 so their boards refresh immediately.
     server1.proc.send('refresh')
+    server2.proc.send('refresh')
     await until(async () => {
-      const b = (await (await fetch(`${pair.master.url}/api/board`)).json()) as { items: { key: string }[] }
+      const b = (await (await fetch(`${pair.master.url}/api/board`)).json()) as {
+        items: { key: string; call?: { parent: string | null } }[]
+      }
       const keys = b.items.map(i => i.key)
       const mIdx = keys.indexOf(MASTER_SID)
       const cmIdx = keys.indexOf(`@server-1:${CALL_MASTER_SID}`)
       const tIdx = keys.indexOf(`@server-2:${THIRD_SID}`)
       const ctIdx = keys.indexOf(`@server-1:${CALL_THIRD_SID}`)
-      return mIdx >= 0 && cmIdx === mIdx + 1 && tIdx >= 0 && ctIdx === tIdx + 1
+      const spoof1 = b.items.find(i => i.key === `@server-1:${CALL_SPOOF_UNGRANTED_SID}`)
+      const spoof2 = b.items.find(i => i.key === `@server-2:${CALL_SPOOF_MASTER_SID}`)
+      return (
+        mIdx >= 0 &&
+        cmIdx === mIdx + 1 &&
+        tIdx >= 0 &&
+        ctIdx === tIdx + 1 &&
+        !!spoof1 &&
+        spoof1.call?.parent === null &&
+        !!spoof2 &&
+        spoof2.call?.parent !== MASTER_SID
+      )
     }, 8000)
 
     // 5. Offline resilience:

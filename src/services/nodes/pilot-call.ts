@@ -58,6 +58,12 @@ export interface NodePilotCalls {
   openForNode(callingDevice: string, rawBody: unknown): Promise<{ status: number; body: unknown }>
   /** Open a call from MokuPilot running on the master itself (#700). */
   openLocal(rawBody: unknown): Promise<Response>
+  /** List callable sessions for MokuPilot running on the master itself (#700, #730). */
+  sessionsLocal(): Response
+  /** Whether MokuPilot node bridge opt-in is enabled for `device` (`local` or a non-revoked node id, #730). */
+  bridgeEnabled(device: string): boolean
+  /** Whether a node item may set `call.parent` to `parentKey` under an active/recent bridge grant (#730). */
+  allowsCallParent(callingDevice: string, parentKey: string): boolean
   /** List callable sessions across the master and all online/known nodes (#700). */
   listSessions(): PilotSessionSummary[]
   /** Revoke all grants and close active runs owned by a calling node (#700). */
@@ -110,10 +116,15 @@ export interface NodePilotCallsDeps {
   grantTtlMs?: number
   /** Probe timeout in ms (default 5 s). */
   checkTimeoutMs?: number
+  /** Maximum active bridge grants per calling node (#730, default 16). */
+  maxGrantsPerNode?: number
 }
 
 const CHECK_TIMEOUT_MS = 5000
 const DEFAULT_GRANT_TTL_MS = 6 * 3600 * 1000
+const DEFAULT_MAX_GRANTS_PER_NODE = 16
+const CALL_PARENT_TTL_MS = 24 * 3600 * 1000
+const MAX_PARENTS_PER_NODE = 64
 const jsonRes = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
@@ -158,15 +169,52 @@ function parseJsonBody(rawBody: string): { ok: true; value: unknown } | { ok: fa
 
 export function createNodePilotCalls(deps: NodePilotCallsDeps): NodePilotCalls {
   const grants = new Map<string, NodePilotCallGrant>()
+  const grantedParents = new Map<string, Map<string, number>>()
+  const stdinChains = new Map<string, Promise<void>>()
   const own = deps.own ?? ownAddresses
   const nodeAddresses = deps.nodeAddresses ?? (() => configuredNodeAddresses(nodesConfig(deps.cfg.nodes)))
   const launch = deps.launch ?? startCall
   const grantTtlMs = deps.grantTtlMs ?? knobMs('BOARD_PILOT_GRANT_TTL_MS', DEFAULT_GRANT_TTL_MS)
   const checkTimeoutMs = deps.checkTimeoutMs ?? knobMs('BOARD_PILOT_CHECK_MS', CHECK_TIMEOUT_MS)
+  const maxGrantsPerNode = Math.max(1, deps.maxGrantsPerNode ?? DEFAULT_MAX_GRANTS_PER_NODE)
 
   function sweep(): void {
     const now = Date.now()
     for (const [id, g] of grants) if (g.expiresAt <= now) grants.delete(id)
+  }
+
+  function bridgeEnabled(device: string): boolean {
+    const dev = nodesConfig(deps.cfg.nodes)?.devices[device]
+    return !!dev && !dev.revoked && dev.pilotBridge === true
+  }
+
+  function grantsForNode(callingDevice: string): number {
+    let count = 0
+    for (const g of grants.values()) {
+      if (g.ownerDevice === callingDevice) count++
+    }
+    return count
+  }
+
+  function recordCallParent(callingDevice: string, parentKey: string): void {
+    const now = Date.now()
+    const expiresAt = now + Math.max(grantTtlMs, CALL_PARENT_TTL_MS)
+    let map = grantedParents.get(callingDevice)
+    if (!map) {
+      map = new Map()
+      grantedParents.set(callingDevice, map)
+    } else {
+      for (const [k, exp] of map) {
+        if (exp <= now) map.delete(k)
+      }
+    }
+    map.delete(parentKey)
+    while (map.size >= MAX_PARENTS_PER_NODE) {
+      const oldest = map.keys().next().value
+      if (oldest === undefined) break
+      map.delete(oldest)
+    }
+    map.set(parentKey, expiresAt)
   }
 
   function currentMasterId(): string {
@@ -352,6 +400,13 @@ export function createNodePilotCalls(deps: NodePilotCallsDeps): NodePilotCalls {
 
     if (!target || (callingDevice && !foundItem)) {
       return { kind: 'error', status: 404, error: t('mokupilot.err.sessionNotFound') }
+    }
+
+    if (callingDevice) {
+      sweep()
+      if (grantsForNode(callingDevice) >= maxGrantsPerNode) {
+        return { kind: 'error', status: 429, error: 'too many active call grants for this device' }
+      }
     }
 
     const probeReq = {
@@ -564,6 +619,7 @@ export function createNodePilotCalls(deps: NodePilotCallsDeps): NodePilotCalls {
     },
 
     authorizeForNode(callingDevice, grantId) {
+      if (!bridgeEnabled(callingDevice)) return null
       if (!isPilotCallId(grantId)) return null
       sweep()
       const grant = grants.get(grantId)
@@ -571,7 +627,35 @@ export function createNodePilotCalls(deps: NodePilotCallsDeps): NodePilotCalls {
       return grant
     },
 
+    bridgeEnabled,
+
+    allowsCallParent(callingDevice, parentKey) {
+      if (!bridgeEnabled(callingDevice)) return false
+      const map = grantedParents.get(callingDevice)
+      if (!map) return false
+      const now = Date.now()
+      const checkKey = (k: string): boolean => {
+        const exp = map.get(k)
+        if (exp === undefined) return false
+        if (exp <= now) {
+          map.delete(k)
+          return false
+        }
+        return true
+      }
+      if (checkKey(parentKey)) return true
+      const at = parseNodeKey(parentKey)
+      const masterId = currentMasterId()
+      if (at && masterId && at.device === masterId) {
+        return checkKey(at.key)
+      }
+      return false
+    },
+
     async openForNode(callingDevice, rawBody) {
+      if (!bridgeEnabled(callingDevice)) {
+        return { status: 403, body: { ok: false, error: t('mokupilot.err.bridgeOff') } }
+      }
       const resolved = await resolveOpenTarget(callingDevice, rawBody)
       if (resolved.kind === 'error') {
         return { status: resolved.status, body: { ok: false, error: resolved.error } }
@@ -587,6 +671,10 @@ export function createNodePilotCalls(deps: NodePilotCallsDeps): NodePilotCalls {
           },
         }
       }
+      sweep()
+      if (grantsForNode(callingDevice) >= maxGrantsPerNode) {
+        return { status: 429, body: { ok: false, error: 'too many active call grants for this device' } }
+      }
       const grant = mintGrant({
         target: resolved.target,
         ownerDevice: callingDevice,
@@ -598,6 +686,7 @@ export function createNodePilotCalls(deps: NodePilotCallsDeps): NodePilotCalls {
         profile: resolved.profile,
         profileFolder: resolved.profileFolder,
       })
+      recordCallParent(callingDevice, grant.prefixedKey)
       deps.log(
         `pilot-call: opened bridge grant ${grant.id.slice(0, 8)} for node ${callingDevice} -> ${resolved.prefixedKey}`,
       )
@@ -617,6 +706,9 @@ export function createNodePilotCalls(deps: NodePilotCallsDeps): NodePilotCalls {
     },
 
     async openLocal(rawBody) {
+      if (!bridgeEnabled(LOCAL)) {
+        return jsonRes(403, { ok: false, error: t('mokupilot.err.bridgeOff') })
+      }
       const resolved = await resolveOpenTarget(null, rawBody)
       if (resolved.kind === 'error') {
         return jsonRes(resolved.status, { ok: false, error: resolved.error })
@@ -672,6 +764,13 @@ export function createNodePilotCalls(deps: NodePilotCallsDeps): NodePilotCalls {
       })
     },
 
+    sessionsLocal() {
+      if (!bridgeEnabled(LOCAL)) {
+        return jsonRes(403, { ok: false, error: t('mokupilot.err.bridgeOff') })
+      }
+      return jsonRes(200, { ok: true, sessions: this.listSessions(), masterOnline: true })
+    },
+
     listSessions() {
       const items = mergedItems()
       const out: PilotSessionSummary[] = []
@@ -692,6 +791,7 @@ export function createNodePilotCalls(deps: NodePilotCallsDeps): NodePilotCalls {
     },
 
     revokeForNode(callingDevice) {
+      grantedParents.delete(callingDevice)
       for (const [id, grant] of [...grants.entries()]) {
         if (grant.ownerDevice !== callingDevice) continue
         grants.delete(id)
@@ -785,15 +885,32 @@ export function createNodePilotCalls(deps: NodePilotCallsDeps): NodePilotCalls {
 
     async runPost(grant, runId, action, rawBody) {
       if (!grant.runs.has(runId)) return jsonRes(404, { ok: false, error: 'run not found' })
-      if (grant.target.kind === 'local') {
-        if (!deps.localPilotCall) return jsonRes(500, { ok: false, error: 'local pilot-call runner unavailable' })
-        const parsed = parseJsonBody(rawBody)
-        if (!parsed.ok) return parsed.res
-        if (action === 'stdin') return answerToResponse(deps.localPilotCall.stdin(runId, parsed.value))
-        if (action === 'mcp-reply') return answerToResponse(deps.localPilotCall.mcpReply(runId, parsed.value))
-        return answerToResponse(deps.localPilotCall.close(runId, parsed.value))
+      const execute = async (): Promise<Response> => {
+        if (grant.target.kind === 'local') {
+          if (!deps.localPilotCall) return jsonRes(500, { ok: false, error: 'local pilot-call runner unavailable' })
+          const parsed = parseJsonBody(rawBody)
+          if (!parsed.ok) return parsed.res
+          if (action === 'stdin') return answerToResponse(deps.localPilotCall.stdin(runId, parsed.value))
+          if (action === 'mcp-reply') return answerToResponse(deps.localPilotCall.mcpReply(runId, parsed.value))
+          return answerToResponse(deps.localPilotCall.close(runId, parsed.value))
+        }
+        return forwardJson(grant.target.device, `/api/node/pilot-call/${runId}/${action}`, rawBody)
       }
-      return forwardJson(grant.target.device, `/api/node/pilot-call/${runId}/${action}`, rawBody)
+      if (action === 'stdin') {
+        const chainKey = `${grant.id}\u0000${runId}`
+        const prev = stdinChains.get(chainKey) ?? Promise.resolve()
+        const run = prev.then(execute, execute)
+        const tail = run.then(
+          () => {},
+          () => {},
+        )
+        stdinChains.set(chainKey, tail)
+        void tail.then(() => {
+          if (stdinChains.get(chainKey) === tail) stdinChains.delete(chainKey)
+        })
+        return run
+      }
+      return execute()
     },
 
     async uploadFiles(grant, rawBody) {
@@ -831,6 +948,7 @@ export function createNodePilotCalls(deps: NodePilotCallsDeps): NodePilotCalls {
         void closeGrantRuns(grant, true)
       }
       grants.clear()
+      grantedParents.clear()
     },
   }
 }

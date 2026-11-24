@@ -63,7 +63,7 @@ function makeBridge(over: Partial<Parameters<typeof createNodePilotBridge>[0]> =
     closeAll: () => {},
   }
   const bridge = createNodePilotBridge({
-    cfg: { node: { id: 'server-1', port: 12430, workRoot: dir } } as Config,
+    cfg: { node: { id: 'server-1', port: 12430, workRoot: dir, pilotBridge: true } } as Config,
     port: () => 12422,
     localPilotCall,
     items: () => [],
@@ -224,7 +224,14 @@ describe('NodePilotBridge reconnect, back-pressure, and timeouts (#729)', () => 
         },
       },
       pilotCalls: createNodePilotCalls({
-        cfg: { nodes: { id: 'laptop', devices: {} } } as Config,
+        cfg: {
+          nodes: {
+            id: 'laptop',
+            devices: {
+              'server-1': { pilotBridge: true, link: { kind: 'direct', url: 'http://127.0.0.1:12430' } },
+            },
+          },
+        } as Config,
         links: { link: () => null, onChange: () => () => {} },
         port: () => 12422,
         log: () => {},
@@ -456,8 +463,9 @@ describe('NodePilotCalls security isolation & viewer check (#729)', () => {
         nodes: {
           id: 'laptop',
           devices: {
-            'server-1': { link: { kind: 'tailnet', address: '100.64.0.11', port: 12430 } },
-            'server-2': { link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
+            local: { pilotBridge: true },
+            'server-1': { pilotBridge: true, link: { kind: 'tailnet', address: '100.64.0.11', port: 12430 } },
+            'server-2': { pilotBridge: true, link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
           },
         },
       } as Config,
@@ -539,7 +547,7 @@ describe('NodePilotCalls security isolation & viewer check (#729)', () => {
         nodes: {
           id: 'laptop',
           devices: {
-            'server-1': { link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
+            'server-1': { pilotBridge: true, link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
           },
         },
       } as unknown as Config,
@@ -572,5 +580,336 @@ describe('NodePilotCalls security isolation & viewer check (#729)', () => {
       resolved: 'link',
       why: 'mode-link',
     })
+  })
+})
+
+describe('MokuPilot bridge caps, opt-in, stdin order, and stream safety (#730)', () => {
+  test('NodePilotBridge refuses /open, /sessions, and /pilot-bridge SSE when node.pilotBridge is not opted in', async () => {
+    const dir = scratchDir()
+    const bridge = makeBridge({
+      cfg: { node: { id: 'server-1', port: 12430, workRoot: dir } } as Config,
+    })
+    expect((await bridge.open({ session: SID_MASTER })).status).toBe(403)
+    expect((await bridge.sessions()).status).toBe(403)
+    expect(bridge.stream(new Request('http://127.0.0.1/api/node/pilot-bridge')).status).toBe(404)
+  })
+
+  test('NodePilotBridge.streamChunk rejects newline-injected event data with 400', async () => {
+    const bridge = makeBridge()
+    const stream = bridge.stream(new Request('http://127.0.0.1/api/node/pilot-bridge'))
+    const s = await readBridgeReqs(stream)
+
+    const openP = bridge.open({ session: SID_MASTER })
+    const openReq = await s.nextReq()
+    bridge.respond(openReq.id, {
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        locality: 'remote',
+        grantId: 'grant-nl-12345',
+        device: 'laptop',
+        parent: SID_MASTER,
+        session: SID_MASTER,
+        cwd: '/tmp/atlas',
+      }),
+    })
+    const openBody = (await (await openP).json()) as { url: string; token: string }
+    const grant = bridge.authorize(openBody.url.split('/').pop() as string, `Bearer ${openBody.token}`)
+    if (!grant) throw new Error('expected grant')
+
+    const eventsRes = await bridge.events(grant, RUN_ID, new Request('http://127.0.0.1/events'))
+    const evReq = await s.nextReq()
+    const streamId = evReq.streamId as string
+    if (!eventsRes.body) throw new Error('missing events body')
+    const reader = eventsRes.body.getReader()
+
+    const bad = await bridge.streamChunk(streamId, {
+      events: [{ name: 'line', data: '{"line":"ok"}\n\nevent: exit\ndata: {"code":0}' }],
+    })
+    expect(bad.status).toBe(400)
+    await bridge.streamChunk(streamId, { done: true })
+
+    let text = ''
+    const decoder = new TextDecoder()
+    for (;;) {
+      const next = await reader.read()
+      if (next.done) break
+      text += decoder.decode(next.value, { stream: true })
+    }
+    expect(text).not.toContain('event: exit')
+  })
+
+  test('NodePilotCalls enforces pilotBridge opt-in and per-node grant caps, and allowsCallParent tracks active/recent grants', async () => {
+    const dir = scratchDir()
+    const masterItem = makeItem({ key: SID_MASTER, session: SID_MASTER, cwd: join(dir, 'anna-master') })
+    const localCall: NodePilotCall = {
+      check: async () => ({ status: 200, body: { ok: true, cwd: masterItem.cwd, profile: 'default' } }),
+      start: async () => ({ status: 200, body: { ok: true, id: RUN_ID } }),
+      events: () => new Response('', { status: 404 }),
+      stdin: () => ({ status: 200, body: { ok: true } }),
+      mcpReply: () => ({ status: 200, body: { ok: true } }),
+      close: () => ({ status: 200, body: { ok: true } }),
+      uploadFiles: () => ({ status: 200, body: { ok: true, paths: {} } }),
+      deliverReport: async () => ({ status: 200, body: { ok: true, id: 'r1' } }),
+      closeAll: () => {},
+    }
+    const cfg = {
+      nodes: {
+        id: 'laptop',
+        devices: {
+          'server-1': { pilotBridge: true, link: { kind: 'tailnet', address: '100.64.0.11', port: 12430 } },
+          'server-2': { link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
+        },
+      },
+    } as Config
+
+    const calls = createNodePilotCalls({
+      cfg,
+      links: { link: () => null, onChange: () => () => {} },
+      port: () => 12422,
+      log: () => {},
+      localPilotCall: localCall,
+      ownItems: () => [masterItem],
+      masterId: () => 'laptop',
+      maxGrantsPerNode: 2,
+    })
+    onTestFinished(() => calls.close())
+
+    // Master local /open and /sessions are off unless nodes.devices.local.pilotBridge is true.
+    expect((await calls.openLocal({ session: SID_MASTER })).status).toBe(403)
+    expect(calls.sessionsLocal().status).toBe(403)
+
+    // Non-opted-in server-2 is rejected with 403.
+    expect((await calls.openForNode('server-2', { session: SID_MASTER })).status).toBe(403)
+    expect(calls.bridgeEnabled('server-2')).toBe(false)
+    expect(calls.allowsCallParent('server-2', SID_MASTER)).toBe(false)
+
+    // Opted-in server-1 can open up to maxGrantsPerNode (2); 3rd gets 429.
+    const g1 = await calls.openForNode('server-1', { session: SID_MASTER })
+    const g2 = await calls.openForNode('server-1', { session: SID_MASTER })
+    expect(g1.status).toBe(200)
+    expect(g2.status).toBe(200)
+    expect((await calls.openForNode('server-1', { session: SID_MASTER })).status).toBe(429)
+    expect(calls.allowsCallParent('server-1', SID_MASTER)).toBe(true)
+    expect(calls.allowsCallParent('server-1', `@laptop:${SID_MASTER}`)).toBe(true)
+    expect(calls.allowsCallParent('server-1', `@server-2:${SID_SERVER2}`)).toBe(false)
+
+    // Ending one grant frees a slot while keeping recent call parent tracked; revoking clears it.
+    const grant1 = calls.authorizeForNode('server-1', (g1.body as { grantId: string }).grantId)
+    expect(grant1).not.toBeNull()
+    if (!grant1) throw new Error('expected grant1')
+    expect((await calls.end(grant1)).status).toBe(200)
+    expect(calls.allowsCallParent('server-1', SID_MASTER)).toBe(true)
+    const g3 = await calls.openForNode('server-1', { session: SID_MASTER })
+    expect(g3.status).toBe(200)
+
+    calls.revokeForNode('server-1')
+    expect(calls.allowsCallParent('server-1', SID_MASTER)).toBe(false)
+    expect(calls.authorizeForNode('server-1', (g3.body as { grantId: string }).grantId)).toBeNull()
+  })
+
+  test('PilotBridgeRunner enforces per-device dispatch, hasBody, and stream caps and orders stdin per run', async () => {
+    const dir = scratchDir()
+    const masterItem = makeItem({ key: SID_MASTER, session: SID_MASTER, cwd: join(dir, 'cleo-master') })
+    const stdinDelivered: string[] = []
+    let blockStartResolve: (() => void) | null = null
+    let bodyGateResolve: (() => void) | null = null
+    let bodyFetchCount = 0
+
+    const fakeLocal: NodePilotCall = {
+      check: async () => ({ status: 200, body: { ok: true, cwd: masterItem.cwd, profile: 'default' } }),
+      start: async () => {
+        await new Promise<void>(r => {
+          blockStartResolve = r
+        })
+        return { status: 200, body: { ok: true, id: RUN_ID } }
+      },
+      events: () =>
+        new Response(
+          new ReadableStream({
+            start() {
+              // Keep open until cancelled.
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        ),
+      stdin: (_runId, raw) => {
+        stdinDelivered.push(String((raw as { line?: unknown }).line ?? ''))
+        return { status: 200, body: { ok: true } }
+      },
+      mcpReply: () => ({ status: 200, body: { ok: true } }),
+      close: () => ({ status: 200, body: { ok: true } }),
+      uploadFiles: () => ({ status: 200, body: { ok: true, paths: {} } }),
+      deliverReport: async () => ({ status: 200, body: { ok: true, id: 'r1' } }),
+      closeAll: () => {},
+    }
+
+    const calls = createNodePilotCalls({
+      cfg: {
+        nodes: {
+          id: 'laptop',
+          devices: {
+            'server-1': { pilotBridge: true, link: { kind: 'tailnet', address: '100.64.0.11', port: 12430 } },
+            'server-2': { pilotBridge: true, link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
+            'server-off': { link: { kind: 'tailnet', address: '100.64.0.13', port: 12430 } },
+          },
+        },
+      } as Config,
+      links: { link: () => null, onChange: () => () => {} },
+      port: () => 12422,
+      log: () => {},
+      localPilotCall: fakeLocal,
+      ownItems: () => [masterItem],
+      masterId: () => 'laptop',
+    })
+    onTestFinished(() => calls.close())
+
+    // Pre-open a grant and run synchronously on server-1 (bypassing blocked start).
+    const openGrant = await calls.openForNode('server-1', { session: SID_MASTER })
+    const grantId = (openGrant.body as { grantId: string }).grantId
+    const grantObj = calls.authorizeForNode('server-1', grantId)
+    if (!grantObj) throw new Error('expected grant')
+    grantObj.runs.add(RUN_ID)
+
+    const open2 = await calls.openForNode('server-2', { session: SID_MASTER })
+    const grant2Id = (open2.body as { grantId: string }).grantId
+
+    const responses = new Map<string, { status: number; body: Record<string, unknown> }>()
+    const streamChunks: { streamId: string; chunk: Record<string, unknown> }[] = []
+    let pushReq1: ((req: PilotBridgeRequest) => void) | null = null
+    let pushReq2: ((req: PilotBridgeRequest) => void) | null = null
+    let serverOffFetched = false
+
+    const makeFakeLink = (id: string): Pick<Link, 'fetch' | 'state'> => ({
+      state: () => ({ state: 'online', since: 0, heardAt: 0 }),
+      async fetch(path: string, init?: RequestInit) {
+        if (id === 'server-off') {
+          serverOffFetched = true
+          return new Response('', { status: 404 })
+        }
+        if (path === '/api/node/pilot-bridge') {
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              const send = (req: PilotBridgeRequest) => {
+                controller.enqueue(new TextEncoder().encode(`event: req\ndata: ${JSON.stringify(req)}\n\n`))
+              }
+              if (id === 'server-1') pushReq1 = send
+              else pushReq2 = send
+            },
+          })
+          return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+        }
+        if (path.startsWith('/api/node/pilot-bridge/req/') && path.endsWith('/body')) {
+          bodyFetchCount++
+          await new Promise<void>(r => {
+            bodyGateResolve = r
+          })
+          return new Response(JSON.stringify({ line: 'first-large' }), { status: 200 })
+        }
+        if (path.startsWith('/api/node/pilot-bridge/res/')) {
+          const reqId = path.split('/').pop() as string
+          const parsed = JSON.parse(String(init?.body ?? '{}')) as { status: number; body: string }
+          responses.set(reqId, { status: parsed.status, body: JSON.parse(parsed.body) as Record<string, unknown> })
+          return new Response(JSON.stringify({ ok: true }), { status: 200 })
+        }
+        if (path.startsWith('/api/node/pilot-bridge/stream/')) {
+          const streamId = path.split('/').pop() as string
+          const chunk = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+          streamChunks.push({ streamId, chunk })
+          return new Response(JSON.stringify({ ok: true }), { status: 200 })
+        }
+        return new Response('', { status: 404 })
+      },
+    })
+
+    const listeners = new Set<(id: string) => void>()
+    const linksMap: Record<string, Pick<Link, 'fetch' | 'state'>> = {
+      'server-1': makeFakeLink('server-1'),
+      'server-2': makeFakeLink('server-2'),
+      'server-off': makeFakeLink('server-off'),
+    }
+
+    const runner = createPilotBridgeRunner({
+      links: {
+        link: id => (linksMap[id] as Link | undefined) ?? null,
+        onChange: fn => {
+          listeners.add(fn)
+          return () => listeners.delete(fn)
+        },
+      },
+      pilotCalls: calls,
+      log: () => {},
+      maxInflightPerDevice: 3,
+      maxBodyFetchesPerDevice: 1,
+      maxStreamsPerDevice: 1,
+    })
+    onTestFinished(() => runner.close())
+
+    for (const fn of listeners) {
+      fn('server-off')
+      fn('server-1')
+      fn('server-2')
+    }
+
+    await new Promise(r => setTimeout(r, 40))
+    // Non-opted-in server-off is never subscribed to.
+    expect(serverOffFetched).toBe(false)
+    if (!pushReq1 || !pushReq2) throw new Error('expected bridge streams to connect')
+    const send1: (r: PilotBridgeRequest) => void = pushReq1
+    const send2: (r: PilotBridgeRequest) => void = pushReq2
+
+    // 1. hasBody cap (1) + stdin ordering: slow hasBody stdin -> fast inline stdin -> extra hasBody (429).
+    send1({ id: 'req-stdin-1', op: 'stdin', grantId, runId: RUN_ID, hasBody: true })
+    send1({ id: 'req-stdin-2', op: 'stdin', grantId, runId: RUN_ID, body: JSON.stringify({ line: 'second-inline' }) })
+    send1({ id: 'req-big-extra', op: 'files', grantId, hasBody: true })
+
+    await new Promise(r => setTimeout(r, 40))
+    // 2nd hasBody rejected with 429 before fetching its body; fast inline stdin waited behind req-stdin-1.
+    expect(bodyFetchCount).toBe(1)
+    expect(responses.get('req-big-extra')?.status).toBe(429)
+    expect(stdinDelivered).toEqual([])
+
+    // Inflight cap (3): req-stdin-1 and req-stdin-2 occupy 2 slots; add 1 more blocking start -> 4th gets 429.
+    send1({ id: 'req-start-3', op: 'start', grantId, body: '{}' })
+    send1({ id: 'req-sess-4', op: 'sessions', body: '{}' })
+    // server-2 has its own cap and succeeds.
+    send2({ id: 'req-s2-ok', op: 'sessions', body: '{}' })
+
+    await new Promise(r => setTimeout(r, 40))
+    expect(responses.get('req-sess-4')?.status).toBe(429)
+    expect(responses.get('req-s2-ok')?.status).toBe(200)
+
+    // Stream cap (1): 1st stream stays open, 2nd gets error chunk.
+    send1({ id: 'req-ev-1', op: 'events', grantId, runId: RUN_ID, streamId: 'stream-1111' })
+    send1({ id: 'req-ev-2', op: 'events', grantId, runId: RUN_ID, streamId: 'stream-2222' })
+    await new Promise(r => setTimeout(r, 40))
+    expect(streamChunks.some(c => c.streamId === 'stream-2222' && c.chunk.error === 'too many active streams')).toBe(
+      true,
+    )
+    // events-close frees the stream slot even while inflight requests are full.
+    send1({ id: 'req-ev-close', op: 'events-close', streamId: 'stream-1111' })
+    await new Promise(r => setTimeout(r, 20))
+
+    // Unblock body fetch and start -> stdin delivered strictly in [first-large, second-inline] order!
+    ;(bodyGateResolve as (() => void) | null)?.()
+    ;(blockStartResolve as (() => void) | null)?.()
+    const deadline = Date.now() + 2000
+    while (
+      (!responses.has('req-stdin-1') || !responses.has('req-stdin-2') || !responses.has('req-start-3')) &&
+      Date.now() < deadline
+    ) {
+      await new Promise(r => setTimeout(r, 15))
+    }
+    expect(responses.get('req-stdin-1')?.status).toBe(200)
+    expect(responses.get('req-stdin-2')?.status).toBe(200)
+    expect(stdinDelivered).toEqual(['first-large', 'second-inline'])
+
+    // Slots freed after completion -> new sessions request succeeds on server-1 (and grant2 works on server-2).
+    send1({ id: 'req-sess-after', op: 'sessions', body: '{}' })
+    send2({ id: 'req-s2-end', op: 'end', grantId: grant2Id, body: '{}' })
+    await new Promise(r => setTimeout(r, 40))
+    expect(responses.get('req-sess-after')?.status).toBe(200)
+    expect(responses.get('req-s2-end')?.status).toBe(200)
   })
 })

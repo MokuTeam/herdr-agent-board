@@ -60,6 +60,7 @@ export interface NodePilotBridge {
   uploadFiles(grant: NodeBridgeGrant, rawBody: string): Promise<Response>
   deliverReport(grant: NodeBridgeGrant, rawBody: unknown): Promise<Response>
   end(grant: NodeBridgeGrant): Promise<Response>
+  sync(): void
   close(): void
 }
 
@@ -140,6 +141,23 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
   const activeStreams = new Map<string, ActiveStream>()
   let ping: ReturnType<typeof setInterval> | null = null
   let closed = false
+
+  const enabled = (): boolean => nodeConfig(deps.cfg.node)?.pilotBridge === true
+
+  function disconnectAll(): void {
+    if (ping) {
+      clearInterval(ping)
+      ping = null
+    }
+    failAllWaiting()
+    grants.clear()
+    for (const c of clients) {
+      try {
+        c.close()
+      } catch {}
+    }
+    clients.clear()
+  }
 
   function sweepGrants(): void {
     const now = Date.now()
@@ -276,6 +294,7 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
 
   return {
     stream(req) {
+      if (!enabled()) return jsonRes(404, { ok: false, error: 'not found' })
       let client: ReadableStreamDefaultController<Uint8Array> | undefined
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
@@ -401,6 +420,7 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
     },
 
     async open(rawBody) {
+      if (!enabled()) return jsonRes(403, { ok: false, error: t('mokupilot.err.bridgeOff') })
       if (deps.cfg.mokupilot === false) return jsonRes(409, { ok: false, error: t('mokupilot.err.off') })
       const parsed = parseOpenRequest(rawBody)
       if ('error' in parsed) return jsonRes(400, { ok: false, error: parsed.error })
@@ -498,6 +518,7 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
     },
 
     async sessions() {
+      if (!enabled()) return jsonRes(403, { ok: false, error: t('mokupilot.err.bridgeOff') })
       if (!clients.size) {
         return jsonRes(200, { ok: true, sessions: localSessions(), masterOnline: false })
       }
@@ -505,6 +526,7 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
     },
 
     authorize(grantId, authHeader) {
+      if (!enabled()) return null
       if (!isPilotCallId(grantId)) return null
       sweepGrants()
       const grant = grants.get(grantId)
@@ -690,18 +712,13 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
       return rpc('end', { grantId: grant.remoteGrantId, body: '{}' })
     },
 
+    sync() {
+      if (!enabled()) disconnectAll()
+    },
+
     close() {
       closed = true
-      if (ping) clearInterval(ping)
-      ping = null
-      failAllWaiting()
-      grants.clear()
-      for (const c of clients) {
-        try {
-          c.close()
-        } catch {}
-      }
-      clients.clear()
+      disconnectAll()
     },
   }
 }

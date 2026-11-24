@@ -5,6 +5,7 @@ import { describe, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { normalizeConfig } from '../../src/core/categories.ts'
 import {
+  configuredNodeAddresses,
   DEVICE_ID,
   type DeviceConfig,
   defaultThresholds,
@@ -498,11 +499,38 @@ describe('nodeConfig', () => {
         { id: 's', tls: false, relay: { host: 'r', user: 'u', socket: 's' } },
         { key: 'tls', why: 'required' },
       ],
+      [
+        { id: 's', pilotBridge: 'yes' },
+        { key: 'pilotBridge', why: 'type' },
+      ],
     ]
     for (const [raw, problem] of cases) {
       assert.equal(nodeConfig(raw), null, JSON.stringify(raw))
       assert.deepEqual(nodeProblems(raw), [problem], JSON.stringify(raw))
     }
+    assert.equal(nodeConfig({ id: 's', pilotBridge: false })?.pilotBridge, undefined)
+    assert.equal(nodeConfig({ id: 's', pilotBridge: true })?.pilotBridge, true)
+  })
+})
+
+describe('configuredNodeAddresses (#730)', () => {
+  test('only includes routable non-private addresses of non-revoked pilotBridge-opted-in devices', () => {
+    const c = conf({
+      devices: {
+        'tailnet-opted': { pilotBridge: true, link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
+        'tailnet-unopted': { link: { kind: 'tailnet', address: '100.64.0.13', port: 12430 } },
+        'tailnet-revoked': {
+          pilotBridge: true,
+          revoked: true,
+          link: { kind: 'tailnet', address: '100.64.0.14', port: 12430 },
+        },
+        'lan-ssh': { pilotBridge: true, link: { kind: 'ssh', host: '192.168.1.50', user: 'anna' } },
+        'pub-ssh': { pilotBridge: true, link: { kind: 'ssh', host: '203.0.113.10', user: 'anna' } },
+        'direct-loopback': { pilotBridge: true, link: { kind: 'direct', url: 'http://127.0.0.1:45001' } },
+        'direct-https': { pilotBridge: true, link: { kind: 'direct', url: 'https://100.64.0.15:12430' } },
+      },
+    })
+    assert.deepEqual(configuredNodeAddresses(c), ['100.64.0.12', '203.0.113.10', '100.64.0.15'])
   })
 })
 

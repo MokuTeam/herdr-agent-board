@@ -65,9 +65,13 @@ const nonEmpty =
     typeof v === 'string' && v ? (v.length > max ? v.slice(0, max) : v) : undefined
 /** A key or a session id of the node: kept whole or not at all, and prefixed. */
 const ref: Check = (v, k) => (typeof v === 'string' && v && v.length <= LEN.key ? k(v) : undefined)
-/** A call parent reference (#700): already device-prefixed parents stay as-is; bare node keys get prefixed. */
-const parentRef: Check = (v, k) =>
-  typeof v === 'string' && v && v.length <= LEN.key ? (parseNodeKey(v) ? v : k(v)) : undefined
+/** A call parent reference (#700, #730): already device-prefixed parents stay for later validation; bare keys get prefixed. */
+const parentRef: Check = (v, k) => {
+  if (typeof v !== 'string' || !v || v.length > LEN.key) return undefined
+  const at = parseNodeKey(v)
+  if (!at) return k(v)
+  return parseNodeKey(at.key) ? null : v
+}
 const num: Check = v => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
 const bool: Check = v => (typeof v === 'boolean' ? v : undefined)
 const yes: Check = v => (v === true ? true : undefined)
@@ -411,7 +415,12 @@ const ITEM: Record<string, Check> = {
 }
 
 /** One item of a node, or null when it has no usable key or name, or is not the node's own. */
-function itemOf(raw: unknown, k: Rekey, device: string | null): Item | null {
+function itemOf(
+  raw: unknown,
+  k: Rekey,
+  device: string | null,
+  allowParent?: (parentKey: string) => boolean,
+): Item | null {
   if (!isObject(raw) || Object.hasOwn(raw, 'device')) return null
   const key = raw.key
   if (typeof key !== 'string' || !key || key.length > LEN.key || parseNodeKey(key)) return null
@@ -436,6 +445,12 @@ function itemOf(raw: unknown, k: Rekey, device: string | null): Item | null {
     attention: pick('attention', ATTENTION, ''),
   }
   const more = shape(ITEM)(raw, k) as Record<string, unknown>
+  if (device && isObject(more.call) && typeof more.call.parent === 'string') {
+    const at = parseNodeKey(more.call.parent)
+    if (at && at.device !== device && !allowParent?.(more.call.parent)) {
+      more.call = { ...more.call, parent: null }
+    }
+  }
   Object.assign(item, more)
   if (device) item.device = device
   return item
@@ -528,7 +543,11 @@ export function dropMovedCards(items: readonly Item[], masterId = ''): Item[] {
  * at all. `device`: the node's id, for the master's payload; null for the offline copy, which keeps
  * the node's own keys.
  */
-export function nodePart(raw: unknown, device: string | null): NodePart | null {
+export function nodePart(
+  raw: unknown,
+  device: string | null,
+  options?: { allowParent?: (parentKey: string) => boolean },
+): NodePart | null {
   if (!isObject(raw)) return null
   const k: Rekey = device ? key => nodeKey(device, key) : key => key
   const tag = <T extends object>(x: T): T => (device ? { ...x, device } : x)
@@ -538,7 +557,7 @@ export function nodePart(raw: unknown, device: string | null): NodePart | null {
   const seen = new Set<string>()
   for (const x of Array.isArray(raw.items) ? raw.items : []) {
     if (items.length >= MOST.items) break
-    const item = itemOf(x, k, device)
+    const item = itemOf(x, k, device, options?.allowParent)
     // Two items with one key: the first, as find() on the node would.
     if (item && !seen.has(item.key)) {
       seen.add(item.key)

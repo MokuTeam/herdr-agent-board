@@ -456,7 +456,7 @@ export function flipNodesConfig(
   const oldMasterEntry = pickDeviceLimits(oldLocalRaw)
   if (!oldMasterEntry.title && oldMasterTitle) oldMasterEntry.title = oldMasterTitle
   oldMasterEntry.link = reverseLink
-  for (const key of ['profiles', 'sinks', 'mcp', 'accept', 'paused', 'giveSecrets'] as const) {
+  for (const key of ['profiles', 'sinks', 'mcp', 'accept', 'paused', 'giveSecrets', 'pilotBridge'] as const) {
     if (oldLocalRaw[key] !== undefined) oldMasterEntry[key] = structuredClone(oldLocalRaw[key])
   }
   nextDevices[oldMasterId] = oldMasterEntry

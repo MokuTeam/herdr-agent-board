@@ -144,6 +144,8 @@ interface Options {
   agyLimits?: () => BoardAgyLimits | null | undefined
   /** Continue mid-turn Claude sessions after a restart (#633, services/turn-resume.ts). */
   turnResume?: Pick<TurnResumeService, 'observe' | 'observeFailure'>
+  /** Whether a node item is allowed to set `call.parent` to another device's card (#730). */
+  allowCallParent?: (device: string, parentKey: string) => boolean
 }
 
 // The colors the category editor offers (aliases left out).
@@ -293,6 +295,7 @@ export function createBoardState({
   journal,
   agyLimits: readAgyLimits,
   turnResume,
+  allowCallParent,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -365,13 +368,23 @@ export function createBoardState({
         if (!parentKey || !it.call) return it
         let parent = allByKey.get(parentKey)
         let normalizedParentKey = parentKey
-        if (!parent && it.device) {
-          const at = parseNodeKey(parentKey)
-          if (at && (at.device === it.device || (masterId && at.device === masterId))) {
-            const localParent = localByKey.get(at.key)
-            if (localParent) {
-              parent = localParent
-              normalizedParentKey = at.key
+        if (it.device) {
+          if (parent && parent.device !== it.device) {
+            if (allowCallParent?.(it.device, parentKey) !== true) {
+              return { ...it, call: { ...it.call, parent: null } }
+            }
+          } else if (!parent) {
+            const at = parseNodeKey(parentKey)
+            if (at && (at.device === it.device || (masterId && at.device === masterId))) {
+              const localParent = localByKey.get(at.key)
+              if (localParent && allowCallParent?.(it.device, at.key) === true) {
+                parent = localParent
+                normalizedParentKey = at.key
+              } else if (at.device !== it.device) {
+                return { ...it, call: { ...it.call, parent: null } }
+              }
+            } else if (at && at.device !== it.device && allowCallParent?.(it.device, parentKey) !== true) {
+              return { ...it, call: { ...it.call, parent: null } }
             }
           }
         }

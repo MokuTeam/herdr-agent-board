@@ -390,7 +390,7 @@ export function parseBridgeStreamChunk(raw: unknown): PilotBridgeStreamChunk | n
     events = []
     for (const item of raw.events) {
       if (!isRecord(item) || typeof item.name !== 'string' || !STREAM_EVENT_NAMES.has(item.name)) return null
-      if (typeof item.data !== 'string') return null
+      if (typeof item.data !== 'string' || item.data.includes('\n') || item.data.includes('\r')) return null
       events.push({ name: item.name as PilotBridgeStreamEvent['name'], data: item.data })
     }
   }

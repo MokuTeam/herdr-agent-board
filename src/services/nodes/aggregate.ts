@@ -68,6 +68,8 @@ export interface NodeAggregateOptions {
   hostName?: string
   /** A device's update to this board's commit (#590, services/nodes/update.ts), for its row. */
   update?: (id: string) => DeviceUpdate | null
+  /** Whether a node item is allowed to set `call.parent` to another device's card (#730). */
+  allowCallParent?: (device: string, parentKey: string) => boolean
 }
 
 /** The offline copy is written at most this often (paced in tests). */
@@ -98,6 +100,7 @@ function boardDevice(
     paused: device?.paused ?? false,
     drain: device?.drain ?? false,
     ...(device?.giveSecrets === false && { giveSecrets: false as const }),
+    ...(device?.pilotBridge === true && { pilotBridge: true as const }),
     maxSessions: device?.maxSessions ?? null,
     minFreeMemMb: device?.minFreeMemMb ?? null,
     maxLoad: device?.maxLoad ?? null,
@@ -163,12 +166,13 @@ export function createNodeAggregate(o: NodeAggregateOptions): NodeAggregate {
 
   /** A device's part now: from its link's last payload, else from its offline copy; null with neither. */
   function current(id: string): { part: NodePart; at: number } | null {
+    const partOpts = { allowParent: (parentKey: string) => o.allowCallParent?.(id, parentKey) ?? false }
     const link = o.links.link(id)
     const raw = link?.payload() ?? null
     if (link && raw) {
       let held = live.get(id)
       if (held?.raw !== raw) {
-        held = { raw, part: nodePart(raw, id) ?? NONE, at: link.view().payloadAt ?? clock.now() }
+        held = { raw, part: nodePart(raw, id, partOpts) ?? NONE, at: link.view().payloadAt ?? clock.now() }
         live.set(id, held)
         // A link made again (its config changed) shows this, not the copy read at the start.
         disk.set(id, { part: held.part, at: held.at })
@@ -177,7 +181,7 @@ export function createNodeAggregate(o: NodeAggregateOptions): NodeAggregate {
     }
     if (!disk.has(id)) {
       const copy = store.snapshot(id)
-      disk.set(id, copy ? { part: nodePart(copy.part, id) ?? NONE, at: copy.at } : null)
+      disk.set(id, copy ? { part: nodePart(copy.part, id, partOpts) ?? NONE, at: copy.at } : null)
     }
     return disk.get(id) ?? null
   }

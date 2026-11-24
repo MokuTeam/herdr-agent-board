@@ -46,6 +46,85 @@ export function isLoopback(address: string): boolean {
   return a === '::1' || a === '0:0:0:0:0:0:0:1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(a)
 }
 
+function parseIpv4Octets(addr: string): [number, number, number, number] | null {
+  const parts = addr.split('.')
+  if (parts.length !== 4) return null
+  const nums: number[] = []
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null
+    const n = Number(part)
+    if (n < 0 || n > 255 || String(n) !== part) return null
+    nums.push(n)
+  }
+  return nums as [number, number, number, number]
+}
+
+function isRoutableIpv4Octets(a: number, b: number): boolean {
+  if (a === 0) return false // 0.0.0.0/8 unspecified
+  if (a === 10) return false // 10.0.0.0/8 RFC 1918 private LAN
+  if (a === 127) return false // 127.0.0.0/8 loopback
+  if (a === 169 && b === 254) return false // 169.254.0.0/16 link-local
+  if (a === 172 && b >= 16 && b <= 31) return false // 172.16.0.0/12 RFC 1918 private LAN
+  if (a === 192 && b === 168) return false // 192.168.0.0/16 RFC 1918 private LAN
+  if (a >= 224) return false // 224.0.0.0/4 multicast and reserved
+  return true
+}
+
+function parseIpv6Groups(addr: string): number[] | null {
+  if (!addr.includes(':')) return null
+  const expandSide = (side: string): number[] | null => {
+    if (!side) return []
+    const raw = side.split(':')
+    const out: number[] = []
+    for (let i = 0; i < raw.length; i++) {
+      const seg = raw[i] ?? ''
+      if (i === raw.length - 1 && seg.includes('.')) {
+        const v4 = parseIpv4Octets(seg)
+        if (!v4) return null
+        out.push((v4[0] << 8) | v4[1], (v4[2] << 8) | v4[3])
+      } else {
+        if (!/^[0-9a-f]{1,4}$/i.test(seg)) return null
+        out.push(Number.parseInt(seg, 16))
+      }
+    }
+    return out
+  }
+
+  const dbl = addr.split('::')
+  if (dbl.length > 2) return null
+  if (dbl.length === 2) {
+    const head = expandSide(dbl[0] ?? '')
+    const tail = expandSide(dbl[1] ?? '')
+    if (!head || !tail) return null
+    const fill = 8 - head.length - tail.length
+    if (fill < 1) return null
+    return [...head, ...Array<number>(fill).fill(0), ...tail]
+  }
+  const full = expandSide(addr)
+  return full && full.length === 8 ? full : null
+}
+
+/**
+ * Whether `address` is a routable non-private address suitable for matching a remote node viewer:
+ * accepts Tailscale (`100.64.0.0/10` / `fd7a:115c:a1e0::/48`) and global unicast IPv4/IPv6;
+ * rejects loopback, RFC 1918 private LAN, link-local, unspecified, multicast, and other ULA ranges.
+ */
+export function isRoutableNodeAddress(address: string): boolean {
+  const addr = plainAddress(address)
+  if (!addr) return false
+  const v4 = parseIpv4Octets(addr)
+  if (v4) return isRoutableIpv4Octets(v4[0], v4[1])
+  const v6 = parseIpv6Groups(addr)
+  if (!v6) return false
+  const [g0 = 0, g1 = 0, g2 = 0, g3 = 0, g4 = 0, g5 = 0, g6 = 0] = v6
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff) {
+    return isRoutableIpv4Octets(g6 >> 8, g6 & 0xff)
+  }
+  const isTailscaleV6 = g0 === 0xfd7a && g1 === 0x115c && g2 === 0xa1e0
+  const isGlobalUnicastV6 = (g0 & 0xe000) === 0x2000
+  return isTailscaleV6 || isGlobalUnicastV6
+}
+
 /** What the request says about who looks: the TCP peer's address ('' unknown) and its X-Forwarded-For. */
 export interface Viewer {
   peer: string
@@ -113,15 +192,16 @@ export function viewerAddress(viewer: Viewer | null | undefined): string {
 }
 
 /**
- * Whether `viewer` resolves to a non-loopback address matching one of `nodeAddresses` (a registered
- * node machine): only then may link mode return a `mokupilot://` link instead of local refusal guards.
+ * Whether `viewer` resolves to a routable non-private address matching one of `nodeAddresses`
+ * (an opted-in registered node machine): only then may link mode return a `mokupilot://` link
+ * instead of local refusal guards.
  */
 export function isRegisteredNodeViewer(viewer: Viewer | null | undefined, nodeAddresses: readonly string[]): boolean {
   const addr = viewerAddress(viewer)
-  if (!addr || isLoopback(addr)) return false
+  if (!addr || !isRoutableNodeAddress(addr)) return false
   for (const entry of nodeAddresses) {
     const plain = plainAddress(entry)
-    if (plain && !isLoopback(plain) && plain === addr) return true
+    if (plain && isRoutableNodeAddress(plain) && plain === addr) return true
   }
   return false
 }

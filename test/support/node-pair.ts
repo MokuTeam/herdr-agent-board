@@ -228,11 +228,13 @@ export async function nodeBoard(
   mkdirSync(dir, { recursive: true })
   const { token } = createNodeStore({ dir }).add('master', 'hand')
   const doorPort = await unusedPort()
-  const { url, proc } = await serveBoard(
-    box,
-    { language: 'en', node: { id, port: doorPort, workRoot: box.dir }, ...cfg?.(box) },
-    env,
-  )
+  const extra = cfg?.(box) ?? {}
+  const { node: extraNode, ...restCfg } = extra
+  const mergedNode =
+    typeof extraNode === 'object' && extraNode !== null && !Array.isArray(extraNode)
+      ? { id, port: doorPort, workRoot: box.dir, ...(extraNode as Record<string, unknown>) }
+      : { id, port: doorPort, workRoot: box.dir }
+  const { url, proc } = await serveBoard(box, { language: 'en', node: mergedNode, ...restCfg }, env)
   await until(() => logged(proc, `node door: listening on 127.0.0.1:${doorPort} as ${id}`), 10_000)
   return { id, box, url, proc, doorPort, token, proxy: await doorProxy(doorPort) }
 }

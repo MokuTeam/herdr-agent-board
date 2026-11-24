@@ -170,6 +170,35 @@ describe('giveSecrets (#604)', () => {
   })
 })
 
+describe('pilotBridge (#730)', () => {
+  const devices = (nodes: Record<string, unknown>) => nodes.devices as Record<string, Record<string, unknown>>
+
+  test('absent or false is off; true is on; non-boolean is flagged', () => {
+    const off = nodesConfig(section(), 'laptop')
+    expect(off?.devices['server-1'] && 'pilotBridge' in off.devices['server-1']).toBe(false)
+    const on = section()
+    devices(on)['server-1'] = { ...devices(on)['server-1'], pilotBridge: true }
+    expect(nodesConfig(on, 'laptop')?.devices['server-1']?.pilotBridge).toBe(true)
+    const bad = section()
+    devices(bad)['server-1'] = { ...devices(bad)['server-1'], pilotBridge: 'yes' }
+    const cfg = nodesConfig(bad, 'laptop')
+    expect(cfg?.devices['server-1']).toBeUndefined()
+    expect(cfg?.problems).toContainEqual({ device: 'server-1', key: 'pilotBridge', why: 'type' })
+  })
+
+  test('the switch works on remote nodes and local; false removes the key', () => {
+    for (const id of ['server-1', 'local']) {
+      const { r, nodes } = applied({ op: 'set', id, pilotBridge: true })
+      expect(r).toEqual({ changed: true })
+      expect(devices(nodes)[id]?.pilotBridge).toBe(true)
+      const back = applyNodesEdit(nodes, read({ op: 'set', id, pilotBridge: false }))
+      expect(back).toEqual({ changed: true })
+      expect('pilotBridge' in (devices(nodes)[id] ?? {})).toBe(false)
+    }
+    expect(nodesEditOf({ op: 'set', id: 'server-1', pilotBridge: 'on' })).toEqual({ error: 'pilotBridge' })
+  })
+})
+
 describe('title (#601)', () => {
   const devices = (nodes: Record<string, unknown>) => nodes.devices as Record<string, Record<string, unknown>>
 

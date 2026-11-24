@@ -287,4 +287,43 @@ describe('nodePart', () => {
     expect(got?.items[3]?.checklist).toBeUndefined()
     expect(got?.items[4]?.checklist).toBeUndefined()
   })
+
+  test('call.parent drops unauthorized cross-device or double-prefixed parents (#730)', () => {
+    const callOf = (parent: string | null) => ({
+      phase: 'on',
+      since: 1000,
+      parent,
+      helpers: 0,
+      tasks: [],
+    })
+    const payload = {
+      items: [
+        item({ key: 'c-bare', call: callOf(SID) }),
+        item({ key: 'c-own', call: callOf(`@server-1:${OTHER}`) }),
+        item({ key: 'c-other', call: callOf(`@server-2:${SID}`) }),
+        item({ key: 'c-master', call: callOf(`@laptop:${SID}`) }),
+        item({ key: 'c-double', call: callOf(`@server-1:@server-2:${SID}`) }),
+      ],
+    }
+
+    const denied = nodePart(payload, 'server-1')
+    expect(denied?.items.map(i => [i.key, i.call?.parent])).toEqual([
+      ['@server-1:c-bare', `@server-1:${SID}`],
+      ['@server-1:c-own', `@server-1:${OTHER}`],
+      ['@server-1:c-other', null],
+      ['@server-1:c-master', null],
+      ['@server-1:c-double', null],
+    ])
+
+    const granted = nodePart(payload, 'server-1', {
+      allowParent: key => key === `@server-2:${SID}`,
+    })
+    expect(granted?.items.map(i => [i.key, i.call?.parent])).toEqual([
+      ['@server-1:c-bare', `@server-1:${SID}`],
+      ['@server-1:c-own', `@server-1:${OTHER}`],
+      ['@server-1:c-other', `@server-2:${SID}`],
+      ['@server-1:c-master', null],
+      ['@server-1:c-double', null],
+    ])
+  })
 })

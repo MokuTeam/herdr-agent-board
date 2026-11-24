@@ -87,12 +87,14 @@ import { answerText, decisionsConfig } from '../core/decisions.ts'
 import { journalConfig } from '../core/journal.ts'
 import { t } from '../core/lang.ts'
 import { messageGate } from '../core/message-gate.ts'
+import { isRoutableNodeAddress } from '../core/mokupilot-mode.ts'
 import { dropMovedCards } from '../core/node-items.ts'
 import { JOIN_TTL_MS } from '../core/node-join.ts'
 import {
   configuredNodeAddresses,
   deviceIdFromHost,
   fillThresholds,
+  LOCAL,
   markRevoked,
   nodeConfig,
   nodesConfig,
@@ -993,6 +995,7 @@ export async function startServer({
     nodes: () => nodeAggregate,
     journal,
     turnResume,
+    allowCallParent: (device, parentKey) => nodePilotCalls?.allowsCallParent(device, parentKey) ?? false,
     // Threads (#379): while config.json turns them on, the revision and the count that waits on
     // the owner (two queries a refresh); off, nothing is read.
     threads: () => {
@@ -1434,6 +1437,7 @@ export async function startServer({
   function doorFollows(): void {
     if (door) {
       door.configChanged()
+      nodePilotBridge?.sync()
       relayDialFollows()
       return
     }
@@ -1467,7 +1471,7 @@ export async function startServer({
       programs: () => [...programsOnPath(NODE_PROGRAMS), ...nodeGit.programs()],
       git: () => nodeGit.facts(),
       agyLimits: () => localAgyLimits(cfg.launch),
-      addresses: ownAddresses,
+      addresses: () => ownAddresses().filter(isRoutableNodeAddress),
     })
     // The plugin at the master's commit (#590): unpacked beside this one, installed, swapped in.
     // Then the board ends with 75 and run.ts, the pane's process, starts it again from the plugin's
@@ -1622,8 +1626,16 @@ export async function startServer({
     if (!conf || !nodeLinks?.on()) return []
     const out = [...configuredNodeAddresses(conf)]
     for (const dev of nodeLinks.view().devices) {
-      if (dev.revoked || !dev.status?.addresses) continue
-      out.push(...dev.status.addresses)
+      if (
+        dev.revoked ||
+        dev.link?.state !== 'online' ||
+        !dev.status?.addresses ||
+        conf.devices[dev.id]?.pilotBridge !== true
+      )
+        continue
+      for (const addr of dev.status.addresses) {
+        if (isRoutableNodeAddress(addr)) out.push(addr)
+      }
     }
     return out
   }
@@ -1767,6 +1779,7 @@ export async function startServer({
   function linksFollow(): void {
     if (nodeLinks) {
       nodeLinks.configChanged()
+      pilotBridgeRunner?.sync()
       scheduler?.wakeDevices()
       return
     }
@@ -1800,6 +1813,7 @@ export async function startServer({
       ownStatus: () => ownStatus.answer(),
       statusMs: linkTimes().statusMs,
       update: id => nodeUpdater?.view(id) ?? null,
+      allowCallParent: (device, parentKey) => nodePilotCalls?.allowsCallParent(device, parentKey) ?? false,
     })
     // This board's commit shipped to a node on another one (#590): by itself when none of its
     // sessions is in a turn, at once when asked. A board with no git checkout has nothing to send.
@@ -1850,6 +1864,7 @@ export async function startServer({
       links: nodeLinks,
       pilotCalls,
       log,
+      deviceIds: () => Object.keys(nodesConfig(cfg.nodes)?.devices ?? {}).filter(id => id !== LOCAL),
     })
     nodeProxy = createNodeProxy({
       cfg,
