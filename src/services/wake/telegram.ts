@@ -18,7 +18,7 @@ import { agyDraft } from '../../core/dialogs/agy-dialogs.ts'
 import { inputDraft } from '../../core/dialogs/input-box.ts'
 import { piDraft } from '../../core/dialogs/pi-dialogs.ts'
 import type { TelegramTarget } from '../../core/wake/config.ts'
-import { type RouteResult, remoteMachineHint } from '../../core/wake/node-route.ts'
+import { isRouteResult, MAX_ROUTE_ITEMS, type RouteResult, remoteMachineHint } from '../../core/wake/node-route.ts'
 import { formatPrompt, type RouteItem, type RouteTarget, resolve } from '../../core/wake/route.ts'
 import type { TelegramStatus } from '../../core/wake/status.ts'
 import type { WakeEngine } from './engine.ts'
@@ -213,6 +213,35 @@ export function notWoken(
   }
 }
 
+/** Posts a topic batch to the master board's `/api/nodes/telegram`; 400/413 are terminal skips, 404/405 mean disabled. */
+export async function postMasterTelegram(
+  url: string,
+  items: RouteItem[],
+  opts: { liveOnly?: boolean } | undefined,
+  timeoutMs: number,
+  log: (line: string) => void,
+  fetchFn: (url: string, init?: RequestInit) => Promise<Response> = fetch,
+): Promise<RouteResult | null> {
+  const res = await fetchFn(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-board': '1' },
+    body: JSON.stringify({ items, ...(opts?.liveOnly && { liveOnly: true }) }),
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  if (res.status === 404 || res.status === 405) return null
+  if (res.status === 400 || res.status === 413) {
+    log(`telegram: master board rejected ${items.length} item(s) with HTTP ${res.status}; skipping batch`)
+    return {
+      skip: true,
+      note: '⚠️ Не удалось передать сообщение на ноду: некорректный или слишком большой запрос.',
+    }
+  }
+  if (!res.ok) throw new Error(`master board HTTP ${res.status}`)
+  const data: unknown = await res.json().catch(() => null)
+  if (isRecord(data) && data.matched === true && isRouteResult(data.result)) return data.result
+  return null
+}
+
 export function createTelegram(o: TelegramDeps): Telegram {
   const fetchFn = o.fetch ?? ((url: string, init: RequestInit) => fetch(url, init))
   const timing: Timing = { log: text => o.log(text), ...(o.sleep && { sleep: o.sleep }) }
@@ -335,31 +364,55 @@ export function createTelegram(o: TelegramDeps): Telegram {
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
   }
 
+  async function ackGroupItems(
+    t: TelegramTarget,
+    chunk: RouteItem[],
+    r: RouteResult,
+    key: string,
+  ): Promise<'delivered' | 'skipped' | 'retry'> {
+    const outcome = 'ok' in r ? 'delivered' : 'skip' in r ? 'skipped' : 'retry'
+    if (outcome !== 'delivered') o.log(`${outcome} ${chunk.length} message(s) for ${key}${r.note ? `: ${r.note}` : ''}`)
+    const retrySec = 'retry' in r ? r.retry : undefined
+    for (const [i, it] of chunk.entries()) {
+      let note = i === 0 ? r.note : undefined
+      if (outcome === 'retry' && note) {
+        const said = notified.get(it.id) ?? new Set<string>()
+        if (said.has(note)) note = undefined
+        else said.add(note)
+        notified.set(it.id, said)
+      }
+      if (outcome !== 'retry') notified.delete(it.id)
+      await ack(t, it.id, outcome, note, retrySec).catch(err => o.log(`ack ${it.id} failed: ${messageOf(err)}`))
+    }
+    return outcome
+  }
+
   /** Routes a topic's messages and acks each to the tg-mcp that handed them out; under way until the last ack. */
   function handleGroup(items: RouteItem[], t: TelegramTarget): Promise<void> {
     const key = items[0]?.key ?? ''
     return o.engine.deliver(async () => {
-      let r: RouteResult
-      try {
-        r = await route(items)
-      } catch (err) {
-        o.log(`routing ${key} failed: ${messageOf(err)}`)
-        r = { retry: RETRY_AFTER_ERROR_SEC }
-      }
-      const outcome = 'ok' in r ? 'delivered' : 'skip' in r ? 'skipped' : 'retry'
-      if (outcome !== 'delivered')
-        o.log(`${outcome} ${items.length} message(s) for ${key}${r.note ? `: ${r.note}` : ''}`)
-      const retrySec = 'retry' in r ? r.retry : undefined
-      for (const [i, it] of items.entries()) {
-        let note = i === 0 ? r.note : undefined
-        if (outcome === 'retry' && note) {
-          const said = notified.get(it.id) ?? new Set<string>()
-          if (said.has(note)) note = undefined
-          else said.add(note)
-          notified.set(it.id, said)
+      const remoteActive = Boolean(o.remote && (!o.hasRemote || o.hasRemote()))
+      const chunks =
+        remoteActive && items.length > MAX_ROUTE_ITEMS
+          ? Array.from({ length: Math.ceil(items.length / MAX_ROUTE_ITEMS) }, (_, i) =>
+              items.slice(i * MAX_ROUTE_ITEMS, (i + 1) * MAX_ROUTE_ITEMS),
+            )
+          : [items]
+      for (let idx = 0; idx < chunks.length; idx++) {
+        const chunk = chunks[idx] ?? []
+        let r: RouteResult
+        try {
+          r = await route(chunk)
+        } catch (err) {
+          o.log(`routing ${key} failed: ${messageOf(err)}`)
+          r = { retry: RETRY_AFTER_ERROR_SEC }
         }
-        if (outcome !== 'retry') notified.delete(it.id)
-        await ack(t, it.id, outcome, note, retrySec).catch(err => o.log(`ack ${it.id} failed: ${messageOf(err)}`))
+        const outcome = await ackGroupItems(t, chunk, r, key)
+        if (outcome !== 'delivered' && idx + 1 < chunks.length) {
+          const rest = items.slice((idx + 1) * MAX_ROUTE_ITEMS)
+          await ackGroupItems(t, rest, r, key)
+          return
+        }
       }
     })
   }

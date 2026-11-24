@@ -116,7 +116,7 @@ export function orderNodeDevices(item: RouteItem, devices: readonly NodeRouteCan
     .map(x => x.d)
 }
 
-const MAX_ROUTE_ITEMS = 100
+export const MAX_ROUTE_ITEMS = 100
 const MAX_KEY_LEN = 1024
 const MAX_HINT_LEN = 256
 const MAX_TEXT_LEN = 16_000

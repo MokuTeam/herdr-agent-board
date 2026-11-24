@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path'
 import { createProfileHomes } from '../../src/adapters/profile-homes.ts'
 import { findProfileDirs } from '../../src/adapters/profiles.ts'
 import { mergeProfiles, profileSet } from '../../src/core/profiles.ts'
-import { cleanTelegramItems, promptOf } from '../../src/core/schedule-rules.ts'
+import { cleanTelegramItems, MAX_TELEGRAM_HOLD_CHARS, promptOf } from '../../src/core/schedule-rules.ts'
 import type { Config, Item } from '../../src/core/types.ts'
 import { wakeConfig } from '../../src/core/wake/config.ts'
 import type { RouteItem } from '../../src/core/wake/route.ts'
@@ -17,7 +17,7 @@ import { createNodeTelegram } from '../../src/services/node/telegram.ts'
 import type { Link } from '../../src/services/nodes/link.ts'
 import { createNodesTelegram } from '../../src/services/nodes/telegram.ts'
 import { createWakeEngine, type WakeEngineDeps } from '../../src/services/wake/engine.ts'
-import { createTelegram } from '../../src/services/wake/telegram.ts'
+import { createTelegram, postMasterTelegram } from '../../src/services/wake/telegram.ts'
 import { isolatedHome } from '../support/env.ts'
 import { type FakePane, type FakeWakeHerdr, fakeWakeHerdr } from '../support/fake-wake-herdr.ts'
 import { runningSession, SID, SID2 } from '../support/wake-fixtures.ts'
@@ -203,6 +203,146 @@ describe('createTelegram remote delegation', () => {
     const woken = await tg.route([routeItem({ key: PROJECT, live_panes: ['SERVER1:w1:p9'] })])
     expect(woken).toEqual({ ok: true, note: '⏰ Разбудил сессию «Local chat».' })
     expect(calls).toEqual([{ liveOnly: true }])
+  })
+
+  test('splits groups over 100 items across remote chunks and treats HTTP 400/413 from master as terminal skip', async () => {
+    const w = world({ panes: [] })
+    const engine = createWakeEngine(w.deps)
+    const sentChunks: number[] = []
+    const acked: { id: unknown; outcome: string }[] = []
+    let polls = 0
+    const batch150 = Array.from({ length: 150 }, (_, idx) =>
+      routeItem({ id: idx + 1, key: 'topic:Burst', topic: 'Burst', pane: 'SRV1:w1:p1', text: `m${idx + 1}` }),
+    )
+    let resolveDone: () => void
+    const allAcked = new Promise<void>(r => {
+      resolveDone = r
+    })
+    let chunkMode: 'deliver' | 'retry-first' = 'deliver'
+
+    const tg = createTelegram({
+      engine,
+      herdr: w.io,
+      target: () => ({ host: '127.0.0.1:9999', url: 'http://127.0.0.1:9999', authorization: 'Bearer tok' }),
+      machine: 'LAPTOP',
+      pollTimeoutSec: () => 5,
+      log: text => w.log.push(text),
+      hasRemote: () => true,
+      remote: async chunk => {
+        sentChunks.push(chunk.length)
+        if (chunkMode === 'retry-first') return { retry: 30 }
+        return { ok: true }
+      },
+      fetch: async (url, init) => {
+        if (String(url).includes('/router/wait')) {
+          polls++
+          if (polls === 1) return Response.json({ items: batch150 })
+          return await new Promise<Response>(resolve => {
+            init?.signal?.addEventListener('abort', () => resolve(new Response('{}', { status: 499 })))
+          })
+        }
+        if (String(url).includes('/router/ack')) {
+          const body = JSON.parse(String(init?.body ?? '{}')) as { id: unknown; outcome: string }
+          acked.push({ id: body.id, outcome: body.outcome })
+          if (acked.length === 150) resolveDone()
+          return Response.json({ ok: true })
+        }
+        return new Response('not found', { status: 404 })
+      },
+    })
+    onTestFinished(() => tg.stop())
+    tg.start()
+    await allAcked
+    tg.stop()
+
+    expect(sentChunks).toEqual([100, 50])
+    expect(acked).toHaveLength(150)
+    expect(acked.every(a => a.outcome === 'delivered')).toBe(true)
+
+    // If the first chunk returns retry, do not deliver the tail out of order; ack all 150 as retry.
+    const w2 = world({ panes: [] })
+    const engine2 = createWakeEngine(w2.deps)
+    sentChunks.length = 0
+    acked.length = 0
+    polls = 0
+    chunkMode = 'retry-first'
+    let resolveRetryDone: () => void
+    const allRetryAcked = new Promise<void>(r => {
+      resolveRetryDone = r
+    })
+    const tgRetry = createTelegram({
+      engine: engine2,
+      herdr: w2.io,
+      target: () => ({ host: '127.0.0.1:9999', url: 'http://127.0.0.1:9999', authorization: 'Bearer tok' }),
+      machine: 'LAPTOP',
+      pollTimeoutSec: () => 5,
+      log: text => w2.log.push(text),
+      hasRemote: () => true,
+      remote: async chunk => {
+        sentChunks.push(chunk.length)
+        return { retry: 30 }
+      },
+      fetch: async (url, init) => {
+        if (String(url).includes('/router/wait')) {
+          polls++
+          if (polls === 1) return Response.json({ items: batch150 })
+          return await new Promise<Response>(resolve => {
+            init?.signal?.addEventListener('abort', () => resolve(new Response('{}', { status: 499 })))
+          })
+        }
+        if (String(url).includes('/router/ack')) {
+          const body = JSON.parse(String(init?.body ?? '{}')) as { id: unknown; outcome: string }
+          acked.push({ id: body.id, outcome: body.outcome })
+          if (acked.length === 150) resolveRetryDone()
+          return Response.json({ ok: true })
+        }
+        return new Response('not found', { status: 404 })
+      },
+    })
+    onTestFinished(() => tgRetry.stop())
+    tgRetry.start()
+    await allRetryAcked
+    tgRetry.stop()
+
+    expect(sentChunks).toEqual([100])
+    expect(acked).toHaveLength(150)
+    expect(acked.every(a => a.outcome === 'retry')).toBe(true)
+
+    // postMasterTelegram treats 400 and 413 as terminal skips with a log instead of throwing for retry.
+    const errLogs: string[] = []
+    const rejectedNote = '⚠️ Не удалось передать сообщение на ноду: некорректный или слишком большой запрос.'
+    expect(
+      await postMasterTelegram(
+        'http://127.0.0.1:1/api/nodes/telegram',
+        [routeItem()],
+        undefined,
+        5000,
+        l => errLogs.push(l),
+        async () => new Response('bad body', { status: 400 }),
+      ),
+    ).toEqual({ skip: true, note: rejectedNote })
+    expect(
+      await postMasterTelegram(
+        'http://127.0.0.1:1/api/nodes/telegram',
+        [routeItem()],
+        undefined,
+        5000,
+        l => errLogs.push(l),
+        async () => new Response('too big', { status: 413 }),
+      ),
+    ).toEqual({ skip: true, note: rejectedNote })
+    expect(errLogs.some(l => l.includes('HTTP 400'))).toBe(true)
+    expect(errLogs.some(l => l.includes('HTTP 413'))).toBe(true)
+    await expect(
+      postMasterTelegram(
+        'http://127.0.0.1:1/api/nodes/telegram',
+        [routeItem()],
+        undefined,
+        5000,
+        () => {},
+        async () => new Response('err', { status: 502 }),
+      ),
+    ).rejects.toThrow('master board HTTP 502')
   })
 })
 
@@ -415,6 +555,45 @@ describe('createNodesTelegram', () => {
       },
     })
     expect(held).toHaveLength(1)
+
+    // 20 x 4096-char messages (81,920 chars > 48,000 cleaner limit, even if < 128 KB) must return retry instead of silently truncating.
+    const twenty = await svc.route({
+      items: Array.from({ length: 20 }, (_, idx) =>
+        routeItem({ id: 300 + idx, pane: 'SRV1:w1:p2', text: 'a'.repeat(4096) }),
+      ),
+    })
+    expect(twenty).toEqual({
+      status: 200,
+      body: {
+        matched: true,
+        result: {
+          retry: 60,
+          note: '💤 Устройство «Atlas 1» не в сети. Доставлю, когда оно подключится.',
+        },
+      },
+    })
+    expect(held).toHaveLength(1)
+
+    // A batch within MAX_TELEGRAM_HOLD_CHARS (10 x 4096 = 40,960 <= 48,000) is held cleanly without truncation.
+    const ten = Array.from({ length: 10 }, (_, idx) =>
+      routeItem({ id: 400 + idx, pane: 'SRV1:w1:p2', text: String(idx).repeat(4096).slice(0, 4096) }),
+    )
+    expect(ten.reduce((s, it) => s + (it.text?.length ?? 0), 0)).toBeLessThanOrEqual(MAX_TELEGRAM_HOLD_CHARS)
+    const heldTen = await svc.route({ items: ten })
+    expect(heldTen).toEqual({
+      status: 200,
+      body: {
+        matched: true,
+        result: {
+          ok: true,
+          note: '💤 Устройство «Atlas 1» не в сети. Сообщение сохранено и будет доставлено, когда оно подключится.',
+        },
+      },
+    })
+    expect(held).toHaveLength(2)
+    const storedTen = cleanTelegramItems(held[1]?.telegramItems as RouteItem[])
+    expect(storedTen).toHaveLength(10)
+    expect(storedTen.map(it => it.text?.length)).toEqual(Array(10).fill(4096))
 
     // Control characters are stripped when cleaning telegramItems for schedule storage.
     const cleaned = cleanTelegramItems([routeItem({ text: 'hi\x1b[31m there\x07', meta: { message_id: '55\x1b' } })])

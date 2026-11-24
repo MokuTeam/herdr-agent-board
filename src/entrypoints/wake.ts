@@ -41,14 +41,14 @@ import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
 import { scheduledJobs } from '../adapters/wake-transcripts.ts'
 import { nodeConfig, nodesConfig } from '../core/nodes.ts'
 import { type TelegramTarget, telegramTarget, type WakeConfig, wakeConfig, wakeSwitch } from '../core/wake/config.ts'
-import { isNodeOnly, isRouteResult, parseRouteItemsBody } from '../core/wake/node-route.ts'
+import { isNodeOnly, parseRouteItemsBody } from '../core/wake/node-route.ts'
 import type { RouteItem } from '../core/wake/route.ts'
 import type { TelegramStatus } from '../core/wake/status.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { defaultAgyOps } from '../services/wake/agy.ts'
 import { createWakeEngine, type WakeEngine } from '../services/wake/engine.ts'
 import { PORT_TAKEN_EXIT, RESTART_EXIT } from '../services/wake/supervisor.ts'
-import { createTelegram, type Telegram } from '../services/wake/telegram.ts'
+import { createTelegram, postMasterTelegram, type Telegram } from '../services/wake/telegram.ts'
 
 const reapDry = process.argv[2] === '--reap-dry'
 /** --deliver's key and words. */
@@ -192,17 +192,13 @@ const telegramRouter = (target: () => TelegramTarget | null, onState?: (s: Teleg
     hasRemote: () => nodesConfig(cfg.nodes) !== null,
     async remote(items, opts) {
       if (!nodesConfig(cfg.nodes)) return null
-      const res = await fetch(`http://127.0.0.1:${boardPort()}/api/nodes/telegram`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-board': '1' },
-        body: JSON.stringify({ items, ...(opts?.liveOnly && { liveOnly: true }) }),
-        signal: AbortSignal.timeout((settings().wakeTimeoutSec + 60) * 1000),
-      })
-      if (res.status === 404 || res.status === 405) return null
-      if (!res.ok) throw new Error(`master board HTTP ${res.status}`)
-      const data: unknown = await res.json().catch(() => null)
-      if (isRecord(data) && data.matched === true && isRouteResult(data.result)) return data.result
-      return null
+      return postMasterTelegram(
+        `http://127.0.0.1:${boardPort()}/api/nodes/telegram`,
+        items,
+        opts,
+        (settings().wakeTimeoutSec + 60) * 1000,
+        log,
+      )
     },
     ...(onState && { onState }),
   })

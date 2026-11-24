@@ -5,7 +5,7 @@
 import { isRecord } from '../../adapters/json-store.ts'
 import { addEntry, type NewEntry } from '../../adapters/schedule-store.ts'
 import { LOCAL, nodesConfig } from '../../core/nodes.ts'
-import { NODE_OFFLINE_WHY, type ScheduleEntry } from '../../core/schedule-rules.ts'
+import { MAX_TELEGRAM_HOLD_CHARS, NODE_OFFLINE_WHY, type ScheduleEntry } from '../../core/schedule-rules.ts'
 import type { Config } from '../../core/types.ts'
 import { wakeConfig } from '../../core/wake/config.ts'
 import {
@@ -142,10 +142,11 @@ export function createNodesTelegram(deps: NodesTelegramDeps): NodesTelegram {
           const hit = matchNodeItem(first, d.items, d.machine)
           if (hit) {
             const at = now()
+            const totalChars = items.reduce((sum, it) => sum + String(it.text ?? '').length, 0)
             const formatted = formatPrompt(items, at)
-            if (Buffer.byteLength(formatted, 'utf8') > MAX_HOLD_PROMPT_BYTES) {
+            if (totalChars > MAX_TELEGRAM_HOLD_CHARS || Buffer.byteLength(formatted, 'utf8') > MAX_HOLD_PROMPT_BYTES) {
               deps.log(
-                `telegram: held batch too large (${formatted.length} chars) for ${hit.key}; asking tg-mcp to retry`,
+                `telegram: held batch exceeds offline limit (${totalChars} text chars, ${formatted.length} formatted chars) for ${hit.key}; asking tg-mcp to retry`,
               )
               return { status: 200, body: { matched: true, result: { retry: 60, note: offlineRetryNote(d.title) } } }
             }

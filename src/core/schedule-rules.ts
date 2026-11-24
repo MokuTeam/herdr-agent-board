@@ -112,8 +112,10 @@ export const cleanName = (s: unknown): string =>
     .trim()
     .slice(0, 60)
 
+export const MAX_TELEGRAM_HOLD_CHARS = 48_000
+
 /** Strips terminal control characters and bounds total size of held Telegram items (#701). */
-export function cleanTelegramItems(items: readonly RouteItem[], maxTotal = 48_000): RouteItem[] {
+export function cleanTelegramItems(items: readonly RouteItem[], maxTotal = MAX_TELEGRAM_HOLD_CHARS): RouteItem[] {
   let remaining = maxTotal
   const out: RouteItem[] = []
   for (const it of items) {
