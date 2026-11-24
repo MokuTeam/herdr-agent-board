@@ -2,14 +2,14 @@
 // while wake is on and has not run for more than a minute (models/wake.ts noteShown); a press
 // opens Settings → Sleep and wake…. Never on a phone, which cannot change it.
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { remotePage } from '../../models/remote-page.ts'
+import { adminHere } from '../../models/remote-page.ts'
 import { isWakeView, noteShown } from '../../models/wake.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 
 export function WakeNote({ onOpen }: { onOpen(): void }) {
   const t = useT()
   const { data, now } = useBoardContext()
-  if (remotePage() || !noteShown(isWakeView(data?.wake) ? data.wake : undefined, now)) return null
+  if (!adminHere() || !noteShown(isWakeView(data?.wake) ? data.wake : undefined, now)) return null
   return (
     <button
       type="button"

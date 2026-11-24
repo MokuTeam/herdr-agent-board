@@ -20,7 +20,7 @@ import { useT } from '../i18n/I18nProvider.tsx'
 import { deviceOptions, pickedDevice } from '../models/devices.ts'
 import { litLanes } from '../models/lane-picks.ts'
 import { pickedProfile, profileOptions } from '../models/profiles.ts'
-import { remotePage } from '../models/remote-page.ts'
+import { adminHere } from '../models/remote-page.ts'
 import { columnHeads, documentTitle, laneOptions, summaryParts } from '../models/toolbar.ts'
 import { filterCount, filterText } from '../models/toolbar-collapse.ts'
 import { isWakeView, noteShown } from '../models/wake.ts'
@@ -109,7 +109,7 @@ export function Toolbar({
     if (noteRef) noteRef.current = limitsAnchor.current
   })
 
-  const wakeDown = !remotePage() && noteShown(isWakeView(data?.wake) ? data.wake : undefined, now) && !!onWake
+  const wakeDown = adminHere() && noteShown(isWakeView(data?.wake) ? data.wake : undefined, now) && !!onWake
   const alertCount = (setup?.shown ? 1 : 0) + (data?.backup?.problem ? 1 : 0) + (wakeDown ? 1 : 0)
 
   const activeLaneOptions = ui.filter.length ? (lanes ?? []).filter(l => litLanes(ui.filter).includes(l.id)) : []

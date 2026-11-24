@@ -156,7 +156,14 @@ import {
 } from '../adapters/call-receipts.ts'
 import { allCards, changeTodos, readCard, writeCard } from '../adapters/cards.ts'
 import { createClaudeHome, cwdOf } from '../adapters/claude-home.ts'
-import { configFile, editCategories, loadConfig, setRemoteOn, setTunnelOn } from '../adapters/config-file.ts'
+import {
+  configFile,
+  editCategories,
+  loadConfig,
+  setRemoteOn,
+  setRemoteOwnerAdmin,
+  setTunnelOn,
+} from '../adapters/config-file.ts'
 import { cygpath, takeGitBashArgs } from '../adapters/git-bash.ts'
 import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
@@ -232,7 +239,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | agents [--json] | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | update | housekeeping [--dry-run | status] [--json] | presence [here | away | call] | journal [--since <when> | --away] [--json] | spend [--day <d>] [--lane <id>] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | resume --agy <conversation id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp [--agents] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>] | db rekey --from <old> --to <new> [--dry-run] [--json]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | agents [--json] | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | owner-admin on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | update | housekeeping [--dry-run | status] [--json] | presence [here | away | call] | journal [--since <when> | --away] [--json] | spend [--day <d>] [--lane <id>] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | resume --agy <conversation id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp [--agents] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>] | db rekey --from <old> --to <new> [--dry-run] [--json]] [--session <id|name|pane>]`
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal', 'spend'])
 
@@ -2094,17 +2101,25 @@ async function adoptPi(): Promise<void> {
 }
 
 /**
- * `board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]]`: the remote mode
+ * `board remote [on | off | pwa on|off | owner-admin on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]]`: the remote mode
  * (core/remote.ts). On and off edit config.json (off takes back `tailscale serve` too); `pwa`
  * sets serve up for the board in a phone's browser (core/pwa.ts) and shows its address and QR
- * code; the rest goes through the running board, which holds the requests to pair. `desk` marks a
+ * code; `owner-admin` allows the owner's own strong login to use admin panels over remote listeners
+ * on a headless master (#694); the rest goes through the running board, which holds the requests to pair. `desk` marks a
  * paired device as the owner's desk (RemoteDevice.desk), `desk <id> off` takes it back. Without an
  * argument: where it listens, who waits, who is paired.
  */
 async function remote(): Promise<void> {
   const [op = 'status', id = ''] = words
-  const usage = 'usage: board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]]'
+  const usage =
+    'usage: board remote [on | off | pwa on|off | owner-admin on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]]'
   const webPort = Number(cfg.port) || 12422
+  if (op === 'owner-admin') {
+    if (id !== 'on' && id !== 'off') throw new Error(usage)
+    const r = setRemoteOwnerAdmin(id === 'on')
+    if (!r.ok) throw new Error(r.error)
+    return console.log(id === 'on' ? 'ok · owner-admin on' : 'ok · owner-admin off')
+  }
   if (op === 'pwa') {
     const { pwaOff, pwaOn } = await import('../services/pwa.ts')
     if (id === 'off') {
@@ -2168,8 +2183,13 @@ async function remote(): Promise<void> {
   }
   if (op !== 'status') throw new Error(usage)
   const view = (await call()) as Partial<RemoteView>
-  if (!view.on) return console.log('remote off · `board remote on` lets a paired phone use this board over Tailscale')
+  if (!view.on) {
+    console.log('remote off · `board remote on` lets a paired phone use this board over Tailscale')
+    if (view.ownerAdmin) console.log('owner-admin: on')
+    return
+  }
   console.log(`remote on · ${view.url ?? `not listening: ${view.error ?? 'starting'}`}`)
+  if (view.ownerAdmin) console.log('owner-admin: on')
   const pwa = view.pwa
   if (pwa?.on)
     console.log(
@@ -2856,6 +2876,8 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
   const card = key ? readCard(key) : null
   const cwd = s && typeof s.cwd === 'string' && s.cwd ? s.cwd : process.cwd()
   const lane = key ? (typeof card?.category === 'string' && card.category) || categoryFor(c, cwd) || null : null
+  // Fetched at most once when `nodes` is on, never when `nodes` is off.
+  let boardPayload: Promise<Record<string, unknown> | null> | null = null
   return {
     cfg: c,
     actor: key ? { kind: 'session', key, name } : { kind: 'owner' },
@@ -2873,17 +2895,62 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
       })
     },
     findSession: async word => {
-      const w = word.toLowerCase()
-      const items = (await sessions()).filter(i =>
-        [i.name, i.autoName, i.pane, i.session, i.key].some(v => v && v.toLowerCase() === w),
-      )
-      if (items.length > 1)
-        throw new Error(
-          `"${word}" names ${items.length} sessions (${items.map(i => i.pane || i.key).join(', ')}): give its pane`,
+      const localFind = async () => {
+        const w = word.toLowerCase()
+        const items = (await sessions()).filter(i =>
+          [i.name, i.autoName, i.pane, i.session, i.key].some(v => v && v.toLowerCase() === w),
         )
-      const [item] = items
-      if (item) return { kind: 'session', key: item.key, name: item.name || item.autoName || item.key.slice(0, 8) }
-      return UUID.test(word) || /^pane-\S+$/.test(word) ? { kind: 'session', key: word, name: word.slice(0, 8) } : null
+        if (items.length > 1)
+          throw new Error(
+            `"${word}" names ${items.length} sessions (${items.map(i => i.pane || i.key).join(', ')}): give its pane`,
+          )
+        const [item] = items
+        if (item)
+          return { kind: 'session' as const, key: item.key, name: item.name || item.autoName || item.key.slice(0, 8) }
+        return UUID.test(word) || /^pane-\S+$/.test(word)
+          ? { kind: 'session' as const, key: word, name: word.slice(0, 8) }
+          : null
+      }
+      if (!c.nodes) return localFind()
+      const { LOCAL, nodesConfig, parseNodeKey } = await import('../core/nodes.ts')
+      const nodesCfg = nodesConfig(c.nodes, (await import('node:os')).hostname())
+      if (!nodesCfg) return localFind()
+      // Master with `nodes` (#693): resolve against the board aggregate (or local + offline node
+      // snapshots when the web board is not running) using the same rules as `board send`, falling
+      // back to paneless non-sleeping local cards that `--to` used to resolve before `nodes`.
+      boardPayload ??= c.web === false ? Promise.resolve(null) : c === cfg ? boardAnswer() : fetchBoard(c.port)
+      const body = await boardPayload
+      const A = await import('../core/agent-send.ts')
+      let own = ''
+      let allItems: unknown[]
+      if (body) {
+        own = A.ownDeviceOf(body)
+        allItems = Array.isArray(body.items) ? body.items : []
+      } else {
+        const { createDeviceStore } = await import('../adapters/node-store.ts')
+        const { nodePart } = await import('../core/node-items.ts')
+        const store = createDeviceStore()
+        const remote = Object.entries(nodesCfg.devices).flatMap(([id, dev]) => {
+          if (id === LOCAL || dev.revoked) return []
+          const snap = store.snapshot(id)
+          return snap ? (nodePart(snap.part, id)?.items ?? []) : []
+        })
+        own = nodesCfg.id
+        allItems = [...(await sessions()), ...remote]
+      }
+      const hit =
+        A.resolveTarget(A.targetsOf(allItems, own), word, own) ??
+        A.resolveTarget(A.targetsOf(allItems, own, { includePaneless: true }), word, own)
+      if (hit && 'error' in hit) {
+        const { ThreadError } = await import('../adapters/work-thread-store.ts')
+        throw new ThreadError('ambiguous', hit.error)
+      }
+      if (hit) return { kind: 'session', key: hit.target.key, name: hit.target.name }
+      if (UUID.test(word) || /^pane-\S+$/.test(word)) return { kind: 'session', key: word, name: word.slice(0, 8) }
+      const at = parseNodeKey(word)
+      if (at && Object.hasOwn(nodesCfg.devices, at.device) && (UUID.test(at.key) || /^pane-\S+$/.test(at.key)))
+        return { kind: 'session', key: word, name: at.key.slice(0, 8) }
+      return null
     },
     sessionByKey: async word => {
       const item = (await sessions()).find(i => i.key === word || i.session === word)

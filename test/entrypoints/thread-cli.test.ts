@@ -499,3 +499,107 @@ test("a shared thread (#394): the owner's entry from the command waits for the p
   expect(quiet.out).toBeUndefined()
   expect(asked).toHaveLength(1)
 })
+
+test('#693 owner post schedules immediate wake delivery to assignee (or creator when unassigned); agent post routes as before', async () => {
+  const { run } = setUp()
+  const owner: Party = { kind: 'owner' }
+  const anna: Party = { kind: 'session', key: 'anna-1', name: 'anna' }
+  const ben: Party = { kind: 'session', key: '@server-1:ben-1', name: 'ben' }
+  await run(anna, ['new', 'Unassigned thread'])
+  await run(master, ['new', '--to', 'ben', 'Assigned to node'], { findSession: async () => ben })
+  // Even if the assignee unwatched the thread, an owner post still reaches and wakes it.
+  await run(ben, ['unwatch', 'atlas-2'])
+
+  // Owner post on unassigned thread reaches creator immediately without noWake.
+  await run(owner, ['post', 'atlas-1', 'please check rows'])
+  const [e1] = events('anna-1')
+  expect(e1).toMatchObject({
+    key: 'anna-1',
+    next: NOW,
+    text: 'atlas-1 (owner): please check rows. More: board thread changes',
+  })
+  expect(e1?.noWake).toBeUndefined()
+  expect(e1?.idle).toBeUndefined()
+  expect(e1?.ownerPosts).toMatchObject([
+    { thread: e1?.ownerPosts?.[0]?.thread ?? '', key: 'atlas-1', target: { key: 'anna-1', name: 'anna' } },
+  ])
+  expect(typeof e1?.ownerPosts?.[0]?.seq).toBe('number')
+
+  // Owner post on assigned thread reaches node assignee immediately without noWake.
+  await run(owner, ['post', 'atlas-2', 'recheck column B'])
+  const [e2] = events('@server-1:ben-1')
+  expect(e2).toMatchObject({
+    key: '@server-1:ben-1',
+    next: NOW,
+    text: 'atlas-2 (owner): recheck column B. More: board thread changes',
+  })
+  expect(e2?.noWake).toBeUndefined()
+  expect(e2?.ownerPosts?.[0]?.key).toBe('atlas-2')
+
+  // Owner post on owner-created thread with no assignee schedules nothing.
+  await run(owner, ['new', 'Owner only'])
+  await run(owner, ['post', 'atlas-3', 'self note'])
+  expect(listEntries().filter(e => e.text.includes('atlas-3'))).toEqual([])
+
+  // Agent post routes as before: creator hears status change with noWake, poster gets no echo, no ownerPosts.
+  deliver('anna-1')
+  await run(mapper, ['post', 'atlas-1', '--status', 'doing', 'agent working'])
+  const [e3] = events('anna-1')
+  expect(e3?.noWake).toBe(true)
+  expect(e3?.ownerPosts).toBeUndefined()
+  expect(events(mapper.kind === 'session' ? mapper.key : '')).toEqual([])
+
+  // Unwatched assignee with no prior cursor still sees only the owner post on `board thread changes`, not prior entries.
+  const cleo: Party = { kind: 'session', key: 'cleo-no-cursor', name: 'cleo' }
+  await run(master, ['new', 'Before cleo'])
+  await run(master, ['new', '--to', 'cleo', 'Cleo task'], { findSession: async () => cleo })
+  await run(cleo, ['unwatch', 'atlas-5'])
+  const db = openDb({ create: false })
+  assert.ok(db)
+  try {
+    db.write('test', tx => tx.db.query('DELETE FROM thread_cursor WHERE session = ?').run('cleo-no-cursor'))
+  } finally {
+    db.close()
+  }
+  await run(owner, ['post', 'atlas-5', 'wake cleo'])
+  const cleoChanges = (await run(cleo, ['changes'])).out.split('\n')
+  expect(cleoChanges).toEqual(['atlas-5 · doing · cleo · Cleo task · +1'])
+
+  // Status-only owner post (no text, files or links) does NOT wake a sleeper or bypass gapSec.
+  const dan: Party = { kind: 'session', key: 'dan-1', name: 'dan' }
+  await run(master, ['new', '--to', 'dan', 'Status only task'], { findSession: async () => dan })
+  await run(dan, ['unwatch', 'atlas-6'])
+  await run(owner, ['post', 'atlas-6', '--status', 'dropped'])
+  expect(events('dan-1')).toEqual([])
+
+  // Even when watching (`--what status`), status-only owner post keeps noWake and respects gapSec.
+  await run(dan, ['new', 'Watched status only'])
+  deliver('dan-1')
+  const { openDb: openThreadDb } = await import('../../src/adapters/db.ts')
+  const { threadByKey: byKey } = await import('../../src/adapters/work-thread-store.ts')
+  const { postEntry } = await import('../../src/services/work-threads.ts')
+  await run(owner, ['post', 'atlas-7', '--status', 'dropped'])
+  expect(events('dan-1')[0]?.noWake).toBe(true)
+  expect(events('dan-1')[0]?.ownerPosts).toBeUndefined()
+  deliver('dan-1')
+
+  // Board-written post authored by owner without directOwner (e.g. internal verify/share note) does NOT wake.
+  const d = openThreadDb({ create: false })
+  assert.ok(d)
+  try {
+    const h = byKey(d, 'atlas-6')
+    if (!h) throw new Error('missing atlas-6')
+    const cfg = { agents: true, gapSec: 60, share: true }
+    postEntry({ db: d, cfg, actor: owner, now: NOW }, h, { type: 'note', text: 'internal note', noDirect: true })
+    expect(events('dan-1')).toEqual([])
+  } finally {
+    d.close()
+  }
+
+  // Long owner post (> 300 chars) keeps full text (up to MAX_TEXT), not clipped to 160 chars.
+  const longText = `Please check every row: ${'x'.repeat(320)} END_MARKER`
+  await run(owner, ['post', 'atlas-1', longText])
+  const [longEvt] = events('anna-1')
+  expect(longEvt?.text).toContain('END_MARKER')
+  expect((longEvt?.text ?? '').length).toBeGreaterThan(320)
+})

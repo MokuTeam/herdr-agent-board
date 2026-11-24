@@ -133,7 +133,7 @@ function movedAway(t: Target, by: Target, own: string, hasBoardNode: boolean): b
 }
 
 /** The cards of a payload's `items` a message can go to; anything else in the list is left out. */
-export function targetsOf(items: unknown, own = ''): Target[] {
+export function targetsOf(items: unknown, own = '', o: { includePaneless?: boolean } = {}): Target[] {
   if (!Array.isArray(items)) return []
   const all: Target[] = []
   for (const i of items) {
@@ -161,7 +161,9 @@ export function targetsOf(items: unknown, own = ''): Target[] {
     })
   }
   const hasBoardNode = all.some(t => t.device === LEGACY_MASTER)
-  const kept = all.filter(t => t.sleeping || ((t.pane || t.day) && !all.some(o => replaced(t, o))))
+  const kept = all.filter(
+    t => t.sleeping || (o.includePaneless && !t.pane) || ((t.pane || t.day) && !all.some(x => replaced(t, x))),
+  )
   // Drop cards superseded by an explicit move mark first so a chain move (A -> B -> C) never lets
   // stale card A beat final card C by clock (#642), then apply #641 clock fallback on the rest.
   const unmoved = kept.filter(t => !kept.some(o => movedByMark(t, o, own, hasBoardNode)))
@@ -268,6 +270,34 @@ export function matching(targets: readonly Target[], named: string): Target[] {
   if (ref.length < 8) return byName
   const byRef = byName.filter(t => idOf(t.key, t.session).toLowerCase().startsWith(ref))
   return byRef.length || byName.length !== 1 ? byRef : byName
+}
+
+/**
+ * Resolves a session reference (name, "Name [ref]", key, session id, `@<device>:<id>`, or local
+ * pane id) against `targets` using the same matching and ambiguity rules as `board send` (#693).
+ * Returns `{ target }` on a unique match, `{ error, ambiguous: true }` when several sessions fit,
+ * or `null` when none fits.
+ */
+export function resolveTarget(
+  targets: readonly Target[],
+  word: string,
+  own = '',
+): { target: Target } | { error: string; ambiguous: true } | null {
+  let fits = matching(targets, word)
+  if (!fits.length) {
+    const w = word.trim().toLowerCase()
+    if (w) fits = targets.filter(t => t.device === null && t.pane?.toLowerCase() === w)
+  }
+  if (!fits.length) return null
+  const [target] = fits
+  if (!target || fits.length > 1)
+    return {
+      ambiguous: true,
+      error:
+        `"${word.trim()}" fits more than one session (${fits.map(t => `${labelOf(t)} ${whereOf(t, own)}`).join(', ')}): ` +
+        'give its name with its ref, or its key',
+    }
+  return { target }
 }
 
 /** The message as the board carries it, or why it does not. */

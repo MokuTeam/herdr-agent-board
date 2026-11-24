@@ -277,13 +277,22 @@ export function feedOf(head: ThreadHead, entries: readonly ThreadEntryView[], op
     const sharedHere = shared && e.type === 'system' && !e.text && !before && e.author.kind === 'peer'
     // Only this board's own lines are said as such; a teammate's system entry carries no words (#394).
     const ownWords = !!e.text && (e.author.kind !== 'peer' || e.private === true)
-    const said = shared && e.type === 'system' && (ownWords || sharedHere) && !e.closed && !created
+    const localNotice =
+      !shared &&
+      e.type === 'system' &&
+      e.private === true &&
+      e.author.kind === 'owner' &&
+      !!e.text &&
+      !Object.keys(set).length &&
+      !e.closed &&
+      !created
+    const said = (shared && e.type === 'system' && (ownWords || sharedHere) && !e.closed && !created) || localNotice
     const did: Extract<FeedItem, { kind: 'status' }>['did'] | null = created
       ? 'created'
       : said
-        ? e.text === SHARED_TEXT || sharedHere
+        ? !localNotice && (e.text === SHARED_TEXT || sharedHere)
           ? 'shared'
-          : e.text === UNSHARED_TEXT
+          : !localNotice && e.text === UNSHARED_TEXT
             ? 'unshared'
             : 'said'
         : e.closed

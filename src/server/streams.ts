@@ -30,9 +30,12 @@ export function remoteRefusal(
   desk = false,
   teamOwner = false,
   owner = false,
+  ownerAdmin = false,
 ): Response | null {
   const focus = desk && deskFocus(raw) && deskFocus(path)
   if (!focus && (desktopOnly(raw) || desktopOnly(path))) return json(403, { error: 'desktop' })
+  // Headless master (#694): owner's own strong login with remote.ownerAdmin on may use localOnly admin routes.
+  if (ownerAdmin) return null
   const pairing = desk && raw === '/api/remote' && path === '/api/remote'
   // The owner's own login, with the team on, reads and writes the team as on the computer (#355).
   const team = teamOwner && ownerTeam(raw) && ownerTeam(path)
@@ -51,6 +54,16 @@ export async function deskOpRefusal(req: Request, raw: string): Promise<Response
   if (req.method !== 'POST' || raw !== '/api/remote') return null
   const body = await readBody(req.clone()).catch(() => null)
   return DESK_REMOTE_OPS.has(isRecord(body) ? body.op : undefined) ? null : json(403, { error: 'local' })
+}
+
+const SAFE_OP = /^[a-z0-9][a-z0-9._-]{0,47}$/i
+
+/** Short `op` field from a mutating JSON request for the audit log, without reading or logging any other field (#694). */
+export async function adminOpOf(req: Request): Promise<string | undefined> {
+  if (req.method === 'GET' || req.method === 'HEAD') return undefined
+  const body = await readBody(req.clone()).catch(() => null)
+  const op = isRecord(body) ? body.op : undefined
+  return typeof op === 'string' && SAFE_OP.test(op) ? op : undefined
 }
 
 /**

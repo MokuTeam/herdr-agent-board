@@ -514,6 +514,7 @@ export function createVerifier(host: VerifyHost): Verifier {
             waitingOn: SWITCHED_OFF,
             ...(run && { set: { verifier: null } }),
             ...(sharingOf(head) && { private: true }),
+            noDirect: true,
           })
           n++
         } catch (err) {

@@ -33,7 +33,8 @@ import {
   RATES,
   RateLimiter,
 } from '../core/access.ts'
-import { REMOTE_API } from '../core/remote.ts'
+import type { AdminEdge } from '../core/links.ts'
+import { isOwnerAdminRoute, isStrongTunnelLogin, REMOTE_API, remoteConfig } from '../core/remote.ts'
 import { teamConfig } from '../core/team.ts'
 import { boardPorts, publicHosts, publicOrigin, tunnelConfig, tunnelPort, tunnelProblems } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
@@ -41,7 +42,7 @@ import { threadsConfig } from '../core/work-threads.ts'
 import type { Access, SignIn, Who } from '../services/access.ts'
 import type { Probes } from '../services/tunnel.ts'
 import { type Body, dispatch, type GuardState, json, peerOf, type Route, readBody } from './http.ts'
-import { decoded, endsWhenGone, remoteRefusal } from './streams.ts'
+import { adminOpOf, decoded, endsWhenGone, remoteRefusal } from './streams.ts'
 import { probeAnswer } from './tunnel-probe.ts'
 
 export interface TunnelListenerOptions {
@@ -60,6 +61,12 @@ export interface TunnelListenerOptions {
   log: (text: string) => void
   /** listening() changed: it started, stopped or moved. */
   onChange: () => void
+  /** Extra admin route resolver (e.g. /api/nodes, /api/nodes/setup) used only when `ownerAdmin` is authorised (#694). */
+  adminRoutes?: (path: string) => Route[] | null
+  /** Preflight check that the audit store is writable before executing a remote admin mutation (#694). */
+  onAdminAuditCheck?: () => boolean
+  /** Record each admin action unlocked by `remote.ownerAdmin` in the edge log (#694). */
+  onAdminAction?: (entry: Omit<AdminEdge, 'seq'>) => void
 }
 
 export interface TunnelListener {
@@ -179,7 +186,10 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
       const room = o.access.rate('open', who.address)
       if (!room.ok) return limited(room.retryAfterS)
       const token = loginToken(cookie)
-      const signedIn = !!(token && o.access.verify(token))
+      const login = token ? o.access.verify(token) : null
+      const signedIn = !!login
+      const ownerAdmin =
+        !!login && isStrongTunnelLogin(login, o.access.ready()) && remoteConfig(o.cfg.remote).ownerAdmin
       // Nothing more before a login: no version, host name or platform.
       const res = json(200, {
         board: 'agent-board',
@@ -191,6 +201,8 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         ...(signedIn && teamConfig(o.cfg.team) !== null && { team: true }),
         // Threads (#392): the tunnel's login is the owner's own, while threads are on.
         ...(signedIn && threadsConfig(o.cfg.threads) && { threads: true }),
+        // Headless master admin (#694): only when signed in with a strong login and ownerAdmin is on.
+        ...(ownerAdmin && { ownerAdmin: true }),
       })
       return signedIn ? res : clearedFor(res, cookie)
     }
@@ -257,8 +269,11 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
       if (path === null) return json(400, { error: 'path' })
       if (NOT_HERE.test(raw) || NOT_HERE.test(path)) return json(404, { error: 'not found' })
       // The tunnel's login is the owner's own: with the team on, the Team panel works here (#355).
-      // Its login is the owner's own: threads too (#392).
-      const refused = remoteRefusal(raw, path, false, teamConfig(o.cfg.team) !== null, true)
+      // Its login is the owner's own: threads too (#392). With remote.ownerAdmin on (#694), strong
+      // logins may also reach localOnly admin routes.
+      const teamOn = teamConfig(o.cfg.team) !== null
+      const ownerAdmin = isStrongTunnelLogin(login, o.access.ready()) && remoteConfig(o.cfg.remote).ownerAdmin
+      const refused = remoteRefusal(raw, path, false, teamOn, true, ownerAdmin)
       if (refused) return refused
       if (req.method === 'POST' && raw === '/api/logout') {
         o.access.endToken(token)
@@ -281,15 +296,36 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         const r = o.access.addPasskey(login.id, body, { origin, rpId: domain }, who.userAgent)
         return r.ok ? json(200, { ok: true, id: r.id }) : json(400, { ok: false, error: r.error })
       }
-      const res = await dispatch(
-        o.routes,
-        req,
-        url,
-        path,
-        { ...o.guards, origins: [origin], ownFiles: o.ownFiles },
-        () => peerOf(srv, req),
-      )
-      return endsWhenGone(res, gone => o.access.watch(login.id, gone), { 'x-accel-buffering': 'no' })
+      const selected = ownerAdmin ? (o.adminRoutes?.(path) ?? o.routes) : o.routes
+      const logAdmin = ownerAdmin && isOwnerAdminRoute(req.method, raw, path, teamOn)
+      if (logAdmin && o.onAdminAuditCheck && !o.onAdminAuditCheck()) return json(503, { ok: false, error: 'audit' })
+      const op = logAdmin ? await adminOpOf(req) : undefined
+      let res: Response | undefined
+      try {
+        res = await dispatch(
+          selected,
+          req,
+          url,
+          path,
+          { ...o.guards, origins: [origin], ownFiles: o.ownFiles, remote: true },
+          () => peerOf(srv, req),
+        )
+        return endsWhenGone(res, gone => o.access.watch(login.id, gone), { 'x-accel-buffering': 'no' })
+      } finally {
+        if (logAdmin) {
+          o.onAdminAction?.({
+            kind: 'admin',
+            at: Date.now(),
+            method: req.method,
+            path: path.slice(0, 200),
+            ...(op && { op }),
+            status: res?.status ?? 500,
+            via: 'tunnel',
+            who: `${login.method}:${login.id}${login.label ? ` (${login.label})` : ''}`,
+            from: who.address || 'unknown',
+          })
+        }
+      }
     } catch (err) {
       // The path only: a query can carry the page's file token.
       o.log(`tunnel ${req.method} ${url ? url.pathname : ''}: ${messageOf(err)}`)

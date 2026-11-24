@@ -2,7 +2,9 @@
 // the board in a phone's browser too (core/pwa.ts), and answering the phones that ask to pair. Never from a phone: the remote listener refuses
 // /api/remote for them (server/remote.ts), but for a desk's answers to a pairing. Marking a desk is
 // for this computer only. /api/hello says what this board is, on both.
-import { setRemoteOn } from '../../adapters/config-file.ts'
+import { setRemoteOn, setRemoteOwnerAdmin } from '../../adapters/config-file.ts'
+import { isRecord } from '../../adapters/json-store.ts'
+import { remoteConfig } from '../../core/remote.ts'
 import type { Config } from '../../core/types.ts'
 import { pwaOff, pwaOn, remoteOff } from '../../services/pwa.ts'
 import type { Remote } from '../../services/remote.ts'
@@ -12,13 +14,21 @@ import type { RemoteListener } from '../remote.ts'
 export function remoteRoutes(listener: RemoteListener, remote: Remote, cfg: Config, webPort: number): Route[] {
   return [
     { method: 'GET', path: '/api/hello', handle: () => json(200, listener.hello()) },
-    { method: 'GET', path: '/api/remote', handle: () => json(200, listener.view() ?? { on: false }) },
+    {
+      method: 'GET',
+      path: '/api/remote',
+      handle: () =>
+        json(
+          200,
+          listener.view() ?? (remoteConfig(cfg.remote).ownerAdmin ? { on: false, ownerAdmin: true } : { on: false }),
+        ),
+    },
     {
       method: 'POST',
       path: '/api/remote',
       guard: ['board-header', 'origin'],
       async handle(_req, ctx) {
-        const { op, id } = await ctx.body()
+        const { op, id, on } = await ctx.body()
         const key = typeof id === 'string' ? id : ''
         switch (op) {
           case 'on': {
@@ -27,6 +37,22 @@ export function remoteRoutes(listener: RemoteListener, remote: Remote, cfg: Conf
           }
           case 'off': {
             const r = await remoteOff(cfg, webPort)
+            return json(r.ok ? 200 : 409, r)
+          }
+          case 'owner-admin': {
+            if (typeof on !== 'boolean') return json(400, { ok: false, error: 'on must be boolean' })
+            const r = setRemoteOwnerAdmin(on)
+            if (r.ok) {
+              const next: Record<string, unknown> = isRecord(cfg.remote)
+                ? { ...cfg.remote }
+                : cfg.remote === true
+                  ? { on: true }
+                  : {}
+              if (on) next.ownerAdmin = true
+              else delete next.ownerAdmin
+              cfg.remote = Object.keys(next).length ? (next as unknown as Config['remote']) : undefined
+              listener.configChanged()
+            }
             return json(r.ok ? 200 : 409, r)
           }
           case 'pwa-on':

@@ -45,7 +45,7 @@ describe('BrandMark & NavRail header (#705)', () => {
     expect(rects[0]?.attrs.get('fill')).toBe('currentColor')
   })
 
-  test('NavRail renders BrandMark and MokuBoard wordmark in #rail-expand across locales', () => {
+  test('NavRail shows the MokuBoard wordmark in #rail-expand without a second mark (#719)', () => {
     for (const lang of ['en', 'ru'] as const) {
       const nodes = renderInBoard(
         <NavRail
@@ -64,7 +64,7 @@ describe('BrandMark & NavRail header (#705)', () => {
         lang,
       )
       const headBtn = byId(nodes, 'rail-expand')
-      expect(findAll([headBtn], el => el.tag === 'svg' && hasClass(el, 'brand-mark'))).toHaveLength(1)
+      expect(findAll([headBtn], el => el.tag === 'svg' && hasClass(el, 'brand-mark'))).toHaveLength(0)
       expect(findAll([headBtn], el => hasClass(el, 'rail-brand')).map(textOf)).toEqual(['MokuBoard'])
     }
   })

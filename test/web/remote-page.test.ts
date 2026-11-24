@@ -5,11 +5,13 @@ import { expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { cardMenu, chipMenu, launchMenu, type MenuEntry, type MenuItem } from '../../web/src/models/menu-model.ts'
 import {
+  adminHere,
   gateAfter,
   helloOf,
   keepAuth,
   keptAuth,
   nextRetryMs,
+  ownerAdminPage,
   pairName,
   pollStep,
   remotePage,
@@ -170,4 +172,29 @@ test('the board on show stays through a check with no answer or a refusal; only 
   expect([nextRetryMs(null), nextRetryMs(2000), nextRetryMs(4000), nextRetryMs(8000), nextRetryMs(15_000)]).toEqual([
     2000, 4000, 8000, 15_000, 15_000,
   ])
+})
+
+test('helloOf parses ownerAdmin only when true; adminHere unlocks only local or data-owner-admin (#694)', () => {
+  expect(helloOf({ board: 'agent-board', auth: 'login', signedIn: true, ownerAdmin: true })?.ownerAdmin).toBe(true)
+  expect(
+    helloOf({ board: 'agent-board', auth: 'login', signedIn: true, ownerAdmin: 'yes' })?.ownerAdmin,
+  ).toBeUndefined()
+  expect(helloOf({ board: 'agent-board', host: 'BOX', paired: true })?.ownerAdmin).toBeUndefined()
+
+  const attrs = new Set<string>()
+  const doc = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: { documentElement: { hasAttribute: (name: string) => attrs.has(name) } },
+  })
+  try {
+    expect([remotePage(), ownerAdminPage(), adminHere()]).toEqual([false, false, true])
+    attrs.add('data-remote')
+    expect([remotePage(), ownerAdminPage(), adminHere()]).toEqual([true, false, false])
+    attrs.add('data-owner-admin')
+    expect([remotePage(), ownerAdminPage(), adminHere()]).toEqual([true, true, true])
+  } finally {
+    if (doc) Object.defineProperty(globalThis, 'document', doc)
+    else Reflect.deleteProperty(globalThis, 'document')
+  }
 })

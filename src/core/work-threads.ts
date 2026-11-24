@@ -13,6 +13,7 @@
 import { switched, switchedOff, withField } from './feature-switch.ts'
 import { readModel } from './launch/model.ts'
 import { DEVICE_ID, LOCAL } from './node-key.ts'
+import { MAX_TEXT } from './schedule-rules.ts'
 import type { CaseSessionView } from './work-cases.ts'
 
 export const THREAD_STATUSES = ['next', 'doing', 'waiting', 'owner', 'done', 'dropped'] as const
@@ -1024,6 +1025,8 @@ export interface DigestItem {
   verified?: boolean
   /** The owner kept the held done of the session that hears it open (#492): it is back with it. */
   kept?: boolean
+  /** An owner post on the thread (#693): the owner's note, shown when no status summary says it. */
+  ownerNote?: string
 }
 
 function clause(d: DigestItem, detailMax: number): { text: string; detail: string } {
@@ -1035,29 +1038,36 @@ function clause(d: DigestItem, detailMax: number): { text: string; detail: strin
     if (d.closed && h.status !== 'done' && h.status !== 'dropped')
       return { text: `${h.key}: ${closedText(d.closed)}`, detail: '' }
     const word = STATUS_WORD[h.status]
-    const said = h.status === 'waiting' || h.status === 'owner' ? h.waitingOn : h.summary
+    const said = d.ownerNote || (h.status === 'waiting' || h.status === 'owner' ? h.waitingOn : h.summary) || ''
     return { text: `${h.key} ${word}`, detail: detail(said) }
   }
   if (d.failed !== undefined)
     return { text: `${h.key} verification failed`, detail: detail(`${d.failed}. Reasons: board thread show ${h.key}`) }
   if (d.kept) return { text: `${h.key} kept open by the owner: your done is back with you`, detail: '' }
   if (d.ask !== undefined) return { text: `${h.key} asks the owner`, detail: detail(d.ask) }
+  if (d.ownerNote !== undefined) return { text: `${h.key} (owner)`, detail: detail(d.ownerNote) }
   return { text: `${h.key} +${d.entries}`, detail: '' }
 }
 
 /**
  * The event's line (6.5): at most EVENT_SPELLED threads spelled out (status changes first, in the
- * order they came), then "and N more", then where to read more; EVENT_MAX characters at most, the
- * details cut evenly to fit. A peer's words never go in: only a local entry's summary does.
+ * order they came), then "and N more", then where to read more; EVENT_MAX characters at most (or
+ * MAX_TEXT when an owner post note is included, #693), the details cut evenly to fit. A peer's
+ * words never go in: only a local entry's summary or owner post does.
  */
 export function digestLine(items: readonly DigestItem[]): string {
-  const told = (d: DigestItem): boolean => d.ask !== undefined || d.failed !== undefined || !!d.kept
+  const told = (d: DigestItem): boolean =>
+    d.ask !== undefined || d.failed !== undefined || !!d.kept || d.ownerNote !== undefined
   const ordered = [...items.filter(d => d.status), ...items.filter(d => !d.status && told(d))].concat(
     items.filter(d => !d.status && !told(d)),
   )
   const shown = ordered.slice(0, EVENT_SPELLED)
   const more = ordered.length - shown.length
   const tail = `${more > 0 ? ` · and ${more} more` : ''}. More: board thread changes`
+  const hasOwnerNote = items.some(d => d.ownerNote !== undefined)
+  const lineMax = hasOwnerNote ? MAX_TEXT : EVENT_MAX
+  const startDetail = hasOwnerNote ? MAX_TEXT : SUMMARY_MAX
+  const step = hasOwnerNote ? 64 : 4
   const build = (max: number): string =>
     shown
       .map(d => {
@@ -1065,9 +1075,9 @@ export function digestLine(items: readonly DigestItem[]): string {
         return c.detail ? `${c.text}: ${c.detail}` : c.text
       })
       .join(' · ') + tail
-  let line = build(SUMMARY_MAX)
-  for (let max = SUMMARY_MAX; line.length > EVENT_MAX && max > 8; max -= 4) line = build(max)
-  return clip(line, EVENT_MAX)
+  let line = build(startDetail)
+  for (let max = startDetail; line.length > lineMax && max > 8; max -= step) line = build(max)
+  return clip(line, lineMax)
 }
 
 /** The tag a thread event is typed with, from the scheduler's `from`: `[board reminder from threads]`. */

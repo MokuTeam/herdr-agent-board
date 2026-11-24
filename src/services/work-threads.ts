@@ -48,9 +48,10 @@ import {
   watchesFor,
   watchesOf,
 } from '../adapters/work-thread-store.ts'
+import { parseNodeKey } from '../core/node-key.ts'
 import { OWNER } from '../core/owner-watch.ts'
 import type { ThreadsPayload } from '../core/payload.ts'
-import type { ScheduleEntry } from '../core/schedule-rules.ts'
+import { MAX_TEXT, type ScheduleEntry } from '../core/schedule-rules.ts'
 import { agentBoardOf, isMirrored } from '../core/thread-import.ts'
 import type { Config } from '../core/types.ts'
 import { safeName } from '../core/upload-name.ts'
@@ -76,6 +77,7 @@ import {
   LINK_MAX,
   LINKS_MAX,
   MINE,
+  OWNER as OWNER_PARTY,
   oneLine,
   type Party,
   SUMMARY_MAX,
@@ -324,6 +326,10 @@ export interface PostInput {
   state?: string
   /** Acceptance lines to add (#492): one entry carries one; more than one: an entry each after it. */
   accept?: readonly string[]
+  /** Owner post written directly by the owner (CLI `post` or `/api/threads/:id` `post`) opts into direct wake/delivery (#693). */
+  directOwner?: boolean
+  /** Suppresses direct wake/delivery on internal owner transitions (#693). */
+  noDirect?: boolean
 }
 
 /** Verified done is off on this board (#492). */
@@ -545,7 +551,19 @@ export function postEntry(ctx: ThreadsCtx, head: ThreadHead, input: PostInput): 
     for (const f of files) rmSync(filePath(f.ref, ctx.state), { force: true })
     throw err
   }
-  return { ...done.written, ...tellWatchers(ctx, done.heads) }
+  return {
+    ...done.written,
+    ...tellWatchers(
+      ctx,
+      done.heads,
+      input.directOwner && !input.noDirect && isOwnerPostContent(done.written.entry)
+        ? (() => {
+            const target = ownerPostTarget(done.written.head)
+            return target ? { session: target.key, name: target.name, seq: done.written.entry.seq } : undefined
+          })()
+        : undefined,
+    ),
+  }
 }
 
 /** `board thread ask`: a question for the owner; the thread waits on the owner with it. */
@@ -737,34 +755,71 @@ function covers(w: Watch, h: ThreadHead, session: string): boolean {
   return w.target === MINE && (isSession(h.createdBy, session) || isSession(h.assignee, session))
 }
 
+export interface OwnerPostRef {
+  thread: string
+  key: string
+  target: { key: string; name: string }
+  seq?: number
+}
+
+/**
+ * Who an owner post in `head` must reach (#693): its assignee when that is a session, else
+ * (when there is no assignee) its creator when that is a session; null otherwise.
+ */
+export function ownerPostTarget(
+  head: Pick<ThreadHead, 'assignee' | 'createdBy'>,
+): Extract<Party, { kind: 'session' }> | null {
+  if (head.assignee) return head.assignee.kind === 'session' ? head.assignee : null
+  return head.createdBy.kind === 'session' ? head.createdBy : null
+}
+
+/** Whether an entry is an owner post that carries content (text, files, or links) to deliver (#693). */
+export function isOwnerPostContent(e: Pick<ThreadEntry, 'author' | 'type' | 'text' | 'files' | 'links'>): boolean {
+  if (e.author.kind !== 'owner' || e.type !== 'note') return false
+  return !!(e.text || e.files?.length || e.links?.length)
+}
+
 interface Heard {
   items: DigestItem[]
   /** The watches that matched: they decide idle and wake. */
   matched: Watch[]
   /** Every entry seen, by thread. */
   byThread: Map<string, { head: ThreadHead; entries: ThreadEntry[] }>
+  /** Owner posts targeting `session` in this window (#693). */
+  ownerPosts: OwnerPostRef[]
 }
 
 /**
  * What `session` hears of the entries written after `since` and up to `until`: every thread one of
  * its watches covers, with the entries that watch is wide enough for and that came after the watch
- * began, never the session's own. `all`: every such entry, whatever the watch's width (`board
- * thread changes`).
+ * began, never the session's own; plus any direct owner post on a thread it holds (assignee, or
+ * creator when unassigned) (#693). `all`: every such entry, whatever the watch's width (`board thread changes`).
  */
-export function heardSince(db: BoardDb, session: string, since: number, until: number, all = false): Heard {
+export function heardSince(
+  db: BoardDb,
+  session: string,
+  since: number,
+  until: number,
+  all = false,
+  directSeqs?: ReadonlySet<number>,
+): Heard {
   const watches = watchesOf(db, session)
   const matched = new Set<Watch>()
   const byThread = new Map<string, { head: ThreadHead; entries: ThreadEntry[] }>()
   const items: DigestItem[] = []
-  if (!watches.length) return { items, matched: [], byThread }
+  const ownerPosts: OwnerPostRef[] = []
   const fresh = entriesAfter(db, since, until).filter(e => !isSession(e.author, session))
+  if (!fresh.length) return { items, matched: [], byThread, ownerPosts }
+  const isDirect = (e: ThreadEntry): boolean => isOwnerPostContent(e) && (all || !!directSeqs?.has(e.seq))
   const threads = new Map<string, ThreadEntry[]>()
   for (const e of fresh) threads.set(e.thread, [...(threads.get(e.thread) ?? []), e])
   for (const [id, list] of threads) {
     const head = getThread(db, id)
     if (!head) continue
     const ws = watches.filter(w => covers(w, head, session))
-    if (!ws.length) continue
+    const ownerTarget = ownerPostTarget(head)
+    const hasOwnerPost = ownerTarget?.key === session && list.some(e => isDirect(e))
+    if (!ws.length && !hasOwnerPost) continue
     // Each entry's head before and after it, folded from the start: whether its status changed.
     const states = new Map<string, { before: ThreadHead | null; after: ThreadHead }>()
     let h: ThreadHead | null = null
@@ -784,6 +839,7 @@ export function heardSince(db: BoardDb, session: string, since: number, until: n
     let kept = false
     let verified = false
     let closed: number | undefined
+    let ownerNote: string | undefined
     let local = saidBy === null || isLocal(saidBy)
     for (const e of list) {
       const st = states.get(e.id)
@@ -798,7 +854,8 @@ export function heardSince(db: BoardDb, session: string, since: number, until: n
         isSession(st.before.proposed.by, session)
       const level = fails || reopened ? LEVEL.answers : st ? entryLevel(e, st.before, st.after) : LEVEL.all
       const by = ws.filter(w => e.seq > w.since && (all || LEVEL[w.what] >= level))
-      if (!by.length) continue
+      const forOwner = ownerTarget?.key === session && isDirect(e)
+      if (!by.length && !forOwner) continue
       for (const w of by) matched.add(w)
       heard.push(e)
       if (level <= LEVEL.status && !fails && !reopened) status = true
@@ -807,6 +864,20 @@ export function heardSince(db: BoardDb, session: string, since: number, until: n
       if (reopened) kept = true
       if (e.set?.verdict === 'pass') verified = true
       if (e.closed) closed = e.closed
+      if (forOwner) {
+        if (!ownerPosts.some(o => o.thread === head.id && o.seq === e.seq))
+          ownerPosts.push({
+            thread: head.id,
+            key: head.key,
+            target: { key: ownerTarget.key, name: ownerTarget.name },
+            seq: e.seq,
+          })
+        if (e.text) ownerNote = e.text
+        else if (e.files?.length)
+          ownerNote ??= e.files.length === 1 ? 'attached a file' : `attached ${e.files.length} files`
+        else if (e.links?.length)
+          ownerNote ??= e.links.length === 1 ? 'shared a link' : `shared ${e.links.length} links`
+      }
       if (!isLocal(e.author)) local = false
     }
     if (!heard.length) continue
@@ -819,6 +890,7 @@ export function heardSince(db: BoardDb, session: string, since: number, until: n
       ...(kept && { kept }),
       ...(verified && { verified }),
       ...(closed && { closed }),
+      ...(ownerNote !== undefined && { ownerNote: cleanText(ownerNote, MAX_TEXT) }),
       entries: heard.length,
       local,
     })
@@ -832,7 +904,7 @@ export function heardSince(db: BoardDb, session: string, since: number, until: n
     const only = byThread.get(i.head.id)?.entries.every(e => e.closed)
     return !(only && i.closed && childrenOf(db, i.head.id).every(k => closedHere.has(k.id)))
   })
-  return { items: told, matched: [...matched], byThread }
+  return { items: told, matched: [...matched], byThread, ownerPosts }
 }
 
 /** Who was told of a write, and how many watchers could not be (their sessions read `changes`). */
@@ -842,19 +914,24 @@ export interface Told {
 }
 
 /**
- * Tells every session that watches one of `heads` what it has not heard yet, as one pending
- * schedule entry each (see the top of the file). Each session's turn runs in a transaction of the
- * board's database, which holds its write lock: two commands writing at once tell a session one
- * after the other, so the second finds and replaces the first one's entry and no session is left
- * with two. A session the schedule cannot take (one at its limit of entries) is counted untold and
- * reads its news with `board thread changes`.
+ * Tells every session that watches one of `heads` (and `direct`, if an owner post targets it)
+ * what it has not heard yet, as one pending schedule entry each (see the top of the file). Each
+ * session's turn runs in a transaction of the board's database, which holds its write lock: two
+ * commands writing at once tell a session one after the other, so the second finds and replaces the
+ * first one's entry and no session is left with two. A session the schedule cannot take (one at its
+ * limit of entries) is counted untold and reads its news with `board thread changes`.
  */
-export function tellWatchers(ctx: ThreadsCtx, heads: readonly ThreadHead[]): Told {
+export function tellWatchers(
+  ctx: ThreadsCtx,
+  heads: readonly ThreadHead[],
+  direct?: { session: string; name: string; seq: number },
+): Told {
   const schedule = ctx.schedule ?? fileSchedule
   const out: Told = { told: [], untold: 0 }
   const sessions = new Set<string>()
   try {
     for (const h of heads) for (const w of watchesFor(ctx.db, h)) if (covers(w, h, w.session)) sessions.add(w.session)
+    if (direct) sessions.add(direct.session)
     if (ctx.actor.kind === 'session') sessions.delete(ctx.actor.key)
   } catch {
     out.untold = 1
@@ -862,7 +939,8 @@ export function tellWatchers(ctx: ThreadsCtx, heads: readonly ThreadHead[]): Tol
   }
   for (const session of sessions) {
     try {
-      if (ctx.db.write(byOf(ctx.actor), tx => tellOne(ctx, schedule, session, tx))) out.told.push(session)
+      const d = direct?.session === session ? direct : undefined
+      if (ctx.db.write(byOf(ctx.actor), tx => tellOne(ctx, schedule, session, tx, d))) out.told.push(session)
     } catch {
       out.untold++
     }
@@ -871,31 +949,57 @@ export function tellWatchers(ctx: ThreadsCtx, heads: readonly ThreadHead[]): Tol
 }
 
 /** One session's event, under the database's write lock (`tx`); whether it was told anything new. */
-function tellOne(ctx: ThreadsCtx, schedule: EventSchedule, session: string, tx: Tx): boolean {
+function tellOne(
+  ctx: ThreadsCtx,
+  schedule: EventSchedule,
+  session: string,
+  tx: Tx,
+  direct?: { session: string; name: string; seq: number },
+): boolean {
   const rev = threadsRev(ctx.db)
-  const cursor = cursorOf(ctx.db, session) ?? { seq: rev, at: 0, asked: rev }
+  const hadCursor = cursorOf(ctx.db, session)
+  const cursor = hadCursor ?? {
+    seq: direct ? Math.max(0, direct.seq - 1) : rev,
+    at: 0,
+    asked: direct ? Math.max(0, direct.seq - 1) : rev,
+  }
   const pending = pendingOf(schedule, session)
+  const directSeqs = new Set<number>()
+  if (direct) directSeqs.add(direct.seq)
+  for (const o of Array.isArray(pending?.ownerPosts) ? pending.ownerPosts : []) {
+    if (typeof o?.seq === 'number') directSeqs.add(o.seq)
+  }
   const pendingSince = typeof pending?.threadsSince === 'number' ? pending.threadsSince : undefined
   let since = pendingSince ?? cursor.seq
-  let heard = heardSince(ctx.db, session, since, rev)
+  let heard = heardSince(ctx.db, session, since, rev, false, directSeqs)
   if (!heard.items.length) return false
   let text = digestLine(heard.items)
-  // Nothing new for this session in what was written: its pending event stands as it is.
-  if (pending && pending.text === text) return false
+  let hasOwnerPost = heard.ownerPosts.length > 0
+  // Nothing new for this session in what was written: its pending event stands as it is (unless an
+  // owner post upgrades a delayed or noWake event to wake and deliver now).
+  if (pending && pending.text === text && (!hasOwnerPost || (pending.noWake !== true && pending.next <= ctx.now)))
+    return false
   // Replaced, not changed in place; one claimed meanwhile goes as it is and this one follows it.
   const replaced = pending ? schedule.takeBack(pending.id) : false
   if (pending && !replaced) {
     since = cursor.seq
-    heard = heardSince(ctx.db, session, since, rev)
+    const freshSeqs = new Set<number>(direct ? [direct.seq] : [])
+    heard = heardSince(ctx.db, session, since, rev, false, freshSeqs)
     if (!heard.items.length) return false
     text = digestLine(heard.items)
+    hasOwnerPost = heard.ownerPosts.length > 0
   }
-  // A watch that asked to wait for a free session, or to wake it, has its way: waiting only delays
-  // the line, and waking is what that watch asked for.
-  const wake = heard.matched.some(w => w.wake)
-  const idle = heard.matched.some(w => w.idle)
-  const next = replaced && pending ? pending.next : Math.max(ctx.now, cursor.at + ctx.cfg.gapSec * 1000)
-  const name = heard.matched.find(w => w.name)?.name
+  // An owner post wakes and goes at once; otherwise a watch that asked to wait for a free session,
+  // or to wake it, has its way.
+  const wake = hasOwnerPost || heard.matched.some(w => w.wake)
+  const idle = hasOwnerPost ? false : heard.matched.some(w => w.idle)
+  const next = hasOwnerPost
+    ? ctx.now
+    : replaced && pending
+      ? pending.next
+      : Math.max(ctx.now, cursor.at + ctx.cfg.gapSec * 1000)
+  const name =
+    heard.matched.find(w => w.name)?.name || heard.ownerPosts.find(o => o.target.name)?.target.name || direct?.name
   schedule.add({
     key: session,
     ...(name && { name }),
@@ -906,11 +1010,89 @@ function tellOne(ctx: ThreadsCtx, schedule: EventSchedule, session: string, tx: 
     from: { ...EVENT_FROM },
     ...(wake ? {} : { noWake: true }),
     ...(idle && { idle: true }),
+    ...(hasOwnerPost && { ownerPosts: heard.ownerPosts }),
     threadsSince: since,
     threadsSeq: rev,
   })
-  moveCursor(tx, session, { seq: rev, at: next })
+  moveCursor(tx, session, { seq: rev, at: next, ...(!hadCursor && { asked: cursor.asked }) })
   return true
+}
+
+function deliveryFailureText(target: { key: string; name: string }, why: string): string {
+  const at = parseNodeKey(target.key)
+  const who = target.name || (at ? at.key : target.key).slice(0, 8)
+  const place = at ? ` (on ${at.device})` : ''
+  if (why === 'node-offline') {
+    return at
+      ? `Delivery to ${who} (on ${at.device}) held until ${at.device} is back`
+      : `Not delivered to ${who}: node offline`
+  }
+  const reason =
+    why === 'gone'
+      ? 'session is gone'
+      : why === 'node-revoked'
+        ? 'node revoked'
+        : why === 'node-forgotten'
+          ? 'node forgotten'
+          : why === 'node-api'
+            ? 'node link incompatible'
+            : why || 'could not be reached'
+  return `Not delivered to ${who}${place}: ${reason}`
+}
+
+/**
+ * Records a private system notice on each thread whose owner post is held offline or failed (#693),
+ * so it never passes silently. Never calls tellWatchers.
+ */
+export function recordOwnerPostFailure(
+  entry: Pick<ScheduleEntry, 'ownerPosts'>,
+  why: string,
+  now: number,
+  log?: (line: string) => void,
+): boolean {
+  const raw = Array.isArray(entry.ownerPosts) ? entry.ownerPosts : []
+  const seen = new Set<string>()
+  const refs = raw.filter((r): r is OwnerPostRef => {
+    if (
+      typeof r !== 'object' ||
+      r === null ||
+      typeof r.thread !== 'string' ||
+      !r.thread ||
+      typeof r.key !== 'string' ||
+      typeof r.target !== 'object' ||
+      r.target === null ||
+      typeof r.target.key !== 'string' ||
+      typeof r.target.name !== 'string' ||
+      seen.has(r.thread)
+    )
+      return false
+    seen.add(r.thread)
+    return true
+  })
+  if (!refs.length) return false
+  try {
+    return withThreadsDb(false, db => {
+      if (!db) return false
+      let wrote = false
+      for (const ref of refs) {
+        if (!getThread(db, ref.thread)) continue
+        db.write(byOf(OWNER_PARTY), tx => {
+          appendEntry(tx, ref.thread, {
+            at: now,
+            author: OWNER_PARTY,
+            type: 'system',
+            text: deliveryFailureText(ref.target, why),
+            private: true,
+          })
+        })
+        wrote = true
+      }
+      return wrote
+    })
+  } catch (err) {
+    log?.(`threads: could not record delivery failure: ${err instanceof Error ? err.message : String(err)}`)
+    return false
+  }
 }
 
 /** One line per thread `board thread changes` prints: what changed since the session last asked. */
@@ -1141,7 +1323,7 @@ export function answerAsk(ctx: ThreadsCtx, head: ThreadHead, words: string): Ans
 export function confirmClose(ctx: ThreadsCtx, head: ThreadHead): Written {
   if (!head.proposed) throw new ThreadError('no_proposal', `nobody proposed ${head.key} done`)
   const summary = oneLine(head.proposed.why, SUMMARY_MAX)
-  return postEntry(ctx, head, { status: 'done', ...(summary && { summary }) })
+  return postEntry(ctx, head, { status: 'done', ...(summary && { summary }), noDirect: true })
 }
 
 /**
@@ -1150,11 +1332,11 @@ export function confirmClose(ctx: ThreadsCtx, head: ThreadHead): Written {
  */
 export function keepOpen(ctx: ThreadsCtx, head: ThreadHead): Written {
   if (!head.proposed) throw new ThreadError('no_proposal', `nobody proposed ${head.key} done`)
-  if (!head.proposed.verify) return postEntry(ctx, head, { status: 'owner' })
+  if (!head.proposed.verify) return postEntry(ctx, head, { status: 'owner', noDirect: true })
   // Its worker hears it in one line (heardSince), and the verifier ends as a verdict ends it: its
   // word no longer counts, and it is archived once it is free.
   const run = head.verify?.run
-  const w = postEntry(ctx, head, { status: 'doing' })
+  const w = postEntry(ctx, head, { status: 'doing', noDirect: true })
   if (run) endVerifierRun(run.key, ctx.now)
   return w
 }

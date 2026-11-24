@@ -18,7 +18,7 @@ import {
   profileUsage,
 } from '../models/limits.ts'
 import { presenceBody, presenceSwitch } from '../models/presence.ts'
-import { remotePage } from '../models/remote-page.ts'
+import { adminHere, remotePage } from '../models/remote-page.ts'
 import { summaryParts, summaryText } from '../models/toolbar.ts'
 import { isWakeView, noteShown } from '../models/wake.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
@@ -101,8 +101,7 @@ export function LimitsPop({ anchor, unified = false, setup, onBackup, onWake }: 
   }
 
   const backupProblem = unified ? data?.backup?.problem : undefined
-  const wakeDown =
-    unified && !remotePage() && noteShown(isWakeView(data?.wake) ? data.wake : undefined, now) && !!onWake
+  const wakeDown = unified && adminHere() && noteShown(isWakeView(data?.wake) ? data.wake : undefined, now) && !!onWake
   const setupWarn = unified && !!setup?.shown
 
   return (

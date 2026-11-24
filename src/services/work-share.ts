@@ -487,7 +487,7 @@ export function declineShare(ctx: ThreadsCtx, head: ThreadHead): Written {
   if (ctx.actor.kind !== 'owner') throw new ThreadError('owner_only', 'only the owner answers a request to share')
   if (!requestOf(head)) throw new ThreadError('no_request', `nobody asked to share ${head.key}`)
   ctx.db.write(byOf(ctx.actor), tx => setScope(tx, head.id, 'local'))
-  return postEntry(ctx, { ...head, scope: 'local' }, { type: 'note', text: 'share declined' })
+  return postEntry(ctx, { ...head, scope: 'local' }, { type: 'note', text: 'share declined', noDirect: true })
 }
 
 /**
@@ -590,7 +590,11 @@ export function takeOffer(ctx: ThreadsCtx & { me: string }, head: ThreadHead): W
 export function declineOffer(ctx: ThreadsCtx & { me: string }, head: ThreadHead, why = ''): Written {
   const s = offerOf(ctx, head)
   const text = cleanText(why, 500)
-  const w = postEntry(ctx, head, { text: text ? `declined: ${text}` : 'declined', set: { assignee: null } })
+  const w = postEntry(ctx, head, {
+    text: text ? `declined: ${text}` : 'declined',
+    set: { assignee: null },
+    noDirect: true,
+  })
   clearOffer(ctx, w.head, s)
   return { ...w, head: getThread(ctx.db, head.id) ?? w.head }
 }

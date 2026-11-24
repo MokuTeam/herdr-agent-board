@@ -261,9 +261,11 @@ describe('the Settings menu (#510)', () => {
   }
   const ids = (items: ReturnType<typeof settingsMenu>) => items.map(i => ('separator' in i ? '-' : i.id))
 
-  test('Devices… on the local page, a board without nodes too (it adds its first server there, #509); never on a remote page', () => {
+  test('Devices… on the local page, a board without nodes too (it adds its first server there, #509); on remote only when ownerAdmin is set (#694)', () => {
     expect(offersDevices(false)).toBe(true)
     expect(offersDevices(true)).toBe(false)
+    expect(offersDevices(true, false)).toBe(false)
+    expect(offersDevices(true, true)).toBe(true)
   })
 
   test('Devices… only when the page offers it; without, the menu is as before', () => {

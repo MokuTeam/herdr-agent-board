@@ -126,5 +126,5 @@ export function scheduleBadge(schedules: ScheduleEntry[], now: number): { count:
 /** The tab's title, with how many sessions need the user first. */
 export function documentTitle(items: Item[]): string {
   const me = items.filter(i => i.column === 'me').length
-  return me ? `(${me}) Agent board` : 'Agent board'
+  return me ? `(${me}) MokuBoard` : 'MokuBoard'
 }

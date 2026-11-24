@@ -228,20 +228,26 @@ test('the login screen: a passkey first, then a password and a code in a form a 
 
 test('hello marks the page before the board draws: data-desk and data-device as it says, and gone once it no longer does', async () => {
   // Through tailscale serve (server/remote.ts): the desk's hello, then the same browser unmarked
-  // on the computer, then a hello with no device at all (the tunnel's).
+  // on the computer, then a hello with no device at all (the tunnel's) with ownerAdmin on and off.
   const desk = { board: 'agent-board', host: 'BOX', paired: true, desk: true, device: '2d240475327c', language: 'en' }
-  answers([200, desk], [200, { ...desk, desk: false }], [200, hello(true)])
+  answers([200, desk], [200, { ...desk, desk: false }], [200, { ...hello(true), ownerAdmin: true }], [200, hello(true)])
   const world = browser(false)
   try {
     const html = world.document.documentElement
-    const marks = () => [html.hasAttribute('data-desk'), html.getAttribute('data-device')]
+    const marks = () => [
+      html.hasAttribute('data-desk'),
+      html.getAttribute('data-device'),
+      html.hasAttribute('data-owner-admin'),
+    ]
     const gate = gateFlow({ follow() {} })
     await gate.check()
-    expect([gate.view.get().gate, ...marks()]).toEqual(['board', true, '2d240475327c'])
+    expect([gate.view.get().gate, ...marks()]).toEqual(['board', true, '2d240475327c', false])
     await gate.check()
-    expect([gate.view.get().gate, ...marks()]).toEqual(['board', false, '2d240475327c'])
+    expect([gate.view.get().gate, ...marks()]).toEqual(['board', false, '2d240475327c', false])
     await gate.check()
-    expect([gate.view.get().gate, ...marks()]).toEqual(['board', false, null])
+    expect([gate.view.get().gate, ...marks()]).toEqual(['board', false, null, true])
+    await gate.check()
+    expect([gate.view.get().gate, ...marks()]).toEqual(['board', false, null, false])
   } finally {
     world.uninstall()
   }

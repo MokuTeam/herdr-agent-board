@@ -6,7 +6,7 @@
 // on another site cannot send that without a CORS preflight, which this server never grants, so
 // it cannot type into a session.
 
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
@@ -443,6 +443,10 @@ export async function startServer({
   // The page for a phone's browser through `tailscale serve`, while remote.pwa is on, and through
   // the owner's domain: marked remote, with what installs it.
   const remotePage = staticRoute(WEB, bundle, html => pwaPage(page(html), bundle.version()), viewerExtras)
+  // Headless master admin (#694): resolved lazily once board, localNodeRoutes and localSetupRoutes
+  // are set up below (never called before start() wires routes and begins listening).
+  const remoteAdminRoutes = (path: string): Route[] | null =>
+    path === '/api/nodes' && localNodeRoutes ? localNodeRoutes : path === '/api/nodes/setup' ? localSetupRoutes : null
   const listener = createRemoteListener({
     cfg,
     webPort: port,
@@ -453,6 +457,9 @@ export async function startServer({
     remote,
     log,
     onChange: () => board.publish(),
+    adminRoutes: remoteAdminRoutes,
+    onAdminAuditCheck: () => board.checkAdminAudit(),
+    onAdminAction: entry => board.recordAdmin(entry),
   })
   // The board through the owner's domain (core/tunnel.ts): the login (services/access.ts), the
   // nonces the board's probe answers, and the tunnel listener on 127.0.0.1 while the tunnel is on
@@ -491,6 +498,9 @@ export async function startServer({
       accessChanged()
       void supervisor.sync()
     },
+    adminRoutes: remoteAdminRoutes,
+    onAdminAuditCheck: () => board.checkAdminAudit(),
+    onAdminAction: entry => board.recordAdmin(entry),
   })
   // The tunnel's ssh (services/tunnel.ts). It starts nothing until this board holds the web port
   // (below). Its line goes to the tunnel listener's port while that listens, the tunnel is on and
@@ -1016,6 +1026,10 @@ export async function startServer({
         cfg,
         changed: () => board.publish(),
         async tell(key, text) {
+          if (parseNodeKey(key) && nodeProxy) {
+            const r = await nodeProxy.send(key, text, { requestId: randomUUID(), idle: false, noWake: false })
+            return r.ok ? { ok: true } : { ok: false, error: r.error }
+          }
           const { t } = await import('../core/lang.ts')
           const { collect } = await import('../services/board.ts')
           const { send } = await import('../services/actions.ts')

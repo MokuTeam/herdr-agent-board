@@ -4,7 +4,12 @@ import {
   bearerOf,
   deskSteps,
   desktopOnly,
+  isNodesAdminPath,
+  isOwnerAdminDevice,
+  isOwnerAdminRoute,
   isOwnerLogin,
+  isStrongTunnelLogin,
+  isTaggedLogin,
   localOnly,
   ownerTeam,
   remoteConfig,
@@ -15,17 +20,27 @@ import {
 const PWA_OFF = { on: false, https: 443, port: null }
 
 test('remote is off unless config.json turns it on', () => {
-  expect(remoteConfig(undefined)).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF })
-  expect(remoteConfig(false)).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF })
-  expect(remoteConfig('yes')).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF })
-  expect(remoteConfig({ on: 'true' })).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF })
-  expect(remoteConfig(true)).toEqual({ on: true, port: null, allow: [], pwa: PWA_OFF })
+  expect(remoteConfig(undefined)).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF, ownerAdmin: false })
+  expect(remoteConfig(false)).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF, ownerAdmin: false })
+  expect(remoteConfig('yes')).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF, ownerAdmin: false })
+  expect(remoteConfig({ on: 'true' })).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF, ownerAdmin: false })
+  expect(remoteConfig(true)).toEqual({ on: true, port: null, allow: [], pwa: PWA_OFF, ownerAdmin: false })
   expect(remoteConfig({ on: true, port: 12500, allow: [' Anna@Example.com ', 'anna@example.com', '', 3] })).toEqual({
     on: true,
     port: 12500,
     allow: ['anna@example.com'],
     pwa: PWA_OFF,
+    ownerAdmin: false,
   })
+  expect(remoteConfig({ ownerAdmin: true })).toEqual({
+    on: false,
+    port: null,
+    allow: [],
+    pwa: PWA_OFF,
+    ownerAdmin: true,
+  })
+  expect(remoteConfig({ on: true, ownerAdmin: true }).ownerAdmin).toBe(true)
+  expect(remoteConfig({ on: true, ownerAdmin: 'true' }).ownerAdmin).toBe(false)
   expect(remoteConfig({ on: true, port: 70000 }).port).toBeNull()
   expect(remoteConfig({ on: true, port: 1.5 }).port).toBeNull()
 })
@@ -98,8 +113,14 @@ test("the remote mode's, Remote access's, wake's, the backup's and Settings → 
     '/api/time',
     '/api/links/logs',
     '/api/processes',
+    '/api/nodes',
+    '/api/nodes/setup',
+    '/api/nodez',
   ])
     expect(localOnly(path)).toBe(false)
+  expect(isNodesAdminPath('/api/nodes')).toBe(true)
+  expect(isNodesAdminPath('/api/nodes/setup')).toBe(true)
+  expect(isNodesAdminPath('/api/nodez')).toBe(false)
   expect(localOnly('/api/login/password')).toBe(false)
 })
 
@@ -196,4 +217,54 @@ test("the owner's own logins may read and write the team away from the computer,
   expect(isOwnerLogin('friend@example.com', 'me@example.com')).toBe(false)
   expect(isOwnerLogin(null, 'me@example.com')).toBe(false)
   expect(isOwnerLogin('me@example.com', null)).toBe(false)
+})
+
+test('ownerAdmin helpers classify strong logins, non-desk owner devices, tagged logins, and mutating admin routes (#694)', () => {
+  expect(isTaggedLogin('tagged-devices')).toBe(true)
+  expect(isTaggedLogin('Tagged-Server')).toBe(true)
+  expect(isTaggedLogin('me@example.com')).toBe(false)
+  expect(isTaggedLogin(null)).toBe(false)
+
+  expect(isOwnerAdminDevice({}, 'Me@Example.com', 'me@example.com')).toBe(true)
+  expect(isOwnerAdminDevice({ desk: false }, 'me@example.com', 'me@example.com')).toBe(true)
+  expect(isOwnerAdminDevice({ desk: true }, 'me@example.com', 'me@example.com')).toBe(false)
+  expect(isOwnerAdminDevice({}, 'anna@example.com', 'me@example.com')).toBe(false)
+  expect(isOwnerAdminDevice({}, 'me@example.com', null)).toBe(false)
+  expect(isOwnerAdminDevice({}, 'tagged-devices', 'tagged-devices')).toBe(false)
+
+  expect(isStrongTunnelLogin({ method: 'passkey' }, true)).toBe(true)
+  expect(isStrongTunnelLogin({ method: 'passkey' }, false)).toBe(true)
+  expect(isStrongTunnelLogin({ method: 'password' }, true)).toBe(true)
+  expect(isStrongTunnelLogin({ method: 'password' }, false)).toBe(false)
+  expect(isStrongTunnelLogin({ method: 'other' }, true)).toBe(false)
+  expect(isStrongTunnelLogin(null, true)).toBe(false)
+
+  for (const path of [
+    '/api/access',
+    '/api/remote',
+    '/api/wake',
+    '/api/backup',
+    '/api/time-settings',
+    '/api/calendar-settings',
+    '/api/threads-settings',
+    '/api/feature-settings',
+    '/api/self-update',
+    '/api/housekeeping',
+    '/api/process',
+    '/api/nodes',
+    '/api/nodes/setup',
+    '/api/mokupilot/node-call/abc12345/start',
+    '/api/team/agents',
+    '/api/team/trust',
+  ]) {
+    expect([path, isOwnerAdminRoute('POST', path, path, true)]).toEqual([path, true])
+    expect([path, isOwnerAdminRoute('GET', path, path, true)]).toEqual([path, false])
+    expect([path, isOwnerAdminRoute('HEAD', path, path, true)]).toEqual([path, false])
+  }
+  expect(isOwnerAdminRoute('POST', '/api/%61ccess', '/api/access', true)).toBe(true)
+  expect(isOwnerAdminRoute('POST', '/api/links/log', '/api/links/log', true)).toBe(false)
+  expect(isOwnerAdminRoute('POST', '/api/team/send', '/api/team/send', true)).toBe(false)
+  expect(isOwnerAdminRoute('POST', '/api/team/send', '/api/team/send', false)).toBe(true)
+  expect(isOwnerAdminRoute('POST', '/api/threads', '/api/threads', true)).toBe(false)
+  expect(isOwnerAdminRoute('POST', '/api/board', '/api/board', true)).toBe(false)
 })

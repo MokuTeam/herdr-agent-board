@@ -61,7 +61,7 @@ import { useToolbarMenu } from './hooks/useToolbarMore.ts'
 import { useT } from './i18n/I18nProvider.tsx'
 import { linkDecisionsSheet } from './models/decisions.ts'
 import { pageLayers } from './models/lifecycle.ts'
-import { remotePage } from './models/remote-page.ts'
+import { adminHere, remotePage } from './models/remote-page.ts'
 import { offersTeam, teamBadge } from './models/team.ts'
 import { proposedCount } from './models/todos.ts'
 import { scheduleBadge } from './models/toolbar.ts'
@@ -416,7 +416,7 @@ export function App() {
     panels.place.boardTop = () => document.querySelector('.toolbar')?.getBoundingClientRect().bottom ?? 0
   }, [panels.place])
 
-  const wakeDown = !remotePage() && isWakeView(data?.wake) && noteShown(data.wake, now)
+  const wakeDown = adminHere() && isWakeView(data?.wake) && noteShown(data.wake, now)
   const systemAlert = setup.shown || !!data?.backup?.problem || wakeDown
   const sched = scheduleBadge(data?.schedules ?? [], now)
   const railAlert =
@@ -495,7 +495,7 @@ export function App() {
           onTodos={() => setTodosOpen(!todosOpen)}
           {...(threads && { onThreads: () => threads.setShown(!threads.shown) })}
           {...(decisionsOn && { onDecisions: () => setDecisionsOpen(!decisionsOpen) })}
-          onBackup={remotePage() ? undefined : openBackup}
+          onBackup={adminHere() ? openBackup : undefined}
           onTime={() => {
             setTimeClient(null)
             setTimeOpen(!timeOpen)
@@ -545,7 +545,7 @@ export function App() {
               },
             }
           : {})}
-        {...(accessMounted && !remotePage()
+        {...(accessMounted && adminHere()
           ? {
               access: {
                 open: access,
@@ -554,7 +554,7 @@ export function App() {
               },
             }
           : {})}
-        {...(backupMounted && !remotePage()
+        {...(backupMounted && adminHere()
           ? {
               backup: {
                 open: backup,
@@ -563,7 +563,7 @@ export function App() {
               },
             }
           : {})}
-        {...(updatesMounted && !remotePage()
+        {...(updatesMounted && adminHere()
           ? {
               updates: {
                 open: updates,
@@ -572,7 +572,7 @@ export function App() {
               },
             }
           : {})}
-        {...(housekeepingMounted && !remotePage()
+        {...(housekeepingMounted && adminHere()
           ? {
               housekeeping: {
                 open: housekeeping,
@@ -581,7 +581,7 @@ export function App() {
               },
             }
           : {})}
-        {...(timeSettingsMounted && !remotePage()
+        {...(timeSettingsMounted && adminHere()
           ? {
               timeSettings: {
                 open: timeSettings,
@@ -590,7 +590,7 @@ export function App() {
               },
             }
           : {})}
-        {...(calendarSettingsMounted && !remotePage()
+        {...(calendarSettingsMounted && adminHere()
           ? {
               calendarSettings: {
                 open: calendarSettings,
@@ -607,7 +607,7 @@ export function App() {
             setCalendarOpen(false)
             setCalendarFocus(null)
           },
-          onSettings: remotePage() ? undefined : openCalendarSettings,
+          onSettings: adminHere() ? openCalendarSettings : undefined,
         }}
         {...(localPathsMounted && remotePage()
           ? {
@@ -618,7 +618,7 @@ export function App() {
               },
             }
           : {})}
-        {...(devicesMounted && !remotePage()
+        {...(devicesMounted && adminHere()
           ? {
               devices: {
                 open: devices,
@@ -705,7 +705,7 @@ export function App() {
         anchor={limitsAnchor}
         unified
         setup={setup}
-        onBackup={remotePage() ? undefined : openBackup}
+        onBackup={adminHere() ? openBackup : undefined}
         onWake={() => setWake(true)}
       />
       <SetupPop setup={setup} />

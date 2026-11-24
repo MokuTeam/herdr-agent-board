@@ -1520,7 +1520,12 @@ the board then have in their transcripts.
 
 `GET /api/links/log?since=<seq>&limit=<n>` answers `{ edges, next }`: the lines after `since` (0,
 or none: from the first), at most `limit` (1 to 1000, 1000 when not given), and the `seq` to ask
-after next time. For the board on this computer only: a remote listener refuses it. Code:
+after next time. On a desktop master, this is for the board on this computer only; when
+`remote.ownerAdmin` is enabled on a headless master, the owner's authorised strong login may also
+read it remotely, and every mutating remote admin action unlocked by `remote.ownerAdmin` is
+written here with `kind: "admin"`, `method`, `path`, `op` (when the JSON body has a short `op`),
+`status`, `via`, `who`, `from`, and `at` (never request bodies or secrets). If the audit store is
+not writable, mutating remote admin requests are refused with 503. Code:
 `src/adapters/edge-log.ts`, `src/server/routes/links.ts`, `promptsOf` in
 `src/core/transcript-links.ts`.
 
@@ -4434,6 +4439,39 @@ failed attempts.
 
 **One tunnel, one computer per domain.** The Android app stays on Tailscale ([Phones](#phones));
 the tunnel and the Tailscale listeners are independent, either on without the other.
+
+### Admin panels on a headless master (`remote.ownerAdmin`)
+
+By default, every remote listener refuses `localOnly` admin panels and routes (Remote access,
+Phones, Sleep and wake, Backup, Time settings, Calendar settings, Threads settings, Feature
+settings, Updates, Housekeeping, Team management, Devices). When the master runs headless on a
+server without a screen, you can opt in by setting `"remote": { "ownerAdmin": true }` in
+`config.json` (or running `board remote owner-admin on` on the server, or flipping it from an
+already authorised local or owner-admin session).
+
+- **Who gets admin access:** only the owner's own strong login:
+  - through the tunnel (`https://<domain>`): a live login created with a passkey or password + TOTP;
+  - through Tailscale (app or `tailscale serve`): a paired device belonging to the computer's own
+    Tailscale login that is **not** marked as a desk (`board remote desk <id>`).
+- **Who stays refused:** desks, `remote.allow` users, devices paired by anyone else, peers on the
+  tailnet, tagged Tailscale nodes (`tagged-*`), and unauthenticated callers. Actions that act on
+  the server's screen (`desktopOnly`: opening files, links, or focusing herdr) stay refused remotely.
+- **Step-up for credentials:** changing the login password, confirming a new TOTP secret, or
+  lifting a lockout over a remote listener requires a fresh current TOTP code (`totpCode` in the
+  body), as adding a passkey already does.
+- **Audit:** every mutating remote admin request unlocked by `remote.ownerAdmin` is appended to
+  the [edge log](#the-edge-log) (`kind: "admin"`, naming who, from where, method, path, short `op`,
+  status, and listener, without other body fields or secrets). Mutating requests fail closed (503)
+  and notify the owner if the audit store cannot be written.
+- **Risk:** `remote.ownerAdmin` lets an authorised remote session reconfigure remote access,
+  backup, wake, team trust, devices, and board settings without sitting at the server. Flipping
+  `remote.ownerAdmin` on immediately grants admin access to every already-paired non-desk device of
+  the owner's Tailscale login and every live strong tunnel session, so review and revoke old
+  pairings first. On Tailscale, an already-verified caller keeps its `whois` identity for up to
+  10 minutes (`WHOIS_GRACE_MS`) if `tailscaled` stops answering temporarily. Leave `ownerAdmin` off
+  on a desktop computer where you have a local screen, prefer passkeys over passwords, and revoke
+  lost devices or sessions right away (`board remote revoke <id>` or `POST /api/access`
+  `login-end`).
 
 ## Language
 

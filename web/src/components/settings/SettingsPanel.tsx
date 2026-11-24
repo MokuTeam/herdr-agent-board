@@ -30,7 +30,7 @@ import { reachable } from '../../models/devices.ts'
 import { LOOK_KEY, LOOKS, lookNow, setLook } from '../../models/look.ts'
 import { DOCKS, type Dock } from '../../models/panel-layout.ts'
 import { offersProfiles } from '../../models/profiles.ts'
-import { keptAuth, remotePage } from '../../models/remote-page.ts'
+import { adminHere, keptAuth, ownerAdminPage, remotePage } from '../../models/remote-page.ts'
 import {
   COMPACT_CHOICES,
   featuresNow,
@@ -217,12 +217,13 @@ export function SettingsPanel({
   const look = lookNow(rootEl)
   const cardText = cardTextNow(rootEl)
   const isRemote = remotePage()
+  const canAdmin = adminHere()
   const languages = data?.languages ?? LANGUAGES
   const presenceMode: PresenceMode | 'none' = data?.presence?.mode ?? 'none'
   const idleMinutes = data?.presence?.idleMinutes ?? 15
   const todosMode: TodoMode = todoModeOf(data?.todos ?? null)
-  const threadsInfo = data && !isRemote ? threadsNow(data) : null
-  const features = data && !isRemote ? featuresNow(data) : null
+  const threadsInfo = data && canAdmin ? threadsNow(data) : null
+  const features = data && canAdmin ? featuresNow(data) : null
   const compact = data?.compactDefault
   const turnResumeOn = data?.turnResume !== false
   const compactChoices =
@@ -231,7 +232,7 @@ export function SettingsPanel({
       : [...COMPACT_CHOICES]
 
   const backupProblem = data?.backup?.problem
-  const wakeDown = !isRemote && isWakeView(data?.wake) && noteShown(data.wake, now)
+  const wakeDown = canAdmin && isWakeView(data?.wake) && noteShown(data.wake, now)
   const systemWarn = !!setup?.shown || !!backupProblem || wakeDown
 
   const pickTheme = (next: string) => {
@@ -284,7 +285,7 @@ export function SettingsPanel({
   const sections: { id: SettingsSection; label: string; icon: ReactNode; warn?: boolean }[] = [
     { id: 'display', label: t('set.sec.display'), icon: <SlidersIcon /> },
     { id: 'board', label: t('set.sec.board'), icon: <CpuIcon /> },
-    ...(!isRemote ? [{ id: 'features' as const, label: t('set.sec.features'), icon: <LayersIcon /> }] : []),
+    ...(canAdmin ? [{ id: 'features' as const, label: t('set.sec.features'), icon: <LayersIcon /> }] : []),
     { id: 'integrations', label: t('set.sec.integrations'), icon: <PlugIcon /> },
     { id: 'system', label: t('set.sec.system'), icon: <ShieldIcon />, warn: systemWarn },
   ]
@@ -550,7 +551,7 @@ export function SettingsPanel({
             </section>
           )}
 
-          {section === 'features' && !isRemote && (
+          {section === 'features' && canAdmin && (
             <section className="set-section">
               <div className="set-sec-head">
                 <h3>{t('set.sec.features')}</h3>
@@ -703,7 +704,7 @@ export function SettingsPanel({
                     onClick={openChild(onOpenWake)}
                   />
                 )}
-                {!isRemote && (
+                {canAdmin && (
                   <LinkRow
                     label={t('set.calendar')}
                     meta={
@@ -719,7 +720,7 @@ export function SettingsPanel({
                     onClick={openChild(onOpenCalendarSettings)}
                   />
                 )}
-                {!isRemote && (
+                {canAdmin && (
                   <LinkRow
                     label={t('set.time')}
                     meta={<span>{data?.time ? t('set.integrations.on') : t('set.integrations.off')}</span>}
@@ -736,7 +737,7 @@ export function SettingsPanel({
                   />
                 )}
                 {offersMokupilot(data) && <LinkRow label={t('set.mokupilot')} onClick={openChild(onOpenMokupilot)} />}
-                {offersDevices(isRemote) && (
+                {offersDevices(isRemote, ownerAdminPage()) && (
                   <LinkRow
                     label={t('node.set.devices')}
                     meta={
@@ -748,7 +749,7 @@ export function SettingsPanel({
                   />
                 )}
                 {!!data?.remote && <LinkRow label={t('set.phones')} onClick={openChild(onOpenPhones)} />}
-                {!isRemote && <LinkRow label={t('set.access')} onClick={openChild(onOpenAccess)} />}
+                {canAdmin && <LinkRow label={t('set.access')} onClick={openChild(onOpenAccess)} />}
                 {isRemote && <LinkRow label={t('set.localPaths')} onClick={openChild(onOpenLocalPaths)} />}
               </div>
             </section>
@@ -761,7 +762,7 @@ export function SettingsPanel({
                 <span className="set-scope">{t('set.scope.panels')}</span>
               </div>
               <div className="set-group">
-                {!isRemote && (
+                {canAdmin && (
                   <LinkRow
                     label={t('set.backup')}
                     meta={<span>{backupProblem ? backupNoteText(backupProblem, t) : t('set.integrations.on')}</span>}
@@ -769,8 +770,8 @@ export function SettingsPanel({
                     onClick={openChild(onOpenBackup)}
                   />
                 )}
-                {!isRemote && <LinkRow label={t('set.updates')} onClick={openChild(onOpenUpdates)} />}
-                {!isRemote && (
+                {canAdmin && <LinkRow label={t('set.updates')} onClick={openChild(onOpenUpdates)} />}
+                {canAdmin && (
                   <LinkRow
                     label={t('set.housekeeping')}
                     meta={
