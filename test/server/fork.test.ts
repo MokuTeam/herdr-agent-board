@@ -6,6 +6,7 @@ import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, join } from 'node:path'
+import { projectFolderName } from '../../src/core/resume.ts'
 import { unusedPort } from '../support/board-server.ts'
 import { type Child, type Sandbox, sandbox, until } from '../support/sandbox.ts'
 
@@ -393,3 +394,102 @@ test('a fork is refused before anything starts for a session that is not Claude�
     false,
   )
 }, 60_000)
+
+test('a moved Claude session forks in its target folder before and after local turns (#621)', async () => {
+  // Subcase A: freshly moved session before any new turn on target (transcript only has foreign source cwd).
+  const boxA = await sandbox()
+  const nodeDirA = join(boxA.dir, 'atlas проект 100%')
+  mkdirSync(nodeDirA, { recursive: true })
+  const projectsA = join(boxA.env.HOME as string, '.claude', 'projects', projectFolderName(nodeDirA))
+  mkdirSync(projectsA, { recursive: true })
+  writeFileSync(
+    join(projectsA, `${S}.jsonl`),
+    `${JSON.stringify({
+      type: 'user',
+      cwd: 'C:\\Work\\atlas',
+      sessionId: S,
+      message: { role: 'user', content: 'from source' },
+      timestamp: new Date().toISOString(),
+    })}\n`,
+  )
+  mkdirSync(boxA.cards, { recursive: true })
+  writeFileSync(join(boxA.cards, `${S}.json`), JSON.stringify({ key: S, name: 'Moved card', category: 'personal' }))
+  herdrWith(boxA, nodeDirA)
+  const bA = await board(boxA)
+  try {
+    const rA = await bA.post(`/api/session/${S}/fork`, { name: 'Moved fork A' })
+    assert.equal(rA.status, 200, JSON.stringify(rA.body))
+    await until(() => calls(boxA).some(c => c.startsWith('agent rename wP:p9')), 20_000)
+    assert.ok(
+      calls(boxA).includes(`tab create --workspace wP --cwd ${nodeDirA} --label Moved fork A --no-focus`),
+      calls(boxA).join('\n'),
+    )
+  } finally {
+    bA.proc.kill()
+    await bA.proc.exited
+  }
+
+  // Subcase B: moved session after a local turn, when the pane cd'd into a subdirectory.
+  const boxB = await sandbox()
+  const nodeDirB = join(boxB.dir, 'atlas проект 100%')
+  const subDirB = join(nodeDirB, 'sub')
+  mkdirSync(subDirB, { recursive: true })
+  const projectsB = join(boxB.env.HOME as string, '.claude', 'projects', projectFolderName(nodeDirB))
+  mkdirSync(projectsB, { recursive: true })
+  writeFileSync(
+    join(projectsB, `${S}.jsonl`),
+    `${[
+      JSON.stringify({
+        type: 'user',
+        cwd: 'C:\\Work\\atlas',
+        sessionId: S,
+        message: { role: 'user', content: 'from source' },
+        timestamp: new Date().toISOString(),
+      }),
+      JSON.stringify({
+        type: 'user',
+        cwd: nodeDirB,
+        sessionId: S,
+        message: { role: 'user', content: 'on node' },
+        timestamp: new Date().toISOString(),
+      }),
+    ].join('\n')}\n`,
+  )
+  mkdirSync(boxB.cards, { recursive: true })
+  writeFileSync(join(boxB.cards, `${S}.json`), JSON.stringify({ key: S, name: 'Moved card', category: 'personal' }))
+  herdrWith(boxB, subDirB)
+  const bB = await board(boxB)
+  try {
+    const rB = await bB.post(`/api/session/${S}/fork`, { name: 'Moved fork B' })
+    assert.equal(rB.status, 200, JSON.stringify(rB.body))
+    await until(() => calls(boxB).some(c => c.startsWith('agent rename wP:p9')), 20_000)
+    assert.ok(
+      calls(boxB).includes(`tab create --workspace wP --cwd ${nodeDirB} --label Moved fork B --no-focus`),
+      calls(boxB).join('\n'),
+    )
+  } finally {
+    bB.proc.kill()
+    await bB.proc.exited
+  }
+}, 60_000)
+
+test('an unmoved Claude session whose pane cd’d into a subdirectory still forks in its transcript’s first cwd', async () => {
+  const box = await sandbox()
+  const dir = project(box)
+  const sub = join(dir, 'sub')
+  mkdirSync(sub, { recursive: true })
+  herdrWith(box, sub)
+  const b = await board(box)
+  try {
+    const r = await b.post(`/api/session/${S}/fork`, { name: 'Unmoved fork' })
+    assert.equal(r.status, 200, JSON.stringify(r.body))
+    await until(() => calls(box).some(c => c.startsWith('agent rename wP:p9')), 20_000)
+    assert.ok(
+      calls(box).includes(`tab create --workspace wP --cwd ${dir} --label Unmoved fork --no-focus`),
+      calls(box).join('\n'),
+    )
+  } finally {
+    b.proc.kill()
+    await b.proc.exited
+  }
+}, 30_000)

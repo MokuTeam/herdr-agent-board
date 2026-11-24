@@ -635,7 +635,7 @@ describe('agent drafts and agent requests (#231, #216)', () => {
       state: 'acked',
       via: 'agent',
     }
-    const pressed: ThreadLine = { ...outgoing, id: 'a4', pressed: true }
+    const pressed: ThreadLine = { ...outgoing, id: 'a4', ts: '2026-10-28T11:04:00Z', pressed: true }
     const plain: ThreadLine = {
       id: 'a3',
       dir: 'out',

@@ -10,7 +10,10 @@ import {
   lastCwdOf,
   readUsageCache,
   sessionCwd,
+  transcriptCwd,
+  transcriptUsesCodeMode,
 } from '../../src/adapters/claude-home.ts'
+import { projectFolderName } from '../../src/core/resume.ts'
 import { canSymlink, SYMLINK_SKIP_REASON } from '../support/fs.ts'
 
 const made: string[] = []
@@ -439,5 +442,160 @@ describe('lastCwdOf and sessionCwd (#657)', () => {
     assert.equal(await sessionCwd(fallbackFirst, ['', join(root, 'missing-card')]), firstDir)
     // 5. Nothing exists anywhere -> empty string.
     assert.equal(await sessionCwd(null, ['C:\\Work\\atlas', fileNotDir]), '')
+  })
+
+  test('transcriptUsesCodeMode handles CRLF, missing trailing newline, 256 KiB chunk boundary, and >64 KiB lines', async () => {
+    const root = newRoot()
+
+    // 1. CRLF and no trailing newline on the repl-mode line.
+    const crlfNoNl = join(root, 'crlf.jsonl')
+    writeFileSync(
+      crlfNoNl,
+      `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' } })}\r\n${JSON.stringify({
+        type: 'repl-mode',
+        replMode: true,
+      })}`,
+    )
+    assert.equal(await transcriptUsesCodeMode(crlfNoNl), true)
+
+    // 2. "repl-mode" key straddling the 256 KiB chunk boundary (262144 bytes).
+    const boundary = join(root, 'boundary.jsonl')
+    const cmLine = JSON.stringify({ type: 'repl-mode', replMode: true })
+    const line1Len = (256 << 10) - 12
+    const padLen = line1Len - Buffer.byteLength('{"type":"user","t":"') - Buffer.byteLength('"}\n')
+    const exactLine1 = `{"type":"user","t":"${'x'.repeat(padLen)}"}\n`
+    assert.equal(Buffer.byteLength(exactLine1), line1Len)
+    writeFileSync(boundary, `${exactLine1}${cmLine}\n`)
+    assert.equal(await transcriptUsesCodeMode(boundary), true)
+
+    // 3. >64 KiB line containing "repl-mode" is skipped without blowing memory, while a normal line later still matches.
+    const hugeSkipped = join(root, 'huge-skipped.jsonl')
+    const hugeLine = JSON.stringify({
+      type: 'repl-mode',
+      replMode: true,
+      pad: 'z'.repeat(65 * 1024),
+    })
+    writeFileSync(hugeSkipped, `${hugeLine}\n`)
+    assert.equal(await transcriptUsesCodeMode(hugeSkipped), false)
+    assert.equal(await transcriptUsesCodeMode(join(root, 'missing.jsonl')), false)
+  })
+})
+
+describe('transcriptCwd (#621)', () => {
+  const putTranscript = (root: string, folderName: string, name: string, lines: Record<string, unknown>[]) => {
+    const dir = join(root, 'projects', folderName)
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, `${name}.jsonl`)
+    writeFileSync(file, `${lines.map(l => JSON.stringify(l)).join('\n')}\n`)
+    return file
+  }
+
+  test('unmoved sessions keep their first cwd (standard, special chars, Windows case, and deleted local dir)', async () => {
+    const root = newRoot()
+    const plainDir = join(root, 'plain')
+    const specialDir = join(root, 'atlas проект 100%')
+    const subDir = join(plainDir, 'sub')
+    mkdirSync(subDir, { recursive: true })
+    mkdirSync(specialDir, { recursive: true })
+
+    const plain = putTranscript(root, projectFolderName(plainDir), 'plain', [
+      { type: 'user', cwd: plainDir },
+      { type: 'user', cwd: subDir },
+    ])
+    assert.equal(await transcriptCwd(plain, subDir), plainDir)
+    assert.equal(await transcriptCwd(plain, ''), plainDir)
+
+    const special = putTranscript(root, projectFolderName(specialDir), 'special', [{ type: 'user', cwd: specialDir }])
+    assert.equal(await transcriptCwd(special, ''), specialDir)
+
+    // Windows path with drive-letter case difference matches case-insensitively on win32.
+    const winDir = 'C:\\Work\\atlas'
+    const winFile = putTranscript(root, projectFolderName(winDir), 'win', [{ type: 'user', cwd: 'c:\\work\\atlas' }])
+    assert.equal(
+      await transcriptCwd(winFile, '', {
+        platform: 'win32',
+        isDir: d => d.toLowerCase() === 'c:\\work\\atlas',
+      }),
+      'c:\\work\\atlas',
+    )
+
+    // Unmoved session whose local folder was deleted still returns that deleted first cwd.
+    const deletedDir = join(root, 'deleted-local')
+    const deleted = putTranscript(root, projectFolderName(deletedDir), 'deleted', [{ type: 'user', cwd: deletedDir }])
+    assert.equal(await transcriptCwd(deleted, ''), deletedDir)
+  })
+
+  test('moved sessions resolve target folder from fallback or lastCwdOf even when source folder exists', async () => {
+    const root = newRoot()
+    const sourceDir = join(root, 'source-atlas')
+    const targetDir = join(root, 'target проект 100%')
+    const targetSub = join(targetDir, 'sub')
+    const hopDir = join(root, 'hop-target')
+    mkdirSync(sourceDir, { recursive: true })
+    mkdirSync(targetSub, { recursive: true })
+    mkdirSync(hopDir, { recursive: true })
+
+    // Freshly moved session before any new turn on target (only foreign source cwd in transcript).
+    const freshMoved = putTranscript(root, projectFolderName(targetDir), 'fresh', [
+      { type: 'user', cwd: 'C:\\Work\\atlas' },
+    ])
+    assert.equal(await transcriptCwd(freshMoved, targetDir), targetDir)
+
+    // Moved session after a new turn on target, when fallback is empty or a subdirectory.
+    const turnedMoved = putTranscript(root, projectFolderName(targetDir), 'turned', [
+      { type: 'user', cwd: 'C:\\Work\\atlas' },
+      { type: 'user', cwd: targetDir },
+    ])
+    assert.equal(await transcriptCwd(turnedMoved, ''), targetDir)
+    assert.equal(await transcriptCwd(turnedMoved, targetSub), targetDir)
+
+    // Both source folder and target folder exist on disk: project folder picks target, never source.
+    const bothExist = putTranscript(root, projectFolderName(targetDir), 'both', [{ type: 'user', cwd: sourceDir }])
+    assert.equal(await transcriptCwd(bothExist, targetDir), targetDir)
+
+    // Multi-hop moved session (A -> B with turns -> C without turns yet): picks C (fallback).
+    const multiHop = putTranscript(root, projectFolderName(hopDir), 'hop', [
+      { type: 'user', cwd: 'C:\\Work\\atlas' },
+      { type: 'user', cwd: targetDir },
+    ])
+    assert.equal(await transcriptCwd(multiHop, hopDir), hopDir)
+
+    // Moved session whose target folder was deleted: returns deleted local target, not foreign source cwd.
+    const deletedTarget = join(root, 'deleted-target')
+    const movedDeleted = putTranscript(root, projectFolderName(deletedTarget), 'moved-deleted', [
+      { type: 'user', cwd: 'C:\\Work\\atlas' },
+    ])
+    assert.equal(await transcriptCwd(movedDeleted, deletedTarget), deletedTarget)
+  })
+
+  test('handles project-folder encoding collisions, custom folder layouts, and missing transcripts', async () => {
+    const root = newRoot()
+    const existing = join(root, 'project-one')
+    const missing = join(root, 'project', 'one')
+    mkdirSync(existing, { recursive: true })
+
+    // Encoding collision: /project/one and /project-one share projectFolderName; pick the existing one.
+    const collided = putTranscript(root, projectFolderName(existing), 'collided', [{ type: 'user', cwd: missing }])
+    assert.equal(await transcriptCwd(collided, existing), existing)
+
+    // Custom non-matching project folder name: unmoved returns existing first; moved falls back to existing last/fallback.
+    const customUnmoved = putTranscript(root, 'custom-dir', 'custom-unmoved', [{ type: 'user', cwd: existing }])
+    assert.equal(await transcriptCwd(customUnmoved, ''), existing)
+
+    const customMoved = putTranscript(root, 'custom-dir', 'custom-moved', [
+      { type: 'user', cwd: 'C:\\Work\\atlas' },
+      { type: 'user', cwd: existing },
+    ])
+    assert.equal(await transcriptCwd(customMoved, ''), existing)
+    assert.equal(await transcriptCwd(customMoved, missing), existing)
+
+    const customFallback = putTranscript(root, 'custom-dir', 'custom-fallback', [
+      { type: 'user', cwd: 'C:\\Work\\atlas' },
+    ])
+    assert.equal(await transcriptCwd(customFallback, existing), existing)
+
+    // Null/undefined transcript returns fallback or ''.
+    assert.equal(await transcriptCwd(null, existing), existing)
+    assert.equal(await transcriptCwd(undefined, '   '), '')
   })
 })

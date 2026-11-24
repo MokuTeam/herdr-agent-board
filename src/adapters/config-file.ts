@@ -36,7 +36,20 @@ import { isTodoMode } from '../core/todos.ts'
 import { fieldProblem, type TunnelField } from '../core/tunnel.ts'
 import type { Category, Config } from '../core/types.ts'
 import { wakeConfig } from '../core/wake/config.ts'
-import { isThreadMode, type ThreadMode, threadsConfig, threadsParts, threadsSetting } from '../core/work-threads.ts'
+import {
+  applyVerifyPatch,
+  isThreadMode,
+  parseVerifyPatch,
+  type ThreadMode,
+  threadsConfig,
+  threadsParts,
+  threadsSetting,
+  VERIFY_LIMIT_MIN,
+  VERIFY_MAX,
+  type VerifySettingsPatch,
+  type VerifySettingsView,
+  verifySettingsOf,
+} from '../core/work-threads.ts'
 import { allCards, writeCard } from './cards.ts'
 import { isRecord, readJson, replaceFile, withLock } from './json-store.ts'
 import { configDir } from './paths.ts'
@@ -309,13 +322,33 @@ export function editTodos(body: unknown): EditResult {
 }
 
 /**
+ * Read `threads.verify` settings from config.json on disk (or `fallback` when config.json is not on
+ * disk yet), for `GET /api/threads-settings` (#680).
+ */
+export function readThreadsSettings(fallback?: unknown): VerifySettingsView {
+  const raw = readConfigFile()
+  const rawThreads = raw ? raw.threads : fallback
+  const threadsOn = threadsConfig(rawThreads) !== null
+  const rawVerify = isRecord(rawThreads) ? rawThreads.verify : undefined
+  return {
+    threadsOn,
+    verify: {
+      ...verifySettingsOf(rawVerify),
+      defaults: { limitMin: VERIFY_LIMIT_MIN, max: VERIFY_MAX },
+    },
+  }
+}
+
+/**
  * Threads (#410) from Settings → Threads: { mode?: 'none' | 'mine' | 'agents', share?: boolean,
- * cases?: boolean, verify?: boolean } into config.json's `threads` (core/work-threads.ts
- * threadsSetting): none deletes the key (the stored threads stay), mine is `{ agents: false }`,
- * agents `true`, the section's other fields kept. Case files and verified done (#596,
- * threadsParts) are `cases` and `verify`, verify's settings kept while it is off. `share`,
- * `cases` and `verify` without a mode are refused while threads are off. `on` says whether they
- * are on after it. The running board picks the change up as any edit (liveConfig).
+ * cases?: boolean, verify?: boolean, verifySettings?: VerifySettingsPatch } into config.json's
+ * `threads` (core/work-threads.ts threadsSetting): none deletes the key (the stored threads stay),
+ * mine is `{ agents: false }`, agents `true`, the section's other fields kept. Case files and
+ * verified done (#596, threadsParts) are `cases` and `verify`, verify's settings kept while it is
+ * off; `verifySettings` (#680) updates or clears individual `threads.verify` fields while keeping
+ * unknown keys and off-state. `share`, `cases`, `verify`, and `verifySettings` without a mode are
+ * refused while threads are off. `on` says whether they are on after it. The running board picks
+ * the change up as any edit (liveConfig).
  */
 export function editThreads(body: unknown): EditResult & { on?: boolean } {
   const b: Raw = isRecord(body) ? body : {}
@@ -329,15 +362,27 @@ export function editThreads(body: unknown): EditResult & { on?: boolean } {
     if (typeof b[part] === 'boolean') parts[part] = b[part]
     else if (b[part] !== undefined) return { ok: false, error: t('thread.err.mode') }
   }
+  let verifyPatch: VerifySettingsPatch | undefined
+  if (b.verifySettings !== undefined) {
+    const parsed = parseVerifyPatch(b.verifySettings)
+    if (!parsed.ok) return { ok: false, error: t(`verify.err.${parsed.field}`) }
+    verifyPatch = parsed.patch
+  }
   const touched = change.mode !== undefined || change.share !== undefined
-  if (!touched && parts.cases === undefined && parts.verify === undefined)
+  if (!touched && parts.cases === undefined && parts.verify === undefined && verifyPatch === undefined)
     return { ok: false, error: t('thread.err.mode') }
   let on = false
   const r = editConfig(raw => {
     if (change.mode === undefined && !threadsConfig(raw.threads)) return { ok: false, error: t('thread.err.off') }
     let next = touched ? threadsSetting(raw.threads, change) : raw.threads
-    if (next !== undefined && (parts.cases !== undefined || parts.verify !== undefined))
-      next = threadsParts(next, parts)
+    if (next !== undefined) {
+      if (verifyPatch !== undefined) {
+        if (parts.cases !== undefined) next = threadsParts(next, { cases: parts.cases })
+        next = applyVerifyPatch(next, verifyPatch, parts.verify)
+      } else if (parts.cases !== undefined || parts.verify !== undefined) {
+        next = threadsParts(next, parts)
+      }
+    }
     if (next === undefined) delete raw.threads
     else raw.threads = next
     on = threadsConfig(next) !== null

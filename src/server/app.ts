@@ -64,6 +64,7 @@ import { answerText, decisionsConfig } from '../core/decisions.ts'
 import { journalConfig } from '../core/journal.ts'
 import { t } from '../core/lang.ts'
 import { messageGate } from '../core/message-gate.ts'
+import { dropMovedCards } from '../core/node-items.ts'
 import { deviceIdFromHost, fillThresholds, markRevoked, nodeConfig, nodesConfig, parseNodeKey } from '../core/nodes.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payload.ts'
@@ -1111,14 +1112,16 @@ export async function startServer({
       deps,
       items: board.items,
       refresh,
-      toDevice: (targets, device, how) =>
-        nodeLinks && nodesConfig(cfg.nodes)
+      toDevice: (targets, device, how) => {
+        const moveNodes = () => nodesConfig(cfg.nodes, hostname())
+        const masterId = moveNodes()?.id ?? ''
+        return nodeLinks && moveNodes()
           ? moveToDevice(
               {
-                nodes: () => nodesConfig(cfg.nodes),
+                nodes: moveNodes,
                 link: id => nodeLinks?.link(id) ?? null,
                 ...movers(),
-                items: () => [...board.items(), ...(nodeAggregate?.part()?.items ?? [])],
+                items: () => dropMovedCards([...board.items(), ...(nodeAggregate?.part()?.items ?? [])], masterId),
                 rekeyThreads: (from, to) => {
                   withThreadsDb(false, db => db?.write('board', tx => rekeySession(tx, from, to)))
                 },
@@ -1129,7 +1132,8 @@ export async function startServer({
               device,
               how,
             )
-          : null,
+          : null
+      },
     }),
     // Settings → Sleep and wake… (services/wake/control.ts), for this computer only.
     ...wakeRoutes(wake),
@@ -1536,7 +1540,10 @@ export async function startServer({
     uplinkRunner = createUplinkRunner({
       links: nodeLinks,
       find: board.findAny,
-      items: () => [...board.items(), ...(aggregate.part()?.items ?? [])],
+      items: () => {
+        const masterId = nodesConfig(cfg.nodes, hostname())?.id ?? ''
+        return dropMovedCards([...board.items(), ...(aggregate.part()?.items ?? [])], masterId)
+      },
       // Case files (#488): the same cards, a device not heard now marked as its copy.
       caseItems: () => caseItems(board.items(), aggregate.part()),
       cfg,

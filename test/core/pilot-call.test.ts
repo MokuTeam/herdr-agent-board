@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { doorRefusal } from '../../src/core/node-door.ts'
 import {
+  CODE_MODE_SETTINGS,
   claudePilotArgs,
   claudePilotEnv,
+  extractClaudeError,
+  failureSummary,
+  isCodeModeTranscriptLine,
   isSafeCallFileName,
   NO_HOOKS_SETTINGS,
   parseCallFilesRequest,
@@ -11,6 +15,7 @@ import {
   parseReportRequest,
   parseStartRequest,
   parseStdinRequest,
+  profileHasCodeMode,
 } from '../../src/core/pilot-call.ts'
 import { localOnly } from '../../src/core/remote.ts'
 import { extractInitSessionId } from '../../src/services/nodes/pilot-call.ts'
@@ -138,6 +143,87 @@ describe('core/pilot-call', () => {
       '--allowedTools',
       'mcp__mokupilot__say,mcp__mokupilot__board',
     ])
+
+    const plainExplicit = claudePilotArgs({ session: SID, fork: true, fullAccess: false, codeMode: false })
+    expect(plainExplicit).toEqual(claudePilotArgs({ session: SID, fork: true, fullAccess: false }))
+    expect(plainExplicit).toContain(NO_HOOKS_SETTINGS)
+
+    const codeModeArgs = claudePilotArgs({
+      session: SID,
+      fork: true,
+      fullAccess: false,
+      codeMode: true,
+    })
+    const settingsIdx = codeModeArgs.indexOf('--settings')
+    expect(settingsIdx).toBeGreaterThan(-1)
+    expect(codeModeArgs[settingsIdx + 1]).toBe(CODE_MODE_SETTINGS)
+    expect(JSON.parse(codeModeArgs[settingsIdx + 1] ?? '{}')).toEqual({
+      disableAllHooks: true,
+      env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '1' },
+    })
+  })
+
+  test('isCodeModeTranscriptLine and profileHasCodeMode detect Code Mode markers accurately', () => {
+    expect(isCodeModeTranscriptLine(JSON.stringify({ type: 'repl-mode', replMode: true, sessionId: SID }))).toBe(true)
+    expect(isCodeModeTranscriptLine(`\uFEFF${JSON.stringify({ type: 'repl-mode', replMode: true })}`)).toBe(true)
+    expect(isCodeModeTranscriptLine(JSON.stringify({ type: 'repl-mode', replMode: false, sessionId: SID }))).toBe(false)
+    expect(
+      isCodeModeTranscriptLine(
+        JSON.stringify({
+          type: 'user',
+          message: { role: 'user', content: 'line {"type":"repl-mode","replMode":true}' },
+        }),
+      ),
+    ).toBe(false)
+    expect(isCodeModeTranscriptLine('{"type":"repl-mode"')).toBe(false)
+
+    expect(profileHasCodeMode({ env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '1' } })).toBe(true)
+    expect(profileHasCodeMode({ env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: 'true' } })).toBe(true)
+    expect(profileHasCodeMode({ env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: true } })).toBe(true)
+    expect(profileHasCodeMode({ env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: 1 } })).toBe(true)
+    expect(profileHasCodeMode({ env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '0' } })).toBe(false)
+    expect(profileHasCodeMode({ env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: 'false' } })).toBe(false)
+    expect(profileHasCodeMode({ disableAllHooks: true })).toBe(false)
+    expect(profileHasCodeMode(null)).toBe(false)
+  })
+
+  test('extractClaudeError and failureSummary surface CLI errors in plain words', () => {
+    expect(
+      extractClaudeError(
+        JSON.stringify({
+          type: 'result',
+          is_error: true,
+          errors: ['\x1b[31mFailed to resume session\x1b[0m', 'details'],
+        }),
+      ),
+    ).toEqual({ kind: 'error', text: 'Failed to resume session; details' })
+    expect(extractClaudeError(JSON.stringify({ type: 'result', is_error: true, result: 'session locked' }))).toEqual({
+      kind: 'error',
+      text: 'session locked',
+    })
+    expect(
+      extractClaudeError(JSON.stringify({ type: 'result', is_error: true, errors: [], result: 'fallback error' })),
+    ).toEqual({ kind: 'error', text: 'fallback error' })
+    expect(extractClaudeError(JSON.stringify({ type: 'result', is_error: false, result: 'ok' }))).toEqual({
+      kind: 'clear',
+      text: '',
+    })
+    expect(
+      extractClaudeError(
+        JSON.stringify({
+          type: 'system',
+          subtype: 'notification',
+          color: 'warning',
+          text: 'Code Mode unavailable',
+        }),
+      ),
+    ).toEqual({ kind: 'notice', text: 'Code Mode unavailable' })
+    expect(extractClaudeError('\x1b[31mplain fatal failure\x1b[0m')).toEqual({
+      kind: 'plain',
+      text: 'plain fatal failure',
+    })
+    expect(failureSummary('line1\n\x1b[31mline2\x1b[0m\nline3\nline4')).toBe('line2; line3; line4')
+    expect(failureSummary('a'.repeat(50), 20)).toBe(`${'a'.repeat(17)}...`)
   })
 
   test('claudePilotEnv strips herdr and nested-claude vars and applies CLAUDE_CONFIG_DIR', () => {

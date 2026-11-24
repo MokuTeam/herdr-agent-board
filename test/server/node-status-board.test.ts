@@ -4,7 +4,9 @@
 // computer's own row has a status of its own.
 import { expect, test } from 'bun:test'
 import type { BoardPayload } from '../../src/core/payload.ts'
-import { nodePair, STATUS_MS } from '../support/node-pair.ts'
+import { serveBoard } from '../support/board-server.ts'
+import { nodePair, PAIR_ENV, STATUS_MS } from '../support/node-pair.ts'
+import { sandbox } from '../support/sandbox.ts'
 
 async function devices(url: string): Promise<NonNullable<BoardPayload['devices']>> {
   const res = await fetch(`${url}/api/board`)
@@ -28,3 +30,15 @@ test("the node's status and this computer's own reach the payload with nothing e
   expect(local?.status?.id).toBe('laptop')
   expect(local?.status?.sessions).toEqual({ awake: 0, working: 0, asleep: 0 })
 }, 60_000)
+
+test('ownStatus keeps default id when nodes.id is omitted in config', async () => {
+  const box = await sandbox()
+  const { url } = await serveBoard(box, { nodes: { devices: {} } }, PAIR_ENV)
+  const deadline = Date.now() + 10_000
+  let local = (await devices(url)).find(d => d.id === 'local')
+  while (!local?.status && Date.now() < deadline) {
+    await Bun.sleep(25)
+    local = (await devices(url)).find(d => d.id === 'local')
+  }
+  expect(local?.status?.id).toBe('board')
+}, 30_000)
