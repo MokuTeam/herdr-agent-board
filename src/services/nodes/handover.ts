@@ -889,31 +889,64 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
 
           // Step 5b: Commit on target (point of no return).
           step = 'commit'
-          const commitRes = await fetchJson<{ ok: boolean }>(
-            targetLink,
-            '/api/node/handover/commit',
-            {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ id }),
-            },
-            15_000,
-          )
-          if (!commitRes.ok) {
-            if (commitRes.status === 400 || commitRes.status === 409) {
-              throw new Error(`commit on ${plan.to} failed: ${commitRes.error}`)
+          let commitOutcome: 'committed' | 'not-committed' | 'unknown' = 'unknown'
+          let lastCommitError = ''
+          const commitBackoffsMs = [250, 500, 1000]
+          for (let attempt = 0; attempt <= commitBackoffsMs.length; attempt++) {
+            if (attempt > 0) await pause(commitBackoffsMs[attempt - 1] ?? 500)
+            const commitRes = await fetchJson<{ ok: boolean }>(
+              targetLink,
+              '/api/node/handover/commit',
+              {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ id }),
+              },
+              attempt === 0 ? 15_000 : 10_000,
+            )
+            if (commitRes.ok) {
+              commitOutcome = 'committed'
+              break
             }
-            // Lost commit reply or timeout: probe target phase before deciding whether to roll back.
+            lastCommitError = commitRes.error
+            if (commitRes.status === 400 || commitRes.status === 409) {
+              commitOutcome = 'not-committed'
+              break
+            }
             const probe = await fetchJson<TargetCheckResponse>(
               targetLink,
               '/api/node/handover/check',
               { method: 'GET' },
               10_000,
             )
-            if (probe.ok && probe.data.handoverState?.id === id && probe.data.handoverState.phase === 'applied') {
-              throw new Error(`commit on ${plan.to} did not complete: ${commitRes.error}`)
+            if (probe.ok) {
+              const targetState = probe.data.handoverState
+              if (targetState?.id === id && targetState.phase === 'committed') {
+                commitOutcome = 'committed'
+                break
+              }
+              if (targetState?.id === id && targetState.phase === 'applied') {
+                if (attempt === commitBackoffsMs.length) {
+                  commitOutcome = 'not-committed'
+                  break
+                }
+                continue
+              }
+              commitOutcome = 'not-committed'
+              break
             }
-            // Either probe reports committed, or target already closed its node door after committing.
+          }
+
+          if (commitOutcome === 'not-committed') {
+            throw new Error(`commit on ${plan.to} failed: ${lastCommitError}`)
+          }
+          if (commitOutcome === 'unknown') {
+            const error = `commit confirmation from ${plan.to} failed after retries (${lastCommitError}); keeping this master write-frozen to prevent split-brain or losing the master role. Check ${plan.to} with "board master status": if ${plan.to} is master, leave this device stopped; if ${plan.to} did not commit, run "board master rollback" here.`
+            lastError = error
+            phase = 'failed'
+            step = null
+            o.log(`handover ${id}: ${error}`)
+            return { ok: false, id, from: plan.from, to: plan.to, rolledBack: false, error, plan, verify }
           }
         } catch (err) {
           const error = msg(err)
@@ -934,19 +967,9 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
           return { ok: false, id, from: plan.from, to: plan.to, rolledBack: true, error, plan, verify: lastVerify }
         }
 
-        // Post-commit point of no return: finish old master forward-only, NEVER autoRollback.
+        // Post-commit point of no return: persist committed state immediately before unpairing peers
+        // or updating local files, NEVER autoRollback.
         try {
-          for (const p of pairedOthers) {
-            const peerLink = linkFor(p.id)
-            if (!peerLink) continue
-            await fetchJson(peerLink, '/api/node/handover/unpair', {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ self: true }),
-            }).catch(() => {})
-          }
-
-          retireShippedOldMasterState(id)
           writeHandoverState({
             v: 1,
             id,
@@ -959,6 +982,18 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
             ...(enrolledSocket && { enrolledSocket }),
             at: now(),
           })
+
+          for (const p of pairedOthers) {
+            const peerLink = linkFor(p.id)
+            if (!peerLink) continue
+            await fetchJson(peerLink, '/api/node/handover/unpair', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ self: true }),
+            }).catch(() => {})
+          }
+
+          retireShippedOldMasterState(id)
 
           if (!oldNodeCfg) throw new Error('missing old master node config')
           const finalOldConfig = buildOldMasterNodeConfig(rawCfg, {

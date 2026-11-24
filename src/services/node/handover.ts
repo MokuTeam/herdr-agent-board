@@ -24,6 +24,7 @@ import {
 } from '../../adapters/handover-store.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { masterName, type NodeStore } from '../../adapters/node-store.ts'
+import { knobMs, pace } from '../../adapters/pacing.ts'
 import { stateDir } from '../../adapters/paths.ts'
 import { keepStream } from '../../adapters/plugin-update.ts'
 import { listEntries } from '../../adapters/schedule-store.ts'
@@ -115,6 +116,14 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
   const hostFn = o.hostName ?? hostname
   const freeFn = o.freeMb ?? freeMbUnder
   let busy = false
+  let commitCloseTimer: ReturnType<typeof setTimeout> | null = null
+
+  const clearCommitCloseTimer = () => {
+    if (commitCloseTimer) {
+      clearTimeout(commitCloseTimer)
+      commitCloseTimer = null
+    }
+  }
 
   const withBusy = async (fn: () => Promise<Answer>): Promise<Answer> => {
     if (busy) return { status: 409, body: { ok: false, error: 'handover is busy' } }
@@ -173,6 +182,7 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
         ) {
           return { status: 409, body: { ok: false, error: `handover ${cur.id} already in phase ${cur.phase}` } }
         }
+        clearCommitCloseTimer()
         takeLocalBackup(body.id, now())
         writeHandoverState({
           v: 1,
@@ -458,22 +468,31 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
         if (prev.phase !== 'applied') {
           return { status: 409, body: { ok: false, error: `cannot commit handover in phase ${prev.phase}` } }
         }
-        const raw = readConfigFile()
-        if (!raw) return { status: 500, body: { ok: false, error: 'config.json unreadable' } }
-        const next = { ...raw }
-        delete next.node
-        withConfigFile((_, save) => save(next))
-
         writeHandoverState({ ...prev, phase: 'committed', at: now() })
         rmSync(handoverStageDir(body.id), { recursive: true, force: true })
-        if (callingMasterId) {
-          try {
-            o.nodeStore.forget(callingMasterId)
-          } catch {}
-        }
         o.log(`handover ${body.id}: committed master role`)
-        // Defer reload so the HTTP 200 response completes before the node door stops listening.
-        setTimeout(() => void o.reloadConfig().catch(() => {}), 100)
+        // Keep the node door and master token alive briefly so an idempotent commit retry or phase
+        // probe can succeed if this HTTP response is lost; strip node/token once that window closes.
+        clearCommitCloseTimer()
+        const closeDelayMs = knobMs('BOARD_HANDOVER_COMMIT_CLOSE_MS', Math.max(400, Math.round(4000 * pace())))
+        commitCloseTimer = setTimeout(() => {
+          commitCloseTimer = null
+          const cur = readHandoverState()
+          if (cur?.role !== 'new-master' || cur.id !== body.id || cur.phase !== 'committed') return
+          withConfigFile((current, save) => {
+            if (!current || !Object.hasOwn(current, 'node')) return
+            const next = { ...current }
+            delete next.node
+            save(next)
+          })
+          if (callingMasterId) {
+            try {
+              o.nodeStore.forget(callingMasterId)
+            } catch {}
+          }
+          void o.reloadConfig().catch(() => {})
+        }, closeDelayMs)
+        commitCloseTimer.unref?.()
         return { status: 200, body: { ok: true, id: body.id } }
       })
     },
@@ -491,6 +510,7 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
         if (prev.phase === 'rolled-back') {
           return { status: 409, body: { ok: false, error: `handover ${prev.id} already rolled back` } }
         }
+        clearCommitCloseTimer()
 
         let scope: HandoverRestoreScope
         if (prev.role === 'new-master') {

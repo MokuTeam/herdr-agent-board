@@ -12,7 +12,14 @@ import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { localAgyLimits } from '../adapters/agy-limits.ts'
 import { allCards } from '../adapters/cards.ts'
-import { editNodes, editNodesAdding, loadConfig, readConfigFile, saveFoundProfiles } from '../adapters/config-file.ts'
+import {
+  editNodes,
+  editNodesAdding,
+  loadConfig,
+  readConfigFile,
+  saveFoundProfiles,
+  withConfigFile,
+} from '../adapters/config-file.ts'
 import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { archiveCommit, headCommit } from '../adapters/git.ts'
@@ -356,7 +363,10 @@ export async function startServer({
   const initialNoFileCfg = readConfigFile() === null ? structuredClone(cfg) : null
   // Crash recovery (#697): recover any incomplete handover before opening SQLite DBs or services.
   const bootHandover = readHandoverState()
-  let handoverFrozen = bootHandover?.role === 'old-master' && bootHandover.phase === 'prepared'
+  const oldMasterStillMaster =
+    bootHandover?.role === 'old-master' && bootHandover.phase === 'committed' && nodesConfig(cfg.nodes) !== null
+  let handoverFrozen =
+    (bootHandover?.role === 'old-master' && bootHandover.phase === 'prepared') || oldMasterStillMaster
   if (bootHandover?.role === 'new-master' && (bootHandover.phase === 'prepared' || bootHandover.phase === 'applied')) {
     try {
       await restoreLocalBackup(bootHandover.id, { scope: 'all' })
@@ -373,6 +383,20 @@ export async function startServer({
     } catch (err) {
       log(`handover ${bootHandover.id}: boot recovery failed: ${messageOf(err)}`)
     }
+  } else if (bootHandover?.role === 'new-master' && bootHandover.phase === 'committed') {
+    const rawOnDisk = readConfigFile()
+    if (rawOnDisk && Object.hasOwn(rawOnDisk, 'node')) {
+      withConfigFile((current, save) => {
+        if (!current || !Object.hasOwn(current, 'node')) return
+        const next = { ...current }
+        delete next.node
+        save(next)
+      })
+      delete (cfg as unknown as Record<string, unknown>).node
+      log(`handover ${bootHandover.id}: completed deferred node-door removal after commit`)
+    }
+  } else if (oldMasterStillMaster) {
+    log(`handover ${bootHandover?.id}: old master committed before finishing demotion; staying write-frozen`)
   } else if (handoverFrozen) {
     log(`handover ${bootHandover?.id}: old master stays frozen until rolled back`)
   }

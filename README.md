@@ -4890,9 +4890,10 @@ board master rollback --discard-since-commit
 ```
 
 Post-commit rollback requires `--discard-since-commit` because anything written on the new master
-since the commit is replaced by the pre-handover backup. Existing backup snapshots encrypted with
-the old master's backup key remain unreadable on the new master when the target already keeps a
-backup key of its own.
+since the commit is replaced by the pre-handover backup. Existing backup history encrypted with
+the old master's backup key is unreadable under the new master's own backup key when the target
+already keeps a backup key of its own (keep the old backup passphrase if you may need to restore
+pre-handover snapshots).
 
 If the old master is unreachable or stopped, `board master rollback --local-only` (with
 `--discard-since-commit` after commit) restores only this machine from its local pre-handover
