@@ -218,7 +218,6 @@ describe('createTelegram remote delegation', () => {
     const allAcked = new Promise<void>(r => {
       resolveDone = r
     })
-    let chunkMode: 'deliver' | 'retry-first' = 'deliver'
 
     const tg = createTelegram({
       engine,
@@ -230,7 +229,6 @@ describe('createTelegram remote delegation', () => {
       hasRemote: () => true,
       remote: async chunk => {
         sentChunks.push(chunk.length)
-        if (chunkMode === 'retry-first') return { retry: 30 }
         return { ok: true }
       },
       fetch: async (url, init) => {
@@ -260,23 +258,21 @@ describe('createTelegram remote delegation', () => {
     expect(acked.every(a => a.outcome === 'delivered')).toBe(true)
 
     // If the first chunk returns retry, do not deliver the tail out of order; ack all 150 as retry.
-    const w2 = world({ panes: [] })
-    const engine2 = createWakeEngine(w2.deps)
+    const engine2 = createWakeEngine(w.deps)
     sentChunks.length = 0
     acked.length = 0
     polls = 0
-    chunkMode = 'retry-first'
     let resolveRetryDone: () => void
     const allRetryAcked = new Promise<void>(r => {
       resolveRetryDone = r
     })
     const tgRetry = createTelegram({
       engine: engine2,
-      herdr: w2.io,
+      herdr: w.io,
       target: () => ({ host: '127.0.0.1:9999', url: 'http://127.0.0.1:9999', authorization: 'Bearer tok' }),
       machine: 'LAPTOP',
       pollTimeoutSec: () => 5,
-      log: text => w2.log.push(text),
+      log: text => w.log.push(text),
       hasRemote: () => true,
       remote: async chunk => {
         sentChunks.push(chunk.length)
