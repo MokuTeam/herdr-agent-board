@@ -24,7 +24,7 @@ import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { knobMs, pace, pause } from '../adapters/pacing.ts'
 import { archiveDir, cardsDir, pluginRoot, ROOT, scheduleDir } from '../adapters/paths.ts'
-import { pluginCommit, touchCode } from '../adapters/plugin-update.ts'
+import { pluginCommit, startGuard, touchCode } from '../adapters/plugin-update.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { programsOnPath } from '../adapters/process.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
@@ -1297,7 +1297,9 @@ export async function startServer({
     // The plugin at the master's commit (#590): unpacked beside this one, installed, swapped in.
     // Then the board ends with 75 and run.ts, the pane's process, starts it again from the plugin's
     // folder: herdr and the agents' panes are not touched. The code touched first wakes the watchers
-    // of run.ts and wake-run.ts, so wake comes back on the new code too.
+    // of run.ts and wake-run.ts, so wake comes back on the new code too. On Windows (#699) the folder
+    // cannot be swapped under a running board: the files go in place, and a guard process puts the
+    // copy before back when this board does not come back on the new commit.
     const root = pluginRoot()
     const nodeUpdate = createNodeUpdate({
       root,
@@ -1307,6 +1309,13 @@ export async function startServer({
       platform: process.env.BOARD_TEST_PLATFORM || process.platform,
       // run.ts starts the board over IPC: with no such parent nothing would start it again.
       canRestart: typeof process.send === 'function',
+      // In production the plugin's folder is this code, so its copy in `old` (which stays as it is
+      // while the files change) runs the guard; a test's scratch plugin (BOARD_TEST_PLUGIN_ROOT) is
+      // not, so the guard is this code's own file.
+      guard: (file, old) => {
+        const inOld = join(old, 'src', 'entrypoints', 'node-update-guard.ts')
+        startGuard(existsSync(inOld) ? inOld : join(ROOT, 'src', 'entrypoints', 'node-update-guard.ts'), file)
+      },
       restart: old => {
         touchCode(old)
         touchCode(root)
@@ -1396,7 +1405,11 @@ export async function startServer({
       }),
       log,
     })
-    void door.sync()
+    // Once the door is up: an update on Windows that put this commit in place is confirmed (#699).
+    void door
+      .sync()
+      .then(() => nodeUpdate.started())
+      .catch(err => log(`node: update check at start: ${err instanceof Error ? err.message : String(err)}`))
   }
 
   // The master's links to its nodes (#499, services/nodes/links.ts) and `/api/nodes` on this board

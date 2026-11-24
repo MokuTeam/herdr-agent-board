@@ -14,6 +14,7 @@ import { serveBoard } from '../support/board-server.ts'
 import { nodeBoard, nodePair, PAIR_ENV } from '../support/node-pair.ts'
 import { gitDir, type PluginRepo, pluginRepo } from '../support/plugin-tar.ts'
 import { sandbox, until } from '../support/sandbox.ts'
+import { stateFolder } from '../support/tunnel-board.ts'
 
 /** A scratch folder for the test, gone with it. */
 async function scratch(): Promise<string> {
@@ -189,22 +190,64 @@ describe('a node updates to its master’s commit', () => {
 })
 
 describe('a node on Windows', () => {
-  test('answers that it does not update itself there, and the row says to update it by hand', async () => {
+  /** A master and a Windows node on commit A, the master on B; the node's board ends with 75 once the new files are in place. */
+  async function windowsPair(guardMs: string) {
     const dir = await scratch()
     const repo = pluginRepo(join(dir, 'repo'))
     const root = join(dir, 'node', 'agent-board')
     nodePlugin(repo, root)
+    const env = { BOARD_TEST_PLUGIN_ROOT: root, BOARD_TEST_PLATFORM: 'win32', BOARD_NODE_GUARD_MS: guardMs }
     const pair = await nodePair({
-      env: { BOARD_TEST_PLUGIN_ROOT: root, BOARD_TEST_PLATFORM: 'win32' },
+      env,
       masterEnv: { BOARD_TEST_PLUGIN_ROOT: repo.dir, PATH: [dirname(process.execPath), gitDir()].join(delimiter) },
     })
-    const failed = await pair.waitDevice('server-1', d => d.update?.state === 'failed', 20_000)
-    expect(failed.update).toMatchObject({ commit: repo.b, error: 'platform' })
-    // said once: the link's next statuses bring no second try
-    await Bun.sleep(1000)
-    expect(pair.nodes[0]?.proxy.requests.filter(r => r === 'PUT /api/node/update/blob')).toHaveLength(1)
-    expect(text(root, '.archive-commit')).toBe(`${repo.a}\n`)
-  }, 60_000)
+    const node = pair.nodes[0]
+    if (!node) throw new Error('no node')
+    const ended = await Promise.race([node.proc.exited, Bun.sleep(60_000).then(() => null)])
+    expect(ended?.code).toBe(75)
+    const state = stateFolder(node.box)
+    return {
+      repo,
+      root,
+      pair,
+      node,
+      env,
+      pending: join(state, 'node', 'update', 'pending.json'),
+      weblog: join(state, 'web.log'),
+    }
+  }
+
+  test('updates in place with a record and a guard; the board that comes back on the new commit settles it', async () => {
+    const { repo, root, pair, node, env, pending } = await windowsPair('60000')
+    expect(text(root, '.archive-commit')).toBe(`${repo.b}\n`)
+    expect(text(root, 'src', 'b.ts')).toBe('export const B = true\n')
+    expect(text(besidePlugin(root).old, '.archive-commit')).toBe(`${repo.a}\n`)
+    expect(existsSync(pending)).toBe(true)
+    // run.ts starts it again from the plugin's folder: here the test does
+    await serveBoard(
+      node.box,
+      { language: 'en', node: { id: node.id, port: node.doorPort, workRoot: node.box.dir } },
+      { ...PAIR_ENV, ...env },
+    )
+    const back = await pair.waitDevice('server-1', d => d.sameCommit === true && d.update === undefined, 20_000)
+    expect(back.status?.commit).toBe(repo.b)
+    await until(() => !existsSync(pending), 10_000)
+    expect(text(root, '.archive-commit')).toBe(`${repo.b}\n`)
+    const asked = node.box.calls().map(c => c.join(' '))
+    expect(asked.filter(c => /\b(close|kill|stop|restart|quit|exit)\b/.test(c))).toEqual([])
+  }, 120_000)
+
+  test('a board that does not come back on the new commit is put back on the old copy by the guard', async () => {
+    const { repo, root, weblog, pending } = await windowsPair('1500')
+    await until(
+      () => existsSync(join(root, '.archive-commit')) && text(root, '.archive-commit') === `${repo.a}\n`,
+      20_000,
+    )
+    expect(existsSync(join(root, 'src', 'b.ts'))).toBe(false)
+    expect(text(root, 'src', 'adapters', 'paths.ts')).toBe(text(besidePlugin(root).old, 'src', 'adapters', 'paths.ts'))
+    expect(existsSync(pending)).toBe(false)
+    expect(readFileSync(weblog, 'utf8')).toContain('is back in place')
+  }, 120_000)
 })
 
 describe('Without node and nodes', () => {

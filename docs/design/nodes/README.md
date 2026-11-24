@@ -514,6 +514,8 @@ The optional tailnet door (T14) pairs the same way with the Tailscale address in
 
 The master ships its commit (6.2). herdr is never restarted for it: that would end every pane's process, the agents' too. The new code is put in place and the board's own pane restarts itself when the plugin's code changes (`src/entrypoints/run.ts`), which the hand-installed node did with its session still running. A node on another commit gets no new work until it matches. After the master's own update each node updates when none of its sessions is in a turn, or at once from the button. A node's sessions survive: the board's process restarts, herdr and the agents do not.
 
+On Windows (#699) the folders cannot be swapped under a running board (a process holds its files), so the last step differs. A full copy of the plugin goes to `<name>.old`, then `<state>/node/update/pending.json` is written and a guard process (`src/entrypoints/node-update-guard.ts`, run from the `.old` copy, detached) is started, then the new copy is written into the plugin's folder file by file (only the files that differ, each through a temp file renamed over), and the board restarts as above. The board that comes back on the new commit removes the record. When the record is still there after 2 minutes the guard takes it, writes the `.old` copy back and touches a code file, so run.ts restarts the board on the old code; the master's row then shows `not-back`. A copy that fails half way is put back at once and answered as `swap`. A Windows node whose board predates this still answers `platform`: it is updated by hand once.
+
 ### 11.4 Pause, drain, revoke
 
 - **Pause**: no new work. **Drain**: no new work, and the row says when its last session is done.

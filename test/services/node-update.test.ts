@@ -2,7 +2,9 @@
 // the archive kept, checked, unpacked beside the plugin, installed, swapped in, the board told to
 // restart; a wrong sha256, an archive with a path outside and a failed install leave the old copy
 // as it was; one update at a time; the commit it runs is answered as current; Windows and a board
-// with nothing to start it again do not update themselves.
+// with nothing to start it again do not update themselves. On Windows (#699) a node with a guard puts
+// the new copy in place file by file, after a copy of the plugin and a pending record, and puts the
+// copy back when the new copy does not go in.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import {
   existsSync,
@@ -13,11 +15,25 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { besidePlugin, keepStream, loadsIn, pluginCommit, saidTail, swapIn } from '../../src/adapters/plugin-update.ts'
+import {
+  backupPlugin,
+  besidePlugin,
+  claimPending,
+  keepStream,
+  loadsIn,
+  mirrorTree,
+  pluginCommit,
+  readPending,
+  saidTail,
+  swapIn,
+  writePending,
+} from '../../src/adapters/plugin-update.ts'
 import { createNodeUpdate, type NodeUpdateDeps } from '../../src/services/node/update.ts'
 import { type PluginRepo, pluginRepo, tarOf } from '../support/plugin-tar.ts'
 
@@ -280,7 +296,7 @@ describe('a node updates its plugin', () => {
     oldCopyStands()
   })
 
-  test('on Windows, and with nothing to start the board again, the node does not update itself', async () => {
+  test('on Windows with no guard to give, and with nothing to start the board again, the node does not update itself', async () => {
     const archive = repo.archive(repo.b)
     for (const [over, error] of [
       [{ platform: 'win32' }, 'platform'],
@@ -364,5 +380,256 @@ describe("the update's files", () => {
     expect(await pluginCommit(inside)).toBe('')
     writeFileSync(join(inside, '.archive-commit'), `${repo.a}\n`)
     expect(await pluginCommit(inside)).toBe(repo.a)
+  })
+})
+
+const pendingFile = (): string => join(dir, 'state', 'node', 'update', 'pending.json')
+const stub = {
+  install: async () => ({ ok: true, detail: '' }),
+  check: async () => ({ ok: true, detail: '' }),
+}
+
+describe('a Windows node updates its plugin in place', () => {
+  test('a copy of the plugin and the record first, the guard started, then the files in place, and the board told to restart', async () => {
+    const seen: string[] = []
+    const guard = (file: string, old: string): void => {
+      // by now: the plugin's folder is as it was, the copy before is whole, the record is written
+      seen.push(
+        `${file}|${old}|${text(root, 'src', 'adapters', 'paths.ts')}|${text(old, 'src', 'adapters', 'paths.ts')}`,
+      )
+      expect(readPending(file)).toMatchObject({ commit: repo.b, from: repo.a, root, old })
+    }
+    const { update, restarts, logs } = make({
+      ...stub,
+      platform: 'win32',
+      guard,
+      swap: () => {
+        throw new Error('the folders are not swapped on Windows')
+      },
+    })
+    const folder = statSync(root).ino
+    const src = statSync(join(root, 'src')).ino
+    const archive = repo.archive(repo.b)
+    await update.blob(stream(archive), archive.length)
+    const r = await update.update({ commit: repo.b, sha256: sha(archive) })
+    expect(r).toEqual({ status: 200, body: { ok: true, commit: repo.b, restarting: true } })
+    const { fresh, old } = besidePlugin(root)
+    expect(seen).toEqual([`${pendingFile()}|${old}|export const V = 1\n|export const V = 1\n`])
+    expect(text(root, 'src', 'adapters', 'paths.ts')).toBe('export const V = 2\n')
+    expect(text(root, 'src', 'b.ts')).toBe('export const B = true\n')
+    expect(text(root, '.archive-commit')).toBe(`${repo.b}\n`)
+    expect(text(old, '.archive-commit')).toBe(`${repo.a}\n`)
+    expect(existsSync(join(old, 'src', 'b.ts'))).toBe(false)
+    expect(existsSync(fresh)).toBe(false)
+    // in place: the plugin's folder and its src are the same folders
+    expect(statSync(root).ino).toBe(folder)
+    expect(statSync(join(root, 'src')).ino).toBe(src)
+    expect(readPending(pendingFile())).toMatchObject({ commit: repo.b, from: repo.a, root, old })
+    expect(restarts).toEqual([old])
+    expect(logs.join('\n')).toContain(`updated to ${repo.b.slice(0, 12)}`)
+    expect(update.busy()).toBe(true)
+  })
+
+  test('Linux and macOS go through the swap as before: no copy, no record, no guard', async () => {
+    for (const platform of ['linux', 'darwin']) {
+      let guards = 0
+      const { update, restarts } = make({
+        ...stub,
+        platform,
+        guard: () => void guards++,
+        backup: () => {
+          throw new Error('no backup here')
+        },
+        mirror: () => {
+          throw new Error('no mirror here')
+        },
+      })
+      const archive = repo.archive(repo.b)
+      await update.blob(stream(archive), archive.length)
+      const r = await update.update({ commit: repo.b, sha256: sha(archive) })
+      expect(r.status).toBe(200)
+      expect(guards).toBe(0)
+      expect(existsSync(pendingFile())).toBe(false)
+      expect(text(besidePlugin(root).old, '.archive-commit')).toBe(`${repo.a}\n`)
+      expect(restarts).toHaveLength(1)
+      // each platform starts from commit A again
+      rmSync(root, { recursive: true, force: true })
+      rmSync(besidePlugin(root).old, { recursive: true, force: true })
+      unpackedA()
+    }
+  })
+
+  test('a mirror that fails half way is put back at once from the copy before, and no restart follows', async () => {
+    const { fresh } = besidePlugin(root)
+    const { update, restarts } = make({
+      ...stub,
+      platform: 'win32',
+      guard: () => {},
+      mirror: (from, to) => {
+        if (from !== fresh) return mirrorTree(from, to)
+        writeFileSync(join(to, 'src', 'b.ts'), 'half')
+        throw new Error('EBUSY')
+      },
+    })
+    const archive = repo.archive(repo.b)
+    await update.blob(stream(archive), archive.length)
+    const r = await update.update({ commit: repo.b, sha256: sha(archive) })
+    expect(r).toEqual({ status: 500, body: { ok: false, error: 'swap', detail: 'EBUSY' } })
+    expect(text(root, 'src', 'adapters', 'paths.ts')).toBe('export const V = 1\n')
+    expect(text(root, '.archive-commit')).toBe(`${repo.a}\n`)
+    expect(existsSync(join(root, 'src', 'b.ts'))).toBe(false)
+    expect(existsSync(pendingFile())).toBe(false)
+    expect(existsSync(fresh)).toBe(false)
+    expect(restarts).toEqual([])
+    expect(update.busy()).toBe(false)
+  })
+
+  test('a mirror and its put-back that both fail keep the record for the guard, and the log names both', async () => {
+    const { update, restarts, logs } = make({
+      ...stub,
+      platform: 'win32',
+      guard: () => {},
+      mirror: (from, to) => {
+        throw new Error(from === besidePlugin(root).fresh ? 'EBUSY first' : `EPERM back into ${to === root}`)
+      },
+    })
+    const archive = repo.archive(repo.b)
+    await update.blob(stream(archive), archive.length)
+    const r = await update.update({ commit: repo.b, sha256: sha(archive) })
+    expect(r.body).toEqual({ ok: false, error: 'swap', detail: 'EBUSY first' })
+    expect(readPending(pendingFile())).toMatchObject({ commit: repo.b, from: repo.a })
+    expect(logs.join('\n')).toContain('EBUSY first')
+    expect(logs.join('\n')).toContain('EPERM back into true')
+    expect(restarts).toEqual([])
+    expect(update.busy()).toBe(false)
+  })
+
+  test('a copy that cannot be made and a guard that does not start leave the plugin as it was', async () => {
+    const archive = repo.archive(repo.b)
+    for (const [over, detail] of [
+      [
+        {
+          guard: () => {
+            throw new Error('spawn failed')
+          },
+        },
+        'the guard that puts the copy before back did not start: spawn failed',
+      ],
+      [
+        {
+          guard: () => {},
+          backup: () => {
+            throw new Error('disk full')
+          },
+        },
+        'disk full',
+      ],
+    ] as const) {
+      const { update, restarts } = make({ ...stub, platform: 'win32', ...over })
+      await update.blob(stream(archive), archive.length)
+      const r = await update.update({ commit: repo.b, sha256: sha(archive) })
+      expect(r).toEqual({ status: 500, body: { ok: false, error: 'swap', detail } })
+      expect(text(root, 'src', 'adapters', 'paths.ts')).toBe('export const V = 1\n')
+      expect(existsSync(join(root, 'src', 'b.ts'))).toBe(false)
+      expect(existsSync(pendingFile())).toBe(false)
+      expect(existsSync(besidePlugin(root).fresh)).toBe(false)
+      expect(restarts).toEqual([])
+      expect(update.busy()).toBe(false)
+    }
+  })
+
+  test('started: the board that came back on the commit removes the record; another commit leaves it; Linux reads nothing', async () => {
+    const record = { commit: repo.b, from: repo.a, root, old: besidePlugin(root).old, at: 1 }
+    writePending(pendingFile(), record)
+    const wrong = make({ platform: 'win32', guard: () => {} })
+    await wrong.update.started()
+    expect(readPending(pendingFile())).toEqual(record)
+    expect(wrong.logs).toEqual([])
+    const linux = make({ platform: 'linux', commit: async () => repo.b })
+    await linux.update.started()
+    expect(readPending(pendingFile())).toEqual(record)
+    const back = make({ platform: 'win32', guard: () => {}, commit: async () => repo.b })
+    await back.update.started()
+    expect(existsSync(pendingFile())).toBe(false)
+    expect(back.logs.join('\n')).toContain(`back on ${repo.b.slice(0, 12)}`)
+    // nothing pending: nothing happens
+    await back.update.started()
+  })
+})
+
+describe('the Windows update files', () => {
+  const put = (base: string, rel: string, data: string): void => {
+    mkdirSync(join(base, ...rel.split('/').slice(0, -1)), { recursive: true })
+    writeFileSync(join(base, ...rel.split('/')), data)
+  }
+
+  test('mirrorTree writes only the files that differ, removes what the source lacks, and keeps the folders', () => {
+    const from = join(dir, 'from')
+    const to = join(dir, 'to')
+    put(from, 'same.ts', 'same')
+    put(from, 'src/new.ts', 'new')
+    put(from, 'src/changed.ts', 'after')
+    put(from, 'asfolder/inner.ts', 'inner')
+    put(from, 'asfile', 'file now')
+    put(to, 'same.ts', 'same')
+    put(to, 'src/changed.ts', 'before')
+    put(to, 'src/gone.ts', 'gone')
+    put(to, 'gone/deep/x.ts', 'x')
+    put(to, 'asfolder', 'was a file')
+    put(to, 'asfile/inner.ts', 'was a folder')
+    const old = new Date(2000, 0, 1)
+    utimesSync(join(to, 'same.ts'), old, old)
+    const folder = statSync(to).ino
+    const src = statSync(join(to, 'src')).ino
+    mirrorTree(from, to)
+    expect(text(to, 'same.ts')).toBe('same')
+    expect(statSync(join(to, 'same.ts')).mtimeMs).toBe(old.getTime())
+    expect(text(to, 'src', 'changed.ts')).toBe('after')
+    expect(text(to, 'src', 'new.ts')).toBe('new')
+    expect(existsSync(join(to, 'src', 'gone.ts'))).toBe(false)
+    expect(existsSync(join(to, 'gone'))).toBe(false)
+    expect(text(to, 'asfolder', 'inner.ts')).toBe('inner')
+    expect(text(to, 'asfile')).toBe('file now')
+    expect(statSync(to).ino).toBe(folder)
+    expect(statSync(join(to, 'src')).ino).toBe(src)
+    expect(readdirSync(join(to, 'src')).sort()).toEqual(['changed.ts', 'new.ts'])
+    // a second time changes nothing
+    const writes: string[] = []
+    mirrorTree(from, to, f => void writes.push(f))
+    expect(writes).toEqual([])
+  })
+
+  test('mirrorTree: a name that changes only in case ends with the new name alone, and a link is followed as a link', () => {
+    const from = join(dir, 'from')
+    const to = join(dir, 'to')
+    put(from, 'src/foo.ts', 'x')
+    put(to, 'src/Foo.ts', 'x')
+    symlinkSync('foo.ts', join(from, 'src', 'link.ts'))
+    mirrorTree(from, to)
+    expect(readdirSync(join(to, 'src')).sort()).toEqual(['foo.ts', 'link.ts'])
+    expect(readFileSync(join(to, 'src', 'link.ts'), 'utf8')).toBe('x')
+  })
+
+  test('backupPlugin copies everything, a .git folder too, and replaces an older copy', () => {
+    put(root, '.git/HEAD', 'ref')
+    put(root, 'node_modules/dep/index.js', 'dep')
+    const old = join(dir, 'home', 'agent-board.old')
+    put(old, 'stale.ts', 'stale')
+    backupPlugin(root, old)
+    expect(existsSync(join(old, 'stale.ts'))).toBe(false)
+    expect(text(old, '.git', 'HEAD')).toBe('ref')
+    expect(text(old, 'node_modules', 'dep', 'index.js')).toBe('dep')
+    expect(text(old, 'src', 'adapters', 'paths.ts')).toBe('export const V = 1\n')
+  })
+
+  test('claimPending gives the record once, and leaves nothing beside it', () => {
+    const file = join(dir, 'state', 'pending.json')
+    expect(claimPending(file)).toBeNull()
+    writePending(file, { commit: repo.b, from: repo.a, root, old: `${root}.old`, at: 5 })
+    expect(claimPending(file)).toEqual({ commit: repo.b, from: repo.a, root, old: `${root}.old`, at: 5 })
+    expect(claimPending(file)).toBeNull()
+    expect(readdirSync(join(dir, 'state'))).toEqual([])
+    writeFileSync(file, 'not json')
+    expect(readPending(file)).toBeNull()
   })
 })

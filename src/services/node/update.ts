@@ -13,18 +13,29 @@
 // hand) is updated the same way: after it the folder is the archive's content with the stamp, and
 // the checkout, its own commits too, is in `<name>.old` until the next update removes it.
 //
-// Not on Windows: a folder whose files a running process holds open cannot be renamed there, so the
-// node answers `platform` and the master's row says to update it by hand.
+// On Windows (#699) a folder whose files a running process holds open cannot be renamed, so the
+// last step is another one: a full copy of the plugin goes to `<name>.old`, a pending record is
+// written (`<dir>/pending.json`) and a guard process is started (adapters/plugin-update.ts
+// startGuard), then the new copy is written into the plugin's folder file by file (mirrorTree),
+// and the board restarts. The board that comes back on the new commit removes the record
+// (`started`); when it does not within the guard's wait, the guard puts the copy before back and
+// the board restarts on it. A mirror that fails half way is put back at once from the copy before.
+// A node whose board has no guard to give (an older one) answers `platform`.
 import { join } from 'node:path'
 import {
+  backupPlugin,
   besidePlugin,
   installProduction,
   keepStream,
   loadsIn,
+  mirrorTree,
   readKept,
+  readPending,
   removeKept,
+  removePending,
   removeTree,
   swapIn,
+  writePending,
   writeTree,
 } from '../../adapters/plugin-update.ts'
 import { ARCHIVE_COMMIT_FILE } from '../../core/node-texts.ts'
@@ -60,6 +71,16 @@ export interface NodeUpdateDeps {
   /** The archive's entries written into a folder (adapters/plugin-update.ts writeTree). */
   unpack?: (dir: string, entries: readonly TarEntry[]) => void
   swap?: (root: string, fresh: string, old: string) => void
+  /** Windows: a full copy of the plugin's folder in `old` (adapters/plugin-update.ts backupPlugin). */
+  backup?: (root: string, old: string) => void
+  /** Windows: `to` made to hold `from`'s tree, file by file (adapters/plugin-update.ts mirrorTree). */
+  mirror?: (from: string, to: string) => void
+  /**
+   * Windows: starts the guard process that puts `old` back when the board does not come back on the
+   * new commit (the pending record in `file` stays). Throws when it cannot start; without it a
+   * Windows node does not update itself.
+   */
+  guard?: (file: string, old: string) => void
   log(text: string): void
 }
 
@@ -70,11 +91,19 @@ export interface NodeUpdate {
   update(body: unknown): Promise<Answer>
   /** An update is under way, or done and the board about to restart. */
   busy(): boolean
+  /** The board has started: on Windows, one that came back on the commit an update put in place says so (the guard stands down). */
+  started(): Promise<void>
 }
 
 const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/
 const SHA256 = /^[0-9a-f]{64}$/
 const short = (sha: string): string => sha.slice(0, 12)
+interface PutIn {
+  commit: string
+  from: string
+  fresh: string
+  old: string
+}
 const refuse = (status: number, error: string, detail?: string): Answer => ({
   status,
   body: { ok: false, error, ...(detail && { detail }) },
@@ -87,19 +116,73 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
   const check = d.check ?? (dir => loadsIn(dir, LOAD_MS))
   const unpack = d.unpack ?? writeTree
   const swap = d.swap ?? swapIn
+  const backup = d.backup ?? backupPlugin
+  const mirror = d.mirror ?? mirrorTree
+  const pendingFile = join(d.dir, 'pending.json')
   let busy = false
   /** An archive is coming in: an update, or a second archive, waits for it. */
   let uploading = false
 
   /** Why this node does not update itself at all, or null. */
   function cannot(): Answer | null {
-    if (platform === 'win32') return refuse(409, 'platform')
+    if (platform === 'win32' && !d.guard) return refuse(409, 'platform')
     if (!d.canRestart) return refuse(409, 'restart')
+    return null
+  }
+
+  /** Windows: the copy before, the record, the guard, then the new copy in place. A refusal when it did not go in. */
+  function putInPlace(guard: (file: string, old: string) => void, o: PutIn): Answer | null {
+    const { commit, from, fresh, old } = o
+    try {
+      backup(d.root, old)
+    } catch (err) {
+      removeTree(fresh)
+      return refuse(500, 'swap', err instanceof Error ? err.message : String(err))
+    }
+    try {
+      writePending(pendingFile, { commit, from, root: d.root, old, at: Date.now() })
+      guard(pendingFile, old)
+    } catch (err) {
+      removePending(pendingFile)
+      removeTree(fresh)
+      const why = err instanceof Error ? err.message : String(err)
+      return refuse(500, 'swap', `the guard that puts the copy before back did not start: ${why}`)
+    }
+    try {
+      mirror(fresh, d.root)
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err)
+      try {
+        mirror(old, d.root)
+        removePending(pendingFile)
+      } catch (again) {
+        // the record stays: the guard puts the copy back at its deadline
+        d.log(
+          `node: the update to ${short(commit)} stopped (${why}) and the copy before could not be put back: ${
+            again instanceof Error ? again.message : String(again)
+          }`,
+        )
+      }
+      removeTree(fresh)
+      return refuse(500, 'swap', why)
+    }
+    removeTree(fresh)
     return null
   }
 
   return {
     busy: () => busy,
+    async started() {
+      // Nothing is read on a platform that has no such record.
+      if (platform !== 'win32') return
+      const p = readPending(pendingFile)
+      if (!p) return
+      if (p.commit !== (await d.commit())) return
+      removePending(pendingFile)
+      d.log(
+        `node: back on ${short(p.commit)} after the update; the copy before stays in ${p.old} until the next update`,
+      )
+    },
     async blob(body, told) {
       const no = cannot()
       if (no) {
@@ -137,7 +220,8 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
       let done = false
       const { fresh, old } = besidePlugin(d.root)
       try {
-        if ((await d.commit()) === commit) {
+        const from = await d.commit()
+        if (from === commit) {
           removeKept(kept)
           return { status: 200, body: { ok: true, current: true, commit } }
         }
@@ -186,11 +270,16 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
           d.log(`node: the update to ${short(commit)} stopped: its web board does not load`)
           return refuse(500, 'loads', loads.detail)
         }
-        try {
-          swap(d.root, fresh, old)
-        } catch (err) {
-          removeTree(fresh)
-          return refuse(500, 'swap', err instanceof Error ? err.message : String(err))
+        if (platform === 'win32' && d.guard) {
+          const no = putInPlace(d.guard, { commit, from, fresh, old })
+          if (no) return no
+        } else {
+          try {
+            swap(d.root, fresh, old)
+          } catch (err) {
+            removeTree(fresh)
+            return refuse(500, 'swap', err instanceof Error ? err.message : String(err))
+          }
         }
         done = true
         d.log(

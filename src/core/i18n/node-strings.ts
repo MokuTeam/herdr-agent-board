@@ -217,7 +217,7 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'this board has no git checkout to send its code from (installed from an archive, or git is missing): update the device by hand',
     'node.dev.upd.git-archive': "git could not pack this board's version",
     'node.dev.upd.too-big': 'the archive is larger than the device takes',
-    'node.dev.upd.platform': 'it runs Windows, where the board does not update itself: update it by hand',
+    'node.dev.upd.platform': 'it runs an older board on Windows, which does not update itself: update it by hand once',
     'node.dev.upd.restart':
       'its board does not run in its herdr pane, so nothing would start it again: update it by hand',
     'node.dev.upd.not-built': 'its board is too old to update itself: update it by hand once',
@@ -594,7 +594,8 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'у этой доски нет git-копии, из которой можно отправить код (установлена из архива или нет git): обновите устройство вручную',
     'node.dev.upd.git-archive': 'git не смог упаковать версию этой доски',
     'node.dev.upd.too-big': 'архив больше, чем устройство принимает',
-    'node.dev.upd.platform': 'на нём Windows, где доска сама не обновляется: обновите его вручную',
+    'node.dev.upd.platform':
+      'на нём старая доска на Windows, которая сама не обновляется: обновите её вручную один раз',
     'node.dev.upd.restart':
       'его доска запущена не в своей панели herdr, и перезапустить её некому: обновите его вручную',
     'node.dev.upd.not-built': 'его доска слишком старая, чтобы обновиться самой: один раз обновите её вручную',

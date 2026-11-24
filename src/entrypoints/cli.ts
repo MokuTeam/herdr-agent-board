@@ -2329,7 +2329,7 @@ const UPDATE_WHY: Record<string, string> = {
   'no-checkout':
     'this board has no git checkout to send its code from (installed from an archive, or git is missing): update the node by hand',
   'git-archive': "git could not make the archive of this board's commit",
-  platform: 'the node runs Windows, where a node does not update itself: update it by hand',
+  platform: 'the node runs an older board on Windows, which does not update itself: update it by hand once',
   restart: 'its board does not run in its herdr pane (run.ts), so nothing would start it again: update it by hand',
   'not-built': 'its board is older than updates over the link: update it by hand once',
   sha256: 'the archive arrived changed: try again',

@@ -577,7 +577,7 @@ describe('Update, on a node on another version (#590)', () => {
     // what the button cannot mend says to update by hand, with no button
     expect(failed('platform')).toEqual({
       state: 'failed',
-      text: 'The update failed: it runs Windows, where the board does not update itself: update it by hand',
+      text: 'The update failed: it runs an older board on Windows, which does not update itself: update it by hand once',
       offer: false,
     })
     expect(failed('no-checkout')?.offer).toBe(false)
@@ -626,7 +626,7 @@ describe('Update, on a node on another version (#590)', () => {
       [
         'Runs another version of the board than this computer. It updates by itself while it is online and none of its sessions is working.Update',
       ],
-      ['The update failed: it runs Windows, where the board does not update itself: update it by hand'],
+      ['The update failed: it runs an older board on Windows, which does not update itself: update it by hand once'],
       [],
     ])
     const ru = renderInBoard(

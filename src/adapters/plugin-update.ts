@@ -1,17 +1,26 @@
 // The node's files for an update of its plugin (#590, docs/design/nodes 6.2, 11.3): the archive its
 // master sends, kept as it comes; the archive's entries (core/tar.ts) written into a fresh folder
-// beside the plugin's; `bun install --production` there; and the swap of the two folders. The
-// decisions are services/node/update.ts's; this only does what it is told.
+// beside the plugin's; `bun install --production` there; and the swap of the two folders. On
+// Windows (#699), where a folder whose files a process holds cannot be renamed, the new copy goes
+// into the plugin's folder file by file instead (mirrorTree), after a full copy of the plugin
+// (backupPlugin) and a pending record (writePending) that a guard process (startGuard) puts the
+// copy back by when the board does not come back. The decisions are services/node/update.ts's;
+// this only does what it is told.
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   closeSync,
+  cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   renameSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
   writeSync,
@@ -19,7 +28,7 @@ import {
 import { basename, dirname, join } from 'node:path'
 import type { TarEntry } from '../core/tar.ts'
 import { archiveStamp, headCommit } from './git.ts'
-import { renameWithRetry } from './json-store.ts'
+import { isRecord, readJson, renameWithRetry, replaceFile } from './json-store.ts'
 import { run } from './process.ts'
 
 /**
@@ -203,4 +212,150 @@ export function touchCode(dir: string): void {
   try {
     utimesSync(file, now, now)
   } catch {}
+}
+
+/** What an update on Windows leaves for the board that starts on the new code, and for the guard (#699). */
+export interface PendingUpdate {
+  /** The commit the update put in place. */
+  commit: string
+  /** The commit the plugin was on. */
+  from: string
+  /** The plugin's folder. */
+  root: string
+  /** The full copy of the plugin before the update (`<name>.old`). */
+  old: string
+  at: number
+}
+
+export function writePending(file: string, p: PendingUpdate): void {
+  mkdirSync(dirname(file), { recursive: true })
+  replaceFile(file, `${JSON.stringify(p)}\n`)
+}
+
+export function readPending(file: string): PendingUpdate | null {
+  const raw = readJson(file, isRecord)
+  if (!raw) return null
+  const { commit, from, root, old, at } = raw
+  if (typeof commit !== 'string' || typeof from !== 'string' || typeof root !== 'string' || typeof old !== 'string')
+    return null
+  if (typeof at !== 'number' || !Number.isFinite(at)) return null
+  return { commit, from, root, old, at }
+}
+
+export function removePending(file: string): void {
+  rmSync(file, { force: true })
+}
+
+/**
+ * The pending record taken for good: renamed away first, so of the board that confirms and the
+ * guard that rolls back only one gets it. Null when there is none, or someone else took it.
+ */
+export function claimPending(file: string): PendingUpdate | null {
+  const mine = `${file}.rollback`
+  try {
+    renameSync(file, mine)
+  } catch {
+    return null
+  }
+  const p = readPending(mine)
+  rmSync(mine, { force: true })
+  return p
+}
+
+/** A full copy of the plugin's folder in `old` (what was there goes first): the rollback's source. */
+export function backupPlugin(root: string, old: string): void {
+  rmSync(old, { recursive: true, force: true })
+  cpSync(root, old, { recursive: true, verbatimSymlinks: true })
+}
+
+/** `file` replaced by `data` through a temp file beside it, renamed over it (a `.tmp` name no watcher takes for code). */
+function replaceBytes(file: string, data: Uint8Array, mode: number): void {
+  const tmp = `${file}.${process.pid}.tmp`
+  try {
+    writeFileSync(tmp, data, { mode })
+    renameWithRetry(tmp, file)
+  } catch (err) {
+    rmSync(tmp, { force: true })
+    throw err
+  }
+}
+
+const kindOf = (path: string): 'dir' | 'file' | 'link' | null => {
+  try {
+    const st = lstatSync(path)
+    return st.isSymbolicLink() ? 'link' : st.isDirectory() ? 'dir' : 'file'
+  } catch {
+    return null
+  }
+}
+
+/** Entries of `to` that `from` lacks, or has as another kind, removed (recursively into folders both have). */
+function pruneTree(from: string, to: string): void {
+  for (const name of readdirSync(to)) {
+    const there = join(to, name)
+    const kind = kindOf(there)
+    const want = kindOf(join(from, name))
+    if (want !== kind) rmSync(there, { recursive: true, force: true })
+    else if (kind === 'dir') pruneTree(join(from, name), there)
+  }
+}
+
+function fillTree(from: string, to: string, write: (file: string, data: Uint8Array, mode: number) => void): void {
+  mkdirSync(to, { recursive: true })
+  for (const name of readdirSync(from)) {
+    const src = join(from, name)
+    const dst = join(to, name)
+    const st = lstatSync(src)
+    if (st.isSymbolicLink()) {
+      const target = readlinkSync(src)
+      if (kindOf(dst) === 'link' && readlinkSync(dst) === target) continue
+      rmSync(dst, { recursive: true, force: true })
+      symlinkSync(target, dst)
+    } else if (st.isDirectory()) {
+      fillTree(src, dst, write)
+    } else {
+      const data = readFileSync(src)
+      if (kindOf(dst) === 'file') {
+        const have = lstatSync(dst)
+        if (have.size === data.length && readFileSync(dst).equals(data)) continue
+      }
+      write(dst, data, st.mode & 0o777)
+    }
+  }
+}
+
+/**
+ * `to` made to hold exactly `from`'s tree, file by file: what `from` lacks is removed first (so a
+ * name that changes only in case comes out right on a case-insensitive disk), then each file that
+ * is missing or different is written through a temp file and renamed over. `to` itself and the
+ * folders both have stay (a running board holds its files, which Windows will not let be renamed
+ * away, but does let be replaced), a file that is the same is not touched.
+ */
+export function mirrorTree(
+  from: string,
+  to: string,
+  write: (file: string, data: Uint8Array, mode: number) => void = replaceBytes,
+): void {
+  mkdirSync(to, { recursive: true })
+  pruneTree(from, to)
+  fillTree(from, to, write)
+}
+
+/**
+ * The guard (entrypoints/node-update-guard.ts) started by `script`, a process of its own that
+ * outlives this board: it waits for `file`'s record to go and puts the copy before back when it
+ * does not. Its folder is the state's, never the plugin's, which a process would hold on Windows.
+ * Throws when it did not start.
+ */
+export function startGuard(script: string, file: string): void {
+  const child = spawn(process.execPath, [script, file], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: process.env,
+    cwd: dirname(file),
+  })
+  child.on('error', () => {})
+  if (child.pid === undefined) throw new Error('the process did not start')
+  child.unref()
 }
